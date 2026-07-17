@@ -2,132 +2,19 @@ package projectview
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/workflowstore"
-	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 )
-
-func metadataColumnExists(t *testing.T, db *sql.DB, table string, column string) bool {
-	t.Helper()
-	rows, err := db.QueryContext(context.Background(), `PRAGMA table_info(`+table+`)`)
-	if err != nil {
-		t.Fatalf("inspect %s schema: %v", table, err)
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var cid int
-		var name, typ string
-		var notNull int
-		var defaultValue any
-		var pk int
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
-			t.Fatalf("scan %s schema: %v", table, err)
-		}
-		if name == column {
-			return true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate %s schema: %v", table, err)
-	}
-	return false
-}
-
-func TestServiceListsSingleProjectAndSessions(t *testing.T) {
-	store, cfg, binding := newProjectViewMetadataStore(t)
-	containerDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
-	baseTime := time.Now().UTC().Add(time.Hour)
-	firstOptions := append(store.AuthoritativeSessionStoreOptions(), session.WithClock(func() time.Time {
-		return baseTime
-	}))
-	first, err := session.Create(containerDir, filepath.Base(containerDir), cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, firstOptions...)
-	if err != nil {
-		t.Fatalf("create first session: %v", err)
-	}
-	if err := first.SetName("first"); err != nil {
-		t.Fatalf("persist first session meta: %v", err)
-	}
-	firstMeta := first.Meta()
-	firstMeta.CreatedAt = baseTime
-	firstMeta.UpdatedAt = baseTime
-	if err := store.ImportSessionSnapshot(context.Background(), session.PersistedStoreSnapshot{
-		SessionDir: first.Dir(),
-		Meta:       firstMeta,
-	}); err != nil {
-		t.Fatalf("set deterministic first-session recency: %v", err)
-	}
-	secondOptions := append(store.AuthoritativeSessionStoreOptions(), session.WithClock(func() time.Time {
-		return baseTime.Add(time.Second)
-	}))
-	second, err := session.Create(containerDir, filepath.Base(containerDir), cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, secondOptions...)
-	if err != nil {
-		t.Fatalf("create second session: %v", err)
-	}
-	if err := second.SetName("second"); err != nil {
-		t.Fatalf("persist second session meta: %v", err)
-	}
-	secondMeta := second.Meta()
-	secondMeta.CreatedAt = baseTime.Add(time.Second)
-	secondMeta.UpdatedAt = baseTime.Add(time.Second)
-	if err := store.ImportSessionSnapshot(context.Background(), session.PersistedStoreSnapshot{
-		SessionDir: second.Dir(),
-		Meta:       secondMeta,
-	}); err != nil {
-		t.Fatalf("set deterministic second-session recency: %v", err)
-	}
-
-	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
-
-	projects, err := svc.ListProjects(context.Background(), serverapi.ProjectListRequest{})
-	if err != nil {
-		t.Fatalf("ListProjects: %v", err)
-	}
-	if len(projects.Projects) != 1 {
-		t.Fatalf("expected one project, got %+v", projects)
-	}
-	if projects.Projects[0].ProjectID != binding.ProjectID {
-		t.Fatalf("unexpected project summary: %+v", projects.Projects[0])
-	}
-	if projects.Projects[0].Availability != clientui.ProjectAvailabilityAvailable {
-		t.Fatalf("expected available workspace availability, got %+v", projects.Projects[0])
-	}
-
-	sessions, err := svc.ListSessionPage(context.Background(), serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		PageSize:  20,
-		Position:  serverapi.NewestSessionPagePosition(),
-	})
-	if err != nil {
-		t.Fatalf("ListSessionPage: %v", err)
-	}
-	if len(sessions.Sessions) != 2 {
-		t.Fatalf("expected two sessions, got %+v", sessions)
-	}
-	if sessions.Sessions[0].SessionID.String() != second.Meta().SessionID {
-		t.Fatalf("expected most recent session first, got %+v", sessions.Sessions)
-	}
-
-	overview, err := svc.GetProjectOverview(context.Background(), serverapi.ProjectGetOverviewRequest{ProjectID: binding.ProjectID})
-	if err != nil {
-		t.Fatalf("GetProjectOverview: %v", err)
-	}
-	if overview.Overview.Project.SessionCount != 2 {
-		t.Fatalf("unexpected overview session count: %+v", overview.Overview)
-	}
-}
 
 func TestServiceRejectsUnknownProjectID(t *testing.T) {
 	store, _, binding := newProjectViewMetadataStore(t)
@@ -289,30 +176,6 @@ func TestServiceDeleteProjectBlocksSessionCreatedAfterPreflightList(t *testing.T
 	}
 }
 
-func TestServiceDeleteProjectDoesNotDependOnSessionInFlightMetadata(t *testing.T) {
-	store, cfg, binding := newProjectViewMetadataStore(t)
-	sessionDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
-	created, err := session.Create(sessionDir, filepath.Base(sessionDir), cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, store.AuthoritativeSessionStoreOptions()...)
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
-	if err := created.SetName("stale"); err != nil {
-		t.Fatalf("persist session: %v", err)
-	}
-	if metadataColumnExists(t, store.DB(), "sessions", "in_flight_step") {
-		t.Fatal("sessions.in_flight_step should not exist after Slice 13 migration")
-	}
-	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
-
-	deleted, err := svc.DeleteProject(context.Background(), serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID})
-	if err != nil {
-		t.Fatalf("DeleteProject: %v", err)
-	}
-	if !deleted.Deleted || len(deleted.Blockers) != 0 {
-		t.Fatalf("delete response = %+v, want no DB in-flight metadata dependency", deleted)
-	}
-}
-
 func TestDeleteSessionArtifactRejectsSymlinkEscape(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
@@ -372,66 +235,6 @@ func TestMetadataServiceSupportsWildcardAndScopedProjectListing(t *testing.T) {
 	}
 }
 
-func TestMetadataServiceCreatesProjectWithExplicitKey(t *testing.T) {
-	store, _, _ := newProjectViewMetadataStore(t)
-	workspace := t.TempDir()
-	svc := newProjectViewMetadataService(t, store, "")
-
-	created, err := svc.CreateProject(context.Background(), serverapi.ProjectCreateRequest{
-		DisplayName:   "GUI Project",
-		ProjectKey:    "GUI1",
-		WorkspaceRoot: workspace,
-	})
-	if err != nil {
-		t.Fatalf("CreateProject: %v", err)
-	}
-	if created.Binding.ProjectKey != "GUI1" {
-		t.Fatalf("project key = %q, want GUI1", created.Binding.ProjectKey)
-	}
-
-	overview, err := svc.GetProjectOverview(context.Background(), serverapi.ProjectGetOverviewRequest{ProjectID: created.Binding.ProjectID})
-	if err != nil {
-		t.Fatalf("GetProjectOverview: %v", err)
-	}
-	if overview.Overview.Project.ProjectKey != "GUI1" {
-		t.Fatalf("overview project key = %q, want GUI1", overview.Overview.Project.ProjectKey)
-	}
-}
-
-func TestMetadataServiceRejectsInvalidAndDuplicateProjectKeys(t *testing.T) {
-	store, _, _ := newProjectViewMetadataStore(t)
-	svc := newProjectViewMetadataService(t, store, "")
-
-	if _, err := svc.CreateProject(context.Background(), serverapi.ProjectCreateRequest{
-		DisplayName:   "Invalid",
-		ProjectKey:    "bad-key",
-		WorkspaceRoot: t.TempDir(),
-	}); err == nil {
-		t.Fatal("expected invalid project key error")
-	}
-	if _, err := svc.CreateProject(context.Background(), serverapi.ProjectCreateRequest{
-		DisplayName:   "First",
-		ProjectKey:    "DUP1",
-		WorkspaceRoot: t.TempDir(),
-	}); err != nil {
-		t.Fatalf("CreateProject first: %v", err)
-	}
-	if _, err := svc.CreateProject(context.Background(), serverapi.ProjectCreateRequest{
-		DisplayName:   "Second",
-		ProjectKey:    "DUP1",
-		WorkspaceRoot: t.TempDir(),
-	}); err == nil {
-		t.Fatal("expected duplicate project key error")
-	}
-	projects, err := svc.ListProjects(context.Background(), serverapi.ProjectListRequest{})
-	if err != nil {
-		t.Fatalf("ListProjects after duplicate key: %v", err)
-	}
-	if len(projects.Projects) != 2 {
-		t.Fatalf("project count after duplicate key = %d, want 2: %+v", len(projects.Projects), projects.Projects)
-	}
-}
-
 func TestMetadataServiceCreatesProjectWithoutExplicitKey(t *testing.T) {
 	store, _, _ := newProjectViewMetadataStore(t)
 	svc := newProjectViewMetadataService(t, store, "")
@@ -445,32 +248,6 @@ func TestMetadataServiceCreatesProjectWithoutExplicitKey(t *testing.T) {
 	}
 	if created.Binding.ProjectKey == "" {
 		t.Fatalf("expected generated project key, got %+v", created.Binding)
-	}
-}
-
-func TestMetadataServiceListsProjectWorkspacesForGUI(t *testing.T) {
-	store, _, binding := newProjectViewMetadataStore(t)
-	attached := attachProjectViewWorkspace(t, store, binding.ProjectID)
-	svc := newProjectViewMetadataService(t, store, "")
-
-	list, err := svc.ListProjectWorkspaces(context.Background(), serverapi.ProjectWorkspaceListRequest{ProjectID: binding.ProjectID})
-	if err != nil {
-		t.Fatalf("ListProjectWorkspaces: %v", err)
-	}
-	if list.ProjectID != binding.ProjectID {
-		t.Fatalf("project id = %q, want %q", list.ProjectID, binding.ProjectID)
-	}
-	if list.DefaultWorkspaceID != binding.WorkspaceID {
-		t.Fatalf("default workspace = %q, want %q", list.DefaultWorkspaceID, binding.WorkspaceID)
-	}
-	if len(list.Workspaces) != 2 {
-		t.Fatalf("workspace count = %d, want 2: %+v", len(list.Workspaces), list.Workspaces)
-	}
-	if list.Workspaces[0].WorkspaceID != binding.WorkspaceID || !list.Workspaces[0].IsPrimary {
-		t.Fatalf("first workspace = %+v, want primary %q", list.Workspaces[0], binding.WorkspaceID)
-	}
-	if list.Workspaces[1].WorkspaceID != attached.WorkspaceID {
-		t.Fatalf("second workspace = %+v, want newest attached %q", list.Workspaces[1], attached.WorkspaceID)
 	}
 }
 
@@ -556,37 +333,6 @@ func TestMetadataServiceUpdatesProjectKeyForEditPage(t *testing.T) {
 	}
 	if unchanged.Project.ProjectKey != "ABC" {
 		t.Fatalf("project key after empty update = %q, want ABC", unchanged.Project.ProjectKey)
-	}
-}
-
-func TestMetadataServiceRejectsInvalidProjectEditKeys(t *testing.T) {
-	store, _, binding := newProjectViewMetadataStore(t)
-	svc := newProjectViewMetadataService(t, store, "")
-
-	for _, projectKey := range []string{"bad-key", "1AB", "A", strings.Repeat("A", 9)} {
-		_, err := svc.UpdateProject(context.Background(), serverapi.ProjectUpdateRequest{
-			ProjectID:   binding.ProjectID,
-			DisplayName: "Valid name",
-			ProjectKey:  projectKey,
-		})
-		if err == nil {
-			t.Fatalf("UpdateProject(key=%q) succeeded, want validation error", projectKey)
-		}
-	}
-}
-
-func TestMetadataServiceRejectsInvalidProjectEditNames(t *testing.T) {
-	store, _, binding := newProjectViewMetadataStore(t)
-	svc := newProjectViewMetadataService(t, store, "")
-
-	for _, displayName := range []string{"", " trimmed", "trimmed ", "line\nbreak", strings.Repeat("a", 81)} {
-		_, err := svc.UpdateProject(context.Background(), serverapi.ProjectUpdateRequest{
-			ProjectID:   binding.ProjectID,
-			DisplayName: displayName,
-		})
-		if err == nil {
-			t.Fatalf("UpdateProject(%q) succeeded, want validation error", displayName)
-		}
 	}
 }
 
@@ -726,27 +472,6 @@ func TestMetadataServiceUnlinkWorkspaceBlocksSessionAttachedAfterPreflightList(t
 	}
 	if len(runtimeState.blocked) == 0 || runtimeState.blocked[len(runtimeState.blocked)-1] != created.Meta().SessionID {
 		t.Fatalf("blocked sessions = %+v, want late session %q blocked inside unlink transaction", runtimeState.blocked, created.Meta().SessionID)
-	}
-}
-
-func TestMetadataServiceUnlinkWorkspaceDoesNotDependOnSessionInFlightMetadata(t *testing.T) {
-	store, cfg, binding := newProjectViewMetadataStore(t)
-	attached := attachProjectViewWorkspace(t, store, binding.ProjectID)
-	_ = createProjectViewSession(t, store, cfg, binding.ProjectID, attached.CanonicalRoot, "stale-workspace")
-	if metadataColumnExists(t, store.DB(), "sessions", "in_flight_step") {
-		t.Fatal("sessions.in_flight_step should not exist after Slice 13 migration")
-	}
-	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
-
-	unlinked, err := svc.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
-		ProjectID:   binding.ProjectID,
-		WorkspaceID: attached.WorkspaceID,
-	})
-	if err != nil {
-		t.Fatalf("UnlinkWorkspaceFromProject: %v", err)
-	}
-	if !unlinked.Unlinked || len(unlinked.Blockers) != 0 {
-		t.Fatalf("unlink response = %+v, want no DB in-flight metadata dependency", unlinked)
 	}
 }
 

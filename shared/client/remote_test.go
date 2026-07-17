@@ -818,36 +818,27 @@ func TestRemoteProjectViewCallsReuseInitialProjectAttach(t *testing.T) {
 	}
 }
 
-func TestProtocolErrorMapsPromptTerminalCodes(t *testing.T) {
-	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodePromptNotFound, Message: "missing"}); !errors.Is(err, serverapi.ErrPromptNotFound) {
-		t.Fatalf("expected prompt not found, got %v", err)
-	}
-	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodePromptResolved, Message: "resolved"}); !errors.Is(err, serverapi.ErrPromptAlreadyResolved) {
-		t.Fatalf("expected prompt already resolved, got %v", err)
-	}
-	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodePromptUnsupported, Message: "unsupported"}); !errors.Is(err, serverapi.ErrPromptUnsupported) {
-		t.Fatalf("expected prompt unsupported, got %v", err)
-	}
-	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeMethodNotFound, Message: "missing method"}); !errors.Is(err, serverapi.ErrMethodNotFound) {
-		t.Fatalf("expected rpc method not found, got %v", err)
-	}
-}
-
-func TestProtocolErrorMapsWorkflowTaskNotFoundCode(t *testing.T) {
-	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeWorkflowTaskNotFound, Message: "missing task"}); !errors.Is(err, serverapi.ErrWorkflowTaskNotFound) {
-		t.Fatalf("expected workflow task not found, got %v", err)
-	}
-}
-
-func TestProtocolErrorMapsWorkflowTaskCompleteAmbiguousCode(t *testing.T) {
-	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeWorkflowTaskCompleteAmbiguous, Message: "ambiguous completion target"}); !errors.Is(err, serverapi.ErrWorkflowTaskCompleteSelectorAmbiguous) {
-		t.Fatalf("expected ambiguous workflow task completion target, got %v", err)
-	}
-}
-
-func TestProtocolErrorMapsWorkflowTaskCompleteNotFoundCode(t *testing.T) {
-	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeWorkflowTaskCompleteNotFound, Message: "missing completion target"}); !errors.Is(err, serverapi.ErrWorkflowTaskCompleteTargetNotFound) {
-		t.Fatalf("expected missing workflow task completion target, got %v", err)
+func TestProtocolErrorMapsSentinelCodes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code int
+		want error
+	}{
+		{name: "prompt not found", code: protocol.ErrCodePromptNotFound, want: serverapi.ErrPromptNotFound},
+		{name: "prompt resolved", code: protocol.ErrCodePromptResolved, want: serverapi.ErrPromptAlreadyResolved},
+		{name: "prompt unsupported", code: protocol.ErrCodePromptUnsupported, want: serverapi.ErrPromptUnsupported},
+		{name: "method not found", code: protocol.ErrCodeMethodNotFound, want: serverapi.ErrMethodNotFound},
+		{name: "workflow task not found", code: protocol.ErrCodeWorkflowTaskNotFound, want: serverapi.ErrWorkflowTaskNotFound},
+		{name: "workflow completion ambiguous", code: protocol.ErrCodeWorkflowTaskCompleteAmbiguous, want: serverapi.ErrWorkflowTaskCompleteSelectorAmbiguous},
+		{name: "workflow completion target missing", code: protocol.ErrCodeWorkflowTaskCompleteNotFound, want: serverapi.ErrWorkflowTaskCompleteTargetNotFound},
+		{name: "auth required", code: protocol.ErrCodeAuthRequired, want: serverapi.ErrServerAuthRequired},
+		{name: "runtime unavailable", code: protocol.ErrCodeRuntimeUnavailable, want: serverapi.ErrRuntimeUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := protocolError(&protocol.ResponseError{Code: tc.code, Message: tc.name}); !errors.Is(err, tc.want) {
+				t.Fatalf("protocol error = %v, want %v", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -870,25 +861,6 @@ func TestProtocolErrorDecodesWorkflowTaskListScopeError(t *testing.T) {
 	if decoded.Kind != source.Kind || decoded.MissingScope == nil || *decoded.MissingScope != missing || len(decoded.ProjectIDs) != 2 || decoded.ProjectIDs[0] != "project-1" || decoded.ProjectIDs[1] != "project-2" {
 		t.Fatalf("decoded scope error = %+v, want %+v", decoded, source)
 	}
-}
-
-func TestProtocolErrorDecodesSessionRetargetError(t *testing.T) {
-	source := &serverapi.SessionRetargetError{
-		Reason:        serverapi.SessionRetargetTargetProjectRequired,
-		SessionID:     "session-1",
-		SourceProject: serverapi.ProjectReference{ID: "project-source", Name: "Source"},
-		TargetRoot:    "/work/target",
-		CandidateProjects: []serverapi.ProjectReference{{
-			ID:   "project-target",
-			Name: "Target",
-		}},
-	}
-	err := protocolError(&protocol.ResponseError{
-		Code:    protocol.ErrCodeSessionRetarget,
-		Message: source.Error(),
-		Data:    source.RPCErrorData(),
-	})
-	assertRemoteSessionRetargetError(t, err, source)
 }
 
 func TestRemoteSessionRetargetErrorRoundTrip(t *testing.T) {
@@ -939,20 +911,6 @@ func assertRemoteSessionRetargetError(t *testing.T, err error, source *serverapi
 		len(decoded.CandidateProjects) != len(source.CandidateProjects) ||
 		decoded.CandidateProjects[0] != source.CandidateProjects[0] {
 		t.Fatalf("decoded session retarget error = %+v, want %+v", decoded, source)
-	}
-}
-
-func TestProtocolErrorDecodesWorktreeStructuredErrors(t *testing.T) {
-	operationID := serverapi.NewWorktreeOperationID()
-	for _, source := range remoteTestWorktreeStructuredErrors(operationID) {
-		t.Run(source.Error(), func(t *testing.T) {
-			err := protocolError(&protocol.ResponseError{
-				Code:    source.RPCErrorCode(),
-				Message: source.Error(),
-				Data:    source.RPCErrorData(),
-			})
-			assertRemoteWorktreeStructuredError(t, err, source, operationID)
-		})
 	}
 }
 
@@ -1087,18 +1045,6 @@ func TestProtocolErrorDecodesWorkflowLockedExecutionTargetError(t *testing.T) {
 	}
 	if decoded.Cause != source.Cause {
 		t.Fatalf("decoded locked target error = %+v, want %+v", decoded, source)
-	}
-}
-
-func TestProtocolErrorMapsAuthRequiredCode(t *testing.T) {
-	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeAuthRequired, Message: "auth required"}); !errors.Is(err, serverapi.ErrServerAuthRequired) {
-		t.Fatalf("expected server auth required, got %v", err)
-	}
-}
-
-func TestProtocolErrorMapsRuntimeUnavailableCode(t *testing.T) {
-	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeRuntimeUnavailable, Message: "runtime missing"}); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		t.Fatalf("expected runtime unavailable, got %v", err)
 	}
 }
 

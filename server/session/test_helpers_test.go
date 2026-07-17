@@ -124,3 +124,12 @@ func newSessionTestLazyStoreAt(t *testing.T, root string) *Store {
 func openSessionTestStore(store *Store) (*Store, error) {
 	return Open(store.Dir(), sessionTestPersistence.options()...)
 }
+
+func mustOpenSessionTestStore(t *testing.T, store *Store) *Store {
+	t.Helper()
+	opened, err := openSessionTestStore(store)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	return opened
+}

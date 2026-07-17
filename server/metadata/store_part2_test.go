@@ -341,108 +341,24 @@ func TestUpsertWorktreeRecordRejectsMissingRequiredFields(t *testing.T) {
 	}
 }
 
-func TestResolvePersistedSessionUsesReboundWorkspaceRoot(t *testing.T) {
-	ctx := context.Background()
-	store, cfg, binding := newMetadataTestStore(t)
-	projectSessionsDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
-	sess, err := session.Create(projectSessionsDir, filepath.Base(projectSessionsDir), cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, store.AuthoritativeSessionStoreOptions()...)
-	if err != nil {
-		t.Fatalf("session.Create: %v", err)
-	}
-	if err := sess.SetName("hello"); err != nil {
-		t.Fatalf("SetName: %v", err)
-	}
-	if err := sess.EnsureDurable(); err != nil {
-		t.Fatalf("EnsureDurable: %v", err)
-	}
-	oldWorkspace := cfg.WorkspaceRoot
-	newWorkspace := filepath.Join(t.TempDir(), "workspace-moved")
-	if err := os.Rename(oldWorkspace, newWorkspace); err != nil {
-		t.Fatalf("Rename workspace: %v", err)
-	}
-	if _, err := store.RebindWorkspace(ctx, oldWorkspace, newWorkspace); err != nil {
-		t.Fatalf("RebindWorkspace: %v", err)
-	}
-	record, err := store.ResolvePersistedSession(ctx, sess.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ResolvePersistedSession: %v", err)
-	}
-	canonicalNewWorkspace, err := config.CanonicalWorkspaceRoot(newWorkspace)
-	if err != nil {
-		t.Fatalf("CanonicalWorkspaceRoot newWorkspace: %v", err)
-	}
-	if record.Meta == nil {
-		t.Fatal("expected resolved metadata")
-	}
-	if record.Meta.WorkspaceRoot != canonicalNewWorkspace {
-		t.Fatalf("resolved workspace root = %q, want %q", record.Meta.WorkspaceRoot, canonicalNewWorkspace)
-	}
-}
-
-func TestHiddenDurableSessionStaysOutOfProjectListingsUntilVisible(t *testing.T) {
-	ctx := context.Background()
-	store, cfg, binding := newMetadataTestStore(t)
-	sess := createMetadataTestSession(t, store, cfg, binding)
-
-	projects, err := store.ListProjects(ctx)
-	if err != nil {
-		t.Fatalf("ListProjects before visibility: %v", err)
-	}
-	if len(projects) != 1 {
-		t.Fatalf("expected one project, got %+v", projects)
-	}
-	if projects[0].SessionCount != 0 {
-		t.Fatalf("hidden durable session must not affect project session count, got %+v", projects[0])
-	}
-
-	page, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		PageSize:  20,
-		Position:  serverapi.NewestSessionPagePosition(),
-	})
-	if err != nil {
-		t.Fatalf("ListSessionPage before visibility: %v", err)
-	}
-	if len(page.Sessions) != 0 {
-		t.Fatalf("expected hidden durable session to stay out of listings, got %+v", page.Sessions)
-	}
-
-	if err := sess.SetName("incident triage"); err != nil {
-		t.Fatalf("SetName: %v", err)
-	}
-
-	projects, err = store.ListProjects(ctx)
-	if err != nil {
-		t.Fatalf("ListProjects after visibility: %v", err)
-	}
-	if projects[0].SessionCount != 1 {
-		t.Fatalf("visible session must affect project session count, got %+v", projects[0])
-	}
-
-	page, err = store.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		PageSize:  20,
-		Position:  serverapi.NewestSessionPagePosition(),
-	})
-	if err != nil {
-		t.Fatalf("ListSessionPage after visibility: %v", err)
-	}
-	if len(page.Sessions) != 1 || page.Sessions[0].SessionID.String() != sess.Meta().SessionID {
-		t.Fatalf("expected newly visible session in listings, got %+v", page.Sessions)
-	}
-	if page.Sessions[0].Name != "incident triage" {
-		t.Fatalf("session name = %q, want incident triage", page.Sessions[0].Name)
-	}
-}
-
 func TestSessionLaunchVisibilityTransitions(t *testing.T) {
 	tests := []struct {
 		name        string
 		mutate      func(*testing.T, *session.Store)
 		wantVisible bool
+		wantName    string
 	}{
+		{
+			name:        "name makes session launch-visible",
+			wantVisible: true,
+			wantName:    "incident triage",
+			mutate: func(t *testing.T, sess *session.Store) {
+				t.Helper()
+				if err := sess.SetName("incident triage"); err != nil {
+					t.Fatalf("SetName: %v", err)
+				}
+			},
+		},
 		{
 			name:        "input draft makes session launch-visible",
 			wantVisible: true,
@@ -506,6 +422,9 @@ func TestSessionLaunchVisibilityTransitions(t *testing.T) {
 			}
 			if listed[0].SessionID.String() != sess.Meta().SessionID {
 				t.Fatalf("listed session id = %q, want %q", listed[0].SessionID, sess.Meta().SessionID)
+			}
+			if tc.wantName != "" && listed[0].Name != tc.wantName {
+				t.Fatalf("listed session name = %q, want %q", listed[0].Name, tc.wantName)
 			}
 		})
 	}

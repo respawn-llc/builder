@@ -413,10 +413,6 @@ func PrepareRunPromptOverridesWithContext(app config.App, overrides serverapi.Ru
 	return prepareRunPromptOverridesWithBudget(app, overrides, authState, preparation, applyDerivedModelContextBudgetOverrides)
 }
 
-func prepareRunPromptOverrides(app config.App, overrides serverapi.RunPromptOverrides, authState auth.State, preparation RunPromptPreparationContext) (PreparedRunPromptOverrides, error) {
-	return prepareRunPromptOverridesWithBudget(app, overrides, authState, preparation, applyDerivedModelContextBudgetOverrides)
-}
-
 func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.RunPromptOverrides, authState auth.State, preparation RunPromptPreparationContext, applyBudget modelContextBudgetApplier) (PreparedRunPromptOverrides, error) {
 	roleOverride, err := overrides.AgentRoleOverride()
 	if err != nil {

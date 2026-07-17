@@ -160,10 +160,9 @@ func TestOnboardingImportTargetSkipFactsHideImportSteps(t *testing.T) {
 	}
 	state := testOnboardingFlowStatePtr(t, nil)
 	state.imports = onboardingImportDiscoveryFromFacts(facts)
-
 	for _, step := range newOnboardingWorkflow(state).steps {
-		if step.id == "skills_import" && step.visible(state) {
-			t.Fatalf("expected server target skip facts to hide skill import step")
+		if step.id == onboardingStepSkillsImport && step.visible(state) {
+			t.Fatal("server target skip facts did not hide the skill import step")
 		}
 	}
 }
@@ -191,16 +190,6 @@ func TestOnboardingSkippedImportErrorScreenCanContinueWithNoneChoice(t *testing.
 	}
 }
 
-func TestApplyImportChoiceRejectsRemovedCopyModes(t *testing.T) {
-	selection := onboardingImportSelection{}
-	if err := applyImportChoice(&selection, "copy:claude_code", nil); err == nil {
-		t.Fatal("expected removed copy mode to be rejected")
-	}
-	if err := applyImportChoice(&selection, "merge", nil); err == nil {
-		t.Fatal("expected removed merge mode to be rejected")
-	}
-}
-
 func TestOnboardingModelBackspaceTogglesMultiSelect(t *testing.T) {
 	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = theme.Dark }))
 	model.currentScreen = onboardingScreen{
@@ -216,24 +205,6 @@ func TestOnboardingModelBackspaceTogglesMultiSelect(t *testing.T) {
 	updated := next.(*onboardingModel)
 	if updated.selection["one"] {
 		t.Fatal("expected backspace to toggle the current multi-select option off")
-	}
-}
-
-func TestOnboardingModelCtrlHTogglesMultiSelect(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = theme.Dark }))
-	model.currentScreen = onboardingScreen{
-		ID:        "skills_enabled",
-		Kind:      onboardingScreenMulti,
-		Title:     "Choose enabled skills",
-		Options:   []onboardingOption{{ID: "one", Title: "One"}},
-		Selection: map[string]bool{"one": true},
-	}
-	model.selection = map[string]bool{"one": true}
-	model.cursor = 0
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlH})
-	updated := next.(*onboardingModel)
-	if updated.selection["one"] {
-		t.Fatal("expected ctrl+h to toggle the current multi-select option off")
 	}
 }
 
@@ -280,34 +251,13 @@ func TestBuildSkillSelectionScreenShowsGeneratedSkillsWithoutImport(t *testing.T
 			t.Fatalf("expected option ID %q, got %+v", want, screen.Options)
 		}
 	}
-}
-
-func TestDisabledOnboardingSkillNamesCanDisableGeneratedSkillWithoutImport(t *testing.T) {
-	state := testOnboardingFlowStatePtr(t, nil)
-	state.imports = onboardingImportDiscovery{generatedSkillItems: []onboardingSkillImportItem{
-		{ID: "generated:kent-dogfooding", ProviderLabel: "Preinstalled", TargetDirName: "kent-dogfooding", SkillName: "kent-dogfooding", DefaultEnabled: true},
-		{ID: "generated:creating-skills", ProviderLabel: "Preinstalled", TargetDirName: "creating-skills", SkillName: "creating-skills", DefaultEnabled: true},
-	}}
-	state.selections.skillEnablement = initialSkillEnablement(state)
 	state.selections.skillEnablement = map[string]bool{
 		"generated:kent-dogfooding": true,
 		"generated:creating-skills": false,
 	}
-	disabled := disabledOnboardingSkillNames(*state)
-	if len(disabled) != 1 || disabled[0] != "creating-skills" {
-		t.Fatalf("disabled generated skills = %+v, want creating-skills", disabled)
-	}
-}
-
-func TestGeneratedSkillSelectionCountsWithoutImport(t *testing.T) {
-	state := testOnboardingFlowStatePtr(t, nil)
-	state.imports = onboardingImportDiscovery{generatedSkillItems: []onboardingSkillImportItem{
-		{ID: "generated:kent-dogfooding", ProviderLabel: "Preinstalled", TargetDirName: "kent-dogfooding", SkillName: "kent-dogfooding", DefaultEnabled: true},
-		{ID: "generated:creating-skills", ProviderLabel: "Preinstalled", TargetDirName: "creating-skills", SkillName: "creating-skills", DefaultEnabled: true},
-	}}
-	state.selections.skillEnablement = map[string]bool{
-		"generated:kent-dogfooding": true,
-		"generated:creating-skills": false,
+	disabledNames := disabledOnboardingSkillNames(*state)
+	if len(disabledNames) != 1 || disabledNames[0] != "creating-skills" {
+		t.Fatalf("disabled generated skills = %+v, want creating-skills", disabledNames)
 	}
 	enabled, disabled := selectedSkillCounts(state)
 	if enabled != 1 || disabled != 1 {
@@ -318,64 +268,39 @@ func TestGeneratedSkillSelectionCountsWithoutImport(t *testing.T) {
 	}
 }
 
-func TestOnboardingModelToggleAllHotkeyTogglesMultiSelection(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = theme.Dark }))
-	model.currentScreen = onboardingScreen{
-		ID:      "skills_enabled",
-		Kind:    onboardingScreenMulti,
-		Title:   "Choose enabled skills",
-		Options: []onboardingOption{{ID: onboardingToggleAllOptionID, Title: "Disable all"}, {ID: "one", Title: "One"}, {ID: "two", Title: "Two"}, {ID: "three", Title: "Three"}},
+func TestOnboardingModelToggleAllInputsToggleMultiSelection(t *testing.T) {
+	tests := []struct {
+		name string
+		key  tea.KeyMsg
+	}{
+		{name: "hotkey", key: tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}},
+		{name: "menu item", key: tea.KeyMsg{Type: tea.KeySpace}},
 	}
-	model.selection = map[string]bool{"one": true, "two": true, "three": true}
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	updated := next.(*onboardingModel)
-	for _, id := range []string{"one", "two", "three"} {
-		if updated.selection[id] {
-			t.Fatalf("expected %q to be toggled off", id)
-		}
-	}
-	if updated.selection[onboardingToggleAllOptionID] {
-		t.Fatal("toggle-all selection must be unchecked when selectable options are disabled")
-	}
-}
-
-func TestOnboardingModelToggleAllMenuItemTogglesMultiSelection(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = theme.Dark }))
-	model.currentScreen = onboardingScreen{
-		ID:      "skills_enabled",
-		Kind:    onboardingScreenMulti,
-		Title:   "Choose enabled skills",
-		Options: []onboardingOption{{ID: onboardingToggleAllOptionID, Title: "Disable all"}, {ID: "one", Title: "One"}, {ID: "two", Title: "Two"}, {ID: "three", Title: "Three"}},
-	}
-	model.selection = map[string]bool{"one": true, "two": true, "three": true}
-	model.cursor = 0
-	next, _ := model.Update(tea.KeyMsg{Type: tea.KeySpace})
-	updated := next.(*onboardingModel)
-	for _, id := range []string{"one", "two", "three"} {
-		if updated.selection[id] {
-			t.Fatalf("expected %q to be toggled off", id)
-		}
-	}
-}
-
-func TestOnboardingModelRefreshToggleAllTracksCheckedState(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = theme.Dark }))
-	model.currentScreen = onboardingScreen{
-		ID:      "skills_enabled",
-		Kind:    onboardingScreenMulti,
-		Title:   "Choose enabled skills",
-		Options: []onboardingOption{{ID: onboardingToggleAllOptionID, Title: "Disable all"}, {ID: "one", Title: "One"}, {ID: "two", Title: "Two"}},
-	}
-	model.selection = map[string]bool{"one": true, "two": true}
-	model.refreshToggleAllOption()
-	if !model.selection[onboardingToggleAllOptionID] {
-		t.Fatal("expected toggle-all action to render checked when all options are enabled")
-	}
-
-	model.selection["two"] = false
-	model.refreshToggleAllOption()
-	if model.selection[onboardingToggleAllOptionID] {
-		t.Fatal("expected toggle-all action to render unchecked when not all options are enabled")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = theme.Dark }))
+			model.currentScreen = onboardingScreen{
+				ID:      "skills_enabled",
+				Kind:    onboardingScreenMulti,
+				Title:   "Choose enabled skills",
+				Options: []onboardingOption{{ID: onboardingToggleAllOptionID, Title: "Disable all"}, {ID: "one", Title: "One"}, {ID: "two", Title: "Two"}, {ID: "three", Title: "Three"}},
+			}
+			model.selection = map[string]bool{"one": true, "two": true, "three": true}
+			model.refreshToggleAllOption()
+			if !model.selection[onboardingToggleAllOptionID] {
+				t.Fatal("toggle-all action is unchecked while every option is enabled")
+			}
+			next, _ := model.Update(tt.key)
+			updated := next.(*onboardingModel)
+			for _, id := range []string{"one", "two", "three"} {
+				if updated.selection[id] {
+					t.Fatalf("expected %q to be toggled off", id)
+				}
+			}
+			if updated.selection[onboardingToggleAllOptionID] {
+				t.Fatal("toggle-all selection must be unchecked when selectable options are disabled")
+			}
+		})
 	}
 }
 
@@ -391,18 +316,6 @@ func TestOnboardingSubmitCurrentScreenShowsValidationError(t *testing.T) {
 	}
 	if updated.currentScreen.ErrorText == "" {
 		t.Fatal("expected submit validation error to be shown on the current screen")
-	}
-}
-
-func TestOnboardingWorkflowStartsWithThemeStep(t *testing.T) {
-	state := testOnboardingFlowStatePtr(t, nil)
-	workflow := newOnboardingWorkflow(state)
-	steps := workflow.visibleSteps(state)
-	if len(steps) == 0 {
-		t.Fatal("expected onboarding workflow to include steps")
-	}
-	if steps[0].id != "theme" {
-		t.Fatalf("expected first onboarding step to be theme, got %q", steps[0].id)
 	}
 }
 

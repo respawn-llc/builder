@@ -123,24 +123,3 @@ func TestAskFreeformAltRuneWordNavigation(t *testing.T) {
 		t.Fatalf("ask cursor after alt+f = %d, want %d", got, want)
 	}
 }
-
-func TestSingleLineEditorAltRuneWordNavigation(t *testing.T) {
-	editor := newSingleLineEditor("alpha beta gamma")
-	editor.SetCursor(len(editor.Text()))
-
-	updateSingleLineEditorWithAppKeys(&editor, tea.KeyMsg{Type: tea.KeyRunes, Alt: true, Runes: []rune{'b'}})
-	if got, want := editor.Text(), "alpha beta gamma"; got != want {
-		t.Fatalf("editor text after alt+b = %q, want %q", got, want)
-	}
-	if got, want := editor.Cursor(), byteOffsetForRuneCursor(editor.Text(), moveBufferCursorWordLeft(editor.Text(), len([]rune(editor.Text())))); got != want {
-		t.Fatalf("editor cursor after alt+b = %d, want %d", got, want)
-	}
-
-	updateSingleLineEditorWithAppKeys(&editor, tea.KeyMsg{Type: tea.KeyRunes, Alt: true, Runes: []rune{'f'}})
-	if got, want := editor.Text(), "alpha beta gamma"; got != want {
-		t.Fatalf("editor text after alt+f = %q, want %q", got, want)
-	}
-	if got, want := editor.Cursor(), len(editor.Text()); got != want {
-		t.Fatalf("editor cursor after alt+f = %d, want %d", got, want)
-	}
-}

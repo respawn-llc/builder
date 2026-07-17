@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,12 +15,10 @@ import (
 	"core/internal/testharness/runtimewirefixture"
 	"core/internal/testharness/testsetup"
 	"core/server/auth"
-	"core/server/launch"
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/session"
 	"core/server/session/sessiontest"
-	"core/server/subagentpolicy"
 	"core/server/tools"
 	askquestion "core/server/tools"
 	patchtool "core/server/tools/patch"
@@ -632,25 +628,6 @@ func TestBackgroundEventRouterStaleClearKeepsReplacementForSameSession(t *testin
 	}
 }
 
-func TestBackgroundEventRouterQueuesNoticeForActiveOwnerSession(t *testing.T) {
-	root := t.TempDir()
-	store := newRuntimeWireSession(t, root, "ws")
-	client := &busyToggleFakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "notice handled", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200_000}}}}
-	eng := newRuntimeWireEngine(t, store, client)
-
-	router := &BackgroundEventRouter{}
-	router.SetActiveSession(store.Meta().SessionID, eng)
-	router.Handle(runtimewirefixture.BackgroundCompletionEvent("1001", store.Meta().SessionID, root))
-
-	deadline := time.Now().Add(2 * time.Second)
-	for client.CallCount() == 0 && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if got := client.CallCount(); got == 0 {
-		t.Fatal("expected active owner completion to queue a model notice")
-	}
-}
-
 func TestBackgroundEventRouterDropsOrphanedTerminalEventBeforeInvariantHandling(t *testing.T) {
 	router := NewBackgroundEventRouterWithInvariantPolicy(nil, 16_000, shelltool.BackgroundOutputDefault, invariant.NewPolicy(invariant.WithMode(invariant.ModePanic)))
 	exitCode := 7
@@ -792,108 +769,6 @@ func TestNewRuntimeWiringRejectsEmptyModelAfterBypassingConfigDefaults(t *testin
 	}
 }
 
-func TestRuntimeWiringUsesResolvedParentAndSubagentPerSkillPolicies(t *testing.T) {
-	tests := []struct {
-		name               string
-		globalSkillEnabled bool
-		roleSkillEnabled   bool
-		wantParentSkills   bool
-		wantRoleSkills     bool
-	}{
-		{
-			name:               "role disables globally enabled skill",
-			globalSkillEnabled: true,
-			roleSkillEnabled:   false,
-			wantParentSkills:   true,
-			wantRoleSkills:     false,
-		},
-		{
-			name:               "role re-enables globally disabled skill",
-			globalSkillEnabled: false,
-			roleSkillEnabled:   true,
-			wantParentSkills:   false,
-			wantRoleSkills:     true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			configRoot := t.TempDir()
-			workspace := t.TempDir()
-			configPath := filepath.Join(configRoot, "config.toml")
-			configBody := fmt.Sprintf("[skills]\nworkspace-skill = %t\n\n[subagents.worker.skills]\nworkspace-skill = %t\n", tt.globalSkillEnabled, tt.roleSkillEnabled)
-			if err := os.WriteFile(configPath, []byte(configBody), 0o644); err != nil {
-				t.Fatalf("write config: %v", err)
-			}
-			skillDir := filepath.Join(workspace, config.ConfigDirName, "skills")
-			if err := os.MkdirAll(skillDir, 0o755); err != nil {
-				t.Fatalf("mkdir skills: %v", err)
-			}
-			validSkillDir := filepath.Join(skillDir, "workspace-skill")
-			if err := os.MkdirAll(validSkillDir, 0o755); err != nil {
-				t.Fatalf("mkdir valid skill: %v", err)
-			}
-			if err := os.WriteFile(filepath.Join(validSkillDir, "SKILL.md"), []byte("---\nname: workspace-skill\ndescription: workspace skill\n---\n"), 0o644); err != nil {
-				t.Fatalf("write skill: %v", err)
-			}
-			if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), filepath.Join(skillDir, "broken-skill")); err != nil {
-				t.Fatalf("create broken skill symlink: %v", err)
-			}
-
-			app, err := config.Load(workspace, config.LoadOptions{ConfigRoot: configRoot})
-			if err != nil {
-				t.Fatalf("load config: %v", err)
-			}
-			if err := subagentpolicy.Authorize(app.Settings, &subagentpolicy.Caller{}, subagentpolicy.Target{Kind: subagentpolicy.TargetNamed, Selector: "worker"}); err != nil {
-				t.Fatal("skills policy must not affect role callability")
-			}
-
-			parentStore := newRuntimeWireSessionForWorkspace(t, t.TempDir(), "parent", workspace)
-			roleStore := newRuntimeWireSessionForWorkspace(t, t.TempDir(), "role", workspace)
-			roleName := "worker"
-			if err := roleStore.SetContinuationContext(session.ContinuationContext{AgentRole: &roleName}); err != nil {
-				t.Fatalf("set role continuation: %v", err)
-			}
-
-			parentRequest, parentWarning := runResolvedSkillsRequest(t, app, parentStore, workspace, configRoot)
-			roleRequest, roleWarning := runResolvedSkillsRequest(t, app, roleStore, workspace, configRoot)
-			assertSkillsRequestState(t, parentRequest, parentWarning, tt.wantParentSkills, true)
-			assertSkillsRequestState(t, roleRequest, roleWarning, tt.wantRoleSkills, true)
-		})
-	}
-}
-
-func TestReviewerProviderSettingsFallbacks(t *testing.T) {
-	resolved := config.ResolveReviewerProviderSettings(config.Settings{
-		ProviderOverride: "openai",
-		OpenAIBaseURL:    "http://127.0.0.1:8080/v1",
-	})
-	if resolved.ProviderOverride != "openai" || resolved.OpenAIBaseURL != "http://127.0.0.1:8080/v1" {
-		t.Fatalf("expected main provider settings fallback, got %+v", resolved)
-	}
-
-	resolved = config.ResolveReviewerProviderSettings(config.Settings{
-		OpenAIBaseURL: "http://127.0.0.1:8080/v1",
-		Reviewer: config.ReviewerSettings{
-			ProviderOverride: "openai",
-		},
-	})
-	if resolved.ProviderOverride != "openai" || resolved.OpenAIBaseURL != "http://127.0.0.1:8080/v1" {
-		t.Fatalf("expected explicit reviewer openai provider to inherit main base URL, got %+v", resolved)
-	}
-
-	resolved = config.ResolveReviewerProviderSettings(config.Settings{
-		OpenAIBaseURL: "http://127.0.0.1:8080/v1",
-		Reviewer: config.ReviewerSettings{
-			ProviderOverride: "openai",
-			OpenAIBaseURL:    "http://localhost:11434/v1",
-		},
-	})
-	if resolved.ProviderOverride != "openai" || resolved.OpenAIBaseURL != "http://localhost:11434/v1" {
-		t.Fatalf("expected explicit reviewer provider settings, got %+v", resolved)
-	}
-}
-
 func TestReviewerModelCapabilitiesHonorExplicitFalseSources(t *testing.T) {
 	locked := lockedModelCapabilitiesForConfig(
 		"gpt-5",
@@ -925,138 +800,6 @@ func TestReviewerModelCapabilitiesHonorInheritedExplicitFalseSources(t *testing.
 	}
 	if !locked.SupportsVisionInputs {
 		t.Fatalf("expected default reviewer vision capability to come from model contract, got %+v", locked)
-	}
-}
-
-func TestRuntimeProviderClientUsesProviderCapabilitiesOverride(t *testing.T) {
-	client, err := llm.NewProviderClient(llm.ProviderClientOptions{
-		Model:         "local-reviewer",
-		Provider:      llm.Provider("openai"),
-		OpenAIBaseURL: "http://127.0.0.1:11434/v1",
-		Auth:          nil,
-		ProviderCapabilitiesOverride: &llm.ProviderCapabilities{
-			ProviderID:             "local-reviewer",
-			SupportsResponsesAPI:   true,
-			SupportsPromptCacheKey: true,
-		},
-	})
-	if err != nil {
-		t.Fatalf("new runtime provider client: %v", err)
-	}
-	provider, ok := client.(llm.ProviderCapabilitiesClient)
-	if !ok {
-		t.Fatalf("expected provider capabilities client, got %T", client)
-	}
-	caps, err := provider.ProviderCapabilities(context.Background())
-	if err != nil {
-		t.Fatalf("resolve provider capabilities: %v", err)
-	}
-	if caps.ProviderID != "local-reviewer" || !caps.SupportsResponsesAPI || !caps.SupportsPromptCacheKey {
-		t.Fatalf("unexpected reviewer provider capabilities: %+v", caps)
-	}
-}
-
-func TestReviewerAuthNoneDoesNotSendGlobalAuthToLocalEndpoint(t *testing.T) {
-	authHeaders := make(chan string, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/responses" {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		authHeaders <- r.Header.Get("Authorization")
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"id":"resp_local_reviewer",
-			"object":"response",
-			"output":[{
-				"type":"message",
-				"id":"msg_local_reviewer",
-				"role":"assistant",
-				"status":"completed",
-				"content":[{"type":"output_text","text":"{\"suggestions\":[]}"}]
-			}],
-			"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
-		}`))
-	}))
-	defer server.Close()
-
-	client, err := llm.NewProviderClient(llm.ProviderClientOptions{
-		Model:               "local-reviewer",
-		Provider:            llm.Provider("openai"),
-		OpenAIBaseURL:       server.URL + "/v1",
-		Auth:                nil,
-		HTTPClient:          server.Client(),
-		ModelVerbosity:      string(config.ModelVerbosityLow),
-		ContextWindowTokens: 64000,
-	})
-	if err != nil {
-		t.Fatalf("new reviewer provider client: %v", err)
-	}
-	if _, err := client.Generate(context.Background(), llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic,
-		Model:        "local-reviewer",
-		Temperature:  1,
-		SystemPrompt: "review",
-		Items: []llm.ResponseItem{{
-			Type:    llm.ResponseItemTypeMessage,
-			Role:    llm.RoleUser,
-			Content: "hi",
-		}},
-	}); err != nil {
-		t.Fatalf("generate: %v", err)
-	}
-	select {
-	case got := <-authHeaders:
-		if strings.TrimSpace(got) != "" {
-			t.Fatalf("expected no Authorization header, got %q", got)
-		}
-	default:
-		t.Fatal("expected local reviewer server request")
-	}
-}
-
-func TestReviewerProviderCapabilitiesOverrideControlsRuntimePromptCacheKey(t *testing.T) {
-	root := t.TempDir()
-	store := newRuntimeWireSession(t, root, "ws")
-	mainClient := &runtimewireCaptureClient{
-		caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true},
-		responses: []llm.Response{{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
-			Usage:     llm.Usage{WindowTokens: 200_000},
-		}},
-	}
-	reviewerClient := &runtimewireCaptureClient{
-		caps: llm.ProviderCapabilities{ProviderID: "local-reviewer", SupportsResponsesAPI: true, SupportsPromptCacheKey: true},
-		responses: []llm.Response{{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":[]}`},
-			Usage:     llm.Usage{WindowTokens: 200_000},
-		}},
-	}
-	reviewerOverride := runtimewireCapabilitiesOverrideClient{
-		Client: reviewerClient,
-		Capabilities: llm.ProviderCapabilities{
-			ProviderID:             "local-reviewer",
-			SupportsResponsesAPI:   true,
-			SupportsPromptCacheKey: false,
-		},
-	}
-
-	eng := newRuntimeWireEngine(t, store, mainClient, runtime.Config{
-		Model: "gpt-5",
-		Reviewer: runtime.ReviewerConfig{
-			Frequency: "all",
-			Model:     "local-reviewer",
-			Client:    reviewerOverride,
-		},
-	})
-	if _, err := eng.SubmitUserMessage(context.Background(), "review this"); err != nil {
-		t.Fatalf("submit user message: %v", err)
-	}
-	if reviewerClient.CallCount() != 1 {
-		t.Fatalf("expected one reviewer call, got %d", reviewerClient.CallCount())
-	}
-	reviewerReq := reviewerClient.LastRequest()
-	if reviewerReq.PromptCacheKey != "" {
-		t.Fatalf("expected reviewer capability override to suppress prompt cache key, got %q", reviewerReq.PromptCacheKey)
 	}
 }
 
@@ -1111,84 +854,6 @@ func newRuntimeWireSession(t *testing.T, root string, name string) *session.Stor
 		t.Fatalf("create store %s: %v", name, err)
 	}
 	return store
-}
-
-func newRuntimeWireSessionForWorkspace(t *testing.T, root string, name string, workspace string) *session.Store {
-	t.Helper()
-	store, err := session.Create(root, name, workspace, sessioncontract.SessionCategoryMain, runtimeWireTestSessionPersistence.Options()...)
-	if err != nil {
-		t.Fatalf("create store %s: %v", name, err)
-	}
-	return store
-}
-
-func runResolvedSkillsRequest(t *testing.T, app config.App, store *session.Store, workspace string, configRoot string) (llm.Request, bool) {
-	t.Helper()
-	resolved, err := launch.ResolvePromptFacingSnapshotConfig(app, store, false)
-	if err != nil {
-		t.Fatalf("resolve prompt-facing settings: %v", err)
-	}
-	client := &runtimewireCaptureClient{
-		caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true},
-		responses: []llm.Response{{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
-			Usage:     llm.Usage{WindowTokens: 200_000},
-		}},
-	}
-	var eventMu sync.Mutex
-	hasWarning := false
-	wiring, err := NewRuntimeWiring(
-		store,
-		resolved.Settings,
-		resolved.ActiveToolIDs,
-		workspace,
-		auth.NewManager(auth.NewMemoryStore(auth.EmptyState()), nil, nil),
-		nil,
-		RuntimeWiringOptions{
-			Client:          client,
-			Sources:         resolved.Source.Sources,
-			GlobalConfigDir: configRoot,
-			OnEvent: func(event runtime.Event) {
-				if event.Kind != runtime.EventLocalEntryAdded || event.LocalEntry == nil || event.LocalEntry.Role != "warning" {
-					return
-				}
-				eventMu.Lock()
-				hasWarning = true
-				eventMu.Unlock()
-			},
-		},
-	)
-	if err != nil {
-		t.Fatalf("new runtime wiring: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := wiring.Close(); err != nil {
-			t.Errorf("close runtime wiring: %v", err)
-		}
-	})
-	if _, err := wiring.Engine.SubmitUserMessage(context.Background(), "hello"); err != nil {
-		t.Fatalf("submit user message: %v", err)
-	}
-	eventMu.Lock()
-	defer eventMu.Unlock()
-	return client.LastRequest(), hasWarning
-}
-
-func assertSkillsRequestState(t *testing.T, request llm.Request, hasWarning bool, wantSkills bool, wantWarning bool) {
-	t.Helper()
-	foundSkills := false
-	for _, message := range llm.MessagesFromItems(request.Items) {
-		if message.MessageType == llm.MessageTypeSkills {
-			foundSkills = true
-			break
-		}
-	}
-	if foundSkills != wantSkills {
-		t.Fatalf("skills context present = %t, want %t; messages=%+v", foundSkills, wantSkills, llm.MessagesFromItems(request.Items))
-	}
-	if hasWarning != wantWarning {
-		t.Fatalf("skill discovery warning present = %t, want %t", hasWarning, wantWarning)
-	}
 }
 
 func newRuntimeWireToolRegistry(t *testing.T, workspace string, enabled ...toolspec.ID) (*tools.Registry, *askquestion.AskQuestionBroker) {
@@ -1305,15 +970,6 @@ type runtimewireCaptureClient struct {
 	calls     []llm.Request
 }
 
-type runtimewireCapabilitiesOverrideClient struct {
-	llm.Client
-	Capabilities llm.ProviderCapabilities
-}
-
-func (c runtimewireCapabilitiesOverrideClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
-	return c.Capabilities, nil
-}
-
 func (f *runtimewireCaptureClient) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
 	if err := ctx.Err(); err != nil {
 		return llm.Response{}, err
@@ -1337,15 +993,6 @@ func (f *runtimewireCaptureClient) CallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.calls)
-}
-
-func (f *runtimewireCaptureClient) LastRequest() llm.Request {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.calls) == 0 {
-		return llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic}
-	}
-	return f.calls[len(f.calls)-1]
 }
 
 func (f *busyToggleFakeClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {

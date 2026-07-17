@@ -31,7 +31,3 @@ func stripANSIAndTrimRight(view string) string {
 	}
 	return strings.Join(lines, "\n")
 }
-
-func stripANSIPreserve(view string) string {
-	return ansi.Strip(view)
-}

@@ -12,15 +12,44 @@ import (
 	"core/shared/sessioncontract"
 )
 
+func appendSessionTestEvent(t *testing.T, store *Store, stepID, kind string, payload any) Event {
+	t.Helper()
+	event, _, err := store.AppendEvent(stepID, kind, payload)
+	if err != nil {
+		t.Fatalf("append %s event: %v", kind, err)
+	}
+	return event
+}
+
+func sessionTestLockedContract() LockedContract {
+	toolPreambles := true
+	return LockedContract{
+		Model:             "gpt-5",
+		SystemPrompt:      "prompt",
+		HasSystemPrompt:   true,
+		ReviewerPrompt:    "reviewer",
+		HasReviewerPrompt: true,
+		EnabledTools:      []string{"shell"},
+		HasEnabledTools:   true,
+		WebSearchMode:     "native",
+		ToolPreambles:     &toolPreambles,
+	}
+}
+
+func markSessionTestLocked(t *testing.T, store *Store, locked LockedContract) {
+	t.Helper()
+	if err := store.MarkModelDispatchLocked(locked); err != nil {
+		t.Fatalf("mark model dispatch locked: %v", err)
+	}
+}
+
 func TestNewLazyDoesNotPersistUntilFirstWrite(t *testing.T) {
 	store := newSessionTestLazyStore(t)
 	if _, err := os.Stat(store.Dir()); !os.IsNotExist(err) {
 		t.Fatalf("expected no session dir before first write, stat err=%v", err)
 	}
 
-	if _, _, err := store.AppendEvent("step1", "message", map[string]any{"a": 1}); err != nil {
-		t.Fatalf("append event: %v", err)
-	}
+	appendSessionTestEvent(t, store, "step1", "message", map[string]any{"a": 1})
 	if _, err := os.Stat(filepath.Join(store.Dir(), eventsFile)); err != nil {
 		t.Fatalf("expected events file after first write: %v", err)
 	}
@@ -156,14 +185,8 @@ func TestSetWorkflowSessionStateNormalizesEmptyStateToNil(t *testing.T) {
 func TestAppendEventMonotonicSequence(t *testing.T) {
 	store := newSessionTestStore(t)
 
-	e1, _, err := store.AppendEvent("step1", "message", map[string]any{"a": 1})
-	if err != nil {
-		t.Fatalf("append event1: %v", err)
-	}
-	e2, _, err := store.AppendEvent("step1", "message", map[string]any{"b": 2})
-	if err != nil {
-		t.Fatalf("append event2: %v", err)
-	}
+	e1 := appendSessionTestEvent(t, store, "step1", "message", map[string]any{"a": 1})
+	e2 := appendSessionTestEvent(t, store, "step1", "message", map[string]any{"b": 2})
 
 	if e1.Seq != 1 || e2.Seq != 2 {
 		t.Fatalf("unexpected sequence values: %d, %d", e1.Seq, e2.Seq)
@@ -181,64 +204,35 @@ func TestAppendEventMonotonicSequence(t *testing.T) {
 	}
 }
 
-func TestSetInputDraftPersistsAcrossReopen(t *testing.T) {
+func TestInputDraftAndRecoveryPersistAcrossReopenAndClearTogether(t *testing.T) {
 	store := newSessionTestLazyStore(t)
 	want := "draft line one\nline two"
 	if err := store.SetInputDraft(want); err != nil {
 		t.Fatalf("set input draft: %v", err)
 	}
-	reopened, err := openSessionTestStore(store)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	reopened := mustOpenSessionTestStore(t, store)
 	if reopened.Meta().InputDraft != want {
 		t.Fatalf("expected persisted draft %q, got %q", want, reopened.Meta().InputDraft)
 	}
-}
 
-func TestSetInputDraftClearsPersistedValue(t *testing.T) {
-	store := newSessionTestStore(t)
-	if err := store.SetInputDraft("draft"); err != nil {
-		t.Fatalf("set draft: %v", err)
-	}
-	if err := store.SetInputDraft(""); err != nil {
-		t.Fatalf("clear draft: %v", err)
-	}
-	reopened, err := openSessionTestStore(store)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	if reopened.Meta().InputDraft != "" {
-		t.Fatalf("expected cleared draft, got %q", reopened.Meta().InputDraft)
-	}
-}
-
-func TestSetInputDraftRecoveryPersistsAcrossReopenAndClearsWithDraft(t *testing.T) {
-	store := newSessionTestLazyStore(t)
-	if err := store.SetInputDraftRecovery("visible", []InputDraftRecoveryBuffer{{
+	if err := reopened.SetInputDraftRecovery("visible", []InputDraftRecoveryBuffer{{
 		Kind: "active_submit",
 		Text: "submitted before forced exit",
 	}}); err != nil {
 		t.Fatalf("set input draft recovery: %v", err)
 	}
-	reopened, err := openSessionTestStore(store)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	if reopened.Meta().InputDraft != "visible" || len(reopened.Meta().InputDraftRecoveryBuffers) != 1 {
-		t.Fatalf("reopened draft metadata = %+v", reopened.Meta())
+	recovered := mustOpenSessionTestStore(t, store)
+	if recovered.Meta().InputDraft != "visible" || len(recovered.Meta().InputDraftRecoveryBuffers) != 1 {
+		t.Fatalf("reopened draft metadata = %+v", recovered.Meta())
 	}
 	wantBuffer := InputDraftRecoveryBuffer{Kind: "active_submit", Text: "submitted before forced exit"}
-	if reopened.Meta().InputDraftRecoveryBuffers[0] != wantBuffer {
-		t.Fatalf("recovery buffer = %+v, want %+v", reopened.Meta().InputDraftRecoveryBuffers[0], wantBuffer)
+	if recovered.Meta().InputDraftRecoveryBuffers[0] != wantBuffer {
+		t.Fatalf("recovery buffer = %+v, want %+v", recovered.Meta().InputDraftRecoveryBuffers[0], wantBuffer)
 	}
-	if err := reopened.SetInputDraft(""); err != nil {
+	if err := recovered.SetInputDraft(""); err != nil {
 		t.Fatalf("clear input draft: %v", err)
 	}
-	cleared, err := openSessionTestStore(store)
-	if err != nil {
-		t.Fatalf("open cleared store: %v", err)
-	}
+	cleared := mustOpenSessionTestStore(t, store)
 	if cleared.Meta().InputDraft != "" || len(cleared.Meta().InputDraftRecoveryBuffers) != 0 {
 		t.Fatalf("cleared draft metadata = %+v, want no draft recovery", cleared.Meta())
 	}
@@ -258,10 +252,7 @@ func TestSetUsageStatePersistsAcrossReopen(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("set usage state: %v", err)
 	}
-	reopened, err := openSessionTestStore(store)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	reopened := mustOpenSessionTestStore(t, store)
 	if reopened.Meta().UsageState == nil {
 		t.Fatal("expected persisted usage state")
 	}
@@ -270,71 +261,27 @@ func TestSetUsageStatePersistsAcrossReopen(t *testing.T) {
 	}
 }
 
-func TestLockedContractPersistenceIncludesPrompts(t *testing.T) {
+func TestLockedContractPersistenceIncludesPromptAndRequestSnapshots(t *testing.T) {
 	store := newSessionTestStore(t)
-	if err := store.MarkModelDispatchLocked(LockedContract{
-		Model:             "gpt-5",
-		Temperature:       1,
-		MaxOutputToken:    0,
-		SystemPrompt:      "locked system prompt",
-		HasSystemPrompt:   true,
-		ReviewerPrompt:    "locked reviewer prompt",
-		HasReviewerPrompt: true,
-	}); err != nil {
-		t.Fatalf("mark model dispatch locked: %v", err)
-	}
-
-	opened, err := openSessionTestStore(store)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	contract := sessionTestLockedContract()
+	contract.EnabledTools = nil
+	markSessionTestLocked(t, store, contract)
+	opened := mustOpenSessionTestStore(t, store)
 	locked := opened.Meta().Locked
-	if locked == nil || locked.SystemPrompt != "locked system prompt" || !locked.HasSystemPrompt {
+	if locked == nil || locked.SystemPrompt != "prompt" || !locked.HasSystemPrompt {
 		t.Fatalf("locked system prompt = %+v, want persisted snapshot marker", locked)
 	}
-	if locked.ReviewerPrompt != "locked reviewer prompt" || !locked.HasReviewerPrompt {
+	if locked.ReviewerPrompt != "reviewer" || !locked.HasReviewerPrompt {
 		t.Fatalf("locked reviewer prompt = %+v, want persisted snapshot marker", locked)
 	}
-}
-
-func TestLockedContractPersistenceIncludesExplicitZeroToolsAndWebSearchMode(t *testing.T) {
-	store := newSessionTestStore(t)
-	if err := store.MarkModelDispatchLocked(LockedContract{
-		Model:             "gpt-5",
-		SystemPrompt:      "prompt",
-		HasSystemPrompt:   true,
-		EnabledTools:      nil,
-		HasEnabledTools:   true,
-		WebSearchMode:     "native",
-		ReviewerPrompt:    "reviewer",
-		HasReviewerPrompt: true,
-	}); err != nil {
-		t.Fatalf("mark model dispatch locked: %v", err)
-	}
-	opened, err := openSessionTestStore(store)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	locked := opened.Meta().Locked
-	if locked == nil || !locked.HasEnabledTools || len(locked.EnabledTools) != 0 || locked.WebSearchMode != "native" {
+	if !locked.HasEnabledTools || len(locked.EnabledTools) != 0 || locked.WebSearchMode != "native" {
 		t.Fatalf("locked request shape = %+v, want explicit zero tools and native web search", locked)
 	}
 }
 
 func TestResetLockedContractForCompactionBoundaryPersistsFreshContractBoundary(t *testing.T) {
 	store := newSessionTestStore(t)
-	if err := store.MarkModelDispatchLocked(LockedContract{
-		Model:             "gpt-5.3-codex-spark",
-		SystemPrompt:      "source prompt",
-		HasSystemPrompt:   true,
-		ReviewerPrompt:    "source reviewer prompt",
-		HasReviewerPrompt: true,
-		EnabledTools:      []string{"shell"},
-		HasEnabledTools:   true,
-		WebSearchMode:     "native",
-	}); err != nil {
-		t.Fatalf("mark model dispatch locked: %v", err)
-	}
+	markSessionTestLocked(t, store, sessionTestLockedContract())
 
 	if err := store.ResetLockedContractForCompactionBoundary(); err != nil {
 		t.Fatalf("reset locked contract for compaction boundary: %v", err)
@@ -345,10 +292,7 @@ func TestResetLockedContractForCompactionBoundaryPersistsFreshContractBoundary(t
 	if got := store.Meta().PromptCacheLineageGeneration; got != 1 {
 		t.Fatalf("prompt cache lineage generation = %d, want 1", got)
 	}
-	opened, err := openSessionTestStore(store)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	opened := mustOpenSessionTestStore(t, store)
 	if locked := opened.Meta().Locked; locked != nil {
 		t.Fatalf("persisted locked contract = %+v, want absent", locked)
 	}
@@ -360,25 +304,7 @@ func TestResetLockedContractForCompactionBoundaryPersistsFreshContractBoundary(t
 func TestLockedPromptFacingMutationsPreserveLifetimeFields(t *testing.T) {
 	store := newSessionTestStore(t)
 	toolPreambles := true
-	lockedAt := store.Meta().CreatedAt
-	if err := store.MarkModelDispatchLocked(LockedContract{
-		Model:             "gpt-5",
-		Temperature:       0.7,
-		MaxOutputToken:    1000,
-		SystemPrompt:      "prompt A",
-		HasSystemPrompt:   true,
-		ReviewerPrompt:    "reviewer A",
-		HasReviewerPrompt: true,
-		ContextWindow:     100,
-		ContextPercent:    50,
-		EnabledTools:      []string{"shell"},
-		HasEnabledTools:   true,
-		WebSearchMode:     "native",
-		ToolPreambles:     &toolPreambles,
-		LockedAt:          lockedAt,
-	}); err != nil {
-		t.Fatalf("mark model dispatch locked: %v", err)
-	}
+	markSessionTestLocked(t, store, sessionTestLockedContract())
 	stale, err := store.MarkLockedPromptFacingSnapshotsStale()
 	if err != nil {
 		t.Fatalf("mark stale: %v", err)
@@ -430,10 +356,7 @@ func TestLockedRequestShapeBackfillPersistsTogether(t *testing.T) {
 	if !result.Committed || result.Locked == nil || !result.Locked.HasEnabledTools || strings.Join(result.Locked.EnabledTools, ",") != "shell,patch" || result.Locked.WebSearchMode != "native" {
 		t.Fatalf("request shape result = %+v", result)
 	}
-	opened, err := openSessionTestStore(store)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	opened := mustOpenSessionTestStore(t, store)
 	if locked := opened.Meta().Locked; locked == nil || !locked.HasEnabledTools || locked.WebSearchMode != "native" || len(locked.EnabledTools) != 2 {
 		t.Fatalf("persisted request shape = %+v", locked)
 	}
@@ -441,20 +364,7 @@ func TestLockedRequestShapeBackfillPersistsTogether(t *testing.T) {
 
 func TestLockedPromptFacingContractStaleClearsRequestShape(t *testing.T) {
 	store := newSessionTestStore(t)
-	toolPreambles := true
-	if err := store.MarkModelDispatchLocked(LockedContract{
-		Model:             "gpt-5",
-		SystemPrompt:      "prompt",
-		HasSystemPrompt:   true,
-		ReviewerPrompt:    "reviewer",
-		HasReviewerPrompt: true,
-		EnabledTools:      []string{"shell"},
-		HasEnabledTools:   true,
-		WebSearchMode:     "native",
-		ToolPreambles:     &toolPreambles,
-	}); err != nil {
-		t.Fatalf("mark model dispatch locked: %v", err)
-	}
+	markSessionTestLocked(t, store, sessionTestLockedContract())
 
 	result, err := store.MarkLockedPromptFacingContractStale()
 	if err != nil {
@@ -477,16 +387,7 @@ func TestLockedPromptFacingContractStaleClearsRequestShape(t *testing.T) {
 
 func TestSetContinuationContextAndLockedPromptFacingContractStalePersistsTogether(t *testing.T) {
 	store := newSessionTestStore(t)
-	if err := store.MarkModelDispatchLocked(LockedContract{
-		Model:           "gpt-5",
-		SystemPrompt:    "prompt",
-		HasSystemPrompt: true,
-		EnabledTools:    []string{"shell"},
-		HasEnabledTools: true,
-		WebSearchMode:   "native",
-	}); err != nil {
-		t.Fatalf("mark model dispatch locked: %v", err)
-	}
+	markSessionTestLocked(t, store, sessionTestLockedContract())
 
 	role := "reviewer"
 	result, err := store.SetContinuationContextAndMarkLockedPromptFacingContractStale(ContinuationContext{AgentRole: &role})
@@ -496,10 +397,7 @@ func TestSetContinuationContextAndLockedPromptFacingContractStalePersistsTogethe
 	if !result.Committed || result.Locked == nil {
 		t.Fatalf("mutation result = %+v, want committed lock", result)
 	}
-	opened, err := openSessionTestStore(store)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	opened := mustOpenSessionTestStore(t, store)
 	meta := opened.Meta()
 	if meta.Continuation == nil || meta.Continuation.AgentRole == nil || *meta.Continuation.AgentRole != "reviewer" {
 		t.Fatalf("continuation = %+v, want reviewer", meta.Continuation)
@@ -534,9 +432,7 @@ func TestReadEventsHandlesLargeJSONLines(t *testing.T) {
 
 	const payloadSize = 128 * 1024
 	large := strings.Repeat("x", payloadSize)
-	if _, _, err := store.AppendEvent("step1", "message", map[string]any{"blob": large}); err != nil {
-		t.Fatalf("append large event: %v", err)
-	}
+	appendSessionTestEvent(t, store, "step1", "message", map[string]any{"blob": large})
 
 	events, err := collectEvents(store)
 	if err != nil {
@@ -557,27 +453,20 @@ func TestReadEventsHandlesLargeJSONLines(t *testing.T) {
 
 func TestAppendEventPersistsFirstPromptPreview(t *testing.T) {
 	store := newSessionTestStore(t)
-	if _, _, err := store.AppendEvent("s1", "message", map[string]any{"role": "assistant", "content": "hello"}); err != nil {
-		t.Fatalf("append assistant event: %v", err)
-	}
+	appendSessionTestEvent(t, store, "s1", "message", map[string]any{"role": "assistant", "content": "hello"})
+	appendSessionTestEvent(t, store, "s1", "message", map[string]any{"role": "developer", "message_type": "compaction_summary", "content": "summary"})
 	if got := store.Meta().FirstPromptPreview; got != "" {
-		t.Fatalf("expected assistant event to leave preview empty, got %q", got)
+		t.Fatalf("non-user messages set preview %q", got)
 	}
-	if _, _, err := store.AppendEvent("s2", "message", map[string]any{"role": "user", "content": "Investigate config load failures\nsecond line"}); err != nil {
-		t.Fatalf("append user event: %v", err)
-	}
+	appendSessionTestEvent(t, store, "s2", "message", map[string]any{"role": "user", "content": "\n  Investigate config load failures\nsecond line"})
 	if got := store.Meta().FirstPromptPreview; got != "Investigate config load failures" {
-		t.Fatalf("preview = %q, want %q", got, "Investigate config load failures")
+		t.Fatalf("preview = %q, want normalized first user line", got)
 	}
 
-	opened, err := openSessionTestStore(store)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	opened := mustOpenSessionTestStore(t, store)
 	if got := opened.Meta().FirstPromptPreview; got != "Investigate config load failures" {
-		t.Fatalf("reopened preview = %q, want %q", got, "Investigate config load failures")
+		t.Fatalf("reopened preview = %q, want persisted first user line", got)
 	}
-
 }
 
 func TestSetListingMetadataPersistsNameAndFirstPromptPreview(t *testing.T) {
@@ -598,9 +487,7 @@ func TestSetListingMetadataPersistsNameAndFirstPromptPreview(t *testing.T) {
 		t.Fatalf("observer snapshot = %+v, called %v", observer.snapshot.Meta, observer.called)
 	}
 
-	if _, _, err := store.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "event prompt"}); err != nil {
-		t.Fatalf("append user event: %v", err)
-	}
+	appendSessionTestEvent(t, store, "s1", "message", map[string]any{"role": "user", "content": "event prompt"})
 	if got := store.Meta().FirstPromptPreview; got != "Rendered workflow prompt" {
 		t.Fatalf("event capture overwrote explicit preview: %q", got)
 	}
@@ -633,38 +520,7 @@ func TestSetListingMetadataPersistsNameAndFirstPromptPreview(t *testing.T) {
 	}
 }
 
-func TestSetParentSessionIDRejectsBlankValueWithoutMutatingMetadata(t *testing.T) {
-	store := newSessionTestStore(t)
-	parentSessionID := "parent-session"
-	if err := store.SetParentSessionID(&parentSessionID); err != nil {
-		t.Fatalf("SetParentSessionID: %v", err)
-	}
-	before := store.Meta()
-	blankParentSessionID := " \t "
-	if err := store.SetParentSessionID(&blankParentSessionID); err == nil {
-		t.Fatal("SetParentSessionID blank value unexpectedly succeeded")
-	}
-	after := store.Meta()
-	if after.ParentSessionID == nil || before.ParentSessionID == nil || *after.ParentSessionID != *before.ParentSessionID {
-		t.Fatalf("parent session id changed after rejected write: before=%v after=%v", before.ParentSessionID, after.ParentSessionID)
-	}
-}
-
-func TestSetParentSessionIDNilClearsParent(t *testing.T) {
-	store := newSessionTestStore(t)
-	parentSessionID := "parent-session"
-	if err := store.SetParentSessionID(&parentSessionID); err != nil {
-		t.Fatalf("SetParentSessionID: %v", err)
-	}
-	if err := store.SetParentSessionID(nil); err != nil {
-		t.Fatalf("SetParentSessionID(nil): %v", err)
-	}
-	if got := store.Meta().ParentSessionID; got != nil {
-		t.Fatalf("parent session id = %v, want nil", got)
-	}
-}
-
-func TestMetaSnapshotDeepCopiesParentSessionID(t *testing.T) {
+func TestParentSessionIDValidationClearingAndSnapshotIsolation(t *testing.T) {
 	store := newSessionTestStore(t)
 	parentSessionID := "parent-session"
 	if err := store.SetParentSessionID(&parentSessionID); err != nil {
@@ -676,9 +532,22 @@ func TestMetaSnapshotDeepCopiesParentSessionID(t *testing.T) {
 		t.Fatal("snapshot parent session id is nil")
 	}
 	*snapshot.ParentSessionID = "mutated-snapshot"
-
 	if got := store.Meta().ParentSessionID; got == nil || *got != parentSessionID {
-		t.Fatalf("store parent session id = %v, want %q after snapshot mutation", got, parentSessionID)
+		t.Fatalf("store parent session id = %v after snapshot mutation", got)
+	}
+
+	blankParentSessionID := " \t "
+	if err := store.SetParentSessionID(&blankParentSessionID); err == nil {
+		t.Fatal("SetParentSessionID blank value unexpectedly succeeded")
+	}
+	if got := store.Meta().ParentSessionID; got == nil || *got != parentSessionID {
+		t.Fatalf("parent session id changed after rejected write: %v", got)
+	}
+	if err := store.SetParentSessionID(nil); err != nil {
+		t.Fatalf("SetParentSessionID(nil): %v", err)
+	}
+	if got := store.Meta().ParentSessionID; got != nil {
+		t.Fatalf("parent session id = %v, want nil", got)
 	}
 }
 
@@ -687,36 +556,19 @@ func TestConversationFreshnessAdvancesOnlyForVisibleUserMessages(t *testing.T) {
 	if got := store.ConversationFreshness(); got != ConversationFreshnessFresh {
 		t.Fatalf("freshness = %v, want fresh", got)
 	}
-	if _, _, err := store.AppendEvent("s1", "message", map[string]any{"role": "assistant", "content": "hello"}); err != nil {
-		t.Fatalf("append assistant event: %v", err)
-	}
+	appendSessionTestEvent(t, store, "s1", "message", map[string]any{"role": "assistant", "content": "hello"})
 	if got := store.ConversationFreshness(); got != ConversationFreshnessFresh {
 		t.Fatalf("freshness after assistant = %v, want fresh", got)
 	}
-	if _, _, err := store.AppendEvent("s2", "message", map[string]any{"role": "developer", "message_type": "compaction_summary", "content": "summary"}); err != nil {
-		t.Fatalf("append compaction summary event: %v", err)
-	}
+	appendSessionTestEvent(t, store, "s2", "message", map[string]any{"role": "developer", "message_type": "compaction_summary", "content": "summary"})
 	if got := store.ConversationFreshness(); got != ConversationFreshnessFresh {
 		t.Fatalf("freshness after compaction summary = %v, want fresh", got)
 	}
-	if _, _, err := store.AppendEvent("s3", "message", map[string]any{"role": "user", "content": "Investigate config load failures"}); err != nil {
-		t.Fatalf("append user event: %v", err)
-	}
+	appendSessionTestEvent(t, store, "s3", "message", map[string]any{"role": "user", "content": "Investigate config load failures"})
 	if got := store.ConversationFreshness(); got != ConversationFreshnessEstablished {
 		t.Fatalf("freshness after visible user message = %v, want established", got)
 	}
-}
-
-func TestOpenRehydratesConversationFreshnessFromEvents(t *testing.T) {
-	store := newSessionTestStore(t)
-	if _, _, err := store.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "Investigate config load failures"}); err != nil {
-		t.Fatalf("append user event: %v", err)
-	}
-
-	opened, err := openSessionTestStore(store)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	opened := mustOpenSessionTestStore(t, store)
 	if got := opened.ConversationFreshness(); got != ConversationFreshnessEstablished {
 		t.Fatalf("reopened freshness = %v, want established", got)
 	}
@@ -724,9 +576,7 @@ func TestOpenRehydratesConversationFreshnessFromEvents(t *testing.T) {
 
 func TestOpenBackfillsConversationFreshnessFromTail(t *testing.T) {
 	store := newSessionTestStore(t)
-	if _, _, err := store.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "established session"}); err != nil {
-		t.Fatalf("append user event: %v", err)
-	}
+	appendSessionTestEvent(t, store, "s1", "message", map[string]any{"role": "user", "content": "established session"})
 
 	meta := store.Meta()
 	meta.ConversationEstablished = false
@@ -753,9 +603,7 @@ func TestOpenBackfillsConversationFreshnessFromTail(t *testing.T) {
 func TestOpenRecoversLastSequenceFromTailWhenMetaStale(t *testing.T) {
 	store := newSessionTestStore(t)
 	for i := 0; i < 3; i++ {
-		if _, _, err := store.AppendEvent("s1", "message", map[string]any{"role": "assistant", "content": "reply"}); err != nil {
-			t.Fatalf("append event %d: %v", i, err)
-		}
+		appendSessionTestEvent(t, store, "s1", "message", map[string]any{"role": "assistant", "content": "reply"})
 	}
 	trueLastSeq := store.Meta().LastSequence
 
@@ -778,22 +626,6 @@ func TestOpenRecoversLastSequenceFromTailWhenMetaStale(t *testing.T) {
 	}
 	if got := opened.Meta().LastSequence; got != trueLastSeq {
 		t.Fatalf("recovered last sequence = %d, want %d", got, trueLastSeq)
-	}
-}
-
-func TestFirstPromptPreviewSkipsCompactionSummaryMessages(t *testing.T) {
-	store := newSessionTestStore(t)
-	if _, _, err := store.AppendEvent("s1", "message", map[string]any{"role": "developer", "message_type": "compaction_summary", "content": "summary"}); err != nil {
-		t.Fatalf("append compaction summary event: %v", err)
-	}
-	if got := store.Meta().FirstPromptPreview; got != "" {
-		t.Fatalf("expected compaction summary to be ignored, got %q", got)
-	}
-	if _, _, err := store.AppendEvent("s2", "message", map[string]any{"role": "user", "content": "\n  Fix config registry boot path\nmore details"}); err != nil {
-		t.Fatalf("append visible user event: %v", err)
-	}
-	if got := store.Meta().FirstPromptPreview; got != "Fix config registry boot path" {
-		t.Fatalf("preview = %q, want %q", got, "Fix config registry boot path")
 	}
 }
 
@@ -888,27 +720,15 @@ func userMessageSeqAt(t *testing.T, store *Store, n int) int64 {
 func TestForkAtUserMessageCopiesPrefixBeforeSelectedMessage(t *testing.T) {
 	root := t.TempDir()
 	parent := newSessionTestStoreAt(t, root)
-	if err := parent.MarkModelDispatchLocked(LockedContract{
-		Model:             "locked-parent",
-		SystemPrompt:      "parent prompt snapshot",
-		HasSystemPrompt:   true,
-		ReviewerPrompt:    "parent reviewer prompt snapshot",
-		HasReviewerPrompt: true,
-	}); err != nil {
-		t.Fatalf("MarkModelDispatchLocked parent: %v", err)
-	}
-	if _, _, err := parent.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "u1"}); err != nil {
-		t.Fatalf("append u1: %v", err)
-	}
-	if _, _, err := parent.AppendEvent("s1", "message", map[string]any{"role": "assistant", "content": "a1"}); err != nil {
-		t.Fatalf("append a1: %v", err)
-	}
-	if _, _, err := parent.AppendEvent("s2", "message", map[string]any{"role": "user", "content": "u2"}); err != nil {
-		t.Fatalf("append u2: %v", err)
-	}
-	if _, _, err := parent.AppendEvent("s2", "message", map[string]any{"role": "assistant", "content": "a2"}); err != nil {
-		t.Fatalf("append a2: %v", err)
-	}
+	contract := sessionTestLockedContract()
+	contract.Model = "locked-parent"
+	contract.SystemPrompt = "parent prompt snapshot"
+	contract.ReviewerPrompt = "parent reviewer prompt snapshot"
+	markSessionTestLocked(t, parent, contract)
+	appendSessionTestEvent(t, parent, "s1", "message", map[string]any{"role": "user", "content": "u1"})
+	appendSessionTestEvent(t, parent, "s1", "message", map[string]any{"role": "assistant", "content": "a1"})
+	appendSessionTestEvent(t, parent, "s2", "message", map[string]any{"role": "user", "content": "u2"})
+	appendSessionTestEvent(t, parent, "s2", "message", map[string]any{"role": "assistant", "content": "a2"})
 
 	forked, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 2), "Parent → edit u2", testSessionCategory)
 	if err != nil {
@@ -950,125 +770,65 @@ func TestForkAtUserMessageCopiesPrefixBeforeSelectedMessage(t *testing.T) {
 }
 
 func TestForkAtUserMessageDerivesReminderIssuedFromReplayedHistory(t *testing.T) {
-	parent := newSessionTestStore(t)
-	if _, _, err := parent.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "u1"}); err != nil {
-		t.Fatalf("append first user: %v", err)
+	user := func(content string) EventInput {
+		return EventInput{Kind: "message", Payload: map[string]any{"role": "user", "content": content}}
 	}
-	if _, _, err := parent.AppendEvent("s1", "message", map[string]any{"role": "developer", "message_type": "compaction_soon_reminder", "content": "compact soon"}); err != nil {
-		t.Fatalf("append reminder: %v", err)
+	reminder := EventInput{Kind: "message", Payload: map[string]any{
+		"role": "developer", "message_type": "compaction_soon_reminder", "content": "compact soon",
+	}}
+	replacement := func(engine string, items []map[string]any) EventInput {
+		return EventInput{Kind: "history_replaced", Payload: map[string]any{"engine": engine, "items": items}}
 	}
-	if err := parent.SetCompactionSoonReminderIssued(true); err != nil {
-		t.Fatalf("persist reminder state: %v", err)
+	cases := []struct {
+		name              string
+		events            []EventInput
+		forkAtUser        int
+		persistedReminder bool
+		wantReminder      bool
+	}{
+		{"before reminder", []EventInput{user("u1"), reminder, user("u2")}, 1, true, false},
+		{"after reminder", []EventInput{user("u1"), reminder, user("u2")}, 2, true, true},
+		{"legacy reviewer rollback injected reminder ignored", []EventInput{
+			user("u1"),
+			replacement("reviewer_rollback", []map[string]any{{
+				"type": "message", "role": "developer", "message_type": "compaction_soon_reminder", "content": "compact soon",
+			}}),
+			user("u2"),
+		}, 2, false, false},
+		{"compaction clears reminder", []EventInput{
+			user("u1"), reminder, replacement("compaction", []map[string]any{}), user("u2"),
+		}, 2, false, false},
+		{"legacy reviewer rollback preserves earlier reminder", []EventInput{
+			user("u1"), reminder, replacement("reviewer_rollback", []map[string]any{}), user("u2"),
+		}, 2, false, true},
 	}
-	if _, _, err := parent.AppendEvent("s2", "message", map[string]any{"role": "user", "content": "u2"}); err != nil {
-		t.Fatalf("append second user: %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			parent := newSessionTestStore(t)
+			if _, receipt, err := parent.AppendTurnAtomic("replay", tc.events); err != nil {
+				t.Fatalf("append replay fixture: %v", err)
+			} else if !receipt.Committed {
+				t.Fatal("replay fixture was not committed")
+			}
+			if tc.persistedReminder {
+				if err := parent.SetCompactionSoonReminderIssued(true); err != nil {
+					t.Fatalf("persist reminder state: %v", err)
+				}
+			}
+			forked, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, tc.forkAtUser), tc.name, testSessionCategory)
+			if err != nil {
+				t.Fatalf("fork: %v", err)
+			}
+			if got := forked.Meta().CompactionSoonReminderIssued; got != tc.wantReminder {
+				t.Fatalf("reminder-issued = %v, want %v", got, tc.wantReminder)
+			}
+		})
 	}
-
-	beforeReminder, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 1), "before reminder", testSessionCategory)
-	if err != nil {
-		t.Fatalf("fork before reminder: %v", err)
-	}
-	if beforeReminder.Meta().CompactionSoonReminderIssued {
-		t.Fatal("expected fork before reminder to clear reminder-issued state")
-	}
-
-	afterReminder, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 2), "after reminder", testSessionCategory)
-	if err != nil {
-		t.Fatalf("fork after reminder: %v", err)
-	}
-	if !afterReminder.Meta().CompactionSoonReminderIssued {
-		t.Fatal("expected fork after reminder to preserve reminder-issued state")
-	}
-
-	t.Run("legacy reviewer rollback history replacement is ignored", func(t *testing.T) {
-		parent := newSessionTestStore(t)
-		if _, _, err := parent.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "u1"}); err != nil {
-			t.Fatalf("append first user: %v", err)
-		}
-		if _, _, err := parent.AppendEvent("s1", "history_replaced", map[string]any{
-			"engine": "reviewer_rollback",
-			"items": []map[string]any{{
-				"type":         "message",
-				"role":         "developer",
-				"message_type": "compaction_soon_reminder",
-				"content":      "compact soon",
-			}},
-		}); err != nil {
-			t.Fatalf("append reviewer rollback history replacement: %v", err)
-		}
-		if _, _, err := parent.AppendEvent("s2", "message", map[string]any{"role": "user", "content": "u2"}); err != nil {
-			t.Fatalf("append second user: %v", err)
-		}
-
-		forked, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 2), "after legacy reviewer rollback", testSessionCategory)
-		if err != nil {
-			t.Fatalf("fork: %v", err)
-		}
-		if forked.Meta().CompactionSoonReminderIssued {
-			t.Fatal("expected legacy reviewer rollback history replacement to be ignored for reminder-issued state")
-		}
-	})
-
-	t.Run("non-reviewer history replacement clears reminder state", func(t *testing.T) {
-		parent := newSessionTestStore(t)
-		if _, _, err := parent.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "u1"}); err != nil {
-			t.Fatalf("append first user: %v", err)
-		}
-		if _, _, err := parent.AppendEvent("s1", "message", map[string]any{"role": "developer", "message_type": "compaction_soon_reminder", "content": "compact soon"}); err != nil {
-			t.Fatalf("append reminder: %v", err)
-		}
-		if _, _, err := parent.AppendEvent("s1", "history_replaced", map[string]any{
-			"engine": "compaction",
-			"items":  []map[string]any{},
-		}); err != nil {
-			t.Fatalf("append compaction history replacement: %v", err)
-		}
-		if _, _, err := parent.AppendEvent("s2", "message", map[string]any{"role": "user", "content": "u2"}); err != nil {
-			t.Fatalf("append second user: %v", err)
-		}
-
-		forked, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 2), "after compaction", testSessionCategory)
-		if err != nil {
-			t.Fatalf("fork: %v", err)
-		}
-		if forked.Meta().CompactionSoonReminderIssued {
-			t.Fatal("expected reminder-issued state to clear after non-reviewer history replacement")
-		}
-	})
-
-	t.Run("legacy reviewer rollback preserves earlier reminder-issued state", func(t *testing.T) {
-		parent := newSessionTestStore(t)
-		if _, _, err := parent.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "u1"}); err != nil {
-			t.Fatalf("append first user: %v", err)
-		}
-		if _, _, err := parent.AppendEvent("s1", "message", map[string]any{"role": "developer", "message_type": "compaction_soon_reminder", "content": "compact soon"}); err != nil {
-			t.Fatalf("append reminder: %v", err)
-		}
-		if _, _, err := parent.AppendEvent("s1", "history_replaced", map[string]any{
-			"engine": "reviewer_rollback",
-			"items":  []map[string]any{},
-		}); err != nil {
-			t.Fatalf("append reviewer rollback history replacement: %v", err)
-		}
-		if _, _, err := parent.AppendEvent("s2", "message", map[string]any{"role": "user", "content": "u2"}); err != nil {
-			t.Fatalf("append second user: %v", err)
-		}
-
-		forked, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 2), "after legacy rollback", testSessionCategory)
-		if err != nil {
-			t.Fatalf("fork: %v", err)
-		}
-		if !forked.Meta().CompactionSoonReminderIssued {
-			t.Fatal("expected legacy reviewer rollback to preserve earlier reminder-issued state")
-		}
-	})
 }
 
 func TestForkAtUserMessageCopiesWorktreeReminderTarget(t *testing.T) {
 	parent := newSessionTestStore(t)
-	if _, _, err := parent.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "u1"}); err != nil {
-		t.Fatalf("append first user: %v", err)
-	}
+	appendSessionTestEvent(t, parent, "s1", "message", map[string]any{"role": "user", "content": "u1"})
 	if err := parent.SetWorktreeReminderState(&WorktreeReminderState{
 		Mode: WorktreeReminderModeEnter,
 		WorktreeContext: WorktreeContext{
@@ -1080,9 +840,7 @@ func TestForkAtUserMessageCopiesWorktreeReminderTarget(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("persist worktree reminder state: %v", err)
 	}
-	if _, _, err := parent.AppendEvent("s2", "message", map[string]any{"role": "user", "content": "u2"}); err != nil {
-		t.Fatalf("append second user: %v", err)
-	}
+	appendSessionTestEvent(t, parent, "s2", "message", map[string]any{"role": "user", "content": "u2"})
 
 	forked, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 2), "forked", testSessionCategory)
 	if err != nil {
@@ -1173,18 +931,12 @@ func TestInitializeChildFromParentCopiesContextWithoutConversationState(t *testi
 	if err != nil {
 		t.Fatalf("create parent: %v", err)
 	}
-	toolPreambles := true
-	if err := parent.MarkModelDispatchLocked(LockedContract{
-		Model:             "locked-parent",
-		EnabledTools:      []string{"shell", "patch"},
-		ToolPreambles:     &toolPreambles,
-		SystemPrompt:      "parent system prompt snapshot",
-		HasSystemPrompt:   true,
-		ReviewerPrompt:    "parent reviewer prompt snapshot",
-		HasReviewerPrompt: true,
-	}); err != nil {
-		t.Fatalf("MarkModelDispatchLocked parent: %v", err)
-	}
+	contract := sessionTestLockedContract()
+	contract.Model = "locked-parent"
+	contract.EnabledTools = []string{"shell", "patch"}
+	contract.SystemPrompt = "parent system prompt snapshot"
+	contract.ReviewerPrompt = "parent reviewer prompt snapshot"
+	markSessionTestLocked(t, parent, contract)
 	if err := parent.SetContinuationContext(ContinuationContext{OpenAIBaseURL: "http://parent.local/v1"}); err != nil {
 		t.Fatalf("SetContinuationContext parent: %v", err)
 	}
@@ -1260,13 +1012,8 @@ func TestSetContinuationContextStaysLazyUntilFirstWrite(t *testing.T) {
 	if _, err := os.Stat(store.Dir()); !os.IsNotExist(err) {
 		t.Fatalf("expected lazy session to remain unpersisted, stat err=%v", err)
 	}
-	if _, _, err := store.AppendEvent("step1", "message", map[string]any{"a": 1}); err != nil {
-		t.Fatalf("append event: %v", err)
-	}
-	opened, err := openSessionTestStore(store)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	appendSessionTestEvent(t, store, "step1", "message", map[string]any{"a": 1})
+	opened := mustOpenSessionTestStore(t, store)
 	if opened.Meta().Continuation == nil || opened.Meta().Continuation.OpenAIBaseURL != "http://example.local/v1" {
 		t.Fatalf("expected persisted continuation context, got %+v", opened.Meta().Continuation)
 	}
@@ -1301,28 +1048,6 @@ func TestPendingModelRecoveryPersistsMetadataAndEvents(t *testing.T) {
 	}
 	if events[0].StepID != recovery.StepID || events[1].StepID != recovery.StepID {
 		t.Fatalf("recovery events should carry step ID, got %+v", events)
-	}
-}
-
-func TestContinuationPersistsAcrossAuthoritativeMetadataRoundTrip(t *testing.T) {
-	store := newSessionTestStore(t)
-	if err := store.MarkModelDispatchLocked(LockedContract{
-		Model:          "gpt-5",
-		Temperature:    1,
-		MaxOutputToken: 0,
-	}); err != nil {
-		t.Fatalf("mark model dispatch locked: %v", err)
-	}
-	if err := store.SetContinuationContext(ContinuationContext{OpenAIBaseURL: "http://example.local/v1"}); err != nil {
-		t.Fatalf("set continuation context: %v", err)
-	}
-
-	opened, err := openSessionTestStore(store)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	if opened.Meta().Continuation == nil || opened.Meta().Continuation.OpenAIBaseURL != "http://example.local/v1" {
-		t.Fatalf("expected persisted continuation context, got %+v", opened.Meta().Continuation)
 	}
 }
 

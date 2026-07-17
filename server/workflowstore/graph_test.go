@@ -3,13 +3,11 @@ package workflowstore
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"core/internal/testharness/testsetup"
-	"core/server/metadata"
 	"core/server/workflow"
 	"core/server/workflowscript"
 )
@@ -131,13 +129,7 @@ func TestScriptNodePersistsNullableScriptPath(t *testing.T) {
 		t.Fatalf("script path = %q/%t, want absent", path, ok)
 	}
 	saveWorkflowGraphFixture(t, ctx, store, created.ID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		for index := range req.Nodes {
-			if req.Nodes[index].ID == "node-script" {
-				req.Nodes[index].ScriptPath = "scripts/complete"
-				return
-			}
-		}
-		t.Fatal("script node missing from workflow fixture")
+		workflowGraphSaveNodeRecord(t, req.Nodes, "node-script").ScriptPath = "scripts/complete"
 	})
 	def, _, err = store.GetDefinition(ctx, created.ID)
 	if err != nil {
@@ -150,75 +142,42 @@ func TestScriptNodePersistsNullableScriptPath(t *testing.T) {
 }
 
 func TestStartTaskSchedulesScriptFirstTargetRun(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createScriptStartWorkflow(t, ctx, store, "scripts/complete")
-	scriptID := workflow.NodeID("node-script-" + string(workflowID))
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	worktreeRoot := filepath.Join(t.TempDir(), "script-worktree")
-	scriptPath := filepath.Join(worktreeRoot, "scripts", "complete")
-	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
-		t.Fatalf("create script dir: %v", err)
-	}
-	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nprintf '{}'\n"), 0o755); err != nil {
-		t.Fatalf("write script: %v", err)
-	}
-	attachManagedWorktree(t, ctx, store, binding.WorkspaceID, task.ID, worktreeRoot)
-
-	started := startTask(t, ctx, store, task.ID)
+	f := newScriptExecutionFixture(t, "scripts/complete", []byte("#!/bin/sh\nprintf '{}'\n"))
+	started := startTask(t, f.ctx, f.store, f.task.ID)
 
 	if started.RunID == "" {
 		t.Fatalf("start result has no run id: %+v", started)
 	}
-	runs, err := store.ListRuns(ctx, task.ID)
+	runs, err := f.store.ListRuns(f.ctx, f.task.ID)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].NodeID != scriptID {
+	if len(runs) != 1 || runs[0].NodeID != f.scriptID {
 		t.Fatalf("runs = %+v, want one script run", runs)
 	}
-	runnable, err := store.ListRunnableRuns(ctx, 10)
+	runnable, err := f.store.ListRunnableRuns(f.ctx, 10)
 	if err != nil {
 		t.Fatalf("ListRunnableRuns: %v", err)
 	}
-	if len(runnable) != 1 || runnable[0].ID != started.RunID || runnable[0].NodeID != scriptID {
+	if len(runnable) != 1 || runnable[0].ID != started.RunID || runnable[0].NodeID != f.scriptID {
 		t.Fatalf("runnable = %+v, want script run", runnable)
 	}
 }
 
 func TestRunStartContextLoadsClearedLiveScriptPath(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createScriptStartWorkflow(t, ctx, store, "scripts/complete")
-	scriptID := workflow.NodeID("node-script-" + string(workflowID))
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	worktreeRoot := filepath.Join(t.TempDir(), "script-worktree")
-	scriptPath := filepath.Join(worktreeRoot, "scripts", "complete")
-	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
-		t.Fatalf("create script dir: %v", err)
-	}
-	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nprintf '{}'\n"), 0o755); err != nil {
-		t.Fatalf("write script: %v", err)
-	}
-	attachManagedWorktree(t, ctx, store, binding.WorkspaceID, task.ID, worktreeRoot)
-	started := startTask(t, ctx, store, task.ID)
-	if _, err := store.GetRunStartContext(ctx, started.RunID); err != nil {
+	f := newScriptExecutionFixture(t, "scripts/complete", []byte("#!/bin/sh\nprintf '{}'\n"))
+	started := startTask(t, f.ctx, f.store, f.task.ID)
+	if _, err := f.store.GetRunStartContext(f.ctx, started.RunID); err != nil {
 		t.Fatalf("GetRunStartContext before clear: %v", err)
 	}
-	if err := store.InterruptRun(ctx, started.RunID, "manual", "{}"); err != nil {
+	if err := f.store.InterruptRun(f.ctx, started.RunID, "manual", "{}"); err != nil {
 		t.Fatalf("InterruptRun: %v", err)
 	}
-	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		for index := range req.Nodes {
-			if req.Nodes[index].ID == scriptID {
-				req.Nodes[index].ScriptPath = ""
-				return
-			}
-		}
-		t.Fatalf("script node %q missing from workflow fixture", scriptID)
+	saveWorkflowGraphFixture(t, f.ctx, f.store, f.workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		workflowGraphSaveNodeRecord(t, req.Nodes, f.scriptID).ScriptPath = ""
 	})
 
-	input, err := store.GetRunStartContext(ctx, started.RunID)
+	input, err := f.store.GetRunStartContext(f.ctx, started.RunID)
 	if err != nil {
 		t.Fatalf("GetRunStartContext after clear: %v", err)
 	}
@@ -228,32 +187,10 @@ func TestRunStartContextLoadsClearedLiveScriptPath(t *testing.T) {
 }
 
 func TestScriptCompletionUsesLiveOutputContract(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createScriptStartWorkflow(t, ctx, store, "scripts/complete")
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	worktreeRoot := filepath.Join(t.TempDir(), "script-worktree")
-	scriptPath := filepath.Join(worktreeRoot, "scripts", "complete")
-	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
-		t.Fatalf("create script dir: %v", err)
-	}
-	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nprintf '{}'\n"), 0o755); err != nil {
-		t.Fatalf("write script: %v", err)
-	}
-	attachManagedWorktree(t, ctx, store, binding.WorkspaceID, task.ID, worktreeRoot)
-	started := startTask(t, ctx, store, task.ID)
-	parameters, err := marshalJSONArray([]workflow.Parameter{{Key: "summary", Description: "Live summary."}})
-	if err != nil {
-		t.Fatalf("marshal parameters: %v", err)
-	}
-	// Intentional direct graph mutation: the separate graph-edit policy controls
-	// whether live edits are accepted. This test isolates the script completion
-	// contract once the current graph has changed.
-	if _, err := store.db.ExecContext(ctx, `UPDATE workflow_edges SET parameters_json = ? WHERE id = ?`, parameters, "edge-done-"+string(workflowID)); err != nil {
-		t.Fatalf("force live script output contract: %v", err)
-	}
-
-	_, err = store.CompleteRun(ctx, CompleteRunRequest{RunID: started.RunID, Actor: "script"})
+	f := newScriptExecutionFixture(t, "scripts/complete", []byte("#!/bin/sh\nprintf '{}'\n"))
+	started := startTask(t, f.ctx, f.store, f.task.ID)
+	f.requireLiveSummary(t)
+	_, err := f.store.CompleteRun(f.ctx, CompleteRunRequest{RunID: started.RunID, Actor: "script"})
 
 	var validationErr CompletionValidationError
 	if !errors.As(err, &validationErr) {
@@ -265,29 +202,11 @@ func TestScriptCompletionUsesLiveOutputContract(t *testing.T) {
 }
 
 func TestRunCompletionContextUsesLiveScriptContract(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createScriptStartWorkflow(t, ctx, store, "scripts/complete")
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	worktreeRoot := filepath.Join(t.TempDir(), "script-worktree")
-	scriptPath := filepath.Join(worktreeRoot, "scripts", "complete")
-	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
-		t.Fatalf("create script dir: %v", err)
-	}
-	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nprintf '{}'\n"), 0o755); err != nil {
-		t.Fatalf("write script: %v", err)
-	}
-	attachManagedWorktree(t, ctx, store, binding.WorkspaceID, task.ID, worktreeRoot)
-	started := startTask(t, ctx, store, task.ID)
-	parameters, err := marshalJSONArray([]workflow.Parameter{{Key: "summary", Description: "Live summary."}})
-	if err != nil {
-		t.Fatalf("marshal parameters: %v", err)
-	}
-	if _, err := store.db.ExecContext(ctx, `UPDATE workflow_edges SET parameters_json = ? WHERE id = ?`, parameters, "edge-done-"+string(workflowID)); err != nil {
-		t.Fatalf("force live script output contract: %v", err)
-	}
+	f := newScriptExecutionFixture(t, "scripts/complete", []byte("#!/bin/sh\nprintf '{}'\n"))
+	started := startTask(t, f.ctx, f.store, f.task.ID)
+	f.requireLiveSummary(t)
 
-	contract, err := store.GetRunCompletionContext(ctx, started.RunID)
+	contract, err := f.store.GetRunCompletionContext(f.ctx, started.RunID)
 	if err != nil {
 		t.Fatalf("GetRunCompletionContext: %v", err)
 	}
@@ -297,26 +216,14 @@ func TestRunCompletionContextUsesLiveScriptContract(t *testing.T) {
 }
 
 func TestResumeTaskRunsSkipsAgentRoleValidationForScriptRun(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createScriptStartWorkflow(t, ctx, store, "scripts/complete")
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	worktreeRoot := filepath.Join(t.TempDir(), "script-worktree")
-	scriptPath := filepath.Join(worktreeRoot, "scripts", "complete")
-	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
-		t.Fatalf("create script dir: %v", err)
-	}
-	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nprintf '{}'\n"), 0o755); err != nil {
-		t.Fatalf("write script: %v", err)
-	}
-	attachManagedWorktree(t, ctx, store, binding.WorkspaceID, task.ID, worktreeRoot)
-	started := startTask(t, ctx, store, task.ID)
-	if err := store.InterruptRun(ctx, started.RunID, "manual", "{}"); err != nil {
+	f := newScriptExecutionFixture(t, "scripts/complete", []byte("#!/bin/sh\nprintf '{}'\n"))
+	started := startTask(t, f.ctx, f.store, f.task.ID)
+	if err := f.store.InterruptRun(f.ctx, started.RunID, "manual", "{}"); err != nil {
 		t.Fatalf("InterruptRun: %v", err)
 	}
-	store.roleResolver = testsetup.QuestionsEnabled()
+	f.store.roleResolver = testsetup.QuestionsEnabled()
 
-	resumed, err := store.ResumeTaskRuns(ctx, task.ID)
+	resumed, err := f.store.ResumeTaskRuns(f.ctx, f.task.ID)
 	if err != nil {
 		t.Fatalf("ResumeTaskRuns: %v", err)
 	}
@@ -326,13 +233,8 @@ func TestResumeTaskRunsSkipsAgentRoleValidationForScriptRun(t *testing.T) {
 }
 
 func TestStartTaskBlocksInvalidScriptFirstTarget(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createScriptStartWorkflow(t, ctx, store, "missing")
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	attachManagedWorktree(t, ctx, store, binding.WorkspaceID, task.ID, filepath.Join(t.TempDir(), "script-worktree"))
-
-	_, err := store.StartTask(ctx, task.ID)
+	f := newScriptExecutionFixture(t, "missing", nil)
+	_, err := f.store.StartTask(f.ctx, f.task.ID)
 	var validationErr workflowscript.ValidationError
 	if !errors.As(err, &validationErr) {
 		t.Fatalf("StartTask error = %v, want script validation", err)
@@ -392,36 +294,6 @@ func TestCompleteRunReturnsPreInterruptedScriptTargetRun(t *testing.T) {
 		return
 	}
 	t.Fatalf("script run %s not found in %+v", result.InterruptedRunIDs[0], runs)
-}
-
-func attachManagedWorktree(t *testing.T, ctx context.Context, store *Store, workspaceID string, taskID workflow.TaskID, worktreeRoot string) {
-	t.Helper()
-	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
-		t.Fatalf("create worktree root: %v", err)
-	}
-	worktreeID := "worktree-" + string(taskID)
-	if err := store.metadata.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{ID: worktreeID, WorkspaceID: workspaceID, CanonicalRoot: worktreeRoot, Managed: true, CreatedBranch: true}); err != nil {
-		t.Fatalf("UpsertWorktreeRecord: %v", err)
-	}
-	if _, err := store.db.ExecContext(ctx, `
-UPDATE tasks
-SET source_workspace_id = ?,
-    managed_worktree_id = ?,
-    execution_target_mode = ?,
-    execution_target_requested_ref = ?,
-    execution_target_commit_oid = ?,
-    execution_target_provenance = ?
-WHERE id = ?`,
-		workspaceID,
-		worktreeID,
-		string(workflow.ExecutionTargetModeHead),
-		"HEAD",
-		"fixture-commit",
-		string(ExecutionTargetProvenanceResolved),
-		string(taskID),
-	); err != nil {
-		t.Fatalf("attach managed worktree to task: %v", err)
-	}
 }
 
 func TestWorkflowListPaginatesWithMostRecentOrderAndFilters(t *testing.T) {

@@ -29,6 +29,7 @@ import (
 )
 
 type bindingCommandTimeoutProjectViewStub struct {
+	apicontract.ProjectViewService
 	resolveProjectPath func(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error)
 	listProjects       func(context.Context, serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error)
 	createProject      func(context.Context, serverapi.ProjectCreateRequest) (serverapi.ProjectCreateResponse, error)
@@ -37,6 +38,7 @@ type bindingCommandTimeoutProjectViewStub struct {
 }
 
 type bindingCommandTimeoutSessionLifecycleStub struct {
+	apicontract.SessionLifecycleService
 	retargetSessionWorkspace func(context.Context, serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error)
 }
 
@@ -51,10 +53,6 @@ func (s bindingCommandTimeoutProjectViewStub) ListProjects(ctx context.Context, 
 	return s.listProjects(ctx, req)
 }
 
-func (bindingCommandTimeoutProjectViewStub) ListProjectHome(context.Context, serverapi.ProjectHomeListRequest) (serverapi.ProjectHomeListResponse, error) {
-	return serverapi.ProjectHomeListResponse{}, errors.New("unexpected ListProjectHome call")
-}
-
 func (s bindingCommandTimeoutProjectViewStub) ResolveProjectPath(ctx context.Context, req serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
 	if s.resolveProjectPath == nil {
 		return serverapi.ProjectResolvePathResponse{}, errors.New("unexpected ResolveProjectPath call")
@@ -62,19 +60,11 @@ func (s bindingCommandTimeoutProjectViewStub) ResolveProjectPath(ctx context.Con
 	return s.resolveProjectPath(ctx, req)
 }
 
-func (bindingCommandTimeoutProjectViewStub) PlanWorkspaceBinding(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
-	return serverapi.ProjectBindingPlanResponse{}, errors.New("unexpected PlanWorkspaceBinding call")
-}
-
 func (s bindingCommandTimeoutProjectViewStub) CreateProject(ctx context.Context, req serverapi.ProjectCreateRequest) (serverapi.ProjectCreateResponse, error) {
 	if s.createProject == nil {
 		return serverapi.ProjectCreateResponse{}, errors.New("unexpected CreateProject call")
 	}
 	return s.createProject(ctx, req)
-}
-
-func (bindingCommandTimeoutProjectViewStub) ListProjectWorkspaces(context.Context, serverapi.ProjectWorkspaceListRequest) (serverapi.ProjectWorkspaceListResponse, error) {
-	return serverapi.ProjectWorkspaceListResponse{}, errors.New("unexpected ListProjectWorkspaces call")
 }
 
 func (s bindingCommandTimeoutProjectViewStub) AttachWorkspaceToProject(ctx context.Context, req serverapi.ProjectAttachWorkspaceRequest) (serverapi.ProjectAttachWorkspaceResponse, error) {
@@ -91,31 +81,11 @@ func (s bindingCommandTimeoutProjectViewStub) RebindWorkspace(ctx context.Contex
 	return s.rebindWorkspace(ctx, req)
 }
 
-func (bindingCommandTimeoutProjectViewStub) ListSessionPage(context.Context, serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
-	return serverapi.SessionPageResponse{}, nil
-}
-
-func (bindingCommandTimeoutProjectViewStub) GetProjectOverview(context.Context, serverapi.ProjectGetOverviewRequest) (serverapi.ProjectGetOverviewResponse, error) {
-	return serverapi.ProjectGetOverviewResponse{}, errors.New("unexpected GetProjectOverview call")
-}
-
-func (bindingCommandTimeoutSessionLifecycleStub) GetInitialInput(context.Context, serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
-	return serverapi.SessionInitialInputResponse{}, errors.New("unexpected GetInitialInput call")
-}
-
-func (bindingCommandTimeoutSessionLifecycleStub) PersistInputDraft(context.Context, serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
-	return serverapi.SessionPersistInputDraftResponse{}, errors.New("unexpected PersistInputDraft call")
-}
-
 func (s bindingCommandTimeoutSessionLifecycleStub) RetargetSessionWorkspace(ctx context.Context, req serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
 	if s.retargetSessionWorkspace == nil {
 		return serverapi.SessionRetargetWorkspaceResponse{}, errors.New("unexpected RetargetSessionWorkspace call")
 	}
 	return s.retargetSessionWorkspace(ctx, req)
-}
-
-func (bindingCommandTimeoutSessionLifecycleStub) ResolveTransition(context.Context, serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
-	return serverapi.SessionResolveTransitionResponse{}, errors.New("unexpected ResolveTransition call")
 }
 
 type bindingCommandMemoryAuthHandler struct {

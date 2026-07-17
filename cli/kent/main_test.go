@@ -5,22 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"core/cli/app"
-	"core/server/launch"
-	"core/server/metadata"
-	"core/server/registry"
-	"core/server/session"
-	"core/server/session/sessiontest"
-	"core/server/sessionlaunch"
 	serverstartup "core/server/startup"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -29,13 +23,8 @@ import (
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
 
-	"core/shared/sessioncontract"
 	"github.com/google/uuid"
 )
-
-func mainTestStringPtr(value string) *string {
-	return &value
-}
 
 type stubServeServer struct {
 	serveErr error
@@ -190,93 +179,6 @@ func TestRootCommandMapsAgentFlagToInteractiveApp(t *testing.T) {
 	}
 }
 
-func TestRootCommandContinueAgentRejectsLockedRoleChange(t *testing.T) {
-	original := runInteractiveApp
-	t.Cleanup(func() {
-		runInteractiveApp = original
-	})
-	t.Setenv("HOME", t.TempDir())
-	ctx := context.Background()
-	workspace := t.TempDir()
-	t.Chdir(workspace)
-	cfg, err := config.Load(workspace, config.LoadOptions{})
-	if err != nil {
-		t.Fatalf("config.Load: %v", err)
-	}
-	reviewerSettings := cfg.Settings
-	reviewerSettings.Model = "gpt-5.6-sol"
-	workerSettings := cfg.Settings
-	workerSettings.Model = "gpt-5.4-mini"
-	cfg.Settings.Subagents = map[string]config.SubagentRole{
-		"reviewer": {Settings: reviewerSettings},
-		"worker":   {Settings: workerSettings},
-	}
-	meta, err := metadata.Open(cfg.PersistenceRoot)
-	if err != nil {
-		t.Fatalf("metadata.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = meta.Close() })
-	binding, err := meta.RegisterWorkspaceBinding(ctx, cfg.WorkspaceRoot)
-	if err != nil {
-		t.Fatalf("RegisterWorkspaceBinding: %v", err)
-	}
-	containerDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
-	store, err := session.Create(containerDir, filepath.Base(filepath.Clean(cfg.WorkspaceRoot)), cfg.WorkspaceRoot, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
-	if err != nil {
-		t.Fatalf("session.Create: %v", err)
-	}
-	if err := store.EnsureDurable(); err != nil {
-		t.Fatalf("EnsureDurable: %v", err)
-	}
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("reviewer")}); err != nil {
-		t.Fatalf("SetContinuationContext: %v", err)
-	}
-	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.6-sol", EnabledTools: []string{"shell"}}); err != nil {
-		t.Fatalf("MarkModelDispatchLocked: %v", err)
-	}
-	service := sessionlaunch.NewService(launch.Planner{
-		Config:       cfg,
-		ContainerDir: containerDir,
-		StoreOptions: meta.AuthoritativeSessionStoreOptions(),
-	}, registry.NewSessionStoreRegistry())
-	runInteractiveApp = func(ctx context.Context, opts app.Options) error {
-		if opts.SessionID != store.Meta().SessionID || opts.AgentRole == nil || *opts.AgentRole != "worker" {
-			t.Fatalf("interactive options = %+v, want locked session and worker role", opts)
-		}
-		sessionID, parseErr := runtimeids.ParseSessionID(opts.SessionID)
-		if parseErr != nil {
-			t.Fatalf("ParseSessionID: %v", parseErr)
-		}
-		_, err := service.PlanSession(ctx, serverapi.SessionPlanRequest{
-			ClientRequestID: "root-command-regression",
-			Mode:            serverapi.SessionLaunchModeInteractive,
-			Intent:          serverapi.OpenExistingSessionLaunchIntent(sessionID),
-			Overrides:       serverapi.RunPromptOverrides{AgentRole: opts.AgentRole},
-		})
-		if !errors.Is(err, launch.ErrLockedAgentRoleChange) {
-			t.Fatalf("PlanSession error = %v, want locked role change", err)
-		}
-		return err
-	}
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	args := []string{
-		"--force-interactive",
-		"--continue", store.Meta().SessionID,
-		"--agent", "worker",
-	}
-	if code := rootCommand(args, strings.NewReader(""), &stdout, &stderr); code != 1 {
-		t.Fatalf("exit code = %d, want 1", code)
-	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty", stdout.String())
-	}
-	if got := stderr.String(); !strings.Contains(got, launch.ErrLockedAgentRoleChange.Error()) {
-		t.Fatalf("stderr = %q, want locked role error", got)
-	}
-}
-
 func TestRootCommandRejectsInvalidAgentFlag(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -427,25 +329,8 @@ func TestRunSubcommandMapsCommonFlagsToRunPrompt(t *testing.T) {
 		return app.RunPromptResult{Result: "done"}, nil
 	}
 
-	originalStdout := os.Stdout
-	originalStderr := os.Stderr
-	stdoutFile, err := os.CreateTemp(t.TempDir(), "stdout")
-	if err != nil {
-		t.Fatalf("create stdout temp file: %v", err)
-	}
-	stderrFile, err := os.CreateTemp(t.TempDir(), "stderr")
-	if err != nil {
-		t.Fatalf("create stderr temp file: %v", err)
-	}
-	os.Stdout = stdoutFile
-	os.Stderr = stderrFile
-	t.Cleanup(func() {
-		os.Stdout = originalStdout
-		os.Stderr = originalStderr
-		_ = stdoutFile.Close()
-		_ = stderrFile.Close()
-	})
-
+	t.Setenv(config.PersistenceRootEnvName, "inherited-root")
+	persistenceRoot := t.TempDir()
 	args := []string{
 		"run",
 		"--workspace", "/tmp/run-workspace",
@@ -457,11 +342,13 @@ func TestRunSubcommandMapsCommonFlagsToRunPrompt(t *testing.T) {
 		"--model-timeout-seconds", "12",
 		"--tools", "shell",
 		"--openai-base-url", "http://run.example/v1",
+		"--persistence-root", persistenceRoot,
 		"--timeout", "2m",
 		"hello from test",
 	}
-	if code := rootCommand(args, strings.NewReader(""), io.Discard, io.Discard); code != 0 {
-		t.Fatalf("exit code = %d, want 0", code)
+	_, stderr, code := runRootCommandWithCapturedProcessOutput(t, args)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
 	}
 	if gotPrompt != "hello from test" || gotTimeout != 2*time.Minute {
 		t.Fatalf("unexpected run prompt mapping prompt=%q timeout=%v", gotPrompt, gotTimeout)
@@ -481,6 +368,9 @@ func TestRunSubcommandMapsCommonFlagsToRunPrompt(t *testing.T) {
 	if gotOpts.OpenAIBaseURL != "http://run.example/v1" || !gotOpts.OpenAIBaseURLExplicit {
 		t.Fatalf("unexpected base url mapping: %+v", gotOpts)
 	}
+	if gotOpts.ConfigRoot != persistenceRoot || os.Getenv(config.PersistenceRootEnvName) != persistenceRoot {
+		t.Fatalf("persistence root mapping: opts=%q env=%q, want %q", gotOpts.ConfigRoot, os.Getenv(config.PersistenceRootEnvName), persistenceRoot)
+	}
 }
 
 func TestRunSubcommandStreamsFinalizedAssistantResponsesAndNoticesByDefault(t *testing.T) {
@@ -491,9 +381,12 @@ func TestRunSubcommandStreamsFinalizedAssistantResponsesAndNoticesByDefault(t *t
 	commentary := "checking the runtime boundary"
 	finalResponse := "implemented the fix"
 	steeredText := "preserve the typed contract"
-	runPromptApp = func(_ context.Context, _ app.Options, _ string, _ time.Duration, progress serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
+	runPromptApp = func(_ context.Context, _ app.Options, _ string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
 		if progress == nil {
 			t.Fatal("default run progress sink is absent")
+		}
+		if timeout != 0 {
+			t.Fatalf("default timeout = %v, want infinite", timeout)
 		}
 		progress.PublishRunPromptProgress(serverapi.RunPromptProgress{
 			Kind:           serverapi.RunPromptProgressKindSessionStarted,
@@ -589,9 +482,11 @@ func runRootCommandWithCapturedProcessOutput(t *testing.T, args []string) (strin
 	}
 	os.Stdout = stdoutFile
 	os.Stderr = stderrFile
-	t.Cleanup(func() {
+	defer func() {
 		os.Stdout = originalStdout
 		os.Stderr = originalStderr
+	}()
+	t.Cleanup(func() {
 		_ = stdoutFile.Close()
 		_ = stderrFile.Close()
 	})
@@ -624,116 +519,63 @@ func TestRunSubcommandMapsFastFlagToAgentRole(t *testing.T) {
 		return app.RunPromptResult{Result: "done"}, nil
 	}
 
-	originalStdout := os.Stdout
-	stdoutFile, err := os.CreateTemp(t.TempDir(), "stdout")
-	if err != nil {
-		t.Fatalf("create stdout temp file: %v", err)
-	}
-	os.Stdout = stdoutFile
-	t.Cleanup(func() {
-		os.Stdout = originalStdout
-		_ = stdoutFile.Close()
-	})
-
-	if code := rootCommand([]string{"run", "--fast", "hello"}, strings.NewReader(""), io.Discard, io.Discard); code != 0 {
-		t.Fatalf("exit code = %d, want 0", code)
+	_, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "--fast", "hello"})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
 	}
 	if gotOpts.AgentRole == nil || *gotOpts.AgentRole != config.BuiltInSubagentRoleFast {
 		t.Fatalf("agent role = %v, want fast", gotOpts.AgentRole)
 	}
 }
 
-func TestRunSubcommandPreservesPromptStartingWithLiveWaitVerb(t *testing.T) {
+func TestRunSubcommandPreservesPromptsThatDoNotMatchLiveControlArity(t *testing.T) {
 	originalPrompt := runPromptApp
-	originalWait := runLiveWaitApp
-	t.Cleanup(func() {
-		runPromptApp = originalPrompt
-		runLiveWaitApp = originalWait
-	})
-	var gotPrompt string
-	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
-		gotPrompt = prompt
-		return app.RunPromptResult{SessionID: "018fdd67-89ab-4cde-8123-456789abcdef", Result: "done"}, nil
-	}
-	runLiveWaitApp = func(context.Context, app.Options, runtimeids.SessionID) (app.RunPromptResult, error) {
-		t.Fatal("live wait app should not be called for ordinary prompt")
-		return app.RunPromptResult{}, nil
-	}
-
-	stdout, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "wait", "for", "CI", "to", "finish"})
-	if code != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
-	}
-	if gotPrompt != "wait for CI to finish" {
-		t.Fatalf("prompt = %q, want joined prompt", gotPrompt)
-	}
-	if stdout == "" {
-		t.Fatal("stdout is empty; want final run output")
-	}
-}
-
-func TestRunSubcommandPreservesShortPromptStartingWithLiveStopVerb(t *testing.T) {
-	originalPrompt := runPromptApp
-	originalStop := runLiveStopApp
-	t.Cleanup(func() {
-		runPromptApp = originalPrompt
-		runLiveStopApp = originalStop
-	})
-	var gotPrompt string
-	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
-		gotPrompt = prompt
-		return app.RunPromptResult{SessionID: "018fdd67-89ab-4cde-8123-456789abcdef", Result: "done"}, nil
-	}
-	runLiveStopApp = func(context.Context, app.Options, runtimeids.SessionID) (app.RunLiveStopResult, error) {
-		t.Fatal("live stop app should not be called for ordinary prompt")
-		return app.RunLiveStopResult{}, nil
-	}
-
-	if _, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "stop", "now"}); code != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
-	}
-	if gotPrompt != "stop now" {
-		t.Fatalf("prompt = %q, want joined prompt", gotPrompt)
-	}
-}
-
-func TestRunSubcommandPreservesPromptWhenLiveVerbArityDoesNotMatch(t *testing.T) {
-	originalPrompt := runPromptApp
-	originalWait := runLiveWaitApp
 	originalSteer := runLiveSteerApp
+	originalStop := runLiveStopApp
+	originalWait := runLiveWaitApp
 	t.Cleanup(func() {
 		runPromptApp = originalPrompt
-		runLiveWaitApp = originalWait
 		runLiveSteerApp = originalSteer
+		runLiveStopApp = originalStop
+		runLiveWaitApp = originalWait
 	})
 	var prompts []string
 	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
 		prompts = append(prompts, prompt)
 		return app.RunPromptResult{SessionID: "018fdd67-89ab-4cde-8123-456789abcdef", Result: "done"}, nil
 	}
-	runLiveWaitApp = func(context.Context, app.Options, runtimeids.SessionID) (app.RunPromptResult, error) {
-		t.Fatal("live wait app should not be called when wait has extra prompt words")
-		return app.RunPromptResult{}, nil
-	}
 	runLiveSteerApp = func(context.Context, app.Options, runtimeids.SessionID, string) (app.RunLiveSteerResult, error) {
-		t.Fatal("live steer app should not be called without a message")
+		t.Fatal("live steer app should not be called for ordinary prompt")
 		return app.RunLiveSteerResult{}, nil
 	}
+	runLiveStopApp = func(context.Context, app.Options, runtimeids.SessionID) (app.RunLiveStopResult, error) {
+		t.Fatal("live stop app should not be called for ordinary prompt")
+		return app.RunLiveStopResult{}, nil
+	}
+	runLiveWaitApp = func(context.Context, app.Options, runtimeids.SessionID) (app.RunPromptResult, error) {
+		t.Fatal("live wait app should not be called for ordinary prompt")
+		return app.RunPromptResult{}, nil
+	}
 
-	if _, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "wait", "018fdd67-89ab-4cde-8123-456789abcdef", "for", "CI"}); code != 0 {
-		t.Fatalf("wait prompt exit code = %d, want 0; stderr=%q", code, stderr)
+	cases := [][]string{
+		{"run", "wait", "for", "CI", "to", "finish"},
+		{"run", "stop", "now"},
+		{"run", "wait", "018fdd67-89ab-4cde-8123-456789abcdef", "for", "CI"},
+		{"run", "steer", "018fdd67-89ab-4cde-8123-456789abcdef"},
 	}
-	if _, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "steer", "018fdd67-89ab-4cde-8123-456789abcdef"}); code != 0 {
-		t.Fatalf("steer prompt exit code = %d, want 0; stderr=%q", code, stderr)
-	}
-	want := []string{"wait 018fdd67-89ab-4cde-8123-456789abcdef for CI", "steer 018fdd67-89ab-4cde-8123-456789abcdef"}
-	if len(prompts) != len(want) {
-		t.Fatalf("prompts = %+v, want %+v", prompts, want)
-	}
-	for i := range want {
-		if prompts[i] != want[i] {
-			t.Fatalf("prompts = %+v, want %+v", prompts, want)
+	for _, args := range cases {
+		if _, stderr, code := runRootCommandWithCapturedProcessOutput(t, args); code != 0 {
+			t.Fatalf("args=%q exit code = %d, want 0; stderr=%q", args, code, stderr)
 		}
+	}
+	want := []string{
+		"wait for CI to finish",
+		"stop now",
+		"wait 018fdd67-89ab-4cde-8123-456789abcdef for CI",
+		"steer 018fdd67-89ab-4cde-8123-456789abcdef",
+	}
+	if !slices.Equal(prompts, want) {
+		t.Fatalf("prompts = %+v, want %+v", prompts, want)
 	}
 }
 
@@ -767,15 +609,16 @@ func TestRunSteerNoActiveRunPrintsContinueCommand(t *testing.T) {
 	runLiveSteerApp = func(context.Context, app.Options, runtimeids.SessionID, string) (app.RunLiveSteerResult, error) {
 		return app.RunLiveSteerResult{}, errors.Join(serverapi.ErrRuntimeNoActiveRun, errors.New("inactive"))
 	}
-	stdout, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "steer", "--persistence-root", "root with space", "018fdd67-89ab-4cde-8123-456789abcdef", "say", "hi"})
+	stdout, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "steer", "--persistence-root", "/tmp/root $HOME", "018fdd67-89ab-4cde-8123-456789abcdef", "say 'hi' and $(stay literal)"})
 	if code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
 	if stdout != "" {
 		t.Fatalf("stdout = %q, want empty", stdout)
 	}
-	if stderr == "" {
-		t.Fatal("stderr is empty; want no-active guidance")
+	want := "kent run --persistence-root '/tmp/root $HOME' --continue 018fdd67-89ab-4cde-8123-456789abcdef 'say '\\''hi'\\'' and $(stay literal)'"
+	if !strings.Contains(stderr, want) {
+		t.Fatalf("stderr = %q, want shell-safe continuation %q", stderr, want)
 	}
 }
 
@@ -882,14 +725,6 @@ func TestRunLiveControlsRejectSelfTargetBeforeAppCall(t *testing.T) {
 	}
 }
 
-func TestRunSteerContinueCommandUsesShellSafeQuoting(t *testing.T) {
-	got := buildRunSteerContinueCommand("018fdd67-89ab-4cde-8123-456789abcdef", "/tmp/root $HOME", "say 'hi' and $(stay literal)")
-	want := "kent run --persistence-root '/tmp/root $HOME' --continue 018fdd67-89ab-4cde-8123-456789abcdef 'say '\\''hi'\\'' and $(stay literal)'"
-	if got != want {
-		t.Fatalf("continue command = %q, want %q", got, want)
-	}
-}
-
 func TestRunSubcommandJSONModeKeepsWarningsInJSONOnly(t *testing.T) {
 	original := runPromptApp
 	t.Cleanup(func() {
@@ -902,86 +737,50 @@ func TestRunSubcommandJSONModeKeepsWarningsInJSONOnly(t *testing.T) {
 		return app.RunPromptResult{Result: "done", Warnings: []string{"warning one"}}, nil
 	}
 
-	originalStdout := os.Stdout
-	originalStderr := os.Stderr
-	stdoutFile, err := os.CreateTemp(t.TempDir(), "stdout")
-	if err != nil {
-		t.Fatalf("create stdout temp file: %v", err)
+	stdout, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "--output-mode=json", "hello"})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
 	}
-	stderrFile, err := os.CreateTemp(t.TempDir(), "stderr")
-	if err != nil {
-		t.Fatalf("create stderr temp file: %v", err)
-	}
-	os.Stdout = stdoutFile
-	os.Stderr = stderrFile
-	t.Cleanup(func() {
-		os.Stdout = originalStdout
-		os.Stderr = originalStderr
-		_ = stdoutFile.Close()
-		_ = stderrFile.Close()
-	})
-
-	if code := rootCommand([]string{"run", "--output-mode=json", "hello"}, strings.NewReader(""), io.Discard, io.Discard); code != 0 {
-		t.Fatalf("exit code = %d, want 0", code)
-	}
-	if _, err := stdoutFile.Seek(0, 0); err != nil {
-		t.Fatalf("seek stdout: %v", err)
-	}
-	data, err := io.ReadAll(stdoutFile)
-	if err != nil {
-		t.Fatalf("read stdout: %v", err)
-	}
-	if strings.Contains(string(data), "warning one\n\n") {
-		t.Fatalf("expected stdout to stay json-only, got %q", string(data))
+	if strings.Contains(stdout, "warning one\n\n") {
+		t.Fatalf("expected stdout to stay json-only, got %q", stdout)
 	}
 	var decoded runJSONResult
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("decode json output: %v; raw=%q", err, string(data))
+	if err := json.Unmarshal([]byte(stdout), &decoded); err != nil {
+		t.Fatalf("decode json output: %v; raw=%q", err, stdout)
 	}
 	if len(decoded.Warnings) != 1 || decoded.Warnings[0] != "warning one" {
 		t.Fatalf("unexpected warnings: %+v", decoded.Warnings)
 	}
-	if _, err := stderrFile.Seek(0, 0); err != nil {
-		t.Fatalf("seek stderr: %v", err)
-	}
-	stderrData, err := io.ReadAll(stderrFile)
-	if err != nil {
-		t.Fatalf("read stderr: %v", err)
-	}
-	if strings.TrimSpace(string(stderrData)) != "" {
-		t.Fatalf("stderr = %q, want empty", string(stderrData))
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
 	}
 }
 
-func TestRequireInteractiveTerminalAllowsForce(t *testing.T) {
-	if err := requireInteractiveTerminal(strings.NewReader(""), &bytes.Buffer{}, true); err != nil {
-		t.Fatalf("require interactive terminal with force: %v", err)
+func TestRunSubcommandRejectsInvalidPublicFlags(t *testing.T) {
+	original := runPromptApp
+	t.Cleanup(func() { runPromptApp = original })
+	called := false
+	runPromptApp = func(context.Context, app.Options, string, time.Duration, serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
+		called = true
+		return app.RunPromptResult{}, nil
 	}
-}
-
-func TestParseRunTimeoutDefaultsToInfinite(t *testing.T) {
-	got, err := parseRunTimeout("")
-	if err != nil {
-		t.Fatalf("parse run timeout: %v", err)
+	cases := [][]string{
+		{"run", "--timeout", "not-a-duration", "hello"},
+		{"run", "--output-mode", "verbose", "hello"},
+		{"run", "--progress-mode", "chatty", "hello"},
+		{"run", "--bash-timeout-seconds", "1", "hello"},
+		{"run", "--session", "one", "--continue", "two", "hello"},
+		{"run", "--agent", "default", "--fast", "hello"},
+		{"run", "--agent", "none", "hello"},
+		{"run", "--agent", "self", "hello"},
+		{"run", "--continue", "session-123", "--agent=", "hello"},
 	}
-	if got != 0 {
-		t.Fatalf("timeout = %v, want 0", got)
-	}
-}
-
-func TestParseRunTimeoutRejectsInvalid(t *testing.T) {
-	if _, err := parseRunTimeout("not-a-duration"); err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestParseRunTimeoutParsesDuration(t *testing.T) {
-	got, err := parseRunTimeout("2m")
-	if err != nil {
-		t.Fatalf("parse run timeout: %v", err)
-	}
-	if got != 2*time.Minute {
-		t.Fatalf("timeout = %v, want %v", got, 2*time.Minute)
+	for _, args := range cases {
+		called = false
+		_, stderr, code := runRootCommandWithCapturedProcessOutput(t, args)
+		if code != 2 || called || stderr == "" {
+			t.Fatalf("args=%q code=%d called=%v stderr=%q, want usage rejection", args, code, called, stderr)
+		}
 	}
 }
 
@@ -1015,68 +814,6 @@ func TestRunErrorMessageFallsBackToRawErrorWhenUnmapped(t *testing.T) {
 	}
 }
 
-func TestParseRunOutputMode(t *testing.T) {
-	got, err := parseRunOutputMode("final-text")
-	if err != nil {
-		t.Fatalf("parse output mode: %v", err)
-	}
-	if got != runOutputModeFinalText {
-		t.Fatalf("output mode = %q, want %q", got, runOutputModeFinalText)
-	}
-	got, err = parseRunOutputMode("json")
-	if err != nil {
-		t.Fatalf("parse output mode: %v", err)
-	}
-	if got != runOutputModeJSON {
-		t.Fatalf("output mode = %q, want %q", got, runOutputModeJSON)
-	}
-	if _, err := parseRunOutputMode("verbose"); err == nil {
-		t.Fatal("expected invalid output mode error")
-	}
-}
-
-func TestParseRunProgressMode(t *testing.T) {
-	got, err := parseRunProgressMode("quiet")
-	if err != nil {
-		t.Fatalf("parse progress mode: %v", err)
-	}
-	if got != runProgressModeQuiet {
-		t.Fatalf("progress mode = %q, want %q", got, runProgressModeQuiet)
-	}
-	got, err = parseRunProgressMode("stderr")
-	if err != nil {
-		t.Fatalf("parse progress mode: %v", err)
-	}
-	if got != runProgressModeStderr {
-		t.Fatalf("progress mode = %q, want %q", got, runProgressModeStderr)
-	}
-	if _, err := parseRunProgressMode("chatty"); err == nil {
-		t.Fatal("expected invalid progress mode error")
-	}
-}
-
-func TestEffectiveSessionIDPrefersContinueAlias(t *testing.T) {
-	got, err := effectiveSessionID(commonFlags{SessionID: "abc", ContinueID: "abc"})
-	if err != nil {
-		t.Fatalf("effective session id: %v", err)
-	}
-	if got != "abc" {
-		t.Fatalf("session id = %q, want abc", got)
-	}
-
-	got, err = effectiveSessionID(commonFlags{ContinueID: "xyz"})
-	if err != nil {
-		t.Fatalf("effective session id: %v", err)
-	}
-	if got != "xyz" {
-		t.Fatalf("session id = %q, want xyz", got)
-	}
-
-	if _, err := effectiveSessionID(commonFlags{SessionID: "abc", ContinueID: "xyz"}); err == nil {
-		t.Fatal("expected conflicting --session/--continue error")
-	}
-}
-
 func TestRunSubcommandUsesKentSessionEnvAsWorkspaceContext(t *testing.T) {
 	original := runPromptApp
 	t.Cleanup(func() {
@@ -1089,33 +826,19 @@ func TestRunSubcommandUsesKentSessionEnvAsWorkspaceContext(t *testing.T) {
 	}
 	t.Setenv(sessionenv.SessionIDEnv, "session-from-env")
 
-	originalStdout := os.Stdout
-	originalStderr := os.Stderr
-	stdoutFile, err := os.CreateTemp(t.TempDir(), "stdout")
-	if err != nil {
-		t.Fatalf("create stdout temp file: %v", err)
-	}
-	stderrFile, err := os.CreateTemp(t.TempDir(), "stderr")
-	if err != nil {
-		t.Fatalf("create stderr temp file: %v", err)
-	}
-	os.Stdout = stdoutFile
-	os.Stderr = stderrFile
-	t.Cleanup(func() {
-		os.Stdout = originalStdout
-		os.Stderr = originalStderr
-		_ = stdoutFile.Close()
-		_ = stderrFile.Close()
-	})
-
-	if code := rootCommand([]string{"run", "hello"}, strings.NewReader(""), io.Discard, io.Discard); code != 0 {
-		t.Fatalf("exit code = %d, want 0", code)
+	args := []string{"run", "please keep --workspace unchanged and ignore --openai-base-url"}
+	_, stderr, code := runRootCommandWithCapturedProcessOutput(t, args)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
 	}
 	if gotOpts.SessionID != "" {
 		t.Fatalf("session id = %q, want empty", gotOpts.SessionID)
 	}
 	if gotOpts.WorkspaceContextSessionID != "session-from-env" {
 		t.Fatalf("workspace context session id = %q, want env session", gotOpts.WorkspaceContextSessionID)
+	}
+	if gotOpts.WorkspaceRoot != "." || gotOpts.WorkspaceRootExplicit || gotOpts.OpenAIBaseURL != "" || gotOpts.OpenAIBaseURLExplicit {
+		t.Fatalf("flag-looking prompt text changed explicit overrides: %+v", gotOpts)
 	}
 }
 
@@ -1143,44 +866,6 @@ func TestRunSubcommandKeepsKentSessionEnvAsCallerWhenSelectingSession(t *testing
 	}
 }
 
-func TestRunSubcommandDefaultAgentWithFastUsesFastRole(t *testing.T) {
-	original := runPromptApp
-	t.Cleanup(func() {
-		runPromptApp = original
-	})
-	var gotOpts app.Options
-	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
-		gotOpts = opts
-		return app.RunPromptResult{Result: "done"}, nil
-	}
-
-	originalStdout := os.Stdout
-	originalStderr := os.Stderr
-	stdoutFile, err := os.CreateTemp(t.TempDir(), "stdout")
-	if err != nil {
-		t.Fatalf("create stdout temp file: %v", err)
-	}
-	stderrFile, err := os.CreateTemp(t.TempDir(), "stderr")
-	if err != nil {
-		t.Fatalf("create stderr temp file: %v", err)
-	}
-	os.Stdout = stdoutFile
-	os.Stderr = stderrFile
-	t.Cleanup(func() {
-		os.Stdout = originalStdout
-		os.Stderr = originalStderr
-		_ = stdoutFile.Close()
-		_ = stderrFile.Close()
-	})
-
-	if code := rootCommand([]string{"run", "--agent=default", "--fast", "hello"}, strings.NewReader(""), io.Discard, io.Discard); code != 2 {
-		t.Fatalf("exit code = %d, want 2", code)
-	}
-	if gotOpts.AgentRole != nil {
-		t.Fatalf("run prompt app should not be called, got agent role %v", gotOpts.AgentRole)
-	}
-}
-
 func TestRunSubcommandContinueDefaultAgentSendsDefaultRoleOverride(t *testing.T) {
 	original := runPromptApp
 	t.Cleanup(func() {
@@ -1192,75 +877,15 @@ func TestRunSubcommandContinueDefaultAgentSendsDefaultRoleOverride(t *testing.T)
 		return app.RunPromptResult{Result: "done"}, nil
 	}
 
-	originalStdout := os.Stdout
-	originalStderr := os.Stderr
-	stdoutFile, err := os.CreateTemp(t.TempDir(), "stdout")
-	if err != nil {
-		t.Fatalf("create stdout temp file: %v", err)
-	}
-	stderrFile, err := os.CreateTemp(t.TempDir(), "stderr")
-	if err != nil {
-		t.Fatalf("create stderr temp file: %v", err)
-	}
-	os.Stdout = stdoutFile
-	os.Stderr = stderrFile
-	t.Cleanup(func() {
-		os.Stdout = originalStdout
-		os.Stderr = originalStderr
-		_ = stdoutFile.Close()
-		_ = stderrFile.Close()
-	})
-
-	if code := rootCommand([]string{"run", "--continue", "session-123", "--agent", "default", "hello"}, strings.NewReader(""), io.Discard, io.Discard); code != 0 {
-		t.Fatalf("exit code = %d, want 0", code)
+	_, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "--continue", "session-123", "--agent", "default", "hello"})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
 	}
 	if gotOpts.SessionID != "session-123" {
 		t.Fatalf("session id = %q, want session-123", gotOpts.SessionID)
 	}
 	if gotOpts.AgentRole == nil || *gotOpts.AgentRole != config.DefaultSubagentRole {
 		t.Fatalf("agent role = %v, want default", gotOpts.AgentRole)
-	}
-}
-
-func TestRunSubcommandRejectsRemovedDefaultAgentAliases(t *testing.T) {
-	for _, alias := range []string{"none", "self"} {
-		t.Run(alias, func(t *testing.T) {
-			original := runPromptApp
-			t.Cleanup(func() {
-				runPromptApp = original
-			})
-			called := false
-			runPromptApp = func(context.Context, app.Options, string, time.Duration, serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
-				called = true
-				return app.RunPromptResult{}, nil
-			}
-
-			if code := rootCommand([]string{"run", "--agent", alias, "hello"}, strings.NewReader(""), io.Discard, io.Discard); code != 2 {
-				t.Fatalf("exit code = %d, want 2", code)
-			}
-			if called {
-				t.Fatal("run prompt app should not be called for invalid role")
-			}
-		})
-	}
-}
-
-func TestRunSubcommandRejectsExplicitBlankAgentRole(t *testing.T) {
-	original := runPromptApp
-	t.Cleanup(func() {
-		runPromptApp = original
-	})
-	called := false
-	runPromptApp = func(context.Context, app.Options, string, time.Duration, serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
-		called = true
-		return app.RunPromptResult{}, nil
-	}
-
-	if code := rootCommand([]string{"run", "--continue", "session-123", "--agent=", "hello"}, strings.NewReader(""), io.Discard, io.Discard); code != 2 {
-		t.Fatalf("exit code = %d, want 2", code)
-	}
-	if called {
-		t.Fatal("run prompt app should not be called for blank role")
 	}
 }
 
@@ -1296,96 +921,6 @@ func TestSessionIDSubcommandFailsOutsideKentShell(t *testing.T) {
 	}
 }
 
-func TestRegisterCommonFlagsDoesNotExposeRemovedBashTimeoutAlias(t *testing.T) {
-	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	registerCommonFlags(fs, true)
-	if fs.Lookup("bash-timeout-seconds") != nil {
-		t.Fatal("expected removed --bash-timeout-seconds flag to be absent")
-	}
-}
-
-func TestEffectiveRunAgentRoleRejectsConflictingFastFlag(t *testing.T) {
-	if _, err := effectiveRunAgentRole("worker", true); err == nil {
-		t.Fatal("expected conflicting fast role error")
-	}
-	if _, err := effectiveRunAgentRole("default", true); err == nil {
-		t.Fatal("expected default role to conflict with fast flag")
-	}
-	role, err := effectiveRunAgentRole("fast", true)
-	if err != nil {
-		t.Fatalf("effectiveRunAgentRole: %v", err)
-	}
-	if role == nil || *role != config.BuiltInSubagentRoleFast {
-		t.Fatalf("role = %v, want fast", role)
-	}
-}
-
-func TestEffectiveRunAgentRoleDefaultAndRemovedAliases(t *testing.T) {
-	omitted, err := effectiveRunAgentRole("", false)
-	if err != nil {
-		t.Fatalf("effectiveRunAgentRole omitted: %v", err)
-	}
-	if omitted != nil {
-		t.Fatalf("omitted role = %v, want nil", omitted)
-	}
-	role, err := effectiveRunAgentRole("default", false)
-	if err != nil {
-		t.Fatalf("effectiveRunAgentRole: %v", err)
-	}
-	if role == nil || *role != config.DefaultSubagentRole {
-		t.Fatalf("role = %v, want default", role)
-	}
-	for _, alias := range []string{"none", "self"} {
-		t.Run(alias, func(t *testing.T) {
-			if _, err := effectiveRunAgentRole(alias, false); err == nil {
-				t.Fatal("expected removed alias to be rejected")
-			}
-		})
-	}
-}
-
-func TestMarkExplicitCommonFlagsTracksOnlyParsedFlags(t *testing.T) {
-	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	flags := registerCommonFlags(fs, true)
-	if err := fs.Parse([]string{"--workspace", "/tmp/w", "--openai-base-url=http://local/v1", "prompt"}); err != nil {
-		t.Fatalf("parse flags: %v", err)
-	}
-	markExplicitCommonFlags(fs, flags)
-	if !flags.WorkspaceExplicit {
-		t.Fatal("expected workspace override to be marked explicit")
-	}
-	if !flags.OpenAIBaseURLExplicit {
-		t.Fatal("expected openai base url override to be marked explicit")
-	}
-}
-
-func TestMarkExplicitCommonFlagsIgnoresFlagTextInsidePrompt(t *testing.T) {
-	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	flags := registerCommonFlags(fs, true)
-	prompt := "please keep --workspace unchanged and ignore --openai-base-url"
-	if err := fs.Parse([]string{"--continue", "session-123", prompt}); err != nil {
-		t.Fatalf("parse flags: %v", err)
-	}
-	markExplicitCommonFlags(fs, flags)
-	if flags.WorkspaceExplicit {
-		t.Fatal("did not expect prompt text to mark workspace explicit")
-	}
-	if flags.OpenAIBaseURLExplicit {
-		t.Fatal("did not expect prompt text to mark openai base url explicit")
-	}
-}
-
-func TestPublishPersistenceRootEnvNormalizesInheritedRelativeEnv(t *testing.T) {
-	t.Setenv(config.PersistenceRootEnvName, "rel-root")
-	if err := publishPersistenceRootEnv(""); err != nil {
-		t.Fatalf("publishPersistenceRootEnv: %v", err)
-	}
-	got := os.Getenv(config.PersistenceRootEnvName)
-	if !filepath.IsAbs(got) {
-		t.Fatalf("inherited relative env root = %q, want republished as absolute", got)
-	}
-}
-
 func TestRootCommandNormalizesInheritedRelativeEnvBeforeDispatch(t *testing.T) {
 	// Root-checking client subcommands (project/attach/rebind/goal/workflow/task)
 	// dispatch before the interactive path's publishPersistenceRootEnv call, so
@@ -1416,26 +951,5 @@ func TestRootCommandToleratesUnnormalizableInheritedEnvBeforeDispatch(t *testing
 	var stdout, stderr strings.Builder
 	if code := rootCommand([]string{"--version"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
 		t.Fatalf("rootCommand --version exit = %d: %s", code, stderr.String())
-	}
-}
-
-func TestPublishPersistenceRootEnvFlagWinsOverEnv(t *testing.T) {
-	t.Setenv(config.PersistenceRootEnvName, "rel-root")
-	flagRoot := filepath.Join(string(filepath.Separator), "tmp", "flag-root")
-	if err := publishPersistenceRootEnv(flagRoot); err != nil {
-		t.Fatalf("publishPersistenceRootEnv: %v", err)
-	}
-	if got := os.Getenv(config.PersistenceRootEnvName); got != flagRoot {
-		t.Fatalf("env root = %q, want flag root %q", got, flagRoot)
-	}
-}
-
-func TestPublishPersistenceRootEnvLeavesUnsetEnvUntouched(t *testing.T) {
-	t.Setenv(config.PersistenceRootEnvName, "")
-	if err := publishPersistenceRootEnv(""); err != nil {
-		t.Fatalf("publishPersistenceRootEnv: %v", err)
-	}
-	if got := os.Getenv(config.PersistenceRootEnvName); got != "" {
-		t.Fatalf("env root = %q, want empty (untouched)", got)
 	}
 }

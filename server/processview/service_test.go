@@ -88,6 +88,8 @@ func (f processViewFixture) startCommand(t *testing.T, id string, command string
 	t.Helper()
 	input, err := json.Marshal(map[string]any{
 		"cmd":           command,
+		"shell":         "/bin/sh",
+		"login":         false,
 		"yield_time_ms": 250,
 	})
 	if err != nil {

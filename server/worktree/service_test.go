@@ -45,13 +45,6 @@ func sessionTargetWorktreeID(target clientui.SessionExecutionTarget) string {
 	return strings.TrimSpace(target.Worktree.ID)
 }
 
-func sessionTargetWorktreeRoot(target clientui.SessionExecutionTarget) string {
-	if target.Worktree == nil {
-		return ""
-	}
-	return strings.TrimSpace(target.Worktree.Root)
-}
-
 func (r *serviceTestRuntime) blockedRunCount(sessionID string) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -192,58 +185,6 @@ type serviceTestProcessSource struct {
 
 func (s *serviceTestProcessSource) List() []shelltool.Snapshot {
 	return append([]shelltool.Snapshot(nil), s.snapshots...)
-}
-
-type serviceTestLocalNotes struct {
-	mu             sync.Mutex
-	texts          []string
-	sessionTexts   []string
-	appendLocalErr error
-}
-
-type dirtyCountFailingGitRunner struct {
-	base      gitCommandRunner
-	dirtyRoot string
-}
-
-func (r *dirtyCountFailingGitRunner) Output(ctx context.Context, dir string, args ...string) ([]byte, error) {
-	output, exitCode, err := r.Run(ctx, dir, args...)
-	if err != nil {
-		return nil, formatGitRunError(exitCode, err, output, args...)
-	}
-	return output, nil
-}
-
-func (r *dirtyCountFailingGitRunner) Run(ctx context.Context, dir string, args ...string) ([]byte, int, error) {
-	if equalStrings(args, []string{"status", "--porcelain=v1", "-z"}) && strings.TrimSpace(dir) == strings.TrimSpace(r.dirtyRoot) {
-		return []byte("status failed"), 1, errors.New("status failed")
-	}
-	return r.base.Run(ctx, dir, args...)
-}
-
-func (n *serviceTestLocalNotes) AppendCommittedEntry(_ context.Context, req serverapi.RuntimeAppendCommittedEntryRequest) error {
-	if n.appendLocalErr != nil {
-		return n.appendLocalErr
-	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.texts = append(n.texts, req.Text)
-	return nil
-}
-
-func (n *serviceTestLocalNotes) AppendSessionEntry(_ context.Context, _ string, _ string, text string) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.sessionTexts = append(n.sessionTexts, text)
-	return nil
-}
-
-func (n *serviceTestLocalNotes) snapshot() []string {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	combined := append([]string(nil), n.texts...)
-	combined = append(combined, n.sessionTexts...)
-	return combined
 }
 
 type serviceTestEnv struct {

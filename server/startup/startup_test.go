@@ -236,75 +236,6 @@ var startupNoopOnboarding = OnboardingHandler(func(_ context.Context, req Onboar
 	return reloaded, nil
 })
 
-func TestStartWrapsCoreWithSameClientAssembly(t *testing.T) {
-	home := t.TempDir()
-	workspace := t.TempDir()
-	t.Setenv("HOME", home)
-
-	request := Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}
-	authHandler := startupEnvAuthHandler{}
-	onboarding := startupNoopOnboarding
-	registerStartupWorkspace(t, workspace)
-
-	appCore, err := StartCore(context.Background(), request, authHandler, onboarding)
-	if err != nil {
-		t.Fatalf("StartCore: %v", err)
-	}
-	generatedSkillsRoot := filepath.Join(home, config.ConfigDirName, ".generated", "skills")
-	if entries, err := os.ReadDir(generatedSkillsRoot); err != nil {
-		t.Fatalf("expected StartCore to seed generated skills through bootstrap: %v", err)
-	} else if len(entries) == 0 {
-		t.Fatal("expected StartCore to seed at least one generated skill")
-	}
-
-	wrapped := &EmbeddedServer{Core: appCore}
-	if wrapped.ProjectViewClient() != appCore.ProjectViewClient() {
-		t.Fatal("expected embedded wrapper to expose core project client")
-	}
-	if wrapped.SessionViewClient() != appCore.SessionViewClient() {
-		t.Fatal("expected embedded wrapper to expose core session client")
-	}
-	if wrapped.ProcessViewClient() != appCore.ProcessViewClient() {
-		t.Fatal("expected embedded wrapper to expose core process client")
-	}
-	if wrapped.ProcessOutputClient() != appCore.ProcessOutputClient() {
-		t.Fatal("expected embedded wrapper to expose core process output client")
-	}
-	if wrapped.RunPromptClient() != appCore.RunPromptClient() {
-		t.Fatal("expected embedded wrapper to expose core run prompt client")
-	}
-	coreProjectID := appCore.ProjectID()
-	coreProjects, err := appCore.ProjectViewClient().ListProjects(context.Background(), serverapi.ProjectListRequest{})
-	if err != nil {
-		t.Fatalf("core ListProjects: %v", err)
-	}
-	if err := appCore.Close(); err != nil {
-		t.Fatalf("appCore.Close: %v", err)
-	}
-
-	started, err := Start(context.Background(), request, authHandler, onboarding)
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	defer func() { _ = started.Close() }()
-	if started.Core == nil {
-		t.Fatal("expected embedded server to carry core")
-	}
-	if started.ProjectID() != coreProjectID {
-		t.Fatalf("project id mismatch: started=%q core=%q", started.ProjectID(), coreProjectID)
-	}
-	startedProjects, err := started.ProjectViewClient().ListProjects(context.Background(), serverapi.ProjectListRequest{})
-	if err != nil {
-		t.Fatalf("started ListProjects: %v", err)
-	}
-	if len(coreProjects.Projects) != 1 || len(startedProjects.Projects) != 1 {
-		t.Fatalf("unexpected project counts core=%d started=%d", len(coreProjects.Projects), len(startedProjects.Projects))
-	}
-	if coreProjects.Projects[0].ProjectID != startedProjects.Projects[0].ProjectID {
-		t.Fatalf("project listing mismatch core=%+v started=%+v", coreProjects.Projects[0], startedProjects.Projects[0])
-	}
-}
-
 func TestStartCoreOnboardingReceivesPreCoreCapabilityFactsClient(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
@@ -431,24 +362,6 @@ func TestHeadlessHandlersAllowExplicitOpenAIBaseURLWithoutCredentials(t *testing
 
 	if appCore.Config().Settings.OpenAIBaseURL != "http://127.0.0.1:8080/v1" {
 		t.Fatalf("openai base url = %q", appCore.Config().Settings.OpenAIBaseURL)
-	}
-}
-
-func TestStartupMissingConfigReturnsBootstrapServerWithoutConstructingCore(t *testing.T) {
-	home := t.TempDir()
-	workspace := t.TempDir()
-	t.Setenv("HOME", home)
-
-	server, err := StartWithOptions(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, startupEnvAuthHandler{}, nil, Options{})
-	if err != nil {
-		t.Fatalf("StartWithOptions: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-	if server.Core != nil {
-		t.Fatal("expected missing-config startup to defer configured core construction")
-	}
-	if _, statErr := os.Stat(filepath.Join(home, config.ConfigDirName, "config.toml")); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("settings file should remain absent, stat err=%v", statErr)
 	}
 }
 

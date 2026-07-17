@@ -316,16 +316,6 @@ func validateRuntimeOperationRef(ref clientui.RuntimeOperationRef, kind clientui
 	return nil
 }
 
-func validateRuntimeGoalActionRequest(clientRequestID string, sessionID string, actor string) error {
-	if err := validateClientRequestID(clientRequestID); err != nil {
-		return err
-	}
-	if err := validateRequiredSessionID(sessionID); err != nil {
-		return err
-	}
-	return validateGoalActor(actor)
-}
-
 func (r RuntimeSetSessionNameRequest) Validate() error {
 	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }

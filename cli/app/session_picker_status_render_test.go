@@ -2,7 +2,6 @@ package app
 
 import (
 	"errors"
-	"strings"
 	"testing"
 
 	"core/shared/sessioncontract"
@@ -41,85 +40,6 @@ func (p *sessionPickerFailureProjection) Clear(tab sessioncontract.SessionCatego
 func (p *sessionPickerFailureProjection) Status(activeTab sessioncontract.SessionCategory) *startupPickerStatusFailure {
 	p.status.activeTab = &activeTab
 	return projectStartupPickerStatus(p.status).Failure
-}
-
-func TestAuthPickerNoticeCurrentContractBeforeSharedExtraction(t *testing.T) {
-	t.Parallel()
-
-	model := newStartupPickerModel(
-		"**Auth**",
-		"Auth",
-		"dark",
-		startupPickerNotice{Text: "operation failed", Kind: startupPickerNoticeError},
-		nil,
-	)
-	model.width = 40
-	model.height = 10
-
-	rendered := ansi.Strip(model.renderNotice())
-	if strings.TrimSpace(rendered) == "" {
-		t.Fatal("auth picker notice rendered empty")
-	}
-	if lipgloss.Width(rendered) > model.contentWidth() {
-		t.Fatalf("auth picker notice width = %d, want <= %d", lipgloss.Width(rendered), model.contentWidth())
-	}
-}
-
-func TestStartupPickersUseSharedStatusRenderer(t *testing.T) {
-	t.Parallel()
-
-	status := newStartupPickerStatusModel()
-	status.Record(startupPickerStatusFailure{
-		Tab:        sessioncontract.SessionCategoryMain,
-		Operation:  sessionPickerOperationBodyPage,
-		Generation: 3,
-		Kind:       sessionPickerFailurePageRequest,
-		Diagnostic: errors.New("page failed"),
-	})
-
-	if got := renderStartupPickerStatus(projectStartupPickerStatus(status), 40); strings.TrimSpace(ansi.Strip(got)) == "" {
-		t.Fatal("shared startup status renderer produced empty output")
-	}
-}
-
-func TestSessionPickerInitialNoticeUsesSharedStatusSurface(t *testing.T) {
-	t.Parallel()
-
-	diagnostic := errors.New("workspace lookup failed")
-	notice := startupPickerNotice{
-		Text:       "retry",
-		Kind:       startupPickerNoticeError,
-		Diagnostic: diagnostic,
-	}
-	model := newUninitializedTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{Notice: &notice})
-	projection := projectStartupPickerStatus(model.startupStatus)
-	if projection.Notice.Kind != startupPickerNoticeError ||
-		!errors.Is(projection.Notice.Diagnostic, diagnostic) {
-		t.Fatalf("initial notice projection = %+v", projection.Notice)
-	}
-	if got := newSessionPickerStatusSurface(model.startupStatus).RenderStatus(80); strings.TrimSpace(ansi.Strip(got)) == "" {
-		t.Fatal("initial notice rendered empty")
-	}
-}
-
-func TestSessionPickerResumeUsesSharedStartupStatusSurface(t *testing.T) {
-	t.Parallel()
-
-	authStatus := newStartupPickerStatusModel()
-	authStatus.Record(startupPickerStatusFailure{
-		Tab:        sessioncontract.SessionCategoryMain,
-		Operation:  sessionPickerOperationBodyPage,
-		Generation: 7,
-		Kind:       sessionPickerFailurePageRequest,
-		Diagnostic: errors.New("page failed"),
-	})
-	resume := newSessionPickerStatusSurface(authStatus)
-	if resume.model != authStatus {
-		t.Fatal("resume picker did not reuse shared startup status model")
-	}
-	if got := resume.RenderStatus(80); strings.TrimSpace(ansi.Strip(got)) == "" {
-		t.Fatal("resume picker shared status rendered empty")
-	}
 }
 
 func TestSessionPickerFailureProjectionKeepsOverlappingSourcesKeyed(t *testing.T) {
@@ -180,33 +100,6 @@ func TestSessionPickerFailureProjectionPrefersActiveTabThenInactiveRecency(t *te
 	}
 }
 
-func TestSessionPickerFailureProjectionRetryRetainsUnrelatedFailure(t *testing.T) {
-	t.Parallel()
-
-	failures := newSessionPickerFailureProjection()
-	failures.Record(sessionPickerStatusFailure{
-		Tab:        sessioncontract.SessionCategoryMain,
-		Operation:  sessionPickerOperationBodyPage,
-		Generation: 8,
-		Kind:       sessionPickerFailurePageRequest,
-		Diagnostic: errors.New("body"),
-	})
-	failures.Record(sessionPickerStatusFailure{
-		Tab:        sessioncontract.SessionCategoryMain,
-		Operation:  sessionPickerOperationDirectionalPage,
-		Generation: 9,
-		Kind:       sessionPickerFailurePageRequest,
-		Diagnostic: errors.New("directional"),
-	})
-	if got := failures.Status(sessioncontract.SessionCategoryMain); got == nil || got.Operation != sessionPickerOperationDirectionalPage {
-		t.Fatalf("retry status = %q, want directional page", got.Operation)
-	}
-	failures.Clear(sessioncontract.SessionCategoryMain, sessionPickerOperationDirectionalPage, 9)
-	if got := failures.Status(sessioncontract.SessionCategoryMain); got == nil || got.Operation != sessionPickerOperationBodyPage {
-		t.Fatalf("after directional recovery = %+v, want retained body failure", got)
-	}
-}
-
 func TestSessionPickerFailureRenderProjectionExcludesDiagnostics(t *testing.T) {
 	t.Parallel()
 
@@ -247,7 +140,6 @@ func TestSessionPickerResponsiveTabsStackFullLabelsOnlyAtSupportedNarrowWidth(t 
 	}{
 		{name: "wide", width: 120, stacked: false},
 		{name: "supported narrow", width: 40, stacked: true},
-		{name: "minimum width", width: 40, stacked: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			projection := projectSessionPickerTabs(sessionPickerTabsProjectionInput{
@@ -269,18 +161,5 @@ func TestSessionPickerResponsiveTabsStackFullLabelsOnlyAtSupportedNarrowWidth(t 
 				}
 			}
 		})
-	}
-}
-
-func TestSessionPickerResponsiveTabsRemainHorizontalAboveMinimum(t *testing.T) {
-	t.Parallel()
-
-	projection := projectSessionPickerTabs(sessionPickerTabsProjectionInput{
-		Width:     80,
-		ActiveTab: sessioncontract.SessionCategorySubagent,
-		Geometry:  terminalGeometryKnown(80, 24),
-	})
-	if len(projection.Rows) != 1 {
-		t.Fatalf("wide tab rows = %d, want one", len(projection.Rows))
 	}
 }

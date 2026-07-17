@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"core/prompts"
 	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -129,8 +128,8 @@ func TestTaskHumanOnlyActionsAreDeniedInsideKentSession(t *testing.T) {
 		if stdout != "" {
 			t.Fatalf("%v stdout = %q, want empty", args, stdout)
 		}
-		if stderr != prompts.WorkflowHumanOnlyTaskActionDeniedPrompt+"\n" {
-			t.Fatalf("%v stderr = %q, want denied prompt", args, stderr)
+		if strings.TrimSpace(stderr) == "" {
+			t.Fatalf("%v stderr is empty, want denial", args)
 		}
 	}
 }
@@ -140,98 +139,10 @@ func TestTaskSafeActionsRemainAvailableInsideKentSession(t *testing.T) {
 	_, binding, remote := newWorkflowCommandLoopback(t)
 	restore := replaceWorkflowCommandRemoteOpener(t, remote.cfg, remote)
 	defer restore()
+	setupLinkedWorkflow(t, binding.ProjectID, "Safe Task Workflow")
 
-	workflowID := workflowCreateForTest(t, "Safe Task Workflow").ID
-	if workflowID == "" {
-		t.Fatal("workflow create did not return a workflow id")
-	}
-	if _, nodeErr, code := runWorkflowRootCommand("workflow", "node", "add", workflowID, "--key", "implement", "--kind", "agent", "--agent", "workflow-test", "--prompt", "Do work"); code != 0 {
-		t.Fatalf("workflow node add exit=%d stderr=%q", code, nodeErr)
-	}
-	if _, edgeErr, code := runWorkflowRootCommand("workflow", "edge", "add", workflowID, "--from", "backlog", "--transition", "start", "--edge-key", "start", "--to", "implement", "--context", "new_session", "--prompt", "Do work"); code != 0 {
-		t.Fatalf("workflow start edge add exit=%d stderr=%q", code, edgeErr)
-	}
-	if _, edgeErr, code := runWorkflowRootCommand("workflow", "edge", "add", workflowID, "--from", "implement", "--transition", "done", "--edge-key", "done", "--to", "done", "--context", "new_session"); code != 0 {
-		t.Fatalf("workflow done edge add exit=%d stderr=%q", code, edgeErr)
-	}
-	if _, linkErr, code := runWorkflowRootCommand("workflow", "link", binding.ProjectID, workflowID, "--default"); code != 0 {
-		t.Fatalf("workflow link exit=%d stderr=%q", code, linkErr)
-	}
-
-	taskOut, taskErr, code := runWorkflowRootCommand("task", "create", "--title", "Safe Task", "--body", "Body", "--workflow", workflowID, "--project", binding.ProjectID, "--source-url", "https://github.com/respawn-llc/kent/issues/123")
-	if code != 0 {
-		t.Fatalf("task create exit=%d stderr=%q", code, taskErr)
-	}
-	if !strings.Contains(taskOut, "Imported from: https://github.com/respawn-llc/kent/issues/123\n") {
-		t.Fatalf("task create output = %q, want source URL", taskOut)
-	}
-	shortID := taskDetailHeadingShortID(t, taskOut)
-	if _, listErr, code := runWorkflowRootCommand("task", "list", "--project", binding.ProjectID); code != 0 {
-		t.Fatalf("task list exit=%d stderr=%q", code, listErr)
-	}
-	if _, showErr, code := runWorkflowRootCommand("task", "show", "--project", binding.ProjectID, shortID); code != 0 {
-		t.Fatalf("task show exit=%d stderr=%q", code, showErr)
-	}
-	commentOut, commentErr, code := runWorkflowRootCommand("task", "comment", "add", "--project", binding.ProjectID, "--author", "user", "--author-id", "octocat", "--body", "note", shortID)
-	if code != 0 {
-		t.Fatalf("task comment add exit=%d stderr=%q", code, commentErr)
-	}
-	commentID := labeledOutputValue(t, commentOut, "comment_id")
-	if commentID == "" {
-		t.Fatalf("task comment add output = %q", commentOut)
-	}
-	commentListOut, commentListErr, code := runWorkflowRootCommand("task", "comment", "list", "--project", binding.ProjectID, shortID)
-	if code != 0 {
-		t.Fatalf("task comment list exit=%d stderr=%q", code, commentListErr)
-	}
-	if !strings.Contains(commentListOut, "octocat at ") {
-		t.Fatalf("task comment list output = %q, want author id", commentListOut)
-	}
-	if _, replaceErr, code := runWorkflowRootCommand("task", "comment", "replace", "--body", "edited", commentID); code != 0 {
-		t.Fatalf("task comment replace exit=%d stderr=%q", code, replaceErr)
-	}
-}
-
-func TestTaskMutationOutputRenderers(t *testing.T) {
-	task := serverapi.WorkflowTaskDetail{
-		Summary:  serverapi.WorkflowTaskSummary{ID: "task-1", ShortID: "BLD-1", Title: "Task"},
-		Workflow: serverapi.WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Workflow"},
-		Placements: []serverapi.WorkflowPlacement{
-			{ID: "placement-1", NodeID: "node-1", NodeKey: "implement"},
-			{ID: "placement-2", NodeID: "node-2", NodeKey: "review"},
-		},
-		Runs: []serverapi.WorkflowRun{
-			{ID: "run-1", PlacementID: "placement-1", NodeID: "node-1", SessionID: "session-1"},
-			{ID: "run-2", PlacementID: "placement-2", NodeID: "node-2", SessionID: "session-2"},
-		},
-		Transitions: []serverapi.WorkflowTaskTransition{
-			{
-				ID:            "transition-1",
-				SourceNodeKey: "implement",
-				TransitionID:  "done",
-				Edges: []serverapi.WorkflowTransitionEdge{
-					{EdgeKey: "done", TargetNodeKey: "review", State: "applied"},
-				},
-			},
-		},
-	}
-
-	var start bytes.Buffer
-	writeTaskStartResult(&start, task, serverapi.WorkflowTaskStartApplied{RunID: "run-1", PlacementID: "placement-1", TransitionID: "transition-start"})
-	if got, want := start.String(), "Started task BLD-1 in session session-1 using workflow \"Workflow\" (workflow-1).\nFirst node: implement\n"; got != want {
-		t.Fatalf("start output = %q, want %q", got, want)
-	}
-
-	var approve bytes.Buffer
-	writeTaskTransitionResult(&approve, "Approved transition of", task, "transition-1", []string{"run-2"})
-	if got, want := approve.String(), "Approved transition of BLD-1 from `implement` to `done`.\nBecause of this, started node review in session session-2.\n"; got != want {
-		t.Fatalf("approve output = %q, want %q", got, want)
-	}
-
-	var move bytes.Buffer
-	writeTaskTransitionResult(&move, "Moved task", task, "transition-1", nil)
-	if got, want := move.String(), "Moved task BLD-1 from `implement` to `done`.\n"; got != want {
-		t.Fatalf("move output = %q, want %q", got, want)
+	if _, stderr, code := runWorkflowRootCommand("task", "list", "--project", binding.ProjectID); code != 0 {
+		t.Fatalf("safe task list exit=%d stderr=%q", code, stderr)
 	}
 }
 

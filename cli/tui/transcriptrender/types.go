@@ -198,10 +198,6 @@ func SemanticSpan(text string, role StyleRole, attributes ...SpanAttribute) Span
 	return Span{Text: text, Style: SemanticStyle(role, attributes...)}
 }
 
-func ExplicitRGBSpan(text string, foreground RGBColor, attributes ...SpanAttribute) Span {
-	return Span{Text: text, Style: ExplicitRGBStyle(foreground, attributes...)}
-}
-
 func EncodeSpanHyperlink(span Span, rendered string) string {
 	if rendered == "" || span.Hyperlink == nil || span.Hyperlink.URL == "" {
 		return rendered

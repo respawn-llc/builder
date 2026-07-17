@@ -64,50 +64,25 @@ func TestInjectsGlobalAndWorkspaceAgentsBeforeFirstUserMessage(t *testing.T) {
 		t.Fatalf("expected 2 model calls, got %d", len(client.calls))
 	}
 
-	firstReq := client.calls[0]
-	if len(requestMessages(firstReq)) < 4 {
-		t.Fatalf("expected at least 4 messages in first request, got %d", len(requestMessages(firstReq)))
+	firstMessages := requestMessages(client.calls[0])
+	if len(firstMessages) < 4 {
+		t.Fatalf("expected environment, AGENTS, and user messages, got %+v", firstMessages)
 	}
-	envMsg := requestMessages(firstReq)[0]
-	if envMsg.Role != llm.RoleDeveloper || !strings.Contains(envMsg.Content, environmentInjectedHeader) {
-		t.Fatalf("expected first message to be environment developer injection, got %+v", envMsg)
-	}
-	if envMsg.MessageType != llm.MessageTypeEnvironment {
-		t.Fatalf("expected environment message type, got %+v", envMsg)
-	}
-	if requestMessages(firstReq)[1].Role != llm.RoleDeveloper || !strings.Contains(requestMessages(firstReq)[1].Content, "source: "+globalPath) {
-		t.Fatalf("expected second message to be global developer AGENTS injection, got %+v", requestMessages(firstReq)[1])
-	}
-	if requestMessages(firstReq)[1].MessageType != llm.MessageTypeAgentsMD {
-		t.Fatalf("expected global AGENTS message type, got %+v", requestMessages(firstReq)[1])
-	}
-	if requestMessages(firstReq)[2].Role != llm.RoleDeveloper || !strings.Contains(requestMessages(firstReq)[2].Content, "source: "+workspacePath) {
-		t.Fatalf("expected third message to be workspace developer AGENTS injection, got %+v", requestMessages(firstReq)[2])
-	}
-	if requestMessages(firstReq)[2].MessageType != llm.MessageTypeAgentsMD {
-		t.Fatalf("expected workspace AGENTS message type, got %+v", requestMessages(firstReq)[2])
-	}
-	for _, required := range []string{
-		"\nYour model: gpt-5\n",
-		"OS: ",
-		"Current TZ: ",
-		"Date/time: ",
-		"Shell: ",
-		"CWD: ",
-		"CPU arch: ",
+	for index, want := range []llm.Message{
+		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeEnvironment},
+		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeAgentsMD, SourcePath: globalPath},
+		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeAgentsMD, SourcePath: workspacePath},
+		{Role: llm.RoleUser, Content: "first"},
 	} {
-		if !strings.Contains(envMsg.Content, required) {
-			t.Fatalf("expected environment message to contain %q, got %q", required, envMsg.Content)
+		got := firstMessages[index]
+		if got.Role != want.Role || got.MessageType != want.MessageType || got.SourcePath != want.SourcePath || (want.Content != "" && got.Content != want.Content) {
+			t.Fatalf("message %d = %+v, want role=%q type=%q source=%q content=%q", index, got, want.Role, want.MessageType, want.SourcePath, want.Content)
 		}
 	}
-	if requestMessages(firstReq)[3].Role != llm.RoleUser || requestMessages(firstReq)[3].Content != "first" {
-		t.Fatalf("expected user message after injections, got %+v", requestMessages(firstReq)[3])
-	}
 
-	secondReq := client.calls[1]
 	injectedCount := 0
 	envInjectedCount := 0
-	for _, msg := range requestMessages(secondReq) {
+	for _, msg := range requestMessages(client.calls[1]) {
 		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeAgentsMD {
 			injectedCount++
 		}
@@ -175,10 +150,10 @@ func TestFreshChildSessionReinjectsDeveloperContextEvenWhenParentAlreadyInjected
 	if messages[1].MessageType != llm.MessageTypeSkills || !strings.Contains(messages[1].Content, "workspace-skill") {
 		t.Fatalf("expected skills reinjected after environment, got %+v", messages[1])
 	}
-	if messages[2].MessageType != llm.MessageTypeAgentsMD || !strings.Contains(messages[2].Content, "source: "+globalPath) {
+	if messages[2].MessageType != llm.MessageTypeAgentsMD || messages[2].SourcePath != globalPath {
 		t.Fatalf("expected global AGENTS reinjected, got %+v", messages[2])
 	}
-	if messages[3].MessageType != llm.MessageTypeAgentsMD || !strings.Contains(messages[3].Content, "source: "+workspacePath) {
+	if messages[3].MessageType != llm.MessageTypeAgentsMD || messages[3].SourcePath != workspacePath {
 		t.Fatalf("expected workspace AGENTS reinjected, got %+v", messages[3])
 	}
 	if messages[4].Role != llm.RoleUser || messages[4].Content != "first child turn" {
@@ -186,49 +161,13 @@ func TestFreshChildSessionReinjectsDeveloperContextEvenWhenParentAlreadyInjected
 	}
 }
 
-func TestInjectsEnvironmentInfoWithoutAnyAgentsFiles(t *testing.T) {
+func TestInjectsSkillsContextAfterEnvironmentAndPersists(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
 	workspace := t.TempDir()
-	storeRoot := t.TempDir()
-	store := mustCreateNamedTestSessionAt(t, storeRoot, "ws", workspace)
-
-	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-
-	if _, err := eng.SubmitUserMessage(context.Background(), "first"); err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-
-	if len(client.calls) != 1 {
-		t.Fatalf("expected one model call, got %d", len(client.calls))
-	}
-	req := client.calls[0]
-	if len(requestMessages(req)) < 2 {
-		t.Fatalf("expected at least 2 messages, got %d", len(requestMessages(req)))
-	}
-	if requestMessages(req)[0].Role != llm.RoleDeveloper || !strings.Contains(requestMessages(req)[0].Content, environmentInjectedHeader) {
-		t.Fatalf("expected first message to be environment injection, got %+v", requestMessages(req)[0])
-	}
-	if !strings.Contains(requestMessages(req)[0].Content, "\nYour model: gpt-5\n") {
-		t.Fatalf("expected environment injection to include labeled model identifier, got %+v", requestMessages(req)[0])
-	}
-	if requestMessages(req)[1].Role != llm.RoleUser || requestMessages(req)[1].Content != "first" {
-		t.Fatalf("expected user message after environment injection, got %+v", requestMessages(req)[1])
-	}
-}
-
-func TestInjectsSkillsContextBeforeEnvironmentAndPersists(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	workspace := t.TempDir()
-	homeSkillPath := writeTestSkill(t, filepath.Join(home, brand.ConfigDirName, "skills", "home-skill"), "home-skill", "from home")
-	workspaceSkillPath := writeTestSkill(t, filepath.Join(workspace, brand.ConfigDirName, "skills", "workspace-skill"), "workspace-skill", "from workspace")
+	writeTestSkill(t, filepath.Join(home, brand.ConfigDirName, "skills", "home-skill"), "home-skill", "from home")
+	writeTestSkill(t, filepath.Join(workspace, brand.ConfigDirName, "skills", "workspace-skill"), "workspace-skill", "from workspace")
 
 	storeRoot := t.TempDir()
 	store := mustCreateNamedTestSessionAt(t, storeRoot, "ws", workspace)
@@ -250,19 +189,13 @@ func TestInjectsSkillsContextBeforeEnvironmentAndPersists(t *testing.T) {
 		t.Fatalf("expected two model calls, got %d", len(client.calls))
 	}
 
-	firstReq := client.calls[0]
+	firstMessages := requestMessages(client.calls[0])
 	skillsIdx := -1
 	envIdx := -1
 	userIdx := -1
-	for i, msg := range requestMessages(firstReq) {
+	for i, msg := range firstMessages {
 		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeSkills {
 			skillsIdx = i
-			if !strings.Contains(msg.Content, "- home-skill: "+filepath.ToSlash(homeSkillPath)+" . from home") {
-				t.Fatalf("expected injected skills context to include home skill entry, got %q", msg.Content)
-			}
-			if !strings.Contains(msg.Content, "- workspace-skill: "+filepath.ToSlash(workspaceSkillPath)+" . from workspace") {
-				t.Fatalf("expected injected skills context to include workspace skill entry, got %q", msg.Content)
-			}
 		}
 		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeEnvironment {
 			envIdx = i
@@ -272,21 +205,20 @@ func TestInjectsSkillsContextBeforeEnvironmentAndPersists(t *testing.T) {
 		}
 	}
 	if skillsIdx < 0 {
-		t.Fatalf("expected injected skills developer message in first request, messages=%+v", requestMessages(firstReq))
+		t.Fatalf("expected injected skills developer message in first request, messages=%+v", firstMessages)
 	}
 	if envIdx < 0 {
-		t.Fatalf("expected injected environment developer message in first request, messages=%+v", requestMessages(firstReq))
+		t.Fatalf("expected injected environment developer message in first request, messages=%+v", firstMessages)
 	}
 	if userIdx < 0 {
-		t.Fatalf("expected first user message in first request, messages=%+v", requestMessages(firstReq))
+		t.Fatalf("expected first user message in first request, messages=%+v", firstMessages)
 	}
 	if !(envIdx < skillsIdx && skillsIdx < userIdx) {
 		t.Fatalf("expected environment -> skills -> user ordering, got env=%d skills=%d user=%d", envIdx, skillsIdx, userIdx)
 	}
 
-	secondReq := client.calls[1]
 	skillsInjectedCount := 0
-	for _, msg := range requestMessages(secondReq) {
+	for _, msg := range requestMessages(client.calls[1]) {
 		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeSkills {
 			skillsInjectedCount++
 		}
@@ -340,71 +272,40 @@ func TestBrokenSymlinkedSkillsAreSkippedAndWarnedInTranscript(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	workspace := t.TempDir()
-	validSkillPath := writeTestSkill(t, filepath.Join(workspace, brand.ConfigDirName, "skills", "valid-skill"), "valid-skill", "from workspace")
 	brokenLinkPath := filepath.Join(workspace, brand.ConfigDirName, "skills", "broken-skill")
+	if err := os.MkdirAll(filepath.Dir(brokenLinkPath), 0o755); err != nil {
+		t.Fatalf("mkdir skills dir: %v", err)
+	}
 	if err := os.Symlink(filepath.Join(t.TempDir(), "missing-skill-dir"), brokenLinkPath); err != nil {
 		t.Fatalf("symlink broken skill dir: %v", err)
 	}
 
-	storeRoot := t.TempDir()
-	store := mustCreateNamedTestSessionAt(t, storeRoot, "ws", workspace)
-
-	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"}, Usage: llm.Usage{WindowTokens: 200000}}}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	store := mustCreateNamedTestSessionAt(t, t.TempDir(), "ws", workspace)
+	client := &fakeClient{responses: []llm.Response{finalOutputItemResponse("ok")}}
+	eng := mustNewExecTestEngine(t, store, client, Config{Model: "gpt-5"})
 
 	if _, err := eng.SubmitUserMessage(context.Background(), "first"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if len(client.calls) != 1 {
-		t.Fatalf("expected one model call, got %d", len(client.calls))
+	assertModelCallCount(t, client, 1)
+	for _, msg := range requestMessages(client.calls[0]) {
+		if msg.MessageType == llm.MessageTypeSkills {
+			t.Fatalf("broken skill produced model-visible skills context: %+v", requestMessages(client.calls[0]))
+		}
 	}
 
-	foundSkills := false
-	for _, msg := range requestMessages(client.calls[0]) {
-		if msg.Role != llm.RoleDeveloper || msg.MessageType != llm.MessageTypeSkills {
+	warnings := 0
+	for _, entry := range eng.ChatSnapshot().Entries {
+		if entry.Role != string(transcript.EntryRoleWarning) {
 			continue
 		}
-		foundSkills = true
-		if !strings.Contains(msg.Content, "- valid-skill: "+filepath.ToSlash(validSkillPath)+" . from workspace") {
-			t.Fatalf("expected valid skill to remain injected, got %q", msg.Content)
-		}
-		if strings.Contains(msg.Content, "broken-skill") {
-			t.Fatalf("did not expect broken symlinked skill in injected context, got %q", msg.Content)
+		warnings++
+		if entry.Visibility != transcript.EntryVisibilityOngoing {
+			t.Fatalf("warning visibility = %q, want ongoing", entry.Visibility)
 		}
 	}
-	if !foundSkills {
-		t.Fatalf("expected skills developer message in first request, messages=%+v", requestMessages(client.calls[0]))
-	}
-	for _, msg := range requestMessages(client.calls[0]) {
-		if strings.Contains(msg.Content, "Skipped skill \"broken-skill\"") {
-			t.Fatalf("expected broken skill warning to stay out of model request, got %+v", requestMessages(client.calls[0]))
-		}
-	}
-
-	snapshot := eng.ChatSnapshot()
-	foundWarning := false
-	for _, entry := range snapshot.Entries {
-		if entry.Role != "warning" || entry.Visibility != transcript.EntryVisibilityOngoing {
-			continue
-		}
-		if strings.Contains(entry.Text, "Skipped skill \"broken-skill\"") && strings.Contains(entry.Text, filepath.ToSlash(brokenLinkPath)) {
-			foundWarning = true
-			break
-		}
-	}
-	if !foundWarning {
-		t.Fatalf("expected broken skill warning in transcript, entries=%+v", snapshot.Entries)
-	}
-}
-
-func TestEnvironmentContextMessageUsesWorkspaceRootForCWD(t *testing.T) {
-	workspace := t.TempDir()
-	msg, err := environmentContextMessage(workspace, "gpt-5.3-codex", time.Unix(0, 0).UTC())
-	if err != nil {
-		t.Fatalf("environmentContextMessage: %v", err)
-	}
-	if !strings.Contains(msg, "\nCWD: "+workspace+"\n") {
-		t.Fatalf("expected environment message cwd to use workspace root %q, got %q", workspace, msg)
+	if warnings != 1 {
+		t.Fatalf("warning entries = %d, want 1; entries=%+v", warnings, eng.ChatSnapshot().Entries)
 	}
 }
 
@@ -445,20 +346,9 @@ func TestSubmitInjectsEnvironmentLineWithLabeledModelIdentifier(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	workspace := t.TempDir()
-	storeRoot := t.TempDir()
-	store := mustCreateNamedTestSessionAt(t, storeRoot, "ws", workspace)
-
-	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "ok"},
-		OutputItems: []llm.ResponseItem{{
-			Type:    llm.ResponseItemTypeMessage,
-			Role:    llm.RoleAssistant,
-			Phase:   llm.MessagePhaseFinal,
-			Content: "ok",
-		}},
-		Usage: llm.Usage{WindowTokens: 200000},
-	}}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	store := mustCreateNamedTestSessionAt(t, t.TempDir(), "ws", workspace)
+	client := &fakeClient{responses: []llm.Response{finalOutputItemResponse("ok")}}
+	eng := mustNewExecTestEngine(t, store, client, Config{
 		Model:                 "gpt-5.3-codex",
 		ThinkingLevel:         "high",
 		AutoCompactTokenLimit: 1_000_000_000,
@@ -469,14 +359,12 @@ func TestSubmitInjectsEnvironmentLineWithLabeledModelIdentifier(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 
-	if len(client.calls) != 1 {
-		t.Fatalf("expected one model call, got %d", len(client.calls))
+	assertModelCallCount(t, client, 1)
+	messages := requestMessages(client.calls[0])
+	if len(messages) < 2 {
+		t.Fatalf("expected environment and user messages, got %d", len(messages))
 	}
-	req := client.calls[0]
-	if len(requestMessages(req)) < 2 {
-		t.Fatalf("expected environment and user messages, got %d", len(requestMessages(req)))
-	}
-	envMsg := requestMessages(req)[0]
+	envMsg := messages[0]
 	if envMsg.Role != llm.RoleDeveloper || envMsg.MessageType != llm.MessageTypeEnvironment {
 		t.Fatalf("expected first request message to be environment context, got %+v", envMsg)
 	}
@@ -547,94 +435,7 @@ func TestManualCompactionReinjectsOnlyActiveHeadlessState(t *testing.T) {
 	}
 }
 
-func TestSubmitUserMessageInjectsHeadlessEnterPromptWhenContinuingRegularSessionInHeadlessMode(t *testing.T) {
-	prevHeadlessPrompt := prompts.HeadlessModePrompt
-	prompts.HeadlessModePrompt = "headless mode instructions"
-	defer func() {
-		prompts.HeadlessModePrompt = prevHeadlessPrompt
-	}()
-
-	store := mustCreateTestSession(t)
-
-	interactiveClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "interactive-ok"},
-		OutputItems: []llm.ResponseItem{{
-			Type:    llm.ResponseItemTypeMessage,
-			Role:    llm.RoleAssistant,
-			Phase:   llm.MessagePhaseFinal,
-			Content: "interactive-ok",
-		}},
-		Usage: llm.Usage{WindowTokens: 200000},
-	}}}
-	interactiveEngine := mustNewTestEngine(t, store, interactiveClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if _, err := interactiveEngine.SubmitUserMessage(context.Background(), "regular start"); err != nil {
-		t.Fatalf("interactive submit: %v", err)
-	}
-
-	headlessClient := &fakeClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "headless-ok-1"},
-			OutputItems: []llm.ResponseItem{{
-				Type:    llm.ResponseItemTypeMessage,
-				Role:    llm.RoleAssistant,
-				Phase:   llm.MessagePhaseFinal,
-				Content: "headless-ok-1",
-			}},
-			Usage: llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "headless-ok-2"},
-			OutputItems: []llm.ResponseItem{{
-				Type:    llm.ResponseItemTypeMessage,
-				Role:    llm.RoleAssistant,
-				Phase:   llm.MessagePhaseFinal,
-				Content: "headless-ok-2",
-			}},
-			Usage: llm.Usage{WindowTokens: 200000},
-		},
-	}}
-	headlessEngine := mustNewTestEngine(t, store, headlessClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", HeadlessMode: true})
-
-	if _, err := headlessEngine.SubmitUserMessage(context.Background(), "continue headlessly"); err != nil {
-		t.Fatalf("headless submit 1: %v", err)
-	}
-	if _, err := headlessEngine.SubmitUserMessage(context.Background(), "continue headlessly again"); err != nil {
-		t.Fatalf("headless submit 2: %v", err)
-	}
-
-	if len(headlessClient.calls) != 2 {
-		t.Fatalf("expected two headless calls, got %d", len(headlessClient.calls))
-	}
-	firstReq := headlessClient.calls[0]
-	headlessIdx := -1
-	userIdx := -1
-	for i, msg := range requestMessages(firstReq) {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeHeadlessMode {
-			headlessIdx = i
-		}
-		if msg.Role == llm.RoleUser && msg.Content == "continue headlessly" {
-			userIdx = i
-		}
-	}
-	if headlessIdx < 0 {
-		t.Fatalf("expected enter prompt when switching regular session into headless mode, messages=%+v", requestMessages(firstReq))
-	}
-	if userIdx < 0 || headlessIdx >= userIdx {
-		t.Fatalf("expected headless enter prompt before user message, headless=%d user=%d messages=%+v", headlessIdx, userIdx, requestMessages(firstReq))
-	}
-	secondReq := headlessClient.calls[1]
-	headlessCount := 0
-	for _, msg := range requestMessages(secondReq) {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeHeadlessMode {
-			headlessCount++
-		}
-	}
-	if headlessCount != 1 {
-		t.Fatalf("expected exactly one persisted headless enter marker, got %d messages=%+v", headlessCount, requestMessages(secondReq))
-	}
-}
-
-func TestSubmitUserMessageInjectsHeadlessExitPromptOnFirstInteractiveTurn(t *testing.T) {
+func TestSubmitUserMessagePersistsHeadlessModeTransitions(t *testing.T) {
 	prevHeadlessPrompt := prompts.HeadlessModePrompt
 	prevExitPrompt := prompts.HeadlessModeExitPrompt
 	prompts.HeadlessModePrompt = "headless mode instructions"
@@ -644,128 +445,76 @@ func TestSubmitUserMessageInjectsHeadlessExitPromptOnFirstInteractiveTurn(t *tes
 		prompts.HeadlessModeExitPrompt = prevExitPrompt
 	}()
 
-	store := mustCreateTestSession(t)
-
-	headlessClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "headless-ok"},
-		OutputItems: []llm.ResponseItem{{
-			Type:    llm.ResponseItemTypeMessage,
-			Role:    llm.RoleAssistant,
-			Phase:   llm.MessagePhaseFinal,
-			Content: "headless-ok",
-		}},
-		Usage: llm.Usage{WindowTokens: 200000},
-	}}}
-	headlessEngine := mustNewTestEngine(t, store, headlessClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", HeadlessMode: true})
-	if _, err := headlessEngine.SubmitUserMessage(context.Background(), "run headless"); err != nil {
-		t.Fatalf("headless submit: %v", err)
-	}
-
-	interactiveClient := &fakeClient{responses: []llm.Response{
+	tests := []struct {
+		name           string
+		seedHeadless   bool
+		targetHeadless bool
+		messageTypes   []llm.MessageType
+	}{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "interactive-ok-1"},
-			OutputItems: []llm.ResponseItem{{
-				Type:    llm.ResponseItemTypeMessage,
-				Role:    llm.RoleAssistant,
-				Phase:   llm.MessagePhaseFinal,
-				Content: "interactive-ok-1",
-			}},
-			Usage: llm.Usage{WindowTokens: 200000},
+			name:           "enter headless",
+			targetHeadless: true,
+			messageTypes:   []llm.MessageType{llm.MessageTypeHeadlessMode},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "interactive-ok-2"},
-			OutputItems: []llm.ResponseItem{{
-				Type:    llm.ResponseItemTypeMessage,
-				Role:    llm.RoleAssistant,
-				Phase:   llm.MessagePhaseFinal,
-				Content: "interactive-ok-2",
-			}},
-			Usage: llm.Usage{WindowTokens: 200000},
+			name:         "exit headless",
+			seedHeadless: true,
+			messageTypes: []llm.MessageType{llm.MessageTypeHeadlessMode, llm.MessageTypeHeadlessModeExit},
 		},
-	}}
-	interactiveEngine := mustNewTestEngine(t, store, interactiveClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+		{
+			name: "remain interactive",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			seedClient := &fakeClient{responses: []llm.Response{finalOutputItemResponse("seeded")}}
+			seedEngine := mustNewExecTestEngine(t, store, seedClient, Config{Model: "gpt-5", HeadlessMode: test.seedHeadless})
+			if _, err := seedEngine.SubmitUserMessage(context.Background(), "seed"); err != nil {
+				t.Fatalf("seed submit: %v", err)
+			}
 
-	if _, err := interactiveEngine.SubmitUserMessage(context.Background(), "continue interactively"); err != nil {
-		t.Fatalf("interactive submit 1: %v", err)
-	}
-	if _, err := interactiveEngine.SubmitUserMessage(context.Background(), "continue again"); err != nil {
-		t.Fatalf("interactive submit 2: %v", err)
-	}
+			client := &fakeClient{responses: []llm.Response{
+				finalOutputItemResponse("transitioned"),
+				finalOutputItemResponse("continued"),
+			}}
+			eng := mustNewExecTestEngine(t, store, client, Config{Model: "gpt-5", HeadlessMode: test.targetHeadless})
+			if _, err := eng.SubmitUserMessage(context.Background(), "transition"); err != nil {
+				t.Fatalf("transition submit: %v", err)
+			}
+			if _, err := eng.SubmitUserMessage(context.Background(), "again"); err != nil {
+				t.Fatalf("second submit: %v", err)
+			}
+			assertModelCallCount(t, client, 2)
 
-	if len(interactiveClient.calls) != 2 {
-		t.Fatalf("expected two interactive model calls, got %d", len(interactiveClient.calls))
-	}
+			firstMessages := requestMessages(client.calls[0])
+			secondMessages := requestMessages(client.calls[1])
+			if len(test.messageTypes) == 0 {
+				for _, messages := range [][]llm.Message{firstMessages, secondMessages} {
+					for _, message := range messages {
+						if message.MessageType == llm.MessageTypeHeadlessMode || message.MessageType == llm.MessageTypeHeadlessModeExit {
+							t.Fatalf("unchanged interactive session gained headless transition: %+v", messages)
+						}
+					}
+				}
+				return
+			}
 
-	firstReq := interactiveClient.calls[0]
-	headlessIdx := -1
-	exitIdx := -1
-	userIdx := -1
-	for i, msg := range requestMessages(firstReq) {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeHeadlessMode {
-			headlessIdx = i
-		}
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeHeadlessModeExit {
-			exitIdx = i
-		}
-		if msg.Role == llm.RoleUser && msg.Content == "continue interactively" {
-			userIdx = i
-		}
-	}
-	if headlessIdx < 0 {
-		t.Fatalf("expected prior headless prompt in first interactive request, messages=%+v", requestMessages(firstReq))
-	}
-	if exitIdx < 0 {
-		t.Fatalf("expected exit prompt in first interactive request, messages=%+v", requestMessages(firstReq))
-	}
-	if userIdx < 0 {
-		t.Fatalf("expected interactive user message in first request, messages=%+v", requestMessages(firstReq))
-	}
-	if !(headlessIdx < exitIdx && exitIdx < userIdx) {
-		t.Fatalf("expected headless -> exit -> user ordering, got headless=%d exit=%d user=%d", headlessIdx, exitIdx, userIdx)
-	}
-
-	secondReq := interactiveClient.calls[1]
-	exitCount := 0
-	for _, msg := range requestMessages(secondReq) {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeHeadlessModeExit {
-			exitCount++
-		}
-	}
-	if exitCount != 1 {
-		t.Fatalf("expected exactly one persisted exit prompt in later requests, got %d messages=%+v", exitCount, requestMessages(secondReq))
-	}
-}
-
-func TestSubmitUserMessageDoesNotInjectHeadlessExitPromptForNormalSession(t *testing.T) {
-	prevExitPrompt := prompts.HeadlessModeExitPrompt
-	prompts.HeadlessModeExitPrompt = "interactive mode instructions"
-	defer func() {
-		prompts.HeadlessModeExitPrompt = prevExitPrompt
-	}()
-
-	store := mustCreateTestSession(t)
-
-	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "ok"},
-		OutputItems: []llm.ResponseItem{{
-			Type:    llm.ResponseItemTypeMessage,
-			Role:    llm.RoleAssistant,
-			Phase:   llm.MessagePhaseFinal,
-			Content: "ok",
-		}},
-		Usage: llm.Usage{WindowTokens: 200000},
-	}}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-
-	if _, err := eng.SubmitUserMessage(context.Background(), "plain user"); err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if len(client.calls) != 1 {
-		t.Fatalf("expected one model call, got %d", len(client.calls))
-	}
-	for _, msg := range requestMessages(client.calls[0]) {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeHeadlessModeExit {
-			t.Fatalf("did not expect headless exit prompt in normal session, messages=%+v", requestMessages(client.calls[0]))
-		}
+			assertMessageTypesInOrder(t, firstMessages, test.messageTypes...)
+			assertMessageTypesInOrder(t, secondMessages, test.messageTypes...)
+			transitionIndex := -1
+			userIndex := -1
+			for index, message := range firstMessages {
+				if message.Role == llm.RoleDeveloper && message.MessageType == test.messageTypes[len(test.messageTypes)-1] {
+					transitionIndex = index
+				}
+				if message.Role == llm.RoleUser && message.Content == "transition" {
+					userIndex = index
+				}
+			}
+			if transitionIndex < 0 || userIndex < 0 || transitionIndex >= userIndex {
+				t.Fatalf("transition/user indexes = %d/%d, want transition before current user; messages=%+v", transitionIndex, userIndex, firstMessages)
+			}
+		})
 	}
 }

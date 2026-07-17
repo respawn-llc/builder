@@ -12,6 +12,7 @@ import (
 
 	"core/cli/app/internal/projectbinding"
 	"core/server/metadata"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -655,6 +656,7 @@ type failingBindProjectServer struct {
 }
 
 type projectBindingFlowStubProjectViewService struct {
+	apicontract.ProjectViewService
 	resolveResp         serverapi.ProjectResolvePathResponse
 	resolveErr          error
 	listProjectsResp    serverapi.ProjectListResponse

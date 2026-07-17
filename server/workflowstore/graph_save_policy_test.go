@@ -4,8 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"core/server/workflow"
@@ -46,117 +44,67 @@ func TestWorkflowGraphSaveRejectsChangedConfirmationImpact(t *testing.T) {
 }
 
 func TestWorkflowGraphSaveAllowsUnrelatedEditsWhileTasksExist(t *testing.T) {
-	t.Run("backlog only task", func(t *testing.T) {
-		ctx, store, binding := newTestStoreContext(t)
-		workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-		createTask(t, ctx, store, CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Backlog", Body: "Body"})
-		def, record, err := store.GetDefinition(ctx, workflowID)
-		if err != nil {
-			t.Fatalf("GetDefinition: %v", err)
-		}
-		req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
-		req.Nodes = renameWorkflowGraphSaveNode(req.Nodes, workflow.NodeID("node-agent-"+string(workflowID)), "Agent Renamed")
+	type taskState int
+	const (
+		backlogTask taskState = iota
+		activeTask
+		claimedRun
+		interruptedRun
+		pendingApproval
+		terminalTask
+	)
+	for _, tc := range []struct {
+		name  string
+		state taskState
+	}{
+		{name: "backlog only task", state: backlogTask},
+		{name: "active task", state: activeTask},
+		{name: "claimed active run", state: claimedRun},
+		{name: "interrupted task", state: interruptedRun},
+		{name: "pending approval", state: pendingApproval},
+		{name: "terminal only task", state: terminalTask},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, store, binding := newTestStoreContext(t)
+			var workflowID workflow.WorkflowID
+			if tc.state == pendingApproval {
+				workflowID = createApprovalWorkflow(t, ctx, store)
+				linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+			} else {
+				workflowID = createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+			}
+			task := createDefaultTask(t, ctx, store, binding.ProjectID)
+			if tc.state != backlogTask {
+				started := startTask(t, ctx, store, task.ID)
+				switch tc.state {
+				case claimedRun:
+					if _, err := store.ClaimRun(ctx, started.RunID, 0); err != nil {
+						t.Fatalf("ClaimRun: %v", err)
+					}
+				case interruptedRun:
+					if err := store.InterruptRun(ctx, started.RunID, "manual", "{}"); err != nil {
+						t.Fatalf("InterruptRun: %v", err)
+					}
+				case pendingApproval, terminalTask:
+					completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "done"})
+				}
+			}
+			def, record, err := store.GetDefinition(ctx, workflowID)
+			if err != nil {
+				t.Fatalf("GetDefinition: %v", err)
+			}
+			req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
+			req.Nodes = renameWorkflowGraphSaveNode(req.Nodes, workflow.NodeID("node-agent-"+string(workflowID)), "Agent Renamed")
 
-		result, err := store.SaveWorkflowGraph(ctx, req)
-		if err != nil {
-			t.Fatalf("SaveWorkflowGraph backlog-only: %v", err)
-		}
-		if !result.Saved || len(result.Blockers) != 0 {
-			t.Fatalf("backlog-only graph save = %+v, want saved without active-work blockers", result)
-		}
-	})
-
-	t.Run("active task", func(t *testing.T) {
-		ctx, store, binding := newTestStoreContext(t)
-		workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-		task := createTask(t, ctx, store, CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Active", Body: "Body"})
-		startTask(t, ctx, store, task.ID)
-		def, record, err := store.GetDefinition(ctx, workflowID)
-		if err != nil {
-			t.Fatalf("GetDefinition: %v", err)
-		}
-		req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
-		req.Nodes = renameWorkflowGraphSaveNode(req.Nodes, workflow.NodeID("node-agent-"+string(workflowID)), "Agent Renamed")
-
-		result, err := store.SaveWorkflowGraph(ctx, req)
-		if err != nil {
-			t.Fatalf("SaveWorkflowGraph active task: %v", err)
-		}
-		if !result.Saved || len(result.Blockers) != 0 {
-			t.Fatalf("active-task graph save = %+v, want saved without broad active-work blockers", result)
-		}
-	})
-
-	t.Run("claimed active run", func(t *testing.T) {
-		ctx, store, binding := newTestStoreContext(t)
-		workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-		task := createTask(t, ctx, store, CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Claimed", Body: "Body"})
-		started := startTask(t, ctx, store, task.ID)
-		if _, err := store.ClaimRun(ctx, started.RunID, 0); err != nil {
-			t.Fatalf("ClaimRun: %v", err)
-		}
-		def, record, err := store.GetDefinition(ctx, workflowID)
-		if err != nil {
-			t.Fatalf("GetDefinition: %v", err)
-		}
-		req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
-		req.Nodes = renameWorkflowGraphSaveNode(req.Nodes, workflow.NodeID("node-agent-"+string(workflowID)), "Agent Renamed")
-
-		result, err := store.SaveWorkflowGraph(ctx, req)
-		if err != nil {
-			t.Fatalf("SaveWorkflowGraph claimed active run: %v", err)
-		}
-		if !result.Saved || len(result.Blockers) != 0 {
-			t.Fatalf("claimed active-run graph save = %+v, want saved without broad active-run blocker", result)
-		}
-	})
-
-	t.Run("interrupted task", func(t *testing.T) {
-		ctx, store, binding := newTestStoreContext(t)
-		workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-		task := createTask(t, ctx, store, CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Interrupted", Body: "Body"})
-		started := startTask(t, ctx, store, task.ID)
-		if err := store.InterruptRun(ctx, started.RunID, "manual", "{}"); err != nil {
-			t.Fatalf("InterruptRun: %v", err)
-		}
-		def, record, err := store.GetDefinition(ctx, workflowID)
-		if err != nil {
-			t.Fatalf("GetDefinition: %v", err)
-		}
-		req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
-		req.Nodes = renameWorkflowGraphSaveNode(req.Nodes, workflow.NodeID("node-agent-"+string(workflowID)), "Agent Renamed")
-
-		result, err := store.SaveWorkflowGraph(ctx, req)
-		if err != nil {
-			t.Fatalf("SaveWorkflowGraph interrupted task: %v", err)
-		}
-		if !result.Saved || len(result.Blockers) != 0 {
-			t.Fatalf("interrupted-task graph save = %+v, want saved without broad active-work blockers", result)
-		}
-	})
-
-	t.Run("pending approval", func(t *testing.T) {
-		ctx, store, binding := newTestStoreContext(t)
-		workflowID := createApprovalWorkflow(t, ctx, store)
-		linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-		task := createDefaultTask(t, ctx, store, binding.ProjectID)
-		started := startTask(t, ctx, store, task.ID)
-		completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "done"})
-		def, record, err := store.GetDefinition(ctx, workflowID)
-		if err != nil {
-			t.Fatalf("GetDefinition: %v", err)
-		}
-		req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
-		req.Nodes = renameWorkflowGraphSaveNode(req.Nodes, workflow.NodeID("node-agent-"+string(workflowID)), "Agent Renamed")
-
-		result, err := store.SaveWorkflowGraph(ctx, req)
-		if err != nil {
-			t.Fatalf("SaveWorkflowGraph pending approval: %v", err)
-		}
-		if !result.Saved || len(result.Blockers) != 0 {
-			t.Fatalf("pending-approval graph save = %+v, want saved without pending_approvals blocker", result)
-		}
-	})
+			result, err := store.SaveWorkflowGraph(ctx, req)
+			if err != nil {
+				t.Fatalf("SaveWorkflowGraph: %v", err)
+			}
+			if !result.Saved || len(result.Blockers) != 0 {
+				t.Fatalf("unrelated graph save = %+v, want saved without blockers", result)
+			}
+		})
+	}
 
 	t.Run("active task current node removal", func(t *testing.T) {
 		ctx, store, binding := newTestStoreContext(t)
@@ -218,51 +166,6 @@ func TestWorkflowGraphSaveAllowsUnrelatedEditsWhileTasksExist(t *testing.T) {
 		}
 	})
 
-	t.Run("interrupted task", func(t *testing.T) {
-		ctx, store, binding := newTestStoreContext(t)
-		workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-		task := createTask(t, ctx, store, CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Interrupted", Body: "Body"})
-		started := startTask(t, ctx, store, task.ID)
-		if err := store.InterruptRun(ctx, started.RunID, "manual", "{}"); err != nil {
-			t.Fatalf("InterruptRun: %v", err)
-		}
-		def, record, err := store.GetDefinition(ctx, workflowID)
-		if err != nil {
-			t.Fatalf("GetDefinition: %v", err)
-		}
-		req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
-		req.Nodes = renameWorkflowGraphSaveNode(req.Nodes, workflow.NodeID("node-agent-"+string(workflowID)), "Agent Renamed")
-
-		result, err := store.SaveWorkflowGraph(ctx, req)
-		if err != nil {
-			t.Fatalf("SaveWorkflowGraph interrupted task: %v", err)
-		}
-		if !result.Saved || len(result.Blockers) != 0 {
-			t.Fatalf("interrupted-task graph save = %+v, want saved without active-work blockers", result)
-		}
-	})
-
-	t.Run("terminal only task", func(t *testing.T) {
-		ctx, store, binding := newTestStoreContext(t)
-		workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-		task := createTask(t, ctx, store, CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Terminal", Body: "Body"})
-		started := startTask(t, ctx, store, task.ID)
-		completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "done"})
-		def, record, err := store.GetDefinition(ctx, workflowID)
-		if err != nil {
-			t.Fatalf("GetDefinition: %v", err)
-		}
-		req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
-		req.Nodes = renameWorkflowGraphSaveNode(req.Nodes, workflow.NodeID("node-agent-"+string(workflowID)), "Agent Renamed")
-
-		result, err := store.SaveWorkflowGraph(ctx, req)
-		if err != nil {
-			t.Fatalf("SaveWorkflowGraph terminal-only: %v", err)
-		}
-		if !result.Saved || len(result.Blockers) != 0 {
-			t.Fatalf("terminal-only graph save = %+v, want saved without active-work blockers", result)
-		}
-	})
 }
 
 func TestWorkflowGraphSaveEditPolicyBlocksStartNodeChanges(t *testing.T) {
@@ -409,120 +312,84 @@ func TestWorkflowGraphSaveAllowsTransitionPromptMetadataWhileRunActive(t *testin
 	}
 }
 
-func TestWorkflowGraphSaveBlocksTransitionContractChangeWhileSourceRunUnresolved(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	startTask(t, ctx, store, task.ID)
-	def, record, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	doneEdge := edgeByKey(t, def, "done")
-	agentID := workflow.NodeID("node-agent-" + string(workflowID))
-	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
-	req.Edges = mutateWorkflowGraphSaveEdge(req.Edges, doneEdge.ID, func(edge *EdgeRecord) {
-		edge.TargetNodeID = agentID
-	})
+func TestWorkflowGraphSaveBlocksTransitionContractChangeForDurableSourceStates(t *testing.T) {
+	type sourceState int
+	const (
+		unresolvedSource sourceState = iota
+		interruptedSource
+		pendingApprovalSource
+	)
+	for _, tc := range []struct {
+		name  string
+		state sourceState
+	}{
+		{name: "unresolved run", state: unresolvedSource},
+		{name: "interrupted run", state: interruptedSource},
+		{name: "pending approval", state: pendingApprovalSource},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, store, binding := newTestStoreContext(t)
+			var workflowID workflow.WorkflowID
+			if tc.state == pendingApprovalSource {
+				workflowID = createApprovalWorkflow(t, ctx, store)
+				linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+			} else {
+				workflowID = createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+			}
+			task := createDefaultTask(t, ctx, store, binding.ProjectID)
+			started := startTask(t, ctx, store, task.ID)
+			switch tc.state {
+			case interruptedSource:
+				if err := store.InterruptRun(ctx, started.RunID, "manual", "{}"); err != nil {
+					t.Fatalf("InterruptRun: %v", err)
+				}
+			case pendingApprovalSource:
+				pending := completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "done"})
+				if pending.State != "pending_approval" {
+					t.Fatalf("setup transition state = %q, want pending_approval", pending.State)
+				}
+			}
+			def, record, err := store.GetDefinition(ctx, workflowID)
+			if err != nil {
+				t.Fatalf("GetDefinition: %v", err)
+			}
+			doneEdge := edgeByKey(t, def, "done")
+			agentID := workflow.NodeIDOf(nodeByKey(t, def, "agent"))
+			req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
+			req.Edges = mutateWorkflowGraphSaveEdge(req.Edges, doneEdge.ID, func(edge *EdgeRecord) {
+				edge.TargetNodeID = agentID
+			})
 
-	result, err := store.SaveWorkflowGraph(ctx, req)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph source-run transition contract update: %v", err)
-	}
-	if result.Saved || workflowGraphSaveBlockerCount(result.Blockers, "active_transition_contract_changed") == 0 {
-		t.Fatalf("source-run transition contract update = %+v, want active_transition_contract_changed blocker", result)
-	}
-}
-
-func TestWorkflowGraphSaveBlocksTransitionContractChangeWhileSourceRunInterrupted(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
-	if err := store.InterruptRun(ctx, started.RunID, "manual", "{}"); err != nil {
-		t.Fatalf("InterruptRun: %v", err)
-	}
-	def, record, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	doneEdge := edgeByKey(t, def, "done")
-	agentID := workflow.NodeID("node-agent-" + string(workflowID))
-	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
-	req.Edges = mutateWorkflowGraphSaveEdge(req.Edges, doneEdge.ID, func(edge *EdgeRecord) {
-		edge.TargetNodeID = agentID
-	})
-
-	result, err := store.SaveWorkflowGraph(ctx, req)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph interrupted source-run transition contract update: %v", err)
-	}
-	if result.Saved || workflowGraphSaveBlockerCount(result.Blockers, "active_transition_contract_changed") == 0 {
-		t.Fatalf("interrupted source-run transition contract update = %+v, want active_transition_contract_changed blocker", result)
+			result, err := store.SaveWorkflowGraph(ctx, req)
+			if err != nil {
+				t.Fatalf("SaveWorkflowGraph transition contract update: %v", err)
+			}
+			if result.Saved || workflowGraphSaveBlockerCount(result.Blockers, "active_transition_contract_changed") == 0 {
+				t.Fatalf("transition contract update = %+v, want active_transition_contract_changed blocker", result)
+			}
+		})
 	}
 }
 
 func TestWorkflowGraphSaveBlocksTransitionContractChangeWhileScriptRunActive(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createScriptStartWorkflow(t, ctx, store, "scripts/complete")
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	worktreeRoot := filepath.Join(t.TempDir(), "script-worktree")
-	scriptPath := filepath.Join(worktreeRoot, "scripts", "complete")
-	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
-		t.Fatalf("create script dir: %v", err)
-	}
-	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nprintf '{}'\n"), 0o755); err != nil {
-		t.Fatalf("write script: %v", err)
-	}
-	attachManagedWorktree(t, ctx, store, binding.WorkspaceID, task.ID, worktreeRoot)
-	startTask(t, ctx, store, task.ID)
-	def, record, err := store.GetDefinition(ctx, workflowID)
+	f := newScriptExecutionFixture(t, "scripts/complete", []byte("#!/bin/sh\nprintf '{}'\n"))
+	startTask(t, f.ctx, f.store, f.task.ID)
+	def, record, err := f.store.GetDefinition(f.ctx, f.workflowID)
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	doneEdge := edgeByKey(t, def, "done")
-	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
+	req := workflowGraphSaveRequestFromDefinition(f.workflowID, record.Version, true, def)
 	req.Edges = mutateWorkflowGraphSaveEdge(req.Edges, doneEdge.ID, func(edge *EdgeRecord) {
 		edge.Parameters = []workflow.Parameter{{Key: "summary", Description: "Summary."}}
 	})
 
-	result, err := store.SaveWorkflowGraph(ctx, req)
+	result, err := f.store.SaveWorkflowGraph(f.ctx, req)
 	if err != nil {
 		t.Fatalf("SaveWorkflowGraph active script transition contract update: %v", err)
 	}
 	if result.Saved || workflowGraphSaveBlockerCount(result.Blockers, "active_transition_contract_changed") == 0 {
 		t.Fatalf("active script transition contract update = %+v, want active_transition_contract_changed blocker", result)
-	}
-}
-
-func TestWorkflowGraphSaveBlocksUnsafeTransitionContractChangeWithPendingApproval(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createApprovalWorkflow(t, ctx, store)
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
-	pending := completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "done"})
-	if pending.State != "pending_approval" {
-		t.Fatalf("setup transition state = %q, want pending_approval", pending.State)
-	}
-	def, record, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	doneEdge := edgeByKey(t, def, "done")
-	agentID := workflow.NodeID("node-agent-" + string(workflowID))
-	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
-	req.Edges = mutateWorkflowGraphSaveEdge(req.Edges, doneEdge.ID, func(edge *EdgeRecord) {
-		edge.TargetNodeID = agentID
-	})
-
-	result, err := store.SaveWorkflowGraph(ctx, req)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph unsafe transition contract update: %v", err)
-	}
-	if result.Saved || workflowGraphSaveBlockerCount(result.Blockers, "active_transition_contract_changed") == 0 {
-		t.Fatalf("unsafe transition contract update = %+v, want active_transition_contract_changed blocker", result)
 	}
 }
 

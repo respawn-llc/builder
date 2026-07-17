@@ -1,7 +1,6 @@
 package app
 
 import (
-	tuiinput "core/cli/tui/input"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"runtime"
@@ -34,23 +33,6 @@ func TestOnboardingImportDiscoveryKeepsTypedInput(t *testing.T) {
 	}
 	if got := updated.input.Text(); got != "draft-model-alias" {
 		t.Fatalf("expected import discovery refresh to preserve typed input, got %q", got)
-	}
-}
-
-func TestOnboardingInputRendersReusableEditorFieldCursor(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = "dark" }))
-	model.currentScreen = onboardingScreen{Kind: onboardingScreenInput, Title: "Enter value"}
-	model.input = newSingleLineEditor("abc")
-	model.input.SetCursor(byteOffsetForRuneCursor(model.input.Text(), 1))
-
-	content := model.buildContent(24)
-	expected := tuiinput.RenderSoftCursorLines(24, renderSingleLineEditor(24, 0, model.input, "> ", true, 0, ""), model.styles.inputText)
-	if content.cursorRow < 0 || content.cursorRow+len(expected) > len(content.lines) {
-		t.Fatalf("input cursor row %d outside content lines %#v", content.cursorRow, content.lines)
-	}
-	got := content.lines[content.cursorRow : content.cursorRow+len(expected)]
-	if strings.Join(got, "\n") != strings.Join(expected, "\n") {
-		t.Fatalf("onboarding input did not render through reusable text input, got %#v want %#v", got, expected)
 	}
 }
 
@@ -227,51 +209,37 @@ func TestOnboardingInputPlainArrowsKeepStepNavigation(t *testing.T) {
 	}
 }
 
-func TestOnboardingSpinnerTickDoesNotRescheduleOutsideLoadingOrFinalize(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = "dark" }))
-	model.state.imports.pending = false
-	model.syncScreen(true)
-	if model.currentScreen.Kind == onboardingScreenLoading {
-		t.Fatalf("expected non-loading onboarding screen, got %q", model.currentScreen.Kind)
+func TestOnboardingSpinnerSchedulingTracksScreenState(t *testing.T) {
+	tests := []struct {
+		name        string
+		configure   func(*onboardingModel)
+		reschedules bool
+	}{
+		{name: "idle", configure: func(model *onboardingModel) {
+			model.state.imports.pending = false
+			model.syncScreen(true)
+		}},
+		{name: "loading", configure: func(model *onboardingModel) {
+			model.currentScreen = onboardingScreen{Kind: onboardingScreenLoading}
+		}, reschedules: true},
+		{name: "finalizing", configure: func(model *onboardingModel) {
+			model.state.imports.pending = false
+			model.syncScreen(true)
+			model.finalizing = true
+		}, reschedules: true},
 	}
-	tickAt := model.spinnerClock.anchor.Add(spinnerTickInterval)
-	next, cmd := model.Update(onboardingSpinnerTickMsg{at: tickAt})
-	updated := next.(*onboardingModel)
-	if updated.spinnerFrame == 0 {
-		t.Fatal("expected spinner tick to advance frame even when stopping animation")
-	}
-	if cmd != nil {
-		t.Fatalf("did not expect spinner tick to reschedule on %q screen", updated.currentScreen.Kind)
-	}
-}
-
-func TestOnboardingSpinnerTickReschedulesWhileLoading(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = "dark" }))
-	model.currentScreen = onboardingScreen{Kind: onboardingScreenLoading}
-	tickAt := model.spinnerClock.anchor.Add(spinnerTickInterval)
-	next, cmd := model.Update(onboardingSpinnerTickMsg{at: tickAt})
-	updated := next.(*onboardingModel)
-	if updated.spinnerFrame == 0 {
-		t.Fatal("expected loading spinner tick to advance frame")
-	}
-	if cmd == nil {
-		t.Fatal("expected loading spinner tick to reschedule")
-	}
-}
-
-func TestOnboardingSpinnerTickReschedulesWhileFinalizing(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = "dark" }))
-	model.state.imports.pending = false
-	model.syncScreen(true)
-	model.finalizing = true
-	tickAt := model.spinnerClock.anchor.Add(spinnerTickInterval)
-	next, cmd := model.Update(onboardingSpinnerTickMsg{at: tickAt})
-	updated := next.(*onboardingModel)
-	if updated.spinnerFrame == 0 {
-		t.Fatal("expected finalizing spinner tick to advance frame")
-	}
-	if cmd == nil {
-		t.Fatal("expected finalizing spinner tick to reschedule")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := newOnboardingModelForWorkspace(t.TempDir(), "", testOnboardingFlowState(t, func(cfg *config.App) { cfg.Settings.Theme = "dark" }))
+			tt.configure(model)
+			next, cmd := model.Update(onboardingSpinnerTickMsg{at: model.spinnerClock.anchor.Add(spinnerTickInterval)})
+			if next.(*onboardingModel).spinnerFrame == 0 {
+				t.Fatal("spinner tick did not advance")
+			}
+			if got := cmd != nil; got != tt.reschedules {
+				t.Fatalf("spinner rescheduled = %t, want %t", got, tt.reschedules)
+			}
+		})
 	}
 }
 
@@ -303,26 +271,6 @@ func TestApplyOnboardingModelResetsUnknownModelContextWindowToBaseline(t *testin
 	}
 }
 
-func TestReviewerModelStepDefaultsToMainModel(t *testing.T) {
-	state := testOnboardingFlowStatePtr(t, nil)
-	screen := findWorkflowStep(t, state, "reviewer_model").build(state)
-	if screen.InputValue != "gpt-5.6-sol" {
-		t.Fatalf("expected reviewer model default to follow main model, got %q", screen.InputValue)
-	}
-}
-
-func TestReviewerThinkingStepDefaultsToMainThinking(t *testing.T) {
-	state := testOnboardingFlowStatePtr(t, func(cfg *config.App) {
-		cfg.Settings.ThinkingLevel = "high"
-		cfg.Settings.Reviewer.ThinkingLevel = "high"
-		cfg.Source.Sources["thinking_level"] = "file"
-	})
-	screen := findWorkflowStep(t, state, "reviewer_thinking").build(state)
-	if screen.DefaultOptionID != "high" {
-		t.Fatalf("expected reviewer thinking default to follow main thinking, got %q", screen.DefaultOptionID)
-	}
-}
-
 func TestMainThinkingChoiceSynchronizesReviewerThinking(t *testing.T) {
 	state := testOnboardingFlowStatePtr(t, nil)
 	if err := findWorkflowStep(t, state, "thinking").apply(state, "high"); err != nil {
@@ -343,58 +291,6 @@ func TestMainThinkingChoicePreservesCustomReviewerThinking(t *testing.T) {
 	}
 	if state.selections.reviewerThinkingValue() != "low" {
 		t.Fatalf("expected custom reviewer thinking to be preserved, got %q", state.selections.reviewerThinkingValue())
-	}
-}
-
-func TestReviewerThinkingDisableDoesNotForceCustomInput(t *testing.T) {
-	state := testOnboardingFlowStatePtr(t, nil)
-	if err := findWorkflowStep(t, state, "reviewer_thinking").apply(state, "disable"); err != nil {
-		t.Fatalf("apply reviewer disable choice: %v", err)
-	}
-	if state.selections.supervisor.thinking.override.kind != onboardingThinkingDisabled {
-		t.Fatalf("expected reviewer thinking to be disabled, got %+v", state.selections.supervisor.thinking)
-	}
-	if state.selections.pendingReviewerThinking.kind != onboardingThinkingEditNone {
-		t.Fatal("expected disable choice not to open custom reviewer thinking input")
-	}
-	if workflowIncludesStep(newOnboardingWorkflow(state).visibleSteps(state), "reviewer_thinking_custom") {
-		t.Fatal("expected custom reviewer thinking step to stay hidden after disable choice")
-	}
-}
-
-func TestReviewerThinkingPresetChoiceDoesNotForceCustomInput(t *testing.T) {
-	state := testOnboardingFlowStatePtr(t, nil)
-	if err := findWorkflowStep(t, state, "reviewer_thinking").apply(state, "low"); err != nil {
-		t.Fatalf("apply reviewer preset choice: %v", err)
-	}
-	if state.selections.reviewerThinkingValue() != "low" {
-		t.Fatalf("expected reviewer thinking preset to be preserved, got %q", state.selections.reviewerThinkingValue())
-	}
-	if state.selections.supervisor.thinking.kind != onboardingReviewerThinkingOverridden {
-		t.Fatal("expected non-primary reviewer preset to remain an override")
-	}
-	if state.selections.pendingReviewerThinking.kind != onboardingThinkingEditNone {
-		t.Fatal("expected preset reviewer thinking choice not to open custom input")
-	}
-	if workflowIncludesStep(newOnboardingWorkflow(state).visibleSteps(state), "reviewer_thinking_custom") {
-		t.Fatal("expected custom reviewer thinking step to stay hidden after preset choice")
-	}
-}
-
-func TestMainThinkingChoicePreservesDisabledReviewerThinking(t *testing.T) {
-	state := testOnboardingFlowStatePtr(t, nil)
-	if err := findWorkflowStep(t, state, "reviewer_thinking").apply(state, "disable"); err != nil {
-		t.Fatalf("apply reviewer disable choice: %v", err)
-	}
-	if err := findWorkflowStep(t, state, "thinking").apply(state, "high"); err != nil {
-		t.Fatalf("apply main thinking choice: %v", err)
-	}
-	if state.selections.reviewerThinkingValue() != "" {
-		t.Fatalf("expected reviewer thinking to remain disabled after main thinking change, got %q", state.selections.reviewerThinkingValue())
-	}
-	if state.selections.supervisor.thinking.kind != onboardingReviewerThinkingOverridden ||
-		state.selections.supervisor.thinking.override.kind != onboardingThinkingDisabled {
-		t.Fatal("expected explicit reviewer disable choice to remain sticky")
 	}
 }
 

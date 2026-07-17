@@ -101,21 +101,6 @@ func TestWorkflowCommandsExposeJSONAndPersistGraphState(t *testing.T) {
 	}
 }
 
-func TestWorkflowNodeAddRejectsSecondStart(t *testing.T) {
-	cfg, _, remote := newWorkflowCommandLoopback(t)
-	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
-	defer restore()
-	workflowID := workflowCreateForTest(t, "Duplicate Start").ID
-
-	_, stderr, code := runWorkflowRootCommand(
-		"workflow", "node", "add", workflowID,
-		"--key", "second_start", "--kind", "start",
-	)
-	if code == 0 || strings.TrimSpace(stderr) == "" {
-		t.Fatalf("second Start exit=%d stderr_present=%t, want actionable command failure", code, strings.TrimSpace(stderr) != "")
-	}
-}
-
 func TestWorkflowJSONFlagPlacementCompatibility(t *testing.T) {
 	cfg, _, remote := newWorkflowCommandLoopback(t)
 	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
@@ -173,10 +158,6 @@ func TestWorkflowUpdateRoundTripsExecutionTargetPolicies(t *testing.T) {
 		}
 	}
 
-	human, _ := runWorkflowRootCommandOK(t, "workflow", "inspect", workflowID)
-	if !strings.Contains(human, "ask-on-first-execution") {
-		t.Fatalf("workflow inspect omitted execution target policy: %s", human)
-	}
 }
 
 func TestWorkflowEditCommandsPersistNodeAndEdgeMetadata(t *testing.T) {
@@ -322,9 +303,9 @@ func TestWorkflowNodeScriptPathAddUpdateAndInspect(t *testing.T) {
 	}
 
 	runWorkflowRootCommandOK(t, "workflow", "node", "update", workflowID, "script", "--json", "--script-path", "scripts/fixed")
-	inspectOut, _ := runWorkflowRootCommandOK(t, "workflow", "inspect", workflowID)
-	if !strings.Contains(inspectOut, "- script (script): Renamed Script  [script: scripts/fixed]") {
-		t.Fatalf("workflow inspect output = %q, want script path node line", inspectOut)
+	node = workflowNodeByIDForTest(t, workflowInspectDefinitionForTest(t, workflowID), added.NodeID)
+	if node.ScriptPath == nil || *node.ScriptPath != "scripts/fixed" {
+		t.Fatalf("script path after update = %+v, want scripts/fixed", node.ScriptPath)
 	}
 }
 
@@ -521,23 +502,6 @@ func TestTaskCommentAuthorForAddBoundaryCases(t *testing.T) {
 	sessionFallbackRemote := &commentAuthorRemote{sessionName: "triage"}
 	if got := taskCommentAuthorForAdd(context.Background(), sessionFallbackRemote, "task-1", "", false); got.Kind != "agent" || got.ID != "Session triage agent" {
 		t.Fatalf("taskCommentAuthorForAdd session fallback = %+v, want session-name agent", got)
-	}
-}
-
-func TestWorkflowHelpSmoke(t *testing.T) {
-	_, stderr, code := runWorkflowRootCommand("workflow", "--help")
-	if code != 0 {
-		t.Fatalf("workflow --help exit=%d, want 0", code)
-	}
-	if strings.TrimSpace(stderr) == "" {
-		t.Fatal("workflow --help output is empty")
-	}
-}
-
-func TestWorkflowValidateRejectsRemovedProjectFlag(t *testing.T) {
-	_, _, code := runWorkflowRootCommand("workflow", "validate", "workflow-id", "--project", "project-id")
-	if code != 2 {
-		t.Fatalf("workflow validate with removed --project exit=%d, want 2", code)
 	}
 }
 

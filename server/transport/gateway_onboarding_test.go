@@ -48,127 +48,89 @@ func (s gatewayOnboardingService) FinalizeOnboarding(ctx context.Context, req se
 	return serverapi.OnboardingFinalizeResponse{Completed: true, SettingsPath: "/tmp/config.toml"}, nil
 }
 
-func TestGatewayOnboardingFinalizeIsUnauthenticatedAndDomainInvalidIsTyped(t *testing.T) {
-	appCore, _ := newGatewayTestCore(t, true, false)
-	defer func() { _ = appCore.Close() }()
-	gateway, err := NewGateway(&gatewayOnboardingOverride{
-		Core:     appCore,
-		finalize: gatewayOnboardingService{},
-	}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
-	if err != nil {
-		t.Fatalf("NewGateway: %v", err)
-	}
-	server := httptestServerForGateway(t, gateway)
-	defer server.Close()
-	conn := dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-	handshakeGateway(t, conn)
-
+func TestGatewayOnboardingFinalizeErrorContracts(t *testing.T) {
 	blue := serverapi.OnboardingTheme("blue")
-	errResp := callGatewayExpectError(t, conn, "finalize-invalid", protocol.MethodOnboardingFinalize, serverapi.OnboardingFinalizeRequest{Theme: &blue})
-	if errResp.Code != protocol.ErrCodeOnboardingFinalizeFailed {
-		t.Fatalf("error code = %d, want onboarding finalize failed", errResp.Code)
+	tests := []struct {
+		name       string
+		authReady  bool
+		params     any
+		code       int
+		structured bool
+	}{
+		{name: "unauthenticated domain invalid is typed", params: serverapi.OnboardingFinalizeRequest{Theme: &blue}, code: protocol.ErrCodeOnboardingFinalizeFailed, structured: true},
+		{name: "malformed params remain invalid params", authReady: true, params: "not an object", code: protocol.ErrCodeInvalidParams},
 	}
-	decoded := serverapi.DecodeOnboardingFinalizeError(errResp.Data, errResp.Message)
-	if !errors.Is(decoded, serverapi.ErrOnboardingFinalizeInvalidRequest) {
-		t.Fatalf("decoded error = %v, want invalid_request", decoded)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			appCore, _ := newGatewayTestCore(t, true, tt.authReady)
+			defer func() { _ = appCore.Close() }()
+			gateway, err := NewGateway(&gatewayOnboardingOverride{Core: appCore, finalize: gatewayOnboardingService{}}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+			if err != nil {
+				t.Fatalf("NewGateway: %v", err)
+			}
+			server := httptestServerForGateway(t, gateway)
+			defer server.Close()
+			conn := dialGateway(t, server)
+			defer func() { _ = conn.Close() }()
+			handshakeGateway(t, conn)
+
+			errResp := callGatewayExpectError(t, conn, "finalize-invalid", protocol.MethodOnboardingFinalize, tt.params)
+			if errResp.Code != tt.code {
+				t.Fatalf("error code = %d, want %d", errResp.Code, tt.code)
+			}
+			if !tt.structured {
+				if len(errResp.Data) != 0 {
+					t.Fatalf("malformed finalize response = %+v, want no structured data", errResp)
+				}
+				return
+			}
+			if decoded := serverapi.DecodeOnboardingFinalizeError(errResp.Data, errResp.Message); !errors.Is(decoded, serverapi.ErrOnboardingFinalizeInvalidRequest) {
+				t.Fatalf("decoded error = %v, want invalid_request", decoded)
+			}
+		})
 	}
 }
 
-func TestGatewayOnboardingFinalizeMalformedParamsRemainInvalidParams(t *testing.T) {
-	appCore, _ := newGatewayTestCore(t, true, true)
-	defer func() { _ = appCore.Close() }()
-	gateway, err := NewGateway(&gatewayOnboardingOverride{
-		Core:     appCore,
-		finalize: gatewayOnboardingService{},
-	}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
-	if err != nil {
-		t.Fatalf("NewGateway: %v", err)
+func TestGatewayChecksDependencyAvailabilityBeforeRouteSpecificWork(t *testing.T) {
+	tests := []struct {
+		name       string
+		authReady  bool
+		dependency apicontract.Dependency
+		method     string
+		params     func(*core.Core) any
+	}{
+		{name: "subscription client lookup", authReady: true, dependency: apicontract.DependencyAttentionNotification, method: protocol.MethodAttentionNotificationSubscribe, params: func(*core.Core) any {
+			return serverapi.AttentionNotificationSubscribeRequest{}
+		}},
+		{name: "progress auth and preflight", dependency: apicontract.DependencyRunPrompt, method: protocol.MethodRunPrompt, params: func(*core.Core) any {
+			return serverapi.RunPromptRequest{ClientRequestID: "run-prompt", Intent: serverapi.CreateNewSessionLaunchIntent(nil), Prompt: "test"}
+		}},
+		{name: "attach after handshake", dependency: apicontract.DependencyProtocolAttach, method: protocol.MethodAttachProject, params: func(appCore *core.Core) any {
+			return protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}
+		}},
 	}
-	server := httptestServerForGateway(t, gateway)
-	defer server.Close()
-	conn := dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-	handshakeGateway(t, conn)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			appCore, _ := newGatewayTestCore(t, true, tt.authReady)
+			defer func() { _ = appCore.Close() }()
+			gateway, err := NewGateway(&gatewayOnboardingUnavailableOverride{Core: appCore, unavailable: tt.dependency}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+			if err != nil {
+				t.Fatalf("NewGateway: %v", err)
+			}
+			server := httptestServerForGateway(t, gateway)
+			defer server.Close()
+			conn := dialGateway(t, server)
+			defer func() { _ = conn.Close() }()
+			handshakeGateway(t, conn)
 
-	errResp := callGatewayExpectError(t, conn, "bad-params", protocol.MethodOnboardingFinalize, "not an object")
-	if errResp.Code != protocol.ErrCodeInvalidParams || len(errResp.Data) != 0 {
-		t.Fatalf("malformed finalize response = %+v, want invalid params without structured data", errResp)
-	}
-}
-
-func TestGatewaySubscriptionChecksDependencyAvailabilityBeforeClientLookup(t *testing.T) {
-	appCore, _ := newGatewayTestCore(t, true, true)
-	defer func() { _ = appCore.Close() }()
-	gateway, err := NewGateway(&gatewayOnboardingUnavailableOverride{
-		Core:        appCore,
-		unavailable: apicontract.DependencyAttentionNotification,
-	}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
-	if err != nil {
-		t.Fatalf("NewGateway: %v", err)
-	}
-	server := httptestServerForGateway(t, gateway)
-	defer server.Close()
-	conn := dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-	handshakeGateway(t, conn)
-
-	errResp := callGatewayExpectError(t, conn, "attention-subscribe", protocol.MethodAttentionNotificationSubscribe, serverapi.AttentionNotificationSubscribeRequest{})
-	if errResp.Code != protocol.ErrCodeServerNotReady {
-		t.Fatalf("error code = %d, want server not ready", errResp.Code)
-	}
-	if decoded := serverapi.DecodeServerNotReadyError(errResp.Data, errResp.Message); !errors.Is(decoded, serverapi.ErrServerNotReadyOnboardingRequired) {
-		t.Fatalf("decoded error = %v, want onboarding_required", decoded)
-	}
-}
-
-func TestGatewayProgressChecksDependencyAvailabilityBeforeAuthAndPreflight(t *testing.T) {
-	appCore, _ := newGatewayTestCore(t, true, false)
-	defer func() { _ = appCore.Close() }()
-	gateway, err := NewGateway(&gatewayOnboardingUnavailableOverride{
-		Core:        appCore,
-		unavailable: apicontract.DependencyRunPrompt,
-	}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
-	if err != nil {
-		t.Fatalf("NewGateway: %v", err)
-	}
-	server := httptestServerForGateway(t, gateway)
-	defer server.Close()
-	conn := dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-	handshakeGateway(t, conn)
-
-	errResp := callGatewayExpectError(t, conn, "run-prompt", protocol.MethodRunPrompt, serverapi.RunPromptRequest{ClientRequestID: "run-prompt", Intent: serverapi.CreateNewSessionLaunchIntent(nil), Prompt: "test"})
-	if errResp.Code != protocol.ErrCodeServerNotReady {
-		t.Fatalf("error code = %d, want server not ready", errResp.Code)
-	}
-	if decoded := serverapi.DecodeServerNotReadyError(errResp.Data, errResp.Message); !errors.Is(decoded, serverapi.ErrServerNotReadyOnboardingRequired) {
-		t.Fatalf("decoded error = %v, want onboarding_required", decoded)
-	}
-}
-
-func TestGatewayAttachChecksDependencyAvailabilitySeparatelyFromHandshake(t *testing.T) {
-	appCore, _ := newGatewayTestCore(t, true, false)
-	defer func() { _ = appCore.Close() }()
-	gateway, err := NewGateway(&gatewayOnboardingUnavailableOverride{
-		Core:        appCore,
-		unavailable: apicontract.DependencyProtocolAttach,
-	}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
-	if err != nil {
-		t.Fatalf("NewGateway: %v", err)
-	}
-	server := httptestServerForGateway(t, gateway)
-	defer server.Close()
-	conn := dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-	handshakeGateway(t, conn)
-
-	errResp := callGatewayExpectError(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()})
-	if errResp.Code != protocol.ErrCodeServerNotReady {
-		t.Fatalf("error code = %d, want server not ready", errResp.Code)
-	}
-	if decoded := serverapi.DecodeServerNotReadyError(errResp.Data, errResp.Message); !errors.Is(decoded, serverapi.ErrServerNotReadyOnboardingRequired) {
-		t.Fatalf("decoded error = %v, want onboarding_required", decoded)
+			errResp := callGatewayExpectError(t, conn, "dependency-unavailable", tt.method, tt.params(appCore))
+			if errResp.Code != protocol.ErrCodeServerNotReady {
+				t.Fatalf("error code = %d, want server not ready", errResp.Code)
+			}
+			if decoded := serverapi.DecodeServerNotReadyError(errResp.Data, errResp.Message); !errors.Is(decoded, serverapi.ErrServerNotReadyOnboardingRequired) {
+				t.Fatalf("decoded error = %v, want onboarding_required", decoded)
+			}
+		})
 	}
 }
 
@@ -217,14 +179,11 @@ func TestConfiguredCoreOnboardingFinalizeReturnsConfigAlreadyExists(t *testing.T
 		t.Fatalf("DialRemoteURL: %v", err)
 	}
 	defer func() { _ = remote.Close() }()
-	_, err = remote.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{Theme: ptrThemeForTransport("blue")})
+	blue := serverapi.OnboardingTheme("blue")
+	_, err = remote.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{Theme: &blue})
 	if !errors.Is(err, serverapi.ErrOnboardingFinalizeConfigAlreadyExists) {
 		t.Fatalf("FinalizeOnboarding error = %v, want config_already_exists", err)
 	}
-}
-
-func ptrThemeForTransport(value serverapi.OnboardingTheme) *serverapi.OnboardingTheme {
-	return &value
 }
 
 func httptestServerForGateway(t *testing.T, gateway *Gateway) *httptest.Server {

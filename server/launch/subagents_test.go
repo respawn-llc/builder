@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"reflect"
 	"testing"
 
 	"core/shared/config"
@@ -47,11 +48,10 @@ func TestApplyReviewerInheritanceRecomputesDefaultBaseURLWhenReviewerProviderExp
 			OpenAIBaseURL:    "http://parent.local/v1",
 		},
 	}
-	sources := reviewerInheritanceDefaultSources()
-	sources["openai_base_url"] = "subagent"
-	sources["reviewer.provider_override"] = "subagent"
-
-	applyReviewerInheritance(&settings, sources)
+	applyReviewerInheritance(&settings, map[string]string{
+		"reviewer.provider_override": "subagent",
+		"reviewer.openai_base_url":   "default",
+	})
 
 	if settings.Reviewer.ProviderOverride != "openai" {
 		t.Fatalf("reviewer provider override = %q, want openai", settings.Reviewer.ProviderOverride)
@@ -61,11 +61,16 @@ func TestApplyReviewerInheritanceRecomputesDefaultBaseURLWhenReviewerProviderExp
 	}
 }
 
-func TestOverlaySubagentRoleSettingsAppliesProviderVerbosityCapability(t *testing.T) {
-	settings := config.Settings{
+func TestOverlaySubagentRoleSettingsAppliesRegistryAndDynamicSettings(t *testing.T) {
+	base := config.Settings{
 		ProviderCapabilities: config.ProviderCapabilitiesOverride{
 			ProviderID:                "main-provider",
 			SupportsProviderVerbosity: true,
+		},
+		SkillToggles: map[string]bool{
+			"apiresult": false,
+			"inherited": false,
+			"enabled":   true,
 		},
 	}
 	role := config.SubagentRole{
@@ -74,80 +79,26 @@ func TestOverlaySubagentRoleSettingsAppliesProviderVerbosityCapability(t *testin
 				ProviderID:                "main-provider",
 				SupportsProviderVerbosity: false,
 			},
+			SkillToggles: map[string]bool{
+				"apiresult": true,
+				"enabled":   false,
+			},
 		},
 		Sources: map[string]string{
 			"provider_capabilities.supports_provider_verbosity": "file",
+			"skills.apiresult": "file",
+			"skills.enabled":   "file",
 		},
 	}
 
-	settings = config.OverlaySubagentRoleSettings(settings, role, true)
+	settings := config.OverlaySubagentRoleSettings(base, role, true)
 
 	if settings.ProviderCapabilities.SupportsProviderVerbosity {
 		t.Fatalf("expected subagent verbosity capability override to apply, got %+v", settings.ProviderCapabilities)
 	}
-}
-
-func TestOverlaySubagentRoleSettingsResolvesPerSkillToggles(t *testing.T) {
-	tests := []struct {
-		name          string
-		base          config.Settings
-		role          config.SubagentRole
-		wantAPIResult bool
-		wantInherited bool
-		wantEnabled   bool
-	}{
-		{
-			name: "omitted role toggles inherit global values",
-			base: config.Settings{
-				SkillToggles: map[string]bool{
-					"apiresult": false,
-					"inherited": false,
-					"enabled":   true,
-				},
-			},
-			role:        config.SubagentRole{},
-			wantEnabled: true,
-		},
-		{
-			name: "explicit role toggles override named skills only",
-			base: config.Settings{
-				SkillToggles: map[string]bool{
-					"apiresult": false,
-					"inherited": false,
-					"enabled":   true,
-				},
-			},
-			role: config.SubagentRole{
-				Settings: config.Settings{
-					SkillToggles: map[string]bool{
-						"apiresult": true,
-						"enabled":   false,
-					},
-				},
-				Sources: map[string]string{
-					"skills.apiresult": "file",
-					"skills.enabled":   "file",
-				},
-			},
-			wantAPIResult: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			settings := cloneSettings(tt.base)
-			settings = config.OverlaySubagentRoleSettings(settings, tt.role, true)
-			policy := config.ResolveSkillPolicy(settings)
-			if got := policy.SkillEnabled("apiresult"); got != tt.wantAPIResult {
-				t.Fatalf("apiresult enabled = %t, want %t", got, tt.wantAPIResult)
-			}
-			if got := policy.SkillEnabled("inherited"); got != tt.wantInherited {
-				t.Fatalf("inherited skill enabled = %t, want %t", got, tt.wantInherited)
-			}
-			if got := policy.SkillEnabled("enabled"); got != tt.wantEnabled {
-				t.Fatalf("skill named enabled = %t, want %t", got, tt.wantEnabled)
-			}
-		})
+	wantToggles := map[string]bool{"apiresult": true, "inherited": false, "enabled": false}
+	if !reflect.DeepEqual(settings.SkillToggles, wantToggles) {
+		t.Fatalf("skill toggles = %+v, want %+v", settings.SkillToggles, wantToggles)
 	}
 }
 
@@ -166,7 +117,7 @@ func TestApplyReviewerInheritanceDoesNotCopyMainProviderCapabilitiesForExplicitR
 			OpenAIBaseURL:    "http://reviewer.local/v1",
 		},
 	}
-	sources := reviewerInheritanceDefaultSources()
+	sources := reviewerProviderCapabilitySources()
 	sources["reviewer.provider_override"] = "subagent"
 	sources["reviewer.openai_base_url"] = "subagent"
 
@@ -191,20 +142,23 @@ func TestApplyReviewerInheritanceCopiesMainProviderCapabilitiesForNoOpReviewerPr
 			OpenAIBaseURL:    "http://parent.local/v1",
 		},
 	}
-	sources := reviewerInheritanceDefaultSources()
-	sources["openai_base_url"] = "subagent"
+	sources := reviewerProviderCapabilitySources()
 	sources["reviewer.provider_override"] = "file"
+	sources["reviewer.openai_base_url"] = "default"
 
 	applyReviewerInheritance(&settings, sources)
 
 	if settings.Reviewer.OpenAIBaseURL != "http://subagent.local/v1" {
 		t.Fatalf("expected no-op reviewer provider override to inherit subagent main base URL, got %q", settings.Reviewer.OpenAIBaseURL)
 	}
-	if settings.Reviewer.ProviderCapabilities.ProviderID != "subagent-main-provider" ||
-		!settings.Reviewer.ProviderCapabilities.SupportsResponsesAPI ||
-		!settings.Reviewer.ProviderCapabilities.SupportsRequestInputTokenCount ||
-		!settings.Reviewer.ProviderCapabilities.SupportsPromptCacheKey {
-		t.Fatalf("expected no-op reviewer provider override to inherit subagent main provider capabilities, got %+v", settings.Reviewer.ProviderCapabilities)
+	wantCapabilities := config.ProviderCapabilitiesOverride{
+		ProviderID:                     "subagent-main-provider",
+		SupportsResponsesAPI:           true,
+		SupportsRequestInputTokenCount: true,
+		SupportsPromptCacheKey:         true,
+	}
+	if settings.Reviewer.ProviderCapabilities != wantCapabilities {
+		t.Fatalf("reviewer provider capabilities = %+v, want %+v", settings.Reviewer.ProviderCapabilities, wantCapabilities)
 	}
 }
 
@@ -221,16 +175,14 @@ func TestApplyReviewerInheritanceMergesReviewerModelCapabilitiesPerField(t *test
 			},
 		},
 	}
-	sources := reviewerInheritanceDefaultSources()
-	sources["reviewer.model_capabilities.supports_reasoning_effort"] = "subagent"
+	applyReviewerInheritance(&settings, map[string]string{
+		"reviewer.model_capabilities.supports_reasoning_effort": "subagent",
+		"reviewer.model_capabilities.supports_vision_inputs":    "default",
+	})
 
-	applyReviewerInheritance(&settings, sources)
-
-	if settings.Reviewer.ModelCapabilities.SupportsReasoningEffort {
-		t.Fatalf("expected explicit reviewer reasoning capability override to stay false")
-	}
-	if !settings.Reviewer.ModelCapabilities.SupportsVisionInputs {
-		t.Fatalf("expected default reviewer vision capability to inherit updated main true")
+	want := config.ModelCapabilitiesOverride{SupportsVisionInputs: true}
+	if settings.Reviewer.ModelCapabilities != want {
+		t.Fatalf("reviewer model capabilities = %+v, want %+v", settings.Reviewer.ModelCapabilities, want)
 	}
 }
 
@@ -257,7 +209,7 @@ func TestApplyReviewerInheritanceMergesReviewerProviderCapabilitiesPerField(t *t
 			},
 		},
 	}
-	sources := reviewerInheritanceDefaultSources()
+	sources := reviewerProviderCapabilitySources()
 	sources["reviewer.provider_capabilities.provider_id"] = "subagent"
 	sources["reviewer.provider_capabilities.supports_responses_api"] = "subagent"
 	sources["reviewer.provider_capabilities.supports_prompt_cache_key"] = "subagent"
@@ -265,39 +217,18 @@ func TestApplyReviewerInheritanceMergesReviewerProviderCapabilitiesPerField(t *t
 
 	applyReviewerInheritance(&settings, sources)
 
-	if settings.Reviewer.ProviderCapabilities.ProviderID != "reviewer-provider" {
-		t.Fatalf("expected explicit reviewer provider ID to remain, got %+v", settings.Reviewer.ProviderCapabilities)
-	}
-	if settings.Reviewer.ProviderCapabilities.SupportsResponsesAPI {
-		t.Fatalf("expected explicit reviewer responses API override to stay false")
-	}
-	if settings.Reviewer.ProviderCapabilities.SupportsPromptCacheKey {
-		t.Fatalf("expected explicit reviewer prompt cache override to stay false")
-	}
-	if settings.Reviewer.ProviderCapabilities.SupportsProviderVerbosity {
-		t.Fatalf("expected explicit reviewer verbosity override to stay false")
-	}
-	if !settings.Reviewer.ProviderCapabilities.SupportsResponsesCompact ||
-		!settings.Reviewer.ProviderCapabilities.SupportsRequestInputTokenCount ||
-		!settings.Reviewer.ProviderCapabilities.SupportsNativeWebSearch ||
-		!settings.Reviewer.ProviderCapabilities.SupportsReasoningEncrypted ||
-		!settings.Reviewer.ProviderCapabilities.SupportsServerSideContextEdit ||
-		!settings.Reviewer.ProviderCapabilities.IsOpenAIFirstParty {
-		t.Fatalf("expected default reviewer provider capabilities to inherit updated main true, got %+v", settings.Reviewer.ProviderCapabilities)
+	want := settings.ProviderCapabilities
+	want.ProviderID = "reviewer-provider"
+	want.SupportsResponsesAPI = false
+	want.SupportsPromptCacheKey = false
+	want.SupportsProviderVerbosity = false
+	if settings.Reviewer.ProviderCapabilities != want {
+		t.Fatalf("reviewer provider capabilities = %+v, want %+v", settings.Reviewer.ProviderCapabilities, want)
 	}
 }
 
-func reviewerInheritanceDefaultSources() map[string]string {
+func reviewerProviderCapabilitySources() map[string]string {
 	sources := map[string]string{
-		"reviewer.model":                                                    "default",
-		"reviewer.thinking_level":                                           "default",
-		"reviewer.model_verbosity":                                          "default",
-		"reviewer.provider_override":                                        "default",
-		"reviewer.openai_base_url":                                          "default",
-		"reviewer.model_context_window":                                     "default",
-		"reviewer.auth":                                                     "default",
-		"reviewer.model_capabilities.supports_reasoning_effort":             "default",
-		"reviewer.model_capabilities.supports_vision_inputs":                "default",
 		"reviewer.provider_capabilities.provider_id":                        "default",
 		"reviewer.provider_capabilities.supports_responses_api":             "default",
 		"reviewer.provider_capabilities.supports_responses_compact":         "default",

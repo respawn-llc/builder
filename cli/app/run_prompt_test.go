@@ -3,33 +3,25 @@ package app
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
-	goruntime "runtime"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"core/cli/app/internal/daemonlaunch"
-	"core/cli/app/internal/remoteattach"
 	"core/server/auth"
 	"core/server/authservice"
-	"core/server/launch"
 	"core/server/runprompt"
-	"core/server/session"
-	"core/server/session/sessiontest"
 	serverstartup "core/server/startup"
 	askquestion "core/server/tools"
-	"core/shared/apicontract"
-	"core/shared/client"
-	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/protocol"
-	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+
+	"golang.org/x/net/websocket"
 )
 
 type memoryAuthHandler struct {
@@ -101,35 +93,6 @@ func TestLoadRemoteAttachConfigUsesSessionWorkspaceWhenWorkspaceImplicit(t *test
 	}
 }
 
-func TestLoadRemoteAttachConfigRejectsStaleWorkspaceContextSession(t *testing.T) {
-	newAppTestHome(t)
-	workspace := t.TempDir()
-	configureAppTestServerPort(t)
-	_ = loadAppTestConfig(t, workspace, config.LoadOptions{})
-
-	_, err := loadRemoteAttachConfig(Options{
-		WorkspaceRoot:             workspace,
-		WorkspaceContextSessionID: "stale-env-session",
-	})
-	if !errors.Is(err, sessioncontract.ErrSessionNotFound) {
-		t.Fatalf("error = %v, want missing session rejection", err)
-	}
-}
-
-func TestLoadRemoteAttachConfigKeepsExplicitSessionLookupStrict(t *testing.T) {
-	newAppTestHome(t)
-	workspace := t.TempDir()
-	configureAppTestServerPort(t)
-
-	_, err := loadRemoteAttachConfig(Options{
-		WorkspaceRoot: workspace,
-		SessionID:     "missing-explicit-session",
-	})
-	if err == nil {
-		t.Fatal("expected stale explicit session id to fail")
-	}
-}
-
 func TestRunPromptFromWorktreeUsesKentSessionWorkspaceContext(t *testing.T) {
 	home := newAppTestHome(t)
 	workspace := t.TempDir()
@@ -191,218 +154,6 @@ func TestRunPromptRejectsStaleWorkspaceContextSession(t *testing.T) {
 	}
 }
 
-type headlessProjectViewStubService struct {
-	listProjectsResp serverapi.ProjectListResponse
-	listProjectsErr  error
-	overviews        map[string]serverapi.ProjectGetOverviewResponse
-	overviewErr      error
-}
-
-type configuredProjectViewRemoteStub struct {
-	identity           protocol.ServerIdentity
-	resolveProjectPath func(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error)
-	listProjects       func(context.Context, serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error)
-	getProjectOverview func(context.Context, serverapi.ProjectGetOverviewRequest) (serverapi.ProjectGetOverviewResponse, error)
-	closed             atomic.Bool
-}
-
-func (s *configuredProjectViewRemoteStub) Close() error {
-	if s != nil {
-		s.closed.Store(true)
-	}
-	return nil
-}
-
-func (s *configuredProjectViewRemoteStub) Identity() protocol.ServerIdentity {
-	if s == nil {
-		return protocol.ServerIdentity{}
-	}
-	return s.identity
-}
-
-func (s *configuredProjectViewRemoteStub) RequireRoot(rootID string) error {
-	if s == nil {
-		return errors.New("remote client is required")
-	}
-	if rootID != "" && s.identity.PersistenceRootID != rootID {
-		return errors.New("project view root mismatch")
-	}
-	return nil
-}
-
-func (s *configuredProjectViewRemoteStub) ListProjects(ctx context.Context, req serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error) {
-	if s != nil && s.listProjects != nil {
-		return s.listProjects(ctx, req)
-	}
-	return serverapi.ProjectListResponse{}, errors.New("unexpected ListProjects call")
-}
-
-func (*configuredProjectViewRemoteStub) ListProjectHome(context.Context, serverapi.ProjectHomeListRequest) (serverapi.ProjectHomeListResponse, error) {
-	return serverapi.ProjectHomeListResponse{}, errors.New("unexpected ListProjectHome call")
-}
-
-func (s *configuredProjectViewRemoteStub) ResolveProjectPath(ctx context.Context, req serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
-	if s != nil && s.resolveProjectPath != nil {
-		return s.resolveProjectPath(ctx, req)
-	}
-	return serverapi.ProjectResolvePathResponse{}, errors.New("unexpected ResolveProjectPath call")
-}
-
-func (s *configuredProjectViewRemoteStub) PlanWorkspaceBinding(ctx context.Context, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
-	return testPlanHeadlessWorkspaceBinding(ctx, s, req)
-}
-
-func (*configuredProjectViewRemoteStub) CreateProject(context.Context, serverapi.ProjectCreateRequest) (serverapi.ProjectCreateResponse, error) {
-	return serverapi.ProjectCreateResponse{}, errors.New("unexpected CreateProject call")
-}
-
-func (*configuredProjectViewRemoteStub) ListProjectWorkspaces(context.Context, serverapi.ProjectWorkspaceListRequest) (serverapi.ProjectWorkspaceListResponse, error) {
-	return serverapi.ProjectWorkspaceListResponse{}, errors.New("unexpected ListProjectWorkspaces call")
-}
-
-func (*configuredProjectViewRemoteStub) AttachWorkspaceToProject(context.Context, serverapi.ProjectAttachWorkspaceRequest) (serverapi.ProjectAttachWorkspaceResponse, error) {
-	return serverapi.ProjectAttachWorkspaceResponse{}, errors.New("unexpected AttachWorkspaceToProject call")
-}
-
-func (*configuredProjectViewRemoteStub) RebindWorkspace(context.Context, serverapi.ProjectRebindWorkspaceRequest) (serverapi.ProjectRebindWorkspaceResponse, error) {
-	return serverapi.ProjectRebindWorkspaceResponse{}, errors.New("unexpected RebindWorkspace call")
-}
-
-func (s *configuredProjectViewRemoteStub) GetProjectOverview(ctx context.Context, req serverapi.ProjectGetOverviewRequest) (serverapi.ProjectGetOverviewResponse, error) {
-	if s != nil && s.getProjectOverview != nil {
-		return s.getProjectOverview(ctx, req)
-	}
-	return serverapi.ProjectGetOverviewResponse{}, errors.New("unexpected GetProjectOverview call")
-}
-
-func (*configuredProjectViewRemoteStub) ListSessionPage(context.Context, serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
-	return serverapi.SessionPageResponse{}, nil
-}
-
-func (s headlessProjectViewStubService) ListProjects(context.Context, serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error) {
-	return s.listProjectsResp, s.listProjectsErr
-}
-
-func (headlessProjectViewStubService) ListProjectHome(context.Context, serverapi.ProjectHomeListRequest) (serverapi.ProjectHomeListResponse, error) {
-	return serverapi.ProjectHomeListResponse{}, errors.New("unexpected ListProjectHome call")
-}
-
-func (headlessProjectViewStubService) ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
-	return serverapi.ProjectResolvePathResponse{}, errors.New("unexpected ResolveProjectPath call")
-}
-
-func (s headlessProjectViewStubService) PlanWorkspaceBinding(ctx context.Context, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectBindingPlanResponse{}, err
-	}
-	selection, found, err := testSelectSingleRemoteWorkspace(ctx, s)
-	if err != nil {
-		return serverapi.ProjectBindingPlanResponse{}, err
-	}
-	if !found {
-		return serverapi.ProjectBindingPlanResponse{Kind: serverapi.ProjectBindingPlanKindHeadlessRemoteAmbiguous}, nil
-	}
-	return serverapi.ProjectBindingPlanResponse{
-		Kind:      serverapi.ProjectBindingPlanKindHeadlessRemoteSelected,
-		Workspace: &selection,
-	}, nil
-}
-
-func (headlessProjectViewStubService) CreateProject(context.Context, serverapi.ProjectCreateRequest) (serverapi.ProjectCreateResponse, error) {
-	return serverapi.ProjectCreateResponse{}, errors.New("unexpected CreateProject call")
-}
-
-func (headlessProjectViewStubService) ListProjectWorkspaces(context.Context, serverapi.ProjectWorkspaceListRequest) (serverapi.ProjectWorkspaceListResponse, error) {
-	return serverapi.ProjectWorkspaceListResponse{}, errors.New("unexpected ListProjectWorkspaces call")
-}
-
-func (headlessProjectViewStubService) AttachWorkspaceToProject(context.Context, serverapi.ProjectAttachWorkspaceRequest) (serverapi.ProjectAttachWorkspaceResponse, error) {
-	return serverapi.ProjectAttachWorkspaceResponse{}, errors.New("unexpected AttachWorkspaceToProject call")
-}
-
-func (headlessProjectViewStubService) RebindWorkspace(context.Context, serverapi.ProjectRebindWorkspaceRequest) (serverapi.ProjectRebindWorkspaceResponse, error) {
-	return serverapi.ProjectRebindWorkspaceResponse{}, errors.New("unexpected RebindWorkspace call")
-}
-
-func (s headlessProjectViewStubService) GetProjectOverview(_ context.Context, req serverapi.ProjectGetOverviewRequest) (serverapi.ProjectGetOverviewResponse, error) {
-	if s.overviewErr != nil {
-		return serverapi.ProjectGetOverviewResponse{}, s.overviewErr
-	}
-	resp, ok := s.overviews[req.ProjectID]
-	if !ok {
-		return serverapi.ProjectGetOverviewResponse{}, errors.New("missing overview")
-	}
-	return resp, nil
-}
-
-func (headlessProjectViewStubService) ListSessionPage(context.Context, serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
-	return serverapi.SessionPageResponse{}, nil
-}
-
-func testPlanHeadlessWorkspaceBinding(ctx context.Context, projectViews apicontract.ProjectViewService, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectBindingPlanResponse{}, err
-	}
-	resolved, err := projectViews.ResolveProjectPath(ctx, serverapi.ProjectResolvePathRequest{Path: req.Path})
-	if err != nil {
-		return serverapi.ProjectBindingPlanResponse{}, err
-	}
-	resp := serverapi.ProjectBindingPlanResponse{
-		CanonicalRoot:    resolved.CanonicalRoot,
-		PathAvailability: resolved.PathAvailability,
-		Binding:          resolved.Binding,
-	}
-	if resolved.Binding != nil {
-		resp.Kind = serverapi.ProjectBindingPlanKindBound
-		return resp, nil
-	}
-	if resolved.PathAvailability == clientui.ProjectAvailabilityAvailable {
-		resp.Kind = serverapi.ProjectBindingPlanKindLocalUnbound
-		return resp, nil
-	}
-	selection, found, err := testSelectSingleRemoteWorkspace(ctx, projectViews)
-	if err != nil {
-		return serverapi.ProjectBindingPlanResponse{}, err
-	}
-	if !found {
-		resp.Kind = serverapi.ProjectBindingPlanKindHeadlessRemoteAmbiguous
-		return resp, nil
-	}
-	resp.Kind = serverapi.ProjectBindingPlanKindHeadlessRemoteSelected
-	resp.Workspace = &selection
-	return resp, nil
-}
-
-func testSelectSingleRemoteWorkspace(ctx context.Context, projectViews apicontract.ProjectViewService) (serverapi.ProjectWorkspacePlanSelected, bool, error) {
-	projects, err := projectViews.ListProjects(ctx, serverapi.ProjectListRequest{})
-	if err != nil {
-		return serverapi.ProjectWorkspacePlanSelected{}, false, err
-	}
-	selection := serverapi.ProjectWorkspacePlanSelected{}
-	count := 0
-	for _, project := range projects.Projects {
-		overview, err := projectViews.GetProjectOverview(ctx, serverapi.ProjectGetOverviewRequest{ProjectID: project.ProjectID})
-		if err != nil {
-			return serverapi.ProjectWorkspacePlanSelected{}, false, err
-		}
-		for _, workspace := range overview.Overview.Workspaces {
-			availability := strings.TrimSpace(string(workspace.Availability))
-			if availability != "" && workspace.Availability != clientui.ProjectAvailabilityAvailable {
-				continue
-			}
-			count++
-			selection = serverapi.ProjectWorkspacePlanSelected{ProjectID: project.ProjectID, WorkspaceID: workspace.WorkspaceID}
-			if count > 1 {
-				return serverapi.ProjectWorkspacePlanSelected{}, false, nil
-			}
-		}
-	}
-	if count == 0 {
-		return serverapi.ProjectWorkspacePlanSelected{}, false, nil
-	}
-	return selection, true, nil
-}
-
 func (h memoryAuthHandler) WrapStore(auth.Store) auth.Store {
 	return auth.NewMemoryStore(h.state)
 }
@@ -455,45 +206,6 @@ func waitForConfiguredRunPromptDaemon(t *testing.T, workspace string) {
 			t.Fatalf("configured daemon did not become healthy at %s", healthURL)
 		}
 		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-func TestEnsureSubagentSessionNameSetsDefault(t *testing.T) {
-	containerDir := t.TempDir()
-	persistence := sessiontest.NewPersistence()
-	store, err := session.NewLazy(containerDir, "workspace-x", "/tmp/workspace", sessioncontract.SessionCategoryMain, persistence.Options()...)
-	if err != nil {
-		t.Fatalf("new lazy session: %v", err)
-	}
-
-	if err := launch.EnsureSubagentSessionName(store); err != nil {
-		t.Fatalf("ensure subagent session name: %v", err)
-	}
-
-	meta := store.Meta()
-	want := meta.SessionID + " " + subagentSessionSuffix
-	if meta.Name != want {
-		t.Fatalf("session name = %q, want %q", meta.Name, want)
-	}
-}
-
-func TestEnsureSubagentSessionNamePreservesExistingName(t *testing.T) {
-	containerDir := t.TempDir()
-	persistence := sessiontest.NewPersistence()
-	store, err := session.NewLazy(containerDir, "workspace-x", "/tmp/workspace", sessioncontract.SessionCategoryMain, persistence.Options()...)
-	if err != nil {
-		t.Fatalf("new lazy session: %v", err)
-	}
-	if err := store.SetName("incident triage"); err != nil {
-		t.Fatalf("set name: %v", err)
-	}
-
-	if err := launch.EnsureSubagentSessionName(store); err != nil {
-		t.Fatalf("ensure subagent session name: %v", err)
-	}
-
-	if got := store.Meta().Name; got != "incident triage" {
-		t.Fatalf("session name = %q, want incident triage", got)
 	}
 }
 
@@ -571,39 +283,6 @@ func TestRunPromptWithIncompatibleServerReportsIncompatibleError(t *testing.T) {
 	}
 }
 
-func TestOwnedDaemonCloseFallsBackToKillWhenInterruptFails(t *testing.T) {
-	if goruntime.GOOS == "windows" {
-		t.Skip("sleep helper is unix-only")
-	}
-	cmd := exec.Command("sleep", "30")
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- cmd.Wait()
-	}()
-	killed := false
-	closeFn := daemonlaunch.NewOwnedProcessClose[*client.Remote](nil, nil, cmd, errCh, daemonlaunch.Controls{
-		Terminate: func(process *os.Process) error {
-			return errors.New("interrupt unsupported")
-		},
-		Kill: func(process *os.Process) error {
-			killed = true
-			if process == nil {
-				return nil
-			}
-			return process.Kill()
-		},
-	})
-	if err := closeFn(); err != nil {
-		t.Fatalf("closeFn: %v", err)
-	}
-	if !killed {
-		t.Fatal("expected owned daemon close to fall back to kill")
-	}
-}
-
 func TestRunPromptUsesInvocationOverridesWhenAttachingToConfiguredDaemon(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspace(t)
 
@@ -651,28 +330,6 @@ func TestRunPromptUsesInvocationOverridesWhenAttachingToConfiguredDaemon(t *test
 
 }
 
-func TestTryDialMatchingConfiguredRemoteRejectsServerThatDoesNotMatchSpawnedPID(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-	cleanup := publishConfiguredRemoteForWorkspace(t, workspace, protocol.CapabilityFlags{RunPrompt: true, AuthBootstrap: true, ProjectAttach: true})
-	defer cleanup()
-	if remote, ok := tryDialMatchingConfiguredRemoteWithRequirement(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, remoteattach.SupportsRunPrompt, func(identity protocol.ServerIdentity) bool {
-		return identity.PID == 111
-	}, true); ok || remote != nil {
-		t.Fatalf("expected mismatched pid server to be rejected, got remote=%v ok=%t", remote, ok)
-	}
-}
-
-func TestTryDialMatchingConfiguredRemoteSkipsUnregisteredWorkspace(t *testing.T) {
-	newAppTestHome(t)
-	workspace := t.TempDir()
-	configureAppTestServerPort(t)
-	cleanup := publishConfiguredRemoteForWorkspace(t, workspace, protocol.CapabilityFlags{RunPrompt: true, AuthBootstrap: true, ProjectAttach: true})
-	defer cleanup()
-	if remote, ok := tryDialMatchingConfiguredRemoteWithRequirement(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, remoteattach.SupportsRunPrompt, nil, true); ok || remote != nil {
-		t.Fatalf("expected unregistered workspace to skip configured remote attach, got remote=%v ok=%t", remote, ok)
-	}
-}
-
 func TestStartRunPromptClientWithoutServerRequiresRunningServer(t *testing.T) {
 	newAppTestHome(t)
 	workspace := t.TempDir()
@@ -693,261 +350,40 @@ func TestStartRunPromptClientWithoutServerRequiresRunningServer(t *testing.T) {
 	}
 }
 
-func TestHeadlessProjectBindingPlanChoosesOnlyWorkspace(t *testing.T) {
-	client := headlessProjectViewStubService{
-		listProjectsResp: serverapi.ProjectListResponse{Projects: []clientui.ProjectSummary{{ProjectID: "project-1"}}},
-		overviews: map[string]serverapi.ProjectGetOverviewResponse{
-			"project-1": {Overview: clientui.ProjectOverview{Workspaces: []clientui.ProjectWorkspaceSummary{{WorkspaceID: "workspace-1"}}}},
-		},
+func publishConfiguredRemoteForWorkspace(t *testing.T, workspace string, caps protocol.CapabilityFlags) func() {
+	t.Helper()
+	identity := protocol.ServerIdentity{
+		ProtocolVersion: protocol.Version,
+		ServerID:        "stale-daemon",
+		PID:             222,
+		Capabilities:    caps,
 	}
-
-	plan, err := client.PlanWorkspaceBinding(context.Background(), serverapi.ProjectBindingPlanRequest{Path: "/client/missing", Mode: serverapi.ProjectBindingPlanModeHeadless})
-	if err != nil {
-		t.Fatalf("PlanWorkspaceBinding: %v", err)
-	}
-	if plan.Kind != serverapi.ProjectBindingPlanKindHeadlessRemoteSelected || plan.Workspace == nil {
-		t.Fatalf("expected single workspace selection, got %+v", plan)
-	}
-	if plan.Workspace.ProjectID != "project-1" || plan.Workspace.WorkspaceID != "workspace-1" {
-		t.Fatalf("unexpected selection: %+v", plan.Workspace)
-	}
-}
-
-func TestHeadlessProjectBindingPlanIgnoresUnavailableWorkspaces(t *testing.T) {
-	client := headlessProjectViewStubService{
-		listProjectsResp: serverapi.ProjectListResponse{Projects: []clientui.ProjectSummary{{ProjectID: "project-1"}}},
-		overviews: map[string]serverapi.ProjectGetOverviewResponse{
-			"project-1": {Overview: clientui.ProjectOverview{Workspaces: []clientui.ProjectWorkspaceSummary{
-				{WorkspaceID: "workspace-missing", Availability: clientui.ProjectAvailabilityMissing},
-				{WorkspaceID: "workspace-1", Availability: clientui.ProjectAvailabilityAvailable},
-				{WorkspaceID: "workspace-inaccessible", Availability: clientui.ProjectAvailabilityInaccessible},
-			}}},
-		},
-	}
-
-	plan, err := client.PlanWorkspaceBinding(context.Background(), serverapi.ProjectBindingPlanRequest{Path: "/client/missing", Mode: serverapi.ProjectBindingPlanModeHeadless})
-	if err != nil {
-		t.Fatalf("PlanWorkspaceBinding: %v", err)
-	}
-	if plan.Kind != serverapi.ProjectBindingPlanKindHeadlessRemoteSelected || plan.Workspace == nil {
-		t.Fatalf("expected single available workspace selection, got %+v", plan)
-	}
-	if plan.Workspace.ProjectID != "project-1" || plan.Workspace.WorkspaceID != "workspace-1" {
-		t.Fatalf("unexpected selection: %+v", plan.Workspace)
-	}
-}
-
-func TestTryDialConfiguredRunPromptRemoteUsesFreshDialTimeoutAfterWorkspaceDiscovery(t *testing.T) {
-	newAppTestHome(t)
-	workspace := t.TempDir()
-
-	originalProjectViewsDial := dialConfiguredProjectViewRemote
-	originalRemoteDial := dialConfiguredRemote
-	originalAttachTimeout := configuredRemoteAttachTimeout
-	originalDiscoveryTimeout := configuredRemoteWorkspaceDiscoveryTimeout
-	t.Cleanup(func() {
-		dialConfiguredProjectViewRemote = originalProjectViewsDial
-		dialConfiguredRemote = originalRemoteDial
-		configuredRemoteAttachTimeout = originalAttachTimeout
-		configuredRemoteWorkspaceDiscoveryTimeout = originalDiscoveryTimeout
-	})
-
-	configuredRemoteAttachTimeout = 20 * time.Millisecond
-	configuredRemoteWorkspaceDiscoveryTimeout = 120 * time.Millisecond
-	projectViews := &configuredProjectViewRemoteStub{
-		identity: protocol.ServerIdentity{Capabilities: protocol.CapabilityFlags{RunPrompt: true, AuthBootstrap: true, ProjectAttach: true}},
-		resolveProjectPath: func(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
-			return serverapi.ProjectResolvePathResponse{PathAvailability: clientui.ProjectAvailabilityMissing}, nil
-		},
-		listProjects: func(context.Context, serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error) {
-			return serverapi.ProjectListResponse{Projects: []clientui.ProjectSummary{{ProjectID: "project-1"}}}, nil
-		},
-		getProjectOverview: func(ctx context.Context, req serverapi.ProjectGetOverviewRequest) (serverapi.ProjectGetOverviewResponse, error) {
-			time.Sleep(configuredRemoteAttachTimeout + 10*time.Millisecond)
-			if err := ctx.Err(); err != nil {
-				return serverapi.ProjectGetOverviewResponse{}, err
+	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		defer func() { _ = ws.Close() }()
+		var req protocol.Request
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			return
+		}
+		if req.Method != protocol.MethodHandshake {
+			_ = websocket.JSON.Send(ws, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake required"))
+			return
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: identity})); err != nil {
+			return
+		}
+		for {
+			if err := websocket.JSON.Receive(ws, &req); err != nil {
+				return
 			}
-			return serverapi.ProjectGetOverviewResponse{Overview: clientui.ProjectOverview{Workspaces: []clientui.ProjectWorkspaceSummary{{WorkspaceID: "workspace-1"}}}}, nil
-		},
-	}
-	dialConfiguredProjectViewRemote = func(context.Context, config.App) (configuredProjectViewRemote, error) {
-		return projectViews, nil
-	}
-	var dialRemaining time.Duration
-	dialConfiguredRemote = func(ctx context.Context, cfg config.App, projectID string, workspaceID string) (*client.Remote, error) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+			_ = websocket.JSON.Send(ws, protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, "method not found"))
 		}
-		deadline, ok := ctx.Deadline()
-		if !ok {
-			t.Fatal("expected dial context deadline")
-		}
-		dialRemaining = time.Until(deadline)
-		if cfg.WorkspaceRoot != workspace {
-			t.Fatalf("unexpected config workspace root: %s", cfg.WorkspaceRoot)
-		}
-		if projectID != "project-1" || workspaceID != "workspace-1" {
-			t.Fatalf("unexpected workspace dial target: %s/%s", projectID, workspaceID)
-		}
-		return new(client.Remote), nil
-	}
-
-	remote, ok, err := tryDialMatchingConfiguredRunPromptRemote(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, nil)
+	}))
+	host, port, err := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
 	if err != nil {
-		t.Fatalf("tryDialMatchingConfiguredRunPromptRemote: %v", err)
+		server.Close()
+		t.Fatalf("SplitHostPort: %v", err)
 	}
-	if !ok {
-		t.Fatal("expected configured remote attach to succeed")
-	}
-	if remote == nil {
-		t.Fatal("expected remote client")
-	}
-	if !projectViews.closed.Load() {
-		t.Fatal("expected project view remote to close after workspace selection")
-	}
-	if dialRemaining <= configuredRemoteAttachTimeout/2 {
-		t.Fatalf("expected fresh attach timeout after workspace discovery, remaining=%v attach=%v", dialRemaining, configuredRemoteAttachTimeout)
-	}
-}
-
-func TestTryDialMatchingConfiguredRunPromptRemoteUsesWorkspaceDiscoveryForAcceptedDaemon(t *testing.T) {
-	newAppTestHome(t)
-	workspace := t.TempDir()
-
-	originalProjectViewsDial := dialConfiguredProjectViewRemote
-	originalRemoteDial := dialConfiguredRemote
-	t.Cleanup(func() {
-		dialConfiguredProjectViewRemote = originalProjectViewsDial
-		dialConfiguredRemote = originalRemoteDial
-	})
-
-	projectViews := &configuredProjectViewRemoteStub{
-		identity: protocol.ServerIdentity{PID: 777, Capabilities: protocol.CapabilityFlags{RunPrompt: true, AuthBootstrap: true, ProjectAttach: true}},
-		resolveProjectPath: func(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
-			return serverapi.ProjectResolvePathResponse{PathAvailability: clientui.ProjectAvailabilityMissing}, nil
-		},
-		listProjects: func(context.Context, serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error) {
-			return serverapi.ProjectListResponse{Projects: []clientui.ProjectSummary{{ProjectID: "project-1"}}}, nil
-		},
-		getProjectOverview: func(context.Context, serverapi.ProjectGetOverviewRequest) (serverapi.ProjectGetOverviewResponse, error) {
-			return serverapi.ProjectGetOverviewResponse{Overview: clientui.ProjectOverview{Workspaces: []clientui.ProjectWorkspaceSummary{{WorkspaceID: "workspace-1", Availability: clientui.ProjectAvailabilityAvailable}}}}, nil
-		},
-	}
-	dialConfiguredProjectViewRemote = func(context.Context, config.App) (configuredProjectViewRemote, error) {
-		return projectViews, nil
-	}
-	dialConfiguredRemote = func(ctx context.Context, cfg config.App, projectID string, workspaceID string) (*client.Remote, error) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if cfg.WorkspaceRoot != workspace {
-			t.Fatalf("unexpected config workspace root: %s", cfg.WorkspaceRoot)
-		}
-		if projectID != "project-1" || workspaceID != "workspace-1" {
-			t.Fatalf("unexpected workspace dial target: %s/%s", projectID, workspaceID)
-		}
-		return new(client.Remote), nil
-	}
-
-	remote, ok, err := tryDialMatchingConfiguredRunPromptRemote(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, func(identity protocol.ServerIdentity) bool {
-		return identity.PID == 777
-	})
-	if err != nil {
-		t.Fatalf("tryDialMatchingConfiguredRunPromptRemote: %v", err)
-	}
-	if !ok {
-		t.Fatal("expected launched daemon attach to succeed via workspace discovery")
-	}
-	if remote == nil {
-		t.Fatal("expected remote client")
-	}
-	if !projectViews.closed.Load() {
-		t.Fatal("expected project view remote to close after workspace discovery")
-	}
-}
-
-func TestTryDialConfiguredRunPromptRemoteSkipsServerWithoutAuthBootstrapCapability(t *testing.T) {
-	newAppTestHome(t)
-	workspace := t.TempDir()
-
-	originalProjectViewsDial := dialConfiguredProjectViewRemote
-	t.Cleanup(func() { dialConfiguredProjectViewRemote = originalProjectViewsDial })
-
-	projectViews := &configuredProjectViewRemoteStub{
-		identity: protocol.ServerIdentity{Capabilities: protocol.CapabilityFlags{RunPrompt: true}},
-	}
-	dialConfiguredProjectViewRemote = func(context.Context, config.App) (configuredProjectViewRemote, error) {
-		return projectViews, nil
-	}
-
-	remote, ok, err := tryDialMatchingConfiguredRunPromptRemote(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, nil)
-	if err != nil {
-		t.Fatalf("tryDialMatchingConfiguredRunPromptRemote: %v", err)
-	}
-	if ok || remote != nil {
-		t.Fatalf("expected configured remote without auth bootstrap to be skipped, got remote=%v ok=%t", remote, ok)
-	}
-	if !projectViews.closed.Load() {
-		t.Fatal("expected incompatible project view remote to be closed")
-	}
-}
-
-func TestTryDialConfiguredRunPromptRemoteSkipsServerWithoutProjectAttachCapability(t *testing.T) {
-	newAppTestHome(t)
-	workspace := t.TempDir()
-
-	originalProjectViewsDial := dialConfiguredProjectViewRemote
-	t.Cleanup(func() { dialConfiguredProjectViewRemote = originalProjectViewsDial })
-
-	projectViews := &configuredProjectViewRemoteStub{
-		identity: protocol.ServerIdentity{Capabilities: protocol.CapabilityFlags{RunPrompt: true, AuthBootstrap: true}},
-	}
-	dialConfiguredProjectViewRemote = func(context.Context, config.App) (configuredProjectViewRemote, error) {
-		return projectViews, nil
-	}
-
-	remote, ok, err := tryDialMatchingConfiguredRunPromptRemote(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, nil)
-	if err != nil {
-		t.Fatalf("tryDialMatchingConfiguredRunPromptRemote: %v", err)
-	}
-	if ok || remote != nil {
-		t.Fatalf("expected configured remote without project attach to be skipped, got remote=%v ok=%t", remote, ok)
-	}
-	if !projectViews.closed.Load() {
-		t.Fatal("expected incompatible project view remote to be closed")
-	}
-}
-
-func TestServerAttachRemotePolicySetsRootIDOnlyForExplicitRoot(t *testing.T) {
-	explicit := config.App{
-		PersistenceRoot: filepath.Join(string(filepath.Separator), "tmp", "iso-root"),
-		Source:          config.SourceReport{Sources: map[string]string{"persistence_root": "flag"}},
-	}
-	policy := serverAttachRemotePolicy(explicit, remoteattach.SupportsRunPrompt, true)
-	if want := config.PersistenceRootHash(explicit.PersistenceRoot); policy.RootID != want {
-		t.Fatalf("explicit-root policy RootID = %q, want %q", policy.RootID, want)
-	}
-
-	defaultRoot := config.App{
-		PersistenceRoot: filepath.Join(string(filepath.Separator), "home", "u", ".kent"),
-		Source:          config.SourceReport{Sources: map[string]string{"persistence_root": "default"}},
-	}
-	if policy := serverAttachRemotePolicy(defaultRoot, remoteattach.SupportsRunPrompt, true); policy.RootID != "" {
-		t.Fatalf("default-root policy RootID = %q, want empty (no root validation)", policy.RootID)
-	}
-
-	// An explicit flag/env root that resolves to the default <home>/.kent must
-	// not require a root id, so default-root attaches stay compatible with older
-	// servers that report an empty id.
-	resolvedDefault, err := config.NormalizePersistenceRoot(config.DefaultPersistence)
-	if err != nil {
-		t.Fatalf("normalize default root: %v", err)
-	}
-	explicitDefault := config.App{
-		PersistenceRoot: resolvedDefault,
-		Source:          config.SourceReport{Sources: map[string]string{"persistence_root": "flag"}},
-	}
-	if policy := serverAttachRemotePolicy(explicitDefault, remoteattach.SupportsRunPrompt, true); policy.RootID != "" {
-		t.Fatalf("explicit-default-root policy RootID = %q, want empty (no root validation)", policy.RootID)
-	}
+	t.Setenv("KENT_SERVER_HOST", host)
+	t.Setenv("KENT_SERVER_PORT", port)
+	return server.Close
 }

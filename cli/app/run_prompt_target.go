@@ -132,14 +132,6 @@ var errRunServerIncompatible = errors.New("a Kent server is running on the confi
 // endpoint.
 var errRunServerRootMismatch = errors.New("a Kent server is running on the configured endpoint but serves a different persistence root than the selected one. Stop or reconfigure that server, or point `--persistence-root`/the configured endpoint at the matching instance, instead of starting another server which would conflict on the same address")
 
-func tryDialMatchingConfiguredRunPromptRemote(ctx context.Context, opts Options, accept func(protocol.ServerIdentity) bool) (*client.Remote, bool, error) {
-	workspaceConfig, err := resolveRunPromptWorkspaceConfig(opts)
-	if err != nil {
-		return nil, false, err
-	}
-	return serverattach.DialRemote(ctx, serverattach.ModeHeadless, serverAttachRemotePolicy(workspaceConfig.Config, remoteattach.SupportsRunPrompt, true), accept)
-}
-
 func tryDialMatchingConfiguredRemoteWithRequirement(ctx context.Context, opts Options, supports func(protocol.CapabilityFlags) bool, accept func(protocol.ServerIdentity) bool, requireRegistered bool) (*client.Remote, bool) {
 	cfg, err := loadRemoteAttachConfig(opts)
 	if err != nil {

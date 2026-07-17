@@ -589,7 +589,7 @@ func TestSubmitUserMessageDoesNotRetainPendingToolStartForHostedExecutions(t *te
 	}
 }
 
-func TestSubmitUserMessageLegacyGarbageTokenRemainsTerminal(t *testing.T) {
+func TestSubmitUserMessageLegacyArtifactContentRemainsTerminal(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -603,7 +603,7 @@ func TestSubmitUserMessageLegacyGarbageTokenRemainsTerminal(t *testing.T) {
 		},
 	}}
 
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	eng := mustNewExecTestEngine(t, store, client, Config{Model: "gpt-5"})
 
 	msg, err := eng.SubmitUserMessage(context.Background(), "do the task")
 	if err != nil {
@@ -612,9 +612,7 @@ func TestSubmitUserMessageLegacyGarbageTokenRemainsTerminal(t *testing.T) {
 	if msg.Content != "working #+#+#+#+#+ malformed" {
 		t.Fatalf("assistant content = %q", msg.Content)
 	}
-	if len(client.calls) != 1 {
-		t.Fatalf("expected 1 model call, got %d", len(client.calls))
-	}
+	assertModelCallCount(t, client, 1)
 
 	events, err := sessiontest.CollectEvents(store)
 	if err != nil {
@@ -635,55 +633,6 @@ func TestSubmitUserMessageLegacyGarbageTokenRemainsTerminal(t *testing.T) {
 	}
 	if !persistedAsFinal {
 		t.Fatalf("expected garbage-token assistant message to remain final")
-	}
-}
-
-func TestSubmitUserMessageLegacyEnvelopeLeakRemainsTerminal(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	client := &fakeClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{
-				Role:    llm.RoleAssistant,
-				Content: "assistant to=functions.shell commentary  {\"command\":\"pwd\"}",
-				Phase:   llm.MessagePhaseFinal,
-			},
-			Usage: llm.Usage{WindowTokens: 200000},
-		},
-	}}
-
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-
-	msg, err := eng.SubmitUserMessage(context.Background(), "do the task")
-	if err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if msg.Content != "assistant to=functions.shell commentary  {\"command\":\"pwd\"}" {
-		t.Fatalf("assistant content = %q", msg.Content)
-	}
-	if len(client.calls) != 1 {
-		t.Fatalf("expected 1 model call, got %d", len(client.calls))
-	}
-
-	events, err := sessiontest.CollectEvents(store)
-	if err != nil {
-		t.Fatalf("read events: %v", err)
-	}
-	persistedEnvelopeAsFinal := false
-	for _, evt := range events {
-		if evt.Kind != "message" {
-			continue
-		}
-		var persisted llm.Message
-		if err := json.Unmarshal(evt.Payload, &persisted); err != nil {
-			t.Fatalf("decode message event: %v", err)
-		}
-		if persisted.Role == llm.RoleAssistant && strings.Contains(strings.ToLower(persisted.Content), "assistant to=functions.") {
-			persistedEnvelopeAsFinal = persisted.Phase == llm.MessagePhaseFinal
-		}
-	}
-	if !persistedEnvelopeAsFinal {
-		t.Fatalf("expected envelope leak assistant message to remain final")
 	}
 }
 

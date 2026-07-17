@@ -4,24 +4,19 @@ import (
 	"context"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/core"
-	"core/server/llm"
 	"core/server/metadata"
 	"core/server/session"
-	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	remoteclient "core/shared/client"
 	"core/shared/config"
 	"core/shared/protocol"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
-	"core/shared/toolspec"
-	"encoding/json"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -301,61 +296,6 @@ func runGatewayGit(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
 	}
 	return string(output)
-}
-
-type gatewayTestLLMClient struct {
-	response llm.Response
-}
-
-func (c gatewayTestLLMClient) Generate(context.Context, llm.Request) (llm.Response, error) {
-	return c.response, nil
-}
-
-type gatewayTestStreamingClient struct {
-	mu    sync.Mutex
-	calls int
-}
-
-func (c *gatewayTestStreamingClient) Generate(context.Context, llm.Request) (llm.Response, error) {
-	return llm.Response{}, nil
-}
-
-func (c *gatewayTestStreamingClient) GenerateStreamWithEvents(_ context.Context, _ llm.Request, callbacks llm.StreamCallbacks) (llm.Response, error) {
-	c.mu.Lock()
-	call := c.calls
-	c.calls++
-	c.mu.Unlock()
-	if call == 0 {
-		if callbacks.OnAssistantDelta != nil {
-			callbacks.OnAssistantDelta(llm.AssistantDelta{Text: "inspecting", Phase: llm.MessagePhaseCommentary})
-		}
-		return llm.Response{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "Inspecting now", Phase: llm.MessagePhaseCommentary},
-			ToolCalls: []llm.ToolCall{{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		}, nil
-	}
-	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}, nil
-}
-
-func (c *gatewayTestStreamingClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
-	return llm.ProviderCapabilities{
-		ProviderID:                    "openai",
-		SupportsResponsesAPI:          true,
-		SupportsResponsesCompact:      true,
-		SupportsReasoningEncrypted:    true,
-		SupportsServerSideContextEdit: true,
-		IsOpenAIFirstParty:            true,
-	}, nil
-}
-
-type gatewayTestShellTool struct{}
-
-func (gatewayTestShellTool) Call(_ context.Context, call tools.Call) (tools.Result, error) {
-	return tools.Result{CallID: call.ID, Name: call.Name, Output: json.RawMessage(`{"output":"/tmp\n"}`)}, nil
 }
 
 func TestGatewayProcessOutputSubscriptionStreamsOutputAndCompletion(t *testing.T) {

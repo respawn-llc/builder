@@ -221,15 +221,6 @@ func (r *RuntimeRegistry) clearStartLocked(sessionID string, startID uint64) {
 	r.runStateCond.Broadcast()
 }
 
-func (r *RuntimeRegistry) hasExclusiveStartLocked(sessionID string) bool {
-	for _, reservation := range r.starts[sessionID] {
-		if reservation.exclusive {
-			return true
-		}
-	}
-	return false
-}
-
 type GuardedPromptResponder interface {
 	SubmitPromptResponse(resp askquestion.AskQuestionResponse, err error) error
 }
@@ -275,13 +266,6 @@ func (r *RuntimeRegistry) WithTranscriptContractViolationPanic(enabled bool) *Ru
 	}
 	transcriptContractViolationsPanic = enabled
 	return r
-}
-
-func (r *RuntimeRegistry) nextReadModelVersion(sessionID string) clientui.ReadModelVersion {
-	if r == nil || r.readModels == nil {
-		return runtimeactivity.NextReadModelVersion(sessionID)
-	}
-	return r.readModels.Next(sessionID)
 }
 
 func (r *RuntimeRegistry) closeEntry(ctx context.Context, sessionID string, engine *runtime.Engine, drain func(context.Context) error) (bool, error) {
@@ -962,17 +946,6 @@ func (r *RuntimeRegistry) notifyInterestChanged(sessionID string, reason Runtime
 	if observer != nil {
 		observer(id, reason)
 	}
-}
-
-func (r *RuntimeRegistry) updateAggregateRuntimeActivity(sessionID string, activeForControl bool) {
-	if r == nil {
-		return
-	}
-	id := strings.TrimSpace(sessionID)
-	if id == "" {
-		return
-	}
-	r.updateAggregateRuntimeActivityState(id, activeForControl)
 }
 
 func (r *RuntimeRegistry) updateAggregateRuntimeActivityForEntry(sessionID string, entry *runtimeEntry, activeForControl bool) bool {

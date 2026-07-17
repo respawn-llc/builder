@@ -1,194 +1,183 @@
 package workflowstore
 
 import (
+	"context"
 	"testing"
 
 	"core/server/workflow"
 )
 
-func TestWorkflowGraphSaveAppliesExpectedRevisionAndRemovalConfirmation(t *testing.T) {
+type graphSaveWorkflowFactory func(*testing.T, context.Context, *Store) workflow.WorkflowID
+
+type graphSaveFixture struct {
+	ctx        context.Context
+	store      *Store
+	workflowID workflow.WorkflowID
+	def        workflow.Definition
+	record     WorkflowRecord
+}
+
+func newGraphSaveFixture(t *testing.T, create graphSaveWorkflowFactory) graphSaveFixture {
+	t.Helper()
 	ctx, store, _ := newTestStoreContext(t)
-	workflowID := createValidWorkflow(t, ctx, store)
+	workflowID := create(t, ctx, store)
 	def, record, err := store.GetDefinition(ctx, workflowID)
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
+	return graphSaveFixture{ctx: ctx, store: store, workflowID: workflowID, def: def, record: record}
+}
 
-	unconfirmed := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
-	unconfirmed.Edges = removeWorkflowGraphSaveEdge(unconfirmed.Edges, workflow.EdgeID("edge-done-"+string(workflowID)))
-	unconfirmed.TransitionGroups = removeWorkflowGraphSaveTransitionGroupByID(unconfirmed.TransitionGroups, workflow.TransitionGroupID("group-done-"+string(workflowID)))
-	blocked, err := store.SaveWorkflowGraph(ctx, unconfirmed)
+func (f graphSaveFixture) request(version int64, confirmed bool, def workflow.Definition) WorkflowGraphSaveRequest {
+	return workflowGraphSaveRequestFromDefinition(f.workflowID, version, confirmed, def)
+}
+
+func (f graphSaveFixture) save(t *testing.T, req WorkflowGraphSaveRequest) WorkflowGraphSaveResult {
+	t.Helper()
+	result, err := f.store.SaveWorkflowGraph(f.ctx, req)
 	if err != nil {
-		t.Fatalf("SaveWorkflowGraph unconfirmed: %v", err)
+		t.Fatalf("SaveWorkflowGraph: %v", err)
 	}
+	return result
+}
+
+func (f graphSaveFixture) preview(t *testing.T, req WorkflowGraphSaveRequest) WorkflowGraphSaveResult {
+	t.Helper()
+	result, err := f.store.PreviewWorkflowGraphSave(f.ctx, req)
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
+	}
+	return result
+}
+
+func (f graphSaveFixture) current(t *testing.T) (workflow.Definition, WorkflowRecord) {
+	t.Helper()
+	def, record, err := f.store.GetDefinition(f.ctx, f.workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	return def, record
+}
+
+func TestWorkflowGraphSaveAppliesExpectedRevisionAndRemovalConfirmation(t *testing.T) {
+	f := newGraphSaveFixture(t, createValidWorkflow)
+	unconfirmed := f.request(f.record.Version, false, f.def)
+	unconfirmed.Edges = removeWorkflowGraphSaveEdge(unconfirmed.Edges, workflow.EdgeID("edge-done-"+string(f.workflowID)))
+	unconfirmed.TransitionGroups = removeWorkflowGraphSaveTransitionGroupByID(unconfirmed.TransitionGroups, workflow.TransitionGroupID("group-done-"+string(f.workflowID)))
+	blocked := f.save(t, unconfirmed)
 	if blocked.Saved || workflowGraphSaveBlockerCount(blocked.Blockers, "confirmation_required") != 2 {
 		t.Fatalf("unconfirmed graph save = %+v, want confirmation blocker for one removed edge and transition group", blocked)
 	}
-	if _, unchanged, err := store.GetDefinition(ctx, workflowID); err != nil {
-		t.Fatalf("GetDefinition after unconfirmed save: %v", err)
-	} else if unchanged.Version != record.Version {
-		t.Fatalf("workflow version after unconfirmed save = %d, want %d", unchanged.Version, record.Version)
+	_, unchanged := f.current(t)
+	if unchanged.Version != f.record.Version {
+		t.Fatalf("workflow version after unconfirmed save = %d, want %d", unchanged.Version, f.record.Version)
 	}
 
 	confirmed := unconfirmed
-	confirmed.Confirmed = true
 	confirmed = confirmWorkflowGraphSaveRequest(confirmed, blocked.Impact)
-	saved, err := store.SaveWorkflowGraph(ctx, confirmed)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph confirmed: %v", err)
-	}
-	if !saved.Saved || len(saved.Blockers) != 0 || saved.Version != record.Version+1 {
+	saved := f.save(t, confirmed)
+	if !saved.Saved || len(saved.Blockers) != 0 || saved.Version != f.record.Version+1 {
 		t.Fatalf("confirmed graph save = %+v, want single revision bump", saved)
 	}
-	updatedDef, updatedRecord, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition after confirmed save: %v", err)
-	}
-	if updatedRecord.Version != record.Version+1 || len(updatedDef.Edges) != len(def.Edges)-1 {
-		t.Fatalf("updated graph = revision %d edges %d, want revision %d edges %d", updatedRecord.Version, len(updatedDef.Edges), record.Version+1, len(def.Edges)-1)
+	updatedDef, updatedRecord := f.current(t)
+	if updatedRecord.Version != f.record.Version+1 || len(updatedDef.Edges) != len(f.def.Edges)-1 {
+		t.Fatalf("updated graph = revision %d edges %d, want revision %d edges %d", updatedRecord.Version, len(updatedDef.Edges), f.record.Version+1, len(f.def.Edges)-1)
 	}
 
-	stale := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, updatedDef)
-	staleResult, err := store.SaveWorkflowGraph(ctx, stale)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph stale no-op: %v", err)
-	}
+	stale := f.request(f.record.Version, true, updatedDef)
+	staleResult := f.save(t, stale)
 	if !staleResult.Saved || len(staleResult.Blockers) != 0 || staleResult.Version != updatedRecord.Version {
 		t.Fatalf("stale no-op save = %+v, want successful no-op without workflow version check", staleResult)
 	}
 }
 
 func TestWorkflowGraphSaveSupportsMetadataAndNoopRevisions(t *testing.T) {
-	ctx, store, _ := newTestStoreContext(t)
-	workflowID := createValidWorkflow(t, ctx, store)
-	def, record, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-
-	metadataOnly := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	f := newGraphSaveFixture(t, createValidWorkflow)
+	metadataOnly := f.request(f.record.Version, false, f.def)
 	metadataOnly.Metadata = &WorkflowGraphSaveMetadata{Name: "Renamed workflow", Description: "Updated description"}
-	metadataSaved, err := store.SaveWorkflowGraph(ctx, metadataOnly)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph metadata-only: %v", err)
-	}
-	if !metadataSaved.Saved || metadataSaved.Version != record.Version+1 {
+	metadataSaved := f.save(t, metadataOnly)
+	if !metadataSaved.Saved || metadataSaved.Version != f.record.Version+1 {
 		t.Fatalf("metadata-only save = %+v, want version bump", metadataSaved)
 	}
-	_, afterMetadata, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition after metadata-only: %v", err)
-	}
-	if afterMetadata.Name != "Renamed workflow" || afterMetadata.Description != "Updated description" || afterMetadata.Version != record.Version+1 {
+	_, afterMetadata := f.current(t)
+	if afterMetadata.Name != "Renamed workflow" || afterMetadata.Description != "Updated description" || afterMetadata.Version != f.record.Version+1 {
 		t.Fatalf("record after metadata-only = %+v, want metadata persisted with version bump", afterMetadata)
 	}
 
-	noop := workflowGraphSaveRequestFromDefinition(workflowID, afterMetadata.Version, false, def)
+	noop := f.request(afterMetadata.Version, false, f.def)
 	noop.Metadata = &WorkflowGraphSaveMetadata{Name: afterMetadata.Name, Description: afterMetadata.Description}
-	noopSaved, err := store.SaveWorkflowGraph(ctx, noop)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph noop: %v", err)
-	}
+	noopSaved := f.save(t, noop)
 	if !noopSaved.Saved || noopSaved.Changed || noopSaved.Version != afterMetadata.Version {
 		t.Fatalf("noop save = %+v, want no revision bump", noopSaved)
 	}
 }
 
 func TestWorkflowGraphSaveRoundTripsExecutionTargetPolicy(t *testing.T) {
-	ctx, store, _ := newTestStoreContext(t)
-	workflowID := createValidWorkflow(t, ctx, store)
-	def, record, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	if record.ExecutionTargetPolicy.Mode != workflow.ExecutionTargetModeAskOnFirstExecution || def.ExecutionTargetPolicy.Mode != workflow.ExecutionTargetModeAskOnFirstExecution {
-		t.Fatalf("created workflow policy = record=%+v definition=%+v, want ask_on_first_execution", record.ExecutionTargetPolicy, def.ExecutionTargetPolicy)
+	f := newGraphSaveFixture(t, createValidWorkflow)
+	if f.record.ExecutionTargetPolicy.Mode != workflow.ExecutionTargetModeAskOnFirstExecution || f.def.ExecutionTargetPolicy.Mode != workflow.ExecutionTargetModeAskOnFirstExecution {
+		t.Fatalf("created workflow policy = record=%+v definition=%+v, want ask_on_first_execution", f.record.ExecutionTargetPolicy, f.def.ExecutionTargetPolicy)
 	}
 
 	customRef := "refs/tags/v1"
-	custom := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	custom := f.request(f.record.Version, false, f.def)
 	custom.Metadata = &WorkflowGraphSaveMetadata{
-		Name:                  record.Name,
-		Description:           record.Description,
+		Name:                  f.record.Name,
+		Description:           f.record.Description,
 		ExecutionTargetPolicy: &workflow.ExecutionTargetPolicy{Mode: workflow.ExecutionTargetModeCustomRef, CustomRef: &customRef},
 	}
-	customPreview, err := store.PreviewWorkflowGraphSave(ctx, custom)
-	if err != nil {
-		t.Fatalf("PreviewWorkflowGraphSave custom: %v", err)
-	}
-	if !customPreview.CanSave || customPreview.Version != record.Version {
+	customPreview := f.preview(t, custom)
+	if !customPreview.CanSave || customPreview.Version != f.record.Version {
 		t.Fatalf("custom policy preview = %+v, want saveable unchanged revision", customPreview)
 	}
-	customSaved, err := store.SaveWorkflowGraph(ctx, custom)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph custom: %v", err)
-	}
-	if !customSaved.Saved || !customSaved.Changed || customSaved.Version != record.Version+1 {
+	customSaved := f.save(t, custom)
+	if !customSaved.Saved || !customSaved.Changed || customSaved.Version != f.record.Version+1 {
 		t.Fatalf("custom policy save = %+v, want one metadata revision", customSaved)
 	}
-	updated, updatedRecord, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition custom: %v", err)
-	}
+	updated, updatedRecord := f.current(t)
 	if updated.ExecutionTargetPolicy.Mode != workflow.ExecutionTargetModeCustomRef || updated.ExecutionTargetPolicy.CustomRef == nil || *updated.ExecutionTargetPolicy.CustomRef != customRef ||
 		updatedRecord.ExecutionTargetPolicy != updated.ExecutionTargetPolicy {
 		t.Fatalf("custom policy did not round-trip: definition=%+v record=%+v", updated.ExecutionTargetPolicy, updatedRecord.ExecutionTargetPolicy)
 	}
 
-	combined := workflowGraphSaveRequestFromDefinition(workflowID, updatedRecord.Version, false, updated)
-	combined.Nodes = renameWorkflowGraphSaveNode(combined.Nodes, workflow.NodeID("node-agent-"+string(workflowID)), "Renamed agent")
+	combined := f.request(updatedRecord.Version, false, updated)
+	combined.Nodes = renameWorkflowGraphSaveNode(combined.Nodes, workflow.NodeID("node-agent-"+string(f.workflowID)), "Renamed agent")
 	combined.Metadata = &WorkflowGraphSaveMetadata{
 		Name:                  updatedRecord.Name,
 		Description:           updatedRecord.Description,
 		ExecutionTargetPolicy: &workflow.ExecutionTargetPolicy{Mode: workflow.ExecutionTargetModeHead},
 	}
-	combinedSaved, err := store.SaveWorkflowGraph(ctx, combined)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph combined policy and graph: %v", err)
-	}
+	combinedSaved := f.save(t, combined)
 	if !combinedSaved.Saved || combinedSaved.Version != updatedRecord.Version+1 {
 		t.Fatalf("combined policy/graph save = %+v, want exactly one version increment", combinedSaved)
 	}
-	afterCombined, afterCombinedRecord, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition combined: %v", err)
-	}
+	afterCombined, afterCombinedRecord := f.current(t)
 	if afterCombined.ExecutionTargetPolicy.Mode != workflow.ExecutionTargetModeHead || afterCombined.ExecutionTargetPolicy.CustomRef != nil ||
 		afterCombinedRecord.ExecutionTargetPolicy != afterCombined.ExecutionTargetPolicy {
 		t.Fatalf("non-custom policy should clear custom ref: definition=%+v record=%+v", afterCombined.ExecutionTargetPolicy, afterCombinedRecord.ExecutionTargetPolicy)
 	}
 
-	noop := workflowGraphSaveRequestFromDefinition(workflowID, afterCombinedRecord.Version, false, afterCombined)
+	noop := f.request(afterCombinedRecord.Version, false, afterCombined)
 	noop.Metadata = &WorkflowGraphSaveMetadata{
 		Name:                  afterCombinedRecord.Name,
 		Description:           afterCombinedRecord.Description,
 		ExecutionTargetPolicy: &afterCombinedRecord.ExecutionTargetPolicy,
 	}
-	noopSaved, err := store.SaveWorkflowGraph(ctx, noop)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph policy noop: %v", err)
-	}
+	noopSaved := f.save(t, noop)
 	if !noopSaved.Saved || noopSaved.Changed || noopSaved.Version != afterCombinedRecord.Version {
 		t.Fatalf("policy noop = %+v, want unchanged workflow", noopSaved)
 	}
 
-	incomplete := workflowGraphSaveRequestFromDefinition(workflowID, afterCombinedRecord.Version, false, afterCombined)
+	incomplete := f.request(afterCombinedRecord.Version, false, afterCombined)
 	incomplete.Metadata = &WorkflowGraphSaveMetadata{
 		Name:                  afterCombinedRecord.Name,
 		Description:           afterCombinedRecord.Description,
 		ExecutionTargetPolicy: &workflow.ExecutionTargetPolicy{Mode: workflow.ExecutionTargetModeCustomRef},
 	}
-	incompletePreview, err := store.PreviewWorkflowGraphSave(ctx, incomplete)
-	if err != nil {
-		t.Fatalf("PreviewWorkflowGraphSave incomplete custom ref: %v", err)
-	}
+	incompletePreview := f.preview(t, incomplete)
 	if !incompletePreview.CanSave || !hasWorkflowValidationCode(incompletePreview.ValidationErrors, workflow.CodeExecutionTargetCustomRefRequired) {
 		t.Fatalf("incomplete custom ref preview = %+v, want saveable semantic validation", incompletePreview)
 	}
-	incompleteSaved, err := store.SaveWorkflowGraph(ctx, incomplete)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph incomplete custom ref: %v", err)
-	}
+	incompleteSaved := f.save(t, incomplete)
 	if !incompleteSaved.Saved || incompleteSaved.Version != afterCombinedRecord.Version+1 {
 		t.Fatalf("incomplete custom ref save = %+v, want one metadata revision", incompleteSaved)
 	}
@@ -204,33 +193,24 @@ func hasWorkflowValidationCode(errors []workflow.ValidationError, want workflow.
 }
 
 func TestWorkflowGraphSavePersistsScriptPathOnlyEdit(t *testing.T) {
-	ctx, store, _ := newTestStoreContext(t)
-	workflowID := createScriptStartWorkflow(t, ctx, store, "scripts/old")
-	scriptID := workflow.NodeID("node-script-" + string(workflowID))
-	def, record, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	f := newGraphSaveFixture(t, func(t *testing.T, ctx context.Context, store *Store) workflow.WorkflowID {
+		return createScriptStartWorkflow(t, ctx, store, "scripts/old")
+	})
+	scriptID := workflow.NodeID("node-script-" + string(f.workflowID))
+	req := f.request(f.record.Version, false, f.def)
 	for index := range req.Nodes {
 		if req.Nodes[index].ID == scriptID {
 			req.Nodes[index].ScriptPath = "scripts/new"
 		}
 	}
 
-	saved, err := store.SaveWorkflowGraph(ctx, req)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph script path: %v", err)
-	}
-	if !saved.Saved || !saved.Changed || saved.Version != record.Version+1 {
+	saved := f.save(t, req)
+	if !saved.Saved || !saved.Changed || saved.Version != f.record.Version+1 {
 		t.Fatalf("save result = %+v, want script-path graph change with version bump", saved)
 	}
-	updatedDef, updatedRecord, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition updated script: %v", err)
-	}
-	if updatedRecord.Version != record.Version+1 {
-		t.Fatalf("updated version = %d, want %d", updatedRecord.Version, record.Version+1)
+	updatedDef, updatedRecord := f.current(t)
+	if updatedRecord.Version != f.record.Version+1 {
+		t.Fatalf("updated version = %d, want %d", updatedRecord.Version, f.record.Version+1)
 	}
 	path, ok := workflow.NodeScriptPath(nodeByID(t, updatedDef, scriptID)).Value()
 	if !ok || path != "scripts/new" {
@@ -239,14 +219,8 @@ func TestWorkflowGraphSavePersistsScriptPathOnlyEdit(t *testing.T) {
 }
 
 func TestWorkflowGraphSaveRoundTripsTransitionInvocationContract(t *testing.T) {
-	ctx, store, _ := newTestStoreContext(t)
-	workflowID := createValidWorkflow(t, ctx, store)
-	def, record, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-
-	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	f := newGraphSaveFixture(t, createValidWorkflow)
+	req := f.request(f.record.Version, false, f.def)
 	for i := range req.Edges {
 		switch req.Edges[i].Key {
 		case "start":
@@ -255,18 +229,12 @@ func TestWorkflowGraphSaveRoundTripsTransitionInvocationContract(t *testing.T) {
 			req.Edges[i].Parameters = []workflow.Parameter{{Key: "summary", Description: "Summary for terminal history."}}
 		}
 	}
-	saved, err := store.SaveWorkflowGraph(ctx, req)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph: %v", err)
-	}
-	if !saved.Saved || !saved.Changed || saved.Version != record.Version+1 {
+	saved := f.save(t, req)
+	if !saved.Saved || !saved.Changed || saved.Version != f.record.Version+1 {
 		t.Fatalf("save result = %+v, want graph change with version bump", saved)
 	}
 
-	updated, updatedRecord, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition updated: %v", err)
-	}
+	updated, updatedRecord := f.current(t)
 	startEdge := edgeByKey(t, updated, "start")
 	if startEdge.PromptTemplate != "Start from {{.TaskTitle}}." {
 		t.Fatalf("start edge prompt = %q, want transition prompt round-tripped", startEdge.PromptTemplate)
@@ -276,28 +244,19 @@ func TestWorkflowGraphSaveRoundTripsTransitionInvocationContract(t *testing.T) {
 		t.Fatalf("done edge parameters = %+v, want transition parameters round-tripped", doneEdge.Parameters)
 	}
 
-	noop := workflowGraphSaveRequestFromDefinition(workflowID, updatedRecord.Version, false, updated)
-	noopSaved, err := store.SaveWorkflowGraph(ctx, noop)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph noop: %v", err)
-	}
+	noop := f.request(updatedRecord.Version, false, updated)
+	noopSaved := f.save(t, noop)
 	if !noopSaved.Saved || noopSaved.Changed || noopSaved.Version != updatedRecord.Version {
 		t.Fatalf("noop save = %+v, want prompt/parameters preserved as unchanged graph", noopSaved)
 	}
 }
 
 func TestWorkflowGraphSaveAcceptsClientGeneratedTopologyIDsAndRejectsCollisions(t *testing.T) {
-	ctx, store, _ := newTestStoreContext(t)
-	workflowID := createValidWorkflow(t, ctx, store)
-	def, record, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-
-	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	f := newGraphSaveFixture(t, createValidWorkflow)
+	req := f.request(f.record.Version, false, f.def)
 	req.Nodes = append(req.Nodes, NodeRecord{
 		ID:           "workflow-node-00000000-0000-4000-8000-000000000001",
-		WorkflowID:   workflowID,
+		WorkflowID:   f.workflowID,
 		Key:          "client_generated",
 		Kind:         workflow.NodeKindAgent,
 		DisplayName:  "Client Generated",
@@ -305,14 +264,14 @@ func TestWorkflowGraphSaveAcceptsClientGeneratedTopologyIDsAndRejectsCollisions(
 	})
 	req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
 		ID:           "workflow-transition-group-00000000-0000-4000-8000-000000000001",
-		WorkflowID:   workflowID,
-		SourceNodeID: workflow.NodeID("node-agent-" + string(workflowID)),
+		WorkflowID:   f.workflowID,
+		SourceNodeID: workflow.NodeID("node-agent-" + string(f.workflowID)),
 		TransitionID: "client_generated",
 		DisplayName:  "Client Generated",
 	})
 	req.Edges = append(req.Edges, EdgeRecord{
 		ID:                "workflow-edge-00000000-0000-4000-8000-000000000001",
-		WorkflowID:        workflowID,
+		WorkflowID:        f.workflowID,
 		TransitionGroupID: "workflow-transition-group-00000000-0000-4000-8000-000000000001",
 		Key:               "client_generated",
 		TargetNodeID:      "workflow-node-00000000-0000-4000-8000-000000000001",
@@ -320,181 +279,116 @@ func TestWorkflowGraphSaveAcceptsClientGeneratedTopologyIDsAndRejectsCollisions(
 		PromptTemplate:    "Client generated.",
 	})
 
-	saved, err := store.SaveWorkflowGraph(ctx, req)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph client ids: %v", err)
-	}
+	saved := f.save(t, req)
 	if !saved.Saved || len(saved.Blockers) != 0 {
 		t.Fatalf("client id graph save = %+v, want saved without blockers", saved)
 	}
-	updated, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition after client ids: %v", err)
-	}
+	updated, _ := f.current(t)
 	if workflow.NodeKey(nodeByID(t, updated, "workflow-node-00000000-0000-4000-8000-000000000001")) != "client_generated" {
 		t.Fatalf("client-generated node id was not persisted")
 	}
 
-	colliding := workflowGraphSaveRequestFromDefinition(workflowID, saved.Version, false, updated)
+	colliding := f.request(saved.Version, false, updated)
 	colliding.Nodes = append(colliding.Nodes, colliding.Nodes[len(colliding.Nodes)-1])
-	collidingResult, err := store.SaveWorkflowGraph(ctx, colliding)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph duplicate client id: %v", err)
-	}
+	collidingResult := f.save(t, colliding)
 	if collidingResult.Saved || workflowGraphSaveBlockerCount(collidingResult.Blockers, "validation_failed") == 0 {
 		t.Fatalf("duplicate client id graph save = %+v, want validation blocker", collidingResult)
 	}
 }
 
 func TestWorkflowGraphSaveMetadataAndGraphAreAtomic(t *testing.T) {
-	ctx, store, _ := newTestStoreContext(t)
-	workflowID := createValidWorkflow(t, ctx, store)
-	def, record, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	agentID := workflow.NodeID("node-agent-" + string(workflowID))
+	f := newGraphSaveFixture(t, createValidWorkflow)
+	agentID := workflow.NodeID("node-agent-" + string(f.workflowID))
 
-	combined := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	combined := f.request(f.record.Version, false, f.def)
 	combined.Metadata = &WorkflowGraphSaveMetadata{Name: "Combined save", Description: "Graph and metadata"}
 	combined.Nodes = renameWorkflowGraphSaveNode(combined.Nodes, agentID, "Edited Agent")
-	saved, err := store.SaveWorkflowGraph(ctx, combined)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph combined: %v", err)
-	}
-	if !saved.Saved || saved.Version != record.Version+1 {
+	saved := f.save(t, combined)
+	if !saved.Saved || saved.Version != f.record.Version+1 {
 		t.Fatalf("combined save = %+v, want one version bump", saved)
 	}
-	updatedDef, updatedRecord, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition after combined: %v", err)
-	}
+	updatedDef, updatedRecord := f.current(t)
 	if updatedRecord.Name != "Combined save" || workflow.NodeDisplayName(nodeByID(t, updatedDef, agentID)) != "Edited Agent" {
 		t.Fatalf("combined save persisted record=%+v node=%+v", updatedRecord, nodeByID(t, updatedDef, agentID))
 	}
 
-	blocked := workflowGraphSaveRequestFromDefinition(workflowID, updatedRecord.Version, false, updatedDef)
+	blocked := f.request(updatedRecord.Version, false, updatedDef)
 	blocked.Metadata = &WorkflowGraphSaveMetadata{Name: "Must not persist", Description: "Blocked"}
-	blocked.Edges = removeWorkflowGraphSaveEdge(blocked.Edges, workflow.EdgeID("edge-done-"+string(workflowID)))
-	blockedResult, err := store.SaveWorkflowGraph(ctx, blocked)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph blocked combined: %v", err)
-	}
+	blocked.Edges = removeWorkflowGraphSaveEdge(blocked.Edges, workflow.EdgeID("edge-done-"+string(f.workflowID)))
+	blockedResult := f.save(t, blocked)
 	if blockedResult.Saved || workflowGraphSaveBlockerCount(blockedResult.Blockers, "confirmation_required") == 0 {
 		t.Fatalf("blocked combined save = %+v, want confirmation blocker", blockedResult)
 	}
-	_, unchangedRecord, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition after blocked combined: %v", err)
-	}
+	_, unchangedRecord := f.current(t)
 	if unchangedRecord.Name != "Combined save" || unchangedRecord.Description != "Graph and metadata" || unchangedRecord.Version != updatedRecord.Version {
 		t.Fatalf("record after blocked combined = %+v, want unchanged", unchangedRecord)
 	}
 }
 
 func TestWorkflowGraphSaveValidatesAndPersistsV1NodeGroups(t *testing.T) {
-	ctx, store, _ := newTestStoreContext(t)
-	workflowID := createFanoutJoinWorkflow(t, ctx, store)
-	def, record, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	groupID := "group-parallel-" + string(workflowID)
-	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
-	req.NodeGroups = append(req.NodeGroups, NodeGroupRecord{ID: groupID, WorkflowID: workflowID, Key: "parallel", DisplayName: "Parallel"})
-	req.Nodes = setWorkflowGraphSaveNodeGroup(req.Nodes, workflow.NodeID("node-impl-a-"+string(workflowID)), groupID)
-	req.Nodes = setWorkflowGraphSaveNodeGroup(req.Nodes, workflow.NodeID("node-impl-b-"+string(workflowID)), groupID)
-	req.Nodes = setWorkflowGraphSaveNodeGroup(req.Nodes, workflow.NodeID("node-join-"+string(workflowID)), groupID)
+	f := newGraphSaveFixture(t, createFanoutJoinWorkflow)
+	groupID := "group-parallel-" + string(f.workflowID)
+	req := f.request(f.record.Version, false, f.def)
+	req.NodeGroups = append(req.NodeGroups, NodeGroupRecord{ID: groupID, WorkflowID: f.workflowID, Key: "parallel", DisplayName: "Parallel"})
+	req.Nodes = setWorkflowGraphSaveNodeGroup(req.Nodes, workflow.NodeID("node-impl-a-"+string(f.workflowID)), groupID)
+	req.Nodes = setWorkflowGraphSaveNodeGroup(req.Nodes, workflow.NodeID("node-impl-b-"+string(f.workflowID)), groupID)
+	req.Nodes = setWorkflowGraphSaveNodeGroup(req.Nodes, workflow.NodeID("node-join-"+string(f.workflowID)), groupID)
 
-	result, err := store.SaveWorkflowGraph(ctx, req)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph valid group: %v", err)
-	}
+	result := f.save(t, req)
 	if !result.Saved || len(result.Blockers) != 0 {
 		t.Fatalf("valid node group graph save = %+v, want saved", result)
 	}
-	savedDef, savedRecord, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition after valid group: %v", err)
-	}
-	if savedRecord.Version != record.Version+1 {
-		t.Fatalf("valid node group version = %d, want %d", savedRecord.Version, record.Version+1)
+	savedDef, savedRecord := f.current(t)
+	if savedRecord.Version != f.record.Version+1 {
+		t.Fatalf("valid node group version = %d, want %d", savedRecord.Version, f.record.Version+1)
 	}
 	if len(savedDef.NodeGroups) != 1 || len(savedDef.NodeGroups[0].MemberNodeIDs) != 3 {
 		t.Fatalf("saved node groups = %+v, want one group with three members", savedDef.NodeGroups)
 	}
-	if workflow.NodeGroupID(nodeByID(t, savedDef, workflow.NodeID("node-join-"+string(workflowID)))) != groupID {
-		t.Fatalf("saved join group id not persisted: %+v", nodeByID(t, savedDef, workflow.NodeID("node-join-"+string(workflowID))))
+	if workflow.NodeGroupID(nodeByID(t, savedDef, workflow.NodeID("node-join-"+string(f.workflowID)))) != groupID {
+		t.Fatalf("saved join group id not persisted: %+v", nodeByID(t, savedDef, workflow.NodeID("node-join-"+string(f.workflowID))))
 	}
 
-	invalid := workflowGraphSaveRequestFromDefinition(workflowID, savedRecord.Version, false, savedDef)
-	invalid.Nodes = setWorkflowGraphSaveNodeGroup(invalid.Nodes, workflow.NodeID("node-impl-b-"+string(workflowID)), "")
-	invalidResult, err := store.SaveWorkflowGraph(ctx, invalid)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph invalid group: %v", err)
-	}
+	invalid := f.request(savedRecord.Version, false, savedDef)
+	invalid.Nodes = setWorkflowGraphSaveNodeGroup(invalid.Nodes, workflow.NodeID("node-impl-b-"+string(f.workflowID)), "")
+	invalidResult := f.save(t, invalid)
 	if invalidResult.Saved || workflowGraphSaveBlockerCount(invalidResult.Blockers, "validation_failed") == 0 {
 		t.Fatalf("invalid node group graph save = %+v, want validation blocker", invalidResult)
 	}
 }
 
 func TestWorkflowGraphSaveRejectsStaleVersion(t *testing.T) {
-	ctx, store, _ := newTestStoreContext(t)
-	workflowID := createValidWorkflow(t, ctx, store)
-	def, record, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	if err := store.UpdateWorkflowInfo(ctx, workflowID, "Remote rename", "Remote description"); err != nil {
+	f := newGraphSaveFixture(t, createValidWorkflow)
+	if err := f.store.UpdateWorkflowInfo(f.ctx, f.workflowID, "Remote rename", "Remote description"); err != nil {
 		t.Fatalf("UpdateWorkflowInfo: %v", err)
 	}
-	_, remote, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition remote: %v", err)
-	}
+	_, remote := f.current(t)
 
-	stale := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	stale := f.request(f.record.Version, false, f.def)
 	stale.Metadata = &WorkflowGraphSaveMetadata{Name: "Local rename", Description: "Local description"}
-	result, err := store.SaveWorkflowGraph(ctx, stale)
-	if err != nil {
-		t.Fatalf("SaveWorkflowGraph stale definition: %v", err)
-	}
+	result := f.save(t, stale)
 	if result.Saved || workflowGraphSaveBlockerCount(result.Blockers, "version_changed") != remote.Version {
 		t.Fatalf("stale metadata save = %+v, want current version blocker", result)
 	}
-	_, unchanged, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition after stale definition: %v", err)
-	}
+	_, unchanged := f.current(t)
 	if unchanged.Name != "Remote rename" || unchanged.Version != remote.Version {
 		t.Fatalf("record after stale metadata save = %+v, want remote metadata preserved", unchanged)
 	}
 }
 
 func TestPreviewWorkflowGraphSaveDoesNotMutateWithoutBlockers(t *testing.T) {
-	ctx, store, _ := newTestStoreContext(t)
-	workflowID := createValidWorkflow(t, ctx, store)
-	def, record, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	agentID := workflow.NodeID("node-agent-" + string(workflowID))
-	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	f := newGraphSaveFixture(t, createValidWorkflow)
+	agentID := workflow.NodeID("node-agent-" + string(f.workflowID))
+	req := f.request(f.record.Version, false, f.def)
 	req.Nodes = renameWorkflowGraphSaveNode(req.Nodes, agentID, "Preview Agent")
 
-	preview, err := store.PreviewWorkflowGraphSave(ctx, req)
-	if err != nil {
-		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
-	}
+	preview := f.preview(t, req)
 	if preview.Saved || len(preview.Blockers) != 0 || !preview.CanSave {
 		t.Fatalf("preview graph save = %+v, want non-mutating savable preview without blockers", preview)
 	}
-	unchangedDef, unchangedRecord, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition after preview: %v", err)
-	}
-	if unchangedRecord.Version != record.Version {
-		t.Fatalf("workflow version after preview = %d, want %d", unchangedRecord.Version, record.Version)
+	unchangedDef, unchangedRecord := f.current(t)
+	if unchangedRecord.Version != f.record.Version {
+		t.Fatalf("workflow version after preview = %d, want %d", unchangedRecord.Version, f.record.Version)
 	}
 	if workflow.NodeDisplayName(nodeByID(t, unchangedDef, agentID)) == "Preview Agent" {
 		t.Fatalf("preview mutated node display name")

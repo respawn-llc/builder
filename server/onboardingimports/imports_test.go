@@ -10,25 +10,29 @@ import (
 	brand "core/shared/config"
 )
 
-func TestDiscoverWithoutWorkspaceReturnsGlobalAndGeneratedFacts(t *testing.T) {
+func TestDiscoverWithoutWorkspaceReturnsGlobalAndGeneratedFactsAndRecomputes(t *testing.T) {
 	configRoot := t.TempDir()
 	home := t.TempDir()
-	writeProviderSkill(t, home, ProviderCodex, filepath.Join("skills", "local"), "review", "Review", "Review code")
-
-	result, err := Discover(Options{ConfigRoot: configRoot, HomeDir: home})
+	first, err := Discover(Options{ConfigRoot: configRoot, HomeDir: home})
 	if err != nil {
-		t.Fatalf("Discover: %v", err)
+		t.Fatalf("first Discover: %v", err)
 	}
-	if result.Workspace.Root != nil {
-		t.Fatalf("workspace root = %q, want absent", *result.Workspace.Root)
+	if first.Workspace.Root != nil {
+		t.Fatalf("workspace root = %q, want absent", *first.Workspace.Root)
 	}
-	if len(result.Skills.Items) == 0 {
-		t.Fatal("expected skill facts")
+	if len(first.Skills.Items) == 0 || len(first.SkillEnablement) == 0 {
+		t.Fatalf("expected generated skill facts without a workspace: %+v", first.Skills)
 	}
-	if len(result.SkillEnablement) == 0 {
-		t.Fatal("expected skill enablement projections")
+
+	writeProviderSkill(t, home, ProviderCodex, filepath.Join("skills", "local"), "review", "Review", "Review code")
+	second, err := Discover(Options{ConfigRoot: configRoot, HomeDir: home})
+	if err != nil {
+		t.Fatalf("second Discover: %v", err)
 	}
-	for _, item := range result.Skills.Items {
+	if len(second.Skills.Items) <= len(first.Skills.Items) {
+		t.Fatalf("expected recomputed skill item count to grow, first=%d second=%d", len(first.Skills.Items), len(second.Skills.Items))
+	}
+	for _, item := range second.Skills.Items {
 		if item.Ref.SourceKind == SourceKindExternalProvider && item.Ref.ProviderID != nil && *item.Ref.ProviderID != ProviderCodex {
 			t.Fatalf("unexpected provider item: %+v", item)
 		}
@@ -56,51 +60,41 @@ func TestDiscoverInvalidWorkspaceReturnsStructuredErrorAndContinues(t *testing.T
 	}
 }
 
-func TestDiscoverProviderFailureDoesNotSuppressOtherProviders(t *testing.T) {
-	configRoot := t.TempDir()
-	home := t.TempDir()
-	writeProviderSkill(t, home, ProviderCodex, filepath.Join("skills", "local"), "review", "Review", "Review code")
-	claudeSkills := filepath.Join(home, ".claude", "skills")
-	if err := os.MkdirAll(filepath.Dir(claudeSkills), 0o755); err != nil {
-		t.Fatalf("mkdir bad claude parent: %v", err)
+func TestDiscoverProviderFailuresRemainScoped(t *testing.T) {
+	tests := []struct {
+		name          string
+		badPath       string
+		source        string
+		itemProvider  ProviderID
+		errorProvider ProviderID
+	}{
+		{name: "other providers continue", badPath: filepath.Join(".claude", "skills"), source: filepath.Join("skills", "local"), itemProvider: ProviderCodex, errorProvider: ProviderClaudeCode},
+		{name: "alternate source roots continue", badPath: filepath.Join(".codex", "skills", "local"), source: "skills", itemProvider: ProviderCodex, errorProvider: ProviderCodex},
 	}
-	if err := os.WriteFile(claudeSkills, []byte("not a directory"), 0o644); err != nil {
-		t.Fatalf("write bad claude root: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configRoot := t.TempDir()
+			home := t.TempDir()
+			badPath := filepath.Join(home, tt.badPath)
+			if err := os.MkdirAll(filepath.Dir(badPath), 0o755); err != nil {
+				t.Fatalf("mkdir bad provider parent: %v", err)
+			}
+			if err := os.WriteFile(badPath, []byte("not a directory"), 0o644); err != nil {
+				t.Fatalf("write bad provider root: %v", err)
+			}
+			writeProviderSkill(t, home, tt.itemProvider, tt.source, "available", "Available", "Available skill")
 
-	result, err := Discover(Options{ConfigRoot: configRoot, HomeDir: home})
-	if err != nil {
-		t.Fatalf("Discover: %v", err)
-	}
-	if !hasProviderItem(result.Skills.Items, ProviderCodex) {
-		t.Fatalf("expected codex item despite claude failure, items=%+v errors=%+v", result.Skills.Items, result.Errors)
-	}
-	if !hasProviderError(result.Errors, ProviderClaudeCode) {
-		t.Fatalf("expected claude provider error, got %+v", result.Errors)
-	}
-}
-
-func TestDiscoverProviderSourceFailureDoesNotSuppressAlternateSourceRoot(t *testing.T) {
-	configRoot := t.TempDir()
-	home := t.TempDir()
-	badCodexLocal := filepath.Join(home, ".codex", "skills", "local")
-	if err := os.MkdirAll(filepath.Dir(badCodexLocal), 0o755); err != nil {
-		t.Fatalf("mkdir bad codex parent: %v", err)
-	}
-	if err := os.WriteFile(badCodexLocal, []byte("not a directory"), 0o644); err != nil {
-		t.Fatalf("write bad codex local root: %v", err)
-	}
-	writeProviderSkill(t, home, ProviderCodex, "skills", "fallback", "Fallback", "Fallback skill")
-
-	result, err := Discover(Options{ConfigRoot: configRoot, HomeDir: home})
-	if err != nil {
-		t.Fatalf("Discover: %v", err)
-	}
-	if !hasProviderItem(result.Skills.Items, ProviderCodex) {
-		t.Fatalf("expected fallback codex skill despite local root failure, items=%+v errors=%+v", result.Skills.Items, result.Errors)
-	}
-	if !hasProviderError(result.Errors, ProviderCodex) {
-		t.Fatalf("expected codex source error, got %+v", result.Errors)
+			result, err := Discover(Options{ConfigRoot: configRoot, HomeDir: home})
+			if err != nil {
+				t.Fatalf("Discover: %v", err)
+			}
+			if !hasProviderItem(result.Skills.Items, tt.itemProvider) {
+				t.Fatalf("expected available provider item, items=%+v errors=%+v", result.Skills.Items, result.Errors)
+			}
+			if !hasProviderError(result.Errors, tt.errorProvider) {
+				t.Fatalf("expected scoped provider error, got %+v", result.Errors)
+			}
+		})
 	}
 }
 
@@ -167,7 +161,7 @@ func TestDiscoverWorkspaceLocalTargetsDoNotSkipGlobalImports(t *testing.T) {
 	}
 }
 
-func TestDiscoverReportsTargetProbeErrors(t *testing.T) {
+func TestDiscoverReportsTargetProbeErrorsAndKeepsGeneratedSkills(t *testing.T) {
 	configRoot := t.TempDir()
 	home := t.TempDir()
 	target := filepath.Join(configRoot, "skills")
@@ -190,6 +184,9 @@ func TestDiscoverReportsTargetProbeErrors(t *testing.T) {
 	}
 	if !hasErrorScope(result.Errors, ErrorScopeTarget) {
 		t.Fatalf("expected structured target error, got %+v", result.Errors)
+	}
+	if !hasSourceKindItem(result.Skills.Items, SourceKindGenerated) {
+		t.Fatalf("expected generated skill facts despite target failure, items=%+v errors=%+v", result.Skills.Items, result.Errors)
 	}
 }
 
@@ -226,102 +223,33 @@ func TestSkillEnablementProjectionsShadowGeneratedAndMarkDefaults(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
+	disabledGeneratedFound := false
+	shadowedGeneratedFound := false
 	for _, projection := range result.SkillEnablement {
-		seen := map[string]bool{}
+		creatingSkills := 0
 		for _, item := range projection.Candidates {
-			if item.Ref.Name != nil {
-				seen[*item.Ref.Name] = true
-			}
-			if item.Ref.Name != nil && *item.Ref.Name == "kent-dogfooding" && (item.DefaultEnabled == nil || *item.DefaultEnabled) {
-				t.Fatalf("disabled generated skill default enabled: %+v", item)
-			}
-		}
-		if projection.ChoiceRef.Mode == ChoiceModeSymlinkSource && seen["creating-skills"] {
-			count := 0
-			for _, item := range projection.Candidates {
-				if item.Ref.Name != nil && *item.Ref.Name == "creating-skills" {
-					count++
-				}
-			}
-			if count != 1 {
-				t.Fatalf("expected generated creating-skills shadowed by import choice, projection=%+v", projection)
-			}
-		}
-	}
-}
-
-func TestGeneratedDisabledSkillRemainsCandidateWithDisabledDefault(t *testing.T) {
-	configRoot := t.TempDir()
-	home := t.TempDir()
-
-	result, err := Discover(Options{
-		ConfigRoot:  configRoot,
-		HomeDir:     home,
-		SkillPolicy: brand.ResolveSkillPolicy(brand.Settings{SkillToggles: map[string]bool{"kent-dogfooding": false}}),
-	})
-	if err != nil {
-		t.Fatalf("Discover: %v", err)
-	}
-	found := false
-	for _, projection := range result.SkillEnablement {
-		if projection.ChoiceRef.Mode != ChoiceModeNone {
-			continue
-		}
-		for _, item := range projection.Candidates {
-			if item.Ref.Name == nil || *item.Ref.Name != "kent-dogfooding" {
+			if item.Ref.Name == nil {
 				continue
 			}
-			found = true
-			if item.DefaultEnabled == nil || *item.DefaultEnabled {
-				t.Fatalf("expected disabled generated skill to be present with default disabled, got %+v", item)
+			if projection.ChoiceRef.Mode == ChoiceModeNone && *item.Ref.Name == "kent-dogfooding" {
+				disabledGeneratedFound = true
+				if item.DefaultEnabled == nil || *item.DefaultEnabled {
+					t.Fatalf("disabled generated skill default enabled: %+v", item)
+				}
+			}
+			if projection.ChoiceRef.Mode == ChoiceModeSymlinkSource && *item.Ref.Name == "creating-skills" {
+				creatingSkills++
 			}
 		}
+		if creatingSkills > 0 {
+			if creatingSkills != 1 {
+				t.Fatalf("expected imported creating-skills to shadow its generated candidate, projection=%+v", projection)
+			}
+			shadowedGeneratedFound = true
+		}
 	}
-	if !found {
-		t.Fatalf("expected disabled generated skill candidate, projections=%+v", result.SkillEnablement)
-	}
-}
-
-func TestDiscoverKeepsGeneratedSkillsWhenUserSkillRootFails(t *testing.T) {
-	configRoot := t.TempDir()
-	home := t.TempDir()
-	target := filepath.Join(configRoot, skillcatalog.SkillsDirName)
-	if err := os.MkdirAll(target, 0o755); err != nil {
-		t.Fatalf("mkdir user skill root: %v", err)
-	}
-	if err := os.Chmod(target, 0); err != nil {
-		t.Fatalf("chmod user skill root: %v", err)
-	}
-	defer func() {
-		_ = os.Chmod(target, 0o755)
-	}()
-
-	result, err := Discover(Options{ConfigRoot: configRoot, HomeDir: home})
-	if err != nil {
-		t.Fatalf("Discover: %v", err)
-	}
-	if !hasErrorScope(result.Errors, ErrorScopeWorkspace) && !hasErrorScope(result.Errors, ErrorScopeTarget) {
-		t.Fatalf("expected structured user skill root error, got %+v", result.Errors)
-	}
-	if !hasSourceKindItem(result.Skills.Items, SourceKindGenerated) {
-		t.Fatalf("expected generated skill facts despite user skill root failure, items=%+v errors=%+v", result.Skills.Items, result.Errors)
-	}
-}
-
-func TestDiscoverRecomputesFilesystemState(t *testing.T) {
-	configRoot := t.TempDir()
-	home := t.TempDir()
-	first, err := Discover(Options{ConfigRoot: configRoot, HomeDir: home})
-	if err != nil {
-		t.Fatalf("first Discover: %v", err)
-	}
-	writeProviderSkill(t, home, ProviderCodex, filepath.Join("skills", "local"), "review", "Review", "Review code")
-	second, err := Discover(Options{ConfigRoot: configRoot, HomeDir: home})
-	if err != nil {
-		t.Fatalf("second Discover: %v", err)
-	}
-	if len(second.Skills.Items) <= len(first.Skills.Items) {
-		t.Fatalf("expected recomputed skill item count to grow, first=%d second=%d", len(first.Skills.Items), len(second.Skills.Items))
+	if !disabledGeneratedFound || !shadowedGeneratedFound {
+		t.Fatalf("skill enablement projections did not preserve disabled or shadowed generated candidates: %+v", result.SkillEnablement)
 	}
 }
 
@@ -386,5 +314,3 @@ func hasSourceKindItem(items []Item, sourceKind SourceKind) bool {
 	}
 	return false
 }
-
-var _ = brand.ConfigDirName
