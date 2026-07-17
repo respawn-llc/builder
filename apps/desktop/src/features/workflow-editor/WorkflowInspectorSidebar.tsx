@@ -1,8 +1,8 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { WorkflowDefinition } from "../../api";
-import type { WorkflowInspectorInitialFocus, WorkflowInspectorSelection } from "../../app/sidebarContext";
+import type { WorkflowDefinition } from "@/api";
+import type { WorkflowInspectorInitialFocus, WorkflowInspectorSelection } from "@/app-facade";
 import { workflowDefinitionFromDraft } from "./workflowEditorDraft";
 import {
   useWorkflowEditorDraftController,
@@ -41,7 +41,13 @@ export function WorkflowInspectorSidebar({
     return null;
   }
   if (controller !== null) {
-    return <WorkflowDraftInspectorContent controller={controller} initialFocus={initialFocus} selection={selection} />;
+    return (
+      <WorkflowDraftInspectorContent
+        controller={controller}
+        initialFocus={initialFocus}
+        selection={selection}
+      />
+    );
   }
   if (definition === undefined) {
     return <p className="text-[var(--color-muted)]">{t("workflowEditor.inspectorUnavailable")}</p>;

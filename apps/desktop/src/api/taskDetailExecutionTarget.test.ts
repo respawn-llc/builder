@@ -1,4 +1,4 @@
-import { taskDetailResponse } from "../testSupport/taskDetailFixtures";
+import { taskDetailResponse } from "@/test-support/task-detail";
 import { taskDetailSchema } from "./schemas/workflowBoard";
 
 describe("task detail execution target contract", () => {

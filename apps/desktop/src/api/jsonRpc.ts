@@ -105,7 +105,12 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     return socket;
   }
 
-  async #send(socket: WebSocket, method: string, params: JsonValue, options?: RpcCallOptions): Promise<unknown> {
+  async #send(
+    socket: WebSocket,
+    method: string,
+    params: JsonValue,
+    options?: RpcCallOptions,
+  ): Promise<unknown> {
     if (socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new TransportError("WebSocket is not open."));
     }
@@ -114,12 +119,15 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     const frame = JSON.stringify({ jsonrpc: jsonRpcVersion, id, method, params });
     return new Promise((resolve, reject) => {
       const timeoutMs = options?.timeoutMs === undefined ? rpcRequestTimeoutMs : options.timeoutMs;
-      const timeout = timeoutMs === null ? null : setTimeout(() => {
-        if (!this.#pending.delete(id)) {
-          return;
-        }
-        reject(new TransportError(`${method} request timed out.`));
-      }, timeoutMs);
+      const timeout =
+        timeoutMs === null
+          ? null
+          : setTimeout(() => {
+              if (!this.#pending.delete(id)) {
+                return;
+              }
+              reject(new TransportError(`${method} request timed out.`));
+            }, timeoutMs);
       this.#pending.set(id, { method, timeout, resolve, reject });
       try {
         socket.send(frame);
@@ -259,15 +267,14 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     }
   }
 
-  #throwNonZeroComplete(
-    method: string,
-    complete: Readonly<{ code: number; message: string }> | null,
-  ): void {
+  #throwNonZeroComplete(method: string, complete: Readonly<{ code: number; message: string }> | null): void {
     if (complete === null || complete.code === 0) {
       return;
     }
     const suffix = complete.message.length === 0 ? "" : `: ${complete.message}`;
-    throw new TransportError(`${method} subscription completed with code ${complete.code.toString()}${suffix}`);
+    throw new TransportError(
+      `${method} subscription completed with code ${complete.code.toString()}${suffix}`,
+    );
   }
 }
 

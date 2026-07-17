@@ -1,7 +1,7 @@
 import { Position } from "@xyflow/react";
 import type { ElkNode } from "elkjs/lib/elk-api";
 
-import type { WorkflowDefinition, WorkflowNodeKind } from "../../api";
+import type { WorkflowDefinition, WorkflowNodeKind } from "@/api";
 import {
   emptyGroupHeight,
   emptyGroupWidth,
@@ -36,9 +36,7 @@ export function layoutWorkflowGraphNodes(
   errorMarkers: WorkflowGraphValidationMarkers,
   endpointPortsByNodeID: ReadonlyMap<string, readonly WorkflowGraphEndpointPort[]> = new Map(),
 ): WorkflowGraphNodeLayout {
-  const workflowNodesByID = new Map(
-    definition.nodes.map((node) => [node.id, node]),
-  );
+  const workflowNodesByID = new Map(definition.nodes.map((node) => [node.id, node]));
   const layoutByID = layoutNodeByID(result);
   const groupLayout = workflowGroupNodes(definition, layoutByID, errorMarkers);
   const alignedJoinLayoutByID = alignedJoinLayouts(definition, layoutByID, groupLayout.groupNodeByGroupID);
@@ -234,7 +232,8 @@ function workflowGraphNodeRect(
   workflowNodeModel: WorkflowDefinition["nodes"][number],
   groupNodeByGraphID: ReadonlyMap<string, WorkflowGraphNode>,
 ): WorkflowGraphNodeRect {
-  const parentNode = graphNode.parentId === undefined ? undefined : groupNodeByGraphID.get(graphNode.parentId);
+  const parentNode =
+    graphNode.parentId === undefined ? undefined : groupNodeByGraphID.get(graphNode.parentId);
   const parentOffset = parentNode?.position ?? { x: 0, y: 0 };
   return {
     groupID: workflowNodeModel.groupID,
@@ -293,7 +292,7 @@ function workflowGraphCreationHandleIDForNode(node: WorkflowDefinition["nodes"][
 }
 
 function workflowGraphNodeRole(node: WorkflowDefinition["nodes"][number]): string {
-  return node.kind === "script" ? node.scriptPath ?? "" : node.subagentRole;
+  return node.kind === "script" ? (node.scriptPath ?? "") : node.subagentRole;
 }
 
 function parentNodeOptions(parentId: string): Pick<WorkflowGraphNode, "extent" | "parentId"> {

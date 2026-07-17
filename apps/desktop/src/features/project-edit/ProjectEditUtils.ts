@@ -1,4 +1,4 @@
-import type { WorkspaceSummary } from "../../api";
+import type { WorkspaceSummary } from "@/api";
 
 export function projectNameErrors(value: string, t: (key: string) => string): readonly string[] {
   const errors: string[] = [];

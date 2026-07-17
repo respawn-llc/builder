@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 
-import { IslandTabs } from "../../ui";
+import { IslandTabs } from "@/ui";
 
 export type DetailTab = "comments" | "activity";
 

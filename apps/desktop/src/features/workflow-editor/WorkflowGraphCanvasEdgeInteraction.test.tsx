@@ -2,9 +2,9 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { act } from "react";
 import { afterEach, beforeEach, vi } from "vitest";
 
-import { initializeI18n } from "../../i18n/setup";
-import type { WorkflowNodeKind } from "../../api";
-import { workflowEditorEnglish } from "../../i18n/workflowEditorEn";
+import { initializeI18n } from "@/i18n";
+import type { WorkflowNodeKind } from "@/api";
+import { workflowEditorEnglish } from "@/i18n";
 import { WorkflowGraphCanvas } from "./WorkflowGraphCanvas";
 import type { WorkflowGraphEdge, WorkflowGraphNode, WorkflowGraphNodeData } from "./workflowGraphLayout";
 
@@ -62,7 +62,9 @@ describe("WorkflowGraphCanvas edge interactions", () => {
     expect(onEdgeInspect).not.toHaveBeenCalled();
 
     fireEvent.click(within(agent).getByTestId("workflow-node-source-handle"), { detail: 1 });
-    fireEvent.click(await screen.findByRole("button", { name: workflowEditorEnglish.addAgentNode }), { detail: 1 });
+    fireEvent.click(await screen.findByRole("button", { name: workflowEditorEnglish.addAgentNode }), {
+      detail: 1,
+    });
     expect(onAddConnectedNode).toHaveBeenCalledWith("agent", "agent", "pointer");
     expect(onEdgeInspect).not.toHaveBeenCalled();
   });
@@ -111,11 +113,7 @@ describe("WorkflowGraphCanvas edge interactions", () => {
       onWorkflowInspect: () => undefined,
     };
     const { rerender } = render(
-      <WorkflowGraphCanvas
-        {...props}
-        graph={{ edges: [], nodes: [] }}
-        graphSelectionRequest={request}
-      />,
+      <WorkflowGraphCanvas {...props} graph={{ edges: [], nodes: [] }} graphSelectionRequest={request} />,
     );
 
     expect(onGraphSelectionConsumed).not.toHaveBeenCalled();
@@ -124,7 +122,9 @@ describe("WorkflowGraphCanvas edge interactions", () => {
       <WorkflowGraphCanvas
         {...props}
         graph={{
-          edges: [workflowGraphEdge({ id: "edge-delayed", routePoints: [], source: "source", target: "target" })],
+          edges: [
+            workflowGraphEdge({ id: "edge-delayed", routePoints: [], source: "source", target: "target" }),
+          ],
           nodes: [],
         }}
         graphSelectionRequest={request}
@@ -139,17 +139,15 @@ describe("WorkflowGraphCanvas edge interactions", () => {
 
     onGraphSelectionConsumed.mockClear();
     rerender(
-      <WorkflowGraphCanvas
-        {...props}
-        graph={{ edges: [], nodes: [] }}
-        graphSelectionRequest={null}
-      />,
+      <WorkflowGraphCanvas {...props} graph={{ edges: [], nodes: [] }} graphSelectionRequest={null} />,
     );
     rerender(
       <WorkflowGraphCanvas
         {...props}
         graph={{
-          edges: [workflowGraphEdge({ id: "edge-delayed", routePoints: [], source: "source", target: "target" })],
+          edges: [
+            workflowGraphEdge({ id: "edge-delayed", routePoints: [], source: "source", target: "target" }),
+          ],
           nodes: [],
         }}
         graphSelectionRequest={null}
@@ -174,7 +172,9 @@ describe("WorkflowGraphCanvas edge interactions", () => {
       <WorkflowGraphCanvas
         {...props}
         graph={{
-          edges: [workflowGraphEdge({ id: "edge-delayed", routePoints: [], source: "source", target: "target" })],
+          edges: [
+            workflowGraphEdge({ id: "edge-delayed", routePoints: [], source: "source", target: "target" }),
+          ],
           nodes: [],
         }}
         graphSelectionRequest={canceledAfterLayoutRequest}
@@ -184,7 +184,9 @@ describe("WorkflowGraphCanvas edge interactions", () => {
       <WorkflowGraphCanvas
         {...props}
         graph={{
-          edges: [workflowGraphEdge({ id: "edge-delayed", routePoints: [], source: "source", target: "target" })],
+          edges: [
+            workflowGraphEdge({ id: "edge-delayed", routePoints: [], source: "source", target: "target" }),
+          ],
           nodes: [],
         }}
         graphSelectionRequest={null}
@@ -197,7 +199,6 @@ describe("WorkflowGraphCanvas edge interactions", () => {
     });
     expect(onGraphSelectionConsumed).not.toHaveBeenCalled();
   });
-
 });
 
 class MockResizeObserver implements ResizeObserver {

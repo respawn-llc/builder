@@ -1,4 +1,4 @@
-import type { WorkflowNode } from "../../api";
+import type { WorkflowNode } from "@/api";
 import type { DraftWorkflowDefinition, DraftWorkflowNode } from "./workflowEditorDraftTypes";
 import { uniqueWorkflowModelKey } from "./workflowEditorGraphKeys";
 import {
@@ -26,7 +26,12 @@ export function addWorkflowNode(
   input: AddWorkflowNodeInput,
 ): WorkflowEditorGraphMutationResult {
   const name = input.name ?? defaultNodeName(input.kind);
-  const key = input.key ?? uniqueWorkflowModelKey(name, draft.nodes.map((node) => node.key));
+  const key =
+    input.key ??
+    uniqueWorkflowModelKey(
+      name,
+      draft.nodes.map((node) => node.key),
+    );
   const node: DraftWorkflowNode = {
     groupID: "",
     groupKey: "",
@@ -38,9 +43,9 @@ export function addWorkflowNode(
     name,
     completionMode: "",
     outputFields: [],
-    promptTemplate: input.kind === "agent" ? input.promptTemplate ?? "" : "",
+    promptTemplate: input.kind === "agent" ? (input.promptTemplate ?? "") : "",
     scriptPath: null,
-    subagentRole: input.kind === "agent" ? input.subagentRole ?? "default" : "",
+    subagentRole: input.kind === "agent" ? (input.subagentRole ?? "default") : "",
     workflowID: draft.workflow.id,
   };
   return {
@@ -119,8 +124,16 @@ export function createWorkflowNodeGroupFromNode(
     return unchanged(draft, workflowEditorGraphMutationWarnings.nodeGroupRequiresUngroupedNode);
   }
   const groupName = input.groupName ?? `${node.name} parallel`;
-  const groupKey = input.groupKey ?? uniqueWorkflowModelKey(groupName, draft.nodeGroups.map((group) => group.key));
-  const joinKey = uniqueWorkflowModelKey(`${groupKey}_join`, draft.nodes.map((item) => item.key));
+  const groupKey =
+    input.groupKey ??
+    uniqueWorkflowModelKey(
+      groupName,
+      draft.nodeGroups.map((group) => group.key),
+    );
+  const joinKey = uniqueWorkflowModelKey(
+    `${groupKey}_join`,
+    draft.nodes.map((item) => item.key),
+  );
   const group = {
     id: input.groupID,
     key: groupKey,
@@ -264,10 +277,13 @@ export function extractWorkflowNodeFromGroup(
   );
   const joinEdgeIDs = new Set(
     rehomedIncoming.edges
-      .filter((edge) => extractedTransitionGroupIDs.has(edge.transitionGroupID) && joinIDs.has(edge.targetNodeID))
+      .filter(
+        (edge) => extractedTransitionGroupIDs.has(edge.transitionGroupID) && joinIDs.has(edge.targetNodeID),
+      )
       .map((edge) => edge.id),
   );
-  const afterJoinEdges = joinEdgeIDs.size === 0 ? rehomedIncoming : removeEdgesInternal(rehomedIncoming, joinEdgeIDs);
+  const afterJoinEdges =
+    joinEdgeIDs.size === 0 ? rehomedIncoming : removeEdgesInternal(rehomedIncoming, joinEdgeIDs);
   const ungroupedNodes = afterJoinEdges.nodes.map((item) =>
     item.id === node.id ? { ...item, groupID: "", groupKey: "" } : item,
   );
@@ -337,7 +353,9 @@ function dissolveWorkflowNodeGroup(
   const beforeJoinDeletes =
     fanoutEdgeIDs.length === 0 ? rewiredDraft : removeEdgesInternal(rewiredDraft, new Set(fanoutEdgeIDs));
   const afterJoinDeletes =
-    joinIDs.size === 0 ? { ...beforeJoinDeletes, nodes: ungroupedNodes } : deleteNodeIDsInternal({ ...beforeJoinDeletes, nodes: ungroupedNodes }, joinIDs);
+    joinIDs.size === 0
+      ? { ...beforeJoinDeletes, nodes: ungroupedNodes }
+      : deleteNodeIDsInternal({ ...beforeJoinDeletes, nodes: ungroupedNodes }, joinIDs);
   const nextDraft = {
     ...afterJoinDeletes,
     nodeGroups: afterJoinDeletes.nodeGroups.filter((group) => group.id !== groupID),
@@ -358,7 +376,9 @@ function dissolveWorkflowNodeGroup(
 function orderedNodeGroupBranchIDs(draft: DraftWorkflowDefinition, groupID: string): readonly string[] {
   const group = draft.nodeGroups.find((item) => item.id === groupID);
   const branchIDs = new Set(
-    draft.nodes.filter((node) => node.groupID === groupID && workflowBranchNodeKind(node.kind)).map((node) => node.id),
+    draft.nodes
+      .filter((node) => node.groupID === groupID && workflowBranchNodeKind(node.kind))
+      .map((node) => node.id),
   );
   const ordered = group?.nodeIDs.filter((nodeID) => branchIDs.has(nodeID)) ?? [];
   return ordered.length > 0 ? ordered : [...branchIDs];
@@ -377,7 +397,10 @@ function rehomeExtractedBranchFanoutEdge(
     return { kind: "blocked" };
   }
   const fanoutGroup = fanoutGroups[0];
-  if (fanoutGroup === undefined || draft.transitionGroups.some((group) => group.id === rehomedTransitionGroupID)) {
+  if (
+    fanoutGroup === undefined ||
+    draft.transitionGroups.some((group) => group.id === rehomedTransitionGroupID)
+  ) {
     return { kind: "blocked" };
   }
   const branchEdge = draft.edges.find(

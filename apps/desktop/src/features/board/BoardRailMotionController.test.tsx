@@ -3,9 +3,9 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { BoardCard, BoardColumn, SelectedWorkflowBoard, WorkflowPickerItem } from "../../api";
-import { appI18n, initializeI18n } from "../../i18n/setup";
-import { TestDataTransfer } from "../../testSupport/boardDrag";
+import type { BoardCard, BoardColumn, SelectedWorkflowBoard, WorkflowPickerItem } from "@/api";
+import { appI18n, initializeI18n } from "@/i18n";
+import { TestDataTransfer } from "@/test-support/board-drag";
 import type { PendingBoardCardMove } from "./BoardCardMotionModel";
 import type { KanbanCardVM } from "./BoardColumnViewModel";
 import type { BoardCardDragPayload } from "./BoardDragTypes";
@@ -608,20 +608,14 @@ describe("BoardRailMotionController bounded column lifecycle", () => {
       throw new Error("Expected one Shared task instance in each active column");
     }
     expect(observedCards()).toEqual(new Set([backlogCardElement, reconCardElement]));
-    expect(within(backlogCardElement).getByTestId("task-card-body")).not.toHaveTextContent(
-      "Visible preview",
-    );
-    expect(within(reconCardElement).getByTestId("task-card-body")).not.toHaveTextContent(
-      "Visible preview",
-    );
+    expect(within(backlogCardElement).getByTestId("task-card-body")).not.toHaveTextContent("Visible preview");
+    expect(within(reconCardElement).getByTestId("task-card-body")).not.toHaveTextContent("Visible preview");
 
     intersect(backlogCardElement, true);
     await flush();
     expect(within(backlogCardElement).getByTestId("task-card-body")).toHaveTextContent("Visible preview");
     expect(within(backlogCardElement).getByTestId("task-card-preview-ellipsis")).toBeInTheDocument();
-    expect(within(reconCardElement).getByTestId("task-card-body")).not.toHaveTextContent(
-      "Visible preview",
-    );
+    expect(within(reconCardElement).getByTestId("task-card-body")).not.toHaveTextContent("Visible preview");
 
     intersect(recon, false);
     await flush();

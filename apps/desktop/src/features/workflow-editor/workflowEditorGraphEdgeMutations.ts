@@ -1,4 +1,4 @@
-import type { WorkflowEdge } from "../../api";
+import type { WorkflowEdge } from "@/api";
 import type { DraftWorkflowDefinition } from "./workflowEditorDraftTypes";
 import { uniqueWorkflowModelKey } from "./workflowEditorGraphKeys";
 import {
@@ -42,7 +42,8 @@ export function connectWorkflowNodes(
     uniqueWorkflowModelKey(target.key, transitionIDsForSource(draft, input.sourceNodeID));
   const transitionName = input.transitionName ?? target.name;
   const edgeKey =
-    input.edgeKey ?? uniqueWorkflowModelKey(
+    input.edgeKey ??
+    uniqueWorkflowModelKey(
       target.key,
       edgesForTransitionGroup(draft, input.transitionGroupID).map((edge) => edge.key),
     );
@@ -132,7 +133,9 @@ function groupedSiblingBranchIDs(
 ): ReadonlySet<string> {
   return new Set(
     draft.nodes
-      .filter((node) => workflowBranchNodeKind(node.kind) && node.groupID === groupID && node.id !== targetNodeID)
+      .filter(
+        (node) => workflowBranchNodeKind(node.kind) && node.groupID === groupID && node.id !== targetNodeID,
+      )
       .map((node) => node.id),
   );
 }
@@ -230,10 +233,12 @@ function connectNodeGroupFanoutBranch(
       warnings: [],
     };
   }
-  const edgeKey = input.edgeKey ?? uniqueWorkflowModelKey(
-    target.key,
-    edgesForTransitionGroup(draft, connection.transitionGroupID).map((edge) => edge.key),
-  );
+  const edgeKey =
+    input.edgeKey ??
+    uniqueWorkflowModelKey(
+      target.key,
+      edgesForTransitionGroup(draft, connection.transitionGroupID).map((edge) => edge.key),
+    );
   const edge = {
     contextMode: "new_session",
     contextSource: { kind: "immediate_source", nodeKey: "" },
@@ -372,9 +377,7 @@ function reconnectWorkflowEdgeTarget(
   return {
     draft: {
       ...draft,
-      edges: draft.edges.map((item) =>
-        item.id === edge.id ? { ...item, targetNodeID: target.id } : item,
-      ),
+      edges: draft.edges.map((item) => (item.id === edge.id ? { ...item, targetNodeID: target.id } : item)),
     },
     nextSelection: { edgeID: edge.id, kind: "edge" },
     summary: emptySummary,
@@ -399,7 +402,11 @@ function reconnectWorkflowEdgeSource(
     return unchangedEdge(draft, edge.id, workflowEditorGraphMutationWarnings.transitionGroupNotFound);
   }
   if (edgesForTransitionGroup(draft, transitionGroup.id).length > 1) {
-    return unchangedEdge(draft, edge.id, workflowEditorGraphMutationWarnings.fanoutSourceReconnectUnsupported);
+    return unchangedEdge(
+      draft,
+      edge.id,
+      workflowEditorGraphMutationWarnings.fanoutSourceReconnectUnsupported,
+    );
   }
   if (transitionGroup.sourceNodeID === source.id) {
     return unchangedEdge(draft, edge.id);

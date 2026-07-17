@@ -139,7 +139,11 @@ export function workflowGraphSelectionExists(
 }
 
 export function isFormTarget(target: EventTarget | null): boolean {
-  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement
+  );
 }
 
 function isWorkflowGraphNodeData(data: Node["data"]): data is WorkflowGraphNodeData {
@@ -158,10 +162,7 @@ function workflowGraphEdgeID(edge: Edge): string | null {
   return isWorkflowGraphEdgeData(edge.data) ? edge.data.entityID : edge.id;
 }
 
-function inferReconnectEndpoint(
-  edge: Edge,
-  connection: Connection,
-): WorkflowGraphReconnectEndpoint | null {
+function inferReconnectEndpoint(edge: Edge, connection: Connection): WorkflowGraphReconnectEndpoint | null {
   if (connection.source !== null && connection.source !== edge.source) {
     return "source";
   }
@@ -173,7 +174,7 @@ function inferReconnectEndpoint(
 
 function groupIDFromElement(element: Element | null): string | null {
   const group = element?.closest("[data-workflow-group-id]");
-  return group instanceof HTMLElement ? group.dataset.workflowGroupId ?? null : null;
+  return group instanceof HTMLElement ? (group.dataset.workflowGroupId ?? null) : null;
 }
 
 function groupIDFromBounds(x: number, y: number): string | null {

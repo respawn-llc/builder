@@ -4,13 +4,8 @@ import { type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 
-import {
-  IslandSurface,
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "../../ui";
-import { cx } from "../../ui/classes";
+import { IslandSurface, Tooltip, TooltipContent, TooltipTrigger } from "@/ui";
+import { cx } from "@/ui";
 import { WorkflowNodeKindPicker } from "./WorkflowNodeKindPicker";
 import type { CreatableWorkflowNodeKind } from "./workflowEditorGraphMutationTypes";
 

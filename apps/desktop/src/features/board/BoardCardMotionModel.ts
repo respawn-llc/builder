@@ -1,4 +1,4 @@
-import type { BoardColumn, SelectedWorkflowBoard } from "../../api";
+import type { BoardColumn, SelectedWorkflowBoard } from "@/api";
 import type { KanbanCardVM } from "./BoardColumnViewModel";
 import type { BoardSection } from "./BoardModel";
 

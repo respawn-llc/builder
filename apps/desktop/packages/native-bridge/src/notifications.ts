@@ -30,9 +30,7 @@ export type NativeNotificationTaskDetailTarget = Readonly<{
   kind: "task_detail";
   taskID: string;
   focus:
-    | NativeNotificationQuestionFocus
-    | NativeNotificationApprovalFocus
-    | NativeNotificationInterruptedRunFocus;
+    NativeNotificationQuestionFocus | NativeNotificationApprovalFocus | NativeNotificationInterruptedRunFocus;
 }>;
 
 export type NativeNotificationTarget = NativeNotificationTaskDetailTarget;
@@ -55,7 +53,9 @@ export type NativeNotificationBridge = Readonly<{
   permissionState(): Promise<NativeNotificationPermission>;
   requestPermission(): Promise<NativeNotificationPermission>;
   notify(message: NativeNotification): Promise<void>;
-  onActivated(handler: (activation: NativeNotificationActivation) => void): Promise<NativeNotificationUnlisten>;
+  onActivated(
+    handler: (activation: NativeNotificationActivation) => void,
+  ): Promise<NativeNotificationUnlisten>;
   removeActive(id: string): Promise<void>;
 }>;
 
@@ -88,7 +88,9 @@ type TauriNotificationBackend = Readonly<{
   isPermissionGranted(): Promise<boolean>;
   requestPermission(): Promise<NotificationPermission>;
   send(notification: TauriNotificationRequest): Promise<void>;
-  onActivated(handler: (activation: NativeNotificationActivation) => void): Promise<NativeNotificationUnlisten>;
+  onActivated(
+    handler: (activation: NativeNotificationActivation) => void,
+  ): Promise<NativeNotificationUnlisten>;
   removeActive(backendID: number): Promise<void>;
 }>;
 
@@ -119,7 +121,9 @@ export type TauriNativeNotificationOptions = Readonly<{
   backend?: TauriNotificationBackend;
 }>;
 
-export function createTauriNativeNotifications(options: TauriNativeNotificationOptions): NativeNotificationBridge {
+export function createTauriNativeNotifications(
+  options: TauriNativeNotificationOptions,
+): NativeNotificationBridge {
   if (!tauriPlatformSupportsNativeNotifications(options.platform)) {
     return createUnavailableNativeNotifications();
   }
@@ -190,7 +194,9 @@ function createWebNativeNotifications(runtime: WebNotificationRuntime): NativeNo
         });
       };
     },
-    async onActivated(handler: (activation: NativeNotificationActivation) => void): Promise<NativeNotificationUnlisten> {
+    async onActivated(
+      handler: (activation: NativeNotificationActivation) => void,
+    ): Promise<NativeNotificationUnlisten> {
       handlers.add(handler);
       return () => {
         handlers.delete(handler);
@@ -235,7 +241,9 @@ function createTauriDesktopNativeNotifications(backend: TauriNotificationBackend
 function defaultTauriNotificationBackend(): TauriNotificationBackend {
   return {
     isPermissionGranted: tauriIsPermissionGranted,
-    async onActivated(handler: (activation: NativeNotificationActivation) => void): Promise<NativeNotificationUnlisten> {
+    async onActivated(
+      handler: (activation: NativeNotificationActivation) => void,
+    ): Promise<NativeNotificationUnlisten> {
       return listen<unknown>(tauriActivationEvent, (event) => {
         handler(nativeNotificationActivation(event.payload));
       });
@@ -282,9 +290,7 @@ function nativeNotificationActivation(value: unknown): NativeNotificationActivat
   return parsed.data;
 }
 
-function readWebPermission(
-  notification: WebNotificationConstructor | null,
-): NativeNotificationPermission {
+function readWebPermission(notification: WebNotificationConstructor | null): NativeNotificationPermission {
   if (notification === null) {
     return "unsupported";
   }
@@ -300,10 +306,7 @@ function webPermission(permission: NotificationPermission): NativeNotificationPe
 
 function globalWebNotificationRuntime(): WebNotificationRuntime {
   return {
-    notification:
-      "Notification" in globalThis
-        ? globalThis.Notification
-        : null,
+    notification: "Notification" in globalThis ? globalThis.Notification : null,
     focusWindow() {
       if (typeof window !== "undefined") {
         window.focus();

@@ -1,11 +1,10 @@
 import type { NativeBridge, NativeUpdateDownloadProgress } from "@app/native-bridge";
 import { z } from "zod";
 
-import type { GuiLogger } from "./logging";
+import type { AppLogger } from "@/app-facade";
 
 export type DesktopUpdateAvailability =
-  | Readonly<{ available: false }>
-  | Readonly<{ available: true; version: string }>;
+  Readonly<{ available: false }> | Readonly<{ available: true; version: string }>;
 
 // Self-update is gated off on Homebrew installs (brew owns updates), on installs the
 // platform updater cannot service (Linux deb/plain-binary, where only AppImage
@@ -13,7 +12,7 @@ export type DesktopUpdateAvailability =
 // failures stay silent so the next launch retries instead of surfacing an error chip.
 export async function checkForDesktopUpdate(
   nativeBridge: NativeBridge,
-  logger: GuiLogger,
+  logger: AppLogger,
 ): Promise<DesktopUpdateAvailability> {
   if (!nativeBridge.capabilities.updater) {
     return { available: false };
@@ -41,7 +40,7 @@ export type DesktopUpdateInstall = Readonly<{ ok: boolean }>;
 // error instead of leaving the app in a half-updated state.
 export async function installDesktopUpdate(
   nativeBridge: NativeBridge,
-  logger: GuiLogger,
+  logger: AppLogger,
   onProgress: (progress: NativeUpdateDownloadProgress) => void,
 ): Promise<DesktopUpdateInstall> {
   try {
@@ -64,7 +63,7 @@ export async function installDesktopUpdate(
 // Reads the install-local self-update gate. A read failure is treated as "not
 // disabled" so a missing/corrupt settings file never silently suppresses updates
 // for direct-download installs; the cask explicitly writes "disabled" for brew.
-async function isSelfUpdateDisabled(nativeBridge: NativeBridge, logger: GuiLogger): Promise<boolean> {
+async function isSelfUpdateDisabled(nativeBridge: NativeBridge, logger: AppLogger): Promise<boolean> {
   try {
     const settings = await nativeBridge.settings.read();
     return settings.selfUpdate === "disabled";

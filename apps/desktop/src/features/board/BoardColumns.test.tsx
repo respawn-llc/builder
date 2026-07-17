@@ -2,8 +2,8 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { I18nextProvider } from "react-i18next";
 import { beforeAll, vi } from "vitest";
 
-import { appI18n, initializeI18n } from "../../i18n/setup";
-import { createBoardDragEvent, TestDataTransfer } from "../../testSupport/boardDrag";
+import { appI18n, initializeI18n } from "@/i18n";
+import { createBoardDragEvent, TestDataTransfer } from "@/test-support/board-drag";
 import { KanbanColumn } from "./BoardColumns";
 import type { KanbanCardVM, KanbanColumnVM } from "./BoardColumnViewModel";
 import { boardCardDragPayloadType } from "./BoardDragTypes";

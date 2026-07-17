@@ -1,4 +1,4 @@
-import { chromeContentPaddingClassName } from "../ui/chromePadding";
+import { chromeContentPaddingClassName } from "@/ui";
 
 const edgeToEdgeRoutePatterns = new Set(["/projects/$projectId", "/workflows/$workflowId/editor"]);
 

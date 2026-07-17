@@ -1,9 +1,6 @@
 import { z } from "zod";
 
-import type {
-  WorkflowExecutionTarget,
-  WorkflowExecutionTargetWorktree,
-} from "../workflowExecutionTarget";
+import type { WorkflowExecutionTarget, WorkflowExecutionTargetWorktree } from "../workflowExecutionTarget";
 
 const nonBlankString = z.string().trim().min(1);
 const optionalNonBlankString = nonBlankString.optional().transform((value) => value ?? null);
@@ -41,18 +38,16 @@ const noManagedWorktreeTargetSchema = z
     provenance: z.literal("resolved"),
   })
   .strict()
-  .transform(
-    (value): WorkflowExecutionTarget => ({
-      mode: value.mode,
-      effectiveRoot: value.effective_root,
-      requestedRef: null,
-      resolvedRef: null,
-      commitOID: null,
-      provenance: value.provenance,
-      currentBranch: null,
-      managedWorktree: null,
-    }),
-  );
+  .transform((value): WorkflowExecutionTarget => ({
+    mode: value.mode,
+    effectiveRoot: value.effective_root,
+    requestedRef: null,
+    resolvedRef: null,
+    commitOID: null,
+    provenance: value.provenance,
+    currentBranch: null,
+    managedWorktree: null,
+  }));
 
 const managedTargetSchema = z
   .object({
@@ -104,18 +99,16 @@ const managedTargetSchema = z
       });
     }
   })
-  .transform(
-    (value): WorkflowExecutionTarget => ({
-      mode: value.mode,
-      effectiveRoot: value.effective_root,
-      requestedRef: value.requested_ref,
-      resolvedRef: value.resolved_ref,
-      commitOID: value.commit_oid,
-      provenance: value.provenance,
-      currentBranch: value.current_branch,
-      managedWorktree: value.managed_worktree,
-    }),
-  );
+  .transform((value): WorkflowExecutionTarget => ({
+    mode: value.mode,
+    effectiveRoot: value.effective_root,
+    requestedRef: value.requested_ref,
+    resolvedRef: value.resolved_ref,
+    commitOID: value.commit_oid,
+    provenance: value.provenance,
+    currentBranch: value.current_branch,
+    managedWorktree: value.managed_worktree,
+  }));
 
 export const workflowExecutionTargetSchema: z.ZodType<WorkflowExecutionTarget> = z.union([
   noManagedWorktreeTargetSchema,

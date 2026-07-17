@@ -133,7 +133,9 @@ export function EmptyState({
     >
       <p className="m-0 max-w-[52ch] text-[var(--color-muted)]">{body}</p>
       {children}
-      {renderedActions !== undefined ? <StateActions testID="empty-state-actions">{renderedActions}</StateActions> : null}
+      {renderedActions !== undefined ? (
+        <StateActions testID="empty-state-actions">{renderedActions}</StateActions>
+      ) : null}
     </StateIsland>
   );
 }
@@ -185,7 +187,9 @@ export function ErrorState({
           {details}
         </pre>
       ) : null}
-      {children !== undefined ? <div className="max-w-full text-[var(--color-on-island)]">{children}</div> : null}
+      {children !== undefined ? (
+        <div className="max-w-full text-[var(--color-on-island)]">{children}</div>
+      ) : null}
       {retryLabel !== undefined && onRetry !== undefined ? (
         <StateActions testID="error-state-actions">
           <Button onClick={onRetry} variant="primary">
@@ -246,7 +250,9 @@ function StateIsland({
       >
         {icon}
       </div>
-      {title !== null ? <h2 className={cx("m-0 text-[1.25rem] font-bold", titleClassName)}>{title}</h2> : null}
+      {title !== null ? (
+        <h2 className={cx("m-0 text-[1.25rem] font-bold", titleClassName)}>{title}</h2>
+      ) : null}
       <div className="grid max-w-full justify-items-center gap-[var(--space-2)]">{children}</div>
     </div>
   );
@@ -275,10 +281,7 @@ function StateIsland({
   }
   return (
     <Island
-      className={cx(
-        "grid place-items-center",
-        reveal && "animate-[surface-reveal_var(--motion-normal)]",
-      )}
+      className={cx("grid place-items-center", reveal && "animate-[surface-reveal_var(--motion-normal)]")}
       data-testid={testID}
       tone={tone}
     >

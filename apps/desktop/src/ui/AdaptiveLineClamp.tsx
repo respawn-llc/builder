@@ -17,11 +17,7 @@ export type AdaptiveLineClampProps = Readonly<{
 }> &
   Omit<HTMLAttributes<HTMLSpanElement>, "children" | "className">;
 
-export function AdaptiveLineClamp({
-  children,
-  className,
-  ...props
-}: AdaptiveLineClampProps) {
+export function AdaptiveLineClamp({ children, className, ...props }: AdaptiveLineClampProps) {
   const viewportRef = useRef<HTMLSpanElement | null>(null);
   const lineProbeRef = useRef<HTMLSpanElement | null>(null);
   const [lineCount, setLineCount] = useState<number | null>(null);
@@ -60,11 +56,7 @@ export function AdaptiveLineClamp({
   }, [measure]);
 
   return (
-    <span
-      {...props}
-      className={cx("relative block min-h-0 overflow-hidden", className)}
-      ref={viewportRef}
-    >
+    <span {...props} className={cx("relative block min-h-0 overflow-hidden", className)} ref={viewportRef}>
       <span style={lineClampStyle(lineCount)}>{children}</span>
       <span
         aria-hidden="true"

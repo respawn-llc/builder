@@ -56,7 +56,8 @@ export function Dialog({
         aria-modal="true"
         className={cx(
           "relative grid max-h-[calc(100vh-48px)] w-[min(720px,calc(100vw-32px))] grid-rows-[auto_minmax(0,1fr)] gap-[var(--space-4)] overflow-hidden",
-          surface === "island" && cx(islandSurfaceClassName(0), "rounded-[var(--radius-xl)] p-[var(--space-4)]"),
+          surface === "island" &&
+            cx(islandSurfaceClassName(0), "rounded-[var(--radius-xl)] p-[var(--space-4)]"),
           surface === "transparent" && "bg-transparent p-0 shadow-none",
           className,
         )}

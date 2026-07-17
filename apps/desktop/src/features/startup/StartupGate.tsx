@@ -3,9 +3,9 @@ import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 
-import { useStatusController } from "../../app/useStatusController";
-import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
-import { ErrorState, LoadingState } from "../../ui";
+import { useStatusController } from "@/app-facade";
+import { useConnectionSnapshot } from "@/app-facade";
+import { ErrorState, LoadingState } from "@/ui";
 import { ServerSetupGuide } from "./ServerSetupGuide";
 import { useStartup } from "./useStartup";
 
@@ -47,7 +47,14 @@ export function StartupGate({ children }: StartupGateProps): ReactElement {
   }, [location.pathname, navigate, startupTitleKey]);
 
   if (startup.kind === "loading") {
-    return <LoadingState body={t("startup.loadingBody")} chromePadding reveal={false} title={t("startup.loadingTitle")} />;
+    return (
+      <LoadingState
+        body={t("startup.loadingBody")}
+        chromePadding
+        reveal={false}
+        title={t("startup.loadingTitle")}
+      />
+    );
   }
 
   if (startup.kind === "server-missing") {

@@ -2,16 +2,16 @@ import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, Save } from "lucide-react";
 
-import type { ProjectEdit, WorkspaceSummary } from "../../api";
-import { errorMessage } from "../../api/errors";
-import { useAppServices } from "../../app/useAppServices";
-import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
-import { useNativeDialogFallback } from "../../app/useNativeDialogFallback";
-import { usePublishSidebarHeaderAction } from "../../app/sidebarHeaderActionContext";
-import { useSidebarHeaderOffset } from "../../app/sidebarHeaderOffset";
-import { useStatusController } from "../../app/useStatusController";
-import { useWindowChromeTitle } from "../../app/windowChromeTitle";
-import { Button, ErrorState, HelpHint, LoadingState, VirtualizedInfiniteList } from "../../ui";
+import type { ProjectEdit, WorkspaceSummary } from "@/api";
+import { errorMessage } from "@/api";
+import { useAppServices } from "@/app-facade";
+import { useConnectionSnapshot } from "@/app-facade";
+import { useNativeDialogFallback } from "@/app-facade";
+import { usePublishSidebarHeaderAction } from "@/app-facade";
+import { useSidebarHeaderOffset } from "@/app-facade";
+import { useStatusController } from "@/app-facade";
+import { useWindowChromeTitle } from "@/app-facade";
+import { Button, ErrorState, HelpHint, LoadingState, VirtualizedInfiniteList } from "@/ui";
 import {
   ProjectKeyField,
   ProjectNameField,

@@ -6,8 +6,9 @@ import type {
   WorkflowNode,
   WorkflowNodeGroup,
   WorkflowValidation,
-} from "../../api";
-import type { WorkflowInspectorSelection } from "../../app/sidebarContext";
+} from "@/api";
+import type { WorkflowInspectorSelection } from "@/app-facade";
+import { WorkflowEdgeRouteGraphic } from "@/shared/workflow-edge";
 import {
   DetailRow,
   DetailSection,
@@ -15,7 +16,6 @@ import {
   MissingEntity,
   ValidationDetails,
 } from "./WorkflowInspectorPrimitives";
-import { WorkflowEdgeRouteGraphic } from "./WorkflowEdgeRouteGraphic";
 import { fallbackLabel, transitionGroupIsFanOut } from "./workflowInspectorModel";
 import { Bindings, FieldSummary, JoinProviders, PromptPreview } from "./WorkflowInspectorSharedSections";
 import {
@@ -72,10 +72,7 @@ function WorkflowDetails({
   return (
     <InspectorStack>
       <DetailSection title={t("workflowEditor.inspectorOverview")}>
-        <DetailRow
-          label={t("workflowEditor.version")}
-          value={definition.workflow.version.toString()}
-        />
+        <DetailRow label={t("workflowEditor.version")} value={definition.workflow.version.toString()} />
         <DetailRow label={t("workflowEditor.nodeCount")} value={definition.nodes.length.toString()} />
         <DetailRow label={t("workflowEditor.edgeCount")} value={definition.edges.length.toString()} />
         <DetailRow label={t("workflowEditor.groupCount")} value={definition.nodeGroups.length.toString()} />
@@ -125,7 +122,10 @@ export function NodeDetails({
       ) : null}
       {node.kind === "join" ? (
         <>
-          <FieldSummary fields={derivedNode.joinOutputFields} title={t("workflowEditor.joinRequiredInputs")} />
+          <FieldSummary
+            fields={derivedNode.joinOutputFields}
+            title={t("workflowEditor.joinRequiredInputs")}
+          />
           <JoinProviders definition={definition} node={node} />
         </>
       ) : null}

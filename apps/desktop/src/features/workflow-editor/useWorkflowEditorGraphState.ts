@@ -6,16 +6,13 @@ import {
   type WorkflowDefinition,
   type WorkflowDerivedWiring,
   type WorkflowValidation,
-} from "../../api";
+} from "@/api";
 import {
   workflowDefinitionFromDraft,
   type WorkflowEditorDirtyState,
   type WorkflowEditorDraftState,
 } from "./workflowEditorDraft";
-import {
-  workflowGraphLayoutWithDraftProjection,
-  type WorkflowGraphLayout,
-} from "./workflowGraphLayout";
+import { workflowGraphLayoutWithDraftProjection, type WorkflowGraphLayout } from "./workflowGraphLayout";
 import {
   emptyWorkflowValidation,
   mergeWorkflowValidations,
@@ -57,7 +54,11 @@ export function useWorkflowEditorGraphState(
     [data.workflowQuery.data, draftState],
   );
   const draftValidationQuery = useWorkflowDraftValidationQuery(workflowID, draftState, dirty.graphDirty);
-  const draftDerivedWiringQuery = useWorkflowDraftDerivedWiringQuery(workflowID, draftState, dirty.graphDirty);
+  const draftDerivedWiringQuery = useWorkflowDraftDerivedWiringQuery(
+    workflowID,
+    draftState,
+    dirty.graphDirty,
+  );
   const cachedDraftValidation = draftValidationQuery.data?.draft ?? null;
   const cachedExecutionValidation = resolveCachedExecutionValidation(
     draftValidationQuery.data?.execution,

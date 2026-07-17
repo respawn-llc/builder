@@ -4,12 +4,13 @@ import { useForm, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-import { errorMessage } from "../../api/errors";
-import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
-import { useAppServices } from "../../app/useAppServices";
-import { Button, Dialog, NativeDialogWindow, SelectField, TextArea, TextInput } from "../../ui";
-import { cx } from "../../ui/classes";
-import { useCreateTask, useWorkspaces } from "./useTaskMutations";
+import { errorMessage } from "@/api";
+import { useConnectionSnapshot } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
+import { NativeDialogWindow } from "@/shared/native-dialog";
+import { useCreateTask, useWorkspaces } from "@/shared/task-mutations";
+import { Button, Dialog, SelectField, TextArea, TextInput } from "@/ui";
+import { cx } from "@/ui";
 
 const newTaskContentMaxWidth = "560px";
 
@@ -141,7 +142,8 @@ export function NewTaskForm({
     [workspaceItems],
   );
   const selectedWorkspaceID = useWatch({ control: form.control, name: "sourceWorkspaceID" });
-  const displayedWorkspaceID = selectedWorkspaceID.trim().length > 0 ? selectedWorkspaceID : initialWorkspaceID;
+  const displayedWorkspaceID =
+    selectedWorkspaceID.trim().length > 0 ? selectedWorkspaceID : initialWorkspaceID;
   const disabled =
     connection.phase !== "connected" || createTask.isPending || initialWorkspaceID.length === 0;
 

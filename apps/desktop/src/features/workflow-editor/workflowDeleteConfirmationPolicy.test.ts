@@ -5,7 +5,7 @@ import {
   emptyWorkflowDerivedWiring,
   type WorkflowDefinition,
   type WorkflowNode,
-} from "../../api";
+} from "@/api";
 import {
   workflowDeleteNeedsConfirmation,
   workflowDeletionConfirmationCounts,

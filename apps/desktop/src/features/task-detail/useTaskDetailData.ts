@@ -1,12 +1,12 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 
-import type { QuestionAnswerInput } from "../../api";
-import { errorMessage } from "../../api/errors";
-import { queryKeys } from "../../app/queryKeys";
-import { useAppServices } from "../../app/useAppServices";
-import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
-import { workflowProjectEventAffectsTask } from "../../app/workflowProjectEvents";
+import type { QuestionAnswerInput } from "@/api";
+import { errorMessage } from "@/api";
+import { queryKeys } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
+import { useConnectionSnapshot } from "@/app-facade";
+import { workflowProjectEventAffectsTask } from "@/app-facade";
 
 // useTaskDetailLiveRefresh keeps an open task detail in sync with the server by
 // subscribing to its project's workflow events. Any event that mutates this
@@ -28,7 +28,7 @@ export function useTaskDetailLiveRefresh(taskID: string, projectID: string, enab
       return;
     }
     const subscription = api.subscribeProject(projectID, {
-      onEvent(_method, params) {
+      onEvent(params) {
         if (!workflowProjectEventAffectsTask(params, taskID)) {
           return;
         }

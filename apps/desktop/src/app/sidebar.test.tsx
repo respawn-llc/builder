@@ -3,9 +3,9 @@ import type { ReactNode } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, beforeAll, vi } from "vitest";
 
-import { appI18n, initializeI18n } from "../i18n/setup";
+import { appI18n, initializeI18n } from "@/i18n";
 import { SidebarHost } from "./sidebar";
-import { useSidebar } from "./sidebarContext";
+import { useSidebar } from "@/app-facade";
 import { SidebarProvider } from "./sidebarProvider";
 
 describe("SidebarHost", () => {
@@ -262,9 +262,7 @@ async function renderOpenSidebarAtWindowWidth(
     <I18nextProvider i18n={appI18n}>
       <SidebarProvider>
         <div className="relative flex min-h-0" data-testid="app-shell-content">
-          <div className="min-w-0 flex-1">
-            {opener}
-          </div>
+          <div className="min-w-0 flex-1">{opener}</div>
           <SidebarHost />
         </div>
       </SidebarProvider>

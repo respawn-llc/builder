@@ -1,11 +1,12 @@
 import { createRoute, type AnyRootRoute } from "@tanstack/react-router";
 import { z } from "zod";
 
-import type { WorkflowDeleteImpact } from "../api";
-import { WorkflowDeleteWindowRoute } from "../features/workflow-editor/WorkflowDeleteButton";
+import type { WorkflowDeleteImpact } from "@/api";
+import { WorkflowDeleteWindowRoute } from "@/features/workflow-editor";
+import { workflowDeleteNativeDialogPath } from "@/shared/workflow-deletion";
 import { InvalidNativeDialogRoute } from "./InvalidNativeDialogRoute";
 
-export const workflowDeleteNativeDialogPath = "/native-dialog/workflow-delete";
+export { workflowDeleteNativeDialogPath } from "@/shared/workflow-deletion";
 
 const optionalSearchString = z
   .union([z.string(), z.number().transform((value) => value.toString())])

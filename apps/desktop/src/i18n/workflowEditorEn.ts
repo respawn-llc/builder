@@ -73,7 +73,8 @@ export const workflowEditorEnglish = {
   executionTargetPolicy_default_branchHelp:
     "Create a managed worktree from the repository's configured remote default branch.",
   executionTargetPolicy_custom_ref: "Custom Git ref",
-  executionTargetPolicy_custom_refHelp: "Resolve a branch, tag, commit, or other Git revision when execution starts.",
+  executionTargetPolicy_custom_refHelp:
+    "Resolve a branch, tag, commit, or other Git revision when execution starts.",
   executionTargetPolicy_ask_on_first_execution: "Ask when execution starts",
   executionTargetPolicy_ask_on_first_executionHelp:
     "Let the operator choose a task-local target when the task first reaches executable work.",

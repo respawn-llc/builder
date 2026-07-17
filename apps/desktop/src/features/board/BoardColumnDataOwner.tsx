@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { BoardColumn, SelectedWorkflowBoard } from "../../api";
-import { errorMessage } from "../../api/errors";
-import type { VirtualizedInfiniteListBoundaryState } from "../../ui";
+import type { BoardColumn, SelectedWorkflowBoard } from "@/api";
+import { errorMessage } from "@/api";
+import type { VirtualizedInfiniteListBoundaryState } from "@/ui";
 import { cardBelongsToColumn } from "./BoardCardMotionModel";
 import { toKanbanCardVM, type KanbanCardVM } from "./BoardColumnViewModel";
 import { useBoardNodeCards } from "./useBoardData";

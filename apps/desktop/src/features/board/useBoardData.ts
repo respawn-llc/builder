@@ -7,11 +7,11 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useEffect } from "react";
 
-import type { BoardNodeCardsPage } from "../../api";
-import { queryKeys } from "../../app/queryKeys";
-import { useAppServices } from "../../app/useAppServices";
-import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
-import { workflowProjectEvent, workflowProjectQuestionTaskID } from "../../app/workflowProjectEvents";
+import type { BoardNodeCardsPage } from "@/api";
+import { queryKeys } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
+import { useConnectionSnapshot } from "@/app-facade";
+import { workflowProjectEvent, workflowProjectQuestionTaskID } from "@/app-facade";
 
 export function useBoard(projectID: string, workflowID: string | undefined) {
   const { api } = useAppServices();
@@ -95,7 +95,7 @@ export function useProjectBoardSubscription(
       onOpen() {
         void refresh().catch(consumeBackgroundError);
       },
-      onEvent(_method, params) {
+      onEvent(params) {
         if (isDeletedTaskEvent(params, selectedTaskID)) {
           onSelectedTaskDeleted?.();
         }

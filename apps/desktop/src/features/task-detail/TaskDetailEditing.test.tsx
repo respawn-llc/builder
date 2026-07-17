@@ -2,26 +2,24 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { useState } from "react";
 import { afterEach, vi } from "vitest";
 
-import { App } from "../../App";
-import type { TaskDetail } from "../../api";
-import type { JsonValue } from "../../api/json";
-import { taskDetailSchema } from "../../api/schemas/workflowBoard";
-import { AppProviders } from "../../app/AppProviders";
-import { createTestServices, startupRoutes } from "../../testSupport/appServices";
+import type { TaskDetail } from "@/api";
+import type { JsonValue } from "@/api";
+import { createTestServices, startupRoutes, TestAppProviders } from "@/test-support/app-services";
 import {
   activityResponse,
+  createTaskDetailFixture,
   getCallCount,
   questionAttention,
   taskDetailNoInboxResponse,
-  taskDetailResponse,
   taskQuestionWaitingEvent,
   taskUpdateParamsSchema,
   taskUpdateResponse,
   taskUpdatedEvent,
-} from "../../testSupport/taskDetailFixtures";
+} from "@/test-support/task-detail";
 import { TaskDetailContent } from "./TaskDetailContent";
 import { initialDescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
 import { DescriptionIsland, type TaskDraft } from "./TaskDetailRows";
+import { TaskDetailSurface } from "./TaskDetailSurface";
 import { useTaskActivity, useTaskComments } from "./useTaskDetailData";
 
 describe("TaskDetailSurface editing", () => {
@@ -61,7 +59,7 @@ describe("TaskDetailSurface editing", () => {
       },
     ]);
 
-    render(<App services={services} />);
+    renderTaskDetail(services);
 
     expect(await screen.findByRole("textbox", { name: "Title" })).toHaveValue("Resolve blocker");
     expect(screen.queryByRole("region", { name: "Inbox" })).not.toBeInTheDocument();
@@ -110,7 +108,7 @@ describe("TaskDetailSurface editing", () => {
       { method: "workflow.task.update", result: taskUpdateResponse },
     ]);
 
-    render(<App services={services} />);
+    renderTaskDetail(services);
 
     expect(await screen.findByRole("textbox", { name: "Title" })).toHaveValue("Resolve blocker");
     expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
@@ -150,7 +148,7 @@ describe("TaskDetailSurface editing", () => {
       { method: "workflow.task.activity.list", result: activityResponse },
     ]);
 
-    render(<App services={services} />);
+    renderTaskDetail(services);
 
     const description = await screen.findByRole("textbox", { name: "Description" });
     Object.defineProperties(description, {
@@ -194,7 +192,7 @@ describe("TaskDetailSurface editing", () => {
       { method: "workflow.task.activity.list", result: activityResponse },
     ]);
 
-    render(<App services={services} />);
+    renderTaskDetail(services);
 
     const description = await screen.findByRole("textbox", { name: "Description" });
     Object.defineProperties(description, {
@@ -211,7 +209,7 @@ describe("TaskDetailSurface editing", () => {
   });
 
   it("resets description presentation when a mounted detail surface switches tasks", async () => {
-    const taskOne: TaskDetail = taskDetailSchema.parse(taskDetailResponse);
+    const taskOne = await createTaskDetailFixture();
     const taskTwo: TaskDetail = {
       ...taskOne,
       id: "task-2",
@@ -221,18 +219,18 @@ describe("TaskDetailSurface editing", () => {
     };
     const services = createTestServices(startupRoutes);
     const { rerender } = render(
-      <AppProviders services={services}>
+      <TestAppProviders services={services}>
         <TaskDetailContentHarness detail={taskOne} />
-      </AppProviders>,
+      </TestAppProviders>,
     );
 
     fireEvent.focus(await screen.findByRole("textbox", { name: "Description" }));
     expect(screen.getByRole("textbox", { name: "Description" })).toBeInstanceOf(HTMLTextAreaElement);
 
     rerender(
-      <AppProviders services={services}>
+      <TestAppProviders services={services}>
         <TaskDetailContentHarness detail={taskTwo} />
-      </AppProviders>,
+      </TestAppProviders>,
     );
 
     const description = await screen.findByRole("textbox", { name: "Description" });
@@ -250,9 +248,9 @@ describe("TaskDetailSurface editing", () => {
   it("retains expanded description presentation when the virtualized body row remounts", async () => {
     const services = createTestServices(startupRoutes);
     const { rerender } = render(
-      <AppProviders services={services}>
+      <TestAppProviders services={services}>
         <VirtualizedDescriptionHarness bodyVisible />
-      </AppProviders>,
+      </TestAppProviders>,
     );
 
     const description = screen.getByRole("textbox", { name: "Description" });
@@ -266,16 +264,16 @@ describe("TaskDetailSurface editing", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Expand" }));
 
     rerender(
-      <AppProviders services={services}>
+      <TestAppProviders services={services}>
         <VirtualizedDescriptionHarness bodyVisible={false} />
-      </AppProviders>,
+      </TestAppProviders>,
     );
     expect(screen.queryByTestId("task-description-input-frame")).not.toBeInTheDocument();
 
     rerender(
-      <AppProviders services={services}>
+      <TestAppProviders services={services}>
         <VirtualizedDescriptionHarness bodyVisible />
-      </AppProviders>,
+      </TestAppProviders>,
     );
     expect(screen.getByRole("textbox", { name: "Description" })).not.toBeInstanceOf(HTMLTextAreaElement);
     expect(screen.queryByRole("button", { name: "Expand" })).not.toBeInTheDocument();
@@ -303,7 +301,7 @@ describe("TaskDetailSurface editing", () => {
       { method: "ask.listPendingBySession", result: { Asks: [] } },
     ]);
 
-    render(<App services={services} />);
+    renderTaskDetail(services);
 
     await screen.findByRole("textbox", { name: "Title" });
     expect(screen.queryByRole("region", { name: "Question" })).not.toBeInTheDocument();
@@ -336,7 +334,7 @@ describe("TaskDetailSurface editing", () => {
       { method: "workflow.task.activity.list", result: activityResponse },
     ]);
 
-    render(<App services={services} />);
+    renderTaskDetail(services);
 
     const description = await screen.findByRole("textbox", { name: "Description" });
     fireEvent.focus(description);
@@ -380,7 +378,7 @@ describe("TaskDetailSurface editing", () => {
       { method: "workflow.task.activity.list", result: activityResponse },
     ]);
 
-    render(<App services={services} />);
+    renderTaskDetail(services);
 
     expect(await screen.findByRole("textbox", { name: "Title" })).toHaveValue("Resolve blocker");
 
@@ -397,16 +395,19 @@ describe("TaskDetailSurface editing", () => {
   });
 });
 
+function renderTaskDetail(services: ReturnType<typeof createTestServices>) {
+  return render(
+    <TestAppProviders services={services}>
+      <TaskDetailSurface enabled taskId="task-1" />
+    </TestAppProviders>,
+  );
+}
+
 function TaskDetailContentHarness({ detail }: Readonly<{ detail: TaskDetail }>) {
   const activity = useTaskActivity(detail.id, false);
   const comments = useTaskComments(detail.id, false);
   return (
-    <TaskDetailContent
-      activity={activity}
-      comments={comments}
-      detail={detail}
-      openLink={() => undefined}
-    />
+    <TaskDetailContent activity={activity} comments={comments} detail={detail} openLink={() => undefined} />
   );
 }
 

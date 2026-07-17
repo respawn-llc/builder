@@ -12,17 +12,17 @@ import {
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage } from "../../api/errors";
-import { useSidebar } from "../../app/sidebarContext";
+import { errorMessage } from "@/api";
+import { useSidebar } from "@/app-facade";
 import type {
   SidebarDestination,
   WorkflowInspectorInitialFocus,
   WorkflowInspectorSelection,
-} from "../../app/sidebarContext";
-import { useStatusController } from "../../app/useStatusController";
-import { useWindowChromeTitle } from "../../app/windowChromeTitle";
-import { ErrorState, LoadingState } from "../../ui";
-import { cx } from "../../ui/classes";
+} from "@/app-facade";
+import { useStatusController } from "@/app-facade";
+import { useWindowChromeTitle } from "@/app-facade";
+import { ErrorState, LoadingState } from "@/ui";
+import { cx } from "@/ui";
 import { useWorkflowEditorData, type WorkflowEditorData } from "./useWorkflowEditorData";
 import {
   initializeWorkflowEditorDraft,
@@ -33,11 +33,11 @@ import {
   useRegisterWorkflowEditorDraftController,
   type WorkflowEditorDraftController,
 } from "./workflowEditorDraftBridgeCore";
-import { graphEditWarningTranslationKey, type PendingGraphMutation } from "./workflowEditorGraphMutationPlanning";
 import {
-  emptyWorkflowDefinition,
-  emptyWorkflowValidation,
-} from "./workflowEditorLayoutSnapshot";
+  graphEditWarningTranslationKey,
+  type PendingGraphMutation,
+} from "./workflowEditorGraphMutationPlanning";
+import { emptyWorkflowDefinition, emptyWorkflowValidation } from "./workflowEditorLayoutSnapshot";
 import { workflowEditorDraftStateReducer } from "./workflowEditorQueries";
 import { workflowEditorViewState } from "./workflowEditorViewState";
 import { useWorkflowEditorGraphState } from "./useWorkflowEditorGraphState";
@@ -167,15 +167,7 @@ export function WorkflowEditorRoute({ projectID, surface = "route", workflowID }
       state: fallbackDraftState,
       workflowID,
     }),
-    [
-      dirty,
-      draftDerivedWiring,
-      draftValidation,
-      executionValidation,
-      fallbackDraftState,
-      save,
-      workflowID,
-    ],
+    [dirty, draftDerivedWiring, draftValidation, executionValidation, fallbackDraftState, save, workflowID],
   );
   useRegisterWorkflowEditorDraftController(controller);
   useEffect(() => {

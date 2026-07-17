@@ -11,9 +11,9 @@ import type {
   WorkflowParameter,
   WorkflowTransitionGroup,
   WorkflowValidation,
-} from "../../api";
-import { queryKeys } from "../../app/queryKeys";
-import { type SelectFieldOption } from "../../ui";
+} from "@/api";
+import { queryKeys } from "@/app-facade";
+import { type SelectFieldOption } from "@/ui";
 import { fallbackLabel, nodeByID, transitionGroupByID } from "./workflowInspectorModel";
 
 export type Translate = ReturnType<typeof useTranslation>["t"];

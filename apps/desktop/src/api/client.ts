@@ -1,5 +1,6 @@
 import type { AttentionNotificationEventHandler } from "./attentionNotifications";
 import { attentionNotificationRpcHandler } from "./attentionNotificationSubscription";
+import type { ApiConnectionSource, ApiEventHandler, ApiService, ApiSubscription } from "./apiService";
 import { parseRpcResponse as parse } from "./clientParse";
 import * as taskLifecycle from "./clientTaskLifecycle";
 import {
@@ -98,22 +99,24 @@ import {
   workflowListSchema,
   workflowValidationSchema,
 } from "./schemas/workflow";
-import type { RpcEventHandler, RpcSubscription, RpcTransport } from "./transport";
+import type { RpcEventHandler, RpcTransport } from "./transport";
 
 export const guiTaskCommentAuthor = "user";
 
-export class ApiClient {
-  readonly transport: RpcTransport;
+export class ApiClient implements ApiService {
+  readonly connection: ApiConnectionSource;
+  readonly #transport: RpcTransport;
 
   constructor(transport: RpcTransport) {
-    this.transport = transport;
+    this.#transport = transport;
+    this.connection = transport.connection;
   }
 
   async getReadiness(): Promise<ServerReadiness> {
     return parse(
       "server.readiness.get",
       readinessSchema,
-      await this.transport.call("server.readiness.get", emptyJsonObject),
+      await this.#transport.call("server.readiness.get", emptyJsonObject),
     );
   }
 
@@ -121,7 +124,7 @@ export class ApiClient {
     return parse(
       "project.home.list",
       projectPageSchema,
-      await this.transport.call("project.home.list", { page_size: 40, page_token: pageToken }),
+      await this.#transport.call("project.home.list", { page_size: 40, page_token: pageToken }),
     );
   }
 
@@ -129,7 +132,7 @@ export class ApiClient {
     return parse(
       "project.workspace.list",
       workspaceListSchema,
-      await this.transport.call("project.workspace.list", {
+      await this.#transport.call("project.workspace.list", {
         project_id: projectID,
         page_size: 100,
         page_token: pageToken,
@@ -141,7 +144,7 @@ export class ApiClient {
     return parse(
       "project.edit.get",
       projectEditSchema,
-      await this.transport.call("project.edit.get", {
+      await this.#transport.call("project.edit.get", {
         project_id: projectID,
         page_size: 100,
         page_token: pageToken,
@@ -153,7 +156,7 @@ export class ApiClient {
     return parse(
       "project.planWorkspaceBinding",
       bindingPlanSchema,
-      await this.transport.call("project.planWorkspaceBinding", { path, mode: "interactive" }),
+      await this.#transport.call("project.planWorkspaceBinding", { path, mode: "interactive" }),
     );
   }
 
@@ -165,7 +168,7 @@ export class ApiClient {
     return parse(
       "project.create",
       projectCreateSchema,
-      await this.transport.call("project.create", {
+      await this.#transport.call("project.create", {
         display_name: displayName,
         project_key: projectKey,
         workspace_root: workspaceRoot,
@@ -177,7 +180,7 @@ export class ApiClient {
     return parse(
       "project.attachWorkspace",
       projectCreateSchema,
-      await this.transport.call("project.attachWorkspace", {
+      await this.#transport.call("project.attachWorkspace", {
         project_id: projectID,
         workspace_root: workspaceRoot,
       }),
@@ -192,7 +195,7 @@ export class ApiClient {
     return parse(
       "project.update",
       projectMutationResponseSchema,
-      await this.transport.call("project.update", {
+      await this.#transport.call("project.update", {
         project_id: projectID,
         display_name: displayName,
         project_key: projectKey,
@@ -204,7 +207,7 @@ export class ApiClient {
     return parse(
       "project.defaultWorkspace.set",
       projectMutationResponseSchema,
-      await this.transport.call("project.defaultWorkspace.set", {
+      await this.#transport.call("project.defaultWorkspace.set", {
         project_id: projectID,
         workspace_id: workspaceID,
       }),
@@ -215,7 +218,7 @@ export class ApiClient {
     return parse(
       "project.unlinkWorkspace",
       workspaceUnlinkResponseSchema,
-      await this.transport.call("project.unlinkWorkspace", {
+      await this.#transport.call("project.unlinkWorkspace", {
         project_id: projectID,
         workspace_id: workspaceID,
       }),
@@ -226,7 +229,7 @@ export class ApiClient {
     return parse(
       "project.delete",
       projectDeleteResponseSchema,
-      await this.transport.call("project.delete", { project_id: projectID }),
+      await this.#transport.call("project.delete", { project_id: projectID }),
     );
   }
 
@@ -234,7 +237,7 @@ export class ApiClient {
     return parse(
       "workflow.board.get",
       workflowBoardSchema,
-      await this.transport.call(
+      await this.#transport.call(
         "workflow.board.get",
         compactJsonObject({
           project_id: projectID,
@@ -248,7 +251,7 @@ export class ApiClient {
     return parse(
       "workflow.get",
       workflowDefinitionSchema,
-      await this.transport.call("workflow.get", { workflow_id: workflowID }),
+      await this.#transport.call("workflow.get", { workflow_id: workflowID }),
     );
   }
 
@@ -256,7 +259,7 @@ export class ApiClient {
     return parse(
       "workflow.list",
       workflowListSchema,
-      await this.transport.call(
+      await this.#transport.call(
         "workflow.list",
         compactJsonObject({
           page_size: input.pageSize ?? 40,
@@ -271,7 +274,7 @@ export class ApiClient {
     return parse(
       "workflow.create",
       workflowCreateSchema,
-      await this.transport.call(
+      await this.#transport.call(
         "workflow.create",
         compactJsonObject({
           name: input.name,
@@ -287,7 +290,7 @@ export class ApiClient {
     return parse(
       "workflow.createAndLinkProject",
       workflowCreateAndLinkSchema,
-      await this.transport.call(
+      await this.#transport.call(
         "workflow.createAndLinkProject",
         compactJsonObject({
           name: input.name,
@@ -303,7 +306,7 @@ export class ApiClient {
     return parse(
       "workflow.linkProject",
       workflowLinkProjectSchema,
-      await this.transport.call(
+      await this.#transport.call(
         "workflow.linkProject",
         compactJsonObject({
           project_id: input.projectID,
@@ -321,7 +324,7 @@ export class ApiClient {
     return parse(
       "workflow.validate",
       workflowValidationSchema,
-      await this.transport.call("workflow.validate", { workflow_id: workflowID, mode }),
+      await this.#transport.call("workflow.validate", { workflow_id: workflowID, mode }),
     );
   }
 
@@ -329,7 +332,7 @@ export class ApiClient {
     return parse(
       "workflow.scriptPath.validate",
       workflowValidationSchema,
-      await this.transport.call(
+      await this.#transport.call(
         "workflow.scriptPath.validate",
         compactJsonObject({
           workflow_id: input.workflowID,
@@ -346,7 +349,7 @@ export class ApiClient {
     return parse(
       "workflow.graph.validateDraft",
       workflowGraphValidateDraftSchema,
-      await this.transport.call(
+      await this.#transport.call(
         "workflow.graph.validateDraft",
         compactJsonObject({
           workflow_id: input.workflowID,
@@ -362,7 +365,7 @@ export class ApiClient {
     return parse(
       "workflow.graph.deriveWiring",
       workflowGraphDeriveWiringSchema,
-      await this.transport.call(
+      await this.#transport.call(
         "workflow.graph.deriveWiring",
         compactJsonObject({
           workflow_id: input.workflowID,
@@ -376,7 +379,7 @@ export class ApiClient {
     return parse(
       "workflow.graph.savePreview",
       workflowGraphSavePreviewSchema,
-      await this.transport.call(
+      await this.#transport.call(
         "workflow.graph.savePreview",
         compactJsonObject({
           workflow_id: input.workflowID,
@@ -392,7 +395,7 @@ export class ApiClient {
     return parse(
       "workflow.graph.save",
       workflowGraphSaveSchema,
-      await this.transport.call(
+      await this.#transport.call(
         "workflow.graph.save",
         compactJsonObject({
           workflow_id: input.workflowID,
@@ -409,7 +412,7 @@ export class ApiClient {
     return parse(
       "workflow.deletePreview",
       workflowDeletePreviewSchema,
-      await this.transport.call("workflow.deletePreview", { workflow_id: workflowID }),
+      await this.#transport.call("workflow.deletePreview", { workflow_id: workflowID }),
     );
   }
 
@@ -417,7 +420,7 @@ export class ApiClient {
     return parse(
       "workflow.delete",
       workflowDeleteResponseSchema,
-      await this.transport.call(
+      await this.#transport.call(
         "workflow.delete",
         compactJsonObject({
           workflow_id: input.workflowID,
@@ -436,7 +439,7 @@ export class ApiClient {
     return parse(
       "workflow.listProjectLinks",
       projectWorkflowLinksSchema,
-      await this.transport.call("workflow.listProjectLinks", { project_id: projectID }),
+      await this.#transport.call("workflow.listProjectLinks", { project_id: projectID }),
     );
   }
 
@@ -449,7 +452,7 @@ export class ApiClient {
     return parse(
       "workflow.board.nodeCards.list",
       boardNodeCardsPageSchema,
-      await this.transport.call(
+      await this.#transport.call(
         "workflow.board.nodeCards.list",
         compactJsonObject({
           project_id: projectID,
@@ -466,7 +469,7 @@ export class ApiClient {
     return parse(
       "workflow.attention.list",
       attentionPageSchema,
-      await this.transport.call(
+      await this.#transport.call(
         "workflow.attention.list",
         compactJsonObject({
           project_id: projectID.length > 0 ? projectID : undefined,
@@ -481,7 +484,7 @@ export class ApiClient {
     const response = parse(
       "workflow.task.create",
       taskCreateResponseSchema,
-      await this.transport.call(
+      await this.#transport.call(
         "workflow.task.create",
         compactJsonObject({
           project_id: input.projectID,
@@ -499,7 +502,7 @@ export class ApiClient {
     const response = parse(
       "workflow.task.update",
       taskUpdateResponseSchema,
-      await this.transport.call(
+      await this.#transport.call(
         "workflow.task.update",
         compactJsonObject({
           task_id: input.taskID,
@@ -517,22 +520,22 @@ export class ApiClient {
     setupOperationID?: SetupOperationID,
     executionTarget?: WorkflowExecutionTargetSelection,
   ): Promise<TaskStartResponse> {
-    return taskLifecycle.startTask(this.transport, taskID, setupOperationID, executionTarget);
+    return taskLifecycle.startTask(this.#transport, taskID, setupOperationID, executionTarget);
   }
 
   async moveTask(input: TaskMoveInput): Promise<TaskMoveResponse> {
-    return taskLifecycle.moveTask(this.transport, input);
+    return taskLifecycle.moveTask(this.#transport, input);
   }
 
   async interruptTask(taskID: string, sessionID?: string): Promise<void> {
-    await this.transport.call(
+    await this.#transport.call(
       "workflow.task.interrupt",
       compactJsonObject({ task_id: taskID, session_id: sessionID }),
     );
   }
 
   async resumeTask(taskID: string): Promise<void> {
-    await this.transport.call("workflow.task.resume", compactJsonObject({ task_id: taskID }));
+    await this.#transport.call("workflow.task.resume", compactJsonObject({ task_id: taskID }));
   }
 
   async approveTransition(
@@ -541,7 +544,7 @@ export class ApiClient {
     executionTarget?: WorkflowExecutionTargetSelection,
   ): Promise<TaskApproveResponse> {
     return taskLifecycle.approveTransition(
-      this.transport,
+      this.#transport,
       taskTransitionID,
       setupOperationID,
       executionTarget,
@@ -549,18 +552,18 @@ export class ApiClient {
   }
 
   async cancelTask(taskID: string): Promise<void> {
-    await this.transport.call("workflow.task.cancel", { task_id: taskID });
+    await this.#transport.call("workflow.task.cancel", { task_id: taskID });
   }
 
   async deleteTask(taskID: string): Promise<void> {
-    await this.transport.call("workflow.task.delete", { task_id: taskID });
+    await this.#transport.call("workflow.task.delete", { task_id: taskID });
   }
 
   async getTask(taskID: string): Promise<TaskDetail> {
     return parse(
       "workflow.task.get",
       taskDetailSchema,
-      await this.transport.call("workflow.task.get", { task_id: taskID }),
+      await this.#transport.call("workflow.task.get", { task_id: taskID }),
     );
   }
 
@@ -568,7 +571,7 @@ export class ApiClient {
     return parse(
       "workflow.task.activity.list",
       activityPageSchema,
-      await this.transport.call("workflow.task.activity.list", {
+      await this.#transport.call("workflow.task.activity.list", {
         task_id: taskID,
         page_size: 40,
         page_token: pageToken,
@@ -580,7 +583,7 @@ export class ApiClient {
     return parse(
       "workflow.task.comment.list",
       commentPageSchema,
-      await this.transport.call("workflow.task.comment.list", {
+      await this.#transport.call("workflow.task.comment.list", {
         task_id: taskID,
         page_size: 40,
         page_token: pageToken,
@@ -592,7 +595,7 @@ export class ApiClient {
     return parse(
       "workflow.task.comment.add",
       commentAddResponseSchema,
-      await this.transport.call("workflow.task.comment.add", {
+      await this.#transport.call("workflow.task.comment.add", {
         task_id: taskID,
         body,
         author: guiTaskCommentAuthor,
@@ -601,11 +604,11 @@ export class ApiClient {
   }
 
   async replaceComment(commentID: string, body: string): Promise<void> {
-    await this.transport.call("workflow.task.comment.replace", { comment_id: commentID, body });
+    await this.#transport.call("workflow.task.comment.replace", { comment_id: commentID, body });
   }
 
   async deleteComment(commentID: string): Promise<void> {
-    await this.transport.call("workflow.task.comment.delete", { comment_id: commentID });
+    await this.#transport.call("workflow.task.comment.delete", { comment_id: commentID });
   }
 
   async answerQuestion(input: QuestionAnswerInput): Promise<void> {
@@ -621,7 +624,7 @@ export class ApiClient {
             selected_option_number: input.selectedOptionNumber,
             freeform_answer: input.freeformAnswer,
           };
-    await this.transport.call(
+    await this.#transport.call(
       "workflow.task.question.answer",
       compactJsonObject({
         client_request_id: input.clientRequestID,
@@ -637,20 +640,28 @@ export class ApiClient {
     return parse(
       "ask.listPendingBySession",
       pendingAskListSchema,
-      await this.transport.call("ask.listPendingBySession", { SessionID: sessionID }),
+      await this.#transport.call("ask.listPendingBySession", { SessionID: sessionID }),
     );
   }
 
-  subscribeProject(projectID: string, handler: RpcEventHandler): RpcSubscription {
-    return this.transport.subscribe("workflow.subscribeProject", { project_id: projectID }, handler);
+  subscribeProject(projectID: string, handler: ApiEventHandler): ApiSubscription {
+    return this.#transport.subscribe(
+      "workflow.subscribeProject",
+      { project_id: projectID },
+      apiEventRpcHandler(handler),
+    );
   }
 
-  subscribeWorkflow(workflowID: string, handler: RpcEventHandler): RpcSubscription {
-    return this.transport.subscribe("workflow.subscribe", { workflow_id: workflowID }, handler);
+  subscribeWorkflow(workflowID: string, handler: ApiEventHandler): ApiSubscription {
+    return this.#transport.subscribe(
+      "workflow.subscribe",
+      { workflow_id: workflowID },
+      apiEventRpcHandler(handler),
+    );
   }
 
-  subscribeAttentionNotifications(handler: AttentionNotificationEventHandler): RpcSubscription {
-    return this.transport.subscribe(
+  subscribeAttentionNotifications(handler: AttentionNotificationEventHandler): ApiSubscription {
+    return this.#transport.subscribe(
       "attention.notification.subscribe",
       emptyJsonObject,
       attentionNotificationRpcHandler(handler),
@@ -660,11 +671,22 @@ export class ApiClient {
   subscribeWorktreeSetup(
     setupOperationID: SetupOperationID,
     handler: WorktreeSetupEventHandler,
-  ): RpcSubscription {
-    return this.transport.subscribe(
+  ): ApiSubscription {
+    return this.#transport.subscribe(
       "worktree.setup.subscribe",
       { setup_operation_id: setupOperationID.toJSONValue() },
       worktreeSetupRpcHandler(handler),
     );
   }
+}
+
+function apiEventRpcHandler(handler: ApiEventHandler): RpcEventHandler {
+  return {
+    ...(handler.onOpen === undefined ? {} : { onOpen: handler.onOpen }),
+    onComplete: handler.onComplete,
+    onError: handler.onError,
+    onEvent(_method, params) {
+      handler.onEvent(params);
+    },
+  };
 }

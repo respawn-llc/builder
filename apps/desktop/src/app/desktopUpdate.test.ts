@@ -6,8 +6,8 @@ import {
 } from "@app/native-bridge";
 import { vi } from "vitest";
 
+import type { AppLogger } from "@/app-facade";
 import { checkForDesktopUpdate, installDesktopUpdate } from "./desktopUpdate";
-import type { GuiLogger } from "./logging";
 
 const noUpdate: NativeUpdateAvailability = { available: false };
 
@@ -15,8 +15,8 @@ function availableUpdate(version: string): NativeUpdateAvailability {
   return { available: true, version, currentVersion: "2.0.0", notes: null, publishedAt: null };
 }
 
-function fakeLogger(): GuiLogger {
-  return { entries: () => [], append: vi.fn(async () => undefined) };
+function fakeLogger(): AppLogger {
+  return { append: vi.fn(async () => undefined) };
 }
 
 function fakeBridge(
@@ -76,7 +76,10 @@ describe("checkForDesktopUpdate", () => {
       },
     );
 
-    await expect(checkForDesktopUpdate(bridge, fakeLogger())).resolves.toEqual({ available: true, version: "2.3.0" });
+    await expect(checkForDesktopUpdate(bridge, fakeLogger())).resolves.toEqual({
+      available: true,
+      version: "2.3.0",
+    });
   });
 
   it("reports an available update with its version", async () => {
@@ -86,7 +89,10 @@ describe("checkForDesktopUpdate", () => {
       },
     });
 
-    await expect(checkForDesktopUpdate(bridge, fakeLogger())).resolves.toEqual({ available: true, version: "2.2.0" });
+    await expect(checkForDesktopUpdate(bridge, fakeLogger())).resolves.toEqual({
+      available: true,
+      version: "2.2.0",
+    });
   });
 
   it("stays silent and logs when the check fails", async () => {

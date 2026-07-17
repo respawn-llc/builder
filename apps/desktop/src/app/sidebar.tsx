@@ -15,24 +15,20 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage } from "../api/errors";
-import { Button, IconTooltipButton, showStatusToast } from "../ui";
-import { cx } from "../ui/classes";
-import { ProjectDeleteButton } from "../features/project-edit/ProjectDeleteButton";
-import { SidebarInboxNav } from "../features/home/SidebarInboxNav";
-import { WorkflowDeleteButton } from "../features/workflow-editor/WorkflowDeleteButton";
-import { useAppServices } from "./useAppServices";
-import { useStatusController } from "./useStatusController";
-import {
-  SidebarHeaderActionProvider,
-  SidebarHeaderActionSlot,
-} from "./sidebarHeaderAction";
+import { errorMessage } from "@/api";
+import { ProjectDeleteButton } from "@/features/project-edit";
+import { SidebarInboxNav } from "@/features/home";
+import { WorkflowDeleteButton } from "@/features/workflow-editor";
+import { Button, cx, IconTooltipButton, showStatusToast } from "@/ui";
+import { useAppServices } from "@/app-facade";
+import { useStatusController } from "@/app-facade";
+import { SidebarHeaderActionProvider, SidebarHeaderActionSlot } from "@/app-facade";
 import { SidebarDestinationView } from "./sidebarDestinations";
-import { SidebarHeaderOffsetContext } from "./sidebarHeaderOffset";
+import { SidebarHeaderOffsetContext } from "@/app-facade";
 import { sidebarPopOutOptions } from "./sidebarPopOut";
-import { sidebarTitle } from "./sidebarTitle";
-import { sidebarSizePreference } from "./sidebarDestinationSizing";
-import { useSidebar, type SidebarDestination } from "./sidebarContext";
+import { sidebarTitle } from "@/app-facade";
+import { sidebarSizePreference } from "@/app-facade";
+import { useSidebar, type SidebarDestination } from "@/app-facade";
 import {
   sidebarMaxWidthRatio,
   sidebarMinWidthPx,
@@ -40,7 +36,7 @@ import {
   sidebarResizeStepPx,
   resolveSidebarWidth,
   type SidebarResizeBounds,
-} from "./sidebarSizing";
+} from "@/app-facade";
 
 export function SidebarRouteChangeCloser() {
   const location = useLocation();

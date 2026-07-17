@@ -2,9 +2,9 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, vi } from "vitest";
 
-import { initializeI18n } from "../../i18n/setup";
-import type { WorkflowNodeKind } from "../../api";
-import { workflowEditorEnglish } from "../../i18n/workflowEditorEn";
+import { initializeI18n } from "@/i18n";
+import type { WorkflowNodeKind } from "@/api";
+import { workflowEditorEnglish } from "@/i18n";
 import { WorkflowGraphCanvas, WorkflowNodeInfoTooltipContent } from "./WorkflowGraphCanvas";
 import { groupIDFromPoint } from "./workflowGraphCanvasInteractions";
 import type { WorkflowGraphNode } from "./workflowGraphLayout";
@@ -73,8 +73,12 @@ describe("WorkflowGraphCanvas", () => {
     );
 
     expect(screen.getByTestId("workflow-graph-node-start")).toHaveAttribute("data-kind", "start");
-    expect(within(screen.getByTestId("workflow-graph-node-start")).queryAllByTestId("workflow-node-target-handle")).toHaveLength(0);
-    expect(within(screen.getByTestId("workflow-graph-node-start")).queryAllByTestId("workflow-node-source-handle")).toHaveLength(1);
+    expect(
+      within(screen.getByTestId("workflow-graph-node-start")).queryAllByTestId("workflow-node-target-handle"),
+    ).toHaveLength(0);
+    expect(
+      within(screen.getByTestId("workflow-graph-node-start")).queryAllByTestId("workflow-node-source-handle"),
+    ).toHaveLength(1);
     expect(screen.getByTestId("workflow-graph-node-agent")).toHaveAttribute("data-kind", "agent");
     expect(screen.getByTestId("workflow-graph-node-agent")).not.toHaveAttribute("draggable", "true");
     expect(screen.getByTestId("workflow-graph-node-terminal")).toHaveAttribute("data-kind", "terminal");
@@ -88,10 +92,15 @@ describe("WorkflowGraphCanvas", () => {
     expect(onNodeInspect).toHaveBeenCalledWith("join");
     fireEvent.click(screen.getByTestId("workflow-graph-node-agent"));
     expect(onNodeInspect).toHaveBeenCalledWith("agent");
-    fireEvent.click(within(screen.getByTestId("workflow-graph-node-agent")).getByTestId("workflow-node-source-handle"), {
+    fireEvent.click(
+      within(screen.getByTestId("workflow-graph-node-agent")).getByTestId("workflow-node-source-handle"),
+      {
+        detail: 1,
+      },
+    );
+    fireEvent.click(await screen.findByRole("button", { name: workflowEditorEnglish.addAgentNode }), {
       detail: 1,
     });
-    fireEvent.click(await screen.findByRole("button", { name: workflowEditorEnglish.addAgentNode }), { detail: 1 });
     expect(onAddConnectedNode).toHaveBeenCalledWith("agent", "agent", "pointer");
     fireEvent.pointerMove(screen.getByTestId("workflow-graph-node-join"), { pointerType: "mouse" });
     await waitFor(() => {
@@ -172,8 +181,14 @@ describe("WorkflowGraphCanvas", () => {
     fireEvent.keyDown(window, { key: "Delete" });
 
     expect(onDeleteSelection).toHaveBeenCalledWith({ kind: "node", nodeID: "agent" });
-    expect(within(screen.getByTestId("workflow-graph-node-agent")).queryAllByTestId("workflow-node-source-handle")).toHaveLength(1);
-    expect(within(screen.getByTestId("workflow-graph-node-terminal")).queryAllByTestId("workflow-node-source-handle")).toHaveLength(0);
+    expect(
+      within(screen.getByTestId("workflow-graph-node-agent")).queryAllByTestId("workflow-node-source-handle"),
+    ).toHaveLength(1);
+    expect(
+      within(screen.getByTestId("workflow-graph-node-terminal")).queryAllByTestId(
+        "workflow-node-source-handle",
+      ),
+    ).toHaveLength(0);
   });
 
   it("opens handle quick-add from every editable source kind with keyboard selection", async () => {
@@ -410,7 +425,6 @@ describe("WorkflowGraphCanvas", () => {
     expect(onAddNodeToGroup).not.toHaveBeenCalled();
     expect(onExtractNodeFromGroup).not.toHaveBeenCalled();
   });
-
 });
 
 class MockResizeObserver implements ResizeObserver {

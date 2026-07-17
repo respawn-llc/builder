@@ -1,4 +1,4 @@
-import { IslandSurface } from "../../ui";
+import { IslandSurface } from "@/ui";
 
 export type WorkflowGroupDragState = Readonly<{
   label: string;

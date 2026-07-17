@@ -6,13 +6,10 @@ import {
   type WorkflowDefinition,
   type WorkflowNode,
   type WorkflowValidation,
-} from "../../api";
+} from "@/api";
 import type { WorkflowGraphEdge, WorkflowGraphNode, WorkflowGraphPoint } from "./workflowGraphLayout";
 import { layoutWorkflowGraph } from "./workflowGraphLayout";
-import {
-  workflowGraphAbsoluteNodeRect,
-  workflowGraphEndpointPoint,
-} from "../../test-support/workflow-editor/workflowGraphLayoutTestHelpers";
+import { workflowGraphAbsoluteNodeRect, workflowGraphEndpointPoint } from "./workflowGraphLayoutTestHelpers";
 
 describe("layoutWorkflowGraph node group bounds", () => {
   it("keeps unrelated nodes outside populated node group bounds", async () => {
@@ -51,9 +48,18 @@ describe("layoutWorkflowGraph node group bounds", () => {
     const points = requiredRoutePoints(edge);
     const outgoingPoints = requiredRoutePoints(outgoingEdge);
 
-    expectPointCloseTo(points[0], workflowGraphEndpointPoint(branch, edge.sourceHandle, "source", graph.nodes));
-    expectPointCloseTo(points[points.length - 1], workflowGraphEndpointPoint(join, edge.targetHandle, "target", graph.nodes));
-    expectPointCloseTo(outgoingPoints[0], workflowGraphEndpointPoint(join, outgoingEdge.sourceHandle, "source", graph.nodes));
+    expectPointCloseTo(
+      points[0],
+      workflowGraphEndpointPoint(branch, edge.sourceHandle, "source", graph.nodes),
+    );
+    expectPointCloseTo(
+      points[points.length - 1],
+      workflowGraphEndpointPoint(join, edge.targetHandle, "target", graph.nodes),
+    );
+    expectPointCloseTo(
+      outgoingPoints[0],
+      workflowGraphEndpointPoint(join, outgoingEdge.sourceHandle, "source", graph.nodes),
+    );
     expect(outgoingPoints.length).toBeGreaterThan(2);
     expectRouteSegmentsToBeOrthogonal(outgoingPoints);
     expectRouteToHaveCorner(outgoingPoints);
@@ -99,12 +105,19 @@ function rectsOverlap(left: WorkflowGraphNode, right: WorkflowGraphNode): boolea
   );
 }
 
-function rectRight(rect: Readonly<{ position: Readonly<{ x: number }>; style?: WorkflowGraphNode["style"] }>): number {
+function rectRight(
+  rect: Readonly<{ position: Readonly<{ x: number }>; style?: WorkflowGraphNode["style"] }>,
+): number {
   return rect.position.x + Number(rect.style?.width ?? 0);
 }
 
 function rectCenterY(
-  rect: Readonly<{ height?: number; position?: Readonly<{ y: number }>; style?: WorkflowGraphNode["style"]; y?: number }>,
+  rect: Readonly<{
+    height?: number;
+    position?: Readonly<{ y: number }>;
+    style?: WorkflowGraphNode["style"];
+    y?: number;
+  }>,
 ): number {
   return (rect.position?.y ?? rect.y ?? 0) + (rect.height ?? Number(rect.style?.height ?? 0)) / 2;
 }

@@ -6,8 +6,9 @@ import type {
   WorkflowExecutionTargetMode,
   WorkflowExecutionTargetPolicy,
   WorkflowValidation,
-} from "../../api";
-import type { WorkflowInspectorInitialFocus, WorkflowInspectorSelection } from "../../app/sidebarContext";
+} from "@/api";
+import type { WorkflowInspectorInitialFocus, WorkflowInspectorSelection } from "@/app-facade";
+import { WorkflowEdgeRouteGraphic } from "@/shared/workflow-edge";
 import {
   DisabledInteractionGuard,
   identifierInputAttributes,
@@ -17,7 +18,7 @@ import {
   TextArea,
   TextInput,
   TooltipProvider,
-} from "../../ui";
+} from "@/ui";
 import {
   DetailRow,
   DetailSection,
@@ -25,7 +26,6 @@ import {
   MissingEntity,
   ValidationDetails,
 } from "./WorkflowInspectorPrimitives";
-import { WorkflowEdgeRouteGraphic } from "./WorkflowEdgeRouteGraphic";
 import { transitionGroupByID, transitionGroupIsFanOut } from "./workflowInspectorModel";
 import {
   workflowDefinitionFromDraft,

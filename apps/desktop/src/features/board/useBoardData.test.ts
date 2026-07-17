@@ -3,10 +3,10 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 
-import type { BoardNodeCardsPage } from "../../api";
-import { queryKeys } from "../../app/queryKeys";
-import { AppServicesProvider } from "../../app/servicesContext";
-import { createTestServices } from "../../testSupport/appServices";
+import type { BoardNodeCardsPage } from "@/api";
+import { queryKeys } from "@/app-facade";
+import { AppServicesProvider } from "@/app-facade";
+import { createTestServices } from "@/test-support/app-services";
 import { shouldRefreshBoardFromProjectEvent } from "./useBoardData";
 import { useBoardNodeCards } from "./useBoardData";
 

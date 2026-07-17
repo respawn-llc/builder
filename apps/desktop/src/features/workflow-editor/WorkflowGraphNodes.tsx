@@ -12,8 +12,8 @@ import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "../../ui";
-import { cx } from "../../ui/classes";
+} from "@/ui";
+import { cx } from "@/ui";
 import { WorkflowNodeInfoTooltipContent, type CopyText } from "./WorkflowGraphNodeMetadata";
 import type { CreatableWorkflowNodeKind } from "./workflowEditorGraphMutationTypes";
 import type { WorkflowGraphSelection } from "./workflowGraphSelection";
@@ -41,7 +41,11 @@ type WorkflowNodeContextMenuCallbacks = Readonly<{
 
 type WorkflowConnectedNodeCallbacks = Readonly<{
   onAddConnectedNode:
-    | ((sourceNodeID: string, kind: CreatableWorkflowNodeKind, modality: WorkflowNodeKindSelectionModality) => void)
+    | ((
+        sourceNodeID: string,
+        kind: CreatableWorkflowNodeKind,
+        modality: WorkflowNodeKindSelectionModality,
+      ) => void)
     | undefined;
   onCreationHandleActivate: (nodeID: string) => boolean;
 }>;
@@ -139,7 +143,8 @@ export const WorkflowNode = memo(function WorkflowNode({
   Readonly<
     {
       onCopyText: CopyText;
-    } & WorkflowNodeContextMenuCallbacks & WorkflowConnectedNodeCallbacks
+    } & WorkflowNodeContextMenuCallbacks &
+      WorkflowConnectedNodeCallbacks
   >) {
   const { t } = useTranslation();
   const nodeCard = (
@@ -171,13 +176,10 @@ export const WorkflowNode = memo(function WorkflowNode({
       <span className="min-w-0 truncate font-mono text-sm text-[var(--color-muted)]">{data.role}</span>
     </IslandSurface>
   );
-  const tooltip = data.kind === "join" ? (
-    <WorkflowNodeInfoTooltipContent
-      nodeID={data.entityID}
-      nodeKey={data.key}
-      onCopyText={onCopyText}
-    />
-  ) : undefined;
+  const tooltip =
+    data.kind === "join" ? (
+      <WorkflowNodeInfoTooltipContent nodeID={data.entityID} nodeKey={data.key} onCopyText={onCopyText} />
+    ) : undefined;
   return (
     <WorkflowNodeContextMenuShell
       data={data}
@@ -196,8 +198,7 @@ export const WorkflowNode = memo(function WorkflowNode({
 export const WorkflowGroupNode = memo(function WorkflowGroupNode({
   activeDropTarget,
   data,
-}: NodeProps<WorkflowGraphGroupNode> &
-  Readonly<{ activeDropTarget: boolean }>) {
+}: NodeProps<WorkflowGraphGroupNode> & Readonly<{ activeDropTarget: boolean }>) {
   const { t } = useTranslation();
   return (
     <IslandSurface
@@ -213,9 +214,7 @@ export const WorkflowGroupNode = memo(function WorkflowGroupNode({
       level={1}
       style={workflowNodeOutlineStyle(data.kind, data.hasError)}
     >
-      <div className="font-mono text-sm font-bold text-[var(--color-muted)]">
-        {data.label}
-      </div>
+      <div className="font-mono text-sm font-bold text-[var(--color-muted)]">{data.label}</div>
       {"empty" in data && data.empty ? (
         <div className="grid h-[calc(100%-24px)] place-items-center text-sm text-[var(--color-muted)]">
           {t("workflowEditor.emptyGroup")}
@@ -238,7 +237,10 @@ export const WorkflowJoinNode = memo(function WorkflowJoinNode({
   Readonly<
     {
       onCopyText: CopyText;
-    } & Pick<WorkflowNodeContextMenuCallbacks, "onDeleteSelection" | "onInspectNode" | "onSelectContextMenu"> &
+    } & Pick<
+      WorkflowNodeContextMenuCallbacks,
+      "onDeleteSelection" | "onInspectNode" | "onSelectContextMenu"
+    > &
       WorkflowConnectedNodeCallbacks
   >) {
   const nodeCard = (
@@ -274,11 +276,7 @@ export const WorkflowJoinNode = memo(function WorkflowJoinNode({
     </div>
   );
   const tooltip = (
-    <WorkflowNodeInfoTooltipContent
-      nodeID={data.entityID}
-      nodeKey={data.key}
-      onCopyText={onCopyText}
-    />
+    <WorkflowNodeInfoTooltipContent nodeID={data.entityID} nodeKey={data.key} onCopyText={onCopyText} />
   );
   return (
     <WorkflowNodeContextMenuShell
@@ -386,7 +384,8 @@ function workflowBranchNodeKind(kind: string): boolean {
   return kind === "agent" || kind === "script";
 }
 
-type WorkflowNodeOutlineStyle = CSSProperties & Readonly<Record<"--workflow-editor-node-outline-color", string>>;
+type WorkflowNodeOutlineStyle = CSSProperties &
+  Readonly<Record<"--workflow-editor-node-outline-color", string>>;
 
 function workflowNodeOutlineStyle(kind: string, hasError: boolean): WorkflowNodeOutlineStyle {
   if (hasError) {

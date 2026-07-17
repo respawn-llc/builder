@@ -118,9 +118,7 @@ describe("task lifecycle client", () => {
         },
       },
     ]) {
-      const client = new ApiClient(
-        new FakeRpcTransport([{ method: "workflow.task.start", result }]),
-      );
+      const client = new ApiClient(new FakeRpcTransport([{ method: "workflow.task.start", result }]));
       await expect(client.startTask("task-1")).rejects.toBeInstanceOf(ContractError);
     }
   });
@@ -155,11 +153,7 @@ describe("task lifecycle client", () => {
       targetNodeID: "node-1",
       executionTarget: { mode: "custom_ref", customRef: "release/v2" },
     });
-    await client.approveTransition(
-      "transition-3",
-      undefined,
-      { mode: "none", customRef: null },
-    );
+    await client.approveTransition("transition-3", undefined, { mode: "none", customRef: null });
 
     expect(transport.calls.map((call) => call.params)).toMatchObject([
       { execution_target: { mode: "default_branch" } },

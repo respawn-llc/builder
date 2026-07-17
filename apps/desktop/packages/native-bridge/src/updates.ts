@@ -46,9 +46,7 @@ export function createBrowserUpdates(): NativeUpdateBridge {
   };
 }
 
-export function createTauriUpdates(
-  selfUpdateSupported: () => Promise<boolean>,
-): NativeUpdateBridge {
+export function createTauriUpdates(selfUpdateSupported: () => Promise<boolean>): NativeUpdateBridge {
   let pendingUpdate: Update | null = null;
   return {
     supported: selfUpdateSupported,
@@ -70,9 +68,7 @@ export function createTauriUpdates(
         publishedAt: parseUpdateDate(update.date),
       };
     },
-    async downloadAndInstall(
-      onProgress?: (progress: NativeUpdateDownloadProgress) => void,
-    ): Promise<void> {
+    async downloadAndInstall(onProgress?: (progress: NativeUpdateDownloadProgress) => void): Promise<void> {
       if (pendingUpdate === null) {
         throw new Error("No update is pending; call updates.check() first.");
       }

@@ -2,11 +2,12 @@ import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
-import type { ProjectWorkflowLink, WorkflowRecord } from "../../api";
-import { errorMessage } from "../../api/errors";
-import { queryKeys } from "../../app/queryKeys";
-import { useSidebar } from "../../app/sidebarContext";
-import { useAppServices } from "../../app/useAppServices";
+import type { ProjectWorkflowLink, WorkflowRecord } from "@/api";
+import { errorMessage } from "@/api";
+import { queryKeys } from "@/app-facade";
+import { useSidebar } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
+import { WorkflowActionsContextMenu, useWorkflowPages } from "@/shared/workflow-library";
 import {
   Button,
   EmptyState,
@@ -15,9 +16,7 @@ import {
   ItemTitle,
   LoadingState,
   VirtualizedInfiniteList,
-} from "../../ui";
-import { WorkflowActionsContextMenu } from "./WorkflowActionsContextMenu";
-import { useWorkflowPages } from "./WorkflowData";
+} from "@/ui";
 import { WorkflowCreateForm } from "./WorkflowCreateForm";
 
 export function LinkWorkflowSidebar({

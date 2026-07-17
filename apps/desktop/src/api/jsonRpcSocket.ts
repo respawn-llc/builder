@@ -1,11 +1,10 @@
 import { z } from "zod";
 
-import protocolVersionDefinition from "../../../../shared/protocol/version.json";
 import { ProtocolMismatchError, RpcError, ServerRootMismatchError, TransportError } from "./errors";
 import type { JsonValue } from "./json";
 import type { RpcEventHandler } from "./transport";
 
-export const protocolVersion = protocolVersionDefinition.version;
+export const protocolVersion = __KENT_PROTOCOL_VERSION__;
 export const jsonRpcVersion = "2.0";
 export const handshakeMethod = "protocol.handshake";
 export const protocolVersionMismatchErrorCode = -32025;
@@ -227,8 +226,7 @@ export async function delay(milliseconds: number, signal: AbortSignal): Promise<
 }
 
 export type SubscriptionMessageResult = Readonly<
-  | { kind: "active" }
-  | { kind: "complete"; code: number; message: string }
+  { kind: "active" } | { kind: "complete"; code: number; message: string }
 >;
 
 export function subscriptionCompleteMethod(subscriptionMethod: string): string | null {

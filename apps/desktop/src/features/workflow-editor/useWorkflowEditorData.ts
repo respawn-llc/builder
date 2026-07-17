@@ -2,11 +2,11 @@ import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { queryKeys } from "../../app/queryKeys";
-import { useAppServices } from "../../app/useAppServices";
-import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
-import { useStatusController } from "../../app/useStatusController";
-import { workflowProjectEvent } from "../../app/workflowProjectEvents";
+import { queryKeys } from "@/app-facade";
+import { useAppServices } from "@/app-facade";
+import { useConnectionSnapshot } from "@/app-facade";
+import { useStatusController } from "@/app-facade";
+import { workflowProjectEvent } from "@/app-facade";
 
 export type WorkflowEditorData = ReturnType<typeof useWorkflowEditorData>;
 
@@ -66,7 +66,7 @@ export function useWorkflowEditorData(rawProjectID: string, workflowID: string) 
         onOpen() {
           void refresh(false);
         },
-        onEvent(_method, params) {
+        onEvent(params) {
           if (shouldRefreshWorkflowDefinition(params, workflowID)) {
             void refresh(shouldNotifyWorkflowEditorRefresh(params, projectID, workflowID));
           }
@@ -85,7 +85,7 @@ export function useWorkflowEditorData(rawProjectID: string, workflowID: string) 
           onOpen() {
             void refresh(false);
           },
-          onEvent(_method, params) {
+          onEvent(params) {
             if (shouldRefreshWorkflowLink(params, projectID, workflowID)) {
               void refresh(shouldNotifyWorkflowEditorRefresh(params, projectID, workflowID));
             }

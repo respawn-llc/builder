@@ -1,13 +1,12 @@
 import { Bot, Save, Trash2, UserRound } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type { TaskComment } from "../../api";
-import { errorMessage } from "../../api/errors";
-import { formatRelativeTime } from "../../app/formatters";
-import { useStatusController } from "../../app/useStatusController";
-import { Button, homeListCardMaxWidthClassName, IslandSurface, MarkdownText } from "../../ui";
-import { fieldIslandInputClassName } from "../../ui/fieldInputStyles";
-import { cx } from "../../ui/classes";
+import type { TaskComment } from "@/api";
+import { errorMessage } from "@/api";
+import { formatRelativeTime } from "@/app-facade";
+import { useStatusController } from "@/app-facade";
+import { Button, homeListCardMaxWidthClassName, IslandSurface, MarkdownText } from "@/ui";
+import { cx, fieldIslandInputClassName } from "@/ui";
 import type { useTaskMutations } from "./useTaskDetailData";
 
 export function CommentComposer({
@@ -144,7 +143,10 @@ export function CommentRow({
           <AuthorText author={comment.author} />
         ) : (
           <button
-            aria-label={t("task.editCommentBy", { author: authorLabel, defaultValue: `Edit comment by ${authorLabel}` })}
+            aria-label={t("task.editCommentBy", {
+              author: authorLabel,
+              defaultValue: `Edit comment by ${authorLabel}`,
+            })}
             className="min-w-0 rounded-[var(--radius-m)] p-0 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
             disabled={interactionDisabled}
             onClick={() => {
@@ -155,7 +157,9 @@ export function CommentRow({
             <AuthorText author={comment.author} />
           </button>
         )}
-        <time className="whitespace-nowrap text-sm text-[var(--color-muted)]">{formatRelativeTime(comment.createdAt)}</time>
+        <time className="whitespace-nowrap text-sm text-[var(--color-muted)]">
+          {formatRelativeTime(comment.createdAt)}
+        </time>
         <button
           aria-label={t("task.deleteComment")}
           className="grid h-8 w-8 place-items-center rounded-full text-[var(--color-error)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-error)_14%,transparent)] disabled:cursor-not-allowed disabled:opacity-55"
@@ -202,7 +206,9 @@ function EllipsisText({ className, text }: Readonly<{ className?: string | undef
   );
 }
 
-export function ActivityRow({ item }: Readonly<{ item: { id: string; summary: string; occurredAt: number } }>) {
+export function ActivityRow({
+  item,
+}: Readonly<{ item: { id: string; summary: string; occurredAt: number } }>) {
   return (
     <IslandSurface
       as="article"

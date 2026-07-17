@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { initializeI18n } from "../../i18n/setup";
+import { initializeI18n } from "@/i18n";
 
 interface InspectorProps {
   initialFocus: "firstEditableControl" | undefined;

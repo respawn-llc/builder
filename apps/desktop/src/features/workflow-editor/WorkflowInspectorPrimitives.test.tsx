@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { initializeI18n } from "../../i18n/setup";
+import { initializeI18n } from "@/i18n";
 import { DetailSection, ValidationDetails } from "./WorkflowInspectorPrimitives";
 
 void initializeI18n();

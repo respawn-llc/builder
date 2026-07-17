@@ -1,5 +1,5 @@
-import type { TaskStatus } from "../../api";
-import { appI18n, initializeI18n } from "../../i18n/setup";
+import type { TaskStatus } from "@/api";
+import { appI18n, initializeI18n } from "@/i18n";
 import { taskStatusTone } from "./taskStatusTone";
 
 describe("taskStatusTone", () => {
@@ -24,9 +24,9 @@ describe("taskStatusTone", () => {
       expect(appI18n.t(`task.statusKinds.${kind}`)).not.toBe(`task.statusKinds.${kind}`);
       expect(taskStatusTone(status)).toBe(tone);
     }
-    expect(taskStatusTone(taskStatus({ attentionTypes: ["question"], kind: "active", nativeState: "active" }))).toBe(
-      "warning",
-    );
+    expect(
+      taskStatusTone(taskStatus({ attentionTypes: ["question"], kind: "active", nativeState: "active" })),
+    ).toBe("warning");
   });
 });
 

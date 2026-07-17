@@ -18,5 +18,6 @@ export function workflowDeletionConfirmationCounts(
 
 function deletedPromptCount(draft: DraftWorkflowDefinition, summary: WorkflowEditorCascadeSummary): number {
   const removedEdgeIDs = new Set(summary.removedEdgeIDs);
-  return draft.edges.filter((edge) => removedEdgeIDs.has(edge.id) && edge.promptTemplate.trim().length > 0).length;
+  return draft.edges.filter((edge) => removedEdgeIDs.has(edge.id) && edge.promptTemplate.trim().length > 0)
+    .length;
 }

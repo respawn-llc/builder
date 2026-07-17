@@ -1,8 +1,5 @@
-import type {
-  WorkflowGraphSaveConfirmation,
-  WorkflowGraphSaveImpact,
-} from "../../api";
-import type { useAppServices } from "../../app/useAppServices";
+import type { WorkflowGraphSaveConfirmation, WorkflowGraphSaveImpact } from "@/api";
+import type { useAppServices } from "@/app-facade";
 import type {
   WorkflowDeleteConfirmationCounts,
   WorkflowGraphCascadeConfirmationOperation,

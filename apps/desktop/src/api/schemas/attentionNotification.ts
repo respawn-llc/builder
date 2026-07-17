@@ -48,7 +48,9 @@ const workflowTaskFocusWireSchema = z.discriminatedUnion("kind", [
   interruptedRunFocusWireSchema,
 ]);
 
-function workflowTaskFocus(value: z.infer<typeof workflowTaskFocusWireSchema>): AttentionNotificationTaskDetailFocus {
+function workflowTaskFocus(
+  value: z.infer<typeof workflowTaskFocusWireSchema>,
+): AttentionNotificationTaskDetailFocus {
   if (value.kind === "question") {
     return { kind: "question", askIDs: value.ask_ids };
   }
@@ -276,21 +278,25 @@ const unsupportedEventProbeSchema = z.looseObject({
   event: z.looseObject({
     type: z.string().optional(),
     kind: z.string().optional(),
-    pending: z.looseObject({
-      kind: z.string().optional(),
-      target: z.looseObject({
+    pending: z
+      .looseObject({
         kind: z.string().optional(),
-        focus: z.looseObject({
-          kind: z.string().optional(),
-        }).optional(),
-      }).optional(),
-    }).optional(),
+        target: z
+          .looseObject({
+            kind: z.string().optional(),
+            focus: z
+              .looseObject({
+                kind: z.string().optional(),
+              })
+              .optional(),
+          })
+          .optional(),
+      })
+      .optional(),
   }),
 });
 
-function isUnsupportedPendingEvent(
-  event: z.infer<typeof unsupportedEventProbeSchema>["event"],
-): boolean {
+function isUnsupportedPendingEvent(event: z.infer<typeof unsupportedEventProbeSchema>["event"]): boolean {
   const pending = event.pending;
   if (pending === undefined) {
     return false;
@@ -338,7 +344,10 @@ function validateQuestionNotification(
     context.addIssue({ code: "custom", message: "question notification must not carry approval payload" });
   }
   if (value.interrupted_run !== null && value.interrupted_run !== undefined) {
-    context.addIssue({ code: "custom", message: "question notification must not carry interrupted_run payload" });
+    context.addIssue({
+      code: "custom",
+      message: "question notification must not carry interrupted_run payload",
+    });
   }
   if (value.target.kind === "workflow_task") {
     const { focus } = value.target;
@@ -367,7 +376,10 @@ function validateApprovalNotification(
     context.addIssue({ code: "custom", message: "approval notification must not carry question payload" });
   }
   if (value.interrupted_run !== null && value.interrupted_run !== undefined) {
-    context.addIssue({ code: "custom", message: "approval notification must not carry interrupted_run payload" });
+    context.addIssue({
+      code: "custom",
+      message: "approval notification must not carry interrupted_run payload",
+    });
   }
   if (value.target.kind === "workflow_task") {
     const { focus } = value.target;
@@ -389,10 +401,16 @@ function validateInterruptedRunNotification(
     context.addIssue({ code: "custom", message: "interrupted_run payload is required" });
   }
   if (value.question !== null && value.question !== undefined) {
-    context.addIssue({ code: "custom", message: "interrupted_run notification must not carry question payload" });
+    context.addIssue({
+      code: "custom",
+      message: "interrupted_run notification must not carry question payload",
+    });
   }
   if (value.approval !== null && value.approval !== undefined) {
-    context.addIssue({ code: "custom", message: "interrupted_run notification must not carry approval payload" });
+    context.addIssue({
+      code: "custom",
+      message: "interrupted_run notification must not carry approval payload",
+    });
   }
   validateInterruptedRunTarget(value, context);
 }
@@ -407,14 +425,16 @@ function validateInterruptedRunTarget(
   }
   const { focus } = value.target;
   if (focus.kind !== "interrupted_run") {
-    context.addIssue({ code: "custom", message: "interrupted_run workflow-task focus kind must be interrupted_run" });
+    context.addIssue({
+      code: "custom",
+      message: "interrupted_run workflow-task focus kind must be interrupted_run",
+    });
     return;
   }
   if (
     value.interrupted_run !== null &&
     value.interrupted_run !== undefined &&
-    (value.interrupted_run.runID !== value.target.run_id ||
-      value.interrupted_run.runID !== focus.run_id)
+    (value.interrupted_run.runID !== value.target.run_id || value.interrupted_run.runID !== focus.run_id)
   ) {
     context.addIssue({ code: "custom", message: "interrupted_run ids must match target and focus" });
   }

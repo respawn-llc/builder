@@ -1,4 +1,4 @@
-import type { BoardCard, WorkspaceSummary } from "../../api";
+import type { BoardCard, WorkspaceSummary } from "@/api";
 import { toKanbanCardVM } from "./BoardColumnViewModel";
 
 const card: BoardCard = {

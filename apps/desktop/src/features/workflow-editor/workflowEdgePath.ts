@@ -50,7 +50,9 @@ function roundedPolylinePath(points: readonly Readonly<{ x: number; y: number }>
     }
     const corner = roundedCorner(previous, current, next, radius);
     commands.push(`L ${corner.entry.x.toString()} ${corner.entry.y.toString()}`);
-    commands.push(`Q ${current.x.toString()} ${current.y.toString()} ${corner.exit.x.toString()} ${corner.exit.y.toString()}`);
+    commands.push(
+      `Q ${current.x.toString()} ${current.y.toString()} ${corner.exit.x.toString()} ${corner.exit.y.toString()}`,
+    );
   }
   return commands.join(" ");
 }
@@ -94,7 +96,9 @@ function isCollinear(
   return (b.x - a.x) * (c.y - b.y) === (b.y - a.y) * (c.x - b.x);
 }
 
-function midpointOnPolyline(points: readonly Readonly<{ x: number; y: number }>[]): Readonly<{ x: number; y: number }> {
+function midpointOnPolyline(
+  points: readonly Readonly<{ x: number; y: number }>[],
+): Readonly<{ x: number; y: number }> {
   const segments = polylineSegments(points);
   const targetDistance = segments.reduce((total, segment) => total + segment.length, 0) / 2;
   let traversedDistance = 0;

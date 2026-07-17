@@ -1,12 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { initializeI18n } from "../../i18n/setup";
-import { showStatusToast } from "../../ui";
+import { initializeI18n } from "@/i18n";
+import { showStatusToast } from "@/ui";
 import { WorkflowNodeInfoTooltipContent } from "./WorkflowGraphNodeMetadata";
-import type * as AppUI from "../../ui";
+import type * as AppUI from "@/ui";
 
-vi.mock("../../ui", async (importOriginal) => {
+vi.mock("@/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof AppUI>();
   return {
     ...actual,
@@ -23,13 +23,7 @@ describe("WorkflowNodeInfoTooltipContent", () => {
 
   it("shows a Sonner status toast after copying node metadata", async () => {
     const copyText = vi.fn();
-    render(
-      <WorkflowNodeInfoTooltipContent
-        nodeID="node-terminal"
-        nodeKey="done"
-        onCopyText={copyText}
-      />,
-    );
+    render(<WorkflowNodeInfoTooltipContent nodeID="node-terminal" nodeKey="done" onCopyText={copyText} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Copy Key done" }));
     fireEvent.click(screen.getByRole("button", { name: "Copy ID node-terminal" }));

@@ -1,29 +1,29 @@
-import type { NativeBridge, NativeLogEntry } from "@app/native-bridge";
+import type { NativeBridge } from "@app/native-bridge";
+
+import type { AppLogger, AppLogLevel } from "@/app-facade";
 
 const maxLogBytes = 10 * 1024 * 1024;
 const redactedValue = "[redacted]";
 const sensitiveKeys = new Set(["authorization", "token", "api_key", "apikey", "password", "secret"]);
 
-export type GuiLogLevel = NativeLogEntry["level"];
-
 export type GuiLogEntry = Readonly<{
-  level: GuiLogLevel;
+  level: AppLogLevel;
   message: string;
   context: Readonly<Record<string, string>>;
   occurredAt: string;
 }>;
 
-export type GuiLogger = Readonly<{
-  entries(): readonly GuiLogEntry[];
-  append(level: GuiLogLevel, message: string, context?: Readonly<Record<string, string>>): Promise<void>;
-}>;
+export type GuiLogger = AppLogger &
+  Readonly<{
+    entries(): readonly GuiLogEntry[];
+  }>;
 
 export function createGuiLogger(nativeBridge: NativeBridge): GuiLogger {
   const entries: GuiLogEntry[] = [];
   let byteSize = 0;
 
   async function append(
-    level: GuiLogLevel,
+    level: AppLogLevel,
     message: string,
     context: Readonly<Record<string, string>> = {},
   ): Promise<void> {

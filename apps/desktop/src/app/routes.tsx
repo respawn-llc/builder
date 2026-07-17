@@ -84,10 +84,7 @@ export function createAppRouter() {
 export type AppRouter = ReturnType<typeof createAppRouter>;
 
 export function shouldSkipNativeDialogStartupGate(pathname: string): boolean {
-  return (
-    pathname === workspaceUnlinkNativeDialogPath ||
-    pathname === workflowDeleteConfirmNativeDialogPath
-  );
+  return pathname === workspaceUnlinkNativeDialogPath || pathname === workflowDeleteConfirmNativeDialogPath;
 }
 
 declare module "@tanstack/react-router" {

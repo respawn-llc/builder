@@ -7,13 +7,10 @@ import {
   type WorkflowDefinition,
   type WorkflowNode,
   type WorkflowValidation,
-} from "../../api";
+} from "@/api";
 import type { WorkflowGraphEdge, WorkflowGraphNode } from "./workflowGraphLayout";
 import { layoutWorkflowGraph, workflowGraphLayoutWithDraftProjection } from "./workflowGraphLayout";
-import {
-  workflowGraphAbsoluteNodeRect,
-  workflowGraphEndpointPoint,
-} from "../../test-support/workflow-editor/workflowGraphLayoutTestHelpers";
+import { workflowGraphAbsoluteNodeRect, workflowGraphEndpointPoint } from "./workflowGraphLayoutTestHelpers";
 
 const nodeHeightSchema = z.number();
 
@@ -64,7 +61,14 @@ describe("layoutWorkflowGraph", () => {
       errors: [
         {
           code: "workflow.validation.invalid",
-          details: { fieldName: "", inputName: "", placeholder: "", providerEdgeID: "", role: null, requiredTool: null },
+          details: {
+            fieldName: "",
+            inputName: "",
+            placeholder: "",
+            providerEdgeID: "",
+            role: null,
+            requiredTool: null,
+          },
           message: "Invalid",
           workflowID: "workflow-1",
           nodeID: "node-1",
@@ -89,7 +93,14 @@ describe("layoutWorkflowGraph", () => {
         {
           blocksContext: true,
           code: "workflow.validation.invalid_join_input_provider",
-          details: { fieldName: "", inputName: "summary", placeholder: "", providerEdgeID: "edge-join-b", role: null, requiredTool: null },
+          details: {
+            fieldName: "",
+            inputName: "summary",
+            placeholder: "",
+            providerEdgeID: "edge-join-b",
+            role: null,
+            requiredTool: null,
+          },
           edgeID: "",
           message: "join input provider must reference an incoming edge into the join",
           nodeID: "join",
@@ -180,8 +191,12 @@ describe("layoutWorkflowGraph", () => {
     expect(absoluteNodeX(graph.nodes, "code-review-join")).toBeGreaterThan(
       absoluteNodeX(graph.nodes, "workflow-group-code-review-parallel"),
     );
-    expect(absoluteNodeX(graph.nodes, planRejected.source)).toBeGreaterThan(absoluteNodeX(graph.nodes, planRejected.target));
-    expect(absoluteNodeX(graph.nodes, approvalRejected.source)).toBeGreaterThan(absoluteNodeX(graph.nodes, approvalRejected.target));
+    expect(absoluteNodeX(graph.nodes, planRejected.source)).toBeGreaterThan(
+      absoluteNodeX(graph.nodes, planRejected.target),
+    );
+    expect(absoluteNodeX(graph.nodes, approvalRejected.source)).toBeGreaterThan(
+      absoluteNodeX(graph.nodes, approvalRejected.target),
+    );
   });
 
   it("routes transition endpoints away from the reserved creation handle slot", async () => {
@@ -321,16 +336,24 @@ function assertEndpointHandle(
   expect(point?.y).toBe(workflowGraphEndpointPoint(node, handle, side, nodes).y);
 }
 
-function expectNodeXPositionsToIncrease(nodes: readonly WorkflowGraphNode[], nodeIDs: readonly string[]): void {
+function expectNodeXPositionsToIncrease(
+  nodes: readonly WorkflowGraphNode[],
+  nodeIDs: readonly string[],
+): void {
   for (const [index, nodeID] of nodeIDs.entries()) {
     const previousID = nodeIDs[index - 1];
     if (previousID !== undefined) {
-      expect(requireNode(nodes, nodeID).position.x).toBeGreaterThan(requireNode(nodes, previousID).position.x);
+      expect(requireNode(nodes, nodeID).position.x).toBeGreaterThan(
+        requireNode(nodes, previousID).position.x,
+      );
     }
   }
 }
 
-function expectAbsoluteNodeXPositionsToIncrease(nodes: readonly WorkflowGraphNode[], nodeIDs: readonly string[]): void {
+function expectAbsoluteNodeXPositionsToIncrease(
+  nodes: readonly WorkflowGraphNode[],
+  nodeIDs: readonly string[],
+): void {
   for (const [index, nodeID] of nodeIDs.entries()) {
     const previousID = nodeIDs[index - 1];
     if (previousID !== undefined) {
@@ -345,9 +368,7 @@ function absoluteNodeX(nodes: readonly WorkflowGraphNode[], nodeID: string): num
   return workflowGraphAbsoluteNodeRect(requireNode(nodes, nodeID), nodes).x;
 }
 
-function expectRouteSegmentsToBeOrthogonal(
-  points: readonly Readonly<{ x: number; y: number }>[],
-): void {
+function expectRouteSegmentsToBeOrthogonal(points: readonly Readonly<{ x: number; y: number }>[]): void {
   for (const [index, point] of points.entries()) {
     const previous = points[index - 1];
     if (previous !== undefined) {
@@ -681,7 +702,12 @@ const loopedWorkflow: WorkflowDefinition = {
     workflowTransitionGroup("tg-review-implement", "review", "rework", "Rework"),
   ],
   edges: [
-    workflowEdge({ id: "edge-start-plan", key: "plan", targetNodeID: "plan", transitionGroupID: "tg-start-plan" }),
+    workflowEdge({
+      id: "edge-start-plan",
+      key: "plan",
+      targetNodeID: "plan",
+      transitionGroupID: "tg-start-plan",
+    }),
     workflowEdge({
       id: "edge-plan-implement",
       key: "implement",
@@ -700,7 +726,12 @@ const loopedWorkflow: WorkflowDefinition = {
       targetNodeID: "approval",
       transitionGroupID: "tg-review-approval",
     }),
-    workflowEdge({ id: "edge-approval-done", key: "done", targetNodeID: "done", transitionGroupID: "tg-approval-done" }),
+    workflowEdge({
+      id: "edge-approval-done",
+      key: "done",
+      targetNodeID: "done",
+      transitionGroupID: "tg-approval-done",
+    }),
     workflowEdge({
       id: "edge-approval-plan",
       key: "rejected",

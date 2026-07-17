@@ -1,8 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach } from "vitest";
 
-import { App } from "../App";
-import { createTestServices, startupRoutes } from "../testSupport/appServices";
+import { App } from "./startup/App";
+import { createTestServices, startupRoutes } from "@/test-support/app-services";
 
 describe("native dialog theme inheritance", () => {
   beforeEach(() => {
@@ -42,5 +42,4 @@ describe("native dialog theme inheritance", () => {
     expect(await screen.findByTestId("native-dialog-content")).toBeInTheDocument();
     expect(document.documentElement).toHaveAttribute("data-theme", "light");
   });
-
 });

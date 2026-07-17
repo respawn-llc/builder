@@ -9,8 +9,8 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { BoardColumn, SelectedWorkflowBoard } from "../../api";
-import { useStableCallback, type VirtualizedInfiniteListBoundaryState } from "../../ui";
+import type { BoardColumn, SelectedWorkflowBoard } from "@/api";
+import { useStableCallback, type VirtualizedInfiniteListBoundaryState } from "@/ui";
 import {
   BoardColumnDataOwner,
   type BoardColumnDataView,

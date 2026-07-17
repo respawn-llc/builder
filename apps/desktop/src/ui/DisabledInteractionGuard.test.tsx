@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, vi } from "vitest";
 
-import { TooltipProvider } from "../components/ui/tooltip";
+import { TooltipProvider } from "./radix/tooltip";
 import { DisabledInteractionGuard } from "./DisabledInteractionGuard";
 
 describe("DisabledInteractionGuard", () => {

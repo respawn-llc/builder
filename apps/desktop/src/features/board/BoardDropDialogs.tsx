@@ -1,7 +1,7 @@
 import type { SyntheticEvent } from "react";
 import { useTranslation } from "react-i18next";
 
-import { Button, Dialog, TextArea } from "../../ui";
+import { Button, Dialog, TextArea } from "@/ui";
 import type { PendingMissingInputDrop } from "./BoardDropActions";
 
 export function RollbackStartDialog({

@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 
-import { initializeI18n } from "../../i18n/setup";
+import { initializeI18n } from "@/i18n";
 import { WorkflowEditorLegendIsland } from "./WorkflowEditorLegendIsland";
 
 void initializeI18n();

@@ -11,8 +11,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactFlow as ReactFlowComponent } from "@xyflow/react";
 import { z } from "zod";
 
-import { initializeI18n } from "../../i18n/setup";
-import { workflowEditorEnglish } from "../../i18n/workflowEditorEn";
+import { initializeI18n } from "@/i18n";
+import { workflowEditorEnglish } from "@/i18n";
 import type { WorkflowGraphEdge, WorkflowGraphNode } from "./workflowGraphLayout";
 
 type ReactFlowProps = ComponentProps<typeof ReactFlowComponent>;
@@ -32,8 +32,8 @@ type LifecycleHandleProps = Readonly<{
   role?: string;
   tabIndex?: number;
 }>;
-const lifecycleNodeRendererSchema = z.custom<ComponentType<LifecycleNodeProps>>((value) =>
-  z.function().safeParse(value).success,
+const lifecycleNodeRendererSchema = z.custom<ComponentType<LifecycleNodeProps>>(
+  (value) => z.function().safeParse(value).success,
 );
 
 const reactFlowHarness = vi.hoisted(
@@ -46,14 +46,14 @@ const reactFlowHarness = vi.hoisted(
     };
     props: ReactFlowProps | null;
   } => ({
-  instance: {
-    fitView: vi.fn(async () => true),
-    setViewport: vi.fn(async () => true),
-    zoomIn: vi.fn(async () => true),
-    zoomOut: vi.fn(async () => true),
-  },
-  props: null,
-}),
+    instance: {
+      fitView: vi.fn(async () => true),
+      setViewport: vi.fn(async () => true),
+      zoomIn: vi.fn(async () => true),
+      zoomOut: vi.fn(async () => true),
+    },
+    props: null,
+  }),
 );
 
 vi.mock("@xyflow/react", async () => {
@@ -115,7 +115,16 @@ vi.mock("@xyflow/react", async () => {
   return {
     Background: () => null,
     BackgroundVariant: { Dots: "dots" },
-    Handle: ({ "aria-label": ariaLabel, className, "data-testid": testID, id, onClick, onKeyDown, role, tabIndex }: LifecycleHandleProps) =>
+    Handle: ({
+      "aria-label": ariaLabel,
+      className,
+      "data-testid": testID,
+      id,
+      onClick,
+      onKeyDown,
+      role,
+      tabIndex,
+    }: LifecycleHandleProps) =>
       renderElement("button", {
         "aria-label": ariaLabel,
         className,
@@ -129,7 +138,8 @@ vi.mock("@xyflow/react", async () => {
       }),
     Position: { Bottom: "bottom", Left: "left", Right: "right", Top: "top" },
     ReactFlow,
-    ReactFlowProvider: ({ children }: Readonly<{ children?: ReactNode }>) => renderElement(Fragment, null, children),
+    ReactFlowProvider: ({ children }: Readonly<{ children?: ReactNode }>) =>
+      renderElement(Fragment, null, children),
     applyNodeChanges: <NodeType,>(_: unknown, nodes: readonly NodeType[]) => nodes,
     useReactFlow: () => reactFlowHarness.instance,
   };
@@ -180,14 +190,19 @@ describe("WorkflowGraphCanvas connection lifecycle", () => {
     expect(screen.queryByRole("button", { name: workflowEditorEnglish.addAgentNode })).toBeNull();
 
     fireEvent.click(sourceHandle, { detail: 1 });
-    expect(await screen.findByRole("button", { name: workflowEditorEnglish.addAgentNode })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: workflowEditorEnglish.addAgentNode }),
+    ).toBeInTheDocument();
     expect(onAddConnectedNode).not.toHaveBeenCalled();
   });
 
   it("does not suppress a stationary activation lifecycle", async () => {
     render(
       <WorkflowGraphCanvas
-        graph={{ edges: [], nodes: [workflowGraphNode({ id: "source", kind: "agent", label: "Source", x: 0 })] }}
+        graph={{
+          edges: [],
+          nodes: [workflowGraphNode({ id: "source", kind: "agent", label: "Source", x: 0 })],
+        }}
         onAddConnectedNode={() => undefined}
         onEdgeInspect={() => undefined}
         onGroupInspect={() => undefined}
@@ -202,7 +217,9 @@ describe("WorkflowGraphCanvas connection lifecycle", () => {
       { detail: 1 },
     );
 
-    expect(await screen.findByRole("button", { name: workflowEditorEnglish.addAgentNode })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: workflowEditorEnglish.addAgentNode }),
+    ).toBeInTheDocument();
   });
 
   it("clears a selected quick-add transition before Delete when the canvas pane is clicked", async () => {

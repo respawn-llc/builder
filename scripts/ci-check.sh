@@ -40,6 +40,18 @@ run_frontend_deps_policy() {
 	node apps/scripts/check-dependency-policy.mjs
 }
 
+run_frontend_lint() {
+	if [ ! -f apps/package.json ]; then
+		return
+	fi
+	echo "==> frontend lint"
+	if ! command -v pnpm >/dev/null 2>&1; then
+		echo "pnpm is required to lint the frontend workspace" >&2
+		exit 2
+	fi
+	pnpm --dir apps lint
+}
+
 run_vet() {
 	echo "==> go vet"
 	go vet ./...
@@ -74,6 +86,7 @@ mode="${1:-all}"
 case "$mode" in
 all)
 	run_frontend_deps_policy
+	run_frontend_lint
 	run_format
 	run_rust_policy
 	run_vet
@@ -82,6 +95,9 @@ all)
 	;;
 deps)
 	run_frontend_deps_policy
+	;;
+frontend-lint)
+	run_frontend_lint
 	;;
 format)
 	run_format
@@ -101,7 +117,7 @@ test)
 	;;
 *)
 	echo "Unknown mode: $mode" >&2
-	echo "Usage: $0 [all|deps|format|rust-policy|vet|build|test [test target/options...]]" >&2
+	echo "Usage: $0 [all|deps|frontend-lint|format|rust-policy|vet|build|test [test target/options...]]" >&2
 	exit 1
 	;;
 esac
