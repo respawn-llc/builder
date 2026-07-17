@@ -110,14 +110,6 @@ func AgentRole(value string) *string {
 	return &value
 }
 
-// SameAgentRole compares optional continuation agent-role fixtures. Test-only.
-func SameAgentRole(left, right *string) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	return *left == *right
-}
-
 // Snapshot mirrors the durable session state a test commonly asserts against:
 // metadata, the full event history, and conversation freshness.
 type Snapshot struct {

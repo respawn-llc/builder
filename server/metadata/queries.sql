@@ -1703,30 +1703,8 @@ matching_workflows AS (
       AND (args.workflow_id IS NULL OR task_link.workflow_id = args.workflow_id)
       AND EXISTS (
           SELECT 1
-          FROM tasks t INDEXED BY tasks_project_workflow_link_idx
-          JOIN workflow_task_status_records status ON status.task_id = t.id
-          LEFT JOIN column_facts ON column_facts.task_id = t.id
-          WHERE t.project_workflow_link_id = task_link.id
-            AND (
-                args.column_filter_set = 0
-                OR EXISTS (
-                    SELECT 1
-                    FROM json_each(args.column_keys_json) filter_key
-                    JOIN json_each(column_facts.column_keys_json) task_key ON task_key.value = filter_key.value
-                )
-            )
-            AND (
-                args.status_filter_set = 0
-                OR status.kind IN (SELECT value FROM json_each(args.status_kinds_json))
-            )
-            AND (
-                args.attention_filter_set = 0
-                OR EXISTS (
-                    SELECT 1
-                    FROM json_each(args.attention_kinds_json) filter_attention
-                    JOIN json_each(status.attention_types_json) task_attention ON task_attention.value = filter_attention.value
-                )
-            )
+          FROM selected_rows eligible
+          WHERE eligible.project_workflow_link_id = task_link.id
           LIMIT 1
       )
     LIMIT 2

@@ -155,6 +155,9 @@ func requireQueryPlanDoesNotGroupIntoTemporaryTree(t *testing.T, db *sql.DB, que
 		if detail == "USE TEMP B-TREE FOR GROUP BY" {
 			groupingStructures++
 		}
+		if detail == "MATERIALIZE selected_rows" {
+			t.Fatalf("task-list eligibility authority was materialized before pagination")
+		}
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate query plan: %v", err)
