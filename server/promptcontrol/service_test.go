@@ -28,15 +28,33 @@ func (s *stubPromptResponder) SubmitPromptResponse(sessionID string, resp askque
 	return s.submitErr
 }
 
-func TestServiceAnswerAskSubmitsResponse(t *testing.T) {
+func newPromptControlTestService() (*PromptControlService, *stubPromptResponder) {
 	responder := &stubPromptResponder{}
-	service := NewPromptControlService(responder)
-	req := serverapi.AskAnswerRequest{
-		ClientRequestID: "req-1",
+	return NewPromptControlService(responder), responder
+}
+
+func askAnswerRequest(clientRequestID string) serverapi.AskAnswerRequest {
+	return serverapi.AskAnswerRequest{
+		ClientRequestID: clientRequestID,
 		SessionID:       "session-1",
 		AskID:           "ask-1",
-		Answer:          "hello",
 	}
+}
+
+func approvalAnswerRequest(clientRequestID string) serverapi.ApprovalAnswerRequest {
+	return serverapi.ApprovalAnswerRequest{
+		ClientRequestID: clientRequestID,
+		SessionID:       "session-1",
+		ApprovalID:      "approval-1",
+		Decision:        clientui.ApprovalDecisionAllowOnce,
+		Commentary:      "looks good",
+	}
+}
+
+func TestServiceAnswerAskSubmitsResponse(t *testing.T) {
+	service, responder := newPromptControlTestService()
+	req := askAnswerRequest("req-1")
+	req.Answer = "hello"
 
 	if err := service.AnswerAsk(context.Background(), req); err != nil {
 		t.Fatalf("AnswerAsk: %v", err)
@@ -50,14 +68,9 @@ func TestServiceAnswerAskSubmitsResponse(t *testing.T) {
 }
 
 func TestServiceAnswerAskPreservesAbsentSelectedOption(t *testing.T) {
-	responder := &stubPromptResponder{}
-	service := NewPromptControlService(responder)
-	req := serverapi.AskAnswerRequest{
-		ClientRequestID: "req-freeform",
-		SessionID:       "session-1",
-		AskID:           "ask-1",
-		FreeformAnswer:  "typed",
-	}
+	service, responder := newPromptControlTestService()
+	req := askAnswerRequest("req-freeform")
+	req.FreeformAnswer = "typed"
 
 	if err := service.AnswerAsk(context.Background(), req); err != nil {
 		t.Fatalf("AnswerAsk: %v", err)
@@ -68,14 +81,9 @@ func TestServiceAnswerAskPreservesAbsentSelectedOption(t *testing.T) {
 }
 
 func TestServiceAnswerAskMemoizesSelectedOptionByValue(t *testing.T) {
-	responder := &stubPromptResponder{}
-	service := NewPromptControlService(responder)
-	request := serverapi.AskAnswerRequest{
-		ClientRequestID:      "req-option",
-		SessionID:            "session-1",
-		AskID:                "ask-1",
-		SelectedOptionNumber: textutil.Int(1),
-	}
+	service, responder := newPromptControlTestService()
+	request := askAnswerRequest("req-option")
+	request.SelectedOptionNumber = textutil.Int(1)
 	if err := service.AnswerAsk(context.Background(), request); err != nil {
 		t.Fatalf("AnswerAsk first: %v", err)
 	}
@@ -89,14 +97,9 @@ func TestServiceAnswerAskMemoizesSelectedOptionByValue(t *testing.T) {
 }
 
 func TestServiceAnswerAskDistinguishesAbsentAndPresentSelectedOption(t *testing.T) {
-	responder := &stubPromptResponder{}
-	service := NewPromptControlService(responder)
-	request := serverapi.AskAnswerRequest{
-		ClientRequestID: "req-presence",
-		SessionID:       "session-1",
-		AskID:           "ask-1",
-		FreeformAnswer:  "typed",
-	}
+	service, _ := newPromptControlTestService()
+	request := askAnswerRequest("req-presence")
+	request.FreeformAnswer = "typed"
 	if err := service.AnswerAsk(context.Background(), request); err != nil {
 		t.Fatalf("AnswerAsk absent selection: %v", err)
 	}
@@ -107,14 +110,9 @@ func TestServiceAnswerAskDistinguishesAbsentAndPresentSelectedOption(t *testing.
 }
 
 func TestServiceAnswerAskDedupesSuccessfulRetry(t *testing.T) {
-	responder := &stubPromptResponder{}
-	service := NewPromptControlService(responder)
-	req := serverapi.AskAnswerRequest{
-		ClientRequestID: "req-1",
-		SessionID:       "session-1",
-		AskID:           "ask-1",
-		Answer:          "hello",
-	}
+	service, responder := newPromptControlTestService()
+	req := askAnswerRequest("req-1")
+	req.Answer = "hello"
 
 	if err := service.AnswerAsk(context.Background(), req); err != nil {
 		t.Fatalf("AnswerAsk first: %v", err)
@@ -129,22 +127,14 @@ func TestServiceAnswerAskDedupesSuccessfulRetry(t *testing.T) {
 }
 
 func TestServiceAnswerAskRejectsClientRequestIDPayloadMismatch(t *testing.T) {
-	responder := &stubPromptResponder{}
-	service := NewPromptControlService(responder)
-	if err := service.AnswerAsk(context.Background(), serverapi.AskAnswerRequest{
-		ClientRequestID: "req-1",
-		SessionID:       "session-1",
-		AskID:           "ask-1",
-		Answer:          "hello",
-	}); err != nil {
+	service, responder := newPromptControlTestService()
+	request := askAnswerRequest("req-1")
+	request.Answer = "hello"
+	if err := service.AnswerAsk(context.Background(), request); err != nil {
 		t.Fatalf("AnswerAsk first: %v", err)
 	}
-	err := service.AnswerAsk(context.Background(), serverapi.AskAnswerRequest{
-		ClientRequestID: "req-1",
-		SessionID:       "session-1",
-		AskID:           "ask-1",
-		Answer:          "different",
-	})
+	request.Answer = "different"
+	err := service.AnswerAsk(context.Background(), request)
 	if !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
 		t.Fatalf("AnswerAsk mismatch error = %v, want reused with different parameters", err)
 	}
@@ -154,16 +144,10 @@ func TestServiceAnswerAskRejectsClientRequestIDPayloadMismatch(t *testing.T) {
 }
 
 func TestServiceAnswerApprovalSubmitsPromptError(t *testing.T) {
-	responder := &stubPromptResponder{submitErr: serverapi.ErrPromptAlreadyResolved}
-	service := NewPromptControlService(responder)
-	req := serverapi.ApprovalAnswerRequest{
-		ClientRequestID: "req-1",
-		SessionID:       "session-1",
-		ApprovalID:      "approval-1",
-		Decision:        clientui.ApprovalDecisionAllowOnce,
-		Commentary:      "looks good",
-		ErrorMessage:    serverapi.ErrPromptAlreadyResolved.Error(),
-	}
+	service, responder := newPromptControlTestService()
+	responder.submitErr = serverapi.ErrPromptAlreadyResolved
+	req := approvalAnswerRequest("req-1")
+	req.ErrorMessage = serverapi.ErrPromptAlreadyResolved.Error()
 
 	err := service.AnswerApproval(context.Background(), req)
 	if !errors.Is(err, serverapi.ErrPromptAlreadyResolved) {
@@ -184,15 +168,8 @@ func TestServiceAnswerApprovalSubmitsPromptError(t *testing.T) {
 }
 
 func TestServiceAnswerApprovalDedupesSuccessfulRetry(t *testing.T) {
-	responder := &stubPromptResponder{}
-	service := NewPromptControlService(responder)
-	req := serverapi.ApprovalAnswerRequest{
-		ClientRequestID: "req-1",
-		SessionID:       "session-1",
-		ApprovalID:      "approval-1",
-		Decision:        clientui.ApprovalDecisionAllowOnce,
-		Commentary:      "looks good",
-	}
+	service, responder := newPromptControlTestService()
+	req := approvalAnswerRequest("req-1")
 
 	if err := service.AnswerApproval(context.Background(), req); err != nil {
 		t.Fatalf("AnswerApproval first: %v", err)
