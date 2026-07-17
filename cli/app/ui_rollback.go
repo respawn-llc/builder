@@ -135,7 +135,7 @@ func (m *uiModel) rollbackActivationStillEligible() bool {
 		(m.view.Mode() == tui.ModeOngoing || m.view.Mode() == tui.ModeDetail) &&
 		m.inputMode() == uiInputModeMain &&
 		!m.blocksRuntimeInput() &&
-		strings.TrimSpace(m.input) == ""
+		strings.TrimSpace(m.mainEditor.Text()) == ""
 }
 
 func (m *uiModel) refreshRollbackCandidates() {
@@ -487,7 +487,7 @@ func (m *uiModel) beginRollbackEditing() bool {
 	m.rollback.editingCandidate = &selectedCopy
 	m.rollback.phase = uiRollbackPhaseEditing
 	m.setInputMode(uiInputModeRollbackEdit)
-	m.replaceMainInput(selected.Text, len([]rune(selected.Text)))
+	m.replaceMainInputAtEnd(selected.Text)
 	m.applyRollbackSelectionHighlight()
 	return true
 }

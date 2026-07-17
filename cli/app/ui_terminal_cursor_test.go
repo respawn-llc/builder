@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"core/cli/tui"
+	tuiinput "core/cli/tui/input"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -278,8 +279,7 @@ func TestUITerminalCursorPlacementTracksWrappedInputAcrossWidthChanges(t *testin
 			model := newProjectedStaticUIModel(WithUITerminalCursorState(state))
 			model.terminalGeometry = terminalGeometryKnown(test.wideWidth, 12)
 			model.altScreenActive = test.altScreen
-			model.input = test.input
-			model.inputCursor = -1
+			testSetMainInput(model, test.input)
 			model.layout().syncViewport()
 			size := model.terminalGeometry.Size()
 			if size == nil {
@@ -326,11 +326,9 @@ func TestInputCursorsUseSharedFieldDisplayWidth(t *testing.T) {
 			if test.ask {
 				event := testQuestionAskEvent("ask-1", "Question?")
 				testSetActiveAsk(model, &event)
-				model.ask.input = "ab👍cd"
-				model.ask.inputCursor = 3
+				testSetAskInputAtRuneCursor(model, "ab👍cd", 3)
 			} else {
-				model.input = "ab👍cd"
-				model.inputCursor = 3
+				testSetMainInputAtRuneCursor(model, "ab👍cd", 3)
 			}
 			model.layout().syncViewport()
 			size := model.terminalGeometry.Size()
@@ -338,7 +336,7 @@ func TestInputCursorsUseSharedFieldDisplayWidth(t *testing.T) {
 				t.Fatal("expected known terminal geometry")
 			}
 
-			cursor := model.layout().inputPaneCursor(size.width)
+			cursor := model.layout().inputPaneProjection(size.width, size.height, uiThemeStyles(model.theme)).Cursor
 			if !cursor.Visible || cursor.Row != test.cursorRow || cursor.Col != 6 {
 				t.Fatalf("cursor = %+v, want visible row %d col 6", cursor, test.cursorRow)
 			}
@@ -355,7 +353,7 @@ func TestViewDoesNotAppendHideCursorWhenRealTerminalCursorVisible(t *testing.T) 
 	state := newUITerminalCursorState()
 	m := newProjectedStaticUIModel(WithUITerminalCursorState(state))
 	m.terminalGeometry = terminalGeometryKnown(24, 10)
-	m.input = "visible cursor"
+	testSetMainInput(m, "visible cursor")
 	m.layout().syncViewport()
 	size := m.terminalGeometry.Size()
 	if size == nil {
@@ -398,7 +396,7 @@ func TestRealCursorFrameChangesAfterTypingEachSpace(t *testing.T) {
 		}
 		previous = current
 	}
-	if got, want := model.(*uiModel).input, "   "; got != want {
+	if got, want := testMainInput(model.(*uiModel)), "   "; got != want {
 		t.Fatalf("input = %q, want %q", got, want)
 	}
 }
@@ -406,7 +404,7 @@ func TestRealCursorFrameChangesAfterTypingEachSpace(t *testing.T) {
 func TestRealCursorFrameMarkerNotRenderedWithoutRealCursor(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.terminalGeometry = terminalGeometryKnown(24, 10)
-	m.input = " "
+	testSetMainInput(m, " ")
 	m.layout().syncViewport()
 
 	view := m.View()
@@ -477,19 +475,20 @@ func TestTerminalCursorPlacementAccountsForTailTrimmedStatusLine(t *testing.T) {
 }
 
 func TestSoftCursorOverlayPreservesColumnAfterTrimmedTrailingSpaces(t *testing.T) {
-	rendered := overlayCursorOnLine("› abc", 7, 10, lipgloss.NewStyle().Reverse(true))
+	rendered := tuiinput.RenderSoftCursorLine(10, "› abc", 7, lipgloss.NewStyle())
 	if !strings.HasPrefix(rendered, "› abc  ") {
 		t.Fatalf("expected cursor overlay to preserve target column, got %q", rendered)
 	}
 }
 
 func TestSharedFieldRenderingPreservesExplicitTrailingSpaces(t *testing.T) {
-	rendered := renderEditableInputField(10, 1, uiEditableInputRenderSpec{
-		Prefix:       "› ",
-		Text:         "abc  ",
-		CursorIndex:  -1,
-		RenderCursor: true,
-	})
+	field := tuiinput.NewField()
+	field.Editor.Replace("abc  ")
+	field.Editor.SetCursor(len(field.Editor.Text()))
+	field.Prefix = "› "
+	field.MaxLines = 1
+	field.Cursor = true
+	rendered := field.Render(10)
 	if got, want := rendered.Lines[0], "› abc     "; got != want {
 		t.Fatalf("line = %q, want %q", got, want)
 	}

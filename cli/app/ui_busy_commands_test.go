@@ -56,14 +56,14 @@ func TestBusyEnterAppliesImmediateSettings(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.input, func(t *testing.T) {
 			model := busyCommandTestModel()
-			model.input = test.input
+			testSetMainInput(model, test.input)
 			if test.setup != nil {
 				test.setup(model)
 			}
 			next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			updated := next.(*uiModel)
-			if updated.input != "" || updated.sessionName != test.sessionName || updated.thinkingLevel != test.thinkingLevel || updated.fastModeEnabled != test.fast {
-				t.Fatalf("updated model = input %q, name %q, thinking %q, fast %t", updated.input, updated.sessionName, updated.thinkingLevel, updated.fastModeEnabled)
+			if testMainInput(updated) != "" || updated.sessionName != test.sessionName || updated.thinkingLevel != test.thinkingLevel || updated.fastModeEnabled != test.fast {
+				t.Fatalf("updated model = input %q, name %q, thinking %q, fast %t", testMainInput(updated), updated.sessionName, updated.thinkingLevel, updated.fastModeEnabled)
 			}
 			requireBusyCommandQueuesEmpty(t, updated)
 		})
@@ -79,7 +79,7 @@ func TestBusyEnterOpensReadOverlays(t *testing.T) {
 		t.Run(input, func(t *testing.T) {
 			model := busyCommandTestModel()
 			model.sessionID = "busy-navigation-session"
-			model.input = input
+			testSetMainInput(model, input)
 			next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			updated := next.(*uiModel)
 			if updated.inputMode() != mode || !updated.isBusy() {
@@ -94,11 +94,11 @@ func TestBusyEnterBlocksIdleOnlyCommands(t *testing.T) {
 	for _, input := range []string{"/worktree list"} {
 		t.Run(input, func(t *testing.T) {
 			model := busyCommandTestModel()
-			model.input = input
+			testSetMainInput(model, input)
 			next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			updated := next.(*uiModel)
-			if cmd == nil || updated.input != "" {
-				t.Fatalf("blocked command result = cmd %v, input %q", cmd, updated.input)
+			if cmd == nil || testMainInput(updated) != "" {
+				t.Fatalf("blocked command result = cmd %v, input %q", cmd, testMainInput(updated))
 			}
 			requireBusyCommandQueuesEmpty(t, updated)
 		})
@@ -107,13 +107,13 @@ func TestBusyEnterBlocksIdleOnlyCommands(t *testing.T) {
 
 func TestBusyEnterDispatchesCompact(t *testing.T) {
 	model := busyCommandTestModel()
-	model.input = "/compact now"
+	testSetMainInput(model, "/compact now")
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated := next.(*uiModel)
-	if cmd == nil || updated.input != "" || len(updated.queued) != 0 || !updated.isCompacting() {
-		t.Fatalf("compact dispatch = cmd %v, input %q, queued %+v, compacting %t", cmd, updated.input, updated.queued, updated.isCompacting())
+	if cmd == nil || testMainInput(updated) != "" || len(updated.queued) != 0 || !updated.isCompacting() {
+		t.Fatalf("compact dispatch = cmd %v, input %q, queued %+v, compacting %t", cmd, testMainInput(updated), updated.queued, updated.isCompacting())
 	}
-	updated.input = "/compact again"
+	testSetMainInput(updated, "/compact again")
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated = next.(*uiModel)
 	if refs := updated.pendingRuntimeOperationRefs(); len(refs) != 1 {
@@ -128,7 +128,7 @@ func TestBusyNavigationCommandsStartTheirExistingTransitions(t *testing.T) {
 	} {
 		t.Run(input, func(t *testing.T) {
 			model := busyCommandTestModel()
-			model.input = input
+			testSetMainInput(model, input)
 			next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			updated := next.(*uiModel)
 			if cmd == nil || updated.exitAction != action {
@@ -156,14 +156,14 @@ func TestBusyTabQueuesValidatedCommands(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.input, func(t *testing.T) {
 			model := busyCommandTestModel()
-			model.input = test.input
+			testSetMainInput(model, test.input)
 			if test.setup != nil {
 				test.setup(model)
 			}
 			next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 			updated := next.(*uiModel)
-			if cmd != nil || updated.input != "" || len(updated.queued) != 1 || updated.queued[0].Text != test.input || len(updated.pendingInjected) != 0 {
-				t.Fatalf("queued command result = cmd %v, input %q, queued %+v, pending %+v", cmd, updated.input, updated.queued, updated.pendingInjected)
+			if cmd != nil || testMainInput(updated) != "" || len(updated.queued) != 1 || updated.queued[0].Text != test.input || len(updated.pendingInjected) != 0 {
+				t.Fatalf("queued command result = cmd %v, input %q, queued %+v, pending %+v", cmd, testMainInput(updated), updated.queued, updated.pendingInjected)
 			}
 		})
 	}
@@ -173,11 +173,11 @@ func TestBusyTabRejectsInvalidCommands(t *testing.T) {
 	for _, input := range []string{"/fast on", "/back", "/ps kill proc-1", "/worktree list"} {
 		t.Run(input, func(t *testing.T) {
 			model := busyCommandTestModel()
-			model.input = input
+			testSetMainInput(model, input)
 			next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 			updated := next.(*uiModel)
-			if cmd == nil || updated.input != input {
-				t.Fatalf("rejected command result = cmd %v, input %q", cmd, updated.input)
+			if cmd == nil || testMainInput(updated) != input {
+				t.Fatalf("rejected command result = cmd %v, input %q", cmd, testMainInput(updated))
 			}
 			requireBusyCommandQueuesEmpty(t, updated)
 		})
@@ -186,8 +186,8 @@ func TestBusyTabRejectsInvalidCommands(t *testing.T) {
 
 func TestBusyQueuedCompactStartsCompactionAfterTurnDrains(t *testing.T) {
 	model := busyCommandTestModel()
-	model.input = "/compact tighten summary"
-	want := model.input
+	testSetMainInput(model, "/compact tighten summary")
+	want := testMainInput(model)
 	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
 	updated := next.(*uiModel)
 	if len(updated.queued) != 1 || updated.queued[0].Text != want {
@@ -217,8 +217,8 @@ func TestCompactionKeepsInputEditableAndQueuesSteering(t *testing.T) {
 	updated := next.(*uiModel)
 	next, queueCmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated = next.(*uiModel)
-	if queueCmd == nil || updated.input != "" || len(updated.pendingInjected) != 1 || updated.pendingInjected[0].Text != "steer during compaction" || !updated.isCompacting() {
-		t.Fatalf("queued steering = cmd %v, input %q, pending %+v, compacting %t", queueCmd, updated.input, updated.pendingInjected, updated.isCompacting())
+	if queueCmd == nil || testMainInput(updated) != "" || len(updated.pendingInjected) != 1 || updated.pendingInjected[0].Text != "steer during compaction" || !updated.isCompacting() {
+		t.Fatalf("queued steering = cmd %v, input %q, pending %+v, compacting %t", queueCmd, testMainInput(updated), updated.pendingInjected, updated.isCompacting())
 	}
 }
 

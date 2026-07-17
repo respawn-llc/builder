@@ -37,7 +37,7 @@ func setupClipboardTestInput(t *testing.T, m *uiModel, target clipboardTestInput
 	t.Helper()
 	switch target {
 	case clipboardTestInputMain:
-		m.replaceMainInput("beforeafter", len([]rune("before")))
+		m.replaceMainInput("beforeafter", byteOffsetForRuneCursor("beforeafter", len([]rune("before"))))
 		return m
 	case clipboardTestInputAsk:
 		next, _ := m.Update(askEventMsg{event: testQuestionAskEvent(
@@ -48,8 +48,7 @@ func setupClipboardTestInput(t *testing.T, m *uiModel, target clipboardTestInput
 		if !updated.ask.freeform {
 			t.Fatal("expected freeform ask input")
 		}
-		updated.ask.input = "beforeafter"
-		updated.ask.inputCursor = len([]rune("before"))
+		testSetAskInputAtRuneCursor(updated, "beforeafter", len([]rune("before")))
 		return updated
 	default:
 		t.Fatalf("unknown clipboard test input target %d", target)
@@ -60,9 +59,9 @@ func setupClipboardTestInput(t *testing.T, m *uiModel, target clipboardTestInput
 func clipboardTestInputText(m *uiModel, target clipboardTestInputTarget) string {
 	switch target {
 	case clipboardTestInputMain:
-		return m.input
+		return testMainInput(m)
 	case clipboardTestInputAsk:
-		return m.ask.input
+		return testAskInput(m)
 	default:
 		return ""
 	}
@@ -97,7 +96,7 @@ func TestClipboardPasteMainReturnsAutocompleteRefreshCommand(t *testing.T) {
 	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{
 		AuthManager: auth.NewManager(store, nil, nil),
 	}))
-	m.replaceMainInput("/l", -1)
+	m.replaceMainInputAtEnd("/l")
 
 	next, cmd := m.Update(clipboardPasteDoneMsg{
 		Target:         uiClipboardPasteTargetMain,
@@ -175,7 +174,7 @@ func TestClipboardPasteDoneRejectsStaleTarget(t *testing.T) {
 	t.Run("replaced main draft", func(t *testing.T) {
 		m := setupClipboardTestInput(t, newProjectedStaticUIModel(), clipboardTestInputMain)
 		staleToken := m.mainInputDraftToken
-		m.replaceMainInput("replacement", -1)
+		m.replaceMainInputAtEnd("replacement")
 
 		next, _ := m.Update(clipboardPasteDoneMsg{
 			Target:         uiClipboardPasteTargetMain,
@@ -183,7 +182,7 @@ func TestClipboardPasteDoneRejectsStaleTarget(t *testing.T) {
 			Content:        uiClipboardText{Text: "clipboard"},
 		})
 		updated := next.(*uiModel)
-		if got, want := updated.input, "replacement"; got != want {
+		if got, want := testMainInput(updated), "replacement"; got != want {
 			t.Fatalf("input = %q, want %q", got, want)
 		}
 	})
@@ -194,7 +193,7 @@ func TestClipboardPasteDoneRejectsStaleTarget(t *testing.T) {
 		replacement := testQuestionAskEvent("replacement-ask", "Replacement")
 		testSetActiveAsk(m, &replacement)
 		m.ask.freeform = true
-		m.ask.input = "replacement"
+		testSetAskInput(m, "replacement")
 
 		next, _ := m.Update(clipboardPasteDoneMsg{
 			Target:   uiClipboardPasteTargetAsk,
@@ -202,7 +201,7 @@ func TestClipboardPasteDoneRejectsStaleTarget(t *testing.T) {
 			Content:  uiClipboardText{Text: "clipboard"},
 		})
 		updated := next.(*uiModel)
-		if got, want := updated.ask.input, "replacement"; got != want {
+		if got, want := testAskInput(updated), "replacement"; got != want {
 			t.Fatalf("ask input = %q, want %q", got, want)
 		}
 	})
@@ -218,8 +217,8 @@ func TestClipboardPasteDoneRejectsStaleTarget(t *testing.T) {
 			Content:  uiClipboardText{Text: "clipboard"},
 		})
 		updated := next.(*uiModel)
-		if updated.ask.current != nil || updated.ask.input != "beforeafter" {
-			t.Fatalf("closed ask changed: current=%+v input=%q", updated.ask.current, updated.ask.input)
+		if updated.ask.current != nil || testAskInput(updated) != "beforeafter" {
+			t.Fatalf("closed ask changed: current=%+v input=%q", updated.ask.current, testAskInput(updated))
 		}
 	})
 }
@@ -227,7 +226,7 @@ func TestClipboardPasteDoneRejectsStaleTarget(t *testing.T) {
 func TestClipboardPasteDoneRemovesStaleTemporaryImage(t *testing.T) {
 	model := setupClipboardTestInput(t, newProjectedStaticUIModel(), clipboardTestInputMain)
 	staleToken := model.mainInputDraftToken
-	model.replaceMainInput("replacement", -1)
+	model.replaceMainInputAtEnd("replacement")
 	removed := 0
 	image := newTemporaryClipboardImage("/tmp/kent-stale-clipboard.png", &uiClipboardTempImage{
 		path: "/tmp/kent-stale-clipboard.png",
@@ -243,8 +242,8 @@ func TestClipboardPasteDoneRemovesStaleTemporaryImage(t *testing.T) {
 		Content:        image,
 	})
 	updated := next.(*uiModel)
-	if removed != 0 || updated.input != "replacement" || cmd == nil {
-		t.Fatalf("stale image result = removed %d, input %q, cmd %v", removed, updated.input, cmd)
+	if removed != 0 || testMainInput(updated) != "replacement" || cmd == nil {
+		t.Fatalf("stale image result = removed %d, input %q, cmd %v", removed, testMainInput(updated), cmd)
 	}
 	next, _ = updated.Update(cmd())
 	if removed != 1 {
@@ -255,7 +254,7 @@ func TestClipboardPasteDoneRemovesStaleTemporaryImage(t *testing.T) {
 func TestClipboardPasteDoneReportsAsynchronousStaleImageCleanupFailure(t *testing.T) {
 	m := setupClipboardTestInput(t, newProjectedStaticUIModel(), clipboardTestInputMain)
 	staleToken := m.mainInputDraftToken
-	m.replaceMainInput("replacement", -1)
+	m.replaceMainInputAtEnd("replacement")
 	image := newTemporaryClipboardImage("/tmp/kent-stale-clipboard.png", &uiClipboardTempImage{
 		path: "/tmp/kent-stale-clipboard.png",
 		remove: func(string) error {
@@ -301,7 +300,7 @@ func TestClipboardPasteDoneRejectsEmptyAndUnknownContent(t *testing.T) {
 				Content:        tc.content,
 			})
 			updated := next.(*uiModel)
-			if got, want := updated.input, "beforeafter"; got != want {
+			if got, want := testMainInput(updated), "beforeafter"; got != want {
 				t.Fatalf("input = %q, want %q", got, want)
 			}
 			if updated.transientStatus == "" {
@@ -487,7 +486,7 @@ func TestClipboardPasteBindingLeavesNonFreeformAskUnchanged(t *testing.T) {
 	if calls != 0 {
 		t.Fatalf("clipboard read calls = %d, want 0", calls)
 	}
-	if updated.ask.freeform || updated.ask.input != "" {
-		t.Fatalf("non-freeform ask changed: freeform=%v input=%q", updated.ask.freeform, updated.ask.input)
+	if updated.ask.freeform || testAskInput(updated) != "" {
+		t.Fatalf("non-freeform ask changed: freeform=%v input=%q", updated.ask.freeform, testAskInput(updated))
 	}
 }

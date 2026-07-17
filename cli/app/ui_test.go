@@ -16,7 +16,7 @@ import (
 
 func TestTabQueuesAndStartsSubmission(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.input = "echo hi"
+	testSetMainInput(m, "echo hi")
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	updated := next.(*uiModel)
@@ -24,8 +24,8 @@ func TestTabQueuesAndStartsSubmission(t *testing.T) {
 	if !updated.isBusy() {
 		t.Fatal("expected busy after tab queued submission")
 	}
-	if updated.input != "" {
-		t.Fatalf("expected input cleared, got %q", updated.input)
+	if testMainInput(updated) != "" {
+		t.Fatalf("expected input cleared, got %q", testMainInput(updated))
 	}
 }
 
@@ -53,7 +53,7 @@ func TestEmptyEnterFlushesOnlyNextQueuedItem(t *testing.T) {
 func TestIdleTabWithExistingQueueFlushesOnlyNextQueuedItem(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.queued = queuedInputsForTest("/name queued title")
-	m.input = "follow up"
+	testSetMainInput(m, "follow up")
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	updated := next.(*uiModel)
@@ -74,7 +74,7 @@ func TestIdleTabWithExistingQueueFlushesOnlyNextQueuedItem(t *testing.T) {
 
 func TestCustomKeyCtrlEnterQueuesAndStartsSubmission(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.input = "echo hi"
+	testSetMainInput(m, "echo hi")
 
 	next, _ := m.Update(customKeyMsg{Kind: customKeyCtrlEnter})
 	updated := next.(*uiModel)
@@ -82,15 +82,15 @@ func TestCustomKeyCtrlEnterQueuesAndStartsSubmission(t *testing.T) {
 	if !updated.isBusy() {
 		t.Fatal("expected busy after ctrl+enter custom key")
 	}
-	if updated.input != "" {
-		t.Fatalf("expected input cleared after ctrl+enter custom key, got %q", updated.input)
+	if testMainInput(updated) != "" {
+		t.Fatalf("expected input cleared after ctrl+enter custom key, got %q", testMainInput(updated))
 	}
 }
 
 func TestCustomKeyCtrlEnterQueuesPostTurnWhenBusy(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.setRuntimeActivityBusyForTest(true)
-	m.input = "echo hi"
+	testSetMainInput(m, "echo hi")
 
 	next, _ := m.Update(customKeyMsg{Kind: customKeyCtrlEnter})
 	updated := next.(*uiModel)
@@ -105,7 +105,7 @@ func TestCustomKeyCtrlEnterQueuesPostTurnWhenBusy(t *testing.T) {
 
 func TestCustomKeyShiftEnterInsertsNewline(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.input = "hello"
+	testSetMainInput(m, "hello")
 
 	next, _ := m.Update(customKeyMsg{Kind: customKeyShiftEnter})
 	updated := next.(*uiModel)
@@ -113,14 +113,14 @@ func TestCustomKeyShiftEnterInsertsNewline(t *testing.T) {
 	if updated.isBusy() {
 		t.Fatal("did not expect busy after shift+enter CSI sequence")
 	}
-	if updated.input != "hello\n" {
-		t.Fatalf("expected newline insertion from shift+enter CSI sequence, got %q", updated.input)
+	if testMainInput(updated) != "hello\n" {
+		t.Fatalf("expected newline insertion from shift+enter CSI sequence, got %q", testMainInput(updated))
 	}
 }
 
 func TestCustomKeyShiftEnterThenEnterDoesNotSubmitTrailingNewline(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.input = "hello"
+	testSetMainInput(m, "hello")
 
 	next, _ := m.Update(customKeyMsg{Kind: customKeyShiftEnter})
 	updated := next.(*uiModel)
@@ -134,18 +134,95 @@ func TestCustomKeyShiftEnterThenEnterDoesNotSubmitTrailingNewline(t *testing.T) 
 
 func TestCustomKeyCtrlBackspaceDeletesCurrentLine(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.input = "one\ntwo\nthree"
-	m.inputCursor = 5 // inside "two"
+	testSetMainInputAtRuneCursor(m, "one\ntwo\nthree", 5) // inside "two"
 
 	next, _ := m.Update(customKeyMsg{Kind: customKeyCtrlBackspace})
 	updated := next.(*uiModel)
 
-	if updated.input != "one\nthree" {
-		t.Fatalf("expected ctrl+backspace CSI to remove current line, got %q", updated.input)
+	if testMainInput(updated) != "one\nthree" {
+		t.Fatalf("expected ctrl+backspace CSI to remove current line, got %q", testMainInput(updated))
 	}
-	if updated.inputCursor != 4 {
-		t.Fatalf("expected cursor at start of joined line after delete, got %d", updated.inputCursor)
+	if testMainInputRuneCursor(updated) != 4 {
+		t.Fatalf("expected cursor at start of joined line after delete, got %d", testMainInputRuneCursor(updated))
 	}
+}
+
+func TestMainComposerMutatesTokenOnlyForEditsAndKeepsByteCursor(t *testing.T) {
+	m := newProjectedStaticUIModel()
+	initialToken := m.mainInputDraftToken
+
+	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyBackspace})
+	if got := m.mainInputDraftToken; got != initialToken {
+		t.Fatalf("empty backspace token = %d, want unchanged %d", got, initialToken)
+	}
+
+	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("界")})
+	if got, want := testMainInput(m), "界"; got != want {
+		t.Fatalf("input = %q, want %q", got, want)
+	}
+	if got, want := m.mainEditor.Cursor(), len("界"); got != want {
+		t.Fatalf("byte cursor after unicode insert = %d, want %d", got, want)
+	}
+	if m.mainInputDraftToken == initialToken {
+		t.Fatal("unicode insert did not advance main draft token")
+	}
+	afterInsertToken := m.mainInputDraftToken
+
+	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyLeft})
+	if got, want := m.mainEditor.Cursor(), 0; got != want {
+		t.Fatalf("byte cursor after left = %d, want %d", got, want)
+	}
+	if got := m.mainInputDraftToken; got != afterInsertToken {
+		t.Fatalf("cursor movement token = %d, want unchanged %d", got, afterInsertToken)
+	}
+
+	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyDelete})
+	if got, want := testMainInput(m), ""; got != want {
+		t.Fatalf("input after delete = %q, want %q", got, want)
+	}
+	if m.mainInputDraftToken == afterInsertToken {
+		t.Fatal("delete did not advance main draft token")
+	}
+	afterDeleteToken := m.mainInputDraftToken
+
+	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyDelete})
+	if got := m.mainInputDraftToken; got != afterDeleteToken {
+		t.Fatalf("empty delete token = %d, want unchanged %d", got, afterDeleteToken)
+	}
+}
+
+func TestSharedEditorsRemoveSplitMouseSGRSequencesAroundUnicode(t *testing.T) {
+	const prefix = "界"
+	const suffix = "尾"
+	const first = "\x1b[<64;"
+	const second = "63;24M" + suffix
+
+	t.Run("main", func(t *testing.T) {
+		m := newProjectedStaticUIModel()
+		m.insertInputRunes([]rune(prefix + first))
+		m.insertInputRunes([]rune(second))
+		if got, want := m.mainEditor.Text(), prefix+suffix; got != want {
+			t.Fatalf("main editor = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("ask", func(t *testing.T) {
+		m := newProjectedStaticUIModel()
+		m.insertAskInputRunes([]rune(prefix + first))
+		m.insertAskInputRunes([]rune(second))
+		if got, want := m.ask.editor.Text(), prefix+suffix; got != want {
+			t.Fatalf("ask editor = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("single line", func(t *testing.T) {
+		editor := newSingleLineEditor("")
+		updateSingleLineEditorWithAppKeys(&editor, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(prefix + first)})
+		updateSingleLineEditorWithAppKeys(&editor, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(second)})
+		if got, want := editor.Text(), prefix+suffix; got != want {
+			t.Fatalf("single-line editor = %q, want %q", got, want)
+		}
+	})
 }
 
 func TestParseUserShellCommand(t *testing.T) {
@@ -237,7 +314,7 @@ func TestAskQuestionPickerSubmitPreservesPendingFreeformDraft(t *testing.T) {
 	hasDisabledDraftPreview := false
 	hasHintLine := false
 	for _, line := range promptLines {
-		if line.Kind == askPromptLineKindInput && line.Disabled && line.InputText == "custom" {
+		if line.Kind == askPromptLineKindInput && line.Disabled && line.InputEditor.Text() == "custom" {
 			hasDisabledDraftPreview = true
 		}
 		if line.Kind == askPromptLineKindHint {
@@ -447,26 +524,25 @@ func TestAskFreeformCtrlUEditingMatchesMainInput(t *testing.T) {
 
 	next, _ := m.Update(askEventMsg{event: event})
 	updated := next.(*uiModel)
-	updated.ask.input = "top\ncurrent\nbottom"
-	updated.ask.inputCursor = len([]rune("top\ncur"))
+	testSetAskInputAtRuneCursor(updated, "top\ncurrent\nbottom", len([]rune("top\ncur")))
 
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
 	updated = next.(*uiModel)
 
 	if goruntime.GOOS == "darwin" {
-		if updated.ask.input != "top\nbottom" {
-			t.Fatalf("expected ctrl+u to delete current ask line on darwin, got %q", updated.ask.input)
+		if testAskInput(updated) != "top\nbottom" {
+			t.Fatalf("expected ctrl+u to delete current ask line on darwin, got %q", testAskInput(updated))
 		}
-		if updated.ask.inputCursor != len([]rune("top\n")) {
-			t.Fatalf("expected cursor at joined ask line on darwin, got %d", updated.ask.inputCursor)
+		if testAskInputRuneCursor(updated) != len([]rune("top\n")) {
+			t.Fatalf("expected cursor at joined ask line on darwin, got %d", testAskInputRuneCursor(updated))
 		}
 		return
 	}
-	if updated.ask.input != "top\nrent\nbottom" {
-		t.Fatalf("expected ctrl+u to kill to ask line start, got %q", updated.ask.input)
+	if testAskInput(updated) != "top\nrent\nbottom" {
+		t.Fatalf("expected ctrl+u to kill to ask line start, got %q", testAskInput(updated))
 	}
-	if updated.ask.inputCursor != len([]rune("top\n")) {
-		t.Fatalf("expected cursor at ask line start, got %d", updated.ask.inputCursor)
+	if testAskInputRuneCursor(updated) != len([]rune("top\n")) {
+		t.Fatalf("expected cursor at ask line start, got %d", testAskInputRuneCursor(updated))
 	}
 }
 
@@ -538,7 +614,7 @@ func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 func TestDetailModeHidesInputBox(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.terminalGeometry = terminalGeometryKnown(80, 16)
-	m.input = "draft input should be hidden"
+	testSetMainInput(m, "draft input should be hidden")
 	m.layout().syncViewport()
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
@@ -624,23 +700,22 @@ func TestAskQuestionMarkdownPromptCursorTracksInputAfterExpandedQuestion(t *test
 	m.layout().syncViewport()
 	event := testQuestionAskEvent("ask-1", question)
 	testSetActiveAsk(m, &event)
-	m.ask.input = "typed"
-	m.ask.inputCursor = len([]rune(m.ask.input))
+	testSetAskInput(m, "typed")
 
-	wrapped, cursorLine := m.layout().wrappedAskPromptLines(64)
-	if cursorLine < 0 || cursorLine >= len(wrapped) {
-		t.Fatalf("expected cursor line in wrapped prompt, got %d of %d", cursorLine, len(wrapped))
+	wrapped, cursorLine := testAskPaneContent(m, 64)
+	if cursorLine == nil || *cursorLine >= len(wrapped) {
+		t.Fatalf("expected cursor line in wrapped prompt, got %v of %d", cursorLine, len(wrapped))
 	}
-	if wrapped[cursorLine].Line.Kind != askPromptLineKindInput {
-		t.Fatalf("expected cursor to land on input after markdown-expanded question, got line %+v", wrapped[cursorLine])
+	if wrapped[*cursorLine].prompt.Kind != askPromptLineKindInput {
+		t.Fatalf("expected cursor to land on input after markdown-expanded question, got line %+v", wrapped[*cursorLine])
 	}
 
-	visible, visibleCursor := m.layout().visibleAskPromptLinesWithCursor(64)
-	if visibleCursor < 0 || visibleCursor >= len(visible) {
-		t.Fatalf("expected cursor line in visible prompt, got %d of %d", visibleCursor, len(visible))
+	visible, visibleCursor := testVisibleAskPaneContent(m, 64)
+	if visibleCursor == nil || *visibleCursor >= len(visible) {
+		t.Fatalf("expected cursor line in visible prompt, got %v of %d", visibleCursor, len(visible))
 	}
-	if visible[visibleCursor].Line.Kind != askPromptLineKindInput {
-		t.Fatalf("expected visible cursor to land on input after markdown-expanded question, got line %+v", visible[visibleCursor])
+	if visible[*visibleCursor].prompt.Kind != askPromptLineKindInput {
+		t.Fatalf("expected visible cursor to land on input after markdown-expanded question, got line %+v", visible[*visibleCursor])
 	}
 }
 
@@ -673,21 +748,20 @@ func TestAskQuestionMarkdownLinksWrapIntoIndependentBoundedRows(t *testing.T) {
 				"[PR #456](https://github.com/org/repo/pull/456)",
 			)
 			testSetActiveAsk(m, &event)
-			m.ask.input = "answer"
-			m.ask.inputCursor = len([]rune(m.ask.input))
+			testSetAskInput(m, "answer")
 
-			wrapped, cursorLine := m.layout().wrappedAskPromptLines(12)
-			if cursorLine < 0 || wrapped[cursorLine].Line.Kind != askPromptLineKindInput {
-				t.Fatalf("cursor=%d should remain on answer input: %+v", cursorLine, wrapped)
+			wrapped, cursorLine := testAskPaneContent(m, 12)
+			if cursorLine == nil || wrapped[*cursorLine].prompt.Kind != askPromptLineKindInput {
+				t.Fatalf("cursor=%v should remain on answer input: %+v", cursorLine, wrapped)
 			}
 
 			var linked strings.Builder
 			for _, line := range wrapped {
-				if width := lipgloss.Width(line.Text); width > 12 {
+				if width := lipgloss.Width(line.text); width > 12 {
 					t.Fatalf("line width=%d want <=12: %+v", width, line)
 				}
-				trace := tuitest.TraceTerminalHyperlinks(t, line.Text)
-				if line.Line.Kind == askPromptLineKindQuestion {
+				trace := tuitest.TraceTerminalHyperlinks(t, line.text)
+				if line.prompt.Kind == askPromptLineKindQuestion {
 					linked.WriteString(trace.LinkedText(target))
 					continue
 				}
@@ -707,12 +781,12 @@ func TestAskQuestionPlainPRReferenceDoesNotCreateHyperlink(t *testing.T) {
 	event := testQuestionAskEvent("ask-1", "PR #456")
 	testSetActiveAsk(m, &event)
 
-	wrapped, _ := m.layout().wrappedAskPromptLines(12)
+	wrapped, _ := testAskPaneContent(m, 12)
 	for _, line := range wrapped {
-		if line.Line.Kind != askPromptLineKindQuestion {
+		if line.prompt.Kind != askPromptLineKindQuestion {
 			continue
 		}
-		if trace := tuitest.TraceTerminalHyperlinks(t, line.Text); len(trace.Events) != 0 {
+		if trace := tuitest.TraceTerminalHyperlinks(t, line.text); len(trace.Events) != 0 {
 			t.Fatalf("plain PR reference emitted hyperlink events: %+v", trace.Events)
 		}
 	}
@@ -730,12 +804,12 @@ func TestAskQuestionViewportPrioritizesAnswerOptionsOverQuestionLines(t *testing
 	)
 	testSetActiveAsk(m, &event)
 
-	visible, _ := m.layout().visibleAskPromptLinesWithCursor(48)
+	visible, _ := testVisibleAskPaneContent(m, 48)
 	questionLines := 0
 	optionLines := 0
 	hintLines := 0
 	for _, line := range visible {
-		switch line.Line.Kind {
+		switch line.prompt.Kind {
 		case askPromptLineKindQuestion:
 			questionLines++
 		case askPromptLineKindOption:

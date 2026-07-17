@@ -3,6 +3,8 @@ package app
 import (
 	"strings"
 
+	tuiinput "core/cli/tui/input"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -25,20 +27,21 @@ func preservePromptHistoryText(text string) string {
 }
 
 func (m *uiModel) resetPromptHistoryNavigation() {
-	m.promptHistorySelection = -1
-	m.promptHistoryDraft = ""
-	m.promptHistoryDraftCursor = -1
+	m.promptHistorySelection = nil
+	m.promptHistoryDraft = nil
 }
 
 func (m *uiModel) promptHistorySelectionActive() bool {
-	return m.promptHistorySelection >= 0 && m.promptHistorySelection < len(m.promptHistory)
+	return m.promptHistorySelection != nil &&
+		*m.promptHistorySelection >= 0 &&
+		*m.promptHistorySelection < len(m.promptHistory)
 }
 
 func (m *uiModel) selectedPromptHistoryText() (string, bool) {
 	if !m.promptHistorySelectionActive() {
 		return "", false
 	}
-	return m.promptHistory[m.promptHistorySelection], true
+	return m.promptHistory[*m.promptHistorySelection], true
 }
 
 func (m *uiModel) promptHistorySelectionMatchesInput() bool {
@@ -46,16 +49,16 @@ func (m *uiModel) promptHistorySelectionMatchesInput() bool {
 	if !ok {
 		return false
 	}
-	return m.input == selected
+	return m.mainEditor.Text() == selected
 }
 
 func (m *uiModel) inputCursorAtBoundary() bool {
-	cursor := clampCursor(m.inputCursor, len([]rune(m.input)))
-	return cursor == 0 || cursor == len([]rune(m.input))
+	cursor := m.mainEditor.Cursor()
+	return cursor == 0 || cursor == len(m.mainEditor.Text())
 }
 
 func (m *uiModel) inputCursorAtStart() bool {
-	return clampCursor(m.inputCursor, len([]rune(m.input))) == 0
+	return m.mainEditor.Cursor() == 0
 }
 
 func (m *uiModel) promptHistoryCursorAtBoundary() bool {
@@ -79,7 +82,7 @@ func (m *uiModel) syncPromptHistorySelectionToInput() {
 	if m.promptHistorySelectionMatchesInput() {
 		return
 	}
-	m.promptHistorySelection = -1
+	m.promptHistorySelection = nil
 }
 
 func (m *uiModel) shouldAttemptPromptHistoryNavigation(delta int) bool {
@@ -89,7 +92,7 @@ func (m *uiModel) shouldAttemptPromptHistoryNavigation(delta int) bool {
 	if len(m.promptHistory) == 0 {
 		return false
 	}
-	if m.input == "" {
+	if m.mainEditor.Text() == "" {
 		return true
 	}
 	if m.promptHistorySelectionActive() {
@@ -116,61 +119,69 @@ func (m *uiModel) navigatePromptHistory(delta int) bool {
 
 func (m *uiModel) navigatePromptHistoryUp() bool {
 	if !m.promptHistorySelectionActive() {
-		if m.input != "" && !m.inputCursorAtStart() {
+		if m.mainEditor.Text() != "" && !m.inputCursorAtStart() {
 			return false
 		}
-		m.promptHistoryDraft = m.input
-		m.promptHistoryDraftCursor = m.inputCursor
-		m.promptHistorySelection = len(m.promptHistory) - 1
+		snapshot := m.mainEditor.Snapshot()
+		m.promptHistoryDraft = &snapshot
+		selection := len(m.promptHistory) - 1
+		m.promptHistorySelection = &selection
 		m.applyPromptHistorySelection()
 		return true
 	}
 	if !m.promptHistoryCursorAtBoundary() {
 		return false
 	}
-	if m.promptHistorySelection == 0 {
+	if *m.promptHistorySelection == 0 {
 		return false
 	}
-	m.promptHistorySelection--
+	selection := *m.promptHistorySelection - 1
+	m.promptHistorySelection = &selection
 	m.applyPromptHistorySelection()
 	return true
 }
 
 func (m *uiModel) navigatePromptHistoryDown() bool {
-	if !m.promptHistorySelectionActive() || m.input == "" || !m.promptHistoryCursorAtBoundary() {
+	if !m.promptHistorySelectionActive() || m.mainEditor.Text() == "" || !m.promptHistoryCursorAtBoundary() {
 		return false
 	}
-	if m.promptHistorySelection == len(m.promptHistory)-1 {
+	if *m.promptHistorySelection == len(m.promptHistory)-1 {
 		m.restorePromptHistoryDraft()
 		return true
 	}
-	m.promptHistorySelection++
+	selection := *m.promptHistorySelection + 1
+	m.promptHistorySelection = &selection
 	m.applyPromptHistorySelection()
 	return true
 }
 
 func (m *uiModel) hasPromptHistoryDraft() bool {
-	return m.promptHistoryDraft != "" || m.promptHistoryDraftCursor >= 0
+	return m.promptHistoryDraft != nil
 }
 
 func (m *uiModel) restorePromptHistoryDraft() {
-	m.replaceMainInput(m.promptHistoryDraft, m.promptHistoryDraftCursor)
+	if m.promptHistoryDraft == nil {
+		return
+	}
+	m.mainEditor.Restore(*m.promptHistoryDraft)
+	m.mainInputMutated()
 	m.resetPromptHistoryNavigation()
 }
 
-func (m *uiModel) capturePromptHistoryDraftForReuse() (string, int, bool) {
-	if !m.hasPromptHistoryDraft() {
-		return "", -1, false
+func (m *uiModel) capturePromptHistoryDraftForReuse() *tuiinput.EditorSnapshot {
+	if m.promptHistoryDraft == nil {
+		return nil
 	}
-	return m.promptHistoryDraft, m.promptHistoryDraftCursor, true
+	draft := *m.promptHistoryDraft
+	return &draft
 }
 
-func (m *uiModel) restoreCapturedPromptHistoryDraft(text string, cursor int, ok bool) bool {
-	if !ok {
+func (m *uiModel) restoreCapturedPromptHistoryDraft(draft *tuiinput.EditorSnapshot) bool {
+	if draft == nil {
 		return false
 	}
-	m.promptHistoryDraft = text
-	m.promptHistoryDraftCursor = cursor
+	captured := *draft
+	m.promptHistoryDraft = &captured
 	m.restorePromptHistoryDraft()
 	return true
 }
@@ -179,7 +190,7 @@ func (m *uiModel) applyPromptHistorySelection() {
 	if !m.promptHistorySelectionActive() {
 		return
 	}
-	m.replaceMainInput(m.promptHistory[m.promptHistorySelection], -1)
+	m.replaceMainInputAtEnd(m.promptHistory[*m.promptHistorySelection])
 }
 
 func (m *uiModel) rememberPromptHistoryLocally(text string) bool {

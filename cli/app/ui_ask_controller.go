@@ -4,6 +4,7 @@ import (
 	"context"
 	"core/cli/app/internal/runtimeattach"
 	"core/cli/tui"
+	tuiinput "core/cli/tui/input"
 	"core/shared/clientui"
 	"core/shared/textutil"
 	"errors"
@@ -35,8 +36,7 @@ type askPromptLine struct {
 	MutedSuffix string
 	Disabled    bool
 	InputPrefix string
-	InputText   string
-	InputCursor int
+	InputEditor tuiinput.Editor
 	ShowsCursor bool
 }
 
@@ -128,32 +128,10 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.ask.freeform && isClipboardPasteKey(msg) {
 		return m, m.pasteClipboardCmd(uiClipboardPasteTargetAsk)
 	}
-	if m.ask.freeform && handleSharedInputEditKeyForGOOS(msg, uiSharedInputEditActions{
-		Backspace:          m.backspaceAskInput,
-		DeleteForward:      m.deleteForwardAskInput,
-		DeleteBackwardWord: m.deleteBackwardWordAskInput,
-		DeleteForwardWord:  m.deleteForwardWordAskInput,
-		KillToLineStart:    m.killAskInputToLineStart,
-		KillToLineEnd:      m.killAskInputToLineEnd,
-		Yank:               m.yankAskInput,
-		DeleteCurrentLine:  m.deleteCurrentAskInputLine,
-	}, runtime.GOOS) {
+	if m.ask.freeform && applySharedInputEditKeyForGOOS(msg, &m.ask.editor, runtime.GOOS).Handled {
 		return m, nil
 	}
-	if m.ask.freeform && handleSharedInputMovementKey(msg, uiSharedInputMovementActions{
-		MoveLeft: func() {
-			m.ask.inputCursor = moveBufferCursorLeft(m.ask.input, m.ask.inputCursor)
-		},
-		MoveRight: func() {
-			m.ask.inputCursor = moveBufferCursorRight(m.ask.input, m.ask.inputCursor)
-		},
-		MoveWordLeft: func() {
-			m.ask.inputCursor = moveBufferCursorWordLeft(m.ask.input, m.ask.inputCursor)
-		},
-		MoveWordRight: func() {
-			m.ask.inputCursor = moveBufferCursorWordRight(m.ask.input, m.ask.inputCursor)
-		},
-	}) {
+	if m.ask.freeform && applySharedInputMovementKey(msg, &m.ask.editor) {
 		return m, nil
 	}
 
@@ -200,7 +178,7 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.inputController().normalizePendingCSIShiftEnterOnEnter()
 		if m.ask.freeform {
-			commentary := strings.TrimSpace(m.ask.input)
+			commentary := strings.TrimSpace(m.ask.editor.Text())
 			if askRequiresFreeformSelectionCommentary(req, m.ask.cursor) && commentary == "" {
 				return m, sequenceCmds(
 					c.model.sendTransientStatusWithNoticeID("Write your response before submitting the freeform option", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""),
@@ -250,7 +228,7 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if askHasFreeformSelectionOption(req) && m.ask.cursor == len(askVisibleOptions(req)) {
-			commentary := strings.TrimSpace(m.ask.input)
+			commentary := strings.TrimSpace(m.ask.editor.Text())
 			if commentary == "" {
 				m.ask.freeform = true
 				return m, nil
@@ -270,7 +248,7 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		resp := clientui.PromptAnswer{SelectedOptionNumber: textutil.Int(m.ask.cursor + 1)}
-		if commentary := strings.TrimSpace(m.ask.input); askSupportsDraftRoundTrip(req) && commentary != "" {
+		if commentary := strings.TrimSpace(m.ask.editor.Text()); askSupportsDraftRoundTrip(req) && commentary != "" {
 			resp.FreeformAnswer = commentary
 		}
 		if transcriptPromptIsApproval(req) && m.ask.cursor < len(req.ApprovalOptions) {
@@ -285,7 +263,7 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, answerCmd
 	case tea.KeyUp:
 		if m.ask.freeform {
-			m.moveAskCursorUpLine()
+			m.moveAskCursorVertical(-1)
 			return m, nil
 		}
 		if m.ask.cursor > 0 {
@@ -294,7 +272,7 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyDown:
 		if m.ask.freeform {
-			m.moveAskCursorDownLine()
+			m.moveAskCursorVertical(1)
 			return m, nil
 		}
 		maxIdx := askOptionCount(req) - 1
@@ -318,12 +296,12 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyHome, tea.KeyCtrlA:
 		if m.ask.freeform {
-			m.ask.inputCursor = 0
+			m.ask.editor.MoveLineStart()
 		}
 		return m, nil
 	case tea.KeyEnd, tea.KeyCtrlE, tea.KeyCtrlEnd:
 		if m.ask.freeform {
-			m.ask.inputCursor = -1
+			m.ask.editor.MoveLineEnd()
 		}
 		return m, nil
 	default:
@@ -351,7 +329,7 @@ func (c uiAskController) renderPromptLines() []askPromptLine {
 	if isApprovalCommentaryPrompt(req, m.ask.freeform, m.ask.freeformMode) {
 		return []askPromptLine{
 			{Text: approvalCommentaryLabel(req, m.ask.cursor), Kind: askPromptLineKindHint},
-			{Kind: askPromptLineKindInput, InputPrefix: "› ", InputText: m.ask.input, InputCursor: m.ask.inputCursor, ShowsCursor: true},
+			{Kind: askPromptLineKindInput, InputPrefix: "› ", InputEditor: m.ask.editor, ShowsCursor: true},
 		}
 	}
 	lines := askQuestionPromptTextLines(req.Question)
@@ -383,8 +361,8 @@ func (c uiAskController) renderPromptLines() []askPromptLine {
 			}
 			lines = append(lines, askPromptLine{Text: fmt.Sprintf("%s%d. %s", prefix, idx, askFreeformSelectionOptionText), Kind: askPromptLineKindOption, Selected: selected})
 		}
-		if askSupportsDraftRoundTrip(req) && askHasPendingFreeformDraft(m.ask.input) {
-			lines = append(lines, askPromptLine{Kind: askPromptLineKindInput, Disabled: true, InputPrefix: "› ", InputText: m.ask.input, InputCursor: m.ask.inputCursor, ShowsCursor: false})
+		if askSupportsDraftRoundTrip(req) && askHasPendingFreeformDraft(m.ask.editor.Text()) {
+			lines = append(lines, askPromptLine{Kind: askPromptLineKindInput, Disabled: true, InputPrefix: "› ", InputEditor: m.ask.editor, ShowsCursor: false})
 			return lines
 		}
 		hint := "Tab to add commentary • Enter to submit"
@@ -402,7 +380,7 @@ func (c uiAskController) renderPromptLines() []askPromptLine {
 	if inputLabel != "" {
 		lines = append(lines, askPromptLine{Text: inputLabel, Kind: askPromptLineKindHint})
 	}
-	lines = append(lines, askPromptLine{Kind: askPromptLineKindInput, InputPrefix: "› ", InputText: m.ask.input, InputCursor: m.ask.inputCursor, ShowsCursor: true})
+	lines = append(lines, askPromptLine{Kind: askPromptLineKindInput, InputPrefix: "› ", InputEditor: m.ask.editor, ShowsCursor: true})
 	hint := "Enter to submit"
 	if askSupportsDraftRoundTrip(req) {
 		hint = "Tab to return to picker • Enter to submit"

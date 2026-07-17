@@ -418,13 +418,13 @@ func (c uiInputController) runProcessAction(action, id string) (tea.Model, tea.C
 
 func (m *uiModel) appendProcessOutputToInput(id, output string) {
 	payload := fmt.Sprintf("Output of bg shell %s:\n%s\n", id, output)
-	if strings.TrimSpace(m.input) == "" {
-		m.replaceMainInput(payload, -1)
+	if strings.TrimSpace(m.mainEditor.Text()) == "" {
+		m.replaceMainInputAtEnd(payload)
 		return
 	}
-	m.moveCursorEnd()
+	m.mainEditor.SetCursor(len(m.mainEditor.Text()))
 	prefix := "\n"
-	if strings.HasSuffix(m.input, "\n") {
+	if strings.HasSuffix(m.mainEditor.Text(), "\n") {
 		prefix = ""
 	}
 	m.insertInputRunes([]rune(prefix + payload))

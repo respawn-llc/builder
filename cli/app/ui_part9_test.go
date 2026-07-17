@@ -16,7 +16,7 @@ func TestReviewerProgressKeepsInputEditable(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
-	m.input = "keep this draft"
+	testSetMainInput(m, "keep this draft")
 
 	m.applyTranscriptReviewerState(clientui.TranscriptReviewerState{
 		StepID: ongoingTestStepID(),
@@ -26,7 +26,7 @@ func TestReviewerProgressKeepsInputEditable(t *testing.T) {
 	if !started.isReviewerBlocking() {
 		t.Fatal("expected reviewer state to be marked running")
 	}
-	lines := started.layout().renderInputLines(80, uiThemeStyles("dark"))
+	lines := started.layout().inputPaneProjection(80, 0, uiThemeStyles("dark")).Lines
 	plain := stripANSIAndTrimRight(strings.Join(lines, "\n"))
 	if !strings.Contains(plain, "keep this draft") {
 		t.Fatalf("expected original draft visible while reviewer runs, got %q", plain)
@@ -34,8 +34,8 @@ func TestReviewerProgressKeepsInputEditable(t *testing.T) {
 
 	next, _ := started.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 	locked := next.(*uiModel)
-	if locked.input != "keep this draftx" {
-		t.Fatalf("expected key input accepted while reviewer runs, got %q", locked.input)
+	if testMainInput(locked) != "keep this draftx" {
+		t.Fatalf("expected key input accepted while reviewer runs, got %q", testMainInput(locked))
 	}
 
 	locked.applyTranscriptReviewerState(clientui.TranscriptReviewerState{
@@ -46,7 +46,7 @@ func TestReviewerProgressKeepsInputEditable(t *testing.T) {
 	if completed.isReviewerBlocking() {
 		t.Fatal("expected reviewer state cleared after completion")
 	}
-	lines = completed.layout().renderInputLines(80, uiThemeStyles("dark"))
+	lines = completed.layout().inputPaneProjection(80, 0, uiThemeStyles("dark")).Lines
 	plain = stripANSIAndTrimRight(strings.Join(lines, "\n"))
 	if !strings.Contains(plain, "keep this draftx") {
 		t.Fatalf("expected edited draft retained after reviewer completion, got %q", plain)
@@ -57,7 +57,7 @@ func TestBusyEnterDuringReviewerUsesSteeringInjection(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
-	m.input = "steer after review"
+	testSetMainInput(m, "steer after review")
 
 	m.applyTranscriptReviewerState(clientui.TranscriptReviewerState{
 		StepID: ongoingTestStepID(),
@@ -76,8 +76,8 @@ func TestBusyEnterDuringReviewerUsesSteeringInjection(t *testing.T) {
 	if len(updated.pendingInjected) != 1 || updated.pendingInjected[0].Text != "steer after review" {
 		t.Fatalf("expected reviewer steering injected for earliest flush, got %+v", updated.pendingInjected)
 	}
-	if updated.input != "" {
-		t.Fatalf("expected input cleared immediately after queueing reviewer steering, got %q", updated.input)
+	if testMainInput(updated) != "" {
+		t.Fatalf("expected input cleared immediately after queueing reviewer steering, got %q", testMainInput(updated))
 	}
 }
 
@@ -95,8 +95,8 @@ func TestMouseSGRSplitEscAndRunesDoNotArmRollback(t *testing.T) {
 	if !updated.lastEscAt.IsZero() {
 		t.Fatal("expected split mouse sgr continuation to clear rollback esc arming")
 	}
-	if updated.input != "" {
-		t.Fatalf("expected split sgr payload ignored, got %q", updated.input)
+	if testMainInput(updated) != "" {
+		t.Fatalf("expected split sgr payload ignored, got %q", testMainInput(updated))
 	}
 }
 
@@ -119,8 +119,8 @@ func TestHelpDismissesOnRegisteredKeyAndAppliesAction(t *testing.T) {
 	if updated.helpVisible {
 		t.Fatal("expected help dismissed by registered key")
 	}
-	if updated.input != "x" {
-		t.Fatalf("expected keypress to keep its normal behavior, got %q", updated.input)
+	if testMainInput(updated) != "x" {
+		t.Fatalf("expected keypress to keep its normal behavior, got %q", testMainInput(updated))
 	}
 }
 

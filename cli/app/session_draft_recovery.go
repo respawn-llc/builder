@@ -57,8 +57,8 @@ func (m *uiModel) restoreSessionDraftRecoveryBuffers(buffers []serverapi.Session
 
 func (m *uiModel) restoreRecoveredDraftBuffersToVisibleInput(buffers []serverapi.SessionDraftRecoveryBuffer) {
 	parts := make([]string, 0, 1+len(buffers))
-	if m.input != "" {
-		parts = append(parts, m.input)
+	if m.mainEditor.Text() != "" {
+		parts = append(parts, m.mainEditor.Text())
 	}
 	for _, buffer := range buffers {
 		if strings.TrimSpace(buffer.Text) == "" {
@@ -69,5 +69,5 @@ func (m *uiModel) restoreRecoveredDraftBuffersToVisibleInput(buffers []serverapi
 	if len(parts) == 0 {
 		return
 	}
-	m.replaceMainInput(strings.Join(parts, "\n\n"), -1)
+	m.replaceMainInputAtEnd(strings.Join(parts, "\n\n"))
 }

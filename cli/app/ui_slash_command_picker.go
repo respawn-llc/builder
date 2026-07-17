@@ -86,7 +86,7 @@ func parseSlashCommandInput(input string) slashCommandInput {
 }
 
 func (m *uiModel) refreshSlashCommandFilterFromInputWithAuth(scheduleAuth bool) tea.Cmd {
-	parsed := parseSlashCommandInput(m.input)
+	parsed := parseSlashCommandInput(m.mainEditor.Text())
 	if !parsed.active || parsed.argumentMode {
 		m.authSlashSessionOpen = false
 		m.authSlashLoading = false
@@ -233,7 +233,7 @@ func (m *uiModel) slashCommandPicker() slashCommandPickerState {
 	if m.shouldSuppressSlashCommandPicker() {
 		return slashCommandPickerState{}
 	}
-	parsed := parseSlashCommandInput(m.input)
+	parsed := parseSlashCommandInput(m.mainEditor.Text())
 	if !parsed.active || parsed.argumentMode ||
 		m.ask.hasCurrent() {
 		return slashCommandPickerState{}
@@ -329,8 +329,7 @@ func (m *uiModel) navigateSlashCommandPicker(delta int) bool {
 	nextSelection := clampSlashPickerIndex(state.selection+delta, 0, len(state.matches)-1)
 	m.slashCommandSelection = nextSelection
 	m.mainInputDraftToken = nextNonZeroToken(m.mainInputDraftToken)
-	m.input = "/" + state.matches[nextSelection].Name
-	m.inputCursor = -1
+	m.mainEditor.Replace("/" + state.matches[nextSelection].Name)
 	m.refreshPathReferenceFromInput()
 	return true
 }

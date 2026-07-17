@@ -1,57 +1,43 @@
 package app
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	tuiinput "core/cli/tui/input"
 
-type uiSharedInputEditActions struct {
-	Backspace          func() bool
-	DeleteForward      func() bool
-	DeleteBackwardWord func() bool
-	DeleteForwardWord  func() bool
-	KillToLineStart    func() bool
-	KillToLineEnd      func() bool
-	Yank               func() bool
-	DeleteCurrentLine  func() bool
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+type uiEditorKeyResult struct {
+	Handled bool
+	Mutated bool
 }
 
-func handleSharedInputEditKeyForGOOS(msg tea.KeyMsg, actions uiSharedInputEditActions, goos string) bool {
+func applySharedInputEditKeyForGOOS(msg tea.KeyMsg, editor *tuiinput.Editor, goos string) uiEditorKeyResult {
+	if editor == nil {
+		return uiEditorKeyResult{}
+	}
 	if isDeleteCurrentLineKeyForGOOS(msg, goos) {
-		runInputEditAction(actions.DeleteCurrentLine)
-		return true
+		return uiEditorKeyResult{Handled: true, Mutated: editor.DeleteCurrentLine()}
 	}
 	switch msg.Type {
 	case tea.KeyBackspace, tea.KeyCtrlH:
 		if msg.Alt {
-			runInputEditAction(actions.DeleteBackwardWord)
-		} else {
-			runInputEditAction(actions.Backspace)
+			return uiEditorKeyResult{Handled: true, Mutated: editor.DeleteBackwardWord()}
 		}
-		return true
+		return uiEditorKeyResult{Handled: true, Mutated: editor.DeleteBackward()}
 	case tea.KeyDelete:
 		if msg.Alt {
-			runInputEditAction(actions.DeleteForwardWord)
-		} else {
-			runInputEditAction(actions.DeleteForward)
+			return uiEditorKeyResult{Handled: true, Mutated: editor.DeleteForwardWord()}
 		}
-		return true
+		return uiEditorKeyResult{Handled: true, Mutated: editor.DeleteForward()}
 	case tea.KeyCtrlW:
-		runInputEditAction(actions.DeleteBackwardWord)
-		return true
+		return uiEditorKeyResult{Handled: true, Mutated: editor.DeleteBackwardWord()}
 	case tea.KeyCtrlK:
-		runInputEditAction(actions.KillToLineEnd)
-		return true
+		return uiEditorKeyResult{Handled: true, Mutated: editor.KillToLineEnd()}
 	case tea.KeyCtrlU:
-		runInputEditAction(actions.KillToLineStart)
-		return true
+		return uiEditorKeyResult{Handled: true, Mutated: editor.KillToLineStart()}
 	case tea.KeyCtrlY:
-		runInputEditAction(actions.Yank)
-		return true
+		return uiEditorKeyResult{Handled: true, Mutated: editor.Yank()}
 	default:
-		return false
-	}
-}
-
-func runInputEditAction(action func() bool) {
-	if action != nil {
-		action()
+		return uiEditorKeyResult{}
 	}
 }

@@ -44,8 +44,8 @@ func TestPathReferenceCompletionKeys(t *testing.T) {
 				m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyDown})
 			}
 			m = updateUIModel(t, m, test.key)
-			if m.input != test.wantInput {
-				t.Fatalf("input = %q, want %q", m.input, test.wantInput)
+			if testMainInput(m) != test.wantInput {
+				t.Fatalf("input = %q, want %q", testMainInput(m), test.wantInput)
 			}
 			if m.isBusy() {
 				t.Fatal("completion started submission")
@@ -81,8 +81,8 @@ func TestPathReferenceEnterDoesNotSubmitWhileQueryIsPending(t *testing.T) {
 	if updated.isBusy() {
 		t.Fatal("did not expect enter to submit while path-reference query is still pending")
 	}
-	if updated.input != "echo @ab" {
-		t.Fatalf("input = %q, want unchanged draft", updated.input)
+	if testMainInput(updated) != "echo @ab" {
+		t.Fatalf("input = %q, want unchanged draft", testMainInput(updated))
 	}
 }
 

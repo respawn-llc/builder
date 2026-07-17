@@ -51,8 +51,8 @@ func TestDoubleEscLoadsNewestDetailPageAndSelectsNewestRollbackCandidate(t *test
 	if !model.rollback.isEditing() {
 		t.Fatal("Enter did not begin editing the selected rollback candidate")
 	}
-	if model.input != "newest user message" {
-		t.Fatalf("rollback edit input = %q, want newest candidate text", model.input)
+	if testMainInput(model) != "newest user message" {
+		t.Fatalf("rollback edit input = %q, want newest candidate text", testMainInput(model))
 	}
 	if model.rollback.editingCandidate == nil || model.rollback.editingCandidate.RollbackTargetID != newestTarget {
 		t.Fatalf("editing candidate = %#v, want newest rollback target %q", model.rollback.editingCandidate, newestTarget)
@@ -294,8 +294,8 @@ func TestRollbackPickerDoesNotOpenAfterComposerChangesDuringHydration(t *testing
 	if model.rollback.isActive() || model.rollback.isAwaitingActivation() {
 		t.Fatalf("stale rollback activation survived composer edit: %#v", model.rollback)
 	}
-	if model.input != "x" || model.surface() != uiSurfaceOngoingTranscript || model.view.Mode() != tui.ModeOngoing {
-		t.Fatalf("stale rollback activation changed composer/surface: input=%q surface=%q mode=%q", model.input, model.surface(), model.view.Mode())
+	if testMainInput(model) != "x" || model.surface() != uiSurfaceOngoingTranscript || model.view.Mode() != tui.ModeOngoing {
+		t.Fatalf("stale rollback activation changed composer/surface: input=%q surface=%q mode=%q", testMainInput(model), model.surface(), model.view.Mode())
 	}
 	if transitionCmd != nil {
 		t.Fatal("stale rollback activation scheduled a surface transition")
@@ -575,9 +575,9 @@ func TestRollbackPageKeysKeepVisibleSelectionAndForkTargetInSync(t *testing.T) {
 	assertRollbackSelection(t, model, oldestTarget)
 
 	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
-	if model.input != "oldest" || model.rollback.editingCandidate == nil ||
+	if testMainInput(model) != "oldest" || model.rollback.editingCandidate == nil ||
 		model.rollback.editingCandidate.RollbackTargetID != oldestTarget {
-		t.Fatalf("PgUp edit target drifted: input=%q candidate=%#v", model.input, model.rollback.editingCandidate)
+		t.Fatalf("PgUp edit target drifted: input=%q candidate=%#v", testMainInput(model), model.rollback.editingCandidate)
 	}
 }
 
@@ -639,13 +639,13 @@ func TestRollbackEditingEscChainRestoresPriorTranscriptSurface(t *testing.T) {
 	model = openRollbackPicker(t, model)
 
 	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
-	if !model.rollback.isEditing() || model.input != "message to revise" {
-		t.Fatalf("rollback edit state = %#v input = %q", model.rollback, model.input)
+	if !model.rollback.isEditing() || testMainInput(model) != "message to revise" {
+		t.Fatalf("rollback edit state = %#v input = %q", model.rollback, testMainInput(model))
 	}
 
 	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEsc})
-	if !model.rollback.isSelecting() || model.input != "" {
-		t.Fatalf("first Esc state = %#v input = %q, want selection with empty composer", model.rollback, model.input)
+	if !model.rollback.isSelecting() || testMainInput(model) != "" {
+		t.Fatalf("first Esc state = %#v input = %q, want selection with empty composer", model.rollback, testMainInput(model))
 	}
 	assertRollbackSelection(t, model, targetID)
 
@@ -751,8 +751,8 @@ func TestSessionReplacementDiscardsRollbackStateWithoutRestoringOldTranscript(t 
 			if model.detailTranscript.loaded {
 				t.Fatalf("session replacement restored old transcript page: %#v", model.detailTranscript.page())
 			}
-			if model.input != "" {
-				t.Fatalf("session replacement retained old rollback composer %q", model.input)
+			if testMainInput(model) != "" {
+				t.Fatalf("session replacement retained old rollback composer %q", testMainInput(model))
 			}
 			model.resetRollbackState()
 			if model.detailTranscript.loaded {
@@ -776,7 +776,7 @@ func TestRollbackEditingSubmissionPreservesExactSelectedTarget(t *testing.T) {
 	model = openRollbackPicker(t, model)
 	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
 	editedPrompt := "edited rollback prompt"
-	model.replaceMainInput(editedPrompt, len([]rune(editedPrompt)))
+	model.replaceMainInputAtEnd(editedPrompt)
 
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(*uiModel)
@@ -853,8 +853,8 @@ func TestRollbackPickerWorksAfterInterruptedRuntimeAndTUIRestart(t *testing.T) {
 		t.Fatal("Esc-Esc did not open rollback selection after runtime/TUI restart")
 	}
 	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
-	if model.input != "interrupted prompt survives restart" {
-		t.Fatalf("restored rollback edit input = %q", model.input)
+	if testMainInput(model) != "interrupted prompt survives restart" {
+		t.Fatalf("restored rollback edit input = %q", testMainInput(model))
 	}
 	if model.rollback.editingCandidate == nil {
 		t.Fatal("restored rollback candidate lost its target identity")

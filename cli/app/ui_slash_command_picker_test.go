@@ -24,7 +24,7 @@ func refreshSlashCommandFilterForTest(t *testing.T, m *uiModel) {
 func TestSlashCommandEnterIgnoresWhitespaceImmediatelyAfterSlash(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.sessionName = "existing"
-	m.input = "/ name"
+	testSetMainInput(m, "/ name")
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated := next.(*uiModel)
@@ -34,8 +34,8 @@ func TestSlashCommandEnterIgnoresWhitespaceImmediatelyAfterSlash(t *testing.T) {
 	if updated.sessionName != "" {
 		t.Fatalf("expected / name to behave like /name with empty args, got %q", updated.sessionName)
 	}
-	if updated.input != "" {
-		t.Fatalf("expected input cleared after slash command execution, got %q", updated.input)
+	if testMainInput(updated) != "" {
+		t.Fatalf("expected input cleared after slash command execution, got %q", testMainInput(updated))
 	}
 }
 
@@ -56,8 +56,8 @@ func TestSlashCommandPickerHighlightTracksSelectionAfterViewportScroll(t *testin
 	if state.start == 0 {
 		t.Fatalf("expected slash picker viewport to scroll for /goal, got %+v", state)
 	}
-	if m.input != "/goal" {
-		t.Fatalf("expected logical slash selection to update input to /goal, got %q", m.input)
+	if testMainInput(m) != "/goal" {
+		t.Fatalf("expected logical slash selection to update input to /goal, got %q", testMainInput(m))
 	}
 	assertActivePickerHighlightedSelection(t, m)
 }
@@ -73,7 +73,7 @@ func newSlashPickerScrollTestModel() *uiModel {
 		registerSlashPickerTestCommand(name)
 	}
 	m := newProjectedStaticUIModel(WithUICommandRegistry(r))
-	m.input = "/"
+	testSetMainInput(m, "/")
 	m.refreshSlashCommandFilterFromInputWithAuth(true)
 	return m
 }
@@ -104,7 +104,7 @@ func assertActivePickerHighlightedSelection(t *testing.T, m *uiModel) {
 
 func TestSlashCommandPickerShowsResumeWhenCurrentSessionIsOnlyKnownSession(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.input = "/re"
+	testSetMainInput(m, "/re")
 	refreshSlashCommandFilterForTest(t, m)
 
 	state := m.slashCommandPicker()
@@ -155,7 +155,7 @@ func TestSlashCommandPickerProjectsAuthCommand(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthManager: tc.manager}))
-			m.input = "/"
+			testSetMainInput(m, "/")
 			refreshSlashCommandFilterForTest(t, m)
 
 			state := m.slashCommandPicker()
@@ -207,7 +207,7 @@ func TestExactHiddenAuthSlashCommandsStillExecute(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthManager: tc.manager}))
-			m.input = tc.input
+			testSetMainInput(m, tc.input)
 
 			next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			updated := next.(*uiModel)
@@ -224,7 +224,7 @@ func TestExactHiddenAuthSlashCommandsStillExecute(t *testing.T) {
 func TestSlashCommandPickerHidesAuthCommandsWhenAuthStateCannotLoad(t *testing.T) {
 	manager := auth.NewManager(errorAuthStore{err: errors.New("permission denied")}, nil, nil)
 	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthManager: manager}))
-	m.input = "/"
+	testSetMainInput(m, "/")
 	refreshSlashCommandFilterForTest(t, m)
 
 	state := m.slashCommandPicker()
@@ -263,7 +263,7 @@ func TestSlashCommandPickerRefreshesAuthStateAfterModelInit(t *testing.T) {
 		t.Fatalf("update auth store: %v", err)
 	}
 
-	m.input = "/"
+	testSetMainInput(m, "/")
 	refreshSlashCommandFilterForTest(t, m)
 	state := m.slashCommandPicker()
 	if !slashPickerContainsCommand(state, "logout") {
@@ -290,16 +290,16 @@ func TestSlashCommandPickerLoadsAuthStateOncePerSlashSession(t *testing.T) {
 	loadsAfterInit := store.loads
 
 	for _, input := range []string{"/", "/l", "/lo"} {
-		m.input = input
+		testSetMainInput(m, input)
 		refreshSlashCommandFilterForTest(t, m)
 	}
 	if got := store.loads - loadsAfterInit; got != 1 {
 		t.Fatalf("expected one auth load while editing one slash session, got %d", got)
 	}
 
-	m.input = "ordinary prompt"
+	testSetMainInput(m, "ordinary prompt")
 	m.refreshSlashCommandFilterFromInputWithAuth(true)
-	m.input = "/"
+	testSetMainInput(m, "/")
 	refreshSlashCommandFilterForTest(t, m)
 	if got := store.loads - loadsAfterInit; got != 2 {
 		t.Fatalf("expected auth load after starting a new slash session, got %d", got)
@@ -354,7 +354,7 @@ func TestSlashCommandPickerAuthRefreshSingleFlightsAfterScheduledCommand(t *test
 	}}
 	manager := auth.NewManager(store, nil, nil)
 	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthManager: manager}))
-	m.replaceMainInput("/", -1)
+	m.replaceMainInputAtEnd("/")
 	if m.authSlashLoading {
 		t.Fatal("replaceMainInput must not mark an unscheduled auth refresh in flight")
 	}
@@ -366,7 +366,7 @@ func TestSlashCommandPickerAuthRefreshSingleFlightsAfterScheduledCommand(t *test
 	if !m.authSlashLoading {
 		t.Fatal("expected scheduled auth slash refresh to be marked loading")
 	}
-	m.input = "/lo"
+	testSetMainInput(m, "/lo")
 	secondCmd := m.refreshSlashCommandFilterFromInputWithAuth(true)
 	if secondCmd != nil {
 		t.Fatal("did not expect concurrent auth slash refresh while first is loading")
@@ -418,7 +418,7 @@ func TestSlashCommandPickerAlwaysShowsCopyWithoutReadingCachedRuntimeStatus(t *t
 		status: clientui.RuntimeStatus{LastCommittedAssistantFinalAnswer: "done"},
 	}
 	m := newProjectedTestUIModel(client)
-	m.input = "/co"
+	testSetMainInput(m, "/co")
 	m.refreshSlashCommandFilterFromInputWithAuth(true)
 
 	state := m.slashCommandPicker()

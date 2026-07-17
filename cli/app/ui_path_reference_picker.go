@@ -110,7 +110,11 @@ func (m *uiModel) refreshPathReferenceFromInput() {
 		m.clearPathReferenceState()
 		return
 	}
-	query := detectPathReferenceQuery(m.input, clampCursor(m.inputCursor, len([]rune(m.input))))
+	text := m.mainEditor.Text()
+	query := detectPathReferenceQuery(
+		text,
+		runeOffsetForByteCursor(text, m.mainEditor.Cursor()),
+	)
 	if !query.Active {
 		m.clearPathReferenceState()
 		return
@@ -229,11 +233,17 @@ func (m *uiModel) acceptPathReferenceSelection() bool {
 		return false
 	}
 	selection := clampSlashPickerIndex(m.pathReference.selection, 0, len(m.pathReference.matches)-1)
-	updated, nextCursor, ok := applyPathReferenceCompletion(m.input, m.inputCursor, m.pathReference.tracked, m.pathReference.matches[selection])
+	text := m.mainEditor.Text()
+	updated, nextCursor, ok := applyPathReferenceCompletion(
+		text,
+		runeOffsetForByteCursor(text, m.mainEditor.Cursor()),
+		m.pathReference.tracked,
+		m.pathReference.matches[selection],
+	)
 	if !ok {
 		return false
 	}
-	m.replaceMainInput(updated, nextCursor)
+	m.replaceMainInput(updated, byteOffsetForRuneCursor(updated, nextCursor))
 	return true
 }
 

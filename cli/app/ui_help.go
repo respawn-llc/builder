@@ -21,7 +21,7 @@ type uiHelpSection struct {
 
 func (m *uiModel) canToggleHelpWithQuestionMark() bool {
 	if m == nil ||
-		m.input != "" {
+		m.mainEditor.Text() != "" {
 		return false
 	}
 	switch m.inputMode() {

@@ -572,8 +572,8 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 			defer composition.close()
 			parentModel := composition.model
 
-			if parentModel.input != wantInput {
-				t.Fatalf("parent composer input = %q, want %q", parentModel.input, wantInput)
+			if testMainInput(parentModel) != wantInput {
+				t.Fatalf("parent composer input = %q, want %q", testMainInput(parentModel), wantInput)
 			}
 			if parentModel.startupSubmit != "" || parentModel.activeSubmit.text != "" || parentModel.isBusy() {
 				t.Fatalf("parent prefill submitted on startup: startup=%q active=%+v busy=%t", parentModel.startupSubmit, parentModel.activeSubmit, parentModel.isBusy())
@@ -591,8 +591,8 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 			if editCmd != nil {
 				t.Fatal("normal parent composer edit created a runtime command")
 			}
-			if edited.input != wantInput+"x" {
-				t.Fatalf("edited parent input = %q, want %q", edited.input, wantInput+"x")
+			if testMainInput(edited) != wantInput+"x" {
+				t.Fatalf("edited parent input = %q, want %q", testMainInput(edited), wantInput+"x")
 			}
 			afterEdit, err := parentRuntimePlan.Wiring.runtimeClient.RefreshMainView()
 			if err != nil {

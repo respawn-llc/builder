@@ -128,41 +128,32 @@ func TestEditorDeleteCurrentLine(t *testing.T) {
 	}
 }
 
-func TestEditorWrappedCursorPositionAndVerticalMovement(t *testing.T) {
-	editor := NewEditor()
-	editor.Replace("abcd efgh ijkl")
-	lines := editor.WrappedLines(5)
-	if len(lines) != 3 {
-		t.Fatalf("wrapped lines = %+v, want 3", lines)
-	}
-	if pos := editor.CursorPosition(5); pos.Line != 2 || pos.Col != 4 {
-		t.Fatalf("cursor position = %+v, want line 2 col 4", pos)
-	}
-	if !editor.MoveUp(5) {
-		t.Fatal("expected move up")
-	}
-	if pos := editor.CursorPosition(5); pos.Line != 1 || pos.Col != 4 {
-		t.Fatalf("after move up cursor position = %+v, want line 1 col 4", pos)
-	}
-	if !editor.MoveUp(5) {
-		t.Fatal("expected second move up")
-	}
-	if pos := editor.CursorPosition(5); pos.Line != 0 || pos.Col != 4 {
-		t.Fatalf("after second move up cursor position = %+v, want line 0 col 4", pos)
-	}
-	if !editor.MoveDown(5) {
-		t.Fatal("expected move down")
-	}
-	if pos := editor.CursorPosition(5); pos.Line != 1 || pos.Col != 4 {
-		t.Fatalf("after move down cursor position = %+v, want line 1 col 4", pos)
-	}
-}
-
 func TestEditorSetCursorClampsInsideGrapheme(t *testing.T) {
 	editor := NewEditor()
 	editor.Replace("e\u0301x")
 	editor.SetCursor(len("e"))
 	if got := editor.Cursor(); got != 0 && got != len("e\u0301") {
 		t.Fatalf("cursor should clamp to grapheme boundary, got %d", got)
+	}
+}
+
+func TestEditorSnapshotRestoresTextAndCursorWithoutReplacingKillBuffer(t *testing.T) {
+	editor := NewEditor()
+	editor.Replace("界x")
+	editor.SetCursor(len("界"))
+	snapshot := editor.Snapshot()
+
+	editor.Replace("temporary")
+	editor.SetKillBuffer("retained")
+	editor.Restore(snapshot)
+
+	if got, want := editor.Text(), "界x"; got != want {
+		t.Fatalf("restored text = %q, want %q", got, want)
+	}
+	if got, want := editor.Cursor(), len("界"); got != want {
+		t.Fatalf("restored cursor = %d, want %d", got, want)
+	}
+	if got, want := editor.KillBuffer(), "retained"; got != want {
+		t.Fatalf("kill buffer = %q, want %q", got, want)
 	}
 }

@@ -62,7 +62,7 @@ func TestApplyPathReferenceCompletionReplacesMiddleSpan(t *testing.T) {
 func TestPathReferenceSearchIgnoredWhileSlashPickerActive(t *testing.T) {
 	search := newStubUIPathReferenceSearch()
 	m := newProjectedStaticUIModel(WithUIPathReferenceSearch(search))
-	m.replaceMainInput("/@ab", -1)
+	m.replaceMainInputAtEnd("/@ab")
 
 	if !m.slashCommandPicker().visible {
 		t.Fatal("expected slash picker visible")
@@ -99,10 +99,10 @@ func TestPathReferenceLoadingDelayDoesNotOverwriteFresherMatches(t *testing.T) {
 	search := newStubUIPathReferenceSearch()
 	m := newProjectedStaticUIModel(WithUIPathReferenceSearch(search), WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: "/tmp/workspace"}))
 
-	m.replaceMainInput("@ab", -1)
+	m.replaceMainInputAtEnd("@ab")
 	firstToken := m.pathReference.queryToken
 	firstDraft := m.pathReference.draftToken
-	m.replaceMainInput("@abc", -1)
+	m.replaceMainInputAtEnd("@abc")
 	secondToken := m.pathReference.queryToken
 	secondDraft := m.pathReference.draftToken
 
@@ -133,7 +133,7 @@ func TestPathReferenceLoadingDelayDoesNotOverwriteFresherMatches(t *testing.T) {
 func TestPathReferenceDropsStaleCorpusGenerationEvents(t *testing.T) {
 	search := newStubUIPathReferenceSearch()
 	m := newProjectedStaticUIModel(WithUIPathReferenceSearch(search), WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: "/tmp/workspace"}))
-	m.replaceMainInput("@ab", -1)
+	m.replaceMainInputAtEnd("@ab")
 	m.pathReference.corpusGeneration = 2
 
 	updated := updateUIModel(t, m, uiPathReferenceCorpusReadyMsg{WorkspaceRoot: "/tmp/workspace", CorpusGeneration: 1})
@@ -169,12 +169,12 @@ func TestPathReferenceDropsStaleCorpusGenerationEvents(t *testing.T) {
 func TestPathReferenceWorkspaceSwitchDropsInFlightEvents(t *testing.T) {
 	search := newStubUIPathReferenceSearch()
 	m := newProjectedStaticUIModel(WithUIPathReferenceSearch(search), WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: "/tmp/workspace-a"}))
-	m.replaceMainInput("@ab", -1)
+	m.replaceMainInputAtEnd("@ab")
 	staleDraft := m.pathReference.draftToken
 	staleToken := m.pathReference.queryToken
 
 	m.statusConfig.WorkspaceRoot = "/tmp/workspace-b"
-	m.replaceMainInput("@ab", -1)
+	m.replaceMainInputAtEnd("@ab")
 
 	updated := updateUIModel(t, m, uiPathReferenceMatchResultMsg{
 		WorkspaceRoot:    "/tmp/workspace-a",
@@ -203,11 +203,11 @@ func TestPathReferenceUpDownNavigatesSelectionWithoutRewritingInput(t *testing.T
 	if updated.pathReference.selection != 1 {
 		t.Fatalf("selection = %d, want 1", updated.pathReference.selection)
 	}
-	if updated.input != "@ab" {
-		t.Fatalf("input = %q, want unchanged draft", updated.input)
+	if testMainInput(updated) != "@ab" {
+		t.Fatalf("input = %q, want unchanged draft", testMainInput(updated))
 	}
-	if updated.promptHistorySelection != -1 {
-		t.Fatalf("did not expect prompt history navigation, got %d", updated.promptHistorySelection)
+	if updated.promptHistorySelection != nil {
+		t.Fatalf("did not expect prompt history navigation, got %v", updated.promptHistorySelection)
 	}
 }
 
@@ -277,8 +277,7 @@ func TestPathReferencePickerSanitizesControlCharactersForDisplay(t *testing.T) {
 
 func TestPathReferenceAcceptanceUsesUnsanitizedCandidate(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.input = "@ab"
-	m.inputCursor = len([]rune(m.input))
+	testSetMainInput(m, "@ab")
 	m.pathReference.tracked = uiPathReferenceQuery{Active: true, Start: 0, End: 3, RawQuery: "ab", NormalizedQuery: "ab"}
 	rawPath := "safe/line\n\t" + string(rune(0x1b)) + "[31mname.txt"
 	m.pathReference.matches = []uiPathReferenceCandidate{{Path: rawPath}}
@@ -286,8 +285,8 @@ func TestPathReferenceAcceptanceUsesUnsanitizedCandidate(t *testing.T) {
 	if !m.acceptPathReferenceSelection() {
 		t.Fatal("expected raw candidate acceptance")
 	}
-	if m.input != "@"+rawPath {
-		t.Fatalf("accepted input = %q, want original candidate bytes", m.input)
+	if testMainInput(m) != "@"+rawPath {
+		t.Fatalf("accepted input = %q, want original candidate bytes", testMainInput(m))
 	}
 }
 
@@ -343,7 +342,7 @@ func newPathReferenceTestModel(input string) (*uiModel, *stubUIPathReferenceSear
 		WithUIPathReferenceSearch(search),
 		WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: "/tmp/workspace"}),
 	)
-	m.replaceMainInput(input, -1)
+	m.replaceMainInputAtEnd(input)
 	return m, search
 }
 

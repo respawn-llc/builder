@@ -9,11 +9,9 @@ import (
 )
 
 type Editor struct {
-	text            string
-	cursor          int
-	killBuffer      string
-	preferredColumn int
-	hasPreferredCol bool
+	text       string
+	cursor     int
+	killBuffer string
 }
 
 type LineRange struct {
@@ -24,6 +22,11 @@ type LineRange struct {
 type CursorPosition struct {
 	Line int
 	Col  int
+}
+
+type EditorSnapshot struct {
+	text   string
+	cursor int
 }
 
 func NewEditor() Editor {
@@ -37,13 +40,11 @@ func (e *Editor) Text() string {
 func (e *Editor) SetText(text string) {
 	e.text = text
 	e.cursor = clampCursor(text, e.cursor)
-	e.resetPreferredColumn()
 }
 
 func (e *Editor) Replace(text string) {
 	e.text = text
 	e.cursor = len(text)
-	e.resetPreferredColumn()
 }
 
 func (e *Editor) Cursor() int {
@@ -60,7 +61,15 @@ func (e *Editor) SetKillBuffer(text string) {
 
 func (e *Editor) SetCursor(cursor int) {
 	e.cursor = clampCursor(e.text, cursor)
-	e.resetPreferredColumn()
+}
+
+func (e *Editor) Snapshot() EditorSnapshot {
+	return EditorSnapshot{text: e.text, cursor: e.cursor}
+}
+
+func (e *Editor) Restore(snapshot EditorSnapshot) {
+	e.text = snapshot.text
+	e.cursor = clampCursor(e.text, snapshot.cursor)
 }
 
 func (e *Editor) InsertString(text string) {
@@ -70,7 +79,6 @@ func (e *Editor) InsertString(text string) {
 	cursor := clampCursor(e.text, e.cursor)
 	e.text = e.text[:cursor] + text + e.text[cursor:]
 	e.cursor = cursor + len(text)
-	e.resetPreferredColumn()
 }
 
 func (e *Editor) DeleteBackward() bool {
@@ -97,7 +105,6 @@ func (e *Editor) MoveLeft() bool {
 		return false
 	}
 	e.cursor = next
-	e.resetPreferredColumn()
 	return true
 }
 
@@ -107,7 +114,6 @@ func (e *Editor) MoveRight() bool {
 		return false
 	}
 	e.cursor = next
-	e.resetPreferredColumn()
 	return true
 }
 
@@ -117,7 +123,6 @@ func (e *Editor) MoveLineStart() bool {
 		return false
 	}
 	e.cursor = next
-	e.resetPreferredColumn()
 	return true
 }
 
@@ -127,7 +132,6 @@ func (e *Editor) MoveLineEnd() bool {
 		return false
 	}
 	e.cursor = next
-	e.resetPreferredColumn()
 	return true
 }
 
@@ -137,7 +141,6 @@ func (e *Editor) MoveWordLeft() bool {
 		return false
 	}
 	e.cursor = next
-	e.resetPreferredColumn()
 	return true
 }
 
@@ -147,7 +150,6 @@ func (e *Editor) MoveWordRight() bool {
 		return false
 	}
 	e.cursor = next
-	e.resetPreferredColumn()
 	return true
 }
 
@@ -222,40 +224,6 @@ func (e *Editor) Yank() bool {
 	return true
 }
 
-func (e *Editor) MoveUp(width int) bool {
-	lines := e.WrappedLines(width)
-	lineIndex := wrappedLineIndex(lines, e.cursor)
-	if lineIndex <= 0 {
-		next := 0
-		changed := e.cursor != next
-		e.cursor = next
-		e.resetPreferredColumn()
-		return changed
-	}
-	targetCol := e.currentPreferredColumn(lines[lineIndex])
-	target := cursorAtDisplayColumn(e.text, lines[lineIndex-1], targetCol)
-	changed := target != e.cursor
-	e.cursor = target
-	return changed
-}
-
-func (e *Editor) MoveDown(width int) bool {
-	lines := e.WrappedLines(width)
-	lineIndex := wrappedLineIndex(lines, e.cursor)
-	if lineIndex < 0 || lineIndex+1 >= len(lines) {
-		next := len(e.text)
-		changed := e.cursor != next
-		e.cursor = next
-		e.resetPreferredColumn()
-		return changed
-	}
-	targetCol := e.currentPreferredColumn(lines[lineIndex])
-	target := cursorAtDisplayColumn(e.text, lines[lineIndex+1], targetCol)
-	changed := target != e.cursor
-	e.cursor = target
-	return changed
-}
-
 func (e *Editor) WrappedLines(width int) []LineRange {
 	return wrapRanges(e.text, width)
 }
@@ -284,7 +252,6 @@ func (e *Editor) replaceRange(start int, end int, replacement string) {
 	}
 	e.text = e.text[:start] + replacement + e.text[end:]
 	e.cursor = start + len(replacement)
-	e.resetPreferredColumn()
 }
 
 func (e *Editor) killRange(start int, end int) {
@@ -298,20 +265,6 @@ func (e *Editor) killRange(start int, end int) {
 	}
 	e.killBuffer = e.text[start:end]
 	e.replaceRange(start, end, "")
-}
-
-func (e *Editor) currentPreferredColumn(line LineRange) int {
-	if e.hasPreferredCol {
-		return e.preferredColumn
-	}
-	e.preferredColumn = uniseg.StringWidth(e.text[line.Start:e.cursor])
-	e.hasPreferredCol = true
-	return e.preferredColumn
-}
-
-func (e *Editor) resetPreferredColumn() {
-	e.hasPreferredCol = false
-	e.preferredColumn = 0
 }
 
 type grapheme struct {

@@ -7,6 +7,7 @@ import (
 	"core/cli/app/commands"
 	"core/cli/app/internal/status"
 	"core/cli/tui"
+	tuiinput "core/cli/tui/input"
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 	"core/shared/theme"
@@ -34,16 +35,14 @@ func newUIRuntimeFeatureState(runtimeClient clientui.RuntimeClient) uiRuntimeFea
 
 func newUIInputFeatureState() uiInputFeatureState {
 	return uiInputFeatureState{
-		activity:                 uiActivityIdle,
-		inputCursor:              -1,
-		mainInputDraftToken:      1,
-		promptHistorySelection:   -1,
-		promptHistoryDraftCursor: -1,
-		commandRegistry:          commands.NewDefaultRegistry(),
-		reviewerMode:             "off",
-		autoCompactionEnabled:    true,
-		questionsEnabled:         true,
-		conversationFreshness:    clientui.ConversationFreshnessFresh,
+		mainEditor:            tuiinput.NewEditor(),
+		activity:              uiActivityIdle,
+		mainInputDraftToken:   1,
+		commandRegistry:       commands.NewDefaultRegistry(),
+		reviewerMode:          "off",
+		autoCompactionEnabled: true,
+		questionsEnabled:      true,
+		conversationFreshness: clientui.ConversationFreshnessFresh,
 	}
 }
 
@@ -58,7 +57,7 @@ func newUIPresentationFeatureState() uiPresentationFeatureState {
 func newUIConversationFeatureState() uiConversationFeatureState {
 	return uiConversationFeatureState{
 		interaction: uiInteractionState{Mode: uiInputModeMain},
-		ask:         uiAskState{inputCursor: -1},
+		ask:         uiAskState{editor: tuiinput.NewEditor()},
 	}
 }
 

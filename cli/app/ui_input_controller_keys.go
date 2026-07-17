@@ -50,7 +50,7 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.forwardToView(tea.KeyMsg{Type: msg.Type})
 		case tea.KeyEsc:
 			if m.blocksRuntimeInput() ||
-				strings.TrimSpace(m.input) != "" {
+				strings.TrimSpace(m.mainEditor.Text()) != "" {
 				return m, nil
 			}
 			return c.handleIdleRollbackEsc()
@@ -62,16 +62,10 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
-	if handleSharedInputEditKeyForGOOS(msg, uiSharedInputEditActions{
-		Backspace:          m.backspaceInput,
-		DeleteForward:      m.deleteForwardInput,
-		DeleteBackwardWord: m.deleteBackwardWordInput,
-		DeleteForwardWord:  m.deleteForwardWordInput,
-		KillToLineStart:    m.killInputToLineStart,
-		KillToLineEnd:      m.killInputToLineEnd,
-		Yank:               m.yankInput,
-		DeleteCurrentLine:  m.deleteCurrentInputLine,
-	}, runtime.GOOS) {
+	if result := applySharedInputEditKeyForGOOS(msg, &m.mainEditor, runtime.GOOS); result.Handled {
+		if result.Mutated {
+			m.mainInputMutated()
+		}
 		return m, nil
 	}
 	switch msg.Type {
@@ -84,7 +78,7 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	if isQueueSubmissionKey(msg) {
-		text := strings.TrimSpace(m.input)
+		text := strings.TrimSpace(m.mainEditor.Text())
 		if text == "" {
 			return m, nil
 		}
@@ -134,12 +128,8 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if isClipboardPasteKey(msg) {
 		return m, m.pasteClipboardCmd(uiClipboardPasteTargetMain)
 	}
-	if handleSharedInputMovementKey(msg, uiSharedInputMovementActions{
-		MoveLeft:      m.moveCursorLeft,
-		MoveRight:     m.moveCursorRight,
-		MoveWordLeft:  m.moveCursorWordLeft,
-		MoveWordRight: m.moveCursorWordRight,
-	}) {
+	if applySharedInputMovementKey(msg, &m.mainEditor) {
+		m.refreshAutocompleteStateFromInput()
 		return m, nil
 	}
 
@@ -161,13 +151,13 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.blocksRuntimeInput() ||
-			strings.TrimSpace(m.input) != "" {
+			strings.TrimSpace(m.mainEditor.Text()) != "" {
 			return m, nil
 		}
 		return c.handleIdleRollbackEsc()
 	case tea.KeyEnter:
 		c.normalizePendingCSIShiftEnterOnEnter()
-		text := strings.TrimSpace(m.input)
+		text := strings.TrimSpace(m.mainEditor.Text())
 		if text == "" {
 			if !m.blocksRuntimeInput() && len(m.queued) > 0 {
 				return c.flushQueuedInputs(queueDrainOne)
@@ -189,20 +179,20 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, disconnectCmd
 		}
 		_, isUserShell := parseUserShellCommand(text)
-		draftText, draftCursor, restoreDraft := m.capturePromptHistoryDraftForReuse()
+		draft := m.capturePromptHistoryDraftForReuse()
 		if m.blocksRuntimeInput() {
 			if isUserShell {
 				m.queueInput(text)
-				m.restoreCapturedPromptHistoryDraft(draftText, draftCursor, restoreDraft)
+				m.restoreCapturedPromptHistoryDraft(draft)
 				return m, nil
 			}
 			cmd := m.queueInjectedInput(text)
-			m.restoreCapturedPromptHistoryDraft(draftText, draftCursor, restoreDraft)
+			m.restoreCapturedPromptHistoryDraft(draft)
 			return m, cmd
 		}
 		if len(m.queued) > 0 {
 			m.queueInput(text)
-			m.restoreCapturedPromptHistoryDraft(draftText, draftCursor, restoreDraft)
+			m.restoreCapturedPromptHistoryDraft(draft)
 			return c.flushQueuedInputs(queueDrainOne)
 		}
 		if handled, next, cmd := c.handleEnteredSlashCommandInput(text); handled {
@@ -211,12 +201,12 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if commandResult := m.commandRegistry.Execute(text); commandResult.Handled {
 			command, _ := m.commandRegistry.Command(text)
 			recordCmd := m.recordPromptHistory(text)
-			m.clearCommandInput(command, draftText, draftCursor, restoreDraft)
+			m.clearCommandInput(command, draft)
 			next, cmd := c.applyCommandResultWithPreSubmitQueuePosition(commandResult, preSubmitQueueBack)
 			return next, finalizeSlashCommandCmd(commandResult.Action, cmd, recordCmd)
 		}
 		m.clearInput()
-		m.restoreCapturedPromptHistoryDraft(draftText, draftCursor, restoreDraft)
+		m.restoreCapturedPromptHistoryDraft(draft)
 		return m, c.startSubmissionWithPromptHistoryAndQueuePositionAndID(text, preSubmitQueueBack, "")
 	case tea.KeyCtrlJ, keyTypeShiftEnterCSI:
 		m.insertInputRunes([]rune{'\n'})
@@ -228,16 +218,18 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.insertInputRunes([]rune{' '})
 		return m, nil
 	case tea.KeyHome, tea.KeyCtrlA:
-		m.moveCursorStart()
+		m.mainEditor.MoveLineStart()
+		m.refreshAutocompleteStateFromInput()
 		return m, nil
 	case tea.KeyEnd, tea.KeyCtrlE, tea.KeyCtrlEnd:
-		m.moveCursorEnd()
+		m.mainEditor.MoveLineEnd()
+		m.refreshAutocompleteStateFromInput()
 		return m, nil
 	case tea.KeyUp:
-		m.moveCursorUpLine()
+		m.moveMainCursorVertical(-1)
 		return m, nil
 	case tea.KeyDown:
-		m.moveCursorDownLine()
+		m.moveMainCursorVertical(1)
 		return m, nil
 	case tea.KeyPgUp, tea.KeyPgDown:
 		return m, nil

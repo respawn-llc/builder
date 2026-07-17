@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"core/cli/tui"
+	tuiinput "core/cli/tui/input"
 	"core/shared/clientui"
 )
 
@@ -33,9 +34,7 @@ type uiAskState struct {
 	freeformMode   askFreeformMode
 	activeDelivery *activePromptAnswerDelivery
 	answerPending  bool
-	input          string
-	inputCursor    int
-	inputKill      string
+	editor         tuiinput.Editor
 }
 
 type uiProcessListState struct {

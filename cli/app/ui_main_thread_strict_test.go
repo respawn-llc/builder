@@ -73,7 +73,7 @@ func TestTUIStrictIOBusyEnterQueuesInjectedInputAsCommand(t *testing.T) {
 	m := newProjectedTestUIModel(client, WithUIDebug(true))
 	m.startupCmds = nil
 	m.setRuntimeActivityBusyForTest(true)
-	m.input = "queued steering"
+	testSetMainInput(m, "queued steering")
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated := next.(*uiModel)
