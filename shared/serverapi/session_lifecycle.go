@@ -3,8 +3,6 @@ package serverapi
 import (
 	"errors"
 	"strings"
-
-	"core/shared/clientui"
 )
 
 // ErrClientRequestIDRequired is returned when a lifecycle request omits its
@@ -62,12 +60,8 @@ const (
 )
 
 type SessionDraftRecoveryBuffer struct {
-	Kind            SessionDraftRecoveryBufferKind `json:"kind"`
-	ID              string                         `json:"id,omitempty"`
-	ServerID        string                         `json:"server_id,omitempty"`
-	ClientRequestID string                         `json:"client_request_id,omitempty"`
-	Text            string                         `json:"text,omitempty"`
-	OperationRef    clientui.RuntimeOperationRef   `json:"operation_ref,omitempty"`
+	Kind SessionDraftRecoveryBufferKind `json:"kind"`
+	Text string                         `json:"text,omitempty"`
 }
 
 type SessionRetargetWorkspaceRequest struct {
