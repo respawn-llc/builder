@@ -105,7 +105,7 @@ func (c *sessionRuntimeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 	if err != nil {
 		return nil, err
 	}
-	return c.applyGoalResponse(resp), nil
+	return runtimeGoalFromAPI(resp.Goal), nil
 }
 
 func (c *sessionRuntimeClient) SetGoal(objective string) (*clientui.RuntimeGoal, error) {
@@ -172,7 +172,6 @@ func runtimeGoalFromAPI(goal *serverapi.RuntimeGoal) *clientui.RuntimeGoal {
 		ID:        goal.ID,
 		Objective: goal.Objective,
 		Status:    clientui.RuntimeGoalStatus(strings.TrimSpace(goal.Status)),
-		Suspended: goal.Suspended,
 	}
 }
 

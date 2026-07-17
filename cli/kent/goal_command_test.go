@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -28,9 +29,16 @@ import (
 type recordingGoalRemote struct {
 	showReq          []serverapi.RuntimeGoalShowRequest
 	setReq           []serverapi.RuntimeGoalSetRequest
+	pauseReq         []serverapi.RuntimeGoalStatusRequest
+	resumeReq        []serverapi.RuntimeGoalStatusRequest
 	completeReq      []serverapi.RuntimeGoalStatusRequest
+	clearReq         []serverapi.RuntimeGoalClearRequest
 	goal             *serverapi.RuntimeGoal
 	setErr           error
+	pauseErr         error
+	resumeErr        error
+	completeErr      error
+	clearErr         error
 	showDeadline     time.Time
 	completeDeadline time.Time
 }
@@ -53,12 +61,14 @@ func (r *recordingGoalRemote) SetGoal(_ context.Context, req serverapi.RuntimeGo
 	return serverapi.RuntimeGoalShowResponse{Goal: r.goal}, nil
 }
 
-func (r *recordingGoalRemote) PauseGoal(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	return serverapi.RuntimeGoalShowResponse{}, nil
+func (r *recordingGoalRemote) PauseGoal(_ context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	r.pauseReq = append(r.pauseReq, req)
+	return serverapi.RuntimeGoalShowResponse{}, r.pauseErr
 }
 
-func (r *recordingGoalRemote) ResumeGoal(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	return serverapi.RuntimeGoalShowResponse{}, nil
+func (r *recordingGoalRemote) ResumeGoal(_ context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	r.resumeReq = append(r.resumeReq, req)
+	return serverapi.RuntimeGoalShowResponse{}, r.resumeErr
 }
 
 func (r *recordingGoalRemote) CompleteGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
@@ -66,11 +76,115 @@ func (r *recordingGoalRemote) CompleteGoal(ctx context.Context, req serverapi.Ru
 	if deadline, ok := ctx.Deadline(); ok {
 		r.completeDeadline = deadline
 	}
+	if r.completeErr != nil {
+		return serverapi.RuntimeGoalShowResponse{}, r.completeErr
+	}
 	return serverapi.RuntimeGoalShowResponse{Goal: r.goal}, nil
 }
 
-func (r *recordingGoalRemote) ClearGoal(context.Context, serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	return serverapi.RuntimeGoalShowResponse{}, nil
+func (r *recordingGoalRemote) ClearGoal(_ context.Context, req serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	r.clearReq = append(r.clearReq, req)
+	return serverapi.RuntimeGoalShowResponse{}, r.clearErr
+}
+
+func TestGoalMutationRuntimeUnavailableMapsToTypedPresentationError(t *testing.T) {
+	const sessionID = "cc948e1e-17e5-4213-87d5-4793ebe18a55"
+	transportErr := errors.Join(serverapi.ErrRuntimeUnavailable, errors.New("transport detail that must not be rendered"))
+
+	err := goalMutationCommandError(sessionID, transportErr)
+	var presentationErr goalRuntimeUnavailablePresentationError
+	if !errors.As(err, &presentationErr) {
+		t.Fatalf("goalMutationCommandError type = %T, want goalRuntimeUnavailablePresentationError", err)
+	}
+	if presentationErr.SessionID != sessionID {
+		t.Fatalf("presentation session id = %q, want %q", presentationErr.SessionID, sessionID)
+	}
+	if errors.Is(err, transportErr) {
+		t.Fatal("presentation error must discard the joined transport error")
+	}
+	ordinaryErr := errors.New("ordinary mutation failure")
+	if got := goalMutationCommandError(sessionID, ordinaryErr); got != ordinaryErr {
+		t.Fatalf("ordinary error = %v, want original error identity", got)
+	}
+}
+
+func TestGoalRuntimeBackedMutationsPresentRuntimeUnavailableForResolvedSession(t *testing.T) {
+	t.Setenv(sessionenv.SessionIDEnv, "")
+	const sessionID = "cc948e1e-17e5-4213-87d5-4793ebe18a55"
+	runtimeErr := errors.Join(serverapi.ErrRuntimeUnavailable, errors.New("joined transport detail"))
+	tests := []struct {
+		name       string
+		args       []string
+		goalStatus string
+		configure  func(*recordingGoalRemote)
+		callCount  func(*recordingGoalRemote) int
+	}{
+		{
+			name:      "set",
+			args:      []string{"set", "--session", sessionID, "replacement goal"},
+			configure: func(remote *recordingGoalRemote) { remote.setErr = runtimeErr },
+			callCount: func(remote *recordingGoalRemote) int { return len(remote.setReq) },
+		},
+		{
+			name:      "pause",
+			args:      []string{"pause", "--session", sessionID},
+			configure: func(remote *recordingGoalRemote) { remote.pauseErr = runtimeErr },
+			callCount: func(remote *recordingGoalRemote) int { return len(remote.pauseReq) },
+		},
+		{
+			name:      "resume",
+			args:      []string{"resume", "--session", sessionID},
+			configure: func(remote *recordingGoalRemote) { remote.resumeErr = runtimeErr },
+			callCount: func(remote *recordingGoalRemote) int { return len(remote.resumeReq) },
+		},
+		{
+			name:       "complete active",
+			args:       []string{"complete", "--session", sessionID},
+			goalStatus: string(session.GoalStatusActive),
+			configure:  func(remote *recordingGoalRemote) { remote.completeErr = runtimeErr },
+			callCount:  func(remote *recordingGoalRemote) int { return len(remote.completeReq) },
+		},
+		{
+			name:       "complete paused",
+			args:       []string{"complete", "--session", sessionID},
+			goalStatus: string(session.GoalStatusPaused),
+			configure:  func(remote *recordingGoalRemote) { remote.completeErr = runtimeErr },
+			callCount:  func(remote *recordingGoalRemote) int { return len(remote.completeReq) },
+		},
+		{
+			name:      "clear",
+			args:      []string{"clear", "--session", sessionID},
+			configure: func(remote *recordingGoalRemote) { remote.clearErr = runtimeErr },
+			callCount: func(remote *recordingGoalRemote) int { return len(remote.clearReq) },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			remote := &recordingGoalRemote{}
+			if tt.goalStatus != "" {
+				remote.goal = &serverapi.RuntimeGoal{ID: "goal-1", Objective: "dormant goal", Status: tt.goalStatus}
+			}
+			tt.configure(remote)
+			restore := replaceGoalCommandRemoteOpener(t, remote)
+			defer restore()
+
+			stdout := new(strings.Builder)
+			stderr := new(strings.Builder)
+			if code := goalSubcommand(tt.args, stdout, stderr); code != 1 {
+				t.Fatalf("goal mutation exit = %d, want 1", code)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("stdout = %q, want empty", stdout.String())
+			}
+			if strings.TrimSpace(stderr.String()) == "" {
+				t.Fatal("stderr is empty, want presentation error")
+			}
+			if got := tt.callCount(remote); got != 1 {
+				t.Fatalf("mutation RPC calls = %d, want 1", got)
+			}
+		})
+	}
 }
 
 func TestGoalShowUsesSessionIDEnv(t *testing.T) {
@@ -218,7 +332,10 @@ func TestGoalCompleteAlreadyCompletePrintsAlreadyCompletePrompt(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv(sessionenv.SessionIDEnv, "session-1")
-			remote := &recordingGoalRemote{goal: &serverapi.RuntimeGoal{ID: "goal-1", Objective: "ship goal mode", Status: "complete"}}
+			remote := &recordingGoalRemote{
+				goal:        &serverapi.RuntimeGoal{ID: "goal-1", Objective: "ship goal mode", Status: "complete"},
+				completeErr: errors.Join(serverapi.ErrRuntimeUnavailable, errors.New("dormant runtime")),
+			}
 			restore := replaceGoalCommandRemoteOpener(t, remote)
 			defer restore()
 
@@ -262,7 +379,7 @@ func TestGoalCompleteUsesFreshTimeoutForCompletionRPC(t *testing.T) {
 	}
 }
 
-func TestGoalCommandSubprocessTargetsLiveSessionFromUnboundWorktree(t *testing.T) {
+func TestGoalCommandSubprocessReadsDormantAndMutatesLiveSessionFromUnboundWorktree(t *testing.T) {
 	kentPath := filepath.Join(t.TempDir(), "kent")
 	buildCmd := exec.Command("go", "build", "-o", kentPath, ".")
 	if output, err := buildCmd.CombinedOutput(); err != nil {
@@ -313,6 +430,57 @@ func TestGoalCommandSubprocessTargetsLiveSessionFromUnboundWorktree(t *testing.T
 
 	cleanup := startBindingCommandServer(t, unboundWorktree)
 	defer cleanup()
+	t.Setenv(sessionenv.SessionIDEnv, store.Meta().SessionID)
+
+	assertGoalCommandSubprocessShow := func(want *session.GoalState) {
+		t.Helper()
+		showOutput, showErr := runGoalCommandSubprocess(t, kentPath, unboundWorktree, store.Meta().SessionID, "show", "--json")
+		if showErr != "" {
+			t.Fatalf("goal show stderr = %q", showErr)
+		}
+		var show serverapi.RuntimeGoalShowResponse
+		if err := json.Unmarshal([]byte(showOutput), &show); err != nil {
+			t.Fatalf("decode show json: %v output=%q", err, showOutput)
+		}
+		if show.Goal == nil ||
+			show.Goal.ID != want.ID ||
+			show.Goal.Status != string(want.Status) ||
+			show.Goal.Objective != want.Objective ||
+			!show.Goal.CreatedAt.Equal(want.CreatedAt) ||
+			!show.Goal.UpdatedAt.Equal(want.UpdatedAt) {
+			t.Fatalf("show goal = %+v, want %+v", show.Goal, want)
+		}
+		var payload struct {
+			Goal map[string]json.RawMessage `json:"goal"`
+		}
+		if err := json.Unmarshal([]byte(showOutput), &payload); err != nil {
+			t.Fatalf("decode show shape: %v output=%q", err, showOutput)
+		}
+		if _, exists := payload.Goal["suspended"]; exists {
+			t.Fatalf("goal show JSON unexpectedly contains runtime-local suspension: %q", showOutput)
+		}
+	}
+
+	assertGoalCommandSubprocessShow(record.Meta.Goal)
+
+	dormantOutput, dormantErr, dormantRunErr := runGoalCommandSubprocessRaw(t, kentPath, unboundWorktree, store.Meta().SessionID, "set", "replacement dormant goal CLI")
+	if dormantRunErr == nil {
+		t.Fatal("dormant goal mutation unexpectedly succeeded")
+	}
+	if dormantOutput != "" {
+		t.Fatalf("dormant goal mutation stdout = %q, want empty", dormantOutput)
+	}
+	if got := nonEmptyLineCount(t, dormantErr); got != 1 {
+		t.Fatalf("dormant goal mutation stderr lines = %d, want 1", got)
+	}
+	record, err = metadataStore.ResolvePersistedSession(context.Background(), store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolvePersistedSession after dormant mutation: %v", err)
+	}
+	if goal := record.Meta.Goal; goal == nil || goal.Objective != "exercise live goal CLI" || goal.Status != session.GoalStatusActive {
+		t.Fatalf("persisted goal after dormant mutation = %+v", goal)
+	}
+
 	remote, err := client.DialConfiguredRemoteForProjectWorkspace(context.Background(), cfg, binding.ProjectID, cfg.WorkspaceRoot)
 	if err != nil {
 		t.Fatalf("DialConfiguredRemoteForProjectWorkspace: %v", err)
@@ -330,25 +498,7 @@ func TestGoalCommandSubprocessTargetsLiveSessionFromUnboundWorktree(t *testing.T
 	}); err != nil {
 		t.Fatalf("ActivateSessionRuntime: %v", err)
 	}
-	defer func() {
-		_, _ = remote.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-			ClientRequestID: "release-goal-cli-e2e",
-			SessionID:       store.Meta().SessionID,
-		})
-	}()
-
-	t.Setenv(sessionenv.SessionIDEnv, store.Meta().SessionID)
-	showOutput, showErr := runGoalCommandSubprocess(t, kentPath, unboundWorktree, store.Meta().SessionID, "show", "--json")
-	if showErr != "" {
-		t.Fatalf("goal show stderr = %q", showErr)
-	}
-	var show serverapi.RuntimeGoalShowResponse
-	if err := json.Unmarshal([]byte(showOutput), &show); err != nil {
-		t.Fatalf("decode show json: %v output=%q", err, showOutput)
-	}
-	if show.Goal == nil || show.Goal.Status != "active" || show.Goal.Objective != "exercise live goal CLI" {
-		t.Fatalf("show goal = %+v", show.Goal)
-	}
+	assertGoalCommandSubprocessShow(record.Meta.Goal)
 
 	overwriteOutput, overwriteErr, overwriteRunErr := runGoalCommandSubprocessRaw(t, kentPath, unboundWorktree, store.Meta().SessionID, "set", "replacement live goal CLI")
 	if overwriteRunErr == nil {
@@ -387,6 +537,28 @@ func TestGoalCommandSubprocessTargetsLiveSessionFromUnboundWorktree(t *testing.T
 	if goal := record.Meta.Goal; goal == nil || goal.Objective != "exercise live goal CLI" || goal.Status != session.GoalStatusComplete {
 		t.Fatalf("persisted goal after complete = %+v", goal)
 	}
+	if _, err := remote.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
+		ClientRequestID: "release-goal-cli-e2e",
+		SessionID:       store.Meta().SessionID,
+	}); err != nil {
+		t.Fatalf("ReleaseSessionRuntime: %v", err)
+	}
+	assertGoalCommandSubprocessShow(record.Meta.Goal)
+}
+
+func nonEmptyLineCount(t *testing.T, text string) int {
+	t.Helper()
+	scanner := bufio.NewScanner(strings.NewReader(text))
+	count := 0
+	for scanner.Scan() {
+		if strings.TrimSpace(scanner.Text()) != "" {
+			count++
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan process output lines: %v", err)
+	}
+	return count
 }
 
 func runGoalCommandSubprocess(t *testing.T, kentPath string, workdir string, sessionID string, args ...string) (stdout string, stderr string) {

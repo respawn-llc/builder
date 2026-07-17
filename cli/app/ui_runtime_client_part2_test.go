@@ -237,14 +237,74 @@ func (c *reconnectRetryRuntimeControlClient) ClearGoal(context.Context, serverap
 	return c.clearGoalResp, nil
 }
 
-func TestRuntimeClientGoalMethodsPatchCachedMainView(t *testing.T) {
-	showGoal := &serverapi.RuntimeGoal{ID: "goal-show", Objective: "show goal", Status: "paused", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+func TestRuntimeClientShowGoalDoesNotOverwriteAcceptedPendingGoal(t *testing.T) {
+	pending := &serverapi.RuntimeGoal{ID: "goal-pending", Objective: "accepted pending goal", Status: "active"}
+	committed := &serverapi.RuntimeGoal{ID: "goal-committed", Objective: "prior committed goal", Status: "paused"}
+	controls := &reconnectRetryRuntimeControlClient{
+		setGoalResp:  serverapi.RuntimeGoalShowResponse{Goal: pending},
+		showGoalResp: serverapi.RuntimeGoalShowResponse{Goal: committed},
+	}
+	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
+
+	accepted, err := runtimeClient.SetGoal(pending.Objective)
+	if err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	assertRuntimeClientGoalCached(t, runtimeClient, accepted, runtimeGoalFromAPI(pending))
+
+	shown, err := runtimeClient.ShowGoal()
+	if err != nil {
+		t.Fatalf("ShowGoal: %v", err)
+	}
+	if !reflect.DeepEqual(shown, runtimeGoalFromAPI(committed)) {
+		t.Fatalf("shown goal = %+v, want committed goal %+v", shown, committed)
+	}
+	view, ok := runtimeClient.CachedMainView()
+	if !ok {
+		t.Fatal("expected cached main view")
+	}
+	if !reflect.DeepEqual(view.Status.Goal, runtimeGoalFromAPI(pending)) {
+		t.Fatalf("cached goal = %+v, want accepted pending goal %+v", view.Status.Goal, pending)
+	}
+}
+
+func TestRuntimeClientShowGoalPreservesSuspendedLiveStatus(t *testing.T) {
+	committed := &serverapi.RuntimeGoal{ID: "goal-committed", Objective: "committed goal", Status: "active"}
+	controls := &reconnectRetryRuntimeControlClient{showGoalResp: serverapi.RuntimeGoalShowResponse{Goal: committed}}
+	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
+	liveGoal := &clientui.RuntimeGoal{
+		ID:        committed.ID,
+		Objective: committed.Objective,
+		Status:    clientui.RuntimeGoalStatusActive,
+		Suspended: true,
+	}
+	runtimeClient.storeMainView(clientui.RuntimeMainView{
+		Session: clientui.RuntimeSessionView{SessionID: "session-1"},
+		Status:  clientui.RuntimeStatus{Goal: liveGoal},
+	})
+
+	shown, err := runtimeClient.ShowGoal()
+	if err != nil {
+		t.Fatalf("ShowGoal: %v", err)
+	}
+	if !reflect.DeepEqual(shown, runtimeGoalFromAPI(committed)) {
+		t.Fatalf("shown goal = %+v, want committed goal %+v", shown, committed)
+	}
+	view, ok := runtimeClient.CachedMainView()
+	if !ok {
+		t.Fatal("expected cached main view")
+	}
+	if !reflect.DeepEqual(view.Status.Goal, liveGoal) {
+		t.Fatalf("cached goal = %+v, want suspended live goal %+v", view.Status.Goal, liveGoal)
+	}
+}
+
+func TestRuntimeClientGoalMutationMethodsPatchCachedMainView(t *testing.T) {
 	setGoal := &serverapi.RuntimeGoal{ID: "goal-set", Objective: "set goal", Status: "active", CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	pauseGoal := &serverapi.RuntimeGoal{ID: "goal-pause", Objective: "pause goal", Status: "paused", CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	resumeGoal := &serverapi.RuntimeGoal{ID: "goal-resume", Objective: "resume goal", Status: "active", CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	completeGoal := &serverapi.RuntimeGoal{ID: "goal-complete", Objective: "complete goal", Status: "complete", CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	controls := &reconnectRetryRuntimeControlClient{
-		showGoalResp:     serverapi.RuntimeGoalShowResponse{Goal: showGoal},
 		setGoalResp:      serverapi.RuntimeGoalShowResponse{Goal: setGoal},
 		pauseGoalResp:    serverapi.RuntimeGoalShowResponse{Goal: pauseGoal},
 		resumeGoalResp:   serverapi.RuntimeGoalShowResponse{Goal: resumeGoal},
@@ -255,13 +315,6 @@ func TestRuntimeClientGoalMethodsPatchCachedMainView(t *testing.T) {
 	reactivator := newRuntimeReactivator()
 	reactivator.SetReactivateFunc(func(context.Context) error { return nil })
 	runtimeClient.SetRuntimeReactivator(reactivator)
-
-	goal, err := runtimeClient.ShowGoal()
-	if err != nil {
-		t.Fatalf("ShowGoal: %v", err)
-	}
-	assertRuntimeClientGoalCached(t, runtimeClient, goal, runtimeGoalFromAPI(showGoal))
-	assertRuntimeGoalConversionDropsAPITimestamps(t, goal, showGoal)
 
 	for _, tt := range []struct {
 		name string
@@ -280,6 +333,9 @@ func TestRuntimeClientGoalMethodsPatchCachedMainView(t *testing.T) {
 				t.Fatalf("%s goal: %v", tt.name, err)
 			}
 			assertRuntimeClientGoalCached(t, runtimeClient, goal, runtimeGoalFromAPI(tt.want))
+			if tt.want != nil {
+				assertRuntimeGoalConversionDropsAPITimestamps(t, goal, tt.want)
+			}
 		})
 	}
 }
@@ -426,7 +482,7 @@ func assertRuntimeGoalConversionDropsAPITimestamps(t *testing.T, got *clientui.R
 	if source == nil || source.CreatedAt.IsZero() || source.UpdatedAt.IsZero() {
 		t.Fatal("test source goal must include timestamps")
 	}
-	if got == nil || got.ID != source.ID || got.Objective != source.Objective || string(got.Status) != source.Status || got.Suspended != source.Suspended {
+	if got == nil || got.ID != source.ID || got.Objective != source.Objective || string(got.Status) != source.Status {
 		t.Fatalf("converted goal = %+v, source = %+v", got, source)
 	}
 }

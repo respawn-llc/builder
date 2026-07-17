@@ -119,6 +119,7 @@ type Service struct {
 	activity       RuntimeActivityResolver
 	promptStore    PromptHistoryStore
 	workflowStates WorkflowSessionResolver
+	persisted      session.PersistedSessionResolver
 	operations     *runtimeops.Coordinator
 	sessionNames   *requestmemo.Memo[sessionStringMemoRequest, struct{}]
 	thinkingLevels *requestmemo.Memo[sessionStringMemoRequest, struct{}]
@@ -284,6 +285,14 @@ func (s *Service) WithWorkflowSessionResolver(resolver WorkflowSessionResolver) 
 		return nil
 	}
 	s.workflowStates = resolver
+	return s
+}
+
+func (s *Service) WithPersistedSessionResolver(resolver session.PersistedSessionResolver) *Service {
+	if s == nil {
+		return nil
+	}
+	s.persisted = resolver
 	return s
 }
 
