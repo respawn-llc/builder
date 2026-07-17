@@ -37,9 +37,7 @@ const (
 )
 
 type CallerContext struct {
-	Kind            CallerKind
-	WorkflowSession bool
-	AgentRole       *string
+	Kind CallerKind
 }
 
 func humanCallerContext() CallerContext {
@@ -91,19 +89,12 @@ func ResolveRunPromptConfig(req Request) (RunPromptResult, error) {
 	}
 	caller := humanCallerContext()
 	if contextSessionID != "" {
-		sessionContext := plan.SessionContext
-		if sessionContext == nil || contextSessionID != sessionID {
-			resolved, err := bootstrap.ResolveSessionCallerContext(plan.Config.PersistenceRoot, contextSessionID)
-			if err != nil {
+		if contextSessionID != sessionID {
+			if err := bootstrap.ValidateSessionContext(plan.Config.PersistenceRoot, contextSessionID); err != nil {
 				return RunPromptResult{}, workspaceContextSessionError(contextSessionID, err)
 			}
-			sessionContext = &resolved
 		}
-		caller = CallerContext{
-			Kind:            CallerKindKentSession,
-			WorkflowSession: sessionContext.WorkflowSession,
-			AgentRole:       sessionContext.AgentRole,
-		}
+		caller = CallerContext{Kind: CallerKindKentSession}
 	}
 	resolvedRoot := workspaceRoot
 	if strings.TrimSpace(plan.Config.WorkspaceRoot) != "" && plan.Config.WorkspaceRoot != workspaceRoot {
