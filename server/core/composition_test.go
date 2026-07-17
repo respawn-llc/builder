@@ -73,7 +73,15 @@ func TestComposedWorkflowTaskSetupPrecedesFirstModelRequest(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatalf("create source workspace config directory: %v", err)
 	}
-	validSetupConfig := fmt.Sprintf("[worktrees]\nsetup_script = %q\n", filepath.ToSlash(setupScript))
+	blockedBase := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blockedBase, []byte("blocked"), 0o644); err != nil {
+		t.Fatalf("write blocked base path: %v", err)
+	}
+	validSetupConfig := fmt.Sprintf(
+		"[worktrees]\nbase_dir = %q\nsetup_script = %q\n",
+		filepath.Join(blockedBase, "worktrees"),
+		filepath.ToSlash(setupScript),
+	)
 	if err := os.WriteFile(configPath, []byte("[worktrees]\nsetup_timeout_seconds = \"invalid\"\n"), 0o644); err != nil {
 		t.Fatalf("write invalid source workspace config: %v", err)
 	}

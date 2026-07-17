@@ -31,6 +31,10 @@ type registrySetting interface {
 	applyFile(settingsFile, string, *settingsState, map[string]string) error
 }
 
+type keyedRegistrySetting interface {
+	registryKey() string
+}
+
 type sourceInitializingSetting interface {
 	initSources(map[string]string)
 }
@@ -1022,6 +1026,10 @@ func newIntSetting(
 
 func (s scalarSetting[T]) applyDefault(state *settingsState) {
 	s.apply(state, s.defaultValue)
+}
+
+func (s scalarSetting[T]) registryKey() string {
+	return s.key
 }
 
 func (s scalarSetting[T]) initSources(sources map[string]string) {

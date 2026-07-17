@@ -149,11 +149,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background, worktree.ServiceOptions{
 		BaseDir: cfg.Settings.Worktrees.BaseDir,
 		ResolveSetup: func(sourceWorkspaceRoot string) (config.WorktreeSettings, error) {
-			sourceConfig, err := config.Load(sourceWorkspaceRoot, config.LoadOptions{ConfigRoot: cfg.PersistenceRoot})
-			if err != nil {
-				return config.WorktreeSettings{}, err
-			}
-			return sourceConfig.Settings.Worktrees, nil
+			return config.LoadWorktreeSetupSettings(sourceWorkspaceRoot, cfg.PersistenceRoot)
 		},
 	})
 	projectViews := projectService
