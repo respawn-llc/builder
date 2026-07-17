@@ -11,7 +11,14 @@ import (
 type exclusiveStepOptions struct {
 	EmitRunState bool
 	ActiveKind   ActiveKind
+	Reservation  *exclusiveStepReservation
 }
+
+type exclusiveStepReservationKind uint8
+
+const exclusiveStepReservationManualCompaction exclusiveStepReservationKind = 1
+
+type exclusiveStepReservation = struct{ Kind exclusiveStepReservationKind }
 
 type exclusiveStepLifecycle interface {
 	Run(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error

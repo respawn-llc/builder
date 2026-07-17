@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync/atomic"
 
 	"core/prompts"
 	"core/server/llm"
@@ -47,7 +46,6 @@ var (
 	errHandoffTooEarly = errors.New(handoffTooEarlyMessage)
 	// errCompactionDisabledModeNone is returned when manual compaction is requested while compaction_mode=none.
 	errCompactionDisabledModeNone = errors.New("context compaction is disabled (compaction_mode=none)")
-	ErrManualCompactionPending    = errors.New("manual compaction is already pending")
 )
 
 type compactionResult struct {
@@ -63,7 +61,6 @@ type compactionResult struct {
 type defaultContextCompactor struct {
 	engine *Engine
 	steps  exclusiveStepLifecycle
-	manual atomic.Bool
 }
 
 func (e *Engine) CompactContext(ctx context.Context, args string) error {
@@ -94,10 +91,6 @@ func (e *Engine) TriggerHandoff(ctx context.Context, stepID string, activeCall l
 }
 
 func (c *defaultContextCompactor) CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) (session.CommitReceipt, error) {
-	if !c.manual.CompareAndSwap(false, true) {
-		return session.CommitReceipt{}, ErrManualCompactionPending
-	}
-	defer c.manual.Store(false)
 	return c.compactContext(ctx, compactionModeManual, args, true, onActive)
 }
 
@@ -137,7 +130,11 @@ func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compa
 	e.pauseQueuedUserAutoDrain()
 	defer e.resumeQueuedUserAutoDrain()
 	var receipt session.CommitReceipt
-	err := runExclusiveStepWhenIdle(ctx, c.steps, activeKind, func(stepCtx context.Context, stepID string) error {
+	var reservation *exclusiveStepReservation
+	if includeManualCarryover {
+		reservation = &exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction}
+	}
+	err := runExclusiveStepWhenIdle(ctx, c.steps, activeKind, reservation, func(stepCtx context.Context, stepID string) error {
 		if onActive != nil {
 			onActive()
 		}

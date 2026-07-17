@@ -331,6 +331,15 @@ func (m *uiModel) addPendingRuntimeOperation(ref clientui.RuntimeOperationRef) {
 	m.pendingRuntimeOperations = append(m.pendingRuntimeOperations, ref)
 }
 
+func (m *uiModel) hasPendingRuntimeOperationKind(kind clientui.RuntimeOperationKind) bool {
+	for _, ref := range m.pendingRuntimeOperations {
+		if ref.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *uiModel) clearPendingRuntimeOperations(kinds ...clientui.RuntimeOperationKind) {
 	if m == nil || len(kinds) == 0 || len(m.pendingRuntimeOperations) == 0 {
 		return

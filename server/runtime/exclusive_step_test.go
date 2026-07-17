@@ -256,7 +256,7 @@ func TestExclusiveStepLifecycleBlocksSuccessorWhileTerminalPublicationPending(t 
 	}
 }
 
-func TestRunWhenIdleWaitsForTerminalPublication(t *testing.T) {
+func TestRunNextPreservesOrderAcrossTerminalPublicationAndCancellation(t *testing.T) {
 	store := mustCreateTestSession(t)
 	sink := newBlockingStepLifecycleSink()
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5", StepLifecycle: sink})
@@ -277,17 +277,41 @@ func TestRunWhenIdleWaitsForTerminalPublication(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for terminal publication")
 	}
-	startedSuccessor := make(chan struct{})
-	successorDone := make(chan error, 1)
+	waitQueued := func(want int) {
+		t.Helper()
+		for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+			lifecycle.mu.Lock()
+			got := len(lifecycle.nextWaiters)
+			lifecycle.mu.Unlock()
+			if got == want {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatalf("queued RunNext callers did not reach %d", want)
+	}
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	started := make(chan string, 2)
+	firstQueuedDone := make(chan error, 1)
 	go func() {
-		successorDone <- eng.RunWhenIdle(context.Background(), ActiveKindRuntimeMaintenance, func() error {
-			close(startedSuccessor)
+		firstQueuedDone <- lifecycle.RunNext(firstCtx, exclusiveStepOptions{ActiveKind: ActiveKindRuntimeMaintenance}, func(stepCtx context.Context, _ string) error {
+			started <- "first"
+			<-stepCtx.Done()
+			return stepCtx.Err()
+		})
+	}()
+	waitQueued(1)
+	secondQueuedDone := make(chan error, 1)
+	go func() {
+		secondQueuedDone <- lifecycle.RunNext(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindRuntimeMaintenance}, func(context.Context, string) error {
+			started <- "second"
 			return nil
 		})
 	}()
+	waitQueued(2)
 	select {
-	case <-startedSuccessor:
-		t.Fatal("RunWhenIdle successor started before terminal publication completed")
+	case got := <-started:
+		t.Fatalf("RunNext caller %q started before terminal publication completed", got)
 	case <-time.After(50 * time.Millisecond):
 	}
 
@@ -296,12 +320,24 @@ func TestRunWhenIdleWaitsForTerminalPublication(t *testing.T) {
 		t.Fatalf("first run: %v", err)
 	}
 	select {
-	case <-startedSuccessor:
+	case got := <-started:
+		if got != "first" {
+			t.Fatalf("first admitted RunNext caller = %q, want first", got)
+		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for RunWhenIdle successor after terminal publication")
+		t.Fatal("timed out waiting for first queued RunNext caller")
 	}
-	if err := <-successorDone; err != nil {
-		t.Fatalf("RunWhenIdle successor: %v", err)
+	cancelFirst()
+	if err := <-firstQueuedDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("first queued RunNext error = %v, want context canceled", err)
+	}
+	<-sink.endedStarted
+	if got := <-started; got != "second" {
+		t.Fatalf("second admitted RunNext caller = %q, want second", got)
+	}
+	<-sink.endedStarted
+	if err := <-secondQueuedDone; err != nil {
+		t.Fatalf("second queued RunNext: %v", err)
 	}
 }
 

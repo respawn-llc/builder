@@ -122,16 +122,11 @@ func TestActiveGoalContinuationProjectsAsDetailDeveloperContext(t *testing.T) {
 		t.Fatalf("entries = %+v, want one active-goal continuation row", entries)
 	}
 	entry := entries[0]
-	if entry.Visibility != transcript.EntryVisibilityDetail {
-		t.Fatalf("visibility = %q, want detail", entry.Visibility)
-	}
-	if entry.Role != string(transcript.EntryRoleDeveloperContext) {
-		t.Fatalf("role = %q, want developer context", entry.Role)
-	}
-	if entry.MessageType != llm.MessageTypeActiveGoalContinuation {
-		t.Fatalf("message type = %q, want active-goal continuation", entry.MessageType)
-	}
-	if entry.CondensedText != clientui.GoalNudgeCompactLabel || entry.CompactLabel != clientui.GoalNudgeCompactLabel {
-		t.Fatalf("compact presentation = condensed:%q label:%q, want shared goal nudge label", entry.CondensedText, entry.CompactLabel)
+	if entry.Visibility != transcript.EntryVisibilityDetail ||
+		entry.Role != string(transcript.EntryRoleDeveloperContext) ||
+		entry.MessageType != llm.MessageTypeActiveGoalContinuation ||
+		entry.CondensedText != clientui.GoalNudgeCompactLabel ||
+		entry.CompactLabel != clientui.GoalNudgeCompactLabel {
+		t.Fatalf("active-goal continuation projection = %+v", entry)
 	}
 }

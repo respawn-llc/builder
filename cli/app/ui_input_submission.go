@@ -127,7 +127,7 @@ const (
 
 func (c uiInputController) startCompactionWithOrigin(args string, origin uiCompactionOrigin) tea.Cmd {
 	m := c.model
-	if m.isCompacting() {
+	if m.hasPendingRuntimeOperationKind(clientui.RuntimeOperationKindCompact) {
 		return nil
 	}
 	c.startRuntimeOperationAffordance(true)

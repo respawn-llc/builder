@@ -16,6 +16,23 @@ var ErrAgentBusy = errors.New("agent is busy")
 
 var ErrEngineClosed = errors.New("runtime engine is closed")
 
+var ErrExclusiveStepReservationPending = errors.New("exclusive step reservation is already pending")
+
+type exclusiveStepReservationPendingError struct {
+	kind exclusiveStepReservationKind
+}
+
+func (e exclusiveStepReservationPendingError) Error() string {
+	if e.kind == exclusiveStepReservationManualCompaction {
+		return "manual compaction is already pending"
+	}
+	return ErrExclusiveStepReservationPending.Error()
+}
+
+func (e exclusiveStepReservationPendingError) Unwrap() error {
+	return ErrExclusiveStepReservationPending
+}
+
 // errPendingModelRecoveryClear wraps failures to clear the recovery marker at
 // step end after terminal transcript state has already been published.
 var errPendingModelRecoveryClear = errors.New("clear pending model recovery")
@@ -26,10 +43,14 @@ type defaultExclusiveStepLifecycle struct {
 
 	mu                 sync.Mutex
 	active             *exclusiveRunState
-	nextWaiters        int
-	nextChanged        chan struct{}
+	nextWaiters        []*exclusiveStepWaiter
 	runSeq             uint64
 	terminalPublishing bool
+}
+
+type exclusiveStepWaiter struct {
+	ready       chan struct{}
+	reservation *exclusiveStepReservation
 }
 
 type exclusiveRunState struct {
@@ -42,6 +63,7 @@ type exclusiveRunState struct {
 	startedAt   time.Time
 	closing     bool
 	interrupted bool
+	reservation *exclusiveStepReservation
 }
 
 func (s *defaultExclusiveStepLifecycle) Run(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) (err error) {
@@ -178,7 +200,7 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrent(beforeCancel func(*RunS
 func (s *defaultExclusiveStepLifecycle) IsBusy() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.active != nil || s.terminalPublishing || s.nextWaiters > 0
+	return s.active != nil || s.terminalPublishing || len(s.nextWaiters) > 0
 }
 
 func (s *defaultExclusiveStepLifecycle) Snapshot() *RunSnapshot {
@@ -219,7 +241,7 @@ func (s *defaultExclusiveStepLifecycle) begin(ctx context.Context, options exclu
 		return nil, "", err
 	}
 	s.mu.Lock()
-	if s.active != nil || s.terminalPublishing || s.nextWaiters > 0 {
+	if s.active != nil || s.terminalPublishing || len(s.nextWaiters) > 0 {
 		s.mu.Unlock()
 		return nil, "", ErrAgentBusy
 	}
@@ -241,41 +263,40 @@ func (s *defaultExclusiveStepLifecycle) beginNext(ctx context.Context, options e
 	}
 
 	s.mu.Lock()
-	if s.active == nil && !s.terminalPublishing && s.nextWaiters == 0 {
+	if s.reservationPendingLocked(options.Reservation) {
+		s.mu.Unlock()
+		return nil, "", exclusiveStepReservationPendingError{kind: options.Reservation.Kind}
+	}
+	if s.active == nil && !s.terminalPublishing && len(s.nextWaiters) == 0 {
 		stepCtx, stepID := s.activateLocked(ctx, options)
 		s.mu.Unlock()
 		return s.publishStepBegan(options, stepCtx, stepID)
 	}
-	s.nextWaiters++
-	for {
-		changed := s.nextChanged
-		if changed == nil {
-			changed = make(chan struct{})
-			s.nextChanged = changed
-		}
-		s.mu.Unlock()
-		select {
-		case <-ctx.Done():
-		case <-changed:
-		}
-		s.mu.Lock()
-		if err := ctx.Err(); err != nil {
-			s.nextWaiters--
-			idle := s.active == nil && !s.terminalPublishing && s.nextWaiters == 0
-			s.signalNextWaitersLocked()
-			s.mu.Unlock()
-			if idle {
-				return nil, "", errors.Join(err, s.scheduleIdleWork(true))
-			}
-			return nil, "", err
-		}
-		if s.active == nil && !s.terminalPublishing {
-			s.nextWaiters--
-			stepCtx, stepID := s.activateLocked(ctx, options)
-			s.mu.Unlock()
-			return s.publishStepBegan(options, stepCtx, stepID)
-		}
+	waiter := &exclusiveStepWaiter{ready: make(chan struct{}), reservation: options.Reservation}
+	s.nextWaiters = append(s.nextWaiters, waiter)
+	s.mu.Unlock()
+
+	select {
+	case <-ctx.Done():
+	case <-waiter.ready:
 	}
+	if err := ctx.Err(); err != nil {
+		idle := s.cancelNextWaiter(waiter)
+		if idle {
+			return nil, "", errors.Join(err, s.scheduleIdleWork(true))
+		}
+		return nil, "", err
+	}
+
+	s.mu.Lock()
+	if len(s.nextWaiters) == 0 || s.nextWaiters[0] != waiter || s.active != nil || s.terminalPublishing {
+		s.mu.Unlock()
+		return nil, "", errors.New("exclusive step next-boundary reservation invariant violated")
+	}
+	s.nextWaiters = s.nextWaiters[1:]
+	stepCtx, stepID := s.activateLocked(ctx, options)
+	s.mu.Unlock()
+	return s.publishStepBegan(options, stepCtx, stepID)
 }
 
 func validateExclusiveStepStart(ctx context.Context, options exclusiveStepOptions) error {
@@ -284,6 +305,9 @@ func validateExclusiveStepStart(ctx context.Context, options exclusiveStepOption
 	}
 	if !options.ActiveKind.Valid() {
 		return errors.New("exclusive step active kind is required")
+	}
+	if options.Reservation != nil && options.Reservation.Kind != exclusiveStepReservationManualCompaction {
+		return errors.New("exclusive step reservation kind is invalid")
 	}
 	return nil
 }
@@ -295,13 +319,14 @@ func (s *defaultExclusiveStepLifecycle) activateLocked(ctx context.Context, opti
 	stepID := uuid.NewString()
 	startedAt := time.Now().UTC()
 	s.active = &exclusiveRunState{
-		sequence:   s.runSeq,
-		mode:       runModeFromActiveKind(options.ActiveKind),
-		activeKind: options.ActiveKind,
-		cancel:     cancel,
-		runID:      runID,
-		stepID:     stepID,
-		startedAt:  startedAt,
+		sequence:    s.runSeq,
+		mode:        runModeFromActiveKind(options.ActiveKind),
+		activeKind:  options.ActiveKind,
+		cancel:      cancel,
+		runID:       runID,
+		stepID:      stepID,
+		startedAt:   startedAt,
+		reservation: options.Reservation,
 	}
 	return stepCtx, stepID
 }
@@ -339,10 +364,42 @@ func (s *defaultExclusiveStepLifecycle) publishStepBegan(options exclusiveStepOp
 	return stepCtx, stepID, nil
 }
 
-func (s *defaultExclusiveStepLifecycle) signalNextWaitersLocked() {
-	if changed := s.nextChanged; changed != nil {
-		s.nextChanged = nil
-		close(changed)
+func (s *defaultExclusiveStepLifecycle) reservationPendingLocked(reservation *exclusiveStepReservation) bool {
+	if reservation == nil {
+		return false
+	}
+	if s.active != nil && s.active.reservation != nil && s.active.reservation.Kind == reservation.Kind {
+		return true
+	}
+	for _, waiter := range s.nextWaiters {
+		if waiter.reservation != nil && waiter.reservation.Kind == reservation.Kind {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *defaultExclusiveStepLifecycle) cancelNextWaiter(waiter *exclusiveStepWaiter) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index, candidate := range s.nextWaiters {
+		if candidate == waiter {
+			s.nextWaiters = append(s.nextWaiters[:index], s.nextWaiters[index+1:]...)
+			s.notifyNextWaiterLocked()
+			return s.active == nil && !s.terminalPublishing && len(s.nextWaiters) == 0
+		}
+	}
+	return false
+}
+
+func (s *defaultExclusiveStepLifecycle) notifyNextWaiterLocked() {
+	if s.active != nil || s.terminalPublishing || len(s.nextWaiters) == 0 {
+		return
+	}
+	select {
+	case <-s.nextWaiters[0].ready:
+	default:
+		close(s.nextWaiters[0].ready)
 	}
 }
 
@@ -360,7 +417,7 @@ func (s *defaultExclusiveStepLifecycle) scheduleIdleWork(scheduleQueuedUserWork 
 func (s *defaultExclusiveStepLifecycle) end() {
 	s.mu.Lock()
 	s.active = nil
-	s.signalNextWaitersLocked()
+	s.notifyNextWaiterLocked()
 	s.mu.Unlock()
 }
 
@@ -374,7 +431,7 @@ func (s *defaultExclusiveStepLifecycle) beginTerminalPublication() {
 func (s *defaultExclusiveStepLifecycle) finishTerminalPublication() {
 	s.mu.Lock()
 	s.terminalPublishing = false
-	s.signalNextWaitersLocked()
+	s.notifyNextWaiterLocked()
 	s.mu.Unlock()
 }
 
