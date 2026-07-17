@@ -9,7 +9,7 @@ import (
 
 func runCompletionNoticeTest(t *testing.T, execID string, command string, pollID string, pollYieldMS int) (*Manager, <-chan Event) {
 	t.Helper()
-	manager := newBackgroundTestManager(t)
+	manager := newShellTestManager(t, 50*time.Millisecond)
 	events := make(chan Event, 2)
 	manager.SetEventHandler(func(evt Event) {
 		if evt.Type == EventCompleted || evt.Type == EventKilled {
@@ -24,7 +24,7 @@ func runCompletionNoticeTest(t *testing.T, execID string, command string, pollID
 		"cmd":           command,
 		"shell":         "/bin/sh",
 		"login":         false,
-		"yield_time_ms": 250,
+		"yield_time_ms": 50,
 	})
 	if result.IsError {
 		t.Fatalf("unexpected exec_command error: %s", string(result.Output))
@@ -41,7 +41,7 @@ func runCompletionNoticeTest(t *testing.T, execID string, command string, pollID
 }
 
 func TestWriteStdinCompletionSuppressesBackgroundNoticeEvent(t *testing.T) {
-	manager, events := runCompletionNoticeTest(t, "bg-1", "sleep 0.3; echo done", "bg-2", 800)
+	manager, events := runCompletionNoticeTest(t, "bg-1", "sleep 0.15; echo done", "bg-2", 800)
 
 	select {
 	case evt := <-events:
@@ -58,7 +58,7 @@ func TestWriteStdinSuppressesFallbackCompletionNoticeEvent(t *testing.T) {
 	manager, events := runCompletionNoticeTest(
 		t,
 		"bg-large-1",
-		"sleep 0.3; dd if=/dev/zero bs=1048576 count=3 2>/dev/null | tr '\\000' x",
+		"sleep 0.15; dd if=/dev/zero bs=1048576 count=3 2>/dev/null | tr '\\000' x",
 		"bg-large-2",
 		1_500,
 	)
@@ -79,7 +79,7 @@ func TestWriteStdinSuppressesFallbackCompletionNoticeEvent(t *testing.T) {
 
 func TestTerminalEventEmissionHoldsPollingInteractionLock(t *testing.T) {
 	workspace := t.TempDir()
-	manager := newBackgroundTestManager(t)
+	manager := newShellTestManager(t, 50*time.Millisecond)
 	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
 	terminalHandlerStarted := make(chan struct{})
 	releaseTerminalHandler := make(chan struct{})
@@ -94,10 +94,10 @@ func TestTerminalEventEmissionHoldsPollingInteractionLock(t *testing.T) {
 	})
 
 	result := callExecCommand(t, execTool, "bg-lock-1", map[string]any{
-		"cmd":           "sleep 0.3; echo done",
+		"cmd":           "sleep 0.15; echo done",
 		"shell":         "/bin/sh",
 		"login":         false,
-		"yield_time_ms": 250,
+		"yield_time_ms": 50,
 	})
 	if result.IsError {
 		t.Fatalf("unexpected exec_command error: %s", string(result.Output))
@@ -179,7 +179,7 @@ func TestExecCommandClosesStdinForNonInteractiveProcess(t *testing.T) {
 }
 
 func TestManagerCloseKillsRunningProcesses(t *testing.T) {
-	manager, err := NewManager(WithMinimumExecToBgTime(250*time.Millisecond), WithCloseTimeouts(20*time.Millisecond, 200*time.Millisecond))
+	manager, err := NewManager(WithMinimumExecToBgTime(50*time.Millisecond), WithCloseTimeouts(20*time.Millisecond, 200*time.Millisecond))
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestManagerCloseKillsRunningProcesses(t *testing.T) {
 		Command:        []string{"/bin/sh", "-c", "trap '' TERM INT; sleep 30"},
 		DisplayCommand: "trap '' TERM INT; sleep 30",
 		Workdir:        t.TempDir(),
-		YieldTime:      250 * time.Millisecond,
+		YieldTime:      50 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("start background process: %v", err)

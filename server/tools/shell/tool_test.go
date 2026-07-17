@@ -99,7 +99,12 @@ func writeExecutableScript(t *testing.T, contents string) string {
 
 func newBackgroundTestManager(t *testing.T) *Manager {
 	t.Helper()
-	manager, err := NewManager(WithMinimumExecToBgTime(250*time.Millisecond), WithCloseTimeouts(20*time.Millisecond, 200*time.Millisecond))
+	return newShellTestManager(t, 250*time.Millisecond)
+}
+
+func newShellTestManager(t *testing.T, minimumExecToBackground time.Duration) *Manager {
+	t.Helper()
+	manager, err := NewManager(WithMinimumExecToBgTime(minimumExecToBackground), WithCloseTimeouts(20*time.Millisecond, 200*time.Millisecond))
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
@@ -435,16 +440,16 @@ func TestWriteStdinPollingPreservesTerminalLifecycleForAllCompletionShapes(t *te
 		command      string
 		wantExitCode int
 	}{
-		{name: "zero silent", command: "sleep 0.3", wantExitCode: 0},
-		{name: "zero with output", command: "sleep 0.3; printf visible", wantExitCode: 0},
-		{name: "non-zero silent", command: "sleep 0.3; exit 7", wantExitCode: 7},
-		{name: "non-zero with output", command: "sleep 0.3; printf visible; exit 7", wantExitCode: 7},
+		{name: "zero silent", command: "sleep 0.15", wantExitCode: 0},
+		{name: "zero with output", command: "sleep 0.15; printf visible", wantExitCode: 0},
+		{name: "non-zero silent", command: "sleep 0.15; exit 7", wantExitCode: 7},
+		{name: "non-zero with output", command: "sleep 0.15; printf visible; exit 7", wantExitCode: 7},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			workspace := t.TempDir()
-			manager := newBackgroundTestManager(t)
+			manager := newShellTestManager(t, 50*time.Millisecond)
 			execTool := NewExecCommandTool(workspace, 16_000, manager, "")
 			pollTool := NewWriteStdinTool(16_000, manager)
 
@@ -452,7 +457,7 @@ func TestWriteStdinPollingPreservesTerminalLifecycleForAllCompletionShapes(t *te
 				"cmd":           tt.command,
 				"shell":         "/bin/sh",
 				"login":         false,
-				"yield_time_ms": 250,
+				"yield_time_ms": 50,
 			})
 			if start.IsError {
 				t.Fatalf("unexpected exec_command error: %s", string(start.Output))
@@ -617,14 +622,14 @@ func TestExecCommandReportsNonZeroExitCode(t *testing.T) {
 
 func TestWriteStdinWarnsAndRetriesWhenFullLogReadFails(t *testing.T) {
 	workspace := t.TempDir()
-	manager := newBackgroundTestManager(t)
+	manager := newShellTestManager(t, 50*time.Millisecond)
 	pollTool := NewWriteStdinTool(16_000, manager)
 
 	result, err := manager.Start(context.Background(), ExecRequest{
-		Command:        []string{"sh", "-c", "sleep 0.35; printf done"},
+		Command:        []string{"sh", "-c", "sleep 0.15; printf done"},
 		DisplayCommand: "delayed-done",
 		Workdir:        workspace,
-		YieldTime:      250 * time.Millisecond,
+		YieldTime:      50 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -639,7 +644,11 @@ func TestWriteStdinWarnsAndRetriesWhenFullLogReadFails(t *testing.T) {
 		t.Fatalf("parse session id: %v", err)
 	}
 
-	time.Sleep(500 * time.Millisecond)
+	testsetup.RequireUntil(t, time.Now().Add(time.Second), 5*time.Millisecond, func() bool {
+		snapshot, snapshotErr := manager.Snapshot(result.SessionID)
+		info, statErr := os.Stat(logPath)
+		return snapshotErr == nil && !snapshot.Running && statErr == nil && info.Size() > 0
+	}, "timed out waiting for completed process output")
 	if err := os.Rename(logPath, backupPath); err != nil {
 		t.Fatalf("rename log away: %v", err)
 	}
@@ -721,15 +730,15 @@ func TestNormalizeWriteYieldTimeDoesNotCapLongPolls(t *testing.T) {
 
 func TestWriteStdinPollHonorsRequestedDuration(t *testing.T) {
 	workspace := t.TempDir()
-	manager := newBackgroundTestManager(t)
+	manager := newShellTestManager(t, 50*time.Millisecond)
 	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
 	pollTool := NewWriteStdinTool(16_000, manager)
 
 	result := callExecCommand(t, execTool, "poll-duration-exec", map[string]any{
-		"cmd":           "sleep 0.8",
+		"cmd":           "sleep 0.6",
 		"shell":         "/bin/sh",
 		"login":         false,
-		"yield_time_ms": 250,
+		"yield_time_ms": 50,
 	})
 	if result.IsError {
 		t.Fatalf("unexpected exec_command error: %s", string(result.Output))
@@ -811,7 +820,7 @@ func TestExecCommandRawOutputAddsPresentationMetadata(t *testing.T) {
 
 func TestWriteStdinRawSessionAddsPresentationMetadata(t *testing.T) {
 	workspace := t.TempDir()
-	manager := newBackgroundTestManager(t)
+	manager := newShellTestManager(t, 50*time.Millisecond)
 	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
 	stdinTool := NewWriteStdinTool(16_000, manager)
 
@@ -821,7 +830,7 @@ func TestWriteStdinRawSessionAddsPresentationMetadata(t *testing.T) {
 		"login":         false,
 		"raw":           true,
 		"tty":           true,
-		"yield_time_ms": 250,
+		"yield_time_ms": 50,
 	})
 	if result.IsError {
 		t.Fatalf("unexpected exec_command error: %s", string(result.Output))
@@ -843,7 +852,7 @@ func TestWriteStdinRawSessionAddsPresentationMetadata(t *testing.T) {
 
 func TestWriteStdinSendsInputToInteractiveProcess(t *testing.T) {
 	workspace := t.TempDir()
-	manager := newBackgroundTestManager(t)
+	manager := newShellTestManager(t, 50*time.Millisecond)
 	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
 	stdinTool := NewWriteStdinTool(16_000, manager)
 
@@ -852,7 +861,7 @@ func TestWriteStdinSendsInputToInteractiveProcess(t *testing.T) {
 		"shell":         "/bin/sh",
 		"login":         false,
 		"tty":           true,
-		"yield_time_ms": 250,
+		"yield_time_ms": 50,
 	})
 	if result.IsError {
 		t.Fatalf("unexpected exec_command error: %s", string(result.Output))
@@ -879,7 +888,7 @@ func TestWriteStdinSendsInputToInteractiveProcess(t *testing.T) {
 
 func TestWriteStdinCompletionTruncationSetsPresentationMetadata(t *testing.T) {
 	workspace := t.TempDir()
-	manager := newBackgroundTestManager(t)
+	manager := newShellTestManager(t, 50*time.Millisecond)
 	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
 	stdinTool := NewWriteStdinTool(16_000, manager)
 
@@ -888,7 +897,7 @@ func TestWriteStdinCompletionTruncationSetsPresentationMetadata(t *testing.T) {
 		"shell":         "/bin/sh",
 		"login":         false,
 		"tty":           true,
-		"yield_time_ms": 250,
+		"yield_time_ms": 50,
 	})
 	if result.IsError {
 		t.Fatalf("unexpected exec_command error: %s", string(result.Output))
@@ -911,7 +920,7 @@ func TestWriteStdinCompletionTruncationSetsPresentationMetadata(t *testing.T) {
 
 func TestWriteStdinPreservesBackgroundSummaryTruncationMetadata(t *testing.T) {
 	workspace := t.TempDir()
-	manager := newBackgroundTestManager(t)
+	manager := newShellTestManager(t, 50*time.Millisecond)
 	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
 	stdinTool := NewWriteStdinTool(16_000, manager)
 
@@ -920,7 +929,7 @@ func TestWriteStdinPreservesBackgroundSummaryTruncationMetadata(t *testing.T) {
 		"shell":         "/bin/sh",
 		"login":         false,
 		"tty":           true,
-		"yield_time_ms": 250,
+		"yield_time_ms": 50,
 	})
 	if result.IsError {
 		t.Fatalf("unexpected exec_command error: %s", string(result.Output))

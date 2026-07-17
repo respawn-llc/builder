@@ -56,10 +56,10 @@ func TestBackgroundProcessKeepsCapturedHookAcrossLaterStartsPollingAndCompletion
 	pollTool := NewWriteStdinTool(16_000, manager)
 
 	startA := callExecCommand(t, toolA, "a-background", map[string]any{
-		"cmd":           "printf early; sleep 0.45; printf late",
+		"cmd":           "printf early; sleep 0.2; printf late",
 		"shell":         "/bin/sh",
 		"login":         false,
-		"yield_time_ms": 250,
+		"yield_time_ms": 50,
 	})
 	if startA.IsError {
 		t.Fatalf("runtime A background start error: %s", string(startA.Output))
@@ -112,10 +112,10 @@ func TestBackgroundProcessKeepsCapturedHookAcrossLaterStartsPollingAndCompletion
 		}
 	})
 	autoA := callExecCommand(t, toolA, "a-auto", map[string]any{
-		"cmd":           "sleep 0.35; printf automatic",
+		"cmd":           "sleep 0.2; printf automatic",
 		"shell":         "/bin/sh",
 		"login":         false,
-		"yield_time_ms": 250,
+		"yield-time_ms": 50,
 	})
 	if autoA.IsError {
 		t.Fatalf("runtime A automatic completion start error: %s", string(autoA.Output))
@@ -156,11 +156,11 @@ func TestRawBypassesCapturedPolicyInForegroundBackgroundAndPolling(t *testing.T)
 	}
 
 	background := callExecCommand(t, tool, "raw-background", map[string]any{
-		"cmd":           "printf '\\033[31mearly\\033[0m'; sleep 0.4; printf '\\033[32mlate\\033[0m'",
+		"cmd":           "printf '\\033[31mearly\\033[0m'; sleep 0.2; printf '\\033[32mlate\\033[0m'",
 		"shell":         "/bin/sh",
 		"login":         false,
 		"raw":           true,
-		"yield_time_ms": 250,
+		"yield_time_ms": 50,
 	})
 	if background.IsError {
 		t.Fatalf("raw background error: %s", string(background.Output))
@@ -208,7 +208,7 @@ func TestSharedManagerKeepsGlobalLifecycleAcrossCapturedPolicies(t *testing.T) {
 			"cmd":           "printf started; sleep 30",
 			"shell":         "/bin/sh",
 			"login":         false,
-			"yield_time_ms": 250,
+			"yield_time_ms": 50,
 		})
 		if result.IsError {
 			t.Fatalf("%s background start error: %s", name, string(result.Output))
@@ -291,7 +291,7 @@ func replacementRunner(t *testing.T, replacement string) *postprocess.Runner {
 func newManagerWithPostprocessor(t *testing.T, runner *postprocess.Runner) *Manager {
 	t.Helper()
 	manager, err := NewManager(
-		WithMinimumExecToBgTime(250*time.Millisecond),
+		WithMinimumExecToBgTime(50*time.Millisecond),
 		WithCloseTimeouts(20*time.Millisecond, 200*time.Millisecond),
 		WithPostprocessor(runner),
 	)
