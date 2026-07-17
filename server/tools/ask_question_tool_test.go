@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"core/internal/testharness/testsetup"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"encoding/json"
@@ -596,13 +597,12 @@ func TestCanceledAskIsRemovedFromPendingQueue(t *testing.T) {
 
 func waitForPendingRequests(t *testing.T, b *AskQuestionBroker, want int) []AskQuestionRequest {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		pending := b.Pending()
-		if len(pending) == want {
-			return pending
-		}
-		time.Sleep(5 * time.Millisecond)
+	var pending []AskQuestionRequest
+	if testsetup.Until(time.Now().Add(2*time.Second), 5*time.Millisecond, func() bool {
+		pending = b.Pending()
+		return len(pending) == want
+	}) {
+		return pending
 	}
 	return b.Pending()
 }

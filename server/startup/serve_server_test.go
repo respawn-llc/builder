@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	"core/server/authservice"
 	"core/server/metadata"
@@ -269,17 +270,12 @@ func TestServeExposesConfiguredHealthEndpoints(t *testing.T) {
 	}
 	healthURL := config.ServerHTTPBaseURL(loadCfg) + protocol.HealthPath
 	readyURL := config.ServerHTTPBaseURL(loadCfg) + protocol.ReadinessPath
-	deadline := time.Now().Add(5 * time.Second)
 	var healthResp *http.Response
-	for {
+	if !testsetup.Until(time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
 		healthResp, err = http.Get(healthURL)
-		if err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("GET health: %v", err)
-		}
-		time.Sleep(10 * time.Millisecond)
+		return err == nil
+	}) {
+		t.Fatalf("GET health: %v", err)
 	}
 	defer func() { _ = healthResp.Body.Close() }()
 	if healthResp.StatusCode != http.StatusOK {
@@ -353,37 +349,32 @@ func TestServeExposesDerivedLocalUnixSocketAndCleansStalePath(t *testing.T) {
 	}()
 
 	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if _, err := os.Stat(socketPath); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("unix socket path did not appear: %v", err)
-		}
-		time.Sleep(10 * time.Millisecond)
+	var socketErr error
+	if !testsetup.Until(deadline, 10*time.Millisecond, func() bool {
+		_, socketErr = os.Stat(socketPath)
+		return socketErr == nil
+	}) {
+		t.Fatalf("unix socket path did not appear: %v", socketErr)
 	}
-	for {
-		conn, dialErr := net.DialTimeout("unix", socketPath, 100*time.Millisecond)
+	var dialErr error
+	if !testsetup.Until(deadline, 10*time.Millisecond, func() bool {
+		var conn net.Conn
+		conn, dialErr = net.DialTimeout("unix", socketPath, 100*time.Millisecond)
 		if dialErr == nil {
 			_ = conn.Close()
-			break
+			return true
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("unix socket path did not become dialable: %v", dialErr)
-		}
-		time.Sleep(10 * time.Millisecond)
+		return false
+	}) {
+		t.Fatalf("unix socket path did not become dialable: %v", dialErr)
 	}
 
 	var localRemote *client.Remote
-	for {
+	if !testsetup.Until(deadline, 10*time.Millisecond, func() bool {
 		localRemote, err = client.DialConfiguredRemote(context.Background(), loadCfg)
-		if err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("DialConfiguredRemote: %v", err)
-		}
-		time.Sleep(10 * time.Millisecond)
+		return err == nil
+	}) {
+		t.Fatalf("DialConfiguredRemote: %v", err)
 	}
 	if localRemote.Identity().ServerID == "" {
 		t.Fatal("expected configured remote identity")
@@ -419,17 +410,12 @@ func TestEmbeddedServeBackgroundExposesAttachEndpointUntilClose(t *testing.T) {
 	// An external client can attach and the handshake reports an identity stamped
 	// with the persistence-root id, which is exactly what kent run validates.
 	var remote *client.Remote
-	deadline := time.Now().Add(5 * time.Second)
-	for {
+	if !testsetup.Until(time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
 		remote, err = client.DialConfiguredRemote(context.Background(), loadCfg)
-		if err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			_ = server.Close()
-			t.Fatalf("DialConfiguredRemote: %v", err)
-		}
-		time.Sleep(10 * time.Millisecond)
+		return err == nil
+	}) {
+		_ = server.Close()
+		t.Fatalf("DialConfiguredRemote: %v", err)
 	}
 	identity := remote.Identity()
 	_ = remote.Close()
@@ -444,18 +430,14 @@ func TestEmbeddedServeBackgroundExposesAttachEndpointUntilClose(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	// After Close the control endpoint is torn down: a fresh dial must fail.
-	closedDeadline := time.Now().Add(2 * time.Second)
-	for {
+	testsetup.RequireUntil(t, time.Now().Add(2*time.Second), 10*time.Millisecond, func() bool {
 		closedRemote, dialErr := client.DialRemoteURL(context.Background(), config.ServerRPCURL(loadCfg))
 		if dialErr != nil {
-			break
+			return true
 		}
 		_ = closedRemote.Close()
-		if time.Now().After(closedDeadline) {
-			t.Fatal("embedded attach endpoint still reachable after Close")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return false
+	}, "embedded attach endpoint still reachable after Close")
 }
 
 func TestServeDegradesToTCPWhenDerivedLocalSocketFails(t *testing.T) {
@@ -491,17 +473,17 @@ func TestServeDegradesToTCPWhenDerivedLocalSocketFails(t *testing.T) {
 		t.Fatalf("config.Load: %v", err)
 	}
 	healthURL := config.ServerHTTPBaseURL(loadCfg) + protocol.HealthPath
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		resp, err := http.Get(healthURL)
-		if err == nil {
+	var healthErr error
+	if !testsetup.Until(time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
+		var resp *http.Response
+		resp, healthErr = http.Get(healthURL)
+		if healthErr == nil {
 			_ = resp.Body.Close()
-			break
+			return true
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("GET health: %v", err)
-		}
-		time.Sleep(10 * time.Millisecond)
+		return false
+	}) {
+		t.Fatalf("GET health: %v", healthErr)
 	}
 
 	tcpRemote, err := client.DialRemoteURL(context.Background(), config.ServerRPCURL(loadCfg))
@@ -533,17 +515,12 @@ func TestServeStartsUnauthenticatedAndReportsBootstrapReadiness(t *testing.T) {
 	}
 	healthURL := config.ServerHTTPBaseURL(loadCfg) + protocol.HealthPath
 	readyURL := config.ServerHTTPBaseURL(loadCfg) + protocol.ReadinessPath
-	deadline := time.Now().Add(5 * time.Second)
 	var healthResp *http.Response
-	for {
+	if !testsetup.Until(time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
 		healthResp, err = http.Get(healthURL)
-		if err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("GET health: %v", err)
-		}
-		time.Sleep(10 * time.Millisecond)
+		return err == nil
+	}) {
+		t.Fatalf("GET health: %v", err)
 	}
 	defer func() { _ = healthResp.Body.Close() }()
 	if healthResp.StatusCode != http.StatusOK {
@@ -621,27 +598,26 @@ openai_base_url = "http://127.0.0.1:11434/v1"
 	}
 	readyURL := config.ServerHTTPBaseURL(loadCfg) + protocol.ReadinessPath
 	client := &http.Client{Timeout: time.Second}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		resp, requestErr := client.Get(readyURL)
-		if requestErr == nil {
-			defer func() { _ = resp.Body.Close() }()
-			if resp.StatusCode != http.StatusOK {
-				t.Fatalf("readiness status = %d, want 200", resp.StatusCode)
-			}
-			var body map[string]any
-			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-				t.Fatalf("decode readiness body: %v", err)
-			}
-			if body["ready"] != true || body["auth_ready"] != false {
-				t.Fatalf("readiness body = %+v, want ready with unavailable auth", body)
-			}
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("GET ready: %v", requestErr)
-		}
-		time.Sleep(10 * time.Millisecond)
+	var (
+		resp       *http.Response
+		requestErr error
+	)
+	if !testsetup.Until(time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
+		resp, requestErr = client.Get(readyURL)
+		return requestErr == nil
+	}) {
+		t.Fatalf("GET ready: %v", requestErr)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("readiness status = %d, want 200", resp.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode readiness body: %v", err)
+	}
+	if body["ready"] != true || body["auth_ready"] != false {
+		t.Fatalf("readiness body = %+v, want ready with unavailable auth", body)
 	}
 }
 
@@ -756,17 +732,17 @@ model = "blocked-model"
 		t.Fatalf("config.Load: %v", err)
 	}
 	healthURL := config.ServerHTTPBaseURL(loadCfg) + protocol.HealthPath
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		resp, err := http.Get(healthURL)
-		if err == nil {
+	var healthErr error
+	if !testsetup.Until(time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
+		var resp *http.Response
+		resp, healthErr = http.Get(healthURL)
+		if healthErr == nil {
 			_ = resp.Body.Close()
-			break
+			return true
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("GET health: %v", err)
-		}
-		time.Sleep(10 * time.Millisecond)
+		return false
+	}) {
+		t.Fatalf("GET health: %v", healthErr)
 	}
 
 	remote, err := client.DialConfiguredRemote(context.Background(), loadCfg)

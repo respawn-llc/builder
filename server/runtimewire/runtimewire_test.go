@@ -558,13 +558,9 @@ func TestBackgroundEventRouterRoutesCompletionToMatchingActiveOwnerSession(t *te
 	router.SetActiveSession(storeB.Meta().SessionID, engB)
 	router.Handle(runtimewirefixture.BackgroundCompletionEvent("1002", storeA.Meta().SessionID, root))
 
-	deadline := time.Now().Add(2 * time.Second)
-	for clientA.CallCount() == 0 && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if got := clientA.CallCount(); got == 0 {
-		t.Fatal("expected owner session completion to route to its active engine even when another session is also active")
-	}
+	testsetup.RequireUntil(t, time.Now().Add(2*time.Second), 20*time.Millisecond, func() bool {
+		return clientA.CallCount() != 0
+	}, "expected owner session completion to route to its active engine even when another session is also active")
 	if got := clientB.CallCount(); got != 0 {
 		t.Fatalf("did not expect foreign active session to receive routed completion, got %d", got)
 	}
@@ -593,13 +589,9 @@ func TestBackgroundEventRouterClearActiveSessionDropsOnlyThatOwner(t *testing.T)
 	}
 
 	router.Handle(runtimewirefixture.BackgroundCompletionEvent("1004", storeB.Meta().SessionID, root))
-	deadline := time.Now().Add(2 * time.Second)
-	for clientB.CallCount() == 0 && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if got := clientB.CallCount(); got == 0 {
-		t.Fatal("expected other active sessions to keep receiving their own completions after clearing a different owner")
-	}
+	testsetup.RequireUntil(t, time.Now().Add(2*time.Second), 20*time.Millisecond, func() bool {
+		return clientB.CallCount() != 0
+	}, "expected other active sessions to keep receiving their own completions after clearing a different owner")
 }
 
 func TestBackgroundEventRouterStaleClearKeepsReplacementForSameSession(t *testing.T) {
@@ -616,13 +608,9 @@ func TestBackgroundEventRouterStaleClearKeepsReplacementForSameSession(t *testin
 	router.ClearActiveSession(store.Meta().SessionID, engA)
 	router.Handle(runtimewirefixture.BackgroundCompletionEvent("1005", store.Meta().SessionID, root))
 
-	deadline := time.Now().Add(2 * time.Second)
-	for clientB.CallCount() == 0 && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if got := clientB.CallCount(); got == 0 {
-		t.Fatal("expected replacement active session to receive completion after stale clear")
-	}
+	testsetup.RequireUntil(t, time.Now().Add(2*time.Second), 20*time.Millisecond, func() bool {
+		return clientB.CallCount() != 0
+	}, "expected replacement active session to receive completion after stale clear")
 	if got := clientA.CallCount(); got != 0 {
 		t.Fatalf("did not expect stale active session to receive completion, got %d", got)
 	}

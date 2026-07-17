@@ -69,12 +69,10 @@ func decodeWriteStdinToolOutput(t *testing.T, result tools.Result) writeStdinOut
 
 func waitForManagerCount(t *testing.T, manager *Manager, want int, timeout time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if manager.Count() == want {
-			return
-		}
-		time.Sleep(25 * time.Millisecond)
+	if testsetup.Until(time.Now().Add(timeout), 25*time.Millisecond, func() bool {
+		return manager.Count() == want
+	}) {
+		return
 	}
 	t.Fatalf("manager count = %d, want %d", manager.Count(), want)
 }
@@ -85,15 +83,13 @@ func waitForEntryInteraction(t *testing.T, manager *Manager, id string, timeout 
 	if err != nil {
 		t.Fatalf("background entry %s: %v", id, err)
 	}
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	testsetup.RequireUntil(t, time.Now().Add(timeout), time.Millisecond, func() bool {
 		if !entry.interactMu.TryLock() {
-			return
+			return true
 		}
 		entry.interactMu.Unlock()
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for write_stdin to start interacting with session %s", id)
+		return false
+	}, "timed out waiting for write_stdin to start interacting with session %s", id)
 }
 
 func writeExecutableScript(t *testing.T, contents string) string {

@@ -2217,29 +2217,26 @@ func TestScriptCompletionAttentionFinalizesTransitionAndInterruptedRuns(t *testi
 
 func (f starterFixture) waitForCompletedRun(t *testing.T, taskID workflow.TaskID) {
 	t.Helper()
-	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
-	for time.Now().Before(deadline) {
+	testsetup.RequireUntil(t, time.Now().Add(workflowRunnerTestWaitTimeout), 20*time.Millisecond, func() bool {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
 			t.Fatalf("ListRuns: %v", err)
 		}
 		if len(runs) == 1 && runs[0].CompletedAt != nil {
-			return
+			return true
 		}
 		if len(runs) == 1 && runs[0].InterruptedAt != nil {
 			var detail string
 			_ = f.metadata.DB().QueryRowContext(context.Background(), `SELECT interruption_detail_json FROM task_runs WHERE id = ?`, string(runs[0].ID)).Scan(&detail)
 			t.Fatalf("run interrupted: %+v detail=%s", runs[0], detail)
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for workflow run completion")
+		return false
+	}, "timed out waiting for workflow run completion")
 }
 
 func (f starterFixture) waitForCompletedRunCount(t *testing.T, taskID workflow.TaskID, count int) {
 	t.Helper()
-	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
-	for time.Now().Before(deadline) {
+	testsetup.RequireUntil(t, time.Now().Add(workflowRunnerTestWaitTimeout), 20*time.Millisecond, func() bool {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
 			t.Fatalf("ListRuns: %v", err)
@@ -2255,18 +2252,14 @@ func (f starterFixture) waitForCompletedRunCount(t *testing.T, taskID workflow.T
 				completed++
 			}
 		}
-		if completed == count {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %d completed workflow runs", count)
+		return completed == count
+	}, "timed out waiting for %d completed workflow runs", count)
 }
 
 func (f starterFixture) waitForWaitingAsk(t *testing.T, taskID workflow.TaskID, askID string) workflowstore.RunRecord {
 	t.Helper()
-	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
-	for time.Now().Before(deadline) {
+	var waiting workflowstore.RunRecord
+	testsetup.RequireUntil(t, time.Now().Add(workflowRunnerTestWaitTimeout), 20*time.Millisecond, func() bool {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
 			t.Fatalf("ListRuns: %v", err)
@@ -2278,34 +2271,28 @@ func (f starterFixture) waitForWaitingAsk(t *testing.T, taskID workflow.TaskID, 
 			if runs[0].CompletedAt != nil || runs[0].InterruptedAt != nil {
 				t.Fatalf("waiting run has terminal outcome: %+v", runs[0])
 			}
-			return runs[0]
+			waiting = runs[0]
+			return true
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for workflow run ask %s", askID)
-	return workflowstore.RunRecord{}
+		return false
+	}, "timed out waiting for workflow run ask %s", askID)
+	return waiting
 }
 
 func (f starterFixture) waitForRunCount(t *testing.T, taskID workflow.TaskID, count int) {
 	t.Helper()
-	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
-	for time.Now().Before(deadline) {
+	testsetup.RequireUntil(t, time.Now().Add(workflowRunnerTestWaitTimeout), 20*time.Millisecond, func() bool {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
 			t.Fatalf("ListRuns: %v", err)
 		}
-		if len(runs) == count {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %d workflow runs", count)
+		return len(runs) == count
+	}, "timed out waiting for %d workflow runs", count)
 }
 
 func (f starterFixture) waitForAllRunsCompleted(t *testing.T, taskID workflow.TaskID, count int) {
 	t.Helper()
-	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
-	for time.Now().Before(deadline) {
+	testsetup.RequireUntil(t, time.Now().Add(workflowRunnerTestWaitTimeout), 20*time.Millisecond, func() bool {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
 			t.Fatalf("ListRuns: %v", err)
@@ -2319,18 +2306,13 @@ func (f starterFixture) waitForAllRunsCompleted(t *testing.T, taskID workflow.Ta
 				completed++
 			}
 		}
-		if len(runs) == count && completed == count {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %d completed workflow runs", count)
+		return len(runs) == count && completed == count
+	}, "timed out waiting for %d completed workflow runs", count)
 }
 
 func (f starterFixture) waitForInterruptedRun(t *testing.T, scheduler *SchedulerService, taskID workflow.TaskID, reason string) {
 	t.Helper()
-	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
-	for time.Now().Before(deadline) {
+	testsetup.RequireUntil(t, time.Now().Add(workflowRunnerTestWaitTimeout), 20*time.Millisecond, func() bool {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
 			t.Fatalf("ListRuns: %v", err)
@@ -2340,21 +2322,18 @@ func (f starterFixture) waitForInterruptedRun(t *testing.T, scheduler *Scheduler
 				t.Fatalf("interruption reason = %v, want %q", runs[0].InterruptionReason, reason)
 			}
 			f.waitForActiveCountZero(t, scheduler)
-			return
+			return true
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for workflow run interruption")
+		return false
+	}, "timed out waiting for workflow run interruption")
 }
 
 func (f starterFixture) waitForActiveCountZero(t *testing.T, scheduler *SchedulerService) {
 	t.Helper()
-	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
-	for time.Now().Before(deadline) {
-		if scheduler.ActiveCount() == 0 {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+	if testsetup.Until(time.Now().Add(workflowRunnerTestWaitTimeout), 20*time.Millisecond, func() bool {
+		return scheduler.ActiveCount() == 0
+	}) {
+		return
 	}
 	t.Fatalf("scheduler active count = %d, want 0 after runtime finish", scheduler.ActiveCount())
 }

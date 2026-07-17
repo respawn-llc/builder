@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"core/internal/testharness/scriptedllm"
+	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/tools"
@@ -421,15 +422,12 @@ func (c *blockingToolCall) releaseCall() {
 
 func waitForPendingPrompt(t *testing.T, registry *RuntimeRegistry, sessionID string, promptID string) {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for {
-		prompts := registry.ListPendingPrompts(sessionID)
-		if len(prompts) == 1 && prompts[0].Request.ID == promptID {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("pending prompt %q was not registered: %+v", promptID, prompts)
-		}
-		time.Sleep(10 * time.Millisecond)
+	var prompts []PendingPromptSnapshot
+	if testsetup.Until(time.Now().Add(time.Second), 10*time.Millisecond, func() bool {
+		prompts = registry.ListPendingPrompts(sessionID)
+		return len(prompts) == 1 && prompts[0].Request.ID == promptID
+	}) {
+		return
 	}
+	t.Fatalf("pending prompt %q was not registered: %+v", promptID, prompts)
 }

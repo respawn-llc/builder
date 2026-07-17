@@ -13,6 +13,7 @@ import (
 	"time"
 
 	modelstub "core/internal/testharness/pty/blackbox"
+	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	"core/server/authservice"
 	"core/server/llm"
@@ -136,21 +137,18 @@ func TestStartWithOptionsMissingConfigExposesBootstrapSurface(t *testing.T) {
 
 func dialEmbeddedRemote(t *testing.T, cfg config.App) *client.Remote {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
 	var (
 		remote *client.Remote
 		err    error
 	)
-	for {
+	if testsetup.Until(time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
 		remote, err = client.DialConfiguredRemote(context.Background(), cfg)
-		if err == nil {
-			return remote
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("DialConfiguredRemote: %v", err)
-		}
-		time.Sleep(10 * time.Millisecond)
+		return err == nil
+	}) {
+		return remote
 	}
+	t.Fatalf("DialConfiguredRemote: %v", err)
+	return nil
 }
 
 func TestRunPromptClientRunsLoopbackThroughEmbeddedServer(t *testing.T) {
