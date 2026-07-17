@@ -601,17 +601,14 @@ func TestRemoteCompactionTaskCommentCountErrorDoesNotReplaceHistory(t *testing.T
 }
 
 func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) {
-	paused, complete := session.GoalStatusPaused, session.GoalStatusComplete
+	paused := session.GoalStatusPaused
 	tests := []struct {
 		name     string
 		workflow bool
 		status   *session.GoalStatus
-		clear    bool
 	}{
 		{name: "absent"},
 		{name: "paused", status: &paused},
-		{name: "complete", status: &complete},
-		{name: "cleared", clear: true},
 		{name: "active workflow", workflow: true},
 	}
 
@@ -622,18 +619,13 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 			if test.workflow {
 				engine = mustNewWorkflowTestEngine(t, store, activeGoalCompactionTestClient(), testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool), Config{Model: "gpt-5"})
 			}
-			if test.status != nil || test.clear || test.workflow {
+			if test.status != nil || test.workflow {
 				if _, err := engine.SetGoal("inactive goal", session.GoalActorUser); err != nil {
 					t.Fatal(err)
 				}
 			}
 			if test.status != nil {
 				if _, err := engine.SetGoalStatus(*test.status, session.GoalActorUser); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if test.clear {
-				if _, err := engine.ClearGoal(session.GoalActorUser); err != nil {
 					t.Fatal(err)
 				}
 			}

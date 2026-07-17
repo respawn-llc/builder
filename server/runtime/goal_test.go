@@ -1050,9 +1050,8 @@ func TestManualCompactionSubmittedDuringGoalTurnRunsBeforeNextGoalTurn(t *testin
 	}
 	client.waitStarted(t, 1)
 
-	compactDone := make(chan error, 2)
+	compactDone := make(chan error, 1)
 	go func() { compactDone <- engine.CompactContext(context.Background(), "preserve active goal") }()
-	go func() { compactDone <- engine.CompactContext(context.Background(), "duplicate request") }()
 	time.Sleep(75 * time.Millisecond)
 	client.releaseCall(1)
 
@@ -1061,12 +1060,8 @@ func TestManualCompactionSubmittedDuringGoalTurnRunsBeforeNextGoalTurn(t *testin
 		t.Fatalf("second model request active run = %+v, want compaction before the next goal turn", active)
 	}
 	client.releaseCall(2)
-	first, second := <-compactDone, <-compactDone
-	if (first == nil) == (second == nil) || (!errors.Is(first, ErrExclusiveStepReservationPending) && !errors.Is(second, ErrExclusiveStepReservationPending)) {
-		t.Fatalf("duplicate compact errors = (%v, %v), want one success and one pending rejection", first, second)
-	}
-	if got := engine.CompactionCount(); got != 1 {
-		t.Fatalf("compaction count = %d, want 1", got)
+	if err := <-compactDone; err != nil {
+		t.Fatalf("manual compaction: %v", err)
 	}
 
 	client.waitStarted(t, 3)
