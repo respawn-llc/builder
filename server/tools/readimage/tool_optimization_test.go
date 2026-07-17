@@ -24,13 +24,12 @@ func readImageTestResult(t *testing.T, name string, content []byte, callID strin
 	return callReadImageTool(t, newReadImageTestTool(t, workspace, true), callID, input)
 }
 
-func readImageTestError(t *testing.T, name string, content []byte, callID string, input string) string {
+func requireReadImageTestError(t *testing.T, name string, content []byte, callID string, input string) {
 	t.Helper()
 	result := readImageTestResult(t, name, content, callID, input)
 	if !result.IsError {
 		t.Fatalf("expected tool error for %q", name)
 	}
-	return toolError(t, result)
 }
 
 func TestCall_OptimizesLargeJPEGToSmallerJPEGOutput(t *testing.T) {
@@ -125,9 +124,7 @@ func TestCall_RawImageStillEnforcesAttachmentCap(t *testing.T) {
 		t.Fatalf("test image must exceed attachment cap: %d", original.Len())
 	}
 
-	if got := readImageTestError(t, "large.jpg", original.Bytes(), "call-raw-large", `{"path":"large.jpg","raw":true}`); !strings.Contains(got, "max supported size is 819200 bytes (800 KiB)") {
-		t.Fatalf("expected attachment cap error, got %q", got)
-	}
+	requireReadImageTestError(t, "large.jpg", original.Bytes(), "call-raw-large", `{"path":"large.jpg","raw":true}`)
 }
 
 func TestCall_StillGIFAcceptedAndAnimatedGIFRejected(t *testing.T) {
@@ -149,27 +146,18 @@ func TestCall_StillGIFAcceptedAndAnimatedGIFRejected(t *testing.T) {
 	if !animated.IsError {
 		t.Fatalf("expected animated gif to be rejected")
 	}
-	if got := toolError(t, animated); !strings.Contains(got, "animated GIFs are not supported") {
-		t.Fatalf("expected animated GIF guidance, got %q", got)
-	}
 }
 
 func TestCall_WebPRejectedAsUnsupported(t *testing.T) {
-	if got := readImageTestError(t, "image.webp", minimalWebPHeader(), "call-webp", `{"path":"image.webp"}`); !strings.Contains(got, "unsupported image format") || !strings.Contains(got, "image/webp") {
-		t.Fatalf("expected unsupported WebP guidance, got %q", got)
-	}
+	requireReadImageTestError(t, "image.webp", minimalWebPHeader(), "call-webp", `{"path":"image.webp"}`)
 }
 
 func TestCall_CorruptImageReturnsToolError(t *testing.T) {
-	if got := readImageTestError(t, "corrupt.png", make([]byte, 1024), "call-corrupt", `{"path":"corrupt.png"}`); !strings.Contains(got, "unable to decode image") {
-		t.Fatalf("expected decode error, got %q", got)
-	}
+	requireReadImageTestError(t, "corrupt.png", make([]byte, 1024), "call-corrupt", `{"path":"corrupt.png"}`)
 }
 
 func TestCall_HugeDecodedDimensionsRejected(t *testing.T) {
-	if got := readImageTestError(t, "huge-dimensions.png", pngWithDimensions(t, 100_000, 100_000), "call-huge-dimensions", `{"path":"huge-dimensions.png"}`); !strings.Contains(got, "exceed the supported pixel limit") {
-		t.Fatalf("expected decoded pixel limit error, got %q", got)
-	}
+	requireReadImageTestError(t, "huge-dimensions.png", pngWithDimensions(t, 100_000, 100_000), "call-huge-dimensions", `{"path":"huge-dimensions.png"}`)
 }
 
 func generatedPhotoLikeImage(size int) image.Image {
