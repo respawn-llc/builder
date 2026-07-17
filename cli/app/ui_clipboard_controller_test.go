@@ -43,7 +43,6 @@ func setupClipboardTestInput(t *testing.T, m *uiModel, target clipboardTestInput
 		next, _ := m.Update(askEventMsg{event: testQuestionAskEvent(
 			"clipboard-ask",
 			"Provide details",
-			make(chan askReply, 1),
 		)})
 		updated := next.(*uiModel)
 		if !updated.ask.freeform {
@@ -192,7 +191,7 @@ func TestClipboardPasteDoneRejectsStaleTarget(t *testing.T) {
 	t.Run("replaced ask", func(t *testing.T) {
 		m := setupClipboardTestInput(t, newProjectedStaticUIModel(), clipboardTestInputAsk)
 		staleToken := m.ask.currentToken
-		replacement := testQuestionAskEvent("replacement-ask", "Replacement", make(chan askReply, 1))
+		replacement := testQuestionAskEvent("replacement-ask", "Replacement")
 		testSetActiveAsk(m, &replacement)
 		m.ask.freeform = true
 		m.ask.input = "replacement"
@@ -472,7 +471,6 @@ func TestClipboardPasteBindingLeavesNonFreeformAskUnchanged(t *testing.T) {
 	next, _ := m.Update(askEventMsg{event: testQuestionAskEvent(
 		"clipboard-choice",
 		"Choose one",
-		make(chan askReply, 1),
 		"first",
 		"second",
 	)})

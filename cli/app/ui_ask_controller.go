@@ -513,6 +513,7 @@ func (c uiAskController) applyDeliveryResult(result promptAnswerDeliveryResultMs
 		return nil
 	}
 	c.cancelActiveDelivery()
+	m.ask.answerPending = false
 	if errors.Is(result.err, context.Canceled) || runtimeattach.IsRuntimeConnectionError(result.err) {
 		return nil
 	}

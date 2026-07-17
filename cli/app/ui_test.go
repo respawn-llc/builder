@@ -4,7 +4,6 @@ import (
 	"core/cli/tui"
 	"core/cli/tui/transcriptrender"
 	tuitest "core/internal/testharness/pty"
-	"core/server/runtime"
 	"core/shared/clientui"
 	goruntime "runtime"
 	"strings"
@@ -176,9 +175,8 @@ func TestParseUserShellCommand(t *testing.T) {
 }
 
 func TestAskQuestionTabFreeformFlow(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	reply := make(chan askReply, 1)
-	event := testQuestionAskEvent("ask-1", "Pick one", reply, "a", "b")
+	m, control := newProjectedPromptTestUIModel(t)
+	event := testQuestionAskEvent("ask-1", "Pick one", "a", "b")
 
 	next, _ := m.Update(askEventMsg{event: event})
 	updated := next.(*uiModel)
@@ -200,18 +198,15 @@ func TestAskQuestionTabFreeformFlow(t *testing.T) {
 
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("custom")})
 	updated = next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated = next.(*uiModel)
-
-	resp := <-reply
-	if resp.response.Answer != "custom" {
-		t.Fatalf("unexpected answer: %q", resp.response.Answer)
+	updated, request := submitAskPromptKey(t, updated, control, tea.KeyMsg{Type: tea.KeyEnter})
+	if request.Answer != "custom" {
+		t.Fatalf("unexpected answer: %q", request.Answer)
 	}
-	if resp.response.FreeformAnswer != "custom" {
-		t.Fatalf("unexpected freeform answer: %q", resp.response.FreeformAnswer)
+	if request.FreeformAnswer != "custom" {
+		t.Fatalf("unexpected freeform answer: %q", request.FreeformAnswer)
 	}
-	if resp.response.SelectedOptionNumber == nil || *resp.response.SelectedOptionNumber != 1 {
-		t.Fatalf("expected selected option 1 preserved when switching to freeform, got %+v", resp.response)
+	if request.SelectedOptionNumber == nil || *request.SelectedOptionNumber != 1 {
+		t.Fatalf("expected selected option 1 preserved when switching to freeform, got %+v", request)
 	}
 	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
@@ -220,9 +215,8 @@ func TestAskQuestionTabFreeformFlow(t *testing.T) {
 }
 
 func TestAskQuestionPickerSubmitPreservesPendingFreeformDraft(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	reply := make(chan askReply, 1)
-	event := testQuestionAskEvent("ask-1", "Pick one", reply, "a", "b")
+	m, control := newProjectedPromptTestUIModel(t)
+	event := testQuestionAskEvent("ask-1", "Pick one", "a", "b")
 
 	next, _ := m.Update(askEventMsg{event: event})
 	updated := next.(*uiModel)
@@ -259,18 +253,15 @@ func TestAskQuestionPickerSubmitPreservesPendingFreeformDraft(t *testing.T) {
 
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
 	updated = next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated = next.(*uiModel)
-
-	resp := <-reply
-	if resp.response.SelectedOptionNumber == nil || *resp.response.SelectedOptionNumber != 2 {
-		t.Fatalf("expected selected option number 2, got %+v", resp.response)
+	updated, request := submitAskPromptKey(t, updated, control, tea.KeyMsg{Type: tea.KeyEnter})
+	if request.SelectedOptionNumber == nil || *request.SelectedOptionNumber != 2 {
+		t.Fatalf("expected selected option number 2, got %+v", request)
 	}
-	if resp.response.Answer != "" {
-		t.Fatalf("expected structured picker response without raw answer text, got %+v", resp.response)
+	if request.Answer != "" {
+		t.Fatalf("expected structured picker response without raw answer text, got %+v", request)
 	}
-	if resp.response.FreeformAnswer != "custom" {
-		t.Fatalf("expected pending freeform draft submitted with picker answer, got %+v", resp.response)
+	if request.FreeformAnswer != "custom" {
+		t.Fatalf("expected pending freeform draft submitted with picker answer, got %+v", request)
 	}
 	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
@@ -279,9 +270,8 @@ func TestAskQuestionPickerSubmitPreservesPendingFreeformDraft(t *testing.T) {
 }
 
 func TestAskQuestionTabRoundTripRestoresPendingFreeformDraftAndCursor(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	reply := make(chan askReply, 1)
-	event := testQuestionAskEvent("ask-1", "Pick one", reply, "a", "b")
+	m, control := newProjectedPromptTestUIModel(t)
+	event := testQuestionAskEvent("ask-1", "Pick one", "a", "b")
 
 	next, _ := m.Update(askEventMsg{event: event})
 	updated := next.(*uiModel)
@@ -314,15 +304,12 @@ func TestAskQuestionTabRoundTripRestoresPendingFreeformDraftAndCursor(t *testing
 
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
 	updated = next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated = next.(*uiModel)
-
-	resp := <-reply
-	if resp.response.SelectedOptionNumber == nil || *resp.response.SelectedOptionNumber != 2 {
-		t.Fatalf("expected selected option number 2 after round-trip, got %+v", resp.response)
+	updated, request := submitAskPromptKey(t, updated, control, tea.KeyMsg{Type: tea.KeyEnter})
+	if request.SelectedOptionNumber == nil || *request.SelectedOptionNumber != 2 {
+		t.Fatalf("expected selected option number 2 after round-trip, got %+v", request)
 	}
-	if resp.response.FreeformAnswer != "custoXm" {
-		t.Fatalf("expected restored draft to remain editable, got %+v", resp.response)
+	if request.FreeformAnswer != "custoXm" {
+		t.Fatalf("expected restored draft to remain editable, got %+v", request)
 	}
 	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
@@ -332,8 +319,7 @@ func TestAskQuestionTabRoundTripRestoresPendingFreeformDraftAndCursor(t *testing
 
 func TestAskQuestionFreeformSelectionEnterDropsIntoFreeformWhenEmpty(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	reply := make(chan askReply, 1)
-	event := testQuestionAskEvent("ask-1", "Pick one", reply, "a", "b")
+	event := testQuestionAskEvent("ask-1", "Pick one", "a", "b")
 
 	next, _ := m.Update(askEventMsg{event: event})
 	updated := next.(*uiModel)
@@ -356,17 +342,11 @@ func TestAskQuestionFreeformSelectionEnterDropsIntoFreeformWhenEmpty(t *testing.
 	if testActiveAsk(updated) == nil {
 		t.Fatal("expected ask to remain active after switching to freeform")
 	}
-	select {
-	case resp := <-reply:
-		t.Fatalf("did not expect reply while opening freeform, got %+v", resp)
-	default:
-	}
 }
 
 func TestAskQuestionFreeformSelectionEmptySubmitRequiresCommentary(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	reply := make(chan askReply, 1)
-	event := testQuestionAskEvent("ask-1", "Pick one", reply, "a", "b")
+	m, control := newProjectedPromptTestUIModel(t)
+	event := testQuestionAskEvent("ask-1", "Pick one", "a", "b")
 
 	next, _ := m.Update(askEventMsg{event: event})
 	updated := next.(*uiModel)
@@ -392,16 +372,15 @@ func TestAskQuestionFreeformSelectionEmptySubmitRequiresCommentary(t *testing.T)
 		t.Fatal("expected ask to remain active after validation error")
 	}
 	select {
-	case resp := <-reply:
-		t.Fatalf("did not expect reply on validation error, got %+v", resp)
+	case request := <-control.askRequests:
+		t.Fatalf("did not expect request on validation error, got %+v", request)
 	default:
 	}
 }
 
 func TestAskQuestionFreeformSelectionSubmitsFreeformOnly(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	reply := make(chan askReply, 1)
-	event := testQuestionAskEvent("ask-1", "Pick one", reply, "a", "b")
+	m, control := newProjectedPromptTestUIModel(t)
+	event := testQuestionAskEvent("ask-1", "Pick one", "a", "b")
 
 	next, _ := m.Update(askEventMsg{event: event})
 	updated := next.(*uiModel)
@@ -413,15 +392,12 @@ func TestAskQuestionFreeformSelectionSubmitsFreeformOnly(t *testing.T) {
 	updated = next.(*uiModel)
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("custom")})
 	updated = next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated = next.(*uiModel)
-
-	resp := <-reply
-	if resp.response.SelectedOptionNumber != nil {
-		t.Fatalf("expected freeform selection to submit without selected option number, got %+v", resp.response)
+	updated, request := submitAskPromptKey(t, updated, control, tea.KeyMsg{Type: tea.KeyEnter})
+	if request.SelectedOptionNumber != nil {
+		t.Fatalf("expected freeform selection to submit without selected option number, got %+v", request)
 	}
-	if resp.response.Answer != "custom" || resp.response.FreeformAnswer != "custom" {
-		t.Fatalf("unexpected freeform selection response: %+v", resp.response)
+	if request.Answer != "custom" || request.FreeformAnswer != "custom" {
+		t.Fatalf("unexpected freeform selection response: %+v", request)
 	}
 	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
@@ -430,9 +406,8 @@ func TestAskQuestionFreeformSelectionSubmitsFreeformOnly(t *testing.T) {
 }
 
 func TestAskFreeformUsesMainEditingStack(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	reply := make(chan askReply, 1)
-	event := testQuestionAskEvent("ask-1", "Type answer", reply)
+	m, control := newProjectedPromptTestUIModel(t)
+	event := testQuestionAskEvent("ask-1", "Type answer")
 
 	next, _ := m.Update(askEventMsg{event: event})
 	updated := next.(*uiModel)
@@ -456,12 +431,9 @@ func TestAskFreeformUsesMainEditingStack(t *testing.T) {
 	updated = next.(*uiModel)
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyBackspace})
 	updated = next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated = next.(*uiModel)
-
-	resp := <-reply
-	if resp.response.Answer != ">hello _worl" {
-		t.Fatalf("unexpected inline edit result: %q", resp.response.Answer)
+	updated, request := submitAskPromptKey(t, updated, control, tea.KeyMsg{Type: tea.KeyEnter})
+	if request.Answer != ">hello _worl" {
+		t.Fatalf("unexpected inline edit result: %q", request.Answer)
 	}
 	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
@@ -471,8 +443,7 @@ func TestAskFreeformUsesMainEditingStack(t *testing.T) {
 
 func TestAskFreeformCtrlUEditingMatchesMainInput(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	reply := make(chan askReply, 1)
-	event := testQuestionAskEvent("ask-1", "Type answer", reply)
+	event := testQuestionAskEvent("ask-1", "Type answer")
 
 	next, _ := m.Update(askEventMsg{event: event})
 	updated := next.(*uiModel)
@@ -500,14 +471,11 @@ func TestAskFreeformCtrlUEditingMatchesMainInput(t *testing.T) {
 }
 
 func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
-	_, eng := newAppRuntimeEngine(t, statusLineFakeClient{}, runtime.Config{ContextWindowTokens: 400_000})
-	m := newProjectedEngineUIModel(eng)
+	m, control := newProjectedPromptTestUIModel(t)
 	m.setRuntimeActivityBusyForTest(true)
-	reply := make(chan askReply, 1)
 	event := testApprovalAskEvent(
 		"approval-1",
 		"Approve?",
-		reply,
 		clientui.ApprovalDecisionAllowOnce,
 		clientui.ApprovalDecisionAllowSession,
 		clientui.ApprovalDecisionDeny,
@@ -546,26 +514,17 @@ func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 	if len(promptLines) != 2 || promptLines[0].Kind != askPromptLineKindHint || promptLines[1].Kind != askPromptLineKindInput {
 		t.Fatalf("expected commentary prompt to collapse to hint+input, got %+v", promptLines)
 	}
-	select {
-	case <-reply:
-		t.Fatal("did not expect answer submission before commentary")
-	default:
-	}
-
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("blocked by policy")})
 	updated = next.(*uiModel)
 	next, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated = next.(*uiModel)
-	if cmd != nil {
-		t.Fatal("deny commentary must not create a queued user-message command")
+	if cmd == nil {
+		t.Fatal("deny commentary did not create a direct approval delivery command")
 	}
-
-	resp := <-reply
-	if resp.response.Approval == nil {
-		t.Fatal("expected typed approval response")
-	}
-	if resp.response.Approval.Decision != clientui.ApprovalDecisionDeny || resp.response.Approval.Commentary != "blocked by policy" {
-		t.Fatalf("unexpected approval response: %+v", resp.response.Approval)
+	updated = runPromptDeliveryCommand(t, updated, cmd)
+	request := <-control.approvalRequests
+	if request.Decision != clientui.ApprovalDecisionDeny || request.Commentary != "blocked by policy" {
+		t.Fatalf("unexpected approval request: %+v", request)
 	}
 	if len(updated.pendingInjected) != 0 {
 		t.Fatalf("deny commentary created a duplicate queued user message: %+v", updated.pendingInjected)
@@ -663,7 +622,7 @@ func TestAskQuestionMarkdownPromptCursorTracksInputAfterExpandedQuestion(t *test
 	m := newProjectedStaticUIModel()
 	m.terminalGeometry = terminalGeometryKnown(72, 12)
 	m.layout().syncViewport()
-	event := testQuestionAskEvent("ask-1", question, make(chan askReply, 1))
+	event := testQuestionAskEvent("ask-1", question)
 	testSetActiveAsk(m, &event)
 	m.ask.input = "typed"
 	m.ask.inputCursor = len([]rune(m.ask.input))
@@ -712,7 +671,6 @@ func TestAskQuestionMarkdownLinksWrapIntoIndependentBoundedRows(t *testing.T) {
 			event := testQuestionAskEvent(
 				"ask-1",
 				"[PR #456](https://github.com/org/repo/pull/456)",
-				make(chan askReply, 1),
 			)
 			testSetActiveAsk(m, &event)
 			m.ask.input = "answer"
@@ -746,7 +704,7 @@ func TestAskQuestionMarkdownLinksWrapIntoIndependentBoundedRows(t *testing.T) {
 
 func TestAskQuestionPlainPRReferenceDoesNotCreateHyperlink(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	event := testQuestionAskEvent("ask-1", "PR #456", make(chan askReply, 1))
+	event := testQuestionAskEvent("ask-1", "PR #456")
 	testSetActiveAsk(m, &event)
 
 	wrapped, _ := m.layout().wrappedAskPromptLines(12)
@@ -767,7 +725,6 @@ func TestAskQuestionViewportPrioritizesAnswerOptionsOverQuestionLines(t *testing
 	event := testQuestionAskEvent(
 		"ask-1",
 		strings.Repeat("Long **Markdown question** content. ", 8),
-		make(chan askReply, 1),
 		"First",
 		"Second",
 	)

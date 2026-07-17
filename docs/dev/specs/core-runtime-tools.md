@@ -114,7 +114,7 @@
 - Selecting freeform with empty input opens freeform editing; submitting from that path still requires non-empty commentary.
 - Returning to picker preserves a pending freeform draft as muted text.
 - Internal approval asks show only `Allow once`, `Allow for this session`, and `Deny`.
-- Internal approval commentary is injected through regular queued user-message steering; denial fails the guarded tool call authoritatively.
+- Internal approval commentary follows the selected decision: denial commentary accompanies only the typed approval answer, while allow commentary is queued as a regular user message before the approval answer. The allow queue and approval answer are separate operations; if the queue succeeds but its response is lost, a later submission can queue the commentary again. Denial fails the guarded tool call authoritatively.
 - Freeform ask input uses the same editor/cursor behavior as main input.
 - Source origin is not labeled in UI.
 - Answers are persisted as explicit summary text including selected option number and commentary.

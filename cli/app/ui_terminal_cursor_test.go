@@ -324,8 +324,7 @@ func TestInputCursorsUseSharedFieldDisplayWidth(t *testing.T) {
 			model := newProjectedStaticUIModel(WithUITerminalCursorState(state))
 			model.terminalGeometry = terminalGeometryKnown(12, 10)
 			if test.ask {
-				reply := make(chan askReply, 1)
-				event := testQuestionAskEvent("ask-1", "Question?", reply)
+				event := testQuestionAskEvent("ask-1", "Question?")
 				testSetActiveAsk(model, &event)
 				model.ask.input = "ab👍cd"
 				model.ask.inputCursor = 3

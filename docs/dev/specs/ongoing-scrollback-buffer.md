@@ -47,7 +47,7 @@
   - The last received event sequence number: one integer.
   - The active assistant stream: source text, its stream/step identity, its rendered rows, and the promotion boundary within them.
   - Mutable-band frame state: pending tool-call rows, spinner/animation state, input field, status line.
-  - One temporary active prompt-answer delivery, including the immutable submitted answer and cancellation ownership. The visible prompt editor remains operator-owned draft state and may diverge from that submitted answer for a future retry.
+  - One temporary active prompt-answer delivery, including the immutable submitted answer and cancellation ownership. The visible prompt editor remains operator-owned draft state and may diverge from that submitted answer for a future retry. Approval commentary queued before an allow answer belongs to the operator-input queue; denial commentary does not enter that queue.
   - The arrival-order queue of received-but-unrendered typed events, used only while the surface does not own the normal buffer, plus its rehydration-required marker after overflow.
   - Operator-owned UI-local state: input draft, editor cursor state, and prompt history capped at the 100 most recent entries. Prompt history must never grow unbounded; entries beyond the cap are discarded oldest-first.
   - The group register: the group kind of the most recently promoted row. One enum value.
