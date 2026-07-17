@@ -143,7 +143,7 @@ func TestListTasksUsesBoardCanceledTerminalNode(t *testing.T) {
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	boardTerminalNodeID := canceledBoardTerminalNodeID(def)
-	if boardTerminalNodeID == "" {
+	if boardTerminalNodeID == nil {
 		t.Fatal("workflow must have a board canceled-terminal node")
 	}
 	extraTerminalNodeID := workflow.NodeID("node-extra-terminal-" + string(workflowID))
@@ -164,7 +164,7 @@ func TestListTasksUsesBoardCanceledTerminalNode(t *testing.T) {
 	boardTerminalIndex, extraTerminalIndex := -1, -1
 	for index, column := range columns {
 		switch column.Node.NodeID {
-		case boardTerminalNodeID:
+		case *boardTerminalNodeID:
 			boardTerminalIndex = index
 		case string(extraTerminalNodeID):
 			extraTerminalIndex = index
@@ -189,7 +189,7 @@ func TestListTasksUsesBoardCanceledTerminalNode(t *testing.T) {
 		projectID: binding.ProjectID,
 		narrowed: &workflowTaskListNarrowedQueryFacts{
 			workflowID:             string(workflowID),
-			canceledTerminalNodeID: &boardTerminalNodeID,
+			canceledTerminalNodeID: boardTerminalNodeID,
 			columns:                columns,
 		},
 		limit: 2,
@@ -201,7 +201,7 @@ func TestListTasksUsesBoardCanceledTerminalNode(t *testing.T) {
 		t.Fatalf("canceled task rows = %+v", rows)
 	}
 	for _, column := range columns {
-		if column.Node.NodeID == boardTerminalNodeID && (*rows[0].item.ColumnKeys)[0] != column.Node.Key {
+		if column.Node.NodeID == *boardTerminalNodeID && (*rows[0].item.ColumnKeys)[0] != column.Node.Key {
 			t.Fatalf("canceled task column key = %q, want board terminal %q", (*rows[0].item.ColumnKeys)[0], column.Node.Key)
 		}
 	}
@@ -624,13 +624,13 @@ func TestListTasksSortAndCursorPagination(t *testing.T) {
 	changedProjectToken := token
 	changedProjectToken.Scope.ProjectID = "project-conflict"
 	invalidRequests := []serverapi.WorkflowTaskListRequest{
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageToken(invalidVersionToken)},
+		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, invalidVersionToken)},
 		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: firstPage.NextPageToken, StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog}},
 		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: firstPage.NextPageToken, Sort: []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldColumn, Direction: serverapi.WorkflowTaskListSortDirectionAsc}}},
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageToken(changedWorkflowVersionToken)},
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageToken(changedColumnStructureToken)},
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageToken(changedStatusModelToken)},
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageToken(changedProjectToken)},
+		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, changedWorkflowVersionToken)},
+		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, changedColumnStructureToken)},
+		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, changedStatusModelToken)},
+		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, changedProjectToken)},
 	}
 	for _, request := range invalidRequests {
 		_, err := view.ListTasks(ctx, request, testsetup.QuestionsEnabled("coder"))
@@ -1127,7 +1127,7 @@ func TestWorkflowTaskListPageTokenUsesTypedModeInvariants(t *testing.T) {
 		ProjectID:   "project-1",
 		ProjectWide: &workflowTaskListProjectWidePageTokenInvariants{},
 	}
-	parsed, ok, err := parseWorkflowTaskListPageToken(workflowTaskListPageToken(projectWide))
+	parsed, ok, err := parseWorkflowTaskListPageToken(workflowTaskListPageTokenForTest(t, projectWide))
 	if err != nil || !ok || parsed.Scope.ProjectWide == nil || parsed.Scope.Narrowed != nil {
 		t.Fatalf("parse project-wide token = %+v/%t/%v", parsed, ok, err)
 	}
@@ -1155,7 +1155,7 @@ func TestWorkflowTaskListPageTokenUsesTypedModeInvariants(t *testing.T) {
 			ColumnStructureHash: "columns",
 		},
 	}
-	parsed, ok, err = parseWorkflowTaskListPageToken(workflowTaskListPageToken(narrowed))
+	parsed, ok, err = parseWorkflowTaskListPageToken(workflowTaskListPageTokenForTest(t, narrowed))
 	if err != nil || !ok || parsed.Scope.ProjectWide != nil || parsed.Scope.Narrowed == nil {
 		t.Fatalf("parse narrowed token = %+v/%t/%v", parsed, ok, err)
 	}
@@ -1235,29 +1235,83 @@ func TestWorkflowTaskListPageTokenRejectsMalformedModeAndCardinality(t *testing.
 		"malformed workflow id":    malformedWorkflowID,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, _, err := parseWorkflowTaskListPageToken(workflowTaskListPageToken(payload)); !errors.Is(err, ErrInvalidPageToken) {
+			if _, _, err := parseWorkflowTaskListPageToken(workflowTaskListPageTokenForTest(t, payload)); !errors.Is(err, ErrInvalidPageToken) {
 				t.Fatalf("parse malformed token error = %v, want ErrInvalidPageToken", err)
 			}
 		})
 	}
 }
 
+func workflowTaskListPageTokenForTest(t *testing.T, payload workflowTaskListPageTokenPayload) string {
+	t.Helper()
+	token, err := workflowTaskListPageToken(payload)
+	if err != nil {
+		t.Fatalf("workflowTaskListPageToken: %v", err)
+	}
+	return token
+}
+
 func TestWorkflowTaskListRequestFingerprintCanonicalizesSetFilters(t *testing.T) {
 	sortSelectors := []serverapi.WorkflowTaskListSort{
 		{Field: serverapi.WorkflowTaskListSortFieldStatus, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
 	}
-	first := workflowTaskListRequestFingerprint(serverapi.WorkflowTaskListRequest{
+	first, err := workflowTaskListRequestFingerprint(serverapi.WorkflowTaskListRequest{
 		ColumnKeys:     []string{"done", "backlog", "done"},
 		StatusKinds:    []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindRunning, serverapi.WorkflowTaskStatusKindBacklog, serverapi.WorkflowTaskStatusKindRunning},
 		AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindQuestion, serverapi.WorkflowTaskAttentionKindApproval},
-	}, sortSelectors, "columns")
-	second := workflowTaskListRequestFingerprint(serverapi.WorkflowTaskListRequest{
+	}, sortSelectors, workflowTaskListFingerprintScope{
+		Narrowed: &workflowTaskListNarrowedFingerprintInvariants{ColumnStructureHash: "columns"},
+	})
+	if err != nil {
+		t.Fatalf("first fingerprint: %v", err)
+	}
+	second, err := workflowTaskListRequestFingerprint(serverapi.WorkflowTaskListRequest{
 		ColumnKeys:     []string{"backlog", "done"},
 		StatusKinds:    []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog, serverapi.WorkflowTaskStatusKindRunning},
 		AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindApproval, serverapi.WorkflowTaskAttentionKindQuestion},
-	}, sortSelectors, "columns")
+	}, sortSelectors, workflowTaskListFingerprintScope{
+		Narrowed: &workflowTaskListNarrowedFingerprintInvariants{ColumnStructureHash: "columns"},
+	})
+	if err != nil {
+		t.Fatalf("second fingerprint: %v", err)
+	}
 	if first != second {
 		t.Fatalf("canonical fingerprints differ: %q != %q", first, second)
+	}
+}
+
+func TestWorkflowTaskListRequestFingerprintRequiresOneTypedScope(t *testing.T) {
+	request := serverapi.WorkflowTaskListRequest{}
+	sortSelectors := normalizeWorkflowTaskListSort(nil)
+	for name, scope := range map[string]workflowTaskListFingerprintScope{
+		"missing mode": {},
+		"both modes": {
+			ProjectWide: &workflowTaskListProjectWideFingerprintInvariants{},
+			Narrowed:    &workflowTaskListNarrowedFingerprintInvariants{ColumnStructureHash: "columns"},
+		},
+		"blank narrowed hash": {
+			Narrowed: &workflowTaskListNarrowedFingerprintInvariants{},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := workflowTaskListRequestFingerprint(request, sortSelectors, scope); err == nil {
+				t.Fatalf("workflowTaskListRequestFingerprint accepted %s", name)
+			}
+		})
+	}
+}
+
+func TestCanceledBoardTerminalNodeIDUsesTypedAbsence(t *testing.T) {
+	if got := canceledBoardTerminalNodeID(serverapi.WorkflowDefinition{}); got != nil {
+		t.Fatalf("canceledBoardTerminalNodeID without terminal = %v, want nil", got)
+	}
+	def := serverapi.WorkflowDefinition{Nodes: []serverapi.WorkflowNode{
+		{ID: "node-terminal", Key: "archive", Kind: string(workflow.NodeKindTerminal)},
+		{ID: "node-done", Key: "done", Kind: string(workflow.NodeKindTerminal)},
+	}}
+	got := canceledBoardTerminalNodeID(def)
+	if got == nil || *got != "node-done" {
+		t.Fatalf("canceledBoardTerminalNodeID = %v, want done terminal", got)
 	}
 }
 

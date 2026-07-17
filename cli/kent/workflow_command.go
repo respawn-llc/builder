@@ -292,7 +292,10 @@ func workflowListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	if err := validateWorkflowListProjectMetadata(projectID, response.ProjectID, workflows); err != nil {
+	if err := validateWorkflowListProjectMetadata(workflowListExpectedScope{
+		ProjectID:      projectID,
+		TokenOwnsScope: projectID == nil && strings.TrimSpace(*pageToken) != "",
+	}, response.ProjectID, workflows); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
@@ -312,8 +315,13 @@ func workflowListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 	return 0
 }
 
-func validateWorkflowListProjectMetadata(expectedProjectID *string, responseProjectID *string, workflows []serverapi.WorkflowRecord) error {
-	if expectedProjectID == nil {
+type workflowListExpectedScope struct {
+	ProjectID      *string
+	TokenOwnsScope bool
+}
+
+func validateWorkflowListProjectMetadata(expected workflowListExpectedScope, responseProjectID *string, workflows []serverapi.WorkflowRecord) error {
+	if expected.ProjectID == nil && !expected.TokenOwnsScope {
 		if responseProjectID != nil {
 			return fmt.Errorf("global workflow list response unexpectedly contains project_id %q", *responseProjectID)
 		}
@@ -324,11 +332,30 @@ func validateWorkflowListProjectMetadata(expectedProjectID *string, responseProj
 		}
 		return nil
 	}
+	if expected.ProjectID == nil {
+		if responseProjectID == nil {
+			for _, workflow := range workflows {
+				if workflow.ProjectLink != nil {
+					return fmt.Errorf("global workflow list continuation workflow %q contains project_link metadata", workflow.ID)
+				}
+			}
+			return nil
+		}
+		if strings.TrimSpace(*responseProjectID) == "" {
+			return errors.New("project workflow list continuation response has blank project_id")
+		}
+		for _, workflow := range workflows {
+			if workflow.ProjectLink == nil {
+				return fmt.Errorf("project workflow list continuation workflow %q is missing project_link metadata", workflow.ID)
+			}
+		}
+		return nil
+	}
 	if responseProjectID == nil || strings.TrimSpace(*responseProjectID) == "" {
 		return errors.New("project workflow list response is missing project_id")
 	}
-	if *responseProjectID != *expectedProjectID {
-		return fmt.Errorf("project workflow list response project %q does not match requested project %q", *responseProjectID, *expectedProjectID)
+	if *responseProjectID != *expected.ProjectID {
+		return fmt.Errorf("project workflow list response project %q does not match requested project %q", *responseProjectID, *expected.ProjectID)
 	}
 	for _, workflow := range workflows {
 		if workflow.ProjectLink == nil {
@@ -1033,7 +1060,7 @@ func workflowInspectSubcommand(args []string, stdout io.Writer, stderr io.Writer
 			fmt.Fprintln(stderr, projectionErr)
 			return 1
 		}
-		if scopeErr := validateWorkflowListProjectMetadata(nil, response.ProjectID, workflows); scopeErr != nil {
+		if scopeErr := validateWorkflowListProjectMetadata(workflowListExpectedScope{}, response.ProjectID, workflows); scopeErr != nil {
 			fmt.Fprintln(stderr, scopeErr)
 			return 1
 		}

@@ -203,11 +203,24 @@ func (s *Service) ListTasks(ctx context.Context, req serverapi.WorkflowTaskListR
 		}
 	}
 	sortSelectors := normalizeWorkflowTaskListSort(req.Sort)
-	columnStructureHash := ""
-	if workflowID != nil {
-		columnStructureHash = workflowTaskListColumnStructureHash(def, columns)
+	fingerprintScope := workflowTaskListFingerprintScope{
+		ProjectWide: &workflowTaskListProjectWideFingerprintInvariants{},
 	}
-	fingerprint := workflowTaskListRequestFingerprint(req, sortSelectors, columnStructureHash)
+	var columnStructureHash *string
+	if workflowID != nil {
+		value, hashErr := workflowTaskListColumnStructureHash(def, columns)
+		if hashErr != nil {
+			return serverapi.WorkflowTaskListResponse{}, hashErr
+		}
+		columnStructureHash = &value
+		fingerprintScope = workflowTaskListFingerprintScope{
+			Narrowed: &workflowTaskListNarrowedFingerprintInvariants{ColumnStructureHash: value},
+		}
+	}
+	fingerprint, err := workflowTaskListRequestFingerprint(req, sortSelectors, fingerprintScope)
+	if err != nil {
+		return serverapi.WorkflowTaskListResponse{}, err
+	}
 	cursor := workflowTaskListCursor{}
 	matchingWorkflowCardinality := serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone
 	if hasPageToken {
@@ -225,7 +238,8 @@ func (s *Service) ListTasks(ctx context.Context, req serverapi.WorkflowTaskListR
 			if narrowed == nil ||
 				narrowed.WorkflowID != *workflowID ||
 				narrowed.WorkflowVersion != def.Workflow.Version ||
-				narrowed.ColumnStructureHash != columnStructureHash {
+				columnStructureHash == nil ||
+				narrowed.ColumnStructureHash != *columnStructureHash {
 				return serverapi.WorkflowTaskListResponse{}, ErrInvalidPageToken
 			}
 		}
@@ -234,13 +248,9 @@ func (s *Service) ListTasks(ctx context.Context, req serverapi.WorkflowTaskListR
 	}
 	var narrowedQuery *workflowTaskListNarrowedQueryFacts
 	if workflowID != nil {
-		var canceledTerminalNodeID *string
-		if value := canceledBoardTerminalNodeID(def); value != "" {
-			canceledTerminalNodeID = &value
-		}
 		narrowedQuery = &workflowTaskListNarrowedQueryFacts{
 			workflowID:             *workflowID,
-			canceledTerminalNodeID: canceledTerminalNodeID,
+			canceledTerminalNodeID: canceledBoardTerminalNodeID(def),
 			columns:                columns,
 			columnKeys:             req.ColumnKeys,
 		}
@@ -282,10 +292,10 @@ func (s *Service) ListTasks(ctx context.Context, req serverapi.WorkflowTaskListR
 			tokenScope.Narrowed = &workflowTaskListNarrowedPageTokenInvariants{
 				WorkflowID:          *workflowID,
 				WorkflowVersion:     def.Workflow.Version,
-				ColumnStructureHash: columnStructureHash,
+				ColumnStructureHash: *columnStructureHash,
 			}
 		}
-		nextPageToken = workflowTaskListPageToken(workflowTaskListPageTokenPayload{
+		nextPageToken, err = workflowTaskListPageToken(workflowTaskListPageTokenPayload{
 			Version:                     workflowTaskListPageTokenVersion,
 			Scope:                       tokenScope,
 			MatchingWorkflowCardinality: matchingWorkflowCardinality,
@@ -293,6 +303,9 @@ func (s *Service) ListTasks(ctx context.Context, req serverapi.WorkflowTaskListR
 			Fingerprint:                 fingerprint,
 			Cursor:                      workflowTaskListCursorFromRow(pageItems[len(pageItems)-1]),
 		})
+		if err != nil {
+			return serverapi.WorkflowTaskListResponse{}, err
+		}
 	}
 	return serverapi.WorkflowTaskListResponse{
 		Scope: serverapi.WorkflowTaskListScope{
@@ -465,7 +478,7 @@ func (s *Service) ListBoardNodeCards(ctx context.Context, req serverapi.Workflow
 		CursorUpdatedAtUnixMs:  cursorUpdatedAtUnixMs,
 		CursorTaskID:           cursorTaskID,
 		NodeID:                 sql.NullString{String: nodeID, Valid: true},
-		CanceledTerminalNodeID: canceledBoardTerminalNodeID(def),
+		CanceledTerminalNodeID: nullableWorkflowViewString(canceledBoardTerminalNodeID(def)),
 		LimitRows:              int64(pageSize + 1),
 	})
 	if err != nil {
@@ -2357,11 +2370,11 @@ func workflowDerivedEdgeWiringByID(derived serverapi.WorkflowDerivedWiring) map[
 	return byID
 }
 
-func (s *Service) applyBoardColumnTaskCounts(ctx context.Context, columns []serverapi.WorkflowBoardColumn, projectID string, workflowID string, canceledTerminalNodeID string) error {
+func (s *Service) applyBoardColumnTaskCounts(ctx context.Context, columns []serverapi.WorkflowBoardColumn, projectID string, workflowID string, canceledTerminalNodeID *string) error {
 	rows, err := s.queries.ListBoardColumnTaskCounts(ctx, sqlitegen.ListBoardColumnTaskCountsParams{
 		ProjectID:              projectID,
 		WorkflowID:             workflowID,
-		CanceledTerminalNodeID: canceledTerminalNodeID,
+		CanceledTerminalNodeID: nullableWorkflowViewString(canceledTerminalNodeID),
 	})
 	if err != nil {
 		return err
@@ -2380,6 +2393,13 @@ func (s *Service) applyBoardColumnTaskCounts(ctx context.Context, columns []serv
 		}
 	}
 	return nil
+}
+
+func nullableWorkflowViewString(value *string) sql.NullString {
+	if value == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: *value, Valid: true}
 }
 
 func effectiveBoardPlacements(placements []sqlitegen.TaskNodePlacementRecord, nodeKinds map[string]workflow.NodeKind) []sqlitegen.TaskNodePlacementRecord {
@@ -2409,7 +2429,7 @@ func effectiveBoardPlacementsForTask(task sqlitegen.TaskRecord, placements []sql
 		return active
 	}
 	terminalNodeID := canceledBoardTerminalNodeID(def)
-	if terminalNodeID == "" {
+	if terminalNodeID == nil {
 		return active
 	}
 	terminalPlacements := make([]sqlitegen.TaskNodePlacementRecord, 0, len(active))
@@ -2425,24 +2445,26 @@ func effectiveBoardPlacementsForTask(task sqlitegen.TaskRecord, placements []sql
 	return []sqlitegen.TaskNodePlacementRecord{{
 		ID:              "",
 		TaskID:          task.ID,
-		NodeID:          sql.NullString{String: terminalNodeID, Valid: true},
+		NodeID:          sql.NullString{String: *terminalNodeID, Valid: true},
 		State:           "active",
 		CreatedAtUnixMs: task.UpdatedAtUnixMs,
 		UpdatedAtUnixMs: task.UpdatedAtUnixMs,
 	}}
 }
 
-func canceledBoardTerminalNodeID(def serverapi.WorkflowDefinition) string {
-	fallback := ""
+func canceledBoardTerminalNodeID(def serverapi.WorkflowDefinition) *string {
+	var fallback *string
 	for _, node := range def.Nodes {
 		if workflow.NodeKind(node.Kind) != workflow.NodeKindTerminal {
 			continue
 		}
-		if fallback == "" {
-			fallback = node.ID
+		if fallback == nil {
+			value := node.ID
+			fallback = &value
 		}
 		if node.Key == "done" {
-			return node.ID
+			value := node.ID
+			return &value
 		}
 	}
 	return fallback

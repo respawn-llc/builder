@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -111,15 +112,34 @@ func workflowTaskListContinuationCardinalityValid(cardinality serverapi.Workflow
 		cardinality == serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple
 }
 
-func workflowTaskListPageToken(payload workflowTaskListPageTokenPayload) string {
+func workflowTaskListPageToken(payload workflowTaskListPageTokenPayload) (string, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("marshal task list page token: %w", err)
 	}
-	return base64.RawURLEncoding.EncodeToString(raw)
+	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
-func workflowTaskListRequestFingerprint(req serverapi.WorkflowTaskListRequest, sortSelectors []serverapi.WorkflowTaskListSort, columnStructureHash string) string {
+type workflowTaskListProjectWideFingerprintInvariants struct{}
+
+type workflowTaskListNarrowedFingerprintInvariants struct {
+	ColumnStructureHash string `json:"column_structure_hash"`
+}
+
+type workflowTaskListFingerprintScope struct {
+	ProjectWide *workflowTaskListProjectWideFingerprintInvariants `json:"project_wide,omitempty"`
+	Narrowed    *workflowTaskListNarrowedFingerprintInvariants    `json:"narrowed,omitempty"`
+}
+
+func workflowTaskListRequestFingerprint(req serverapi.WorkflowTaskListRequest, sortSelectors []serverapi.WorkflowTaskListSort, scope workflowTaskListFingerprintScope) (string, error) {
+	if (scope.ProjectWide == nil) == (scope.Narrowed == nil) {
+		return "", errors.New("task list fingerprint requires exactly one scope mode")
+	}
+	if scope.Narrowed != nil &&
+		(strings.TrimSpace(scope.Narrowed.ColumnStructureHash) == "" ||
+			strings.TrimSpace(scope.Narrowed.ColumnStructureHash) != scope.Narrowed.ColumnStructureHash) {
+		return "", errors.New("task list narrowed fingerprint requires column structure hash")
+	}
 	statusKinds := make([]string, 0, len(req.StatusKinds))
 	for _, kind := range req.StatusKinds {
 		statusKinds = append(statusKinds, string(kind))
@@ -129,34 +149,48 @@ func workflowTaskListRequestFingerprint(req serverapi.WorkflowTaskListRequest, s
 		attentionKinds = append(attentionKinds, string(kind))
 	}
 	payload := struct {
-		ColumnKeys          []string                         `json:"column_keys"`
-		StatusKinds         []string                         `json:"status_kinds"`
-		AttentionKinds      []string                         `json:"attention_kinds"`
-		Sort                []serverapi.WorkflowTaskListSort `json:"sort"`
-		ColumnStructureHash string                           `json:"column_structure_hash"`
-		StatusModelVersion  int                              `json:"status_model_version"`
+		ColumnKeys         []string                         `json:"column_keys"`
+		StatusKinds        []string                         `json:"status_kinds"`
+		AttentionKinds     []string                         `json:"attention_kinds"`
+		Sort               []serverapi.WorkflowTaskListSort `json:"sort"`
+		Scope              workflowTaskListFingerprintScope `json:"scope"`
+		StatusModelVersion int                              `json:"status_model_version"`
 	}{
-		ColumnKeys:          dedupeSortedStrings(req.ColumnKeys),
-		StatusKinds:         dedupeSortedStrings(statusKinds),
-		AttentionKinds:      dedupeSortedStrings(attentionKinds),
-		Sort:                sortSelectors,
-		ColumnStructureHash: columnStructureHash,
-		StatusModelVersion:  workflowTaskStatusModelVersion,
+		ColumnKeys:         dedupeSortedStrings(req.ColumnKeys),
+		StatusKinds:        dedupeSortedStrings(statusKinds),
+		AttentionKinds:     dedupeSortedStrings(attentionKinds),
+		Sort:               sortSelectors,
+		Scope:              scope,
+		StatusModelVersion: workflowTaskStatusModelVersion,
 	}
-	raw, _ := json.Marshal(payload)
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal task list fingerprint: %w", err)
+	}
 	sum := sha256.Sum256(raw)
-	return base64.RawURLEncoding.EncodeToString(sum[:])
+	return base64.RawURLEncoding.EncodeToString(sum[:]), nil
 }
 
-func workflowTaskListColumnStructureHash(def serverapi.WorkflowDefinition, columns []serverapi.WorkflowBoardColumn) string {
-	parts := make([]string, 0, len(columns)+1)
+func workflowTaskListColumnStructureHash(def serverapi.WorkflowDefinition, columns []serverapi.WorkflowBoardColumn) (string, error) {
+	columnFacts := make([]string, 0, len(columns))
 	for _, column := range columns {
-		parts = append(parts, strings.Join([]string{column.Node.NodeID, column.Node.Key, column.Node.Kind, strconv.Itoa(column.SortOrder), strconv.FormatBool(column.IsBacklog), strconv.FormatBool(column.IsDone)}, "\x00"))
+		columnFacts = append(columnFacts, strings.Join([]string{column.Node.NodeID, column.Node.Key, column.Node.Kind, strconv.Itoa(column.SortOrder), strconv.FormatBool(column.IsBacklog), strconv.FormatBool(column.IsDone)}, "\x00"))
 	}
-	parts = append(parts, "status-model:"+strconv.Itoa(workflowTaskStatusModelVersion))
-	parts = append(parts, "canceled:"+canceledBoardTerminalNodeID(def))
-	sum := sha256.Sum256([]byte(strings.Join(parts, "\x01")))
-	return base64.RawURLEncoding.EncodeToString(sum[:])
+	payload := struct {
+		Columns                []string `json:"columns"`
+		StatusModelVersion     int      `json:"status_model_version"`
+		CanceledTerminalNodeID *string  `json:"canceled_terminal_node_id"`
+	}{
+		Columns:                columnFacts,
+		StatusModelVersion:     workflowTaskStatusModelVersion,
+		CanceledTerminalNodeID: canceledBoardTerminalNodeID(def),
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal task list column structure: %w", err)
+	}
+	sum := sha256.Sum256(raw)
+	return base64.RawURLEncoding.EncodeToString(sum[:]), nil
 }
 
 func dedupeSortedStrings(values []string) []string {

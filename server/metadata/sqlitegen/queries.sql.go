@@ -3845,7 +3845,7 @@ WITH effective_board_placements AS (
       AND (
           t.canceled_at_unix_ms IS NULL
           OR n.kind = 'terminal'
-          OR trim(?3) = ''
+          OR ?3 IS NULL
       )
     UNION
     SELECT
@@ -3855,7 +3855,7 @@ WITH effective_board_placements AS (
     WHERE t.project_id = ?1
       AND t.workflow_id = ?2
       AND t.canceled_at_unix_ms IS NOT NULL
-      AND trim(?3) != ''
+      AND ?3 IS NOT NULL
       AND NOT EXISTS (
           SELECT 1
           FROM task_node_placements p
@@ -3875,7 +3875,7 @@ WITH effective_board_placements AS (
       AND t.workflow_id = ?2
       AND (
           t.canceled_at_unix_ms IS NULL
-          OR trim(?3) = ''
+          OR ?3 IS NULL
       )
       AND trim(tt.source_node_id) != ''
 )
@@ -3890,7 +3890,7 @@ ORDER BY node_id ASC
 type ListBoardColumnTaskCountsParams struct {
 	ProjectID              string
 	WorkflowID             string
-	CanceledTerminalNodeID string
+	CanceledTerminalNodeID interface{}
 }
 
 type ListBoardColumnTaskCountsRow struct {
@@ -7410,6 +7410,7 @@ SELECT
               AND project_workflow_link_records.workflow_id = workflows.id
         )
     END AS project_link_default
+    , lower(workflows.name) AS project_name_order_key
 FROM workflows
 WHERE (?2 IS NULL OR workflows.id = ?2)
   AND (
@@ -7541,6 +7542,7 @@ type ListWorkflowRecordsPageRow struct {
 	UpdatedAtUnixMs          int64
 	ActivityAtUnixMs         int64
 	ProjectLinkDefault       interface{}
+	ProjectNameOrderKey      string
 }
 
 func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowRecordsPageParams) ([]ListWorkflowRecordsPageRow, error) {
@@ -7573,6 +7575,7 @@ func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowR
 			&i.UpdatedAtUnixMs,
 			&i.ActivityAtUnixMs,
 			&i.ProjectLinkDefault,
+			&i.ProjectNameOrderKey,
 		); err != nil {
 			return nil, err
 		}

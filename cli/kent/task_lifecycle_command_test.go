@@ -190,6 +190,42 @@ func TestTaskCreateTypedSelectionErrorsUseResolvedCommandContext(t *testing.T) {
 	}
 }
 
+func TestTaskCreateSerializationConflictPrintsRetryCommand(t *testing.T) {
+	cfg, binding, loopback := newWorkflowCommandLoopback(t)
+	remote := &taskCreateSelectionErrorRemote{
+		workflowCommandRemote: loopback,
+		createErr: &serverapi.WorkflowTaskCreateConflictError{
+			Reason: serverapi.WorkflowTaskCreateConflictReasonSerialization,
+		},
+	}
+	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+	defer restore()
+
+	stdout, stderr, code := runWorkflowRootCommand(
+		"task", "create",
+		"--project", binding.ProjectID,
+		"--title", "Concurrent task",
+		"--body", "Body",
+		"--json",
+	)
+	if code != 1 || stdout != "" {
+		t.Fatalf("task create conflict exit=%d stdout=%q, want retryable failure", code, stdout)
+	}
+	retryCommand := commandString(taskCreateRetryCommandArgs(taskCreateCommandContext{
+		ProjectRef:        binding.ProjectID,
+		ResolvedProjectID: binding.ProjectID,
+		Title:             "Concurrent task",
+		Body:              "Body",
+		JSON:              true,
+	}, nil))
+	if !strings.Contains(stderr, retryCommand) {
+		t.Fatalf("task create conflict stderr = %q, want retry command %q", stderr, retryCommand)
+	}
+	if strings.Contains(stderr, string(serverapi.WorkflowTaskCreateConflictReasonSerialization)) {
+		t.Fatalf("task create conflict stderr = %q, want operator guidance without raw reason code", stderr)
+	}
+}
+
 type taskCreateSelectionErrorRemote struct {
 	workflowCommandRemote
 	createErr error

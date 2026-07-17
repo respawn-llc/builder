@@ -749,7 +749,7 @@ func TestWorkflowListRejectsResponseScopeMismatch(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := validateWorkflowListProjectMetadata(testCase.expected, testCase.response, testCase.records); err == nil {
+			if err := validateWorkflowListProjectMetadata(workflowListExpectedScope{ProjectID: testCase.expected}, testCase.response, testCase.records); err == nil {
 				t.Fatalf("validateWorkflowListProjectMetadata(%s) accepted mismatched response scope", name)
 			}
 		})
@@ -774,7 +774,7 @@ func TestWorkflowListProjectContinuationPreservesScopeAndJSONShape(t *testing.T)
 	if first.ProjectID == nil || first.NextPageToken == "" || len(first.Workflows) != 1 {
 		t.Fatalf("first project page = %+v, want one row and continuation", first)
 	}
-	secondOut, secondErr, code := runWorkflowRootCommand("workflow", "list", "--project", binding.ProjectID, "--page-size", "1", "--page-token", first.NextPageToken, "--json")
+	secondOut, secondErr, code := runWorkflowRootCommand("workflow", "list", "--page-size", "1", "--page-token", first.NextPageToken, "--json")
 	if code != 0 {
 		t.Fatalf("workflow list second project page exit=%d stderr=%q", code, secondErr)
 	}
@@ -786,8 +786,8 @@ func TestWorkflowListProjectContinuationPreservesScopeAndJSONShape(t *testing.T)
 		t.Fatalf("second project page = %+v, want restored project context", second)
 	}
 	requests := remote.ListRequests()
-	if len(requests) != 2 || requests[1].PageToken != first.NextPageToken || requests[1].ProjectID == nil || *requests[1].ProjectID != binding.ProjectID {
-		t.Fatalf("continuation requests = %+v, want project-bound token replay", requests)
+	if len(requests) != 2 || requests[1].PageToken != first.NextPageToken || requests[1].ProjectID != nil {
+		t.Fatalf("continuation requests = %+v, want token-owned project scope", requests)
 	}
 }
 

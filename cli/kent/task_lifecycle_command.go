@@ -115,6 +115,18 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 }
 
 func writeTaskCreateError(stderr io.Writer, err error, commandContext taskCreateCommandContext) {
+	var conflictErr *serverapi.WorkflowTaskCreateConflictError
+	if errors.As(err, &conflictErr) {
+		switch conflictErr.Reason {
+		case serverapi.WorkflowTaskCreateConflictReasonSerialization:
+			retryCommand := taskCreateRetryCommandArgs(commandContext, commandContext.SelectedWorkflowID)
+			fmt.Fprintln(stderr, "Task creation conflicted with a concurrent update. This failure is retryable; no task was created.")
+			fmt.Fprintf(stderr, "  %s\n", commandString(retryCommand))
+		default:
+			fmt.Fprintln(stderr, err)
+		}
+		return
+	}
 	var selectionErr *serverapi.WorkflowTaskCreateSelectionError
 	if !errors.As(err, &selectionErr) {
 		fmt.Fprintln(stderr, err)

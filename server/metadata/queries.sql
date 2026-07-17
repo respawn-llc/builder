@@ -214,6 +214,7 @@ SELECT
               AND project_workflow_link_records.workflow_id = workflows.id
         )
     END AS project_link_default
+    , lower(workflows.name) AS project_name_order_key
 FROM workflows
 WHERE (sqlc.narg(workflow_id) IS NULL OR workflows.id = sqlc.narg(workflow_id))
   AND (
@@ -1450,17 +1451,17 @@ WITH effective_board_placements AS (
       AND (
           t.canceled_at_unix_ms IS NULL
           OR n.kind = 'terminal'
-          OR trim(sqlc.arg(canceled_terminal_node_id)) = ''
+          OR sqlc.narg(canceled_terminal_node_id) IS NULL
       )
     UNION
     SELECT
         t.id AS task_id,
-        sqlc.arg(canceled_terminal_node_id) AS node_id
+        sqlc.narg(canceled_terminal_node_id) AS node_id
     FROM task_records t
     WHERE t.project_id = sqlc.arg(project_id)
       AND t.workflow_id = sqlc.arg(workflow_id)
       AND t.canceled_at_unix_ms IS NOT NULL
-      AND trim(sqlc.arg(canceled_terminal_node_id)) != ''
+      AND sqlc.narg(canceled_terminal_node_id) IS NOT NULL
       AND NOT EXISTS (
           SELECT 1
           FROM task_node_placements p
@@ -1480,7 +1481,7 @@ WITH effective_board_placements AS (
       AND t.workflow_id = sqlc.arg(workflow_id)
       AND (
           t.canceled_at_unix_ms IS NULL
-          OR trim(sqlc.arg(canceled_terminal_node_id)) = ''
+          OR sqlc.narg(canceled_terminal_node_id) IS NULL
       )
       AND trim(tt.source_node_id) != ''
 )

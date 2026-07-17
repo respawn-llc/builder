@@ -407,6 +407,24 @@ func TestWorkflowListPageTokenRejectsMalformedOptionalScope(t *testing.T) {
 			payload.ProjectDefault = &projectDefault
 			payload.ProjectName = &projectName
 		},
+		"padded project name": func(payload *workflowListPageTokenPayload) {
+			payload.ProjectID = &validProjectID
+			payload.ProjectDefault = &projectDefault
+			value := " workflow"
+			payload.ProjectName = &value
+		},
+		"non-canonical project name": func(payload *workflowListPageTokenPayload) {
+			payload.ProjectID = &validProjectID
+			payload.ProjectDefault = &projectDefault
+			value := "Workflow"
+			payload.ProjectName = &value
+		},
+		"padded search query": func(payload *workflowListPageTokenPayload) {
+			payload.SearchQuery = " workflow "
+		},
+		"non-canonical search query": func(payload *workflowListPageTokenPayload) {
+			payload.SearchQuery = "Workflow"
+		},
 		"blank exact workflow filter": func(payload *workflowListPageTokenPayload) {
 			value := ""
 			payload.FilterWorkflowID = &value
@@ -513,6 +531,32 @@ func TestWorkflowListProjectScopeOrdersDefaultActivityAndName(t *testing.T) {
 	otherProject := "project-other"
 	if _, err := store.ListWorkflows(ctx, ListWorkflowsRequest{ProjectID: &otherProject, PageToken: page1.NextPageToken}); err == nil {
 		t.Fatal("project cursor accepted conflicting project filter")
+	}
+}
+
+func TestWorkflowListProjectScopeUsesSQLiteUnicodeOrderKeyAcrossPages(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	for _, name := range []string{"Äworkflow", "Öworkflow"} {
+		record, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: name})
+		if err != nil {
+			t.Fatalf("CreateWorkflow %q: %v", name, err)
+		}
+		linkWorkflow(t, ctx, store, binding.ProjectID, record.ID, false)
+	}
+	projectID := binding.ProjectID
+	first, err := store.ListWorkflows(ctx, ListWorkflowsRequest{ProjectID: &projectID, PageSize: 1})
+	if err != nil {
+		t.Fatalf("ListWorkflows first page: %v", err)
+	}
+	if len(first.Workflows) != 1 || first.NextPageToken == "" {
+		t.Fatalf("first page = %+v, want one row and continuation", first)
+	}
+	second, err := store.ListWorkflows(ctx, ListWorkflowsRequest{PageToken: first.NextPageToken, PageSize: 1})
+	if err != nil {
+		t.Fatalf("ListWorkflows second page: %v", err)
+	}
+	if len(second.Workflows) != 1 || second.Workflows[0].ID == first.Workflows[0].ID {
+		t.Fatalf("paginated workflows first=%+v second=%+v, want distinct complete rows", first.Workflows, second.Workflows)
 	}
 }
 
