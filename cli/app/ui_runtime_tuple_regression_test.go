@@ -115,6 +115,50 @@ func TestRuntimeMainViewRefreshCommitsOnlyWhenReducerHandlesCandidate(t *testing
 	}
 }
 
+func TestRuntimeMainViewRefreshPreservesMetadataChangedAfterRequestStarted(t *testing.T) {
+	v10 := runtimeTupleTestView(10, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
+	v10.Status = clientui.RuntimeStatus{
+		ReviewerFrequency: "stale unary reviewer",
+		ThinkingLevel:     "stale unary thinking",
+	}
+	reads := &countingSessionViewClient{view: v10}
+	runtimeClient := newTestSessionRuntimeClient(reads, runtimecontrol.NewService(registry.NewRuntimeRegistry()))
+	v9 := runtimeTupleTestView(9, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationSubmitted))
+	v9.Status = clientui.RuntimeStatus{ReviewerFrequency: "initial", ThinkingLevel: "initial"}
+	runtimeClient.storeMainView(v9)
+	m := newProjectedTestUIModel(runtimeClient)
+
+	decision := m.startRuntimeMainViewRefreshRequest(runtimeMainViewRefreshRequestForCause(runtimeMainViewRefreshCauseManual))
+	msg, ok := decision.cmd().(runtimeMainViewRefreshedMsg)
+	if !ok {
+		t.Fatal("refresh command returned an unexpected message")
+	}
+	statusMessage := clientui.TranscriptMessage{
+		Kind: clientui.TranscriptMessageSessionStatus,
+		Payload: clientui.TranscriptPayload{SessionStatus: &clientui.TranscriptSessionStatus{
+			ReviewerFrequency: "fresh transcript reviewer",
+			ThinkingLevel:     "fresh transcript thinking",
+			CompactionMode:    "auto",
+		}},
+	}
+	admission, err := runtimeClient.admitTranscriptMessageState(statusMessage)
+	if err != nil {
+		t.Fatalf("admit transcript status: %v", err)
+	}
+	m.applyAdmittedTranscriptMessageState(statusMessage, admission)
+
+	m.handleRuntimeMainViewRefreshed(msg)
+
+	got := runtimeClient.MainView()
+	assertRuntimeTupleView(t, got, v10)
+	if got.Status.ReviewerFrequency != "fresh transcript reviewer" || got.Status.ThinkingLevel != "fresh transcript thinking" {
+		t.Fatalf("stale unary response replaced newer metadata: %+v", got.Status)
+	}
+	if m.reviewerMode != "fresh transcript reviewer" || m.thinkingLevel != "fresh transcript thinking" {
+		t.Fatalf("UI projected stale unary metadata: reviewer=%q thinking=%q", m.reviewerMode, m.thinkingLevel)
+	}
+}
+
 func runtimeTupleTestView(
 	sequence uint64,
 	activity clientui.RuntimeActivity,

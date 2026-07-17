@@ -30,9 +30,10 @@ type sessionRuntimeClient struct {
 	connectionStateObserver  func(error)
 	reconnectWarningObserver func(string, clientui.EntryVisibility)
 
-	mu          sync.RWMutex
-	mainView    clientui.RuntimeMainView
-	hasMainView bool
+	mu               sync.RWMutex
+	mainView         clientui.RuntimeMainView
+	hasMainView      bool
+	metadataRevision uint64
 }
 
 func newUIRuntimeClientWithReads(sessionID string, reads apicontract.SessionViewService, controls apicontract.RuntimeControlService) clientui.RuntimeClient {

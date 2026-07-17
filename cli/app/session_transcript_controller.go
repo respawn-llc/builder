@@ -181,6 +181,12 @@ func (c *ongoingTranscriptController) commitDelivery(message clientui.Transcript
 	c.lastSequence = message.Sequence
 }
 
+func (c *ongoingTranscriptController) acceptedHydration(message clientui.TranscriptMessage) bool {
+	return message.Kind == clientui.TranscriptMessageHydration &&
+		c.hydrated &&
+		c.lastSequence == message.Sequence
+}
+
 func (c *ongoingTranscriptController) requestScratchRehydration() {
 	c.queue = nil
 	c.queueOverflowed = true

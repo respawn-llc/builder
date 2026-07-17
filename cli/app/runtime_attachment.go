@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -47,14 +46,6 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 		_ = runtimeattach.Release(clients.SessionRuntime, plan.SessionID, ownerID)
 		return nil, errors.New("session transcript service is required")
 	}
-	runtimeClient := newUIRuntimeClientWithReads(plan.SessionID, clients.SessionViews, clients.RuntimeControls).(*sessionRuntimeClient)
-	if reactivator != nil {
-		runtimeClient.SetRuntimeReactivator(reactivator)
-	}
-	if _, err := runtimeClient.refreshMainViewSync(uiRuntimeHydrationReadTimeout, nil); err != nil {
-		_ = runtimeattach.Release(clients.SessionRuntime, plan.SessionID, ownerID)
-		return nil, fmt.Errorf("initialize runtime main view: %w", err)
-	}
 	var attentionSubscription serverapi.AttentionNotificationSubscription
 	if clients.AttentionNotificationsSupported {
 		if clients.Attention == nil {
@@ -77,7 +68,7 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 		clients,
 		plan,
 		attentionSubscription,
-		runtimeClient,
+		reactivator,
 	)
 	var stopStreamsOnce sync.Once
 	stopStreams := func() {
@@ -119,8 +110,12 @@ func prepareSharedRuntimeWiring(
 	clients runtimeAttachmentClients,
 	plan sessionLaunchPlan,
 	attentionSubscription serverapi.AttentionNotificationSubscription,
-	runtimeClient *sessionRuntimeClient,
+	reactivator *runtimeReactivator,
 ) (*runtimeWiring, func(), func()) {
+	runtimeClient := newUIRuntimeClientWithReads(plan.SessionID, clients.SessionViews, clients.RuntimeControls).(*sessionRuntimeClient)
+	if reactivator != nil {
+		runtimeClient.SetRuntimeReactivator(reactivator)
+	}
 	subscribeTranscript := func(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
 		return clients.SessionTranscript.SubscribeSessionTranscript(ctx, req)
 	}

@@ -188,6 +188,92 @@ func TestNonStaleContentCompleteHydrationAppliesWholeEvent(t *testing.T) {
 	}
 }
 
+func TestAcceptedHydrationStartsUnaryMetadataRefreshAfterWholeEventConsumption(t *testing.T) {
+	v12 := runtimeTupleTestView(12, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
+	v12.Status.ThinkingLevel = "hydrated metadata refresh"
+	reads := &countingSessionViewClient{view: v12}
+	runtimeClient := newTestSessionRuntimeClient(reads, runtimecontrol.NewService(registry.NewRuntimeRegistry()))
+	runtimeClient.storeMainView(runtimeTupleTestView(
+		10,
+		runtimeTupleTestIdleActivity(),
+		runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationSubmitted),
+	))
+	m := newProjectedTestUIModel(runtimeClient)
+	surface := &ongoingSurfaceSpy{}
+	m.ongoingTranscript = newOngoingTranscriptController(
+		surface,
+		m.ongoingFrameInput,
+		runtimeClient.admitTranscriptMessageState,
+		m.applyAdmittedTranscriptMessageState,
+	)
+	hydration := runtimeTupleTestRichHydration(11)
+
+	cmd := m.handleOngoingTranscriptEvent(ongoingTranscriptEvent{
+		Kind:    ongoingTranscriptEventMessage,
+		Message: hydration,
+	})
+
+	if got := reads.mainViewCount.Load(); got != 0 {
+		t.Fatalf("main-view reads before hydration consumption returned = %d, want 0", got)
+	}
+	if got := surface.appliedKinds(); !reflect.DeepEqual(got, []clientui.TranscriptMessageKind{clientui.TranscriptMessageHydration}) {
+		t.Fatalf("surface messages before refresh execution = %v", got)
+	}
+	var refreshed runtimeMainViewRefreshedMsg
+	for _, message := range collectCmdMessages(t, cmd) {
+		if candidate, ok := message.(runtimeMainViewRefreshedMsg); ok {
+			refreshed = candidate
+		}
+	}
+	if refreshed.view.Version != v12.Version {
+		t.Fatalf("post-hydration refresh candidate version = %+v, want %+v", refreshed.view.Version, v12.Version)
+	}
+	assertRuntimeTupleView(t, runtimeClient.MainView(), runtimeTupleTestView(
+		11,
+		hydration.Payload.Hydration.RuntimeReadModelUpdate.Activity,
+		hydration.Payload.Hydration.RuntimeReadModelUpdate.InputReconciliation,
+	))
+}
+
+func TestRejectedDuplicateHydrationDoesNotStartUnaryRefresh(t *testing.T) {
+	v12 := runtimeTupleTestView(12, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
+	reads := &countingSessionViewClient{view: v12}
+	runtimeClient := newTestSessionRuntimeClient(reads, runtimecontrol.NewService(registry.NewRuntimeRegistry()))
+	runtimeClient.storeMainView(runtimeTupleTestView(
+		10,
+		runtimeTupleTestIdleActivity(),
+		runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationSubmitted),
+	))
+	m := newProjectedTestUIModel(runtimeClient)
+	m.ongoingTranscript = newOngoingTranscriptController(
+		&ongoingSurfaceSpy{},
+		m.ongoingFrameInput,
+		runtimeClient.admitTranscriptMessageState,
+		m.applyAdmittedTranscriptMessageState,
+	)
+	hydration := runtimeTupleTestRichHydration(11)
+	if _, _, err := m.ongoingTranscript.Accept(hydration); err != nil {
+		t.Fatalf("accept initial hydration: %v", err)
+	}
+
+	cmd := m.handleOngoingTranscriptEvent(ongoingTranscriptEvent{
+		Kind:    ongoingTranscriptEventMessage,
+		Message: hydration,
+	})
+	_ = collectCmdMessages(t, cmd)
+
+	if got := reads.mainViewCount.Load(); got != 0 {
+		t.Fatalf("rejected duplicate hydration main-view reads = %d, want 0", got)
+	}
+	if m.runtimeMainViewBusy || m.runtimeMainViewPendingSet {
+		t.Fatalf(
+			"rejected duplicate hydration scheduled refresh: busy=%t pending=%t",
+			m.runtimeMainViewBusy,
+			m.runtimeMainViewPendingSet,
+		)
+	}
+}
+
 func TestHydrationAdmissionSerializesUnaryAndInterruptTupleCommitsUntilWholeEventCompletes(t *testing.T) {
 	v12 := runtimeTupleTestView(12, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
 	v12.Session.SessionID = ongoingTestSessionID().String()

@@ -16,6 +16,7 @@ func (c *sessionRuntimeClient) mergeRuntimeTuple(
 		applyRuntimeTuple(&c.mainView, candidate)
 		if c.mainView.Session.SessionID == "" {
 			c.mainView.Session.SessionID = c.sessionID
+			c.advanceMetadataRevision()
 		}
 		c.hasMainView = true
 	}
@@ -43,31 +44,39 @@ func (c *sessionRuntimeClient) admitTranscriptMessageState(message clientui.Tran
 		}
 		applyTranscriptHydrationMetadataToMainView(&c.mainView, *hydration)
 		c.ensureMainViewIdentity()
+		c.advanceMetadataRevision()
 		result = runtimeTupleMergeResult{decision: decision, view: c.mainView, project: true}
 	case clientui.TranscriptMessageRuntimeReadModelUpdate:
 		candidate := runtimeTupleFromReadModelUpdate(*message.Payload.RuntimeReadModelUpdate)
 		decision := decideRuntimeTuple(c.mainView.Version, candidate.Version, runtimeTupleIngressIncremental)
 		if decision == runtimeTupleApply {
 			applyRuntimeTuple(&c.mainView, candidate)
-			c.ensureMainViewIdentity()
+			if c.ensureMainViewIdentity() {
+				c.advanceMetadataRevision()
+			}
 		}
 		result = runtimeTupleMergeResult{decision: decision, view: c.mainView, project: decision == runtimeTupleApply}
 	default:
-		applyTranscriptMetadataToMainView(&c.mainView, message)
-		c.ensureMainViewIdentity()
+		metadataChanged := applyTranscriptMetadataToMainView(&c.mainView, message)
+		if c.ensureMainViewIdentity() || metadataChanged {
+			c.advanceMetadataRevision()
+		}
 		result.view = c.mainView
 	}
 	return result, nil
 }
 
-func (c *sessionRuntimeClient) ensureMainViewIdentity() {
+func (c *sessionRuntimeClient) ensureMainViewIdentity() bool {
 	if c.mainView.Session.SessionID == "" {
 		c.mainView.Session.SessionID = c.sessionID
+		c.hasMainView = true
+		return true
 	}
 	c.hasMainView = true
+	return false
 }
 
-func applyTranscriptMetadataToMainView(view *clientui.RuntimeMainView, message clientui.TranscriptMessage) {
+func applyTranscriptMetadataToMainView(view *clientui.RuntimeMainView, message clientui.TranscriptMessage) bool {
 	switch message.Kind {
 	case clientui.TranscriptMessageSessionStatus:
 		applyTranscriptSessionStatusToRuntimeStatus(&view.Status, *message.Payload.SessionStatus)
@@ -79,7 +88,10 @@ func applyTranscriptMetadataToMainView(view *clientui.RuntimeMainView, message c
 		view.Status.Goal = runtimeGoalFromTranscript(*message.Payload.GoalStatus)
 	case clientui.TranscriptMessageCompactionStatus:
 		view.Status.CompactionCount = message.Payload.CompactionStatus.Count
+	default:
+		return false
 	}
+	return true
 }
 
 func applyTranscriptHydrationMetadataToMainView(view *clientui.RuntimeMainView, hydration clientui.TranscriptHydration) {
