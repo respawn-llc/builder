@@ -216,8 +216,6 @@ func (s *testEmbeddedServer) PromptControlClient() apicontract.PromptControlServ
 	return s.promptControlClient
 }
 
-func (s *testEmbeddedServer) ContainerDir() string { return s.containerDir }
-
 func (s *testEmbeddedServer) OAuthOptions() auth.OpenAIOAuthOptions { return s.oauthOpts }
 
 func (s *testEmbeddedServer) AuthManager() *auth.Manager { return s.authManager }

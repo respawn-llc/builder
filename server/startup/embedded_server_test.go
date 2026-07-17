@@ -194,10 +194,7 @@ func TestStartBuildsEmbeddedServerAndRunsOnboarding(t *testing.T) {
 		t.Fatalf("oauth client id = %q", got)
 	}
 	wantContainerDir := filepath.Join(filepath.Join(server.Config().PersistenceRoot, "projects"), server.ProjectID(), "sessions")
-	if server.ContainerDir() != wantContainerDir {
-		t.Fatalf("container dir = %q, want %q", server.ContainerDir(), wantContainerDir)
-	}
-	if _, err := os.Stat(filepath.Join(server.ContainerDir())); err != nil {
+	if _, err := os.Stat(wantContainerDir); err != nil {
 		t.Fatalf("expected container dir to exist: %v", err)
 	}
 	if server.RunPromptClient() == nil {

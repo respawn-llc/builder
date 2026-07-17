@@ -31,8 +31,7 @@ type Request struct {
 }
 
 type ConfigPlan struct {
-	Config       config.App
-	ContainerDir string
+	Config config.App
 }
 
 func ValidateSessionContext(persistenceRoot string, sessionID string) error {

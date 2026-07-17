@@ -112,7 +112,4 @@ func TestResolveConfigDoesNotCreateLegacyWorkspaceContainer(t *testing.T) {
 	if plan.Config.Settings.Model != loaded.Settings.Model {
 		t.Fatalf("resolved config model = %q, want %q", plan.Config.Settings.Model, loaded.Settings.Model)
 	}
-	if plan.ContainerDir != "" {
-		t.Fatalf("container dir = %q, want empty after legacy workspace containers removal", plan.ContainerDir)
-	}
 }

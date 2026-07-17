@@ -332,13 +332,6 @@ func (s *Core) Config() config.App {
 	return s.safeBundles().Projects.cfg
 }
 
-func (s *Core) ContainerDir() string {
-	if s == nil {
-		return ""
-	}
-	return s.safeBundles().Projects.containerDir
-}
-
 func (s *Core) MetadataStore() *metadata.Store {
 	if s == nil {
 		return nil
