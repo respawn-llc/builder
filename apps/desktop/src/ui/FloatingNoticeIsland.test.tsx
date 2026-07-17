@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, vi } from "vitest";
 
-import { FloatingNoticeIsland } from "./FloatingNoticeIsland";
+import { FloatingNoticeIsland, type FloatingNoticeIslandProps } from "./FloatingNoticeIsland";
 
 describe("FloatingNoticeIsland", () => {
   afterEach(() => {
@@ -12,15 +12,10 @@ describe("FloatingNoticeIsland", () => {
     const onCollapsedChange = vi.fn();
 
     render(
-      <FloatingNoticeIsland
-        collapsed
-        collapseLabel="Collapse"
-        expandLabel="Expand"
-        onCollapsedChange={onCollapsedChange}
-        title="Notice"
-      >
-        <p>Persistent notice body</p>
-      </FloatingNoticeIsland>,
+      noticeElement({
+        children: <p>Persistent notice body</p>,
+        onCollapsedChange,
+      }),
     );
 
     const content = screen.getByTestId("floating-notice-content");
@@ -34,17 +29,7 @@ describe("FloatingNoticeIsland", () => {
   });
 
   it("keeps the collapsed affordance mounted while expanded", () => {
-    render(
-      <FloatingNoticeIsland
-        collapsed={false}
-        collapseLabel="Collapse"
-        expandLabel="Expand"
-        onCollapsedChange={vi.fn()}
-        title="Notice"
-      >
-        <p>Visible notice body</p>
-      </FloatingNoticeIsland>,
-    );
+    render(noticeElement({ collapsed: false }));
 
     const collapsedButton = screen.getByTestId("floating-notice-collapsed-button");
     expect(collapsedButton).toHaveAttribute("inert");
@@ -53,36 +38,19 @@ describe("FloatingNoticeIsland", () => {
 
   it("keeps custom-sized expanded content hidden until the shell finishes expanding", () => {
     vi.useFakeTimers();
-    const { rerender } = render(
-      <FloatingNoticeIsland
-        collapsed
-        collapseLabel="Collapse"
-        expandedClassName="floating-notice-expanded grid h-[204px] w-[min(300px,calc(100vw-var(--space-2)*2))] gap-[6px] rounded-[var(--radius-xl)] p-[var(--space-2)]"
-        expandLabel="Expand"
-        onCollapsedChange={vi.fn()}
-        title="Legend"
-        tone="neutral"
-      >
-        <p>Custom notice body</p>
-      </FloatingNoticeIsland>,
-    );
+    const customNoticeProps = {
+      children: <p>Custom notice body</p>,
+      expandedClassName:
+        "floating-notice-expanded grid h-[204px] w-[min(300px,calc(100vw-var(--space-2)*2))] gap-[6px] rounded-[var(--radius-xl)] p-[var(--space-2)]",
+      title: "Legend",
+      tone: "neutral",
+    } satisfies Partial<FloatingNoticeIslandProps>;
+    const { rerender } = render(noticeElement(customNoticeProps));
     const collapsedContent = screen.getByTestId("floating-notice-content");
     expect(collapsedContent).toHaveAttribute("aria-hidden", "true");
     expect(collapsedContent).toHaveAttribute("inert");
 
-    rerender(
-      <FloatingNoticeIsland
-        collapsed={false}
-        collapseLabel="Collapse"
-        expandedClassName="floating-notice-expanded grid h-[204px] w-[min(300px,calc(100vw-var(--space-2)*2))] gap-[6px] rounded-[var(--radius-xl)] p-[var(--space-2)]"
-        expandLabel="Expand"
-        onCollapsedChange={vi.fn()}
-        title="Legend"
-        tone="neutral"
-      >
-        <p>Custom notice body</p>
-      </FloatingNoticeIsland>,
-    );
+    rerender(noticeElement({ ...customNoticeProps, collapsed: false }));
 
     expect(screen.getByTestId("floating-notice-content")).toBe(collapsedContent);
     expect(screen.getByTestId("floating-notice-shell")).toHaveAttribute("data-state", "expanding");
@@ -101,32 +69,12 @@ describe("FloatingNoticeIsland", () => {
 
   it("hides expanded content before the first collapse frame", () => {
     vi.useFakeTimers();
-    const { rerender } = render(
-      <FloatingNoticeIsland
-        collapsed={false}
-        collapseLabel="Collapse"
-        expandLabel="Expand"
-        onCollapsedChange={vi.fn()}
-        title="Notice"
-      >
-        <p>Visible notice body</p>
-      </FloatingNoticeIsland>,
-    );
+    const { rerender } = render(noticeElement({ collapsed: false }));
     const content = screen.getByTestId("floating-notice-content");
     expect(content).not.toHaveAttribute("aria-hidden", "true");
     expect(content).not.toHaveAttribute("inert");
 
-    rerender(
-      <FloatingNoticeIsland
-        collapsed
-        collapseLabel="Collapse"
-        expandLabel="Expand"
-        onCollapsedChange={vi.fn()}
-        title="Notice"
-      >
-        <p>Visible notice body</p>
-      </FloatingNoticeIsland>,
-    );
+    rerender(noticeElement());
 
     expect(screen.getByTestId("floating-notice-shell")).toHaveAttribute("data-state", "collapsing");
     expect(content).toHaveAttribute("aria-hidden", "true");
@@ -139,3 +87,22 @@ describe("FloatingNoticeIsland", () => {
     expect(screen.getByTestId("floating-notice-shell")).toHaveAttribute("data-state", "collapsed");
   });
 });
+
+const defaultNoticeProps = {
+  collapsed: true,
+  collapseLabel: "Collapse",
+  expandLabel: "Expand",
+  title: "Notice",
+} satisfies Pick<FloatingNoticeIslandProps, "collapsed" | "collapseLabel" | "expandLabel" | "title">;
+
+function noticeElement({
+  children = <p>Visible notice body</p>,
+  onCollapsedChange = vi.fn(),
+  ...overrides
+}: Partial<FloatingNoticeIslandProps> = {}) {
+  return (
+    <FloatingNoticeIsland {...defaultNoticeProps} {...overrides} onCollapsedChange={onCollapsedChange}>
+      {children}
+    </FloatingNoticeIsland>
+  );
+}
