@@ -14,7 +14,7 @@ import (
 )
 
 func TestLoadCorpusSnapshotIncludesDerivedDirectoriesAndExcludesGit(t *testing.T) {
-	runner := &stubUIPathReferenceCommandRunner{output: nulJoinPathReferenceOutput("cli/app/ui.go", ".github/workflows/release.yml", ".git/config")}
+	runner := &stubUIPathReferenceCommandRunner{output: nulJoinPathReferenceOutput("./cli/app/ui.go", ".github/workflows/release.yml", ".git/config")}
 	service := &uiPathReferenceSearchService{runner: runner}
 
 	snapshot, err := service.loadCorpusSnapshot(context.Background(), "/tmp/workspace")
@@ -35,6 +35,9 @@ func TestLoadCorpusSnapshotIncludesDerivedDirectoriesAndExcludesGit(t *testing.T
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("snapshot candidates = %+v, want %+v", got, want)
+	}
+	if runner.name != "rg" {
+		t.Fatalf("runner executable = %q, want rg", runner.name)
 	}
 	if runner.dir != "/tmp/workspace" {
 		t.Fatalf("runner dir = %q, want /tmp/workspace", runner.dir)
@@ -142,8 +145,40 @@ func TestPathReferenceSearchServiceRetriesAfterCorpusBuildFailure(t *testing.T) 
 }
 
 func TestPathReferenceSearchServiceStopUnblocksAndPreventsFurtherRequests(t *testing.T) {
-	service := newTestUIPathReferenceSearchService(&stubUIPathReferenceCommandRunner{output: nulJoinPathReferenceOutput("cli/app/ui.go")}, fuzzyUIPathReferenceMatcher{})
-	service.Stop()
+	matcher := newBlockingUIPathReferenceMatcher()
+	var releaseOnce sync.Once
+	releaseMatcher := func() { releaseOnce.Do(matcher.releaseOne) }
+	t.Cleanup(releaseMatcher)
+	service := newTestUIPathReferenceSearchService(
+		&stubUIPathReferenceCommandRunner{output: nulJoinPathReferenceOutput("cli/app/ui.go")},
+		matcher,
+	)
+	t.Cleanup(service.Stop)
+	service.Search(uiPathReferenceSearchRequest{WorkspaceRoot: "/tmp/workspace", DraftToken: 1, QueryToken: 1, NormalizedQuery: "ab"})
+	waitForPathReferenceEventType[uiPathReferenceCorpusReadyMsg](t, service.Events())
+	if got := <-matcher.started; got != "ab" {
+		t.Fatalf("started query = %q, want ab", got)
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		service.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not return while matcher was in flight")
+	}
+	releaseMatcher()
+	select {
+	case got := <-matcher.finished:
+		if got != "ab" {
+			t.Fatalf("finished query = %q, want ab", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("matcher did not exit after release")
+	}
 
 	service.StartPrewarm("/tmp/workspace")
 	service.Search(uiPathReferenceSearchRequest{WorkspaceRoot: "/tmp/workspace", DraftToken: 1, QueryToken: 1, NormalizedQuery: "ab"})
@@ -263,16 +298,18 @@ func (s *stubUIPathReferenceCommandRunner) Output(_ context.Context, dir string,
 }
 
 type blockingUIPathReferenceMatcher struct {
-	mu      sync.Mutex
-	calls   []string
-	started chan string
-	release chan struct{}
+	mu       sync.Mutex
+	calls    []string
+	started  chan string
+	release  chan struct{}
+	finished chan string
 }
 
 func newBlockingUIPathReferenceMatcher() *blockingUIPathReferenceMatcher {
 	return &blockingUIPathReferenceMatcher{
-		started: make(chan string, 8),
-		release: make(chan struct{}, 8),
+		started:  make(chan string, 8),
+		release:  make(chan struct{}, 8),
+		finished: make(chan string, 8),
 	}
 }
 
@@ -282,6 +319,7 @@ func (m *blockingUIPathReferenceMatcher) Match(query string, _ []uiPathReference
 	m.mu.Unlock()
 	m.started <- query
 	<-m.release
+	m.finished <- query
 	return []uiPathReferenceCandidate{{Path: query}}
 }
 
@@ -341,15 +379,6 @@ func nulJoinPathReferenceOutput(paths ...string) []byte {
 		return nil
 	}
 	return []byte(strings.Join(paths, "\x00") + "\x00")
-}
-
-func TestNormalizePathReferenceCandidateRejectsGitPaths(t *testing.T) {
-	if got := normalizePathReferenceCandidate(".git/config"); got != "" {
-		t.Fatalf("normalizePathReferenceCandidate(.git/config) = %q, want empty", got)
-	}
-	if got := normalizePathReferenceCandidate("./cli/app/ui.go"); got != "cli/app/ui.go" {
-		t.Fatalf("normalizePathReferenceCandidate returned %q", got)
-	}
 }
 
 func TestLoadCorpusSnapshotPropagatesRunnerError(t *testing.T) {
