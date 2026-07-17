@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -22,15 +23,19 @@ func (canceledGitCommandRunner) Run(ctx context.Context, _ string, _ ...string) 
 	return nil, -1, ctx.Err()
 }
 
+type stubGitCommandResult struct {
+	output   []byte
+	err      error
+	exitCode int
+}
+
 type stubGitCommandRunner struct {
-	output    []byte
-	err       error
-	exitCode  int
-	dir       string
-	args      []string
-	outputs   map[string][]byte
-	errors    map[string]error
-	exitCodes map[string]int
+	output   []byte
+	err      error
+	exitCode int
+	dir      string
+	args     []string
+	results  map[string]stubGitCommandResult
 }
 
 func (s *stubGitCommandRunner) Output(_ context.Context, dir string, args ...string) ([]byte, error) {
@@ -44,30 +49,21 @@ func (s *stubGitCommandRunner) Output(_ context.Context, dir string, args ...str
 func (s *stubGitCommandRunner) Run(_ context.Context, dir string, args ...string) ([]byte, int, error) {
 	s.dir = dir
 	s.args = append([]string(nil), args...)
-	key := strings.Join(args, "\x00")
 	output := append([]byte(nil), s.output...)
-	if s.outputs != nil {
-		if specific, ok := s.outputs[key]; ok {
-			output = append([]byte(nil), specific...)
-		}
-	}
 	err := s.err
-	if s.errors != nil {
-		if specific, ok := s.errors[key]; ok {
-			err = specific
-		}
-	}
 	exitCode := s.exitCode
-	if s.exitCodes != nil {
-		if specific, ok := s.exitCodes[key]; ok {
-			exitCode = specific
-		}
+	if specific, ok := s.results[gitCommandKey(args...)]; ok {
+		output = append([]byte(nil), specific.output...)
+		err = specific.err
+		exitCode = specific.exitCode
 	}
 	if err != nil && exitCode == 0 {
 		exitCode = 1
 	}
 	return output, exitCode, err
 }
+
+func gitCommandKey(args ...string) string { return strings.Join(args, "\x00") }
 
 func TestGitInspectorListParsesPorcelainTopology(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
@@ -202,25 +198,37 @@ func TestParseGitWorktreeListPorcelainRejectsUnsupportedKeys(t *testing.T) {
 	}
 }
 
-func TestGitInspectorAddCreatesBranchFromExplicitBaseRef(t *testing.T) {
-	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
-	worktreeRoot := filepath.Join(t.TempDir(), "linked")
-	runner := &stubGitCommandRunner{outputs: map[string][]byte{
-		strings.Join([]string{"worktree", "add", "-b", "feature/new", canonicalTestPath(t, worktreeRoot), "HEAD"}, "\x00"): nil,
-	}}
-	inspector := NewGitInspector(runner)
-	created, err := inspector.Add(context.Background(), workspaceRoot, worktreeRoot, CreateSpec{BaseRef: "HEAD", CreateBranch: true, BranchName: "feature/new"})
-	if err != nil {
-		t.Fatalf("Add: %v", err)
+func TestGitInspectorAdd(t *testing.T) {
+	tests := []struct {
+		name           string
+		spec           CreateSpec
+		argsBeforeRoot []string
+		argsAfterRoot  []string
+		created        bool
+	}{
+		{"creates branch from explicit base ref", CreateSpec{BaseRef: "HEAD", CreateBranch: true, BranchName: "feature/new"}, []string{"worktree", "add", "-b", "feature/new"}, []string{"HEAD"}, true},
+		{"uses existing ref without creating branch", CreateSpec{BaseRef: "feature/existing"}, []string{"worktree", "add"}, []string{"feature/existing"}, false},
 	}
-	if !created {
-		t.Fatal("expected created branch=true for new branch")
-	}
-	if got, want := runner.args, []string{"worktree", "add", "-b", "feature/new", canonicalTestPath(t, worktreeRoot), "HEAD"}; !equalStrings(got, want) {
-		t.Fatalf("git args=%v want=%v", got, want)
-	}
-	if got, want := runner.dir, canonicalTestPath(t, workspaceRoot); got != want {
-		t.Fatalf("git dir=%q want=%q", got, want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+			worktreeRoot := filepath.Join(t.TempDir(), "linked")
+			runner := &stubGitCommandRunner{}
+			created, err := NewGitInspector(runner).Add(context.Background(), workspaceRoot, worktreeRoot, tt.spec)
+			if err != nil {
+				t.Fatalf("Add: %v", err)
+			}
+			if created != tt.created {
+				t.Fatalf("created branch = %t, want %t", created, tt.created)
+			}
+			wantArgs := append(append(slices.Clone(tt.argsBeforeRoot), canonicalTestPath(t, worktreeRoot)), tt.argsAfterRoot...)
+			if !slices.Equal(runner.args, wantArgs) {
+				t.Fatalf("git args=%v want=%v", runner.args, wantArgs)
+			}
+			if got, want := runner.dir, canonicalTestPath(t, workspaceRoot); got != want {
+				t.Fatalf("git dir=%q want=%q", got, want)
+			}
+		})
 	}
 }
 
@@ -242,9 +250,7 @@ func TestGitInspectorAddRejectsCreateBranchWithoutBaseRef(t *testing.T) {
 
 func TestGitInspectorDirtyFileCountUsesPorcelainStatus(t *testing.T) {
 	worktreeRoot := filepath.Join(t.TempDir(), "linked")
-	runner := &stubGitCommandRunner{outputs: map[string][]byte{
-		strings.Join([]string{"status", "--porcelain=v1", "-z"}, "\x00"): []byte(" M changed.go\x00?? new.go\x00R  renamed.go\x00old.go\x00"),
-	}}
+	runner := &stubGitCommandRunner{output: []byte(" M changed.go\x00?? new.go\x00R  renamed.go\x00old.go\x00")}
 	inspector := NewGitInspector(runner)
 
 	count, err := inspector.DirtyFileCount(context.Background(), worktreeRoot)
@@ -254,7 +260,7 @@ func TestGitInspectorDirtyFileCountUsesPorcelainStatus(t *testing.T) {
 	if count != 3 {
 		t.Fatalf("dirty count = %d, want 3", count)
 	}
-	if got, want := runner.args, []string{"status", "--porcelain=v1", "-z"}; !equalStrings(got, want) {
+	if got, want := runner.args, []string{"status", "--porcelain=v1", "-z"}; !slices.Equal(got, want) {
 		t.Fatalf("git args=%v want=%v", got, want)
 	}
 	if got, want := runner.dir, canonicalTestPath(t, worktreeRoot); got != want {
@@ -289,9 +295,9 @@ func TestGitInspectorInspectsTargetIdentityAndExactRef(t *testing.T) {
 	if err := os.Mkdir(commonDir, 0o755); err != nil {
 		t.Fatalf("Mkdir Git marker: %v", err)
 	}
-	runner := &stubGitCommandRunner{outputs: map[string][]byte{
-		strings.Join([]string{"rev-parse", "--show-toplevel"}, "\x00"):  []byte(root + "\n"),
-		strings.Join([]string{"rev-parse", "--git-common-dir"}, "\x00"): []byte(commonDir + "\n"),
+	runner := &stubGitCommandRunner{results: map[string]stubGitCommandResult{
+		gitCommandKey("rev-parse", "--show-toplevel"):  {output: []byte(root + "\n")},
+		gitCommandKey("rev-parse", "--git-common-dir"): {output: []byte(commonDir + "\n")},
 	}}
 	inspector := NewGitInspector(runner)
 	inspection, err := inspector.InspectTarget(context.Background(), root)
@@ -302,8 +308,9 @@ func TestGitInspectorInspectsTargetIdentityAndExactRef(t *testing.T) {
 		t.Fatalf("inspection = %+v", inspection)
 	}
 
-	runner.errors = map[string]error{strings.Join([]string{"rev-parse", "--verify", "--quiet", "refs/heads/feature/*^{object}"}, "\x00"): errors.New("exit status 1")}
-	runner.exitCodes = map[string]int{strings.Join([]string{"rev-parse", "--verify", "--quiet", "refs/heads/feature/*^{object}"}, "\x00"): 1}
+	runner.results = map[string]stubGitCommandResult{
+		gitCommandKey("rev-parse", "--verify", "--quiet", "refs/heads/feature/*^{object}"): {err: errors.New("exit status 1"), exitCode: 1},
+	}
 	exists, err := inspector.RefExists(context.Background(), root, "refs/heads/feature/*")
 	if err != nil || exists {
 		t.Fatalf("RefExists = %t, %v; want false, nil", exists, err)
@@ -330,145 +337,88 @@ func TestGitInspectorRemoveUsesForceWhenRequested(t *testing.T) {
 	if err := inspector.Remove(context.Background(), workspaceRoot, worktreeRoot, true); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	if got, want := runner.args, []string{"worktree", "remove", "--force", canonicalTestPath(t, worktreeRoot)}; !equalStrings(got, want) {
+	if got, want := runner.args, []string{"worktree", "remove", "--force", canonicalTestPath(t, worktreeRoot)}; !slices.Equal(got, want) {
 		t.Fatalf("git args=%v want=%v", got, want)
 	}
 }
 
-func TestGitInspectorAddUsesExistingRefWithoutCreatingBranch(t *testing.T) {
-	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
-	worktreeRoot := filepath.Join(t.TempDir(), "linked")
-	runner := &stubGitCommandRunner{outputs: map[string][]byte{
-		strings.Join([]string{"worktree", "add", canonicalTestPath(t, worktreeRoot), "feature/existing"}, "\x00"): nil,
-	}}
-	inspector := NewGitInspector(runner)
-	created, err := inspector.Add(context.Background(), workspaceRoot, worktreeRoot, CreateSpec{BaseRef: "feature/existing", CreateBranch: false})
-	if err != nil {
-		t.Fatalf("Add: %v", err)
-	}
-	if created {
-		t.Fatal("expected created branch=false for existing ref")
-	}
-	if got, want := runner.args, []string{"worktree", "add", canonicalTestPath(t, worktreeRoot), "feature/existing"}; !equalStrings(got, want) {
-		t.Fatalf("git args=%v want=%v", got, want)
-	}
-	if got, want := runner.dir, canonicalTestPath(t, workspaceRoot); got != want {
-		t.Fatalf("git dir=%q want=%q", got, want)
-	}
-}
-
-func TestGitInspectorResolveCreateTargetClassifiesExistingBranch(t *testing.T) {
-	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
-	runner := &stubGitCommandRunner{outputs: map[string][]byte{
-		strings.Join([]string{"rev-parse", "--verify", "--quiet", "refs/heads/main^{object}"}, "\x00"): []byte("abc123\n"),
-	}}
-	inspector := NewGitInspector(runner)
-	resolution, err := inspector.ResolveCreateTarget(context.Background(), workspaceRoot, "main")
-	if err != nil {
-		t.Fatalf("ResolveCreateTarget: %v", err)
-	}
-	if resolution.Kind != CreateTargetResolutionKindExistingBranch || resolution.ResolvedRef != "main" {
-		t.Fatalf("unexpected resolution: %+v", resolution)
-	}
-}
-
-func TestGitInspectorResolveCreateTargetTreatsPrefixOnlyBranchAsNewBranch(t *testing.T) {
-	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
-	runner := &stubGitCommandRunner{
-		errors: map[string]error{
-			strings.Join([]string{"rev-parse", "--verify", "--quiet", "refs/heads/feature^{object}"}, "\x00"): errors.New("exit status 1"),
-			strings.Join([]string{"rev-parse", "--verify", "--quiet", "feature^{object}"}, "\x00"):            errors.New("exit status 1"),
+func TestGitInspectorResolveCreateTarget(t *testing.T) {
+	tests := []struct {
+		name, target string
+		results      map[string]stubGitCommandResult
+		kind         CreateTargetResolutionKind
+		resolvedRef  string
+		invalid      bool
+	}{
+		{
+			name: "existing branch", target: "main",
+			results: map[string]stubGitCommandResult{
+				gitCommandKey("rev-parse", "--verify", "--quiet", "refs/heads/main^{object}"): {output: []byte("abc123\n")},
+			},
+			kind: CreateTargetResolutionKindExistingBranch, resolvedRef: "main",
 		},
-		exitCodes: map[string]int{
-			strings.Join([]string{"rev-parse", "--verify", "--quiet", "refs/heads/feature^{object}"}, "\x00"): 1,
-			strings.Join([]string{"rev-parse", "--verify", "--quiet", "feature^{object}"}, "\x00"):            1,
+		{
+			name: "prefix-only branch", target: "feature",
+			results: map[string]stubGitCommandResult{
+				gitCommandKey("rev-parse", "--verify", "--quiet", "refs/heads/feature^{object}"): {err: errors.New("exit status 1"), exitCode: 1},
+				gitCommandKey("rev-parse", "--verify", "--quiet", "feature^{object}"):            {err: errors.New("exit status 1"), exitCode: 1},
+			},
+			kind: CreateTargetResolutionKindNewBranch,
 		},
-	}
-	inspector := NewGitInspector(runner)
-	resolution, err := inspector.ResolveCreateTarget(context.Background(), workspaceRoot, "feature")
-	if err != nil {
-		t.Fatalf("ResolveCreateTarget: %v", err)
-	}
-	if resolution.Kind != CreateTargetResolutionKindNewBranch {
-		t.Fatalf("unexpected resolution: %+v", resolution)
-	}
-}
-
-func TestGitInspectorResolveCreateTargetClassifiesDetachedRef(t *testing.T) {
-	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
-	runner := &stubGitCommandRunner{
-		outputs: map[string][]byte{
-			strings.Join([]string{"rev-parse", "--verify", "--quiet", "HEAD^{object}"}, "\x00"): []byte("abc123\n"),
+		{
+			name: "detached ref", target: "HEAD",
+			results: map[string]stubGitCommandResult{
+				gitCommandKey("rev-parse", "--verify", "--quiet", "refs/heads/HEAD^{object}"): {err: errors.New("exit status 1"), exitCode: 1},
+				gitCommandKey("rev-parse", "--verify", "--quiet", "HEAD^{object}"):            {output: []byte("abc123\n")},
+			},
+			kind: CreateTargetResolutionKindDetachedRef, resolvedRef: "abc123",
 		},
-		errors: map[string]error{
-			strings.Join([]string{"rev-parse", "--verify", "--quiet", "refs/heads/HEAD^{object}"}, "\x00"): errors.New("exit status 1"),
+		{
+			name: "new branch", target: "feature/new",
+			results: map[string]stubGitCommandResult{
+				gitCommandKey("rev-parse", "--verify", "--quiet", "refs/heads/feature/new^{object}"): {err: errors.New("exit status 1"), exitCode: 1},
+				gitCommandKey("rev-parse", "--verify", "--quiet", "feature/new^{object}"):            {err: errors.New("exit status 1"), exitCode: 1},
+			},
+			kind: CreateTargetResolutionKindNewBranch,
 		},
-		exitCodes: map[string]int{
-			strings.Join([]string{"rev-parse", "--verify", "--quiet", "refs/heads/HEAD^{object}"}, "\x00"): 1,
+		{
+			name: "invalid branch", target: "feature..bad",
+			results: map[string]stubGitCommandResult{
+				gitCommandKey("check-ref-format", "--branch", "feature..bad"):              {err: errors.New("exit status 128"), exitCode: 128},
+				gitCommandKey("rev-parse", "--verify", "--quiet", "feature..bad^{object}"): {err: errors.New("exit status 1"), exitCode: 1},
+			},
+			invalid: true,
 		},
 	}
-	inspector := NewGitInspector(runner)
-	resolution, err := inspector.ResolveCreateTarget(context.Background(), workspaceRoot, "HEAD")
-	if err != nil {
-		t.Fatalf("ResolveCreateTarget: %v", err)
-	}
-	if resolution.Kind != CreateTargetResolutionKindDetachedRef || resolution.ResolvedRef != "abc123" {
-		t.Fatalf("unexpected resolution: %+v", resolution)
-	}
-}
-
-func TestGitInspectorResolveCreateTargetClassifiesNewBranch(t *testing.T) {
-	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
-	runner := &stubGitCommandRunner{
-		errors: map[string]error{
-			strings.Join([]string{"rev-parse", "--verify", "--quiet", "refs/heads/feature/new^{object}"}, "\x00"): errors.New("exit status 1"),
-			strings.Join([]string{"rev-parse", "--verify", "--quiet", "feature/new^{object}"}, "\x00"):            errors.New("exit status 1"),
-		},
-		exitCodes: map[string]int{
-			strings.Join([]string{"rev-parse", "--verify", "--quiet", "refs/heads/feature/new^{object}"}, "\x00"): 1,
-			strings.Join([]string{"rev-parse", "--verify", "--quiet", "feature/new^{object}"}, "\x00"):            1,
-		},
-	}
-	inspector := NewGitInspector(runner)
-	resolution, err := inspector.ResolveCreateTarget(context.Background(), workspaceRoot, "feature/new")
-	if err != nil {
-		t.Fatalf("ResolveCreateTarget: %v", err)
-	}
-	if resolution.Kind != CreateTargetResolutionKindNewBranch {
-		t.Fatalf("unexpected resolution: %+v", resolution)
-	}
-}
-
-func TestGitInspectorResolveCreateTargetRejectsInvalidBranchName(t *testing.T) {
-	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
-	runner := &stubGitCommandRunner{
-		errors: map[string]error{
-			strings.Join([]string{"check-ref-format", "--branch", "feature..bad"}, "\x00"):              errors.New("exit status 128"),
-			strings.Join([]string{"rev-parse", "--verify", "--quiet", "feature..bad^{object}"}, "\x00"): errors.New("exit status 1"),
-		},
-		exitCodes: map[string]int{
-			strings.Join([]string{"check-ref-format", "--branch", "feature..bad"}, "\x00"):              128,
-			strings.Join([]string{"rev-parse", "--verify", "--quiet", "feature..bad^{object}"}, "\x00"): 1,
-		},
-	}
-	inspector := NewGitInspector(runner)
-	_, err := inspector.ResolveCreateTarget(context.Background(), workspaceRoot, "feature..bad")
-	var invalidTarget *InvalidCreateTargetError
-	if !errors.As(err, &invalidTarget) || invalidTarget.Target != "feature..bad" {
-		t.Fatalf("ResolveCreateTarget error = %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolution, err := NewGitInspector(&stubGitCommandRunner{results: tt.results}).ResolveCreateTarget(
+				context.Background(),
+				filepath.Join(t.TempDir(), "workspace"),
+				tt.target,
+			)
+			if tt.invalid {
+				var invalidTarget *InvalidCreateTargetError
+				if !errors.As(err, &invalidTarget) || invalidTarget.Target != tt.target {
+					t.Fatalf("ResolveCreateTarget error = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ResolveCreateTarget: %v", err)
+			}
+			if resolution.Input != tt.target || resolution.Kind != tt.kind || resolution.ResolvedRef != tt.resolvedRef {
+				t.Fatalf("resolution = %+v, want input %q kind %q ref %q", resolution, tt.target, tt.kind, tt.resolvedRef)
+			}
+		})
 	}
 }
 
 func TestGitInspectorBranchExistsUsesExactRefLookup(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
-	runner := &stubGitCommandRunner{
-		errors: map[string]error{
-			strings.Join([]string{"rev-parse", "--verify", "--quiet", "refs/heads/feature/*^{object}"}, "\x00"): errors.New("exit status 1"),
-		},
-		exitCodes: map[string]int{
-			strings.Join([]string{"rev-parse", "--verify", "--quiet", "refs/heads/feature/*^{object}"}, "\x00"): 1,
-		},
-	}
+	runner := &stubGitCommandRunner{results: map[string]stubGitCommandResult{
+		gitCommandKey("rev-parse", "--verify", "--quiet", "refs/heads/feature/*^{object}"): {err: errors.New("exit status 1"), exitCode: 1},
+	}}
 	inspector := NewGitInspector(runner)
 	exists, err := inspector.BranchExists(context.Background(), workspaceRoot, "feature/*")
 	if err != nil {
@@ -477,7 +427,7 @@ func TestGitInspectorBranchExistsUsesExactRefLookup(t *testing.T) {
 	if exists {
 		t.Fatal("expected exact-ref lookup to treat glob-like branch as absent")
 	}
-	if got, want := runner.args, []string{"rev-parse", "--verify", "--quiet", "refs/heads/feature/*^{object}"}; !equalStrings(got, want) {
+	if got, want := runner.args, []string{"rev-parse", "--verify", "--quiet", "refs/heads/feature/*^{object}"}; !slices.Equal(got, want) {
 		t.Fatalf("git args=%v want=%v", got, want)
 	}
 }
@@ -795,16 +745,4 @@ func canonicalTestPath(t *testing.T, path string) string {
 
 func stringPointer(value string) *string {
 	return &value
-}
-
-func equalStrings(got []string, want []string) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			return false
-		}
-	}
-	return true
 }
