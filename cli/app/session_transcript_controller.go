@@ -1,7 +1,9 @@
 package app
 
 import (
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"core/cli/tui/ongoing"
@@ -75,7 +77,7 @@ func (c *ongoingTranscriptController) Accept(message clientui.TranscriptMessage)
 	}
 	admission, err := c.runtimeAdmission(message)
 	if err != nil {
-		return ongoing.Result{}, nil, err
+		return ongoing.Result{}, nil, c.diagnoseRuntimeAdmissionError(message, err)
 	}
 	c.commitDelivery(message)
 	stateChanged := c.applyState(message)
@@ -89,6 +91,26 @@ func (c *ongoingTranscriptController) Accept(message clientui.TranscriptMessage)
 	}
 	result, err := c.applyNow(message, stateChanged)
 	return result, stateCmd, err
+}
+
+func (c *ongoingTranscriptController) diagnoseRuntimeAdmissionError(
+	message clientui.TranscriptMessage,
+	err error,
+) error {
+	var conflict hydrationRuntimeTupleConflictError
+	if !errors.As(err, &conflict) {
+		return err
+	}
+	frame := c.frameProvider()
+	facts := conflict.facts()
+	facts["terminal_size"] = frame.Size
+	facts["terminal_cursor"] = frame.Cursor
+	facts["quoted_payload"] = strconv.Quote(fmt.Sprintf("%+v", message.Payload.Hydration))
+	return ongoing.NewDeveloperError(
+		"admit_transcript_hydration_runtime_tuple",
+		conflict.Error(),
+		facts,
+	)
 }
 
 func (c *ongoingTranscriptController) SetNormalBufferOwned(owned bool) (ongoing.Result, error) {

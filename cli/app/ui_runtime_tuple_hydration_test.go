@@ -1,7 +1,9 @@
 package app
 
 import (
+	"fmt"
 	"reflect"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -12,8 +14,6 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/transcript"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestStaleContentCompleteHydrationFailsBeforeAnySideEffect(t *testing.T) {
@@ -67,84 +67,75 @@ func TestStaleContentCompleteHydrationFailsBeforeAnySideEffect(t *testing.T) {
 	}
 }
 
-func TestStaleHydrationUIEventDoesNotFlushQueuedInputBeforeDeveloperError(t *testing.T) {
-	runtimeClient := newTestSessionRuntimeClient(
-		&countingSessionViewClient{},
-		runtimecontrol.NewService(registry.NewRuntimeRegistry()),
-	)
-	current := runtimeTupleTestView(11, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationCommitted))
-	runtimeClient.storeMainView(current)
-	m := newProjectedTestUIModel(runtimeClient)
-	m.queued = []queuedInputItem{{ID: "queued-1", Text: "do not flush"}}
-	m.pendingQueuedDrainAfterHydration = true
-	m.queuedDrainReadyAfterHydration = true
-	surface := &ongoingSurfaceSpy{}
-	m.ongoingTranscript = newOngoingTranscriptController(
-		surface,
-		m.ongoingFrameInput,
-		runtimeClient.admitTranscriptMessageState,
-		m.applyAdmittedTranscriptMessageState,
-	)
-	beforeView := runtimeClient.MainView()
-	beforeQueue := append([]queuedInputItem(nil), m.queued...)
+func TestStaleHydrationDeveloperErrorPanicsInEveryModeBeforeSideEffects(t *testing.T) {
+	for _, debugMode := range []bool{false, true} {
+		t.Run(map[bool]string{false: "release", true: "debug"}[debugMode], func(t *testing.T) {
+			runtimeClient := newTestSessionRuntimeClient(
+				&countingSessionViewClient{},
+				runtimecontrol.NewService(registry.NewRuntimeRegistry()),
+			)
+			current := runtimeTupleTestView(11, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationCommitted))
+			runtimeClient.storeMainView(current)
+			m := sizedTestUIModel(newProjectedTestUIModel(runtimeClient, WithUIDebug(debugMode)), 93, 31)
+			m.queued = []queuedInputItem{{ID: "queued-1", Text: "do not flush"}}
+			m.pendingQueuedDrainAfterHydration = true
+			m.queuedDrainReadyAfterHydration = true
+			surface := &ongoingSurfaceSpy{}
+			m.ongoingTranscript = newOngoingTranscriptController(
+				surface,
+				m.ongoingFrameInput,
+				runtimeClient.admitTranscriptMessageState,
+				m.applyAdmittedTranscriptMessageState,
+			)
+			beforeView := runtimeClient.MainView()
+			beforeQueue := append([]queuedInputItem(nil), m.queued...)
+			hydration := runtimeTupleTestRichHydration(10)
 
-	cmd := m.handleOngoingTranscriptEvent(ongoingTranscriptEvent{
-		Kind:    ongoingTranscriptEventMessage,
-		Message: runtimeTupleTestRichHydration(10),
-	})
-
-	if cmd == nil {
-		t.Fatal("developer error did not return a termination command")
-	}
-	if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Fatalf("developer error command returned %T, want tea.QuitMsg", cmd())
-	}
-	assertUnchanged(t, "cached main view", runtimeClient.MainView(), beforeView)
-	assertUnchanged(t, "queued input", m.queued, beforeQueue)
-	if !m.pendingQueuedDrainAfterHydration || !m.queuedDrainReadyAfterHydration {
-		t.Fatalf(
-			"stale hydration changed drain flags: pending=%t ready=%t",
-			m.pendingQueuedDrainAfterHydration,
-			m.queuedDrainReadyAfterHydration,
-		)
-	}
-	if len(surface.calls) != 0 {
-		t.Fatalf("stale hydration reached terminal surface: %+v", surface.calls)
-	}
-	if !m.Transition().Exit {
-		t.Fatal("release developer-error policy did not request TUI exit")
+			recovered := capturePanic(func() {
+				_ = m.handleOngoingTranscriptEvent(ongoingTranscriptEvent{
+					Kind:    ongoingTranscriptEventMessage,
+					Message: hydration,
+				})
+			})
+			developerErr, ok := recovered.(ongoing.DeveloperError)
+			if !ok {
+				t.Fatalf("panic = %T, want ongoing.DeveloperError", recovered)
+			}
+			if developerErr.Operation != "admit_transcript_hydration_runtime_tuple" {
+				t.Fatalf("developer-error operation = %q", developerErr.Operation)
+			}
+			if got := developerErr.Facts["terminal_size"]; got != (ongoing.Size{Width: 93, Height: 31}) {
+				t.Fatalf("terminal size diagnostic = %+v, want 93x31", got)
+			}
+			wantPayload := strconv.Quote(fmt.Sprintf("%+v", hydration.Payload.Hydration))
+			if got, ok := developerErr.Facts["quoted_payload"].(string); !ok || got != wantPayload {
+				t.Fatalf("quoted payload diagnostic = %#v, want %#v", developerErr.Facts["quoted_payload"], wantPayload)
+			}
+			if developerErr.Stack == "" {
+				t.Fatal("developer error omitted stack trace")
+			}
+			assertUnchanged(t, "cached main view", runtimeClient.MainView(), beforeView)
+			assertUnchanged(t, "queued input", m.queued, beforeQueue)
+			if !m.pendingQueuedDrainAfterHydration || !m.queuedDrainReadyAfterHydration {
+				t.Fatalf(
+					"stale hydration changed drain flags: pending=%t ready=%t",
+					m.pendingQueuedDrainAfterHydration,
+					m.queuedDrainReadyAfterHydration,
+				)
+			}
+			if len(surface.calls) != 0 {
+				t.Fatalf("stale hydration reached terminal surface: %+v", surface.calls)
+			}
+		})
 	}
 }
 
-func TestStaleHydrationDeveloperErrorPanicsInDebug(t *testing.T) {
-	runtimeClient := newTestSessionRuntimeClient(
-		&countingSessionViewClient{},
-		runtimecontrol.NewService(registry.NewRuntimeRegistry()),
-	)
-	runtimeClient.storeMainView(runtimeTupleTestView(
-		11,
-		runtimeTupleTestIdleActivity(),
-		runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationCommitted),
-	))
-	m := newProjectedTestUIModel(runtimeClient, WithUIDebug(true))
-	m.ongoingTranscript = newOngoingTranscriptController(
-		&ongoingSurfaceSpy{},
-		m.ongoingFrameInput,
-		runtimeClient.admitTranscriptMessageState,
-		m.applyAdmittedTranscriptMessageState,
-	)
-
+func capturePanic(action func()) (recovered any) {
 	defer func() {
-		recovered := recover()
-		if _, ok := recovered.(ongoing.DeveloperError); !ok {
-			t.Fatalf("debug panic = %T, want ongoing.DeveloperError", recovered)
-		}
+		recovered = recover()
 	}()
-
-	_ = m.handleOngoingTranscriptEvent(ongoingTranscriptEvent{
-		Kind:    ongoingTranscriptEventMessage,
-		Message: runtimeTupleTestRichHydration(10),
-	})
+	action()
+	return nil
 }
 
 func TestNonStaleContentCompleteHydrationAppliesWholeEvent(t *testing.T) {

@@ -1,9 +1,6 @@
 package app
 
 import (
-	"runtime/debug"
-
-	"core/cli/tui/ongoing"
 	"core/shared/clientui"
 )
 
@@ -137,20 +134,28 @@ func runtimeOperationRefsEqual(left, right clientui.RuntimeOperationRef) bool {
 	return *left.QueueItemID == *right.QueueItemID
 }
 
-func hydrationRuntimeTupleError(current clientui.RuntimeMainView, incoming runtimeTupleCandidate) error {
-	return ongoing.DeveloperError{
-		Operation: "admit_transcript_hydration_runtime_tuple",
-		Reason:    "stale or conflicting runtime tuple",
-		Facts: map[string]any{
-			"current_version":               current.Version,
-			"incoming_version":              incoming.Version,
-			"current_activity":              current.Activity,
-			"incoming_activity":             incoming.Activity,
-			"current_input_reconciliation":  current.InputReconciliation,
-			"incoming_input_reconciliation": incoming.InputReconciliation,
-		},
-		Stack: string(debug.Stack()),
+type hydrationRuntimeTupleConflictError struct {
+	current  clientui.RuntimeMainView
+	incoming runtimeTupleCandidate
+}
+
+func (e hydrationRuntimeTupleConflictError) Error() string {
+	return "stale or conflicting transcript hydration runtime tuple"
+}
+
+func (e hydrationRuntimeTupleConflictError) facts() map[string]any {
+	return map[string]any{
+		"current_version":               e.current.Version,
+		"incoming_version":              e.incoming.Version,
+		"current_activity":              e.current.Activity,
+		"incoming_activity":             e.incoming.Activity,
+		"current_input_reconciliation":  e.current.InputReconciliation,
+		"incoming_input_reconciliation": e.incoming.InputReconciliation,
 	}
+}
+
+func hydrationRuntimeTupleError(current clientui.RuntimeMainView, incoming runtimeTupleCandidate) error {
+	return hydrationRuntimeTupleConflictError{current: current, incoming: incoming}
 }
 
 func runtimeReadModelResetMainViewRefreshRequest() runtimeMainViewRefreshRequest {
