@@ -84,13 +84,10 @@ func (r runtimeResolverMustNotBeCalled) SessionRunsBlocked(string) bool {
 	return false
 }
 
-type staticPersistedSessionResolver struct {
-	record session.PersistedSessionRecord
-	err    error
-}
+type missingMetadataPersistedSessionResolver struct{}
 
-func (r staticPersistedSessionResolver) ResolvePersistedSession(context.Context, string) (session.PersistedSessionRecord, error) {
-	return r.record, r.err
+func (missingMetadataPersistedSessionResolver) ResolvePersistedSession(context.Context, string) (session.PersistedSessionRecord, error) {
+	return session.PersistedSessionRecord{SessionDir: "/tmp/session"}, nil
 }
 
 type countingBeginRuntimeResolver struct {
@@ -693,25 +690,17 @@ func TestServiceGoalMutationsSetShowComplete(t *testing.T) {
 }
 
 func TestServiceShowGoalReturnsPersistedGoalWithoutRuntime(t *testing.T) {
-	createdAt := time.Date(2026, time.July, 16, 10, 11, 12, 0, time.UTC)
-	updatedAt := createdAt.Add(2 * time.Hour)
-	const sessionID = "cc948e1e-17e5-4213-87d5-4793ebe18a55"
-	goal := session.GoalState{
-		ID:        "ecdf563d-22b4-4a93-b587-3cfcc294b413",
-		Objective: "inspect dormant goals",
-		Status:    session.GoalStatusPaused,
-		CreatedAt: createdAt,
-		UpdatedAt: updatedAt,
+	store, _ := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	goal, err := store.SetGoal("inspect dormant goals", session.GoalActorUser)
+	if err != nil {
+		t.Fatalf("SetGoal: %v", err)
 	}
-	service := NewService(runtimeResolverMustNotBeCalled{t: t}).WithPersistedSessionResolver(staticPersistedSessionResolver{
-		record: session.PersistedSessionRecord{
-			SessionDir: "/tmp/session",
-			Meta: &session.Meta{
-				SessionID: sessionID,
-				Goal:      &goal,
-			},
-		},
-	})
+	goal, err = store.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser)
+	if err != nil {
+		t.Fatalf("SetGoalStatus: %v", err)
+	}
+	sessionID := store.Meta().SessionID
+	service := NewService(runtimeResolverMustNotBeCalled{t: t}).WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
 
 	resp, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: sessionID})
 	if err != nil {
@@ -730,24 +719,21 @@ func TestServiceShowGoalReturnsPersistedGoalWithoutRuntime(t *testing.T) {
 }
 
 func TestServiceShowGoalPrefersPersistedGoalOverLiveRuntime(t *testing.T) {
-	_, engine := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	if _, err := engine.SetGoal("live preview must not win", session.GoalActorUser); err != nil {
+	_, liveEngine := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	if _, err := liveEngine.SetGoal("live preview must not win", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
-	const sessionID = "2ff5dc20-31e4-49bd-aad2-90019e5e1fa2"
-	persistedGoal := session.GoalState{
-		ID:        "b5e80dc5-8c29-4635-9fc1-d4c7b3508428",
-		Objective: "return committed metadata",
-		Status:    session.GoalStatusPaused,
-		CreatedAt: time.Date(2026, time.July, 15, 8, 30, 0, 0, time.UTC),
-		UpdatedAt: time.Date(2026, time.July, 16, 9, 45, 0, 0, time.UTC),
+	persistedStore, _ := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	persistedGoal, err := persistedStore.SetGoal("return committed metadata", session.GoalActorUser)
+	if err != nil {
+		t.Fatalf("SetGoal persisted: %v", err)
 	}
-	service := NewService(stubRuntimeResolver{engine: engine}).WithPersistedSessionResolver(staticPersistedSessionResolver{
-		record: session.PersistedSessionRecord{
-			SessionDir: "/tmp/session",
-			Meta:       &session.Meta{SessionID: sessionID, Goal: &persistedGoal},
-		},
-	})
+	persistedGoal, err = persistedStore.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser)
+	if err != nil {
+		t.Fatalf("SetGoalStatus persisted: %v", err)
+	}
+	sessionID := persistedStore.Meta().SessionID
+	service := NewService(stubRuntimeResolver{engine: liveEngine}).WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
 
 	resp, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: sessionID})
 	if err != nil {
@@ -759,13 +745,9 @@ func TestServiceShowGoalPrefersPersistedGoalOverLiveRuntime(t *testing.T) {
 }
 
 func TestServiceShowGoalReturnsEmptyResponseForPersistedSessionWithoutGoal(t *testing.T) {
-	const sessionID = "5a1191c5-0ead-4aa8-93f0-cce6cc99aeeb"
-	service := NewService(runtimeResolverMustNotBeCalled{t: t}).WithPersistedSessionResolver(staticPersistedSessionResolver{
-		record: session.PersistedSessionRecord{
-			SessionDir: "/tmp/session",
-			Meta:       &session.Meta{SessionID: sessionID},
-		},
-	})
+	store, _ := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{})
+	sessionID := store.Meta().SessionID
+	service := NewService(runtimeResolverMustNotBeCalled{t: t}).WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
 
 	resp, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: sessionID})
 	if err != nil {
@@ -778,7 +760,6 @@ func TestServiceShowGoalReturnsEmptyResponseForPersistedSessionWithoutGoal(t *te
 
 func TestServiceShowGoalReturnsPersistedSessionResolutionFailures(t *testing.T) {
 	const sessionID = "64ee658a-138d-47d6-8624-e25aebcb7a5a"
-	resolutionErr := errors.New("metadata store unavailable")
 	tests := []struct {
 		name    string
 		service *Service
@@ -790,16 +771,14 @@ func TestServiceShowGoalReturnsPersistedSessionResolutionFailures(t *testing.T) 
 		},
 		{
 			name: "resolver failure",
-			service: NewService(runtimeResolverMustNotBeCalled{t: t}).WithPersistedSessionResolver(staticPersistedSessionResolver{
-				err: resolutionErr,
-			}),
-			wantIs: resolutionErr,
+			service: NewService(runtimeResolverMustNotBeCalled{t: t}).
+				WithPersistedSessionResolver(runtimeControlTestSessionPersistence),
+			wantIs: session.ErrSessionNotFound,
 		},
 		{
 			name: "metadata required",
-			service: NewService(runtimeResolverMustNotBeCalled{t: t}).WithPersistedSessionResolver(staticPersistedSessionResolver{
-				record: session.PersistedSessionRecord{SessionDir: "/tmp/session"},
-			}),
+			service: NewService(runtimeResolverMustNotBeCalled{t: t}).
+				WithPersistedSessionResolver(missingMetadataPersistedSessionResolver{}),
 		},
 	}
 

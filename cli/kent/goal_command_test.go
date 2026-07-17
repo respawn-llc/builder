@@ -113,11 +113,11 @@ func TestGoalRuntimeBackedMutationsPresentRuntimeUnavailableForResolvedSession(t
 	const sessionID = "cc948e1e-17e5-4213-87d5-4793ebe18a55"
 	runtimeErr := errors.Join(serverapi.ErrRuntimeUnavailable, errors.New("joined transport detail"))
 	tests := []struct {
-		name       string
-		args       []string
-		goalStatus string
-		configure  func(*recordingGoalRemote)
-		callCount  func(*recordingGoalRemote) int
+		name      string
+		args      []string
+		goal      *serverapi.RuntimeGoal
+		configure func(*recordingGoalRemote)
+		callCount func(*recordingGoalRemote) int
 	}{
 		{
 			name:      "set",
@@ -138,18 +138,18 @@ func TestGoalRuntimeBackedMutationsPresentRuntimeUnavailableForResolvedSession(t
 			callCount: func(remote *recordingGoalRemote) int { return len(remote.resumeReq) },
 		},
 		{
-			name:       "complete active",
-			args:       []string{"complete", "--session", sessionID},
-			goalStatus: string(session.GoalStatusActive),
-			configure:  func(remote *recordingGoalRemote) { remote.completeErr = runtimeErr },
-			callCount:  func(remote *recordingGoalRemote) int { return len(remote.completeReq) },
+			name:      "complete active",
+			args:      []string{"complete", "--session", sessionID},
+			goal:      &serverapi.RuntimeGoal{ID: "goal-active", Objective: "dormant goal", Status: string(session.GoalStatusActive)},
+			configure: func(remote *recordingGoalRemote) { remote.completeErr = runtimeErr },
+			callCount: func(remote *recordingGoalRemote) int { return len(remote.completeReq) },
 		},
 		{
-			name:       "complete paused",
-			args:       []string{"complete", "--session", sessionID},
-			goalStatus: string(session.GoalStatusPaused),
-			configure:  func(remote *recordingGoalRemote) { remote.completeErr = runtimeErr },
-			callCount:  func(remote *recordingGoalRemote) int { return len(remote.completeReq) },
+			name:      "complete paused",
+			args:      []string{"complete", "--session", sessionID},
+			goal:      &serverapi.RuntimeGoal{ID: "goal-paused", Objective: "dormant goal", Status: string(session.GoalStatusPaused)},
+			configure: func(remote *recordingGoalRemote) { remote.completeErr = runtimeErr },
+			callCount: func(remote *recordingGoalRemote) int { return len(remote.completeReq) },
 		},
 		{
 			name:      "clear",
@@ -161,10 +161,7 @@ func TestGoalRuntimeBackedMutationsPresentRuntimeUnavailableForResolvedSession(t
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			remote := &recordingGoalRemote{}
-			if tt.goalStatus != "" {
-				remote.goal = &serverapi.RuntimeGoal{ID: "goal-1", Objective: "dormant goal", Status: tt.goalStatus}
-			}
+			remote := &recordingGoalRemote{goal: tt.goal}
 			tt.configure(remote)
 			restore := replaceGoalCommandRemoteOpener(t, remote)
 			defer restore()
