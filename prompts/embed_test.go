@@ -367,8 +367,7 @@ func TestGoalPromptTemplatesKeepTypedCompositionContracts(t *testing.T) {
 
 func TestRenderActiveGoalContinuationPromptPreservesOneExactGoalBlock(t *testing.T) {
 	goal := "  ship /goal mode  "
-	rendered := RenderActiveGoalContinuationPrompt(goal)
-	source := []byte(rendered)
+	source := []byte(RenderActiveGoalContinuationPrompt(goal))
 	document := goldmark.New().Parser().Parse(markdowntext.NewReader(source))
 
 	var goalBlocks [][]string
@@ -380,9 +379,12 @@ func TestRenderActiveGoalContinuationPromptPreservesOneExactGoalBlock(t *testing
 		if !ok {
 			return ast.WalkContinue, nil
 		}
-		lines := markdownSegmentValues(source, block.Lines())
-		if len(lines) > 0 && lines[0] == "<goal>\n" {
-			goalBlocks = append(goalBlocks, lines)
+		lines := block.Lines()
+		if lines.Len() == 3 {
+			first, goal, last := lines.At(0), lines.At(1), lines.At(2)
+			if string(first.Value(source)) == "<goal>\n" {
+				goalBlocks = append(goalBlocks, []string{string(first.Value(source)), string(goal.Value(source)), string(last.Value(source))})
+			}
 		}
 		return ast.WalkContinue, nil
 	}); err != nil {
@@ -392,15 +394,6 @@ func TestRenderActiveGoalContinuationPromptPreservesOneExactGoalBlock(t *testing
 	if !reflect.DeepEqual(goalBlocks, want) {
 		t.Fatalf("goal blocks = %#v, want %#v", goalBlocks, want)
 	}
-}
-
-func markdownSegmentValues(source []byte, segments *markdowntext.Segments) []string {
-	values := make([]string, 0, segments.Len())
-	for index := range segments.Len() {
-		segment := segments.At(index)
-		values = append(values, string(segment.Value(source)))
-	}
-	return values
 }
 
 func TestRenderWorkflowNudgePrompt(t *testing.T) {

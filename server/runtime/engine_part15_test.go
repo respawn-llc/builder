@@ -601,14 +601,17 @@ func TestRemoteCompactionTaskCommentCountErrorDoesNotReplaceHistory(t *testing.T
 }
 
 func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) {
-	paused := session.GoalStatusPaused
+	paused, complete := session.GoalStatusPaused, session.GoalStatusComplete
 	tests := []struct {
 		name     string
 		workflow bool
 		status   *session.GoalStatus
+		clear    bool
 	}{
 		{name: "absent"},
 		{name: "paused", status: &paused},
+		{name: "complete", status: &complete},
+		{name: "cleared", clear: true},
 		{name: "active workflow", workflow: true},
 	}
 
@@ -619,13 +622,18 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 			if test.workflow {
 				engine = mustNewWorkflowTestEngine(t, store, activeGoalCompactionTestClient(), testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool), Config{Model: "gpt-5"})
 			}
-			if test.status != nil || test.workflow {
+			if test.status != nil || test.clear || test.workflow {
 				if _, err := engine.SetGoal("inactive goal", session.GoalActorUser); err != nil {
 					t.Fatal(err)
 				}
 			}
 			if test.status != nil {
 				if _, err := engine.SetGoalStatus(*test.status, session.GoalActorUser); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if test.clear {
+				if _, err := engine.ClearGoal(session.GoalActorUser); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -689,8 +697,6 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndManualCarryoverA
 	if historyIndex < 0 {
 		t.Fatalf("expected history_replaced event, got %+v", events)
 	}
-	// Base meta and manual carryover are reinjected into the same replacement
-	// payload, with summary then canonical context then carryover.
 	summaryIndex, environmentIndex, goalIndex, worktreeIndex, carryoverIndex := -1, -1, -1, -1, -1
 	goalCount := 0
 	for idx, item := range replacement.Items {
@@ -917,7 +923,6 @@ func activeGoalContinuationMessages(items []llm.ResponseItem) []llm.Message {
 }
 
 func assertSingleActiveGoalContinuation(t *testing.T, items []llm.ResponseItem, objective string) {
-	t.Helper()
 	messages := activeGoalContinuationMessages(items)
 	if len(messages) != 1 {
 		t.Fatalf("active-goal continuation count = %d, want 1; messages=%+v", len(messages), messages)
