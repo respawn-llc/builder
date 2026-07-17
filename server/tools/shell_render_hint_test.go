@@ -50,16 +50,7 @@ func TestDetectShellRenderHintDefaultsToShellForGeneralCommands(t *testing.T) {
 
 	for _, command := range commands {
 		t.Run(command, func(t *testing.T) {
-			hint := detectShellRenderHint(ctx, toolspec.ToolExecCommand, json.RawMessage(`{"command":`+jsonQuoted(command)+`}`), command)
-			if hint == nil {
-				t.Fatalf("expected shell render hint for command %q", command)
-			}
-			if hint.Kind != transcript.ToolRenderKindShell {
-				t.Fatalf("expected shell hint, got %+v", hint)
-			}
-			if hint.ShellDialect != transcript.ToolShellDialectPosix {
-				t.Fatalf("expected posix shell dialect, got %+v", hint)
-			}
+			requireShellRenderHint(t, ctx, json.RawMessage(`{"command":`+jsonQuoted(command)+`}`), command, transcript.ToolShellDialectPosix)
 		})
 	}
 }
@@ -78,36 +69,14 @@ func TestDetectShellRenderHintUsesExplicitWindowsExecShell(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			hint := detectShellRenderHint(
-				ToolCallContext{DefaultShellPath: "/bin/zsh", GOOS: "windows"},
-				toolspec.ToolExecCommand,
-				tc.raw,
-				tc.command,
-			)
-			if hint == nil || hint.Kind != transcript.ToolRenderKindShell {
-				t.Fatalf("expected shell render hint, got %+v", hint)
-			}
-			if hint.ShellDialect != tc.want {
-				t.Fatalf("expected %s dialect, got %+v", tc.want, hint)
-			}
+			requireShellRenderHint(t, ToolCallContext{DefaultShellPath: "/bin/zsh", GOOS: "windows"}, tc.raw, tc.command, tc.want)
 		})
 	}
 }
 
 func TestDetectShellRenderHintFallsBackToWindowsCommandDialect(t *testing.T) {
 	command := `copy /y C:\Users\nek\src.txt C:\Temp\dst.txt`
-	hint := detectShellRenderHint(
-		ToolCallContext{GOOS: "windows"},
-		toolspec.ToolExecCommand,
-		json.RawMessage(`{"command":`+jsonQuoted(command)+`}`),
-		command,
-	)
-	if hint == nil || hint.Kind != transcript.ToolRenderKindShell {
-		t.Fatalf("expected shell render hint, got %+v", hint)
-	}
-	if hint.ShellDialect != transcript.ToolShellDialectWindowsCommand {
-		t.Fatalf("expected windows command dialect, got %+v", hint)
-	}
+	requireShellRenderHint(t, ToolCallContext{GOOS: "windows"}, json.RawMessage(`{"command":`+jsonQuoted(command)+`}`), command, transcript.ToolShellDialectWindowsCommand)
 }
 
 func TestDetectShellRenderHintRejectsComplexOrAmbiguousCommands(t *testing.T) {
@@ -124,16 +93,7 @@ func TestDetectShellRenderHintRejectsComplexOrAmbiguousCommands(t *testing.T) {
 
 	for _, command := range tests {
 		t.Run(command, func(t *testing.T) {
-			hint := detectShellRenderHint(ctx, toolspec.ToolExecCommand, json.RawMessage(`{"command":`+jsonQuoted(command)+`}`), command)
-			if hint == nil {
-				t.Fatalf("expected fallback shell hint for command %q", command)
-			}
-			if hint.Kind != transcript.ToolRenderKindShell {
-				t.Fatalf("expected shell fallback hint, got %+v", hint)
-			}
-			if hint.ShellDialect != transcript.ToolShellDialectPosix {
-				t.Fatalf("expected posix shell dialect, got %+v", hint)
-			}
+			requireShellRenderHint(t, ctx, json.RawMessage(`{"command":`+jsonQuoted(command)+`}`), command, transcript.ToolShellDialectPosix)
 		})
 	}
 }
@@ -164,6 +124,23 @@ func TestParseSedFileArgAcceptsOnlyPrintRangeExpressions(t *testing.T) {
 				t.Fatalf("parseSedFileArg(%q) = %q/%t, want %q/%t", tc.args, path, ok, tc.wantPath, tc.wantOK)
 			}
 		})
+	}
+}
+
+func requireShellRenderHint(
+	t *testing.T,
+	ctx ToolCallContext,
+	raw json.RawMessage,
+	command string,
+	wantDialect transcript.ToolShellDialect,
+) {
+	t.Helper()
+	hint := detectShellRenderHint(ctx, toolspec.ToolExecCommand, raw, command)
+	if hint == nil || hint.Kind != transcript.ToolRenderKindShell {
+		t.Fatalf("expected shell render hint, got %+v", hint)
+	}
+	if hint.ShellDialect != wantDialect {
+		t.Fatalf("expected %s dialect, got %+v", wantDialect, hint)
 	}
 }
 

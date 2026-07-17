@@ -383,6 +383,17 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	if err := parent.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable parent: %v", err)
 	}
+	ordinaryCaller, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("session.Create ordinary caller: %v", err)
+	}
+	callerRole := "caller"
+	if err := ordinaryCaller.SetContinuationContext(session.ContinuationContext{AgentRole: &callerRole}); err != nil {
+		t.Fatalf("SetContinuationContext ordinary caller: %v", err)
+	}
+	if err := ordinaryCaller.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable ordinary caller: %v", err)
+	}
 
 	cfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {
@@ -393,10 +404,20 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	cfg.Settings.Workflow = config.WorkflowSettings{Subagents: false}
 	hiddenSettings := cfg.Settings
 	cfg.Settings.Subagents = map[string]config.SubagentRole{
+		"caller": {
+			Settings:         hiddenSettings,
+			Sources:          map[string]string{"thinking_level": "file"},
+			AgentCallableSet: true,
+		},
 		"hidden": {
 			Settings:         hiddenSettings,
 			Sources:          map[string]string{"thinking_level": "file"},
 			AgentCallable:    true,
+			AgentCallableSet: true,
+		},
+		"blocked": {
+			Settings:         hiddenSettings,
+			Sources:          map[string]string{"thinking_level": "file"},
 			AgentCallableSet: true,
 		},
 	}
@@ -421,9 +442,10 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	stores := &recordingStoreRegistrar{}
 	runtimes := &recordingRuntimePublisher{}
 	sessionLauncher := sessionlaunch.NewService(launch.Planner{
-		Config:       cfg,
-		ContainerDir: containerDir,
-		StoreOptions: meta.AuthoritativeSessionStoreOptions(),
+		Config:            cfg,
+		ContainerDir:      containerDir,
+		StoreOptions:      meta.AuthoritativeSessionStoreOptions(),
+		PersistedSessions: meta,
 	}, stores)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch:   sessionLauncher,
@@ -446,6 +468,22 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	after := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes)
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("denied new-child launch changed artifacts: before=%+v after=%+v", before, after)
+	}
+	ordinaryCallerID := ordinaryCaller.Meta().SessionID
+	blockedRole := "blocked"
+	beforeOrdinaryTargetDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes)
+	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
+		ClientRequestID: "ordinary-blocked-target-denial",
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRunPromptSessionID(t, ordinaryCallerID))),
+		CallerSessionID: &ordinaryCallerID,
+		Prompt:          "delegate this",
+		Overrides:       serverapi.RunPromptOverrides{AgentRole: &blockedRole},
+	}, nil)
+	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialNotCallable {
+		t.Fatalf("ordinary blocked-target error = %T %v, want not-callable denial", err, err)
+	}
+	if afterOrdinaryTargetDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes); !reflect.DeepEqual(afterOrdinaryTargetDenial, beforeOrdinaryTargetDenial) {
+		t.Fatalf("ordinary blocked-target denial changed artifacts: before=%+v after=%+v", beforeOrdinaryTargetDenial, afterOrdinaryTargetDenial)
 	}
 	selected, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
@@ -486,6 +524,24 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	if !reflect.DeepEqual(afterSelectedDenial, beforeSelectedDenial) {
 		t.Fatalf("denied selected-session launch changed artifacts: before=%+v after=%+v", beforeSelectedDenial, afterSelectedDenial)
 	}
+	substitutedCaller := selectedBefore.SessionID
+	substitutedCallerID := mustRunPromptSessionID(t, substitutedCaller)
+	substitutedPlan, err := sessionLauncher.PlanLaunchSession(ctx, serverapi.SessionPlanRequest{
+		ClientRequestID: "substituted-ordinary-caller",
+		Mode:            serverapi.SessionLaunchModeHeadless,
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(substitutedCallerID)),
+		CallerSessionID: &substitutedCaller,
+		Overrides:       serverapi.RunPromptOverrides{AgentRole: &role},
+	})
+	if err != nil {
+		t.Fatalf("substituted ordinary caller PlanLaunchSession: %v", err)
+	}
+	if got := substitutedPlan.Plan.Store.Meta().ParentAgentSessionID; got == nil || *got != substitutedCallerID {
+		t.Fatalf("substituted caller child parent-agent = %v, want %q", got, substitutedCaller)
+	}
+	if got := substitutedPlan.Plan.Store.Meta().Continuation; got == nil || got.AgentRole == nil || *got.AgentRole != role {
+		t.Fatalf("substituted caller continuation = %+v, want hidden role", got)
+	}
 }
 
 func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
@@ -513,6 +569,15 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 		t.Fatalf("SetWorkflowSessionState: %v", err)
 	}
 	parentID := parent.Meta().SessionID
+	ordinaryParent, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("session.Create ordinary parent: %v", err)
+	}
+	currentRole := "current"
+	if err := ordinaryParent.SetContinuationContext(session.ContinuationContext{AgentRole: &currentRole}); err != nil {
+		t.Fatalf("SetContinuationContext ordinary parent: %v", err)
+	}
+	ordinaryParentID := ordinaryParent.Meta().SessionID
 
 	var responseCount int
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -536,6 +601,11 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 	cfg.Settings.Workflow = config.WorkflowSettings{Subagents: true}
 	workerSettings := cfg.Settings
 	cfg.Settings.Subagents = map[string]config.SubagentRole{
+		"current": {
+			Settings:         workerSettings,
+			Sources:          map[string]string{"model": "file"},
+			AgentCallableSet: true,
+		},
 		"worker": {
 			Settings:         workerSettings,
 			Sources:          map[string]string{"model": "file"},
@@ -586,8 +656,49 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 	if runtimes.IsSessionRuntimeActive(response.SessionID) {
 		t.Fatalf("completed headless launch left runtime active for %q", response.SessionID)
 	}
-	if responseCount != 1 {
-		t.Fatalf("provider responses = %d, want 1", responseCount)
+
+	fast := config.BuiltInSubagentRoleFast
+	ordinaryTests := []struct {
+		name string
+		role string
+	}{
+		{name: "fast", role: fast},
+		{name: "custom", role: worker},
+	}
+	for _, test := range ordinaryTests {
+		t.Run("ordinary non-callable caller "+test.name, func(t *testing.T) {
+			response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
+				ClientRequestID: "ordinary-non-callable-" + test.name,
+				Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRunPromptSessionID(t, ordinaryParentID))),
+				CallerSessionID: &ordinaryParentID,
+				Prompt:          "delegate this",
+				Overrides:       serverapi.RunPromptOverrides{AgentRole: &test.role},
+			}, nil)
+			if err != nil {
+				t.Fatalf("RunPrompt: %v", err)
+			}
+			if response.Result != "workflow response" {
+				t.Fatalf("result = %q, want provider response", response.Result)
+			}
+			child, err := session.OpenByID(root, response.SessionID, meta.AuthoritativeSessionStoreOptions()...)
+			if err != nil {
+				t.Fatalf("OpenByID child: %v", err)
+			}
+			childMeta := child.Meta()
+			ordinaryParentSessionID := mustRunPromptSessionID(t, ordinaryParentID)
+			if childMeta.ParentAgentSessionID == nil || *childMeta.ParentAgentSessionID != ordinaryParentSessionID {
+				t.Fatalf("parent-agent id = %v, want %q", childMeta.ParentAgentSessionID, ordinaryParentID)
+			}
+			if childMeta.Continuation == nil || childMeta.Continuation.AgentRole == nil || *childMeta.Continuation.AgentRole != test.role {
+				t.Fatalf("continuation = %+v, want role %q", childMeta.Continuation, test.role)
+			}
+			if runtimes.IsSessionRuntimeActive(response.SessionID) {
+				t.Fatalf("completed headless launch left runtime active for %q", response.SessionID)
+			}
+		})
+	}
+	if responseCount != 3 {
+		t.Fatalf("provider responses = %d, want 3", responseCount)
 	}
 }
 

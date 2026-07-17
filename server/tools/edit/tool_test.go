@@ -23,17 +23,9 @@ func TestCreateMissingFileReturnsJSONString(t *testing.T) {
 		"new_string": "hello\n",
 	})
 
-	if result.IsError {
-		t.Fatalf("expected success, got %s", string(result.Output))
-	}
+	requireEditSuccess(t, result)
 	assertJSONText(t, result.Output, "ok")
-	got, err := os.ReadFile(filepath.Join(dir, "nested", "a.txt"))
-	if err != nil {
-		t.Fatalf("read created file: %v", err)
-	}
-	if string(got) != "hello\n" {
-		t.Fatalf("created content = %q", string(got))
-	}
+	assertEditTestFileContent(t, filepath.Join(dir, "nested", "a.txt"), "hello\n")
 	if result.Presentation != nil || result.PresentationDelta != nil {
 		t.Fatalf("edit handler must not own transcript presentation, got presentation=%+v delta=%+v", result.Presentation, result.PresentationDelta)
 	}
@@ -42,9 +34,7 @@ func TestCreateMissingFileReturnsJSONString(t *testing.T) {
 func TestExactReplaceAndReplaceAll(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "a.txt")
-	if err := os.WriteFile(target, []byte("one two one\n"), 0o644); err != nil {
-		t.Fatalf("seed file: %v", err)
-	}
+	writeEditTestFile(t, target, "one two one\n", 0o644)
 	tool := newTestTool(t, dir)
 
 	first := callEdit(t, tool, map[string]any{
@@ -62,24 +52,14 @@ func TestExactReplaceAndReplaceAll(t *testing.T) {
 		"new_string":  "ONE",
 		"replace_all": true,
 	})
-	if second.IsError {
-		t.Fatalf("expected success, got %s", string(second.Output))
-	}
-	data, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("read edited file: %v", err)
-	}
-	if string(data) != "ONE two ONE\n" {
-		t.Fatalf("edited content = %q", string(data))
-	}
+	requireEditSuccess(t, second)
+	assertEditTestFileContent(t, target, "ONE two ONE\n")
 }
 
 func TestEditReplacementPreservesExecutableMode(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "script.sh")
-	if err := os.WriteFile(target, []byte("#!/bin/sh\necho old\n"), 0o755); err != nil {
-		t.Fatalf("seed executable file: %v", err)
-	}
+	writeEditTestFile(t, target, "#!/bin/sh\necho old\n", 0o755)
 	if err := os.Chmod(target, 0o755); err != nil {
 		t.Fatalf("mark seed file executable: %v", err)
 	}
@@ -90,17 +70,8 @@ func TestEditReplacementPreservesExecutableMode(t *testing.T) {
 		"old_string": "echo old",
 		"new_string": "echo new",
 	})
-	if result.IsError {
-		t.Fatalf("expected success, got %s", string(result.Output))
-	}
-
-	data, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("read edited file: %v", err)
-	}
-	if got, want := string(data), "#!/bin/sh\necho new\n"; got != want {
-		t.Fatalf("edited content = %q, want %q", got, want)
-	}
+	requireEditSuccess(t, result)
+	assertEditTestFileContent(t, target, "#!/bin/sh\necho new\n")
 	filemode.AssertUnixPermissionMode(t, target, 0o755)
 }
 
@@ -114,9 +85,7 @@ func TestInputAliasesAndConflicts(t *testing.T) {
 		"newText":    "hello",
 		"replaceAll": true,
 	})
-	if ok.IsError {
-		t.Fatalf("expected alias success, got %s", string(ok.Output))
-	}
+	requireEditSuccess(t, ok)
 
 	conflict := callEdit(t, tool, map[string]any{
 		"path":      "a.txt",
@@ -132,13 +101,9 @@ func TestInputAliasesAndConflicts(t *testing.T) {
 func TestCreateRejectsNonEmptyAndAllowsWhitespaceOnly(t *testing.T) {
 	dir := t.TempDir()
 	nonEmpty := filepath.Join(dir, "non-empty.txt")
-	if err := os.WriteFile(nonEmpty, []byte("already\n"), 0o644); err != nil {
-		t.Fatalf("seed non-empty: %v", err)
-	}
+	writeEditTestFile(t, nonEmpty, "already\n", 0o644)
 	blank := filepath.Join(dir, "blank.txt")
-	if err := os.WriteFile(blank, []byte("  \n\t"), 0o644); err != nil {
-		t.Fatalf("seed blank: %v", err)
-	}
+	writeEditTestFile(t, blank, "  \n\t", 0o644)
 	tool := newTestTool(t, dir)
 
 	rejected := callEdit(t, tool, map[string]any{"path": "non-empty.txt", "old_string": "", "new_string": "new"})
@@ -146,23 +111,13 @@ func TestCreateRejectsNonEmptyAndAllowsWhitespaceOnly(t *testing.T) {
 		t.Fatalf("expected non-empty rejection, got %q", toolResultText(t, rejected))
 	}
 	allowed := callEdit(t, tool, map[string]any{"path": "blank.txt", "old_string": "", "new_string": "new"})
-	if allowed.IsError {
-		t.Fatalf("expected blank replacement success, got %s", string(allowed.Output))
-	}
-	got, err := os.ReadFile(blank)
-	if err != nil {
-		t.Fatalf("read blank replacement: %v", err)
-	}
-	if string(got) != "new" {
-		t.Fatalf("blank replacement = %q", string(got))
-	}
+	requireEditSuccess(t, allowed)
+	assertEditTestFileContent(t, blank, "new")
 }
 
 func TestEncodingAndBinaryGuards(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "nul.txt"), []byte{'a', 0, 'b'}, 0o644); err != nil {
-		t.Fatalf("seed nul: %v", err)
-	}
+	writeEditTestFile(t, filepath.Join(dir, "nul.txt"), "a\x00b", 0o644)
 	tool := newTestTool(t, dir)
 
 	nul := callEdit(t, tool, map[string]any{"path": "nul.txt", "old_string": "a", "new_string": "b"})
@@ -178,31 +133,19 @@ func TestEncodingAndBinaryGuards(t *testing.T) {
 func TestDeletionIncludesFollowingNewlineAfterUniqueness(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "a.txt")
-	if err := os.WriteFile(target, []byte("before\nremove me\nafter\n"), 0o644); err != nil {
-		t.Fatalf("seed file: %v", err)
-	}
+	writeEditTestFile(t, target, "before\nremove me\nafter\n", 0o644)
 	tool := newTestTool(t, dir)
 
 	result := callEdit(t, tool, map[string]any{"path": "a.txt", "old_string": "remove me", "new_string": ""})
-	if result.IsError {
-		t.Fatalf("expected success, got %s", string(result.Output))
-	}
-	got, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("read edited file: %v", err)
-	}
-	if string(got) != "before\nafter\n" {
-		t.Fatalf("deleted content = %q", string(got))
-	}
+	requireEditSuccess(t, result)
+	assertEditTestFileContent(t, target, "before\nafter\n")
 }
 
 func TestContextAwareFallbackRejectsCommonMiddleLineWithoutBoundaryMatch(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "a.txt")
 	original := "alpha\nTODO\nomega\n"
-	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
-		t.Fatalf("seed file: %v", err)
-	}
+	writeEditTestFile(t, target, original, 0o644)
 	tool := newTestTool(t, dir)
 
 	result := callEdit(t, tool, map[string]any{
@@ -213,13 +156,7 @@ func TestContextAwareFallbackRejectsCommonMiddleLineWithoutBoundaryMatch(t *test
 	if !result.IsError || !strings.Contains(toolResultText(t, result), "matched 0 occurrences") {
 		t.Fatalf("expected 0-match failure, got %+v text=%q", result, toolResultText(t, result))
 	}
-	got, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("read file: %v", err)
-	}
-	if string(got) != original {
-		t.Fatalf("file was unexpectedly changed: %q", string(got))
-	}
+	assertEditTestFileContent(t, target, original)
 }
 
 func TestContextAwareFallbackRejectsMismatchedInteriorLines(t *testing.T) {
@@ -260,9 +197,7 @@ func TestOutsideWorkspaceAncestorAliasUsesSingleCallApproval(t *testing.T) {
 		t.Fatalf("create outside target dir: %v", err)
 	}
 	target := filepath.Join(targetDir, "target.txt")
-	if err := os.WriteFile(target, []byte("old\n"), 0o644); err != nil {
-		t.Fatalf("seed outside target: %v", err)
-	}
+	writeEditTestFile(t, target, "old\n", 0o644)
 	alias := filepath.Join(outside, "alias")
 	if err := os.Symlink(targetDir, alias); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
@@ -274,19 +209,11 @@ func TestOutsideWorkspaceAncestorAliasUsesSingleCallApproval(t *testing.T) {
 	}))
 
 	result := callEdit(t, tool, map[string]any{"path": filepath.Join(alias, "target.txt"), "old_string": "old", "new_string": "new"})
-	if result.IsError {
-		t.Fatalf("expected success, got %s", string(result.Output))
-	}
+	requireEditSuccess(t, result)
 	if prompts != 1 {
 		t.Fatalf("outside approval prompts = %d, want 1", prompts)
 	}
-	got, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("read target: %v", err)
-	}
-	if string(got) != "new\n" {
-		t.Fatalf("target content = %q", string(got))
-	}
+	assertEditTestFileContent(t, target, "new\n")
 }
 
 func TestOutsideWorkspaceMissingAncestorAliasUsesSingleCallApproval(t *testing.T) {
@@ -307,28 +234,18 @@ func TestOutsideWorkspaceMissingAncestorAliasUsesSingleCallApproval(t *testing.T
 	}))
 
 	result := callEdit(t, tool, map[string]any{"path": filepath.Join(alias, "new.txt"), "old_string": "", "new_string": "new\n"})
-	if result.IsError {
-		t.Fatalf("expected success, got %s", string(result.Output))
-	}
+	requireEditSuccess(t, result)
 	if prompts != 1 {
 		t.Fatalf("outside approval prompts = %d, want 1", prompts)
 	}
-	got, err := os.ReadFile(filepath.Join(targetDir, "new.txt"))
-	if err != nil {
-		t.Fatalf("read target: %v", err)
-	}
-	if string(got) != "new\n" {
-		t.Fatalf("target content = %q", string(got))
-	}
+	assertEditTestFileContent(t, filepath.Join(targetDir, "new.txt"), "new\n")
 }
 
 func TestOutsideWorkspaceFinalSymlinkRequiresRealPathApproval(t *testing.T) {
 	workspace := t.TempDir()
 	outside := newNonTemporaryOutsideDir(t)
 	target := filepath.Join(outside, "target.txt")
-	if err := os.WriteFile(target, []byte("old\n"), 0o644); err != nil {
-		t.Fatalf("seed outside target: %v", err)
-	}
+	writeEditTestFile(t, target, "old\n", 0o644)
 	link := filepath.Join(outside, "link.txt")
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
@@ -340,9 +257,7 @@ func TestOutsideWorkspaceFinalSymlinkRequiresRealPathApproval(t *testing.T) {
 	}))
 
 	result := callEdit(t, tool, map[string]any{"path": link, "old_string": "old", "new_string": "new"})
-	if result.IsError {
-		t.Fatalf("expected success, got %s", string(result.Output))
-	}
+	requireEditSuccess(t, result)
 	if prompts != 2 {
 		t.Fatalf("outside approval prompts = %d, want 2", prompts)
 	}
@@ -351,9 +266,8 @@ func TestOutsideWorkspaceFinalSymlinkRequiresRealPathApproval(t *testing.T) {
 func TestPathDenyPolicyBlocksCreateReplaceAndRealSymlinkTargets(t *testing.T) {
 	workspace := t.TempDir()
 	deniedRoot := newNonTemporaryOutsideDir(t)
-	if err := os.WriteFile(filepath.Join(deniedRoot, "existing.txt"), []byte("old\n"), 0o644); err != nil {
-		t.Fatalf("seed denied existing file: %v", err)
-	}
+	existing := filepath.Join(deniedRoot, "existing.txt")
+	writeEditTestFile(t, existing, "old\n", 0o644)
 	policy, err := tools.CompileLiteralTreePathDenyPolicy(deniedRoot, "synthetic deny")
 	if err != nil {
 		t.Fatalf("compile path deny policy: %v", err)
@@ -376,17 +290,11 @@ func TestPathDenyPolicyBlocksCreateReplaceAndRealSymlinkTargets(t *testing.T) {
 		t.Fatalf("denied create wrote file, stat err=%v", err)
 	}
 
-	replaced := callEdit(t, tool, map[string]any{"path": filepath.Join(deniedRoot, "existing.txt"), "old_string": "old", "new_string": "new"})
+	replaced := callEdit(t, tool, map[string]any{"path": existing, "old_string": "old", "new_string": "new"})
 	if !replaced.IsError || !strings.Contains(toolResultText(t, replaced), "synthetic deny") {
 		t.Fatalf("expected synthetic deny replace error, got %q", toolResultText(t, replaced))
 	}
-	got, err := os.ReadFile(filepath.Join(deniedRoot, "existing.txt"))
-	if err != nil {
-		t.Fatalf("read denied existing file: %v", err)
-	}
-	if string(got) != "old\n" {
-		t.Fatalf("denied replace changed file to %q", string(got))
-	}
+	assertEditTestFileContent(t, existing, "old\n")
 
 	alias := filepath.Join(workspace, "alias")
 	if err := os.Symlink(deniedRoot, alias); err != nil {
@@ -398,6 +306,31 @@ func TestPathDenyPolicyBlocksCreateReplaceAndRealSymlinkTargets(t *testing.T) {
 	}
 	if prompts != 0 {
 		t.Fatalf("outside approval prompts = %d, want 0", prompts)
+	}
+}
+
+func writeEditTestFile(t *testing.T, path string, content string, mode os.FileMode) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		t.Fatalf("write test file %q: %v", path, err)
+	}
+}
+
+func assertEditTestFileContent(t *testing.T, path string, want string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read test file %q: %v", path, err)
+	}
+	if string(got) != want {
+		t.Fatalf("test file %q content = %q, want %q", path, string(got), want)
+	}
+}
+
+func requireEditSuccess(t *testing.T, result tools.Result) {
+	t.Helper()
+	if result.IsError {
+		t.Fatalf("expected edit success, got %s", string(result.Output))
 	}
 }
 

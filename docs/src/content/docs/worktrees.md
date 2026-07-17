@@ -34,7 +34,7 @@ Select a worktree by its exact ID, branch, display name, or path. IDs take prece
 
 `create` prepares the checkout and runs its setup script. The CLI prints a separate `kent worktree enter` command; the TUI enters the worktree after creation succeeds.
 
-`enter`, `leave`, and deletion of the active worktree may finish after the command returns. Kent applies them after the active agent step and reports completion or failure in session activity. A server restart cancels a pending change.
+`enter`, `leave`, and deletion of the active worktree may finish after the command returns. `enter` and `leave` confirm that the change is scheduled for the agent's next step and usually takes a few seconds; `--json` returns the operation acknowledgement. Kent reports completion or failure in session activity. A server restart cancels a pending change.
 
 ## Delete
 

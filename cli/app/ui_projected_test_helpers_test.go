@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/registry"
 	"core/server/runtime"
 	"core/server/runtimecontrol"
@@ -16,16 +17,7 @@ import (
 
 func waitForTestCondition(t *testing.T, timeout time.Duration, label string, condition func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for {
-		if condition() {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", label)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	testsetup.RequireUntil(t, time.Now().Add(timeout), 10*time.Millisecond, condition, "timed out waiting for %s", label)
 }
 
 func newProjectedTestUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption) *uiModel {

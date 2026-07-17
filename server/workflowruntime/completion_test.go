@@ -145,8 +145,8 @@ func TestCompletionJSONSchemaUsesOpenAICompatibleNullableTransitionParameters(t 
 	if len(schema.OneOf) != 0 {
 		t.Fatalf("schema should not use oneOf: %s", string(raw))
 	}
-	assertNullableParameterProperty(t, schema.Properties["summary"])
-	assertNullableParameterProperty(t, schema.Properties["risk"])
+	assertNullableStringProperty(t, schema.Properties["summary"])
+	assertNullableStringProperty(t, schema.Properties["risk"])
 	assertNullableStringProperty(t, schema.Properties["commentary"])
 	wantRequired := []string{"transition", "commentary", "risk", "summary"}
 	if strings.Join(schema.Required, ",") != strings.Join(wantRequired, ",") {
@@ -165,15 +165,16 @@ func assertNullableStringProperty(t *testing.T, property completionSchemaPropert
 	}
 }
 
-func assertNullableParameterProperty(t *testing.T, property completionSchemaProperty) {
+func requireValidationError(t *testing.T, err error) ValidationError {
 	t.Helper()
-	values, ok := property.Type.([]any)
-	if !ok || len(values) != 2 {
-		t.Fatalf("property type = %+v, want nullable string", property.Type)
+	if err == nil {
+		t.Fatal("expected validation error")
 	}
-	if values[0] != "string" || values[1] != "null" {
-		t.Fatalf("property type = %+v, want [string null]", values)
+	validation, ok := err.(ValidationError)
+	if !ok {
+		t.Fatalf("error type = %T, want ValidationError", err)
 	}
+	return validation
 }
 
 func TestCompletionJSONSchemaRequiresSingleTransitionParameters(t *testing.T) {
@@ -218,13 +219,7 @@ func TestDecodeCompletionRejectsLegacyTransitionID(t *testing.T) {
 	_, err := DecodeCompletion(json.RawMessage(`{"transition_id":"done","commentary":"done","summary":"done"}`), CompletionContract{
 		Transitions: []CompletionTransition{{ID: "done", Parameters: []workflow.Parameter{{Key: "summary", Description: "Summary."}}}},
 	})
-	if err == nil {
-		t.Fatal("expected validation error")
-	}
-	validation, ok := err.(ValidationError)
-	if !ok {
-		t.Fatalf("error type = %T, want ValidationError", err)
-	}
+	validation := requireValidationError(t, err)
 	codes := map[string]bool{}
 	for _, issue := range validation.Issues {
 		codes[issue.Code] = true
@@ -241,13 +236,7 @@ func TestDecodeCompletionInfersSingleTransitionAndRequiresParameters(t *testing.
 			{Key: "risk", Description: "Risk."},
 		}}},
 	})
-	if err == nil {
-		t.Fatal("expected validation error")
-	}
-	validation, ok := err.(ValidationError)
-	if !ok {
-		t.Fatalf("error type = %T, want ValidationError", err)
-	}
+	validation := requireValidationError(t, err)
 	missing := map[string]bool{}
 	for _, issue := range validation.Issues {
 		if issue.Code == "required_parameter_missing" {
@@ -355,13 +344,7 @@ func TestDecodeCompletionRequiresTransitionWhenAmbiguous(t *testing.T) {
 			{ID: "blocked", Parameters: []workflow.Parameter{{Key: "risk", Description: "Risk."}}},
 		},
 	})
-	if err == nil {
-		t.Fatal("expected validation error")
-	}
-	validation, ok := err.(ValidationError)
-	if !ok {
-		t.Fatalf("error type = %T, want ValidationError", err)
-	}
+	validation := requireValidationError(t, err)
 	for _, issue := range validation.Issues {
 		if issue.Code == "required_field_missing" && issue.Field == "transition" {
 			return
@@ -377,13 +360,7 @@ func TestDecodeCompletionRejectsUndeclaredTransition(t *testing.T) {
 			{ID: "blocked"},
 		},
 	})
-	if err == nil {
-		t.Fatal("expected validation error")
-	}
-	validation, ok := err.(ValidationError)
-	if !ok {
-		t.Fatalf("error type = %T, want ValidationError", err)
-	}
+	validation := requireValidationError(t, err)
 	for _, issue := range validation.Issues {
 		if issue.Code == "invalid_transition" && issue.Field == "transition" {
 			return
@@ -399,13 +376,7 @@ func TestDecodeCompletionRejectsParameterFromUnselectedTransition(t *testing.T) 
 			{ID: "blocked", Parameters: []workflow.Parameter{{Key: "risk", Description: "Risk."}}},
 		},
 	})
-	if err == nil {
-		t.Fatal("expected validation error")
-	}
-	validation, ok := err.(ValidationError)
-	if !ok {
-		t.Fatalf("error type = %T, want ValidationError", err)
-	}
+	validation := requireValidationError(t, err)
 	for _, issue := range validation.Issues {
 		if issue.Code == "unexpected_parameter" && issue.Field == "risk" {
 			return

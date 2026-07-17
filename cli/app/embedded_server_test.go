@@ -23,7 +23,6 @@ import (
 	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
 	"core/server/sessionservice"
-	serverstartup "core/server/startup"
 	shelltool "core/server/tools/shell"
 	"core/shared/apicontract"
 	"core/shared/clientui"
@@ -38,7 +37,6 @@ type testEmbeddedServer struct {
 	authManager          *auth.Manager
 	fastModeState        *runtime.FastModeState
 	background           *shelltool.Manager
-	backgroundRouter     serverstartup.BackgroundRouter
 	runPromptClient      apicontract.RunPromptService
 	projectID            string
 	boundWorkspaceID     string
@@ -122,7 +120,6 @@ func (s *testEmbeddedServer) BindProjectWorkspace(_ context.Context, projectID s
 		authManager:          s.authManager,
 		fastModeState:        s.fastModeState,
 		background:           s.background,
-		backgroundRouter:     s.backgroundRouter,
 		runPromptClient:      s.runPromptClient,
 		projectID:            strings.TrimSpace(projectID),
 		boundWorkspaceID:     s.boundWorkspaceID,
@@ -223,8 +220,6 @@ func (s *testEmbeddedServer) PromptControlClient() apicontract.PromptControlServ
 	return s.promptControlClient
 }
 
-func (s *testEmbeddedServer) ContainerDir() string { return s.containerDir }
-
 func (s *testEmbeddedServer) OAuthOptions() auth.OpenAIOAuthOptions { return s.oauthOpts }
 
 func (s *testEmbeddedServer) AuthManager() *auth.Manager { return s.authManager }
@@ -247,10 +242,6 @@ func (s *testEmbeddedServer) AuthStatusClient() apicontract.AuthStatusService {
 func (s *testEmbeddedServer) FastModeState() *runtime.FastModeState { return s.fastModeState }
 
 func (s *testEmbeddedServer) Background() *shelltool.Manager { return s.background }
-
-func (s *testEmbeddedServer) BackgroundRouter() serverstartup.BackgroundRouter {
-	return s.backgroundRouter
-}
 
 func (s *testEmbeddedServer) RunPromptClient() apicontract.RunPromptService { return s.runPromptClient }
 

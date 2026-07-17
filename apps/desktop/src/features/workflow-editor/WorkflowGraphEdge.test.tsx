@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { describe, expect, it, vi } from "vitest";
 import type * as XyflowReact from "@xyflow/react";
@@ -21,35 +21,19 @@ vi.mock("@xyflow/react", async (importOriginal) => {
 
 describe("WorkflowGraphEdge", () => {
   it("renders routed edges as rounded orthogonal polylines", () => {
-    render(
-      <svg>
-        <WorkflowGraphEdge
-          data={{
-            contextMode: "new_session",
-            entityID: "edge-1",
-            entityKind: "edge",
-            hasError: false,
-            label: "",
-            routePoints: [
-              { x: 0, y: 0 },
-              { x: 50, y: 0 },
-              { x: 50, y: 40 },
-              { x: 100, y: 40 },
-            ],
-            transitionGroupID: "tg-1",
-          }}
-          id="edge-1"
-          onInspect={() => undefined}
-          source="join"
-          sourceX={0}
-          sourceY={0}
-          target="done"
-          targetX={100}
-          targetY={40}
-          type="workflow"
-        />
-      </svg>,
-    );
+    renderEdge({
+      data: edgeData({
+        contextMode: "new_session",
+        routePoints: [
+          { x: 0, y: 0 },
+          { x: 50, y: 0 },
+          { x: 50, y: 40 },
+          { x: 100, y: 40 },
+        ],
+      }),
+      source: "join",
+      targetY: 40,
+    });
 
     expect(screen.getByTestId("workflow-edge-path")).toHaveAttribute(
       "d",
@@ -63,30 +47,7 @@ describe("WorkflowGraphEdge", () => {
   it("inspects an edge from the visible path without bubbling to the React Flow wrapper", () => {
     const onInspect = vi.fn();
     const onWrapperClick = vi.fn();
-    render(
-      <svg onClick={onWrapperClick}>
-        <WorkflowGraphEdge
-          data={{
-            contextMode: "compact_and_continue_session",
-            entityID: "edge-1",
-            entityKind: "edge",
-            hasError: false,
-            label: "",
-            routePoints: [],
-            transitionGroupID: "tg-1",
-          }}
-          id="edge-1"
-          onInspect={onInspect}
-          source="node-1"
-          sourceX={0}
-          sourceY={0}
-          target="done"
-          targetX={100}
-          targetY={0}
-          type="workflow"
-        />
-      </svg>,
-    );
+    renderEdge({ onInspect }, onWrapperClick);
 
     fireEvent.click(screen.getByTestId("workflow-edge-path"));
 
@@ -95,34 +56,7 @@ describe("WorkflowGraphEdge", () => {
   });
 
   it("shows a delete-only context menu for the edge path", async () => {
-    const onDeleteSelection = vi.fn();
-    const onSelectContextMenu = vi.fn();
-    render(
-      <svg>
-        <WorkflowGraphEdge
-          data={{
-            contextMode: "compact_and_continue_session",
-            entityID: "edge-1",
-            entityKind: "edge",
-            hasError: false,
-            label: "",
-            routePoints: [],
-            transitionGroupID: "tg-1",
-          }}
-          id="edge-1"
-          onDeleteSelection={onDeleteSelection}
-          onInspect={() => undefined}
-          onSelectContextMenu={onSelectContextMenu}
-          source="node-1"
-          sourceX={0}
-          sourceY={0}
-          target="done"
-          targetX={100}
-          targetY={0}
-          type="workflow"
-        />
-      </svg>,
-    );
+    const { onDeleteSelection, onSelectContextMenu } = mountContextMenuEdge();
 
     fireEvent.contextMenu(screen.getByTestId("workflow-edge-hit-path"));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Delete branch" }));
@@ -134,37 +68,13 @@ describe("WorkflowGraphEdge", () => {
   });
 
   it("shows the same delete-only context menu for the edge label", async () => {
-    const onDeleteSelection = vi.fn();
-    const onSelectContextMenu = vi.fn();
-    render(
-      <svg>
-        <WorkflowGraphEdge
-          data={{
-            contextMode: "compact_and_continue_session",
-            entityID: "edge-1",
-            entityKind: "edge",
-            hasError: false,
-            label: "Review",
-            routePoints: [
-              { x: 0, y: 0 },
-              { x: 100, y: 0 },
-            ],
-            transitionGroupID: "tg-1",
-          }}
-          id="edge-1"
-          onDeleteSelection={onDeleteSelection}
-          onInspect={() => undefined}
-          onSelectContextMenu={onSelectContextMenu}
-          source="node-1"
-          sourceX={0}
-          sourceY={0}
-          target="done"
-          targetX={100}
-          targetY={0}
-          type="workflow"
-        />
-      </svg>,
-    );
+    const { onDeleteSelection, onSelectContextMenu } = mountContextMenuEdge({
+      label: "Review",
+      routePoints: [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+      ],
+    });
 
     fireEvent.contextMenu(screen.getByTestId("workflow-edge-label-edge-1"));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Delete branch" }));
@@ -174,3 +84,55 @@ describe("WorkflowGraphEdge", () => {
     expect(screen.queryByRole("menuitem", { name: "Delete node" })).not.toBeInTheDocument();
   });
 });
+
+type WorkflowGraphEdgeProps = ComponentProps<typeof WorkflowGraphEdge>;
+type WorkflowGraphEdgeData = NonNullable<WorkflowGraphEdgeProps["data"]>;
+
+const noop = () => undefined;
+const defaultEdgeData = {
+  contextMode: "compact_and_continue_session",
+  entityID: "edge-1",
+  entityKind: "edge",
+  hasError: false,
+  label: "",
+  routePoints: [],
+  transitionGroupID: "tg-1",
+} satisfies WorkflowGraphEdgeData;
+const defaultEdgeProps = {
+  data: defaultEdgeData,
+  id: "edge-1",
+  onInspect: noop,
+  source: "node-1",
+  sourceX: 0,
+  sourceY: 0,
+  target: "done",
+  targetX: 100,
+  targetY: 0,
+  type: "workflow",
+} satisfies WorkflowGraphEdgeProps;
+
+function edgeData(overrides: Partial<WorkflowGraphEdgeData> = {}): WorkflowGraphEdgeData {
+  return { ...defaultEdgeData, ...overrides };
+}
+
+function renderEdge(
+  overrides: Partial<WorkflowGraphEdgeProps> = {},
+  onWrapperClick?: ComponentProps<"svg">["onClick"],
+) {
+  return render(
+    <svg onClick={onWrapperClick}>
+      <WorkflowGraphEdge {...defaultEdgeProps} {...overrides} />
+    </svg>,
+  );
+}
+
+function mountContextMenuEdge(dataOverrides: Partial<WorkflowGraphEdgeData> = {}) {
+  const onDeleteSelection = vi.fn();
+  const onSelectContextMenu = vi.fn();
+  renderEdge({
+    data: edgeData(dataOverrides),
+    onDeleteSelection,
+    onSelectContextMenu,
+  });
+  return { onDeleteSelection, onSelectContextMenu };
+}

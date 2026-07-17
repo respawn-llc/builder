@@ -25,7 +25,13 @@ type NodeSnapshot = Readonly<{
   isPending: boolean;
   hasData: boolean;
 }>;
-const emptyNode: NodeSnapshot = { cards: [], isFetching: false, isPending: false, hasData: true };
+type NodeSnapshotOverrides = Partial<Omit<NodeSnapshot, "cards">>;
+
+function nodeSnapshot(cards: readonly BoardCard[] = [], overrides: NodeSnapshotOverrides = {}): NodeSnapshot {
+  return { cards, isFetching: false, isPending: false, hasData: true, ...overrides };
+}
+
+const emptyNode = nodeSnapshot();
 const nodeStore = new Map<string, NodeSnapshot>();
 const listeners = new Set<() => void>();
 const mountedQueryOwners = new Set<string>();
@@ -35,8 +41,8 @@ const refetchByNode = new Map<string, ReturnType<typeof vi.fn>>();
 function emit(): void {
   for (const listener of listeners) listener();
 }
-function setNode(id: string, snapshot: NodeSnapshot): void {
-  nodeStore.set(id, snapshot);
+function setNode(id: string, cards: readonly BoardCard[] = [], overrides: NodeSnapshotOverrides = {}): void {
+  nodeStore.set(id, nodeSnapshot(cards, overrides));
   emit();
 }
 const stableFetchNext = async () => undefined;
@@ -181,6 +187,17 @@ function card(over: Partial<BoardCard>): BoardCard {
 
 const backlogCard = card({});
 
+function numberedCards(count: number, latestUpdatedAt = count): BoardCard[] {
+  return Array.from({ length: count }, (_, index) =>
+    card({
+      id: `task-${index.toString()}`,
+      shortID: `T-${index.toString()}`,
+      title: `Task ${index.toString()}`,
+      updatedAt: latestUpdatedAt - index,
+    }),
+  );
+}
+
 function toTestCardVM(value: BoardCard): KanbanCardVM {
   return {
     activeNodeIDs: value.activeNodeIDs,
@@ -215,15 +232,19 @@ type HarnessState = Readonly<{
   collapsedColumnIDs: ReadonlySet<string>;
   pending: PendingBoardCardMove | null;
 }>;
-let harnessState: HarnessState = {
-  activeDrag: null,
-  board: board(1, 0),
-  collapsedColumnIDs: new Set(),
-  pending: null,
-};
+function initialHarnessState(): HarnessState {
+  return {
+    activeDrag: null,
+    board: board(1, 0),
+    collapsedColumnIDs: new Set(),
+    pending: null,
+  };
+}
+
+let harnessState = initialHarnessState();
 const harnessListeners = new Set<() => void>();
-function applyState(next: HarnessState): void {
-  harnessState = next;
+function updateHarness(overrides: Partial<HarnessState>): void {
+  harnessState = { ...harnessState, ...overrides };
   for (const listener of harnessListeners) listener();
 }
 
@@ -254,7 +275,7 @@ function Harness() {
               payload: drag,
               snapshot: toTestCardVM(backlogCard),
             };
-      applyState({ ...harnessState, activeDrag: active });
+      updateHarness({ activeDrag: active });
     },
     onCardsLoadError: () => undefined,
     onDeleteTask: () => undefined,
@@ -289,31 +310,26 @@ function boardCardMotionCalls(): number {
   return animateElementMock.mock.calls.length;
 }
 
+beforeAll(async () => {
+  await initializeI18n();
+});
+
+beforeEach(() => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  animateElementMock.mockClear();
+  Object.defineProperty(HTMLElement.prototype, "animate", {
+    configurable: true,
+    value: animateElementMock,
+  });
+  nodeStore.clear();
+  mountedQueryOwners.clear();
+  fetchNextByNode.clear();
+  fetchPreviousByNode.clear();
+  refetchByNode.clear();
+  harnessState = initialHarnessState();
+});
+
 describe("BoardRailMotionController manual-drag animation", () => {
-  beforeAll(async () => {
-    await initializeI18n();
-  });
-
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    animateElementMock.mockClear();
-    Object.defineProperty(HTMLElement.prototype, "animate", {
-      configurable: true,
-      value: animateElementMock,
-    });
-    nodeStore.clear();
-    mountedQueryOwners.clear();
-    fetchNextByNode.clear();
-    fetchPreviousByNode.clear();
-    refetchByNode.clear();
-    harnessState = {
-      activeDrag: null,
-      board: board(1, 0),
-      collapsedColumnIDs: new Set(),
-      pending: null,
-    };
-  });
-
   // Drives the exact data-layer sequence a started/moved card produces:
   // 1. backlog node-cards query refetches first and loses the card,
   // 2. the board read-model task counts lag behind,
@@ -322,20 +338,16 @@ describe("BoardRailMotionController manual-drag animation", () => {
   // The ONLY difference between the two runs is `pendingCardMove`, which is the
   // single signal that distinguishes a manual drag from a server-driven move.
   async function driveBacklogExit(pending: PendingBoardCardMove | null): Promise<void> {
-    setNode("backlog", { cards: [backlogCard], isFetching: false, isPending: false, hasData: true });
-    setNode("recon", { cards: [], isFetching: false, isPending: false, hasData: true });
-    render(
-      <I18nextProvider i18n={appI18n}>
-        <Harness />
-      </I18nextProvider>,
-    );
+    setNode("backlog", [backlogCard]);
+    setNode("recon");
+    renderHarness();
     await flush();
     animateElementMock.mockClear();
 
     // Drop happens: pending move is registered, backlog query refetches without the card.
     await act(async () => {
-      applyState({ ...harnessState, board: board(1, 0), pending });
-      setNode("backlog", { cards: [], isFetching: false, isPending: false, hasData: true });
+      updateHarness({ board: board(1, 0), pending });
+      setNode("backlog");
       await Promise.resolve();
     });
     await flush();
@@ -360,28 +372,7 @@ describe("BoardRailMotionController manual-drag animation", () => {
 });
 
 describe("BoardRailMotionController bounded column lifecycle", () => {
-  beforeAll(async () => {
-    await initializeI18n();
-  });
-
   beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    animateElementMock.mockClear();
-    Object.defineProperty(HTMLElement.prototype, "animate", {
-      configurable: true,
-      value: animateElementMock,
-    });
-    nodeStore.clear();
-    mountedQueryOwners.clear();
-    fetchNextByNode.clear();
-    fetchPreviousByNode.clear();
-    refetchByNode.clear();
-    harnessState = {
-      activeDrag: null,
-      board: board(1, 0),
-      collapsedColumnIDs: new Set(),
-      pending: null,
-    };
     ControlledIntersectionObserver.reset();
     vi.stubGlobal("IntersectionObserver", ControlledIntersectionObserver);
   });
@@ -391,68 +382,58 @@ describe("BoardRailMotionController bounded column lifecycle", () => {
   });
 
   it("mounts card data only inside the active margin and releases it immediately on exit", async () => {
-    setNode("backlog", { cards: [backlogCard], isFetching: false, isPending: false, hasData: true });
+    setNode("backlog", [backlogCard]);
     renderHarness();
     await flush();
 
     const backlog = screen.getByRole("listitem", { name: "Backlog" });
     expect(mountedQueryOwners).not.toContain("backlog");
 
-    intersect(backlog, true);
-    await flush();
+    await setIntersecting(true, backlog);
     expect(mountedQueryOwners).toContain("backlog");
 
-    intersect(backlog, false);
-    await flush();
+    await setIntersecting(false, backlog);
     expect(mountedQueryOwners).not.toContain("backlog");
   });
 
   it("reactivates at the newest page and top inside the existing column shell", async () => {
-    setNode("backlog", { cards: [backlogCard], isFetching: false, isPending: false, hasData: true });
+    setNode("backlog", [backlogCard]);
     renderHarness();
     const backlog = screen.getByRole("listitem", { name: "Backlog" });
-    intersect(backlog, true);
-    await flush();
+    await setIntersecting(true, backlog);
 
     const scrollport = screen.getByTestId("kanban-column-scroll-backlog");
     scrollport.scrollTop = 420;
-    intersect(backlog, false);
-    await flush();
+    await setIntersecting(false, backlog);
     expect(screen.getByRole("listitem", { name: "Backlog" })).toBe(backlog);
 
-    intersect(backlog, true);
-    await flush();
+    await setIntersecting(true, backlog);
 
     expect(screen.getByRole("listitem", { name: "Backlog" })).toBe(backlog);
     expect(scrollport.scrollTop).toBe(0);
   });
 
   it("keeps expanded and collapsed shell state stable through initial loading and failure", async () => {
-    setNode("backlog", { cards: [], isFetching: true, isPending: true, hasData: false });
-    setNode("recon", { cards: [], isFetching: true, isPending: true, hasData: false });
-    harnessState = {
-      ...harnessState,
+    const loading = { isFetching: true, isPending: true, hasData: false };
+    setNode("backlog", [], loading);
+    setNode("recon", [], loading);
+    updateHarness({
       board: board(1, 1),
       collapsedColumnIDs: new Set(["recon"]),
-    };
+    });
     renderHarness();
 
     const backlog = screen.getByRole("listitem", { name: "Backlog" });
     const recon = screen.getByRole("listitem", { name: "Recon" });
-    intersect(backlog, true);
-    intersect(recon, true);
-    await flush();
+    await setIntersecting(true, backlog, recon);
 
     expect(backlog).toHaveAttribute("data-collapsed", "false");
     expect(recon).toHaveAttribute("data-collapsed", "true");
     expect(within(backlog).getByRole("status")).toBeInTheDocument();
 
-    await updateNode("backlog", {
-      cards: [],
+    await updateNode("backlog", [], {
       error: new Error("offline"),
       failureDirection: "initial",
-      isFetching: false,
-      isPending: false,
       hasData: false,
     });
 
@@ -463,64 +444,49 @@ describe("BoardRailMotionController bounded column lifecycle", () => {
   });
 
   it("suppresses enter and move motion during hydration and bidirectional page-window changes", async () => {
-    setNode("backlog", { cards: [], isFetching: true, isPending: true, hasData: false });
-    harnessState = { ...harnessState, board: board(4, 0) };
+    setNode("backlog", [], { isFetching: true, isPending: true, hasData: false });
+    updateHarness({ board: board(4, 0) });
     renderHarness();
     const backlog = screen.getByRole("listitem", { name: "Backlog" });
-    intersect(backlog, true);
-    await flush();
+    await setIntersecting(true, backlog);
 
     const taskTwo = card({ id: "task-2", shortID: "T-2", title: "Task 2", updatedAt: 2 });
     const taskOne = card({ id: "task-1", shortID: "T-1", title: "Task 1", updatedAt: 1 });
-    await updateNode("backlog", {
-      cards: [taskTwo, taskOne],
-      isFetching: false,
-      isPending: false,
-      hasData: true,
+    await updateNode("backlog", [taskTwo, taskOne], {
       hasPreviousPage: true,
     });
 
     expect(boardCardMotionCalls()).toBe(0);
     animateElementMock.mockClear();
 
-    await updateNode("backlog", {
-      cards: [taskTwo, taskOne],
+    await updateNode("backlog", [taskTwo, taskOne], {
       isFetching: true,
       isFetchingPreviousPage: true,
-      isPending: false,
-      hasData: true,
       hasPreviousPage: true,
     });
-    await updateNode("backlog", {
-      cards: [
+    await updateNode(
+      "backlog",
+      [
         card({ id: "task-4", shortID: "T-4", title: "Task 4", updatedAt: 4 }),
         card({ id: "task-3", shortID: "T-3", title: "Task 3", updatedAt: 3 }),
         taskTwo,
         taskOne,
       ],
-      isFetching: false,
-      isPending: false,
-      hasData: true,
-      hasPreviousPage: false,
-      hasNextPage: true,
-    });
+      { hasPreviousPage: false, hasNextPage: true },
+    );
 
     expect(boardCardMotionCalls()).toBe(0);
   });
 
   it("renders an initial in-column Retry without collapsing or resizing the shell", async () => {
-    setNode("backlog", {
-      cards: [],
+    setNode("backlog", [], {
       error: new Error("initial page failed"),
       failureDirection: "initial",
-      isFetching: false,
-      isPending: false,
       hasData: false,
     });
     renderHarness();
     const backlog = screen.getByRole("listitem", { name: "Backlog" });
-    intersect(backlog, true);
-    await flush();
+    await setIntersecting(true, backlog);
 
     fireEvent.click(within(backlog).getByRole("button", { name: "Try again" }));
 
@@ -534,42 +500,26 @@ describe("BoardRailMotionController bounded column lifecycle", () => {
   ] as const)(
     "keeps retained rows and the anchor while retrying only the failed %s direction",
     async (failureDirection, boundaryDirection, expectedFetches) => {
-      const cards = Array.from({ length: 8 }, (_, index) =>
-        card({
-          id: `task-${index.toString()}`,
-          shortID: `T-${index.toString()}`,
-          title: `Task ${index.toString()}`,
-          updatedAt: 20 - index,
-        }),
-      );
-      setNode("backlog", {
-        cards,
+      const cards = numberedCards(8, 20);
+      setNode("backlog", cards, {
         hasNextPage: true,
         hasPreviousPage: true,
-        isFetching: false,
-        isPending: false,
-        hasData: true,
       });
-      harnessState = { ...harnessState, board: board(cards.length, 0) };
+      updateHarness({ board: board(cards.length, 0) });
       renderHarness();
       const backlog = screen.getByRole("listitem", { name: "Backlog" });
-      intersect(backlog, true);
-      await flush();
+      await setIntersecting(true, backlog);
       fetchNextByNode.get("backlog")?.mockClear();
       fetchPreviousByNode.get("backlog")?.mockClear();
 
       const scrollport = screen.getByTestId("kanban-column-scroll-backlog");
       scrollport.scrollTop = 346;
       const leadingCard = screen.getByRole("article", { name: "Task 0" });
-      await updateNode("backlog", {
-        cards,
+      await updateNode("backlog", cards, {
         error: new Error(`${failureDirection} page failed`),
         failureDirection,
         hasNextPage: true,
         hasPreviousPage: true,
-        isFetching: false,
-        isPending: false,
-        hasData: true,
       });
 
       expect(screen.getByRole("article", { name: "Task 0" })).toBe(leadingCard);
@@ -591,15 +541,13 @@ describe("BoardRailMotionController bounded column lifecycle", () => {
       preview: { markdown: "Visible **preview**", truncated: true },
       title: "Shared task",
     });
-    setNode("backlog", { cards: [sharedCard], isFetching: false, isPending: false, hasData: true });
-    setNode("recon", { cards: [sharedCard], isFetching: false, isPending: false, hasData: true });
-    harnessState = { ...harnessState, board: board(1, 1) };
+    setNode("backlog", [sharedCard]);
+    setNode("recon", [sharedCard]);
+    updateHarness({ board: board(1, 1) });
     renderHarness();
     const backlog = screen.getByRole("listitem", { name: "Backlog" });
     const recon = screen.getByRole("listitem", { name: "Recon" });
-    intersect(backlog, true);
-    intersect(recon, true);
-    await flush();
+    await setIntersecting(true, backlog, recon);
 
     const [backlogCardElement, reconCardElement] = screen.getAllByRole("article", {
       name: "Shared task",
@@ -611,39 +559,25 @@ describe("BoardRailMotionController bounded column lifecycle", () => {
     expect(within(backlogCardElement).getByTestId("task-card-body")).not.toHaveTextContent("Visible preview");
     expect(within(reconCardElement).getByTestId("task-card-body")).not.toHaveTextContent("Visible preview");
 
-    intersect(backlogCardElement, true);
-    await flush();
+    await setIntersecting(true, backlogCardElement);
     expect(within(backlogCardElement).getByTestId("task-card-body")).toHaveTextContent("Visible preview");
     expect(within(backlogCardElement).getByTestId("task-card-preview-ellipsis")).toBeInTheDocument();
     expect(within(reconCardElement).getByTestId("task-card-body")).not.toHaveTextContent("Visible preview");
 
-    intersect(recon, false);
-    await flush();
+    await setIntersecting(false, recon);
     expect(screen.getByRole("article", { name: "Shared task" })).toBe(backlogCardElement);
     expect(within(backlogCardElement).getByTestId("task-card-body")).toHaveTextContent("Visible preview");
   });
 
   it("keeps the same native drag-source instance mounted beyond overscan and source-page eviction", async () => {
-    const cards = Array.from({ length: 100 }, (_, index) =>
-      card({
-        id: `task-${index.toString()}`,
-        shortID: `T-${index.toString()}`,
-        title: `Task ${index.toString()}`,
-        updatedAt: 100 - index,
-      }),
-    );
-    setNode("backlog", {
-      cards,
+    const cards = numberedCards(100);
+    setNode("backlog", cards, {
       hasNextPage: true,
-      isFetching: false,
-      isPending: false,
-      hasData: true,
     });
-    harnessState = { ...harnessState, board: board(100, 0) };
+    updateHarness({ board: board(100, 0) });
     renderHarness();
     const backlog = screen.getByRole("listitem", { name: "Backlog" });
-    intersect(backlog, true);
-    await flush();
+    await setIntersecting(true, backlog);
 
     const source = screen.getByRole("article", { name: "Task 0" });
     fireEvent.dragStart(source, { dataTransfer: new TestDataTransfer() });
@@ -655,12 +589,8 @@ describe("BoardRailMotionController bounded column lifecycle", () => {
     await flush();
     expect(source).toBeInTheDocument();
 
-    await updateNode("backlog", {
-      cards: cards.slice(25),
+    await updateNode("backlog", cards.slice(25), {
       hasPreviousPage: true,
-      isFetching: false,
-      isPending: false,
-      hasData: true,
     });
 
     expect(screen.getByRole("article", { name: "Task 0" })).toBe(source);
@@ -675,9 +605,13 @@ function renderHarness() {
   );
 }
 
-async function updateNode(id: string, snapshot: NodeSnapshot): Promise<void> {
+async function updateNode(
+  id: string,
+  cards: readonly BoardCard[] = [],
+  overrides: NodeSnapshotOverrides = {},
+): Promise<void> {
   await act(async () => {
-    setNode(id, snapshot);
+    setNode(id, cards, overrides);
     await Promise.resolve();
   });
   await flush();
@@ -738,16 +672,22 @@ class ControlledIntersectionObserver implements IntersectionObserver {
   }
 }
 
-function intersect(target: Element, isIntersecting: boolean): void {
-  const observer = ControlledIntersectionObserver.instances.find((candidate) =>
-    candidate.targets.has(target),
-  );
-  if (observer === undefined) {
-    throw new Error(`No IntersectionObserver owns ${target.tagName}`);
-  }
-  act(() => {
-    observer.emit(target, isIntersecting);
+async function setIntersecting(isIntersecting: boolean, ...targets: readonly Element[]): Promise<void> {
+  const observations = targets.map((target) => {
+    const observer = ControlledIntersectionObserver.instances.find((candidate) =>
+      candidate.targets.has(target),
+    );
+    if (observer === undefined) {
+      throw new Error(`No IntersectionObserver owns ${target.tagName}`);
+    }
+    return { observer, target };
   });
+  act(() => {
+    for (const { observer, target } of observations) {
+      observer.emit(target, isIntersecting);
+    }
+  });
+  await flush();
 }
 
 function observedCards(): ReadonlySet<Element> {

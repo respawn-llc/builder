@@ -286,13 +286,17 @@ A typed inert category-and-text entry inside `DraftRecoveryBuffer`, such as acti
 
 The second-Ctrl+C exit path for a TUI client while interrupt is pending. The client exits locally and detaches its runtime owner reference without releasing or force-closing a shared daemon runtime; embedded process exit still cleans up local owner state before shutdown.
 
-### Step
+### Agent Step
 
-One model request/response iteration in the runtime loop, including any tool calls it triggers. Steps run back-to-back to form a turn.
+One provider request/response iteration in the runtime loop, including returned tool calls and their committed results. A user steer ends the current Agent Step and starts a new Agent Step within the same Agent Turn.
 
-### Turn
+### Agent Turn
 
-A full agent run from a user submission until the runtime returns to idle: the agent produces its final message and no further step is scheduled. A turn is composed of one or more steps.
+A complete agent run from a user submission until the runtime returns to idle. An Agent Turn is composed of one or more Agent Steps.
+
+### Step Boundary
+
+The interval after the current Agent Step commits tool-result handling and before the next provider request or steered Agent Step begins. Transitions that affect the next Agent Step become authoritative at this boundary.
 
 ### Queue
 

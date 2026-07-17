@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { ApiService } from "./apiService";
 import { ApiClient } from "./client";
 import { ContractError } from "./errors";
-import { FakeRpcTransport } from "./fakeTransport";
+import { FakeRpcTransport } from "@/test-support/api";
 import { protocolVersion } from "./jsonRpcSocket";
 
 const startTaskParamsSchema = z.object({

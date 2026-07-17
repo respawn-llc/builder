@@ -19,16 +19,8 @@ describe("useBoardDragAutoScroll", () => {
   });
 
   it("stays idle in neutral zones and accelerates monotonically toward both horizontal edges", () => {
-    render(<AutoScrollHarness active />);
-    const root = screen.getByTestId("auto-scroll-root");
-    setScrollportGeometry(root, {
-      left: 100,
-      top: 0,
-      width: 400,
-      height: 400,
-      scrollWidth: 1_000,
-      scrollHeight: 400,
-    });
+    const { root } = renderAutoScroll();
+    setRootGeometry(root, { left: 100, width: 400 });
 
     root.scrollLeft = 250;
     dispatchBoardDrag(root, "dragover", { clientX: 250, clientY: 200 });
@@ -51,25 +43,8 @@ describe("useBoardDragAutoScroll", () => {
   });
 
   it("owns one pending frame and scrolls horizontal and hovered vertical ports together", () => {
-    render(<AutoScrollHarness active columnIDs={["column-1"]} />);
-    const root = screen.getByTestId("auto-scroll-root");
+    const { root } = renderAutoScroll(["column-1"]);
     const column = screen.getByTestId("column-1");
-    setScrollportGeometry(root, {
-      left: 0,
-      top: 0,
-      width: 500,
-      height: 400,
-      scrollWidth: 1_000,
-      scrollHeight: 400,
-    });
-    setScrollportGeometry(column, {
-      left: 300,
-      top: 0,
-      width: 180,
-      height: 400,
-      scrollWidth: 180,
-      scrollHeight: 1_000,
-    });
 
     dispatchBoardDrag(root, "dragover", { clientX: 480, clientY: 400 });
     dispatchBoardDrag(root, "dragover", { clientX: 480, clientY: 400 });
@@ -84,25 +59,9 @@ describe("useBoardDragAutoScroll", () => {
   });
 
   it("selects a registered column at its exact left and top edges", () => {
-    render(<AutoScrollHarness active columnIDs={["column-1"]} />);
-    const root = screen.getByTestId("auto-scroll-root");
+    const { root } = renderAutoScroll(["column-1"]);
     const column = screen.getByTestId("column-1");
-    setScrollportGeometry(root, {
-      left: 0,
-      top: 0,
-      width: 500,
-      height: 400,
-      scrollWidth: 500,
-      scrollHeight: 400,
-    });
-    setScrollportGeometry(column, {
-      left: 300,
-      top: 0,
-      width: 180,
-      height: 400,
-      scrollWidth: 180,
-      scrollHeight: 1_000,
-    });
+    setRootGeometry(root, { scrollWidth: 500 });
     column.scrollTop = 300;
 
     dispatchBoardDrag(root, "dragover", { clientX: 300, clientY: 0 });
@@ -113,25 +72,8 @@ describe("useBoardDragAutoScroll", () => {
   });
 
   it("keeps each actionable axis independent of the other axis", () => {
-    render(<AutoScrollHarness active columnIDs={["column-1"]} />);
-    const root = screen.getByTestId("auto-scroll-root");
+    const { root } = renderAutoScroll(["column-1"]);
     const column = screen.getByTestId("column-1");
-    setScrollportGeometry(root, {
-      left: 0,
-      top: 0,
-      width: 500,
-      height: 400,
-      scrollWidth: 1_000,
-      scrollHeight: 400,
-    });
-    setScrollportGeometry(column, {
-      left: 300,
-      top: 0,
-      width: 180,
-      height: 400,
-      scrollWidth: 180,
-      scrollHeight: 1_000,
-    });
 
     dispatchBoardDrag(root, "dragover", { clientX: 496, clientY: 200 });
     frames.step(0);
@@ -149,34 +91,12 @@ describe("useBoardDragAutoScroll", () => {
   });
 
   it("switches vertical targets and stops targeting an unregistered column", () => {
-    const view = render(<AutoScrollHarness active columnIDs={["upper", "lower"]} />);
-    const root = screen.getByTestId("auto-scroll-root");
+    const { root, view } = renderAutoScroll(["upper", "lower"]);
     const upper = screen.getByTestId("upper");
     const lower = screen.getByTestId("lower");
-    setScrollportGeometry(root, {
-      left: 0,
-      top: 0,
-      width: 500,
-      height: 400,
-      scrollWidth: 500,
-      scrollHeight: 400,
-    });
-    setScrollportGeometry(upper, {
-      left: 300,
-      top: 0,
-      width: 180,
-      height: 190,
-      scrollWidth: 180,
-      scrollHeight: 1_000,
-    });
-    setScrollportGeometry(lower, {
-      left: 300,
-      top: 210,
-      width: 180,
-      height: 190,
-      scrollWidth: 180,
-      scrollHeight: 1_000,
-    });
+    setRootGeometry(root, { scrollWidth: 500 });
+    setColumnGeometry(upper, { height: 190 });
+    setColumnGeometry(lower, { top: 210, height: 190 });
 
     upper.scrollTop = 300;
     dispatchBoardDrag(root, "dragover", { clientX: 350, clientY: 4 });
@@ -197,16 +117,7 @@ describe("useBoardDragAutoScroll", () => {
   });
 
   it("clamps long frame gaps before applying scroll", () => {
-    render(<AutoScrollHarness active />);
-    const root = screen.getByTestId("auto-scroll-root");
-    setScrollportGeometry(root, {
-      left: 0,
-      top: 0,
-      width: 500,
-      height: 400,
-      scrollWidth: 1_000,
-      scrollHeight: 400,
-    });
+    const { root } = renderAutoScroll();
 
     dispatchBoardDrag(root, "dragover", { clientX: 500, clientY: 200 });
     frames.step(0);
@@ -216,16 +127,7 @@ describe("useBoardDragAutoScroll", () => {
   });
 
   it("stops for neutral pointers, scroll bounds, inactive state, and unmount", () => {
-    const view = render(<AutoScrollHarness active />);
-    const root = screen.getByTestId("auto-scroll-root");
-    setScrollportGeometry(root, {
-      left: 0,
-      top: 0,
-      width: 500,
-      height: 400,
-      scrollWidth: 1_000,
-      scrollHeight: 400,
-    });
+    const { root, view } = renderAutoScroll();
 
     dispatchBoardDrag(root, "dragover", { clientX: 496, clientY: 200 });
     expect(frames.pending).toBe(1);
@@ -250,17 +152,8 @@ describe("useBoardDragAutoScroll", () => {
   });
 
   it("ignores nested root dragleave transitions and stops on board exit", () => {
-    render(<AutoScrollHarness active />);
-    const root = screen.getByTestId("auto-scroll-root");
+    const { root } = renderAutoScroll();
     const child = screen.getByTestId("auto-scroll-child");
-    setScrollportGeometry(root, {
-      left: 0,
-      top: 0,
-      width: 500,
-      height: 400,
-      scrollWidth: 1_000,
-      scrollHeight: 400,
-    });
 
     dispatchBoardDrag(root, "dragover", { clientX: 496, clientY: 200 });
     expect(frames.pending).toBe(1);
@@ -282,16 +175,7 @@ describe("useBoardDragAutoScroll", () => {
     ["bottom boundary", { clientX: 250, clientY: 400 }],
     ["outside", { clientX: 501, clientY: 200 }],
   ] as const)("stops a null-target board leave at the %s", (_location, point) => {
-    render(<AutoScrollHarness active />);
-    const root = screen.getByTestId("auto-scroll-root");
-    setScrollportGeometry(root, {
-      left: 0,
-      top: 0,
-      width: 500,
-      height: 400,
-      scrollWidth: 1_000,
-      scrollHeight: 400,
-    });
+    const { root } = renderAutoScroll();
 
     dispatchBoardDrag(root, "dragover", { clientX: 496, clientY: 200 });
     expect(frames.pending).toBe(1);
@@ -304,16 +188,7 @@ describe("useBoardDragAutoScroll", () => {
     ["dragover", {}],
     ["dragleave", { relatedTarget: null }],
   ] as const)("stops from capture-phase document %s", (type, init) => {
-    render(<AutoScrollHarness active />);
-    const root = screen.getByTestId("auto-scroll-root");
-    setScrollportGeometry(root, {
-      left: 0,
-      top: 0,
-      width: 500,
-      height: 400,
-      scrollWidth: 1_000,
-      scrollHeight: 400,
-    });
+    const { root } = renderAutoScroll();
 
     dispatchBoardDrag(root, "dragover", { clientX: 496, clientY: 200 });
     expect(frames.pending).toBe(1);
@@ -322,6 +197,44 @@ describe("useBoardDragAutoScroll", () => {
     expect(frames.pending).toBe(0);
   });
 });
+
+type ScrollportGeometry = Parameters<typeof setScrollportGeometry>[1];
+
+const rootGeometry = {
+  left: 0,
+  top: 0,
+  width: 500,
+  height: 400,
+  scrollWidth: 1_000,
+  scrollHeight: 400,
+} satisfies ScrollportGeometry;
+
+const columnGeometry = {
+  left: 300,
+  top: 0,
+  width: 180,
+  height: 400,
+  scrollWidth: 180,
+  scrollHeight: 1_000,
+} satisfies ScrollportGeometry;
+
+function setRootGeometry(root: HTMLElement, overrides: Partial<ScrollportGeometry> = {}): void {
+  setScrollportGeometry(root, { ...rootGeometry, ...overrides });
+}
+
+function setColumnGeometry(column: HTMLElement, overrides: Partial<ScrollportGeometry> = {}): void {
+  setScrollportGeometry(column, { ...columnGeometry, ...overrides });
+}
+
+function renderAutoScroll(columnIDs: readonly string[] = []) {
+  const view = render(<AutoScrollHarness active columnIDs={columnIDs} />);
+  const root = screen.getByTestId("auto-scroll-root");
+  setRootGeometry(root);
+  for (const columnID of columnIDs) {
+    setColumnGeometry(screen.getByTestId(columnID));
+  }
+  return { root, view };
+}
 
 function AutoScrollHarness({
   active,

@@ -230,7 +230,7 @@
 - A task locks target-selection provenance only when the initiating action successfully reaches its first executable placement. Later nodes and retries reuse the locked mode and managed requested/resolved facts despite workflow edits or Git ref movement.
 - Every pre-upgrade task with a recorded managed worktree and usable recorded HEAD metadata continues using that worktree after upgrade, regardless of whether it already has a run. Its observed commit is identified as legacy provenance and is not presented as a known original branch point.
 - Pre-upgrade tasks without a managed worktree remain unlocked and inherit their migrated workflow's source-`HEAD` policy.
-- Managed targets use the existing task-worktree creation, setup, and collision behavior. Before the first executable run is scheduled, setup either succeeds for the newly created candidate in that request or a later explicit request accepts the same available, base-compatible candidate as manually repaired.
+- Managed targets use the existing task-worktree creation, setup, and collision behavior. Before the first executable run is scheduled, Kent loads worktree setup settings from the task's source workspace; a configured setup script must succeed for the newly created candidate in that request.
 - Managed worktree setup failure leaves the initiating action unapplied and unscheduled. Any created worktree remains available for inspection or manual repair.
 - Setup runs only when the current request creates or recreates a worktree root. A later retry trusts an already-existing compatible root and does not rerun setup; no durable setup-readiness state exists.
 - Setup receives the source workspace root, branch name, and managed worktree root as stable positional inputs.
@@ -337,6 +337,7 @@
 - `kent task complete` accepts dynamic parameter flags, repeatable `--param name=value`, and `--json`/`--json-file` completion payload input. JSON input modes print JSON responses.
 - `kent task edit <task>` mutates an existing task's title, body, and source workspace through `UpdateWorkflowTask`. It requires at least one of `--title`/`--body`/`--body-file`/`--source-workspace`, reuses the current title when `--title` is omitted, and is available to agents like `task create` (no human-only gate). `--json` prints the update response.
 - `kent task create` and `kent task edit` accept `--source-workspace` as either a workspace id or a path; a path is resolved through its project binding. An omitted source workspace leaves it unchanged on edit.
+- Workflow/task CLI commands report remote-close failures to stderr after command work finishes. A close failure does not change a successful exit code, and an operation failure keeps its existing nonzero exit code.
 - Unsupported commands may fail loudly before backend semantics land rather than implementing partial behavior.
 
 ## Q/A Decisions Preserved

@@ -57,32 +57,29 @@ func taskCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		fmt.Fprintln(stderr, "task complete --force requires exactly one explicit selector: --run, --session, or --task")
 		return 2
 	}
-	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
-	if !opened {
-		return 1
-	}
-	defer closeRemote()
-	req, err := parsed.request(context.Background(), cfg, remote, agentSessionID, agentContext)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	if err := req.Validate(); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-	defer cancel()
-	resp, err := remote.CompleteWorkflowTask(ctx, req)
-	if err != nil {
-		fmt.Fprintln(stderr, taskCompleteErrorMessage(err))
-		return 1
-	}
-	if parsed.JSONPayloadSet || parsed.JSONFileSet {
-		return writeCommandJSON(stdout, stderr, resp)
-	}
-	writeTaskCompleteResult(stdout, resp)
-	return 0
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
+		req, err := parsed.request(context.Background(), cfg, remote, agentSessionID, agentContext)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if err := req.Validate(); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
+		defer cancel()
+		resp, err := remote.CompleteWorkflowTask(ctx, req)
+		if err != nil {
+			fmt.Fprintln(stderr, taskCompleteErrorMessage(err))
+			return 1
+		}
+		if parsed.JSONPayloadSet || parsed.JSONFileSet {
+			return writeCommandJSON(stdout, stderr, resp)
+		}
+		writeTaskCompleteResult(stdout, resp)
+		return 0
+	})
 }
 
 func (a taskCompleteArgs) selectorCount() int {

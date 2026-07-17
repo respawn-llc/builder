@@ -1,5 +1,5 @@
 import { ApiClient } from "./client";
-import { FakeRpcTransport } from "./fakeTransport";
+import { FakeRpcTransport } from "@/test-support/api";
 
 describe("ApiClient workflow script path validation", () => {
   it("maps workflow script path validation", async () => {

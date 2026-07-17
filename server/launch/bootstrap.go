@@ -6,6 +6,7 @@ import (
 
 	"core/server/metadata"
 	"core/server/session"
+	"core/server/subagentpolicy"
 )
 
 type BootstrapRequest struct {
@@ -20,28 +21,21 @@ type BootstrapPlan struct {
 	WorkspaceRoot    string
 	OpenAIBaseURL    string
 	UseOpenAIBaseURL bool
-	SessionContext   *SessionCallerContext
 }
 
-type SessionCallerContext struct {
-	WorkflowSession bool
-	AgentRole       *string
-}
-
-func sessionCallerContext(meta session.Meta) SessionCallerContext {
-	context := SessionCallerContext{WorkflowSession: meta.WorkflowSession != nil}
-	if meta.Continuation != nil {
-		context.AgentRole = cloneContinuationRole(meta.Continuation.AgentRole)
-	}
-	return context
-}
-
-func ResolveSessionCallerContext(persistenceRoot string, sessionID string) (SessionCallerContext, error) {
+func ResolveSessionCaller(persistenceRoot string, sessionID string) (subagentpolicy.Caller, error) {
 	store, err := openSessionByID(persistenceRoot, sessionID)
 	if err != nil {
-		return SessionCallerContext{}, err
+		return subagentpolicy.Caller{}, err
 	}
-	return sessionCallerContext(store.Meta()), nil
+	return subagentpolicy.Caller{Workflow: store.Meta().WorkflowSession != nil}, nil
+}
+
+// ValidateSessionExists verifies a session reference without exposing its
+// persisted metadata to callers that only need provenance validation.
+func ValidateSessionExists(persistenceRoot string, sessionID string) error {
+	_, err := openSessionByID(persistenceRoot, sessionID)
+	return err
 }
 
 func ResolveBootstrapPlan(persistenceRoot string, req BootstrapRequest) (BootstrapPlan, error) {
@@ -61,8 +55,6 @@ func ResolveBootstrapPlan(persistenceRoot string, req BootstrapRequest) (Bootstr
 		return BootstrapPlan{}, err
 	}
 	meta := store.Meta()
-	context := sessionCallerContext(meta)
-	plan.SessionContext = &context
 	if !req.WorkspaceRootExplicit && strings.TrimSpace(meta.WorkspaceRoot) != "" {
 		plan.WorkspaceRoot = strings.TrimSpace(meta.WorkspaceRoot)
 	}

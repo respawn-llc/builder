@@ -1,7 +1,11 @@
-import { ConnectionStore } from "./connectionStore";
-import type { JsonValue } from "./json";
-import type { RpcEventHandler, RpcSubscription, RpcTransport } from "./transport";
-import type { RpcCallOptions } from "./transport";
+import {
+  ConnectionStore,
+  type JsonValue,
+  type RpcCallOptions,
+  type RpcEventHandler,
+  type RpcSubscription,
+  type RpcTransport,
+} from "@/api/composition";
 
 export type FakeRoute = Readonly<{
   method: string;
@@ -58,8 +62,6 @@ export class FakeRpcTransport implements RpcTransport {
     };
   }
 
-  // emit delivers an event to every open subscription, letting tests drive the
-  // event-stream code paths (live refresh, attention updates) deterministically.
   emit(method: string, params: unknown): void {
     for (const subscriber of [...this.#subscribers]) {
       subscriber.handler.onEvent(method, params);

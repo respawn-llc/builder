@@ -299,20 +299,12 @@ func TestSchedulerWorkflowPromptIncludesStoreBackedTaskCommentCount(t *testing.T
 	}
 }
 
-func TestWorkflowRuntimeMultipleAskQuestionsInOneToolBatchResumeSequentially(t *testing.T) {
-	completeInput := json.RawMessage(`{"commentary":"answered both and finished"}`)
-	fixture := newStarterFixture(t, config.WorkflowCompletionModeTool,
-		ScriptedToolBatch("questions",
-			llm.ToolCall{ID: "call-ask-1", Name: "ask_question", Input: json.RawMessage(`{"question":"First direction?","suggestions":["ship","stop"],"recommended_option_index":1}`)},
-			llm.ToolCall{ID: "call-ask-2", Name: "ask_question", Input: json.RawMessage(`{"question":"Second direction?","suggestions":["fast","safe"],"recommended_option_index":2}`)},
-		),
-		ScriptedToolBatch("complete", llm.ToolCall{ID: "call-complete", Name: "complete_node", Input: completeInput}),
-	)
-	role := fixture.cfg.Settings.Subagents["coder"]
-	role.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}
-	role.Sources["tools."+toolspec.ConfigName(toolspec.ToolAskQuestion)] = "test"
-	fixture.cfg.Settings.Subagents["coder"] = role
-	fixture.rebuildStarter(t)
+func TestWorkflowRuntimeQuestionBatchResumesSameSessionAndPublishesOneAttention(t *testing.T) {
+	fixture := newWorkflowQuestionBatchStarterFixture(t)
+	desktopSub, err := fixture.attentionBroker.SubscribeDesktop()
+	if err != nil {
+		t.Fatalf("SubscribeDesktop: %v", err)
+	}
 	task := fixture.createStartedTask(t)
 	scheduler := fixture.scheduler(t)
 
@@ -320,6 +312,12 @@ func TestWorkflowRuntimeMultipleAskQuestionsInOneToolBatchResumeSequentially(t *
 		t.Fatalf("Process: %v", err)
 	}
 	first := fixture.waitForWaitingAsk(t, task.ID, "call-ask-1")
+	prompts := fixture.runtimes.ListPendingPrompts(first.SessionID)
+	if len(prompts) != 1 || prompts[0].Request.AttentionTarget == nil || prompts[0].Request.QuestionBatch == nil {
+		t.Fatalf("pending prompt lacks task-detail attention enrichment: %+v", prompts)
+	}
+	pending := nextWorkflowAttentionEvent(t, desktopSub)
+	assertTaskQuestionBatchPending(t, pending, fixture, task, first.SessionID, "call-ask-1")
 	if err := fixture.runtimes.SubmitPromptResponse(first.SessionID, askquestion.AskQuestionResponse{RequestID: "call-ask-1", Answer: "Ship it"}, nil); err != nil {
 		t.Fatalf("SubmitPromptResponse first: %v", err)
 	}
@@ -327,8 +325,20 @@ func TestWorkflowRuntimeMultipleAskQuestionsInOneToolBatchResumeSequentially(t *
 	if second.SessionID != first.SessionID {
 		t.Fatalf("second ask session = %q, want first session %q", second.SessionID, first.SessionID)
 	}
+	update := nextWorkflowAttentionEvent(t, desktopSub)
+	assertTaskQuestionBatchPending(t, update, fixture, task, second.SessionID, "call-ask-2")
+	if update.Pending.ID != pending.Pending.ID {
+		t.Fatalf("second batch update id = %q, want same batch id %q", update.Pending.ID, pending.Pending.ID)
+	}
+	if update.Pending.Question == nil || update.Pending.Question.MaterializedCount != 2 {
+		t.Fatalf("second batch question state = %+v, want both asks materialized", update.Pending.Question)
+	}
 	if err := fixture.runtimes.SubmitPromptResponse(second.SessionID, askquestion.AskQuestionResponse{RequestID: "call-ask-2", Answer: "Keep it safe"}, nil); err != nil {
 		t.Fatalf("SubmitPromptResponse second: %v", err)
+	}
+	resolved := nextWorkflowAttentionEvent(t, desktopSub)
+	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, pending.Pending.ID) || resolved.Kind != clientui.AttentionNotificationKindQuestion {
+		t.Fatalf("resolved event = %+v, want question batch resolved for %q", resolved, pending.Pending.ID)
 	}
 	fixture.waitForCompletedRun(t, task.ID)
 	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
@@ -358,56 +368,6 @@ func TestWorkflowRuntimeMultipleAskQuestionsInOneToolBatchResumeSequentially(t *
 	}
 }
 
-func TestWorkflowRuntimeTaskQuestionBatchPublishesOneTaskDetailAttention(t *testing.T) {
-	completeInput := json.RawMessage(`{"commentary":"answered both and finished"}`)
-	fixture := newStarterFixture(t, config.WorkflowCompletionModeTool,
-		ScriptedToolBatch("questions",
-			llm.ToolCall{ID: "call-ask-1", Name: "ask_question", Input: json.RawMessage(`{"question":"First direction?","suggestions":["ship","stop"],"recommended_option_index":1}`)},
-			llm.ToolCall{ID: "call-ask-2", Name: "ask_question", Input: json.RawMessage(`{"question":"Second direction?","suggestions":["fast","safe"],"recommended_option_index":2}`)},
-		),
-		ScriptedToolBatch("complete", llm.ToolCall{ID: "call-complete", Name: "complete_node", Input: completeInput}),
-	)
-	enableAskQuestionTool(t, &fixture)
-	fixture.rebuildStarter(t)
-	desktopSub, err := fixture.attentionBroker.SubscribeDesktop()
-	if err != nil {
-		t.Fatalf("SubscribeDesktop: %v", err)
-	}
-	task := fixture.createStartedTask(t)
-	scheduler := fixture.scheduler(t)
-
-	if err := scheduler.Process(context.Background()); err != nil {
-		t.Fatalf("Process: %v", err)
-	}
-	first := fixture.waitForWaitingAsk(t, task.ID, "call-ask-1")
-	prompts := fixture.runtimes.ListPendingPrompts(first.SessionID)
-	if len(prompts) != 1 || prompts[0].Request.AttentionTarget == nil || prompts[0].Request.QuestionBatch == nil {
-		t.Fatalf("pending prompt lacks task-detail attention enrichment: %+v", prompts)
-	}
-	pending := nextWorkflowAttentionEvent(t, desktopSub)
-	assertTaskQuestionBatchPending(t, pending, fixture, task, first.SessionID, "call-ask-1")
-	if err := fixture.runtimes.SubmitPromptResponse(first.SessionID, askquestion.AskQuestionResponse{RequestID: "call-ask-1", Answer: "Ship it"}, nil); err != nil {
-		t.Fatalf("SubmitPromptResponse first: %v", err)
-	}
-	second := fixture.waitForWaitingAsk(t, task.ID, "call-ask-2")
-	update := nextWorkflowAttentionEvent(t, desktopSub)
-	assertTaskQuestionBatchPending(t, update, fixture, task, second.SessionID, "call-ask-2")
-	if update.Pending.ID != pending.Pending.ID {
-		t.Fatalf("second batch update id = %q, want same batch id %q", update.Pending.ID, pending.Pending.ID)
-	}
-	if update.Pending.Question == nil || update.Pending.Question.MaterializedCount != 2 {
-		t.Fatalf("second batch question state = %+v, want both asks materialized", update.Pending.Question)
-	}
-	if err := fixture.runtimes.SubmitPromptResponse(second.SessionID, askquestion.AskQuestionResponse{RequestID: "call-ask-2", Answer: "Keep it safe"}, nil); err != nil {
-		t.Fatalf("SubmitPromptResponse second: %v", err)
-	}
-	resolved := nextWorkflowAttentionEvent(t, desktopSub)
-	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, pending.Pending.ID) || resolved.Kind != clientui.AttentionNotificationKindQuestion {
-		t.Fatalf("resolved event = %+v, want question batch resolved for %q", resolved, pending.Pending.ID)
-	}
-	fixture.waitForCompletedRun(t, task.ID)
-}
-
 func TestWorkflowAskHandlerRejectsTaskQuestionWithoutBatchMetadata(t *testing.T) {
 	starter := &Starter{}
 	req := SchedulerStartRunRequest{RunID: "run-1", Generation: 7}
@@ -430,22 +390,13 @@ func TestWorkflowAskHandlerRejectsTaskQuestionWithoutBatchMetadata(t *testing.T)
 }
 
 func TestWorkflowAskHandlerApprovalUsesDurableTaskQuestionState(t *testing.T) {
-	runtimes := &workflowAskHandlerRuntime{
-		response: askquestion.AskQuestionResponse{
-			RequestID: "approval-1",
-			Approval:  &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce},
-		},
-	}
-	store := &recordingRuntimeStore{}
-	starter := &Starter{store: store, runtimes: runtimes}
-	resp, err := starter.handleWorkflowAsk(context.Background(), "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
-		ID:       "approval-1",
-		Question: "Approve?",
-		Approval: true,
-		ApprovalOptions: []askquestion.AskQuestionApprovalOption{{
-			Decision: askquestion.AskQuestionApprovalDecisionAllowOnce,
-			Label:    "Allow once",
-		}},
+	f := newWorkflowAskHandlerFixture()
+	f.runtimes.response = askquestion.AskQuestionResponse{RequestID: "approval-1", Approval: &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce}}
+	resp, err := f.handle(context.Background(), askquestion.AskQuestionRequest{
+		ID:              "approval-1",
+		Question:        "Approve?",
+		Approval:        true,
+		ApprovalOptions: []askquestion.AskQuestionApprovalOption{{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"}},
 	})
 
 	if err != nil {
@@ -454,71 +405,60 @@ func TestWorkflowAskHandlerApprovalUsesDurableTaskQuestionState(t *testing.T) {
 	if resp.Approval == nil || resp.Approval.Decision != askquestion.AskQuestionApprovalDecisionAllowOnce {
 		t.Fatalf("approval response = %+v", resp)
 	}
-	if store.waitingAskID != "approval-1" || store.clearedAskID != "approval-1" {
-		t.Fatalf("waiting ask lifecycle set=%q cleared=%q, want approval-1", store.waitingAskID, store.clearedAskID)
+	if f.store.waitingAskID != "approval-1" || f.store.clearedAskID != "approval-1" {
+		t.Fatalf("waiting ask lifecycle set=%q cleared=%q, want approval-1", f.store.waitingAskID, f.store.clearedAskID)
 	}
-	if len(runtimes.awaited) != 1 {
-		t.Fatalf("awaited approval requests = %+v, want one", runtimes.awaited)
+	if len(f.runtimes.awaited) != 1 {
+		t.Fatalf("awaited approval requests = %+v, want one", f.runtimes.awaited)
 	}
-	target := runtimes.awaited[0].AttentionTarget
+	target := f.runtimes.awaited[0].AttentionTarget
 	if target == nil || target.Kind != clientui.AttentionNotificationTargetWorkflowTask || target.Focus == nil || target.Focus.Kind != clientui.AttentionNotificationFocusQuestion || len(target.Focus.AskIDs) != 1 || target.Focus.AskIDs[0] != "approval-1" {
 		t.Fatalf("awaited approval target = %+v, want task question focus for approval-1", target)
 	}
-	if runtimes.cleared != nil || runtimes.skipped != nil {
-		t.Fatalf("approval touched batch question attention cleared=%+v skipped=%+v", runtimes.cleared, runtimes.skipped)
+	if f.runtimes.cleared != nil || f.runtimes.skipped != nil {
+		t.Fatalf("approval touched batch question attention cleared=%+v skipped=%+v", f.runtimes.cleared, f.runtimes.skipped)
 	}
-	if len(runtimes.approvalCleared) != 1 || runtimes.approvalCleared[0] != "approval-1" {
-		t.Fatalf("approval clear markers = %+v, want approval-1", runtimes.approvalCleared)
+	if len(f.runtimes.approvalCleared) != 1 || f.runtimes.approvalCleared[0] != "approval-1" {
+		t.Fatalf("approval clear markers = %+v, want approval-1", f.runtimes.approvalCleared)
 	}
 }
 
 func TestWorkflowAskHandlerClearFailureLeavesTaskQuestionAttentionUnresolved(t *testing.T) {
 	clearErr := errors.New("clear failed")
 	batch := workflowTestAskBatch("ask-1", "ask-1")
-	runtimes := &workflowAskHandlerRuntime{response: askquestion.AskQuestionResponse{RequestID: "ask-1", Answer: "done"}}
-	store := &recordingRuntimeStore{clearErr: clearErr}
-	starter := &Starter{store: store, runtimes: runtimes}
-	_, err := starter.handleWorkflowAsk(context.Background(), "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
-		ID:            "ask-1",
-		Question:      "Proceed?",
-		Origin:        askquestion.AskQuestionOriginModelTool,
-		QuestionBatch: &batch,
-	})
+	f := newWorkflowAskHandlerFixture()
+	f.runtimes.response = askquestion.AskQuestionResponse{RequestID: "ask-1", Answer: "done"}
+	f.store.clearErr = clearErr
+	_, err := f.handle(context.Background(), workflowTestBatchQuestion("ask-1", &batch))
 
 	if !errors.Is(err, clearErr) {
 		t.Fatalf("handleWorkflowAsk error = %v, want clear error", err)
 	}
-	if store.waitingAskID != "ask-1" || store.clearedAskID != "ask-1" {
-		t.Fatalf("store calls waiting=%q cleared=%q", store.waitingAskID, store.clearedAskID)
+	if f.store.waitingAskID != "ask-1" || f.store.clearedAskID != "ask-1" {
+		t.Fatalf("store calls waiting=%q cleared=%q", f.store.waitingAskID, f.store.clearedAskID)
 	}
-	if len(runtimes.cleared) != 0 {
-		t.Fatalf("task question attention cleared despite durable clear failure: %+v", runtimes.cleared)
+	if len(f.runtimes.cleared) != 0 {
+		t.Fatalf("task question attention cleared despite durable clear failure: %+v", f.runtimes.cleared)
 	}
 }
 
 func TestWorkflowAskHandlerSetWaitingAskFailureSkipsUnmaterializedBatchQuestions(t *testing.T) {
 	setErr := errors.New("set waiting ask failed")
 	batch := workflowTestAskBatch("ask-2", "ask-1", "ask-2", "ask-3")
-	runtimes := &workflowAskHandlerRuntime{}
-	store := &recordingRuntimeStore{setErr: setErr}
-	starter := &Starter{store: store, runtimes: runtimes}
-	_, err := starter.handleWorkflowAsk(context.Background(), "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
-		ID:            "ask-2",
-		Question:      "Proceed?",
-		Origin:        askquestion.AskQuestionOriginModelTool,
-		QuestionBatch: &batch,
-	})
+	f := newWorkflowAskHandlerFixture()
+	f.store.setErr = setErr
+	_, err := f.handle(context.Background(), workflowTestBatchQuestion("ask-2", &batch))
 
 	if !errors.Is(err, setErr) {
 		t.Fatalf("handleWorkflowAsk error = %v, want set waiting ask error", err)
 	}
-	if len(runtimes.awaited) != 0 {
-		t.Fatalf("runtime awaited prompt despite durable waiting ask failure: %+v", runtimes.awaited)
+	if len(f.runtimes.awaited) != 0 {
+		t.Fatalf("runtime awaited prompt despite durable waiting ask failure: %+v", f.runtimes.awaited)
 	}
-	if len(runtimes.prepared) != 1 || runtimes.prepared[0] != "ask-2" {
-		t.Fatalf("prepared batches = %+v, want current prompt preparation", runtimes.prepared)
+	if len(f.runtimes.prepared) != 1 || f.runtimes.prepared[0] != "ask-2" {
+		t.Fatalf("prepared batches = %+v, want current prompt preparation", f.runtimes.prepared)
 	}
-	if got, want := runtimes.skipped, []string{"ask-1", "ask-2", "ask-3"}; !reflect.DeepEqual(got, want) {
+	if got, want := f.runtimes.skipped, []string{"ask-1", "ask-2", "ask-3"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("skipped attention ids = %+v, want %+v", got, want)
 	}
 }
@@ -527,27 +467,21 @@ func TestWorkflowAskHandlerCancellationClearsAndSkipsRemainingBatch(t *testing.T
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	batch := workflowTestAskBatch("ask-1", "ask-1", "ask-2")
-	runtimes := &workflowAskHandlerRuntime{err: context.Canceled}
-	store := &recordingRuntimeStore{}
-	starter := &Starter{store: store, runtimes: runtimes}
-	_, err := starter.handleWorkflowAsk(ctx, "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
-		ID:            "ask-1",
-		Question:      "Proceed?",
-		Origin:        askquestion.AskQuestionOriginModelTool,
-		QuestionBatch: &batch,
-	})
+	f := newWorkflowAskHandlerFixture()
+	f.runtimes.err = context.Canceled
+	_, err := f.handle(ctx, workflowTestBatchQuestion("ask-1", &batch))
 
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("handleWorkflowAsk error = %v, want context.Canceled", err)
 	}
-	if store.clearedAskID != "ask-1" {
-		t.Fatalf("cleared ask id = %q, want ask-1", store.clearedAskID)
+	if f.store.clearedAskID != "ask-1" {
+		t.Fatalf("cleared ask id = %q, want ask-1", f.store.clearedAskID)
 	}
-	if len(runtimes.cleared) != 1 || runtimes.cleared[0] != "ask-1" {
-		t.Fatalf("cleared attention ids = %+v", runtimes.cleared)
+	if len(f.runtimes.cleared) != 1 || f.runtimes.cleared[0] != "ask-1" {
+		t.Fatalf("cleared attention ids = %+v", f.runtimes.cleared)
 	}
-	if len(runtimes.skipped) != 1 || runtimes.skipped[0] != "ask-2" {
-		t.Fatalf("skipped attention ids = %+v, want ask-2", runtimes.skipped)
+	if len(f.runtimes.skipped) != 1 || f.runtimes.skipped[0] != "ask-2" {
+		t.Fatalf("skipped attention ids = %+v, want ask-2", f.runtimes.skipped)
 	}
 }
 
@@ -783,10 +717,7 @@ func TestStarterAutoUsesRunStartSnapshotForContinuationDetection(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fixture := newStarterFixture(t, config.WorkflowCompletionModeAuto)
-			workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, tt.snapshotMode, "coder")
-			if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
-				t.Fatalf("LinkWorkflow chained: %v", err)
-			}
+			workflowID := fixture.linkChainedWorkflow(t, tt.snapshotMode, "coder")
 			claimed, _, plan := fixture.claimPlannedRun(t)
 			updateChainedStarterWorkflowNextEdgeContextMode(t, fixture.metadata, workflowID, tt.liveMode)
 			input, err := fixture.store.GetRunStartContext(context.Background(), claimed.ID)
@@ -914,11 +845,7 @@ func TestStarterStartWorkflowRunPersistsEffectiveCompletionModeBeforeModelReques
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeAuto)
 	fixture.clientFactory = func(SchedulerStartRunRequest) llm.Client { return client }
 	fixture.rebuildStarter(t)
-	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeContinueSession, "coder")
-	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow chained: %v", err)
-	}
-	task := fixture.createStartedTask(t)
+	task := fixture.createStartedChainedTask(t, workflow.ContextModeContinueSession, "coder")
 	scheduler := fixture.scheduler(t)
 
 	if err := scheduler.Process(context.Background()); err != nil {
@@ -941,11 +868,7 @@ func TestStarterRestoresReusedSessionMetadataWhenSetupFailsAfterPlanning(t *test
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"first comments","prior_summary":"first summary"}`))
 	disableCoderShell(t, &fixture)
 	fixture.rebuildStarter(t)
-	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeContinueSession, "coder")
-	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow chained: %v", err)
-	}
-	task := fixture.createStartedTask(t)
+	task := fixture.createStartedChainedTask(t, workflow.ContextModeContinueSession, "coder")
 	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
 		t.Fatalf("first Process: %v", err)
 	}
@@ -981,11 +904,7 @@ func TestStarterRestoresReusedSessionMetadataWhenSetupFailsAfterPlanning(t *test
 
 func TestSchedulerRunsNextAgentWithBoundInputsAndTaskWorktreeContext(t *testing.T) {
 	fixture := newChainedStarterFixture(t)
-	workflowID := createChainedStarterWorkflow(t, fixture.store)
-	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow chained: %v", err)
-	}
-	task := fixture.createStartedTask(t)
+	task := fixture.createStartedChainedTask(t, workflow.ContextModeNewSession, "coder")
 	scheduler := fixture.scheduler(t)
 
 	if err := scheduler.Start(context.Background()); err != nil {
@@ -1012,8 +931,8 @@ func TestSchedulerRunsNextAgentWithBoundInputsAndTaskWorktreeContext(t *testing.
 	assertPromptContains(t, reqs[1], []string{"\nCWD: " + worktreeRoot + "\n"})
 }
 
-func TestBuildWorkflowTaskInstructionsRendersTransitionParameters(t *testing.T) {
-	instructions, err := BuildWorkflowTaskInstructions(workflowstore.RunStartContext{
+func workflowTaskInstructionContext(promptTemplate string) workflowstore.RunStartContext {
+	return workflowstore.RunStartContext{
 		Task: workflowstore.TaskRecord{
 			ID:         "task-1",
 			WorkflowID: "workflow-1",
@@ -1027,10 +946,15 @@ func TestBuildWorkflowTaskInstructionsRendersTransitionParameters(t *testing.T) 
 			Key:         "review",
 			DisplayName: "Review",
 		},
-		PromptTemplate:       "Use {{.Params.direct}} and {{.Params.plan.summary}}.",
-		ParameterValues:      map[string]string{"direct": "direct parameter"},
-		PriorParameterValues: map[string]map[string]string{"plan": {"summary": "plan parameter"}},
-	})
+		PromptTemplate: promptTemplate,
+	}
+}
+
+func TestBuildWorkflowTaskInstructionsRendersTransitionParameters(t *testing.T) {
+	input := workflowTaskInstructionContext("Use {{.Params.direct}} and {{.Params.plan.summary}}.")
+	input.ParameterValues = map[string]string{"direct": "direct parameter"}
+	input.PriorParameterValues = map[string]map[string]string{"plan": {"summary": "plan parameter"}}
+	instructions, err := BuildWorkflowTaskInstructions(input)
 	if err != nil {
 		t.Fatalf("BuildWorkflowTaskInstructions: %v", err)
 	}
@@ -1040,61 +964,31 @@ func TestBuildWorkflowTaskInstructionsRendersTransitionParameters(t *testing.T) 
 }
 
 func TestBuildWorkflowTaskInstructionsRendersTransitionCommentaryParameter(t *testing.T) {
-	instructions, err := BuildWorkflowTaskInstructions(workflowstore.RunStartContext{
-		Task: workflowstore.TaskRecord{
-			ID:         "task-1",
-			WorkflowID: "workflow-1",
-			ShortID:    "RUN-1",
-			Title:      "Task title",
-			Body:       "Task body",
-		},
-		Workflow: workflowstore.WorkflowRecord{ID: "workflow-1"},
-		Node: workflowstore.NodeRecord{
-			ID:          "node-review",
-			Key:         "review",
-			DisplayName: "Review",
-		},
-		PromptTemplate: "Use {{.Params.commentary}}.",
-	})
-	if err != nil {
-		t.Fatalf("BuildWorkflowTaskInstructions without commentary: %v", err)
-	}
-	if instructions.NodePrompt != "Use ." {
-		t.Fatalf("node prompt without commentary = %q", instructions.NodePrompt)
-	}
-
-	instructions, err = BuildWorkflowTaskInstructions(workflowstore.RunStartContext{
-		Task: workflowstore.TaskRecord{
-			ID:         "task-1",
-			WorkflowID: "workflow-1",
-			ShortID:    "RUN-1",
-			Title:      "Task title",
-			Body:       "Task body",
-		},
-		Workflow: workflowstore.WorkflowRecord{ID: "workflow-1"},
-		Node: workflowstore.NodeRecord{
-			ID:          "node-review",
-			Key:         "review",
-			DisplayName: "Review",
-		},
-		PromptTemplate:  "Use {{.Params.commentary}}.",
-		ParameterValues: map[string]string{"commentary": "ready for review"},
-	})
-	if err != nil {
-		t.Fatalf("BuildWorkflowTaskInstructions with commentary: %v", err)
-	}
-	if instructions.NodePrompt != "Use ready for review." {
-		t.Fatalf("node prompt with commentary = %q", instructions.NodePrompt)
+	for _, test := range []struct {
+		name   string
+		values map[string]string
+		want   string
+	}{
+		{name: "absent", want: "Use ."},
+		{name: "present", values: map[string]string{"commentary": "ready for review"}, want: "Use ready for review."},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := workflowTaskInstructionContext("Use {{.Params.commentary}}.")
+			input.ParameterValues = test.values
+			instructions, err := BuildWorkflowTaskInstructions(input)
+			if err != nil {
+				t.Fatalf("BuildWorkflowTaskInstructions: %v", err)
+			}
+			if instructions.NodePrompt != test.want {
+				t.Fatalf("node prompt = %q, want %q", instructions.NodePrompt, test.want)
+			}
+		})
 	}
 }
 
 func TestWorkflowRuntimeContinueSessionReusesSourceRunSession(t *testing.T) {
 	fixture := newChainedStarterFixture(t)
-	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeContinueSession, "coder")
-	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow chained: %v", err)
-	}
-	task := fixture.createStartedTask(t)
+	task := fixture.createStartedChainedTask(t, workflow.ContextModeContinueSession, "coder")
 	scheduler := fixture.scheduler(t)
 
 	if err := scheduler.Start(context.Background()); err != nil {
@@ -1134,11 +1028,7 @@ func TestWorkflowRuntimeContinueSessionReusesSourceRunSession(t *testing.T) {
 
 func TestWorkflowRuntimeContinueSessionKeepsLockedSetupAfterRoleConfigDrift(t *testing.T) {
 	fixture := newChainedStarterFixture(t)
-	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeContinueSession, "coder")
-	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow chained: %v", err)
-	}
-	task := fixture.createStartedTask(t)
+	task := fixture.createStartedChainedTask(t, workflow.ContextModeContinueSession, "coder")
 	firstScheduler := fixture.scheduler(t)
 
 	if err := firstScheduler.Process(context.Background()); err != nil {
@@ -1190,11 +1080,7 @@ func TestWorkflowRuntimeCompactAndContinueReusesSourceSessionWithRealCompaction(
 			Input: json.RawMessage(`{"commentary":"second done"}`),
 		}),
 	)
-	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeCompactAndContinueSession, "coder")
-	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow chained: %v", err)
-	}
-	task := fixture.createStartedTask(t)
+	task := fixture.createStartedChainedTask(t, workflow.ContextModeCompactAndContinueSession, "coder")
 	scheduler := fixture.scheduler(t)
 
 	if err := scheduler.Process(context.Background()); err != nil {
@@ -1289,11 +1175,7 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 	)
 	fixture.clientFactory = func(SchedulerStartRunRequest) llm.Client { return fixture.client }
 	fixture.rebuildStarter(t)
-	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeCompactAndContinueSession, "reviewer")
-	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow chained: %v", err)
-	}
-	task := fixture.createStartedTask(t)
+	task := fixture.createStartedChainedTask(t, workflow.ContextModeCompactAndContinueSession, "reviewer")
 	scheduler := fixture.scheduler(t)
 
 	if err := scheduler.Process(context.Background()); err != nil {
@@ -1556,11 +1438,7 @@ func TestWorkflowRuntimeStartsWorkflowHiddenConfiguredNoOpRole(t *testing.T) {
 		WorkflowSubagentSet: true,
 	}
 	fixture.rebuildStarter(t)
-	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeNewSession, "planner")
-	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow chained: %v", err)
-	}
-	task := fixture.createStartedTask(t)
+	task := fixture.createStartedChainedTask(t, workflow.ContextModeNewSession, "planner")
 	scheduler := fixture.scheduler(t)
 
 	if err := scheduler.Process(context.Background()); err != nil {
@@ -1986,6 +1864,21 @@ func (f starterFixture) createStartedTask(t *testing.T) workflowstore.TaskRecord
 	return task
 }
 
+func (f starterFixture) linkChainedWorkflow(t *testing.T, contextMode workflow.ContextMode, targetRole string) workflow.WorkflowID {
+	t.Helper()
+	workflowID := createChainedStarterWorkflowWithContextMode(t, f.store, contextMode, targetRole)
+	if _, err := f.store.LinkWorkflow(context.Background(), f.projectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow chained: %v", err)
+	}
+	return workflowID
+}
+
+func (f starterFixture) createStartedChainedTask(t *testing.T, contextMode workflow.ContextMode, targetRole string) workflowstore.TaskRecord {
+	t.Helper()
+	f.linkChainedWorkflow(t, contextMode, targetRole)
+	return f.createStartedTask(t)
+}
+
 func (f starterFixture) createStartedTaskWithoutManagedWorktree(t *testing.T) workflowstore.TaskRecord {
 	t.Helper()
 	task, err := f.store.CreateTask(context.Background(), workflowstore.CreateTaskRequest{ProjectID: f.projectID, Title: "Run workflow", Body: "Body for workflow"})
@@ -2147,6 +2040,40 @@ func workflowTestAskBatch(promptID string, askIDs ...string) askquestion.AskQues
 	}
 }
 
+func newWorkflowQuestionBatchStarterFixture(t *testing.T) starterFixture {
+	t.Helper()
+	fixture := newStarterFixture(t, config.WorkflowCompletionModeTool,
+		ScriptedToolBatch("questions",
+			llm.ToolCall{ID: "call-ask-1", Name: "ask_question", Input: json.RawMessage(`{"question":"First direction?","suggestions":["ship","stop"],"recommended_option_index":1}`)},
+			llm.ToolCall{ID: "call-ask-2", Name: "ask_question", Input: json.RawMessage(`{"question":"Second direction?","suggestions":["fast","safe"],"recommended_option_index":2}`)},
+		),
+		ScriptedToolBatch("complete", llm.ToolCall{ID: "call-complete", Name: "complete_node", Input: json.RawMessage(`{"commentary":"answered both and finished"}`)}),
+	)
+	enableAskQuestionTool(t, &fixture)
+	fixture.rebuildStarter(t)
+	return fixture
+}
+
+type workflowAskHandlerFixture struct {
+	starter  *Starter
+	store    *recordingRuntimeStore
+	runtimes *workflowAskHandlerRuntime
+}
+
+func newWorkflowAskHandlerFixture() workflowAskHandlerFixture {
+	store := &recordingRuntimeStore{}
+	runtimes := &workflowAskHandlerRuntime{}
+	return workflowAskHandlerFixture{starter: &Starter{store: store, runtimes: runtimes}, store: store, runtimes: runtimes}
+}
+
+func (f workflowAskHandlerFixture) handle(ctx context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+	return f.starter.handleWorkflowAsk(ctx, "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), req)
+}
+
+func workflowTestBatchQuestion(askID string, batch *askquestion.AskQuestionBatchMetadata) askquestion.AskQuestionRequest {
+	return askquestion.AskQuestionRequest{ID: askID, Question: "Proceed?", Origin: askquestion.AskQuestionOriginModelTool, QuestionBatch: batch}
+}
+
 type workflowAskHandlerRuntime struct {
 	response        askquestion.AskQuestionResponse
 	err             error
@@ -2290,29 +2217,26 @@ func TestScriptCompletionAttentionFinalizesTransitionAndInterruptedRuns(t *testi
 
 func (f starterFixture) waitForCompletedRun(t *testing.T, taskID workflow.TaskID) {
 	t.Helper()
-	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
-	for time.Now().Before(deadline) {
+	testsetup.RequireUntil(t, time.Now().Add(workflowRunnerTestWaitTimeout), 20*time.Millisecond, func() bool {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
 			t.Fatalf("ListRuns: %v", err)
 		}
 		if len(runs) == 1 && runs[0].CompletedAt != nil {
-			return
+			return true
 		}
 		if len(runs) == 1 && runs[0].InterruptedAt != nil {
 			var detail string
 			_ = f.metadata.DB().QueryRowContext(context.Background(), `SELECT interruption_detail_json FROM task_runs WHERE id = ?`, string(runs[0].ID)).Scan(&detail)
 			t.Fatalf("run interrupted: %+v detail=%s", runs[0], detail)
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for workflow run completion")
+		return false
+	}, "timed out waiting for workflow run completion")
 }
 
 func (f starterFixture) waitForCompletedRunCount(t *testing.T, taskID workflow.TaskID, count int) {
 	t.Helper()
-	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
-	for time.Now().Before(deadline) {
+	testsetup.RequireUntil(t, time.Now().Add(workflowRunnerTestWaitTimeout), 20*time.Millisecond, func() bool {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
 			t.Fatalf("ListRuns: %v", err)
@@ -2328,18 +2252,14 @@ func (f starterFixture) waitForCompletedRunCount(t *testing.T, taskID workflow.T
 				completed++
 			}
 		}
-		if completed == count {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %d completed workflow runs", count)
+		return completed == count
+	}, "timed out waiting for %d completed workflow runs", count)
 }
 
 func (f starterFixture) waitForWaitingAsk(t *testing.T, taskID workflow.TaskID, askID string) workflowstore.RunRecord {
 	t.Helper()
-	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
-	for time.Now().Before(deadline) {
+	var waiting workflowstore.RunRecord
+	testsetup.RequireUntil(t, time.Now().Add(workflowRunnerTestWaitTimeout), 20*time.Millisecond, func() bool {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
 			t.Fatalf("ListRuns: %v", err)
@@ -2351,34 +2271,28 @@ func (f starterFixture) waitForWaitingAsk(t *testing.T, taskID workflow.TaskID, 
 			if runs[0].CompletedAt != nil || runs[0].InterruptedAt != nil {
 				t.Fatalf("waiting run has terminal outcome: %+v", runs[0])
 			}
-			return runs[0]
+			waiting = runs[0]
+			return true
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for workflow run ask %s", askID)
-	return workflowstore.RunRecord{}
+		return false
+	}, "timed out waiting for workflow run ask %s", askID)
+	return waiting
 }
 
 func (f starterFixture) waitForRunCount(t *testing.T, taskID workflow.TaskID, count int) {
 	t.Helper()
-	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
-	for time.Now().Before(deadline) {
+	testsetup.RequireUntil(t, time.Now().Add(workflowRunnerTestWaitTimeout), 20*time.Millisecond, func() bool {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
 			t.Fatalf("ListRuns: %v", err)
 		}
-		if len(runs) == count {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %d workflow runs", count)
+		return len(runs) == count
+	}, "timed out waiting for %d workflow runs", count)
 }
 
 func (f starterFixture) waitForAllRunsCompleted(t *testing.T, taskID workflow.TaskID, count int) {
 	t.Helper()
-	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
-	for time.Now().Before(deadline) {
+	testsetup.RequireUntil(t, time.Now().Add(workflowRunnerTestWaitTimeout), 20*time.Millisecond, func() bool {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
 			t.Fatalf("ListRuns: %v", err)
@@ -2392,18 +2306,13 @@ func (f starterFixture) waitForAllRunsCompleted(t *testing.T, taskID workflow.Ta
 				completed++
 			}
 		}
-		if len(runs) == count && completed == count {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %d completed workflow runs", count)
+		return len(runs) == count && completed == count
+	}, "timed out waiting for %d completed workflow runs", count)
 }
 
 func (f starterFixture) waitForInterruptedRun(t *testing.T, scheduler *SchedulerService, taskID workflow.TaskID, reason string) {
 	t.Helper()
-	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
-	for time.Now().Before(deadline) {
+	testsetup.RequireUntil(t, time.Now().Add(workflowRunnerTestWaitTimeout), 20*time.Millisecond, func() bool {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
 			t.Fatalf("ListRuns: %v", err)
@@ -2413,21 +2322,18 @@ func (f starterFixture) waitForInterruptedRun(t *testing.T, scheduler *Scheduler
 				t.Fatalf("interruption reason = %v, want %q", runs[0].InterruptionReason, reason)
 			}
 			f.waitForActiveCountZero(t, scheduler)
-			return
+			return true
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for workflow run interruption")
+		return false
+	}, "timed out waiting for workflow run interruption")
 }
 
 func (f starterFixture) waitForActiveCountZero(t *testing.T, scheduler *SchedulerService) {
 	t.Helper()
-	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
-	for time.Now().Before(deadline) {
-		if scheduler.ActiveCount() == 0 {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+	if testsetup.Until(time.Now().Add(workflowRunnerTestWaitTimeout), 20*time.Millisecond, func() bool {
+		return scheduler.ActiveCount() == 0
+	}) {
+		return
 	}
 	t.Fatalf("scheduler active count = %d, want 0 after runtime finish", scheduler.ActiveCount())
 }
@@ -2666,11 +2572,6 @@ func createStarterWorkflow(t *testing.T, store *workflowstore.Store) workflow.Wo
 		t.Fatalf("AddEdge done: %v", err)
 	}
 	return created.ID
-}
-
-func createChainedStarterWorkflow(t *testing.T, store *workflowstore.Store) workflow.WorkflowID {
-	t.Helper()
-	return createChainedStarterWorkflowWithContextMode(t, store, workflow.ContextModeNewSession, "coder")
 }
 
 func createChainedStarterWorkflowWithContextMode(t *testing.T, store *workflowstore.Store, contextMode workflow.ContextMode, targetRole string) workflow.WorkflowID {

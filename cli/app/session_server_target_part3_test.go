@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	serverstartup "core/server/startup"
 	askquestion "core/server/tools"
 	shelltool "core/server/tools/shell"
@@ -187,19 +188,18 @@ func TestStartSessionServerUsesConfiguredDaemonForProcessFlows(t *testing.T) {
 
 func waitForConfiguredRemoteIdentity(t *testing.T, workspace string) protocol.ServerIdentity {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
 	opts := Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}
-	for time.Now().Before(deadline) {
+	var identity protocol.ServerIdentity
+	testsetup.RequireUntil(t, time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
 		remote, ok := tryDialMatchingConfiguredRemoteWithRequirement(context.Background(), opts, nil, nil, true)
 		if ok {
-			identity := remote.Identity()
+			identity = remote.Identity()
 			_ = remote.Close()
-			return identity
+			return true
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("configured daemon did not become reachable for workspace %s", workspace)
-	return protocol.ServerIdentity{}
+		return false
+	}, "configured daemon did not become reachable for workspace %s", workspace)
+	return identity
 }
 
 func waitForRemoteTranscriptPrompt(t *testing.T, events <-chan ongoingTranscriptEvent, promptID clientui.PromptID, earlyFailures ...<-chan error) clientui.TranscriptPrompt {
@@ -267,52 +267,44 @@ func answerRemoteTranscriptPrompt(t *testing.T, answerer *transcriptPromptAnswer
 
 func waitForRemoteProcess(t *testing.T, views apicontract.ProcessViewService, sessionID string, processID string) clientui.BackgroundProcess {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	var process clientui.BackgroundProcess
+	testsetup.RequireUntil(t, time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
 		resp, err := views.ListProcesses(context.Background(), serverapi.ProcessListRequest{OwnerSessionID: sessionID})
 		if err != nil {
 			t.Fatalf("ListProcesses: %v", err)
 		}
 		for _, proc := range resp.Processes {
 			if proc.ID == processID {
-				return proc
+				process = proc
+				return true
 			}
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for process %s in session %s", processID, sessionID)
-	return clientui.BackgroundProcess{}
+		return false
+	}, "timed out waiting for process %s in session %s", processID, sessionID)
+	return process
 }
 
 func waitForRemoteProcessExit(t *testing.T, views apicontract.ProcessViewService, processID string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	testsetup.RequireUntil(t, time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
 		resp, err := views.GetProcess(context.Background(), serverapi.ProcessGetRequest{ProcessID: processID})
 		if err != nil {
 			t.Fatalf("GetProcess: %v", err)
 		}
-		if resp.Process != nil && !resp.Process.Running {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for process %s to exit", processID)
+		return resp.Process != nil && !resp.Process.Running
+	}, "timed out waiting for process %s to exit", processID)
 }
 
 func waitForRemoteInlineOutput(t *testing.T, controls apicontract.ProcessControlService, processID string) serverapi.ProcessInlineOutputResponse {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := controls.GetInlineOutput(context.Background(), serverapi.ProcessInlineOutputRequest{ProcessID: processID, MaxChars: 1024})
+	var output serverapi.ProcessInlineOutputResponse
+	testsetup.RequireUntil(t, time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
+		var err error
+		output, err = controls.GetInlineOutput(context.Background(), serverapi.ProcessInlineOutputRequest{ProcessID: processID, MaxChars: 1024})
 		if err != nil {
 			t.Fatalf("GetInlineOutput: %v", err)
 		}
-		if strings.TrimSpace(resp.Output) != "" {
-			return resp
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for inline output from %s", processID)
-	return serverapi.ProcessInlineOutputResponse{}
+		return strings.TrimSpace(output.Output) != ""
+	}, "timed out waiting for inline output from %s", processID)
+	return output
 }

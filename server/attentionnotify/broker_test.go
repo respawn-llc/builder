@@ -11,239 +11,139 @@ import (
 )
 
 func TestBrokerDeliversTaskDetailPendingAndTargetlessResolvedToDesktop(t *testing.T) {
-	broker := NewBroker()
-	sub, err := broker.SubscribeDesktop()
-	if err != nil {
-		t.Fatalf("SubscribeDesktop: %v", err)
-	}
+	fixture := newBrokerFixture(t)
+	sub := fixture.subscribeDesktop()
 	scope := RoutingScope{Kind: RoutingWorkflowTask, TaskID: "task-1"}
 	notification := testQuestionNotification("batch-1", 1)
-	if err := broker.PublishPending(scope, notification); err != nil {
-		t.Fatalf("PublishPending: %v", err)
-	}
-	pending := nextAttentionEvent(t, sub)
+	fixture.publishPending(scope, notification)
+	pending := fixture.next(sub)
 	if pending.Sequence != 1 || pending.Type != clientui.AttentionNotificationEventPending || pending.Pending == nil {
 		t.Fatalf("pending event = %+v", pending)
 	}
 	if pending.Pending.Target.Kind != clientui.AttentionNotificationTargetWorkflowTask {
 		t.Fatalf("pending target = %+v", pending.Pending.Target)
 	}
-	if err := broker.PublishResolved(scope, notification.ID, notification.Kind, testTime().Add(time.Second)); err != nil {
-		t.Fatalf("PublishResolved: %v", err)
-	}
-	resolved := nextAttentionEvent(t, sub)
+	fixture.publishResolved(scope, notification.ID, notification.Kind, testTime().Add(time.Second))
+	resolved := fixture.next(sub)
 	if resolved.Sequence != 2 || resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, notification.ID) || resolved.Pending != nil {
 		t.Fatalf("resolved event = %+v", resolved)
 	}
 }
 
 func TestBrokerDeliversSameIDHigherRevisionPendingUpdates(t *testing.T) {
-	broker := NewBroker()
-	sub, err := broker.SubscribeDesktop()
-	if err != nil {
-		t.Fatalf("SubscribeDesktop: %v", err)
-	}
+	fixture := newBrokerFixture(t)
+	sub := fixture.subscribeDesktop()
 	scope := RoutingScope{Kind: RoutingWorkflowTask, TaskID: "task-1"}
-	if err := broker.PublishPending(scope, testQuestionNotification("batch-1", 1)); err != nil {
-		t.Fatalf("PublishPending rev1: %v", err)
-	}
-	if err := broker.PublishPending(scope, testQuestionNotification("batch-1", 2)); err != nil {
-		t.Fatalf("PublishPending rev2: %v", err)
-	}
+	fixture.publishPending(scope, testQuestionNotification("batch-1", 1))
+	fixture.publishPending(scope, testQuestionNotification("batch-1", 2))
 
-	first := nextAttentionEvent(t, sub)
-	second := nextAttentionEvent(t, sub)
-	if first.Pending.Revision != 1 || second.Pending.Revision != 2 {
-		t.Fatalf("revisions = %d, %d; want 1, 2", first.Pending.Revision, second.Pending.Revision)
+	first := fixture.next(sub)
+	second := fixture.next(sub)
+	expectedID := attentionNotificationID(clientui.AttentionNotificationKindQuestion, "batch-1")
+	if first.Pending.ID != expectedID || first.Pending.Revision != 1 || second.Pending.ID != expectedID || second.Pending.Revision != 2 {
+		t.Fatalf("pending updates = %+v, %+v; want ID %+v with revisions 1, 2", first.Pending, second.Pending, expectedID)
 	}
 }
 
 func TestBrokerKeepsSessionPromptOffDesktopRoot(t *testing.T) {
-	broker := NewBroker()
-	desktop, err := broker.SubscribeDesktop()
-	if err != nil {
-		t.Fatalf("SubscribeDesktop: %v", err)
-	}
-	session, err := broker.SubscribeSession("session-1")
-	if err != nil {
-		t.Fatalf("SubscribeSession: %v", err)
-	}
+	fixture := newBrokerFixture(t)
+	desktop := fixture.subscribeDesktop()
+	session := fixture.subscribeSession("session-1")
 	scope := RoutingScope{Kind: RoutingSessionPrompt, SessionID: "session-1"}
-	if err := broker.PublishPending(scope, testSessionPromptNotification("prompt-1")); err != nil {
-		t.Fatalf("PublishPending: %v", err)
-	}
-	if event, err := desktop.Next(shortContext(t)); err == nil {
-		t.Fatalf("desktop received session prompt event: %+v", event)
-	}
-	if event := nextAttentionEvent(t, session); event.Pending.Target.Kind != clientui.AttentionNotificationTargetSessionPrompt {
+	fixture.publishPending(scope, testSessionPromptNotification("prompt-1"))
+	fixture.requireNoEvent(desktop, "desktop received session prompt event")
+	if event := fixture.next(session); event.Pending.Target.Kind != clientui.AttentionNotificationTargetSessionPrompt {
 		t.Fatalf("session target = %+v", event.Pending.Target)
 	}
 }
 
 func TestBrokerSessionRouteReceivesMatchingTaskDetailEvents(t *testing.T) {
-	broker := NewBroker()
-	matching, err := broker.SubscribeSession("session-1")
-	if err != nil {
-		t.Fatalf("SubscribeSession matching: %v", err)
-	}
-	other, err := broker.SubscribeSession("session-2")
-	if err != nil {
-		t.Fatalf("SubscribeSession other: %v", err)
-	}
+	fixture := newBrokerFixture(t)
+	matching := fixture.subscribeSession("session-1")
+	other := fixture.subscribeSession("session-2")
 	scope := RoutingScope{Kind: RoutingWorkflowTask, SessionID: "session-1", TaskID: "task-1"}
-	if err := broker.PublishPending(scope, testQuestionNotification("batch-1", 1)); err != nil {
-		t.Fatalf("PublishPending: %v", err)
-	}
-	if event := nextAttentionEvent(t, matching); attentionNotificationIDEmpty(event.Pending.ID) {
+	fixture.publishPending(scope, testQuestionNotification("batch-1", 1))
+	if event := fixture.next(matching); event.Pending.ID != attentionNotificationID(clientui.AttentionNotificationKindQuestion, "batch-1") {
 		t.Fatalf("matching event = %+v", event)
 	}
-	if event, err := other.Next(shortContext(t)); err == nil {
-		t.Fatalf("wrong session received event: %+v", event)
-	}
+	fixture.requireNoEvent(other, "wrong session received event")
 }
 
 func TestBrokerDeliversScopedResolvedWithoutActiveID(t *testing.T) {
-	broker := NewBroker()
-	sub, err := broker.SubscribeDesktop()
-	if err != nil {
-		t.Fatalf("SubscribeDesktop: %v", err)
-	}
+	fixture := newBrokerFixture(t)
+	sub := fixture.subscribeDesktop()
 	approvalID := attentionNotificationID(clientui.AttentionNotificationKindApproval, "transition-1")
-	if err := broker.PublishResolved(RoutingScope{Kind: RoutingWorkflowTask}, approvalID, clientui.AttentionNotificationKindApproval, testTime()); err != nil {
-		t.Fatalf("PublishResolved: %v", err)
-	}
-	event := nextAttentionEvent(t, sub)
+	fixture.publishResolved(RoutingScope{Kind: RoutingWorkflowTask}, approvalID, clientui.AttentionNotificationKindApproval, testTime())
+	event := fixture.next(sub)
 	if event.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(event, approvalID) {
 		t.Fatalf("resolved event = %+v", event)
 	}
 }
 
 func TestBrokerEnqueuesInitialEventsOnlyForRegisteredSubscriber(t *testing.T) {
-	broker := NewBroker()
-	if err := broker.PublishPending(RoutingScope{Kind: RoutingWorkflowTask}, testQuestionNotification("batch-1", 1)); err != nil {
-		t.Fatalf("PublishPending before subscribe: %v", err)
-	}
-	sub, err := broker.SubscribeDesktop()
-	if err != nil {
-		t.Fatalf("SubscribeDesktop: %v", err)
-	}
-	if event, err := sub.Next(shortContext(t)); err == nil {
-		t.Fatalf("default subscription replayed old event: %+v", event)
-	}
+	fixture := newBrokerFixture(t)
+	fixture.publishPending(RoutingScope{Kind: RoutingWorkflowTask}, testQuestionNotification("batch-1", 1))
+	sub := fixture.subscribeDesktop()
+	fixture.requireNoEvent(sub, "default subscription replayed old event")
 	initial := clientui.AttentionNotificationEvent{
 		Source:    clientui.AttentionNotificationSourceSnapshot,
 		Type:      clientui.AttentionNotificationEventSnapshotComplete,
 		SessionID: "session-1",
 	}
-	if err := broker.EnqueueInitial(sub, RoutingScope{Kind: RoutingWorkflowTask}, initial); err != nil {
-		t.Fatalf("EnqueueInitial: %v", err)
-	}
-	if event := nextAttentionEvent(t, sub); event.Type != clientui.AttentionNotificationEventSnapshotComplete {
+	fixture.enqueueInitial(sub, RoutingScope{Kind: RoutingWorkflowTask}, initial)
+	if event := fixture.next(sub); event.Type != clientui.AttentionNotificationEventSnapshotComplete {
 		t.Fatalf("initial event = %+v", event)
 	}
 }
 
 func TestBrokerSnapshotPendingActivatesLaterResolvedEvent(t *testing.T) {
-	broker := NewBroker()
-	sub, err := broker.SubscribeSession("session-1")
-	if err != nil {
-		t.Fatalf("SubscribeSession: %v", err)
-	}
+	fixture := newBrokerFixture(t)
+	sub := fixture.subscribeSession("session-1")
 	scope := RoutingScope{Kind: RoutingSessionPrompt, SessionID: "session-1"}
 	notification := testSessionPromptNotification("ask-1")
-	initial := clientui.AttentionNotificationEvent{
-		Source:  clientui.AttentionNotificationSourceSnapshot,
-		Type:    clientui.AttentionNotificationEventPending,
-		Pending: &notification,
-	}
-	if err := broker.EnqueueInitial(sub, scope, initial); err != nil {
-		t.Fatalf("EnqueueInitial: %v", err)
-	}
-	if event := nextAttentionEvent(t, sub); event.Type != clientui.AttentionNotificationEventPending || event.Pending.ID != notification.ID {
+	initial := snapshotPending(notification)
+	fixture.enqueueInitial(sub, scope, initial)
+	if event := fixture.next(sub); event.Type != clientui.AttentionNotificationEventPending || event.Pending.ID != notification.ID {
 		t.Fatalf("initial pending event = %+v", event)
 	}
-	if err := broker.PublishResolved(scope, notification.ID, notification.Kind, testTime().Add(time.Second)); err != nil {
-		t.Fatalf("PublishResolved: %v", err)
-	}
-	resolved := nextAttentionEvent(t, sub)
+	fixture.publishResolved(scope, notification.ID, notification.Kind, testTime().Add(time.Second))
+	resolved := fixture.next(sub)
 	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, notification.ID) {
 		t.Fatalf("resolved event = %+v", resolved)
 	}
 }
 
 func TestBrokerClosesLaggingSubscriberWithStreamGap(t *testing.T) {
-	broker := NewBroker(WithBufferSize(1))
-	sub, err := broker.SubscribeDesktop()
-	if err != nil {
-		t.Fatalf("SubscribeDesktop: %v", err)
-	}
+	fixture := newBrokerFixture(t, WithBufferSize(1))
+	sub := fixture.subscribeDesktop()
 	scope := RoutingScope{Kind: RoutingWorkflowTask}
-	if err := broker.PublishPending(scope, testQuestionNotification("batch-1", 1)); err != nil {
-		t.Fatalf("PublishPending first: %v", err)
-	}
-	if err := broker.PublishPending(scope, testQuestionNotification("batch-2", 1)); err != nil {
-		t.Fatalf("PublishPending second: %v", err)
-	}
-	_ = nextAttentionEvent(t, sub)
-	_, err = sub.Next(context.Background())
-	if !errors.Is(err, serverapi.ErrStreamGap) {
-		t.Fatalf("Next error = %v, want ErrStreamGap", err)
-	}
+	fixture.publishPending(scope, testQuestionNotification("batch-1", 1))
+	fixture.publishPending(scope, testQuestionNotification("batch-2", 1))
+	_ = fixture.next(sub)
+	_, err := sub.Next(context.Background())
+	fixture.requireStreamGap("Next", err)
 }
 
 func TestBrokerInitialEnqueueOverflowReturnsStreamGap(t *testing.T) {
-	broker := NewBroker(WithBufferSize(1))
-	sub, err := broker.SubscribeSession("session-1")
-	if err != nil {
-		t.Fatalf("SubscribeSession: %v", err)
-	}
+	fixture := newBrokerFixture(t, WithBufferSize(1))
+	sub := fixture.subscribeSession("session-1")
 	scope := RoutingScope{Kind: RoutingSessionPrompt, SessionID: "session-1"}
-	firstNotification := testSessionPromptNotification("ask-1")
-	secondNotification := testSessionPromptNotification("ask-2")
-	first := clientui.AttentionNotificationEvent{
-		Source:  clientui.AttentionNotificationSourceSnapshot,
-		Type:    clientui.AttentionNotificationEventPending,
-		Pending: &firstNotification,
-	}
-	second := clientui.AttentionNotificationEvent{
-		Source:  clientui.AttentionNotificationSourceSnapshot,
-		Type:    clientui.AttentionNotificationEventPending,
-		Pending: &secondNotification,
-	}
-	if err := broker.EnqueueInitial(sub, scope, first); err != nil {
-		t.Fatalf("EnqueueInitial first: %v", err)
-	}
-	if err := broker.EnqueueInitial(sub, scope, second); !errors.Is(err, serverapi.ErrStreamGap) {
-		t.Fatalf("EnqueueInitial overflow error = %v, want ErrStreamGap", err)
-	}
-	_ = nextAttentionEvent(t, sub)
-	if _, err := sub.Next(context.Background()); !errors.Is(err, serverapi.ErrStreamGap) {
-		t.Fatalf("Next error = %v, want ErrStreamGap", err)
-	}
+	first := snapshotPending(testSessionPromptNotification("ask-1"))
+	second := snapshotPending(testSessionPromptNotification("ask-2"))
+	fixture.enqueueInitial(sub, scope, first)
+	fixture.requireStreamGap("EnqueueInitial overflow", fixture.EnqueueInitial(sub, scope, second))
+	_ = fixture.next(sub)
+	_, err := sub.Next(context.Background())
+	fixture.requireStreamGap("Next", err)
 }
 
 func TestQuestionBatchTrackerPublishesMaterializedUpdatesAndResolvesAfterClears(t *testing.T) {
-	broker := NewBroker()
-	sub, err := broker.SubscribeDesktop()
-	if err != nil {
-		t.Fatalf("SubscribeDesktop: %v", err)
-	}
-	tracker := NewQuestionBatchTracker(broker)
-	batch := QuestionBatch{
-		ID:             "batch-1",
-		Route:          RoutingScope{Kind: RoutingWorkflowTask, TaskID: "task-1"},
-		Target:         testQuestionTarget(),
-		Preview:        "question from agent",
-		PreparedAskIDs: []string{"ask-1", "ask-2"},
-		OccurredAt:     testTime(),
-	}
-	if err := tracker.Prepare(batch); err != nil {
-		t.Fatalf("Prepare: %v", err)
-	}
-	if err := tracker.MarkMaterialized(batch.ID, "ask-1"); err != nil {
-		t.Fatalf("MarkMaterialized ask-1: %v", err)
-	}
-	first := nextAttentionEvent(t, sub)
+	fixture := newBrokerFixture(t)
+	sub := fixture.subscribeDesktop()
+	tracker, batch := fixture.questionBatch()
+	fixture.noError("Prepare", tracker.Prepare(batch))
+	fixture.noError("MarkMaterialized ask-1", tracker.MarkMaterialized(batch.ID, "ask-1"))
+	first := fixture.next(sub)
 	if first.Pending.Question.DisplayCount != 2 || len(first.Pending.Question.CurrentUnresolvedAskIDs) != 1 {
 		t.Fatalf("first question state = %+v", first.Pending.Question)
 	}
@@ -251,26 +151,18 @@ func TestQuestionBatchTrackerPublishesMaterializedUpdatesAndResolvesAfterClears(
 		t.Fatalf("first preview = %q", first.Pending.Question.Preview)
 	}
 	batch.Preview = "later question from agent"
-	if err := tracker.Prepare(batch); err != nil {
-		t.Fatalf("Prepare emitted batch update: %v", err)
-	}
-	if err := tracker.MarkMaterialized(batch.ID, "ask-2"); err != nil {
-		t.Fatalf("MarkMaterialized ask-2: %v", err)
-	}
-	second := nextAttentionEvent(t, sub)
+	fixture.noError("Prepare emitted batch update", tracker.Prepare(batch))
+	fixture.noError("MarkMaterialized ask-2", tracker.MarkMaterialized(batch.ID, "ask-2"))
+	second := fixture.next(sub)
 	if second.Type != clientui.AttentionNotificationEventPending || second.Pending.Question.MaterializedCount != 2 || len(second.Pending.Question.CurrentUnresolvedAskIDs) != 2 {
 		t.Fatalf("second materialized update = %+v", second)
 	}
 	if second.Pending.Revision <= first.Pending.Revision {
 		t.Fatalf("second revision = %d, want > %d", second.Pending.Revision, first.Pending.Revision)
 	}
-	if err := tracker.MarkDurablyCleared(batch.ID, "ask-1"); err != nil {
-		t.Fatalf("MarkDurablyCleared ask-1: %v", err)
-	}
-	if err := tracker.MarkDurablyCleared(batch.ID, "ask-2"); err != nil {
-		t.Fatalf("MarkDurablyCleared ask-2: %v", err)
-	}
-	resolved := nextAttentionEvent(t, sub)
+	fixture.noError("MarkDurablyCleared ask-1", tracker.MarkDurablyCleared(batch.ID, "ask-1"))
+	fixture.noError("MarkDurablyCleared ask-2", tracker.MarkDurablyCleared(batch.ID, "ask-2"))
+	resolved := fixture.next(sub)
 	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, attentionNotificationID(clientui.AttentionNotificationKindQuestion, batch.ID)) {
 		t.Fatalf("resolved event = %+v", resolved)
 	}
@@ -280,13 +172,96 @@ func TestQuestionBatchTrackerPublishesMaterializedUpdatesAndResolvesAfterClears(
 }
 
 func TestQuestionBatchTrackerResolvesWithoutRepublishingWhenAskSkipped(t *testing.T) {
-	broker := NewBroker()
-	sub, err := broker.SubscribeDesktop()
-	if err != nil {
-		t.Fatalf("SubscribeDesktop: %v", err)
+	fixture := newBrokerFixture(t)
+	sub := fixture.subscribeDesktop()
+	tracker, batch := fixture.questionBatch()
+	fixture.noError("Prepare", tracker.Prepare(batch))
+	fixture.noError("MarkMaterialized ask-1", tracker.MarkMaterialized(batch.ID, "ask-1"))
+	_ = fixture.next(sub)
+	fixture.noError("MarkSkipped ask-2", tracker.MarkSkipped(batch.ID, "ask-2"))
+	fixture.requireNoEvent(sub, "skipped ask published duplicate pending attention")
+	fixture.noError("MarkDurablyCleared ask-1", tracker.MarkDurablyCleared(batch.ID, "ask-1"))
+	resolved := fixture.next(sub)
+	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, attentionNotificationID(clientui.AttentionNotificationKindQuestion, batch.ID)) {
+		t.Fatalf("resolved event = %+v", resolved)
 	}
-	tracker := NewQuestionBatchTracker(broker)
-	batch := QuestionBatch{
+}
+
+type brokerFixture struct {
+	*testing.T
+	*Broker
+}
+
+func newBrokerFixture(t *testing.T, options ...Option) brokerFixture {
+	t.Helper()
+	return brokerFixture{T: t, Broker: NewBroker(options...)}
+}
+
+func (f brokerFixture) subscribeDesktop() *Subscription {
+	f.Helper()
+	sub, err := f.SubscribeDesktop()
+	f.noError("SubscribeDesktop", err)
+	return sub
+}
+
+func (f brokerFixture) subscribeSession(sessionID string) *Subscription {
+	f.Helper()
+	sub, err := f.SubscribeSession(sessionID)
+	f.noError("SubscribeSession", err)
+	return sub
+}
+
+func (f brokerFixture) publishPending(scope RoutingScope, notification clientui.AttentionNotification) {
+	f.Helper()
+	f.noError("PublishPending", f.PublishPending(scope, notification))
+}
+
+func (f brokerFixture) publishResolved(scope RoutingScope, id clientui.AttentionNotificationID, kind clientui.AttentionNotificationKind, occurredAt time.Time) {
+	f.Helper()
+	f.noError("PublishResolved", f.PublishResolved(scope, id, kind, occurredAt))
+}
+
+func (f brokerFixture) enqueueInitial(sub *Subscription, scope RoutingScope, event clientui.AttentionNotificationEvent) {
+	f.Helper()
+	f.noError("EnqueueInitial", f.EnqueueInitial(sub, scope, event))
+}
+
+func (f brokerFixture) next(sub *Subscription) clientui.AttentionNotificationEvent {
+	f.Helper()
+	event, err := sub.Next(context.Background())
+	f.noError("Next", err)
+	return event
+}
+
+func (f brokerFixture) requireNoEvent(sub *Subscription, failure string) {
+	f.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	event, err := sub.Next(ctx)
+	if err == nil {
+		f.Fatalf("%s: %+v", failure, event)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		f.Fatalf("%s: Next error = %v, want context deadline", failure, err)
+	}
+}
+
+func (f brokerFixture) requireStreamGap(operation string, err error) {
+	f.Helper()
+	if !errors.Is(err, serverapi.ErrStreamGap) {
+		f.Fatalf("%s error = %v, want ErrStreamGap", operation, err)
+	}
+}
+
+func (f brokerFixture) noError(operation string, err error) {
+	f.Helper()
+	if err != nil {
+		f.Fatalf("%s: %v", operation, err)
+	}
+}
+
+func (f brokerFixture) questionBatch() (*QuestionBatchTracker, QuestionBatch) {
+	return NewQuestionBatchTracker(f.Broker), QuestionBatch{
 		ID:             "batch-1",
 		Route:          RoutingScope{Kind: RoutingWorkflowTask, TaskID: "task-1"},
 		Target:         testQuestionTarget(),
@@ -294,50 +269,18 @@ func TestQuestionBatchTrackerResolvesWithoutRepublishingWhenAskSkipped(t *testin
 		PreparedAskIDs: []string{"ask-1", "ask-2"},
 		OccurredAt:     testTime(),
 	}
-	if err := tracker.Prepare(batch); err != nil {
-		t.Fatalf("Prepare: %v", err)
-	}
-	if err := tracker.MarkMaterialized(batch.ID, "ask-1"); err != nil {
-		t.Fatalf("MarkMaterialized ask-1: %v", err)
-	}
-	_ = nextAttentionEvent(t, sub)
-	if err := tracker.MarkSkipped(batch.ID, "ask-2"); err != nil {
-		t.Fatalf("MarkSkipped ask-2: %v", err)
-	}
-	if event, err := sub.Next(shortContext(t)); err == nil {
-		t.Fatalf("skipped ask published duplicate pending attention: %+v", event)
-	}
-	if err := tracker.MarkDurablyCleared(batch.ID, "ask-1"); err != nil {
-		t.Fatalf("MarkDurablyCleared ask-1: %v", err)
-	}
-	resolved := nextAttentionEvent(t, sub)
-	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, attentionNotificationID(clientui.AttentionNotificationKindQuestion, batch.ID)) {
-		t.Fatalf("resolved event = %+v", resolved)
-	}
 }
 
-func nextAttentionEvent(t *testing.T, sub *Subscription) clientui.AttentionNotificationEvent {
-	t.Helper()
-	event, err := sub.Next(context.Background())
-	if err != nil {
-		t.Fatalf("Next: %v", err)
+func snapshotPending(notification clientui.AttentionNotification) clientui.AttentionNotificationEvent {
+	return clientui.AttentionNotificationEvent{
+		Source:  clientui.AttentionNotificationSourceSnapshot,
+		Type:    clientui.AttentionNotificationEventPending,
+		Pending: &notification,
 	}
-	return event
-}
-
-func shortContext(t *testing.T) context.Context {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-	t.Cleanup(cancel)
-	return ctx
 }
 
 func attentionNotificationID(kind clientui.AttentionNotificationKind, uuid string) clientui.AttentionNotificationID {
 	return clientui.AttentionNotificationID{Kind: kind, UUID: uuid}
-}
-
-func attentionNotificationIDEmpty(id clientui.AttentionNotificationID) bool {
-	return id.Kind == "" && id.UUID == ""
 }
 
 func attentionNotificationEventIDMatches(event clientui.AttentionNotificationEvent, id clientui.AttentionNotificationID) bool {

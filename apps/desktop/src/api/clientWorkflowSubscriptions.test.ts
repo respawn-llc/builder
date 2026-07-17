@@ -1,7 +1,7 @@
 import type { ApiService } from "./apiService";
 import { ApiClient } from "./client";
 import { ContractError } from "./errors";
-import { FakeRpcTransport } from "./fakeTransport";
+import { FakeRpcTransport } from "@/test-support/api";
 import type { WorkflowProjectEvent } from "./workflowProjectEvents";
 
 const workflowProjectWireEvent = {

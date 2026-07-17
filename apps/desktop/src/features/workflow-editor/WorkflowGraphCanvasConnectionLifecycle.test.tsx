@@ -1,12 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import type {
-  ComponentProps,
-  ComponentType,
-  KeyboardEvent as ReactKeyboardEvent,
-  MouseEvent as ReactMouseEvent,
-  ReactElement,
-  ReactNode,
-} from "react";
+import type { ComponentProps, ComponentType, ReactElement, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactFlow as ReactFlowComponent } from "@xyflow/react";
 import { z } from "zod";
@@ -22,16 +15,12 @@ interface LifecycleNodeProps {
   selected: boolean;
 }
 
-type LifecycleHandleProps = Readonly<{
-  "aria-label"?: string;
-  className?: string;
-  "data-testid"?: string;
-  id?: string;
-  onClick?: (event: ReactMouseEvent<HTMLButtonElement>) => void;
-  onKeyDown?: (event: ReactKeyboardEvent<HTMLButtonElement>) => void;
-  role?: string;
-  tabIndex?: number;
-}>;
+type LifecycleHandleProps = Readonly<
+  Pick<
+    ComponentProps<"button">,
+    "aria-label" | "className" | "id" | "onClick" | "onKeyDown" | "role" | "tabIndex"
+  > & { "data-testid"?: string }
+>;
 const lifecycleNodeRendererSchema = z.custom<ComponentType<LifecycleNodeProps>>(
   (value) => z.function().safeParse(value).success,
 );
@@ -59,49 +48,38 @@ const reactFlowHarness = vi.hoisted(
 vi.mock("@xyflow/react", async () => {
   const { createElement: renderElement, Fragment } = await import("react");
 
+  function connectionLifecycleButton(
+    props: ReactFlowProps,
+    lifecycle: "cancel" | "complete" | "stationary",
+  ): ReactElement {
+    return renderElement("button", {
+      "data-testid": `connection-${lifecycle}`,
+      onClick: () => {
+        props.onConnectStart?.(new MouseEvent("pointerdown", { clientX: 10, clientY: 10 }), {
+          handleId: "creation-source",
+          handleType: "source",
+          nodeId: "source",
+        });
+        if (lifecycle === "complete") {
+          props.onConnect?.({ source: "source", target: "target" });
+        }
+        props.onConnectEnd?.(
+          new MouseEvent("pointerup", { clientX: lifecycle === "stationary" ? 10 : 20, clientY: 10 }),
+        );
+      },
+      type: "button",
+    });
+  }
+
   function ReactFlow(props: ReactFlowProps): ReactNode {
     reactFlowHarness.props = props;
     return renderElement(
       "div",
       { "data-testid": "react-flow-lifecycle-harness" },
       props.nodes?.map((node) => renderLifecycleNode(props, node)),
-      renderElement("button", {
-        "data-testid": "connection-complete",
-        onClick: () => {
-          props.onConnectStart?.(new MouseEvent("pointerdown", { clientX: 10, clientY: 10 }), {
-            handleId: "creation-source",
-            handleType: "source",
-            nodeId: "source",
-          });
-          props.onConnect?.({ source: "source", target: "target" });
-          props.onConnectEnd?.(new MouseEvent("pointerup", { clientX: 20, clientY: 10 }));
-        },
-        type: "button",
-      }),
-      renderElement("button", {
-        "data-testid": "connection-cancel",
-        onClick: () => {
-          props.onConnectStart?.(new MouseEvent("pointerdown", { clientX: 10, clientY: 10 }), {
-            handleId: "creation-source",
-            handleType: "source",
-            nodeId: "source",
-          });
-          props.onConnectEnd?.(new MouseEvent("pointerup", { clientX: 20, clientY: 10 }));
-        },
-        type: "button",
-      }),
-      renderElement("button", {
-        "data-testid": "connection-stationary",
-        onClick: () => {
-          props.onConnectStart?.(new MouseEvent("pointerdown", { clientX: 10, clientY: 10 }), {
-            handleId: "creation-source",
-            handleType: "source",
-            nodeId: "source",
-          });
-          props.onConnectEnd?.(new MouseEvent("pointerup", { clientX: 10, clientY: 10 }));
-        },
-        type: "button",
-      }),
+      connectionLifecycleButton(props, "complete"),
+      connectionLifecycleButton(props, "cancel"),
+      connectionLifecycleButton(props, "stationary"),
       renderElement("button", {
         "data-testid": "canvas-pane-click",
         onClick: () => {
@@ -145,7 +123,7 @@ vi.mock("@xyflow/react", async () => {
   };
 });
 
-import { WorkflowGraphCanvas } from "./WorkflowGraphCanvas";
+import { WorkflowGraphCanvas, type WorkflowGraphCanvasProps } from "./WorkflowGraphCanvas";
 
 void initializeI18n();
 
@@ -158,23 +136,11 @@ describe("WorkflowGraphCanvas connection lifecycle", () => {
   it("suppresses only completed and canceled drag activation, then recovers for the next click", async () => {
     const onAddConnectedNode = vi.fn();
     const onConnectNodes = vi.fn();
-    render(
-      <WorkflowGraphCanvas
-        graph={{
-          edges: [],
-          nodes: [
-            workflowGraphNode({ id: "source", kind: "agent", label: "Source", x: 0 }),
-            workflowGraphNode({ id: "target", kind: "agent", label: "Target", x: 320 }),
-          ],
-        }}
-        onAddConnectedNode={onAddConnectedNode}
-        onConnectNodes={onConnectNodes}
-        onEdgeInspect={() => undefined}
-        onGroupInspect={() => undefined}
-        onNodeInspect={() => undefined}
-        onWorkflowInspect={() => undefined}
-      />,
-    );
+    renderCanvas({
+      graph: testGraph(workflowGraphNode("source", "Source", 0), workflowGraphNode("target", "Target", 320)),
+      onAddConnectedNode,
+      onConnectNodes,
+    });
 
     const sourceHandle = within(screen.getByTestId("workflow-graph-node-source")).getByTestId(
       "workflow-node-source-handle",
@@ -197,19 +163,10 @@ describe("WorkflowGraphCanvas connection lifecycle", () => {
   });
 
   it("does not suppress a stationary activation lifecycle", async () => {
-    render(
-      <WorkflowGraphCanvas
-        graph={{
-          edges: [],
-          nodes: [workflowGraphNode({ id: "source", kind: "agent", label: "Source", x: 0 })],
-        }}
-        onAddConnectedNode={() => undefined}
-        onEdgeInspect={() => undefined}
-        onGroupInspect={() => undefined}
-        onNodeInspect={() => undefined}
-        onWorkflowInspect={() => undefined}
-      />,
-    );
+    renderCanvas({
+      graph: testGraph(workflowGraphNode("source", "Source", 0)),
+      onAddConnectedNode: noop,
+    });
 
     fireEvent.click(screen.getByTestId("connection-stationary"));
     fireEvent.click(
@@ -225,18 +182,12 @@ describe("WorkflowGraphCanvas connection lifecycle", () => {
   it("clears a selected quick-add transition before Delete when the canvas pane is clicked", async () => {
     const onDeleteSelection = vi.fn();
     const onGraphSelectionConsumed = vi.fn();
-    render(
-      <WorkflowGraphCanvas
-        graph={{ edges: [workflowGraphEdge("edge-created")], nodes: [] }}
-        graphSelectionRequest={{ edgeID: "edge-created", requestID: "quick-add-created-edge" }}
-        onDeleteSelection={onDeleteSelection}
-        onEdgeInspect={() => undefined}
-        onGraphSelectionConsumed={onGraphSelectionConsumed}
-        onGroupInspect={() => undefined}
-        onNodeInspect={() => undefined}
-        onWorkflowInspect={() => undefined}
-      />,
-    );
+    renderCanvas({
+      graph: { edges: [workflowGraphEdge("edge-created")], nodes: [] },
+      graphSelectionRequest: { edgeID: "edge-created", requestID: "quick-add-created-edge" },
+      onDeleteSelection,
+      onGraphSelectionConsumed,
+    });
 
     await screen.findByTestId("react-flow-lifecycle-harness");
     await vi.waitFor(() => {
@@ -248,6 +199,23 @@ describe("WorkflowGraphCanvas connection lifecycle", () => {
     expect(onDeleteSelection).not.toHaveBeenCalled();
   });
 });
+
+const noop = () => undefined;
+const defaultCanvasProps = {
+  graph: testGraph(),
+  onEdgeInspect: noop,
+  onGroupInspect: noop,
+  onNodeInspect: noop,
+  onWorkflowInspect: noop,
+} satisfies WorkflowGraphCanvasProps;
+
+function testGraph(...nodes: readonly WorkflowGraphNode[]): WorkflowGraphCanvasProps["graph"] {
+  return { edges: [], nodes };
+}
+
+function renderCanvas(overrides: Partial<WorkflowGraphCanvasProps> = {}) {
+  return render(<WorkflowGraphCanvas {...defaultCanvasProps} {...overrides} />);
+}
 
 function renderLifecycleNode(
   props: ReactFlowProps,
@@ -267,17 +235,7 @@ function renderLifecycleNode(
   return <NodeRenderer data={node.data} dragging={false} key={node.id} selected={node.selected ?? false} />;
 }
 
-function workflowGraphNode({
-  id,
-  kind,
-  label,
-  x,
-}: Readonly<{
-  id: string;
-  kind: "agent";
-  label: string;
-  x: number;
-}>): WorkflowGraphNode {
+function workflowGraphNode(id: string, label: string, x: number): WorkflowGraphNode {
   return {
     data: {
       endpointPorts: [],
@@ -286,7 +244,7 @@ function workflowGraphNode({
       groupID: "",
       hasError: false,
       key: id,
-      kind,
+      kind: "agent",
       label,
       role: "coder",
     },

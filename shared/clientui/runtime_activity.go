@@ -199,14 +199,6 @@ func (r RuntimeCompactRequest) Validate() error {
 	return validateOperationRefKind(r.OperationRef, RuntimeOperationKindCompact)
 }
 
-type RuntimePreSubmitCompactRequest struct {
-	OperationRef RuntimeOperationRef
-}
-
-func (r RuntimePreSubmitCompactRequest) Validate() error {
-	return validateOperationRefKind(r.OperationRef, RuntimeOperationKindPreSubmitCompact)
-}
-
 type RuntimeSubmitQueuedRequest struct {
 	OperationRef RuntimeOperationRef
 }

@@ -1,7 +1,7 @@
 import { ApiClient } from "./client";
 import type { AttentionNotificationEvent } from "./attentionNotifications";
 import { ContractError } from "./errors";
-import { FakeRpcTransport } from "./fakeTransport";
+import { FakeRpcTransport } from "@/test-support/api";
 
 describe("attention notification API", () => {
   it("subscribes to typed attention notifications and rejects malformed events at the API boundary", () => {

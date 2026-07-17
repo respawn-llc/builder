@@ -541,26 +541,6 @@ func ensureInteractiveProjectBinding(ctx context.Context, server projectbinding.
 	})
 }
 
-func ensureInteractiveServerBrowsingBinding(ctx context.Context, server projectbinding.Server[interactiveSessionServer], projects []clientui.ProjectSummary) (interactiveSessionServer, error) {
-	pickServerProject := runServerProjectPickerFlow
-	if pickServerProject == nil {
-		pickServerProject = func(projects []clientui.ProjectSummary, theme string) (projectBindingPickerResult, error) {
-			return runConfiguredProjectPicker(projects, theme, projectPickerOptions{
-				AllowCreate:    false,
-				HeaderMarkdown: serverProjectPickerHeaderMarkdown,
-				HeaderFallback: serverProjectPickerHeaderFallback,
-				NoticeText:     serverProjectPickerNoticeText,
-				GroupLabel:     serverProjectExistingLabel,
-			})
-		}
-	}
-	return projectbinding.EnsureServerBrowsing[interactiveSessionServer](ctx, projectbinding.Request[interactiveSessionServer]{
-		Server:            server,
-		PickServerProject: pickServerProject,
-		PickWorkspace:     runProjectWorkspacePickerFlow,
-	}, projects)
-}
-
 func headerInsetFromRenderedHeader(rendered string) string {
 	for _, line := range strings.Split(ansi.Strip(rendered), "\n") {
 		if strings.TrimSpace(line) == "" {

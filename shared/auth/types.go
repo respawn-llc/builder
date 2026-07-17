@@ -13,7 +13,6 @@ var (
 	ErrSwitchRequiresIdle    = errors.New("auth method switch requires idle session")
 	ErrOAuthRefreshFailed    = errors.New("oauth token refresh failed")
 	ErrInvalidAuthScope      = errors.New("invalid auth scope")
-	ErrMissingOAuthFactory   = errors.New("oauth token source factory is required")
 	ErrDeviceCodeUnsupported = errors.New("device code login is not enabled")
 )
 

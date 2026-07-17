@@ -7,15 +7,23 @@ import {
   type WorkflowNode,
   type WorkflowValidation,
 } from "@/api";
-import type { WorkflowGraphEdge, WorkflowGraphNode, WorkflowGraphPoint } from "./workflowGraphLayout";
+import type { WorkflowGraphNode, WorkflowGraphPoint } from "./workflowGraphLayout";
 import { layoutWorkflowGraph } from "./workflowGraphLayout";
-import { workflowGraphAbsoluteNodeRect, workflowGraphEndpointPoint } from "./workflowGraphLayoutTestHelpers";
+import {
+  requireWorkflowGraphEdge,
+  requireWorkflowGraphNode,
+  requireWorkflowGraphRoutePoints,
+  workflowGraphAbsoluteNodeRect,
+  workflowGraphEndpointPoint,
+  workflowGraphRouteHasCorner,
+  workflowGraphRouteIsOrthogonal,
+} from "./workflowGraphLayoutTestHelpers";
 
 describe("layoutWorkflowGraph node group bounds", () => {
   it("keeps unrelated nodes outside populated node group bounds", async () => {
     const graph = await layoutWorkflowGraph(threeBranchGroupWorkflow, emptyValidation);
-    const group = requiredNodeByID(graph.nodes, "workflow-group-group-1");
-    const unrelatedNodes = ["start", "done"].map((id) => requiredNodeByID(graph.nodes, id));
+    const group = requireWorkflowGraphNode(graph.nodes, "workflow-group-group-1");
+    const unrelatedNodes = ["start", "done"].map((id) => requireWorkflowGraphNode(graph.nodes, id));
 
     for (const node of unrelatedNodes) {
       expect(rectsOverlap(group, node)).toBe(false);
@@ -24,13 +32,13 @@ describe("layoutWorkflowGraph node group bounds", () => {
 
   it("keeps the group Join outside and vertically centered to the right of the group island", async () => {
     const graph = await layoutWorkflowGraph(threeBranchGroupWorkflow, emptyValidation);
-    const group = requiredNodeByID(graph.nodes, "workflow-group-group-1");
-    const join = requiredNodeByID(graph.nodes, "join");
+    const group = requireWorkflowGraphNode(graph.nodes, "workflow-group-group-1");
+    const join = requireWorkflowGraphNode(graph.nodes, "join");
 
     expect(join.parentId).toBeUndefined();
-    expect(requiredNodeByID(graph.nodes, "node-a").parentId).toBe(group.id);
-    expect(requiredNodeByID(graph.nodes, "node-b").parentId).toBe(group.id);
-    expect(requiredNodeByID(graph.nodes, "node-c").parentId).toBe(group.id);
+    expect(requireWorkflowGraphNode(graph.nodes, "node-a").parentId).toBe(group.id);
+    expect(requireWorkflowGraphNode(graph.nodes, "node-b").parentId).toBe(group.id);
+    expect(requireWorkflowGraphNode(graph.nodes, "node-c").parentId).toBe(group.id);
     expect(rectRight(group)).toBeLessThan(join.position.x);
     expect(rectCenterY(join)).toBeCloseTo(rectCenterY(group), 6);
     expect(rectsOverlap(group, join)).toBe(false);
@@ -38,15 +46,15 @@ describe("layoutWorkflowGraph node group bounds", () => {
 
   it("routes group branch endpoints through deterministic Join ports instead of stale in-group coordinates", async () => {
     const graph = await layoutWorkflowGraph(threeBranchGroupJoinWorkflow, emptyValidation);
-    const group = requiredNodeByID(graph.nodes, "workflow-group-group-1");
-    const branch = requiredNodeByID(graph.nodes, "node-a");
-    const join = requiredNodeByID(graph.nodes, "join");
-    const edge = requiredEdgeByID(graph.edges, "edge-a-join");
-    const outgoingEdge = requiredEdgeByID(graph.edges, "edge-join-done");
+    const group = requireWorkflowGraphNode(graph.nodes, "workflow-group-group-1");
+    const branch = requireWorkflowGraphNode(graph.nodes, "node-a");
+    const join = requireWorkflowGraphNode(graph.nodes, "join");
+    const edge = requireWorkflowGraphEdge(graph.edges, "edge-a-join");
+    const outgoingEdge = requireWorkflowGraphEdge(graph.edges, "edge-join-done");
     const branchRect = workflowGraphAbsoluteNodeRect(branch, graph.nodes);
     const joinRect = workflowGraphAbsoluteNodeRect(join, graph.nodes);
-    const points = requiredRoutePoints(edge);
-    const outgoingPoints = requiredRoutePoints(outgoingEdge);
+    const points = requireWorkflowGraphRoutePoints(edge);
+    const outgoingPoints = requireWorkflowGraphRoutePoints(outgoingEdge);
 
     expectPointCloseTo(
       points[0],
@@ -61,36 +69,12 @@ describe("layoutWorkflowGraph node group bounds", () => {
       workflowGraphEndpointPoint(join, outgoingEdge.sourceHandle, "source", graph.nodes),
     );
     expect(outgoingPoints.length).toBeGreaterThan(2);
-    expectRouteSegmentsToBeOrthogonal(outgoingPoints);
-    expectRouteToHaveCorner(outgoingPoints);
+    expect(workflowGraphRouteIsOrthogonal(outgoingPoints)).toBe(true);
+    expect(workflowGraphRouteHasCorner(outgoingPoints)).toBe(true);
     expect(points.some((point) => point.x > rectRight(group) && point.x < joinRect.x)).toBe(true);
     expect(points.every((point) => point.x >= branchRect.x + branchRect.width)).toBe(true);
   });
 });
-
-function requiredNodeByID(nodes: readonly WorkflowGraphNode[], id: string): WorkflowGraphNode {
-  const node = nodes.find((item) => item.id === id);
-  if (node === undefined) {
-    throw new Error(`Node ${id} not found`);
-  }
-  return node;
-}
-
-function requiredEdgeByID(edges: readonly WorkflowGraphEdge[], id: string): WorkflowGraphEdge {
-  const edge = edges.find((item) => item.id === id);
-  if (edge === undefined) {
-    throw new Error(`Edge ${id} not found`);
-  }
-  return edge;
-}
-
-function requiredRoutePoints(edge: WorkflowGraphEdge): readonly WorkflowGraphPoint[] {
-  const points = edge.data?.routePoints ?? [];
-  if (points.length < 2) {
-    throw new Error(`Edge ${edge.id} has no routed points`);
-  }
-  return points;
-}
 
 function rectsOverlap(left: WorkflowGraphNode, right: WorkflowGraphNode): boolean {
   const leftWidth = Number(left.style?.width ?? 0);
@@ -128,29 +112,6 @@ function expectPointCloseTo(actual: WorkflowGraphPoint | undefined, expected: Wo
   }
   expect(actual.x).toBeCloseTo(expected.x, 6);
   expect(actual.y).toBeCloseTo(expected.y, 6);
-}
-
-function expectRouteSegmentsToBeOrthogonal(points: readonly WorkflowGraphPoint[]): void {
-  for (const [index, point] of points.entries()) {
-    const previous = points[index - 1];
-    if (previous !== undefined) {
-      expect(point.x === previous.x || point.y === previous.y).toBe(true);
-    }
-  }
-}
-
-function expectRouteToHaveCorner(points: readonly WorkflowGraphPoint[]): void {
-  expect(
-    points.some((point, index) => {
-      const previous = points[index - 1];
-      const next = points[index + 1];
-      return (
-        previous !== undefined &&
-        next !== undefined &&
-        (previous.x - point.x) * (next.y - point.y) !== (previous.y - point.y) * (next.x - point.x)
-      );
-    }),
-  ).toBe(true);
 }
 
 const emptyValidation: WorkflowValidation = { valid: true, errors: [] };

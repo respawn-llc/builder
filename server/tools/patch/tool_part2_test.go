@@ -8,31 +8,68 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"unicode"
 )
 
-func TestOutsideWorkspaceRejectionIncludesUserCommentary(t *testing.T) {
-	workspace := t.TempDir()
-	outsideRoot := outsideNonTempDir(t)
-	target := filepath.Join(outsideRoot, "outside.txt")
-	if err := os.WriteFile(target, []byte("start\n"), 0o644); err != nil {
-		t.Fatalf("seed outside file: %v", err)
-	}
+type outsidePatchFixture struct {
+	*testing.T
+	outsideRoot string
+}
 
-	tool, err := New(workspace, true, WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
-		return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionDeny, Commentary: "not allowed by policy"}, nil
-	}))
-	if err != nil {
-		t.Fatalf("new patch tool: %v", err)
-	}
+func newOutsidePatchFixture(t *testing.T) outsidePatchFixture {
+	t.Helper()
+	return outsidePatchFixture{T: t, outsideRoot: outsideNonTempDir(t)}
+}
 
-	result := callPatch(t, tool, "deny-commentary", "*** Begin Patch\n*** Update File: "+target+"\n-start\n+done\n*** End Patch\n")
+func (f outsidePatchFixture) tool(opts ...Option) *Tool {
+	f.Helper()
+	return newPatchTestTool(f.T, f.TempDir(), opts...)
+}
+
+func (f outsidePatchFixture) denyPolicyTool(root string, decision OutsideWorkspaceDecision, approvals *int, opts ...Option) *Tool {
+	f.Helper()
+	opts = append(
+		opts,
+		WithPathDenyPolicy(compileLiteralTreeDenyPolicy(f.T, root, "synthetic deny")),
+		WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
+			(*approvals)++
+			return OutsideWorkspaceApproval{Decision: decision}, nil
+		}),
+	)
+	return f.tool(opts...)
+}
+
+func (f outsidePatchFixture) write(path, content string) {
+	f.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		f.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func outsideUpdateApprovalError(
+	t *testing.T,
+	id string,
+	approver func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error),
+) (string, string) {
+	t.Helper()
+	fixture := newOutsidePatchFixture(t)
+	target := filepath.Join(fixture.outsideRoot, "outside.txt")
+	fixture.write(target, "start\n")
+	tool := fixture.tool(WithOutsideWorkspaceApprover(approver))
+	result := callPatch(t, tool, id, "*** Begin Patch\n*** Update File: "+target+"\n-start\n+done\n*** End Patch\n")
 	if !result.IsError {
-		t.Fatalf("expected error result")
+		t.Fatal("expected error result")
 	}
-	errMessage := toolError(t, result)
+	return toolError(t, result), target
+}
+
+func TestOutsideWorkspaceRejectionIncludesUserCommentary(t *testing.T) {
+	errMessage, target := outsideUpdateApprovalError(t, "deny-commentary", func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
+		return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionDeny, Commentary: "not allowed by policy"}, nil
+	})
 	want := "Patch failed: user denied the edit for " + target + ".\nUser said: not allowed by policy"
 	if errMessage != want {
 		t.Fatalf("unexpected rejection error, got %q want %q", errMessage, want)
@@ -40,25 +77,9 @@ func TestOutsideWorkspaceRejectionIncludesUserCommentary(t *testing.T) {
 }
 
 func TestOutsideWorkspaceApprovalFailureUsesPatchSpecificWording(t *testing.T) {
-	workspace := t.TempDir()
-	outsideRoot := outsideNonTempDir(t)
-	target := filepath.Join(outsideRoot, "outside.txt")
-	if err := os.WriteFile(target, []byte("start\n"), 0o644); err != nil {
-		t.Fatalf("seed outside file: %v", err)
-	}
-
-	tool, err := New(workspace, true, WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
+	errMessage, _ := outsideUpdateApprovalError(t, "deny-approval-error", func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
 		return OutsideWorkspaceApproval{}, errors.New("ask failed")
-	}))
-	if err != nil {
-		t.Fatalf("new patch tool: %v", err)
-	}
-
-	result := callPatch(t, tool, "deny-approval-error", "*** Begin Patch\n*** Update File: "+target+"\n-start\n+done\n*** End Patch\n")
-	if !result.IsError {
-		t.Fatalf("expected error result")
-	}
-	errMessage := toolError(t, result)
+	})
 	if !strings.Contains(errMessage, "Patch failed: file edit approval failed") {
 		t.Fatalf("expected patch approval failure wording, got %q", errMessage)
 	}
@@ -67,67 +88,19 @@ func TestOutsideWorkspaceApprovalFailureUsesPatchSpecificWording(t *testing.T) {
 	}
 }
 
-func TestOutsideWorkspaceAddFileRequestsApprovalBeforeMissingPathChecks(t *testing.T) {
-	workspace := t.TempDir()
-	outsideRoot := outsideNonTempDir(t)
-	target := filepath.Join(outsideRoot, "missing", "created.txt")
-
-	approvalCalls := 0
-	tool, err := New(workspace, true, WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
-		approvalCalls++
-		return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionAllowOnce}, nil
-	}))
-	if err != nil {
-		t.Fatalf("new patch tool: %v", err)
-	}
-
-	result := callPatch(t, tool, "outside-add-missing", "*** Begin Patch\n*** Add File: "+target+"\n+hello\n*** End Patch\n")
-	if result.IsError {
-		t.Fatalf("expected success, got %s", toolError(t, result))
-	}
-	if approvalCalls != 1 {
-		t.Fatalf("expected one approval call, got %d", approvalCalls)
-	}
-	got, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("read created outside file: %v", err)
-	}
-	if string(got) != "hello\n" {
-		t.Fatalf("unexpected outside file content: %q", string(got))
-	}
-	if err := os.RemoveAll(filepath.Dir(target)); err != nil {
-		t.Fatalf("cleanup created outside tree: %v", err)
-	}
-}
-
 func TestPathDenyPolicyBlocksPatchOperationsBeforeMutation(t *testing.T) {
-	workspace := t.TempDir()
-	deniedRoot := outsideNonTempDir(t)
+	fixture := newOutsidePatchFixture(t)
+	deniedRoot := fixture.outsideRoot
 	normalRoot := outsideNonTempDir(t)
 	if err := os.MkdirAll(filepath.Join(deniedRoot, "nested"), 0o755); err != nil {
 		t.Fatalf("mkdir denied root: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(deniedRoot, "update.txt"), []byte("old\n"), 0o644); err != nil {
-		t.Fatalf("seed denied update: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(deniedRoot, "delete.txt"), []byte("delete\n"), 0o644); err != nil {
-		t.Fatalf("seed denied delete: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(deniedRoot, "move-src.txt"), []byte("move\n"), 0o644); err != nil {
-		t.Fatalf("seed denied move source: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(normalRoot, "normal-src.txt"), []byte("normal\n"), 0o644); err != nil {
-		t.Fatalf("seed normal source: %v", err)
-	}
+	fixture.write(filepath.Join(deniedRoot, "update.txt"), "old\n")
+	fixture.write(filepath.Join(deniedRoot, "delete.txt"), "delete\n")
+	fixture.write(filepath.Join(deniedRoot, "move-src.txt"), "move\n")
+	fixture.write(filepath.Join(normalRoot, "normal-src.txt"), "normal\n")
 	approvals := 0
-	tool := newPatchTestTool(t, workspace,
-		WithAllowOutsideWorkspace(true),
-		WithPathDenyPolicy(compileLiteralTreeDenyPolicy(t, deniedRoot, "synthetic deny")),
-		WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
-			approvals++
-			return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionAllowOnce}, nil
-		}),
-	)
+	tool := fixture.denyPolicyTool(deniedRoot, OutsideWorkspaceDecisionAllowOnce, &approvals, WithAllowOutsideWorkspace(true))
 
 	tests := []struct {
 		name   string
@@ -173,22 +146,14 @@ func TestPathDenyPolicyBlocksPatchOperationsBeforeMutation(t *testing.T) {
 }
 
 func TestPathDenyPolicyPreflightsWholePatchBeforeOutsideApproval(t *testing.T) {
-	workspace := t.TempDir()
-	normalRoot := outsideNonTempDir(t)
+	fixture := newOutsidePatchFixture(t)
+	normalRoot := fixture.outsideRoot
 	deniedRoot := outsideNonTempDir(t)
 	normalTarget := filepath.Join(normalRoot, "normal.txt")
 	deniedTarget := filepath.Join(deniedRoot, "denied.txt")
-	if err := os.WriteFile(normalTarget, []byte("normal\n"), 0o644); err != nil {
-		t.Fatalf("seed normal target: %v", err)
-	}
+	fixture.write(normalTarget, "normal\n")
 	approvals := 0
-	tool := newPatchTestTool(t, workspace,
-		WithPathDenyPolicy(compileLiteralTreeDenyPolicy(t, deniedRoot, "synthetic deny")),
-		WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
-			approvals++
-			return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionAllowSession}, nil
-		}),
-	)
+	tool := fixture.denyPolicyTool(deniedRoot, OutsideWorkspaceDecisionAllowSession, &approvals)
 
 	result := callPatch(t, tool, "mixed-deny", "*** Begin Patch\n*** Update File: "+normalTarget+"\n-normal\n+changed\n*** Add File: "+deniedTarget+"\n+denied\n*** End Patch\n")
 	if !result.IsError || !strings.Contains(toolError(t, result), "synthetic deny") {
@@ -209,21 +174,15 @@ func TestPathDenyPolicyPreflightsWholePatchBeforeOutsideApproval(t *testing.T) {
 }
 
 func TestPathDenyPolicyPreflightsLexicalSymlinkTargetBeforeOutsideApproval(t *testing.T) {
-	workspace := t.TempDir()
-	deniedRoot := outsideNonTempDir(t)
+	fixture := newOutsidePatchFixture(t)
+	deniedRoot := fixture.outsideRoot
 	normalRoot := outsideNonTempDir(t)
 	link := filepath.Join(deniedRoot, "link")
 	if err := os.Symlink(normalRoot, link); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 	approvals := 0
-	tool := newPatchTestTool(t, workspace,
-		WithPathDenyPolicy(compileLiteralTreeDenyPolicy(t, deniedRoot, "synthetic deny")),
-		WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
-			approvals++
-			return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionAllowOnce}, nil
-		}),
-	)
+	tool := fixture.denyPolicyTool(deniedRoot, OutsideWorkspaceDecisionAllowOnce, &approvals)
 
 	target := filepath.Join(link, "via-link.txt")
 	result := callPatch(t, tool, "lexical-symlink-deny", "*** Begin Patch\n*** Add File: "+target+"\n+denied\n*** End Patch\n")
@@ -238,20 +197,16 @@ func TestPathDenyPolicyPreflightsLexicalSymlinkTargetBeforeOutsideApproval(t *te
 	}
 }
 
-func TestOutsideWorkspaceQueuesApprovalPerFileInSinglePatch(t *testing.T) {
-	workspace := t.TempDir()
-	outsideRoot := outsideNonTempDir(t)
-	first := filepath.Join(outsideRoot, "first", "one.txt")
-	second := filepath.Join(outsideRoot, "second", "two.txt")
+func TestOutsideWorkspaceAddFilesRequestApprovalBeforeMissingPathChecksPerFile(t *testing.T) {
+	fixture := newOutsidePatchFixture(t)
+	first := filepath.Join(fixture.outsideRoot, "first", "one.txt")
+	second := filepath.Join(fixture.outsideRoot, "second", "two.txt")
 
 	requests := make([]OutsideWorkspaceRequest, 0, 2)
-	tool, err := New(workspace, true, WithOutsideWorkspaceApprover(func(_ context.Context, req OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
+	tool := fixture.tool(WithOutsideWorkspaceApprover(func(_ context.Context, req OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
 		requests = append(requests, req)
 		return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionAllowOnce}, nil
 	}))
-	if err != nil {
-		t.Fatalf("new patch tool: %v", err)
-	}
 
 	result := callPatch(t, tool, "outside-multi-add", "*** Begin Patch\n*** Add File: "+first+"\n+one\n*** Add File: "+second+"\n+two\n*** End Patch\n")
 	if result.IsError {
@@ -273,19 +228,7 @@ func TestOutsideWorkspaceQueuesApprovalPerFileInSinglePatch(t *testing.T) {
 		{path: first, want: "one\n"},
 		{path: second, want: "two\n"},
 	} {
-		got, err := os.ReadFile(tc.path)
-		if err != nil {
-			t.Fatalf("read outside file %s: %v", tc.path, err)
-		}
-		if string(got) != tc.want {
-			t.Fatalf("unexpected content for %s: %q", tc.path, string(got))
-		}
-	}
-	if err := os.RemoveAll(filepath.Dir(first)); err != nil {
-		t.Fatalf("cleanup first outside tree: %v", err)
-	}
-	if err := os.RemoveAll(filepath.Dir(second)); err != nil {
-		t.Fatalf("cleanup second outside tree: %v", err)
+		assertPatchFileContent(t, tc.path, tc.want)
 	}
 }
 
@@ -305,20 +248,26 @@ func outsideNonTempDir(t *testing.T) string {
 		}
 		abs, err := filepath.Abs(dir)
 		if err != nil {
-			_ = os.RemoveAll(dir)
+			if cleanupErr := os.RemoveAll(dir); cleanupErr != nil {
+				t.Fatalf("cleanup outside directory after Abs failure: %v", cleanupErr)
+			}
 			continue
 		}
 		if IsPathInTemporaryDir(abs) {
-			_ = os.RemoveAll(dir)
+			if err := os.RemoveAll(dir); err != nil {
+				t.Fatalf("cleanup temporary outside-directory candidate: %v", err)
+			}
 			continue
 		}
 		t.Cleanup(func() {
-			_ = os.RemoveAll(dir)
+			if err := os.RemoveAll(dir); err != nil {
+				t.Errorf("cleanup outside directory %q: %v", dir, err)
+			}
 		})
 		return abs
 	}
 	t.Skip("unable to create non-temporary outside directory for test")
-	return ""
+	panic("unreachable after testing.T.Skip")
 }
 
 func TestTemporaryEditableRootsIncludeBasicTmpAliases(t *testing.T) {
@@ -336,25 +285,16 @@ func TestTemporaryEditableRootsIncludeBasicTmpAliases(t *testing.T) {
 			return
 		}
 		roots := tempEditableRoots()
-		if !containsString(roots, filepath.Clean(primary)) {
+		if !slices.Contains(roots, filepath.Clean(primary)) {
 			t.Fatalf("expected temp roots to include %q, got %v", primary, roots)
 		}
-		if !containsString(roots, filepath.Clean(alias)) {
+		if !slices.Contains(roots, filepath.Clean(alias)) {
 			t.Fatalf("expected temp roots to include %q, got %v", alias, roots)
 		}
 	}
 
 	assertAlias("/tmp", "/private/tmp")
 	assertAlias("/var/tmp", "/private/var/tmp")
-}
-
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }
 
 func findCaseVariantExistingAlias(path string) (string, bool) {

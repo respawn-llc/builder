@@ -2,8 +2,11 @@ package startupconfig
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 
+	"core/server/metadata"
+	"core/server/session"
 	"core/shared/config"
 	"core/shared/sessioncontract"
 )
@@ -96,6 +99,50 @@ func TestResolveRunPromptConfigThreadsPersistenceRoot(t *testing.T) {
 	}
 	if res.Config.PersistenceRoot != root {
 		t.Fatalf("persistence root = %q, want %q", res.Config.PersistenceRoot, root)
+	}
+}
+
+func TestResolveRunPromptConfigClassifiesValidatedProvenance(t *testing.T) {
+	root := t.TempDir()
+	workspace := t.TempDir()
+	meta, err := metadata.Open(root)
+	if err != nil {
+		t.Fatalf("metadata.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = meta.Close() })
+	binding, err := meta.RegisterWorkspaceBinding(t.Context(), workspace)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	containerDir := filepath.Join(root, "projects", binding.ProjectID, "sessions")
+	store, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+
+	kentSession, err := ResolveRunPromptConfig(Request{
+		WorkspaceRoot:             workspace,
+		WorkspaceRootExplicit:     true,
+		WorkspaceContextSessionID: store.Meta().SessionID,
+		LoadOptions:               config.LoadOptions{ConfigRoot: root},
+	})
+	if err != nil {
+		t.Fatalf("ResolveRunPromptConfig Kent session: %v", err)
+	}
+	if kentSession.CallerContext.Kind != CallerKindKentSession {
+		t.Fatalf("caller kind = %q, want Kent session", kentSession.CallerContext.Kind)
+	}
+
+	human, err := ResolveRunPromptConfig(Request{
+		WorkspaceRoot:         workspace,
+		WorkspaceRootExplicit: true,
+		LoadOptions:           config.LoadOptions{ConfigRoot: root},
+	})
+	if err != nil {
+		t.Fatalf("ResolveRunPromptConfig human: %v", err)
+	}
+	if human.CallerContext.Kind != CallerKindHuman {
+		t.Fatalf("caller kind = %q, want human", human.CallerContext.Kind)
 	}
 }
 

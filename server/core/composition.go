@@ -79,7 +79,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("persistence bundle: generated support: %w", err)
 	}
 	runtimeSupport.Generated = generatedSupport
-	containerDir := ""
 	metadataStore, err := metadata.Open(cfg.PersistenceRoot)
 	if err != nil {
 		closeRootLeaseOnFailure()
@@ -146,7 +145,12 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveSessionExecutionTarget)
 	runtimeControlService := runtimecontrol.NewService(runtimeRegistry).WithOperationCoordinator(runtimeOperations).WithPromptHistoryStore(metadataStore).WithWorkflowSessionResolver(sessionStoreResolver)
 	gitInspector := worktree.NewGitInspector(nil)
-	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background, worktree.ServiceOptions{BaseDir: cfg.Settings.Worktrees.BaseDir, SetupScript: cfg.Settings.Worktrees.SetupScript, SetupTimeoutSeconds: cfg.Settings.Worktrees.SetupTimeoutSeconds})
+	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background, worktree.ServiceOptions{
+		BaseDir: cfg.Settings.Worktrees.BaseDir,
+		ResolveSetup: func(sourceWorkspaceRoot string) (config.WorktreeSettings, error) {
+			return config.LoadWorktreeSetupSettings(sourceWorkspaceRoot, cfg.PersistenceRoot)
+		},
+	})
 	projectViews := projectService
 	authBootstrapService := authservice.NewBootstrapService(authSupport.AuthManager, authSupport.OAuthOptions, cfg.Settings, rpccontract.AllowedPreAuthMethods())
 	authStatusService := authservice.NewStatusService(authSupport.AuthManager, cfg.Settings)
@@ -210,7 +214,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	}
 	core := &Core{bundles: composeBundles(bundleCompositionInput{
 		cfg:                     cfg,
-		containerDir:            containerDir,
 		authSupport:             authSupport,
 		capabilityFactsService:  capabilityFactsService,
 		runtimeSupport:          runtimeSupport,
@@ -247,8 +250,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		}
 		if err == nil {
 			core.bundles.Projects.projectID = binding.ProjectID
-			core.bundles.Projects.containerDir = filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
-			if err := os.MkdirAll(core.bundles.Projects.containerDir, 0o755); err != nil {
+			projectSessionsDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
+			if err := os.MkdirAll(projectSessionsDir, 0o755); err != nil {
 				_ = core.Close()
 				return nil, fmt.Errorf("projects bundle: sessions root: %w", err)
 			}

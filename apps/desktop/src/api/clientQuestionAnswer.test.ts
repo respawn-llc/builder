@@ -1,5 +1,5 @@
 import { ApiClient } from "./client";
-import { FakeRpcTransport } from "./fakeTransport";
+import { FakeRpcTransport } from "@/test-support/api";
 
 describe("ApiClient task question answers", () => {
   it("serializes explicit nullable ordinary selections and approval payloads", async () => {

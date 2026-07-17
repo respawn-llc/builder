@@ -100,7 +100,10 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 				}
 				return
 			}
-			res, err := h.Call(ctx, tools.Call{ID: tc.ID, Name: toolID, Input: tc.Input, RunID: runID, StepID: stepID, AskQuestionBatch: askBatch, OnAskQuestionBatchSkipped: e.cfg.AskQuestionBatchSkipped})
+			res, err := h.Call(
+				tools.WithExecutionIdentity(ctx, tools.ExecutionIdentity{RunID: runID, StepID: stepID}),
+				tools.Call{ID: tc.ID, Name: toolID, Input: tc.Input, RunID: runID, StepID: stepID, AskQuestionBatch: askBatch, OnAskQuestionBatchSkipped: e.cfg.AskQuestionBatchSkipped},
+			)
 			if err != nil {
 				callErr = err
 				res = tools.Result{CallID: tc.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": err.Error()}), Summary: err.Error()}

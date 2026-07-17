@@ -115,7 +115,7 @@ func (m *uiModel) refreshPathReferenceFromInput() {
 		m.clearPathReferenceState()
 		return
 	}
-	workspaceRoot := strings.TrimSpace(m.statusConfig.WorkspaceRoot)
+	workspaceRoot := m.currentExecutionWorkdir(m.currentExecutionTarget())
 	if m.pathReference.tracked == query &&
 		m.pathReference.draftToken == m.mainInputDraftToken &&
 		m.pathReference.workspaceRoot == workspaceRoot &&

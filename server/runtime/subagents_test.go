@@ -179,42 +179,6 @@ func TestSubagentsMetaMessageCurrentNonCallableRoleDoesNotDisableOtherRoles(t *t
 	}
 }
 
-func TestSubagentsMetaMessageHidesCatalogForPersistedNonCallableCaller(t *testing.T) {
-	settings := config.Settings{
-		Model: "gpt-5.6-sol",
-		EnabledTools: map[toolspec.ID]bool{
-			toolspec.ToolExecCommand: true,
-		},
-		Subagents: map[string]config.SubagentRole{
-			"current": {
-				Settings:         config.Settings{Model: "gpt-5.4-mini"},
-				Sources:          map[string]string{"model": "file"},
-				AgentCallable:    false,
-				AgentCallableSet: true,
-			},
-			"worker": {
-				Settings:    config.Settings{ThinkingLevel: "high"},
-				Sources:     map[string]string{"thinking_level": "file"},
-				Description: "Callable helper.",
-			},
-		},
-	}
-	current := "current"
-	builder := newMetaContextBuilder("/tmp/work", "gpt-5.6-sol", "medium", config.ResolveSkillPolicy(settings), time.Unix(0, 0)).
-		withSubagents(settings, []toolspec.ID{toolspec.ToolExecCommand}).
-		withSubagentCallerRole(&current)
-	result, err := builder.Build(metaContextBuildOptions{
-		IncludeSubagents:          true,
-		SubagentInvocationContext: config.SubagentInvocationContextOrdinary,
-	})
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	if len(result.Subagents) != 0 {
-		t.Fatalf("persisted non-callable caller must not receive an actionable catalog: %+v", result.Subagents)
-	}
-}
-
 func TestSubagentCatalogAppliesInvocationContextPolicy(t *testing.T) {
 	baseSettings := func(globalEnabled bool, roleDisabled bool) config.Settings {
 		return config.Settings{
@@ -386,7 +350,7 @@ func TestSubagentCatalogRemainsVisibleAcrossDepthPreservingSessionPathsAndLimits
 	}
 }
 
-func TestSubagentCatalogCarriesPersistedCallerPolicyIntoBaseAndCompaction(t *testing.T) {
+func TestSubagentCatalogIgnoresPersistedCallerTargetPolicyInBaseAndCompaction(t *testing.T) {
 	store := mustCreateTestSession(t)
 	current := "current"
 	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &current}); err != nil {
@@ -419,15 +383,15 @@ func TestSubagentCatalogCarriesPersistedCallerPolicyIntoBaseAndCompaction(t *tes
 	if err := eng.steerBaseMetaContextIfNeeded("base"); err != nil {
 		t.Fatalf("steer base meta context: %v", err)
 	}
-	if hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()) {
-		t.Fatal("base catalog must not advertise targets denied to the persisted caller")
+	if !hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()) {
+		t.Fatal("base catalog must advertise eligible targets regardless of persisted caller callability")
 	}
 	compacted, err := eng.compactionReinjectedMetaMessages(context.Background())
 	if err != nil {
 		t.Fatalf("compaction reinjection: %v", err)
 	}
-	if hasSubagentMetaMessage(compacted) {
-		t.Fatal("compaction catalog must not advertise targets denied to the persisted caller")
+	if !hasSubagentMetaMessage(compacted) {
+		t.Fatal("compaction catalog must advertise eligible targets regardless of persisted caller callability")
 	}
 }
 

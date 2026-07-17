@@ -260,7 +260,7 @@
 - Q: Should Interrupt confirm? A: No.
 - Q: Should drag-to-start confirm? A: No.
 - Q: What format do body/details/comments use? A: Plain multiline Markdown, no WYSIWYG.
-- Q: How does desktop find server endpoint? A: Kent config/default host and port only.
+- Q: How does desktop find server endpoint? A: Kent config/default host and port only. Desktop does not persist a separate endpoint. When the configured host is an unspecified IP listener, Desktop projects `0.0.0.0` to `127.0.0.1` and `::` to `::1` for its connection endpoint while preserving the configured port; concrete hosts remain unchanged. This Desktop-only projection does not edit Kent config.
 - Q: How should workflow groups render? A: Implementation-led first pass, initial preference group islands.
 - Q: What happens to drafts during disconnect? A: Keep local drafts, disable submit, refresh on reconnect, user manually saves and overwrites.
 - Q: What should the task detail CLI action do? A: Copy `kent --session=<session-id>` to clipboard and show a success toast. Do not launch terminals from the GUI.

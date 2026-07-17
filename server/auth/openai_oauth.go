@@ -404,13 +404,13 @@ func RefreshOpenAIAuthToken(ctx context.Context, opts OpenAIOAuthOptions, method
 
 func NewOpenAIOAuthRefresher(opts OpenAIOAuthOptions, now func() time.Time, refreshBefore time.Duration) *OAuthRefresher {
 	opts = normalizeOpenAIOAuthOptions(opts)
-	return &OAuthRefresher{
-		Now:           now,
-		RefreshBefore: refreshBefore,
-		Refresh: func(ctx context.Context, method Method) (Method, error) {
+	return NewOAuthRefresher(
+		now,
+		refreshBefore,
+		func(ctx context.Context, method Method) (Method, error) {
 			return RefreshOpenAIAuthToken(ctx, opts, method)
 		},
-	}
+	)
 }
 
 func parsePollInterval(v any) (int64, error) {

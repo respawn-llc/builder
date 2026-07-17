@@ -410,6 +410,29 @@ func TestRuntimeRegistryTracksPendingPromptsPerSession(t *testing.T) {
 	}
 }
 
+func TestRuntimeRegistryRejectsPromptWithoutStepIdentity(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := &runtime.Engine{}
+	registerReady(t, registry, "session-1", engine)
+	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
+
+	_, err := registry.AwaitPromptResponse(context.Background(), "session-1", askquestion.AskQuestionRequest{
+		ID:       "approval-1",
+		Question: "Approve?",
+		Approval: true,
+		ApprovalOptions: []askquestion.AskQuestionApprovalOption{
+			{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
+			{Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"},
+		},
+	})
+	if err == nil {
+		t.Fatal("AwaitPromptResponse accepted a prompt without a step identity")
+	}
+	if prompts := registry.ListPendingPrompts("session-1"); len(prompts) != 0 {
+		t.Fatalf("pending prompts = %+v, want none", prompts)
+	}
+}
+
 func TestRuntimeRegistrySubmitPromptResponseRemovesPendingPromptBeforeWaiterReturns(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := &runtime.Engine{}
@@ -422,17 +445,7 @@ func TestRuntimeRegistrySubmitPromptResponseRemovesPendingPromptBeforeWaiterRetu
 		responseDone <- err
 	}()
 
-	deadline := time.Now().Add(time.Second)
-	for {
-		items := registry.ListPendingPrompts("session-1")
-		if len(items) == 1 && items[0].Request.ID == "ask-1" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("pending prompt was not registered: %+v", items)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForPendingPrompt(t, registry, "session-1", "ask-1")
 
 	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{RequestID: "ask-1", Answer: "yes"}, nil); err != nil {
 		t.Fatalf("SubmitPromptResponse: %v", err)
@@ -799,17 +812,7 @@ func TestRuntimeRegistrySubmitPromptResponseAllowedForClosingDrainPrompt(t *test
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for close drain")
 	}
-	deadline := time.Now().Add(time.Second)
-	for {
-		items := registry.ListPendingPrompts("session-1")
-		if len(items) == 1 && items[0].Request.ID == "ask-1" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("pending drain prompt was not published: %+v", items)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForPendingPrompt(t, registry, "session-1", "ask-1")
 
 	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{RequestID: "ask-1", Answer: "yes"}, nil); err != nil {
 		t.Fatalf("SubmitPromptResponse while closing drain waits: %v", err)

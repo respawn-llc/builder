@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { VirtualizedInfiniteList } from "./VirtualizedInfiniteList";
+import { VirtualizedInfiniteList, type VirtualizedInfiniteListProps } from "./VirtualizedInfiniteList";
 import {
   resolveVirtualizedInitialScroll,
   virtualizedInitialScrollIndex,
@@ -13,12 +13,18 @@ const atBottom = {
   atBottom: true,
   hasNextPage: true,
   isFetchingNextPage: false,
+  lastLoadMoreKey: null,
+  loadMoreKey: "page-1",
   wasFetchingNextPage: false,
-};
+} satisfies Parameters<typeof resolveLoadMore>[0];
+
+function resolveAtBottom(overrides: Partial<Parameters<typeof resolveLoadMore>[0]> = {}) {
+  return resolveLoadMore({ ...atBottom, ...overrides });
+}
 
 describe("resolveLoadMore", () => {
   it("requests the next page when scrolled to the bottom for an unseen key", () => {
-    expect(resolveLoadMore({ ...atBottom, lastLoadMoreKey: null, loadMoreKey: "page-1" })).toEqual({
+    expect(resolveAtBottom()).toEqual({
       shouldLoad: true,
       lastLoadMoreKey: "page-1",
     });
@@ -26,11 +32,9 @@ describe("resolveLoadMore", () => {
 
   it("does not re-request the key that is already in flight", () => {
     expect(
-      resolveLoadMore({
-        ...atBottom,
+      resolveAtBottom({
         isFetchingNextPage: true,
         lastLoadMoreKey: "page-1",
-        loadMoreKey: "page-1",
       }),
     ).toEqual({ shouldLoad: false, lastLoadMoreKey: "page-1" });
   });
@@ -39,17 +43,15 @@ describe("resolveLoadMore", () => {
     // A failed/canceled fetch leaves loadMoreKey unchanged; the suppression must
     // be cleared so a later scroll can retry the same page.
     expect(
-      resolveLoadMore({
-        ...atBottom,
+      resolveAtBottom({
         wasFetchingNextPage: true,
         lastLoadMoreKey: "page-1",
-        loadMoreKey: "page-1",
       }),
     ).toEqual({ shouldLoad: false, lastLoadMoreKey: null });
   });
 
   it("retries the failed page on the next pass after suppression was released", () => {
-    expect(resolveLoadMore({ ...atBottom, lastLoadMoreKey: null, loadMoreKey: "page-1" })).toEqual({
+    expect(resolveAtBottom()).toEqual({
       shouldLoad: true,
       lastLoadMoreKey: "page-1",
     });
@@ -57,8 +59,7 @@ describe("resolveLoadMore", () => {
 
   it("does not re-request a key that already advanced after a successful fetch", () => {
     expect(
-      resolveLoadMore({
-        ...atBottom,
+      resolveAtBottom({
         wasFetchingNextPage: true,
         lastLoadMoreKey: "page-1",
         loadMoreKey: "page-2",
@@ -67,20 +68,16 @@ describe("resolveLoadMore", () => {
   });
 
   it("does not request more while away from the bottom", () => {
-    expect(
-      resolveLoadMore({ ...atBottom, atBottom: false, lastLoadMoreKey: null, loadMoreKey: "page-1" }),
-    ).toEqual({ shouldLoad: false, lastLoadMoreKey: null });
+    expect(resolveAtBottom({ atBottom: false })).toEqual({ shouldLoad: false, lastLoadMoreKey: null });
   });
 
   it("keeps previous and next retry suppression independent", () => {
-    const previous = resolveLoadMore({
-      ...atBottom,
+    const previous = resolveAtBottom({
       wasFetchingNextPage: true,
       lastLoadMoreKey: "previous-1",
       loadMoreKey: "previous-1",
     });
-    const next = resolveLoadMore({
-      ...atBottom,
+    const next = resolveAtBottom({
       isFetchingNextPage: true,
       lastLoadMoreKey: "next-1",
       loadMoreKey: "next-1",
@@ -95,67 +92,39 @@ describe("virtualizedInitialScrollIndex", () => {
   const items = [{ key: "header" }, { key: "inbox" }, { key: "activity" }];
   const getItemKey = (item: (typeof items)[number]): string => item.key;
 
+  function scrollIndex(initialScrollKey: string | undefined): number | null {
+    return virtualizedInitialScrollIndex({
+      getItemKey,
+      headerCount: 1,
+      initialScrollKey,
+      items,
+    });
+  }
+
+  function resolvedScroll(initialScrollRequestKey: string, lastRequestKey: string | null) {
+    return resolveVirtualizedInitialScroll({
+      getItemKey,
+      headerCount: 1,
+      initialScrollKey: "inbox",
+      initialScrollRequestKey,
+      items,
+      lastRequestKey,
+    });
+  }
+
   it("finds the target item after the virtual list header", () => {
-    expect(
-      virtualizedInitialScrollIndex({
-        getItemKey,
-        headerCount: 1,
-        initialScrollKey: "inbox",
-        items,
-      }),
-    ).toBe(2);
+    expect(scrollIndex("inbox")).toBe(2);
   });
 
   it("ignores absent or unmatched initial scroll keys", () => {
-    expect(
-      virtualizedInitialScrollIndex({
-        getItemKey,
-        headerCount: 1,
-        initialScrollKey: undefined,
-        items,
-      }),
-    ).toBeNull();
-    expect(
-      virtualizedInitialScrollIndex({
-        getItemKey,
-        headerCount: 1,
-        initialScrollKey: "missing",
-        items,
-      }),
-    ).toBeNull();
+    expect(scrollIndex(undefined)).toBeNull();
+    expect(scrollIndex("missing")).toBeNull();
   });
 
   it("suppresses repeated request keys while allowing the same target for a new request", () => {
-    expect(
-      resolveVirtualizedInitialScroll({
-        getItemKey,
-        headerCount: 1,
-        initialScrollKey: "inbox",
-        initialScrollRequestKey: "task-1",
-        items,
-        lastRequestKey: null,
-      }),
-    ).toEqual({ requestKey: "task-1", scrollIndex: 2 });
-    expect(
-      resolveVirtualizedInitialScroll({
-        getItemKey,
-        headerCount: 1,
-        initialScrollKey: "inbox",
-        initialScrollRequestKey: "task-1",
-        items,
-        lastRequestKey: "task-1",
-      }),
-    ).toBeNull();
-    expect(
-      resolveVirtualizedInitialScroll({
-        getItemKey,
-        headerCount: 1,
-        initialScrollKey: "inbox",
-        initialScrollRequestKey: "task-2",
-        items,
-        lastRequestKey: "task-1",
-      }),
-    ).toEqual({ requestKey: "task-2", scrollIndex: 2 });
+    expect(resolvedScroll("task-1", null)).toEqual({ requestKey: "task-1", scrollIndex: 2 });
+    expect(resolvedScroll("task-1", "task-1")).toBeNull();
+    expect(resolvedScroll("task-2", "task-1")).toEqual({ requestKey: "task-2", scrollIndex: 2 });
   });
 });
 
@@ -170,17 +139,14 @@ describe("VirtualizedInfiniteList bidirectional boundaries", () => {
   it("passes item indexes to renderers without counting virtual chrome rows", () => {
     const items = [{ id: "item-1" }, { id: "item-2" }];
 
-    render(
-      <VirtualizedInfiniteList
-        {...virtualListProps(items)}
-        header={<span>Header</span>}
-        renderItem={(item, itemIndex) => (
-          <span>
-            {itemIndex}:{item.id}
-          </span>
-        )}
-      />,
-    );
+    renderVirtualList(items, {
+      header: <span>Header</span>,
+      renderItem: (item, itemIndex) => (
+        <span>
+          {itemIndex}:{item.id}
+        </span>
+      ),
+    });
 
     expect(screen.getByText("0:item-1")).toBeInTheDocument();
     expect(screen.getByText("1:item-2")).toBeInTheDocument();
@@ -189,17 +155,14 @@ describe("VirtualizedInfiniteList bidirectional boundaries", () => {
   it("loads independently from the visible top and bottom boundaries", async () => {
     const onLoadPrevious = vi.fn();
     const onLoadNext = vi.fn();
-    const props = {
-      ...virtualListProps([{ id: "item-1" }]),
+    renderVirtualList([{ id: "item-1" }], {
       hasNextPage: true,
       onLoadMore: onLoadNext,
       hasPreviousPage: true,
       isFetchingPreviousPage: false,
       previousLoadKey: "previous-1",
       onLoadPrevious,
-    };
-
-    render(<VirtualizedInfiniteList {...props} />);
+    });
 
     await waitFor(() => {
       expect(onLoadPrevious).toHaveBeenCalledTimes(1);
@@ -210,45 +173,34 @@ describe("VirtualizedInfiniteList bidirectional boundaries", () => {
   it("does not reserve directional boundary rows unless they represent loading or error", () => {
     const previousRetry = vi.fn();
     const nextRetry = vi.fn();
-    const props = virtualListProps([{ id: "item-1" }]);
-    const view = render(<VirtualizedInfiniteList {...props} />);
+    const view = renderVirtualList([{ id: "item-1" }]);
     expect(screen.queryByTestId("virtual-boundary-previous")).not.toBeInTheDocument();
     expect(screen.queryByTestId("virtual-boundary-next")).not.toBeInTheDocument();
     expect(screen.getAllByRole("listitem")).toHaveLength(1);
 
-    view.rerender(
-      <VirtualizedInfiniteList
-        {...{
-          ...props,
-          previousBoundary: { state: "loading", label: "Loading newer cards" } as const,
-          nextBoundary: { state: "loading", label: "Loading older cards" } as const,
-        }}
-      />,
-    );
+    view.rerender({
+      previousBoundary: { state: "loading", label: "Loading newer cards" },
+      nextBoundary: { state: "loading", label: "Loading older cards" },
+    });
     const loadingPreviousSlot = screen.getByTestId("virtual-boundary-previous");
     const loadingNextSlot = screen.getByTestId("virtual-boundary-next");
     expect(within(loadingPreviousSlot).getByRole("status")).toHaveAccessibleName("Loading newer cards");
     expect(within(loadingNextSlot).getByRole("status")).toHaveAccessibleName("Loading older cards");
 
-    view.rerender(
-      <VirtualizedInfiniteList
-        {...{
-          ...props,
-          previousBoundary: {
-            state: "error",
-            message: "Newer cards failed",
-            retryLabel: "Retry newer cards",
-            onRetry: previousRetry,
-          } as const,
-          nextBoundary: {
-            state: "error",
-            message: "Older cards failed",
-            retryLabel: "Retry older cards",
-            onRetry: nextRetry,
-          } as const,
-        }}
-      />,
-    );
+    view.rerender({
+      previousBoundary: {
+        state: "error",
+        message: "Newer cards failed",
+        retryLabel: "Retry newer cards",
+        onRetry: previousRetry,
+      },
+      nextBoundary: {
+        state: "error",
+        message: "Older cards failed",
+        retryLabel: "Retry older cards",
+        onRetry: nextRetry,
+      },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Retry newer cards" }));
     fireEvent.click(screen.getByRole("button", { name: "Retry older cards" }));
     expect(previousRetry).toHaveBeenCalledTimes(1);
@@ -257,11 +209,9 @@ describe("VirtualizedInfiniteList bidirectional boundaries", () => {
 
   it("registers the production scroll element and clears it on unmount", async () => {
     const onScrollElementChange = vi.fn();
-    const props = {
-      ...virtualListProps([{ id: "item-1" }]),
+    const view = renderVirtualList([{ id: "item-1" }], {
       onScrollElementChange,
-    };
-    const view = render(<VirtualizedInfiniteList {...props} />);
+    });
 
     await waitFor(() => {
       expect(onScrollElementChange.mock.calls[0]?.[0]).toBeInstanceOf(HTMLDivElement);
@@ -274,17 +224,12 @@ describe("VirtualizedInfiniteList bidirectional boundaries", () => {
     const initialItems = Array.from({ length: 20 }, (_value, index) => ({
       id: `item-${index.toString()}`,
     }));
-    const props = virtualListProps(initialItems);
-    const view = render(<VirtualizedInfiniteList {...props} />);
+    const view = renderVirtualList(initialItems);
     const scrollElement = screen.getByTestId("virtual-list");
     scrollElement.scrollTop = 150;
     fireEvent.scroll(scrollElement);
 
-    view.rerender(
-      <VirtualizedInfiniteList
-        {...virtualListProps([{ id: "prepended-0" }, { id: "prepended-1" }, ...initialItems])}
-      />,
-    );
+    view.rerender({ items: [{ id: "prepended-0" }, { id: "prepended-1" }, ...initialItems] });
 
     await waitFor(() => {
       expect(scrollElement.scrollTop).toBe(350);
@@ -295,35 +240,40 @@ describe("VirtualizedInfiniteList bidirectional boundaries", () => {
     const items = Array.from({ length: 100 }, (_value, index) => ({
       id: `item-${index.toString()}`,
     }));
-    const props = {
-      ...virtualListProps(items),
+    const view = renderVirtualList(items, {
       pinnedItemKeys: new Set(["item-99"]),
-    };
-    const view = render(<VirtualizedInfiniteList {...props} />);
+    });
     expect(screen.getByText("item-99")).toBeInTheDocument();
 
-    view.rerender(
-      <VirtualizedInfiniteList
-        {...{
-          ...props,
-          pinnedItemKeys: new Set<string>(),
-        }}
-      />,
-    );
+    view.rerender({ pinnedItemKeys: new Set<string>() });
     expect(screen.queryByText("item-99")).not.toBeInTheDocument();
   });
 });
 
-function virtualListProps(items: readonly Readonly<{ id: string }>[]) {
+type TestItem = Readonly<{ id: string }>;
+type TestListProps = VirtualizedInfiniteListProps<TestItem>;
+
+function virtualListProps(items: readonly TestItem[]): TestListProps {
   return {
     items,
-    getItemKey: (item: Readonly<{ id: string }>) => item.id,
-    renderItem: (item: Readonly<{ id: string }>) => <span>{item.id}</span>,
+    getItemKey: (item) => item.id,
+    renderItem: (item) => <span>{item.id}</span>,
     hasNextPage: false,
     isFetchingNextPage: false,
     loadingLabel: "Loading items",
     onLoadMore: vi.fn(),
     estimateSize: () => 100,
     testId: "virtual-list",
+  };
+}
+
+function renderVirtualList(items: readonly TestItem[], overrides: Partial<TestListProps> = {}) {
+  const props = { ...virtualListProps(items), ...overrides };
+  const view = render(<VirtualizedInfiniteList {...props} />);
+  return {
+    ...view,
+    rerender: (next: Partial<TestListProps>) => {
+      view.rerender(<VirtualizedInfiniteList {...props} {...next} />);
+    },
   };
 }

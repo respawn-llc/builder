@@ -162,10 +162,6 @@ func ensureServerBrowsingBinding[T any](ctx context.Context, req Request[T], pro
 	return bound, nil
 }
 
-func EnsureServerBrowsing[T any](ctx context.Context, req Request[T], projects []clientui.ProjectSummary) (T, error) {
-	return ensureServerBrowsingBinding(ctx, req, projects)
-}
-
 type WorkspaceSelectionRequest struct {
 	Server interface {
 		Config() config.App

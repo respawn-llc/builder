@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, useMemo, type ReactNode } from "react";
 import { I18nextProvider } from "react-i18next";
 
-import { ApiClient, FakeRpcTransport, protocolVersion, type FakeRoute } from "@/api/composition";
+import { ApiClient, protocolVersion } from "@/api/composition";
 import {
   AppServicesProvider,
   StatusProvider,
@@ -13,6 +13,7 @@ import {
   type AppServices,
 } from "@/app-facade";
 import { appI18n, initializeI18n } from "@/i18n";
+import { FakeRpcTransport, type FakeRoute } from "../api";
 
 void initializeI18n();
 

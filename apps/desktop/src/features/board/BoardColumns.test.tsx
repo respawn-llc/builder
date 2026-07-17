@@ -4,7 +4,7 @@ import { beforeAll, vi } from "vitest";
 
 import { appI18n, initializeI18n } from "@/i18n";
 import { createBoardDragEvent, TestDataTransfer } from "@/test-support/board-drag";
-import { KanbanColumn } from "./BoardColumns";
+import { KanbanColumn, type KanbanColumnProps } from "./BoardColumns";
 import type { KanbanCardVM, KanbanColumnVM } from "./BoardColumnViewModel";
 import { boardCardDragPayloadType } from "./BoardDragTypes";
 
@@ -14,27 +14,7 @@ describe("KanbanColumn", () => {
   });
 
   it("renders load-more with shared spinner and hidden accessible label", () => {
-    render(
-      <I18nextProvider i18n={appI18n}>
-        <KanbanColumn
-          actionsDisabled={false}
-          cards={[card]}
-          column={column}
-          dropState="idle"
-          hasMoreCards
-          isFirstActive={false}
-          isLoadingMoreCards
-          onCardClick={() => undefined}
-          onCardDragEnd={() => undefined}
-          onCardDragStart={() => undefined}
-          onDeleteTask={() => undefined}
-          onDropTask={() => undefined}
-          onInterruptTask={() => undefined}
-          onLoadMoreCards={() => undefined}
-          onResumeTask={() => undefined}
-        />
-      </I18nextProvider>,
-    );
+    renderColumn({ hasMoreCards: true, isLoadingMoreCards: true });
 
     expect(screen.getByRole("status")).toContainElement(screen.getByTestId("spinner"));
   });
@@ -42,29 +22,12 @@ describe("KanbanColumn", () => {
   it("renders an empty collapsed column as an expandable bar without task pagination surface", () => {
     const onExpandColumn = vi.fn();
 
-    render(
-      <I18nextProvider i18n={appI18n}>
-        <KanbanColumn
-          actionsDisabled={false}
-          cards={[]}
-          column={{ ...column, assigneeRole: "reviewer", name: "Review", taskCount: 0 }}
-          dropState="idle"
-          hasMoreCards={false}
-          isCollapsed
-          isFirstActive={false}
-          isLoadingMoreCards={false}
-          onCardClick={() => undefined}
-          onCardDragEnd={() => undefined}
-          onCardDragStart={() => undefined}
-          onDeleteTask={() => undefined}
-          onDropTask={() => undefined}
-          onExpandColumn={onExpandColumn}
-          onInterruptTask={() => undefined}
-          onLoadMoreCards={() => undefined}
-          onResumeTask={() => undefined}
-        />
-      </I18nextProvider>,
-    );
+    renderColumn({
+      cards: [],
+      column: { ...column, assigneeRole: "reviewer", name: "Review", taskCount: 0 },
+      isCollapsed: true,
+      onExpandColumn,
+    });
 
     const renderedColumn = screen.getByRole("listitem", { name: "Review" });
 
@@ -79,27 +42,7 @@ describe("KanbanColumn", () => {
   });
 
   it("omits the footer when the card has no status, chip, or action content", () => {
-    render(
-      <I18nextProvider i18n={appI18n}>
-        <KanbanColumn
-          actionsDisabled={false}
-          cards={[card]}
-          column={column}
-          dropState="idle"
-          hasMoreCards={false}
-          isFirstActive={false}
-          isLoadingMoreCards={false}
-          onCardClick={() => undefined}
-          onCardDragEnd={() => undefined}
-          onCardDragStart={() => undefined}
-          onDeleteTask={() => undefined}
-          onDropTask={() => undefined}
-          onInterruptTask={() => undefined}
-          onLoadMoreCards={() => undefined}
-          onResumeTask={() => undefined}
-        />
-      </I18nextProvider>,
-    );
+    renderColumn();
 
     expect(screen.queryByTestId("task-card-footer")).not.toBeInTheDocument();
   });
@@ -108,35 +51,11 @@ describe("KanbanColumn", () => {
     const onInterruptTask = vi.fn();
     const onCardClick = vi.fn();
 
-    render(
-      <I18nextProvider i18n={appI18n}>
-        <KanbanColumn
-          actionsDisabled={false}
-          cards={[
-            {
-              ...card,
-              actions: {
-                ...card.actions,
-                canInterrupt: true,
-              },
-            },
-          ]}
-          column={column}
-          dropState="idle"
-          hasMoreCards={false}
-          isFirstActive={false}
-          isLoadingMoreCards={false}
-          onCardClick={onCardClick}
-          onCardDragEnd={() => undefined}
-          onCardDragStart={() => undefined}
-          onDeleteTask={() => undefined}
-          onDropTask={() => undefined}
-          onInterruptTask={onInterruptTask}
-          onLoadMoreCards={() => undefined}
-          onResumeTask={() => undefined}
-        />
-      </I18nextProvider>,
-    );
+    renderColumn({
+      cards: [testCard({ actions: { canInterrupt: true } })],
+      onCardClick,
+      onInterruptTask,
+    });
 
     const footer = screen.getByTestId("task-card-footer");
     expect(screen.queryByRole("button", { name: "Open task detail" })).not.toBeInTheDocument();
@@ -155,35 +74,11 @@ describe("KanbanColumn", () => {
     const onResumeTask = vi.fn();
     const onCardClick = vi.fn();
 
-    render(
-      <I18nextProvider i18n={appI18n}>
-        <KanbanColumn
-          actionsDisabled={false}
-          cards={[
-            {
-              ...card,
-              actions: {
-                ...card.actions,
-                canResume: true,
-              },
-            },
-          ]}
-          column={column}
-          dropState="idle"
-          hasMoreCards={false}
-          isFirstActive={false}
-          isLoadingMoreCards={false}
-          onCardClick={onCardClick}
-          onCardDragEnd={() => undefined}
-          onCardDragStart={() => undefined}
-          onDeleteTask={() => undefined}
-          onDropTask={() => undefined}
-          onInterruptTask={() => undefined}
-          onLoadMoreCards={() => undefined}
-          onResumeTask={onResumeTask}
-        />
-      </I18nextProvider>,
-    );
+    renderColumn({
+      cards: [testCard({ actions: { canResume: true } })],
+      onCardClick,
+      onResumeTask,
+    });
 
     const resumeButton = within(screen.getByTestId("task-card-footer")).getByRole("button", {
       name: "Resume",
@@ -197,37 +92,15 @@ describe("KanbanColumn", () => {
   });
 
   it("treats question-waiting cards as answer-blocked instead of interruptible", () => {
-    render(
-      <I18nextProvider i18n={appI18n}>
-        <KanbanColumn
-          actionsDisabled={false}
-          cards={[
-            {
-              ...card,
-              actions: {
-                ...card.actions,
-                canInterrupt: true,
-              },
-              statusKind: "waiting_question",
-              title: "Question task",
-            },
-          ]}
-          column={column}
-          dropState="idle"
-          hasMoreCards={false}
-          isFirstActive={false}
-          isLoadingMoreCards={false}
-          onCardClick={() => undefined}
-          onCardDragEnd={() => undefined}
-          onCardDragStart={() => undefined}
-          onDeleteTask={() => undefined}
-          onDropTask={() => undefined}
-          onInterruptTask={() => undefined}
-          onLoadMoreCards={() => undefined}
-          onResumeTask={() => undefined}
-        />
-      </I18nextProvider>,
-    );
+    renderColumn({
+      cards: [
+        testCard({
+          actions: { canInterrupt: true },
+          statusKind: "waiting_question",
+          title: "Question task",
+        }),
+      ],
+    });
 
     const questionCard = screen.getByRole("article", { name: "Question task" });
 
@@ -237,48 +110,28 @@ describe("KanbanColumn", () => {
   });
 
   it("renders bounded card previews, workspace chips only when present, and distinct question/approval border tones", () => {
-    render(
-      <I18nextProvider i18n={appI18n}>
-        <KanbanColumn
-          actionsDisabled={false}
-          cards={[
-            {
-              ...card,
-              preview: {
-                markdown: "Bounded preview from the server: **semantic source remains intact**",
-                truncated: true,
-              },
-              id: "task-question",
-              borderTone: "primary",
-              statusKind: "waiting_question",
-              title: "Question task",
-              workspaceChipLabel: null,
-            },
-            {
-              ...card,
-              id: "task-approval",
-              borderTone: "secondary",
-              statusKind: "waiting_approval",
-              title: "Approval task",
-              workspaceChipLabel: "Other workspace",
-            },
-          ]}
-          column={column}
-          dropState="idle"
-          hasMoreCards={false}
-          isFirstActive={false}
-          isLoadingMoreCards={false}
-          onCardClick={() => undefined}
-          onCardDragEnd={() => undefined}
-          onCardDragStart={() => undefined}
-          onDeleteTask={() => undefined}
-          onDropTask={() => undefined}
-          onInterruptTask={() => undefined}
-          onLoadMoreCards={() => undefined}
-          onResumeTask={() => undefined}
-        />
-      </I18nextProvider>,
-    );
+    renderColumn({
+      cards: [
+        testCard({
+          preview: {
+            markdown: "Bounded preview from the server: **semantic source remains intact**",
+            truncated: true,
+          },
+          id: "task-question",
+          borderTone: "primary",
+          statusKind: "waiting_question",
+          title: "Question task",
+          workspaceChipLabel: null,
+        }),
+        testCard({
+          id: "task-approval",
+          borderTone: "secondary",
+          statusKind: "waiting_approval",
+          title: "Approval task",
+          workspaceChipLabel: "Other workspace",
+        }),
+      ],
+    });
 
     const questionCard = screen.getByRole("article", { name: "Question task" });
     const approvalCard = screen.getByRole("article", { name: "Approval task" });
@@ -295,33 +148,15 @@ describe("KanbanColumn", () => {
   });
 
   it("shows an active run spinner only for running cards", () => {
-    render(
-      <I18nextProvider i18n={appI18n}>
-        <KanbanColumn
-          actionsDisabled={false}
-          cards={[
-            { ...card, id: "task-running", statusKind: "running", title: "Running task" },
-            { ...card, id: "task-question", statusKind: "waiting_question", title: "Question task" },
-            { ...card, id: "task-approval", statusKind: "waiting_approval", title: "Approval task" },
-            { ...card, id: "task-interrupted", statusKind: "interrupted", title: "Interrupted task" },
-            { ...card, id: "task-canceled", statusKind: "canceled", title: "Canceled task" },
-          ]}
-          column={column}
-          dropState="idle"
-          hasMoreCards={false}
-          isFirstActive={false}
-          isLoadingMoreCards={false}
-          onCardClick={() => undefined}
-          onCardDragEnd={() => undefined}
-          onCardDragStart={() => undefined}
-          onDeleteTask={() => undefined}
-          onDropTask={() => undefined}
-          onInterruptTask={() => undefined}
-          onLoadMoreCards={() => undefined}
-          onResumeTask={() => undefined}
-        />
-      </I18nextProvider>,
-    );
+    renderColumn({
+      cards: [
+        testCard({ id: "task-running", statusKind: "running", title: "Running task" }),
+        testCard({ id: "task-question", statusKind: "waiting_question", title: "Question task" }),
+        testCard({ id: "task-approval", statusKind: "waiting_approval", title: "Approval task" }),
+        testCard({ id: "task-interrupted", statusKind: "interrupted", title: "Interrupted task" }),
+        testCard({ id: "task-canceled", statusKind: "canceled", title: "Canceled task" }),
+      ],
+    });
 
     expect(
       within(screen.getByRole("article", { name: "Running task" })).getByTestId(
@@ -353,27 +188,10 @@ describe("KanbanColumn", () => {
   it("opens task detail when clicking any non-action area of the card", () => {
     const onCardClick = vi.fn();
 
-    render(
-      <I18nextProvider i18n={appI18n}>
-        <KanbanColumn
-          actionsDisabled={false}
-          cards={[{ ...card, workspaceChipLabel: "Other workspace" }]}
-          column={column}
-          dropState="idle"
-          hasMoreCards={false}
-          isFirstActive={false}
-          isLoadingMoreCards={false}
-          onCardClick={onCardClick}
-          onCardDragEnd={() => undefined}
-          onCardDragStart={() => undefined}
-          onDeleteTask={() => undefined}
-          onDropTask={() => undefined}
-          onInterruptTask={() => undefined}
-          onLoadMoreCards={() => undefined}
-          onResumeTask={() => undefined}
-        />
-      </I18nextProvider>,
-    );
+    renderColumn({
+      cards: [testCard({ workspaceChipLabel: "Other workspace" })],
+      onCardClick,
+    });
 
     const renderedCard = screen.getByTestId("task-card");
     fireEvent.click(screen.getByTestId("task-card-title"));
@@ -391,27 +209,7 @@ describe("KanbanColumn", () => {
     const onCardClick = vi.fn();
     const onDeleteTask = vi.fn();
 
-    render(
-      <I18nextProvider i18n={appI18n}>
-        <KanbanColumn
-          actionsDisabled={false}
-          cards={[card]}
-          column={column}
-          dropState="idle"
-          hasMoreCards={false}
-          isFirstActive={false}
-          isLoadingMoreCards={false}
-          onCardClick={onCardClick}
-          onCardDragEnd={() => undefined}
-          onCardDragStart={() => undefined}
-          onDeleteTask={onDeleteTask}
-          onDropTask={() => undefined}
-          onInterruptTask={() => undefined}
-          onLoadMoreCards={() => undefined}
-          onResumeTask={() => undefined}
-        />
-      </I18nextProvider>,
-    );
+    renderColumn({ onCardClick, onDeleteTask });
 
     fireEvent.contextMenu(screen.getByRole("article", { name: "Task" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
@@ -423,37 +221,16 @@ describe("KanbanColumn", () => {
   it("starts override drags for active cards without start or move targets", () => {
     const onCardDragStart = vi.fn();
     const onCardClick = vi.fn();
+    const draggableCard = testCard({
+      actions: { canStart: false, manualMoveTargetNodeIDs: [] },
+    });
 
-    render(
-      <I18nextProvider i18n={appI18n}>
-        <KanbanColumn
-          actionsDisabled={false}
-          cards={[
-            {
-              ...card,
-              actions: {
-                ...card.actions,
-                canStart: false,
-                manualMoveTargetNodeIDs: [],
-              },
-            },
-          ]}
-          column={column}
-          dropState="blocked"
-          hasMoreCards={false}
-          isFirstActive={false}
-          isLoadingMoreCards={false}
-          onCardClick={onCardClick}
-          onCardDragEnd={() => undefined}
-          onCardDragStart={onCardDragStart}
-          onDeleteTask={() => undefined}
-          onDropTask={() => undefined}
-          onInterruptTask={() => undefined}
-          onLoadMoreCards={() => undefined}
-          onResumeTask={() => undefined}
-        />
-      </I18nextProvider>,
-    );
+    renderColumn({
+      cards: [draggableCard],
+      dropState: "blocked",
+      onCardClick,
+      onCardDragStart,
+    });
 
     const dataTransfer = new TestDataTransfer();
     const renderedCard = screen.getByRole("article", { name: "Task" });
@@ -476,40 +253,13 @@ describe("KanbanColumn", () => {
         statusKind: "backlog",
         manualMoveTargetNodeIDs: [],
       },
-      snapshot: {
-        ...card,
-        actions: {
-          ...card.actions,
-          canStart: false,
-          manualMoveTargetNodeIDs: [],
-        },
-      },
+      snapshot: draggableCard,
     });
     expect(onCardClick).not.toHaveBeenCalled();
   });
 
   it("accepts board-card dragover before drop-state rerenders from idle", () => {
-    render(
-      <I18nextProvider i18n={appI18n}>
-        <KanbanColumn
-          actionsDisabled={false}
-          cards={[]}
-          column={column}
-          dropState="idle"
-          hasMoreCards={false}
-          isFirstActive={false}
-          isLoadingMoreCards={false}
-          onCardClick={() => undefined}
-          onCardDragEnd={() => undefined}
-          onCardDragStart={() => undefined}
-          onDeleteTask={() => undefined}
-          onDropTask={() => undefined}
-          onInterruptTask={() => undefined}
-          onLoadMoreCards={() => undefined}
-          onResumeTask={() => undefined}
-        />
-      </I18nextProvider>,
-    );
+    renderColumn({ cards: [] });
 
     const dataTransfer = new TestDataTransfer();
     dataTransfer.setData(boardCardDragPayloadType, "board-card");
@@ -522,27 +272,7 @@ describe("KanbanColumn", () => {
   });
 
   it("ignores unrelated dragover while the column has no active board drag", () => {
-    render(
-      <I18nextProvider i18n={appI18n}>
-        <KanbanColumn
-          actionsDisabled={false}
-          cards={[]}
-          column={column}
-          dropState="idle"
-          hasMoreCards={false}
-          isFirstActive={false}
-          isLoadingMoreCards={false}
-          onCardClick={() => undefined}
-          onCardDragEnd={() => undefined}
-          onCardDragStart={() => undefined}
-          onDeleteTask={() => undefined}
-          onDropTask={() => undefined}
-          onInterruptTask={() => undefined}
-          onLoadMoreCards={() => undefined}
-          onResumeTask={() => undefined}
-        />
-      </I18nextProvider>,
-    );
+    renderColumn({ cards: [] });
 
     const dataTransfer = new TestDataTransfer();
     dataTransfer.setData("text/plain", "unrelated");
@@ -580,3 +310,41 @@ const card: KanbanCardVM = {
   title: "Task",
   updatedAt: Date.UTC(2026, 0, 1),
 };
+
+type CardOverrides = Omit<Partial<KanbanCardVM>, "actions"> &
+  Readonly<{ actions?: Partial<KanbanCardVM["actions"]> }>;
+
+function testCard(overrides: CardOverrides = {}): KanbanCardVM {
+  return {
+    ...card,
+    ...overrides,
+    actions: { ...card.actions, ...overrides.actions },
+  };
+}
+
+const noop = () => undefined;
+const defaultColumnProps = {
+  actionsDisabled: false,
+  cards: [card],
+  column,
+  dropState: "idle",
+  hasMoreCards: false,
+  isFirstActive: false,
+  isLoadingMoreCards: false,
+  onCardClick: noop,
+  onCardDragEnd: noop,
+  onCardDragStart: noop,
+  onDeleteTask: noop,
+  onDropTask: noop,
+  onInterruptTask: noop,
+  onLoadMoreCards: noop,
+  onResumeTask: noop,
+} satisfies KanbanColumnProps;
+
+function renderColumn(overrides: Partial<KanbanColumnProps> = {}) {
+  return render(
+    <I18nextProvider i18n={appI18n}>
+      <KanbanColumn {...defaultColumnProps} {...overrides} />
+    </I18nextProvider>,
+  );
+}

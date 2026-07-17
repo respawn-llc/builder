@@ -1,7 +1,8 @@
 import { z } from "zod";
 
 import { guiTaskCommentAuthor, type JsonObject, type JsonValue, type TaskDetail } from "@/api";
-import { ApiClient, FakeRpcTransport } from "@/api/composition";
+import { ApiClient } from "@/api/composition";
+import { FakeRpcTransport } from "../api";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 

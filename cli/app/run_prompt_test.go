@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	"core/server/authservice"
 	"core/server/runprompt"
@@ -192,21 +193,15 @@ func waitForConfiguredRunPromptDaemon(t *testing.T, workspace string) {
 	t.Helper()
 	loadCfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
 	healthURL := config.ServerHTTPBaseURL(loadCfg) + protocol.HealthPath
-	deadline := time.Now().Add(5 * time.Second)
 	client := &http.Client{Timeout: 250 * time.Millisecond}
-	for {
+	testsetup.RequireUntil(t, time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
 		resp, err := client.Get(healthURL)
 		if err == nil {
 			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return
-			}
+			return resp.StatusCode == http.StatusOK
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("configured daemon did not become healthy at %s", healthURL)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return false
+	}, "configured daemon did not become healthy at %s", healthURL)
 }
 
 func TestRunPromptAskHandlerReturnsError(t *testing.T) {

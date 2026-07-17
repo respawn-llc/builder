@@ -2,6 +2,7 @@ package app
 
 import (
 	"testing"
+	"time"
 
 	"core/shared/clientui"
 
@@ -38,6 +39,10 @@ func TestUIUpdateRoutesWorktreeMessagesThroughReducer(t *testing.T) {
 }
 
 func TestUIUpdateRoutesProcessRefreshThroughReducer(t *testing.T) {
+	previousInterval := processListRefreshInterval
+	processListRefreshInterval = time.Millisecond
+	t.Cleanup(func() { processListRefreshInterval = previousInterval })
+
 	m := newProjectedStaticUIModel(WithUIProcessClient(fixedUIProcessClient{
 		entries: []clientui.BackgroundProcess{{ID: "proc-1", Command: "sleep 1"}},
 	}))

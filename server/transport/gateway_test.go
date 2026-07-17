@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/net/websocket"
 
+	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/core"
@@ -269,14 +270,7 @@ func gatewayRuntimeActivateRequest(appCore *core.Core, sessionID string, request
 
 func waitForGatewayCondition(t *testing.T, label string, condition func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if condition() {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", label)
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, condition, "timed out waiting for %s", label)
 }
 
 type countingSessionRuntimeClient struct {
