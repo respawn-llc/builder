@@ -44,11 +44,9 @@ run_frontend_lint() {
 	if [ ! -f apps/package.json ]; then
 		return
 	fi
+	echo "==> frontend dependencies"
+	./scripts/install-frontend-dependencies.sh
 	echo "==> frontend lint"
-	if ! command -v pnpm >/dev/null 2>&1; then
-		echo "pnpm is required to lint the frontend workspace" >&2
-		exit 2
-	fi
 	pnpm --dir apps lint
 }
 
