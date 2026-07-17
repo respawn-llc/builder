@@ -535,24 +535,7 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 		}
 	}
 	if row.Diagnostic != nil && (mode == ModeDetailExpanded || typedCompactText == "") {
-		developerText := ""
-		if row.Diagnostic.Developer != nil {
-			developerText = transcript.DeveloperDiagnosticText(*row.Diagnostic.Developer)
-		}
-		legacyCode := ""
-		if row.Diagnostic.Code != nil {
-			legacyCode = string(*row.Diagnostic.Code)
-		}
-		legacyDetail := ""
-		if row.Diagnostic.Detail != nil {
-			legacyDetail = *row.Diagnostic.Detail
-		}
-		text = firstNonEmpty(
-			developerText,
-			legacyDetail,
-			legacyCode,
-			text,
-		)
+		text = firstNonEmpty(row.Diagnostic.Detail, string(row.Diagnostic.Code), text)
 	}
 	return noticeStyleRole(row), text
 }
@@ -638,8 +621,7 @@ func noticeDiagnosticHasReviewerRole(row *clientui.TranscriptNoticeRow) bool {
 	if row == nil || row.Diagnostic == nil {
 		return false
 	}
-	return row.Diagnostic.Code != nil &&
-		transcript.IsReviewerEntryRole(strings.TrimSpace(string(*row.Diagnostic.Code)))
+	return transcript.IsReviewerEntryRole(strings.TrimSpace(string(row.Diagnostic.Code)))
 }
 
 func noticeLegacyText(row *clientui.TranscriptNoticeRow) string {

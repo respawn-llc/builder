@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"core/cli/tui/transcriptrender"
-	"core/internal/testharness/testsetup"
 	"core/shared/clientui"
 	"core/shared/rollbacktarget"
 	"core/shared/transcript"
@@ -265,10 +264,10 @@ func TestDetailModeCachedRowsPreserveVisibility(t *testing.T) {
 		Reason:       clientui.TranscriptNoticeRuntimeDiagnostic,
 		Severity:     clientui.TranscriptNoticeInfo,
 		CompactLabel: &compactNotice,
-		Diagnostic: testsetup.LegacyTranscriptDiagnostic(
-			"detail_cache_test",
-			"diagnostic detail",
-		),
+		Diagnostic: &clientui.TranscriptDiagnostic{
+			Code:   "detail_cache_test",
+			Detail: "diagnostic detail",
+		},
 	})
 	cached.Visibility = clientui.EntryVisibilityOngoingCollapsed
 	next, _ := model.Update(SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
@@ -540,10 +539,10 @@ func TestDetailReviewerRowsPreserveDiagnosticCodes(t *testing.T) {
 				Severity:     clientui.TranscriptNoticeInfo,
 				MessageType:  &messageType,
 				CompactLabel: &compactLabel,
-				Diagnostic: testsetup.LegacyTranscriptDiagnostic(
-					clientui.TranscriptDiagnosticCode(role),
-					"review result",
-				),
+				Diagnostic: &clientui.TranscriptDiagnostic{
+					Code:   clientui.TranscriptDiagnosticCode(role),
+					Detail: "review result",
+				},
 			}))
 			if !ok {
 				t.Fatal("reviewer row was dropped")
@@ -552,9 +551,8 @@ func TestDetailReviewerRowsPreserveDiagnosticCodes(t *testing.T) {
 			if row.Notice == nil || row.Notice.Diagnostic == nil {
 				t.Fatalf("reviewer row = %+v", row)
 			}
-			if row.Notice.Diagnostic.Code == nil ||
-				*row.Notice.Diagnostic.Code != clientui.TranscriptDiagnosticCode(role) {
-				t.Fatalf("reviewer diagnostic = %+v, want code %q", row.Notice.Diagnostic, role)
+			if row.Notice.Diagnostic.Code != clientui.TranscriptDiagnosticCode(role) {
+				t.Fatalf("reviewer diagnostic code = %q, want %q", row.Notice.Diagnostic.Code, role)
 			}
 		})
 	}

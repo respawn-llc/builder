@@ -2,9 +2,6 @@ package clientui
 
 import (
 	"testing"
-
-	"core/shared/transcript"
-	patchformat "core/shared/transcript/patchformat"
 )
 
 func TestTranscriptWorktreeAndOperationalOutcomesStayTyped(t *testing.T) {
@@ -34,18 +31,6 @@ func TestTranscriptOperationOutcomesRejectUntypedFailure(t *testing.T) {
 	}
 	if err := worktree.Validate(); err == nil {
 		t.Fatal("accepted failed worktree transition without diagnostic")
-	}
-
-	developer := transcript.NewDeletionFactMismatchDeveloperDiagnostic(
-		"call-1",
-		patchformat.WholeFileDeletionFactMismatchError{
-			Kind: patchformat.WholeFileDeletionFactMismatchMissing,
-			ID:   patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0},
-		},
-	)
-	worktree.Failure = &TranscriptDiagnostic{Developer: &developer}
-	if err := worktree.Validate(); err == nil {
-		t.Fatal("accepted developer diagnostic for worktree transition failure")
 	}
 
 	diagnostic := TranscriptOperationalDiagnostic{

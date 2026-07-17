@@ -7,7 +7,6 @@ import (
 	"testing"
 	"unicode"
 
-	"core/internal/testharness/testsetup"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/transcript"
@@ -431,7 +430,10 @@ func TestBackgroundNoticeUsesPrimaryInfoSymbolAndFullStrengthBody(t *testing.T) 
 			Severity:     clientui.TranscriptNoticeInfo,
 			MessageType:  &messageType,
 			CompactLabel: &compactLabel,
-			Diagnostic:   testsetup.LegacyTranscriptDiagnostic("background_completion", compactLabel),
+			Diagnostic: &clientui.TranscriptDiagnostic{
+				Code:   "background_completion",
+				Detail: compactLabel,
+			},
 			Background: &clientui.TranscriptBackgroundNoticeIdentity{
 				ActivityID: runtimeids.NewBackgroundActivityID(),
 				ProcessID:  "background-process",
@@ -480,10 +482,10 @@ func TestWorktreeNoticeRendersTypedClientContext(t *testing.T) {
 				WorkspaceRoot: "/tmp/workspace",
 				EffectiveCwd:  effectiveCWD,
 			},
-			Diagnostic: testsetup.LegacyTranscriptDiagnostic(
-				"worktree_transition",
-				"model-only instructions",
-			),
+			Diagnostic: &clientui.TranscriptDiagnostic{
+				Code:   "worktree_transition",
+				Detail: "model-only instructions",
+			},
 		},
 	}
 
@@ -496,8 +498,7 @@ func TestWorktreeNoticeRendersTypedClientContext(t *testing.T) {
 		if !strings.Contains(text, branch) || !strings.Contains(text, effectiveCWD) {
 			t.Fatalf("mode %v rendered worktree facts = %q, want branch and effective cwd", mode, text)
 		}
-		diagnosticDetail := *row.Notice.Diagnostic.Detail
-		if strings.Contains(text, diagnosticDetail) {
+		if strings.Contains(text, row.Notice.Diagnostic.Detail) {
 			t.Fatalf("mode %v rendered model instructions instead of client presentation: %q", mode, text)
 		}
 	}
@@ -1601,7 +1602,10 @@ func TestBackgroundExitStatusDoesNotOverridePrimaryNoticeSymbol(t *testing.T) {
 				Severity:     clientui.TranscriptNoticeInfo,
 				MessageType:  &messageType,
 				CompactLabel: &compactLabel,
-				Diagnostic:   testsetup.LegacyTranscriptDiagnostic("background_completion", compactLabel),
+				Diagnostic: &clientui.TranscriptDiagnostic{
+					Code:   "background_completion",
+					Detail: compactLabel,
+				},
 				Background: &clientui.TranscriptBackgroundNoticeIdentity{
 					ActivityID: runtimeids.NewBackgroundActivityID(),
 					ProcessID:  "background-process",
@@ -1822,7 +1826,10 @@ func TestCollapsedDiagnosticNoticeUsesCompactLabelForDetailVisibility(t *testing
 			Reason:       clientui.TranscriptNoticeRuntimeDiagnostic,
 			Severity:     clientui.TranscriptNoticeInfo,
 			CompactLabel: &compactLabel,
-			Diagnostic:   testsetup.LegacyTranscriptDiagnostic("agents_context", "raw diagnostic body"),
+			Diagnostic: &clientui.TranscriptDiagnostic{
+				Code:   "agents_context",
+				Detail: "raw diagnostic body",
+			},
 		},
 	}, 80, "", ModeDetailCollapsed)
 
@@ -1837,34 +1844,14 @@ func TestCollapsedDiagnosticNoticeUsesCompactLabelForDetailVisibility(t *testing
 			Reason:       clientui.TranscriptNoticeRuntimeDiagnostic,
 			Severity:     clientui.TranscriptNoticeInfo,
 			CompactLabel: &compactLabel,
-			Diagnostic:   testsetup.LegacyTranscriptDiagnostic("agents_context", "raw diagnostic body"),
+			Diagnostic: &clientui.TranscriptDiagnostic{
+				Code:   "agents_context",
+				Detail: "raw diagnostic body",
+			},
 		},
 	}, 80, "", ModeDetailExpanded)
 	if got, want := expanded.Lines[0].Plain(), "ℹ raw diagnostic body"; got != want {
 		t.Fatalf("expanded diagnostic line = %q, want %q", got, want)
-	}
-}
-
-func TestDeveloperDiagnosticNoticeRendersTypedContext(t *testing.T) {
-	diagnostic := transcript.NewDeletionFactMismatchDeveloperDiagnostic(
-		"call-1",
-		patchformat.WholeFileDeletionFactMismatchError{
-			Kind: patchformat.WholeFileDeletionFactMismatchMissing,
-			ID:   patchformat.WholeFileDeletionOperationID{HunkOrdinal: 2},
-		},
-	)
-	rendered := RenderCommittedRow(clientui.TranscriptCommittedRow{
-		Kind: clientui.TranscriptRowNotice,
-		Notice: &clientui.TranscriptNoticeRow{
-			Reason:   clientui.TranscriptNoticeRuntimeDiagnostic,
-			Severity: clientui.TranscriptNoticeError,
-			Diagnostic: &clientui.TranscriptDiagnostic{
-				Developer: transcript.CloneDeveloperDiagnostic(&diagnostic),
-			},
-		},
-	}, 120, "", ModeDetailExpanded)
-	if got, want := rendered.Lines[0].Plain(), transcript.DeveloperDiagnosticText(diagnostic); !strings.Contains(got, want) {
-		t.Fatalf("developer diagnostic render = %q, want %q", got, want)
 	}
 }
 
@@ -1916,10 +1903,10 @@ func TestReviewerNoticeRendersReviewerGlyph(t *testing.T) {
 			Severity:     clientui.TranscriptNoticeInfo,
 			MessageType:  &messageType,
 			CompactLabel: &compactLabel,
-			Diagnostic: testsetup.LegacyTranscriptDiagnostic(
-				clientui.TranscriptDiagnosticCode(transcript.EntryRoleReviewerSuggestions),
-				compactLabel,
-			),
+			Diagnostic: &clientui.TranscriptDiagnostic{
+				Code:   clientui.TranscriptDiagnosticCode(transcript.EntryRoleReviewerSuggestions),
+				Detail: compactLabel,
+			},
 		},
 	}
 

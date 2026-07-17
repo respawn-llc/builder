@@ -68,9 +68,8 @@ type TranscriptNoticeRowFact struct {
 	BackgroundActivityID string
 	BackgroundProcessID  string
 	BackgroundExitCode   *int
-	DiagnosticCode       *string
-	DiagnosticDetail     *string
-	DeveloperDiagnostic  *transcript.DeveloperDiagnostic
+	DiagnosticCode       string
+	DiagnosticDetail     string
 	CacheWarning         *TranscriptCacheWarningFact
 }
 
@@ -96,9 +95,6 @@ func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFac
 			return nil
 		}
 		facts = []TranscriptCommittedRowFact{transcriptToolRowFactFromResult(*evt.ToolResult)}
-		if evt.ToolCompletionDiagnostic != nil {
-			facts = append(facts, toolCompletionDiagnosticFact(*evt.ToolCompletionDiagnostic))
-		}
 	case EventCacheWarning:
 		if evt.CacheWarning == nil {
 			return nil
@@ -179,16 +175,6 @@ func TranscriptToolStartFactsFromEvent(evt Event) []TranscriptLiveToolStart {
 }
 
 func transcriptCommittedRowFactsFromMessage(msg llm.Message, streamID *uuid.UUID, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) []TranscriptCommittedRowFact {
-	return transcriptCommittedRowFactsWithToolCompletionDiagnostics(msg, streamID, completions, materializedToolCalls, nil)
-}
-
-func transcriptCommittedRowFactsWithToolCompletionDiagnostics(
-	msg llm.Message,
-	streamID *uuid.UUID,
-	completions map[string]tools.Result,
-	materializedToolCalls map[string]struct{},
-	diagnostics map[string]*transcript.DeveloperDiagnostic,
-) []TranscriptCommittedRowFact {
 	switch msg.Role {
 	case llm.RoleUser:
 		if msg.MessageType == llm.MessageTypeCompactionSummary {
@@ -209,12 +195,12 @@ func transcriptCommittedRowFactsWithToolCompletionDiagnostics(
 		}
 		for _, call := range msg.ToolCalls {
 			if result, ok := synthesizedToolResultForCall(call, completions, materializedToolCalls); ok {
-				out = appendToolCompletionFacts(out, result, diagnostics)
+				out = append(out, transcriptToolRowFactFromResult(result))
 			}
 		}
 		return out
 	case llm.RoleTool:
-		return appendToolCompletionFacts(nil, resolvedToolResultForMessage(msg, completions), diagnostics)
+		return []TranscriptCommittedRowFact{transcriptToolRowFactFromResult(resolvedToolResultForMessage(msg, completions))}
 	case llm.RoleDeveloper:
 		if msg.MessageType == llm.MessageTypeReviewerFeedback {
 			return nil
@@ -232,36 +218,7 @@ func transcriptCommittedRowFactsWithToolCompletionDiagnostics(
 }
 
 func transcriptCommittedEntryCountFromMessage(msg llm.Message, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) int {
-	return transcriptCommittedEntryCountWithToolCompletionDiagnostics(msg, completions, materializedToolCalls, nil)
-}
-
-func transcriptCommittedEntryCountWithToolCompletionDiagnostics(
-	msg llm.Message,
-	completions map[string]tools.Result,
-	materializedToolCalls map[string]struct{},
-	diagnostics map[string]*transcript.DeveloperDiagnostic,
-) int {
-	projections := visibleChatEntryProjectionsFromMessage(msg, completions, materializedToolCalls)
-	count := len(projections)
-	for _, projection := range projections {
-		if projection.ToolCompletion != nil &&
-			diagnostics[strings.TrimSpace(projection.ToolCompletion.CallID)] != nil {
-			count++
-		}
-	}
-	return count
-}
-
-func appendToolCompletionFacts(
-	facts []TranscriptCommittedRowFact,
-	result tools.Result,
-	diagnostics map[string]*transcript.DeveloperDiagnostic,
-) []TranscriptCommittedRowFact {
-	facts = append(facts, transcriptToolRowFactFromResult(result))
-	if diagnostic := diagnostics[strings.TrimSpace(result.CallID)]; diagnostic != nil {
-		facts = append(facts, toolCompletionDiagnosticFact(*diagnostic))
-	}
-	return facts
+	return len(visibleChatEntriesFromMessage(msg, completions, materializedToolCalls))
 }
 
 func transcriptCommittedRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
@@ -394,12 +351,6 @@ func transcriptToolEntryHasRecoverableText(entry ChatEntry) bool {
 }
 
 func transcriptNoticeEntryIntegrity(entry ChatEntry) transcript.RowIntegrity {
-	if entry.DeveloperDiagnostic != nil {
-		if err := entry.DeveloperDiagnostic.Validate(); err != nil {
-			return transcript.RowIntegrityUnrecoverableMalformed
-		}
-		return transcript.RowIntegrityValid
-	}
 	if firstNonBlankTranscriptValue(entry.Text, entry.CondensedText, entry.CompactLabel, entry.SourcePath) == "" {
 		return transcript.RowIntegrityUnrecoverableMalformed
 	}
@@ -571,17 +522,12 @@ func runtimeNoticeFactFromMessage(msg llm.Message, severity string) TranscriptCo
 		BackgroundActivityID: strings.TrimSpace(msg.BackgroundActivityID),
 		BackgroundProcessID:  strings.TrimSpace(msg.Name),
 		BackgroundExitCode:   textutil.Pointer(msg.BackgroundExitCode),
-		DiagnosticCode:       optionalDiagnosticString(code),
-		DiagnosticDetail:     optionalDiagnosticString(msg.Content),
+		DiagnosticCode:       code,
+		DiagnosticDetail:     msg.Content,
 	}}
 }
 
 func runtimeNoticeFactFromLocalEntry(entry ChatEntry) TranscriptCommittedRowFact {
-	if entry.DeveloperDiagnostic != nil {
-		fact := toolCompletionDiagnosticFact(*entry.DeveloperDiagnostic)
-		fact.Visibility = normalizeRuntimeEntryVisibility(entry.Visibility)
-		return fact
-	}
 	noticeID := strings.TrimSpace(entry.NoticeID)
 	var noticeIDPtr *string
 	if noticeID != "" {
@@ -605,8 +551,8 @@ func runtimeNoticeFactFromLocalEntry(entry ChatEntry) TranscriptCommittedRowFact
 		BackgroundActivityID: strings.TrimSpace(entry.BackgroundActivityID),
 		BackgroundProcessID:  strings.TrimSpace(entry.BackgroundProcessID),
 		BackgroundExitCode:   textutil.Pointer(entry.BackgroundExitCode),
-		DiagnosticCode:       optionalDiagnosticString(role),
-		DiagnosticDetail:     optionalDiagnosticString(detail),
+		DiagnosticCode:       role,
+		DiagnosticDetail:     detail,
 	}}
 }
 
@@ -618,8 +564,8 @@ func emptyDeveloperMessageDiagnosticFact(msg llm.Message) TranscriptCommittedRow
 		MessageType:      msg.MessageType,
 		SourcePath:       strings.TrimSpace(msg.SourcePath),
 		CompactLabel:     compactLabelForMessage(msg),
-		DiagnosticCode:   optionalDiagnosticString(code),
-		DiagnosticDetail: optionalDiagnosticString("empty developer message"),
+		DiagnosticCode:   code,
+		DiagnosticDetail: "empty developer message",
 	}}
 }
 
@@ -631,17 +577,9 @@ func runtimeDiagnosticNoticeFact(code string, severity string, detail string) Tr
 	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Visibility: transcript.EntryVisibilityOngoing, Notice: &TranscriptNoticeRowFact{
 		Reason:           transcript.NoticeReasonRuntimeDiagnostic,
 		Severity:         normalizeTranscriptNoticeSeverity(severity),
-		DiagnosticCode:   optionalDiagnosticString(code),
-		DiagnosticDetail: optionalDiagnosticString(detail),
+		DiagnosticCode:   code,
+		DiagnosticDetail: detail,
 	}}
-}
-
-func optionalDiagnosticString(value string) *string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil
-	}
-	return &value
 }
 
 func normalizeTranscriptNoticeSeverity(severity string) string {

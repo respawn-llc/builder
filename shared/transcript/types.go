@@ -73,74 +73,24 @@ type ToolCallMeta struct {
 // tool result. Tool-call input metadata remains authoritative for every other
 // presentation field.
 type ToolResultPresentationDelta struct {
-	RawOutputRequested     bool
-	OutputTruncated        bool
-	MovedToBackground      bool
-	ShellExitCode          *int
-	WholeFileDeletionFacts []patchformat.WholeFileDeletionFact
+	RawOutputRequested bool
+	OutputTruncated    bool
+	MovedToBackground  bool
+	ShellExitCode      *int
 }
 
-type ToolResultPresentationOutcome uint8
-
-const (
-	ToolResultPresentationOutcomeSuccessful ToolResultPresentationOutcome = iota + 1
-	ToolResultPresentationOutcomeFailed
-)
-
-func ApplyToolResultPresentationDelta(
-	meta ToolCallMeta,
-	delta *ToolResultPresentationDelta,
-	outcome ToolResultPresentationOutcome,
-) (ToolCallMeta, *patchformat.WholeFileDeletionFactMismatchError) {
-	switch outcome {
-	case ToolResultPresentationOutcomeSuccessful, ToolResultPresentationOutcomeFailed:
-	default:
-		panic("tool result presentation outcome is invalid")
+func ApplyToolResultPresentationDelta(meta ToolCallMeta, delta *ToolResultPresentationDelta) ToolCallMeta {
+	if delta == nil {
+		return NormalizeToolCallMeta(meta)
 	}
-	if delta != nil {
-		meta.RawOutputRequested = meta.RawOutputRequested || delta.RawOutputRequested
-		meta.OutputTruncated = meta.OutputTruncated || delta.OutputTruncated
-		meta.MovedToBackground = meta.MovedToBackground || delta.MovedToBackground
-		if delta.ShellExitCode != nil {
-			exitCode := *delta.ShellExitCode
-			meta.ShellExitCode = &exitCode
-		}
+	meta.RawOutputRequested = meta.RawOutputRequested || delta.RawOutputRequested
+	meta.OutputTruncated = meta.OutputTruncated || delta.OutputTruncated
+	meta.MovedToBackground = meta.MovedToBackground || delta.MovedToBackground
+	if delta.ShellExitCode != nil {
+		exitCode := *delta.ShellExitCode
+		meta.ShellExitCode = &exitCode
 	}
-	if outcome == ToolResultPresentationOutcomeSuccessful && renderedPatchHasWholeFileDeletions(meta.PatchRender) {
-		rendered := patchformat.RenderedPatch{}
-		if meta.PatchRender != nil {
-			rendered = *meta.PatchRender
-		}
-		var facts []patchformat.WholeFileDeletionFact
-		if delta != nil {
-			facts = delta.WholeFileDeletionFacts
-		}
-		finalized, err := patchformat.ApplyWholeFileDeletionFacts(
-			rendered,
-			facts,
-		)
-		if err != nil {
-			return NormalizeToolCallMeta(meta), err
-		}
-		meta.PatchRender = &finalized
-		meta.PatchSummary = strings.TrimSpace(finalized.SummaryText())
-		meta.PatchDetail = strings.TrimSpace(finalized.DetailText())
-		meta.CompactText = meta.PatchSummary
-		meta.Command = meta.PatchDetail
-	}
-	return NormalizeToolCallMeta(meta), nil
-}
-
-func renderedPatchHasWholeFileDeletions(rendered *patchformat.RenderedPatch) bool {
-	if rendered == nil {
-		return false
-	}
-	for _, file := range rendered.Files {
-		if len(file.WholeFileDeletions) > 0 {
-			return true
-		}
-	}
-	return false
+	return NormalizeToolCallMeta(meta)
 }
 
 func NormalizeToolCallMeta(in ToolCallMeta) ToolCallMeta {

@@ -10,7 +10,6 @@ import (
 	"sync"
 
 	"core/server/tools"
-	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 )
 
@@ -74,8 +73,7 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 			return json.Marshal(errorPayload(patchErr))
 		}), nil
 	}
-	deletionFacts, err := t.apply(ctx, doc)
-	if err != nil {
+	if err := t.apply(ctx, doc); err != nil {
 		return tools.ErrorResultWith(c, err.Error(), func(any) (json.RawMessage, error) {
 			return json.Marshal(errorPayload(err))
 		}), nil
@@ -85,45 +83,38 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 		"ok":         true,
 		"operations": len(doc.Hunks),
 	})
-	result := tools.Result{CallID: c.ID, Name: c.Name, Output: body}
-	if len(deletionFacts) > 0 {
-		result.PresentationDelta = &transcript.ToolResultPresentationDelta{
-			WholeFileDeletionFacts: deletionFacts,
-		}
-	}
-	return result, nil
+	return tools.Result{CallID: c.ID, Name: c.Name, Output: body}, nil
 }
 
-func (t *Tool) apply(ctx context.Context, doc patchformat.Document) ([]patchformat.WholeFileDeletionFact, error) {
+func (t *Tool) apply(ctx context.Context, doc patchformat.Document) error {
 	state := newApplyState(t, ctx)
 	unlock, err := state.lockDocumentPaths(doc)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer unlock()
-	for ordinal, h := range doc.Hunks {
+	for _, h := range doc.Hunks {
 		switch op := h.(type) {
 		case patchformat.AddFile:
 			if err := state.addFile(op); err != nil {
-				return nil, err
+				return err
 			}
 		case patchformat.DeleteFile:
-			operationID := patchformat.WholeFileDeletionOperationID{HunkOrdinal: ordinal}
-			if err := state.deleteFile(op, operationID); err != nil {
-				return nil, err
+			if err := state.deleteFile(op); err != nil {
+				return err
 			}
 		case patchformat.UpdateFile:
 			if err := state.updateFile(op); err != nil {
-				return nil, err
+				return err
 			}
 		default:
-			return nil, fmt.Errorf("unsupported patch hunk: %T", h)
+			return fmt.Errorf("unsupported patch hunk: %T", h)
 		}
 	}
 
 	states, err := state.prepareCommitStates()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer cleanupStagedFiles(states)
 	return commitStagedFiles(states, state.deleteTargets)
