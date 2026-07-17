@@ -6,6 +6,7 @@ import (
 
 	"core/server/metadata"
 	"core/server/session"
+	"core/server/subagentpolicy"
 )
 
 type BootstrapRequest struct {
@@ -22,16 +23,12 @@ type BootstrapPlan struct {
 	UseOpenAIBaseURL bool
 }
 
-type SessionCallerContext struct {
-	WorkflowSession bool
-}
-
-func ResolveSessionCallerContext(persistenceRoot string, sessionID string) (SessionCallerContext, error) {
+func ResolveSessionCaller(persistenceRoot string, sessionID string) (subagentpolicy.Caller, error) {
 	store, err := openSessionByID(persistenceRoot, sessionID)
 	if err != nil {
-		return SessionCallerContext{}, err
+		return subagentpolicy.Caller{}, err
 	}
-	return SessionCallerContext{WorkflowSession: store.Meta().WorkflowSession != nil}, nil
+	return subagentpolicy.Caller{Workflow: store.Meta().WorkflowSession != nil}, nil
 }
 
 // ValidateSessionExists verifies a session reference without exposing its

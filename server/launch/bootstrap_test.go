@@ -106,7 +106,7 @@ func TestResolveBootstrapPlanUsesMetadataSessionLookupByID(t *testing.T) {
 	}
 }
 
-func TestResolveSessionCallerContextReturnsWorkflowOrigin(t *testing.T) {
+func TestResolveSessionCallerReturnsWorkflowOrigin(t *testing.T) {
 	persistenceRoot := t.TempDir()
 	metadataStore, err := metadata.Open(persistenceRoot)
 	if err != nil {
@@ -131,18 +131,18 @@ func TestResolveSessionCallerContextReturnsWorkflowOrigin(t *testing.T) {
 		t.Fatalf("SetWorkflowSessionState: %v", err)
 	}
 
-	ordinaryContext, err := ResolveSessionCallerContext(persistenceRoot, ordinary.Meta().SessionID)
+	ordinaryCaller, err := ResolveSessionCaller(persistenceRoot, ordinary.Meta().SessionID)
 	if err != nil {
-		t.Fatalf("ResolveSessionCallerContext ordinary: %v", err)
+		t.Fatalf("ResolveSessionCaller ordinary: %v", err)
 	}
-	if ordinaryContext.WorkflowSession {
+	if ordinaryCaller.Workflow {
 		t.Fatal("ordinary session resolved as workflow")
 	}
-	workflowContext, err := ResolveSessionCallerContext(persistenceRoot, workflow.Meta().SessionID)
+	workflowCaller, err := ResolveSessionCaller(persistenceRoot, workflow.Meta().SessionID)
 	if err != nil {
-		t.Fatalf("ResolveSessionCallerContext workflow: %v", err)
+		t.Fatalf("ResolveSessionCaller workflow: %v", err)
 	}
-	if !workflowContext.WorkflowSession {
+	if !workflowCaller.Workflow {
 		t.Fatal("workflow session resolved as ordinary")
 	}
 }

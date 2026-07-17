@@ -126,16 +126,11 @@ func newTypedIntentPlanner(t *testing.T) (Planner, string, *sessiontest.Persiste
 	root := t.TempDir()
 	containerDir := filepath.Join(root, "sessions")
 	persistence := sessiontest.NewPersistence()
-	return Planner{
-		Config: config.App{
-			WorkspaceRoot:   "/tmp/workspace-a",
-			PersistenceRoot: root,
-			Settings:        config.Settings{Model: "gpt-5"},
-		},
-		ContainerDir:      containerDir,
-		StoreOptions:      persistence.Options(),
-		PersistedSessions: persistence,
-	}, containerDir, persistence
+	return newPersistenceBackedTestPlanner(config.App{
+		WorkspaceRoot:   "/tmp/workspace-a",
+		PersistenceRoot: root,
+		Settings:        config.Settings{Model: "gpt-5"},
+	}, containerDir, persistence), containerDir, persistence
 }
 
 func createTypedIntentSession(t *testing.T, containerDir string, category sessioncontract.SessionCategory, persistence *sessiontest.Persistence) *session.Store {

@@ -28,8 +28,7 @@ func startEmbeddedServer(ctx context.Context, opts Options, interactor authInter
 			Tools:               opts.Tools,
 			ConfigRoot:          opts.ConfigRoot,
 		},
-		StartupOptions: opts.startupOptions,
-	}, interactor, nil)
+	}, interactor, opts.startupOptions)
 	if err != nil {
 		return nil, err
 	}

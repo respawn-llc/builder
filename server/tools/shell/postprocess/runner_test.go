@@ -25,6 +25,26 @@ func mustNewRunner(t *testing.T, settings Settings) *Runner {
 	return runner
 }
 
+func assertBuiltinFileRead(t *testing.T, runner *Runner, command string, output string, wantProcessed bool, wantOutput string) {
+	t.Helper()
+	exitCode := 0
+	result, err := runner.Apply(context.Background(), Request{
+		ToolName:    toolspec.ToolExecCommand,
+		CommandText: command,
+		ExitCode:    &exitCode,
+		Output:      output,
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if result.Processed != wantProcessed {
+		t.Fatalf("processed = %t, want %t", result.Processed, wantProcessed)
+	}
+	if result.Output != wantOutput {
+		t.Fatalf("output = %q, want %q", result.Output, wantOutput)
+	}
+}
+
 func testStringPointer(value string) *string {
 	copy := value
 	return &copy
@@ -139,76 +159,26 @@ func TestRunnerBuiltinFileReadAddsTotalLineCountForPartialSed(t *testing.T) {
 		"line 5",
 	}, "\n")+"\n")
 	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
-	exitCode := 0
-
-	result, err := runner.Apply(context.Background(), Request{
-		ToolName:    toolspec.ToolExecCommand,
-		CommandText: "sed -n '2,4p' " + shellQuote(path),
-		ExitCode:    &exitCode,
-		Output:      "line 2\nline 3\nline 4\n",
-	})
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	if !result.Processed {
-		t.Fatal("expected partial file read to be processed")
-	}
-	if result.Output != "[Total line count: 5]\nline 2\nline 3\nline 4\n" {
-		t.Fatalf("output = %q", result.Output)
-	}
+	assertBuiltinFileRead(t, runner, "sed -n '2,4p' "+shellQuote(path), "line 2\nline 3\nline 4\n", true, "[Total line count: 5]\nline 2\nline 3\nline 4\n")
 }
 
 func TestRunnerBuiltinFileReadAddsTotalLineCountWhenReportedSedRangeIsPartial(t *testing.T) {
 	path := writeNestedTextFile(t, filepath.Join("cli", "app", "ui_goal.go"), numberedLines(431))
 	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
-	exitCode := 0
 	output := numberedLines(430)
-
-	result, err := runner.Apply(context.Background(), Request{
-		ToolName:    toolspec.ToolExecCommand,
-		CommandText: "sed -n '1,430p' " + shellQuote(path),
-		ExitCode:    &exitCode,
-		Output:      output,
-	})
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	if !result.Processed {
-		t.Fatal("expected partial sed range read to include file context marker")
-	}
-	want := "[Total line count: 431]\n" + output
-	if result.Output != want {
-		t.Fatalf("output = %q, want %q", result.Output, want)
-	}
+	assertBuiltinFileRead(t, runner, "sed -n '1,430p' "+shellQuote(path), output, true, "[Total line count: 431]\n"+output)
 }
 
 func TestRunnerBuiltinFileReadAddsTotalLineCountForUnknownSedScriptFile(t *testing.T) {
 	path := writeTextFile(t, "example.txt", "line 1\nline 2\nline 3\n")
 	scriptPath := writeTextFile(t, "script.sed", "1,1p\n")
 	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
-	exitCode := 0
-
-	result, err := runner.Apply(context.Background(), Request{
-		ToolName:    toolspec.ToolExecCommand,
-		CommandText: "sed -f " + shellQuote(scriptPath) + " " + shellQuote(path),
-		ExitCode:    &exitCode,
-		Output:      "line 1\n",
-	})
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	if !result.Processed {
-		t.Fatal("expected unknown sed script file to be processed conservatively")
-	}
-	if result.Output != "[Total line count: 3]\nline 1\n" {
-		t.Fatalf("output = %q", result.Output)
-	}
+	assertBuiltinFileRead(t, runner, "sed -f "+shellQuote(scriptPath)+" "+shellQuote(path), "line 1\n", true, "[Total line count: 3]\nline 1\n")
 }
 
 func TestRunnerBuiltinFileReadSkipsSedWhenFullFileIsKnown(t *testing.T) {
 	path := writeTextFile(t, "example.txt", "line 1\nline 2\n")
 	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
-	exitCode := 0
 	tests := []struct {
 		name    string
 		command string
@@ -222,21 +192,7 @@ func TestRunnerBuiltinFileReadSkipsSedWhenFullFileIsKnown(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := runner.Apply(context.Background(), Request{
-				ToolName:    toolspec.ToolExecCommand,
-				CommandText: tt.command,
-				ExitCode:    &exitCode,
-				Output:      "line 1\nline 2\n",
-			})
-			if err != nil {
-				t.Fatalf("Apply: %v", err)
-			}
-			if result.Processed {
-				t.Fatal("expected known full-file sed output to bypass file context marker")
-			}
-			if result.Output != "line 1\nline 2\n" {
-				t.Fatalf("output = %q", result.Output)
-			}
+			assertBuiltinFileRead(t, runner, tt.command, "line 1\nline 2\n", false, "line 1\nline 2\n")
 		})
 	}
 }
@@ -251,7 +207,6 @@ func TestRunnerBuiltinFileReadAddsTotalLineCountForHeadTailAndPowerShell(t *test
 		"line 5",
 	}, "\n"))
 	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
-	exitCode := 0
 	tests := []struct {
 		name    string
 		command string
@@ -265,22 +220,7 @@ func TestRunnerBuiltinFileReadAddsTotalLineCountForHeadTailAndPowerShell(t *test
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := runner.Apply(context.Background(), Request{
-				ToolName:    toolspec.ToolExecCommand,
-				CommandText: tt.command,
-				ExitCode:    &exitCode,
-				Output:      tt.output,
-			})
-			if err != nil {
-				t.Fatalf("Apply: %v", err)
-			}
-			if !result.Processed {
-				t.Fatal("expected partial file read to be processed")
-			}
-			want := "[Total line count: 5]\n" + tt.output
-			if result.Output != want {
-				t.Fatalf("output = %q, want %q", result.Output, want)
-			}
+			assertBuiltinFileRead(t, runner, tt.command, tt.output, true, "[Total line count: 5]\n"+tt.output)
 		})
 	}
 }
@@ -296,7 +236,6 @@ func TestRunnerBuiltinFileReadSkipsFullHeadTailAndLargeFiles(t *testing.T) {
 		t.Fatalf("write binary file: %v", err)
 	}
 	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
-	exitCode := 0
 	tests := []struct {
 		name    string
 		command string
@@ -319,21 +258,7 @@ func TestRunnerBuiltinFileReadSkipsFullHeadTailAndLargeFiles(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := runner.Apply(context.Background(), Request{
-				ToolName:    toolspec.ToolExecCommand,
-				CommandText: tt.command,
-				ExitCode:    &exitCode,
-				Output:      tt.output,
-			})
-			if err != nil {
-				t.Fatalf("Apply: %v", err)
-			}
-			if result.Processed {
-				t.Fatal("expected file read marker to be skipped")
-			}
-			if result.Output != tt.output {
-				t.Fatalf("output = %q, want %q", result.Output, tt.output)
-			}
+			assertBuiltinFileRead(t, runner, tt.command, tt.output, false, tt.output)
 		})
 	}
 }
@@ -341,7 +266,6 @@ func TestRunnerBuiltinFileReadSkipsFullHeadTailAndLargeFiles(t *testing.T) {
 func TestRunnerBuiltinFileReadSkipsComposedCommandsAndWholeFileReads(t *testing.T) {
 	path := writeTextFile(t, "example.txt", "line 1\nline 2\n")
 	runner := mustNewRunner(t, Settings{Mode: config.ShellPostprocessingModeBuiltin})
-	exitCode := 0
 	tests := []struct {
 		name    string
 		command string
@@ -355,21 +279,7 @@ func TestRunnerBuiltinFileReadSkipsComposedCommandsAndWholeFileReads(t *testing.
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := runner.Apply(context.Background(), Request{
-				ToolName:    toolspec.ToolExecCommand,
-				CommandText: tt.command,
-				ExitCode:    &exitCode,
-				Output:      tt.output,
-			})
-			if err != nil {
-				t.Fatalf("Apply: %v", err)
-			}
-			if result.Processed {
-				t.Fatal("expected file read marker to be skipped")
-			}
-			if result.Output != tt.output {
-				t.Fatalf("output = %q, want %q", result.Output, tt.output)
-			}
+			assertBuiltinFileRead(t, runner, tt.command, tt.output, false, tt.output)
 		})
 	}
 }

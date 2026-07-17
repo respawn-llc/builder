@@ -35,9 +35,12 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	previousDuration := transientStatusDuration
+	previousSpinnerInterval := spinnerTickInterval
 	transientStatusDuration = 30 * time.Millisecond
+	spinnerTickInterval = time.Millisecond
 	code := m.Run()
 	transientStatusDuration = previousDuration
+	spinnerTickInterval = previousSpinnerInterval
 	if err := cleanupOnboardingRemoteLifecycleTestBinary(); err != nil {
 		log.Print(err)
 		if code == 0 {

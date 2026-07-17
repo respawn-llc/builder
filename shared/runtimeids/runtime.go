@@ -24,11 +24,6 @@ func NewQueueItemID() QueueItemID {
 
 type LiveRunGroupID struct{ uuidv4Value }
 
-func ParseLiveRunGroupID(raw string) (LiveRunGroupID, error) {
-	id, err := parseUUIDv4Value(raw, "live_run_group_id")
-	return LiveRunGroupID{uuidv4Value: id}, err
-}
-
 func NewLiveRunGroupID() LiveRunGroupID {
 	return LiveRunGroupID{uuidv4Value: newUUIDv4Value()}
 }

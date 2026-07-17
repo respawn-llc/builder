@@ -5,7 +5,11 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { initializeI18n } from "../../i18n/setup";
 import type { WorkflowNodeKind } from "../../api";
 import { workflowEditorEnglish } from "../../i18n/workflowEditorEn";
-import { WorkflowGraphCanvas, WorkflowNodeInfoTooltipContent } from "./WorkflowGraphCanvas";
+import {
+  WorkflowGraphCanvas,
+  type WorkflowGraphCanvasProps,
+  WorkflowNodeInfoTooltipContent,
+} from "./WorkflowGraphCanvas";
 import { groupIDFromPoint } from "./workflowGraphCanvasInteractions";
 import type { WorkflowGraphNode } from "./workflowGraphLayout";
 
@@ -27,54 +31,29 @@ describe("WorkflowGraphCanvas", () => {
     const copied: string[] = [];
     const onNodeInspect = vi.fn();
     const onAddConnectedNode = vi.fn();
-    const { unmount } = render(
-      <WorkflowGraphCanvas
-        graph={{
-          edges: [],
-          nodes: [
-            workflowGroupGraphNode({ hasError: false, id: "group", label: "Group", x: -140 }),
-            workflowGraphNode({
-              hasError: false,
-              id: "start",
-              kind: "start",
-              label: "Backlog",
-              nodeKey: "backlog",
-              x: 0,
-            }),
-            workflowGraphNode({ hasError: false, id: "agent", kind: "agent", label: "Agent", x: 120 }),
-            workflowGraphNode({
-              hasError: false,
-              id: "terminal",
-              kind: "terminal",
-              label: "Done",
-              nodeKey: "done",
-              x: 240,
-            }),
-            workflowGraphNode({
-              hasError: false,
-              id: "join",
-              kind: "join",
-              label: "Join",
-              type: "workflowJoin",
-              x: 360,
-            }),
-            workflowGraphNode({ hasError: true, id: "error", kind: "agent", label: "Broken", x: 360 }),
-          ],
-        }}
-        onCopyText={(value) => {
-          copied.push(value);
-        }}
-        onAddConnectedNode={onAddConnectedNode}
-        onEdgeInspect={() => undefined}
-        onGroupInspect={() => undefined}
-        onNodeInspect={onNodeInspect}
-        onWorkflowInspect={() => undefined}
-      />,
-    );
+    const { unmount } = renderCanvas({
+      graph: testGraph(
+        workflowGroupGraphNode("group", "Group", -140),
+        workflowGraphNode(["start", "Backlog", "start", 0], { nodeKey: "backlog" }),
+        workflowGraphNode(["agent", "Agent", "agent", 120]),
+        workflowGraphNode(["terminal", "Done", "terminal", 240], { nodeKey: "done" }),
+        workflowGraphNode(["join", "Join", "join", 360], { type: "workflowJoin" }),
+        workflowGraphNode(["error", "Broken", "agent", 360], { hasError: true }),
+      ),
+      onCopyText: (value) => {
+        copied.push(value);
+      },
+      onAddConnectedNode,
+      onNodeInspect,
+    });
 
     expect(screen.getByTestId("workflow-graph-node-start")).toHaveAttribute("data-kind", "start");
-    expect(within(screen.getByTestId("workflow-graph-node-start")).queryAllByTestId("workflow-node-target-handle")).toHaveLength(0);
-    expect(within(screen.getByTestId("workflow-graph-node-start")).queryAllByTestId("workflow-node-source-handle")).toHaveLength(1);
+    expect(
+      within(screen.getByTestId("workflow-graph-node-start")).queryAllByTestId("workflow-node-target-handle"),
+    ).toHaveLength(0);
+    expect(
+      within(screen.getByTestId("workflow-graph-node-start")).queryAllByTestId("workflow-node-source-handle"),
+    ).toHaveLength(1);
     expect(screen.getByTestId("workflow-graph-node-agent")).toHaveAttribute("data-kind", "agent");
     expect(screen.getByTestId("workflow-graph-node-agent")).not.toHaveAttribute("draggable", "true");
     expect(screen.getByTestId("workflow-graph-node-terminal")).toHaveAttribute("data-kind", "terminal");
@@ -88,10 +67,15 @@ describe("WorkflowGraphCanvas", () => {
     expect(onNodeInspect).toHaveBeenCalledWith("join");
     fireEvent.click(screen.getByTestId("workflow-graph-node-agent"));
     expect(onNodeInspect).toHaveBeenCalledWith("agent");
-    fireEvent.click(within(screen.getByTestId("workflow-graph-node-agent")).getByTestId("workflow-node-source-handle"), {
+    fireEvent.click(
+      within(screen.getByTestId("workflow-graph-node-agent")).getByTestId("workflow-node-source-handle"),
+      {
+        detail: 1,
+      },
+    );
+    fireEvent.click(await screen.findByRole("button", { name: workflowEditorEnglish.addAgentNode }), {
       detail: 1,
     });
-    fireEvent.click(await screen.findByRole("button", { name: workflowEditorEnglish.addAgentNode }), { detail: 1 });
     expect(onAddConnectedNode).toHaveBeenCalledWith("agent", "agent", "pointer");
     fireEvent.pointerMove(screen.getByTestId("workflow-graph-node-join"), { pointerType: "mouse" });
     await waitFor(() => {
@@ -127,16 +111,7 @@ describe("WorkflowGraphCanvas", () => {
 
   it("adds nodes from the canvas toolbar and reserves plain plus for add", async () => {
     const onAddNode = vi.fn();
-    render(
-      <WorkflowGraphCanvas
-        graph={{ edges: [], nodes: [] }}
-        onAddNode={onAddNode}
-        onEdgeInspect={() => undefined}
-        onGroupInspect={() => undefined}
-        onNodeInspect={() => undefined}
-        onWorkflowInspect={() => undefined}
-      />,
-    );
+    renderCanvas({ onAddNode });
 
     fireEvent.pointerEnter(screen.getByRole("button", { name: "Add node" }));
     fireEvent.click(await screen.findByRole("button", { name: "Agent node" }));
@@ -150,61 +125,42 @@ describe("WorkflowGraphCanvas", () => {
 
   it("selects graph entities for keyboard deletion and hides terminal source handles", () => {
     const onDeleteSelection = vi.fn();
-    render(
-      <WorkflowGraphCanvas
-        graph={{
-          edges: [],
-          nodes: [
-            workflowGraphNode({ hasError: false, id: "agent", kind: "agent", label: "Agent", x: 0 }),
-            workflowGraphNode({ hasError: false, id: "terminal", kind: "terminal", label: "Done", x: 160 }),
-          ],
-        }}
-        onDeleteSelection={onDeleteSelection}
-        onAddConnectedNode={() => undefined}
-        onEdgeInspect={() => undefined}
-        onGroupInspect={() => undefined}
-        onNodeInspect={() => undefined}
-        onWorkflowInspect={() => undefined}
-      />,
-    );
+    renderCanvas({
+      graph: testGraph(
+        workflowGraphNode(["agent", "Agent", "agent", 0]),
+        workflowGraphNode(["terminal", "Done", "terminal", 160]),
+      ),
+      onDeleteSelection,
+      onAddConnectedNode: noop,
+    });
 
     fireEvent.click(screen.getByTestId("workflow-graph-node-agent"));
     fireEvent.keyDown(window, { key: "Delete" });
 
     expect(onDeleteSelection).toHaveBeenCalledWith({ kind: "node", nodeID: "agent" });
-    expect(within(screen.getByTestId("workflow-graph-node-agent")).queryAllByTestId("workflow-node-source-handle")).toHaveLength(1);
-    expect(within(screen.getByTestId("workflow-graph-node-terminal")).queryAllByTestId("workflow-node-source-handle")).toHaveLength(0);
+    expect(
+      within(screen.getByTestId("workflow-graph-node-agent")).queryAllByTestId("workflow-node-source-handle"),
+    ).toHaveLength(1);
+    expect(
+      within(screen.getByTestId("workflow-graph-node-terminal")).queryAllByTestId(
+        "workflow-node-source-handle",
+      ),
+    ).toHaveLength(0);
   });
 
   it("opens handle quick-add from every editable source kind with keyboard selection", async () => {
     const user = userEvent.setup();
     const onAddConnectedNode = vi.fn();
-    render(
-      <WorkflowGraphCanvas
-        graph={{
-          edges: [],
-          nodes: [
-            workflowGraphNode({ hasError: false, id: "start", kind: "start", label: "Start", x: 0 }),
-            workflowGraphNode({ hasError: false, id: "agent", kind: "agent", label: "Agent", x: 160 }),
-            workflowGraphNode({ hasError: false, id: "script", kind: "script", label: "Script", x: 320 }),
-            workflowGraphNode({
-              hasError: false,
-              id: "join",
-              kind: "join",
-              label: "Join",
-              type: "workflowJoin",
-              x: 480,
-            }),
-            workflowGraphNode({ hasError: false, id: "terminal", kind: "terminal", label: "Done", x: 640 }),
-          ],
-        }}
-        onAddConnectedNode={onAddConnectedNode}
-        onEdgeInspect={() => undefined}
-        onGroupInspect={() => undefined}
-        onNodeInspect={() => undefined}
-        onWorkflowInspect={() => undefined}
-      />,
-    );
+    renderCanvas({
+      graph: testGraph(
+        workflowGraphNode(["start", "Start", "start", 0]),
+        workflowGraphNode(["agent", "Agent", "agent", 160]),
+        workflowGraphNode(["script", "Script", "script", 320]),
+        workflowGraphNode(["join", "Join", "join", 480], { type: "workflowJoin" }),
+        workflowGraphNode(["terminal", "Done", "terminal", 640]),
+      ),
+      onAddConnectedNode,
+    });
 
     for (const nodeID of ["start", "agent", "script", "join"]) {
       const handle = creationHandleForNode(nodeID);
@@ -226,58 +182,26 @@ describe("WorkflowGraphCanvas", () => {
   });
 
   it("does not render quick-add handles when topology editing is unavailable", () => {
-    render(
-      <WorkflowGraphCanvas
-        graph={{
-          edges: [],
-          nodes: [
-            workflowGraphNode({ hasError: false, id: "start", kind: "start", label: "Start", x: 0 }),
-            workflowGraphNode({ hasError: false, id: "agent", kind: "agent", label: "Agent", x: 160 }),
-            workflowGraphNode({
-              hasError: false,
-              id: "join",
-              kind: "join",
-              label: "Join",
-              type: "workflowJoin",
-              x: 320,
-            }),
-          ],
-        }}
-        onEdgeInspect={() => undefined}
-        onGroupInspect={() => undefined}
-        onNodeInspect={() => undefined}
-        onWorkflowInspect={() => undefined}
-      />,
-    );
+    renderCanvas({
+      graph: testGraph(
+        workflowGraphNode(["start", "Start", "start", 0]),
+        workflowGraphNode(["agent", "Agent", "agent", 160]),
+        workflowGraphNode(["join", "Join", "join", 320], { type: "workflowJoin" }),
+      ),
+    });
 
     expect(screen.queryByTestId("workflow-node-source-handle")).toBeNull();
   });
 
   it("renders real plus icons for non-terminal creation handles on workflow and join nodes", () => {
-    render(
-      <WorkflowGraphCanvas
-        graph={{
-          edges: [],
-          nodes: [
-            workflowGraphNode({ hasError: false, id: "agent", kind: "agent", label: "Agent", x: 0 }),
-            workflowGraphNode({
-              hasError: false,
-              id: "join",
-              kind: "join",
-              label: "Join",
-              type: "workflowJoin",
-              x: 160,
-            }),
-            workflowGraphNode({ hasError: false, id: "terminal", kind: "terminal", label: "Done", x: 320 }),
-          ],
-        }}
-        onAddConnectedNode={() => undefined}
-        onEdgeInspect={() => undefined}
-        onGroupInspect={() => undefined}
-        onNodeInspect={() => undefined}
-        onWorkflowInspect={() => undefined}
-      />,
-    );
+    renderCanvas({
+      graph: testGraph(
+        workflowGraphNode(["agent", "Agent", "agent", 0]),
+        workflowGraphNode(["join", "Join", "join", 160], { type: "workflowJoin" }),
+        workflowGraphNode(["terminal", "Done", "terminal", 320]),
+      ),
+      onAddConnectedNode: noop,
+    });
 
     const creationHandleIcons = screen.getAllByTestId("workflow-node-source-handle-icon");
     expect(creationHandleIcons).toHaveLength(2);
@@ -290,39 +214,24 @@ describe("WorkflowGraphCanvas", () => {
     const onAddNodeToGroup = vi.fn();
     const onCreateNodeGroup = vi.fn();
     const onNodeInspect = vi.fn();
-    render(
-      <WorkflowGraphCanvas
-        graph={{
-          edges: [],
-          nodes: [
-            workflowGroupGraphNode({ hasError: false, id: "group", label: "Group", x: -140 }),
-            workflowGraphNode({ hasError: false, id: "agent", kind: "agent", label: "Agent", x: 0 }),
-          ],
-        }}
-        onAddNodeToGroup={onAddNodeToGroup}
-        onAddConnectedNode={() => undefined}
-        onCreateNodeGroup={onCreateNodeGroup}
-        onEdgeInspect={() => undefined}
-        onGroupInspect={() => undefined}
-        onNodeInspect={onNodeInspect}
-        onWorkflowInspect={() => undefined}
-      />,
-    );
+    renderCanvas({
+      graph: testGraph(
+        workflowGroupGraphNode("group", "Group", -140),
+        workflowGraphNode(["agent", "Agent", "agent", 0]),
+      ),
+      onAddNodeToGroup,
+      onAddConnectedNode: noop,
+      onCreateNodeGroup,
+      onNodeInspect,
+    });
 
     fireEvent.contextMenu(screen.getByTestId("workflow-graph-node-agent"), { clientX: 24, clientY: 32 });
     fireEvent.click(screen.getByRole("menuitem", { name: "Create node group" }));
     expect(onCreateNodeGroup).toHaveBeenCalledWith("agent");
 
     const card = screen.getByTestId("workflow-graph-node-agent");
-    const eventView = card.ownerDocument.defaultView;
-    if (eventView === null) {
-      throw new Error("Expected test document to have a default window");
-    }
-    const elementFromPoint = vi.fn<typeof document.elementFromPoint>(() => card);
-    Object.defineProperty(document, "elementFromPoint", {
-      configurable: true,
-      value: elementFromPoint,
-    });
+    const eventView = ownerWindow(card);
+    const elementFromPoint = stubElementFromPoint(card);
     dispatchMouseEvent(within(card).getByTestId("workflow-node-source-handle"), eventView, "mousedown", {
       button: 0,
       clientX: 12,
@@ -339,10 +248,7 @@ describe("WorkflowGraphCanvas", () => {
     await waitFor(() => {
       expect(screen.getByTestId("workflow-group-drag-preview")).toHaveTextContent("Agent");
     });
-    Object.defineProperty(screen.getByTestId("workflow-graph-group-group"), "getBoundingClientRect", {
-      configurable: true,
-      value: () => new eventView.DOMRect(0, 0, 100, 100),
-    });
+    setGroupRect("group", eventView);
     expect(groupIDFromPoint(36, 40)).toBe("group");
     dispatchMouseEvent(eventView, eventView, "mouseup", { clientX: 36, clientY: 40 });
 
@@ -357,42 +263,22 @@ describe("WorkflowGraphCanvas", () => {
   it("extracts grouped nodes only when dropped outside groups", async () => {
     const onAddNodeToGroup = vi.fn();
     const onExtractNodeFromGroup = vi.fn();
-    render(
-      <WorkflowGraphCanvas
-        graph={{
-          edges: [],
-          nodes: [
-            workflowGroupGraphNode({ hasError: false, id: "group", label: "Group", x: -140 }),
-            workflowGroupGraphNode({ hasError: false, id: "other", label: "Other", x: 260 }),
-            workflowGraphNode({
-              groupID: "group",
-              hasError: false,
-              id: "agent",
-              kind: "agent",
-              label: "Agent",
-              parentId: "group",
-              x: 0,
-            }),
-          ],
-        }}
-        onAddNodeToGroup={onAddNodeToGroup}
-        onEdgeInspect={() => undefined}
-        onExtractNodeFromGroup={onExtractNodeFromGroup}
-        onGroupInspect={() => undefined}
-        onNodeInspect={() => undefined}
-        onWorkflowInspect={() => undefined}
-      />,
-    );
+    renderCanvas({
+      graph: testGraph(
+        workflowGroupGraphNode("group", "Group", -140),
+        workflowGroupGraphNode("other", "Other", 260),
+        workflowGraphNode(["agent", "Agent", "agent", 0], {
+          groupID: "group",
+          parentId: "group",
+        }),
+      ),
+      onAddNodeToGroup,
+      onExtractNodeFromGroup,
+    });
 
     const card = screen.getByTestId("workflow-graph-node-agent");
-    const eventView = card.ownerDocument.defaultView;
-    if (eventView === null) {
-      throw new Error("Expected test document to have a default window");
-    }
-    Object.defineProperty(document, "elementFromPoint", {
-      configurable: true,
-      value: vi.fn<typeof document.elementFromPoint>(() => card),
-    });
+    const eventView = ownerWindow(card);
+    stubElementFromPoint(card);
 
     dragNode(card, eventView, { x: 500, y: 500 });
     await waitFor(() => {
@@ -402,16 +288,29 @@ describe("WorkflowGraphCanvas", () => {
 
     onAddNodeToGroup.mockClear();
     onExtractNodeFromGroup.mockClear();
-    Object.defineProperty(screen.getByTestId("workflow-graph-group-group"), "getBoundingClientRect", {
-      configurable: true,
-      value: () => new eventView.DOMRect(0, 0, 100, 100),
-    });
+    setGroupRect("group", eventView);
     dragNode(card, eventView, { x: 36, y: 40 });
     expect(onAddNodeToGroup).not.toHaveBeenCalled();
     expect(onExtractNodeFromGroup).not.toHaveBeenCalled();
   });
-
 });
+
+const noop = () => undefined;
+const defaultCanvasProps = {
+  graph: testGraph(),
+  onEdgeInspect: noop,
+  onGroupInspect: noop,
+  onNodeInspect: noop,
+  onWorkflowInspect: noop,
+} satisfies WorkflowGraphCanvasProps;
+
+function testGraph(...nodes: readonly WorkflowGraphNode[]): WorkflowGraphCanvasProps["graph"] {
+  return { edges: [], nodes };
+}
+
+function renderCanvas(overrides: Partial<WorkflowGraphCanvasProps> = {}) {
+  return render(<WorkflowGraphCanvas {...defaultCanvasProps} {...overrides} />);
+}
 
 class MockResizeObserver implements ResizeObserver {
   observe(): void {
@@ -449,27 +348,25 @@ function dragNode(
   dispatchMouseEvent(eventView, eventView, "mouseup", { clientX: end.x, clientY: end.y });
 }
 
-function workflowGraphNode({
-  id,
-  label,
-  kind,
-  hasError,
-  groupID,
-  nodeKey = id,
-  parentId,
-  x,
-  type = "workflowNode",
-}: Readonly<{
-  hasError: boolean;
-  id: string;
-  kind: WorkflowNodeKind;
-  label: string;
-  nodeKey?: string;
-  type?: string;
-  x: number;
+type WorkflowGraphNodeOverrides = Readonly<{
+  hasError?: boolean;
   groupID?: string | undefined;
+  nodeKey?: string;
   parentId?: string | undefined;
-}>): WorkflowGraphNode {
+  type?: string;
+}>;
+type WorkflowGraphNodeIdentity = readonly [id: string, label: string, kind: WorkflowNodeKind, x: number];
+
+function workflowGraphNode(
+  [id, label, kind, x]: WorkflowGraphNodeIdentity,
+  {
+    hasError = false,
+    groupID,
+    nodeKey = id,
+    parentId,
+    type = "workflowNode",
+  }: WorkflowGraphNodeOverrides = {},
+): WorkflowGraphNode {
   return {
     data: {
       entityID: id,
@@ -490,23 +387,13 @@ function workflowGraphNode({
   };
 }
 
-function workflowGroupGraphNode({
-  id,
-  label,
-  hasError,
-  x,
-}: Readonly<{
-  hasError: boolean;
-  id: string;
-  label: string;
-  x: number;
-}>): WorkflowGraphNode {
+function workflowGroupGraphNode(id: string, label: string, x: number): WorkflowGraphNode {
   return {
     data: {
       empty: true,
       entityID: id,
       entityKind: "group",
-      hasError,
+      hasError: false,
       kind: "group",
       label,
     },
@@ -516,6 +403,30 @@ function workflowGroupGraphNode({
     style: { height: 140, width: 260 },
     type: "workflowGroup",
   };
+}
+
+function ownerWindow(element: HTMLElement): Window & typeof globalThis {
+  const eventView = element.ownerDocument.defaultView;
+  if (eventView === null) {
+    throw new Error("Expected test document to have a default window");
+  }
+  return eventView;
+}
+
+function stubElementFromPoint(element: Element) {
+  const elementFromPoint = vi.fn<typeof document.elementFromPoint>(() => element);
+  Object.defineProperty(document, "elementFromPoint", {
+    configurable: true,
+    value: elementFromPoint,
+  });
+  return elementFromPoint;
+}
+
+function setGroupRect(groupID: string, eventView: Window & typeof globalThis): void {
+  Object.defineProperty(screen.getByTestId(`workflow-graph-group-${groupID}`), "getBoundingClientRect", {
+    configurable: true,
+    value: () => new eventView.DOMRect(0, 0, 100, 100),
+  });
 }
 
 function creationHandleForNode(nodeID: string): HTMLElement {

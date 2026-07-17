@@ -94,13 +94,11 @@ func TestSchedulerStartProcessesRunnableWorkCreatedAfterStartup(t *testing.T) {
 
 	startedRun := createAndStartSchedulerTask(t, ctx, store, binding.ProjectID)
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
+	if testsetup.Until(time.Now().Add(2*time.Second), 10*time.Millisecond, func() bool {
 		started := starter.requests()
-		if len(started) == 1 && started[0].RunID == startedRun.RunID {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+		return len(started) == 1 && started[0].RunID == startedRun.RunID
+	}) {
+		return
 	}
 	t.Fatalf("scheduler did not process post-start runnable run; requests=%+v", starter.requests())
 }

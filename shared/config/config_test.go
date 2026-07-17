@@ -598,51 +598,105 @@ func TestLoadSubagentRoleWorkflowSubagentMetadata(t *testing.T) {
 	}
 }
 
-func TestLoadSubagentRoleRejectsReservedNames(t *testing.T) {
-	for _, reserved := range []string{"default", "none", "self"} {
-		t.Run(reserved, func(t *testing.T) {
-			err := loadConfigTestFileError(t, "[subagents."+reserved+"]\nmodel = \"gpt-5.6-sol\"\n", LoadOptions{})
-			if err == nil {
-				t.Fatal("expected reserved role to fail")
-			}
-			if !errors.Is(err, errInvalidSubagentKey) {
-				t.Fatalf("unexpected error: %v", err)
-			}
-		})
+type configRejectionExpectation interface {
+	assert(t *testing.T, err error)
+}
+
+type configErrorChainExpectation []error
+
+func (expected configErrorChainExpectation) assert(t *testing.T, err error) {
+	t.Helper()
+	for _, target := range expected {
+		if !errors.Is(err, target) {
+			t.Fatalf("error = %v, want errors.Is target %v", err, target)
+		}
 	}
 }
 
-func TestLoadSubagentRoleRejectsInvalidMetadata(t *testing.T) {
+type unknownConfigKeyExpectation string
+
+func (expected unknownConfigKeyExpectation) assert(t *testing.T, err error) {
+	t.Helper()
+	if !unknownSettingsKeyReported(err, string(expected)) {
+		t.Fatalf("error = %v, want unknown settings key %q", err, expected)
+	}
+}
+
+type configKeyTypeExpectation string
+
+func (expected configKeyTypeExpectation) assert(t *testing.T, err error) {
+	t.Helper()
+	var typeErr *SettingsKeyTypeError
+	if !errors.As(err, &typeErr) || typeErr.ExpectedType != string(expected) {
+		t.Fatalf("error = %v, want settings key type %q", err, expected)
+	}
+}
+
+func TestLoadSubagentRoleRejections(t *testing.T) {
 	tests := []struct {
-		name  string
-		body  string
-		match func(error) bool
+		name string
+		body string
+		want configRejectionExpectation
 	}{
-		{name: "description type", body: "[subagents.worker]\ndescription = 123\n", match: func(err error) bool {
-			var typeErr *SettingsKeyTypeError
-			return errors.As(err, &typeErr) && typeErr.ExpectedType == "string"
-		}},
-		{name: "agent callable type", body: "[subagents.worker]\nagent_callable = \"no\"\n", match: func(err error) bool {
-			var typeErr *SettingsKeyTypeError
-			return errors.As(err, &typeErr) && typeErr.ExpectedType == "boolean"
-		}},
-		{name: "workflow subagent type", body: "[subagents.worker]\nworkflow_subagent = \"no\"\n", match: func(err error) bool {
-			var typeErr *SettingsKeyTypeError
-			return errors.As(err, &typeErr) && typeErr.ExpectedType == "boolean"
-		}},
-		{name: "description length", body: "[subagents.worker]\ndescription = \"" + strings.Repeat("x", MaxSubagentDescriptionChars+1) + "\"\n", match: func(err error) bool {
-			return errors.Is(err, errSubagentDescriptionTooLong)
-		}},
+		{name: "reserved name/default", body: "[subagents.default]\nmodel = \"gpt-5.6-sol\"\n", want: configErrorChainExpectation{errInvalidSubagentKey}},
+		{name: "reserved name/none", body: "[subagents.none]\nmodel = \"gpt-5.6-sol\"\n", want: configErrorChainExpectation{errInvalidSubagentKey}},
+		{name: "reserved name/self", body: "[subagents.self]\nmodel = \"gpt-5.6-sol\"\n", want: configErrorChainExpectation{errInvalidSubagentKey}},
+		{name: "invalid metadata/description type", body: "[subagents.worker]\ndescription = 123\n", want: configKeyTypeExpectation("string")},
+		{name: "invalid metadata/agent callable type", body: "[subagents.worker]\nagent_callable = \"no\"\n", want: configKeyTypeExpectation("boolean")},
+		{name: "invalid metadata/workflow subagent type", body: "[subagents.worker]\nworkflow_subagent = \"no\"\n", want: configKeyTypeExpectation("boolean")},
+		{name: "invalid metadata/description length", body: "[subagents.worker]\ndescription = \"" + strings.Repeat("x", MaxSubagentDescriptionChars+1) + "\"\n", want: configErrorChainExpectation{errSubagentDescriptionTooLong}},
+		{name: "nested subagents table", body: strings.Join([]string{
+			"model = \"gpt-5.6-sol\"",
+			"",
+			"[subagents.fast]",
+			"thinking_level = \"low\"",
+			"",
+			"[subagents.fast.subagents.worker]",
+			"thinking_level = \"high\"",
+		}, "\n"), want: unknownConfigKeyExpectation("subagents.fast.subagents")},
+		{name: "unknown key/unknown toggle", body: strings.Join([]string{
+			"model = \"gpt-5.6-sol\"",
+			"",
+			"[subagents.fast]",
+			"thinking_level = \"low\"",
+			"unknown_toggle = true",
+		}, "\n"), want: unknownConfigKeyExpectation("subagents.fast.unknown_toggle")},
+		{name: "unknown key/workflow subagent typo", body: strings.Join([]string{
+			"model = \"gpt-5.6-sol\"",
+			"",
+			"[subagents.fast]",
+			"thinking_level = \"low\"",
+			"workflow_subagent_typo = true",
+		}, "\n"), want: unknownConfigKeyExpectation("subagents.fast.workflow_subagent_typo")},
+		{name: "invalid values", body: strings.Join([]string{
+			"model = \"gpt-5.6-sol\"",
+			"",
+			"[subagents.fast]",
+			"provider_override = \"bogus\"",
+		}, "\n"), want: configErrorChainExpectation{errSubagentRole}},
+		{name: "model context window below minimum", body: strings.Join([]string{
+			"[subagents.fast]",
+			"model_context_window = 39999",
+			"context_compaction_threshold_tokens = 30000",
+		}, "\n"), want: configErrorChainExpectation{errSubagentRole, errModelContextWindowBelowMinimum}},
+		{name: "reviewer model context window below minimum", body: strings.Join([]string{
+			"[subagents.fast.reviewer]",
+			"model_context_window = 39999",
+		}, "\n"), want: configErrorChainExpectation{errSubagentRole, errModelContextWindowBelowMinimum}},
+		{name: "persistence root", body: strings.Join([]string{
+			"model = \"gpt-5.6-sol\"",
+			"",
+			"[subagents.fast]",
+			"persistence_root = \"/tmp/custom\"",
+		}, "\n"), want: unknownConfigKeyExpectation("subagents.fast.persistence_root")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := loadConfigTestFileError(t, tt.body, LoadOptions{})
 			if err == nil {
-				t.Fatal("expected metadata error")
+				t.Fatal("expected subagent role config rejection")
 			}
-			if !tt.match(err) {
-				t.Fatalf("unexpected error: %v", err)
-			}
+			tt.want.assert(t, err)
 		})
 	}
 }
@@ -807,48 +861,6 @@ func TestParseSubagentRoleSystemPromptFileResolvesConfigRelativePath(t *testing.
 	}
 }
 
-func TestLoadSubagentRoleRejectsNestedSubagentsTable(t *testing.T) {
-	contents := strings.Join([]string{
-		"model = \"gpt-5.6-sol\"",
-		"",
-		"[subagents.fast]",
-		"thinking_level = \"low\"",
-		"",
-		"[subagents.fast.subagents.worker]",
-		"thinking_level = \"high\"",
-	}, "\n")
-
-	err := loadConfigTestFileError(t, contents, LoadOptions{})
-	if err == nil {
-		t.Fatal("expected nested subagents table to fail")
-	}
-	if !unknownSettingsKeyReported(err, "subagents.fast.subagents") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestLoadSubagentRoleRejectsUnknownKeys(t *testing.T) {
-	for _, key := range []string{"unknown_toggle", "workflow_subagent_typo"} {
-		t.Run(key, func(t *testing.T) {
-			contents := strings.Join([]string{
-				"model = \"gpt-5.6-sol\"",
-				"",
-				"[subagents.fast]",
-				"thinking_level = \"low\"",
-				key + " = true",
-			}, "\n")
-
-			err := loadConfigTestFileError(t, contents, LoadOptions{})
-			if err == nil {
-				t.Fatal("expected unknown subagent key to fail")
-			}
-			if !unknownSettingsKeyReported(err, "subagents.fast."+key) {
-				t.Fatalf("unexpected error: %v", err)
-			}
-		})
-	}
-}
-
 func TestLoadResolvesWorktreeBaseDirRelativeToPersistenceRoot(t *testing.T) {
 	root := t.TempDir()
 	workspace := t.TempDir()
@@ -946,73 +958,6 @@ func TestLoadCreatesWorktreeBaseDir(t *testing.T) {
 	}
 	if !info.IsDir() {
 		t.Fatalf("expected worktree base dir, got mode %v", info.Mode())
-	}
-}
-
-func TestLoadSubagentRoleRejectsInvalidValues(t *testing.T) {
-	contents := strings.Join([]string{
-		"model = \"gpt-5.6-sol\"",
-		"",
-		"[subagents.fast]",
-		"provider_override = \"bogus\"",
-	}, "\n")
-
-	err := loadConfigTestFileError(t, contents, LoadOptions{})
-	if err == nil {
-		t.Fatal("expected invalid subagent role values to fail")
-	}
-	if !errors.Is(err, errSubagentRole) {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestLoadSubagentRoleRejectsModelContextWindowBelowMinimum(t *testing.T) {
-	err := loadConfigTestFileError(t, strings.Join([]string{
-		"[subagents.fast]",
-		"model_context_window = 39999",
-		"context_compaction_threshold_tokens = 30000",
-	}, "\n"), LoadOptions{})
-	if err == nil {
-		t.Fatal("expected subagent model_context_window below minimum validation error")
-	}
-	if !errors.Is(err, errSubagentRole) {
-		t.Fatalf("expected subagent role validation error, got %v", err)
-	}
-	if !errors.Is(err, errModelContextWindowBelowMinimum) {
-		t.Fatalf("expected model context window minimum validation detail, got %v", err)
-	}
-}
-
-func TestLoadSubagentRoleRejectsReviewerModelContextWindowBelowMinimum(t *testing.T) {
-	err := loadConfigTestFileError(t, strings.Join([]string{
-		"[subagents.fast.reviewer]",
-		"model_context_window = 39999",
-	}, "\n"), LoadOptions{})
-	if err == nil {
-		t.Fatal("expected subagent reviewer.model_context_window below minimum validation error")
-	}
-	if !errors.Is(err, errSubagentRole) {
-		t.Fatalf("expected subagent role validation error, got %v", err)
-	}
-	if !errors.Is(err, errModelContextWindowBelowMinimum) {
-		t.Fatalf("expected model context window minimum validation detail, got %v", err)
-	}
-}
-
-func TestLoadSubagentRoleRejectsPersistenceRoot(t *testing.T) {
-	contents := strings.Join([]string{
-		"model = \"gpt-5.6-sol\"",
-		"",
-		"[subagents.fast]",
-		"persistence_root = \"/tmp/custom\"",
-	}, "\n")
-
-	err := loadConfigTestFileError(t, contents, LoadOptions{})
-	if err == nil {
-		t.Fatal("expected persistence_root in subagent role to fail")
-	}
-	if !unknownSettingsKeyReported(err, "subagents.fast.persistence_root") {
-		t.Fatalf("expected unknown persistence_root subagent key, got: %v", err)
 	}
 }
 

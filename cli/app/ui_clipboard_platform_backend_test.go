@@ -129,24 +129,8 @@ func TestSystemClipboardPasterDarwinReturnsTextAndCleansReservedImagePath(t *tes
 		return []byte(`{"kind":"text","text":"α\nβ"}`), nil
 	}
 
-	content, err := paster.Paste(context.Background())
-	if err != nil {
-		t.Fatalf("paste clipboard: %v", err)
-	}
-	text, ok := content.(uiClipboardText)
-	if !ok {
-		t.Fatalf("content = %T, want uiClipboardText", content)
-	}
-	if got, want := text.Text, "α\nβ"; got != want {
-		t.Fatalf("text = %q, want %q", got, want)
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read temporary directory: %v", err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("reserved image file was not cleaned: %v", entries)
-	}
+	requireClipboardText(t, paster, "α\nβ")
+	requireEmptyClipboardDir(t, dir)
 }
 
 func TestSystemClipboardPasterWindowsReturnsUnicodeTextThroughASCIIEnvelope(t *testing.T) {
@@ -167,21 +151,8 @@ func TestSystemClipboardPasterWindowsReturnsUnicodeTextThroughASCIIEnvelope(t *t
 		return nil
 	}
 
-	content, err := paster.Paste(context.Background())
-	if err != nil {
-		t.Fatalf("paste clipboard: %v", err)
-	}
-	got, ok := content.(uiClipboardText)
-	if !ok || got.Text != text {
-		t.Fatalf("content = %#v, want text %q", content, text)
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read temporary directory: %v", err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("reserved image file was not cleaned: %v", entries)
-	}
+	requireClipboardText(t, paster, text)
+	requireEmptyClipboardDir(t, dir)
 }
 
 type closeErrorClipboardFile struct {
@@ -236,14 +207,7 @@ func TestSystemClipboardPasterWaylandPreservesTextBytes(t *testing.T) {
 	runner.outputs[clipboardCommandKey("wl-paste", "--list-types")] = []byte("text/plain;charset=utf-8\n")
 	runner.outputs[clipboardCommandKey("wl-paste", "--no-newline", "--type", "text/plain;charset=utf-8")] = []byte("α\nβ\n")
 
-	content, err := paster.Paste(context.Background())
-	if err != nil {
-		t.Fatalf("paste clipboard: %v", err)
-	}
-	text, ok := content.(uiClipboardText)
-	if !ok || text.Text != "α\nβ\n" {
-		t.Fatalf("content = %#v, want text with exact bytes", content)
-	}
+	requireClipboardText(t, paster, "α\nβ\n")
 }
 
 func TestSystemClipboardPasterRejectsInvalidLinuxTextUTF8(t *testing.T) {
@@ -275,14 +239,7 @@ func TestSystemClipboardPasterX11PreservesTextWithoutImageTarget(t *testing.T) {
 	runner.outputs[clipboardCommandKey("xclip", "-selection", "clipboard", "-target", "TARGETS", "-o")] = []byte("text/plain\nimage/jpeg\n")
 	runner.outputs[clipboardCommandKey("xclip", "-selection", "clipboard", "-target", "text/plain", "-o")] = []byte("α\nβ\n")
 
-	content, err := paster.Paste(context.Background())
-	if err != nil {
-		t.Fatalf("paste clipboard: %v", err)
-	}
-	text, ok := content.(uiClipboardText)
-	if !ok || text.Text != "α\nβ\n" {
-		t.Fatalf("content = %#v, want text with original newlines", content)
-	}
+	requireClipboardText(t, paster, "α\nβ\n")
 }
 
 func TestSystemClipboardPasterCleansReservedImagePathAfterMalformedPlatformEnvelope(t *testing.T) {
@@ -301,13 +258,7 @@ func TestSystemClipboardPasterCleansReservedImagePathAfterMalformedPlatformEnvel
 			if _, err := paster.Paste(context.Background()); err == nil {
 				t.Fatal("expected malformed envelope error")
 			}
-			entries, err := os.ReadDir(dir)
-			if err != nil {
-				t.Fatalf("read temporary directory: %v", err)
-			}
-			if len(entries) != 0 {
-				t.Fatalf("reserved image file was not cleaned: %v", entries)
-			}
+			requireEmptyClipboardDir(t, dir)
 		})
 	}
 }
@@ -332,5 +283,28 @@ func TestSystemClipboardPasterSurfacesReservedImageCleanupFailure(t *testing.T) 
 				t.Fatal("expected temporary image cleanup error")
 			}
 		})
+	}
+}
+
+func requireClipboardText(t *testing.T, paster *systemClipboardPaster, want string) {
+	t.Helper()
+	content, err := paster.Paste(context.Background())
+	if err != nil {
+		t.Fatalf("paste clipboard: %v", err)
+	}
+	text, ok := content.(uiClipboardText)
+	if !ok || text.Text != want {
+		t.Fatalf("content = %#v, want text %q", content, want)
+	}
+}
+
+func requireEmptyClipboardDir(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read temporary directory: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("reserved image file was not cleaned: %v", entries)
 	}
 }

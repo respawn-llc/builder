@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	"core/server/authservice"
 	"core/server/metadata"
@@ -279,20 +280,14 @@ func waitForBindingCommandServer(t *testing.T, workspace string) {
 	}
 	healthURL := config.ServerHTTPBaseURL(cfg) + protocol.HealthPath
 	client := &http.Client{Timeout: 250 * time.Millisecond}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
+	testsetup.RequireUntil(t, time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
 		resp, err := client.Get(healthURL)
 		if err == nil {
 			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return
-			}
+			return resp.StatusCode == http.StatusOK
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("binding command test server did not become healthy at %s", healthURL)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return false
+	}, "binding command test server did not become healthy at %s", healthURL)
 }
 
 func TestProjectSubcommandPrintsBoundProjectID(t *testing.T) {

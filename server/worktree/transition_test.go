@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -67,23 +68,20 @@ func TestEnterWorktreePreflightObservesCancellationWhileWorkspaceMutationLocked(
 func waitForWorkspaceMutationReferences(t *testing.T, service *Service, workspaceID string, want int) {
 	t.Helper()
 	workspaceID = strings.TrimSpace(workspaceID)
-	deadline := time.Now().Add(3 * time.Second)
-	for {
+	refs := 0
+	if testsetup.Until(time.Now().Add(3*time.Second), 5*time.Millisecond, func() bool {
 		service.workspaceMu.Lock()
 		lock := service.workspaceLocks[workspaceID]
-		refs := 0
+		refs = 0
 		if lock != nil {
 			refs = lock.refs
 		}
 		service.workspaceMu.Unlock()
-		if refs == want {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("workspace mutation references = %d, want %d", refs, want)
-		}
-		time.Sleep(5 * time.Millisecond)
+		return refs == want
+	}) {
+		return
 	}
+	t.Fatalf("workspace mutation references = %d, want %d", refs, want)
 }
 
 func TestEnterWorktreeRejectsInvalidSelectorsBeforeScheduling(t *testing.T) {

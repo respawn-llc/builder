@@ -1,43 +1,13 @@
 package startup
 
 import (
-	"context"
 	"errors"
 	"sync"
 
 	"core/server/auth"
-	"core/server/authservice"
-	serverbootstrap "core/server/bootstrap"
 	"core/server/core"
-	"core/server/runtime"
-	"core/shared/apicontract"
 	"core/shared/config"
 )
-
-type EmbeddedAuthHandler interface {
-	WrapStore(base auth.Store) auth.Store
-	NeedsInteraction(req authservice.FlowInteractionRequest) bool
-	Interact(ctx context.Context, req authservice.FlowInteractionRequest) (authservice.FlowInteractionOutcome, error)
-}
-
-type EmbeddedOnboardingHandler func(ctx context.Context, req EmbeddedOnboardingRequest) (config.App, error)
-
-type EmbeddedOnboardingRequest struct {
-	Config                config.App
-	AuthManager           *auth.Manager
-	CapabilityFactsClient apicontract.CapabilityFactsService
-	ReloadConfig          func() (config.App, error)
-}
-
-type EmbeddedStartHooks struct {
-	Auth       EmbeddedAuthHandler
-	Onboarding EmbeddedOnboardingHandler
-}
-
-type BackgroundRouter interface {
-	SetActiveSession(sessionID string, engine *runtime.Engine)
-	ClearActiveSession(sessionID string, engine *runtime.Engine)
-}
 
 type EmbeddedServer struct {
 	*core.Core
@@ -142,44 +112,4 @@ func (s *EmbeddedServer) Close() error {
 		return nil
 	}
 	return s.Core.Close()
-}
-
-func StartEmbedded(ctx context.Context, req serverbootstrap.Request, hooks EmbeddedStartHooks) (*EmbeddedServer, error) {
-	return StartEmbeddedWithOptions(ctx, req, hooks, Options{})
-}
-
-func StartEmbeddedWithOptions(ctx context.Context, req serverbootstrap.Request, hooks EmbeddedStartHooks, opts Options) (*EmbeddedServer, error) {
-	if hooks.Auth == nil {
-		return nil, errors.New("auth handler is required")
-	}
-	resolved, err := serverbootstrap.ResolveConfig(req)
-	if err != nil {
-		return nil, err
-	}
-	if !resolved.Config.Source.SettingsFileExists && hooks.Onboarding == nil {
-		cfg, deps, err := buildStartupControlSurface(ctx, req, true, hooks.Auth, opts)
-		if err != nil {
-			if errors.Is(err, errStartupControlSurfaceNotRequired) {
-				return startConfiguredEmbeddedServer(ctx, req, true, hooks.Auth, nil, opts)
-			}
-			return nil, err
-		}
-		return &EmbeddedServer{deps: deps, cfg: cfg}, nil
-	}
-	onboarding := func(ctx context.Context, onboardingReq OnboardingRequest) (config.App, error) {
-		if hooks.Onboarding == nil {
-			return onboardingReq.Config, nil
-		}
-		return hooks.Onboarding(ctx, EmbeddedOnboardingRequest{
-			Config:                onboardingReq.Config,
-			AuthManager:           onboardingReq.AuthManager,
-			CapabilityFactsClient: onboardingReq.CapabilityFactsClient,
-			ReloadConfig:          onboardingReq.ReloadConfig,
-		})
-	}
-	appCore, err := startCoreWithBootstrap(ctx, req, true, hooks.Auth, onboarding, opts)
-	if err != nil {
-		return nil, err
-	}
-	return &EmbeddedServer{Core: appCore}, nil
 }

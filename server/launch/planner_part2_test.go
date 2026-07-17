@@ -69,12 +69,11 @@ func TestPlannerInteractiveReopensSelectedSessionWithinActiveContainer(t *testin
 		t.Fatalf("persist selected session meta: %v", err)
 	}
 	writeSessionEventArtifact(t, filepath.Join(containerB, selected.Meta().SessionID))
-	planner := Planner{
-		Config:            config.App{WorkspaceRoot: "/tmp/workspace-a", PersistenceRoot: root, Settings: config.Settings{}},
-		ContainerDir:      containerA,
-		StoreOptions:      persistence.Options(),
-		PersistedSessions: persistence,
-	}
+	planner := newPersistenceBackedTestPlanner(
+		config.App{WorkspaceRoot: "/tmp/workspace-a", PersistenceRoot: root, Settings: config.Settings{}},
+		containerA,
+		persistence,
+	)
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, selected.Meta().SessionID))})
 	if err != nil {
@@ -104,12 +103,11 @@ func TestPlannerSelectedSessionUsesAuthoritativeMetadata(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("record authoritative session metadata: %v", err)
 	}
-	planner := Planner{
-		Config:            config.App{WorkspaceRoot: authoritative.WorkspaceRoot, PersistenceRoot: root, Settings: config.Settings{}},
-		ContainerDir:      container,
-		StoreOptions:      persistence.Options(),
-		PersistedSessions: persistence,
-	}
+	planner := newPersistenceBackedTestPlanner(
+		config.App{WorkspaceRoot: authoritative.WorkspaceRoot, PersistenceRoot: root, Settings: config.Settings{}},
+		container,
+		persistence,
+	)
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, selected.Meta().SessionID))})
 	if err != nil {
@@ -130,12 +128,11 @@ func TestPlannerSelectedSessionIDUsesAuthoritativePersistedIdentity(t *testing.T
 		t.Fatalf("persist selected session meta: %v", err)
 	}
 	writeSessionEventArtifact(t, filepath.Join(containerB, selected.Meta().SessionID))
-	planner := Planner{
-		Config:            config.App{WorkspaceRoot: "/tmp/workspace-a", PersistenceRoot: root, Settings: config.Settings{}},
-		ContainerDir:      containerA,
-		StoreOptions:      persistence.Options(),
-		PersistedSessions: persistence,
-	}
+	planner := newPersistenceBackedTestPlanner(
+		config.App{WorkspaceRoot: "/tmp/workspace-a", PersistenceRoot: root, Settings: config.Settings{}},
+		containerA,
+		persistence,
+	)
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, selected.Meta().SessionID))})
 	if err != nil {
@@ -156,12 +153,11 @@ func TestPlannerSelectedSessionIDDoesNotOpenAcrossProjectContainers(t *testing.T
 	if err := otherProjectSession.SetName("other project session"); err != nil {
 		t.Fatalf("persist other project session meta: %v", err)
 	}
-	planner := Planner{
-		Config:            config.App{WorkspaceRoot: "/tmp/project-workspace", PersistenceRoot: root, Settings: config.Settings{}},
-		ContainerDir:      projectContainer,
-		StoreOptions:      persistence.Options(),
-		PersistedSessions: persistence,
-	}
+	planner := newPersistenceBackedTestPlanner(
+		config.App{WorkspaceRoot: "/tmp/project-workspace", PersistenceRoot: root, Settings: config.Settings{}},
+		projectContainer,
+		persistence,
+	)
 
 	_, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, otherProjectSession.Meta().SessionID))})
 	if err == nil || !errors.Is(err, session.ErrSessionNotFound) {
@@ -181,12 +177,11 @@ func TestPlannerSelectedSessionIDRejectsSymlinkOutsideActiveContainer(t *testing
 	if err := os.Symlink(escaped.Dir(), filepath.Join(containerA, "escaped-link")); err != nil {
 		t.Fatalf("symlink escaped session: %v", err)
 	}
-	planner := Planner{
-		Config:            config.App{WorkspaceRoot: "/tmp/workspace-a", PersistenceRoot: root, Settings: config.Settings{}},
-		ContainerDir:      containerA,
-		StoreOptions:      persistence.Options(),
-		PersistedSessions: persistence,
-	}
+	planner := newPersistenceBackedTestPlanner(
+		config.App{WorkspaceRoot: "/tmp/workspace-a", PersistenceRoot: root, Settings: config.Settings{}},
+		containerA,
+		persistence,
+	)
 
 	if _, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, "escaped-link"))}); err == nil {
 		t.Fatal("expected planner to reject symlinked selected session outside active container")

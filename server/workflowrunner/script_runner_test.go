@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/workflow"
 	"core/server/workflowstore"
 )
@@ -174,26 +175,24 @@ type workflowScriptProcessIdentity struct {
 
 func waitForWorkflowScriptProcessIdentity(t *testing.T, path string, timeout time.Duration) workflowScriptProcessIdentity {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	var identity workflowScriptProcessIdentity
+	testsetup.RequireUntil(t, time.Now().Add(timeout), 10*time.Millisecond, func() bool {
 		body, err := os.ReadFile(path)
 		if err == nil {
-			var identity workflowScriptProcessIdentity
 			if err := json.Unmarshal(body, &identity); err != nil {
 				t.Fatalf("decode process identity %s: %v", path, err)
 			}
 			if identity.ProcessGroupID <= 0 {
 				t.Fatalf("process identity = %+v, want positive process group id", identity)
 			}
-			return identity
+			return true
 		}
 		if !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("read process identity %s: %v", path, err)
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", path)
-	return workflowScriptProcessIdentity{}
+		return false
+	}, "timed out waiting for %s", path)
+	return identity
 }
 
 func shellQuote(value string) string {

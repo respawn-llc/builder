@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"core/server/auth"
 	"core/server/authservice"
@@ -59,87 +58,6 @@ func (h stubAuthHandler) LookupEnv(key string) string {
 		return ""
 	}
 	return h.lookupEnv(key)
-}
-
-type stubAuthState struct {
-	cfg       config.App
-	oauthOpts auth.OpenAIOAuthOptions
-	mgr       *auth.Manager
-}
-
-func (s stubAuthState) Config() config.App                    { return s.cfg }
-func (s stubAuthState) OAuthOptions() auth.OpenAIOAuthOptions { return s.oauthOpts }
-func (s stubAuthState) AuthManager() *auth.Manager            { return s.mgr }
-
-func TestEnsureReadyUsesAuthHandlerLookupEnv(t *testing.T) {
-	mgr := auth.NewManager(auth.NewMemoryStore(auth.EmptyState()), nil, time.Now)
-	sawInteraction := false
-	err := EnsureReady(context.Background(), stubAuthState{
-		cfg: config.App{Settings: config.Settings{
-			Theme: "dark",
-		}},
-		oauthOpts: auth.OpenAIOAuthOptions{ClientID: "client-test"},
-		mgr:       mgr,
-	}, stubAuthHandler{
-		lookupEnv: func(key string) string {
-			if key == "OPENAI_API_KEY" {
-				return "sk-env"
-			}
-			return ""
-		},
-		needs: func(req authservice.FlowInteractionRequest) bool {
-			sawInteraction = true
-			if !req.HasEnvAPIKey {
-				t.Fatal("expected lookup env api key to be reflected in interaction request")
-			}
-			if req.Theme != "dark" {
-				t.Fatalf("theme = %q, want dark", req.Theme)
-			}
-			return true
-		},
-		interact: func(context.Context, authservice.FlowInteractionRequest) error {
-			return auth.ErrAuthNotConfigured
-		},
-	})
-	if !errors.Is(err, auth.ErrAuthNotConfigured) {
-		t.Fatalf("expected auth not configured, got %v", err)
-	}
-	if !sawInteraction {
-		t.Fatal("expected ensure ready to invoke auth interaction")
-	}
-}
-
-func TestEnsureReadyPromptsDuringExplicitReauthWhenStartupAuthIsOptional(t *testing.T) {
-	mgr := auth.NewManager(auth.NewMemoryStore(auth.EmptyState()), nil, time.Now)
-	called := false
-	err := EnsureReady(context.Background(), stubAuthState{
-		cfg: config.App{Settings: config.Settings{
-			Theme:         "dark",
-			OpenAIBaseURL: "http://127.0.0.1:8080/v1",
-		}},
-		mgr: mgr,
-	}, stubAuthHandler{
-		needs: func(req authservice.FlowInteractionRequest) bool {
-			return !called && req.PromptOptional && !req.Gate.Ready
-		},
-		interact: func(context.Context, authservice.FlowInteractionRequest) error {
-			called = true
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("ensure ready: %v", err)
-	}
-	if !called {
-		t.Fatal("expected explicit reauth to prompt even when startup auth is optional")
-	}
-}
-
-func TestEnsureReadyRequiresAuthManager(t *testing.T) {
-	err := EnsureReady(context.Background(), stubAuthState{}, stubAuthHandler{})
-	if err == nil || !errors.Is(err, errAuthManagerRequired) {
-		t.Fatalf("expected missing auth manager error, got %v", err)
-	}
 }
 
 func TestBuildRequestMapsStartupOptionsAndLookupEnv(t *testing.T) {
@@ -236,7 +154,7 @@ var startupNoopOnboarding = OnboardingHandler(func(_ context.Context, req Onboar
 	return reloaded, nil
 })
 
-func TestStartCoreOnboardingReceivesPreCoreCapabilityFactsClient(t *testing.T) {
+func TestStartWithOptionsOnboardingReceivesPreCoreCapabilityFactsClient(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	t.Setenv("HOME", home)
@@ -261,11 +179,11 @@ func TestStartCoreOnboardingReceivesPreCoreCapabilityFactsClient(t *testing.T) {
 		return startupNoopOnboarding(ctx, req)
 	})
 
-	appCore, err := StartCore(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, startupEnvAuthHandler{}, onboarding)
+	server, err := StartWithOptions(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, startupEnvAuthHandler{}, onboarding, Options{})
 	if err != nil {
-		t.Fatalf("StartCore: %v", err)
+		t.Fatalf("StartWithOptions: %v", err)
 	}
-	t.Cleanup(func() { _ = appCore.Close() })
+	t.Cleanup(func() { _ = server.Close() })
 	if !onboardingCalled {
 		t.Fatal("expected onboarding to run")
 	}
@@ -282,49 +200,49 @@ func factsContainGeneratedSkillCandidate(facts serverapi.CapabilityFactsResponse
 	return false
 }
 
-func TestHeadlessHandlersStartCoreWithoutCLIFrontendDependencies(t *testing.T) {
+func TestHeadlessHandlersStartWithOptionsWithoutCLIFrontendDependencies(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	t.Setenv("HOME", home)
 
 	authHandler, onboardingHandler := NewHeadlessHandlers(startupTestAuthLookupEnv)
 	registerStartupWorkspace(t, workspace)
-	appCore, err := StartCore(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, authHandler, onboardingHandler)
+	server, err := StartWithOptions(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, authHandler, onboardingHandler, Options{})
 	if err != nil {
-		t.Fatalf("StartCore: %v", err)
+		t.Fatalf("StartWithOptions: %v", err)
 	}
-	defer func() { _ = appCore.Close() }()
+	defer func() { _ = server.Close() }()
 
-	if appCore.Config().WorkspaceRoot != workspace {
-		t.Fatalf("workspace root = %q, want %q", appCore.Config().WorkspaceRoot, workspace)
+	if server.Config().WorkspaceRoot != workspace {
+		t.Fatalf("workspace root = %q, want %q", server.Config().WorkspaceRoot, workspace)
 	}
-	if !appCore.Config().Source.SettingsFileExists {
+	if !server.Config().Source.SettingsFileExists {
 		t.Fatal("expected headless startup onboarding to ensure settings file exists")
 	}
-	if appCore.Config().Source.SettingsPath == "" {
+	if server.Config().Source.SettingsPath == "" {
 		t.Fatal("expected settings path to be populated after headless onboarding")
 	}
-	if _, err := os.Stat(appCore.Config().Source.SettingsPath); err != nil {
+	if _, err := os.Stat(server.Config().Source.SettingsPath); err != nil {
 		t.Fatalf("expected settings file to exist: %v", err)
 	}
 }
 
-func TestStartCoreRejectsSecondOwnerForSamePersistenceRoot(t *testing.T) {
+func TestStartWithOptionsRejectsSecondOwnerForSamePersistenceRoot(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	t.Setenv("HOME", home)
 
 	authHandler, onboardingHandler := NewHeadlessHandlers(startupTestAuthLookupEnv)
 	registerStartupWorkspace(t, workspace)
-	first, err := StartCore(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, authHandler, onboardingHandler)
+	first, err := StartWithOptions(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, authHandler, onboardingHandler, Options{})
 	if err != nil {
-		t.Fatalf("StartCore first: %v", err)
+		t.Fatalf("StartWithOptions first: %v", err)
 	}
 	defer func() { _ = first.Close() }()
 
-	_, err = StartCore(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, authHandler, onboardingHandler)
+	_, err = StartWithOptions(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, authHandler, onboardingHandler, Options{})
 	if !errors.Is(err, corepkg.ErrPersistenceRootBusy) {
-		t.Fatalf("StartCore second error = %v, want ErrPersistenceRootBusy", err)
+		t.Fatalf("StartWithOptions second error = %v, want ErrPersistenceRootBusy", err)
 	}
 }
 
@@ -335,7 +253,7 @@ func TestHeadlessHandlersFailFastWithoutCredentials(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 
 	authHandler, onboardingHandler := NewHeadlessHandlers(nil)
-	_, err := StartCore(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, authHandler, onboardingHandler)
+	_, err := StartWithOptions(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, authHandler, onboardingHandler, Options{})
 	if !errors.Is(err, auth.ErrAuthNotConfigured) {
 		t.Fatalf("expected auth not configured, got %v", err)
 	}
@@ -349,19 +267,19 @@ func TestHeadlessHandlersAllowExplicitOpenAIBaseURLWithoutCredentials(t *testing
 
 	authHandler, onboardingHandler := NewHeadlessHandlers(nil)
 	registerStartupWorkspace(t, workspace)
-	appCore, err := StartCore(context.Background(), Request{
+	server, err := StartWithOptions(context.Background(), Request{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		OpenAIBaseURL:         "http://127.0.0.1:8080/v1",
 		OpenAIBaseURLExplicit: true,
-	}, authHandler, onboardingHandler)
+	}, authHandler, onboardingHandler, Options{})
 	if err != nil {
-		t.Fatalf("StartCore: %v", err)
+		t.Fatalf("StartWithOptions: %v", err)
 	}
-	defer func() { _ = appCore.Close() }()
+	defer func() { _ = server.Close() }()
 
-	if appCore.Config().Settings.OpenAIBaseURL != "http://127.0.0.1:8080/v1" {
-		t.Fatalf("openai base url = %q", appCore.Config().Settings.OpenAIBaseURL)
+	if server.Config().Settings.OpenAIBaseURL != "http://127.0.0.1:8080/v1" {
+		t.Fatalf("openai base url = %q", server.Config().Settings.OpenAIBaseURL)
 	}
 }
 

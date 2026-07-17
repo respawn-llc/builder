@@ -795,51 +795,29 @@ func TestLoadRejectsDuplicateNormalizedSkillNamedEnabledKeys(t *testing.T) {
 }
 
 func TestLoadNotificationMethodPrecedenceAndValidation(t *testing.T) {
-	_, workspace, cfg := loadConfigTestFileApp(t, "notification_method = \"bel\"\n", LoadOptions{})
-	if cfg.Settings.NotificationMethod != "bel" {
-		t.Fatalf("expected file notification_method=bel, got %q", cfg.Settings.NotificationMethod)
-	}
-	if got := cfg.Source.Sources["notification_method"]; got != "file" {
-		t.Fatalf("expected notification_method source file, got %q", got)
-	}
-
-	t.Setenv("KENT_NOTIFICATION_METHOD", "osc9")
-	cfg = loadConfigTestApp(t, workspace, LoadOptions{})
-	if cfg.Settings.NotificationMethod != "osc9" {
-		t.Fatalf("expected env notification_method=osc9, got %q", cfg.Settings.NotificationMethod)
-	}
-	if got := cfg.Source.Sources["notification_method"]; got != "env" {
-		t.Fatalf("expected notification_method source env, got %q", got)
-	}
-
-	t.Setenv("KENT_NOTIFICATION_METHOD", "bad")
-	if _, err := Load(workspace, LoadOptions{}); err == nil {
-		t.Fatal("expected invalid notification_method validation error")
-	}
+	workspace := assertConfigPrecedence(t, configPrecedenceCase[string]{
+		fileContents: "notification_method = \"bel\"\n",
+		sourceKey:    "notification_method",
+		fileWant:     "bel",
+		envName:      "KENT_NOTIFICATION_METHOD",
+		envValue:     "osc9",
+		envWant:      "osc9",
+		read:         func(settings Settings) string { return settings.NotificationMethod },
+	})
+	assertConfigEnvRejected(t, workspace, "KENT_NOTIFICATION_METHOD", "bad")
 }
 
 func TestLoadToolPreamblesPrecedence(t *testing.T) {
-	_, workspace, cfg := loadConfigTestFileApp(t, "tool_preambles = false\n", LoadOptions{})
-	if cfg.Settings.ToolPreambles {
-		t.Fatalf("expected file tool_preambles=false")
-	}
-	if got := cfg.Source.Sources["tool_preambles"]; got != "file" {
-		t.Fatalf("expected tool_preambles source file, got %q", got)
-	}
-
-	t.Setenv("KENT_TOOL_PREAMBLES", "true")
-	cfg = loadConfigTestApp(t, workspace, LoadOptions{})
-	if !cfg.Settings.ToolPreambles {
-		t.Fatalf("expected env tool_preambles=true")
-	}
-	if got := cfg.Source.Sources["tool_preambles"]; got != "env" {
-		t.Fatalf("expected tool_preambles source env, got %q", got)
-	}
-
-	t.Setenv("KENT_TOOL_PREAMBLES", "broken")
-	if _, err := Load(workspace, LoadOptions{}); err == nil {
-		t.Fatal("expected invalid KENT_TOOL_PREAMBLES error")
-	}
+	workspace := assertConfigPrecedence(t, configPrecedenceCase[bool]{
+		fileContents: "tool_preambles = false\n",
+		sourceKey:    "tool_preambles",
+		fileWant:     false,
+		envName:      "KENT_TOOL_PREAMBLES",
+		envValue:     "true",
+		envWant:      true,
+		read:         func(settings Settings) bool { return settings.ToolPreambles },
+	})
+	assertConfigEnvRejected(t, workspace, "KENT_TOOL_PREAMBLES", "broken")
 }
 
 func TestLoadAllowsReviewerAuthNoneWithInheritedCompatibleBaseURL(t *testing.T) {

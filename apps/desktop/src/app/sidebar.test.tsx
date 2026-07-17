@@ -18,74 +18,21 @@ describe("SidebarHost", () => {
   });
 
   it("uses the destination desired width for the initial width", async () => {
-    const {
-      restoreWindowWidth: restoreUncappedWindowWidth,
-      sidebar: uncappedSidebar,
-      unmount: unmountUncapped,
-    } = await renderOpenSidebarAtWindowWidth(1600);
-    try {
-      expect(sidebarWidthStyle(uncappedSidebar)).toBe(550);
-    } finally {
-      unmountUncapped();
-      restoreUncappedWindowWidth();
-    }
-
-    const {
-      restoreWindowWidth: restoreCappedWindowWidth,
-      sidebar: cappedSidebar,
-      unmount: unmountCapped,
-    } = await renderOpenSidebarAtWindowWidth(3000);
-    try {
-      expect(sidebarWidthStyle(cappedSidebar)).toBe(550);
-    } finally {
-      unmountCapped();
-      restoreCappedWindowWidth();
-    }
+    await expectOpenSidebarWidths(<OpenCustomSidebar />, [
+      [1600, 550],
+      [3000, 550],
+    ]);
   });
 
   it("clamps destination desired width by the global max and content minimum", async () => {
-    const {
-      restoreWindowWidth: restoreWideWindowWidth,
-      sidebar: wideSidebar,
-      unmount: unmountWide,
-    } = await renderOpenSidebarAtWindowWidth(1600, <OpenSizedCustomSidebar />);
-    try {
-      expect(sidebarWidthStyle(wideSidebar)).toBe(900);
-    } finally {
-      unmountWide();
-      restoreWideWindowWidth();
-    }
-
-    const {
-      restoreWindowWidth: restoreNarrowWindowWidth,
-      sidebar: narrowSidebar,
-      unmount: unmountNarrow,
-    } = await renderOpenSidebarAtWindowWidth(700, <OpenSizedCustomSidebar />);
-    try {
-      expect(sidebarWidthStyle(narrowSidebar)).toBe(595);
-    } finally {
-      unmountNarrow();
-      restoreNarrowWindowWidth();
-    }
+    await expectOpenSidebarWidths(<OpenSizedCustomSidebar />, [
+      [1600, 900],
+      [700, 595],
+    ]);
   });
 
   it("uses shift layout as the default destination mode", async () => {
-    render(
-      <I18nextProvider i18n={appI18n}>
-        <SidebarProvider>
-          <div className="relative flex min-h-0" data-testid="app-shell-content">
-            <div className="min-w-0 flex-1">
-              <OpenCustomSidebar />
-            </div>
-            <SidebarHost />
-          </div>
-        </SidebarProvider>
-      </I18nextProvider>,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Open sidebar" }));
-
-    const sidebar = await screen.findByRole("complementary", { name: "Settings" });
+    const { sidebar } = await renderOpenSidebar(<OpenCustomSidebar />);
     expect(sidebar).toHaveAttribute("data-mode", "shift");
     expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
@@ -93,44 +40,18 @@ describe("SidebarHost", () => {
   });
 
   it("keeps overlay destinations out of the flex layout", async () => {
-    render(
-      <I18nextProvider i18n={appI18n}>
-        <SidebarProvider>
-          <div className="relative flex min-h-0" data-testid="app-shell-content">
-            <div className="min-w-0 flex-1">
-              <OpenOverlaySidebar />
-            </div>
-            <SidebarHost />
-          </div>
-        </SidebarProvider>
-      </I18nextProvider>,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Open overlay sidebar" }));
-
-    const sidebar = await screen.findByRole("complementary", { name: "Create workflow" });
+    const { sidebar } = await renderOpenSidebar(<OpenOverlaySidebar />, {
+      destinationName: "Create workflow",
+      openButtonName: "Open overlay sidebar",
+    });
     expect(sidebar).toHaveAttribute("data-mode", "overlay");
     expect(screen.getByTestId("overlay-source-content")).toBeInTheDocument();
   });
 
   it("resizes from the leading edge without requiring pointer-capture APIs", async () => {
     mockSidebarLayout();
-    render(
-      <I18nextProvider i18n={appI18n}>
-        <SidebarProvider>
-          <div className="relative flex min-h-0" data-testid="app-shell-content">
-            <div className="min-w-0 flex-1">
-              <OpenCustomSidebar />
-            </div>
-            <SidebarHost />
-          </div>
-        </SidebarProvider>
-      </I18nextProvider>,
-    );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open sidebar" }));
-
-    const sidebar = await screen.findByRole("complementary", { name: "Settings" });
+    const { sidebar } = await renderOpenSidebar(<OpenCustomSidebar />);
     const resizeHandle = screen.getByRole("separator", { name: "Resize sidebar" });
     const initialWidth = sidebarWidthStyle(sidebar);
     fireEvent.pointerDown(resizeHandle, { button: 0, clientX: 700, pointerId: 1 });
@@ -148,21 +69,8 @@ describe("SidebarHost", () => {
   it("clamps the current width when the app shell narrows", async () => {
     let shellWidth = 1200;
     mockSidebarLayout(() => shellWidth);
-    render(
-      <I18nextProvider i18n={appI18n}>
-        <SidebarProvider>
-          <div className="relative flex min-h-0" data-testid="app-shell-content">
-            <div className="min-w-0 flex-1">
-              <OpenCustomSidebar />
-            </div>
-            <SidebarHost />
-          </div>
-        </SidebarProvider>
-      </I18nextProvider>,
-    );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open sidebar" }));
-    const sidebar = await screen.findByRole("complementary", { name: "Settings" });
+    const { sidebar } = await renderOpenSidebar(<OpenCustomSidebar />);
     const resizeHandle = screen.getByRole("separator", { name: "Resize sidebar" });
     fireEvent.keyDown(resizeHandle, { key: "End" });
     await waitFor(() => {
@@ -247,37 +155,54 @@ function sidebarWidthStyle(sidebar: HTMLElement): number {
   return Number.parseInt(sidebar.style.getPropertyValue("--app-sidebar-width"), 10);
 }
 
-async function renderOpenSidebarAtWindowWidth(
-  width: number,
-  opener: ReactNode = <OpenCustomSidebar />,
-): Promise<
-  Readonly<{
-    restoreWindowWidth(): void;
-    sidebar: HTMLElement;
-    unmount(): void;
-  }>
-> {
-  const restoreWindowWidth = mockWindowWidth(width);
+async function renderOpenSidebar(
+  opener: ReactNode,
+  {
+    destinationName = "Settings",
+    openButtonName = "Open sidebar",
+  }: Readonly<{
+    destinationName?: string;
+    openButtonName?: string;
+  }> = {},
+): Promise<Readonly<{ sidebar: HTMLElement; unmount(): void }>> {
   const { unmount } = render(
     <I18nextProvider i18n={appI18n}>
       <SidebarProvider>
         <div className="relative flex min-h-0" data-testid="app-shell-content">
-          <div className="min-w-0 flex-1">
-            {opener}
-          </div>
+          <div className="min-w-0 flex-1">{opener}</div>
           <SidebarHost />
         </div>
       </SidebarProvider>
     </I18nextProvider>,
   );
 
-  fireEvent.click(screen.getByRole("button", { name: "Open sidebar" }));
+  fireEvent.click(screen.getByRole("button", { name: openButtonName }));
 
   return {
-    restoreWindowWidth,
-    sidebar: await screen.findByRole("complementary", { name: "Settings" }),
+    sidebar: await screen.findByRole("complementary", { name: destinationName }),
     unmount,
   };
+}
+
+type SidebarWidthExpectation = readonly [windowWidth: number, sidebarWidth: number];
+
+async function expectOpenSidebarWidths(
+  opener: ReactNode,
+  expectations: readonly SidebarWidthExpectation[],
+): Promise<void> {
+  for (const [windowWidth, expectedWidth] of expectations) {
+    const restoreWindowWidth = mockWindowWidth(windowWidth);
+    try {
+      const { sidebar, unmount } = await renderOpenSidebar(opener);
+      try {
+        expect(sidebarWidthStyle(sidebar)).toBe(expectedWidth);
+      } finally {
+        unmount();
+      }
+    } finally {
+      restoreWindowWidth();
+    }
+  }
 }
 
 function mockWindowWidth(width: number): () => void {

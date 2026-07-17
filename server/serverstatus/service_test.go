@@ -11,7 +11,7 @@ import (
 )
 
 func TestGetServerReadinessIncludesWorkflowAssigneeRoles(t *testing.T) {
-	service := NewServerStatusService(nil, config.App{
+	readiness := requireServerReadiness(t, nil, config.App{
 		Settings: config.Settings{
 			Model: "base",
 			Workflow: config.WorkflowSettings{
@@ -38,11 +38,6 @@ func TestGetServerReadinessIncludesWorkflowAssigneeRoles(t *testing.T) {
 		},
 	})
 
-	readiness, err := service.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
-	if err != nil {
-		t.Fatalf("GetServerReadiness: %v", err)
-	}
-
 	got := make([]string, 0, len(readiness.SubagentRoles))
 	for _, role := range readiness.SubagentRoles {
 		got = append(got, role.Name)
@@ -59,14 +54,9 @@ func TestGetServerReadinessIncludesWorkflowAssigneeRoles(t *testing.T) {
 }
 
 func TestGetServerReadinessReadyWhenStartupAuthNotRequired(t *testing.T) {
-	service := NewServerStatusService(nil, config.App{
+	readiness := requireServerReadiness(t, nil, config.App{
 		Settings: config.Settings{ProviderOverride: "anthropic"},
 	})
-
-	readiness, err := service.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
-	if err != nil {
-		t.Fatalf("GetServerReadiness: %v", err)
-	}
 
 	if readiness.AuthRequired {
 		t.Fatalf("AuthRequired = true, want false for non-OpenAI provider")
@@ -80,14 +70,9 @@ func TestGetServerReadinessReadyWhenStartupAuthNotRequired(t *testing.T) {
 }
 
 func TestGetServerReadinessBlockedWhenStartupAuthRequiredButMissing(t *testing.T) {
-	service := NewServerStatusService(nil, config.App{
+	readiness := requireServerReadiness(t, nil, config.App{
 		Settings: config.Settings{ProviderOverride: "openai"},
 	})
-
-	readiness, err := service.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
-	if err != nil {
-		t.Fatalf("GetServerReadiness: %v", err)
-	}
 
 	if !readiness.AuthRequired {
 		t.Fatalf("AuthRequired = false, want true for OpenAI provider")
@@ -110,12 +95,7 @@ func (failingAuthStore) Save(context.Context, auth.State) error { return nil }
 
 func TestGetServerReadinessIgnoresAuthStoreWhenStartupAuthNotRequired(t *testing.T) {
 	manager := auth.NewManager(failingAuthStore{}, nil, nil)
-	service := NewServerStatusService(manager, config.App{Settings: config.Settings{ProviderOverride: "anthropic"}})
-
-	readiness, err := service.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
-	if err != nil {
-		t.Fatalf("GetServerReadiness should not fail on auth store when auth not required: %v", err)
-	}
+	readiness := requireServerReadiness(t, manager, config.App{Settings: config.Settings{ProviderOverride: "anthropic"}})
 	if readiness.AuthRequired {
 		t.Fatalf("AuthRequired = true, want false for non-OpenAI provider")
 	}
@@ -131,4 +111,13 @@ func TestGetServerReadinessSurfacesAuthStoreErrorWhenStartupAuthRequired(t *test
 	if _, err := service.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{}); err == nil {
 		t.Fatal("expected auth store error to surface when startup auth is required")
 	}
+}
+
+func requireServerReadiness(t *testing.T, manager *auth.Manager, app config.App) serverapi.ServerReadinessResponse {
+	t.Helper()
+	readiness, err := NewServerStatusService(manager, app).GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
+	if err != nil {
+		t.Fatalf("GetServerReadiness: %v", err)
+	}
+	return readiness
 }
