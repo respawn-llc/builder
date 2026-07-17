@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/toolspec"
@@ -48,15 +48,13 @@ type Planner struct {
 	ContainerDir        string
 	StoreOptions        []session.StoreOption
 	ReloadConfig        func() (config.App, error)
+	PersistedSessions   session.PersistedSessionResolver
 	MetadataStoreOpener MetadataExecutionTargetStoreOpener
 }
 
 type SessionRequest struct {
 	Mode                                Mode
 	Intent                              serverapi.SessionLaunchIntent
-	SelectedSessionID                   string
-	ForceNewSession                     bool
-	ParentSessionID                     *string
 	SkipContinuationAgentRoleValidation bool
 	PreparedPromptFacingTarget          *PreparedBaseTarget
 }
@@ -821,16 +819,7 @@ func (p Planner) openStore(ctx context.Context, req SessionRequest) (*session.St
 	switch req.Intent.Kind() {
 	case serverapi.SessionLaunchIntentOpenExisting:
 		sessionID, _ := req.Intent.SessionID()
-		req.SelectedSessionID = sessionID.String()
-	case serverapi.SessionLaunchIntentCreateNew:
-		req.ForceNewSession = true
-		if parentID, ok := req.Intent.ParentID(); ok {
-			parent := parentID.String()
-			req.ParentSessionID = &parent
-		}
-	}
-	if strings.TrimSpace(req.SelectedSessionID) != "" {
-		opened, err := p.openScopedSession(req.SelectedSessionID)
+		opened, err := p.openScopedSession(sessionID.String())
 		if err != nil {
 			return nil, err
 		}
@@ -840,11 +829,15 @@ func (p Planner) openStore(ctx context.Context, req SessionRequest) (*session.St
 			}
 		}
 		return opened, nil
+	case serverapi.SessionLaunchIntentCreateNew:
+		origin, ok := req.Intent.CreateOrigin()
+		if !ok {
+			return nil, errors.New("create-new session launch intent requires origin")
+		}
+		return p.createSession(ctx, origin, req.Mode)
+	default:
+		return nil, errSessionLaunchIntentRequired
 	}
-	if req.ForceNewSession || req.Mode == ModeHeadless {
-		return p.createSession(ctx, req.ParentSessionID, req.Mode)
-	}
-	return nil, errSessionSelectionRequired
 }
 
 func (p Planner) openScopedSession(sessionID string) (*session.Store, error) {
@@ -857,8 +850,8 @@ func (p Planner) openScopedSession(sessionID string) (*session.Store, error) {
 
 // SelectedSessionLockedContract reads a selected session's persisted lock
 // without materializing a new child or mutating the selected session.
-func (p Planner) SelectedSessionLockedContract(sessionID string) (*session.LockedContract, error) {
-	store, err := p.openScopedSession(sessionID)
+func (p Planner) SelectedSessionLockedContract(sessionID runtimeids.SessionID) (*session.LockedContract, error) {
+	store, err := p.openScopedSession(sessionID.String())
 	if err != nil {
 		return nil, err
 	}
@@ -867,8 +860,8 @@ func (p Planner) SelectedSessionLockedContract(sessionID string) (*session.Locke
 
 // SelectedSessionPromptFacingTarget resolves a selected session's persisted
 // continuation and lock without materializing or mutating the session.
-func (p Planner) SelectedSessionPromptFacingTarget(sessionID string) (PreparedBaseTarget, error) {
-	store, err := p.openScopedSession(sessionID)
+func (p Planner) SelectedSessionPromptFacingTarget(sessionID runtimeids.SessionID) (PreparedBaseTarget, error) {
+	store, err := p.openScopedSession(sessionID.String())
 	if err != nil {
 		return PreparedBaseTarget{}, err
 	}
@@ -885,8 +878,8 @@ func (p Planner) SelectedSessionPromptFacingTarget(sessionID string) (PreparedBa
 
 // SelectedSessionContinuationAgentRole reads the persisted continuation role
 // without applying it or mutating the selected session.
-func (p Planner) SelectedSessionContinuationAgentRole(sessionID string) (*string, error) {
-	store, err := p.openScopedSession(sessionID)
+func (p Planner) SelectedSessionContinuationAgentRole(sessionID runtimeids.SessionID) (*string, error) {
+	store, err := p.openScopedSession(sessionID.String())
 	if err != nil {
 		return nil, err
 	}
@@ -897,70 +890,84 @@ func (p Planner) SelectedSessionContinuationAgentRole(sessionID string) (*string
 	return cloneContinuationRole(continuation.AgentRole), nil
 }
 
-func (p Planner) createSession(ctx context.Context, parentSessionID *string, mode Mode) (*session.Store, error) {
+func (p Planner) createSession(ctx context.Context, origin serverapi.SessionCreateOrigin, mode Mode) (*session.Store, error) {
 	containerName := filepath.Base(p.ContainerDir)
 	category := sessioncontract.SessionCategoryMain
 	if mode == ModeHeadless {
 		category = sessioncontract.SessionCategorySubagent
 	}
-	created, err := session.NewLazy(p.ContainerDir, containerName, p.Config.WorkspaceRoot, category, p.StoreOptions...)
-	if err != nil {
-		return nil, err
-	}
-	if parentSessionID != nil {
-		parentID := strings.TrimSpace(*parentSessionID)
-		if parentID == "" {
-			return nil, errors.New("parent session id must not be empty")
-		}
-		if err := p.initializeChildSessionContext(ctx, created, parentID, mode); err != nil {
+	if origin.Kind() == serverapi.SessionCreateOriginIndependent {
+		created, err := session.NewLazy(p.ContainerDir, containerName, p.Config.WorkspaceRoot, category, p.StoreOptions...)
+		if err != nil {
 			return nil, err
 		}
-	} else {
+		if err := session.InitializeCreationContext(created, nil, session.SessionCreationSourceIndependent, session.ChildContextOptions{}); err != nil {
+			return nil, err
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		if err := created.EnsureDurable(); err != nil {
 			return nil, err
 		}
+		return created, nil
+	}
+	sourceID, present := origin.SessionID()
+	if !present {
+		return nil, errors.New("session creation source is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	source, err := p.openPersistedSession(ctx, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	if origin.Kind() == serverapi.SessionCreateOriginParentAgent {
+		if err := (parentAgentDepthPolicy{sessions: p.PersistedSessions}).enforce(
+			ctx,
+			source.Meta(),
+			p.Config.Settings.MaxSubagentDepth,
+			p.Config.Settings.Debug,
+		); err != nil {
+			return nil, err
+		}
+	}
+	created, err := session.NewLazy(p.ContainerDir, containerName, p.Config.WorkspaceRoot, category, p.StoreOptions...)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.initializeChildSessionContext(ctx, created, source, sourceID, origin.Kind(), mode); err != nil {
+		return nil, err
 	}
 	return created, nil
 }
 
-func (p Planner) initializeChildSessionContext(ctx context.Context, child *session.Store, parentSessionID string, mode Mode) error {
+func (p Planner) initializeChildSessionContext(ctx context.Context, child *session.Store, source *session.Store, sourceSessionID runtimeids.SessionID, originKind serverapi.SessionCreateOriginKind, mode Mode) error {
 	if child == nil {
 		return errors.New("child session store is required")
 	}
-	parentID := strings.TrimSpace(parentSessionID)
-	if parentID == "" {
-		return child.EnsureDurable()
+	if source == nil {
+		return errors.New("session creation source is required")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	parent, err := p.openParentSession(parentID)
-	if err != nil {
+	childContextOptions := session.ChildContextOptions{
+		InheritLockedContract: true,
+		InheritContinuation:   true,
+	}
+	creationSourceKind := session.SessionCreationSourcePreviousSession
+	if originKind == serverapi.SessionCreateOriginParentAgent {
+		creationSourceKind = session.SessionCreationSourceParentAgent
+		childContextOptions = session.ChildContextOptions{}
+	} else if originKind != serverapi.SessionCreateOriginPreviousSession {
+		return errors.New("session creation origin kind is invalid")
+	}
+	if err := session.InitializeCreationContext(child, source, creationSourceKind, childContextOptions); err != nil {
 		return err
 	}
-	if parent != nil {
-		childContextOptions := session.ChildContextOptions{
-			InheritLockedContract: true,
-			InheritContinuation:   true,
-		}
-		if mode == ModeHeadless {
-			// Headless children are subagent launches: they keep parent workspace
-			// and worktree targeting, but their model/tools/prompts/base URL come
-			// from the selected role and current config rather than the parent
-			// session.
-			childContextOptions = session.ChildContextOptions{}
-		}
-		if err := session.InitializeChildFromParentWithOptions(child, parent, childContextOptions); err != nil {
-			return err
-		}
-	}
-	if parent == nil {
-		return child.SetParentSessionID(&parentID)
-	}
-	target, hasTarget, err := p.resolveParentExecutionTarget(ctx, parentID)
+	target, hasTarget, err := p.resolveParentExecutionTarget(ctx, sourceSessionID.String())
 	if err != nil {
 		return err
 	}
@@ -976,15 +983,15 @@ func (p Planner) initializeChildSessionContext(ctx context.Context, child *sessi
 	return nil
 }
 
-func (p Planner) openParentSession(parentSessionID string) (*session.Store, error) {
-	parent, err := p.openScopedSession(parentSessionID)
+func (p Planner) openPersistedSession(ctx context.Context, sessionID runtimeids.SessionID) (*session.Store, error) {
+	if p.PersistedSessions == nil {
+		return nil, errors.New("persisted session resolver is required")
+	}
+	record, err := p.PersistedSessions.ResolvePersistedSession(ctx, sessionID.String())
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, session.ErrSessionNotFound) {
-			return nil, nil
-		}
 		return nil, err
 	}
-	return parent, nil
+	return session.OpenResolved(record, p.StoreOptions...)
 }
 
 func (p Planner) openMetadataStore() (MetadataExecutionTargetStore, error) {

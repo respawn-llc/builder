@@ -39,26 +39,30 @@ func TestSessionLifecycleResultJSONRoundTrip(t *testing.T) {
 		{
 			name: "launch create with prompt and restored draft",
 			want: LaunchSessionDirective(
-				CreateNewSessionLaunchIntent(&parent),
+				CreateNewSessionLaunchIntent(ParentAgentSessionCreateOrigin(parent)),
 				NewSessionLaunchPreparation(
 					&prompt,
 					RestoreStoredDraftSessionDraftDisposition(),
 					SessionAuthPreparationKeepCurrent,
 				),
 			),
-			json: `{"kind":"launch","intent":{"kind":"create_new","parent_id":"parent-session"},"preparation":{"initial_prompt":{"text":"seed prompt","history_recorded":true},"input_policy":{"kind":"restore_stored_draft"},"auth":"keep_current_auth"}}`,
+			json: `{"kind":"launch","intent":{"kind":"create_new","origin":{"kind":"parent_agent","session_id":"parent-session"}},"preparation":{"initial_prompt":{"text":"seed prompt","history_recorded":true},"input_policy":{"kind":"restore_stored_draft"},"auth":"keep_current_auth"}}`,
 		},
 		{
 			name: "launch open with legitimate empty input override",
 			want: LaunchSessionDirective(
 				OpenExistingSessionLaunchIntent(target),
-				NewSessionLaunchPreparation(
+				NewSessionNavigationLaunchPreparation(
 					nil,
 					OverrideStoredDraftSessionDraftDisposition(""),
 					SessionAuthPreparationReauthenticate,
+					SessionNavigationBinding{
+						ProjectID:   "project-target",
+						WorkspaceID: "workspace-target",
+					},
 				),
 			),
-			json: `{"kind":"launch","intent":{"kind":"open_existing","session_id":"target-session"},"preparation":{"input_policy":{"kind":"override_stored_draft","text":""},"auth":"reauthenticate"}}`,
+			json: `{"kind":"launch","intent":{"kind":"open_existing","session_id":"target-session"},"preparation":{"input_policy":{"kind":"override_stored_draft","text":""},"auth":"reauthenticate","navigation_binding":{"project_id":"project-target","workspace_id":"workspace-target"}}}`,
 		},
 	}
 

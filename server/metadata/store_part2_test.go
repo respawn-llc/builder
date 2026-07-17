@@ -22,25 +22,26 @@ func TestResolvePersistedSessionRejectsEscapingArtifactRelpath(t *testing.T) {
 	store, _, binding := newMetadataTestStore(t)
 	now := time.Now().UTC().UnixMilli()
 	if err := store.queries.UpsertSession(ctx, sqlitegen.UpsertSessionParams{
-		ID:                 "session-escape",
-		ProjectID:          binding.ProjectID,
-		WorkspaceID:        sql.NullString{String: binding.WorkspaceID, Valid: true},
-		WorktreeID:         sql.NullString{},
-		ArtifactRelpath:    "../escape",
-		Name:               "",
-		FirstPromptPreview: "",
-		InputDraft:         "",
-		ParentSessionID:    sql.NullString{},
-		CreatedAtUnixMs:    now,
-		UpdatedAtUnixMs:    now,
-		LastSequence:       0,
-		ModelRequestCount:  0,
-		LaunchVisible:      0,
-		CwdRelpath:         ".",
-		ContinuationJson:   "{}",
-		LockedJson:         "{}",
-		UsageStateJson:     "{}",
-		MetadataJson:       "{}",
+		ID:                   "session-escape",
+		ProjectID:            binding.ProjectID,
+		WorkspaceID:          sql.NullString{String: binding.WorkspaceID, Valid: true},
+		WorktreeID:           sql.NullString{},
+		ArtifactRelpath:      "../escape",
+		Name:                 "",
+		FirstPromptPreview:   "",
+		InputDraft:           "",
+		PreviousSessionID:    sql.NullString{},
+		ParentAgentSessionID: sql.NullString{},
+		CreatedAtUnixMs:      now,
+		UpdatedAtUnixMs:      now,
+		LastSequence:         0,
+		ModelRequestCount:    0,
+		LaunchVisible:        0,
+		CwdRelpath:           ".",
+		ContinuationJson:     "{}",
+		LockedJson:           "{}",
+		UsageStateJson:       "{}",
+		MetadataJson:         "{}",
 	}); err != nil {
 		t.Fatalf("UpsertSession: %v", err)
 	}
@@ -211,6 +212,13 @@ func TestResolveSessionExecutionTargetUsesMetadataAuthority(t *testing.T) {
 	if target.EffectiveWorkdir != canonicalRoot {
 		t.Fatalf("effective workdir = %q, want %q", target.EffectiveWorkdir, canonicalRoot)
 	}
+	navigationBinding, err := store.ResolveSessionNavigationBinding(ctx, sess.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionNavigationBinding: %v", err)
+	}
+	if navigationBinding.ProjectID != binding.ProjectID || navigationBinding.WorkspaceID != binding.WorkspaceID {
+		t.Fatalf("navigation binding = %+v, want project=%q workspace=%q", navigationBinding, binding.ProjectID, binding.WorkspaceID)
+	}
 }
 
 func TestObservedSessionMetadataPersistencePreservesExecutionTarget(t *testing.T) {
@@ -344,7 +352,7 @@ func TestUpsertWorktreeRecordRejectsMissingRequiredFields(t *testing.T) {
 func TestSessionLaunchVisibilityTransitions(t *testing.T) {
 	tests := []struct {
 		name        string
-		mutate      func(*testing.T, *session.Store)
+		mutate      func(*testing.T, *Store, config.App, Binding, *session.Store)
 		wantVisible bool
 		wantName    string
 	}{
@@ -352,7 +360,7 @@ func TestSessionLaunchVisibilityTransitions(t *testing.T) {
 			name:        "name makes session launch-visible",
 			wantVisible: true,
 			wantName:    "incident triage",
-			mutate: func(t *testing.T, sess *session.Store) {
+			mutate: func(t *testing.T, _ *Store, _ config.App, _ Binding, sess *session.Store) {
 				t.Helper()
 				if err := sess.SetName("incident triage"); err != nil {
 					t.Fatalf("SetName: %v", err)
@@ -362,7 +370,7 @@ func TestSessionLaunchVisibilityTransitions(t *testing.T) {
 		{
 			name:        "input draft makes session launch-visible",
 			wantVisible: true,
-			mutate: func(t *testing.T, sess *session.Store) {
+			mutate: func(t *testing.T, _ *Store, _ config.App, _ Binding, sess *session.Store) {
 				t.Helper()
 				if err := sess.SetInputDraft("draft prompt"); err != nil {
 					t.Fatalf("SetInputDraft: %v", err)
@@ -370,20 +378,9 @@ func TestSessionLaunchVisibilityTransitions(t *testing.T) {
 			},
 		},
 		{
-			name:        "parent linkage makes session launch-visible",
-			wantVisible: true,
-			mutate: func(t *testing.T, sess *session.Store) {
-				t.Helper()
-				parentSessionID := "session-parent"
-				if err := sess.SetParentSessionID(&parentSessionID); err != nil {
-					t.Fatalf("SetParentSessionID: %v", err)
-				}
-			},
-		},
-		{
 			name:        "first user prompt makes session launch-visible",
 			wantVisible: true,
-			mutate: func(t *testing.T, sess *session.Store) {
+			mutate: func(t *testing.T, _ *Store, _ config.App, _ Binding, sess *session.Store) {
 				t.Helper()
 				if _, _, err := sess.AppendEvent("step-1", "message", map[string]any{"role": "user", "content": "Investigate broken startup flow\nmore detail"}); err != nil {
 					t.Fatalf("AppendEvent: %v", err)
@@ -393,7 +390,7 @@ func TestSessionLaunchVisibilityTransitions(t *testing.T) {
 		{
 			name:        "non-user events keep prepared session hidden",
 			wantVisible: false,
-			mutate: func(t *testing.T, sess *session.Store) {
+			mutate: func(t *testing.T, _ *Store, _ config.App, _ Binding, sess *session.Store) {
 				t.Helper()
 				if _, _, err := sess.AppendEvent("step-1", "message", map[string]any{"role": "assistant", "content": "warming up"}); err != nil {
 					t.Fatalf("AppendEvent: %v", err)
@@ -410,7 +407,7 @@ func TestSessionLaunchVisibilityTransitions(t *testing.T) {
 
 			assertProjectSessionListingCount(t, ctx, store, binding.ProjectID, 0)
 
-			tc.mutate(t, sess)
+			tc.mutate(t, store, cfg, binding, sess)
 
 			wantCount := 0
 			if tc.wantVisible {

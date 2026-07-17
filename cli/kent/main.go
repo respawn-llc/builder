@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -17,7 +16,6 @@ import (
 	"core/cli/app"
 	"core/prompts"
 	"core/shared/config"
-	"core/shared/llmerrors"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
@@ -39,30 +37,6 @@ type commonFlags struct {
 	OpenAIBaseURLExplicit bool
 	PersistenceRoot       string
 }
-
-type runJSONResult struct {
-	Status      string        `json:"status"`
-	Result      string        `json:"result,omitempty"`
-	SessionID   string        `json:"session_id,omitempty"`
-	SessionName string        `json:"session_name,omitempty"`
-	ContinueID  string        `json:"continue_id,omitempty"`
-	ContinueCmd string        `json:"continue_command,omitempty"`
-	Warnings    []string      `json:"warnings,omitempty"`
-	DurationMS  int64         `json:"duration_ms"`
-	Error       *runJSONError `json:"error,omitempty"`
-}
-
-type runJSONError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-type runOutputMode string
-
-const (
-	runOutputModeFinalText runOutputMode = "final-text"
-	runOutputModeJSON      runOutputMode = "json"
-)
 
 type runProgressMode string
 
@@ -381,10 +355,7 @@ func runSubcommand(args []string) int {
 				ContinueCmd: continueCmd,
 				Warnings:    append([]string(nil), result.Warnings...),
 				DurationMS:  result.Duration.Milliseconds(),
-				Error: &runJSONError{
-					Code:    code,
-					Message: runErrorMessage(runErr),
-				},
+				Error:       newRunJSONError(runErr),
 			})
 		} else {
 			emitWarnings(os.Stderr, result.Warnings)
@@ -610,7 +581,7 @@ func runLiveWaitSubcommand(args []string) int {
 	continueCmd := prompts.ContinueRunCommandWithRoot(result.SessionID, continueRoot)
 	if runErr != nil {
 		if outputMode == runOutputModeJSON {
-			emitRunJSON(runJSONResult{Status: "error", SessionID: result.SessionID, SessionName: result.SessionName, ContinueID: result.SessionID, ContinueCmd: continueCmd, DurationMS: result.Duration.Milliseconds(), Error: &runJSONError{Code: runErrorCode(runErr), Message: runErrorMessage(runErr)}})
+			emitRunJSON(runJSONResult{Status: "error", SessionID: result.SessionID, SessionName: result.SessionName, ContinueID: result.SessionID, ContinueCmd: continueCmd, DurationMS: result.Duration.Milliseconds(), Error: newRunJSONError(runErr)})
 		} else {
 			fmt.Fprintln(os.Stderr, runErrorMessage(runErr))
 			if continueHint != "" {
@@ -770,17 +741,6 @@ func parseRunTimeout(raw string) (time.Duration, error) {
 	return parsed, nil
 }
 
-func parseRunOutputMode(raw string) (runOutputMode, error) {
-	switch runOutputMode(strings.TrimSpace(raw)) {
-	case runOutputModeFinalText:
-		return runOutputModeFinalText, nil
-	case runOutputModeJSON:
-		return runOutputModeJSON, nil
-	default:
-		return "", fmt.Errorf("invalid --output-mode value %q", raw)
-	}
-}
-
 func parseRunProgressMode(raw string) (runProgressMode, error) {
 	switch runProgressMode(strings.TrimSpace(raw)) {
 	case runProgressModeQuiet:
@@ -790,102 +750,6 @@ func parseRunProgressMode(raw string) (runProgressMode, error) {
 	default:
 		return "", fmt.Errorf("invalid --progress-mode value %q", raw)
 	}
-}
-
-func runErrorMessage(err error) string {
-	var denied *serverapi.SubagentLaunchDeniedError
-	if errors.As(err, &denied) {
-		target := ""
-		if denied.Target != nil {
-			target = strings.TrimSpace(*denied.Target)
-		}
-		switch denied.Kind {
-		case serverapi.SubagentLaunchDenialTargetMissing:
-			if len(denied.AvailableRoles) > 0 {
-				return fmt.Sprintf("subagent role %q is unavailable; available roles: %s", target, strings.Join(denied.AvailableRoles, ", "))
-			}
-			return fmt.Sprintf("subagent role %q is unavailable", target)
-		case serverapi.SubagentLaunchDenialNotCallable:
-			return "the requested subagent launch is not allowed for this Kent session"
-		case serverapi.SubagentLaunchDenialCallerMissing:
-			return "the caller session no longer exists"
-		case serverapi.SubagentLaunchDenialParentMissing:
-			return "the parent session no longer exists"
-		default:
-			return "the subagent launch request is invalid"
-		}
-	}
-	if message := llmerrors.UserFacingError(err); message != "" {
-		return message
-	}
-	return err.Error()
-}
-
-func runErrorCode(err error) string {
-	if err == nil {
-		return ""
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return "timeout"
-	}
-	if errors.Is(err, context.Canceled) {
-		return "interrupted"
-	}
-	var denied *serverapi.SubagentLaunchDeniedError
-	if errors.As(err, &denied) {
-		return "subagent_denied"
-	}
-	return "runtime"
-}
-
-func emitRunJSON(v runJSONResult) {
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to encode JSON output: %v\n", err)
-	}
-}
-
-func emitRunUsageError(mode runOutputMode, message string) {
-	if mode == runOutputModeJSON {
-		emitRunJSON(runJSONResult{
-			Status: "error",
-			Error:  &runJSONError{Code: "usage", Message: message},
-		})
-		return
-	}
-	_, _ = fmt.Fprintln(os.Stderr, message)
-}
-
-func emitRunFinalText(w io.Writer, warnings []string, result string, continueHint string) {
-	if w == nil {
-		return
-	}
-	emitWarnings(w, warnings)
-	trimmedResult := strings.TrimRight(result, "\n")
-	trimmedHint := strings.TrimSpace(continueHint)
-	switch {
-	case trimmedResult != "" && trimmedHint != "":
-		_, _ = fmt.Fprintf(w, "%s\n\n%s\n", trimmedResult, trimmedHint)
-	case trimmedResult != "":
-		_, _ = fmt.Fprintln(w, trimmedResult)
-	case trimmedHint != "":
-		_, _ = fmt.Fprintln(w, trimmedHint)
-	}
-}
-
-func emitWarnings(w io.Writer, warnings []string) {
-	if w == nil || len(warnings) == 0 {
-		return
-	}
-	for _, warning := range warnings {
-		trimmed := strings.TrimSpace(warning)
-		if trimmed == "" {
-			continue
-		}
-		_, _ = fmt.Fprintln(w, trimmed)
-	}
-	_, _ = fmt.Fprintln(w)
 }
 
 func effectiveRunAgentRole(raw string, fast bool) (*string, error) {
@@ -951,31 +815,4 @@ func continueCommandPersistenceRoot(flagValue string) string {
 		return abs
 	}
 	return trimmed
-}
-
-func inferRunOutputMode(args []string) runOutputMode {
-	for i := 0; i < len(args); i++ {
-		arg := strings.TrimSpace(args[i])
-		switch {
-		case arg == "--output-mode" || arg == "-output-mode":
-			if i+1 >= len(args) {
-				return runOutputModeFinalText
-			}
-			if mode, err := parseRunOutputMode(args[i+1]); err == nil {
-				return mode
-			}
-			return runOutputModeFinalText
-		case strings.HasPrefix(arg, "--output-mode="):
-			if mode, err := parseRunOutputMode(strings.TrimPrefix(arg, "--output-mode=")); err == nil {
-				return mode
-			}
-			return runOutputModeFinalText
-		case strings.HasPrefix(arg, "-output-mode="):
-			if mode, err := parseRunOutputMode(strings.TrimPrefix(arg, "-output-mode=")); err == nil {
-				return mode
-			}
-			return runOutputModeFinalText
-		}
-	}
-	return runOutputModeFinalText
 }

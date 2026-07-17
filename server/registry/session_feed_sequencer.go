@@ -404,7 +404,9 @@ func cloneTranscriptGoalStatus(value *clientui.TranscriptGoalStatus) *clientui.T
 
 func cloneTranscriptSessionStatus(value clientui.TranscriptSessionStatus) clientui.TranscriptSessionStatus {
 	copied := value
-	copied.ParentSessionID = textutil.Pointer(value.ParentSessionID)
+	copied.PreviousSessionID = textutil.Pointer(value.PreviousSessionID)
+	copied.ParentAgentSessionID = textutil.Pointer(value.ParentAgentSessionID)
+	copied.NavigationTargetSessionID = textutil.Pointer(value.NavigationTargetSessionID)
 	if value.Workflow != nil {
 		workflow := *value.Workflow
 		copied.Workflow = &workflow

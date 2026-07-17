@@ -65,12 +65,11 @@ func TestWorkflowRunContextMapsContinuationModesToTypedLaunchIntent(t *testing.T
 			} else if got, present := req.Intent.SessionID(); !present || got != test.wantSessionID {
 				t.Fatalf("intent session = %q/%v, want %q/true", got.String(), present, test.wantSessionID.String())
 			}
-			if test.wantParentID.IsZero() {
-				if _, present := req.Intent.ParentID(); present {
-					t.Fatal("intent unexpectedly carries a parent identity")
+			if req.Intent.Kind() == serverapi.SessionLaunchIntentCreateNew {
+				origin, present := req.Intent.CreateOrigin()
+				if !present || origin.Kind() != serverapi.SessionCreateOriginIndependent {
+					t.Fatalf("workflow create origin = %+v/%v, want independent", origin, present)
 				}
-			} else if got, present := req.Intent.ParentID(); !present || got != test.wantParentID {
-				t.Fatalf("intent parent = %q/%v, want %q/true", got.String(), present, test.wantParentID.String())
 			}
 		})
 	}

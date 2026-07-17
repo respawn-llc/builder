@@ -59,9 +59,13 @@ func requireSessionCreateDestination(t *testing.T, result serverapi.SessionDirec
 	if !present || intent.Kind() != serverapi.SessionLaunchIntentCreateNew {
 		t.Fatalf("launch intent = %+v, want new session", intent)
 	}
-	parentID, present := intent.ParentID()
-	if !present {
+	origin, present := intent.CreateOrigin()
+	if !present || origin.Kind() == serverapi.SessionCreateOriginIndependent {
 		return nil
+	}
+	parentID, present := origin.SessionID()
+	if !present {
+		t.Fatalf("creation origin = %+v, want source session", origin)
 	}
 	value := parentID.String()
 	return &value
@@ -282,8 +286,9 @@ func TestSessionSelectionPickerCreateSendsCreateNewWithoutParent(t *testing.T) {
 			if req.Intent.Kind() != serverapi.SessionLaunchIntentCreateNew {
 				t.Fatalf("intent kind = %q, want create new", req.Intent.Kind())
 			}
-			if parentID, present := req.Intent.ParentID(); present {
-				t.Fatalf("picker create carried parent %q", parentID.String())
+			origin, present := req.Intent.CreateOrigin()
+			if !present || origin.Kind() != serverapi.SessionCreateOriginIndependent {
+				t.Fatalf("picker create origin = %+v/%v, want independent", origin, present)
 			}
 			return serverapi.SessionPlanResponse{}, stopErr
 		}},

@@ -8,16 +8,18 @@ import (
 )
 
 type TranscriptSessionStatus struct {
-	ReviewerFrequency     string
-	ReviewerEnabled       bool
-	AutoCompactionEnabled bool
-	QuestionsEnabled      bool
-	FastModeAvailable     bool
-	FastModeEnabled       bool
-	ThinkingLevel         string
-	CompactionMode        string
-	ParentSessionID       *runtimeids.SessionID
-	Workflow              *TranscriptWorkflowSession
+	ReviewerFrequency         string
+	ReviewerEnabled           bool
+	AutoCompactionEnabled     bool
+	QuestionsEnabled          bool
+	FastModeAvailable         bool
+	FastModeEnabled           bool
+	ThinkingLevel             string
+	CompactionMode            string
+	PreviousSessionID         *runtimeids.SessionID
+	ParentAgentSessionID      *runtimeids.SessionID
+	NavigationTargetSessionID *runtimeids.SessionID
+	Workflow                  *TranscriptWorkflowSession
 }
 
 type TranscriptWorkflowSession struct {
@@ -40,8 +42,14 @@ func (s TranscriptSessionStatus) Validate() error {
 	if s.FastModeEnabled && !s.FastModeAvailable {
 		return fmt.Errorf("session status cannot enable unavailable fast mode")
 	}
-	if s.ParentSessionID != nil && s.ParentSessionID.IsZero() {
-		return fmt.Errorf("session status parent session id is invalid")
+	if s.PreviousSessionID != nil && s.PreviousSessionID.IsZero() {
+		return fmt.Errorf("session status previous session id is invalid")
+	}
+	if s.ParentAgentSessionID != nil && s.ParentAgentSessionID.IsZero() {
+		return fmt.Errorf("session status parent agent session id is invalid")
+	}
+	if s.NavigationTargetSessionID != nil && s.NavigationTargetSessionID.IsZero() {
+		return fmt.Errorf("session status navigation target session id is invalid")
 	}
 	if s.Workflow != nil {
 		return s.Workflow.Validate()

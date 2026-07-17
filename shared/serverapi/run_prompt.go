@@ -1,7 +1,6 @@
 package serverapi
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -15,47 +14,40 @@ import (
 )
 
 type RunPromptRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	Intent            SessionLaunchIntent
-	SelectedSessionID string             `json:"selected_session_id,omitempty"`
-	CallerSessionID   *string            `json:"caller_session_id,omitempty"`
-	ParentSessionID   *string            `json:"parent_session_id,omitempty"`
-	Prompt            string             `json:"prompt"`
-	Timeout           time.Duration      `json:"timeout"`
-	Overrides         RunPromptOverrides `json:"overrides,omitempty"`
+	ClientRequestID string              `json:"client_request_id"`
+	Intent          SessionLaunchIntent `json:"intent"`
+	CallerSessionID *string             `json:"caller_session_id,omitempty"`
+	Prompt          string              `json:"prompt"`
+	Timeout         time.Duration       `json:"timeout"`
+	Overrides       RunPromptOverrides  `json:"overrides,omitempty"`
 }
 
-func (r RunPromptRequest) MarshalJSON() ([]byte, error) {
+func (r *RunPromptRequest) UnmarshalJSON(data []byte) error {
 	type wire struct {
-		ClientRequestID   string               `json:"client_request_id"`
-		Intent            *SessionLaunchIntent `json:"intent,omitempty"`
-		SelectedSessionID string               `json:"selected_session_id,omitempty"`
-		CallerSessionID   *string              `json:"caller_session_id,omitempty"`
-		ParentSessionID   *string              `json:"parent_session_id,omitempty"`
-		Prompt            string               `json:"prompt"`
-		Timeout           time.Duration        `json:"timeout"`
-		Overrides         RunPromptOverrides   `json:"overrides,omitempty"`
+		ClientRequestID string              `json:"client_request_id"`
+		Intent          SessionLaunchIntent `json:"intent"`
+		CallerSessionID *string             `json:"caller_session_id"`
+		Prompt          string              `json:"prompt"`
+		Timeout         time.Duration       `json:"timeout"`
+		Overrides       RunPromptOverrides  `json:"overrides"`
 	}
-	intent := r.Intent
-	var intentJSON *SessionLaunchIntent
-	if err := intent.Validate(); err != nil {
-		if strings.TrimSpace(r.SelectedSessionID) == "" && r.CallerSessionID == nil && r.ParentSessionID == nil {
-			intent = CreateNewSessionLaunchIntent(nil)
-			intentJSON = &intent
-		}
-	} else {
-		intentJSON = &intent
+	var decoded wire
+	if err := decodeStrictJSON(data, &decoded); err != nil {
+		return err
 	}
-	return json.Marshal(wire{
-		ClientRequestID:   r.ClientRequestID,
-		Intent:            intentJSON,
-		SelectedSessionID: r.SelectedSessionID,
-		CallerSessionID:   r.CallerSessionID,
-		ParentSessionID:   r.ParentSessionID,
-		Prompt:            r.Prompt,
-		Timeout:           r.Timeout,
-		Overrides:         r.Overrides,
-	})
+	request := RunPromptRequest{
+		ClientRequestID: decoded.ClientRequestID,
+		Intent:          decoded.Intent,
+		CallerSessionID: decoded.CallerSessionID,
+		Prompt:          decoded.Prompt,
+		Timeout:         decoded.Timeout,
+		Overrides:       decoded.Overrides,
+	}
+	if err := request.Validate(); err != nil {
+		return err
+	}
+	*r = request
+	return nil
 }
 
 type OptionalStringKey struct {
@@ -122,13 +114,10 @@ func (r RunPromptRequest) Validate() error {
 	if strings.TrimSpace(r.Prompt) == "" {
 		return errors.New("prompt is required")
 	}
-	if err := r.Intent.Validate(); err != nil && strings.TrimSpace(r.SelectedSessionID) == "" && r.CallerSessionID == nil && r.ParentSessionID == nil {
+	if err := r.Intent.Validate(); err != nil {
 		return fmt.Errorf("intent: %w", err)
 	}
 	if err := ValidateOptionalIdentifier("caller_session_id", r.CallerSessionID); err != nil {
-		return err
-	}
-	if err := ValidateOptionalIdentifier("parent_session_id", r.ParentSessionID); err != nil {
 		return err
 	}
 	return r.Overrides.ValidateAgentRoleOverride()

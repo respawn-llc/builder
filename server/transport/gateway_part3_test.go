@@ -203,7 +203,7 @@ func callGatewayRaw(t *testing.T, conn *websocket.Conn, id string, method string
 	return resp
 }
 
-func TestGatewayRunPromptValidatesRawNullableProvenanceAndSelector(t *testing.T) {
+func TestGatewayRunPromptValidatesTypedIntentCallerAndSelector(t *testing.T) {
 	appCore, server := newGatewayTestServer(t)
 	defer func() { _ = appCore.Close() }()
 	defer server.Close()
@@ -214,8 +214,8 @@ func TestGatewayRunPromptValidatesRawNullableProvenanceAndSelector(t *testing.T)
 	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
 
 	valid := map[string]json.RawMessage{
-		"omitted": []byte(`{"client_request_id":"raw-omitted","selected_session_id":"missing-session","prompt":"hello"}`),
-		"null":    []byte(`{"client_request_id":"raw-null","selected_session_id":"missing-session","caller_session_id":null,"parent_session_id":null,"prompt":"hello","overrides":{"agent_role":null}}`),
+		"omitted caller": []byte(`{"client_request_id":"raw-omitted","intent":{"kind":"open_existing","session_id":"missing-session"},"prompt":"hello"}`),
+		"null caller":    []byte(`{"client_request_id":"raw-null","intent":{"kind":"open_existing","session_id":"missing-session"},"caller_session_id":null,"prompt":"hello","overrides":{"agent_role":null}}`),
 	}
 	var validCode int
 	for name, params := range valid {
@@ -238,8 +238,8 @@ func TestGatewayRunPromptValidatesRawNullableProvenanceAndSelector(t *testing.T)
 	for name, params := range map[string]json.RawMessage{
 		"empty caller":        []byte(`{"client_request_id":"raw-empty-caller","caller_session_id":"","prompt":"hello"}`),
 		"whitespace caller":   []byte(`{"client_request_id":"raw-space-caller","caller_session_id":" \t ","prompt":"hello"}`),
-		"empty parent":        []byte(`{"client_request_id":"raw-empty-parent","parent_session_id":"","prompt":"hello"}`),
-		"whitespace parent":   []byte(`{"client_request_id":"raw-space-parent","parent_session_id":" \t ","prompt":"hello"}`),
+		"legacy selected":     []byte(`{"client_request_id":"raw-legacy-selected","selected_session_id":"missing-session","prompt":"hello"}`),
+		"legacy parent":       []byte(`{"client_request_id":"raw-legacy-parent","parent_session_id":"parent-session","prompt":"hello"}`),
 		"empty selector":      []byte(`{"client_request_id":"raw-empty-selector","prompt":"hello","overrides":{"agent_role":""}}`),
 		"whitespace selector": []byte(`{"client_request_id":"raw-space-selector","prompt":"hello","overrides":{"agent_role":" \t "}}`),
 	} {
@@ -249,6 +249,23 @@ func TestGatewayRunPromptValidatesRawNullableProvenanceAndSelector(t *testing.T)
 				t.Fatalf("raw %s response = %+v, want invalid params", name, resp)
 			}
 		})
+	}
+}
+
+func TestGatewayRunPromptRejectsMixedTypedAndLegacyLaunchFields(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+	handshakeGateway(t, conn)
+	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
+
+	raw := json.RawMessage(`{"client_request_id":"mixed-launch","intent":{"kind":"open_existing","session_id":"target"},"selected_session_id":"legacy","prompt":"hello"}`)
+	resp := callGatewayRaw(t, conn, "mixed-launch", protocol.MethodRunPrompt, raw)
+	if resp.Error == nil || resp.Error.Code != protocol.ErrCodeInvalidParams {
+		t.Fatalf("mixed launch response = %+v, want invalid params", resp)
 	}
 }
 

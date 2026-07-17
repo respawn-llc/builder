@@ -20,25 +20,111 @@ const (
 )
 
 type SessionLaunchIntentKind string
+type SessionCreateOriginKind string
 
 const (
 	SessionLaunchIntentCreateNew    SessionLaunchIntentKind = "create_new"
 	SessionLaunchIntentOpenExisting SessionLaunchIntentKind = "open_existing"
+
+	SessionCreateOriginIndependent     SessionCreateOriginKind = "independent"
+	SessionCreateOriginPreviousSession SessionCreateOriginKind = "previous_session"
+	SessionCreateOriginParentAgent     SessionCreateOriginKind = "parent_agent"
 )
 
-type SessionLaunchIntent struct {
-	kind      SessionLaunchIntentKind
-	parentID  *runtimeids.SessionID
+type SessionCreateOrigin struct {
+	kind      SessionCreateOriginKind
 	sessionID *runtimeids.SessionID
 }
 
-func CreateNewSessionLaunchIntent(parentID *runtimeids.SessionID) SessionLaunchIntent {
-	intent := SessionLaunchIntent{kind: SessionLaunchIntentCreateNew}
-	if parentID != nil {
-		copied := *parentID
-		intent.parentID = &copied
+func IndependentSessionCreateOrigin() SessionCreateOrigin {
+	return SessionCreateOrigin{kind: SessionCreateOriginIndependent}
+}
+
+func PreviousSessionCreateOrigin(sessionID runtimeids.SessionID) SessionCreateOrigin {
+	return sessionCreateOriginWithID(SessionCreateOriginPreviousSession, sessionID)
+}
+
+func ParentAgentSessionCreateOrigin(sessionID runtimeids.SessionID) SessionCreateOrigin {
+	return sessionCreateOriginWithID(SessionCreateOriginParentAgent, sessionID)
+}
+
+func sessionCreateOriginWithID(kind SessionCreateOriginKind, sessionID runtimeids.SessionID) SessionCreateOrigin {
+	copied := sessionID
+	return SessionCreateOrigin{kind: kind, sessionID: &copied}
+}
+
+func (o SessionCreateOrigin) Kind() SessionCreateOriginKind {
+	return o.kind
+}
+
+func (o SessionCreateOrigin) SessionID() (runtimeids.SessionID, bool) {
+	if o.sessionID == nil {
+		return runtimeids.SessionID{}, false
 	}
-	return intent
+	return *o.sessionID, true
+}
+
+func (o SessionCreateOrigin) Equal(other SessionCreateOrigin) bool {
+	if o.kind != other.kind {
+		return false
+	}
+	left, leftPresent := o.SessionID()
+	right, rightPresent := other.SessionID()
+	return leftPresent == rightPresent && (!leftPresent || left == right)
+}
+
+func (o SessionCreateOrigin) Validate() error {
+	switch o.kind {
+	case SessionCreateOriginIndependent:
+		if o.sessionID != nil {
+			return errors.New("independent session create origin cannot contain session_id")
+		}
+	case SessionCreateOriginPreviousSession, SessionCreateOriginParentAgent:
+		if o.sessionID == nil || o.sessionID.IsZero() {
+			return fmt.Errorf("%s session create origin requires session_id", o.kind)
+		}
+	default:
+		return errors.New("session create origin kind is invalid")
+	}
+	return nil
+}
+
+func (o SessionCreateOrigin) MarshalJSON() ([]byte, error) {
+	if err := o.Validate(); err != nil {
+		return nil, err
+	}
+	type wire struct {
+		Kind      SessionCreateOriginKind `json:"kind"`
+		SessionID *runtimeids.SessionID   `json:"session_id,omitempty"`
+	}
+	return json.Marshal(wire{Kind: o.kind, SessionID: o.sessionID})
+}
+
+func (o *SessionCreateOrigin) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Kind      SessionCreateOriginKind `json:"kind"`
+		SessionID *runtimeids.SessionID   `json:"session_id"`
+	}
+	if err := decodeStrictJSON(data, &wire); err != nil {
+		return err
+	}
+	decoded := SessionCreateOrigin{kind: wire.Kind, sessionID: wire.SessionID}
+	if err := decoded.Validate(); err != nil {
+		return err
+	}
+	*o = decoded
+	return nil
+}
+
+type SessionLaunchIntent struct {
+	kind      SessionLaunchIntentKind
+	origin    *SessionCreateOrigin
+	sessionID *runtimeids.SessionID
+}
+
+func CreateNewSessionLaunchIntent(origin SessionCreateOrigin) SessionLaunchIntent {
+	copied := origin
+	return SessionLaunchIntent{kind: SessionLaunchIntentCreateNew, origin: &copied}
 }
 
 func OpenExistingSessionLaunchIntent(sessionID runtimeids.SessionID) SessionLaunchIntent {
@@ -53,11 +139,11 @@ func (i SessionLaunchIntent) Kind() SessionLaunchIntentKind {
 	return i.kind
 }
 
-func (i SessionLaunchIntent) ParentID() (runtimeids.SessionID, bool) {
-	if i.parentID == nil {
-		return runtimeids.SessionID{}, false
+func (i SessionLaunchIntent) CreateOrigin() (SessionCreateOrigin, bool) {
+	if i.origin == nil {
+		return SessionCreateOrigin{}, false
 	}
-	return *i.parentID, true
+	return *i.origin, true
 }
 
 func (i SessionLaunchIntent) SessionID() (runtimeids.SessionID, bool) {
@@ -71,9 +157,9 @@ func (i SessionLaunchIntent) Equal(other SessionLaunchIntent) bool {
 	if i.kind != other.kind {
 		return false
 	}
-	leftParent, leftHasParent := i.ParentID()
-	rightParent, rightHasParent := other.ParentID()
-	if leftHasParent != rightHasParent || (leftHasParent && leftParent != rightParent) {
+	leftOrigin, leftHasOrigin := i.CreateOrigin()
+	rightOrigin, rightHasOrigin := other.CreateOrigin()
+	if leftHasOrigin != rightHasOrigin || (leftHasOrigin && !leftOrigin.Equal(rightOrigin)) {
 		return false
 	}
 	leftSession, leftHasSession := i.SessionID()
@@ -87,12 +173,15 @@ func (i SessionLaunchIntent) Validate() error {
 		if i.sessionID != nil {
 			return errors.New("create_new session launch intent cannot contain session_id")
 		}
-		if i.parentID != nil && i.parentID.IsZero() {
-			return errors.New("create_new session launch intent parent_id is invalid")
+		if i.origin == nil {
+			return errors.New("create_new session launch intent requires origin")
+		}
+		if err := i.origin.Validate(); err != nil {
+			return fmt.Errorf("create_new session launch intent origin: %w", err)
 		}
 	case SessionLaunchIntentOpenExisting:
-		if i.parentID != nil {
-			return errors.New("open_existing session launch intent cannot contain parent_id")
+		if i.origin != nil {
+			return errors.New("open_existing session launch intent cannot contain origin")
 		}
 		if i.sessionID == nil || i.sessionID.IsZero() {
 			return errors.New("open_existing session launch intent requires session_id")
@@ -109,12 +198,12 @@ func (i SessionLaunchIntent) MarshalJSON() ([]byte, error) {
 	}
 	type wire struct {
 		Kind      SessionLaunchIntentKind `json:"kind"`
-		ParentID  *runtimeids.SessionID   `json:"parent_id,omitempty"`
+		Origin    *SessionCreateOrigin    `json:"origin,omitempty"`
 		SessionID *runtimeids.SessionID   `json:"session_id,omitempty"`
 	}
 	return json.Marshal(wire{
 		Kind:      i.kind,
-		ParentID:  i.parentID,
+		Origin:    i.origin,
 		SessionID: i.sessionID,
 	})
 }
@@ -122,7 +211,7 @@ func (i SessionLaunchIntent) MarshalJSON() ([]byte, error) {
 func (i *SessionLaunchIntent) UnmarshalJSON(data []byte) error {
 	var wire struct {
 		Kind      SessionLaunchIntentKind `json:"kind"`
-		ParentID  *runtimeids.SessionID   `json:"parent_id"`
+		Origin    *SessionCreateOrigin    `json:"origin"`
 		SessionID *runtimeids.SessionID   `json:"session_id"`
 	}
 	if err := decodeStrictJSON(data, &wire); err != nil {
@@ -130,7 +219,7 @@ func (i *SessionLaunchIntent) UnmarshalJSON(data []byte) error {
 	}
 	decoded := SessionLaunchIntent{
 		kind:      wire.Kind,
-		parentID:  wire.ParentID,
+		origin:    wire.Origin,
 		sessionID: wire.SessionID,
 	}
 	if err := decoded.Validate(); err != nil {
@@ -141,45 +230,31 @@ func (i *SessionLaunchIntent) UnmarshalJSON(data []byte) error {
 }
 
 type SessionPlanRequest struct {
-	ClientRequestID   string              `json:"client_request_id"`
-	Mode              SessionLaunchMode   `json:"mode"`
-	Intent            SessionLaunchIntent `json:"intent"`
-	SelectedSessionID string              `json:"selected_session_id,omitempty"`
-	ForceNewSession   bool                `json:"force_new_session,omitempty"`
-	CallerSessionID   *string             `json:"caller_session_id,omitempty"`
-	ParentSessionID   *string             `json:"parent_session_id,omitempty"`
-	Overrides         RunPromptOverrides  `json:"overrides,omitempty"`
+	ClientRequestID string              `json:"client_request_id"`
+	Mode            SessionLaunchMode   `json:"mode"`
+	Intent          SessionLaunchIntent `json:"intent"`
+	CallerSessionID *string             `json:"caller_session_id,omitempty"`
+	Overrides       RunPromptOverrides  `json:"overrides,omitempty"`
 }
 
 func (r *SessionPlanRequest) UnmarshalJSON(data []byte) error {
 	type wire struct {
-		ClientRequestID   string              `json:"client_request_id"`
-		Mode              SessionLaunchMode   `json:"mode"`
-		Intent            SessionLaunchIntent `json:"intent"`
-		SelectedSessionID string              `json:"selected_session_id"`
-		ForceNewSession   bool                `json:"force_new_session"`
-		CallerSessionID   *string             `json:"caller_session_id"`
-		ParentSessionID   *string             `json:"parent_session_id"`
-		Overrides         RunPromptOverrides  `json:"overrides"`
+		ClientRequestID string              `json:"client_request_id"`
+		Mode            SessionLaunchMode   `json:"mode"`
+		Intent          SessionLaunchIntent `json:"intent"`
+		CallerSessionID *string             `json:"caller_session_id"`
+		Overrides       RunPromptOverrides  `json:"overrides"`
 	}
 	var decoded wire
 	if err := decodeStrictJSON(data, &decoded); err != nil {
 		return err
 	}
 	request := SessionPlanRequest{
-		ClientRequestID:   decoded.ClientRequestID,
-		Mode:              decoded.Mode,
-		Intent:            decoded.Intent,
-		SelectedSessionID: decoded.SelectedSessionID,
-		ForceNewSession:   decoded.ForceNewSession,
-		CallerSessionID:   decoded.CallerSessionID,
-		ParentSessionID:   decoded.ParentSessionID,
-		Overrides:         decoded.Overrides,
-	}
-	if err := request.Intent.Validate(); err != nil ||
-		strings.TrimSpace(request.SelectedSessionID) != "" ||
-		request.ForceNewSession {
-		return errors.New("legacy session launch fields are not accepted; use intent")
+		ClientRequestID: decoded.ClientRequestID,
+		Mode:            decoded.Mode,
+		Intent:          decoded.Intent,
+		CallerSessionID: decoded.CallerSessionID,
+		Overrides:       decoded.Overrides,
 	}
 	if err := request.Validate(); err != nil {
 		return err
@@ -215,14 +290,10 @@ func (r SessionPlanRequest) Validate() error {
 	if mode != string(SessionLaunchModeInteractive) && mode != string(SessionLaunchModeHeadless) {
 		return errors.New("mode must be interactive or headless")
 	}
-	intentErr := r.Intent.Validate()
-	if intentErr != nil && strings.TrimSpace(r.SelectedSessionID) == "" && !r.ForceNewSession && r.CallerSessionID == nil && r.ParentSessionID == nil {
-		return fmt.Errorf("intent: %w", intentErr)
+	if err := r.Intent.Validate(); err != nil {
+		return fmt.Errorf("intent: %w", err)
 	}
 	if err := ValidateOptionalIdentifier("caller_session_id", r.CallerSessionID); err != nil {
-		return err
-	}
-	if err := ValidateOptionalIdentifier("parent_session_id", r.ParentSessionID); err != nil {
 		return err
 	}
 	return r.Overrides.ValidateAgentRoleOverride()

@@ -12,25 +12,36 @@ import (
 )
 
 func TestRemoteSessionLaunchPreservesTypedIntent(t *testing.T) {
-	parent := mustTransportSessionID(t, "parent-session")
+	previous := mustTransportSessionID(t, "previous-session")
+	parentAgent := mustTransportSessionID(t, "parent-agent-session")
 	target := mustTransportSessionID(t, "target-session")
 	tests := []struct {
 		name       string
 		intent     serverapi.SessionLaunchIntent
 		wantKind   serverapi.SessionLaunchIntentKind
-		wantParent *runtimeids.SessionID
+		wantOrigin serverapi.SessionCreateOriginKind
+		wantSource *runtimeids.SessionID
 		wantTarget *runtimeids.SessionID
 	}{
 		{
-			name:     "create new without parent",
-			intent:   serverapi.CreateNewSessionLaunchIntent(nil),
-			wantKind: serverapi.SessionLaunchIntentCreateNew,
+			name:       "independent creation",
+			intent:     serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+			wantKind:   serverapi.SessionLaunchIntentCreateNew,
+			wantOrigin: serverapi.SessionCreateOriginIndependent,
 		},
 		{
-			name:       "create new with parent",
-			intent:     serverapi.CreateNewSessionLaunchIntent(&parent),
+			name:       "previous session creation",
+			intent:     serverapi.CreateNewSessionLaunchIntent(serverapi.PreviousSessionCreateOrigin(previous)),
 			wantKind:   serverapi.SessionLaunchIntentCreateNew,
-			wantParent: &parent,
+			wantOrigin: serverapi.SessionCreateOriginPreviousSession,
+			wantSource: &previous,
+		},
+		{
+			name:       "parent agent creation",
+			intent:     serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(parentAgent)),
+			wantKind:   serverapi.SessionLaunchIntentCreateNew,
+			wantOrigin: serverapi.SessionCreateOriginParentAgent,
+			wantSource: &parentAgent,
 		},
 		{
 			name:       "open existing",
@@ -57,7 +68,7 @@ func TestRemoteSessionLaunchPreservesTypedIntent(t *testing.T) {
 					t.Errorf("decode session.plan params: %v", err)
 					return
 				}
-				assertTransportIntent(t, plan.Intent, test.wantKind, test.wantParent, test.wantTarget)
+				assertTransportIntent(t, plan.Intent, test.wantKind, test.wantOrigin, test.wantSource, test.wantTarget)
 				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.SessionPlanResponse{})); err != nil {
 					t.Errorf("send session.plan response: %v", err)
 				}
@@ -103,25 +114,35 @@ func TestRemoteSessionLaunchPropagatesTypedIntentRejection(t *testing.T) {
 	_, err = remote.PlanSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID: "legacy-request",
 		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(nil),
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	})
 	if err == nil {
 		t.Fatal("PlanSession accepted a request rejected by the remote gateway")
 	}
 }
 
-func assertTransportIntent(t *testing.T, got serverapi.SessionLaunchIntent, wantKind serverapi.SessionLaunchIntentKind, wantParent *runtimeids.SessionID, wantSession *runtimeids.SessionID) {
+func assertTransportIntent(t *testing.T, got serverapi.SessionLaunchIntent, wantKind serverapi.SessionLaunchIntentKind, wantOrigin serverapi.SessionCreateOriginKind, wantSource *runtimeids.SessionID, wantSession *runtimeids.SessionID) {
 	t.Helper()
 	if got.Kind() != wantKind {
 		t.Fatalf("intent kind = %q, want %q", got.Kind(), wantKind)
 	}
-	parent, hasParent := got.ParentID()
-	if wantParent == nil {
-		if hasParent {
-			t.Fatalf("unexpected parent ID %q", parent.String())
+	origin, hasOrigin := got.CreateOrigin()
+	if wantKind == serverapi.SessionLaunchIntentOpenExisting {
+		if hasOrigin {
+			t.Fatalf("unexpected creation origin %+v", origin)
 		}
-	} else if !hasParent || parent != *wantParent {
-		t.Fatalf("parent ID = %q/%v, want %q", parent.String(), hasParent, wantParent.String())
+	} else {
+		if !hasOrigin || origin.Kind() != wantOrigin {
+			t.Fatalf("creation origin = %+v/%v, want %q", origin, hasOrigin, wantOrigin)
+		}
+		source, hasSource := origin.SessionID()
+		if wantSource == nil {
+			if hasSource {
+				t.Fatalf("unexpected creation source %q", source.String())
+			}
+		} else if !hasSource || source != *wantSource {
+			t.Fatalf("creation source = %q/%v, want %q", source.String(), hasSource, wantSource.String())
+		}
 	}
 	session, hasSession := got.SessionID()
 	if wantSession == nil {

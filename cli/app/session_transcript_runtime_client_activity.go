@@ -1,6 +1,9 @@
 package app
 
-import "core/shared/clientui"
+import (
+	"core/shared/clientui"
+	"core/shared/runtimeids"
+)
 
 type runtimeActivitySnapshotPatch struct {
 	Version             clientui.ReadModelVersion
@@ -129,11 +132,9 @@ func applyTranscriptSessionStatusToRuntimeStatus(status *clientui.RuntimeStatus,
 	status.FastModeEnabled = update.FastModeEnabled
 	status.ThinkingLevel = update.ThinkingLevel
 	status.CompactionMode = update.CompactionMode
-	status.ParentSessionID = nil
-	if update.ParentSessionID != nil {
-		parentSessionID := update.ParentSessionID.String()
-		status.ParentSessionID = &parentSessionID
-	}
+	status.PreviousSessionID = cloneRuntimeSessionID(update.PreviousSessionID)
+	status.ParentAgentSessionID = cloneRuntimeSessionID(update.ParentAgentSessionID)
+	status.NavigationTargetSessionID = cloneRuntimeSessionID(update.NavigationTargetSessionID)
 	status.WorkflowActive = false
 	status.WorkflowSession = nil
 	if update.Workflow != nil {
@@ -144,6 +145,14 @@ func applyTranscriptSessionStatusToRuntimeStatus(status *clientui.RuntimeStatus,
 			WorkflowID: update.Workflow.WorkflowID,
 		}
 	}
+}
+
+func cloneRuntimeSessionID(value *runtimeids.SessionID) *runtimeids.SessionID {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }
 
 func applyTranscriptSessionIdentityToRuntimeView(view *clientui.RuntimeSessionView, identity clientui.TranscriptSessionIdentity) {

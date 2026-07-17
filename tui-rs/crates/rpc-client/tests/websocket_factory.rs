@@ -2,6 +2,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
 
+use client_contracts::protocol::AttachProjectWorkspace;
 use rpc_client::api::{PROTOCOL_VERSION, RemoteClient, RemoteContext};
 use rpc_client::endpoint::parse_websocket_endpoint;
 use rpc_client::transport::FrameConnection;
@@ -9,6 +10,11 @@ use rpc_client::websocket::{EndpointConnectionFactory, WebSocketTransport};
 use rpc_client::wire::{Frame, JSONRPC_VERSION, Response};
 use serde_json::json;
 use tungstenite::Message;
+
+#[test]
+fn rust_protocol_version_matches_attachment_contract() {
+    assert_eq!(PROTOCOL_VERSION, "62");
+}
 
 #[test]
 fn websocket_endpoint_factory_runs_remote_client_setup_over_real_frames() {
@@ -25,7 +31,7 @@ fn websocket_endpoint_factory_runs_remote_client_setup_over_real_frames() {
     let factory = EndpointConnectionFactory::new(endpoint, WebSocketTransport::default());
     let mut remote = RemoteClient::new(
         factory,
-        RemoteContext::project("project-1", "workspace-1", ""),
+        RemoteContext::project("project-1", Some(AttachProjectWorkspace::id("workspace-1"))),
     );
     let mut connection = remote.open_project_connection().unwrap();
     connection.close().unwrap();
@@ -64,7 +70,7 @@ fn websocket_endpoint_factory_runs_dedicated_call_over_real_frames() {
     let factory = EndpointConnectionFactory::new(endpoint, WebSocketTransport::default());
     let mut remote = RemoteClient::new(
         factory,
-        RemoteContext::project("project-1", "workspace-1", ""),
+        RemoteContext::project("project-1", Some(AttachProjectWorkspace::id("workspace-1"))),
     );
     let (response, mut connection) = remote
         .call_dedicated(
@@ -131,7 +137,10 @@ where
         attach.params,
         Some(json!({
             "project_id": "project-1",
-            "workspace_id": "workspace-1"
+            "workspace": {
+                "kind": "workspace_id",
+                "workspace_id": "workspace-1"
+            }
         }))
     );
     socket
@@ -142,7 +151,12 @@ where
                 result: Some(json!({
                     "kind": "project",
                     "project_id": "project-1",
-                    "workspace_id": "workspace-1"
+                    "workspace_id": "workspace-1",
+                    "workspace_root": "/workspace",
+                    "workspace_selection": {
+                        "kind": "workspace_id",
+                        "workspace_id": "workspace-1"
+                    }
                 })),
                 error: None,
             }))

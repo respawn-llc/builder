@@ -17,6 +17,7 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 )
@@ -161,7 +162,7 @@ func newRealSessionRetargetFixture(t *testing.T) realSessionRetargetFixture {
 	if err := parent.EnsureDurable(); err != nil {
 		t.Fatalf("parent EnsureDurable: %v", err)
 	}
-	child, err := session.Create(
+	child, err := session.NewLazy(
 		sourceContainer,
 		sourceBinding.WorkspaceName,
 		sourceBinding.CanonicalRoot,
@@ -171,12 +172,11 @@ func newRealSessionRetargetFixture(t *testing.T) realSessionRetargetFixture {
 	if err != nil {
 		t.Fatalf("session.Create child: %v", err)
 	}
+	if err := session.InitializeCreationContext(child, parent, session.SessionCreationSourcePreviousSession, session.ChildContextOptions{}); err != nil {
+		t.Fatalf("InitializeCreationContext: %v", err)
+	}
 	if err := child.EnsureDurable(); err != nil {
 		t.Fatalf("child EnsureDurable: %v", err)
-	}
-	parentSessionID := parent.Meta().SessionID
-	if err := child.SetParentSessionID(&parentSessionID); err != nil {
-		t.Fatalf("SetParentSessionID: %v", err)
 	}
 	stores := registry.NewSessionStoreRegistry()
 	stores.RegisterStore(child)
@@ -446,8 +446,12 @@ func TestSessionWorkspaceRetargeterMovesRealArtifactAndMetadataAcrossProjects(t 
 	if reopened.Meta().WorkspaceRoot != result.Binding.CanonicalRoot {
 		t.Fatalf("reopened workspace root = %q, want %q", reopened.Meta().WorkspaceRoot, result.Binding.CanonicalRoot)
 	}
-	if reopened.Meta().ParentSessionID == nil || *reopened.Meta().ParentSessionID != fixture.parent.Meta().SessionID {
-		t.Fatalf("reopened parent session = %v, want %q", reopened.Meta().ParentSessionID, fixture.parent.Meta().SessionID)
+	parentID, err := runtimeids.ParseSessionID(fixture.parent.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID parent: %v", err)
+	}
+	if reopened.Meta().PreviousSessionID == nil || *reopened.Meta().PreviousSessionID != parentID {
+		t.Fatalf("reopened previous session = %v, want %q", reopened.Meta().PreviousSessionID, fixture.parent.Meta().SessionID)
 	}
 	parentInSource, err := fixture.metadata.SessionBelongsToProject(context.Background(), fixture.parent.Meta().SessionID, fixture.sourceBinding.ProjectID)
 	if err != nil {

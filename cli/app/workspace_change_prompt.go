@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/protocol"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -31,6 +33,63 @@ type workspaceChangePromptResult struct {
 	Rebind bool
 }
 
+type sessionWorkspaceRetargetContext struct {
+	workspaceRoot string
+	theme         string
+}
+
+type sessionWorkspaceRetargetContextProvider interface {
+	workspaceRetargetContext() *sessionWorkspaceRetargetContext
+}
+
+func newSessionWorkspaceRetargetContext(workspaceRoot string, theme string) (*sessionWorkspaceRetargetContext, error) {
+	normalizedRoot := normalizeWorkspaceChangeDisplayRoot(workspaceRoot)
+	if normalizedRoot == "" {
+		return nil, errors.New("workspace retarget root is required")
+	}
+	return &sessionWorkspaceRetargetContext{
+		workspaceRoot: normalizedRoot,
+		theme:         strings.TrimSpace(theme),
+	}, nil
+}
+
+func sessionWorkspaceRetargetContextFromBinding(binding protocol.ProjectAttachment, theme string) *sessionWorkspaceRetargetContext {
+	return &sessionWorkspaceRetargetContext{
+		workspaceRoot: normalizeWorkspaceChangeDisplayRoot(binding.WorkspaceRoot),
+		theme:         strings.TrimSpace(theme),
+	}
+}
+
+func resolveSessionWorkspaceRetargetContext(
+	ctx context.Context,
+	projectViews apicontract.ProjectViewService,
+	projectID string,
+	workspaceID string,
+	theme string,
+) (*sessionWorkspaceRetargetContext, error) {
+	if projectViews == nil {
+		return nil, errors.New("project view client is required for workspace retarget context")
+	}
+	trimmedProjectID := strings.TrimSpace(projectID)
+	if trimmedProjectID == "" {
+		return nil, errors.New("project id is required for workspace retarget context")
+	}
+	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
+	if trimmedWorkspaceID == "" {
+		return nil, errors.New("workspace id is required for workspace retarget context")
+	}
+	overview, err := projectViews.GetProjectOverview(ctx, serverapi.ProjectGetOverviewRequest{ProjectID: trimmedProjectID})
+	if err != nil {
+		return nil, err
+	}
+	for _, workspace := range overview.Overview.Workspaces {
+		if workspace.WorkspaceID == trimmedWorkspaceID {
+			return newSessionWorkspaceRetargetContext(workspace.RootPath, theme)
+		}
+	}
+	return nil, fmt.Errorf("workspace %q is not attached to project %q", trimmedWorkspaceID, trimmedProjectID)
+}
+
 type workspaceChangePromptModel struct {
 	width        int
 	height       int
@@ -43,7 +102,7 @@ type workspaceChangePromptModel struct {
 
 func maybeHandlePickedSessionWorkspaceChange(ctx context.Context, server sessionWorkspaceChangeServer, sessionID string, executionTarget clientui.SessionExecutionTarget) (sessionWorkspaceChangeAction, error) {
 	if server == nil {
-		return sessionWorkspaceChangeProceed, errors.New("embedded server is required")
+		return sessionWorkspaceChangeProceed, errors.New("session server is required")
 	}
 	if strings.TrimSpace(sessionID) == "" {
 		return sessionWorkspaceChangeProceed, errors.New("session id is required")
@@ -52,25 +111,39 @@ func maybeHandlePickedSessionWorkspaceChange(ctx context.Context, server session
 	if executionTarget.WorkspaceAvailability != clientui.ProjectAvailabilityAvailable {
 		return sessionWorkspaceChangeProceed, nil
 	}
-	currentRoot := normalizeWorkspaceChangeDisplayRoot(server.Config().WorkspaceRoot)
+	contextProvider, ok := server.(sessionWorkspaceRetargetContextProvider)
+	if !ok {
+		return sessionWorkspaceChangeProceed, errors.New("workspace retarget context provider is required")
+	}
+	retargetContext := contextProvider.workspaceRetargetContext()
+	if retargetContext == nil {
+		return sessionWorkspaceChangeProceed, errors.New("workspace retarget context is required")
+	}
+	currentRoot := normalizeWorkspaceChangeDisplayRoot(retargetContext.workspaceRoot)
 	selectedRoot := normalizeWorkspaceChangeDisplayRoot(executionTarget.WorkspaceRoot)
-	if comparableWorkspaceChangeRoot(currentRoot) == "" || comparableWorkspaceChangeRoot(selectedRoot) == "" || comparableWorkspaceChangeRoot(currentRoot) == comparableWorkspaceChangeRoot(selectedRoot) {
+	if comparableWorkspaceChangeRoot(currentRoot) == "" {
+		return sessionWorkspaceChangeProceed, errors.New("current workspace root is required")
+	}
+	if comparableWorkspaceChangeRoot(selectedRoot) == "" {
+		return sessionWorkspaceChangeProceed, errors.New("selected session workspace root is required")
+	}
+	if comparableWorkspaceChangeRoot(currentRoot) == comparableWorkspaceChangeRoot(selectedRoot) {
 		return sessionWorkspaceChangeProceed, nil
 	}
-	result, err := runWorkspaceChangePromptFlow(selectedRoot, currentRoot, server.Config().Settings.Theme)
+	result, err := runWorkspaceChangePromptFlow(selectedRoot, currentRoot, retargetContext.theme)
 	if err != nil {
 		return sessionWorkspaceChangeProceed, err
 	}
 	if !result.Rebind {
 		return sessionWorkspaceChangePickAgain, nil
 	}
-	if err := retargetInteractiveSessionWorkspace(ctx, server, sessionID); err != nil {
+	if err := retargetInteractiveSessionWorkspace(ctx, server, sessionID, currentRoot); err != nil {
 		return sessionWorkspaceChangeProceed, err
 	}
 	return sessionWorkspaceChangeProceed, nil
 }
 
-func retargetInteractiveSessionWorkspace(ctx context.Context, server sessionWorkspaceChangeServer, sessionID string) error {
+func retargetInteractiveSessionWorkspace(ctx context.Context, server sessionLifecycleClientProvider, sessionID string, workspaceRoot string) error {
 	if server == nil || server.SessionLifecycleClient() == nil {
 		return errors.New("session lifecycle client is required")
 	}
@@ -78,11 +151,11 @@ func retargetInteractiveSessionWorkspace(ctx context.Context, server sessionWork
 	if trimmedSessionID == "" {
 		return errors.New("session id is required")
 	}
-	workspaceRoot := strings.TrimSpace(server.Config().WorkspaceRoot)
-	if workspaceRoot == "" {
+	trimmedWorkspaceRoot := strings.TrimSpace(workspaceRoot)
+	if trimmedWorkspaceRoot == "" {
 		return errors.New("workspace root is required")
 	}
-	_, err := server.SessionLifecycleClient().RetargetSessionWorkspace(ctx, serverapi.SessionRetargetWorkspaceRequest{ClientRequestID: uuid.NewString(), SessionID: trimmedSessionID, WorkspaceRoot: workspaceRoot})
+	_, err := server.SessionLifecycleClient().RetargetSessionWorkspace(ctx, serverapi.SessionRetargetWorkspaceRequest{ClientRequestID: uuid.NewString(), SessionID: trimmedSessionID, WorkspaceRoot: trimmedWorkspaceRoot})
 	return err
 }
 

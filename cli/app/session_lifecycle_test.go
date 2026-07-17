@@ -69,7 +69,7 @@ func TestRunSessionLifecycleReturnsMissingWorkspaceFailure(t *testing.T) {
 		},
 	}
 
-	createIntent := serverapi.CreateNewSessionLaunchIntent(nil)
+	createIntent := serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())
 	err := runSessionLifecycleWithOptions(context.Background(), server, nil, sessionLifecycleOptions{Intent: &createIntent})
 	if err == nil {
 		t.Fatal("expected startup error for missing workspace")
@@ -100,7 +100,7 @@ func TestRunSessionLifecycleAppliesInitialAgentOverride(t *testing.T) {
 		}},
 	}
 
-	createIntent := serverapi.CreateNewSessionLaunchIntent(nil)
+	createIntent := serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())
 	err := runSessionLifecycleWithOptions(context.Background(), server, nil, sessionLifecycleOptions{
 		Intent:    &createIntent,
 		Overrides: serverapi.RunPromptOverrides{AgentRole: sessionLifecycleStringPtr("worker")},
@@ -156,9 +156,10 @@ func TestRunSessionLifecycleRejectsDifferentAgentRoleForLockedContinuation(t *te
 		t.Fatalf("MarkModelDispatchLocked: %v", err)
 	}
 	service := sessionlaunch.NewService(launch.Planner{
-		Config:       cfg,
-		ContainerDir: containerDir,
-		StoreOptions: metadataStore.AuthoritativeSessionStoreOptions(),
+		Config:            cfg,
+		ContainerDir:      containerDir,
+		StoreOptions:      metadataStore.AuthoritativeSessionStoreOptions(),
+		PersistedSessions: metadataStore,
 	}, registry.NewSessionStoreRegistry())
 	server := &testEmbeddedServer{
 		cfg:               cfg,
@@ -209,6 +210,61 @@ func TestMaybeHandlePickedSessionWorkspaceChangeCanonicalizesAliases(t *testing.
 	}
 	if promptCalls != 0 {
 		t.Fatalf("prompt calls = %d, want 0", promptCalls)
+	}
+}
+
+func TestMaybeHandlePickedSessionWorkspaceChangeUsesRemoteServerBindingRoot(t *testing.T) {
+	originalPrompt := runWorkspaceChangePromptFlow
+	defer func() { runWorkspaceChangePromptFlow = originalPrompt }()
+	promptCalls := 0
+	var promptedCurrentRoot string
+	runWorkspaceChangePromptFlow = func(_ string, currentRoot string, _ string) (workspaceChangePromptResult, error) {
+		promptCalls++
+		promptedCurrentRoot = currentRoot
+		return workspaceChangePromptResult{}, nil
+	}
+
+	action, err := maybeHandlePickedSessionWorkspaceChange(
+		context.Background(),
+		&remoteAppServer{
+			cfg: config.App{
+				WorkspaceRoot: "/source-client-workspace",
+				Settings:      config.Settings{Theme: "dark"},
+			},
+			retarget: &sessionWorkspaceRetargetContext{workspaceRoot: "/active-server-workspace", theme: "dark"},
+		},
+		"session-1",
+		clientui.SessionExecutionTarget{
+			WorkspaceRoot:         "/target-server-workspace",
+			WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+		},
+	)
+	if err != nil {
+		t.Fatalf("maybeHandlePickedSessionWorkspaceChange: %v", err)
+	}
+	if action != sessionWorkspaceChangePickAgain {
+		t.Fatalf("action = %v, want pick again", action)
+	}
+	if promptCalls != 1 {
+		t.Fatalf("prompt calls = %d, want 1", promptCalls)
+	}
+	if promptedCurrentRoot != "/active-server-workspace" {
+		t.Fatalf("prompt current root = %q, want server binding root", promptedCurrentRoot)
+	}
+}
+
+func TestMaybeHandlePickedSessionWorkspaceChangeRejectsMissingBindingContext(t *testing.T) {
+	_, err := maybeHandlePickedSessionWorkspaceChange(
+		context.Background(),
+		narrowSessionLifecycleServer{},
+		"session-1",
+		clientui.SessionExecutionTarget{
+			WorkspaceRoot:         "/target-server-workspace",
+			WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+		},
+	)
+	if err == nil {
+		t.Fatal("expected missing workspace retarget context error")
 	}
 }
 
@@ -715,12 +771,16 @@ func mustCanonicalPath(t *testing.T, path string) string {
 }
 
 func TestResolveSessionActionNewSessionUsesForceNewFlow(t *testing.T) {
+	previousSessionID, err := runtimeids.ParseSessionID("parent-1")
+	if err != nil {
+		t.Fatalf("parse previous session id: %v", err)
+	}
 	resolved, err := resolveSessionAction(
 		context.Background(),
 		&testEmbeddedServer{},
 		nil,
 		"",
-		UITransition{Action: UIActionNewSession, InitialPrompt: "hello", ParentSessionID: "parent-1"},
+		UITransition{Action: UIActionNewSession, InitialPrompt: "hello", PreviousSessionID: &previousSessionID},
 	)
 	if err != nil {
 		t.Fatalf("resolve session action: %v", err)
@@ -750,7 +810,7 @@ func TestResolveSessionActionPreservesInitialPromptHistoryRecorded(t *testing.T)
 				HistoryRecorded: req.Transition.InitialPromptHistoryRecorded,
 			}
 			return serverapi.LaunchSessionDirective(
-				serverapi.CreateNewSessionLaunchIntent(nil),
+				serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 				serverapi.NewSessionLaunchPreparation(
 					&prompt,
 					serverapi.RestoreStoredDraftSessionDraftDisposition(),
@@ -798,18 +858,37 @@ func TestNewSessionTransitionKeepsBackgroundProcessesAlive(t *testing.T) {
 	}
 
 	root := t.TempDir()
+	persistence := sessiontest.NewPersistence()
+	source, err := session.Create(
+		root,
+		filepath.Base(filepath.Clean(workdir)),
+		workdir,
+		sessioncontract.SessionCategoryMain,
+		persistence.Options()...,
+	)
+	if err != nil {
+		t.Fatalf("create source session: %v", err)
+	}
+	if err := source.EnsureDurable(); err != nil {
+		t.Fatalf("persist source session: %v", err)
+	}
+	sourceSessionID := source.Meta().SessionID
+	previousSessionID, err := runtimeids.ParseSessionID(sourceSessionID)
+	if err != nil {
+		t.Fatalf("parse source session id: %v", err)
+	}
 	resolved, err := resolveSessionAction(
 		context.Background(),
 		&testEmbeddedServer{background: manager},
 		nil,
 		"",
-		UITransition{Action: UIActionNewSession, InitialPrompt: "hello", ParentSessionID: "parent-1"},
+		UITransition{Action: UIActionNewSession, InitialPrompt: "hello", PreviousSessionID: &previousSessionID},
 	)
 	if err != nil {
 		t.Fatalf("resolve session action: %v", err)
 	}
 	parent := requireSessionCreateDestination(t, resolved)
-	if parent == nil || *parent != "parent-1" {
+	if parent == nil || *parent != sourceSessionID {
 		t.Fatalf("expected new-session parent, got %+v", parent)
 	}
 	preparation, present := resolved.LaunchPreparation()
@@ -828,7 +907,7 @@ func TestNewSessionTransitionKeepsBackgroundProcessesAlive(t *testing.T) {
 			Settings:        config.Settings{Theme: "dark"},
 		},
 		containerDir:       root,
-		sessionPersistence: sessiontest.NewPersistence(),
+		sessionPersistence: persistence,
 	}
 	planner := &launchPlanner{server: testServer}
 	launchRequest := sessionLaunchRequestFromLifecycleResult(t, resolved, serverapi.RunPromptOverrides{})
@@ -843,8 +922,8 @@ func TestNewSessionTransitionKeepsBackgroundProcessesAlive(t *testing.T) {
 	if store == nil {
 		t.Fatal("expected planned session store in registry")
 	}
-	if store.Meta().ParentSessionID == nil || *store.Meta().ParentSessionID != "parent-1" {
-		t.Fatalf("expected parent session id preserved across new session transition, got %v", store.Meta().ParentSessionID)
+	if store.Meta().PreviousSessionID == nil || store.Meta().PreviousSessionID.String() != sourceSessionID {
+		t.Fatalf("expected previous session id preserved across new session transition, got %v", store.Meta().PreviousSessionID)
 	}
 	entries := manager.List()
 	if len(entries) != 1 {
@@ -943,8 +1022,8 @@ func TestReviewTeleportLifecyclePreservesParentWorktreeContext(t *testing.T) {
 	}
 	child := openAuthoritativeAppSession(t, cfg.PersistenceRoot, plan.SessionID)
 	childMeta := child.Meta()
-	if childMeta.ParentSessionID == nil || *childMeta.ParentSessionID != parent.Meta().SessionID {
-		t.Fatalf("child parent session id = %v, want %q", childMeta.ParentSessionID, parent.Meta().SessionID)
+	if childMeta.PreviousSessionID == nil || childMeta.PreviousSessionID.String() != parent.Meta().SessionID {
+		t.Fatalf("child previous session id = %v, want %q", childMeta.PreviousSessionID, parent.Meta().SessionID)
 	}
 	if childMeta.Continuation == nil || childMeta.Continuation.OpenAIBaseURL != "http://review-parent.local/v1" {
 		t.Fatalf("child continuation = %+v, want parent continuation", childMeta.Continuation)
@@ -964,33 +1043,16 @@ func TestReviewTeleportLifecyclePreservesParentWorktreeContext(t *testing.T) {
 	}
 }
 
-func TestResolveSessionActionOpenSessionUsesTargetID(t *testing.T) {
-	resolved, err := resolveSessionAction(
+func TestResolveSessionActionOpenSessionRequiresCurrentSession(t *testing.T) {
+	_, err := resolveSessionAction(
 		context.Background(),
 		&testEmbeddedServer{},
 		nil,
 		"",
 		UITransition{Action: UIActionOpenSession, TargetSessionID: "session-42", InitialInput: "draft reply"},
 	)
-	if err != nil {
-		t.Fatalf("resolve session action: %v", err)
-	}
-	if got := requireSessionOpenDestination(t, resolved); got != "session-42" {
-		t.Fatalf("expected target session id passthrough, got %q", got)
-	}
-	preparation, present := resolved.LaunchPreparation()
-	if !present {
-		t.Fatal("open-session result omitted launch preparation")
-	}
-	if _, present := preparation.InitialPrompt(); present {
-		t.Fatal("expected no initial prompt")
-	}
-	if preparation.DraftDisposition().Kind() != serverapi.SessionDraftDispositionOverrideStoredDraft {
-		t.Fatalf("input policy = %q, want override stored draft", preparation.DraftDisposition().Kind())
-	}
-	override, present := preparation.DraftDisposition().OverrideText()
-	if !present || override != "draft reply" {
-		t.Fatalf("input override = %q/%v, want draft reply/true", override, present)
+	if err == nil {
+		t.Fatal("open-session navigation without a current session unexpectedly succeeded")
 	}
 }
 

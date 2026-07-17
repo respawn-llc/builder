@@ -19,7 +19,8 @@ use client_contracts::process::{
 };
 use client_contracts::prompt::{ApprovalAnswerRequest, AskAnswerRequest};
 use client_contracts::protocol::{
-    AttachResponse, CapabilityFlags, HandshakeRequest, HandshakeResponse, ServerIdentity,
+    AttachProjectRequest, AttachProjectWorkspace, CapabilityFlags, HandshakeRequest,
+    HandshakeResponse, ServerIdentity,
 };
 use client_contracts::runtime_control::{
     RuntimeAppendCommittedEntryRequest, RuntimeCompactContextRequest,
@@ -39,9 +40,10 @@ use client_contracts::runtime_control::{
     RuntimeSubmitUserTurnRequest, RuntimeSubmitUserTurnResponse,
 };
 use client_contracts::session::{
-    RunPromptOverrides, SessionInitialInputRequest, SessionLaunchIntent, SessionLaunchIntentKind,
-    SessionInitialInputResponse, SessionLaunchMode, SessionMainViewRequest, SessionMainViewResponse,
-    SessionPersistInputDraftRequest, SessionPersistInputDraftResponse, SessionPlanRequest,
+    RunPromptOverrides, SessionAuthPreparation, SessionCreateOrigin, SessionInitialInputPolicy,
+    SessionInitialInputRequest, SessionInitialInputResponse, SessionLaunchIntent,
+    SessionLaunchMode, SessionLaunchPreparation, SessionMainViewRequest, SessionMainViewResponse,
+    SessionNavigationBinding, SessionPersistInputDraftRequest, SessionPersistInputDraftResponse, SessionPlanRequest,
     SessionResolveTransitionRequest, SessionResolveTransitionResponse,
     SessionRetargetWorkspaceRequest, SessionRetargetWorkspaceResponse,
     SessionRuntimeActivateRequest, SessionRuntimeReleaseRequest, SessionTransition,
@@ -108,18 +110,16 @@ fn project_scoped_connection_setup_orders_handshake_before_attach() {
         success_response("handshake", handshake_response()),
         success_response(
             "attach-project",
-            AttachResponse {
-                kind: "project".to_owned(),
-                project_id: "project-1".to_owned(),
-                workspace_id: String::new(),
-                workspace_root: "/tmp/workspace".to_owned(),
-                session_id: String::new(),
-            },
+            project_attach_response_for_root(
+                "/tmp/workspace",
+                "workspace-1",
+                "/tmp/workspace",
+            ),
         ),
     ]);
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![connection]),
-        RemoteContext::project("project-1", "", "/tmp/workspace"),
+        RemoteContext::project("project-1", Some(AttachProjectWorkspace::root("/tmp/workspace"))),
     );
 
     let connection = remote.open_project_connection().unwrap();
@@ -137,29 +137,26 @@ fn project_scoped_connection_setup_orders_handshake_before_attach() {
         connection.sent[1].request().params.unwrap(),
         json!({
             "project_id": "project-1",
-            "workspace_root": "/tmp/workspace"
+            "workspace": {
+                "kind": "workspace_root",
+                "workspace_root": "/tmp/workspace"
+            }
         })
     );
 }
 
 #[test]
-fn project_scoped_connection_prefers_workspace_id_over_root_when_both_known() {
+fn project_scoped_connection_selects_workspace_by_id() {
     let connection = ScriptedConnection::new(vec![
         success_response("handshake", handshake_response()),
         success_response(
             "attach-project",
-            AttachResponse {
-                kind: "project".to_owned(),
-                project_id: "project-1".to_owned(),
-                workspace_id: "workspace-1".to_owned(),
-                workspace_root: "/tmp/workspace".to_owned(),
-                session_id: String::new(),
-            },
+            project_attach_response_for_id("workspace-1", "/tmp/workspace"),
         ),
     ]);
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![connection]),
-        RemoteContext::project("project-1", "workspace-1", "/tmp/workspace"),
+        RemoteContext::project("project-1", Some(AttachProjectWorkspace::id("workspace-1"))),
     );
 
     let connection = remote.open_project_connection().unwrap();
@@ -168,9 +165,172 @@ fn project_scoped_connection_prefers_workspace_id_over_root_when_both_known() {
         connection.sent[1].request().params.unwrap(),
         json!({
             "project_id": "project-1",
-            "workspace_id": "workspace-1"
+            "workspace": {
+                "kind": "workspace_id",
+                "workspace_id": "workspace-1"
+            }
         })
     );
+}
+
+#[test]
+fn project_scoped_connection_rejects_substituted_root_attachment() {
+    let connection = ScriptedConnection::new(vec![
+        success_response("handshake", handshake_response()),
+        success_response(
+            "attach-project",
+            project_attach_response_for_root(
+                "/workspace-b",
+                "workspace-b",
+                "/canonical/workspace-b",
+            ),
+        ),
+    ]);
+    let close_count = connection.close_count.clone();
+    let mut remote = RemoteClient::new(
+        ScriptedFactory::new(vec![connection]),
+        RemoteContext::project(
+            "project-1",
+            Some(AttachProjectWorkspace::root("/workspace-a")),
+        ),
+    );
+
+    assert!(matches!(
+        remote.open_project_connection(),
+        Err(RpcError::Decode(_))
+    ));
+    assert_eq!(close_count.get(), 1);
+}
+
+#[test]
+fn project_scoped_connection_rejects_changed_reconnect_binding() {
+    let first = ScriptedConnection::new(vec![
+        success_response("handshake", handshake_response()),
+        success_response(
+            "attach-project",
+            project_attach_response_for_root(
+                "/workspace-a",
+                "workspace-a",
+                "/canonical/workspace-a",
+            ),
+        ),
+    ]);
+    let second = ScriptedConnection::new(vec![
+        success_response("handshake", handshake_response()),
+        success_response(
+            "attach-project",
+            project_attach_response_for_root(
+                "/workspace-a",
+                "workspace-b",
+                "/canonical/workspace-b",
+            ),
+        ),
+    ]);
+    let second_close_count = second.close_count.clone();
+    let mut remote = RemoteClient::new(
+        ScriptedFactory::new(vec![first, second]),
+        RemoteContext::project(
+            "project-1",
+            Some(AttachProjectWorkspace::root("/workspace-a")),
+        ),
+    );
+
+    let mut first_connection = remote.open_project_connection().unwrap();
+    first_connection.close().unwrap();
+    assert!(matches!(
+        remote.open_project_connection(),
+        Err(RpcError::Decode(_))
+    ));
+    assert_eq!(second_close_count.get(), 1);
+}
+
+#[test]
+fn project_scoped_connection_rejects_malformed_or_wrong_kind_attachment() {
+    let malformed = ScriptedConnection::new(vec![
+        success_response("handshake", handshake_response()),
+        success_response(
+            "attach-project",
+            json!({
+                "kind": "project",
+                "project_id": "project-1",
+                "workspace_id": "workspace-1",
+                "workspace_root": "/workspace"
+            }),
+        ),
+    ]);
+    let wrong_kind = ScriptedConnection::new(vec![
+        success_response("handshake", handshake_response()),
+        success_response("attach-project", session_attach_response("session-1")),
+    ]);
+    let mut remote = RemoteClient::new(
+        ScriptedFactory::new(vec![malformed, wrong_kind]),
+        RemoteContext::project("project-1", None),
+    );
+
+    assert!(matches!(
+        remote.open_project_connection(),
+        Err(RpcError::Decode(_))
+    ));
+    assert!(matches!(
+        remote.open_project_connection(),
+        Err(RpcError::Decode(_))
+    ));
+}
+
+#[test]
+fn session_connection_rejects_substituted_session_attachment() {
+    let connection = ScriptedConnection::new(vec![
+        success_response("handshake", handshake_response()),
+        success_response("attach-session", session_attach_response("session-2")),
+    ]);
+    let close_count = connection.close_count.clone();
+    let mut remote = RemoteClient::new(
+        ScriptedFactory::new(vec![connection]),
+        RemoteContext::unscoped(),
+    );
+
+    assert!(matches!(
+        remote.subscribe_raw(
+            "session-1",
+            subscription_route(),
+            json!({"session_id": "session-1"}),
+        ),
+        Err(RpcError::Decode(_))
+    ));
+    assert_eq!(close_count.get(), 1);
+}
+
+#[test]
+fn session_connection_rejects_session_outside_attached_project() {
+    let connection = ScriptedConnection::new(vec![
+        success_response("handshake", handshake_response()),
+        success_response("attach-project", project_attach_response()),
+        success_response(
+            "attach-session",
+            json!({
+                "kind": "session",
+                "project_id": "project-2",
+                "workspace_id": "workspace-2",
+                "workspace_root": "/workspace-2",
+                "session_id": "session-1"
+            }),
+        ),
+    ]);
+    let close_count = connection.close_count.clone();
+    let mut remote = RemoteClient::new(
+        ScriptedFactory::new(vec![connection]),
+        RemoteContext::project("project-1", None),
+    );
+
+    assert!(matches!(
+        remote.subscribe_raw(
+            "session-1",
+            subscription_route(),
+            json!({"session_id": "session-1"}),
+        ),
+        Err(RpcError::Decode(_))
+    ));
+    assert_eq!(close_count.get(), 1);
 }
 
 #[test]
@@ -179,29 +339,17 @@ fn session_subscription_setup_attaches_session_before_subscribe() {
         success_response("handshake", handshake_response()),
         success_response(
             "attach-project",
-            AttachResponse {
-                kind: "project".to_owned(),
-                project_id: "project-1".to_owned(),
-                workspace_id: String::new(),
-                workspace_root: String::new(),
-                session_id: String::new(),
-            },
+            project_attach_response(),
         ),
         success_response(
             "attach-session",
-            AttachResponse {
-                kind: "session".to_owned(),
-                project_id: String::new(),
-                workspace_id: String::new(),
-                workspace_root: String::new(),
-                session_id: "session-1".to_owned(),
-            },
+            session_attach_response("session-1"),
         ),
         success_response("subscribe-sample", json!({"stream":"session-1"})),
     ]);
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     let (connection, stream_id) = remote
@@ -226,6 +374,13 @@ fn session_subscription_setup_attaches_session_before_subscribe() {
         ],
     );
     assert_eq!(
+        connection.sent[1].request().params,
+        Some(json!({
+            "project_id": "project-1",
+            "workspace": null
+        }))
+    );
+    assert_eq!(
         connection.sent[2].request().params.unwrap(),
         json!({"session_id":"session-1"})
     );
@@ -237,19 +392,13 @@ fn dedicated_call_uses_fixed_route_request_id_on_dedicated_connection() {
         success_response("handshake", handshake_response()),
         success_response(
             "attach-project",
-            AttachResponse {
-                kind: "project".to_owned(),
-                project_id: "project-1".to_owned(),
-                workspace_id: String::new(),
-                workspace_root: String::new(),
-                session_id: String::new(),
-            },
+            project_attach_response(),
         ),
         success_response("runtime-interrupt", json!({})),
     ]);
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     let (response, connection) = remote
@@ -307,13 +456,7 @@ fn runtime_interrupt_uses_dedicated_connection_and_fixed_request_id() {
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("runtime-interrupt", json!({})),
         ],
@@ -321,7 +464,7 @@ fn runtime_interrupt_uses_dedicated_connection_and_fixed_request_id() {
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![interrupt_connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     remote
@@ -423,7 +566,7 @@ fn auth_status_remote_call_uses_unscoped_control_even_with_project_context() {
     ], sent_log.clone());
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![connection]),
-        RemoteContext::project("project-1", "workspace-1", "/workspace"),
+        RemoteContext::project("project-1", Some(AttachProjectWorkspace::id("workspace-1"))),
     );
 
     let response = remote.get_auth_status().unwrap();
@@ -447,30 +590,24 @@ fn startup_attach_wrappers_use_phase_four_contract_dtos_and_method_names() {
     let connection = ScriptedConnection::new(vec![
         success_response(
             "attach-project",
-            AttachResponse {
-                kind: "project".to_owned(),
-                project_id: "project-1".to_owned(),
-                workspace_id: String::new(),
-                workspace_root: "/tmp/workspace".to_owned(),
-                session_id: String::new(),
-            },
+            project_attach_response_for_root(
+                "/tmp/workspace",
+                "workspace-1",
+                "/tmp/workspace",
+            ),
         ),
         success_response(
             "attach-session",
-            AttachResponse {
-                kind: "session".to_owned(),
-                project_id: String::new(),
-                workspace_id: String::new(),
-                workspace_root: String::new(),
-                session_id: "session-1".to_owned(),
-            },
+            session_attach_response("session-1"),
         ),
     ]);
     let mut client = Client::new(connection);
 
-    let project = client
-        .attach_project("project-1", "", "/tmp/workspace")
-        .unwrap();
+    let project_request = AttachProjectRequest {
+        project_id: "project-1".to_owned(),
+        workspace: Some(AttachProjectWorkspace::root("/tmp/workspace")),
+    };
+    let project = client.attach_project(&project_request).unwrap();
     let session = client.attach_session("session-1").unwrap();
     let connection = client.into_connection();
 
@@ -634,14 +771,10 @@ fn session_plan_wrapper_sends_contract_dto_and_method_name() {
         .plan_session(SessionPlanRequest {
             client_request_id: "request-1".to_owned(),
             mode: SessionLaunchMode::Interactive,
-            intent: SessionLaunchIntent {
-                kind: SessionLaunchIntentKind::OpenExisting,
-                parent_id: None,
-                session_id: Some("session-1".to_owned()),
+            intent: SessionLaunchIntent::OpenExisting {
+                session_id: "session-1".to_owned(),
             },
-            selected_session_id: None,
             caller_session_id: None,
-            parent_session_id: None,
             overrides: RunPromptOverrides::default(),
         })
         .unwrap();
@@ -649,6 +782,7 @@ fn session_plan_wrapper_sends_contract_dto_and_method_name() {
 
     assert_eq!(actual.plan.session_id, "session-1");
     assert_eq!(actual.plan.enabled_tool_ids, ["shell", "patch"]);
+    assert_eq!(actual.plan.active_settings.max_subagent_depth, 2);
     assert_sent_methods(&connection.sent, &[("rpc-1", "session.plan")]);
     assert_eq!(
         connection.sent[0].request().params.unwrap(),
@@ -673,7 +807,7 @@ fn session_plan_wrapper_sends_contract_dto_and_method_name() {
 }
 
 #[test]
-fn session_plan_wrapper_serializes_nullable_lineage_and_selector_fields() {
+fn session_plan_wrapper_serializes_parent_agent_origin_and_selector() {
     let connection = ScriptedConnection::new(vec![success_response(
         "rpc-1",
         json!({"plan": {
@@ -688,14 +822,12 @@ fn session_plan_wrapper_serializes_nullable_lineage_and_selector_fields() {
         .plan_session(SessionPlanRequest {
             client_request_id: "request-1".to_owned(),
             mode: SessionLaunchMode::Headless,
-            intent: SessionLaunchIntent {
-                kind: SessionLaunchIntentKind::CreateNew,
-                parent_id: Some("parent-session".to_owned()),
-                session_id: None,
+            intent: SessionLaunchIntent::CreateNew {
+                origin: SessionCreateOrigin::ParentAgent {
+                    session_id: "parent-session".to_owned(),
+                },
             },
-            selected_session_id: Some("legacy-selector".to_owned()),
             caller_session_id: Some("caller-session".to_owned()),
-            parent_session_id: Some("parent-session".to_owned()),
             overrides: RunPromptOverrides {
                 agent_role: Some("worker".to_owned()),
                 ..RunPromptOverrides::default()
@@ -711,11 +843,12 @@ fn session_plan_wrapper_serializes_nullable_lineage_and_selector_fields() {
             "mode": "headless",
             "intent": {
                 "kind": "create_new",
-                "parent_id": "parent-session"
+                "origin": {
+                    "kind": "parent_agent",
+                    "session_id": "parent-session"
+                }
             },
-            "selected_session_id": "legacy-selector",
             "caller_session_id": "caller-session",
-            "parent_session_id": "parent-session",
             "overrides": {
                 "agent_role": "worker",
                 "model": "",
@@ -731,20 +864,105 @@ fn session_plan_wrapper_serializes_nullable_lineage_and_selector_fields() {
 }
 
 #[test]
-fn session_plan_contract_rejects_unknown_wire_fields() {
-    let raw = json!({
-        "client_request_id": "request-1",
-        "mode": "interactive",
-        "intent": {
-            "kind": "create_new"
-        },
-        "overrides": {},
-        "force_new_session": true
-    });
-
-    if serde_json::from_value::<SessionPlanRequest>(raw).is_ok() {
-        panic!("session plan contract accepted an unknown legacy field");
+fn session_plan_contract_rejects_malformed_unknown_mixed_and_legacy_intents() {
+    let invalid = [
+        json!({"client_request_id":"request-1","mode":"interactive","intent":{"kind":"create_new"},"overrides":{}}),
+        json!({"client_request_id":"request-1","mode":"interactive","intent":{"kind":"unknown"},"overrides":{}}),
+        json!({"client_request_id":"request-1","mode":"interactive","intent":{"kind":"create_new","origin":{"kind":"independent","session_id":"mixed"}},"overrides":{}}),
+        json!({"client_request_id":"request-1","mode":"interactive","intent":{"kind":"create_new","origin":{"kind":"previous_session"}},"overrides":{}}),
+        json!({"client_request_id":"request-1","mode":"interactive","intent":{"kind":"open_existing","session_id":"target","origin":{"kind":"independent"}},"overrides":{}}),
+        json!({"client_request_id":"request-1","mode":"interactive","intent":{"kind":"create_new","parent_id":"legacy-parent"},"overrides":{}}),
+        json!({"client_request_id":"request-1","mode":"interactive","intent":{"kind":"create_new","origin":{"kind":"independent"}},"selected_session_id":"legacy","overrides":{}}),
+        json!({"client_request_id":"request-1","mode":"interactive","intent":{"kind":"create_new","origin":{"kind":"independent"}},"force_new_session":true,"overrides":{}}),
+        json!({"client_request_id":"request-1","mode":"interactive","intent":{"kind":"create_new","origin":{"kind":"independent"}},"parent_session_id":"legacy","overrides":{}}),
+    ];
+    for raw in invalid {
+        if serde_json::from_value::<SessionPlanRequest>(raw.clone()).is_ok() {
+            panic!("session plan contract accepted invalid payload {raw}");
+        }
     }
+}
+
+#[test]
+fn session_launch_intent_serializes_every_typed_origin_variant() {
+    let cases = [
+        (
+            SessionLaunchIntent::CreateNew {
+                origin: SessionCreateOrigin::Independent,
+            },
+            json!({"kind":"create_new","origin":{"kind":"independent"}}),
+        ),
+        (
+            SessionLaunchIntent::CreateNew {
+                origin: SessionCreateOrigin::PreviousSession {
+                    session_id: "previous-session".to_owned(),
+                },
+            },
+            json!({"kind":"create_new","origin":{"kind":"previous_session","session_id":"previous-session"}}),
+        ),
+        (
+            SessionLaunchIntent::CreateNew {
+                origin: SessionCreateOrigin::ParentAgent {
+                    session_id: "parent-agent-session".to_owned(),
+                },
+            },
+            json!({"kind":"create_new","origin":{"kind":"parent_agent","session_id":"parent-agent-session"}}),
+        ),
+        (
+            SessionLaunchIntent::OpenExisting {
+                session_id: "target-session".to_owned(),
+            },
+            json!({"kind":"open_existing","session_id":"target-session"}),
+        ),
+    ];
+    for (intent, expected) in cases {
+        assert_eq!(serde_json::to_value(intent).unwrap(), expected);
+    }
+}
+
+#[test]
+fn session_lifecycle_contract_rejects_flat_unknown_and_malformed_shapes() {
+    let invalid = [
+        json!({"kind":"unknown"}),
+        json!({"kind":"stop","should_continue":true}),
+        json!({"kind":"select_session"}),
+        json!({"kind":"select_session","auth":"unknown"}),
+        json!({"kind":"launch"}),
+        json!({"kind":"launch","intent":{"kind":"create_new","origin":{"kind":"independent"}}}),
+        json!({"kind":"launch","intent":{"kind":"open_existing","session_id":"target"},"preparation":{"input_policy":{"kind":"unknown"},"auth":"keep_current_auth"}}),
+        json!({"kind":"launch","intent":{"kind":"open_existing","session_id":"target"},"preparation":{"input_policy":{"kind":"override_stored_draft"},"auth":"keep_current_auth"}}),
+        json!({"kind":"launch","intent":{"kind":"open_existing","session_id":"target"},"preparation":{"input_policy":{"kind":"restore_stored_draft","text":"mixed"},"auth":"keep_current_auth"}}),
+        json!({"kind":"launch","intent":{"kind":"open_existing","session_id":"target"},"preparation":{"input_policy":{"kind":"restore_stored_draft"},"auth":"keep_current_auth","parent_session_id":"legacy"}}),
+    ];
+    for raw in invalid {
+        if serde_json::from_value::<SessionResolveTransitionResponse>(raw.clone()).is_ok() {
+            panic!("session lifecycle contract accepted invalid payload {raw}");
+        }
+    }
+
+    assert_eq!(
+        serde_json::from_value::<SessionResolveTransitionResponse>(json!({"kind":"stop"}))
+            .unwrap(),
+        SessionResolveTransitionResponse::Stop {}
+    );
+    assert_eq!(
+        serde_json::from_value::<SessionResolveTransitionResponse>(
+            json!({"kind":"select_session","auth":"reauthenticate"})
+        )
+        .unwrap(),
+        SessionResolveTransitionResponse::SelectSession {
+            auth: SessionAuthPreparation::Reauthenticate,
+        }
+    );
+    assert_eq!(
+        serde_json::from_value::<SessionInitialInputPolicy>(
+            json!({"kind":"override_stored_draft","text":""})
+        )
+        .unwrap(),
+        SessionInitialInputPolicy::OverrideStoredDraft {
+            text: String::new(),
+        }
+    );
 }
 
 #[test]
@@ -848,15 +1066,22 @@ fn session_retarget_workspace_wrapper_uses_startup_binding_route() {
 
 #[test]
 fn session_resolve_transition_uses_route_method_and_preserves_fork_fields() {
-    let response = SessionResolveTransitionResponse {
-        next_session_id: "session-fork-1".to_owned(),
-        initial_prompt: "edited rollback prompt".to_owned(),
-        initial_prompt_history_recorded: false,
-        initial_input: String::new(),
-        parent_session_id: String::new(),
-        force_new_session: false,
-        should_continue: true,
-        requires_reauth: false,
+    let response = SessionResolveTransitionResponse::Launch {
+        intent: SessionLaunchIntent::OpenExisting {
+            session_id: "session-fork-1".to_owned(),
+        },
+        preparation: SessionLaunchPreparation {
+            initial_prompt: Some(client_contracts::session::SessionInitialPromptMetadata {
+                text: "edited rollback prompt".to_owned(),
+                history_recorded: false,
+            }),
+            input_policy: SessionInitialInputPolicy::RestoreStoredDraft {},
+            auth: SessionAuthPreparation::KeepCurrentAuth,
+            navigation_binding: Some(SessionNavigationBinding {
+                project_id: "project-target".to_owned(),
+                workspace_id: "workspace-target".to_owned(),
+            }),
+        },
     };
     let connection = ScriptedConnection::new(vec![success_response("rpc-1", response.clone())]);
     let mut client = Client::new(connection);
@@ -937,28 +1162,26 @@ fn session_initial_input_and_persist_draft_wrappers_use_lifecycle_routes() {
 #[test]
 fn remote_resolve_session_transition_uses_control_connection_and_typed_shape() {
     let sent_log = Rc::new(RefCell::new(Vec::new()));
-    let response = SessionResolveTransitionResponse {
-        next_session_id: "session-fork-1".to_owned(),
-        initial_prompt: "edited rollback prompt".to_owned(),
-        initial_prompt_history_recorded: false,
-        initial_input: String::new(),
-        parent_session_id: String::new(),
-        force_new_session: false,
-        should_continue: true,
-        requires_reauth: false,
+    let response = SessionResolveTransitionResponse::Launch {
+        intent: SessionLaunchIntent::OpenExisting {
+            session_id: "session-fork-1".to_owned(),
+        },
+        preparation: SessionLaunchPreparation {
+            initial_prompt: Some(client_contracts::session::SessionInitialPromptMetadata {
+                text: "edited rollback prompt".to_owned(),
+                history_recorded: false,
+            }),
+            input_policy: SessionInitialInputPolicy::RestoreStoredDraft {},
+            auth: SessionAuthPreparation::KeepCurrentAuth,
+            navigation_binding: None,
+        },
     };
     let connection = ScriptedConnection::with_sent_log(
         vec![
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("rpc-1", response.clone()),
         ],
@@ -966,7 +1189,7 @@ fn remote_resolve_session_transition_uses_control_connection_and_typed_shape() {
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     let actual = remote
@@ -1064,13 +1287,7 @@ fn runtime_control_submit_routes_use_dedicated_connections_and_fixed_ids() {
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response(
                 "runtime-submit-user-turn",
@@ -1087,13 +1304,7 @@ fn runtime_control_submit_routes_use_dedicated_connections_and_fixed_ids() {
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("runtime-submit-user-shell-command", json!({})),
         ],
@@ -1101,7 +1312,7 @@ fn runtime_control_submit_routes_use_dedicated_connections_and_fixed_ids() {
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![turn_connection, shell_connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     let turn_response = remote
@@ -1170,13 +1381,7 @@ fn runtime_compact_context_uses_dedicated_connection_and_fixed_request_id() {
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("runtime-compact-context", json!({})),
         ],
@@ -1184,7 +1389,7 @@ fn runtime_compact_context_uses_dedicated_connection_and_fixed_request_id() {
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![compact_connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     remote
@@ -1225,13 +1430,7 @@ fn runtime_control_queue_routes_use_control_connections_and_generated_ids() {
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response(
                 "rpc-1",
@@ -1248,13 +1447,7 @@ fn runtime_control_queue_routes_use_control_connections_and_generated_ids() {
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response(
                 "rpc-1",
@@ -1268,13 +1461,7 @@ fn runtime_control_queue_routes_use_control_connections_and_generated_ids() {
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("rpc-1", json!({})),
         ],
@@ -1286,7 +1473,7 @@ fn runtime_control_queue_routes_use_control_connections_and_generated_ids() {
             discard_connection,
             history_connection,
         ]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     let queued = remote
@@ -1363,13 +1550,7 @@ fn prompt_answer_routes_use_control_connections_and_generated_ids() {
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("rpc-1", json!({})),
         ],
@@ -1380,13 +1561,7 @@ fn prompt_answer_routes_use_control_connections_and_generated_ids() {
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("rpc-1", json!({})),
         ],
@@ -1394,7 +1569,7 @@ fn prompt_answer_routes_use_control_connections_and_generated_ids() {
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![ask_connection, approval_connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     remote
@@ -1470,13 +1645,7 @@ fn runtime_has_queued_user_work_uses_control_connection() {
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response(
                 "rpc-1",
@@ -1489,7 +1658,7 @@ fn runtime_has_queued_user_work_uses_control_connection() {
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![has_queued_connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     let response = remote
@@ -1525,13 +1694,7 @@ fn runtime_submit_queued_user_messages_uses_dedicated_connection() {
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response(
                 "runtime-submit-queued-user-messages",
@@ -1544,7 +1707,7 @@ fn runtime_submit_queued_user_messages_uses_dedicated_connection() {
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![submit_queued_connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     let response = remote
@@ -1594,13 +1757,7 @@ fn runtime_goal_routes_use_control_connections() {
                 success_response("handshake", handshake_response()),
                 success_response(
                     "attach-project",
-                    AttachResponse {
-                        kind: "project".to_owned(),
-                        project_id: "project-1".to_owned(),
-                        workspace_id: String::new(),
-                        workspace_root: String::new(),
-                        session_id: String::new(),
-                    },
+                    project_attach_response(),
                 ),
                 success_response("rpc-1", scenario.response()),
             ],
@@ -1608,7 +1765,7 @@ fn runtime_goal_routes_use_control_connections() {
         );
         let mut remote = RemoteClient::new(
             ScriptedFactory::new(vec![connection]),
-            RemoteContext::project("project-1", "", ""),
+            RemoteContext::project("project-1", None),
         );
 
         let response = scenario.call(&mut remote).unwrap();
@@ -1795,13 +1952,7 @@ fn worktree_list_uses_control_connection_and_worktree_list_method() {
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("rpc-1", response.clone()),
         ],
@@ -1809,7 +1960,7 @@ fn worktree_list_uses_control_connection_and_worktree_list_method() {
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![worktree_connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     let actual = remote
@@ -1846,13 +1997,7 @@ fn process_routes_use_control_connection_and_process_methods() {
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response(
                 "rpc-1",
@@ -1868,13 +2013,7 @@ fn process_routes_use_control_connection_and_process_methods() {
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("rpc-1", json!({})),
         ],
@@ -1885,13 +2024,7 @@ fn process_routes_use_control_connection_and_process_methods() {
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response(
                 "rpc-1",
@@ -1905,7 +2038,7 @@ fn process_routes_use_control_connection_and_process_methods() {
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![list_connection, kill_connection, inline_connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     let list = remote
@@ -2003,13 +2136,7 @@ fn worktree_switch_uses_control_connection_and_worktree_switch_method() {
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("rpc-1", response.clone()),
         ],
@@ -2017,7 +2144,7 @@ fn worktree_switch_uses_control_connection_and_worktree_switch_method() {
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![worktree_connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     let actual = remote
@@ -2079,13 +2206,7 @@ fn worktree_delete_uses_control_connection_and_worktree_delete_method() {
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("rpc-1", response.clone()),
         ],
@@ -2093,7 +2214,7 @@ fn worktree_delete_uses_control_connection_and_worktree_delete_method() {
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![worktree_connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     let actual = remote
@@ -2142,13 +2263,7 @@ fn worktree_create_target_resolve_uses_control_connection_and_worktree_create_ta
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("rpc-1", response.clone()),
         ],
@@ -2156,7 +2271,7 @@ fn worktree_create_target_resolve_uses_control_connection_and_worktree_create_ta
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![worktree_connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     let actual = remote
@@ -2216,13 +2331,7 @@ fn worktree_create_uses_control_connection_and_worktree_create_method() {
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("rpc-1", response.clone()),
         ],
@@ -2230,7 +2339,7 @@ fn worktree_create_uses_control_connection_and_worktree_create_method() {
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![worktree_connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     let actual = remote
@@ -2273,13 +2382,7 @@ fn runtime_set_session_name_uses_control_connection() {
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("rpc-1", json!({})),
         ],
@@ -2287,7 +2390,7 @@ fn runtime_set_session_name_uses_control_connection() {
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![set_name_connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     remote
@@ -2318,13 +2421,7 @@ fn runtime_set_thinking_level_uses_control_connection() {
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("rpc-1", json!({})),
         ],
@@ -2332,7 +2429,7 @@ fn runtime_set_thinking_level_uses_control_connection() {
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![set_thinking_connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     remote
@@ -2363,13 +2460,7 @@ fn runtime_set_fast_mode_enabled_uses_control_connection_and_decodes_changed_res
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("rpc-1", json!({"changed":false})),
         ],
@@ -2377,7 +2468,7 @@ fn runtime_set_fast_mode_enabled_uses_control_connection_and_decodes_changed_res
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![set_fast_connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     let response = remote
@@ -2412,13 +2503,7 @@ fn runtime_append_local_entry_uses_control_connection_and_decodes_empty_response
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("rpc-1", json!({})),
         ],
@@ -2426,7 +2511,7 @@ fn runtime_append_local_entry_uses_control_connection_and_decodes_empty_response
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![append_connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     remote
@@ -2460,13 +2545,7 @@ fn runtime_set_reviewer_enabled_uses_control_connection_and_decodes_changed_mode
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("rpc-1", json!({"changed":false,"mode":"edits"})),
         ],
@@ -2474,7 +2553,7 @@ fn runtime_set_reviewer_enabled_uses_control_connection_and_decodes_changed_mode
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![set_reviewer_connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     let response = remote
@@ -2513,13 +2592,7 @@ fn runtime_set_auto_compaction_enabled_uses_control_connection_and_decodes_chang
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("rpc-1", json!({"changed":false,"enabled":false})),
         ],
@@ -2527,7 +2600,7 @@ fn runtime_set_auto_compaction_enabled_uses_control_connection_and_decodes_chang
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![set_auto_compaction_connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     let response = remote
@@ -2565,13 +2638,7 @@ fn runtime_set_questions_enabled_uses_control_connection_and_decodes_changed_ena
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("rpc-1", json!({"changed":false,"enabled":true})),
         ],
@@ -2579,7 +2646,7 @@ fn runtime_set_questions_enabled_uses_control_connection_and_decodes_changed_ena
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![set_questions_connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     let response = remote
@@ -2615,18 +2682,16 @@ fn remote_main_view_uses_control_connection_and_decodes_questions_status() {
     let mut response: SessionMainViewResponse =
         serde_json::from_value(zero_main_view_json()).unwrap();
     response.main_view.status.questions_enabled = true;
+    response.main_view.status.previous_session_id = Some("previous-session".to_owned());
+    response.main_view.status.parent_agent_session_id = Some("parent-agent-session".to_owned());
+    response.main_view.status.navigation_target_session_id =
+        Some("server-navigation-target".to_owned());
     let main_view_connection = ScriptedConnection::with_sent_log(
         vec![
             success_response("handshake", handshake_response()),
             success_response(
                 "attach-project",
-                AttachResponse {
-                    kind: "project".to_owned(),
-                    project_id: "project-1".to_owned(),
-                    workspace_id: String::new(),
-                    workspace_root: String::new(),
-                    session_id: String::new(),
-                },
+                project_attach_response(),
             ),
             success_response("rpc-1", response.clone()),
         ],
@@ -2634,7 +2699,7 @@ fn remote_main_view_uses_control_connection_and_decodes_questions_status() {
     );
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![main_view_connection]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
 
     let actual = remote
@@ -2645,7 +2710,18 @@ fn remote_main_view_uses_control_connection_and_decodes_questions_status() {
     let factory = remote.into_factory();
 
     assert!(actual.main_view.status.questions_enabled);
-    assert_eq!(actual.main_view.status.parent_session_id, None);
+    assert_eq!(
+        actual.main_view.status.previous_session_id.as_deref(),
+        Some("previous-session")
+    );
+    assert_eq!(
+        actual.main_view.status.parent_agent_session_id.as_deref(),
+        Some("parent-agent-session")
+    );
+    assert_eq!(
+        actual.main_view.status.navigation_target_session_id.as_deref(),
+        Some("server-navigation-target")
+    );
     assert_eq!(factory.opened, vec![ConnectionKind::Control]);
     assert_sent_methods(
         &main_view_log.borrow(),
@@ -2807,7 +2883,7 @@ fn setup_and_dedicated_failures_close_new_connections() {
     let handshake_transport_closed = handshake_transport.close_count.clone();
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![handshake_transport]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
     assert!(remote.open_project_connection().is_err());
     assert_eq!(handshake_transport_closed.get(), 1);
@@ -2816,7 +2892,7 @@ fn setup_and_dedicated_failures_close_new_connections() {
     let handshake_closed = handshake.close_count.clone();
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![handshake]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
     assert!(remote.open_project_connection().is_err());
     assert_eq!(handshake_closed.get(), 1);
@@ -2828,7 +2904,7 @@ fn setup_and_dedicated_failures_close_new_connections() {
     let project_attach_closed = project_attach.close_count.clone();
     let mut remote = RemoteClient::new(
         ScriptedFactory::new(vec![project_attach]),
-        RemoteContext::project("project-1", "", ""),
+        RemoteContext::project("project-1", None),
     );
     assert!(remote.open_project_connection().is_err());
     assert_eq!(project_attach_closed.get(), 1);
@@ -2857,13 +2933,7 @@ fn setup_and_dedicated_failures_close_new_connections() {
         success_response("handshake", handshake_response()),
         success_response(
             "attach-session",
-            AttachResponse {
-                kind: "session".to_owned(),
-                project_id: String::new(),
-                workspace_id: String::new(),
-                workspace_root: String::new(),
-                session_id: "session-1".to_owned(),
-            },
+            session_attach_response("session-1"),
         ),
         error_response("subscribe-sample"),
     ]);
@@ -2887,13 +2957,7 @@ fn setup_and_dedicated_failures_close_new_connections() {
         success_response("handshake", handshake_response()),
         success_response(
             "attach-session",
-            AttachResponse {
-                kind: "session".to_owned(),
-                project_id: String::new(),
-                workspace_id: String::new(),
-                workspace_root: String::new(),
-                session_id: "session-1".to_owned(),
-            },
+            session_attach_response("session-1"),
         ),
     ]);
     let subscribe_transport_closed = subscribe_transport.close_count.clone();
@@ -3110,7 +3174,7 @@ fn fork_rollback_transition_request() -> SessionResolveTransitionRequest {
             initial_input: String::new(),
             target_session_id: String::new(),
             fork_rollback_target_id: "rollback-target-2".to_owned(),
-            parent_session_id: String::new(),
+            previous_session_id: None,
         },
     }
 }
@@ -3121,6 +3185,57 @@ fn success_response(id: &str, result: impl serde::Serialize) -> Frame {
         id: id.to_owned(),
         result: Some(serde_json::to_value(result).unwrap()),
         error: None,
+    })
+}
+
+fn project_attach_response() -> serde_json::Value {
+    json!({
+        "kind": "project",
+        "project_id": "project-1",
+        "workspace_id": "workspace-1",
+        "workspace_root": "/workspace",
+        "workspace_selection": null
+    })
+}
+
+fn project_attach_response_for_id(workspace_id: &str, workspace_root: &str) -> serde_json::Value {
+    json!({
+        "kind": "project",
+        "project_id": "project-1",
+        "workspace_id": workspace_id,
+        "workspace_root": workspace_root,
+        "workspace_selection": {
+            "kind": "workspace_id",
+            "workspace_id": workspace_id
+        }
+    })
+}
+
+fn project_attach_response_for_root(
+    requested_root: &str,
+    workspace_id: &str,
+    canonical_root: &str,
+) -> serde_json::Value {
+    json!({
+        "kind": "project",
+        "project_id": "project-1",
+        "workspace_id": workspace_id,
+        "workspace_root": canonical_root,
+        "workspace_selection": {
+            "kind": "workspace_root",
+            "requested_root": requested_root,
+            "canonical_root": canonical_root
+        }
+    })
+}
+
+fn session_attach_response(session_id: &str) -> serde_json::Value {
+    json!({
+        "kind": "session",
+        "project_id": "project-1",
+        "workspace_id": "workspace-1",
+        "workspace_root": "/workspace",
+        "session_id": session_id
     })
 }
 
@@ -3236,7 +3351,8 @@ fn contract_settings_json() -> serde_json::Value {
             "VerboseOutput": false
         },
         "Subagents": {},
-        "PreventSleep": ""
+        "PreventSleep": "",
+        "MaxSubagentDepth": 2
     })
 }
 
@@ -3284,7 +3400,9 @@ fn zero_main_view_json() -> serde_json::Value {
                 "FastModeAvailable": false,
                 "FastModeEnabled": false,
                 "ConversationFreshness": 0,
-                "ParentSessionID": null,
+                "PreviousSessionID": null,
+                "ParentAgentSessionID": null,
+                "NavigationTargetSessionID": null,
                 "LastCommittedAssistantFinalAnswer": "",
                 "ThinkingLevel": "",
                 "CompactionMode": "",

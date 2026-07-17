@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"core/shared/rollbacktarget"
+	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 )
@@ -62,15 +63,15 @@ func streamChildFromParent(parent *Store, parentMeta Meta, forkName string, cate
 	if err != nil {
 		return nil, 0, err
 	}
+	if err := InitializeCreationContext(child, parent, SessionCreationSourcePreviousSession, ChildContextOptions{
+		InheritLockedContract: true,
+		InheritContinuation:   true,
+	}); err != nil {
+		return nil, 0, err
+	}
 
 	child.mu.Lock()
-	child.meta.Locked = cloneLockedContract(parentMeta.Locked)
-	child.meta.WorktreeReminder = CloneWorktreeReminderState(parentMeta.WorktreeReminder)
-	child.meta.UsageState = nil
-	parentSessionID := parentMeta.SessionID
-	child.meta.ParentSessionID = &parentSessionID
 	child.meta.Name = strings.TrimSpace(forkName)
-	child.meta.Continuation = cloneContinuationContext(parentMeta.Continuation)
 	child.mu.Unlock()
 
 	derived, cutOrdinal, err := streamReplayIntoChild(parent, child, targetSeq)
@@ -262,49 +263,78 @@ type ChildContextOptions struct {
 	InheritContinuation bool
 }
 
-// InitializeChildFromParent initializes a fresh child session with parent-owned
-// execution context while leaving conversational state empty. The caller owns
-// durability so launch planning can finish cross-store setup atomically.
-func InitializeChildFromParent(child *Store, parent *Store) error {
-	return InitializeChildFromParentWithOptions(child, parent, ChildContextOptions{
-		InheritLockedContract: true,
-		InheritContinuation:   true,
-	})
-}
+type SessionCreationSourceKind uint8
 
-// InitializeChildFromParentWithOptions initializes a fresh child session with
-// selected parent-owned context while leaving conversational state empty. Use
-// this for child sessions that need parent workspace/worktree targeting without
-// inheriting the parent's model/tool/prompt lock.
-func InitializeChildFromParentWithOptions(child *Store, parent *Store, opts ChildContextOptions) error {
+const (
+	SessionCreationSourceIndependent SessionCreationSourceKind = iota
+	SessionCreationSourcePreviousSession
+	SessionCreationSourceParentAgent
+)
+
+// InitializeCreationContext atomically initializes immutable provenance and
+// source-owned execution context before a fresh session becomes durable.
+func InitializeCreationContext(child *Store, source *Store, kind SessionCreationSourceKind, opts ChildContextOptions) error {
 	if child == nil {
 		return fmt.Errorf("child store is required")
 	}
-	if parent == nil {
-		return fmt.Errorf("parent store is required")
+	switch kind {
+	case SessionCreationSourceIndependent:
+		if source != nil {
+			return fmt.Errorf("independent session creation cannot have a source")
+		}
+	case SessionCreationSourcePreviousSession, SessionCreationSourceParentAgent:
+		if source == nil {
+			return fmt.Errorf("session creation source is required")
+		}
+	default:
+		return fmt.Errorf("session creation source kind is invalid")
 	}
-	parentMeta := parent.Meta()
+	var sourceMeta Meta
+	if source != nil {
+		sourceMeta = source.Meta()
+	}
 	child.mutationMu.Lock()
 	defer child.mutationMu.Unlock()
 	child.mu.Lock()
+	defer child.mu.Unlock()
+	if child.persisted {
+		return fmt.Errorf("session creation context is immutable after durability")
+	}
+	child.meta.PreviousSessionID = nil
+	child.meta.ParentAgentSessionID = nil
+	if kind == SessionCreationSourceIndependent {
+		child.meta.UpdatedAt = time.Now().UTC()
+		return nil
+	}
 	if opts.InheritLockedContract {
-		child.meta.Locked = cloneLockedContract(parentMeta.Locked)
+		child.meta.Locked = cloneLockedContract(sourceMeta.Locked)
 	} else {
 		child.meta.Locked = nil
 	}
-	child.meta.WorkspaceRoot = parentMeta.WorkspaceRoot
-	child.meta.WorkspaceContainer = parentMeta.WorkspaceContainer
-	child.meta.WorktreeReminder = CloneWorktreeReminderState(parentMeta.WorktreeReminder)
+	child.meta.WorkspaceRoot = sourceMeta.WorkspaceRoot
+	child.meta.WorkspaceContainer = sourceMeta.WorkspaceContainer
+	child.meta.WorktreeReminder = CloneWorktreeReminderState(sourceMeta.WorktreeReminder)
 	child.meta.UsageState = nil
-	parentSessionID := parentMeta.SessionID
-	child.meta.ParentSessionID = &parentSessionID
+	sourceID, err := runtimeids.ParseSessionID(sourceMeta.SessionID)
+	if err != nil {
+		return fmt.Errorf("invalid creation source session id: %w", err)
+	}
+	switch kind {
+	case SessionCreationSourcePreviousSession:
+		child.meta.PreviousSessionID = &sourceID
+		if sourceMeta.ParentAgentSessionID != nil {
+			parentAgentSessionID := *sourceMeta.ParentAgentSessionID
+			child.meta.ParentAgentSessionID = &parentAgentSessionID
+		}
+	case SessionCreationSourceParentAgent:
+		child.meta.ParentAgentSessionID = &sourceID
+	}
 	if opts.InheritContinuation {
-		child.meta.Continuation = cloneContinuationContext(parentMeta.Continuation)
+		child.meta.Continuation = cloneContinuationContext(sourceMeta.Continuation)
 	} else {
 		child.meta.Continuation = nil
 	}
 	child.meta.UpdatedAt = time.Now().UTC()
-	child.mu.Unlock()
 	return nil
 }
 

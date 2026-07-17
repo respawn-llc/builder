@@ -161,7 +161,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithUpdateStatusProvider(updateStatusService)
 	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background)
 	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, sessionStoreRegistry, authSupport.AuthManager, storeOptions...).
-		WithWorkspaceRetargeter(sessionWorkspaceRetargeter)
+		WithWorkspaceRetargeter(sessionWorkspaceRetargeter).
+		WithNavigationTargetResolver(metadataStore)
 	var workflowRuntimeStarter *workflowrunner.Starter
 	var workflowScheduler *workflowrunner.SchedulerService
 	cleanupNewFailure := func() {

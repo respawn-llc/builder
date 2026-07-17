@@ -28,8 +28,12 @@ pub struct RuntimeStatus {
     pub fast_mode_enabled: bool,
     #[serde(rename = "ConversationFreshness")]
     pub conversation_freshness: ConversationFreshness,
-    #[serde(rename = "ParentSessionID")]
-    pub parent_session_id: Option<String>,
+    #[serde(rename = "PreviousSessionID")]
+    pub previous_session_id: Option<String>,
+    #[serde(rename = "ParentAgentSessionID")]
+    pub parent_agent_session_id: Option<String>,
+    #[serde(rename = "NavigationTargetSessionID")]
+    pub navigation_target_session_id: Option<String>,
     #[serde(rename = "LastCommittedAssistantFinalAnswer")]
     pub last_committed_assistant_final_answer: String,
     #[serde(rename = "ThinkingLevel")]

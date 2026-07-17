@@ -124,7 +124,10 @@ func TestFreshChildSessionReinjectsDeveloperContextEvenWhenParentAlreadyInjected
 	if err != nil {
 		t.Fatalf("create child: %v", err)
 	}
-	if err := session.InitializeChildFromParent(child, parent); err != nil {
+	if err := session.InitializeCreationContext(child, parent, session.SessionCreationSourceParentAgent, session.ChildContextOptions{
+		InheritLockedContract: true,
+		InheritContinuation:   true,
+	}); err != nil {
 		t.Fatalf("initialize child: %v", err)
 	}
 

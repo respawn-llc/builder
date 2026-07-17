@@ -29,7 +29,9 @@ func TestSessionSnapshotSourcesParityForMainView(t *testing.T) {
 	assertEqual(t, "session name", live.Session.SessionName, dormant.Session.SessionName)
 	assertEqual(t, "freshness", live.Session.ConversationFreshness, dormant.Session.ConversationFreshness)
 	assertEqual(t, "execution target", live.Session.ExecutionTarget, dormant.Session.ExecutionTarget)
-	assertEqual(t, "parent session id", live.Status.ParentSessionID, dormant.Status.ParentSessionID)
+	assertEqual(t, "previous session id", live.Status.PreviousSessionID, dormant.Status.PreviousSessionID)
+	assertEqual(t, "parent agent session id", live.Status.ParentAgentSessionID, dormant.Status.ParentAgentSessionID)
+	assertEqual(t, "navigation target session id", live.Status.NavigationTargetSessionID, dormant.Status.NavigationTargetSessionID)
 	assertEqual(t, "last committed final", live.Status.LastCommittedAssistantFinalAnswer, dormant.Status.LastCommittedAssistantFinalAnswer)
 	assertEqual(t, "update status", live.Status.Update, dormant.Status.Update)
 	assertEqual(t, "activity available", live.Activity.State != "", true)
@@ -49,7 +51,7 @@ func TestSessionSnapshotSourcesParityForRollbackLocatorAcrossCandidateFreeCompac
 		compactStepID = "22222222-2222-4222-8222-222222222222"
 	)
 	dir := t.TempDir()
-	store := newSessionViewStore(t, dir, "ws", dir)
+	store, _ := newSessionViewParentAgentChild(t, dir, "ws", dir)
 	appended, err := store.AppendEventWithEndByteCursor(
 		userStepID,
 		"message",
@@ -160,10 +162,6 @@ func newSessionSnapshotParityFixture(t *testing.T, cacheWarningMode config.Cache
 	store := newSessionViewStore(t, dir, "ws", dir)
 	if err := store.SetName("parity session"); err != nil {
 		t.Fatalf("set name: %v", err)
-	}
-	parentSessionID := "parent-session"
-	if err := store.SetParentSessionID(&parentSessionID); err != nil {
-		t.Fatalf("set parent: %v", err)
 	}
 	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
 		t.Fatalf("append u1: %v", err)

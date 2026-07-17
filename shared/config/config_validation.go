@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+const MaxSupportedSubagentDepth = 30
+
 func validateSubagentRoleState(state settingsState, sources map[string]string) error {
 	if len(sources) == 0 {
 		return nil
@@ -319,6 +321,19 @@ func validateWorkflowSettings(state settingsState, _ map[string]string) error {
 	}
 	if state.Settings.Workflow.MaxInvalidCompletionAttempts <= 0 {
 		return fmt.Errorf("%w: workflow.max_invalid_completion_attempts must be > 0", errInvalidWorkflowSettings)
+	}
+	return nil
+}
+
+func validateMaxSubagentDepth(state settingsState, _ map[string]string) error {
+	if state.Settings.MaxSubagentDepth < 0 {
+		return fmt.Errorf("max_subagent_depth must be between 0 and %d", MaxSupportedSubagentDepth)
+	}
+	if state.Settings.MaxSubagentDepth > MaxSupportedSubagentDepth {
+		return fmt.Errorf(
+			"max_subagent_depth must be between 0 and %d; Kent does not support recursion chains that deep",
+			MaxSupportedSubagentDepth,
+		)
 	}
 	return nil
 }

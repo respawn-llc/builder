@@ -22,6 +22,25 @@ func (p SessionAuthPreparation) Validate() error {
 	}
 }
 
+type SessionNavigationBinding struct {
+	ProjectID   string `json:"project_id"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+func (b SessionNavigationBinding) Validate() error {
+	if normalized := strings.TrimSpace(b.ProjectID); normalized == "" {
+		return errors.New("session navigation project_id is required")
+	} else if normalized != b.ProjectID {
+		return errors.New("session navigation project_id must not have leading or trailing whitespace")
+	}
+	if normalized := strings.TrimSpace(b.WorkspaceID); normalized == "" {
+		return errors.New("session navigation workspace_id is required")
+	} else if normalized != b.WorkspaceID {
+		return errors.New("session navigation workspace_id must not have leading or trailing whitespace")
+	}
+	return nil
+}
+
 type SessionInitialPromptMetadata struct {
 	Text            string `json:"text"`
 	HistoryRecorded bool   `json:"history_recorded,omitempty"`
@@ -109,9 +128,10 @@ func (p *SessionDraftDisposition) UnmarshalJSON(data []byte) error {
 }
 
 type SessionLaunchPreparation struct {
-	initialPrompt    *SessionInitialPromptMetadata
-	draftDisposition SessionDraftDisposition
-	auth             SessionAuthPreparation
+	initialPrompt     *SessionInitialPromptMetadata
+	draftDisposition  SessionDraftDisposition
+	auth              SessionAuthPreparation
+	navigationBinding *SessionNavigationBinding
 }
 
 func NewSessionLaunchPreparation(initialPrompt *SessionInitialPromptMetadata, draftDisposition SessionDraftDisposition, auth SessionAuthPreparation) SessionLaunchPreparation {
@@ -120,6 +140,13 @@ func NewSessionLaunchPreparation(initialPrompt *SessionInitialPromptMetadata, dr
 		copied := *initialPrompt
 		preparation.initialPrompt = &copied
 	}
+	return preparation
+}
+
+func NewSessionNavigationLaunchPreparation(initialPrompt *SessionInitialPromptMetadata, draftDisposition SessionDraftDisposition, auth SessionAuthPreparation, binding SessionNavigationBinding) SessionLaunchPreparation {
+	preparation := NewSessionLaunchPreparation(initialPrompt, draftDisposition, auth)
+	copied := binding
+	preparation.navigationBinding = &copied
 	return preparation
 }
 
@@ -138,6 +165,13 @@ func (p SessionLaunchPreparation) AuthPreparation() SessionAuthPreparation {
 	return p.auth
 }
 
+func (p SessionLaunchPreparation) NavigationBinding() (SessionNavigationBinding, bool) {
+	if p.navigationBinding == nil {
+		return SessionNavigationBinding{}, false
+	}
+	return *p.navigationBinding, true
+}
+
 func (p SessionLaunchPreparation) Validate() error {
 	if p.initialPrompt != nil {
 		if err := p.initialPrompt.Validate(); err != nil {
@@ -147,7 +181,13 @@ func (p SessionLaunchPreparation) Validate() error {
 	if err := p.draftDisposition.Validate(); err != nil {
 		return err
 	}
-	return p.auth.Validate()
+	if err := p.auth.Validate(); err != nil {
+		return err
+	}
+	if p.navigationBinding != nil {
+		return p.navigationBinding.Validate()
+	}
+	return nil
 }
 
 func (p SessionLaunchPreparation) MarshalJSON() ([]byte, error) {
@@ -155,27 +195,34 @@ func (p SessionLaunchPreparation) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	type wire struct {
-		InitialPrompt *SessionInitialPromptMetadata `json:"initial_prompt,omitempty"`
-		InputPolicy   SessionDraftDisposition       `json:"input_policy"`
-		Auth          SessionAuthPreparation        `json:"auth"`
+		InitialPrompt     *SessionInitialPromptMetadata `json:"initial_prompt,omitempty"`
+		InputPolicy       SessionDraftDisposition       `json:"input_policy"`
+		Auth              SessionAuthPreparation        `json:"auth"`
+		NavigationBinding *SessionNavigationBinding     `json:"navigation_binding,omitempty"`
 	}
 	return json.Marshal(wire{
-		InitialPrompt: p.initialPrompt,
-		InputPolicy:   p.draftDisposition,
-		Auth:          p.auth,
+		InitialPrompt:     p.initialPrompt,
+		InputPolicy:       p.draftDisposition,
+		Auth:              p.auth,
+		NavigationBinding: p.navigationBinding,
 	})
 }
 
 func (p *SessionLaunchPreparation) UnmarshalJSON(data []byte) error {
 	var wire struct {
-		InitialPrompt *SessionInitialPromptMetadata `json:"initial_prompt"`
-		InputPolicy   SessionDraftDisposition       `json:"input_policy"`
-		Auth          SessionAuthPreparation        `json:"auth"`
+		InitialPrompt     *SessionInitialPromptMetadata `json:"initial_prompt"`
+		InputPolicy       SessionDraftDisposition       `json:"input_policy"`
+		Auth              SessionAuthPreparation        `json:"auth"`
+		NavigationBinding *SessionNavigationBinding     `json:"navigation_binding"`
 	}
 	if err := decodeStrictJSON(data, &wire); err != nil {
 		return err
 	}
 	decoded := NewSessionLaunchPreparation(wire.InitialPrompt, wire.InputPolicy, wire.Auth)
+	if wire.NavigationBinding != nil {
+		copied := *wire.NavigationBinding
+		decoded.navigationBinding = &copied
+	}
 	if err := decoded.Validate(); err != nil {
 		return err
 	}

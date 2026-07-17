@@ -140,15 +140,25 @@ func statusVisibleAuthSummary(auth uiStatusAuthInfo, subscription uiStatusSubscr
 	return summary
 }
 
-func statusParentSessionSummary(snapshot uiStatusSnapshot) string {
-	parentID := strings.TrimSpace(snapshot.ParentSessionID)
-	if parentID == "" {
-		return ""
+func statusSessionProvenanceSummaries(snapshot uiStatusSnapshot) []string {
+	summaries := make([]string, 0, 2)
+	if snapshot.PreviousSessionID != nil {
+		previousID := snapshot.PreviousSessionID.String()
+		if previousName := strings.TrimSpace(snapshot.PreviousSessionName); previousName != "" {
+			summaries = append(summaries, fmt.Sprintf("Previous session: %s <%s>", previousName, previousID))
+		} else {
+			summaries = append(summaries, fmt.Sprintf("Previous session: %s", previousID))
+		}
 	}
-	if parentName := strings.TrimSpace(snapshot.ParentSessionName); parentName != "" {
-		return fmt.Sprintf("Parent session: %s <%s>", parentName, parentID)
+	if snapshot.ParentAgentSessionID != nil {
+		parentAgentID := snapshot.ParentAgentSessionID.String()
+		if parentAgentName := strings.TrimSpace(snapshot.ParentAgentSessionName); parentAgentName != "" {
+			summaries = append(summaries, fmt.Sprintf("Parent agent session: %s <%s>", parentAgentName, parentAgentID))
+		} else {
+			summaries = append(summaries, fmt.Sprintf("Parent agent session: %s", parentAgentID))
+		}
 	}
-	return fmt.Sprintf("Parent session: %s", parentID)
+	return summaries
 }
 
 func statusPartitionSkills(skills []uiStatusSkillInspection) ([]uiStatusSkillInspection, []uiStatusSkillInspection) {

@@ -125,7 +125,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			if err := g.deps.ProjectExists(ctx, params.ProjectID); err != nil {
 				return protocol.AttachResponse{}, err
 			}
-			attachedWorkspaceID, attachedRoot, err := g.resolveAttachedProjectWorkspace(ctx, params.ProjectID, params.WorkspaceID, params.WorkspaceRoot)
+			attachedWorkspaceID, attachedRoot, err := g.resolveAttachedProjectWorkspace(ctx, params)
 			if err != nil {
 				return protocol.AttachResponse{}, err
 			}
@@ -133,7 +133,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			state.attachedWorkspaceID = attachedWorkspaceID
 			state.attachedWorkspaceRoot = attachedRoot
 			state.attachedSession = ""
-			return protocol.AttachResponse{Kind: "project", ProjectID: params.ProjectID, WorkspaceID: attachedWorkspaceID, WorkspaceRoot: attachedRoot}, nil
+			return protocol.ProjectAttachResponseForRequest(params, attachedWorkspaceID, attachedRoot)
 		})
 	},
 	protocol.MethodAttachSession: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
@@ -149,13 +149,12 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			state.attachedWorkspaceID = binding.WorkspaceID
 			state.attachedWorkspaceRoot = binding.CanonicalRoot
 			state.attachedSession = params.SessionID
-			return protocol.AttachResponse{
-				Kind:          "session",
-				ProjectID:     binding.ProjectID,
-				WorkspaceID:   binding.WorkspaceID,
-				WorkspaceRoot: binding.CanonicalRoot,
-				SessionID:     params.SessionID,
-			}, nil
+			return protocol.SessionAttachResponse(
+				binding.ProjectID,
+				binding.WorkspaceID,
+				binding.CanonicalRoot,
+				params.SessionID,
+			)
 		})
 	},
 	protocol.MethodProjectList:                   gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectListRequest, serverapi.ProjectListResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.ListProjects),

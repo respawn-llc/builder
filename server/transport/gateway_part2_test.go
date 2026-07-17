@@ -90,12 +90,16 @@ func TestGatewayRequiresExplicitWorkspaceSelectionForMultiWorkspaceProject(t *te
 		t.Fatalf("expected explicit workspace selection error, got %+v", respErr)
 	}
 
-	callGateway(t, conn, "attach-project-explicit", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: bindingA.ProjectID, WorkspaceID: bindingB.WorkspaceID}, nil)
+	attachWorkspaceB, err := protocol.AttachProjectRequestForWorkspaceID(bindingA.ProjectID, bindingB.WorkspaceID)
+	if err != nil {
+		t.Fatalf("AttachProjectRequestForWorkspaceID: %v", err)
+	}
+	callGateway(t, conn, "attach-project-explicit", protocol.MethodAttachProject, attachWorkspaceB, nil)
 	var planResp serverapi.SessionPlanResponse
 	callGateway(t, conn, "session-plan", protocol.MethodSessionPlan, serverapi.SessionPlanRequest{
 		ClientRequestID: "plan-after-explicit-workspace",
 		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(nil),
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	}, &planResp)
 	target := gatewaySessionExecutionTarget(t, conn, "main-view-after-explicit-workspace", planResp.Plan.SessionID)
 	if got, want := target.EffectiveWorkdir, bindingB.CanonicalRoot; got != want {
@@ -139,14 +143,18 @@ func TestGatewayAttachSessionClearsWorkspaceOverrideForLaterPlans(t *testing.T) 
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
-	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: bindingB.ProjectID, WorkspaceRoot: resolvedA.Config.WorkspaceRoot}, nil)
+	attachWorkspaceA, err := protocol.AttachProjectRequestForWorkspaceRoot(bindingB.ProjectID, resolvedA.Config.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("AttachProjectRequestForWorkspaceRoot: %v", err)
+	}
+	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, attachWorkspaceA, nil)
 	callGateway(t, conn, "attach-session", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: storeB.Meta().SessionID}, nil)
 
 	var planResp serverapi.SessionPlanResponse
 	callGateway(t, conn, "session-plan", protocol.MethodSessionPlan, serverapi.SessionPlanRequest{
 		ClientRequestID: "new-after-attach-session",
 		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(nil),
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	}, &planResp)
 	wantWorkspaceRoot, err := config.CanonicalWorkspaceRoot(resolvedB.Config.WorkspaceRoot)
 	if err != nil {

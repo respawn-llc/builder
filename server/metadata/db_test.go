@@ -819,7 +819,7 @@ WHERE id = 'transition-lifecycle-null'
 	}
 }
 
-func TestOpenMigratesLegacyEmptyParentSessionIDToNull(t *testing.T) {
+func TestOpenMigratesLegacyEmptyParentSessionIDToNullPreviousSession(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db", "main.sqlite3")
 	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 52)
@@ -877,16 +877,16 @@ INSERT INTO task_runs (
 	}
 	defer func() { _ = store.Close() }()
 
-	var parentSessionID sql.NullString
+	var previousSessionID sql.NullString
 	if err := store.db.QueryRowContext(t.Context(), `
-SELECT parent_session_id
+SELECT previous_session_id
 FROM sessions
 WHERE id = 'session-parent-null'
-`).Scan(&parentSessionID); err != nil {
-		t.Fatalf("query migrated parent session id: %v", err)
+`).Scan(&previousSessionID); err != nil {
+		t.Fatalf("query migrated previous session id: %v", err)
 	}
-	if parentSessionID.Valid {
-		t.Fatalf("migrated parent session id = %+v, want NULL absence", parentSessionID)
+	if previousSessionID.Valid {
+		t.Fatalf("migrated previous session id = %+v, want NULL absence", previousSessionID)
 	}
 	var promptText string
 	if err := store.db.QueryRowContext(t.Context(), `
@@ -909,6 +909,115 @@ WHERE id = 'run-parent-null'
 	}
 	if !taskRunSessionID.Valid || taskRunSessionID.String != "session-parent-null" {
 		t.Fatalf("migrated task run session id = %+v, want session-parent-null", taskRunSessionID)
+	}
+}
+
+func TestOpenMigratesLegacySessionParentToTypedProvenance(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 55)
+	if err != nil {
+		t.Fatalf("open test database at version 55: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-provenance', 'Project', ?, ?, '{}')`, now, now)
+	execSeed(t, db, "workspace", `
+INSERT INTO workspaces (
+    id, project_id, canonical_root_path, git_metadata_json, created_at_unix_ms, updated_at_unix_ms
+) VALUES ('workspace-provenance', 'project-provenance', '/workspace-provenance', '{}', ?, ?)`, now, now)
+	execSeed(t, db, "legacy sessions", `
+INSERT INTO sessions (
+    id, project_id, workspace_id, artifact_relpath, parent_session_id,
+    created_at_unix_ms, updated_at_unix_ms
+) VALUES
+    ('session-with-parent', 'project-provenance', 'workspace-provenance', 'sessions/session-with-parent', 'legacy-parent', ?, ?),
+    ('session-without-parent', 'project-provenance', 'workspace-provenance', 'sessions/session-without-parent', NULL, ?, ?),
+    ('session-padded-parent', 'project-provenance', 'workspace-provenance', 'sessions/session-padded-parent', ' padded-parent ', ?, ?),
+    ('session-traversal-parent', 'project-provenance', 'workspace-provenance', 'sessions/session-traversal-parent', '../legacy-parent', ?, ?),
+    ('session-absolute-parent', 'project-provenance', 'workspace-provenance', 'sessions/session-absolute-parent', '/legacy-parent', ?, ?),
+    ('session-uuidv4-parent', 'project-provenance', 'workspace-provenance', 'sessions/session-uuidv4-parent', '550e8400-e29b-41d4-a716-446655440000', ?, ?),
+    ('session-uuidv1-parent', 'project-provenance', 'workspace-provenance', 'sessions/session-uuidv1-parent', '550e8400-e29b-11d4-a716-446655440000', ?, ?)`,
+		now, now, now, now, now, now, now, now, now, now, now, now, now, now)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 55 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	rows, err := store.db.QueryContext(t.Context(), `
+SELECT id, previous_session_id, parent_agent_session_id
+FROM sessions
+ORDER BY id`)
+	if err != nil {
+		t.Fatalf("query migrated provenance: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	type migratedRow struct {
+		id          string
+		previous    sql.NullString
+		parentAgent sql.NullString
+	}
+	var migrated []migratedRow
+	for rows.Next() {
+		var row migratedRow
+		if err := rows.Scan(&row.id, &row.previous, &row.parentAgent); err != nil {
+			t.Fatalf("scan migrated provenance: %v", err)
+		}
+		migrated = append(migrated, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate migrated provenance: %v", err)
+	}
+	if len(migrated) != 7 {
+		t.Fatalf("migrated rows = %+v, want seven", migrated)
+	}
+	migratedByID := make(map[string]migratedRow, len(migrated))
+	for _, row := range migrated {
+		migratedByID[row.id] = row
+	}
+	withParent := migratedByID["session-with-parent"]
+	if !withParent.previous.Valid || withParent.previous.String != "legacy-parent" ||
+		withParent.parentAgent.Valid {
+		t.Fatalf("session-with-parent provenance = %+v", withParent)
+	}
+	withoutParent := migratedByID["session-without-parent"]
+	if withoutParent.previous.Valid || withoutParent.parentAgent.Valid {
+		t.Fatalf("session-without-parent provenance = %+v", withoutParent)
+	}
+	for id, expected := range map[string]string{
+		"session-padded-parent":    " padded-parent ",
+		"session-traversal-parent": "../legacy-parent",
+		"session-absolute-parent":  "/legacy-parent",
+		"session-uuidv1-parent":    "550e8400-e29b-11d4-a716-446655440000",
+	} {
+		row := migratedByID[id]
+		if !row.previous.Valid || row.previous.String != expected || row.parentAgent.Valid {
+			t.Fatalf("legacy provenance for %s = %+v, want exact previous-session value %q", id, row, expected)
+		}
+		if _, err := store.ResolvePersistedSession(context.Background(), row.id); err == nil {
+			t.Fatalf("ResolvePersistedSession(%s) accepted malformed preserved provenance", row.id)
+		}
+	}
+	uuidV4 := migratedByID["session-uuidv4-parent"]
+	if !uuidV4.previous.Valid || uuidV4.previous.String != "550e8400-e29b-41d4-a716-446655440000" {
+		t.Fatalf("session-uuidv4-parent provenance = %+v, want canonical UUIDv4", uuidV4)
+	}
+
+	var legacyColumnCount int
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT COUNT(*)
+FROM pragma_table_info('sessions')
+WHERE name = 'parent_session_id'`).Scan(&legacyColumnCount); err != nil {
+		t.Fatalf("inspect sessions columns: %v", err)
+	}
+	if legacyColumnCount != 0 {
+		t.Fatalf("parent_session_id column count = %d, want removed", legacyColumnCount)
 	}
 }
 

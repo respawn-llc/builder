@@ -3,6 +3,8 @@ package serverapi
 import (
 	"errors"
 	"strings"
+
+	"core/shared/runtimeids"
 )
 
 // ErrClientRequestIDRequired is returned when a lifecycle request omits its
@@ -27,7 +29,7 @@ type SessionTransition struct {
 	InitialInput                 string                  `json:"initial_input,omitempty"`
 	TargetSessionID              string                  `json:"target_session_id,omitempty"`
 	ForkRollbackTargetID         string                  `json:"fork_rollback_target_id,omitempty"`
-	ParentSessionID              string                  `json:"parent_session_id,omitempty"`
+	PreviousSessionID            *runtimeids.SessionID   `json:"previous_session_id,omitempty"`
 }
 
 type SessionInitialInputRequest struct {

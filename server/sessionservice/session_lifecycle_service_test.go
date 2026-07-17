@@ -69,6 +69,17 @@ type sessionLifecycleRetargeterStub struct {
 	req    metadata.SessionWorkspaceRetargetRequest
 }
 
+type sessionNavigationTargetResolverStub struct {
+	target serverapi.SessionNavigationBinding
+	err    error
+	calls  []string
+}
+
+func (s *sessionNavigationTargetResolverStub) ResolveSessionNavigationBinding(_ context.Context, sessionID string) (serverapi.SessionNavigationBinding, error) {
+	s.calls = append(s.calls, sessionID)
+	return s.target, s.err
+}
+
 func (s *sessionLifecycleRetargeterStub) RetargetWorkspace(_ context.Context, req metadata.SessionWorkspaceRetargetRequest) (metadata.SessionWorkspaceRetargetResult, error) {
 	s.req = req
 	return s.result, s.err
@@ -522,6 +533,93 @@ func TestServiceResolveTransitionOpenSessionRequiresTarget(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("open-session transition without target resolved as %+v", response)
+	}
+}
+
+func TestServiceResolveTransitionOpenSessionAuthorizesProvenanceTargetAndReturnsBinding(t *testing.T) {
+	_, containerDir, parent := createPersistedSession(t)
+	child, err := session.NewLazy(
+		containerDir,
+		"workspace-x",
+		"/tmp/work",
+		sessioncontract.SessionCategoryMain,
+		sessionServiceTestPersistence.Options()...,
+	)
+	if err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+	if err := session.InitializeCreationContext(child, parent, session.SessionCreationSourcePreviousSession, session.ChildContextOptions{}); err != nil {
+		t.Fatalf("InitializeCreationContext: %v", err)
+	}
+	if err := child.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable child: %v", err)
+	}
+	resolver := &sessionNavigationTargetResolverStub{target: serverapi.SessionNavigationBinding{
+		ProjectID:   "project-target",
+		WorkspaceID: "workspace-target",
+	}}
+	service := newTestSessionLifecycleService(containerDir, nil).WithNavigationTargetResolver(resolver)
+
+	response, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
+		ClientRequestID: "authorized-navigation",
+		SessionID:       child.Meta().SessionID,
+		Transition: serverapi.SessionTransition{
+			Action:          serverapi.SessionTransitionActionOpenSession,
+			TargetSessionID: parent.Meta().SessionID,
+			InitialInput:    "draft reply",
+		},
+	})
+	if err != nil {
+		t.Fatalf("ResolveTransition: %v", err)
+	}
+	intent, preparation := requireSessionLifecycleLaunch(t, response)
+	targetID, present := intent.SessionID()
+	if !present || targetID.String() != parent.Meta().SessionID {
+		t.Fatalf("navigation target = %q/%t, want %q", targetID.String(), present, parent.Meta().SessionID)
+	}
+	binding, present := preparation.NavigationBinding()
+	if !present || binding.ProjectID != "project-target" || binding.WorkspaceID != "workspace-target" {
+		t.Fatalf("navigation binding = %+v/%t", binding, present)
+	}
+	if len(resolver.calls) != 1 || resolver.calls[0] != parent.Meta().SessionID {
+		t.Fatalf("target resolver calls = %#v, want parent once", resolver.calls)
+	}
+}
+
+func TestServiceResolveTransitionOpenSessionRejectsNonProvenanceTargetBeforeResolution(t *testing.T) {
+	_, containerDir, parent := createPersistedSession(t)
+	child, err := session.NewLazy(
+		containerDir,
+		"workspace-x",
+		"/tmp/work",
+		sessioncontract.SessionCategoryMain,
+		sessionServiceTestPersistence.Options()...,
+	)
+	if err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+	if err := session.InitializeCreationContext(child, parent, session.SessionCreationSourcePreviousSession, session.ChildContextOptions{}); err != nil {
+		t.Fatalf("InitializeCreationContext: %v", err)
+	}
+	if err := child.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable child: %v", err)
+	}
+	resolver := &sessionNavigationTargetResolverStub{}
+	service := newTestSessionLifecycleService(containerDir, nil).WithNavigationTargetResolver(resolver)
+
+	_, err = service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
+		ClientRequestID: "unauthorized-navigation",
+		SessionID:       child.Meta().SessionID,
+		Transition: serverapi.SessionTransition{
+			Action:          serverapi.SessionTransitionActionOpenSession,
+			TargetSessionID: "arbitrary-session",
+		},
+	})
+	if err == nil {
+		t.Fatal("non-provenance navigation target unexpectedly succeeded")
+	}
+	if len(resolver.calls) != 0 {
+		t.Fatalf("target resolver calls = %#v, want none", resolver.calls)
 	}
 }
 

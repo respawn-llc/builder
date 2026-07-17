@@ -263,9 +263,10 @@ func newTestHeadlessSessionLaunch(cfg config.App, containerDir string, authManag
 		persistence = persistences[0]
 	}
 	return sessionlaunch.NewService(launch.Planner{
-		Config:       cfg,
-		ContainerDir: containerDir,
-		StoreOptions: persistence.Options(),
+		Config:            cfg,
+		ContainerDir:      containerDir,
+		StoreOptions:      persistence.Options(),
+		PersistedSessions: persistence,
 	}, registry.NewSessionStoreRegistry()).WithAuthStateReader(authManager)
 }
 
@@ -433,8 +434,8 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	parentID := parent.Meta().SessionID
 	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
 		ClientRequestID: "workflow-denial-1",
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRunPromptSessionID(t, parentID))),
 		CallerSessionID: &parentID,
-		ParentSessionID: &parentID,
 		Prompt:          "delegate this",
 		Overrides:       serverapi.RunPromptOverrides{AgentRole: &role},
 	}, nil)
@@ -459,10 +460,10 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	selectedBefore := selected.Meta()
 	beforeSelectedDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes)
 	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
-		ClientRequestID:   "workflow-selected-denial-1",
-		SelectedSessionID: selectedBefore.SessionID,
-		CallerSessionID:   &parentID,
-		Prompt:            "continue selected",
+		ClientRequestID: "workflow-selected-denial-1",
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, selectedBefore.SessionID)),
+		CallerSessionID: &parentID,
+		Prompt:          "continue selected",
 	}, nil)
 	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialNotCallable {
 		t.Fatalf("selected RunPrompt error = %T %v, want workflow policy denial", err, err)
@@ -472,7 +473,8 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		t.Fatalf("OpenByID selected: %v", err)
 	}
 	if got := reopenedSelected.Meta(); got.Name != selectedBefore.Name ||
-		got.ParentSessionID != selectedBefore.ParentSessionID ||
+		!reflect.DeepEqual(got.PreviousSessionID, selectedBefore.PreviousSessionID) ||
+		!reflect.DeepEqual(got.ParentAgentSessionID, selectedBefore.ParentAgentSessionID) ||
 		got.Continuation == nil ||
 		got.Continuation.AgentRole == nil ||
 		*got.Continuation.AgentRole != role ||
@@ -544,9 +546,10 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 	runtimes := registry.NewRuntimeRegistry()
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch: sessionlaunch.NewService(launch.Planner{
-			Config:       cfg,
-			ContainerDir: containerDir,
-			StoreOptions: meta.AuthoritativeSessionStoreOptions(),
+			Config:            cfg,
+			ContainerDir:      containerDir,
+			StoreOptions:      meta.AuthoritativeSessionStoreOptions(),
+			PersistedSessions: meta,
 		}, registry.NewSessionStoreRegistry()).WithAuthStateReader(authManager),
 		AuthManager:     authManager,
 		RuntimeRegistry: runtimes,
@@ -557,8 +560,8 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 	worker := "worker"
 	response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
 		ClientRequestID: "workflow-allowed-custom",
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRunPromptSessionID(t, parentID))),
 		CallerSessionID: &parentID,
-		ParentSessionID: &parentID,
 		Prompt:          "delegate this",
 		Overrides:       serverapi.RunPromptOverrides{AgentRole: &worker},
 	}, nil)
@@ -573,8 +576,9 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 		t.Fatalf("OpenByID child: %v", err)
 	}
 	childMeta := child.Meta()
-	if childMeta.ParentSessionID == nil || *childMeta.ParentSessionID != parentID {
-		t.Fatalf("parent id = %v, want %q", childMeta.ParentSessionID, parentID)
+	parentSessionID := mustRunPromptSessionID(t, parentID)
+	if childMeta.ParentAgentSessionID == nil || *childMeta.ParentAgentSessionID != parentSessionID {
+		t.Fatalf("parent-agent id = %v, want %q", childMeta.ParentAgentSessionID, parentID)
 	}
 	if got := childMeta.Continuation; got == nil || got.AgentRole == nil || *got.AgentRole != worker {
 		t.Fatalf("continuation = %+v, want worker role", got)

@@ -20,7 +20,6 @@ import (
 
 func TestSessionTransitionMapsEveryActionToTypedLifecycleResult(t *testing.T) {
 	parentID := mustSessionLifecycleResultID(t, "parent-session")
-	targetID := mustSessionLifecycleResultID(t, "target-session")
 	service := newTestSessionLifecycleService(t.TempDir(), nil)
 
 	tests := []struct {
@@ -48,7 +47,7 @@ func TestSessionTransitionMapsEveryActionToTypedLifecycleResult(t *testing.T) {
 				Action:                       serverapi.SessionTransitionActionNewSession,
 				InitialPrompt:                "seed prompt",
 				InitialPromptHistoryRecorded: true,
-				ParentSessionID:              parentID.String(),
+				PreviousSessionID:            &parentID,
 			},
 			wantKind: serverapi.SessionDirectiveLaunch,
 			assert: func(t *testing.T, result serverapi.SessionDirective) {
@@ -56,9 +55,10 @@ func TestSessionTransitionMapsEveryActionToTypedLifecycleResult(t *testing.T) {
 				if intent.Kind() != serverapi.SessionLaunchIntentCreateNew {
 					t.Fatalf("intent kind = %q, want create new", intent.Kind())
 				}
-				parent, ok := intent.ParentID()
-				if !ok || parent != parentID {
-					t.Fatalf("parent = %q/%v, want %q", parent.String(), ok, parentID.String())
+				origin, ok := intent.CreateOrigin()
+				source, hasSource := origin.SessionID()
+				if !ok || origin.Kind() != serverapi.SessionCreateOriginPreviousSession || !hasSource || source != parentID {
+					t.Fatalf("origin = %+v/%v source=%q/%v, want previous session %q", origin, ok, source.String(), hasSource, parentID.String())
 				}
 				assertSessionLaunchPreparation(
 					t,
@@ -67,34 +67,6 @@ func TestSessionTransitionMapsEveryActionToTypedLifecycleResult(t *testing.T) {
 					serverapi.SessionDraftDispositionRestoreStoredDraft,
 					"",
 					false,
-					serverapi.SessionAuthPreparationKeepCurrent,
-				)
-			},
-		},
-		{
-			name: "open session launches target with empty input override",
-			transition: serverapi.SessionTransition{
-				Action:          serverapi.SessionTransitionActionOpenSession,
-				TargetSessionID: targetID.String(),
-				InitialInput:    "",
-			},
-			wantKind: serverapi.SessionDirectiveLaunch,
-			assert: func(t *testing.T, result serverapi.SessionDirective) {
-				intent, preparation := requireSessionLifecycleLaunch(t, result)
-				if intent.Kind() != serverapi.SessionLaunchIntentOpenExisting {
-					t.Fatalf("intent kind = %q, want open existing", intent.Kind())
-				}
-				target, ok := intent.SessionID()
-				if !ok || target != targetID {
-					t.Fatalf("target = %q/%v, want %q", target.String(), ok, targetID.String())
-				}
-				assertSessionLaunchPreparation(
-					t,
-					preparation,
-					nil,
-					serverapi.SessionDraftDispositionOverrideStoredDraft,
-					"",
-					true,
 					serverapi.SessionAuthPreparationKeepCurrent,
 				)
 			},

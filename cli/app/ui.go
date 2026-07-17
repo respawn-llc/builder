@@ -205,7 +205,7 @@ func (m *uiModel) Transition() UITransition {
 		InitialInput:                 m.nextSessionInitialInput,
 		TargetSessionID:              strings.TrimSpace(m.nextSessionID),
 		ForkRollbackTargetID:         m.nextForkRollbackTargetID,
-		ParentSessionID:              strings.TrimSpace(m.nextParentSessionID),
+		PreviousSessionID:            m.nextPreviousSessionID,
 	}
 }
 
