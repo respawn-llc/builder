@@ -13,8 +13,7 @@ import (
 )
 
 func TestActiveGoalContinuationUsesOneCanonicalMetaContextSlot(t *testing.T) {
-	first := llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeActiveGoalContinuation, Content: "preserved continuation", CompactContent: clientui.GoalNudgeCompactLabel}
-	second := llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeActiveGoalContinuation, Content: "duplicate continuation", CompactContent: clientui.GoalNudgeCompactLabel}
+	first, second := llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeActiveGoalContinuation, Content: "preserved continuation", CompactContent: clientui.GoalNudgeCompactLabel}, llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeActiveGoalContinuation, Content: "duplicate continuation", CompactContent: clientui.GoalNudgeCompactLabel}
 	result, err := newMetaContextBuilder(t.TempDir(), "", "", config.SkillPolicy{}, time.Unix(0, 0)).Build(metaContextBuildOptions{ExistingMessages: []llm.Message{
 		first, second,
 		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeWorktreeMode, Content: "worktree"},

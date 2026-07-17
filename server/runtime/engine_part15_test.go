@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
