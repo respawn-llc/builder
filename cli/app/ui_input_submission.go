@@ -321,10 +321,10 @@ func (c uiInputController) handleCompactDone(msg compactDoneMsg) (tea.Model, tea
 			m.layout().syncViewport()
 			return m, tea.Batch(restoreInjectedCmd, m.interruptedStatusNoticeCmd())
 		}
-		detailErr := runtimeattach.FormatSubmissionError(msg.err)
+		detailErr := runtimeattach.FormatCompactionError(msg.err)
 		m.activity = uiActivityError
 		appendCmd := m.appendLocalEntryWithNoticeID(operatorErrorFeedbackRole, detailErr, "")
-		m.logf("compaction.error err=%q", detailErr)
+		m.logf("compaction.error err=%q", msg.err.Error())
 		m.layout().syncViewport()
 		return m, tea.Batch(restoreInjectedCmd, appendCmd)
 	}

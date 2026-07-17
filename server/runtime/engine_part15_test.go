@@ -279,6 +279,17 @@ func TestEmitCompactionStatusStillPublishesFailureEventWhenErrorPersistenceFails
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
+	raw := "provider capacity details"
+	if err := newCompactionPersistence(eng).emitStatus("step-1", EventCompactionFailed, compactionModeAuto, "remote", "openai", nil, 2, raw); err != nil {
+		t.Fatalf("emit compaction failure: %v", err)
+	}
+	if local := eng.ChatSnapshot().Entries[0].Text; strings.Contains(local, raw) {
+		t.Fatalf("local compaction failure exposed diagnostic %q", local)
+	}
+	if got := events[len(events)-1].Compaction.Error; got != raw {
+		t.Fatalf("compaction diagnostic = %q, want %q", got, raw)
+	}
+	events = nil
 	mustBlockTestEventLogAppends(t, store)
 
 	err := newCompactionPersistence(eng).emitStatus("step-1", EventCompactionFailed, compactionModeAuto, "remote", "openai", nil, 2, "quota exceeded")
@@ -618,26 +629,23 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			store := mustCreateTestSession(t)
-			client := activeGoalCompactionTestClient()
-			var engine *Engine
+			engine := mustNewExecTestEngine(t, store, activeGoalCompactionTestClient(), Config{Model: "gpt-5"})
 			if test.workflow {
-				engine = mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool), Config{Model: "gpt-5"})
-			} else {
-				engine = mustNewExecTestEngine(t, store, client, Config{Model: "gpt-5"})
+				engine = mustNewWorkflowTestEngine(t, store, activeGoalCompactionTestClient(), testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool), Config{Model: "gpt-5"})
 			}
 			if test.status != nil || test.clear || test.workflow {
 				if _, err := engine.SetGoal("inactive goal", session.GoalActorUser); err != nil {
-					t.Fatalf("set goal: %v", err)
+					t.Fatal(err)
 				}
 			}
 			if test.status != nil {
 				if _, err := engine.SetGoalStatus(*test.status, session.GoalActorUser); err != nil {
-					t.Fatalf("set goal status: %v", err)
+					t.Fatal(err)
 				}
 			}
 			if test.clear {
 				if _, err := engine.ClearGoal(session.GoalActorUser); err != nil {
-					t.Fatalf("clear goal: %v", err)
+					t.Fatal(err)
 				}
 			}
 			if err := engine.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {

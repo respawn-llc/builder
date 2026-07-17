@@ -78,7 +78,16 @@ func (p markdownProjector) Project(input markdownProjectionInput) markdownProjec
 	}
 	candidateRows := p.renderer.Render(suffix[:candidateBoundary], width)
 	if !rowsPrefixEqual(fullRows, candidateRows) {
-		return markdownProjectionResult{VolatileRows: fullRows, PromotedBoundary: input.PromotedBoundary}
+		return markdownProjectionResult{
+			VolatileRows:     fullRows,
+			PromotedBoundary: input.PromotedBoundary,
+			ProjectionFailure: &markdownProjectionFailure{
+				SourceBoundary:    input.PromotedBoundary,
+				Width:             width,
+				CandidateBoundary: input.PromotedBoundary + candidateBoundary,
+				RowIndex:          firstDifferentRow(fullRows, candidateRows),
+			},
+		}
 	}
 	return markdownProjectionResult{
 		PromotedRows:     p.renderer.RenderStable(suffix[:candidateBoundary], width),

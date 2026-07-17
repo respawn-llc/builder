@@ -581,18 +581,6 @@ func TestReopenedManualCompactionKeepsCarryoverAsSingleDetailTranscriptEntry(t *
 	if carryoverMessages != 1 {
 		t.Fatalf("manual compaction carryover message count = %d, want 1; messages=%+v", carryoverMessages, messages)
 	}
-	goalMessages := 0
-	for _, message := range messages {
-		if message.MessageType != llm.MessageTypeActiveGoalContinuation {
-			continue
-		}
-		goalMessages++
-		if message.Content != prompts.RenderActiveGoalContinuationPrompt("survive process reopen") {
-			t.Fatalf("reopened active-goal continuation content = %q", message.Content)
-		}
-	}
-	if goalMessages != 1 {
-		t.Fatalf("reopened active-goal continuation count = %d, want 1; messages=%+v", goalMessages, messages)
-	}
+	assertSingleActiveGoalContinuation(t, llm.ItemsFromMessages(messages), "survive process reopen")
 
 }

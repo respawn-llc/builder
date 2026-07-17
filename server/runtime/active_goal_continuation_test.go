@@ -31,11 +31,8 @@ func TestActiveGoalContinuationUsesOneCanonicalMetaContextSlot(t *testing.T) {
 	}
 	assertMessageTypesInOrder(t, result.OrderedMetaMessages(), llm.MessageTypeEnvironment, llm.MessageTypeHeadlessMode, llm.MessageTypeActiveGoalContinuation, llm.MessageTypeWorkflowMode, llm.MessageTypeWorktreeMode)
 	meta, ordinary := splitMetaContextMessages([]llm.Message{first, {Role: llm.RoleUser, Content: "request"}})
-	if !reflect.DeepEqual(meta, []llm.Message{first}) {
-		t.Fatalf("classified meta context = %+v, want active-goal continuation", meta)
-	}
-	if len(ordinary) != 1 || ordinary[0].Role != llm.RoleUser {
-		t.Fatalf("ordinary transcript = %+v, want user request only", ordinary)
+	if !reflect.DeepEqual(meta, []llm.Message{first}) || len(ordinary) != 1 || ordinary[0].Role != llm.RoleUser {
+		t.Fatalf("classified meta=%+v ordinary=%+v, want continuation and user request", meta, ordinary)
 	}
 }
 
@@ -65,8 +62,7 @@ func TestActiveGoalContinuationProjectsAsDetailDeveloperContext(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("entries = %+v, want one active-goal continuation row", entries)
 	}
-	entry := entries[0]
-	if entry.Visibility != transcript.EntryVisibilityDetail || entry.Role != string(transcript.EntryRoleDeveloperContext) || entry.MessageType != llm.MessageTypeActiveGoalContinuation || entry.CondensedText != clientui.GoalNudgeCompactLabel || entry.CompactLabel != clientui.GoalNudgeCompactLabel {
+	if entry := entries[0]; entry.Visibility != transcript.EntryVisibilityDetail || entry.Role != string(transcript.EntryRoleDeveloperContext) || entry.MessageType != llm.MessageTypeActiveGoalContinuation || entry.CondensedText != clientui.GoalNudgeCompactLabel || entry.CompactLabel != clientui.GoalNudgeCompactLabel {
 		t.Fatalf("active-goal continuation projection = %+v", entry)
 	}
 }

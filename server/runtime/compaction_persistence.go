@@ -57,10 +57,7 @@ func (p compactionPersistence) emitStatus(stepID string, kind EventKind, mode co
 		}))
 
 	case EventCompactionFailed:
-		message := fmt.Sprintf("Context compaction failed (%s): %s", status.Mode, status.Error)
-		if strings.TrimSpace(status.Error) == "" {
-			message = fmt.Sprintf("Context compaction failed (%s).", status.Mode)
-		}
+		message := fmt.Sprintf("Context compaction failed (%s).", status.Mode)
 		if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{Role: "error", Text: message})); err != nil {
 			_ = e.steer(stepID, steerEventIntent(Event{
 				Kind:       kind,

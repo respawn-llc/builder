@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"core/shared/llmerrors"
@@ -18,6 +19,9 @@ func TestFormatSubmissionErrorSurfacesStall(t *testing.T) {
 	if got := FormatSubmissionError(stall); got != want {
 		t.Fatalf("FormatSubmissionError(stall) = %q, want %q", got, want)
 	}
+	if got := FormatCompactionError(stall); got != want {
+		t.Fatalf("non-provider compaction error = %q, want %q", got, want)
+	}
 }
 
 func TestFormatSubmissionErrorSuppressesCancellation(t *testing.T) {
@@ -26,5 +30,15 @@ func TestFormatSubmissionErrorSuppressesCancellation(t *testing.T) {
 	}
 	if got := FormatSubmissionError(errors.Join(ErrSubmissionInterrupted, errors.New("noise"))); got != "" {
 		t.Fatalf("interrupt should not surface a submission error, got %q", got)
+	}
+}
+
+func TestFormatCompactionErrorHidesOnlyProviderDiagnostics(t *testing.T) {
+	providerErr := &llmerrors.ProviderAPIError{ProviderID: "local", StatusCode: 400, Message: "secret detail", Raw: "raw payload"}
+	got := FormatCompactionError(fmt.Errorf("compact: %w", providerErr))
+	for _, raw := range []string{providerErr.Error(), providerErr.Message, providerErr.Raw} {
+		if got == "" || strings.Contains(got, raw) {
+			t.Fatalf("compaction error exposed provider diagnostics: %q", got)
+		}
 	}
 }

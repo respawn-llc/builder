@@ -223,6 +223,12 @@ func TestExclusiveStepLifecycleBlocksSuccessorWhileTerminalPublicationPending(t 
 	if err := lifecycle.AcquireReservation(reservation); err != nil {
 		t.Fatalf("acquire reservation: %v", err)
 	}
+	if !lifecycle.IsBusy() {
+		t.Fatal("held reservation must keep exclusive lifecycle busy")
+	}
+	if err := lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error { return nil }); !errors.Is(err, ErrAgentBusy) {
+		t.Fatalf("ordinary run with held reservation err = %v, want busy", err)
+	}
 	releaseStep := make(chan struct{})
 	firstDone := make(chan error, 1)
 	go func() {

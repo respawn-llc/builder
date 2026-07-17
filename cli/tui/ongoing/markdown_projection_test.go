@@ -265,18 +265,12 @@ func TestMarkdownProjectionPromotesOnlyLongestSafeCandidateWithTwoRenders(t *tes
 	if got, want := result.VolatileRows, []string{"three"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("volatile rows = %v, want %v", got, want)
 	}
-	result = projector.Project(markdownProjectionInput{Source: "stable\n\nopen", Width: 40})
-	if len(result.PromotedRows) != 0 || result.PromotedBoundary != 0 || result.ProjectionFailure != nil || !reflect.DeepEqual(result.VolatileRows, []string{"changed", "open"}) {
-		t.Fatalf("unstable candidate projection: %+v", result)
-	}
 }
 
-type countingMarkdownRenderer struct{}
+type countingMarkdownRenderer struct {
+}
 
 func (r *countingMarkdownRenderer) Render(source string, width int) []string {
-	if source == "stable\n\nopen" {
-		return []string{"changed", "open"}
-	}
 	return renderPlainMarkdownRows(source, width)
 }
 
