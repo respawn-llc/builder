@@ -5,13 +5,13 @@ import (
 )
 
 // MarshalOpenAIWirePayload builds the exact responses.ResponseNewParams that the
-// OpenAI / openai-compatible HTTP transport would POST, using the same production
-// buildPayload path, and marshals it to the byte-identical JSON body the openai-go
-// SDK sends over the wire (it calls the same ResponseNewParams.MarshalJSON that
-// requestconfig uses to build the HTTP body). No HTTP is performed.
+// OpenAI / openai-compatible HTTP transport would POST, using the production
+// buildPayload path, and marshals them as semantically equivalent diagnostic
+// JSON. JSON escaping may differ from the openai-go SDK HTTP body. No HTTP is
+// performed.
 //
 // This is an operator-only diagnostic seam used by offline inspection tooling to
-// capture the literal request payload for a session without executing a model turn.
+// capture a request payload for a session without executing a model turn.
 //
 //   - request: the provider-DTO request (project from a provider-agnostic Request
 //     via RequestAsOpenAI, the same projection the live OpenAIClient uses).
