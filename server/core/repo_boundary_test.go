@@ -479,49 +479,34 @@ func TestCLIPackagesDoNotImportServerOutsideCompositionBridges(t *testing.T) {
 	allowedServerImportsByFile := allowedCLIServerImports()
 	actualAllowedServerImportsByFile := make(map[string]map[string]struct{})
 	violations := make([]string, 0)
-	walkRoot := filepath.Join(repoRoot, "cli")
-	if err := filepath.WalkDir(walkRoot, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		fileSet := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fileSet, path, nil, parser.ImportsOnly)
-		if parseErr != nil {
-			return parseErr
-		}
-		relPath, relErr := filepath.Rel(repoRoot, path)
-		if relErr != nil {
-			relPath = path
-		}
-		for _, spec := range file.Imports {
+	walkRepositoryGoSources(t, repoRoot, repositoryGoSourceScan{
+		Operation:    "scan cli server imports",
+		Root:         "cli",
+		Recursive:    true,
+		IncludeTests: false,
+		Mode:         parser.ImportsOnly,
+		Selection:    allRepositoryGoSources{},
+	}, func(source parsedGoSource) {
+		for _, spec := range source.File.Imports {
 			importPath := strings.Trim(spec.Path.Value, "\"")
 			if !strings.HasPrefix(importPath, "core/server/") {
 				continue
 			}
 			if importPath == "core/server/subagentpolicy" {
-				violations = append(violations, relPath+": CLI must not own or execute server subagent launch authorization")
+				violations = append(violations, source.RelPath+": CLI must not own or execute server subagent launch authorization")
 				continue
 			}
-			allowedImports := allowedServerImportsByFile[relPath]
+			allowedImports := allowedServerImportsByFile[source.RelPath]
 			if _, allowed := allowedImports[importPath]; allowed {
-				if actualAllowedServerImportsByFile[relPath] == nil {
-					actualAllowedServerImportsByFile[relPath] = make(map[string]struct{})
+				if actualAllowedServerImportsByFile[source.RelPath] == nil {
+					actualAllowedServerImportsByFile[source.RelPath] = make(map[string]struct{})
 				}
-				actualAllowedServerImportsByFile[relPath][importPath] = struct{}{}
+				actualAllowedServerImportsByFile[source.RelPath][importPath] = struct{}{}
 				continue
 			}
-			violations = append(violations, relPath+": CLI production file must not import server package "+importPath)
+			violations = append(violations, source.RelPath+": CLI production file must not import server package "+importPath)
 		}
-		return nil
-	}); err != nil {
-		t.Fatalf("scan cli server imports: %v", err)
-	}
+	})
 	for relPath, expectedImports := range allowedServerImportsByFile {
 		actualImports := actualAllowedServerImportsByFile[relPath]
 		for importPath, reason := range expectedImports {
@@ -583,49 +568,25 @@ func allowedCLIServerImports() map[string]map[string]string {
 
 func TestCLIAppUIFilesDoNotAddServerImports(t *testing.T) {
 	repoRoot := findRepoRoot(t)
-	actualServerImportsByFile := make(map[string]map[string]struct{})
 	violations := make([]string, 0)
-	walkRoot := filepath.Join(repoRoot, "cli", "app")
-	if err := filepath.WalkDir(walkRoot, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if path != walkRoot {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		base := filepath.Base(path)
-		if !strings.HasPrefix(base, "ui") || !strings.HasSuffix(base, ".go") || strings.HasSuffix(base, "_test.go") {
-			return nil
-		}
-		fileSet := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fileSet, path, nil, parser.ImportsOnly)
-		if parseErr != nil {
-			return parseErr
-		}
-		relPath, relErr := filepath.Rel(repoRoot, path)
-		if relErr != nil {
-			relPath = path
-		}
-		for _, spec := range file.Imports {
+	walkRepositoryGoSources(t, repoRoot, repositoryGoSourceScan{
+		Operation:    "scan cli app UI sources",
+		Root:         filepath.Join("cli", "app"),
+		Recursive:    false,
+		IncludeTests: false,
+		Mode:         parser.ImportsOnly,
+		Selection:    repositoryGoSourceBasePrefix{Prefix: "ui"},
+	}, func(source parsedGoSource) {
+		for _, spec := range source.File.Imports {
 			importPath := strings.Trim(spec.Path.Value, "\"")
 			if !strings.HasPrefix(importPath, "core/server/") {
 				continue
 			}
-			if actualServerImportsByFile[relPath] == nil {
-				actualServerImportsByFile[relPath] = make(map[string]struct{})
-			}
-			actualServerImportsByFile[relPath][importPath] = struct{}{}
-			if !isAllowedCLIAppRootServerImport(relPath, importPath) {
-				violations = append(violations, relPath+": UI file must not add server import "+importPath)
+			if !isAllowedCLIAppRootServerImport(source.RelPath, importPath) {
+				violations = append(violations, source.RelPath+": UI file must not add server import "+importPath)
 			}
 		}
-		return nil
-	}); err != nil {
-		t.Fatalf("scan cli app UI sources: %v", err)
-	}
+	})
 	if len(violations) > 0 {
 		t.Fatalf("cli app UI server import boundary violations:\n%s", strings.Join(violations, "\n"))
 	}
@@ -634,49 +595,30 @@ func TestCLIAppUIFilesDoNotAddServerImports(t *testing.T) {
 func TestCLIUIFilesDoNotBypassServerAttachService(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	violations := make([]string, 0)
-	for _, root := range []string{
-		filepath.Join(repoRoot, "cli", "app"),
-		filepath.Join(repoRoot, "cli", "tui"),
-	} {
-		if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return err
+	checkImports := func(source parsedGoSource) {
+		for _, spec := range source.File.Imports {
+			importPath := strings.Trim(spec.Path.Value, "\"")
+			if importPath == "core/cli/app/internal/serverattach" || importPath == "core/cli/app/internal/remoteattach" {
+				violations = append(violations, source.RelPath+": UI files must not import startup attachment package "+importPath)
 			}
-			if d.IsDir() {
-				if path != root && root == filepath.Join(repoRoot, "cli", "app") {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			base := filepath.Base(path)
-			isAppUI := root == filepath.Join(repoRoot, "cli", "app") && strings.HasPrefix(base, "ui")
-			isTUI := strings.Contains(filepath.ToSlash(path), "/cli/tui/")
-			if !isAppUI && !isTUI {
-				return nil
-			}
-			fileSet := token.NewFileSet()
-			file, parseErr := parser.ParseFile(fileSet, path, nil, parser.ImportsOnly)
-			if parseErr != nil {
-				return parseErr
-			}
-			relPath, relErr := filepath.Rel(repoRoot, path)
-			if relErr != nil {
-				relPath = path
-			}
-			for _, spec := range file.Imports {
-				importPath := strings.Trim(spec.Path.Value, "\"")
-				if importPath == "core/cli/app/internal/serverattach" || importPath == "core/cli/app/internal/remoteattach" {
-					violations = append(violations, relPath+": UI files must not import startup attachment package "+importPath)
-				}
-			}
-			return nil
-		}); err != nil {
-			t.Fatalf("scan UI sources under %s: %v", root, err)
 		}
 	}
+	walkRepositoryGoSources(t, repoRoot, repositoryGoSourceScan{
+		Operation:    "scan UI sources under " + filepath.Join(repoRoot, "cli", "app"),
+		Root:         filepath.Join("cli", "app"),
+		Recursive:    false,
+		IncludeTests: false,
+		Mode:         parser.ImportsOnly,
+		Selection:    repositoryGoSourceBasePrefix{Prefix: "ui"},
+	}, checkImports)
+	walkRepositoryGoSources(t, repoRoot, repositoryGoSourceScan{
+		Operation:    "scan UI sources under " + filepath.Join(repoRoot, "cli", "tui"),
+		Root:         filepath.Join("cli", "tui"),
+		Recursive:    true,
+		IncludeTests: false,
+		Mode:         parser.ImportsOnly,
+		Selection:    allRepositoryGoSources{},
+	}, checkImports)
 	if len(violations) > 0 {
 		t.Fatalf("cli UI server attach bypass violations:\n%s", strings.Join(violations, "\n"))
 	}
@@ -685,7 +627,14 @@ func TestCLIUIFilesDoNotBypassServerAttachService(t *testing.T) {
 func TestCLIAppRootFilesDoNotImportServerPackages(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	violations := make([]string, 0)
-	walkCLIAppRootFiles(t, repoRoot, false, parser.ImportsOnly, func(source parsedGoSource) {
+	walkRepositoryGoSources(t, repoRoot, repositoryGoSourceScan{
+		Operation:    "scan cli app root sources",
+		Root:         filepath.Join("cli", "app"),
+		Recursive:    false,
+		IncludeTests: false,
+		Mode:         parser.ImportsOnly,
+		Selection:    allRepositoryGoSources{},
+	}, func(source parsedGoSource) {
 		for _, spec := range source.File.Imports {
 			importPath := strings.Trim(spec.Path.Value, "\"")
 			if strings.HasPrefix(importPath, "core/server/") && !isAllowedCLIAppRootServerImport(source.RelPath, importPath) {
@@ -701,7 +650,14 @@ func TestCLIAppRootFilesDoNotImportServerPackages(t *testing.T) {
 func TestCLIAppDoesNotReintroduceEmbeddedServerServiceLocator(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	violations := make([]string, 0)
-	walkCLIAppRootFiles(t, repoRoot, true, parser.SkipObjectResolution, func(source parsedGoSource) {
+	walkRepositoryGoSources(t, repoRoot, repositoryGoSourceScan{
+		Operation:    "scan cli app root sources",
+		Root:         filepath.Join("cli", "app"),
+		Recursive:    false,
+		IncludeTests: true,
+		Mode:         parser.SkipObjectResolution,
+		Selection:    allRepositoryGoSources{},
+	}, func(source parsedGoSource) {
 		ast.Inspect(source.File, func(node ast.Node) bool {
 			ident, ok := node.(*ast.Ident)
 			if ok && ident.Name == "embeddedServer" {
@@ -814,24 +770,54 @@ type parsedGoSource struct {
 	File    *ast.File
 }
 
-func walkCLIAppRootFiles(t *testing.T, repoRoot string, includeTests bool, mode parser.Mode, visit func(parsedGoSource)) {
+type repositoryGoSourceScan struct {
+	Operation    string
+	Root         string
+	Recursive    bool
+	IncludeTests bool
+	Mode         parser.Mode
+	Selection    repositoryGoSourceSelection
+}
+
+type repositoryGoSourceSelection interface {
+	Include(path string) bool
+}
+
+type allRepositoryGoSources struct{}
+
+func (allRepositoryGoSources) Include(string) bool {
+	return true
+}
+
+type repositoryGoSourceBasePrefix struct {
+	Prefix string
+}
+
+func (selection repositoryGoSourceBasePrefix) Include(path string) bool {
+	return strings.HasPrefix(filepath.Base(path), selection.Prefix)
+}
+
+func walkRepositoryGoSources(t *testing.T, repoRoot string, scan repositoryGoSourceScan, visit func(parsedGoSource)) {
 	t.Helper()
-	root := filepath.Join(repoRoot, "cli", "app")
+	root := filepath.Join(repoRoot, scan.Root)
 	if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			if path != root {
+			if !scan.Recursive && path != root {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if !strings.HasSuffix(path, ".go") || (!includeTests && strings.HasSuffix(path, "_test.go")) {
+		if !strings.HasSuffix(path, ".go") || (!scan.IncludeTests && strings.HasSuffix(path, "_test.go")) {
+			return nil
+		}
+		if !scan.Selection.Include(path) {
 			return nil
 		}
 		fileSet := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fileSet, path, nil, mode)
+		file, parseErr := parser.ParseFile(fileSet, path, nil, scan.Mode)
 		if parseErr != nil {
 			return parseErr
 		}
@@ -842,7 +828,7 @@ func walkCLIAppRootFiles(t *testing.T, repoRoot string, includeTests bool, mode 
 		visit(parsedGoSource{RelPath: relPath, File: file})
 		return nil
 	}); err != nil {
-		t.Fatalf("scan cli app root sources: %v", err)
+		t.Fatalf("%s: %v", scan.Operation, err)
 	}
 }
 
@@ -881,41 +867,22 @@ func TestCLIAppSplitFilesDoNotImportServerPackages(t *testing.T) {
 func TestCLIOnboardingDoesNotOwnCapabilityFactDomains(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	violations := make([]string, 0)
-	onboardingRoot := filepath.Join(repoRoot, "cli", "app")
-	if err := filepath.WalkDir(onboardingRoot, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if path != onboardingRoot {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		base := filepath.Base(path)
-		if !strings.HasPrefix(base, "onboarding") || !strings.HasSuffix(base, ".go") || strings.HasSuffix(base, "_test.go") {
-			return nil
-		}
-		fileSet := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fileSet, path, nil, parser.ImportsOnly)
-		if parseErr != nil {
-			return parseErr
-		}
-		relPath, relErr := filepath.Rel(repoRoot, path)
-		if relErr != nil {
-			relPath = path
-		}
-		for _, spec := range file.Imports {
+	walkRepositoryGoSources(t, repoRoot, repositoryGoSourceScan{
+		Operation:    "scan cli onboarding imports",
+		Root:         filepath.Join("cli", "app"),
+		Recursive:    false,
+		IncludeTests: false,
+		Mode:         parser.ImportsOnly,
+		Selection:    repositoryGoSourceBasePrefix{Prefix: "onboarding"},
+	}, func(source parsedGoSource) {
+		for _, spec := range source.File.Imports {
 			importPath := strings.Trim(spec.Path.Value, "\"")
 			switch importPath {
 			case "core/server/llm", "core/server/onboardingimports", "core/server/skillcatalog":
-				violations = append(violations, relPath+": onboarding capability facts must come from shared client/serverapi, not "+importPath)
+				violations = append(violations, source.RelPath+": onboarding capability facts must come from shared client/serverapi, not "+importPath)
 			}
 		}
-		return nil
-	}); err != nil {
-		t.Fatalf("scan cli onboarding imports: %v", err)
-	}
+	})
 
 	internalRoot := filepath.Join(repoRoot, "cli", "app", "internal", "onboarding")
 	if err := filepath.WalkDir(internalRoot, func(path string, d os.DirEntry, err error) error {
@@ -948,44 +915,29 @@ func TestCLITUIFilesDoNotImportServerPackages(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	allowedServerImportsByFile := map[string]map[string]struct{}{}
 	actualServerImportsByFile := make(map[string]map[string]struct{})
-	tuiRoot := filepath.Join(repoRoot, "cli", "tui")
 	violations := make([]string, 0)
-	if err := filepath.WalkDir(tuiRoot, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		fileSet := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fileSet, path, nil, parser.ImportsOnly)
-		if parseErr != nil {
-			return parseErr
-		}
-		relPath, relErr := filepath.Rel(repoRoot, path)
-		if relErr != nil {
-			relPath = path
-		}
-		for _, spec := range file.Imports {
+	walkRepositoryGoSources(t, repoRoot, repositoryGoSourceScan{
+		Operation:    "scan cli tui sources",
+		Root:         filepath.Join("cli", "tui"),
+		Recursive:    true,
+		IncludeTests: false,
+		Mode:         parser.ImportsOnly,
+		Selection:    allRepositoryGoSources{},
+	}, func(source parsedGoSource) {
+		for _, spec := range source.File.Imports {
 			importPath := strings.Trim(spec.Path.Value, "\"")
 			if !strings.HasPrefix(importPath, "core/server/") {
 				continue
 			}
-			if actualServerImportsByFile[relPath] == nil {
-				actualServerImportsByFile[relPath] = make(map[string]struct{})
+			if actualServerImportsByFile[source.RelPath] == nil {
+				actualServerImportsByFile[source.RelPath] = make(map[string]struct{})
 			}
-			actualServerImportsByFile[relPath][importPath] = struct{}{}
-			if _, allowed := allowedServerImportsByFile[relPath][importPath]; !allowed {
-				violations = append(violations, relPath+": TUI package must not add server import "+importPath)
+			actualServerImportsByFile[source.RelPath][importPath] = struct{}{}
+			if _, allowed := allowedServerImportsByFile[source.RelPath][importPath]; !allowed {
+				violations = append(violations, source.RelPath+": TUI package must not add server import "+importPath)
 			}
 		}
-		return nil
-	}); err != nil {
-		t.Fatalf("scan cli tui sources: %v", err)
-	}
+	})
 	for relPath, expectedImports := range allowedServerImportsByFile {
 		actualImports := actualServerImportsByFile[relPath]
 		for importPath := range expectedImports {
@@ -1033,56 +985,41 @@ func assertCLIAppInternalPackageBoundary(t *testing.T, tc cliInternalBoundaryCas
 	repoRoot := findRepoRoot(t)
 	violations := make([]string, 0)
 	for _, packageName := range tc.Packages {
-		root := filepath.Join(repoRoot, "cli", "app", "internal", packageName)
-		if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				return nil
-			}
-			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			fileSet := token.NewFileSet()
-			file, parseErr := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
-			if parseErr != nil {
-				return parseErr
-			}
-			relPath, relErr := filepath.Rel(repoRoot, path)
-			if relErr != nil {
-				relPath = path
-			}
-			for _, spec := range file.Imports {
+		walkRepositoryGoSources(t, repoRoot, repositoryGoSourceScan{
+			Operation:    "scan cli app internal " + packageName + " sources",
+			Root:         filepath.Join("cli", "app", "internal", packageName),
+			Recursive:    true,
+			IncludeTests: false,
+			Mode:         parser.SkipObjectResolution,
+			Selection:    allRepositoryGoSources{},
+		}, func(source parsedGoSource) {
+			for _, spec := range source.File.Imports {
 				importPath := strings.Trim(spec.Path.Value, "\"")
 				switch {
 				case tc.ForbidAllCore && strings.HasPrefix(importPath, "core/"):
-					violations = append(violations, relPath+": "+tc.Label+" must not import core packages "+importPath)
+					violations = append(violations, source.RelPath+": "+tc.Label+" must not import core packages "+importPath)
 				case tc.ForbidServer && strings.HasPrefix(importPath, "core/server/"):
 					message := tc.ServerViolationLabel
 					if message == "" {
 						message = tc.Label + " must not import server package"
 					}
-					violations = append(violations, relPath+": "+message+" "+importPath)
+					violations = append(violations, source.RelPath+": "+message+" "+importPath)
 				case importPath == "github.com/charmbracelet/bubbletea":
-					violations = append(violations, relPath+": "+tc.Label+" must not import Bubble Tea")
+					violations = append(violations, source.RelPath+": "+tc.Label+" must not import Bubble Tea")
 				case importPath == "core/cli/app/commands":
-					violations = append(violations, relPath+": "+tc.Label+" must not import app commands")
+					violations = append(violations, source.RelPath+": "+tc.Label+" must not import app commands")
 				case importPath == "core/cli/app":
-					violations = append(violations, relPath+": "+tc.Label+" must not import app package")
+					violations = append(violations, source.RelPath+": "+tc.Label+" must not import app package")
 				}
 			}
-			ast.Inspect(file, func(node ast.Node) bool {
+			ast.Inspect(source.File, func(node ast.Node) bool {
 				ident, ok := node.(*ast.Ident)
 				if ok && ident.Name == "uiModel" {
-					violations = append(violations, relPath+": "+tc.Label+" must not reference uiModel")
+					violations = append(violations, source.RelPath+": "+tc.Label+" must not reference uiModel")
 				}
 				return true
 			})
-			return nil
-		}); err != nil {
-			t.Fatalf("scan cli app internal %s sources: %v", packageName, err)
-		}
+		})
 	}
 	if len(violations) > 0 {
 		t.Fatalf("cli app internal %s boundary violations:\n%s", tc.Name, strings.Join(violations, "\n"))
@@ -1110,24 +1047,16 @@ func TestCLIDoesNotCallPersistenceStorageAPIsDirectly(t *testing.T) {
 		},
 	}
 	violations := make([]string, 0)
-	walkRoot := filepath.Join(repoRoot, "cli")
-	if err := filepath.WalkDir(walkRoot, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		fileSet := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
-		if parseErr != nil {
-			return parseErr
-		}
+	walkRepositoryGoSources(t, repoRoot, repositoryGoSourceScan{
+		Operation:    "scan cli sources",
+		Root:         "cli",
+		Recursive:    true,
+		IncludeTests: false,
+		Mode:         parser.SkipObjectResolution,
+		Selection:    allRepositoryGoSources{},
+	}, func(source parsedGoSource) {
 		importAliases := make(map[string]string)
-		for _, spec := range file.Imports {
+		for _, spec := range source.File.Imports {
 			importPath := strings.Trim(spec.Path.Value, "\"")
 			alias := ""
 			if spec.Name != nil {
@@ -1137,7 +1066,7 @@ func TestCLIDoesNotCallPersistenceStorageAPIsDirectly(t *testing.T) {
 			}
 			importAliases[alias] = importPath
 		}
-		ast.Inspect(file, func(node ast.Node) bool {
+		ast.Inspect(source.File, func(node ast.Node) bool {
 			call, ok := node.(*ast.CallExpr)
 			if !ok {
 				return true
@@ -1159,18 +1088,11 @@ func TestCLIDoesNotCallPersistenceStorageAPIsDirectly(t *testing.T) {
 				return true
 			}
 			if _, forbidden := forbiddenSelectors[selector.Sel.Name]; forbidden {
-				relPath, relErr := filepath.Rel(repoRoot, path)
-				if relErr != nil {
-					relPath = path
-				}
-				violations = append(violations, relPath+": frontend must not call "+importPath+"."+selector.Sel.Name)
+				violations = append(violations, source.RelPath+": frontend must not call "+importPath+"."+selector.Sel.Name)
 			}
 			return true
 		})
-		return nil
-	}); err != nil {
-		t.Fatalf("scan cli sources: %v", err)
-	}
+	})
 	if len(violations) > 0 {
 		t.Fatalf("cli persistence boundary violations:\n%s", strings.Join(violations, "\n"))
 	}
