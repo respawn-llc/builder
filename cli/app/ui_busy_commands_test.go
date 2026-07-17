@@ -105,24 +105,13 @@ func TestBusyEnterBlocksIdleOnlyCommands(t *testing.T) {
 }
 
 func TestBusyEnterDispatchesCompact(t *testing.T) {
-	model := newProjectedStaticUIModel()
-	if err := model.applyRuntimeActivityProjection(clientui.RuntimeActivity{
-		State: clientui.RuntimeActivityRunning,
-		ActiveStep: &clientui.RuntimeActiveStep{
-			ActiveKind: clientui.RuntimeActivityActiveKindGoalLoop,
-			RunID:      ongoingTestRunID(),
-			StepID:     ongoingTestStepID(),
-		},
-	}); err != nil {
-		t.Fatalf("apply goal-loop activity: %v", err)
-	}
+	model := busyCommandTestModel()
 	model.input = "/compact now"
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated := next.(*uiModel)
-	if cmd == nil || updated.input != "" || !updated.isCompacting() {
-		t.Fatalf("dispatched compact result = cmd %v, input %q, compacting %t", cmd, updated.input, updated.isCompacting())
+	if cmd == nil || updated.input != "" || len(updated.queued) != 0 || !updated.isCompacting() {
+		t.Fatalf("compact dispatch = cmd %v, input %q, queued %+v, compacting %t", cmd, updated.input, updated.queued, updated.isCompacting())
 	}
-	requireBusyCommandQueuesEmpty(t, updated)
 	updated.input = "/compact again"
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated = next.(*uiModel)
