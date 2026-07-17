@@ -8,6 +8,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { vi } from "vitest";
 
 import { App } from "../../App";
+import type { FakeRoute } from "../../api/fakeTransport";
 import { guiTaskCommentAuthor } from "../../api/client";
 import type { JsonValue } from "../../api/json";
 import { appI18n } from "../../i18n/setup";
@@ -49,6 +50,34 @@ vi.mock("../../ui", async (importOriginal) => {
   };
 });
 
+type TaskDetailFixtureOptions = Readonly<{
+  asks?: unknown;
+  comments?: unknown;
+  nativeBridge?: NativeBridge | undefined;
+  path?: string | undefined;
+  routes?: readonly FakeRoute[] | undefined;
+}>;
+
+function taskDetailFixture(
+  task: unknown,
+  { asks, comments, nativeBridge, path = "/tasks/task-1", routes = [] }: TaskDetailFixtureOptions = {},
+): ReturnType<typeof createTestServices> {
+  window.history.pushState(null, "", path);
+  const services = createTestServices(
+    [
+      ...startupRoutes,
+      { method: "workflow.task.get", result: task },
+      ...(comments === undefined ? [] : [{ method: "workflow.task.comment.list", result: comments }]),
+      { method: "workflow.task.activity.list", result: activityResponse },
+      ...(asks === undefined ? [] : [{ method: "ask.listPendingBySession", result: asks }]),
+      ...routes,
+    ],
+    nativeBridge,
+  );
+  render(<App services={services} />);
+  return services;
+}
+
 describe("TaskDetailSurface", () => {
   beforeEach(() => {
     statusToastHarness.notices.clear();
@@ -56,15 +85,12 @@ describe("TaskDetailSurface", () => {
   });
 
   it("renders direct task route inline with inbox, comments, approvals, questions, and CLI actions", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
     const copied: string[] = [];
-    const services = createTestServices(
-      [
-        ...startupRoutes,
-        { method: "workflow.task.get", result: taskDetailResponseWithNewerActiveRun },
-        { method: "workflow.task.comment.list", result: commentListResponse },
-        { method: "workflow.task.activity.list", result: activityResponse },
-        { method: "ask.listPendingBySession", result: pendingAskResponse },
+    const services = taskDetailFixture(taskDetailResponseWithNewerActiveRun, {
+      asks: pendingAskResponse,
+      comments: commentListResponse,
+      nativeBridge: nativeBridgeWithClipboard(copied),
+      routes: [
         { method: "workflow.task.question.answer", result: {} },
         {
           method: "workflow.task.approve",
@@ -80,10 +106,7 @@ describe("TaskDetailSurface", () => {
         { method: "workflow.task.comment.add", result: commentAddResponse },
         { method: "workflow.task.comment.replace", result: {} },
       ],
-      nativeBridgeWithClipboard(copied),
-    );
-
-    render(<App services={services} />);
+    });
 
     await screen.findByRole("textbox", { name: "Description" });
     expect(screen.queryByTestId("task-detail-description-island")).not.toBeInTheDocument();
@@ -118,7 +141,9 @@ describe("TaskDetailSurface", () => {
     await waitFor(() => {
       const params = callParams(services.transport.calls, "workflow.task.approve");
       expect(params.task_transition_id).toBe("transition-1");
-      expect(services.transport.calls.find((call) => call.method === "workflow.task.approve")?.options).toEqual({
+      expect(
+        services.transport.calls.find((call) => call.method === "workflow.task.approve")?.options,
+      ).toEqual({
         timeoutMs: null,
       });
     });
@@ -155,37 +180,31 @@ describe("TaskDetailSurface", () => {
   });
 
   it("continues the exact pending approval with a task-local execution target", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
-    const services = createTestServices([
-      ...startupRoutes,
-      { method: "workflow.task.get", result: taskDetailResponseWithNewerActiveRun },
-      { method: "workflow.task.comment.list", result: commentListResponse },
-      { method: "workflow.task.activity.list", result: activityResponse },
-      { method: "ask.listPendingBySession", result: pendingAskResponse },
-      {
-        method: "workflow.task.approve",
-        handler: (_params, callIndex) =>
-          callIndex === 0
-            ? {
-                outcome: "selection_required",
-                selection_required: { reason: "policy_requires_selection" },
-              }
-            : {
-                outcome: "applied",
-                applied: {
-                  transition_id: "transition-1",
-                  task_id: "task-1",
-                  state: "approved",
+    const services = taskDetailFixture(taskDetailResponseWithNewerActiveRun, {
+      asks: pendingAskResponse,
+      comments: commentListResponse,
+      routes: [
+        {
+          method: "workflow.task.approve",
+          handler: (_params, callIndex) =>
+            callIndex === 0
+              ? {
+                  outcome: "selection_required",
+                  selection_required: { reason: "policy_requires_selection" },
+                }
+              : {
+                  outcome: "applied",
+                  applied: {
+                    transition_id: "transition-1",
+                    task_id: "task-1",
+                    state: "approved",
+                  },
                 },
-              },
-      },
-    ]);
+        },
+      ],
+    });
 
-    render(<App services={services} />);
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: appI18n.t("task.approve") }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: appI18n.t("task.approve") }));
     const dialog = await screen.findByRole("dialog", {
       name: appI18n.t("executionTargetContinuation.title"),
     });
@@ -209,9 +228,7 @@ describe("TaskDetailSurface", () => {
         }),
       ).not.toBeInTheDocument();
     });
-    const approvalCalls = services.transport.calls.filter(
-      (call) => call.method === "workflow.task.approve",
-    );
+    const approvalCalls = services.transport.calls.filter((call) => call.method === "workflow.task.approve");
     expect(approvalCalls).toHaveLength(2);
     const initialParams = approvalCalls[0]?.params;
     const continuationParams = approvalCalls[1]?.params;
@@ -225,7 +242,6 @@ describe("TaskDetailSurface", () => {
   });
 
   it("disables approval while the initial request is pending and submits it once", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
     let resolveApproval:
       | ((response: {
           outcome: "applied";
@@ -246,25 +262,20 @@ describe("TaskDetailSurface", () => {
     }>((resolve) => {
       resolveApproval = resolve;
     });
-    const services = createTestServices([
-      ...startupRoutes,
-      { method: "workflow.task.get", result: taskDetailResponseWithNewerActiveRun },
-      { method: "workflow.task.comment.list", result: commentListResponse },
-      { method: "workflow.task.activity.list", result: activityResponse },
-      { method: "ask.listPendingBySession", result: pendingAskResponse },
-      { method: "workflow.task.approve", handler: async () => approval },
-    ]);
-
-    render(<App services={services} />);
+    const services = taskDetailFixture(taskDetailResponseWithNewerActiveRun, {
+      asks: pendingAskResponse,
+      comments: commentListResponse,
+      routes: [{ method: "workflow.task.approve", handler: async () => approval }],
+    });
 
     const approve = await screen.findByRole("button", { name: appI18n.t("task.approve") });
     fireEvent.click(approve);
     fireEvent.click(approve);
 
     expect(approve).toBeDisabled();
-    expect(
-      services.transport.calls.filter((call) => call.method === "workflow.task.approve"),
-    ).toHaveLength(1);
+    expect(services.transport.calls.filter((call) => call.method === "workflow.task.approve")).toHaveLength(
+      1,
+    );
 
     await act(async () => {
       resolveApproval?.({
@@ -280,48 +291,32 @@ describe("TaskDetailSurface", () => {
   });
 
   it("renders queued task status from the typed server status", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
-    const services = createTestServices([
-      ...startupRoutes,
+    taskDetailFixture(
       {
-        method: "workflow.task.get",
-        result: {
-          ...taskDetailNoInboxResponse,
-          task: {
-            ...taskDetailNoInboxResponse.task,
-            status: {
-              attention_types: [],
-              kind: "queued",
-              native_state: "queued",
-              node_ids: ["node-1"],
-              run_ids: ["run-1"],
-            },
+        ...taskDetailNoInboxResponse,
+        task: {
+          ...taskDetailNoInboxResponse.task,
+          status: {
+            attention_types: [],
+            kind: "queued",
+            native_state: "queued",
+            node_ids: ["node-1"],
+            run_ids: ["run-1"],
           },
         },
       },
-      { method: "workflow.task.comment.list", result: commentListResponse },
-      { method: "workflow.task.activity.list", result: activityResponse },
-    ]);
-
-    render(<App services={services} />);
+      { comments: commentListResponse },
+    );
 
     expect(await screen.findByText("Queued")).toBeInTheDocument();
   });
 
   it("renders source and managed execution target facts and copies the full commit", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
     const copied: string[] = [];
-    const services = createTestServices(
-      [
-        ...startupRoutes,
-        { method: "workflow.task.get", result: taskDetailNoInboxResponse },
-        { method: "workflow.task.comment.list", result: commentListResponse },
-        { method: "workflow.task.activity.list", result: activityResponse },
-      ],
-      nativeBridgeWithClipboard(copied),
-    );
-
-    render(<App services={services} />);
+    taskDetailFixture(taskDetailNoInboxResponse, {
+      comments: commentListResponse,
+      nativeBridge: nativeBridgeWithClipboard(copied),
+    });
 
     const properties = await screen.findByRole("region", {
       name: appI18n.t("task.properties"),
@@ -356,35 +351,27 @@ describe("TaskDetailSurface", () => {
   });
 
   it("omits unavailable current branch and identifies a legacy observed commit", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
-    const services = createTestServices([
-      ...startupRoutes,
+    taskDetailFixture(
       {
-        method: "workflow.task.get",
-        result: {
-          ...taskDetailNoInboxResponse,
-          task: {
-            ...taskDetailNoInboxResponse.task,
-            execution_target: {
-              mode: "head",
-              requested_ref: "0123456789abcdef0123456789abcdef01234567",
-              commit_oid: "0123456789abcdef0123456789abcdef01234567",
-              provenance: "legacy_observed",
-              managed_worktree: {
-                worktree_id: "worktree-1",
-                display_name: "T-1",
-                canonical_root: "/tmp/worktree",
-                availability: "missing",
-              },
+        ...taskDetailNoInboxResponse,
+        task: {
+          ...taskDetailNoInboxResponse.task,
+          execution_target: {
+            mode: "head",
+            requested_ref: "0123456789abcdef0123456789abcdef01234567",
+            commit_oid: "0123456789abcdef0123456789abcdef01234567",
+            provenance: "legacy_observed",
+            managed_worktree: {
+              worktree_id: "worktree-1",
+              display_name: "T-1",
+              canonical_root: "/tmp/worktree",
+              availability: "missing",
             },
           },
         },
       },
-      { method: "workflow.task.comment.list", result: commentListResponse },
-      { method: "workflow.task.activity.list", result: activityResponse },
-    ]);
-
-    render(<App services={services} />);
+      { comments: commentListResponse },
+    );
 
     const properties = await screen.findByRole("region", {
       name: appI18n.t("task.properties"),
@@ -404,20 +391,12 @@ describe("TaskDetailSurface", () => {
   });
 
   it("opens script files through native file capabilities without exposing CLI sessions", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
     const opened: NativeFileTarget[] = [];
     const checked: NativeFileTarget[] = [];
-    const services = createTestServices(
-      [
-        ...startupRoutes,
-        { method: "workflow.task.get", result: taskDetailResponseWithScriptRun },
-        { method: "workflow.task.comment.list", result: commentListResponse },
-        { method: "workflow.task.activity.list", result: activityResponse },
-      ],
-      nativeBridgeWithFiles({ available: true, checked, opened }),
-    );
-
-    render(<App services={services} />);
+    taskDetailFixture(taskDetailResponseWithScriptRun, {
+      comments: commentListResponse,
+      nativeBridge: nativeBridgeWithFiles({ available: true, checked, opened }),
+    });
 
     expect(await screen.findByRole("textbox", { name: "Description" })).toBeInTheDocument();
     const openScript = await screen.findByRole("button", { name: "Open script" });
@@ -432,19 +411,11 @@ describe("TaskDetailSurface", () => {
   });
 
   it("hides script file opening when the native client cannot access the file", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
     const checked: NativeFileTarget[] = [];
-    const services = createTestServices(
-      [
-        ...startupRoutes,
-        { method: "workflow.task.get", result: taskDetailResponseWithScriptRun },
-        { method: "workflow.task.comment.list", result: commentListResponse },
-        { method: "workflow.task.activity.list", result: activityResponse },
-      ],
-      nativeBridgeWithFiles({ available: false, checked, opened: [] }),
-    );
-
-    render(<App services={services} />);
+    taskDetailFixture(taskDetailResponseWithScriptRun, {
+      comments: commentListResponse,
+      nativeBridge: nativeBridgeWithFiles({ available: false, checked, opened: [] }),
+    });
 
     expect(await screen.findByRole("textbox", { name: "Description" })).toBeInTheDocument();
     await waitFor(() => {
@@ -454,19 +425,11 @@ describe("TaskDetailSurface", () => {
   });
 
   it("copies interrupted run structured details without rendering them inline", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
     const copied: string[] = [];
-    const services = createTestServices(
-      [
-        ...startupRoutes,
-        { method: "workflow.task.get", result: taskDetailResponseWithInterruptedScriptRun },
-        { method: "workflow.task.comment.list", result: commentListResponse },
-        { method: "workflow.task.activity.list", result: activityResponse },
-      ],
-      nativeBridgeWithClipboard(copied),
-    );
-
-    render(<App services={services} />);
+    taskDetailFixture(taskDetailResponseWithInterruptedScriptRun, {
+      comments: commentListResponse,
+      nativeBridge: nativeBridgeWithClipboard(copied),
+    });
 
     const interrupted = await screen.findByRole("region", { name: "Interrupted" });
     expect(within(interrupted).getByText("Script failed")).toBeInTheDocument();
@@ -480,16 +443,10 @@ describe("TaskDetailSurface", () => {
   });
 
   it("surfaces failed comment saves through the status toast surface", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
-    const services = createTestServices([
-      ...startupRoutes,
-      { method: "workflow.task.get", result: taskDetailResponse },
-      { method: "workflow.task.comment.list", result: commentListResponse },
-      { method: "workflow.task.activity.list", result: activityResponse },
-      { method: "workflow.task.comment.add", error: new Error("constraint failed") },
-    ]);
-
-    render(<App services={services} />);
+    taskDetailFixture(taskDetailResponse, {
+      comments: commentListResponse,
+      routes: [{ method: "workflow.task.comment.add", error: new Error("constraint failed") }],
+    });
 
     await screen.findByRole("textbox", { name: "Add comment" });
     fireEvent.change(screen.getByRole("textbox", { name: "Add comment" }), {
@@ -503,16 +460,10 @@ describe("TaskDetailSurface", () => {
   });
 
   it("submits a comment after the focused composer receives typed input", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
-    const services = createTestServices([
-      ...startupRoutes,
-      { method: "workflow.task.get", result: taskDetailResponse },
-      { method: "workflow.task.comment.list", result: commentListResponse },
-      { method: "workflow.task.activity.list", result: activityResponse },
-      { method: "workflow.task.comment.add", result: commentAddResponse },
-    ]);
-
-    render(<App services={services} />);
+    const services = taskDetailFixture(taskDetailResponse, {
+      comments: commentListResponse,
+      routes: [{ method: "workflow.task.comment.add", result: commentAddResponse }],
+    });
 
     const composerFrame = await screen.findByTestId("task-comment-input-frame");
     const composer = within(composerFrame).getByRole("textbox");
@@ -532,23 +483,15 @@ describe("TaskDetailSurface", () => {
   });
 
   it("renders task description markdown with block typography", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
-    const services = createTestServices([
-      ...startupRoutes,
+    taskDetailFixture(
       {
-        method: "workflow.task.get",
-        result: {
-          task: {
-            ...taskDetailNoInboxResponse.task,
-            body: "# Release plan\n\n- Restore bullets\n- Restore headings\n\nUse `kent`.",
-          },
+        task: {
+          ...taskDetailNoInboxResponse.task,
+          body: "# Release plan\n\n- Restore bullets\n- Restore headings\n\nUse `kent`.",
         },
       },
-      { method: "workflow.task.comment.list", result: commentListResponse },
-      { method: "workflow.task.activity.list", result: activityResponse },
-    ]);
-
-    render(<App services={services} />);
+      { comments: commentListResponse },
+    );
 
     const description = await screen.findByRole("textbox", { name: "Description" });
     expect(within(description).getByTestId("markdown-text")).toHaveClass("markdown-text");
@@ -558,16 +501,10 @@ describe("TaskDetailSurface", () => {
   });
 
   it("surfaces failed comment deletes through the status toast surface", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
-    const services = createTestServices([
-      ...startupRoutes,
-      { method: "workflow.task.get", result: taskDetailResponse },
-      { method: "workflow.task.comment.list", result: commentListResponse },
-      { method: "workflow.task.activity.list", result: activityResponse },
-      { method: "workflow.task.comment.delete", error: new Error("delete failed") },
-    ]);
-
-    render(<App services={services} />);
+    taskDetailFixture(taskDetailResponse, {
+      comments: commentListResponse,
+      routes: [{ method: "workflow.task.comment.delete", error: new Error("delete failed") }],
+    });
 
     fireEvent.click(await screen.findByRole("button", { name: "Delete comment" }));
 
@@ -577,29 +514,25 @@ describe("TaskDetailSurface", () => {
   });
 
   it("renders task comments from paginated comment pages and loads the next page", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
     const detailWithoutInlineComments = {
       task: {
         ...taskDetailNoInboxResponse.task,
         comments: [],
       },
     };
-    const services = createTestServices([
-      ...startupRoutes,
-      { method: "workflow.task.get", result: detailWithoutInlineComments },
-      {
-        method: "workflow.task.comment.list",
-        handler: (params: JsonValue) => {
-          if (isJsonObject(params) && params.page_token === "cursor-2") {
-            return secondCommentListResponse;
-          }
-          return firstCommentListResponse;
+    const services = taskDetailFixture(detailWithoutInlineComments, {
+      routes: [
+        {
+          method: "workflow.task.comment.list",
+          handler: (params: JsonValue) => {
+            if (isJsonObject(params) && params.page_token === "cursor-2") {
+              return secondCommentListResponse;
+            }
+            return firstCommentListResponse;
+          },
         },
-      },
-      { method: "workflow.task.activity.list", result: activityResponse },
-    ]);
-
-    render(<App services={services} />);
+      ],
+    });
 
     expect(await screen.findByText("First paged comment")).toBeInTheDocument();
     expect(await screen.findByText("Second paged comment")).toBeInTheDocument();
@@ -615,16 +548,10 @@ describe("TaskDetailSurface", () => {
   });
 
   it("requires commentary when answering a task question with Neither", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
-    const services = createTestServices([
-      ...startupRoutes,
-      { method: "workflow.task.get", result: taskDetailResponse },
-      { method: "workflow.task.activity.list", result: activityResponse },
-      { method: "ask.listPendingBySession", result: pendingAskResponse },
-      { method: "workflow.task.question.answer", result: {} },
-    ]);
-
-    render(<App services={services} />);
+    const services = taskDetailFixture(taskDetailResponse, {
+      asks: pendingAskResponse,
+      routes: [{ method: "workflow.task.question.answer", result: {} }],
+    });
 
     const question = await screen.findByRole("region", { name: "Question" });
     expect(await within(question).findByRole("radio", { name: /Use option A/u })).toBeChecked();
@@ -647,16 +574,10 @@ describe("TaskDetailSurface", () => {
   });
 
   it("preserves commentary when switching between task question options", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
-    const services = createTestServices([
-      ...startupRoutes,
-      { method: "workflow.task.get", result: taskDetailResponse },
-      { method: "workflow.task.activity.list", result: activityResponse },
-      { method: "ask.listPendingBySession", result: pendingAskResponse },
-      { method: "workflow.task.question.answer", result: {} },
-    ]);
-
-    render(<App services={services} />);
+    const services = taskDetailFixture(taskDetailResponse, {
+      asks: pendingAskResponse,
+      routes: [{ method: "workflow.task.question.answer", result: {} }],
+    });
 
     const question = await screen.findByRole("region", { name: "Question" });
     const recommendedOption = await within(question).findByRole("radio", { name: /Use option A/u });
@@ -676,27 +597,18 @@ describe("TaskDetailSurface", () => {
   });
 
   it("renders freeform-only ordinary questions without an option group and submits a null selection", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
-    const services = createTestServices([
-      ...startupRoutes,
-      { method: "workflow.task.get", result: taskDetailResponse },
-      { method: "workflow.task.activity.list", result: activityResponse },
-      {
-        method: "ask.listPendingBySession",
-        result: {
-          Asks: [
-            {
-              ...pendingAskResponse.Asks[0],
-              RecommendedOptionIndex: 0,
-              Suggestions: [],
-            },
-          ],
-        },
+    const services = taskDetailFixture(taskDetailResponse, {
+      asks: {
+        Asks: [
+          {
+            ...pendingAskResponse.Asks[0],
+            RecommendedOptionIndex: 0,
+            Suggestions: [],
+          },
+        ],
       },
-      { method: "workflow.task.question.answer", result: {} },
-    ]);
-
-    render(<App services={services} />);
+      routes: [{ method: "workflow.task.question.answer", result: {} }],
+    });
 
     const question = await screen.findByRole("region", { name: "Question" });
     expect(within(question).queryByRole("radiogroup")).not.toBeInTheDocument();
@@ -716,7 +628,6 @@ describe("TaskDetailSurface", () => {
   });
 
   it("renders task question options from attention when pending asks are not available", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
     const detailWithAttentionOptions = {
       task: {
         ...taskDetailResponse.task,
@@ -732,14 +643,9 @@ describe("TaskDetailSurface", () => {
         ),
       },
     };
-    const services = createTestServices([
-      ...startupRoutes,
-      { method: "workflow.task.get", result: detailWithAttentionOptions },
-      { method: "workflow.task.activity.list", result: activityResponse },
-      { method: "ask.listPendingBySession", result: { Asks: [] } },
-    ]);
-
-    render(<App services={services} />);
+    taskDetailFixture(detailWithAttentionOptions, {
+      asks: { Asks: [] },
+    });
 
     const question = await screen.findByRole("region", { name: "Question" });
     expect(await within(question).findByRole("radio", { name: /Trail mix/u })).toBeInTheDocument();
@@ -748,7 +654,6 @@ describe("TaskDetailSurface", () => {
   });
 
   it("renders and submits runtime approval prompts through the task question path", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
     const detailWithRuntimeApprovalQuestion = {
       task: {
         ...taskDetailResponse.task,
@@ -768,14 +673,9 @@ describe("TaskDetailSurface", () => {
         ),
       },
     };
-    const services = createTestServices([
-      ...startupRoutes,
-      { method: "workflow.task.get", result: detailWithRuntimeApprovalQuestion },
-      { method: "workflow.task.activity.list", result: activityResponse },
-      { method: "workflow.task.question.answer", result: {} },
-    ]);
-
-    render(<App services={services} />);
+    const services = taskDetailFixture(detailWithRuntimeApprovalQuestion, {
+      routes: [{ method: "workflow.task.question.answer", result: {} }],
+    });
 
     const question = await screen.findByRole("region", { name: "Question" });
     expect(await within(question).findByText("Approve protected path?")).toBeInTheDocument();
@@ -802,7 +702,6 @@ describe("TaskDetailSurface", () => {
   });
 
   it("focuses only the first unresolved matching question from a batched notification target", async () => {
-    window.history.pushState(null, "", "/");
     const scrollTargets: HTMLElement[] = [];
     const restoreScrollIntoView = installScrollIntoViewSpy(scrollTargets);
     const native = nativeBridgeWithActivation();
@@ -823,19 +722,14 @@ describe("TaskDetailSurface", () => {
         ],
       },
     };
-    const services = createTestServices(
-      [
-        ...startupRoutes,
-        { method: "workflow.task.get", result: detailWithQuestionBatch },
-        { method: "workflow.task.activity.list", result: activityResponse },
-        { method: "ask.listPendingBySession", result: { Asks: [] } },
-        { method: "workflow.task.question.answer", result: {} },
-      ],
-      native.bridge,
-    );
+    const services = taskDetailFixture(detailWithQuestionBatch, {
+      asks: { Asks: [] },
+      nativeBridge: native.bridge,
+      path: "/",
+      routes: [{ method: "workflow.task.question.answer", result: {} }],
+    });
 
     try {
-      render(<App services={services} />);
       await waitFor(() => {
         expect(native.hasActivationHandler()).toBe(true);
       });
@@ -872,19 +766,11 @@ describe("TaskDetailSurface", () => {
   });
 
   it("renders approval snapshots as route, commentary, and copyable output values", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
     const copied: string[] = [];
-    const services = createTestServices(
-      [
-        ...startupRoutes,
-        { method: "workflow.task.get", result: taskDetailResponse },
-        { method: "workflow.task.activity.list", result: activityResponse },
-        { method: "ask.listPendingBySession", result: pendingAskResponse },
-      ],
-      nativeBridgeWithClipboard(copied),
-    );
-
-    render(<App services={services} />);
+    taskDetailFixture(taskDetailResponse, {
+      asks: pendingAskResponse,
+      nativeBridge: nativeBridgeWithClipboard(copied),
+    });
 
     const approval = await screen.findByRole("region", { name: "Approval" });
     expect(within(approval).queryByRole("heading", { name: "Approval" })).not.toBeInTheDocument();
@@ -907,16 +793,10 @@ describe("TaskDetailSurface", () => {
   });
 
   it("confirms task cancellation in a popover without inline helper copy", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
-    const services = createTestServices([
-      ...startupRoutes,
-      { method: "workflow.task.get", result: taskDetailResponse },
-      { method: "workflow.task.activity.list", result: activityResponse },
-      { method: "ask.listPendingBySession", result: pendingAskResponse },
-      { method: "workflow.task.cancel", result: {} },
-    ]);
-
-    render(<App services={services} />);
+    const services = taskDetailFixture(taskDetailResponse, {
+      asks: pendingAskResponse,
+      routes: [{ method: "workflow.task.cancel", result: {} }],
+    });
 
     fireEvent.click(await screen.findByRole("button", { name: "Cancel task" }));
 
