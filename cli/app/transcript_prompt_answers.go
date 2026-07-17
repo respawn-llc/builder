@@ -200,7 +200,13 @@ func retryTranscriptPromptAnswer(
 	wait func(context.Context, time.Duration) error,
 	submit func() error,
 ) error {
-	err := submit()
+	submitIfActive := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return submit()
+	}
+	err := submitIfActive()
 	for _, delay := range delays {
 		if !shouldRetryTranscriptPromptAnswer(err) {
 			return err
@@ -208,7 +214,7 @@ func retryTranscriptPromptAnswer(
 		if err := wait(ctx, delay); err != nil {
 			return err
 		}
-		err = submit()
+		err = submitIfActive()
 	}
 	return err
 }

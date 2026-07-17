@@ -616,6 +616,40 @@ func TestAskSessionReplacementCancelsDeliveryAndClearsOldPrompt(t *testing.T) {
 	}
 }
 
+func TestAskResolutionBeforeDeliveryCommandRunsDoesNotCallPromptControl(t *testing.T) {
+	control := &scriptedAskPromptControl{}
+	model := newProjectedStaticUIModel()
+	model.promptAnswers = newTranscriptPromptAnswerer(context.Background(), control)
+	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
+		testQuestionPrompt("ask-resolved-before-command", "Proceed?", "Yes", "No"),
+	)})
+
+	next, delivery := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(*uiModel)
+	if delivery == nil || !testPromptAnswerDeliveryActive(model) {
+		t.Fatal("submission did not create an active delivery command")
+	}
+	resolveAnsweredTestAskThroughTranscript(t, model)
+	if testActiveAsk(model) != nil || testPromptAnswerDeliveryActive(model) {
+		t.Fatal("canonical resolution did not cancel and remove the prompt")
+	}
+
+	result, ok := delivery().(promptAnswerDeliveryResultMsg)
+	if !ok {
+		t.Fatalf("delivery result = %T, want promptAnswerDeliveryResultMsg", result)
+	}
+	if !errors.Is(result.err, context.Canceled) {
+		t.Fatalf("delivery error = %v, want context canceled", result.err)
+	}
+	if len(control.requests()) != 0 {
+		t.Fatalf("prompt-control calls = %d, want zero after pre-execution resolution", len(control.requests()))
+	}
+	model = updateUIModel(t, model, result)
+	if testActiveAsk(model) != nil || testPromptAnswerDeliveryActive(model) {
+		t.Fatal("stale canceled result restored the resolved prompt")
+	}
+}
+
 func TestDenyCommentaryDeadlineKeepsEditedDraftActionableWithoutQueuedCopy(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 	control := newDeadlineThenSuccessApprovalControl()

@@ -77,6 +77,33 @@ func TestTranscriptPromptAnswerRetryStopsImmediatelyForTerminalErrors(t *testing
 	}
 }
 
+func TestTranscriptPromptAnswerRetryDoesNotSubmitWhenAlreadyCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	calls := 0
+	waits := 0
+
+	err := retryTranscriptPromptAnswer(
+		ctx,
+		transcriptPromptAnswerRetryDelays,
+		func(context.Context, time.Duration) error {
+			waits++
+			return nil
+		},
+		func() error {
+			calls++
+			return nil
+		},
+	)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("retry error = %v, want context canceled", err)
+	}
+	if calls != 0 || waits != 0 {
+		t.Fatalf("calls = %d waits = %d, want no service call or wait", calls, waits)
+	}
+}
+
 func TestTranscriptPromptAnswerRetryCancellationStopsBlockedBackoff(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	firstCall := make(chan struct{})
