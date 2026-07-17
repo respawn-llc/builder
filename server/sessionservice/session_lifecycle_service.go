@@ -86,13 +86,9 @@ func (s *SessionLifecycleService) GetInitialInput(_ context.Context, req servera
 		return serverapi.SessionInitialInputResponse{Input: req.TransitionInput}, nil
 	}
 	meta := store.Meta()
-	recoveryBuffers, err := sessionRecoveryBuffersToAPI(meta.InputDraftRecoveryBuffers)
-	if err != nil {
-		return serverapi.SessionInitialInputResponse{}, err
-	}
 	return serverapi.SessionInitialInputResponse{
 		Input:           initialSessionInput(store, req.TransitionInput),
-		RecoveryBuffers: recoveryBuffers,
+		RecoveryBuffers: sessionRecoveryBuffersToAPI(meta.InputDraftRecoveryBuffers),
 	}, nil
 }
 

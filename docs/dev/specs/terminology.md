@@ -276,11 +276,11 @@ A non-liveness session recovery marker used to repair model context after an int
 
 ### DraftRecoveryBuffer
 
-Structured persisted local input that should be recoverable after an early TUI exit, including active submitted text, queued messages, pending injected input, reviewer buffers, and related operation refs. It is a retry/recovery payload, not an instruction to auto-submit.
+An ordered persisted collection of inert local input entries recoverable after an early TUI exit. Each entry carries only its recovery category and original text; the collection carries no runtime operation, request, or queue identity. Opening a session restores eligible entry text to the editable composer and never resumes or automatically replays prior work.
 
 ### DraftInputBuffer
 
-A typed hidden/recoverable buffer entry inside `DraftRecoveryBuffer`, such as active submitted text, queued message, pending injected input, locked injected input, or reviewer buffer. The visible prompt text is the `VisibleInput` field on `DraftRecoveryBuffer`, not a `DraftInputBuffer`.
+A typed inert category-and-text entry inside `DraftRecoveryBuffer`, such as active submitted text, queued message, pending injected input, locked injected input, or reviewer buffer. Its category explains why the text was retained but carries no operation identity or delivery state. The visible prompt text remains separate from these entries.
 
 ### Forced Local Detach
 

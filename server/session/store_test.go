@@ -216,11 +216,8 @@ func TestInputDraftAndRecoveryPersistAcrossReopenAndClearTogether(t *testing.T) 
 	}
 
 	if err := reopened.SetInputDraftRecovery("visible", []InputDraftRecoveryBuffer{{
-		Kind:                     "active_submit",
-		ID:                       "queued-1",
-		Text:                     "submitted before forced exit",
-		OperationKind:            "submit",
-		OperationClientRequestID: "submit-1",
+		Kind: "active_submit",
+		Text: "submitted before forced exit",
 	}}); err != nil {
 		t.Fatalf("set input draft recovery: %v", err)
 	}
@@ -228,8 +225,9 @@ func TestInputDraftAndRecoveryPersistAcrossReopenAndClearTogether(t *testing.T) 
 	if recovered.Meta().InputDraft != "visible" || len(recovered.Meta().InputDraftRecoveryBuffers) != 1 {
 		t.Fatalf("reopened draft metadata = %+v", recovered.Meta())
 	}
-	if recovered.Meta().InputDraftRecoveryBuffers[0].OperationClientRequestID != "submit-1" {
-		t.Fatalf("recovery buffer = %+v, want operation client request id", recovered.Meta().InputDraftRecoveryBuffers[0])
+	wantBuffer := InputDraftRecoveryBuffer{Kind: "active_submit", Text: "submitted before forced exit"}
+	if recovered.Meta().InputDraftRecoveryBuffers[0] != wantBuffer {
+		t.Fatalf("recovery buffer = %+v, want %+v", recovered.Meta().InputDraftRecoveryBuffers[0], wantBuffer)
 	}
 	if err := recovered.SetInputDraft(""); err != nil {
 		t.Fatalf("clear input draft: %v", err)
