@@ -22,7 +22,7 @@ func TestTaskCreateAcceptsSourceWorkspace(t *testing.T) {
 	defer restore()
 
 	workflowID := setupLinkedWorkflow(t, binding.ProjectID, "Source Workflow")
-	createOut, _ := runWorkflowRootCommandOK(t, "task", "create", "--title", "Sourced", "--body", "Body", "--workflow", workflowID, "--project", binding.ProjectID, "--source-workspace", binding.WorkspaceID)
+	createOut, _ := runRootCommandOK(t, "task", "create", "--title", "Sourced", "--body", "Body", "--workflow", workflowID, "--project", binding.ProjectID, "--source-workspace", binding.WorkspaceID)
 	shortID := taskDetailHeadingShortID(t, createOut)
 	resp, err := remote.GetWorkflowTask(context.Background(), serverapi.WorkflowTaskGetRequest{ProjectID: binding.ProjectID, ShortID: shortID})
 	if err != nil {
@@ -39,10 +39,10 @@ func TestTaskEditUpdatesFields(t *testing.T) {
 	defer restore()
 
 	workflowID := setupLinkedWorkflow(t, binding.ProjectID, "Edit Workflow")
-	createOut, _ := runWorkflowRootCommandOK(t, "task", "create", "--title", "Original", "--body", "Original body", "--workflow", workflowID, "--project", binding.ProjectID)
+	createOut, _ := runRootCommandOK(t, "task", "create", "--title", "Original", "--body", "Original body", "--workflow", workflowID, "--project", binding.ProjectID)
 	shortID := taskDetailHeadingShortID(t, createOut)
 
-	editOut, _ := runWorkflowRootCommandOK(t, "task", "edit", "--project", binding.ProjectID, "--title", "Retitled", shortID)
+	editOut, _ := runRootCommandOK(t, "task", "edit", "--project", binding.ProjectID, "--title", "Retitled", shortID)
 	if editOut != "Edited task "+shortID+".\n" {
 		t.Fatalf("task edit output = %q, want confirmation line", editOut)
 	}
@@ -54,7 +54,7 @@ func TestTaskEditUpdatesFields(t *testing.T) {
 		t.Fatalf("after title edit title=%q body=%q, want retitled with unchanged body", resp.Task.Summary.Title, resp.Task.Body)
 	}
 
-	runWorkflowRootCommandOK(t, "task", "edit", "--project", binding.ProjectID, "--body", "Edited body", shortID)
+	runRootCommandOK(t, "task", "edit", "--project", binding.ProjectID, "--body", "Edited body", shortID)
 	resp, err = remote.GetWorkflowTask(context.Background(), serverapi.WorkflowTaskGetRequest{ProjectID: binding.ProjectID, ShortID: shortID})
 	if err != nil {
 		t.Fatalf("GetWorkflowTask after body edit: %v", err)
@@ -63,7 +63,7 @@ func TestTaskEditUpdatesFields(t *testing.T) {
 		t.Fatalf("after body edit title=%q body=%q, want unchanged title with edited body", resp.Task.Summary.Title, resp.Task.Body)
 	}
 
-	runWorkflowRootCommandOK(t, "task", "edit", "--project", binding.ProjectID, "--source-workspace", binding.WorkspaceID, shortID)
+	runRootCommandOK(t, "task", "edit", "--project", binding.ProjectID, "--source-workspace", binding.WorkspaceID, shortID)
 	resp, err = remote.GetWorkflowTask(context.Background(), serverapi.WorkflowTaskGetRequest{ProjectID: binding.ProjectID, ShortID: shortID})
 	if err != nil {
 		t.Fatalf("GetWorkflowTask after source workspace edit: %v", err)
@@ -72,7 +72,7 @@ func TestTaskEditUpdatesFields(t *testing.T) {
 		t.Fatalf("after source workspace edit source=%q, want %q", resp.Task.Summary.SourceWorkspaceID, binding.WorkspaceID)
 	}
 
-	jsonOut, _ := runWorkflowRootCommandOK(t, "task", "edit", "--project", binding.ProjectID, "--json", "--title", "JSON title", shortID)
+	jsonOut, _ := runRootCommandOK(t, "task", "edit", "--project", binding.ProjectID, "--json", "--title", "JSON title", shortID)
 	var updateResp serverapi.WorkflowTaskUpdateResponse
 	if err := json.Unmarshal([]byte(jsonOut), &updateResp); err != nil {
 		t.Fatalf("task edit --json output = %q, want JSON: %v", jsonOut, err)
@@ -88,16 +88,16 @@ func TestTaskEditValidation(t *testing.T) {
 	defer restore()
 
 	workflowID := setupLinkedWorkflow(t, binding.ProjectID, "Edit Validation Workflow")
-	createOut, _ := runWorkflowRootCommandOK(t, "task", "create", "--title", "Original", "--body", "Body", "--workflow", workflowID, "--project", binding.ProjectID)
+	createOut, _ := runRootCommandOK(t, "task", "create", "--title", "Original", "--body", "Body", "--workflow", workflowID, "--project", binding.ProjectID)
 	shortID := taskDetailHeadingShortID(t, createOut)
 
-	if _, stderr, code := runWorkflowRootCommand("task", "edit", "--project", binding.ProjectID); code != 2 || !strings.Contains(stderr, "requires <short-id-or-task-id>") {
+	if _, stderr, code := runRootCommand("task", "edit", "--project", binding.ProjectID); code != 2 || !strings.Contains(stderr, "requires <short-id-or-task-id>") {
 		t.Fatalf("task edit without id code=%d stderr=%q, want positional requirement", code, stderr)
 	}
-	if _, stderr, code := runWorkflowRootCommand("task", "edit", "--project", binding.ProjectID, shortID); code != 2 || !strings.Contains(stderr, "at least one of") {
+	if _, stderr, code := runRootCommand("task", "edit", "--project", binding.ProjectID, shortID); code != 2 || !strings.Contains(stderr, "at least one of") {
 		t.Fatalf("task edit without fields code=%d stderr=%q, want field requirement", code, stderr)
 	}
-	if _, stderr, code := runWorkflowRootCommand("task", "edit", "--project", binding.ProjectID, "--body", "x", "--body-file", "/tmp/x", shortID); code != 2 || !strings.Contains(stderr, "--body cannot be combined with --body-file") {
+	if _, stderr, code := runRootCommand("task", "edit", "--project", binding.ProjectID, "--body", "x", "--body-file", "/tmp/x", shortID); code != 2 || !strings.Contains(stderr, "--body cannot be combined with --body-file") {
 		t.Fatalf("task edit body conflict code=%d stderr=%q, want mutual exclusion error", code, stderr)
 	}
 }
@@ -121,7 +121,7 @@ func TestTaskHumanOnlyActionsAreDeniedInsideKentSession(t *testing.T) {
 		{"task", "move", "TASK-1", "node-1"},
 		{"task", "comment", "delete", "comment-1"},
 	} {
-		stdout, stderr, code := runWorkflowRootCommand(args...)
+		stdout, stderr, code := runRootCommand(args...)
 		if code != 1 {
 			t.Fatalf("%v exit = %d stderr=%q", args, code, stderr)
 		}
@@ -141,7 +141,7 @@ func TestTaskSafeActionsRemainAvailableInsideKentSession(t *testing.T) {
 	defer restore()
 	setupLinkedWorkflow(t, binding.ProjectID, "Safe Task Workflow")
 
-	if _, stderr, code := runWorkflowRootCommand("task", "list", "--project", binding.ProjectID); code != 0 {
+	if _, stderr, code := runRootCommand("task", "list", "--project", binding.ProjectID); code != 0 {
 		t.Fatalf("safe task list exit=%d stderr=%q", code, stderr)
 	}
 }
@@ -168,7 +168,7 @@ func TestTaskStartExecutionTargetOverrideAndSelectionRequiredOutput(t *testing.T
 	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: "."}, remote)
 	defer restore()
 
-	stdout, stderr, code := runWorkflowRootCommand("task", "start", "--project", remote.projectID, remote.shortID)
+	stdout, stderr, code := runRootCommand("task", "start", "--project", remote.projectID, remote.shortID)
 	if code != 1 || stdout != "" {
 		t.Fatalf("selection-required exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
@@ -185,7 +185,7 @@ func TestTaskStartExecutionTargetOverrideAndSelectionRequiredOutput(t *testing.T
 	}
 
 	remote.taskIDDetailCalls = 0
-	stdout, stderr, code = runWorkflowRootCommand("task", "start", "--project", remote.projectID, "--json", remote.shortID)
+	stdout, stderr, code = runRootCommand("task", "start", "--project", remote.projectID, "--json", remote.shortID)
 	if code != 1 || stderr != "" {
 		t.Fatalf("JSON selection-required exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
@@ -211,7 +211,7 @@ func TestTaskStartExecutionTargetOverrideAndSelectionRequiredOutput(t *testing.T
 			UnavailableCause: serverapi.WorkflowExecutionTargetUnavailableCauseInvalidRevision,
 		},
 	}
-	_, stderr, code = runWorkflowRootCommand("task", "start", "--project", remote.projectID, remote.shortID)
+	_, stderr, code = runRootCommand("task", "start", "--project", remote.projectID, remote.shortID)
 	if code != 1 ||
 		!strings.Contains(stderr, "ref:"+configuredRef) ||
 		!strings.Contains(stderr, string(serverapi.WorkflowExecutionTargetUnavailableCauseInvalidRevision)) {
@@ -220,7 +220,7 @@ func TestTaskStartExecutionTargetOverrideAndSelectionRequiredOutput(t *testing.T
 
 	remote.startResponse = nil
 	remote.taskIDDetailCalls = 0
-	stdout, stderr, code = runWorkflowRootCommand("task", "start", "--project", remote.projectID, "--execution-target", "ref:release/v1", remote.shortID)
+	stdout, stderr, code = runRootCommand("task", "start", "--project", remote.projectID, "--execution-target", "ref:release/v1", remote.shortID)
 	if code != 0 || stderr != "" {
 		t.Fatalf("explicit target exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
@@ -276,7 +276,7 @@ func TestTaskApproveAndMoveExecutionTargetOverrideAndSelectionRequiredOutput(t *
 			restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: "."}, remote)
 			defer restore()
 
-			stdout, stderr, code := runWorkflowRootCommand(tc.args...)
+			stdout, stderr, code := runRootCommand(tc.args...)
 			if code != 1 || stdout != "" {
 				t.Fatalf("selection-required exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 			}
@@ -296,7 +296,7 @@ func TestTaskApproveAndMoveExecutionTargetOverrideAndSelectionRequiredOutput(t *
 			restore()
 			restore = replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: "."}, remote)
 			args := append([]string{"task", tc.name, "--execution-target", "ref:release/v1"}, tc.args[2:]...)
-			stdout, stderr, code = runWorkflowRootCommand(args...)
+			stdout, stderr, code = runRootCommand(args...)
 			if code != 0 {
 				t.Fatalf("explicit target exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 			}
@@ -325,7 +325,7 @@ func TestTaskApproveAndMoveRejectMalformedExecutionTargetBeforeOpeningRemote(t *
 		{"task", "approve", "transition-1", "--execution-target", "branch"},
 		{"task", "move", "BLD-1", "node-1", "--execution-target", "ref:"},
 	} {
-		stdout, stderr, code := runWorkflowRootCommand(args...)
+		stdout, stderr, code := runRootCommand(args...)
 		if code != 2 || stdout != "" || !strings.Contains(stderr, "execution target") {
 			t.Fatalf("%v exit=%d stdout=%q stderr=%q", args, code, stdout, stderr)
 		}
@@ -418,7 +418,7 @@ func TestTaskStartCommandPollsForSessionAndPrintsReadableOutput(t *testing.T) {
 	restoreRemote := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
 	defer restoreRemote()
 
-	stdout, stderr, code := runWorkflowRootCommand("task", "start", "--project", "project-1", "BLD-1")
+	stdout, stderr, code := runRootCommand("task", "start", "--project", "project-1", "BLD-1")
 	if code != 0 {
 		t.Fatalf("task start exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
@@ -452,7 +452,7 @@ func TestTaskLifecycleCommandsConsumeWorktreeSetupProgressWithoutMutationDeadlin
 			restoreRemote := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
 			defer restoreRemote()
 
-			stdout, stderr, code := runWorkflowRootCommand(tc.args...)
+			stdout, stderr, code := runRootCommand(tc.args...)
 			if code != 0 {
 				t.Fatalf("command exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 			}
@@ -486,7 +486,7 @@ func TestTaskLifecycleCommandsWarnAndContinueWhenSetupProgressUnavailable(t *tes
 			restoreRemote := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
 			defer restoreRemote()
 
-			stdout, stderr, code := runWorkflowRootCommand(tc.args...)
+			stdout, stderr, code := runRootCommand(tc.args...)
 			if code != 0 {
 				t.Fatalf("command exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 			}
@@ -522,7 +522,7 @@ func TestTaskLifecycleCommandsWarnAndContinueWhenSetupProgressStreamFailsAfterMu
 			restoreRemote := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
 			defer restoreRemote()
 
-			stdout, stderr, code := runWorkflowRootCommand(tc.args...)
+			stdout, stderr, code := runRootCommand(tc.args...)
 			if code != 0 {
 				t.Fatalf("command exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 			}

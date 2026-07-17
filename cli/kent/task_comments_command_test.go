@@ -136,7 +136,7 @@ func TestTaskCommentListUsesReadablePaginatedOutput(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
 	defer restore()
 
-	stdout, stderr, code := runWorkflowRootCommand("task", "comment", "list", "task-1", "--page-size", "2")
+	stdout, stderr, code := runRootCommand("task", "comment", "list", "task-1", "--page-size", "2")
 	if code != 0 {
 		t.Fatalf("task comment list exit=%d stderr=%q", code, stderr)
 	}
@@ -165,7 +165,7 @@ func TestTaskCommentListUsesPageToken(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
 	defer restore()
 
-	stdout, stderr, code := runWorkflowRootCommand("task", "comment", "list", "task-1", "--page-size", "2", "--page-token", "2")
+	stdout, stderr, code := runRootCommand("task", "comment", "list", "task-1", "--page-size", "2", "--page-token", "2")
 	if code != 0 {
 		t.Fatalf("task comment list exit=%d stderr=%q", code, stderr)
 	}
@@ -192,7 +192,7 @@ func TestTaskCommentsPluralListAliasUsesCommentList(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
 	defer restore()
 
-	stdout, stderr, code := runWorkflowRootCommand("task", "comments", "list", "task-1")
+	stdout, stderr, code := runRootCommand("task", "comments", "list", "task-1")
 	if code != 0 {
 		t.Fatalf("task comments list exit=%d stderr=%q", code, stderr)
 	}
@@ -210,7 +210,7 @@ func TestTaskCommentsPluralAddAliasUsesCommentAdd(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
 	defer restore()
 
-	stdout, stderr, code := runWorkflowRootCommand("task", "comments", "add", "task-1", "--body", "note", "--author", "user")
+	stdout, stderr, code := runRootCommand("task", "comments", "add", "task-1", "--body", "note", "--author", "user")
 	if code != 0 {
 		t.Fatalf("task comments add exit=%d stderr=%q", code, stderr)
 	}

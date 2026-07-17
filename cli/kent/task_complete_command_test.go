@@ -30,7 +30,7 @@ func TestTaskCompleteAgentSessionBuildsCompletionRequest(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
 	defer restore()
 
-	stdout, stderr, code := runWorkflowRootCommand(
+	stdout, stderr, code := runRootCommand(
 		"task", "complete",
 		"--transition", "done",
 		"--summary", "draft",
@@ -68,7 +68,7 @@ func TestTaskCompleteSafetyGates(t *testing.T) {
 		restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, taskCompleteFatalRemote{t: t})
 		defer restore()
 
-		stdout, stderr, code := runWorkflowRootCommand("task", "complete", "--run", "run-1")
+		stdout, stderr, code := runRootCommand("task", "complete", "--run", "run-1")
 		if code != 1 {
 			t.Fatalf("task complete exit=%d stderr=%q", code, stderr)
 		}
@@ -85,7 +85,7 @@ func TestTaskCompleteSafetyGates(t *testing.T) {
 		restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, taskCompleteFatalRemote{t: t})
 		defer restore()
 
-		stdout, stderr, code := runWorkflowRootCommand("task", "complete", "--force", "--run", "run-1")
+		stdout, stderr, code := runRootCommand("task", "complete", "--force", "--run", "run-1")
 		if code != 1 {
 			t.Fatalf("task complete exit=%d stderr=%q", code, stderr)
 		}
@@ -102,7 +102,7 @@ func TestTaskCompleteSafetyGates(t *testing.T) {
 		restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, taskCompleteFatalRemote{t: t})
 		defer restore()
 
-		stdout, stderr, code := runWorkflowRootCommand("task", "complete", "--force", "--transition", "done")
+		stdout, stderr, code := runRootCommand("task", "complete", "--force", "--transition", "done")
 		if code != 2 {
 			t.Fatalf("task complete exit=%d stderr=%q", code, stderr)
 		}
@@ -175,7 +175,7 @@ func TestTaskCompleteSelectorForms(t *testing.T) {
 			restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
 			defer restore()
 
-			if _, stderr, code := runWorkflowRootCommand(tt.args...); code != 0 {
+			if _, stderr, code := runRootCommand(tt.args...); code != 0 {
 				t.Fatalf("%v exit=%d stderr=%q", tt.args, code, stderr)
 			}
 			req := remote.requireSingleRequest(t)
@@ -197,7 +197,7 @@ func TestTaskCompleteRejectsMultipleSelectors(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, taskCompleteFatalRemote{t: t})
 	defer restore()
 
-	stdout, stderr, code := runWorkflowRootCommand("task", "complete", "--run", "run-1", "--session", "session-1")
+	stdout, stderr, code := runRootCommand("task", "complete", "--run", "run-1", "--session", "session-1")
 	if code != 2 {
 		t.Fatalf("task complete exit=%d stderr=%q", code, stderr)
 	}
@@ -214,7 +214,7 @@ func TestTaskCompleteRejectsMissingFlagValueBeforeNextFlag(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, taskCompleteFatalRemote{t: t})
 	defer restore()
 
-	stdout, stderr, code := runWorkflowRootCommand("task", "complete", "--run", "--session", "session-1")
+	stdout, stderr, code := runRootCommand("task", "complete", "--run", "--session", "session-1")
 	if code != 2 {
 		t.Fatalf("task complete missing value exit=%d stderr=%q", code, stderr)
 	}
@@ -234,7 +234,7 @@ func TestTaskCompleteAmbiguousSelectorErrorShowsRetryGuidance(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
 	defer restore()
 
-	stdout, stderr, code := runWorkflowRootCommand("task", "complete", "--run", "run-1")
+	stdout, stderr, code := runRootCommand("task", "complete", "--run", "run-1")
 	if code != 1 {
 		t.Fatalf("task complete ambiguous selector exit=%d stderr=%q", code, stderr)
 	}
@@ -254,7 +254,7 @@ func TestTaskCompleteMissingTargetErrorShowsRetryGuidance(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
 	defer restore()
 
-	stdout, stderr, code := runWorkflowRootCommand("task", "complete")
+	stdout, stderr, code := runRootCommand("task", "complete")
 	if code != 1 {
 		t.Fatalf("task complete missing target exit=%d stderr=%q", code, stderr)
 	}
@@ -281,7 +281,7 @@ func TestTaskCompleteJSONInputModes(t *testing.T) {
 		restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
 		defer restore()
 
-		stdout, stderr, code := runWorkflowRootCommand(
+		stdout, stderr, code := runRootCommand(
 			"task", "complete",
 			"--force",
 			"--run", "run-1",
@@ -318,7 +318,7 @@ func TestTaskCompleteJSONInputModes(t *testing.T) {
 		restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
 		defer restore()
 
-		if _, stderr, code := runWorkflowRootCommand("task", "complete", "--force", "--run", "run-1", "--json-file", path); code != 0 {
+		if _, stderr, code := runRootCommand("task", "complete", "--force", "--run", "run-1", "--json-file", path); code != 0 {
 			t.Fatalf("task complete --json-file exit=%d stderr=%q", code, stderr)
 		}
 		req := remote.requireSingleRequest(t)
@@ -332,7 +332,7 @@ func TestTaskCompleteJSONInputModes(t *testing.T) {
 		restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, taskCompleteFatalRemote{t: t})
 		defer restore()
 
-		stdout, stderr, code := runWorkflowRootCommand("task", "complete", "--force", "--run", "run-1", "--json", `{}`, "--transition", "done")
+		stdout, stderr, code := runRootCommand("task", "complete", "--force", "--run", "run-1", "--json", `{}`, "--transition", "done")
 		if code != 2 {
 			t.Fatalf("task complete mixed json exit=%d stderr=%q", code, stderr)
 		}
@@ -346,7 +346,7 @@ func TestTaskCompleteJSONInputModes(t *testing.T) {
 }
 
 func TestTaskCompleteHelpSmoke(t *testing.T) {
-	_, stderr, code := runWorkflowRootCommand("task", "complete", "--help")
+	_, stderr, code := runRootCommand("task", "complete", "--help")
 	if code != 0 {
 		t.Fatalf("task complete --help exit=%d stderr=%q", code, stderr)
 	}
@@ -362,16 +362,16 @@ func TestTaskCompleteAgentCrossSessionSelectorUsesServiceOwnershipError(t *testi
 	defer restore()
 
 	workflowID := workflowCreateForTest(t, "Completion Workflow").ID
-	if _, nodeErr, code := runWorkflowRootCommand("workflow", "node", "add", workflowID, "--key", "implement", "--kind", "agent", "--agent", "workflow-test", "--prompt", "Do work"); code != 0 {
+	if _, nodeErr, code := runRootCommand("workflow", "node", "add", workflowID, "--key", "implement", "--kind", "agent", "--agent", "workflow-test", "--prompt", "Do work"); code != 0 {
 		t.Fatalf("workflow node add exit=%d stderr=%q", code, nodeErr)
 	}
-	if _, edgeErr, code := runWorkflowRootCommand("workflow", "edge", "add", workflowID, "--from", "backlog", "--transition", "start", "--edge-key", "start", "--to", "implement", "--context", "new_session", "--prompt", "Do work"); code != 0 {
+	if _, edgeErr, code := runRootCommand("workflow", "edge", "add", workflowID, "--from", "backlog", "--transition", "start", "--edge-key", "start", "--to", "implement", "--context", "new_session", "--prompt", "Do work"); code != 0 {
 		t.Fatalf("workflow edge add start exit=%d stderr=%q", code, edgeErr)
 	}
-	if _, edgeErr, code := runWorkflowRootCommand("workflow", "edge", "add", workflowID, "--from", "implement", "--transition", "done", "--edge-key", "done", "--to", "done", "--context", "new_session"); code != 0 {
+	if _, edgeErr, code := runRootCommand("workflow", "edge", "add", workflowID, "--from", "implement", "--transition", "done", "--edge-key", "done", "--to", "done", "--context", "new_session"); code != 0 {
 		t.Fatalf("workflow edge add done exit=%d stderr=%q", code, edgeErr)
 	}
-	if _, linkErr, code := runWorkflowRootCommand("workflow", "link", binding.ProjectID, workflowID, "--default"); code != 0 {
+	if _, linkErr, code := runRootCommand("workflow", "link", binding.ProjectID, workflowID, "--default"); code != 0 {
 		t.Fatalf("workflow link exit=%d stderr=%q", code, linkErr)
 	}
 	created, err := remote.CreateWorkflowTask(context.Background(), serverapi.WorkflowTaskCreateRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID, Title: "Task", Body: "Body"})
@@ -400,7 +400,7 @@ func TestTaskCompleteAgentCrossSessionSelectorUsesServiceOwnershipError(t *testi
 		t.Fatalf("AttachRunSession: %v", err)
 	}
 
-	stdout, stderr, code := runWorkflowRootCommand("task", "complete", "--run", started.Applied.RunID)
+	stdout, stderr, code := runRootCommand("task", "complete", "--run", started.Applied.RunID)
 	if code != 1 {
 		t.Fatalf("task complete cross-session exit=%d stderr=%q", code, stderr)
 	}

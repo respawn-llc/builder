@@ -16,7 +16,7 @@ import (
 )
 
 func TestTaskShowHelpSmoke(t *testing.T) {
-	_, stderr, code := runWorkflowRootCommand("task", "show", "--help")
+	_, stderr, code := runRootCommand("task", "show", "--help")
 	if code != 0 {
 		t.Fatalf("task show --help exit=%d stderr=%q", code, stderr)
 	}
@@ -31,19 +31,19 @@ func TestTaskShowFindsSameProjectTaskOutsideSelectedWorkflow(t *testing.T) {
 	defer restore()
 
 	defaultWorkflowID := createRunnableWorkflowForCommandTest(t, "Default Workflow")
-	if _, linkErr, code := runWorkflowRootCommand("workflow", "link", binding.ProjectID, defaultWorkflowID, "--default"); code != 0 {
+	if _, linkErr, code := runRootCommand("workflow", "link", binding.ProjectID, defaultWorkflowID, "--default"); code != 0 {
 		t.Fatalf("default workflow link exit=%d stderr=%q", code, linkErr)
 	}
 	otherWorkflowID := createRunnableWorkflowForCommandTest(t, "Other Workflow")
-	if _, linkErr, code := runWorkflowRootCommand("workflow", "link", binding.ProjectID, otherWorkflowID); code != 0 {
+	if _, linkErr, code := runRootCommand("workflow", "link", binding.ProjectID, otherWorkflowID); code != 0 {
 		t.Fatalf("other workflow link exit=%d stderr=%q", code, linkErr)
 	}
-	taskOut, taskErr, code := runWorkflowRootCommand("task", "create", "--title", "Other Task", "--body", "Body", "--workflow", otherWorkflowID, "--project", binding.ProjectID)
+	taskOut, taskErr, code := runRootCommand("task", "create", "--title", "Other Task", "--body", "Body", "--workflow", otherWorkflowID, "--project", binding.ProjectID)
 	if code != 0 {
 		t.Fatalf("task create exit=%d stderr=%q", code, taskErr)
 	}
 	shortID := taskDetailHeadingShortID(t, taskOut)
-	showOut, showErr, code := runWorkflowRootCommand("task", "show", "--project", binding.ProjectID, shortID)
+	showOut, showErr, code := runRootCommand("task", "show", "--project", binding.ProjectID, shortID)
 	if code != 0 {
 		t.Fatalf("task show exit=%d stderr=%q", code, showErr)
 	}
@@ -73,16 +73,16 @@ func TestTaskShowUsesRegisteredTaskWorktreeRootAsCurrentProject(t *testing.T) {
 	defer restore()
 
 	workflowID := createRunnableWorkflowForCommandTest(t, "Task Worktree Workflow")
-	if _, linkErr, code := runWorkflowRootCommand("workflow", "link", binding.ProjectID, workflowID, "--default"); code != 0 {
+	if _, linkErr, code := runRootCommand("workflow", "link", binding.ProjectID, workflowID, "--default"); code != 0 {
 		t.Fatalf("workflow link exit=%d stderr=%q", code, linkErr)
 	}
-	taskOut, taskErr, code := runWorkflowRootCommand("task", "create", "--title", "Worktree Task", "--body", "Body", "--workflow", workflowID, "--project", binding.ProjectID)
+	taskOut, taskErr, code := runRootCommand("task", "create", "--title", "Worktree Task", "--body", "Body", "--workflow", workflowID, "--project", binding.ProjectID)
 	if code != 0 {
 		t.Fatalf("task create exit=%d stderr=%q", code, taskErr)
 	}
 	shortID := taskDetailHeadingShortID(t, taskOut)
 
-	showOut, showErr, code := runWorkflowRootCommand("task", "show", shortID)
+	showOut, showErr, code := runRootCommand("task", "show", shortID)
 	if code != 0 {
 		t.Fatalf("task show from worktree root exit=%d stderr=%q", code, showErr)
 	}
@@ -97,7 +97,7 @@ func TestTaskShowWarnsWhenShortIDBelongsToAnotherKnownProject(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
 	defer restore()
 
-	stdout, stderr, code := runWorkflowRootCommand("task", "show", "--project", "project-current", "OTH-1")
+	stdout, stderr, code := runRootCommand("task", "show", "--project", "project-current", "OTH-1")
 	if code != 0 {
 		t.Fatalf("task show exit=%d stderr=%q", code, stderr)
 	}
@@ -118,7 +118,7 @@ func TestTaskShowFallsBackAfterRemoteScopedShortIDNotFound(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
 	defer restore()
 
-	stdout, stderr, code := runWorkflowRootCommand("task", "show", "--project", "project-current", "OTH-1")
+	stdout, stderr, code := runRootCommand("task", "show", "--project", "project-current", "OTH-1")
 	if code != 0 {
 		t.Fatalf("task show exit=%d stderr=%q", code, stderr)
 	}
@@ -136,7 +136,7 @@ func TestTaskShowSurfacesScopedShortIDLookupErrors(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
 	defer restore()
 
-	_, stderr, code := runWorkflowRootCommand("task", "show", "--project", "project-current", "OTH-1")
+	_, stderr, code := runRootCommand("task", "show", "--project", "project-current", "OTH-1")
 	if code == 0 {
 		t.Fatalf("task show exit=%d, want failure", code)
 	}
@@ -154,7 +154,7 @@ func TestTaskShowSurfacesUnscopedShortIDLookupErrors(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
 	defer restore()
 
-	_, stderr, code := runWorkflowRootCommand("task", "show", "--project", "project-current", "OTH-1")
+	_, stderr, code := runRootCommand("task", "show", "--project", "project-current", "OTH-1")
 	if code == 0 {
 		t.Fatalf("task show exit=%d, want failure", code)
 	}
@@ -172,7 +172,7 @@ func TestTaskShowRejectsUnknownStatus(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
 	defer restore()
 
-	stdout, stderr, code := runWorkflowRootCommand("task", "show", "task-unknown")
+	stdout, stderr, code := runRootCommand("task", "show", "task-unknown")
 	if code != 1 || stdout != "" {
 		t.Fatalf("task show exit=%d stdout=%q stderr=%q, want unsupported-status failure without output", code, stdout, stderr)
 	}
@@ -181,13 +181,13 @@ func TestTaskShowRejectsUnknownStatus(t *testing.T) {
 func createRunnableWorkflowForCommandTest(t *testing.T, name string) string {
 	t.Helper()
 	workflowID := workflowCreateForTest(t, name).ID
-	if _, nodeErr, code := runWorkflowRootCommand("workflow", "node", "add", workflowID, "--key", "implement", "--kind", "agent", "--agent", "workflow-test", "--prompt", "Do work"); code != 0 {
+	if _, nodeErr, code := runRootCommand("workflow", "node", "add", workflowID, "--key", "implement", "--kind", "agent", "--agent", "workflow-test", "--prompt", "Do work"); code != 0 {
 		t.Fatalf("workflow node add exit=%d stderr=%q", code, nodeErr)
 	}
-	if _, edgeErr, code := runWorkflowRootCommand("workflow", "edge", "add", workflowID, "--from", "backlog", "--transition", "start", "--edge-key", "start", "--to", "implement", "--context", "new_session", "--prompt", "Do work"); code != 0 {
+	if _, edgeErr, code := runRootCommand("workflow", "edge", "add", workflowID, "--from", "backlog", "--transition", "start", "--edge-key", "start", "--to", "implement", "--context", "new_session", "--prompt", "Do work"); code != 0 {
 		t.Fatalf("workflow start edge add exit=%d stderr=%q", code, edgeErr)
 	}
-	if _, edgeErr, code := runWorkflowRootCommand("workflow", "edge", "add", workflowID, "--from", "implement", "--transition", "done", "--edge-key", "done", "--to", "done", "--context", "new_session"); code != 0 {
+	if _, edgeErr, code := runRootCommand("workflow", "edge", "add", workflowID, "--from", "implement", "--transition", "done", "--edge-key", "done", "--to", "done", "--context", "new_session"); code != 0 {
 		t.Fatalf("workflow done edge add exit=%d stderr=%q", code, edgeErr)
 	}
 	return workflowID

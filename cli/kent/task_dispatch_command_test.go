@@ -11,25 +11,25 @@ func TestTaskRootDispatchRoutesCanonicalAndHiddenPluralAlias(t *testing.T) {
 	defer restore()
 
 	workflowID := setupLinkedWorkflow(t, binding.ProjectID, "Task Alias Workflow")
-	taskOut, taskErr, code := runWorkflowRootCommand("task", "create", "--title", "Alias Task", "--body", "Body", "--workflow", workflowID, "--project", binding.ProjectID)
+	taskOut, taskErr, code := runRootCommand("task", "create", "--title", "Alias Task", "--body", "Body", "--workflow", workflowID, "--project", binding.ProjectID)
 	if code != 0 {
 		t.Fatalf("kent task create exit=%d stderr=%q", code, taskErr)
 	}
 	shortID := taskDetailHeadingShortID(t, taskOut)
 
-	if _, stderr, code := runWorkflowRootCommand("task", "show", "--project", binding.ProjectID, shortID); code != 0 {
+	if _, stderr, code := runRootCommand("task", "show", "--project", binding.ProjectID, shortID); code != 0 {
 		t.Fatalf("kent task show exit=%d stderr=%q", code, stderr)
 	}
-	if _, stderr, code := runWorkflowRootCommand("tasks", "show", "--project", binding.ProjectID, shortID); code != 0 {
+	if _, stderr, code := runRootCommand("tasks", "show", "--project", binding.ProjectID, shortID); code != 0 {
 		t.Fatalf("kent tasks show exit=%d stderr=%q", code, stderr)
 	}
-	if _, stderr, code := runWorkflowRootCommand("tasks", "comments", "list", "--project", binding.ProjectID, shortID); code != 0 {
+	if _, stderr, code := runRootCommand("tasks", "comments", "list", "--project", binding.ProjectID, shortID); code != 0 {
 		t.Fatalf("kent tasks comments list exit=%d stderr=%q", code, stderr)
 	}
 }
 
 func TestTaskRootDispatchDoesNotDocumentHiddenPluralAlias(t *testing.T) {
-	_, rootHelp, rootCode := runWorkflowRootCommand("--help")
+	_, rootHelp, rootCode := runRootCommand("--help")
 	if rootCode != 0 {
 		t.Fatalf("kent --help exit=%d stderr=%q", rootCode, rootHelp)
 	}
@@ -37,7 +37,7 @@ func TestTaskRootDispatchDoesNotDocumentHiddenPluralAlias(t *testing.T) {
 		t.Fatalf("root help documents hidden plural command:\n%s", rootHelp)
 	}
 
-	_, taskHelp, taskCode := runWorkflowRootCommand("tasks", "--help")
+	_, taskHelp, taskCode := runRootCommand("tasks", "--help")
 	if taskCode != 0 {
 		t.Fatalf("kent tasks --help exit=%d stderr=%q", taskCode, taskHelp)
 	}
