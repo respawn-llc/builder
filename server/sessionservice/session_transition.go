@@ -19,7 +19,7 @@ type sessionTransition struct {
 	InitialInput                 string
 	TargetSessionID              string
 	ForkUserMessageSeq           int64
-	ParentSessionID              string
+	PreviousSessionID            *runtimeids.SessionID
 }
 
 type sessionTransitionResolveRequest struct {
@@ -79,16 +79,16 @@ func sessionRecoveryBuffersToAPI(buffers []session.InputDraftRecoveryBuffer) []s
 func resolveSessionTransition(_ context.Context, req sessionTransitionResolveRequest) (serverapi.SessionDirective, error) {
 	switch req.Transition.Action {
 	case serverapi.SessionTransitionActionNewSession:
-		parentID, err := optionalSessionID(req.Transition.ParentSessionID)
-		if err != nil {
-			return serverapi.SessionDirective{}, err
-		}
 		prompt, err := sessionInitialPromptMetadata(req.Transition.InitialPrompt, req.Transition.InitialPromptHistoryRecorded)
 		if err != nil {
 			return serverapi.SessionDirective{}, err
 		}
+		origin := serverapi.IndependentSessionCreateOrigin()
+		if req.Transition.PreviousSessionID != nil {
+			origin = serverapi.PreviousSessionCreateOrigin(*req.Transition.PreviousSessionID)
+		}
 		return serverapi.LaunchSessionDirective(
-			serverapi.CreateNewSessionLaunchIntent(parentID),
+			serverapi.CreateNewSessionLaunchIntent(origin),
 			serverapi.NewSessionLaunchPreparation(
 				prompt,
 				serverapi.RestoreStoredDraftSessionDraftDisposition(),
@@ -152,18 +152,6 @@ func resolveForkRollback(req sessionTransitionResolveRequest) (serverapi.Session
 			serverapi.SessionAuthPreparationKeepCurrent,
 		),
 	), nil
-}
-
-func optionalSessionID(raw string) (*runtimeids.SessionID, error) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return nil, nil
-	}
-	parsed, err := runtimeids.ParseSessionID(trimmed)
-	if err != nil {
-		return nil, err
-	}
-	return &parsed, nil
 }
 
 func sessionInitialPromptMetadata(text string, historyRecorded bool) (*serverapi.SessionInitialPromptMetadata, error) {

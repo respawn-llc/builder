@@ -155,7 +155,7 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, steer func(*testing.T, *
 	plan, err := launchClient.PlanSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID: "plan-1",
 		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(nil),
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)

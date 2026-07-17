@@ -3,6 +3,8 @@ package clientui
 import (
 	"context"
 	"strings"
+
+	"core/shared/runtimeids"
 )
 
 type ConversationFreshness uint8
@@ -46,7 +48,9 @@ type RuntimeStatus struct {
 	FastModeAvailable                 bool
 	FastModeEnabled                   bool
 	ConversationFreshness             ConversationFreshness
-	ParentSessionID                   *string
+	PreviousSessionID                 *runtimeids.SessionID
+	ParentAgentSessionID              *runtimeids.SessionID
+	NavigationTargetSessionID         *runtimeids.SessionID
 	LastCommittedAssistantFinalAnswer string
 	ThinkingLevel                     string
 	CompactionMode                    string

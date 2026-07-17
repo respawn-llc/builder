@@ -38,14 +38,15 @@ func TestServiceMapsTypedLaunchIntentsAndMemoizesByTypedIntent(t *testing.T) {
 			PersistenceRoot: t.TempDir(),
 			Settings:        config.Settings{Model: "gpt-5"},
 		},
-		ContainerDir: containerDir,
-		StoreOptions: persistence.Options(),
+		ContainerDir:      containerDir,
+		StoreOptions:      persistence.Options(),
+		PersistedSessions: persistence,
 	}, registry.NewSessionStoreRegistry())
 
 	createRequest := serverapi.SessionPlanRequest{
 		ClientRequestID: "same-request-id",
 		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(nil),
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	}
 	created, err := service.PlanSession(context.Background(), createRequest)
 	if err != nil {
@@ -68,4 +69,13 @@ func TestServiceMapsTypedLaunchIntentsAndMemoizesByTypedIntent(t *testing.T) {
 	if _, err := service.PlanSession(context.Background(), openRequest); err == nil {
 		t.Fatal("different typed intent reused the same client request ID")
 	}
+}
+
+func mustSessionLaunchIntentID(t *testing.T, raw string) runtimeids.SessionID {
+	t.Helper()
+	id, err := runtimeids.ParseSessionID(raw)
+	if err != nil {
+		t.Fatalf("ParseSessionID(%q): %v", raw, err)
+	}
+	return id
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 	"github.com/google/uuid"
 )
@@ -110,6 +111,20 @@ type ContinuationContext struct {
 	AgentRole     *string `json:"agent_role,omitempty"`
 }
 
+// NavigationTargetSessionID returns the authoritative human-navigation target
+// for a session, preferring its immediate previous session over agent ancestry.
+func NavigationTargetSessionID(meta Meta) *runtimeids.SessionID {
+	source := meta.PreviousSessionID
+	if source == nil {
+		source = meta.ParentAgentSessionID
+	}
+	if source == nil {
+		return nil
+	}
+	copied := *source
+	return &copied
+}
+
 type UsageState struct {
 	InputTokens             int  `json:"input_tokens,omitempty"`
 	OutputTokens            int  `json:"output_tokens,omitempty"`
@@ -189,7 +204,8 @@ type Meta struct {
 	FirstPromptPreview              string                           `json:"first_prompt_preview,omitempty"`
 	InputDraft                      string                           `json:"input_draft,omitempty"`
 	InputDraftRecoveryBuffers       []InputDraftRecoveryBuffer       `json:"input_draft_recovery_buffers,omitempty"`
-	ParentSessionID                 *string                          `json:"parent_session_id,omitempty"`
+	PreviousSessionID               *runtimeids.SessionID            `json:"previous_session_id,omitempty"`
+	ParentAgentSessionID            *runtimeids.SessionID            `json:"parent_agent_session_id,omitempty"`
 	WorkspaceRoot                   string                           `json:"workspace_root"`
 	WorkspaceContainer              string                           `json:"workspace_container"`
 	Continuation                    *ContinuationContext             `json:"continuation,omitempty"`

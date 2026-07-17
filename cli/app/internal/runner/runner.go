@@ -64,12 +64,12 @@ func SessionLifecycleOptionsFor[SO any](req Request[SO]) (SessionLifecycleOption
 		if err != nil {
 			return SessionLifecycleOptions{}, err
 		}
-		intent := serverapi.CreateNewSessionLaunchIntent(&parentID)
+		intent := serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(parentID))
 		options.Intent = &intent
 		return options, nil
 	}
 	if agentRole != nil && *agentRole != config.DefaultSubagentRole {
-		intent := serverapi.CreateNewSessionLaunchIntent(nil)
+		intent := serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())
 		options.Intent = &intent
 	}
 	return options, nil

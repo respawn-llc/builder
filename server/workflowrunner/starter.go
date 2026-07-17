@@ -472,9 +472,10 @@ func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartC
 	}
 	containerDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), projectID, "sessions")
 	planner := launch.Planner{
-		Config:       cfg,
-		ContainerDir: containerDir,
-		StoreOptions: s.storeOptions,
+		Config:            cfg,
+		ContainerDir:      containerDir,
+		StoreOptions:      s.storeOptions,
+		PersistedSessions: s.metadata,
 		MetadataStoreOpener: func(string) (launch.MetadataExecutionTargetStore, error) {
 			return s.metadata, nil
 		},
@@ -575,7 +576,7 @@ func sessionLaunchRequestForWorkflowRun(input workflowstore.RunStartContext) (wo
 	}
 	switch input.ContextMode {
 	case "", workflow.ContextModeNewSession:
-		request.Intent = serverapi.CreateNewSessionLaunchIntent(nil)
+		request.Intent = serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())
 	case workflow.ContextModeContinueSession:
 		intent, err := openWorkflowSessionIntent(input.SourceSessionID)
 		if err != nil {

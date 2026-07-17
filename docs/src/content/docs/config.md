@@ -34,6 +34,7 @@ model = "gpt-5.6-sol"
 provider_identifier = "kent"
 thinking_level = "medium" # low, medium, high, xhigh, max, ultra
 model_verbosity = "low" # or "medium" / "high"
+max_subagent_depth = 2 # 0 through 30; 0 blocks model-originated child creation
 # system_prompt_file = "SYSTEM.md" # relative to this config.toml directory
 theme = "auto" # or light / dark
 web_search = "native"
@@ -114,6 +115,7 @@ verbose_output = false # show supervisor suggestions in ongoing transcript
 | Key | Type | Default | Env | CLI | Description |
 | --- | --- | --- | --- | --- | --- |
 | `model` | string | `gpt-5.6-sol` | `KENT_MODEL` | `kent run --model` | Model name. If provider inference from the model name is not enough, set `provider_override` too. |
+| `max_subagent_depth` | int | `2` |  |  | Maximum depth for model-originated creation of new child agents. A root is depth `0`; values must be from `0` through `30`, and `0` blocks all model-originated child creation. Kent uses the active global-then-workspace value for every launch attempt. |
 | `thinking_level` | string | `medium` | `KENT_THINKING_LEVEL` | `kent run --thinking-level` | Provider-specific reasoning effort string. |
 | `model_verbosity` | string | `low` |  |  | Text verbosity hint for supported models. Allowed: `""`, `low`, `medium`, `high`. Unsupported models ignore it. |
 | `system_prompt_file` | string | `""` |  |  | Main system prompt file. Relative paths resolve from the containing `config.toml` directory. Empty files are skipped. |
@@ -257,6 +259,7 @@ Kent creates `rg.conf` in the config+data root when missing and exports it to sh
 ### Subagents
 
 `[subagents.<role>]` is a file-only table for named headless subagent roles. Fast is always-present, but you can add custom agents here.
+`max_subagent_depth` is a root-level TOML setting rather than a role setting. It has no environment-variable or `kent run` flag override.
 
 More info on the [Subagents page](../headless/).
 

@@ -198,7 +198,11 @@ func dialWorkspaceServerWithRoot(t *testing.T, rootID string) (remoteattach.Dial
 			case protocol.MethodHandshake:
 				_ = conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1", PersistenceRootID: rootID}})))
 			case protocol.MethodAttachProject:
-				_ = conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.AttachResponse{Kind: "project", ProjectID: "project-1"})))
+				attachment, err := protocol.ProjectAttachResponse("project-1", "workspace-1", "/workspace")
+				if err != nil {
+					return
+				}
+				_ = conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, attachment)))
 			default:
 				return
 			}

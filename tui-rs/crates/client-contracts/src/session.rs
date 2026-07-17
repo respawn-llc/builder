@@ -25,29 +25,23 @@ pub struct SessionPlanRequest {
     pub mode: SessionLaunchMode,
     pub intent: SessionLaunchIntent,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub selected_session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub caller_session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub parent_session_id: Option<String>,
     pub overrides: RunPromptOverrides,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct SessionLaunchIntent {
-    pub kind: SessionLaunchIntentKind,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub parent_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub session_id: Option<String>,
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SessionLaunchIntent {
+    CreateNew { origin: SessionCreateOrigin },
+    OpenExisting { session_id: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SessionLaunchIntentKind {
-    CreateNew,
-    OpenExisting,
-    Unknown(String),
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SessionCreateOrigin {
+    Independent,
+    PreviousSession { session_id: String },
+    ParentAgent { session_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,8 +167,8 @@ pub struct SessionTransition {
     pub target_session_id: String,
     #[serde(skip_serializing_if = "String::is_empty", default)]
     pub fork_rollback_target_id: String,
-    #[serde(skip_serializing_if = "String::is_empty", default)]
-    pub parent_session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub previous_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,23 +183,56 @@ pub enum SessionTransitionAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct SessionResolveTransitionResponse {
-    #[serde(default)]
-    pub next_session_id: String,
-    #[serde(default)]
-    pub initial_prompt: String,
-    #[serde(default)]
-    pub initial_prompt_history_recorded: bool,
-    #[serde(default)]
-    pub initial_input: String,
-    #[serde(default)]
-    pub parent_session_id: String,
-    #[serde(default)]
-    pub force_new_session: bool,
-    #[serde(default)]
-    pub should_continue: bool,
-    #[serde(default)]
-    pub requires_reauth: bool,
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SessionResolveTransitionResponse {
+    Stop {},
+    SelectSession {
+        auth: SessionAuthPreparation,
+    },
+    Launch {
+        intent: SessionLaunchIntent,
+        preparation: SessionLaunchPreparation,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionAuthPreparation {
+    KeepCurrentAuth,
+    Reauthenticate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionInitialPromptMetadata {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub history_recorded: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionLaunchPreparation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_prompt: Option<SessionInitialPromptMetadata>,
+    pub input_policy: SessionInitialInputPolicy,
+    pub auth: SessionAuthPreparation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub navigation_binding: Option<SessionNavigationBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionNavigationBinding {
+    pub project_id: String,
+    pub workspace_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SessionInitialInputPolicy {
+    RestoreStoredDraft {},
+    OverrideStoredDraft { text: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -304,33 +331,6 @@ impl SessionLaunchMode {
             "headless" => Self::Headless,
             _ => Self::Unknown(value),
         }
-    }
-}
-
-impl Serialize for SessionLaunchIntentKind {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(match self {
-            Self::CreateNew => "create_new",
-            Self::OpenExisting => "open_existing",
-            Self::Unknown(value) => value,
-        })
-    }
-}
-
-impl<'de> Deserialize<'de> for SessionLaunchIntentKind {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Ok(match value.as_str() {
-            "create_new" => Self::CreateNew,
-            "open_existing" => Self::OpenExisting,
-            _ => Self::Unknown(value),
-        })
     }
 }
 

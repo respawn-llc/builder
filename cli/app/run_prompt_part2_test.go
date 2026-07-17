@@ -190,8 +190,8 @@ func TestRunPromptWorkspaceContextCreatesChildWithParentWorktreeContext(t *testi
 	}
 	child := openAuthoritativeAppSession(t, cfg.PersistenceRoot, result.SessionID)
 	childMeta := child.Meta()
-	if childMeta.ParentSessionID == nil || *childMeta.ParentSessionID != parent.Meta().SessionID {
-		t.Fatalf("child parent session id = %v, want %q", childMeta.ParentSessionID, parent.Meta().SessionID)
+	if childMeta.ParentAgentSessionID == nil || childMeta.ParentAgentSessionID.String() != parent.Meta().SessionID {
+		t.Fatalf("child parent-agent session id = %v, want %q", childMeta.ParentAgentSessionID, parent.Meta().SessionID)
 	}
 	if childMeta.WorktreeReminder == nil {
 		t.Fatal("expected child worktree reminder")
@@ -287,7 +287,7 @@ func runHeadlessPromptViaEmbedded(t *testing.T, opts Options, clientRequestID, p
 	defer func() { _ = boot.Close() }()
 	resp, err := newHeadlessRunPromptClient(boot).RunPrompt(context.Background(), serverapi.RunPromptRequest{
 		ClientRequestID: clientRequestID,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(nil),
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 		Prompt:          prompt,
 	}, nil)
 	if err != nil {

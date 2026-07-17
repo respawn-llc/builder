@@ -1,6 +1,9 @@
 package app
 
-import "core/shared/clientui"
+import (
+	"core/shared/clientui"
+	"core/shared/textutil"
+)
 
 func (c *sessionRuntimeClient) mergeRuntimeTuple(
 	candidate runtimeTupleCandidate,
@@ -119,11 +122,9 @@ func applyTranscriptSessionStatusToRuntimeStatus(status *clientui.RuntimeStatus,
 	status.FastModeEnabled = update.FastModeEnabled
 	status.ThinkingLevel = update.ThinkingLevel
 	status.CompactionMode = update.CompactionMode
-	status.ParentSessionID = nil
-	if update.ParentSessionID != nil {
-		parentSessionID := update.ParentSessionID.String()
-		status.ParentSessionID = &parentSessionID
-	}
+	status.PreviousSessionID = textutil.Pointer(update.PreviousSessionID)
+	status.ParentAgentSessionID = textutil.Pointer(update.ParentAgentSessionID)
+	status.NavigationTargetSessionID = textutil.Pointer(update.NavigationTargetSessionID)
 	status.WorkflowActive = false
 	status.WorkflowSession = nil
 	if update.Workflow != nil {

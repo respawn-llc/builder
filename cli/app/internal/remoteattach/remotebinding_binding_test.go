@@ -3,6 +3,8 @@ package remoteattach
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"core/shared/client"
@@ -38,12 +40,17 @@ func TestBindProjectWorkspaceDialsWorkspaceRootWithTrimmedProject(t *testing.T) 
 	}
 }
 
-func TestBindProjectWorkspaceDialsWorkspaceID(t *testing.T) {
+func TestBindProjectWorkspaceDialsWorkspaceIDWithoutReadingUnavailableWorkspaceRoot(t *testing.T) {
 	var rootDialed bool
 	var gotWorkspaceID string
+	unavailableRoot := filepath.Join(t.TempDir(), "server-host-only-workspace")
+	if _, err := os.Stat(unavailableRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unavailable workspace root precondition: %v", err)
+	}
 	next := &client.Remote{}
 	bound, err := BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{
 		Current:     &client.Remote{},
+		Config:      config.App{WorkspaceRoot: unavailableRoot},
 		ProjectID:   "project-1",
 		WorkspaceID: " workspace-id ",
 		DialWorkspaceRoot: func(context.Context, config.App, string, string) (*client.Remote, error) {

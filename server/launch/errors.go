@@ -12,9 +12,9 @@ var (
 	// condition.
 	ErrPatchEditToolsConflict = errors.New("tools.patch and tools.edit cannot both be enabled; set one to false")
 
-	// errSessionSelectionRequired is returned when neither selected_session_id
-	// nor force_new_session is provided.
-	errSessionSelectionRequired = errors.New("selected_session_id or force_new_session is required")
+	// errSessionLaunchIntentRequired is returned when the launch intent kind is
+	// absent or invalid.
+	errSessionLaunchIntentRequired = errors.New("session launch intent is required")
 
 	// errInvalidAgentRole is returned when an agent-role override does not
 	// resolve to a usable subagent role.

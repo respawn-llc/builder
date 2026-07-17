@@ -5,7 +5,7 @@ description: Headless Kent runs, scriptable output modes, and how interactive Ke
 
 Kent supports a headless, non-interactive run mode via `kent run`.
 When the interactive Kent session uses subagents, it does so by launching separate headless Kent runs.
-This keeps the subagent path contextual and scriptable: subagent invocation are not new tools and consume no extra tokens in model context.
+This keeps the subagent path contextual and scriptable: subagent invocations are not new tools and consume no extra tokens in model context.
 
 Run a single prompt:
 
@@ -23,7 +23,7 @@ Control an active shared run from another shell or agent:
 
 ```bash
 kent run steer <session-id> "adjust the next step" # inject a user message into a running agent
-kent run stop <session-id> # gracefully interrupt the riun
+kent run stop <session-id> # gracefully interrupt the run
 kent run wait <session-id> # wait for the model's turn to end
 ```
 
@@ -80,6 +80,16 @@ Useful role-specific keys include:
 
 For the full list of shared overrides, see [Configuration](../config/).
 
+## Delegation Depth
+
+Kent limits model-originated creation of new child agents. A root session is depth `0`; with the default maximum of `2`, a root can create a subagent at depth `1`, that subagent can create one at depth `2`, and creation of a child at depth `3` is rejected.
+
+The same limit applies across role changes and to delegation initiated by workflow agents. Scheduler-created workflow sessions start at depth `0`. Derived sessions such as `/new`, `/review`, rollback forks, and workflow fan-out clones preserve their source's agent ancestry.
+
+The policy applies only when creating a new model-originated child. Opening or continuing an existing session is unchanged. Kent reads the active effective configuration for each attempt, rejects an over-limit launch before creating its session, and tells the current agent to stop trying subagents and complete the task itself.
+
+Configure the root-level TOML key, supported range, and disable-with-zero behavior in the [configuration reference](../config/#core-settings). There is no environment-variable or `kent run` flag override.
+
 ## Session Behavior
 
 Headless runs are non-interactive. They do not stop to ask the human operator questions mid-run, issue tool preambles, or support the Supervisor. That makes them more suitable for background execution, automation, and saves tokens. You can talk to a headless agent if you select it in the `/resume` (session picker).
@@ -119,6 +129,23 @@ JSON mode emits exactly one final object on `stdout`.
 ```
 
 On failure, JSON mode emits `status: "error"` and an `error` object instead of `result`.
+
+An over-limit child launch uses the stable `subagent_max_depth_exceeded` code and includes the attempted depth and active maximum:
+
+```json
+{
+  "status": "error",
+  "duration_ms": 0,
+  "error": {
+    "code": "subagent_max_depth_exceeded",
+    "message": "subagent launch rejected at depth 3 (maximum 2): ...",
+    "attempted_depth": 3,
+    "max_depth": 2
+  }
+}
+```
+
+Because the child was never created, this response has no session ID or continuation command. Final-text mode prints the actionable policy message instead.
 
 ---
 

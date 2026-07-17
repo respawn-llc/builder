@@ -451,10 +451,7 @@ func TestRemoteSessionAttachmentSurvivesUnaryControlReconnect(t *testing.T) {
 					return
 				}
 				attachCount.Add(1)
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.AttachResponse{
-					Kind:      "session",
-					SessionID: attach.SessionID,
-				}))); err != nil {
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, testSessionAttachResponse(t, "project-1", "workspace-1", "/workspace", attach.SessionID)))); err != nil {
 					reportHandlerError(handlerErrs, "send attach-session response: %w", err)
 					return
 				}
@@ -500,6 +497,105 @@ func TestRemoteSessionAttachmentSurvivesUnaryControlReconnect(t *testing.T) {
 	requireNoHandlerError(t, handlerErrs)
 }
 
+func TestRemoteProjectRootAttachmentRejectsDifferentWorkspaceOnReconnect(t *testing.T) {
+	var connectionCount atomic.Int32
+	handlerErrs := make(chan error, 8)
+	server := httptest.NewServer(rpcwire.NewWebSocketTransport().Handler(func(ctx context.Context, conn rpcwire.Conn) {
+		connIndex := connectionCount.Add(1)
+		handshaken := false
+		attached := false
+		for event := range conn.Events() {
+			if event.Err != nil {
+				return
+			}
+			req := event.Frame.Request()
+			switch {
+			case !handshaken:
+				if req.Method != protocol.MethodHandshake {
+					reportHandlerError(handlerErrs, "connection %d first method = %q, want handshake", connIndex, req.Method)
+					return
+				}
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{
+					Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
+				}))); err != nil {
+					reportHandlerError(handlerErrs, "send handshake response: %w", err)
+					return
+				}
+				handshaken = true
+			case !attached:
+				if req.Method != protocol.MethodAttachProject {
+					reportHandlerError(handlerErrs, "connection %d second method = %q, want attach-project", connIndex, req.Method)
+					return
+				}
+				var attach protocol.AttachProjectRequest
+				if err := json.Unmarshal(req.Params, &attach); err != nil {
+					reportHandlerError(handlerErrs, "decode attach-project: %v", err)
+					return
+				}
+				responseRequest := attach
+				workspaceID := "workspace-a"
+				canonicalRoot := "/canonical/workspace-a"
+				if connIndex >= 2 {
+					var err error
+					responseRequest, err = protocol.AttachProjectRequestForWorkspaceRoot("project-1", "/workspace-b")
+					if err != nil {
+						reportHandlerError(handlerErrs, "construct substituted request: %v", err)
+						return
+					}
+					workspaceID = "workspace-b"
+					canonicalRoot = "/canonical/workspace-b"
+				}
+				response, err := protocol.ProjectAttachResponseForRequest(responseRequest, workspaceID, canonicalRoot)
+				if err != nil {
+					reportHandlerError(handlerErrs, "construct attach response: %v", err)
+					return
+				}
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, response))); err != nil {
+					reportHandlerError(handlerErrs, "send attach response: %w", err)
+					return
+				}
+				attached = true
+				if connIndex >= 2 {
+					return
+				}
+			default:
+				if req.Method != protocol.MethodProjectList {
+					reportHandlerError(handlerErrs, "connection %d method = %q, want project list", connIndex, req.Method)
+					return
+				}
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.ProjectListResponse{}))); err != nil {
+					reportHandlerError(handlerErrs, "send project list response: %w", err)
+				}
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	remote, err := DialRemoteURLForProjectWorkspace(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		"project-1",
+		"/workspace-a",
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForProjectWorkspace: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	if _, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{}); err != nil {
+		t.Fatalf("first ListProjects: %v", err)
+	}
+	waitForRemoteControlDisconnect(t, remote, handlerErrs)
+	if _, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{}); err == nil {
+		t.Fatal("reconnect with substituted workspace unexpectedly succeeded")
+	}
+	if got := remote.WorkspaceID(); got != "workspace-a" {
+		t.Fatalf("authoritative WorkspaceID = %q, want workspace-a", got)
+	}
+	requireNoHandlerError(t, handlerErrs)
+}
+
 func TestRemoteInterruptUsesDedicatedConnWhileSubmitIsInFlight(t *testing.T) {
 	var connectionCount atomic.Int32
 	handlerErrs := make(chan error, 8)
@@ -532,7 +628,7 @@ func TestRemoteInterruptUsesDedicatedConnWhileSubmitIsInFlight(t *testing.T) {
 					reportHandlerError(handlerErrs, "second method = %q, want attach project", req.Method)
 					return
 				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.AttachResponse{Kind: "project", ProjectID: "project-1", WorkspaceRoot: "/tmp/workspace-a"}))); err != nil {
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, testProjectAttachResponse(t, "project-1", "workspace-1", "/tmp/workspace-a")))); err != nil {
 					reportHandlerError(handlerErrs, "send attach response: %w", err)
 					return
 				}

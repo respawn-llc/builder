@@ -225,11 +225,11 @@ func (c defaultUIStatusCollector) CollectEnvironment(ctx context.Context, req ui
 
 func (c defaultUIStatusCollector) adapter() status.Collector {
 	return status.Collector{
-		AuthManager:              c.authManager,
-		RequestTimeout:           statusRefreshTimeout,
-		GitTimeout:               statusGitTimeout,
-		ParentSessionReadTimeout: uiRuntimeReadTimeout,
-		EnvSanitizer:             sanitizedGitEnv,
+		AuthManager:            c.authManager,
+		RequestTimeout:         statusRefreshTimeout,
+		GitTimeout:             statusGitTimeout,
+		SessionNameReadTimeout: uiRuntimeReadTimeout,
+		EnvSanitizer:           sanitizedGitEnv,
 	}
 }
 

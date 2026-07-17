@@ -65,8 +65,8 @@ func statusOverlaySessionLines(snapshot uiStatusSnapshot) []statusOverlayLine {
 		lines = append(lines, statusOverlayLine{Text: sessionName, Style: statusOverlayLineStyleBold})
 	}
 	lines = append(lines, statusOverlayLine{Text: "Session ID: " + statusValueOrFallback(snapshot.SessionID, "session unknown"), Style: statusOverlayLineStyleNormal})
-	if parentSummary := statusParentSessionSummary(snapshot); parentSummary != "" {
-		lines = append(lines, statusOverlayLine{Text: parentSummary, Style: statusOverlayLineStyleSubtle})
+	for _, provenanceSummary := range statusSessionProvenanceSummaries(snapshot) {
+		lines = append(lines, statusOverlayLine{Text: provenanceSummary, Style: statusOverlayLineStyleSubtle})
 	}
 	return lines
 }

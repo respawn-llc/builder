@@ -58,12 +58,13 @@ func TestSessionLifecycleOptionsUseExplicitTypedInitialIntent(t *testing.T) {
 			} else if got, present := (*opts.Intent).SessionID(); !present || got != test.wantSessionID {
 				t.Fatalf("session identity = %q/%v, want %q/true", got.String(), present, test.wantSessionID.String())
 			}
+			origin, hasOrigin := (*opts.Intent).CreateOrigin()
 			if test.wantParentID.IsZero() {
-				if _, present := (*opts.Intent).ParentID(); present {
-					t.Fatal("intent unexpectedly has a parent")
+				if hasOrigin && origin.Kind() == serverapi.SessionCreateOriginParentAgent {
+					t.Fatal("intent unexpectedly has a parent-agent origin")
 				}
-			} else if got, present := (*opts.Intent).ParentID(); !present || got != test.wantParentID {
-				t.Fatalf("parent identity = %q/%v, want %q/true", got.String(), present, test.wantParentID.String())
+			} else if got, present := origin.SessionID(); !hasOrigin || origin.Kind() != serverapi.SessionCreateOriginParentAgent || !present || got != test.wantParentID {
+				t.Fatalf("parent-agent identity = %q/%v, want %q/true", got.String(), present, test.wantParentID.String())
 			}
 		})
 	}

@@ -32,3 +32,36 @@ func TestProtocolErrorDecodesSubagentLaunchDenial(t *testing.T) {
 		t.Fatalf("decoded denial = %+v", denied)
 	}
 }
+
+func TestProtocolErrorDecodesSubagentLaunchPolicyError(t *testing.T) {
+	source := protocol.NewMaxDepthExceededSubagentLaunchPolicyError(3, 2)
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeSubagentLaunchPolicy,
+		Message: "launch rejected",
+		Data:    source.RPCErrorData(),
+	})
+	var policyErr *protocol.SubagentLaunchPolicyError
+	if !errors.As(err, &policyErr) {
+		t.Fatalf("decoded error = %T %v, want SubagentLaunchPolicyError", err, err)
+	}
+	if policyErr.Kind != protocol.SubagentLaunchPolicyMaxDepthExceeded ||
+		policyErr.AttemptedDepth == nil || *policyErr.AttemptedDepth != 3 ||
+		policyErr.MaxDepth == nil || *policyErr.MaxDepth != 2 {
+		t.Fatalf("decoded policy error = %+v", policyErr)
+	}
+}
+
+func TestProtocolErrorUsesGenericMessageForMalformedSubagentLaunchPolicyData(t *testing.T) {
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeSubagentLaunchPolicy,
+		Message: "launch rejected",
+		Data:    json.RawMessage(`{"kind":"max_depth_exceeded"}`),
+	})
+	var policyErr *protocol.SubagentLaunchPolicyError
+	if errors.As(err, &policyErr) {
+		t.Fatalf("decoded malformed data as typed error %+v", policyErr)
+	}
+	if err == nil || err.Error() != "launch rejected" {
+		t.Fatalf("decoded malformed error = %v, want generic message", err)
+	}
+}

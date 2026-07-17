@@ -9,6 +9,7 @@ import (
 	"core/cli/tui/transcriptrender"
 	"core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -159,7 +160,7 @@ type uiSessionTransitionFeatureState struct {
 	nextSessionInitialInput                 string
 	nextSessionID                           string
 	nextForkRollbackTargetID                string
-	nextParentSessionID                     string
+	nextPreviousSessionID                   *runtimeids.SessionID
 	sessionName                             string
 	sessionID                               string
 	forcedLocalExit                         bool

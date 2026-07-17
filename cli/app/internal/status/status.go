@@ -14,6 +14,7 @@ import (
 	"core/shared/auth"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/runtimeids"
 )
 
 const (
@@ -64,27 +65,29 @@ type Request struct {
 }
 
 type Snapshot struct {
-	CollectedAt       time.Time
-	Workdir           string
-	SessionName       string
-	SessionID         string
-	ParentSessionID   string
-	ParentSessionName string
-	OwnsServer        bool
-	Git               GitInfo
-	Auth              AuthInfo
-	Context           ContextInfo
-	Model             ModelInfo
-	Update            UpdateInfo
-	Config            ConfigInfo
-	Subscription      SubscriptionInfo
-	SkillPolicy       config.SkillPolicy
-	Skills            []SkillInspection
-	SkillTokenCounts  map[string]int
-	AgentsPaths       []string
-	AgentTokenCounts  map[string]int
-	CompactionCount   int
-	CollectorWarning  string
+	CollectedAt            time.Time
+	Workdir                string
+	SessionName            string
+	SessionID              string
+	PreviousSessionID      *runtimeids.SessionID
+	PreviousSessionName    string
+	ParentAgentSessionID   *runtimeids.SessionID
+	ParentAgentSessionName string
+	OwnsServer             bool
+	Git                    GitInfo
+	Auth                   AuthInfo
+	Context                ContextInfo
+	Model                  ModelInfo
+	Update                 UpdateInfo
+	Config                 ConfigInfo
+	Subscription           SubscriptionInfo
+	SkillPolicy            config.SkillPolicy
+	Skills                 []SkillInspection
+	SkillTokenCounts       map[string]int
+	AgentsPaths            []string
+	AgentTokenCounts       map[string]int
+	CompactionCount        int
+	CollectorWarning       string
 }
 
 type AuthInfo struct {

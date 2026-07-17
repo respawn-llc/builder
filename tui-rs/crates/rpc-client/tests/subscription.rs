@@ -1,8 +1,6 @@
 use std::collections::VecDeque;
 
-use client_contracts::protocol::{
-    AttachResponse, CapabilityFlags, HandshakeResponse, ServerIdentity,
-};
+use client_contracts::protocol::{CapabilityFlags, HandshakeResponse, ServerIdentity};
 use rpc_client::api::{RemoteClient, RemoteContext};
 use rpc_client::error::{ProtocolError, RpcError};
 use rpc_client::stream::{NextCancellation, StreamItem, SubscriptionRoute};
@@ -16,13 +14,7 @@ fn subscription_ack_event_and_complete_are_ordered_and_terminal() {
         success_response("handshake", handshake_response()),
         success_response(
             "attach-session",
-            AttachResponse {
-                kind: "session".to_owned(),
-                project_id: String::new(),
-                workspace_id: String::new(),
-                workspace_root: String::new(),
-                session_id: "session-1".to_owned(),
-            },
+            session_attach_response("session-1"),
         ),
         success_response("subscribe-sample", json!({"stream":"stream-1"})),
         notification("sample.event", json!({"value": 1})),
@@ -200,6 +192,16 @@ fn success_response(id: &str, result: impl serde::Serialize) -> Frame {
         id: id.to_owned(),
         result: Some(serde_json::to_value(result).unwrap()),
         error: None,
+    })
+}
+
+fn session_attach_response(session_id: &str) -> serde_json::Value {
+    json!({
+        "kind": "session",
+        "project_id": "project-1",
+        "workspace_id": "workspace-1",
+        "workspace_root": "/workspace",
+        "session_id": session_id
     })
 }
 

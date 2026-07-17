@@ -118,7 +118,7 @@ func sameAskAnswerMemoRequest(a askAnswerMemoRequest, b askAnswerMemoRequest) bo
 		a.AskID == b.AskID &&
 		a.ErrorMessage == b.ErrorMessage &&
 		a.Answer == b.Answer &&
-		textutil.EqualOptionalInt(a.SelectedOptionNumber, b.SelectedOptionNumber) &&
+		textutil.EqualOptional(a.SelectedOptionNumber, b.SelectedOptionNumber) &&
 		a.FreeformAnswer == b.FreeformAnswer
 }
 

@@ -77,7 +77,7 @@ func (m *uiModel) blockedDeferredSlashCommand(commandText string) (string, bool)
 	}
 	switch commandResult.Action {
 	case commands.ActionBack:
-		if !m.hasParentSession() {
+		if !m.hasNavigationTargetSession() {
 			return "No parent session available", true
 		}
 	case commands.ActionSetFast:

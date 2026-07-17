@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"core/cli/app/commands"
 	"core/cli/app/internal/remoteattach"
@@ -18,13 +17,13 @@ import (
 type remoteAppServer struct {
 	remote       *client.Remote
 	identity     protocol.ServerIdentity
-	projectID    string
 	cfg          config.App
 	closeFn      func() error
 	owns         bool
 	presentation startupPresentation
 	promptRoots  commands.ClientPromptRoots
 	promptErr    error
+	retarget     *sessionWorkspaceRetargetContext
 }
 
 type startupPresentation struct {
@@ -39,10 +38,9 @@ func newRemoteAppServerWithAuth(remote *client.Remote, cfg config.App, closeFn f
 		closeFn = remote.Close
 	}
 	promptRoots, promptErr := commands.NewClientPromptRoots()
-	return &remoteAppServer{
+	server := &remoteAppServer{
 		remote:       remote,
 		identity:     remote.Identity(),
-		projectID:    remote.ProjectID(),
 		cfg:          cfg,
 		closeFn:      closeFn,
 		owns:         ownsServer,
@@ -50,6 +48,10 @@ func newRemoteAppServerWithAuth(remote *client.Remote, cfg config.App, closeFn f
 		promptRoots:  promptRoots,
 		promptErr:    promptErr,
 	}
+	if binding, present := remote.ProjectBinding(); present {
+		server.retarget = sessionWorkspaceRetargetContextFromBinding(binding, server.presentation.Theme)
+	}
+	return server
 }
 
 func newRemoteAppServerWithAuthAndPromptRoots(remote *client.Remote, cfg config.App, closeFn func() error, ownsServer bool, roots commands.ClientPromptRoots) *remoteAppServer {
@@ -96,6 +98,14 @@ func (s *remoteAppServer) Config() config.App {
 	return s.cfg
 }
 
+func (s *remoteAppServer) workspaceRetargetContext() *sessionWorkspaceRetargetContext {
+	if s == nil || s.retarget == nil {
+		return nil
+	}
+	copied := *s.retarget
+	return &copied
+}
+
 func (s *remoteAppServer) BindProjectWorkspace(ctx context.Context, projectID string, workspaceID string) (interactiveSessionServer, error) {
 	if s == nil {
 		_, err := remoteattach.BindProjectWorkspace(ctx, remoteattach.ProjectWorkspaceBindingRequest{ProjectID: projectID, WorkspaceID: workspaceID})
@@ -113,10 +123,24 @@ func (s *remoteAppServer) BindProjectWorkspace(ctx context.Context, projectID st
 	if err != nil {
 		return nil, err
 	}
+	binding, present := bound.Remote.ProjectBinding()
+	if !present {
+		var closeErr error
+		if bound.CloseFn != nil {
+			closeErr = bound.CloseFn()
+		} else {
+			closeErr = bound.Remote.Close()
+		}
+		s.remote = nil
+		s.closeFn = nil
+		return nil, errors.Join(errors.New("remote project attachment binding is required"), closeErr)
+	}
+	retargetContext := sessionWorkspaceRetargetContextFromBinding(binding, s.presentation.Theme)
 	next := newRemoteAppServerWithAuth(bound.Remote, s.cfg, bound.CloseFn, s.owns)
 	next.presentation = s.presentation
 	next.promptRoots = s.promptRoots
 	next.promptErr = s.promptErr
+	next.retarget = retargetContext
 	s.remote = nil
 	s.closeFn = nil
 	return next, nil
@@ -130,10 +154,10 @@ func (s *remoteAppServer) AuthStatusClient() apicontract.AuthStatusService {
 }
 
 func (s *remoteAppServer) ProjectID() string {
-	if s == nil {
+	if s == nil || s.remote == nil {
 		return ""
 	}
-	return strings.TrimSpace(s.projectID)
+	return s.remote.ProjectID()
 }
 
 func (s *remoteAppServer) RuntimeAttachmentClients() runtimeAttachmentClients {

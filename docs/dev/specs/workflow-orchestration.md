@@ -111,6 +111,7 @@
 - Workflow runs use dedicated workflow-mode developer instructions.
 - Prompt explains task identity, node role/assignee, selected completion behavior, question behavior, handoff/transition mechanics, task comments, and why ordinary final answers are invalid when the selected mode does not accept them.
 - Workflow runtime builds on reusable headless/session infrastructure for session launch, runtime wiring, logging, progress, subagent role handling, and mode prompts.
+- Workflow scheduler-created agent sessions begin at subagent depth `0`. Model-originated delegation from a workflow agent follows the global subagent-depth policy.
 - `RunPromptService.RunPrompt` final text is not workflow completion authority.
 - Existing user goal state is not reused as workflow autonomy state.
 - Workflow task sessions reject user `/goal` control; the workflow node/run is the task objective driver. Agents may still set themselves goals and complete them, per the agent goal rules in core-runtime-tools.
@@ -141,6 +142,7 @@
 ## Context Preservation And Bindings
 
 - Per-edge context preservation supports `new_session`, `continue_session`, and `compact_and_continue_session`.
+- Workflow-created clones follow the shared derived-session provenance contract, so cloning does not reset delegation depth.
 - Continuation modes may select `immediate_source`, `node:<node_key>`, `previous_target`, or `previous_target_or_new` as context source.
 - `previous_target` resolves the latest completed run of the target node before the transition event and fails when none exists.
 - `previous_target_or_new` resolves the latest completed run of the target node before the transition event when one exists; otherwise the target run starts with effective `new_session` and no source run/session.
