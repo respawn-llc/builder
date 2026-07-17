@@ -264,7 +264,7 @@ func TestBoardNodeCardsProjectBoundedUnicodeMarkdownPreview(t *testing.T) {
 	for _, testCase := range cases {
 		if _, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
 			ProjectID:  binding.ProjectID,
-			WorkflowID: workflowID,
+			WorkflowID: workflowIDPointerForTest(workflowID),
 			Title:      testCase.title,
 			Body:       testCase.body,
 		}); err != nil {
@@ -333,7 +333,7 @@ func TestBoardNodeCardsDefaultPageSizeIs25(t *testing.T) {
 	for index := 0; index < 26; index++ {
 		if _, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
 			ProjectID:  binding.ProjectID,
-			WorkflowID: workflowID,
+			WorkflowID: workflowIDPointerForTest(workflowID),
 			Title:      "Task " + strconv.Itoa(index),
 			Body:       "Body",
 		}); err != nil {
@@ -929,11 +929,11 @@ func TestBoardSelectsWorkflowAndReturnsPickerAndGroups(t *testing.T) {
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, selected.ID, false); err != nil {
 		t.Fatalf("LinkWorkflow selected: %v", err)
 	}
-	defaultTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: defaultWorkflowID, Title: "Default task", Body: "Body"})
+	defaultTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowIDPointerForTest(defaultWorkflowID), Title: "Default task", Body: "Body"})
 	if err != nil {
 		t.Fatalf("CreateTask default: %v", err)
 	}
-	selectedTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: selected.ID, Title: "Selected task", Body: "Body"})
+	selectedTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowIDPointerForTest(selected.ID), Title: "Selected task", Body: "Body"})
 	if err != nil {
 		t.Fatalf("CreateTask selected: %v", err)
 	}
@@ -1031,7 +1031,7 @@ func TestTaskDetailPrefersActiveWorkflowLink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID, Title: "Historical", Body: "Body"})
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowIDPointerForTest(workflowID), Title: "Historical", Body: "Body"})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -1060,7 +1060,7 @@ func TestBoardColumnTaskCountsUseFullSelectedWorkflow(t *testing.T) {
 	}
 	taskIDs := []string{}
 	for _, title := range []string{"Task A", "Task B"} {
-		task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID, Title: title, Body: "Body"})
+		task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowIDPointerForTest(workflowID), Title: title, Body: "Body"})
 		if err != nil {
 			t.Fatalf("CreateTask %s: %v", title, err)
 		}
@@ -1121,7 +1121,7 @@ func TestBoardNodeCardsBidirectionalPaginationRoundTripsWithoutGaps(t *testing.T
 	for index := 0; index < 126; index++ {
 		task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
 			ProjectID:  binding.ProjectID,
-			WorkflowID: workflowID,
+			WorkflowID: workflowIDPointerForTest(workflowID),
 			Title:      "Paged task " + strconv.Itoa(index),
 			Body:       "Body",
 		})
@@ -1245,7 +1245,7 @@ func TestBoardNodeCardsArchiveCanceledTaskInDoneNode(t *testing.T) {
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID, Title: "Canceled backlog", Body: "Body"})
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowIDPointerForTest(workflowID), Title: "Canceled backlog", Body: "Body"})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -1287,7 +1287,7 @@ func TestBoardNodeCardsAllowRestartAfterDoneTaskResetToBacklog(t *testing.T) {
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID, Title: "Restart", Body: "Body"})
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowIDPointerForTest(workflowID), Title: "Restart", Body: "Body"})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -1329,7 +1329,7 @@ func TestBoardNodeCardsIgnoreInterruptedRunsFromCompletedPlacementsAfterResetToB
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID, Title: "Restart", Body: "Body"})
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowIDPointerForTest(workflowID), Title: "Restart", Body: "Body"})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -1392,7 +1392,7 @@ func TestBoardNodeCardsDoNotArchiveCanceledTaskInAlternateTerminalNode(t *testin
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID, Title: "Canceled backlog", Body: "Body"})
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowIDPointerForTest(workflowID), Title: "Canceled backlog", Body: "Body"})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}

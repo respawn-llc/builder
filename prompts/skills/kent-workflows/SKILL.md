@@ -26,17 +26,19 @@ The CLI authoring path is: create a workflow, add or update nodes, add or update
 
 ```bash
 kent workflow create --description "Implement and review changes" "Implementation Review"
-kent workflow inspect "Implementation Review"
+kent workflow list
+workflow_uuid="<uuid-from-workflow-list>"
+kent workflow inspect "$workflow_uuid"
 
-kent workflow node add "Implementation Review" --key implement --kind agent --agent <implementer-role>
-kent workflow node add "Implementation Review" --key review --kind agent --agent <reviewer-role>
+kent workflow node add "$workflow_uuid" --key implement --kind agent --agent <implementer-role>
+kent workflow node add "$workflow_uuid" --key review --kind agent --agent <reviewer-role>
 
-kent workflow edge add "Implementation Review" --from backlog --transition start --edge-key start --to implement --context new_session --prompt "Implement the task."
-kent workflow edge add "Implementation Review" --from implement --transition review --edge-key review --to review --context new_session --prompt "Review the implementation."
-kent workflow edge add "Implementation Review" --from review --transition done --edge-key done --to done --context new_session
+kent workflow edge add "$workflow_uuid" --from backlog --transition start --edge-key start --to implement --context new_session --prompt "Implement the task."
+kent workflow edge add "$workflow_uuid" --from implement --transition review --edge-key review --to review --context new_session --prompt "Review the implementation."
+kent workflow edge add "$workflow_uuid" --from review --transition done --edge-key done --to done --context new_session
 
-kent workflow link . "Implementation Review" --default
-kent workflow validate "Implementation Review" --mode execution
+kent workflow link . "$workflow_uuid" --default
+kent workflow validate "$workflow_uuid" --mode execution
 ```
 
 For validation modes, use `draft` while authoring, `task_creation` before creating tasks, and `execution` for final handoff to the user. Draft workflows can be saved and linked while semantic validation fails. Validate before task creation as a best practice.
@@ -46,7 +48,8 @@ To understand what `--agent` roles are available (the reminder in your memory mi
 Important CLI behavior:
 - Every `workflow` command supports verbose `--json` for scripting, automation, and richer technical context.
 - `workflow create` auto-creates the initial backlog/start and done/terminal shape; inspect after create before adding duplicate start or terminal nodes.
-- Workflow references can be exact workflow IDs or exact workflow names. Prefer IDs in scripts and exact names in interactive work.
+- Workflow selectors use bare canonical UUIDv4 values emitted by the CLI. Names and `workflow-...` persistence IDs are rejected.
+- `workflow list --project <path-or-id>` discovers linked workflows with the default first. `workflow inspect <uuid> --summary` reads metadata without loading the graph.
 - Agent-targeting edges require `--prompt <text>`. Omit `--prompt` for edges targeting `start`, `join`, or `terminal` nodes, as there's nobody to prompt.
 - Script nodes use `--kind script --script-path <path>` and can appear anywhere an agent node can appear. Absolute paths resolve on the Kent server; relative paths resolve against the task managed worktree when the script runs.
 - Link, unlink, and set project defaults with `kent workflow link`, `kent workflow unlink`, and `kent workflow default`. This sets up bindings between a project (repo, workspace) and a workflow, and enables sharing of workflows.
@@ -58,8 +61,8 @@ Important CLI behavior:
 Use a script node when a workflow step should run a deterministic executable on the Kent server instead of starting an agent session. This saves tokens and eliminates the non-deterministic aspect of LLMs.
 
 ```bash
-kent workflow node add "Implementation Review" --key release_notes --kind script --script-path scripts/release-notes
-kent workflow edge add "Implementation Review" --from implement --transition release_notes --edge-key release_notes --to release_notes --context new_session
+kent workflow node add "$workflow_uuid" --key release_notes --kind script --script-path scripts/release-notes
+kent workflow edge add "$workflow_uuid" --from implement --transition release_notes --edge-key release_notes --to release_notes --context new_session
 ```
 
 Kent executes the script directly, without a shell wrapper. Stdin is one JSON object: incoming workflow parameter values are top-level properties, and `_kent` contains runtime identifiers such as `run_id` and `placement_id`. Prefer placing scripts in the repository main workspace (checked into VCS or not depends on user choice) for workflows that are tailored to a project, and at `~/.kent/scripts` or similar generic directory for reusable workflows, unless the user gives guidance.
@@ -82,8 +85,8 @@ Execution validation and task start require the selected script path to exist on
 Use the edge/node CRUD commands to manage the workflow:
 
 ```sh
-kent workflow node update "Implementation Review" implement --agent <implementer-role>
-kent workflow edge update "Implementation Review" edge-abc123 --transition needs_review --transition-display-name "Needs Review" --edge-key review --to review --context compact_and_continue_session --prompt "Review the implementation."
+kent workflow node update "$workflow_uuid" implement --agent <implementer-role>
+kent workflow edge update "$workflow_uuid" edge-abc123 --transition needs_review --transition-display-name "Needs Review" --edge-key review --to review --context compact_and_continue_session --prompt "Review the implementation."
 ```
 
 Node update flags are partial: omitted scalar fields keep current values. Edge update flags are partial; provided `--prompt` replaces the branch prompt. Validate the workflow with `kent workflow validate` each meaningful graph change.
@@ -109,11 +112,11 @@ Continuation modes also have a context source. Use `--context-source <source>` o
 Examples:
 
 ```bash
-kent workflow edge update "Implementation Review" edge-review \
+kent workflow edge update "$workflow_uuid" edge-review \
   --context continue_session \
   --context-source previous_target_or_new
 
-kent workflow edge update "Implementation Review" edge-rework \
+kent workflow edge update "$workflow_uuid" edge-rework \
   --context compact_and_continue_session \
   --context-source previous_target
 ```
@@ -144,7 +147,7 @@ Set it per node with `--completion-mode <mode>` on `node add` or `node update`. 
 The transition prompt is the task the target agent runs; parameters are the typed outputs the source agent must produce to carry context across the edge.
 
 ```bash
-kent workflow edge update "Implementation Review" edge-abc123 \
+kent workflow edge update "$workflow_uuid" edge-abc123 \
   --transition-description "Implementation is complete; send for review." \
   --param "plan_file_path=Path to the plan document the implementer followed." \
   --prompt "Review the changes against the plan at {{.Params.plan_file_path}}."

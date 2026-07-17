@@ -9,6 +9,7 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 	"core/shared/workflowkey"
 )
 
@@ -78,6 +79,11 @@ type WorkflowRecord struct {
 	Description           string                               `json:"description"`
 	Version               int64                                `json:"version"`
 	ExecutionTargetPolicy WorkflowExecutionTargetConfiguration `json:"execution_target_policy"`
+	ProjectLink           *WorkflowListProjectLink             `json:"project_link,omitempty"`
+}
+
+type WorkflowListProjectLink struct {
+	Default bool `json:"default"`
 }
 
 type WorkflowNode struct {
@@ -376,14 +382,16 @@ type WorkflowUpdateRequest struct {
 }
 
 type WorkflowListRequest struct {
-	PageSize  int    `json:"page_size,omitempty"`
-	PageToken string `json:"page_token,omitempty"`
-	Query     string `json:"query,omitempty"`
-	ExactName string `json:"exact_name,omitempty"`
+	PageSize   int     `json:"page_size,omitempty"`
+	PageToken  string  `json:"page_token,omitempty"`
+	Query      string  `json:"query,omitempty"`
+	ProjectID  *string `json:"project_id,omitempty"`
+	WorkflowID *string `json:"workflow_id,omitempty"`
 }
 
 type WorkflowListResponse struct {
 	Workflows     []WorkflowRecord `json:"workflows"`
+	ProjectID     *string          `json:"project_id,omitempty"`
 	NextPageToken string           `json:"next_page_token,omitempty"`
 }
 
@@ -657,16 +665,137 @@ type WorkflowValidationErrorDetails struct {
 }
 
 type WorkflowTaskCreateRequest struct {
-	ProjectID         string `json:"project_id"`
-	WorkflowID        string `json:"workflow_id,omitempty"`
-	Title             string `json:"title"`
-	Body              string `json:"body,omitempty"`
-	SourceURL         string `json:"source_url,omitempty"`
-	SourceWorkspaceID string `json:"source_workspace_id,omitempty"`
+	ProjectID         string  `json:"project_id"`
+	WorkflowID        *string `json:"workflow_id,omitempty"`
+	Title             string  `json:"title"`
+	Body              string  `json:"body,omitempty"`
+	SourceURL         string  `json:"source_url,omitempty"`
+	SourceWorkspaceID string  `json:"source_workspace_id,omitempty"`
 }
 
 type WorkflowTaskCreateResponse struct {
 	Task WorkflowTaskSummary `json:"task"`
+}
+
+type WorkflowTaskCreateSelectionReason string
+
+const (
+	WorkflowTaskCreateSelectionReasonNoLinkedWorkflows       WorkflowTaskCreateSelectionReason = "no_linked_workflows"
+	WorkflowTaskCreateSelectionReasonWorkflowNotLinked       WorkflowTaskCreateSelectionReason = "workflow_not_linked"
+	WorkflowTaskCreateSelectionReasonAmbiguousWithoutDefault WorkflowTaskCreateSelectionReason = "ambiguous_without_default"
+)
+
+type WorkflowTaskCreateSelectionError struct {
+	Reason     WorkflowTaskCreateSelectionReason
+	ProjectID  string
+	WorkflowID *string
+}
+
+func (e *WorkflowTaskCreateSelectionError) Error() string {
+	if e == nil {
+		return "workflow task create selection error"
+	}
+	return "workflow task create selection error: " + string(e.Reason)
+}
+
+func (e *WorkflowTaskCreateSelectionError) RPCErrorCode() int {
+	return protocol.ErrCodeWorkflowTaskCreateSelection
+}
+
+func (e *WorkflowTaskCreateSelectionError) RPCErrorData() json.RawMessage {
+	if e == nil {
+		return nil
+	}
+	return marshalRPCErrorData(struct {
+		Type       string                            `json:"type"`
+		Reason     WorkflowTaskCreateSelectionReason `json:"reason"`
+		ProjectID  string                            `json:"project_id"`
+		WorkflowID *string                           `json:"workflow_id,omitempty"`
+	}{
+		Type:       "workflow_task_create_selection_error",
+		Reason:     e.Reason,
+		ProjectID:  e.ProjectID,
+		WorkflowID: e.WorkflowID,
+	})
+}
+
+func DecodeWorkflowTaskCreateSelectionError(data json.RawMessage, message string) error {
+	var envelope struct {
+		Type       string                            `json:"type"`
+		Reason     WorkflowTaskCreateSelectionReason `json:"reason"`
+		ProjectID  string                            `json:"project_id"`
+		WorkflowID *string                           `json:"workflow_id,omitempty"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil ||
+		envelope.Type != "workflow_task_create_selection_error" ||
+		strings.TrimSpace(envelope.ProjectID) == "" ||
+		!validWorkflowTaskCreateSelectionError(envelope.Reason, envelope.WorkflowID) {
+		return errors.New(strings.TrimSpace(message))
+	}
+	return &WorkflowTaskCreateSelectionError{
+		Reason:     envelope.Reason,
+		ProjectID:  envelope.ProjectID,
+		WorkflowID: envelope.WorkflowID,
+	}
+}
+
+func validWorkflowTaskCreateSelectionError(reason WorkflowTaskCreateSelectionReason, workflowID *string) bool {
+	switch reason {
+	case WorkflowTaskCreateSelectionReasonNoLinkedWorkflows,
+		WorkflowTaskCreateSelectionReasonAmbiguousWithoutDefault:
+		return workflowID == nil
+	case WorkflowTaskCreateSelectionReasonWorkflowNotLinked:
+		return workflowID != nil && strings.TrimSpace(*workflowID) != ""
+	default:
+		return false
+	}
+}
+
+type WorkflowTaskCreateConflictReason string
+
+const (
+	WorkflowTaskCreateConflictReasonSerialization WorkflowTaskCreateConflictReason = "serialization_conflict"
+)
+
+type WorkflowTaskCreateConflictError struct {
+	Reason WorkflowTaskCreateConflictReason
+}
+
+func (e *WorkflowTaskCreateConflictError) Error() string {
+	if e == nil {
+		return "workflow task create conflict"
+	}
+	return "workflow task create conflict: " + string(e.Reason)
+}
+
+func (e *WorkflowTaskCreateConflictError) RPCErrorCode() int {
+	return protocol.ErrCodeWorkflowTaskCreateConflict
+}
+
+func (e *WorkflowTaskCreateConflictError) RPCErrorData() json.RawMessage {
+	if e == nil {
+		return nil
+	}
+	return marshalRPCErrorData(struct {
+		Type   string                           `json:"type"`
+		Reason WorkflowTaskCreateConflictReason `json:"reason"`
+	}{
+		Type:   "workflow_task_create_conflict_error",
+		Reason: e.Reason,
+	})
+}
+
+func DecodeWorkflowTaskCreateConflictError(data json.RawMessage, message string) error {
+	var envelope struct {
+		Type   string                           `json:"type"`
+		Reason WorkflowTaskCreateConflictReason `json:"reason"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil ||
+		envelope.Type != "workflow_task_create_conflict_error" ||
+		envelope.Reason != WorkflowTaskCreateConflictReasonSerialization {
+		return errors.New(strings.TrimSpace(message))
+	}
+	return &WorkflowTaskCreateConflictError{Reason: envelope.Reason}
 }
 
 type WorkflowTaskUpdateRequest struct {
@@ -1025,53 +1154,59 @@ type WorkflowTaskListRequest struct {
 	PageToken      string                      `json:"page_token,omitempty"`
 }
 
+type WorkflowTaskListScope struct {
+	ProjectID  string  `json:"project_id"`
+	WorkflowID *string `json:"workflow_id,omitempty"`
+}
+
+type WorkflowTaskListMatchingWorkflowCardinality string
+
+const (
+	WorkflowTaskListMatchingWorkflowCardinalityNone     WorkflowTaskListMatchingWorkflowCardinality = "none"
+	WorkflowTaskListMatchingWorkflowCardinalityOne      WorkflowTaskListMatchingWorkflowCardinality = "one"
+	WorkflowTaskListMatchingWorkflowCardinalityMultiple WorkflowTaskListMatchingWorkflowCardinality = "multiple"
+)
+
 type WorkflowTaskListResponse struct {
-	ProjectID         string                 `json:"project_id"`
-	WorkflowID        string                 `json:"workflow_id"`
-	SelectedWorkflow  *WorkflowPickerItem    `json:"selected_workflow,omitempty"`
-	NextPageToken     string                 `json:"next_page_token,omitempty"`
-	GeneratedAtUnixMs int64                  `json:"generated_at_unix_ms"`
-	Tasks             []WorkflowTaskListItem `json:"tasks"`
+	Scope                       WorkflowTaskListScope                       `json:"scope"`
+	MatchingWorkflowCardinality WorkflowTaskListMatchingWorkflowCardinality `json:"matching_workflow_cardinality"`
+	NextPageToken               string                                      `json:"next_page_token,omitempty"`
+	GeneratedAtUnixMs           int64                                       `json:"generated_at_unix_ms"`
+	Tasks                       []WorkflowTaskListItem                      `json:"tasks"`
 }
 
 type WorkflowTaskListItem struct {
 	TaskID          string             `json:"task_id"`
 	ShortID         string             `json:"short_id"`
 	WorkflowID      string             `json:"workflow_id"`
+	WorkflowName    string             `json:"workflow_name,omitempty"`
 	Title           string             `json:"title"`
 	CreatedAtUnixMs int64              `json:"created_at_unix_ms"`
 	UpdatedAtUnixMs int64              `json:"updated_at_unix_ms"`
-	ColumnKeys      []string           `json:"column_keys"`
+	ColumnKeys      *[]string          `json:"column_keys,omitempty"`
 	Status          WorkflowTaskStatus `json:"status"`
 	RunCount        int                `json:"run_count"`
 }
 
-type WorkflowTaskListScopeErrorKind string
+type WorkflowTaskListScopeErrorReason string
 
 const (
-	WorkflowTaskListScopeErrorKindNotLinked WorkflowTaskListScopeErrorKind = "not_linked"
-	WorkflowTaskListScopeErrorKindAmbiguous WorkflowTaskListScopeErrorKind = "ambiguous"
-)
-
-type WorkflowTaskListScopeDimension string
-
-const (
-	WorkflowTaskListScopeDimensionProject  WorkflowTaskListScopeDimension = "project"
-	WorkflowTaskListScopeDimensionWorkflow WorkflowTaskListScopeDimension = "workflow"
+	WorkflowTaskListScopeReasonNoLinkedWorkflows       WorkflowTaskListScopeErrorReason = "no_linked_workflows"
+	WorkflowTaskListScopeReasonWorkflowNotLinked       WorkflowTaskListScopeErrorReason = "workflow_not_linked"
+	WorkflowTaskListScopeReasonWorkflowRequiredColumns WorkflowTaskListScopeErrorReason = "workflow_required_for_columns"
 )
 
 type WorkflowTaskListScopeError struct {
-	Kind         WorkflowTaskListScopeErrorKind
-	MissingScope *WorkflowTaskListScopeDimension
-	ProjectIDs   []string
-	WorkflowIDs  []string
+	Reason     WorkflowTaskListScopeErrorReason
+	ProjectID  *string
+	WorkflowID *string
 }
 
 func (e *WorkflowTaskListScopeError) Error() string {
 	if e == nil {
 		return "workflow task list scope error"
 	}
-	return "workflow task list scope error: " + string(e.Kind)
+	return "workflow task list scope error: " + string(e.Reason)
 }
 
 func (e *WorkflowTaskListScopeError) RPCErrorCode() int {
@@ -1083,41 +1218,60 @@ func (e *WorkflowTaskListScopeError) RPCErrorData() json.RawMessage {
 		return nil
 	}
 	return marshalRPCErrorData(struct {
-		Type         string                          `json:"type"`
-		Kind         WorkflowTaskListScopeErrorKind  `json:"kind"`
-		MissingScope *WorkflowTaskListScopeDimension `json:"missing_scope,omitempty"`
-		ProjectIDs   []string                        `json:"project_ids,omitempty"`
-		WorkflowIDs  []string                        `json:"workflow_ids,omitempty"`
+		Type       string                           `json:"type"`
+		Reason     WorkflowTaskListScopeErrorReason `json:"reason"`
+		ProjectID  *string                          `json:"project_id,omitempty"`
+		WorkflowID *string                          `json:"workflow_id,omitempty"`
 	}{
-		Type:         "workflow_task_list_scope_error",
-		Kind:         e.Kind,
-		MissingScope: e.MissingScope,
-		ProjectIDs:   e.ProjectIDs,
-		WorkflowIDs:  e.WorkflowIDs,
+		Type:       "workflow_task_list_scope_error",
+		Reason:     e.Reason,
+		ProjectID:  e.ProjectID,
+		WorkflowID: e.WorkflowID,
 	})
 }
 
 func DecodeWorkflowTaskListScopeError(data json.RawMessage, message string) error {
 	var envelope struct {
-		Type         string                          `json:"type"`
-		Kind         WorkflowTaskListScopeErrorKind  `json:"kind"`
-		MissingScope *WorkflowTaskListScopeDimension `json:"missing_scope,omitempty"`
-		ProjectIDs   []string                        `json:"project_ids,omitempty"`
-		WorkflowIDs  []string                        `json:"workflow_ids,omitempty"`
+		Type       string                           `json:"type"`
+		Reason     WorkflowTaskListScopeErrorReason `json:"reason"`
+		ProjectID  *string                          `json:"project_id,omitempty"`
+		WorkflowID *string                          `json:"workflow_id,omitempty"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil ||
-		envelope.Type != "workflow_task_list_scope_error" ||
-		(envelope.Kind != WorkflowTaskListScopeErrorKindNotLinked && envelope.Kind != WorkflowTaskListScopeErrorKindAmbiguous) ||
-		(envelope.MissingScope != nil && *envelope.MissingScope != WorkflowTaskListScopeDimensionProject && *envelope.MissingScope != WorkflowTaskListScopeDimensionWorkflow) ||
-		(envelope.Kind == WorkflowTaskListScopeErrorKindAmbiguous && envelope.MissingScope == nil) {
+		envelope.Type != "workflow_task_list_scope_error" {
 		return errors.New(strings.TrimSpace(message))
 	}
-	return &WorkflowTaskListScopeError{
-		Kind:         envelope.Kind,
-		MissingScope: envelope.MissingScope,
-		ProjectIDs:   envelope.ProjectIDs,
-		WorkflowIDs:  envelope.WorkflowIDs,
+	scopeErr := &WorkflowTaskListScopeError{
+		Reason:     envelope.Reason,
+		ProjectID:  envelope.ProjectID,
+		WorkflowID: envelope.WorkflowID,
 	}
+	if err := scopeErr.validate(); err != nil {
+		return errors.New(strings.TrimSpace(message))
+	}
+	return scopeErr
+}
+
+func (e *WorkflowTaskListScopeError) validate() error {
+	if e == nil || e.ProjectID == nil || strings.TrimSpace(*e.ProjectID) == "" || strings.TrimSpace(*e.ProjectID) != *e.ProjectID {
+		return errors.New("workflow task list scope error requires an exact project id")
+	}
+	switch e.Reason {
+	case WorkflowTaskListScopeReasonNoLinkedWorkflows, WorkflowTaskListScopeReasonWorkflowRequiredColumns:
+		if e.WorkflowID != nil {
+			return errors.New("workflow task list scope error reason forbids workflow id")
+		}
+	case WorkflowTaskListScopeReasonWorkflowNotLinked:
+		if e.WorkflowID == nil {
+			return errors.New("workflow-not-linked task list scope error requires workflow id")
+		}
+		if _, err := runtimeids.ParseCanonicalPrefixedUUIDv4(*e.WorkflowID, "workflow-", "workflow id"); err != nil {
+			return err
+		}
+	default:
+		return errors.New("workflow task list scope error reason is invalid")
+	}
+	return nil
 }
 
 type WorkflowBoardResponse struct {
@@ -1435,6 +1589,16 @@ func (r WorkflowListRequest) Validate() error {
 	}
 	if r.PageToken != strings.TrimSpace(r.PageToken) {
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not have leading or trailing whitespace")
+	}
+	if r.ProjectID != nil {
+		if err := validateRequired("project_id", *r.ProjectID); err != nil {
+			return err
+		}
+	}
+	if r.WorkflowID != nil {
+		if err := validateRequired("workflow_id", *r.WorkflowID); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1846,7 +2010,13 @@ func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
 }
 
 func (r WorkflowTaskCreateRequest) Validate() error {
-	return validateRequiredFields(requiredField("project_id", r.ProjectID), requiredField("title", r.Title))
+	if err := validateRequiredFields(requiredField("project_id", r.ProjectID), requiredField("title", r.Title)); err != nil {
+		return err
+	}
+	if r.WorkflowID != nil {
+		return validateRequired("workflow_id", *r.WorkflowID)
+	}
+	return nil
 }
 
 func (r WorkflowTaskUpdateRequest) Validate() error {
@@ -2095,8 +2265,12 @@ func (r WorkflowBoardRequest) Validate() error {
 }
 
 func (r WorkflowTaskListRequest) Validate() error {
-	if r.ProjectID == nil && r.WorkflowID == nil && strings.TrimSpace(r.PageToken) == "" {
-		return workflowRequestError(WorkflowRequestErrorRequired, "scope", "project_id, workflow_id, or page_token is required")
+	if r.ProjectID == nil && strings.TrimSpace(r.PageToken) == "" {
+		message := "project_id is required on the first page"
+		if r.WorkflowID != nil {
+			message = "project_id is required when workflow_id is selected"
+		}
+		return workflowRequestError(WorkflowRequestErrorRequired, "project_id", message)
 	}
 	for _, scope := range []struct {
 		field string

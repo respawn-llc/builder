@@ -29,8 +29,8 @@ func TestTaskCommandsUseWorkflowAPI(t *testing.T) {
 	taskID := taskResp.Task.Summary.ID
 
 	taskListOut, _ := runWorkflowRootCommandOK(t, "task", "list", "--project", binding.ProjectID)
-	if !strings.Contains(taskListOut, shortID+": Task.") || !strings.Contains(taskListOut, "Status: backlog") || !strings.Contains(taskListOut, "Columns: backlog") {
-		t.Fatalf("task list output = %q, want short id, typed status, and column", taskListOut)
+	if !strings.Contains(taskListOut, shortID+": Task.") || !strings.Contains(taskListOut, "Status: backlog") || strings.Contains(taskListOut, "Columns:") {
+		t.Fatalf("task list output = %q, want project-wide short id and typed status without workflow-relative columns", taskListOut)
 	}
 	taskListJSONOut, _ := runWorkflowRootCommandOK(t, "task", "list", "--project", binding.ProjectID, "--json")
 	if !strings.Contains(taskListJSONOut, shortID) || !strings.Contains(taskListJSONOut, taskID) {

@@ -1,0 +1,139 @@
+package main
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"core/shared/serverapi"
+)
+
+type taskListOutput struct {
+	ProjectID                   string                                                `json:"project_id"`
+	WorkflowID                  *string                                               `json:"workflow_id,omitempty"`
+	MatchingWorkflowCardinality serverapi.WorkflowTaskListMatchingWorkflowCardinality `json:"matching_workflow_cardinality"`
+	NextPageToken               string                                                `json:"next_page_token,omitempty"`
+	Tasks                       []taskListItem                                        `json:"tasks"`
+}
+
+type taskListItem struct {
+	ShortID         string                       `json:"short_id"`
+	TaskID          string                       `json:"task_id"`
+	WorkflowID      string                       `json:"workflow_id"`
+	Status          serverapi.WorkflowTaskStatus `json:"status"`
+	ColumnKeys      *[]string                    `json:"column_keys,omitempty"`
+	Title           string                       `json:"title"`
+	CreatedAtUnixMs int64                        `json:"created_at_unix_ms"`
+	UpdatedAtUnixMs int64                        `json:"updated_at_unix_ms"`
+	RunCount        int                          `json:"run_count"`
+}
+
+type taskListProjection struct {
+	Output taskListOutput
+	Rows   []taskListRenderItem
+}
+
+type taskListRenderItem struct {
+	Item         taskListItem
+	WorkflowName string
+	ShowWorkflow bool
+	ShowColumns  bool
+}
+
+type taskListExpectedScope struct {
+	ProjectID  string
+	WorkflowID *string
+}
+
+func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, expectedScope taskListExpectedScope) (taskListProjection, error) {
+	if strings.TrimSpace(expectedScope.ProjectID) == "" || strings.TrimSpace(expectedScope.ProjectID) != expectedScope.ProjectID {
+		return taskListProjection{}, errors.New("task list request scope is missing project_id")
+	}
+	if strings.TrimSpace(resp.Scope.ProjectID) == "" || strings.TrimSpace(resp.Scope.ProjectID) != resp.Scope.ProjectID {
+		return taskListProjection{}, errors.New("task list response scope is missing project_id")
+	}
+	if resp.Scope.ProjectID != expectedScope.ProjectID {
+		return taskListProjection{}, fmt.Errorf("task list response project %q does not match requested project %q", resp.Scope.ProjectID, expectedScope.ProjectID)
+	}
+	if (resp.Scope.WorkflowID == nil) != (expectedScope.WorkflowID == nil) {
+		return taskListProjection{}, errors.New("task list response workflow scope does not match requested scope")
+	}
+	if resp.Scope.WorkflowID != nil && *resp.Scope.WorkflowID != *expectedScope.WorkflowID {
+		return taskListProjection{}, fmt.Errorf("task list response workflow %q does not match requested workflow %q", *resp.Scope.WorkflowID, *expectedScope.WorkflowID)
+	}
+	switch resp.MatchingWorkflowCardinality {
+	case serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone,
+		serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
+		serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple:
+	default:
+		return taskListProjection{}, fmt.Errorf("task list response has invalid matching_workflow_cardinality %q", resp.MatchingWorkflowCardinality)
+	}
+	if resp.MatchingWorkflowCardinality == serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone && len(resp.Tasks) != 0 {
+		return taskListProjection{}, errors.New("task list response with no matching workflows cannot contain tasks")
+	}
+	var selectedWorkflowID *string
+	if resp.Scope.WorkflowID != nil {
+		workflowID, err := workflowIDForCLI(*resp.Scope.WorkflowID)
+		if err != nil {
+			return taskListProjection{}, err
+		}
+		selectedWorkflowID = &workflowID
+		if resp.MatchingWorkflowCardinality == serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple {
+			return taskListProjection{}, errors.New("task list response narrowed to one workflow cannot have multiple matching workflows")
+		}
+	}
+	showWorkflow := resp.MatchingWorkflowCardinality == serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple
+	showColumns := selectedWorkflowID != nil
+	items := make([]taskListItem, 0, len(resp.Tasks))
+	rows := make([]taskListRenderItem, 0, len(resp.Tasks))
+	for _, task := range resp.Tasks {
+		workflowID, err := workflowIDForCLI(task.WorkflowID)
+		if err != nil {
+			return taskListProjection{}, err
+		}
+		if selectedWorkflowID != nil && workflowID != *selectedWorkflowID {
+			return taskListProjection{}, fmt.Errorf("task list response task %q workflow %q does not match selected workflow %q", task.TaskID, workflowID, *selectedWorkflowID)
+		}
+		var columnKeys *[]string
+		if showColumns {
+			if task.ColumnKeys == nil {
+				return taskListProjection{}, fmt.Errorf("narrowed task list response task %q is missing workflow-relative columns", task.TaskID)
+			}
+			values := append([]string(nil), (*task.ColumnKeys)...)
+			columnKeys = &values
+		} else if task.ColumnKeys != nil {
+			return taskListProjection{}, fmt.Errorf("project-wide task list response task %q contains workflow-relative columns", task.TaskID)
+		}
+		if showWorkflow && strings.TrimSpace(task.WorkflowName) == "" {
+			return taskListProjection{}, fmt.Errorf("task list response task %q is missing workflow_name for multiple-workflow rendering", task.TaskID)
+		}
+		item := taskListItem{
+			ShortID:         task.ShortID,
+			TaskID:          task.TaskID,
+			WorkflowID:      workflowID,
+			Status:          task.Status,
+			ColumnKeys:      columnKeys,
+			Title:           task.Title,
+			CreatedAtUnixMs: task.CreatedAtUnixMs,
+			UpdatedAtUnixMs: task.UpdatedAtUnixMs,
+			RunCount:        task.RunCount,
+		}
+		items = append(items, item)
+		rows = append(rows, taskListRenderItem{
+			Item:         item,
+			WorkflowName: task.WorkflowName,
+			ShowWorkflow: showWorkflow,
+			ShowColumns:  showColumns,
+		})
+	}
+	return taskListProjection{
+		Output: taskListOutput{
+			ProjectID:                   resp.Scope.ProjectID,
+			WorkflowID:                  selectedWorkflowID,
+			MatchingWorkflowCardinality: resp.MatchingWorkflowCardinality,
+			NextPageToken:               resp.NextPageToken,
+			Tasks:                       items,
+		},
+		Rows: rows,
+	}, nil
+}

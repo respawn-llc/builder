@@ -182,59 +182,87 @@ func (s *Service) ListTasks(ctx context.Context, req serverapi.WorkflowTaskListR
 	if _, err := s.metadata.GetProjectOverview(ctx, projectID); err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
 	}
-	definitions, _, picker, err := s.workflowSelectionInputs(ctx, projectID, roleResolver)
-	if err != nil {
-		return serverapi.WorkflowTaskListResponse{}, err
-	}
-	var selected serverapi.WorkflowPickerItem
-	for _, candidate := range picker {
-		if candidate.WorkflowID == workflowID {
-			selected = candidate
-			break
+	var def serverapi.WorkflowDefinition
+	var columns []serverapi.WorkflowBoardColumn
+	if workflowID == nil {
+		if len(req.ColumnKeys) > 0 || workflowTaskListSortUsesColumn(req.Sort) {
+			errorProjectID := projectID
+			return serverapi.WorkflowTaskListResponse{}, &serverapi.WorkflowTaskListScopeError{
+				Reason:    serverapi.WorkflowTaskListScopeReasonWorkflowRequiredColumns,
+				ProjectID: &errorProjectID,
+			}
 		}
-	}
-	if selected.WorkflowID == "" {
-		return serverapi.WorkflowTaskListResponse{}, serverapi.WorkflowRequestValidationError{
-			Code:    serverapi.WorkflowRequestErrorInvalidValue,
-			Field:   "workflow_id",
-			Message: fmt.Sprintf("unknown workflow %q for project %s", workflowID, projectID),
+	} else {
+		def, _, err = s.definition(ctx, *workflowID)
+		if err != nil {
+			return serverapi.WorkflowTaskListResponse{}, err
 		}
-	}
-	def := definitions[selected.WorkflowID]
-	columns := boardColumns(def)
-	if err := validateWorkflowTaskListColumnKeys(req.ColumnKeys, columns); err != nil {
-		return serverapi.WorkflowTaskListResponse{}, err
+		columns = boardColumns(def)
+		if err := validateWorkflowTaskListColumnKeys(req.ColumnKeys, columns); err != nil {
+			return serverapi.WorkflowTaskListResponse{}, err
+		}
 	}
 	sortSelectors := normalizeWorkflowTaskListSort(req.Sort)
-	columnStructureHash := workflowTaskListColumnStructureHash(def, columns)
+	columnStructureHash := ""
+	if workflowID != nil {
+		columnStructureHash = workflowTaskListColumnStructureHash(def, columns)
+	}
 	fingerprint := workflowTaskListRequestFingerprint(req, sortSelectors, columnStructureHash)
 	cursor := workflowTaskListCursor{}
+	matchingWorkflowCardinality := serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone
 	if hasPageToken {
-		if pageToken.ProjectID != projectID ||
-			pageToken.WorkflowID != selected.WorkflowID ||
-			pageToken.WorkflowVersion != def.Workflow.Version ||
-			pageToken.ColumnStructureHash != columnStructureHash ||
+		if pageToken.Scope.ProjectID != projectID ||
 			pageToken.StatusModelVersion != workflowTaskStatusModelVersion ||
 			pageToken.Fingerprint != fingerprint {
 			return serverapi.WorkflowTaskListResponse{}, ErrInvalidPageToken
 		}
+		if workflowID == nil {
+			if pageToken.Scope.ProjectWide == nil {
+				return serverapi.WorkflowTaskListResponse{}, ErrInvalidPageToken
+			}
+		} else {
+			narrowed := pageToken.Scope.Narrowed
+			if narrowed == nil ||
+				narrowed.WorkflowID != *workflowID ||
+				narrowed.WorkflowVersion != def.Workflow.Version ||
+				narrowed.ColumnStructureHash != columnStructureHash {
+				return serverapi.WorkflowTaskListResponse{}, ErrInvalidPageToken
+			}
+		}
 		cursor = pageToken.Cursor
+		matchingWorkflowCardinality = pageToken.MatchingWorkflowCardinality
+	}
+	var narrowedQuery *workflowTaskListNarrowedQueryFacts
+	if workflowID != nil {
+		var canceledTerminalNodeID *string
+		if value := canceledBoardTerminalNodeID(def); value != "" {
+			canceledTerminalNodeID = &value
+		}
+		narrowedQuery = &workflowTaskListNarrowedQueryFacts{
+			workflowID:             *workflowID,
+			canceledTerminalNodeID: canceledTerminalNodeID,
+			columns:                columns,
+			columnKeys:             req.ColumnKeys,
+		}
 	}
 	rows, err := s.listWorkflowTaskListRows(ctx, workflowTaskListQueryRequest{
-		projectID:              projectID,
-		workflowID:             selected.WorkflowID,
-		canceledTerminalNodeID: canceledBoardTerminalNodeID(def),
-		columns:                columns,
-		columnKeys:             req.ColumnKeys,
-		statusKinds:            req.StatusKinds,
-		attentionKinds:         req.AttentionKinds,
-		sortSelectors:          sortSelectors,
-		cursor:                 cursor,
-		cursorSet:              hasPageToken,
-		limit:                  pageSize + 1,
+		projectID:      projectID,
+		narrowed:       narrowedQuery,
+		statusKinds:    req.StatusKinds,
+		attentionKinds: req.AttentionKinds,
+		sortSelectors:  sortSelectors,
+		cursor:         cursor,
+		cursorSet:      hasPageToken,
+		limit:          pageSize + 1,
 	})
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
+	}
+	if !hasPageToken {
+		matchingWorkflowCardinality, err = workflowTaskListMatchingWorkflowCardinality(rows)
+		if err != nil {
+			return serverapi.WorkflowTaskListResponse{}, err
+		}
 	}
 	pageItems := rows
 	hasNext := len(pageItems) > pageSize
@@ -247,85 +275,78 @@ func (s *Service) ListTasks(ctx context.Context, req serverapi.WorkflowTaskListR
 	}
 	nextPageToken := ""
 	if hasNext && len(pageItems) > 0 {
+		tokenScope := workflowTaskListPageTokenScope{ProjectID: projectID}
+		if workflowID == nil {
+			tokenScope.ProjectWide = &workflowTaskListProjectWidePageTokenInvariants{}
+		} else {
+			tokenScope.Narrowed = &workflowTaskListNarrowedPageTokenInvariants{
+				WorkflowID:          *workflowID,
+				WorkflowVersion:     def.Workflow.Version,
+				ColumnStructureHash: columnStructureHash,
+			}
+		}
 		nextPageToken = workflowTaskListPageToken(workflowTaskListPageTokenPayload{
-			Version:             workflowTaskListPageTokenVersion,
-			ProjectID:           projectID,
-			WorkflowID:          selected.WorkflowID,
-			WorkflowVersion:     def.Workflow.Version,
-			ColumnStructureHash: columnStructureHash,
-			StatusModelVersion:  workflowTaskStatusModelVersion,
-			Fingerprint:         fingerprint,
-			Cursor:              workflowTaskListCursorFromRow(pageItems[len(pageItems)-1]),
+			Version:                     workflowTaskListPageTokenVersion,
+			Scope:                       tokenScope,
+			MatchingWorkflowCardinality: matchingWorkflowCardinality,
+			StatusModelVersion:          workflowTaskStatusModelVersion,
+			Fingerprint:                 fingerprint,
+			Cursor:                      workflowTaskListCursorFromRow(pageItems[len(pageItems)-1]),
 		})
 	}
-	selectedCopy := selected
 	return serverapi.WorkflowTaskListResponse{
-		ProjectID:         projectID,
-		WorkflowID:        selected.WorkflowID,
-		SelectedWorkflow:  &selectedCopy,
-		NextPageToken:     nextPageToken,
-		GeneratedAtUnixMs: time.Now().UTC().UnixMilli(),
-		Tasks:             responseItems,
+		Scope: serverapi.WorkflowTaskListScope{
+			ProjectID:  projectID,
+			WorkflowID: workflowID,
+		},
+		MatchingWorkflowCardinality: matchingWorkflowCardinality,
+		NextPageToken:               nextPageToken,
+		GeneratedAtUnixMs:           time.Now().UTC().UnixMilli(),
+		Tasks:                       responseItems,
 	}, nil
 }
 
-func (s *Service) resolveWorkflowTaskListScope(ctx context.Context, projectIDValue *string, workflowIDValue *string, token *workflowTaskListPageTokenPayload) (string, string, error) {
+func (s *Service) resolveWorkflowTaskListScope(ctx context.Context, projectIDValue *string, workflowIDValue *string, token *workflowTaskListPageTokenPayload) (string, *string, error) {
 	if token != nil {
-		if projectIDValue != nil && *projectIDValue != token.ProjectID {
-			return "", "", ErrInvalidPageToken
+		if projectIDValue != nil && *projectIDValue != token.Scope.ProjectID {
+			return "", nil, ErrInvalidPageToken
 		}
-		if workflowIDValue != nil && *workflowIDValue != token.WorkflowID {
-			return "", "", ErrInvalidPageToken
+		var tokenWorkflowID *string
+		if token.Scope.Narrowed != nil {
+			tokenWorkflowID = &token.Scope.Narrowed.WorkflowID
 		}
-		projectIDValue = &token.ProjectID
-		workflowIDValue = &token.WorkflowID
+		if workflowIDValue != nil {
+			if tokenWorkflowID == nil || *workflowIDValue != *tokenWorkflowID {
+				return "", nil, ErrInvalidPageToken
+			}
+		}
+		projectIDValue = &token.Scope.ProjectID
+		workflowIDValue = tokenWorkflowID
 	}
 	if projectIDValue != nil && workflowIDValue != nil {
 		if _, err := s.queries.GetActiveProjectWorkflowLinkByWorkflow(ctx, sqlitegen.GetActiveProjectWorkflowLinkByWorkflowParams{ProjectID: *projectIDValue, WorkflowID: *workflowIDValue}); err == nil {
-			return *projectIDValue, *workflowIDValue, nil
+			workflowID := *workflowIDValue
+			return *projectIDValue, &workflowID, nil
 		} else if errors.Is(err, sql.ErrNoRows) {
-			return "", "", &serverapi.WorkflowTaskListScopeError{Kind: serverapi.WorkflowTaskListScopeErrorKindNotLinked, ProjectIDs: []string{*projectIDValue}, WorkflowIDs: []string{*workflowIDValue}}
+			errorProjectID := *projectIDValue
+			errorWorkflowID := *workflowIDValue
+			return "", nil, &serverapi.WorkflowTaskListScopeError{Reason: serverapi.WorkflowTaskListScopeReasonWorkflowNotLinked, ProjectID: &errorProjectID, WorkflowID: &errorWorkflowID}
 		} else {
-			return "", "", err
+			return "", nil, err
 		}
 	}
 	if projectIDValue != nil {
-		links, err := s.queries.ListProjectWorkflowLinks(ctx, *projectIDValue)
+		linkCount, err := s.queries.CountActiveProjectWorkflowLinks(ctx, *projectIDValue)
 		if err != nil {
-			return "", "", err
+			return "", nil, err
 		}
-		if len(links) == 1 {
-			return *projectIDValue, links[0].WorkflowID, nil
+		if linkCount == 0 {
+			errorProjectID := *projectIDValue
+			return "", nil, &serverapi.WorkflowTaskListScopeError{Reason: serverapi.WorkflowTaskListScopeReasonNoLinkedWorkflows, ProjectID: &errorProjectID}
 		}
-		candidates := make([]string, 0, len(links))
-		for _, link := range links {
-			candidates = append(candidates, link.WorkflowID)
-		}
-		if len(candidates) == 0 {
-			return "", "", &serverapi.WorkflowTaskListScopeError{Kind: serverapi.WorkflowTaskListScopeErrorKindNotLinked, ProjectIDs: []string{*projectIDValue}}
-		}
-		missing := serverapi.WorkflowTaskListScopeDimensionWorkflow
-		return "", "", &serverapi.WorkflowTaskListScopeError{Kind: serverapi.WorkflowTaskListScopeErrorKindAmbiguous, MissingScope: &missing, ProjectIDs: []string{*projectIDValue}, WorkflowIDs: candidates}
+		return *projectIDValue, nil, nil
 	}
-	if workflowIDValue != nil {
-		links, err := s.queries.ListWorkflowProjectLinks(ctx, *workflowIDValue)
-		if err != nil {
-			return "", "", err
-		}
-		if len(links) == 1 {
-			return links[0].ProjectID, *workflowIDValue, nil
-		}
-		candidates := make([]string, 0, len(links))
-		for _, link := range links {
-			candidates = append(candidates, link.ProjectID)
-		}
-		if len(candidates) == 0 {
-			return "", "", &serverapi.WorkflowTaskListScopeError{Kind: serverapi.WorkflowTaskListScopeErrorKindNotLinked, WorkflowIDs: []string{*workflowIDValue}}
-		}
-		missing := serverapi.WorkflowTaskListScopeDimensionProject
-		return "", "", &serverapi.WorkflowTaskListScopeError{Kind: serverapi.WorkflowTaskListScopeErrorKindAmbiguous, MissingScope: &missing, ProjectIDs: candidates, WorkflowIDs: []string{*workflowIDValue}}
-	}
-	return "", "", &serverapi.WorkflowTaskListScopeError{Kind: serverapi.WorkflowTaskListScopeErrorKindNotLinked}
+	return "", nil, &serverapi.WorkflowTaskListScopeError{Reason: serverapi.WorkflowTaskListScopeReasonNoLinkedWorkflows}
 }
 
 func validateWorkflowTaskListColumnKeys(columnKeys []string, columns []serverapi.WorkflowBoardColumn) error {

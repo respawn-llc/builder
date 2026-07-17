@@ -355,6 +355,7 @@ describe("ApiClient", () => {
       {
         method: "workflow.list",
         result: {
+          project_id: "project-1",
           workflows: [
             {
               id: "workflow-1",
@@ -362,6 +363,7 @@ describe("ApiClient", () => {
               description: "Ship",
               version: 4,
               execution_target_policy: { mode: "custom_ref", custom_ref: "release/v1" },
+              project_link: { default: true },
             },
           ],
           next_page_token: "cursor-2",

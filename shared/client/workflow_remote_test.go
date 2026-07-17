@@ -68,6 +68,62 @@ func TestRemoteWorkflowListRoute(t *testing.T) {
 	}
 }
 
+func TestRemoteWorkflowTaskListRoundTripsTypedScope(t *testing.T) {
+	handlerErr := make(chan error, 1)
+	projectID := "project-1"
+	workflowID := "workflow-1"
+	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		defer func() { _ = ws.Close() }()
+		var req protocol.Request
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			handlerErr <- fmt.Errorf("receive handshake: %w", err)
+			return
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
+			handlerErr <- fmt.Errorf("send handshake response: %w", err)
+			return
+		}
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			handlerErr <- fmt.Errorf("receive task list: %w", err)
+			return
+		}
+		if req.Method != protocol.MethodWorkflowTaskList {
+			handlerErr <- fmt.Errorf("task list method = %q", req.Method)
+			return
+		}
+		response := serverapi.WorkflowTaskListResponse{
+			Scope:                       serverapi.WorkflowTaskListScope{ProjectID: projectID, WorkflowID: &workflowID},
+			MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
+			Tasks:                       []serverapi.WorkflowTaskListItem{{TaskID: "task-1", WorkflowID: workflowID}},
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, response)); err != nil {
+			handlerErr <- fmt.Errorf("send task list response: %w", err)
+			return
+		}
+		handlerErr <- nil
+	}))
+	defer server.Close()
+
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	response, err := remote.ListWorkflowTasks(context.Background(), serverapi.WorkflowTaskListRequest{ProjectID: &projectID, WorkflowID: &workflowID})
+	if err != nil {
+		t.Fatalf("ListWorkflowTasks: %v", err)
+	}
+	if response.Scope.ProjectID != projectID || response.Scope.WorkflowID == nil || *response.Scope.WorkflowID != workflowID || response.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne {
+		t.Fatalf("response scope = %+v, want typed project/workflow scope", response)
+	}
+	if len(response.Tasks) != 1 || response.Tasks[0].WorkflowID != workflowID {
+		t.Fatalf("response tasks = %+v, want one workflow task", response.Tasks)
+	}
+	if err := <-handlerErr; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRemoteWorkflowStartRejectsInvalidResponse(t *testing.T) {
 	handlerErr := make(chan error, 1)
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {

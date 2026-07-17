@@ -5018,6 +5018,50 @@ func (q *Queries) ListProjectWorkflowLinks(ctx context.Context, projectID string
 	return items, nil
 }
 
+const listProjectWorkflowLinksForTaskSelection = `-- name: ListProjectWorkflowLinksForTaskSelection :many
+SELECT
+    id,
+    project_id,
+    workflow_id,
+    is_default,
+    created_at_unix_ms,
+    updated_at_unix_ms
+FROM project_workflow_link_records
+WHERE project_id = ?1
+ORDER BY created_at_unix_ms ASC, id ASC
+LIMIT 2
+`
+
+func (q *Queries) ListProjectWorkflowLinksForTaskSelection(ctx context.Context, projectID string) ([]ProjectWorkflowLinkRecord, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectWorkflowLinksForTaskSelection, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProjectWorkflowLinkRecord
+	for rows.Next() {
+		var i ProjectWorkflowLinkRecord
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.WorkflowID,
+			&i.IsDefault,
+			&i.CreatedAtUnixMs,
+			&i.UpdatedAtUnixMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjectWorkflowTaskActivity = `-- name: ListProjectWorkflowTaskActivity :many
 SELECT
     workflow_id,
@@ -7330,52 +7374,63 @@ func (q *Queries) ListWorkflowQuestionAttentionItems(ctx context.Context, arg Li
 }
 
 const listWorkflowRecordsPage = `-- name: ListWorkflowRecordsPage :many
-WITH workflow_list(
-    id,
-    name,
-    description,
-    version,
-    execution_target_policy,
-    execution_target_custom_ref,
-    created_at_unix_ms,
-    updated_at_unix_ms,
-    activity_at_unix_ms
-) AS (
-    SELECT
-        workflows.id,
-        workflows.name,
-        workflows.description,
-        workflows.version,
-        workflows.execution_target_policy,
-        workflows.execution_target_custom_ref,
-        workflows.created_at_unix_ms,
-        workflows.updated_at_unix_ms,
-        CAST(MAX(
-            workflows.updated_at_unix_ms,
-            COALESCE((
+SELECT
+    workflows.id,
+    workflows.name,
+    workflows.description,
+    workflows.version,
+    workflows.execution_target_policy,
+    workflows.execution_target_custom_ref,
+    workflows.created_at_unix_ms,
+    workflows.updated_at_unix_ms,
+    CAST(
+        CASE
+            WHEN ?1 IS NULL THEN MAX(
+                workflows.updated_at_unix_ms,
+                COALESCE((
+                    SELECT MAX(task_records.updated_at_unix_ms)
+                    FROM task_records
+                    WHERE task_records.workflow_id = workflows.id
+                ), 0)
+            )
+            ELSE COALESCE((
                 SELECT MAX(task_records.updated_at_unix_ms)
                 FROM task_records
                 WHERE task_records.workflow_id = workflows.id
+                  AND task_records.project_id = ?1
             ), 0)
-        ) AS INTEGER) AS activity_at_unix_ms
-    FROM workflows
-    WHERE (?2 = '' OR workflows.name = ?2)
-      AND (
-          ?3 = ''
-          OR lower(workflows.name) LIKE '%' || lower(?3) || '%'
-          OR lower(workflows.description) LIKE '%' || lower(?3) || '%'
+        END
+    AS INTEGER) AS activity_at_unix_ms,
+    CASE
+        WHEN ?1 IS NULL THEN NULL
+        ELSE (
+            SELECT project_workflow_link_records.is_default
+            FROM project_workflow_link_records
+            WHERE project_workflow_link_records.project_id = ?1
+              AND project_workflow_link_records.workflow_id = workflows.id
+        )
+    END AS project_link_default
+FROM workflows
+WHERE (?2 IS NULL OR workflows.id = ?2)
+  AND (
+      ?3 = ''
+      OR lower(workflows.name) LIKE '%' || lower(?3) || '%'
+      OR lower(workflows.description) LIKE '%' || lower(?3) || '%'
+  )
+  AND (
+      ?1 IS NULL
+      OR EXISTS (
+          SELECT 1
+          FROM project_workflow_link_records
+          WHERE project_workflow_link_records.project_id = ?1
+            AND project_workflow_link_records.workflow_id = workflows.id
       )
-      AND (
-          ?4 = 0
-          OR MAX(
-              workflows.updated_at_unix_ms,
-              COALESCE((
-                  SELECT MAX(task_records.updated_at_unix_ms)
-                  FROM task_records
-                  WHERE task_records.workflow_id = workflows.id
-              ), 0)
-          ) < ?5
-          OR (
+  )
+  AND (
+      ?4 = 0
+      OR (
+          ?1 IS NULL
+          AND (
               MAX(
                   workflows.updated_at_unix_ms,
                   COALESCE((
@@ -7383,33 +7438,96 @@ WITH workflow_list(
                       FROM task_records
                       WHERE task_records.workflow_id = workflows.id
                   ), 0)
-              ) = ?5
-              AND workflows.id < ?6
+              ) < ?5
+              OR (
+                  MAX(
+                      workflows.updated_at_unix_ms,
+                      COALESCE((
+                          SELECT MAX(task_records.updated_at_unix_ms)
+                          FROM task_records
+                          WHERE task_records.workflow_id = workflows.id
+                      ), 0)
+                  ) = ?5
+                  AND workflows.id < ?6
+              )
           )
       )
-)
-SELECT
-    id,
-    name,
-    description,
-    version,
-    execution_target_policy,
-    execution_target_custom_ref,
-    created_at_unix_ms,
-    updated_at_unix_ms,
-    activity_at_unix_ms
-FROM workflow_list
-ORDER BY activity_at_unix_ms DESC, id DESC
-LIMIT ?1
+      OR (
+          ?1 IS NOT NULL
+          AND (
+              COALESCE((
+                  SELECT project_workflow_link_records.is_default
+                  FROM project_workflow_link_records
+                  WHERE project_workflow_link_records.project_id = ?1
+                    AND project_workflow_link_records.workflow_id = workflows.id
+              ), 0) < ?7
+              OR (
+                  COALESCE((
+                      SELECT project_workflow_link_records.is_default
+                      FROM project_workflow_link_records
+                      WHERE project_workflow_link_records.project_id = ?1
+                        AND project_workflow_link_records.workflow_id = workflows.id
+                  ), 0) = ?7
+                  AND COALESCE((
+                      SELECT MAX(task_records.updated_at_unix_ms)
+                      FROM task_records
+                      WHERE task_records.workflow_id = workflows.id
+                        AND task_records.project_id = ?1
+                  ), 0) < ?5
+              )
+              OR (
+                  COALESCE((
+                      SELECT project_workflow_link_records.is_default
+                      FROM project_workflow_link_records
+                      WHERE project_workflow_link_records.project_id = ?1
+                        AND project_workflow_link_records.workflow_id = workflows.id
+                  ), 0) = ?7
+                  AND COALESCE((
+                      SELECT MAX(task_records.updated_at_unix_ms)
+                      FROM task_records
+                      WHERE task_records.workflow_id = workflows.id
+                        AND task_records.project_id = ?1
+                  ), 0) = ?5
+                  AND lower(workflows.name) > ?8
+              )
+              OR (
+                  COALESCE((
+                      SELECT project_workflow_link_records.is_default
+                      FROM project_workflow_link_records
+                      WHERE project_workflow_link_records.project_id = ?1
+                        AND project_workflow_link_records.workflow_id = workflows.id
+                  ), 0) = ?7
+                  AND COALESCE((
+                      SELECT MAX(task_records.updated_at_unix_ms)
+                      FROM task_records
+                      WHERE task_records.workflow_id = workflows.id
+                        AND task_records.project_id = ?1
+                  ), 0) = ?5
+                  AND lower(workflows.name) = ?8
+                  AND workflows.id > ?6
+              )
+          )
+      )
+  )
+ORDER BY
+    project_link_default DESC,
+    activity_at_unix_ms DESC,
+    CASE WHEN project_link_default IS NOT NULL THEN lower(workflows.name) END ASC,
+    CASE WHEN project_link_default IS NULL THEN workflows.id END DESC,
+    CASE WHEN project_link_default IS NOT NULL THEN workflows.id END ASC
+LIMIT ?9
 `
 
 type ListWorkflowRecordsPageParams struct {
-	PageLimit              int64
-	ExactName              interface{}
+	ProjectID              interface{}
+	WorkflowID             interface{}
 	SearchQuery            interface{}
 	CursorActive           interface{}
 	CursorActivityAtUnixMs int64
 	CursorWorkflowID       string
+	CursorProjectDefault   sql.NullInt64
+	CursorProjectName      sql.NullString
+	PageLimit              int64
 }
 
 type ListWorkflowRecordsPageRow struct {
@@ -7422,16 +7540,20 @@ type ListWorkflowRecordsPageRow struct {
 	CreatedAtUnixMs          int64
 	UpdatedAtUnixMs          int64
 	ActivityAtUnixMs         int64
+	ProjectLinkDefault       interface{}
 }
 
 func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowRecordsPageParams) ([]ListWorkflowRecordsPageRow, error) {
 	rows, err := q.db.QueryContext(ctx, listWorkflowRecordsPage,
-		arg.PageLimit,
-		arg.ExactName,
+		arg.ProjectID,
+		arg.WorkflowID,
 		arg.SearchQuery,
 		arg.CursorActive,
 		arg.CursorActivityAtUnixMs,
 		arg.CursorWorkflowID,
+		arg.CursorProjectDefault,
+		arg.CursorProjectName,
+		arg.PageLimit,
 	)
 	if err != nil {
 		return nil, err
@@ -7450,6 +7572,7 @@ func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowR
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.ActivityAtUnixMs,
+			&i.ProjectLinkDefault,
 		); err != nil {
 			return nil, err
 		}
@@ -7709,13 +7832,15 @@ visible_columns AS (
 ),
 current_positions AS (
     SELECT p.task_id, p.node_id
-    FROM task_node_placements p
-    JOIN task_records t ON t.id = p.task_id
+    FROM args
+    CROSS JOIN project_workflow_links task_link
+    CROSS JOIN tasks t INDEXED BY tasks_project_workflow_link_idx
+    JOIN task_node_placements p ON p.task_id = t.id
     JOIN workflow_nodes n ON n.id = p.node_id
-    CROSS JOIN args
-    WHERE p.state IN ('active', 'waiting_approval')
-      AND t.project_id = args.project_id
-      AND t.workflow_id = args.workflow_id
+    WHERE task_link.project_id = args.project_id
+      AND (args.workflow_id IS NULL OR task_link.workflow_id = args.workflow_id)
+      AND t.project_workflow_link_id = task_link.id
+      AND p.state IN ('active', 'waiting_approval')
       AND (
           t.canceled_at_unix_ms IS NULL
           OR n.kind = 'terminal'
@@ -7724,25 +7849,29 @@ current_positions AS (
     UNION
 
     SELECT tt.task_id, tt.source_node_id
-    FROM task_transition_records tt
-    JOIN task_records t ON t.id = tt.task_id
-    CROSS JOIN args
-    WHERE tt.state = 'pending_approval'
+    FROM args
+    CROSS JOIN project_workflow_links task_link
+    CROSS JOIN tasks t INDEXED BY tasks_project_workflow_link_idx
+    JOIN task_transition_records tt ON tt.task_id = t.id
+    WHERE task_link.project_id = args.project_id
+      AND (args.workflow_id IS NULL OR task_link.workflow_id = args.workflow_id)
+      AND t.project_workflow_link_id = task_link.id
+      AND tt.state = 'pending_approval'
       AND tt.source_node_id IS NOT NULL
       AND trim(tt.source_node_id) != ''
-      AND t.project_id = args.project_id
-      AND t.workflow_id = args.workflow_id
       AND t.canceled_at_unix_ms IS NULL
 
     UNION
 
     SELECT t.id, args.canceled_terminal_node_id AS node_id
-    FROM task_records t
-    CROSS JOIN args
-    WHERE t.project_id = args.project_id
-      AND t.workflow_id = args.workflow_id
+    FROM args
+    CROSS JOIN project_workflow_links task_link
+    CROSS JOIN tasks t INDEXED BY tasks_project_workflow_link_idx
+    WHERE task_link.project_id = args.project_id
+      AND (args.workflow_id IS NULL OR task_link.workflow_id = args.workflow_id)
+      AND t.project_workflow_link_id = task_link.id
       AND t.canceled_at_unix_ms IS NOT NULL
-      AND trim(args.canceled_terminal_node_id) != ''
+      AND args.canceled_terminal_node_id IS NOT NULL
       AND NOT EXISTS (
           SELECT 1
           FROM task_node_placements p
@@ -7771,19 +7900,22 @@ column_facts AS (
 ),
 run_counts AS (
     SELECT r.task_id, CAST(COUNT(*) AS INTEGER) AS run_count
-    FROM task_run_records r
-    JOIN task_records t ON t.id = r.task_id
-    CROSS JOIN args
-    WHERE t.project_id = args.project_id
-      AND t.workflow_id = args.workflow_id
+    FROM args
+    CROSS JOIN project_workflow_links task_link
+    CROSS JOIN tasks t INDEXED BY tasks_project_workflow_link_idx
+    JOIN task_run_records r ON r.task_id = t.id
+    WHERE task_link.project_id = args.project_id
+      AND (args.workflow_id IS NULL OR task_link.workflow_id = args.workflow_id)
+      AND t.project_workflow_link_id = task_link.id
     GROUP BY r.task_id
 ),
 selected_rows AS (
     SELECT
         t.id,
-        t.project_id,
+        pwl.project_id,
         t.project_workflow_link_id,
-        t.workflow_id,
+        pwl.workflow_id,
+        w.name AS workflow_name,
         t.workflow_revision_seen,
         t.task_seq,
         t.short_id,
@@ -7802,7 +7934,7 @@ selected_rows AS (
         t.created_at_unix_ms,
         t.updated_at_unix_ms,
         t.metadata_json,
-        CAST(column_facts.column_rank AS INTEGER) AS column_rank,
+        column_facts.column_rank,
         column_facts.column_keys_json,
         status.kind,
         CAST(status.primary_status_rank AS INTEGER) AS primary_status_rank,
@@ -7856,13 +7988,18 @@ selected_rows AS (
             WHEN 'title' THEN LOWER(t.title)
             ELSE ''
         END AS sort_5_value
-    FROM task_records t
-    CROSS JOIN args
+    FROM args
+    CROSS JOIN project_workflow_links pwl
+    CROSS JOIN tasks t INDEXED BY tasks_project_workflow_link_idx
+    JOIN workflows w ON w.id = pwl.workflow_id
     JOIN workflow_task_status_records status ON status.task_id = t.id
-    JOIN column_facts ON column_facts.task_id = t.id
+    LEFT JOIN column_facts
+        ON args.workflow_id IS NOT NULL
+       AND column_facts.task_id = t.id
     LEFT JOIN run_counts ON run_counts.task_id = t.id
-    WHERE t.project_id = args.project_id
-      AND t.workflow_id = args.workflow_id
+    WHERE pwl.project_id = args.project_id
+      AND (args.workflow_id IS NULL OR pwl.workflow_id = args.workflow_id)
+      AND t.project_workflow_link_id = pwl.id
       AND (
           args.column_filter_set = 0
           OR EXISTS (
@@ -7883,6 +8020,12 @@ selected_rows AS (
               JOIN json_each(status.attention_types_json) task_attention ON task_attention.value = filter_attention.value
           )
       )
+),
+matching_workflows AS (
+    SELECT workflow_id
+    FROM selected_rows
+    GROUP BY workflow_id
+    LIMIT 2
 ),
 cursor_values AS (
     SELECT
@@ -7938,6 +8081,7 @@ SELECT
     rows.project_id,
     rows.project_workflow_link_id,
     rows.workflow_id,
+    rows.workflow_name,
     rows.workflow_revision_seen,
     rows.task_seq,
     rows.short_id,
@@ -7964,7 +8108,8 @@ SELECT
     rows.run_ids_json,
     rows.attention_types_json,
     rows.run_count,
-    rows.title_sort
+    rows.title_sort,
+    CAST((SELECT COUNT(*) FROM matching_workflows) AS INTEGER) AS matching_workflow_count
 FROM selected_rows rows
 CROSS JOIN args
 CROSS JOIN cursor_values cursor
@@ -7994,11 +8139,11 @@ LIMIT (SELECT limit_rows FROM args)
 
 type ListWorkflowTaskListRowsParams struct {
 	ProjectID               string
-	WorkflowID              string
-	CanceledTerminalNodeID  string
-	VisibleColumnsJson      string
+	WorkflowID              sql.NullString
+	CanceledTerminalNodeID  sql.NullString
+	VisibleColumnsJson      sql.NullString
 	ColumnFilterSet         int64
-	ColumnKeysJson          string
+	ColumnKeysJson          sql.NullString
 	StatusFilterSet         int64
 	StatusKindsJson         string
 	AttentionFilterSet      int64
@@ -8007,7 +8152,7 @@ type ListWorkflowTaskListRowsParams struct {
 	CursorCreatedAtUnixMs   int64
 	CursorUpdatedAtUnixMs   int64
 	CursorPrimaryStatusRank int64
-	CursorColumnRank        int64
+	CursorColumnRank        sql.NullInt64
 	CursorRunCount          int64
 	CursorTitleSort         string
 	CursorTaskID            string
@@ -8029,6 +8174,7 @@ type ListWorkflowTaskListRowsRow struct {
 	ProjectID                   string
 	ProjectWorkflowLinkID       string
 	WorkflowID                  string
+	WorkflowName                string
 	WorkflowRevisionSeen        int64
 	TaskSeq                     int64
 	ShortID                     string
@@ -8047,8 +8193,8 @@ type ListWorkflowTaskListRowsRow struct {
 	CreatedAtUnixMs             int64
 	UpdatedAtUnixMs             int64
 	MetadataJson                string
-	ColumnRank                  int64
-	ColumnKeysJson              string
+	ColumnRank                  sql.NullInt64
+	ColumnKeysJson              sql.NullString
 	Kind                        string
 	PrimaryStatusRank           int64
 	NodeIdsJson                 string
@@ -8056,6 +8202,7 @@ type ListWorkflowTaskListRowsRow struct {
 	AttentionTypesJson          string
 	RunCount                    int64
 	TitleSort                   string
+	MatchingWorkflowCount       int64
 }
 
 func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflowTaskListRowsParams) ([]ListWorkflowTaskListRowsRow, error) {
@@ -8102,6 +8249,7 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 			&i.ProjectID,
 			&i.ProjectWorkflowLinkID,
 			&i.WorkflowID,
+			&i.WorkflowName,
 			&i.WorkflowRevisionSeen,
 			&i.TaskSeq,
 			&i.ShortID,
@@ -8129,6 +8277,7 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 			&i.AttentionTypesJson,
 			&i.RunCount,
 			&i.TitleSort,
+			&i.MatchingWorkflowCount,
 		); err != nil {
 			return nil, err
 		}

@@ -147,11 +147,14 @@ func TestServiceListWorkflowTasksValidatesAndDelegates(t *testing.T) {
 	if _, err := service.ListWorkflowTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &blankProjectID}); !isWorkflowServiceRequestFieldError(err, "project_id") {
 		t.Fatalf("blank project error = %#v, want project_id validation", err)
 	}
-	resp, err := service.ListWorkflowTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &binding.ProjectID})
+	resp, err := service.ListWorkflowTasks(ctx, serverapi.WorkflowTaskListRequest{
+		ProjectID:  &binding.ProjectID,
+		WorkflowID: &workflowID,
+	})
 	if err != nil {
 		t.Fatalf("ListWorkflowTasks: %v", err)
 	}
-	if resp.WorkflowID != workflowID || len(resp.Tasks) != 1 || resp.Tasks[0].TaskID != task.Task.ID {
+	if resp.Scope.WorkflowID == nil || *resp.Scope.WorkflowID != workflowID || len(resp.Tasks) != 1 || resp.Tasks[0].TaskID != task.Task.ID {
 		t.Fatalf("task list response = %+v, want workflow %s task %s", resp, workflowID, task.Task.ID)
 	}
 }
@@ -638,13 +641,94 @@ func TestServiceAllowsInvalidDefaultBacklogButRejectsUnlinkedWorkflow(t *testing
 	if err != nil {
 		t.Fatalf("CreateWorkflow unlinked: %v", err)
 	}
-	if _, err := service.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{ProjectID: binding.ProjectID, WorkflowID: unlinked.Workflow.ID, Title: "Task", Body: "Body"}); err == nil {
+	unlinkedWorkflowID := unlinked.Workflow.ID
+	if _, err := service.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{ProjectID: binding.ProjectID, WorkflowID: &unlinkedWorkflowID, Title: "Task", Body: "Body"}); err == nil {
 		t.Fatalf("expected unlinked workflow task create to fail")
 	}
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, unlinked.Workflow.ID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
 	if _, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskID: task.Task.ID}); !errors.Is(err, workflowstore.ErrWorkflowValidationFailed) {
 		t.Fatalf("expected invalid default workflow start error, got %v", err)
+	}
+}
+
+func TestServiceTaskCreateMapsNoLinkedWorkflowsSelectionError(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+
+	_, err := service.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "No workflow",
+	})
+	var selectionErr *serverapi.WorkflowTaskCreateSelectionError
+	if !errors.As(err, &selectionErr) {
+		t.Fatalf("CreateWorkflowTask error = %v, want WorkflowTaskCreateSelectionError", err)
+	}
+	if selectionErr.Reason != serverapi.WorkflowTaskCreateSelectionReasonNoLinkedWorkflows ||
+		selectionErr.ProjectID != binding.ProjectID ||
+		selectionErr.WorkflowID != nil {
+		t.Fatalf("selection error = %+v", selectionErr)
+	}
+}
+
+func TestServiceTaskCreateMapsExplicitWorkflowNotLinkedSelectionError(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+
+	_, err := service.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: &workflowID,
+		Title:      "Unlinked workflow",
+	})
+	var selectionErr *serverapi.WorkflowTaskCreateSelectionError
+	if !errors.As(err, &selectionErr) {
+		t.Fatalf("CreateWorkflowTask error = %v, want WorkflowTaskCreateSelectionError", err)
+	}
+	if selectionErr.Reason != serverapi.WorkflowTaskCreateSelectionReasonWorkflowNotLinked ||
+		selectionErr.ProjectID != binding.ProjectID ||
+		selectionErr.WorkflowID == nil ||
+		*selectionErr.WorkflowID != workflowID {
+		t.Fatalf("selection error = %+v", selectionErr)
+	}
+}
+
+func TestServiceTaskCreateMapsAmbiguousWorkflowSelectionError(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	firstWorkflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	secondWorkflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkWorkflowServiceProject(t, ctx, service, serverapi.WorkflowLinkProjectRequest{
+		ProjectID:     binding.ProjectID,
+		WorkflowID:    firstWorkflowID,
+		DefaultPolicy: serverapi.WorkflowProjectLinkDefaultNever,
+	})
+	linkWorkflowServiceProject(t, ctx, service, serverapi.WorkflowLinkProjectRequest{
+		ProjectID:     binding.ProjectID,
+		WorkflowID:    secondWorkflowID,
+		DefaultPolicy: serverapi.WorkflowProjectLinkDefaultNever,
+	})
+
+	_, err := service.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Ambiguous workflow",
+	})
+	var selectionErr *serverapi.WorkflowTaskCreateSelectionError
+	if !errors.As(err, &selectionErr) {
+		t.Fatalf("CreateWorkflowTask error = %v, want WorkflowTaskCreateSelectionError", err)
+	}
+	if selectionErr.Reason != serverapi.WorkflowTaskCreateSelectionReasonAmbiguousWithoutDefault ||
+		selectionErr.ProjectID != binding.ProjectID ||
+		selectionErr.WorkflowID != nil {
+		t.Fatalf("selection error = %+v", selectionErr)
+	}
+}
+
+func TestServiceTaskCreateMapsRetryableStoreConflict(t *testing.T) {
+	err := workflowTaskCreateError(workflowstore.TaskCreateConflictError{
+		Reason: workflowstore.TaskCreateConflictSerialization,
+		Cause:  errors.New("database locked"),
+	})
+	var conflictErr *serverapi.WorkflowTaskCreateConflictError
+	if !errors.As(err, &conflictErr) || conflictErr.Reason != serverapi.WorkflowTaskCreateConflictReasonSerialization {
+		t.Fatalf("workflowTaskCreateError = %T %v, want typed serialization conflict", err, err)
 	}
 }
 
@@ -1661,6 +1745,25 @@ func TestServiceWorkflowListPaginatesAndCreateLinkIsAtomic(t *testing.T) {
 	}
 	if created.Workflow.ID == "" || created.Link.WorkflowID != created.Workflow.ID || !created.Link.Default {
 		t.Fatalf("created = %+v, want first default link", created)
+	}
+	projectID := binding.ProjectID
+	projectPage, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{ProjectID: &projectID, PageSize: 10})
+	if err != nil {
+		t.Fatalf("project ListWorkflows: %v", err)
+	}
+	if projectPage.ProjectID == nil || *projectPage.ProjectID != projectID || len(projectPage.Workflows) != 1 {
+		t.Fatalf("project page = %+v, want one project-scoped workflow", projectPage)
+	}
+	if projectPage.Workflows[0].ProjectLink == nil || !projectPage.Workflows[0].ProjectLink.Default {
+		t.Fatalf("project workflow = %+v, want default project metadata", projectPage.Workflows[0])
+	}
+	exactWorkflowID := created.Workflow.ID
+	exactPage, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{WorkflowID: &exactWorkflowID, PageSize: 10})
+	if err != nil {
+		t.Fatalf("exact ListWorkflows: %v", err)
+	}
+	if len(exactPage.Workflows) != 1 || exactPage.Workflows[0].ID != exactWorkflowID {
+		t.Fatalf("exact page = %+v, want selected workflow", exactPage)
 	}
 	if _, err := service.CreateAndLinkWorkflowToProject(ctx, serverapi.WorkflowCreateAndLinkProjectRequest{
 		Name:          "Broken",

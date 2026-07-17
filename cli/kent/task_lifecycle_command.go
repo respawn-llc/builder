@@ -23,7 +23,7 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	title := fs.String("title", "", "task title")
 	body := fs.String("body", "", "task body")
 	bodyFile := fs.String("body-file", "", "read the task body from this file")
-	workflowRef := fs.String("workflow", "", "workflow ID or exact name; defaults to the project's default workflow")
+	workflowRef := fs.String("workflow", "", "workflow UUID; defaults to the project's default workflow")
 	projectRef := fs.String("project", ".", "project ID or attached workspace path")
 	sourceURL := fs.String("source-url", "", "URL of the issue or document that originated the task")
 	sourceWorkspace := fs.String("source-workspace", "", "workspace ID or path used as the task's source checkout")
@@ -40,49 +40,107 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, *projectRef)
+	var selectedWorkflow *workflowSelector
+	if flagWasProvided(fs, "workflow") {
+		selector, parseErr := parseWorkflowSelector(*workflowRef)
+		if parseErr != nil {
+			fmt.Fprintln(stderr, parseErr)
+			return 2
+		}
+		selectedWorkflow = &selector
+	}
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
+		return 1
+	}
+	defer closeRemote()
+	projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, *projectRef)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	var workflowID *string
+	if selectedWorkflow != nil {
+		value := selectedWorkflow.PersistedID()
+		workflowID = &value
+	}
+	sourceWorkspaceID := ""
+	if strings.TrimSpace(*sourceWorkspace) != "" {
+		sourceWorkspaceID, err = resolveWorkflowSourceWorkspaceID(context.Background(), cfg, remote, *sourceWorkspace)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		workflowID := ""
-		if strings.TrimSpace(*workflowRef) != "" {
-			workflowID, err = resolveWorkflowID(context.Background(), remote, *workflowRef)
-			if err != nil {
-				fmt.Fprintln(stderr, err)
-				return 1
-			}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
+	defer cancel()
+	resp, err := remote.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{ProjectID: projectID, WorkflowID: workflowID, Title: *title, Body: taskBody, SourceURL: *sourceURL, SourceWorkspaceID: sourceWorkspaceID})
+	if err != nil {
+		var selectedWorkflowID *string
+		if selectedWorkflow != nil {
+			value := selectedWorkflow.String()
+			selectedWorkflowID = &value
 		}
-		sourceWorkspaceID := ""
-		if strings.TrimSpace(*sourceWorkspace) != "" {
-			sourceWorkspaceID, err = resolveWorkflowSourceWorkspaceID(context.Background(), cfg, remote, *sourceWorkspace)
-			if err != nil {
-				fmt.Fprintln(stderr, err)
-				return 1
-			}
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-		defer cancel()
-		resp, err := remote.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{ProjectID: projectID, WorkflowID: workflowID, Title: *title, Body: taskBody, SourceURL: *sourceURL, SourceWorkspaceID: sourceWorkspaceID})
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		task, err := getWorkflowTaskByID(context.Background(), remote, resp.Task.ID)
-		if err != nil {
-			fmt.Fprintf(stderr, "created task %s but failed to load task detail for output: %v\n", resp.Task.ID, err)
-			return 1
-		}
-		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, taskShowOutputFromDetail(task))
-		}
-		if err := writeTaskDetail(stdout, task); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		return 0
-	})
+		writeTaskCreateError(stderr, err, taskCreateCommandContext{
+			ProjectRef:         *projectRef,
+			ResolvedProjectID:  projectID,
+			SelectedWorkflowID: selectedWorkflowID,
+			Title:              *title,
+			Body:               *body,
+			BodyFile:           *bodyFile,
+			SourceURL:          *sourceURL,
+			SourceWorkspace:    *sourceWorkspace,
+			JSON:               *jsonOut,
+		})
+		return 1
+	}
+	task, err := getWorkflowTaskByID(context.Background(), remote, resp.Task.ID)
+	if err != nil {
+		fmt.Fprintf(stderr, "created task %s but failed to load task detail for output: %v\n", resp.Task.ID, err)
+		return 1
+	}
+	task, err = workflowTaskDetailForCLI(task)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if *jsonOut {
+		return writeCommandJSON(stdout, stderr, taskShowOutputFromDetail(task))
+	}
+	if err := writeTaskDetail(stdout, task); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
+}
+
+func writeTaskCreateError(stderr io.Writer, err error, commandContext taskCreateCommandContext) {
+	var selectionErr *serverapi.WorkflowTaskCreateSelectionError
+	if !errors.As(err, &selectionErr) {
+		fmt.Fprintln(stderr, err)
+		return
+	}
+	recovery, projectionErr := taskCreateRecoveryForSelectionError(selectionErr, commandContext)
+	if projectionErr != nil {
+		fmt.Fprintln(stderr, projectionErr)
+		return
+	}
+	switch recovery.Kind {
+	case taskWorkflowRecoveryNoLinkedWorkflows:
+		fmt.Fprintln(stderr, "This project doesn't have any linked workflows yet. First, create a workflow or link an existing one, then retry.")
+	case taskWorkflowRecoveryWorkflowNotLinked:
+		fmt.Fprintln(stderr, "The selected workflow isn't linked to this project.")
+	case taskWorkflowRecoveryAmbiguousWithoutDefault:
+		fmt.Fprintf(
+			stderr,
+			"Tasks need both a project and a workflow binding, but your input leaves workflow choice ambiguous. Run `%s`, then retry with `--workflow <uuid>` or set a default with `%s`.\n",
+			commandString(recovery.Commands[0].Args),
+			commandString(recovery.Commands[2].Args),
+		)
+	}
+	for _, command := range recovery.Commands {
+		fmt.Fprintf(stderr, "  %s\n", commandString(command.Args))
+	}
 }
 
 func taskEditSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -114,46 +172,55 @@ func taskEditSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "--body cannot be combined with --body-file")
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
+		return 1
+	}
+	defer closeRemote()
+	taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	// Send title only when provided; omitting it leaves the persisted title unchanged.
+	req := serverapi.WorkflowTaskUpdateRequest{TaskID: taskID}
+	if titleProvided {
+		req.Title = title
+	}
+	if bodyProvided || bodyFileProvided {
+		newBody, err := readTaskEditBody(*body, *bodyFile, bodyFileProvided)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		req.Body = &newBody
+	}
+	if workspaceProvided {
+		workspaceID, err := resolveWorkflowSourceWorkspaceID(context.Background(), cfg, remote, *sourceWorkspace)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		// Send title only when provided; omitting it leaves the persisted title unchanged.
-		req := serverapi.WorkflowTaskUpdateRequest{TaskID: taskID}
-		if titleProvided {
-			req.Title = title
-		}
-		if bodyProvided || bodyFileProvided {
-			newBody, err := readTaskEditBody(*body, *bodyFile, bodyFileProvided)
-			if err != nil {
-				fmt.Fprintln(stderr, err)
-				return 2
-			}
-			req.Body = &newBody
-		}
-		if workspaceProvided {
-			workspaceID, err := resolveWorkflowSourceWorkspaceID(context.Background(), cfg, remote, *sourceWorkspace)
-			if err != nil {
-				fmt.Fprintln(stderr, err)
-				return 1
-			}
-			req.SourceWorkspaceID = workspaceID
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-		defer cancel()
-		resp, err := remote.UpdateWorkflowTask(ctx, req)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
+		req.SourceWorkspaceID = workspaceID
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
+	defer cancel()
+	resp, err := remote.UpdateWorkflowTask(ctx, req)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if *jsonOut {
+		projected, projectionErr := workflowTaskSummaryForCLI(resp.Task)
+		if projectionErr != nil {
+			fmt.Fprintln(stderr, projectionErr)
 			return 1
 		}
-		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, resp)
-		}
-		fmt.Fprintf(stdout, "Edited task %s.\n", taskSummaryDisplayID(resp.Task))
-		return 0
-	})
+		resp.Task = projected
+		return writeCommandJSON(stdout, stderr, resp)
+	}
+	fmt.Fprintf(stdout, "Edited task %s.\n", taskSummaryDisplayID(resp.Task))
+	return 0
 }
 
 // readTaskEditBody reads the replacement body for task edit. Unlike task create,
@@ -192,49 +259,57 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskStartResponse, error) {
-			return remote.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{SetupOperationID: setupOperationID, TaskID: taskID, ExecutionTarget: executionTarget})
-		})
-		if err != nil {
-			if !writeWorkflowExecutionTargetError(stderr, err) {
-				fmt.Fprintln(stderr, err)
-			}
-			return 1
-		}
-		if err := resp.Validate(); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired {
-			if *jsonOut {
-				_ = writeCommandJSON(stdout, stderr, resp)
-			} else {
-				writeWorkflowExecutionTargetSelectionRequired(stderr, resp.SelectionRequired)
-			}
-			return 1
-		}
-		applied, err := requireAppliedWorkflowAction(resp.Outcome, resp.Applied)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, resp)
-		}
-		detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, taskID, applied.RunID, taskStartSessionPollTimeout, taskStartSessionPollInterval)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		writeTaskStartResult(stdout, detail, *applied)
-		return 0
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
+		return 1
+	}
+	defer closeRemote()
+	taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskStartResponse, error) {
+		return remote.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{SetupOperationID: setupOperationID, TaskID: taskID, ExecutionTarget: executionTarget})
 	})
+	if err != nil {
+		if !writeWorkflowExecutionTargetError(stderr, err) {
+			fmt.Fprintln(stderr, err)
+		}
+		return 1
+	}
+	if err := resp.Validate(); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeSelectionRequired {
+		if *jsonOut {
+			_ = writeCommandJSON(stdout, stderr, resp)
+		} else {
+			writeWorkflowExecutionTargetSelectionRequired(stderr, resp.SelectionRequired)
+		}
+		return 1
+	}
+	applied, err := requireAppliedWorkflowAction(resp.Outcome, resp.Applied)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if *jsonOut {
+		return writeCommandJSON(stdout, stderr, resp)
+	}
+	detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, taskID, applied.RunID, taskStartSessionPollTimeout, taskStartSessionPollInterval)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	detail, err = workflowTaskDetailForCLI(detail)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	writeTaskStartResult(stdout, detail, *applied)
+	return 0
 }
 
 func writeWorkflowExecutionTargetSelectionRequired(stderr io.Writer, requirement *serverapi.WorkflowExecutionTargetSelectionRequirement) {
@@ -299,26 +374,29 @@ func taskCancelSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	if denyAgentHumanOnlyTaskAction(stderr) {
 		return 1
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-		defer cancel()
-		if err := remote.CancelWorkflowTask(ctx, serverapi.WorkflowTaskCancelRequest{TaskID: taskID, Reason: *reason}); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
-		if err != nil {
-			fmt.Fprintf(stderr, "canceled task %s but failed to load task detail for output: %v\n", taskID, err)
-			return 1
-		}
-		fmt.Fprintf(stdout, "Canceled task %s.\n", taskDisplayID(detail))
-		return 0
-	})
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
+		return 1
+	}
+	defer closeRemote()
+	taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
+	defer cancel()
+	if err := remote.CancelWorkflowTask(ctx, serverapi.WorkflowTaskCancelRequest{TaskID: taskID, Reason: *reason}); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
+	if err != nil {
+		fmt.Fprintf(stderr, "canceled task %s but failed to load task detail for output: %v\n", taskID, err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "Canceled task %s.\n", taskDisplayID(detail))
+	return 0
 }
 
 func taskDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -336,27 +414,30 @@ func taskDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	if denyAgentHumanOnlyTaskAction(stderr) {
 		return 1
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		// Load the task detail before deletion so we can report a stable display id;
-		// the task no longer exists once the delete RPC succeeds.
-		displayID := taskID
-		if detail, err := getWorkflowTaskByID(context.Background(), remote, taskID); err == nil {
-			displayID = taskDisplayID(detail)
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-		defer cancel()
-		if err := remote.DeleteWorkflowTask(ctx, serverapi.WorkflowTaskDeleteRequest{TaskID: taskID}); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		fmt.Fprintf(stdout, "Deleted task %s.\n", displayID)
-		return 0
-	})
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
+		return 1
+	}
+	defer closeRemote()
+	taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	// Load the task detail before deletion so we can report a stable display id;
+	// the task no longer exists once the delete RPC succeeds.
+	displayID := taskID
+	if detail, err := getWorkflowTaskByID(context.Background(), remote, taskID); err == nil {
+		displayID = taskDisplayID(detail)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
+	defer cancel()
+	if err := remote.DeleteWorkflowTask(ctx, serverapi.WorkflowTaskDeleteRequest{TaskID: taskID}); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "Deleted task %s.\n", displayID)
+	return 0
 }
 
 func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -374,27 +455,30 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	if denyAgentHumanOnlyTaskAction(stderr) {
 		return 1
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-		defer cancel()
-		resp, err := remote.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{TaskID: taskID})
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
-		if err != nil {
-			fmt.Fprintf(stderr, "resumed task %s but failed to load task detail for output: %v\n", taskID, err)
-			return 1
-		}
-		writeTaskResumeResult(stdout, detail, resp)
-		return 0
-	})
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
+		return 1
+	}
+	defer closeRemote()
+	taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
+	defer cancel()
+	resp, err := remote.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{TaskID: taskID})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
+	if err != nil {
+		fmt.Fprintf(stderr, "resumed task %s but failed to load task detail for output: %v\n", taskID, err)
+		return 1
+	}
+	writeTaskResumeResult(stdout, detail, resp)
+	return 0
 }
 
 func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -417,40 +501,43 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
-		resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskApproveResponse, error) {
-			return remote.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{SetupOperationID: setupOperationID, TransitionID: positionals[0], ExecutionTarget: executionTarget})
-		})
-		if err != nil {
-			if !writeWorkflowExecutionTargetError(stderr, err) {
-				fmt.Fprintln(stderr, err)
-			}
-			return 1
-		}
-		if err := resp.Validate(); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		if workflowActionRequiresExecutionTargetSelection(stderr, resp.Outcome, resp.SelectionRequired) {
-			return 1
-		}
-		applied, err := requireAppliedWorkflowAction(resp.Outcome, resp.Applied)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		if strings.TrimSpace(applied.TaskID) == "" {
-			fmt.Fprintf(stderr, "approved transition %s but response did not include task id for output\n", applied.TransitionID)
-			return 1
-		}
-		detail, err := getWorkflowTaskByID(context.Background(), remote, applied.TaskID)
-		if err != nil {
-			fmt.Fprintf(stderr, "approved transition %s but failed to load task detail for output: %v\n", applied.TransitionID, err)
-			return 1
-		}
-		writeTaskTransitionResult(stdout, "Approved transition of", detail, applied.TransitionID, applied.RunIDs)
-		return 0
+	_, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
+		return 1
+	}
+	defer closeRemote()
+	resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskApproveResponse, error) {
+		return remote.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{SetupOperationID: setupOperationID, TransitionID: positionals[0], ExecutionTarget: executionTarget})
 	})
+	if err != nil {
+		if !writeWorkflowExecutionTargetError(stderr, err) {
+			fmt.Fprintln(stderr, err)
+		}
+		return 1
+	}
+	if err := resp.Validate(); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if workflowActionRequiresExecutionTargetSelection(stderr, resp.Outcome, resp.SelectionRequired) {
+		return 1
+	}
+	applied, err := requireAppliedWorkflowAction(resp.Outcome, resp.Applied)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if strings.TrimSpace(applied.TaskID) == "" {
+		fmt.Fprintf(stderr, "approved transition %s but response did not include task id for output\n", applied.TransitionID)
+		return 1
+	}
+	detail, err := getWorkflowTaskByID(context.Background(), remote, applied.TaskID)
+	if err != nil {
+		fmt.Fprintf(stderr, "approved transition %s but failed to load task detail for output: %v\n", applied.TransitionID, err)
+		return 1
+	}
+	writeTaskTransitionResult(stdout, "Approved transition of", detail, applied.TransitionID, applied.RunIDs)
+	return 0
 }
 
 func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -477,41 +564,44 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskMoveResponse, error) {
-			return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{SetupOperationID: setupOperationID, TaskID: taskID, TargetNodeID: positionals[1], OutputValues: outputs.values, Commentary: *commentary, ExecutionTarget: executionTarget})
-		})
-		if err != nil {
-			if !writeWorkflowExecutionTargetError(stderr, err) {
-				fmt.Fprintln(stderr, err)
-			}
-			return 1
-		}
-		if err := resp.Validate(); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		if workflowActionRequiresExecutionTargetSelection(stderr, resp.Outcome, resp.SelectionRequired) {
-			return 1
-		}
-		applied, err := requireAppliedWorkflowAction(resp.Outcome, resp.Applied)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
-		if err != nil {
-			fmt.Fprintf(stderr, "moved task %s but failed to load task detail for output: %v\n", taskID, err)
-			return 1
-		}
-		writeTaskTransitionResult(stdout, "Moved task", detail, applied.TransitionID, applied.RunIDs)
-		return 0
+	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
+	if !opened {
+		return 1
+	}
+	defer closeRemote()
+	taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskMoveResponse, error) {
+		return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{SetupOperationID: setupOperationID, TaskID: taskID, TargetNodeID: positionals[1], OutputValues: outputs.values, Commentary: *commentary, ExecutionTarget: executionTarget})
 	})
+	if err != nil {
+		if !writeWorkflowExecutionTargetError(stderr, err) {
+			fmt.Fprintln(stderr, err)
+		}
+		return 1
+	}
+	if err := resp.Validate(); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if workflowActionRequiresExecutionTargetSelection(stderr, resp.Outcome, resp.SelectionRequired) {
+		return 1
+	}
+	applied, err := requireAppliedWorkflowAction(resp.Outcome, resp.Applied)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
+	if err != nil {
+		fmt.Fprintf(stderr, "moved task %s but failed to load task detail for output: %v\n", taskID, err)
+		return 1
+	}
+	writeTaskTransitionResult(stdout, "Moved task", detail, applied.TransitionID, applied.RunIDs)
+	return 0
 }
 
 func workflowActionRequiresExecutionTargetSelection(

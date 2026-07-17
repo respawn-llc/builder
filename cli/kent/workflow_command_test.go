@@ -34,11 +34,17 @@ type workflowCommandLoopbackRemote struct {
 	store                 *workflowstore.Store
 	closeErr              error
 	closeCalls            int
+	listRequests          []serverapi.WorkflowListRequest
 }
 
 func (r *workflowCommandLoopbackRemote) Close() error {
 	r.closeCalls++
 	return r.closeErr
+}
+
+func (r *workflowCommandLoopbackRemote) ListWorkflows(ctx context.Context, req serverapi.WorkflowListRequest) (serverapi.WorkflowListResponse, error) {
+	r.listRequests = append(r.listRequests, req)
+	return r.WorkflowService.ListWorkflows(ctx, req)
 }
 
 func (r *workflowCommandLoopbackRemote) SubscribeWorktreeSetup(ctx context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
@@ -106,6 +112,21 @@ func TestWorkflowCommandsExposeJSONAndPersistGraphState(t *testing.T) {
 	}
 }
 
+func TestWorkflowNodeAddRejectsSecondStart(t *testing.T) {
+	cfg, _, remote := newWorkflowCommandLoopback(t)
+	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+	defer restore()
+	workflowID := workflowCreateForTest(t, "Duplicate Start").ID
+
+	_, stderr, code := runWorkflowRootCommand(
+		"workflow", "node", "add", workflowID,
+		"--key", "second_start", "--kind", "start",
+	)
+	if code == 0 || strings.TrimSpace(stderr) == "" {
+		t.Fatalf("second Start exit=%d stderr_present=%t, want actionable command failure", code, strings.TrimSpace(stderr) != "")
+	}
+}
+
 func TestWorkflowJSONFlagPlacementCompatibility(t *testing.T) {
 	cfg, _, remote := newWorkflowCommandLoopback(t)
 	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
@@ -122,8 +143,12 @@ func TestWorkflowJSONFlagPlacementCompatibility(t *testing.T) {
 	if record.Name != "Trailing Flag Flow" {
 		t.Fatalf("workflow name = %q, want trailing flag name", record.Name)
 	}
+	selector, err := parseWorkflowSelector(record.ID)
+	if err != nil {
+		t.Fatalf("created workflow id %q: %v", record.ID, err)
+	}
 
-	nodeOut, _, code := runWorkflowRootCommand("workflow", "node", "add", "--json", record.ID, "--key", "implement", "--kind", "agent", "--agent", "workflow-test", "--prompt", "Do work")
+	nodeOut, _, code := runWorkflowRootCommand("workflow", "node", "add", "--json", selector.String(), "--key", "implement", "--kind", "agent", "--agent", "workflow-test", "--prompt", "Do work")
 	if code != 0 {
 		t.Fatalf("workflow node add leading --json exit=%d", code)
 	}
@@ -163,6 +188,10 @@ func TestWorkflowUpdateRoundTripsExecutionTargetPolicies(t *testing.T) {
 		}
 	}
 
+	human, _ := runWorkflowRootCommandOK(t, "workflow", "inspect", workflowID)
+	if !strings.Contains(human, "ask-on-first-execution") {
+		t.Fatalf("workflow inspect omitted execution target policy: %s", human)
+	}
 }
 
 func TestWorkflowEditCommandsPersistNodeAndEdgeMetadata(t *testing.T) {
@@ -308,9 +337,9 @@ func TestWorkflowNodeScriptPathAddUpdateAndInspect(t *testing.T) {
 	}
 
 	runWorkflowRootCommandOK(t, "workflow", "node", "update", workflowID, "script", "--json", "--script-path", "scripts/fixed")
-	node = workflowNodeByIDForTest(t, workflowInspectDefinitionForTest(t, workflowID), added.NodeID)
-	if node.ScriptPath == nil || *node.ScriptPath != "scripts/fixed" {
-		t.Fatalf("script path after update = %+v, want scripts/fixed", node.ScriptPath)
+	inspectOut, _ := runWorkflowRootCommandOK(t, "workflow", "inspect", workflowID)
+	if !strings.Contains(inspectOut, "- script (script): Renamed Script  [script: scripts/fixed]") {
+		t.Fatalf("workflow inspect output = %q, want script path node line", inspectOut)
 	}
 }
 
@@ -320,7 +349,7 @@ func TestWorkflowNodeUpdatePreservesCanonicalWiringFields(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
 	defer restore()
 
-	_, stderr, code := runWorkflowRootCommand("workflow", "node", "update", "workflow-1", "join", "--json", "--display-name", "Updated Join")
+	_, stderr, code := runWorkflowRootCommand("workflow", "node", "update", workflowSelectorTestUUID, "join", "--json", "--display-name", "Updated Join")
 	if code != 0 {
 		t.Fatalf("workflow node update exit=%d stderr=%q", code, stderr)
 	}
@@ -380,7 +409,7 @@ func TestWorkflowEdgeUpdateRollsBackTransitionGroupWhenEdgeUpdateFails(t *testin
 	if _, _, code := runWorkflowRootCommand("workflow", "edge", "update", workflowID, edgeID, "--transition", "changed"); code == 0 {
 		t.Fatal("workflow edge update succeeded despite injected edge update failure")
 	}
-	def, _, err := loopback.store.GetDefinition(context.Background(), workflow.WorkflowID(workflowID))
+	def, _, err := loopback.store.GetDefinition(context.Background(), workflow.WorkflowID(workflowPersistedIDForTest(t, workflowID)))
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
@@ -409,7 +438,7 @@ func TestTaskCommandsExposeJSONAndPersistState(t *testing.T) {
 	if err := json.Unmarshal([]byte(createOut), &created); err != nil {
 		t.Fatalf("task create --json = %q, want JSON: %v", createOut, err)
 	}
-	if created.Summary.ID == "" || created.Summary.ShortID == "" || created.Body != "Body" || created.Workflow.WorkflowID != workflowID {
+	if created.Summary.ID == "" || created.Summary.ShortID == "" || created.Body != "Body" || created.Workflow.WorkflowID != workflowID || created.Summary.WorkflowID != workflowID {
 		t.Fatalf("task create --json = %+v, want created task detail", created)
 	}
 
@@ -436,7 +465,12 @@ func TestTaskCommandsExposeJSONAndPersistState(t *testing.T) {
 	if err := json.Unmarshal([]byte(showOut), &shown); err != nil {
 		t.Fatalf("task show --json = %q, want JSON: %v", showOut, err)
 	}
-	if shown.Summary.ID != created.Summary.ID || shown.Summary.Title != "Updated" || shown.Body != "Updated body" || shown.Summary.SourceWorkspaceID != binding.WorkspaceID {
+	if shown.Summary.ID != created.Summary.ID ||
+		shown.Summary.Title != "Updated" ||
+		shown.Body != "Updated body" ||
+		shown.Summary.SourceWorkspaceID != binding.WorkspaceID ||
+		shown.Summary.WorkflowID != workflowID ||
+		shown.Workflow.WorkflowID != workflowID {
 		t.Fatalf("task show --json = %+v, want updated task detail", shown)
 	}
 	var shownFields map[string]json.RawMessage
@@ -510,6 +544,23 @@ func TestTaskCommentAuthorForAddBoundaryCases(t *testing.T) {
 	}
 }
 
+func TestWorkflowHelpSmoke(t *testing.T) {
+	_, stderr, code := runWorkflowRootCommand("workflow", "--help")
+	if code != 0 {
+		t.Fatalf("workflow --help exit=%d, want 0", code)
+	}
+	if strings.TrimSpace(stderr) == "" {
+		t.Fatal("workflow --help output is empty")
+	}
+}
+
+func TestWorkflowValidateRejectsRemovedProjectFlag(t *testing.T) {
+	_, _, code := runWorkflowRootCommand("workflow", "validate", "workflow-id", "--project", "project-id")
+	if code != 2 {
+		t.Fatalf("workflow validate with removed --project exit=%d, want 2", code)
+	}
+}
+
 func TestWorkflowCommandValidationErrorsAreExitTwo(t *testing.T) {
 	for _, args := range [][]string{
 		{"workflow", "create"},
@@ -547,25 +598,23 @@ func TestParseWorkflowParameters(t *testing.T) {
 	}
 }
 
-func TestWorkflowListPaginatesAndResolutionDoesNotDrainPages(t *testing.T) {
+func TestWorkflowListPaginatesWithoutSelectorLookup(t *testing.T) {
+	const secondWorkflowSelector = "8e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
 	cfg := config.App{WorkspaceRoot: t.TempDir()}
 	remote := &pagedWorkflowListRemote{
 		delayAfterFirstPage: true,
 		pages: map[string]serverapi.WorkflowListResponse{
 			"": {
 				Workflows: []serverapi.WorkflowRecord{
-					{ID: "workflow-1", Name: "First", Version: 1},
+					{ID: "workflow-" + workflowSelectorTestUUID, Name: "First", Version: 1},
 				},
 				NextPageToken: "next",
 			},
 			"next": {
 				Workflows: []serverapi.WorkflowRecord{
-					{ID: "workflow-2", Name: "Second", Version: 2},
+					{ID: "workflow-" + secondWorkflowSelector, Name: "Second", Version: 2},
 				},
 			},
-		},
-		definitions: map[string]serverapi.WorkflowDefinition{
-			"workflow-2": {Workflow: serverapi.WorkflowRecord{ID: "workflow-2", Name: "Second", Version: 2}},
 		},
 	}
 	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
@@ -579,60 +628,235 @@ func TestWorkflowListPaginatesAndResolutionDoesNotDrainPages(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &listed); err != nil {
 		t.Fatalf("workflow list --json = %q, want JSON: %v", stdout, err)
 	}
-	if len(listed.Workflows) != 1 || listed.Workflows[0].ID != "workflow-1" || listed.NextPageToken != "next" {
+	if len(listed.Workflows) != 1 || listed.Workflows[0].ID != workflowSelectorTestUUID || listed.NextPageToken != "next" {
 		t.Fatalf("workflow list --json = %+v, want first page plus token", listed)
 	}
 	if len(remote.requests) != 1 || remote.requests[0].PageToken != "" || remote.requests[0].PageSize != serverapi.WorkflowListMaxPageSize {
 		t.Fatalf("workflow list requests = %+v, want single default-sized first page", remote.requests)
 	}
 
-	remote.requests = nil
-	remote.deadlines = nil
-	resolved, err := resolveWorkflowID(context.Background(), remote, "Second")
-	if err != nil {
-		t.Fatalf("resolveWorkflowID: %v", err)
-	}
-	if resolved != "workflow-2" {
-		t.Fatalf("resolveWorkflowID = %q, want workflow-2", resolved)
-	}
-	if len(remote.requests) != 1 || remote.requests[0].ExactName != "Second" || remote.requests[0].PageSize != 2 || remote.requests[0].PageToken != "" {
-		t.Fatalf("resolve requests = %+v, want bounded exact-name lookup", remote.requests)
-	}
-	if len(remote.deadlines) != 3 {
-		t.Fatalf("resolve deadlines = %+v, want id get plus exact-name list plus name get deadlines", remote.deadlines)
+	if len(remote.deadlines) != 1 {
+		t.Fatalf("list deadlines = %+v, want one bounded list call", remote.deadlines)
 	}
 }
 
-func TestRunWorkflowCommandSessionReportsCloseFailureWithoutChangingExitCode(t *testing.T) {
-	for _, wantCode := range []int{0, 1, 2} {
-		remote := &workflowCommandLoopbackRemote{closeErr: errors.New("close failed")}
-		restore := replaceWorkflowCommandRemoteOpener(t, config.App{}, remote)
-		stderr := new(strings.Builder)
-		got := runWorkflowCommandSession(stderr, func(config.App, workflowCommandRemote) int { return wantCode })
-		restore()
-		if got != wantCode {
-			t.Fatalf("exit code = %d, want %d", got, wantCode)
-		}
-		if remote.closeCalls != 1 {
-			t.Fatalf("remote close calls = %d, want 1", remote.closeCalls)
-		}
-		if strings.TrimSpace(stderr.String()) == "" {
-			t.Fatal("remote close failure was not reported")
-		}
+func TestWorkflowListProjectScopeResolvesPathAndIDAndProjectsMetadata(t *testing.T) {
+	cfg, binding, remote := newWorkflowCommandLoopback(t)
+	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+	defer restore()
+
+	workflowID := setupLinkedWorkflow(t, binding.ProjectID, "Project Workflow")
+	out, _, code := runWorkflowRootCommand("workflow", "list", "--project", binding.ProjectID, "--json")
+	if code != 0 {
+		t.Fatalf("workflow list project id exit=%d", code)
+	}
+	var byID workflowListOutput
+	if err := json.Unmarshal([]byte(out), &byID); err != nil {
+		t.Fatalf("decode project-id workflow list: %v", err)
+	}
+	if byID.ProjectID == nil || *byID.ProjectID != binding.ProjectID || !workflowListContains(byID.Workflows, workflowID) {
+		t.Fatalf("project-id response = %+v, want project context and workflow", byID)
+	}
+	if len(byID.Workflows) != 1 || byID.Workflows[0].ProjectLink == nil {
+		t.Fatalf("project-id workflow metadata = %+v, want project link metadata", byID.Workflows)
 	}
 
-	original := workflowCommandRemoteOpener
-	defer func() { workflowCommandRemoteOpener = original }()
-	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
-		return config.App{}, nil, errors.New("open failed")
+	out, _, code = runWorkflowRootCommand("workflow", "list", "--project", cfg.WorkspaceRoot, "--json")
+	if code != 0 {
+		t.Fatalf("workflow list project path exit=%d", code)
 	}
-	called := false
-	stderr := new(strings.Builder)
-	if got := runWorkflowCommandSession(stderr, func(config.App, workflowCommandRemote) int {
-		called = true
-		return 0
-	}); got != 1 || called || strings.TrimSpace(stderr.String()) == "" {
-		t.Fatalf("open failure exit=%d callback=%t stderr=%q", got, called, stderr.String())
+	var byPath workflowListOutput
+	if err := json.Unmarshal([]byte(out), &byPath); err != nil {
+		t.Fatalf("decode project-path workflow list: %v", err)
+	}
+	if byPath.ProjectID == nil || *byPath.ProjectID != binding.ProjectID || !workflowListContains(byPath.Workflows, workflowID) {
+		t.Fatalf("project-path response = %+v, want same project discovery", byPath)
+	}
+	if len(remote.ListRequests()) != 2 {
+		t.Fatalf("workflow list requests = %+v, want one request per scope", remote.ListRequests())
+	}
+	for _, req := range remote.ListRequests() {
+		if req.ProjectID == nil || *req.ProjectID != binding.ProjectID {
+			t.Fatalf("workflow list request = %+v, want resolved project id", req)
+		}
+	}
+}
+
+func TestWorkflowListRejectsExplicitBlankProjectBeforeOpeningRemote(t *testing.T) {
+	opened := false
+	original := workflowCommandRemoteOpener
+	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
+		opened = true
+		return config.App{}, nil, nil
+	}
+	defer func() { workflowCommandRemoteOpener = original }()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := workflowListSubcommand([]string{"--project", ""}, &stdout, &stderr)
+	if code != 2 || opened || stdout.Len() != 0 || stderr.Len() == 0 {
+		t.Fatalf("workflow list blank project exit=%d opened=%v stdout=%q stderr=%q", code, opened, stdout.String(), stderr.String())
+	}
+}
+
+func TestWorkflowListProjectResponseRequiresProjectLinkMetadata(t *testing.T) {
+	projectID := "project-1"
+	remote := &pagedWorkflowListRemote{
+		pages: map[string]serverapi.WorkflowListResponse{
+			"": {
+				ProjectID: &projectID,
+				Workflows: []serverapi.WorkflowRecord{{
+					ID:                    "workflow-" + workflowSelectorTestUUID,
+					Name:                  "Workflow",
+					Version:               1,
+					ExecutionTargetPolicy: serverapi.WorkflowExecutionTargetConfiguration{Mode: serverapi.WorkflowExecutionTargetModeNone},
+				}},
+			},
+		},
+	}
+	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: "."}, remote)
+	defer restore()
+
+	stdout, _, code := runWorkflowRootCommand("workflow", "list", "--project", projectID)
+	if code != 1 || stdout != "" {
+		t.Fatalf("workflow list exit=%d stdout=%q, want impossible project-link response failure", code, stdout)
+	}
+}
+
+func TestWorkflowListRejectsResponseScopeMismatch(t *testing.T) {
+	requestedProjectID := "project-1"
+	otherProjectID := "project-2"
+	projectWorkflow := serverapi.WorkflowRecord{
+		ID:                    "workflow-" + workflowSelectorTestUUID,
+		ProjectLink:           &serverapi.WorkflowListProjectLink{},
+		ExecutionTargetPolicy: serverapi.WorkflowExecutionTargetConfiguration{Mode: serverapi.WorkflowExecutionTargetModeNone},
+	}
+	for name, testCase := range map[string]struct {
+		expected *string
+		response *string
+		records  []serverapi.WorkflowRecord
+	}{
+		"global response unexpectedly scoped": {
+			response: &otherProjectID,
+		},
+		"project response missing scope": {
+			expected: &requestedProjectID,
+		},
+		"project response mismatches scope": {
+			expected: &requestedProjectID,
+			response: &otherProjectID,
+			records:  []serverapi.WorkflowRecord{projectWorkflow},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateWorkflowListProjectMetadata(testCase.expected, testCase.response, testCase.records); err == nil {
+				t.Fatalf("validateWorkflowListProjectMetadata(%s) accepted mismatched response scope", name)
+			}
+		})
+	}
+}
+
+func TestWorkflowListProjectContinuationPreservesScopeAndJSONShape(t *testing.T) {
+	cfg, binding, remote := newWorkflowCommandLoopback(t)
+	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+	defer restore()
+
+	setupLinkedWorkflow(t, binding.ProjectID, "First Project Workflow")
+	setupLinkedWorkflow(t, binding.ProjectID, "Second Project Workflow")
+	firstOut, firstErr, code := runWorkflowRootCommand("workflow", "list", "--project", binding.ProjectID, "--page-size", "1", "--json")
+	if code != 0 {
+		t.Fatalf("workflow list first project page exit=%d stderr=%q", code, firstErr)
+	}
+	var first workflowListOutput
+	if err := json.Unmarshal([]byte(firstOut), &first); err != nil {
+		t.Fatalf("decode first project page: %v", err)
+	}
+	if first.ProjectID == nil || first.NextPageToken == "" || len(first.Workflows) != 1 {
+		t.Fatalf("first project page = %+v, want one row and continuation", first)
+	}
+	secondOut, secondErr, code := runWorkflowRootCommand("workflow", "list", "--project", binding.ProjectID, "--page-size", "1", "--page-token", first.NextPageToken, "--json")
+	if code != 0 {
+		t.Fatalf("workflow list second project page exit=%d stderr=%q", code, secondErr)
+	}
+	var second workflowListOutput
+	if err := json.Unmarshal([]byte(secondOut), &second); err != nil {
+		t.Fatalf("decode second project page: %v", err)
+	}
+	if second.ProjectID == nil || *second.ProjectID != binding.ProjectID || len(second.Workflows) != 1 {
+		t.Fatalf("second project page = %+v, want restored project context", second)
+	}
+	requests := remote.ListRequests()
+	if len(requests) != 2 || requests[1].PageToken != first.NextPageToken || requests[1].ProjectID == nil || *requests[1].ProjectID != binding.ProjectID {
+		t.Fatalf("continuation requests = %+v, want project-bound token replay", requests)
+	}
+}
+
+func TestWorkflowInspectSummaryUsesMetadataListWithoutDefinitionRead(t *testing.T) {
+	cfg := config.App{WorkspaceRoot: t.TempDir()}
+	const workflowID = "workflow-" + workflowSelectorTestUUID
+	remote := &pagedWorkflowListRemote{
+		pages: map[string]serverapi.WorkflowListResponse{
+			"": {Workflows: []serverapi.WorkflowRecord{{
+				ID:                    workflowID,
+				Name:                  "Summary Workflow",
+				Description:           "Metadata only",
+				Version:               7,
+				ExecutionTargetPolicy: serverapi.WorkflowExecutionTargetConfiguration{Mode: "head"},
+			}}},
+		},
+		definitions: map[string]serverapi.WorkflowDefinition{},
+	}
+	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+	defer restore()
+
+	out, _, code := runWorkflowRootCommand("workflow", "inspect", workflowSelectorTestUUID, "--summary", "--json")
+	if code != 0 {
+		t.Fatalf("workflow inspect summary exit=%d", code)
+	}
+	var summary serverapi.WorkflowRecord
+	if err := json.Unmarshal([]byte(out), &summary); err != nil {
+		t.Fatalf("decode workflow inspect summary: %v", err)
+	}
+	if summary.ID != workflowSelectorTestUUID || summary.Name != "Summary Workflow" || summary.Version != 7 {
+		t.Fatalf("summary = %+v, want projected metadata record", summary)
+	}
+	if len(remote.requests) != 1 || remote.requests[0].WorkflowID == nil || *remote.requests[0].WorkflowID != workflowID || remote.requests[0].PageSize != 1 {
+		t.Fatalf("summary list requests = %+v, want exact one-row metadata request", remote.requests)
+	}
+	if remote.getWorkflowCalls != 0 {
+		t.Fatalf("summary GetWorkflow calls = %d, want metadata-only path", remote.getWorkflowCalls)
+	}
+}
+
+func TestWorkflowInspectSummaryRejectsMismatchedResponseScope(t *testing.T) {
+	const requestedWorkflowID = "workflow-" + workflowSelectorTestUUID
+	const otherWorkflowID = "workflow-8e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+	projectID := "project-1"
+	for name, response := range map[string]serverapi.WorkflowListResponse{
+		"unexpected project scope": {
+			ProjectID: &projectID,
+			Workflows: []serverapi.WorkflowRecord{{
+				ID:          requestedWorkflowID,
+				ProjectLink: &serverapi.WorkflowListProjectLink{},
+			}},
+		},
+		"wrong workflow": {
+			Workflows: []serverapi.WorkflowRecord{{ID: otherWorkflowID}},
+		},
+		"multiple workflows": {
+			Workflows: []serverapi.WorkflowRecord{{ID: requestedWorkflowID}, {ID: otherWorkflowID}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			remote := &pagedWorkflowListRemote{pages: map[string]serverapi.WorkflowListResponse{"": response}}
+			restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
+			defer restore()
+
+			stdout, _, code := runWorkflowRootCommand("workflow", "inspect", workflowSelectorTestUUID, "--summary")
+			if code != 1 || stdout != "" {
+				t.Fatalf("workflow inspect summary mismatch exit=%d stdout=%q", code, stdout)
+			}
+		})
 	}
 }
 
@@ -790,7 +1014,19 @@ func workflowCreateForTest(t *testing.T, args ...string) serverapi.WorkflowRecor
 	if err := json.Unmarshal([]byte(out), &record); err != nil {
 		t.Fatalf("decode workflow create json %q: %v", out, err)
 	}
+	if _, err := parseWorkflowSelector(record.ID); err != nil {
+		t.Fatalf("created workflow id %q: %v", record.ID, err)
+	}
 	return record
+}
+
+func workflowPersistedIDForTest(t *testing.T, selector string) string {
+	t.Helper()
+	parsed, err := parseWorkflowSelector(selector)
+	if err != nil {
+		t.Fatalf("workflow selector %q: %v", selector, err)
+	}
+	return parsed.PersistedID()
 }
 
 func workflowNodeAddForTest(t *testing.T, args ...string) workflowNodeOutput {
@@ -900,7 +1136,7 @@ func workflowTransitionGroupForID(def serverapi.WorkflowDefinition, groupID stri
 
 func workflowCommandStoredEdgeByID(t *testing.T, ctx context.Context, store *workflowstore.Store, workflowID string, edgeID string) workflow.Edge {
 	t.Helper()
-	def, _, err := store.GetDefinition(ctx, workflow.WorkflowID(workflowID))
+	def, _, err := store.GetDefinition(ctx, workflow.WorkflowID(workflowPersistedIDForTest(t, workflowID)))
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
@@ -919,6 +1155,7 @@ type pagedWorkflowListRemote struct {
 	pages               map[string]serverapi.WorkflowListResponse
 	requests            []serverapi.WorkflowListRequest
 	deadlines           []time.Time
+	getWorkflowCalls    int
 	delayAfterFirstPage bool
 }
 
@@ -937,24 +1174,11 @@ func (r *pagedWorkflowListRemote) ListWorkflows(ctx context.Context, req servera
 	if r.delayAfterFirstPage && callIndex == 0 {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if strings.TrimSpace(req.ExactName) != "" {
-		matches := []serverapi.WorkflowRecord{}
-		for _, page := range r.pages {
-			for _, record := range page.Workflows {
-				if record.Name == req.ExactName {
-					matches = append(matches, record)
-				}
-			}
-		}
-		if len(matches) > req.PageSize {
-			return serverapi.WorkflowListResponse{Workflows: matches[:req.PageSize], NextPageToken: "more"}, nil
-		}
-		return serverapi.WorkflowListResponse{Workflows: matches}, nil
-	}
 	return r.pages[req.PageToken], nil
 }
 
 func (r *pagedWorkflowListRemote) GetWorkflow(ctx context.Context, req serverapi.WorkflowGetRequest) (serverapi.WorkflowGetResponse, error) {
+	r.getWorkflowCalls++
 	if deadline, ok := ctx.Deadline(); ok {
 		r.deadlines = append(r.deadlines, deadline)
 	}
@@ -963,6 +1187,10 @@ func (r *pagedWorkflowListRemote) GetWorkflow(ctx context.Context, req serverapi
 		return serverapi.WorkflowGetResponse{}, sql.ErrNoRows
 	}
 	return serverapi.WorkflowGetResponse{Definition: def}, nil
+}
+
+func (r *workflowCommandLoopbackRemote) ListRequests() []serverapi.WorkflowListRequest {
+	return append([]serverapi.WorkflowListRequest(nil), r.listRequests...)
 }
 
 type preservingNodeUpdateRemote struct {
@@ -982,10 +1210,10 @@ func (r *preservingNodeUpdateRemote) ListWorkflows(context.Context, serverapi.Wo
 
 func (r *preservingNodeUpdateRemote) GetWorkflow(context.Context, serverapi.WorkflowGetRequest) (serverapi.WorkflowGetResponse, error) {
 	return serverapi.WorkflowGetResponse{Definition: serverapi.WorkflowDefinition{
-		Workflow: serverapi.WorkflowRecord{ID: "workflow-1", Name: "Workflow"},
+		Workflow: serverapi.WorkflowRecord{ID: "workflow-" + workflowSelectorTestUUID, Name: "Workflow"},
 		Nodes: []serverapi.WorkflowNode{{
 			ID:          "node-join",
-			WorkflowID:  "workflow-1",
+			WorkflowID:  "workflow-" + workflowSelectorTestUUID,
 			Key:         "join",
 			Kind:        "join",
 			DisplayName: "Join",
