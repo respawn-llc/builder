@@ -575,9 +575,7 @@ func allowedCLIServerImports() map[string]map[string]string {
 			"core/server/bootstrap": "startup config resolves server bootstrap context at the startup boundary",
 		},
 		filepath.Join("cli", "app", "internal", "embeddedattach", "embeddedstartup_start.go"): {
-			"core/server/auth":        "embedded startup composes server auth readiness",
-			"core/server/authservice": "embedded startup composes server auth flow readiness",
-			"core/server/startup":     "embedded startup delegates to server startup",
+			"core/server/startup": "embedded startup is the CLI composition root for server startup",
 		},
 		filepath.Join("cli", "kent", "serve.go"): {
 			"core/server/startup": "kent serve command is a composition root",
