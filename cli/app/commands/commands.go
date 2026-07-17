@@ -66,6 +66,7 @@ type ActiveRunPolicy uint8
 const (
 	ActiveRunPolicyRequiresIdle ActiveRunPolicy = iota
 	ActiveRunPolicyAllowed
+	ActiveRunPolicyQueueUntilIdle
 )
 
 type Command struct {
@@ -106,7 +107,7 @@ func NewDefaultRegistry() *Registry {
 	r.RegisterWithOptions("login", "Open auth options", RegisterOptions{PreservePromptHistoryDraft: true}, func(string) Result {
 		return Result{Handled: true, Action: ActionLogout}
 	})
-	r.RegisterWithOptions("compact", "Compact the current context (optional: /compact <instructions>)", RegisterOptions{PreservePromptHistoryDraft: true}, func(args string) Result {
+	r.RegisterWithOptions("compact", "Compact the current context (optional: /compact <instructions>)", RegisterOptions{ActiveRunPolicy: ActiveRunPolicyQueueUntilIdle, PreservePromptHistoryDraft: true}, func(args string) Result {
 		return Result{Handled: true, Action: ActionCompact, Args: strings.TrimSpace(args)}
 	})
 	r.RegisterWithOptions("name", "Set session title and terminal title (usage: /name <title>; empty resets)", RegisterOptions{ActiveRunPolicy: ActiveRunPolicyAllowed, PreservePromptHistoryDraft: true}, func(args string) Result {

@@ -829,3 +829,31 @@ func TestContextCompactorUsesExclusiveStepLifecycle(t *testing.T) {
 		t.Fatalf("expected one local compaction model call, got %d", callCount)
 	}
 }
+
+func TestContextCompactorRetriesBusyExclusiveStep(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "summary"},
+		Usage:     llm.Usage{WindowTokens: 200000},
+	}}}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+		t.Fatalf("append seed message: %v", err)
+	}
+
+	attempts := 0
+	steps := &stubExclusiveStepLifecycle{runFn: func(ctx context.Context, _ exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
+		attempts++
+		if attempts == 1 {
+			return ErrAgentBusy
+		}
+		return fn(ctx, "compact-step")
+	}}
+	compactor := &defaultContextCompactor{engine: eng, steps: steps}
+	if _, err := compactor.CompactContextWithActiveHook(context.Background(), "", nil); err != nil {
+		t.Fatalf("compact context: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("exclusive-step attempts = %d, want one busy retry then compaction", attempts)
+	}
+}

@@ -18,10 +18,20 @@ func (e *Engine) RunWhenIdle(ctx context.Context, activeKind ActiveKind, fn func
 		return nil
 	}
 	e.ensureOrchestrationCollaborators()
+	return runExclusiveStepWhenIdle(ctx, e.stepLifecycle, activeKind, func(context.Context, string) error {
+		return fn()
+	})
+}
+
+func runExclusiveStepWhenIdle(ctx context.Context, steps exclusiveStepLifecycle, activeKind ActiveKind, fn func(context.Context, string) error) error {
+	if steps == nil {
+		return errors.New("exclusive step lifecycle is required")
+	}
+	if fn == nil {
+		return nil
+	}
 	for {
-		err := e.stepLifecycle.Run(ctx, exclusiveStepOptions{ActiveKind: activeKind}, func(context.Context, string) error {
-			return fn()
-		})
+		err := steps.Run(ctx, exclusiveStepOptions{ActiveKind: activeKind}, fn)
 		if !errors.Is(err, ErrAgentBusy) {
 			return err
 		}

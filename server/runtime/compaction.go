@@ -127,8 +127,10 @@ func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compa
 	if includeManualCarryover {
 		activeKind = ActiveKindCompaction
 	}
+	e.pauseQueuedUserAutoDrain()
+	defer e.resumeQueuedUserAutoDrain()
 	var receipt session.CommitReceipt
-	err := c.steps.Run(ctx, exclusiveStepOptions{ActiveKind: activeKind}, func(stepCtx context.Context, stepID string) error {
+	err := runExclusiveStepWhenIdle(ctx, c.steps, activeKind, func(stepCtx context.Context, stepID string) error {
 		if onActive != nil {
 			onActive()
 		}

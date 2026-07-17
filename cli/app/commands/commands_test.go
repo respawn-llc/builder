@@ -51,6 +51,19 @@ func TestExecuteBuiltins(t *testing.T) {
 	}
 }
 
+func TestDefaultRegistryActiveRunPolicies(t *testing.T) {
+	registry := NewDefaultRegistry()
+	for name, want := range map[string]ActiveRunPolicy{
+		"compact":  ActiveRunPolicyQueueUntilIdle,
+		"worktree": ActiveRunPolicyRequiresIdle,
+	} {
+		command, ok := registry.Command("/" + name)
+		if !ok || command.ActiveRunPolicy != want {
+			t.Fatalf("/%s policy = %v, want %v; ok=%v", name, command.ActiveRunPolicy, want, ok)
+		}
+	}
+}
+
 func TestExecuteBuiltinPromptCommandsSubmitFreshUserTurns(t *testing.T) {
 	registry := NewDefaultRegistry()
 	for input, suffix := range map[string]string{

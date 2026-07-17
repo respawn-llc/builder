@@ -14,7 +14,7 @@ func TestDefaultRegistryBusyContract(t *testing.T) {
 	want := map[string]commands.ActiveRunPolicy{
 		"exit": commands.ActiveRunPolicyAllowed, "login": commands.ActiveRunPolicyRequiresIdle,
 		"new": commands.ActiveRunPolicyAllowed, "resume": commands.ActiveRunPolicyAllowed,
-		"logout": commands.ActiveRunPolicyRequiresIdle, "compact": commands.ActiveRunPolicyRequiresIdle,
+		"logout": commands.ActiveRunPolicyRequiresIdle, "compact": commands.ActiveRunPolicyQueueUntilIdle,
 		"name": commands.ActiveRunPolicyAllowed, "thinking": commands.ActiveRunPolicyAllowed,
 		"fast": commands.ActiveRunPolicyAllowed, "supervisor": commands.ActiveRunPolicyAllowed,
 		"autocompaction": commands.ActiveRunPolicyAllowed, "questions": commands.ActiveRunPolicyAllowed,
@@ -90,7 +90,7 @@ func TestBusyEnterOpensReadOverlays(t *testing.T) {
 }
 
 func TestBusyEnterBlocksIdleOnlyCommands(t *testing.T) {
-	for _, input := range []string{"/compact now", "/worktree list"} {
+	for _, input := range []string{"/worktree list"} {
 		t.Run(input, func(t *testing.T) {
 			model := busyCommandTestModel()
 			model.input = input
@@ -101,6 +101,19 @@ func TestBusyEnterBlocksIdleOnlyCommands(t *testing.T) {
 			}
 			requireBusyCommandQueuesEmpty(t, updated)
 		})
+	}
+}
+
+func TestBusyEnterQueuesCompact(t *testing.T) {
+	model := busyCommandTestModel()
+	model.input = "/compact now"
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated := next.(*uiModel)
+	if cmd != nil || updated.input != "" || len(updated.queued) != 1 || updated.queued[0].Text != "/compact now" {
+		t.Fatalf("queued compact result = cmd %v, input %q, queued %+v", cmd, updated.input, updated.queued)
+	}
+	if len(updated.pendingInjected) != 0 {
+		t.Fatalf("pending injected = %+v, want empty", updated.pendingInjected)
 	}
 }
 
