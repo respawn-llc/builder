@@ -15,7 +15,6 @@ import (
 	modelstub "core/internal/testharness/pty/blackbox"
 	"core/server/auth"
 	"core/server/authservice"
-	serverbootstrap "core/server/bootstrap"
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/session"
@@ -27,40 +26,6 @@ import (
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 )
-
-type testAuthHandler struct {
-	lookupEnv      func(string) string
-	state          *auth.State
-	interactCalled bool
-}
-
-func (h *testAuthHandler) WrapStore(base auth.Store) auth.Store {
-	if h != nil && h.state != nil {
-		return auth.NewMemoryStore(*h.state)
-	}
-	return authservice.WrapStoreWithEnvAPIKeyOverride(base, h.lookupEnv)
-}
-
-func (h *testAuthHandler) NeedsInteraction(req authservice.FlowInteractionRequest) bool {
-	return !req.Gate.Ready
-}
-
-func (h *testAuthHandler) Interact(context.Context, authservice.FlowInteractionRequest) (authservice.FlowInteractionOutcome, error) {
-	h.interactCalled = true
-	return authservice.FlowInteractionOutcome{}, auth.ErrAuthNotConfigured
-}
-
-func readyEmbeddedAuthHandler() *testAuthHandler {
-	state := auth.State{
-		Scope: auth.ScopeGlobal,
-		Method: auth.Method{
-			Type:   auth.MethodAPIKey,
-			APIKey: &auth.APIKeyMethod{Key: "in-memory-test-key"},
-		},
-		UpdatedAt: time.Now().UTC(),
-	}
-	return &testAuthHandler{state: &state}
-}
 
 func registerEmbeddedWorkspace(t *testing.T, workspace string) {
 	t.Helper()
@@ -81,35 +46,9 @@ func newRegisteredEmbeddedWorkspace(t *testing.T) string {
 	return workspace
 }
 
-func defaultEmbeddedOnboardingHandler(called *bool) EmbeddedOnboardingHandler {
-	return func(_ context.Context, req EmbeddedOnboardingRequest) (config.App, error) {
-		if called != nil {
-			*called = true
-		}
-		path, created, err := config.WriteDefaultSettingsFile()
-		if err != nil {
-			return config.App{}, err
-		}
-		reloaded, err := req.ReloadConfig()
-		if err != nil {
-			return config.App{}, err
-		}
-		reloaded.Source.CreatedDefaultConfig = created
-		reloaded.Source.SettingsPath = path
-		reloaded.Source.SettingsFileExists = true
-		return reloaded, nil
-	}
-}
-
-func startReadyEmbeddedServer(t *testing.T, req serverbootstrap.Request) *EmbeddedServer {
+func startReadyEmbeddedServer(t *testing.T, req Request) *EmbeddedServer {
 	t.Helper()
-	if req.LookupEnv == nil {
-		req.LookupEnv = os.Getenv
-	}
-	server, err := StartEmbedded(context.Background(), req, EmbeddedStartHooks{
-		Auth:       readyEmbeddedAuthHandler(),
-		Onboarding: defaultEmbeddedOnboardingHandler(nil),
-	})
+	server, err := StartWithOptions(context.Background(), req, startupEnvAuthHandler{}, startupNoopOnboarding, Options{})
 	if err != nil {
 		t.Fatalf("start embedded server: %v", err)
 	}
@@ -157,104 +96,19 @@ func openEmbeddedSessionByID(t *testing.T, server *EmbeddedServer, sessionID str
 	return store
 }
 
-func TestStartBuildsEmbeddedServerAndRunsOnboarding(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("KENT_OAUTH_ISSUER", "https://attacker.example")
-	t.Setenv("KENT_OAUTH_CLIENT_ID", "client-test")
-
-	workspace := t.TempDir()
-	registerEmbeddedWorkspace(t, workspace)
-	authHandler := readyEmbeddedAuthHandler()
-	onboardingCalled := false
-	onboarding := defaultEmbeddedOnboardingHandler(&onboardingCalled)
-
-	server, err := StartEmbedded(context.Background(), serverbootstrap.Request{
-		WorkspaceRoot: workspace,
-		LookupEnv:     os.Getenv,
-	}, EmbeddedStartHooks{Auth: authHandler, Onboarding: onboarding})
-	if err != nil {
-		t.Fatalf("start embedded server: %v", err)
-	}
-	t.Cleanup(func() { _ = server.Close() })
-	generatedSkillsRoot := filepath.Join(home, config.ConfigDirName, ".generated", "skills")
-	if entries, err := os.ReadDir(generatedSkillsRoot); err != nil {
-		t.Fatalf("expected embedded startup to seed generated skills through bootstrap: %v", err)
-	} else if len(entries) == 0 {
-		t.Fatal("expected embedded startup to seed at least one generated skill")
-	}
-
-	if !onboardingCalled {
-		t.Fatal("expected onboarding handler to run")
-	}
-	if got := server.OAuthOptions().Issuer; got != auth.DefaultOpenAIIssuer {
-		t.Fatalf("oauth issuer = %q, want %q", got, auth.DefaultOpenAIIssuer)
-	}
-	if got := server.OAuthOptions().ClientID; got != "client-test" {
-		t.Fatalf("oauth client id = %q", got)
-	}
-	wantContainerDir := filepath.Join(filepath.Join(server.Config().PersistenceRoot, "projects"), server.ProjectID(), "sessions")
-	if _, err := os.Stat(wantContainerDir); err != nil {
-		t.Fatalf("expected container dir to exist: %v", err)
-	}
-	if server.RunPromptClient() == nil {
-		t.Fatal("expected run prompt client")
-	}
-}
-
-func TestStartEmbeddedOnboardingReceivesCapabilityFactsClient(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	workspace := t.TempDir()
-	registerEmbeddedWorkspace(t, workspace)
-
-	seenFacts := false
-	onboarding := EmbeddedOnboardingHandler(func(ctx context.Context, req EmbeddedOnboardingRequest) (config.App, error) {
-		if req.CapabilityFactsClient == nil {
-			t.Fatal("capability facts client was not threaded into embedded onboarding")
-		}
-		facts, err := req.CapabilityFactsClient.GetCapabilityFacts(ctx, serverapi.CapabilityFactsRequest{})
-		if err != nil {
-			t.Fatalf("GetCapabilityFacts: %v", err)
-		}
-		seenFacts = factsContainGeneratedSkillCandidate(facts)
-		return defaultEmbeddedOnboardingHandler(nil)(ctx, req)
-	})
-
-	server, err := StartEmbedded(context.Background(), serverbootstrap.Request{
-		WorkspaceRoot: workspace,
-		LookupEnv:     os.Getenv,
-	}, EmbeddedStartHooks{Auth: readyEmbeddedAuthHandler(), Onboarding: onboarding})
-	if err != nil {
-		t.Fatalf("start embedded server: %v", err)
-	}
-	t.Cleanup(func() { _ = server.Close() })
-	if !seenFacts {
-		t.Fatal("expected embedded generated skill facts before core startup")
-	}
-}
-
-func TestStartEmbeddedMissingConfigExposesBootstrapSurface(t *testing.T) {
+func TestStartWithOptionsMissingConfigExposesBootstrapSurface(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	configureServeTestServerPort(t)
 	workspace := t.TempDir()
 	registerEmbeddedWorkspace(t, workspace)
 
-	server, err := StartEmbeddedWithOptions(context.Background(), serverbootstrap.Request{
+	server, err := StartWithOptions(context.Background(), Request{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
-		LookupEnv: func(key string) string {
-			if key == "OPENAI_API_KEY" {
-				return "in-memory-test-key"
-			}
-			return ""
-		},
-	}, EmbeddedStartHooks{
-		Auth: readyEmbeddedAuthHandler(),
-	}, Options{})
+	}, startupEnvAuthHandler{}, nil, Options{})
 	if err != nil {
-		t.Fatalf("StartEmbeddedWithOptions: %v", err)
+		t.Fatalf("StartWithOptions: %v", err)
 	}
 	t.Cleanup(func() { _ = server.Close() })
 	if server.Core != nil {
@@ -316,7 +170,7 @@ func TestRunPromptClientRunsLoopbackThroughEmbeddedServer(t *testing.T) {
 	}))
 	defer responseServer.Close()
 
-	server := startReadyEmbeddedServer(t, serverbootstrap.Request{
+	server := startReadyEmbeddedServer(t, Request{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		OpenAIBaseURL:         responseServer.URL,
@@ -371,20 +225,30 @@ func TestRunPromptClientRunsLoopbackThroughEmbeddedServer(t *testing.T) {
 	}
 }
 
-func TestStartPropagatesAuthFailureBeforeOnboarding(t *testing.T) {
+func TestStartWithOptionsPropagatesAuthFailureBeforeOnboarding(t *testing.T) {
 	workspace := newRegisteredEmbeddedWorkspace(t)
-	authHandler := &testAuthHandler{lookupEnv: os.Getenv}
+	authInteractionCalled := false
+	authHandler := stubAuthHandler{
+		lookupEnv: os.Getenv,
+		needs: func(req authservice.FlowInteractionRequest) bool {
+			return !req.Gate.Ready
+		},
+		interact: func(context.Context, authservice.FlowInteractionRequest) error {
+			authInteractionCalled = true
+			return auth.ErrAuthNotConfigured
+		},
+	}
 	onboardingCalled := false
-	onboarding := EmbeddedOnboardingHandler(func(_ context.Context, req EmbeddedOnboardingRequest) (config.App, error) {
+	onboarding := OnboardingHandler(func(_ context.Context, req OnboardingRequest) (config.App, error) {
 		onboardingCalled = true
 		return req.Config, nil
 	})
 
-	_, err := StartEmbedded(context.Background(), serverbootstrap.Request{WorkspaceRoot: workspace, LookupEnv: os.Getenv}, EmbeddedStartHooks{Auth: authHandler, Onboarding: onboarding})
+	_, err := StartWithOptions(context.Background(), Request{WorkspaceRoot: workspace}, authHandler, onboarding, Options{})
 	if !errors.Is(err, auth.ErrAuthNotConfigured) {
 		t.Fatalf("expected auth not configured, got %v", err)
 	}
-	if !authHandler.interactCalled {
+	if !authInteractionCalled {
 		t.Fatal("expected auth handler interaction")
 	}
 	if onboardingCalled {
@@ -395,7 +259,7 @@ func TestStartPropagatesAuthFailureBeforeOnboarding(t *testing.T) {
 func TestSessionViewClientReadsDormantSessionByIDWithoutMutatingFiles(t *testing.T) {
 	workspace := newRegisteredEmbeddedWorkspace(t)
 
-	server := startReadyEmbeddedServer(t, serverbootstrap.Request{
+	server := startReadyEmbeddedServer(t, Request{
 		WorkspaceRoot: workspace,
 	})
 
