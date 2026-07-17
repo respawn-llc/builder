@@ -223,7 +223,8 @@ func (c *defaultContextCompactor) ShouldCompactBeforeUserMessage(ctx context.Con
 	if estimatedCurrentTotal+promptEstimate < limit {
 		return false, nil
 	}
-	req, err := e.buildRequestWithExtraItems(ctx, "", []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: text}}, true)
+	extra := llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: text}})
+	req, err := e.buildRequestWithExtraItems(ctx, "", extra, true)
 	if err != nil {
 		return false, err
 	}

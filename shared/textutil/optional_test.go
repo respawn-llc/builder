@@ -2,6 +2,16 @@ package textutil
 
 import "testing"
 
+func TestOptionalTrimmedStringNormalizesPresence(t *testing.T) {
+	if OptionalTrimmedString(" \t ") != nil {
+		t.Fatal("blank optional string is present")
+	}
+	value := OptionalTrimmedString(" value ")
+	if value == nil || *value != "value" {
+		t.Fatalf("optional string = %#v, want value", value)
+	}
+}
+
 func TestPointerCopiesOptionalValue(t *testing.T) {
 	if Pointer[int](nil) != nil {
 		t.Fatal("nil pointer copy is not nil")

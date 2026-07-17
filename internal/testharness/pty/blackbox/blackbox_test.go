@@ -877,7 +877,7 @@ func TestResponsesStubServesCompactInputTokenAndModelMetadataTransportRoutes(t *
 	compactTransport := newStubTransport(compact)
 	if _, err := compactTransport.Compact(context.Background(), llm.OpenAICompactionRequest{
 		Model:      "gpt-5",
-		InputItems: []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "input"}},
+		InputItems: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: "input"}}),
 	}); err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
@@ -895,7 +895,7 @@ func TestResponsesStubServesCompactInputTokenAndModelMetadataTransportRoutes(t *
 	count, err := newStubTransport(inputTokens).CountRequestInputTokens(context.Background(), llm.OpenAIRequest{
 		Model:          "gpt-5",
 		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
-		Items:          []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "input"}},
+		Items:          llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: "input"}}),
 	})
 	if err != nil {
 		t.Fatalf("CountRequestInputTokens: %v", err)

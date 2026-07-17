@@ -63,7 +63,7 @@ func compactionConversationWithPromptItems(items []llm.ResponseItem, instruction
 	if prompt == "" {
 		return conversation
 	}
-	return append(conversation, llm.ResponseItem{Type: llm.ResponseItemTypeMessage, Role: llm.RoleDeveloper, Content: prompt})
+	return append(conversation, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, Content: prompt}})...)
 }
 
 func (e *Engine) compactWithContextRepairRetry(
@@ -219,11 +219,8 @@ func (e *Engine) compactLocal(ctx context.Context, input []llm.ResponseItem, pro
 	if err != nil {
 		return compactionResult{}, err
 	}
-	replacement := llm.CloneResponseItems([]llm.ResponseItem{{
-		Type:        llm.ResponseItemTypeMessage,
-		Role:        llm.RoleDeveloper,
-		MessageType: llm.MessageTypeCompactionSummary,
-		Content:     strings.TrimSpace(summary),
+	replacement := llm.ItemsFromMessages([]llm.Message{{
+		Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: strings.TrimSpace(summary),
 	}})
 
 	usageInputTokens := estimateItemsTokens(replacement)
@@ -314,11 +311,7 @@ func (e *Engine) localCompactionSummaryWithRepair(ctx context.Context, input []l
 }
 
 func (e *Engine) localCompactionSummaryFromWindow(ctx context.Context, locked session.LockedContract, systemPrompt string, window []llm.ResponseItem, instructions string, requestTools []llm.Tool, mode compactionMode) (string, error) {
-	items := append(llm.CloneResponseItems(window), llm.ResponseItem{
-		Type:    llm.ResponseItemTypeMessage,
-		Role:    llm.RoleDeveloper,
-		Content: instructions,
-	})
+	items := append(llm.CloneResponseItems(window), llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, Content: instructions}})...)
 	for attempt := 0; ; attempt++ {
 		req, err := llm.RequestFromLockedContract(locked, systemPrompt, items, requestTools, llm.ToolControls{ChoiceMode: llm.ToolChoiceModeAutomatic})
 		if err != nil {
@@ -381,7 +374,7 @@ func handoffCompactionToolCallRetryItems(resp llm.Response) ([]llm.ResponseItem,
 			Output: mustJSON(map[string]any{"error": handoffCompactionToolsDisabledMessage}),
 		})
 	}
-	return items, nil
+	return llm.PrepareOpenAIInputItems(items), nil
 }
 
 func localCompactionWindow(input []llm.ResponseItem) []llm.ResponseItem {

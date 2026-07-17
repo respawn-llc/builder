@@ -76,6 +76,9 @@ func collapseCompactionOverflowToolPayloadsAfterSavings(items []llm.ResponseItem
 			currentSavedTokens += saved
 		}
 	}
+	if stats.Collapsed() {
+		out = llm.PrepareOpenAIInputItems(out)
+	}
 	return out, stats
 }
 

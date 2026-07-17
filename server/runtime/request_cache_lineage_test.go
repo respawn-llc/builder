@@ -521,8 +521,11 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 		}
 		return capturedRequests[len(capturedRequests)-1]
 	}
+	userExtra := func(text string) []llm.ResponseItem {
+		return llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: text}})
+	}
 
-	mainBeforeReq, err := eng.buildRequestWithExtraItems(context.Background(), "", []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "before"}}, true)
+	mainBeforeReq, err := eng.buildRequestWithExtraItems(context.Background(), "", userExtra("before"), true)
 	if err != nil {
 		t.Fatalf("build main before request: %v", err)
 	}
@@ -550,7 +553,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 	}
 
 	eng.compactionRuntimeState().SetCount(1)
-	mainAfterReq, err := eng.buildRequestWithExtraItems(context.Background(), "", []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "after"}}, true)
+	mainAfterReq, err := eng.buildRequestWithExtraItems(context.Background(), "", userExtra("after"), true)
 	if err != nil {
 		t.Fatalf("build main after request: %v", err)
 	}
@@ -586,7 +589,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 		t.Fatalf("reopen store: %v", err)
 	}
 	reopenedEng := mustNewTestEngine(t, reopened, engineClient, tools.NewRegistry(), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
-	reopenedMainReq, err := reopenedEng.buildRequestWithExtraItems(context.Background(), "", []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "reopened"}}, true)
+	reopenedMainReq, err := reopenedEng.buildRequestWithExtraItems(context.Background(), "", userExtra("reopened"), true)
 	if err != nil {
 		t.Fatalf("build reopened main request: %v", err)
 	}

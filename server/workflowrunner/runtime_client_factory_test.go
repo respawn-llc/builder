@@ -124,9 +124,7 @@ func TestWorkflowProviderClientPreservesLockedVerbosityAcrossConfigChanges(t *te
 			}
 			request := llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 				Model: "operator-alias",
-				Items: []llm.ResponseItem{
-					{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "hello"},
-				},
+				Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: "hello"}}),
 			}
 			if _, err := client.Generate(context.Background(), request); err != nil {
 				t.Fatalf("generate: %v", err)

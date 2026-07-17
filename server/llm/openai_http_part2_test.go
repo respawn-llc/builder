@@ -308,10 +308,10 @@ func TestBuildPayload_AddsAdditionalPropertiesFalseToToolSchemas(t *testing.T) {
 }
 
 func TestBuildResponsesInput_CanonicalCompactionItemRoundTrip(t *testing.T) {
-	items := mustBuildResponsesInput(t, []ResponseItem{
+	items := mustBuildResponsesInput(t, PrepareOpenAIInputItems([]ResponseItem{
 		{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "u1"},
 		{Type: ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
-	})
+	}))
 	if len(items) != 2 {
 		t.Fatalf("expected 2 items, got %d", len(items))
 	}
@@ -449,9 +449,9 @@ func TestCompactRequestTargetsResponsesCompactPath(t *testing.T) {
 
 	resp, err := transport.Compact(context.Background(), OpenAICompactionRequest{
 		Model: "gpt-5",
-		InputItems: []ResponseItem{
+		InputItems: PrepareOpenAIInputItems([]ResponseItem{
 			{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "u1"},
-		},
+		}),
 	})
 	if err != nil {
 		t.Fatalf("compact request failed: %v", err)
@@ -476,9 +476,9 @@ func TestCompactRequestAcceptsJSONBodyWithNonJSONContentType(t *testing.T) {
 
 	resp, err := transport.Compact(context.Background(), OpenAICompactionRequest{
 		Model: "gpt-5",
-		InputItems: []ResponseItem{
+		InputItems: PrepareOpenAIInputItems([]ResponseItem{
 			{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "u1"},
-		},
+		}),
 	})
 	if err != nil {
 		t.Fatalf("compact request failed: %v", err)
@@ -584,14 +584,24 @@ func TestBuildInputTokenCountPreservesRequiredToolChoiceAndEffectiveTools(t *tes
 	}
 }
 
-func TestOpenAIRequestBuildersRejectUnmaterializedViewImageInputFileOutput(t *testing.T) {
+func TestOpenAIRequestBuildersRejectUnpreparedViewImageInputFileOutput(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	unpreparedItems := []ResponseItem{unmaterializedViewImageInputFileOutput()}
 	caps := requireProviderCapabilities(t, transport, OpenAIAuthMode{})
 	checkErr := func(name string, err error) {
 		t.Helper()
-		if !errors.Is(err, ErrViewImageOutputNotMaterialized) {
+		if !errors.Is(err, ErrOpenAIInputItemUnprepared) {
 			t.Fatalf("%s error = %v, want materialization failure", name, err)
+		}
+		var preparationErr *OpenAIInputItemPreparationError
+		if !errors.As(err, &preparationErr) {
+			t.Fatalf("%s error type = %T, want typed preparation error", name, err)
+		}
+		if preparationErr.Type != ResponseItemTypeFunctionCallOutput ||
+			preparationErr.Name == nil || *preparationErr.Name != string(toolspec.ToolViewImage) ||
+			preparationErr.CallID == nil || *preparationErr.CallID != "call_1" ||
+			preparationErr.State != OpenAIInputPreparationMissingRaw {
+			t.Fatalf("%s preparation error = %+v", name, preparationErr)
 		}
 	}
 
@@ -654,9 +664,9 @@ func TestCountRequestInputTokensTargetsResponsesInputTokensPath(t *testing.T) {
 	count, err := transport.CountRequestInputTokens(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model:        "gpt-5",
 		SystemPrompt: "sys",
-		Items: []ResponseItem{
+		Items: PrepareOpenAIInputItems([]ResponseItem{
 			{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "hello"},
-		},
+		}),
 	})
 	if err != nil {
 		t.Fatalf("count request input tokens failed: %v", err)

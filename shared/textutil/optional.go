@@ -1,6 +1,19 @@
 package textutil
 
-import "cmp"
+import (
+	"cmp"
+	"strings"
+)
+
+// OptionalTrimmedString returns nil for blank text and a pointer to the
+// normalized value otherwise.
+func OptionalTrimmedString(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
 
 func Pointer[T any](value *T) *T {
 	if value == nil {

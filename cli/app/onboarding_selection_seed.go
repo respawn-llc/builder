@@ -7,6 +7,7 @@ import (
 
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"core/shared/theme"
 	"core/shared/toolspec"
 )
@@ -112,8 +113,8 @@ func onboardingSelectionsFromConfig(cfg config.App, facts serverapi.CapabilityFa
 		pendingPrimaryThinking:  onboardingThinkingEdit{kind: onboardingThinkingEditNone},
 		pendingReviewerThinking: onboardingThinkingEdit{kind: onboardingThinkingEditNone},
 		preserved: onboardingPreservedInputs{
-			providerOverride:           optionalNonBlankString(settings.ProviderOverride),
-			openAIBaseURL:              optionalNonBlankString(settings.OpenAIBaseURL),
+			providerOverride:           textutil.OptionalTrimmedString(settings.ProviderOverride),
+			openAIBaseURL:              textutil.OptionalTrimmedString(settings.OpenAIBaseURL),
 			modelTimeoutSeconds:        modelTimeoutSeconds,
 			enabledTools:               enabledTools,
 			baselineModelContextWindow: baselineModelContextWindow,
@@ -357,14 +358,6 @@ func validateOnboardingImportFacts(facts serverapi.ImportCapabilityFacts) error 
 
 func conversionError(field string, value any, reason string) error {
 	return &onboardingSelectionConversionError{Field: field, Value: value, Reason: reason}
-}
-
-func optionalNonBlankString(value string) *string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return nil
-	}
-	return &trimmed
 }
 
 func resolvedOnboardingTools(source map[toolspec.ID]bool) map[toolspec.ID]bool {
