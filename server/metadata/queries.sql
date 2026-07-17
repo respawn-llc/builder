@@ -187,35 +187,29 @@ SELECT
     workflows.execution_target_custom_ref,
     workflows.created_at_unix_ms,
     workflows.updated_at_unix_ms,
-    CAST(
-        CASE
-            WHEN sqlc.narg(project_id) IS NULL THEN MAX(
-                workflows.updated_at_unix_ms,
-                COALESCE((
-                    SELECT MAX(task_records.updated_at_unix_ms)
-                    FROM task_records
-                    WHERE task_records.workflow_id = workflows.id
-                ), 0)
-            )
-            ELSE COALESCE((
-                SELECT MAX(task_records.updated_at_unix_ms)
-                FROM task_records
-                WHERE task_records.workflow_id = workflows.id
-                  AND task_records.project_id = sqlc.narg(project_id)
-            ), 0)
-        END
-    AS INTEGER) AS activity_at_unix_ms,
-    CASE
-        WHEN sqlc.narg(project_id) IS NULL THEN NULL
-        ELSE (
-            SELECT project_workflow_link_records.is_default
-            FROM project_workflow_link_records
-            WHERE project_workflow_link_records.project_id = sqlc.narg(project_id)
-              AND project_workflow_link_records.workflow_id = workflows.id
-        )
-    END AS project_link_default
-    , lower(workflows.name) AS project_name_order_key
+    CAST(MAX(
+        workflows.updated_at_unix_ms,
+        COALESCE((
+            SELECT MAX(task_records.updated_at_unix_ms)
+            FROM task_records
+            WHERE task_records.workflow_id = workflows.id
+        ), workflows.updated_at_unix_ms)
+    ) AS INTEGER) AS global_activity_at_unix_ms,
+    project_latest_task.updated_at_unix_ms AS project_activity_at_unix_ms,
+    project_link.is_default AS project_link_default,
+    lower(workflows.name) AS project_name_order_key
 FROM workflows
+LEFT JOIN project_workflow_link_records project_link
+    ON project_link.project_id = sqlc.narg(project_id)
+   AND project_link.workflow_id = workflows.id
+LEFT JOIN tasks project_latest_task
+    ON project_latest_task.id = (
+        SELECT latest_task.id
+        FROM tasks latest_task INDEXED BY tasks_project_workflow_link_updated_idx
+        WHERE latest_task.project_workflow_link_id = project_link.id
+        ORDER BY latest_task.updated_at_unix_ms DESC, latest_task.id DESC
+        LIMIT 1
+    )
 WHERE (sqlc.narg(workflow_id) IS NULL OR workflows.id = sqlc.narg(workflow_id))
   AND (
       sqlc.arg(search_query) = ''
@@ -224,12 +218,7 @@ WHERE (sqlc.narg(workflow_id) IS NULL OR workflows.id = sqlc.narg(workflow_id))
   )
   AND (
       sqlc.narg(project_id) IS NULL
-      OR EXISTS (
-          SELECT 1
-          FROM project_workflow_link_records
-          WHERE project_workflow_link_records.project_id = sqlc.narg(project_id)
-            AND project_workflow_link_records.workflow_id = workflows.id
-      )
+      OR project_link.id IS NOT NULL
   )
   AND (
       sqlc.arg(cursor_active) = 0
@@ -242,8 +231,8 @@ WHERE (sqlc.narg(workflow_id) IS NULL OR workflows.id = sqlc.narg(workflow_id))
                       SELECT MAX(task_records.updated_at_unix_ms)
                       FROM task_records
                       WHERE task_records.workflow_id = workflows.id
-                  ), 0)
-              ) < sqlc.arg(cursor_activity_at_unix_ms)
+                  ), workflows.updated_at_unix_ms)
+              ) < sqlc.narg(cursor_activity_at_unix_ms)
               OR (
                   MAX(
                       workflows.updated_at_unix_ms,
@@ -251,8 +240,8 @@ WHERE (sqlc.narg(workflow_id) IS NULL OR workflows.id = sqlc.narg(workflow_id))
                           SELECT MAX(task_records.updated_at_unix_ms)
                           FROM task_records
                           WHERE task_records.workflow_id = workflows.id
-                      ), 0)
-                  ) = sqlc.arg(cursor_activity_at_unix_ms)
+                      ), workflows.updated_at_unix_ms)
+                  ) = sqlc.narg(cursor_activity_at_unix_ms)
                   AND workflows.id < sqlc.arg(cursor_workflow_id)
               )
           )
@@ -260,63 +249,44 @@ WHERE (sqlc.narg(workflow_id) IS NULL OR workflows.id = sqlc.narg(workflow_id))
       OR (
           sqlc.narg(project_id) IS NOT NULL
           AND (
-              COALESCE((
-                  SELECT project_workflow_link_records.is_default
-                  FROM project_workflow_link_records
-                  WHERE project_workflow_link_records.project_id = sqlc.narg(project_id)
-                    AND project_workflow_link_records.workflow_id = workflows.id
-              ), 0) < sqlc.narg(cursor_project_default)
+              project_link.is_default < sqlc.narg(cursor_project_default)
               OR (
-                  COALESCE((
-                      SELECT project_workflow_link_records.is_default
-                      FROM project_workflow_link_records
-                      WHERE project_workflow_link_records.project_id = sqlc.narg(project_id)
-                        AND project_workflow_link_records.workflow_id = workflows.id
-                  ), 0) = sqlc.narg(cursor_project_default)
-                  AND COALESCE((
-                      SELECT MAX(task_records.updated_at_unix_ms)
-                      FROM task_records
-                      WHERE task_records.workflow_id = workflows.id
-                        AND task_records.project_id = sqlc.narg(project_id)
-                  ), 0) < sqlc.arg(cursor_activity_at_unix_ms)
-              )
-              OR (
-                  COALESCE((
-                      SELECT project_workflow_link_records.is_default
-                      FROM project_workflow_link_records
-                      WHERE project_workflow_link_records.project_id = sqlc.narg(project_id)
-                        AND project_workflow_link_records.workflow_id = workflows.id
-                  ), 0) = sqlc.narg(cursor_project_default)
-                  AND COALESCE((
-                      SELECT MAX(task_records.updated_at_unix_ms)
-                      FROM task_records
-                      WHERE task_records.workflow_id = workflows.id
-                        AND task_records.project_id = sqlc.narg(project_id)
-                  ), 0) = sqlc.arg(cursor_activity_at_unix_ms)
-                  AND lower(workflows.name) > sqlc.narg(cursor_project_name)
-              )
-              OR (
-                  COALESCE((
-                      SELECT project_workflow_link_records.is_default
-                      FROM project_workflow_link_records
-                      WHERE project_workflow_link_records.project_id = sqlc.narg(project_id)
-                        AND project_workflow_link_records.workflow_id = workflows.id
-                  ), 0) = sqlc.narg(cursor_project_default)
-                  AND COALESCE((
-                      SELECT MAX(task_records.updated_at_unix_ms)
-                      FROM task_records
-                      WHERE task_records.workflow_id = workflows.id
-                        AND task_records.project_id = sqlc.narg(project_id)
-                  ), 0) = sqlc.arg(cursor_activity_at_unix_ms)
-                  AND lower(workflows.name) = sqlc.narg(cursor_project_name)
-                  AND workflows.id > sqlc.arg(cursor_workflow_id)
+                  project_link.is_default = sqlc.narg(cursor_project_default)
+                  AND (
+                      (
+                          sqlc.narg(cursor_activity_at_unix_ms) IS NOT NULL
+                          AND (
+                              project_latest_task.updated_at_unix_ms IS NULL
+                              OR project_latest_task.updated_at_unix_ms < sqlc.narg(cursor_activity_at_unix_ms)
+                          )
+                      )
+                      OR (
+                          (
+                              project_latest_task.updated_at_unix_ms = sqlc.narg(cursor_activity_at_unix_ms)
+                              OR (
+                                  project_latest_task.updated_at_unix_ms IS NULL
+                                  AND sqlc.narg(cursor_activity_at_unix_ms) IS NULL
+                              )
+                          )
+                          AND (
+                              lower(workflows.name) > sqlc.narg(cursor_project_name)
+                              OR (
+                                  lower(workflows.name) = sqlc.narg(cursor_project_name)
+                                  AND workflows.id > sqlc.arg(cursor_workflow_id)
+                              )
+                          )
+                      )
+                  )
               )
           )
       )
   )
 ORDER BY
     project_link_default DESC,
-    activity_at_unix_ms DESC,
+    CASE
+        WHEN project_link_default IS NULL THEN global_activity_at_unix_ms
+        ELSE project_activity_at_unix_ms
+    END DESC,
     CASE WHEN project_link_default IS NOT NULL THEN lower(workflows.name) END ASC,
     CASE WHEN project_link_default IS NULL THEN workflows.id END DESC,
     CASE WHEN project_link_default IS NOT NULL THEN workflows.id END ASC
@@ -1726,9 +1696,39 @@ selected_rows AS (
       )
 ),
 matching_workflows AS (
-    SELECT workflow_id
-    FROM selected_rows
-    GROUP BY workflow_id
+    SELECT task_link.workflow_id
+    FROM args
+    CROSS JOIN project_workflow_links task_link
+    WHERE task_link.project_id = args.project_id
+      AND (args.workflow_id IS NULL OR task_link.workflow_id = args.workflow_id)
+      AND EXISTS (
+          SELECT 1
+          FROM tasks t INDEXED BY tasks_project_workflow_link_idx
+          JOIN workflow_task_status_records status ON status.task_id = t.id
+          LEFT JOIN column_facts ON column_facts.task_id = t.id
+          WHERE t.project_workflow_link_id = task_link.id
+            AND (
+                args.column_filter_set = 0
+                OR EXISTS (
+                    SELECT 1
+                    FROM json_each(args.column_keys_json) filter_key
+                    JOIN json_each(column_facts.column_keys_json) task_key ON task_key.value = filter_key.value
+                )
+            )
+            AND (
+                args.status_filter_set = 0
+                OR status.kind IN (SELECT value FROM json_each(args.status_kinds_json))
+            )
+            AND (
+                args.attention_filter_set = 0
+                OR EXISTS (
+                    SELECT 1
+                    FROM json_each(args.attention_kinds_json) filter_attention
+                    JOIN json_each(status.attention_types_json) task_attention ON task_attention.value = filter_attention.value
+                )
+            )
+          LIMIT 1
+      )
     LIMIT 2
 ),
 cursor_values AS (

@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 
+	"core/shared/textutil"
 	patchformat "core/shared/transcript/patchformat"
 )
 
@@ -85,7 +86,7 @@ func ToolCallMetaEqual(left, right *ToolCallMeta) bool {
 		normalizedLeft.RawOutputRequested == normalizedRight.RawOutputRequested &&
 		normalizedLeft.OutputTruncated == normalizedRight.OutputTruncated &&
 		normalizedLeft.MovedToBackground == normalizedRight.MovedToBackground &&
-		optionalIntEqual(normalizedLeft.ShellExitCode, normalizedRight.ShellExitCode)
+		textutil.EqualOptional(normalizedLeft.ShellExitCode, normalizedRight.ShellExitCode)
 }
 
 func toolCallMetaEmpty(meta ToolCallMeta) bool {
@@ -110,13 +111,6 @@ func toolCallMetaEmpty(meta ToolCallMeta) bool {
 		!meta.OutputTruncated &&
 		!meta.MovedToBackground &&
 		meta.ShellExitCode == nil
-}
-
-func optionalIntEqual(left, right *int) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	return *left == *right
 }
 
 func toolRenderHintsEqual(left, right *ToolRenderHint) bool {

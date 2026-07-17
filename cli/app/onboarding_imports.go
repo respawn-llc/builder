@@ -243,20 +243,9 @@ func importSelectionsEqual(left, right onboardingImportSelection) bool {
 
 func importChoiceRefsEqual(left, right serverapi.ImportChoiceRef) bool {
 	return left.Mode == right.Mode &&
-		ptrStringEqual(left.SourceKind, right.SourceKind) &&
-		ptrStringEqual(left.ImportProviderID, right.ImportProviderID) &&
-		ptrStringEqual(left.SourceRootPath, right.SourceRootPath)
-}
-
-func ptrEqual[T comparable](left, right *T) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	return *left == *right
-}
-
-func ptrStringEqual(left, right *string) bool {
-	return ptrEqual(left, right)
+		textutil.EqualOptional(left.SourceKind, right.SourceKind) &&
+		textutil.EqualOptional(left.ImportProviderID, right.ImportProviderID) &&
+		textutil.EqualOptional(left.SourceRootPath, right.SourceRootPath)
 }
 
 func applyImportChoice(selection *onboardingImportSelection, choiceID string, choices []onboardingImportChoice) error {

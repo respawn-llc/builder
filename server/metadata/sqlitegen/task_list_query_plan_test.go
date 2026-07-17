@@ -135,4 +135,31 @@ CREATE TABLE task_run_records (
 	}
 	requireQueryUsesAnyTableIndex(t, db, listWorkflowTaskListRows, "project_workflow_links", args...)
 	requireQueryUsesIndex(t, db, listWorkflowTaskListRows, "tasks_project_workflow_link_idx", args...)
+	requireQueryPlanDoesNotGroupIntoTemporaryTree(t, db, listWorkflowTaskListRows, args...)
+}
+
+func requireQueryPlanDoesNotGroupIntoTemporaryTree(t *testing.T, db *sql.DB, query string, args ...any) {
+	t.Helper()
+	rows, err := db.Query("EXPLAIN QUERY PLAN "+query, args...)
+	if err != nil {
+		t.Fatalf("explain query plan: %v", err)
+	}
+	defer rows.Close()
+	groupingStructures := 0
+	for rows.Next() {
+		var id, parent, unused int64
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatalf("scan query plan: %v", err)
+		}
+		if detail == "USE TEMP B-TREE FOR GROUP BY" {
+			groupingStructures++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate query plan: %v", err)
+	}
+	if groupingStructures > 1 {
+		t.Fatalf("task-list cardinality introduced an extra unbounded grouping structure: count=%d", groupingStructures)
+	}
 }
