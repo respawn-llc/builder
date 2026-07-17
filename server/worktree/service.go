@@ -56,6 +56,7 @@ type ServiceOptions struct {
 	BaseDir             string
 	SetupScript         string
 	SetupTimeoutSeconds int
+	ResolveSetup        func(sourceWorkspaceRoot string) (config.WorktreeSettings, error)
 }
 
 type Service struct {
@@ -67,6 +68,7 @@ type Service struct {
 	baseDir             string
 	setupScript         string
 	setupTimeoutSeconds int
+	resolveSetup        func(sourceWorkspaceRoot string) (config.WorktreeSettings, error)
 	setupBroker         *setupEventBroker
 
 	workspaceMu    sync.Mutex
@@ -222,6 +224,7 @@ func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, activ
 		baseDir:             strings.TrimSpace(opts.BaseDir),
 		setupScript:         strings.TrimSpace(opts.SetupScript),
 		setupTimeoutSeconds: opts.SetupTimeoutSeconds,
+		resolveSetup:        opts.ResolveSetup,
 		setupBroker:         newSetupEventBroker(),
 		workspaceLocks:      make(map[string]*workspaceMutationLock),
 		transitionCtx:       transitionCtx,
@@ -564,6 +567,10 @@ func (s *Service) registeredWorktreeRoot(ctx context.Context, workspaceRoot stri
 }
 
 func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTaskWorktreeCreationRequest) (resp TaskWorktreeMaterialization, err error) {
+	setupSettings, err := s.worktreeSetupSettings(req.Workspace.RootPath)
+	if err != nil {
+		return TaskWorktreeMaterialization{}, err
+	}
 	createSpec, err := normalizeCreateSpec(req.CreateSpec)
 	if err != nil {
 		return TaskWorktreeMaterialization{}, err
@@ -656,6 +663,7 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 	if err := s.runSetupForWorktree(ctx, setupExecutionRequest{
 		SetupOperationID:    req.SetupOperationID,
 		SourceWorkspaceRoot: req.Workspace.RootPath,
+		ResolvedSettings:    &setupSettings,
 		BranchName:          branchName,
 		WorktreeRoot:        created.record.CanonicalRoot,
 		ScriptPayload: setupScriptPayload{
@@ -1546,6 +1554,7 @@ func nextAvailableWorktreeRoot(baseRoot string) (string, error) {
 type setupExecutionRequest struct {
 	SetupOperationID    serverapi.WorktreeSetupOperationID
 	SourceWorkspaceRoot string
+	ResolvedSettings    *config.WorktreeSettings
 	BranchName          string
 	WorktreeRoot        string
 	ScriptPayload       setupScriptPayload
@@ -1553,7 +1562,15 @@ type setupExecutionRequest struct {
 }
 
 func (s *Service) runSetupForWorktree(ctx context.Context, req setupExecutionRequest) error {
-	trimmedScript := strings.TrimSpace(s.setupScript)
+	settings := req.ResolvedSettings
+	if settings == nil {
+		resolved, err := s.worktreeSetupSettings(req.SourceWorkspaceRoot)
+		if err != nil {
+			return err
+		}
+		settings = &resolved
+	}
+	trimmedScript := strings.TrimSpace(settings.SetupScript)
 	if trimmedScript == "" {
 		return nil
 	}
@@ -1595,7 +1612,7 @@ func (s *Service) runSetupForWorktree(ctx context.Context, req setupExecutionReq
 		Phase:               serverapi.WorktreeSetupPhaseStarted,
 	}
 	s.publishSetupEvent(started)
-	if err := s.runSetupScript(ctx, scriptPath, payload); err != nil {
+	if err := s.runSetupScript(ctx, scriptPath, payload, settings.SetupTimeoutSeconds); err != nil {
 		failure := started
 		failure.Phase = serverapi.WorktreeSetupPhaseFailed
 		var setupErr *setupScriptError
@@ -1618,11 +1635,25 @@ func (s *Service) runSetupForWorktree(ctx context.Context, req setupExecutionReq
 	return nil
 }
 
-func (s *Service) runSetupScript(ctx context.Context, scriptPath string, payload setupScriptPayload) error {
+func (s *Service) worktreeSetupSettings(sourceWorkspaceRoot string) (config.WorktreeSettings, error) {
+	if s.resolveSetup == nil {
+		return config.WorktreeSettings{
+			SetupScript:         s.setupScript,
+			SetupTimeoutSeconds: s.setupTimeoutSeconds,
+		}, nil
+	}
+	settings, err := s.resolveSetup(sourceWorkspaceRoot)
+	if err != nil {
+		return config.WorktreeSettings{}, fmt.Errorf("resolve worktree setup settings: %w", err)
+	}
+	return settings, nil
+}
+
+func (s *Service) runSetupScript(ctx context.Context, scriptPath string, payload setupScriptPayload, timeoutSeconds int) error {
 	setupCtx := ctx
 	var cancel context.CancelFunc
-	if s != nil && s.setupTimeoutSeconds > 0 {
-		setupCtx, cancel = context.WithTimeout(ctx, time.Duration(s.setupTimeoutSeconds)*time.Second)
+	if timeoutSeconds > 0 {
+		setupCtx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 		defer cancel()
 	}
 	body, err := json.Marshal(payload)
@@ -1662,8 +1693,8 @@ func (s *Service) runSetupScript(ctx context.Context, scriptPath string, payload
 		setupErr.Timeout = errors.Is(setupCtx.Err(), context.DeadlineExceeded)
 		setupErr.Canceled = errors.Is(setupCtx.Err(), context.Canceled)
 		if setupErr.Timeout {
-			setupErr.TimeoutSeconds = s.setupTimeoutSeconds
-			setupErr.Message = fmt.Sprintf("timed out after %s", time.Duration(s.setupTimeoutSeconds)*time.Second)
+			setupErr.TimeoutSeconds = timeoutSeconds
+			setupErr.Message = fmt.Sprintf("timed out after %s", time.Duration(timeoutSeconds)*time.Second)
 		} else {
 			setupErr.Message = setupCtx.Err().Error()
 		}
