@@ -235,6 +235,8 @@
 
 - Models may use normal shell commands `kent goal show`, `kent goal complete`, and first-time `kent goal set <objective>` for the current session, but other goal commands detect invocation by the agent and refuse it.
 -  `goal set` by agents is allowed only when no active or paused goal exists. Completed goals do not block the next agent-set goal.
+- Goal inspection reads the durable session goal and does not require an Active Session Runtime. Running and dormant sessions return the same goal result; a valid session with no goal returns no goal, while unknown or inaccessible sessions remain errors.
+- Goal inspection excludes runtime-local goal-loop suspension. Live clients derive suspension from runtime status.
 - Successful goal mutations emit typed runtime status updates carrying the projected goal status state so frontends can update from goal SSOT instead of inferring status from transcript feedback or run lifecycle. Set, pause, resume, complete, and clear emit updates; show/read-only operations do not.
 - `/goal <objective>` (TUI slash command or GUI path) immediately sets/replaces the session goal and starts a model turn. It must be allowed even while the model turn is running, and the new notice is steered as usual.
 - `/goal resume` on a completed goal reopens it as active.

@@ -3,6 +3,7 @@ package runtimecontrol
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"core/prompts"
@@ -15,22 +16,22 @@ func (s *Service) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowReq
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeGoalShowResponse{}, err
 	}
-	engine, err := s.resolve(ctx, req.SessionID)
-	if err != nil {
-		return serverapi.RuntimeGoalShowResponse{}, err
+	if s == nil || s.persisted == nil {
+		return serverapi.RuntimeGoalShowResponse{}, errors.New("persisted session resolver is required")
 	}
-	goal := engine.Goal()
+	sessionID := strings.TrimSpace(req.SessionID)
+	record, err := s.persisted.ResolvePersistedSession(ctx, sessionID)
+	if err != nil {
+		return serverapi.RuntimeGoalShowResponse{}, fmt.Errorf("resolve persisted session %q: %w", sessionID, err)
+	}
+	if record.Meta == nil {
+		return serverapi.RuntimeGoalShowResponse{}, fmt.Errorf("persisted session %q metadata is required", sessionID)
+	}
+	goal := record.Meta.Goal
 	if goal == nil {
 		return serverapi.RuntimeGoalShowResponse{}, nil
 	}
-	return serverapi.RuntimeGoalShowResponse{Goal: &serverapi.RuntimeGoal{
-		ID:        strings.TrimSpace(goal.ID),
-		Objective: goal.Objective,
-		Status:    strings.TrimSpace(string(goal.Status)),
-		Suspended: engine.GoalLoopSuspended(),
-		CreatedAt: goal.CreatedAt,
-		UpdatedAt: goal.UpdatedAt,
-	}}, nil
+	return serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(*goal)}, nil
 }
 
 func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalShowResponse, error) {
@@ -51,7 +52,7 @@ func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetReque
 					}
 					return err
 				}
-				response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal, false)}
+				response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal)}
 				return nil
 			}
 			goal, queued, qErr := queueGoalSetForRequest(engine, req, trimmedObjective)
@@ -63,7 +64,7 @@ func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetReque
 				return qErr
 			}
 			if queued {
-				response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal, false)}
+				response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal)}
 				return nil
 			}
 			if strings.TrimSpace(req.Actor) == string(session.GoalActorAgent) {
@@ -86,7 +87,7 @@ func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetReque
 			if err := engine.StartGoalLoop(); err != nil {
 				return err
 			}
-			response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal, false)}
+			response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal)}
 			return nil
 		})
 		return response, err
@@ -129,18 +130,18 @@ func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalSt
 			if engine.WorkflowRunConfigured() && !requestOriginatesFromAgentStep(req.Actor, req.StepID) {
 				current := engine.Goal()
 				if status == session.GoalStatusActive && current != nil && current.Status == session.GoalStatusActive {
-					response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(*current, false)}
+					response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(*current)}
 					return nil
 				}
 				if status == session.GoalStatusComplete && current != nil && current.Status == session.GoalStatusComplete {
-					response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(*current, false)}
+					response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(*current)}
 					return nil
 				}
 				goal, err := engine.SetGoalStatusWithoutGoalLoopStart(status, session.GoalActor(req.Actor))
 				if err != nil {
 					return err
 				}
-				response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal, false)}
+				response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal)}
 				return nil
 			}
 			goal, queued, qErr := queueGoalStatusForRequest(engine, req, status)
@@ -148,20 +149,20 @@ func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalSt
 				return qErr
 			}
 			if queued {
-				response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal, false)}
+				response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal)}
 				return nil
 			}
 			if status == session.GoalStatusActive {
 				current := engine.Goal()
 				if current != nil && current.Status == session.GoalStatusActive && engine.GoalLoopContinuationEnforced() {
-					response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(*current, false)}
+					response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(*current)}
 					return nil
 				}
 			}
 			if status == session.GoalStatusComplete {
 				current := engine.Goal()
 				if current != nil && current.Status == session.GoalStatusComplete {
-					response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(*current, false)}
+					response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(*current)}
 					return nil
 				}
 			}
@@ -179,7 +180,7 @@ func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalSt
 					return err
 				}
 			}
-			response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal, false)}
+			response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal)}
 			return nil
 		})
 		return response, err
@@ -231,12 +232,11 @@ func requestOriginatesFromAgentStep(actor string, stepID string) bool {
 	return strings.TrimSpace(actor) == string(session.GoalActorAgent) && strings.TrimSpace(stepID) != ""
 }
 
-func runtimeGoalFromSessionGoal(goal session.GoalState, suspended bool) *serverapi.RuntimeGoal {
+func runtimeGoalFromSessionGoal(goal session.GoalState) *serverapi.RuntimeGoal {
 	return &serverapi.RuntimeGoal{
 		ID:        strings.TrimSpace(goal.ID),
 		Objective: goal.Objective,
 		Status:    strings.TrimSpace(string(goal.Status)),
-		Suspended: suspended,
 		CreatedAt: goal.CreatedAt,
 		UpdatedAt: goal.UpdatedAt,
 	}

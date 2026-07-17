@@ -50,6 +50,46 @@ func (s stubRuntimeResolver) BeginCancellableSessionRun(string) (context.Context
 
 func (s stubRuntimeResolver) SessionRunsBlocked(string) bool { return false }
 
+type runtimeResolverMustNotBeCalled struct {
+	t *testing.T
+}
+
+func (r runtimeResolverMustNotBeCalled) ResolveRuntime(context.Context, string) (*runtime.Engine, error) {
+	r.t.Helper()
+	r.t.Fatal("ResolveRuntime must not be called for persisted goal inspection")
+	return nil, nil
+}
+
+func (r runtimeResolverMustNotBeCalled) WithGuardedRuntime(context.Context, string, func(*runtime.Engine) error) (bool, error) {
+	r.t.Helper()
+	r.t.Fatal("WithGuardedRuntime must not be called for persisted goal inspection")
+	return false, nil
+}
+
+func (r runtimeResolverMustNotBeCalled) BeginSessionRun(string) (func(), bool) {
+	r.t.Helper()
+	r.t.Fatal("BeginSessionRun must not be called for persisted goal inspection")
+	return nil, false
+}
+
+func (r runtimeResolverMustNotBeCalled) BeginCancellableSessionRun(string) (context.Context, func(), bool) {
+	r.t.Helper()
+	r.t.Fatal("BeginCancellableSessionRun must not be called for persisted goal inspection")
+	return nil, nil, false
+}
+
+func (r runtimeResolverMustNotBeCalled) SessionRunsBlocked(string) bool {
+	r.t.Helper()
+	r.t.Fatal("SessionRunsBlocked must not be called for persisted goal inspection")
+	return false
+}
+
+type missingMetadataPersistedSessionResolver struct{}
+
+func (missingMetadataPersistedSessionResolver) ResolvePersistedSession(context.Context, string) (session.PersistedSessionRecord, error) {
+	return session.PersistedSessionRecord{SessionDir: "/tmp/session"}, nil
+}
+
 type countingBeginRuntimeResolver struct {
 	stubRuntimeResolver
 	beginCount atomic.Int32
@@ -365,7 +405,9 @@ func newRuntimeControlTestService(t *testing.T, client llm.Client, registry *too
 	t.Helper()
 	store, engine := newRuntimeControlTestEngine(t, client, registry, cfg, opts...)
 	history := newRuntimeControlPromptHistoryStore(store.Meta().SessionID)
-	service := NewService(stubRuntimeResolver{engine: engine}).WithPromptHistoryStore(history)
+	service := NewService(stubRuntimeResolver{engine: engine}).
+		WithPromptHistoryStore(history).
+		WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
 	return store, engine, service
 }
 
@@ -613,7 +655,7 @@ func TestServiceInterruptReturnsCurrentActivitySnapshot(t *testing.T) {
 
 func TestServiceGoalMutationsSetShowComplete(t *testing.T) {
 	store, engine := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	service := NewService(stubRuntimeResolver{engine: engine})
+	service := NewService(stubRuntimeResolver{engine: engine}).WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
 
 	setResp, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
 		ClientRequestID: "goal-set-1",
@@ -644,6 +686,187 @@ func TestServiceGoalMutationsSetShowComplete(t *testing.T) {
 	}
 	if completeResp.Goal == nil || completeResp.Goal.Status != "complete" {
 		t.Fatalf("complete goal response = %+v", completeResp.Goal)
+	}
+}
+
+func TestServiceShowGoalReturnsPersistedGoalWithoutRuntime(t *testing.T) {
+	store, _ := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	goal, err := store.SetGoal("inspect dormant goals", session.GoalActorUser)
+	if err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	goal, err = store.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser)
+	if err != nil {
+		t.Fatalf("SetGoalStatus: %v", err)
+	}
+	sessionID := store.Meta().SessionID
+	service := NewService(runtimeResolverMustNotBeCalled{t: t}).WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
+
+	resp, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: sessionID})
+	if err != nil {
+		t.Fatalf("ShowGoal: %v", err)
+	}
+	if resp.Goal == nil {
+		t.Fatal("ShowGoal goal = nil, want persisted goal")
+	}
+	if resp.Goal.ID != goal.ID ||
+		resp.Goal.Objective != goal.Objective ||
+		resp.Goal.Status != string(goal.Status) ||
+		!resp.Goal.CreatedAt.Equal(goal.CreatedAt) ||
+		!resp.Goal.UpdatedAt.Equal(goal.UpdatedAt) {
+		t.Fatalf("ShowGoal goal = %+v, want %+v", resp.Goal, goal)
+	}
+}
+
+func TestServiceShowGoalPrefersPersistedGoalOverLiveRuntime(t *testing.T) {
+	_, liveEngine := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	if _, err := liveEngine.SetGoal("live preview must not win", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	persistedStore, _ := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	persistedGoal, err := persistedStore.SetGoal("return committed metadata", session.GoalActorUser)
+	if err != nil {
+		t.Fatalf("SetGoal persisted: %v", err)
+	}
+	persistedGoal, err = persistedStore.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser)
+	if err != nil {
+		t.Fatalf("SetGoalStatus persisted: %v", err)
+	}
+	sessionID := persistedStore.Meta().SessionID
+	service := NewService(stubRuntimeResolver{engine: liveEngine}).WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
+
+	resp, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: sessionID})
+	if err != nil {
+		t.Fatalf("ShowGoal: %v", err)
+	}
+	if resp.Goal == nil || resp.Goal.ID != persistedGoal.ID || resp.Goal.Objective != persistedGoal.Objective || resp.Goal.Status != string(persistedGoal.Status) {
+		t.Fatalf("ShowGoal goal = %+v, want persisted goal %+v", resp.Goal, persistedGoal)
+	}
+}
+
+func TestServiceShowGoalReturnsEmptyResponseForPersistedSessionWithoutGoal(t *testing.T) {
+	store, _ := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{})
+	sessionID := store.Meta().SessionID
+	service := NewService(runtimeResolverMustNotBeCalled{t: t}).WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
+
+	resp, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: sessionID})
+	if err != nil {
+		t.Fatalf("ShowGoal: %v", err)
+	}
+	if resp.Goal != nil {
+		t.Fatalf("ShowGoal goal = %+v, want nil", resp.Goal)
+	}
+}
+
+func TestServiceShowGoalReturnsPersistedSessionResolutionFailures(t *testing.T) {
+	const sessionID = "64ee658a-138d-47d6-8624-e25aebcb7a5a"
+	tests := []struct {
+		name    string
+		service *Service
+		wantIs  error
+	}{
+		{
+			name:    "resolver required",
+			service: NewService(runtimeResolverMustNotBeCalled{t: t}),
+		},
+		{
+			name: "resolver failure",
+			service: NewService(runtimeResolverMustNotBeCalled{t: t}).
+				WithPersistedSessionResolver(runtimeControlTestSessionPersistence),
+			wantIs: session.ErrSessionNotFound,
+		},
+		{
+			name: "metadata required",
+			service: NewService(runtimeResolverMustNotBeCalled{t: t}).
+				WithPersistedSessionResolver(missingMetadataPersistedSessionResolver{}),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := tt.service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: sessionID})
+			if err == nil {
+				t.Fatal("ShowGoal error = nil, want failure")
+			}
+			if tt.wantIs != nil && !errors.Is(err, tt.wantIs) {
+				t.Fatalf("ShowGoal error = %v, want wrapping %v", err, tt.wantIs)
+			}
+			if resp.Goal != nil {
+				t.Fatalf("ShowGoal goal = %+v, want nil on failure", resp.Goal)
+			}
+		})
+	}
+}
+
+func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T) {
+	client := newCancelObservingRuntimeControlClient()
+	store, engine := newRuntimeControlTestEngine(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	initialGoal, err := engine.SetGoal("committed before active step", session.GoalActorUser)
+	if err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	service := NewService(stubRuntimeResolver{engine: engine}).
+		WithPromptHistoryStore(newRuntimeControlPromptHistoryStore(store.Meta().SessionID)).
+		WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
+	turnDone := make(chan error, 1)
+	go func() {
+		_, submitErr := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "turn-1", "work"))
+		turnDone <- submitErr
+	}()
+	released := false
+	defer func() {
+		if !released {
+			close(client.release)
+		}
+		select {
+		case <-turnDone:
+		case <-time.After(3 * time.Second):
+		}
+	}()
+	select {
+	case <-client.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for active model step")
+	}
+
+	accepted, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
+		ClientRequestID: "goal-set-queued",
+		SessionID:       store.Meta().SessionID,
+		Objective:       "accepted pending goal",
+		Actor:           string(session.GoalActorUser),
+	})
+	if err != nil {
+		t.Fatalf("SetGoal queued mutation: %v", err)
+	}
+	if accepted.Goal == nil || accepted.Goal.Objective != "accepted pending goal" || accepted.Goal.Status != string(session.GoalStatusActive) {
+		t.Fatalf("SetGoal accepted response = %+v, want active pending goal", accepted.Goal)
+	}
+
+	beforeDrain, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID})
+	if err != nil {
+		t.Fatalf("ShowGoal before drain: %v", err)
+	}
+	if beforeDrain.Goal == nil || beforeDrain.Goal.ID != initialGoal.ID || beforeDrain.Goal.Objective != initialGoal.Objective {
+		t.Fatalf("ShowGoal before drain = %+v, want prior committed goal %+v", beforeDrain.Goal, initialGoal)
+	}
+
+	close(client.release)
+	released = true
+	select {
+	case err := <-turnDone:
+		if err != nil {
+			t.Fatalf("SubmitUserTurn: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for active step drain")
+	}
+
+	afterDrain, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID})
+	if err != nil {
+		t.Fatalf("ShowGoal after drain: %v", err)
+	}
+	if afterDrain.Goal == nil || afterDrain.Goal.Objective != accepted.Goal.Objective || afterDrain.Goal.Status != accepted.Goal.Status {
+		t.Fatalf("ShowGoal after drain = %+v, want committed accepted goal %+v", afterDrain.Goal, accepted.Goal)
 	}
 }
 
@@ -1010,37 +1233,6 @@ func TestServiceResumeGoalPreflightFailureDoesNotMutateOrEmit(t *testing.T) {
 	}
 	if len(events) != 0 {
 		t.Fatalf("live events emitted after failed resume preflight: %+v", events)
-	}
-}
-
-func TestServiceShowGoalReportsRuntimeSuspension(t *testing.T) {
-	client := newCancelObservingRuntimeControlClient()
-	store, engine := newRuntimeControlTestEngine(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
-		t.Fatalf("SetGoal: %v", err)
-	}
-	if err := engine.StartGoalLoop(); err != nil {
-		t.Fatalf("StartGoalLoop: %v", err)
-	}
-	select {
-	case <-client.started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for goal loop to start")
-	}
-	if err := engine.Interrupt(); err != nil {
-		t.Fatalf("Interrupt: %v", err)
-	}
-	defer func() {
-		close(client.release)
-	}()
-	service := NewService(stubRuntimeResolver{engine: engine})
-
-	resp, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID})
-	if err != nil {
-		t.Fatalf("ShowGoal: %v", err)
-	}
-	if resp.Goal == nil || !resp.Goal.Suspended {
-		t.Fatalf("goal response = %+v, want suspended", resp.Goal)
 	}
 }
 
