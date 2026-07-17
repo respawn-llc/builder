@@ -118,7 +118,7 @@
 - Freeform ask input uses the same editor/cursor behavior as main input.
 - Source origin is not labeled in UI.
 - Answers are persisted as explicit summary text including selected option number and commentary.
-- Ask queue semantics are strict FIFO, in-memory only, and submitted answers are not editable.
+- Ask queue semantics are strict FIFO and in-memory only. Each submission snapshots an immutable answer payload. During delivery, the visible editor may hold a separate editable retry draft; changes apply only to a future submission after delivery fails, and canonical prompt resolution discards the draft.
 - Optional post-answer action binding uses typed registry with stable ID, payload schema, and handler.
 
 ## Sessions And Persistence

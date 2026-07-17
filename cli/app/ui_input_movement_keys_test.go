@@ -101,8 +101,7 @@ func TestMainComposerPreservesOtherRuneInput(t *testing.T) {
 
 func TestAskFreeformAltRuneWordNavigation(t *testing.T) {
 	model := newProjectedStaticUIModel()
-	reply := make(chan askReply, 1)
-	event := testQuestionAskEvent("ask-1", "Type answer", reply)
+	event := testQuestionAskEvent("ask-1", "Type answer")
 	updated := updateUIModel(t, model, askEventMsg{event: event})
 	updated.ask.input = "alpha beta gamma"
 	updated.ask.inputCursor = len([]rune(updated.ask.input))

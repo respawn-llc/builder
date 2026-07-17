@@ -16,6 +16,7 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/rpcwire"
 	"core/shared/runtimeids"
 	"core/shared/toolspec"
 	"core/shared/transcript"
@@ -988,7 +989,7 @@ func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, cli
 		if i >= len(delays) {
 			break
 		}
-		if err := waitForRetryDelay(ctx, delays[i]); err != nil {
+		if err := rpcwire.WaitForRetry(ctx, delays[i]); err != nil {
 			return llm.Response{}, err
 		}
 	}

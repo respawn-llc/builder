@@ -39,7 +39,7 @@ type uiRuntimeFeatureState struct {
 	worktreeClient        apicontract.WorktreeService
 
 	pathReferenceEvents        <-chan uiPathReferenceSearchEvent
-	runtimeConnectionEvents    <-chan runtimeConnectionStateChangedMsg
+	runtimeConnectionEvents    chan runtimeConnectionStateChangedMsg
 	runtimeReconnectWarning    <-chan runtimeReconnectWarningMsg
 	runtimeContextUsage        clientui.RuntimeContextUsage
 	runtimeContextUsageSession string

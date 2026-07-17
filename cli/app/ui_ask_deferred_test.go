@@ -9,8 +9,7 @@ import (
 )
 
 func TestAskEventDefersWhileDetailModeActive(t *testing.T) {
-	reply := make(chan askReply, 1)
-	m := newProjectedStaticUIModel()
+	m, control := newProjectedPromptTestUIModel(t)
 	m.terminalGeometry = terminalGeometryKnown(90, 12)
 	m.input = "hidden draft"
 	m.layout().syncViewport()
@@ -20,7 +19,7 @@ func TestAskEventDefersWhileDetailModeActive(t *testing.T) {
 		t.Fatalf("expected detail mode, got %q", m.view.Mode())
 	}
 
-	m = updateUIModel(t, m, askEventMsg{event: testQuestionAskEvent("ask-1", "Proceed?", reply, "Yes", "No")})
+	m = updateUIModel(t, m, askEventMsg{event: testQuestionAskEvent("ask-1", "Proceed?", "Yes", "No")})
 	if got := m.inputMode(); got != uiInputModeMain {
 		t.Fatalf("expected detail mode to defer ask input, got %q", got)
 	}
@@ -32,10 +31,8 @@ func TestAskEventDefersWhileDetailModeActive(t *testing.T) {
 
 	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyPgUp})
 
-	select {
-	case got := <-reply:
-		t.Fatalf("did not expect ask answered before leaving detail mode: %+v", got)
-	default:
+	if len(control.askRequests) != 0 {
+		t.Fatal("did not expect ask answered before leaving detail mode")
 	}
 
 	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
@@ -50,16 +47,16 @@ func TestAskEventDefersWhileDetailModeActive(t *testing.T) {
 		t.Fatalf("expected ask prompt visible after returning to ongoing mode, got %q", view)
 	}
 
-	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
-	resp := <-reply
-	if resp.response.SelectedOptionNumber == nil || *resp.response.SelectedOptionNumber != 1 {
-		t.Fatalf("expected first option selected by default, got %+v", resp.response)
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = runPromptDeliveryCommand(t, next.(*uiModel), cmd)
+	request := <-control.askRequests
+	if request.SelectedOptionNumber == nil || *request.SelectedOptionNumber != 1 {
+		t.Fatalf("expected first option selected by default, got %+v", request)
 	}
 }
 
 func TestAskEventDefersWhileProcessListOverlayIsOpen(t *testing.T) {
-	reply := make(chan askReply, 1)
-	m := newProjectedStaticUIModel()
+	m, control := newProjectedPromptTestUIModel(t)
 	m.terminalGeometry = terminalGeometryKnown(100, 14)
 	m.input = "/ps"
 
@@ -68,15 +65,13 @@ func TestAskEventDefersWhileProcessListOverlayIsOpen(t *testing.T) {
 		t.Fatalf("expected process list surface open, visible=%t surface=%q", m.processList.open, m.surface())
 	}
 
-	m = updateUIModel(t, m, askEventMsg{event: testQuestionAskEvent("ask-1", "Pick one", reply, "a", "b")})
+	m = updateUIModel(t, m, askEventMsg{event: testQuestionAskEvent("ask-1", "Pick one", "a", "b")})
 	if got := m.inputMode(); got != uiInputModeProcessList {
 		t.Fatalf("expected process list to keep input focus while ask is pending, got %q", got)
 	}
 
-	select {
-	case got := <-reply:
-		t.Fatalf("did not expect ask answered while process list overlay was open: %+v", got)
-	default:
+	if len(control.askRequests) != 0 {
+		t.Fatal("did not expect ask answered while process list overlay was open")
 	}
 
 	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyEsc})
@@ -94,10 +89,11 @@ func TestAskEventDefersWhileProcessListOverlayIsOpen(t *testing.T) {
 		t.Fatalf("expected deferred ask prompt visible after closing process list, got %q", view)
 	}
 
-	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
-	resp := <-reply
-	if resp.response.SelectedOptionNumber == nil || *resp.response.SelectedOptionNumber != 1 {
-		t.Fatalf("expected first option selected by default, got %+v", resp.response)
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = runPromptDeliveryCommand(t, next.(*uiModel), cmd)
+	request := <-control.askRequests
+	if request.SelectedOptionNumber == nil || *request.SelectedOptionNumber != 1 {
+		t.Fatalf("expected first option selected by default, got %+v", request)
 	}
 }
 

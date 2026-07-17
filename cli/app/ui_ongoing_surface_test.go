@@ -145,7 +145,6 @@ func TestOngoingTranscriptDeliveryKeepsCursorAbsentForAskOptionPicker(t *testing
 	next, _ := m.Update(askEventMsg{event: testQuestionAskEvent(
 		"ask-1",
 		"Choose an option",
-		make(chan askReply, 1),
 		"first",
 		"second",
 	)})

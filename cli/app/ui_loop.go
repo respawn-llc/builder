@@ -147,7 +147,9 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		}
 		return nil, errors.New("projected UI model has unexpected type")
 	}
-	model.promptAnswers = request.wiring.promptAnswers
+	model.promptAnswers = request.wiring.promptAnswers.withConnectionOutcomeSink(func(err error) {
+		enqueueRuntimeConnectionStateChange(model.runtimeConnectionEvents, err)
+	})
 	model.promptAttention = request.wiring.promptAttention
 	sessionClient, ok := runtimeClient.(*sessionRuntimeClient)
 	if !ok {

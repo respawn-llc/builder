@@ -227,8 +227,6 @@ type clipboardTextCopyDoneMsg struct {
 
 type askEvent struct {
 	prompt           clientui.TranscriptPrompt
-	reply            chan askReply
-	cancel           func()
 	resolvedPromptID clientui.PromptID
 }
 
@@ -241,17 +239,6 @@ func (e askEvent) promptID() string {
 
 func (e askEvent) isResolution() bool {
 	return strings.TrimSpace(string(e.resolvedPromptID)) != ""
-}
-
-func (e askEvent) cancelPending() {
-	if e.cancel != nil {
-		e.cancel()
-	}
-}
-
-type askReply struct {
-	response clientui.PromptAnswer
-	err      error
 }
 
 type askEventMsg struct {

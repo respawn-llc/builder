@@ -60,7 +60,7 @@ func resolveAnsweredTestAskThroughTranscript(t *testing.T, m *uiModel) {
 	if active == nil {
 		t.Fatal("answered ask was resolved before the canonical transcript resolution")
 	}
-	if !m.ask.answerPending {
+	if m.ask.activeDelivery == nil && !m.ask.answerPending {
 		t.Fatal("answered ask is not awaiting the canonical transcript resolution")
 	}
 	resolved := cloneTranscriptPromptForAsk(active.prompt)
