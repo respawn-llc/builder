@@ -25,20 +25,8 @@
 
 ## Import Boundaries
 
-- Desktop TypeScript code has explicit owners: shell/composition, the app-services facade, feature modules, desktop-shared capabilities, shared UI, the API adapter, test support, native packages, and tooling.
-- Desktop startup TypeScript entrypoints live under `src/app/startup` so shell ownership remains folder-based and fail-closed.
-- Feature modules do not depend on other feature modules. Behavior or presentation reused across features belongs to a desktop-shared capability or shared UI owner.
-- Desktop-only reusable capabilities live in the desktop application's shared layer. Workspace-level shared packages remain reserved until another GUI application is a real consumer.
-- Desktop-shared capabilities may depend on one another only through the target capability's public entrypoint.
-- Imports that cross an owner boundary use that owner's public entrypoint. Relative imports stay within one owner.
-- Categorized tests may read the two physical `src-tauri` JSON configuration fixtures through narrow relative imports; no production owner may import them.
-- The shell constructs and provides the app-services facade. Features and desktop-shared capabilities may consume the facade; the facade does not depend on shell or feature implementations.
-- App services expose feature-safe API and logging contracts. The concrete API client, transport, and logger implementations are constructed by shell/test composition and injected; transport and logger implementation details do not cross the facade.
-- Features do not import Tauri APIs or the native-bridge package directly. Native capabilities reach features through the app-services facade or a desktop-shared native capability.
-- The API adapter exclusively owns raw server representations, schemas, transport, socket, and client construction. Its public surface exposes adapted operations/models/errors plus a read-only connection source. Startup/composition and test harnesses may construct the concrete client; features receive only the feature-safe API contract through app services.
-- Reusable test-only code has a dedicated test-support owner and is importable only by tests. Fixtures that require feature internals remain owned by that feature.
-- Boundary enforcement is fail-closed: every desktop TypeScript file and internal dependency must belong to a declared owner; import, re-export, dynamic loading, CommonJS, and test module-mocking forms are checked; existing violations are fixed rather than grandfathered.
-- Feature components must not import `react-markdown`; use shared `MarkdownText`.
+- Feature components must not import Tauri APIs, raw transport, raw server DTOs, or `react-markdown`.
+- Use native bridge packages, shared `MarkdownText`, API adapters, and app-local UI kit exports.
 - Native dialog/modal actions go through bridge/helper paths such as `useNativeDialogFallback`.
 
 ## Native Bridge
