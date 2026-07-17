@@ -32,9 +32,14 @@ type workflowCommandLoopbackRemote struct {
 	projectBindingsByRoot map[string]serverapi.ProjectBinding
 	metadataStore         *metadata.Store
 	store                 *workflowstore.Store
+	closeErr              error
+	closeCalls            int
 }
 
-func (r *workflowCommandLoopbackRemote) Close() error { return nil }
+func (r *workflowCommandLoopbackRemote) Close() error {
+	r.closeCalls++
+	return r.closeErr
+}
 
 func (r *workflowCommandLoopbackRemote) SubscribeWorktreeSetup(ctx context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
 	if err := req.Validate(); err != nil {
@@ -595,6 +600,39 @@ func TestWorkflowListPaginatesAndResolutionDoesNotDrainPages(t *testing.T) {
 	}
 	if len(remote.deadlines) != 3 {
 		t.Fatalf("resolve deadlines = %+v, want id get plus exact-name list plus name get deadlines", remote.deadlines)
+	}
+}
+
+func TestRunWorkflowCommandSessionReportsCloseFailureWithoutChangingExitCode(t *testing.T) {
+	for _, wantCode := range []int{0, 1, 2} {
+		remote := &workflowCommandLoopbackRemote{closeErr: errors.New("close failed")}
+		restore := replaceWorkflowCommandRemoteOpener(t, config.App{}, remote)
+		stderr := new(strings.Builder)
+		got := runWorkflowCommandSession(stderr, func(config.App, workflowCommandRemote) int { return wantCode })
+		restore()
+		if got != wantCode {
+			t.Fatalf("exit code = %d, want %d", got, wantCode)
+		}
+		if remote.closeCalls != 1 {
+			t.Fatalf("remote close calls = %d, want 1", remote.closeCalls)
+		}
+		if strings.TrimSpace(stderr.String()) == "" {
+			t.Fatal("remote close failure was not reported")
+		}
+	}
+
+	original := workflowCommandRemoteOpener
+	defer func() { workflowCommandRemoteOpener = original }()
+	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
+		return config.App{}, nil, errors.New("open failed")
+	}
+	called := false
+	stderr := new(strings.Builder)
+	if got := runWorkflowCommandSession(stderr, func(config.App, workflowCommandRemote) int {
+		called = true
+		return 0
+	}); got != 1 || called || strings.TrimSpace(stderr.String()) == "" {
+		t.Fatalf("open failure exit=%d callback=%t stderr=%q", got, called, stderr.String())
 	}
 }
 

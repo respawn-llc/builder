@@ -42,31 +42,28 @@ func taskShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "task show requires <short-id-or-task-id>")
 		return 2
 	}
-	cfg, remote, closeRemote, opened := openWorkflowCommandSession(stderr, ".")
-	if !opened {
-		return 1
-	}
-	defer closeRemote()
-	requestedProjectID, task, err := getWorkflowTaskForShow(context.Background(), cfg, remote, *projectRef, positionals[0])
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	if requestedProjectID != "" && task.Summary.ProjectID != "" && task.Summary.ProjectID != requestedProjectID && task.Project.ProjectKey != "" {
-		fmt.Fprintf(stderr, "Note: This task belongs to another project %s\n", task.Project.ProjectKey)
-	}
-	if *jsonOut {
-		if _, err := taskStatusText(task.Status); err != nil {
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
+		requestedProjectID, task, err := getWorkflowTaskForShow(context.Background(), cfg, remote, *projectRef, positionals[0])
+		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		return writeCommandJSON(stdout, stderr, taskShowOutputFromDetail(task))
-	}
-	if err := writeTaskDetail(stdout, task); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	return 0
+		if requestedProjectID != "" && task.Summary.ProjectID != "" && task.Summary.ProjectID != requestedProjectID && task.Project.ProjectKey != "" {
+			fmt.Fprintf(stderr, "Note: This task belongs to another project %s\n", task.Project.ProjectKey)
+		}
+		if *jsonOut {
+			if _, err := taskStatusText(task.Status); err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+			return writeCommandJSON(stdout, stderr, taskShowOutputFromDetail(task))
+		}
+		if err := writeTaskDetail(stdout, task); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+	})
 }
 
 func taskShowOutputFromDetail(task serverapi.WorkflowTaskDetail) taskShowOutput {
