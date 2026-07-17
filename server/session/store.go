@@ -152,26 +152,19 @@ func OpenByID(persistenceRoot, sessionID string, options ...StoreOption) (*Store
 }
 
 func openPersistedSessionWithReconciliationRefresh(storeOpts storeOptions, resolve func() (PersistedSessionRecord, error)) (*Store, error) {
-	var conflict error
-	for attempt := 0; attempt < maxEventLogReconciliationOpenAttempts; attempt++ {
-		record, err := resolve()
-		if err != nil {
-			if conflict != nil {
-				return nil, errors.Join(conflict, fmt.Errorf("refresh session metadata after event-log reconciliation conflict: %w", err))
-			}
-			return nil, err
-		}
-		opened, err := openPersistedSession(record.SessionDir, record.Meta, storeOpts)
-		if !errors.Is(err, ErrEventLogReconciliationConflict) {
-			return opened, err
-		}
-		conflict = err
+	record, err := resolve()
+	if err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf(
-		"open persisted session did not converge after %d event-log reconciliation attempts: %w",
-		maxEventLogReconciliationOpenAttempts,
-		conflict,
-	)
+	opened, err := openPersistedSession(record.SessionDir, record.Meta, storeOpts)
+	if !errors.Is(err, ErrEventLogReconciliationConflict) {
+		return opened, err
+	}
+	refreshed, refreshErr := resolve()
+	if refreshErr != nil {
+		return nil, errors.Join(err, fmt.Errorf("refresh session metadata after event-log reconciliation conflict: %w", refreshErr))
+	}
+	return openPersistedSession(refreshed.SessionDir, refreshed.Meta, storeOpts)
 }
 
 func openPersistedSession(sessionDir string, resolvedMeta *Meta, storeOpts storeOptions) (*Store, error) {

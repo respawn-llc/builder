@@ -3,8 +3,6 @@ package transcript
 import (
 	"encoding/json"
 	"testing"
-
-	patchformat "core/shared/transcript/patchformat"
 )
 
 func TestDecodeToolCallMetaTreatsEmptyObjectAsAbsent(t *testing.T) {
@@ -63,34 +61,5 @@ func TestEncodeDecodeToolCallMetaRoundTripsShellOutputStatus(t *testing.T) {
 	if !meta.RawOutputRequested || !meta.OutputTruncated || !meta.MovedToBackground ||
 		meta.ShellExitCode == nil || *meta.ShellExitCode != 7 {
 		t.Fatalf("expected shell output status to round-trip, got %+v", meta)
-	}
-}
-
-func TestEncodeDecodeToolCallMetaRoundTripsKnownZeroDeletionCount(t *testing.T) {
-	rendered := patchformat.Render(
-		"*** Begin Patch\n*** Delete File: empty.txt\n*** End Patch\n",
-		"/workspace",
-	)
-	rendered, err := patchformat.ApplyWholeFileDeletionFacts(
-		rendered,
-		[]patchformat.WholeFileDeletionFact{{
-			ID: patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0},
-		}},
-	)
-	if err != nil {
-		t.Fatalf("apply known-zero deletion fact: %v", err)
-	}
-
-	raw := EncodeToolCallMeta(ToolCallMeta{ToolName: "patch", PatchRender: &rendered})
-	meta, ok := DecodeToolCallMeta(raw)
-	if !ok || meta.PatchRender == nil || len(meta.PatchRender.Files) != 1 {
-		t.Fatalf("decoded patch metadata = %+v, want one file", meta)
-	}
-	file := meta.PatchRender.Files[0]
-	if file.Removed != 0 ||
-		len(file.WholeFileDeletions) != 1 ||
-		!file.WholeFileDeletions[0].CountKnown ||
-		!patchformat.ShowsRemovedCount(file) {
-		t.Fatalf("known-zero deletion did not round-trip: %+v", file)
 	}
 }

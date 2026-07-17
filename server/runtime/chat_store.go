@@ -7,7 +7,6 @@ import (
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -35,7 +34,6 @@ type ChatEntry struct {
 	BackgroundProcessID  string
 	BackgroundExitCode   *int
 	ToolCall             *transcript.ToolCallMeta
-	DeveloperDiagnostic  *transcript.DeveloperDiagnostic
 }
 
 type ChatSnapshot struct {
@@ -58,47 +56,14 @@ type TranscriptWindowSnapshot struct {
 }
 
 type storedToolCompletion struct {
-	CallID        string                          `json:"call_id"`
-	Name          string                          `json:"name"`
-	IsError       bool                            `json:"is_error"`
-	Output        json.RawMessage                 `json:"output"`
-	Summary       string                          `json:"summary,omitempty"`
-	CondensedText string                          `json:"condensed_text,omitempty"`
-	Presentation  *transcript.ToolCallMeta        `json:"presentation,omitempty"`
-	ProviderItems []llm.ResponseItem              `json:"provider_items,omitempty"`
-	Diagnostic    *transcript.DeveloperDiagnostic `json:"diagnostic,omitempty"`
-}
-
-func toolCompletionDiagnosticChatEntry(diagnostic transcript.DeveloperDiagnostic) ChatEntry {
-	return ChatEntry{
-		Visibility:          transcript.EntryVisibilityOngoing,
-		Role:                string(transcript.EntryRoleDeveloperErrorFeedback),
-		DeveloperDiagnostic: transcript.CloneDeveloperDiagnostic(&diagnostic),
-	}
-}
-
-func validateStoredToolCompletionDiagnostic(completion storedToolCompletion) error {
-	if completion.Diagnostic == nil {
-		return nil
-	}
-	if completion.IsError {
-		return errors.New("failed tool completion cannot carry a developer diagnostic")
-	}
-	if err := completion.Diagnostic.Validate(); err != nil {
-		return fmt.Errorf("tool completion diagnostic: %w", err)
-	}
-	context := completion.Diagnostic.DeletionFactMismatch
-	if context == nil {
-		return errors.New("tool completion diagnostic requires a deletion fact mismatch context")
-	}
-	if strings.TrimSpace(context.CallID) != strings.TrimSpace(completion.CallID) {
-		return fmt.Errorf(
-			"tool completion diagnostic call id %q does not match completion call id %q",
-			context.CallID,
-			completion.CallID,
-		)
-	}
-	return nil
+	CallID        string                   `json:"call_id"`
+	Name          string                   `json:"name"`
+	IsError       bool                     `json:"is_error"`
+	Output        json.RawMessage          `json:"output"`
+	Summary       string                   `json:"summary,omitempty"`
+	CondensedText string                   `json:"condensed_text,omitempty"`
+	Presentation  *transcript.ToolCallMeta `json:"presentation,omitempty"`
+	ProviderItems []llm.ResponseItem       `json:"provider_items,omitempty"`
 }
 
 type chatStore struct {
@@ -109,21 +74,19 @@ type chatStore struct {
 	compact        *compactionCheckpoint
 	local          []localChatEntry
 
-	toolCompletions                    map[string]tools.Result
-	toolCompletionProviderItems        map[string][]llm.ResponseItem
-	toolCompletionDiagnostics          map[string]*transcript.DeveloperDiagnostic
-	assistantToolCalls                 map[string]struct{}
-	materializedToolResults            map[string]struct{}
-	synthesizedToolResults             map[string]struct{}
-	projectedToolCompletionDiagnostics map[string]struct{}
-	assistantStreamIDsByEntry          map[int]uuid.UUID
-	activeSegmentEntryStart            int
-	streaming                          *assistantStreamingState
-	streamingError                     string
-	cwd                                string
-	lastCommittedAssistantFinalAnswer  string
-	messageCount                       int
-	transcriptEntryCount               int
+	toolCompletions                   map[string]tools.Result
+	toolCompletionProviderItems       map[string][]llm.ResponseItem
+	assistantToolCalls                map[string]struct{}
+	materializedToolResults           map[string]struct{}
+	synthesizedToolResults            map[string]struct{}
+	assistantStreamIDsByEntry         map[int]uuid.UUID
+	activeSegmentEntryStart           int
+	streaming                         *assistantStreamingState
+	streamingError                    string
+	cwd                               string
+	lastCommittedAssistantFinalAnswer string
+	messageCount                      int
+	transcriptEntryCount              int
 
 	providerTokenEstimate      int
 	providerTokenEstimateDirty bool
@@ -157,15 +120,13 @@ func newChatStore() *chatStore {
 
 func newChatStoreWithCWD(cwd string) *chatStore {
 	return &chatStore{
-		toolCompletions:                    make(map[string]tools.Result, 16),
-		toolCompletionProviderItems:        make(map[string][]llm.ResponseItem, 16),
-		toolCompletionDiagnostics:          make(map[string]*transcript.DeveloperDiagnostic, 16),
-		assistantToolCalls:                 make(map[string]struct{}, 16),
-		materializedToolResults:            make(map[string]struct{}, 16),
-		synthesizedToolResults:             make(map[string]struct{}, 16),
-		projectedToolCompletionDiagnostics: make(map[string]struct{}, 16),
-		cwd:                                strings.TrimSpace(cwd),
-		providerTokenEstimateDirty:         true,
+		toolCompletions:             make(map[string]tools.Result, 16),
+		toolCompletionProviderItems: make(map[string][]llm.ResponseItem, 16),
+		assistantToolCalls:          make(map[string]struct{}, 16),
+		materializedToolResults:     make(map[string]struct{}, 16),
+		synthesizedToolResults:      make(map[string]struct{}, 16),
+		cwd:                         strings.TrimSpace(cwd),
+		providerTokenEstimateDirty:  true,
 	}
 }
 
@@ -229,11 +190,9 @@ func (s *chatStore) pruneAssistantStreamIDsBeforeLocked(activeSegmentEntryStart 
 func (s *chatStore) pruneToolCompletionsToWorkingSetLocked() {
 	if len(s.toolCompletions) == 0 &&
 		len(s.toolCompletionProviderItems) == 0 &&
-		len(s.toolCompletionDiagnostics) == 0 &&
 		len(s.assistantToolCalls) == 0 &&
 		len(s.materializedToolResults) == 0 &&
-		len(s.synthesizedToolResults) == 0 &&
-		len(s.projectedToolCompletionDiagnostics) == 0 {
+		len(s.synthesizedToolResults) == 0 {
 		return
 	}
 	referenced := make(map[string]struct{}, len(s.toolCompletions))
@@ -251,11 +210,9 @@ func (s *chatStore) pruneToolCompletionsToWorkingSetLocked() {
 	}
 	pruneCallIDMapToReferenced(s.toolCompletions, referenced)
 	pruneCallIDMapToReferenced(s.toolCompletionProviderItems, referenced)
-	pruneCallIDMapToReferenced(s.toolCompletionDiagnostics, referenced)
 	pruneCallIDMapToReferenced(s.assistantToolCalls, referenced)
 	pruneCallIDMapToReferenced(s.materializedToolResults, referenced)
 	pruneCallIDMapToReferenced(s.synthesizedToolResults, referenced)
-	pruneCallIDMapToReferenced(s.projectedToolCompletionDiagnostics, referenced)
 }
 
 func pruneCallIDMapToReferenced[V any](m map[string]V, referenced map[string]struct{}) {
@@ -338,15 +295,7 @@ func (s *chatStore) restoreToolCompletionPayload(payload []byte) error {
 	if err := json.Unmarshal(payload, &completion); err != nil {
 		return fmt.Errorf("decode tool_completed event: %w", err)
 	}
-	if err := validateStoredToolCompletionDiagnostic(completion); err != nil {
-		return fmt.Errorf("decode tool_completed event: %w", err)
-	}
-	s.recordStoredToolCompletion(completion)
-	return nil
-}
-
-func (s *chatStore) recordStoredToolCompletion(completion storedToolCompletion) {
-	s.recordToolCompletionWithDiagnostic(tools.Result{
+	s.recordToolCompletionWithProviderItems(tools.Result{
 		CallID:        completion.CallID,
 		Name:          toolspec.ID(completion.Name),
 		IsError:       completion.IsError,
@@ -354,14 +303,11 @@ func (s *chatStore) recordStoredToolCompletion(completion storedToolCompletion) 
 		Summary:       completion.Summary,
 		CondensedText: completion.CondensedText,
 		Presentation:  completion.Presentation,
-	}, completion.ProviderItems, completion.Diagnostic)
+	}, completion.ProviderItems)
+	return nil
 }
 
 func (s *chatStore) recordToolCompletionWithProviderItems(res tools.Result, providerItems []llm.ResponseItem) {
-	s.recordToolCompletionWithDiagnostic(res, providerItems, nil)
-}
-
-func (s *chatStore) recordToolCompletionWithDiagnostic(res tools.Result, providerItems []llm.ResponseItem, diagnostic *transcript.DeveloperDiagnostic) {
 	callID := strings.TrimSpace(res.CallID)
 	if callID == "" {
 		return
@@ -374,36 +320,15 @@ func (s *chatStore) recordToolCompletionWithDiagnostic(res tools.Result, provide
 	} else {
 		delete(s.toolCompletionProviderItems, callID)
 	}
-	if diagnostic == nil {
-		delete(s.toolCompletionDiagnostics, callID)
-	} else {
-		s.toolCompletionDiagnostics[callID] = transcript.CloneDeveloperDiagnostic(diagnostic)
-	}
 	s.providerTokenEstimateDirty = true
-	s.transcriptEntryCount += s.projectToolCompletionLocked(callID)
-}
-
-func (s *chatStore) projectToolCompletionLocked(callID string) int {
-	if _, ok := s.assistantToolCalls[callID]; !ok {
-		return 0
-	}
-	if _, ok := s.toolCompletions[callID]; !ok {
-		return 0
-	}
-	added := 0
-	if _, materialized := s.materializedToolResults[callID]; !materialized {
-		if _, synthesized := s.synthesizedToolResults[callID]; !synthesized {
-			s.synthesizedToolResults[callID] = struct{}{}
-			added++
+	if _, ok := s.assistantToolCalls[callID]; ok {
+		if _, materialized := s.materializedToolResults[callID]; !materialized {
+			if _, synthesized := s.synthesizedToolResults[callID]; !synthesized {
+				s.synthesizedToolResults[callID] = struct{}{}
+				s.transcriptEntryCount++
+			}
 		}
 	}
-	if s.toolCompletionDiagnostics[callID] != nil {
-		if _, projected := s.projectedToolCompletionDiagnostics[callID]; !projected {
-			s.projectedToolCompletionDiagnostics[callID] = struct{}{}
-			added++
-		}
-	}
-	return added
 }
 
 func (s *chatStore) appendStreamingDelta(stepID string, baseRevision int64, baseCommittedEntryCount int, delta string, phase llm.MessagePhase) (*AssistantStreamMetadata, *uuid.UUID) {
@@ -735,7 +660,16 @@ func (s *chatStore) applyMessageStatsLocked(msg llm.Message) {
 				continue
 			}
 			s.assistantToolCalls[callID] = struct{}{}
-			delta += s.projectToolCompletionLocked(callID)
+			if _, materialized := s.materializedToolResults[callID]; materialized {
+				continue
+			}
+			if _, synthesized := s.synthesizedToolResults[callID]; synthesized {
+				continue
+			}
+			if _, completed := s.toolCompletions[callID]; completed {
+				s.synthesizedToolResults[callID] = struct{}{}
+				delta++
+			}
 		}
 	case llm.RoleTool:
 		callID := strings.TrimSpace(msg.ToolCallID)
@@ -779,28 +713,15 @@ type transcriptDeliverySnapshot struct {
 }
 
 type transcriptDeliveryFactScan struct {
-	rows                      []TranscriptCommittedRowFact
-	toolCompletions           map[string]tools.Result
-	materializedToolCalls     map[string]struct{}
-	toolCompletionDiagnostics map[string]*transcript.DeveloperDiagnostic
-	streamIDsByEntry          map[int]uuid.UUID
-	currentEntryIndex         int
+	rows                  []TranscriptCommittedRowFact
+	toolCompletions       map[string]tools.Result
+	materializedToolCalls map[string]struct{}
+	streamIDsByEntry      map[int]uuid.UUID
+	currentEntryIndex     int
 }
 
-func newTranscriptDeliveryFactScan(
-	completions map[string]tools.Result,
-	materializedToolCalls map[string]struct{},
-	diagnostics map[string]*transcript.DeveloperDiagnostic,
-	streamIDsByEntry map[int]uuid.UUID,
-	currentEntryIndex int,
-) *transcriptDeliveryFactScan {
-	return &transcriptDeliveryFactScan{
-		toolCompletions:           completions,
-		materializedToolCalls:     materializedToolCalls,
-		toolCompletionDiagnostics: diagnostics,
-		streamIDsByEntry:          streamIDsByEntry,
-		currentEntryIndex:         currentEntryIndex,
-	}
+func newTranscriptDeliveryFactScan(completions map[string]tools.Result, materializedToolCalls map[string]struct{}, streamIDsByEntry map[int]uuid.UUID, currentEntryIndex int) *transcriptDeliveryFactScan {
+	return &transcriptDeliveryFactScan{toolCompletions: completions, materializedToolCalls: materializedToolCalls, streamIDsByEntry: streamIDsByEntry, currentEntryIndex: currentEntryIndex}
 }
 
 func (s *transcriptDeliveryFactScan) ApplyMessage(stepID string, msg llm.Message) {
@@ -813,21 +734,10 @@ func (s *transcriptDeliveryFactScan) ApplyMessage(stepID string, msg llm.Message
 	}
 	facts := transcriptCommittedRowFactsForStep(
 		stepID,
-		transcriptCommittedRowFactsWithToolCompletionDiagnostics(
-			msg,
-			streamID,
-			s.toolCompletions,
-			s.materializedToolCalls,
-			s.toolCompletionDiagnostics,
-		),
+		transcriptCommittedRowFactsFromMessage(msg, streamID, s.toolCompletions, s.materializedToolCalls),
 	)
 	s.rows = append(s.rows, facts...)
-	s.currentEntryIndex += transcriptCommittedEntryCountWithToolCompletionDiagnostics(
-		msg,
-		s.toolCompletions,
-		s.materializedToolCalls,
-		s.toolCompletionDiagnostics,
-	)
+	s.currentEntryIndex += transcriptCommittedEntryCountFromMessage(msg, s.toolCompletions, s.materializedToolCalls)
 }
 
 func (s *transcriptDeliveryFactScan) ApplyLocalEntry(entry ChatEntry, projected bool) {
@@ -913,13 +823,7 @@ func (s *chatStore) deliverySnapshot() transcriptDeliverySnapshot {
 	for entryIndex, streamID := range s.assistantStreamIDsByEntry {
 		streamIDsByEntry[entryIndex] = streamID
 	}
-	scan := newTranscriptDeliveryFactScan(
-		s.toolCompletions,
-		materializedToolResults,
-		s.toolCompletionDiagnostics,
-		streamIDsByEntry,
-		s.activeSegmentEntryStart,
-	)
+	scan := newTranscriptDeliveryFactScan(s.toolCompletions, materializedToolResults, streamIDsByEntry, s.activeSegmentEntryStart)
 	s.walkProjectionLocked(
 		scan.ApplyMessage,
 		func(local localChatEntry) {

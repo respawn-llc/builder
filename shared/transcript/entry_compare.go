@@ -138,8 +138,7 @@ func renderedPatchesEqual(left, right *patchformat.RenderedPatch) bool {
 			a.RelPath == b.RelPath &&
 			a.Added == b.Added &&
 			a.Removed == b.Removed &&
-			slices.Equal(a.Diff, b.Diff) &&
-			slices.Equal(a.WholeFileDeletions, b.WholeFileDeletions)
+			slices.Equal(a.Diff, b.Diff)
 	}) &&
 		slices.EqualFunc(left.SummaryLines, right.SummaryLines, func(a, b patchformat.RenderedLine) bool {
 			return a.Kind == b.Kind &&

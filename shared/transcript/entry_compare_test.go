@@ -80,25 +80,3 @@ func TestEntryPayloadEqualIncludesPatchRenderMetadata(t *testing.T) {
 		t.Fatal("expected patch render summary change to make entries different")
 	}
 }
-
-func TestEntryPayloadEqualIncludesWholeFileDeletionMetadata(t *testing.T) {
-	leftRender := patchformat.Render(
-		"*** Begin Patch\n*** Delete File: a.go\n*** End Patch\n",
-		"/workspace",
-	)
-	rightRender := patchformat.Clone(&leftRender)
-	rightRender.Files[0].WholeFileDeletions[0].CountKnown = true
-
-	left := EntryPayload{
-		Role:       "tool_call",
-		Text:       "patch",
-		ToolCallID: "call-1",
-		ToolCall:   &ToolCallMeta{ToolName: "patch", PatchRender: &leftRender},
-	}
-	right := left
-	right.ToolCall = &ToolCallMeta{ToolName: "patch", PatchRender: rightRender}
-
-	if EntryPayloadEqual(left, right) {
-		t.Fatal("expected whole-file deletion metadata change to make entries different")
-	}
-}

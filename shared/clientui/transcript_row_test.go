@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"core/shared/transcript"
-	patchformat "core/shared/transcript/patchformat"
 )
 
 func TestTranscriptCommittedAssistantRowCarriesStepAndOptionalStreamIdentity(t *testing.T) {
@@ -89,9 +88,6 @@ func TestTranscriptNoticeRowCarriesTypedCacheWarningFacts(t *testing.T) {
 
 func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 	legacyText := "legacy notice"
-	runtimeCode := TranscriptDiagnosticCode("runtime")
-	contradictory := "contradictory"
-	failed := "failed"
 	tests := []TranscriptNoticeRow{
 		{
 			Reason:   TranscriptNoticeCacheWarning,
@@ -113,7 +109,10 @@ func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 				Reason:     "cache_miss",
 				Visibility: transcript.EntryVisibilityOngoing,
 			},
-			Diagnostic: &TranscriptDiagnostic{Code: &runtimeCode, Detail: &contradictory},
+			Diagnostic: &TranscriptDiagnostic{
+				Code:   TranscriptDiagnosticCode("runtime"),
+				Detail: "contradictory",
+			},
 		},
 		{
 			Reason:   TranscriptNoticeRuntimeDiagnostic,
@@ -123,44 +122,24 @@ func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 				Reason:     "cache_miss",
 				Visibility: transcript.EntryVisibilityOngoing,
 			},
-			Diagnostic: &TranscriptDiagnostic{Code: &runtimeCode, Detail: &failed},
+			Diagnostic: &TranscriptDiagnostic{
+				Code:   TranscriptDiagnosticCode("runtime"),
+				Detail: "failed",
+			},
 		},
 		{
 			Reason:     TranscriptNoticeLegacyUntypedNotice,
 			Severity:   TranscriptNoticeInfo,
 			LegacyText: &legacyText,
-			Diagnostic: &TranscriptDiagnostic{Code: &runtimeCode, Detail: &contradictory},
+			Diagnostic: &TranscriptDiagnostic{
+				Code:   TranscriptDiagnosticCode("runtime"),
+				Detail: "contradictory",
+			},
 		},
 	}
 	for _, notice := range tests {
 		if err := notice.Validate(); err == nil {
 			t.Fatalf("accepted notice without required typed payload: %+v", notice)
 		}
-	}
-}
-
-func TestTranscriptNoticeRowCarriesTypedDeveloperDiagnosticWithoutLegacyFields(t *testing.T) {
-	diagnostic := transcript.NewDeletionFactMismatchDeveloperDiagnostic(
-		"call-1",
-		patchformat.WholeFileDeletionFactMismatchError{
-			Kind: patchformat.WholeFileDeletionFactMismatchMissing,
-			ID:   patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0},
-		},
-	)
-	notice := TranscriptNoticeRow{
-		Reason:     TranscriptNoticeRuntimeDiagnostic,
-		Severity:   TranscriptNoticeError,
-		Diagnostic: &TranscriptDiagnostic{Developer: transcript.CloneDeveloperDiagnostic(&diagnostic)},
-	}
-	if err := notice.Validate(); err != nil {
-		t.Fatalf("validate typed developer diagnostic notice: %v", err)
-	}
-
-	legacyCode := TranscriptDiagnosticCode("legacy")
-	legacyDetail := "must not coexist"
-	notice.Diagnostic.Code = &legacyCode
-	notice.Diagnostic.Detail = &legacyDetail
-	if err := notice.Validate(); err == nil {
-		t.Fatal("accepted developer diagnostic with legacy code and detail")
 	}
 }

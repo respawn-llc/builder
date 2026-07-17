@@ -437,7 +437,6 @@ func TestSessionChildReceivesOnlyDeclaredEnvironment(t *testing.T) {
 	}
 	for range session.Events() {
 	}
-	<-session.Done()
 	capture, err := session.Capture()
 	if err != nil {
 		t.Fatalf("Capture: %v", err)

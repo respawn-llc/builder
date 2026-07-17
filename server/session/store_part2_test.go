@@ -1,7 +1,6 @@
 package session
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -474,95 +473,6 @@ func TestOpenReconcilesMetaLastSequenceFromEventLog(t *testing.T) {
 	}
 	if next.Seq != 3 {
 		t.Fatalf("expected seq=3 after reopen reconciliation, got %d", next.Seq)
-	}
-}
-
-type conflictingReconciliationObserver struct {
-	record             PersistedSessionRecord
-	conflictsRemaining int
-	resolveCalls       int
-	reconcileCalls     int
-}
-
-func (o *conflictingReconciliationObserver) ObservePersistedStore(_ context.Context, snapshot PersistedStoreSnapshot) error {
-	o.record = PersistedSessionRecord{SessionDir: snapshot.SessionDir, Meta: ptrMeta(snapshot.Meta)}
-	return nil
-}
-
-func (o *conflictingReconciliationObserver) ObserveEventLogReconciliation(_ context.Context, reconciliation PersistedEventLogReconciliation) error {
-	o.reconcileCalls++
-	if o.conflictsRemaining > 0 {
-		o.conflictsRemaining--
-		return EventLogReconciliationConflictError{
-			SessionID:            reconciliation.SessionID,
-			ObservedLastSequence: reconciliation.ObservedLastSequence,
-			CurrentLastSequence:  reconciliation.ObservedLastSequence + 1,
-		}
-	}
-	return nil
-}
-
-func (o *conflictingReconciliationObserver) ResolvePersistedSession(_ context.Context, _ string) (PersistedSessionRecord, error) {
-	o.resolveCalls++
-	return cloneTestPersistedSessionRecord(o.record), nil
-}
-
-func TestOpenRetriesEventLogReconciliationUntilMetadataConverges(t *testing.T) {
-	store := newSessionTestStore(t)
-	if _, _, err := store.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "u1"}); err != nil {
-		t.Fatalf("append event: %v", err)
-	}
-	meta := store.Meta()
-	meta.LastSequence = 0
-	observer := &conflictingReconciliationObserver{
-		record:             PersistedSessionRecord{SessionDir: store.Dir(), Meta: &meta},
-		conflictsRemaining: 2,
-	}
-
-	reopened, err := Open(
-		store.Dir(),
-		WithPersistedSessionResolver(observer),
-		WithPersistenceObserver(observer),
-	)
-	if err != nil {
-		t.Fatalf("open store after conflicts: %v", err)
-	}
-	if reopened.Meta().LastSequence != 1 {
-		t.Fatalf("reconciled last sequence = %d, want 1", reopened.Meta().LastSequence)
-	}
-	if observer.resolveCalls != 3 || observer.reconcileCalls != 3 {
-		t.Fatalf("retry calls = {resolve:%d reconcile:%d}, want 3 each", observer.resolveCalls, observer.reconcileCalls)
-	}
-}
-
-func TestOpenBoundsPersistentEventLogReconciliationConflicts(t *testing.T) {
-	store := newSessionTestStore(t)
-	if _, _, err := store.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "u1"}); err != nil {
-		t.Fatalf("append event: %v", err)
-	}
-	meta := store.Meta()
-	meta.LastSequence = 0
-	observer := &conflictingReconciliationObserver{
-		record:             PersistedSessionRecord{SessionDir: store.Dir(), Meta: &meta},
-		conflictsRemaining: maxEventLogReconciliationOpenAttempts,
-	}
-
-	_, err := Open(
-		store.Dir(),
-		WithPersistedSessionResolver(observer),
-		WithPersistenceObserver(observer),
-	)
-	if !errors.Is(err, ErrEventLogReconciliationConflict) {
-		t.Fatalf("open error = %v, want reconciliation conflict", err)
-	}
-	if observer.resolveCalls != maxEventLogReconciliationOpenAttempts ||
-		observer.reconcileCalls != maxEventLogReconciliationOpenAttempts {
-		t.Fatalf(
-			"bounded retry calls = {resolve:%d reconcile:%d}, want %d each",
-			observer.resolveCalls,
-			observer.reconcileCalls,
-			maxEventLogReconciliationOpenAttempts,
-		)
 	}
 }
 

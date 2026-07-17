@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"strings"
 	"testing"
 
 	"core/server/llm"
@@ -62,7 +61,7 @@ func TestAssistantCommentaryIsDetailOnlyWhileFinalAnswersRemainOngoing(t *testin
 			if len(facts) != 1 || facts[0].Visibility != test.want {
 				t.Fatalf("assistant facts = %+v, want one %q row", facts, test.want)
 			}
-			scan := newInMemoryTranscriptScan(inMemoryTranscriptScanRequest{Limit: 1}, nil, nil, nil)
+			scan := newInMemoryTranscriptScan(inMemoryTranscriptScanRequest{Limit: 1}, nil, nil)
 			scan.ApplyMessage(llm.Message{
 				Role:    llm.RoleAssistant,
 				Phase:   test.phase,
@@ -103,8 +102,7 @@ func TestEmptyUnknownDeveloperMessageProjectsDetailDiagnosticFact(t *testing.T) 
 		t.Fatalf("empty unknown developer facts = %+v, want one detail diagnostic notice", facts)
 	}
 	notice := facts[0].Notice
-	if notice.DiagnosticCode == nil || *notice.DiagnosticCode != string(unknownType) ||
-		notice.DiagnosticDetail == nil || strings.TrimSpace(*notice.DiagnosticDetail) == "" {
+	if notice.DiagnosticCode != string(unknownType) || notice.DiagnosticDetail == "" {
 		t.Fatalf("diagnostic notice = %+v, want unknown type code and non-empty detail", notice)
 	}
 }

@@ -14,10 +14,9 @@ const (
 )
 
 const (
-	defaultEventLogFSyncPolicy            = EventLogFSyncPeriodic
-	defaultEventLogFSyncIntervalWrites    = 16
-	defaultPersistenceObserverTimeout     = 2 * time.Second
-	maxEventLogReconciliationOpenAttempts = 8
+	defaultEventLogFSyncPolicy         = EventLogFSyncPeriodic
+	defaultEventLogFSyncIntervalWrites = 16
+	defaultPersistenceObserverTimeout  = 2 * time.Second
 )
 
 type StoreOption func(*storeOptions)

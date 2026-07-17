@@ -13,7 +13,6 @@ import (
 	"core/shared/clientui"
 	"core/shared/rollbacktarget"
 	"core/shared/transcript"
-	patchformat "core/shared/transcript/patchformat"
 
 	"github.com/google/uuid"
 )
@@ -76,34 +75,6 @@ func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 	}
 	if got := hydration.CommittedRows[0].Visibility; got != clientui.EntryVisibilityHidden {
 		t.Fatalf("hydration visibility = %q, want hidden", got)
-	}
-}
-
-func TestTranscriptNoticeProjectionCarriesTypedDeveloperDiagnostic(t *testing.T) {
-	diagnostic := transcript.NewDeletionFactMismatchDeveloperDiagnostic(
-		"call-1",
-		patchformat.WholeFileDeletionFactMismatchError{
-			Kind: patchformat.WholeFileDeletionFactMismatchMissing,
-			ID:   patchformat.WholeFileDeletionOperationID{HunkOrdinal: 2},
-		},
-	)
-	row := transcriptRowFromFact(runtime.TranscriptCommittedRowFact{
-		Visibility: transcript.EntryVisibilityOngoing,
-		Kind:       runtime.TranscriptCommittedRowFactNotice,
-		Notice: &runtime.TranscriptNoticeRowFact{
-			Reason:              transcript.NoticeReasonRuntimeDiagnostic,
-			Severity:            transcript.NoticeSeverityError,
-			DeveloperDiagnostic: &diagnostic,
-		},
-	})
-	if row.Notice == nil || row.Notice.Diagnostic == nil || row.Notice.Diagnostic.Developer == nil {
-		t.Fatalf("projected developer diagnostic = %+v", row.Notice)
-	}
-	if row.Notice.Diagnostic.Code != nil || row.Notice.Diagnostic.Detail != nil {
-		t.Fatalf("developer diagnostic leaked legacy fields: %+v", row.Notice.Diagnostic)
-	}
-	if !transcript.DeveloperDiagnosticEqual(row.Notice.Diagnostic.Developer, &diagnostic) {
-		t.Fatalf("projected developer diagnostic = %+v, want %+v", row.Notice.Diagnostic.Developer, diagnostic)
 	}
 }
 

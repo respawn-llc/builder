@@ -12,54 +12,36 @@ import (
 )
 
 func VisibleChatEntriesFromMessage(msg llm.Message) []ChatEntry {
-	projections := visibleChatEntryProjectionsFromMessage(msg, nil, nil)
-	entries := make([]ChatEntry, 0, len(projections))
-	for _, projection := range projections {
-		entries = append(entries, projection.Entry)
-	}
-	return entries
+	return visibleChatEntriesFromMessage(msg, nil, nil)
 }
 
-type visibleChatEntryProjection struct {
-	Entry          ChatEntry
-	ToolCompletion *tools.Result
-}
-
-func visibleChatEntryProjectionsFromMessage(msg llm.Message, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) []visibleChatEntryProjection {
-	entries := make([]visibleChatEntryProjection, 0, 1+len(msg.ToolCalls))
+func visibleChatEntriesFromMessage(msg llm.Message, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) []ChatEntry {
+	entries := make([]ChatEntry, 0, 1+len(msg.ToolCalls))
 	switch msg.Role {
 	case llm.RoleUser:
 		if entry, ok := visibleUserTranscriptEntry(msg); ok {
-			entries = append(entries, visibleChatEntryProjection{Entry: entry})
+			entries = append(entries, entry)
 		}
 	case llm.RoleAssistant:
 		if strings.TrimSpace(msg.Content) != "" && !isNoopFinalAnswer(msg) {
-			entries = append(entries, visibleChatEntryProjection{Entry: ChatEntry{
+			entries = append(entries, ChatEntry{
 				Visibility: assistantTranscriptVisibility(msg.Phase),
 				Role:       "assistant",
 				Text:       msg.Content,
 				Phase:      msg.Phase,
-			}})
+			})
 		}
 		for _, call := range msg.ToolCalls {
-			entries = append(entries, visibleChatEntryProjection{Entry: formatPersistedToolCall(call)})
+			entries = append(entries, formatPersistedToolCall(call))
 			if result, ok := synthesizedToolResultForCall(call, completions, materializedToolCalls); ok {
-				resultCopy := result
-				entries = append(entries, visibleChatEntryProjection{
-					Entry:          toolResultChatEntry(result),
-					ToolCompletion: &resultCopy,
-				})
+				entries = append(entries, toolResultChatEntry(result))
 			}
 		}
 	case llm.RoleTool:
-		result := resolvedToolResultForMessage(msg, completions)
-		entries = append(entries, visibleChatEntryProjection{
-			Entry:          toolResultChatEntry(result),
-			ToolCompletion: &result,
-		})
+		entries = append(entries, toolResultChatEntry(resolvedToolResultForMessage(msg, completions)))
 	case llm.RoleDeveloper:
 		if entry, ok := visibleDeveloperChatEntry(msg); ok {
-			entries = append(entries, visibleChatEntryProjection{Entry: entry})
+			entries = append(entries, entry)
 		}
 	}
 	return entries
@@ -111,9 +93,6 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 			return nil
 		}
 		entries = []ChatEntry{toolResultChatEntry(*evt.ToolResult)}
-		if evt.ToolCompletionDiagnostic != nil {
-			entries = append(entries, toolCompletionDiagnosticChatEntry(*evt.ToolCompletionDiagnostic))
-		}
 	case EventReviewerCompleted:
 		// Reviewer completion remains a runtime-status event only.
 		// Persisted reviewer terminal rows must arrive through local_entry_added

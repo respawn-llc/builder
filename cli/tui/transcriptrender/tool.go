@@ -351,7 +351,7 @@ func renderPatchTool(
 		}
 		var spans []Span
 		spans = append(spans, roleSpan(path, role))
-		if patchformat.ShowsRemovedCount(file) {
+		if file.Removed > 0 {
 			spans = append(spans, roleSpan(" ", role))
 			spans = append(spans, SemanticSpan(fmt.Sprintf("-%d", file.Removed), StyleRoleToolError))
 		}
