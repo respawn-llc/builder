@@ -21,6 +21,7 @@ import (
 	"core/server/workflow"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/gitref"
 	"core/shared/serverapi"
 	"github.com/google/uuid"
 )
@@ -1061,10 +1062,14 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 		return serverapi.WorktreeCreateResponse{}, err
 	}
 	cleanup.active = false
+	branchName, err := requiredWorktreeBranchName(created.git)
+	if err != nil {
+		return serverapi.WorktreeCreateResponse{}, err
+	}
 	if err := s.runSetupForWorktree(ctx, setupExecutionRequest{
 		SetupOperationID:    req.SetupOperationID,
 		SourceWorkspaceRoot: workspaceCtx.workspaceRoot,
-		BranchName:          worktreeNamedBranch(created.git),
+		BranchName:          branchName,
 		WorktreeRoot:        created.record.CanonicalRoot,
 		ScriptPayload: setupScriptPayload{
 			SessionID:   setupSessionID,
@@ -1489,16 +1494,11 @@ func defaultWorktreePathSeed(createSpec CreateSpec) string {
 
 func shortRefName(ref string) string {
 	trimmed := strings.TrimSpace(ref)
-	switch {
-	case strings.HasPrefix(trimmed, "refs/heads/"):
-		return strings.TrimPrefix(trimmed, "refs/heads/")
-	case strings.HasPrefix(trimmed, "refs/tags/"):
-		return strings.TrimPrefix(trimmed, "refs/tags/")
-	case strings.HasPrefix(trimmed, "refs/remotes/"):
-		return strings.TrimPrefix(trimmed, "refs/remotes/")
-	default:
+	parsed, err := gitref.Parse(trimmed)
+	if err != nil {
 		return trimmed
 	}
+	return parsed.Name()
 }
 
 // ErrWorktreeRootCollisionCap is returned when no free worktree root can be

@@ -10,6 +10,7 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/shared/clientui"
+	"core/shared/gitref"
 )
 
 type worktreeSessionRetargetFilter func(metadata.WorktreeSessionBlocker) bool
@@ -297,7 +298,7 @@ func worktreeReminderStateForTransition(previous *syncedWorktree, previousTarget
 		return session.WorktreeReminderState{
 			Mode: session.WorktreeReminderModeExit,
 			WorktreeContext: session.WorktreeContext{
-				Branch:        session.OptionalWorktreeBranch(worktreeNamedBranch(previous.git)),
+				Branch:        optionalWorktreeBranchName(previous.git.Branch),
 				WorktreePath:  strings.TrimSpace(previous.record.CanonicalRoot),
 				WorkspaceRoot: strings.TrimSpace(nextTarget.WorkspaceRoot),
 				EffectiveCwd:  strings.TrimSpace(nextTarget.EffectiveWorkdir),
@@ -307,7 +308,7 @@ func worktreeReminderStateForTransition(previous *syncedWorktree, previousTarget
 	return session.WorktreeReminderState{
 		Mode: session.WorktreeReminderModeEnter,
 		WorktreeContext: session.WorktreeContext{
-			Branch:        session.OptionalWorktreeBranch(worktreeNamedBranch(next.git)),
+			Branch:        optionalWorktreeBranchName(next.git.Branch),
 			WorktreePath:  strings.TrimSpace(next.record.CanonicalRoot),
 			WorkspaceRoot: strings.TrimSpace(nextTarget.WorkspaceRoot),
 			EffectiveCwd:  strings.TrimSpace(nextTarget.EffectiveWorkdir),
@@ -323,12 +324,20 @@ func worktreeReminderStateForExitedWorktree(worktree metadata.WorktreeRecord, ne
 	return session.WorktreeReminderState{
 		Mode: session.WorktreeReminderModeExit,
 		WorktreeContext: session.WorktreeContext{
-			Branch:        session.OptionalWorktreeBranch(worktreeNamedBranch(gitMetadata)),
+			Branch:        optionalWorktreeBranchName(gitMetadata.Branch),
 			WorktreePath:  strings.TrimSpace(worktree.CanonicalRoot),
 			WorkspaceRoot: strings.TrimSpace(nextTarget.WorkspaceRoot),
 			EffectiveCwd:  strings.TrimSpace(nextTarget.EffectiveWorkdir),
 		},
 	}, nil
+}
+
+func optionalWorktreeBranchName(branch *gitref.LocalBranch) *string {
+	if branch == nil {
+		return nil
+	}
+	name := branch.Name()
+	return &name
 }
 
 func worktreeGitMetadataFromRecord(worktree metadata.WorktreeRecord) (GitWorktree, error) {
@@ -343,9 +352,9 @@ func worktreeGitMetadataFromRecord(worktree metadata.WorktreeRecord) (GitWorktre
 	if (persisted.BranchRef == nil) != (persisted.BranchName == nil) {
 		return GitWorktree{}, errors.New("decode git worktree metadata: branch_ref and branch_name must be present together")
 	}
-	var branch *localBranch
+	var branch *gitref.LocalBranch
 	if persisted.BranchRef != nil {
-		value, err := newLocalBranch(*persisted.BranchRef)
+		value, err := gitref.ParseLocalBranch(*persisted.BranchRef)
 		if err != nil {
 			return GitWorktree{}, fmt.Errorf("decode git worktree metadata: %w", err)
 		}

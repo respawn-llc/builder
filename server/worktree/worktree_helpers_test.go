@@ -7,13 +7,14 @@ import (
 
 	"core/server/metadata"
 	"core/shared/clientui"
+	"core/shared/gitref"
 	"core/shared/serverapi"
 )
 
 func TestLocalBranchDerivesNameFromCanonicalRef(t *testing.T) {
-	branch, err := newLocalBranch("refs/heads/feature/round-trip")
+	branch, err := gitref.ParseLocalBranch("refs/heads/feature/round-trip")
 	if err != nil {
-		t.Fatalf("newLocalBranch: %v", err)
+		t.Fatalf("ParseLocalBranch: %v", err)
 	}
 	if branch.Ref() != "refs/heads/feature/round-trip" {
 		t.Fatalf("branch ref = %q", branch.Ref())
@@ -26,8 +27,8 @@ func TestLocalBranchDerivesNameFromCanonicalRef(t *testing.T) {
 func TestLocalBranchRejectsInvalidRefs(t *testing.T) {
 	for _, ref := range []string{"", " ", "main", "refs/tags/v1", "refs/heads/", "refs/heads/ "} {
 		t.Run(strings.ReplaceAll(ref, "/", "_"), func(t *testing.T) {
-			if _, err := newLocalBranch(ref); err == nil {
-				t.Fatalf("newLocalBranch(%q) succeeded", ref)
+			if _, err := gitref.ParseLocalBranch(ref); err == nil {
+				t.Fatalf("ParseLocalBranch(%q) succeeded", ref)
 			}
 		})
 	}
@@ -342,11 +343,11 @@ func TestWorktreeReminderTransitionRejectsPresentPreviousTargetWithEmptyWorktree
 	}
 }
 
-func mustLocalBranch(t *testing.T, ref string) *localBranch {
+func mustLocalBranch(t *testing.T, ref string) *gitref.LocalBranch {
 	t.Helper()
-	branch, err := newLocalBranch(ref)
+	branch, err := gitref.ParseLocalBranch(ref)
 	if err != nil {
-		t.Fatalf("newLocalBranch(%q): %v", ref, err)
+		t.Fatalf("ParseLocalBranch(%q): %v", ref, err)
 	}
 	return &branch
 }

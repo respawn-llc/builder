@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/shared/clientui"
+	"core/shared/gitref"
 	"core/shared/runtimeids"
 
 	"github.com/google/uuid"
@@ -232,15 +233,11 @@ func (f WorktreeGitFacts) Validate() error {
 		return errors.New("git branch_ref and branch_name must be provided together")
 	}
 	if f.BranchRef != nil {
-		const headsPrefix = "refs/heads/"
-		if *f.BranchRef != strings.TrimSpace(*f.BranchRef) || !strings.HasPrefix(*f.BranchRef, headsPrefix) {
-			return errors.New("git branch_ref must be a canonical refs/heads ref")
+		branch, err := gitref.ParseLocalBranch(*f.BranchRef)
+		if err != nil {
+			return fmt.Errorf("git branch_ref is invalid: %w", err)
 		}
-		derivedName := strings.TrimPrefix(*f.BranchRef, headsPrefix)
-		if strings.TrimSpace(derivedName) == "" || derivedName != strings.TrimSpace(derivedName) {
-			return errors.New("git branch_ref must derive a nonblank branch name")
-		}
-		if *f.BranchName != derivedName {
+		if *f.BranchName != branch.Name() {
 			return errors.New("git branch_name must match the name derived from branch_ref")
 		}
 	}

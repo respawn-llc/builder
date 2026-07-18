@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"core/shared/config"
+	"core/shared/gitref"
 	"core/shared/serverapi"
 )
 
@@ -32,42 +33,15 @@ func (e *InvalidCreateTargetError) Error() string {
 }
 
 type GitWorktree struct {
-	Root           string       `json:"-"`
-	HeadOID        string       `json:"head_oid,omitempty"`
-	Branch         *localBranch `json:"-"`
-	Detached       bool         `json:"detached,omitempty"`
-	Bare           bool         `json:"bare,omitempty"`
-	LockedReason   string       `json:"locked_reason,omitempty"`
-	PrunableReason string       `json:"prunable_reason,omitempty"`
-	DirtyFileCount int          `json:"-"`
-	IsMain         bool         `json:"-"`
-}
-
-type localBranch struct {
-	ref string
-}
-
-func newLocalBranch(ref string) (localBranch, error) {
-	if ref != strings.TrimSpace(ref) {
-		return localBranch{}, errors.New("local branch ref must not contain surrounding whitespace")
-	}
-	name, ok := strings.CutPrefix(ref, "refs/heads/")
-	if !ok || name == "" || name != strings.TrimSpace(name) {
-		return localBranch{}, fmt.Errorf("local branch ref %q must be a canonical refs/heads ref", ref)
-	}
-	return localBranch{ref: ref}, nil
-}
-
-func (b localBranch) Ref() string {
-	return b.ref
-}
-
-func (b localBranch) Name() string {
-	name, ok := strings.CutPrefix(b.ref, "refs/heads/")
-	if !ok {
-		panic(fmt.Sprintf("invalid local branch aggregate ref %q", b.ref))
-	}
-	return name
+	Root           string              `json:"-"`
+	HeadOID        string              `json:"head_oid,omitempty"`
+	Branch         *gitref.LocalBranch `json:"-"`
+	Detached       bool                `json:"detached,omitempty"`
+	Bare           bool                `json:"bare,omitempty"`
+	LockedReason   string              `json:"locked_reason,omitempty"`
+	PrunableReason string              `json:"prunable_reason,omitempty"`
+	DirtyFileCount int                 `json:"-"`
+	IsMain         bool                `json:"-"`
 }
 
 func (w GitWorktree) validateHead() error {
@@ -209,10 +183,10 @@ type ManagedWorktreeIdentity struct {
 	SourceCommonDir   string
 	WorktreeTopLevel  string
 	WorktreeCommonDir string
-	Branch            *localBranch
+	Branch            *gitref.LocalBranch
 }
 
-func (i ManagedWorktreeIdentity) NamedBranch() (*localBranch, bool) {
+func (i ManagedWorktreeIdentity) NamedBranch() (*gitref.LocalBranch, bool) {
 	return i.Branch, i.Branch != nil
 }
 
@@ -419,7 +393,8 @@ func (i *GitInspector) ResolveDefaultBranch(ctx context.Context, workspaceRoot s
 			}
 		}
 		ref := strings.TrimSpace(string(symbolicOutput))
-		if !strings.HasPrefix(ref, "refs/remotes/"+remoteName+"/") {
+		remoteBranch, err := gitref.ParseRemoteBranch(ref)
+		if err != nil || remoteBranch.RemoteName() != remoteName {
 			return GitDefaultBranch{}, &GitDefaultBranchResolutionError{
 				Kind:  GitDefaultBranchResolutionErrorGitFailure,
 				Cause: fmt.Errorf("git remote HEAD %q resolves outside remote %q", ref, remoteName),
@@ -502,17 +477,15 @@ func (i *GitInspector) ValidateManagedWorktreeIdentity(ctx context.Context, spec
 			Cause: fmt.Errorf("source common git directory %q does not match worktree common git directory %q", sourceCommonDir, worktreeCommonDir),
 		}
 	}
+	var branch *gitref.LocalBranch
 	symbolicHead, err := i.gitOutput(ctx, expectedRoot, "symbolic-ref", "--quiet", "HEAD")
 	if err != nil {
 		var commandErr *gitCommandError
 		if !errors.As(err, &commandErr) || commandErr.ExitCode != 1 {
 			return ManagedWorktreeIdentity{}, identityInspectionError(err)
 		}
-		symbolicHead = ""
-	}
-	var branch *localBranch
-	if symbolicHead != "" {
-		value, err := newLocalBranch(symbolicHead)
+	} else {
+		value, err := gitref.ParseLocalBranch(symbolicHead)
 		if err != nil {
 			return ManagedWorktreeIdentity{}, identityInspectionError(err)
 		}
@@ -1210,7 +1183,7 @@ func parseGitWorktreeListPorcelain(body string, workspaceRoot string) ([]GitWork
 			if !haveCurrent {
 				return nil, fmt.Errorf("git worktree branch entry without worktree root")
 			}
-			branch, err := newLocalBranch(value)
+			branch, err := gitref.ParseLocalBranch(value)
 			if err != nil {
 				return nil, err
 			}

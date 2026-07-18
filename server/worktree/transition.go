@@ -11,6 +11,7 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/shared/clientui"
+	"core/shared/gitref"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -393,9 +394,9 @@ func gitWorktreeFromFacts(facts serverapi.WorktreeGitFacts) (GitWorktree, error)
 }
 
 func gitWorktreeFromValidatedFacts(facts serverapi.WorktreeGitFacts) (GitWorktree, error) {
-	var branch *localBranch
+	var branch *gitref.LocalBranch
 	if facts.BranchRef != nil {
-		value, err := newLocalBranch(*facts.BranchRef)
+		value, err := gitref.ParseLocalBranch(*facts.BranchRef)
 		if err != nil {
 			return GitWorktree{}, err
 		}

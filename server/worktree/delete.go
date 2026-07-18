@@ -13,6 +13,7 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/shared/clientui"
+	"core/shared/gitref"
 	"core/shared/serverapi"
 )
 
@@ -26,12 +27,12 @@ const (
 
 type worktreeBranchCleanupDecision struct {
 	kind    worktreeBranchCleanupDecisionKind
-	branch  *localBranch
+	branch  *gitref.LocalBranch
 	outcome serverapi.WorktreeBranchCleanupOutcome
 }
 
 type worktreeExitReminderProjection struct {
-	branch       *localBranch
+	branch       *gitref.LocalBranch
 	worktreePath string
 }
 
@@ -39,6 +40,28 @@ type worktreeDeletionPlan struct {
 	cleanup      worktreeBranchCleanupDecision
 	exitReminder worktreeExitReminderProjection
 	live         *GitWorktree
+}
+
+func retainedWorktreeBranchCleanupDecision(
+	branch *gitref.LocalBranch,
+	diagnostic string,
+) worktreeBranchCleanupDecision {
+	if branch == nil {
+		panic("retained worktree branch cleanup decision has no branch")
+	}
+	if strings.TrimSpace(diagnostic) == "" {
+		panic("retained worktree branch cleanup decision has no diagnostic")
+	}
+	branchName := branch.Name()
+	return worktreeBranchCleanupDecision{
+		kind:   worktreeBranchCleanupRetain,
+		branch: branch,
+		outcome: serverapi.WorktreeBranchCleanupOutcome{
+			Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
+			BranchName: &branchName,
+			Diagnostic: &diagnostic,
+		},
+	}
 }
 
 func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error) {
@@ -405,14 +428,10 @@ func (s *Service) retargetDeleteSessions(
 }
 
 func (p worktreeExitReminderProjection) reminder(nextTarget clientui.SessionExecutionTarget) session.WorktreeReminderState {
-	branchName := ""
-	if p.branch != nil {
-		branchName = p.branch.Name()
-	}
 	return session.WorktreeReminderState{
 		Mode: session.WorktreeReminderModeExit,
 		WorktreeContext: session.WorktreeContext{
-			Branch:        session.OptionalWorktreeBranch(branchName),
+			Branch:        optionalWorktreeBranchName(p.branch),
 			WorktreePath:  strings.TrimSpace(p.worktreePath),
 			WorkspaceRoot: strings.TrimSpace(nextTarget.WorkspaceRoot),
 			EffectiveCwd:  strings.TrimSpace(nextTarget.EffectiveWorkdir),
@@ -505,43 +524,22 @@ func planWorktreeDeletion(
 		}
 	case serverapi.WorktreeBranchCleanupModeAutoIfKentCreated:
 		if record == nil {
-			diagnostic := "Kent cannot prove this worktree created the branch"
-			plan.cleanup = worktreeBranchCleanupDecision{
-				kind:   worktreeBranchCleanupRetain,
-				branch: live.Branch,
-				outcome: serverapi.WorktreeBranchCleanupOutcome{
-					Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
-					BranchName: &branchName,
-					Diagnostic: &diagnostic,
-				},
-			}
+			plan.cleanup = retainedWorktreeBranchCleanupDecision(
+				live.Branch,
+				"Kent cannot prove this worktree created the branch",
+			)
 			return plan, nil
 		}
 		createdBranch, proven, err := kentCreatedBranchForCleanup(*record, &live)
 		if err != nil {
-			diagnostic := err.Error()
-			plan.cleanup = worktreeBranchCleanupDecision{
-				kind:   worktreeBranchCleanupRetain,
-				branch: live.Branch,
-				outcome: serverapi.WorktreeBranchCleanupOutcome{
-					Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
-					BranchName: &branchName,
-					Diagnostic: &diagnostic,
-				},
-			}
+			plan.cleanup = retainedWorktreeBranchCleanupDecision(live.Branch, err.Error())
 			return plan, nil
 		}
 		if !proven {
-			diagnostic := "Kent cannot prove this worktree created the branch"
-			plan.cleanup = worktreeBranchCleanupDecision{
-				kind:   worktreeBranchCleanupRetain,
-				branch: live.Branch,
-				outcome: serverapi.WorktreeBranchCleanupOutcome{
-					Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
-					BranchName: &branchName,
-					Diagnostic: &diagnostic,
-				},
-			}
+			plan.cleanup = retainedWorktreeBranchCleanupDecision(
+				live.Branch,
+				"Kent cannot prove this worktree created the branch",
+			)
 			return plan, nil
 		}
 		if createdBranch != branchName {
