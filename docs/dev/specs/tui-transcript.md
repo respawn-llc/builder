@@ -274,10 +274,16 @@
 ## Notifications
 
 - Ring terminal bell when a new `ask_question` is shown.
-- Ring on turn end only if the turn executed at least two tool calls.
-- Turn-end notification is deferred until queued prompt drain is fully idle.
+- Ring on turn end only if the TUI observed at least two tool calls for an eligible turn.
+- A supervisor-reviewed turn-end notification is requested only after the supervisor workflow completes, and every turn-end notification is requested only after the local queued prompt drain is fully idle.
+- Notification processing never delays queued model work. Submit completion and transcript delivery are independent, so transcript lag may omit a notification, delay it until a later drain, or select an earlier observed preview.
+- When the TUI observes a supervisor-reviewed turn boundary before notification, its preview uses the final answer produced before supervisor feedback is addressed.
+- A queued prompt drain emits at most one turn-end notification when any observed turn in the drain meets the two-tool threshold, using the last final answer observed by the TUI even when that turn has fewer than two tool calls.
 - Turn-end text includes assistant preview when available, else `<session title>: turn complete`.
 - Ask notifications include `<session title>: Question: <question>` or `<session title>: Action required: <question>`.
+- Every text-bearing terminal notification uses one formatting pipeline and is capped at 80 characters in total, including the session title and notification label. When the composed text exceeds the limit, Kent keeps its first 77 characters and appends `...` without word-boundary or component-specific truncation.
+- Markdown preview content uses the transcript's visible-text projection, including link destinations when that projection displays them, before the final notification is truncated.
+- Rendered preview whitespace and line breaks collapse to single spaces before composition.
 - `auto` notification method prefers OSC 9 on supported terminals and falls back to BEL.
 - OSC 9 notifications still emit a separate BEL.
 - OSC 9 is disabled when `WT_SESSION` is set.
