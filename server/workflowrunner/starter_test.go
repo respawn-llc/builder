@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -33,6 +34,7 @@ import (
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/server/workflowview"
+	worktreesvc "core/server/worktree"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -1579,6 +1581,175 @@ func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 	}
 }
 
+func TestWorkflowRuntimeResumesDetachedManagedWorktreeAndContinuesNextNode(t *testing.T) {
+	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput,
+		ScriptedFinalAnswer(`{"commentary":"resumed","prior_summary":"resumed summary"}`),
+		ScriptedFinalAnswer(`{"commentary":"second done"}`),
+	)
+	fixture.linkChainedWorkflow(t, workflow.ContextModeNewSession, "coder")
+	workspaceRoot := fixture.worktrees.metadataRoot()
+	initializeWorkflowRunnerGitRepository(t, workspaceRoot)
+	inspector := worktreesvc.NewGitInspector(nil)
+	worktreeService := worktreesvc.NewService(
+		fixture.metadata,
+		inspector,
+		nil,
+		nil,
+		nil,
+		worktreesvc.ServiceOptions{BaseDir: filepath.Join(t.TempDir(), "task-worktrees")},
+	)
+	t.Cleanup(func() { _ = worktreeService.Close() })
+	if fixture.starter != nil {
+		_ = fixture.starter.Close()
+	}
+	starter, err := NewStarter(fixture.cfg, fixture.metadata, fixture.store, nil, nil, fixture.runtimes, StarterOptions{
+		ClientFactory:  fixture.clientFactory,
+		Worktrees:      workflowRunnerRealWorktreeRestorer{service: worktreeService},
+		SessionRuntime: fixture.sessionRuntime,
+	})
+	if err != nil {
+		t.Fatalf("NewStarter with real worktree service: %v", err)
+	}
+	fixture.starter = starter
+	t.Cleanup(func() { _ = starter.Close() })
+
+	task, err := fixture.store.CreateTask(context.Background(), workflowstore.CreateTaskRequest{
+		ProjectID: fixture.projectID,
+		Title:     "Resume detached worktree",
+		Body:      "Keep the locked root.",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	revision, err := inspector.ResolveHEAD(context.Background(), workspaceRoot)
+	if err != nil {
+		t.Fatalf("ResolveHEAD: %v", err)
+	}
+	materialized, err := worktreeService.MaterializeInitialTaskWorktree(context.Background(), worktreesvc.InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: revision,
+	})
+	if err != nil {
+		t.Fatalf("MaterializeInitialTaskWorktree: %v", err)
+	}
+	if materialized.Worktree.Registered == nil {
+		t.Fatalf("materialized worktree = %+v, want registered topology", materialized.Worktree)
+	}
+	registered := materialized.Worktree.Registered
+	requestedRef := revision.RequestedRef
+	commitOID := revision.CommitOID
+	if _, err := fixture.store.StartTaskWithExecutionTarget(context.Background(), task.ID, &workflowstore.ExecutionTargetCandidate{
+		Snapshot: workflowstore.ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			ResolvedRef:  revision.CanonicalRef,
+			CommitOID:    &commitOID,
+			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		Root: workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   fixture.worktrees.workspaceID,
+			SourceWorkspaceRoot: workspaceRoot,
+			Managed: &workflowstore.ManagedExecutionRoot{
+				WorktreeID: registered.Kent.WorktreeID,
+				Root:       registered.Git.CanonicalRoot,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
+	}
+
+	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns initial: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("initial runs = %+v, want one", runs)
+	}
+	claimed, err := fixture.store.ClaimRun(context.Background(), runs[0].ID, runs[0].Generation)
+	if err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	input, err := fixture.store.GetRunStartContext(context.Background(), claimed.ID)
+	if err != nil {
+		t.Fatalf("GetRunStartContext: %v", err)
+	}
+	plan, _, err := fixture.starter.planSession(context.Background(), input)
+	if err != nil {
+		t.Fatalf("planSession: %v", err)
+	}
+	if err := plan.Store.MarkModelDispatchLocked(session.LockedContract{Model: fixture.cfg.Settings.Model}); err != nil {
+		t.Fatalf("MarkModelDispatchLocked: %v", err)
+	}
+	originalSessionID := plan.Store.Meta().SessionID
+	if err := fixture.store.AttachRunSession(context.Background(), claimed.ID, claimed.Generation, originalSessionID); err != nil {
+		t.Fatalf("AttachRunSession: %v", err)
+	}
+	if err := fixture.store.InterruptRunGeneration(context.Background(), claimed.ID, claimed.Generation, "manual", "{}"); err != nil {
+		t.Fatalf("InterruptRunGeneration: %v", err)
+	}
+	runWorkflowRunnerGit(t, registered.Git.CanonicalRoot, "checkout", "--detach")
+	assertWorkflowRunnerGitDetached(t, registered.Git.CanonicalRoot)
+
+	resumedRuns, err := fixture.store.ResumeTaskRuns(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ResumeTaskRuns: %v", err)
+	}
+	if len(resumedRuns) != 1 ||
+		resumedRuns[0].ID != claimed.ID ||
+		resumedRuns[0].Generation <= claimed.Generation ||
+		resumedRuns[0].SessionID != originalSessionID {
+		t.Fatalf("resumed runs = %+v, want same run/session with newer generation", resumedRuns)
+	}
+	scheduler := fixture.scheduler(t)
+	if err := scheduler.Process(context.Background()); err != nil {
+		t.Fatalf("Process resumed detached run: %v", err)
+	}
+	fixture.waitForRunCount(t, task.ID, 2)
+	fixture.waitForCompletedRunCount(t, task.ID, 1)
+	fixture.waitForActiveCountZero(t, scheduler)
+	assertWorkflowRunnerGitDetached(t, registered.Git.CanonicalRoot)
+
+	runs, err = fixture.store.ListRuns(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns after resumed completion: %v", err)
+	}
+	if len(runs) != 2 || runs[0].ID != claimed.ID || runs[0].SessionID != originalSessionID {
+		t.Fatalf("runs after resumed completion = %+v", runs)
+	}
+	nextContext, err := fixture.store.GetRunStartContext(context.Background(), runs[1].ID)
+	if err != nil {
+		t.Fatalf("GetRunStartContext next node: %v", err)
+	}
+	if nextContext.ExecutionRoot == nil ||
+		nextContext.ExecutionRoot.Managed == nil ||
+		nextContext.ExecutionRoot.Managed.WorktreeID != registered.Kent.WorktreeID ||
+		nextContext.ExecutionRoot.Managed.Root != registered.Git.CanonicalRoot {
+		t.Fatalf("next-node execution root = %+v, want same locked worktree", nextContext.ExecutionRoot)
+	}
+	if err := scheduler.Process(context.Background()); err != nil {
+		t.Fatalf("Process next detached node: %v", err)
+	}
+	fixture.waitForAllRunsCompleted(t, task.ID, 2)
+	fixture.waitForActiveCountZero(t, scheduler)
+	assertWorkflowRunnerGitDetached(t, registered.Git.CanonicalRoot)
+	runs, err = fixture.store.ListRuns(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns completed: %v", err)
+	}
+	for _, run := range runs {
+		target, err := fixture.metadata.ResolveSessionExecutionTarget(context.Background(), run.SessionID)
+		if err != nil {
+			t.Fatalf("ResolveSessionExecutionTarget(%s): %v", run.SessionID, err)
+		}
+		if target.Worktree == nil ||
+			target.Worktree.ID != registered.Kent.WorktreeID ||
+			target.Worktree.Root != registered.Git.CanonicalRoot ||
+			target.EffectiveWorkdir != registered.Git.CanonicalRoot {
+			t.Fatalf("run %s execution target = %+v, want same detached worktree", run.ID, target)
+		}
+	}
+}
+
 func TestStartWorkflowRunWaitsForLockedTaskWorktreeRestoreBeforeRefreshingRunContext(t *testing.T) {
 	ensureStarted := make(chan LockedTaskWorktreeRestoreRequest, 1)
 	releaseEnsure := make(chan struct{})
@@ -2462,6 +2633,58 @@ type metadataTaskWorktrees struct {
 	workspaceID string
 	root        string
 	afterCreate func(worktreeRoot string) error
+}
+
+type workflowRunnerRealWorktreeRestorer struct {
+	service *worktreesvc.Service
+}
+
+func (r workflowRunnerRealWorktreeRestorer) RestoreLockedTaskWorktree(ctx context.Context, req LockedTaskWorktreeRestoreRequest) error {
+	if r.service == nil {
+		return errors.New("real worktree restore service is required")
+	}
+	_, err := r.service.RestoreLockedTaskWorktree(ctx, worktreesvc.LockedTaskWorktreeRestoreRequest{
+		TaskID:           req.TaskID,
+		SetupOperationID: req.SetupOperationID,
+	})
+	return err
+}
+
+func initializeWorkflowRunnerGitRepository(t *testing.T, root string) {
+	t.Helper()
+	runWorkflowRunnerGit(t, root, "init", "-q", "-b", "main")
+	runWorkflowRunnerGit(t, root, "config", "user.email", "workflowrunner@example.com")
+	runWorkflowRunnerGit(t, root, "config", "user.name", "Workflow Runner Test")
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("workflow runner\n"), 0o644); err != nil {
+		t.Fatalf("write workflow runner repository file: %v", err)
+	}
+	runWorkflowRunnerGit(t, root, "add", "README.md")
+	runWorkflowRunnerGit(t, root, "commit", "-q", "-m", "initial")
+}
+
+func runWorkflowRunnerGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", args...)
+	command.Dir = dir
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v in %q: %v\n%s", args, dir, err, output)
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func assertWorkflowRunnerGitDetached(t *testing.T, root string) {
+	t.Helper()
+	command := exec.Command("git", "symbolic-ref", "--quiet", "HEAD")
+	command.Dir = root
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("worktree %q is attached to %q, want detached HEAD", root, strings.TrimSpace(string(output)))
+	}
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) || exitError.ExitCode() != 1 {
+		t.Fatalf("inspect detached HEAD in %q: %v\n%s", root, err, output)
+	}
 }
 
 func (e *metadataTaskWorktrees) RestoreLockedTaskWorktree(ctx context.Context, req LockedTaskWorktreeRestoreRequest) error {

@@ -256,12 +256,20 @@ func (s *Service) enterTransitionWorktree(ctx context.Context, workspaceCtx sess
 		if err != nil {
 			return syncedWorktree{}, err
 		}
-		return syncedWorktree{record: record, git: gitWorktreeFromFacts(entry.Registered.Git)}, nil
+		gitEntry, err := gitWorktreeFromFacts(entry.Registered.Git)
+		if err != nil {
+			return syncedWorktree{}, err
+		}
+		return syncedWorktree{record: record, git: gitEntry}, nil
 	case serverapi.WorktreeTopologyVariantExternal:
+		gitEntry, err := gitWorktreeFromFacts(entry.External.Git)
+		if err != nil {
+			return syncedWorktree{}, err
+		}
 		if entry.External.Git.IsMain {
 			return syncedWorktree{
 				record: metadata.WorktreeRecord{WorkspaceID: workspaceCtx.workspaceID, CanonicalRoot: workspaceCtx.workspaceRoot},
-				git:    gitWorktreeFromFacts(entry.External.Git),
+				git:    gitEntry,
 			}, nil
 		}
 		return s.adoptExternalWorktree(ctx, workspaceCtx.workspaceID, entry.External.Git)
@@ -276,7 +284,10 @@ func (s *Service) enterTransitionWorktree(ctx context.Context, workspaceCtx sess
 }
 
 func (s *Service) adoptExternalWorktree(ctx context.Context, workspaceID string, facts serverapi.WorktreeGitFacts) (syncedWorktree, error) {
-	gitEntry := gitWorktreeFromFacts(facts)
+	gitEntry, err := gitWorktreeFromFacts(facts)
+	if err != nil {
+		return syncedWorktree{}, err
+	}
 	now := time.Now().UTC()
 	record := metadata.WorktreeRecord{
 		ID:            uuid.NewString(),
@@ -288,7 +299,6 @@ func (s *Service) adoptExternalWorktree(ctx context.Context, workspaceID string,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
-	var err error
 	record.GitMetadataJSON, err = marshalGitMetadata(gitEntry)
 	if err != nil {
 		return syncedWorktree{}, err
@@ -319,7 +329,11 @@ func (s *Service) currentTransitionWorktree(
 			if err != nil {
 				return nil, err
 			}
-			value := syncedWorktree{record: record, git: gitWorktreeFromFacts(entry.Registered.Git)}
+			gitEntry, err := gitWorktreeFromFacts(entry.Registered.Git)
+			if err != nil {
+				return nil, err
+			}
+			value := syncedWorktree{record: record, git: gitEntry}
 			return &value, nil
 		case serverapi.WorktreeTopologyVariantMissing:
 			record, err := s.metadata.GetWorktreeRecordByID(ctx, targetID)
@@ -342,20 +356,28 @@ func mainTransitionWorktree(topology []serverapi.WorktreeTopologyEntry, workspac
 		switch entry.Variant {
 		case serverapi.WorktreeTopologyVariantRegistered:
 			if entry.Registered.Git.IsMain {
+				gitEntry, err := gitWorktreeFromFacts(entry.Registered.Git)
+				if err != nil {
+					return syncedWorktree{}, err
+				}
 				return syncedWorktree{
 					record: metadata.WorktreeRecord{
 						ID:            entry.Registered.Kent.WorktreeID,
 						WorkspaceID:   "",
 						CanonicalRoot: entry.Registered.Git.CanonicalRoot,
 					},
-					git: gitWorktreeFromFacts(entry.Registered.Git),
+					git: gitEntry,
 				}, nil
 			}
 		case serverapi.WorktreeTopologyVariantExternal:
 			if entry.External.Git.IsMain {
+				gitEntry, err := gitWorktreeFromFacts(entry.External.Git)
+				if err != nil {
+					return syncedWorktree{}, err
+				}
 				return syncedWorktree{
 					record: metadata.WorktreeRecord{CanonicalRoot: strings.TrimSpace(workspaceRoot)},
-					git:    gitWorktreeFromFacts(entry.External.Git),
+					git:    gitEntry,
 				}, nil
 			}
 		}
@@ -363,18 +385,36 @@ func mainTransitionWorktree(topology []serverapi.WorktreeTopologyEntry, workspac
 	return syncedWorktree{}, fmt.Errorf("main worktree not found")
 }
 
-func gitWorktreeFromFacts(facts serverapi.WorktreeGitFacts) GitWorktree {
-	return GitWorktree{
+func gitWorktreeFromFacts(facts serverapi.WorktreeGitFacts) (GitWorktree, error) {
+	if err := facts.Validate(); err != nil {
+		return GitWorktree{}, err
+	}
+	return gitWorktreeFromValidatedFacts(facts)
+}
+
+func gitWorktreeFromValidatedFacts(facts serverapi.WorktreeGitFacts) (GitWorktree, error) {
+	var branch *localBranch
+	if facts.BranchRef != nil {
+		value, err := newLocalBranch(*facts.BranchRef)
+		if err != nil {
+			return GitWorktree{}, err
+		}
+		branch = &value
+	}
+	entry := GitWorktree{
 		Root:           strings.TrimSpace(facts.CanonicalRoot),
 		HeadOID:        strings.TrimSpace(facts.HeadObject),
-		BranchRef:      optionalString(facts.BranchRef),
-		BranchName:     optionalString(facts.BranchName),
+		Branch:         branch,
 		Detached:       facts.Detached,
 		Bare:           facts.Bare,
 		LockedReason:   optionalString(facts.LockedReason),
 		PrunableReason: optionalString(facts.PrunableReason),
 		IsMain:         facts.IsMain,
 	}
+	if err := entry.validateHead(); err != nil {
+		return GitWorktree{}, err
+	}
+	return entry, nil
 }
 
 func optionalString(value *string) string {

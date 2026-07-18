@@ -32,16 +32,49 @@ func (e *InvalidCreateTargetError) Error() string {
 }
 
 type GitWorktree struct {
-	Root           string `json:"-"`
-	HeadOID        string `json:"head_oid,omitempty"`
-	BranchRef      string `json:"branch_ref,omitempty"`
-	BranchName     string `json:"branch_name,omitempty"`
-	Detached       bool   `json:"detached,omitempty"`
-	Bare           bool   `json:"bare,omitempty"`
-	LockedReason   string `json:"locked_reason,omitempty"`
-	PrunableReason string `json:"prunable_reason,omitempty"`
-	DirtyFileCount int    `json:"-"`
-	IsMain         bool   `json:"-"`
+	Root           string       `json:"-"`
+	HeadOID        string       `json:"head_oid,omitempty"`
+	Branch         *localBranch `json:"-"`
+	Detached       bool         `json:"detached,omitempty"`
+	Bare           bool         `json:"bare,omitempty"`
+	LockedReason   string       `json:"locked_reason,omitempty"`
+	PrunableReason string       `json:"prunable_reason,omitempty"`
+	DirtyFileCount int          `json:"-"`
+	IsMain         bool         `json:"-"`
+}
+
+type localBranch struct {
+	ref string
+}
+
+func newLocalBranch(ref string) (localBranch, error) {
+	if ref != strings.TrimSpace(ref) {
+		return localBranch{}, errors.New("local branch ref must not contain surrounding whitespace")
+	}
+	name, ok := strings.CutPrefix(ref, "refs/heads/")
+	if !ok || name == "" || name != strings.TrimSpace(name) {
+		return localBranch{}, fmt.Errorf("local branch ref %q must be a canonical refs/heads ref", ref)
+	}
+	return localBranch{ref: ref}, nil
+}
+
+func (b localBranch) Ref() string {
+	return b.ref
+}
+
+func (b localBranch) Name() string {
+	name, ok := strings.CutPrefix(b.ref, "refs/heads/")
+	if !ok {
+		panic(fmt.Sprintf("invalid local branch aggregate ref %q", b.ref))
+	}
+	return name
+}
+
+func (w GitWorktree) validateHead() error {
+	if w.Detached && w.Branch != nil {
+		return errors.New("detached worktree cannot have a named branch")
+	}
+	return nil
 }
 
 type GitRepositoryIdentity struct {
@@ -176,13 +209,11 @@ type ManagedWorktreeIdentity struct {
 	SourceCommonDir   string
 	WorktreeTopLevel  string
 	WorktreeCommonDir string
-	SymbolicHead      string
+	Branch            *localBranch
 }
 
-func (i ManagedWorktreeIdentity) NamedBranch() (string, bool) {
-	branchName, ok := strings.CutPrefix(strings.TrimSpace(i.SymbolicHead), "refs/heads/")
-	branchName = strings.TrimSpace(branchName)
-	return branchName, ok && branchName != ""
+func (i ManagedWorktreeIdentity) NamedBranch() (*localBranch, bool) {
+	return i.Branch, i.Branch != nil
 }
 
 type ManagedWorktreeIdentityErrorKind string
@@ -474,20 +505,25 @@ func (i *GitInspector) ValidateManagedWorktreeIdentity(ctx context.Context, spec
 	symbolicHead, err := i.gitOutput(ctx, expectedRoot, "symbolic-ref", "--quiet", "HEAD")
 	if err != nil {
 		var commandErr *gitCommandError
-		if errors.As(err, &commandErr) && commandErr.ExitCode == 1 {
-			return ManagedWorktreeIdentity{}, &ManagedWorktreeIdentityError{
-				Kind:  ManagedWorktreeIdentityErrorDetachedHead,
-				Cause: err,
-			}
+		if !errors.As(err, &commandErr) || commandErr.ExitCode != 1 {
+			return ManagedWorktreeIdentity{}, identityInspectionError(err)
 		}
-		return ManagedWorktreeIdentity{}, identityInspectionError(err)
+		symbolicHead = ""
+	}
+	var branch *localBranch
+	if symbolicHead != "" {
+		value, err := newLocalBranch(symbolicHead)
+		if err != nil {
+			return ManagedWorktreeIdentity{}, identityInspectionError(err)
+		}
+		branch = &value
 	}
 	return ManagedWorktreeIdentity{
 		SourceTopLevel:    sourceTopLevel,
 		SourceCommonDir:   sourceCommonDir,
 		WorktreeTopLevel:  worktreeTopLevel,
 		WorktreeCommonDir: worktreeCommonDir,
-		SymbolicHead:      symbolicHead,
+		Branch:            branch,
 	}, nil
 }
 
@@ -1137,6 +1173,9 @@ func parseGitWorktreeListPorcelain(body string, workspaceRoot string) ([]GitWork
 		}
 		current.Root = canonicalRoot
 		current.IsMain = canonicalRoot == canonicalWorkspaceRoot
+		if err := current.validateHead(); err != nil {
+			return err
+		}
 		entries = append(entries, current)
 		current = GitWorktree{}
 		haveCurrent = false
@@ -1171,8 +1210,11 @@ func parseGitWorktreeListPorcelain(body string, workspaceRoot string) ([]GitWork
 			if !haveCurrent {
 				return nil, fmt.Errorf("git worktree branch entry without worktree root")
 			}
-			current.BranchRef = value
-			current.BranchName = shortBranchName(value)
+			branch, err := newLocalBranch(value)
+			if err != nil {
+				return nil, err
+			}
+			current.Branch = &branch
 		case "detached":
 			if !haveCurrent {
 				return nil, fmt.Errorf("git worktree detached entry without worktree root")
@@ -1201,12 +1243,4 @@ func parseGitWorktreeListPorcelain(body string, workspaceRoot string) ([]GitWork
 		return nil, err
 	}
 	return entries, nil
-}
-
-func shortBranchName(ref string) string {
-	trimmed := strings.TrimSpace(ref)
-	if strings.HasPrefix(trimmed, "refs/heads/") {
-		return strings.TrimPrefix(trimmed, "refs/heads/")
-	}
-	return trimmed
 }

@@ -225,6 +225,25 @@ func (f WorktreeGitFacts) Validate() error {
 			return errors.New("optional git facts must not be empty")
 		}
 	}
+	if f.Detached && (f.BranchRef != nil || f.BranchName != nil) {
+		return errors.New("detached git facts must not include branch facts")
+	}
+	if (f.BranchRef == nil) != (f.BranchName == nil) {
+		return errors.New("git branch_ref and branch_name must be provided together")
+	}
+	if f.BranchRef != nil {
+		const headsPrefix = "refs/heads/"
+		if *f.BranchRef != strings.TrimSpace(*f.BranchRef) || !strings.HasPrefix(*f.BranchRef, headsPrefix) {
+			return errors.New("git branch_ref must be a canonical refs/heads ref")
+		}
+		derivedName := strings.TrimPrefix(*f.BranchRef, headsPrefix)
+		if strings.TrimSpace(derivedName) == "" || derivedName != strings.TrimSpace(derivedName) {
+			return errors.New("git branch_ref must derive a nonblank branch name")
+		}
+		if *f.BranchName != derivedName {
+			return errors.New("git branch_name must match the name derived from branch_ref")
+		}
+	}
 	return nil
 }
 

@@ -722,7 +722,7 @@ func TestSwitchWorktreeClampsCwdAndRecordsPendingReminder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorktreeRecordByID: %v", err)
 	}
-	previous := syncedWorktree{record: previousRecord, git: GitWorktree{Root: created.CanonicalRoot, BranchName: created.BranchName}}
+	previous := syncedWorktree{record: previousRecord, git: GitWorktree{Root: created.CanonicalRoot, Branch: mustLocalBranch(t, created.BranchRef)}}
 	respTarget, err := env.service.switchSessionTarget(env.ctx, sessionWorkspaceContext{
 		target:        mustResolveServiceTestTarget(t, env),
 		projectID:     env.binding.ProjectID,

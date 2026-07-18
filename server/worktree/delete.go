@@ -16,6 +16,31 @@ import (
 	"core/shared/serverapi"
 )
 
+type worktreeBranchCleanupDecisionKind string
+
+const (
+	worktreeBranchCleanupNotApplicable worktreeBranchCleanupDecisionKind = "not_applicable"
+	worktreeBranchCleanupRetain        worktreeBranchCleanupDecisionKind = "retain"
+	worktreeBranchCleanupDelete        worktreeBranchCleanupDecisionKind = "delete"
+)
+
+type worktreeBranchCleanupDecision struct {
+	kind    worktreeBranchCleanupDecisionKind
+	branch  *localBranch
+	outcome serverapi.WorktreeBranchCleanupOutcome
+}
+
+type worktreeExitReminderProjection struct {
+	branch       *localBranch
+	worktreePath string
+}
+
+type worktreeDeletionPlan struct {
+	cleanup      worktreeBranchCleanupDecision
+	exitReminder worktreeExitReminderProjection
+	live         *GitWorktree
+}
+
 func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorktreeDeleteResult{}, err
@@ -53,7 +78,17 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 		return serverapi.WorktreeDeleteResult{}, fmt.Errorf("cannot delete main workspace worktree: %w", serverapi.ErrWorktreeBlocked)
 	}
 	if topologyIsCurrent(match.entry, workspaceCtx.target) {
-		target, _, err := s.deleteTarget(ctx, workspaceCtx, match.entry)
+		record, err := s.deleteRecord(ctx, match.entry)
+		if err != nil {
+			release()
+			return serverapi.WorktreeDeleteResult{}, err
+		}
+		plan, err := planWorktreeDeletion(match.entry, record, req.BranchCleanupPolicy)
+		if err != nil {
+			release()
+			return serverapi.WorktreeDeleteResult{}, err
+		}
+		target, err := deletionTarget(workspaceCtx, match.entry, record, plan)
 		if err != nil {
 			release()
 			return serverapi.WorktreeDeleteResult{}, err
@@ -123,7 +158,7 @@ func (s *Service) executeDeleteLocked(
 	if topologyIsMain(entry) {
 		return serverapi.WorktreeDeleteCompletedResult{}, fmt.Errorf("cannot delete main workspace worktree: %w", serverapi.ErrWorktreeBlocked)
 	}
-	target, record, err := s.deleteTarget(ctx, workspaceCtx, entry)
+	record, err := s.deleteRecord(ctx, entry)
 	if err != nil {
 		return serverapi.WorktreeDeleteCompletedResult{}, err
 	}
@@ -140,6 +175,14 @@ func (s *Service) executeDeleteLocked(
 	if len(blockers) > 0 {
 		return serverapi.WorktreeDeleteCompletedResult{}, activeDeleteBlockerError(blockers)
 	}
+	plan, err := planWorktreeDeletion(entry, record, req.BranchCleanupPolicy)
+	if err != nil {
+		return serverapi.WorktreeDeleteCompletedResult{}, err
+	}
+	target, err := deletionTarget(workspaceCtx, entry, record, plan)
+	if err != nil {
+		return serverapi.WorktreeDeleteCompletedResult{}, err
+	}
 	if target != nil {
 		if processBlockers := s.backgroundProcessBlockers(target.record.CanonicalRoot); len(processBlockers) > 0 {
 			return serverapi.WorktreeDeleteCompletedResult{}, errors.Join(serverapi.ErrWorktreeBlocked, fmt.Errorf("worktree has active background processes: %s", strings.Join(processBlockers, ", ")))
@@ -150,7 +193,7 @@ func (s *Service) executeDeleteLocked(
 	}
 	retargetCompensation := worktreeSessionRetargetCompensation{}
 	if record != nil {
-		retargetCompensation, err = s.retargetDeleteSessions(ctx, workspaceCtx, *record, currentSync)
+		retargetCompensation, err = s.retargetDeleteSessions(ctx, workspaceCtx, *record, plan.exitReminder, currentSync)
 		if err != nil {
 			return serverapi.WorktreeDeleteCompletedResult{}, err
 		}
@@ -177,7 +220,7 @@ func (s *Service) executeDeleteLocked(
 			return serverapi.WorktreeDeleteCompletedResult{}, err
 		}
 	}
-	cleanup := s.cleanupDeletedBranch(ctx, workspaceCtx.workspaceRoot, entry, record, req.BranchCleanupPolicy)
+	cleanup := s.executeWorktreeBranchCleanup(ctx, workspaceCtx.workspaceRoot, plan.cleanup)
 	result := serverapi.WorktreeDeleteCompletedResult{Cleanup: cleanup, LeftoverRoot: leftoverRoot}
 	if err := result.Validate(); err != nil {
 		return serverapi.WorktreeDeleteCompletedResult{}, err
@@ -203,37 +246,55 @@ func (s *Service) ensureDeleteFolderRemovalAuthorized(
 	return nil
 }
 
-func (s *Service) deleteTarget(
-	ctx context.Context,
-	workspaceCtx sessionWorkspaceContext,
-	entry serverapi.WorktreeTopologyEntry,
-) (*syncedWorktree, *metadata.WorktreeRecord, error) {
+func (s *Service) deleteRecord(ctx context.Context, entry serverapi.WorktreeTopologyEntry) (*metadata.WorktreeRecord, error) {
 	switch entry.Variant {
 	case serverapi.WorktreeTopologyVariantRegistered:
 		record, err := s.metadata.GetWorktreeRecordByID(ctx, entry.Registered.Kent.WorktreeID)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		target := syncedWorktree{record: record, git: gitWorktreeFromFacts(entry.Registered.Git)}
-		return &target, &record, nil
+		return &record, nil
 	case serverapi.WorktreeTopologyVariantExternal:
-		target := syncedWorktree{
-			record: metadata.WorktreeRecord{
-				WorkspaceID:   workspaceCtx.workspaceID,
-				CanonicalRoot: entry.External.Git.CanonicalRoot,
-				DisplayName:   filepath.Base(entry.External.Git.CanonicalRoot),
-			},
-			git: gitWorktreeFromFacts(entry.External.Git),
-		}
-		return &target, nil, nil
+		return nil, nil
 	case serverapi.WorktreeTopologyVariantMissing:
 		record, err := s.metadata.GetWorktreeRecordByID(ctx, entry.Missing.Kent.WorktreeID)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		return nil, &record, nil
+		return &record, nil
 	default:
-		return nil, nil, errors.New("worktree topology variant is invalid")
+		return nil, errors.New("worktree topology variant is invalid")
+	}
+}
+
+func deletionTarget(
+	workspaceCtx sessionWorkspaceContext,
+	entry serverapi.WorktreeTopologyEntry,
+	record *metadata.WorktreeRecord,
+	plan worktreeDeletionPlan,
+) (*syncedWorktree, error) {
+	switch entry.Variant {
+	case serverapi.WorktreeTopologyVariantRegistered:
+		if record == nil || plan.live == nil {
+			return nil, errors.New("registered deletion requires Kent record and live Git facts")
+		}
+		return &syncedWorktree{record: *record, git: *plan.live}, nil
+	case serverapi.WorktreeTopologyVariantExternal:
+		if plan.live == nil {
+			return nil, errors.New("external deletion requires live Git facts")
+		}
+		return &syncedWorktree{
+			record: metadata.WorktreeRecord{
+				WorkspaceID:   workspaceCtx.workspaceID,
+				CanonicalRoot: plan.live.Root,
+				DisplayName:   filepath.Base(plan.live.Root),
+			},
+			git: *plan.live,
+		}, nil
+	case serverapi.WorktreeTopologyVariantMissing:
+		return nil, nil
+	default:
+		return nil, errors.New("worktree topology variant is invalid")
 	}
 }
 
@@ -318,6 +379,7 @@ func (s *Service) retargetDeleteSessions(
 	ctx context.Context,
 	workspaceCtx sessionWorkspaceContext,
 	record metadata.WorktreeRecord,
+	projection worktreeExitReminderProjection,
 	currentSync transitionTargetSync,
 ) (worktreeSessionRetargetCompensation, error) {
 	return s.retargetSessionsFromWorktree(
@@ -326,7 +388,9 @@ func (s *Service) retargetDeleteSessions(
 		workspaceCtx.workspaceRoot,
 		record,
 		worktreeSessionRetargetOptions{
-			reminder: worktreeReminderStateForExitedWorktree,
+			reminder: func(_ metadata.WorktreeRecord, nextTarget clientui.SessionExecutionTarget) (session.WorktreeReminderState, error) {
+				return projection.reminder(nextTarget), nil
+			},
 			sync: func(
 				syncCtx context.Context,
 				sessionID string,
@@ -338,6 +402,22 @@ func (s *Service) retargetDeleteSessions(
 			rollbackOnError: true,
 		},
 	)
+}
+
+func (p worktreeExitReminderProjection) reminder(nextTarget clientui.SessionExecutionTarget) session.WorktreeReminderState {
+	branchName := ""
+	if p.branch != nil {
+		branchName = p.branch.Name()
+	}
+	return session.WorktreeReminderState{
+		Mode: session.WorktreeReminderModeExit,
+		WorktreeContext: session.WorktreeContext{
+			Branch:        session.OptionalWorktreeBranch(branchName),
+			WorktreePath:  strings.TrimSpace(p.worktreePath),
+			WorkspaceRoot: strings.TrimSpace(nextTarget.WorkspaceRoot),
+			EffectiveCwd:  strings.TrimSpace(nextTarget.EffectiveWorkdir),
+		},
+	}
 }
 
 func (s *Service) syncDeleteSession(
@@ -365,55 +445,131 @@ func missingLeftoverRoot(entry serverapi.WorktreeTopologyEntry) *string {
 	return &root
 }
 
-func (s *Service) cleanupDeletedBranch(
-	ctx context.Context,
-	workspaceRoot string,
+func planWorktreeDeletion(
 	entry serverapi.WorktreeTopologyEntry,
 	record *metadata.WorktreeRecord,
 	policy serverapi.WorktreeBranchCleanupMode,
-) serverapi.WorktreeBranchCleanupOutcome {
-	gitEntry, live, err := branchCleanupGitEntry(entry, record)
+) (worktreeDeletionPlan, error) {
+	if err := entry.Validate(); err != nil {
+		return worktreeDeletionPlan{}, err
+	}
+	if err := policy.Validate(); err != nil {
+		return worktreeDeletionPlan{}, err
+	}
+	if entry.Variant == serverapi.WorktreeTopologyVariantMissing {
+		if record == nil {
+			return worktreeDeletionPlan{}, errors.New("missing worktree topology requires a Kent record")
+		}
+		return worktreeDeletionPlan{
+			cleanup: worktreeBranchCleanupDecision{
+				kind:    worktreeBranchCleanupNotApplicable,
+				outcome: serverapi.WorktreeBranchCleanupOutcome{Kind: serverapi.WorktreeBranchCleanupOutcomeNotApplicable},
+			},
+			exitReminder: worktreeExitReminderProjection{worktreePath: record.CanonicalRoot},
+		}, nil
+	}
+	var facts serverapi.WorktreeGitFacts
+	switch entry.Variant {
+	case serverapi.WorktreeTopologyVariantRegistered:
+		facts = entry.Registered.Git
+	case serverapi.WorktreeTopologyVariantExternal:
+		facts = entry.External.Git
+	default:
+		return worktreeDeletionPlan{}, errors.New("worktree topology variant is invalid")
+	}
+	live, err := gitWorktreeFromValidatedFacts(facts)
 	if err != nil {
-		return serverapi.WorktreeBranchCleanupOutcome{Kind: serverapi.WorktreeBranchCleanupOutcomeNotApplicable}
+		return worktreeDeletionPlan{}, err
 	}
-	branchName := worktreeNamedBranch(gitEntry)
-	if branchName == "" {
-		return serverapi.WorktreeBranchCleanupOutcome{Kind: serverapi.WorktreeBranchCleanupOutcomeNotApplicable}
+	plan := worktreeDeletionPlan{
+		live: &live,
+		exitReminder: worktreeExitReminderProjection{
+			branch:       live.Branch,
+			worktreePath: live.Root,
+		},
 	}
+	if live.Branch == nil {
+		plan.cleanup = worktreeBranchCleanupDecision{
+			kind:    worktreeBranchCleanupNotApplicable,
+			outcome: serverapi.WorktreeBranchCleanupOutcome{Kind: serverapi.WorktreeBranchCleanupOutcomeNotApplicable},
+		}
+		return plan, nil
+	}
+	branchName := live.Branch.Name()
 	switch policy {
 	case serverapi.WorktreeBranchCleanupModeRetain:
-		return serverapi.WorktreeBranchCleanupOutcome{Kind: serverapi.WorktreeBranchCleanupOutcomeNotRequested}
+		plan.cleanup = worktreeBranchCleanupDecision{
+			kind:    worktreeBranchCleanupRetain,
+			branch:  live.Branch,
+			outcome: serverapi.WorktreeBranchCleanupOutcome{Kind: serverapi.WorktreeBranchCleanupOutcomeNotRequested},
+		}
 	case serverapi.WorktreeBranchCleanupModeAutoIfKentCreated:
 		if record == nil {
 			diagnostic := "Kent cannot prove this worktree created the branch"
-			return serverapi.WorktreeBranchCleanupOutcome{
-				Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
-				BranchName: &branchName,
-				Diagnostic: &diagnostic,
+			plan.cleanup = worktreeBranchCleanupDecision{
+				kind:   worktreeBranchCleanupRetain,
+				branch: live.Branch,
+				outcome: serverapi.WorktreeBranchCleanupOutcome{
+					Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
+					BranchName: &branchName,
+					Diagnostic: &diagnostic,
+				},
 			}
+			return plan, nil
 		}
-		createdBranch, proven, err := kentCreatedBranchForCleanup(*record, live)
+		createdBranch, proven, err := kentCreatedBranchForCleanup(*record, &live)
 		if err != nil {
 			diagnostic := err.Error()
-			return serverapi.WorktreeBranchCleanupOutcome{
-				Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
-				BranchName: &branchName,
-				Diagnostic: &diagnostic,
+			plan.cleanup = worktreeBranchCleanupDecision{
+				kind:   worktreeBranchCleanupRetain,
+				branch: live.Branch,
+				outcome: serverapi.WorktreeBranchCleanupOutcome{
+					Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
+					BranchName: &branchName,
+					Diagnostic: &diagnostic,
+				},
 			}
+			return plan, nil
 		}
 		if !proven {
 			diagnostic := "Kent cannot prove this worktree created the branch"
-			return serverapi.WorktreeBranchCleanupOutcome{
-				Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
-				BranchName: &branchName,
-				Diagnostic: &diagnostic,
+			plan.cleanup = worktreeBranchCleanupDecision{
+				kind:   worktreeBranchCleanupRetain,
+				branch: live.Branch,
+				outcome: serverapi.WorktreeBranchCleanupOutcome{
+					Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
+					BranchName: &branchName,
+					Diagnostic: &diagnostic,
+				},
 			}
+			return plan, nil
 		}
-		branchName = createdBranch
+		if createdBranch != branchName {
+			return worktreeDeletionPlan{}, fmt.Errorf("created branch %q does not match live branch %q", createdBranch, branchName)
+		}
+		plan.cleanup = worktreeBranchCleanupDecision{kind: worktreeBranchCleanupDelete, branch: live.Branch}
 	case serverapi.WorktreeBranchCleanupModeDeleteSafe:
-	default:
-		panic(fmt.Sprintf("invalid branch cleanup policy %q", policy))
+		plan.cleanup = worktreeBranchCleanupDecision{kind: worktreeBranchCleanupDelete, branch: live.Branch}
 	}
+	return plan, nil
+}
+
+func (s *Service) executeWorktreeBranchCleanup(
+	ctx context.Context,
+	workspaceRoot string,
+	decision worktreeBranchCleanupDecision,
+) serverapi.WorktreeBranchCleanupOutcome {
+	switch decision.kind {
+	case worktreeBranchCleanupNotApplicable, worktreeBranchCleanupRetain:
+		return decision.outcome
+	case worktreeBranchCleanupDelete:
+	default:
+		panic(fmt.Sprintf("invalid worktree branch cleanup decision %q", decision.kind))
+	}
+	if decision.branch == nil {
+		panic("delete worktree branch cleanup decision has no branch")
+	}
+	branchName := decision.branch.Name()
 	if err := s.git.deleteBranch(ctx, workspaceRoot, branchName, false); err != nil {
 		diagnostic := err.Error()
 		return serverapi.WorktreeBranchCleanupOutcome{
@@ -425,27 +581,5 @@ func (s *Service) cleanupDeletedBranch(
 	return serverapi.WorktreeBranchCleanupOutcome{
 		Kind:       serverapi.WorktreeBranchCleanupOutcomeDeleted,
 		BranchName: &branchName,
-	}
-}
-
-func branchCleanupGitEntry(
-	entry serverapi.WorktreeTopologyEntry,
-	record *metadata.WorktreeRecord,
-) (GitWorktree, *GitWorktree, error) {
-	switch entry.Variant {
-	case serverapi.WorktreeTopologyVariantRegistered:
-		live := gitWorktreeFromFacts(entry.Registered.Git)
-		return live, &live, nil
-	case serverapi.WorktreeTopologyVariantExternal:
-		live := gitWorktreeFromFacts(entry.External.Git)
-		return live, &live, nil
-	case serverapi.WorktreeTopologyVariantMissing:
-		if record == nil {
-			return GitWorktree{}, nil, nil
-		}
-		persisted, err := worktreeGitMetadataFromRecord(*record)
-		return persisted, nil, err
-	default:
-		return GitWorktree{}, nil, errors.New("worktree topology variant is invalid")
 	}
 }

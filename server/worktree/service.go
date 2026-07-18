@@ -304,6 +304,9 @@ func (s *Service) materializeInitialTaskWorktree(ctx context.Context, taskID str
 			ExpectedWorktreeRoot: record.CanonicalRoot,
 		})
 		if identityErr == nil {
+			if _, ok := identity.NamedBranch(); !ok {
+				return TaskWorktreeMaterialization{}, &ManagedWorktreeIdentityError{Kind: ManagedWorktreeIdentityErrorDetachedHead}
+			}
 			reused, err := s.rebindHealthyManagedTaskWorktree(ctx, task, workspace, record, identity)
 			if err != nil {
 				return TaskWorktreeMaterialization{}, err
@@ -438,6 +441,9 @@ func (s *Service) restoreUnboundLockedTaskWorktree(ctx context.Context, req Lock
 		if identityErr != nil {
 			return TaskWorktreeMaterialization{}, lockedTaskWorktreeIdentityError(identityErr)
 		}
+		if _, ok := identity.NamedBranch(); !ok {
+			return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseDetachedHead}
+		}
 		return s.rebindHealthyManagedTaskWorktree(ctx, task, workspace, record, identity)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
@@ -461,16 +467,12 @@ func (s *Service) rebindHealthyManagedTaskWorktree(ctx context.Context, task sql
 	if err != nil {
 		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseGitFailure, Err: err}
 	}
-	branchRef := strings.TrimSpace(identity.SymbolicHead)
-	branchName, ok := identity.NamedBranch()
-	if !ok {
-		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseDetachedHead}
-	}
+	branch, named := identity.NamedBranch()
 	gitMetadata := GitWorktree{
-		Root:       record.CanonicalRoot,
-		HeadOID:    revision.CommitOID,
-		BranchRef:  branchRef,
-		BranchName: branchName,
+		Root:     record.CanonicalRoot,
+		HeadOID:  revision.CommitOID,
+		Branch:   branch,
+		Detached: !named,
 	}
 	record.GitMetadataJSON, err = marshalGitMetadata(gitMetadata)
 	if err != nil {
@@ -513,10 +515,10 @@ func (s *Service) restoreMissingLockedTaskWorktree(ctx context.Context, req Lock
 	if err != nil {
 		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseInvalidRoot, Err: err}
 	}
-	branchName := strings.TrimSpace(gitMetadata.BranchName)
-	if gitMetadata.Detached || branchName == "" {
+	if gitMetadata.Detached || gitMetadata.Branch == nil {
 		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseMissingBranch}
 	}
+	branchName := gitMetadata.Branch.Name()
 	exists, err := s.git.BranchExists(ctx, workspace.RootPath, branchName)
 	if err != nil {
 		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseGitFailure, Err: err}
@@ -664,7 +666,7 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 		SetupOperationID:    req.SetupOperationID,
 		SourceWorkspaceRoot: req.Workspace.RootPath,
 		ResolvedSettings:    &setupSettings,
-		BranchName:          branchName,
+		BranchName:          branchName.Name(),
 		WorktreeRoot:        created.record.CanonicalRoot,
 		ScriptPayload: setupScriptPayload{
 			ProjectID:   req.Task.ProjectID,
@@ -793,11 +795,18 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	if !found {
 		return DeleteTaskWorktreeResponse{}, fmt.Errorf("managed worktree %q is absent from projected topology: %w", worktreeID, serverapi.ErrWorktreeNotFound)
 	}
-	var target syncedWorktree
-	targetFound := entry.Variant == serverapi.WorktreeTopologyVariantRegistered
-	if targetFound {
-		target = syncedWorktree{record: record, git: gitWorktreeFromFacts(entry.Registered.Git)}
+	plan, err := planWorktreeDeletion(entry, &record, serverapi.WorktreeBranchCleanupModeAutoIfKentCreated)
+	if err != nil {
+		return DeleteTaskWorktreeResponse{}, err
 	}
+	target, err := deletionTarget(sessionWorkspaceContext{
+		workspaceID:   record.WorkspaceID,
+		workspaceRoot: workspaceRoot,
+	}, entry, &record, plan)
+	if err != nil {
+		return DeleteTaskWorktreeResponse{}, err
+	}
+	targetFound := target != nil
 	forceRemoval := false
 	if targetFound {
 		dirtyState, err := s.git.ProbeDirtyState(ctx, target.record.CanonicalRoot)
@@ -809,7 +818,7 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	retargetCompensation, err := s.retargetDeleteSessions(ctx, sessionWorkspaceContext{
 		workspaceID:   record.WorkspaceID,
 		workspaceRoot: workspaceRoot,
-	}, record, nil)
+	}, record, plan.exitReminder, nil)
 	if err != nil {
 		return DeleteTaskWorktreeResponse{}, err
 	}
@@ -822,10 +831,8 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	// failure must not abort the remaining metadata cleanup; otherwise the record
 	// is left pointing at a removed worktree. Treat branch deletion as best-effort
 	// and report the outcome via BranchDeleted.
-	branchDeleted, branchErr := s.deleteTaskWorktreeBranch(ctx, workspaceRoot, record, target, targetFound)
-	if branchErr != nil {
-		branchDeleted = false
-	}
+	cleanup := s.executeWorktreeBranchCleanup(ctx, workspaceRoot, plan.cleanup)
+	branchDeleted := cleanup.Kind == serverapi.WorktreeBranchCleanupOutcomeDeleted
 	if err := s.metadata.DeleteWorktreeRecordByID(ctx, worktreeID); err != nil {
 		return DeleteTaskWorktreeResponse{}, err
 	}
@@ -888,27 +895,6 @@ func (s *Service) ensureTaskWorktreeDeletionUnblocked(ctx context.Context, taskI
 		return func() {}, err
 	}
 	return s.ensureDeletionSessionAndProcessUnblocked(ctx, "", record.ID, record.CanonicalRoot)
-}
-
-func (s *Service) deleteTaskWorktreeBranch(ctx context.Context, workspaceRoot string, record metadata.WorktreeRecord, target syncedWorktree, found bool) (bool, error) {
-	if !record.Managed {
-		return false, nil
-	}
-	var live *GitWorktree
-	if found {
-		live = &target.git
-	}
-	branchName, proven, err := kentCreatedBranchForCleanup(record, live)
-	if err != nil {
-		return false, err
-	}
-	if !proven {
-		return false, nil
-	}
-	if err := s.git.deleteBranch(ctx, workspaceRoot, branchName, false); err != nil {
-		return false, fmt.Errorf("delete task worktree branch %q: %w", branchName, err)
-	}
-	return true, nil
 }
 
 type taskSourceWorkspace struct {
@@ -1078,7 +1064,7 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 	if err := s.runSetupForWorktree(ctx, setupExecutionRequest{
 		SetupOperationID:    req.SetupOperationID,
 		SourceWorkspaceRoot: workspaceCtx.workspaceRoot,
-		BranchName:          strings.TrimSpace(created.git.BranchName),
+		BranchName:          worktreeNamedBranch(created.git),
 		WorktreeRoot:        created.record.CanonicalRoot,
 		ScriptPayload: setupScriptPayload{
 			SessionID:   setupSessionID,

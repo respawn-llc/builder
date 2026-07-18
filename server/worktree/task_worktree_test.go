@@ -2,6 +2,7 @@ package worktree
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -31,6 +32,24 @@ func taskWorktreeBranch(entry serverapi.WorktreeTopologyEntry) string {
 		return ""
 	}
 	return *entry.Registered.Git.BranchName
+}
+
+func assertGitWorktreeDetached(t *testing.T, env *serviceTestEnv, root string) {
+	t.Helper()
+	entries, err := env.service.git.List(env.ctx, env.workspaceRoot)
+	if err != nil {
+		t.Fatalf("List worktrees: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.Root != root {
+			continue
+		}
+		if !entry.Detached || entry.Branch != nil {
+			t.Fatalf("worktree head = %+v, want detached", entry)
+		}
+		return
+	}
+	t.Fatalf("worktree %q absent from Git topology: %+v", root, entries)
 }
 
 func TestMaterializeInitialTaskWorktreeRequiresResolvedCommit(t *testing.T) {
@@ -71,15 +90,79 @@ func TestRestoreLockedTaskWorktreeAcceptsHealthyChangedNamedBranch(t *testing.T)
 	}
 }
 
-func TestRestoreLockedTaskWorktreeRejectsDetachedHead(t *testing.T) {
+func TestRestoreLockedTaskWorktreeReusesDetachedHeadWithoutRunningSetup(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, materialized, _ := materializeAndLockTaskWorktree(t, env)
-	runGit(t, taskWorktreeRoot(materialized.Worktree), "checkout", "--detach")
+	worktreeID := taskWorktreeID(materialized.Worktree)
+	worktreeRoot := taskWorktreeRoot(materialized.Worktree)
+	runGit(t, worktreeRoot, "checkout", "--detach")
+	detachedRevision := resolveTaskWorktreeTestHEAD(t, env, worktreeRoot)
+	setupMarker := filepath.Join(t.TempDir(), "setup-ran")
+	setupScript := filepath.Join(t.TempDir(), "setup.sh")
+	writeExecutableFile(t, setupScript, fmt.Sprintf("#!/bin/sh\ntouch %q\n", setupMarker))
+	env.service.setupScript = setupScript
 
-	_, err := env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID})
-	var lockedErr *LockedTaskWorktreeError
-	if !errors.As(err, &lockedErr) || lockedErr.Cause != LockedTaskWorktreeCauseDetachedHead {
-		t.Fatalf("RestoreLockedTaskWorktree error = %v, want detached-head locked target error", err)
+	restored, err := env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{
+		TaskID:           task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if err != nil {
+		t.Fatalf("RestoreLockedTaskWorktree: %v", err)
+	}
+	if restored.Created ||
+		taskWorktreeID(restored.Worktree) != worktreeID ||
+		taskWorktreeRoot(restored.Worktree) != worktreeRoot ||
+		!restored.Worktree.Registered.Git.Detached ||
+		restored.Worktree.Registered.Git.BranchRef != nil ||
+		restored.Worktree.Registered.Git.BranchName != nil {
+		t.Fatalf("restored worktree = %+v, want detached reuse of %q", restored, worktreeID)
+	}
+	record, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID)
+	if err != nil {
+		t.Fatalf("GetWorktreeRecordByID: %v", err)
+	}
+	persisted, err := worktreeGitMetadataFromRecord(record)
+	if err != nil {
+		t.Fatalf("worktreeGitMetadataFromRecord: %v", err)
+	}
+	if persisted.HeadOID != detachedRevision.CommitOID || !persisted.Detached || persisted.Branch != nil {
+		t.Fatalf("persisted detached metadata = %+v, want head %q", persisted, detachedRevision.CommitOID)
+	}
+	assertGitWorktreeDetached(t, env, worktreeRoot)
+	if _, err := os.Stat(setupMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("restore ran setup for reused detached worktree: %v", err)
+	}
+}
+
+func TestMaterializeInitialTaskWorktreeRejectsDetachedExistingCandidate(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	resolved := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
+	materialized, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: resolved,
+	})
+	if err != nil {
+		t.Fatalf("MaterializeInitialTaskWorktree first: %v", err)
+	}
+	root := taskWorktreeRoot(materialized.Worktree)
+	runGit(t, root, "checkout", "--detach")
+
+	_, err = env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: resolved,
+	})
+	var identityErr *ManagedWorktreeIdentityError
+	if !errors.As(err, &identityErr) || identityErr.Kind != ManagedWorktreeIdentityErrorDetachedHead {
+		t.Fatalf("MaterializeInitialTaskWorktree error = %v, want detached-head identity error", err)
+	}
+	assertGitWorktreeDetached(t, env, root)
+	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if !row.ManagedWorktreeID.Valid || row.ManagedWorktreeID.String != taskWorktreeID(materialized.Worktree) {
+		t.Fatalf("task managed worktree id = %+v, want unchanged", row.ManagedWorktreeID)
 	}
 }
 
@@ -166,8 +249,8 @@ func TestRestoreLockedTaskWorktreeReportsConflictForRegisteredMissingRoot(t *tes
 	if err != nil {
 		t.Fatalf("worktreeGitMetadataFromRecord: %v", err)
 	}
-	if gitMetadata.BranchName != task.ShortID {
-		t.Fatalf("persisted branch = %q, want %q (metadata %s)", gitMetadata.BranchName, task.ShortID, record.GitMetadataJSON)
+	if gitMetadata.Branch == nil || gitMetadata.Branch.Name() != task.ShortID {
+		t.Fatalf("persisted branch = %+v, want %q (metadata %s)", gitMetadata.Branch, task.ShortID, record.GitMetadataJSON)
 	}
 	oldRoot := taskWorktreeRoot(materialized.Worktree)
 	if err := os.RemoveAll(oldRoot); err != nil {
@@ -258,6 +341,78 @@ func TestRestoreLockedTaskWorktreeRebindsHealthyDeterministicRoot(t *testing.T) 
 	}
 	if !row.ManagedWorktreeID.Valid || row.ManagedWorktreeID.String != taskWorktreeID(materialized.Worktree) {
 		t.Fatalf("task managed worktree id = %+v, want rebound %q", row.ManagedWorktreeID, taskWorktreeID(materialized.Worktree))
+	}
+}
+
+func TestRestoreLockedTaskWorktreeRejectsDetachedUnboundExistingRoot(t *testing.T) {
+	for _, retainRecord := range []bool{true, false} {
+		name := "without_record"
+		if retainRecord {
+			name = "with_record"
+		}
+		t.Run(name, func(t *testing.T) {
+			env := newServiceTestEnv(t)
+			task, materialized, _ := materializeAndLockTaskWorktree(t, env)
+			worktreeID := taskWorktreeID(materialized.Worktree)
+			worktreeRoot := taskWorktreeRoot(materialized.Worktree)
+			recordBefore, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID)
+			if err != nil {
+				t.Fatalf("GetWorktreeRecordByID before: %v", err)
+			}
+			updated, err := env.store.Queries().UpdateTaskManagedWorktree(env.ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+				ID:              string(task.ID),
+				UpdatedAtUnixMs: time.Now().UTC().UnixMilli(),
+			})
+			if err != nil {
+				t.Fatalf("clear task managed worktree: %v", err)
+			}
+			if updated != 1 {
+				t.Fatalf("clear task managed worktree updated %d rows, want 1", updated)
+			}
+			if !retainRecord {
+				if err := env.store.DeleteWorktreeRecordByID(env.ctx, worktreeID); err != nil {
+					t.Fatalf("DeleteWorktreeRecordByID: %v", err)
+				}
+			}
+			runGit(t, worktreeRoot, "checkout", "--detach")
+			setupMarker := filepath.Join(t.TempDir(), "setup-ran")
+			setupScript := filepath.Join(t.TempDir(), "setup.sh")
+			writeExecutableFile(t, setupScript, fmt.Sprintf("#!/bin/sh\ntouch %q\n", setupMarker))
+			env.service.setupScript = setupScript
+
+			_, err = env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{
+				TaskID:           task.ID,
+				SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+			})
+			var lockedErr *LockedTaskWorktreeError
+			if !errors.As(err, &lockedErr) || lockedErr.Cause != LockedTaskWorktreeCauseDetachedHead {
+				t.Fatalf("RestoreLockedTaskWorktree error = %v, want detached-head locked target error", err)
+			}
+			row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
+			if err != nil {
+				t.Fatalf("GetTask: %v", err)
+			}
+			if row.ManagedWorktreeID.Valid {
+				t.Fatalf("task managed worktree id = %+v, want unbound", row.ManagedWorktreeID)
+			}
+			if retainRecord {
+				recordAfter, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID)
+				if err != nil {
+					t.Fatalf("GetWorktreeRecordByID after: %v", err)
+				}
+				if recordAfter.GitMetadataJSON != recordBefore.GitMetadataJSON ||
+					recordAfter.CanonicalRoot != recordBefore.CanonicalRoot ||
+					!recordAfter.UpdatedAt.Equal(recordBefore.UpdatedAt) {
+					t.Fatalf("retained record changed: before=%+v after=%+v", recordBefore, recordAfter)
+				}
+			} else if _, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID); !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("absent record was synthesized: %v", err)
+			}
+			assertGitWorktreeDetached(t, env, worktreeRoot)
+			if _, err := os.Stat(setupMarker); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("restore ran setup for rejected detached repair: %v", err)
+			}
+		})
 	}
 }
 
@@ -886,6 +1041,150 @@ func TestDeleteTaskWorktreeRemovesManagedWorktreeAndBranch(t *testing.T) {
 	}
 	if row.ManagedWorktreeID.Valid {
 		t.Fatalf("task managed worktree id = %+v, want cleared after worktree record delete", row.ManagedWorktreeID)
+	}
+}
+
+func TestDeleteTaskWorktreeRegisteredMalformedPersistenceStillRemovesWorktree(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	created, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
+	})
+	if err != nil {
+		t.Fatalf("MaterializeInitialTaskWorktree: %v", err)
+	}
+	worktreeID := taskWorktreeID(created.Worktree)
+	worktreeRoot := taskWorktreeRoot(created.Worktree)
+	branchName := taskWorktreeBranch(created.Worktree)
+	record, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID)
+	if err != nil {
+		t.Fatalf("GetWorktreeRecordByID: %v", err)
+	}
+	record.GitMetadataJSON = `{"branch_ref":"refs/heads/feature/stale","branch_name":"feature/other"}`
+	if err := env.store.UpsertWorktreeRecord(env.ctx, record); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+
+	response, err := env.service.DeleteTaskWorktree(env.ctx, DeleteTaskWorktreeRequest{TaskID: string(task.ID)})
+	if err != nil {
+		t.Fatalf("DeleteTaskWorktree: %v", err)
+	}
+	if !response.Deleted || response.WorktreeID != worktreeID || response.BranchDeleted {
+		t.Fatalf("DeleteTaskWorktree response = %+v, want worktree removed with retained branch", response)
+	}
+	if _, err := os.Stat(worktreeRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("worktree root still exists: %v", err)
+	}
+	if _, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("worktree record after delete = %v, want sql.ErrNoRows", err)
+	}
+	if exists, err := env.service.git.BranchExists(env.ctx, env.workspaceRoot, branchName); err != nil || !exists {
+		t.Fatalf("retained branch exists=%v err=%v", exists, err)
+	}
+}
+
+func TestDeleteTaskWorktreeBranchDeleteFailureStillClearsMetadata(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	created, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
+	})
+	if err != nil {
+		t.Fatalf("MaterializeInitialTaskWorktree: %v", err)
+	}
+	worktreeID := taskWorktreeID(created.Worktree)
+	worktreeRoot := taskWorktreeRoot(created.Worktree)
+	branchName := taskWorktreeBranch(created.Worktree)
+	env.service.git = NewGitInspector(&selectedCommandFailingGitRunner{
+		base:      execGitCommandRunner{},
+		directory: env.workspaceRoot,
+		arguments: []string{"branch", "-d", branchName},
+	})
+
+	response, err := env.service.DeleteTaskWorktree(env.ctx, DeleteTaskWorktreeRequest{TaskID: string(task.ID)})
+	if err != nil {
+		t.Fatalf("DeleteTaskWorktree: %v", err)
+	}
+	if !response.Deleted || response.WorktreeID != worktreeID || response.BranchDeleted {
+		t.Fatalf("DeleteTaskWorktree response = %+v, want completed removal with retained branch", response)
+	}
+	if _, err := os.Stat(worktreeRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("worktree root still exists after branch cleanup failure: %v", err)
+	}
+	if _, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("worktree record after branch cleanup failure = %v, want sql.ErrNoRows", err)
+	}
+	if exists, err := env.service.git.BranchExists(env.ctx, env.workspaceRoot, branchName); err != nil || !exists {
+		t.Fatalf("retained branch exists=%v err=%v", exists, err)
+	}
+}
+
+func TestDeleteTaskWorktreeMissingTopologyRetargetsWithoutReadingMalformedGitMetadata(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	created, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
+	})
+	if err != nil {
+		t.Fatalf("MaterializeInitialTaskWorktree: %v", err)
+	}
+	worktreeID := taskWorktreeID(created.Worktree)
+	worktreeRoot := taskWorktreeRoot(created.Worktree)
+	branchName := taskWorktreeBranch(created.Worktree)
+	if err := env.service.git.Remove(env.ctx, env.workspaceRoot, worktreeRoot, true); err != nil {
+		t.Fatalf("Remove worktree: %v", err)
+	}
+	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll leftover root: %v", err)
+	}
+	leftoverFile := filepath.Join(worktreeRoot, "preserve.txt")
+	if err := os.WriteFile(leftoverFile, []byte("preserve"), 0o644); err != nil {
+		t.Fatalf("WriteFile leftover: %v", err)
+	}
+	record, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID)
+	if err != nil {
+		t.Fatalf("GetWorktreeRecordByID: %v", err)
+	}
+	record.GitMetadataJSON = `{"branch_ref":"refs/heads/feature/stale","branch_name":"feature/other"}`
+	if err := env.store.UpsertWorktreeRecord(env.ctx, record); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	attached := createServiceTestSession(t, env.store, env.cfg, env.binding)
+	updateServiceTestSessionTarget(t, env, attached.Meta().SessionID, env.binding.WorkspaceID, worktreeID, ".")
+
+	response, err := env.service.DeleteTaskWorktree(env.ctx, DeleteTaskWorktreeRequest{TaskID: string(task.ID)})
+	if err != nil {
+		t.Fatalf("DeleteTaskWorktree: %v", err)
+	}
+	if !response.Deleted || response.WorktreeID != worktreeID || response.BranchDeleted {
+		t.Fatalf("DeleteTaskWorktree response = %+v, want metadata-only missing cleanup", response)
+	}
+	target, err := env.store.ResolveSessionExecutionTarget(env.ctx, attached.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
+	}
+	if target.Worktree != nil || target.EffectiveWorkdir != env.workspaceRoot {
+		t.Fatalf("attached session target = %+v, want main workspace", target)
+	}
+	assertBranchAbsentExitReminder(t, env.runtime, worktreeRoot)
+	if _, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetWorktreeRecordByID after delete error = %v, want sql.ErrNoRows", err)
+	}
+	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if row.ManagedWorktreeID.Valid {
+		t.Fatalf("task managed worktree id = %+v, want cleared", row.ManagedWorktreeID)
+	}
+	if body, err := os.ReadFile(leftoverFile); err != nil || string(body) != "preserve" {
+		t.Fatalf("leftover file changed: body=%q err=%v", body, err)
+	}
+	if exists, err := env.service.git.BranchExists(env.ctx, env.workspaceRoot, branchName); err != nil || !exists {
+		t.Fatalf("missing-topology task branch exists=%v err=%v, want retained", exists, err)
 	}
 }
 

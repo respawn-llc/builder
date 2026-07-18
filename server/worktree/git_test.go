@@ -86,15 +86,15 @@ func TestGitInspectorListParsesPorcelainTopology(t *testing.T) {
 		t.Fatalf("entries=%d want 3", len(entries))
 	}
 	mainEntry := entries[0]
-	if !mainEntry.IsMain || mainEntry.BranchName != "main" || mainEntry.Root != canonicalTestPath(t, workspaceRoot) {
+	if !mainEntry.IsMain || mainEntry.Branch == nil || mainEntry.Branch.Name() != "main" || mainEntry.Root != canonicalTestPath(t, workspaceRoot) {
 		t.Fatalf("unexpected main entry: %+v", mainEntry)
 	}
 	linkedEntry := entries[1]
-	if linkedEntry.IsMain || linkedEntry.BranchRef != "refs/heads/feature/worktree" || linkedEntry.BranchName != "feature/worktree" || linkedEntry.LockedReason != "bootstrap running" {
+	if linkedEntry.IsMain || linkedEntry.Branch == nil || linkedEntry.Branch.Ref() != "refs/heads/feature/worktree" || linkedEntry.Branch.Name() != "feature/worktree" || linkedEntry.LockedReason != "bootstrap running" {
 		t.Fatalf("unexpected linked entry: %+v", linkedEntry)
 	}
 	prunableEntry := entries[2]
-	if !prunableEntry.Detached || prunableEntry.BranchName != "" || prunableEntry.PrunableReason == "" || prunableEntry.Root != canonicalTestPath(t, prunableRoot) {
+	if !prunableEntry.Detached || prunableEntry.Branch != nil || prunableEntry.PrunableReason == "" || prunableEntry.Root != canonicalTestPath(t, prunableRoot) {
 		t.Fatalf("unexpected prunable entry: %+v", prunableEntry)
 	}
 }
@@ -603,7 +603,11 @@ func TestGitInspectorValidateManagedWorktreeIdentity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ValidateManagedWorktreeIdentity: %v", err)
 		}
-		if identity.SourceTopLevel != canonicalTestPath(t, sourceRoot) || identity.WorktreeTopLevel != canonicalTestPath(t, targetRoot) || identity.SourceCommonDir != identity.WorktreeCommonDir || identity.SymbolicHead != "refs/heads/"+taskBranch {
+		if identity.SourceTopLevel != canonicalTestPath(t, sourceRoot) ||
+			identity.WorktreeTopLevel != canonicalTestPath(t, targetRoot) ||
+			identity.SourceCommonDir != identity.WorktreeCommonDir ||
+			identity.Branch == nil ||
+			identity.Branch.Ref() != "refs/heads/"+taskBranch {
 			t.Fatalf("identity = %+v", identity)
 		}
 
@@ -652,7 +656,16 @@ func TestGitInspectorValidateManagedWorktreeIdentity(t *testing.T) {
 		assertIdentityError(t, validate(otherTargetRoot), ManagedWorktreeIdentityErrorSourceRepositoryMismatch)
 
 		runGit(t, targetRoot, "checkout", "-q", "--detach")
-		assertIdentityError(t, validate(targetRoot), ManagedWorktreeIdentityErrorDetachedHead)
+		detachedIdentity, err := inspector.ValidateManagedWorktreeIdentity(context.Background(), ManagedWorktreeIdentitySpec{
+			SourceWorkspaceRoot:  sourceRoot,
+			ExpectedWorktreeRoot: targetRoot,
+		})
+		if err != nil {
+			t.Fatalf("detached identity: %v", err)
+		}
+		if detachedIdentity.Branch != nil {
+			t.Fatalf("detached identity branch = %+v, want absent", detachedIdentity.Branch)
+		}
 
 		sourceRoot, targetRoot = newManagedWorktree(t, taskBranch)
 		inspector = NewGitInspector(nil)
@@ -664,8 +677,8 @@ func TestGitInspectorValidateManagedWorktreeIdentity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("named branch identity: %v", err)
 		}
-		if identity.SymbolicHead != "refs/heads/other-branch" {
-			t.Fatalf("named branch symbolic head = %q, want other branch", identity.SymbolicHead)
+		if identity.Branch == nil || identity.Branch.Ref() != "refs/heads/other-branch" || identity.Branch.Name() != "other-branch" {
+			t.Fatalf("named branch identity = %+v, want other branch", identity.Branch)
 		}
 
 		_, err = inspector.ValidateManagedWorktreeIdentity(context.Background(), ManagedWorktreeIdentitySpec{

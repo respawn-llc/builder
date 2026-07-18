@@ -315,10 +315,10 @@ func (s *Service) resolveBranch(
 			if entry.Detached {
 				return serverapi.UnavailableSessionExecutionBranch(serverapi.SessionExecutionBranchUnavailableDetachedHead)
 			}
-			if strings.TrimSpace(entry.BranchName) == "" {
+			if entry.Branch == nil {
 				return serverapi.UnavailableSessionExecutionBranch(serverapi.SessionExecutionBranchUnavailableNotGitRepository)
 			}
-			return serverapi.AvailableSessionExecutionBranch(entry.BranchName)
+			return serverapi.AvailableSessionExecutionBranch(entry.Branch.Name())
 		}
 	}
 	return serverapi.UnavailableSessionExecutionBranch(serverapi.SessionExecutionBranchUnavailableNotGitRepository)

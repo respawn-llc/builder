@@ -824,7 +824,8 @@ func (s *Service) executionTargetForTask(ctx context.Context, task sqlitegen.Tas
 					SourceWorkspaceRoot:  sourceWorkspace.RootPath,
 					ExpectedWorktreeRoot: facts.CanonicalRoot,
 				}); inspectErr == nil {
-					if branchName, ok := identity.NamedBranch(); ok {
+					if branch, ok := identity.NamedBranch(); ok {
+						branchName := branch.Name()
 						target.CurrentBranch = &branchName
 					}
 				} else if ctxErr := ctx.Err(); ctxErr != nil {
