@@ -129,7 +129,7 @@ func commitStagedFiles(
 					FirstOperation: operationIDs[0],
 				},
 				OperationIDs: operationIDs,
-				Removed:      len(splitLines(string(before.Data))),
+				Removed:      logicalLineCount(before.Data),
 			})
 		}
 	}

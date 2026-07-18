@@ -17,6 +17,19 @@ func splitLines(s string) []string {
 	return strings.Split(s, "\n")
 }
 
+func logicalLineCount(data []byte) int {
+	if len(data) == 0 {
+		return 0
+	}
+	count := 1
+	for index, value := range data {
+		if value == '\n' && index < len(data)-1 {
+			count++
+		}
+	}
+	return count
+}
+
 func applyEdit(original []string, changes []patchformat.ChangeLine) ([]string, error) {
 	hunks, err := parseEditHunks(changes)
 	if err != nil {

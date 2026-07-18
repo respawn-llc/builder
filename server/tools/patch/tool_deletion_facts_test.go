@@ -17,6 +17,8 @@ func TestDeleteFileReturnsAuthoritativeLogicalLineCountFacts(t *testing.T) {
 	}{
 		{name: "crlf final newline", content: "first\r\nsecond\r\n", want: 2},
 		{name: "no final newline", content: "first\nsecond", want: 2},
+		{name: "single blank lf line", content: "\n", want: 1},
+		{name: "single blank crlf line", content: "\r\n", want: 1},
 		{name: "empty", content: "", want: 0},
 	}
 	for _, test := range tests {
