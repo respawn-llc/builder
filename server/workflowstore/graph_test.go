@@ -379,6 +379,31 @@ func TestWorkflowListPaginatesWithMostRecentOrderAndFilters(t *testing.T) {
 	}
 }
 
+func TestWorkflowListRejectsInvalidPresentScopes(t *testing.T) {
+	ctx, store, _ := newTestStoreContext(t)
+	validProjectID := "project-1"
+	paddedProjectID := " project-1 "
+	blankProjectID := " "
+	malformedWorkflowID := workflow.WorkflowID("workflow-1")
+	paddedWorkflowID := workflow.WorkflowID(" workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0 ")
+	tests := []struct {
+		name string
+		req  ListWorkflowsRequest
+	}{
+		{name: "blank project", req: ListWorkflowsRequest{ProjectID: &blankProjectID}},
+		{name: "padded project", req: ListWorkflowsRequest{ProjectID: &paddedProjectID}},
+		{name: "malformed workflow", req: ListWorkflowsRequest{ProjectID: &validProjectID, WorkflowID: &malformedWorkflowID}},
+		{name: "padded workflow", req: ListWorkflowsRequest{ProjectID: &validProjectID, WorkflowID: &paddedWorkflowID}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := store.ListWorkflows(ctx, test.req); err == nil {
+				t.Fatalf("ListWorkflows accepted invalid scope: %+v", test.req)
+			}
+		})
+	}
+}
+
 func TestWorkflowListPageTokenRejectsMalformedOptionalScope(t *testing.T) {
 	const cursorWorkflowID = "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
 	projectDefault := int64(0)

@@ -495,7 +495,7 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
 		resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskApproveResponse, error) {
 			return remote.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{SetupOperationID: setupOperationID, TransitionID: positionals[0], ExecutionTarget: executionTarget})
 		})

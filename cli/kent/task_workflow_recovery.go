@@ -34,13 +34,13 @@ type taskCreateCommandContext struct {
 	JSON               bool
 }
 
-type taskWorkflowRecoveryKind string
+type taskWorkflowRecoveryKind uint8
 
 const (
-	taskWorkflowRecoveryNoLinkedWorkflows       taskWorkflowRecoveryKind = taskWorkflowRecoveryKind(serverapi.WorkflowTaskListScopeReasonNoLinkedWorkflows)
-	taskWorkflowRecoveryWorkflowNotLinked       taskWorkflowRecoveryKind = taskWorkflowRecoveryKind(serverapi.WorkflowTaskListScopeReasonWorkflowNotLinked)
-	taskWorkflowRecoveryWorkflowRequiredColumns taskWorkflowRecoveryKind = taskWorkflowRecoveryKind(serverapi.WorkflowTaskListScopeReasonWorkflowRequiredColumns)
-	taskWorkflowRecoveryAmbiguousWithoutDefault taskWorkflowRecoveryKind = taskWorkflowRecoveryKind(serverapi.WorkflowTaskCreateSelectionReasonAmbiguousWithoutDefault)
+	taskWorkflowRecoveryNoLinkedWorkflows taskWorkflowRecoveryKind = iota + 1
+	taskWorkflowRecoveryWorkflowNotLinked
+	taskWorkflowRecoveryWorkflowRequiredColumns
+	taskWorkflowRecoveryAmbiguousWithoutDefault
 )
 
 type taskWorkflowRecoveryCommandKind string
@@ -87,8 +87,12 @@ func taskListRecoveryForScopeError(scopeErr *serverapi.WorkflowTaskListScopeErro
 	if scopeErr == nil || scopeErr.ProjectID == nil {
 		return taskWorkflowRecovery{}, errors.New("task list scope error with project context is required")
 	}
+	kind, err := taskListRecoveryKind(scopeErr.Reason)
+	if err != nil {
+		return taskWorkflowRecovery{}, err
+	}
 	failure := taskWorkflowRecoveryFailure{
-		kind:       taskWorkflowRecoveryKind(scopeErr.Reason),
+		kind:       kind,
 		projectID:  *scopeErr.ProjectID,
 		workflowID: scopeErr.WorkflowID,
 	}
@@ -104,8 +108,12 @@ func taskCreateRecoveryForSelectionError(createErr *serverapi.WorkflowTaskCreate
 	if createErr == nil {
 		return taskWorkflowRecovery{}, errors.New("task create selection error is required")
 	}
+	kind, err := taskCreateRecoveryKind(createErr.Reason)
+	if err != nil {
+		return taskWorkflowRecovery{}, err
+	}
 	failure := taskWorkflowRecoveryFailure{
-		kind:       taskWorkflowRecoveryKind(createErr.Reason),
+		kind:       kind,
 		projectID:  createErr.ProjectID,
 		workflowID: createErr.WorkflowID,
 	}
@@ -115,6 +123,32 @@ func taskCreateRecoveryForSelectionError(createErr *serverapi.WorkflowTaskCreate
 		selectedWorkflowID: commandContext.SelectedWorkflowID,
 		create:             &commandContext,
 	})
+}
+
+func taskListRecoveryKind(reason serverapi.WorkflowTaskListScopeErrorReason) (taskWorkflowRecoveryKind, error) {
+	switch reason {
+	case serverapi.WorkflowTaskListScopeReasonNoLinkedWorkflows:
+		return taskWorkflowRecoveryNoLinkedWorkflows, nil
+	case serverapi.WorkflowTaskListScopeReasonWorkflowNotLinked:
+		return taskWorkflowRecoveryWorkflowNotLinked, nil
+	case serverapi.WorkflowTaskListScopeReasonWorkflowRequiredColumns:
+		return taskWorkflowRecoveryWorkflowRequiredColumns, nil
+	default:
+		return 0, fmt.Errorf("unsupported task-list workflow recovery reason %q", reason)
+	}
+}
+
+func taskCreateRecoveryKind(reason serverapi.WorkflowTaskCreateSelectionReason) (taskWorkflowRecoveryKind, error) {
+	switch reason {
+	case serverapi.WorkflowTaskCreateSelectionReasonNoLinkedWorkflows:
+		return taskWorkflowRecoveryNoLinkedWorkflows, nil
+	case serverapi.WorkflowTaskCreateSelectionReasonWorkflowNotLinked:
+		return taskWorkflowRecoveryWorkflowNotLinked, nil
+	case serverapi.WorkflowTaskCreateSelectionReasonAmbiguousWithoutDefault:
+		return taskWorkflowRecoveryAmbiguousWithoutDefault, nil
+	default:
+		return 0, fmt.Errorf("unsupported task-create workflow recovery reason %q", reason)
+	}
 }
 
 func taskWorkflowRecoveryForFailure(failure taskWorkflowRecoveryFailure, commandContext taskWorkflowRecoveryContext) (taskWorkflowRecovery, error) {
@@ -184,7 +218,7 @@ func taskWorkflowRecoveryForFailure(failure taskWorkflowRecoveryFailure, command
 			{Kind: taskWorkflowRecoveryCommandSetDefaultWorkflow, Args: []string{config.Command, "workflow", "default", commandContext.projectRef, "<uuid>"}},
 		}
 	default:
-		return taskWorkflowRecovery{}, fmt.Errorf("unsupported task workflow recovery reason %q", failure.kind)
+		return taskWorkflowRecovery{}, fmt.Errorf("unsupported task workflow recovery kind %d", failure.kind)
 	}
 	return recovery, nil
 }

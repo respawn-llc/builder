@@ -604,7 +604,7 @@ func TestWorkflowTaskListResponseJSONShape(t *testing.T) {
 			WorkflowID: stringPointerForTest("workflow-1"),
 		},
 		MatchingWorkflowCardinality: WorkflowTaskListMatchingWorkflowCardinalityOne,
-		NextPageToken:               "next",
+		NextPageToken:               stringPointerForTest("next"),
 		GeneratedAtUnixMs:           10,
 		Tasks: []WorkflowTaskListItem{{
 			TaskID:          "task-1",
@@ -632,6 +632,9 @@ func TestWorkflowTaskListResponseJSONShape(t *testing.T) {
 	}
 	if selectedShape["matching_workflow_cardinality"] != string(WorkflowTaskListMatchingWorkflowCardinalityOne) {
 		t.Fatalf("matching workflow cardinality = %#v", selectedShape["matching_workflow_cardinality"])
+	}
+	if selectedShape["next_page_token"] != "next" {
+		t.Fatalf("next page token = %#v, want present token", selectedShape["next_page_token"])
 	}
 	tasks, ok := selectedShape["tasks"].([]any)
 	if !ok || len(tasks) != 1 {
@@ -679,10 +682,13 @@ func TestWorkflowTaskListResponseJSONShape(t *testing.T) {
 	if _, ok := emptyScope["workflow_id"]; ok {
 		t.Fatalf("workflow_id present in project-only scope JSON: %s", raw)
 	}
+	if _, ok := emptyShape["next_page_token"]; ok {
+		t.Fatalf("next_page_token present without continuation: %s", raw)
+	}
 	projectWide := WorkflowTaskListResponse{
 		Scope:                       WorkflowTaskListScope{ProjectID: "project-1"},
 		MatchingWorkflowCardinality: WorkflowTaskListMatchingWorkflowCardinalityMultiple,
-		Tasks:                       []WorkflowTaskListItem{{TaskID: "task-1", WorkflowID: "workflow-1"}},
+		Tasks:                       []WorkflowTaskListItem{{TaskID: "task-1", WorkflowID: "workflow-1", WorkflowName: stringPointerForTest("Workflow")}},
 	}
 	raw, err = json.Marshal(projectWide)
 	if err != nil {
@@ -702,6 +708,9 @@ func TestWorkflowTaskListResponseJSONShape(t *testing.T) {
 	}
 	if _, ok := projectWideTask["column_keys"]; ok {
 		t.Fatalf("project-wide task unexpectedly contains column_keys: %s", raw)
+	}
+	if projectWideTask["workflow_name"] != "Workflow" {
+		t.Fatalf("project-wide task workflow_name = %#v, want present name", projectWideTask["workflow_name"])
 	}
 	emptyColumns := []string{}
 	narrowed := WorkflowTaskListResponse{
@@ -727,6 +736,21 @@ func TestWorkflowTaskListResponseJSONShape(t *testing.T) {
 	}
 	if columnKeys, present := narrowedTask["column_keys"]; !present || !equalJSONArrays(columnKeys.([]any), []any{}) {
 		t.Fatalf("narrowed empty column_keys = %#v, want present empty array", narrowedTask["column_keys"])
+	}
+	if _, present := narrowedTask["workflow_name"]; present {
+		t.Fatalf("narrowed task unexpectedly contains workflow_name: %s", raw)
+	}
+}
+
+func TestOptionalWorkflowIdentityJSONOmitsAbsentValues(t *testing.T) {
+	_, validationShape := marshalWorkflowJSON[map[string]any](t, WorkflowValidationError{Code: "invalid"})
+	if _, present := validationShape["workflow_id"]; present {
+		t.Fatalf("validation workflow_id present without identity: %#v", validationShape)
+	}
+
+	_, attentionShape := marshalWorkflowJSON[map[string]any](t, WorkflowAttentionItem{ID: "attention-1", Kind: "approval"})
+	if _, present := attentionShape["workflow_id"]; present {
+		t.Fatalf("attention workflow_id present without identity: %#v", attentionShape)
 	}
 }
 
@@ -865,6 +889,28 @@ func TestWorkflowTaskCreateSelectionErrorRoundTrip(t *testing.T) {
 	}
 	if selectionErr.RPCErrorCode() != protocol.ErrCodeWorkflowTaskCreateSelection {
 		t.Fatalf("selection error code = %d, want %d", selectionErr.RPCErrorCode(), protocol.ErrCodeWorkflowTaskCreateSelection)
+	}
+	canonicalWorkflowID := "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+	linked := &WorkflowTaskCreateSelectionError{
+		Reason:     WorkflowTaskCreateSelectionReasonWorkflowNotLinked,
+		ProjectID:  "project-1",
+		WorkflowID: &canonicalWorkflowID,
+	}
+	if decoded := DecodeWorkflowTaskCreateSelectionError(linked.RPCErrorData(), linked.Error()); !errors.As(decoded, &selectionErr) {
+		t.Fatalf("canonical workflow-not-linked error decoded as %T %v", decoded, decoded)
+	}
+	for name, payload := range map[string]string{
+		"padded project":     `{"type":"workflow_task_create_selection_error","reason":"no_linked_workflows","project_id":" project-1"}`,
+		"malformed workflow": `{"type":"workflow_task_create_selection_error","reason":"workflow_not_linked","project_id":"project-1","workflow_id":"workflow-1"}`,
+		"workflow forbidden": `{"type":"workflow_task_create_selection_error","reason":"no_linked_workflows","project_id":"project-1","workflow_id":"` + canonicalWorkflowID + `"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			decoded := DecodeWorkflowTaskCreateSelectionError(json.RawMessage(payload), "fallback")
+			var typed *WorkflowTaskCreateSelectionError
+			if errors.As(decoded, &typed) {
+				t.Fatalf("invalid payload decoded as typed selection error: %+v", typed)
+			}
+		})
 	}
 }
 

@@ -72,12 +72,15 @@ func TestWorkflowDefinitionForCLIProjectsEveryWorkflowIdentity(t *testing.T) {
 		TransitionGroups: []serverapi.WorkflowTransitionGroup{{WorkflowID: persistedID}},
 		Edges:            []serverapi.WorkflowEdge{{WorkflowID: persistedID}},
 		DerivedWiring: serverapi.WorkflowDerivedWiring{
-			Diagnostics: []serverapi.WorkflowValidationError{{WorkflowID: persistedID}},
+			Diagnostics: []serverapi.WorkflowValidationError{{WorkflowID: &persistedID}},
 		},
 	}
 	projected, err := workflowDefinitionForCLI(serverDefinition)
 	if err != nil {
 		t.Fatalf("workflowDefinitionForCLI: %v", err)
+	}
+	if projected.DerivedWiring.Diagnostics[0].WorkflowID == nil {
+		t.Fatal("projected diagnostic workflow id is absent")
 	}
 	for label, got := range map[string]string{
 		"record":           projected.Workflow.ID,
@@ -85,7 +88,7 @@ func TestWorkflowDefinitionForCLIProjectsEveryWorkflowIdentity(t *testing.T) {
 		"node":             projected.Nodes[0].WorkflowID,
 		"transition group": projected.TransitionGroups[0].WorkflowID,
 		"edge":             projected.Edges[0].WorkflowID,
-		"diagnostic":       projected.DerivedWiring.Diagnostics[0].WorkflowID,
+		"diagnostic":       *projected.DerivedWiring.Diagnostics[0].WorkflowID,
 	} {
 		if got != workflowSelectorTestUUID {
 			t.Fatalf("%s workflow id = %q, want bare UUID", label, got)
@@ -118,17 +121,20 @@ func TestProjectWorkflowLinkForCLIProjectsBareWorkflowID(t *testing.T) {
 func TestWorkflowValidationForCLIProjectsWorkflowIDs(t *testing.T) {
 	persistedID := "workflow-" + workflowSelectorTestUUID
 	serverResponse := serverapi.WorkflowValidateResponse{
-		Errors: []serverapi.WorkflowValidationError{{WorkflowID: persistedID}},
+		Errors: []serverapi.WorkflowValidationError{{WorkflowID: &persistedID}, {}},
 	}
 	projected, err := workflowValidationForCLI(serverResponse)
 	if err != nil {
 		t.Fatalf("workflowValidationForCLI: %v", err)
 	}
-	if projected.Errors[0].WorkflowID != workflowSelectorTestUUID {
-		t.Fatalf("projected workflow id = %q, want bare UUID", projected.Errors[0].WorkflowID)
+	if projected.Errors[0].WorkflowID == nil || *projected.Errors[0].WorkflowID != workflowSelectorTestUUID {
+		t.Fatalf("projected workflow id = %v, want bare UUID", projected.Errors[0].WorkflowID)
 	}
-	if serverResponse.Errors[0].WorkflowID != persistedID {
+	if serverResponse.Errors[0].WorkflowID == nil || *serverResponse.Errors[0].WorkflowID != persistedID {
 		t.Fatal("workflowValidationForCLI mutated server response")
+	}
+	if projected.Errors[1].WorkflowID != nil {
+		t.Fatalf("absent projected workflow id = %v, want nil", projected.Errors[1].WorkflowID)
 	}
 }
 
@@ -138,19 +144,22 @@ func TestWorkflowTaskDetailForCLIProjectsSummaryPickerAndAttentionWorkflowIDs(t 
 		Summary: serverapi.WorkflowTaskSummary{WorkflowID: persistedID},
 		Workflow: serverapi.WorkflowPickerItem{
 			WorkflowID:       persistedID,
-			ValidationErrors: []serverapi.WorkflowValidationError{{WorkflowID: persistedID}},
+			ValidationErrors: []serverapi.WorkflowValidationError{{WorkflowID: &persistedID}, {}},
 		},
-		Attention: []serverapi.WorkflowAttentionItem{{WorkflowID: persistedID}},
+		Attention: []serverapi.WorkflowAttentionItem{{WorkflowID: &persistedID}, {}},
 	}
 	projected, err := workflowTaskDetailForCLI(serverDetail)
 	if err != nil {
 		t.Fatalf("workflowTaskDetailForCLI: %v", err)
 	}
+	if projected.Workflow.ValidationErrors[0].WorkflowID == nil || projected.Attention[0].WorkflowID == nil {
+		t.Fatal("projected optional workflow identity is absent")
+	}
 	for label, got := range map[string]string{
 		"summary":    projected.Summary.WorkflowID,
 		"picker":     projected.Workflow.WorkflowID,
-		"validation": projected.Workflow.ValidationErrors[0].WorkflowID,
-		"attention":  projected.Attention[0].WorkflowID,
+		"validation": *projected.Workflow.ValidationErrors[0].WorkflowID,
+		"attention":  *projected.Attention[0].WorkflowID,
 	} {
 		if got != workflowSelectorTestUUID {
 			t.Fatalf("%s workflow id = %q, want bare UUID", label, got)
@@ -158,6 +167,25 @@ func TestWorkflowTaskDetailForCLIProjectsSummaryPickerAndAttentionWorkflowIDs(t 
 	}
 	if serverDetail.Summary.WorkflowID != persistedID {
 		t.Fatal("workflowTaskDetailForCLI mutated server detail")
+	}
+	if projected.Workflow.ValidationErrors[1].WorkflowID != nil || projected.Attention[1].WorkflowID != nil {
+		t.Fatal("absent optional workflow identities became present")
+	}
+}
+
+func TestWorkflowProjectionRejectsPresentBlankOptionalWorkflowIdentity(t *testing.T) {
+	blank := ""
+	if _, err := workflowValidationForCLI(serverapi.WorkflowValidateResponse{
+		Errors: []serverapi.WorkflowValidationError{{WorkflowID: &blank}},
+	}); err == nil {
+		t.Fatal("workflowValidationForCLI accepted a present blank workflow identity")
+	}
+	if _, err := workflowTaskDetailForCLI(serverapi.WorkflowTaskDetail{
+		Summary:   serverapi.WorkflowTaskSummary{WorkflowID: "workflow-" + workflowSelectorTestUUID},
+		Workflow:  serverapi.WorkflowPickerItem{WorkflowID: "workflow-" + workflowSelectorTestUUID},
+		Attention: []serverapi.WorkflowAttentionItem{{WorkflowID: &blank}},
+	}); err == nil {
+		t.Fatal("workflowTaskDetailForCLI accepted a present blank attention workflow identity")
 	}
 }
 

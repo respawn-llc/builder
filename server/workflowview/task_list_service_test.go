@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"core/internal/testharness/testsetup"
@@ -536,10 +537,10 @@ func TestListTasksSortAndCursorPagination(t *testing.T) {
 				seen[item.TaskID] = true
 				items = append(items, item)
 			}
-			if response.NextPageToken == "" {
+			if response.NextPageToken == nil {
 				return items
 			}
-			request.PageToken = response.NextPageToken
+			request.PageToken = *response.NextPageToken
 		}
 	}
 	sortedRequest := func(field serverapi.WorkflowTaskListSortField, direction serverapi.WorkflowTaskListSortDirection) serverapi.WorkflowTaskListRequest {
@@ -602,10 +603,10 @@ func TestListTasksSortAndCursorPagination(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTasks first page: %v", err)
 	}
-	if firstPage.NextPageToken == "" {
+	if firstPage.NextPageToken == nil {
 		t.Fatal("first page must produce a continuation token")
 	}
-	token, ok, err := parseWorkflowTaskListPageToken(firstPage.NextPageToken)
+	token, ok, err := parseWorkflowTaskListPageToken(*firstPage.NextPageToken)
 	if err != nil || !ok {
 		t.Fatalf("parse page token = %+v/%t/%v", token, ok, err)
 	}
@@ -625,8 +626,8 @@ func TestListTasksSortAndCursorPagination(t *testing.T) {
 	changedProjectToken.Scope.ProjectID = "project-conflict"
 	invalidRequests := []serverapi.WorkflowTaskListRequest{
 		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, invalidVersionToken)},
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: firstPage.NextPageToken, StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog}},
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: firstPage.NextPageToken, Sort: []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldColumn, Direction: serverapi.WorkflowTaskListSortDirectionAsc}}},
+		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: *firstPage.NextPageToken, StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog}},
+		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: *firstPage.NextPageToken, Sort: []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldColumn, Direction: serverapi.WorkflowTaskListSortDirectionAsc}}},
 		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, changedWorkflowVersionToken)},
 		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, changedColumnStructureToken)},
 		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, changedStatusModelToken)},
@@ -708,7 +709,7 @@ func TestTaskListProjectScopeSpansLinkedWorkflowsWithoutColumns(t *testing.T) {
 		if task.ColumnKeys != nil {
 			t.Fatalf("project-wide task columns = %+v, want omitted", task.ColumnKeys)
 		}
-		if task.WorkflowName == "" {
+		if task.WorkflowName == nil || strings.TrimSpace(*task.WorkflowName) == "" {
 			t.Fatalf("project-wide task = %+v, want workflow name", task)
 		}
 	}
@@ -983,7 +984,7 @@ func TestTaskListMatchingWorkflowCardinalityUsesFullFilteredSet(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ListTasks: %v", err)
 		}
-		if response.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple || len(response.Tasks) != 1 || response.NextPageToken == "" {
+		if response.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple || len(response.Tasks) != 1 || response.NextPageToken == nil {
 			t.Fatalf("first page = %+v, want multiple cardinality and continuation", response)
 		}
 	})
@@ -1013,11 +1014,11 @@ func TestTaskListProjectWidePaginationFreezesCardinalityWhileRowsRemainLive(t *t
 		if err != nil {
 			t.Fatalf("ListTasks first page: %v", err)
 		}
-		if firstPage.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne || firstPage.NextPageToken == "" {
+		if firstPage.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne || firstPage.NextPageToken == nil {
 			t.Fatalf("first page = %+v, want one and continuation", firstPage)
 		}
 		if _, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
-			PageToken:   firstPage.NextPageToken,
+			PageToken:   *firstPage.NextPageToken,
 			StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindDone},
 			Sort:        sortByTitle,
 		}, nil); !errors.Is(err, ErrInvalidPageToken) {
@@ -1026,7 +1027,7 @@ func TestTaskListProjectWidePaginationFreezesCardinalityWhileRowsRemainLive(t *t
 		selectedWorkflowID := string(secondWorkflowID)
 		if _, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
 			WorkflowID: &selectedWorkflowID,
-			PageToken:  firstPage.NextPageToken,
+			PageToken:  *firstPage.NextPageToken,
 			Sort:       sortByTitle,
 		}, nil); !errors.Is(err, ErrInvalidPageToken) {
 			t.Fatalf("conflicting continuation scope error = %v, want ErrInvalidPageToken", err)
@@ -1040,7 +1041,7 @@ func TestTaskListProjectWidePaginationFreezesCardinalityWhileRowsRemainLive(t *t
 			t.Fatalf("CreateTask Zulu: %v", err)
 		}
 		nextPage, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
-			PageToken: firstPage.NextPageToken,
+			PageToken: *firstPage.NextPageToken,
 			PageSize:  10,
 			Sort:      sortByTitle,
 		}, nil)
@@ -1090,7 +1091,7 @@ func TestTaskListProjectWidePaginationFreezesCardinalityWhileRowsRemainLive(t *t
 		if err != nil {
 			t.Fatalf("ListTasks first page: %v", err)
 		}
-		if firstPage.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple || firstPage.NextPageToken == "" {
+		if firstPage.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple || firstPage.NextPageToken == nil {
 			t.Fatalf("first page = %+v, want multiple and continuation", firstPage)
 		}
 		if _, err := workflowStore.StartTask(ctx, zulu.ID); err != nil {
@@ -1098,7 +1099,7 @@ func TestTaskListProjectWidePaginationFreezesCardinalityWhileRowsRemainLive(t *t
 		}
 		nextPage, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
 			StatusKinds: statusFilter,
-			PageToken:   firstPage.NextPageToken,
+			PageToken:   *firstPage.NextPageToken,
 			PageSize:    10,
 			Sort:        sortByTitle,
 		}, nil)
@@ -1331,10 +1332,10 @@ func TestTaskListInfersScopeFromContinuationToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTasks first page: %v", err)
 	}
-	if firstPage.NextPageToken == "" {
+	if firstPage.NextPageToken == nil {
 		t.Fatal("expected continuation token")
 	}
-	nextPage, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{PageToken: firstPage.NextPageToken, PageSize: 1}, testsetup.QuestionsEnabled("coder"))
+	nextPage, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{PageToken: *firstPage.NextPageToken, PageSize: 1}, testsetup.QuestionsEnabled("coder"))
 	if err != nil {
 		t.Fatalf("ListTasks token-only continuation: %v", err)
 	}
@@ -1342,7 +1343,7 @@ func TestTaskListInfersScopeFromContinuationToken(t *testing.T) {
 		t.Fatalf("token-only continuation = %+v, want resolved second page", nextPage)
 	}
 	otherProjectID := "project-conflict"
-	_, err = view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &otherProjectID, PageToken: firstPage.NextPageToken, PageSize: 1}, testsetup.QuestionsEnabled("coder"))
+	_, err = view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &otherProjectID, PageToken: *firstPage.NextPageToken, PageSize: 1}, testsetup.QuestionsEnabled("coder"))
 	if !errors.Is(err, ErrInvalidPageToken) {
 		t.Fatalf("ListTasks conflicting token scope error = %v, want ErrInvalidPageToken", err)
 	}

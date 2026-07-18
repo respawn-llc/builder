@@ -107,14 +107,14 @@ func workflowValidationForCLI(response serverapi.WorkflowValidateResponse) (serv
 func workflowValidationErrorsForCLI(errors []serverapi.WorkflowValidationError) ([]serverapi.WorkflowValidationError, error) {
 	projected := append([]serverapi.WorkflowValidationError(nil), errors...)
 	for i := range projected {
-		if projected[i].WorkflowID == "" {
+		if projected[i].WorkflowID == nil {
 			continue
 		}
-		workflowID, err := workflowIDForCLI(projected[i].WorkflowID)
+		workflowID, err := workflowIDForCLI(*projected[i].WorkflowID)
 		if err != nil {
 			return nil, err
 		}
-		projected[i].WorkflowID = workflowID
+		projected[i].WorkflowID = &workflowID
 	}
 	return projected, nil
 }
@@ -136,13 +136,15 @@ func workflowTaskDetailForCLI(detail serverapi.WorkflowTaskDetail) (serverapi.Wo
 	}
 	projected.Attention = append([]serverapi.WorkflowAttentionItem(nil), detail.Attention...)
 	for i := range projected.Attention {
-		if projected.Attention[i].WorkflowID == "" {
+		if projected.Attention[i].WorkflowID == nil {
 			continue
 		}
-		projected.Attention[i].WorkflowID, err = workflowIDForCLI(projected.Attention[i].WorkflowID)
+		workflowID, projectionErr := workflowIDForCLI(*projected.Attention[i].WorkflowID)
+		err = projectionErr
 		if err != nil {
 			return serverapi.WorkflowTaskDetail{}, err
 		}
+		projected.Attention[i].WorkflowID = &workflowID
 	}
 	return projected, nil
 }

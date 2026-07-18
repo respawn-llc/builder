@@ -1005,6 +1005,10 @@ func workflowInspectSubcommand(args []string, stdout io.Writer, stderr io.Writer
 				fmt.Fprintln(stderr, listErr)
 				return 1
 			}
+			if response.NextPageToken != "" {
+				fmt.Fprintln(stderr, "workflow summary response contains a continuation token")
+				return 1
+			}
 			workflows, projectionErr := workflowRecordsForCLI(response.Workflows)
 			if projectionErr != nil {
 				fmt.Fprintln(stderr, projectionErr)
@@ -1291,6 +1295,13 @@ func resolveWorkflowDefinition(ctx context.Context, remote workflowCommandRemote
 	resp, err := remote.GetWorkflow(getCtx, serverapi.WorkflowGetRequest{WorkflowID: selector.PersistedID()})
 	if err != nil {
 		return serverapi.WorkflowDefinition{}, err
+	}
+	if resp.Definition.Workflow.ID != selector.PersistedID() {
+		return serverapi.WorkflowDefinition{}, fmt.Errorf(
+			"workflow response identity %q does not match requested workflow %q",
+			resp.Definition.Workflow.ID,
+			selector.PersistedID(),
+		)
 	}
 	return resp.Definition, nil
 }

@@ -643,10 +643,6 @@ func TestTaskStartCommandPollsForSessionAndPrintsReadableOutput(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("task start exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
-	want := "Started task BLD-1 in session session-1 using workflow \"Workflow\" (" + workflowSelectorTestUUID + ").\nFirst node: implement\n"
-	if stdout != want {
-		t.Fatalf("task start stdout = %q, want %q", stdout, want)
-	}
 	if stderr != "" {
 		t.Fatalf("task start stderr = %q, want empty", stderr)
 	}

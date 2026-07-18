@@ -399,10 +399,13 @@ func (p workflowApprovalProjection) ApprovalProjection(ctx context.Context, tran
 		if strings.TrimSpace(item.RunID) == "" || strings.TrimSpace(item.SessionID) == "" {
 			break
 		}
+		if item.WorkflowID == nil {
+			break
+		}
 		return workflowattention.ApprovalProjection{
 			TransitionID:     transitionID,
 			ProjectID:        item.ProjectID,
-			WorkflowID:       item.WorkflowID,
+			WorkflowID:       *item.WorkflowID,
 			TaskID:           workflow.TaskID(item.TaskID),
 			TaskShortID:      item.TaskShortID,
 			TaskTitle:        item.TaskTitle,
@@ -470,9 +473,12 @@ func (p workflowApprovalProjection) interruptedRunAttentionProjection(ctx contex
 		if item.Kind != "interrupted_run" || item.RunID != string(run.ID) {
 			continue
 		}
+		if item.WorkflowID == nil {
+			continue
+		}
 		return workflowattention.InterruptedRunProjection{
 			ProjectID:        item.ProjectID,
-			WorkflowID:       item.WorkflowID,
+			WorkflowID:       *item.WorkflowID,
 			TaskID:           workflow.TaskID(item.TaskID),
 			TaskShortID:      item.TaskShortID,
 			TaskTitle:        item.TaskTitle,

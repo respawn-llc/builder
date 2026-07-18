@@ -1,26 +1,28 @@
 package main
 
 import (
-	"bytes"
 	"flag"
-	"strings"
 	"testing"
 )
 
-func TestWriteCommandFlagDefaultsUsesDoubleDashLongFlags(t *testing.T) {
-	var output bytes.Buffer
+func TestCommandFlagDefaultMetadataUsesTypedGetterValues(t *testing.T) {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	fs.SetOutput(&output)
-	fs.Bool("json", false, "write JSON")
-	fs.String("page-size", "", "page size")
+	fs.String("path", "release/v1", "`ref` custom reference")
+	fs.String("zero-string", "0", "string")
+	fs.String("empty-string", "", "string")
+	fs.Bool("false", false, "false")
+	fs.Int("zero-int", 0, "zero")
 
-	writeCommandFlagDefaults(fs)
-
-	rendered := output.String()
-	if !strings.Contains(rendered, "--json") || !strings.Contains(rendered, "--page-size") {
-		t.Fatalf("help = %q, want double-dash long flags", rendered)
+	tests := map[string]commandFlagDefaultMetadata{
+		"path":         {Value: "release/v1", Visible: true, Quote: true},
+		"zero-string":  {Value: "0", Visible: true, Quote: true},
+		"empty-string": {Value: "", Visible: false, Quote: true},
+		"false":        {Value: "false", Visible: false},
+		"zero-int":     {Value: "0", Visible: false},
 	}
-	if strings.Contains(rendered, "\n  -json") || strings.Contains(rendered, "\n  -page-size") {
-		t.Fatalf("help = %q, contains single-dash rendered long flags", rendered)
+	for name, want := range tests {
+		if got := commandFlagDefaultMetadataFor(fs.Lookup(name)); got != want {
+			t.Fatalf("metadata for %q = %+v, want %+v", name, got, want)
+		}
 	}
 }

@@ -132,7 +132,7 @@ func TestServiceValidateWorkflowScriptPathReportsMissingPath(t *testing.T) {
 		t.Fatalf("validation = %+v, want one blocking missing-path diagnostic", validated)
 	}
 	got := validated.Errors[0]
-	if got.Code != workflowscript.CodeMissingPath || got.WorkflowID != workflowID || got.NodeID != "node-script" || !got.BlocksContext {
+	if got.Code != workflowscript.CodeMissingPath || got.WorkflowID == nil || *got.WorkflowID != workflowID || got.NodeID != "node-script" || !got.BlocksContext {
 		t.Fatalf("validation error = %+v, want blocking missing-path diagnostic scoped to script node", got)
 	}
 }

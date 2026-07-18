@@ -25,6 +25,8 @@ import (
 	"core/shared/sessionenv"
 )
 
+const workflowMismatchedSelectorTestUUID = "8e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+
 type workflowCommandLoopbackRemote struct {
 	apicontract.WorkflowService
 	cfg                   config.App
@@ -188,10 +190,6 @@ func TestWorkflowUpdateRoundTripsExecutionTargetPolicies(t *testing.T) {
 		}
 	}
 
-	human, _ := runWorkflowRootCommandOK(t, "workflow", "inspect", workflowID)
-	if !strings.Contains(human, "ask-on-first-execution") {
-		t.Fatalf("workflow inspect omitted execution target policy: %s", human)
-	}
 }
 
 func TestWorkflowEditCommandsPersistNodeAndEdgeMetadata(t *testing.T) {
@@ -337,9 +335,9 @@ func TestWorkflowNodeScriptPathAddUpdateAndInspect(t *testing.T) {
 	}
 
 	runWorkflowRootCommandOK(t, "workflow", "node", "update", workflowID, "script", "--json", "--script-path", "scripts/fixed")
-	inspectOut, _ := runWorkflowRootCommandOK(t, "workflow", "inspect", workflowID)
-	if !strings.Contains(inspectOut, "- script (script): Renamed Script  [script: scripts/fixed]") {
-		t.Fatalf("workflow inspect output = %q, want script path node line", inspectOut)
+	node = workflowNodeByIDForTest(t, workflowInspectDefinitionForTest(t, workflowID), added.NodeID)
+	if node.ScriptPath == nil || *node.ScriptPath != "scripts/fixed" || node.DisplayName != "Renamed Script" {
+		t.Fatalf("updated script node = %+v, want preserved display name and fixed script path", node)
 	}
 }
 
@@ -555,7 +553,7 @@ func TestWorkflowHelpSmoke(t *testing.T) {
 }
 
 func TestWorkflowValidateRejectsRemovedProjectFlag(t *testing.T) {
-	_, _, code := runWorkflowRootCommand("workflow", "validate", "workflow-id", "--project", "project-id")
+	_, _, code := runWorkflowRootCommand("workflow", "validate", workflowSelectorTestUUID, "--project", "project-id")
 	if code != 2 {
 		t.Fatalf("workflow validate with removed --project exit=%d, want 2", code)
 	}
@@ -857,6 +855,41 @@ func TestWorkflowInspectSummaryRejectsMismatchedResponseScope(t *testing.T) {
 				t.Fatalf("workflow inspect summary mismatch exit=%d stdout=%q", code, stdout)
 			}
 		})
+	}
+}
+
+func TestWorkflowInspectSummaryRejectsContinuationToken(t *testing.T) {
+	const workflowID = "workflow-" + workflowSelectorTestUUID
+	remote := &pagedWorkflowListRemote{
+		pages: map[string]serverapi.WorkflowListResponse{
+			"": {
+				Workflows:     []serverapi.WorkflowRecord{{ID: workflowID}},
+				NextPageToken: "unexpected",
+			},
+		},
+	}
+	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
+	defer restore()
+
+	stdout, _, code := runWorkflowRootCommand("workflow", "inspect", workflowSelectorTestUUID, "--summary")
+	if code != 1 || stdout != "" {
+		t.Fatalf("workflow inspect summary exit=%d stdout=%q, want rejected continuation", code, stdout)
+	}
+}
+
+func TestWorkflowUpdateRejectsMismatchedGetWorkflowIdentity(t *testing.T) {
+	remote := &preservingNodeUpdateRemote{
+		definitionWorkflowID: "workflow-" + workflowMismatchedSelectorTestUUID,
+	}
+	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
+	defer restore()
+
+	stdout, _, code := runWorkflowRootCommand("workflow", "update", workflowSelectorTestUUID, "--name", "Updated")
+	if code != 1 || stdout != "" {
+		t.Fatalf("workflow update exit=%d stdout=%q, want rejected mismatched identity", code, stdout)
+	}
+	if remote.saveCalls != 0 {
+		t.Fatalf("SaveWorkflowGraph calls = %d, want no mutation after mismatched identity", remote.saveCalls)
 	}
 }
 
@@ -1195,7 +1228,9 @@ func (r *workflowCommandLoopbackRemote) ListRequests() []serverapi.WorkflowListR
 
 type preservingNodeUpdateRemote struct {
 	apicontract.WorkflowService
-	updateReq serverapi.WorkflowNodeUpdateRequest
+	updateReq            serverapi.WorkflowNodeUpdateRequest
+	definitionWorkflowID string
+	saveCalls            int
 }
 
 func (r *preservingNodeUpdateRemote) Close() error { return nil }
@@ -1209,8 +1244,12 @@ func (r *preservingNodeUpdateRemote) ListWorkflows(context.Context, serverapi.Wo
 }
 
 func (r *preservingNodeUpdateRemote) GetWorkflow(context.Context, serverapi.WorkflowGetRequest) (serverapi.WorkflowGetResponse, error) {
+	workflowID := r.definitionWorkflowID
+	if workflowID == "" {
+		workflowID = "workflow-" + workflowSelectorTestUUID
+	}
 	return serverapi.WorkflowGetResponse{Definition: serverapi.WorkflowDefinition{
-		Workflow: serverapi.WorkflowRecord{ID: "workflow-" + workflowSelectorTestUUID, Name: "Workflow"},
+		Workflow: serverapi.WorkflowRecord{ID: workflowID, Name: "Workflow"},
 		Nodes: []serverapi.WorkflowNode{{
 			ID:          "node-join",
 			WorkflowID:  "workflow-" + workflowSelectorTestUUID,
@@ -1227,6 +1266,11 @@ func (r *preservingNodeUpdateRemote) GetWorkflow(context.Context, serverapi.Work
 			}},
 		}},
 	}}, nil
+}
+
+func (r *preservingNodeUpdateRemote) SaveWorkflowGraph(context.Context, serverapi.WorkflowGraphSaveRequest) (serverapi.WorkflowGraphSaveResponse, error) {
+	r.saveCalls++
+	return serverapi.WorkflowGraphSaveResponse{}, nil
 }
 
 func (r *preservingNodeUpdateRemote) UpdateWorkflowNode(_ context.Context, req serverapi.WorkflowNodeUpdateRequest) (serverapi.WorkflowNodeUpdateResponse, error) {

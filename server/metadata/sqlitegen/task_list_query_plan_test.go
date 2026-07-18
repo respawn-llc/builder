@@ -144,7 +144,7 @@ func requireQueryPlanDoesNotGroupIntoTemporaryTree(t *testing.T, db *sql.DB, que
 	if err != nil {
 		t.Fatalf("explain query plan: %v", err)
 	}
-	defer rows.Close()
+	defer closeQueryRows(t, rows)
 	groupingStructures := 0
 	for rows.Next() {
 		var id, parent, unused int64

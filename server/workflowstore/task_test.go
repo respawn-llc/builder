@@ -189,6 +189,23 @@ func TestTaskCreateRejectsPresentBlankWorkflowWithoutMutation(t *testing.T) {
 	assertTaskCreationUnchanged(t, ctx, store, binding.ProjectID, beforeSequence)
 }
 
+func TestTaskCreateRejectsBlankProjectWithoutMutation(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	beforeSequence := projectNextTaskSequence(t, ctx, store, binding.ProjectID)
+	for _, projectID := range []string{"", " ", "\t\n"} {
+		t.Run(fmt.Sprintf("%q", projectID), func(t *testing.T) {
+			if _, err := store.CreateTask(ctx, CreateTaskRequest{
+				ProjectID: projectID,
+				Title:     "Blank project",
+				Body:      "Body",
+			}); err == nil {
+				t.Fatal("CreateTask accepted a blank project id")
+			}
+			assertTaskCreationUnchanged(t, ctx, store, binding.ProjectID, beforeSequence)
+		})
+	}
+}
+
 func TestTaskCreateMapsSQLiteBusyToTypedConflictWithoutMutation(t *testing.T) {
 	ctx, fixtureStore, binding, cfg := newTestStoreWithConfigContext(t)
 	createLinkedValidWorkflow(t, ctx, fixtureStore, binding.ProjectID)

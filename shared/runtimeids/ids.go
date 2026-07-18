@@ -57,7 +57,7 @@ func ParseCanonicalPrefixedUUIDv4(raw string, prefix string, field string) (uuid
 	if len(raw) != len(prefix)+canonicalUUIDTextLength {
 		return uuid.Nil, fmt.Errorf("%s must use the %q prefix followed by a canonical UUIDv4", field, prefix)
 	}
-	for index := range prefix {
+	for index := 0; index < len(prefix); index++ {
 		if raw[index] != prefix[index] {
 			return uuid.Nil, fmt.Errorf("%s must use the %q prefix followed by a canonical UUIDv4", field, prefix)
 		}

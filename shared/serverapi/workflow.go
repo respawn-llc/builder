@@ -646,7 +646,7 @@ type WorkflowValidateResponse struct {
 type WorkflowValidationError struct {
 	Code              string                          `json:"code"`
 	Message           string                          `json:"message"`
-	WorkflowID        string                          `json:"workflow_id,omitempty"`
+	WorkflowID        *string                         `json:"workflow_id,omitempty"`
 	NodeID            string                          `json:"node_id,omitempty"`
 	TransitionGroupID string                          `json:"transition_group_id,omitempty"`
 	EdgeID            string                          `json:"edge_id,omitempty"`
@@ -729,6 +729,7 @@ func DecodeWorkflowTaskCreateSelectionError(data json.RawMessage, message string
 	if err := json.Unmarshal(data, &envelope); err != nil ||
 		envelope.Type != "workflow_task_create_selection_error" ||
 		strings.TrimSpace(envelope.ProjectID) == "" ||
+		strings.TrimSpace(envelope.ProjectID) != envelope.ProjectID ||
 		!validWorkflowTaskCreateSelectionError(envelope.Reason, envelope.WorkflowID) {
 		return errors.New(strings.TrimSpace(message))
 	}
@@ -745,7 +746,11 @@ func validWorkflowTaskCreateSelectionError(reason WorkflowTaskCreateSelectionRea
 		WorkflowTaskCreateSelectionReasonAmbiguousWithoutDefault:
 		return workflowID == nil
 	case WorkflowTaskCreateSelectionReasonWorkflowNotLinked:
-		return workflowID != nil && strings.TrimSpace(*workflowID) != ""
+		if workflowID == nil {
+			return false
+		}
+		_, err := runtimeids.ParseCanonicalPrefixedUUIDv4(*workflowID, "workflow-", "workflow id")
+		return err == nil
 	default:
 		return false
 	}
@@ -978,7 +983,7 @@ type WorkflowAttentionItem struct {
 	ID                     string                           `json:"id"`
 	Kind                   string                           `json:"kind"`
 	ProjectID              string                           `json:"project_id,omitempty"`
-	WorkflowID             string                           `json:"workflow_id,omitempty"`
+	WorkflowID             *string                          `json:"workflow_id,omitempty"`
 	TaskID                 string                           `json:"task_id,omitempty"`
 	TaskShortID            string                           `json:"task_short_id,omitempty"`
 	TaskTitle              string                           `json:"task_title,omitempty"`
@@ -1170,7 +1175,7 @@ const (
 type WorkflowTaskListResponse struct {
 	Scope                       WorkflowTaskListScope                       `json:"scope"`
 	MatchingWorkflowCardinality WorkflowTaskListMatchingWorkflowCardinality `json:"matching_workflow_cardinality"`
-	NextPageToken               string                                      `json:"next_page_token,omitempty"`
+	NextPageToken               *string                                     `json:"next_page_token,omitempty"`
 	GeneratedAtUnixMs           int64                                       `json:"generated_at_unix_ms"`
 	Tasks                       []WorkflowTaskListItem                      `json:"tasks"`
 }
@@ -1179,7 +1184,7 @@ type WorkflowTaskListItem struct {
 	TaskID          string             `json:"task_id"`
 	ShortID         string             `json:"short_id"`
 	WorkflowID      string             `json:"workflow_id"`
-	WorkflowName    string             `json:"workflow_name,omitempty"`
+	WorkflowName    *string            `json:"workflow_name,omitempty"`
 	Title           string             `json:"title"`
 	CreatedAtUnixMs int64              `json:"created_at_unix_ms"`
 	UpdatedAtUnixMs int64              `json:"updated_at_unix_ms"`

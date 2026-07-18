@@ -106,10 +106,14 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			})
 			return 1
 		}
-		return writeTaskListResponse(stdout, stderr, resp, taskListExpectedScope{
+		expectedScope := taskListExpectedScope{
 			ProjectID:  projectID,
 			WorkflowID: selectedWorkflowID,
-		}, *jsonOut)
+		}
+		if selectedWorkflowID == nil && strings.TrimSpace(*pageToken) != "" {
+			expectedScope.WorkflowOwner = taskListExpectedWorkflowFromToken
+		}
+		return writeTaskListResponse(stdout, stderr, resp, expectedScope, *jsonOut)
 	})
 }
 
@@ -136,8 +140,8 @@ func writeTaskListResponse(stdout io.Writer, stderr io.Writer, resp serverapi.Wo
 			fmt.Fprintf(stdout, "Columns: %s\n", taskListColumnKeysText(*row.Item.ColumnKeys))
 		}
 	}
-	if strings.TrimSpace(resp.NextPageToken) != "" {
-		fmt.Fprintf(stderr, "Next page token: `%s`\n", resp.NextPageToken)
+	if resp.NextPageToken != nil {
+		fmt.Fprintf(stderr, "Next page token: `%s`\n", *resp.NextPageToken)
 	}
 	return 0
 }

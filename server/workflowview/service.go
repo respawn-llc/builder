@@ -281,9 +281,13 @@ func (s *Service) ListTasks(ctx context.Context, req serverapi.WorkflowTaskListR
 	}
 	responseItems := make([]serverapi.WorkflowTaskListItem, 0, len(pageItems))
 	for _, item := range pageItems {
-		responseItems = append(responseItems, item.item)
+		responseItem := item.item
+		if matchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple {
+			responseItem.WorkflowName = nil
+		}
+		responseItems = append(responseItems, responseItem)
 	}
-	nextPageToken := ""
+	var nextPageToken *string
 	if hasNext && len(pageItems) > 0 {
 		tokenScope := workflowTaskListPageTokenScope{ProjectID: projectID}
 		if workflowID == nil {
@@ -295,7 +299,7 @@ func (s *Service) ListTasks(ctx context.Context, req serverapi.WorkflowTaskListR
 				ColumnStructureHash: *columnStructureHash,
 			}
 		}
-		nextPageToken, err = workflowTaskListPageToken(workflowTaskListPageTokenPayload{
+		encodedToken, encodeErr := workflowTaskListPageToken(workflowTaskListPageTokenPayload{
 			Version:                     workflowTaskListPageTokenVersion,
 			Scope:                       tokenScope,
 			MatchingWorkflowCardinality: matchingWorkflowCardinality,
@@ -303,9 +307,10 @@ func (s *Service) ListTasks(ctx context.Context, req serverapi.WorkflowTaskListR
 			Fingerprint:                 fingerprint,
 			Cursor:                      workflowTaskListCursorFromRow(pageItems[len(pageItems)-1]),
 		})
-		if err != nil {
-			return serverapi.WorkflowTaskListResponse{}, err
+		if encodeErr != nil {
+			return serverapi.WorkflowTaskListResponse{}, encodeErr
 		}
+		nextPageToken = &encodedToken
 	}
 	return serverapi.WorkflowTaskListResponse{
 		Scope: serverapi.WorkflowTaskListScope{
@@ -1096,9 +1101,10 @@ func (s *Service) attentionItemCandidates(ctx context.Context, projectID string,
 }
 
 func (s *Service) attentionItemFromCandidate(ctx context.Context, row attentionCandidateRow, roleResolver workflow.RoleResolver, questions *pendingQuestionResolver) (serverapi.WorkflowAttentionItem, bool, error) {
+	workflowID := row.workflowID
 	switch row.kind {
 	case "approval":
-		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: "approval", ProjectID: row.projectID, WorkflowID: row.workflowID, TaskID: row.taskID, TaskShortID: row.shortID, TaskTitle: row.title, TaskTransitionID: row.taskTransitionID, Message: "Approval required", OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
+		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: "approval", ProjectID: row.projectID, WorkflowID: &workflowID, TaskID: row.taskID, TaskShortID: row.shortID, TaskTitle: row.title, TaskTransitionID: row.taskTransitionID, Message: "Approval required", OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
 	case "question":
 		question, err := questions.Question(ctx, row.sessionID, row.askID)
 		if err != nil {
@@ -1106,7 +1112,7 @@ func (s *Service) attentionItemFromCandidate(ctx context.Context, row attentionC
 		}
 		return workflowQuestionAttentionItem(row.id, row.projectID, row.workflowID, row.taskID, row.shortID, row.title, row.runID, row.sessionID, row.askID, question, row.occurredAtUnixMs), true, nil
 	case attentionKindInterruptedRun:
-		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: attentionKindInterruptedRun, ProjectID: row.projectID, WorkflowID: row.workflowID, TaskID: row.taskID, TaskShortID: row.shortID, TaskTitle: row.title, RunID: row.runID, SessionID: row.sessionID, Message: interruptedRunMessage(row.interruptionReason, row.interruptionDetailJSON), DetailJSON: row.interruptionDetailJSON, OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
+		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: attentionKindInterruptedRun, ProjectID: row.projectID, WorkflowID: &workflowID, TaskID: row.taskID, TaskShortID: row.shortID, TaskTitle: row.title, RunID: row.runID, SessionID: row.sessionID, Message: interruptedRunMessage(row.interruptionReason, row.interruptionDetailJSON), DetailJSON: row.interruptionDetailJSON, OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
 	case "validation_blocker":
 		def, _, err := s.definition(ctx, row.workflowID)
 		if err != nil {
@@ -1116,7 +1122,7 @@ func (s *Service) attentionItemFromCandidate(ctx context.Context, row attentionC
 		if !validation.HasBlockingErrors() {
 			return serverapi.WorkflowAttentionItem{}, false, nil
 		}
-		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: "validation_blocker", ProjectID: row.projectID, WorkflowID: row.workflowID, Message: fmt.Sprintf("Workflow %q is invalid for task start", def.Workflow.Name), OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
+		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: "validation_blocker", ProjectID: row.projectID, WorkflowID: &workflowID, Message: fmt.Sprintf("Workflow %q is invalid for task start", def.Workflow.Name), OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
 	default:
 		return serverapi.WorkflowAttentionItem{}, false, fmt.Errorf("unknown attention item kind %q", row.kind)
 	}
@@ -1392,7 +1398,8 @@ func (s *Service) activityItemsFromRows(task sqlitegen.TaskRecord, rows []taskAc
 				item.Summary = "Run completed"
 			case "run_interrupted":
 				item.Summary = interruptedRunMessage(metadata.OptionalString(run.InterruptionReason), run.InterruptionDetailJson)
-				attention := serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + run.ID, Kind: attentionKindInterruptedRun, ProjectID: task.ProjectID, WorkflowID: task.WorkflowID, TaskID: task.ID, TaskShortID: task.ShortID, TaskTitle: task.Title, RunID: run.ID, SessionID: run.SessionID.String, Message: item.Summary, DetailJSON: run.InterruptionDetailJson, OccurredAtUnixMs: run.InterruptedAtUnixMs.Int64}
+				workflowID := task.WorkflowID
+				attention := serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + run.ID, Kind: attentionKindInterruptedRun, ProjectID: task.ProjectID, WorkflowID: &workflowID, TaskID: task.ID, TaskShortID: task.ShortID, TaskTitle: task.Title, RunID: run.ID, SessionID: run.SessionID.String, Message: item.Summary, DetailJSON: run.InterruptionDetailJson, OccurredAtUnixMs: run.InterruptedAtUnixMs.Int64}
 				item.Attention = &attention
 			}
 		case "task_canceled":
@@ -1685,7 +1692,8 @@ func (s *Service) approvalAttentionItems(ctx context.Context, projectID string, 
 	}
 	items := make([]serverapi.WorkflowAttentionItem, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, serverapi.WorkflowAttentionItem{ID: "approval:" + row.TaskTransitionID, Kind: "approval", ProjectID: row.ProjectID, WorkflowID: row.WorkflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, TaskTransitionID: row.TaskTransitionID, Message: "Approval required", OccurredAtUnixMs: row.CreatedAtUnixMs})
+		workflowID := row.WorkflowID
+		items = append(items, serverapi.WorkflowAttentionItem{ID: "approval:" + row.TaskTransitionID, Kind: "approval", ProjectID: row.ProjectID, WorkflowID: &workflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, TaskTransitionID: row.TaskTransitionID, Message: "Approval required", OccurredAtUnixMs: row.CreatedAtUnixMs})
 	}
 	return items, nil
 }
@@ -1723,7 +1731,8 @@ func requiredWaitingAskID(value sql.NullString, runID string) (string, error) {
 }
 
 func workflowQuestionAttentionItem(id string, projectID string, workflowID string, taskID string, shortID string, title string, runID string, sessionID string, askID string, question pendingQuestion, occurredAtUnixMs int64) serverapi.WorkflowAttentionItem {
-	return serverapi.WorkflowAttentionItem{ID: id, Kind: "question", ProjectID: projectID, WorkflowID: workflowID, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, RunID: runID, SessionID: sessionID, AskID: askID, Message: question.message, Suggestions: question.suggestions, RecommendedOptionIndex: question.recommendedOptionIndex, Question: question.prompt, OccurredAtUnixMs: occurredAtUnixMs}
+	workflowIDValue := workflowID
+	return serverapi.WorkflowAttentionItem{ID: id, Kind: "question", ProjectID: projectID, WorkflowID: &workflowIDValue, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, RunID: runID, SessionID: sessionID, AskID: askID, Message: question.message, Suggestions: question.suggestions, RecommendedOptionIndex: question.recommendedOptionIndex, Question: question.prompt, OccurredAtUnixMs: occurredAtUnixMs}
 }
 
 const pendingQuestionFallbackMessage = "Question pending; open the task to answer."
@@ -1859,7 +1868,8 @@ func (s *Service) interruptedRunAttentionItems(ctx context.Context, projectID st
 	}
 	items := make([]serverapi.WorkflowAttentionItem, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + row.RunID, Kind: attentionKindInterruptedRun, ProjectID: row.ProjectID, WorkflowID: row.WorkflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, RunID: row.RunID, SessionID: row.SessionID, Message: interruptedRunMessage(metadata.OptionalString(row.InterruptionReason), row.InterruptionDetailJson), DetailJSON: row.InterruptionDetailJson, OccurredAtUnixMs: row.InterruptedAtUnixMs.Int64})
+		workflowID := row.WorkflowID
+		items = append(items, serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + row.RunID, Kind: attentionKindInterruptedRun, ProjectID: row.ProjectID, WorkflowID: &workflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, RunID: row.RunID, SessionID: row.SessionID, Message: interruptedRunMessage(metadata.OptionalString(row.InterruptionReason), row.InterruptionDetailJson), DetailJSON: row.InterruptionDetailJson, OccurredAtUnixMs: row.InterruptedAtUnixMs.Int64})
 	}
 	return items, nil
 }
@@ -1924,7 +1934,8 @@ func (s *Service) validationAttentionItems(ctx context.Context, projectID string
 		if !validation.HasBlockingErrors() {
 			continue
 		}
-		items = append(items, serverapi.WorkflowAttentionItem{ID: "validation_blocker:" + link.projectID + ":" + link.workflowID, Kind: "validation_blocker", ProjectID: link.projectID, WorkflowID: link.workflowID, Message: fmt.Sprintf("Workflow %q is invalid for task start", def.Workflow.Name), OccurredAtUnixMs: link.occurredAt})
+		workflowID := link.workflowID
+		items = append(items, serverapi.WorkflowAttentionItem{ID: "validation_blocker:" + link.projectID + ":" + link.workflowID, Kind: "validation_blocker", ProjectID: link.projectID, WorkflowID: &workflowID, Message: fmt.Sprintf("Workflow %q is invalid for task start", def.Workflow.Name), OccurredAtUnixMs: link.occurredAt})
 	}
 	return items, nil
 }

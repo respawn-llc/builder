@@ -30,7 +30,7 @@ const taskListSecondWorkflowID = "workflow-" + taskListSecondWorkflowSelector
 
 func TestTaskListSendsTypedFiltersAndSorts(t *testing.T) {
 	remote := &capturingTaskListRemote{response: serverapi.WorkflowTaskListResponse{
-		Scope:                       taskListResponseScope("project-1", taskListWorkflowID),
+		Scope:                       taskListResponseScope("project-1", stringPointerForTaskListTest(taskListWorkflowID)),
 		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone,
 	}}
 	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
@@ -80,7 +80,7 @@ func TestTaskListSendsTypedFiltersAndSorts(t *testing.T) {
 
 func TestTaskListLeavesDefaultSortToServer(t *testing.T) {
 	remote := &capturingTaskListRemote{response: serverapi.WorkflowTaskListResponse{
-		Scope:                       taskListResponseScope("project-1", ""),
+		Scope:                       taskListResponseScope("project-1", nil),
 		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone,
 	}}
 	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
@@ -98,10 +98,10 @@ func TestTaskListLeavesDefaultSortToServer(t *testing.T) {
 func TestTaskListWorkflowOnlyResolvesCurrentProject(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	remote := &capturingTaskListRemote{response: serverapi.WorkflowTaskListResponse{
-		Scope:                       taskListResponseScope("project-current", taskListWorkflowID),
+		Scope:                       taskListResponseScope("project-current", stringPointerForTaskListTest(taskListWorkflowID)),
 		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone,
 	}}
-	remote.resolvedProjectID = "project-current"
+	remote.resolvedProjectID = stringPointerForTaskListTest("project-current")
 	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: workspaceRoot}, remote)
 	defer restore()
 
@@ -120,10 +120,10 @@ func TestTaskListWorkflowOnlyResolvesCurrentProject(t *testing.T) {
 func TestTaskListTokenContinuationResolvesCurrentProject(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	remote := &capturingTaskListRemote{response: serverapi.WorkflowTaskListResponse{
-		Scope:                       taskListResponseScope("project-current", ""),
+		Scope:                       taskListResponseScope("project-current", nil),
 		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
 	}}
-	remote.resolvedProjectID = "project-current"
+	remote.resolvedProjectID = stringPointerForTaskListTest("project-current")
 	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: workspaceRoot}, remote)
 	defer restore()
 
@@ -139,9 +139,35 @@ func TestTaskListTokenContinuationResolvesCurrentProject(t *testing.T) {
 	}
 }
 
+func TestTaskListTokenContinuationAcceptsServerRestoredWorkflowScope(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	remote := &capturingTaskListRemote{response: serverapi.WorkflowTaskListResponse{
+		Scope:                       taskListResponseScope("project-current", stringPointerForTaskListTest(taskListWorkflowID)),
+		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone,
+	}}
+	remote.resolvedProjectID = stringPointerForTaskListTest("project-current")
+	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: workspaceRoot}, remote)
+	defer restore()
+
+	stdout, stderr, code := runWorkflowRootCommand("task", "list", "--page-token", "narrowed-token", "--json")
+	if code != 0 {
+		t.Fatalf("task list exit=%d stderr=%q", code, stderr)
+	}
+	if len(remote.requests) != 1 || remote.requests[0].WorkflowID != nil || remote.requests[0].PageToken != "narrowed-token" {
+		t.Fatalf("requests = %+v, want token-owned workflow scope", remote.requests)
+	}
+	var output taskListOutput
+	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
+		t.Fatalf("task list JSON = %q: %v", stdout, err)
+	}
+	if output.WorkflowID == nil || *output.WorkflowID != taskListWorkflowSelector {
+		t.Fatalf("task list workflow = %v, want restored bare selector %q", output.WorkflowID, taskListWorkflowSelector)
+	}
+}
+
 func TestTaskListRejectsUnknownResponseStatus(t *testing.T) {
 	remote := &capturingTaskListRemote{response: serverapi.WorkflowTaskListResponse{
-		Scope:                       taskListResponseScope("project-1", taskListWorkflowID),
+		Scope:                       taskListResponseScope("project-1", stringPointerForTaskListTest(taskListWorkflowID)),
 		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
 		Tasks: []serverapi.WorkflowTaskListItem{{
 			TaskID:     "task-1",
@@ -178,20 +204,12 @@ func TestTaskListRejectsInvalidFlagsBeforeOpeningRemote(t *testing.T) {
 	}
 }
 
-func taskListResponseScope(projectID string, workflowID string) serverapi.WorkflowTaskListScope {
-	scope := serverapi.WorkflowTaskListScope{ProjectID: projectID}
-	if workflowID != "" {
-		scope.WorkflowID = &workflowID
-	}
-	return scope
+func taskListResponseScope(projectID string, workflowID *string) serverapi.WorkflowTaskListScope {
+	return serverapi.WorkflowTaskListScope{ProjectID: projectID, WorkflowID: workflowID}
 }
 
-func taskListExpectedScopeForTest(projectID string, workflowID string) taskListExpectedScope {
-	scope := taskListExpectedScope{ProjectID: projectID}
-	if workflowID != "" {
-		scope.WorkflowID = &workflowID
-	}
-	return scope
+func taskListExpectedScopeForTest(projectID string, workflowID *string) taskListExpectedScope {
+	return taskListExpectedScope{ProjectID: projectID, WorkflowID: workflowID}
 }
 
 func TestTaskListRejectsBlankWorkflowBeforeOpeningRemote(t *testing.T) {
@@ -244,7 +262,7 @@ type capturingTaskListRemote struct {
 	apicontract.WorkflowService
 	requests          []serverapi.WorkflowTaskListRequest
 	resolveRequests   []serverapi.ProjectResolvePathRequest
-	resolvedProjectID string
+	resolvedProjectID *string
 	response          serverapi.WorkflowTaskListResponse
 	err               error
 }
@@ -253,12 +271,12 @@ func (r *capturingTaskListRemote) Close() error { return nil }
 
 func (r *capturingTaskListRemote) ResolveProjectPath(_ context.Context, request serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
 	r.resolveRequests = append(r.resolveRequests, request)
-	if r.resolvedProjectID == "" {
+	if r.resolvedProjectID == nil {
 		return serverapi.ProjectResolvePathResponse{}, errors.New("unexpected project path resolution")
 	}
 	return serverapi.ProjectResolvePathResponse{
 		Binding: &serverapi.ProjectBinding{
-			ProjectID:     r.resolvedProjectID,
+			ProjectID:     *r.resolvedProjectID,
 			CanonicalRoot: request.Path,
 		},
 	}, nil
@@ -274,7 +292,7 @@ func (r *capturingTaskListRemote) ListWorkflowTasks(_ context.Context, request s
 
 func TestTaskListJSONUsesTypedStatusObject(t *testing.T) {
 	remote := &capturingTaskListRemote{response: serverapi.WorkflowTaskListResponse{
-		Scope:                       taskListResponseScope("project-1", taskListWorkflowID),
+		Scope:                       taskListResponseScope("project-1", stringPointerForTaskListTest(taskListWorkflowID)),
 		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
 		Tasks: []serverapi.WorkflowTaskListItem{{
 			TaskID:     "task-1",
@@ -304,25 +322,27 @@ func TestTaskListJSONUsesTypedStatusObject(t *testing.T) {
 
 func TestTaskListProjectionUsesFrozenCardinalityAndNormalizesWorkflowIDs(t *testing.T) {
 	projectWide, err := taskListProjectionFromResponse(serverapi.WorkflowTaskListResponse{
-		Scope:                       taskListResponseScope("project-1", ""),
+		Scope:                       taskListResponseScope("project-1", nil),
 		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple,
 		Tasks: []serverapi.WorkflowTaskListItem{
 			{
 				TaskID:       "task-1",
 				ShortID:      "KENT-1",
 				WorkflowID:   taskListWorkflowID,
-				WorkflowName: "First",
+				WorkflowName: stringPointerForTaskListTest("First"),
 				Title:        "First task",
+				Status:       serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindQueued, NativeState: "queued"},
 			},
 			{
 				TaskID:       "task-2",
 				ShortID:      "KENT-2",
 				WorkflowID:   taskListSecondWorkflowID,
-				WorkflowName: "Second",
+				WorkflowName: stringPointerForTaskListTest("Second"),
 				Title:        "Second task",
+				Status:       serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindQueued, NativeState: "queued"},
 			},
 		},
-	}, taskListExpectedScopeForTest("project-1", ""))
+	}, taskListExpectedScopeForTest("project-1", nil))
 	if err != nil {
 		t.Fatalf("taskListProjectionFromResponse project-wide: %v", err)
 	}
@@ -342,17 +362,17 @@ func TestTaskListProjectionUsesFrozenCardinalityAndNormalizesWorkflowIDs(t *test
 	}
 
 	narrowed, err := taskListProjectionFromResponse(serverapi.WorkflowTaskListResponse{
-		Scope:                       taskListResponseScope("project-1", taskListWorkflowID),
+		Scope:                       taskListResponseScope("project-1", stringPointerForTaskListTest(taskListWorkflowID)),
 		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
 		Tasks: []serverapi.WorkflowTaskListItem{{
-			TaskID:       "task-1",
-			ShortID:      "KENT-1",
-			WorkflowID:   taskListWorkflowID,
-			WorkflowName: "First",
-			ColumnKeys:   stringSlicePointerForTest("plan"),
-			Title:        "First task",
+			TaskID:     "task-1",
+			ShortID:    "KENT-1",
+			WorkflowID: taskListWorkflowID,
+			ColumnKeys: stringSlicePointerForTest("plan"),
+			Title:      "First task",
+			Status:     serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindQueued, NativeState: "queued"},
 		}},
-	}, taskListExpectedScopeForTest("project-1", taskListWorkflowID))
+	}, taskListExpectedScopeForTest("project-1", stringPointerForTaskListTest(taskListWorkflowID)))
 	if err != nil {
 		t.Fatalf("taskListProjectionFromResponse narrowed: %v", err)
 	}
@@ -370,16 +390,17 @@ func TestTaskListProjectWideJSONOmitsWorkflowAndColumnSentinels(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	code := writeTaskListResponse(&stdout, &stderr, serverapi.WorkflowTaskListResponse{
-		Scope:                       taskListResponseScope("project-1", ""),
+		Scope:                       taskListResponseScope("project-1", nil),
 		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple,
 		Tasks: []serverapi.WorkflowTaskListItem{{
 			TaskID:       "task-1",
 			ShortID:      "KENT-1",
 			WorkflowID:   taskListWorkflowID,
-			WorkflowName: "First",
+			WorkflowName: stringPointerForTaskListTest("First"),
 			Title:        "Task",
+			Status:       serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindQueued, NativeState: "queued"},
 		}},
-	}, taskListExpectedScopeForTest("project-1", ""), true)
+	}, taskListExpectedScopeForTest("project-1", nil), true)
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("writeTaskListResponse exit=%d stderr=%q", code, stderr.String())
 	}
@@ -410,26 +431,26 @@ func TestTaskListProjectWideJSONOmitsWorkflowAndColumnSentinels(t *testing.T) {
 func TestTaskListProjectionRejectsMalformedOrImpossibleWorkflowScope(t *testing.T) {
 	for name, response := range map[string]serverapi.WorkflowTaskListResponse{
 		"malformed selected workflow": {
-			Scope:                       taskListResponseScope("project-1", "workflow-not-a-uuid"),
+			Scope:                       taskListResponseScope("project-1", stringPointerForTaskListTest("workflow-not-a-uuid")),
 			MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone,
 		},
 		"malformed task workflow": {
-			Scope:                       taskListResponseScope("project-1", ""),
+			Scope:                       taskListResponseScope("project-1", nil),
 			MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
 			Tasks:                       []serverapi.WorkflowTaskListItem{{TaskID: "task-1", WorkflowID: "workflow-not-a-uuid"}},
 		},
 		"project-wide columns": {
-			Scope:                       taskListResponseScope("project-1", ""),
+			Scope:                       taskListResponseScope("project-1", nil),
 			MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
 			Tasks:                       []serverapi.WorkflowTaskListItem{{TaskID: "task-1", WorkflowID: taskListWorkflowID, ColumnKeys: stringSlicePointerForTest("plan")}},
 		},
 		"narrowed multiple cardinality": {
-			Scope:                       taskListResponseScope("project-1", taskListWorkflowID),
+			Scope:                       taskListResponseScope("project-1", stringPointerForTaskListTest(taskListWorkflowID)),
 			MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			expectedScope := taskListExpectedScopeForTest(response.Scope.ProjectID, "")
+			expectedScope := taskListExpectedScopeForTest(response.Scope.ProjectID, nil)
 			if response.Scope.WorkflowID != nil {
 				expectedScope.WorkflowID = response.Scope.WorkflowID
 			}
@@ -446,25 +467,55 @@ func TestTaskListProjectionRejectsResponseScopeMismatch(t *testing.T) {
 		expected taskListExpectedScope
 	}{
 		"project mismatch": {
-			response: serverapi.WorkflowTaskListResponse{Scope: taskListResponseScope("project-other", "")},
-			expected: taskListExpectedScopeForTest("project-1", ""),
+			response: serverapi.WorkflowTaskListResponse{Scope: taskListResponseScope("project-other", nil)},
+			expected: taskListExpectedScopeForTest("project-1", nil),
 		},
 		"unexpected narrowed workflow": {
-			response: serverapi.WorkflowTaskListResponse{Scope: taskListResponseScope("project-1", taskListWorkflowID)},
-			expected: taskListExpectedScopeForTest("project-1", ""),
+			response: serverapi.WorkflowTaskListResponse{Scope: taskListResponseScope("project-1", stringPointerForTaskListTest(taskListWorkflowID))},
+			expected: taskListExpectedScopeForTest("project-1", nil),
 		},
 		"missing narrowed workflow": {
-			response: serverapi.WorkflowTaskListResponse{Scope: taskListResponseScope("project-1", "")},
-			expected: taskListExpectedScopeForTest("project-1", taskListWorkflowID),
+			response: serverapi.WorkflowTaskListResponse{Scope: taskListResponseScope("project-1", nil)},
+			expected: taskListExpectedScopeForTest("project-1", stringPointerForTaskListTest(taskListWorkflowID)),
 		},
 		"workflow mismatch": {
-			response: serverapi.WorkflowTaskListResponse{Scope: taskListResponseScope("project-1", taskListSecondWorkflowID)},
-			expected: taskListExpectedScopeForTest("project-1", taskListWorkflowID),
+			response: serverapi.WorkflowTaskListResponse{Scope: taskListResponseScope("project-1", stringPointerForTaskListTest(taskListSecondWorkflowID))},
+			expected: taskListExpectedScopeForTest("project-1", stringPointerForTaskListTest(taskListWorkflowID)),
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := taskListProjectionFromResponse(testCase.response, testCase.expected); err == nil {
 				t.Fatalf("taskListProjectionFromResponse(%s) accepted mismatched response scope", name)
+			}
+		})
+	}
+}
+
+func TestTaskListProjectionAcceptsTokenOwnedWorkflowScope(t *testing.T) {
+	for name, response := range map[string]serverapi.WorkflowTaskListResponse{
+		"project wide": {
+			Scope:                       taskListResponseScope("project-1", nil),
+			MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone,
+		},
+		"narrowed": {
+			Scope:                       taskListResponseScope("project-1", stringPointerForTaskListTest(taskListWorkflowID)),
+			MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			projection, err := taskListProjectionFromResponse(response, taskListExpectedScope{
+				ProjectID:     "project-1",
+				WorkflowOwner: taskListExpectedWorkflowFromToken,
+			})
+			if err != nil {
+				t.Fatalf("taskListProjectionFromResponse(%s): %v", name, err)
+			}
+			if name == "narrowed" {
+				if projection.Output.WorkflowID == nil || *projection.Output.WorkflowID != taskListWorkflowSelector {
+					t.Fatalf("narrowed output workflow = %v, want %q", projection.Output.WorkflowID, taskListWorkflowSelector)
+				}
+			} else if projection.Output.WorkflowID != nil {
+				t.Fatalf("project-wide output workflow = %v, want nil", projection.Output.WorkflowID)
 			}
 		})
 	}
@@ -669,11 +720,11 @@ func TestTaskListLoopbackValidatesExactPairAndContinuesFromToken(t *testing.T) {
 	if err := json.Unmarshal([]byte(firstJSON), &first); err != nil {
 		t.Fatalf("first list JSON = %q: %v", firstJSON, err)
 	}
-	if first.ProjectID != binding.ProjectID || first.WorkflowID != nil || len(first.Tasks) != 1 || first.NextPageToken == "" {
+	if first.ProjectID != binding.ProjectID || first.WorkflowID != nil || len(first.Tasks) != 1 || first.NextPageToken == nil {
 		t.Fatalf("first page = %+v, want project-wide scope and continuation", first)
 	}
 
-	secondJSON, secondErr, code := runWorkflowRootCommand("task", "list", "--page-token", first.NextPageToken, "--page-size", "1", "--json")
+	secondJSON, secondErr, code := runWorkflowRootCommand("task", "list", "--page-token", *first.NextPageToken, "--page-size", "1", "--json")
 	if code != 0 {
 		t.Fatalf("continuation exit=%d stderr=%q", code, secondErr)
 	}

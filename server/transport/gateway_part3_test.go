@@ -293,7 +293,7 @@ func TestDecodeAndHandlePreservesWorkflowTaskListScopeError(t *testing.T) {
 }
 
 func TestDecodeAndHandlePreservesWorkflowTaskCreateSelectionError(t *testing.T) {
-	workflowID := "workflow-1"
+	workflowID := "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
 	source := &serverapi.WorkflowTaskCreateSelectionError{
 		Reason:     serverapi.WorkflowTaskCreateSelectionReasonWorkflowNotLinked,
 		ProjectID:  "project-1",

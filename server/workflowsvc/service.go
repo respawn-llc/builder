@@ -1362,7 +1362,7 @@ func (s *Service) workflowInterruptedRunAttentionIDsByWorkflow(ctx context.Conte
 			}
 			for _, item := range attention.Items {
 				runID := strings.TrimSpace(item.RunID)
-				if item.Kind == "interrupted_run" && item.WorkflowID == workflowID && runID != "" && !seenRuns[runID] {
+				if item.Kind == "interrupted_run" && item.WorkflowID != nil && *item.WorkflowID == workflowID && runID != "" && !seenRuns[runID] {
 					seenRuns[runID] = true
 					runIDs = append(runIDs, workflow.RunID(runID))
 				}
@@ -1789,10 +1789,11 @@ func scriptPathValidationErrors(def workflow.Definition, rootPath *string) []ser
 }
 
 func scriptPathValidationError(workflowID workflow.WorkflowID, nodeID workflow.NodeID, diagnostic workflowscript.Diagnostic) serverapi.WorkflowValidationError {
+	workflowIDValue := string(workflowID)
 	return serverapi.WorkflowValidationError{
 		Code:          diagnostic.Code,
 		Message:       diagnostic.Message,
-		WorkflowID:    string(workflowID),
+		WorkflowID:    &workflowIDValue,
 		NodeID:        string(nodeID),
 		BlocksContext: diagnostic.Blocking,
 	}

@@ -536,6 +536,9 @@ func (s *Store) ListWorkflows(ctx context.Context, req ListWorkflowsRequest) (Li
 	projectID := req.ProjectID
 	workflowID := workflowIDString(req.WorkflowID)
 	query := sqliteLowerASCII(strings.TrimSpace(req.Query))
+	if err := validateWorkflowListScopes(projectID, workflowID); err != nil {
+		return ListWorkflowsResult{}, err
+	}
 	if cursor.hasValue {
 		if projectID != nil && !textutil.EqualOptional(projectID, cursor.projectID) {
 			return ListWorkflowsResult{}, errors.New("workflow list page token project scope conflict")
@@ -627,6 +630,19 @@ func (s *Store) ListWorkflows(ctx context.Context, req ListWorkflowsRequest) (Li
 		responseProjectID = &value
 	}
 	return ListWorkflowsResult{Workflows: out, ProjectID: responseProjectID, NextPageToken: nextPageToken}, nil
+}
+
+func validateWorkflowListScopes(projectID *string, workflowID *string) error {
+	if projectID != nil &&
+		(strings.TrimSpace(*projectID) == "" || strings.TrimSpace(*projectID) != *projectID) {
+		return errors.New("workflow list project scope must be non-blank and unpadded")
+	}
+	if workflowID != nil {
+		if _, err := runtimeids.ParseCanonicalPrefixedUUIDv4(*workflowID, "workflow-", "workflow id"); err != nil {
+			return fmt.Errorf("invalid workflow list workflow scope: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) AddNode(ctx context.Context, node NodeRecord) (int64, error) {

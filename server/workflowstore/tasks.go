@@ -131,6 +131,10 @@ type ManualMoveRequest struct {
 type ManualMoveResult = CompleteRunResult
 
 func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskRecord, error) {
+	projectID := strings.TrimSpace(req.ProjectID)
+	if projectID == "" {
+		return TaskRecord{}, errors.New("project id is required")
+	}
 	var workflowID *workflow.WorkflowID
 	if req.WorkflowID != nil {
 		if strings.TrimSpace(string(*req.WorkflowID)) == "" {
@@ -140,7 +144,7 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskReco
 		workflowID = &value
 	}
 	prepared := preparedTaskCreate{
-		projectID:         strings.TrimSpace(req.ProjectID),
+		projectID:         projectID,
 		workflowID:        workflowID,
 		title:             strings.TrimSpace(req.Title),
 		body:              strings.TrimSpace(req.Body),

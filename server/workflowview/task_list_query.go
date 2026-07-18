@@ -333,12 +333,20 @@ func (s *Service) listWorkflowTaskListRows(ctx context.Context, req workflowTask
 		if workflowTaskListSortUsesColumn(req.sortSelectors) && columnRank == nil {
 			return nil, fmt.Errorf("workflow task list record for task %q is missing a column rank required by column sorting", row.ID)
 		}
+		var workflowName *string
+		if req.narrowed == nil {
+			if strings.TrimSpace(row.WorkflowName) == "" {
+				return nil, fmt.Errorf("project-wide workflow task list record for task %q is missing workflow name", row.ID)
+			}
+			value := row.WorkflowName
+			workflowName = &value
+		}
 		out = append(out, workflowTaskListRow{
 			item: serverapi.WorkflowTaskListItem{
 				TaskID:          row.ID,
 				ShortID:         row.ShortID,
 				WorkflowID:      row.WorkflowID,
-				WorkflowName:    row.WorkflowName,
+				WorkflowName:    workflowName,
 				Title:           row.Title,
 				CreatedAtUnixMs: row.CreatedAtUnixMs,
 				UpdatedAtUnixMs: row.UpdatedAtUnixMs,

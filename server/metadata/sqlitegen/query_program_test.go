@@ -47,7 +47,7 @@ func requireQueryUsesAnyTableIndex(t *testing.T, db *sql.DB, query string, table
 	if err != nil {
 		t.Fatalf("resolve indexes for table %q: %v", tableName, err)
 	}
-	defer rows.Close()
+	defer closeQueryRows(t, rows)
 	rootPages := map[int64]bool{}
 	for rows.Next() {
 		var rootPage int64
@@ -76,7 +76,7 @@ func queryProgram(t *testing.T, db *sql.DB, query string, args ...any) []sqliteI
 	if err != nil {
 		t.Fatalf("explain query program: %v", err)
 	}
-	defer rows.Close()
+	defer closeQueryRows(t, rows)
 	var instructions []sqliteInstruction
 	for rows.Next() {
 		var address, p1, p2, p3, p5 int64
@@ -91,6 +91,13 @@ func queryProgram(t *testing.T, db *sql.DB, query string, args ...any) []sqliteI
 		t.Fatalf("iterate query program: %v", err)
 	}
 	return instructions
+}
+
+func closeQueryRows(t *testing.T, rows *sql.Rows) {
+	t.Helper()
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close query rows: %v", err)
+	}
 }
 
 func requireQueryProgramOpensIndex(t *testing.T, db *sql.DB, instructions []sqliteInstruction, indexName string) {

@@ -1051,7 +1051,7 @@ func TestProtocolErrorDecodesWorkflowTaskListScopeError(t *testing.T) {
 }
 
 func TestProtocolErrorDecodesWorkflowTaskCreateSelectionError(t *testing.T) {
-	workflowID := "workflow-1"
+	workflowID := "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
 	source := &serverapi.WorkflowTaskCreateSelectionError{
 		Reason:     serverapi.WorkflowTaskCreateSelectionReasonWorkflowNotLinked,
 		ProjectID:  "project-1",
@@ -1071,6 +1071,14 @@ func TestProtocolErrorDecodesWorkflowTaskCreateSelectionError(t *testing.T) {
 		decoded.WorkflowID == nil ||
 		*decoded.WorkflowID != workflowID {
 		t.Fatalf("decoded selection error = %+v, want %+v", decoded, source)
+	}
+	malformed := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeWorkflowTaskCreateSelection,
+		Message: "selection failed",
+		Data:    json.RawMessage(`{"type":"workflow_task_create_selection_error","reason":"workflow_not_linked","project_id":"project-1","workflow_id":"workflow-1"}`),
+	})
+	if errors.As(malformed, &decoded) {
+		t.Fatalf("malformed selection payload decoded as typed error: %+v", decoded)
 	}
 }
 

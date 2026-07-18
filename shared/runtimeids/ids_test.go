@@ -35,6 +35,13 @@ func TestParseCanonicalPrefixedUUIDv4RequiresExactPrefixAndCanonicalValue(t *tes
 	}
 }
 
+func TestParseCanonicalPrefixedUUIDv4ComparesEveryPrefixByte(t *testing.T) {
+	const canonical = "7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+	if _, err := ParseCanonicalPrefixedUUIDv4("ê-"+canonical, "é-", "workflow id"); err == nil {
+		t.Fatal("ParseCanonicalPrefixedUUIDv4 accepted a changed UTF-8 continuation byte")
+	}
+}
+
 func TestParseSessionIDAcceptsCanonicalUUIDv4AndSupportedLegacyIDs(t *testing.T) {
 	for _, raw := range []string{
 		"7fd3bc93-f11c-4814-87d0-b60f10e6dd5c",

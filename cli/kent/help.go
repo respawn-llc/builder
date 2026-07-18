@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"time"
 
 	"core/shared/config"
 )
@@ -61,15 +62,52 @@ func writeCommandFlagDefaults(fs *flag.FlagSet) {
 			flagName += " " + valueName
 		}
 		_, _ = fmt.Fprintf(fs.Output(), "  %s\n    \t%s", flagName, usage)
-		defaultValue := definition.DefValue
-		if defaultValue != "" && defaultValue != "false" && defaultValue != "0" {
-			if valueName == "string" {
+		if metadata := commandFlagDefaultMetadataFor(definition); metadata.Visible {
+			defaultValue := metadata.Value
+			if metadata.Quote {
 				defaultValue = strconv.Quote(defaultValue)
 			}
 			_, _ = fmt.Fprintf(fs.Output(), " (default %s)", defaultValue)
 		}
 		_, _ = fmt.Fprintln(fs.Output())
 	})
+}
+
+type commandFlagDefaultMetadata struct {
+	Value   string
+	Visible bool
+	Quote   bool
+}
+
+func commandFlagDefaultMetadataFor(definition *flag.Flag) commandFlagDefaultMetadata {
+	metadata := commandFlagDefaultMetadata{Value: definition.DefValue}
+	getter, ok := definition.Value.(flag.Getter)
+	if !ok {
+		metadata.Visible = metadata.Value != ""
+		return metadata
+	}
+	switch value := getter.Get().(type) {
+	case string:
+		metadata.Visible = value != ""
+		metadata.Quote = true
+	case bool:
+		metadata.Visible = value
+	case int:
+		metadata.Visible = value != 0
+	case int64:
+		metadata.Visible = value != 0
+	case time.Duration:
+		metadata.Visible = value != 0
+	case uint:
+		metadata.Visible = value != 0
+	case uint64:
+		metadata.Visible = value != 0
+	case float64:
+		metadata.Visible = value != 0
+	default:
+		metadata.Visible = metadata.Value != ""
+	}
+	return metadata
 }
 
 func flagSetHasDefinitions(fs *flag.FlagSet) bool {
