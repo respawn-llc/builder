@@ -10,7 +10,6 @@ import {
   WorkflowEditorShellRoute,
   WorkflowLibraryShellRoute,
 } from "./routeComponents";
-import { createWorkflowDeleteWindowRoute } from "./workflowDeleteRoute";
 
 const optionalSearchString = z.string().catch("");
 const optionalWorkflowSelector = z.string().optional().catch(undefined);
@@ -59,7 +58,6 @@ const taskRoute = createRoute({
 });
 
 const nativeDialogRoutes = createNativeDialogRoutes(rootRoute);
-const workflowDeleteWindowRoute = createWorkflowDeleteWindowRoute(rootRoute);
 
 const routeTree = rootRoute.addChildren([
   homeRoute,
@@ -68,7 +66,6 @@ const routeTree = rootRoute.addChildren([
   workflowEditorRoute,
   taskRoute,
   ...nativeDialogRoutes,
-  workflowDeleteWindowRoute,
 ]);
 
 export function createAppRouter() {

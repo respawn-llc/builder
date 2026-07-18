@@ -121,11 +121,12 @@ describe("navigation stack state", () => {
         taskRoute,
       ]),
     });
+    const services = createTestServices(startupRoutes);
 
     render(
       createElement(AppServicesProvider, {
         children: createElement(RouterProvider, { router }),
-        services: createTestServices(startupRoutes),
+        services,
       }),
     );
 
@@ -141,7 +142,7 @@ describe("navigation stack state", () => {
     });
     expectRoute(router, "/workflows/workflow-1/editor", { projectId: "project-1" });
     await act(async () => {
-      await navigation.openWorkflowLibrary();
+      expect(await navigation.openWorkflowLibrary()).toBe("completed");
     });
     expectRoute(router, "/workflows", {});
     await act(async () => {
@@ -177,6 +178,20 @@ describe("navigation stack state", () => {
     expectRoute(router, "/", {});
 
     expect(startViewTransition).toHaveBeenCalledTimes(6);
+    const navigationError = new Error("transition failed");
+    startViewTransition.mockImplementationOnce(() => ({
+      finished: Promise.resolve(),
+      ready: Promise.resolve(),
+      updateCallbackDone: Promise.reject(navigationError),
+    }));
+    await act(async () => {
+      expect(await navigation.openWorkflowLibrary()).toBe("failed");
+    });
+    expect(services.logger.entries()).toContainEqual({
+      context: { error: navigationError.message },
+      level: "warn",
+      message: "Navigation failed",
+    });
   });
 });
 

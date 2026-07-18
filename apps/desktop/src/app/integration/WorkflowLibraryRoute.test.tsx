@@ -1,13 +1,10 @@
-import {
-  createBrowserNativeBridge,
-  type NativeBridge,
-  type NativeDialogWindowOptions,
-} from "@/test-support/native-bridge";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { createBrowserNativeBridge } from "@/test-support/native-bridge";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach } from "vitest";
 
 import { App } from "../startup/App";
+import { appI18n } from "@/i18n";
 import { createTestServices, startupRoutes } from "@/test-support/app-services";
 
 describe("WorkflowLibraryRoute", () => {
@@ -122,44 +119,37 @@ describe("WorkflowLibraryRoute", () => {
     expect(screen.queryByRole("button", { name: "Delivery rev 1" })).not.toBeInTheDocument();
   }, 10000);
 
-  it("opens existing workflow delete confirmation flow from the workflow picker context menu", async () => {
-    const opened: NativeDialogWindowOptions[] = [];
+  it("uses an in-app workflow delete dialog even when native dialogs are available", async () => {
+    const base = createBrowserNativeBridge();
+    const openWindow = vi.fn(async () => undefined);
     const services = createTestServices(
       [
         ...startupRoutes,
         { method: "workflow.list", result: workflowListResponse },
         { method: "workflow.deletePreview", result: workflowDeletePreviewResponse },
       ],
-      nativeWorkflowDeleteDialogBridge(opened),
+      {
+        ...base,
+        capabilities: { ...base.capabilities, dialogWindows: true },
+        dialogs: { ...base.dialogs, openWindow },
+      },
     );
 
-    render(<App services={services} />);
+    const view = render(<App services={services} />);
 
     fireEvent.contextMenu(await screen.findByRole("button", { name: "Delivery rev 1" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: appI18n.t("workflowLibrary.delete") }));
 
-    await waitFor(() => {
-      expect(opened).toHaveLength(1);
+    await screen.findByRole("dialog", {
+      name: appI18n.t("workflowEditor.workflowDeleteTitle"),
     });
-    expect(opened[0]).toMatchObject({
-      initialHeight: 300,
-      initialWidth: 460,
-      route: "/native-dialog/workflow-delete",
-      title: "Delete workflow?",
-      params: {
-        active_run_count: "0",
-        blocked_task_count: "0",
-        default_replacement_project_count: "0",
-        link_count: "1",
-        project_count: "1",
-        runnable_run_count: "0",
-        task_count: "2",
-        version: "1",
-        workflow_id: "workflow-1",
-      },
-    });
+    expect(
+      within(view.container).queryByRole("dialog", {
+        name: appI18n.t("workflowEditor.workflowDeleteTitle"),
+      }),
+    ).toBeNull();
+    expect(openWindow).not.toHaveBeenCalled();
     expect(services.transport.calls.map((call) => call.method)).toContain("workflow.deletePreview");
-    expect(screen.queryByRole("dialog", { name: "Delete workflow?" })).not.toBeInTheDocument();
   });
 });
 
@@ -175,23 +165,6 @@ class MockResizeObserver implements ResizeObserver {
   disconnect(): void {
     return;
   }
-}
-
-function nativeWorkflowDeleteDialogBridge(opened: NativeDialogWindowOptions[]): NativeBridge {
-  const base = createBrowserNativeBridge();
-  return {
-    ...base,
-    capabilities: {
-      ...base.capabilities,
-      dialogWindows: true,
-    },
-    dialogs: {
-      ...base.dialogs,
-      async openWindow(options): Promise<void> {
-        opened.push(options);
-      },
-    },
-  };
 }
 
 const workflowListResponse = {

@@ -5,14 +5,12 @@ import { Button } from "@/ui";
 
 export function WorkflowDeleteConfirmationContent({
   actionError,
-  committed = false,
   disabled = false,
   impact,
   onCancel,
   onConfirm,
 }: Readonly<{
   actionError?: string | undefined;
-  committed?: boolean | undefined;
   disabled?: boolean | undefined;
   impact: WorkflowDeleteImpact;
   onCancel: () => void;
@@ -32,20 +30,14 @@ export function WorkflowDeleteConfirmationContent({
         <li className="list-none">{t("workflowEditor.workflowDeleteLinks", { count: impact.linkCount })}</li>
         <li className="list-none">{t("workflowEditor.workflowDeleteTasks", { count: impact.taskCount })}</li>
       </ul>
-      {committed ? (
-        <Button className="justify-self-end" onClick={onCancel}>
-          {t("app.close")}
+      <div className="grid grid-cols-2 gap-[var(--space-2)]">
+        <Button className="w-full" disabled={disabled} onClick={onCancel}>
+          {t("app.cancel")}
         </Button>
-      ) : (
-        <div className="grid grid-cols-2 gap-[var(--space-2)]">
-          <Button className="w-full" disabled={disabled} onClick={onCancel}>
-            {t("app.cancel")}
-          </Button>
-          <Button className="w-full" disabled={disabled} onClick={onConfirm} variant="danger">
-            {t("workflowEditor.workflowDeleteConfirm")}
-          </Button>
-        </div>
-      )}
+        <Button className="w-full" disabled={disabled} onClick={onConfirm} variant="danger">
+          {t("workflowEditor.workflowDeleteConfirm")}
+        </Button>
+      </div>
     </div>
   );
 }

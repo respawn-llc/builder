@@ -142,10 +142,6 @@ export type NativeBridge = Readonly<{
     notifyChanged(event: NativeProjectWorkspaceChanged): Promise<void>;
     onChanged(handler: (event: NativeProjectWorkspaceChanged) => void): Promise<NativeUnlisten>;
   }>;
-  workflowDeletion: Readonly<{
-    notifyDeleted(event: NativeWorkflowDeleted): Promise<void>;
-    onDeleted(handler: (event: NativeWorkflowDeleted) => void): Promise<NativeUnlisten>;
-  }>;
 }>;
 
 export type NativeWindowGlassTint = Readonly<{
@@ -203,17 +199,12 @@ export type NativeProjectWorkspaceChanged = Readonly<{
   projectID: string;
 }>;
 
-export type NativeWorkflowDeleted = Readonly<{
-  workflowID: string;
-}>;
-
 export type NativeUnlisten = () => void;
 
 export const nativeDialogWindowHorizontalInsetPx = 16;
 const projectDeletedEvent = "app://project-deleted";
 const workspaceUnlinkRequestEvent = "app://workspace-unlink-request";
 const projectWorkspaceChangedEvent = "app://project-workspace-changed";
-const workflowDeletedEvent = "app://workflow-deleted";
 
 declare global {
   interface Window {
@@ -231,7 +222,6 @@ export function createBrowserNativeBridge(options: BrowserNativeBridgeOptions = 
   // the browser shell is not updater-capable.
   const capabilities = createBrowserCapabilities(options.platform ?? "browser");
   const projectDeletionHandlers = new Set<(event: NativeProjectDeleted) => void>();
-  const workflowDeletionHandlers = new Set<(event: NativeWorkflowDeleted) => void>();
   const browserWindowFocus = createBrowserWindowFocusControls();
   return {
     capabilities,
@@ -340,20 +330,6 @@ export function createBrowserNativeBridge(options: BrowserNativeBridgeOptions = 
       },
       async onChanged(): Promise<NativeUnlisten> {
         return () => undefined;
-      },
-    },
-    workflowDeletion: {
-      async notifyDeleted(event: NativeWorkflowDeleted): Promise<void> {
-        workflowDeletionHandlers.forEach((handler) => {
-          handler(event);
-        });
-        return Promise.resolve();
-      },
-      async onDeleted(handler: (event: NativeWorkflowDeleted) => void): Promise<NativeUnlisten> {
-        workflowDeletionHandlers.add(handler);
-        return () => {
-          workflowDeletionHandlers.delete(handler);
-        };
       },
     },
   };
@@ -474,16 +450,6 @@ export function createTauriNativeBridge(platform: NativePlatform = "unknown"): N
       },
       async onChanged(handler: (event: NativeProjectWorkspaceChanged) => void): Promise<NativeUnlisten> {
         return listen<NativeProjectWorkspaceChanged>(projectWorkspaceChangedEvent, (event) => {
-          handler(event.payload);
-        });
-      },
-    },
-    workflowDeletion: {
-      async notifyDeleted(event: NativeWorkflowDeleted): Promise<void> {
-        await emitTo("main", workflowDeletedEvent, event);
-      },
-      async onDeleted(handler: (event: NativeWorkflowDeleted) => void): Promise<NativeUnlisten> {
-        return listen<NativeWorkflowDeleted>(workflowDeletedEvent, (event) => {
           handler(event.payload);
         });
       },
