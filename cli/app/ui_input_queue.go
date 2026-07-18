@@ -7,7 +7,6 @@ import (
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
-	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -120,12 +119,7 @@ func cloneOptionalPromptAnswer(answer *clientui.PromptAnswer) *clientui.PromptAn
 	if answer == nil {
 		return nil
 	}
-	cloned := *answer
-	cloned.PromptID = textutil.Pointer(answer.PromptID)
-	if answer.Approval != nil {
-		approval := *answer.Approval
-		cloned.Approval = &approval
-	}
+	cloned := clonePromptAnswer(*answer)
 	return &cloned
 }
 
