@@ -14,26 +14,16 @@ import { Icon } from '@astrojs/starlight/components';
 </kent-theme-toggle>
 
 <script>
-  const storageKey = 'starlight-theme';
-  const lightTheme = 'light';
-  const darkTheme = 'dark';
+  type Theme = 'light' | 'dark';
 
-  const getStoredTheme = () => {
-    const value = typeof localStorage !== 'undefined' ? localStorage.getItem(storageKey) : null;
-    return value === lightTheme || value === darkTheme ? value : null;
-  };
+  interface KentThemeProvider extends StarlightThemeProvider {
+    applyEffectiveTheme(): Theme;
+    getEffectiveTheme(): Theme;
+    getStoredTheme(): Theme | null;
+    toggleTheme(): Theme;
+  }
 
-  const getSystemTheme = () =>
-    window.matchMedia('(prefers-color-scheme: light)').matches ? lightTheme : darkTheme;
-
-  const getEffectiveTheme = () => getStoredTheme() ?? getSystemTheme();
-
-  const setTheme = (theme, persist) => {
-    document.documentElement.dataset.theme = theme;
-    if (persist) {
-      localStorage.setItem(storageKey, theme);
-    }
-  };
+  const themeProvider = window.StarlightThemeProvider as KentThemeProvider;
 
   const updateToggleUi = (root) => {
     const button = root.querySelector('button');
@@ -41,8 +31,8 @@ import { Icon } from '@astrojs/starlight/components';
       return;
     }
 
-    const currentTheme = getEffectiveTheme();
-    const nextTheme = currentTheme === darkTheme ? lightTheme : darkTheme;
+    const currentTheme = themeProvider.getEffectiveTheme();
+    const nextTheme = currentTheme === 'dark' ? 'light' : 'dark';
     button.dataset.currentTheme = currentTheme;
     button.setAttribute('aria-label', `Switch to ${nextTheme} theme`);
   };
@@ -56,14 +46,13 @@ import { Icon } from '@astrojs/starlight/components';
       super();
       this.mediaQuery = window.matchMedia('(prefers-color-scheme: light)');
       this.onSystemThemeChange = () => {
-        if (getStoredTheme() === null) {
-          setTheme(getSystemTheme(), false);
+        if (themeProvider.getStoredTheme() === null) {
+          themeProvider.applyEffectiveTheme();
           updateAllToggleUis();
         }
       };
       this.onToggleClick = () => {
-        const nextTheme = getEffectiveTheme() === darkTheme ? lightTheme : darkTheme;
-        setTheme(nextTheme, true);
+        themeProvider.toggleTheme();
         updateAllToggleUis();
       };
     }
@@ -74,7 +63,7 @@ import { Icon } from '@astrojs/starlight/components';
         return;
       }
 
-      setTheme(getEffectiveTheme(), false);
+      themeProvider.applyEffectiveTheme();
       updateAllToggleUis();
       button.addEventListener('click', this.onToggleClick);
 
