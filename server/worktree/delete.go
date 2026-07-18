@@ -42,25 +42,32 @@ type worktreeDeletionPlan struct {
 	live         *GitWorktree
 }
 
+func retainedWorktreeBranchCleanupOutcome(
+	branch *gitref.LocalBranch,
+	diagnostic string,
+) serverapi.WorktreeBranchCleanupOutcome {
+	if branch == nil {
+		panic("retained worktree branch cleanup outcome has no branch")
+	}
+	if strings.TrimSpace(diagnostic) == "" {
+		panic("retained worktree branch cleanup outcome has no diagnostic")
+	}
+	branchName := branch.Name()
+	return serverapi.WorktreeBranchCleanupOutcome{
+		Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
+		BranchName: &branchName,
+		Diagnostic: &diagnostic,
+	}
+}
+
 func retainedWorktreeBranchCleanupDecision(
 	branch *gitref.LocalBranch,
 	diagnostic string,
 ) worktreeBranchCleanupDecision {
-	if branch == nil {
-		panic("retained worktree branch cleanup decision has no branch")
-	}
-	if strings.TrimSpace(diagnostic) == "" {
-		panic("retained worktree branch cleanup decision has no diagnostic")
-	}
-	branchName := branch.Name()
 	return worktreeBranchCleanupDecision{
-		kind:   worktreeBranchCleanupRetain,
-		branch: branch,
-		outcome: serverapi.WorktreeBranchCleanupOutcome{
-			Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
-			BranchName: &branchName,
-			Diagnostic: &diagnostic,
-		},
+		kind:    worktreeBranchCleanupRetain,
+		branch:  branch,
+		outcome: retainedWorktreeBranchCleanupOutcome(branch, diagnostic),
 	}
 }
 
@@ -569,12 +576,7 @@ func (s *Service) executeWorktreeBranchCleanup(
 	}
 	branchName := decision.branch.Name()
 	if err := s.git.deleteBranch(ctx, workspaceRoot, branchName, false); err != nil {
-		diagnostic := err.Error()
-		return serverapi.WorktreeBranchCleanupOutcome{
-			Kind:       serverapi.WorktreeBranchCleanupOutcomeRetained,
-			BranchName: &branchName,
-			Diagnostic: &diagnostic,
-		}
+		return retainedWorktreeBranchCleanupOutcome(decision.branch, err.Error())
 	}
 	return serverapi.WorktreeBranchCleanupOutcome{
 		Kind:       serverapi.WorktreeBranchCleanupOutcomeDeleted,
