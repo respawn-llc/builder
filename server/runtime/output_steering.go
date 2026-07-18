@@ -429,7 +429,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			e.transcriptRuntimeState().CompleteLiveTool(result.CallID)
 			e.emitRaw(Event{Kind: EventToolCallCompleted, StepID: stepID, ToolResult: &result, CommittedTranscriptChanged: true})
 			if completion.OperatorFeedback != nil {
-				entry := localEntryChatEntry(*completion.OperatorFeedback)
+				entry := localEntryChatEntryForStep(*completion.OperatorFeedback, stepID)
 				e.emitRaw(Event{
 					Kind:                       EventLocalEntryAdded,
 					StepID:                     stepID,

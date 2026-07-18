@@ -241,8 +241,7 @@ func (s *streamingTranscriptScan) closeTurn() {
 }
 
 func (s *streamingTranscriptScan) appendLocalEntry(entry storedLocalEntry, stepID string) {
-	projected := *localEntryChatEntry(entry)
-	projected.StepID = strings.TrimSpace(stepID)
+	projected := *localEntryChatEntryForStep(entry, stepID)
 	s.scan.appendEntry(projected)
 }
 

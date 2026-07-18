@@ -278,7 +278,9 @@ func assertDeletionFallbackHydration(t *testing.T, engine *Engine, wantRows int)
 		}
 		if wantRows == 2 {
 			if snapshot.CommittedRows[0].Kind != TranscriptCommittedRowFactTool ||
+				snapshot.CommittedRows[0].StepID != "step-delete" ||
 				snapshot.CommittedRows[1].Kind != TranscriptCommittedRowFactNotice ||
+				snapshot.CommittedRows[1].StepID != "step-delete" ||
 				snapshot.CommittedRows[1].Notice == nil ||
 				snapshot.CommittedRows[1].Notice.Reason != transcript.NoticeReasonRuntimeDiagnostic ||
 				snapshot.CommittedRows[1].Notice.DiagnosticCode != string(transcript.EntryRoleDeveloperErrorFeedback) {

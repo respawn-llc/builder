@@ -65,8 +65,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				return fmt.Errorf("decode local_entry event: %w", err)
 			}
 			e.diagnosticDedupeStore().RestoreLocal(entry.DiagnosticKey)
-			restored := *localEntryChatEntry(entry)
-			restored.StepID = strings.TrimSpace(evt.StepID)
+			restored := *localEntryChatEntryForStep(entry, evt.StepID)
 			e.transcriptRuntimeState().AppendLocalEntryRecord(restored, entry.AfterToolCallID)
 		case sessionEventCacheWarning:
 			if err := applyPersistedCacheWarningToTranscript(e.transcriptRuntimeState(), evt.Payload, e.cfg.CacheWarningMode); err != nil {

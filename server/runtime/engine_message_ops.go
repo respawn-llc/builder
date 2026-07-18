@@ -63,7 +63,7 @@ func (e *Engine) persistFinalizedToolCompletionRaw(
 			hasBackgroundSession,
 		)
 		e.transcriptRuntimeState().AppendLocalEntryRecord(
-			*localEntryChatEntry(feedback),
+			*localEntryChatEntryForStep(feedback, stepID),
 			feedback.AfterToolCallID,
 		)
 	}
@@ -187,8 +187,9 @@ func (e *Engine) appendPersistedLocalEntryRecordRaw(stepID string, entry storedL
 	}
 	_, receipt, err := e.store.AppendEvent(stepID, "local_entry", entry)
 	if receipt.Committed {
-		e.transcriptRuntimeState().AppendLocalEntryRecord(*localEntryChatEntry(entry), entry.AfterToolCallID)
-		e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: localEntryChatEntry(entry), CommittedTranscriptChanged: true})
+		projected := localEntryChatEntryForStep(entry, stepID)
+		e.transcriptRuntimeState().AppendLocalEntryRecord(*projected, entry.AfterToolCallID)
+		e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: projected, CommittedTranscriptChanged: true})
 	}
 	return receipt, err
 }
@@ -223,6 +224,12 @@ func localEntryChatEntry(entry storedLocalEntry) *ChatEntry {
 		CondensedText: strings.TrimSpace(entry.CondensedText),
 		NoticeID:      strings.TrimSpace(entry.NoticeID),
 	}
+}
+
+func localEntryChatEntryForStep(entry storedLocalEntry, stepID string) *ChatEntry {
+	projected := localEntryChatEntry(entry)
+	projected.StepID = strings.TrimSpace(stepID)
+	return projected
 }
 
 func (e *Engine) resetLocalDiagnostics() {
