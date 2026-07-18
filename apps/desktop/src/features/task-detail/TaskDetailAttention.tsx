@@ -12,6 +12,7 @@ import {
 import { writeClipboardText } from "@/shared/native-clipboard";
 import { WorkflowEdgeRouteGraphic } from "@/shared/workflow-edge";
 import { Button, Island, showStatusToast } from "@/ui";
+import { TaskDetailCopyableValue } from "./TaskDetailCopyableValue";
 import type { useTaskMutations } from "./useTaskDetailData";
 
 export { QuestionBox } from "./TaskDetailQuestionForm";
@@ -30,7 +31,7 @@ export function ApprovalBox({
   transitions: readonly TaskTransition[];
 }>) {
   const { t } = useTranslation();
-  const { api, nativeBridge } = useAppServices();
+  const { api } = useAppServices();
   const executionTargetContinuation = useExecutionTargetContinuation({
     execute: async (action, selection) => executeExecutionTargetAction(api, action, selection),
     onApplied: mutations.refresh,
@@ -99,25 +100,7 @@ export function ApprovalBox({
                 {transition.commentary}
               </p>
             ) : null}
-            <ApprovalOutputValues
-              nativeBridge={nativeBridge}
-              outputValues={transition.outputValues}
-              onCopied={(name) => {
-                showStatusToast({
-                  id: `task-approval-output-copied-${name}`,
-                  title: t("task.outputValueCopied", { name }),
-                  tone: "success",
-                });
-              }}
-              onCopyFailed={(name, error) => {
-                showStatusToast({
-                  body: errorMessage(error),
-                  id: `task-approval-output-copy-failed-${name}`,
-                  title: t("task.outputValueCopyFailed", { name }),
-                  tone: "danger",
-                });
-              }}
-            />
+            <ApprovalOutputValues outputValues={transition.outputValues} />
             {stale ? (
               <p className="m-0 text-sm text-[var(--color-warning)]">
                 <strong>{t("task.staleApproval")}</strong> {t("task.staleApprovalBody")}
@@ -207,16 +190,8 @@ export function InterruptedRunBox({
 }
 
 function ApprovalOutputValues({
-  nativeBridge,
-  onCopyFailed,
-  onCopied,
   outputValues,
-}: Readonly<{
-  nativeBridge: ReturnType<typeof useAppServices>["nativeBridge"];
-  onCopyFailed: (name: string, error: unknown) => void;
-  onCopied: (name: string) => void;
-  outputValues: Readonly<Record<string, string>>;
-}>) {
+}: Readonly<{ outputValues: Readonly<Record<string, string>> }>) {
   const { t } = useTranslation();
   const entries = Object.entries(outputValues);
   if (entries.length === 0) {
@@ -228,21 +203,12 @@ function ApprovalOutputValues({
         <div className="grid gap-[var(--space-2)]" key={name}>
           <div className="grid gap-[var(--space-1)]">
             <strong className="text-sm">{name}</strong>
-            <button
-              className="-mx-[var(--space-1)] min-w-0 whitespace-pre-wrap rounded-[var(--radius-m)] px-[var(--space-1)] py-[var(--space-1)] text-left text-sm text-[var(--color-muted)] transition-colors hover:bg-[var(--color-island-2)] hover:text-[var(--color-on-island)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
-              onClick={() => {
-                void writeClipboardText(value, nativeBridge)
-                  .then(() => {
-                    onCopied(name);
-                  })
-                  .catch((error: unknown) => {
-                    onCopyFailed(name, error);
-                  });
-              }}
-              type="button"
+            <TaskDetailCopyableValue
+              clipboardValue={value}
+              kind={{ kind: "transition_output", outputName: name }}
             >
               {value}
-            </button>
+            </TaskDetailCopyableValue>
           </div>
           {index < entries.length - 1 ? (
             <div className="px-[var(--space-2)]">

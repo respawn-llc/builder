@@ -8,7 +8,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { vi } from "vitest";
 
 import { App } from "../startup/App";
-import { guiTaskCommentAuthor } from "@/api";
+import { errorMessage, guiTaskCommentAuthor } from "@/api";
 import type { JsonValue } from "@/api";
 import { appI18n } from "@/i18n";
 import type { FakeRoute } from "@/test-support/api";
@@ -311,7 +311,92 @@ describe("TaskDetailSurface", () => {
     expect(await screen.findByText("Queued")).toBeInTheDocument();
   });
 
-  it("renders source and managed execution target facts and copies the full commit", async () => {
+  it("renders each managed execution path once in execution-target fact order", async () => {
+    const copied: string[] = [];
+    taskDetailFixture(
+      {
+        ...taskDetailNoInboxResponse,
+        task: {
+          ...taskDetailNoInboxResponse.task,
+          execution_target: {
+            ...taskDetailNoInboxResponse.task.execution_target,
+            requested_ref: "requested-ref",
+            current_branch: "managed-branch",
+          },
+        },
+      },
+      {
+        comments: commentListResponse,
+        nativeBridge: nativeBridgeWithClipboard(copied),
+      },
+    );
+
+    const properties = await screen.findByRole("region", {
+      name: appI18n.t("task.properties"),
+    });
+    const definitions = propertyDefinitions(properties);
+    const sourceWorkspace = definitionContaining(definitions, "Main");
+    const managedWorktree = definitionContaining(definitions, "/tmp/worktree");
+
+    expect(sourceWorkspace).toHaveTextContent("/tmp/project");
+    expect(definitionsContaining(definitions, "/tmp/project")).toHaveLength(1);
+    expect(definitionsContaining(definitions, "/tmp/worktree")).toHaveLength(1);
+    expect(definitions.indexOf(managedWorktree)).toBeLessThan(
+      definitions.indexOf(definitionContaining(definitions, "requested-ref")),
+    );
+    expect(definitions.indexOf(managedWorktree)).toBeLessThan(
+      definitions.indexOf(definitionContaining(definitions, "0123456789ab")),
+    );
+    expect(definitions.indexOf(managedWorktree)).toBeLessThan(
+      definitions.indexOf(definitionContaining(definitions, "managed-branch")),
+    );
+
+    fireEvent.click(within(managedWorktree).getByRole("button"));
+
+    await waitFor(() => {
+      expect(copied).toEqual(["/tmp/worktree"]);
+      expect(statusNotice("task-managed-worktree-path-copied")).toMatchObject({
+        id: "task-managed-worktree-path-copied",
+        tone: "success",
+      });
+    });
+
+    const commitDefinition = definitionContaining(definitions, "0123456789ab");
+    fireEvent.click(within(commitDefinition).getByRole("button"));
+
+    await waitFor(() => {
+      expect(copied).toEqual(["/tmp/worktree", "0123456789abcdef0123456789abcdef01234567"]);
+      expect(statusNotice("task-commit-copied")).toMatchObject({
+        id: "task-commit-copied",
+        tone: "success",
+      });
+    });
+  });
+
+  it("renders a no-managed source workspace path once", async () => {
+    taskDetailFixture(
+      {
+        ...taskDetailNoInboxResponse,
+        task: {
+          ...taskDetailNoInboxResponse.task,
+          execution_target: {
+            mode: "none",
+            effective_root: "/tmp/project",
+            provenance: "resolved",
+          },
+        },
+      },
+      { comments: commentListResponse },
+    );
+
+    const properties = await screen.findByRole("region", {
+      name: appI18n.t("task.properties"),
+    });
+
+    expect(definitionsContaining(propertyDefinitions(properties), "/tmp/project")).toHaveLength(1);
+  });
+
+  it("copies the source workspace path with its typed success notice", async () => {
     const copied: string[] = [];
     taskDetailFixture(taskDetailNoInboxResponse, {
       comments: commentListResponse,
@@ -321,36 +406,43 @@ describe("TaskDetailSurface", () => {
     const properties = await screen.findByRole("region", {
       name: appI18n.t("task.properties"),
     });
-    expect(propertyDefinition(properties, appI18n.t("task.sourceWorkspace"))).toHaveTextContent("Main");
-    expect(propertyDefinition(properties, appI18n.t("task.sourceRoot"))).toHaveTextContent("/tmp/project");
-    expect(propertyDefinition(properties, appI18n.t("task.executionTarget"))).toHaveTextContent(
-      appI18n.t("task.executionTargetModes.head"),
-    );
-    expect(propertyDefinition(properties, appI18n.t("task.executionRoot"))).toHaveTextContent(
-      "/tmp/worktree",
-    );
-    expect(propertyDefinition(properties, appI18n.t("task.requestedRevision"))).toHaveTextContent("HEAD");
-    expect(propertyDefinition(properties, appI18n.t("task.currentBranch"))).toHaveTextContent("T-1");
-    expect(propertyDefinition(properties, appI18n.t("task.managedWorktree"))).toHaveTextContent(
-      "/tmp/worktree",
-    );
-    expect(propertyDefinition(properties, appI18n.t("task.resolvedCommit"))).toHaveTextContent(
-      "0123456789ab",
-    );
-    expect(properties).not.toHaveTextContent("0123456789abcdef0123456789abcdef01234567");
+    const sourceDefinition = definitionContaining(propertyDefinitions(properties), "/tmp/project");
 
-    fireEvent.click(
-      within(properties).getByRole("button", {
-        name: appI18n.t("task.copyResolvedCommit"),
-      }),
-    );
+    fireEvent.click(within(sourceDefinition).getByRole("button"));
 
     await waitFor(() => {
-      expect(copied).toEqual(["0123456789abcdef0123456789abcdef01234567"]);
+      expect(copied).toEqual(["/tmp/project"]);
+      expect(statusNotice("task-source-workspace-path-copied")).toMatchObject({
+        id: "task-source-workspace-path-copied",
+        tone: "success",
+      });
     });
   });
 
-  it("omits unavailable current branch and identifies a legacy observed commit", async () => {
+  it("surfaces source workspace path clipboard rejection through its typed failure notice", async () => {
+    const rejected = new Error("clipboard denied");
+    taskDetailFixture(taskDetailNoInboxResponse, {
+      comments: commentListResponse,
+      nativeBridge: nativeBridgeRejectingClipboard(rejected),
+    });
+
+    const properties = await screen.findByRole("region", {
+      name: appI18n.t("task.properties"),
+    });
+    const sourceDefinition = definitionContaining(propertyDefinitions(properties), "/tmp/project");
+
+    fireEvent.click(within(sourceDefinition).getByRole("button"));
+
+    await waitFor(() => {
+      expect(statusNotice("task-source-workspace-path-copy-failed")).toMatchObject({
+        body: errorMessage(rejected),
+        id: "task-source-workspace-path-copy-failed",
+        tone: "danger",
+      });
+    });
+  });
+
+  it("omits unavailable managed execution facts while retaining target history", async () => {
     taskDetailFixture(
       {
         ...taskDetailNoInboxResponse,
@@ -358,12 +450,12 @@ describe("TaskDetailSurface", () => {
           ...taskDetailNoInboxResponse.task,
           execution_target: {
             mode: "head",
-            requested_ref: "0123456789abcdef0123456789abcdef01234567",
+            requested_ref: "legacy-source",
             commit_oid: "0123456789abcdef0123456789abcdef01234567",
             provenance: "legacy_observed",
             managed_worktree: {
               worktree_id: "worktree-1",
-              display_name: "T-1",
+              display_name: "unavailable-branch",
               canonical_root: "/tmp/worktree",
               availability: "missing",
             },
@@ -376,18 +468,12 @@ describe("TaskDetailSurface", () => {
     const properties = await screen.findByRole("region", {
       name: appI18n.t("task.properties"),
     });
-    expect(propertyDefinition(properties, appI18n.t("task.executionRoot"))).toHaveTextContent(
-      appI18n.t("app.unavailable"),
-    );
-    expect(propertyDefinition(properties, appI18n.t("task.observedCommit"))).toHaveTextContent(
-      "0123456789ab",
-    );
-    expect(
-      within(properties).queryByRole("term", { name: appI18n.t("task.currentBranch") }),
-    ).not.toBeInTheDocument();
-    expect(propertyDefinition(properties, appI18n.t("task.managedWorktree"))).toHaveTextContent(
-      appI18n.t("app.unavailable"),
-    );
+    const definitions = propertyDefinitions(properties);
+
+    expect(definitionsContaining(definitions, "/tmp/worktree")).toHaveLength(0);
+    expect(definitionsContaining(definitions, "unavailable-branch")).toHaveLength(0);
+    expect(definitionsContaining(definitions, "legacy-source")).toHaveLength(1);
+    expect(definitionsContaining(definitions, "0123456789ab")).toHaveLength(1);
   });
 
   it("opens script files through native file capabilities without exposing CLI sessions", async () => {
@@ -765,7 +851,7 @@ describe("TaskDetailSurface", () => {
     }
   });
 
-  it("renders approval snapshots as route, commentary, and copyable output values", async () => {
+  it("copies approval output values through their typed notice policy", async () => {
     const copied: string[] = [];
     taskDetailFixture(taskDetailResponse, {
       asks: pendingAskResponse,
@@ -773,22 +859,24 @@ describe("TaskDetailSurface", () => {
     });
 
     const approval = await screen.findByRole("region", { name: "Approval" });
-    expect(within(approval).queryByRole("heading", { name: "Approval" })).not.toBeInTheDocument();
-    expect(within(approval).queryByText("Approval snapshot")).not.toBeInTheDocument();
-    expect(within(approval).queryByText("Version")).not.toBeInTheDocument();
-    expect(within(approval).queryByText("Approve transition")).not.toBeInTheDocument();
     const routeActionRow = within(approval).getByTestId("task-approval-route-action-row");
-    expect(within(routeActionRow).getByTestId("workflow-edge-route-source")).toHaveTextContent("Implement");
-    expect(within(routeActionRow).getByTestId("workflow-edge-route-target")).toHaveTextContent("Ship");
-    expect(within(routeActionRow).getByRole("button", { name: "Approve" })).toBeInTheDocument();
-    expect(within(routeActionRow).queryByText("Looks good")).not.toBeInTheDocument();
-    expect(within(routeActionRow).queryByRole("button", { name: "ok" })).not.toBeInTheDocument();
-    expect(within(approval).getByText("Looks good")).toBeInTheDocument();
+    const action = within(routeActionRow).getByRole("button");
+    const valueControl = within(approval)
+      .getAllByRole("button")
+      .find((control) => control !== action);
+    expect(valueControl).toBeDefined();
+    if (valueControl === undefined) {
+      throw new Error("Expected one approval output value control outside the route action row.");
+    }
 
-    fireEvent.click(within(approval).getByRole("button", { name: "ok" }));
+    fireEvent.click(valueControl);
 
     await waitFor(() => {
       expect(copied).toEqual(["ok"]);
+      expect(statusNotice("task-transition-output-copied-result")).toMatchObject({
+        id: "task-transition-output-copied-result",
+        tone: "success",
+      });
     });
   });
 
@@ -830,8 +918,39 @@ function nativeBridgeWithClipboard(copied: string[]): NativeBridge {
   };
 }
 
-function propertyDefinition(region: HTMLElement, label: string): HTMLElement {
-  return within(region).getByRole("definition", { name: `${label} value` });
+function nativeBridgeRejectingClipboard(error: unknown): NativeBridge {
+  const base = createBrowserNativeBridge();
+  return {
+    ...base,
+    capabilities: {
+      ...base.capabilities,
+      clipboard: { ...base.capabilities.clipboard, writeText: true },
+    },
+    clipboard: {
+      ...base.clipboard,
+      async writeText(): Promise<void> {
+        throw error;
+      },
+    },
+  };
+}
+
+function propertyDefinitions(region: HTMLElement): HTMLElement[] {
+  return within(region).getAllByRole("definition");
+}
+
+function definitionsContaining(definitions: readonly HTMLElement[], value: string): HTMLElement[] {
+  return definitions.filter((definition) => definition.textContent.includes(value));
+}
+
+function definitionContaining(definitions: readonly HTMLElement[], value: string): HTMLElement {
+  const matching = definitionsContaining(definitions, value);
+  expect(matching).toHaveLength(1);
+  const definition = matching[0];
+  if (definition === undefined) {
+    throw new Error(`Expected one property definition containing fixture value ${value}.`);
+  }
+  return definition;
 }
 
 function nativeBridgeWithActivation(): Readonly<{
@@ -911,4 +1030,8 @@ function nativeBridgeWithFiles({
 
 function toastCount(): number {
   return statusToastHarness.notices.size;
+}
+
+function statusNotice(id: string): StatusNotice | undefined {
+  return statusToastHarness.notices.get(id);
 }
