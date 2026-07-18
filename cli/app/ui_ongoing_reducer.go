@@ -39,14 +39,9 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 	if m.ongoingTranscript == nil {
 		return nil
 	}
-	var (
-		result ongoing.Result
-		err    error
-	)
 	switch event.Kind {
 	case ongoingTranscriptEventMessage:
-		var stateCmd tea.Cmd
-		result, stateCmd, err = m.ongoingTranscript.Accept(event.Message)
+		result, stateCmd, err := m.ongoingTranscript.Accept(event.Message)
 		if err != nil {
 			var developerErr ongoing.DeveloperError
 			if errors.As(err, &developerErr) {
@@ -65,7 +60,7 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 			m.turnQueueHook.OnTurnQueueAborted()
 		}
 		m.observeRuntimeStreamResult(event.Err)
-		result = m.ongoingTranscript.HandleSubscriptionLoss()
+		result := m.ongoingTranscript.HandleSubscriptionLoss()
 		return m.batchWithNativeOngoingRepaint(m.handleOngoingResult(result))
 	default:
 		if m.debugMode {
@@ -73,8 +68,4 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 		}
 		return nil
 	}
-	if err != nil {
-		return m.handleOngoingSurfaceError(err)
-	}
-	return m.handleOngoingResult(result)
 }
