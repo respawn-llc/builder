@@ -620,11 +620,14 @@ export type TaskAttention = Readonly<{
   generatedAt: number;
 }>;
 
+export type TaskCommentAuthorKind = "agent" | "user";
+
 export type TaskComment = Readonly<{
   id: string;
   taskID: string;
   body: string;
-  author: string;
+  authorKind: TaskCommentAuthorKind;
+  authorID: string | null;
   createdAt: number;
   updatedAt: number;
 }>;

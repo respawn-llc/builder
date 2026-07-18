@@ -74,6 +74,7 @@ export type {
   ServerReadiness,
   TaskComment,
   TaskAttention,
+  TaskCommentAuthorKind,
   TaskDetail,
   TaskApproveApplied,
   TaskApproveResponse,

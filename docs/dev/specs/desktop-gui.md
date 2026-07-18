@@ -40,6 +40,8 @@
 ## Visual System
 
 - No hardcoded colors/fonts in feature components.
+- Cards are reserved for Kanban task cards. Navigation, browsing, and selection collections use purpose-built list rows.
+- Migrating existing non-Kanban card collections to list rows is a separate desktop collection-design task. It must not be bundled into a Sessions, Chat, Home-shell, or workflow-binding implementation ticket.
 - Tailwind is accepted for the desktop GUI despite older notes rejecting it.
 - Shared UI/theme source of truth starts app-local.
 - Use i18next/react-i18next static English locale files.
@@ -73,8 +75,23 @@
 
 ## Navigation
 
-- Home is the project-first landing destination.
+- Home is the Inbox-first landing destination.
 - Relaunch restores last valid project/workflow route when possible; fallback is Home.
+- Home uses one compact left navigation island and one remaining-space content area.
+- Home preserves the existing constraint-driven auto-fit behavior: navigation and content render side by side while both meet their minimum usable width, then navigation stacks above content when they cannot. Home does not add a user-resizable splitter or temporary navigation drawer.
+- In the side-by-side layout, the navigation island has a semantic maximum width and the content area receives the remaining width.
+- The left navigation contains a typed, pinned global Inbox destination above the cursor-paginated Projects list. Inbox is not represented as a project record.
+- The base Inbox navigation row does not require an attention badge.
+- An exact nonzero unresolved-attention badge is a separate optional feature with its own server and desktop task. It must not be bundled into the Home redesign, ordinary-session attention, or another implementation ticket.
+- Selecting Inbox shows the aggregate Inbox in the content area. Selecting a project shows that project's workspace.
+- A project workspace has `Workflows` and `Sessions` tabs. One window-local last-used project-workspace tab selection applies when moving between projects.
+- The project-workspace tab posture is not restored after relaunch; it falls back to `Workflows`.
+- The project workspace uses a compact sticky header containing project name/key, the `Workflows`/`Sessions` control, and the contextual `Link workflow` or `New Session` action.
+- The `Workflows` tab uses a cursor-paginated virtualized list of compact project-workflow link rows.
+- Project-workflow link rows show the reusable workflow identity, project-default state, and server validation state. Selecting a linked workflow enters its full-screen workflow board.
+- The `Sessions` tab is owned by the Desktop Sessions And Chat spec. Selecting a session enters its full-screen chat destination.
+- Workflows are not a primary Home navigation destination.
+- The reusable Workflow Library/editor remains available as a secondary `Manage workflows` destination from the Link workflow flow, including for reusable workflows not linked to the selected project.
 - Project workflow board routes are project-scoped.
 - Workflow library/editor routes may be global workflow-definition routes, while project-originated task/board routes remain project-scoped.
 - Board workflow picker and primary board actions live in a hover/focus non-modal popup/menu.
@@ -85,6 +102,19 @@
 
 ## Home And Projects
 
+- Inbox is selected when Home has no restored destination.
+- An empty Inbox shows a focused `All caught up` state. It does not add recent-project content or navigate to a project automatically.
+- Project navigation uses compact list rows with the existing project editing action.
+- Project title and default-workspace path each render at most two lines.
+- Unselected project rows use island level 1. The selected project row uses island level 2, elevating its semantic surface color and shadow without adding an accent rail, selection border, checkmark, or one-off color.
+- The selected project button exposes `aria-current` so selection is not communicated only by visual elevation.
+- Project rows expose project identity and project editing without duplicating board or session content.
+- The project workspace `Workflows` tab exposes `Link workflow` for linking an existing reusable workflow or creating and linking a workflow.
+- `Link workflow` opens the existing link-workflow overlay.
+- The Link workflow overlay keeps its server-paginated reusable-workflow list and exposes `Create workflow` and secondary `Manage workflows` actions in its header.
+- Creating from Link workflow atomically creates and links the reusable workflow in the selected project. Manage workflows opens the global Workflow Library/editor.
+- Home navigation and actions use `Workflows` and `Link workflow` terminology.
+- Selecting an Inbox item keeps the Inbox list in place and opens Task Detail through the existing overlay sidebar. It does not replace the Home content area or navigate to standalone Task Detail.
 - Project creation uses an OS-native directory picker.
 - If selected workspace already belongs to a project, the app opens that project/workspace.
 - If selected workspace is unbound, the app opens project creation with editable project name and project key.
@@ -293,5 +323,5 @@
 - Q: How does desktop find server endpoint? A: Kent config/default host and port only. Desktop does not persist a separate endpoint. When the configured host is an unspecified IP listener, Desktop projects `0.0.0.0` to `127.0.0.1` and `::` to `::1` for its connection endpoint while preserving the configured port; concrete hosts remain unchanged. This Desktop-only projection does not edit Kent config.
 - Q: How should workflow groups render? A: Implementation-led first pass, initial preference group islands.
 - Q: What happens to drafts during disconnect? A: Keep local drafts, disable submit, refresh on reconnect, user manually saves and overwrites.
-- Q: What should the task detail CLI action do? A: Copy `kent --session=<session-id>` to clipboard and show a success toast. Do not launch terminals from the GUI.
+- Q: What should the task detail session action do? A: `Open Chat` replaces `Open in CLI` and opens the referenced session through the desktop chat destination.
 - Q: How does project creation map directory picker result to Kent project/workspace binding? A: Bound workspace opens existing project; unbound workspace opens project creation with editable project name and key.

@@ -232,7 +232,14 @@ describe("ApiClient", () => {
     const client = new ApiClient(transport);
 
     await expect(client.listTaskComments("task-1", "cursor-1")).resolves.toMatchObject({
-      comments: [{ id: "comment-1", body: "Existing comment" }],
+      comments: [
+        {
+          id: "comment-1",
+          body: "Existing comment",
+          authorKind: "user",
+          authorID: "Nek-12",
+        },
+      ],
       nextPageToken: "cursor-2",
     });
     expect(transport.calls).toContainEqual({
@@ -858,6 +865,7 @@ const commentResponse = {
   task_id: "task-1",
   body: "Existing comment",
   author: "user",
+  author_id: "Nek-12",
   created_at_unix_ms: 1,
   updated_at_unix_ms: 1,
 };
