@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"core/shared/clientui"
 	"core/shared/llmerrors"
@@ -45,24 +46,38 @@ func TestDialRemoteWithTransportRejectsBlankSessionID(t *testing.T) {
 }
 
 func TestRemoteGetUpdateStatusRejectsMalformedResponse(t *testing.T) {
-	var connections atomic.Int32
+	handlerErrs := make(chan error, 4)
+	malformedSent := make(chan struct{}, 1)
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
-		acceptRemoteHandshake(t, ws)
-		if connections.Add(1) == 1 {
+		var handshake protocol.Request
+		if err := websocket.JSON.Receive(ws, &handshake); err != nil {
+			return
+		}
+		if handshake.Method != protocol.MethodHandshake {
+			reportHandlerError(handlerErrs, "handshake method = %q", handshake.Method)
+			return
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(handshake.ID, protocol.HandshakeResponse{
+			Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
+		})); err != nil {
+			reportHandlerError(handlerErrs, "send handshake response: %v", err)
 			return
 		}
 		var request protocol.Request
 		if err := websocket.JSON.Receive(ws, &request); err != nil {
-			t.Fatalf("receive update status request: %v", err)
+			return
 		}
 		if request.Method != protocol.MethodServerUpdateStatusGet {
-			t.Fatalf("method = %q, want update status", request.Method)
+			reportHandlerError(handlerErrs, "method = %q, want update status", request.Method)
+			return
 		}
 		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, map[string]any{
 			"result": map[string]any{"kind": "available"},
 		})); err != nil {
-			t.Fatalf("send malformed update response: %v", err)
+			reportHandlerError(handlerErrs, "send malformed update response: %v", err)
+			return
 		}
+		malformedSent <- struct{}{}
 	})
 	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
 	if err != nil {
@@ -73,6 +88,14 @@ func TestRemoteGetUpdateStatusRejectsMalformedResponse(t *testing.T) {
 	if _, err := remote.GetUpdateStatus(context.Background(), serverapi.UpdateStatusRequest{}); err == nil {
 		t.Fatal("malformed update response was accepted")
 	}
+	select {
+	case <-malformedSent:
+	case err := <-handlerErrs:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for malformed update response")
+	}
+	requireNoHandlerError(t, handlerErrs)
 }
 
 func newRemoteTestServer(t *testing.T, handle func(*websocket.Conn)) *httptest.Server {
