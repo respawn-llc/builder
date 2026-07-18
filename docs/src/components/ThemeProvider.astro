@@ -1,0 +1,53 @@
+<script is:inline>
+  window.StarlightThemeProvider = (() => {
+    const storageKey = 'starlight-theme';
+    const lightTheme = 'light';
+    const darkTheme = 'dark';
+
+    const isTheme = (value) => value === lightTheme || value === darkTheme;
+
+    const getStoredTheme = () => {
+      const value = typeof localStorage !== 'undefined' ? localStorage.getItem(storageKey) : null;
+      return isTheme(value) ? value : null;
+    };
+
+    const getSystemTheme = () =>
+      window.matchMedia('(prefers-color-scheme: light)').matches ? lightTheme : darkTheme;
+
+    const getEffectiveTheme = () => getStoredTheme() ?? getSystemTheme();
+
+    const updatePickers = (theme = getStoredTheme() ?? 'auto') => {
+      document.querySelectorAll('starlight-theme-select').forEach((picker) => {
+        const select = picker.querySelector('select');
+        if (select) {
+          select.value = theme;
+        }
+      });
+    };
+
+    const applyEffectiveTheme = () => {
+      const theme = getEffectiveTheme();
+      document.documentElement.dataset.theme = theme;
+      updatePickers();
+      return theme;
+    };
+
+    const toggleTheme = () => {
+      const theme = getEffectiveTheme() === darkTheme ? lightTheme : darkTheme;
+      localStorage.setItem(storageKey, theme);
+      document.documentElement.dataset.theme = theme;
+      updatePickers(theme);
+      return theme;
+    };
+
+    applyEffectiveTheme();
+
+    return {
+      applyEffectiveTheme,
+      getEffectiveTheme,
+      getStoredTheme,
+      toggleTheme,
+      updatePickers,
+    };
+  })();
+</script>
