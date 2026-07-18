@@ -50,8 +50,8 @@ func TestRenderErasesPreviousMutableBandRows(t *testing.T) {
 		"\x1b]133;C\x1b\\" +
 		"\x1b[4;1H\x1b]133;C\x1b\\\x1b[2K" +
 		"\x1b[5;1H\x1b]133;C\x1b\\\x1b[2K" +
-		"\x1b[5;1H\x1b]133;A;redraw=1\x1b\\" +
-		"gamma" +
+		"\x1b[4;1H\x1b]133;A;redraw=1\x1b\\" +
+		"\x1b[5;1Hgamma" +
 		"\x1b[?25l"
 	if got := out.String(); got != want {
 		t.Fatalf("terminal transaction bytes = %q, want %q", got, want)

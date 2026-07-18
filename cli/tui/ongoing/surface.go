@@ -99,7 +99,7 @@ const (
 
 type Surface struct {
 	writer             io.Writer
-	previousBandHeight int
+	retainedBandHeight int
 	groupRegister      *clientui.TranscriptRowKind
 	activeAssistant    activeAssistantState
 	terminalResize     TerminalResizePolicy
@@ -373,7 +373,7 @@ func (s *Surface) immutableScrollbackProduced() bool {
 
 func (s *Surface) ResetForScratchHydration(reason RehydrateReason, frame FrameInput) (Result, error) {
 	s.validateRenderFrame(frame, "reset_for_scratch_hydration")
-	linesToErase := min(s.previousBandHeight, max(0, frame.Size.Height))
+	linesToErase := min(s.retainedBandHeight, max(0, frame.Size.Height))
 	var transaction strings.Builder
 	transaction.WriteString(resetScrollRegionAndOriginMode())
 	transaction.WriteString(semanticOutputSequence())
@@ -382,7 +382,7 @@ func (s *Surface) ResetForScratchHydration(reason RehydrateReason, frame FrameIn
 	if _, err := io.WriteString(s.writer, transaction.String()); err != nil {
 		return Result{}, err
 	}
-	s.previousBandHeight = 0
+	s.retainedBandHeight = 0
 	s.activeAssistant = activeAssistantState{}
 	s.groupRegister = nil
 	return Result{Action: ResultRequestScratchRehydration, Reason: reason}, nil
@@ -642,27 +642,33 @@ func (s *Surface) writeFrameTransaction(frame FrameInput, immutableRows []string
 		liveLines = nil
 		frame.Cursor = Cursor{}
 	}
-	eraseHeight := min(max(s.previousBandHeight, len(liveLines)), frame.Size.Height)
+	previousHeight := min(s.retainedBandHeight, frame.Size.Height)
+	contentHeight := len(liveLines)
+	nextHeight := contentHeight
+	if len(immutableRows) == 0 {
+		nextHeight = max(contentHeight, previousHeight)
+	}
+	eraseHeight := max(previousHeight, nextHeight)
 	var transaction strings.Builder
 	transaction.WriteString(resetScrollRegionAndOriginMode())
 	transaction.WriteString(semanticOutputSequence())
-	if len(liveLines) > s.previousBandHeight && s.immutableScrollbackProduced() {
-		writeImmutableRegionScrollForLiveBandGrowth(&transaction, frame.Size.Height, s.previousBandHeight, len(liveLines))
+	if nextHeight > previousHeight && s.immutableScrollbackProduced() {
+		writeImmutableRegionScrollForLiveBandGrowth(&transaction, frame.Size.Height, previousHeight, nextHeight)
 	}
 	writeMutableBandErase(&transaction, frame.Size.Height, eraseHeight)
 	writeImmutableRowsAboveMutableBand(
 		&transaction,
 		frame.Size.Height,
-		s.previousBandHeight,
-		len(liveLines),
+		previousHeight,
+		nextHeight,
 		immutableRows,
 	)
-	writeMutableBandLines(&transaction, frame.Size.Height, liveLines)
+	writeRetainedMutableBand(&transaction, frame.Size.Height, nextHeight, liveLines)
 	writeCursor(&transaction, frame.Cursor)
 	if _, err := io.WriteString(s.writer, transaction.String()); err != nil {
 		return Result{}, err
 	}
-	s.previousBandHeight = len(liveLines)
+	s.retainedBandHeight = nextHeight
 	s.lastSize = frame.Size
 	return Result{}, nil
 }
@@ -903,17 +909,20 @@ func writeImmutableRegionScrollForLiveBandGrowth(builder *strings.Builder, termi
 	builder.WriteString(resetScrollRegionAndOriginMode())
 }
 
-func writeMutableBandLines(builder *strings.Builder, terminalHeight int, lines []string) {
-	if len(lines) == 0 {
+func writeRetainedMutableBand(builder *strings.Builder, terminalHeight, retainedHeight int, lines []string) {
+	if retainedHeight <= 0 {
 		return
 	}
+	retainedStartRow := terminalHeight - retainedHeight + 1
+	fmt.Fprintf(builder, "\x1b[%d;1H", retainedStartRow)
+	// At the left margin OSC 133 A marks the complete retained region without
+	// advancing. Supporting terminals clear the region before resize reflow.
+	builder.WriteString(redrawableSemanticPromptSequence())
 	startRow := terminalHeight - len(lines) + 1
 	for index, line := range lines {
-		fmt.Fprintf(builder, "\x1b[%d;1H", startRow+index)
-		if index == 0 {
-			// At the left margin OSC 133 A marks this row without advancing.
-			// Supporting terminals clear the region before resize reflow.
-			builder.WriteString(redrawableSemanticPromptSequence())
+		row := startRow + index
+		if index > 0 || row != retainedStartRow {
+			fmt.Fprintf(builder, "\x1b[%d;1H", row)
 		}
 		builder.WriteString(line)
 	}

@@ -93,6 +93,7 @@ func TestRenderHidesEntireLiveAreaWhenMinimumDoesNotFit(t *testing.T) {
 		"\x1b]133;C\x1b\\" +
 		"\x1b[1;1H\x1b]133;C\x1b\\\x1b[2K" +
 		"\x1b[2;1H\x1b]133;C\x1b\\\x1b[2K" +
+		"\x1b[1;1H\x1b]133;A;redraw=1\x1b\\" +
 		"\x1b[?25l"
 	if got := out.String(); got != want {
 		t.Fatalf("too-short live band bytes = %q, want %q", got, want)
@@ -198,7 +199,7 @@ func TestLiveBandGrowthScrollsImmutableRegionBeforeErase(t *testing.T) {
 	if !surface.immutableScrollbackProduced() {
 		t.Fatal("test setup did not produce immutable scrollback")
 	}
-	if got, want := surface.previousBandHeight, 1; got != want {
+	if got, want := surface.retainedBandHeight, 1; got != want {
 		t.Fatalf("test setup previous band height = %d, want %d", got, want)
 	}
 	out.Reset()
@@ -227,6 +228,106 @@ func TestLiveBandGrowthScrollsImmutableRegionBeforeErase(t *testing.T) {
 	}
 	assertTerminalPrefix(t, parseTerminalOps(out.String()), wantPrefix)
 	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"tool", "> prompt", "ready"})
+}
+
+func TestTransientLiveBandShrinkRetainsMutableRowsWithoutSyntheticScrollback(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+	shortFrame := FrameInput{
+		Size:     Size{Width: 40, Height: 8},
+		Sections: []FrameSection{{Kind: FrameSectionStatus, Lines: []string{"ready"}}},
+	}
+	tallFrame := FrameInput{
+		Size: Size{Width: 40, Height: 8},
+		Sections: []FrameSection{
+			{Kind: FrameSectionPicker, Lines: []string{"one", "two", "three", "four"}},
+			{Kind: FrameSectionStatus, Lines: []string{"ready"}},
+		},
+	}
+	if _, err := surface.ApplyTerminalMessage(committedMessage(userRow("committed")), shortFrame); err != nil {
+		t.Fatalf("append committed row: %v", err)
+	}
+	if _, err := surface.Render(tallFrame); err != nil {
+		t.Fatalf("open transient live frame: %v", err)
+	}
+	shrinkStart := out.Len()
+	if _, err := surface.Render(shortFrame); err != nil {
+		t.Fatalf("close transient live frame: %v", err)
+	}
+
+	shrinkBytes := out.Bytes()[shrinkStart:]
+	ops := parseTerminalOps(string(shrinkBytes))
+	if got, want := surface.retainedBandHeight, 5; got != want {
+		t.Fatalf("retained mutable height = %d, want %d", got, want)
+	}
+	if got := countTerminalOp(ops, terminalOpOSC, redrawableSemanticPromptSequence()); got != 1 {
+		t.Fatalf("redrawable prompt boundary count = %d, want 1; ops=%+v", got, ops)
+	}
+	assertCursorAddress(t, ops, shortFrame.Size.Height-5+1, 1)
+	assertCursorAddress(t, ops, shortFrame.Size.Height, 1)
+	for _, op := range ops {
+		if op.kind == terminalOpCRLF {
+			t.Fatalf("transient shrink appended immutable rows: ops=%+v", ops)
+		}
+	}
+
+	capture, err := pty.NewCapture(
+		pty.MustDimensions(shortFrame.Size.Height, shortFrame.Size.Width),
+		[]pty.Chunk{pty.NewChunk(0, time.Millisecond, out.Bytes())},
+	)
+	if err != nil {
+		t.Fatalf("create transient-shrink capture: %v", err)
+	}
+	analysis, err := analyzer.Analyze(capture)
+	if err != nil {
+		t.Fatalf("analyze transient-shrink lifecycle: %v", err)
+	}
+	rows := strings.Split(analysis.Screen.RenderText(), "\n")
+	committedRow := screenRowIndex(rows, "❯ committed")
+	readyRow := screenRowIndex(rows, "ready")
+	if committedRow < 0 || readyRow < 0 {
+		t.Fatalf("committed/live rows missing from terminal screen: %q", rows)
+	}
+	if readyRow != shortFrame.Size.Height-1 {
+		t.Fatalf("live content row = %d, want bottom row %d; screen=%q", readyRow, shortFrame.Size.Height-1, rows)
+	}
+}
+
+func TestTransientLiveBandShrinkToEmptyRetainsSingleMutableBoundary(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+	frame := FrameInput{
+		Size: Size{Width: 40, Height: 6},
+		Sections: []FrameSection{{
+			Kind:  FrameSectionPicker,
+			Lines: []string{"one", "two", "three"},
+		}},
+	}
+	if _, err := surface.Render(frame); err != nil {
+		t.Fatalf("render transient live frame: %v", err)
+	}
+	out.Reset()
+
+	if _, err := surface.Render(FrameInput{Size: frame.Size}); err != nil {
+		t.Fatalf("shrink transient live frame to empty: %v", err)
+	}
+
+	ops := parseTerminalOps(out.String())
+	if got, want := surface.retainedBandHeight, 3; got != want {
+		t.Fatalf("retained mutable height = %d, want %d", got, want)
+	}
+	if got := countTerminalOp(ops, terminalOpOSC, redrawableSemanticPromptSequence()); got != 1 {
+		t.Fatalf("redrawable prompt boundary count = %d, want 1; ops=%+v", got, ops)
+	}
+	assertCursorAddress(t, ops, frame.Size.Height-3+1, 1)
+	if got := visibleTextRows(ops); len(got) != 0 {
+		t.Fatalf("empty live content painted visible rows: %q", got)
+	}
+	for _, op := range ops {
+		if op.kind == terminalOpCRLF {
+			t.Fatalf("transient empty shrink appended immutable rows: ops=%+v", ops)
+		}
+	}
 }
 
 func TestPendingToolCommitDoesNotLeaveBlankRowBetweenConsecutiveTools(t *testing.T) {
@@ -286,6 +387,16 @@ func TestPendingToolCommitDoesNotLeaveBlankRowBetweenConsecutiveTools(t *testing
 			rows,
 		)
 	}
+}
+
+func countTerminalOp(ops []terminalOp, kind terminalOpKind, value string) int {
+	count := 0
+	for _, op := range ops {
+		if op.kind == kind && op.value == value {
+			count++
+		}
+	}
+	return count
 }
 
 func screenRowIndex(rows []string, want string) int {
