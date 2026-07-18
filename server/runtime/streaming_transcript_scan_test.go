@@ -100,36 +100,58 @@ func TestStreamingTranscriptScanBoundarySeedOverriddenByLaterFinalAnswer(t *test
 }
 
 func TestStreamingTranscriptScanKeepsToolAttachedLocalEntryAfterMaterializedOutput(t *testing.T) {
-	callID := "call-fallback"
-	presentation := transcript.ToolCallMeta{
+	fallbackCallID := "call-fallback"
+	ordinaryCallID := "call-ordinary"
+	fallbackPresentation := transcript.ToolCallMeta{
 		ToolName: string(toolspec.ToolPatch),
 	}
-	expectedPresentation := transcript.NormalizeToolCallMeta(presentation)
+	ordinaryPresentation := transcript.ToolCallMeta{
+		ToolName: string(toolspec.ToolExecCommand),
+	}
+	expectedFallbackPresentation := transcript.NormalizeToolCallMeta(fallbackPresentation)
 	events := []session.Event{
 		streamScanTestEvent(t, "message", llm.Message{
 			Role: llm.RoleAssistant,
-			ToolCalls: []llm.ToolCall{{
-				ID:   callID,
-				Name: string(toolspec.ToolPatch),
-			}},
+			ToolCalls: []llm.ToolCall{
+				{
+					ID:   fallbackCallID,
+					Name: string(toolspec.ToolPatch),
+				},
+				{
+					ID:   ordinaryCallID,
+					Name: string(toolspec.ToolExecCommand),
+				},
+			},
 		}),
 		streamScanTestEvent(t, "tool_completed", storedToolCompletion{
-			CallID:       callID,
+			CallID:       fallbackCallID,
 			Name:         string(toolspec.ToolPatch),
 			Output:       json.RawMessage(`{"ok":true}`),
-			Presentation: &presentation,
+			Presentation: &fallbackPresentation,
 		}),
 		streamScanTestEvent(t, "local_entry", storedLocalEntry{
 			Role:            string(transcript.EntryRoleDeveloperErrorFeedback),
 			Text:            "presentation fallback",
-			AfterToolCallID: &callID,
+			AfterToolCallID: &fallbackCallID,
+		}),
+		streamScanTestEvent(t, "tool_completed", storedToolCompletion{
+			CallID:       ordinaryCallID,
+			Name:         string(toolspec.ToolExecCommand),
+			Output:       json.RawMessage(`{"output":"done"}`),
+			Presentation: &ordinaryPresentation,
 		}),
 		streamScanTestEvent(t, "message", llm.Message{
 			Role:        llm.RoleTool,
-			ToolCallID:  callID,
+			ToolCallID:  fallbackCallID,
 			Name:        string(toolspec.ToolPatch),
 			Content:     `{"ok":true}`,
 			MessageType: llm.ToolOutputMessageType(true),
+		}),
+		streamScanTestEvent(t, "message", llm.Message{
+			Role:       llm.RoleTool,
+			ToolCallID: ordinaryCallID,
+			Name:       string(toolspec.ToolExecCommand),
+			Content:    `{"output":"done"}`,
 		}),
 		streamScanTestEvent(t, "message", llm.Message{
 			Role:    llm.RoleAssistant,
@@ -139,20 +161,26 @@ func TestStreamingTranscriptScanKeepsToolAttachedLocalEntryAfterMaterializedOutp
 	}
 
 	snapshot := fullStreamingProjection(t, events)
-	if got := len(snapshot.Entries); got != 4 {
-		t.Fatalf("entry count = %d, want one tool call, one tool result, one operator row, and one assistant row: %+v", got, snapshot.Entries)
+	if got := len(snapshot.Entries); got != 6 {
+		t.Fatalf("entry count = %d, want two tool calls, two tool results, one operator row, and one assistant row: %+v", got, snapshot.Entries)
 	}
-	if got := snapshot.Entries[0]; got.Role != "tool_call" || got.ToolCallID != callID {
-		t.Fatalf("entry[0] = %+v, want tool call row", got)
+	if got := snapshot.Entries[0]; got.Role != "tool_call" || got.ToolCallID != fallbackCallID {
+		t.Fatalf("entry[0] = %+v, want fallback tool call row", got)
 	}
-	if got := snapshot.Entries[1]; got.Role != "tool_result_ok" || got.ToolCallID != callID || got.ToolCall == nil || !reflect.DeepEqual(*got.ToolCall, expectedPresentation) {
-		t.Fatalf("entry[1] = %+v, want one finalized tool result row", got)
+	if got := snapshot.Entries[1]; got.Role != "tool_call" || got.ToolCallID != ordinaryCallID {
+		t.Fatalf("entry[1] = %+v, want ordinary tool call row", got)
 	}
-	if got := snapshot.Entries[2]; got.Role != string(transcript.EntryRoleDeveloperErrorFeedback) {
-		t.Fatalf("entry[2] = %+v, want operator feedback after tool output", got)
+	if got := snapshot.Entries[2]; got.Role != "tool_result_ok" || got.ToolCallID != fallbackCallID || got.ToolCall == nil || !reflect.DeepEqual(*got.ToolCall, expectedFallbackPresentation) {
+		t.Fatalf("entry[2] = %+v, want one finalized fallback tool result row", got)
 	}
-	if got := snapshot.Entries[3]; got.Role != "assistant" {
-		t.Fatalf("entry[3] = %+v, want following assistant row", got)
+	if got := snapshot.Entries[3]; got.Role != string(transcript.EntryRoleDeveloperErrorFeedback) {
+		t.Fatalf("entry[3] = %+v, want operator feedback immediately after its tool output", got)
+	}
+	if got := snapshot.Entries[4]; got.Role != "tool_result_ok" || got.ToolCallID != ordinaryCallID {
+		t.Fatalf("entry[4] = %+v, want later ordinary tool result row", got)
+	}
+	if got := snapshot.Entries[5]; got.Role != "assistant" {
+		t.Fatalf("entry[5] = %+v, want following assistant row", got)
 	}
 }
 

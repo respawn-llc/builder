@@ -197,29 +197,34 @@ func (s *streamingTranscriptScan) closeTurn() {
 	localEntries := s.turn.localEntries
 	localEntrySteps := s.turn.localEntrySteps
 
+	if len(materializedSteps) != len(materialized) {
+		panic(fmt.Sprintf("persisted transcript tool-message step identity count mismatch: materialized_count=%d step_id_count=%d", len(materialized), len(materializedSteps)))
+	}
+	if len(localEntrySteps) != len(localEntries) {
+		panic(fmt.Sprintf("persisted transcript local-entry step identity count mismatch: local_entry_count=%d step_id_count=%d", len(localEntries), len(localEntrySteps)))
+	}
 	for _, rm := range materialized {
 		if callID := strings.TrimSpace(rm.ToolCallID); callID != "" {
 			s.materialized[callID] = struct{}{}
 		}
 	}
 	s.applyMessage(assistant, 0, assistantStepID)
-	for index, rm := range materialized {
-		if index >= len(materializedSteps) {
-			panic(fmt.Sprintf("persisted transcript tool-message step identity missing: materialized_index=%d materialized_count=%d step_id_count=%d", index, len(materialized), len(materializedSteps)))
-		}
-		s.applyMessage(rm, 0, materializedSteps[index])
-	}
-	if len(materializedSteps) != len(materialized) {
-		panic(fmt.Sprintf("persisted transcript tool-message step identity count mismatch: materialized_count=%d step_id_count=%d", len(materialized), len(materializedSteps)))
-	}
 	for index, entry := range localEntries {
-		if index >= len(localEntrySteps) {
-			panic(fmt.Sprintf("persisted transcript local-entry step identity missing: local_entry_index=%d local_entry_count=%d step_id_count=%d", index, len(localEntries), len(localEntrySteps)))
+		callID := strings.TrimSpace(*entry.AfterToolCallID)
+		if _, materialized := s.materialized[callID]; materialized {
+			continue
 		}
 		s.appendLocalEntry(entry, localEntrySteps[index])
 	}
-	if len(localEntrySteps) != len(localEntries) {
-		panic(fmt.Sprintf("persisted transcript local-entry step identity count mismatch: local_entry_count=%d step_id_count=%d", len(localEntries), len(localEntrySteps)))
+	for index, rm := range materialized {
+		s.applyMessage(rm, 0, materializedSteps[index])
+		callID := strings.TrimSpace(rm.ToolCallID)
+		for localIndex, entry := range localEntries {
+			if entry.AfterToolCallID == nil || strings.TrimSpace(*entry.AfterToolCallID) != callID {
+				continue
+			}
+			s.appendLocalEntry(entry, localEntrySteps[localIndex])
+		}
 	}
 
 	for _, callID := range callIDs {
