@@ -1186,6 +1186,63 @@ func TestAskViewportMarkdownHyperlinkEllipsisIsWidthSafe(t *testing.T) {
 	}
 }
 
+func TestAskViewportTallMixedMarkdownIsBoundedAcrossLinkPresentations(t *testing.T) {
+	const (
+		width  = 32
+		height = 12
+	)
+	source := strings.Repeat(
+		"Paragraph with wrapped words and a [link](https://example.com/destination).\n\n"+
+			"- first list item\n- second list item\n\n"+
+			"```go\nfmt.Println(\"bounded\")\n```\n\n",
+		8,
+	)
+	for _, presentation := range []transcriptrender.MarkdownLinkPresentation{
+		transcriptrender.MarkdownLinkLabelOnly,
+		transcriptrender.MarkdownLinkLabelAndDestination,
+	} {
+		t.Run(fmt.Sprintf("presentation-%d", presentation), func(t *testing.T) {
+			model := sizedTestUIModel(newProjectedStaticUIModel(
+				WithUIMarkdownLinkPresentation(presentation),
+			), width, height)
+			next, command := model.Update(askEventMsg{event: testQuestionAskEvent(
+				"ask-1",
+				source,
+				"First",
+				"Second",
+			)})
+			pending := next.(*uiModel)
+			next, _ = pending.Update(command())
+			ready := next.(*uiModel)
+
+			visible, cursor := testVisibleAskPaneContent(ready, width)
+			if cursor != nil {
+				t.Fatalf("picker viewport unexpectedly exposed a cursor: %v", cursor)
+			}
+			if len(visible) > inputContentLineLimit(height) {
+				t.Fatalf("visible rows = %d, content budget = %d", len(visible), inputContentLineLimit(height))
+			}
+			questionRows := 0
+			optionRows := 0
+			for _, line := range visible {
+				if got := lipgloss.Width(line.text); got > width {
+					t.Fatalf("visible row width = %d, want <= %d", got, width)
+				}
+				switch line.prompt.Kind {
+				case askPromptLineKindQuestion:
+					questionRows++
+					tuitest.TraceTerminalHyperlinks(t, line.text+" plain")
+				case askPromptLineKindOption:
+					optionRows++
+				}
+			}
+			if questionRows == 0 || optionRows != 3 {
+				t.Fatalf("bounded mixed Markdown rows = question %d options %d", questionRows, optionRows)
+			}
+		})
+	}
+}
+
 func TestAskViewportZeroQuestionCapacityDoesNotEmitEllipsisRow(t *testing.T) {
 	const (
 		width  = 48
