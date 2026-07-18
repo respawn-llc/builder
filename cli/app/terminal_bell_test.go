@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
+	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/transcript"
@@ -13,10 +15,12 @@ import (
 type countRinger struct {
 	notifications int
 	bells         int
+	messages      []string
 }
 
-func (r *countRinger) Notify(string) {
+func (r *countRinger) Notify(message string) {
 	r.notifications++
+	r.messages = append(r.messages, message)
 }
 
 func (r *countRinger) Bell() {
@@ -80,6 +84,184 @@ func TestBellHooksAttentionNotificationPolicy(t *testing.T) {
 	)
 	if focused.notifications != 0 || focused.bells != 1 {
 		t.Fatalf("focused events = notifications %d, bells %d", focused.notifications, focused.bells)
+	}
+}
+
+func TestBellHooksAttentionNotificationsPropagateDynamicMarkdownPreview(t *testing.T) {
+	ringer := &countRinger{}
+	hooks := newUnfocusedBellHooks(ringer)
+	questionPreview := "dynamic-question-preview"
+	approvalPreview := "dynamic-approval-preview"
+
+	hooks.OnAttentionNotification(testAttentionPendingEvent(
+		"question-dynamic",
+		clientui.AttentionNotificationKindQuestion,
+		"**"+questionPreview+"**",
+	))
+	hooks.OnAttentionNotification(testAttentionPendingEvent(
+		"approval-dynamic",
+		clientui.AttentionNotificationKindApproval,
+		"`"+approvalPreview+"`",
+	))
+
+	if ringer.notifications != 2 || len(ringer.messages) != 2 {
+		t.Fatalf("dynamic attention events = notifications %d, messages %d", ringer.notifications, len(ringer.messages))
+	}
+	if !strings.Contains(ringer.messages[0], questionPreview) {
+		t.Fatalf("question notification omitted dynamic preview: %q", ringer.messages[0])
+	}
+	if !strings.Contains(ringer.messages[1], approvalPreview) {
+		t.Fatalf("approval notification omitted dynamic preview: %q", ringer.messages[1])
+	}
+}
+
+func TestBellHooksTextNotificationsHaveNonEmptyStructuralFallbacks(t *testing.T) {
+	ringer := &countRinger{}
+	title := "dynamic-session"
+	hooks := newBellHooks(ringer, func() string { return title }, func() bool { return false })
+
+	hooks.OnAttentionNotification(testAttentionPendingEvent(
+		"question-empty",
+		clientui.AttentionNotificationKindQuestion,
+		"",
+	))
+	hooks.OnAttentionNotification(testAttentionPendingEvent(
+		"approval-empty",
+		clientui.AttentionNotificationKindApproval,
+		"",
+	))
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, " \n\t "))
+	hooks.OnTranscriptMessage(bellStepFinishedMessage(1))
+	hooks.OnTurnQueueDrained()
+
+	if len(ringer.messages) != 3 {
+		t.Fatalf("fallback notification count = %d, want three", len(ringer.messages))
+	}
+	for _, message := range ringer.messages {
+		if strings.TrimSpace(message) == "" || message == title+":" || message == title+": " {
+			t.Fatalf("notification lacks structural fallback: %q", message)
+		}
+		if strings.ContainsAny(message, "\n\t") {
+			t.Fatalf("fallback notification is not single-line: %q", message)
+		}
+	}
+}
+
+func TestBellHooksCapsCompleteNotificationAtNotifierBoundary(t *testing.T) {
+	ringer := &countRinger{}
+	title := strings.Repeat("session-", 4)
+	hooks := newBellHooks(ringer, func() string { return title }, func() bool { return false })
+
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, strings.Repeat("answer", 30)))
+	hooks.OnTranscriptMessage(bellStepFinishedMessage(1))
+	hooks.OnTurnQueueDrained()
+
+	if len(ringer.messages) != 1 {
+		t.Fatalf("formatted notification count = %d, want one", len(ringer.messages))
+	}
+	message := ringer.messages[0]
+	if got := len([]rune(message)); got != terminalNotificationPreviewLimit {
+		t.Fatalf("formatted notification length = %d, want %d", got, terminalNotificationPreviewLimit)
+	}
+	if !strings.HasSuffix(message, "...") || strings.Count(message, "...") != 1 || strings.Contains(message, "…") {
+		t.Fatalf("formatted notification has invalid terminal ellipsis: %q", message)
+	}
+}
+
+func TestNotificationMarkdownPreviewUsesVisibleSingleLineText(t *testing.T) {
+	first := "dynamic-bold"
+	label := "dynamic-link"
+	destination := "https://example.invalid/dynamic-target"
+	last := "dynamic-tail"
+	source := "**" + first + "**\n\n[" + label + "](" + destination + ")\t" + last
+
+	preview := notificationMarkdownPreview(
+		source,
+		transcriptrender.MarkdownLinkLabelAndDestination,
+	)
+
+	for _, dynamic := range []string{first, label, destination, last} {
+		if !strings.Contains(preview, dynamic) {
+			t.Fatalf("Markdown preview %q omitted dynamic visible text %q", preview, dynamic)
+		}
+	}
+	if strings.ContainsAny(preview, "*[]()\n\t") {
+		t.Fatalf("Markdown preview retained source syntax or whitespace controls: %q", preview)
+	}
+	if got := strings.Join(strings.Fields(preview), " "); got != preview {
+		t.Fatalf("Markdown preview whitespace = %q, want collapsed single line", preview)
+	}
+}
+
+func TestNotificationMarkdownPreviewAdaptsLinkPresentation(t *testing.T) {
+	label := "dynamic-link-label"
+	destination := "https://example.invalid/dynamic-link-destination"
+	source := "[" + label + "](" + destination + ")"
+
+	labelOnly := notificationMarkdownPreview(source, transcriptrender.MarkdownLinkLabelOnly)
+	withDestination := notificationMarkdownPreview(source, transcriptrender.MarkdownLinkLabelAndDestination)
+
+	if !strings.Contains(labelOnly, label) || !strings.Contains(withDestination, label) {
+		t.Fatalf("link previews omitted dynamic label: label-only=%q fallback=%q", labelOnly, withDestination)
+	}
+	if strings.Contains(labelOnly, destination) {
+		t.Fatalf("label-only preview exposed dynamic destination: %q", labelOnly)
+	}
+	if !strings.Contains(withDestination, destination) {
+		t.Fatalf("fallback preview omitted dynamic destination: %q", withDestination)
+	}
+}
+
+func TestNotificationMarkdownPreviewIsBoundedWithoutVisibleTruncation(t *testing.T) {
+	preview := notificationMarkdownPreview(
+		strings.Repeat("dynamic-preview", terminalNotificationPreviewLimit),
+		transcriptrender.MarkdownLinkLabelOnly,
+	)
+
+	if got := len([]rune(preview)); got != terminalNotificationPreviewLimit {
+		t.Fatalf("retained preview length = %d, want %d", got, terminalNotificationPreviewLimit)
+	}
+	if strings.HasSuffix(preview, "...") || strings.HasSuffix(preview, "…") {
+		t.Fatalf("retained preview contains early visible truncation: %q", preview)
+	}
+}
+
+func TestTerminalNotificationFormattingSlicesUnicodeSafely(t *testing.T) {
+	title := strings.Repeat("界", 12)
+	body := strings.Repeat("λ", terminalNotificationPreviewLimit)
+
+	message := formatTerminalNotificationMessage(title, body)
+
+	if !utf8.ValidString(message) {
+		t.Fatalf("formatted notification is invalid UTF-8: %q", message)
+	}
+	if got := len([]rune(message)); got != terminalNotificationPreviewLimit {
+		t.Fatalf("formatted Unicode notification length = %d, want %d", got, terminalNotificationPreviewLimit)
+	}
+	if !strings.HasSuffix(message, "...") {
+		t.Fatalf("formatted Unicode notification lacks terminal ellipsis: %q", message)
+	}
+}
+
+func TestBellHooksCompactionUsesCompleteMessageFormatter(t *testing.T) {
+	ringer := &countRinger{}
+	title := strings.Repeat("dynamic-session-title", 6)
+	hooks := newBellHooks(ringer, func() string { return title }, func() bool { return false })
+
+	hooks.OnUserCompactionCompleted(true)
+
+	if len(ringer.messages) != 1 {
+		t.Fatalf("compaction notification count = %d, want one", len(ringer.messages))
+	}
+	if got := len([]rune(ringer.messages[0])); got != terminalNotificationPreviewLimit {
+		t.Fatalf("compaction notification length = %d, want %d", got, terminalNotificationPreviewLimit)
+	}
+	if !strings.HasSuffix(ringer.messages[0], "...") {
+		t.Fatalf("compaction notification lacks terminal ellipsis: %q", ringer.messages[0])
 	}
 }
 
@@ -152,6 +334,117 @@ func TestBellHooksToolHeavyTurnCompletion(t *testing.T) {
 	}
 }
 
+func TestBellHooksSupervisorTurnUsesPreFeedbackPreview(t *testing.T) {
+	ringer := &countRinger{}
+	hooks := newUnfocusedBellHooks(ringer)
+	preFeedback := "original answer before review"
+	followUp := "distinct answer after review"
+
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, preFeedback))
+	hooks.OnTranscriptMessage(bellReviewerStateMessage(1, clientui.ReviewerStateRunning))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, followUp))
+	hooks.OnTranscriptMessage(bellReviewerStateMessage(1, clientui.ReviewerStateCompleted))
+	hooks.OnTranscriptMessage(bellStepFinishedMessage(1))
+	hooks.OnTurnQueueDrained()
+
+	if ringer.notifications != 1 {
+		t.Fatalf("supervisor turn emitted %d notifications, want one", ringer.notifications)
+	}
+	if len(ringer.messages) != 1 {
+		t.Fatalf("supervisor turn retained %d messages, want one", len(ringer.messages))
+	}
+	if got := ringer.messages[0]; got != defaultSessionTitle+": "+preFeedback {
+		t.Fatalf("supervisor notification = %q, want pre-feedback preview", got)
+	}
+}
+
+func TestBellHooksSupervisorToolThresholdSpansReview(t *testing.T) {
+	ringer := &countRinger{}
+	hooks := newUnfocusedBellHooks(ringer)
+
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, "answer before review"))
+	hooks.OnTranscriptMessage(bellReviewerStateMessage(1, clientui.ReviewerStateRunning))
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, "answer after review"))
+	hooks.OnTranscriptMessage(bellReviewerStateMessage(1, clientui.ReviewerStateCompleted))
+	hooks.OnTurnQueueDrained()
+	if ringer.total() != 0 {
+		t.Fatalf("supervisor turn notified before step finish")
+	}
+
+	hooks.OnTranscriptMessage(bellStepFinishedMessage(1))
+	hooks.OnTurnQueueDrained()
+	if ringer.notifications != 1 {
+		t.Fatalf("split-threshold supervisor turn emitted %d notifications, want one", ringer.notifications)
+	}
+}
+
+func TestBellHooksSupervisorNoopFollowUpPreservesTurn(t *testing.T) {
+	ringer := &countRinger{}
+	hooks := newUnfocusedBellHooks(ringer)
+	preFeedback := "answer preserved across silent review"
+
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, preFeedback))
+	hooks.OnTranscriptMessage(bellReviewerStateMessage(1, clientui.ReviewerStateRunning))
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellAssistantDeltaMessage(1, uiNoopFinalToken))
+	hooks.OnTranscriptMessage(bellReviewerStateMessage(1, clientui.ReviewerStateCompleted))
+	hooks.OnTranscriptMessage(bellStepFinishedMessage(1))
+	hooks.OnTurnQueueDrained()
+
+	if ringer.notifications != 1 {
+		t.Fatalf("silent reviewer follow-up emitted %d notifications, want one", ringer.notifications)
+	}
+	if got := ringer.messages[0]; got != defaultSessionTitle+": "+preFeedback {
+		t.Fatalf("silent reviewer notification = %q, want preserved pre-feedback preview", got)
+	}
+}
+
+func TestBellHooksQueuedTurnsUseLatestPreviewAndEarlierEligibility(t *testing.T) {
+	ringer := &countRinger{}
+	hooks := newUnfocusedBellHooks(ringer)
+	latest := "latest observed queued answer"
+
+	recordToolHeavyBellTurn(hooks, 1)
+	hooks.OnTranscriptMessage(bellToolStartMessage(2))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(2, latest))
+	hooks.OnTranscriptMessage(bellStepFinishedMessage(2))
+	hooks.OnTurnQueueDrained()
+
+	if ringer.notifications != 1 {
+		t.Fatalf("queued turns emitted %d notifications, want one", ringer.notifications)
+	}
+	if got := ringer.messages[0]; got != defaultSessionTitle+": "+latest {
+		t.Fatalf("queued notification = %q, want latest observed preview", got)
+	}
+}
+
+func TestBellHooksDrainUsesOnlyObservedFacts(t *testing.T) {
+	ringer := &countRinger{}
+	hooks := newUnfocusedBellHooks(ringer)
+
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellToolStartMessage(1))
+	hooks.OnTranscriptMessage(bellAssistantFinalMessage(1))
+	hooks.OnTurnQueueDrained()
+	if ringer.total() != 0 {
+		t.Fatalf("drain emitted %d events before step finish was observed", ringer.total())
+	}
+
+	hooks.OnTranscriptMessage(bellStepFinishedMessage(1))
+	if ringer.total() != 0 {
+		t.Fatalf("late step finish scheduled %d delayed events", ringer.total())
+	}
+	hooks.OnTurnQueueDrained()
+	if ringer.notifications != 1 {
+		t.Fatalf("later ordinary drain emitted %d notifications, want one", ringer.notifications)
+	}
+}
+
 func TestBellHooksTurnCompletionFocusPolicy(t *testing.T) {
 	t.Run("focused suppresses", func(t *testing.T) {
 		ringer := &countRinger{}
@@ -197,25 +490,6 @@ func TestBellHooksNoopFinalizationScope(t *testing.T) {
 			t.Fatalf("unrelated active turn emitted %d notifications", ringer.notifications)
 		}
 	})
-}
-
-func TestFormatAssistantPreview(t *testing.T) {
-	long := strings.Repeat("a", terminalNotificationPreviewLimit+5)
-	for _, test := range []struct {
-		content string
-		limit   int
-		want    string
-	}{
-		{content: "\n  hello\tworld  ", limit: 80, want: "hello world"},
-		{content: "", limit: 80, want: ""},
-		{content: "abcdef", limit: 4, want: "abc…"},
-		{content: long, limit: terminalNotificationPreviewLimit, want: strings.Repeat("a", terminalNotificationPreviewLimit-1) + "…"},
-		{content: "ab\x1bcd\a ef", limit: 80, want: "abcd ef"},
-	} {
-		if got := formatAssistantPreview(test.content, test.limit); got != test.want {
-			t.Fatalf("formatAssistantPreview(%q, %d) = %q, want %q", test.content, test.limit, got, test.want)
-		}
-	}
 }
 
 func TestBellHooksCorrelateQueuedTurnSteps(t *testing.T) {
@@ -342,6 +616,10 @@ func bellToolStartMessage(step int) clientui.TranscriptMessage {
 }
 
 func bellAssistantFinalMessage(step int) clientui.TranscriptMessage {
+	return bellAssistantFinalMessageWithText(step, "turn complete")
+}
+
+func bellAssistantFinalMessageWithText(step int, text string) clientui.TranscriptMessage {
 	return clientui.TranscriptMessage{
 		Sequence: 2,
 		Kind:     clientui.TranscriptMessageCommittedRow,
@@ -350,8 +628,30 @@ func bellAssistantFinalMessage(step int) clientui.TranscriptMessage {
 			Integrity:  transcript.RowIntegrityValid,
 			Kind:       clientui.TranscriptRowAssistant,
 			Assistant: &clientui.TranscriptAssistantRow{
-				StepID: bellTestStepID(step), Text: "turn complete", Phase: transcript.AssistantPhaseFinal,
+				StepID: bellTestStepID(step), Text: text, Phase: transcript.AssistantPhaseFinal,
 			},
+		}},
+	}
+}
+
+func bellReviewerStateMessage(step int, state clientui.ReviewerState) clientui.TranscriptMessage {
+	return clientui.TranscriptMessage{
+		Sequence: 2,
+		Kind:     clientui.TranscriptMessageReviewerState,
+		Payload: clientui.TranscriptPayload{ReviewerState: &clientui.TranscriptReviewerState{
+			StepID: bellTestStepID(step),
+			State:  state,
+		}},
+	}
+}
+
+func bellStepFinishedMessage(step int) clientui.TranscriptMessage {
+	return clientui.TranscriptMessage{
+		Sequence: 2,
+		Kind:     clientui.TranscriptMessageStepState,
+		Payload: clientui.TranscriptPayload{StepState: &clientui.TranscriptStepState{
+			StepID:    bellTestStepID(step),
+			Lifecycle: clientui.StepLifecycleFinished,
 		}},
 	}
 }
@@ -370,4 +670,5 @@ func recordToolHeavyBellTurn(hooks *bellHooks, step int) {
 	hooks.OnTranscriptMessage(bellToolStartMessage(step))
 	hooks.OnTranscriptMessage(bellToolStartMessage(step))
 	hooks.OnTranscriptMessage(bellAssistantFinalMessage(step))
+	hooks.OnTranscriptMessage(bellStepFinishedMessage(step))
 }
