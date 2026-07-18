@@ -1,8 +1,4 @@
-import type {
-  WorkflowGraphEdge,
-  WorkflowGraphNode,
-  WorkflowGraphPoint,
-} from "./workflowGraphLayout";
+import type { WorkflowGraphEdge, WorkflowGraphNode, WorkflowGraphPoint } from "./workflowGraphLayout";
 import { z } from "zod";
 
 type WorkflowGraphEndpointSide = "source" | "target";

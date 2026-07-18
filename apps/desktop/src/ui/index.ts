@@ -4,6 +4,7 @@ export { AdaptiveLineClamp } from "./AdaptiveLineClamp";
 export type { AdaptiveLineClampProps } from "./AdaptiveLineClamp";
 export { Button } from "./Button";
 export type { ButtonSize, ButtonVariant } from "./Button";
+export { CopyableValueButton } from "./CopyableValueButton";
 export { IconTooltipButton } from "./IconTooltipButton";
 export { HelpHint } from "./HelpHint";
 export type { HelpHintProps } from "./HelpHint";
