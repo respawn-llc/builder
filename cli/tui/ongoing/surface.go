@@ -104,7 +104,7 @@ type Surface struct {
 	activeAssistant    activeAssistantState
 	terminalResize     TerminalResizePolicy
 	markdownLinks      transcriptrender.MarkdownLinkPresentation
-	lastSize           Size
+	lastPaintedSize    *Size
 }
 
 type activeAssistantState struct {
@@ -359,11 +359,12 @@ func (s *Surface) observeResize(size Size) Result {
 	if s.terminalResize != TerminalResizeWidthRehydration {
 		return Result{}
 	}
-	if s.lastSize.Width > 0 && size.Width > 0 && size.Width != s.lastSize.Width && s.immutableScrollbackProduced() {
-		s.lastSize = size
+	if s.lastPaintedSize != nil &&
+		size.Width > 0 &&
+		size.Width != s.lastPaintedSize.Width &&
+		s.immutableScrollbackProduced() {
 		return Result{Action: ResultScheduleWidthRehydration, Reason: RehydrateReasonWidthChange}
 	}
-	s.lastSize = size
 	return Result{}
 }
 
@@ -642,12 +643,15 @@ func (s *Surface) writeFrameTransaction(frame FrameInput, immutableRows []string
 		liveLines = nil
 		frame.Cursor = Cursor{}
 	}
-	previousHeight := min(s.retainedBandHeight, frame.Size.Height)
-	contentHeight := len(liveLines)
-	nextHeight := contentHeight
-	if len(immutableRows) == 0 {
-		nextHeight = max(contentHeight, previousHeight)
+	previousHeight := 0
+	if s.lastPaintedSize != nil && s.retainedBandHeight > 0 {
+		previousHeight = min(s.retainedBandHeight, frame.Size.Height)
 	}
+	contentHeight := len(liveLines)
+	releasableHeight := max(0, previousHeight-contentHeight)
+	releasedHeight := min(len(immutableRows), releasableHeight)
+	nextHeight := max(contentHeight, previousHeight-releasedHeight)
+	validateFrameTransactionGeometry(frame, previousHeight, contentHeight, nextHeight, len(immutableRows))
 	eraseHeight := max(previousHeight, nextHeight)
 	var transaction strings.Builder
 	transaction.WriteString(resetScrollRegionAndOriginMode())
@@ -669,8 +673,49 @@ func (s *Surface) writeFrameTransaction(frame FrameInput, immutableRows []string
 		return Result{}, err
 	}
 	s.retainedBandHeight = nextHeight
-	s.lastSize = frame.Size
+	paintedSize := frame.Size
+	s.lastPaintedSize = &paintedSize
 	return Result{}, nil
+}
+
+func validateFrameTransactionGeometry(
+	frame FrameInput,
+	previousHeight int,
+	contentHeight int,
+	nextHeight int,
+	immutableRowCount int,
+) {
+	valid := previousHeight >= 0 &&
+		contentHeight >= 0 &&
+		contentHeight <= nextHeight &&
+		nextHeight <= frame.Size.Height
+	if immutableRowCount > 0 {
+		valid = valid && nextHeight < frame.Size.Height
+	}
+	if frame.Cursor.Visible {
+		valid = valid &&
+			frame.Cursor.Row > 0 &&
+			frame.Cursor.Row <= frame.Size.Height &&
+			frame.Cursor.Column > 0 &&
+			frame.Cursor.Column <= frame.Size.Width
+	}
+	if valid {
+		return
+	}
+	sectionLineCounts := make(map[FrameSectionKind]int, len(frame.Sections))
+	for _, section := range frame.Sections {
+		sectionLineCounts[section.Kind] += len(section.Lines) + len(section.StyledLines)
+	}
+	panicOngoingDeveloperError("write_frame_transaction", "invalid frame transaction geometry", map[string]any{
+		"width":               frame.Size.Width,
+		"height":              frame.Size.Height,
+		"previous_height":     previousHeight,
+		"content_height":      contentHeight,
+		"next_height":         nextHeight,
+		"immutable_row_count": immutableRowCount,
+		"section_line_counts": sectionLineCounts,
+		"cursor":              frame.Cursor,
+	})
 }
 
 func (s *Surface) minimumLiveBandFits(frame FrameInput, liveLines []string) bool {
