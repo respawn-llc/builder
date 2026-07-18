@@ -294,7 +294,8 @@ func TestPathReferencePickerScrollsSelectionAndReservesBoundedHeight(t *testing.
 func TestPathReferencePickerSanitizesControlCharactersForDisplay(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.pathReference.tracked = detectPathReferenceQuery("@ab", 3)
-	m.pathReference.matches = []uiPathReferenceCandidate{{Path: "safe/]52;evilname.txt"}}
+	rawPath := "safe/\x1b]52;evil\x07name\x01.txt"
+	m.pathReference.matches = []uiPathReferenceCandidate{{Path: rawPath}}
 
 	state := m.pathReferencePicker()
 	if !state.visible || len(state.rows) != 1 {
@@ -303,7 +304,7 @@ func TestPathReferencePickerSanitizesControlCharactersForDisplay(t *testing.T) {
 	if state.rows[0].primary != "safe/name.txt" {
 		t.Fatalf("display path = %q", state.rows[0].primary)
 	}
-	if m.pathReference.matches[0].Path != "safe/]52;evilname.txt" {
+	if m.pathReference.matches[0].Path != rawPath {
 		t.Fatalf("expected underlying candidate path preserved, got %q", m.pathReference.matches[0].Path)
 	}
 }
