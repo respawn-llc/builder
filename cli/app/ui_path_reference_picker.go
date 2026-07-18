@@ -70,7 +70,7 @@ func isPathReferenceQueryRune(r rune) bool {
 }
 
 func applyPathReferenceCompletion(input string, cursor int, query uiPathReferenceQuery, candidate uiPathReferenceCandidate) (string, int, bool) {
-	if !query.Active || query.End < query.Start || strings.TrimSpace(candidate.Path) == "" {
+	if !query.Active || query.End < query.Start || !isTerminalSafePathReference(candidate.Path) {
 		return input, cursor, false
 	}
 	runes := []rune(input)
@@ -202,7 +202,7 @@ func (m *uiModel) pathReferencePicker() uiPickerPresentation {
 	}
 	rows := make([]uiPickerRow, 0, len(m.pathReference.matches))
 	for _, match := range m.pathReference.matches {
-		rows = append(rows, uiPickerRow{primary: sanitizePathReferenceDisplayText(match.Path), selectable: true})
+		rows = append(rows, uiPickerRow{primary: match.Path, selectable: true})
 	}
 	lineCount := len(m.pathReference.matches)
 	if lineCount > slashCommandPickerLines {
@@ -241,7 +241,7 @@ func (m *uiModel) acceptPathReferenceSelection() bool {
 		m.pathReference.matches[selection],
 	)
 	if !ok {
-		return false
+		return true
 	}
 	m.replaceMainInput(updated, byteOffsetForRuneCursor(updated, nextCursor))
 	return true
@@ -262,7 +262,7 @@ func (m *uiModel) shouldBlockPathReferenceAcceptanceKey() bool {
 	return m.pathReference.pending || m.pathReference.loading
 }
 
-func sanitizePathReferenceDisplayText(path string) string {
+func terminalSafePathReferenceText(path string) string {
 	if path == "" {
 		return ""
 	}
@@ -280,6 +280,20 @@ func sanitizePathReferenceDisplayText(path string) string {
 		filtered = append(filtered, r)
 	}
 	return string(filtered)
+}
+
+func isTerminalSafePathReference(path string) bool {
+	return strings.TrimSpace(path) != "" && terminalSafePathReferenceText(path) == path
+}
+
+func terminalSafePathReferenceCandidates(candidates []uiPathReferenceCandidate) []uiPathReferenceCandidate {
+	filtered := make([]uiPathReferenceCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if isTerminalSafePathReference(candidate.Path) {
+			filtered = append(filtered, candidate)
+		}
+	}
+	return filtered
 }
 
 func skipTerminalEscapeSequence(runes []rune, start int) int {
@@ -376,7 +390,7 @@ func (m *uiModel) handlePathReferenceMatchResult(msg uiPathReferenceMatchResultM
 	m.pathReference.corpusGeneration = msg.CorpusGeneration
 	m.pathReference.pending = false
 	m.pathReference.loading = false
-	m.pathReference.matches = append([]uiPathReferenceCandidate(nil), msg.Matches...)
+	m.pathReference.matches = terminalSafePathReferenceCandidates(msg.Matches)
 	m.pathReference.selection = 0
 }
 

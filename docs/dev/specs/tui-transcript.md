@@ -198,6 +198,7 @@
 - Query tracking is cursor-local and accepts Unicode letters/digits plus `/`, `.`, `_`, and `-`.
 - Hidden paths are included, `.git` is excluded, and normal ignore-file handling remains enabled.
 - Non-empty directory candidates are derived from file paths; empty directories are intentionally excluded in v1.
+- Candidates whose repo-relative path changes under terminal-safe projection are excluded from the cached corpus before fuzzy matching and result limits; derived directories remain eligible when their own path is unchanged.
 - Corpus-build failures are retryable later in the same workspace and do not permanently disable path autocomplete.
 
 ## Startup And Session Selection

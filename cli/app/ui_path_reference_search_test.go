@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,7 +48,7 @@ func TestLoadCorpusSnapshotIncludesDerivedDirectoriesAndExcludesGit(t *testing.T
 	}
 }
 
-func TestLoadCorpusSnapshotPreservesFilenameNewlinesWithNullSeparatedOutput(t *testing.T) {
+func TestLoadCorpusSnapshotFiltersControlBearingFileAndKeepsSafeDirectory(t *testing.T) {
 	runner := &stubUIPathReferenceCommandRunner{output: nulJoinPathReferenceOutput("dir/line\nbreak.txt")}
 	service := &uiPathReferenceSearchService{runner: runner}
 
@@ -55,7 +56,7 @@ func TestLoadCorpusSnapshotPreservesFilenameNewlinesWithNullSeparatedOutput(t *t
 	if err != nil {
 		t.Fatalf("loadCorpusSnapshot() error = %v", err)
 	}
-	want := []uiPathReferenceCandidate{{Path: "dir", Directory: true}, {Path: "dir/line\nbreak.txt"}}
+	want := []uiPathReferenceCandidate{{Path: "dir", Directory: true}}
 	if !reflect.DeepEqual(snapshot.Candidates, want) {
 		t.Fatalf("snapshot candidates = %+v, want %+v", snapshot.Candidates, want)
 	}
@@ -89,6 +90,37 @@ func TestPathReferenceSearchServiceRunsOnlyOneMatcherAtATime(t *testing.T) {
 	second := waitForPathReferenceEventType[uiPathReferenceMatchResultMsg](t, service.Events())
 	if second.NormalizedQuery != "abc" {
 		t.Fatalf("second result query = %q, want abc", second.NormalizedQuery)
+	}
+}
+
+func TestPathReferenceSearchFiltersUnsafeCandidatesBeforeMatchLimit(t *testing.T) {
+	paths := make([]string, 0, slashCommandPickerLines+2)
+	for index := 0; index <= slashCommandPickerLines; index++ {
+		paths = append(paths, fmt.Sprintf("unsafe/match-%02d\x1b[31m.go", index))
+	}
+	const safePath = "safe/match.go"
+	paths = append(paths, safePath)
+
+	service := newTestUIPathReferenceSearchService(
+		&stubUIPathReferenceCommandRunner{output: nulJoinPathReferenceOutput(paths...)},
+		unsafeFirstUIPathReferenceMatcher{},
+	)
+	t.Cleanup(service.Stop)
+	service.Search(uiPathReferenceSearchRequest{WorkspaceRoot: "/tmp/workspace", DraftToken: 1, QueryToken: 1, NormalizedQuery: "match"})
+	waitForPathReferenceEventType[uiPathReferenceCorpusReadyMsg](t, service.Events())
+	result := waitForPathReferenceEventType[uiPathReferenceMatchResultMsg](t, service.Events())
+
+	foundSafePath := false
+	for _, candidate := range result.Matches {
+		if !isTerminalSafePathReference(candidate.Path) {
+			t.Fatalf("unsafe candidate reached limited matches: %q", candidate.Path)
+		}
+		if candidate.Path == safePath {
+			foundSafePath = true
+		}
+	}
+	if !foundSafePath {
+		t.Fatalf("safe path missing after unsafe higher-ranked candidates: %+v", result.Matches)
 	}
 }
 
@@ -303,6 +335,31 @@ type blockingUIPathReferenceMatcher struct {
 	started  chan string
 	release  chan struct{}
 	finished chan string
+}
+
+type unsafeFirstUIPathReferenceMatcher struct{}
+
+func (unsafeFirstUIPathReferenceMatcher) Match(_ string, candidates []uiPathReferenceCandidate, limit int) []uiPathReferenceCandidate {
+	results := make([]uiPathReferenceCandidate, 0, min(limit, len(candidates)))
+	for _, candidate := range candidates {
+		if isTerminalSafePathReference(candidate.Path) {
+			continue
+		}
+		results = append(results, candidate)
+		if len(results) == limit {
+			return results
+		}
+	}
+	for _, candidate := range candidates {
+		if !isTerminalSafePathReference(candidate.Path) {
+			continue
+		}
+		results = append(results, candidate)
+		if len(results) == limit {
+			break
+		}
+	}
+	return results
 }
 
 func newBlockingUIPathReferenceMatcher() *blockingUIPathReferenceMatcher {
