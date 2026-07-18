@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"core/shared/clientui"
-	"core/shared/gitref"
 	"core/shared/runtimeids"
 
 	"github.com/google/uuid"
@@ -221,16 +220,10 @@ func (f WorktreeGitFacts) Validate() error {
 	if strings.TrimSpace(f.HeadObject) == "" {
 		return errors.New("git head_object is required")
 	}
-	for _, fact := range []*string{f.LockedReason, f.PrunableReason} {
+	for _, fact := range []*string{f.BranchRef, f.BranchName, f.LockedReason, f.PrunableReason} {
 		if fact != nil && strings.TrimSpace(*fact) == "" {
 			return errors.New("optional git facts must not be empty")
 		}
-	}
-	if f.Detached && (f.BranchRef != nil || f.BranchName != nil) {
-		return errors.New("detached git facts must not include branch facts")
-	}
-	if _, err := gitref.ParseOptionalLocalBranch(f.BranchRef, f.BranchName); err != nil {
-		return fmt.Errorf("git branch facts are invalid: %w", err)
 	}
 	return nil
 }

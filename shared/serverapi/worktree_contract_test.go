@@ -54,54 +54,6 @@ func TestWorktreeTopologyEntryRequiresExactlyOneMatchingPayload(t *testing.T) {
 	}
 }
 
-func TestWorktreeGitFactsRequireOneConsistentHeadShape(t *testing.T) {
-	const branchRef = "refs/heads/feature/contract"
-	const branchName = "feature/contract"
-	valid := []WorktreeGitFacts{
-		{
-			CanonicalRoot: "/repo/named",
-			HeadObject:    "named-head",
-			BranchRef:     stringPointer(branchRef),
-			BranchName:    stringPointer(branchName),
-		},
-		{
-			CanonicalRoot: "/repo/detached",
-			HeadObject:    "detached-head",
-			Detached:      true,
-		},
-		{
-			CanonicalRoot: "/repo/unknown",
-			HeadObject:    "unknown-head",
-		},
-	}
-	for _, facts := range valid {
-		if err := facts.Validate(); err != nil {
-			t.Fatalf("valid Git facts rejected: %+v: %v", facts, err)
-		}
-	}
-
-	empty := ""
-	otherName := "feature/other"
-	tagRef := "refs/tags/v1"
-	spacedRef := "refs/heads/feature/spaced "
-	spacedName := "feature/spaced "
-	invalid := []WorktreeGitFacts{
-		{CanonicalRoot: "/repo/empty-ref", HeadObject: "head", BranchRef: &empty},
-		{CanonicalRoot: "/repo/empty-name", HeadObject: "head", BranchName: &empty},
-		{CanonicalRoot: "/repo/ref-only", HeadObject: "head", BranchRef: stringPointer(branchRef)},
-		{CanonicalRoot: "/repo/name-only", HeadObject: "head", BranchName: stringPointer(branchName)},
-		{CanonicalRoot: "/repo/tag", HeadObject: "head", BranchRef: &tagRef, BranchName: stringPointer("v1")},
-		{CanonicalRoot: "/repo/spaced", HeadObject: "head", BranchRef: &spacedRef, BranchName: &spacedName},
-		{CanonicalRoot: "/repo/mismatch", HeadObject: "head", BranchRef: stringPointer(branchRef), BranchName: &otherName},
-		{CanonicalRoot: "/repo/detached-named", HeadObject: "head", BranchRef: stringPointer(branchRef), BranchName: stringPointer(branchName), Detached: true},
-	}
-	for _, facts := range invalid {
-		if err := facts.Validate(); err == nil {
-			t.Fatalf("invalid Git facts validated: %+v", facts)
-		}
-	}
-}
-
 func TestWorktreeStatusHasNoSelectorAndValidatesTypedProblems(t *testing.T) {
 	response := WorktreeStatusResponse{
 		Target: clientui.SessionExecutionTarget{

@@ -41,11 +41,11 @@ func kentCreatedBranchForCleanup(record metadata.WorktreeRecord, live *GitWorktr
 	return persisted.Branch.Name(), true, nil
 }
 
-func requiredWorktreeBranchName(worktree GitWorktree) (string, error) {
+func worktreeNamedBranch(worktree GitWorktree) (string, bool) {
 	if worktree.Branch == nil {
-		return "", errors.New("worktree must have a named branch")
+		return "", false
 	}
-	return worktree.Branch.Name(), nil
+	return worktree.Branch.Name(), true
 }
 
 type PathInspection struct {

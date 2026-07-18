@@ -21,7 +21,6 @@ import (
 	"core/server/workflow"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/gitref"
 	"core/shared/serverapi"
 	"github.com/google/uuid"
 )
@@ -468,12 +467,11 @@ func (s *Service) rebindHealthyManagedTaskWorktree(ctx context.Context, task sql
 	if err != nil {
 		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseGitFailure, Err: err}
 	}
-	branch, named := identity.NamedBranch()
 	gitMetadata := GitWorktree{
 		Root:     record.CanonicalRoot,
 		HeadOID:  revision.CommitOID,
-		Branch:   branch,
-		Detached: !named,
+		Branch:   identity.branch,
+		Detached: identity.branch == nil,
 	}
 	record.GitMetadataJSON, err = marshalGitMetadata(gitMetadata)
 	if err != nil {
@@ -667,7 +665,7 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 		SetupOperationID:    req.SetupOperationID,
 		SourceWorkspaceRoot: req.Workspace.RootPath,
 		ResolvedSettings:    &setupSettings,
-		BranchName:          branchName.Name(),
+		BranchName:          branchName,
 		WorktreeRoot:        created.record.CanonicalRoot,
 		ScriptPayload: setupScriptPayload{
 			ProjectID:   req.Task.ProjectID,
@@ -796,18 +794,15 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	if !found {
 		return DeleteTaskWorktreeResponse{}, fmt.Errorf("managed worktree %q is absent from projected topology: %w", worktreeID, serverapi.ErrWorktreeNotFound)
 	}
-	plan, err := planWorktreeDeletion(entry, &record, serverapi.WorktreeBranchCleanupModeAutoIfKentCreated)
-	if err != nil {
-		return DeleteTaskWorktreeResponse{}, err
+	var target syncedWorktree
+	targetFound := entry.Variant == serverapi.WorktreeTopologyVariantRegistered
+	if targetFound {
+		gitEntry, err := gitWorktreeFromFacts(entry.Registered.Git)
+		if err != nil {
+			return DeleteTaskWorktreeResponse{}, err
+		}
+		target = syncedWorktree{record: record, git: gitEntry}
 	}
-	target, err := deletionTarget(sessionWorkspaceContext{
-		workspaceID:   record.WorkspaceID,
-		workspaceRoot: workspaceRoot,
-	}, entry, &record, plan)
-	if err != nil {
-		return DeleteTaskWorktreeResponse{}, err
-	}
-	targetFound := target != nil
 	forceRemoval := false
 	if targetFound {
 		dirtyState, err := s.git.ProbeDirtyState(ctx, target.record.CanonicalRoot)
@@ -819,7 +814,7 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	retargetCompensation, err := s.retargetDeleteSessions(ctx, sessionWorkspaceContext{
 		workspaceID:   record.WorkspaceID,
 		workspaceRoot: workspaceRoot,
-	}, record, plan.exitReminder, nil)
+	}, record, nil)
 	if err != nil {
 		return DeleteTaskWorktreeResponse{}, err
 	}
@@ -832,8 +827,10 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	// failure must not abort the remaining metadata cleanup; otherwise the record
 	// is left pointing at a removed worktree. Treat branch deletion as best-effort
 	// and report the outcome via BranchDeleted.
-	cleanup := s.executeWorktreeBranchCleanup(ctx, workspaceRoot, plan.cleanup)
-	branchDeleted := cleanup.Kind == serverapi.WorktreeBranchCleanupOutcomeDeleted
+	branchDeleted, branchErr := s.deleteTaskWorktreeBranch(ctx, workspaceRoot, record, target, targetFound)
+	if branchErr != nil {
+		branchDeleted = false
+	}
 	if err := s.metadata.DeleteWorktreeRecordByID(ctx, worktreeID); err != nil {
 		return DeleteTaskWorktreeResponse{}, err
 	}
@@ -896,6 +893,27 @@ func (s *Service) ensureTaskWorktreeDeletionUnblocked(ctx context.Context, taskI
 		return func() {}, err
 	}
 	return s.ensureDeletionSessionAndProcessUnblocked(ctx, "", record.ID, record.CanonicalRoot)
+}
+
+func (s *Service) deleteTaskWorktreeBranch(ctx context.Context, workspaceRoot string, record metadata.WorktreeRecord, target syncedWorktree, found bool) (bool, error) {
+	if !record.Managed {
+		return false, nil
+	}
+	var live *GitWorktree
+	if found {
+		live = &target.git
+	}
+	branchName, proven, err := kentCreatedBranchForCleanup(record, live)
+	if err != nil {
+		return false, err
+	}
+	if !proven {
+		return false, nil
+	}
+	if err := s.git.deleteBranch(ctx, workspaceRoot, branchName, false); err != nil {
+		return false, fmt.Errorf("delete task worktree branch %q: %w", branchName, err)
+	}
+	return true, nil
 }
 
 type taskSourceWorkspace struct {
@@ -1061,9 +1079,9 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
-	branchName, err := requiredWorktreeBranchName(created.git)
-	if err != nil {
-		return serverapi.WorktreeCreateResponse{}, err
+	branchName, named := worktreeNamedBranch(created.git)
+	if !named {
+		return serverapi.WorktreeCreateResponse{}, errors.New("created managed worktree does not have a named branch")
 	}
 	cleanup.active = false
 	if err := s.runSetupForWorktree(ctx, setupExecutionRequest{
@@ -1494,11 +1512,16 @@ func defaultWorktreePathSeed(createSpec CreateSpec) string {
 
 func shortRefName(ref string) string {
 	trimmed := strings.TrimSpace(ref)
-	parsed, err := gitref.Parse(trimmed)
-	if err != nil {
+	switch {
+	case strings.HasPrefix(trimmed, "refs/heads/"):
+		return strings.TrimPrefix(trimmed, "refs/heads/")
+	case strings.HasPrefix(trimmed, "refs/tags/"):
+		return strings.TrimPrefix(trimmed, "refs/tags/")
+	case strings.HasPrefix(trimmed, "refs/remotes/"):
+		return strings.TrimPrefix(trimmed, "refs/remotes/")
+	default:
 		return trimmed
 	}
-	return parsed.Name()
 }
 
 // ErrWorktreeRootCollisionCap is returned when no free worktree root can be

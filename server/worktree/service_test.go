@@ -629,7 +629,7 @@ func TestCreateWorktreeAllowsExistingRefWithoutCreatingBranch(t *testing.T) {
 
 func TestCreateWorktreeFromCheckedOutHEADRollsBackDetachedRegistration(t *testing.T) {
 	env := newServiceTestEnv(t)
-	createSpec := CreateSpec{BaseRef: "HEAD", CreateBranch: false}
+	createSpec := CreateSpec{BaseRef: "HEAD"}
 	expectedRoot, err := env.service.resolveRequestedWorktreeRoot("", env.binding.WorkspaceID, createSpec)
 	if err != nil {
 		t.Fatalf("resolveRequestedWorktreeRoot: %v", err)
@@ -640,7 +640,6 @@ func TestCreateWorktreeFromCheckedOutHEADRollsBackDetachedRegistration(t *testin
 		ClientRequestID:  "req-create-detached-head",
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
-		CreateBranch:     false,
 	})
 	if err == nil {
 		t.Fatal("CreateWorktree from checked-out HEAD succeeded")
@@ -763,7 +762,7 @@ func TestSwitchWorktreeClampsCwdAndRecordsPendingReminder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorktreeRecordByID: %v", err)
 	}
-	previous := syncedWorktree{record: previousRecord, git: GitWorktree{Root: created.CanonicalRoot, Branch: mustLocalBranch(t, created.BranchRef)}}
+	previous := syncedWorktree{record: previousRecord, git: GitWorktree{Root: created.CanonicalRoot, Branch: mustLocalBranch(t, created.BranchName)}}
 	respTarget, err := env.service.switchSessionTarget(env.ctx, sessionWorkspaceContext{
 		target:        mustResolveServiceTestTarget(t, env),
 		projectID:     env.binding.ProjectID,

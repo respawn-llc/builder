@@ -350,33 +350,6 @@ func TestLeaveWorktreeRunsAtTransitionBoundary(t *testing.T) {
 	}
 }
 
-func TestAdoptExternalWorktreeRejectsMalformedBranchFactsWithoutPersisting(t *testing.T) {
-	env := newServiceTestEnv(t)
-	before, err := env.store.ListWorktreeRecordsByWorkspaceID(env.ctx, env.binding.WorkspaceID)
-	if err != nil {
-		t.Fatalf("ListWorktreeRecordsByWorkspaceID before: %v", err)
-	}
-	branchRef := "refs/heads/feature/external"
-	branchName := "feature/other"
-	_, err = env.service.adoptExternalWorktree(env.ctx, env.binding.WorkspaceID, serverapi.WorktreeGitFacts{
-		CanonicalRoot: filepath.Join(t.TempDir(), "external"),
-		HeadObject:    "deadbeef",
-		BranchRef:     &branchRef,
-		BranchName:    &branchName,
-		PathAvailable: true,
-	})
-	if err == nil {
-		t.Fatal("adoptExternalWorktree accepted mismatched branch facts")
-	}
-	after, listErr := env.store.ListWorktreeRecordsByWorkspaceID(env.ctx, env.binding.WorkspaceID)
-	if listErr != nil {
-		t.Fatalf("ListWorktreeRecordsByWorkspaceID after: %v", listErr)
-	}
-	if len(after) != len(before) {
-		t.Fatalf("worktree records changed after rejected adoption: before=%+v after=%+v", before, after)
-	}
-}
-
 func TestCloseCancelsPendingWorktreeTransitionWithoutPublishingOutcome(t *testing.T) {
 	env := newServiceTestEnv(t)
 	gate := make(chan struct{})

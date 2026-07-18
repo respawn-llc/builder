@@ -8,7 +8,6 @@ import (
 	"slices"
 	"testing"
 
-	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
@@ -184,97 +183,43 @@ func TestDeleteWorktreeAutoCleanupRetainsBranchWhenLiveProvenanceChanged(t *test
 	}
 }
 
-func TestDeleteWorktreeBranchDeleteFailureKeepsCompletedRemovalAndRetainedDiagnostic(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/delete-branch-failure")
-	env.service.git = NewGitInspector(&selectedCommandFailingGitRunner{
-		base:      execGitCommandRunner{},
-		directory: env.workspaceRoot,
-		arguments: []string{"branch", "-d", created.BranchName},
-	})
+func TestDeleteWorktreeUsesPersistedBranchFactsForMissingWorktree(t *testing.T) {
+	for _, policy := range []serverapi.WorktreeBranchCleanupMode{
+		serverapi.WorktreeBranchCleanupModeAutoIfKentCreated,
+		serverapi.WorktreeBranchCleanupModeDeleteSafe,
+	} {
+		t.Run(string(policy), func(t *testing.T) {
+			env := newServiceTestEnv(t)
+			created := mustCreateWorktree(t, env, "feature/delete-missing-"+string(policy))
+			if err := env.service.git.Remove(env.ctx, env.workspaceRoot, created.CanonicalRoot, true); err != nil {
+				t.Fatalf("Remove worktree: %v", err)
+			}
+			if exists, err := env.service.git.BranchExists(env.ctx, env.workspaceRoot, created.BranchName); err != nil || !exists {
+				t.Fatalf("persisted branch before delete exists=%v err=%v", exists, err)
+			}
 
-	result, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		OperationID:         serverapi.NewWorktreeOperationID(),
-		SessionID:           env.session.Meta().SessionID,
-		Selector:            created.WorktreeID,
-		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeDeleteSafe,
-	})
-	if err != nil {
-		t.Fatalf("DeleteWorktree: %v", err)
-	}
-	if result.Completed == nil ||
-		result.Completed.Cleanup.Kind != serverapi.WorktreeBranchCleanupOutcomeRetained ||
-		result.Completed.Cleanup.BranchName == nil ||
-		*result.Completed.Cleanup.BranchName != created.BranchName ||
-		result.Completed.Cleanup.Diagnostic == nil {
-		t.Fatalf("cleanup = %+v, want retained branch-delete failure", result.Completed)
-	}
-	if _, err := os.Stat(created.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("worktree root still exists after branch cleanup failure: %v", err)
-	}
-	if _, err := env.store.GetWorktreeRecordByID(env.ctx, created.WorktreeID); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("worktree record after branch cleanup failure = %v, want sql.ErrNoRows", err)
-	}
-	if exists, err := env.service.git.BranchExists(env.ctx, env.workspaceRoot, created.BranchName); err != nil || !exists {
-		t.Fatalf("retained branch exists=%v err=%v", exists, err)
-	}
-}
-
-func TestDeleteWorktreeMissingTopologyRetargetsWithoutReadingMalformedGitMetadata(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/delete-missing-malformed")
-	if err := env.service.git.Remove(env.ctx, env.workspaceRoot, created.CanonicalRoot, true); err != nil {
-		t.Fatalf("Remove worktree: %v", err)
-	}
-	if err := os.MkdirAll(created.CanonicalRoot, 0o755); err != nil {
-		t.Fatalf("MkdirAll leftover root: %v", err)
-	}
-	leftoverFile := filepath.Join(created.CanonicalRoot, "preserve.txt")
-	if err := os.WriteFile(leftoverFile, []byte("preserve"), 0o644); err != nil {
-		t.Fatalf("WriteFile leftover: %v", err)
-	}
-	record, err := env.store.GetWorktreeRecordByID(env.ctx, created.WorktreeID)
-	if err != nil {
-		t.Fatalf("GetWorktreeRecordByID: %v", err)
-	}
-	record.GitMetadataJSON = `{"branch_ref":"refs/heads/feature/stale","branch_name":"feature/other"}`
-	if err := env.store.UpsertWorktreeRecord(env.ctx, record); err != nil {
-		t.Fatalf("UpsertWorktreeRecord: %v", err)
-	}
-	attached := createServiceTestSession(t, env.store, env.cfg, env.binding)
-	updateServiceTestSessionTarget(t, env, attached.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
-
-	result, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		OperationID:         serverapi.NewWorktreeOperationID(),
-		SessionID:           env.session.Meta().SessionID,
-		Selector:            created.WorktreeID,
-		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeDeleteSafe,
-	})
-	if err != nil {
-		t.Fatalf("DeleteWorktree: %v", err)
-	}
-	if result.Completed == nil ||
-		result.Completed.Cleanup.Kind != serverapi.WorktreeBranchCleanupOutcomeNotApplicable ||
-		result.Completed.LeftoverRoot == nil ||
-		*result.Completed.LeftoverRoot != created.CanonicalRoot {
-		t.Fatalf("result = %+v, want missing-topology cleanup with leftover root", result)
-	}
-	target, err := env.store.ResolveSessionExecutionTarget(env.ctx, attached.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
-	}
-	if target.Worktree != nil || target.EffectiveWorkdir != env.workspaceRoot {
-		t.Fatalf("attached session target = %+v, want main workspace", target)
-	}
-	assertBranchAbsentExitReminder(t, env.runtime, created.CanonicalRoot)
-	if _, err := env.store.GetWorktreeRecordByID(env.ctx, created.WorktreeID); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("GetWorktreeRecordByID after delete error = %v, want sql.ErrNoRows", err)
-	}
-	if body, err := os.ReadFile(leftoverFile); err != nil || string(body) != "preserve" {
-		t.Fatalf("leftover file changed: body=%q err=%v", body, err)
-	}
-	if exists, err := env.service.git.BranchExists(env.ctx, env.workspaceRoot, created.BranchName); err != nil || !exists {
-		t.Fatalf("missing-topology branch exists=%v err=%v, want retained", exists, err)
+			result, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
+				OperationID:         serverapi.NewWorktreeOperationID(),
+				SessionID:           env.session.Meta().SessionID,
+				Selector:            created.WorktreeID,
+				BranchCleanupPolicy: policy,
+			})
+			if err != nil {
+				t.Fatalf("DeleteWorktree: %v", err)
+			}
+			if result.Completed == nil ||
+				result.Completed.Cleanup.Kind != serverapi.WorktreeBranchCleanupOutcomeDeleted ||
+				result.Completed.Cleanup.BranchName == nil ||
+				*result.Completed.Cleanup.BranchName != created.BranchName {
+				t.Fatalf("cleanup = %+v, want deleted persisted branch %q", result.Completed, created.BranchName)
+			}
+			if exists, err := env.service.git.BranchExists(env.ctx, env.workspaceRoot, created.BranchName); err != nil || exists {
+				t.Fatalf("persisted branch after delete exists=%v err=%v", exists, err)
+			}
+			if _, err := env.store.GetWorktreeRecordByID(env.ctx, created.WorktreeID); !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("GetWorktreeRecordByID after delete error = %v, want sql.ErrNoRows", err)
+			}
+		})
 	}
 }
 
@@ -486,21 +431,4 @@ func TestDeleteBlocksActiveOtherSessionAndRetargetsIdleOtherSession(t *testing.T
 			t.Fatalf("session %s was not retargeted: %+v", sessionID, target)
 		}
 	}
-}
-
-func assertBranchAbsentExitReminder(t *testing.T, runtime *serviceTestRuntime, worktreeRoot string) {
-	t.Helper()
-	runtime.mu.Lock()
-	reminders := append([]session.WorktreeReminderState(nil), runtime.reminderCalls...)
-	runtime.mu.Unlock()
-	for _, reminder := range reminders {
-		if reminder.Mode != session.WorktreeReminderModeExit || reminder.WorktreePath != worktreeRoot {
-			continue
-		}
-		if reminder.Branch != nil {
-			t.Fatalf("exit reminder branch = %q, want absent", *reminder.Branch)
-		}
-		return
-	}
-	t.Fatalf("branch-absent exit reminder for %q not found in %+v", worktreeRoot, reminders)
 }

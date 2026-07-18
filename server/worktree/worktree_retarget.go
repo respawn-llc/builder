@@ -10,7 +10,6 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/shared/clientui"
-	"core/shared/gitref"
 )
 
 type worktreeSessionRetargetFilter func(metadata.WorktreeSessionBlocker) bool
@@ -332,7 +331,7 @@ func worktreeReminderStateForExitedWorktree(worktree metadata.WorktreeRecord, ne
 	}, nil
 }
 
-func optionalWorktreeBranchName(branch *gitref.LocalBranch) *string {
+func optionalWorktreeBranchName(branch *localBranch) *string {
 	if branch == nil {
 		return nil
 	}
@@ -349,7 +348,7 @@ func worktreeGitMetadataFromRecord(worktree metadata.WorktreeRecord) (GitWorktre
 	if err := json.Unmarshal([]byte(metadataJSON), &persisted); err != nil {
 		return GitWorktree{}, fmt.Errorf("decode git worktree metadata: %w", err)
 	}
-	branch, err := gitref.ParseOptionalLocalBranch(persisted.BranchRef, persisted.BranchName)
+	branch, err := optionalLocalBranch(persisted.BranchRef, persisted.BranchName)
 	if err != nil {
 		return GitWorktree{}, fmt.Errorf("decode git worktree metadata: %w", err)
 	}

@@ -198,6 +198,20 @@ func TestParseGitWorktreeListPorcelainRejectsUnsupportedKeys(t *testing.T) {
 	}
 }
 
+func TestParseGitWorktreeListPorcelainRejectsNamedDetachedHead(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	for name, body := range map[string]string{
+		"branch_then_detached": "worktree " + workspaceRoot + "\nHEAD aaa111\nbranch refs/heads/main\ndetached\n",
+		"detached_then_branch": "worktree " + workspaceRoot + "\nHEAD aaa111\ndetached\nbranch refs/heads/main\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseGitWorktreeListPorcelain(body, workspaceRoot); err == nil {
+				t.Fatal("parseGitWorktreeListPorcelain accepted named detached head")
+			}
+		})
+	}
+}
+
 func TestGitInspectorAdd(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -552,18 +566,6 @@ func TestGitInspectorResolveDefaultBranchUsesConfiguredRemoteHEAD(t *testing.T) 
 		}
 	})
 
-	t.Run("supports remote names containing slashes", func(t *testing.T) {
-		workspaceRoot := newRepositoryWithRemoteHEAD(t, "team/origin", "main")
-
-		resolution, err := NewGitInspector(nil).ResolveDefaultBranch(context.Background(), workspaceRoot)
-		if err != nil {
-			t.Fatalf("ResolveDefaultBranch: %v", err)
-		}
-		if resolution.RemoteName != "team/origin" || resolution.Ref != "refs/remotes/team/origin/main" {
-			t.Fatalf("resolution = %+v, want team/origin refs/remotes/team/origin/main", resolution)
-		}
-	})
-
 	t.Run("rejects missing and ambiguous remote heads", func(t *testing.T) {
 		missingRoot := t.TempDir()
 		initGitRepo(t, missingRoot)
@@ -615,11 +617,12 @@ func TestGitInspectorValidateManagedWorktreeIdentity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ValidateManagedWorktreeIdentity: %v", err)
 		}
+		branchName, named := identity.NamedBranch()
 		if identity.SourceTopLevel != canonicalTestPath(t, sourceRoot) ||
 			identity.WorktreeTopLevel != canonicalTestPath(t, targetRoot) ||
 			identity.SourceCommonDir != identity.WorktreeCommonDir ||
-			identity.Branch == nil ||
-			identity.Branch.Ref() != "refs/heads/"+taskBranch {
+			!named ||
+			branchName != taskBranch {
 			t.Fatalf("identity = %+v", identity)
 		}
 
@@ -675,9 +678,16 @@ func TestGitInspectorValidateManagedWorktreeIdentity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("detached identity: %v", err)
 		}
-		if detachedIdentity.Branch != nil {
-			t.Fatalf("detached identity branch = %+v, want absent", detachedIdentity.Branch)
+		if branchName, named := detachedIdentity.NamedBranch(); named {
+			t.Fatalf("detached branch name = %q, want absent", branchName)
 		}
+
+		sourceRoot, targetRoot = newManagedWorktree(t, taskBranch)
+		inspector = NewGitInspector(nil)
+		const remoteHead = "refs/remotes/origin/main"
+		runGit(t, targetRoot, "update-ref", remoteHead, "HEAD")
+		runGit(t, targetRoot, "symbolic-ref", "HEAD", remoteHead)
+		assertIdentityError(t, validate(targetRoot), ManagedWorktreeIdentityErrorGitInspectionFailed)
 
 		sourceRoot, targetRoot = newManagedWorktree(t, taskBranch)
 		inspector = NewGitInspector(nil)
@@ -689,8 +699,8 @@ func TestGitInspectorValidateManagedWorktreeIdentity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("named branch identity: %v", err)
 		}
-		if identity.Branch == nil || identity.Branch.Ref() != "refs/heads/other-branch" || identity.Branch.Name() != "other-branch" {
-			t.Fatalf("named branch identity = %+v, want other branch", identity.Branch)
+		if branchName, named := identity.NamedBranch(); !named || branchName != "other-branch" {
+			t.Fatalf("named branch = %q/%v, want other branch", branchName, named)
 		}
 
 		_, err = inspector.ValidateManagedWorktreeIdentity(context.Background(), ManagedWorktreeIdentitySpec{

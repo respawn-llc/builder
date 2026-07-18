@@ -11,7 +11,6 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/shared/clientui"
-	"core/shared/gitref"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -390,11 +389,7 @@ func gitWorktreeFromFacts(facts serverapi.WorktreeGitFacts) (GitWorktree, error)
 	if err := facts.Validate(); err != nil {
 		return GitWorktree{}, err
 	}
-	return gitWorktreeFromValidatedFacts(facts)
-}
-
-func gitWorktreeFromValidatedFacts(facts serverapi.WorktreeGitFacts) (GitWorktree, error) {
-	branch, err := gitref.ParseOptionalLocalBranch(facts.BranchRef, facts.BranchName)
+	branch, err := optionalLocalBranch(facts.BranchRef, facts.BranchName)
 	if err != nil {
 		return GitWorktree{}, err
 	}
