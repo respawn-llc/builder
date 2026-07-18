@@ -614,6 +614,111 @@ func TestPendingPatchToolUsesStructuredPathAndCounts(t *testing.T) {
 	}
 }
 
+func TestWholeFileDeletionBadgeUsesTypedRemovedCountInPendingOngoingAndDetail(t *testing.T) {
+	rendered := patchformat.Render(
+		"*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n",
+		"/workspace",
+	)
+	pending := RenderPendingTool(clientui.TranscriptToolStart{
+		ToolCallID: "f0b891b5-f353-4c5c-b70f-3f907f2a7807",
+		ToolName:   "patch",
+		Presentation: &transcript.ToolCallMeta{
+			ToolName:    "patch",
+			PatchRender: &rendered,
+		},
+	}, 80, "", "⢎ ")
+	if semanticSpanCount(pending, StyleRoleToolError) != 0 {
+		t.Fatalf("pending deletion rendered removal badge: %+v", pending.Spans)
+	}
+
+	id := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
+	finalized, mismatch := patchformat.ApplyWholeFileDeletionFacts(rendered, []patchformat.WholeFileDeletionFact{{
+		PhysicalGroup: patchformat.WholeFileDeletionGroupID{FirstOperation: id},
+		OperationIDs:  []patchformat.WholeFileDeletionOperationID{id},
+		Removed:       0,
+	}})
+	if mismatch != nil {
+		t.Fatalf("finalize empty-file deletion: %+v", mismatch)
+	}
+	removed := patchformat.RemovedLineCount(finalized.Files[0])
+	if removed == nil || *removed != 0 {
+		t.Fatalf("shared removed projection = %v, want present zero", removed)
+	}
+	row := toolRow("patch", transcript.ToolPresentationDefault, finalized.DetailText(), false)
+	row.Tool.Presentation.PatchRender = &finalized
+
+	ongoing := RenderCommittedRow(row, 80, "", ModeOngoing)
+	if len(ongoing.Lines) != 1 ||
+		semanticSpanCount(ongoing.Lines[0], StyleRoleToolError) != 1 ||
+		!hasSemanticSpanText(ongoing.Lines[0], StyleRoleToolError, fmt.Sprintf("-%d", *removed)) {
+		t.Fatalf("ongoing deletion badge structure = %+v", ongoing.Lines)
+	}
+	t.Logf("empty deletion ongoing: %s", ongoing.Lines[0].Plain())
+	detail := RenderCommittedRow(row, 80, "", ModeDetailCollapsed)
+	if len(detail.Lines) != 1 ||
+		semanticSpanCount(detail.Lines[0], StyleRoleToolError) != 1 ||
+		!hasSemanticSpanText(detail.Lines[0], StyleRoleToolError, fmt.Sprintf("-%d", *removed)) {
+		t.Fatalf("detail deletion badge structure = %+v", detail.Lines)
+	}
+	t.Logf("empty deletion detail: %s", detail.Lines[0].Plain())
+}
+
+func TestWholeFileDeletionBadgeDeduplicatesPhysicalGroupPerFileAndProjectsAliases(t *testing.T) {
+	rendered := patchformat.Format(patchformat.Document{Hunks: []any{
+		patchformat.DeleteFile{Path: "target.txt"},
+		patchformat.DeleteFile{Path: "target.txt"},
+		patchformat.DeleteFile{Path: "alias.txt"},
+	}}, "/workspace")
+	first := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
+	finalized, mismatch := patchformat.ApplyWholeFileDeletionFacts(rendered, []patchformat.WholeFileDeletionFact{{
+		PhysicalGroup: patchformat.WholeFileDeletionGroupID{FirstOperation: first},
+		OperationIDs: []patchformat.WholeFileDeletionOperationID{
+			first,
+			{HunkOrdinal: 1},
+			{HunkOrdinal: 2},
+		},
+		Removed: 6,
+	}})
+	if mismatch != nil {
+		t.Fatalf("finalize alias deletion: %+v", mismatch)
+	}
+	row := toolRow("patch", transcript.ToolPresentationDefault, finalized.DetailText(), false)
+	row.Tool.Presentation.PatchRender = &finalized
+
+	ongoing := RenderCommittedRow(row, 80, "", ModeOngoing)
+	if len(ongoing.Lines) != 2 {
+		t.Fatalf("ongoing alias rows = %d, want two", len(ongoing.Lines))
+	}
+	for index, line := range ongoing.Lines {
+		if semanticSpanCount(line, StyleRoleToolError) != 1 ||
+			!hasSemanticSpanText(line, StyleRoleToolError, fmt.Sprintf("-%d", 6)) {
+			t.Fatalf("alias row %d badge structure = %+v", index, line.Spans)
+		}
+	}
+	t.Logf("populated deletion ongoing: %s", ongoing.Lines[0].Plain())
+}
+
+func semanticSpanCount(line Line, role StyleRole) int {
+	count := 0
+	for _, span := range line.Spans {
+		if span.Style.Kind == SpanStyleSemantic && span.Style.SemanticRole == role {
+			count++
+		}
+	}
+	return count
+}
+
+func hasSemanticSpanText(line Line, role StyleRole, text string) bool {
+	for _, span := range line.Spans {
+		if span.Text == text &&
+			span.Style.Kind == SpanStyleSemantic &&
+			span.Style.SemanticRole == role {
+			return true
+		}
+	}
+	return false
+}
+
 func TestCommittedMultilineShellStacksHiddenLineCountBeforeStatus(t *testing.T) {
 	command := "body=$(kent task show KENT-224 --project . --json |\n  jq -r '.body')\necho \"$body\""
 	row := toolRow("exec_command", transcript.ToolPresentationShell, command, false)

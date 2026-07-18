@@ -80,3 +80,61 @@ func TestEntryPayloadEqualIncludesPatchRenderMetadata(t *testing.T) {
 		t.Fatal("expected patch render summary change to make entries different")
 	}
 }
+
+func TestToolCallMetaEqualDistinguishesWholeFileDeletionDispositionStates(t *testing.T) {
+	id := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
+	group := patchformat.WholeFileDeletionGroupID{FirstOperation: id}
+	legacy := &ToolCallMeta{ToolName: "patch", PatchRender: &patchformat.RenderedPatch{
+		Files: []patchformat.RenderedFile{{RelPath: "target.txt"}},
+	}}
+	pending := &ToolCallMeta{ToolName: "patch", PatchRender: &patchformat.RenderedPatch{
+		Files: []patchformat.RenderedFile{{
+			RelPath: "target.txt",
+			WholeFileDeletions: []patchformat.WholeFileDeletionOperation{{
+				ID: id,
+			}},
+		}},
+	}}
+	zero := &ToolCallMeta{ToolName: "patch", PatchRender: &patchformat.RenderedPatch{
+		Files: []patchformat.RenderedFile{{
+			RelPath: "target.txt",
+			WholeFileDeletions: []patchformat.WholeFileDeletionOperation{{
+				ID: id,
+				Disposition: &patchformat.WholeFileDeletionDisposition{
+					PhysicalGroup: group,
+					Removed:       0,
+				},
+			}},
+		}},
+	}}
+
+	if ToolCallMetaEqual(legacy, pending) {
+		t.Fatal("legacy missing operation metadata equals explicit pending operation")
+	}
+	if ToolCallMetaEqual(pending, zero) {
+		t.Fatal("absent disposition equals present zero disposition")
+	}
+
+	positive := cloneToolCallMetaForEqualityTest(zero)
+	positive.PatchRender.Files[0].WholeFileDeletions[0].Disposition.Removed = 4
+	if ToolCallMetaEqual(zero, positive) {
+		t.Fatal("present zero equals present positive disposition")
+	}
+
+	otherGroup := cloneToolCallMetaForEqualityTest(positive)
+	otherGroup.PatchRender.Files[0].WholeFileDeletions[0].Disposition.PhysicalGroup.FirstOperation.HunkOrdinal = 1
+	if ToolCallMetaEqual(positive, otherGroup) {
+		t.Fatal("different physical group identity compares equal")
+	}
+
+	legacyCopy := cloneToolCallMetaForEqualityTest(legacy)
+	if !ToolCallMetaEqual(legacy, legacyCopy) {
+		t.Fatal("equivalent legacy renders compare different")
+	}
+}
+
+func cloneToolCallMetaForEqualityTest(source *ToolCallMeta) *ToolCallMeta {
+	cloned := *source
+	cloned.PatchRender = patchformat.Clone(source.PatchRender)
+	return &cloned
+}

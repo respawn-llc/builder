@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"core/internal/testharness/runtimewirefixture"
+	"core/internal/testharness/scriptedllm"
 	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	"core/server/llm"
@@ -27,10 +29,80 @@ import (
 	"core/shared/config"
 	"core/shared/invariant"
 	"core/shared/toolspec"
+	"core/shared/transcript"
+	patchformat "core/shared/transcript/patchformat"
 
 	"core/shared/sessioncontract"
 	"github.com/google/uuid"
 )
+
+type mismatchedDeletionPresentationHandler struct{}
+
+func (mismatchedDeletionPresentationHandler) Call(_ context.Context, call tools.Call) (tools.Result, error) {
+	received := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 9}
+	return tools.Result{
+		CallID: call.ID,
+		Name:   call.Name,
+		Output: json.RawMessage(`{"ok":true}`),
+		PresentationDelta: &transcript.ToolResultPresentationDelta{
+			WholeFileDeletionFacts: []patchformat.WholeFileDeletionFact{{
+				PhysicalGroup: patchformat.WholeFileDeletionGroupID{FirstOperation: received},
+				OperationIDs:  []patchformat.WholeFileDeletionOperationID{received},
+				Removed:       3,
+			}},
+		},
+	}, nil
+}
+
+func TestRuntimeWiringSnapshotsActiveDebugSettingForToolCompletionMismatch(t *testing.T) {
+	const childProcess = "KENT_RUNTIMEWIRE_DEBUG_MISMATCH_CHILD"
+	if os.Getenv(childProcess) == "" {
+		command := exec.Command(
+			os.Args[0],
+			"-test.run",
+			"TestRuntimeWiringSnapshotsActiveDebugSettingForToolCompletionMismatch",
+		)
+		command.Env = append(os.Environ(), childProcess+"=1")
+		if err := command.Run(); err == nil {
+			t.Fatal("debug mismatch child process exited successfully")
+		}
+		return
+	}
+
+	root := t.TempDir()
+	store := newRuntimeWireSession(t, root, "debug-mismatch")
+	call := llm.ToolCall{
+		ID:          "c5928052-8654-41eb-819e-b9d7e3f5200e",
+		Name:        string(toolspec.ToolPatch),
+		Custom:      true,
+		CustomInput: "*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n",
+	}
+	client := scriptedllm.NewClient(scriptedllm.Script{
+		Steps: []scriptedllm.Step{scriptedllm.ToolBatch("", call)},
+	})
+	active := runtimeWireShellSettings(config.ShellPostprocessingModeBuiltin, nil)
+	active.Debug = true
+	wiring, err := NewRuntimeWiringWithBackground(
+		store,
+		active,
+		[]toolspec.ID{toolspec.ToolPatch},
+		root,
+		nil,
+		nil,
+		nil,
+		RuntimeWiringOptions{Client: client},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
+	}
+	t.Cleanup(func() { _ = wiring.Close() })
+	wiring.LocalTools.Registry().ReplaceHandlers(tools.HandlerRegistration{
+		ID:      toolspec.ToolPatch,
+		Handler: mismatchedDeletionPresentationHandler{},
+	})
+
+	_, _ = wiring.Engine.SubmitUserMessage(context.Background(), "delete target")
+}
 
 var runtimeWireTestSessionPersistence = sessiontest.NewPersistence()
 

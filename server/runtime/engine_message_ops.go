@@ -21,6 +21,56 @@ import (
 )
 
 func (e *Engine) persistToolCompletionRaw(stepID string, r tools.Result) (session.CommitReceipt, error) {
+	payload, backgroundSessionID, hasBackgroundSession := e.prepareStoredToolCompletion(r)
+	_, receipt, err := e.store.AppendEvent(stepID, "tool_completed", payload)
+	if receipt.Committed {
+		e.applyCommittedStoredToolCompletion(
+			payload,
+			backgroundSessionID,
+			hasBackgroundSession,
+		)
+	}
+	return receipt, err
+}
+
+func (e *Engine) persistFinalizedToolCompletionRaw(
+	stepID string,
+	completion finalizedToolCompletion,
+) (session.CommitReceipt, error) {
+	if completion.OperatorFeedback == nil {
+		return e.persistToolCompletionRaw(stepID, completion.Result)
+	}
+	payload, backgroundSessionID, hasBackgroundSession := e.prepareStoredToolCompletion(
+		completion.Result,
+	)
+	feedback, ok := normalizeStoredLocalEntry(*completion.OperatorFeedback)
+	if !ok {
+		panic(fmt.Sprintf(
+			"tool completion presentation fallback requires operator feedback (call_id=%q tool=%q)",
+			completion.Result.CallID,
+			completion.Result.Name,
+		))
+	}
+	_, receipt, err := e.store.AppendTurnAtomic(stepID, []session.EventInput{
+		{Kind: "tool_completed", Payload: payload},
+		{Kind: "local_entry", Payload: feedback},
+	})
+	if receipt.Committed {
+		e.applyCommittedStoredToolCompletion(
+			payload,
+			backgroundSessionID,
+			hasBackgroundSession,
+		)
+		e.transcriptRuntimeState().AppendLocalEntryRecord(
+			*localEntryChatEntry(feedback),
+		)
+	}
+	return receipt, err
+}
+
+func (e *Engine) prepareStoredToolCompletion(
+	r tools.Result,
+) (storedToolCompletion, string, bool) {
 	if r.PresentationDelta != nil {
 		panic(fmt.Sprintf(
 			"tool result presentation invariant violated: unconsumed presentation delta reached persistence (call_id=%q tool=%q)",
@@ -46,16 +96,20 @@ func (e *Engine) persistToolCompletionRaw(stepID string, r tools.Result) (sessio
 		Presentation:  r.Presentation,
 		ProviderItems: e.providerItemsForToolCompletion(r),
 	}
-	_, receipt, err := e.store.AppendEvent(stepID, "tool_completed", payload)
-	if receipt.Committed {
-		e.markCurrentRequestShapeDirtyForSignificantMutation()
-		e.transcriptRuntimeState().RecordStoredToolCompletion(payload)
-		if hasBackgroundSession {
-			e.ensureOrchestrationCollaborators()
-			e.backgroundFlow.ConsumePendingBackgroundNotice(backgroundSessionID)
-		}
+	return payload, backgroundSessionID, hasBackgroundSession
+}
+
+func (e *Engine) applyCommittedStoredToolCompletion(
+	payload storedToolCompletion,
+	backgroundSessionID string,
+	hasBackgroundSession bool,
+) {
+	e.markCurrentRequestShapeDirtyForSignificantMutation()
+	e.transcriptRuntimeState().RecordStoredToolCompletion(payload)
+	if hasBackgroundSession {
+		e.ensureOrchestrationCollaborators()
+		e.backgroundFlow.ConsumePendingBackgroundNotice(backgroundSessionID)
 	}
-	return receipt, err
 }
 
 func (e *Engine) providerItemsForToolCompletion(r tools.Result) []llm.ResponseItem {
@@ -125,12 +179,8 @@ func (e *Engine) steerPersistedDiagnosticEntry(stepID, diagnosticKey, role, text
 }
 
 func (e *Engine) appendPersistedLocalEntryRecordRaw(stepID string, entry storedLocalEntry) (session.CommitReceipt, error) {
-	entry.Role = strings.TrimSpace(entry.Role)
-	entry.Text = strings.TrimSpace(entry.Text)
-	entry.CondensedText = strings.TrimSpace(entry.CondensedText)
-	entry.DiagnosticKey = strings.TrimSpace(entry.DiagnosticKey)
-	entry.NoticeID = strings.TrimSpace(entry.NoticeID)
-	if entry.Role == "" || entry.Text == "" {
+	entry, ok := normalizeStoredLocalEntry(entry)
+	if !ok {
 		return session.CommitReceipt{}, nil
 	}
 	_, receipt, err := e.store.AppendEvent(stepID, "local_entry", entry)
@@ -139,6 +189,18 @@ func (e *Engine) appendPersistedLocalEntryRecordRaw(stepID string, entry storedL
 		e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: localEntryChatEntry(entry), CommittedTranscriptChanged: true})
 	}
 	return receipt, err
+}
+
+func normalizeStoredLocalEntry(entry storedLocalEntry) (storedLocalEntry, bool) {
+	entry.Role = strings.TrimSpace(entry.Role)
+	entry.Text = strings.TrimSpace(entry.Text)
+	entry.CondensedText = strings.TrimSpace(entry.CondensedText)
+	entry.DiagnosticKey = strings.TrimSpace(entry.DiagnosticKey)
+	entry.NoticeID = strings.TrimSpace(entry.NoticeID)
+	if entry.Role == "" || entry.Text == "" {
+		return storedLocalEntry{}, false
+	}
+	return entry, true
 }
 
 func localEntryChatEntry(entry storedLocalEntry) *ChatEntry {

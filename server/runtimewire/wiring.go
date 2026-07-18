@@ -193,6 +193,7 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 	}
 	eng, err = runtime.New(store, client, toolRegistry, runtime.Config{
 		Model:                         active.Model,
+		Debug:                         active.Debug,
 		Temperature:                   1,
 		MaxTokens:                     0,
 		ThinkingLevel:                 active.ThinkingLevel,

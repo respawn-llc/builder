@@ -74,6 +74,10 @@ func Raw(src string) RenderedPatch {
 
 func Format(doc Document, cwd string) RenderedPatch {
 	files := buildRenderedFiles(doc, cwd)
+	return renderFiles(files)
+}
+
+func renderFiles(files []RenderedFile) RenderedPatch {
 	if len(files) == 0 {
 		return RenderedPatch{}
 	}
@@ -145,7 +149,7 @@ func buildRenderedFiles(doc Document, cwd string) []RenderedFile {
 		return &files[idx]
 	}
 
-	for _, hunk := range doc.Hunks {
+	for ordinal, hunk := range doc.Hunks {
 		switch op := hunk.(type) {
 		case AddFile:
 			file := getFile(op.Path)
@@ -179,7 +183,12 @@ func buildRenderedFiles(doc Document, cwd string) []RenderedFile {
 			if file == nil {
 				continue
 			}
-			file.Removed++
+			file.WholeFileDeletions = append(
+				file.WholeFileDeletions,
+				WholeFileDeletionOperation{
+					ID: WholeFileDeletionOperationID{HunkOrdinal: ordinal},
+				},
+			)
 			file.Diff = append(file.Diff, "-<deleted file>")
 		}
 	}
@@ -205,10 +214,179 @@ func summaryLine(file RenderedFile) string {
 	if file.Added > 0 {
 		line += fmt.Sprintf(" +%d", file.Added)
 	}
-	if file.Removed > 0 {
-		line += fmt.Sprintf(" -%d", file.Removed)
+	if removed := RemovedLineCount(file); removed != nil {
+		line += fmt.Sprintf(" -%d", *removed)
 	}
 	return line
+}
+
+func RemovedLineCount(file RenderedFile) *int {
+	total := file.Removed
+	known := file.Removed > 0
+	groups := make(map[WholeFileDeletionGroupID]struct{}, len(file.WholeFileDeletions))
+	for _, operation := range file.WholeFileDeletions {
+		if operation.Disposition == nil {
+			continue
+		}
+		known = true
+		group := operation.Disposition.PhysicalGroup
+		if _, exists := groups[group]; exists {
+			continue
+		}
+		groups[group] = struct{}{}
+		total += operation.Disposition.Removed
+	}
+	if !known {
+		return nil
+	}
+	return &total
+}
+
+func ApplyWholeFileDeletionFacts(
+	rendered RenderedPatch,
+	facts []WholeFileDeletionFact,
+) (RenderedPatch, *WholeFileDeletionFactMismatch) {
+	out := Clone(&rendered)
+	if out == nil {
+		out = &RenderedPatch{}
+	}
+	type operationLocation struct {
+		fileIndex      int
+		operationIndex int
+	}
+	expected := make([]WholeFileDeletionOperationID, 0)
+	locations := make(map[WholeFileDeletionOperationID]operationLocation)
+	for fileIndex := range out.Files {
+		for operationIndex, operation := range out.Files[fileIndex].WholeFileDeletions {
+			expected = append(expected, operation.ID)
+			if _, duplicate := locations[operation.ID]; duplicate {
+				return rendered, deletionFactMismatch(
+					WholeFileDeletionFactMismatchDuplicateOperation,
+					expected,
+					nil,
+					nil,
+					nil,
+				)
+			}
+			locations[operation.ID] = operationLocation{
+				fileIndex:      fileIndex,
+				operationIndex: operationIndex,
+			}
+		}
+	}
+
+	received := make([]WholeFileDeletionOperationID, 0, len(expected))
+	seen := make(map[WholeFileDeletionOperationID]struct{}, len(expected))
+	seenGroups := make(map[WholeFileDeletionGroupID]struct{}, len(facts))
+	for _, fact := range facts {
+		group := fact.PhysicalGroup
+		removed := fact.Removed
+		if fact.Removed < 0 {
+			return rendered, deletionFactMismatch(
+				WholeFileDeletionFactMismatchInvalidCount,
+				expected,
+				append(received, fact.OperationIDs...),
+				&group,
+				&removed,
+			)
+		}
+		if len(fact.OperationIDs) == 0 ||
+			fact.PhysicalGroup.FirstOperation != fact.OperationIDs[0] {
+			return rendered, deletionFactMismatch(
+				WholeFileDeletionFactMismatchInvalidGroup,
+				expected,
+				append(received, fact.OperationIDs...),
+				&group,
+				&removed,
+			)
+		}
+		if _, duplicate := seenGroups[group]; duplicate {
+			return rendered, deletionFactMismatch(
+				WholeFileDeletionFactMismatchInvalidGroup,
+				expected,
+				append(received, fact.OperationIDs...),
+				&group,
+				&removed,
+			)
+		}
+		seenGroups[group] = struct{}{}
+		for _, operationID := range fact.OperationIDs {
+			received = append(received, operationID)
+			if _, duplicate := seen[operationID]; duplicate {
+				return rendered, deletionFactMismatch(
+					WholeFileDeletionFactMismatchDuplicateOperation,
+					expected,
+					received,
+					&group,
+					&removed,
+				)
+			}
+			seen[operationID] = struct{}{}
+			location, exists := locations[operationID]
+			if !exists {
+				return rendered, deletionFactMismatch(
+					WholeFileDeletionFactMismatchUnexpectedOperation,
+					expected,
+					received,
+					&group,
+					&removed,
+				)
+			}
+			if out.Files[location.fileIndex].WholeFileDeletions[location.operationIndex].Disposition != nil {
+				return rendered, deletionFactMismatch(
+					WholeFileDeletionFactMismatchDuplicateOperation,
+					expected,
+					received,
+					&group,
+					&removed,
+				)
+			}
+		}
+	}
+	if len(received) != len(expected) {
+		return rendered, deletionFactMismatch(
+			WholeFileDeletionFactMismatchMissingOperation,
+			expected,
+			received,
+			nil,
+			nil,
+		)
+	}
+
+	for _, fact := range facts {
+		for _, operationID := range fact.OperationIDs {
+			location := locations[operationID]
+			out.Files[location.fileIndex].WholeFileDeletions[location.operationIndex].Disposition =
+				&WholeFileDeletionDisposition{
+					PhysicalGroup: fact.PhysicalGroup,
+					Removed:       fact.Removed,
+				}
+		}
+	}
+	return renderFiles(out.Files), nil
+}
+
+func deletionFactMismatch(
+	kind WholeFileDeletionFactMismatchKind,
+	expected []WholeFileDeletionOperationID,
+	received []WholeFileDeletionOperationID,
+	group *WholeFileDeletionGroupID,
+	removed *int,
+) *WholeFileDeletionFactMismatch {
+	mismatch := &WholeFileDeletionFactMismatch{
+		Kind:                 kind,
+		ExpectedOperationIDs: append([]WholeFileDeletionOperationID(nil), expected...),
+		ReceivedOperationIDs: append([]WholeFileDeletionOperationID(nil), received...),
+	}
+	if group != nil {
+		copyGroup := *group
+		mismatch.PhysicalGroup = &copyGroup
+	}
+	if removed != nil {
+		copyRemoved := *removed
+		mismatch.Removed = &copyRemoved
+	}
+	return mismatch
 }
 
 func detailHeader(file RenderedFile) string {
