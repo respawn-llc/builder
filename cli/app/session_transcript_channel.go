@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"core/shared/clientui"
 	"core/shared/runtimeids"
@@ -32,11 +31,15 @@ type ongoingTranscriptEventStream struct {
 
 type sessionTranscriptSubscriber func(context.Context, serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error)
 
-func startSessionTranscriptEvents(ctx context.Context, sessionID string, subscribe sessionTranscriptSubscriber) ongoingTranscriptEventStream {
-	sourceSessionID, err := runtimeids.ParseSessionID(sessionID)
-	if err != nil {
-		panic(fmt.Sprintf("start session transcript events with invalid session id %q: %v", sessionID, err))
+func startSessionTranscriptEvents(
+	ctx context.Context,
+	sourceSessionID runtimeids.SessionID,
+	subscribe sessionTranscriptSubscriber,
+) ongoingTranscriptEventStream {
+	if sourceSessionID.IsZero() {
+		panic("start session transcript events requires source session authority")
 	}
+	sessionID := sourceSessionID.String()
 	out := make(chan ongoingTranscriptEvent, 64)
 	requests := make(chan struct{}, 1)
 	if subscribe == nil {

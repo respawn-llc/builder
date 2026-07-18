@@ -145,7 +145,8 @@ func TestPTYCheckpointModelEmitsScenarioFinalAppliedAfterTerminalTransaction(t *
 	scenario.markScenarioComplete()
 	wrapped := newPTYCheckpointModel(model, writer, scenario)
 	wrapped.Update(dispatchPTYCheckpointTranscriptEvent(ongoingTranscriptEvent{
-		Kind: ongoingTranscriptEventMessage,
+		Kind:            ongoingTranscriptEventMessage,
+		SourceSessionID: ongoingTestSessionID(),
 		Message: clientui.TranscriptMessage{
 			Sequence: 2,
 			Kind:     clientui.TranscriptMessageCommittedRow,
@@ -192,7 +193,8 @@ func TestPTYCheckpointModelEmitsToolStartedOnceAfterAcceptedToolStart(t *testing
 		newPTYCheckpointScenarioState(appfixture.ScriptFinalAssistantOrdinal(1)),
 	)
 	wrapped.Update(dispatchPTYCheckpointTranscriptEvent(ongoingTranscriptEvent{
-		Kind: ongoingTranscriptEventMessage,
+		Kind:            ongoingTranscriptEventMessage,
+		SourceSessionID: ongoingTestSessionID(),
 		Message: clientui.TranscriptMessage{
 			Sequence: 3,
 			Kind:     clientui.TranscriptMessageToolStart,
@@ -217,7 +219,8 @@ func TestPTYCheckpointModelEmitsToolStartedOnceAfterAcceptedToolStart(t *testing
 		newPTYCheckpointScenarioState(appfixture.ScriptFinalAssistantOrdinal(1)),
 	)
 	wrapped.Update(dispatchPTYCheckpointTranscriptEvent(ongoingTranscriptEvent{
-		Kind: ongoingTranscriptEventMessage,
+		Kind:            ongoingTranscriptEventMessage,
+		SourceSessionID: ongoingTestSessionID(),
 		Message: clientui.TranscriptMessage{
 			Sequence: 2,
 			Kind:     clientui.TranscriptMessageToolStart,
@@ -231,7 +234,8 @@ func TestPTYCheckpointModelEmitsToolStartedOnceAfterAcceptedToolStart(t *testing
 		},
 	}))
 	wrapped.Update(dispatchPTYCheckpointTranscriptEvent(ongoingTranscriptEvent{
-		Kind: ongoingTranscriptEventMessage,
+		Kind:            ongoingTranscriptEventMessage,
+		SourceSessionID: ongoingTestSessionID(),
 		Message: clientui.TranscriptMessage{
 			Sequence: 3,
 			Kind:     clientui.TranscriptMessageToolStart,
@@ -357,7 +361,8 @@ func ptyLastTerminalOperationEnd(analysis analyzer.Analysis) int64 {
 
 func applyPTYCheckpointAssistantFinal(model *ptyCheckpointModel, sequence uint64, text string) {
 	model.Update(dispatchPTYCheckpointTranscriptEvent(ongoingTranscriptEvent{
-		Kind: ongoingTranscriptEventMessage,
+		Kind:            ongoingTranscriptEventMessage,
+		SourceSessionID: ongoingTestSessionID(),
 		Message: clientui.TranscriptMessage{
 			Sequence: sequence,
 			Kind:     clientui.TranscriptMessageCommittedRow,

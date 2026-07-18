@@ -166,6 +166,30 @@ func TestOngoingTranscriptPromptHydrationCancelsOmittedWorker(t *testing.T) {
 	_ = awaitPromptAnswerCommand(t, nextDelivery)
 }
 
+func TestOngoingTranscriptPromptHydrationKeepsRetainedDeliveryWhenDroppingDuplicateOwnership(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	control := newCancellationObservingPromptControl()
+	model := sizedTestUIModel(newProjectedStaticUIModel(), 80, 24)
+	model.promptAnswers = newTranscriptPromptAnswerer(ctx, control)
+	model.ongoingTranscript = newPromptTestOngoingTranscriptController(model, &ongoingSurfaceSpy{})
+
+	prompt := testQuestionPrompt("duplicate-owned-delivery", "Choose", "one")
+	model = deliverPromptHydration(t, model, prompt)
+	model, delivery := startPromptAnswerCommand(t, model)
+	if got := control.nextRequest(t).AskID; got != string(prompt.PromptID) {
+		t.Fatalf("blocked request prompt = %q, want %q", got, prompt.PromptID)
+	}
+	model.ask.queue = append(model.ask.queue, model.transcriptPromptEvent(prompt))
+
+	model = scratchHydratePrompts(t, model, []clientui.TranscriptPrompt{prompt})
+	control.assertNoCancellation(t)
+	control.assertNoRequest(t)
+
+	cancel()
+	_ = awaitPromptAnswerCommand(t, delivery)
+}
+
 func startPromptAnswerCommand(t *testing.T, model *uiModel) (*uiModel, <-chan tea.Msg) {
 	t.Helper()
 	next, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -257,6 +281,15 @@ func (c *cancellationObservingPromptControl) nextCancellation(t *testing.T) stri
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for prompt-control cancellation")
 		return ""
+	}
+}
+
+func (c *cancellationObservingPromptControl) assertNoCancellation(t *testing.T) {
+	t.Helper()
+	select {
+	case promptID := <-c.cancellations:
+		t.Fatalf("unexpected prompt-control cancellation for %q", promptID)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

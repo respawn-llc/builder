@@ -84,6 +84,9 @@ func newOngoingTranscriptController(
 
 func (c *ongoingTranscriptController) AcceptFrom(sourceSessionID runtimeids.SessionID, message clientui.TranscriptMessage) (ongoing.Result, tea.Cmd, error) {
 	c.validateSourceSession(sourceSessionID, message)
+	if result, ok := c.rejectDelivery(message); ok {
+		return result, nil, nil
+	}
 	var (
 		promptReconciliation    transcriptPromptReconciliation
 		hasPromptReconciliation bool
@@ -103,9 +106,6 @@ func (c *ongoingTranscriptController) AcceptFrom(sourceSessionID runtimeids.Sess
 	}
 	if err := message.Validate(); err != nil {
 		return ongoing.Result{}, nil, fmt.Errorf("validate ongoing transcript message: %w", err)
-	}
-	if result, ok := c.rejectDelivery(message); ok {
-		return result, nil, nil
 	}
 	admission, err := c.runtimeAdmission(message)
 	if err != nil {

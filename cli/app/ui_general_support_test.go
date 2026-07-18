@@ -53,10 +53,6 @@ func (s stubSessionViewClient) GetSessionExecutionEnvironment(context.Context, s
 
 func updateUIModel(t *testing.T, m *uiModel, msg tea.Msg) *uiModel {
 	t.Helper()
-	if event, ok := msg.(ongoingTranscriptEvent); ok && event.SourceSessionID.IsZero() {
-		event.SourceSessionID = ongoingTestSessionID()
-		msg = event
-	}
 	next, _ := m.Update(msg)
 	updated, ok := next.(*uiModel)
 	if !ok {

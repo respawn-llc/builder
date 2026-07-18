@@ -277,7 +277,14 @@ func (m *uiModel) commitTranscriptPromptReconciliation(reconciliation transcript
 		event.prompt = cloneTranscriptPromptForAsk(planned.prompt)
 		events = append(events, event)
 	}
+	retainedPromptIDs := make(map[clientui.PromptID]struct{}, len(reconciliation.events))
+	for _, event := range reconciliation.events {
+		retainedPromptIDs[event.prompt.PromptID] = struct{}{}
+	}
 	for _, event := range reconciliation.canceled {
+		if _, retained := retainedPromptIDs[event.promptID()]; retained {
+			continue
+		}
 		m.clearApprovalCommentaryAnswer(event.promptID())
 		if m.ask.activeDelivery != nil && m.ask.activeDelivery.key.promptID == event.promptID() {
 			m.askController().cancelActiveDelivery()

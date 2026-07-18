@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/apicontract"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -36,6 +38,10 @@ type runtimeAttachmentClients struct {
 func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, plan sessionLaunchPlan, diagnosticWriter io.Writer, startLogLine string) (*runtimeLaunchPlan, error) {
 	if source == nil {
 		return nil, errors.New("server is required")
+	}
+	sourceSessionID, err := runtimeids.ParseSessionID(plan.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("validate runtime session id: %w", err)
 	}
 	clients := source.RuntimeAttachmentClients()
 	reactivator, ownerID, err := activateSharedRuntime(ctx, clients, plan)
@@ -67,6 +73,7 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 		ctx,
 		clients,
 		plan,
+		sourceSessionID,
 		attentionSubscription,
 		reactivator,
 	)
@@ -109,6 +116,7 @@ func prepareSharedRuntimeWiring(
 	ctx context.Context,
 	clients runtimeAttachmentClients,
 	plan sessionLaunchPlan,
+	sourceSessionID runtimeids.SessionID,
 	attentionSubscription serverapi.AttentionNotificationSubscription,
 	reactivator *runtimeReactivator,
 ) (*runtimeWiring, func(), func()) {
@@ -119,7 +127,7 @@ func prepareSharedRuntimeWiring(
 	subscribeTranscript := func(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
 		return clients.SessionTranscript.SubscribeSessionTranscript(ctx, req)
 	}
-	transcriptStream := startSessionTranscriptEvents(ctx, plan.SessionID, subscribeTranscript)
+	transcriptStream := startSessionTranscriptEvents(ctx, sourceSessionID, subscribeTranscript)
 	transcriptEvents := transcriptStream.Events
 	requestTranscriptOpen := transcriptStream.RequestRehydration
 	stopTranscriptEvents := transcriptStream.Stop

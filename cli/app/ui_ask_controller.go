@@ -25,6 +25,9 @@ func (m *uiModel) reconcileTranscriptPrompts(prompts []clientui.TranscriptPrompt
 	}
 	present := make(map[clientui.PromptID]struct{}, len(prompts))
 	for _, prompt := range prompts {
+		if _, duplicate := present[prompt.PromptID]; duplicate {
+			panic(fmt.Sprintf("reconcile transcript prompts with duplicate prompt id %q", prompt.PromptID))
+		}
 		present[prompt.PromptID] = struct{}{}
 	}
 	if m.ask.hasCurrent() {
@@ -32,7 +35,8 @@ func (m *uiModel) reconcileTranscriptPrompts(prompts []clientui.TranscriptPrompt
 			m.askController().resolvePrompt(m.ask.current.prompt.PromptID)
 		}
 	}
-	for _, queued := range m.ask.queue {
+	queuedPrompts := append([]askEvent(nil), m.ask.queue...)
+	for _, queued := range queuedPrompts {
 		if _, ok := present[queued.prompt.PromptID]; !ok {
 			m.askController().resolvePrompt(queued.prompt.PromptID)
 		}

@@ -97,6 +97,29 @@ func TestRuntimeAttachmentRequiresTranscriptServiceAndReleasesRuntime(t *testing
 	}
 }
 
+func TestRuntimeAttachmentRejectsInvalidSessionIDBeforeActivation(t *testing.T) {
+	activateCalls := 0
+	server := runtimeAttachmentTestServer{
+		runtime: &recordingSessionRuntimeClient{
+			activate: func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
+				activateCalls++
+				return serverapi.SessionRuntimeActivateResponse{}, nil
+			},
+		},
+	}
+
+	plan, err := prepareSharedRuntime(context.Background(), server, sessionLaunchPlan{SessionID: "../invalid"}, io.Discard, "test")
+	if err == nil {
+		t.Fatal("expected invalid session ID error")
+	}
+	if plan != nil {
+		t.Fatalf("plan = %+v, want nil", plan)
+	}
+	if activateCalls != 0 {
+		t.Fatalf("activation calls = %d, want zero before session ID validation", activateCalls)
+	}
+}
+
 func TestRuntimeAttachmentAttentionSubscribeFailureReleasesRuntime(t *testing.T) {
 	releaseCount := 0
 	subscribeErr := errors.New("attention stream unavailable")

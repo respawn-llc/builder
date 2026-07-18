@@ -21,7 +21,8 @@ func TestStartSessionTranscriptEventsWaitsForExplicitRehydrationAfterLoss(t *tes
 			{messages: []clientui.TranscriptMessage{ongoingHydrationMessage(1)}},
 		},
 	}
-	stream := startSessionTranscriptEvents(context.Background(), "session-1", subscriber.SubscribeSessionTranscript)
+	sourceSessionID := ongoingTestSessionID()
+	stream := startSessionTranscriptEvents(context.Background(), sourceSessionID, subscriber.SubscribeSessionTranscript)
 	defer stream.Stop()
 
 	first := nextTranscriptEvent(t, stream.Events)
@@ -43,14 +44,14 @@ func TestStartSessionTranscriptEventsWaitsForExplicitRehydrationAfterLoss(t *tes
 	if second.Kind != ongoingTranscriptEventMessage || second.Message.Kind != clientui.TranscriptMessageHydration {
 		t.Fatalf("second event = %+v, want reopened hydration message", second)
 	}
-	if got, want := subscriber.sessionIDs, []string{"session-1", "session-1"}; !reflect.DeepEqual(got, want) {
+	if got, want := subscriber.sessionIDs, []string{sourceSessionID.String(), sourceSessionID.String()}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("subscribe session IDs = %v, want %v", got, want)
 	}
 }
 
 func TestStartSessionTranscriptEventsLocalCancelClosesChannel(t *testing.T) {
 	subscriber := &recordingTranscriptSubscriber{subs: []*scriptedTranscriptSubscription{{}}}
-	stream := startSessionTranscriptEvents(context.Background(), "session-1", subscriber.SubscribeSessionTranscript)
+	stream := startSessionTranscriptEvents(context.Background(), ongoingTestSessionID(), subscriber.SubscribeSessionTranscript)
 
 	stream.Stop()
 
@@ -71,7 +72,7 @@ func TestStartSessionTranscriptEventsReopensOnLocalRehydrationRequest(t *testing
 			{messages: []clientui.TranscriptMessage{ongoingHydrationMessage(1)}},
 		},
 	}
-	stream := startSessionTranscriptEvents(context.Background(), "session-1", subscriber.SubscribeSessionTranscript)
+	stream := startSessionTranscriptEvents(context.Background(), ongoingTestSessionID(), subscriber.SubscribeSessionTranscript)
 	defer stream.Stop()
 
 	first := nextTranscriptEvent(t, stream.Events)

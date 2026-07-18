@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"core/cli/tui/ongoing"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 
@@ -21,14 +22,6 @@ type promptInvariantLogger struct {
 func (l *promptInvariantLogger) Logf(_ string, args ...any) {
 	l.calls++
 	l.args = append([]any(nil), args...)
-}
-
-func captureTestPanic(run func()) (value any) {
-	defer func() {
-		value = recover()
-	}()
-	run()
-	return nil
 }
 
 func mustTestSessionID(raw string) runtimeids.SessionID {
@@ -212,7 +205,7 @@ func TestOngoingTranscriptForeignSessionPayloadPanics(t *testing.T) {
 				beforeTransition := model.Transition()
 				beforeReopens := reopens
 
-				panicValue := captureTestPanic(func() {
+				panicValue := capturePanic(func() {
 					_, _ = model.Update(ongoingTranscriptEvent{
 						Kind:            ongoingTranscriptEventMessage,
 						SourceSessionID: ongoingTestSessionID(),
@@ -261,6 +254,33 @@ func TestOngoingTranscriptPromptLiveContractMismatchPanics(t *testing.T) {
 
 func TestOngoingTranscriptPromptHydrationContractMismatchPanics(t *testing.T) {
 	runPromptContractMismatchCases(t, clientui.TranscriptMessageHydration)
+}
+
+func TestOngoingTranscriptStalePromptContractMismatchRequestsScratchBeforeReconciliation(t *testing.T) {
+	model := sizedTestUIModel(newProjectedStaticUIModel(), 80, 24)
+	model.ongoingTranscript = newPromptTestOngoingTranscriptController(model, &ongoingSurfaceSpy{})
+	prompt := testQuestionPrompt("stale-contract", "Choose", "one")
+	model = deliverPromptHydration(t, model, prompt)
+
+	stale := prompt
+	stale.StepID = mustTestStepID("dddddddd-dddd-4ddd-8ddd-dddddddddddd")
+	result, command, err := model.ongoingTranscript.AcceptFrom(
+		ongoingTestSessionID(),
+		clientui.TranscriptMessage{
+			Sequence: 3,
+			Kind:     clientui.TranscriptMessagePromptPending,
+			Payload:  clientui.TranscriptPayload{PromptPending: &stale},
+		},
+	)
+	if err != nil {
+		t.Fatalf("accept stale contract mismatch: %v", err)
+	}
+	if command != nil {
+		t.Fatal("stale contract mismatch returned a state command")
+	}
+	if result.Action != ongoing.ResultRequestScratchRehydration {
+		t.Fatalf("stale contract mismatch action = %q, want scratch rehydration", result.Action)
+	}
 }
 
 func TestOngoingTranscriptPromptResolvedContractMismatchPanics(t *testing.T) {
@@ -358,7 +378,7 @@ func runPromptContractMismatchCases(t *testing.T, messageKind clientui.Transcrip
 					}
 					surfaceCalls := len(surface.calls)
 					notifications := ringer.total()
-					panicValue := captureTestPanic(func() {
+					panicValue := capturePanic(func() {
 						_, _ = model.Update(ongoingTranscriptEvent{
 							Kind:            ongoingTranscriptEventMessage,
 							SourceSessionID: ongoingTestSessionID(),

@@ -54,6 +54,42 @@ func TestOngoingTranscriptPromptHydrationPreservesFIFO(t *testing.T) {
 	}
 }
 
+func TestFallbackTranscriptPromptReconciliationRejectsDuplicateIDsAtomically(t *testing.T) {
+	model := newProjectedStaticUIModel()
+	prompt := testQuestionPrompt("duplicate-fallback", "Choose", "one")
+
+	recovered := capturePanic(func() {
+		model.reconcileTranscriptPrompts([]clientui.TranscriptPrompt{prompt, prompt})
+	})
+	if recovered == nil {
+		t.Fatal("duplicate fallback prompts did not panic")
+	}
+	if testActiveAsk(model) != nil || len(model.ask.queue) != 0 {
+		t.Fatalf("duplicate fallback prompts partially committed: active=%v queue=%d", testActiveAsk(model) != nil, len(model.ask.queue))
+	}
+}
+
+func TestFallbackTranscriptPromptReconciliationRemovesEveryOmittedQueuedPrompt(t *testing.T) {
+	model := newProjectedStaticUIModel()
+	active := testQuestionPrompt("fallback-active", "Active", "one")
+	firstOmitted := testQuestionPrompt("fallback-omitted-1", "First omitted", "one")
+	firstOmitted.CreatedAt = active.CreatedAt.Add(time.Second)
+	secondOmitted := testQuestionPrompt("fallback-omitted-2", "Second omitted", "one")
+	secondOmitted.CreatedAt = active.CreatedAt.Add(2 * time.Second)
+	for _, prompt := range []clientui.TranscriptPrompt{active, firstOmitted, secondOmitted} {
+		model.askController().acceptEvent(model.transcriptPromptEvent(prompt))
+	}
+
+	model.reconcileTranscriptPrompts([]clientui.TranscriptPrompt{active})
+
+	if current := testActiveAsk(model); current == nil || current.prompt.PromptID != active.PromptID {
+		t.Fatalf("fallback active prompt = %+v, want %q", current, active.PromptID)
+	}
+	if len(model.ask.queue) != 0 {
+		t.Fatalf("fallback reconciliation retained %d omitted queued prompts", len(model.ask.queue))
+	}
+}
+
 func TestOngoingTranscriptPromptExactIDsDoNotCollide(t *testing.T) {
 	control := newRecordingPromptControl()
 	model := newDeferredApprovalTestModel(&runtimeControlFakeClient{}, control)
