@@ -38,6 +38,7 @@ func TestInteractiveConnectionClassifierUsesTypedEvidence(t *testing.T) {
 		{name: "timeout is inconclusive", operation: interactiveConnectionOperationUnary, err: interactiveConnectionTimeoutError{}, want: interactiveConnectionOutcomeInconclusiveOperationFailure},
 		{name: "stream termination is inconclusive", operation: interactiveConnectionOperationStream, err: serverapi.ErrStreamUnavailable, want: interactiveConnectionOutcomeInconclusiveOperationFailure},
 		{name: "graceful stream eof is inconclusive", operation: interactiveConnectionOperationStream, err: io.EOF, want: interactiveConnectionOutcomeInconclusiveOperationFailure},
+		{name: "normalized graceful stream eof is inconclusive", operation: interactiveConnectionOperationStream, err: errors.Join(serverapi.ErrStreamFailed, io.EOF), want: interactiveConnectionOutcomeInconclusiveOperationFailure},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -45,6 +46,17 @@ func TestInteractiveConnectionClassifierUsesTypedEvidence(t *testing.T) {
 				t.Fatalf("classifyInteractiveConnection(%v, %T) = %v, want %v", tc.operation, tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestInteractiveConnectionOwnerIgnoresGracefulStreamClose(t *testing.T) {
+	t.Parallel()
+
+	owner := newInteractiveConnectionOwner()
+	owner.ObserveStream(errors.Join(serverapi.ErrStreamFailed, io.EOF))
+
+	if owner.IsDisconnected() {
+		t.Fatal("graceful stream close persisted a disconnect")
 	}
 }
 

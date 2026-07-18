@@ -170,10 +170,14 @@ func (c *webSocketConn) OnClose(_ *gws.Conn, err error) {
 	if c.closeRequested.Load() {
 		return
 	}
+	var closeErr *gws.CloseError
 	if err == nil {
-		err = io.EOF
+		c.publishError(io.EOF)
+	} else if errors.As(err, &closeErr) {
+		c.publishError(errors.Join(io.EOF, err))
+	} else {
+		c.publishError(errors.Join(ErrTransportClosed, err))
 	}
-	c.publishError(errors.Join(ErrTransportClosed, err))
 	_ = c.Close()
 }
 

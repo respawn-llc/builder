@@ -9,7 +9,6 @@ import (
 	"core/cli/app/commands"
 	"core/shared/apicontract"
 	"core/shared/config"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -49,23 +48,10 @@ type sessionLifecycleOptions struct {
 	Connection *interactiveConnectionOwner
 }
 
-func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, interactor authInteractor, initialSessionID string) error {
-	var intent *serverapi.SessionLaunchIntent
-	if trimmed := strings.TrimSpace(initialSessionID); trimmed != "" {
-		sessionID, err := runtimeids.ParseSessionID(trimmed)
-		if err != nil {
-			return err
-		}
-		open := serverapi.OpenExistingSessionLaunchIntent(sessionID)
-		intent = &open
-	}
-	return runSessionLifecycleWithOptions(ctx, server, interactor, sessionLifecycleOptions{Intent: intent, Connection: &interactiveConnectionOwner{}})
-}
-
 func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessionServer, interactor authInteractor, opts sessionLifecycleOptions) error {
 	connection := opts.Connection
 	if connection == nil {
-		connection = &interactiveConnectionOwner{}
+		return errors.New("interactive connection owner is required")
 	}
 	originalServer := server
 	boundServer, err := ensureInteractiveProjectBinding(ctx, server)

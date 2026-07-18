@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -165,10 +167,15 @@ func TestWebSocketTransportSecureRoundTrip(t *testing.T) {
 	}
 }
 
-func TestWebSocketTransportReportsUnexpectedPeerCloseAsTransportLoss(t *testing.T) {
+func TestWebSocketTransportReportsGracefulPeerCloseAsEOF(t *testing.T) {
 	transport := NewWebSocketTransport()
 	server := httptest.NewServer(transport.Handler(func(_ context.Context, conn Conn) {
-		_ = conn.Close()
+		adapter, ok := conn.(*webSocketConn)
+		if !ok {
+			t.Errorf("server connection type = %T, want *webSocketConn", conn)
+			return
+		}
+		_ = adapter.socket.WriteClose(1000, nil)
 	}))
 	defer server.Close()
 
@@ -185,12 +192,38 @@ func TestWebSocketTransportReportsUnexpectedPeerCloseAsTransportLoss(t *testing.
 	select {
 	case event, ok := <-conn.Events():
 		if !ok {
-			t.Fatal("Events closed without typed transport-loss event")
+			t.Fatal("Events closed without graceful EOF event")
 		}
-		if !errors.Is(event.Err, ErrTransportClosed) {
-			t.Fatalf("unexpected peer-close error = %v, want ErrTransportClosed", event.Err)
+		if !errors.Is(event.Err, io.EOF) {
+			t.Fatalf("graceful peer-close error = %v, want EOF", event.Err)
+		}
+		if errors.Is(event.Err, ErrTransportClosed) {
+			t.Fatalf("graceful peer-close error = %v, must not carry ErrTransportClosed", event.Err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for peer-close event")
+	}
+}
+
+func TestWebSocketConnAnnotatesPeerCloseFailureAsTransportLoss(t *testing.T) {
+	conn := newWebSocketConn()
+	transportErr := &net.OpError{Op: "read", Net: "tcp", Err: errors.New("reset")}
+
+	conn.OnClose(nil, transportErr)
+
+	event := <-conn.Events()
+	if !errors.Is(event.Err, ErrTransportClosed) || !errors.Is(event.Err, transportErr) {
+		t.Fatalf("failed peer-close error = %v, want transport sentinel and cause", event.Err)
+	}
+}
+
+func TestWebSocketConnAnnotatesAbruptPeerEOFAsTransportLoss(t *testing.T) {
+	conn := newWebSocketConn()
+
+	conn.OnClose(nil, io.EOF)
+
+	event := <-conn.Events()
+	if !errors.Is(event.Err, ErrTransportClosed) || !errors.Is(event.Err, io.EOF) {
+		t.Fatalf("abrupt peer EOF = %v, want transport sentinel and EOF", event.Err)
 	}
 }

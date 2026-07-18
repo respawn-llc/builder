@@ -294,7 +294,7 @@ func TestSessionSelectionPickerCreateSendsCreateNewWithoutParent(t *testing.T) {
 		}},
 	}
 
-	if err := runSessionLifecycle(context.Background(), server, nil, ""); !errors.Is(err, stopErr) {
+	if err := runSessionLifecycleForTest(context.Background(), server, nil, ""); !errors.Is(err, stopErr) {
 		t.Fatalf("runSessionLifecycle error = %v, want %v", err, stopErr)
 	}
 	if planCalls != 1 {

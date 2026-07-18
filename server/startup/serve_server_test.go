@@ -150,6 +150,24 @@ func startServingTestServer(t *testing.T, server *ServeServer) {
 			t.Errorf("Serve error = %v, want context canceled", serveErr)
 		}
 	})
+	waitForServeListener(t, server.Config())
+}
+
+func waitForServeListener(t *testing.T, cfg config.App) {
+	t.Helper()
+	address := net.JoinHostPort(cfg.Settings.ServerHost, strconv.Itoa(cfg.Settings.ServerPort))
+	var dialErr error
+	if !testsetup.Until(time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
+		conn, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+		dialErr = err
+		if err != nil {
+			return false
+		}
+		_ = conn.Close()
+		return true
+	}) {
+		t.Fatalf("serve listener %s did not become dialable: %v", address, dialErr)
+	}
 }
 
 func waitForServeResponse(t *testing.T, httpClient *http.Client, url string) *http.Response {

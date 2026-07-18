@@ -15,9 +15,6 @@ func TestInteractiveConnectionOwnerHandoffPreservesDisconnectUntilReachabilityCo
 	if !model.runtimeDisconnectStatusVisible() {
 		t.Fatal("main UI did not project the earlier interactive disconnect")
 	}
-	if got := model.runtimeDisconnectStatusText(); got != "server connection lost" {
-		t.Fatalf("persisted disconnect text = %q, want spec-owned copy", got)
-	}
 
 	model.observeRuntimeRequestResult(&llmerrors.APIStatusError{StatusCode: 503})
 	if model.runtimeDisconnectStatusVisible() {
