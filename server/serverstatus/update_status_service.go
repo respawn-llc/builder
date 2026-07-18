@@ -48,7 +48,7 @@ type updateStatusOperation struct {
 	done          chan struct{}
 	terminal      updateStatusTerminal
 	waiters       int
-	latestVersion string
+	latestVersion *string
 }
 
 type updateStatusTerminal struct {
@@ -60,7 +60,7 @@ type updateStatusTerminal struct {
 func NewUpdateStatusService(currentVersion string, dependencies Dependencies) *UpdateStatusService {
 	releaseSource := dependencies.ReleaseSource
 	if releaseSource == nil {
-		releaseSource = NewGitHubReleaseMetadataSource(nil, "")
+		releaseSource = NewDefaultGitHubReleaseMetadataSource()
 	}
 	lifecycle, cancel := context.WithCancel(context.Background())
 	return &UpdateStatusService{
@@ -150,7 +150,7 @@ func (s *UpdateStatusService) checkUpdateStatus(
 	if err != nil {
 		return classifyReleaseSourceFailure(err)
 	}
-	operation.latestVersion = metadata.Version
+	operation.latestVersion = &metadata.Version
 	latestVersion, err := parseUpdateVersion(metadata.Version)
 	if err != nil {
 		return serverapi.FailedUpdateStatusResult(fmt.Sprintf("latest release version is invalid: %v", err))
@@ -283,15 +283,23 @@ func (s *UpdateStatusService) invariantFailureResultLocked(
 	operationName string,
 	cause string,
 ) serverapi.UpdateStatusResult {
-	s.policy.Check(false, invariant.UpdateStatusDiagnostic(invariant.UpdateStatusDiagnosticInput{
+	s.policy.Check(false, s.invariantDiagnostic(operation, operationName, cause))
+	return serverapi.FailedUpdateStatusResult("internal update checker failure: " + cause)
+}
+
+func (s *UpdateStatusService) invariantDiagnostic(
+	operation *updateStatusOperation,
+	operationName string,
+	cause string,
+) invariant.Diagnostic {
+	return invariant.UpdateStatusDiagnostic(invariant.UpdateStatusDiagnosticInput{
 		Operation:      operationName,
 		CurrentVersion: strings.TrimSpace(s.currentVersion),
 		LatestVersion:  operation.latestVersion,
 		CacheState:     updateStatusCacheState(s.completed),
 		InflightState:  updateStatusInflightState(s.inflight, operation),
 		Cause:          cause,
-	}))
-	return serverapi.FailedUpdateStatusResult("internal update checker failure: " + cause)
+	})
 }
 
 func updateStatusCacheState(completed *completedUpdateStatus) string {

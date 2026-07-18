@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 
@@ -75,7 +74,7 @@ func (c uiInputController) submitCmd(text string, queuedID string) tea.Cmd {
 		})
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, serverapi.ErrRuntimeOperationCanceled) {
-				return newSubmitDoneMsg(token, "", text, runtimeattach.ErrSubmissionInterrupted)
+				return newSubmitDoneMsg(token, "", text, errRuntimeSubmissionInterrupted)
 			}
 			return newSubmitDoneMsg(token, "", text, err)
 		}
@@ -97,7 +96,7 @@ func (c uiInputController) submitUserShellCmd(originalText, command string) tea.
 		err := m.submitRuntimeShell(context.Background(), clientui.RuntimeShellRequest{OperationRef: operationRef, Command: command})
 		if err != nil {
 			if isRuntimeOperationInterrupted(err) {
-				return newSubmitDoneMsg(token, "", originalText, runtimeattach.ErrSubmissionInterrupted)
+				return newSubmitDoneMsg(token, "", originalText, errRuntimeSubmissionInterrupted)
 			}
 			return newSubmitDoneMsg(token, "", originalText, err)
 		}
@@ -216,7 +215,7 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 			m.layout().syncViewport()
 			return m, tea.Batch(restoreInjectedCmd, m.interruptedStatusNoticeCmd())
 		}
-		detailErr := runtimeattach.FormatSubmissionError(msg.err)
+		detailErr := formatRuntimeSubmissionError(msg.err)
 		m.activity = uiActivityError
 		m.logf("step.error err=%q", detailErr)
 		m.layout().syncViewport()
@@ -321,7 +320,7 @@ func (c uiInputController) handleCompactDone(msg compactDoneMsg) (tea.Model, tea
 			m.layout().syncViewport()
 			return m, tea.Batch(restoreInjectedCmd, m.interruptedStatusNoticeCmd())
 		}
-		detailErr := runtimeattach.FormatSubmissionError(msg.err)
+		detailErr := formatRuntimeSubmissionError(msg.err)
 		m.activity = uiActivityError
 		appendCmd := m.appendLocalEntryWithNoticeID(operatorErrorFeedbackRole, detailErr, "")
 		m.logf("compaction.error err=%q", detailErr)
@@ -399,7 +398,7 @@ func (m *uiModel) shouldRestoreSubmittedTextOnSubmitError(err error) bool {
 }
 
 func isRuntimeOperationInterrupted(err error) bool {
-	return errors.Is(err, runtimeattach.ErrSubmissionInterrupted) ||
+	return errors.Is(err, errRuntimeSubmissionInterrupted) ||
 		errors.Is(err, context.Canceled) ||
 		errors.Is(err, serverapi.ErrRuntimeOperationCanceled)
 }

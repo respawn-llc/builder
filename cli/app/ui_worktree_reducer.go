@@ -4,7 +4,6 @@ import (
 	"errors"
 	"strings"
 
-	"core/cli/app/internal/runtimeattach"
 	"core/cli/app/internal/worktreeui"
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -50,13 +49,13 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 		}
 		m.worktrees.listPending = false
 		if msg.err != nil {
-			m.worktrees.errorText = runtimeattach.FormatSubmissionError(msg.err)
+			m.worktrees.errorText = formatRuntimeSubmissionError(msg.err)
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
 		}
 		m.worktrees.errorText = ""
 		if err := m.applyWorktreeListResponse(msg.resp); err != nil {
-			m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+			m.worktrees.errorText = formatRuntimeSubmissionError(err)
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
 		}
@@ -72,30 +71,30 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 		}
 		m.worktrees.deleteTargetResolutionPending = false
 		if msg.err != nil {
-			m.worktrees.errorText = runtimeattach.FormatSubmissionError(msg.err)
+			m.worktrees.errorText = formatRuntimeSubmissionError(msg.err)
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
 		}
 		target, err := worktreeui.ProjectSelectorPreview(msg.resp)
 		if err != nil {
-			m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+			m.worktrees.errorText = formatRuntimeSubmissionError(err)
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
 		}
 		if err := worktreeui.ValidateDeletionTarget(target); err != nil {
-			m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+			m.worktrees.errorText = formatRuntimeSubmissionError(err)
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
 		}
 		targetIdentity, err := worktreeui.SelectionIdentityForItem(target)
 		if err != nil {
-			m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+			m.worktrees.errorText = formatRuntimeSubmissionError(err)
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
 		}
 		listedTarget, idx, ok, err := worktreeui.FindByIdentity(m.worktrees.entries, targetIdentity)
 		if err != nil {
-			m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+			m.worktrees.errorText = formatRuntimeSubmissionError(err)
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
 		}
@@ -105,7 +104,7 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 			m.worktrees.entries[idx] = target
 			m.worktrees.selection = idx + 1
 			if err := m.recordWorktreeSelection(); err != nil {
-				m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+				m.worktrees.errorText = formatRuntimeSubmissionError(err)
 				m.layout().syncViewport()
 				return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
 			}
@@ -129,11 +128,11 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 		m.worktrees.create.submitting = false
 		if msg.err != nil {
 			if !m.worktrees.open {
-				status := runtimeattach.FormatSubmissionError(msg.err)
+				status := formatRuntimeSubmissionError(msg.err)
 				m.layout().syncViewport()
 				return handledUIFeatureUpdate(m, m.sendTransientStatusWithNoticeID(status, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
 			}
-			m.worktrees.create.errorText = runtimeattach.FormatSubmissionError(msg.err)
+			m.worktrees.create.errorText = formatRuntimeSubmissionError(msg.err)
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
 		}
@@ -167,7 +166,7 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 			return handledUIFeatureUpdate(m, nil)
 		}
 		if msg.err != nil {
-			m.worktrees.create.errorText = runtimeattach.FormatSubmissionError(msg.err)
+			m.worktrees.create.errorText = formatRuntimeSubmissionError(msg.err)
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
 		}
@@ -188,11 +187,11 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 		if msg.err != nil {
 			followUp = m.takeQueuedWorktreeSwitchCmd()
 			if !m.worktrees.open {
-				status := runtimeattach.FormatSubmissionError(msg.err)
+				status := formatRuntimeSubmissionError(msg.err)
 				m.layout().syncViewport()
 				return handledUIFeatureUpdate(m, tea.Batch(m.sendTransientStatusWithNoticeID(status, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""), followUp))
 			}
-			m.worktrees.errorText = runtimeattach.FormatSubmissionError(msg.err)
+			m.worktrees.errorText = formatRuntimeSubmissionError(msg.err)
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, tea.Batch(followUp, m.reconcileSpinnerTicking(false)))
 		}
@@ -221,11 +220,11 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 				return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
 			}
 			if !m.worktrees.open {
-				status := runtimeattach.FormatSubmissionError(msg.err)
+				status := formatRuntimeSubmissionError(msg.err)
 				m.layout().syncViewport()
 				return handledUIFeatureUpdate(m, m.sendTransientStatusWithNoticeID(status, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
 			}
-			m.worktrees.deleteConfirm.errorText = runtimeattach.FormatSubmissionError(msg.err)
+			m.worktrees.deleteConfirm.errorText = formatRuntimeSubmissionError(msg.err)
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
 		}
@@ -260,7 +259,7 @@ func (m *uiModel) reduceWorktreeMessage(msg tea.Msg) uiFeatureUpdateResult {
 		}
 		errorText := ""
 		if msg.err != nil {
-			errorText = runtimeattach.FormatSubmissionError(msg.err)
+			errorText = formatRuntimeSubmissionError(msg.err)
 		}
 		state, outcome := worktreeui.Done(m.worktrees.create.resolveState(), worktreeui.DoneInput{
 			Token:         msg.token,

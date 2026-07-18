@@ -30,6 +30,7 @@ type ReadinessBoundaryKind = analyzer.ReadinessBoundaryKind
 
 const (
 	ReadinessRendererFrame        = analyzer.ReadinessRendererFrame
+	ReadinessNativeOngoingFrame   = analyzer.ReadinessNativeOngoingFrame
 	ReadinessInputApplied         = analyzer.ReadinessInputApplied
 	ReadinessNormalBufferRestored = analyzer.ReadinessNormalBufferRestored
 )
@@ -106,20 +107,25 @@ type PrivateModeChange = analyzer.PrivateModeChange
 type PhaseKind = analyzer.PhaseKind
 
 const (
-	PhaseScenarioStart            = analyzer.PhaseScenarioStart
-	PhaseWindowStart              = analyzer.PhaseWindowStart
-	PhaseWindowEnd                = analyzer.PhaseWindowEnd
-	PhaseReadyForQuit             = analyzer.PhaseReadyForQuit
-	PhaseScenarioComplete         = analyzer.PhaseScenarioComplete
-	PhaseInputApplied             = analyzer.PhaseInputApplied
-	PhaseDetailInitialPageApplied = analyzer.PhaseDetailInitialPageApplied
-	PhaseScenarioFinalApplied     = analyzer.PhaseScenarioFinalApplied
-	PhaseToolStarted              = analyzer.PhaseToolStarted
-	PhaseAppRunStarted            = analyzer.PhaseAppRunStarted
-	PhaseAuthPickerReady          = analyzer.PhaseAuthPickerReady
-	PhaseSessionPickerReady       = analyzer.PhaseSessionPickerReady
-	PhaseMainUIReady              = analyzer.PhaseMainUIReady
-	PhaseAppRunExited             = analyzer.PhaseAppRunExited
+	PhaseScenarioStart                     = analyzer.PhaseScenarioStart
+	PhaseWindowStart                       = analyzer.PhaseWindowStart
+	PhaseWindowEnd                         = analyzer.PhaseWindowEnd
+	PhaseReadyForQuit                      = analyzer.PhaseReadyForQuit
+	PhaseScenarioComplete                  = analyzer.PhaseScenarioComplete
+	PhaseInputApplied                      = analyzer.PhaseInputApplied
+	PhaseDetailInitialPageApplied          = analyzer.PhaseDetailInitialPageApplied
+	PhaseScenarioFinalApplied              = analyzer.PhaseScenarioFinalApplied
+	PhaseToolStarted                       = analyzer.PhaseToolStarted
+	PhaseAppRunStarted                     = analyzer.PhaseAppRunStarted
+	PhaseAuthPickerReady                   = analyzer.PhaseAuthPickerReady
+	PhaseSessionPickerReady                = analyzer.PhaseSessionPickerReady
+	PhasePickerRequestCanceled             = analyzer.PhasePickerRequestCanceled
+	PhaseTranscriptSubscriptionEstablished = analyzer.PhaseTranscriptSubscriptionEstablished
+	PhaseInitialInputLoaded                = analyzer.PhaseInitialInputLoaded
+	PhaseTranscriptTransportLost           = analyzer.PhaseTranscriptTransportLost
+	PhaseMainUIReady                       = analyzer.PhaseMainUIReady
+	PhaseMainRequestReachable              = analyzer.PhaseMainRequestReachable
+	PhaseAppRunExited                      = analyzer.PhaseAppRunExited
 )
 
 type WindowID = analyzer.WindowID

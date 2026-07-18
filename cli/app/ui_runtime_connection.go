@@ -4,11 +4,10 @@ import (
 	"io"
 	"strings"
 
-	"core/cli/app/internal/connectionstate"
 	"core/shared/clientui"
 )
 
-const runtimeDisconnectedStatusMessage = "server disconnected"
+const runtimeDisconnectedStatusMessage = "server connection lost"
 
 func (m *uiModel) observeRuntimeRequestResult(err error) {
 	if m == nil || !m.hasRuntimeClient() || m.connectionState == nil {
@@ -76,9 +75,9 @@ func (m *uiModel) setRuntimeDisconnected(disconnected bool) {
 	m.connectionState.ObserveUnary(nil)
 }
 
-func (m *uiModel) observeRuntimeStreamResult(err error) connectionstate.Outcome {
+func (m *uiModel) observeRuntimeStreamResult(err error) interactiveConnectionOutcome {
 	if m == nil || m.connectionState == nil {
-		return connectionstate.Classify(connectionstate.OperationStream, err)
+		return classifyInteractiveConnection(interactiveConnectionOperationStream, err)
 	}
 	return m.connectionState.ObserveStream(err)
 }

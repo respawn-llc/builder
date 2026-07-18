@@ -29,7 +29,14 @@ func (m *uiModel) reduceOngoingMessage(msg tea.Msg) uiFeatureUpdateResult {
 }
 
 func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea.Cmd {
-	if m == nil || m.ongoingTranscript == nil {
+	if m == nil {
+		return nil
+	}
+	if event.Kind == ongoingTranscriptEventReachable {
+		m.observeRuntimeStreamResult(nil)
+		return m.batchWithNativeOngoingRepaint(nil)
+	}
+	if m.ongoingTranscript == nil {
 		return nil
 	}
 	var (
@@ -57,7 +64,9 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 		if m.turnQueueHook != nil {
 			m.turnQueueHook.OnTurnQueueAborted()
 		}
+		m.observeRuntimeStreamResult(event.Err)
 		result = m.ongoingTranscript.HandleSubscriptionLoss()
+		return m.batchWithNativeOngoingRepaint(m.handleOngoingResult(result))
 	default:
 		if m.debugMode {
 			panic("unknown ongoing transcript event kind")

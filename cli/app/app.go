@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"core/cli/app/internal/connectionstate"
 	"core/cli/app/internal/embeddedattach"
 	"core/cli/app/internal/runner"
 	"core/shared/serverapi"
@@ -30,7 +29,7 @@ type Options struct {
 }
 
 func Run(ctx context.Context, opts Options) error {
-	connection := connectionstate.NewOwner()
+	connection := newInteractiveConnectionOwner()
 	return runner.RunInteractive(ctx, runnerRequestFromOptions(opts), runner.Dependencies[interactiveSessionServer, authInteractor, embeddedattach.StartupOptions]{
 		NewAuthInteractor: func() authInteractor {
 			return newInteractiveAuthInteractorWithConnection(connection)

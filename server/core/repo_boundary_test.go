@@ -962,7 +962,6 @@ type cliInternalBoundaryCase struct {
 func TestCLIAppInternalPackageBoundaries(t *testing.T) {
 	cases := []cliInternalBoundaryCase{
 		{Name: "Status", Packages: []string{"status"}, Label: "status package"},
-		{Name: "RuntimeAttach", Packages: []string{"runtimeattach"}, Label: "runtime connection package", ForbidServer: true},
 		{Name: "AuthUI", Packages: []string{"authui"}, Label: "auth UI package"},
 		{Name: "ServerAttach", Packages: []string{"serverattach"}, Label: "server attach package", ForbidServer: true},
 		{Name: "DaemonLaunch", Packages: []string{"daemonlaunch"}, Label: "daemon launch package", ForbidAllCore: true},

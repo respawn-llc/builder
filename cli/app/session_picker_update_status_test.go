@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"core/cli/app/internal/connectionstate"
 	"core/shared/config"
 	"core/shared/serverapi"
 
@@ -114,8 +113,8 @@ func TestSessionPickerUpdateStatusRunsIndependentlyOfInitialPageLoads(t *testing
 	case <-time.After(time.Second):
 		t.Fatal("blocked update request did not complete")
 	}
-	if model.updateStatus.kind != sessionPickerUpdateAvailable {
-		t.Fatalf("update state = %q, want available", model.updateStatus.kind)
+	if model.updateStatus == nil || model.updateStatus.Kind() != serverapi.UpdateStatusAvailable {
+		t.Fatalf("update result = %+v, want available", model.updateStatus)
 	}
 }
 
@@ -125,27 +124,27 @@ func TestSessionPickerUpdateStatusMapsOnlyValidatedResultVariants(t *testing.T) 
 	tests := []struct {
 		name string
 		resp serverapi.UpdateStatusResponse
-		want sessionPickerUpdateKind
+		want serverapi.UpdateStatusResultKind
 	}{
 		{
 			name: "current",
 			resp: serverapi.UpdateStatusResponse{Result: serverapi.CurrentUpdateStatusResult("1.0.0", "1.0.0")},
-			want: sessionPickerUpdateCurrent,
+			want: serverapi.UpdateStatusCurrent,
 		},
 		{
 			name: "available",
 			resp: serverapi.UpdateStatusResponse{Result: serverapi.AvailableUpdateStatusResult("1.0.0", "1.1.0")},
-			want: sessionPickerUpdateAvailable,
+			want: serverapi.UpdateStatusAvailable,
 		},
 		{
 			name: "network unavailable",
 			resp: serverapi.UpdateStatusResponse{Result: serverapi.CheckUnavailableUpdateStatusResult()},
-			want: sessionPickerUpdateCheckUnavailable,
+			want: serverapi.UpdateStatusCheckUnavailable,
 		},
 		{
 			name: "release mode invariant failure",
 			resp: serverapi.UpdateStatusResponse{Result: serverapi.FailedUpdateStatusResult("internal invariant")},
-			want: sessionPickerUpdateCheckFailed,
+			want: serverapi.UpdateStatusCheckFailed,
 		},
 	}
 	for _, test := range tests {
@@ -153,7 +152,7 @@ func TestSessionPickerUpdateStatusMapsOnlyValidatedResultVariants(t *testing.T) 
 			model := newUninitializedTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{})
 			next, command := model.Update(sessionPickerUpdateStatusMsg{
 				response: &test.resp,
-				outcome:  connectionstate.Classify(connectionstate.OperationUnary, nil),
+				outcome:  classifyInteractiveConnection(interactiveConnectionOperationUnary, nil),
 			})
 			if updated, ok := next.(*sessionPickerModel); !ok || updated != model {
 				t.Fatalf("picker update replacement = %T/%p, want %p", next, updated, model)
@@ -161,10 +160,19 @@ func TestSessionPickerUpdateStatusMapsOnlyValidatedResultVariants(t *testing.T) 
 			if command != nil {
 				t.Fatalf("validated result scheduled unexpected command %T", command)
 			}
-			if model.updateStatus.kind != test.want {
-				t.Fatalf("update state = %q, want %q", model.updateStatus.kind, test.want)
+			if model.updateStatus == nil || model.updateStatus.Kind() != test.want {
+				t.Fatalf("update result = %+v, want kind %q", model.updateStatus, test.want)
 			}
 		})
+	}
+}
+
+func TestSessionPickerUpdateStatusPendingIsStructurallyAbsent(t *testing.T) {
+	t.Parallel()
+
+	model := newUninitializedTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{})
+	if model.updateStatus != nil {
+		t.Fatalf("initial update result = %+v, want nil pending state", model.updateStatus)
 	}
 }
 
@@ -205,14 +213,14 @@ func TestSessionPickerUpdateStatusRequestsAgainForEachPickerOpen(t *testing.T) {
 func TestSessionPickerUpdateCompletionKeepsConnectionAndStatusOwnershipExhaustive(t *testing.T) {
 	t.Parallel()
 
-	owner := connectionstate.NewOwner()
+	owner := newInteractiveConnectionOwner()
 	model := newUninitializedTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{
 		Notice:     &startupPickerNotice{Text: "surface notice"},
 		connection: owner,
 	})
 	original := model.updateStatus
 
-	apply := func(outcome connectionstate.Outcome) {
+	apply := func(outcome interactiveConnectionOutcome) {
 		t.Helper()
 		next, command := model.Update(sessionPickerUpdateStatusMsg{outcome: outcome})
 		if updated, ok := next.(*sessionPickerModel); !ok || updated != model {
@@ -226,11 +234,11 @@ func TestSessionPickerUpdateCompletionKeepsConnectionAndStatusOwnershipExhaustiv
 		}
 	}
 
-	apply(connectionstate.Classify(connectionstate.OperationUnary, context.Canceled))
+	apply(classifyInteractiveConnection(interactiveConnectionOperationUnary, context.Canceled))
 	if owner.IsDisconnected() {
 		t.Fatal("picker-context cancellation marked shared connection disconnected")
 	}
-	apply(connectionstate.Classify(connectionstate.OperationUnary, io.EOF))
+	apply(classifyInteractiveConnection(interactiveConnectionOperationUnary, io.EOF))
 	if !owner.IsDisconnected() {
 		t.Fatal("connection-loss completion did not update the shared owner")
 	}
@@ -242,14 +250,14 @@ func TestSessionPickerUpdateCompletionKeepsConnectionAndStatusOwnershipExhaustiv
 	if !projectStartupPickerStatus(model.startupStatus).Disconnected {
 		t.Fatal("disconnect did not fill empty startup projection")
 	}
-	apply(connectionstate.Classify(connectionstate.OperationUnary, context.DeadlineExceeded))
+	apply(classifyInteractiveConnection(interactiveConnectionOperationUnary, context.DeadlineExceeded))
 	if !owner.IsDisconnected() {
 		t.Fatal("reachability-inconclusive update failure cleared disconnect")
 	}
 	if _, ok := model.startupStatus.failure(model.activeTab, sessionPickerOperationUpdateStatus); !ok {
 		t.Fatal("reachability-inconclusive update failure did not use the startup error surface")
 	}
-	apply(connectionstate.Classify(connectionstate.OperationUnary, errors.New("server operation failed")))
+	apply(classifyInteractiveConnection(interactiveConnectionOperationUnary, errors.New("server operation failed")))
 	if owner.IsDisconnected() {
 		t.Fatal("reachability-confirming update failure did not clear disconnect")
 	}
@@ -258,7 +266,7 @@ func TestSessionPickerUpdateCompletionKeepsConnectionAndStatusOwnershipExhaustiv
 func TestSessionPickerUpdateStatusInvalidContractFailsFastOrExitsWithoutRowMutation(t *testing.T) {
 	t.Parallel()
 
-	invalidOutcome := connectionstate.InvalidContract(errors.New("malformed update status response"))
+	invalidOutcome := invalidInteractiveConnectionContract(errors.New("malformed update status response"))
 	t.Run("release exits through startup error surface", func(t *testing.T) {
 		model := newUninitializedTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{})
 		before := model.updateStatus
@@ -297,7 +305,7 @@ func TestSessionPickerLifecycleCloseCancelsOnlyUpdateRequestAndIgnoresLateComple
 	t.Parallel()
 
 	updates := newBlockingUpdateStatusClient()
-	owner := connectionstate.NewOwner()
+	owner := newInteractiveConnectionOwner()
 	lifecycle := newSessionPickerLifecycle(sessionPickerLifecycleOptions{
 		Loader: &recordingSessionPageLoader{},
 		Theme:  "dark",

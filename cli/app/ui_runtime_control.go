@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -552,7 +551,7 @@ func (m *uiModel) applyRuntimeControlDone(msg runtimeControlDoneMsg) tea.Cmd {
 	m.observeRuntimeRequestResult(msg.err)
 	if msg.err != nil {
 		m.clearRuntimeControlPending(msg.operation)
-		errText := runtimeattach.FormatSubmissionError(msg.err)
+		errText := formatRuntimeSubmissionError(msg.err)
 		return sequenceCmds(
 			m.appendLocalEntryWithNoticeID("error", errText, ""),
 			m.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""),

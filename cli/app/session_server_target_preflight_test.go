@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"core/cli/app/internal/startupremote"
 	"core/shared/config"
 	"core/shared/protocol"
 )
@@ -18,29 +17,29 @@ func TestValidateStartupRemoteIdentityRequiresExactOnboardingControlSurface(t *t
 			OnboardingFinalize: true,
 		},
 	}
-	if err := startupremote.ValidateIdentity(compatible); err != nil {
+	if err := validateConfiguredRemoteIdentity(compatible); err != nil {
 		t.Fatalf("compatible identity: %v", err)
 	}
 
 	for _, test := range []struct {
 		identity protocol.ServerIdentity
-		issue    startupremote.CompatibilityIssue
+		issue    configuredRemoteCompatibilityIssue
 	}{
 		{
 			identity: protocol.ServerIdentity{ProtocolVersion: "different", Capabilities: compatible.Capabilities},
-			issue:    startupremote.ProtocolVersionMismatch,
+			issue:    configuredRemoteProtocolVersionMismatch,
 		},
 		{
 			identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, Capabilities: protocol.CapabilityFlags{OnboardingFinalize: true}},
-			issue:    startupremote.AuthBootstrapUnavailable,
+			issue:    configuredRemoteAuthBootstrapUnavailable,
 		},
 		{
 			identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, Capabilities: protocol.CapabilityFlags{AuthBootstrap: true}},
-			issue:    startupremote.OnboardingFinalizeUnavailable,
+			issue:    configuredRemoteOnboardingFinalizeUnavailable,
 		},
 	} {
-		err := startupremote.ValidateIdentity(test.identity)
-		var compatibility *startupremote.CompatibilityError
+		err := validateConfiguredRemoteIdentity(test.identity)
+		var compatibility *configuredRemoteCompatibilityError
 		if !errors.As(err, &compatibility) {
 			t.Fatalf("identity %+v error = %v, want typed compatibility error", test.identity, err)
 		}

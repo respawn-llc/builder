@@ -25,13 +25,34 @@ func TestGitHubReleaseMetadataSourceReturnsValidatedRelease(t *testing.T) {
 	}))
 	defer server.Close()
 
-	source := NewGitHubReleaseMetadataSource(server.Client(), server.URL)
+	source, err := NewGitHubReleaseMetadataSource(server.Client(), server.URL)
+	if err != nil {
+		t.Fatalf("NewGitHubReleaseMetadataSource: %v", err)
+	}
 	metadata, err := source.LatestRelease(context.Background())
 	if err != nil {
 		t.Fatalf("LatestRelease: %v", err)
 	}
 	if metadata.Version != "1.2.3" {
 		t.Fatalf("version = %q, want 1.2.3", metadata.Version)
+	}
+}
+
+func TestGitHubReleaseMetadataSourceConstructionSeparatesDefaultAndCustomEndpoints(t *testing.T) {
+	defaultSource := NewDefaultGitHubReleaseMetadataSource()
+	if defaultSource.latestURL != defaultLatestReleaseURL {
+		t.Fatalf("default latest URL = %q, want %q", defaultSource.latestURL, defaultLatestReleaseURL)
+	}
+
+	for _, endpoint := range []string{"", "  "} {
+		source, err := NewGitHubReleaseMetadataSource(nil, endpoint)
+		if err == nil {
+			t.Fatalf("NewGitHubReleaseMetadataSource(%q) unexpectedly succeeded with %+v", endpoint, source)
+		}
+		var configurationError *ReleaseSourceConfigurationError
+		if !errors.As(err, &configurationError) {
+			t.Fatalf("error = %T, want ReleaseSourceConfigurationError", err)
+		}
 	}
 }
 
@@ -96,8 +117,11 @@ func TestGitHubReleaseMetadataSourceReturnsTypedErrors(t *testing.T) {
 				url = server.URL
 			}
 
-			source := NewGitHubReleaseMetadataSource(client, url)
-			_, err := source.LatestRelease(context.Background())
+			source, err := NewGitHubReleaseMetadataSource(client, url)
+			if err != nil {
+				t.Fatalf("NewGitHubReleaseMetadataSource: %v", err)
+			}
+			_, err = source.LatestRelease(context.Background())
 			if err == nil {
 				t.Fatal("LatestRelease unexpectedly succeeded")
 			}
@@ -140,8 +164,11 @@ func TestGitHubReleaseMetadataSourceSurfacesResponseCloseFailure(t *testing.T) {
 		}, nil
 	})}
 
-	source := NewGitHubReleaseMetadataSource(client, "https://release.invalid/latest")
-	_, err := source.LatestRelease(context.Background())
+	source, err := NewGitHubReleaseMetadataSource(client, "https://release.invalid/latest")
+	if err != nil {
+		t.Fatalf("NewGitHubReleaseMetadataSource: %v", err)
+	}
+	_, err = source.LatestRelease(context.Background())
 	var transportError *ReleaseTransportError
 	if !errors.As(err, &transportError) {
 		t.Fatalf("error = %T, want ReleaseTransportError", err)

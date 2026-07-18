@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"core/cli/app/commands"
-	"core/cli/app/internal/connectionstate"
 	"core/cli/tui"
 	tuiinput "core/cli/tui/input"
 	"core/cli/tui/ongoing"
@@ -193,7 +192,7 @@ type uiStatusFeatureState struct {
 }
 
 type uiTranscriptFeatureState struct {
-	connectionState              *connectionstate.Owner
+	connectionState              *interactiveConnectionOwner
 	runtimeMainViewToken         uint64
 	runtimeMainViewBusy          bool
 	runtimeMainViewActiveRequest runtimeMainViewRefreshRequest

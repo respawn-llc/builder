@@ -1,11 +1,12 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 
-	"core/cli/app/internal/connectionstate"
 	"core/cli/app/internal/status"
 	"core/shared/apicontract"
+	"core/shared/serverapi"
 
 	"github.com/mattn/go-runewidth"
 )
@@ -23,7 +24,7 @@ type sessionPickerHeaderInfo struct {
 	OwnsServer    bool
 	ServerAddress string
 	Notice        *startupPickerNotice
-	connection    *connectionstate.Owner
+	connection    *interactiveConnectionOwner
 	updateStatus  apicontract.ServerStatusService
 }
 
@@ -101,14 +102,14 @@ func (m *sessionPickerModel) projectUpdateHeaderRow(maxWidth int) *sessionPicker
 	if maxWidth < 1 {
 		maxWidth = 1
 	}
-	switch m.updateStatus.kind {
-	case sessionPickerUpdatePending, sessionPickerUpdateCurrent, sessionPickerUpdateCheckUnavailable:
+	if m.updateStatus == nil {
 		return nil
-	case sessionPickerUpdateAvailable:
-		if m.updateStatus.result == nil {
-			panic("available session-picker update state requires a result")
-		}
-		_, latestVersion, ok := m.updateStatus.result.Versions()
+	}
+	switch m.updateStatus.Kind() {
+	case serverapi.UpdateStatusCurrent, serverapi.UpdateStatusCheckUnavailable:
+		return nil
+	case serverapi.UpdateStatusAvailable:
+		_, latestVersion, ok := m.updateStatus.Versions()
 		if !ok {
 			panic("available session-picker update state requires versions")
 		}
@@ -117,11 +118,8 @@ func (m *sessionPickerModel) projectUpdateHeaderRow(maxWidth int) *sessionPicker
 			"Update available: v"+latestVersion,
 			maxWidth,
 		)
-	case sessionPickerUpdateCheckFailed:
-		if m.updateStatus.result == nil {
-			panic("failed session-picker update state requires a result")
-		}
-		cause, ok := m.updateStatus.result.FailureCause()
+	case serverapi.UpdateStatusCheckFailed:
+		cause, ok := m.updateStatus.FailureCause()
 		if !ok {
 			panic("failed session-picker update state requires a failure cause")
 		}
@@ -131,7 +129,7 @@ func (m *sessionPickerModel) projectUpdateHeaderRow(maxWidth int) *sessionPicker
 			maxWidth,
 		)
 	default:
-		panic("unknown session-picker update state")
+		panic(fmt.Sprintf("unknown validated session-picker update result kind %q", m.updateStatus.Kind()))
 	}
 }
 

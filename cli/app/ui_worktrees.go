@@ -6,7 +6,6 @@ import (
 	"io"
 	"strings"
 
-	"core/cli/app/internal/runtimeattach"
 	"core/cli/app/internal/worktreeui"
 	tuiinput "core/cli/tui/input"
 	"core/shared/apicontract"
@@ -361,24 +360,24 @@ func (m *uiModel) applyWorktreeIntent() tea.Cmd {
 	}
 	target, err := resolveWorktreeDeleteIntentTarget(m.worktrees.entries, intent.DeleteTarget)
 	if err != nil {
-		m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+		m.worktrees.errorText = formatRuntimeSubmissionError(err)
 		return nil
 	}
 	targetIdentity, err := worktreeui.SelectionIdentityForItem(target)
 	if err != nil {
-		m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+		m.worktrees.errorText = formatRuntimeSubmissionError(err)
 		return nil
 	}
 	_, idx, ok, err := worktreeui.FindByIdentity(m.worktrees.entries, targetIdentity)
 	if err != nil {
-		m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+		m.worktrees.errorText = formatRuntimeSubmissionError(err)
 		return nil
 	}
 	if ok {
 		m.worktrees.selection = idx + 1
 	}
 	if err := m.recordWorktreeSelection(); err != nil {
-		m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+		m.worktrees.errorText = formatRuntimeSubmissionError(err)
 		return nil
 	}
 	m.openDeleteWorktreeDialog(
@@ -535,7 +534,7 @@ func (m *uiModel) worktreeSwitchCmd(target worktreeui.Item) tea.Cmd {
 	}
 	selector, err := worktreeui.StableMutationSelector(target)
 	if err != nil {
-		m.worktrees.errorText = runtimeattach.FormatSubmissionError(err)
+		m.worktrees.errorText = formatRuntimeSubmissionError(err)
 		return nil
 	}
 	if m.worktrees.switchPending {

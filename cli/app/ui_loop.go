@@ -7,7 +7,6 @@ import (
 	"os"
 
 	"core/cli/app/commands"
-	"core/cli/app/internal/connectionstate"
 	"core/cli/tui/ongoing"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -34,7 +33,7 @@ type uiLoopRequest struct {
 	modelContractLocked          bool
 	configuredModelName          string
 	statusConfig                 uiStatusConfig
-	connectionState              *connectionstate.Owner
+	connectionState              *interactiveConnectionOwner
 }
 
 func runUILoop(request uiLoopRequest) (tea.Model, error) {

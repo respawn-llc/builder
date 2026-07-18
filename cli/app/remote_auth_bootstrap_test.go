@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"core/cli/app/internal/authui"
-	"core/cli/app/internal/connectionstate"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -30,7 +29,7 @@ func (c *stubAuthBootstrapClient) GetAuthBootstrapStatus(context.Context, server
 }
 
 func TestInteractiveConnectionAuthTransportLossAndRecovery(t *testing.T) {
-	owner := connectionstate.NewOwner()
+	owner := newInteractiveConnectionOwner()
 	pickerCalls := 0
 	interactor := &interactiveAuthInteractor{
 		connectionState: owner,

@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"core/cli/app/commands"
-	"core/cli/app/internal/connectionstate"
 	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -47,7 +46,7 @@ type interactiveSessionServer interface {
 type sessionLifecycleOptions struct {
 	Intent     *serverapi.SessionLaunchIntent
 	Overrides  serverapi.RunPromptOverrides
-	Connection *connectionstate.Owner
+	Connection *interactiveConnectionOwner
 }
 
 func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, interactor authInteractor, initialSessionID string) error {
@@ -60,13 +59,13 @@ func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, i
 		open := serverapi.OpenExistingSessionLaunchIntent(sessionID)
 		intent = &open
 	}
-	return runSessionLifecycleWithOptions(ctx, server, interactor, sessionLifecycleOptions{Intent: intent, Connection: &connectionstate.Owner{}})
+	return runSessionLifecycleWithOptions(ctx, server, interactor, sessionLifecycleOptions{Intent: intent, Connection: &interactiveConnectionOwner{}})
 }
 
 func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessionServer, interactor authInteractor, opts sessionLifecycleOptions) error {
 	connection := opts.Connection
 	if connection == nil {
-		connection = &connectionstate.Owner{}
+		connection = &interactiveConnectionOwner{}
 	}
 	originalServer := server
 	boundServer, err := ensureInteractiveProjectBinding(ctx, server)
@@ -293,7 +292,7 @@ func prepareSessionUIRunWithConnection(
 	initialPromptHistoryRecorded bool,
 	transitionInput string,
 	overrideStoredDraft bool,
-	connection *connectionstate.Owner,
+	connection *interactiveConnectionOwner,
 ) (*runtimeLaunchPlan, uiLoopRequest, error) {
 	runtimePlan, err := planner.PrepareRuntime(ctx, plan, os.Stderr, "app.start session_id="+plan.SessionID+" workspace="+plan.ExecutionTarget.EffectiveWorkdir+" model="+plan.ActiveSettings.Model)
 	if err != nil {

@@ -45,8 +45,12 @@ func TestDialRemoteWithTransportRejectsBlankSessionID(t *testing.T) {
 }
 
 func TestRemoteGetUpdateStatusRejectsMalformedResponse(t *testing.T) {
+	var connections atomic.Int32
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		acceptRemoteHandshake(t, ws)
+		if connections.Add(1) == 1 {
+			return
+		}
 		var request protocol.Request
 		if err := websocket.JSON.Receive(ws, &request); err != nil {
 			t.Fatalf("receive update status request: %v", err)

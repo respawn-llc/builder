@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	brand "core/shared/config"
@@ -20,6 +21,24 @@ type ReleaseMetadata struct {
 
 type ReleaseMetadataSource interface {
 	LatestRelease(context.Context) (ReleaseMetadata, error)
+}
+
+type ReleaseSourceConfigurationError struct {
+	Cause error
+}
+
+func (e *ReleaseSourceConfigurationError) Error() string {
+	if e == nil || e.Cause == nil {
+		return "GitHub release source configuration is invalid"
+	}
+	return e.Cause.Error()
+}
+
+func (e *ReleaseSourceConfigurationError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
 }
 
 type ReleaseTransportError struct {
@@ -75,13 +94,24 @@ type GitHubReleaseMetadataSource struct {
 	latestURL string
 }
 
-func NewGitHubReleaseMetadataSource(client *http.Client, latestURL string) *GitHubReleaseMetadataSource {
+func NewDefaultGitHubReleaseMetadataSource() *GitHubReleaseMetadataSource {
+	return newGitHubReleaseMetadataSource(nil, defaultLatestReleaseURL)
+}
+
+func NewGitHubReleaseMetadataSource(client *http.Client, latestURL string) (*GitHubReleaseMetadataSource, error) {
+	parsedURL, err := url.ParseRequestURI(strings.TrimSpace(latestURL))
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+		if err == nil {
+			err = errors.New("custom GitHub release URL must be an absolute URL")
+		}
+		return nil, &ReleaseSourceConfigurationError{Cause: err}
+	}
+	return newGitHubReleaseMetadataSource(client, parsedURL.String()), nil
+}
+
+func newGitHubReleaseMetadataSource(client *http.Client, latestURL string) *GitHubReleaseMetadataSource {
 	if client == nil {
 		client = &http.Client{}
-	}
-	latestURL = strings.TrimSpace(latestURL)
-	if latestURL == "" {
-		latestURL = defaultLatestReleaseURL
 	}
 	return &GitHubReleaseMetadataSource{client: client, latestURL: latestURL}
 }

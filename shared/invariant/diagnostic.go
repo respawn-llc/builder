@@ -124,23 +124,26 @@ type BackgroundEventDiagnosticInput struct {
 type UpdateStatusDiagnosticInput struct {
 	Operation      string
 	CurrentVersion string
-	LatestVersion  string
+	LatestVersion  *string
 	CacheState     string
 	InflightState  string
 	Cause          string
 }
 
 func UpdateStatusDiagnostic(input UpdateStatusDiagnosticInput) Diagnostic {
+	diagnosticFields := map[Field]string{
+		FieldOperation:      input.Operation,
+		FieldCurrentVersion: input.CurrentVersion,
+		FieldCacheState:     input.CacheState,
+		FieldInflightState:  input.InflightState,
+		FieldInvariantError: input.Cause,
+	}
+	if input.LatestVersion != nil {
+		diagnosticFields[FieldLatestVersion] = *input.LatestVersion
+	}
 	return Diagnostic{
-		Scope: ScopeUpdateStatus,
-		Fields: fields(map[Field]string{
-			FieldOperation:      input.Operation,
-			FieldCurrentVersion: input.CurrentVersion,
-			FieldLatestVersion:  input.LatestVersion,
-			FieldCacheState:     input.CacheState,
-			FieldInflightState:  input.InflightState,
-			FieldInvariantError: input.Cause,
-		}),
+		Scope:  ScopeUpdateStatus,
+		Fields: diagnosticFields,
 	}
 }
 

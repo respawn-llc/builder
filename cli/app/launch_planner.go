@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"core/cli/app/internal/connectionstate"
 	"core/cli/app/internal/status"
 	"core/shared/apicontract"
 	"core/shared/clientui"
@@ -111,14 +110,14 @@ type launchPlannerRuntimePreparer interface {
 type launchPlanner struct {
 	server      launchPlannerServer
 	pickSession sessionPickerRunner
-	connection  *connectionstate.Owner
+	connection  *interactiveConnectionOwner
 }
 
 func newSessionLaunchPlanner(server launchPlannerServer) *launchPlanner {
 	return newSessionLaunchPlannerWithConnection(server, nil)
 }
 
-func newSessionLaunchPlannerWithConnection(server launchPlannerServer, connection *connectionstate.Owner) *launchPlanner {
+func newSessionLaunchPlannerWithConnection(server launchPlannerServer, connection *interactiveConnectionOwner) *launchPlanner {
 	return &launchPlanner{
 		server:     server,
 		connection: connection,
@@ -131,7 +130,7 @@ func newSessionLaunchPlannerWithConnection(server launchPlannerServer, connectio
 type projectScopedSessionPageLoader struct {
 	projectID  string
 	client     apicontract.ProjectViewService
-	connection *connectionstate.Owner
+	connection *interactiveConnectionOwner
 }
 
 func (l projectScopedSessionPageLoader) ProjectID() string {

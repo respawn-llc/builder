@@ -589,32 +589,39 @@ type PrivateModeChange struct {
 type PhaseKind = Kind
 
 const (
-	PhaseScenarioStart            = KindScenarioStart
-	PhaseWindowStart              = KindWindowStart
-	PhaseWindowEnd                = KindWindowEnd
-	PhaseReadyForQuit             = KindReadyForQuit
-	PhaseScenarioComplete         = KindScenarioComplete
-	PhaseInputApplied             = KindInputApplied
-	PhaseDetailInitialPageApplied = KindDetailInitialPageApplied
-	PhaseScenarioFinalApplied     = KindScenarioFinalApplied
-	PhaseToolStarted              = KindToolStarted
-	PhaseAppRunStarted            = KindAppRunStarted
-	PhaseAuthPickerReady          = KindAuthPickerReady
-	PhaseSessionPickerReady       = KindSessionPickerReady
-	PhaseMainUIReady              = KindMainUIReady
-	PhaseAppRunExited             = KindAppRunExited
+	PhaseScenarioStart                     = KindScenarioStart
+	PhaseWindowStart                       = KindWindowStart
+	PhaseWindowEnd                         = KindWindowEnd
+	PhaseReadyForQuit                      = KindReadyForQuit
+	PhaseScenarioComplete                  = KindScenarioComplete
+	PhaseInputApplied                      = KindInputApplied
+	PhaseDetailInitialPageApplied          = KindDetailInitialPageApplied
+	PhaseScenarioFinalApplied              = KindScenarioFinalApplied
+	PhaseToolStarted                       = KindToolStarted
+	PhaseAppRunStarted                     = KindAppRunStarted
+	PhaseAuthPickerReady                   = KindAuthPickerReady
+	PhaseSessionPickerReady                = KindSessionPickerReady
+	PhasePickerRequestCanceled             = KindPickerRequestCanceled
+	PhaseTranscriptSubscriptionEstablished = KindTranscriptSubscriptionEstablished
+	PhaseInitialInputLoaded                = KindInitialInputLoaded
+	PhaseTranscriptTransportLost           = KindTranscriptTransportLost
+	PhaseMainUIReady                       = KindMainUIReady
+	PhaseMainRequestReachable              = KindMainRequestReachable
+	PhaseAppRunExited                      = KindAppRunExited
 )
 
 type ReadinessBoundaryKind uint8
 
 const (
 	ReadinessRendererFrame ReadinessBoundaryKind = iota + 1
+	ReadinessNativeOngoingFrame
 	ReadinessInputApplied
 	ReadinessNormalBufferRestored
 )
 
 func (k ReadinessBoundaryKind) Valid() bool {
 	return k == ReadinessRendererFrame ||
+		k == ReadinessNativeOngoingFrame ||
 		k == ReadinessInputApplied ||
 		k == ReadinessNormalBufferRestored
 }

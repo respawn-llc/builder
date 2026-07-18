@@ -191,7 +191,13 @@ func (c *Remote) GetServerReadiness(ctx context.Context, req serverapi.ServerRea
 }
 
 func (c *Remote) GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
-	return callUnscopedRPC[serverapi.UpdateStatusRequest, serverapi.UpdateStatusResponse](c, ctx, protocol.MethodServerUpdateStatusGet, req)
+	return callDedicatedRPC[serverapi.UpdateStatusRequest, serverapi.UpdateStatusResponse](
+		c,
+		ctx,
+		"get-update-status",
+		protocol.MethodServerUpdateStatusGet,
+		req,
+	)
 }
 
 func (c *Remote) ProjectID() string {

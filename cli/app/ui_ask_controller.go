@@ -1,7 +1,6 @@
 package app
 
 import (
-	"core/cli/app/internal/connectionstate"
 	"core/cli/tui"
 	tuiinput "core/cli/tui/input"
 	"core/shared/clientui"
@@ -492,8 +491,8 @@ func (c uiAskController) applyDeliveryResult(result promptAnswerDeliveryResultMs
 	}
 	c.cancelActiveDelivery()
 	m.activity = uiActivityQuestion
-	outcome := connectionstate.Classify(connectionstate.OperationUnary, result.err)
-	if outcome.Kind() == connectionstate.OutcomeSurfaceCanceled || outcome.IsConnectionLoss() {
+	outcome := classifyInteractiveConnection(interactiveConnectionOperationUnary, result.err)
+	if outcome.Kind() == interactiveConnectionOutcomeSurfaceCanceled || outcome.IsConnectionLoss() {
 		return nil
 	}
 	return m.sendTransientStatusWithNoticeID(result.err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")

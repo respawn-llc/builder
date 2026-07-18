@@ -7,7 +7,6 @@ import (
 
 	"core/cli/app/commands"
 	"core/cli/app/internal/remoteattach"
-	"core/cli/app/internal/startupremote"
 	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
@@ -120,13 +119,12 @@ func (s *remoteAppServer) BindProjectWorkspace(ctx context.Context, projectID st
 		WorkspaceID: workspaceID,
 		OwnsServer:  s.owns,
 		OwnedClose:  s.closeFn,
-		RootID:      config.ExplicitPersistenceRootID(s.cfg),
 		ValidateSuccessor: func(ctx context.Context, remote *client.Remote) error {
 			var workspaceRoot *string
 			if root := strings.TrimSpace(s.cfg.WorkspaceRoot); root != "" {
 				workspaceRoot = &root
 			}
-			return startupremote.ValidateWithWorkspace(ctx, remote, config.ExplicitPersistenceRootID(s.cfg), workspaceRoot)
+			return validateConfiguredRemoteWithWorkspace(ctx, remote, config.ExplicitPersistenceRootID(s.cfg), workspaceRoot)
 		},
 	})
 	if err != nil {

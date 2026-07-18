@@ -31,6 +31,8 @@ type Event struct {
 	Err   error
 }
 
+var ErrTransportClosed = errors.New("rpc transport closed")
+
 type Conn interface {
 	Send(context.Context, Frame) error
 	Events() <-chan Event
@@ -171,7 +173,7 @@ func (c *webSocketConn) OnClose(_ *gws.Conn, err error) {
 	if err == nil {
 		err = io.EOF
 	}
-	c.publishError(err)
+	c.publishError(errors.Join(ErrTransportClosed, err))
 	_ = c.Close()
 }
 

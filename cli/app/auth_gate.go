@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"core/cli/app/internal/authui"
-	"core/cli/app/internal/connectionstate"
 	serverauth "core/server/auth"
 	"core/server/authservice"
 
@@ -56,14 +55,14 @@ type interactiveAuthInteractor struct {
 	pickConflict          func(authInteraction) (authConflictPickerResult, error)
 	showSuccess           func(authSuccessScreenData) error
 	promptReader          *bufio.Reader
-	connectionState       *connectionstate.Owner
+	connectionState       *interactiveConnectionOwner
 }
 
 func newInteractiveAuthInteractor() authInteractor {
 	return newInteractiveAuthInteractorWithConnection(nil)
 }
 
-func newInteractiveAuthInteractorWithConnection(connection *connectionstate.Owner) authInteractor {
+func newInteractiveAuthInteractorWithConnection(connection *interactiveConnectionOwner) authInteractor {
 	return &interactiveAuthInteractor{
 		stdin:       os.Stdin,
 		stderr:      os.Stderr,

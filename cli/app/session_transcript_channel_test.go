@@ -39,6 +39,10 @@ func TestStartSessionTranscriptEventsWaitsForExplicitRehydrationAfterLoss(t *tes
 	}
 
 	stream.RequestRehydration()
+	reachable := nextTranscriptEvent(t, stream.Events)
+	if reachable.Kind != ongoingTranscriptEventReachable {
+		t.Fatalf("reconnect event = %+v, want reachable", reachable)
+	}
 	second := nextTranscriptEvent(t, stream.Events)
 	if second.Kind != ongoingTranscriptEventMessage || second.Message.Kind != clientui.TranscriptMessageHydration {
 		t.Fatalf("second event = %+v, want reopened hydration message", second)
@@ -81,6 +85,10 @@ func TestStartSessionTranscriptEventsReopensOnLocalRehydrationRequest(t *testing
 
 	stream.RequestRehydration()
 
+	reachable := nextTranscriptEvent(t, stream.Events)
+	if reachable.Kind != ongoingTranscriptEventReachable {
+		t.Fatalf("reconnect event = %+v, want reachable", reachable)
+	}
 	second := nextTranscriptEvent(t, stream.Events)
 	if second.Kind != ongoingTranscriptEventMessage || second.Message.Sequence != 1 {
 		t.Fatalf("second event = %+v, want reopened hydration", second)

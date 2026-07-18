@@ -4,17 +4,19 @@ import (
 	"io"
 	"testing"
 
-	"core/cli/app/internal/connectionstate"
 	"core/shared/llmerrors"
 )
 
 func TestInteractiveConnectionOwnerHandoffPreservesDisconnectUntilReachabilityConfirmation(t *testing.T) {
-	owner := connectionstate.NewOwner()
+	owner := newInteractiveConnectionOwner()
 	owner.ObserveUnary(io.EOF)
 
 	model := newProjectedTestUIModel(&runtimeControlFakeClient{}, WithUIConnectionState(owner))
 	if !model.runtimeDisconnectStatusVisible() {
 		t.Fatal("main UI did not project the earlier interactive disconnect")
+	}
+	if got := model.runtimeDisconnectStatusText(); got != "server connection lost" {
+		t.Fatalf("persisted disconnect text = %q, want spec-owned copy", got)
 	}
 
 	model.observeRuntimeRequestResult(&llmerrors.APIStatusError{StatusCode: 503})
@@ -24,7 +26,7 @@ func TestInteractiveConnectionOwnerHandoffPreservesDisconnectUntilReachabilityCo
 }
 
 func TestInteractiveConnectionMainTransientNoticeOverridesAndThenRevealsDisconnect(t *testing.T) {
-	owner := connectionstate.NewOwner()
+	owner := newInteractiveConnectionOwner()
 	owner.ObserveUnary(io.EOF)
 	model := newProjectedTestUIModel(&runtimeControlFakeClient{}, WithUIConnectionState(owner))
 

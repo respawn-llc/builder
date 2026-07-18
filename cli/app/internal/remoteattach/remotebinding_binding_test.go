@@ -103,26 +103,6 @@ func TestBindProjectWorkspaceRejectsMissingInputsBeforeDial(t *testing.T) {
 	}
 }
 
-func TestBindProjectWorkspacePinsRootOnReboundRemote(t *testing.T) {
-	// The rebound remote must validate the expected persistence root just like the
-	// initially attached one. The zero-value remote reports an empty root id, so a
-	// non-empty required RootID must reject it on mismatch rather than handing back
-	// an unpinned remote that could reconnect to a different root.
-	next := &client.Remote{}
-	_, err := BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{
-		Current:           &client.Remote{},
-		ProjectID:         "project-1",
-		RootID:            "root-iso",
-		ValidateSuccessor: validateSuccessor,
-		DialWorkspaceRoot: func(context.Context, config.App, string, string) (*client.Remote, error) {
-			return next, nil
-		},
-	})
-	if !errors.Is(err, client.ErrServerRootMismatch) {
-		t.Fatalf("error = %v, want ErrServerRootMismatch from rebound-remote root pin", err)
-	}
-}
-
 func TestBindProjectWorkspaceKeepsCurrentRemoteOpenWhenDialFails(t *testing.T) {
 	dialErr := errors.New("dial failed")
 	_, err := BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{

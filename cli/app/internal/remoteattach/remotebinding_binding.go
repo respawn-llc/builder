@@ -23,12 +23,6 @@ type ProjectWorkspaceBindingRequest struct {
 	DialWorkspaceRoot WorkspaceRootDialer
 	DialWorkspaceID   WorkspaceIDDialer
 	ValidateSuccessor ValidateSuccessor
-	// RootID, when non-empty, is pinned on the rebound remote so it keeps
-	// validating the expected persistence root on every reconnect, exactly like
-	// the initially attached remote. Without this, rebinding a workspace would
-	// hand back an unpinned remote that could silently reconnect to a different
-	// root over the fallback TCP endpoint.
-	RootID string
 }
 
 type ProjectWorkspaceBinding struct {
@@ -52,16 +46,13 @@ func BindProjectWorkspace(ctx context.Context, req ProjectWorkspaceBindingReques
 	if err != nil {
 		return ProjectWorkspaceBinding{}, err
 	}
-	if err := nextRemote.RequireRoot(req.RootID); err != nil {
+	if err := req.ValidateSuccessor(ctx, nextRemote); err != nil {
 		return ProjectWorkspaceBinding{}, errors.Join(err, nextRemote.Close())
 	}
 	if req.Current.NoAuthBootstrapAcknowledgementEnabled() {
 		if err := nextRemote.EnableNoAuthBootstrapAcknowledgement(ctx); err != nil {
 			return ProjectWorkspaceBinding{}, errors.Join(err, nextRemote.Close())
 		}
-	}
-	if err := req.ValidateSuccessor(ctx, nextRemote); err != nil {
-		return ProjectWorkspaceBinding{}, errors.Join(err, nextRemote.Close())
 	}
 	// The successor is fully established at this point. Remote.Close marks the
 	// superseded connection closed before its transport teardown can fail, so a

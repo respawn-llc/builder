@@ -3,6 +3,7 @@ package rpcwire
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -161,5 +162,35 @@ func TestWebSocketTransportSecureRoundTrip(t *testing.T) {
 
 	if err := <-serverErr; err != nil {
 		t.Fatalf("Server handler: %v", err)
+	}
+}
+
+func TestWebSocketTransportReportsUnexpectedPeerCloseAsTransportLoss(t *testing.T) {
+	transport := NewWebSocketTransport()
+	server := httptest.NewServer(transport.Handler(func(_ context.Context, conn Conn) {
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	endpoint, err := ParseWebSocketEndpoint("ws" + server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("ParseWebSocketEndpoint: %v", err)
+	}
+	conn, err := transport.Dial(context.Background(), endpoint)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	select {
+	case event, ok := <-conn.Events():
+		if !ok {
+			t.Fatal("Events closed without typed transport-loss event")
+		}
+		if !errors.Is(event.Err, ErrTransportClosed) {
+			t.Fatalf("unexpected peer-close error = %v, want ErrTransportClosed", event.Err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for peer-close event")
 	}
 }

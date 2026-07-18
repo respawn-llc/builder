@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"core/cli/app/internal/connectionstate"
 	"core/internal/testharness/testsetup"
 	"core/server/registry"
 	"core/server/runtime"
@@ -42,12 +41,12 @@ func waitForTestCondition(t *testing.T, timeout time.Duration, label string, con
 }
 
 func newProjectedTestUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption) *uiModel {
-	opts = append([]UIOption{WithUIConnectionState(&connectionstate.Owner{})}, opts...)
+	opts = append([]UIOption{WithUIConnectionState(&interactiveConnectionOwner{})}, opts...)
 	return NewProjectedUIModel(runtimeClient, opts...).(*uiModel)
 }
 
-func testInteractiveConnectionState() *connectionstate.Owner {
-	return &connectionstate.Owner{}
+func testInteractiveConnectionState() *interactiveConnectionOwner {
+	return &interactiveConnectionOwner{}
 }
 
 func newProjectedClosedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption) *uiModel {

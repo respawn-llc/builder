@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"core/cli/app/internal/connectionstate"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -69,8 +68,8 @@ type sessionPickerModel struct {
 	spinnerSequence            uint64
 	scheduledSpinnerGeneration *uint64
 	startupStatus              *startupPickerStatusModel
-	connection                 *connectionstate.Owner
-	updateStatus               sessionPickerUpdateState
+	connection                 *interactiveConnectionOwner
+	updateStatus               *serverapi.UpdateStatusResult
 	clock                      func() time.Time
 }
 
@@ -116,7 +115,6 @@ func newSessionPickerModel(
 		styles:         newSessionPickerStyles(theme),
 		startupStatus:  startupStatus,
 		connection:     header.connection,
-		updateStatus:   pendingSessionPickerUpdateState(),
 		clock:          time.Now,
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"core/cli/app/internal/connectionstate"
 	"core/shared/sessioncontract"
 	sharedtheme "core/shared/theme"
 
@@ -51,7 +50,7 @@ type startupPickerStatusModel struct {
 	failures   map[startupPickerStatusKey]startupPickerStatusRecord
 	sequence   uint64
 	activeTab  *sessioncontract.SessionCategory
-	connection *connectionstate.Owner
+	connection *interactiveConnectionOwner
 }
 
 func newStartupPickerStatusModel() *startupPickerStatusModel {

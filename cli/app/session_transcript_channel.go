@@ -11,8 +11,9 @@ import (
 type ongoingTranscriptEventKind string
 
 const (
-	ongoingTranscriptEventMessage ongoingTranscriptEventKind = "message"
-	ongoingTranscriptEventLoss    ongoingTranscriptEventKind = "loss"
+	ongoingTranscriptEventMessage   ongoingTranscriptEventKind = "message"
+	ongoingTranscriptEventLoss      ongoingTranscriptEventKind = "loss"
+	ongoingTranscriptEventReachable ongoingTranscriptEventKind = "reachable"
 )
 
 type ongoingTranscriptEvent struct {
@@ -39,10 +40,19 @@ func startSessionTranscriptEvents(ctx context.Context, sessionID string, subscri
 	pollCtx, cancel := context.WithCancel(ctx)
 	go func() {
 		defer close(out)
+		reconnecting := false
 		for {
 			sub, err := resubscribeSessionTranscript(pollCtx, sessionID, subscribe)
 			if err != nil {
 				return
+			}
+			if reconnecting {
+				select {
+				case <-pollCtx.Done():
+					_ = sub.Close()
+					return
+				case out <- ongoingTranscriptEvent{Kind: ongoingTranscriptEventReachable}:
+				}
 			}
 			reopen, stop := pumpSessionTranscriptSubscription(pollCtx, sub, out, requests)
 			if stop {
@@ -51,6 +61,7 @@ func startSessionTranscriptEvents(ctx context.Context, sessionID string, subscri
 			if !reopen {
 				return
 			}
+			reconnecting = true
 		}
 	}()
 	requestRehydration := func() {

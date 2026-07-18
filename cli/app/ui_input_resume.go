@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -53,7 +52,7 @@ func (c uiInputController) handleQueuedRuntimeWorkCheckDone(msg queuedRuntimeWor
 			m.layout().syncViewport()
 			return m, tea.Batch(restoreCmd, m.interruptedStatusNoticeCmd())
 		}
-		detailErr := runtimeattach.FormatSubmissionError(msg.err)
+		detailErr := formatRuntimeSubmissionError(msg.err)
 		m.activity = uiActivityError
 		appendCmd := m.appendLocalEntryWithNoticeID(operatorErrorFeedbackRole, detailErr, "")
 		m.logf("queue_check.error err=%q", detailErr)
@@ -99,7 +98,7 @@ func (c uiInputController) submitQueuedUserMessagesCmd() tea.Cmd {
 		msg, err := submitQueuedRuntimeUserMessages(context.Background(), client, operationRef)
 		if err != nil {
 			if isRuntimeOperationInterrupted(err) {
-				return newSubmitDoneMsg(token, "", "", runtimeattach.ErrSubmissionInterrupted)
+				return newSubmitDoneMsg(token, "", "", errRuntimeSubmissionInterrupted)
 			}
 			return newSubmitDoneMsg(token, "", "", err)
 		}

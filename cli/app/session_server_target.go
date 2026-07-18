@@ -7,9 +7,7 @@ import (
 	"strings"
 
 	"core/cli/app/commands"
-	"core/cli/app/internal/connectionstate"
 	"core/cli/app/internal/startupconfig"
-	"core/cli/app/internal/startupremote"
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -19,7 +17,7 @@ func startSessionServer(ctx context.Context, opts Options, interactor authIntera
 	return startSessionServerWithConnection(ctx, opts, interactor, interactive, nil)
 }
 
-func startSessionServerWithConnection(ctx context.Context, opts Options, interactor authInteractor, interactive bool, connection *connectionstate.Owner) (server interactiveSessionServer, returnErr error) {
+func startSessionServerWithConnection(ctx context.Context, opts Options, interactor authInteractor, interactive bool, connection *interactiveConnectionOwner) (server interactiveSessionServer, returnErr error) {
 	promptRoots, err := commands.NewClientPromptRoots()
 	if err != nil {
 		return nil, err
@@ -81,7 +79,7 @@ func attachConfiguredStartupRemote(ctx context.Context, cfg config.App) (attache
 	return attachConfiguredStartupRemoteWithConnection(ctx, cfg, nil)
 }
 
-func attachConfiguredStartupRemoteWithConnection(ctx context.Context, cfg config.App, connection *connectionstate.Owner) (attached *client.Remote, returnErr error) {
+func attachConfiguredStartupRemoteWithConnection(ctx context.Context, cfg config.App, connection *interactiveConnectionOwner) (attached *client.Remote, returnErr error) {
 	remote, err := client.DialConfiguredRemote(ctx, cfg)
 	if connection != nil {
 		connection.ObserveUnary(err)
@@ -99,7 +97,7 @@ func attachConfiguredStartupRemoteWithConnection(ctx context.Context, cfg config
 	if root := strings.TrimSpace(cfg.WorkspaceRoot); root != "" {
 		workspaceRoot = &root
 	}
-	if err := startupremote.ValidateWithWorkspace(ctx, remote, config.ExplicitPersistenceRootID(cfg), workspaceRoot); err != nil {
+	if err := validateConfiguredRemoteWithWorkspace(ctx, remote, config.ExplicitPersistenceRootID(cfg), workspaceRoot); err != nil {
 		if connection != nil {
 			connection.ObserveUnary(err)
 		}

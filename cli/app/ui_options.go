@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"core/cli/app/commands"
-	"core/cli/app/internal/connectionstate"
 	"core/cli/tui"
 	"core/cli/tui/transcriptrender"
 	"core/shared/apicontract"
@@ -45,7 +44,7 @@ func WithUILogger(logger uiLogger) UIOption {
 	}
 }
 
-func WithUIConnectionState(owner *connectionstate.Owner) UIOption {
+func WithUIConnectionState(owner *interactiveConnectionOwner) UIOption {
 	return func(m *uiModelConstruction) {
 		if owner != nil {
 			m.connectionState = owner

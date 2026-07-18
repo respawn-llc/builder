@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"core/cli/app/internal/authui"
-	"core/cli/app/internal/connectionstate"
 	serverauth "core/server/auth"
 	"core/shared/apicontract"
 	"core/shared/config"
@@ -65,10 +64,10 @@ func ensureRemoteAuthReady(ctx context.Context, remote apicontract.AuthBootstrap
 	return nil
 }
 
-func observeAuthConnection(interactor authInteractor, err error) connectionstate.Outcome {
+func observeAuthConnection(interactor authInteractor, err error) interactiveConnectionOutcome {
 	interactive, ok := interactor.(*interactiveAuthInteractor)
 	if !ok || interactive == nil || interactive.connectionState == nil {
-		return connectionstate.Classify(connectionstate.OperationUnary, err)
+		return classifyInteractiveConnection(interactiveConnectionOperationUnary, err)
 	}
 	return interactive.connectionState.ObserveUnary(err)
 }

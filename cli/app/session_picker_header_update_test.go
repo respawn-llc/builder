@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"core/cli/app/internal/connectionstate"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 
@@ -25,7 +24,7 @@ func TestSessionPickerHeaderProjectionPlacesAvailableUpdateBelowVersion(t *testi
 	}
 	model.Update(sessionPickerUpdateStatusMsg{
 		response: &response,
-		outcome:  connectionstate.Classify(connectionstate.OperationUnary, nil),
+		outcome:  classifyInteractiveConnection(interactiveConnectionOperationUnary, nil),
 	})
 
 	rows := model.projectHeaderRows(80)
@@ -51,7 +50,7 @@ func TestSessionPickerHeaderProjectionPlacesFailedUpdateBelowVersion(t *testing.
 	}
 	model.Update(sessionPickerUpdateStatusMsg{
 		response: &response,
-		outcome:  connectionstate.Classify(connectionstate.OperationUnary, nil),
+		outcome:  classifyInteractiveConnection(interactiveConnectionOperationUnary, nil),
 	})
 
 	rows := model.projectHeaderRows(80)
@@ -95,7 +94,7 @@ func TestSessionPickerHeaderProjectionOmitsRowlessUpdateStates(t *testing.T) {
 			if test.response != nil {
 				model.Update(sessionPickerUpdateStatusMsg{
 					response: test.response,
-					outcome:  connectionstate.Classify(connectionstate.OperationUnary, nil),
+					outcome:  classifyInteractiveConnection(interactiveConnectionOperationUnary, nil),
 				})
 			}
 			for _, row := range model.projectHeaderRows(80) {
@@ -134,7 +133,7 @@ func TestSessionPickerUpdateHeaderRespectsSupportedNarrowWidth(t *testing.T) {
 			response := serverapi.UpdateStatusResponse{Result: test.result}
 			model.Update(sessionPickerUpdateStatusMsg{
 				response: &response,
-				outcome:  connectionstate.Classify(connectionstate.OperationUnary, nil),
+				outcome:  classifyInteractiveConnection(interactiveConnectionOperationUnary, nil),
 			})
 
 			rows := model.projectHeaderRows(36)
@@ -183,7 +182,7 @@ func TestSessionPickerUpdateHeaderRebudgetsVisibleRows(t *testing.T) {
 			response := serverapi.UpdateStatusResponse{Result: test.result}
 			model.Update(sessionPickerUpdateStatusMsg{
 				response: &response,
-				outcome:  connectionstate.Classify(connectionstate.OperationUnary, nil),
+				outcome:  classifyInteractiveConnection(interactiveConnectionOperationUnary, nil),
 			})
 
 			afterBudget := model.visibleLineBudget()
@@ -279,7 +278,7 @@ func applySessionPickerHeaderReviewResult(
 	response := serverapi.UpdateStatusResponse{Result: result}
 	model.Update(sessionPickerUpdateStatusMsg{
 		response: &response,
-		outcome:  connectionstate.Classify(connectionstate.OperationUnary, nil),
+		outcome:  classifyInteractiveConnection(interactiveConnectionOperationUnary, nil),
 	})
 }
 

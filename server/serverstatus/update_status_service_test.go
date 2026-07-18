@@ -437,6 +437,26 @@ func TestUpdateStatusImpossibleTerminalUsesInvariantPolicy(t *testing.T) {
 	})
 }
 
+func TestUpdateStatusDiagnosticIncludesLatestVersionOnlyAfterReleaseMetadataArrives(t *testing.T) {
+	service := NewUpdateStatusService("1.1.0", Dependencies{
+		ReleaseSource: &countingReleaseSource{metadata: ReleaseMetadata{Version: "1.2.0"}},
+	})
+	t.Cleanup(func() { closeUpdateStatusService(t, service) })
+
+	operation := &updateStatusOperation{done: make(chan struct{})}
+	before := service.invariantDiagnostic(operation, "publish_update_status", "incomplete terminal")
+	if _, exists := before.Fields[invariant.FieldLatestVersion]; exists {
+		t.Fatal("diagnostic included latest version before release metadata arrived")
+	}
+
+	latest := "1.2.0"
+	operation.latestVersion = &latest
+	after := service.invariantDiagnostic(operation, "publish_update_status", "incomplete terminal")
+	if got := after.Fields[invariant.FieldLatestVersion]; got != latest {
+		t.Fatalf("diagnostic latest version = %q, want %q", got, latest)
+	}
+}
+
 func TestUpdateStatusDuplicateTerminalPublicationWakesWaitersWithDiagnosticFailure(t *testing.T) {
 	t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
 	service := NewUpdateStatusService("1.1.0", Dependencies{
