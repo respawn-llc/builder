@@ -142,12 +142,6 @@ export type NativeBridge = Readonly<{
     notifyChanged(event: NativeProjectWorkspaceChanged): Promise<void>;
     onChanged(handler: (event: NativeProjectWorkspaceChanged) => void): Promise<NativeUnlisten>;
   }>;
-  workflowEditor: Readonly<{
-    confirmGraphDelete(confirmation: NativeWorkflowGraphDeleteConfirmation): Promise<void>;
-    onGraphDeleteConfirmed(
-      handler: (confirmation: NativeWorkflowGraphDeleteConfirmation) => void,
-    ): Promise<NativeUnlisten>;
-  }>;
   workflowDeletion: Readonly<{
     notifyDeleted(event: NativeWorkflowDeleted): Promise<void>;
     onDeleted(handler: (event: NativeWorkflowDeleted) => void): Promise<NativeUnlisten>;
@@ -209,10 +203,6 @@ export type NativeProjectWorkspaceChanged = Readonly<{
   projectID: string;
 }>;
 
-export type NativeWorkflowGraphDeleteConfirmation = Readonly<{
-  requestID: string;
-}>;
-
 export type NativeWorkflowDeleted = Readonly<{
   workflowID: string;
 }>;
@@ -223,7 +213,6 @@ export const nativeDialogWindowHorizontalInsetPx = 16;
 const projectDeletedEvent = "app://project-deleted";
 const workspaceUnlinkRequestEvent = "app://workspace-unlink-request";
 const projectWorkspaceChangedEvent = "app://project-workspace-changed";
-const workflowGraphDeleteConfirmEvent = "app://workflow-graph-delete-confirm";
 const workflowDeletedEvent = "app://workflow-deleted";
 
 declare global {
@@ -350,14 +339,6 @@ export function createBrowserNativeBridge(options: BrowserNativeBridgeOptions = 
         return Promise.resolve();
       },
       async onChanged(): Promise<NativeUnlisten> {
-        return () => undefined;
-      },
-    },
-    workflowEditor: {
-      async confirmGraphDelete(): Promise<void> {
-        return Promise.resolve();
-      },
-      async onGraphDeleteConfirmed(): Promise<NativeUnlisten> {
         return () => undefined;
       },
     },
@@ -493,18 +474,6 @@ export function createTauriNativeBridge(platform: NativePlatform = "unknown"): N
       },
       async onChanged(handler: (event: NativeProjectWorkspaceChanged) => void): Promise<NativeUnlisten> {
         return listen<NativeProjectWorkspaceChanged>(projectWorkspaceChangedEvent, (event) => {
-          handler(event.payload);
-        });
-      },
-    },
-    workflowEditor: {
-      async confirmGraphDelete(confirmation: NativeWorkflowGraphDeleteConfirmation): Promise<void> {
-        await emitTo("main", workflowGraphDeleteConfirmEvent, confirmation);
-      },
-      async onGraphDeleteConfirmed(
-        handler: (confirmation: NativeWorkflowGraphDeleteConfirmation) => void,
-      ): Promise<NativeUnlisten> {
-        return listen<NativeWorkflowGraphDeleteConfirmation>(workflowGraphDeleteConfirmEvent, (event) => {
           handler(event.payload);
         });
       },

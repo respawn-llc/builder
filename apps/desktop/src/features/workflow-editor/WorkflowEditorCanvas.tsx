@@ -17,7 +17,6 @@ import {
   deleteWarningTranslationKey,
   dispatchGraphDeletion,
   graphEditWarningTranslationKey,
-  nextGraphDeleteRequestID,
   planGraphDeletion,
   planGraphExtraction,
   type PendingGraphMutation,
@@ -46,12 +45,9 @@ export type WorkflowEditorCanvasProps = Readonly<{
   surface: "route" | "sidebar";
   draftState: WorkflowEditorDraftState | null;
   dispatch: (action: WorkflowEditorDraftAction) => void;
-  deleteRequestIndexRef: { current: number };
   inspect: (selection: WorkflowInspectorSelection, initialFocus?: WorkflowInspectorInitialFocus) => void;
   closeDeletedNodeInspector: (selection: WorkflowGraphSelection) => void;
-  onPendingGraphMutationChange: (mutation: PendingGraphMutation | null) => void;
-  openDeleteConfirmation: (mutation: PendingGraphMutation) => Promise<void>;
-  workflowID: string;
+  openDeleteConfirmation: (mutation: PendingGraphMutation) => void;
 }>;
 
 export function WorkflowEditorCanvas({
@@ -59,12 +55,9 @@ export function WorkflowEditorCanvas({
   surface,
   draftState,
   dispatch,
-  deleteRequestIndexRef,
   inspect,
   closeDeletedNodeInspector,
-  onPendingGraphMutationChange,
   openDeleteConfirmation,
-  workflowID,
 }: WorkflowEditorCanvasProps) {
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
@@ -118,7 +111,6 @@ export function WorkflowEditorCanvas({
       return;
     }
     const plannedDelete = planGraphDeletion(draftState.draft, selection);
-    onPendingGraphMutationChange(null);
     if (plannedDelete.kind === "blocked") {
       pushStatus({
         body: t(deleteWarningTranslationKey(plannedDelete.warning)),
@@ -139,22 +131,21 @@ export function WorkflowEditorCanvas({
       const deleteRequest = {
         action: { kind: "delete", selection },
         counts,
-        requestID: nextGraphDeleteRequestID(workflowID, deleteRequestIndexRef),
         summary: plannedDelete.summary,
       } satisfies PendingGraphMutation;
-      onPendingGraphMutationChange(deleteRequest);
-      void openDeleteConfirmation(deleteRequest);
+      openDeleteConfirmation(deleteRequest);
       return;
     }
     dispatchGraphDeletion(selection, dispatch);
-    closeDeletedNodeInspector(selection);
+    if (selection.kind === "node") {
+      closeDeletedNodeInspector(selection);
+    }
   };
 
   const handleExtractNodeFromGroup = (nodeID: string): void => {
     if (draftState === null) {
       return;
     }
-    onPendingGraphMutationChange(null);
     const input = {
       nodeID,
       rehomedIncomingTransitionGroupID: newWorkflowTopologyID("transitionGroup"),
@@ -174,11 +165,9 @@ export function WorkflowEditorCanvas({
       const extractionRequest = {
         action: { graphVersion: draftState.graphVersion, input, kind: "extract" },
         counts,
-        requestID: nextGraphDeleteRequestID(workflowID, deleteRequestIndexRef),
         summary: plannedExtraction.summary,
       } satisfies PendingGraphMutation;
-      onPendingGraphMutationChange(extractionRequest);
-      void openDeleteConfirmation(extractionRequest);
+      openDeleteConfirmation(extractionRequest);
       return;
     }
     dispatch({ input, type: "extractNodeFromGroup" });

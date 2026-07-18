@@ -3,7 +3,6 @@ import {
   useEffect,
   useMemo,
   useReducer,
-  useRef,
   useState,
   type Dispatch,
   type ReactNode,
@@ -68,15 +67,13 @@ type WorkflowEditorReadyViewProps = Readonly<{
   activeEmbeddedInspectorSelection: WorkflowInspectorSelection | null;
   closeDeletedNodeInspector: (selection: WorkflowGraphSelection) => void;
   controller: WorkflowEditorDraftController;
-  deleteConfirmationFallback: ReactNode;
-  deleteRequestIndexRef: { current: number };
+  deleteConfirmationDialog: ReactNode;
   dispatch: (action: WorkflowEditorDraftAction) => void;
   draftState: WorkflowEditorDraftState | null;
   graph: WorkflowGraphLayout;
   inspect: (selection: WorkflowInspectorSelection, initialFocus?: WorkflowInspectorInitialFocus) => void;
   onClearEmbeddedInspector: () => void;
-  onPendingGraphMutationChange: (mutation: PendingGraphMutation | null) => void;
-  openDeleteConfirmation: (mutation: PendingGraphMutation) => Promise<void>;
+  openDeleteConfirmation: (mutation: PendingGraphMutation) => void;
   save: WorkflowEditorSave;
   surface: "route" | "sidebar";
   workflowID: string;
@@ -99,11 +96,6 @@ export function WorkflowEditorRoute({ projectID, surface = "route", workflowID }
   const save = useWorkflowEditorSave({ data, dispatch, draftState, projectID, workflowID });
   const [embeddedInspectorSelection, setEmbeddedInspectorSelection] =
     useState<WorkflowEditorEmbeddedInspectorSelection | null>(null);
-  const pendingGraphMutationRef = useRef<PendingGraphMutation | null>(null);
-  const onPendingGraphMutationChange = useCallback((mutation: PendingGraphMutation | null) => {
-    pendingGraphMutationRef.current = mutation;
-  }, []);
-  const deleteRequestIndexRef = useRef(0);
   const graphState = useWorkflowEditorGraphState({ data, dirty, draftState, workflowID });
   const { draftDerivedWiring, draftValidation, executionValidation, layoutQuery } = graphState;
   useWindowChromeTitle(
@@ -187,8 +179,7 @@ export function WorkflowEditorRoute({ projectID, surface = "route", workflowID }
     closeDeletedNodeInspector,
     dispatch,
     draftState,
-    onPendingGraphMutationChange,
-    pendingRef: pendingGraphMutationRef,
+    workflowID,
   });
 
   const viewState = workflowEditorViewState(data, layoutQuery, graphState.projectedGraph);
@@ -220,8 +211,7 @@ export function WorkflowEditorRoute({ projectID, surface = "route", workflowID }
       activeEmbeddedInspectorSelection={activeEmbeddedInspector?.selection ?? null}
       closeDeletedNodeInspector={closeDeletedNodeInspector}
       controller={controller}
-      deleteConfirmationFallback={deleteConfirmation.fallback}
-      deleteRequestIndexRef={deleteRequestIndexRef}
+      deleteConfirmationDialog={deleteConfirmation.dialog}
       dispatch={dispatch}
       draftState={draftState}
       graph={viewState.graph}
@@ -229,7 +219,6 @@ export function WorkflowEditorRoute({ projectID, surface = "route", workflowID }
       onClearEmbeddedInspector={() => {
         setEmbeddedInspectorSelection(null);
       }}
-      onPendingGraphMutationChange={onPendingGraphMutationChange}
       openDeleteConfirmation={deleteConfirmation.open}
       save={save}
       surface={surface}
@@ -275,14 +264,12 @@ function WorkflowEditorReadyView(props: WorkflowEditorReadyViewProps) {
     activeEmbeddedInspectorSelection,
     closeDeletedNodeInspector,
     controller,
-    deleteConfirmationFallback,
-    deleteRequestIndexRef,
+    deleteConfirmationDialog,
     dispatch,
     draftState,
     graph,
     inspect,
     onClearEmbeddedInspector,
-    onPendingGraphMutationChange,
     openDeleteConfirmation,
     save,
     surface,
@@ -301,15 +288,12 @@ function WorkflowEditorReadyView(props: WorkflowEditorReadyViewProps) {
     >
       <WorkflowEditorCanvas
         closeDeletedNodeInspector={closeDeletedNodeInspector}
-        deleteRequestIndexRef={deleteRequestIndexRef}
         dispatch={dispatch}
         draftState={draftState}
         graph={graph}
         inspect={inspect}
-        onPendingGraphMutationChange={onPendingGraphMutationChange}
         openDeleteConfirmation={openDeleteConfirmation}
         surface={surface}
-        workflowID={workflowID}
       />
       <WorkflowEditorEmbeddedInspector
         initialFocus={activeEmbeddedInspectorInitialFocus}
@@ -334,7 +318,7 @@ function WorkflowEditorReadyView(props: WorkflowEditorReadyViewProps) {
         }}
         positionStrategy={positionStrategy}
       />
-      {deleteConfirmationFallback}
+      {deleteConfirmationDialog}
       <WorkflowEditorLegendIsland positionStrategy={positionStrategy} />
     </section>
   );

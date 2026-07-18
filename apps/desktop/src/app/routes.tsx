@@ -10,10 +10,6 @@ import {
   WorkflowEditorShellRoute,
   WorkflowLibraryShellRoute,
 } from "./routeComponents";
-import {
-  createWorkflowDeleteConfirmWindowRoute,
-  workflowDeleteConfirmNativeDialogPath,
-} from "./workflowDeleteConfirmRoute";
 import { createWorkflowDeleteWindowRoute } from "./workflowDeleteRoute";
 
 const optionalSearchString = z.string().catch("");
@@ -63,7 +59,6 @@ const taskRoute = createRoute({
 });
 
 const nativeDialogRoutes = createNativeDialogRoutes(rootRoute);
-const workflowDeleteConfirmWindowRoute = createWorkflowDeleteConfirmWindowRoute(rootRoute);
 const workflowDeleteWindowRoute = createWorkflowDeleteWindowRoute(rootRoute);
 
 const routeTree = rootRoute.addChildren([
@@ -74,7 +69,6 @@ const routeTree = rootRoute.addChildren([
   taskRoute,
   ...nativeDialogRoutes,
   workflowDeleteWindowRoute,
-  workflowDeleteConfirmWindowRoute,
 ]);
 
 export function createAppRouter() {
@@ -84,7 +78,7 @@ export function createAppRouter() {
 export type AppRouter = ReturnType<typeof createAppRouter>;
 
 export function shouldSkipNativeDialogStartupGate(pathname: string): boolean {
-  return pathname === workspaceUnlinkNativeDialogPath || pathname === workflowDeleteConfirmNativeDialogPath;
+  return pathname === workspaceUnlinkNativeDialogPath;
 }
 
 declare module "@tanstack/react-router" {
