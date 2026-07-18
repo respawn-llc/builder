@@ -141,18 +141,20 @@ func TestServiceGetSessionMainViewIncludesUpdateStatus(t *testing.T) {
 	}
 }
 
-func TestServiceGetSessionMainViewPropagatesConfiguredStoreResolutionFailure(t *testing.T) {
+func TestServiceGetSessionMainViewDoesNotRequireStoreResolutionForLiveRuntime(t *testing.T) {
 	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
 	engine, err := runtime.New(store, &serviceFakeLLM{}, tools.NewRegistry(), runtime.Config{Model: "gpt-5"})
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
 	t.Cleanup(func() { _ = engine.Close() })
-	want := errors.New("store unavailable")
-	_, err = NewService(failingSessionStoreResolver{err: want}, newTestRuntimeResolver(engine), nil).
+	response, err := NewService(failingSessionStoreResolver{err: errors.New("store unavailable")}, newTestRuntimeResolver(engine), nil).
 		GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
-	if !errors.Is(err, want) {
-		t.Fatalf("error = %v, want store resolution failure", err)
+	if err != nil {
+		t.Fatalf("get live main view: %v", err)
+	}
+	if response.MainView.Activity.State != clientui.RuntimeActivityRegisteredIdle {
+		t.Fatalf("live activity = %+v, want registered idle", response.MainView.Activity)
 	}
 }
 

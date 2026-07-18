@@ -101,7 +101,7 @@ func (s *resolvedSessionSnapshotSource) resolveSessionSnapshot(ctx context.Conte
 			if err != nil {
 				return nil, err
 			}
-			return liveRuntimeSessionSnapshot{engine: engine, sessions: s.sessions, snapshot: snapshot}, nil
+			return liveRuntimeSessionSnapshot{engine: engine, snapshot: snapshot}, nil
 		}
 	}
 	if s.sessions == nil {
@@ -127,7 +127,6 @@ func (s *resolvedSessionSnapshotSource) resolveSessionSnapshot(ctx context.Conte
 
 type liveRuntimeSessionSnapshot struct {
 	engine   *runtime.Engine
-	sessions SessionStoreResolver
 	snapshot runtimeactivity.ResponseSnapshot
 }
 
@@ -137,15 +136,6 @@ func (s liveRuntimeSessionSnapshot) MainView(ctx context.Context) (clientui.Runt
 	}
 	view := runtimeview.MainViewFromRuntimeActivity(s.engine, s.snapshot.Version, s.snapshot.Activity)
 	view.InputReconciliation = s.snapshot.InputReconciliation
-	if s.sessions != nil && view.Status.WorkflowSession == nil {
-		store, err := s.sessions.ResolveSessionStore(ctx, s.engine.SessionID())
-		if err != nil {
-			return clientui.RuntimeMainView{}, err
-		}
-		if store != nil {
-			view.Status.WorkflowSession = workflowSessionStatus(store.Meta().WorkflowSession)
-		}
-	}
 	return resultWithContext(ctx, view)
 }
 
