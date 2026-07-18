@@ -10,6 +10,8 @@ import (
 
 func TestAskEventDefersWhileDetailModeActive(t *testing.T) {
 	m, control := newProjectedPromptTestUIModel(t)
+	ringer := &countRinger{}
+	m.promptAttention = newUnfocusedBellHooks(ringer)
 	m.terminalGeometry = terminalGeometryKnown(90, 12)
 	testSetMainInput(m, "hidden draft")
 	m.layout().syncViewport()
@@ -24,6 +26,9 @@ func TestAskEventDefersWhileDetailModeActive(t *testing.T) {
 	m = updateUIModel(t, m, projectionCommand())
 	if got := m.inputMode(); got != uiInputModeMain {
 		t.Fatalf("expected detail mode to defer ask input, got %q", got)
+	}
+	if ringer.total() != 0 {
+		t.Fatal("hidden detail-mode ask emitted attention before becoming visible")
 	}
 
 	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
@@ -44,6 +49,9 @@ func TestAskEventDefersWhileDetailModeActive(t *testing.T) {
 	if got := m.inputMode(); got != uiInputModeAsk {
 		t.Fatalf("expected ask input after leaving detail mode, got %q", got)
 	}
+	if ringer.total() != 1 {
+		t.Fatalf("visible ask attention count = %d, want 1 after leaving detail mode", ringer.total())
+	}
 	view := stripANSIAndTrimRight(m.View())
 	if !strings.Contains(view, "Proceed?") {
 		t.Fatalf("expected ask prompt visible after returning to ongoing mode, got %q", view)
@@ -59,6 +67,8 @@ func TestAskEventDefersWhileDetailModeActive(t *testing.T) {
 
 func TestAskEventDefersWhileProcessListOverlayIsOpen(t *testing.T) {
 	m, control := newProjectedPromptTestUIModel(t)
+	ringer := &countRinger{}
+	m.promptAttention = newUnfocusedBellHooks(ringer)
 	m.terminalGeometry = terminalGeometryKnown(100, 14)
 	testSetMainInput(m, "/ps")
 
@@ -72,6 +82,9 @@ func TestAskEventDefersWhileProcessListOverlayIsOpen(t *testing.T) {
 	m = updateUIModel(t, m, projectionCommand())
 	if got := m.inputMode(); got != uiInputModeProcessList {
 		t.Fatalf("expected process list to keep input focus while ask is pending, got %q", got)
+	}
+	if ringer.total() != 0 {
+		t.Fatal("hidden process-list ask emitted attention before becoming visible")
 	}
 
 	if len(control.askRequests) != 0 {
@@ -87,6 +100,9 @@ func TestAskEventDefersWhileProcessListOverlayIsOpen(t *testing.T) {
 	}
 	if got := m.inputMode(); got != uiInputModeAsk {
 		t.Fatalf("expected ask to become interactive after closing process list, got %q", got)
+	}
+	if ringer.total() != 1 {
+		t.Fatalf("visible ask attention count = %d, want 1 after closing process list", ringer.total())
 	}
 	view := stripANSIAndTrimRight(m.View())
 	if !strings.Contains(view, "Pick one") {

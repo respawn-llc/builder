@@ -168,6 +168,7 @@ func (m *uiModel) restorePrimaryInputMode() {
 	}
 	if m.ask.hasCurrent() && (m.view.Mode() == "" || m.view.Mode() == tui.ModeOngoing) {
 		m.setInputMode(uiInputModeAsk)
+		m.notifyPendingTranscriptPromptActivation()
 		return
 	}
 	m.setInputMode(uiInputModeMain)

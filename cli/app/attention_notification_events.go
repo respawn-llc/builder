@@ -50,3 +50,17 @@ func notifyTranscriptPromptActivation(hook *bellHooks, prompt clientui.Transcrip
 		Pending: &notification,
 	}, &projectedPreview)
 }
+
+func (m *uiModel) notifyPendingTranscriptPromptActivation() {
+	if m == nil ||
+		m.surface() != uiSurfaceOngoingTranscript ||
+		m.inputMode() != uiInputModeAsk ||
+		m.ask.current == nil ||
+		m.ask.activeProjection == nil ||
+		m.ask.activeProjection.pendingActivationPreview == nil {
+		return
+	}
+	preview := *m.ask.activeProjection.pendingActivationPreview
+	m.ask.activeProjection.pendingActivationPreview = nil
+	notifyTranscriptPromptActivation(m.promptAttention, m.ask.current.prompt, preview)
+}

@@ -35,8 +35,9 @@ type questionRenderResultMsg struct {
 }
 
 type activeQuestionProjection struct {
-	renderedAt questionRenderIdentity
-	rows       []string
+	renderedAt               questionRenderIdentity
+	rows                     []string
+	pendingActivationPreview *string
 }
 
 type desiredQuestionProjection struct {
@@ -152,16 +153,22 @@ func (m *uiModel) applyQuestionRenderResult(result questionRenderResultMsg) (tea
 		return m.handleQuestionProjectionError(result), false
 	}
 	initialActivation := m.ask.activeProjection == nil
+	activationPending := initialActivation ||
+		m.ask.activeProjection != nil && m.ask.activeProjection.pendingActivationPreview != nil
 	candidate := cloneAskEventForProjection(desired.candidate)
 	m.ask.current = &candidate
+	var pendingActivationPreview *string
+	if activationPending {
+		preview := result.notificationPreview
+		pendingActivationPreview = &preview
+	}
 	m.ask.activeProjection = &activeQuestionProjection{
-		renderedAt: result.request.identity,
-		rows:       append([]string(nil), result.rows...),
+		renderedAt:               result.request.identity,
+		rows:                     append([]string(nil), result.rows...),
+		pendingActivationPreview: pendingActivationPreview,
 	}
 	m.ask.latestDesiredProjection = nil
-	if initialActivation {
-		notifyTranscriptPromptActivation(m.promptAttention, candidate.prompt, result.notificationPreview)
-	}
+	m.notifyPendingTranscriptPromptActivation()
 	return nil, true
 }
 
