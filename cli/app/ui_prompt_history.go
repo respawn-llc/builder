@@ -17,12 +17,24 @@ const (
 	promptHistoryOverflowLocalSubmission
 )
 
-func (m *uiModel) loadInitialPromptHistory(initial []string) {
-	history := m.retainPromptHistoryTail(initial, promptHistoryOverflowInitialLoad)
+func (m *uiModel) loadInitialPromptHistory(initial [][]string) {
+	total := 0
+	for _, history := range initial {
+		total += len(history)
+	}
+	skip := m.promptHistoryTailSkip(total, promptHistoryOverflowInitialLoad)
 	var loaded []string
-	for _, raw := range history {
-		if text := preservePromptHistoryText(raw); text != "" {
-			loaded = append(loaded, text)
+	for _, history := range initial {
+		if skip >= len(history) {
+			skip -= len(history)
+			continue
+		}
+		history = history[skip:]
+		skip = 0
+		for _, raw := range history {
+			if text := preservePromptHistoryText(raw); text != "" {
+				loaded = append(loaded, text)
+			}
 		}
 	}
 	m.promptHistory = loaded
@@ -216,8 +228,19 @@ func (m *uiModel) retainPromptHistoryTail(
 	history []string,
 	policy promptHistoryOverflowPolicy,
 ) []string {
-	if len(history) <= serverapi.SessionPromptHistoryMaxEntries {
+	skip := m.promptHistoryTailSkip(len(history), policy)
+	if skip == 0 {
 		return history
+	}
+	return append([]string(nil), history[skip:]...)
+}
+
+func (m *uiModel) promptHistoryTailSkip(
+	count int,
+	policy promptHistoryOverflowPolicy,
+) int {
+	if count <= serverapi.SessionPromptHistoryMaxEntries {
+		return 0
 	}
 	switch policy {
 	case promptHistoryOverflowInitialLoad:
@@ -226,7 +249,7 @@ func (m *uiModel) retainPromptHistoryTail(
 				"load_prompt_history",
 				"session-opening prompt history exceeds contract maximum",
 				map[string]any{
-					"actual_count":  len(history),
+					"actual_count":  count,
 					"maximum_count": serverapi.SessionPromptHistoryMaxEntries,
 				},
 			))
@@ -236,10 +259,7 @@ func (m *uiModel) retainPromptHistoryTail(
 	default:
 		panic("retain prompt history tail with invalid overflow policy")
 	}
-	return append(
-		[]string(nil),
-		history[len(history)-serverapi.SessionPromptHistoryMaxEntries:]...,
-	)
+	return count - serverapi.SessionPromptHistoryMaxEntries
 }
 
 func (m *uiModel) recordPromptHistory(text string) tea.Cmd {

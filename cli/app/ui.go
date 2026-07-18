@@ -70,7 +70,7 @@ func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption)
 
 type uiModelConstruction struct {
 	*uiModel
-	initialPromptHistory []string
+	initialPromptHistories [][]string
 }
 
 func newUIModelConstruction(runtimeClient clientui.RuntimeClient) *uiModelConstruction {
@@ -78,8 +78,8 @@ func newUIModelConstruction(runtimeClient clientui.RuntimeClient) *uiModelConstr
 }
 
 func (c *uiModelConstruction) finalize() *uiModel {
-	c.uiModel.loadInitialPromptHistory(c.initialPromptHistory)
-	c.initialPromptHistory = nil
+	c.uiModel.loadInitialPromptHistory(c.initialPromptHistories)
+	c.initialPromptHistories = nil
 	return c.uiModel
 }
 

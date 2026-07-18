@@ -27,31 +27,28 @@ func TestLoadPromptHistoryKeepsOnlyNewestContractTailInRelease(t *testing.T) {
 	}
 }
 
-func TestPromptHistoryOptionDoesNotPopulateRuntimeHistoryBeforeFinalization(t *testing.T) {
-	history := make([]string, 0, serverapi.SessionPromptHistoryMaxEntries+25)
-	for i := range serverapi.SessionPromptHistoryMaxEntries + 25 {
-		history = append(history, promptHistoryEntry(i))
-	}
-	construction := newUIModelConstruction(nil)
-
-	WithUIPromptHistory(history)(construction)
-
-	if got := len(construction.promptHistory); got != 0 {
-		t.Fatalf("runtime prompt history length before finalization = %d, want 0", got)
-	}
-	if got := len(construction.initialPromptHistory); got != len(history) {
-		t.Fatalf("staged prompt history length = %d, want %d", got, len(history))
-	}
-	if &construction.initialPromptHistory[0] != &history[0] {
-		t.Fatal("staged prompt history copied the source payload")
+func TestPromptHistoryOptionsComposeBeforeRetainingNewestContractTail(t *testing.T) {
+	first := make([]string, 0, 75)
+	second := make([]string, 0, 75)
+	for i := range 75 {
+		first = append(first, promptHistoryEntry(i))
+		second = append(second, promptHistoryEntry(i+75))
 	}
 
-	m := construction.finalize()
+	m := newProjectedStaticUIModel(
+		WithUIDebug(false),
+		WithUIPromptHistory(first),
+		WithUIPromptHistory(second),
+	)
+
 	if got, want := len(m.promptHistory), serverapi.SessionPromptHistoryMaxEntries; got != want {
-		t.Fatalf("final prompt history length = %d, want %d", got, want)
+		t.Fatalf("prompt history length = %d, want %d", got, want)
 	}
-	if construction.initialPromptHistory != nil {
-		t.Fatal("construction retained initial prompt history after finalization")
+	if got, want := m.promptHistory[0], promptHistoryEntry(50); got != want {
+		t.Fatalf("oldest retained prompt = %q, want %q", got, want)
+	}
+	if got, want := m.promptHistory[len(m.promptHistory)-1], promptHistoryEntry(149); got != want {
+		t.Fatalf("newest retained prompt = %q, want %q", got, want)
 	}
 }
 
