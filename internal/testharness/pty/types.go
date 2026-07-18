@@ -115,6 +115,11 @@ const (
 	PhaseDetailInitialPageApplied = analyzer.PhaseDetailInitialPageApplied
 	PhaseScenarioFinalApplied     = analyzer.PhaseScenarioFinalApplied
 	PhaseToolStarted              = analyzer.PhaseToolStarted
+	PhaseAppRunStarted            = analyzer.PhaseAppRunStarted
+	PhaseAuthPickerReady          = analyzer.PhaseAuthPickerReady
+	PhaseSessionPickerReady       = analyzer.PhaseSessionPickerReady
+	PhaseMainUIReady              = analyzer.PhaseMainUIReady
+	PhaseAppRunExited             = analyzer.PhaseAppRunExited
 )
 
 type WindowID = analyzer.WindowID

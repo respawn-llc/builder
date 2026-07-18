@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"core/cli/app/internal/authui"
+	"core/cli/app/internal/connectionstate"
 	serverauth "core/server/auth"
 	"core/shared/apicontract"
 	"core/shared/config"
@@ -25,6 +26,7 @@ func ensureRemoteAuthReady(ctx context.Context, remote apicontract.AuthBootstrap
 		return errors.New("auth bootstrap client is required")
 	}
 	status, err := remote.GetAuthBootstrapStatus(ctx, serverapi.AuthGetBootstrapStatusRequest{})
+	observeAuthConnection(interactor, err)
 	if err != nil {
 		return err
 	}
@@ -40,7 +42,7 @@ func ensureRemoteAuthReady(ctx context.Context, remote apicontract.AuthBootstrap
 	}
 	if interactive, ok := interactor.(*interactiveAuthInteractor); ok {
 		if status.NoAuthSelected {
-			return enableRemoteNoAuth(ctx, remote)
+			return enableRemoteNoAuth(ctx, remote, interactive)
 		}
 		return interactive.completeRemoteAuthBootstrap(ctx, remote, settings, status, false)
 	}
@@ -52,6 +54,7 @@ func ensureRemoteAuthReady(ctx context.Context, remote apicontract.AuthBootstrap
 		Mode:   serverapi.AuthBootstrapModeAPIKey,
 		APIKey: apiKey,
 	})
+	observeAuthConnection(interactor, err)
 	if err != nil {
 		return err
 	}
@@ -60,6 +63,14 @@ func ensureRemoteAuthReady(ctx context.Context, remote apicontract.AuthBootstrap
 	}
 	disableRemoteNoAuth(remote)
 	return nil
+}
+
+func observeAuthConnection(interactor authInteractor, err error) connectionstate.Outcome {
+	interactive, ok := interactor.(*interactiveAuthInteractor)
+	if !ok || interactive == nil || interactive.connectionState == nil {
+		return connectionstate.Classify(connectionstate.OperationUnary, err)
+	}
+	return interactive.connectionState.ObserveUnary(err)
 }
 
 func (i *interactiveAuthInteractor) completeRemoteAuthBootstrap(ctx context.Context, remote apicontract.AuthBootstrapService, settings config.Settings, status serverapi.AuthGetBootstrapStatusResponse, force bool) error {
@@ -84,12 +95,13 @@ func (i *interactiveAuthInteractor) completeRemoteAuthBootstrap(ctx context.Cont
 		}
 		completeReq.Force = force
 		resp, err := remote.CompleteAuthBootstrap(ctx, completeReq)
+		observeAuthConnection(i, err)
 		if err != nil {
 			req.FlowErr = err
 			continue
 		}
 		if completeReq.Mode == serverapi.AuthBootstrapModeNone && resp.NoAuthSelected {
-			if err := enableRemoteNoAuth(ctx, remote); err != nil {
+			if err := enableRemoteNoAuth(ctx, remote, i); err != nil {
 				return err
 			}
 			i.printAuthSection(req.Theme, "Server Auth Skipped", []string{lipgloss.NewStyle().Foreground(uiPalette(req.Theme).muted).Faint(true).Render("Kent will proceed without configured server auth.")})
@@ -113,11 +125,14 @@ type remoteNoAuthAcknowledgementDisabler interface {
 	DisableNoAuthBootstrapAcknowledgement()
 }
 
-func enableRemoteNoAuth(ctx context.Context, remote apicontract.AuthBootstrapService) error {
+func enableRemoteNoAuth(ctx context.Context, remote apicontract.AuthBootstrapService, interactor authInteractor) error {
 	if enabler, ok := remote.(remoteNoAuthAcknowledgementEnabler); ok {
-		return enabler.EnableNoAuthBootstrapAcknowledgement(ctx)
+		err := enabler.EnableNoAuthBootstrapAcknowledgement(ctx)
+		observeAuthConnection(interactor, err)
+		return err
 	}
 	resp, err := remote.AcknowledgeNoAuth(ctx, serverapi.AuthAcknowledgeNoAuthRequest{})
+	observeAuthConnection(interactor, err)
 	if err != nil {
 		return err
 	}

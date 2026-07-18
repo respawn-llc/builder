@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"core/cli/app/internal/connectionstate"
 	"core/cli/app/internal/embeddedattach"
 	"core/cli/app/internal/runner"
 	"core/shared/serverapi"
@@ -29,15 +30,19 @@ type Options struct {
 }
 
 func Run(ctx context.Context, opts Options) error {
+	connection := connectionstate.NewOwner()
 	return runner.RunInteractive(ctx, runnerRequestFromOptions(opts), runner.Dependencies[interactiveSessionServer, authInteractor, embeddedattach.StartupOptions]{
-		NewAuthInteractor: newInteractiveAuthInteractor,
+		NewAuthInteractor: func() authInteractor {
+			return newInteractiveAuthInteractorWithConnection(connection)
+		},
 		StartSessionServer: func(ctx context.Context, req runner.Request[embeddedattach.StartupOptions], interactor authInteractor, interactive bool) (interactiveSessionServer, error) {
-			return startSessionServer(ctx, optionsFromRunnerRequest(req), interactor, interactive)
+			return startSessionServerWithConnection(ctx, optionsFromRunnerRequest(req), interactor, interactive, connection)
 		},
 		RunSessionLifecycle: func(ctx context.Context, server interactiveSessionServer, interactor authInteractor, opts runner.SessionLifecycleOptions) error {
 			return runSessionLifecycleWithOptions(ctx, server, interactor, sessionLifecycleOptions{
-				Intent:    opts.Intent,
-				Overrides: opts.Overrides,
+				Intent:     opts.Intent,
+				Overrides:  opts.Overrides,
+				Connection: connection,
 			})
 		},
 	})

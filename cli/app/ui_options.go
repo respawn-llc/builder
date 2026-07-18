@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"core/cli/app/commands"
+	"core/cli/app/internal/connectionstate"
 	"core/cli/tui"
 	"core/cli/tui/transcriptrender"
 	"core/shared/apicontract"
@@ -41,6 +42,14 @@ const (
 func WithUILogger(logger uiLogger) UIOption {
 	return func(m *uiModelConstruction) {
 		m.logger = logger
+	}
+}
+
+func WithUIConnectionState(owner *connectionstate.Owner) UIOption {
+	return func(m *uiModelConstruction) {
+		if owner != nil {
+			m.connectionState = owner
+		}
 	}
 }
 
@@ -197,12 +206,6 @@ func WithUITerminalFocusState(state *terminalFocusState) UIOption {
 func WithUIPromptHistory(history []string) UIOption {
 	return func(m *uiModelConstruction) {
 		m.appendInitialPromptHistory(history)
-	}
-}
-
-func WithUIStartupUpdateNotice(enabled bool) UIOption {
-	return func(m *uiModelConstruction) {
-		m.startupUpdateNotice = enabled
 	}
 }
 

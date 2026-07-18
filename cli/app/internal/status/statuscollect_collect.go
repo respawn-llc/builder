@@ -96,7 +96,6 @@ func (c Collector) CollectBase(req Request) Snapshot {
 		OwnsServer:           req.OwnsServer,
 		Context:              contextInfo,
 		Model:                ModelInfo{Summary: ModelSummary(req)},
-		Update:               BuildUpdateInfo(req),
 		Config: ConfigInfo{
 			SettingsPath:    filepath.ToSlash(strings.TrimSpace(req.Source.SettingsPath)),
 			OverrideSources: ConfigOverrideSources(req.Source),
@@ -169,9 +168,10 @@ func (c Collector) CollectAuth(ctx context.Context, req Request, _ Snapshot) Aut
 		if err != nil {
 			errText := err.Error()
 			return AuthStageResult{
-				Auth:         AuthInfo{Summary: "Auth unavailable", Details: []string{errText}, Visible: true},
-				Subscription: SubscriptionInfo{Applicable: true, Summary: "Subscription unavailable: " + errText, Error: errText},
-				Warning:      "auth: " + errText,
+				Auth:           AuthInfo{Summary: "Auth unavailable", Details: []string{errText}, Visible: true},
+				Subscription:   SubscriptionInfo{Applicable: true, Summary: "Subscription unavailable: " + errText, Error: errText},
+				Warning:        "auth: " + errText,
+				OperationError: err,
 			}
 		}
 		return AuthStageResult{

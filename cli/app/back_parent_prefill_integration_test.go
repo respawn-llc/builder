@@ -228,7 +228,6 @@ func TestBackReopensPreviousSessionAcrossProjects(t *testing.T) {
 		false,
 		"",
 		false,
-		false,
 	)
 	if err != nil {
 		t.Fatalf("prepare embedded target parent UI: %v", err)
@@ -397,7 +396,6 @@ func TestRemoteBackRebindsToParentProjectBeforeRuntimePreparation(t *testing.T) 
 		false,
 		"",
 		false,
-		false,
 	)
 	if err != nil {
 		t.Fatalf("prepare target parent UI: %v", err)
@@ -558,7 +556,6 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 				false,
 				wantInput,
 				true,
-				false,
 			)
 			if err != nil {
 				t.Fatalf("prepare parent UI: %v", err)

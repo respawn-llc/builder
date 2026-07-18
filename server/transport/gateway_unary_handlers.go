@@ -66,6 +66,15 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			return response, nil
 		})
 	},
+	protocol.MethodServerUpdateStatusGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeAndHandle(req, func(params serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
+			statusClient := g.deps.ServerStatusClient()
+			if statusClient == nil {
+				return serverapi.UpdateStatusResponse{}, errors.New("server status client is required")
+			}
+			return statusClient.GetUpdateStatus(ctx, params)
+		})
+	},
 	protocol.MethodAuthCompleteBootstrap: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
 			bootstrapClient := g.deps.AuthBootstrapClient()

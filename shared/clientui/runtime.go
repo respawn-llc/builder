@@ -59,20 +59,12 @@ type RuntimeStatus struct {
 	Goal                              *RuntimeGoal
 	WorkflowActive                    bool
 	WorkflowSession                   *WorkflowSessionStatus
-	Update                            UpdateStatus
 }
 
 type WorkflowSessionStatus struct {
 	RunID      string
 	TaskID     string
 	WorkflowID string
-}
-
-type UpdateStatus struct {
-	Checked        bool
-	Available      bool
-	CurrentVersion string
-	LatestVersion  string
 }
 
 type RunStatus string

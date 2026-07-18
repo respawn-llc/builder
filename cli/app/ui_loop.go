@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"core/cli/app/commands"
+	"core/cli/app/internal/connectionstate"
 	"core/cli/tui/ongoing"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -33,7 +34,7 @@ type uiLoopRequest struct {
 	modelContractLocked          bool
 	configuredModelName          string
 	statusConfig                 uiStatusConfig
-	startupUpdateNotice          bool
+	connectionState              *connectionstate.Owner
 }
 
 func runUILoop(request uiLoopRequest) (tea.Model, error) {
@@ -132,7 +133,7 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUISessionName(request.sessionName),
 		WithUISessionID(sessionID),
 		WithUIStatusConfig(request.statusConfig),
-		WithUIStartupUpdateNotice(request.startupUpdateNotice),
+		WithUIConnectionState(request.connectionState),
 		WithUITerminalCursorState(terminalCursor),
 		WithUIRendererOutputGateState(rendererOutputGate),
 		WithUIOngoingSurface(ongoingSurface),

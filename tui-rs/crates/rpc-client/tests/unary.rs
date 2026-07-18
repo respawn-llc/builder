@@ -3413,13 +3413,7 @@ fn zero_main_view_json() -> serde_json::Value {
                     "HasCacheHitPercentage": false
                 },
                 "CompactionCount": 0,
-                "Goal": null,
-                "Update": {
-                    "Checked": false,
-                    "Available": false,
-                    "CurrentVersion": "",
-                    "LatestVersion": ""
-                }
+                "Goal": null
             },
             "Session": {
                 "SessionID": "",

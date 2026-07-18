@@ -3,7 +3,9 @@ package app
 import (
 	"strings"
 
+	"core/cli/app/internal/connectionstate"
 	"core/cli/app/internal/status"
+	"core/shared/apicontract"
 
 	"github.com/mattn/go-runewidth"
 )
@@ -21,12 +23,25 @@ type sessionPickerHeaderInfo struct {
 	OwnsServer    bool
 	ServerAddress string
 	Notice        *startupPickerNotice
+	connection    *connectionstate.Owner
+	updateStatus  apicontract.ServerStatusService
 }
 
 type sessionPickerHeaderLine struct {
+	kind   sessionPickerHeaderRowKind
 	plain  string
 	render string
 }
+
+type sessionPickerHeaderRowKind uint8
+
+const (
+	sessionPickerHeaderRowVersion sessionPickerHeaderRowKind = iota + 1
+	sessionPickerHeaderRowUpdateAvailable
+	sessionPickerHeaderRowUpdateFailed
+	sessionPickerHeaderRowMetadata
+	sessionPickerHeaderRowServer
+)
 
 func (m *sessionPickerModel) renderHeader() string {
 	maxOuterWidth := m.width
@@ -37,7 +52,7 @@ func (m *sessionPickerModel) renderHeader() string {
 	if maxInnerWidth < 1 {
 		maxInnerWidth = 1
 	}
-	lines := m.renderHeaderLines(maxInnerWidth)
+	lines := m.projectHeaderRows(maxInnerWidth)
 	innerWidth := maxRenderedHeaderLineWidth(lines)
 	if innerWidth < 1 {
 		innerWidth = 1
@@ -48,16 +63,20 @@ func (m *sessionPickerModel) renderHeader() string {
 	return m.styles.headerBox.Width(innerWidth + 2).Render(renderHeaderLines(lines, innerWidth))
 }
 
-func (m *sessionPickerModel) renderHeaderLines(maxWidth int) []sessionPickerHeaderLine {
+func (m *sessionPickerModel) projectHeaderRows(maxWidth int) []sessionPickerHeaderLine {
 	info := m.normalizedHeaderInfo()
 	title := "Kent v" + info.Version
 	if maxWidth < 1 {
 		maxWidth = 1
 	}
 	lines := []sessionPickerHeaderLine{{
+		kind:   sessionPickerHeaderRowVersion,
 		plain:  title,
 		render: m.styles.headerTitle.Render(truncateQueuedMessageLine(title, maxWidth)),
 	}}
+	if updateLine := m.projectUpdateHeaderRow(maxWidth); updateLine != nil {
+		lines = append(lines, *updateLine)
+	}
 	lines = append(lines, m.renderHeaderPairLines(gitBranchHeaderSegment(info.Branch), info.CWD, maxWidth)...)
 	lines = append(lines, m.renderHeaderPairLines(info.Auth, info.Model, maxWidth)...)
 	serverLine := m.serverHeaderLine(info)
@@ -70,11 +89,67 @@ func (m *sessionPickerModel) renderHeaderLines(maxWidth int) []sessionPickerHead
 			style = m.styles.headerWarning
 		}
 		lines = append(lines, sessionPickerHeaderLine{
+			kind:   sessionPickerHeaderRowServer,
 			plain:  serverLine,
 			render: style.Render(serverLine),
 		})
 	}
 	return lines
+}
+
+func (m *sessionPickerModel) projectUpdateHeaderRow(maxWidth int) *sessionPickerHeaderLine {
+	if maxWidth < 1 {
+		maxWidth = 1
+	}
+	switch m.updateStatus.kind {
+	case sessionPickerUpdatePending, sessionPickerUpdateCurrent, sessionPickerUpdateCheckUnavailable:
+		return nil
+	case sessionPickerUpdateAvailable:
+		if m.updateStatus.result == nil {
+			panic("available session-picker update state requires a result")
+		}
+		_, latestVersion, ok := m.updateStatus.result.Versions()
+		if !ok {
+			panic("available session-picker update state requires versions")
+		}
+		return m.renderUpdateHeaderRow(
+			sessionPickerHeaderRowUpdateAvailable,
+			"Update available: v"+latestVersion,
+			maxWidth,
+		)
+	case sessionPickerUpdateCheckFailed:
+		if m.updateStatus.result == nil {
+			panic("failed session-picker update state requires a result")
+		}
+		cause, ok := m.updateStatus.result.FailureCause()
+		if !ok {
+			panic("failed session-picker update state requires a failure cause")
+		}
+		return m.renderUpdateHeaderRow(
+			sessionPickerHeaderRowUpdateFailed,
+			"Update check failed: "+cause,
+			maxWidth,
+		)
+	default:
+		panic("unknown session-picker update state")
+	}
+}
+
+func (m *sessionPickerModel) renderUpdateHeaderRow(
+	kind sessionPickerHeaderRowKind,
+	text string,
+	maxWidth int,
+) *sessionPickerHeaderLine {
+	rendered := truncateQueuedMessageLine(text, maxWidth)
+	style := m.styles.headerSuccess
+	if kind == sessionPickerHeaderRowUpdateFailed {
+		style = m.styles.headerError
+	}
+	return &sessionPickerHeaderLine{
+		kind:   kind,
+		plain:  rendered,
+		render: style.Render(rendered),
+	}
 }
 
 func (m *sessionPickerModel) normalizedHeaderInfo() sessionPickerHeaderInfo {
@@ -106,6 +181,7 @@ func (m *sessionPickerModel) renderHeaderPairLines(first string, second string, 
 	row := first + statusLineSeparator + second
 	if runewidth.StringWidth(row) <= maxWidth {
 		return []sessionPickerHeaderLine{{
+			kind:   sessionPickerHeaderRowMetadata,
 			plain:  row,
 			render: m.styles.headerText.Render(row),
 		}}
@@ -122,6 +198,7 @@ func (m *sessionPickerModel) renderHeaderTextLine(text string, maxWidth int) ses
 		renderedText = truncateSessionPickerHeaderSegment(renderedText, maxWidth)
 	}
 	return sessionPickerHeaderLine{
+		kind:   sessionPickerHeaderRowMetadata,
 		plain:  renderedText,
 		render: m.styles.headerText.Render(renderedText),
 	}

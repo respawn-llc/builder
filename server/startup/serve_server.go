@@ -50,6 +50,10 @@ var localSocketListener = listenLocalSocket
 var errStartupControlSurfaceNotRequired = errors.New("startup control surface is not required")
 
 func StartServeServer(ctx context.Context, req Request, authHandler AuthHandler, onboardingHandler OnboardingHandler) (*ServeServer, error) {
+	return StartServeServerWithOptions(ctx, req, authHandler, onboardingHandler, Options{})
+}
+
+func StartServeServerWithOptions(ctx context.Context, req Request, authHandler AuthHandler, onboardingHandler OnboardingHandler, opts Options) (*ServeServer, error) {
 	if authHandler == nil {
 		return nil, errors.New("auth handler is required")
 	}
@@ -60,7 +64,7 @@ func StartServeServer(ctx context.Context, req Request, authHandler AuthHandler,
 	}
 	cfg := resolved.Config
 	if cfg.Source.SettingsFileExists {
-		appCore, err := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, Options{})
+		appCore, err := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -72,17 +76,17 @@ func StartServeServer(ctx context.Context, req Request, authHandler AuthHandler,
 			return nil, err
 		}
 		if completed && onboardingCfg.Source.SettingsFileExists {
-			appCore, err := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, nil, Options{})
+			appCore, err := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, nil, opts)
 			if err != nil {
 				return nil, err
 			}
 			return &ServeServer{Core: appCore, cfg: appCore.Config()}, nil
 		}
 	}
-	cfg, deps, err := buildStartupControlSurface(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, Options{})
+	cfg, deps, err := buildStartupControlSurface(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, opts)
 	if err != nil {
 		if errors.Is(err, errStartupControlSurfaceNotRequired) {
-			appCore, coreErr := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, Options{})
+			appCore, coreErr := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, opts)
 			if coreErr != nil {
 				return nil, coreErr
 			}
@@ -561,6 +565,7 @@ type startupServerStatusService struct {
 	readiness interface {
 		ServerReadinessState() startupReadinessState
 	}
+	activeCore func() *core.Core
 }
 
 func (s startupServerStatusService) GetServerReadiness(ctx context.Context, req serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error) {
@@ -601,6 +606,33 @@ func (s startupServerStatusService) GetServerReadiness(ctx context.Context, req 
 	return resp, nil
 }
 
+func (s startupServerStatusService) GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.UpdateStatusResponse{}, err
+	}
+	if s.readiness != nil {
+		if state := s.readiness.ServerReadinessState(); !state.Ready {
+			reason := serverapi.ServerNotReadyOnboardingRequired
+			if state.Reason != nil {
+				reason = *state.Reason
+			}
+			var details any
+			if state.Diagnostic != nil {
+				details = serverapi.ServerNotReadyDetails{Diagnostic: state.Diagnostic}
+			}
+			return serverapi.UpdateStatusResponse{}, serverapi.NewServerNotReadyError(reason, details, nil)
+		}
+	}
+	if s.activeCore == nil {
+		return serverapi.UpdateStatusResponse{}, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
+	}
+	activeCore := s.activeCore()
+	if activeCore == nil {
+		return serverapi.UpdateStatusResponse{}, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
+	}
+	return activeCore.ServerStatusClient().GetUpdateStatus(ctx, req)
+}
+
 type startupFinalizeService struct {
 	service           apicontract.OnboardingFinalizeService
 	activate          func(context.Context, serverapi.OnboardingFinalizeResponse) error
@@ -639,7 +671,11 @@ func (d *startupGatewayDependencies) CapabilityFactsClient() apicontract.Capabil
 }
 func (d *startupGatewayDependencies) ServerStatusClient() apicontract.ServerStatusService {
 	cfg := d.snapshotConfig()
-	return startupServerStatusService{base: serverstatus.NewServerStatusService(d.authSupport.AuthManager, cfg), readiness: d}
+	return startupServerStatusService{
+		base:       serverstatus.NewServerStatusService(d.authSupport.AuthManager, cfg, nil),
+		readiness:  d,
+		activeCore: d.activeCore,
+	}
 }
 func (d *startupGatewayDependencies) ServerAuthRequired() bool {
 	cfg := d.snapshotConfig()

@@ -93,8 +93,6 @@ func runtimeMainViewRefreshRequestForCause(cause runtimeMainViewRefreshCause) ru
 	priority := 10
 	class := runtimeSyncPolicyClassRoutine
 	switch cause {
-	case runtimeMainViewRefreshCauseStartupUpdate:
-		priority = 20
 	case runtimeMainViewRefreshCauseWorktreeMutation:
 		class = runtimeSyncPolicyClassAllowed
 		priority = 50
@@ -152,8 +150,7 @@ func (m *uiModel) handleRuntimeMainViewRefreshed(msg runtimeMainViewRefreshedMsg
 		).view
 	}
 	applyCmd := m.applyRuntimeMainViewState(canonical)
-	noticeCmd := runtimeMainViewStartupUpdateNoticeCmd(req, canonical)
-	return sequenceCmds(applyCmd, m.applyRuntimeSessionMetadata(canonical.Session), noticeCmd, m.drainPendingRuntimeMainViewRefresh().cmd)
+	return sequenceCmds(applyCmd, m.applyRuntimeSessionMetadata(canonical.Session), m.drainPendingRuntimeMainViewRefresh().cmd)
 }
 
 func (m *uiModel) applyRuntimeSessionMetadata(session clientui.RuntimeSessionView) tea.Cmd {
@@ -178,19 +175,6 @@ func (m *uiModel) applyRuntimeSessionMetadata(session clientui.RuntimeSessionVie
 	resetCmd := m.forwardToView(tui.ResetDetailTranscriptMsg{})
 	loadCmd := m.loadDetailTranscriptPageCmd(m.detailTranscript.requestedPageForDetailEntry())
 	return sequenceCmds(rollbackCmd, cancelCmd, resetCmd, loadCmd)
-}
-
-func runtimeMainViewStartupUpdateNoticeCmd(req runtimeMainViewRefreshRequest, view clientui.RuntimeMainView) tea.Cmd {
-	if req.cause != runtimeMainViewRefreshCauseStartupUpdate {
-		return nil
-	}
-	status := view.Status.Update
-	if !status.Available || strings.TrimSpace(status.LatestVersion) == "" {
-		return nil
-	}
-	return func() tea.Msg {
-		return startupUpdateNoticeMsg{version: status.LatestVersion}
-	}
 }
 
 func (m *uiModel) flushQueuedInputsAfterHydration() tea.Cmd {

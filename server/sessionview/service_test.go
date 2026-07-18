@@ -52,14 +52,6 @@ func (r staticExecutionTargetResolver) ResolveSessionExecutionTarget(context.Con
 	return r.target, nil
 }
 
-type staticUpdateStatusProvider struct {
-	status clientui.UpdateStatus
-}
-
-func (p staticUpdateStatusProvider) Status(context.Context) clientui.UpdateStatus {
-	return p.status
-}
-
 type failingSessionStoreResolver struct {
 	err error
 }
@@ -122,22 +114,6 @@ func TestServiceGetSessionMainViewUsesLiveRuntimeWhenAttached(t *testing.T) {
 	close(release)
 	if err := <-done; err != nil {
 		t.Fatalf("submit user message: %v", err)
-	}
-}
-
-func TestServiceGetSessionMainViewIncludesUpdateStatus(t *testing.T) {
-	dir := t.TempDir()
-	store := newSessionViewStore(t, dir, "ws", dir)
-	svc := NewService(newTestSessionResolver(store), nil, nil).WithUpdateStatusProvider(staticUpdateStatusProvider{
-		status: clientui.UpdateStatus{Checked: true, Available: true, LatestVersion: "1.2.3"},
-	})
-
-	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
-	if err != nil {
-		t.Fatalf("get session main view: %v", err)
-	}
-	if resp.MainView.Status.Update.LatestVersion != "1.2.3" || !resp.MainView.Status.Update.Available {
-		t.Fatalf("unexpected update status: %+v", resp.MainView.Status.Update)
 	}
 }
 

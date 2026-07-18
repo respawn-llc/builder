@@ -31,6 +31,9 @@ func TestRoutePolicyAuthPolicyHandlesBlankAndUnknownMethods(t *testing.T) {
 	if err := executor.requireAuth(context.Background(), nil, protocol.MethodProjectAttachWorkspace); !errors.Is(err, serverapi.ErrServerAuthRequired) {
 		t.Fatalf("auth-required method error = %v, want server auth required", err)
 	}
+	if err := executor.requireAuth(context.Background(), nil, protocol.MethodServerUpdateStatusGet); !errors.Is(err, serverapi.ErrServerAuthRequired) {
+		t.Fatalf("update status auth error = %v, want server auth required", err)
+	}
 	if err := executor.requireAuth(context.Background(), nil, "missing.method"); !errors.Is(err, serverapi.ErrServerAuthRequired) {
 		t.Fatalf("unknown method error = %v, want server auth required", err)
 	}

@@ -12,6 +12,7 @@ import (
 const (
 	MethodHandshake                                     = "protocol.handshake"
 	MethodServerReadinessGet                            = "server.readiness.get"
+	MethodServerUpdateStatusGet                         = "server.updateStatus.get"
 	MethodAuthGetBootstrapStatus                        = "auth.getBootstrapStatus"
 	MethodAuthCompleteBootstrap                         = "auth.completeBootstrap"
 	MethodAuthAcknowledgeNoAuth                         = "auth.acknowledgeNoAuth"

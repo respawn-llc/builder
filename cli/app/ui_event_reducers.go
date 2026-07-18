@@ -2,7 +2,6 @@ package app
 
 import (
 	"runtime/debug"
-	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -52,15 +51,6 @@ func (m *uiModel) reduceNoticeMessage(msg tea.Msg) uiFeatureUpdateResult {
 		}
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, nil)
-	case startupUpdateNoticeMsg:
-		if m.startupUpdateShown {
-			m.layout().syncViewport()
-			return handledUIFeatureUpdate(m, nil)
-		}
-		m.startupUpdateShown = true
-		cmd := m.sendTransientStatusWithNoticeID("update available: "+strings.TrimSpace(msg.version), uiStatusNoticeSuccess, updateNoticeDuration, uiStatusNoticeQueue, "")
-		m.layout().syncViewport()
-		return handledUIFeatureUpdate(m, cmd)
 	}
 	return uiFeatureUpdateResult{}
 }

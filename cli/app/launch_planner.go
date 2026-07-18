@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"core/cli/app/internal/connectionstate"
 	"core/cli/app/internal/status"
 	"core/shared/apicontract"
 	"core/shared/clientui"
@@ -89,6 +90,10 @@ type launchPlannerServer interface {
 	SessionViewClient() apicontract.SessionViewService
 }
 
+type launchPlannerServerStatusProvider interface {
+	ServerStatusClient() apicontract.ServerStatusService
+}
+
 type launchPlannerAuthStateProvider interface {
 	AuthStateResolver() status.AuthStateResolver
 	AuthStatePath() string
@@ -106,11 +111,17 @@ type launchPlannerRuntimePreparer interface {
 type launchPlanner struct {
 	server      launchPlannerServer
 	pickSession sessionPickerRunner
+	connection  *connectionstate.Owner
 }
 
 func newSessionLaunchPlanner(server launchPlannerServer) *launchPlanner {
+	return newSessionLaunchPlannerWithConnection(server, nil)
+}
+
+func newSessionLaunchPlannerWithConnection(server launchPlannerServer, connection *connectionstate.Owner) *launchPlanner {
 	return &launchPlanner{
-		server: server,
+		server:     server,
+		connection: connection,
 		pickSession: func(loader sessionPageLoader, theme string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
 			return runSessionPickerFlow(loader, theme, header)
 		},
@@ -118,8 +129,9 @@ func newSessionLaunchPlanner(server launchPlannerServer) *launchPlanner {
 }
 
 type projectScopedSessionPageLoader struct {
-	projectID string
-	client    apicontract.ProjectViewService
+	projectID  string
+	client     apicontract.ProjectViewService
+	connection *connectionstate.Owner
 }
 
 func (l projectScopedSessionPageLoader) ProjectID() string {
@@ -127,7 +139,11 @@ func (l projectScopedSessionPageLoader) ProjectID() string {
 }
 
 func (l projectScopedSessionPageLoader) ListSessionPage(ctx context.Context, request serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
-	return l.client.ListSessionPage(ctx, request)
+	response, err := l.client.ListSessionPage(ctx, request)
+	if l.connection != nil {
+		l.connection.ObserveUnary(err)
+	}
+	return response, err
 }
 
 func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchRequest) (sessionLaunchPlan, error) {
@@ -242,8 +258,9 @@ func (p *launchPlanner) selectSession(ctx context.Context, notice *startupPicker
 		return nil, errors.New("session picker project ID is required")
 	}
 	loader := projectScopedSessionPageLoader{
-		projectID: projectID,
-		client:    p.server.ProjectViewClient(),
+		projectID:  projectID,
+		client:     p.server.ProjectViewClient(),
+		connection: p.connection,
 	}
 	header := p.sessionPickerHeaderInfo(p.server.Config())
 	header.Notice = notice
@@ -285,7 +302,17 @@ func (p *launchPlanner) sessionPickerHeaderInfo(cfg config.App) sessionPickerHea
 		AuthManager:   status.NormalizeAuthStateResolver(authState.Resolver),
 		OwnsServer:    p != nil && p.server != nil && p.server.OwnsServer(),
 		ServerAddress: net.JoinHostPort(cfg.Settings.ServerHost, strconv.Itoa(cfg.Settings.ServerPort)),
+		connection:    p.connection,
+		updateStatus:  launchPlannerUpdateStatusClient(p.server),
 	}
+}
+
+func launchPlannerUpdateStatusClient(server launchPlannerServer) apicontract.ServerStatusService {
+	provider, ok := server.(launchPlannerServerStatusProvider)
+	if !ok {
+		return nil
+	}
+	return provider.ServerStatusClient()
 }
 
 func sessionPlanOverridesFromConfig(cfg config.App) serverapi.RunPromptOverrides {

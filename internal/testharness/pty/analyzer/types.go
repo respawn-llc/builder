@@ -598,6 +598,11 @@ const (
 	PhaseDetailInitialPageApplied = KindDetailInitialPageApplied
 	PhaseScenarioFinalApplied     = KindScenarioFinalApplied
 	PhaseToolStarted              = KindToolStarted
+	PhaseAppRunStarted            = KindAppRunStarted
+	PhaseAuthPickerReady          = KindAuthPickerReady
+	PhaseSessionPickerReady       = KindSessionPickerReady
+	PhaseMainUIReady              = KindMainUIReady
+	PhaseAppRunExited             = KindAppRunExited
 )
 
 type ReadinessBoundaryKind uint8

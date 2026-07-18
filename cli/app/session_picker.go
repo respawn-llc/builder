@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"core/cli/app/internal/connectionstate"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -68,6 +69,8 @@ type sessionPickerModel struct {
 	spinnerSequence            uint64
 	scheduledSpinnerGeneration *uint64
 	startupStatus              *startupPickerStatusModel
+	connection                 *connectionstate.Owner
+	updateStatus               sessionPickerUpdateState
 	clock                      func() time.Time
 }
 
@@ -96,6 +99,7 @@ func newSessionPickerModel(
 		panic("session picker requires a page loader")
 	}
 	startupStatus := newStartupPickerStatusModel()
+	startupStatus.connection = header.connection
 	if header.Notice != nil {
 		startupStatus.notice = *header.Notice
 	}
@@ -111,6 +115,8 @@ func newSessionPickerModel(
 		theme:          theme,
 		styles:         newSessionPickerStyles(theme),
 		startupStatus:  startupStatus,
+		connection:     header.connection,
+		updateStatus:   pendingSessionPickerUpdateState(),
 		clock:          time.Now,
 	}
 }
@@ -120,6 +126,7 @@ func (m *sessionPickerModel) Init() tea.Cmd {
 		m.startBodyRequest(sessioncontract.SessionCategoryMain, sessionPickerBodyRequestInitial),
 		m.startBodyRequest(sessioncontract.SessionCategorySubagent, sessionPickerBodyRequestInitial),
 		collectSessionPickerStatusCmd(m.header),
+		m.collectUpdateStatusCmd(),
 	}
 	if tick := m.reconcileSpinnerTick(); tick != nil {
 		commands = append(commands, tick)
@@ -151,12 +158,17 @@ func (m *sessionPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinnerFrame++
 		return m, m.reconcileSpinnerTick()
 	case sessionPickerStatusMsg:
+		if message.connectionObserved && m.connection != nil {
+			m.connection.ObserveUnary(message.connectionErr)
+		}
 		m.header.CWD = sessionPickerStatusText(message.cwd)
 		m.header.Branch = sessionPickerStatusText(message.branch)
 		m.header.Auth = sessionPickerStatusText(message.auth)
 		m.header.Model = sessionPickerStatusText(message.model)
 		m.ensureSelectedVisible(m.tab(m.activeTab))
 		return m, nil
+	case sessionPickerUpdateStatusMsg:
+		return m, m.applyUpdateStatus(message)
 	case tea.WindowSizeMsg:
 		if message.Width > 0 {
 			m.width = message.Width

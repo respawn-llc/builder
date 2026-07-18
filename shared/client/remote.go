@@ -190,6 +190,10 @@ func (c *Remote) GetServerReadiness(ctx context.Context, req serverapi.ServerRea
 	return callUnscopedRPC[serverapi.ServerReadinessRequest, serverapi.ServerReadinessResponse](c, ctx, protocol.MethodServerReadinessGet, req)
 }
 
+func (c *Remote) GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
+	return callUnscopedRPC[serverapi.UpdateStatusRequest, serverapi.UpdateStatusResponse](c, ctx, protocol.MethodServerUpdateStatusGet, req)
+}
+
 func (c *Remote) ProjectID() string {
 	if binding, present := c.projectBinding(); present {
 		return binding.ProjectID

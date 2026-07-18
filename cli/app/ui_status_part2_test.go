@@ -13,6 +13,7 @@ import (
 	"core/server/sessionview"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -148,14 +149,14 @@ func TestStatusRefreshCmdSchedulesBaseEnrichmentForProgressiveCollector(t *testi
 	}
 }
 
-func TestStatusRefreshDefersRuntimeAndAuthReadsToCommands(t *testing.T) {
+func TestStatusOverlayRefreshDefersRuntimeAndAuthReadsWithoutUpdateStatusCall(t *testing.T) {
 	store := &countingAuthStore{}
 	manager := auth.NewManager(store, nil, nil)
 	runtimeClient := &statusRefreshRuntimeClient{}
 	model := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthManager: manager}))
 	model.engine = runtimeClient
 
-	cmd := model.statusRefreshCmd()
+	cmd := model.inputController().startStatusFlowCmd()
 	if cmd == nil {
 		t.Fatal("expected status refresh command")
 	}
@@ -163,8 +164,13 @@ func TestStatusRefreshDefersRuntimeAndAuthReadsToCommands(t *testing.T) {
 		t.Fatalf("status refresh performed eager reads: runtime=%d auth=%d", runtimeClient.statusCalls, store.loads)
 	}
 	_ = collectCmdMessages(t, cmd)
-	if runtimeClient.statusCalls == 0 || store.loads == 0 {
-		t.Fatalf("status refresh command reads: runtime=%d auth=%d", runtimeClient.statusCalls, store.loads)
+	if runtimeClient.statusCalls != 1 || store.loads == 0 || runtimeClient.updateStatusCalls != 0 {
+		t.Fatalf(
+			"status overlay refresh calls: runtime=%d auth=%d update-status=%d; want one runtime read and no update-status call",
+			runtimeClient.statusCalls,
+			store.loads,
+			runtimeClient.updateStatusCalls,
+		)
 	}
 }
 
@@ -181,7 +187,8 @@ func TestStatusCollectorPrefersWorkspaceRootForWorkdir(t *testing.T) {
 
 type statusRefreshRuntimeClient struct {
 	runtimeControlFakeClient
-	statusCalls int
+	statusCalls       int
+	updateStatusCalls int
 }
 
 func (c *statusRefreshRuntimeClient) Status() clientui.RuntimeStatus {
@@ -194,6 +201,14 @@ func (c *statusRefreshRuntimeClient) Status() clientui.RuntimeStatus {
 		PreviousSessionID:         &parentSessionID,
 		NavigationTargetSessionID: &parentSessionID,
 	}
+}
+
+func (c *statusRefreshRuntimeClient) GetUpdateStatus(
+	context.Context,
+	serverapi.UpdateStatusRequest,
+) (serverapi.UpdateStatusResponse, error) {
+	c.updateStatusCalls++
+	return serverapi.UpdateStatusResponse{}, nil
 }
 
 func initStatusLineGitRepo(t *testing.T, branch string) string {

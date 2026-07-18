@@ -310,18 +310,6 @@ func (m *uiModel) advanceTransientStatusQueue() tea.Cmd {
 	return cmd
 }
 
-func (m *uiModel) startupUpdateNoticeCmd(status clientui.UpdateStatus) tea.Cmd {
-	if status.Available && strings.TrimSpace(status.LatestVersion) != "" {
-		return func() tea.Msg {
-			return startupUpdateNoticeMsg{version: status.LatestVersion}
-		}
-	}
-	if status.Checked {
-		return nil
-	}
-	return m.startRuntimeMainViewRefreshRequest(runtimeMainViewRefreshRequestForCause(runtimeMainViewRefreshCauseStartupUpdate)).cmd
-}
-
 func batchCmds(cmds ...tea.Cmd) tea.Cmd {
 	filtered := make([]tea.Cmd, 0, len(cmds))
 	for _, cmd := range cmds {

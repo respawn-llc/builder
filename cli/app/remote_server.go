@@ -3,9 +3,11 @@ package app
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"core/cli/app/commands"
 	"core/cli/app/internal/remoteattach"
+	"core/cli/app/internal/startupremote"
 	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
@@ -119,6 +121,13 @@ func (s *remoteAppServer) BindProjectWorkspace(ctx context.Context, projectID st
 		OwnsServer:  s.owns,
 		OwnedClose:  s.closeFn,
 		RootID:      config.ExplicitPersistenceRootID(s.cfg),
+		ValidateSuccessor: func(ctx context.Context, remote *client.Remote) error {
+			var workspaceRoot *string
+			if root := strings.TrimSpace(s.cfg.WorkspaceRoot); root != "" {
+				workspaceRoot = &root
+			}
+			return startupremote.ValidateWithWorkspace(ctx, remote, config.ExplicitPersistenceRootID(s.cfg), workspaceRoot)
+		},
 	})
 	if err != nil {
 		return nil, err
@@ -186,6 +195,13 @@ func (s *remoteAppServer) ProjectViewClient() apicontract.ProjectViewService {
 	return s.remote
 }
 
+func (s *remoteAppServer) ServerStatusClient() apicontract.ServerStatusService {
+	if s == nil {
+		return nil
+	}
+	return s.remote
+}
+
 func (s *remoteAppServer) SessionLaunchClient() apicontract.SessionLaunchService {
 	if s == nil {
 		return nil
@@ -212,6 +228,7 @@ func (s *remoteAppServer) Reauthenticate(ctx context.Context, interactor authInt
 		return errors.New("remote server is required")
 	}
 	status, err := s.remote.GetAuthBootstrapStatus(ctx, serverapi.AuthGetBootstrapStatusRequest{})
+	observeAuthConnection(interactor, err)
 	if err != nil {
 		return err
 	}

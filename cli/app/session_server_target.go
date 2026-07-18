@@ -7,14 +7,19 @@ import (
 	"strings"
 
 	"core/cli/app/commands"
+	"core/cli/app/internal/connectionstate"
 	"core/cli/app/internal/startupconfig"
+	"core/cli/app/internal/startupremote"
 	"core/shared/client"
 	"core/shared/config"
-	"core/shared/protocol"
 	"core/shared/serverapi"
 )
 
 func startSessionServer(ctx context.Context, opts Options, interactor authInteractor, interactive bool) (server interactiveSessionServer, returnErr error) {
+	return startSessionServerWithConnection(ctx, opts, interactor, interactive, nil)
+}
+
+func startSessionServerWithConnection(ctx context.Context, opts Options, interactor authInteractor, interactive bool, connection *connectionstate.Owner) (server interactiveSessionServer, returnErr error) {
 	promptRoots, err := commands.NewClientPromptRoots()
 	if err != nil {
 		return nil, err
@@ -23,7 +28,7 @@ func startSessionServer(ctx context.Context, opts Options, interactor authIntera
 	if err != nil {
 		return nil, err
 	}
-	remote, err := attachConfiguredStartupRemote(ctx, cfg)
+	remote, err := attachConfiguredStartupRemoteWithConnection(ctx, cfg, connection)
 	if err != nil {
 		return nil, err
 	}
@@ -36,9 +41,15 @@ func startSessionServer(ctx context.Context, opts Options, interactor authIntera
 	remoteServer := newRemoteAppServerWithAuthAndPromptRoots(remote, cfg, remote.Close, false, promptRoots)
 	server = remoteServer
 	if err := server.EnsureAuthReady(ctx, interactor, interactive); err != nil {
+		if connection != nil {
+			connection.ObserveUnary(err)
+		}
 		return nil, err
 	}
 	readiness, err := remote.GetServerReadiness(ctx, serverapi.ServerReadinessRequest{})
+	if connection != nil {
+		connection.ObserveUnary(err)
+	}
 	if err != nil {
 		return nil, newConfiguredServerPreflightError(cfg, "probe server readiness", err)
 	}
@@ -52,6 +63,9 @@ func startSessionServer(ctx context.Context, opts Options, interactor authIntera
 		}
 		remoteServer.presentation = startupPresentation{Theme: result.EffectiveTheme}
 		readiness, err = remote.GetServerReadiness(ctx, serverapi.ServerReadinessRequest{})
+		if connection != nil {
+			connection.ObserveUnary(err)
+		}
 		if err != nil {
 			return nil, newConfiguredServerPreflightError(cfg, "confirm onboarding completion", err)
 		}
@@ -64,7 +78,14 @@ func startSessionServer(ctx context.Context, opts Options, interactor authIntera
 }
 
 func attachConfiguredStartupRemote(ctx context.Context, cfg config.App) (attached *client.Remote, returnErr error) {
+	return attachConfiguredStartupRemoteWithConnection(ctx, cfg, nil)
+}
+
+func attachConfiguredStartupRemoteWithConnection(ctx context.Context, cfg config.App, connection *connectionstate.Owner) (attached *client.Remote, returnErr error) {
 	remote, err := client.DialConfiguredRemote(ctx, cfg)
+	if connection != nil {
+		connection.ObserveUnary(err)
+	}
 	if err != nil {
 		return nil, newConfiguredServerPreflightError(cfg, "attach", err)
 	}
@@ -74,69 +95,21 @@ func attachConfiguredStartupRemote(ctx context.Context, cfg config.App) (attache
 			returnErr = errors.Join(returnErr, remote.Close())
 		}
 	}()
-	if err := remote.RequireRoot(config.ExplicitPersistenceRootID(cfg)); err != nil {
-		return nil, newConfiguredServerPreflightError(cfg, "validate persistence root", err)
-	}
-	if err := validateStartupRemoteIdentity(remote.Identity()); err != nil {
-		return nil, newConfiguredServerPreflightError(cfg, "validate compatibility", err)
-	}
-	if _, err := remote.GetServerReadiness(ctx, serverapi.ServerReadinessRequest{}); err != nil {
-		return nil, newConfiguredServerPreflightError(cfg, "probe server readiness", err)
-	}
-	if _, err := remote.GetAuthBootstrapStatus(ctx, serverapi.AuthGetBootstrapStatusRequest{}); err != nil {
-		return nil, newConfiguredServerPreflightError(cfg, "probe auth bootstrap", err)
-	}
 	var workspaceRoot *string
 	if root := strings.TrimSpace(cfg.WorkspaceRoot); root != "" {
 		workspaceRoot = &root
 	}
-	if _, err := remote.GetCapabilityFacts(ctx, serverapi.CapabilityFactsRequest{WorkspaceRoot: workspaceRoot}); err != nil {
-		return nil, newConfiguredServerPreflightError(cfg, "probe onboarding capability facts", err)
+	if err := startupremote.ValidateWithWorkspace(ctx, remote, config.ExplicitPersistenceRootID(cfg), workspaceRoot); err != nil {
+		if connection != nil {
+			connection.ObserveUnary(err)
+		}
+		return nil, newConfiguredServerPreflightError(cfg, "validate configured remote", err)
+	}
+	if connection != nil {
+		connection.ObserveUnary(nil)
 	}
 	closeRemote = false
 	return remote, nil
-}
-
-func validateStartupRemoteIdentity(identity protocol.ServerIdentity) error {
-	if identity.ProtocolVersion != protocol.Version {
-		return &startupRemoteCompatibilityError{
-			issue:         startupRemoteProtocolVersionMismatch,
-			serverVersion: identity.ProtocolVersion,
-		}
-	}
-	if !identity.Capabilities.AuthBootstrap {
-		return &startupRemoteCompatibilityError{issue: startupRemoteAuthBootstrapUnavailable}
-	}
-	if !identity.Capabilities.OnboardingFinalize {
-		return &startupRemoteCompatibilityError{issue: startupRemoteOnboardingFinalizeUnavailable}
-	}
-	return nil
-}
-
-type startupRemoteCompatibilityIssue uint8
-
-const (
-	startupRemoteProtocolVersionMismatch startupRemoteCompatibilityIssue = iota + 1
-	startupRemoteAuthBootstrapUnavailable
-	startupRemoteOnboardingFinalizeUnavailable
-)
-
-type startupRemoteCompatibilityError struct {
-	issue         startupRemoteCompatibilityIssue
-	serverVersion string
-}
-
-func (e *startupRemoteCompatibilityError) Error() string {
-	switch e.issue {
-	case startupRemoteProtocolVersionMismatch:
-		return fmt.Sprintf("server protocol version %q is incompatible with client protocol version %q", e.serverVersion, protocol.Version)
-	case startupRemoteAuthBootstrapUnavailable:
-		return "server does not advertise auth bootstrap support"
-	case startupRemoteOnboardingFinalizeUnavailable:
-		return "server does not advertise onboarding finalization support"
-	default:
-		return "server startup control surface is incompatible"
-	}
 }
 
 type configuredServerPreflightError struct {

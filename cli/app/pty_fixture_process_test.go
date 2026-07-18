@@ -4,10 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
+	"sync"
 
 	checkpoint "core/internal/testharness/pty/analyzer"
 	"core/internal/testharness/pty/appfixture"
+	"core/shared/apicontract"
+	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -15,6 +20,90 @@ import (
 type ptyCheckpointTerminalFile struct {
 	file   *os.File
 	writer *checkpoint.Writer
+}
+
+func runConfiguredPTYClientProcess(ctx context.Context, processConfig appfixture.ConfiguredClientProcessConfig) (runErr error) {
+	if err := processConfig.Validate(); err != nil {
+		return err
+	}
+	endpoint, err := url.Parse(processConfig.ConfiguredServerEndpoint)
+	if err != nil {
+		return fmt.Errorf("parse configured client endpoint: %w", err)
+	}
+	host, port, err := net.SplitHostPort(endpoint.Host)
+	if err != nil {
+		return fmt.Errorf("split configured client endpoint: %w", err)
+	}
+	if err := os.Setenv(config.PersistenceRootEnvName, processConfig.PersistenceRoot); err != nil {
+		return err
+	}
+	if err := os.Setenv("KENT_SERVER_HOST", host); err != nil {
+		return err
+	}
+	if err := os.Setenv("KENT_SERVER_PORT", port); err != nil {
+		return err
+	}
+	writer := checkpoint.NewWriter(os.Stdout)
+	if err := writer.Emit(checkpoint.KindAppRunStarted, nil); err != nil {
+		return err
+	}
+	previousSessionPicker := runSessionPickerFlow
+	previousAuthPicker := runStartupPickerFlow
+	runSessionPickerFlow = func(loader sessionPageLoader, theme string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
+		if header.updateStatus == nil {
+			return nil, errors.New("configured PTY picker requires server update-status client")
+		}
+		header.updateStatus = &configuredPTYUpdateStatusClient{
+			inner: header.updateStatus,
+			onStart: func() error {
+				return writer.Emit(checkpoint.KindSessionPickerReady, nil)
+			},
+		}
+		return previousSessionPicker(
+			loader,
+			theme,
+			header,
+		)
+	}
+	runStartupPickerFlow = func(model *startupPickerModel) (startupPickerResult, error) {
+		if err := writer.Emit(checkpoint.KindAuthPickerReady, nil); err != nil {
+			return startupPickerResult{}, err
+		}
+		return previousAuthPicker(model)
+	}
+	defer func() {
+		runSessionPickerFlow = previousSessionPicker
+		runStartupPickerFlow = previousAuthPicker
+		if err := writer.Emit(checkpoint.KindAppRunExited, nil); err != nil {
+			runErr = errors.Join(runErr, err)
+		}
+	}()
+	return Run(ctx, Options{
+		WorkspaceRoot:         processConfig.WorkspaceRoot,
+		WorkspaceRootExplicit: true,
+		ConfigRoot:            processConfig.PersistenceRoot,
+	})
+}
+
+type configuredPTYUpdateStatusClient struct {
+	inner    apicontract.ServerStatusService
+	onStart  func() error
+	once     sync.Once
+	readyErr error
+}
+
+func (client *configuredPTYUpdateStatusClient) GetServerReadiness(ctx context.Context, request serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error) {
+	return client.inner.GetServerReadiness(ctx, request)
+}
+
+func (client *configuredPTYUpdateStatusClient) GetUpdateStatus(ctx context.Context, request serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
+	client.once.Do(func() {
+		client.readyErr = client.onStart()
+	})
+	if client.readyErr != nil {
+		return serverapi.UpdateStatusResponse{}, client.readyErr
+	}
+	return client.inner.GetUpdateStatus(ctx, request)
 }
 
 func newPTYCheckpointTerminalFile(file *os.File) *ptyCheckpointTerminalFile {
@@ -133,7 +222,7 @@ func runPTYFixtureProcess(ctx context.Context, processConfig appfixture.ProcessC
 	if err != nil {
 		return err
 	}
-	runtimePlan, request, err := prepareSessionUIRun(ctx, server, planner, plan, "", false, "", false, true)
+	runtimePlan, request, err := prepareSessionUIRun(ctx, server, planner, plan, "", false, "", false)
 	if err != nil {
 		return err
 	}

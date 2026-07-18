@@ -74,6 +74,7 @@ Out of the box, Kent does not ship a sandbox, and does not enforce tool calling 
 :::
 
 Start Kent CLI with: `kent`. The first run will ask you to pick auth option and walk you through onboarding.
+The session picker reports an available server release; upgrade through your installation channel.
 
 Supported auth options:
 

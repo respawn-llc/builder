@@ -53,6 +53,7 @@ func NewWithContext(ctx context.Context, cfg config.App, authSupport serverboots
 type Options struct {
 	RuntimeClientFactory runtimewire.RuntimeClientFactory
 	RootLease            *RootLockLease
+	ServerStatus         serverstatus.Dependencies
 }
 
 func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serverbootstrap.AuthSupport, runtimeSupport serverbootstrap.RuntimeSupport, opts Options) (*Core, error) {
@@ -158,15 +159,14 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	projectViews := projectService
 	authBootstrapService := authservice.NewBootstrapService(authSupport.AuthManager, authSupport.OAuthOptions, cfg.Settings, rpccontract.AllowedPreAuthMethods())
 	authStatusService := authservice.NewStatusService(authSupport.AuthManager, cfg.Settings)
-	serverStatusService := serverstatus.NewServerStatusService(authSupport.AuthManager, cfg)
-	updateStatusService := serverstatus.NewUpdateStatusService(config.Version)
+	updateStatusService := serverstatus.NewUpdateStatusService(config.Version, opts.ServerStatus)
+	serverStatusService := serverstatus.NewServerStatusService(authSupport.AuthManager, cfg, updateStatusService)
 	sessionViewService := sessionview.NewService(sessionStoreResolver, runtimeRegistry, metadataStore).
 		WithExecutionEnvironmentConfig(cfg).
 		WithExecutionEnvironmentAuth(authStatusService).
 		WithExecutionEnvironmentGit(gitInspector).
 		WithOperationCoordinator(runtimeOperations).
-		WithCacheWarningMode(cfg.Settings.CacheWarningMode).
-		WithUpdateStatusProvider(updateStatusService)
+		WithCacheWarningMode(cfg.Settings.CacheWarningMode)
 	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background)
 	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, sessionStoreRegistry, authSupport.AuthManager, storeOptions...).
 		WithWorkspaceRetargeter(sessionWorkspaceRetargeter).
@@ -275,7 +275,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		_ = core.Close()
 		return nil, fmt.Errorf("workflow bundle: scheduler start: %w", err)
 	}
-	updateStatusService.Start()
 	return core, nil
 }
 

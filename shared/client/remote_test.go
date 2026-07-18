@@ -44,6 +44,33 @@ func TestDialRemoteWithTransportRejectsBlankSessionID(t *testing.T) {
 	}
 }
 
+func TestRemoteGetUpdateStatusRejectsMalformedResponse(t *testing.T) {
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		acceptRemoteHandshake(t, ws)
+		var request protocol.Request
+		if err := websocket.JSON.Receive(ws, &request); err != nil {
+			t.Fatalf("receive update status request: %v", err)
+		}
+		if request.Method != protocol.MethodServerUpdateStatusGet {
+			t.Fatalf("method = %q, want update status", request.Method)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, map[string]any{
+			"result": map[string]any{"kind": "available"},
+		})); err != nil {
+			t.Fatalf("send malformed update response: %v", err)
+		}
+	})
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	if _, err := remote.GetUpdateStatus(context.Background(), serverapi.UpdateStatusRequest{}); err == nil {
+		t.Fatal("malformed update response was accepted")
+	}
+}
+
 func newRemoteTestServer(t *testing.T, handle func(*websocket.Conn)) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
