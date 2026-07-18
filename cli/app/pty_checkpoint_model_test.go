@@ -276,6 +276,9 @@ func ptyCheckpointTranscriptEvent(msg tea.Msg) (ongoingTranscriptEvent, bool) {
 }
 
 func dispatchPTYCheckpointTranscriptEvent(event ongoingTranscriptEvent) uiDispatchedEventMsg {
+	if event.SourceSessionID.IsZero() {
+		event.SourceSessionID = ongoingTestSessionID()
+	}
 	return uiDispatchedEventMsg{event: event}
 }
 

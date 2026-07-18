@@ -85,7 +85,7 @@ func TestTranscriptRuntimeProgressStartsAndRearmsSpinner(t *testing.T) {
 			ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
 		},
 	}
-	next, cmd := m.Update(ongoingTranscriptEvent{Kind: ongoingTranscriptEventMessage, Message: running})
+	next, cmd := m.Update(ongoingTranscriptEvent{Kind: ongoingTranscriptEventMessage, SourceSessionID: ongoingTestSessionID(), Message: running})
 	updated := next.(*uiModel)
 	if !updated.isBusy() || updated.spinnerTickToken == 0 || updated.spinnerTickDue.IsZero() || cmd == nil {
 		t.Fatalf(
@@ -101,8 +101,9 @@ func TestTranscriptRuntimeProgressStartsAndRearmsSpinner(t *testing.T) {
 	updated.spinnerTickDue = anchor.Add(spinnerTickInterval)
 	now = updated.spinnerTickDue.Add(spinnerTickRearmGrace + time.Millisecond)
 	next, cmd = updated.Update(ongoingTranscriptEvent{
-		Kind:    ongoingTranscriptEventMessage,
-		Message: animationAssistantDeltaMessage(3),
+		Kind:            ongoingTranscriptEventMessage,
+		SourceSessionID: ongoingTestSessionID(),
+		Message:         animationAssistantDeltaMessage(3),
 	})
 	updated = next.(*uiModel)
 	if updated.spinnerTickToken == 0 || updated.spinnerTickToken == previousToken {
@@ -127,7 +128,7 @@ func TestTranscriptReviewerLifecycleStartsAndStopsSpinner(t *testing.T) {
 			State:  clientui.ReviewerStateRunning,
 		}},
 	}
-	next, _ := m.Update(ongoingTranscriptEvent{Kind: ongoingTranscriptEventMessage, Message: startedMessage})
+	next, _ := m.Update(ongoingTranscriptEvent{Kind: ongoingTranscriptEventMessage, SourceSessionID: ongoingTestSessionID(), Message: startedMessage})
 	started := next.(*uiModel)
 	if !started.isReviewerRunning() || started.spinnerTickToken == 0 {
 		t.Fatalf("reviewer start did not start spinner: running=%t token=%d", started.isReviewerRunning(), started.spinnerTickToken)
@@ -139,7 +140,7 @@ func TestTranscriptReviewerLifecycleStartsAndStopsSpinner(t *testing.T) {
 		StepID: ongoingTestStepID(),
 		State:  clientui.ReviewerStateCompleted,
 	}
-	next, _ = started.Update(ongoingTranscriptEvent{Kind: ongoingTranscriptEventMessage, Message: completedMessage})
+	next, _ = started.Update(ongoingTranscriptEvent{Kind: ongoingTranscriptEventMessage, SourceSessionID: ongoingTestSessionID(), Message: completedMessage})
 	completed := next.(*uiModel)
 	if completed.isReviewerRunning() || completed.spinnerTickToken != 0 {
 		t.Fatalf("reviewer completion did not stop spinner: running=%t token=%d", completed.isReviewerRunning(), completed.spinnerTickToken)
@@ -156,10 +157,12 @@ func newAnimationTranscriptModel(t *testing.T) *uiModel {
 		m.ongoingFrameInput,
 		runtimeClient.admitTranscriptMessageState,
 		m.applyAdmittedTranscriptMessageState,
+		m,
 	)
 	next, _ := m.Update(ongoingTranscriptEvent{
-		Kind:    ongoingTranscriptEventMessage,
-		Message: ongoingHydrationMessage(1),
+		Kind:            ongoingTranscriptEventMessage,
+		SourceSessionID: ongoingTestSessionID(),
+		Message:         ongoingHydrationMessage(1),
 	})
 	return next.(*uiModel)
 }

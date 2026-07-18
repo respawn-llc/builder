@@ -116,19 +116,22 @@ func TestOngoingTranscriptControllerLeavesUserMessageFlushPresentationToStateObs
 	controller := newOngoingTranscriptController(
 		surface,
 		ongoingTestFrameProvider,
-		noopOngoingTranscriptRuntimeAdmission,
+		func(clientui.TranscriptMessage) (runtimeTupleMergeResult, error) {
+			return runtimeTupleMergeResult{}, nil
+		},
 		func(message clientui.TranscriptMessage, _ runtimeTupleMergeResult) tea.Cmd {
 			observed = append(observed, message.Kind)
 			return nil
 		},
+		newTestOngoingTranscriptPromptOwner(),
 	)
-	if _, _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+	if _, _, err := controller.AcceptFrom(ongoingTestSessionID(), ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
 	surface.calls = nil
 	observed = nil
 
-	if _, command, err := controller.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessageUserMessageFlushed)); err != nil {
+	if _, command, err := controller.AcceptFrom(ongoingTestSessionID(), ongoingTranscriptMessage(2, clientui.TranscriptMessageUserMessageFlushed)); err != nil {
 		t.Fatalf("accept user-message flush: %v", err)
 	} else if command != nil {
 		t.Fatal("user-message flush returned an unexpected state command")
@@ -345,19 +348,46 @@ func newNoopOngoingTranscriptController(surface ongoingTranscriptSurface, frameP
 	return newOngoingTranscriptController(
 		surface,
 		frameProvider,
-		noopOngoingTranscriptRuntimeAdmission,
+		func(clientui.TranscriptMessage) (runtimeTupleMergeResult, error) {
+			return runtimeTupleMergeResult{}, nil
+		},
 		func(clientui.TranscriptMessage, runtimeTupleMergeResult) tea.Cmd {
 			return nil
 		},
+		newTestOngoingTranscriptPromptOwner(),
 	)
 }
 
-func noopOngoingTranscriptRuntimeAdmission(clientui.TranscriptMessage) (runtimeTupleMergeResult, error) {
-	return runtimeTupleMergeResult{}, nil
+type testOngoingTranscriptPromptOwner struct {
+	snapshot transcriptPromptOwnershipSnapshot
+}
+
+func newTestOngoingTranscriptPromptOwner() *testOngoingTranscriptPromptOwner {
+	return &testOngoingTranscriptPromptOwner{}
+}
+
+func (o *testOngoingTranscriptPromptOwner) snapshotTranscriptPromptOwnership() transcriptPromptOwnershipSnapshot {
+	return o.snapshot
+}
+
+func (o *testOngoingTranscriptPromptOwner) commitTranscriptPromptReconciliation(
+	reconciliation transcriptPromptReconciliation,
+) {
+	events := make([]askEvent, 0, len(reconciliation.events))
+	for _, planned := range reconciliation.events {
+		event := planned.retained
+		event.prompt = cloneTranscriptPromptForAsk(planned.prompt)
+		events = append(events, event)
+	}
+	o.snapshot = transcriptPromptOwnershipSnapshot{events: events}
+	if len(events) > 0 {
+		currentPromptID := events[0].prompt.PromptID
+		o.snapshot.currentPromptID = &currentPromptID
+	}
 }
 
 func (c *testOngoingTranscriptController) Accept(message clientui.TranscriptMessage) (ongoing.Result, error) {
-	result, command, err := c.ongoingTranscriptController.Accept(message)
+	result, command, err := c.ongoingTranscriptController.AcceptFrom(ongoingTestSessionID(), message)
 	if command != nil {
 		panic("test ongoing transcript controller received an unexpected state command")
 	}

@@ -2,7 +2,6 @@ package app
 
 import (
 	"os/exec"
-	"strings"
 	"time"
 
 	"core/shared/clientui"
@@ -227,18 +226,18 @@ type clipboardTextCopyDoneMsg struct {
 
 type askEvent struct {
 	prompt           clientui.TranscriptPrompt
-	resolvedPromptID clientui.PromptID
+	resolvedPromptID *clientui.PromptID
 }
 
-func (e askEvent) promptID() string {
-	if strings.TrimSpace(string(e.resolvedPromptID)) != "" {
-		return strings.TrimSpace(string(e.resolvedPromptID))
+func (e askEvent) promptID() clientui.PromptID {
+	if e.resolvedPromptID != nil {
+		return *e.resolvedPromptID
 	}
-	return strings.TrimSpace(string(e.prompt.PromptID))
+	return e.prompt.PromptID
 }
 
 func (e askEvent) isResolution() bool {
-	return strings.TrimSpace(string(e.resolvedPromptID)) != ""
+	return e.resolvedPromptID != nil
 }
 
 type askEventMsg struct {

@@ -32,7 +32,7 @@ type keyedOngoingLiveItems[K comparable, T any] struct {
 
 type ongoingLiveItemID string
 
-type ongoingPromptID string
+type ongoingPromptID clientui.PromptID
 
 func newOngoingTranscriptReadModel() ongoingTranscriptReadModel {
 	return ongoingTranscriptReadModel{
@@ -171,6 +171,14 @@ func (m *ongoingTranscriptReadModel) applyPendingPrompt(prompt *clientui.Transcr
 	m.refreshPendingPromptSection(80)
 }
 
+func (m *ongoingTranscriptReadModel) replacePendingPrompts(prompts []clientui.TranscriptPrompt) {
+	m.pendingPrompts = newKeyedOngoingLiveItems[ongoingPromptID, clientui.TranscriptPrompt]()
+	for _, prompt := range prompts {
+		m.pendingPrompts.set(parseOngoingPromptID(prompt.PromptID), cloneTranscriptPromptForAsk(prompt))
+	}
+	m.refreshPendingPromptSection(80)
+}
+
 func (m *ongoingTranscriptReadModel) refreshPendingPromptSection(width int) {
 	m.setSection(ongoing.FrameSectionPendingPrompt, terminalSafeFrameLinesForWidth(pendingPromptListLines(m.pendingPrompts.values()), width))
 }
@@ -211,11 +219,10 @@ func (items keyedOngoingLiveItems[K, T]) values() []T {
 }
 
 func parseOngoingPromptID(raw clientui.PromptID) ongoingPromptID {
-	id := strings.TrimSpace(string(raw))
-	if id == "" {
-		panicOngoingTranscriptReadModelDeveloperError("pending_prompt_id", "missing id", nil)
+	if err := raw.Validate(); err != nil {
+		panicOngoingTranscriptReadModelDeveloperError("pending_prompt_id", err.Error(), map[string]any{"id": raw})
 	}
-	return ongoingPromptID(id)
+	return ongoingPromptID(raw)
 }
 
 func panicOngoingTranscriptReadModelDeveloperError(operation, reason string, facts map[string]any) {

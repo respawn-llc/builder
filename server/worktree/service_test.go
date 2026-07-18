@@ -327,9 +327,12 @@ func TestCreateWorktreeBlocksUntilSetupCompletesBeforeSessionSwitch(t *testing.T
 		resp serverapi.WorktreeCreateResponse
 		err  error
 	}
+	createCtx, cancelCreate := context.WithCancel(env.ctx)
 	resultCh := make(chan createResult, 1)
+	createDone := make(chan struct{})
 	go func() {
-		resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		defer close(createDone)
+		resp, err := env.service.CreateWorktree(createCtx, serverapi.WorktreeCreateRequest{
 			SetupOperationID: setupID,
 			ClientRequestID:  "req-create-blocking",
 			SessionID:        env.session.Meta().SessionID,
@@ -339,6 +342,14 @@ func TestCreateWorktreeBlocksUntilSetupCompletesBeforeSessionSwitch(t *testing.T
 		})
 		resultCh <- createResult{resp: resp, err: err}
 	}()
+	t.Cleanup(func() {
+		cancelCreate()
+		select {
+		case <-createDone:
+		case <-time.After(5 * time.Second):
+			t.Error("timed out cleaning up blocked CreateWorktree")
+		}
+	})
 
 	started := waitForFileText(t, startedPath)
 	if started != "started" {

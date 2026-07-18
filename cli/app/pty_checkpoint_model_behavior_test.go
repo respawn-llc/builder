@@ -337,8 +337,9 @@ func newPTYCheckpointOngoingModel(t *testing.T, writer *analyzer.Writer) *uiMode
 		model.ongoingFrameInput,
 		runtimeClient.admitTranscriptMessageState,
 		model.applyAdmittedTranscriptMessageState,
+		model,
 	)
-	if _, _, err := model.ongoingTranscript.Accept(ongoingHydrationMessage(1)); err != nil {
+	if _, _, err := model.ongoingTranscript.AcceptFrom(ongoingTestSessionID(), ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept initial hydration: %v", err)
 	}
 	return model

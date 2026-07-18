@@ -1,6 +1,8 @@
 package app
 
 import (
+	"cmp"
+	"slices"
 	"testing"
 
 	"core/shared/clientui"
@@ -134,7 +136,29 @@ func resolveAnsweredTestAskThroughTranscript(t *testing.T, m *uiModel) {
 	if err := message.Validate(); err != nil {
 		t.Fatalf("validate prompt resolution transcript message: %v", err)
 	}
-	if cmd := m.applyAdmittedTranscriptMessageState(message, runtimeTupleMergeResult{}); cmd != nil {
-		t.Fatal("prompt resolution transcript message unexpectedly returned a command")
+	if m.ongoingTranscript == nil {
+		m.ongoingTranscript = newPromptTestOngoingTranscriptController(m, &ongoingSurfaceSpy{})
+	}
+	hydration := ongoingHydrationMessage(1)
+	hydration.Payload.Hydration.RuntimeReadModelUpdate.Activity = runningPromptTestActivity()
+	ownership := m.snapshotTranscriptPromptOwnership()
+	hydration.Payload.Hydration.PendingPrompts = make([]clientui.TranscriptPrompt, 0, len(ownership.events))
+	for _, event := range ownership.events {
+		hydration.Payload.Hydration.PendingPrompts = append(
+			hydration.Payload.Hydration.PendingPrompts,
+			cloneTranscriptPromptForAsk(event.prompt),
+		)
+	}
+	slices.SortFunc(hydration.Payload.Hydration.PendingPrompts, func(left, right clientui.TranscriptPrompt) int {
+		if order := left.CreatedAt.Compare(right.CreatedAt); order != 0 {
+			return order
+		}
+		return cmp.Compare(left.PromptID, right.PromptID)
+	})
+	if _, _, err := m.ongoingTranscript.AcceptFrom(ongoingTestSessionID(), hydration); err != nil {
+		t.Fatalf("accept prompt hydration: %v", err)
+	}
+	if _, _, err := m.ongoingTranscript.AcceptFrom(ongoingTestSessionID(), message); err != nil {
+		t.Fatalf("accept prompt resolution: %v", err)
 	}
 }

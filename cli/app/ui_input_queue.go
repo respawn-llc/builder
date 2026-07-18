@@ -7,6 +7,7 @@ import (
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -84,19 +85,21 @@ func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *cl
 		return nil
 	}
 	localID := uuid.NewString()
+	approvalCommentaryAnswer := cloneOptionalPromptAnswer(answer)
 	if !m.hasRuntimeClient() {
 		item := clientui.QueuedUserMessage{ID: localID, Text: trimmed}
 		m.pendingInjected = append(m.pendingInjected, item)
-		m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{LocalID: localID, ServerID: localID, Text: trimmed, State: injectedRuntimeQueueEnqueued})
+		m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{
+			LocalID:                  localID,
+			ServerID:                 localID,
+			Text:                     trimmed,
+			State:                    injectedRuntimeQueueEnqueued,
+			ApprovalCommentaryAnswer: approvalCommentaryAnswer,
+		})
 		return nil
 	}
 	token := m.nextInjectedQueueToken()
 	clientRequestID := runtimeids.NewRuntimeClientRequestID()
-	var approvalCommentaryAnswer *clientui.PromptAnswer
-	if answer != nil {
-		snap := *answer
-		approvalCommentaryAnswer = &snap
-	}
 	m.pendingInjected = append(m.pendingInjected, clientui.QueuedUserMessage{ID: localID, Text: trimmed, ClientRequestID: clientRequestID.String()})
 	m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{
 		LocalID:                  localID,
@@ -109,8 +112,21 @@ func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *cl
 	client := m.runtimeClient()
 	return func() tea.Msg {
 		item, err := queueRuntimeUserMessage(client, trimmed, clientRequestID)
-		return injectedQueueCreateDoneMsg{token: token, localID: localID, item: item, approvalCommentaryAnswer: answer, err: err}
+		return injectedQueueCreateDoneMsg{token: token, localID: localID, item: item, err: err}
 	}
+}
+
+func cloneOptionalPromptAnswer(answer *clientui.PromptAnswer) *clientui.PromptAnswer {
+	if answer == nil {
+		return nil
+	}
+	cloned := *answer
+	cloned.PromptID = textutil.Pointer(answer.PromptID)
+	if answer.Approval != nil {
+		approval := *answer.Approval
+		cloned.Approval = &approval
+	}
+	return &cloned
 }
 
 func queueRuntimeUserMessage(client clientui.RuntimeClient, text string, clientRequestID runtimeids.RuntimeClientRequestID) (clientui.QueuedUserMessage, error) {
@@ -464,9 +480,7 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 		return m, nil
 	}
 	approvalCommentaryAnswer := item.ApprovalCommentaryAnswer
-	if approvalCommentaryAnswer == nil {
-		approvalCommentaryAnswer = msg.approvalCommentaryAnswer
-	}
+	item.ApprovalCommentaryAnswer = nil
 	m.observeRuntimeRequestResult(msg.err)
 	if msg.err != nil {
 		m.injectedQueue[index].State = injectedRuntimeQueueCreateFailed
@@ -498,7 +512,6 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 	item.ServerID = serverID
 	item.Text = serverText
 	item.ClientRequestID = strings.TrimSpace(msg.item.ClientRequestID)
-	item.ApprovalCommentaryAnswer = nil
 	switch item.State {
 	case injectedRuntimeQueuePendingCreate:
 		item.State = injectedRuntimeQueueEnqueued
@@ -521,6 +534,27 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 		m.injectedQueue[index] = item
 	}
 	return m, nil
+}
+
+func (m *uiModel) consumeApprovalCommentaryAnswer(promptID clientui.PromptID) *clientui.PromptAnswer {
+	for index := range m.injectedQueue {
+		answer := m.injectedQueue[index].ApprovalCommentaryAnswer
+		if answer == nil || answer.PromptID == nil || *answer.PromptID != promptID {
+			continue
+		}
+		m.injectedQueue[index].ApprovalCommentaryAnswer = nil
+		return answer
+	}
+	return nil
+}
+
+func (m *uiModel) clearApprovalCommentaryAnswer(promptID clientui.PromptID) {
+	for index := range m.injectedQueue {
+		answer := m.injectedQueue[index].ApprovalCommentaryAnswer
+		if answer != nil && answer.PromptID != nil && *answer.PromptID == promptID {
+			m.injectedQueue[index].ApprovalCommentaryAnswer = nil
+		}
+	}
 }
 
 func (c uiInputController) handleInjectedQueueDiscardDone(msg injectedQueueDiscardDoneMsg) (tea.Model, tea.Cmd) {

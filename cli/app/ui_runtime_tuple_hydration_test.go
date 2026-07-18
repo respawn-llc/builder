@@ -34,6 +34,7 @@ func TestStaleContentCompleteHydrationFailsBeforeAnySideEffect(t *testing.T) {
 		m.ongoingFrameInput,
 		runtimeClient.admitTranscriptMessageState,
 		m.applyAdmittedTranscriptMessageState,
+		m,
 	)
 	beforeView := runtimeClient.MainView()
 	beforeActivity := m.runtimeActivityProjection
@@ -43,7 +44,7 @@ func TestStaleContentCompleteHydrationFailsBeforeAnySideEffect(t *testing.T) {
 	beforeAsk := m.ask
 
 	hydration := runtimeTupleTestRichHydration(10)
-	_, cmd, err := controller.Accept(hydration)
+	_, cmd, err := controller.AcceptFrom(ongoingTestSessionID(), hydration)
 	assertRuntimeTupleHydrationError(t, err)
 	if cmd != nil {
 		t.Fatal("stale hydration returned a state command")
@@ -86,6 +87,7 @@ func TestStaleHydrationDeveloperErrorPanicsInEveryModeBeforeSideEffects(t *testi
 				m.ongoingFrameInput,
 				runtimeClient.admitTranscriptMessageState,
 				m.applyAdmittedTranscriptMessageState,
+				m,
 			)
 			beforeView := runtimeClient.MainView()
 			beforeQueue := append([]queuedInputItem(nil), m.queued...)
@@ -93,8 +95,9 @@ func TestStaleHydrationDeveloperErrorPanicsInEveryModeBeforeSideEffects(t *testi
 
 			recovered := capturePanic(func() {
 				_ = m.handleOngoingTranscriptEvent(ongoingTranscriptEvent{
-					Kind:    ongoingTranscriptEventMessage,
-					Message: hydration,
+					Kind:            ongoingTranscriptEventMessage,
+					SourceSessionID: ongoingTestSessionID(),
+					Message:         hydration,
 				})
 			})
 			developerErr, ok := recovered.(ongoing.DeveloperError)
@@ -152,10 +155,11 @@ func TestNonStaleContentCompleteHydrationAppliesWholeEvent(t *testing.T) {
 		m.ongoingFrameInput,
 		runtimeClient.admitTranscriptMessageState,
 		m.applyAdmittedTranscriptMessageState,
+		m,
 	)
 	hydration := runtimeTupleTestRichHydration(11)
 
-	if _, _, err := controller.Accept(hydration); err != nil {
+	if _, _, err := controller.AcceptFrom(ongoingTestSessionID(), hydration); err != nil {
 		t.Fatalf("accept current hydration: %v", err)
 	}
 
@@ -204,12 +208,14 @@ func TestAcceptedHydrationDoesNotAdvanceCacheWithUnaryRead(t *testing.T) {
 		m.ongoingFrameInput,
 		runtimeClient.admitTranscriptMessageState,
 		m.applyAdmittedTranscriptMessageState,
+		m,
 	)
 	hydration := runtimeTupleTestRichHydration(11)
 
 	cmd := m.handleOngoingTranscriptEvent(ongoingTranscriptEvent{
-		Kind:    ongoingTranscriptEventMessage,
-		Message: hydration,
+		Kind:            ongoingTranscriptEventMessage,
+		SourceSessionID: ongoingTestSessionID(),
+		Message:         hydration,
 	})
 
 	if got := reads.mainViewCount.Load(); got != 0 {
@@ -251,15 +257,17 @@ func TestRejectedDuplicateHydrationDoesNotStartUnaryRefresh(t *testing.T) {
 		m.ongoingFrameInput,
 		runtimeClient.admitTranscriptMessageState,
 		m.applyAdmittedTranscriptMessageState,
+		m,
 	)
 	hydration := runtimeTupleTestRichHydration(11)
-	if _, _, err := m.ongoingTranscript.Accept(hydration); err != nil {
+	if _, _, err := m.ongoingTranscript.AcceptFrom(ongoingTestSessionID(), hydration); err != nil {
 		t.Fatalf("accept initial hydration: %v", err)
 	}
 
 	cmd := m.handleOngoingTranscriptEvent(ongoingTranscriptEvent{
-		Kind:    ongoingTranscriptEventMessage,
-		Message: hydration,
+		Kind:            ongoingTranscriptEventMessage,
+		SourceSessionID: ongoingTestSessionID(),
+		Message:         hydration,
 	})
 	_ = collectCmdMessages(t, cmd)
 
@@ -296,11 +304,12 @@ func TestHydrationAdmissionSerializesUnaryAndInterruptTupleCommitsUntilWholeEven
 		m.ongoingFrameInput,
 		runtimeClient.admitTranscriptMessageState,
 		m.applyAdmittedTranscriptMessageState,
+		m,
 	)
 	hydration := runtimeTupleTestRichHydration(11)
 	acceptDone := make(chan error, 1)
 	go func() {
-		_, _, err := controller.Accept(hydration)
+		_, _, err := controller.AcceptFrom(ongoingTestSessionID(), hydration)
 		acceptDone <- err
 	}()
 	<-surface.started

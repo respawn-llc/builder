@@ -51,12 +51,12 @@ func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.
 		switch prompt.PromptID {
 		case "ask-remote-1":
 			answerRemoteTranscriptPrompt(t, runtimePlan.Wiring.promptAnswers, prompt, clientui.PromptAnswer{
-				PromptID: string(prompt.PromptID),
+				PromptID: &prompt.PromptID,
 				Answer:   "done",
 			})
 		case "approval-remote-1":
 			answerRemoteTranscriptPrompt(t, runtimePlan.Wiring.promptAnswers, prompt, clientui.PromptAnswer{
-				PromptID: string(prompt.PromptID),
+				PromptID: &prompt.PromptID,
 				Approval: &clientui.ApprovalPromptAnswer{Decision: clientui.ApprovalDecisionAllowOnce},
 			})
 		default:

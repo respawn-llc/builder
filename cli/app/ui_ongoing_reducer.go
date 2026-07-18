@@ -39,7 +39,7 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 	switch event.Kind {
 	case ongoingTranscriptEventMessage:
 		var stateCmd tea.Cmd
-		result, stateCmd, err = m.ongoingTranscript.Accept(event.Message)
+		result, stateCmd, err = m.ongoingTranscript.AcceptFrom(event.SourceSessionID, event.Message)
 		if err != nil {
 			var developerErr ongoing.DeveloperError
 			if errors.As(err, &developerErr) {

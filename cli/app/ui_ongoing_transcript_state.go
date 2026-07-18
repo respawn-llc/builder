@@ -55,11 +55,9 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 			return m.requestProcessListRefresh()
 		}
 	case clientui.TranscriptMessagePromptPending:
-		prompt := *message.Payload.PromptPending
-		m.askController().acceptEvent(m.transcriptPromptEvent(prompt))
-		notifyTranscriptPromptFallback(m.promptAttention, prompt, clientui.AttentionNotificationSourceLive)
+		// The ongoing transcript controller commits prepared prompt reconciliation.
 	case clientui.TranscriptMessagePromptResolved:
-		m.askController().resolvePrompt(string(message.Payload.PromptResolved.PromptID))
+		// The ongoing transcript controller commits prepared prompt reconciliation.
 	case clientui.TranscriptMessageWorktreeTransitionOutcome:
 		return m.reconcileTranscriptWorktreeTransitionOutcome(*message.Payload.WorktreeTransitionOutcome)
 	case clientui.TranscriptMessageOperationalDiagnostic:
@@ -94,7 +92,6 @@ func (m *uiModel) applyTranscriptHydration(
 	}
 
 	m.reconcileTranscriptQueuedMessages(hydration.QueuedMessages)
-	m.reconcileTranscriptPrompts(hydration.PendingPrompts)
 	for _, background := range hydration.BackgroundActivities {
 		m.applyTranscriptBackgroundActivity(background)
 	}
@@ -330,33 +327,6 @@ func (m *uiModel) transcriptPromptEvent(prompt clientui.TranscriptPrompt) askEve
 	}
 	return askEvent{
 		prompt: cloneTranscriptPromptForAsk(prompt),
-	}
-}
-
-func (m *uiModel) reconcileTranscriptPrompts(prompts []clientui.TranscriptPrompt) {
-	present := make(map[string]struct{}, len(prompts))
-	for _, prompt := range prompts {
-		present[string(prompt.PromptID)] = struct{}{}
-	}
-	var stale []string
-	if m.ask.hasCurrent() {
-		id := m.ask.current.promptID()
-		if _, exists := present[id]; !exists {
-			stale = append(stale, id)
-		}
-	}
-	for _, queued := range m.ask.queue {
-		id := queued.promptID()
-		if _, exists := present[id]; !exists {
-			stale = append(stale, id)
-		}
-	}
-	for _, id := range stale {
-		m.askController().resolvePrompt(id)
-	}
-	for _, prompt := range prompts {
-		m.askController().acceptEvent(m.transcriptPromptEvent(prompt))
-		notifyTranscriptPromptFallback(m.promptAttention, prompt, clientui.AttentionNotificationSourceSnapshot)
 	}
 }
 

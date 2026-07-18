@@ -119,6 +119,9 @@
 - Source origin is not labeled in UI.
 - Answers are persisted as explicit summary text including selected option number and commentary.
 - Ask queue semantics are strict FIFO and in-memory only. Each submission snapshots an immutable answer payload. During delivery, the visible editor may hold a separate editable retry draft; changes apply only to a future submission after delivery fails, and canonical prompt resolution discards the draft.
+- Prompt/tool-call IDs are unique for the full lifetime of a session; same-session ID reuse is unsupported.
+- A repeated prompt ID must preserve its immutable session, kind, step, creation time, and tool-provenance contract. A mismatch is a developer error.
+- This contract has no prompt-incarnation protocol or server-side session-lifetime seen-ID guard. The theoretical delayed-answer ABA risk from a contract-violating external/provider ID is accepted.
 - Optional post-answer action binding uses typed registry with stable ID, payload schema, and handler.
 
 ## Sessions And Persistence

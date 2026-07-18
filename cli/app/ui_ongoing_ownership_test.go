@@ -15,7 +15,7 @@ import (
 func TestOngoingSurfaceTransitionQueuesTranscriptWhileDetailActive(t *testing.T) {
 	surface := &ongoingSurfaceSpy{}
 	controller := newNoopOngoingTranscriptController(surface, ongoingTestFrameProvider)
-	if _, _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+	if _, _, err := controller.AcceptFrom(ongoingTestSessionID(), ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
 	surface.calls = nil
@@ -24,7 +24,7 @@ func TestOngoingSurfaceTransitionQueuesTranscriptWhileDetailActive(t *testing.T)
 	if cmd := m.activateSurface(uiSurfaceTranscriptDetail); cmd == nil {
 		t.Fatal("expected detail activation command")
 	}
-	if _, _, err := controller.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessageRuntimeReadModelUpdate)); err != nil {
+	if _, _, err := controller.AcceptFrom(ongoingTestSessionID(), ongoingTranscriptMessage(2, clientui.TranscriptMessageRuntimeReadModelUpdate)); err != nil {
 		t.Fatalf("accept detail queued message: %v", err)
 	}
 	if len(surface.calls) != 0 {
@@ -50,7 +50,7 @@ func TestOngoingSurfaceTransitionQueuesTranscriptWhileDetailActive(t *testing.T)
 func TestTranscriptModeTransitionMarksOngoingUnowned(t *testing.T) {
 	surface := &ongoingSurfaceSpy{}
 	controller := newNoopOngoingTranscriptController(surface, ongoingTestFrameProvider)
-	if _, _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+	if _, _, err := controller.AcceptFrom(ongoingTestSessionID(), ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
 	surface.calls = nil
@@ -60,7 +60,7 @@ func TestTranscriptModeTransitionMarksOngoingUnowned(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("transition to detail did not return alt-screen command")
 	}
-	if _, _, err := controller.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessageRuntimeReadModelUpdate)); err != nil {
+	if _, _, err := controller.AcceptFrom(ongoingTestSessionID(), ongoingTranscriptMessage(2, clientui.TranscriptMessageRuntimeReadModelUpdate)); err != nil {
 		t.Fatalf("accept detail queued message: %v", err)
 	}
 
@@ -72,14 +72,14 @@ func TestTranscriptModeTransitionMarksOngoingUnowned(t *testing.T) {
 func TestTranscriptModeReturnDrainsOngoingOnlyAfterPostExitMessage(t *testing.T) {
 	surface := &ongoingSurfaceSpy{}
 	controller := newNoopOngoingTranscriptController(surface, ongoingTestFrameProvider)
-	if _, _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+	if _, _, err := controller.AcceptFrom(ongoingTestSessionID(), ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
 	m := newProjectedStaticUIModel(withUIOngoingTranscriptController(controller))
 	if cmd := m.transitionTranscriptModeWithOptions(transcriptModeTransitionOptions{target: tui.ModeDetail}); cmd == nil {
 		t.Fatal("transition to detail did not return alt-screen command")
 	}
-	if _, _, err := controller.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessageRuntimeReadModelUpdate)); err != nil {
+	if _, _, err := controller.AcceptFrom(ongoingTestSessionID(), ongoingTranscriptMessage(2, clientui.TranscriptMessageRuntimeReadModelUpdate)); err != nil {
 		t.Fatalf("accept queued message: %v", err)
 	}
 	surface.calls = nil
@@ -102,14 +102,14 @@ func TestTranscriptModeReturnDrainsOngoingOnlyAfterPostExitMessage(t *testing.T)
 func TestDetailReturnKeyDoesNotRenderOngoingBeforePostExitMessage(t *testing.T) {
 	surface := &ongoingSurfaceSpy{}
 	controller := newNoopOngoingTranscriptController(surface, ongoingTestFrameProvider)
-	if _, _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+	if _, _, err := controller.AcceptFrom(ongoingTestSessionID(), ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
 	m := newProjectedStaticUIModel(withUIOngoingTranscriptController(controller))
 	if cmd := m.transitionTranscriptModeWithOptions(transcriptModeTransitionOptions{target: tui.ModeDetail}); cmd == nil {
 		t.Fatal("transition to detail did not return alt-screen command")
 	}
-	if _, _, err := controller.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessageRuntimeReadModelUpdate)); err != nil {
+	if _, _, err := controller.AcceptFrom(ongoingTestSessionID(), ongoingTranscriptMessage(2, clientui.TranscriptMessageRuntimeReadModelUpdate)); err != nil {
 		t.Fatalf("accept queued message: %v", err)
 	}
 	surface.calls = nil
@@ -139,7 +139,7 @@ func TestScratchResetWhileDetailActiveDefersRawSurfaceWriteUntilOngoingOwnsTermi
 	}
 	raw.Reset()
 	controller := newNoopOngoingTranscriptController(&ongoingSurfaceSpy{}, ongoingTestFrameProvider)
-	if _, _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+	if _, _, err := controller.AcceptFrom(ongoingTestSessionID(), ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
 	reopenCount := 0

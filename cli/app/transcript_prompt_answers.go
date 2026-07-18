@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"core/shared/apicontract"
@@ -12,6 +11,7 @@ import (
 	"core/shared/rpcwire"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -159,9 +159,8 @@ func newTranscriptPromptKey(prompt clientui.TranscriptPrompt) (transcriptPromptK
 	if prompt.SessionID.IsZero() {
 		return transcriptPromptKey{}, errors.New("prompt answer session id is required")
 	}
-	rawPromptID := string(prompt.PromptID)
-	if strings.TrimSpace(rawPromptID) == "" || strings.TrimSpace(rawPromptID) != rawPromptID {
-		return transcriptPromptKey{}, errors.New("prompt answer prompt id is required without surrounding whitespace")
+	if err := prompt.PromptID.Validate(); err != nil {
+		return transcriptPromptKey{}, fmt.Errorf("validate prompt answer prompt id: %w", err)
 	}
 	return transcriptPromptKey{sessionID: prompt.SessionID, promptID: prompt.PromptID}, nil
 }
@@ -171,8 +170,11 @@ func newActivePromptAnswerDelivery(
 	requestID runtimeids.RuntimeClientRequestID,
 	cancel context.CancelFunc,
 ) (*activePromptAnswerDelivery, error) {
-	if key.sessionID.IsZero() || strings.TrimSpace(string(key.promptID)) == "" {
+	if key.sessionID.IsZero() {
 		return nil, errors.New("prompt answer delivery key is required")
+	}
+	if err := key.promptID.Validate(); err != nil {
+		return nil, fmt.Errorf("validate prompt answer delivery prompt id: %w", err)
 	}
 	if requestID.IsZero() {
 		return nil, errors.New("prompt answer delivery request id is required")
@@ -230,6 +232,7 @@ func shouldRetryTranscriptPromptAnswer(err error) bool {
 }
 
 func clonePromptAnswer(answer clientui.PromptAnswer) clientui.PromptAnswer {
+	answer.PromptID = textutil.Pointer(answer.PromptID)
 	if answer.SelectedOptionNumber != nil {
 		selected := *answer.SelectedOptionNumber
 		answer.SelectedOptionNumber = &selected

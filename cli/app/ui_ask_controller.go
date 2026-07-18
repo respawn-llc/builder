@@ -19,6 +19,29 @@ type uiAskController struct {
 	model *uiModel
 }
 
+func (m *uiModel) reconcileTranscriptPrompts(prompts []clientui.TranscriptPrompt) {
+	if m == nil || m.ongoingTranscript != nil {
+		return
+	}
+	present := make(map[clientui.PromptID]struct{}, len(prompts))
+	for _, prompt := range prompts {
+		present[prompt.PromptID] = struct{}{}
+	}
+	if m.ask.hasCurrent() {
+		if _, ok := present[m.ask.current.prompt.PromptID]; !ok {
+			m.askController().resolvePrompt(m.ask.current.prompt.PromptID)
+		}
+	}
+	for _, queued := range m.ask.queue {
+		if _, ok := present[queued.prompt.PromptID]; !ok {
+			m.askController().resolvePrompt(queued.prompt.PromptID)
+		}
+	}
+	for _, prompt := range prompts {
+		m.askController().acceptEvent(askEvent{prompt: cloneTranscriptPromptForAsk(prompt)})
+	}
+}
+
 type askPromptLineKind int
 
 const (
@@ -55,8 +78,8 @@ func (c uiAskController) acceptEvent(evt askEvent) {
 		c.resolvePrompt(evt.promptID())
 		return
 	}
-	incomingPromptID := strings.TrimSpace(string(evt.prompt.PromptID))
-	if incomingPromptID != "" && m.ask.hasCurrent() && strings.TrimSpace(string(m.ask.current.prompt.PromptID)) == incomingPromptID {
+	incomingPromptID := evt.prompt.PromptID
+	if m.ask.hasCurrent() && m.ask.current.prompt.PromptID == incomingPromptID {
 		m.ask.current.prompt = evt.prompt
 		return
 	}
@@ -71,21 +94,17 @@ func (c uiAskController) acceptEvent(evt askEvent) {
 	m.ask.queue = append(m.ask.queue, evt)
 }
 
-func (c uiAskController) resolvePrompt(promptID string) {
+func (c uiAskController) resolvePrompt(promptID clientui.PromptID) {
 	m := c.model
-	targetID := strings.TrimSpace(promptID)
-	if targetID == "" {
-		return
-	}
 	filteredQueue := m.ask.queue[:0]
 	for _, queued := range m.ask.queue {
-		if strings.TrimSpace(string(queued.prompt.PromptID)) == targetID {
+		if queued.prompt.PromptID == promptID {
 			continue
 		}
 		filteredQueue = append(filteredQueue, queued)
 	}
 	m.ask.queue = filteredQueue
-	if !m.ask.hasCurrent() || strings.TrimSpace(string(m.ask.current.prompt.PromptID)) != targetID {
+	if !m.ask.hasCurrent() || m.ask.current.prompt.PromptID != promptID {
 		return
 	}
 	c.cancelActiveDelivery()
@@ -196,7 +215,10 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						return m, nil
 					}
 					resp = clientui.PromptAnswer{
-						PromptID: string(req.PromptID),
+						PromptID: func() *clientui.PromptID {
+							promptID := req.PromptID
+							return &promptID
+						}(),
 						Approval: &clientui.ApprovalPromptAnswer{Decision: decision, Commentary: commentary},
 					}
 					if decision != clientui.ApprovalDecisionDeny {
@@ -407,17 +429,14 @@ func (c uiAskController) answer(resp clientui.PromptAnswer, err error) (bool, bo
 	if !m.ask.hasCurrent() {
 		return false, false, nil
 	}
-	currentPromptID := strings.TrimSpace(string(m.ask.current.prompt.PromptID))
-	answerPromptID := strings.TrimSpace(resp.PromptID)
-	if answerPromptID != "" && answerPromptID != currentPromptID {
+	currentPromptID := m.ask.current.prompt.PromptID
+	if resp.PromptID != nil && *resp.PromptID != currentPromptID {
 		return false, false, nil
 	}
-	if answerPromptID == "" {
-		resp.PromptID = currentPromptID
-	} else {
-		resp.PromptID = answerPromptID
+	if resp.PromptID == nil {
+		resp.PromptID = &currentPromptID
 	}
-	if m.promptAnswers == nil || m.ask.current.prompt.SessionID.IsZero() || currentPromptID == "" {
+	if m.promptAnswers == nil || m.ask.current.prompt.SessionID.IsZero() {
 		return true, c.resolveAnsweredPromptOptimistically(), nil
 	}
 	active, cmd, deliveryErr := m.promptAnswers.delivery(m.ask.current.prompt, resp, err)

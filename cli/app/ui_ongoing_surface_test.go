@@ -86,8 +86,9 @@ func TestNativeOngoingHydrationWaitsForWindowSize(t *testing.T) {
 
 	_ = m.Init()
 	_, _ = m.Update(ongoingTranscriptEvent{
-		Kind:    ongoingTranscriptEventMessage,
-		Message: ongoingHydrationMessage(1),
+		Kind:            ongoingTranscriptEventMessage,
+		SourceSessionID: ongoingTestSessionID(),
+		Message:         ongoingHydrationMessage(1),
 	})
 	if len(spySurface.calls) != 0 {
 		t.Fatalf("surface calls before window size = %v, want none", spySurface.callKinds())
@@ -116,8 +117,9 @@ func TestOngoingTranscriptEventReachesNativeSurface(t *testing.T) {
 	}
 	hydration.Payload.Hydration.CommittedRows[0].User.Text = "hydrated row"
 	_, cmd := m.Update(ongoingTranscriptEvent{
-		Kind:    ongoingTranscriptEventMessage,
-		Message: hydration,
+		Kind:            ongoingTranscriptEventMessage,
+		SourceSessionID: ongoingTestSessionID(),
+		Message:         hydration,
 	})
 
 	if cmd != nil {
@@ -138,7 +140,7 @@ func TestOngoingTranscriptDeliveryKeepsCursorAbsentForAskOptionPicker(t *testing
 	testSetMainInput(m, strings.Repeat("x", 91))
 	m.ongoingTranscript = newNoopOngoingTranscriptController(surface, m.ongoingFrameInput)
 
-	if _, _, err := m.ongoingTranscript.Accept(ongoingHydrationMessage(1)); err != nil {
+	if _, _, err := m.ongoingTranscript.AcceptFrom(ongoingTestSessionID(), ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
 	next, _ := m.Update(askEventMsg{event: testQuestionAskEvent(
@@ -162,7 +164,7 @@ func TestOngoingTranscriptDeliveryKeepsCursorAbsentForAskOptionPicker(t *testing
 		t.Fatalf("ask option picker cursor = %+v, want absent", got)
 	}
 
-	if _, _, err := m.ongoingTranscript.Accept(clientui.TranscriptMessage{
+	if _, _, err := m.ongoingTranscript.AcceptFrom(ongoingTestSessionID(), clientui.TranscriptMessage{
 		Sequence: 2,
 		Kind:     clientui.TranscriptMessageAssistantDelta,
 		Payload: clientui.TranscriptPayload{
@@ -190,10 +192,10 @@ func TestNativeOngoingRepaintKeepsControllerLiveFrameSections(t *testing.T) {
 		WithUIOngoingSurface(nativeSurface),
 	), 40, 10)
 	m.ongoingTranscript = newNoopOngoingTranscriptController(spySurface, m.ongoingFrameInput)
-	if _, _, err := m.ongoingTranscript.Accept(ongoingHydrationMessage(1)); err != nil {
+	if _, _, err := m.ongoingTranscript.AcceptFrom(ongoingTestSessionID(), ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
-	if _, _, err := m.ongoingTranscript.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessagePromptPending)); err != nil {
+	if _, _, err := m.ongoingTranscript.AcceptFrom(ongoingTestSessionID(), ongoingTranscriptMessage(2, clientui.TranscriptMessagePromptPending)); err != nil {
 		t.Fatalf("accept pending prompt: %v", err)
 	}
 	spySurface.calls = nil
@@ -319,7 +321,7 @@ func TestScratchRehydrationResultRequestsTranscriptReopen(t *testing.T) {
 	var out bytes.Buffer
 	surface := ongoing.NewSurface(&out)
 	controller := newNoopOngoingTranscriptController(surface, ongoingTestFrameProvider)
-	if _, _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+	if _, _, err := controller.AcceptFrom(ongoingTestSessionID(), ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
 	reopened := false
@@ -340,7 +342,7 @@ func TestScratchRehydrationResultRequestsTranscriptReopen(t *testing.T) {
 	if !reopened {
 		t.Fatal("scratch rehydration did not request transcript subscription reopen")
 	}
-	if result, _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil || result.Action != ongoing.ResultNoop {
+	if result, _, err := controller.AcceptFrom(ongoingTestSessionID(), ongoingHydrationMessage(1)); err != nil || result.Action != ongoing.ResultNoop {
 		t.Fatalf("post-reopen hydration result=%+v err=%v, want accepted hydration", result, err)
 	}
 }

@@ -751,8 +751,9 @@ func TestStaleQueuedApprovalCommentaryDoesNotUnlockCurrentPrompt(t *testing.T) {
 	)})
 	model.ask.answerPending = true
 
+	stalePromptID := clientui.PromptID("approval-stale")
 	command := model.answerQueuedApprovalCommentary(clientui.PromptAnswer{
-		PromptID: "approval-stale",
+		PromptID: &stalePromptID,
 		Approval: &clientui.ApprovalPromptAnswer{
 			Decision:   clientui.ApprovalDecisionAllowOnce,
 			Commentary: "stale commentary",

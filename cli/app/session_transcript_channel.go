@@ -3,8 +3,10 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -16,9 +18,10 @@ const (
 )
 
 type ongoingTranscriptEvent struct {
-	Kind    ongoingTranscriptEventKind
-	Message clientui.TranscriptMessage
-	Err     error
+	Kind            ongoingTranscriptEventKind
+	SourceSessionID runtimeids.SessionID
+	Message         clientui.TranscriptMessage
+	Err             error
 }
 
 type ongoingTranscriptEventStream struct {
@@ -30,6 +33,10 @@ type ongoingTranscriptEventStream struct {
 type sessionTranscriptSubscriber func(context.Context, serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error)
 
 func startSessionTranscriptEvents(ctx context.Context, sessionID string, subscribe sessionTranscriptSubscriber) ongoingTranscriptEventStream {
+	sourceSessionID, err := runtimeids.ParseSessionID(sessionID)
+	if err != nil {
+		panic(fmt.Sprintf("start session transcript events with invalid session id %q: %v", sessionID, err))
+	}
 	out := make(chan ongoingTranscriptEvent, 64)
 	requests := make(chan struct{}, 1)
 	if subscribe == nil {
@@ -44,7 +51,7 @@ func startSessionTranscriptEvents(ctx context.Context, sessionID string, subscri
 			if err != nil {
 				return
 			}
-			reopen, stop := pumpSessionTranscriptSubscription(pollCtx, sub, out, requests)
+			reopen, stop := pumpSessionTranscriptSubscription(pollCtx, sourceSessionID, sub, out, requests)
 			if stop {
 				return
 			}
@@ -67,7 +74,7 @@ type transcriptNextResult struct {
 	err     error
 }
 
-func pumpSessionTranscriptSubscription(ctx context.Context, sub serverapi.TranscriptSubscription, out chan<- ongoingTranscriptEvent, requests <-chan struct{}) (reopen bool, stop bool) {
+func pumpSessionTranscriptSubscription(ctx context.Context, sourceSessionID runtimeids.SessionID, sub serverapi.TranscriptSubscription, out chan<- ongoingTranscriptEvent, requests <-chan struct{}) (reopen bool, stop bool) {
 	subClosed := false
 	closeSub := func() {
 		if subClosed {
@@ -98,13 +105,13 @@ func pumpSessionTranscriptSubscription(ctx context.Context, sub serverapi.Transc
 					return false, true
 				}
 				closeSub()
-				emitSessionTranscriptLoss(ctx, out, result.err)
+				emitSessionTranscriptLoss(ctx, sourceSessionID, out, result.err)
 				return waitForTranscriptRehydrationRequest(ctx, requests)
 			}
 			select {
 			case <-ctx.Done():
 				return false, true
-			case out <- ongoingTranscriptEvent{Kind: ongoingTranscriptEventMessage, Message: result.message}:
+			case out <- ongoingTranscriptEvent{Kind: ongoingTranscriptEventMessage, SourceSessionID: sourceSessionID, Message: result.message}:
 			}
 		}
 	}
@@ -135,9 +142,9 @@ func resubscribeSessionTranscript(ctx context.Context, sessionID string, subscri
 	}
 }
 
-func emitSessionTranscriptLoss(ctx context.Context, out chan<- ongoingTranscriptEvent, err error) {
+func emitSessionTranscriptLoss(ctx context.Context, sourceSessionID runtimeids.SessionID, out chan<- ongoingTranscriptEvent, err error) {
 	select {
 	case <-ctx.Done():
-	case out <- ongoingTranscriptEvent{Kind: ongoingTranscriptEventLoss, Err: err}:
+	case out <- ongoingTranscriptEvent{Kind: ongoingTranscriptEventLoss, SourceSessionID: sourceSessionID, Err: err}:
 	}
 }

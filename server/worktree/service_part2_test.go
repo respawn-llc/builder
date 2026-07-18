@@ -322,7 +322,8 @@ func TestNextAvailableWorktreeRootFailsAfterCollisionCap(t *testing.T) {
 
 func newServiceTestEnv(t *testing.T) *serviceTestEnv {
 	t.Helper()
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(worktreeTestContext)
+	t.Cleanup(cancel)
 	home := t.TempDir()
 	workspace := t.TempDir()
 	t.Setenv("HOME", home)

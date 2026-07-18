@@ -160,6 +160,8 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		model.ongoingFrameInput,
 		sessionClient.admitTranscriptMessageState,
 		model.applyAdmittedTranscriptMessageState,
+		model,
+		uiLogger,
 	)
 	return &uiProgramComposition{
 		model:   model,

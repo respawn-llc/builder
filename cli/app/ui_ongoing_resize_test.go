@@ -61,7 +61,7 @@ func TestWindowResizeWhileDetailOwnsTerminalRepaintsOnReturn(t *testing.T) {
 			), 80, 24)
 			controller := newNoopOngoingTranscriptController(surface, m.ongoingFrameInput)
 			m.ongoingTranscript = controller
-			if _, _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+			if _, _, err := controller.AcceptFrom(ongoingTestSessionID(), ongoingHydrationMessage(1)); err != nil {
 				t.Fatalf("accept hydration: %v", err)
 			}
 
@@ -124,7 +124,7 @@ func TestAppleTerminalWidthResizeWhileDetailOwnsTerminalRehydratesOnReturn(t *te
 	raw.Reset()
 	surface := &ongoingSurfaceSpy{}
 	controller := newNoopOngoingTranscriptController(surface, ongoingTestFrameProvider)
-	if _, _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+	if _, _, err := controller.AcceptFrom(ongoingTestSessionID(), ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
 	reopenCount := 0
@@ -178,10 +178,10 @@ func TestWindowResizeKeepsControllerLiveFrameSections(t *testing.T) {
 		WithUIOngoingSurface(nativeSurface),
 	), 40, 10)
 	m.ongoingTranscript = newNoopOngoingTranscriptController(surface, m.ongoingFrameInput)
-	if _, _, err := m.ongoingTranscript.Accept(ongoingHydrationMessage(1)); err != nil {
+	if _, _, err := m.ongoingTranscript.AcceptFrom(ongoingTestSessionID(), ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
-	if _, _, err := m.ongoingTranscript.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessagePromptPending)); err != nil {
+	if _, _, err := m.ongoingTranscript.AcceptFrom(ongoingTestSessionID(), ongoingTranscriptMessage(2, clientui.TranscriptMessagePromptPending)); err != nil {
 		t.Fatalf("accept pending prompt: %v", err)
 	}
 	surface.calls = nil

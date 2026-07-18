@@ -23,8 +23,9 @@ func TestDelayedTranscriptRuntimeTupleCannotRollBackNewerUnaryState(t *testing.T
 		m.ongoingFrameInput,
 		runtimeClient.admitTranscriptMessageState,
 		m.applyAdmittedTranscriptMessageState,
+		m,
 	)
-	if _, _, err := controller.Accept(runtimeTupleTestHydration(9, runtimeTupleTestIdleActivity(), v9.InputReconciliation)); err != nil {
+	if _, _, err := controller.AcceptFrom(ongoingTestSessionID(), runtimeTupleTestHydration(9, runtimeTupleTestIdleActivity(), v9.InputReconciliation)); err != nil {
 		t.Fatalf("accept initial hydration: %v", err)
 	}
 
@@ -32,7 +33,7 @@ func TestDelayedTranscriptRuntimeTupleCannotRollBackNewerUnaryState(t *testing.T
 	canonical := runtimeClient.storeMainView(v11)
 	m.applyRuntimeMainViewState(canonical)
 	delayed := runtimeTupleTestUpdateMessage(2, 10, runtimeTupleTestRunningActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationUnknown))
-	if _, cmd, err := controller.Accept(delayed); err != nil {
+	if _, cmd, err := controller.AcceptFrom(ongoingTestSessionID(), delayed); err != nil {
 		t.Fatalf("accept delayed runtime update: %v", err)
 	} else if cmd != nil {
 		t.Fatal("lower-sequence runtime update scheduled an unexpected refresh")
@@ -78,8 +79,9 @@ func TestRuntimeMainViewRefreshCommitsOnlyWhenReducerHandlesCandidate(t *testing
 		m.ongoingFrameInput,
 		runtimeClient.admitTranscriptMessageState,
 		m.applyAdmittedTranscriptMessageState,
+		m,
 	)
-	if _, _, err := controller.Accept(runtimeTupleTestHydration(9, v9.Activity, v9.InputReconciliation)); err != nil {
+	if _, _, err := controller.AcceptFrom(ongoingTestSessionID(), runtimeTupleTestHydration(9, v9.Activity, v9.InputReconciliation)); err != nil {
 		t.Fatalf("accept initial hydration: %v", err)
 	}
 
@@ -97,7 +99,7 @@ func TestRuntimeMainViewRefreshCommitsOnlyWhenReducerHandlesCandidate(t *testing
 	}
 
 	v11 := runtimeTupleTestView(11, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationCommitted))
-	if _, _, err := controller.Accept(runtimeTupleTestUpdateMessage(2, 11, v11.Activity, v11.InputReconciliation)); err != nil {
+	if _, _, err := controller.AcceptFrom(ongoingTestSessionID(), runtimeTupleTestUpdateMessage(2, 11, v11.Activity, v11.InputReconciliation)); err != nil {
 		t.Fatalf("accept newer transcript update: %v", err)
 	}
 	m.handleRuntimeMainViewRefreshed(msg)
