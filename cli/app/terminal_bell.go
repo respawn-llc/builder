@@ -39,6 +39,7 @@ type osc9TerminalNotifier struct {
 type observedNotificationTurn struct {
 	stepID    runtimeids.StepID
 	toolCalls int
+	preview   *turnCompletionPreview
 }
 
 type turnCompletionPreview struct {
@@ -129,7 +130,7 @@ func (r *osc9TerminalNotifier) Notify(message string) {
 	defer r.mu.Unlock()
 	// The first BEL terminates the OSC 9 sequence. Emit a second BEL so asks and
 	// turn-complete notifications still produce an audible bell on OSC-capable terminals.
-	_, _ = io.WriteString(r.out, osc9Prefix+terminalNotificationSingleLine(message)+terminalBell+terminalBell)
+	_, _ = io.WriteString(r.out, osc9Prefix+message+terminalBell+terminalBell)
 }
 
 func (r *osc9TerminalNotifier) Bell() {
@@ -248,22 +249,28 @@ func (h *bellHooks) recordTurnCompletion(stepID runtimeids.StepID, assistantCont
 	if h.reviewerStep != nil && *h.reviewerStep == stepID {
 		return
 	}
-	eligible := false
-	if h.pendingTurnCompletion != nil {
-		eligible = h.pendingTurnCompletion.eligible
+	if h.observedTurn == nil {
+		h.observedTurn = &observedNotificationTurn{stepID: stepID}
 	}
-	h.pendingTurnCompletion = &queuedTurnCompletion{
-		preview:  turnCompletionPreview{stepID: stepID, body: message},
-		eligible: eligible,
+	if h.observedTurn.stepID != stepID {
+		return
 	}
+	h.observedTurn.preview = &turnCompletionPreview{stepID: stepID, body: message}
 }
 
 func (h *bellHooks) recordStepFinished(stepID runtimeids.StepID) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.observedTurn != nil && h.observedTurn.stepID == stepID {
-		if h.pendingTurnCompletion != nil && h.observedTurn.toolCalls >= 2 {
-			h.pendingTurnCompletion.eligible = true
+		if h.observedTurn.preview != nil {
+			eligible := h.observedTurn.toolCalls >= 2
+			if h.pendingTurnCompletion != nil {
+				eligible = eligible || h.pendingTurnCompletion.eligible
+			}
+			h.pendingTurnCompletion = &queuedTurnCompletion{
+				preview:  *h.observedTurn.preview,
+				eligible: eligible,
+			}
 		}
 		h.observedTurn = nil
 	}

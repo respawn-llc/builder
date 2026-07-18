@@ -68,6 +68,19 @@ func TestTerminalNotifierProtocolOutput(t *testing.T) {
 	}
 }
 
+func TestOSC9NotifierEncodesFormattedMessageVerbatim(t *testing.T) {
+	var out bytes.Buffer
+	notifier := newOSC9TerminalNotifier(&out)
+	formatted := "dynamic  formatted notification"
+
+	notifier.Notify(formatted)
+
+	want := osc9Prefix + formatted + terminalBell + terminalBell
+	if got := out.String(); got != want {
+		t.Fatalf("OSC 9 output = %q, want opaque formatted payload %q", got, want)
+	}
+}
+
 func TestBellHooksAttentionNotificationPolicy(t *testing.T) {
 	unfocused := &countRinger{}
 	hooks := newUnfocusedBellHooks(unfocused)
@@ -107,11 +120,13 @@ func TestBellHooksAttentionNotificationsPropagateDynamicMarkdownPreview(t *testi
 	if ringer.notifications != 2 || len(ringer.messages) != 2 {
 		t.Fatalf("dynamic attention events = notifications %d, messages %d", ringer.notifications, len(ringer.messages))
 	}
-	if !strings.Contains(ringer.messages[0], questionPreview) {
-		t.Fatalf("question notification omitted dynamic preview: %q", ringer.messages[0])
+	questionFields := strings.Fields(ringer.messages[0])
+	if got := questionFields[len(questionFields)-1]; got != questionPreview {
+		t.Fatalf("question notification dynamic preview = %q, want %q", got, questionPreview)
 	}
-	if !strings.Contains(ringer.messages[1], approvalPreview) {
-		t.Fatalf("approval notification omitted dynamic preview: %q", ringer.messages[1])
+	approvalFields := strings.Fields(ringer.messages[1])
+	if got := approvalFields[len(approvalFields)-1]; got != approvalPreview {
+		t.Fatalf("approval notification dynamic preview = %q, want %q", got, approvalPreview)
 	}
 }
 
@@ -143,8 +158,8 @@ func TestBellHooksTextNotificationsHaveNonEmptyStructuralFallbacks(t *testing.T)
 		if strings.TrimSpace(message) == "" || message == title+":" || message == title+": " {
 			t.Fatalf("notification lacks structural fallback: %q", message)
 		}
-		if strings.ContainsAny(message, "\n\t") {
-			t.Fatalf("fallback notification is not single-line: %q", message)
+		if normalized := strings.Join(strings.Fields(message), " "); normalized != message {
+			t.Fatalf("fallback notification = %q, want normalized single line %q", message, normalized)
 		}
 	}
 }
@@ -167,8 +182,10 @@ func TestBellHooksCapsCompleteNotificationAtNotifierBoundary(t *testing.T) {
 	if got := len([]rune(message)); got != terminalNotificationPreviewLimit {
 		t.Fatalf("formatted notification length = %d, want %d", got, terminalNotificationPreviewLimit)
 	}
-	if !strings.HasSuffix(message, "...") || strings.Count(message, "...") != 1 || strings.Contains(message, "…") {
-		t.Fatalf("formatted notification has invalid terminal ellipsis: %q", message)
+	composed := terminalNotificationSingleLine(title + ": " + strings.Repeat("answer", 30))
+	want := string([]rune(composed)[:terminalNotificationPreviewLimit-3]) + "..."
+	if message != want {
+		t.Fatalf("formatted notification = %q, want one final truncation %q", message, want)
 	}
 }
 
@@ -184,16 +201,9 @@ func TestNotificationMarkdownPreviewUsesVisibleSingleLineText(t *testing.T) {
 		transcriptrender.MarkdownLinkLabelAndDestination,
 	)
 
-	for _, dynamic := range []string{first, label, destination, last} {
-		if !strings.Contains(preview, dynamic) {
-			t.Fatalf("Markdown preview %q omitted dynamic visible text %q", preview, dynamic)
-		}
-	}
-	if strings.ContainsAny(preview, "*[]()\n\t") {
-		t.Fatalf("Markdown preview retained source syntax or whitespace controls: %q", preview)
-	}
-	if got := strings.Join(strings.Fields(preview), " "); got != preview {
-		t.Fatalf("Markdown preview whitespace = %q, want collapsed single line", preview)
+	want := strings.Join([]string{first, label, destination, last}, " ")
+	if preview != want {
+		t.Fatalf("Markdown preview = %q, want visible single-line text %q", preview, want)
 	}
 }
 
@@ -205,14 +215,11 @@ func TestNotificationMarkdownPreviewAdaptsLinkPresentation(t *testing.T) {
 	labelOnly := notificationMarkdownPreview(source, transcriptrender.MarkdownLinkLabelOnly)
 	withDestination := notificationMarkdownPreview(source, transcriptrender.MarkdownLinkLabelAndDestination)
 
-	if !strings.Contains(labelOnly, label) || !strings.Contains(withDestination, label) {
-		t.Fatalf("link previews omitted dynamic label: label-only=%q fallback=%q", labelOnly, withDestination)
+	if labelOnly != label {
+		t.Fatalf("label-only preview = %q, want %q", labelOnly, label)
 	}
-	if strings.Contains(labelOnly, destination) {
-		t.Fatalf("label-only preview exposed dynamic destination: %q", labelOnly)
-	}
-	if !strings.Contains(withDestination, destination) {
-		t.Fatalf("fallback preview omitted dynamic destination: %q", withDestination)
+	if want := label + " " + destination; withDestination != want {
+		t.Fatalf("fallback preview = %q, want %q", withDestination, want)
 	}
 }
 
@@ -225,8 +232,9 @@ func TestNotificationMarkdownPreviewIsBoundedWithoutVisibleTruncation(t *testing
 	if got := len([]rune(preview)); got != terminalNotificationPreviewLimit {
 		t.Fatalf("retained preview length = %d, want %d", got, terminalNotificationPreviewLimit)
 	}
-	if strings.HasSuffix(preview, "...") || strings.HasSuffix(preview, "…") {
-		t.Fatalf("retained preview contains early visible truncation: %q", preview)
+	runes := []rune(preview)
+	if last := runes[len(runes)-1]; last == '.' || last == '…' {
+		t.Fatalf("retained preview ends with visible truncation rune %q: %q", last, preview)
 	}
 }
 
@@ -242,8 +250,9 @@ func TestTerminalNotificationFormattingSlicesUnicodeSafely(t *testing.T) {
 	if got := len([]rune(message)); got != terminalNotificationPreviewLimit {
 		t.Fatalf("formatted Unicode notification length = %d, want %d", got, terminalNotificationPreviewLimit)
 	}
-	if !strings.HasSuffix(message, "...") {
-		t.Fatalf("formatted Unicode notification lacks terminal ellipsis: %q", message)
+	runes := []rune(message)
+	if got := string(runes[len(runes)-3:]); got != "..." {
+		t.Fatalf("formatted Unicode notification suffix = %q, want terminal ellipsis", got)
 	}
 }
 
@@ -260,8 +269,9 @@ func TestBellHooksCompactionUsesCompleteMessageFormatter(t *testing.T) {
 	if got := len([]rune(ringer.messages[0])); got != terminalNotificationPreviewLimit {
 		t.Fatalf("compaction notification length = %d, want %d", got, terminalNotificationPreviewLimit)
 	}
-	if !strings.HasSuffix(ringer.messages[0], "...") {
-		t.Fatalf("compaction notification lacks terminal ellipsis: %q", ringer.messages[0])
+	runes := []rune(ringer.messages[0])
+	if got := string(runes[len(runes)-3:]); got != "..." {
+		t.Fatalf("compaction notification suffix = %q, want terminal ellipsis", got)
 	}
 }
 
@@ -499,6 +509,7 @@ func TestBellHooksCorrelateQueuedTurnSteps(t *testing.T) {
 		hooks.OnTranscriptMessage(bellToolStartMessage(1))
 		hooks.OnTranscriptMessage(bellToolStartMessage(1))
 		hooks.OnTranscriptMessage(bellAssistantFinalMessage(2))
+		hooks.OnTranscriptMessage(bellStepFinishedMessage(1))
 		hooks.OnTurnQueueDrained()
 		if ringer.total() != 0 {
 			t.Fatalf("mismatched final emitted %d events", ringer.total())
