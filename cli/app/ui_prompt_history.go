@@ -10,31 +10,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-type promptHistoryOverflowPolicy uint8
-
-const (
-	promptHistoryOverflowInitialLoad promptHistoryOverflowPolicy = iota
-	promptHistoryOverflowLocalSubmission
-)
-
-func (m *uiModel) loadInitialPromptHistory(initial [][]string) {
-	total := 0
-	for _, history := range initial {
-		total += len(history)
-	}
-	skip := m.promptHistoryTailSkip(total, promptHistoryOverflowInitialLoad)
-	var loaded []string
-	for _, history := range initial {
-		if skip >= len(history) {
-			skip -= len(history)
-			continue
-		}
-		history = history[skip:]
-		skip = 0
-		for _, raw := range history {
-			if text := preservePromptHistoryText(raw); text != "" {
-				loaded = append(loaded, text)
-			}
+func (m *uiModel) loadInitialPromptHistory(initial []string, rawCount int) {
+	m.validateInitialPromptHistoryCount(rawCount)
+	loaded := make([]string, 0, len(initial))
+	for _, raw := range initial {
+		if text := preservePromptHistoryText(raw); text != "" {
+			loaded = append(loaded, text)
 		}
 	}
 	m.promptHistory = loaded
@@ -218,48 +199,51 @@ func (m *uiModel) rememberPromptHistoryLocally(text string) bool {
 	if text = preservePromptHistoryText(text); text == "" {
 		return false
 	}
-	m.promptHistory = append(m.promptHistory, text)
-	m.promptHistory = m.retainPromptHistoryTail(m.promptHistory, promptHistoryOverflowLocalSubmission)
+	m.promptHistory = appendPromptHistoryTail(m.promptHistory, []string{text})
 	m.resetPromptHistoryNavigation()
 	return true
 }
 
-func (m *uiModel) retainPromptHistoryTail(
-	history []string,
-	policy promptHistoryOverflowPolicy,
-) []string {
-	skip := m.promptHistoryTailSkip(len(history), policy)
-	if skip == 0 {
-		return history
+func appendPromptHistoryTail(tail []string, appended []string) []string {
+	if len(appended) == 0 {
+		return tail
 	}
-	return append([]string(nil), history[skip:]...)
+	maximum := serverapi.SessionPromptHistoryMaxEntries
+	if len(tail) > maximum {
+		tail = tail[len(tail)-maximum:]
+	}
+	if cap(tail) != maximum {
+		bounded := make([]string, len(tail), maximum)
+		copy(bounded, tail)
+		tail = bounded
+	}
+	if len(appended) >= maximum {
+		tail = tail[:0]
+		return append(tail, appended[len(appended)-maximum:]...)
+	}
+	keep := maximum - len(appended)
+	if len(tail) > keep {
+		copy(tail, tail[len(tail)-keep:])
+		tail = tail[:keep]
+	}
+	return append(tail, appended...)
 }
 
-func (m *uiModel) promptHistoryTailSkip(
-	count int,
-	policy promptHistoryOverflowPolicy,
-) int {
+func (m *uiModel) validateInitialPromptHistoryCount(count int) {
 	if count <= serverapi.SessionPromptHistoryMaxEntries {
-		return 0
+		return
 	}
-	switch policy {
-	case promptHistoryOverflowInitialLoad:
-		if m.debugMode {
-			m.handleOngoingDeveloperError(ongoing.NewDeveloperError(
-				"load_prompt_history",
-				"session-opening prompt history exceeds contract maximum",
-				map[string]any{
-					"actual_count":  count,
-					"maximum_count": serverapi.SessionPromptHistoryMaxEntries,
-				},
-			))
-		}
-		// The user-authorized release recovery is intentionally silent.
-	case promptHistoryOverflowLocalSubmission:
-	default:
-		panic("retain prompt history tail with invalid overflow policy")
+	if m.debugMode {
+		m.handleOngoingDeveloperError(ongoing.NewDeveloperError(
+			"load_prompt_history",
+			"session-opening prompt history exceeds contract maximum",
+			map[string]any{
+				"actual_count":  count,
+				"maximum_count": serverapi.SessionPromptHistoryMaxEntries,
+			},
+		))
 	}
-	return count - serverapi.SessionPromptHistoryMaxEntries
+	// The user-authorized release recovery is intentionally silent.
 }
 
 func (m *uiModel) recordPromptHistory(text string) tea.Cmd {

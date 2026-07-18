@@ -70,7 +70,8 @@ func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption)
 
 type uiModelConstruction struct {
 	*uiModel
-	initialPromptHistories [][]string
+	initialPromptHistoryTail  []string
+	initialPromptHistoryCount int
 }
 
 func newUIModelConstruction(runtimeClient clientui.RuntimeClient) *uiModelConstruction {
@@ -78,9 +79,15 @@ func newUIModelConstruction(runtimeClient clientui.RuntimeClient) *uiModelConstr
 }
 
 func (c *uiModelConstruction) finalize() *uiModel {
-	c.uiModel.loadInitialPromptHistory(c.initialPromptHistories)
-	c.initialPromptHistories = nil
+	c.uiModel.loadInitialPromptHistory(c.initialPromptHistoryTail, c.initialPromptHistoryCount)
+	c.initialPromptHistoryTail = nil
+	c.initialPromptHistoryCount = 0
 	return c.uiModel
+}
+
+func (c *uiModelConstruction) appendInitialPromptHistory(history []string) {
+	c.initialPromptHistoryCount += len(history)
+	c.initialPromptHistoryTail = appendPromptHistoryTail(c.initialPromptHistoryTail, history)
 }
 
 func (m *uiModel) Init() tea.Cmd {

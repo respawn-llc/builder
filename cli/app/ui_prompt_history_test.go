@@ -27,19 +27,15 @@ func TestLoadPromptHistoryKeepsOnlyNewestContractTailInRelease(t *testing.T) {
 	}
 }
 
-func TestPromptHistoryOptionsComposeBeforeRetainingNewestContractTail(t *testing.T) {
-	first := make([]string, 0, 75)
-	second := make([]string, 0, 75)
-	for i := range 75 {
-		first = append(first, promptHistoryEntry(i))
-		second = append(second, promptHistoryEntry(i+75))
+func TestManyPromptHistoryOptionsComposeBeforeRetainingNewestContractTail(t *testing.T) {
+	total := serverapi.SessionPromptHistoryMaxEntries + 50
+	options := make([]UIOption, 0, total+1)
+	options = append(options, WithUIDebug(false))
+	for i := range total {
+		options = append(options, WithUIPromptHistory([]string{promptHistoryEntry(i)}))
 	}
 
-	m := newProjectedStaticUIModel(
-		WithUIDebug(false),
-		WithUIPromptHistory(first),
-		WithUIPromptHistory(second),
-	)
+	m := newProjectedStaticUIModel(options...)
 
 	if got, want := len(m.promptHistory), serverapi.SessionPromptHistoryMaxEntries; got != want {
 		t.Fatalf("prompt history length = %d, want %d", got, want)
@@ -47,7 +43,7 @@ func TestPromptHistoryOptionsComposeBeforeRetainingNewestContractTail(t *testing
 	if got, want := m.promptHistory[0], promptHistoryEntry(50); got != want {
 		t.Fatalf("oldest retained prompt = %q, want %q", got, want)
 	}
-	if got, want := m.promptHistory[len(m.promptHistory)-1], promptHistoryEntry(149); got != want {
+	if got, want := m.promptHistory[len(m.promptHistory)-1], promptHistoryEntry(total-1); got != want {
 		t.Fatalf("newest retained prompt = %q, want %q", got, want)
 	}
 }
