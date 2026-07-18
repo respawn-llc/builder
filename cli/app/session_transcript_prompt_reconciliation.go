@@ -255,7 +255,7 @@ func (m *uiModel) snapshotTranscriptPromptOwnership() transcriptPromptOwnershipS
 		switch {
 		case m.ask.answerPending || m.ask.activeDelivery != nil:
 			snapshot.retention = transcriptPromptRetentionAnswerPending
-		case strings.TrimSpace(m.ask.input) != "":
+		case strings.TrimSpace(m.ask.editor.Text()) != "":
 			snapshot.retention = transcriptPromptRetentionMeaningfulDraft
 		}
 		snapshot.events = append(snapshot.events, *m.ask.current)
@@ -320,7 +320,7 @@ func (m *uiModel) normalizeRetainedPromptInteraction(oldPrompt, newPrompt client
 	if slices.Equal(oldPrompt.Suggestions, newPrompt.Suggestions) {
 		return
 	}
-	if strings.TrimSpace(m.ask.input) != "" {
+	if strings.TrimSpace(m.ask.editor.Text()) != "" {
 		m.ask.cursor = len(newPrompt.Suggestions)
 		m.ask.freeform = true
 		m.ask.freeformMode = askFreeformModeGeneric
