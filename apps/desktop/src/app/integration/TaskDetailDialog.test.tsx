@@ -335,20 +335,20 @@ describe("TaskDetailSurface", () => {
       name: appI18n.t("task.properties"),
     });
     const definitions = propertyDefinitions(properties);
-    const sourceWorkspace = definitionContaining(definitions, "Main");
-    const managedWorktree = definitionContaining(definitions, "/tmp/worktree");
+    const sourceWorkspace = definitionWithExactValue(definitions, "Main");
+    const managedWorktree = definitionWithExactValue(definitions, "/tmp/worktree");
 
     expect(sourceWorkspace).toHaveTextContent("/tmp/project");
-    expect(definitionsContaining(definitions, "/tmp/project")).toHaveLength(1);
-    expect(definitionsContaining(definitions, "/tmp/worktree")).toHaveLength(1);
+    expect(definitionsWithExactValue(definitions, "/tmp/project")).toHaveLength(1);
+    expect(definitionsWithExactValue(definitions, "/tmp/worktree")).toHaveLength(1);
     expect(definitions.indexOf(managedWorktree)).toBeLessThan(
-      definitions.indexOf(definitionContaining(definitions, "requested-ref")),
+      definitions.indexOf(definitionWithExactValue(definitions, "requested-ref")),
     );
     expect(definitions.indexOf(managedWorktree)).toBeLessThan(
-      definitions.indexOf(definitionContaining(definitions, "0123456789ab")),
+      definitions.indexOf(definitionWithExactValue(definitions, "0123456789ab")),
     );
     expect(definitions.indexOf(managedWorktree)).toBeLessThan(
-      definitions.indexOf(definitionContaining(definitions, "managed-branch")),
+      definitions.indexOf(definitionWithExactValue(definitions, "managed-branch")),
     );
 
     fireEvent.click(within(managedWorktree).getByRole("button"));
@@ -361,7 +361,7 @@ describe("TaskDetailSurface", () => {
       });
     });
 
-    const commitDefinition = definitionContaining(definitions, "0123456789ab");
+    const commitDefinition = definitionWithExactValue(definitions, "0123456789ab");
     fireEvent.click(within(commitDefinition).getByRole("button"));
 
     await waitFor(() => {
@@ -393,7 +393,7 @@ describe("TaskDetailSurface", () => {
       name: appI18n.t("task.properties"),
     });
 
-    expect(definitionsContaining(propertyDefinitions(properties), "/tmp/project")).toHaveLength(1);
+    expect(definitionsWithExactValue(propertyDefinitions(properties), "/tmp/project")).toHaveLength(1);
   });
 
   it("copies the source workspace path with its typed success notice", async () => {
@@ -406,7 +406,7 @@ describe("TaskDetailSurface", () => {
     const properties = await screen.findByRole("region", {
       name: appI18n.t("task.properties"),
     });
-    const sourceDefinition = definitionContaining(propertyDefinitions(properties), "/tmp/project");
+    const sourceDefinition = definitionWithExactValue(propertyDefinitions(properties), "/tmp/project");
 
     fireEvent.click(within(sourceDefinition).getByRole("button"));
 
@@ -429,7 +429,7 @@ describe("TaskDetailSurface", () => {
     const properties = await screen.findByRole("region", {
       name: appI18n.t("task.properties"),
     });
-    const sourceDefinition = definitionContaining(propertyDefinitions(properties), "/tmp/project");
+    const sourceDefinition = definitionWithExactValue(propertyDefinitions(properties), "/tmp/project");
 
     fireEvent.click(within(sourceDefinition).getByRole("button"));
 
@@ -470,10 +470,10 @@ describe("TaskDetailSurface", () => {
     });
     const definitions = propertyDefinitions(properties);
 
-    expect(definitionsContaining(definitions, "/tmp/worktree")).toHaveLength(0);
-    expect(definitionsContaining(definitions, "unavailable-branch")).toHaveLength(0);
-    expect(definitionsContaining(definitions, "legacy-source")).toHaveLength(1);
-    expect(definitionsContaining(definitions, "0123456789ab")).toHaveLength(1);
+    expect(definitionsWithExactValue(definitions, "/tmp/worktree")).toHaveLength(0);
+    expect(definitionsWithExactValue(definitions, "unavailable-branch")).toHaveLength(0);
+    expect(definitionsWithExactValue(definitions, "legacy-source")).toHaveLength(1);
+    expect(definitionsWithExactValue(definitions, "0123456789ab")).toHaveLength(1);
   });
 
   it("opens script files through native file capabilities without exposing CLI sessions", async () => {
@@ -939,16 +939,18 @@ function propertyDefinitions(region: HTMLElement): HTMLElement[] {
   return within(region).getAllByRole("definition");
 }
 
-function definitionsContaining(definitions: readonly HTMLElement[], value: string): HTMLElement[] {
-  return definitions.filter((definition) => definition.textContent.includes(value));
+function definitionsWithExactValue(definitions: readonly HTMLElement[], value: string): HTMLElement[] {
+  return definitions.filter(
+    (definition) => within(definition).queryByText(value, { exact: true }) !== null,
+  );
 }
 
-function definitionContaining(definitions: readonly HTMLElement[], value: string): HTMLElement {
-  const matching = definitionsContaining(definitions, value);
+function definitionWithExactValue(definitions: readonly HTMLElement[], value: string): HTMLElement {
+  const matching = definitionsWithExactValue(definitions, value);
   expect(matching).toHaveLength(1);
   const definition = matching[0];
   if (definition === undefined) {
-    throw new Error(`Expected one property definition containing fixture value ${value}.`);
+    throw new Error(`Expected one property definition with exact fixture value ${value}.`);
   }
   return definition;
 }
