@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/google/uuid"
 )
 
 func TestAskProjectionAdmissionInitializesPromptWithoutRenderingOnUpdate(t *testing.T) {
@@ -80,8 +81,8 @@ func TestAskProjectionAdmissionInitializesPromptWithoutRenderingOnUpdate(t *test
 		if request.currentToken != updated.ask.currentToken {
 			t.Fatalf("projection current token = %d, want %d", request.currentToken, updated.ask.currentToken)
 		}
-		if request.operationToken == 0 {
-			t.Fatal("projection operation token is zero")
+		if request.operationToken == uuid.Nil {
+			t.Fatal("projection operation token is absent")
 		}
 		if request.identity.questionSource != "# Choose carefully" {
 			t.Fatalf("projection question source = %q", request.identity.questionSource)
@@ -230,7 +231,7 @@ func TestAskProjectionWrongOperationResultDoesNotConsumeInFlightRequest(t *testi
 	}
 	inFlight := *pending.ask.inFlightProjection
 	wrongOperation := inFlight
-	wrongOperation.operationToken = nextNonZeroToken(wrongOperation.operationToken)
+	wrongOperation.operationToken = uuid.New()
 
 	next, command := pending.Update(questionRenderResultMsg{
 		request: wrongOperation,

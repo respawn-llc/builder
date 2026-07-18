@@ -9,6 +9,7 @@ import (
 	"core/cli/tui/transcriptrender"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/uuid"
 )
 
 type questionRenderIdentity struct {
@@ -20,7 +21,7 @@ type questionRenderIdentity struct {
 
 type questionRenderRequest struct {
 	currentToken   uint64
-	operationToken uint64
+	operationToken uuid.UUID
 	identity       questionRenderIdentity
 	questionSource string
 }
@@ -98,10 +99,9 @@ func (m *uiModel) startLatestDesiredQuestionProjection() tea.Cmd {
 	if desired == nil || m.ask.inFlightProjection != nil {
 		return nil
 	}
-	m.ask.projectionOperationToken = nextNonZeroToken(m.ask.projectionOperationToken)
 	request := questionRenderRequest{
 		currentToken:   m.ask.currentToken,
-		operationToken: m.ask.projectionOperationToken,
+		operationToken: uuid.New(),
 		identity:       desired.identity,
 		questionSource: desired.identity.questionSource,
 	}
@@ -172,7 +172,7 @@ func (m *uiModel) handleQuestionProjectionError(result questionRenderResultMsg) 
 		promptID = string(m.ask.current.prompt.PromptID)
 	}
 	m.logf(
-		"ask.question_projection.error prompt_id=%q current_token=%d operation_token=%d rendered_at=%+v desired=%+v delivery_request_id=%q err=%q stack=%s",
+		"ask.question_projection.error prompt_id=%q current_token=%d operation_token=%s rendered_at=%+v desired=%+v delivery_request_id=%q err=%q stack=%s",
 		promptID,
 		m.ask.currentToken,
 		result.request.operationToken,

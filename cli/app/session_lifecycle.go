@@ -204,7 +204,7 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		if transition.Exit {
 			return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, nil)
 		}
-		resolved, err := resolveAndReleaseSessionAction(ctx, server, interactor, plan.SessionID, transition, runtimePlan)
+		resolved, err := resolveAndReleaseSessionAction(ctx, server, interactor, plan.SessionID, transition, runtimePlan, finalModel)
 		if err != nil {
 			return err
 		}
@@ -227,16 +227,18 @@ func bindNavigationSessionContext(ctx context.Context, server interactiveSession
 	return rebound, true, nil
 }
 
-func resolveAndReleaseSessionAction(ctx context.Context, server sessionTransitionServer, interactor authInteractor, sessionID string, transition UITransition, runtimePlan *runtimeLaunchPlan) (serverapi.SessionDirective, error) {
+func resolveAndReleaseSessionAction(
+	ctx context.Context,
+	server sessionTransitionServer,
+	interactor authInteractor,
+	sessionID string,
+	transition UITransition,
+	runtimePlan *runtimeLaunchPlan,
+	finalModel any,
+) (serverapi.SessionDirective, error) {
 	resolved, err := resolveSessionAction(ctx, server, interactor, sessionID, transition)
-	if err != nil {
-		if closeErr := runtimePlan.Close(); closeErr != nil {
-			return serverapi.SessionDirective{}, errors.Join(err, closeErr)
-		}
-		return serverapi.SessionDirective{}, err
-	}
-	if err := runtimePlan.Close(); err != nil {
-		return serverapi.SessionDirective{}, err
+	if releaseErr := releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, err); releaseErr != nil {
+		return serverapi.SessionDirective{}, releaseErr
 	}
 	return resolved, nil
 }

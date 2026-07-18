@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"core/shared/clientui"
+
+	"github.com/google/uuid"
 )
 
 func testActiveAsk(m *uiModel) *askEvent {
@@ -43,7 +45,7 @@ func testInstallCurrentAskProjection(m *uiModel) {
 	}
 	result := projectAskQuestionMarkdown(questionRenderRequest{
 		currentToken:   m.ask.currentToken,
-		operationToken: 1,
+		operationToken: uuid.MustParse("11111111-1111-4111-8111-111111111111"),
 		identity:       identity,
 		questionSource: identity.questionSource,
 	})

@@ -1169,6 +1169,41 @@ func TestSessionLifecycleProjectionFailureUsesDetachOnlyRelease(t *testing.T) {
 	}
 }
 
+func TestResolvedSessionActionUsesFinalModelDetachPolicy(t *testing.T) {
+	model := projectionFailureFinalModel(t)
+	detachCalls := 0
+	plan := &runtimeLaunchPlan{
+		close: func() error {
+			t.Fatal("normal close must not run for forced final model")
+			return nil
+		},
+		detachClose: func() error {
+			detachCalls++
+			return nil
+		},
+	}
+	server := narrowSessionLifecycleServer{lifecycle: &recordingSessionLifecycleClient{
+		resolveTransition: func(context.Context, serverapi.SessionResolveTransitionRequest) (serverapi.SessionDirective, error) {
+			return serverapi.SelectSessionDirective(serverapi.SessionAuthPreparationKeepCurrent), nil
+		},
+	}}
+
+	if _, err := resolveAndReleaseSessionAction(
+		context.Background(),
+		server,
+		nil,
+		"session",
+		UITransition{Action: UIActionExit},
+		plan,
+		model,
+	); err != nil {
+		t.Fatalf("resolve and release forced final model: %v", err)
+	}
+	if detachCalls != 1 {
+		t.Fatalf("detach calls = %d, want 1", detachCalls)
+	}
+}
+
 func TestSessionLifecycleProjectionFailureDraftErrorStillUsesDetachOnlyRelease(t *testing.T) {
 	model := projectionFailureFinalModel(t)
 	persistErr := errors.New("persist draft failed")
