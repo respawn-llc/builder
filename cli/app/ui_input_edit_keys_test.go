@@ -1,47 +1,44 @@
 package app
 
 import (
-	"slices"
 	"testing"
+
+	tuiinput "core/cli/tui/input"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestSharedInputEditKeyCtrlUUsesPlatformSpecificPolicy(t *testing.T) {
-	var darwinAction string
-	if !handleSharedInputEditKeyForGOOS(tea.KeyMsg{Type: tea.KeyCtrlU}, uiSharedInputEditActions{
-		KillToLineStart:   func() bool { darwinAction = "kill-start"; return true },
-		DeleteCurrentLine: func() bool { darwinAction = "delete-line"; return true },
-	}, "darwin") {
+	darwin := tuiinput.NewEditor()
+	darwin.Replace("first\nsecond\nthird")
+	darwin.SetCursor(byteOffsetForRuneCursor(darwin.Text(), len([]rune("first\nsec"))))
+	if result := applySharedInputEditKeyForGOOS(tea.KeyMsg{Type: tea.KeyCtrlU}, &darwin, "darwin"); !result.Handled || !result.Mutated {
 		t.Fatal("expected darwin ctrl+u to be handled")
 	}
-	if darwinAction != "delete-line" {
-		t.Fatalf("darwin ctrl+u action = %q, want delete-line", darwinAction)
+	if got, want := darwin.Text(), "first\nthird"; got != want {
+		t.Fatalf("darwin ctrl+u text = %q, want %q", got, want)
 	}
 
-	var linuxAction string
-	if !handleSharedInputEditKeyForGOOS(tea.KeyMsg{Type: tea.KeyCtrlU}, uiSharedInputEditActions{
-		KillToLineStart:   func() bool { linuxAction = "kill-start"; return true },
-		DeleteCurrentLine: func() bool { linuxAction = "delete-line"; return true },
-	}, "linux") {
+	linux := tuiinput.NewEditor()
+	linux.Replace("first\nsecond\nthird")
+	linux.SetCursor(byteOffsetForRuneCursor(linux.Text(), len([]rune("first\nsec"))))
+	if result := applySharedInputEditKeyForGOOS(tea.KeyMsg{Type: tea.KeyCtrlU}, &linux, "linux"); !result.Handled || !result.Mutated {
 		t.Fatal("expected linux ctrl+u to be handled")
 	}
-	if linuxAction != "kill-start" {
-		t.Fatalf("linux ctrl+u action = %q, want kill-start", linuxAction)
+	if got, want := linux.Text(), "first\nond\nthird"; got != want {
+		t.Fatalf("linux ctrl+u text = %q, want %q", got, want)
 	}
 }
 
 func TestSharedInputEditKeyAltDeleteUsesForwardWord(t *testing.T) {
-	var actions []string
-	handled := handleSharedInputEditKeyForGOOS(tea.KeyMsg{Type: tea.KeyDelete, Alt: true}, uiSharedInputEditActions{
-		DeleteForward:      func() bool { actions = append(actions, "delete-forward"); return true },
-		DeleteBackwardWord: func() bool { actions = append(actions, "delete-backward-word"); return true },
-		DeleteForwardWord:  func() bool { actions = append(actions, "delete-forward-word"); return true },
-	}, "linux")
-	if !handled {
+	editor := tuiinput.NewEditor()
+	editor.Replace("alpha beta gamma")
+	editor.SetCursor(byteOffsetForRuneCursor(editor.Text(), len([]rune("alpha "))))
+	result := applySharedInputEditKeyForGOOS(tea.KeyMsg{Type: tea.KeyDelete, Alt: true}, &editor, "linux")
+	if !result.Handled || !result.Mutated {
 		t.Fatal("expected alt+delete to be handled")
 	}
-	if got, want := actions, []string{"delete-forward-word"}; !slices.Equal(got, want) {
-		t.Fatalf("actions = %v, want %v", got, want)
+	if got, want := editor.Text(), "alpha  gamma"; got != want {
+		t.Fatalf("alt+delete text = %q, want %q", got, want)
 	}
 }

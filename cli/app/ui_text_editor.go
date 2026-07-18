@@ -32,105 +32,21 @@ func updateSingleLineEditorWithAppKeys(editor *tuiinput.Editor, msg tea.Msg) tea
 	if !ok {
 		return nil
 	}
-	text := editor.Text()
-	cursor := runeOffsetForByteCursor(editor.Text(), editor.Cursor())
-	killBuffer := editor.KillBuffer()
-	apply := func(updated string, nextCursor int, nextKill string) {
-		editor.Replace(strings.NewReplacer("\r", "", "\n", "").Replace(updated))
-		editor.SetCursor(byteOffsetForRuneCursor(editor.Text(), nextCursor))
-		editor.SetKillBuffer(nextKill)
-	}
-	if handleSharedInputEditKeyForGOOS(key, uiSharedInputEditActions{
-		Backspace: func() bool {
-			updated, nextCursor, changed := backspaceBuffer(text, cursor)
-			if changed {
-				apply(updated, nextCursor, killBuffer)
-			}
-			return changed
-		},
-		DeleteForward: func() bool {
-			updated, nextCursor, changed := deleteForwardBuffer(text, cursor)
-			if changed {
-				apply(updated, nextCursor, killBuffer)
-			}
-			return changed
-		},
-		DeleteBackwardWord: func() bool {
-			updated, nextCursor, nextKill, changed := deleteBackwardWordBuffer(text, cursor, killBuffer)
-			if changed {
-				apply(updated, nextCursor, nextKill)
-			}
-			return changed
-		},
-		DeleteForwardWord: func() bool {
-			updated, nextCursor, nextKill, changed := deleteForwardWordBuffer(text, cursor, killBuffer)
-			if changed {
-				apply(updated, nextCursor, nextKill)
-			}
-			return changed
-		},
-		KillToLineStart: func() bool {
-			updated, nextCursor, nextKill, changed := killToLineStartBuffer(text, cursor, killBuffer)
-			if changed {
-				apply(updated, nextCursor, nextKill)
-			}
-			return changed
-		},
-		KillToLineEnd: func() bool {
-			updated, nextCursor, nextKill, changed := killToLineEndBuffer(text, cursor, killBuffer)
-			if changed {
-				apply(updated, nextCursor, nextKill)
-			}
-			return changed
-		},
-		Yank: func() bool {
-			updated, nextCursor, changed := yankBuffer(text, cursor, killBuffer)
-			if changed {
-				apply(updated, nextCursor, killBuffer)
-			}
-			return changed
-		},
-		DeleteCurrentLine: func() bool {
-			updated, nextCursor, changed := deleteCurrentBufferLine(text, cursor)
-			if changed {
-				apply(updated, nextCursor, killBuffer)
-			}
-			return changed
-		},
-	}, runtime.GOOS) {
+	if result := applySharedInputEditKeyForGOOS(key, editor, runtime.GOOS); result.Handled {
 		return nil
 	}
-	if handleSharedInputMovementKey(key, uiSharedInputMovementActions{
-		MoveLeft: func() {
-			editor.SetCursor(byteOffsetForRuneCursor(text, moveBufferCursorLeft(text, cursor)))
-		},
-		MoveRight: func() {
-			editor.SetCursor(byteOffsetForRuneCursor(text, moveBufferCursorRight(text, cursor)))
-		},
-		MoveWordLeft: func() {
-			editor.SetCursor(byteOffsetForRuneCursor(text, moveBufferCursorWordLeft(text, cursor)))
-		},
-		MoveWordRight: func() {
-			editor.SetCursor(byteOffsetForRuneCursor(text, moveBufferCursorWordRight(text, cursor)))
-		},
-	}) {
+	if applySharedInputMovementKey(key, editor) {
 		return nil
 	}
 	switch key.Type {
 	case tea.KeySpace:
-		updated, nextCursor, changed := insertBufferRunes(text, cursor, []rune{' '})
-		if changed {
-			apply(updated, nextCursor, killBuffer)
-		}
+		insertEditorRunes(editor, []rune{' '})
 	case tea.KeyHome, tea.KeyCtrlA:
-		editor.SetCursor(byteOffsetForRuneCursor(editor.Text(), 0))
+		editor.SetCursor(0)
 	case tea.KeyEnd, tea.KeyCtrlE, tea.KeyCtrlEnd:
 		editor.SetCursor(len(editor.Text()))
 	case tea.KeyRunes:
-		updated, nextCursor, changed := insertBufferRunes(text, cursor, singleLineRunes(key.Runes))
-		if changed {
-			apply(updated, nextCursor, killBuffer)
-		}
+		insertEditorRunes(editor, singleLineRunes(key.Runes))
 	}
 	return nil
 }

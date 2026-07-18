@@ -11,13 +11,10 @@ import (
 	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/textutil"
 )
 
-type SessionSnapshotSource interface {
-	ResolveSessionSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (SessionSnapshot, error)
-}
-
-type SessionSnapshot interface {
+type sessionSnapshot interface {
 	MainView(ctx context.Context) (clientui.RuntimeMainView, error)
 	TranscriptPage(ctx context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error)
 	TranscriptTailEntries(ctx context.Context) ([]runtime.ChatEntry, error)
@@ -27,26 +24,19 @@ type runtimeReadModelSnapshotProvider interface {
 	RuntimeReadModelSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error)
 }
 
-type sessionRuntimeActivityResolver interface {
-	Snapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error)
-}
-
-type defaultSessionRuntimeActivityResolver struct {
-	runtimes RuntimeResolver
-}
-
-func newDefaultSessionRuntimeActivityResolver(runtimes RuntimeResolver) sessionRuntimeActivityResolver {
-	return defaultSessionRuntimeActivityResolver{runtimes: runtimes}
-}
-
-func (r defaultSessionRuntimeActivityResolver) Snapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error) {
-	if provider, ok := r.runtimes.(runtimeReadModelSnapshotProvider); ok {
+func resolveRuntimeActivitySnapshot(
+	ctx context.Context,
+	runtimes RuntimeResolver,
+	sessionID string,
+	refs []clientui.RuntimeOperationRef,
+) (runtimeactivity.ResponseSnapshot, error) {
+	if provider, ok := runtimes.(runtimeReadModelSnapshotProvider); ok {
 		return provider.RuntimeReadModelSnapshot(ctx, sessionID, refs)
 	}
 	var engine *runtime.Engine
 	var err error
-	if r.runtimes != nil {
-		engine, err = r.runtimes.ResolveRuntime(ctx, sessionID)
+	if runtimes != nil {
+		engine, err = runtimes.ResolveRuntime(ctx, sessionID)
 	}
 	if err != nil {
 		return runtimeactivity.ResponseSnapshot{}, err
@@ -60,92 +50,44 @@ func (r defaultSessionRuntimeActivityResolver) Snapshot(ctx context.Context, ses
 	})
 }
 
-type enrichedSessionSnapshotSource struct {
-	base     SessionSnapshotSource
-	targets  ExecutionTargetResolver
-	updates  func() UpdateStatusProvider
-	clearers []interface{ ClearCaches() }
-}
-
-func newEnrichedSessionSnapshotSource(base SessionSnapshotSource, targets ExecutionTargetResolver, updates func() UpdateStatusProvider) SessionSnapshotSource {
-	source := &enrichedSessionSnapshotSource{base: base, targets: targets, updates: updates}
-	if clearer, ok := base.(interface{ ClearCaches() }); ok {
-		source.clearers = append(source.clearers, clearer)
+func readWithContext[T any](ctx context.Context, read func() (T, error)) (T, error) {
+	var zero T
+	if err := context.Cause(ctx); err != nil {
+		return zero, err
 	}
-	return source
-}
-
-func (s *enrichedSessionSnapshotSource) ResolveSessionSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (SessionSnapshot, error) {
-	if s == nil || s.base == nil {
-		return nil, errSessionStoreResolverRequired
-	}
-	snapshot, err := s.base.ResolveSessionSnapshot(ctx, sessionID, refs)
+	value, err := read()
 	if err != nil {
-		return nil, err
+		return zero, err
 	}
-	return enrichedSessionSnapshot{base: snapshot, targets: s.targets, updates: s.updates}, nil
+	if err := context.Cause(ctx); err != nil {
+		return zero, err
+	}
+	return value, nil
 }
 
-func (s *enrichedSessionSnapshotSource) ClearCaches() {
-	if s == nil {
-		return
+func resultWithContext[T any](ctx context.Context, value T) (T, error) {
+	if err := context.Cause(ctx); err != nil {
+		var zero T
+		return zero, err
 	}
-	for _, clearer := range s.clearers {
-		clearer.ClearCaches()
-	}
-}
-
-type enrichedSessionSnapshot struct {
-	base    SessionSnapshot
-	targets ExecutionTargetResolver
-	updates func() UpdateStatusProvider
-}
-
-func (s enrichedSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeMainView, error) {
-	view, err := s.base.MainView(ctx)
-	if err != nil {
-		return clientui.RuntimeMainView{}, err
-	}
-	if s.targets != nil && strings.TrimSpace(view.Session.SessionID) != "" {
-		target, err := s.targets.ResolveSessionExecutionTarget(ctx, view.Session.SessionID)
-		if err != nil {
-			return clientui.RuntimeMainView{}, err
-		}
-		view.Session.ExecutionTarget = target
-	}
-	if s.updates != nil {
-		if provider := s.updates(); provider != nil {
-			view.Status.Update = provider.Status(ctx)
-		}
-	}
-	return view, nil
-}
-
-func (s enrichedSessionSnapshot) TranscriptPage(ctx context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
-	return s.base.TranscriptPage(ctx, req)
-}
-
-func (s enrichedSessionSnapshot) TranscriptTailEntries(ctx context.Context) ([]runtime.ChatEntry, error) {
-	return s.base.TranscriptTailEntries(ctx)
+	return value, nil
 }
 
 type resolvedSessionSnapshotSource struct {
-	sessions SessionStoreResolver
-	runtimes RuntimeResolver
-	activity sessionRuntimeActivityResolver
-	dormant  *dormantSessionSnapshotSource
+	sessions         SessionStoreResolver
+	runtimes         RuntimeResolver
+	cacheWarningMode func() config.CacheWarningMode
 }
 
 func newResolvedSessionSnapshotSource(sessions SessionStoreResolver, runtimes RuntimeResolver, cacheWarningMode func() config.CacheWarningMode) *resolvedSessionSnapshotSource {
 	return &resolvedSessionSnapshotSource{
-		sessions: sessions,
-		runtimes: runtimes,
-		activity: newDefaultSessionRuntimeActivityResolver(runtimes),
-		dormant:  newDormantSessionSnapshotSource(cacheWarningMode),
+		sessions:         sessions,
+		runtimes:         runtimes,
+		cacheWarningMode: cacheWarningMode,
 	}
 }
 
-func (s *resolvedSessionSnapshotSource) ResolveSessionSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (SessionSnapshot, error) {
+func (s *resolvedSessionSnapshotSource) resolveSessionSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (sessionSnapshot, error) {
 	if s == nil {
 		return nil, errSessionStoreResolverRequired
 	}
@@ -155,11 +97,11 @@ func (s *resolvedSessionSnapshotSource) ResolveSessionSnapshot(ctx context.Conte
 			return nil, err
 		}
 		if engine != nil {
-			snapshot, err := s.activityResolver().Snapshot(ctx, sessionID, refs)
+			snapshot, err := resolveRuntimeActivitySnapshot(ctx, s.runtimes, sessionID, refs)
 			if err != nil {
 				return nil, err
 			}
-			return liveRuntimeSessionSnapshot{engine: engine, sessions: s.sessions, snapshot: snapshot}, nil
+			return liveRuntimeSessionSnapshot{engine: engine, snapshot: snapshot}, nil
 		}
 	}
 	if s.sessions == nil {
@@ -172,180 +114,162 @@ func (s *resolvedSessionSnapshotSource) ResolveSessionSnapshot(ctx context.Conte
 	if store == nil {
 		return nil, errSessionStoreResolverRequired
 	}
-	snapshot := s.dormant.snapshot(store)
-	readModelSnapshot, err := s.activityResolver().Snapshot(ctx, sessionID, refs)
+	readModelSnapshot, err := resolveRuntimeActivitySnapshot(ctx, s.runtimes, sessionID, refs)
 	if err != nil {
 		return nil, err
 	}
-	return activityOverrideSnapshot{base: snapshot, snapshot: readModelSnapshot}, nil
-}
-
-func (s *resolvedSessionSnapshotSource) activityResolver() sessionRuntimeActivityResolver {
-	if s != nil && s.activity != nil {
-		return s.activity
-	}
-	if s == nil {
-		return newDefaultSessionRuntimeActivityResolver(nil)
-	}
-	return newDefaultSessionRuntimeActivityResolver(s.runtimes)
-}
-
-func (s *resolvedSessionSnapshotSource) ClearCaches() {
-	if s != nil && s.dormant != nil {
-		s.dormant.clear()
-	}
+	return dormantSessionSnapshot{
+		store:            store,
+		activity:         readModelSnapshot,
+		cacheWarningMode: s.cacheWarningMode,
+	}, nil
 }
 
 type liveRuntimeSessionSnapshot struct {
 	engine   *runtime.Engine
-	sessions SessionStoreResolver
 	snapshot runtimeactivity.ResponseSnapshot
 }
 
 func (s liveRuntimeSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeMainView, error) {
-	view := runtimeview.MainViewFromRuntimeActivity(s.engine, s.snapshot.Version, s.snapshot.Activity)
-	view.InputReconciliation = s.snapshot.InputReconciliation
-	if s.sessions != nil && view.Status.WorkflowSession == nil {
-		store, err := s.sessions.ResolveSessionStore(ctx, s.engine.SessionID())
-		if err == nil && store != nil {
-			if workflowSession := store.Meta().WorkflowSession; workflowSession != nil {
-				view.Status.WorkflowSession = &clientui.WorkflowSessionStatus{
-					RunID:      strings.TrimSpace(workflowSession.RunID),
-					TaskID:     strings.TrimSpace(workflowSession.TaskID),
-					WorkflowID: strings.TrimSpace(workflowSession.WorkflowID),
-				}
-			}
-		}
-	}
-	return view, nil
-}
-
-func (s liveRuntimeSessionSnapshot) TranscriptPage(_ context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
-	return runtimeview.TranscriptPageFromRuntime(s.engine, req)
-}
-
-func (s liveRuntimeSessionSnapshot) TranscriptTailEntries(_ context.Context) ([]runtime.ChatEntry, error) {
-	page, err := s.engine.TranscriptNewestSegmentPage()
-	if err != nil {
-		return nil, err
-	}
-	return append([]runtime.ChatEntry(nil), page.Snapshot.Entries...), nil
-}
-
-type activityOverrideSnapshot struct {
-	base     SessionSnapshot
-	snapshot runtimeactivity.ResponseSnapshot
-}
-
-func (s activityOverrideSnapshot) MainView(ctx context.Context) (clientui.RuntimeMainView, error) {
-	view, err := s.base.MainView(ctx)
-	if err != nil {
+	if err := context.Cause(ctx); err != nil {
 		return clientui.RuntimeMainView{}, err
 	}
-	view.Version = s.snapshot.Version
-	view.Activity = s.snapshot.Activity
+	view := runtimeview.MainViewFromRuntimeActivity(s.engine, s.snapshot.Version, s.snapshot.Activity)
 	view.InputReconciliation = s.snapshot.InputReconciliation
-	return view, nil
+	return resultWithContext(ctx, view)
 }
 
-func (s activityOverrideSnapshot) TranscriptPage(ctx context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
-	return s.base.TranscriptPage(ctx, req)
-}
-
-func (s activityOverrideSnapshot) TranscriptTailEntries(ctx context.Context) ([]runtime.ChatEntry, error) {
-	return s.base.TranscriptTailEntries(ctx)
-}
-
-type dormantSessionSnapshotSource struct {
-	cacheWarningMode func() config.CacheWarningMode
-	dormant          *dormantTranscriptCache
-}
-
-func newDormantSessionSnapshotSource(cacheWarningMode func() config.CacheWarningMode) *dormantSessionSnapshotSource {
-	source := &dormantSessionSnapshotSource{cacheWarningMode: cacheWarningMode}
-	source.dormant = newDormantTranscriptCacheWithLimit(dormantTranscriptCacheMaxEntries, func(ctx context.Context, store *session.Store) (dormantTranscriptCacheEntry, error) {
-		return source.buildCacheEntry(ctx, store)
+func (s liveRuntimeSessionSnapshot) TranscriptPage(ctx context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
+	return readWithContext(ctx, func() (clientui.TranscriptPage, error) {
+		return runtimeview.TranscriptPageFromRuntime(s.engine, req)
 	})
-	return source
 }
 
-func (s *dormantSessionSnapshotSource) snapshot(store *session.Store) dormantSessionSnapshot {
-	return dormantSessionSnapshot{source: s, store: store}
-}
-
-func (s *dormantSessionSnapshotSource) clear() {
-	if s == nil {
-		return
-	}
-	if s.dormant != nil {
-		s.dormant.clear()
-	}
-}
-
-func (s *dormantSessionSnapshotSource) buildCacheEntry(ctx context.Context, store *session.Store) (dormantTranscriptCacheEntry, error) {
-	return buildDormantTranscriptCacheEntryWithMode(ctx, store, s.cacheWarningModeOrDefault())
-}
-
-func (s *dormantSessionSnapshotSource) cacheWarningModeOrDefault() config.CacheWarningMode {
-	if s != nil && s.cacheWarningMode != nil {
-		return normalizeServiceCacheWarningMode(s.cacheWarningMode())
-	}
-	return config.CacheWarningModeDefault
+func (s liveRuntimeSessionSnapshot) TranscriptTailEntries(ctx context.Context) ([]runtime.ChatEntry, error) {
+	return readWithContext(ctx, func() ([]runtime.ChatEntry, error) {
+		page, err := s.engine.TranscriptNewestSegmentPage()
+		if err != nil {
+			return nil, err
+		}
+		return append([]runtime.ChatEntry(nil), page.Snapshot.Entries...), nil
+	})
 }
 
 type dormantSessionSnapshot struct {
-	source *dormantSessionSnapshotSource
-	store  *session.Store
+	store            *session.Store
+	activity         runtimeactivity.ResponseSnapshot
+	cacheWarningMode func() config.CacheWarningMode
 }
 
 func (s dormantSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeMainView, error) {
 	if s.store == nil {
 		return clientui.RuntimeMainView{}, errors.New("session store is required")
 	}
-	entry, err := s.source.dormant.get(ctx, s.store)
+	segment, err := s.newestSegment(ctx)
 	if err != nil {
 		return clientui.RuntimeMainView{}, err
 	}
 	meta := s.store.Meta()
 	freshness := runtimeview.ConversationFreshnessFromSession(s.store.ConversationFreshness())
-	return entry.mainView(meta, freshness), nil
+	status := clientui.RuntimeStatus{
+		ConversationFreshness:             freshness,
+		PreviousSessionID:                 textutil.Pointer(meta.PreviousSessionID),
+		ParentAgentSessionID:              textutil.Pointer(meta.ParentAgentSessionID),
+		NavigationTargetSessionID:         session.NavigationTargetSessionID(meta),
+		LastCommittedAssistantFinalAnswer: segment.LastCommittedAssistantFinalAnswer,
+		Goal:                              runtimeview.GoalFromSessionState(meta.Goal, false),
+		WorkflowSession:                   workflowSessionStatus(meta.WorkflowSession),
+	}
+	view := runtimeview.RuntimeMainViewFromActivity(
+		s.activity.Activity,
+		status,
+		clientui.RuntimeSessionView{
+			SessionID:             meta.SessionID,
+			SessionName:           meta.Name,
+			ConversationFreshness: freshness,
+		},
+	)
+	view.Version = s.activity.Version
+	view.InputReconciliation = s.activity.InputReconciliation
+	return resultWithContext(ctx, view)
 }
 
 func (s dormantSessionSnapshot) TranscriptPage(ctx context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
 	if s.store == nil {
 		return clientui.TranscriptPage{}, errors.New("session store is required")
 	}
-	meta := s.store.Meta()
-	freshness := runtimeview.ConversationFreshnessFromSession(s.store.ConversationFreshness())
-	cacheWarningMode := s.source.cacheWarningModeOrDefault()
-	entry, err := s.source.dormant.get(ctx, s.store)
-	if err != nil {
-		return clientui.TranscriptPage{}, err
-	}
-	if req.NewerCursor != nil {
-		segment, err := runtime.TranscriptSegmentPageForwardFromStore(s.store, *req.NewerCursor, cacheWarningMode)
+	if req.NewerCursor == nil && req.Cursor == nil {
+		segment, err := s.newestSegment(ctx)
 		if err != nil {
 			return clientui.TranscriptPage{}, err
 		}
-		return entry.transcriptPage(meta, freshness, segment), nil
+		return resultWithContext(ctx, s.transcriptPage(segment))
 	}
-	if req.Cursor == nil {
-		return entry.newestSegmentPage(meta, freshness), nil
+	var (
+		segment runtime.TranscriptSegmentPage
+		err     error
+	)
+	if req.NewerCursor != nil {
+		segment, err = readWithContext(ctx, func() (runtime.TranscriptSegmentPage, error) {
+			return runtime.TranscriptSegmentPageForwardFromStore(s.store, *req.NewerCursor, s.cacheWarningModeOrDefault())
+		})
+	} else {
+		segment, err = readWithContext(ctx, func() (runtime.TranscriptSegmentPage, error) {
+			return runtime.TranscriptSegmentPageFromStore(s.store, *req.Cursor, s.cacheWarningModeOrDefault())
+		})
 	}
-	segment, err := runtime.TranscriptSegmentPageFromStore(s.store, *req.Cursor, cacheWarningMode)
 	if err != nil {
 		return clientui.TranscriptPage{}, err
 	}
-	return entry.transcriptPage(meta, freshness, segment), nil
+	newest, err := s.newestSegment(ctx)
+	if err != nil {
+		return clientui.TranscriptPage{}, err
+	}
+	segment.LatestRollbackCandidate = newest.LatestRollbackCandidate
+	return resultWithContext(ctx, s.transcriptPage(segment))
 }
 
 func (s dormantSessionSnapshot) TranscriptTailEntries(ctx context.Context) ([]runtime.ChatEntry, error) {
 	if s.store == nil {
 		return nil, errors.New("session store is required")
 	}
-	entry, err := s.source.dormant.get(ctx, s.store)
+	segment, err := s.newestSegment(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return entry.newestSegmentTailEntries(), nil
+	return resultWithContext(ctx, append([]runtime.ChatEntry(nil), segment.Snapshot.Entries...))
+}
+
+func (s dormantSessionSnapshot) newestSegment(ctx context.Context) (runtime.TranscriptSegmentPage, error) {
+	return readWithContext(ctx, func() (runtime.TranscriptSegmentPage, error) {
+		return runtime.TranscriptNewestSegmentPageFromStore(s.store, s.cacheWarningModeOrDefault())
+	})
+}
+
+func (s dormantSessionSnapshot) cacheWarningModeOrDefault() config.CacheWarningMode {
+	if s.cacheWarningMode == nil {
+		return config.CacheWarningModeDefault
+	}
+	return normalizeServiceCacheWarningMode(s.cacheWarningMode())
+}
+
+func (s dormantSessionSnapshot) transcriptPage(segment runtime.TranscriptSegmentPage) clientui.TranscriptPage {
+	meta := s.store.Meta()
+	return runtimeview.TranscriptPageFromSegment(
+		meta.SessionID,
+		meta.Name,
+		runtimeview.ConversationFreshnessFromSession(s.store.ConversationFreshness()),
+		segment,
+	)
+}
+
+func workflowSessionStatus(state *session.WorkflowSessionState) *clientui.WorkflowSessionStatus {
+	if state == nil {
+		return nil
+	}
+	return &clientui.WorkflowSessionStatus{
+		RunID:      strings.TrimSpace(state.RunID),
+		TaskID:     strings.TrimSpace(state.TaskID),
+		WorkflowID: strings.TrimSpace(state.WorkflowID),
+	}
 }

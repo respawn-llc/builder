@@ -132,6 +132,7 @@ func TestRunSessionLifecycleRejectsDifferentAgentRoleForLockedContinuation(t *te
 		"reviewer": {Settings: reviewerSettings},
 		"worker":   {Settings: workerSettings},
 	}
+	prepareAppTestPersistenceRoot(t, cfg.PersistenceRoot)
 	metadataStore, err := metadata.Open(cfg.PersistenceRoot)
 	if err != nil {
 		t.Fatalf("metadata.Open: %v", err)
@@ -943,6 +944,7 @@ func TestReviewTeleportLifecyclePreservesParentWorktreeContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
+	prepareAppTestPersistenceRoot(t, cfg.PersistenceRoot)
 	metadataStore, err := metadata.Open(cfg.PersistenceRoot)
 	if err != nil {
 		t.Fatalf("metadata.Open: %v", err)
@@ -995,7 +997,7 @@ func TestReviewTeleportLifecyclePreservesParentWorktreeContext(t *testing.T) {
 		WithUISessionID(parent.Meta().SessionID),
 		WithUIConversationFreshness(clientui.ConversationFreshnessEstablished),
 	)
-	model.input = "/review pkg"
+	testSetMainInput(model, "/review pkg")
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected /review to quit into a new session transition")
@@ -1065,7 +1067,7 @@ func TestPersistSessionDraftIncludesStructuredRecoveryBuffers(t *testing.T) {
 		},
 	}
 	model := newUIModelDefaults(nil)
-	model.input = "visible draft"
+	testSetMainInput(model, "visible draft")
 	model.pendingInjected = queuedUserMessagesForTest("  pending injected\n")
 	model.queued = queuedInputsForTest("\tqueued later  ")
 
@@ -1101,8 +1103,8 @@ func TestInitialRecoveryBuffersRestoreRetryAffordancesWithoutStartupSubmit(t *te
 	).(*uiModel)
 
 	wantInput := "visible draft\n\npending steering\n\nqueued later"
-	if model.input != wantInput {
-		t.Fatalf("input = %q, want recovered visible retry input", model.input)
+	if testMainInput(model) != wantInput {
+		t.Fatalf("input = %q, want recovered visible retry input", testMainInput(model))
 	}
 	if model.startupSubmit != "" || model.activeSubmit.text != "" {
 		t.Fatalf("recovery must not auto-submit: startup=%q active=%+v", model.startupSubmit, model.activeSubmit)

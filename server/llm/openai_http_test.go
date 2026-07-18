@@ -4,6 +4,7 @@ import (
 	"context"
 	"core/server/auth"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"encoding/json"
 	"errors"
@@ -223,12 +224,12 @@ func TestBuildResponsesInput_AssistantPreservesPhase(t *testing.T) {
 }
 
 func TestBuildResponsesInput_CanonicalAssistantPreservesPhase(t *testing.T) {
-	items := mustBuildResponsesInput(t, []ResponseItem{{
+	items := mustBuildResponsesInput(t, PrepareOpenAIInputItems([]ResponseItem{{
 		Type:    ResponseItemTypeMessage,
 		Role:    RoleAssistant,
 		Content: "done",
 		Phase:   MessagePhaseFinal,
-	}})
+	}}))
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
 	}
@@ -454,7 +455,7 @@ func TestCompactErrorPath_ReturnsProviderAPIErrorWithDetectedProviderID(t *testi
 	_, err := transport.Compact(context.Background(), OpenAICompactionRequest{
 		Model:      "gpt-5",
 		SessionID:  "s1",
-		InputItems: []ResponseItem{{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "hello"}},
+		InputItems: PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "hello"}}),
 	})
 	if err == nil {
 		t.Fatal("expected compact error")
@@ -529,17 +530,56 @@ func TestBuildResponsesInput_CanonicalToolOutputPromotesStructuredInputFileItems
 	}
 }
 
-func TestBuildResponsesInputRejectsUnmaterializedViewImageInputFileOutput(t *testing.T) {
-	_, err := buildResponsesInput([]ResponseItem{
+func TestBuildResponsesInputRejectsUnpreparedItemsWithTypedDiagnostics(t *testing.T) {
+	tests := []struct {
+		name      string
+		item      ResponseItem
+		state     OpenAIInputPreparationDetail
+		invariant OpenAIInputPreparationDetail
+	}{
 		{
-			Type:   ResponseItemTypeFunctionCallOutput,
-			CallID: "call_1",
-			Name:   string(toolspec.ToolViewImage),
-			Output: json.RawMessage(`[{"type":"input_file","file_data":"data:application/pdf;base64,Zm9v","filename":"doc.pdf"}]`),
+			name: "view image output missing raw",
+			item: ResponseItem{
+				Type:   ResponseItemTypeFunctionCallOutput,
+				CallID: "call_1",
+				Name:   string(toolspec.ToolViewImage),
+				Output: json.RawMessage(`[{"type":"input_file","file_data":"data:application/pdf;base64,Zm9v","filename":"doc.pdf"}]`),
+			},
+			state:     OpenAIInputPreparationMissingRaw,
+			invariant: OpenAIInputPreparationMissingRaw,
 		},
-	})
-	if !errors.Is(err, ErrViewImageOutputNotMaterialized) {
-		t.Fatalf("expected materialization error, got %v", err)
+		{
+			name:      "message missing content",
+			item:      ResponseItem{Type: ResponseItemTypeMessage, Role: RoleUser},
+			state:     OpenAIInputPreparationMissingRaw,
+			invariant: OpenAIInputInvariantEmptyContent,
+		},
+		{
+			name:      "invalid raw",
+			item:      ResponseItem{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "hello", Raw: json.RawMessage(`{`)},
+			state:     OpenAIInputPreparationInvalidRaw,
+			invariant: OpenAIInputPreparationInvalidRaw,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := buildResponsesInput([]ResponseItem{tt.item})
+			if !errors.Is(err, ErrOpenAIInputItemUnprepared) {
+				t.Fatalf("expected unprepared input error, got %v", err)
+			}
+			var preparationErr *OpenAIInputItemPreparationError
+			if !errors.As(err, &preparationErr) {
+				t.Fatalf("expected typed preparation error, got %T", err)
+			}
+			if preparationErr.Index != 0 ||
+				preparationErr.Type != tt.item.Type ||
+				!reflect.DeepEqual(preparationErr.Name, textutil.OptionalTrimmedString(tt.item.Name)) ||
+				!reflect.DeepEqual(preparationErr.CallID, textutil.OptionalTrimmedString(tt.item.CallID)) ||
+				preparationErr.State != tt.state ||
+				preparationErr.Invariant != tt.invariant {
+				t.Fatalf("unexpected preparation error: %+v", preparationErr)
+			}
+		})
 	}
 }
 
@@ -587,14 +627,14 @@ func TestBuildResponsesInput_MessageToolOutputPromotesPDFToInputMessage(t *testi
 }
 
 func TestBuildResponsesInput_CanonicalNonViewImageToolOutputKeepsStructuredInputFileItems(t *testing.T) {
-	items := mustBuildResponsesInput(t, []ResponseItem{
+	items := mustBuildResponsesInput(t, PrepareOpenAIInputItems([]ResponseItem{
 		{
 			Type:   ResponseItemTypeFunctionCallOutput,
 			CallID: "call_1",
 			Name:   string(toolspec.ToolExecCommand),
 			Output: json.RawMessage(`[{"type":"input_file","file_data":"Zm9v","filename":"doc.pdf"}]`),
 		},
-	})
+	}))
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
 	}
@@ -801,7 +841,7 @@ func TestGenerate_ExplicitBaseURLAllowsAnonymousRequests(t *testing.T) {
 
 	resp, err := transport.Generate(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model: "vendor-custom-model",
-		Items: []ResponseItem{{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "hello"}},
+		Items: PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "hello"}}),
 	})
 	if err != nil {
 		t.Fatalf("generate: %v", err)

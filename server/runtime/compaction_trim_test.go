@@ -51,11 +51,10 @@ func TestCompactionCacheObservationRequestAppendsPromptToConversationReplica(t *
 		t.Fatal("expected compaction cache observation request")
 	}
 
-	wantItems := append(llm.CloneResponseItems(eng.transcriptRuntimeState().SnapshotItems()), llm.ResponseItem{
-		Type:    llm.ResponseItemTypeMessage,
-		Role:    llm.RoleDeveloper,
-		Content: compactionInstructions(args),
-	})
+	wantItems := compactionConversationWithPromptItems(
+		eng.transcriptRuntimeState().SnapshotItems(),
+		compactionInstructions(args),
+	)
 	gotJSON, err := json.Marshal(request.Items)
 	if err != nil {
 		t.Fatalf("marshal observed items: %v", err)

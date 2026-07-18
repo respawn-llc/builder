@@ -13,7 +13,6 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/shared/apicontract"
 	"core/shared/clientui"
-	"core/shared/protocol"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -22,35 +21,20 @@ import (
 func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspace(t)
 
-	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
+	fixture := startConfiguredDaemonFixture(t, workspace, serverstartup.Request{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5",
-	}, apiKeyMemoryAuthHandler("test-key"), autoOnboarding)
-	if err != nil {
-		t.Fatalf("serve.Start: %v", err)
-	}
-	defer func() { _ = srv.Close() }()
+	}, apiKeyMemoryAuthHandler("test-key"))
 
-	stopServing := serveAppServer(t, srv)
-	defer stopServing()
-	waitForConfiguredRemoteIdentity(t, workspace)
-
-	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, newHeadlessAuthInteractor(), false)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-	if _, ok := server.(*remoteAppServer); !ok {
-		t.Fatalf("expected remote app server, got %T", server)
-	}
+	server := fixture.attachRemoteSessionServer(t, Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, newHeadlessAuthInteractor())
 	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, io.Discard, "test remote prompt snapshot reads")
-	defer runtimePlan.Close()
-	finishStep := beginAppTestModelPromptStep(t, srv, plan.SessionID)
+	defer closeRuntimeLaunchPlan(t, runtimePlan)
+	finishStep := beginAppTestModelPromptStep(t, fixture.daemon, plan.SessionID)
 
 	askDone := make(chan error, 1)
 	go func() {
-		_, err := srv.AwaitPromptResponse(context.Background(), plan.SessionID, appTestModelPromptRequest("ask-remote-1", "Ask?"))
+		_, err := fixture.daemon.AwaitPromptResponse(context.Background(), plan.SessionID, appTestModelPromptRequest("ask-remote-1", "Ask?"))
 		askDone <- err
 	}()
 	approvalDone := make(chan error, 1)
@@ -58,7 +42,7 @@ func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.
 		request := appTestModelPromptRequest("approval-remote-1", "Approve?")
 		request.Approval = true
 		request.ApprovalOptions = []askquestion.AskQuestionApprovalOption{{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"}}
-		_, err := srv.AwaitPromptResponse(context.Background(), plan.SessionID, request)
+		_, err := fixture.daemon.AwaitPromptResponse(context.Background(), plan.SessionID, request)
 		approvalDone <- err
 	}()
 
@@ -103,31 +87,15 @@ func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.
 func TestStartSessionServerUsesConfiguredDaemonForProcessFlows(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspace(t)
 
-	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
+	fixture := startConfiguredDaemonFixture(t, workspace, serverstartup.Request{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5",
-	}, apiKeyMemoryAuthHandler("test-key"), autoOnboarding)
-	if err != nil {
-		t.Fatalf("serve.Start: %v", err)
-	}
-	defer func() { _ = srv.Close() }()
-	srv.Background().SetMinimumExecToBgTime(time.Millisecond)
+	}, apiKeyMemoryAuthHandler("test-key"))
+	fixture.daemon.Background().SetMinimumExecToBgTime(time.Millisecond)
 
-	stopServing := serveAppServer(t, srv)
-	defer stopServing()
-	waitForConfiguredRemoteIdentity(t, workspace)
-
-	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, newHeadlessAuthInteractor(), false)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-	remote, ok := server.(*remoteAppServer)
-	if !ok {
-		t.Fatalf("expected remote app server, got %T", server)
-	}
-	processes := remote.RuntimeAttachmentClients()
+	server := fixture.attachRemoteSessionServer(t, Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, newHeadlessAuthInteractor())
+	processes := server.RuntimeAttachmentClients()
 
 	planner := newSessionLaunchPlanner(server)
 	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())})
@@ -135,7 +103,7 @@ func TestStartSessionServerUsesConfiguredDaemonForProcessFlows(t *testing.T) {
 		t.Fatalf("PlanSession: %v", err)
 	}
 
-	result, err := srv.Background().Start(context.Background(), shelltool.ExecRequest{
+	result, err := fixture.daemon.Background().Start(context.Background(), shelltool.ExecRequest{
 		Command:        []string{"/bin/sh", "-lc", "printf 'daemon process output\n'; sleep 0.2"},
 		DisplayCommand: "printf 'daemon process output'; sleep 0.2",
 		Workdir:        workspace,
@@ -166,7 +134,11 @@ func TestStartSessionServerUsesConfiguredDaemonForProcessFlows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubscribeProcessOutput: %v", err)
 	}
-	defer func() { _ = outputSub.Close() }()
+	t.Cleanup(func() {
+		if err := outputSub.Close(); err != nil {
+			t.Errorf("close process output subscription: %v", err)
+		}
+	})
 	chunk, err := outputSub.Next(context.Background())
 	if err != nil {
 		t.Fatalf("ProcessOutput Next: %v", err)
@@ -184,22 +156,6 @@ func TestStartSessionServerUsesConfiguredDaemonForProcessFlows(t *testing.T) {
 	}
 	waitForRemoteProcessExit(t, processes.ProcessViews, result.SessionID)
 
-}
-
-func waitForConfiguredRemoteIdentity(t *testing.T, workspace string) protocol.ServerIdentity {
-	t.Helper()
-	opts := Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}
-	var identity protocol.ServerIdentity
-	testsetup.RequireUntil(t, time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
-		remote, ok := tryDialMatchingConfiguredRemoteWithRequirement(context.Background(), opts, nil, nil, true)
-		if ok {
-			identity = remote.Identity()
-			_ = remote.Close()
-			return true
-		}
-		return false
-	}, "configured daemon did not become reachable for workspace %s", workspace)
-	return identity
 }
 
 func waitForRemoteTranscriptPrompt(t *testing.T, events <-chan ongoingTranscriptEvent, promptID clientui.PromptID, earlyFailures ...<-chan error) clientui.TranscriptPrompt {

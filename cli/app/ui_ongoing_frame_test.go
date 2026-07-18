@@ -15,9 +15,8 @@ func TestOngoingFrameInputUsesOperatorLocalSectionsAndCursor(t *testing.T) {
 		WithUITerminalCursorState(newUITerminalCursorState()),
 		WithUIPromptHistory([]string{"older", "newer"}),
 	), 48, 10)
-	m.input = "hello"
-	m.inputCursor = 2
-	m.promptHistorySelection = 1
+	testSetMainInputAtRuneCursor(m, "hello", 2)
+	testSetPromptHistorySelection(m, 1)
 	m.helpVisible = true
 
 	frame := m.ongoingFrameInput()
@@ -78,8 +77,7 @@ func TestOngoingTranscriptControllerPlacesCursorAfterPrependedLiveSections(t *te
 	m := sizedTestUIModel(newProjectedStaticUIModel(
 		WithUITerminalCursorState(newUITerminalCursorState()),
 	), 48, 10)
-	m.input = "hello"
-	m.inputCursor = 2
+	testSetMainInputAtRuneCursor(m, "hello", 2)
 	surface := &ongoingSurfaceSpy{}
 	controller := newTestOngoingTranscriptController(surface, m.ongoingFrameInput)
 	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
@@ -107,9 +105,8 @@ func TestOngoingTranscriptControllerPreservesWrappedDisplayCursorTargetWithPrepe
 	m := sizedTestUIModel(newProjectedStaticUIModel(
 		WithUITerminalCursorState(newUITerminalCursorState()),
 	), width, 12)
-	m.input = strings.Repeat("界", 20) + " tail"
-	m.inputCursor = -1
-	projected := m.layout().inputPaneCursor(width)
+	testSetMainInput(m, strings.Repeat("界", 20)+" tail")
+	projected := m.layout().inputPaneProjection(width, m.layout().effectiveHeight(), uiThemeStyles(m.theme)).Cursor
 	if !projected.Visible {
 		t.Fatal("shared editor cursor projection is absent")
 	}
@@ -258,7 +255,7 @@ func TestOngoingFrameInputSanitizesPromptHistorySection(t *testing.T) {
 	m := sizedTestUIModel(newProjectedStaticUIModel(
 		WithUIPromptHistory([]string{"alpha\nbeta\tgamma\x1b"}),
 	), 48, 10)
-	m.promptHistorySelection = 0
+	testSetPromptHistorySelection(m, 0)
 
 	frame := m.ongoingFrameInput()
 

@@ -270,9 +270,7 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 
 	request := llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 		Model: "operator-alias",
-		Items: []llm.ResponseItem{
-			{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "hello"},
-		},
+		Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: "hello"}}),
 	}
 	if _, err := mainClient.Generate(context.Background(), request); err != nil {
 		t.Fatalf("generate through resumed main client: %v", err)

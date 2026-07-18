@@ -1,6 +1,7 @@
 package app
 
 import (
+	"reflect"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -58,33 +59,10 @@ func TestApplyPathReferenceCompletionReplacesMiddleSpan(t *testing.T) {
 	}
 }
 
-func TestApplyPathReferenceCompletionAddsTrailingSlashForDirectory(t *testing.T) {
-	input, cursor := testPathReferenceFixture("inspect @cliap|")
-	query := detectPathReferenceQuery(input, cursor)
-	updated, _, ok := applyPathReferenceCompletion(input, cursor, query, uiPathReferenceCandidate{Path: "cli/app", Directory: true})
-	if !ok {
-		t.Fatal("expected completion applied")
-	}
-	if updated != "inspect @cli/app/" {
-		t.Fatalf("updated input = %q", updated)
-	}
-}
-
-func TestPathReferenceReactivatesAfterDirectoryCompletion(t *testing.T) {
-	input, cursor := testPathReferenceFixture("inspect @cli/app/u|")
-	query := detectPathReferenceQuery(input, cursor)
-	if !query.Active {
-		t.Fatal("expected nested path query active after directory completion")
-	}
-	if query.RawQuery != "cli/app/u" {
-		t.Fatalf("query = %q", query.RawQuery)
-	}
-}
-
 func TestPathReferenceSearchIgnoredWhileSlashPickerActive(t *testing.T) {
 	search := newStubUIPathReferenceSearch()
 	m := newProjectedStaticUIModel(WithUIPathReferenceSearch(search))
-	m.replaceMainInput("/@ab", -1)
+	m.replaceMainInputAtEnd("/@ab")
 
 	if !m.slashCommandPicker().visible {
 		t.Fatal("expected slash picker visible")
@@ -121,14 +99,14 @@ func TestPathReferenceLoadingDelayDoesNotOverwriteFresherMatches(t *testing.T) {
 	search := newStubUIPathReferenceSearch()
 	m := newProjectedStaticUIModel(WithUIPathReferenceSearch(search), WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: "/tmp/workspace"}))
 
-	m.replaceMainInput("@ab", -1)
+	m.replaceMainInputAtEnd("@ab")
 	firstToken := m.pathReference.queryToken
 	firstDraft := m.pathReference.draftToken
-	m.replaceMainInput("@abc", -1)
+	m.replaceMainInputAtEnd("@abc")
 	secondToken := m.pathReference.queryToken
 	secondDraft := m.pathReference.draftToken
 
-	next, _ := m.Update(uiPathReferenceMatchResultMsg{
+	updated := updateUIModel(t, m, uiPathReferenceMatchResultMsg{
 		WorkspaceRoot:    "/tmp/workspace",
 		CorpusGeneration: 1,
 		DraftToken:       secondDraft,
@@ -136,16 +114,14 @@ func TestPathReferenceLoadingDelayDoesNotOverwriteFresherMatches(t *testing.T) {
 		NormalizedQuery:  "abc",
 		Matches:          []uiPathReferenceCandidate{{Path: "cli/app/ui.go"}},
 	})
-	updated := next.(*uiModel)
 
-	next, _ = updated.Update(uiPathReferenceLoadingDelayMsg{
+	updated = updateUIModel(t, updated, uiPathReferenceLoadingDelayMsg{
 		WorkspaceRoot:    "/tmp/workspace",
 		CorpusGeneration: 1,
 		DraftToken:       firstDraft,
 		QueryToken:       firstToken,
 		NormalizedQuery:  "ab",
 	})
-	updated = next.(*uiModel)
 	if updated.pathReference.loading {
 		t.Fatal("did not expect stale loading event to overwrite fresher matches")
 	}
@@ -157,16 +133,15 @@ func TestPathReferenceLoadingDelayDoesNotOverwriteFresherMatches(t *testing.T) {
 func TestPathReferenceDropsStaleCorpusGenerationEvents(t *testing.T) {
 	search := newStubUIPathReferenceSearch()
 	m := newProjectedStaticUIModel(WithUIPathReferenceSearch(search), WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: "/tmp/workspace"}))
-	m.replaceMainInput("@ab", -1)
+	m.replaceMainInputAtEnd("@ab")
 	m.pathReference.corpusGeneration = 2
 
-	next, _ := m.Update(uiPathReferenceCorpusReadyMsg{WorkspaceRoot: "/tmp/workspace", CorpusGeneration: 1})
-	updated := next.(*uiModel)
+	updated := updateUIModel(t, m, uiPathReferenceCorpusReadyMsg{WorkspaceRoot: "/tmp/workspace", CorpusGeneration: 1})
 	if updated.pathReference.corpusGeneration != 2 {
 		t.Fatalf("stale corpus-ready changed generation to %d", updated.pathReference.corpusGeneration)
 	}
 
-	next, _ = updated.Update(uiPathReferenceMatchResultMsg{
+	updated = updateUIModel(t, updated, uiPathReferenceMatchResultMsg{
 		WorkspaceRoot:    "/tmp/workspace",
 		CorpusGeneration: 1,
 		DraftToken:       updated.pathReference.draftToken,
@@ -174,20 +149,18 @@ func TestPathReferenceDropsStaleCorpusGenerationEvents(t *testing.T) {
 		NormalizedQuery:  updated.pathReference.normalizedQuery,
 		Matches:          []uiPathReferenceCandidate{{Path: "stale.go"}},
 	})
-	updated = next.(*uiModel)
 	if len(updated.pathReference.matches) != 0 {
 		t.Fatalf("expected stale generation match dropped, got %+v", updated.pathReference.matches)
 	}
 
 	updated.pathReference.pending = true
-	next, _ = updated.Update(uiPathReferenceLoadingDelayMsg{
+	updated = updateUIModel(t, updated, uiPathReferenceLoadingDelayMsg{
 		WorkspaceRoot:    "/tmp/workspace",
 		CorpusGeneration: 1,
 		DraftToken:       updated.pathReference.draftToken,
 		QueryToken:       updated.pathReference.queryToken,
 		NormalizedQuery:  updated.pathReference.normalizedQuery,
 	})
-	updated = next.(*uiModel)
 	if updated.pathReference.loading {
 		t.Fatal("expected stale generation loading event dropped")
 	}
@@ -196,14 +169,14 @@ func TestPathReferenceDropsStaleCorpusGenerationEvents(t *testing.T) {
 func TestPathReferenceWorkspaceSwitchDropsInFlightEvents(t *testing.T) {
 	search := newStubUIPathReferenceSearch()
 	m := newProjectedStaticUIModel(WithUIPathReferenceSearch(search), WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: "/tmp/workspace-a"}))
-	m.replaceMainInput("@ab", -1)
+	m.replaceMainInputAtEnd("@ab")
 	staleDraft := m.pathReference.draftToken
 	staleToken := m.pathReference.queryToken
 
 	m.statusConfig.WorkspaceRoot = "/tmp/workspace-b"
-	m.replaceMainInput("@ab", -1)
+	m.replaceMainInputAtEnd("@ab")
 
-	next, _ := m.Update(uiPathReferenceMatchResultMsg{
+	updated := updateUIModel(t, m, uiPathReferenceMatchResultMsg{
 		WorkspaceRoot:    "/tmp/workspace-a",
 		CorpusGeneration: 1,
 		DraftToken:       staleDraft,
@@ -211,7 +184,6 @@ func TestPathReferenceWorkspaceSwitchDropsInFlightEvents(t *testing.T) {
 		NormalizedQuery:  "ab",
 		Matches:          []uiPathReferenceCandidate{{Path: "stale.go"}},
 	})
-	updated := next.(*uiModel)
 	if len(updated.pathReference.matches) != 0 {
 		t.Fatalf("expected stale workspace match dropped, got %+v", updated.pathReference.matches)
 	}
@@ -221,41 +193,29 @@ func TestPathReferenceWorkspaceSwitchDropsInFlightEvents(t *testing.T) {
 }
 
 func TestPathReferenceUpDownNavigatesSelectionWithoutRewritingInput(t *testing.T) {
-	search := newStubUIPathReferenceSearch()
-	m := newProjectedStaticUIModel(WithUIPathReferenceSearch(search), WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: "/tmp/workspace"}))
+	m, _ := newPathReferenceTestModel("@ab")
 	m.promptHistory = []string{"older prompt"}
-	m.replaceMainInput("@ab", -1)
-
-	next, _ := m.Update(uiPathReferenceMatchResultMsg{
-		WorkspaceRoot:    "/tmp/workspace",
-		CorpusGeneration: 1,
-		DraftToken:       m.pathReference.draftToken,
-		QueryToken:       m.pathReference.queryToken,
-		NormalizedQuery:  "ab",
-		Matches: []uiPathReferenceCandidate{
-			{Path: "cli/app"},
-			{Path: "cli/app/ui.go"},
-		},
+	updated := deliverPathReferenceTestMatches(t, m, 1, []uiPathReferenceCandidate{
+		{Path: "cli/app"},
+		{Path: "cli/app/ui.go"},
 	})
-	updated := next.(*uiModel)
-
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = next.(*uiModel)
+	updated = updateUIModel(t, updated, tea.KeyMsg{Type: tea.KeyDown})
 	if updated.pathReference.selection != 1 {
 		t.Fatalf("selection = %d, want 1", updated.pathReference.selection)
 	}
-	if updated.input != "@ab" {
-		t.Fatalf("input = %q, want unchanged draft", updated.input)
+	if testMainInput(updated) != "@ab" {
+		t.Fatalf("input = %q, want unchanged draft", testMainInput(updated))
 	}
-	if updated.promptHistorySelection != -1 {
-		t.Fatalf("did not expect prompt history navigation, got %d", updated.promptHistorySelection)
+	if updated.promptHistorySelection != nil {
+		t.Fatalf("did not expect prompt history navigation, got %v", updated.promptHistorySelection)
 	}
 }
 
-func TestPathReferencePickerHighlightTracksAbsoluteSelectionAfterViewportScroll(t *testing.T) {
-	withTrueColor(t)
+func TestPathReferencePickerScrollsSelectionAndReservesBoundedHeight(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.pathReference.tracked = uiPathReferenceQuery{Active: true, Start: 0, End: 3, RawQuery: "ab", NormalizedQuery: "ab"}
+	m.terminalGeometry = terminalGeometryKnown(24, 14)
+	chatLinesWithoutPicker := m.layout().calcChatLines()
+	m.pathReference.tracked = detectPathReferenceQuery("@ab", 3)
 	m.pathReference.matches = []uiPathReferenceCandidate{
 		{Path: "match-00.go"},
 		{Path: "match-01.go"},
@@ -267,21 +227,40 @@ func TestPathReferencePickerHighlightTracksAbsoluteSelectionAfterViewportScroll(
 		{Path: "match-07.go"},
 		{Path: "match-08.go"},
 	}
-	m.pathReference.selection = 7
+	for range 7 {
+		m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	}
 
 	state := m.pathReferencePicker()
+	assertActivePickerHighlightedSelection(t, m)
 	if state.start == 0 {
-		t.Fatalf("expected path picker viewport to scroll, got %+v", state)
+		t.Fatalf("picker did not scroll to offscreen selection: %+v", state)
 	}
 	if len(state.rows) != len(m.pathReference.matches) {
-		t.Fatalf("expected path picker rows to keep full absolute row list, got %d rows for %d matches", len(state.rows), len(m.pathReference.matches))
+		t.Fatalf("picker rows = %d, want full absolute candidate list %d", len(state.rows), len(m.pathReference.matches))
 	}
-	assertActivePickerHighlightedSelection(t, m)
+	if state.lineCount != slashCommandPickerLines {
+		t.Fatalf("picker line count = %d, want bounded %d", state.lineCount, slashCommandPickerLines)
+	}
+	renderedPicker := m.layout().renderActivePicker(24)
+	if len(renderedPicker) != state.lineCount {
+		t.Fatalf("rendered picker height = %d, want %d", len(renderedPicker), state.lineCount)
+	}
+	if got := m.layout().calcChatLines(); got != chatLinesWithoutPicker-len(renderedPicker) {
+		t.Fatalf("chat lines with picker = %d, want %d", got, chatLinesWithoutPicker-len(renderedPicker))
+	}
+	frame, ok := m.layout().composeStandardFrame(uiThemeStyles(m.theme))
+	if !ok {
+		t.Fatal("expected composed frame")
+	}
+	if !reflect.DeepEqual(frame.pickerPane, renderedPicker) {
+		t.Fatalf("composed picker pane = %+v, want active picker", frame.pickerPane)
+	}
 }
 
 func TestPathReferencePickerSanitizesControlCharactersForDisplay(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.pathReference.tracked = uiPathReferenceQuery{Active: true, Start: 0, End: 3, RawQuery: "ab", NormalizedQuery: "ab"}
+	m.pathReference.tracked = detectPathReferenceQuery("@ab", 3)
 	m.pathReference.matches = []uiPathReferenceCandidate{{Path: "safe/]52;evilname.txt"}}
 
 	state := m.pathReferencePicker()
@@ -293,6 +272,21 @@ func TestPathReferencePickerSanitizesControlCharactersForDisplay(t *testing.T) {
 	}
 	if m.pathReference.matches[0].Path != "safe/]52;evilname.txt" {
 		t.Fatalf("expected underlying candidate path preserved, got %q", m.pathReference.matches[0].Path)
+	}
+}
+
+func TestPathReferenceAcceptanceUsesUnsanitizedCandidate(t *testing.T) {
+	m := newProjectedStaticUIModel()
+	testSetMainInput(m, "@ab")
+	m.pathReference.tracked = uiPathReferenceQuery{Active: true, Start: 0, End: 3, RawQuery: "ab", NormalizedQuery: "ab"}
+	rawPath := "safe/line\n\t" + string(rune(0x1b)) + "[31mname.txt"
+	m.pathReference.matches = []uiPathReferenceCandidate{{Path: rawPath}}
+
+	if !m.acceptPathReferenceSelection() {
+		t.Fatal("expected raw candidate acceptance")
+	}
+	if testMainInput(m) != "@"+rawPath {
+		t.Fatalf("accepted input = %q, want original candidate bytes", testMainInput(m))
 	}
 }
 
@@ -341,3 +335,25 @@ func (s *stubUIPathReferenceSearch) Search(req uiPathReferenceSearchRequest) {
 }
 
 func (s *stubUIPathReferenceSearch) Stop() {}
+
+func newPathReferenceTestModel(input string) (*uiModel, *stubUIPathReferenceSearch) {
+	search := newStubUIPathReferenceSearch()
+	m := newProjectedStaticUIModel(
+		WithUIPathReferenceSearch(search),
+		WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: "/tmp/workspace"}),
+	)
+	m.replaceMainInputAtEnd(input)
+	return m, search
+}
+
+func deliverPathReferenceTestMatches(t *testing.T, m *uiModel, generation uint64, matches []uiPathReferenceCandidate) *uiModel {
+	t.Helper()
+	return updateUIModel(t, m, uiPathReferenceMatchResultMsg{
+		WorkspaceRoot:    m.pathReference.workspaceRoot,
+		CorpusGeneration: generation,
+		DraftToken:       m.pathReference.draftToken,
+		QueryToken:       m.pathReference.queryToken,
+		NormalizedQuery:  m.pathReference.normalizedQuery,
+		Matches:          matches,
+	})
+}

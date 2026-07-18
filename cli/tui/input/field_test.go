@@ -108,3 +108,53 @@ func TestFieldRenderPlaceholderDoesNotMoveCursorPastPrompt(t *testing.T) {
 		t.Fatalf("placeholder cursor col = %d, want %d", result.Cursor.Col, uniseg.StringWidth("› "))
 	}
 }
+
+func TestFieldVerticalMovementAccountsForPrefixWrapping(t *testing.T) {
+	field := NewField()
+	field.Prefix = "› "
+	field.Editor.Replace("abcdef")
+
+	if !field.MoveUp(4) {
+		t.Fatal("expected prefixed field to move up")
+	}
+	if got, want := field.Editor.Cursor(), len("ab"); got != want {
+		t.Fatalf("cursor after move up = %d, want %d", got, want)
+	}
+}
+
+func TestFieldVerticalMovementAcrossWrappedLines(t *testing.T) {
+	field := NewField()
+	field.Editor.Replace("abcd efgh ijkl")
+
+	if !field.MoveUp(5) {
+		t.Fatal("expected move up")
+	}
+	if pos := field.Editor.CursorPosition(5); pos.Line != 1 || pos.Col != 4 {
+		t.Fatalf("after move up cursor position = %+v, want line 1 col 4", pos)
+	}
+	if !field.MoveUp(5) {
+		t.Fatal("expected second move up")
+	}
+	if pos := field.Editor.CursorPosition(5); pos.Line != 0 || pos.Col != 4 {
+		t.Fatalf("after second move up cursor position = %+v, want line 0 col 4", pos)
+	}
+	if !field.MoveDown(5) {
+		t.Fatal("expected move down")
+	}
+	if pos := field.Editor.CursorPosition(5); pos.Line != 1 || pos.Col != 4 {
+		t.Fatalf("after move down cursor position = %+v, want line 1 col 4", pos)
+	}
+}
+
+func TestFieldMaskedUnicodeVerticalMovementMapsDisplayToSourceCursor(t *testing.T) {
+	field := NewField()
+	field.Mask = '*'
+	field.Editor.Replace("界界界")
+
+	if !field.MoveUp(1) {
+		t.Fatal("expected masked field to move up")
+	}
+	if got, want := field.Editor.Cursor(), len("界界"); got != want {
+		t.Fatalf("cursor after move up = %d, want source byte offset %d", got, want)
+	}
+}

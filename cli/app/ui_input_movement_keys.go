@@ -1,35 +1,35 @@
 package app
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	tuiinput "core/cli/tui/input"
 
-type uiSharedInputMovementActions struct {
-	MoveLeft      func()
-	MoveRight     func()
-	MoveWordLeft  func()
-	MoveWordRight func()
-}
+	tea "github.com/charmbracelet/bubbletea"
+)
 
-func handleSharedInputMovementKey(msg tea.KeyMsg, actions uiSharedInputMovementActions) bool {
+func applySharedInputMovementKey(msg tea.KeyMsg, editor *tuiinput.Editor) bool {
+	if editor == nil {
+		return false
+	}
 	switch msg.Type {
 	case tea.KeyLeft:
 		if msg.Alt {
-			runInputMovementAction(actions.MoveWordLeft)
+			editor.MoveWordLeft()
 		} else {
-			runInputMovementAction(actions.MoveLeft)
+			editor.MoveLeft()
 		}
 		return true
 	case tea.KeyRight:
 		if msg.Alt {
-			runInputMovementAction(actions.MoveWordRight)
+			editor.MoveWordRight()
 		} else {
-			runInputMovementAction(actions.MoveRight)
+			editor.MoveRight()
 		}
 		return true
 	case tea.KeyCtrlLeft:
-		runInputMovementAction(actions.MoveWordLeft)
+		editor.MoveWordLeft()
 		return true
 	case tea.KeyCtrlRight:
-		runInputMovementAction(actions.MoveWordRight)
+		editor.MoveWordRight()
 		return true
 	case tea.KeyRunes:
 		if !msg.Alt || len(msg.Runes) != 1 {
@@ -37,21 +37,15 @@ func handleSharedInputMovementKey(msg tea.KeyMsg, actions uiSharedInputMovementA
 		}
 		switch msg.Runes[0] {
 		case 'b':
-			runInputMovementAction(actions.MoveWordLeft)
+			editor.MoveWordLeft()
 			return true
 		case 'f':
-			runInputMovementAction(actions.MoveWordRight)
+			editor.MoveWordRight()
 			return true
 		default:
 			return false
 		}
 	default:
 		return false
-	}
-}
-
-func runInputMovementAction(action func()) {
-	if action != nil {
-		action()
 	}
 }

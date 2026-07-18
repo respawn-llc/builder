@@ -17,7 +17,7 @@ func TestTaskCommandsUseWorkflowAPI(t *testing.T) {
 
 	workflowID := setupLinkedWorkflow(t, binding.ProjectID, "Task Workflow API")
 
-	taskOut, _ := runWorkflowRootCommandOK(t, "task", "create", "--title", "Task", "--body", "Body", "--workflow", workflowID, "--project", binding.ProjectID)
+	taskOut, _ := runRootCommandOK(t, "task", "create", "--title", "Task", "--body", "Body", "--workflow", workflowID, "--project", binding.ProjectID)
 	shortID := taskDetailHeadingShortID(t, taskOut)
 	if !strings.Contains(taskOut, shortID+": Task\n") || !strings.Contains(taskOut, "Body:\n```md\nBody\n```\n") || !strings.Contains(taskOut, "Status: backlog\n") {
 		t.Fatalf("task create output = %q, want task show output", taskOut)
@@ -28,7 +28,7 @@ func TestTaskCommandsUseWorkflowAPI(t *testing.T) {
 	}
 	taskID := taskResp.Task.Summary.ID
 
-	taskListJSONOut, _ := runWorkflowRootCommandOK(t, "task", "list", "--project", binding.ProjectID, "--json")
+	taskListJSONOut, _ := runRootCommandOK(t, "task", "list", "--project", binding.ProjectID, "--json")
 	var taskList taskListOutput
 	if err := json.Unmarshal([]byte(taskListJSONOut), &taskList); err != nil {
 		t.Fatalf("task list JSON output = %q: %v", taskListJSONOut, err)
@@ -43,11 +43,11 @@ func TestTaskCommandsUseWorkflowAPI(t *testing.T) {
 		t.Fatalf("task list projection = %+v, want project-wide task without workflow-relative columns", taskList)
 	}
 
-	taskShowOut, _ := runWorkflowRootCommandOK(t, "task", "show", "--project", binding.ProjectID, shortID)
+	taskShowOut, _ := runRootCommandOK(t, "task", "show", "--project", binding.ProjectID, shortID)
 	if !strings.Contains(taskShowOut, shortID+": Task\n") || !strings.Contains(taskShowOut, "Body:\n```md\nBody\n```\n") || !strings.Contains(taskShowOut, "Status: backlog\n") {
 		t.Fatalf("task show output = %q, want summary block", taskShowOut)
 	}
-	taskShowJSONOut, _ := runWorkflowRootCommandOK(t, "task", "show", "--project", binding.ProjectID, "--json", shortID)
+	taskShowJSONOut, _ := runRootCommandOK(t, "task", "show", "--project", binding.ProjectID, "--json", shortID)
 	var taskShowJSON taskShowOutput
 	if err := json.Unmarshal([]byte(taskShowJSONOut), &taskShowJSON); err != nil {
 		t.Fatalf("task show --json output = %q, want JSON: %v", taskShowJSONOut, err)
@@ -64,22 +64,22 @@ func TestTaskCommandsUseWorkflowAPI(t *testing.T) {
 			t.Fatalf("task show --json output = %q, did not expect unbounded %q array", taskShowJSONOut, omitted)
 		}
 	}
-	taskShowOut, _ = runWorkflowRootCommandOK(t, "task", "show", "--project", "missing-project", taskID)
+	taskShowOut, _ = runRootCommandOK(t, "task", "show", "--project", "missing-project", taskID)
 	if !strings.Contains(taskShowOut, shortID+": Task\n") {
 		t.Fatalf("task show by full id output = %q, want task short id", taskShowOut)
 	}
 
-	commentOut, _ := runWorkflowRootCommandOK(t, "task", "comment", "add", "--project", binding.ProjectID, "--body", "note", shortID)
+	commentOut, _ := runRootCommandOK(t, "task", "comment", "add", "--project", binding.ProjectID, "--body", "note", shortID)
 	commentID := labeledOutputValue(t, commentOut, "comment_id")
 	if commentID == "" {
 		t.Fatalf("comment output = %q, want comment id", commentOut)
 	}
-	runWorkflowRootCommandOK(t, "task", "comment", "replace", "--body", "edited", commentID)
-	commentListOut, _ := runWorkflowRootCommandOK(t, "task", "comment", "list", "--project", binding.ProjectID, shortID)
+	runRootCommandOK(t, "task", "comment", "replace", "--body", "edited", commentID)
+	commentListOut, _ := runRootCommandOK(t, "task", "comment", "list", "--project", binding.ProjectID, shortID)
 	if !strings.Contains(commentListOut, "Comments (1):\nUser at ") || !strings.Contains(commentListOut, "edited") {
 		t.Fatalf("comment list output = %q, want rendered comment", commentListOut)
 	}
-	runWorkflowRootCommandOK(t, "task", "comment", "delete", commentID)
+	runRootCommandOK(t, "task", "comment", "delete", commentID)
 
 	startResp, err := remote.StartWorkflowTask(context.Background(), serverapi.WorkflowTaskStartRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
@@ -106,23 +106,23 @@ func TestTaskCommandsUseWorkflowAPI(t *testing.T) {
 	if err := remote.store.InterruptRunGeneration(context.Background(), workflow.RunID(runID), claimed.Generation, "manual", "{}"); err != nil {
 		t.Fatalf("InterruptRunGeneration for resume command: %v", err)
 	}
-	resumeOut, _ := runWorkflowRootCommandOK(t, "task", "resume", "--project", binding.ProjectID, shortID)
+	resumeOut, _ := runRootCommandOK(t, "task", "resume", "--project", binding.ProjectID, shortID)
 	if !strings.Contains(resumeOut, shortID) || !strings.Contains(resumeOut, resumeSessionID) || !strings.Contains(resumeOut, "implement") {
 		t.Fatalf("resume output = %q, want task/node/session referenced", resumeOut)
 	}
 
-	cancelOut, _ := runWorkflowRootCommandOK(t, "task", "cancel", "--project", binding.ProjectID, "--reason", "test", shortID)
+	cancelOut, _ := runRootCommandOK(t, "task", "cancel", "--project", binding.ProjectID, "--reason", "test", shortID)
 	if cancelOut != "Canceled task "+shortID+".\n" {
 		t.Fatalf("cancel output = %q, want readable cancel message", cancelOut)
 	}
 
-	if _, resumeErr, resumeCode := runWorkflowRootCommand("task", "resume"); resumeCode != 2 || !strings.Contains(resumeErr, "requires <short-id-or-task-id>") {
+	if _, resumeErr, resumeCode := runRootCommand("task", "resume"); resumeCode != 2 || !strings.Contains(resumeErr, "requires <short-id-or-task-id>") {
 		t.Fatalf("task resume validation code=%d stderr=%q, want task requirement", resumeCode, resumeErr)
 	}
-	if _, approveErr, approveCode := runWorkflowRootCommand("task", "approve"); approveCode != 2 || !strings.Contains(approveErr, "requires <transition-id>") {
+	if _, approveErr, approveCode := runRootCommand("task", "approve"); approveCode != 2 || !strings.Contains(approveErr, "requires <transition-id>") {
 		t.Fatalf("task approve validation code=%d stderr=%q, want transition id requirement", approveCode, approveErr)
 	}
-	if _, moveErr, moveCode := runWorkflowRootCommand("task", "move"); moveCode != 2 || !strings.Contains(moveErr, "requires <short-id-or-task-id> <target-node-id>") {
+	if _, moveErr, moveCode := runRootCommand("task", "move"); moveCode != 2 || !strings.Contains(moveErr, "requires <short-id-or-task-id> <target-node-id>") {
 		t.Fatalf("task move validation code=%d stderr=%q, want task and target requirement", moveCode, moveErr)
 	}
 }

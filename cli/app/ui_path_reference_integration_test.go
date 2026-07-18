@@ -1,174 +1,101 @@
 package app
 
 import (
-	"reflect"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func TestPathReferenceTabCompletesSelectedFile(t *testing.T) {
-	search := newStubUIPathReferenceSearch()
-	m := newProjectedStaticUIModel(WithUIPathReferenceSearch(search), WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: "/tmp/workspace"}))
-	m.replaceMainInput("inspect @ab", -1)
-
-	next, _ := m.Update(uiPathReferenceMatchResultMsg{
-		WorkspaceRoot:    "/tmp/workspace",
-		CorpusGeneration: 1,
-		DraftToken:       m.pathReference.draftToken,
-		QueryToken:       m.pathReference.queryToken,
-		NormalizedQuery:  "ab",
-		Matches: []uiPathReferenceCandidate{
-			{Path: "cli/app", Directory: true},
-			{Path: "cli/app/ui.go"},
+func TestPathReferenceCompletionKeys(t *testing.T) {
+	tests := []struct {
+		name       string
+		key        tea.KeyMsg
+		matches    []uiPathReferenceCandidate
+		moveDown   bool
+		nestedRune string
+		wantInput  string
+	}{
+		{
+			name:      "Tab selects file",
+			key:       tea.KeyMsg{Type: tea.KeyTab},
+			matches:   []uiPathReferenceCandidate{{Path: "cli/app", Directory: true}, {Path: "cli/app/ui.go"}},
+			moveDown:  true,
+			wantInput: "inspect @cli/app/ui.go",
 		},
-	})
-	updated := next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = next.(*uiModel)
-
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
-	updated = next.(*uiModel)
-	if updated.input != "inspect @cli/app/ui.go" {
-		t.Fatalf("input = %q", updated.input)
+		{
+			name:      "Enter selects directory",
+			key:       tea.KeyMsg{Type: tea.KeyEnter},
+			matches:   []uiPathReferenceCandidate{{Path: "cli/app", Directory: true}},
+			wantInput: "inspect @cli/app/",
+		},
+		{
+			name:       "directory selection reactivates nested search",
+			key:        tea.KeyMsg{Type: tea.KeyEnter},
+			matches:    []uiPathReferenceCandidate{{Path: "cli/app", Directory: true}},
+			nestedRune: "u",
+			wantInput:  "inspect @cli/app/",
+		},
 	}
-	if updated.isBusy() {
-		t.Fatal("did not expect completion to start submission")
-	}
-}
-
-func TestPathReferenceEnterCompletesSelectedDirectoryWithoutSubmitting(t *testing.T) {
-	search := newStubUIPathReferenceSearch()
-	m := newProjectedStaticUIModel(WithUIPathReferenceSearch(search), WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: "/tmp/workspace"}))
-	m.replaceMainInput("inspect @ab", -1)
-
-	next, _ := m.Update(uiPathReferenceMatchResultMsg{
-		WorkspaceRoot:    "/tmp/workspace",
-		CorpusGeneration: 1,
-		DraftToken:       m.pathReference.draftToken,
-		QueryToken:       m.pathReference.queryToken,
-		NormalizedQuery:  "ab",
-		Matches:          []uiPathReferenceCandidate{{Path: "cli/app", Directory: true}},
-	})
-	updated := next.(*uiModel)
-
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated = next.(*uiModel)
-	if updated.input != "inspect @cli/app/" {
-		t.Fatalf("input = %q", updated.input)
-	}
-	if updated.isBusy() {
-		t.Fatal("did not expect completion to start submission")
-	}
-}
-
-func TestPathReferenceReactivatesAfterDirectoryCompletionAndNestedTyping(t *testing.T) {
-	search := newStubUIPathReferenceSearch()
-	m := newProjectedStaticUIModel(WithUIPathReferenceSearch(search), WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: "/tmp/workspace"}))
-	m.replaceMainInput("inspect @ab", -1)
-
-	next, _ := m.Update(uiPathReferenceMatchResultMsg{
-		WorkspaceRoot:    "/tmp/workspace",
-		CorpusGeneration: 1,
-		DraftToken:       m.pathReference.draftToken,
-		QueryToken:       m.pathReference.queryToken,
-		NormalizedQuery:  "ab",
-		Matches:          []uiPathReferenceCandidate{{Path: "cli/app", Directory: true}},
-	})
-	updated := next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated = next.(*uiModel)
-
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
-	updated = next.(*uiModel)
-	if !updated.pathReference.tracked.Active {
-		t.Fatal("expected path reference query reactivated after typing nested segment")
-	}
-	if updated.pathReference.tracked.RawQuery != "cli/app/u" {
-		t.Fatalf("query = %q", updated.pathReference.tracked.RawQuery)
-	}
-	if len(search.requests) == 0 {
-		t.Fatal("expected follow-up search request for nested segment")
-	}
-	last := search.requests[len(search.requests)-1]
-	if last.NormalizedQuery != "cli/app/u" {
-		t.Fatalf("search query = %q", last.NormalizedQuery)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m, search := newPathReferenceTestModel("inspect @ab")
+			m = deliverPathReferenceTestMatches(t, m, 1, test.matches)
+			if test.moveDown {
+				m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyDown})
+			}
+			m = updateUIModel(t, m, test.key)
+			if testMainInput(m) != test.wantInput {
+				t.Fatalf("input = %q, want %q", testMainInput(m), test.wantInput)
+			}
+			if m.isBusy() {
+				t.Fatal("completion started submission")
+			}
+			if test.nestedRune == "" {
+				return
+			}
+			m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(test.nestedRune)})
+			if !m.pathReference.tracked.Active || m.pathReference.tracked.RawQuery != "cli/app/u" {
+				t.Fatalf("nested query = %+v", m.pathReference.tracked)
+			}
+			if got := search.requests[len(search.requests)-1].NormalizedQuery; got != "cli/app/u" {
+				t.Fatalf("search query = %q, want cli/app/u", got)
+			}
+		})
 	}
 }
 
 func TestPathReferenceTabFallsThroughWhenNoMatches(t *testing.T) {
-	search := newStubUIPathReferenceSearch()
-	m := newProjectedStaticUIModel(WithUIPathReferenceSearch(search), WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: "/tmp/workspace"}))
-	m.replaceMainInput("echo @ab", -1)
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	updated := next.(*uiModel)
+	m, _ := newPathReferenceTestModel("echo @ab")
+	updated := updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	if !updated.isBusy() {
 		t.Fatal("expected normal tab submission when no matches exist")
 	}
 }
 
 func TestPathReferenceEnterDoesNotSubmitWhileQueryIsPending(t *testing.T) {
-	search := newStubUIPathReferenceSearch()
-	m := newProjectedStaticUIModel(WithUIPathReferenceSearch(search), WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: "/tmp/workspace"}))
-	m.replaceMainInput("echo @ab", -1)
+	m, _ := newPathReferenceTestModel("echo @ab")
 	m.pathReference.matches = []uiPathReferenceCandidate{{Path: "stale.go"}}
 	m.pathReference.pending = true
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated := next.(*uiModel)
+	updated := updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	if updated.isBusy() {
 		t.Fatal("did not expect enter to submit while path-reference query is still pending")
 	}
-	if updated.input != "echo @ab" {
-		t.Fatalf("input = %q, want unchanged draft", updated.input)
-	}
-}
-
-func TestPathReferencePickerSharedWithViewport(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.theme = "dark"
-	m.terminalGeometry = terminalGeometryKnown(24, 14)
-	m.input = "@ab"
-	m.pathReference.tracked = uiPathReferenceQuery{Active: true, Start: 0, End: 3, RawQuery: "ab", NormalizedQuery: "ab"}
-	m.pathReference.matches = []uiPathReferenceCandidate{{Path: "cli/app/ui.go"}}
-	size := m.terminalGeometry.Size()
-	if size == nil {
-		t.Fatal("expected known terminal geometry")
-	}
-
-	style := uiThemeStyles(m.theme)
-	standard, ok := m.layout().composeStandardFrame(style)
-	if !ok {
-		t.Fatal("expected standard frame")
-	}
-	expectedPicker := m.layout().renderActivePicker(size.width)
-	if !reflect.DeepEqual(standard.pickerPane, expectedPicker) {
-		t.Fatalf("standard picker pane = %+v, want %+v", standard.pickerPane, expectedPicker)
-	}
-	wantChat := size.height - len(standard.inputPane) - len(standard.queuePane) - len(expectedPicker) - len(standard.helpPane) - 1
-	if wantChat < 1 {
-		wantChat = 1
-	}
-	if got := m.layout().calcChatLines(); got != wantChat {
-		t.Fatalf("calcChatLines() = %d, want %d", got, wantChat)
+	if testMainInput(updated) != "echo @ab" {
+		t.Fatalf("input = %q, want unchanged draft", testMainInput(updated))
 	}
 }
 
 func TestPathReferenceUIRecoversAfterBuildFailureInSameWorkspace(t *testing.T) {
-	search := newStubUIPathReferenceSearch()
-	m := newProjectedStaticUIModel(WithUIPathReferenceSearch(search), WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: "/tmp/workspace"}))
-	m.replaceMainInput("@ab", -1)
+	m, search := newPathReferenceTestModel("@ab")
 	initialRequests := len(search.requests)
 
-	next, _ := m.Update(uiPathReferenceCorpusFailedMsg{WorkspaceRoot: "/tmp/workspace", CorpusGeneration: 1, Err: errPathReferenceWorkspaceUnavailable})
-	updated := next.(*uiModel)
+	updated := updateUIModel(t, m, uiPathReferenceCorpusFailedMsg{WorkspaceRoot: "/tmp/workspace", CorpusGeneration: 1, Err: errPathReferenceWorkspaceUnavailable})
 	if updated.pathReference.pending || updated.pathReference.loading {
 		t.Fatal("expected failed build to clear pending/loading state")
 	}
 
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
-	updated = next.(*uiModel)
+	updated = updateUIModel(t, updated, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
 	if len(search.requests) != initialRequests+1 {
 		t.Fatalf("expected retry search request after later query, got %d requests", len(search.requests))
 	}
@@ -177,18 +104,8 @@ func TestPathReferenceUIRecoversAfterBuildFailureInSameWorkspace(t *testing.T) {
 		t.Fatalf("expected retry query abc, got %+v", last)
 	}
 
-	next, _ = updated.Update(uiPathReferenceCorpusReadyMsg{WorkspaceRoot: "/tmp/workspace", CorpusGeneration: 2})
-	updated = next.(*uiModel)
-
-	next, _ = updated.Update(uiPathReferenceMatchResultMsg{
-		WorkspaceRoot:    "/tmp/workspace",
-		CorpusGeneration: 2,
-		DraftToken:       updated.pathReference.draftToken,
-		QueryToken:       updated.pathReference.queryToken,
-		NormalizedQuery:  updated.pathReference.normalizedQuery,
-		Matches:          []uiPathReferenceCandidate{{Path: "cli/app/ui.go"}},
-	})
-	updated = next.(*uiModel)
+	updated = updateUIModel(t, updated, uiPathReferenceCorpusReadyMsg{WorkspaceRoot: "/tmp/workspace", CorpusGeneration: 2})
+	updated = deliverPathReferenceTestMatches(t, updated, 2, []uiPathReferenceCandidate{{Path: "cli/app/ui.go"}})
 	if updated.pathReference.loading || updated.pathReference.pending {
 		t.Fatal("expected successful retry to clear loading/pending state")
 	}

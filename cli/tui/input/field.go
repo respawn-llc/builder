@@ -28,6 +28,25 @@ type FieldCursor struct {
 	Col     int
 }
 
+type fieldLayout struct {
+	text             string
+	lines            []LineRange
+	cursorLine       int
+	cursorCol        int
+	cursorBoundaries []fieldCursorBoundary
+}
+
+type fieldDisplay struct {
+	text             string
+	cursor           int
+	cursorBoundaries []fieldCursorBoundary
+}
+
+type fieldCursorBoundary struct {
+	displayOffset int
+	sourceOffset  int
+}
+
 func NewField() Field {
 	return Field{Cursor: true}
 }
@@ -36,37 +55,23 @@ func (f *Field) Render(width int) RenderResult {
 	if width < 1 {
 		width = 1
 	}
-	contentWidth := width
-	text, displayCursor := f.displayTextAndCursorOffset()
-	renderText := f.Prefix + text
-	cursorOffset := len(f.Prefix) + displayCursor
-	if f.Editor.Text() == "" && f.Placeholder != "" {
-		renderText = f.Prefix + f.Placeholder
-		cursorOffset = len(f.Prefix)
-	}
-
-	renderEditor := NewEditor()
-	renderEditor.Replace(renderText)
-	renderEditor.SetCursor(cursorOffset)
-	wrapped := renderEditor.WrappedLines(contentWidth)
-	cursorPos := renderEditor.CursorPosition(contentWidth)
-
-	visibleStart := visibleLineStart(len(wrapped), f.maxContentLines(), cursorPos.Line)
+	layout := f.layout(width)
+	visibleStart := visibleLineStart(len(layout.lines), f.maxContentLines(), layout.cursorLine)
 	visibleEnd := visibleStart + f.maxContentLines()
-	if visibleEnd > len(wrapped) {
-		visibleEnd = len(wrapped)
+	if visibleEnd > len(layout.lines) {
+		visibleEnd = len(layout.lines)
 	}
 	lines := make([]string, 0, visibleEnd-visibleStart+2)
-	for _, line := range wrapped[visibleStart:visibleEnd] {
-		lines = append(lines, padDisplayRight(renderText[line.Start:line.End], contentWidth))
+	for _, line := range layout.lines[visibleStart:visibleEnd] {
+		lines = append(lines, padDisplayRight(layout.text[line.Start:line.End], width))
 	}
 	cursor := FieldCursor{}
 	if f.Cursor {
-		cursorLine := cursorPos.Line - visibleStart
+		cursorLine := layout.cursorLine - visibleStart
 		if cursorLine >= 0 && cursorLine < len(lines) {
 			cursor.Visible = true
 			cursor.Row = cursorLine
-			cursor.Col = normalizeCursorCol(cursorPos.Col, contentWidth)
+			cursor.Col = normalizeCursorCol(layout.cursorCol, width)
 		}
 	}
 
@@ -81,26 +86,121 @@ func (f *Field) Render(width int) RenderResult {
 	return RenderResult{Lines: lines, Width: width, Cursor: cursor}
 }
 
-func (f Field) displayTextAndCursorOffset() (string, int) {
+func (f *Field) MoveUp(width int) bool {
+	return f.moveVertical(width, -1)
+}
+
+func (f *Field) MoveDown(width int) bool {
+	return f.moveVertical(width, 1)
+}
+
+func (f *Field) moveVertical(width, delta int) bool {
+	if width < 1 {
+		width = 1
+	}
+	layout := f.layout(width)
+	if delta < 0 && layout.cursorLine == 0 {
+		changed := f.Editor.Cursor() != 0
+		f.Editor.SetCursor(0)
+		return changed
+	}
+	if delta > 0 && layout.cursorLine+1 >= len(layout.lines) {
+		next := len(f.Editor.Text())
+		changed := f.Editor.Cursor() != next
+		f.Editor.SetCursor(next)
+		return changed
+	}
+	targetLine := layout.lines[layout.cursorLine+delta]
+	targetCol := layout.cursorCol
+	prefixWidth := uniseg.StringWidth(f.Prefix)
+	currentHasPrefix := layout.lines[layout.cursorLine].Start < len(f.Prefix)
+	targetHasPrefix := targetLine.Start < len(f.Prefix)
+	switch {
+	case currentHasPrefix && !targetHasPrefix:
+		targetCol -= prefixWidth
+	case !currentHasPrefix && targetHasPrefix:
+		targetCol += prefixWidth
+	}
+	if targetCol < 0 {
+		targetCol = 0
+	}
+	targetDisplayOffset := cursorAtDisplayColumn(layout.text, targetLine, targetCol)
+	next := layout.sourceCursor(targetDisplayOffset)
+	changed := f.Editor.Cursor() != next
+	f.Editor.SetCursor(next)
+	return changed
+}
+
+func (f Field) layout(width int) fieldLayout {
+	display := f.display()
+	renderText := f.Prefix + display.text
+	cursor := len(f.Prefix) + display.cursor
+	cursorBoundaries := make([]fieldCursorBoundary, 0, len(display.cursorBoundaries)+1)
+	cursorBoundaries = append(cursorBoundaries, fieldCursorBoundary{})
+	for _, boundary := range display.cursorBoundaries {
+		cursorBoundaries = append(cursorBoundaries, fieldCursorBoundary{
+			displayOffset: len(f.Prefix) + boundary.displayOffset,
+			sourceOffset:  boundary.sourceOffset,
+		})
+	}
+	if f.Editor.Text() == "" && f.Placeholder != "" {
+		renderText = f.Prefix + f.Placeholder
+		cursor = len(f.Prefix)
+	}
+	renderEditor := NewEditor()
+	renderEditor.Replace(renderText)
+	renderEditor.SetCursor(cursor)
+	position := renderEditor.CursorPosition(width)
+	return fieldLayout{
+		text:             renderText,
+		lines:            renderEditor.WrappedLines(width),
+		cursorLine:       position.Line,
+		cursorCol:        position.Col,
+		cursorBoundaries: cursorBoundaries,
+	}
+}
+
+func (l fieldLayout) sourceCursor(displayOffset int) int {
+	cursor := 0
+	for _, boundary := range l.cursorBoundaries {
+		if boundary.displayOffset > displayOffset {
+			break
+		}
+		cursor = boundary.sourceOffset
+	}
+	return cursor
+}
+
+func (f Field) display() fieldDisplay {
 	text := f.Editor.Text()
 	cursor := f.Editor.Cursor()
-	if f.Mask == 0 {
-		return text, cursor
-	}
+	clusters := graphemes(text)
 	var out strings.Builder
 	cursorOffset := 0
-	for _, cluster := range graphemes(text) {
+	cursorBoundaries := make([]fieldCursorBoundary, 1, len(clusters)+1)
+	for _, cluster := range clusters {
 		start := out.Len()
-		if cluster.text == "\n" {
+		switch {
+		case cluster.text == "\n":
 			out.WriteByte('\n')
-		} else {
+		case f.Mask != 0:
 			out.WriteRune(f.Mask)
+		default:
+			out.WriteString(cluster.text)
 		}
 		if cluster.end <= cursor {
 			cursorOffset += out.Len() - start
 		}
+		cursorBoundaries = append(cursorBoundaries, fieldCursorBoundary{
+			displayOffset: out.Len(),
+			sourceOffset:  cluster.end,
+		})
 	}
-	return out.String(), cursorOffset
+	return fieldDisplay{
+		text:             out.String(),
+		cursor:           cursorOffset,
+		cursorBoundaries: cursorBoundaries,
+	}
 }
 
 func (f Field) maxContentLines() int {

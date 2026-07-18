@@ -5,6 +5,7 @@ import (
 
 	"core/cli/app/commands"
 	"core/cli/tui"
+	tuiinput "core/cli/tui/input"
 	"core/cli/tui/ongoing"
 	"core/cli/tui/transcriptrender"
 	"core/shared/apicontract"
@@ -48,25 +49,22 @@ type uiRuntimeFeatureState struct {
 }
 
 type uiInputFeatureState struct {
-	input                    string
-	inputCursor              int // rune index; -1 means "track tail"
-	inputKillBuffer          string
-	mainInputDraftToken      uint64
-	promptHistory            []string
-	promptHistorySelection   int
-	promptHistoryDraft       string
-	promptHistoryDraftCursor int
-	activity                 uiActivity
-	runtimeLifecycle         uiRuntimeLifecycle
-	reviewerEnabled          bool
-	reviewerMode             string
-	autoCompactionEnabled    bool
-	questionsEnabled         bool
-	conversationFreshness    clientui.ConversationFreshness
-	localConversationTurn    bool
-	runtimeControlToken      uint64
-	runtimeControlTokens     map[runtimeControlOperation]uint64
-	runtimeControlPending    map[runtimeControlOperation]runtimeControlPendingState
+	mainEditor             tuiinput.Editor
+	mainInputDraftToken    uint64
+	promptHistory          []string
+	promptHistorySelection *int
+	promptHistoryDraft     *tuiinput.EditorSnapshot
+	activity               uiActivity
+	runtimeLifecycle       uiRuntimeLifecycle
+	reviewerEnabled        bool
+	reviewerMode           string
+	autoCompactionEnabled  bool
+	questionsEnabled       bool
+	conversationFreshness  clientui.ConversationFreshness
+	localConversationTurn  bool
+	runtimeControlToken    uint64
+	runtimeControlTokens   map[runtimeControlOperation]uint64
+	runtimeControlPending  map[runtimeControlOperation]runtimeControlPendingState
 
 	// UI-side post-turn input queue. It may contain slash commands, shell
 	// commands, and other client-only actions; server queues only runtime

@@ -373,7 +373,7 @@ func persistSessionDraftToServer(ctx context.Context, server sessionLifecycleCli
 	_, err := server.SessionLifecycleClient().PersistInputDraft(ctx, serverapi.SessionPersistInputDraftRequest{
 		ClientRequestID: uuid.NewString(),
 		SessionID:       strings.TrimSpace(sessionID),
-		Input:           ui.input,
+		Input:           ui.mainEditor.Text(),
 		RecoveryBuffers: ui.sessionDraftRecoveryBuffers(),
 	})
 	return err

@@ -137,10 +137,10 @@ func (c uiInputController) queueOrStartSubmission(text string) (tea.Model, tea.C
 	if blocked, disconnectCmd := c.blockDisconnectedSubmission(false, ""); blocked {
 		return m, disconnectCmd
 	}
-	draftText, draftCursor, restoreDraft := m.capturePromptHistoryDraftForReuse()
+	draft := m.capturePromptHistoryDraftForReuse()
 	m.queueInput(text)
 	if c.preservePromptHistoryDraftForQueuedText(text) {
-		m.restoreCapturedPromptHistoryDraft(draftText, draftCursor, restoreDraft)
+		m.restoreCapturedPromptHistoryDraft(draft)
 	} else {
 		m.resetPromptHistoryNavigation()
 	}
@@ -198,12 +198,13 @@ func (c uiInputController) restoreQueuedMessagesIntoInput() {
 	joined := strings.Join(queuedInputTexts(m.queued), "\n\n")
 	m.queued = nil
 	newInput := joined
-	if strings.TrimSpace(m.input) == "" {
+	current := m.mainEditor.Text()
+	if strings.TrimSpace(current) == "" {
 		newInput = joined
 	} else {
-		newInput = strings.TrimRight(m.input, "\n") + "\n\n" + joined
+		newInput = strings.TrimRight(current, "\n") + "\n\n" + joined
 	}
-	m.replaceMainInput(newInput, -1)
+	m.replaceMainInputAtEnd(newInput)
 }
 
 func (c uiInputController) restoreSubmittedTextIntoInput(text string) {
@@ -213,10 +214,11 @@ func (c uiInputController) restoreSubmittedTextIntoInput(text string) {
 		return
 	}
 	newInput := submitted
-	if strings.TrimSpace(m.input) != "" {
-		newInput = strings.TrimRight(m.input, "\n") + "\n\n" + submitted
+	current := m.mainEditor.Text()
+	if strings.TrimSpace(current) != "" {
+		newInput = strings.TrimRight(current, "\n") + "\n\n" + submitted
 	}
-	m.replaceMainInput(newInput, -1)
+	m.replaceMainInputAtEnd(newInput)
 }
 
 func (c uiInputController) restorePendingInjectedIntoInput() tea.Cmd {
@@ -234,12 +236,13 @@ func (c uiInputController) restorePendingInjectedIntoInput() tea.Cmd {
 	joined := strings.Join(queuedUserMessageTexts(pending), "\n\n")
 	m.pendingInjected = nil
 	newInput := joined
-	if strings.TrimSpace(m.input) == "" {
+	current := m.mainEditor.Text()
+	if strings.TrimSpace(current) == "" {
 		newInput = joined
 	} else {
-		newInput = strings.TrimRight(m.input, "\n") + "\n\n" + joined
+		newInput = strings.TrimRight(current, "\n") + "\n\n" + joined
 	}
-	m.replaceMainInput(newInput, -1)
+	m.replaceMainInputAtEnd(newInput)
 	return tea.Batch(cmds...)
 }
 
@@ -314,7 +317,7 @@ func (m *uiModel) shouldContinueQueuedInputAutoDrain() bool {
 	if m.inputMode() != uiInputModeMain {
 		return false
 	}
-	return strings.TrimSpace(m.input) == ""
+	return strings.TrimSpace(m.mainEditor.Text()) == ""
 }
 
 func (m *uiModel) popQueued() queuedInputItem {
@@ -559,11 +562,12 @@ func (c uiInputController) restoreInjectedTextIntoInput(text string) {
 	if trimmed == "" {
 		return
 	}
-	if strings.TrimSpace(m.input) == "" {
-		m.replaceMainInput(trimmed, -1)
+	current := m.mainEditor.Text()
+	if strings.TrimSpace(current) == "" {
+		m.replaceMainInputAtEnd(trimmed)
 		return
 	}
-	m.replaceMainInput(strings.TrimRight(m.input, "\n")+"\n\n"+trimmed, -1)
+	m.replaceMainInputAtEnd(strings.TrimRight(current, "\n") + "\n\n" + trimmed)
 }
 
 func (m *uiModel) replacePendingInjectedID(oldID string, next clientui.QueuedUserMessage) {

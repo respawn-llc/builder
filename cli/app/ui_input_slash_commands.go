@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"core/cli/app/commands"
+	tuiinput "core/cli/tui/input"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -13,7 +14,7 @@ func (c uiInputController) handleQueuedSlashCommandInput(text string) (bool, tea
 	m := c.model
 	selection := m.resolveSlashCommandSelection(text)
 	if selection.shouldAutocomplete() {
-		m.replaceMainInput(selection.autocompleteText(), -1)
+		m.replaceMainInputAtEnd(selection.autocompleteText())
 		return true, m, nil
 	}
 	if !selection.hasCommand || selection.commandText() == "" {
@@ -46,19 +47,19 @@ func (c uiInputController) handleEnteredSlashCommandInput(text string) (bool, te
 		}
 	}
 	if commandResult := m.commandRegistry.Execute(commandText); commandResult.Handled {
-		draftText, draftCursor, restoreDraft := m.capturePromptHistoryDraftForReuse()
+		draft := m.capturePromptHistoryDraftForReuse()
 		recordCmd := m.recordPromptHistory(commandText)
-		m.clearCommandInput(command, draftText, draftCursor, restoreDraft)
+		m.clearCommandInput(command, draft)
 		next, cmd := c.applyCommandResultWithPreSubmitQueuePosition(commandResult, preSubmitQueueBack)
 		return true, next, finalizeSlashCommandCmd(commandResult.Action, cmd, recordCmd)
 	}
 	return false, m, nil
 }
 
-func (m *uiModel) clearCommandInput(command commands.Command, draftText string, draftCursor int, restoreDraft bool) {
+func (m *uiModel) clearCommandInput(command commands.Command, draft *tuiinput.EditorSnapshot) {
 	m.clearInput()
 	if command.PreservePromptHistoryDraft {
-		m.restoreCapturedPromptHistoryDraft(draftText, draftCursor, restoreDraft)
+		m.restoreCapturedPromptHistoryDraft(draft)
 		return
 	}
 	m.resetPromptHistoryNavigation()

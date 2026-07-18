@@ -67,8 +67,9 @@ func (l uiViewLayout) composeStandardFrame(style uiStyles) (uiRenderFrame, bool)
 	}
 	frame := uiRenderFrame{width: width, height: height, statusLine: l.renderStatusLine(width, style), padToHeight: true, tailOnly: true}
 	if m.surface() == uiSurfaceOngoingTranscript {
-		frame.inputPane = l.renderInputLines(width, style)
-		frame.inputCursor = l.inputPaneCursor(width)
+		inputPane := l.inputPaneProjection(width, height, style)
+		frame.inputPane = inputPane.Lines
+		frame.inputCursor = inputPane.Cursor
 		frame.queuePane = l.renderQueuedMessagesPane(width)
 		frame.pickerPane = l.renderActivePicker(width)
 	}

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func TestProjectItemPreservesServerSelectorAndTopologyFacts(t *testing.T) {
@@ -45,7 +46,7 @@ func testWorktreeItem(t *testing.T, id, name, root, branch string, main, current
 				Git: serverapi.WorktreeGitFacts{
 					CanonicalRoot: root,
 					HeadObject:    "deadbeef",
-					BranchRef:     stringPointer("refs/heads/" + branch),
+					BranchRef:     textutil.OptionalTrimmedString("refs/heads/" + branch),
 					BranchName:    &branchValue,
 					IsMain:        main,
 					PathAvailable: true,

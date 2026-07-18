@@ -221,6 +221,7 @@
 - An unfocused desktop window attempts a native or browser system notification when the local notification backend can deliver one and activation can focus Kent task detail. macOS, Windows, Linux, and browser backends may advertise support; unknown Tauri platforms do not.
 - Native notification activation carries Kent's structured task-detail target. Clicking the delivered notification focuses the main Kent window and opens the matching task detail focus target in the overlay sidebar, not a native child task-detail window.
 - Question notifications focus the first unresolved question in the batch. Approval notifications focus the matching approval item. Error-interrupted-run notifications focus the matching interrupted-run attention item in task detail.
+- Attention payload messages are optional structured context. Clients own and localize fallback display copy when a message is absent; the server does not synthesize user-facing notification copy.
 - Resolved or cleared notification events dismiss matching persistent in-app Sonners.
 - Notification delivery is best-effort and must not affect workflow state. Desktop debug builds fail fast with diagnostic information on notification delivery failures; release builds ignore delivery failures and log when logging is wired.
 

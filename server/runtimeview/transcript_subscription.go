@@ -196,8 +196,8 @@ func transcriptBackgroundActivity(evt runtime.BackgroundShellEvent) clientui.Tra
 		OwnerStepID:       mustTranscriptStepID(evt.OwnerStepID, "background activity owner"),
 		Command:           evt.Command,
 		Workdir:           evt.Workdir,
-		LogPath:           optionalTrimmedString(evt.LogPath),
-		Preview:           optionalTrimmedString(evt.Preview),
+		LogPath:           textutil.OptionalTrimmedString(evt.LogPath),
+		Preview:           textutil.OptionalTrimmedString(evt.Preview),
 		ExitCode:          textutil.Pointer(evt.ExitCode),
 		UserRequestedKill: evt.UserRequestedKill,
 		NoticeSuppressed:  evt.NoticeSuppressed,
@@ -221,7 +221,7 @@ func TranscriptSessionIdentityFromRuntime(engine *runtime.Engine) clientui.Trans
 	}
 	return clientui.TranscriptSessionIdentity{
 		SessionID:             mustTranscriptSessionID(engine.SessionID(), "runtime session identity"),
-		SessionName:           optionalTrimmedString(engine.SessionName()),
+		SessionName:           textutil.OptionalTrimmedString(engine.SessionName()),
 		ConversationFreshness: ConversationFreshnessFromSession(engine.ConversationFreshness()),
 	}
 }
@@ -327,11 +327,11 @@ func transcriptQueuedMessageStateMessages(evt runtime.Event) []clientui.Transcri
 	}
 	switch status.Status {
 	case runtime.QueuedUserMessageAccepted:
-		state.Text = optionalTrimmedString(status.RestoreText)
+		state.Text = textutil.OptionalTrimmedString(status.RestoreText)
 	case runtime.QueuedUserMessageFailed:
 		reason := clientui.QueuedUserMessageFailureReason(status.FailureReason)
 		state.FailureReason = &reason
-		state.Text = optionalTrimmedString(status.RestoreText)
+		state.Text = textutil.OptionalTrimmedString(status.RestoreText)
 	case runtime.QueuedUserMessageSubmitted, runtime.QueuedUserMessageDiscarded:
 	default:
 		panic(fmt.Sprintf("runtime queued-message event has unknown status %q", status.Status))
@@ -489,7 +489,7 @@ func transcriptNoticeFromFact(stepID string, fact *runtime.TranscriptNoticeRowFa
 		Reason:        clientui.TranscriptNoticeReason(strings.TrimSpace(fact.Reason)),
 		Severity:      clientui.TranscriptNoticeSeverity(strings.TrimSpace(fact.Severity)),
 		LegacyText:    optionalStringPointer(fact.LegacyText),
-		SourcePath:    optionalTrimmedString(fact.SourcePath),
+		SourcePath:    textutil.OptionalTrimmedString(fact.SourcePath),
 		Worktree:      transcriptWorktreeContext(fact.MessageType, fact.WorktreeContext),
 		CondensedText: optionalNonBlankString(fact.CondensedText),
 		CompactLabel:  optionalNonBlankString(fact.CompactLabel),
@@ -596,14 +596,6 @@ func transcriptAssistantAbortReason(reason string) clientui.AssistantStreamAbort
 	default:
 		panic(fmt.Sprintf("runtime assistant stream abort has unknown reason %q", reason))
 	}
-}
-
-func optionalTrimmedString(value string) *string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return nil
-	}
-	return &trimmed
 }
 
 func optionalNonBlankString(value string) *string {

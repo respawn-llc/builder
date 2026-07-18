@@ -26,7 +26,8 @@ func (l uiViewLayout) calcChatLines() int {
 		return chat
 	}
 
-	inputLines := l.inputPanelLineCount(l.effectiveWidth(), height)
+	inputPane := l.inputPaneProjection(l.effectiveWidth(), height, uiThemeStyles(l.model.theme))
+	inputLines := inputPane.PanelHeight
 	queuedLines := l.queuedPaneLineCount()
 	pickerLines := l.model.activePickerPresentation().lineCount
 	helpLines := len(l.renderHelpPane(l.effectiveWidth(), helpPaneMaxLines(height, inputLines, queuedLines, pickerLines), uiThemeStyles(l.model.theme)))
@@ -50,7 +51,7 @@ func (l uiViewLayout) syncViewport() {
 
 func (l uiViewLayout) shouldRenderSoftCursor() bool {
 	inputState := l.model.inputModeState()
-	return !l.shouldUseRealTerminalCursor() && inputState.ShowsMainInput
+	return !l.shouldUseRealTerminalCursor() && (inputState.ShowsMainInput || inputState.ShowsAskInput)
 }
 
 func (l uiViewLayout) shouldUseRealTerminalCursor() bool {

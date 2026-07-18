@@ -134,31 +134,31 @@ func TestOnboardingInputWordNavigationStaysInField(t *testing.T) {
 		name          string
 		key           tea.KeyMsg
 		initialCursor func(string) int
-		wantCursor    func(string, int) int
+		wantCursor    int
 	}{
 		{
 			name:          "alt-left",
 			key:           tea.KeyMsg{Type: tea.KeyLeft, Alt: true},
 			initialCursor: func(text string) int { return len([]rune(text)) },
-			wantCursor:    moveBufferCursorWordLeft,
+			wantCursor:    len([]rune("alpha beta ")),
 		},
 		{
 			name:          "alt-right",
 			key:           tea.KeyMsg{Type: tea.KeyRight, Alt: true},
 			initialCursor: func(string) int { return 0 },
-			wantCursor:    moveBufferCursorWordRight,
+			wantCursor:    len([]rune("alpha")),
 		},
 		{
 			name:          "alt-b",
 			key:           tea.KeyMsg{Type: tea.KeyRunes, Alt: true, Runes: []rune{'b'}},
 			initialCursor: func(text string) int { return len([]rune(text)) },
-			wantCursor:    moveBufferCursorWordLeft,
+			wantCursor:    len([]rune("alpha beta ")),
 		},
 		{
 			name:          "alt-f",
 			key:           tea.KeyMsg{Type: tea.KeyRunes, Alt: true, Runes: []rune{'f'}},
 			initialCursor: func(string) int { return 0 },
-			wantCursor:    moveBufferCursorWordRight,
+			wantCursor:    len([]rune("alpha")),
 		},
 	}
 
@@ -179,7 +179,7 @@ func TestOnboardingInputWordNavigationStaysInField(t *testing.T) {
 			if got := updated.input.Text(); got != input {
 				t.Fatalf("input after %s = %q, want %q", tt.name, got, input)
 			}
-			if got, want := runeOffsetForByteCursor(updated.input.Text(), updated.input.Cursor()), tt.wantCursor(input, initialCursor); got != want {
+			if got, want := runeOffsetForByteCursor(updated.input.Text(), updated.input.Cursor()), tt.wantCursor; got != want {
 				t.Fatalf("cursor after %s = %d, want %d", tt.name, got, want)
 			}
 		})

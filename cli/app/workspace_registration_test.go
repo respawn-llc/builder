@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"net"
+	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -21,6 +23,18 @@ import (
 	"core/shared/config"
 	"core/shared/sessioncontract"
 )
+
+type appMetadataTemplateFile struct {
+	relativePath string
+	mode         fs.FileMode
+	data         []byte
+}
+
+var appMetadataTemplate struct {
+	once  sync.Once
+	files []appMetadataTemplateFile
+	err   error
+}
 
 func registerAppWorkspace(t *testing.T, workspace string) {
 	t.Helper()
@@ -69,6 +83,7 @@ func loadAppTestConfig(t *testing.T, workspace string, opts config.LoadOptions) 
 
 func newAppMetadataProjectViewClient(t *testing.T, cfg config.App) apicontract.ProjectViewService {
 	t.Helper()
+	prepareAppTestPersistenceRoot(t, cfg.PersistenceRoot)
 	store, err := metadata.Open(cfg.PersistenceRoot)
 	if err != nil {
 		t.Fatalf("metadata.Open: %v", err)
@@ -231,11 +246,89 @@ func configureAppTestServerPort(t *testing.T) {
 
 func mustRegisterAppBinding(t *testing.T, persistenceRoot string, workspaceRoot string) metadata.Binding {
 	t.Helper()
+	prepareAppTestPersistenceRoot(t, persistenceRoot)
 	binding, err := metadata.RegisterBinding(context.Background(), persistenceRoot, workspaceRoot)
 	if err != nil {
 		t.Fatalf("RegisterBinding: %v", err)
 	}
 	return binding
+}
+
+func prepareAppTestPersistenceRoot(t *testing.T, persistenceRoot string) {
+	t.Helper()
+	appMetadataTemplate.once.Do(func() {
+		templateRoot := t.TempDir()
+		store, err := metadata.Open(templateRoot)
+		if err != nil {
+			appMetadataTemplate.err = err
+			return
+		}
+		if err := store.Close(); err != nil {
+			appMetadataTemplate.err = err
+			return
+		}
+		appMetadataTemplate.files, appMetadataTemplate.err = snapshotAppMetadataTemplate(templateRoot)
+	})
+	if appMetadataTemplate.err != nil {
+		t.Fatalf("initialize metadata template: %v", appMetadataTemplate.err)
+	}
+	for _, file := range appMetadataTemplate.files {
+		target := filepath.Join(persistenceRoot, file.relativePath)
+		if _, err := os.Stat(target); err == nil {
+			return
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("stat metadata template destination %q: %v", target, err)
+		}
+	}
+	for _, file := range appMetadataTemplate.files {
+		target := filepath.Join(persistenceRoot, file.relativePath)
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			t.Fatalf("create metadata template directory %q: %v", filepath.Dir(target), err)
+		}
+		if err := os.WriteFile(target, file.data, file.mode.Perm()); err != nil {
+			t.Fatalf("copy metadata template file %q: %v", target, err)
+		}
+	}
+}
+
+func snapshotAppMetadataTemplate(root string) ([]appMetadataTemplateFile, error) {
+	files := make([]appMetadataTemplateFile, 0, 1)
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return errors.New("metadata template contains a non-regular file")
+		}
+		relativePath, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		files = append(files, appMetadataTemplateFile{
+			relativePath: relativePath,
+			mode:         info.Mode(),
+			data:         data,
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(files) == 0 {
+		return nil, errors.New("metadata template contains no database files")
+	}
+	return files, nil
 }
 
 func createAuthoritativeAppSession(t *testing.T, persistenceRoot string, workspaceRoot string) *session.Store {

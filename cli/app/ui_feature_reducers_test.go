@@ -120,8 +120,8 @@ func TestUIUpdateRoutesClipboardPasteMessagesThroughReducer(t *testing.T) {
 	})
 	updated := next.(*uiModel)
 
-	if updated.input != "/tmp/image.png" {
-		t.Fatalf("expected clipboard reducer to insert pasted image path, got %q", updated.input)
+	if testMainInput(updated) != "/tmp/image.png" {
+		t.Fatalf("expected clipboard reducer to insert pasted image path, got %q", testMainInput(updated))
 	}
 	if cmd != nil {
 		t.Fatalf("did not expect command after successful clipboard image paste, got %T", cmd())

@@ -135,8 +135,7 @@ func TestOngoingTranscriptDeliveryKeepsCursorAbsentForAskOptionPicker(t *testing
 		WithUIOngoingSurface(surface),
 		WithUITerminalCursorState(newUITerminalCursorState()),
 	), 77, 34)
-	m.input = strings.Repeat("x", 91)
-	m.inputCursor = -1
+	testSetMainInput(m, strings.Repeat("x", 91))
 	m.ongoingTranscript = newNoopOngoingTranscriptController(surface, m.ongoingFrameInput)
 
 	if _, _, err := m.ongoingTranscript.Accept(ongoingHydrationMessage(1)); err != nil {
@@ -159,7 +158,7 @@ func TestOngoingTranscriptDeliveryKeepsCursorAbsentForAskOptionPicker(t *testing
 	if got := m.inputMode(); got != uiInputModeAsk {
 		t.Fatalf("input mode = %q, want ask", got)
 	}
-	if got := m.layout().inputPaneCursor(77); got.Visible {
+	if got := m.layout().inputPaneProjection(77, 0, uiThemeStyles(m.theme)).Cursor; got.Visible {
 		t.Fatalf("ask option picker cursor = %+v, want absent", got)
 	}
 
@@ -199,7 +198,7 @@ func TestNativeOngoingRepaintKeepsControllerLiveFrameSections(t *testing.T) {
 	}
 	spySurface.calls = nil
 
-	m.input = "typing while prompt is pending"
+	testSetMainInput(m, "typing while prompt is pending")
 	_ = m.renderNativeOngoingSurface()
 
 	if got, want := spySurface.callKinds(), []string{"render"}; !reflect.DeepEqual(got, want) {
@@ -230,8 +229,8 @@ func TestNativeOngoingClipboardPasteRepaintsInput(t *testing.T) {
 	if got, want := spySurface.callKinds(), []string{"render"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("surface calls = %v, want %v", got, want)
 	}
-	if updated.input != "/tmp/kent-clipboard.png" {
-		t.Fatalf("input = %q, want pasted clipboard image path", updated.input)
+	if testMainInput(updated) != "/tmp/kent-clipboard.png" {
+		t.Fatalf("input = %q, want pasted clipboard image path", testMainInput(updated))
 	}
 	section, ok := frameSection(updated.ongoingFrameInput(), ongoing.FrameSectionInput)
 	if !ok {

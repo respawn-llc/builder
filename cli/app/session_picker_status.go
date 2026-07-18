@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"core/cli/app/internal/status"
+	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -43,23 +44,15 @@ func collectSessionPickerStatusCmd(header sessionPickerHeaderInfo) tea.Cmd {
 		}
 		var model *string
 		if sessionPickerStatusHasModel(req) {
-			model = optionalSessionPickerStatusText(base.Model.Summary)
+			model = textutil.OptionalTrimmedString(base.Model.Summary)
 		}
 		return sessionPickerStatusMsg{
-			cwd:    optionalSessionPickerStatusText(statusDisplayPath(base.Workdir, "")),
+			cwd:    textutil.OptionalTrimmedString(statusDisplayPath(base.Workdir, "")),
 			branch: branch,
-			auth:   optionalSessionPickerStatusText(status.AuthDisplayLabel(authInfo)),
+			auth:   textutil.OptionalTrimmedString(status.AuthDisplayLabel(authInfo)),
 			model:  model,
 		}
 	}
-}
-
-func optionalSessionPickerStatusText(value string) *string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return nil
-	}
-	return &trimmed
 }
 
 func sessionPickerStatusRequestUseful(req uiStatusRequest, authManager status.AuthStateResolver) bool {

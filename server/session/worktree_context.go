@@ -10,11 +10,7 @@ import (
 )
 
 func OptionalWorktreeBranch(value string) *string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return nil
-	}
-	return &trimmed
+	return textutil.OptionalTrimmedString(value)
 }
 
 func NormalizeWorktreeReminderState(state WorktreeReminderState) (WorktreeReminderState, error) {

@@ -15,130 +15,115 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 )
 
-// ErrViewImageOutputNotMaterialized is returned when a view_image input_file
-// tool output reaches request serialization without first being materialized as
-// provider raw input items. Callers match it via errors.Is.
-var ErrViewImageOutputNotMaterialized = errors.New("view_image input_file outputs must be materialized as provider raw input items before request serialization")
+// ErrOpenAIInputItemUnprepared reports that provider-neutral history reached
+// the OpenAI serializer without a valid provider-ready Raw payload.
+var ErrOpenAIInputItemUnprepared = errors.New("openai input item is not prepared")
+
+type OpenAIInputPreparationDetail string
+
+const (
+	OpenAIInputPreparationMissingRaw           OpenAIInputPreparationDetail = "missing_raw"
+	OpenAIInputPreparationInvalidRaw           OpenAIInputPreparationDetail = "invalid_raw"
+	OpenAIInputInvariantEmptyContent           OpenAIInputPreparationDetail = "empty_content"
+	OpenAIInputInvariantEmptyCallID            OpenAIInputPreparationDetail = "empty_call_id"
+	OpenAIInputInvariantEmptyArguments         OpenAIInputPreparationDetail = "empty_arguments"
+	OpenAIInputInvariantInvalidOutputJSON      OpenAIInputPreparationDetail = "invalid_output_json"
+	OpenAIInputInvariantEmptyReasoningID       OpenAIInputPreparationDetail = "empty_reasoning_id"
+	OpenAIInputInvariantEmptyCompactionContent OpenAIInputPreparationDetail = "empty_compaction_content"
+	OpenAIInputInvariantUnsupportedType        OpenAIInputPreparationDetail = "unsupported_type"
+)
+
+type OpenAIInputItemPreparationError struct {
+	Index     int
+	Type      ResponseItemType
+	Name      *string
+	CallID    *string
+	State     OpenAIInputPreparationDetail
+	Invariant OpenAIInputPreparationDetail
+}
+
+func (e *OpenAIInputItemPreparationError) Error() string {
+	return fmt.Sprintf("openai input item at index %d is not prepared (type=%q name=%s call_id=%s state=%q invariant=%q)", e.Index, e.Type, formatOptionalOpenAIInputFact(e.Name), formatOptionalOpenAIInputFact(e.CallID), e.State, e.Invariant)
+}
+
+func (e *OpenAIInputItemPreparationError) Unwrap() error { return ErrOpenAIInputItemUnprepared }
 
 func buildResponsesInput(canonical []ResponseItem) ([]responses.ResponseInputItemUnionParam, error) {
 	items := make([]responses.ResponseInputItemUnionParam, 0, len(canonical))
 	for idx, item := range canonical {
-		if raw := bytes.TrimSpace(item.Raw); len(raw) > 0 {
-			if !json.Valid(raw) {
-				return nil, fmt.Errorf("invalid raw openai input item at index %d", idx)
-			}
-			items = append(items, param.Override[responses.ResponseInputItemUnionParam](append(json.RawMessage(nil), raw...)))
-			continue
+		raw := bytes.TrimSpace(item.Raw)
+		if len(raw) == 0 {
+			return nil, newOpenAIInputItemPreparationError(idx, item, OpenAIInputPreparationMissingRaw)
 		}
-		switch item.Type {
-		case ResponseItemTypeMessage:
-			if strings.TrimSpace(item.Content) == "" {
-				return nil, fmt.Errorf("message input item at index %d has empty content", idx)
-			}
-			items = append(items, messageInput(item, item.Content))
-		case ResponseItemTypeFunctionCall:
-			callID := textutil.FirstNonEmpty(strings.TrimSpace(item.CallID), strings.TrimSpace(item.ID))
-			if callID == "" {
-				return nil, fmt.Errorf("function_call input item at index %d has empty call_id", idx)
-			}
-			arguments := strings.TrimSpace(string(item.Arguments))
-			if arguments == "" {
-				return nil, fmt.Errorf("function_call input item at index %d has empty arguments", idx)
-			}
-			items = append(items, responses.ResponseInputItemParamOfFunctionCall(arguments, callID, strings.TrimSpace(item.Name)))
-		case ResponseItemTypeFunctionCallOutput:
-			callID := strings.TrimSpace(item.CallID)
-			if callID == "" {
-				return nil, fmt.Errorf("function_call_output input item at index %d has empty call_id", idx)
-			}
-			converted, err := functionCallOutputInputItemFromPreparedOutput(callID, item.Name, item.Output)
-			if err != nil {
-				return nil, fmt.Errorf("function_call_output input item at index %d: %w", idx, err)
-			}
-			items = append(items, converted)
-		case ResponseItemTypeCustomToolCall:
-			callID := textutil.FirstNonEmpty(strings.TrimSpace(item.CallID), strings.TrimSpace(item.ID))
-			if callID == "" {
-				return nil, fmt.Errorf("custom_tool_call input item at index %d has empty call_id", idx)
-			}
-			items = append(items, responses.ResponseInputItemParamOfCustomToolCall(callID, item.CustomInput, strings.TrimSpace(item.Name)))
-		case ResponseItemTypeCustomToolOutput:
-			callID := strings.TrimSpace(item.CallID)
-			if callID == "" {
-				return nil, fmt.Errorf("custom_tool_call_output input item at index %d has empty call_id", idx)
-			}
-			output, err := providerOutputStringFromRaw(item.Output)
-			if err != nil {
-				return nil, fmt.Errorf("custom_tool_call_output input item at index %d: %w", idx, err)
-			}
-			items = append(items, responses.ResponseInputItemParamOfCustomToolCallOutput(callID, output))
-		case ResponseItemTypeReasoning:
-			id := strings.TrimSpace(item.ID)
-			if id == "" {
-				return nil, fmt.Errorf("reasoning input item at index %d has empty id", idx)
-			}
-			reasoningParam := responses.ResponseReasoningItemParam{
-				ID:      id,
-				Summary: []responses.ResponseReasoningItemSummaryParam{},
-			}
-			for _, summary := range item.ReasoningSummary {
-				text := strings.TrimSpace(summary.Text)
-				if text == "" {
-					continue
-				}
-				reasoningParam.Summary = append(reasoningParam.Summary, responses.ResponseReasoningItemSummaryParam{
-					Text: text,
-					Type: "summary_text",
-				})
-			}
-			if encrypted := strings.TrimSpace(item.EncryptedContent); encrypted != "" {
-				reasoningParam.EncryptedContent = param.NewOpt(encrypted)
-			}
-			items = append(items, responses.ResponseInputItemUnionParam{OfReasoning: &reasoningParam})
-		case ResponseItemTypeCompaction:
-			encrypted := strings.TrimSpace(item.EncryptedContent)
-			if encrypted == "" {
-				return nil, fmt.Errorf("compaction input item at index %d has empty encrypted_content", idx)
-			}
-			compactionParam := responses.ResponseCompactionItemParam{EncryptedContent: encrypted}
-			if id := strings.TrimSpace(item.ID); id != "" {
-				compactionParam.ID = param.NewOpt(id)
-			}
-			items = append(items, responses.ResponseInputItemUnionParam{OfCompaction: &compactionParam})
-		default:
-			if len(item.Raw) == 0 || !json.Valid(item.Raw) {
-				return nil, fmt.Errorf("unsupported input item at index %d has no valid raw provider payload", idx)
-			}
-			items = append(items, param.Override[responses.ResponseInputItemUnionParam](item.Raw))
+		if !json.Valid(raw) {
+			return nil, newOpenAIInputItemPreparationError(idx, item, OpenAIInputPreparationInvalidRaw)
 		}
+		items = append(items, param.Override[responses.ResponseInputItemUnionParam](append(json.RawMessage(nil), raw...)))
 	}
 	return items, nil
 }
 
-func messageInput(item ResponseItem, text string) responses.ResponseInputItemUnionParam {
-	role := strings.TrimSpace(string(item.Role))
-	role = strings.TrimSpace(role)
-	if role == string(RoleAssistant) {
-		content := []responses.ResponseOutputMessageContentUnionParam{{
-			OfOutputText: &responses.ResponseOutputTextParam{
-				Annotations: []responses.ResponseOutputTextAnnotationUnionParam{},
-				Text:        text,
-			},
-		}}
-		messageItem := responses.ResponseInputItemParamOfOutputMessage(content, "", responses.ResponseOutputMessageStatusCompleted)
-		if messageItem.OfOutputMessage != nil && item.Phase != "" {
-			messageItem.OfOutputMessage.Phase = responses.ResponseOutputMessagePhase(item.Phase)
-		}
-		return messageItem
+func newOpenAIInputItemPreparationError(index int, item ResponseItem, state OpenAIInputPreparationDetail) error {
+	invariant := unpreparedOpenAIInputInvariant(item)
+	if state == OpenAIInputPreparationInvalidRaw {
+		invariant = OpenAIInputPreparationInvalidRaw
 	}
+	return &OpenAIInputItemPreparationError{
+		Index: index, Type: item.Type, Name: textutil.OptionalTrimmedString(item.Name),
+		CallID: textutil.OptionalTrimmedString(textutil.FirstNonEmpty(item.CallID, item.ID)), State: state, Invariant: invariant,
+	}
+}
 
-	inputRole := string(RoleUser)
-	switch role {
-	case string(RoleSystem), string(RoleDeveloper), string(RoleUser):
-		inputRole = role
+func formatOptionalOpenAIInputFact(value *string) string {
+	if value == nil {
+		return "null"
 	}
-	content := responses.ResponseInputMessageContentListParam{responses.ResponseInputContentParamOfInputText(text)}
-	return responses.ResponseInputItemParamOfInputMessage(content, inputRole)
+	return fmt.Sprintf("%q", *value)
+}
+
+func unpreparedOpenAIInputInvariant(item ResponseItem) OpenAIInputPreparationDetail {
+	switch item.Type {
+	case ResponseItemTypeMessage:
+		if strings.TrimSpace(item.Content) == "" {
+			return OpenAIInputInvariantEmptyContent
+		}
+	case ResponseItemTypeFunctionCall:
+		if textutil.FirstNonEmpty(strings.TrimSpace(item.CallID), strings.TrimSpace(item.ID)) == "" {
+			return OpenAIInputInvariantEmptyCallID
+		}
+		if strings.TrimSpace(string(item.Arguments)) == "" {
+			return OpenAIInputInvariantEmptyArguments
+		}
+	case ResponseItemTypeFunctionCallOutput:
+		if strings.TrimSpace(item.CallID) == "" {
+			return OpenAIInputInvariantEmptyCallID
+		}
+		if !json.Valid(item.Output) {
+			return OpenAIInputInvariantInvalidOutputJSON
+		}
+	case ResponseItemTypeCustomToolCall:
+		if textutil.FirstNonEmpty(strings.TrimSpace(item.CallID), strings.TrimSpace(item.ID)) == "" {
+			return OpenAIInputInvariantEmptyCallID
+		}
+	case ResponseItemTypeCustomToolOutput:
+		if strings.TrimSpace(item.CallID) == "" {
+			return OpenAIInputInvariantEmptyCallID
+		}
+		if !json.Valid(item.Output) {
+			return OpenAIInputInvariantInvalidOutputJSON
+		}
+	case ResponseItemTypeReasoning:
+		if strings.TrimSpace(item.ID) == "" {
+			return OpenAIInputInvariantEmptyReasoningID
+		}
+	case ResponseItemTypeCompaction:
+		if strings.TrimSpace(item.EncryptedContent) == "" {
+			return OpenAIInputInvariantEmptyCompactionContent
+		}
+	default:
+		return OpenAIInputInvariantUnsupportedType
+	}
+	return OpenAIInputPreparationMissingRaw
 }
 
 func normalizeToolArguments(arguments string) string {
@@ -560,160 +545,4 @@ func providerOutputStringFromRaw(raw json.RawMessage) (string, error) {
 		return text, nil
 	}
 	return trimmed, nil
-}
-
-func functionCallOutputInputItemFromPreparedOutput(callID string, toolName string, raw json.RawMessage) (responses.ResponseInputItemUnionParam, error) {
-	if contentItems, ok := functionCallOutputContentItemsFromRaw(raw); ok {
-		if strings.TrimSpace(toolName) == string(toolspec.ToolViewImage) {
-			if _, promoted := promoteFunctionOutputFilesToInputMessage(contentItems); promoted {
-				return responses.ResponseInputItemUnionParam{}, ErrViewImageOutputNotMaterialized
-			}
-		}
-		return responses.ResponseInputItemParamOfFunctionCallOutput(callID, contentItems), nil
-	}
-	output, err := providerOutputStringFromRaw(raw)
-	if err != nil {
-		return responses.ResponseInputItemUnionParam{}, err
-	}
-	return responses.ResponseInputItemParamOfFunctionCallOutput(callID, output), nil
-}
-
-func promoteFunctionOutputFilesToInputMessage(contentItems responses.ResponseFunctionCallOutputItemListParam) (responses.ResponseInputMessageContentListParam, bool) {
-	out := make(responses.ResponseInputMessageContentListParam, 0, len(contentItems))
-	hasInputFile := false
-
-	for _, item := range contentItems {
-		switch {
-		case item.OfInputText != nil:
-			out = append(out, responses.ResponseInputContentParamOfInputText(item.OfInputText.Text))
-		case item.OfInputImage != nil:
-			image := responses.ResponseInputImageParam{}
-			detail := responses.ResponseInputImageDetailAuto
-			switch item.OfInputImage.Detail {
-			case responses.ResponseInputImageContentDetailLow:
-				detail = responses.ResponseInputImageDetailLow
-			case responses.ResponseInputImageContentDetailHigh:
-				detail = responses.ResponseInputImageDetailHigh
-			case responses.ResponseInputImageContentDetailAuto:
-				detail = responses.ResponseInputImageDetailAuto
-			}
-			image.Detail = detail
-			if item.OfInputImage.ImageURL.Valid() {
-				image.ImageURL = item.OfInputImage.ImageURL
-			}
-			if item.OfInputImage.FileID.Valid() {
-				image.FileID = item.OfInputImage.FileID
-			}
-			out = append(out, responses.ResponseInputContentUnionParam{OfInputImage: &image})
-		case item.OfInputFile != nil:
-			hasInputFile = true
-			file := responses.ResponseInputFileParam{}
-			if item.OfInputFile.FileData.Valid() {
-				file.FileData = item.OfInputFile.FileData
-			}
-			if item.OfInputFile.FileID.Valid() {
-				file.FileID = item.OfInputFile.FileID
-			}
-			if item.OfInputFile.FileURL.Valid() {
-				file.FileURL = item.OfInputFile.FileURL
-			}
-			if item.OfInputFile.Filename.Valid() {
-				file.Filename = item.OfInputFile.Filename
-			}
-			out = append(out, responses.ResponseInputContentUnionParam{OfInputFile: &file})
-		}
-	}
-
-	if !hasInputFile || len(out) == 0 {
-		return nil, false
-	}
-	return out, true
-}
-
-func functionCallOutputContentItemsFromRaw(raw json.RawMessage) (responses.ResponseFunctionCallOutputItemListParam, bool) {
-	trimmed := strings.TrimSpace(string(raw))
-	if trimmed == "" || !strings.HasPrefix(trimmed, "[") {
-		return nil, false
-	}
-
-	var arr []json.RawMessage
-	if err := json.Unmarshal(raw, &arr); err != nil {
-		return nil, false
-	}
-	if len(arr) == 0 {
-		return nil, false
-	}
-
-	out := make(responses.ResponseFunctionCallOutputItemListParam, 0, len(arr))
-	for _, rawItem := range arr {
-		item, ok := functionCallOutputContentItemFromRaw(rawItem)
-		if !ok {
-			return nil, false
-		}
-		out = append(out, item)
-	}
-	return out, true
-}
-
-func functionCallOutputContentItemFromRaw(raw json.RawMessage) (responses.ResponseFunctionCallOutputItemUnionParam, bool) {
-	var item struct {
-		Type     string `json:"type"`
-		Text     string `json:"text"`
-		ImageURL string `json:"image_url"`
-		Detail   string `json:"detail"`
-		FileID   string `json:"file_id"`
-		FileData string `json:"file_data"`
-		FileURL  string `json:"file_url"`
-		Filename string `json:"filename"`
-	}
-	if err := json.Unmarshal(raw, &item); err != nil {
-		return responses.ResponseFunctionCallOutputItemUnionParam{}, false
-	}
-
-	switch strings.ToLower(strings.TrimSpace(item.Type)) {
-	case "input_text":
-		return responses.ResponseFunctionCallOutputItemUnionParam{
-			OfInputText: &responses.ResponseInputTextContentParam{Text: item.Text},
-		}, true
-	case "input_image":
-		image := responses.ResponseInputImageContentParam{}
-		if v := strings.TrimSpace(item.ImageURL); v != "" {
-			image.ImageURL = param.NewOpt(v)
-		}
-		if v := strings.TrimSpace(item.FileID); v != "" {
-			image.FileID = param.NewOpt(v)
-		}
-		switch strings.ToLower(strings.TrimSpace(item.Detail)) {
-		case "low":
-			image.Detail = responses.ResponseInputImageContentDetailLow
-		case "high":
-			image.Detail = responses.ResponseInputImageContentDetailHigh
-		case "auto":
-			image.Detail = responses.ResponseInputImageContentDetailAuto
-		}
-		if !image.ImageURL.Valid() && !image.FileID.Valid() {
-			return responses.ResponseFunctionCallOutputItemUnionParam{}, false
-		}
-		return responses.ResponseFunctionCallOutputItemUnionParam{OfInputImage: &image}, true
-	case "input_file":
-		file := responses.ResponseInputFileContentParam{}
-		if v := strings.TrimSpace(item.FileData); v != "" {
-			file.FileData = param.NewOpt(v)
-		}
-		if v := strings.TrimSpace(item.FileURL); v != "" {
-			file.FileURL = param.NewOpt(v)
-		}
-		if v := strings.TrimSpace(item.FileID); v != "" {
-			file.FileID = param.NewOpt(v)
-		}
-		if v := strings.TrimSpace(item.Filename); v != "" {
-			file.Filename = param.NewOpt(v)
-		}
-		if !file.FileData.Valid() && !file.FileURL.Valid() && !file.FileID.Valid() {
-			return responses.ResponseFunctionCallOutputItemUnionParam{}, false
-		}
-		return responses.ResponseFunctionCallOutputItemUnionParam{OfInputFile: &file}, true
-	default:
-		return responses.ResponseFunctionCallOutputItemUnionParam{}, false
-	}
 }

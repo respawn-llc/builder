@@ -11,7 +11,7 @@ import (
 func TestAskEventDefersWhileDetailModeActive(t *testing.T) {
 	m, control := newProjectedPromptTestUIModel(t)
 	m.terminalGeometry = terminalGeometryKnown(90, 12)
-	m.input = "hidden draft"
+	testSetMainInput(m, "hidden draft")
 	m.layout().syncViewport()
 
 	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
@@ -25,8 +25,8 @@ func TestAskEventDefersWhileDetailModeActive(t *testing.T) {
 	}
 
 	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
-	if m.input != "hidden draft" {
-		t.Fatalf("expected deferred ask not to mutate hidden main input, got %q", m.input)
+	if testMainInput(m) != "hidden draft" {
+		t.Fatalf("expected deferred ask not to mutate hidden main input, got %q", testMainInput(m))
 	}
 
 	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyPgUp})
@@ -58,7 +58,7 @@ func TestAskEventDefersWhileDetailModeActive(t *testing.T) {
 func TestAskEventDefersWhileProcessListOverlayIsOpen(t *testing.T) {
 	m, control := newProjectedPromptTestUIModel(t)
 	m.terminalGeometry = terminalGeometryKnown(100, 14)
-	m.input = "/ps"
+	testSetMainInput(m, "/ps")
 
 	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	if !m.processList.open || m.surface() != uiSurfaceProcessList {
@@ -100,8 +100,7 @@ func TestAskEventDefersWhileProcessListOverlayIsOpen(t *testing.T) {
 func TestDetailModeIgnoresHiddenMainInputKeys(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.terminalGeometry = terminalGeometryKnown(90, 12)
-	m.input = "draft"
-	m.inputCursor = -1
+	testSetMainInput(m, "draft")
 	m.layout().syncViewport()
 
 	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
@@ -112,7 +111,7 @@ func TestDetailModeIgnoresHiddenMainInputKeys(t *testing.T) {
 	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyBackspace})
 	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
-	if m.input != "draft" {
-		t.Fatalf("expected hidden main input unchanged in detail mode, got %q", m.input)
+	if testMainInput(m) != "draft" {
+		t.Fatalf("expected hidden main input unchanged in detail mode, got %q", testMainInput(m))
 	}
 }

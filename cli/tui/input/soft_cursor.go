@@ -19,6 +19,10 @@ func RenderSoftCursorLines(width int, rendered RenderResult, lineStyle lipgloss.
 	return lines
 }
 
+func RenderSoftCursorLine(width int, line string, cursorCol int, lineStyle lipgloss.Style) string {
+	return renderLineWithSoftCursor(line, width, cursorCol, lineStyle)
+}
+
 func renderLineWithSoftCursor(line string, width int, cursorCol int, lineStyle lipgloss.Style) string {
 	if width < 1 {
 		return lineStyle.Render("")

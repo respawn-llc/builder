@@ -142,10 +142,10 @@ func WithUIStartupSubmitPromptHistoryRecorded(recorded bool) UIOption {
 
 func WithUIInitialInput(text string) UIOption {
 	return func(m *uiModel) {
-		if text == "" || m.input != "" {
+		if text == "" || m.mainEditor.Text() != "" {
 			return
 		}
-		m.replaceMainInput(text, -1)
+		m.replaceMainInputAtEnd(text)
 	}
 }
 

@@ -36,7 +36,7 @@ func TestTaskListSendsTypedFiltersAndSorts(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
 	defer restore()
 
-	_, stderr, code := runWorkflowRootCommand(
+	_, stderr, code := runRootCommand(
 		"task", "list",
 		"--project", "project-1",
 		"--workflow", taskListWorkflowSelector,
@@ -86,7 +86,7 @@ func TestTaskListLeavesDefaultSortToServer(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
 	defer restore()
 
-	_, stderr, code := runWorkflowRootCommand("task", "list", "--project", "project-1")
+	_, stderr, code := runRootCommand("task", "list", "--project", "project-1")
 	if code != 0 {
 		t.Fatalf("task list exit=%d stderr=%q", code, stderr)
 	}
@@ -105,7 +105,7 @@ func TestTaskListWorkflowOnlyResolvesCurrentProject(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: workspaceRoot}, remote)
 	defer restore()
 
-	_, stderr, code := runWorkflowRootCommand("task", "list", "--workflow", taskListWorkflowSelector)
+	_, stderr, code := runRootCommand("task", "list", "--workflow", taskListWorkflowSelector)
 	if code != 0 {
 		t.Fatalf("task list exit=%d stderr=%q", code, stderr)
 	}
@@ -127,7 +127,7 @@ func TestTaskListTokenContinuationResolvesCurrentProject(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: workspaceRoot}, remote)
 	defer restore()
 
-	_, stderr, code := runWorkflowRootCommand("task", "list", "--page-token", "opaque-token")
+	_, stderr, code := runRootCommand("task", "list", "--page-token", "opaque-token")
 	if code != 0 {
 		t.Fatalf("task list exit=%d stderr=%q", code, stderr)
 	}
@@ -149,7 +149,7 @@ func TestTaskListTokenContinuationAcceptsServerRestoredWorkflowScope(t *testing.
 	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: workspaceRoot}, remote)
 	defer restore()
 
-	stdout, stderr, code := runWorkflowRootCommand("task", "list", "--page-token", "narrowed-token", "--json")
+	stdout, stderr, code := runRootCommand("task", "list", "--page-token", "narrowed-token", "--json")
 	if code != 0 {
 		t.Fatalf("task list exit=%d stderr=%q", code, stderr)
 	}
@@ -178,7 +178,7 @@ func TestTaskListRejectsUnknownResponseStatus(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
 	defer restore()
 
-	stdout, stderr, code := runWorkflowRootCommand("task", "list", "--project", "project-1")
+	stdout, stderr, code := runRootCommand("task", "list", "--project", "project-1")
 	if code != 1 || stdout != "" {
 		t.Fatalf("task list exit=%d stdout=%q stderr=%q, want unsupported-status failure without output", code, stdout, stderr)
 	}
@@ -307,7 +307,7 @@ func TestTaskListJSONUsesTypedStatusObject(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
 	defer restore()
 
-	stdout, stderr, code := runWorkflowRootCommand("task", "list", "--project", "project-1", "--workflow", taskListWorkflowSelector, "--json")
+	stdout, stderr, code := runRootCommand("task", "list", "--project", "project-1", "--workflow", taskListWorkflowSelector, "--json")
 	if code != 0 || stderr != "" {
 		t.Fatalf("task list exit=%d stderr=%q", code, stderr)
 	}
@@ -692,7 +692,7 @@ func TestTaskListLoopbackKeepsProjectOnlyScopeWithOneWorkflow(t *testing.T) {
 	for _, args := range [][]string{
 		{"task", "list", "--project", binding.ProjectID, "--json"},
 	} {
-		stdout, stderr, code := runWorkflowRootCommand(args...)
+		stdout, stderr, code := runRootCommand(args...)
 		if code != 0 {
 			t.Fatalf("%v exit=%d stderr=%q", args, code, stderr)
 		}
@@ -716,7 +716,7 @@ func TestTaskListLoopbackProjectScopeSpansLinkedWorkflows(t *testing.T) {
 	firstTask := createTaskForListCommandTest(t, ctx, remote, binding.ProjectID, firstWorkflowID, "First")
 	secondTask := createTaskForListCommandTest(t, ctx, remote, binding.ProjectID, secondWorkflowID, "Second")
 
-	stdout, stderr, code := runWorkflowRootCommand("task", "list", "--project", binding.ProjectID, "--json")
+	stdout, stderr, code := runRootCommand("task", "list", "--project", binding.ProjectID, "--json")
 	if code != 0 {
 		t.Fatalf("task list exit=%d stderr=%q", code, stderr)
 	}
@@ -745,7 +745,7 @@ func TestTaskListLoopbackValidatesExactPairAndContinuesFromToken(t *testing.T) {
 	createTaskForListCommandTest(t, ctx, remote, binding.ProjectID, workflowID, "First")
 	createTaskForListCommandTest(t, ctx, remote, binding.ProjectID, workflowID, "Second")
 
-	firstJSON, firstErr, code := runWorkflowRootCommand("task", "list", "--project", binding.ProjectID, "--page-size", "1", "--json")
+	firstJSON, firstErr, code := runRootCommand("task", "list", "--project", binding.ProjectID, "--page-size", "1", "--json")
 	if code != 0 {
 		t.Fatalf("first list exit=%d stderr=%q", code, firstErr)
 	}
@@ -757,7 +757,7 @@ func TestTaskListLoopbackValidatesExactPairAndContinuesFromToken(t *testing.T) {
 		t.Fatalf("first page = %+v, want project-wide scope and continuation", first)
 	}
 
-	secondJSON, secondErr, code := runWorkflowRootCommand("task", "list", "--page-token", *first.NextPageToken, "--page-size", "1", "--json")
+	secondJSON, secondErr, code := runRootCommand("task", "list", "--page-token", *first.NextPageToken, "--page-size", "1", "--json")
 	if code != 0 {
 		t.Fatalf("continuation exit=%d stderr=%q", code, secondErr)
 	}

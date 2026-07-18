@@ -1,69 +1,204 @@
 package app
 
 import (
-	"core/cli/tui"
-	"core/cli/tui/transcriptrender"
 	"strings"
+
+	"core/cli/tui"
+	tuiinput "core/cli/tui/input"
+	"core/cli/tui/transcriptrender"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
-type wrappedAskPromptLine struct {
-	Text      string
-	Line      askPromptLine
-	HasCursor bool
-	CursorCol int
+// uiInputPaneProjection is one frame-local projection of the active editor pane.
+// It is deliberately not retained: terminal geometry and cursor visibility are
+// frame facts, not editor state.
+type uiInputPaneProjection struct {
+	Lines       []string
+	Cursor      uiInputFieldCursor
+	PanelHeight int
 }
 
-func (l uiViewLayout) renderInputLines(width int, style uiStyles) []string {
-	m := l.model
-	inputState := m.inputModeState()
-	if inputState.Mode == uiInputModeProcessList {
-		return []string{padRight("", width)}
-	}
-	if inputState.Mode == uiInputModeWorktree {
-		return []string{padRight("", width)}
-	}
-	if inputState.Mode == uiInputModeGoal {
-		return []string{padRight("", width)}
-	}
+type uiInputPaneContentLine struct {
+	text      string
+	prompt    askPromptLine
+	cursorCol int
+}
+
+func (l uiViewLayout) inputPaneProjection(width, height int, style uiStyles) uiInputPaneProjection {
+	inputState := l.model.inputModeState()
 	if inputState.Mode == uiInputModeRollbackSelection {
-		return nil
+		return uiInputPaneProjection{}
 	}
 	if width < 1 {
-		return []string{padRight("", width)}
+		return uiInputPaneProjection{Lines: []string{padRight("", width)}, PanelHeight: 1}
 	}
-	if inputState.ShowsAskInput {
-		return l.renderAskInputLines(width, style)
+	if inputState.Mode == uiInputModeProcessList || inputState.Mode == uiInputModeWorktree || inputState.Mode == uiInputModeGoal {
+		return uiInputPaneProjection{Lines: []string{padRight("", width)}, PanelHeight: 1}
 	}
 
-	return renderFramedEditableInputLines(width, inputContentLineLimit(l.effectiveHeight()), l.mainInputRenderSpec(), style.input, l.inputBorderStyle())
+	maxContentLines := inputContentLineLimit(height)
+	if inputState.ShowsAskInput {
+		return l.projectAskInputPane(width, maxContentLines, style)
+	}
+	if !inputState.ShowsMainInput {
+		return uiInputPaneProjection{}
+	}
+
+	field := tuiinput.NewField()
+	field.Editor = l.model.mainEditor
+	field.Prefix = l.mainInputPrefix()
+	field.MaxLines = maxContentLines
+	field.Cursor = l.shouldUseRealTerminalCursor() || l.shouldRenderSoftCursor()
+	rendered := field.Render(width)
+	lines := renderInputFieldLines(width, rendered, style.input, l.shouldRenderSoftCursor())
+	projection := uiInputPaneProjection{
+		Lines:       renderFramedLines(width, lines, l.inputBorderStyle()),
+		PanelHeight: len(rendered.Lines) + 2,
+	}
+	if rendered.Cursor.Visible && l.shouldUseRealTerminalCursor() {
+		row, col := normalizeInputFieldCursorCell(rendered.Cursor.Row, rendered.Cursor.Col, width, len(rendered.Lines))
+		projection.Cursor = uiInputFieldCursor{Visible: true, Row: framedInputContentCursorRow(row), Col: col}
+	}
+	return projection
 }
 
-func (l uiViewLayout) renderAskInputLines(width int, style uiStyles) []string {
-	if width < 1 {
-		return []string{padRight("", width)}
+func (l uiViewLayout) projectAskInputPane(width, maxContentLines int, style uiStyles) uiInputPaneProjection {
+	content, cursorLine := l.askInputPaneContent(width)
+	if len(content) == 0 {
+		content = []uiInputPaneContentLine{{prompt: askPromptLine{Kind: askPromptLineKindQuestion}}}
 	}
-	wrapped := l.visibleAskPromptLines(width)
+	start := cursorAwareInputPaneViewportStart(len(content), maxContentLines, cursorLine)
+	end := min(len(content), start+maxContentLines)
+	visible := content[start:end]
+	var visibleCursorLine *int
+	if cursorLine != nil {
+		line := *cursorLine - start
+		if line >= 0 && line < len(visible) {
+			visibleCursorLine = &line
+		}
+	}
+
+	lines := make([]string, 0, len(visible))
 	selectedStyle := lipgloss.NewStyle().Foreground(uiPalette(l.model.theme).primary).Bold(true)
 	recommendedStyle := lipgloss.NewStyle().Foreground(uiPalette(l.model.theme).secondary)
 	recommendedNoteStyle := style.meta.Faint(true)
-	rendered := make([]string, 0, len(wrapped))
-	for _, line := range wrapped {
-		switch {
-		case line.Line.Kind == askPromptLineKindHint:
-			rendered = append(rendered, style.meta.Render(padANSIRight(line.Text, width)))
-		case line.Line.Disabled:
-			rendered = append(rendered, style.inputDisabled.Render(padANSIRight(line.Text, width)))
-		case line.Line.Selected:
-			rendered = append(rendered, selectedStyle.Render(padANSIRight(line.Text, width)))
-		case line.Line.Recommended:
-			rendered = append(rendered, renderRecommendedAskLine(line.Text, line.Line.MutedSuffix, width, recommendedStyle, recommendedNoteStyle))
-		default:
-			rendered = append(rendered, style.input.Render(padANSIRight(line.Text, width)))
+	for index, line := range visible {
+		lines = append(lines, renderAskPaneLine(
+			line,
+			visibleCursorLine != nil && index == *visibleCursorLine && l.shouldRenderSoftCursor(),
+			width,
+			style,
+			selectedStyle,
+			recommendedStyle,
+			recommendedNoteStyle,
+		))
+	}
+
+	projection := uiInputPaneProjection{
+		Lines:       renderFramedLines(width, lines, l.inputBorderStyle()),
+		PanelHeight: len(visible) + 2,
+	}
+	if visibleCursorLine != nil && l.shouldUseRealTerminalCursor() {
+		cursor := visible[*visibleCursorLine]
+		row, col := normalizeInputFieldCursorCell(*visibleCursorLine, cursor.cursorCol, width, len(visible))
+		projection.Cursor = uiInputFieldCursor{Visible: true, Row: framedInputContentCursorRow(row), Col: col}
+	}
+	return projection
+}
+
+func (l uiViewLayout) askInputPaneContent(width int) ([]uiInputPaneContentLine, *int) {
+	promptLines := l.model.askController().renderPromptLines()
+	if len(promptLines) == 0 {
+		promptLines = []askPromptLine{{Kind: askPromptLineKindQuestion}}
+	}
+	promptLines = renderMarkdownAskQuestionPromptLines(promptLines, l.model.theme, width, l.model.markdownLinks)
+
+	content := make([]uiInputPaneContentLine, 0, len(promptLines)*2)
+	var cursorLine *int
+	for _, prompt := range promptLines {
+		if prompt.Kind == askPromptLineKindInput {
+			field := tuiinput.NewField()
+			field.Editor = prompt.InputEditor
+			field.Prefix = prompt.InputPrefix
+			field.Cursor = prompt.ShowsCursor
+			rendered := field.Render(width)
+			for index, text := range rendered.Lines {
+				line := uiInputPaneContentLine{text: text, prompt: prompt}
+				if rendered.Cursor.Visible && index == rendered.Cursor.Row {
+					line.cursorCol = rendered.Cursor.Col
+					cursor := len(content)
+					cursorLine = &cursor
+				}
+				content = append(content, line)
+			}
+			continue
+		}
+		parts := []string{prompt.Text}
+		if prompt.Kind != askPromptLineKindQuestion {
+			parts = wrapLine(prompt.Text, width)
+		}
+		for _, text := range parts {
+			content = append(content, uiInputPaneContentLine{text: text, prompt: prompt})
 		}
 	}
-	return renderFramedLines(width, rendered, l.inputBorderStyle())
+	return content, cursorLine
+}
+
+func cursorAwareInputPaneViewportStart(totalLines, maxLines int, cursorLine *int) int {
+	if maxLines < 1 || totalLines <= maxLines {
+		return 0
+	}
+	maxStart := totalLines - maxLines
+	if cursorLine == nil {
+		return maxStart
+	}
+	start := *cursorLine - maxLines + 1
+	if start < 0 {
+		return 0
+	}
+	if start > maxStart {
+		return maxStart
+	}
+	return start
+}
+
+func renderInputFieldLines(width int, rendered tuiinput.RenderResult, style lipgloss.Style, softCursor bool) []string {
+	if softCursor {
+		return tuiinput.RenderSoftCursorLines(width, rendered, style)
+	}
+	lines := make([]string, 0, len(rendered.Lines))
+	for _, line := range rendered.Lines {
+		lines = append(lines, style.Render(padANSIRight(line, width)))
+	}
+	return lines
+}
+
+func renderAskPaneLine(
+	line uiInputPaneContentLine,
+	softCursor bool,
+	width int,
+	style uiStyles,
+	selectedStyle lipgloss.Style,
+	recommendedStyle lipgloss.Style,
+	recommendedNoteStyle lipgloss.Style,
+) string {
+	text := line.text
+	if softCursor {
+		return tuiinput.RenderSoftCursorLine(width, text, line.cursorCol, style.input)
+	}
+	switch {
+	case line.prompt.Kind == askPromptLineKindHint:
+		return style.meta.Render(padANSIRight(text, width))
+	case line.prompt.Disabled:
+		return style.inputDisabled.Render(padANSIRight(text, width))
+	case line.prompt.Selected:
+		return selectedStyle.Render(padANSIRight(text, width))
+	case line.prompt.Recommended:
+		return renderRecommendedAskLine(text, line.prompt.MutedSuffix, width, recommendedStyle, recommendedNoteStyle)
+	default:
+		return style.input.Render(padANSIRight(text, width))
+	}
 }
 
 func renderRecommendedAskLine(text string, mutedSuffix string, width int, recommendedStyle lipgloss.Style, noteStyle lipgloss.Style) string {
@@ -72,10 +207,6 @@ func renderRecommendedAskLine(text string, mutedSuffix string, width int, recomm
 	if mutedSuffix != "" && strings.HasSuffix(body, mutedSuffix) {
 		body = strings.TrimSuffix(body, mutedSuffix)
 		suffix = mutedSuffix
-	}
-	if strings.HasPrefix(body, "★ ") {
-		body = strings.TrimPrefix(body, "★ ")
-		body = "★ " + body
 	}
 	rendered := recommendedStyle.Render(body)
 	if suffix != "" {
@@ -88,92 +219,6 @@ func (l uiViewLayout) mainInputPrefix() string {
 	return "› "
 }
 
-func (l uiViewLayout) mainInputRenderSpec() uiEditableInputRenderSpec {
-	return uiEditableInputRenderSpec{
-		Prefix:       l.mainInputPrefix(),
-		Text:         l.model.input,
-		CursorIndex:  l.model.inputCursor,
-		RenderCursor: l.shouldRenderSoftCursor(),
-	}
-}
-
-func (l uiViewLayout) inputPaneCursor(width int) uiInputFieldCursor {
-	if !l.shouldUseRealTerminalCursor() || width < 1 {
-		return uiInputFieldCursor{}
-	}
-	inputState := l.model.inputModeState()
-	if inputState.Mode == uiInputModeProcessList || inputState.Mode == uiInputModeWorktree || inputState.Mode == uiInputModeRollbackSelection {
-		return uiInputFieldCursor{}
-	}
-	if inputState.ShowsAskInput {
-		return l.askInputPaneCursor(width)
-	}
-	if !inputState.ShowsMainInput {
-		return uiInputFieldCursor{}
-	}
-	spec := l.mainInputRenderSpec()
-	spec.RenderCursor = true
-	visible, cursorLine, cursorCol := visibleEditableInputViewport(width, inputContentLineLimit(l.effectiveHeight()), spec)
-	if cursorLine < 0 {
-		return uiInputFieldCursor{}
-	}
-	cursorLine, cursorCol = normalizeInputFieldCursorCell(cursorLine, cursorCol, width, len(visible))
-	return uiInputFieldCursor{Visible: true, Row: framedInputContentCursorRow(cursorLine), Col: cursorCol}
-}
-
-func (l uiViewLayout) wrappedAskPromptLines(width int) ([]wrappedAskPromptLine, int) {
-	promptLines := l.model.askController().renderPromptLines()
-	if len(promptLines) == 0 {
-		promptLines = []askPromptLine{{Text: "", Kind: askPromptLineKindQuestion}}
-	}
-	promptLines = renderMarkdownAskQuestionPromptLines(
-		promptLines,
-		l.model.theme,
-		width,
-		l.model.markdownLinks,
-	)
-	out := make([]wrappedAskPromptLine, 0, len(promptLines)*2)
-	cursorLineIndex := -1
-	for _, line := range promptLines {
-		parts := wrapLine(line.Text, width)
-		lineCursor := -1
-		lineCursorCol := 0
-		if line.Kind == askPromptLineKindQuestion {
-			parts = []string{line.Text}
-		}
-		if line.Kind == askPromptLineKindInput {
-			spec := uiEditableInputRenderSpec{Prefix: line.InputPrefix, Text: line.InputText, CursorIndex: line.InputCursor, RenderCursor: line.ShowsCursor}
-			renderedInput := renderEditableInputField(width, 0, spec)
-			parts = renderedInput.Lines
-			if renderedInput.Cursor.Visible {
-				cursorLine, cursorCol := renderedInput.Cursor.Row, renderedInput.Cursor.Col
-				if cursorLine >= 0 && cursorLine < len(parts) {
-					if !l.shouldUseRealTerminalCursor() {
-						parts[cursorLine] = overlayCursorOnLine(parts[cursorLine], cursorCol, width, lipgloss.NewStyle().Reverse(true))
-					}
-					lineCursor = cursorLine
-					lineCursorCol = cursorCol
-					cursorLineIndex = len(out) + cursorLine
-				}
-			}
-		}
-		if len(parts) == 0 {
-			parts = []string{""}
-		}
-		for partIndex, part := range parts {
-			wrappedLine := line
-			if wrappedLine.MutedSuffix != "" && !strings.HasSuffix(part, wrappedLine.MutedSuffix) {
-				wrappedLine.MutedSuffix = ""
-			}
-			out = append(out, wrappedAskPromptLine{Text: part, Line: wrappedLine, HasCursor: partIndex == lineCursor, CursorCol: lineCursorCol})
-		}
-	}
-	if len(out) == 0 {
-		return []wrappedAskPromptLine{{Text: "", Line: askPromptLine{Kind: askPromptLineKindQuestion}}}, -1
-	}
-	return out, cursorLineIndex
-}
-
 func renderMarkdownAskQuestionPromptLines(
 	lines []askPromptLine,
 	theme string,
@@ -184,27 +229,22 @@ func renderMarkdownAskQuestionPromptLines(
 		return nil
 	}
 	out := make([]askPromptLine, 0, len(lines))
-	for idx := 0; idx < len(lines); {
-		line := lines[idx]
+	for index := 0; index < len(lines); {
+		line := lines[index]
 		if line.Kind != askPromptLineKindQuestion {
 			out = append(out, line)
-			idx++
+			index++
 			continue
 		}
-		start := idx
+		start := index
 		parts := make([]string, 0, 4)
-		for idx < len(lines) && lines[idx].Kind == askPromptLineKindQuestion {
-			parts = append(parts, lines[idx].Text)
-			idx++
+		for index < len(lines) && lines[index].Kind == askPromptLineKindQuestion {
+			parts = append(parts, lines[index].Text)
+			index++
 		}
-		rendered := tui.RenderAskQuestionMarkdownLines(
-			strings.Join(parts, "\n"),
-			theme,
-			width,
-			linkPresentation,
-		)
+		rendered := tui.RenderAskQuestionMarkdownLines(strings.Join(parts, "\n"), theme, width, linkPresentation)
 		if len(rendered) == 0 {
-			out = append(out, lines[start:idx]...)
+			out = append(out, lines[start:index]...)
 			continue
 		}
 		for _, text := range rendered {
@@ -212,39 +252,6 @@ func renderMarkdownAskQuestionPromptLines(
 		}
 	}
 	return out
-}
-
-func (l uiViewLayout) visibleAskPromptLines(width int) []wrappedAskPromptLine {
-	wrapped, _ := l.visibleAskPromptLinesWithCursor(width)
-	return wrapped
-}
-
-func (l uiViewLayout) visibleAskPromptLinesWithCursor(width int) ([]wrappedAskPromptLine, int) {
-	wrapped, cursorLine := l.wrappedAskPromptLines(width)
-	maxContentLines := inputContentLineLimit(l.effectiveHeight())
-	visibleStart := 0
-	if len(wrapped) > maxContentLines {
-		visibleStart = visibleWrappedLineStart(len(wrapped), maxContentLines, cursorLine, cursorLine >= 0)
-		wrapped = wrapped[visibleStart : visibleStart+maxContentLines]
-	}
-	visibleCursorLine := cursorLine - visibleStart
-	if visibleCursorLine < 0 || visibleCursorLine >= len(wrapped) {
-		visibleCursorLine = -1
-	}
-	return wrapped, visibleCursorLine
-}
-
-func (l uiViewLayout) askInputPaneCursor(width int) uiInputFieldCursor {
-	lines, cursorLine := l.visibleAskPromptLinesWithCursor(width)
-	if cursorLine < 0 {
-		return uiInputFieldCursor{}
-	}
-	cursorCol := 0
-	if cursorLine < len(lines) && lines[cursorLine].HasCursor {
-		cursorCol = lines[cursorLine].CursorCol
-	}
-	cursorLine, cursorCol = normalizeInputFieldCursorCell(cursorLine, cursorCol, width, len(lines))
-	return uiInputFieldCursor{Visible: true, Row: framedInputContentCursorRow(cursorLine), Col: cursorCol}
 }
 
 func framedInputContentCursorRow(contentRow int) int {
@@ -270,26 +277,6 @@ func inputContentLineLimit(height int) int {
 		return 1
 	}
 	return maxContentLines
-}
-
-func (l uiViewLayout) inputPanelLineCount(width, height int) int {
-	inputState := l.model.inputModeState()
-	if inputState.Mode == uiInputModeRollbackSelection {
-		return 0
-	}
-	contentLines := len(wrappedEditableInputLines(width, l.mainInputRenderSpec()))
-	if inputState.ShowsAskInput {
-		wrappedAskLines, _ := l.wrappedAskPromptLines(width)
-		contentLines = len(wrappedAskLines)
-	}
-	if contentLines < 1 {
-		contentLines = 1
-	}
-	maxContentLines := inputContentLineLimit(height)
-	if contentLines > maxContentLines {
-		contentLines = maxContentLines
-	}
-	return contentLines + 2
 }
 
 func (l uiViewLayout) inputBorderStyle() lipgloss.Style {

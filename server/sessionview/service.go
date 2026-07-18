@@ -38,7 +38,7 @@ type UpdateStatusProvider interface {
 
 type Service struct {
 	sessions         SessionStoreResolver
-	snapshots        SessionSnapshotSource
+	snapshots        *resolvedSessionSnapshotSource
 	targets          ExecutionTargetResolver
 	updates          UpdateStatusProvider
 	operations       *runtimeops.Coordinator
@@ -77,13 +77,7 @@ func NewService(sessions SessionStoreResolver, runtimes RuntimeResolver, targets
 		cacheWarningMode: config.CacheWarningModeDefault,
 		operations:       runtimeops.NewCoordinator(),
 	}
-	baseSnapshots := newResolvedSessionSnapshotSource(sessions, runtimes, svc.cacheWarningModeValue)
-	svc.snapshots = newEnrichedSessionSnapshotSource(baseSnapshots, targets, func() UpdateStatusProvider {
-		if svc == nil {
-			return nil
-		}
-		return svc.updates
-	})
+	svc.snapshots = newResolvedSessionSnapshotSource(sessions, runtimes, svc.cacheWarningModeValue)
 	return svc
 }
 
@@ -102,14 +96,7 @@ func (s *Service) WithCacheWarningMode(mode config.CacheWarningMode) *Service {
 	if s == nil {
 		return nil
 	}
-	normalized := normalizeServiceCacheWarningMode(mode)
-	changed := s.cacheWarningModeValue() != normalized
-	s.setCacheWarningMode(normalized)
-	if changed {
-		if clearer, ok := s.snapshots.(interface{ ClearCaches() }); ok {
-			clearer.ClearCaches()
-		}
-	}
+	s.setCacheWarningMode(normalizeServiceCacheWarningMode(mode))
 	return s
 }
 
@@ -150,56 +137,6 @@ func normalizeServiceCacheWarningMode(mode config.CacheWarningMode) config.Cache
 	}
 }
 
-type staticSessionResolver struct {
-	store *session.Store
-}
-
-func NewStaticSessionResolver(store *session.Store) SessionStoreResolver {
-	if store == nil {
-		return nil
-	}
-	return staticSessionResolver{store: store}
-}
-
-func (r staticSessionResolver) ResolveSessionStore(_ context.Context, sessionID string) (*session.Store, error) {
-	if r.store == nil {
-		return nil, errors.New("session store is required")
-	}
-	if strings.TrimSpace(sessionID) != strings.TrimSpace(r.store.Meta().SessionID) {
-		return nil, fmt.Errorf("session %q not available", strings.TrimSpace(sessionID))
-	}
-	return r.store, nil
-}
-
-type staticRuntimeResolver struct {
-	engine *runtime.Engine
-}
-
-func NewStaticRuntimeResolver(engine *runtime.Engine) RuntimeResolver {
-	if engine == nil {
-		return nil
-	}
-	return staticRuntimeResolver{engine: engine}
-}
-
-func (r staticRuntimeResolver) ResolveRuntime(_ context.Context, sessionID string) (*runtime.Engine, error) {
-	if r.engine == nil {
-		return nil, nil
-	}
-	if strings.TrimSpace(sessionID) != strings.TrimSpace(r.engine.SessionID()) {
-		return nil, fmt.Errorf("session %q not available", strings.TrimSpace(sessionID))
-	}
-	return r.engine, nil
-}
-
-func (r staticRuntimeResolver) WithGuardedRuntime(ctx context.Context, sessionID string, fn func(*runtime.Engine) error) (bool, error) {
-	engine, err := r.ResolveRuntime(ctx, sessionID)
-	if err != nil || engine == nil {
-		return false, nil
-	}
-	return true, fn(engine)
-}
-
 func (s *Service) GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionMainViewResponse{}, err
@@ -211,6 +148,16 @@ func (s *Service) GetSessionMainView(ctx context.Context, req serverapi.SessionM
 	view, err := snapshot.MainView(ctx)
 	if err != nil {
 		return serverapi.SessionMainViewResponse{}, err
+	}
+	if s.targets != nil && strings.TrimSpace(view.Session.SessionID) != "" {
+		target, err := s.targets.ResolveSessionExecutionTarget(ctx, view.Session.SessionID)
+		if err != nil {
+			return serverapi.SessionMainViewResponse{}, err
+		}
+		view.Session.ExecutionTarget = target
+	}
+	if s.updates != nil {
+		view.Status.Update = s.updates.Status(ctx)
 	}
 	if len(view.InputReconciliation.Operations) == 0 && len(req.PendingOperationRefs) > 0 {
 		reconciliation, err := s.operations.FeedSnapshot(strings.TrimSpace(req.SessionID), req.PendingOperationRefs)
@@ -424,11 +371,11 @@ func sessionExecutionProviderUsesKentManagedAuth(provider string) bool {
 	return err == nil && capabilities.IsOpenAIFirstParty
 }
 
-func (s *Service) resolveSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (SessionSnapshot, error) {
+func (s *Service) resolveSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (sessionSnapshot, error) {
 	if s == nil || s.snapshots == nil {
 		return nil, errSessionStoreResolverRequired
 	}
-	return s.snapshots.ResolveSessionSnapshot(ctx, sessionID, refs)
+	return s.snapshots.resolveSessionSnapshot(ctx, sessionID, refs)
 }
 
 var _ servicecontract.SessionViewService = (*Service)(nil)

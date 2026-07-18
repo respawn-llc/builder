@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -36,10 +35,8 @@ func TestWorktreeStatusUsesShellSessionFromNestedWorkspaceDirectory(t *testing.T
 	t.Chdir(nested)
 	t.Setenv("KENT_SESSION_ID", sess.Meta().SessionID)
 
-	status := decodeWorktreeCommandJSON[serverapi.WorktreeStatusResponse](
-		t,
-		runSuccessfulWorktreeCommand(t, "worktree", "status", "--json"),
-	)
+	stdout, _ := runRootCommandOK(t, "worktree", "status", "--json")
+	status := decodeWorktreeCommandJSON[serverapi.WorktreeStatusResponse](t, stdout)
 	if status.Target.WorkspaceID != binding.WorkspaceID {
 		t.Fatalf("target workspace id = %q, want %q", status.Target.WorkspaceID, binding.WorkspaceID)
 	}
@@ -63,10 +60,8 @@ func TestWorktreeListUsesWorkspaceWithoutShellSession(t *testing.T) {
 	t.Chdir(nested)
 	t.Setenv("KENT_SESSION_ID", "")
 
-	response := decodeWorktreeCommandJSON[serverapi.WorktreeWorkspaceListResponse](
-		t,
-		runSuccessfulWorktreeCommand(t, "worktree", "list", "--json"),
-	)
+	stdout, _ := runRootCommandOK(t, "worktree", "list", "--json")
+	response := decodeWorktreeCommandJSON[serverapi.WorktreeWorkspaceListResponse](t, stdout)
 	if response.WorkspaceID != binding.WorkspaceID || len(response.Worktrees) != 1 {
 		t.Fatalf("workspace list = %+v", response)
 	}
@@ -96,7 +91,7 @@ func TestWorktreeListUsesSessionProjectionWhenSessionIsPresent(t *testing.T) {
 	replaceWorktreeCommandRemote(t, remote)
 	t.Setenv("KENT_SESSION_ID", "shell-session")
 
-	output := runSuccessfulWorktreeCommand(t, "worktree", "list", "--json")
+	output, _ := runRootCommandOK(t, "worktree", "list", "--json")
 	if remote.listRequest == nil || remote.listRequest.SessionID != "shell-session" {
 		t.Fatalf("session list request = %+v", remote.listRequest)
 	}
@@ -115,19 +110,10 @@ func TestWorktreeListUsesExplicitSessionProjectionOutsideShell(t *testing.T) {
 	replaceWorktreeCommandRemote(t, remote)
 	t.Setenv("KENT_SESSION_ID", "")
 
-	runSuccessfulWorktreeCommand(t, "worktree", "list", "--session", "explicit-session")
+	runRootCommandOK(t, "worktree", "list", "--session", "explicit-session")
 	if remote.listRequest == nil || remote.listRequest.SessionID != "explicit-session" {
 		t.Fatalf("session list request = %+v", remote.listRequest)
 	}
-}
-
-func runSuccessfulWorktreeCommand(t *testing.T, args ...string) string {
-	t.Helper()
-	var stdout, stderr bytes.Buffer
-	if exitCode := rootCommand(args, strings.NewReader(""), &stdout, &stderr); exitCode != 0 {
-		t.Fatalf("%v exit=%d stderr=%s", args, exitCode, stderr.String())
-	}
-	return stdout.String()
 }
 
 func decodeWorktreeCommandJSON[T any](t *testing.T, output string) T {
@@ -249,7 +235,7 @@ func TestWorktreeStatusUsesShellSessionAndJSONHasNoSelector(t *testing.T) {
 	}}
 	replaceWorktreeCommandRemote(t, remote)
 	t.Setenv("KENT_SESSION_ID", "shell-session")
-	output := runSuccessfulWorktreeCommand(t, "worktree", "status", "--json", "--session", "ignored")
+	output, _ := runRootCommandOK(t, "worktree", "status", "--json", "--session", "ignored")
 	if remote.statusRequest == nil || remote.statusRequest.SessionID != "shell-session" {
 		t.Fatalf("status request = %+v", remote.statusRequest)
 	}
@@ -272,10 +258,8 @@ func TestWorktreeEnterAndLeaveReturnScheduledAcknowledgements(t *testing.T) {
 		{"worktree", "enter", "--json", "feature/a"},
 		{"worktree", "leave", "--json"},
 	} {
-		acknowledgement := decodeWorktreeCommandJSON[serverapi.WorktreeScheduledAcknowledgement](
-			t,
-			runSuccessfulWorktreeCommand(t, args...),
-		)
+		stdout, _ := runRootCommandOK(t, args...)
+		acknowledgement := decodeWorktreeCommandJSON[serverapi.WorktreeScheduledAcknowledgement](t, stdout)
 		if err := acknowledgement.OperationID.Validate(); err != nil {
 			t.Fatalf("%v acknowledgement = %+v: %v", args, acknowledgement, err)
 		}
@@ -300,14 +284,11 @@ func TestWorktreeEnterAndLeaveHumanConfirmationsAreStableAndActionSpecific(t *te
 
 	run := func(args ...string) string {
 		t.Helper()
-		var stdout, stderr bytes.Buffer
-		if exitCode := rootCommand(args, strings.NewReader(""), &stdout, &stderr); exitCode != 0 {
-			t.Fatalf("%v exit=%d stderr=%s", args, exitCode, stderr.String())
-		}
-		if stdout.Len() == 0 {
+		stdout, _ := runRootCommandOK(t, args...)
+		if stdout == "" {
 			t.Fatalf("%v returned an empty confirmation", args)
 		}
-		return stdout.String()
+		return stdout
 	}
 
 	firstEnter := run("worktree", "enter", "feature/a")
@@ -347,9 +328,9 @@ func TestWorktreeEnterRejectsPartialRuntimeOriginBeforeRPC(t *testing.T) {
 		}
 	})
 
-	var stdout, stderr bytes.Buffer
-	if exitCode := rootCommand([]string{"worktree", "enter", "feature/a"}, strings.NewReader(""), &stdout, &stderr); exitCode != 2 {
-		t.Fatalf("exit=%d stderr=%s, want argument error", exitCode, stderr.String())
+	_, stderr, exitCode := runRootCommand("worktree", "enter", "feature/a")
+	if exitCode != 2 {
+		t.Fatalf("exit=%d stderr=%s, want argument error", exitCode, stderr)
 	}
 	if remote.enterRequest != nil {
 		t.Fatalf("enter RPC ran with partial runtime origin: %+v", remote.enterRequest)
@@ -388,7 +369,7 @@ func TestWorktreeCreateDoesNotEnterAndReturnsCreatedSelector(t *testing.T) {
 	}
 	replaceWorktreeCommandRemote(t, remote)
 	t.Setenv("KENT_SESSION_ID", "shell-session")
-	output := runSuccessfulWorktreeCommand(t, "worktree", "create", "--json", "--base", "main", "feature/a")
+	output, _ := runRootCommandOK(t, "worktree", "create", "--json", "--base", "main", "feature/a")
 	if remote.createRequest == nil || remote.createRequest.SessionID != "shell-session" || !remote.createRequest.CreateBranch || remote.createRequest.BaseRef != "main" {
 		t.Fatalf("create request = %+v", remote.createRequest)
 	}
@@ -412,13 +393,13 @@ func TestAgentWorktreeDeleteRetainsBranchAndRejectsDeleteBranch(t *testing.T) {
 	}
 	replaceWorktreeCommandRemote(t, remote)
 	t.Setenv("KENT_SESSION_ID", "shell-session")
-	runSuccessfulWorktreeCommand(t, "worktree", "delete", "--force", "feature/a")
+	runRootCommandOK(t, "worktree", "delete", "--force", "feature/a")
 	if remote.deleteRequest == nil || remote.deleteRequest.BranchCleanupPolicy != serverapi.WorktreeBranchCleanupModeRetain || !remote.deleteRequest.ForceFolderRemoval {
 		t.Fatalf("delete request = %+v", remote.deleteRequest)
 	}
-	var stdout, stderr bytes.Buffer
-	if exitCode := rootCommand([]string{"worktree", "delete", "--delete-branch", "feature/a"}, strings.NewReader(""), &stdout, &stderr); exitCode != 2 {
-		t.Fatalf("delete-branch exit=%d stderr=%s", exitCode, stderr.String())
+	_, stderr, exitCode := runRootCommand("worktree", "delete", "--delete-branch", "feature/a")
+	if exitCode != 2 {
+		t.Fatalf("delete-branch exit=%d stderr=%s", exitCode, stderr)
 	}
 }
 
@@ -439,7 +420,7 @@ func TestHumanWorktreeDeleteReportsRetainedBranchCleanup(t *testing.T) {
 	}
 	replaceWorktreeCommandRemote(t, remote)
 	t.Setenv("KENT_SESSION_ID", "")
-	output := runSuccessfulWorktreeCommand(
+	output, _ := runRootCommandOK(
 		t,
 		"worktree",
 		"delete",

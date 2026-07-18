@@ -210,10 +210,11 @@ func (m *uiModel) ongoingFrameInput() ongoing.FrameInput {
 		}
 		sections = append(sections, ongoing.FrameSection{Kind: kind, StyledLines: append([]transcriptrender.Line(nil), lines...)})
 	}
+	inputPane := layout.inputPaneProjection(width, height, style)
 	appendSection(ongoing.FrameSectionPicker, layout.renderActivePicker(width))
 	appendStyledSection(ongoing.FrameSectionQueuedOrSteered, layout.renderQueuedMessageLines(width))
 	appendSection(ongoing.FrameSectionHelp, layout.renderHelpPane(width, helpPaneMaxLines(height, 1, 0, 0), style))
-	appendSection(ongoing.FrameSectionInput, layout.renderInputLines(width, style))
+	appendSection(ongoing.FrameSectionInput, inputPane.Lines)
 	if selected, ok := m.selectedPromptHistoryText(); ok {
 		appendSection(ongoing.FrameSectionPromptHistory, terminalSafeFrameLinesForWidth([]string{selected}, width))
 	}
@@ -221,7 +222,7 @@ func (m *uiModel) ongoingFrameInput() ongoing.FrameInput {
 	if statusLine != "" {
 		appendSection(ongoing.FrameSectionStatus, []string{statusLine})
 	}
-	cursor := layout.inputPaneCursor(width)
+	cursor := inputPane.Cursor
 	frameCursor := ongoing.Cursor{}
 	if cursor.Visible {
 		frameCursor = ongoing.Cursor{

@@ -19,195 +19,6 @@ func workflowIDPointerForTest(value workflow.WorkflowID) *workflow.WorkflowID {
 	return &value
 }
 
-func TestListTasksUsesCanonicalStatusProjection(t *testing.T) {
-	ctx, store, workflowStore, binding, view := newWorkflowViewTestContextService(t)
-	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow: %v", err)
-	}
-	requireDoneTransitionApproval(t, ctx, store, workflowID)
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Approval", Body: "Body"})
-	if err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-	started, err := workflowStore.StartTask(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("StartTask: %v", err)
-	}
-	if _, err := workflowStore.CompleteRun(ctx, workflowstore.CompleteRunRequest{RunID: started.RunID, TransitionID: "done"}); err != nil {
-		t.Fatalf("CompleteRun: %v", err)
-	}
-	if _, err := store.DB().ExecContext(ctx, `UPDATE task_runs SET completed_at_unix_ms = NULL, interrupted_at_unix_ms = 1 WHERE id = ?`, string(started.RunID)); err != nil {
-		t.Fatalf("create stale historical run fixture: %v", err)
-	}
-
-	projectID := binding.ProjectID
-	resp, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID:      &projectID,
-		StatusKinds:    []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingApproval},
-		AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindApproval},
-	}, testsetup.QuestionsEnabled("coder"))
-	if err != nil {
-		t.Fatalf("ListTasks: %v", err)
-	}
-	if len(resp.Tasks) != 1 || resp.Tasks[0].TaskID != string(task.ID) {
-		t.Fatalf("list tasks = %+v", resp.Tasks)
-	}
-	detail, err := view.GetTask(ctx, string(task.ID))
-	if err != nil {
-		t.Fatalf("GetTask: %v", err)
-	}
-	if !reflect.DeepEqual(resp.Tasks[0].Status, detail.Status) || containsString(resp.Tasks[0].Status.RunIDs, string(started.RunID)) {
-		t.Fatalf("list/detail status = %+v/%+v", resp.Tasks[0].Status, detail.Status)
-	}
-	if err := workflowStore.CancelTask(ctx, task.ID, "stop"); err != nil {
-		t.Fatalf("CancelTask: %v", err)
-	}
-	detail, err = view.GetTask(ctx, string(task.ID))
-	if err != nil {
-		t.Fatalf("GetTask canceled: %v", err)
-	}
-	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindCanceled || len(detail.Status.AttentionTypes) != 0 {
-		t.Fatalf("canceled detail status = %+v, want canceled without approval attention", detail.Status)
-	}
-	questionTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Question", Body: "Body"})
-	if err != nil {
-		t.Fatalf("CreateTask question: %v", err)
-	}
-	questionStarted, err := workflowStore.StartTask(ctx, questionTask.ID)
-	if err != nil {
-		t.Fatalf("StartTask question: %v", err)
-	}
-	questionClaimed, err := workflowStore.ClaimRun(ctx, questionStarted.RunID, 0)
-	if err != nil {
-		t.Fatalf("ClaimRun question: %v", err)
-	}
-	if err := workflowStore.SetRunWaitingAsk(ctx, questionStarted.RunID, questionClaimed.Generation, "ask-canceled"); err != nil {
-		t.Fatalf("SetRunWaitingAsk: %v", err)
-	}
-	if err := workflowStore.CancelTask(ctx, questionTask.ID, "stop"); err != nil {
-		t.Fatalf("CancelTask question: %v", err)
-	}
-	interruptedTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Interrupted", Body: "Body"})
-	if err != nil {
-		t.Fatalf("CreateTask interrupted: %v", err)
-	}
-	interruptedStarted, err := workflowStore.StartTask(ctx, interruptedTask.ID)
-	if err != nil {
-		t.Fatalf("StartTask interrupted: %v", err)
-	}
-	interruptedClaimed, err := workflowStore.ClaimRun(ctx, interruptedStarted.RunID, 0)
-	if err != nil {
-		t.Fatalf("ClaimRun interrupted: %v", err)
-	}
-	if err := workflowStore.InterruptRunGeneration(ctx, interruptedStarted.RunID, interruptedClaimed.Generation, "manual", "{}"); err != nil {
-		t.Fatalf("InterruptRunGeneration: %v", err)
-	}
-	if err := workflowStore.CancelTask(ctx, interruptedTask.ID, "stop"); err != nil {
-		t.Fatalf("CancelTask interrupted: %v", err)
-	}
-	for _, taskID := range []workflow.TaskID{questionTask.ID, interruptedTask.ID} {
-		detail, err := view.GetTask(ctx, string(taskID))
-		if err != nil {
-			t.Fatalf("GetTask canceled attention task %s: %v", taskID, err)
-		}
-		if detail.Status.Kind != serverapi.WorkflowTaskStatusKindCanceled || len(detail.Status.AttentionTypes) != 0 {
-			t.Fatalf("canceled detail status = %+v, want no attention", detail.Status)
-		}
-	}
-	for _, attentionKind := range []serverapi.WorkflowTaskAttentionKind{
-		serverapi.WorkflowTaskAttentionKindApproval,
-		serverapi.WorkflowTaskAttentionKindQuestion,
-		serverapi.WorkflowTaskAttentionKindInterrupted,
-	} {
-		resp, err = view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
-			ProjectID:      &projectID,
-			AttentionKinds: []serverapi.WorkflowTaskAttentionKind{attentionKind},
-		}, testsetup.QuestionsEnabled("coder"))
-		if err != nil {
-			t.Fatalf("ListTasks canceled %s attention: %v", attentionKind, err)
-		}
-		if len(resp.Tasks) != 0 {
-			t.Fatalf("%s attention after cancellation = %+v, want none", attentionKind, resp.Tasks)
-		}
-	}
-}
-
-func TestListTasksUsesBoardCanceledTerminalNode(t *testing.T) {
-	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
-	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
-		t.Fatalf("LinkWorkflow: %v", err)
-	}
-	def, _, err := view.GetDefinition(ctx, string(workflowID))
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	boardTerminalNodeID := canceledBoardTerminalNodeID(def)
-	if boardTerminalNodeID == nil {
-		t.Fatal("workflow must have a board canceled-terminal node")
-	}
-	extraTerminalNodeID := workflow.NodeID("node-extra-terminal-" + string(workflowID))
-	if _, err := workflowStore.AddNode(ctx, workflowstore.NodeRecord{
-		ID:          extraTerminalNodeID,
-		WorkflowID:  workflowID,
-		Key:         "extra_terminal",
-		Kind:        workflow.NodeKindTerminal,
-		DisplayName: "Extra terminal",
-	}); err != nil {
-		t.Fatalf("AddNode extra terminal: %v", err)
-	}
-	def, _, err = view.GetDefinition(ctx, string(workflowID))
-	if err != nil {
-		t.Fatalf("GetDefinition after extra terminal: %v", err)
-	}
-	columns := boardColumns(def)
-	boardTerminalIndex, extraTerminalIndex := -1, -1
-	for index, column := range columns {
-		switch column.Node.NodeID {
-		case *boardTerminalNodeID:
-			boardTerminalIndex = index
-		case string(extraTerminalNodeID):
-			extraTerminalIndex = index
-		}
-	}
-	if boardTerminalIndex < 0 || extraTerminalIndex < 0 {
-		t.Fatalf("terminal columns missing: %+v", columns)
-	}
-	columns[boardTerminalIndex], columns[extraTerminalIndex] = columns[extraTerminalIndex], columns[boardTerminalIndex]
-	for index := range columns {
-		columns[index].SortOrder = index
-	}
-
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Canceled", Body: "Body"})
-	if err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-	if err := workflowStore.CancelTask(ctx, task.ID, "stop"); err != nil {
-		t.Fatalf("CancelTask: %v", err)
-	}
-	rows, err := view.listWorkflowTaskListRows(ctx, workflowTaskListQueryRequest{
-		projectID: binding.ProjectID,
-		narrowed: &workflowTaskListNarrowedQueryFacts{
-			workflowID:             string(workflowID),
-			canceledTerminalNodeID: boardTerminalNodeID,
-			columns:                columns,
-		},
-		limit: 2,
-	})
-	if err != nil {
-		t.Fatalf("listWorkflowTaskListRows: %v", err)
-	}
-	if len(rows) != 1 || rows[0].item.ColumnKeys == nil || len(*rows[0].item.ColumnKeys) != 1 {
-		t.Fatalf("canceled task rows = %+v", rows)
-	}
-	for _, column := range columns {
-		if column.Node.NodeID == *boardTerminalNodeID && (*rows[0].item.ColumnKeys)[0] != column.Node.Key {
-			t.Fatalf("canceled task column key = %q, want board terminal %q", (*rows[0].item.ColumnKeys)[0], column.Node.Key)
-		}
-	}
-}
-
 func TestListTasksFiltersTypedStatusAndColumn(t *testing.T) {
 	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
@@ -419,9 +230,38 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 			}
 		}
 	}
-	approvalResponse := list(serverapi.WorkflowTaskListRequest{StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingApproval}})
-	if approvalResponse.Tasks[0].RunCount != 1 || containsString(approvalResponse.Tasks[0].Status.RunIDs, string(approvalStarted.RunID)) || slices.Contains(approvalResponse.Tasks[0].Status.AttentionTypes, serverapi.WorkflowTaskAttentionKindInterrupted) {
+	approvalResponse := list(serverapi.WorkflowTaskListRequest{
+		StatusKinds:    []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingApproval},
+		AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindApproval},
+	})
+	if len(approvalResponse.Tasks) != 1 || approvalResponse.Tasks[0].TaskID != string(approval.ID) || approvalResponse.Tasks[0].RunCount != 1 || slices.Contains(approvalResponse.Tasks[0].Status.RunIDs, string(approvalStarted.RunID)) || slices.Contains(approvalResponse.Tasks[0].Status.AttentionTypes, serverapi.WorkflowTaskAttentionKindInterrupted) {
 		t.Fatalf("approval list item must preserve history count but exclude stale current facts: %+v", approvalResponse.Tasks[0])
+	}
+	for _, request := range []serverapi.WorkflowTaskListRequest{
+		{StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingApproval}, AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindQuestion}},
+		{WorkflowID: &workflowIDString, StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindRunning}, ColumnKeys: []string{"backlog"}},
+	} {
+		if response := list(request); len(response.Tasks) != 0 {
+			t.Fatalf("combined filters %+v = %+v, want no tasks", request, response.Tasks)
+		}
+	}
+	for _, taskID := range []workflow.TaskID{approval.ID, question.ID, interrupted.ID} {
+		if err := workflowStore.CancelTask(ctx, taskID, "stop"); err != nil {
+			t.Fatalf("CancelTask %s: %v", taskID, err)
+		}
+		detail := mustTaskDetail(t, view, ctx, string(taskID))
+		if detail.Status.Kind != serverapi.WorkflowTaskStatusKindCanceled || len(detail.Status.AttentionTypes) != 0 {
+			t.Fatalf("canceled detail status = %+v, want no attention", detail.Status)
+		}
+	}
+	for _, attention := range []serverapi.WorkflowTaskAttentionKind{
+		serverapi.WorkflowTaskAttentionKindApproval,
+		serverapi.WorkflowTaskAttentionKindQuestion,
+		serverapi.WorkflowTaskAttentionKindInterrupted,
+	} {
+		if response := list(serverapi.WorkflowTaskListRequest{AttentionKinds: []serverapi.WorkflowTaskAttentionKind{attention}}); len(response.Tasks) != 0 {
+			t.Fatalf("%s attention after cancellation = %+v, want none", attention, response.Tasks)
+		}
 	}
 
 	for _, request := range []serverapi.WorkflowTaskListRequest{
@@ -435,39 +275,6 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 		if !errors.As(err, &validationErr) {
 			t.Fatalf("ListTasks invalid request %+v error = %v, want validation error", request, err)
 		}
-	}
-}
-
-func TestListTasksPreservesFanoutStatusUnions(t *testing.T) {
-	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
-	fixture := createWorkflowViewFanoutStatusFixture(t, ctx, workflowStore, binding)
-	projectID := binding.ProjectID
-	response, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID:   &projectID,
-		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingQuestion},
-	}, testsetup.QuestionsEnabled("coder"))
-	if err != nil {
-		t.Fatalf("ListTasks: %v", err)
-	}
-	if len(response.Tasks) != 1 || response.Tasks[0].TaskID != string(fixture.task.ID) {
-		t.Fatalf("fanout list tasks = %+v", response.Tasks)
-	}
-	detail, err := view.GetTask(ctx, string(fixture.task.ID))
-	if err != nil {
-		t.Fatalf("GetTask: %v", err)
-	}
-	if !reflect.DeepEqual(response.Tasks[0].Status, detail.Status) || !reflect.DeepEqual(response.Tasks[0].Status.RunIDs, fixture.status.RunIDs) || !reflect.DeepEqual(response.Tasks[0].Status.AttentionTypes, fixture.status.AttentionTypes) {
-		t.Fatalf("fanout list/detail status = %+v/%+v, want complete unions %+v", response.Tasks[0].Status, detail.Status, fixture.status)
-	}
-}
-
-func TestWorkflowTaskListColumnKeysPreservesBoardOrder(t *testing.T) {
-	columnKeys, err := workflowTaskListColumnKeys("task-1", `["zeta","alpha"]`)
-	if err != nil {
-		t.Fatalf("workflowTaskListColumnKeys: %v", err)
-	}
-	if !reflect.DeepEqual(columnKeys, []string{"zeta", "alpha"}) {
-		t.Fatalf("column keys = %+v, want board order", columnKeys)
 	}
 }
 

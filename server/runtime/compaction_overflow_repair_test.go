@@ -45,12 +45,11 @@ func TestCompactionOverflowRepairCollapsesShellOutputAndPreservesInput(t *testin
 	if collapsed != "<collapsed>" {
 		t.Fatalf("collapsed shell output = %q, want <collapsed>", collapsed)
 	}
-	if len(repaired[1].Raw) != 0 {
-		t.Fatalf("expected stale provider raw payload to be cleared, got %s", repaired[1].Raw)
+	if len(repaired[1].Raw) == 0 {
+		t.Fatal("expected collapsed shell output to be rematerialized")
 	}
-	prepared := llm.PrepareOpenAIInputItems(repaired)
-	if bytes.Contains(mustMarshalItemsForRepairTestBytes(t, prepared), []byte(staleRawMarker)) {
-		t.Fatalf("prepared repaired request still contains stale raw marker")
+	if bytes.Contains(mustMarshalItemsForRepairTestBytes(t, repaired), []byte(staleRawMarker)) {
+		t.Fatalf("repaired request still contains stale raw marker")
 	}
 }
 
@@ -97,12 +96,11 @@ func TestCompactionOverflowRepairCollapsesPatchInputAndPreservesPair(t *testing.
 	if string(repaired[1].Output) != string(items[1].Output) {
 		t.Fatalf("patch output changed: %s", repaired[1].Output)
 	}
-	if len(repaired[0].Raw) != 0 {
-		t.Fatalf("expected stale provider raw payload to be cleared, got %s", repaired[0].Raw)
+	if len(repaired[0].Raw) == 0 {
+		t.Fatal("expected collapsed patch input to be rematerialized")
 	}
-	prepared := llm.PrepareOpenAIInputItems(repaired)
-	if bytes.Contains(mustMarshalItemsForRepairTestBytes(t, prepared), []byte(staleRawMarker)) {
-		t.Fatalf("prepared repaired request still contains stale raw marker")
+	if bytes.Contains(mustMarshalItemsForRepairTestBytes(t, repaired), []byte(staleRawMarker)) {
+		t.Fatalf("repaired request still contains stale raw marker")
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 var ErrMainWorkspaceNotDeletable = errors.New("main workspace is not deletable")
@@ -48,7 +49,7 @@ func ProjectItem(entry serverapi.WorktreeListEntry) (Item, error) {
 		kent := entry.Topology.Registered.Kent
 		item.DisplayName = kent.DisplayName
 		item.CanonicalRoot = git.CanonicalRoot
-		item.WorktreeID = stringPointer(kent.WorktreeID)
+		item.WorktreeID = textutil.OptionalTrimmedString(kent.WorktreeID)
 		item.BranchName = git.BranchName
 		item.Detached = git.Detached
 		item.IsMain = git.IsMain
@@ -65,7 +66,7 @@ func ProjectItem(entry serverapi.WorktreeListEntry) (Item, error) {
 		kent := entry.Topology.Missing.Kent
 		item.DisplayName = kent.DisplayName
 		item.CanonicalRoot = kent.CanonicalRoot
-		item.WorktreeID = stringPointer(kent.WorktreeID)
+		item.WorktreeID = textutil.OptionalTrimmedString(kent.WorktreeID)
 		item.Managed = kent.Managed
 		item.CreatedBranch = kent.CreatedBranch
 	default:
@@ -81,14 +82,6 @@ func ProjectSelectorPreview(response serverapi.WorktreeSelectorPreviewResponse) 
 			Selector: response.Selector,
 		},
 	})
-}
-
-func stringPointer(value string) *string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return nil
-	}
-	return &trimmed
 }
 
 func WorktreeID(item Item) string {

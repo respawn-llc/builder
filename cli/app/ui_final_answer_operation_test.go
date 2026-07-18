@@ -56,8 +56,8 @@ func TestCopyFinalAnswerOperationBlocksInputUntilClipboardCompletes(t *testing.T
 	op := *m.finalAnswerOperation
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("blocked")})
 	m = next.(*uiModel)
-	if m.input != "" {
-		t.Fatalf("input = %q, want blocked input", m.input)
+	if testMainInput(m) != "" {
+		t.Fatalf("input = %q, want blocked input", testMainInput(m))
 	}
 
 	next, clipboardCmd := m.Update(latestFinalAnswerDoneMsg{token: op.token, purpose: op.purpose, sessionID: op.sessionID, parentSessionID: op.parentSessionID, answer: &answer})
@@ -78,7 +78,7 @@ func TestCopyFinalAnswerOperationBlocksInputUntilClipboardCompletes(t *testing.T
 func TestFinalAnswerLookupTimeoutAndStaleResultDoNotNavigate(t *testing.T) {
 	m := newProjectedStaticUIModel(WithUISessionID("child-1"))
 	m.statusConfig.SessionViews = &countingSessionViewClient{}
-	m.input = "editable child draft"
+	testSetMainInput(m, "editable child draft")
 	_ = m.startFinalAnswerOperation(uiFinalAnswerOperationBack, "parent-1")
 	op := *m.finalAnswerOperation
 
@@ -87,8 +87,8 @@ func TestFinalAnswerLookupTimeoutAndStaleResultDoNotNavigate(t *testing.T) {
 	if m.finalAnswerOperation != nil {
 		t.Fatal("timeout must restore input ownership")
 	}
-	if m.input != "editable child draft" {
-		t.Fatalf("timeout child input = %q, want preserved draft", m.input)
+	if testMainInput(m) != "editable child draft" {
+		t.Fatalf("timeout child input = %q, want preserved draft", testMainInput(m))
 	}
 	answer := "late answer"
 	next, _ = m.Update(latestFinalAnswerDoneMsg{token: op.token, purpose: op.purpose, sessionID: op.sessionID, parentSessionID: op.parentSessionID, answer: &answer})
@@ -98,8 +98,8 @@ func TestFinalAnswerLookupTimeoutAndStaleResultDoNotNavigate(t *testing.T) {
 	}
 	next, editCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
 	m = next.(*uiModel)
-	if editCmd != nil || m.input != "editable child draftx" {
-		t.Fatalf("child input after timeout edit = %q cmd=%v, want editable draft", m.input, editCmd)
+	if editCmd != nil || testMainInput(m) != "editable child draftx" {
+		t.Fatalf("child input after timeout edit = %q cmd=%v, want editable draft", testMainInput(m), editCmd)
 	}
 }
 
@@ -155,7 +155,7 @@ func TestBackFinalAnswerOperationAbsenceOpensParentWithEmptyPrefill(t *testing.T
 
 func TestBackCommandMissingParentPreservesEditableChildWithoutLookupOrTransition(t *testing.T) {
 	m := newProjectedStaticUIModel(WithUISessionID("child-1"))
-	m.input = "editable child draft"
+	testSetMainInput(m, "editable child draft")
 
 	next, errorCmd := m.inputController().handleBackCommand()
 	m = next.(*uiModel)
@@ -168,8 +168,8 @@ func TestBackCommandMissingParentPreservesEditableChildWithoutLookupOrTransition
 	if transition := m.Transition(); transition.Action != UIActionNone || transition.Exit {
 		t.Fatalf("missing parent emitted transition %+v", transition)
 	}
-	if m.input != "editable child draft" {
-		t.Fatalf("child input = %q, want preserved draft", m.input)
+	if testMainInput(m) != "editable child draft" {
+		t.Fatalf("child input = %q, want preserved draft", testMainInput(m))
 	}
 
 	next, editCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
@@ -177,8 +177,8 @@ func TestBackCommandMissingParentPreservesEditableChildWithoutLookupOrTransition
 	if editCmd != nil {
 		t.Fatal("normal child edit after missing parent created a command")
 	}
-	if m.input != "editable child draftx" {
-		t.Fatalf("edited child input = %q, want editable draft", m.input)
+	if testMainInput(m) != "editable child draftx" {
+		t.Fatalf("edited child input = %q, want editable draft", testMainInput(m))
 	}
 }
 
@@ -186,7 +186,7 @@ func TestFinalAnswerLookupErrorRestoresInputWithoutNavigation(t *testing.T) {
 	lookupErr := errors.New("durable lookup failed")
 	m := newProjectedStaticUIModel(WithUISessionID("child-1"))
 	m.statusConfig.SessionViews = &countingSessionViewClient{}
-	m.input = "editable child draft"
+	testSetMainInput(m, "editable child draft")
 	_ = m.startFinalAnswerOperation(uiFinalAnswerOperationBack, "parent-1")
 	op := *m.finalAnswerOperation
 
@@ -195,13 +195,13 @@ func TestFinalAnswerLookupErrorRestoresInputWithoutNavigation(t *testing.T) {
 	if m.finalAnswerOperation != nil || m.exitAction != UIActionNone || m.transientStatus == "" {
 		t.Fatalf("lookup failure state op=%+v transition=%+v status=%q", m.finalAnswerOperation, m.Transition(), m.transientStatus)
 	}
-	if m.input != "editable child draft" {
-		t.Fatalf("lookup failure child input = %q, want preserved draft", m.input)
+	if testMainInput(m) != "editable child draft" {
+		t.Fatalf("lookup failure child input = %q, want preserved draft", testMainInput(m))
 	}
 	next, editCmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
 	m = next.(*uiModel)
-	if editCmd != nil || m.input != "editable child draftx" {
-		t.Fatalf("child input after lookup failure edit = %q cmd=%v, want editable draft", m.input, editCmd)
+	if editCmd != nil || testMainInput(m) != "editable child draftx" {
+		t.Fatalf("child input after lookup failure edit = %q cmd=%v, want editable draft", testMainInput(m), editCmd)
 	}
 }
 
@@ -229,8 +229,8 @@ func TestFinalAnswerOperationRejectsWrongCorrelationAndBlocksNavigation(t *testi
 	} {
 		next, _ = m.Update(key)
 		m = next.(*uiModel)
-		if m.input != "" || m.exitAction != UIActionNone || m.finalAnswerOperation == nil {
-			t.Fatalf("key escaped owned operation: key=%+v input=%q transition=%+v op=%+v", key, m.input, m.Transition(), m.finalAnswerOperation)
+		if testMainInput(m) != "" || m.exitAction != UIActionNone || m.finalAnswerOperation == nil {
+			t.Fatalf("key escaped owned operation: key=%+v input=%q transition=%+v op=%+v", key, testMainInput(m), m.Transition(), m.finalAnswerOperation)
 		}
 	}
 }

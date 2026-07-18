@@ -171,7 +171,7 @@ func TestRemoteSessionStatusDoesNotReuseLocalAuthState(t *testing.T) {
 		return authservice.UsagePayload{PlanType: "pro"}, nil
 	}
 
-	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
+	startConfiguredDaemonFixture(t, workspace, serverstartup.Request{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5",
@@ -186,15 +186,7 @@ func TestRemoteSessionStatusDoesNotReuseLocalAuthState(t *testing.T) {
 			},
 		},
 		UpdatedAt: time.Now().UTC(),
-	}}, autoOnboarding)
-	if err != nil {
-		t.Fatalf("serve.Start: %v", err)
-	}
-	defer func() { _ = srv.Close() }()
-
-	stopServing := serveAppServer(t, srv)
-	defer stopServing()
-	waitForConfiguredRemoteIdentity(t, workspace)
+	}})
 
 	loadCfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
 	store := auth.NewFileStore(config.GlobalAuthConfigPath(loadCfg))
@@ -219,7 +211,7 @@ func TestRemoteSessionStatusDoesNotReuseLocalAuthState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("startSessionServer: %v", err)
 	}
-	defer func() { _ = server.Close() }()
+	t.Cleanup(func() { closeInteractiveSessionServer(t, server) })
 	if _, ok := server.(*remoteAppServer); !ok {
 		t.Fatalf("expected remote app server, got %T", server)
 	}
@@ -272,37 +264,25 @@ func TestStartSessionServerUsesInvocationOverridesWhenAttachingToDiscoveredDaemo
 	overrideResponses, overrideHits := newFakeResponsesServer(t, []string{"interactive daemon override"})
 	defer overrideResponses.Close()
 
-	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
+	fixture := startConfiguredDaemonFixture(t, workspace, serverstartup.Request{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5.4",
 		OpenAIBaseURL:         defaultResponses.URL,
 		OpenAIBaseURLExplicit: true,
-	}, apiKeyMemoryAuthHandler("test-key"), autoOnboarding)
-	if err != nil {
-		t.Fatalf("serve.Start: %v", err)
-	}
-	defer func() { _ = srv.Close() }()
+	}, apiKeyMemoryAuthHandler("test-key"))
 
-	stopServing := serveAppServer(t, srv)
-	defer stopServing()
-	waitForConfiguredRemoteIdentity(t, workspace)
-
-	server, err := startSessionServer(context.Background(), Options{
+	server := fixture.attachRemoteSessionServer(t, Options{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5.3-codex",
 		Tools:                 "shell",
 		OpenAIBaseURL:         overrideResponses.URL,
 		OpenAIBaseURLExplicit: true,
-	}, newHeadlessAuthInteractor(), false)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
-	}
-	defer func() { _ = server.Close() }()
+	}, newHeadlessAuthInteractor())
 
 	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, io.Discard, "test remote interactive runtime override")
-	defer runtimePlan.Close()
+	defer closeRuntimeLaunchPlan(t, runtimePlan)
 	if plan.ActiveSettings.Model != "gpt-5.3-codex" {
 		t.Fatalf("model = %q, want gpt-5.3-codex", plan.ActiveSettings.Model)
 	}
@@ -329,28 +309,16 @@ func TestStartSessionServerUsesInvocationOverridesWhenAttachingToDiscoveredDaemo
 func TestStartSessionServerUsesConfiguredDaemonForPromptRoundTrip(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspace(t)
 
-	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
+	fixture := startConfiguredDaemonFixture(t, workspace, serverstartup.Request{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5",
-	}, apiKeyMemoryAuthHandler("test-key"), autoOnboarding)
-	if err != nil {
-		t.Fatalf("serve.Start: %v", err)
-	}
-	defer func() { _ = srv.Close() }()
+	}, apiKeyMemoryAuthHandler("test-key"))
 
-	stopServing := serveAppServer(t, srv)
-	defer stopServing()
-	waitForConfiguredRemoteIdentity(t, workspace)
-
-	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
-	}
-	defer func() { _ = server.Close() }()
+	server := fixture.attachRemoteSessionServer(t, Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, readyMemoryAuthHandler())
 	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, io.Discard, "test remote prompt round trip")
-	defer runtimePlan.Close()
-	finishStep := beginAppTestModelPromptStep(t, srv, plan.SessionID)
+	defer closeRuntimeLaunchPlan(t, runtimePlan)
+	finishStep := beginAppTestModelPromptStep(t, fixture.daemon, plan.SessionID)
 
 	askDone := make(chan struct {
 		resp askquestion.AskQuestionResponse
@@ -361,7 +329,7 @@ func TestStartSessionServerUsesConfiguredDaemonForPromptRoundTrip(t *testing.T) 
 		request := appTestModelPromptRequest("ask-1", "Pick one")
 		request.Suggestions = []string{"one", "two"}
 		request.RecommendedOptionIndex = 2
-		resp, err := srv.AwaitPromptResponse(context.Background(), plan.SessionID, request)
+		resp, err := fixture.daemon.AwaitPromptResponse(context.Background(), plan.SessionID, request)
 		if err != nil {
 			askFailure <- err
 		}
@@ -397,7 +365,7 @@ func TestStartSessionServerUsesConfiguredDaemonForPromptRoundTrip(t *testing.T) 
 		request := appTestModelPromptRequest("approval-1", "Approve it?")
 		request.Approval = true
 		request.ApprovalOptions = []askquestion.AskQuestionApprovalOption{{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"}}
-		resp, err := srv.AwaitPromptResponse(context.Background(), plan.SessionID, request)
+		resp, err := fixture.daemon.AwaitPromptResponse(context.Background(), plan.SessionID, request)
 		approvalDone <- struct {
 			resp askquestion.AskQuestionResponse
 			err  error

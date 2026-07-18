@@ -46,6 +46,51 @@ func TestRememberPromptHistoryLocallyDiscardsOldestPastHundred(t *testing.T) {
 	}
 }
 
+func TestPromptHistoryRestoresAnEmptyDraft(t *testing.T) {
+	m := newProjectedStaticUIModel(WithUIPromptHistory([]string{"previous prompt"}))
+	testSetMainInputAtRuneCursor(m, "", 0)
+
+	if !m.navigatePromptHistoryUp() {
+		t.Fatal("expected history navigation to select the previous prompt")
+	}
+	if got, want := testMainInput(m), "previous prompt"; got != want {
+		t.Fatalf("history input = %q, want %q", got, want)
+	}
+	if !m.navigatePromptHistoryDown() {
+		t.Fatal("expected history navigation to restore the empty draft")
+	}
+	if got := testMainInput(m); got != "" {
+		t.Fatalf("restored draft = %q, want empty", got)
+	}
+	if got := m.mainEditor.Cursor(); got != 0 {
+		t.Fatalf("restored empty draft cursor = %d, want 0", got)
+	}
+	if m.promptHistorySelectionActive() || m.hasPromptHistoryDraft() {
+		t.Fatalf("history state remained active after restoring empty draft: selection=%v draft=%#v", m.promptHistorySelection, m.promptHistoryDraft)
+	}
+}
+
+func TestPromptHistoryDraftRestoresUnicodeCursorWithoutReplacingKillBuffer(t *testing.T) {
+	m := newProjectedStaticUIModel()
+	m.mainEditor.Replace("界x")
+	m.mainEditor.SetCursor(len("界"))
+	snapshot := m.mainEditor.Snapshot()
+	m.promptHistoryDraft = &snapshot
+	m.mainEditor.Replace("temporary")
+	m.mainEditor.SetKillBuffer("retained")
+
+	m.restorePromptHistoryDraft()
+	if got, want := testMainInput(m), "界x"; got != want {
+		t.Fatalf("restored draft = %q, want %q", got, want)
+	}
+	if got, want := m.mainEditor.Cursor(), len("界"); got != want {
+		t.Fatalf("restored byte cursor = %d, want %d", got, want)
+	}
+	if got, want := m.mainEditor.KillBuffer(), "retained"; got != want {
+		t.Fatalf("restored kill buffer = %q, want live value %q", got, want)
+	}
+}
+
 func promptHistoryEntry(index int) string {
 	return "prompt history entry " + strconv.Itoa(index)
 }

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"core/cli/app/internal/startupconfig"
+	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/runtime"
@@ -11,8 +12,8 @@ import (
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/protocol"
 	"core/shared/serverapi"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -23,25 +24,98 @@ import (
 	"github.com/google/uuid"
 )
 
+type configuredDaemonFixture struct {
+	daemon *serverstartup.ServeServer
+}
+
+func startConfiguredDaemonFixture(
+	t *testing.T,
+	workspace string,
+	request serverstartup.Request,
+	authHandler serverstartup.AuthHandler,
+) *configuredDaemonFixture {
+	t.Helper()
+	daemon, err := serverstartup.StartServeServer(context.Background(), request, authHandler, autoOnboarding)
+	if err != nil {
+		t.Fatalf("StartServeServer: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := daemon.Close(); err != nil {
+			t.Errorf("ServeServer.Close: %v", err)
+		}
+	})
+	stopServing := serveAppServer(t, daemon)
+	t.Cleanup(stopServing)
+	waitForConfiguredRemoteIdentity(t, workspace)
+	return &configuredDaemonFixture{daemon: daemon}
+}
+
+func (f *configuredDaemonFixture) attachRemoteSessionServer(
+	t *testing.T,
+	options Options,
+	interactor authInteractor,
+) *remoteAppServer {
+	t.Helper()
+	server, err := startSessionServer(context.Background(), options, interactor, false)
+	if err != nil {
+		t.Fatalf("startSessionServer: %v", err)
+	}
+	remote, ok := server.(*remoteAppServer)
+	if !ok {
+		closeInteractiveSessionServer(t, server)
+		t.Fatalf("expected remote app server, got %T", server)
+	}
+	t.Cleanup(func() { closeInteractiveSessionServer(t, remote) })
+	return remote
+}
+
+func closeInteractiveSessionServer(t *testing.T, server interactiveSessionServer) {
+	t.Helper()
+	if server == nil {
+		return
+	}
+	if err := server.Close(); err != nil {
+		t.Errorf("interactive session server close: %v", err)
+	}
+}
+
+func closeRuntimeLaunchPlan(t *testing.T, plan *runtimeLaunchPlan) {
+	t.Helper()
+	if plan == nil {
+		return
+	}
+	if err := plan.Close(); err != nil {
+		t.Errorf("runtime launch plan close: %v", err)
+	}
+}
+
+func waitForConfiguredRemoteIdentity(t *testing.T, workspace string) protocol.ServerIdentity {
+	t.Helper()
+	opts := Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}
+	var identity protocol.ServerIdentity
+	testsetup.RequireUntil(t, time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
+		remote, ok := tryDialMatchingConfiguredRemoteWithRequirement(context.Background(), opts, nil, nil, true)
+		if ok {
+			identity = remote.Identity()
+			_ = remote.Close()
+			return true
+		}
+		return false
+	}, "configured daemon did not become reachable for workspace %s", workspace)
+	return identity
+}
+
 func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspace(t)
 	fakeResponses, hits := newNoAuthFakeResponsesServer(t, []string{"first no-auth reply", "second no-auth reply"})
 	defer fakeResponses.Close()
 
-	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
+	startConfiguredDaemonFixture(t, workspace, serverstartup.Request{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5",
 		AllowUnauthenticated:  true,
-	}, memoryAuthHandler{}, autoOnboarding)
-	if err != nil {
-		t.Fatalf("serve.Start: %v", err)
-	}
-	defer func() { _ = srv.Close() }()
-
-	stopServing := serveAppServer(t, srv)
-	defer stopServing()
-	waitForConfiguredRemoteIdentity(t, workspace)
+	}, memoryAuthHandler{})
 
 	pickerCalls := 0
 	firstInteractor := &interactiveAuthInteractor{
@@ -69,7 +143,7 @@ func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) 
 	if firstSubmission.Message != "first no-auth reply" {
 		t.Fatalf("first assistant message = %q, want first no-auth reply", firstSubmission.Message)
 	}
-	firstRuntimePlan.Close()
+	closeRuntimeLaunchPlan(t, firstRuntimePlan)
 	if err := firstServer.Close(); err != nil {
 		t.Fatalf("first server close: %v", err)
 	}
@@ -88,7 +162,7 @@ func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) 
 	if err != nil {
 		t.Fatalf("second startSessionServer: %v", err)
 	}
-	defer func() { _ = secondServer.Close() }()
+	t.Cleanup(func() { closeInteractiveSessionServer(t, secondServer) })
 	_, secondRuntimePlan := prepareAppRuntimePlanWithOpenAIBaseURL(t, secondServer, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, fakeResponses.URL, io.Discard, "test remote persisted no-auth runtime")
 	secondSubmission, err := submitRuntimeClientForTest(t, secondRuntimePlan.Wiring.runtimeClient, "hello after persisted no auth")
 	if err != nil {
@@ -97,7 +171,7 @@ func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) 
 	if secondSubmission.Message != "second no-auth reply" {
 		t.Fatalf("second assistant message = %q, want second no-auth reply", secondSubmission.Message)
 	}
-	secondRuntimePlan.Close()
+	closeRuntimeLaunchPlan(t, secondRuntimePlan)
 	if hits.Load() != 2 {
 		t.Fatalf("expected fake LLM calls twice, got %d", hits.Load())
 	}
@@ -191,29 +265,13 @@ func TestConfiguredDaemonPlanSessionUsesSessionWorkspaceLocalConfig(t *testing.T
 		t.Fatalf("RegisterBinding: %v", err)
 	}
 
-	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{AllowUnauthenticated: true}, readyMemoryAuthHandler(), autoOnboarding)
-	if err != nil {
-		t.Fatalf("serve.Start: %v", err)
-	}
-	defer func() { _ = srv.Close() }()
-
-	stopServing := serveAppServer(t, srv)
-	defer stopServing()
-	waitForConfiguredRemoteIdentity(t, workspace)
-
-	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-	if _, ok := server.(*remoteAppServer); !ok {
-		t.Fatalf("expected remote app server, got %T", server)
-	}
+	fixture := startConfiguredDaemonFixture(t, workspace, serverstartup.Request{AllowUnauthenticated: true}, readyMemoryAuthHandler())
+	server := fixture.attachRemoteSessionServer(t, Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, readyMemoryAuthHandler())
 	bound, err := ensureInteractiveProjectBinding(context.Background(), server)
 	if err != nil {
 		t.Fatalf("ensureInteractiveProjectBinding: %v", err)
 	}
-	defer func() { _ = bound.Close() }()
+	t.Cleanup(func() { closeInteractiveSessionServer(t, bound) })
 	planner := newSessionLaunchPlanner(bound)
 	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())})
 	if err != nil {
@@ -233,30 +291,17 @@ func TestConfiguredDaemonEnvironmentContextUsesSessionWorkspaceRootForCWD(t *tes
 	fakeResponses, hits := newFakeResponsesServer(t, []string{"interactive daemon reply"})
 	defer fakeResponses.Close()
 
-	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
+	fixture := startConfiguredDaemonFixture(t, workspace, serverstartup.Request{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5",
 		OpenAIBaseURL:         fakeResponses.URL,
 		OpenAIBaseURLExplicit: true,
-	}, apiKeyMemoryAuthHandler("test-key"), autoOnboarding)
-	if err != nil {
-		t.Fatalf("serve.Start: %v", err)
-	}
-	defer func() { _ = srv.Close() }()
-
-	stopServing := serveAppServer(t, srv)
-	defer stopServing()
-	waitForConfiguredRemoteIdentity(t, workspace)
-
-	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, newHeadlessAuthInteractor(), false)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
-	}
-	defer func() { _ = server.Close() }()
+	}, apiKeyMemoryAuthHandler("test-key"))
+	server := fixture.attachRemoteSessionServer(t, Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, newHeadlessAuthInteractor())
 
 	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, io.Discard, "test daemon environment cwd")
-	defer runtimePlan.Close()
+	defer closeRuntimeLaunchPlan(t, runtimePlan)
 
 	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello through interactive daemon")
 	message := submission.Message
@@ -302,7 +347,16 @@ func TestConfiguredDaemonEnvironmentContextUsesSessionWorkspaceRootForCWD(t *tes
 }
 
 func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorkspaces(t *testing.T) {
-	fixture := startRemoteMultiClientRuntimeFixture(t, "")
+	fixture := startRemoteMultiClientRuntimeFixture(t)
+	if got, want := fixture.serverA.ProjectID(), fixture.serverB.ProjectID(); got != want {
+		t.Fatalf("project id mismatch across clients: a=%q b=%q", got, want)
+	}
+	if fixture.serverA.Config().WorkspaceRoot == fixture.serverB.Config().WorkspaceRoot {
+		t.Fatalf("expected distinct workspace roots across clients, both=%q", fixture.serverA.Config().WorkspaceRoot)
+	}
+	if fixture.planB.SessionID != fixture.planA.SessionID {
+		t.Fatalf("expected second client to attach same session, a=%q b=%q", fixture.planA.SessionID, fixture.planB.SessionID)
+	}
 	finishStep := beginAppTestModelPromptStep(t, fixture.daemon, fixture.planA.SessionID)
 
 	askDone := make(chan struct {
@@ -469,89 +523,32 @@ func beginAppTestModelPromptStep(t *testing.T, server *serverstartup.ServeServer
 
 type remoteMultiClientRuntimeFixture struct {
 	daemon       *serverstartup.ServeServer
-	workspaceA   string
-	workspaceB   string
-	serverA      remoteMultiClientServer
-	serverB      remoteMultiClientServer
+	serverA      *remoteAppServer
+	serverB      *remoteAppServer
 	planA        sessionLaunchPlan
 	planB        sessionLaunchPlan
 	runtimePlanA *runtimeLaunchPlan
-	runtimePlanB *runtimeLaunchPlan
 }
 
-type remoteMultiClientServer interface {
-	interactiveSessionServer
-	RuntimeAttachmentClients() runtimeAttachmentClients
-}
-
-func startRemoteMultiClientRuntimeFixture(t *testing.T, openAIBaseURL string) *remoteMultiClientRuntimeFixture {
+func startRemoteMultiClientRuntimeFixture(t *testing.T) *remoteMultiClientRuntimeFixture {
 	t.Helper()
 
-	fixture := &remoteMultiClientRuntimeFixture{
-		workspaceA: t.TempDir(),
-		workspaceB: t.TempDir(),
-	}
+	fixture := &remoteMultiClientRuntimeFixture{}
+	workspaceA := t.TempDir()
+	workspaceB := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
-	registerAppWorkspace(t, fixture.workspaceA)
-	registerAppWorkspace(t, fixture.workspaceB)
+	registerAppWorkspace(t, workspaceA)
+	registerAppWorkspace(t, workspaceB)
 
-	req := serverstartup.Request{
-		WorkspaceRoot:         fixture.workspaceA,
+	configured := startConfiguredDaemonFixture(t, workspaceA, serverstartup.Request{
+		WorkspaceRoot:         workspaceA,
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5",
-	}
-	if strings.TrimSpace(openAIBaseURL) != "" {
-		req.OpenAIBaseURL = openAIBaseURL
-		req.OpenAIBaseURLExplicit = true
-	}
+	}, apiKeyMemoryAuthHandler("test-key"))
+	fixture.daemon = configured.daemon
+	fixture.serverA = configured.attachRemoteSessionServer(t, Options{WorkspaceRoot: workspaceA, WorkspaceRootExplicit: true}, newHeadlessAuthInteractor())
 
-	srv, err := serverstartup.StartServeServer(context.Background(), req, apiKeyMemoryAuthHandler("test-key"), autoOnboarding)
-	if err != nil {
-		t.Fatalf("serve.Start: %v", err)
-	}
-	fixture.daemon = srv
-
-	serveCtx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- srv.Serve(serveCtx)
-	}()
-	waitForConfiguredRemoteIdentity(t, fixture.workspaceA)
-
-	t.Cleanup(func() {
-		if fixture.runtimePlanB != nil {
-			fixture.runtimePlanB.Close()
-		}
-		if fixture.runtimePlanA != nil {
-			fixture.runtimePlanA.Close()
-		}
-		if fixture.serverB != nil {
-			_ = fixture.serverB.Close()
-		}
-		if fixture.serverA != nil {
-			_ = fixture.serverA.Close()
-		}
-		cancel()
-		if serveErr := <-errCh; !errors.Is(serveErr, context.Canceled) && serveErr != nil {
-			t.Errorf("Serve error = %v, want context canceled", serveErr)
-		}
-		_ = srv.Close()
-	})
-
-	serverA, err := startSessionServer(context.Background(), Options{WorkspaceRoot: fixture.workspaceA, WorkspaceRootExplicit: true}, newHeadlessAuthInteractor(), false)
-	if err != nil {
-		t.Fatalf("startSessionServer workspace A: %v", err)
-	}
-	serverAFull, ok := serverA.(remoteMultiClientServer)
-	if !ok {
-		t.Fatalf("expected remote multi-client server for workspace A, got %T", serverA)
-	}
-	fixture.serverA = serverAFull
-	if _, ok := fixture.serverA.(*remoteAppServer); !ok {
-		t.Fatalf("expected remote app server for workspace A, got %T", fixture.serverA)
-	}
-
-	cfgB, err := startupconfig.ResolveSessionConfig(startupConfigRequest(Options{WorkspaceRoot: fixture.workspaceB, WorkspaceRootExplicit: true}))
+	cfgB, err := startupconfig.ResolveSessionConfig(startupConfigRequest(Options{WorkspaceRoot: workspaceB, WorkspaceRootExplicit: true}))
 	if err != nil {
 		t.Fatalf("loadSessionServerConfig workspace B: %v", err)
 	}
@@ -560,23 +557,15 @@ func startRemoteMultiClientRuntimeFixture(t *testing.T, openAIBaseURL string) *r
 		t.Fatalf("DialRemote workspace B: %v", err)
 	}
 	fixture.serverB = newRemoteAppServerWithAuth(remoteB, cfgB, nil, false)
-
-	if got, want := fixture.serverA.ProjectID(), fixture.serverB.ProjectID(); got != want {
-		t.Fatalf("project id mismatch across clients: a=%q b=%q", got, want)
-	}
-	if fixture.serverA.Config().WorkspaceRoot == fixture.serverB.Config().WorkspaceRoot {
-		t.Fatalf("expected distinct workspace roots across clients, both=%q", fixture.serverA.Config().WorkspaceRoot)
-	}
+	t.Cleanup(func() { closeInteractiveSessionServer(t, fixture.serverB) })
 
 	fixture.planA, fixture.runtimePlanA = prepareAppRuntimePlan(t, fixture.serverA, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, io.Discard, "test remote multi-client runtime A")
+	t.Cleanup(func() { closeRuntimeLaunchPlan(t, fixture.runtimePlanA) })
 
 	plannerB := newSessionLaunchPlanner(fixture.serverB)
 	fixture.planB, err = plannerB.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(sessionLifecycleSessionID(t, fixture.planA.SessionID))})
 	if err != nil {
 		t.Fatalf("PlanSession B: %v", err)
-	}
-	if fixture.planB.SessionID != fixture.planA.SessionID {
-		t.Fatalf("expected second client to attach same session, a=%q b=%q", fixture.planA.SessionID, fixture.planB.SessionID)
 	}
 
 	return fixture

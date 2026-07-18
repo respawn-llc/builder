@@ -24,10 +24,7 @@ func TestEnsureInteractiveProjectBindingBindsRegisteredWorkspaceWithoutPrompt(t 
 	workspace := t.TempDir()
 
 	cfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
-	binding, err := metadata.RegisterBinding(context.Background(), cfg.PersistenceRoot, cfg.WorkspaceRoot)
-	if err != nil {
-		t.Fatalf("RegisterBinding: %v", err)
-	}
+	binding := mustRegisterAppBinding(t, cfg.PersistenceRoot, cfg.WorkspaceRoot)
 	projectViewClient := newAppMetadataProjectViewClient(t, cfg)
 
 	originalPicker := runProjectBindingPickerFlow
@@ -125,10 +122,7 @@ func TestEnsureInteractiveProjectBindingTreatsNestedDirectoryAsUnknownWorkspace(
 	}
 	baseCfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
 	nestedCfg := loadAppTestConfig(t, nested, config.LoadOptions{})
-	_, err := metadata.RegisterBinding(context.Background(), baseCfg.PersistenceRoot, baseCfg.WorkspaceRoot)
-	if err != nil {
-		t.Fatalf("RegisterBinding: %v", err)
-	}
+	mustRegisterAppBinding(t, baseCfg.PersistenceRoot, baseCfg.WorkspaceRoot)
 	projectViewClient := newAppMetadataProjectViewClient(t, baseCfg)
 
 	originalPicker := runProjectBindingPickerFlow
@@ -344,10 +338,7 @@ func TestEnsureInteractiveProjectBindingAttachesUnknownWorkspaceToExistingProjec
 	workspaceB := t.TempDir()
 
 	cfgA := loadAppTestConfig(t, workspaceA, config.LoadOptions{})
-	bindingA, err := metadata.RegisterBinding(context.Background(), cfgA.PersistenceRoot, cfgA.WorkspaceRoot)
-	if err != nil {
-		t.Fatalf("RegisterBinding A: %v", err)
-	}
+	bindingA := mustRegisterAppBinding(t, cfgA.PersistenceRoot, cfgA.WorkspaceRoot)
 
 	cfgB := loadAppTestConfig(t, workspaceB, config.LoadOptions{})
 	projectViewClient := newAppMetadataProjectViewClient(t, cfgB)
@@ -498,10 +489,7 @@ func TestEnsureInteractiveProjectBindingReturnsMissingBoundProjectError(t *testi
 	newAppTestHome(t)
 
 	cfg := loadAppTestConfig(t, t.TempDir(), config.LoadOptions{})
-	binding, err := metadata.RegisterBinding(context.Background(), cfg.PersistenceRoot, cfg.WorkspaceRoot)
-	if err != nil {
-		t.Fatalf("RegisterBinding: %v", err)
-	}
+	binding := mustRegisterAppBinding(t, cfg.PersistenceRoot, cfg.WorkspaceRoot)
 	projectViewClient := newAppMetadataProjectViewClient(t, cfg)
 
 	server := &failingBindProjectServer{
@@ -513,7 +501,7 @@ func TestEnsureInteractiveProjectBindingReturnsMissingBoundProjectError(t *testi
 		bindErr: fmt.Errorf("bind project: %w", serverapi.ErrProjectNotFound),
 	}
 
-	_, err = ensureInteractiveProjectBinding(context.Background(), server)
+	_, err := ensureInteractiveProjectBinding(context.Background(), server)
 	if !errors.Is(err, serverapi.ErrProjectNotFound) {
 		t.Fatalf("ensureInteractiveProjectBinding error = %v, want ErrProjectNotFound", err)
 	}
@@ -528,10 +516,7 @@ func TestEnsureInteractiveProjectBindingPreservesUnavailableBoundProject(t *test
 			newAppTestHome(t)
 
 			cfg := loadAppTestConfig(t, t.TempDir(), config.LoadOptions{})
-			binding, err := metadata.RegisterBinding(context.Background(), cfg.PersistenceRoot, cfg.WorkspaceRoot)
-			if err != nil {
-				t.Fatalf("RegisterBinding: %v", err)
-			}
+			binding := mustRegisterAppBinding(t, cfg.PersistenceRoot, cfg.WorkspaceRoot)
 			projectViewClient := newAppMetadataProjectViewClient(t, cfg)
 			expected := serverapi.ProjectUnavailableError{
 				ProjectID:    binding.ProjectID,
@@ -548,7 +533,7 @@ func TestEnsureInteractiveProjectBindingPreservesUnavailableBoundProject(t *test
 				bindErr: expected,
 			}
 
-			_, err = ensureInteractiveProjectBinding(context.Background(), server)
+			_, err := ensureInteractiveProjectBinding(context.Background(), server)
 			if !errors.Is(err, serverapi.ErrProjectUnavailable) {
 				t.Fatalf("ensureInteractiveProjectBinding error = %v, want ErrProjectUnavailable", err)
 			}

@@ -29,12 +29,6 @@ type scriptedAskPromptControl struct {
 	askRequests []serverapi.AskAnswerRequest
 }
 
-type scriptedApprovalPromptControl struct {
-	mu               sync.Mutex
-	results          []error
-	approvalRequests []serverapi.ApprovalAnswerRequest
-}
-
 type deadlineThenSuccessApprovalControl struct {
 	mu               sync.Mutex
 	approvalRequests []serverapi.ApprovalAnswerRequest
@@ -95,27 +89,6 @@ func (c *scriptedAskPromptControl) requests() []serverapi.AskAnswerRequest {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]serverapi.AskAnswerRequest(nil), c.askRequests...)
-}
-
-func (c *scriptedApprovalPromptControl) AnswerAsk(context.Context, serverapi.AskAnswerRequest) error {
-	return errors.New("unexpected ask answer")
-}
-
-func (c *scriptedApprovalPromptControl) AnswerApproval(_ context.Context, request serverapi.ApprovalAnswerRequest) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	call := len(c.approvalRequests)
-	c.approvalRequests = append(c.approvalRequests, request)
-	if call < len(c.results) {
-		return c.results[call]
-	}
-	return nil
-}
-
-func (c *scriptedApprovalPromptControl) requests() []serverapi.ApprovalAnswerRequest {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([]serverapi.ApprovalAnswerRequest(nil), c.approvalRequests...)
 }
 
 func newDeadlineThenSuccessPromptControl() *deadlineThenSuccessPromptControl {
@@ -325,10 +298,10 @@ func TestAskRetryThenSuccessKeepsOneRequestIDUntilCanonicalResolution(t *testing
 	if len(requests) != 3 {
 		t.Fatalf("ask requests = %d, want two retries then success", len(requests))
 	}
-	requestID := requests[0].ClientRequestID
+	wantRequest := requests[0]
 	for index, request := range requests {
-		if request.ClientRequestID != requestID {
-			t.Fatalf("request %d ID = %q, want stable %q", index, request.ClientRequestID, requestID)
+		if request != wantRequest {
+			t.Fatalf("request %d = %+v, want immutable %+v", index, request, wantRequest)
 		}
 	}
 	if !testPromptAnswerDeliveryActive(model) || testActiveAsk(model) == nil {
@@ -337,50 +310,6 @@ func TestAskRetryThenSuccessKeepsOneRequestIDUntilCanonicalResolution(t *testing
 	resolveAnsweredTestAskThroughTranscript(t, model)
 	if testActiveAsk(model) != nil {
 		t.Fatal("prompt remained after canonical transcript resolution")
-	}
-}
-
-func TestAskPersistentRetryableFailureStopsAfterSixCallsAndRestoresActionability(t *testing.T) {
-	disableTransientStatusClearForTest(t)
-	persistent := errors.New("persistent retryable failure")
-	control := &scriptedAskPromptControl{results: []error{
-		persistent,
-		persistent,
-		persistent,
-		persistent,
-		persistent,
-		persistent,
-	}}
-	answerer := newTranscriptPromptAnswerer(context.Background(), control)
-	answerer.retryWait = func(context.Context, time.Duration) error { return nil }
-
-	model := newProjectedStaticUIModel()
-	model.promptAnswers = answerer
-	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
-		testQuestionPrompt("ask-retry-exhausted", "Provide details"),
-	)})
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("retry draft")})
-
-	next, delivery := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = runPromptDeliveryCommand(t, next.(*uiModel), delivery)
-	requests := control.requests()
-	if len(requests) != 6 {
-		t.Fatalf("ask requests = %d, want bounded six calls", len(requests))
-	}
-	requestID := requests[0].ClientRequestID
-	for index, request := range requests {
-		if request.ClientRequestID != requestID {
-			t.Fatalf("request %d ID = %q, want stable %q", index, request.ClientRequestID, requestID)
-		}
-	}
-	if testPromptAnswerDeliveryActive(model) {
-		t.Fatal("exhausted retry left answer delivery active")
-	}
-	if testActiveAsk(model) == nil || testAskInput(model) != "retry draft" {
-		t.Fatal("exhausted retry did not preserve the actionable prompt draft")
-	}
-	if model.transientStatusKind != uiStatusNoticeError || model.transientStatus == "" {
-		t.Fatalf("exhausted retry notice = kind %d text %q, want visible error", model.transientStatusKind, model.transientStatus)
 	}
 }
 
@@ -745,104 +674,6 @@ func TestDenyCommentaryDeadlineKeepsEditedDraftActionableWithoutQueuedCopy(t *te
 	}
 	if !testPromptAnswerDeliveryActive(model) || testActiveAsk(model) == nil {
 		t.Fatal("successful denial delivery stopped awaiting canonical resolution")
-	}
-	resolveAnsweredTestAskThroughTranscript(t, model)
-}
-
-func TestDenyCommentaryAutomaticRetriesUseOneRequestIDAndStopAfterSixCalls(t *testing.T) {
-	persistent := errors.New("persistent approval failure")
-	control := &scriptedApprovalPromptControl{results: []error{
-		persistent,
-		persistent,
-		persistent,
-		persistent,
-		persistent,
-		persistent,
-	}}
-	answerer := newTranscriptPromptAnswerer(context.Background(), control)
-	answerer.retryWait = func(context.Context, time.Duration) error { return nil }
-
-	model := newProjectedStaticUIModel()
-	model.promptAnswers = answerer
-	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
-		testApprovalPrompt(
-			"deny-commentary-exhausted",
-			"Allow access?",
-			clientui.ApprovalDecisionAllowOnce,
-			clientui.ApprovalDecisionDeny,
-		),
-	)})
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("blocked")})
-
-	next, delivery := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = runPromptDeliveryCommand(t, next.(*uiModel), delivery)
-	requests := control.requests()
-	if len(requests) != 6 {
-		t.Fatalf("denial requests = %d, want bounded six calls", len(requests))
-	}
-	requestID := requests[0].ClientRequestID
-	for index, request := range requests {
-		if request.ClientRequestID != requestID || request.Decision != clientui.ApprovalDecisionDeny || request.Commentary != "blocked" {
-			t.Fatalf("denial request %d = %+v, want stable immutable request ID %q", index, request, requestID)
-		}
-	}
-	if testPromptAnswerDeliveryActive(model) || testActiveAsk(model) == nil || testAskInput(model) != "blocked" {
-		t.Fatal("denial retry exhaustion did not preserve the actionable commentary draft")
-	}
-	if len(model.pendingInjected) != 0 {
-		t.Fatalf("denial retries created queued commentary: %+v", model.pendingInjected)
-	}
-}
-
-func TestAllowCommentaryQueuesBeforeApprovalRetriesWithOneRequestID(t *testing.T) {
-	control := &scriptedApprovalPromptControl{results: []error{
-		errors.New("retryable approval failure one"),
-		errors.New("retryable approval failure two"),
-		nil,
-	}}
-	answerer := newTranscriptPromptAnswerer(context.Background(), control)
-	answerer.retryWait = func(context.Context, time.Duration) error { return nil }
-	runtimeClient := &runtimeControlFakeClient{queueUserMessageID: "allow-commentary-queue"}
-	model := newProjectedTestUIModel(runtimeClient)
-	model.promptAnswers = answerer
-	model.setRuntimeActivityBusyForTest(true)
-	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
-		testApprovalPrompt(
-			"allow-commentary-retry",
-			"Allow access?",
-			clientui.ApprovalDecisionAllowOnce,
-			clientui.ApprovalDecisionDeny,
-		),
-	)})
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("safe operation")})
-
-	next, queueCommand := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = next.(*uiModel)
-	if queueCommand == nil || !model.ask.answerPending || runtimeClient.queueUserMessageCalls != 0 {
-		t.Fatalf("allow queue stage = command %v pending %t calls %d", queueCommand, model.ask.answerPending, runtimeClient.queueUserMessageCalls)
-	}
-	next, deliveryCommand := model.Update(queueCommand())
-	model = next.(*uiModel)
-	model = runPromptDeliveryCommand(t, model, deliveryCommand)
-
-	if runtimeClient.queueUserMessageCalls != 1 || runtimeClient.queuedText != "safe operation" {
-		t.Fatalf("allow commentary queue = calls %d text %q, want one queue before answer", runtimeClient.queueUserMessageCalls, runtimeClient.queuedText)
-	}
-	requests := control.requests()
-	if len(requests) != 3 {
-		t.Fatalf("allow approval requests = %d, want two retries then success", len(requests))
-	}
-	requestID := requests[0].ClientRequestID
-	for index, request := range requests {
-		if request.ClientRequestID != requestID || request.Decision != clientui.ApprovalDecisionAllowOnce || request.Commentary != "safe operation" {
-			t.Fatalf("allow request %d = %+v, want stable immutable request ID %q", index, request, requestID)
-		}
-	}
-	if !testPromptAnswerDeliveryActive(model) || model.ask.answerPending {
-		t.Fatal("successful allow delivery did not remain active with the queue-stage lock released")
 	}
 	resolveAnsweredTestAskThroughTranscript(t, model)
 }

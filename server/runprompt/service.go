@@ -2,8 +2,11 @@ package runprompt
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"time"
 
+	"core/server/metadata"
 	"core/server/requestmemo"
 	servicecontract "core/shared/apicontract"
 	"core/shared/serverapi"
@@ -17,12 +20,12 @@ type runPromptMemoRequest struct {
 	Overrides       serverapi.RunPromptOverridesKey
 }
 
-type memoizingPromptService struct {
-	inner servicecontract.RunPromptService
-	runs  *requestmemo.Memo[runPromptMemoRequest, serverapi.RunPromptResponse]
+type inProcessRunPromptService struct {
+	launcher *headlessPromptLauncher
+	runs     *requestmemo.Memo[runPromptMemoRequest, serverapi.RunPromptResponse]
 }
 
-func (s *memoizingPromptService) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
+func (s *inProcessRunPromptService) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
 	overrides, err := req.Overrides.CanonicalKey()
 	if err != nil {
 		return serverapi.RunPromptResponse{}, err
@@ -35,8 +38,60 @@ func (s *memoizingPromptService) RunPrompt(ctx context.Context, req serverapi.Ru
 		Overrides:       overrides,
 	}
 	return s.runs.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameRunPromptMemoRequest, func(ctx context.Context) (serverapi.RunPromptResponse, error) {
-		return s.inner.RunPrompt(ctx, req, progress)
+		return s.runPrompt(ctx, req, progress)
 	})
+}
+
+func (s *inProcessRunPromptService) runPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
+	if s == nil || s.launcher == nil {
+		return serverapi.RunPromptResponse{}, errors.New("run prompt service is not configured")
+	}
+	req.ClientRequestID = strings.TrimSpace(req.ClientRequestID)
+	req.Prompt = strings.TrimSpace(req.Prompt)
+	if err := req.Validate(); err != nil {
+		return serverapi.RunPromptResponse{}, err
+	}
+
+	runtimeHandle, err := s.launcher.prepareHeadlessPrompt(ctx, req, progress)
+	if err != nil {
+		return serverapi.RunPromptResponse{}, err
+	}
+	failed := false
+	defer func() {
+		runtimeHandle.plan.CloseWithFailure(failed)
+	}()
+
+	runCtx := ctx
+	if req.Timeout > 0 {
+		var cancel context.CancelFunc
+		runCtx, cancel = context.WithTimeout(ctx, req.Timeout)
+		defer cancel()
+	}
+
+	startedAt := time.Now()
+	if history := s.launcher.boot.PromptHistory; history != nil {
+		_, _, err := history.RecordPromptHistoryEntry(runCtx, metadata.PromptHistoryEntry{
+			SessionID: runtimeHandle.plan.sessionID,
+			SourceID:  req.ClientRequestID,
+			Text:      req.Prompt,
+		})
+		if err != nil {
+			failed = true
+			return serverapi.RunPromptResponse{}, err
+		}
+	}
+	response, dropped, runErr := runtimeHandle.submitUserMessage(runCtx, req.Prompt)
+	response.Duration = time.Since(startedAt)
+	if dropped > 0 {
+		runtimeHandle.plan.diagLogger.Logf("runtime.event.drop.total=%d", dropped)
+	}
+	if runErr != nil {
+		failed = true
+		runtimeHandle.plan.diagLogger.Logf("app.run_prompt.exit err=%q", runErr.Error())
+		return response, runErr
+	}
+	runtimeHandle.plan.diagLogger.Logf("app.run_prompt.exit ok")
+	return response, nil
 }
 
 func sameRunPromptMemoRequest(a runPromptMemoRequest, b runPromptMemoRequest) bool {
@@ -47,4 +102,4 @@ func sameRunPromptMemoRequest(a runPromptMemoRequest, b runPromptMemoRequest) bo
 		a.Overrides == b.Overrides
 }
 
-var _ servicecontract.RunPromptService = (*memoizingPromptService)(nil)
+var _ servicecontract.RunPromptService = (*inProcessRunPromptService)(nil)

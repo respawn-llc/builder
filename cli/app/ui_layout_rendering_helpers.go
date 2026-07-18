@@ -11,6 +11,8 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
+// uiEditableInputRenderSpec remains the shared projection contract for
+// independent app-owned input fields outside the main composer and ask pane.
 type uiEditableInputRenderSpec struct {
 	Prefix       string
 	Text         string
@@ -24,8 +26,16 @@ func renderFramedEditableInputLines(width, maxContentLines int, spec uiEditableI
 	if width < 1 {
 		return []string{padRight("", width)}
 	}
-	renderedField := renderEditableInputField(width, maxContentLines, spec)
-	return renderFramedLines(width, tuiinput.RenderSoftCursorLines(width, renderedField, lineStyle), borderStyle)
+	field := tuiinput.NewField()
+	field.Editor.Replace(spec.Text)
+	field.Editor.SetCursor(byteOffsetForRuneCursor(spec.Text, spec.CursorIndex))
+	field.Prefix = spec.Prefix
+	field.MaxLines = maxContentLines
+	field.Cursor = spec.RenderCursor
+	field.Mask = spec.Mask
+	field.Placeholder = spec.Placeholder
+	rendered := field.Render(width)
+	return renderFramedLines(width, tuiinput.RenderSoftCursorLines(width, rendered, lineStyle), borderStyle)
 }
 
 func renderFramedLines(width int, lines []string, borderStyle lipgloss.Style) []string {
@@ -35,108 +45,6 @@ func renderFramedLines(width int, lines []string, borderStyle lipgloss.Style) []
 	out = append(out, lines...)
 	out = append(out, border)
 	return out
-}
-
-func wrappedEditableInputLines(width int, spec uiEditableInputRenderSpec) []string {
-	field := editableInputField(width, 0, spec)
-	return field.Render(width).Lines
-}
-
-func visibleEditableInputViewport(width, maxContentLines int, spec uiEditableInputRenderSpec) ([]string, int, int) {
-	rendered := renderEditableInputField(width, maxContentLines, spec)
-	cursor := rendered.Cursor
-	if !cursor.Visible {
-		return rendered.Lines, -1, 0
-	}
-	return rendered.Lines, cursor.Row, cursor.Col
-}
-
-func renderEditableInputField(width, maxContentLines int, spec uiEditableInputRenderSpec) tuiinput.RenderResult {
-	field := editableInputField(width, maxContentLines, spec)
-	return field.Render(width)
-}
-
-func editableInputField(width, maxContentLines int, spec uiEditableInputRenderSpec) tuiinput.Field {
-	if width < 1 {
-		width = 1
-	}
-	editor := tuiinput.NewEditor()
-	editor.Replace(spec.Text)
-	editor.SetCursor(byteOffsetForRuneCursor(spec.Text, spec.CursorIndex))
-	field := tuiinput.NewField()
-	field.Editor = editor
-	field.Prefix = spec.Prefix
-	field.MaxLines = maxContentLines
-	field.Cursor = spec.RenderCursor
-	field.Mask = spec.Mask
-	field.Placeholder = spec.Placeholder
-	return field
-}
-
-func byteOffsetForRuneCursor(text string, cursor int) int {
-	if cursor < 0 {
-		return len(text)
-	}
-	if cursor == 0 {
-		return 0
-	}
-	runeIndex := 0
-	for byteIndex := range text {
-		if runeIndex == cursor {
-			return byteIndex
-		}
-		runeIndex++
-	}
-	return len(text)
-}
-
-func visibleWrappedLineStart(totalLines, maxContentLines, cursorLine int, trackCursor bool) int {
-	if maxContentLines < 1 || totalLines <= maxContentLines {
-		return 0
-	}
-	maxStart := totalLines - maxContentLines
-	if !trackCursor || cursorLine < 0 {
-		return maxStart
-	}
-	start := cursorLine - maxContentLines + 1
-	if start < 0 {
-		return 0
-	}
-	if start > maxStart {
-		return maxStart
-	}
-	return start
-}
-
-func overlayCursorOnLine(line string, cursorCol, width int, cursorStyle lipgloss.Style) string {
-	if width < 1 {
-		return line
-	}
-
-	runes := []rune(line)
-	displayCol := 0
-	for i, r := range runes {
-		rw := runewidth.RuneWidth(r)
-		if rw < 1 {
-			rw = 1
-		}
-		if cursorCol < displayCol+rw {
-			return string(runes[:i]) + cursorStyle.Render(string(r)) + string(runes[i+1:])
-		}
-		displayCol += rw
-	}
-
-	if displayCol < width {
-		cursorCol = min(max(cursorCol, displayCol), width-1)
-		return line + strings.Repeat(" ", cursorCol-displayCol) + cursorStyle.Render(" ")
-	}
-
-	if len(runes) == 0 {
-		return cursorStyle.Render(" ")
-	}
-
-	last := len(runes) - 1
-	return string(runes[:last]) + cursorStyle.Render(string(runes[last]))
 }
 
 func splitPlainLines(v string) []string {

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -42,55 +41,45 @@ func TestRootCommandPrintsVersion(t *testing.T) {
 		config.Version = original
 	})
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	if code := rootCommand([]string{"--version"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
-		t.Fatalf("exit code = %d, want 0", code)
-	}
-	if got := stdout.String(); got != "1.2.3\n" {
+	stdout, stderr := runRootCommandOK(t, "--version")
+	if got := stdout; got != "1.2.3\n" {
 		t.Fatalf("stdout = %q, want version output", got)
 	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want empty", stderr.String())
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
 	}
 }
 
 func TestRootHelpSmoke(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	if code := rootCommand([]string{"--help"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
-		t.Fatalf("exit code = %d, want 0", code)
+	stdout, stderr := runRootCommandOK(t, "--help")
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
 	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty", stdout.String())
-	}
-	if strings.TrimSpace(stderr.String()) == "" {
+	if strings.TrimSpace(stderr) == "" {
 		t.Fatal("help output is empty")
 	}
 }
 
 func TestRootCommandRejectsUnknownCommand(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	if code := rootCommand([]string{"prompt", "--help"}, strings.NewReader(""), &stdout, &stderr); code != 2 {
+	stdout, stderr, code := runRootCommand("prompt", "--help")
+	if code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty", stdout.String())
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
 	}
 	_ = stderr
 }
 
 func TestRootCommandRejectsNonInteractiveMode(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	if code := rootCommand(nil, strings.NewReader(""), &stdout, &stderr); code != 2 {
+	stdout, stderr, code := runRootCommand()
+	if code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty", stdout.String())
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
 	}
-	if got := stderr.String(); !strings.Contains(got, "interactive mode requires a terminal on stdin and stdout") {
+	if got := stderr; !strings.Contains(got, "interactive mode requires a terminal on stdin and stdout") {
 		t.Fatalf("stderr = %q, want non-interactive error", got)
 	}
 }
@@ -106,16 +95,12 @@ func TestRootCommandForceInteractiveBypassesTerminalCheck(t *testing.T) {
 		return nil
 	}
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	if code := rootCommand([]string{"--force-interactive"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
-		t.Fatalf("exit code = %d, want 0", code)
-	}
+	_, stderr := runRootCommandOK(t, "--force-interactive")
 	if !called {
 		t.Fatal("expected interactive app to run when --force-interactive is set")
 	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want empty", stderr.String())
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
 	}
 }
 
@@ -130,23 +115,19 @@ func TestRootCommandMapsSessionFlagsToInteractiveApp(t *testing.T) {
 		return nil
 	}
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
 	args := []string{
 		"--force-interactive",
 		"--session", "session-123",
 	}
-	if code := rootCommand(args, strings.NewReader(""), &stdout, &stderr); code != 0 {
-		t.Fatalf("exit code = %d, want 0", code)
-	}
+	stdout, stderr := runRootCommandOK(t, args...)
 	if got.WorkspaceRoot != "." || got.WorkspaceRootExplicit {
 		t.Fatalf("unexpected workspace mapping: %+v", got)
 	}
 	if got.SessionID != "session-123" {
 		t.Fatalf("unexpected interactive option mapping: %+v", got)
 	}
-	if stdout.Len() != 0 || stderr.Len() != 0 {
-		t.Fatalf("unexpected output stdout=%q stderr=%q", stdout.String(), stderr.String())
+	if stdout != "" || stderr != "" {
+		t.Fatalf("unexpected output stdout=%q stderr=%q", stdout, stderr)
 	}
 }
 
@@ -161,35 +142,30 @@ func TestRootCommandMapsAgentFlagToInteractiveApp(t *testing.T) {
 		return nil
 	}
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
 	args := []string{
 		"--force-interactive",
 		"--agent", "reviewer",
 		"--session", "session-123",
 	}
-	if code := rootCommand(args, strings.NewReader(""), &stdout, &stderr); code != 0 {
-		t.Fatalf("exit code = %d, want 0", code)
-	}
+	stdout, stderr := runRootCommandOK(t, args...)
 	if got.AgentRole == nil || *got.AgentRole != "reviewer" || got.SessionID != "session-123" {
 		t.Fatalf("unexpected interactive option mapping: %+v", got)
 	}
-	if stdout.Len() != 0 || stderr.Len() != 0 {
-		t.Fatalf("unexpected output stdout=%q stderr=%q", stdout.String(), stderr.String())
+	if stdout != "" || stderr != "" {
+		t.Fatalf("unexpected output stdout=%q stderr=%q", stdout, stderr)
 	}
 }
 
 func TestRootCommandRejectsInvalidAgentFlag(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	if code := rootCommand([]string{"--force-interactive", "--agent", "none"}, strings.NewReader(""), &stdout, &stderr); code != 2 {
+	stdout, stderr, code := runRootCommand("--force-interactive", "--agent", "none")
+	if code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
-	if got := stderr.String(); !strings.Contains(got, `invalid --agent value "none"`) {
+	if got := stderr; !strings.Contains(got, `invalid --agent value "none"`) {
 		t.Fatalf("stderr = %q, want invalid agent error", got)
 	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty", stdout.String())
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
 	}
 }
 
@@ -205,27 +181,22 @@ func TestRootCommandIgnoresKentSessionEnvByDefault(t *testing.T) {
 	}
 	t.Setenv(sessionenv.SessionIDEnv, "session-from-env")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	if code := rootCommand([]string{"--force-interactive"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
-		t.Fatalf("exit code = %d, want 0", code)
-	}
+	stdout, stderr := runRootCommandOK(t, "--force-interactive")
 	if got.SessionID != "" {
 		t.Fatalf("session id = %q, want empty", got.SessionID)
 	}
-	if stdout.Len() != 0 || stderr.Len() != 0 {
-		t.Fatalf("unexpected output stdout=%q stderr=%q", stdout.String(), stderr.String())
+	if stdout != "" || stderr != "" {
+		t.Fatalf("unexpected output stdout=%q stderr=%q", stdout, stderr)
 	}
 }
 
 func TestRootCommandRejectsRemovedStartupConfigFlags(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	if code := rootCommand([]string{"--force-interactive", "--model", "gpt-5"}, strings.NewReader(""), &stdout, &stderr); code != 2 {
+	_, stderr, code := runRootCommand("--force-interactive", "--model", "gpt-5")
+	if code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
-	if !strings.Contains(stderr.String(), "flag provided but not defined: -model") {
-		t.Fatalf("stderr = %q, want undefined model flag rejection", stderr.String())
+	if !strings.Contains(stderr, "flag provided but not defined: -model") {
+		t.Fatalf("stderr = %q, want undefined model flag rejection", stderr)
 	}
 }
 
@@ -238,13 +209,12 @@ func TestRootCommandInteractiveInterruptReturns130(t *testing.T) {
 		return context.Canceled
 	}
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	if code := rootCommand([]string{"--force-interactive"}, strings.NewReader(""), &stdout, &stderr); code != 130 {
+	_, stderr, code := runRootCommand("--force-interactive")
+	if code != 130 {
 		t.Fatalf("exit code = %d, want 130", code)
 	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want empty", stderr.String())
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
 	}
 }
 
@@ -266,9 +236,8 @@ func TestRootCommandServeUsesStandaloneServerPath(t *testing.T) {
 		return nil, nil
 	}
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	if code := rootCommand([]string{"serve"}, strings.NewReader(""), &stdout, &stderr); code != 130 {
+	stdout, _, code := runRootCommand("serve")
+	if code != 130 {
 		t.Fatalf("exit code = %d, want 130", code)
 	}
 	if !called {
@@ -277,8 +246,8 @@ func TestRootCommandServeUsesStandaloneServerPath(t *testing.T) {
 	if got.WorkspaceRoot != "" || got.WorkspaceRootExplicit {
 		t.Fatalf("unexpected workspace mapping: %+v", got)
 	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty", stdout.String())
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
 	}
 	if got.SessionID != "" {
 		t.Fatalf("expected empty session id for serve request, got %q", got.SessionID)
@@ -286,13 +255,12 @@ func TestRootCommandServeUsesStandaloneServerPath(t *testing.T) {
 }
 
 func TestServeSubcommandRejectsRemovedStartupConfigFlags(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	if code := rootCommand([]string{"serve", "--workspace", "/tmp/work"}, strings.NewReader(""), &stdout, &stderr); code != 2 {
+	_, stderr, code := runRootCommand("serve", "--workspace", "/tmp/work")
+	if code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
-	if !strings.Contains(stderr.String(), "flag provided but not defined: -workspace") {
-		t.Fatalf("stderr = %q, want undefined workspace flag rejection", stderr.String())
+	if !strings.Contains(stderr, "flag provided but not defined: -workspace") {
+		t.Fatalf("stderr = %q, want undefined workspace flag rejection", stderr)
 	}
 }
 
@@ -304,13 +272,12 @@ func TestServeSubcommandRejectsSessionFlags(t *testing.T) {
 	newServeStartupHandlers = func() (serverstartup.AuthHandler, serverstartup.OnboardingHandler) {
 		return nil, nil
 	}
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	if code := rootCommand([]string{"serve", "--session", "session-123"}, strings.NewReader(""), &stdout, &stderr); code != 2 {
+	_, stderr, code := runRootCommand("serve", "--session", "session-123")
+	if code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
-	if !strings.Contains(stderr.String(), "flag provided but not defined: -session") {
-		t.Fatalf("stderr = %q, want undefined session flag rejection", stderr.String())
+	if !strings.Contains(stderr, "flag provided but not defined: -session") {
+		t.Fatalf("stderr = %q, want undefined session flag rejection", stderr)
 	}
 }
 
@@ -891,33 +858,26 @@ func TestRunSubcommandContinueDefaultAgentSendsDefaultRoleOverride(t *testing.T)
 
 func TestSessionIDSubcommandPrintsKentSessionEnv(t *testing.T) {
 	t.Setenv(sessionenv.SessionIDEnv, " session-from-env ")
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-
-	if code := rootCommand([]string{"session-id"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
-		t.Fatalf("exit code = %d, want 0", code)
+	stdout, stderr := runRootCommandOK(t, "session-id")
+	if stdout != "session-from-env\n" {
+		t.Fatalf("stdout = %q, want session id", stdout)
 	}
-	if stdout.String() != "session-from-env\n" {
-		t.Fatalf("stdout = %q, want session id", stdout.String())
-	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want empty", stderr.String())
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
 	}
 }
 
 func TestSessionIDSubcommandFailsOutsideKentShell(t *testing.T) {
 	t.Setenv(sessionenv.SessionIDEnv, "")
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-
-	if code := rootCommand([]string{"session-id"}, strings.NewReader(""), &stdout, &stderr); code != 1 {
+	stdout, stderr, code := runRootCommand("session-id")
+	if code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty", stdout.String())
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
 	}
-	if !strings.Contains(stderr.String(), sessionenv.SessionIDEnv+" is not set") {
-		t.Fatalf("stderr = %q, want missing env error", stderr.String())
+	if !strings.Contains(stderr, sessionenv.SessionIDEnv+" is not set") {
+		t.Fatalf("stderr = %q, want missing env error", stderr)
 	}
 }
 
@@ -929,10 +889,7 @@ func TestRootCommandNormalizesInheritedRelativeEnvBeforeDispatch(t *testing.T) {
 	// the server. --version exercises the same entry-point normalization without
 	// requiring a reachable server.
 	t.Setenv(config.PersistenceRootEnvName, "rel-root")
-	var stdout, stderr strings.Builder
-	if code := rootCommand([]string{"--version"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
-		t.Fatalf("rootCommand --version exit = %d: %s", code, stderr.String())
-	}
+	runRootCommandOK(t, "--version")
 	if got := os.Getenv(config.PersistenceRootEnvName); !filepath.IsAbs(got) {
 		t.Fatalf("inherited relative env root = %q, want normalized to absolute at dispatch entry", got)
 	}
@@ -948,8 +905,5 @@ func TestRootCommandToleratesUnnormalizableInheritedEnvBeforeDispatch(t *testing
 	// mean the entry normalization wrongly hard-failed.
 	t.Setenv("HOME", "")
 	t.Setenv(config.PersistenceRootEnvName, "~/cannot-expand")
-	var stdout, stderr strings.Builder
-	if code := rootCommand([]string{"--version"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
-		t.Fatalf("rootCommand --version exit = %d: %s", code, stderr.String())
-	}
+	runRootCommandOK(t, "--version")
 }
