@@ -32,8 +32,8 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 	if m == nil {
 		return nil
 	}
-	if event.Kind == ongoingTranscriptEventReachable {
-		m.observeRuntimeStreamResult(nil)
+	if event.Kind == ongoingTranscriptEventConnectionObservation {
+		m.observeRuntimeStreamResult(event.Err)
 		return m.batchWithNativeOngoingRepaint(nil)
 	}
 	if m.ongoingTranscript == nil {

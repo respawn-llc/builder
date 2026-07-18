@@ -11,9 +11,9 @@ import (
 type ongoingTranscriptEventKind string
 
 const (
-	ongoingTranscriptEventMessage   ongoingTranscriptEventKind = "message"
-	ongoingTranscriptEventLoss      ongoingTranscriptEventKind = "loss"
-	ongoingTranscriptEventReachable ongoingTranscriptEventKind = "reachable"
+	ongoingTranscriptEventMessage               ongoingTranscriptEventKind = "message"
+	ongoingTranscriptEventLoss                  ongoingTranscriptEventKind = "loss"
+	ongoingTranscriptEventConnectionObservation ongoingTranscriptEventKind = "connection_observation"
 )
 
 type ongoingTranscriptEvent struct {
@@ -42,17 +42,14 @@ func startSessionTranscriptEvents(ctx context.Context, sessionID string, subscri
 		defer close(out)
 		reconnecting := false
 		for {
-			sub, err := resubscribeSessionTranscript(pollCtx, sessionID, subscribe)
+			sub, subscribeFailed, err := resubscribeSessionTranscript(pollCtx, sessionID, subscribe, func(err error) {
+				emitSessionTranscriptConnectionObservation(pollCtx, out, err)
+			})
 			if err != nil {
 				return
 			}
-			if reconnecting {
-				select {
-				case <-pollCtx.Done():
-					_ = sub.Close()
-					return
-				case out <- ongoingTranscriptEvent{Kind: ongoingTranscriptEventReachable}:
-				}
+			if reconnecting || subscribeFailed {
+				emitSessionTranscriptConnectionObservation(pollCtx, out, nil)
 			}
 			reopen, stop := pumpSessionTranscriptSubscription(pollCtx, sub, out, requests)
 			if stop {
@@ -130,18 +127,30 @@ func waitForTranscriptRehydrationRequest(ctx context.Context, requests <-chan st
 	}
 }
 
-func resubscribeSessionTranscript(ctx context.Context, sessionID string, subscribe sessionTranscriptSubscriber) (serverapi.TranscriptSubscription, error) {
+func resubscribeSessionTranscript(
+	ctx context.Context,
+	sessionID string,
+	subscribe sessionTranscriptSubscriber,
+	observeFailure func(error),
+) (serverapi.TranscriptSubscription, bool, error) {
+	failureObserved := false
 	for {
 		sub, err := subscribe(ctx, serverapi.TranscriptSubscribeRequest{SessionID: sessionID})
 		if err == nil {
-			return sub, nil
+			return sub, failureObserved, nil
 		}
 		if (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) && ctx.Err() != nil {
-			return nil, err
+			return nil, failureObserved, err
+		}
+		if !failureObserved {
+			failureObserved = true
+			if observeFailure != nil {
+				observeFailure(err)
+			}
 		}
 		emitWait := waitSubscriptionRetry(ctx)
 		if !emitWait {
-			return nil, ctx.Err()
+			return nil, failureObserved, ctx.Err()
 		}
 	}
 }
@@ -150,5 +159,12 @@ func emitSessionTranscriptLoss(ctx context.Context, out chan<- ongoingTranscript
 	select {
 	case <-ctx.Done():
 	case out <- ongoingTranscriptEvent{Kind: ongoingTranscriptEventLoss, Err: err}:
+	}
+}
+
+func emitSessionTranscriptConnectionObservation(ctx context.Context, out chan<- ongoingTranscriptEvent, err error) {
+	select {
+	case <-ctx.Done():
+	case out <- ongoingTranscriptEvent{Kind: ongoingTranscriptEventConnectionObservation, Err: err}:
 	}
 }

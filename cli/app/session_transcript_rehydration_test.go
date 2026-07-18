@@ -88,12 +88,37 @@ func TestMainUITranscriptReconnectClearsSharedDisconnect(t *testing.T) {
 	), 80, 24)
 	model.ongoingTranscript = newNoopOngoingTranscriptController(surface, model.ongoingFrameInput)
 
-	model.handleOngoingTranscriptEvent(ongoingTranscriptEvent{Kind: ongoingTranscriptEventReachable})
+	model.handleOngoingTranscriptEvent(ongoingTranscriptEvent{Kind: ongoingTranscriptEventConnectionObservation})
 
 	if owner.IsDisconnected() {
 		t.Fatal("reachable transcript resubscription did not clear the shared owner")
 	}
 	if output.Len() == 0 {
 		t.Fatal("reachable transcript resubscription did not repaint the cleared main status projection")
+	}
+}
+
+func TestMainUITranscriptResubscribeFailurePersistsSharedDisconnect(t *testing.T) {
+	owner := newInteractiveConnectionOwner()
+	var output bytes.Buffer
+	surface := ongoing.NewSurface(&output)
+	model := sizedTestUIModel(newProjectedTestUIModel(
+		&runtimeControlFakeClient{},
+		WithUIConnectionState(owner),
+		WithUIOngoingSurface(surface),
+	), 80, 24)
+	model.ongoingTranscript = newNoopOngoingTranscriptController(surface, model.ongoingFrameInput)
+
+	connectionFailure := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+	model.handleOngoingTranscriptEvent(ongoingTranscriptEvent{
+		Kind: ongoingTranscriptEventConnectionObservation,
+		Err:  connectionFailure,
+	})
+
+	if !owner.IsDisconnected() {
+		t.Fatal("transcript resubscribe failure did not persist disconnect in the shared owner")
+	}
+	if output.Len() == 0 {
+		t.Fatal("transcript resubscribe failure did not repaint the main status projection")
 	}
 }
