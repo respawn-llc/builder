@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1415,6 +1416,17 @@ func TestBoardNodeCardsDoNotArchiveCanceledTaskInAlternateTerminalNode(t *testin
 	if len(page.Cards) != 0 {
 		t.Fatalf("archive node cards = %+v, want no fallback canceled tasks", page.Cards)
 	}
+	done, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &binding.ProjectID, ColumnKeys: []string{"done"}}, testsetup.QuestionsEnabled("coder"))
+	if err != nil {
+		t.Fatalf("ListTasks done: %v", err)
+	}
+	if len(done.Tasks) != 1 || done.Tasks[0].TaskID != string(task.ID) || !reflect.DeepEqual(done.Tasks[0].ColumnKeys, []string{"done"}) {
+		t.Fatalf("done tasks = %+v, want canceled task only in done", done.Tasks)
+	}
+	archive, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &binding.ProjectID, ColumnKeys: []string{"archive"}}, testsetup.QuestionsEnabled("coder"))
+	if err != nil || len(archive.Tasks) != 0 {
+		t.Fatalf("archive tasks = %+v/%v, want no canceled task", archive.Tasks, err)
+	}
 }
 
 func TestBoardProjectsManualMoveTargetsFromServerPermissions(t *testing.T) {
@@ -1642,7 +1654,7 @@ func TestTaskStatusIgnoresHistoricalRunUnderCompletedPlacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindWaitingApproval || containsString(detail.Status.RunIDs, string(started.RunID)) {
+	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindWaitingApproval || slices.Contains(detail.Status.RunIDs, string(started.RunID)) {
 		t.Fatalf("detail status = %+v, want waiting approval without stale run", detail.Status)
 	}
 
@@ -1655,7 +1667,7 @@ func TestTaskStatusIgnoresHistoricalRunUnderCompletedPlacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListBoardNodeCards: %v", err)
 	}
-	if len(cards.Cards) != 1 || cards.Cards[0].Status.Kind != serverapi.WorkflowTaskStatusKindWaitingApproval || containsString(cards.Cards[0].Status.RunIDs, string(started.RunID)) {
+	if len(cards.Cards) != 1 || cards.Cards[0].Status.Kind != serverapi.WorkflowTaskStatusKindWaitingApproval || slices.Contains(cards.Cards[0].Status.RunIDs, string(started.RunID)) {
 		t.Fatalf("board cards = %+v, want waiting approval without stale run", cards.Cards)
 	}
 }
@@ -1858,6 +1870,16 @@ func TestTaskDetailAndBoardPreserveFanoutStatusUnions(t *testing.T) {
 			t.Fatalf("board status = %+v, want detail status %+v", status, detail.Status)
 		}
 	}
+	tasks, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
+		ProjectID:   &binding.ProjectID,
+		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingQuestion},
+	}, testsetup.QuestionsEnabled("coder"))
+	if err != nil || len(tasks.Tasks) != 1 || tasks.Tasks[0].TaskID != string(fixture.task.ID) || !reflect.DeepEqual(tasks.Tasks[0].Status, detail.Status) {
+		t.Fatalf("fanout list status = %+v/%v, want exact detail status %+v", tasks.Tasks, err, detail.Status)
+	}
+	if !reflect.DeepEqual(tasks.Tasks[0].ColumnKeys, []string{"impl_a", "impl_b", "impl_c"}) {
+		t.Fatalf("fanout list column order = %+v", tasks.Tasks[0].ColumnKeys)
+	}
 }
 
 type workflowViewFanoutStatusFixture struct {
@@ -1992,15 +2014,6 @@ func createWorkflowViewWaitingAskTask(
 		t.Fatalf("SetRunWaitingAsk: %v", err)
 	}
 	return task, started
-}
-
-func containsString(values []string, expected string) bool {
-	for _, value := range values {
-		if value == expected {
-			return true
-		}
-	}
-	return false
 }
 
 func TestTaskDetailProjectsWaitingAskRun(t *testing.T) {
