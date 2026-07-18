@@ -7,14 +7,21 @@
     const isTheme = (value) => value === lightTheme || value === darkTheme;
 
     const getStoredTheme = () => {
-      const value = typeof localStorage !== 'undefined' ? localStorage.getItem(storageKey) : null;
-      return isTheme(value) ? value : null;
+      try {
+        const value = typeof localStorage !== 'undefined' ? localStorage.getItem(storageKey) : null;
+        return isTheme(value) ? value : null;
+      } catch (error) {
+        console.warn('Kent docs could not read the saved theme; using the system theme.', error);
+        return null;
+      }
     };
 
     const getSystemTheme = () =>
       window.matchMedia('(prefers-color-scheme: light)').matches ? lightTheme : darkTheme;
 
-    const getEffectiveTheme = () => getStoredTheme() ?? getSystemTheme();
+    let activeTheme = darkTheme;
+
+    const getEffectiveTheme = () => activeTheme;
 
     const updatePickers = (theme = getStoredTheme() ?? 'auto') => {
       document.querySelectorAll('starlight-theme-select').forEach((picker) => {
@@ -26,18 +33,26 @@
     };
 
     const applyEffectiveTheme = () => {
-      const theme = getEffectiveTheme();
-      document.documentElement.dataset.theme = theme;
-      updatePickers();
-      return theme;
+      const storedTheme = getStoredTheme();
+      activeTheme = storedTheme ?? getSystemTheme();
+      document.documentElement.dataset.theme = activeTheme;
+      updatePickers(storedTheme ?? 'auto');
+      return activeTheme;
     };
 
     const toggleTheme = () => {
-      const theme = getEffectiveTheme() === darkTheme ? lightTheme : darkTheme;
-      localStorage.setItem(storageKey, theme);
-      document.documentElement.dataset.theme = theme;
-      updatePickers(theme);
-      return theme;
+      activeTheme = activeTheme === darkTheme ? lightTheme : darkTheme;
+      try {
+        localStorage.setItem(storageKey, activeTheme);
+      } catch (error) {
+        console.warn(
+          'Kent docs could not save the selected theme; applying it for this page only.',
+          error,
+        );
+      }
+      document.documentElement.dataset.theme = activeTheme;
+      updatePickers(activeTheme);
+      return activeTheme;
     };
 
     applyEffectiveTheme();
