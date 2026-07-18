@@ -16,11 +16,10 @@
 - A task may accumulate many sessions through loops, branches, retries, and complex chains.
 - Task creation creates a durable task at the workflow start node.
 - Automation starts only through explicit task-start, which applies the start node's outgoing transition and requests automation for the first executable placement.
-- Automation then runs through automatic nodes until terminal or blocked by question, approval/manual gate, error, capacity, interruption, cancellation, or validation.
-- Task lifecycle state derives from node placements/runs plus task cancellation metadata, not from a separate task status enum.
-- Node placement is workflow/Kanban state; active/interrupted/done conditions come from runs and terminal nodes.
+- Automation then runs through automatic nodes until terminal or blocked by question, approval/manual gate, error, capacity, interruption, or validation.
+- Task lifecycle projection combines durable node placements and run outcomes with one immutable live snapshot; it is not a separate durable task-status enum.
+- Node placement is workflow/Kanban state; running, queued, and waiting conditions require exact generation-matched live evidence.
 - Terminal-node placements remain active sink placements. Board/read models infer done from an active placement whose node kind is terminal.
-- Task cancellation records cancellation metadata, interrupts active runs, suppresses scheduling, and archives the task to terminal/Done for board visibility.
 
 ## Workflow Definitions
 
@@ -83,7 +82,7 @@
 
 - Agent nodes complete by producing structured workflow completion, not by returning natural language.
 - Completion chooses an outgoing transition group and supplies derived provision field values required by downstream consuming nodes.
-- Runtime failure, cancellation, unanswered questions, and validation blockers are orchestration outcomes, not model-selected terminal statuses.
+- Runtime failure, unanswered questions, interruption, and validation blockers are orchestration outcomes, not model-selected terminal statuses.
 - Completion modes are `structured_output`, dynamic `complete_node` tool, `shell_command`, and `unstructured_output`. Global `[workflow].completion_mode` selects `auto`, `structured_output`, `tool`, `shell_command`, or `unstructured_output`; agent nodes can override it with the same values or inherit the global default.
 - Start, join, and terminal nodes reject non-empty completion-mode overrides.
 - Node completion-mode override is an agent-node execution property, not a transition-branch property. Edges define possible transition branches and parameter requirements; the source agent node owns the completion contract used to choose among them.
@@ -95,18 +94,20 @@
 - Manual interruption releases the specialized workflow runtime. A later ordinary interactive activation uses automatic tool selection; resuming the interrupted workflow run restores the persisted effective completion-mode policy.
 - `complete_node` is workflow-control infrastructure and is available in tool completion mode regardless of subagent role tool config.
 - `shell_command` mode keeps dynamic completion contracts out of request metadata and instructs the agent to run `kent task complete` from the shell. The command infers the current run from `KENT_SESSION_ID` in agent sessions; outside agent sessions it requires `--force` plus one explicit selector.
+- Agent-session `kent task complete` submits through Runtime Command. Forced completion outside an agent session addresses the exact current idle run selected by Workflow Execution; it does not establish a durable active-run selector or polling loop.
 - `unstructured_output` mode keeps dynamic completion contracts out of request metadata and requires the assistant final answer to be exactly one raw JSON object.
 - Any assistant answer that would otherwise resolve an active workflow run must pass through the run's selected completion contract in every completion mode, whether or not the answer carries an explicit final-phase designation.
-- Normal assistant final answers are invalid in tool and shell-command workflow modes. Runtime appends a nudge and continues until valid completion, `ask_question`, interruption, cancellation, protocol cap, or runtime error.
+- Normal assistant final answers are invalid in tool and shell-command workflow modes. Runtime appends a nudge and continues until valid completion, `ask_question`, interruption, protocol cap, or runtime error.
 - Completion payloads expose only optional `transition`, optional `commentary`, and server-derived possible provision fields as top-level properties. They never expose raw `next_node`.
 - Provision field outputs are flat strings. Completion payload parsers accept any JSON value for a provision field and serialize non-string values into that flat string slot; downstream input bindings never receive structured values.
 - Possible provision fields are optional in generated request metadata where a mode uses request metadata. Selected transition groups impose required provision fields after `transition` is known.
 - Required provision fields must be present as trimmed non-empty strings after parser stringification.
 - Size limits: output field name `<= 64` chars, output field description `<= 1000`, output value `<= 64 KiB`, commentary `<= 64 KiB`, task comment body `<= 256 KiB`.
 - Dynamic request metadata in `structured_output` and `tool` modes can affect prompt-cache continuity when workflow completion contracts change. `shell_command` and `unstructured_output` keep completion contracts in appended prompt text instead of request metadata.
-- Runtime observes durable external completion before each model turn, immediately after a model response returns and before assistant/tool persistence, and after local tool results are persisted.
+- Workflow Execution accepts one actor-neutral completion intent for an exact live scope or the exact current idle run. Agent-originated intents are ordered through Runtime Command; script intents address their exact script scope directly.
+- Accepted steering before the completion fence supersedes that intent. Input after the fence is rejected with a typed retryable result and is not transferred to a successor.
 - Runtime enforces one protocol cap. Repeated final answers in invalid modes or invalid completion attempts interrupt the run after `[workflow].max_invalid_completion_attempts = 5`.
-- Every workflow execution-loop exit represents successful completion, a typed resumable blocked state, a typed non-success terminal outcome, or explicit transfer to interactive ownership. The loop must not return normally while its durable run remains active without an owner.
+- Every workflow execution-loop exit represents successful completion, a typed resumable blocked state, or a typed non-success terminal outcome. Exact-scope stop, finalization, and release are joined; the loop cannot return while its scope remains live.
 - No wall-clock runtime cap is required for v1.
 
 ## Script Nodes
@@ -117,20 +118,20 @@
 - Script execution directly `exec`s the resolved file with the task execution root as cwd. It does not use a shell wrapper, retries, or a timeout.
 - Script stdin is one JSON object. Incoming workflow parameter values are top-level properties. `_kent` is reserved for minimal runtime identifiers, including `run_id` and `placement_id`.
 - Script stdout is parsed as the workflow completion JSON using the same completion contract as agent nodes. Stderr is diagnostics only and is not mixed into completion parsing.
-- Script run failures, invalid stdout, invalid script path, cancellation, and execution errors interrupt the run with bounded structured details.
+- Script run failures, invalid stdout, invalid script path, interruption, and execution errors interrupt the run with bounded structured details.
 - Script completion persists transition actor `script`.
-- Resuming an interrupted script run reruns the same task run generation with cached incoming parameter values, the current workflow DB script path, and the current script outgoing transition/output contract.
+- Resuming an interrupted script run creates a successor execution generation with cached incoming parameter values, the current workflow DB script path, and the current script outgoing transition/output contract.
 
 ## Workflow Prompting
 
 - Workflow runs use dedicated workflow-mode developer instructions.
 - Prompt explains task identity, node role/assignee, selected completion behavior, question behavior, handoff/transition mechanics, task comments, and why ordinary final answers are invalid when the selected mode does not accept them.
 - Workflow runtime builds on reusable headless/session infrastructure for session launch, runtime wiring, logging, progress, subagent role handling, and mode prompts.
-- Workflow scheduler-created agent sessions begin at subagent depth `0`. Model-originated delegation from a workflow agent follows the global subagent-depth policy.
+- Workflow Execution-created agent sessions begin at subagent depth `0`. Model-originated delegation from a workflow agent follows the global subagent-depth policy.
 - `RunPromptService.RunPrompt` final text is not workflow completion authority.
 - Existing user goal state is not reused as workflow autonomy state.
 - Workflow task sessions reject user `/goal` control; the workflow node/run is the task objective driver. Agents may still set themselves goals and complete them, per the agent goal rules in core-runtime-tools.
-- If terminal workflow completion commits before accepted client steering is drained, the queued steering resolves with a visible failure and is not applied to the completed run.
+- Client input accepted by Runtime Command before the completion fence supersedes pending completion. Input that reaches the server after the fence is rejected with a typed retryable result, remains unapplied, and is never transferred to a successor run.
 - Task comment bodies are not automatically injected into agent context. When a task has visible comments, workflow-mode instructions include the visible comment count and a `kent task comment list <task>` pull command. Kent re-queries the visible comment count each time the workflow instructions are appended without mutating previously persisted model-visible prompt items.
 
 ## Questions And Approvals
@@ -140,9 +141,8 @@
 - The run pauses until answered.
 - TUI and GUI prompt/approval state is derived from shared server prompt state. A client marks a question or approval resolved only after server acknowledgement.
 - V1 must not introduce a shadow task-question table. If existing ask persistence cannot support workflow asks, upgrade ask persistence as source of truth.
-- Ask rehydration must be proven before scheduler recovery depends on it.
-- Scheduler uses a boundary such as `PendingAskResolver.CanRehydrate(sessionID, runID, askID)`.
-- If pending ask cannot rehydrate, workflow run becomes interrupted with actionable resume path.
+- Runtime question and runtime approval waiters exist only inside the exact live execution scope. Server restart does not reconstruct them; the affected unfinished run becomes interrupted, and Resume closes stale active-segment tool operations with a typed restart outcome before continuing.
+- Persisted workflow transition approvals are durable transition facts rather than live runtime waiters. Server restart leaves them pending with their frozen transition snapshot.
 - Edge approval is a boolean edge property.
 - When any edge in a selected transition group requires approval, the whole group waits for one approval before any target placement/run starts.
 - Pending approvals store resolved transition group, edge set, workflow version, source node snapshot, transition display snapshot, target node snapshots, effective edge config snapshots, and frozen context-source resolution.
@@ -191,37 +191,34 @@
 - Agent synthesis belongs in a normal agent node after the join.
 - Orchestrator-workers do not dynamically create workflow nodes or Kanban columns in v1.
 
-## Scheduler And Recovery
+## Workflow Execution And Restart
 
-- Scheduler has durable inputs in SQLite, but pending scheduler work and active runtime execution are live memory, not durable run states.
-- `task_runs.session_id` is the sole durable workflow/session relation. A current workflow owner is a referencing task run with no persisted terminal outcome; an interrupted run is terminal for ownership even though it remains resumable.
-- Persistence enforces at most one current workflow owner per session atomically when a run attaches to a session, records its terminal outcome, or resumes by clearing/replacing an interrupted outcome. Resume rejects an ownership conflict before mutation.
-- Current-owner lookup returns none for zero matches and the run for one match. Multiple matches produce a typed invariant failure with diagnostics; Kent never orders them, chooses one, or treats the violation as absence.
-- Runnable work derives from active executable placements with approved automation intent, no terminal run outcome, and no task cancellation.
-- An executable task whose run has not started is `queued`.
-- Pending-work ordering is scheduler memory.
-- Active execution derives from the live runtime registry and scheduler.
-- Concurrency limit is global only and configured in `[workflow].concurrency`.
-- Scheduler does not control runtime execution. Runtime execution is ownerless registry lifecycle state, not scheduling authority.
-- Startup rebuilds runnable work from durable state.
-- Completed runs and pending approvals remain as-is.
-- Waiting-for-question remains only if the pending ask can rehydrate.
-- Started runs with no terminal outcome and no live owner after startup become interrupted with restart/shutdown reason.
+- Workflow Execution is the sole workflow lifecycle control plane. It owns one context-aware global mutation permit, volatile automatic intents, branch admission, configured automatic capacity, task affinity, runtime gates, and immutable live snapshots.
+- Automatic intents form one small typed in-memory queue. Membership and order are intentionally lost on restart; no durable claim, queue journal, reconstruction scan, recovery worker, or startup runnable derivation exists.
+- Automatic scheduling is work-conserving and task-affine. `[workflow].concurrency` limits automatic starts only.
+- Explicit Start, Resume, approval, and executable manual move may exceed the automatic concurrency limit without preempting existing work.
+- A live agent or script exact execution scope is the only execution-liveness authority. Durable run timestamps, session relations, task status, transcript rows, and goals do not prove execution.
+- Start and Resume admit selected parallel branches independently and return typed per-run outcomes. A failed branch does not roll back, compensate, or block an independently admitted sibling.
+- Every Resume creates a successor agent or script execution generation. Steering stays within the current generation.
+- Runtime question and approval waiters, automatic intents, runtime gates, and exact execution scopes are volatile. Restart reconstructs none of them and marks affected unfinished runs interrupted with a typed restart reason.
+- Persisted workflow transition approvals remain pending across restart with their frozen transition snapshots.
+- Resume closes stale bounded active-segment tool operations with a typed restart outcome before continuing. It does not reconstruct waiters, replay answers, re-execute interrupted tool calls, or traverse full transcript history.
 - Interrupted runs are never automatically retried.
-- Explicit resume is task-level: it continues every interrupted run of the task from current transcript/worktree state, with no run selection.
-- Explicit interrupt is task-level with an optional session-id selector: no session interrupts all running runs of the task; a specific session interrupts only that run. Run id is never an operator-facing selector — the public per-run identifier is the session id.
-- Manual moves are rejected while a task has any started active run that is not completed or interrupted, including runs waiting on a question. The operator must interrupt, wait for completion, or resume from an interrupted state before manually moving the task.
-- Completion/transition application uses a fence/generation or compare-and-swap so stale runtime callbacks cannot mutate superseded runs.
+- Task Interrupt is task-level with an optional session-id selector: no session interrupts every exact live execution of the task; a specific session interrupts only that run. Run ID is never an operator-facing selector.
+- Manual moves are rejected while a task has an exact live execution or runtime gate that conflicts with movement. The operator must Interrupt or wait for the lifecycle transition to finish.
+- Completion and transition application require either the matching exact live scope and execution generation or Workflow Execution's exact current idle run. The completion fence prevents stale live-scope callbacks from mutating successors.
 - Run completion and transition application remain one SQLite transaction.
-- Runtime failures, cancellation, crashes, model/runtime interruptions, and fixable scheduling validation blockers converge on interrupted outcome with reason metadata.
+- Runtime failures, crashes, model/runtime interruptions, and fixable admission validation blockers converge on interrupted outcome with reason metadata.
 - `failed` is reserved for unrecoverable corrupted orchestration state.
-- Kent does not migrate, reconcile, diagnose, or repair unfinished historical runs owned by completed placements.
+- Kent does not migrate, reconcile, diagnose, or repair unfinished historical runs associated only with completed placements.
 
 ## Task Status And Listing
 
-- Task detail, workflow board cards, and paginated task lists use one server-authoritative typed task-status projection derived only from current placements and their runs.
+- Task detail, workflow board cards, and paginated task lists use one server-authoritative typed task-status projection derived from durable placements/outcomes plus one immutable exact live snapshot.
 - Task status is UI-neutral structured data. Clients render and localize status labels.
-- One primary status uses this precedence: canceled, done, waiting for a question, waiting for approval, interrupted, running, queued, backlog, active.
+- One primary status uses this precedence: done, live question, live or persisted workflow approval, running, queued, interrupted, backlog, active.
+- Running, queued, and live-question status require exact generation-matched live evidence. Interruption metadata annotates interrupted state but never proves liveness.
+- Task read models expose server-authoritative `can_delete` derived from the same snapshot. The Delete mutation treats it as advisory and revalidates quiescence before changing artifacts or persistence.
 - The status projection preserves all applicable typed attention kinds and run references even when parallel branches have different conditions.
 - Workflow validity is workflow-level state and is not a task status.
 - Task lists expose typed task status and attention filters. They do not expose a separate coarse run status.
@@ -304,10 +301,10 @@
 - Workflow implementation package boundaries are locked:
 - `server/workflow`: pure domain types, validation, state-machine logic.
 - `server/workflowstore`: metadata persistence adapter.
-- `server/workflowsvc`: use-case/service orchestration.
-- `server/workflowscheduler`: runnable derivation and workers.
+- `server/workflowsvc`: client-facing workflow use-case adapter.
+- `server/workflowexecution`: lifecycle mutations, volatile automatic intent, admission, runtime gates, and immutable live snapshots.
 - `server/workflowruntime`: completion/runtime contracts used by runtime.
-- `server/workflowrunner`: session/runtime/headless adapter for scheduling.
+- `server/workflowrunner`: agent/script exact-scope adapter used by Workflow Execution.
 - `server/workflowview`: read models.
 - Start node is derived from `workflow_nodes.kind = 'start'` and enforced with a partial unique index; do not store `workflows.start_node_id`.
 - Workflow graph storage derives membership from relationships instead of duplicate workflow IDs where practical.
@@ -324,8 +321,10 @@
 - GUI clients refetch read models after subscription ACK/reconnect/error and treat live events as invalidation hints.
 - There is no product archive lifecycle for workflows or nodes.
 - Workflow deletion impact previews return counts only.
-- Confirmed workflow deletion removes DB workflow-linked tasks, links, and graph rows; it blocks active/runnable runs and default-without-replacement states.
-- Workflow deletion is DB-only by default and preserves artifacts/worktrees. Artifact cleanup is an explicit future opt-in path.
+- Confirmed workflow deletion requires aggregate quiescence across every affected task: no exact live execution, automatic intent, or runtime gate. It also blocks default-without-replacement states.
+- After quiescence, workflow deletion atomically removes DB workflow-linked tasks, links, and graph rows.
+- Workflow deletion is a distinct DB-only aggregate operation that preserves session, worktree, and other external artifacts. It does not invoke individual Task Delete.
+- Individual Task Delete requires no exact live execution, automatic intent, or runtime gate; removes reconstructible managed artifacts idempotently; preserves session artifacts; deletes the task row last; and has no delete journal.
 - Batch graph save uses a store-owned transaction with expected workflow `version`, draft validation, process-local edit semantics, typed blockers, and confirmation for unreferenced graph row removals.
 - Graph saves never delete or move tasks; whole-workflow deletion is the task-deleting path.
 - Run-start context has one store-owned materialization seam. It resolves target run invocation facts through the accepted transition-edge snapshot that created the target placement.
@@ -333,6 +332,7 @@
 ## Schema Minimization Decisions
 
 - Approved cutover removals include `workflow_events`, `project_workflow_links.unlinked_at_unix_ms`, duplicated task project/workflow columns, workflow graph opaque metadata, the `runtime_leases` table, workspace/worktree display labels, `task_comments.source_run_id`, comment soft-delete, and redundant indexes when equivalent unique/leading-key indexes remain.
+- Removing Task Cancel migrates canceled tasks to canonical terminal node key `done` when possible. Canceled tasks in invalid workflows without `done` lose workflow persistence while session, worktree, and other external artifacts remain.
 - Keep `tasks.source_url` as a structured task field.
 - Keep `tasks.short_id` as stored durable product data.
 - Task sequence allocation is transactional behavior, not product state stored as `projects.next_task_seq`.
@@ -373,6 +373,7 @@
 - Q: Are racing/first-success parallel branches in scope? A: No; joins wait for all required inputs.
 - Q: Can orchestrator-workers dynamically create workflow nodes/columns? A: No in v1.
 - Q: Should pending workflow questions get a task-question shadow table? A: No; use `ask_question` source of truth or upgrade ask persistence.
+- Q: Does Task Cancel exist? A: No; Interrupt is the resumable stop operation, and Delete removes a quiescent task.
 - Q: Does real-provider workflow QA need explicit approval? A: Yes, ask the User before spending provider credits.
 - Q: How do agents complete shell-command workflow runs? A: They run `kent task complete` from a shell command; `KENT_SESSION_ID` targets their current run.
 - Q: Must low-level workflow CLI command shape stay stable? A: No; full workflow build/edit capability for agents matters, not the specific command grouping.

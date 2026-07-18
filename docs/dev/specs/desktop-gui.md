@@ -3,7 +3,7 @@
 ## Scope And Authority
 
 - Desktop GUI is a remote-control client over an already-running Kent server.
-- Server remains authoritative for projects, workspaces, workflows, tasks, runtime, scheduler state, validation, approvals, questions, comments, worktrees, persistence, and subscriptions.
+- Server remains authoritative for projects, workspaces, workflows, tasks, runtime, Workflow Execution live state, validation, approvals, questions, comments, worktrees, persistence, and subscriptions.
 - The Tauri app never bundles or starts the Kent server binary as a sidecar.
 - Long-term GUI vision is broad CLI/TUI parity and eventual replacement of the TUI.
 
@@ -132,7 +132,7 @@
 - Resume appears only when resumable.
 - Interrupt appears in the same action slot when exactly one active run is interruptible and acts immediately.
 - Tasks with multiple active runs open detail for per-run controls.
-- Board visual states include Backlog/idle, queued, running, interrupted, approval-gated, question-gated, done/completed, and canceled.
+- Board visual states include Backlog/idle, queued, running, interrupted, approval-gated, question-gated, and done/completed.
 - Dragging Backlog task to first active node starts automation immediately with no confirmation.
 - When task start or an executable manual move requires an execution target, one reusable centered dialog continues the initiating action. It is not anchored to the card/control and does not use the global sidebar.
 - Desktop does not override a usable fixed workflow policy; it opens selection only for `ask_on_first_execution` or an unavailable configured target.
@@ -143,14 +143,14 @@
 - The first executable-node drop hint reads `Drag here to start automation`.
 - While dragging a card, approaching a horizontal board edge or vertical hovered-column edge scrolls that surface, accelerating continuously toward the edge. Horizontal and vertical scrolling may run together; horizontal board scrolling takes priority if reliable simultaneous nested scrolling would require materially greater complexity.
 - Dragging to Done is a user archive/manual move, not normal edge completion.
-- Manual move and Done drag targets are unavailable while a task has a started active run that is not completed or interrupted, including runs waiting on a question.
+- Manual move and Done drag targets follow server action flags derived from exact live scope and runtime-gate evidence. Desktop never infers movement blockers from durable run rows or task status.
 - Agent and script drag targets are available only when the server exposes a concrete workflow edge to that executable target.
 - Done permissions, pagination, and status handling are server-authoritative.
 - Invalid/default-node-only workflows remain visible and their tasks remain visible.
 - New Task stays available for invalid workflows and creates Backlog tasks.
 - Backlog edits and comments remain available while backend permits.
 - Drag/start/run/manual move/Done are disabled for invalid workflows.
-- Cancel, interrupt, and resume follow server action flags for existing runs from earlier valid states.
+- Interrupt and Resume follow server action flags for existing runs from earlier valid states.
 - Non-startable Backlog tasks must not disappear.
 
 ## Task Creation
@@ -177,11 +177,11 @@
 - Expanding a description is one-way until the current task-detail surface closes, keeps the description top anchored in the viewport, and grows content downward. Entering edit mode expands automatically. Reopening task detail starts from the normal collapsed state.
 - `Inbox` area sits above tabs and shows current blockers plus answer/approval/resume controls.
 - Contextual resume modal is superseded by task detail Inbox; resume/next-blocker actions focus/reveal relevant Inbox item.
-- Tabs are `Comments`, `Activity`, and `Runs`; default tab is `Comments`.
+- Tabs are `Comments` and `Activity`; default tab is `Comments`.
 - Comments tab has composer, list, edit/delete, and count badge.
 - Activity tab is compact timeline with no mutation controls and no count badge.
-- Runs tab contains runs, worktree/session info, and telemetry when too dense for header; it has a run count badge.
-- Required identity/status fields: task ID, title, body rendered as Markdown, project, workflow, one source-workspace row with its display name stacked above its monospaced root path, current node/status, completion/done/cancel state, and server action flags.
+- Task-detail errors surface through the shared error state without requiring an inline Retry action. Reopening or refreshing the destination is the recovery path.
+- Required identity/status fields: task ID, title, body rendered as Markdown, project, workflow, one source-workspace row with its display name stacked above its monospaced root path, current node/status, completion/done state, and server action flags including `can_delete`.
 - Conditional fields: locked execution target mode; one managed-worktree path row when the managed worktree is available; requested Git revision, resolved commit, current named branch when the managed root is available; agent role/run status, session ID/name, source URL, and assignee/column ownership when server provides them.
 - Task detail does not render standalone Source root or Execution root rows. A no-managed-worktree target communicates source-workspace execution through the Execution target value; an available managed target shows its path only in the Managed worktree row directly below Execution target, before revision and commit facts. An unavailable managed worktree has no Managed worktree row.
 - Visibly rendered copyable values in task detail use the Transition Output text-copy interaction: the text itself highlights for pointer and keyboard interaction, no copy icon is shown, and clipboard success or failure appears in the status-toast surface. Success identifies the copied value type; failure includes the clipboard error detail. Actions that copy deliberately hidden payloads, including the generated CLI command and structured interruption details, remain explicit buttons.
@@ -206,7 +206,6 @@
 - Workflow transition approval UI exposes Approve only.
 - Approve uses the same centered execution-target dialog when the approved transition first requires selection; dismissal leaves the approval pending.
 - Workflow transition approval UI shows stored approval snapshot: source node, transition label/id, target nodes, required provision fields/values, commentary, workflow version, stale warning.
-- Cancel requires confirmation and no reason.
 - Interrupt acts immediately with no confirmation.
 - Standalone task detail opened from Home attention stays open after resolution; feed/status update and Home row is removed or resorted in background.
 
@@ -258,7 +257,6 @@
 - Q: Where are completed tasks shown? A: Same board in fixed-right Done with per-node infinite scroll.
 - Q: What task fields are required if backend data is missing? A: Hide expected-not-yet-created fields, show continuity fields empty/unassigned, unexpected meaningful missing fields as unavailable/error.
 - Q: Where are workflow questions and approvals answered? A: Home Inbox lists/deep-links; task detail Inbox owns action controls.
-- Q: Should cancel require a reason? A: No; confirmation only.
 - Q: Should Interrupt confirm? A: No.
 - Q: Should drag-to-start confirm? A: No.
 - Q: What format do body/details/comments use? A: Plain multiline Markdown, no WYSIWYG.

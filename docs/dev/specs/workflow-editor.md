@@ -125,6 +125,8 @@
 - `New workflow` from global Workflow Library creates a global workflow definition without implicit project linkage unless the user explicitly links it later.
 - Workflow editor/library routes may be global workflow-definition routes, but project-originated task/board routes remain project-scoped.
 - The editor may own selected-workflow settings/delete actions. Workflow Library/sidebar owns create/copy/link entry points.
+- Whole-workflow deletion uses one in-app body-portaled Dialog implementation shared by Workflow Library, Link Workflow, and workflow inspector entry points; it never opens a native deletion window.
+- Preview, blocker, and API failures remain visible and retryable in the open Dialog. After the server commits deletion, the Dialog closes before cache invalidation, matching-sidebar cleanup, and typed route navigation; any local completion failure surfaces only a warning and never resends deletion.
 - Workflow settings include name/description and actions to link/unlink workflow to projects.
 - Project selection for workflow settings/linking is paginated and minimal, hosted inside the sidebar rather than a native blocking window.
 - The workflow editor toolbar Add node control opens its node-kind popup on hover or focus. Clicking the toolbar button itself does not create a node or toggle the popup.
