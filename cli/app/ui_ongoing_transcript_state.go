@@ -17,8 +17,12 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	if m == nil {
 		return nil
 	}
-	if message.Kind != clientui.TranscriptMessageHydration && m.turnQueueHook != nil {
-		m.turnQueueHook.OnTranscriptMessage(message)
+	if m.turnQueueHook != nil {
+		if message.Kind == clientui.TranscriptMessageHydration {
+			m.turnQueueHook.OnTurnQueueAborted()
+		} else {
+			m.turnQueueHook.OnTranscriptMessage(message)
+		}
 	}
 	switch message.Kind {
 	case clientui.TranscriptMessageHydration:

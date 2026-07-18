@@ -147,5 +147,5 @@ func cloneTranscriptToolCallMeta(meta *transcript.ToolCallMeta) *transcript.Tool
 		return nil
 	}
 	normalized := transcript.NormalizeToolCallMeta(*meta)
-	return &normalized
+	return clonePersistedToolCallMeta(&normalized)
 }

@@ -132,7 +132,8 @@ func renderedPatchesEqual(left, right *patchformat.RenderedPatch) bool {
 			a.RelPath == b.RelPath &&
 			a.Added == b.Added &&
 			a.Removed == b.Removed &&
-			slices.Equal(a.Diff, b.Diff)
+			slices.Equal(a.Diff, b.Diff) &&
+			slices.EqualFunc(a.WholeFileDeletions, b.WholeFileDeletions, wholeFileDeletionOperationsEqual)
 	}) &&
 		slices.EqualFunc(left.SummaryLines, right.SummaryLines, func(a, b patchformat.RenderedLine) bool {
 			return a.Kind == b.Kind &&
@@ -146,4 +147,18 @@ func renderedPatchesEqual(left, right *patchformat.RenderedPatch) bool {
 				a.FileIndex == b.FileIndex &&
 				a.Path == b.Path
 		})
+}
+
+func wholeFileDeletionOperationsEqual(
+	left patchformat.WholeFileDeletionOperation,
+	right patchformat.WholeFileDeletionOperation,
+) bool {
+	if left.ID != right.ID {
+		return false
+	}
+	if left.Disposition == nil || right.Disposition == nil {
+		return left.Disposition == nil && right.Disposition == nil
+	}
+	return left.Disposition.PhysicalGroup == right.Disposition.PhysicalGroup &&
+		left.Disposition.Removed == right.Disposition.Removed
 }

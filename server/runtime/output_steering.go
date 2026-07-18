@@ -421,13 +421,22 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		return err
 	}
 	if item.toolCompletion != nil {
-		result := e.finalizeLiveToolCompletion(*item.toolCompletion)
-		receipt, err := e.persistToolCompletionRaw(stepID, result)
+		completion := e.finalizeLiveToolCompletion(*item.toolCompletion)
+		receipt, err := e.persistFinalizedToolCompletionRaw(stepID, completion)
 		item.recordCommitReceipt(receipt)
 		if receipt.Committed {
-			result = cloneToolResult(result)
+			result := cloneToolResult(completion.Result)
 			e.transcriptRuntimeState().CompleteLiveTool(result.CallID)
 			e.emitRaw(Event{Kind: EventToolCallCompleted, StepID: stepID, ToolResult: &result, CommittedTranscriptChanged: true})
+			if completion.OperatorFeedback != nil {
+				entry := localEntryChatEntryForStep(*completion.OperatorFeedback, stepID)
+				e.emitRaw(Event{
+					Kind:                       EventLocalEntryAdded,
+					StepID:                     stepID,
+					LocalEntry:                 entry,
+					CommittedTranscriptChanged: true,
+				})
+			}
 		}
 		return err
 	}

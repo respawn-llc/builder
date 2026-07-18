@@ -1,6 +1,10 @@
 package transcript
 
-import "testing"
+import (
+	"testing"
+
+	patchformat "core/shared/transcript/patchformat"
+)
 
 func TestNormalizeToolCallMetaRecoversKnownShellToolsWithoutPresentationMetadata(t *testing.T) {
 	tests := []struct {
@@ -105,13 +109,104 @@ func TestApplyToolResultPresentationDeltaCopiesShellExitCode(t *testing.T) {
 	exitCode := 7
 	delta := &ToolResultPresentationDelta{ShellExitCode: &exitCode}
 
-	applied := ApplyToolResultPresentationDelta(ToolCallMeta{
+	applied, mismatch := ApplyToolResultPresentationDelta(ToolCallMeta{
 		ToolName: "exec_command",
 		IsShell:  true,
-	}, delta)
+	}, delta, ToolResultPresentationOutcomeSuccessful)
+	if mismatch != nil {
+		t.Fatalf("apply shell presentation delta: %+v", mismatch)
+	}
 	exitCode = 9
 
 	if applied.ShellExitCode == nil || *applied.ShellExitCode != 7 {
 		t.Fatalf("applied shell exit code = %v, want copied 7", applied.ShellExitCode)
+	}
+}
+
+func TestApplyToolResultPresentationDeltaFinalizesGroupedDeletionFactsWithoutMutatingCallMetadata(t *testing.T) {
+	rendered := patchformat.Render(
+		"*** Begin Patch\n*** Delete File: target.txt\n*** Delete File: target.txt\n*** End Patch\n",
+		"/workspace",
+	)
+	meta := ToolCallMeta{
+		ToolName:     "patch",
+		Command:      rendered.DetailText(),
+		CompactText:  rendered.SummaryText(),
+		PatchDetail:  rendered.DetailText(),
+		PatchSummary: rendered.SummaryText(),
+		PatchRender:  &rendered,
+	}
+	first := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
+	delta := &ToolResultPresentationDelta{
+		WholeFileDeletionFacts: []patchformat.WholeFileDeletionFact{{
+			PhysicalGroup: patchformat.WholeFileDeletionGroupID{FirstOperation: first},
+			OperationIDs: []patchformat.WholeFileDeletionOperationID{
+				first,
+				{HunkOrdinal: 1},
+			},
+			Removed: 5,
+		}},
+	}
+
+	applied, mismatch := ApplyToolResultPresentationDelta(
+		meta,
+		delta,
+		ToolResultPresentationOutcomeSuccessful,
+	)
+	if mismatch != nil {
+		t.Fatalf("apply deletion presentation delta: %+v", mismatch)
+	}
+	if applied.PatchRender == nil {
+		t.Fatal("finalized patch render is absent")
+	}
+	if removed := patchformat.RemovedLineCount(applied.PatchRender.Files[0]); removed == nil || *removed != 5 {
+		t.Fatalf("finalized removed count = %v, want known 5", removed)
+	}
+	if applied.Command != applied.PatchDetail ||
+		applied.CompactText != applied.PatchSummary ||
+		applied.PatchDetail != applied.PatchRender.DetailText() ||
+		applied.PatchSummary != applied.PatchRender.SummaryText() {
+		t.Fatalf("finalized patch aliases are stale: %+v", applied)
+	}
+	if meta.PatchRender.Files[0].WholeFileDeletions[0].Disposition != nil {
+		t.Fatalf("authoritative call metadata was mutated: %+v", meta.PatchRender.Files[0])
+	}
+}
+
+func TestApplyToolResultPresentationDeltaPreservesPendingDispositionForFailedDeletion(t *testing.T) {
+	rendered := patchformat.Render(
+		"*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n",
+		"/workspace",
+	)
+
+	applied, mismatch := ApplyToolResultPresentationDelta(
+		ToolCallMeta{ToolName: "patch", PatchRender: &rendered},
+		nil,
+		ToolResultPresentationOutcomeFailed,
+	)
+	if mismatch != nil {
+		t.Fatalf("apply failed deletion presentation: %+v", mismatch)
+	}
+	if applied.PatchRender == nil {
+		t.Fatal("failed deletion lost prepared patch render")
+	}
+	if removed := patchformat.RemovedLineCount(applied.PatchRender.Files[0]); removed != nil {
+		t.Fatalf("failed deletion fabricated removed count %d", *removed)
+	}
+}
+
+func TestApplyToolResultPresentationDeltaReturnsTypedMissingFactMismatch(t *testing.T) {
+	rendered := patchformat.Render(
+		"*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n",
+		"/workspace",
+	)
+
+	_, mismatch := ApplyToolResultPresentationDelta(
+		ToolCallMeta{ToolName: "patch", PatchRender: &rendered},
+		&ToolResultPresentationDelta{},
+		ToolResultPresentationOutcomeSuccessful,
+	)
+	if mismatch == nil || mismatch.Kind != patchformat.WholeFileDeletionFactMismatchMissingOperation {
+		t.Fatalf("mismatch = %+v, want typed missing operation", mismatch)
 	}
 }

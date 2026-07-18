@@ -4,19 +4,21 @@ import (
 	"strings"
 
 	tuiinput "core/cli/tui/input"
+	"core/cli/tui/ongoing"
+	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-const promptHistoryLimit = 100
-
-func (m *uiModel) loadPromptHistory(history []string) {
-	for _, raw := range history {
+func (m *uiModel) loadInitialPromptHistory(initial []string, rawCount int) {
+	m.validateInitialPromptHistoryCount(rawCount)
+	loaded := make([]string, 0, len(initial))
+	for _, raw := range initial {
 		if text := preservePromptHistoryText(raw); text != "" {
-			m.promptHistory = append(m.promptHistory, text)
+			loaded = append(loaded, text)
 		}
 	}
-	m.trimPromptHistory()
+	m.promptHistory = loaded
 }
 
 func preservePromptHistoryText(text string) string {
@@ -197,17 +199,51 @@ func (m *uiModel) rememberPromptHistoryLocally(text string) bool {
 	if text = preservePromptHistoryText(text); text == "" {
 		return false
 	}
-	m.promptHistory = append(m.promptHistory, text)
-	m.trimPromptHistory()
+	m.promptHistory = appendPromptHistoryTail(m.promptHistory, []string{text})
 	m.resetPromptHistoryNavigation()
 	return true
 }
 
-func (m *uiModel) trimPromptHistory() {
-	if len(m.promptHistory) <= promptHistoryLimit {
+func appendPromptHistoryTail(tail []string, appended []string) []string {
+	if len(appended) == 0 {
+		return tail
+	}
+	maximum := serverapi.SessionPromptHistoryMaxEntries
+	if len(tail) > maximum {
+		tail = tail[len(tail)-maximum:]
+	}
+	if cap(tail) != maximum {
+		bounded := make([]string, len(tail), maximum)
+		copy(bounded, tail)
+		tail = bounded
+	}
+	if len(appended) >= maximum {
+		tail = tail[:0]
+		return append(tail, appended[len(appended)-maximum:]...)
+	}
+	keep := maximum - len(appended)
+	if len(tail) > keep {
+		copy(tail, tail[len(tail)-keep:])
+		tail = tail[:keep]
+	}
+	return append(tail, appended...)
+}
+
+func (m *uiModel) validateInitialPromptHistoryCount(count int) {
+	if count <= serverapi.SessionPromptHistoryMaxEntries {
 		return
 	}
-	m.promptHistory = append([]string(nil), m.promptHistory[len(m.promptHistory)-promptHistoryLimit:]...)
+	if m.debugMode {
+		m.handleOngoingDeveloperError(ongoing.NewDeveloperError(
+			"load_prompt_history",
+			"session-opening prompt history exceeds contract maximum",
+			map[string]any{
+				"actual_count":  count,
+				"maximum_count": serverapi.SessionPromptHistoryMaxEntries,
+			},
+		))
+	}
+	// The user-authorized release recovery is intentionally silent.
 }
 
 func (m *uiModel) recordPromptHistory(text string) tea.Cmd {

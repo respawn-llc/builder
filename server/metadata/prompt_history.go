@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"core/server/metadata/sqlitegen"
+	"core/shared/serverapi"
 )
 
 var ErrPromptHistoryConflict = errors.New("prompt history conflict")
@@ -36,7 +37,10 @@ func (s *Store) ReadPromptHistory(ctx context.Context, sessionID string) ([]stri
 	if trimmedSessionID == "" {
 		return nil, errors.New("session_id is required")
 	}
-	history, err := s.queries.ListSessionPromptHistoryText(ctx, trimmedSessionID)
+	history, err := s.queries.ListSessionPromptHistoryText(ctx, sqlitegen.ListSessionPromptHistoryTextParams{
+		SessionID:  trimmedSessionID,
+		MaxEntries: serverapi.SessionPromptHistoryMaxEntries,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list prompt history: %w", err)
 	}

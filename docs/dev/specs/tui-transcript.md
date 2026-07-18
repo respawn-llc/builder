@@ -32,6 +32,7 @@
 - **Pending tool-call previews in live region use the same rendering/layout as committed tool-call previews, with no pending-only labels.**
 - A pending question's live row shows only the question text; it does not append the internal tool name or prompt kind.
 - **Tool completion appends exactly one final committed line in server emission order. Ongoing never recolors/mutates an earlier emitted tool line.**
+- A pending whole-file deletion keeps its path visible without a removal-count badge while the count is unavailable. In ongoing and detail, a failed whole-file deletion remains path-only, while a successful whole-file deletion uses the existing compact removal badge to show its logical removed-line count, including a known count of zero.
 - **A shell invocation that moves to the background renders both its committed tool row and volatile background-activity row with a secondary `$`, faint foreground command, and `· backgrounded` suffix. The command truncates before the suffix so the complete suffix remains visible whenever the terminal can fit it; these rows never label the state as `running`.**
 - **Parallel tool calls commit in server emission order with no ordering guarantee among concurrent calls.**
 - **In main-input mode, `Up`/`Down` are reserved for prompt-history recall at whole-buffer boundaries or multiline cursor movement. They do not scroll ongoing transcript.**
@@ -198,6 +199,7 @@
 - Query tracking is cursor-local and accepts Unicode letters/digits plus `/`, `.`, `_`, and `-`.
 - Hidden paths are included, `.git` is excluded, and normal ignore-file handling remains enabled.
 - Non-empty directory candidates are derived from file paths; empty directories are intentionally excluded in v1.
+- Candidates whose repo-relative path changes under terminal-safe projection are excluded from the cached corpus before fuzzy matching and result limits; derived directories remain eligible when their own path is unchanged.
 - Corpus-build failures are retryable later in the same workspace and do not permanently disable path autocomplete.
 
 ## Startup And Session Selection
@@ -274,10 +276,16 @@
 ## Notifications
 
 - Ring terminal bell when a new `ask_question` is shown.
-- Ring on turn end only if the turn executed at least two tool calls.
-- Turn-end notification is deferred until queued prompt drain is fully idle.
+- Ring on turn end only if the TUI observed at least two tool calls for an eligible turn.
+- A supervisor-reviewed turn-end notification is requested only after the supervisor workflow completes, and every turn-end notification is requested only after the local queued prompt drain is fully idle.
+- Notification processing never delays queued model work. Submit completion and transcript delivery are independent, so transcript lag may omit a notification, delay it until a later drain, or select an earlier observed preview.
+- When the TUI observes a supervisor-reviewed turn boundary before notification, its preview uses the final answer produced before supervisor feedback is addressed.
+- A queued prompt drain emits at most one turn-end notification when any observed turn in the drain meets the two-tool threshold, using the last final answer observed by the TUI even when that turn has fewer than two tool calls.
 - Turn-end text includes assistant preview when available, else `<session title>: turn complete`.
 - Ask notifications include `<session title>: Question: <question>` or `<session title>: Action required: <question>`.
+- Every text-bearing terminal notification uses one formatting pipeline and is capped at 80 characters in total, including the session title and notification label. When the composed text exceeds the limit, Kent keeps its first 77 characters and appends `...` without word-boundary or component-specific truncation.
+- Markdown preview content uses the transcript's visible-text projection, including link destinations when that projection displays them, before the final notification is truncated.
+- Rendered preview whitespace and line breaks collapse to single spaces before composition.
 - `auto` notification method prefers OSC 9 on supported terminals and falls back to BEL.
 - OSC 9 notifications still emit a separate BEL.
 - OSC 9 is disabled when `WT_SESSION` is set.

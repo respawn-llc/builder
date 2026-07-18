@@ -15,7 +15,7 @@ import (
 )
 
 func withUIOngoingTranscriptController(controller *ongoingTranscriptController) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.ongoingTranscript = controller
 		m.terminalGeometry = terminalGeometryKnown(80, 24)
 	}

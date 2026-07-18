@@ -6,7 +6,9 @@ import (
 	"strings"
 	"sync"
 
+	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 )
 
 const terminalBell = "\a"
@@ -32,6 +34,22 @@ type belTerminalNotifier struct {
 type osc9TerminalNotifier struct {
 	mu  sync.Mutex
 	out io.Writer
+}
+
+type observedNotificationTurn struct {
+	stepID    runtimeids.StepID
+	toolCalls int
+	preview   *turnCompletionPreview
+}
+
+type turnCompletionPreview struct {
+	stepID runtimeids.StepID
+	body   string
+}
+
+type queuedTurnCompletion struct {
+	preview  turnCompletionPreview
+	eligible bool
 }
 
 func newBELTerminalNotifier(out io.Writer) *belTerminalNotifier {
@@ -91,31 +109,6 @@ func supportsOSC9(lookup func(string) (string, bool)) bool {
 	return false
 }
 
-func sanitizeTerminalNotificationMessage(message string) string {
-	message = strings.ReplaceAll(message, "\x1b", "")
-	message = strings.ReplaceAll(message, terminalBell, "")
-	return message
-}
-
-func formatAssistantPreview(content string, maxChars int) string {
-	normalized := strings.Join(strings.Fields(sanitizeTerminalNotificationMessage(content)), " ")
-	trimmed := strings.TrimSpace(normalized)
-	if trimmed == "" {
-		return ""
-	}
-	if maxChars <= 0 {
-		return trimmed
-	}
-	runes := []rune(trimmed)
-	if len(runes) <= maxChars {
-		return trimmed
-	}
-	if maxChars == 1 {
-		return "…"
-	}
-	return string(runes[:maxChars-1]) + "…"
-}
-
 func (r *belTerminalNotifier) Notify(_ string) {
 	r.Bell()
 }
@@ -137,7 +130,7 @@ func (r *osc9TerminalNotifier) Notify(message string) {
 	defer r.mu.Unlock()
 	// The first BEL terminates the OSC 9 sequence. Emit a second BEL so asks and
 	// turn-complete notifications still produce an audible bell on OSC-capable terminals.
-	_, _ = io.WriteString(r.out, osc9Prefix+sanitizeTerminalNotificationMessage(message)+terminalBell+terminalBell)
+	_, _ = io.WriteString(r.out, osc9Prefix+message+terminalBell+terminalBell)
 }
 
 func (r *osc9TerminalNotifier) Bell() {
@@ -154,11 +147,10 @@ type bellHooks struct {
 	notifier              terminalNotifier
 	title                 func() string
 	focused               func() bool
-	currentStep           string
-	toolCalls             int
-	pendingTurnCompletion bool
+	observedTurn          *observedNotificationTurn
+	pendingTurnCompletion *queuedTurnCompletion
 	pendingCompaction     bool
-	lastCompletionMessage string
+	reviewerStep          *runtimeids.StepID
 }
 
 func newBellHooks(notifier terminalNotifier, title func() string, focused ...func() bool) *bellHooks {
@@ -186,7 +178,10 @@ func (h *bellHooks) OnAttentionNotification(evt clientui.AttentionNotificationEv
 	if !tuiSupportsAttentionNotification(*notification) {
 		return
 	}
-	body := formatAssistantPreview(attentionNotificationBody(*notification), terminalNotificationPreviewLimit)
+	body := notificationMarkdownPreview(
+		attentionNotificationBody(*notification),
+		currentTerminalCapabilities().MarkdownLinks,
+	)
 	if body == "" {
 		body = attentionNotificationFallbackBody(*notification)
 	}
@@ -238,45 +233,73 @@ func attentionNotificationApprovalMessage(notification clientui.AttentionNotific
 	return notification.Approval.Message
 }
 
-func (h *bellHooks) recordToolCall(stepID string) {
-	stepID = strings.TrimSpace(stepID)
-	if stepID == "" {
-		return
-	}
+func (h *bellHooks) recordToolCall(stepID runtimeids.StepID) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.currentStep != stepID {
-		h.currentStep = stepID
-		h.toolCalls = 0
+	if h.observedTurn == nil || h.observedTurn.stepID != stepID {
+		h.observedTurn = &observedNotificationTurn{stepID: stepID}
 	}
-	h.toolCalls++
+	h.observedTurn.toolCalls++
 }
 
-func (h *bellHooks) recordTurnCompletion(stepID, assistantContent string) {
-	stepID = strings.TrimSpace(stepID)
+func (h *bellHooks) recordTurnCompletion(stepID runtimeids.StepID, assistantContent string) {
 	message := turnCompletionNotificationMessage(assistantContent)
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.lastCompletionMessage = message
-	if stepID == "" || h.currentStep != stepID {
+	if h.reviewerStep != nil && *h.reviewerStep == stepID {
 		return
 	}
-	if h.toolCalls >= 2 {
-		h.pendingTurnCompletion = true
+	if h.observedTurn == nil {
+		h.observedTurn = &observedNotificationTurn{stepID: stepID}
 	}
-	h.currentStep = ""
-	h.toolCalls = 0
+	if h.observedTurn.stepID != stepID {
+		return
+	}
+	h.observedTurn.preview = &turnCompletionPreview{stepID: stepID, body: message}
 }
 
-func (h *bellHooks) clearPendingTurnCompletionForSilentFinal(stepID string) {
-	stepID = strings.TrimSpace(stepID)
+func (h *bellHooks) recordStepFinished(stepID runtimeids.StepID) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.pendingTurnCompletion = false
-	h.lastCompletionMessage = ""
-	if stepID != "" && h.currentStep == stepID {
-		h.currentStep = ""
-		h.toolCalls = 0
+	if h.observedTurn != nil && h.observedTurn.stepID == stepID {
+		if h.observedTurn.preview != nil {
+			eligible := h.observedTurn.toolCalls >= 2
+			if h.pendingTurnCompletion != nil {
+				eligible = eligible || h.pendingTurnCompletion.eligible
+			}
+			h.pendingTurnCompletion = &queuedTurnCompletion{
+				preview:  *h.observedTurn.preview,
+				eligible: eligible,
+			}
+		}
+		h.observedTurn = nil
+	}
+	if h.reviewerStep != nil && *h.reviewerStep == stepID {
+		h.reviewerStep = nil
+	}
+}
+
+func (h *bellHooks) recordReviewerState(state clientui.TranscriptReviewerState) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	switch state.State {
+	case clientui.ReviewerStateRunning:
+		stepID := state.StepID
+		h.reviewerStep = &stepID
+	case clientui.ReviewerStateCompleted:
+		return
+	}
+}
+
+func (h *bellHooks) clearPendingTurnCompletionForSilentFinal(stepID runtimeids.StepID) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.reviewerStep != nil && *h.reviewerStep == stepID {
+		return
+	}
+	h.pendingTurnCompletion = nil
+	if h.observedTurn != nil && h.observedTurn.stepID == stepID {
+		h.observedTurn = nil
 	}
 }
 
@@ -287,19 +310,17 @@ func (h *bellHooks) OnTurnQueueDrained() {
 	h.mu.Lock()
 	if h.pendingCompaction {
 		h.pendingCompaction = false
-		h.pendingTurnCompletion = false
-		h.lastCompletionMessage = ""
+		h.pendingTurnCompletion = nil
 		h.mu.Unlock()
 		h.notifyIfUnfocused(compactionCompletionNotificationMessage)
 		return
 	}
-	if !h.pendingTurnCompletion {
+	if h.pendingTurnCompletion == nil || !h.pendingTurnCompletion.eligible {
 		h.mu.Unlock()
 		return
 	}
-	message := h.lastCompletionMessage
-	h.pendingTurnCompletion = false
-	h.lastCompletionMessage = ""
+	message := h.pendingTurnCompletion.preview.body
+	h.pendingTurnCompletion = nil
 	h.mu.Unlock()
 	h.notifyIfUnfocused(message)
 }
@@ -309,11 +330,10 @@ func (h *bellHooks) OnTurnQueueAborted() {
 		return
 	}
 	h.mu.Lock()
-	h.currentStep = ""
-	h.toolCalls = 0
-	h.pendingTurnCompletion = false
+	h.observedTurn = nil
+	h.pendingTurnCompletion = nil
 	h.pendingCompaction = false
-	h.lastCompletionMessage = ""
+	h.reviewerStep = nil
 	h.mu.Unlock()
 }
 
@@ -330,17 +350,38 @@ func (h *bellHooks) OnUserCompactionCompleted(queueDrained bool) {
 		return
 	}
 	h.pendingCompaction = false
-	h.pendingTurnCompletion = false
-	h.lastCompletionMessage = ""
+	h.pendingTurnCompletion = nil
 	h.mu.Unlock()
 	h.notifyIfUnfocused(compactionCompletionNotificationMessage)
 }
 
 func turnCompletionNotificationMessage(assistantContent string) string {
-	if preview := formatAssistantPreview(assistantContent, terminalNotificationPreviewLimit); preview != "" {
+	if preview := notificationMarkdownPreview(
+		assistantContent,
+		currentTerminalCapabilities().MarkdownLinks,
+	); preview != "" {
 		return preview
 	}
 	return "turn complete"
+}
+
+func notificationMarkdownPreview(
+	content string,
+	linkPresentation transcriptrender.MarkdownLinkPresentation,
+) string {
+	lines := transcriptrender.RenderMarkdownStableLinesWithLinkPresentation(
+		transcriptrender.StyleRoleAssistant,
+		content,
+		terminalNotificationPreviewLimit,
+		linkPresentation,
+	)
+	plain := strings.Join(transcriptrender.PlainLines(lines), " ")
+	normalized := terminalNotificationSingleLine(plain)
+	runes := []rune(normalized)
+	if len(runes) <= terminalNotificationPreviewLimit {
+		return normalized
+	}
+	return string(runes[:terminalNotificationPreviewLimit])
 }
 
 func (h *bellHooks) formatMessage(message string) string {
@@ -348,7 +389,23 @@ func (h *bellHooks) formatMessage(message string) string {
 	if h != nil && h.title != nil {
 		title = sessionTitle(h.title())
 	}
-	return title + ": " + sanitizeTerminalNotificationMessage(message)
+	return formatTerminalNotificationMessage(title, message)
+}
+
+func formatTerminalNotificationMessage(title, message string) string {
+	composed := terminalNotificationSingleLine(sessionTitle(title) + ": " + message)
+	runes := []rune(composed)
+	if len(runes) <= terminalNotificationPreviewLimit {
+		return composed
+	}
+	return string(runes[:terminalNotificationPreviewLimit-3]) + "..."
+}
+
+func terminalNotificationSingleLine(text string) string {
+	return strings.Join(
+		strings.Fields(transcriptrender.TerminalSafeSingleLine(text)),
+		" ",
+	)
 }
 
 func (h *bellHooks) notifyIfUnfocused(message string) {
@@ -366,10 +423,7 @@ func (h *bellHooks) focusedForAttention() bool {
 		return false
 	}
 	h.mu.Lock()
-	focused := false
-	if h.focused != nil {
-		focused = h.focused()
-	}
+	focusedProvider := h.focused
 	h.mu.Unlock()
-	return focused
+	return focusedProvider != nil && focusedProvider()
 }

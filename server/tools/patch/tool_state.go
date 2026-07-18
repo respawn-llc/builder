@@ -16,8 +16,12 @@ type applyState struct {
 	tool            *Tool
 	ctx             context.Context
 	state           map[string]*patchFileState
-	deleteTargets   map[string]struct{}
+	deleteTargets   map[string]wholeFileDeletionTarget
 	approvedOutside map[string]bool
+}
+
+type wholeFileDeletionTarget struct {
+	OperationIDs []patchformat.WholeFileDeletionOperationID
 }
 
 func newApplyState(tool *Tool, ctx context.Context) *applyState {
@@ -25,7 +29,7 @@ func newApplyState(tool *Tool, ctx context.Context) *applyState {
 		tool:            tool,
 		ctx:             ctx,
 		state:           map[string]*patchFileState{},
-		deleteTargets:   map[string]struct{}{},
+		deleteTargets:   map[string]wholeFileDeletionTarget{},
 		approvedOutside: map[string]bool{},
 	}
 }
@@ -155,7 +159,10 @@ func (s *applyState) addFile(op patchformat.AddFile) error {
 	return nil
 }
 
-func (s *applyState) deleteFile(op patchformat.DeleteFile) error {
+func (s *applyState) deleteFile(
+	op patchformat.DeleteFile,
+	operationID patchformat.WholeFileDeletionOperationID,
+) error {
 	target, err := s.tool.resolvePath(s.ctx, op.Path, true, s.approvedOutside)
 	if err != nil {
 		return err
@@ -170,7 +177,9 @@ func (s *applyState) deleteFile(op patchformat.DeleteFile) error {
 	if !snapshot.Exists {
 		return targetMissingFailure(op.Path, "cannot delete a file that does not exist")
 	}
-	s.deleteTargets[target] = struct{}{}
+	deleteTarget := s.deleteTargets[target]
+	deleteTarget.OperationIDs = append(deleteTarget.OperationIDs, operationID)
+	s.deleteTargets[target] = deleteTarget
 	return nil
 }
 

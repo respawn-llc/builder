@@ -349,7 +349,7 @@ func (s *uiPathReferenceSearchService) loadCorpusSnapshot(ctx context.Context, w
 	sort.Slice(candidates, func(i, j int) bool {
 		return candidates[i].Path < candidates[j].Path
 	})
-	return uiPathReferenceCorpusSnapshot{Candidates: candidates}, nil
+	return uiPathReferenceCorpusSnapshot{Candidates: terminalSafePathReferenceCandidates(candidates)}, nil
 }
 
 func isEmptyRipgrepFilesResult(err error, output []byte) bool {

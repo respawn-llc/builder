@@ -9,11 +9,19 @@ func (h *bellHooks) OnTranscriptMessage(message clientui.TranscriptMessage) {
 	switch message.Kind {
 	case clientui.TranscriptMessageAssistantDelta:
 		if delta := message.Payload.AssistantDelta; delta != nil && isNoopFinalText(delta.Delta) {
-			h.clearPendingTurnCompletionForSilentFinal(delta.StepID.String())
+			h.clearPendingTurnCompletionForSilentFinal(delta.StepID)
 		}
 	case clientui.TranscriptMessageToolStart:
 		if tool := message.Payload.ToolStart; tool != nil {
-			h.recordToolCall(tool.StepID.String())
+			h.recordToolCall(tool.StepID)
+		}
+	case clientui.TranscriptMessageReviewerState:
+		if reviewer := message.Payload.ReviewerState; reviewer != nil {
+			h.recordReviewerState(*reviewer)
+		}
+	case clientui.TranscriptMessageStepState:
+		if step := message.Payload.StepState; step != nil && step.Lifecycle == clientui.StepLifecycleFinished {
+			h.recordStepFinished(step.StepID)
 		}
 	case clientui.TranscriptMessageCommittedRow:
 		row := message.Payload.CommittedRow
@@ -22,7 +30,7 @@ func (h *bellHooks) OnTranscriptMessage(message clientui.TranscriptMessage) {
 		}
 		switch row.Assistant.Phase {
 		case transcript.AssistantPhaseFinal:
-			h.recordTurnCompletion(row.Assistant.StepID.String(), row.Assistant.Text)
+			h.recordTurnCompletion(row.Assistant.StepID, row.Assistant.Text)
 		}
 	}
 }

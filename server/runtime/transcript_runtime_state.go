@@ -213,12 +213,12 @@ func (s *transcriptRuntimeState) AppendMessage(stepID string, msg llm.Message) {
 	s.chatProjection().appendMessage(stepID, msg)
 }
 
-func (s *transcriptRuntimeState) AppendLocalEntryRecord(entry ChatEntry) {
-	s.chatProjection().appendLocalEntryRecord(entry)
+func (s *transcriptRuntimeState) AppendLocalEntryRecord(entry ChatEntry, afterToolCallID *string) {
+	s.chatProjection().appendLocalEntryRecord(entry, afterToolCallID)
 }
 
 func (s *transcriptRuntimeState) AppendCommittedEntryWithVisibility(role, text string, visibility transcript.EntryVisibility) {
-	s.chatProjection().appendLocalEntryRecord(ChatEntry{Visibility: visibility, Role: role, Text: text})
+	s.chatProjection().appendLocalEntryRecord(ChatEntry{Visibility: visibility, Role: role, Text: text}, nil)
 }
 
 func (s *transcriptRuntimeState) AppendStreamingDelta(stepID string, baseRevision int64, baseCommittedEntryCount int, delta string, phase llm.MessagePhase) (*AssistantStreamMetadata, *uuid.UUID) {

@@ -21,6 +21,58 @@ import (
 )
 
 func (e *Engine) persistToolCompletionRaw(stepID string, r tools.Result) (session.CommitReceipt, error) {
+	payload, backgroundSessionID, hasBackgroundSession := e.prepareStoredToolCompletion(r)
+	_, receipt, err := e.store.AppendEvent(stepID, "tool_completed", payload)
+	if receipt.Committed {
+		e.applyCommittedStoredToolCompletion(
+			payload,
+			backgroundSessionID,
+			hasBackgroundSession,
+		)
+	}
+	return receipt, err
+}
+
+func (e *Engine) persistFinalizedToolCompletionRaw(
+	stepID string,
+	completion finalizedToolCompletion,
+) (session.CommitReceipt, error) {
+	if completion.OperatorFeedback == nil {
+		return e.persistToolCompletionRaw(stepID, completion.Result)
+	}
+	payload, backgroundSessionID, hasBackgroundSession := e.prepareStoredToolCompletion(
+		completion.Result,
+	)
+	feedback, normalizeErr := normalizeStoredLocalEntry(*completion.OperatorFeedback)
+	if normalizeErr != nil {
+		panic(fmt.Sprintf(
+			"tool completion presentation fallback requires valid operator feedback (call_id=%q tool=%q error=%v)",
+			completion.Result.CallID,
+			completion.Result.Name,
+			normalizeErr,
+		))
+	}
+	_, receipt, err := e.store.AppendTurnAtomic(stepID, []session.EventInput{
+		{Kind: "tool_completed", Payload: payload},
+		{Kind: "local_entry", Payload: feedback},
+	})
+	if receipt.Committed {
+		e.applyCommittedStoredToolCompletion(
+			payload,
+			backgroundSessionID,
+			hasBackgroundSession,
+		)
+		e.transcriptRuntimeState().AppendLocalEntryRecord(
+			*localEntryChatEntryForStep(feedback, stepID),
+			feedback.AfterToolCallID,
+		)
+	}
+	return receipt, err
+}
+
+func (e *Engine) prepareStoredToolCompletion(
+	r tools.Result,
+) (storedToolCompletion, string, bool) {
 	if r.PresentationDelta != nil {
 		panic(fmt.Sprintf(
 			"tool result presentation invariant violated: unconsumed presentation delta reached persistence (call_id=%q tool=%q)",
@@ -46,16 +98,20 @@ func (e *Engine) persistToolCompletionRaw(stepID string, r tools.Result) (sessio
 		Presentation:  r.Presentation,
 		ProviderItems: e.providerItemsForToolCompletion(r),
 	}
-	_, receipt, err := e.store.AppendEvent(stepID, "tool_completed", payload)
-	if receipt.Committed {
-		e.markCurrentRequestShapeDirtyForSignificantMutation()
-		e.transcriptRuntimeState().RecordStoredToolCompletion(payload)
-		if hasBackgroundSession {
-			e.ensureOrchestrationCollaborators()
-			e.backgroundFlow.ConsumePendingBackgroundNotice(backgroundSessionID)
-		}
+	return payload, backgroundSessionID, hasBackgroundSession
+}
+
+func (e *Engine) applyCommittedStoredToolCompletion(
+	payload storedToolCompletion,
+	backgroundSessionID string,
+	hasBackgroundSession bool,
+) {
+	e.markCurrentRequestShapeDirtyForSignificantMutation()
+	e.transcriptRuntimeState().RecordStoredToolCompletion(payload)
+	if hasBackgroundSession {
+		e.ensureOrchestrationCollaborators()
+		e.backgroundFlow.ConsumePendingBackgroundNotice(backgroundSessionID)
 	}
-	return receipt, err
 }
 
 func (e *Engine) providerItemsForToolCompletion(r tools.Result) []llm.ResponseItem {
@@ -125,20 +181,39 @@ func (e *Engine) steerPersistedDiagnosticEntry(stepID, diagnosticKey, role, text
 }
 
 func (e *Engine) appendPersistedLocalEntryRecordRaw(stepID string, entry storedLocalEntry) (session.CommitReceipt, error) {
+	entry, err := normalizeStoredLocalEntry(entry)
+	if err != nil {
+		return session.CommitReceipt{}, fmt.Errorf("normalize local entry: %w", err)
+	}
+	_, receipt, err := e.store.AppendEvent(stepID, "local_entry", entry)
+	if receipt.Committed {
+		projected := localEntryChatEntryForStep(entry, stepID)
+		e.transcriptRuntimeState().AppendLocalEntryRecord(*projected, entry.AfterToolCallID)
+		e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: projected, CommittedTranscriptChanged: true})
+	}
+	return receipt, err
+}
+
+func normalizeStoredLocalEntry(entry storedLocalEntry) (storedLocalEntry, error) {
 	entry.Role = strings.TrimSpace(entry.Role)
 	entry.Text = strings.TrimSpace(entry.Text)
 	entry.CondensedText = strings.TrimSpace(entry.CondensedText)
 	entry.DiagnosticKey = strings.TrimSpace(entry.DiagnosticKey)
 	entry.NoticeID = strings.TrimSpace(entry.NoticeID)
-	if entry.Role == "" || entry.Text == "" {
-		return session.CommitReceipt{}, nil
+	if entry.AfterToolCallID != nil {
+		callID := strings.TrimSpace(*entry.AfterToolCallID)
+		if callID == "" {
+			return storedLocalEntry{}, errors.New("after-tool call identity is required when present")
+		}
+		entry.AfterToolCallID = &callID
 	}
-	_, receipt, err := e.store.AppendEvent(stepID, "local_entry", entry)
-	if receipt.Committed {
-		e.transcriptRuntimeState().AppendLocalEntryRecord(*localEntryChatEntry(entry))
-		e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: localEntryChatEntry(entry), CommittedTranscriptChanged: true})
+	if entry.Role == "" {
+		return storedLocalEntry{}, errors.New("role is required")
 	}
-	return receipt, err
+	if entry.Text == "" {
+		return storedLocalEntry{}, errors.New("text is required")
+	}
+	return entry, nil
 }
 
 func localEntryChatEntry(entry storedLocalEntry) *ChatEntry {
@@ -149,6 +224,12 @@ func localEntryChatEntry(entry storedLocalEntry) *ChatEntry {
 		CondensedText: strings.TrimSpace(entry.CondensedText),
 		NoticeID:      strings.TrimSpace(entry.NoticeID),
 	}
+}
+
+func localEntryChatEntryForStep(entry storedLocalEntry, stepID string) *ChatEntry {
+	projected := localEntryChatEntry(entry)
+	projected.StepID = strings.TrimSpace(stepID)
+	return projected
 }
 
 func (e *Engine) resetLocalDiagnostics() {

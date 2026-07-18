@@ -10,6 +10,7 @@ import (
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/transcript"
+	patchformat "core/shared/transcript/patchformat"
 )
 
 type PersistedTranscriptScanRequest struct {
@@ -123,6 +124,7 @@ func clonePersistedToolCallMeta(meta *transcript.ToolCallMeta) *transcript.ToolC
 		renderHint := *meta.RenderHint
 		copyMeta.RenderHint = &renderHint
 	}
+	copyMeta.PatchRender = patchformat.Clone(meta.PatchRender)
 	return &copyMeta
 }
 

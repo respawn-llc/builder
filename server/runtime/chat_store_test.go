@@ -64,7 +64,7 @@ func TestChatStoreCompactionPrunesWorkingStateAndPreservesCommittedCount(t *test
 			Visibility: transcript.EntryVisibilityAuto,
 			Role:       "system",
 			Text:       "note",
-		})
+		}, nil)
 	}
 	committedBeforeCompaction := s.committedEntryCount()
 
@@ -233,8 +233,8 @@ func TestChatStoreDeliveryPreservesTypedAndLegacyLocalRowsAfterCompaction(t *tes
 		CondensedText: "1 suggestion",
 		NoticeID:      "0d4ad314-f5f9-4b32-a13d-4b8c1d9a2e61",
 	}
-	s.appendLocalEntryRecord(typed)
-	s.appendLocalEntryRecord(ChatEntry{Text: "ancient untyped row"})
+	s.appendLocalEntryRecord(typed, nil)
+	s.appendLocalEntryRecord(ChatEntry{Text: "ancient untyped row"}, nil)
 
 	rows := s.deliverySnapshot().Rows
 	if len(rows) != 2 {

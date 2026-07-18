@@ -172,13 +172,16 @@ func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := toolResultWithTranscriptPresentation(tools.Result{
+			result, mismatch := toolResultWithTranscriptPresentation(tools.Result{
 				CallID:            tt.call.ID,
 				Name:              toolspec.ID(tt.call.Name),
 				IsError:           true,
 				Summary:           "failed",
 				PresentationDelta: tt.delta,
 			}, tt.call, t.TempDir())
+			if mismatch != nil {
+				t.Fatalf("tool presentation mismatch: %+v", mismatch)
+			}
 
 			if result.Presentation == nil {
 				t.Fatal("tool result presentation is nil")

@@ -467,6 +467,15 @@ func TestDetailTranscriptPageDeepClonesPatchRender(t *testing.T) {
 	sourcePatch := &patchformat.RenderedPatch{Files: []patchformat.RenderedFile{{
 		RelPath: "file.txt",
 		Diff:    []string{"old"},
+		WholeFileDeletions: []patchformat.WholeFileDeletionOperation{{
+			ID: patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0},
+			Disposition: &patchformat.WholeFileDeletionDisposition{
+				PhysicalGroup: patchformat.WholeFileDeletionGroupID{
+					FirstOperation: patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0},
+				},
+				Removed: 2,
+			},
+		}},
 	}}}
 	page := clientui.TranscriptPage{
 		SessionID: detailTestSessionID,
@@ -490,11 +499,53 @@ func TestDetailTranscriptPageDeepClonesPatchRender(t *testing.T) {
 	if got := firstRead.Entries[0].Tool.Presentation.PatchRender.Files[0].Diff[0]; got != "old" {
 		t.Fatalf("stored patch diff = %q, want source-isolated old diff", got)
 	}
+	sourcePatch.Files[0].WholeFileDeletions[0].Disposition.Removed = 8
+	if got := firstRead.Entries[0].Tool.Presentation.PatchRender.Files[0].WholeFileDeletions[0].Disposition.Removed; got != 2 {
+		t.Fatalf("stored deletion count = %d, want source-isolated 2", got)
+	}
 
 	firstRead.Entries[0].Tool.Presentation.PatchRender.Files[0].Diff[0] = "read changed"
+	firstRead.Entries[0].Tool.Presentation.PatchRender.Files[0].WholeFileDeletions[0].Disposition.Removed = 9
 	secondRead := model.detailTranscript.page()
 	if got := secondRead.Entries[0].Tool.Presentation.PatchRender.Files[0].Diff[0]; got != "old" {
 		t.Fatalf("page patch diff = %q, want page-isolated old diff", got)
+	}
+	if got := secondRead.Entries[0].Tool.Presentation.PatchRender.Files[0].WholeFileDeletions[0].Disposition.Removed; got != 2 {
+		t.Fatalf("page deletion count = %d, want page-isolated 2", got)
+	}
+}
+
+func TestDetailTranscriptPagePreservesKnownZeroDeletionCount(t *testing.T) {
+	model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
+	id := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
+	page := clientui.TranscriptPage{
+		SessionID: detailTestSessionID,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestToolRow(clientui.TranscriptToolRow{
+				ToolCallID: "da35dc7a-02e8-4993-aa45-5cfba6eb4546",
+				ToolName:   "patch",
+				Presentation: &transcript.ToolCallMeta{
+					ToolName: "patch",
+					PatchRender: &patchformat.RenderedPatch{Files: []patchformat.RenderedFile{{
+						RelPath: "empty.txt",
+						WholeFileDeletions: []patchformat.WholeFileDeletionOperation{{
+							ID: id,
+							Disposition: &patchformat.WholeFileDeletionDisposition{
+								PhysicalGroup: patchformat.WholeFileDeletionGroupID{FirstOperation: id},
+								Removed:       0,
+							},
+						}},
+					}}},
+				},
+			}),
+		},
+	}
+
+	model.applyDetailTranscriptLoad("", clientui.TranscriptPageRequest{}, page)
+	stored := model.detailTranscript.page()
+	file := stored.Entries[0].Tool.Presentation.PatchRender.Files[0]
+	if removed := patchformat.RemovedLineCount(file); removed == nil || *removed != 0 {
+		t.Fatalf("detail client removed count = %v, want present zero", removed)
 	}
 }
 

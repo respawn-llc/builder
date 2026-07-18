@@ -3,6 +3,7 @@ package app
 import (
 	"reflect"
 	"testing"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -45,17 +46,50 @@ func TestDetectPathReferenceQuery(t *testing.T) {
 }
 
 func TestApplyPathReferenceCompletionReplacesMiddleSpan(t *testing.T) {
-	input, cursor := testPathReferenceFixture("compare @cliap| with tests")
-	query := detectPathReferenceQuery(input, cursor)
-	updated, nextCursor, ok := applyPathReferenceCompletion(input, cursor, query, uiPathReferenceCandidate{Path: "cli/app/ui.go"})
-	if !ok {
-		t.Fatal("expected completion applied")
+	tests := []struct {
+		name          string
+		candidatePath string
+		safePath      string
+		expectFailure bool
+	}{
+		{name: "ordinary path", candidatePath: "cli/app/ui.go", safePath: "cli/app/ui.go"},
+		{name: "CSI", candidatePath: "cli/\x1b[31mapp\x1b[0m/ui.go", expectFailure: true},
+		{name: "OSC terminated by BEL", candidatePath: "cli/\x1b]8;;https://evil.test\x07app\x1b]8;;\x07/ui.go", expectFailure: true},
+		{name: "OSC terminated by ST", candidatePath: "cli/\x1b]0;owned\x1b\\app/ui.go", expectFailure: true},
+		{name: "C0 control", candidatePath: "cli/app/\x01ui.go", expectFailure: true},
+		{name: "printable Unicode and punctuation", candidatePath: "目录/[draft] #1?.txt", safePath: "目录/[draft] #1?.txt"},
+		{name: "empty projection", candidatePath: "\x1b[31m\x1b[0m", expectFailure: true},
+		{name: "blank projection", candidatePath: "\x1b[31m \t\x1b[0m", expectFailure: true},
 	}
-	if updated != "compare @cli/app/ui.go with tests" {
-		t.Fatalf("updated input = %q", updated)
-	}
-	if nextCursor != len([]rune("compare @cli/app/ui.go")) {
-		t.Fatalf("cursor = %d", nextCursor)
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			input, cursor := testPathReferenceFixture("compare @cliap| with tests")
+			query := detectPathReferenceQuery(input, cursor)
+			updated, nextCursor, ok := applyPathReferenceCompletion(input, cursor, query, uiPathReferenceCandidate{Path: tc.candidatePath})
+			if tc.expectFailure {
+				if ok || updated != input || nextCursor != cursor {
+					t.Fatalf("unusable projection result = (%q, %d, %v), want original input and cursor with false", updated, nextCursor, ok)
+				}
+				return
+			}
+			if !ok {
+				t.Fatal("expected completion applied")
+			}
+			wantInput := "compare @" + tc.safePath + " with tests"
+			if updated != wantInput {
+				t.Fatalf("updated input = %q, want %q", updated, wantInput)
+			}
+			wantCursor := len([]rune("compare @" + tc.safePath))
+			if nextCursor != wantCursor {
+				t.Fatalf("cursor = %d, want %d", nextCursor, wantCursor)
+			}
+			for _, r := range updated {
+				if unicode.IsControl(r) {
+					t.Fatalf("updated input contains terminal control %U: %q", r, updated)
+				}
+			}
+		})
 	}
 }
 
@@ -258,35 +292,21 @@ func TestPathReferencePickerScrollsSelectionAndReservesBoundedHeight(t *testing.
 	}
 }
 
-func TestPathReferencePickerSanitizesControlCharactersForDisplay(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.pathReference.tracked = detectPathReferenceQuery("@ab", 3)
-	m.pathReference.matches = []uiPathReferenceCandidate{{Path: "safe/]52;evilname.txt"}}
+func TestPathReferencePickerFiltersControlBearingCandidates(t *testing.T) {
+	m, _ := newPathReferenceTestModel("@ab")
+	rawPath := "safe/\x1b]52;evil\x07name\x01.txt"
+	safePath := "safe/name.txt"
+	m = deliverPathReferenceTestMatches(t, m, 1, []uiPathReferenceCandidate{{Path: rawPath}, {Path: safePath}})
 
 	state := m.pathReferencePicker()
 	if !state.visible || len(state.rows) != 1 {
 		t.Fatalf("unexpected picker state: %+v", state)
 	}
-	if state.rows[0].primary != "safe/name.txt" {
+	if state.rows[0].primary != safePath {
 		t.Fatalf("display path = %q", state.rows[0].primary)
 	}
-	if m.pathReference.matches[0].Path != "safe/]52;evilname.txt" {
-		t.Fatalf("expected underlying candidate path preserved, got %q", m.pathReference.matches[0].Path)
-	}
-}
-
-func TestPathReferenceAcceptanceUsesUnsanitizedCandidate(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	testSetMainInput(m, "@ab")
-	m.pathReference.tracked = uiPathReferenceQuery{Active: true, Start: 0, End: 3, RawQuery: "ab", NormalizedQuery: "ab"}
-	rawPath := "safe/line\n\t" + string(rune(0x1b)) + "[31mname.txt"
-	m.pathReference.matches = []uiPathReferenceCandidate{{Path: rawPath}}
-
-	if !m.acceptPathReferenceSelection() {
-		t.Fatal("expected raw candidate acceptance")
-	}
-	if testMainInput(m) != "@"+rawPath {
-		t.Fatalf("accepted input = %q, want original candidate bytes", testMainInput(m))
+	if len(m.pathReference.matches) != 1 || m.pathReference.matches[0].Path != safePath {
+		t.Fatalf("filtered matches = %+v, want only exact safe path", m.pathReference.matches)
 	}
 }
 
