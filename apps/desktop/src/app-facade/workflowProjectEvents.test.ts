@@ -58,10 +58,7 @@ describe("workflow project event helpers", () => {
 
   it("ignores events for other tasks, other resources, or a blank task id", () => {
     expect(
-      workflowProjectEventAffectsTask(
-        workflowEvent({ changedIDs: ["task-2"], resource: "task" }),
-        "task-1",
-      ),
+      workflowProjectEventAffectsTask(workflowEvent({ changedIDs: ["task-2"], resource: "task" }), "task-1"),
     ).toBe(false);
     expect(
       workflowProjectEventAffectsTask(
@@ -70,10 +67,7 @@ describe("workflow project event helpers", () => {
       ),
     ).toBe(false);
     expect(
-      workflowProjectEventAffectsTask(
-        workflowEvent({ changedIDs: ["task-1"], resource: "task" }),
-        "   ",
-      ),
+      workflowProjectEventAffectsTask(workflowEvent({ changedIDs: ["task-1"], resource: "task" }), "   "),
     ).toBe(false);
   });
 });
