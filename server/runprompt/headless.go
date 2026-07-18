@@ -9,7 +9,6 @@ import (
 
 	"core/server/auth"
 	"core/server/launch"
-	"core/server/llm"
 	"core/server/metadata"
 	"core/server/requestmemo"
 	"core/server/runlog"
@@ -60,9 +59,9 @@ type HeadlessBootstrap struct {
 
 func NewInProcessRunPromptClient(boot HeadlessBootstrap) apicontract.RunPromptService {
 	launcher := &headlessPromptLauncher{boot: boot}
-	return &memoizingPromptService{
-		inner: NewPromptService(launcher),
-		runs:  requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
+	return &inProcessRunPromptService{
+		launcher: launcher,
+		runs:     requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
 	}
 }
 
@@ -70,7 +69,7 @@ type headlessPromptLauncher struct {
 	boot HeadlessBootstrap
 }
 
-func (l *headlessPromptLauncher) PrepareHeadlessPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (PromptSessionRuntime, error) {
+func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (*headlessPromptRuntime, error) {
 	if l.boot.SessionLaunch == nil {
 		return nil, errors.New("headless session launch service is required")
 	}
@@ -115,7 +114,6 @@ func (l *headlessPromptLauncher) PrepareHeadlessPrompt(ctx context.Context, req 
 	return &headlessPromptRuntime{
 		plan:           runtimePlan,
 		warnings:       result.Warnings,
-		history:        l.boot.PromptHistory,
 		progress:       progress,
 		sessionStarted: sessionStarted,
 	}, nil
@@ -124,15 +122,10 @@ func (l *headlessPromptLauncher) PrepareHeadlessPrompt(ctx context.Context, req 
 type headlessRuntimePlan struct {
 	sessionRuntime *sessionruntime.Service
 	sessionID      string
-	ownerID        string
 	engine         *runtime.Engine
 	diagLogger     *runlog.RunLogger
 	eventBridge    *runtimewire.EventBridge
 	close          func()
-}
-
-func (p *headlessRuntimePlan) Close() {
-	p.CloseWithFailure(false)
 }
 
 func (p *headlessRuntimePlan) CloseWithFailure(failed bool) {
@@ -236,7 +229,6 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 	return &headlessRuntimePlan{
 		sessionRuntime: l.boot.SessionRuntime,
 		sessionID:      sessionID,
-		ownerID:        ownerID,
 		engine:         acquiredEngine,
 		diagLogger:     diagLogger,
 		eventBridge:    eventBridge,
@@ -265,25 +257,11 @@ func headlessRuntimeWorkdir(plan launch.SessionPlan) string {
 type headlessPromptRuntime struct {
 	plan           *headlessRuntimePlan
 	warnings       []string
-	history        promptHistoryStore
 	progress       serverapi.RunPromptProgressSink
 	sessionStarted *serverapi.RunPromptSessionStarted
 }
 
-func (r *headlessPromptRuntime) RecordPromptHistory(ctx context.Context, clientRequestID string, prompt string) error {
-	if r == nil || r.history == nil || r.plan == nil {
-		return nil
-	}
-	requestID := strings.TrimSpace(clientRequestID)
-	_, _, err := r.history.RecordPromptHistoryEntry(ctx, metadata.PromptHistoryEntry{
-		SessionID: r.plan.sessionID,
-		SourceID:  requestID,
-		Text:      prompt,
-	})
-	return err
-}
-
-func (r *headlessPromptRuntime) SubmitUserMessage(ctx context.Context, prompt string) (PromptAssistantMessage, error) {
+func (r *headlessPromptRuntime) submitUserMessage(ctx context.Context, prompt string) (serverapi.RunPromptResponse, uint64, error) {
 	var content string
 	var sessionName string
 	var err error
@@ -318,13 +296,12 @@ func (r *headlessPromptRuntime) SubmitUserMessage(ctx context.Context, prompt st
 	if r.plan.eventBridge != nil {
 		dropped = r.plan.eventBridge.Dropped.Load()
 	}
-	return PromptAssistantMessage{
-		SessionID:     r.plan.sessionID,
-		SessionName:   sessionName,
-		Content:       content,
-		Warnings:      append([]string(nil), r.warnings...),
-		DroppedEvents: dropped,
-	}, err
+	return serverapi.RunPromptResponse{
+		SessionID:   r.plan.sessionID,
+		SessionName: sessionName,
+		Result:      content,
+		Warnings:    append([]string(nil), r.warnings...),
+	}, dropped, err
 }
 
 func (r *headlessPromptRuntime) publishSessionStarted() {
@@ -339,94 +316,6 @@ func (r *headlessPromptRuntime) publishSessionStarted() {
 	})
 }
 
-func (r *headlessPromptRuntime) Logf(format string, args ...any) {
-	r.plan.diagLogger.Logf(format, args...)
-}
-func (r *headlessPromptRuntime) Close() error {
-	if r == nil || r.plan == nil {
-		return nil
-	}
-	r.plan.Close()
-	return nil
-}
-
-func (r *headlessPromptRuntime) CloseWithFailure() error {
-	if r == nil || r.plan == nil {
-		return nil
-	}
-	r.plan.CloseWithFailure(true)
-	return nil
-}
-
 func RunPromptAskHandler(req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
 	return askquestion.AskQuestionResponse{}, ErrHeadlessAskUnsupported
-}
-
-func PublishRunPromptProgress(progress serverapi.RunPromptProgressSink, evt runtime.Event) {
-	if progress == nil {
-		return
-	}
-	state, ok := RunPromptProgressFromRuntimeEvent(evt)
-	if !ok {
-		return
-	}
-	progress.PublishRunPromptProgress(state)
-}
-
-func RunPromptProgressFromRuntimeEvent(evt runtime.Event) (serverapi.RunPromptProgress, bool) {
-	switch evt.Kind {
-	case runtime.EventAssistantMessage:
-		content := evt.Message.Content
-		if evt.Message.Role != llm.RoleAssistant || strings.TrimSpace(content) == "" {
-			return serverapi.RunPromptProgress{}, false
-		}
-		switch evt.Message.Phase {
-		case llm.MessagePhaseCommentary, llm.MessagePhaseFinal:
-		default:
-			return serverapi.RunPromptProgress{}, false
-		}
-		return serverapi.RunPromptProgress{
-			Kind: serverapi.RunPromptProgressKindAssistantMessage,
-			AssistantMessage: &serverapi.RunPromptVisibleResponse{
-				Phase:   evt.Message.Phase,
-				Content: content,
-			},
-		}, true
-	case runtime.EventCompactionStarted:
-		return serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindCompactionStarted}, true
-	case runtime.EventCompactionFailed:
-		var detail string
-		if evt.Compaction != nil {
-			detail = evt.Compaction.Error
-		}
-		return serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindCompactionFailed, Failure: runPromptFailure(detail)}, true
-	case runtime.EventInFlightClearFailed:
-		return serverapi.RunPromptProgress{
-			Kind:    serverapi.RunPromptProgressKindRunCleanupFailed,
-			Failure: runPromptFailure(evt.Error),
-		}, true
-	case runtime.EventQueuedUserMessageStatus:
-		status := evt.QueuedUserMessageStatus
-		if status == nil || status.Status != runtime.QueuedUserMessageAccepted {
-			return serverapi.RunPromptProgress{}, false
-		}
-		content := status.RestoreText
-		if strings.TrimSpace(content) == "" {
-			return serverapi.RunPromptProgress{}, false
-		}
-		return serverapi.RunPromptProgress{
-			Kind:           serverapi.RunPromptProgressKindSteeredMessage,
-			SteeredMessage: &serverapi.RunPromptSteeredMessage{Content: content},
-		}, true
-	default:
-		return serverapi.RunPromptProgress{}, false
-	}
-}
-
-func runPromptFailure(raw string) *serverapi.RunPromptFailure {
-	detail := strings.TrimSpace(raw)
-	if detail == "" {
-		return &serverapi.RunPromptFailure{}
-	}
-	return &serverapi.RunPromptFailure{Error: &detail}
 }

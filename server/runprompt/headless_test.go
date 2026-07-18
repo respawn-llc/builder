@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,20 +33,15 @@ import (
 	"core/server/sessionruntime"
 	shelltool "core/server/tools/shell"
 	"core/server/tools/shell/postprocess"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/sessionenv"
 	"core/shared/toolspec"
 )
-
-type stubRunPromptService struct {
-	mu       sync.Mutex
-	calls    int
-	run      func(context.Context, serverapi.RunPromptRequest, serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error)
-	callHook func()
-}
 
 type recordingStoreRegistrar struct {
 	registered []*session.Store
@@ -53,6 +49,22 @@ type recordingStoreRegistrar struct {
 
 func (r *recordingStoreRegistrar) RegisterStore(store *session.Store) {
 	r.registered = append(r.registered, store)
+}
+
+type recordingPromptHistoryStore struct {
+	entries []metadata.PromptHistoryEntry
+}
+
+func (s *recordingPromptHistoryStore) RecordPromptHistoryEntry(_ context.Context, entry metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, bool, error) {
+	s.entries = append(s.entries, entry)
+	return metadata.PromptHistoryRecord{}, true, nil
+}
+
+type blockingPromptHistoryStore struct{}
+
+func (s *blockingPromptHistoryStore) RecordPromptHistoryEntry(ctx context.Context, _ metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, bool, error) {
+	<-ctx.Done()
+	return metadata.PromptHistoryRecord{}, false, ctx.Err()
 }
 
 type recordingRuntimePublisher struct {
@@ -236,25 +248,32 @@ func TestRunPromptProgressFromRuntimeEventDropsOperationalSpam(t *testing.T) {
 	}
 }
 
-func (s *stubRunPromptService) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
-	s.mu.Lock()
-	s.calls++
-	hook := s.callHook
-	run := s.run
-	s.mu.Unlock()
-	if hook != nil {
-		hook()
+func TestInProcessRunPromptClientRejectsInvalidRequestsBeforeLaunch(t *testing.T) {
+	reservedRole := "self"
+	validIntent := serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())
+	tests := []struct {
+		name string
+		req  serverapi.RunPromptRequest
+	}{
+		{name: "missing request id", req: serverapi.RunPromptRequest{Intent: validIntent, Prompt: "work"}},
+		{name: "blank prompt", req: serverapi.RunPromptRequest{ClientRequestID: "request-1", Intent: validIntent, Prompt: " \n "}},
+		{name: "invalid intent", req: serverapi.RunPromptRequest{ClientRequestID: "request-1", Prompt: "work"}},
+		{name: "reserved role", req: serverapi.RunPromptRequest{
+			ClientRequestID: "request-1",
+			Intent:          validIntent,
+			Prompt:          "work",
+			Overrides:       serverapi.RunPromptOverrides{AgentRole: &reservedRole},
+		}},
 	}
-	if run == nil {
-		return serverapi.RunPromptResponse{}, nil
-	}
-	return run(ctx, req, progress)
-}
 
-func (s *stubRunPromptService) CallCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.calls
+	client := NewInProcessRunPromptClient(HeadlessBootstrap{})
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := client.RunPrompt(context.Background(), test.req, nil); err == nil {
+				t.Fatal("RunPrompt succeeded before validating the request")
+			}
+		})
+	}
 }
 
 func newTestHeadlessSessionLaunch(cfg config.App, containerDir string, authManager *auth.Manager, persistences ...*sessiontest.Persistence) *sessionlaunch.Service {
@@ -272,6 +291,52 @@ func newTestHeadlessSessionLaunch(cfg config.App, containerDir string, authManag
 
 func newTestHeadlessSessionRuntime(root string, authManager *auth.Manager, runtimes *registry.RuntimeRegistry) *sessionruntime.Service {
 	return sessionruntime.NewService(root, nil, authManager, nil, nil, nil, runtimes, nil)
+}
+
+type selectedRunPromptFixture struct {
+	store    *session.Store
+	runtimes *registry.RuntimeRegistry
+	client   apicontract.RunPromptService
+}
+
+func newSelectedRunPromptFixture(t *testing.T, providerURL string, history promptHistoryStore) selectedRunPromptFixture {
+	t.Helper()
+	root := t.TempDir()
+	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
+	persistence := sessiontest.NewPersistence()
+	store, err := session.Create(containerDir, "workspace-a", "/tmp/workspace-a", sessioncontract.SessionCategorySubagent, persistence.Options()...)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable: %v", err)
+	}
+	authManager := auth.NewManager(auth.NewMemoryStore(auth.State{
+		Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},
+	}), nil, time.Now)
+	cfg := config.App{
+		WorkspaceRoot:   store.Meta().WorkspaceRoot,
+		PersistenceRoot: root,
+		Settings: config.Settings{
+			Model:         "gpt-5",
+			ThinkingLevel: "medium",
+			OpenAIBaseURL: providerURL,
+			EnabledTools:  map[toolspec.ID]bool{toolspec.ToolAskQuestion: true},
+			Shell:         config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
+		},
+	}
+	runtimes := registry.NewRuntimeRegistry()
+	return selectedRunPromptFixture{
+		store:    store,
+		runtimes: runtimes,
+		client: NewInProcessRunPromptClient(HeadlessBootstrap{
+			SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
+			AuthManager:     authManager,
+			RuntimeRegistry: runtimes,
+			SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
+			PromptHistory:   history,
+		}),
+	}
 }
 
 func TestHeadlessRuntimeWorkdirUsesInheritedWorktreeReminderCWD(t *testing.T) {
@@ -294,65 +359,6 @@ func TestHeadlessRuntimeWorkdirUsesInheritedWorktreeReminderCWD(t *testing.T) {
 	got := headlessRuntimeWorkdir(launch.SessionPlan{Store: store, WorkspaceRoot: "/tmp/workspace"})
 	if got != "/tmp/worktree/pkg" {
 		t.Fatalf("headless runtime workdir = %q, want /tmp/worktree/pkg", got)
-	}
-}
-
-func TestMemoizingPromptServiceDedupesRemoteShapedReplayWithOverrides(t *testing.T) {
-	inner := &stubRunPromptService{run: func(_ context.Context, req serverapi.RunPromptRequest, _ serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
-		return serverapi.RunPromptResponse{Result: "ok"}, nil
-	}}
-	service := &memoizingPromptService{
-		inner: inner,
-		runs:  requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
-	}
-	role := "reviewer"
-	first := serverapi.RunPromptRequest{
-		ClientRequestID: "req-remote-shaped",
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, "remote-session")),
-		Prompt:          "hello",
-		Overrides:       serverapi.RunPromptOverrides{AgentRole: &role, Model: " gpt-5 "},
-	}
-	wire, err := json.Marshal(first)
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-	var replay serverapi.RunPromptRequest
-	if err := json.Unmarshal(wire, &replay); err != nil {
-		t.Fatalf("unmarshal request: %v", err)
-	}
-
-	if _, err := service.RunPrompt(context.Background(), first, nil); err != nil {
-		t.Fatalf("RunPrompt first: %v", err)
-	}
-	if _, err := service.RunPrompt(context.Background(), replay, nil); err != nil {
-		t.Fatalf("RunPrompt remote-shaped replay: %v", err)
-	}
-	if inner.CallCount() != 1 {
-		t.Fatalf("inner call count = %d, want 1", inner.CallCount())
-	}
-}
-
-func TestMemoizingPromptServiceRejectsClientRequestIDPayloadMismatch(t *testing.T) {
-	inner := &stubRunPromptService{run: func(_ context.Context, req serverapi.RunPromptRequest, _ serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
-		return serverapi.RunPromptResponse{Result: "ok"}, nil
-	}}
-	service := &memoizingPromptService{
-		inner: inner,
-		runs:  requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
-	}
-	caller := "caller-1"
-	first := serverapi.RunPromptRequest{ClientRequestID: "req-1", Prompt: "hello", CallerSessionID: &caller}
-	if _, err := service.RunPrompt(context.Background(), first, nil); err != nil {
-		t.Fatalf("RunPrompt first: %v", err)
-	}
-	changedCaller := "caller-2"
-	mismatch := first
-	mismatch.CallerSessionID = &changedCaller
-	if _, err := service.RunPrompt(context.Background(), mismatch, nil); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-		t.Fatalf("RunPrompt mismatch error = %v, want request id payload mismatch", err)
-	}
-	if inner.CallCount() != 1 {
-		t.Fatalf("inner call count = %d, want 1", inner.CallCount())
 	}
 }
 
@@ -628,18 +634,30 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 	})
 
 	worker := "worker"
+	var sessionStarted int
 	response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
 		ClientRequestID: "workflow-allowed-custom",
 		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRunPromptSessionID(t, parentID))),
 		CallerSessionID: &parentID,
 		Prompt:          "delegate this",
 		Overrides:       serverapi.RunPromptOverrides{AgentRole: &worker},
-	}, nil)
+	}, serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
+		if progress.Kind != serverapi.RunPromptProgressKindSessionStarted {
+			return
+		}
+		sessionStarted++
+		if progress.SessionStarted == nil || !runtimes.IsSessionRuntimeActive(progress.SessionStarted.SessionID.String()) {
+			t.Errorf("session_started published before the new runtime became active: %+v", progress)
+		}
+	}))
 	if err != nil {
 		t.Fatalf("RunPrompt: %v", err)
 	}
 	if response.Result != "workflow response" {
 		t.Fatalf("result = %q, want provider response", response.Result)
+	}
+	if sessionStarted != 1 {
+		t.Fatalf("session_started events = %d, want 1", sessionStarted)
 	}
 	child, err := session.OpenByID(root, response.SessionID, meta.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
@@ -714,6 +732,13 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 		t.Fatalf("EnsureDurable: %v", err)
 	}
 
+	var providerCalls atomic.Int32
+	concurrentStarted := make(chan struct{})
+	concurrentRelease := make(chan struct{})
+	var concurrentReleaseOnce sync.Once
+	releaseConcurrent := func() {
+		concurrentReleaseOnce.Do(func() { close(concurrentRelease) })
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if modelstub.HandleInputTokenCount(w, r, 1) {
 			return
@@ -724,9 +749,19 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 		if got := r.Header.Get("Authorization"); got == "" {
 			t.Fatal("expected authorization header")
 		}
+		call := providerCalls.Add(1)
+		if call == 2 {
+			close(concurrentStarted)
+			<-concurrentRelease
+			modelstub.WriteCompletedResponseStream(w, "concurrent replay", 1, 1)
+			return
+		}
 		modelstub.WriteCompletedResponseStream(w, "from persisted continuation", 1, 1)
 	}))
-	defer server.Close()
+	defer func() {
+		releaseConcurrent()
+		server.Close()
+	}()
 
 	if err := store.SetContinuationContext(session.ContinuationContext{OpenAIBaseURL: server.URL}); err != nil {
 		t.Fatalf("set continuation context: %v", err)
@@ -747,19 +782,22 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 		},
 	}
 	runtimes := registry.NewRuntimeRegistry()
+	history := &recordingPromptHistoryStore{}
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
 		AuthManager:     authManager,
 		RuntimeRegistry: runtimes,
 		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
+		PromptHistory:   history,
 	})
 
 	var progresses []serverapi.RunPromptProgress
-	response, err := client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-		ClientRequestID: "continuation-direct-1",
+	request := serverapi.RunPromptRequest{
+		ClientRequestID: "  continuation-direct-1  ",
 		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, store.Meta().SessionID)),
-		Prompt:          "hello",
-	}, serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
+		Prompt:          "  hello  ",
+	}
+	response, err := client.RunPrompt(context.Background(), request, serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
 		progresses = append(progresses, progress)
 	}))
 	if err != nil {
@@ -778,6 +816,207 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 	}
 	if got := store.Meta().Continuation; got == nil || got.OpenAIBaseURL != server.URL {
 		t.Fatalf("expected persisted continuation preserved, got %+v", got)
+	}
+	replayed, err := client.RunPrompt(context.Background(), request, nil)
+	if err != nil {
+		t.Fatalf("replayed RunPrompt: %v", err)
+	}
+	if replayed.SessionID != response.SessionID || replayed.Result != response.Result || providerCalls.Load() != 1 {
+		t.Fatalf("replayed response=%+v provider calls=%d, want memoized %+v/1", replayed, providerCalls.Load(), response)
+	}
+	if len(history.entries) != 1 || history.entries[0].SourceID != "continuation-direct-1" || history.entries[0].Text != "hello" {
+		t.Fatalf("prompt history = %+v, want one normalized entry", history.entries)
+	}
+	mismatch := request
+	mismatch.Prompt = "different"
+	if _, err := client.RunPrompt(context.Background(), mismatch, nil); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
+		t.Fatalf("mismatched replay error = %v, want request-id conflict", err)
+	}
+
+	concurrent := request
+	concurrent.ClientRequestID = "concurrent-request"
+	concurrent.Prompt = "concurrent"
+	results := make(chan serverapi.RunPromptResponse, 2)
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			got, err := client.RunPrompt(context.Background(), concurrent, nil)
+			results <- got
+			errs <- err
+		}()
+	}
+	select {
+	case <-concurrentStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for concurrent provider request")
+	}
+	releaseConcurrent()
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent replay: %v", err)
+		}
+		if got := <-results; got.Result != "concurrent replay" {
+			t.Fatalf("concurrent response = %+v", got)
+		}
+	}
+	if providerCalls.Load() != 2 {
+		t.Fatalf("provider calls = %d, want one initial and one concurrent call", providerCalls.Load())
+	}
+}
+
+func TestInProcessRunPromptTimeoutCoversHistoryAndRunCleanup(t *testing.T) {
+	t.Run("prompt history", func(t *testing.T) {
+		providerCalls := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if modelstub.HandleInputTokenCount(w, r, 1) {
+				return
+			}
+			providerCalls++
+			modelstub.WriteCompletedResponseStream(w, "unexpected", 1, 1)
+		}))
+		defer server.Close()
+
+		fixture := newSelectedRunPromptFixture(t, server.URL, &blockingPromptHistoryStore{})
+		_, err := fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
+			ClientRequestID: "history-timeout",
+			Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, fixture.store.Meta().SessionID)),
+			Prompt:          "hello",
+			Timeout:         100 * time.Millisecond,
+		}, nil)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("RunPrompt error = %v, want deadline exceeded", err)
+		}
+		if providerCalls != 0 || fixture.runtimes.IsSessionRuntimeActive(fixture.store.Meta().SessionID) {
+			t.Fatalf("provider calls=%d runtime active=%t, want 0/false", providerCalls, fixture.runtimes.IsSessionRuntimeActive(fixture.store.Meta().SessionID))
+		}
+	})
+
+	t.Run("runtime", func(t *testing.T) {
+		started := make(chan struct{})
+		release := make(chan struct{})
+		var startedOnce sync.Once
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if modelstub.HandleInputTokenCount(w, r, 1) {
+				return
+			}
+			startedOnce.Do(func() { close(started) })
+			<-release
+		}))
+		defer func() {
+			close(release)
+			server.Close()
+		}()
+
+		fixture := newSelectedRunPromptFixture(t, server.URL, nil)
+		type result struct {
+			response serverapi.RunPromptResponse
+			err      error
+		}
+		done := make(chan result, 1)
+		go func() {
+			response, err := fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
+				ClientRequestID: "run-timeout",
+				Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, fixture.store.Meta().SessionID)),
+				Prompt:          "hello",
+				Timeout:         250 * time.Millisecond,
+			}, nil)
+			done <- result{response: response, err: err}
+		}()
+
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for provider request")
+		}
+		engine, err := fixture.runtimes.ResolveRuntime(context.Background(), fixture.store.Meta().SessionID)
+		if err != nil || engine == nil {
+			t.Fatalf("ResolveRuntime engine=%p err=%v", engine, err)
+		}
+		engine.QueueUserMessageForAutoDrain("restore me", "018fdd67-89ab-4cde-8123-456789abcdef")
+		if !engine.HasQueuedUserWork() {
+			t.Fatal("queued user work was not visible before timeout")
+		}
+
+		select {
+		case got := <-done:
+			if !errors.Is(got.err, context.DeadlineExceeded) {
+				t.Fatalf("RunPrompt error = %v, want deadline exceeded", got.err)
+			}
+			if got.response.SessionID != fixture.store.Meta().SessionID {
+				t.Fatalf("partial response session = %q, want %q", got.response.SessionID, fixture.store.Meta().SessionID)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("RunPrompt did not finish after timeout")
+		}
+		if engine.HasQueuedUserWork() || fixture.runtimes.IsSessionRuntimeActive(fixture.store.Meta().SessionID) {
+			t.Fatalf("queued=%t runtime active=%t, want false/false", engine.HasQueuedUserWork(), fixture.runtimes.IsSessionRuntimeActive(fixture.store.Meta().SessionID))
+		}
+	})
+}
+
+func TestInProcessRunPromptPublishesCommentaryBeforeHeadlessAskFollowupFails(t *testing.T) {
+	var calls atomic.Int32
+	var sawAskResult atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
+			return
+		}
+		switch calls.Add(1) {
+		case 1:
+			writeRunPromptAskQuestionResponse(w, "partial progress")
+		case 2:
+			defer r.Body.Close()
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Errorf("decode ask follow-up request: %v", err)
+			}
+			if _, ok := findRunPromptFunctionCallOutput(payload); !ok {
+				t.Errorf("ask follow-up request has no function_call_output")
+			} else {
+				sawAskResult.Store(true)
+			}
+			writeSSEJSON(w, map[string]any{
+				"type": "response.incomplete",
+				"response": map[string]any{
+					"incomplete_details": map[string]any{"reason": "max_output_tokens"},
+					"output":             []any{},
+				},
+			})
+			_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+		default:
+			t.Errorf("unexpected provider request %d", calls.Load())
+		}
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+	}))
+	defer server.Close()
+
+	fixture := newSelectedRunPromptFixture(t, server.URL, nil)
+	var progresses []serverapi.RunPromptProgress
+	response, err := fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
+		ClientRequestID: "ask-followup-failure",
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, fixture.store.Meta().SessionID)),
+		Prompt:          "ask before failing",
+	}, serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
+		progresses = append(progresses, progress)
+	}))
+	if err == nil || !llm.IsNonRetriableModelError(err) {
+		t.Fatalf("RunPrompt error = %v, want non-retriable provider failure", err)
+	}
+	if response.SessionID != fixture.store.Meta().SessionID || calls.Load() != 2 || !sawAskResult.Load() {
+		t.Fatalf("response=%+v calls=%d saw ask result=%t", response, calls.Load(), sawAskResult.Load())
+	}
+	foundCommentary := false
+	for _, progress := range progresses {
+		if progress.AssistantMessage != nil &&
+			progress.AssistantMessage.Phase == clientui.MessagePhaseCommentary &&
+			progress.AssistantMessage.Content == "partial progress" {
+			foundCommentary = true
+		}
+	}
+	if !foundCommentary || fixture.runtimes.IsSessionRuntimeActive(fixture.store.Meta().SessionID) {
+		t.Fatalf("commentary found=%t runtime active=%t", foundCommentary, fixture.runtimes.IsSessionRuntimeActive(fixture.store.Meta().SessionID))
 	}
 }
 
@@ -962,6 +1201,33 @@ func writeRunPromptExecCommandResponse(w http.ResponseWriter, args json.RawMessa
 	}
 }
 
+func writeRunPromptAskQuestionResponse(w http.ResponseWriter, commentary string) {
+	args := json.RawMessage(`{"question":"Need input?"}`)
+	writeSSEJSON(w, map[string]any{
+		"type":         "response.output_item.added",
+		"output_index": 0,
+		"item":         map[string]any{"type": "message", "role": "assistant", "phase": "commentary", "content": []any{}},
+	})
+	writeSSEJSON(w, map[string]any{"type": "response.output_text.delta", "output_index": 0, "delta": commentary})
+	writeSSEJSON(w, map[string]any{
+		"type":         "response.output_item.added",
+		"output_index": 1,
+		"item":         map[string]any{"id": "fc-ask", "type": "function_call", "name": string(toolspec.ToolAskQuestion), "call_id": "call-ask", "arguments": ""},
+	})
+	writeSSEJSON(w, map[string]any{"type": "response.function_call_arguments.delta", "item_id": "fc-ask", "delta": string(args)})
+	writeSSEJSON(w, map[string]any{
+		"type": "response.completed",
+		"response": map[string]any{
+			"usage": map[string]any{"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+			"output": []any{
+				map[string]any{"type": "message", "role": "assistant", "phase": "commentary", "content": []any{map[string]any{"type": "output_text", "text": commentary}}},
+				map[string]any{"id": "fc-ask", "type": "function_call", "name": string(toolspec.ToolAskQuestion), "call_id": "call-ask", "arguments": string(args)},
+			},
+		},
+	})
+	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+}
+
 func writeSSEJSON(w http.ResponseWriter, value any) {
 	encoded, err := json.Marshal(value)
 	if err != nil {
@@ -987,6 +1253,15 @@ func findRunPromptFunctionCallOutput(payload map[string]any) (string, bool) {
 		return output, true
 	}
 	return "", false
+}
+
+func mustRunPromptSessionID(t *testing.T, raw string) runtimeids.SessionID {
+	t.Helper()
+	id, err := runtimeids.ParseSessionID(raw)
+	if err != nil {
+		t.Fatalf("ParseSessionID(%q): %v", raw, err)
+	}
+	return id
 }
 
 func TestInProcessRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
