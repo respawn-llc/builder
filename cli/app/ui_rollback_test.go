@@ -835,7 +835,7 @@ func TestRollbackPickerWorksAfterInterruptedRuntimeAndTUIRestart(t *testing.T) {
 			t.Errorf("close restarted runtime: %v", err)
 		}
 	})
-	resolver := sessionview.NewStaticRuntimeResolver(restartedEngine)
+	resolver := testSessionViewRuntimeResolver{engine: restartedEngine}
 	reads := sessionview.NewService(nil, resolver, nil)
 	model := newSizedProjectedClosedUIModel(
 		newUIRuntimeClientFromEngine(restartedEngine),

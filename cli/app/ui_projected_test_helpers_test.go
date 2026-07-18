@@ -10,6 +10,7 @@ import (
 	"core/server/runtime"
 	"core/server/runtimecontrol"
 	"core/server/runtimeview"
+	"core/server/session"
 	"core/server/sessionview"
 	"core/shared/apicontract"
 	"core/shared/clientui"
@@ -17,6 +18,22 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+type testSessionViewSessionResolver struct {
+	store *session.Store
+}
+
+func (r testSessionViewSessionResolver) ResolveSessionStore(context.Context, string) (*session.Store, error) {
+	return r.store, nil
+}
+
+type testSessionViewRuntimeResolver struct {
+	engine *runtime.Engine
+}
+
+func (r testSessionViewRuntimeResolver) ResolveRuntime(context.Context, string) (*runtime.Engine, error) {
+	return r.engine, nil
+}
 
 func waitForTestCondition(t *testing.T, timeout time.Duration, label string, condition func() bool) {
 	t.Helper()
@@ -126,7 +143,7 @@ func newUIRuntimeClientFromEngine(engine *runtime.Engine) clientui.RuntimeClient
 	if engine == nil {
 		return nil
 	}
-	resolver := sessionview.NewStaticRuntimeResolver(engine)
+	resolver := testSessionViewRuntimeResolver{engine: engine}
 	reads := sessionview.NewService(nil, resolver, nil)
 	controlRegistry := registry.NewRuntimeRegistry()
 	registerUIRuntime(controlRegistry, engine.SessionID(), engine)
