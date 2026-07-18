@@ -11,7 +11,7 @@ func tuiSupportsAttentionNotification(notification clientui.AttentionNotificatio
 	}
 }
 
-func notifyTranscriptPromptActivation(hook *bellHooks, prompt clientui.TranscriptPrompt) {
+func notifyTranscriptPromptActivation(hook *bellHooks, prompt clientui.TranscriptPrompt, projectedPreview string) {
 	if hook == nil || prompt.State != clientui.TranscriptPromptStatePending {
 		return
 	}
@@ -33,20 +33,20 @@ func notifyTranscriptPromptActivation(hook *bellHooks, prompt clientui.Transcrip
 		},
 	}
 	if prompt.Kind == clientui.TranscriptPromptKindApproval {
-		notification.Approval = &clientui.AttentionNotificationApprovalState{Message: prompt.Question}
+		notification.Approval = &clientui.AttentionNotificationApprovalState{Message: projectedPreview}
 	} else {
 		promptID := string(prompt.PromptID)
 		notification.Question = &clientui.AttentionNotificationQuestionState{
 			PreparedAskIDs:          []string{promptID},
 			MaterializedAskIDs:      []string{promptID},
 			CurrentUnresolvedAskIDs: []string{promptID},
-			Preview:                 prompt.Question,
+			Preview:                 projectedPreview,
 			DisplayCount:            1,
 			MaterializedCount:       1,
 		}
 	}
-	hook.OnAttentionNotification(clientui.AttentionNotificationEvent{
+	hook.onAttentionNotification(clientui.AttentionNotificationEvent{
 		Type:    clientui.AttentionNotificationEventPending,
 		Pending: &notification,
-	})
+	}, &projectedPreview)
 }

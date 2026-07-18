@@ -27,10 +27,11 @@ type questionRenderRequest struct {
 }
 
 type questionRenderResultMsg struct {
-	request questionRenderRequest
-	rows    []string
-	err     error
-	stack   []byte
+	request             questionRenderRequest
+	rows                []string
+	notificationPreview string
+	err                 error
+	stack               []byte
 }
 
 type activeQuestionProjection struct {
@@ -125,6 +126,9 @@ func (m *uiModel) startLatestDesiredQuestionProjection() tea.Cmd {
 			}
 		}
 		result := projector(request)
+		if result.err == nil {
+			result.notificationPreview = projectedQuestionNotificationPreview(result.rows)
+		}
 		if result.err != nil && len(result.stack) == 0 {
 			result.stack = debug.Stack()
 		}
@@ -156,7 +160,7 @@ func (m *uiModel) applyQuestionRenderResult(result questionRenderResultMsg) (tea
 	}
 	m.ask.latestDesiredProjection = nil
 	if initialActivation {
-		notifyTranscriptPromptActivation(m.promptAttention, candidate.prompt)
+		notifyTranscriptPromptActivation(m.promptAttention, candidate.prompt, result.notificationPreview)
 	}
 	return nil, true
 }

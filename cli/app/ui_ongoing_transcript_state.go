@@ -211,13 +211,16 @@ func (m *uiModel) applyTranscriptSessionIdentity(identity clientui.TranscriptSes
 	if previousSessionID == "" || previousSessionID == nextSessionID {
 		return titleCmd
 	}
-	m.reconcileTranscriptPrompts(nil)
+	promptCmd := m.reconcileTranscriptPrompts(nil)
 	rollbackCmd := m.discardRollbackStateForSessionReplacement()
 	cancelCmd := m.cancelPendingDetailTranscriptRequest()
 	m.detailTranscript.reset()
 	resetCmd := m.forwardToView(tui.ResetDetailTranscriptMsg{})
 	loadCmd := m.loadDetailTranscriptPageCmd(m.detailTranscript.requestedPageForDetailEntry())
-	return sequenceCmds(titleCmd, rollbackCmd, cancelCmd, resetCmd, loadCmd)
+	return tea.Batch(
+		promptCmd,
+		sequenceCmds(titleCmd, rollbackCmd, cancelCmd, resetCmd, loadCmd),
+	)
 }
 
 func (m *uiModel) applyTranscriptContextUsage(usage clientui.TranscriptContextUsage) {
