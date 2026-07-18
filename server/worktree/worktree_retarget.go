@@ -349,19 +349,9 @@ func worktreeGitMetadataFromRecord(worktree metadata.WorktreeRecord) (GitWorktre
 	if err := json.Unmarshal([]byte(metadataJSON), &persisted); err != nil {
 		return GitWorktree{}, fmt.Errorf("decode git worktree metadata: %w", err)
 	}
-	if (persisted.BranchRef == nil) != (persisted.BranchName == nil) {
-		return GitWorktree{}, errors.New("decode git worktree metadata: branch_ref and branch_name must be present together")
-	}
-	var branch *gitref.LocalBranch
-	if persisted.BranchRef != nil {
-		value, err := gitref.ParseLocalBranch(*persisted.BranchRef)
-		if err != nil {
-			return GitWorktree{}, fmt.Errorf("decode git worktree metadata: %w", err)
-		}
-		if *persisted.BranchName != value.Name() {
-			return GitWorktree{}, fmt.Errorf("decode git worktree metadata: branch_name %q does not match branch_ref %q", *persisted.BranchName, *persisted.BranchRef)
-		}
-		branch = &value
+	branch, err := gitref.ParseOptionalLocalBranch(persisted.BranchRef, persisted.BranchName)
+	if err != nil {
+		return GitWorktree{}, fmt.Errorf("decode git worktree metadata: %w", err)
 	}
 	decoded := GitWorktree{
 		Root:           worktree.CanonicalRoot,

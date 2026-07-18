@@ -394,13 +394,9 @@ func gitWorktreeFromFacts(facts serverapi.WorktreeGitFacts) (GitWorktree, error)
 }
 
 func gitWorktreeFromValidatedFacts(facts serverapi.WorktreeGitFacts) (GitWorktree, error) {
-	var branch *gitref.LocalBranch
-	if facts.BranchRef != nil {
-		value, err := gitref.ParseLocalBranch(*facts.BranchRef)
-		if err != nil {
-			return GitWorktree{}, err
-		}
-		branch = &value
+	branch, err := gitref.ParseOptionalLocalBranch(facts.BranchRef, facts.BranchName)
+	if err != nil {
+		return GitWorktree{}, err
 	}
 	entry := GitWorktree{
 		Root:           strings.TrimSpace(facts.CanonicalRoot),

@@ -552,6 +552,18 @@ func TestGitInspectorResolveDefaultBranchUsesConfiguredRemoteHEAD(t *testing.T) 
 		}
 	})
 
+	t.Run("supports remote names containing slashes", func(t *testing.T) {
+		workspaceRoot := newRepositoryWithRemoteHEAD(t, "team/origin", "main")
+
+		resolution, err := NewGitInspector(nil).ResolveDefaultBranch(context.Background(), workspaceRoot)
+		if err != nil {
+			t.Fatalf("ResolveDefaultBranch: %v", err)
+		}
+		if resolution.RemoteName != "team/origin" || resolution.Ref != "refs/remotes/team/origin/main" {
+			t.Fatalf("resolution = %+v, want team/origin refs/remotes/team/origin/main", resolution)
+		}
+	})
+
 	t.Run("rejects missing and ambiguous remote heads", func(t *testing.T) {
 		missingRoot := t.TempDir()
 		initGitRepo(t, missingRoot)

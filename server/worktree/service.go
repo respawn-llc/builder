@@ -1061,11 +1061,11 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
-	cleanup.active = false
 	branchName, err := requiredWorktreeBranchName(created.git)
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
+	cleanup.active = false
 	if err := s.runSetupForWorktree(ctx, setupExecutionRequest{
 		SetupOperationID:    req.SetupOperationID,
 		SourceWorkspaceRoot: workspaceCtx.workspaceRoot,

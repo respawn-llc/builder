@@ -67,14 +67,54 @@ func TestParseLocalBranchOwnsCanonicalRefAndDerivedName(t *testing.T) {
 	}
 }
 
-func TestParseRemoteBranchReturnsTypedRemoteAndBranchNames(t *testing.T) {
-	branch, err := ParseRemoteBranch("refs/remotes/origin/feature/nested")
+func TestParseOptionalLocalBranchOwnsTheCompleteRefNamePairInvariant(t *testing.T) {
+	const branchRef = "refs/heads/feature/nested"
+	const branchName = "feature/nested"
+	branch, err := ParseOptionalLocalBranch(stringPointer(branchRef), stringPointer(branchName))
+	if err != nil {
+		t.Fatalf("ParseOptionalLocalBranch: %v", err)
+	}
+	if branch == nil || branch.Ref() != branchRef || branch.Name() != branchName {
+		t.Fatalf("optional local branch = %+v", branch)
+	}
+	absent, err := ParseOptionalLocalBranch(nil, nil)
+	if err != nil || absent != nil {
+		t.Fatalf("absent optional local branch = %+v, %v", absent, err)
+	}
+	for _, pair := range []struct {
+		ref  *string
+		name *string
+	}{
+		{ref: stringPointer(branchRef)},
+		{name: stringPointer(branchName)},
+		{ref: stringPointer(branchRef), name: stringPointer("feature/other")},
+		{ref: stringPointer("refs/tags/v1"), name: stringPointer("v1")},
+	} {
+		if _, err := ParseOptionalLocalBranch(pair.ref, pair.name); err == nil {
+			t.Fatalf("ParseOptionalLocalBranch(%v, %v) succeeded", pair.ref, pair.name)
+		}
+	}
+}
+
+func TestParseRemoteBranchResolvesBranchNameAgainstKnownRemote(t *testing.T) {
+	branch, err := ParseRemoteBranch("refs/remotes/team/origin/feature/nested")
 	if err != nil {
 		t.Fatalf("ParseRemoteBranch: %v", err)
 	}
-	if branch.Ref() != "refs/remotes/origin/feature/nested" ||
-		branch.RemoteName() != "origin" ||
-		branch.BranchName() != "feature/nested" {
-		t.Fatalf("remote branch = %q/%q/%q", branch.Ref(), branch.RemoteName(), branch.BranchName())
+	branchName, err := branch.BranchNameForRemote("team/origin")
+	if err != nil {
+		t.Fatalf("BranchNameForRemote: %v", err)
 	}
+	if branch.Ref() != "refs/remotes/team/origin/feature/nested" || branchName != "feature/nested" {
+		t.Fatalf("remote branch = %q/%q", branch.Ref(), branchName)
+	}
+	for _, remoteName := range []string{"", " team/origin", "team/origin ", "team//origin", "other"} {
+		if _, err := branch.BranchNameForRemote(remoteName); err == nil {
+			t.Fatalf("BranchNameForRemote(%q) succeeded", remoteName)
+		}
+	}
+}
+
+func stringPointer(value string) *string {
+	return &value
 }

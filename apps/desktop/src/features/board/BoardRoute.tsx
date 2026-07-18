@@ -1,5 +1,6 @@
 import type { DragEvent, SyntheticEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { useTranslation } from "react-i18next";
 
 import { hasSelectedWorkflow, type BoardColumn, type SelectedWorkflowBoard } from "@/api";
@@ -525,7 +526,11 @@ function BoardContent({
           onCardClick={openTask}
           onCardDragEnd={cancelActiveDrag}
           onCardDragStart={(drag) => {
-            setActiveDrag(drag);
+            // Native drop can follow dragstart before React commits a batched state
+            // update, so publish the drag payload synchronously for drop admission.
+            flushSync(() => {
+              setActiveDrag(drag);
+            });
           }}
           onCardsLoadError={reportCardsLoadError}
           onDeleteTask={deleteTask}

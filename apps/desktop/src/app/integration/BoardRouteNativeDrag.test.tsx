@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
@@ -66,6 +66,28 @@ describe("BoardRoute native drag lifecycle", () => {
       expect(calls[0]).toMatchObject({
         method: "workflow.task.move",
         params: { task_id: "task-1", target_node_id: "recon" },
+      });
+    });
+  });
+
+  it("publishes the native drag payload before an immediate start drop", async () => {
+    const services = boardTestServices(() => true, true, true);
+    render(<App services={services} />);
+    const source = await screen.findByRole("article", { name: "Drag source" });
+    const recon = screen.getByRole("listitem", { name: "Recon" });
+    const dataTransfer = new TestDataTransfer();
+
+    act(() => {
+      dispatchBoardDrag(source, "dragstart", { dataTransfer });
+      dispatchBoardDrag(recon, "drop", { dataTransfer });
+    });
+
+    await waitFor(() => {
+      const calls = taskActionCalls(services.transport.calls);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        method: "workflow.task.start",
+        params: { task_id: "task-1" },
       });
     });
   });
@@ -316,7 +338,11 @@ async function renderActiveBoard(frames: FakeAnimationFrames) {
   };
 }
 
-function boardTestServices(sourcePresent: () => boolean = () => true, validForTaskCreation = true) {
+function boardTestServices(
+  sourcePresent: () => boolean = () => true,
+  validForTaskCreation = true,
+  canStart = false,
+) {
   return createTestServices([
     ...startupRoutes,
     {
@@ -326,7 +352,18 @@ function boardTestServices(sourcePresent: () => boolean = () => true, validForTa
     {
       method: "workflow.board.nodeCards.list",
       handler: (params: JsonValue) =>
-        nodeCardsResponse(nodeID(params), sourcePresent() && nodeID(params) === "backlog"),
+        nodeCardsResponse(nodeID(params), sourcePresent() && nodeID(params) === "backlog", canStart),
+    },
+    {
+      method: "workflow.task.start",
+      result: {
+        outcome: "applied",
+        applied: {
+          transition_id: "transition-start",
+          placement_id: "placement-start",
+          run_id: "run-start",
+        },
+      },
     },
     {
       method: "workflow.task.move",
@@ -355,12 +392,22 @@ function nodeID(params: JsonValue): string {
   return nodeCardsRequestSchema.parse(params).node_id;
 }
 
-function nodeCardsResponse(nodeIDValue: string, includeSource: boolean) {
+function nodeCardsResponse(nodeIDValue: string, includeSource: boolean, canStart = false) {
   return {
     project_id: "project-1",
     workflow_id: "workflow-1",
     node_id: nodeIDValue,
-    cards: includeSource ? [sourceCard] : [],
+    cards: includeSource
+      ? [
+          {
+            ...sourceCard,
+            actions: {
+              ...sourceCard.actions,
+              can_start: canStart,
+            },
+          },
+        ]
+      : [],
     previous_page_token: null,
     next_page_token: null,
     generated_at_unix_ms: 1,

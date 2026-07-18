@@ -221,7 +221,7 @@ func (f WorktreeGitFacts) Validate() error {
 	if strings.TrimSpace(f.HeadObject) == "" {
 		return errors.New("git head_object is required")
 	}
-	for _, fact := range []*string{f.BranchRef, f.BranchName, f.LockedReason, f.PrunableReason} {
+	for _, fact := range []*string{f.LockedReason, f.PrunableReason} {
 		if fact != nil && strings.TrimSpace(*fact) == "" {
 			return errors.New("optional git facts must not be empty")
 		}
@@ -229,17 +229,8 @@ func (f WorktreeGitFacts) Validate() error {
 	if f.Detached && (f.BranchRef != nil || f.BranchName != nil) {
 		return errors.New("detached git facts must not include branch facts")
 	}
-	if (f.BranchRef == nil) != (f.BranchName == nil) {
-		return errors.New("git branch_ref and branch_name must be provided together")
-	}
-	if f.BranchRef != nil {
-		branch, err := gitref.ParseLocalBranch(*f.BranchRef)
-		if err != nil {
-			return fmt.Errorf("git branch_ref is invalid: %w", err)
-		}
-		if *f.BranchName != branch.Name() {
-			return errors.New("git branch_name must match the name derived from branch_ref")
-		}
+	if _, err := gitref.ParseOptionalLocalBranch(f.BranchRef, f.BranchName); err != nil {
+		return fmt.Errorf("git branch facts are invalid: %w", err)
 	}
 	return nil
 }

@@ -394,7 +394,10 @@ func (i *GitInspector) ResolveDefaultBranch(ctx context.Context, workspaceRoot s
 		}
 		ref := strings.TrimSpace(string(symbolicOutput))
 		remoteBranch, err := gitref.ParseRemoteBranch(ref)
-		if err != nil || remoteBranch.RemoteName() != remoteName {
+		if err == nil {
+			_, err = remoteBranch.BranchNameForRemote(remoteName)
+		}
+		if err != nil {
 			return GitDefaultBranch{}, &GitDefaultBranchResolutionError{
 				Kind:  GitDefaultBranchResolutionErrorGitFailure,
 				Cause: fmt.Errorf("git remote HEAD %q resolves outside remote %q", ref, remoteName),
