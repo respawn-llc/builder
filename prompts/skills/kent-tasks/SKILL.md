@@ -32,15 +32,19 @@ Authoritative command details are always the live CLI:
 kent task --help
 ```
 
-Args marked with `[]` are optional and will attempt to auto-resolve - current cwd's project, default workflow for that project, current session ID.
+Args marked with `[]` are optional and attempt to resolve the current directory's project, that project's task workflow, or the current session ID as appropriate.
 
 Create task records against a linked/default workflow and project, then inspect them:
 
 ```bash
-kent task create [--project "path or id"] [--workflow "id"] --title "Fix flaky workflow tests" --body ".md content"
-kent task list [--project]
+kent workflow list --project .
+kent task create --project . [--workflow "<uuid>"] --title "Fix flaky workflow tests" --body ".md content"
+kent task list --project .
+kent task list --project . --workflow "<uuid>"
 kent task show <short-id-or-task-id>
 ```
+
+Workflow selectors are bare canonical UUIDv4 values copied from CLI workflow output. Names and `workflow-...` persistence IDs are not accepted. Task creation uses the project default when present, otherwise a lone linked workflow; several links without a default require `--workflow`. Project-only task listing spans every linked workflow. Column filters and `--sort column` require explicit workflow narrowing.
 
 ## Execution targets
 `kent task show` always reports the source workspace. After target lock it also reports the target mode and execution root; managed targets include requested revision, resolved commit, current named branch when available, and managed worktree.

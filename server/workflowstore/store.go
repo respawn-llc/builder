@@ -2,6 +2,7 @@ package workflowstore
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -14,6 +15,8 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"github.com/google/uuid"
 )
 
@@ -105,6 +108,11 @@ type WorkflowRecord struct {
 	Description           string
 	Version               int64
 	ExecutionTargetPolicy workflow.ExecutionTargetPolicy
+	ProjectLink           *WorkflowListProjectLink
+}
+
+type WorkflowListProjectLink struct {
+	Default bool
 }
 
 type NodeRecord struct {
@@ -381,32 +389,47 @@ const (
 )
 
 type ListWorkflowsRequest struct {
-	PageSize  int
-	PageToken string
-	Query     string
-	ExactName string
+	PageSize   int
+	PageToken  string
+	Query      string
+	ProjectID  *string
+	WorkflowID *workflow.WorkflowID
 }
 
 type ListWorkflowsResult struct {
 	Workflows     []WorkflowRecord
+	ProjectID     *string
 	NextPageToken string
 }
 
 type workflowListPageCursor struct {
-	activityAtUnixMs int64
-	workflowID       string
-	hasValue         bool
+	activityAtUnixMs  *int64
+	workflowID        string
+	projectDefault    *int64
+	projectName       *string
+	projectID         *string
+	filterWorkflowID  *string
+	searchQuery       string
+	filterFingerprint string
+	hasValue          bool
 }
 
 type workflowListPageTokenPayload struct {
-	Version          int    `json:"version"`
-	ActivityAtUnixMs int64  `json:"activity_at_unix_ms"`
-	WorkflowID       string `json:"workflow_id"`
+	Version           int     `json:"version"`
+	ActivityAtUnixMs  *int64  `json:"activity_at_unix_ms,omitempty"`
+	WorkflowID        string  `json:"workflow_id"`
+	ProjectDefault    *int64  `json:"project_default,omitempty"`
+	ProjectName       *string `json:"project_name,omitempty"`
+	ProjectID         *string `json:"project_id,omitempty"`
+	FilterWorkflowID  *string `json:"filter_workflow_id,omitempty"`
+	SearchQuery       string  `json:"search_query"`
+	FilterFingerprint string  `json:"filter_fingerprint"`
 }
 
 const (
-	defaultWorkflowListPageSize = 50
-	maxWorkflowListPageSize     = 100
+	workflowListPageTokenVersion = 3
+	defaultWorkflowListPageSize  = 50
+	maxWorkflowListPageSize      = 100
 )
 
 func (s *Store) CreateWorkflow(ctx context.Context, req CreateWorkflowRequest) (WorkflowRecord, error) {
@@ -510,17 +533,65 @@ func (s *Store) ListWorkflows(ctx context.Context, req ListWorkflowsRequest) (Li
 	if err != nil {
 		return ListWorkflowsResult{}, err
 	}
+	projectID := req.ProjectID
+	workflowID := workflowIDString(req.WorkflowID)
+	query := sqliteLowerASCII(strings.TrimSpace(req.Query))
+	if err := validateWorkflowListScopes(projectID, workflowID); err != nil {
+		return ListWorkflowsResult{}, err
+	}
+	if cursor.hasValue {
+		if projectID != nil && !textutil.EqualOptional(projectID, cursor.projectID) {
+			return ListWorkflowsResult{}, errors.New("workflow list page token project scope conflict")
+		}
+		if workflowID != nil && !textutil.EqualOptional(workflowID, cursor.filterWorkflowID) {
+			return ListWorkflowsResult{}, errors.New("workflow list page token workflow scope conflict")
+		}
+		if query != "" && query != cursor.searchQuery {
+			return ListWorkflowsResult{}, errors.New("workflow list page token search scope conflict")
+		}
+		if projectID == nil {
+			projectID = cursor.projectID
+		}
+		if workflowID == nil {
+			workflowID = cursor.filterWorkflowID
+		}
+		if query == "" {
+			query = cursor.searchQuery
+		}
+		fingerprint, fingerprintErr := workflowListFilterFingerprint(projectID, workflowID, query)
+		if fingerprintErr != nil {
+			return ListWorkflowsResult{}, fingerprintErr
+		}
+		if fingerprint != cursor.filterFingerprint {
+			return ListWorkflowsResult{}, errors.New("workflow list page token filter fingerprint conflict")
+		}
+	}
 	cursorActive := int64(0)
 	if cursor.hasValue {
 		cursorActive = 1
 	}
+	cursorProjectDefault := sql.NullInt64{}
+	if cursor.projectDefault != nil {
+		cursorProjectDefault = sql.NullInt64{Int64: *cursor.projectDefault, Valid: true}
+	}
+	cursorProjectName := sql.NullString{}
+	if cursor.projectName != nil {
+		cursorProjectName = sql.NullString{String: *cursor.projectName, Valid: true}
+	}
+	cursorActivityAtUnixMs := sql.NullInt64{}
+	if cursor.activityAtUnixMs != nil {
+		cursorActivityAtUnixMs = sql.NullInt64{Int64: *cursor.activityAtUnixMs, Valid: true}
+	}
 	rows, err := s.queries.ListWorkflowRecordsPage(ctx, sqlitegen.ListWorkflowRecordsPageParams{
 		PageLimit:              int64(pageSize + 1),
-		ExactName:              strings.TrimSpace(req.ExactName),
-		SearchQuery:            strings.TrimSpace(req.Query),
+		ProjectID:              nullableStringPointer(projectID),
+		WorkflowID:             nullableWorkflowFilter(workflowID),
+		SearchQuery:            query,
 		CursorActive:           cursorActive,
-		CursorActivityAtUnixMs: cursor.activityAtUnixMs,
+		CursorActivityAtUnixMs: cursorActivityAtUnixMs,
 		CursorWorkflowID:       cursor.workflowID,
+		CursorProjectDefault:   cursorProjectDefault,
+		CursorProjectName:      cursorProjectName,
 	})
 	if err != nil {
 		return ListWorkflowsResult{}, err
@@ -536,19 +607,42 @@ func (s *Store) ListWorkflows(ctx context.Context, req ListWorkflowsRequest) (Li
 			ExecutionTargetCustomRef: row.ExecutionTargetCustomRef,
 			CreatedAtUnixMs:          row.CreatedAtUnixMs,
 			UpdatedAtUnixMs:          row.UpdatedAtUnixMs,
-			ActivityAtUnixMs:         row.ActivityAtUnixMs,
+			ActivityAtUnixMs:         workflowListActivityAtUnixMs(projectID, row.GlobalActivityAtUnixMs, row.ProjectActivityAtUnixMs),
+			ProjectLinkDefault:       row.ProjectLinkDefault,
+			ProjectNameOrderKey:      row.ProjectNameOrderKey,
 		})
 	}
 	nextPageToken := ""
 	if len(rowsOut) > pageSize {
-		nextPageToken = workflowListPageToken(rowsOut[pageSize-1])
+		nextPageToken, err = workflowListPageToken(rowsOut[pageSize-1], projectID, workflowID, query)
+		if err != nil {
+			return ListWorkflowsResult{}, err
+		}
 		rowsOut = rowsOut[:pageSize]
 	}
 	out := make([]WorkflowRecord, 0, len(rowsOut))
 	for _, row := range rowsOut {
 		out = append(out, workflowRecordFromRow(row))
 	}
-	return ListWorkflowsResult{Workflows: out, NextPageToken: nextPageToken}, nil
+	var responseProjectID *string
+	if projectID != nil {
+		value := *projectID
+		responseProjectID = &value
+	}
+	return ListWorkflowsResult{Workflows: out, ProjectID: responseProjectID, NextPageToken: nextPageToken}, nil
+}
+
+func validateWorkflowListScopes(projectID *string, workflowID *string) error {
+	if projectID != nil &&
+		(strings.TrimSpace(*projectID) == "" || strings.TrimSpace(*projectID) != *projectID) {
+		return errors.New("workflow list project scope must be non-blank and unpadded")
+	}
+	if workflowID != nil {
+		if _, err := runtimeids.ParseCanonicalPrefixedUUIDv4(*workflowID, "workflow-", "workflow id"); err != nil {
+			return fmt.Errorf("invalid workflow list workflow scope: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) AddNode(ctx context.Context, node NodeRecord) (int64, error) {
@@ -930,23 +1024,27 @@ func (s *Store) DeleteEdge(ctx context.Context, edgeID workflow.EdgeID) error {
 }
 
 func (s *Store) GetDefinition(ctx context.Context, workflowID workflow.WorkflowID) (workflow.Definition, WorkflowRecord, error) {
-	row, err := s.queries.GetWorkflow(ctx, string(workflowID))
+	return workflowDefinitionFromQueries(ctx, s.queries, workflowID)
+}
+
+func workflowDefinitionFromQueries(ctx context.Context, q *sqlitegen.Queries, workflowID workflow.WorkflowID) (workflow.Definition, WorkflowRecord, error) {
+	row, err := q.GetWorkflow(ctx, string(workflowID))
 	if err != nil {
 		return workflow.Definition{}, WorkflowRecord{}, err
 	}
-	nodes, err := s.queries.ListWorkflowNodes(ctx, string(workflowID))
+	nodes, err := q.ListWorkflowNodes(ctx, string(workflowID))
 	if err != nil {
 		return workflow.Definition{}, WorkflowRecord{}, err
 	}
-	nodeGroups, err := s.queries.ListWorkflowNodeGroups(ctx, string(workflowID))
+	nodeGroups, err := q.ListWorkflowNodeGroups(ctx, string(workflowID))
 	if err != nil {
 		return workflow.Definition{}, WorkflowRecord{}, err
 	}
-	groups, err := s.queries.ListWorkflowTransitionGroups(ctx, string(workflowID))
+	groups, err := q.ListWorkflowTransitionGroups(ctx, string(workflowID))
 	if err != nil {
 		return workflow.Definition{}, WorkflowRecord{}, err
 	}
-	edges, err := s.queries.ListWorkflowEdges(ctx, string(workflowID))
+	edges, err := q.ListWorkflowEdges(ctx, string(workflowID))
 	if err != nil {
 		return workflow.Definition{}, WorkflowRecord{}, err
 	}
@@ -1040,11 +1138,21 @@ type workflowRecordRow struct {
 	ExecutionTargetCustomRef sql.NullString
 	CreatedAtUnixMs          int64
 	UpdatedAtUnixMs          int64
-	ActivityAtUnixMs         int64
+	ActivityAtUnixMs         *int64
+	ProjectLinkDefault       sql.NullInt64
+	ProjectNameOrderKey      string
+}
+
+func workflowListActivityAtUnixMs(projectID *string, globalActivity int64, projectActivity sql.NullInt64) *int64 {
+	if projectID != nil {
+		return metadata.OptionalInt64(projectActivity)
+	}
+	value := globalActivity
+	return &value
 }
 
 func workflowRecordFromRow(row workflowRecordRow) WorkflowRecord {
-	return WorkflowRecord{
+	record := WorkflowRecord{
 		ID:          workflow.WorkflowID(row.ID),
 		Name:        row.Name,
 		Description: row.Description,
@@ -1054,6 +1162,10 @@ func workflowRecordFromRow(row workflowRecordRow) WorkflowRecord {
 			CustomRef: metadata.OptionalString(row.ExecutionTargetCustomRef),
 		}.Canonical(),
 	}
+	if row.ProjectLinkDefault.Valid {
+		record.ProjectLink = &WorkflowListProjectLink{Default: row.ProjectLinkDefault.Int64 != 0}
+	}
+	return record
 }
 
 func parseWorkflowListPageToken(token string) (workflowListPageCursor, error) {
@@ -1068,19 +1180,128 @@ func parseWorkflowListPageToken(token string) (workflowListPageCursor, error) {
 	if err := json.Unmarshal(decoded, &payload); err != nil {
 		return workflowListPageCursor{}, fmt.Errorf("invalid workflow list page token")
 	}
-	if payload.Version != 1 || payload.ActivityAtUnixMs < 0 || strings.TrimSpace(payload.WorkflowID) == "" {
+	if payload.Version != workflowListPageTokenVersion ||
+		(payload.ActivityAtUnixMs != nil && *payload.ActivityAtUnixMs < 0) ||
+		strings.TrimSpace(payload.FilterFingerprint) == "" {
 		return workflowListPageCursor{}, fmt.Errorf("invalid workflow list page token")
 	}
-	return workflowListPageCursor{activityAtUnixMs: payload.ActivityAtUnixMs, workflowID: payload.WorkflowID, hasValue: true}, nil
+	if _, err := runtimeids.ParseCanonicalPrefixedUUIDv4(payload.WorkflowID, "workflow-", "workflow id"); err != nil {
+		return workflowListPageCursor{}, fmt.Errorf("invalid workflow list page token")
+	}
+	if payload.ProjectID == nil && (payload.ActivityAtUnixMs == nil || payload.ProjectDefault != nil || payload.ProjectName != nil) {
+		return workflowListPageCursor{}, fmt.Errorf("invalid workflow list page token")
+	}
+	if payload.ProjectID != nil {
+		if strings.TrimSpace(*payload.ProjectID) == "" ||
+			strings.TrimSpace(*payload.ProjectID) != *payload.ProjectID ||
+			payload.ProjectDefault == nil ||
+			*payload.ProjectDefault < 0 ||
+			*payload.ProjectDefault > 1 ||
+			payload.ProjectName == nil ||
+			strings.TrimSpace(*payload.ProjectName) == "" ||
+			strings.TrimSpace(*payload.ProjectName) != *payload.ProjectName ||
+			sqliteLowerASCII(*payload.ProjectName) != *payload.ProjectName {
+			return workflowListPageCursor{}, fmt.Errorf("invalid workflow list page token")
+		}
+	}
+	if payload.FilterWorkflowID != nil {
+		if _, err := runtimeids.ParseCanonicalPrefixedUUIDv4(*payload.FilterWorkflowID, "workflow-", "workflow id"); err != nil {
+			return workflowListPageCursor{}, fmt.Errorf("invalid workflow list page token")
+		}
+	}
+	if strings.TrimSpace(payload.SearchQuery) != payload.SearchQuery ||
+		sqliteLowerASCII(payload.SearchQuery) != payload.SearchQuery {
+		return workflowListPageCursor{}, fmt.Errorf("invalid workflow list page token")
+	}
+	return workflowListPageCursor{
+		activityAtUnixMs:  payload.ActivityAtUnixMs,
+		workflowID:        payload.WorkflowID,
+		projectDefault:    payload.ProjectDefault,
+		projectName:       payload.ProjectName,
+		projectID:         payload.ProjectID,
+		filterWorkflowID:  payload.FilterWorkflowID,
+		searchQuery:       payload.SearchQuery,
+		filterFingerprint: payload.FilterFingerprint,
+		hasValue:          true,
+	}, nil
 }
 
-func workflowListPageToken(row workflowRecordRow) string {
-	payload := workflowListPageTokenPayload{Version: 1, ActivityAtUnixMs: row.ActivityAtUnixMs, WorkflowID: row.ID}
+func workflowListPageToken(row workflowRecordRow, projectID *string, workflowID *string, query string) (string, error) {
+	payload := workflowListPageTokenPayload{
+		Version:          workflowListPageTokenVersion,
+		ActivityAtUnixMs: row.ActivityAtUnixMs,
+		WorkflowID:       row.ID,
+		ProjectID:        projectID,
+		FilterWorkflowID: workflowID,
+		SearchQuery:      query,
+	}
+	fingerprint, err := workflowListFilterFingerprint(projectID, workflowID, query)
+	if err != nil {
+		return "", err
+	}
+	payload.FilterFingerprint = fingerprint
+	if projectID != nil {
+		if !row.ProjectLinkDefault.Valid {
+			return "", fmt.Errorf("workflow list project default is missing for workflow %q", row.ID)
+		}
+		projectDefault := row.ProjectLinkDefault.Int64
+		payload.ProjectDefault = &projectDefault
+		projectName := row.ProjectNameOrderKey
+		if strings.TrimSpace(projectName) == "" {
+			return "", fmt.Errorf("workflow list project ordering key is missing for workflow %q", row.ID)
+		}
+		payload.ProjectName = &projectName
+	} else if row.ActivityAtUnixMs == nil {
+		return "", fmt.Errorf("global workflow list activity is missing for workflow %q", row.ID)
+	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("marshal workflow list page token: %w", err)
 	}
-	return base64.RawURLEncoding.EncodeToString(encoded)
+	return base64.RawURLEncoding.EncodeToString(encoded), nil
+}
+
+func workflowListFilterFingerprint(projectID *string, workflowID *string, query string) (string, error) {
+	scope := struct {
+		ProjectID  *string `json:"project_id,omitempty"`
+		WorkflowID *string `json:"workflow_id,omitempty"`
+		Query      string  `json:"query"`
+	}{
+		ProjectID:  projectID,
+		WorkflowID: workflowID,
+		Query:      sqliteLowerASCII(strings.TrimSpace(query)),
+	}
+	encoded, err := json.Marshal(scope)
+	if err != nil {
+		return "", fmt.Errorf("marshal workflow list filter scope: %w", err)
+	}
+	sum := sha256.Sum256(encoded)
+	return fmt.Sprintf("%x", sum[:]), nil
+}
+
+func sqliteLowerASCII(value string) string {
+	bytes := []byte(value)
+	for index, current := range bytes {
+		if current >= 'A' && current <= 'Z' {
+			bytes[index] = current + ('a' - 'A')
+		}
+	}
+	return string(bytes)
+}
+
+func workflowIDString(id *workflow.WorkflowID) *string {
+	if id == nil {
+		return nil
+	}
+	value := string(*id)
+	return &value
+}
+
+func nullableWorkflowFilter(value *string) interface{} {
+	if value == nil {
+		return nil
+	}
+	return *value
 }
 
 func resolveWorkflowNodeGroupID(ctx context.Context, q *sqlitegen.Queries, workflowID string, groupID string, groupKey string) (string, error) {

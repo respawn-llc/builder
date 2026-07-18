@@ -236,9 +236,10 @@ func (r *crossProjectTaskShowRemote) GetWorkflowTask(_ context.Context, req serv
 			return serverapi.WorkflowTaskGetResponse{}, r.unscopedErr
 		}
 		return serverapi.WorkflowTaskGetResponse{Task: serverapi.WorkflowTaskDetail{
-			Summary: serverapi.WorkflowTaskSummary{ID: "task-other", ProjectID: "project-other", WorkflowID: "workflow-other", ShortID: "OTH-1", Title: "Other Task"},
-			Project: serverapi.ProjectBoardProject{ProjectKey: "OTH", DisplayName: "Other"},
-			Status:  serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindBacklog},
+			Summary:  serverapi.WorkflowTaskSummary{ID: "task-other", ProjectID: "project-other", WorkflowID: "workflow-" + workflowSelectorTestUUID, ShortID: "OTH-1", Title: "Other Task"},
+			Project:  serverapi.ProjectBoardProject{ProjectKey: "OTH", DisplayName: "Other"},
+			Workflow: serverapi.WorkflowPickerItem{WorkflowID: "workflow-" + workflowSelectorTestUUID, DisplayName: "Workflow"},
+			Status:   serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindBacklog},
 		}}, nil
 	}
 	return serverapi.WorkflowTaskGetResponse{}, sql.ErrNoRows

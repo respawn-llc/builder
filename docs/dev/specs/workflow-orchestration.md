@@ -43,6 +43,21 @@
 - Tasks, runs, transitions, approvals, and edge snapshots store observed workflow version where historical traceability is required.
 - Run-start snapshots and transition/approval/fan-out edge snapshots keep using their snapshot unless a node-specific runtime contract says otherwise. Script nodes live-load their current `script_path` and completion contract from the workflow graph when the run executes/completes.
 
+## CLI Workflow Selection And Discovery
+
+- CLI workflow selectors are bare canonical UUIDv4 values. Workflow display names and prefixed persistence identifiers are not selectors.
+- Every CLI command that accepts a workflow selector uses one shared parser and emits copyable bare UUIDs in human and JSON output. This CLI boundary does not change persisted or server-facing workflow identifiers.
+- Long flags are rendered with double dashes in help, examples, and Kent-authored diagnostics. Single-dash long flags remain accepted for compatibility; standard-library parser failures retain their native formatting.
+- `kent workflow list` is paginated. `--project <path-or-id>` filters the existing workflow list to workflows linked to the resolved project.
+- Project-filtered workflow discovery is served by one paginated database query. It does not load or validate workflow graphs.
+- Project-filtered workflow results are ordered with the project default first, then by project-local task activity, then by workflow name.
+- Project-filtered human results preserve the global one-line format and append default/link status plus execution-target policy. JSON includes the resolved project ID once and adds only the default-link fact to each workflow record.
+- `kent workflow inspect <uuid> --summary` returns only global workflow metadata: name, bare UUID, description, version, and execution-target policy. It does not accept project context; full inspect retains the workflow graph.
+- `kent task show` does not accept a workflow selector. It reports the selected task's actual workflow with a bare UUID.
+- Task creation without an explicit workflow uses the project default. If no default exists and exactly one workflow is linked, Kent uses that workflow.
+- Task creation with no linked workflows explains that a workflow must be created or linked before retrying.
+- Task creation with several linked workflows and no default does not enumerate candidates. It directs the operator to paginated project workflow discovery, an explicit `--workflow <uuid>` retry, or default selection.
+
 ## Nodes, Edges, And Validation
 
 - Nodes configure workflow states and executable behavior. Agent nodes configure subagent role, completion mode, and worktree/session execution policy. Script nodes configure an executable script path.
@@ -210,10 +225,18 @@
 - The status projection preserves all applicable typed attention kinds and run references even when parallel branches have different conditions.
 - Workflow validity is workflow-level state and is not a task status.
 - Task lists expose typed task status and attention filters. They do not expose a separate coarse run status.
-- CLI `--status` filters typed task status, `--column` filters workflow node keys, and `--attention` filters attention kinds.
-- Either project or workflow task-list scope may be inferred only when exactly one active link is possible. Zero links return a typed not-linked error; multiple links return a typed ambiguity error with the available choices.
-- Explicit workflow selectors are workflow UUIDs. When both project and workflow are supplied, Kent validates their active link.
-- Task-list status sorting follows primary typed-status precedence; column sorting follows workflow column position.
+- Task lists are project-scoped. The CLI defaults to the project attached to the current workspace, including when `--workflow` is supplied.
+- A project-only task list spans every workflow linked to that project. An explicit workflow selector narrows the list and must identify an active link in that project.
+- CLI `--status` filters typed task status and `--attention` filters attention kinds across project-wide results. Created, updated, status, run-count, and title sorting are also workflow-neutral.
+- `--column` and column sorting require an explicit workflow because node keys and column positions are workflow-relative.
+- Project-wide human task rows omit column output, and project-wide JSON task items omit `column_keys`. Workflow-narrowed lists retain board-ordered column output.
+- The first project-wide task-list page derives a filtered matching-workflow cardinality of none, one, or multiple and freezes that first-page display decision in continuation tokens. Task membership remains live, so concurrent mutations may make workflow-name visibility stale on later pages.
+- Human task-list rows include workflow names only when the filtered query can return tasks from multiple workflows. JSON task items always include their bare workflow UUID.
+- A project with no linked workflows, an explicitly selected workflow that is not linked to the project, and workflow-relative operations without a workflow selector return distinct typed actionable errors.
+- No-linked-workflow recovery directs the operator to create and link a workflow or list and link an existing workflow before retrying.
+- Explicit not-linked recovery offers project workflow discovery and retry with a linked workflow, or linking the selected workflow to the project.
+- Workflow-relative column recovery offers project workflow discovery and a task-list retry with an explicit workflow while preserving the parsed filters.
+- Task-list status sorting follows primary typed-status precedence; workflow-narrowed column sorting follows workflow column position.
 
 ## Execution Targets And Worktrees
 

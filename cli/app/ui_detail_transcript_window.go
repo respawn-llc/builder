@@ -256,8 +256,8 @@ func (w uiDetailTranscriptWindow) hasSegment(page clientui.TranscriptPage) bool 
 func segmentBoundaryEqual(seg residentSegmentMeta, page clientui.TranscriptPage) bool {
 	return seg.hasMoreAbove == page.HasMoreAbove &&
 		seg.hasMoreBelow == page.HasMoreBelow &&
-		int64PointerEqual(seg.olderCursor, page.OlderCursor) &&
-		int64PointerEqual(seg.newerCursor, page.NewerCursor)
+		textutil.EqualOptional(seg.olderCursor, page.OlderCursor) &&
+		textutil.EqualOptional(seg.newerCursor, page.NewerCursor)
 }
 
 func (w *uiDetailTranscriptWindow) trimToSegments(anchorLocal int) []clientui.TranscriptCommittedRow {
@@ -328,7 +328,7 @@ func (w uiDetailTranscriptWindow) pageAfter() (clientui.TranscriptPageRequest, b
 }
 
 func pageRequestEqual(a, b clientui.TranscriptPageRequest) bool {
-	return int64PointerEqual(a.Cursor, b.Cursor) && int64PointerEqual(a.NewerCursor, b.NewerCursor)
+	return textutil.EqualOptional(a.Cursor, b.Cursor) && textutil.EqualOptional(a.NewerCursor, b.NewerCursor)
 }
 
 func cloneTranscriptPageRequest(request clientui.TranscriptPageRequest) clientui.TranscriptPageRequest {
@@ -405,8 +405,4 @@ func cloneDetailTranscriptNotice(notice *clientui.TranscriptNoticeRow) *clientui
 	copyNotice.CondensedText = textutil.Pointer(notice.CondensedText)
 	copyNotice.CompactLabel = textutil.Pointer(notice.CompactLabel)
 	return &copyNotice
-}
-
-func int64PointerEqual(left, right *int64) bool {
-	return ptrEqual(left, right)
 }

@@ -201,20 +201,34 @@ async function assertRootRedirectPage() {
 async function assertDesktopRedirectPage() {
   const relativePath = 'desktop/index.html';
   const tree = fromHtml(await readFile(path.join(distRoot, relativePath), 'utf8'));
+  const htmlElements = collectElements(tree, (node) => node.tagName === 'html');
+  assert(
+    htmlElements.length === 1 && htmlElements[0].properties?.dataTheme === 'dark',
+    `${relativePath} should bootstrap with one deterministic initial theme`,
+  );
   assert(
     findMeta(tree, 'name', 'robots')?.properties?.content === 'noindex',
     `${relativePath} should keep noindex robots metadata`,
   );
   assert(
-    collectElements(tree, (node) => node.tagName === 'main').length === 1,
-    `${relativePath} should contain static fallback content`,
+    collectElements(tree, (node) => node.tagName === 'link' && relIncludes(node, 'stylesheet'))
+      .length > 0,
+    `${relativePath} should contain a generated stylesheet`,
+  );
+  const mainElements = collectElements(tree, (node) => node.tagName === 'main');
+  assert(
+    mainElements.length === 1 && mainElements[0].properties?.hidden === true,
+    `${relativePath} should contain one initially hidden confirmation surface`,
+  );
+  const releaseLinks = collectElements(
+    mainElements[0],
+    (node) =>
+      node.tagName === 'a' && node.properties?.href === `${docsConfig.repoUrl}/releases/latest`,
   );
   assert(
-    collectElements(
-      tree,
-      (node) =>
-        node.tagName === 'a' && node.properties?.href === `${docsConfig.repoUrl}/releases/latest`,
-    ).length === 1,
+    releaseLinks.length === 1 &&
+      (releaseLinks[0].properties?.target === undefined ||
+        releaseLinks[0].properties?.target === '_self'),
     `${relativePath} should link to the latest desktop release`,
   );
   assert(!hasScriptWithSource(tree, 'ClientRouter'), `${relativePath} should not include ClientRouter`);

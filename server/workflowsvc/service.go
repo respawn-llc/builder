@@ -247,7 +247,18 @@ func (s *Service) ListWorkflows(ctx context.Context, req serverapi.WorkflowListR
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowListResponse{}, err
 	}
-	rows, err := s.store.ListWorkflows(ctx, workflowstore.ListWorkflowsRequest{PageSize: req.PageSize, PageToken: req.PageToken, Query: req.Query, ExactName: req.ExactName})
+	var workflowID *workflow.WorkflowID
+	if req.WorkflowID != nil {
+		value := workflow.WorkflowID(*req.WorkflowID)
+		workflowID = &value
+	}
+	rows, err := s.store.ListWorkflows(ctx, workflowstore.ListWorkflowsRequest{
+		PageSize:   req.PageSize,
+		PageToken:  req.PageToken,
+		Query:      req.Query,
+		ProjectID:  req.ProjectID,
+		WorkflowID: workflowID,
+	})
 	if err != nil {
 		return serverapi.WorkflowListResponse{}, err
 	}
@@ -255,7 +266,7 @@ func (s *Service) ListWorkflows(ctx context.Context, req serverapi.WorkflowListR
 	for _, row := range rows.Workflows {
 		out = append(out, workflowRecord(row))
 	}
-	return serverapi.WorkflowListResponse{Workflows: out, NextPageToken: rows.NextPageToken}, nil
+	return serverapi.WorkflowListResponse{Workflows: out, ProjectID: rows.ProjectID, NextPageToken: rows.NextPageToken}, nil
 }
 
 func (s *Service) GetWorkflow(ctx context.Context, req serverapi.WorkflowGetRequest) (serverapi.WorkflowGetResponse, error) {
@@ -598,9 +609,14 @@ func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskCreateResponse{}, err
 	}
-	task, err := s.store.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: req.ProjectID, WorkflowID: workflow.WorkflowID(req.WorkflowID), Title: req.Title, Body: req.Body, SourceURL: req.SourceURL, SourceWorkspaceID: req.SourceWorkspaceID})
+	var workflowID *workflow.WorkflowID
+	if req.WorkflowID != nil {
+		value := workflow.WorkflowID(*req.WorkflowID)
+		workflowID = &value
+	}
+	task, err := s.store.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: req.ProjectID, WorkflowID: workflowID, Title: req.Title, Body: req.Body, SourceURL: req.SourceURL, SourceWorkspaceID: req.SourceWorkspaceID})
 	if err != nil {
-		return serverapi.WorkflowTaskCreateResponse{}, err
+		return serverapi.WorkflowTaskCreateResponse{}, workflowTaskCreateError(err)
 	}
 	s.publishWorkflowEvent(ctx, task.ProjectID, string(task.WorkflowID), "task", "created", string(task.ID))
 	detail, err := s.view.GetTask(ctx, string(task.ID))
@@ -608,6 +624,40 @@ func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.Workflow
 		return serverapi.WorkflowTaskCreateResponse{}, err
 	}
 	return serverapi.WorkflowTaskCreateResponse{Task: detail.Summary}, nil
+}
+
+func workflowTaskCreateError(err error) error {
+	var selectionErr workflowstore.TaskWorkflowSelectionError
+	if errors.As(err, &selectionErr) {
+		var reason serverapi.WorkflowTaskCreateSelectionReason
+		switch selectionErr.Reason {
+		case workflowstore.TaskWorkflowSelectionNoLinkedWorkflows:
+			reason = serverapi.WorkflowTaskCreateSelectionReasonNoLinkedWorkflows
+		case workflowstore.TaskWorkflowSelectionWorkflowNotLinked:
+			reason = serverapi.WorkflowTaskCreateSelectionReasonWorkflowNotLinked
+		case workflowstore.TaskWorkflowSelectionAmbiguousWithoutDefault:
+			reason = serverapi.WorkflowTaskCreateSelectionReasonAmbiguousWithoutDefault
+		default:
+			return err
+		}
+		var workflowID *string
+		if selectionErr.WorkflowID != nil {
+			value := string(*selectionErr.WorkflowID)
+			workflowID = &value
+		}
+		return &serverapi.WorkflowTaskCreateSelectionError{
+			Reason:     reason,
+			ProjectID:  selectionErr.ProjectID,
+			WorkflowID: workflowID,
+		}
+	}
+	var conflictErr workflowstore.TaskCreateConflictError
+	if errors.As(err, &conflictErr) && conflictErr.Reason == workflowstore.TaskCreateConflictSerialization {
+		return &serverapi.WorkflowTaskCreateConflictError{
+			Reason: serverapi.WorkflowTaskCreateConflictReasonSerialization,
+		}
+	}
+	return err
 }
 
 func (s *Service) UpdateWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskUpdateRequest) (serverapi.WorkflowTaskUpdateResponse, error) {
@@ -1312,7 +1362,7 @@ func (s *Service) workflowInterruptedRunAttentionIDsByWorkflow(ctx context.Conte
 			}
 			for _, item := range attention.Items {
 				runID := strings.TrimSpace(item.RunID)
-				if item.Kind == "interrupted_run" && item.WorkflowID == workflowID && runID != "" && !seenRuns[runID] {
+				if item.Kind == "interrupted_run" && item.WorkflowID != nil && *item.WorkflowID == workflowID && runID != "" && !seenRuns[runID] {
 					seenRuns[runID] = true
 					runIDs = append(runIDs, workflow.RunID(runID))
 				}
@@ -1632,13 +1682,17 @@ func (s *Service) GetWorkflowTask(ctx context.Context, req serverapi.WorkflowTas
 }
 
 func workflowRecord(row workflowstore.WorkflowRecord) serverapi.WorkflowRecord {
-	return serverapi.WorkflowRecord{
+	record := serverapi.WorkflowRecord{
 		ID:                    string(row.ID),
 		Name:                  row.Name,
 		Description:           row.Description,
 		Version:               row.Version,
 		ExecutionTargetPolicy: workflowExecutionTargetPolicyToAPI(row.ExecutionTargetPolicy),
 	}
+	if row.ProjectLink != nil {
+		record.ProjectLink = &serverapi.WorkflowListProjectLink{Default: row.ProjectLink.Default}
+	}
+	return record
 }
 
 func workflowNodeGroup(row workflowstore.NodeGroupRecord) serverapi.WorkflowNodeGroup {
@@ -1735,10 +1789,11 @@ func scriptPathValidationErrors(def workflow.Definition, rootPath *string) []ser
 }
 
 func scriptPathValidationError(workflowID workflow.WorkflowID, nodeID workflow.NodeID, diagnostic workflowscript.Diagnostic) serverapi.WorkflowValidationError {
+	workflowIDValue := string(workflowID)
 	return serverapi.WorkflowValidationError{
 		Code:          diagnostic.Code,
 		Message:       diagnostic.Message,
-		WorkflowID:    string(workflowID),
+		WorkflowID:    &workflowIDValue,
 		NodeID:        string(nodeID),
 		BlocksContext: diagnostic.Blocking,
 	}

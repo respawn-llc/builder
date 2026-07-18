@@ -485,6 +485,19 @@ func TestGatewayHandshakeRejectsProtocolVersionMismatch(t *testing.T) {
 	}
 }
 
+func TestGatewayHandshakeRejectsPreviousProtocolGeneration(t *testing.T) {
+	_, server := newGatewayTestServer(t)
+	defer server.Close()
+
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+
+	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "62"})
+	if respErr.Code != protocol.ErrCodeProtocolVersionMismatch {
+		t.Fatalf("expected previous protocol generation rejection, got %+v", respErr)
+	}
+}
+
 func TestGatewayRejectsMethodsBeforeHandshake(t *testing.T) {
 	_, server := newGatewayTestServer(t)
 	defer server.Close()

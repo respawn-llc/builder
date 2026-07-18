@@ -31,3 +31,14 @@ func TestValidationErrorsIncludesStructuredDetails(t *testing.T) {
 		t.Fatalf("details = %+v", details)
 	}
 }
+
+func TestValidationErrorsPreservesAbsentWorkflowIdentity(t *testing.T) {
+	errors := ValidationErrors("", []workflow.ValidationError{{
+		Code:    workflow.CodeInvalidTemplatePlaceholder,
+		Message: "invalid",
+	}})
+
+	if len(errors) != 1 || errors[0].WorkflowID != nil {
+		t.Fatalf("errors = %+v, want absent workflow identity", errors)
+	}
+}

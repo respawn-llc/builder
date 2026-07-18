@@ -2,17 +2,72 @@ package workflowview
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"core/internal/testharness/testsetup"
-	"core/server/metadata"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
 )
+
+func workflowIDPointerForTest(value workflow.WorkflowID) *workflow.WorkflowID {
+	return &value
+}
+
+func TestListTasksFiltersTypedStatusAndColumn(t *testing.T) {
+	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	backlog, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Backlog", Body: "Body"})
+	if err != nil {
+		t.Fatalf("CreateTask backlog: %v", err)
+	}
+	running, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Running", Body: "Body"})
+	if err != nil {
+		t.Fatalf("CreateTask running: %v", err)
+	}
+	started, err := workflowStore.StartTask(ctx, running.ID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if _, err := workflowStore.ClaimRun(ctx, started.RunID, 0); err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+
+	projectID, workflowIDString := binding.ProjectID, string(workflowID)
+	backlogResp, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
+		ProjectID:   &projectID,
+		WorkflowID:  &workflowIDString,
+		ColumnKeys:  []string{"backlog"},
+		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog},
+	}, testsetup.QuestionsEnabled("coder"))
+	if err != nil {
+		t.Fatalf("ListTasks backlog: %v", err)
+	}
+	if len(backlogResp.Tasks) != 1 || backlogResp.Tasks[0].TaskID != string(backlog.ID) {
+		t.Fatalf("backlog tasks = %+v", backlogResp.Tasks)
+	}
+
+	runningResp, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
+		ProjectID:   &projectID,
+		WorkflowID:  &workflowIDString,
+		ColumnKeys:  []string{"agent"},
+		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindRunning},
+	}, testsetup.QuestionsEnabled("coder"))
+	if err != nil {
+		t.Fatalf("ListTasks running: %v", err)
+	}
+	if len(runningResp.Tasks) != 1 || runningResp.Tasks[0].TaskID != string(running.ID) {
+		t.Fatalf("running tasks = %+v", runningResp.Tasks)
+	}
+}
 
 func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 	ctx, store, workflowStore, binding, view := newWorkflowViewTestContextService(t)
@@ -103,7 +158,7 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 	}
 	forceCanceledBacklogPlacementWithoutTerminal(t, ctx, store, canceled.ID, workflowID)
 
-	projectID := binding.ProjectID
+	projectID, workflowIDString := binding.ProjectID, string(workflowID)
 	list := func(request serverapi.WorkflowTaskListRequest) serverapi.WorkflowTaskListResponse {
 		t.Helper()
 		request.ProjectID = &projectID
@@ -162,7 +217,10 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 		"backlog": {string(backlog.ID): true},
 		"done":    {string(done.ID): true, string(canceled.ID): true},
 	} {
-		response := list(serverapi.WorkflowTaskListRequest{ColumnKeys: []string{columnKey}})
+		response := list(serverapi.WorkflowTaskListRequest{
+			WorkflowID: &workflowIDString,
+			ColumnKeys: []string{columnKey},
+		})
 		if len(response.Tasks) != len(taskIDs) {
 			t.Fatalf("column filter %q = %+v, want task IDs %v", columnKey, response.Tasks, taskIDs)
 		}
@@ -181,7 +239,7 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 	}
 	for _, request := range []serverapi.WorkflowTaskListRequest{
 		{StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingApproval}, AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindQuestion}},
-		{StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindRunning}, ColumnKeys: []string{"backlog"}},
+		{WorkflowID: &workflowIDString, StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindRunning}, ColumnKeys: []string{"backlog"}},
 	} {
 		if response := list(request); len(response.Tasks) != 0 {
 			t.Fatalf("combined filters %+v = %+v, want no tasks", request, response.Tasks)
@@ -209,7 +267,7 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 	for _, request := range []serverapi.WorkflowTaskListRequest{
 		{StatusKinds: []serverapi.WorkflowTaskStatusKind{"invalid"}},
 		{AttentionKinds: []serverapi.WorkflowTaskAttentionKind{"invalid"}},
-		{ColumnKeys: []string{"missing"}},
+		{WorkflowID: &workflowIDString, ColumnKeys: []string{"missing"}},
 	} {
 		request.ProjectID = &projectID
 		_, err := view.ListTasks(ctx, request, testsetup.QuestionsEnabled("coder"))
@@ -265,7 +323,7 @@ func TestListTasksSortAndCursorPagination(t *testing.T) {
 		t.Fatalf("CompleteRun done: %v", err)
 	}
 
-	projectID := binding.ProjectID
+	projectID, workflowIDString := binding.ProjectID, string(workflowID)
 	baseRequest := serverapi.WorkflowTaskListRequest{ProjectID: &projectID, PageSize: 2}
 	listAllPages := func(request serverapi.WorkflowTaskListRequest) []serverapi.WorkflowTaskListItem {
 		t.Helper()
@@ -286,18 +344,22 @@ func TestListTasksSortAndCursorPagination(t *testing.T) {
 				seen[item.TaskID] = true
 				items = append(items, item)
 			}
-			if response.NextPageToken == "" {
+			if response.NextPageToken == nil {
 				return items
 			}
-			request.PageToken = response.NextPageToken
+			request.PageToken = *response.NextPageToken
 		}
 	}
 	sortedRequest := func(field serverapi.WorkflowTaskListSortField, direction serverapi.WorkflowTaskListSortDirection) serverapi.WorkflowTaskListRequest {
-		return serverapi.WorkflowTaskListRequest{
+		request := serverapi.WorkflowTaskListRequest{
 			ProjectID: baseRequest.ProjectID,
 			PageSize:  baseRequest.PageSize,
 			Sort:      []serverapi.WorkflowTaskListSort{{Field: field, Direction: direction}},
 		}
+		if field == serverapi.WorkflowTaskListSortFieldColumn {
+			request.WorkflowID = &workflowIDString
+		}
+		return request
 	}
 	for _, tt := range []struct {
 		name      string
@@ -338,29 +400,45 @@ func TestListTasksSortAndCursorPagination(t *testing.T) {
 		})
 	}
 
+	firstPageRequest := sortedRequest(serverapi.WorkflowTaskListSortFieldStatus, serverapi.WorkflowTaskListSortDirectionAsc)
+	firstPageRequest.WorkflowID = &workflowIDString
 	firstPage, err := view.ListTasks(
 		ctx,
-		sortedRequest(serverapi.WorkflowTaskListSortFieldStatus, serverapi.WorkflowTaskListSortDirectionAsc),
+		firstPageRequest,
 		testsetup.QuestionsEnabled("coder"),
 	)
 	if err != nil {
 		t.Fatalf("ListTasks first page: %v", err)
 	}
-	if firstPage.NextPageToken == "" {
+	if firstPage.NextPageToken == nil {
 		t.Fatal("first page must produce a continuation token")
 	}
-	token, ok, err := parseWorkflowTaskListPageToken(firstPage.NextPageToken)
+	token, ok, err := parseWorkflowTaskListPageToken(*firstPage.NextPageToken)
 	if err != nil || !ok {
 		t.Fatalf("parse page token = %+v/%t/%v", token, ok, err)
 	}
+	invalidVersionToken := token
+	invalidVersionToken.Version = 1
+	changedWorkflowVersionToken := token
+	changedWorkflowVersionInvariants := *token.Scope.Narrowed
+	changedWorkflowVersionInvariants.WorkflowVersion++
+	changedWorkflowVersionToken.Scope.Narrowed = &changedWorkflowVersionInvariants
+	changedColumnStructureToken := token
+	changedColumnStructureInvariants := *token.Scope.Narrowed
+	changedColumnStructureInvariants.ColumnStructureHash = "changed"
+	changedColumnStructureToken.Scope.Narrowed = &changedColumnStructureInvariants
+	changedStatusModelToken := token
+	changedStatusModelToken.StatusModelVersion++
+	changedProjectToken := token
+	changedProjectToken.Scope.ProjectID = "project-conflict"
 	invalidRequests := []serverapi.WorkflowTaskListRequest{
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageToken(workflowTaskListPageTokenPayload{Version: 1, ProjectID: token.ProjectID, WorkflowID: token.WorkflowID, WorkflowVersion: token.WorkflowVersion, ColumnStructureHash: token.ColumnStructureHash, StatusModelVersion: token.StatusModelVersion, Fingerprint: token.Fingerprint, Cursor: token.Cursor})},
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: firstPage.NextPageToken, StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog}},
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: firstPage.NextPageToken, Sort: []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldColumn, Direction: serverapi.WorkflowTaskListSortDirectionAsc}}},
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageToken(workflowTaskListPageTokenPayload{Version: token.Version, ProjectID: token.ProjectID, WorkflowID: token.WorkflowID, WorkflowVersion: token.WorkflowVersion + 1, ColumnStructureHash: token.ColumnStructureHash, StatusModelVersion: token.StatusModelVersion, Fingerprint: token.Fingerprint, Cursor: token.Cursor})},
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageToken(workflowTaskListPageTokenPayload{Version: token.Version, ProjectID: token.ProjectID, WorkflowID: token.WorkflowID, WorkflowVersion: token.WorkflowVersion, ColumnStructureHash: "changed", StatusModelVersion: token.StatusModelVersion, Fingerprint: token.Fingerprint, Cursor: token.Cursor})},
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageToken(workflowTaskListPageTokenPayload{Version: token.Version, ProjectID: token.ProjectID, WorkflowID: token.WorkflowID, WorkflowVersion: token.WorkflowVersion, ColumnStructureHash: token.ColumnStructureHash, StatusModelVersion: token.StatusModelVersion + 1, Fingerprint: token.Fingerprint, Cursor: token.Cursor})},
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageToken(workflowTaskListPageTokenPayload{Version: token.Version, ProjectID: "project-conflict", WorkflowID: token.WorkflowID, WorkflowVersion: token.WorkflowVersion, ColumnStructureHash: token.ColumnStructureHash, StatusModelVersion: token.StatusModelVersion, Fingerprint: token.Fingerprint, Cursor: token.Cursor})},
+		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, invalidVersionToken)},
+		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: *firstPage.NextPageToken, StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog}},
+		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: *firstPage.NextPageToken, Sort: []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldColumn, Direction: serverapi.WorkflowTaskListSortDirectionAsc}}},
+		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, changedWorkflowVersionToken)},
+		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, changedColumnStructureToken)},
+		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, changedStatusModelToken)},
+		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, changedProjectToken)},
 	}
 	for _, request := range invalidRequests {
 		_, err := view.ListTasks(ctx, request, testsetup.QuestionsEnabled("coder"))
@@ -370,134 +448,678 @@ func TestListTasksSortAndCursorPagination(t *testing.T) {
 	}
 }
 
-func TestTaskListResolvesExactProjectWorkflowScope(t *testing.T) {
-	type scopeExpectation struct {
-		kind         serverapi.WorkflowTaskListScopeErrorKind
-		missingScope *serverapi.WorkflowTaskListScopeDimension
-		projectIDs   map[string]bool
-		workflowIDs  map[string]bool
+func TestTaskListUsesTypedProjectWorkflowScope(t *testing.T) {
+	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
 	}
-	for _, testCase := range []struct {
-		name  string
-		setup func(t *testing.T, ctx context.Context, store *metadata.Store, workflowStore *workflowstore.Store, binding metadata.Binding, firstWorkflowID workflow.WorkflowID, secondWorkflowID workflow.WorkflowID) (serverapi.WorkflowTaskListRequest, string, string, *scopeExpectation)
-	}{
-		{
-			name: "exact pair",
-			setup: func(t *testing.T, ctx context.Context, _ *metadata.Store, workflowStore *workflowstore.Store, binding metadata.Binding, firstWorkflowID workflow.WorkflowID, _ workflow.WorkflowID) (serverapi.WorkflowTaskListRequest, string, string, *scopeExpectation) {
-				if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, firstWorkflowID, true); err != nil {
-					t.Fatalf("LinkWorkflow: %v", err)
-				}
-				projectID, workflowID := binding.ProjectID, string(firstWorkflowID)
-				return serverapi.WorkflowTaskListRequest{ProjectID: &projectID, WorkflowID: &workflowID}, projectID, workflowID, nil
-			},
+	projectID, selectedWorkflowID := binding.ProjectID, string(workflowID)
+	response, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
+		ProjectID:  &projectID,
+		WorkflowID: &selectedWorkflowID,
+	}, testsetup.QuestionsEnabled("coder"))
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	if response.Scope.ProjectID != projectID || response.Scope.WorkflowID == nil || *response.Scope.WorkflowID != selectedWorkflowID {
+		t.Fatalf("response scope = %+v, want project/workflow scope", response.Scope)
+	}
+	if response.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone {
+		t.Fatalf("matching workflow cardinality = %q, want none", response.MatchingWorkflowCardinality)
+	}
+}
+
+func TestTaskListProjectScopeSpansLinkedWorkflowsWithoutColumns(t *testing.T) {
+	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+	firstWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	secondWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, firstWorkflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow first: %v", err)
+	}
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, secondWorkflowID, false); err != nil {
+		t.Fatalf("LinkWorkflow second: %v", err)
+	}
+	firstTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: workflowIDPointerForTest(firstWorkflowID),
+		Title:      "First",
+		Body:       "Body",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask first: %v", err)
+	}
+	secondTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: workflowIDPointerForTest(secondWorkflowID),
+		Title:      "Second",
+		Body:       "Body",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask second: %v", err)
+	}
+
+	projectID := binding.ProjectID
+	projectWide, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &projectID}, nil)
+	if err != nil {
+		t.Fatalf("ListTasks project-wide: %v", err)
+	}
+	if projectWide.Scope.ProjectID != projectID || projectWide.Scope.WorkflowID != nil {
+		t.Fatalf("project-wide scope = %+v, want project-only", projectWide.Scope)
+	}
+	if len(projectWide.Tasks) != 2 {
+		t.Fatalf("project-wide tasks = %+v, want both linked workflows", projectWide.Tasks)
+	}
+	seen := map[string]bool{}
+	for _, task := range projectWide.Tasks {
+		seen[task.TaskID] = true
+		if task.ColumnKeys != nil {
+			t.Fatalf("project-wide task columns = %+v, want omitted", task.ColumnKeys)
+		}
+		if task.WorkflowName == nil || strings.TrimSpace(*task.WorkflowName) == "" {
+			t.Fatalf("project-wide task = %+v, want workflow name", task)
+		}
+	}
+	if !seen[string(firstTask.ID)] || !seen[string(secondTask.ID)] {
+		t.Fatalf("project-wide task IDs = %+v, want %s and %s", seen, firstTask.ID, secondTask.ID)
+	}
+
+	selectedWorkflowID := string(secondWorkflowID)
+	narrowed, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
+		ProjectID:  &projectID,
+		WorkflowID: &selectedWorkflowID,
+	}, testsetup.QuestionsEnabled("coder"))
+	if err != nil {
+		t.Fatalf("ListTasks narrowed: %v", err)
+	}
+	if len(narrowed.Tasks) != 1 || narrowed.Tasks[0].TaskID != string(secondTask.ID) || narrowed.Tasks[0].ColumnKeys == nil || len(*narrowed.Tasks[0].ColumnKeys) == 0 {
+		t.Fatalf("narrowed tasks = %+v, want second workflow with columns", narrowed.Tasks)
+	}
+}
+
+func TestTaskListProjectScopeFiltersSortsAndBoundsAcrossLinkedWorkflows(t *testing.T) {
+	ctx, store, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+	firstWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	secondWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, firstWorkflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow first: %v", err)
+	}
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, secondWorkflowID, false); err != nil {
+		t.Fatalf("LinkWorkflow second: %v", err)
+	}
+	alpha, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: workflowIDPointerForTest(firstWorkflowID),
+		Title:      "Alpha",
+		Body:       "Body",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask alpha: %v", err)
+	}
+	zulu, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: workflowIDPointerForTest(secondWorkflowID),
+		Title:      "Zulu",
+		Body:       "Body",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask zulu: %v", err)
+	}
+	zuluStarted, err := workflowStore.StartTask(ctx, zulu.ID)
+	if err != nil {
+		t.Fatalf("StartTask zulu: %v", err)
+	}
+	zuluClaimed, err := workflowStore.ClaimRun(ctx, zuluStarted.RunID, 0)
+	if err != nil {
+		t.Fatalf("ClaimRun zulu: %v", err)
+	}
+	if err := workflowStore.SetRunWaitingAsk(ctx, zuluStarted.RunID, zuluClaimed.Generation, "ask-project-wide"); err != nil {
+		t.Fatalf("SetRunWaitingAsk zulu: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `
+UPDATE tasks
+SET created_at_unix_ms = CASE id WHEN ? THEN 100 ELSE 200 END,
+    updated_at_unix_ms = CASE id WHEN ? THEN 300 ELSE 100 END
+WHERE id IN (?, ?)`, string(alpha.ID), string(alpha.ID), string(alpha.ID), string(zulu.ID)); err != nil {
+		t.Fatalf("set deterministic task times: %v", err)
+	}
+
+	projectID := binding.ProjectID
+	list := func(request serverapi.WorkflowTaskListRequest) []serverapi.WorkflowTaskListItem {
+		t.Helper()
+		request.ProjectID = &projectID
+		response, err := view.ListTasks(ctx, request, nil)
+		if err != nil {
+			t.Fatalf("ListTasks %+v: %v", request, err)
+		}
+		for _, task := range response.Tasks {
+			if task.ColumnKeys != nil {
+				t.Fatalf("project-wide task columns = %+v, want omitted", task.ColumnKeys)
+			}
+		}
+		return response.Tasks
+	}
+	statusFiltered := list(serverapi.WorkflowTaskListRequest{
+		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog},
+	})
+	if len(statusFiltered) != 1 || statusFiltered[0].TaskID != string(alpha.ID) {
+		t.Fatalf("backlog project-wide tasks = %+v, want alpha", statusFiltered)
+	}
+	attentionFiltered := list(serverapi.WorkflowTaskListRequest{
+		AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindQuestion},
+	})
+	if len(attentionFiltered) != 1 || attentionFiltered[0].TaskID != string(zulu.ID) {
+		t.Fatalf("question project-wide tasks = %+v, want zulu", attentionFiltered)
+	}
+
+	assertOrder := func(field serverapi.WorkflowTaskListSortField, direction serverapi.WorkflowTaskListSortDirection, want ...workflow.TaskID) {
+		t.Helper()
+		items := list(serverapi.WorkflowTaskListRequest{
+			Sort: []serverapi.WorkflowTaskListSort{{Field: field, Direction: direction}},
+		})
+		got := make([]string, 0, len(items))
+		for _, item := range items {
+			got = append(got, item.TaskID)
+		}
+		wantStrings := make([]string, 0, len(want))
+		for _, taskID := range want {
+			wantStrings = append(wantStrings, string(taskID))
+		}
+		if !reflect.DeepEqual(got, wantStrings) {
+			t.Fatalf("%s %s order = %v, want %v", field, direction, got, wantStrings)
+		}
+	}
+	assertOrder(serverapi.WorkflowTaskListSortFieldCreated, serverapi.WorkflowTaskListSortDirectionAsc, alpha.ID, zulu.ID)
+	assertOrder(serverapi.WorkflowTaskListSortFieldUpdated, serverapi.WorkflowTaskListSortDirectionAsc, zulu.ID, alpha.ID)
+	assertOrder(serverapi.WorkflowTaskListSortFieldRunCount, serverapi.WorkflowTaskListSortDirectionAsc, alpha.ID, zulu.ID)
+	assertOrder(serverapi.WorkflowTaskListSortFieldTitle, serverapi.WorkflowTaskListSortDirectionAsc, alpha.ID, zulu.ID)
+
+	statusAscending := list(serverapi.WorkflowTaskListRequest{
+		Sort: []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldStatus, Direction: serverapi.WorkflowTaskListSortDirectionAsc}},
+	})
+	statusDescending := list(serverapi.WorkflowTaskListRequest{
+		Sort: []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldStatus, Direction: serverapi.WorkflowTaskListSortDirectionDesc}},
+	})
+	if len(statusAscending) != 2 || len(statusDescending) != 2 ||
+		statusAscending[0].TaskID != statusDescending[1].TaskID ||
+		statusAscending[1].TaskID != statusDescending[0].TaskID {
+		t.Fatalf("status orders = asc %+v desc %+v, want reversed tasks", statusAscending, statusDescending)
+	}
+
+	bounded := list(serverapi.WorkflowTaskListRequest{PageSize: 1})
+	if len(bounded) != 1 {
+		t.Fatalf("bounded project-wide tasks = %+v, want one row", bounded)
+	}
+}
+
+func TestTaskListProjectScopeFailuresAreTyped(t *testing.T) {
+	t.Run("no linked workflows", func(t *testing.T) {
+		ctx, _, _, binding, view := newWorkflowViewTestContextService(t)
+		projectID := binding.ProjectID
+		_, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &projectID}, nil)
+		var scopeErr *serverapi.WorkflowTaskListScopeError
+		if !errors.As(err, &scopeErr) ||
+			scopeErr.Reason != serverapi.WorkflowTaskListScopeReasonNoLinkedWorkflows ||
+			scopeErr.ProjectID == nil || *scopeErr.ProjectID != projectID ||
+			scopeErr.WorkflowID != nil {
+			t.Fatalf("ListTasks error = %+v, want typed no-links error for %q", err, projectID)
+		}
+	})
+
+	t.Run("explicit workflow is not linked", func(t *testing.T) {
+		ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+		linkedWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+		unlinkedWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+		if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, linkedWorkflowID, true); err != nil {
+			t.Fatalf("LinkWorkflow: %v", err)
+		}
+		projectID, workflowID := binding.ProjectID, string(unlinkedWorkflowID)
+		_, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
+			ProjectID:  &projectID,
+			WorkflowID: &workflowID,
+		}, nil)
+		var scopeErr *serverapi.WorkflowTaskListScopeError
+		if !errors.As(err, &scopeErr) ||
+			scopeErr.Reason != serverapi.WorkflowTaskListScopeReasonWorkflowNotLinked ||
+			scopeErr.ProjectID == nil || *scopeErr.ProjectID != projectID ||
+			scopeErr.WorkflowID == nil || *scopeErr.WorkflowID != workflowID {
+			t.Fatalf("ListTasks error = %+v, want typed not-linked error for %q/%q", err, projectID, workflowID)
+		}
+	})
+
+	t.Run("column operation requires workflow", func(t *testing.T) {
+		ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+		workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+		if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+			t.Fatalf("LinkWorkflow: %v", err)
+		}
+		projectID := binding.ProjectID
+		_, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
+			ProjectID:  &projectID,
+			ColumnKeys: []string{"backlog"},
+		}, nil)
+		var scopeErr *serverapi.WorkflowTaskListScopeError
+		if !errors.As(err, &scopeErr) ||
+			scopeErr.Reason != serverapi.WorkflowTaskListScopeReasonWorkflowRequiredColumns ||
+			scopeErr.ProjectID == nil || *scopeErr.ProjectID != projectID ||
+			scopeErr.WorkflowID != nil {
+			t.Fatalf("ListTasks error = %+v, want typed workflow-required error for %q", err, projectID)
+		}
+	})
+}
+
+func TestTaskListMatchingWorkflowCardinalityUsesFullFilteredSet(t *testing.T) {
+	t.Run("none", func(t *testing.T) {
+		ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+		createTwoLinkedWorkflowViewWorkflows(t, ctx, workflowStore, binding.ProjectID)
+		projectID := binding.ProjectID
+		response, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &projectID}, nil)
+		if err != nil {
+			t.Fatalf("ListTasks: %v", err)
+		}
+		if response.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone || len(response.Tasks) != 0 {
+			t.Fatalf("empty filtered response = %+v, want none", response)
+		}
+	})
+
+	t.Run("one after filtering", func(t *testing.T) {
+		ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+		firstWorkflowID, secondWorkflowID := createTwoLinkedWorkflowViewWorkflows(t, ctx, workflowStore, binding.ProjectID)
+		if _, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+			ProjectID:  binding.ProjectID,
+			WorkflowID: workflowIDPointerForTest(firstWorkflowID),
+			Title:      "Backlog",
+			Body:       "Body",
+		}); err != nil {
+			t.Fatalf("CreateTask backlog: %v", err)
+		}
+		running, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+			ProjectID:  binding.ProjectID,
+			WorkflowID: workflowIDPointerForTest(secondWorkflowID),
+			Title:      "Running",
+			Body:       "Body",
+		})
+		if err != nil {
+			t.Fatalf("CreateTask running: %v", err)
+		}
+		started, err := workflowStore.StartTask(ctx, running.ID)
+		if err != nil {
+			t.Fatalf("StartTask: %v", err)
+		}
+		if _, err := workflowStore.ClaimRun(ctx, started.RunID, 0); err != nil {
+			t.Fatalf("ClaimRun: %v", err)
+		}
+
+		projectID := binding.ProjectID
+		response, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
+			ProjectID:   &projectID,
+			StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog},
+		}, nil)
+		if err != nil {
+			t.Fatalf("ListTasks: %v", err)
+		}
+		if response.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne || len(response.Tasks) != 1 || response.Tasks[0].WorkflowID != string(firstWorkflowID) {
+			t.Fatalf("filtered response = %+v, want one matching workflow", response)
+		}
+	})
+
+	t.Run("multiple beyond first page", func(t *testing.T) {
+		ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+		firstWorkflowID, secondWorkflowID := createTwoLinkedWorkflowViewWorkflows(t, ctx, workflowStore, binding.ProjectID)
+		for _, task := range []struct {
+			workflowID workflow.WorkflowID
+			title      string
+		}{
+			{workflowID: firstWorkflowID, title: "Alpha"},
+			{workflowID: secondWorkflowID, title: "Zulu"},
+		} {
+			if _, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+				ProjectID:  binding.ProjectID,
+				WorkflowID: workflowIDPointerForTest(task.workflowID),
+				Title:      task.title,
+				Body:       "Body",
+			}); err != nil {
+				t.Fatalf("CreateTask %s: %v", task.title, err)
+			}
+		}
+		projectID := binding.ProjectID
+		response, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
+			ProjectID: &projectID,
+			PageSize:  1,
+			Sort:      []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldTitle, Direction: serverapi.WorkflowTaskListSortDirectionAsc}},
+		}, nil)
+		if err != nil {
+			t.Fatalf("ListTasks: %v", err)
+		}
+		if response.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple || len(response.Tasks) != 1 || response.NextPageToken == nil {
+			t.Fatalf("first page = %+v, want multiple cardinality and continuation", response)
+		}
+	})
+}
+
+func TestTaskListProjectWidePaginationFreezesCardinalityWhileRowsRemainLive(t *testing.T) {
+	t.Run("one remains frozen after another workflow gains a match", func(t *testing.T) {
+		ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+		firstWorkflowID, secondWorkflowID := createTwoLinkedWorkflowViewWorkflows(t, ctx, workflowStore, binding.ProjectID)
+		for _, title := range []string{"Alpha", "Bravo"} {
+			if _, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+				ProjectID:  binding.ProjectID,
+				WorkflowID: workflowIDPointerForTest(firstWorkflowID),
+				Title:      title,
+				Body:       "Body",
+			}); err != nil {
+				t.Fatalf("CreateTask %s: %v", title, err)
+			}
+		}
+		projectID := binding.ProjectID
+		sortByTitle := []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldTitle, Direction: serverapi.WorkflowTaskListSortDirectionAsc}}
+		firstPage, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
+			ProjectID: &projectID,
+			PageSize:  1,
+			Sort:      sortByTitle,
+		}, nil)
+		if err != nil {
+			t.Fatalf("ListTasks first page: %v", err)
+		}
+		if firstPage.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne || firstPage.NextPageToken == nil {
+			t.Fatalf("first page = %+v, want one and continuation", firstPage)
+		}
+		if _, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
+			PageToken:   *firstPage.NextPageToken,
+			StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindDone},
+			Sort:        sortByTitle,
+		}, nil); !errors.Is(err, ErrInvalidPageToken) {
+			t.Fatalf("conflicting continuation error = %v, want ErrInvalidPageToken", err)
+		}
+		selectedWorkflowID := string(secondWorkflowID)
+		if _, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
+			WorkflowID: &selectedWorkflowID,
+			PageToken:  *firstPage.NextPageToken,
+			Sort:       sortByTitle,
+		}, nil); !errors.Is(err, ErrInvalidPageToken) {
+			t.Fatalf("conflicting continuation scope error = %v, want ErrInvalidPageToken", err)
+		}
+		if _, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+			ProjectID:  binding.ProjectID,
+			WorkflowID: workflowIDPointerForTest(secondWorkflowID),
+			Title:      "Zulu",
+			Body:       "Body",
+		}); err != nil {
+			t.Fatalf("CreateTask Zulu: %v", err)
+		}
+		nextPage, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
+			PageToken: *firstPage.NextPageToken,
+			PageSize:  10,
+			Sort:      sortByTitle,
+		}, nil)
+		if err != nil {
+			t.Fatalf("ListTasks continuation: %v", err)
+		}
+		if nextPage.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne ||
+			nextPage.Scope.WorkflowID != nil ||
+			len(nextPage.Tasks) != 2 ||
+			nextPage.Tasks[0].Title != "Bravo" ||
+			nextPage.Tasks[1].Title != "Zulu" {
+			t.Fatalf("live continuation = %+v, want frozen one with Bravo and Zulu", nextPage)
+		}
+	})
+
+	t.Run("multiple remains frozen after one workflow loses all matches", func(t *testing.T) {
+		ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+		firstWorkflowID, secondWorkflowID := createTwoLinkedWorkflowViewWorkflows(t, ctx, workflowStore, binding.ProjectID)
+		for _, title := range []string{"Alpha", "Bravo"} {
+			if _, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+				ProjectID:  binding.ProjectID,
+				WorkflowID: workflowIDPointerForTest(firstWorkflowID),
+				Title:      title,
+				Body:       "Body",
+			}); err != nil {
+				t.Fatalf("CreateTask %s: %v", title, err)
+			}
+		}
+		zulu, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+			ProjectID:  binding.ProjectID,
+			WorkflowID: workflowIDPointerForTest(secondWorkflowID),
+			Title:      "Zulu",
+			Body:       "Body",
+		})
+		if err != nil {
+			t.Fatalf("CreateTask Zulu: %v", err)
+		}
+		projectID := binding.ProjectID
+		sortByTitle := []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldTitle, Direction: serverapi.WorkflowTaskListSortDirectionAsc}}
+		statusFilter := []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog}
+		firstPage, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
+			ProjectID:   &projectID,
+			StatusKinds: statusFilter,
+			PageSize:    1,
+			Sort:        sortByTitle,
+		}, nil)
+		if err != nil {
+			t.Fatalf("ListTasks first page: %v", err)
+		}
+		if firstPage.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple || firstPage.NextPageToken == nil {
+			t.Fatalf("first page = %+v, want multiple and continuation", firstPage)
+		}
+		if _, err := workflowStore.StartTask(ctx, zulu.ID); err != nil {
+			t.Fatalf("StartTask Zulu: %v", err)
+		}
+		nextPage, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
+			StatusKinds: statusFilter,
+			PageToken:   *firstPage.NextPageToken,
+			PageSize:    10,
+			Sort:        sortByTitle,
+		}, nil)
+		if err != nil {
+			t.Fatalf("ListTasks continuation: %v", err)
+		}
+		if nextPage.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple ||
+			len(nextPage.Tasks) != 1 ||
+			nextPage.Tasks[0].Title != "Bravo" {
+			t.Fatalf("live continuation = %+v, want frozen multiple with only Bravo", nextPage)
+		}
+	})
+}
+
+func TestWorkflowTaskListPageTokenUsesTypedModeInvariants(t *testing.T) {
+	const tokenWorkflowID = "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+	base := workflowTaskListPageTokenPayload{
+		Version:                     workflowTaskListPageTokenVersion,
+		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple,
+		StatusModelVersion:          workflowTaskStatusModelVersion,
+		Fingerprint:                 "fingerprint",
+		Cursor:                      workflowTaskListCursor{TaskID: "task-1"},
+	}
+	projectWide := base
+	projectWide.Scope = workflowTaskListPageTokenScope{
+		ProjectID:   "project-1",
+		ProjectWide: &workflowTaskListProjectWidePageTokenInvariants{},
+	}
+	parsed, ok, err := parseWorkflowTaskListPageToken(workflowTaskListPageTokenForTest(t, projectWide))
+	if err != nil || !ok || parsed.Scope.ProjectWide == nil || parsed.Scope.Narrowed != nil {
+		t.Fatalf("parse project-wide token = %+v/%t/%v", parsed, ok, err)
+	}
+	raw, err := json.Marshal(projectWide)
+	if err != nil {
+		t.Fatalf("marshal project-wide token: %v", err)
+	}
+	var envelope struct {
+		Scope map[string]json.RawMessage `json:"scope"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatalf("decode project-wide token shape: %v", err)
+	}
+	if _, exists := envelope.Scope["narrowed"]; exists {
+		t.Fatalf("project-wide token scope = %s, want no narrowed invariant block", raw)
+	}
+
+	narrowed := base
+	narrowed.MatchingWorkflowCardinality = serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne
+	narrowed.Scope = workflowTaskListPageTokenScope{
+		ProjectID: "project-1",
+		Narrowed: &workflowTaskListNarrowedPageTokenInvariants{
+			WorkflowID:          tokenWorkflowID,
+			WorkflowVersion:     2,
+			ColumnStructureHash: "columns",
 		},
-		{
-			name: "unique project inference",
-			setup: func(t *testing.T, ctx context.Context, _ *metadata.Store, workflowStore *workflowstore.Store, binding metadata.Binding, firstWorkflowID workflow.WorkflowID, _ workflow.WorkflowID) (serverapi.WorkflowTaskListRequest, string, string, *scopeExpectation) {
-				if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, firstWorkflowID, true); err != nil {
-					t.Fatalf("LinkWorkflow: %v", err)
-				}
-				projectID := binding.ProjectID
-				return serverapi.WorkflowTaskListRequest{ProjectID: &projectID}, projectID, string(firstWorkflowID), nil
-			},
+	}
+	parsed, ok, err = parseWorkflowTaskListPageToken(workflowTaskListPageTokenForTest(t, narrowed))
+	if err != nil || !ok || parsed.Scope.ProjectWide != nil || parsed.Scope.Narrowed == nil {
+		t.Fatalf("parse narrowed token = %+v/%t/%v", parsed, ok, err)
+	}
+	raw, err = json.Marshal(narrowed)
+	if err != nil {
+		t.Fatalf("marshal narrowed token: %v", err)
+	}
+	envelope = struct {
+		Scope map[string]json.RawMessage `json:"scope"`
+	}{}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatalf("decode narrowed token shape: %v", err)
+	}
+	if _, exists := envelope.Scope["project_wide"]; exists {
+		t.Fatalf("narrowed token scope = %s, want no project-wide invariant block", raw)
+	}
+}
+
+func TestWorkflowTaskListPageTokenRejectsMalformedModeAndCardinality(t *testing.T) {
+	const tokenWorkflowID = "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+	valid := workflowTaskListPageTokenPayload{
+		Version: workflowTaskListPageTokenVersion,
+		Scope: workflowTaskListPageTokenScope{
+			ProjectID:   "project-1",
+			ProjectWide: &workflowTaskListProjectWidePageTokenInvariants{},
 		},
-		{
-			name: "unique workflow inference",
-			setup: func(t *testing.T, ctx context.Context, _ *metadata.Store, workflowStore *workflowstore.Store, binding metadata.Binding, firstWorkflowID workflow.WorkflowID, _ workflow.WorkflowID) (serverapi.WorkflowTaskListRequest, string, string, *scopeExpectation) {
-				if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, firstWorkflowID, true); err != nil {
-					t.Fatalf("LinkWorkflow: %v", err)
-				}
-				workflowID := string(firstWorkflowID)
-				return serverapi.WorkflowTaskListRequest{WorkflowID: &workflowID}, binding.ProjectID, workflowID, nil
-			},
-		},
-		{
-			name: "project has no links",
-			setup: func(_ *testing.T, _ context.Context, _ *metadata.Store, _ *workflowstore.Store, _ metadata.Binding, _ workflow.WorkflowID, _ workflow.WorkflowID) (serverapi.WorkflowTaskListRequest, string, string, *scopeExpectation) {
-				projectID := "project-unlinked"
-				return serverapi.WorkflowTaskListRequest{ProjectID: &projectID}, "", "", &scopeExpectation{kind: serverapi.WorkflowTaskListScopeErrorKindNotLinked, projectIDs: map[string]bool{projectID: true}}
-			},
-		},
-		{
-			name: "workflow has no links",
-			setup: func(_ *testing.T, _ context.Context, _ *metadata.Store, _ *workflowstore.Store, _ metadata.Binding, _ workflow.WorkflowID, _ workflow.WorkflowID) (serverapi.WorkflowTaskListRequest, string, string, *scopeExpectation) {
-				workflowID := "workflow-unlinked"
-				return serverapi.WorkflowTaskListRequest{WorkflowID: &workflowID}, "", "", &scopeExpectation{kind: serverapi.WorkflowTaskListScopeErrorKindNotLinked, workflowIDs: map[string]bool{workflowID: true}}
-			},
-		},
-		{
-			name: "project inference is ambiguous",
-			setup: func(t *testing.T, ctx context.Context, _ *metadata.Store, workflowStore *workflowstore.Store, binding metadata.Binding, firstWorkflowID workflow.WorkflowID, secondWorkflowID workflow.WorkflowID) (serverapi.WorkflowTaskListRequest, string, string, *scopeExpectation) {
-				if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, firstWorkflowID, true); err != nil {
-					t.Fatalf("LinkWorkflow first: %v", err)
-				}
-				if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, secondWorkflowID, false); err != nil {
-					t.Fatalf("LinkWorkflow second: %v", err)
-				}
-				projectID := binding.ProjectID
-				missing := serverapi.WorkflowTaskListScopeDimensionWorkflow
-				return serverapi.WorkflowTaskListRequest{ProjectID: &projectID}, "", "", &scopeExpectation{kind: serverapi.WorkflowTaskListScopeErrorKindAmbiguous, missingScope: &missing, projectIDs: map[string]bool{projectID: true}, workflowIDs: map[string]bool{string(firstWorkflowID): true, string(secondWorkflowID): true}}
-			},
-		},
-		{
-			name: "workflow inference is ambiguous",
-			setup: func(t *testing.T, ctx context.Context, store *metadata.Store, workflowStore *workflowstore.Store, binding metadata.Binding, firstWorkflowID workflow.WorkflowID, _ workflow.WorkflowID) (serverapi.WorkflowTaskListRequest, string, string, *scopeExpectation) {
-				if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, firstWorkflowID, true); err != nil {
-					t.Fatalf("LinkWorkflow first project: %v", err)
-				}
-				otherBinding, err := store.CreateProjectForWorkspace(ctx, t.TempDir(), "Other")
-				if err != nil {
-					t.Fatalf("CreateProjectForWorkspace: %v", err)
-				}
-				if _, err := workflowStore.LinkWorkflow(ctx, otherBinding.ProjectID, firstWorkflowID, true); err != nil {
-					t.Fatalf("LinkWorkflow second project: %v", err)
-				}
-				workflowID := string(firstWorkflowID)
-				missing := serverapi.WorkflowTaskListScopeDimensionProject
-				return serverapi.WorkflowTaskListRequest{WorkflowID: &workflowID}, "", "", &scopeExpectation{kind: serverapi.WorkflowTaskListScopeErrorKindAmbiguous, missingScope: &missing, projectIDs: map[string]bool{binding.ProjectID: true, otherBinding.ProjectID: true}, workflowIDs: map[string]bool{workflowID: true}}
-			},
-		},
-		{
-			name: "explicit pair is not linked",
-			setup: func(t *testing.T, ctx context.Context, _ *metadata.Store, workflowStore *workflowstore.Store, binding metadata.Binding, firstWorkflowID workflow.WorkflowID, secondWorkflowID workflow.WorkflowID) (serverapi.WorkflowTaskListRequest, string, string, *scopeExpectation) {
-				if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, firstWorkflowID, true); err != nil {
-					t.Fatalf("LinkWorkflow: %v", err)
-				}
-				projectID, workflowID := binding.ProjectID, string(secondWorkflowID)
-				return serverapi.WorkflowTaskListRequest{ProjectID: &projectID, WorkflowID: &workflowID}, "", "", &scopeExpectation{kind: serverapi.WorkflowTaskListScopeErrorKindNotLinked, projectIDs: map[string]bool{projectID: true}, workflowIDs: map[string]bool{workflowID: true}}
-			},
-		},
+		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
+		StatusModelVersion:          workflowTaskStatusModelVersion,
+		Fingerprint:                 "fingerprint",
+		Cursor:                      workflowTaskListCursor{TaskID: "task-1"},
+	}
+	neitherMode := valid
+	neitherMode.Scope.ProjectWide = nil
+	bothModes := valid
+	bothModes.Scope.Narrowed = &workflowTaskListNarrowedPageTokenInvariants{
+		WorkflowID:          tokenWorkflowID,
+		WorkflowVersion:     1,
+		ColumnStructureHash: "columns",
+	}
+	invalidCardinality := valid
+	invalidCardinality.MatchingWorkflowCardinality = serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone
+	missingWorkflowID := valid
+	missingWorkflowID.Scope.ProjectWide = nil
+	missingWorkflowID.Scope.Narrowed = &workflowTaskListNarrowedPageTokenInvariants{
+		WorkflowVersion:     1,
+		ColumnStructureHash: "columns",
+	}
+	missingWorkflowVersion := valid
+	missingWorkflowVersion.Scope.ProjectWide = nil
+	missingWorkflowVersion.Scope.Narrowed = &workflowTaskListNarrowedPageTokenInvariants{
+		WorkflowID:          tokenWorkflowID,
+		ColumnStructureHash: "columns",
+	}
+	missingColumnStructure := valid
+	missingColumnStructure.Scope.ProjectWide = nil
+	missingColumnStructure.Scope.Narrowed = &workflowTaskListNarrowedPageTokenInvariants{
+		WorkflowID:      tokenWorkflowID,
+		WorkflowVersion: 1,
+	}
+	paddedProjectID := valid
+	paddedProjectID.Scope.ProjectID = " project-1"
+	malformedWorkflowID := valid
+	malformedWorkflowID.Scope.ProjectWide = nil
+	malformedWorkflowID.Scope.Narrowed = &workflowTaskListNarrowedPageTokenInvariants{
+		WorkflowID:          "workflow-1",
+		WorkflowVersion:     1,
+		ColumnStructureHash: "columns",
+	}
+	for name, payload := range map[string]workflowTaskListPageTokenPayload{
+		"neither mode":             neitherMode,
+		"both modes":               bothModes,
+		"none cardinality":         invalidCardinality,
+		"missing workflow id":      missingWorkflowID,
+		"missing workflow version": missingWorkflowVersion,
+		"missing column structure": missingColumnStructure,
+		"padded project id":        paddedProjectID,
+		"malformed workflow id":    malformedWorkflowID,
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			ctx, store, workflowStore, binding, view := newWorkflowViewTestContextService(t)
-			firstWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-			secondWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-			request, wantProjectID, wantWorkflowID, scopeErrWant := testCase.setup(t, ctx, store, workflowStore, binding, firstWorkflowID, secondWorkflowID)
-			response, err := view.ListTasks(ctx, request, testsetup.QuestionsEnabled("coder"))
-			if scopeErrWant == nil {
-				if err != nil {
-					t.Fatalf("ListTasks: %v", err)
-				}
-				if response.ProjectID != wantProjectID || response.WorkflowID != wantWorkflowID {
-					t.Fatalf("resolved scope = project %q workflow %q, want %q/%q", response.ProjectID, response.WorkflowID, wantProjectID, wantWorkflowID)
-				}
-				return
-			}
-			var scopeErr *serverapi.WorkflowTaskListScopeError
-			if !errors.As(err, &scopeErr) {
-				t.Fatalf("ListTasks error = %T %v, want scope error", err, err)
-			}
-			if scopeErr.Kind != scopeErrWant.kind || !reflect.DeepEqual(scopeIDSet(scopeErr.ProjectIDs), scopeErrWant.projectIDs) || !reflect.DeepEqual(scopeIDSet(scopeErr.WorkflowIDs), scopeErrWant.workflowIDs) {
-				t.Fatalf("scope error = %+v, want %+v", scopeErr, scopeErrWant)
-			}
-			if scopeErrWant.missingScope == nil {
-				if scopeErr.MissingScope != nil {
-					t.Fatalf("scope error missing scope = %q, want nil", *scopeErr.MissingScope)
-				}
-			} else if scopeErr.MissingScope == nil || *scopeErr.MissingScope != *scopeErrWant.missingScope {
-				t.Fatalf("scope error missing scope = %+v, want %q", scopeErr.MissingScope, *scopeErrWant.missingScope)
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := parseWorkflowTaskListPageToken(workflowTaskListPageTokenForTest(t, payload)); !errors.Is(err, ErrInvalidPageToken) {
+				t.Fatalf("parse malformed token error = %v, want ErrInvalidPageToken", err)
 			}
 		})
+	}
+}
+
+func workflowTaskListPageTokenForTest(t *testing.T, payload workflowTaskListPageTokenPayload) string {
+	t.Helper()
+	token, err := workflowTaskListPageToken(payload)
+	if err != nil {
+		t.Fatalf("workflowTaskListPageToken: %v", err)
+	}
+	return token
+}
+
+func TestWorkflowTaskListRequestFingerprintCanonicalizesSetFilters(t *testing.T) {
+	sortSelectors := []serverapi.WorkflowTaskListSort{
+		{Field: serverapi.WorkflowTaskListSortFieldStatus, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+	}
+	first, err := workflowTaskListRequestFingerprint(serverapi.WorkflowTaskListRequest{
+		ColumnKeys:     []string{"done", "backlog", "done"},
+		StatusKinds:    []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindRunning, serverapi.WorkflowTaskStatusKindBacklog, serverapi.WorkflowTaskStatusKindRunning},
+		AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindQuestion, serverapi.WorkflowTaskAttentionKindApproval},
+	}, sortSelectors, workflowTaskListFingerprintScope{
+		Narrowed: &workflowTaskListNarrowedFingerprintInvariants{ColumnStructureHash: "columns"},
+	})
+	if err != nil {
+		t.Fatalf("first fingerprint: %v", err)
+	}
+	second, err := workflowTaskListRequestFingerprint(serverapi.WorkflowTaskListRequest{
+		ColumnKeys:     []string{"backlog", "done"},
+		StatusKinds:    []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog, serverapi.WorkflowTaskStatusKindRunning},
+		AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindApproval, serverapi.WorkflowTaskAttentionKindQuestion},
+	}, sortSelectors, workflowTaskListFingerprintScope{
+		Narrowed: &workflowTaskListNarrowedFingerprintInvariants{ColumnStructureHash: "columns"},
+	})
+	if err != nil {
+		t.Fatalf("second fingerprint: %v", err)
+	}
+	if first != second {
+		t.Fatalf("canonical fingerprints differ: %q != %q", first, second)
+	}
+}
+
+func TestWorkflowTaskListRequestFingerprintRequiresOneTypedScope(t *testing.T) {
+	request := serverapi.WorkflowTaskListRequest{}
+	sortSelectors := normalizeWorkflowTaskListSort(nil)
+	for name, scope := range map[string]workflowTaskListFingerprintScope{
+		"missing mode": {},
+		"both modes": {
+			ProjectWide: &workflowTaskListProjectWideFingerprintInvariants{},
+			Narrowed:    &workflowTaskListNarrowedFingerprintInvariants{ColumnStructureHash: "columns"},
+		},
+		"blank narrowed hash": {
+			Narrowed: &workflowTaskListNarrowedFingerprintInvariants{},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := workflowTaskListRequestFingerprint(request, sortSelectors, scope); err == nil {
+				t.Fatalf("workflowTaskListRequestFingerprint accepted %s", name)
+			}
+		})
+	}
+}
+
+func TestCanceledBoardTerminalNodeIDUsesTypedAbsence(t *testing.T) {
+	if got := canceledBoardTerminalNodeID(serverapi.WorkflowDefinition{}); got != nil {
+		t.Fatalf("canceledBoardTerminalNodeID without terminal = %v, want nil", got)
+	}
+	def := serverapi.WorkflowDefinition{Nodes: []serverapi.WorkflowNode{
+		{ID: "node-terminal", Key: "archive", Kind: string(workflow.NodeKindTerminal)},
+		{ID: "node-done", Key: "done", Kind: string(workflow.NodeKindTerminal)},
+	}}
+	got := canceledBoardTerminalNodeID(def)
+	if got == nil || *got != "node-done" {
+		t.Fatalf("canceledBoardTerminalNodeID = %v, want done terminal", got)
 	}
 }
 
@@ -517,21 +1139,34 @@ func TestTaskListInfersScopeFromContinuationToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTasks first page: %v", err)
 	}
-	if firstPage.NextPageToken == "" {
+	if firstPage.NextPageToken == nil {
 		t.Fatal("expected continuation token")
 	}
-	nextPage, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{PageToken: firstPage.NextPageToken, PageSize: 1}, testsetup.QuestionsEnabled("coder"))
+	nextPage, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{PageToken: *firstPage.NextPageToken, PageSize: 1}, testsetup.QuestionsEnabled("coder"))
 	if err != nil {
 		t.Fatalf("ListTasks token-only continuation: %v", err)
 	}
-	if nextPage.ProjectID != binding.ProjectID || nextPage.WorkflowID != string(workflowID) || len(nextPage.Tasks) != 1 || nextPage.Tasks[0].TaskID == firstPage.Tasks[0].TaskID {
+	if nextPage.Scope.ProjectID != binding.ProjectID || nextPage.Scope.WorkflowID == nil || *nextPage.Scope.WorkflowID != string(workflowID) || len(nextPage.Tasks) != 1 || nextPage.Tasks[0].TaskID == firstPage.Tasks[0].TaskID {
 		t.Fatalf("token-only continuation = %+v, want resolved second page", nextPage)
 	}
 	otherProjectID := "project-conflict"
-	_, err = view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &otherProjectID, PageToken: firstPage.NextPageToken, PageSize: 1}, testsetup.QuestionsEnabled("coder"))
+	_, err = view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &otherProjectID, PageToken: *firstPage.NextPageToken, PageSize: 1}, testsetup.QuestionsEnabled("coder"))
 	if !errors.Is(err, ErrInvalidPageToken) {
 		t.Fatalf("ListTasks conflicting token scope error = %v, want ErrInvalidPageToken", err)
 	}
+}
+
+func createTwoLinkedWorkflowViewWorkflows(t *testing.T, ctx context.Context, store *workflowstore.Store, projectID string) (workflow.WorkflowID, workflow.WorkflowID) {
+	t.Helper()
+	firstWorkflowID := createWorkflowViewValidWorkflow(t, ctx, store)
+	secondWorkflowID := createWorkflowViewValidWorkflow(t, ctx, store)
+	if _, err := store.LinkWorkflow(ctx, projectID, firstWorkflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow first: %v", err)
+	}
+	if _, err := store.LinkWorkflow(ctx, projectID, secondWorkflowID, false); err != nil {
+		t.Fatalf("LinkWorkflow second: %v", err)
+	}
+	return firstWorkflowID, secondWorkflowID
 }
 
 func scopeIDSet(values []string) map[string]bool {

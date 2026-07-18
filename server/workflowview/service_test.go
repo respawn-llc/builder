@@ -187,7 +187,7 @@ func TestWorkflowPickerAndAttentionIncludeScriptPathDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAttention: %v", err)
 	}
-	if len(attention.Items) != 1 || attention.Items[0].Kind != "validation_blocker" || attention.Items[0].WorkflowID != string(created.ID) {
+	if len(attention.Items) != 1 || attention.Items[0].Kind != "validation_blocker" || attention.Items[0].WorkflowID == nil || *attention.Items[0].WorkflowID != string(created.ID) {
 		t.Fatalf("attention items = %+v, want workflow validation blocker", attention.Items)
 	}
 }
@@ -265,7 +265,7 @@ func TestBoardNodeCardsProjectBoundedUnicodeMarkdownPreview(t *testing.T) {
 	for _, testCase := range cases {
 		if _, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
 			ProjectID:  binding.ProjectID,
-			WorkflowID: workflowID,
+			WorkflowID: workflowIDPointerForTest(workflowID),
 			Title:      testCase.title,
 			Body:       testCase.body,
 		}); err != nil {
@@ -334,7 +334,7 @@ func TestBoardNodeCardsDefaultPageSizeIs25(t *testing.T) {
 	for index := 0; index < 26; index++ {
 		if _, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
 			ProjectID:  binding.ProjectID,
-			WorkflowID: workflowID,
+			WorkflowID: workflowIDPointerForTest(workflowID),
 			Title:      "Task " + strconv.Itoa(index),
 			Body:       "Body",
 		}); err != nil {
@@ -930,11 +930,11 @@ func TestBoardSelectsWorkflowAndReturnsPickerAndGroups(t *testing.T) {
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, selected.ID, false); err != nil {
 		t.Fatalf("LinkWorkflow selected: %v", err)
 	}
-	defaultTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: defaultWorkflowID, Title: "Default task", Body: "Body"})
+	defaultTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowIDPointerForTest(defaultWorkflowID), Title: "Default task", Body: "Body"})
 	if err != nil {
 		t.Fatalf("CreateTask default: %v", err)
 	}
-	selectedTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: selected.ID, Title: "Selected task", Body: "Body"})
+	selectedTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowIDPointerForTest(selected.ID), Title: "Selected task", Body: "Body"})
 	if err != nil {
 		t.Fatalf("CreateTask selected: %v", err)
 	}
@@ -1032,7 +1032,7 @@ func TestTaskDetailPrefersActiveWorkflowLink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID, Title: "Historical", Body: "Body"})
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowIDPointerForTest(workflowID), Title: "Historical", Body: "Body"})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -1061,7 +1061,7 @@ func TestBoardColumnTaskCountsUseFullSelectedWorkflow(t *testing.T) {
 	}
 	taskIDs := []string{}
 	for _, title := range []string{"Task A", "Task B"} {
-		task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID, Title: title, Body: "Body"})
+		task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowIDPointerForTest(workflowID), Title: title, Body: "Body"})
 		if err != nil {
 			t.Fatalf("CreateTask %s: %v", title, err)
 		}
@@ -1122,7 +1122,7 @@ func TestBoardNodeCardsBidirectionalPaginationRoundTripsWithoutGaps(t *testing.T
 	for index := 0; index < 126; index++ {
 		task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
 			ProjectID:  binding.ProjectID,
-			WorkflowID: workflowID,
+			WorkflowID: workflowIDPointerForTest(workflowID),
 			Title:      "Paged task " + strconv.Itoa(index),
 			Body:       "Body",
 		})
@@ -1246,7 +1246,7 @@ func TestBoardNodeCardsArchiveCanceledTaskInDoneNode(t *testing.T) {
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID, Title: "Canceled backlog", Body: "Body"})
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowIDPointerForTest(workflowID), Title: "Canceled backlog", Body: "Body"})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -1288,7 +1288,7 @@ func TestBoardNodeCardsAllowRestartAfterDoneTaskResetToBacklog(t *testing.T) {
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID, Title: "Restart", Body: "Body"})
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowIDPointerForTest(workflowID), Title: "Restart", Body: "Body"})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -1330,7 +1330,7 @@ func TestBoardNodeCardsIgnoreInterruptedRunsFromCompletedPlacementsAfterResetToB
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID, Title: "Restart", Body: "Body"})
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowIDPointerForTest(workflowID), Title: "Restart", Body: "Body"})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -1393,7 +1393,7 @@ func TestBoardNodeCardsDoNotArchiveCanceledTaskInAlternateTerminalNode(t *testin
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
-	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID, Title: "Canceled backlog", Body: "Body"})
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowIDPointerForTest(workflowID), Title: "Canceled backlog", Body: "Body"})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -1416,14 +1416,15 @@ func TestBoardNodeCardsDoNotArchiveCanceledTaskInAlternateTerminalNode(t *testin
 	if len(page.Cards) != 0 {
 		t.Fatalf("archive node cards = %+v, want no fallback canceled tasks", page.Cards)
 	}
-	done, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &binding.ProjectID, ColumnKeys: []string{"done"}}, testsetup.QuestionsEnabled("coder"))
+	workflowIDString := string(workflowID)
+	done, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &binding.ProjectID, WorkflowID: &workflowIDString, ColumnKeys: []string{"done"}}, testsetup.QuestionsEnabled("coder"))
 	if err != nil {
 		t.Fatalf("ListTasks done: %v", err)
 	}
-	if len(done.Tasks) != 1 || done.Tasks[0].TaskID != string(task.ID) || !reflect.DeepEqual(done.Tasks[0].ColumnKeys, []string{"done"}) {
+	if len(done.Tasks) != 1 || done.Tasks[0].TaskID != string(task.ID) || done.Tasks[0].ColumnKeys == nil || !reflect.DeepEqual(*done.Tasks[0].ColumnKeys, []string{"done"}) {
 		t.Fatalf("done tasks = %+v, want canceled task only in done", done.Tasks)
 	}
-	archive, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &binding.ProjectID, ColumnKeys: []string{"archive"}}, testsetup.QuestionsEnabled("coder"))
+	archive, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &binding.ProjectID, WorkflowID: &workflowIDString, ColumnKeys: []string{"archive"}}, testsetup.QuestionsEnabled("coder"))
 	if err != nil || len(archive.Tasks) != 0 {
 		t.Fatalf("archive tasks = %+v/%v, want no canceled task", archive.Tasks, err)
 	}
@@ -1870,14 +1871,16 @@ func TestTaskDetailAndBoardPreserveFanoutStatusUnions(t *testing.T) {
 			t.Fatalf("board status = %+v, want detail status %+v", status, detail.Status)
 		}
 	}
+	workflowIDString := string(fixture.workflowID)
 	tasks, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
 		ProjectID:   &binding.ProjectID,
+		WorkflowID:  &workflowIDString,
 		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingQuestion},
 	}, testsetup.QuestionsEnabled("coder"))
 	if err != nil || len(tasks.Tasks) != 1 || tasks.Tasks[0].TaskID != string(fixture.task.ID) || !reflect.DeepEqual(tasks.Tasks[0].Status, detail.Status) {
 		t.Fatalf("fanout list status = %+v/%v, want exact detail status %+v", tasks.Tasks, err, detail.Status)
 	}
-	if !reflect.DeepEqual(tasks.Tasks[0].ColumnKeys, []string{"impl_a", "impl_b", "impl_c"}) {
+	if tasks.Tasks[0].ColumnKeys == nil || !reflect.DeepEqual(*tasks.Tasks[0].ColumnKeys, []string{"impl_a", "impl_b", "impl_c"}) {
 		t.Fatalf("fanout list column order = %+v", tasks.Tasks[0].ColumnKeys)
 	}
 }

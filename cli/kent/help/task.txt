@@ -1,5 +1,5 @@
 Usage of kent task:
-  kent task create --title <title> (--body <body>|--body-file <path>) [--workflow <workflow>] [--project <project>] [--source-url <url>] [--source-workspace <id-or-path>] [--json]
+  kent task create --title <title> (--body <body>|--body-file <path>) [--workflow <uuid>] [--project <project>] [--source-url <url>] [--source-workspace <id-or-path>] [--json]
   kent task edit <short-id-or-task-id> [--title <title>] [--body <body>|--body-file <path>] [--source-workspace <id-or-path>] [--project <project>] [--json]
   kent task start <short-id-or-task-id> [--project <project>] [--execution-target none|head|default-branch|ref:<revision>] [--json]
   kent task resume <short-id-or-task-id> [--project <project>]
@@ -24,6 +24,12 @@ Task references:
   Short IDs use the project selected by `--project`, which defaults to the
   project attached to the current workspace.
 
+Workflow selection:
+  Workflow selectors are bare canonical UUIDv4 values. Workflow names and
+  persisted `workflow-...` IDs are not accepted.
+  Task creation uses `--workflow` when supplied. Otherwise it uses the project
+  default, or the lone linked workflow when the project has no default.
+
 Selecting an execution target:
   Task start, approve, and move never prompt. If a workflow requires target
   selection, rerun the action with
@@ -37,11 +43,14 @@ If you are an agent, refer to the developer guidance you received for how to mar
 Subcommands `resume`, `approve`, `move`, `cancel`, `delete` are only available to humans. Do not try to circumvent this restriction, and give the user the commands they have to run instead.
 
 Listing tasks:
+  Task listing is always project-scoped. `--project` defaults to the project
+  attached to the current workspace. Without `--workflow`, the list spans all
+  workflows linked to that project; `--workflow <uuid>` narrows the result.
   `--status` filters primary typed task status; `--attention` filters current
   question, approval, or interruption attention; `--column` filters workflow
   node keys.
-  Supply either `--project` or `--workflow` only when its active link is unique,
-  or both to select an exact project/workflow link.
+  `--column` and `--sort column` require `--workflow` because column keys and
+  positions belong to one workflow.
   `--sort` accepts `created`, `updated`, `status`, `column`, `run_count`, or `title`
   followed by `:asc` or `:desc`.
   The default order is `status:asc,updated:desc`.

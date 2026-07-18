@@ -28,13 +28,19 @@ func TestTaskCommandsUseWorkflowAPI(t *testing.T) {
 	}
 	taskID := taskResp.Task.Summary.ID
 
-	taskListOut, _ := runRootCommandOK(t, "task", "list", "--project", binding.ProjectID)
-	if !strings.Contains(taskListOut, shortID+": Task.") || !strings.Contains(taskListOut, "Status: backlog") || !strings.Contains(taskListOut, "Columns: backlog") {
-		t.Fatalf("task list output = %q, want short id, typed status, and column", taskListOut)
-	}
 	taskListJSONOut, _ := runRootCommandOK(t, "task", "list", "--project", binding.ProjectID, "--json")
-	if !strings.Contains(taskListJSONOut, shortID) || !strings.Contains(taskListJSONOut, taskID) {
-		t.Fatalf("task list json output = %q, want ids", taskListJSONOut)
+	var taskList taskListOutput
+	if err := json.Unmarshal([]byte(taskListJSONOut), &taskList); err != nil {
+		t.Fatalf("task list JSON output = %q: %v", taskListJSONOut, err)
+	}
+	if taskList.ProjectID != binding.ProjectID ||
+		taskList.WorkflowID != nil ||
+		len(taskList.Tasks) != 1 ||
+		taskList.Tasks[0].TaskID != taskID ||
+		taskList.Tasks[0].ShortID != shortID ||
+		taskList.Tasks[0].Status.Kind != serverapi.WorkflowTaskStatusKindBacklog ||
+		taskList.Tasks[0].ColumnKeys != nil {
+		t.Fatalf("task list projection = %+v, want project-wide task without workflow-relative columns", taskList)
 	}
 
 	taskShowOut, _ := runRootCommandOK(t, "task", "show", "--project", binding.ProjectID, shortID)

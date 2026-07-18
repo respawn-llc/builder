@@ -42,17 +42,20 @@ func ValidationErrors(workflowID string, errs []workflow.ValidationError) []serv
 		if errorWorkflowID == "" {
 			errorWorkflowID = workflowID
 		}
-		out = append(out, serverapi.WorkflowValidationError{
+		projected := serverapi.WorkflowValidationError{
 			Code:              string(err.Code),
 			Message:           err.Message,
-			WorkflowID:        errorWorkflowID,
 			NodeID:            string(err.NodeID),
 			TransitionGroupID: string(err.TransitionGroupID),
 			EdgeID:            string(err.EdgeID),
 			Details:           validationErrorDetails(err),
 			RelatedIDs:        err.RelatedIDs,
 			BlocksContext:     err.BlocksContext,
-		})
+		}
+		if errorWorkflowID != "" {
+			projected.WorkflowID = &errorWorkflowID
+		}
+		out = append(out, projected)
 	}
 	return out
 }

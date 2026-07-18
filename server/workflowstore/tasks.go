@@ -14,11 +14,23 @@ import (
 
 type CreateTaskRequest struct {
 	ProjectID         string
-	WorkflowID        workflow.WorkflowID
+	WorkflowID        *workflow.WorkflowID
 	Title             string
 	Body              string
 	SourceURL         string
 	SourceWorkspaceID string
+}
+
+type preparedTaskCreate struct {
+	projectID         string
+	workflowID        *workflow.WorkflowID
+	title             string
+	body              string
+	sourceURL         string
+	sourceWorkspaceID string
+	taskID            string
+	placementID       string
+	nowUnixMs         int64
 }
 
 type UpdateTaskRequest struct {
@@ -119,20 +131,58 @@ type ManualMoveRequest struct {
 type ManualMoveResult = CompleteRunResult
 
 func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskRecord, error) {
-	title := strings.TrimSpace(req.Title)
-	body := strings.TrimSpace(req.Body)
-	if title == "" {
+	projectID := strings.TrimSpace(req.ProjectID)
+	if projectID == "" {
+		return TaskRecord{}, errors.New("project id is required")
+	}
+	var workflowID *workflow.WorkflowID
+	if req.WorkflowID != nil {
+		if strings.TrimSpace(string(*req.WorkflowID)) == "" {
+			return TaskRecord{}, errors.New("workflow id is required when provided")
+		}
+		value := *req.WorkflowID
+		workflowID = &value
+	}
+	prepared := preparedTaskCreate{
+		projectID:         projectID,
+		workflowID:        workflowID,
+		title:             strings.TrimSpace(req.Title),
+		body:              strings.TrimSpace(req.Body),
+		sourceURL:         strings.TrimSpace(req.SourceURL),
+		sourceWorkspaceID: strings.TrimSpace(req.SourceWorkspaceID),
+		taskID:            prefixedID("task"),
+		placementID:       prefixedID("placement"),
+		nowUnixMs:         s.now().UnixMilli(),
+	}
+	if prepared.title == "" {
 		return TaskRecord{}, errors.New("task title is required")
 	}
-	link, err := s.resolveTaskWorkflowLink(ctx, req.ProjectID, req.WorkflowID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return TaskRecord{}, taskCreateStoreError(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	task, err := createTaskWithQueries(ctx, q, prepared)
+	if err != nil {
+		return TaskRecord{}, taskCreateStoreError(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return TaskRecord{}, taskCreateStoreError(err)
+	}
+	return task, nil
+}
+
+func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared preparedTaskCreate) (TaskRecord, error) {
+	link, err := resolveTaskWorkflowLinkWithQueries(ctx, q, prepared.projectID, prepared.workflowID)
 	if err != nil {
 		return TaskRecord{}, err
 	}
-	sourceWorkspaceID, err := s.resolveTaskSourceWorkspace(ctx, req.ProjectID, req.SourceWorkspaceID)
+	sourceWorkspaceID, err := resolveTaskSourceWorkspaceWithQueries(ctx, q, prepared.projectID, prepared.sourceWorkspaceID)
 	if err != nil {
 		return TaskRecord{}, err
 	}
-	def, wf, err := s.GetDefinition(ctx, workflow.WorkflowID(link.WorkflowID))
+	def, wf, err := workflowDefinitionFromQueries(ctx, q, workflow.WorkflowID(link.WorkflowID))
 	if err != nil {
 		return TaskRecord{}, err
 	}
@@ -140,16 +190,7 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskReco
 	if err != nil {
 		return TaskRecord{}, err
 	}
-	now := s.now().UnixMilli()
-	taskID := prefixedID("task")
-	placementID := prefixedID("placement")
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return TaskRecord{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
-	allocated, err := q.AllocateProjectTaskSequence(ctx, sqlitegen.AllocateProjectTaskSequenceParams{ProjectID: req.ProjectID, UpdatedAtUnixMs: now})
+	allocated, err := q.AllocateProjectTaskSequence(ctx, sqlitegen.AllocateProjectTaskSequenceParams{ProjectID: prepared.projectID, UpdatedAtUnixMs: prepared.nowUnixMs})
 	if err != nil {
 		return TaskRecord{}, fmt.Errorf("allocate task sequence: %w", err)
 	}
@@ -159,16 +200,13 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskReco
 	if err != nil {
 		return TaskRecord{}, err
 	}
-	if err := q.InsertTask(ctx, sqlitegen.InsertTaskParams{ID: taskID, ProjectWorkflowLinkID: link.ID, WorkflowRevisionSeen: wf.Version, TaskSeq: seq, ShortID: shortID, Title: title, Body: body, SourceUrl: strings.TrimSpace(req.SourceURL), SourceWorkspaceID: sql.NullString{String: sourceWorkspaceID, Valid: sourceWorkspaceID != ""}, ManagedWorktreeID: sql.NullString{}, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, MetadataJson: metadataJSON}); err != nil {
+	if err := q.InsertTask(ctx, sqlitegen.InsertTaskParams{ID: prepared.taskID, ProjectWorkflowLinkID: link.ID, WorkflowRevisionSeen: wf.Version, TaskSeq: seq, ShortID: shortID, Title: prepared.title, Body: prepared.body, SourceUrl: prepared.sourceURL, SourceWorkspaceID: sql.NullString{String: sourceWorkspaceID, Valid: sourceWorkspaceID != ""}, ManagedWorktreeID: sql.NullString{}, CreatedAtUnixMs: prepared.nowUnixMs, UpdatedAtUnixMs: prepared.nowUnixMs, MetadataJson: metadataJSON}); err != nil {
 		return TaskRecord{}, fmt.Errorf("insert task: %w", err)
 	}
-	if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: placementID, TaskID: taskID, NodeID: nullableString(string(workflow.NodeIDOf(startNode))), State: "active", CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
+	if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: prepared.placementID, TaskID: prepared.taskID, NodeID: nullableString(string(workflow.NodeIDOf(startNode))), State: "active", CreatedAtUnixMs: prepared.nowUnixMs, UpdatedAtUnixMs: prepared.nowUnixMs}); err != nil {
 		return TaskRecord{}, fmt.Errorf("insert start placement: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return TaskRecord{}, err
-	}
-	return TaskRecord{ID: workflow.TaskID(taskID), ProjectID: req.ProjectID, WorkflowID: workflow.WorkflowID(link.WorkflowID), LinkID: link.ID, ShortID: shortID, Title: title, Body: body, SourceURL: strings.TrimSpace(req.SourceURL), SourceWorkspaceID: sourceWorkspaceID, Version: wf.Version}, nil
+	return TaskRecord{ID: workflow.TaskID(prepared.taskID), ProjectID: prepared.projectID, WorkflowID: workflow.WorkflowID(link.WorkflowID), LinkID: link.ID, ShortID: shortID, Title: prepared.title, Body: prepared.body, SourceURL: prepared.sourceURL, SourceWorkspaceID: sourceWorkspaceID, Version: wf.Version}, nil
 }
 
 func (s *Store) UpdateTask(ctx context.Context, req UpdateTaskRequest) (TaskRecord, error) {
@@ -306,39 +344,6 @@ func deleteTaskScopedChildren(ctx context.Context, q *sqlitegen.Queries, taskID 
 		return err
 	}
 	return nil
-}
-
-func (s *Store) resolveTaskSourceWorkspace(ctx context.Context, projectID string, workspaceID string) (string, error) {
-	trimmedProjectID := strings.TrimSpace(projectID)
-	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
-	if trimmedProjectID == "" {
-		return "", errors.New("project id is required")
-	}
-	if trimmedWorkspaceID != "" {
-		workspace, err := s.metadata.GetWorkspaceByID(ctx, trimmedWorkspaceID)
-		if err != nil {
-			return "", fmt.Errorf("source workspace %q: %w", trimmedWorkspaceID, err)
-		}
-		if strings.TrimSpace(workspace.ProjectID) != trimmedProjectID {
-			return "", fmt.Errorf("source workspace %q does not belong to project %q: %w", trimmedWorkspaceID, trimmedProjectID, ErrSourceWorkspaceNotInProject)
-		}
-		return trimmedWorkspaceID, nil
-	}
-	workspaces, err := s.metadata.ListProjectWorkspaces(ctx, trimmedProjectID)
-	if err != nil {
-		return "", err
-	}
-	for _, workspace := range workspaces {
-		if workspace.IsPrimary && strings.TrimSpace(workspace.WorkspaceID) != "" {
-			return strings.TrimSpace(workspace.WorkspaceID), nil
-		}
-	}
-	for _, workspace := range workspaces {
-		if strings.TrimSpace(workspace.WorkspaceID) != "" {
-			return strings.TrimSpace(workspace.WorkspaceID), nil
-		}
-	}
-	return "", fmt.Errorf("project %q has no source workspace", trimmedProjectID)
 }
 
 func resolveTaskSourceWorkspaceWithQueries(ctx context.Context, q *sqlitegen.Queries, projectID string, workspaceID string) (string, error) {

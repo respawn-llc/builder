@@ -182,59 +182,97 @@ func (s *Service) ListTasks(ctx context.Context, req serverapi.WorkflowTaskListR
 	if _, err := s.metadata.GetProjectOverview(ctx, projectID); err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
 	}
-	definitions, _, picker, err := s.workflowSelectionInputs(ctx, projectID, roleResolver)
+	var def serverapi.WorkflowDefinition
+	var columns []serverapi.WorkflowBoardColumn
+	if workflowID == nil {
+		if len(req.ColumnKeys) > 0 || workflowTaskListSortUsesColumn(req.Sort) {
+			errorProjectID := projectID
+			return serverapi.WorkflowTaskListResponse{}, &serverapi.WorkflowTaskListScopeError{
+				Reason:    serverapi.WorkflowTaskListScopeReasonWorkflowRequiredColumns,
+				ProjectID: &errorProjectID,
+			}
+		}
+	} else {
+		def, _, err = s.definition(ctx, *workflowID)
+		if err != nil {
+			return serverapi.WorkflowTaskListResponse{}, err
+		}
+		columns = boardColumns(def)
+		if err := validateWorkflowTaskListColumnKeys(req.ColumnKeys, columns); err != nil {
+			return serverapi.WorkflowTaskListResponse{}, err
+		}
+	}
+	sortSelectors := normalizeWorkflowTaskListSort(req.Sort)
+	fingerprintScope := workflowTaskListFingerprintScope{
+		ProjectWide: &workflowTaskListProjectWideFingerprintInvariants{},
+	}
+	var columnStructureHash *string
+	if workflowID != nil {
+		value, hashErr := workflowTaskListColumnStructureHash(def, columns)
+		if hashErr != nil {
+			return serverapi.WorkflowTaskListResponse{}, hashErr
+		}
+		columnStructureHash = &value
+		fingerprintScope = workflowTaskListFingerprintScope{
+			Narrowed: &workflowTaskListNarrowedFingerprintInvariants{ColumnStructureHash: value},
+		}
+	}
+	fingerprint, err := workflowTaskListRequestFingerprint(req, sortSelectors, fingerprintScope)
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
 	}
-	var selected serverapi.WorkflowPickerItem
-	for _, candidate := range picker {
-		if candidate.WorkflowID == workflowID {
-			selected = candidate
-			break
-		}
-	}
-	if selected.WorkflowID == "" {
-		return serverapi.WorkflowTaskListResponse{}, serverapi.WorkflowRequestValidationError{
-			Code:    serverapi.WorkflowRequestErrorInvalidValue,
-			Field:   "workflow_id",
-			Message: fmt.Sprintf("unknown workflow %q for project %s", workflowID, projectID),
-		}
-	}
-	def := definitions[selected.WorkflowID]
-	columns := boardColumns(def)
-	if err := validateWorkflowTaskListColumnKeys(req.ColumnKeys, columns); err != nil {
-		return serverapi.WorkflowTaskListResponse{}, err
-	}
-	sortSelectors := normalizeWorkflowTaskListSort(req.Sort)
-	columnStructureHash := workflowTaskListColumnStructureHash(def, columns)
-	fingerprint := workflowTaskListRequestFingerprint(req, sortSelectors, columnStructureHash)
 	cursor := workflowTaskListCursor{}
+	matchingWorkflowCardinality := serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone
 	if hasPageToken {
-		if pageToken.ProjectID != projectID ||
-			pageToken.WorkflowID != selected.WorkflowID ||
-			pageToken.WorkflowVersion != def.Workflow.Version ||
-			pageToken.ColumnStructureHash != columnStructureHash ||
+		if pageToken.Scope.ProjectID != projectID ||
 			pageToken.StatusModelVersion != workflowTaskStatusModelVersion ||
 			pageToken.Fingerprint != fingerprint {
 			return serverapi.WorkflowTaskListResponse{}, ErrInvalidPageToken
 		}
+		if workflowID == nil {
+			if pageToken.Scope.ProjectWide == nil {
+				return serverapi.WorkflowTaskListResponse{}, ErrInvalidPageToken
+			}
+		} else {
+			narrowed := pageToken.Scope.Narrowed
+			if narrowed == nil ||
+				narrowed.WorkflowID != *workflowID ||
+				narrowed.WorkflowVersion != def.Workflow.Version ||
+				columnStructureHash == nil ||
+				narrowed.ColumnStructureHash != *columnStructureHash {
+				return serverapi.WorkflowTaskListResponse{}, ErrInvalidPageToken
+			}
+		}
 		cursor = pageToken.Cursor
+		matchingWorkflowCardinality = pageToken.MatchingWorkflowCardinality
+	}
+	var narrowedQuery *workflowTaskListNarrowedQueryFacts
+	if workflowID != nil {
+		narrowedQuery = &workflowTaskListNarrowedQueryFacts{
+			workflowID:             *workflowID,
+			canceledTerminalNodeID: canceledBoardTerminalNodeID(def),
+			columns:                columns,
+			columnKeys:             req.ColumnKeys,
+		}
 	}
 	rows, err := s.listWorkflowTaskListRows(ctx, workflowTaskListQueryRequest{
-		projectID:              projectID,
-		workflowID:             selected.WorkflowID,
-		canceledTerminalNodeID: canceledBoardTerminalNodeID(def),
-		columns:                columns,
-		columnKeys:             req.ColumnKeys,
-		statusKinds:            req.StatusKinds,
-		attentionKinds:         req.AttentionKinds,
-		sortSelectors:          sortSelectors,
-		cursor:                 cursor,
-		cursorSet:              hasPageToken,
-		limit:                  pageSize + 1,
+		projectID:      projectID,
+		narrowed:       narrowedQuery,
+		statusKinds:    req.StatusKinds,
+		attentionKinds: req.AttentionKinds,
+		sortSelectors:  sortSelectors,
+		cursor:         cursor,
+		cursorSet:      hasPageToken,
+		limit:          pageSize + 1,
 	})
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
+	}
+	if !hasPageToken {
+		matchingWorkflowCardinality, err = workflowTaskListMatchingWorkflowCardinality(rows)
+		if err != nil {
+			return serverapi.WorkflowTaskListResponse{}, err
+		}
 	}
 	pageItems := rows
 	hasNext := len(pageItems) > pageSize
@@ -243,89 +281,90 @@ func (s *Service) ListTasks(ctx context.Context, req serverapi.WorkflowTaskListR
 	}
 	responseItems := make([]serverapi.WorkflowTaskListItem, 0, len(pageItems))
 	for _, item := range pageItems {
-		responseItems = append(responseItems, item.item)
+		responseItem := item.item
+		if matchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple {
+			responseItem.WorkflowName = nil
+		}
+		responseItems = append(responseItems, responseItem)
 	}
-	nextPageToken := ""
+	var nextPageToken *string
 	if hasNext && len(pageItems) > 0 {
-		nextPageToken = workflowTaskListPageToken(workflowTaskListPageTokenPayload{
-			Version:             workflowTaskListPageTokenVersion,
-			ProjectID:           projectID,
-			WorkflowID:          selected.WorkflowID,
-			WorkflowVersion:     def.Workflow.Version,
-			ColumnStructureHash: columnStructureHash,
-			StatusModelVersion:  workflowTaskStatusModelVersion,
-			Fingerprint:         fingerprint,
-			Cursor:              workflowTaskListCursorFromRow(pageItems[len(pageItems)-1]),
+		tokenScope := workflowTaskListPageTokenScope{ProjectID: projectID}
+		if workflowID == nil {
+			tokenScope.ProjectWide = &workflowTaskListProjectWidePageTokenInvariants{}
+		} else {
+			tokenScope.Narrowed = &workflowTaskListNarrowedPageTokenInvariants{
+				WorkflowID:          *workflowID,
+				WorkflowVersion:     def.Workflow.Version,
+				ColumnStructureHash: *columnStructureHash,
+			}
+		}
+		encodedToken, encodeErr := workflowTaskListPageToken(workflowTaskListPageTokenPayload{
+			Version:                     workflowTaskListPageTokenVersion,
+			Scope:                       tokenScope,
+			MatchingWorkflowCardinality: matchingWorkflowCardinality,
+			StatusModelVersion:          workflowTaskStatusModelVersion,
+			Fingerprint:                 fingerprint,
+			Cursor:                      workflowTaskListCursorFromRow(pageItems[len(pageItems)-1]),
 		})
+		if encodeErr != nil {
+			return serverapi.WorkflowTaskListResponse{}, encodeErr
+		}
+		nextPageToken = &encodedToken
 	}
-	selectedCopy := selected
 	return serverapi.WorkflowTaskListResponse{
-		ProjectID:         projectID,
-		WorkflowID:        selected.WorkflowID,
-		SelectedWorkflow:  &selectedCopy,
-		NextPageToken:     nextPageToken,
-		GeneratedAtUnixMs: time.Now().UTC().UnixMilli(),
-		Tasks:             responseItems,
+		Scope: serverapi.WorkflowTaskListScope{
+			ProjectID:  projectID,
+			WorkflowID: workflowID,
+		},
+		MatchingWorkflowCardinality: matchingWorkflowCardinality,
+		NextPageToken:               nextPageToken,
+		GeneratedAtUnixMs:           time.Now().UTC().UnixMilli(),
+		Tasks:                       responseItems,
 	}, nil
 }
 
-func (s *Service) resolveWorkflowTaskListScope(ctx context.Context, projectIDValue *string, workflowIDValue *string, token *workflowTaskListPageTokenPayload) (string, string, error) {
+func (s *Service) resolveWorkflowTaskListScope(ctx context.Context, projectIDValue *string, workflowIDValue *string, token *workflowTaskListPageTokenPayload) (string, *string, error) {
 	if token != nil {
-		if projectIDValue != nil && *projectIDValue != token.ProjectID {
-			return "", "", ErrInvalidPageToken
+		if projectIDValue != nil && *projectIDValue != token.Scope.ProjectID {
+			return "", nil, ErrInvalidPageToken
 		}
-		if workflowIDValue != nil && *workflowIDValue != token.WorkflowID {
-			return "", "", ErrInvalidPageToken
+		var tokenWorkflowID *string
+		if token.Scope.Narrowed != nil {
+			tokenWorkflowID = &token.Scope.Narrowed.WorkflowID
 		}
-		projectIDValue = &token.ProjectID
-		workflowIDValue = &token.WorkflowID
+		if workflowIDValue != nil {
+			if tokenWorkflowID == nil || *workflowIDValue != *tokenWorkflowID {
+				return "", nil, ErrInvalidPageToken
+			}
+		}
+		projectIDValue = &token.Scope.ProjectID
+		workflowIDValue = tokenWorkflowID
 	}
 	if projectIDValue != nil && workflowIDValue != nil {
 		if _, err := s.queries.GetActiveProjectWorkflowLinkByWorkflow(ctx, sqlitegen.GetActiveProjectWorkflowLinkByWorkflowParams{ProjectID: *projectIDValue, WorkflowID: *workflowIDValue}); err == nil {
-			return *projectIDValue, *workflowIDValue, nil
+			workflowID := *workflowIDValue
+			return *projectIDValue, &workflowID, nil
 		} else if errors.Is(err, sql.ErrNoRows) {
-			return "", "", &serverapi.WorkflowTaskListScopeError{Kind: serverapi.WorkflowTaskListScopeErrorKindNotLinked, ProjectIDs: []string{*projectIDValue}, WorkflowIDs: []string{*workflowIDValue}}
+			errorProjectID := *projectIDValue
+			errorWorkflowID := *workflowIDValue
+			return "", nil, &serverapi.WorkflowTaskListScopeError{Reason: serverapi.WorkflowTaskListScopeReasonWorkflowNotLinked, ProjectID: &errorProjectID, WorkflowID: &errorWorkflowID}
 		} else {
-			return "", "", err
+			return "", nil, err
 		}
 	}
 	if projectIDValue != nil {
-		links, err := s.queries.ListProjectWorkflowLinks(ctx, *projectIDValue)
+		linkCount, err := s.queries.CountActiveProjectWorkflowLinks(ctx, *projectIDValue)
 		if err != nil {
-			return "", "", err
+			return "", nil, err
 		}
-		if len(links) == 1 {
-			return *projectIDValue, links[0].WorkflowID, nil
+		if linkCount == 0 {
+			errorProjectID := *projectIDValue
+			return "", nil, &serverapi.WorkflowTaskListScopeError{Reason: serverapi.WorkflowTaskListScopeReasonNoLinkedWorkflows, ProjectID: &errorProjectID}
 		}
-		candidates := make([]string, 0, len(links))
-		for _, link := range links {
-			candidates = append(candidates, link.WorkflowID)
-		}
-		if len(candidates) == 0 {
-			return "", "", &serverapi.WorkflowTaskListScopeError{Kind: serverapi.WorkflowTaskListScopeErrorKindNotLinked, ProjectIDs: []string{*projectIDValue}}
-		}
-		missing := serverapi.WorkflowTaskListScopeDimensionWorkflow
-		return "", "", &serverapi.WorkflowTaskListScopeError{Kind: serverapi.WorkflowTaskListScopeErrorKindAmbiguous, MissingScope: &missing, ProjectIDs: []string{*projectIDValue}, WorkflowIDs: candidates}
+		return *projectIDValue, nil, nil
 	}
-	if workflowIDValue != nil {
-		links, err := s.queries.ListWorkflowProjectLinks(ctx, *workflowIDValue)
-		if err != nil {
-			return "", "", err
-		}
-		if len(links) == 1 {
-			return links[0].ProjectID, *workflowIDValue, nil
-		}
-		candidates := make([]string, 0, len(links))
-		for _, link := range links {
-			candidates = append(candidates, link.ProjectID)
-		}
-		if len(candidates) == 0 {
-			return "", "", &serverapi.WorkflowTaskListScopeError{Kind: serverapi.WorkflowTaskListScopeErrorKindNotLinked, WorkflowIDs: []string{*workflowIDValue}}
-		}
-		missing := serverapi.WorkflowTaskListScopeDimensionProject
-		return "", "", &serverapi.WorkflowTaskListScopeError{Kind: serverapi.WorkflowTaskListScopeErrorKindAmbiguous, MissingScope: &missing, ProjectIDs: candidates, WorkflowIDs: []string{*workflowIDValue}}
-	}
-	return "", "", &serverapi.WorkflowTaskListScopeError{Kind: serverapi.WorkflowTaskListScopeErrorKindNotLinked}
+	return "", nil, &serverapi.WorkflowTaskListScopeError{Reason: serverapi.WorkflowTaskListScopeReasonNoLinkedWorkflows}
 }
 
 func validateWorkflowTaskListColumnKeys(columnKeys []string, columns []serverapi.WorkflowBoardColumn) error {
@@ -444,7 +483,7 @@ func (s *Service) ListBoardNodeCards(ctx context.Context, req serverapi.Workflow
 		CursorUpdatedAtUnixMs:  cursorUpdatedAtUnixMs,
 		CursorTaskID:           cursorTaskID,
 		NodeID:                 sql.NullString{String: nodeID, Valid: true},
-		CanceledTerminalNodeID: canceledBoardTerminalNodeID(def),
+		CanceledTerminalNodeID: nullableWorkflowViewString(canceledBoardTerminalNodeID(def)),
 		LimitRows:              int64(pageSize + 1),
 	})
 	if err != nil {
@@ -1062,9 +1101,10 @@ func (s *Service) attentionItemCandidates(ctx context.Context, projectID string,
 }
 
 func (s *Service) attentionItemFromCandidate(ctx context.Context, row attentionCandidateRow, roleResolver workflow.RoleResolver, questions *pendingQuestionResolver) (serverapi.WorkflowAttentionItem, bool, error) {
+	workflowID := row.workflowID
 	switch row.kind {
 	case "approval":
-		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: "approval", ProjectID: row.projectID, WorkflowID: row.workflowID, TaskID: row.taskID, TaskShortID: row.shortID, TaskTitle: row.title, TaskTransitionID: row.taskTransitionID, Message: "Approval required", OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
+		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: "approval", ProjectID: row.projectID, WorkflowID: &workflowID, TaskID: row.taskID, TaskShortID: row.shortID, TaskTitle: row.title, TaskTransitionID: row.taskTransitionID, Message: "Approval required", OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
 	case "question":
 		question, err := questions.Question(ctx, row.sessionID, row.askID)
 		if err != nil {
@@ -1072,7 +1112,7 @@ func (s *Service) attentionItemFromCandidate(ctx context.Context, row attentionC
 		}
 		return workflowQuestionAttentionItem(row.id, row.projectID, row.workflowID, row.taskID, row.shortID, row.title, row.runID, row.sessionID, row.askID, question, row.occurredAtUnixMs), true, nil
 	case attentionKindInterruptedRun:
-		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: attentionKindInterruptedRun, ProjectID: row.projectID, WorkflowID: row.workflowID, TaskID: row.taskID, TaskShortID: row.shortID, TaskTitle: row.title, RunID: row.runID, SessionID: row.sessionID, Message: interruptedRunMessage(row.interruptionReason, row.interruptionDetailJSON), DetailJSON: row.interruptionDetailJSON, OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
+		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: attentionKindInterruptedRun, ProjectID: row.projectID, WorkflowID: &workflowID, TaskID: row.taskID, TaskShortID: row.shortID, TaskTitle: row.title, RunID: row.runID, SessionID: row.sessionID, Message: interruptedRunMessage(row.interruptionReason, row.interruptionDetailJSON), DetailJSON: row.interruptionDetailJSON, OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
 	case "validation_blocker":
 		def, _, err := s.definition(ctx, row.workflowID)
 		if err != nil {
@@ -1082,7 +1122,7 @@ func (s *Service) attentionItemFromCandidate(ctx context.Context, row attentionC
 		if !validation.HasBlockingErrors() {
 			return serverapi.WorkflowAttentionItem{}, false, nil
 		}
-		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: "validation_blocker", ProjectID: row.projectID, WorkflowID: row.workflowID, Message: fmt.Sprintf("Workflow %q is invalid for task start", def.Workflow.Name), OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
+		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: "validation_blocker", ProjectID: row.projectID, WorkflowID: &workflowID, Message: fmt.Sprintf("Workflow %q is invalid for task start", def.Workflow.Name), OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
 	default:
 		return serverapi.WorkflowAttentionItem{}, false, fmt.Errorf("unknown attention item kind %q", row.kind)
 	}
@@ -1358,7 +1398,8 @@ func (s *Service) activityItemsFromRows(task sqlitegen.TaskRecord, rows []taskAc
 				item.Summary = "Run completed"
 			case "run_interrupted":
 				item.Summary = interruptedRunMessage(metadata.OptionalString(run.InterruptionReason), run.InterruptionDetailJson)
-				attention := serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + run.ID, Kind: attentionKindInterruptedRun, ProjectID: task.ProjectID, WorkflowID: task.WorkflowID, TaskID: task.ID, TaskShortID: task.ShortID, TaskTitle: task.Title, RunID: run.ID, SessionID: run.SessionID.String, Message: item.Summary, DetailJSON: run.InterruptionDetailJson, OccurredAtUnixMs: run.InterruptedAtUnixMs.Int64}
+				workflowID := task.WorkflowID
+				attention := serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + run.ID, Kind: attentionKindInterruptedRun, ProjectID: task.ProjectID, WorkflowID: &workflowID, TaskID: task.ID, TaskShortID: task.ShortID, TaskTitle: task.Title, RunID: run.ID, SessionID: run.SessionID.String, Message: item.Summary, DetailJSON: run.InterruptionDetailJson, OccurredAtUnixMs: run.InterruptedAtUnixMs.Int64}
 				item.Attention = &attention
 			}
 		case "task_canceled":
@@ -1651,7 +1692,8 @@ func (s *Service) approvalAttentionItems(ctx context.Context, projectID string, 
 	}
 	items := make([]serverapi.WorkflowAttentionItem, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, serverapi.WorkflowAttentionItem{ID: "approval:" + row.TaskTransitionID, Kind: "approval", ProjectID: row.ProjectID, WorkflowID: row.WorkflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, TaskTransitionID: row.TaskTransitionID, Message: "Approval required", OccurredAtUnixMs: row.CreatedAtUnixMs})
+		workflowID := row.WorkflowID
+		items = append(items, serverapi.WorkflowAttentionItem{ID: "approval:" + row.TaskTransitionID, Kind: "approval", ProjectID: row.ProjectID, WorkflowID: &workflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, TaskTransitionID: row.TaskTransitionID, Message: "Approval required", OccurredAtUnixMs: row.CreatedAtUnixMs})
 	}
 	return items, nil
 }
@@ -1689,7 +1731,8 @@ func requiredWaitingAskID(value sql.NullString, runID string) (string, error) {
 }
 
 func workflowQuestionAttentionItem(id string, projectID string, workflowID string, taskID string, shortID string, title string, runID string, sessionID string, askID string, question pendingQuestion, occurredAtUnixMs int64) serverapi.WorkflowAttentionItem {
-	return serverapi.WorkflowAttentionItem{ID: id, Kind: "question", ProjectID: projectID, WorkflowID: workflowID, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, RunID: runID, SessionID: sessionID, AskID: askID, Message: question.message, Suggestions: question.suggestions, RecommendedOptionIndex: question.recommendedOptionIndex, Question: question.prompt, OccurredAtUnixMs: occurredAtUnixMs}
+	workflowIDValue := workflowID
+	return serverapi.WorkflowAttentionItem{ID: id, Kind: "question", ProjectID: projectID, WorkflowID: &workflowIDValue, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, RunID: runID, SessionID: sessionID, AskID: askID, Message: question.message, Suggestions: question.suggestions, RecommendedOptionIndex: question.recommendedOptionIndex, Question: question.prompt, OccurredAtUnixMs: occurredAtUnixMs}
 }
 
 const pendingQuestionFallbackMessage = "Question pending; open the task to answer."
@@ -1825,7 +1868,8 @@ func (s *Service) interruptedRunAttentionItems(ctx context.Context, projectID st
 	}
 	items := make([]serverapi.WorkflowAttentionItem, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + row.RunID, Kind: attentionKindInterruptedRun, ProjectID: row.ProjectID, WorkflowID: row.WorkflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, RunID: row.RunID, SessionID: row.SessionID, Message: interruptedRunMessage(metadata.OptionalString(row.InterruptionReason), row.InterruptionDetailJson), DetailJSON: row.InterruptionDetailJson, OccurredAtUnixMs: row.InterruptedAtUnixMs.Int64})
+		workflowID := row.WorkflowID
+		items = append(items, serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + row.RunID, Kind: attentionKindInterruptedRun, ProjectID: row.ProjectID, WorkflowID: &workflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, RunID: row.RunID, SessionID: row.SessionID, Message: interruptedRunMessage(metadata.OptionalString(row.InterruptionReason), row.InterruptionDetailJson), DetailJSON: row.InterruptionDetailJson, OccurredAtUnixMs: row.InterruptedAtUnixMs.Int64})
 	}
 	return items, nil
 }
@@ -1890,7 +1934,8 @@ func (s *Service) validationAttentionItems(ctx context.Context, projectID string
 		if !validation.HasBlockingErrors() {
 			continue
 		}
-		items = append(items, serverapi.WorkflowAttentionItem{ID: "validation_blocker:" + link.projectID + ":" + link.workflowID, Kind: "validation_blocker", ProjectID: link.projectID, WorkflowID: link.workflowID, Message: fmt.Sprintf("Workflow %q is invalid for task start", def.Workflow.Name), OccurredAtUnixMs: link.occurredAt})
+		workflowID := link.workflowID
+		items = append(items, serverapi.WorkflowAttentionItem{ID: "validation_blocker:" + link.projectID + ":" + link.workflowID, Kind: "validation_blocker", ProjectID: link.projectID, WorkflowID: &workflowID, Message: fmt.Sprintf("Workflow %q is invalid for task start", def.Workflow.Name), OccurredAtUnixMs: link.occurredAt})
 	}
 	return items, nil
 }
@@ -2336,11 +2381,11 @@ func workflowDerivedEdgeWiringByID(derived serverapi.WorkflowDerivedWiring) map[
 	return byID
 }
 
-func (s *Service) applyBoardColumnTaskCounts(ctx context.Context, columns []serverapi.WorkflowBoardColumn, projectID string, workflowID string, canceledTerminalNodeID string) error {
+func (s *Service) applyBoardColumnTaskCounts(ctx context.Context, columns []serverapi.WorkflowBoardColumn, projectID string, workflowID string, canceledTerminalNodeID *string) error {
 	rows, err := s.queries.ListBoardColumnTaskCounts(ctx, sqlitegen.ListBoardColumnTaskCountsParams{
 		ProjectID:              projectID,
 		WorkflowID:             workflowID,
-		CanceledTerminalNodeID: canceledTerminalNodeID,
+		CanceledTerminalNodeID: nullableWorkflowViewString(canceledTerminalNodeID),
 	})
 	if err != nil {
 		return err
@@ -2359,6 +2404,13 @@ func (s *Service) applyBoardColumnTaskCounts(ctx context.Context, columns []serv
 		}
 	}
 	return nil
+}
+
+func nullableWorkflowViewString(value *string) sql.NullString {
+	if value == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: *value, Valid: true}
 }
 
 func effectiveBoardPlacements(placements []sqlitegen.TaskNodePlacementRecord, nodeKinds map[string]workflow.NodeKind) []sqlitegen.TaskNodePlacementRecord {
@@ -2388,7 +2440,7 @@ func effectiveBoardPlacementsForTask(task sqlitegen.TaskRecord, placements []sql
 		return active
 	}
 	terminalNodeID := canceledBoardTerminalNodeID(def)
-	if terminalNodeID == "" {
+	if terminalNodeID == nil {
 		return active
 	}
 	terminalPlacements := make([]sqlitegen.TaskNodePlacementRecord, 0, len(active))
@@ -2404,24 +2456,26 @@ func effectiveBoardPlacementsForTask(task sqlitegen.TaskRecord, placements []sql
 	return []sqlitegen.TaskNodePlacementRecord{{
 		ID:              "",
 		TaskID:          task.ID,
-		NodeID:          sql.NullString{String: terminalNodeID, Valid: true},
+		NodeID:          sql.NullString{String: *terminalNodeID, Valid: true},
 		State:           "active",
 		CreatedAtUnixMs: task.UpdatedAtUnixMs,
 		UpdatedAtUnixMs: task.UpdatedAtUnixMs,
 	}}
 }
 
-func canceledBoardTerminalNodeID(def serverapi.WorkflowDefinition) string {
-	fallback := ""
+func canceledBoardTerminalNodeID(def serverapi.WorkflowDefinition) *string {
+	var fallback *string
 	for _, node := range def.Nodes {
 		if workflow.NodeKind(node.Kind) != workflow.NodeKindTerminal {
 			continue
 		}
-		if fallback == "" {
-			fallback = node.ID
+		if fallback == nil {
+			value := node.ID
+			fallback = &value
 		}
 		if node.Key == "done" {
-			return node.ID
+			value := node.ID
+			return &value
 		}
 	}
 	return fallback

@@ -28,7 +28,7 @@ func Int(value int) *int {
 	return &value
 }
 
-// EqualOptional compares optional values by presence and value.
+// EqualOptional compares optional comparable values by presence and value.
 func EqualOptional[T comparable](left *T, right *T) bool {
 	if left == nil || right == nil {
 		return left == right

@@ -25,20 +25,23 @@ func TestPointerCopiesOptionalValue(t *testing.T) {
 }
 
 func TestEqualOptionalComparesPresenceAndValue(t *testing.T) {
-	one := 1
-	anotherOne := 1
-	two := 2
-	if !EqualOptional[int](nil, nil) {
-		t.Fatal("two absent values are not equal")
-	}
-	if EqualOptional(nil, &one) || EqualOptional(&one, nil) {
-		t.Fatal("present and absent values are equal")
-	}
-	if !EqualOptional(&one, &anotherOne) {
-		t.Fatal("distinct pointers with equal values are not equal")
-	}
-	if EqualOptional(&one, &two) {
-		t.Fatal("different values are equal")
+	one, anotherOne, two := 1, 1, 2
+	for name, testCase := range map[string]struct {
+		left  *int
+		right *int
+		want  bool
+	}{
+		"both absent":       {want: true},
+		"left absent":       {right: &one},
+		"right absent":      {left: &one},
+		"equal present":     {left: &one, right: &anotherOne, want: true},
+		"different present": {left: &one, right: &two},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := EqualOptional(testCase.left, testCase.right); got != testCase.want {
+				t.Fatalf("EqualOptional() = %t, want %t", got, testCase.want)
+			}
+		})
 	}
 }
 

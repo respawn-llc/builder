@@ -13,6 +13,7 @@ import (
 
 	"core/server/skillcatalog"
 	brand "core/shared/config"
+	"core/shared/textutil"
 )
 
 type ProviderID string
@@ -561,22 +562,11 @@ func itemKindPointer(value ItemKind) *ItemKind {
 }
 
 func choiceRefEqual(left, right ChoiceRef) bool {
-	return left.Mode == right.Mode && ptrEqual(left.ProviderID, right.ProviderID) && ptrStringEqual(left.SourceRoot, right.SourceRoot)
+	return left.Mode == right.Mode && textutil.EqualOptional(left.ProviderID, right.ProviderID) && textutil.EqualOptional(left.SourceRoot, right.SourceRoot)
 }
 
 func choiceItemEqual(left, right ItemRef) bool {
-	return left.ItemKind == right.ItemKind && left.SourceKind == right.SourceKind && ptrEqual(left.ProviderID, right.ProviderID) && ptrStringEqual(left.SourcePath, right.SourcePath)
-}
-
-func ptrEqual[T comparable](left, right *T) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	return *left == *right
-}
-
-func ptrStringEqual(left, right *string) bool {
-	return ptrEqual(left, right)
+	return left.ItemKind == right.ItemKind && left.SourceKind == right.SourceKind && textutil.EqualOptional(left.ProviderID, right.ProviderID) && textutil.EqualOptional(left.SourcePath, right.SourcePath)
 }
 
 func providerRank(provider ProviderID) int {

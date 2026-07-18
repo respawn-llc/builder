@@ -13,6 +13,35 @@ func TestParseCanonicalUUIDv4RejectsNonRFCVariant(t *testing.T) {
 	}
 }
 
+func TestParseCanonicalPrefixedUUIDv4RequiresExactPrefixAndCanonicalValue(t *testing.T) {
+	const canonical = "7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+	parsed, err := ParseCanonicalPrefixedUUIDv4("workflow-"+canonical, "workflow-", "workflow id")
+	if err != nil {
+		t.Fatalf("ParseCanonicalPrefixedUUIDv4 valid id: %v", err)
+	}
+	if parsed.String() != canonical {
+		t.Fatalf("parsed id = %q, want %q", parsed, canonical)
+	}
+	for _, raw := range []string{
+		canonical,
+		"workflowx" + canonical,
+		"workflow--" + canonical,
+		"workflow-" + canonical + "-extra",
+		"workflow-7E8D24D2-8A98-4DCF-A197-6214DB1CB3C0",
+	} {
+		if _, err := ParseCanonicalPrefixedUUIDv4(raw, "workflow-", "workflow id"); err == nil {
+			t.Fatalf("ParseCanonicalPrefixedUUIDv4(%q) succeeded", raw)
+		}
+	}
+}
+
+func TestParseCanonicalPrefixedUUIDv4ComparesEveryPrefixByte(t *testing.T) {
+	const canonical = "7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+	if _, err := ParseCanonicalPrefixedUUIDv4("ê-"+canonical, "é-", "workflow id"); err == nil {
+		t.Fatal("ParseCanonicalPrefixedUUIDv4 accepted a changed UTF-8 continuation byte")
+	}
+}
+
 func TestParseSessionIDAcceptsCanonicalUUIDv4AndSupportedLegacyIDs(t *testing.T) {
 	for _, raw := range []string{
 		"7fd3bc93-f11c-4814-87d0-b60f10e6dd5c",
