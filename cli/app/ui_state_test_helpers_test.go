@@ -20,10 +20,39 @@ func testSetActiveAsk(m *uiModel, event *askEvent) {
 	m.ask.currentToken = nextNonZeroToken(m.ask.currentToken)
 	m.ask.current = event
 	if event != nil {
+		testInstallCurrentAskProjection(m)
 		m.setInputMode(uiInputModeAsk)
 		return
 	}
+	m.ask.activeProjection = nil
 	m.restorePrimaryInputMode()
+}
+
+func testInstallCurrentAskProjection(m *uiModel) {
+	if m == nil || m.ask.current == nil {
+		return
+	}
+	identity, ok := m.currentQuestionRenderIdentity()
+	if !ok {
+		identity = questionRenderIdentity{
+			questionSource:   m.ask.current.prompt.Question,
+			terminalWidth:    80,
+			theme:            m.theme,
+			linkPresentation: m.markdownLinks,
+		}
+	}
+	result := projectAskQuestionMarkdown(questionRenderRequest{
+		currentToken:   m.ask.currentToken,
+		operationToken: 1,
+		identity:       identity,
+		questionSource: identity.questionSource,
+	})
+	m.ask.activeProjection = &activeQuestionProjection{
+		renderedAt: identity,
+		rows:       result.rows,
+	}
+	m.ask.inFlightProjection = nil
+	m.ask.latestDesiredProjection = nil
 }
 
 func testAskFreeform(m *uiModel) bool {
@@ -91,26 +120,20 @@ func testAskInputRuneCursor(m *uiModel) int {
 }
 
 func testAskPaneContent(m *uiModel, width int) ([]uiInputPaneContentLine, *int) {
-	return m.layout().askInputPaneContent(width)
-}
-
-func testVisibleAskPaneContent(m *uiModel, width int) ([]uiInputPaneContentLine, *int) {
-	content, cursor := testAskPaneContent(m, width)
 	height := 1
 	if size := m.terminalGeometry.Size(); size != nil {
 		height = size.height
 	}
-	maxLines := inputContentLineLimit(height)
-	start := cursorAwareInputPaneViewportStart(len(content), maxLines, cursor)
-	end := min(len(content), start+maxLines)
-	if cursor == nil {
-		return content[start:end], nil
+	viewport := m.layout().askInputViewport(width, inputContentLineLimit(height))
+	if !viewport.cursor.Visible {
+		return viewport.lines, nil
 	}
-	visibleCursor := *cursor - start
-	if visibleCursor < 0 || visibleCursor >= end-start {
-		return content[start:end], nil
-	}
-	return content[start:end], &visibleCursor
+	row := viewport.cursor.Row
+	return viewport.lines, &row
+}
+
+func testVisibleAskPaneContent(m *uiModel, width int) ([]uiInputPaneContentLine, *int) {
+	return testAskPaneContent(m, width)
 }
 
 func resolveAnsweredTestAskThroughTranscript(t *testing.T, m *uiModel) {

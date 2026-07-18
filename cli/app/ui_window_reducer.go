@@ -29,7 +29,10 @@ func (m *uiModel) reduceWindowMessage(msg tea.Msg) uiFeatureUpdateResult {
 					m.pendingOngoingResizeRepaint = true
 				}
 			}
-			return handledUIFeatureUpdate(m, m.reconcileOngoingOwnership())
+			return handledUIFeatureUpdate(m, tea.Batch(
+				m.reconcileOngoingOwnership(),
+				m.scheduleCurrentQuestionProjection(),
+			))
 		}
 		size := ongoing.Size{Width: msg.Width, Height: msg.Height}
 		var result ongoing.Result
@@ -46,7 +49,7 @@ func (m *uiModel) reduceWindowMessage(msg tea.Msg) uiFeatureUpdateResult {
 		if previousSize == nil || !wasNativeOngoing {
 			cmd = tea.Batch(cmd, m.reconcileOngoingOwnership())
 		}
-		return handledUIFeatureUpdate(m, cmd)
+		return handledUIFeatureUpdate(m, tea.Batch(cmd, m.scheduleCurrentQuestionProjection()))
 	}
 	return uiFeatureUpdateResult{}
 }

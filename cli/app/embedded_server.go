@@ -161,19 +161,16 @@ func (s *embeddedAppServer) RuntimeAttachmentClients() runtimeAttachmentClients 
 	if s == nil || s.inner == nil {
 		return runtimeAttachmentClients{}
 	}
-	attention := s.inner.AttentionNotificationClient()
 	return runtimeAttachmentClients{
-		Attention:                       attention,
-		AttentionNotificationsSupported: attention != nil,
-		ProcessControls:                 s.inner.ProcessControlClient(),
-		ProcessOutput:                   s.inner.ProcessOutputClient(),
-		ProcessViews:                    s.inner.ProcessViewClient(),
-		PromptControl:                   s.inner.PromptControlClient(),
-		RuntimeControls:                 s.inner.RuntimeControlClient(),
-		SessionTranscript:               s.inner.SessionTranscriptClient(),
-		SessionRuntime:                  s.inner.SessionRuntimeClient(),
-		SessionViews:                    s.inner.SessionViewClient(),
-		Worktrees:                       s.inner.WorktreeClient(),
+		ProcessControls:   s.inner.ProcessControlClient(),
+		ProcessOutput:     s.inner.ProcessOutputClient(),
+		ProcessViews:      s.inner.ProcessViewClient(),
+		PromptControl:     s.inner.PromptControlClient(),
+		RuntimeControls:   s.inner.RuntimeControlClient(),
+		SessionTranscript: s.inner.SessionTranscriptClient(),
+		SessionRuntime:    s.inner.SessionRuntimeClient(),
+		SessionViews:      s.inner.SessionViewClient(),
+		Worktrees:         s.inner.WorktreeClient(),
 	}
 }
 

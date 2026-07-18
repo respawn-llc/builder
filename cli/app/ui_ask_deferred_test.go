@@ -19,7 +19,9 @@ func TestAskEventDefersWhileDetailModeActive(t *testing.T) {
 		t.Fatalf("expected detail mode, got %q", m.view.Mode())
 	}
 
-	m = updateUIModel(t, m, askEventMsg{event: testQuestionAskEvent("ask-1", "Proceed?", "Yes", "No")})
+	next, projectionCommand := m.Update(askEventMsg{event: testQuestionAskEvent("ask-1", "Proceed?", "Yes", "No")})
+	m = next.(*uiModel)
+	m = updateUIModel(t, m, projectionCommand())
 	if got := m.inputMode(); got != uiInputModeMain {
 		t.Fatalf("expected detail mode to defer ask input, got %q", got)
 	}
@@ -65,7 +67,9 @@ func TestAskEventDefersWhileProcessListOverlayIsOpen(t *testing.T) {
 		t.Fatalf("expected process list surface open, visible=%t surface=%q", m.processList.open, m.surface())
 	}
 
-	m = updateUIModel(t, m, askEventMsg{event: testQuestionAskEvent("ask-1", "Pick one", "a", "b")})
+	next, projectionCommand := m.Update(askEventMsg{event: testQuestionAskEvent("ask-1", "Pick one", "a", "b")})
+	m = next.(*uiModel)
+	m = updateUIModel(t, m, projectionCommand())
 	if got := m.inputMode(); got != uiInputModeProcessList {
 		t.Fatalf("expected process list to keep input focus while ask is pending, got %q", got)
 	}

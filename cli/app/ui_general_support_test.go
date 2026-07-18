@@ -53,10 +53,25 @@ func (s stubSessionViewClient) GetSessionExecutionEnvironment(context.Context, s
 
 func updateUIModel(t *testing.T, m *uiModel, msg tea.Msg) *uiModel {
 	t.Helper()
-	next, _ := m.Update(msg)
+	next, command := m.Update(msg)
 	updated, ok := next.(*uiModel)
 	if !ok {
 		t.Fatalf("unexpected model type %T", next)
+	}
+	if _, isAskEvent := msg.(askEventMsg); isAskEvent && command != nil {
+		if projection, isProjection := command().(questionRenderResultMsg); isProjection {
+			next, _ = updated.Update(projection)
+			updated, ok = next.(*uiModel)
+			if !ok {
+				t.Fatalf("unexpected model type after ask projection %T", next)
+			}
+		}
+	}
+	if _, isAskEvent := msg.(askEventMsg); isAskEvent &&
+		updated.ask.current != nil &&
+		updated.ask.activeProjection == nil &&
+		updated.ask.inFlightProjection == nil {
+		testInstallCurrentAskProjection(updated)
 	}
 	return updated
 }

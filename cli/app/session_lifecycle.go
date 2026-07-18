@@ -194,24 +194,15 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		finalModel, runErr := runUILoop(request)
 		showStartupUpdateNotice = shouldRetryStartupUpdateNotice(finalModel, showStartupUpdateNotice)
 		if runErr != nil {
-			if closeErr := runtimePlan.Close(); closeErr != nil {
-				return errors.Join(runErr, closeErr)
-			}
-			return runErr
+			return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, runErr)
 		}
 		if err := persistSessionDraftToServer(ctx, server, plan.SessionID, finalModel); err != nil {
-			if closeErr := runtimePlan.Close(); closeErr != nil {
-				return errors.Join(err, closeErr)
-			}
-			return err
+			return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, err)
 		}
 
 		transition := extractUITransition(finalModel)
 		if transition.Exit {
-			if err := closeRuntimePlanAfterUIExit(runtimePlan, finalModel); err != nil {
-				return err
-			}
-			return nil
+			return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, nil)
 		}
 		resolved, err := resolveAndReleaseSessionAction(ctx, server, interactor, plan.SessionID, transition, runtimePlan)
 		if err != nil {
@@ -311,6 +302,17 @@ func closeRuntimePlanAfterUIExit(runtimePlan *runtimeLaunchPlan, finalModel any)
 		return runtimePlan.DetachOnlyClose()
 	}
 	return runtimePlan.Close()
+}
+
+func releaseRuntimePlanAfterUIResult(runtimePlan *runtimeLaunchPlan, finalModel any, primaryErr error) error {
+	releaseErr := closeRuntimePlanAfterUIExit(runtimePlan, finalModel)
+	if primaryErr != nil && releaseErr != nil {
+		return errors.Join(primaryErr, releaseErr)
+	}
+	if primaryErr != nil {
+		return primaryErr
+	}
+	return releaseErr
 }
 
 func shouldRetryStartupUpdateNotice(model any, enabled bool) bool {

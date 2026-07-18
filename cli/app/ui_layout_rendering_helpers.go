@@ -146,10 +146,15 @@ func padANSIRight(line string, width int) string {
 }
 
 func truncateANSIRight(line string, width int) string {
+	return truncateANSIRightWithEllipsis(line, width, false)
+}
+
+func truncateANSIRightWithEllipsis(line string, width int, forceEllipsis bool) string {
 	if width <= 0 {
 		return ""
 	}
-	if line == "" || lipgloss.Width(line) <= width {
+	lineWidth := lipgloss.Width(line)
+	if !forceEllipsis && (line == "" || lineWidth <= width) {
 		return line
 	}
 	truncationSuffix := xansi.ResetHyperlink() + "…" + "\x1b[0m"
@@ -160,6 +165,9 @@ func truncateANSIRight(line string, width int) string {
 	defer xansi.PutParser(parser)
 
 	visibleLimit := width - 1
+	if forceEllipsis && lineWidth < width {
+		visibleLimit = lineWidth
+	}
 	if visibleLimit < 0 {
 		visibleLimit = 0
 	}

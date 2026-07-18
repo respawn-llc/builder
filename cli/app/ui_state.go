@@ -145,6 +145,7 @@ type uiPresentationFeatureState struct {
 type uiConversationFeatureState struct {
 	interaction                        uiInteractionState
 	ask                                uiAskState
+	questionProjector                  questionProjector
 	promptAnswers                      *transcriptPromptAnswerer
 	promptAttention                    *bellHooks
 	startupSubmit                      string

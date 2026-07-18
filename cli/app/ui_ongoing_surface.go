@@ -58,17 +58,10 @@ func (m *uiModel) handleOngoingSurfaceError(err error) tea.Cmd {
 	if err == nil {
 		return nil
 	}
-	if m != nil && m.debugMode {
-		panic(err)
-	}
 	if m != nil {
-		m.exitAction = UIActionExit
-		m.forcedLocalExit = true
-		m.transientStatus = fmt.Sprintf("ongoing terminal surface failed: %v", err)
-		m.transientStatusKind = uiStatusNoticeError
 		m.logf("ongoing.surface.error err=%q", err.Error())
 	}
-	return tea.Quit
+	return m.handleFatalUIError(fmt.Sprintf("ongoing terminal surface failed: %v", err), err)
 }
 
 func (m *uiModel) handleOngoingDeveloperError(err ongoing.DeveloperError) tea.Cmd {

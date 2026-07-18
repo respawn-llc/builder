@@ -49,16 +49,15 @@ const (
 
 const askFreeformSelectionOptionText = "Freeform answer"
 
-func (c uiAskController) acceptEvent(evt askEvent) {
+func (c uiAskController) acceptEvent(evt askEvent) tea.Cmd {
 	m := c.model
 	if evt.isResolution() {
-		c.resolvePrompt(evt.promptID())
-		return
+		return c.resolvePrompt(evt.promptID())
 	}
 	incomingPromptID := strings.TrimSpace(string(evt.prompt.PromptID))
 	if incomingPromptID != "" && m.ask.hasCurrent() && strings.TrimSpace(string(m.ask.current.prompt.PromptID)) == incomingPromptID {
 		m.ask.current.prompt = evt.prompt
-		return
+		return m.scheduleCurrentQuestionProjection()
 	}
 	if !m.ask.hasCurrent() {
 		c.setActiveAsk(evt)
@@ -66,16 +65,17 @@ func (c uiAskController) acceptEvent(evt askEvent) {
 		if m.inputMode() == uiInputModeMain && (m.view.Mode() == "" || m.view.Mode() == tui.ModeOngoing) {
 			m.setInputMode(uiInputModeAsk)
 		}
-		return
+		return m.scheduleCurrentQuestionProjection()
 	}
 	m.ask.queue = append(m.ask.queue, evt)
+	return nil
 }
 
-func (c uiAskController) resolvePrompt(promptID string) {
+func (c uiAskController) resolvePrompt(promptID string) tea.Cmd {
 	m := c.model
 	targetID := strings.TrimSpace(promptID)
 	if targetID == "" {
-		return
+		return nil
 	}
 	filteredQueue := m.ask.queue[:0]
 	for _, queued := range m.ask.queue {
@@ -86,7 +86,7 @@ func (c uiAskController) resolvePrompt(promptID string) {
 	}
 	m.ask.queue = filteredQueue
 	if !m.ask.hasCurrent() || strings.TrimSpace(string(m.ask.current.prompt.PromptID)) != targetID {
-		return
+		return nil
 	}
 	c.cancelActiveDelivery()
 	if len(m.ask.queue) > 0 {
@@ -95,10 +95,12 @@ func (c uiAskController) resolvePrompt(promptID string) {
 		c.setActiveAsk(next)
 		m.activity = uiActivityQuestion
 		m.setInputMode(uiInputModeAsk)
-		return
+		return m.scheduleCurrentQuestionProjection()
 	}
 	m.ask.current = nil
 	m.ask.currentToken = nextNonZeroToken(m.ask.currentToken)
+	m.ask.activeProjection = nil
+	m.ask.latestDesiredProjection = nil
 	m.ask.cursor = 0
 	m.clearAskInput()
 	m.ask.freeform = false
@@ -111,6 +113,7 @@ func (c uiAskController) resolvePrompt(promptID string) {
 			m.activity = uiActivityIdle
 		}
 	}
+	return nil
 }
 
 func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -320,7 +323,7 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (c uiAskController) renderPromptLines() []askPromptLine {
+func (c uiAskController) renderPriorityPromptLines() []askPromptLine {
 	m := c.model
 	if !m.ask.hasCurrent() {
 		return nil
@@ -332,7 +335,7 @@ func (c uiAskController) renderPromptLines() []askPromptLine {
 			{Kind: askPromptLineKindInput, InputPrefix: "› ", InputEditor: m.ask.editor, ShowsCursor: true},
 		}
 	}
-	lines := askQuestionPromptTextLines(req.Question)
+	lines := make([]askPromptLine, 0)
 	if askOptionCount(req) > 0 && !m.ask.freeform {
 		visibleOptions := askVisibleOptions(req)
 		for i, s := range visibleOptions {
@@ -434,6 +437,8 @@ func (c uiAskController) resolveAnsweredPromptOptimistically() bool {
 	if len(m.ask.queue) == 0 {
 		m.ask.current = nil
 		m.ask.currentToken = nextNonZeroToken(m.ask.currentToken)
+		m.ask.activeProjection = nil
+		m.ask.latestDesiredProjection = nil
 		m.ask.cursor = 0
 		m.clearAskInput()
 		m.ask.freeform = false
@@ -468,6 +473,8 @@ func (c uiAskController) setActiveAsk(evt askEvent) {
 	current := evt
 	m.ask.currentToken = nextNonZeroToken(m.ask.currentToken)
 	m.ask.current = &current
+	m.ask.activeProjection = nil
+	m.ask.latestDesiredProjection = nil
 	m.ask.answerPending = false
 	m.ask.cursor = 0
 	m.clearAskInput()

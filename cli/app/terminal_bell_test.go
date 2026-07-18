@@ -290,38 +290,6 @@ func TestUIAskLifecycleDoesNotDuplicateAttentionNotifications(t *testing.T) {
 	}
 }
 
-func TestAttentionNotificationLedgerLifecycle(t *testing.T) {
-	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
-	surfaced := map[string]struct{}{}
-	pending := testAttentionPendingEvent("question-batch-1", clientui.AttentionNotificationKindQuestion, "question")
-
-	applyAttentionNotificationEvent(pending, surfaced, hooks)
-	applyAttentionNotificationEvent(pending, surfaced, hooks)
-	if ringer.notifications != 1 || len(surfaced) != 1 {
-		t.Fatalf("duplicate pending events = notifications %d, surfaced %+v", ringer.notifications, surfaced)
-	}
-
-	applyAttentionNotificationEvent(clientui.AttentionNotificationEvent{
-		Type: clientui.AttentionNotificationEventResolved,
-		ID:   attentionNotificationIDPtr(clientui.AttentionNotificationKindQuestion, "question-batch-1"),
-	}, surfaced, hooks)
-	applyAttentionNotificationEvent(pending, surfaced, hooks)
-	if ringer.notifications != 2 || len(surfaced) != 1 {
-		t.Fatalf("reopened pending event = notifications %d, surfaced %+v", ringer.notifications, surfaced)
-	}
-
-	applyAttentionNotificationEvent(testAttentionPendingEvent("interrupted-1", clientui.AttentionNotificationKindInterruptedRun, "interrupted"), surfaced, hooks)
-	applyAttentionNotificationEvent(clientui.AttentionNotificationEvent{Type: clientui.AttentionNotificationEventSnapshotComplete}, surfaced, hooks)
-	applyAttentionNotificationEvent(clientui.AttentionNotificationEvent{
-		Type: clientui.AttentionNotificationEventResolved,
-		ID:   attentionNotificationIDPtr(clientui.AttentionNotificationKindQuestion, "missing"),
-	}, surfaced, hooks)
-	if ringer.notifications != 2 || len(surfaced) != 1 {
-		t.Fatalf("unsupported/no-op events changed ledger: notifications %d, surfaced %+v", ringer.notifications, surfaced)
-	}
-}
-
 func TestBellHooksToolHeavyTurnCompletion(t *testing.T) {
 	ringer := &countRinger{}
 	hooks := newUnfocusedBellHooks(ringer)
@@ -586,11 +554,6 @@ func testAttentionPendingEvent(id string, kind clientui.AttentionNotificationKin
 
 func attentionNotificationID(kind clientui.AttentionNotificationKind, uuid string) clientui.AttentionNotificationID {
 	return clientui.AttentionNotificationID{Kind: kind, UUID: uuid}
-}
-
-func attentionNotificationIDPtr(kind clientui.AttentionNotificationKind, uuid string) *clientui.AttentionNotificationID {
-	id := attentionNotificationID(kind, uuid)
-	return &id
 }
 
 func bellTestPrompt(id, question string) clientui.TranscriptPrompt {

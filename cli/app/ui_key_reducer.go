@@ -28,6 +28,17 @@ func (m *uiModel) reduceKeyMessage(msg tea.Msg) uiFeatureUpdateResult {
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, m.renderNativeOngoingSurface())
 		}
+		if m.inputMode() == uiInputModeAsk && !m.askReadyForInteraction() {
+			if keyMsg.Type != tea.KeyCtrlC {
+				return handledUIFeatureUpdate(m, nil)
+			}
+			prevSurface := m.surface()
+			next, cmd := m.inputController().handleRuntimeCtrlC(nil)
+			nextModel := next.(*uiModel)
+			nextModel.layout().syncViewport()
+			repaintCmd := nextModel.renderNativeOngoingSurfaceAfterKey(prevSurface)
+			return handledUIFeatureUpdate(nextModel, tea.Batch(cmd, repaintCmd))
+		}
 		switch m.inputModeState().Mode {
 		case uiInputModeAsk:
 			prevSurface := m.surface()
