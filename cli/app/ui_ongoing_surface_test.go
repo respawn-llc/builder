@@ -5,8 +5,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"core/cli/tui/ongoing"
+	"core/internal/testharness/pty"
+	"core/internal/testharness/pty/analyzer"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/transcript"
@@ -180,6 +183,120 @@ func TestOngoingTranscriptDeliveryKeepsCursorAbsentForAskOptionPicker(t *testing
 	if got := m.ongoingFrameInput().Cursor; !reflect.DeepEqual(got, ongoing.Cursor{}) {
 		t.Fatalf("ask option picker frame cursor = %+v, want absent zero value", got)
 	}
+}
+
+func TestNativeOngoingTransientPickersAndAskDoNotCreateBlankScrollback(t *testing.T) {
+	tests := []struct {
+		name  string
+		open  func(*uiModel)
+		close func(*uiModel)
+	}{
+		{
+			name: "slash picker",
+			open: func(m *uiModel) {
+				slash := newSlashPickerScrollTestModel()
+				m.commandRegistry = slash.commandRegistry
+				testSetMainInput(m, "/")
+				m.refreshSlashCommandFilterFromInputWithAuth(true)
+			},
+			close: func(m *uiModel) {
+				testSetMainInput(m, "")
+				m.refreshSlashCommandFilterFromInputWithAuth(true)
+			},
+		},
+		{
+			name: "file picker",
+			open: func(m *uiModel) {
+				testSetMainInput(m, "@ab")
+				m.pathReference.tracked = detectPathReferenceQuery("@ab", 3)
+				m.pathReference.matches = []uiPathReferenceCandidate{
+					{Path: "match-00.go"}, {Path: "match-01.go"}, {Path: "match-02.go"},
+					{Path: "match-03.go"}, {Path: "match-04.go"}, {Path: "match-05.go"},
+					{Path: "match-06.go"}, {Path: "match-07.go"}, {Path: "match-08.go"},
+				}
+			},
+			close: func(m *uiModel) { m.clearPathReferenceState() },
+		},
+		{
+			name: "active ask",
+			open: func(m *uiModel) {
+				event := testQuestionAskEvent("ask-1", "Question source", "First", "Second")
+				testSetActiveAsk(m, &event)
+				m.ask.activeProjection.rows = []string{"question one", "question two", "question three"}
+			},
+			close: func(m *uiModel) {
+				m.askController().resolvePrompt("ask-1")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const (
+				width  = 40
+				height = 12
+			)
+			var out bytes.Buffer
+			surface := ongoing.NewSurface(&out)
+			m := sizedTestUIModel(newProjectedStaticUIModel(
+				WithUIOngoingSurface(surface),
+				WithUITerminalCursorState(newUITerminalCursorState()),
+			), width, height)
+			baseFrame := m.ongoingFrameInput()
+			if _, err := surface.ApplyTerminalMessage(
+				committedMessageForOngoingResizeTest(),
+				baseFrame,
+			); err != nil {
+				t.Fatalf("prime immutable output: %v", err)
+			}
+			test.open(m)
+			openFrame := m.ongoingFrameInput()
+			picker, pickerVisible := frameSection(openFrame, ongoing.FrameSectionPicker)
+			if test.name != "active ask" && (!pickerVisible || len(picker.Lines) != slashCommandPickerLines) {
+				t.Fatalf("picker frame height = %d visible=%t, want %d", len(picker.Lines), pickerVisible, slashCommandPickerLines)
+			}
+			if openFrame.Cursor.Visible &&
+				(openFrame.Cursor.Row < 1 || openFrame.Cursor.Row > height ||
+					openFrame.Cursor.Column < 1 || openFrame.Cursor.Column > width) {
+				t.Fatalf("open cursor outside terminal: %+v", openFrame.Cursor)
+			}
+			if _, err := surface.Render(openFrame); err != nil {
+				t.Fatalf("render transient frame: %v", err)
+			}
+			test.close(m)
+			closedFrame := m.ongoingFrameInput()
+			if _, ok := frameSection(closedFrame, ongoing.FrameSectionPicker); ok {
+				t.Fatal("closed transient lifecycle retained a picker frame section")
+			}
+			if _, err := surface.Render(closedFrame); err != nil {
+				t.Fatalf("close transient frame: %v", err)
+			}
+
+			capture, err := pty.NewCapture(
+				pty.MustDimensions(height, width),
+				[]pty.Chunk{pty.NewChunk(0, time.Millisecond, out.Bytes())},
+			)
+			if err != nil {
+				t.Fatalf("create lifecycle capture: %v", err)
+			}
+			analysis, err := analyzer.Analyze(capture)
+			if err != nil {
+				t.Fatalf("analyze lifecycle: %v", err)
+			}
+			rows := strings.Split(analysis.Screen.RenderText(), "\n")
+			if row := appScreenRowIndex(rows, "❯ committed"); row < 0 {
+				t.Fatalf("committed output missing after lifecycle: %q", rows)
+			}
+		})
+	}
+}
+
+func appScreenRowIndex(rows []string, want string) int {
+	for index, row := range rows {
+		if strings.TrimSpace(row) == want {
+			return index
+		}
+	}
+	return -1
 }
 
 func TestNativeOngoingRepaintKeepsControllerLiveFrameSections(t *testing.T) {
