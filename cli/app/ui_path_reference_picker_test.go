@@ -50,6 +50,7 @@ func TestApplyPathReferenceCompletionReplacesMiddleSpan(t *testing.T) {
 		name          string
 		candidatePath string
 		safePath      string
+		expectFailure bool
 	}{
 		{name: "ordinary path", candidatePath: "cli/app/ui.go", safePath: "cli/app/ui.go"},
 		{name: "CSI", candidatePath: "cli/\x1b[31mapp\x1b[0m/ui.go", safePath: "cli/app/ui.go"},
@@ -57,8 +58,8 @@ func TestApplyPathReferenceCompletionReplacesMiddleSpan(t *testing.T) {
 		{name: "OSC terminated by ST", candidatePath: "cli/\x1b]0;owned\x1b\\app/ui.go", safePath: "cli/app/ui.go"},
 		{name: "C0 control", candidatePath: "cli/app/\x01ui.go", safePath: "cli/app/ui.go"},
 		{name: "printable Unicode and punctuation", candidatePath: "目录/[draft] #1?.txt", safePath: "目录/[draft] #1?.txt"},
-		{name: "empty projection", candidatePath: "\x1b[31m\x1b[0m"},
-		{name: "blank projection", candidatePath: "\x1b[31m \t\x1b[0m"},
+		{name: "empty projection", candidatePath: "\x1b[31m\x1b[0m", expectFailure: true},
+		{name: "blank projection", candidatePath: "\x1b[31m \t\x1b[0m", expectFailure: true},
 	}
 
 	for _, tc := range tests {
@@ -66,7 +67,7 @@ func TestApplyPathReferenceCompletionReplacesMiddleSpan(t *testing.T) {
 			input, cursor := testPathReferenceFixture("compare @cliap| with tests")
 			query := detectPathReferenceQuery(input, cursor)
 			updated, nextCursor, ok := applyPathReferenceCompletion(input, cursor, query, uiPathReferenceCandidate{Path: tc.candidatePath})
-			if tc.safePath == "" {
+			if tc.expectFailure {
 				if ok || updated != input || nextCursor != cursor {
 					t.Fatalf("unusable projection result = (%q, %d, %v), want original input and cursor with false", updated, nextCursor, ok)
 				}
