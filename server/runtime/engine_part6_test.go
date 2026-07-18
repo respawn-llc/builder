@@ -439,6 +439,51 @@ func TestAppendCommittedEntryRecordDoesNotMutateChatOnAppendFailure(t *testing.T
 	}
 }
 
+func TestAppendPersistedLocalEntryRejectsInvalidRecords(t *testing.T) {
+	blankCallID := " "
+	tests := []struct {
+		name  string
+		entry storedLocalEntry
+	}{
+		{
+			name:  "missing role",
+			entry: storedLocalEntry{Text: "feedback"},
+		},
+		{
+			name:  "missing text",
+			entry: storedLocalEntry{Role: "system"},
+		},
+		{
+			name: "empty tool attachment",
+			entry: storedLocalEntry{
+				Role:            "system",
+				Text:            "feedback",
+				AfterToolCallID: &blankCallID,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+
+			if err := eng.steer("step-1", steerLocalEntryIntent(test.entry)); err == nil {
+				t.Fatal("invalid local entry persistence succeeded")
+			}
+			events, err := sessiontest.CollectEvents(store)
+			if err != nil {
+				t.Fatalf("collect events: %v", err)
+			}
+			if len(events) != 0 {
+				t.Fatalf("invalid local entry persisted events: %+v", events)
+			}
+			if snapshot := eng.ChatSnapshot(); len(snapshot.Entries) != 0 {
+				t.Fatalf("invalid local entry mutated chat: %+v", snapshot.Entries)
+			}
+		})
+	}
+}
+
 func TestAppendCommittedEntryWithCondensedTextSkipsBlankEntries(t *testing.T) {
 	store := mustCreateTestSession(t)
 	var events []Event

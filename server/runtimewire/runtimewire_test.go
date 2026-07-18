@@ -63,8 +63,10 @@ func TestRuntimeWiringSnapshotsActiveDebugSettingForToolCompletionMismatch(t *te
 			"TestRuntimeWiringSnapshotsActiveDebugSettingForToolCompletionMismatch",
 		)
 		command.Env = append(os.Environ(), childProcess+"=1")
-		if err := command.Run(); err == nil {
-			t.Fatal("debug mismatch child process exited successfully")
+		output, err := command.CombinedOutput()
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 2 {
+			t.Fatalf("debug mismatch child process exit = %v, want panic exit code 2\n%s", err, output)
 		}
 		return
 	}

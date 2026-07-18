@@ -300,6 +300,18 @@ func ApplyWholeFileDeletionFacts(
 				&removed,
 			)
 		}
+		for index := 1; index < len(fact.OperationIDs); index++ {
+			if fact.OperationIDs[index-1].HunkOrdinal >
+				fact.OperationIDs[index].HunkOrdinal {
+				return rendered, deletionFactMismatch(
+					WholeFileDeletionFactMismatchInvalidGroup,
+					expected,
+					append(received, fact.OperationIDs...),
+					&group,
+					&removed,
+				)
+			}
+		}
 		if _, duplicate := seenGroups[group]; duplicate {
 			return rendered, deletionFactMismatch(
 				WholeFileDeletionFactMismatchInvalidGroup,

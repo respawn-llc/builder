@@ -104,6 +104,31 @@ func TestWholeFileDeletionPresentationReturnsTypedMismatchContext(t *testing.T) 
 	}
 }
 
+func TestWholeFileDeletionPresentationRejectsNoncanonicalOperationOrder(t *testing.T) {
+	rendered := Format(Document{Hunks: []any{
+		DeleteFile{Path: "target.txt"},
+		DeleteFile{Path: "target.txt"},
+	}}, "/workspace")
+	received := []WholeFileDeletionOperationID{
+		{HunkOrdinal: 1},
+		{HunkOrdinal: 0},
+	}
+	group := WholeFileDeletionGroupID{FirstOperation: received[0]}
+
+	_, mismatch := ApplyWholeFileDeletionFacts(rendered, []WholeFileDeletionFact{{
+		PhysicalGroup: group,
+		OperationIDs:  received,
+		Removed:       3,
+	}})
+	if mismatch == nil ||
+		mismatch.Kind != WholeFileDeletionFactMismatchInvalidGroup ||
+		!slices.Equal(mismatch.ReceivedOperationIDs, received) ||
+		mismatch.PhysicalGroup == nil ||
+		*mismatch.PhysicalGroup != group {
+		t.Fatalf("noncanonical ordering mismatch = %+v", mismatch)
+	}
+}
+
 func TestCloneOwnsNestedWholeFileDeletionMetadata(t *testing.T) {
 	id := WholeFileDeletionOperationID{HunkOrdinal: 0}
 	source := RenderedPatch{Files: []RenderedFile{{

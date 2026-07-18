@@ -43,12 +43,13 @@ func (e *Engine) persistFinalizedToolCompletionRaw(
 	payload, backgroundSessionID, hasBackgroundSession := e.prepareStoredToolCompletion(
 		completion.Result,
 	)
-	feedback, ok := normalizeStoredLocalEntry(*completion.OperatorFeedback)
-	if !ok {
+	feedback, normalizeErr := normalizeStoredLocalEntry(*completion.OperatorFeedback)
+	if normalizeErr != nil {
 		panic(fmt.Sprintf(
-			"tool completion presentation fallback requires operator feedback (call_id=%q tool=%q)",
+			"tool completion presentation fallback requires valid operator feedback (call_id=%q tool=%q error=%v)",
 			completion.Result.CallID,
 			completion.Result.Name,
+			normalizeErr,
 		))
 	}
 	_, receipt, err := e.store.AppendTurnAtomic(stepID, []session.EventInput{
@@ -180,9 +181,9 @@ func (e *Engine) steerPersistedDiagnosticEntry(stepID, diagnosticKey, role, text
 }
 
 func (e *Engine) appendPersistedLocalEntryRecordRaw(stepID string, entry storedLocalEntry) (session.CommitReceipt, error) {
-	entry, ok := normalizeStoredLocalEntry(entry)
-	if !ok {
-		return session.CommitReceipt{}, nil
+	entry, err := normalizeStoredLocalEntry(entry)
+	if err != nil {
+		return session.CommitReceipt{}, fmt.Errorf("normalize local entry: %w", err)
 	}
 	_, receipt, err := e.store.AppendEvent(stepID, "local_entry", entry)
 	if receipt.Committed {
@@ -192,7 +193,7 @@ func (e *Engine) appendPersistedLocalEntryRecordRaw(stepID string, entry storedL
 	return receipt, err
 }
 
-func normalizeStoredLocalEntry(entry storedLocalEntry) (storedLocalEntry, bool) {
+func normalizeStoredLocalEntry(entry storedLocalEntry) (storedLocalEntry, error) {
 	entry.Role = strings.TrimSpace(entry.Role)
 	entry.Text = strings.TrimSpace(entry.Text)
 	entry.CondensedText = strings.TrimSpace(entry.CondensedText)
@@ -201,14 +202,17 @@ func normalizeStoredLocalEntry(entry storedLocalEntry) (storedLocalEntry, bool) 
 	if entry.AfterToolCallID != nil {
 		callID := strings.TrimSpace(*entry.AfterToolCallID)
 		if callID == "" {
-			return storedLocalEntry{}, false
+			return storedLocalEntry{}, errors.New("after-tool call identity is required when present")
 		}
 		entry.AfterToolCallID = &callID
 	}
-	if entry.Role == "" || entry.Text == "" {
-		return storedLocalEntry{}, false
+	if entry.Role == "" {
+		return storedLocalEntry{}, errors.New("role is required")
 	}
-	return entry, true
+	if entry.Text == "" {
+		return storedLocalEntry{}, errors.New("text is required")
+	}
+	return entry, nil
 }
 
 func localEntryChatEntry(entry storedLocalEntry) *ChatEntry {
