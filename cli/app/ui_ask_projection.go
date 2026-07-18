@@ -134,7 +134,7 @@ func (m *uiModel) startLatestDesiredQuestionProjection() tea.Cmd {
 
 func (m *uiModel) applyQuestionRenderResult(result questionRenderResultMsg) (tea.Cmd, bool) {
 	inFlight := m.ask.inFlightProjection
-	if inFlight == nil || result.request.operationToken != inFlight.operationToken {
+	if inFlight == nil || result.request != *inFlight {
 		return nil, false
 	}
 	m.ask.inFlightProjection = nil

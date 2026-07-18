@@ -392,19 +392,6 @@ func (c uiAskController) renderPriorityPromptLines() []askPromptLine {
 	return lines
 }
 
-func askQuestionPromptTextLines(question string) []askPromptLine {
-	normalized := strings.ReplaceAll(strings.ReplaceAll(question, "\r\n", "\n"), "\r", "\n")
-	if strings.TrimSpace(normalized) == "" {
-		return []askPromptLine{{Text: "", Kind: askPromptLineKindQuestion}}
-	}
-	parts := strings.Split(normalized, "\n")
-	lines := make([]askPromptLine, 0, len(parts))
-	for _, part := range parts {
-		lines = append(lines, askPromptLine{Text: part, Kind: askPromptLineKindQuestion})
-	}
-	return lines
-}
-
 func (c uiAskController) answer(resp clientui.PromptAnswer, err error) (bool, bool, tea.Cmd) {
 	m := c.model
 	if !m.ask.hasCurrent() {

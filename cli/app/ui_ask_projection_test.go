@@ -176,6 +176,79 @@ func TestAskProjectionStaleProjectorPanicIsIgnored(t *testing.T) {
 	}
 }
 
+func TestAskProjectionWrongCurrentResultDoesNotConsumeInFlightOperation(t *testing.T) {
+	model := sizedTestUIModel(newProjectedStaticUIModel(), 64, 20)
+	next, projectionCommand := model.Update(askEventMsg{event: testQuestionAskEvent(
+		"ask-1",
+		"Question?",
+		"yes",
+	)})
+	pending := next.(*uiModel)
+	if projectionCommand == nil || pending.ask.inFlightProjection == nil {
+		t.Fatal("prompt admission did not establish an in-flight projection")
+	}
+	inFlight := *pending.ask.inFlightProjection
+	wrongCurrent := inFlight
+	wrongCurrent.currentToken = nextNonZeroToken(wrongCurrent.currentToken)
+
+	next, command := pending.Update(questionRenderResultMsg{
+		request: wrongCurrent,
+		rows:    []string{"wrong current rows"},
+	})
+	updated := next.(*uiModel)
+
+	if command != nil {
+		t.Fatal("wrong-current result scheduled replacement work while the real operation remained in flight")
+	}
+	if updated.ask.inFlightProjection == nil || *updated.ask.inFlightProjection != inFlight {
+		t.Fatalf("wrong-current result consumed in-flight request: got %+v want %+v", updated.ask.inFlightProjection, inFlight)
+	}
+	if updated.ask.activeProjection != nil {
+		t.Fatal("wrong-current result installed an active projection")
+	}
+
+	next, command = updated.Update(projectionCommand())
+	completed := next.(*uiModel)
+	if command != nil {
+		t.Fatal("legitimate in-flight result scheduled unexpected follow-up work")
+	}
+	if completed.ask.inFlightProjection != nil || completed.ask.activeProjection == nil {
+		t.Fatal("wrong-current result prevented the legitimate operation from completing")
+	}
+}
+
+func TestAskProjectionWrongOperationResultDoesNotConsumeInFlightRequest(t *testing.T) {
+	model := sizedTestUIModel(newProjectedStaticUIModel(), 64, 20)
+	next, projectionCommand := model.Update(askEventMsg{event: testQuestionAskEvent(
+		"ask-1",
+		"Question?",
+		"yes",
+	)})
+	pending := next.(*uiModel)
+	if projectionCommand == nil || pending.ask.inFlightProjection == nil {
+		t.Fatal("prompt admission did not establish an in-flight projection")
+	}
+	inFlight := *pending.ask.inFlightProjection
+	wrongOperation := inFlight
+	wrongOperation.operationToken = nextNonZeroToken(wrongOperation.operationToken)
+
+	next, command := pending.Update(questionRenderResultMsg{
+		request: wrongOperation,
+		rows:    []string{"wrong operation rows"},
+	})
+	updated := next.(*uiModel)
+
+	if command != nil {
+		t.Fatal("wrong-operation result scheduled replacement work")
+	}
+	if updated.ask.inFlightProjection == nil || *updated.ask.inFlightProjection != inFlight {
+		t.Fatalf("wrong-operation result consumed in-flight request: got %+v want %+v", updated.ask.inFlightProjection, inFlight)
+	}
+	if updated.ask.activeProjection != nil {
+		t.Fatal("wrong-operation result installed an active projection")
+	}
+}
+
 func TestAskProjectionAuthoritativeFailureExitsWithoutMutatingPrompt(t *testing.T) {
 	logger := &testUILogger{}
 	ringer := &countRinger{}
@@ -292,6 +365,61 @@ func TestAskProjectionWidthInvalidationRunsOnlyThroughReturnedCommand(t *testing
 	updated := next.(*uiModel)
 	if updated.ask.activeProjection == nil || updated.ask.activeProjection.renderedAt.terminalWidth != 40 {
 		t.Fatal("width render result did not replace the cached projection")
+	}
+}
+
+func TestAskProjectionStaleRowsAreWidthClampedUntilDesiredRenderInstalls(t *testing.T) {
+	const (
+		initialWidth = 64
+		targetWidth  = 18
+		height       = 12
+	)
+	model := sizedTestUIModel(newProjectedStaticUIModel(), initialWidth, height)
+	next, initialCommand := model.Update(askEventMsg{event: testQuestionAskEvent(
+		"ask-1",
+		"[a long linked label](https://example.com/destination)",
+		"yes",
+	)})
+	pending := next.(*uiModel)
+	next, _ = pending.Update(initialCommand())
+	ready := next.(*uiModel)
+
+	next, resizeCommand := ready.Update(tea.WindowSizeMsg{Width: targetWidth, Height: height})
+	reprojecting := next.(*uiModel)
+	if resizeCommand == nil || reprojecting.ask.inFlightProjection == nil ||
+		reprojecting.ask.latestDesiredProjection == nil {
+		t.Fatal("width change did not establish an exact desired render")
+	}
+	desiredIdentity := reprojecting.ask.latestDesiredProjection.identity
+	if reprojecting.ask.activeProjection == nil ||
+		reprojecting.ask.activeProjection.renderedAt.terminalWidth != initialWidth ||
+		desiredIdentity.terminalWidth != targetWidth {
+		t.Fatal("width change did not retain stale rows while targeting current geometry")
+	}
+
+	visible, _ := testVisibleAskPaneContent(reprojecting, targetWidth)
+	questionRows := 0
+	for _, line := range visible {
+		if line.prompt.Kind != askPromptLineKindQuestion {
+			continue
+		}
+		questionRows++
+		if got := lipgloss.Width(line.text); got > targetWidth {
+			t.Fatalf("stale question row width = %d, want <= %d", got, targetWidth)
+		}
+		trace := tuitest.TraceTerminalHyperlinks(t, line.text+" plain")
+		if last := trace.Fragments[len(trace.Fragments)-1]; last.Link != nil {
+			t.Fatalf("content after stale clamped row inherited hyperlink: %+v", last)
+		}
+	}
+	if questionRows == 0 {
+		t.Fatal("stale visible projection omitted all question rows")
+	}
+
+	next, _ = reprojecting.Update(resizeCommand())
+	installed := next.(*uiModel)
+	if installed.ask.activeProjection == nil || installed.ask.activeProjection.renderedAt != desiredIdentity {
+		t.Fatalf("installed rendered-at identity = %+v, want %+v", installed.ask.activeProjection, desiredIdentity)
 	}
 }
 
@@ -492,6 +620,45 @@ func TestAskProjectionSchedulerSameIdentityUsesLatestCompleteCandidate(t *testin
 		updated.ask.editor.Text() != "draft" || updated.ask.editor.Cursor() != 2 {
 		t.Fatalf(
 			"prompt-local state changed: cursor=%d freeform=%t editor=%q/%d",
+			updated.ask.cursor,
+			updated.ask.freeform,
+			updated.ask.editor.Text(),
+			updated.ask.editor.Cursor(),
+		)
+	}
+}
+
+func TestAskProjectionSameIDActiveReplacementPreservesPromptLocalState(t *testing.T) {
+	model := sizedTestUIModel(newProjectedStaticUIModel(), 64, 20)
+	initial := testQuestionAskEvent("ask-1", "Same question", "one", "two")
+	testSetActiveAsk(model, &initial)
+	model.ask.cursor = 1
+	model.ask.freeform = true
+	testSetAskInputAtRuneCursor(model, "draft text", 5)
+	currentToken := model.ask.currentToken
+	activeProjection := model.ask.activeProjection
+
+	replacement := testQuestionAskEvent("ask-1", "Same question", "new one", "new two", "new three")
+	recommended := 2
+	replacement.prompt.RecommendedOptionIndex = &recommended
+	next, command := model.Update(askEventMsg{event: replacement})
+	updated := next.(*uiModel)
+
+	if command != nil {
+		t.Fatal("same-identity active replacement scheduled redundant projection")
+	}
+	if updated.ask.currentToken != currentToken || updated.ask.activeProjection != activeProjection {
+		t.Fatal("same-ID replacement changed current or projection ownership")
+	}
+	if !slices.Equal(updated.ask.current.prompt.Suggestions, replacement.prompt.Suggestions) ||
+		updated.ask.current.prompt.RecommendedOptionIndex == nil ||
+		*updated.ask.current.prompt.RecommendedOptionIndex != recommended {
+		t.Fatalf("same-ID replacement did not install the latest payload immediately: %+v", updated.ask.current.prompt)
+	}
+	if updated.ask.cursor != 1 || !updated.ask.freeform ||
+		updated.ask.editor.Text() != "draft text" || updated.ask.editor.Cursor() != 5 {
+		t.Fatalf(
+			"same-ID replacement changed prompt-local state: cursor=%d freeform=%t editor=%q/%d",
 			updated.ask.cursor,
 			updated.ask.freeform,
 			updated.ask.editor.Text(),
@@ -1054,6 +1221,152 @@ func TestAskViewportZeroQuestionCapacityDoesNotEmitEllipsisRow(t *testing.T) {
 	}
 	if optionRows != 3 || hintRows != 1 || len(visible) != inputContentLineLimit(height) {
 		t.Fatalf("priority viewport = options %d hints %d rows %d", optionRows, hintRows, len(visible))
+	}
+}
+
+func TestAskViewportPickerFreeformRoundTripPreservesBoundedDraftAndCursor(t *testing.T) {
+	const (
+		width  = 24
+		height = 9
+	)
+	model := sizedTestUIModel(newProjectedStaticUIModel(), width, height)
+	event := testQuestionAskEvent("ask-1", "Question source", "First", "Second")
+	testSetActiveAsk(model, &event)
+	model.ask.activeProjection.rows = []string{
+		"question row one",
+		"question row two",
+		"question row three",
+		"question row four",
+	}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	freeform := next.(*uiModel)
+	next, _ = freeform.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("draft text")})
+	freeform = next.(*uiModel)
+	next, _ = freeform.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	freeform = next.(*uiModel)
+	wantEditorCursor := freeform.ask.editor.Cursor()
+	freeformViewport := freeform.layout().askInputViewport(width, inputContentLineLimit(height))
+	if !freeformViewport.cursor.Visible {
+		t.Fatal("bounded freeform viewport hid the active editor cursor")
+	}
+	if len(freeformViewport.lines) > inputContentLineLimit(height) {
+		t.Fatalf("freeform viewport rows = %d, content budget = %d", len(freeformViewport.lines), inputContentLineLimit(height))
+	}
+
+	next, _ = freeform.Update(tea.KeyMsg{Type: tea.KeyTab})
+	picker := next.(*uiModel)
+	pickerViewport := picker.layout().askInputViewport(width, inputContentLineLimit(height))
+	if picker.ask.freeform {
+		t.Fatal("round trip did not return to picker mode")
+	}
+	if picker.ask.editor.Text() != "draft text" || picker.ask.editor.Cursor() != wantEditorCursor {
+		t.Fatalf("picker mode changed draft/editor cursor: %q/%d", picker.ask.editor.Text(), picker.ask.editor.Cursor())
+	}
+	if pickerViewport.cursor.Visible {
+		t.Fatal("picker viewport exposed the disabled draft cursor")
+	}
+	if len(pickerViewport.lines) > inputContentLineLimit(height) {
+		t.Fatalf("picker viewport rows = %d, content budget = %d", len(pickerViewport.lines), inputContentLineLimit(height))
+	}
+
+	next, _ = picker.Update(tea.KeyMsg{Type: tea.KeyTab})
+	restored := next.(*uiModel)
+	restoredViewport := restored.layout().askInputViewport(width, inputContentLineLimit(height))
+	if !restored.ask.freeform {
+		t.Fatal("round trip did not restore freeform mode")
+	}
+	if restored.ask.editor.Text() != "draft text" || restored.ask.editor.Cursor() != wantEditorCursor {
+		t.Fatalf("restored freeform changed draft/editor cursor: %q/%d", restored.ask.editor.Text(), restored.ask.editor.Cursor())
+	}
+	if !restoredViewport.cursor.Visible {
+		t.Fatal("restored bounded freeform viewport hid the active editor cursor")
+	}
+	if len(restoredViewport.lines) > inputContentLineLimit(height) {
+		t.Fatalf("restored viewport rows = %d, content budget = %d", len(restoredViewport.lines), inputContentLineLimit(height))
+	}
+}
+
+func TestAskProjectionSubsequentPromptStartsWithCleanViewportAndEditorState(t *testing.T) {
+	const (
+		width  = 32
+		height = 9
+	)
+	model := sizedTestUIModel(newProjectedStaticUIModel(), width, height)
+	model.questionProjector = func(request questionRenderRequest) questionRenderResultMsg {
+		rows := []string{request.questionSource + " rendered"}
+		if request.questionSource == "First question" {
+			rows = append(rows,
+				"first overflow row two",
+				"first overflow row three",
+				"first overflow row four",
+				"first overflow row five",
+			)
+		}
+		return questionRenderResultMsg{request: request, rows: rows}
+	}
+
+	next, firstCommand := model.Update(askEventMsg{event: testQuestionAskEvent(
+		"ask-1",
+		"First question",
+		"First",
+		"Second",
+	)})
+	firstPending := next.(*uiModel)
+	next, _ = firstPending.Update(firstCommand())
+	firstReady := next.(*uiModel)
+	next, _ = firstReady.Update(tea.KeyMsg{Type: tea.KeyTab})
+	firstReady = next.(*uiModel)
+	next, _ = firstReady.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("old draft")})
+	firstReady = next.(*uiModel)
+	next, _ = firstReady.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	firstReady = next.(*uiModel)
+
+	next, _ = firstReady.Update(askEventMsg{event: askEvent{resolvedPromptID: "ask-1"}})
+	resolved := next.(*uiModel)
+	next, secondCommand := resolved.Update(askEventMsg{event: testQuestionAskEvent(
+		"ask-2",
+		"Second question",
+		"Only",
+	)})
+	secondPending := next.(*uiModel)
+	if secondCommand == nil {
+		t.Fatal("subsequent prompt did not schedule its own projection")
+	}
+	if secondPending.ask.activeProjection != nil {
+		t.Fatal("subsequent pending prompt inherited the previous active projection")
+	}
+	if secondPending.ask.freeform || secondPending.ask.cursor != 0 ||
+		secondPending.ask.editor.Text() != "" || secondPending.ask.editor.Cursor() != 0 {
+		t.Fatalf(
+			"subsequent pending prompt inherited local state: cursor=%d freeform=%t editor=%q/%d",
+			secondPending.ask.cursor,
+			secondPending.ask.freeform,
+			secondPending.ask.editor.Text(),
+			secondPending.ask.editor.Cursor(),
+		)
+	}
+	if pane := secondPending.layout().inputPaneProjection(width, height, uiThemeStyles(secondPending.theme)); len(pane.Lines) != 0 {
+		t.Fatalf("subsequent pending prompt exposed previous viewport rows: %d", len(pane.Lines))
+	}
+
+	next, _ = secondPending.Update(secondCommand())
+	secondReady := next.(*uiModel)
+	visible, cursor := testVisibleAskPaneContent(secondReady, width)
+	if cursor != nil {
+		t.Fatalf("subsequent picker unexpectedly exposed an editor cursor: %v", cursor)
+	}
+	questionRows := make([]string, 0)
+	for _, line := range visible {
+		if line.prompt.Kind == askPromptLineKindQuestion {
+			questionRows = append(questionRows, xansi.Strip(line.text))
+		}
+	}
+	if got, want := questionRows, []string{"Second question rendered"}; !slices.Equal(got, want) {
+		t.Fatalf("subsequent question rows = %q, want %q", got, want)
+	}
+	if len(visible) > inputContentLineLimit(height) {
+		t.Fatalf("subsequent viewport rows = %d, content budget = %d", len(visible), inputContentLineLimit(height))
 	}
 }
 
