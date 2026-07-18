@@ -127,7 +127,7 @@ Context source constraints:
 - `previous_target` requires an agent target that dominates the source node in the workflow graph.
 - `previous_target_or_new` requires an agent target but does not require dominance.
 - `node:<node-key>` requires an agent node that is guaranteed to run before the transition source and is not the edge target.
-- Manual task moves are blocked for `node:<node-key>`, `previous_target`, and `previous_target_or_new` continuation sources.
+- Manual task moves support `previous_target` and `previous_target_or_new` through concrete edges. `node:<node-key>` remains blocked.
 
 Use `--requires-approval` when a transition must stop for human review before the target node starts. Pending approvals freeze the selected target branches and their context-source resolution, so later workflow edits or later completed runs do not change what approval starts. This can happen asynchronously thus causing cache invalidation, so approvals across `continue_session` are suboptimal. Usually, the User will tell you at which point they want to manually approve continuation.
 

@@ -161,26 +161,11 @@ func (s *Store) ApplyManualMove(ctx context.Context, preparation ManualMovePrepa
 		}
 		result.PlacementIDs = append(result.PlacementIDs, workflow.PlacementID(targetPlacementID))
 	}
-	edgeMetadata := workflowRunMetadata{ContextSource: workflow.CanonicalContextSource(groupSnapshot.Edges[0].ContextSource)}
-	if transitionState == "pending_approval" && executableNodeKind(targetNode.Kind()) {
-		targetSnapshot, err := newRunStartSnapshot(def, workflowRecord, workflow.NodeIDOf(targetNode))
-		if err != nil {
-			return ManualMoveResult{}, err
-		}
-		priorParameterValues, err := s.resolvePromptPriorParameterValues(ctx, q, string(req.TaskID), now, string(sourcePlacement), groupSnapshot.Edges[0])
-		if err != nil {
-			return ManualMoveResult{}, err
-		}
-		edgeMetadata.PriorParameterValues = priorParameterValues
-		edgeMetadata.TargetRunStartSnapshot = &targetSnapshot
-	}
-	if err := insertTransitionEdgeSnapshotWithMetadata(ctx, q, transitionID, groupSnapshot.Edges[0], targetPlacementID, edgeState, edgeMetadata); err != nil {
-		return ManualMoveResult{}, err
-	}
-	if autoApprovedExecutable {
-		if executionRoot == nil {
-			return ManualMoveResult{}, errors.New("auto-approved executable manual move has no execution root")
-		}
+	edgeSnapshot := groupSnapshot.Edges[0]
+	targetSnapshot := runStartSnapshot{}
+	resolution := resolvedContextInvocation{}
+	var priorParameterValues map[string]map[string]string
+	if executableNodeKind(targetNode.Kind()) {
 		var sourceRun *sqlitegen.TaskRunRecord
 		sourceSnapshot := runStartSnapshot{}
 		if sourceRunID != "" {
@@ -193,21 +178,35 @@ func (s *Store) ApplyManualMove(ctx context.Context, preparation ManualMovePrepa
 				return ManualMoveResult{}, err
 			}
 		}
-		targetSnapshot, err := newRunStartSnapshot(def, workflowRecord, workflow.NodeIDOf(targetNode))
+		targetSnapshot, err = newRunStartSnapshot(def, workflowRecord, workflow.NodeIDOf(targetNode))
 		if err != nil {
 			return ManualMoveResult{}, err
 		}
-		resolution, err := s.resolveContextInvocation(ctx, q, string(req.TaskID), now, string(sourcePlacement), sourceRun, sourceSnapshot, groupSnapshot.Edges[0])
+		resolution, err = s.resolveContextInvocation(ctx, q, string(req.TaskID), now, string(sourcePlacement), sourceRun, sourceSnapshot, edgeSnapshot)
 		if err != nil {
 			return ManualMoveResult{}, err
 		}
-		priorParameterValues, err := s.resolvePromptPriorParameterValues(ctx, q, string(req.TaskID), now, string(sourcePlacement), groupSnapshot.Edges[0])
+		priorParameterValues, err = s.resolvePromptPriorParameterValues(ctx, q, string(req.TaskID), now, string(sourcePlacement), edgeSnapshot)
 		if err != nil {
 			return ManualMoveResult{}, err
 		}
-		targetMetadata := resolution.runMetadata(groupSnapshot.Edges[0])
-		targetMetadata.PromptTemplate = strings.TrimSpace(groupSnapshot.Edges[0].PromptTemplate)
-		targetMetadata.Parameters = append([]workflow.Parameter(nil), groupSnapshot.Edges[0].Parameters...)
+	}
+	edgeMetadata := workflowRunMetadata{ContextSource: workflow.CanonicalContextSource(edgeSnapshot.ContextSource)}
+	if transitionState == "pending_approval" && executableNodeKind(targetNode.Kind()) {
+		edgeMetadata = resolution.runMetadata(edgeSnapshot)
+		edgeMetadata.PriorParameterValues = priorParameterValues
+		edgeMetadata.TargetRunStartSnapshot = &targetSnapshot
+	}
+	if err := insertTransitionEdgeSnapshotWithMetadata(ctx, q, transitionID, edgeSnapshot, targetPlacementID, edgeState, edgeMetadata); err != nil {
+		return ManualMoveResult{}, err
+	}
+	if autoApprovedExecutable {
+		if executionRoot == nil {
+			return ManualMoveResult{}, errors.New("auto-approved executable manual move has no execution root")
+		}
+		targetMetadata := resolution.runMetadata(edgeSnapshot)
+		targetMetadata.PromptTemplate = strings.TrimSpace(edgeSnapshot.PromptTemplate)
+		targetMetadata.Parameters = append([]workflow.Parameter(nil), edgeSnapshot.Parameters...)
 		targetMetadata.PriorParameterValues = clonePriorParameterValues(priorParameterValues)
 		createdRun, err := s.insertExecutableRun(ctx, q, executableRunRequest{
 			PlacementID:   targetPlacementID,
@@ -328,10 +327,7 @@ func (s *Store) prepareManualMove(ctx context.Context, req ManualMoveRequest) (p
 	if contextSource.Kind == workflow.ContextSourceSelectedNode {
 		return preparedManualMove{}, ErrManualMoveSelectedContextSource
 	}
-	if contextSource.Kind == workflow.ContextSourcePreviousTarget || contextSource.Kind == workflow.ContextSourcePreviousTargetOrNew {
-		return preparedManualMove{}, ErrManualMovePreviousTargetContext
-	}
-	if edge.ContextMode == workflow.ContextModeContinueSession && strings.TrimSpace(sourceSessionID) == "" {
+	if contextSource.Kind == workflow.ContextSourceImmediateSource && edge.ContextMode == workflow.ContextModeContinueSession && strings.TrimSpace(sourceSessionID) == "" {
 		return preparedManualMove{}, ErrManualMoveContinueSessionNeedsSource
 	}
 	groupSnapshot := transitionContractSnapshot{

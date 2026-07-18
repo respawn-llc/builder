@@ -162,7 +162,7 @@
 - Transition contract changes are blocked while unresolved work references the affected transition branch or can still emit it from the source node. This includes transition source/key changes and edge branch key, target node, parameters, input bindings, and output requirements.
 - Moving an existing edge to a different transition group is blocked when any task history references that edge, because group membership is part of historical branch interpretation.
 - If only backlog/done tasks would lose graph references due to removed nodes or transitions, show confirmation with affected reference counts before applying.
-- Manual task moves are blocked for selected prior-node, `Previous run of this target`, and `Previous run of this target, or new session` continuation context sources.
+- Manual task moves are blocked for selected prior-node continuation context sources. Previous-target continuation sources use the transition edge's server-resolved context.
 - Requested destructive wording pattern: `XXX task references will be detached from the removed graph entity. Proceed?`
 - Workflow graph saves never delete or move tasks; whole-workflow deletion is the task-deleting path.
 

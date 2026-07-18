@@ -179,6 +179,7 @@
 - Continuation modes may select `immediate_source`, `node:<node_key>`, `previous_target`, or `previous_target_or_new` as context source.
 - `previous_target` resolves the latest completed run of the target node before the transition event and fails when none exists.
 - `previous_target_or_new` resolves the latest completed run of the target node before the transition event when one exists; otherwise the target run starts with effective `new_session` and no source run/session.
+- Manual movement through a concrete edge supports `previous_target` and `previous_target_or_new`, resolves the context source when the move is applied, and freezes that resolution before pending approval. Selected prior-node context sources remain unsupported for manual movement.
 - Pending approvals freeze context-source resolution before approval. A fallback-to-new result remains effective `new_session` even if another target run completes before approval, and a resolved prior-target source remains fixed even if a newer target run completes before approval.
 - Continuation modes apply the target node's subagent role context. `continue_session` preserves the reused session's contract generation. `compact_and_continue_session` compacts the reused session and establishes a fresh target-node contract generation, including model/provider setup, generation parameters, capabilities, enabled tools, native web-search mode, prompt snapshots, context budget, and cache lineage.
 - `new_session` uses current role config at its fresh context boundary.

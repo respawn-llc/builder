@@ -180,6 +180,77 @@ func TestPreviousTargetContextSourceUsesLatestCompletedTargetRun(t *testing.T) {
 	}
 }
 
+func TestManualMovePreviousTargetContextSourceUsesLatestCompletedTargetRun(t *testing.T) {
+	f := newSelectedContextSourceFixture(t, func(f *selectedContextSourceFixture) {
+		addOutputFieldToNode(t, f.ctx, f.store, f.workflowID, f.acceptanceNode, workflow.OutputField{Name: "summary", Description: "Rework summary."})
+		addTargetHistoryReworkEdge(t, f.ctx, f.store, f.workflowID, workflow.NodeIDOf(f.acceptanceNode), workflow.NodeIDOf(f.implementationNode), workflow.ContextSourcePreviousTarget, false)
+	})
+	implementationRun := f.completePlan(t)
+	implementationSessionID := f.attachSession(t, implementationRun)
+	f.completeImplementation(t, implementationRun, "implemented")
+
+	moved, err := f.store.ManualMoveTask(f.ctx, ManualMoveRequest{
+		TaskID:       f.taskID,
+		TargetNodeID: workflow.NodeIDOf(f.implementationNode),
+		OutputValues: map[string]string{"summary": "manual rework"},
+		AutoApprove:  true,
+		ExecutionTarget: sourceExecutionTargetCandidate(
+			f.binding.WorkspaceID,
+			f.binding.CanonicalRoot,
+		),
+	})
+	if err != nil {
+		t.Fatalf("ManualMoveTask: %v", err)
+	}
+	if len(moved.RunIDs) != 1 {
+		t.Fatalf("manual move = %+v, want one run", moved)
+	}
+	input := f.startContext(t, moved.RunIDs[0])
+	if input.SourceRunID != implementationRun.ID || input.SourceSessionID != implementationSessionID || input.SourceNode.Key != "implementation" {
+		t.Fatalf("manual move context source = run %q session %q node %q, want implementation run %q session %q", input.SourceRunID, input.SourceSessionID, input.SourceNode.Key, implementationRun.ID, implementationSessionID)
+	}
+}
+
+func TestManualMoveBackwardPreviousTargetContextSourceUsesPriorTargetRun(t *testing.T) {
+	var openPRNode workflow.Node
+	f := newSelectedContextSourceFixture(t, func(f *selectedContextSourceFixture) {
+		def, _, err := f.store.GetDefinition(f.ctx, f.workflowID)
+		if err != nil {
+			t.Fatalf("GetDefinition: %v", err)
+		}
+		openPRNode = nodeByKey(t, def, "open_pr")
+		addOutputFieldToNode(t, f.ctx, f.store, f.workflowID, openPRNode, workflow.OutputField{Name: "summary", Description: "Rework summary."})
+		addTargetHistoryReworkEdge(t, f.ctx, f.store, f.workflowID, workflow.NodeIDOf(openPRNode), workflow.NodeIDOf(f.implementationNode), workflow.ContextSourcePreviousTarget, false)
+	})
+	implementationRun := f.completePlan(t)
+	f.attachSession(t, implementationRun)
+	acceptanceRun := f.completeImplementation(t, implementationRun, "implemented")
+	completeRun(t, f.ctx, f.store, CompleteRunRequest{RunID: acceptanceRun.ID, TransitionID: "open_pr", OutputValues: map[string]string{"acceptance_decision": "approved"}})
+	openPRRun := runForNode(t, f.ctx, f.store, f.taskID, workflow.NodeIDOf(openPRNode))
+	openPRSessionID := f.attachSession(t, openPRRun)
+	completeRun(t, f.ctx, f.store, CompleteRunRequest{RunID: openPRRun.ID, TransitionID: "rework", OutputValues: map[string]string{"summary": "needs changes"}})
+
+	moved, err := f.store.ManualMoveTask(f.ctx, ManualMoveRequest{
+		TaskID:       f.taskID,
+		TargetNodeID: workflow.NodeIDOf(openPRNode),
+		AutoApprove:  true,
+		ExecutionTarget: sourceExecutionTargetCandidate(
+			f.binding.WorkspaceID,
+			f.binding.CanonicalRoot,
+		),
+	})
+	if err != nil {
+		t.Fatalf("ManualMoveTask: %v", err)
+	}
+	if len(moved.RunIDs) != 1 {
+		t.Fatalf("manual move = %+v, want one run", moved)
+	}
+	input := f.startContext(t, moved.RunIDs[0])
+	if input.SourceRunID != openPRRun.ID || input.SourceSessionID != openPRSessionID || input.SourceNode.Key != "open_pr" {
+		t.Fatalf("backward manual move context source = run %q session %q node %q, want open PR run %q session %q", input.SourceRunID, input.SourceSessionID, input.SourceNode.Key, openPRRun.ID, openPRSessionID)
+	}
+}
+
 func TestPreviousTargetOrNewContextSourceFallsBackThenContinuesTargetRun(t *testing.T) {
 	f := newSelectedContextSourceFixture(t, func(f *selectedContextSourceFixture) {
 		f.updateEdge(t, f.acceptEdgeID, func(edge *EdgeRecord) {
@@ -205,6 +276,40 @@ func TestPreviousTargetOrNewContextSourceFallsBackThenContinuesTargetRun(t *test
 	secondAcceptanceInput := f.startContext(t, secondAcceptanceRun.ID)
 	if secondAcceptanceInput.ContextMode != workflow.ContextModeContinueSession || secondAcceptanceInput.SourceRunID != firstAcceptanceRun.ID || secondAcceptanceInput.SourceSessionID != firstAcceptanceSessionID {
 		t.Fatalf("second acceptance context = mode %q source %q/%q, want continue first acceptance %q/%q", secondAcceptanceInput.ContextMode, secondAcceptanceInput.SourceRunID, secondAcceptanceInput.SourceSessionID, firstAcceptanceRun.ID, firstAcceptanceSessionID)
+	}
+}
+
+func TestManualMovePreviousTargetOrNewContextSourceFallsBackToNewSession(t *testing.T) {
+	f := newSelectedContextSourceFixture(t, func(f *selectedContextSourceFixture) {
+		def, _, err := f.store.GetDefinition(f.ctx, f.workflowID)
+		if err != nil {
+			t.Fatalf("GetDefinition: %v", err)
+		}
+		f.updateEdge(t, edgeByKey(t, def, "implement").ID, func(edge *EdgeRecord) {
+			edge.ContextMode = workflow.ContextModeContinueSession
+			edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
+		})
+	})
+
+	moved, err := f.store.ManualMoveTask(f.ctx, ManualMoveRequest{
+		TaskID:       f.taskID,
+		TargetNodeID: workflow.NodeIDOf(f.implementationNode),
+		OutputValues: map[string]string{"summary": "manual implementation"},
+		AutoApprove:  true,
+		ExecutionTarget: sourceExecutionTargetCandidate(
+			f.binding.WorkspaceID,
+			f.binding.CanonicalRoot,
+		),
+	})
+	if err != nil {
+		t.Fatalf("ManualMoveTask: %v", err)
+	}
+	if len(moved.RunIDs) != 1 {
+		t.Fatalf("manual move = %+v, want one run", moved)
+	}
+	input := f.startContext(t, moved.RunIDs[0])
+	if input.ContextMode != workflow.ContextModeNewSession || input.SourceRunID != "" || input.SourceSessionID != "" {
+		t.Fatalf("manual move context = mode %q source %q/%q, want new session without source", input.ContextMode, input.SourceRunID, input.SourceSessionID)
 	}
 }
 
@@ -256,6 +361,42 @@ func TestPendingApprovalFreezesPreviousTargetOrNewResolution(t *testing.T) {
 				t.Fatalf("approved fallback context = mode %q source %q/%q, want frozen new session without source; competing session was %q", input.ContextMode, input.SourceRunID, input.SourceSessionID, competingSessionID)
 			}
 		})
+	}
+}
+
+func TestManualMovePendingApprovalFreezesPreviousTargetResolution(t *testing.T) {
+	f := newSelectedContextSourceFixture(t, func(f *selectedContextSourceFixture) {
+		addOutputFieldToNode(t, f.ctx, f.store, f.workflowID, f.acceptanceNode, workflow.OutputField{Name: "summary", Description: "Rework summary."})
+		addTargetHistoryReworkEdge(t, f.ctx, f.store, f.workflowID, workflow.NodeIDOf(f.acceptanceNode), workflow.NodeIDOf(f.implementationNode), workflow.ContextSourcePreviousTarget, true)
+	})
+	implementationRun := f.completePlan(t)
+	implementationSessionID := f.attachSession(t, implementationRun)
+	f.completeImplementation(t, implementationRun, "implemented")
+
+	pending, err := f.store.ManualMoveTask(f.ctx, ManualMoveRequest{
+		TaskID:       f.taskID,
+		TargetNodeID: workflow.NodeIDOf(f.implementationNode),
+		OutputValues: map[string]string{"summary": "manual rework"},
+		AutoApprove:  true,
+	})
+	if err != nil {
+		t.Fatalf("ManualMoveTask: %v", err)
+	}
+	if pending.State != "pending_approval" {
+		t.Fatalf("manual move = %+v, want pending approval", pending)
+	}
+
+	var transitionCreatedAt int64
+	if err := f.store.db.QueryRowContext(f.ctx, `SELECT created_at_unix_ms FROM task_transitions WHERE id = ?`, string(pending.TransitionID)).Scan(&transitionCreatedAt); err != nil {
+		t.Fatalf("query transition created_at: %v", err)
+	}
+	competingSessionID := createTestSession(t, f.ctx, f.store, f.binding, f.cfg)
+	competingRunID := insertCompletedRunForNodeInBatch(t, f.ctx, f.store, f.taskID, workflow.NodeIDOf(f.implementationNode), implementationRun.ID, competingSessionID, "", transitionCreatedAt)
+
+	approved := f.approve(t, pending.TransitionID)
+	input := f.startContext(t, singleStartedRun(t, approved))
+	if input.SourceRunID != implementationRun.ID || input.SourceSessionID != implementationSessionID {
+		t.Fatalf("approved manual move source = run %q session %q, want frozen implementation %q/%q; competing run was %q/%q", input.SourceRunID, input.SourceSessionID, implementationRun.ID, implementationSessionID, competingRunID, competingSessionID)
 	}
 }
 

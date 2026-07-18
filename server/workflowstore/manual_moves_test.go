@@ -348,68 +348,34 @@ func TestManualMoveContinueSessionRequiresSourceSession(t *testing.T) {
 	}
 }
 
-func TestManualMoveRejectsUnsupportedContextSourcesV1(t *testing.T) {
+func TestManualMoveRejectsSelectedContextSource(t *testing.T) {
 	type completion struct {
 		nodeKey      string
 		transitionID string
 		outputValues map[string]string
 	}
-	type reworkEdge struct {
-		sourceNodeKey string
-		targetNodeKey string
-		contextSource workflow.ContextSourceKind
-	}
 	completions := []completion{
 		{nodeKey: "plan", transitionID: "implement", outputValues: map[string]string{"summary": "plan done"}},
 		{nodeKey: "implementation", transitionID: "accept", outputValues: map[string]string{"summary": "implemented"}},
 		{nodeKey: "acceptance", transitionID: "open_pr", outputValues: map[string]string{"acceptance_decision": "approved"}},
-		{nodeKey: "open_pr", transitionID: "rework", outputValues: map[string]string{"summary": "needs changes"}},
 	}
 	cases := []struct {
 		name          string
-		rework        *reworkEdge
 		completedRuns int
 		targetNodeKey string
 		moveOutputKey string
-		wantErr       error
 	}{
 		{
 			name:          "selected node forward",
 			completedRuns: 2,
 			targetNodeKey: "open_pr",
 			moveOutputKey: "acceptance_decision",
-			wantErr:       ErrManualMoveSelectedContextSource,
 		},
 		{
 			name:          "selected node historical backward",
 			completedRuns: 3,
 			targetNodeKey: "acceptance",
 			moveOutputKey: "summary",
-			wantErr:       ErrManualMoveSelectedContextSource,
-		},
-		{
-			name:          "previous target forward",
-			rework:        &reworkEdge{sourceNodeKey: "acceptance", targetNodeKey: "implementation", contextSource: workflow.ContextSourcePreviousTarget},
-			completedRuns: 2,
-			targetNodeKey: "implementation",
-			moveOutputKey: "summary",
-			wantErr:       ErrManualMovePreviousTargetContext,
-		},
-		{
-			name:          "previous target or new forward",
-			rework:        &reworkEdge{sourceNodeKey: "acceptance", targetNodeKey: "implementation", contextSource: workflow.ContextSourcePreviousTargetOrNew},
-			completedRuns: 2,
-			targetNodeKey: "implementation",
-			moveOutputKey: "summary",
-			wantErr:       ErrManualMovePreviousTargetContext,
-		},
-		{
-			name:          "previous target historical backward",
-			rework:        &reworkEdge{sourceNodeKey: "open_pr", targetNodeKey: "implementation", contextSource: workflow.ContextSourcePreviousTarget},
-			completedRuns: 4,
-			targetNodeKey: "open_pr",
-			moveOutputKey: "summary",
-			wantErr:       ErrManualMovePreviousTargetContext,
 		},
 	}
 
@@ -420,12 +386,6 @@ func TestManualMoveRejectsUnsupportedContextSourcesV1(t *testing.T) {
 			def, _, err := store.GetDefinition(ctx, workflowID)
 			if err != nil {
 				t.Fatalf("GetDefinition: %v", err)
-			}
-			if tc.rework != nil {
-				sourceNode := nodeByKey(t, def, tc.rework.sourceNodeKey)
-				targetNode := nodeByKey(t, def, tc.rework.targetNodeKey)
-				addOutputFieldToNode(t, ctx, store, workflowID, sourceNode, workflow.OutputField{Name: "summary", Description: "Rework summary."})
-				addTargetHistoryReworkEdge(t, ctx, store, workflowID, workflow.NodeIDOf(sourceNode), workflow.NodeIDOf(targetNode), tc.rework.contextSource, false)
 			}
 			linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 			task := createDefaultTask(t, ctx, store, binding.ProjectID)
@@ -438,8 +398,8 @@ func TestManualMoveRejectsUnsupportedContextSourcesV1(t *testing.T) {
 
 			targetNode := nodeByKey(t, def, tc.targetNodeKey)
 			_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(targetNode), OutputValues: map[string]string{tc.moveOutputKey: "manual"}})
-			if !errors.Is(err, tc.wantErr) {
-				t.Fatalf("ManualMoveTask context source error = %v, want %v", err, tc.wantErr)
+			if !errors.Is(err, ErrManualMoveSelectedContextSource) {
+				t.Fatalf("ManualMoveTask context source error = %v, want %v", err, ErrManualMoveSelectedContextSource)
 			}
 		})
 	}
