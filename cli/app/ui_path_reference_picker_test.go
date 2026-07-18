@@ -53,10 +53,10 @@ func TestApplyPathReferenceCompletionReplacesMiddleSpan(t *testing.T) {
 		expectFailure bool
 	}{
 		{name: "ordinary path", candidatePath: "cli/app/ui.go", safePath: "cli/app/ui.go"},
-		{name: "CSI", candidatePath: "cli/\x1b[31mapp\x1b[0m/ui.go", safePath: "cli/app/ui.go"},
-		{name: "OSC terminated by BEL", candidatePath: "cli/\x1b]8;;https://evil.test\x07app\x1b]8;;\x07/ui.go", safePath: "cli/app/ui.go"},
-		{name: "OSC terminated by ST", candidatePath: "cli/\x1b]0;owned\x1b\\app/ui.go", safePath: "cli/app/ui.go"},
-		{name: "C0 control", candidatePath: "cli/app/\x01ui.go", safePath: "cli/app/ui.go"},
+		{name: "CSI", candidatePath: "cli/\x1b[31mapp\x1b[0m/ui.go", expectFailure: true},
+		{name: "OSC terminated by BEL", candidatePath: "cli/\x1b]8;;https://evil.test\x07app\x1b]8;;\x07/ui.go", expectFailure: true},
+		{name: "OSC terminated by ST", candidatePath: "cli/\x1b]0;owned\x1b\\app/ui.go", expectFailure: true},
+		{name: "C0 control", candidatePath: "cli/app/\x01ui.go", expectFailure: true},
 		{name: "printable Unicode and punctuation", candidatePath: "目录/[draft] #1?.txt", safePath: "目录/[draft] #1?.txt"},
 		{name: "empty projection", candidatePath: "\x1b[31m\x1b[0m", expectFailure: true},
 		{name: "blank projection", candidatePath: "\x1b[31m \t\x1b[0m", expectFailure: true},
@@ -292,21 +292,21 @@ func TestPathReferencePickerScrollsSelectionAndReservesBoundedHeight(t *testing.
 	}
 }
 
-func TestPathReferencePickerSanitizesControlCharactersForDisplay(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.pathReference.tracked = detectPathReferenceQuery("@ab", 3)
+func TestPathReferencePickerFiltersControlBearingCandidates(t *testing.T) {
+	m, _ := newPathReferenceTestModel("@ab")
 	rawPath := "safe/\x1b]52;evil\x07name\x01.txt"
-	m.pathReference.matches = []uiPathReferenceCandidate{{Path: rawPath}}
+	safePath := "safe/name.txt"
+	m = deliverPathReferenceTestMatches(t, m, 1, []uiPathReferenceCandidate{{Path: rawPath}, {Path: safePath}})
 
 	state := m.pathReferencePicker()
 	if !state.visible || len(state.rows) != 1 {
 		t.Fatalf("unexpected picker state: %+v", state)
 	}
-	if state.rows[0].primary != "safe/name.txt" {
+	if state.rows[0].primary != safePath {
 		t.Fatalf("display path = %q", state.rows[0].primary)
 	}
-	if m.pathReference.matches[0].Path != rawPath {
-		t.Fatalf("expected underlying candidate path preserved, got %q", m.pathReference.matches[0].Path)
+	if len(m.pathReference.matches) != 1 || m.pathReference.matches[0].Path != safePath {
+		t.Fatalf("filtered matches = %+v, want only exact safe path", m.pathReference.matches)
 	}
 }
 

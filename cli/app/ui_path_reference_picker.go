@@ -70,15 +70,14 @@ func isPathReferenceQueryRune(r rune) bool {
 }
 
 func applyPathReferenceCompletion(input string, cursor int, query uiPathReferenceQuery, candidate uiPathReferenceCandidate) (string, int, bool) {
-	safePath := terminalSafePathReferenceText(candidate.Path)
-	if !query.Active || query.End < query.Start || strings.TrimSpace(safePath) == "" {
+	if !query.Active || query.End < query.Start || !isTerminalSafePathReference(candidate.Path) {
 		return input, cursor, false
 	}
 	runes := []rune(input)
 	if query.Start < 0 || query.End > len(runes) || query.Start > len(runes) {
 		return input, cursor, false
 	}
-	completion := "@" + safePath
+	completion := "@" + candidate.Path
 	if candidate.Directory && !strings.HasSuffix(completion, "/") {
 		completion += "/"
 	}
@@ -203,7 +202,7 @@ func (m *uiModel) pathReferencePicker() uiPickerPresentation {
 	}
 	rows := make([]uiPickerRow, 0, len(m.pathReference.matches))
 	for _, match := range m.pathReference.matches {
-		rows = append(rows, uiPickerRow{primary: terminalSafePathReferenceText(match.Path), selectable: true})
+		rows = append(rows, uiPickerRow{primary: match.Path, selectable: true})
 	}
 	lineCount := len(m.pathReference.matches)
 	if lineCount > slashCommandPickerLines {
@@ -281,6 +280,20 @@ func terminalSafePathReferenceText(path string) string {
 		filtered = append(filtered, r)
 	}
 	return string(filtered)
+}
+
+func isTerminalSafePathReference(path string) bool {
+	return strings.TrimSpace(path) != "" && terminalSafePathReferenceText(path) == path
+}
+
+func terminalSafePathReferenceCandidates(candidates []uiPathReferenceCandidate) []uiPathReferenceCandidate {
+	filtered := make([]uiPathReferenceCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if isTerminalSafePathReference(candidate.Path) {
+			filtered = append(filtered, candidate)
+		}
+	}
+	return filtered
 }
 
 func skipTerminalEscapeSequence(runes []rune, start int) int {
@@ -377,7 +390,7 @@ func (m *uiModel) handlePathReferenceMatchResult(msg uiPathReferenceMatchResultM
 	m.pathReference.corpusGeneration = msg.CorpusGeneration
 	m.pathReference.pending = false
 	m.pathReference.loading = false
-	m.pathReference.matches = append([]uiPathReferenceCandidate(nil), msg.Matches...)
+	m.pathReference.matches = terminalSafePathReferenceCandidates(msg.Matches)
 	m.pathReference.selection = 0
 }
 

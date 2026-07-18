@@ -31,7 +31,7 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 
 - Corpus and matching semantics: cached repo-relative corpus from `rg --files`, async prewarm, no per-keystroke shell-outs, cursor-local query charset, hidden-paths-in/`.git`-out, derived directories, retryable corpus failures. (owner: tui-transcript :: Path Autocomplete)
 - The picker is derived UI: it appears when the cursor sits in a parseable `@` query and disappears when the query no longer parses (cursor moved away, query deleted). No modal open/dismiss state exists.
-- `Up`/`Down` navigate candidates; `Tab` or `Enter` accepts the selection, replacing the query with the picker’s terminal-safe projection of the chosen repo-relative path; terminal controls are never inserted into the composer, and while the picker is visible these keys never submit or queue.
+- Candidates whose repo-relative path changes under terminal-safe projection are excluded from the picker. `Up`/`Down` navigate eligible candidates; `Tab` or `Enter` accepts the selection, replacing the query with the exact chosen repo-relative path; terminal controls are never inserted into the composer, and while the picker is visible these keys never submit or queue.
 - The picker renders between transcript and input, sized to available height; typing is never blocked by picker state or corpus readiness.
 
 ## Queueing And Steering

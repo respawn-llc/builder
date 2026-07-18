@@ -86,22 +86,24 @@ func TestPathReferenceEnterDoesNotSubmitWhileQueryIsPending(t *testing.T) {
 	}
 }
 
-func TestPathReferenceAcceptanceKeyDoesNotSubmitUnusableProjectedPath(t *testing.T) {
+func TestPathReferenceAcceptanceSkipsUnsafeCandidate(t *testing.T) {
 	for _, key := range []tea.KeyType{tea.KeyTab, tea.KeyEnter} {
 		t.Run(key.String(), func(t *testing.T) {
 			m, _ := newPathReferenceTestModel("echo @ab")
-			m.pathReference.matches = []uiPathReferenceCandidate{{Path: "\x1b[31m\x1b[0m"}}
-			m.pathReference.pending = false
+			m = deliverPathReferenceTestMatches(t, m, 1, []uiPathReferenceCandidate{
+				{Path: "evil\x1b[31mred.go"},
+				{Path: "safe.go"},
+			})
 
 			updated := updateUIModel(t, m, tea.KeyMsg{Type: key})
-			if testMainInput(updated) != "echo @ab" {
-				t.Fatalf("input = %q, want unchanged draft", testMainInput(updated))
+			if testMainInput(updated) != "echo @safe.go" {
+				t.Fatalf("input = %q, want exact safe candidate", testMainInput(updated))
 			}
 			if updated.isBusy() {
-				t.Fatal("did not expect unusable completion to start submission")
+				t.Fatal("did not expect completion to start submission")
 			}
 			if len(updated.queued) != 0 || len(updated.pendingInjected) != 0 {
-				t.Fatalf("did not expect unusable completion to queue input: queued=%+v pending=%+v", updated.queued, updated.pendingInjected)
+				t.Fatalf("did not expect completion to queue input: queued=%+v pending=%+v", updated.queued, updated.pendingInjected)
 			}
 			if updated.transientStatus != "" {
 				t.Fatalf("unexpected status UI %q", updated.transientStatus)
