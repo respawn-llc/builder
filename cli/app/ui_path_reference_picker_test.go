@@ -3,6 +3,7 @@ package app
 import (
 	"reflect"
 	"testing"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -45,17 +46,49 @@ func TestDetectPathReferenceQuery(t *testing.T) {
 }
 
 func TestApplyPathReferenceCompletionReplacesMiddleSpan(t *testing.T) {
-	input, cursor := testPathReferenceFixture("compare @cliap| with tests")
-	query := detectPathReferenceQuery(input, cursor)
-	updated, nextCursor, ok := applyPathReferenceCompletion(input, cursor, query, uiPathReferenceCandidate{Path: "cli/app/ui.go"})
-	if !ok {
-		t.Fatal("expected completion applied")
+	tests := []struct {
+		name          string
+		candidatePath string
+		safePath      string
+	}{
+		{name: "ordinary path", candidatePath: "cli/app/ui.go", safePath: "cli/app/ui.go"},
+		{name: "CSI", candidatePath: "cli/\x1b[31mapp\x1b[0m/ui.go", safePath: "cli/app/ui.go"},
+		{name: "OSC terminated by BEL", candidatePath: "cli/\x1b]8;;https://evil.test\x07app\x1b]8;;\x07/ui.go", safePath: "cli/app/ui.go"},
+		{name: "OSC terminated by ST", candidatePath: "cli/\x1b]0;owned\x1b\\app/ui.go", safePath: "cli/app/ui.go"},
+		{name: "C0 control", candidatePath: "cli/app/\x01ui.go", safePath: "cli/app/ui.go"},
+		{name: "printable Unicode and punctuation", candidatePath: "目录/[draft] #1?.txt", safePath: "目录/[draft] #1?.txt"},
+		{name: "empty projection", candidatePath: "\x1b[31m\x1b[0m"},
+		{name: "blank projection", candidatePath: "\x1b[31m \t\x1b[0m"},
 	}
-	if updated != "compare @cli/app/ui.go with tests" {
-		t.Fatalf("updated input = %q", updated)
-	}
-	if nextCursor != len([]rune("compare @cli/app/ui.go")) {
-		t.Fatalf("cursor = %d", nextCursor)
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			input, cursor := testPathReferenceFixture("compare @cliap| with tests")
+			query := detectPathReferenceQuery(input, cursor)
+			updated, nextCursor, ok := applyPathReferenceCompletion(input, cursor, query, uiPathReferenceCandidate{Path: tc.candidatePath})
+			if tc.safePath == "" {
+				if ok || updated != input || nextCursor != cursor {
+					t.Fatalf("unusable projection result = (%q, %d, %v), want original input and cursor with false", updated, nextCursor, ok)
+				}
+				return
+			}
+			if !ok {
+				t.Fatal("expected completion applied")
+			}
+			wantInput := "compare @" + tc.safePath + " with tests"
+			if updated != wantInput {
+				t.Fatalf("updated input = %q, want %q", updated, wantInput)
+			}
+			wantCursor := len([]rune("compare @" + tc.safePath))
+			if nextCursor != wantCursor {
+				t.Fatalf("cursor = %d, want %d", nextCursor, wantCursor)
+			}
+			for _, r := range updated {
+				if unicode.IsControl(r) {
+					t.Fatalf("updated input contains terminal control %U: %q", r, updated)
+				}
+			}
+		})
 	}
 }
 

@@ -70,14 +70,15 @@ func isPathReferenceQueryRune(r rune) bool {
 }
 
 func applyPathReferenceCompletion(input string, cursor int, query uiPathReferenceQuery, candidate uiPathReferenceCandidate) (string, int, bool) {
-	if !query.Active || query.End < query.Start || strings.TrimSpace(candidate.Path) == "" {
+	safePath := terminalSafePathReferenceText(candidate.Path)
+	if !query.Active || query.End < query.Start || strings.TrimSpace(safePath) == "" {
 		return input, cursor, false
 	}
 	runes := []rune(input)
 	if query.Start < 0 || query.End > len(runes) || query.Start > len(runes) {
 		return input, cursor, false
 	}
-	completion := "@" + candidate.Path
+	completion := "@" + safePath
 	if candidate.Directory && !strings.HasSuffix(completion, "/") {
 		completion += "/"
 	}
@@ -202,7 +203,7 @@ func (m *uiModel) pathReferencePicker() uiPickerPresentation {
 	}
 	rows := make([]uiPickerRow, 0, len(m.pathReference.matches))
 	for _, match := range m.pathReference.matches {
-		rows = append(rows, uiPickerRow{primary: sanitizePathReferenceDisplayText(match.Path), selectable: true})
+		rows = append(rows, uiPickerRow{primary: terminalSafePathReferenceText(match.Path), selectable: true})
 	}
 	lineCount := len(m.pathReference.matches)
 	if lineCount > slashCommandPickerLines {
@@ -241,7 +242,7 @@ func (m *uiModel) acceptPathReferenceSelection() bool {
 		m.pathReference.matches[selection],
 	)
 	if !ok {
-		return false
+		return true
 	}
 	m.replaceMainInput(updated, byteOffsetForRuneCursor(updated, nextCursor))
 	return true
@@ -262,7 +263,7 @@ func (m *uiModel) shouldBlockPathReferenceAcceptanceKey() bool {
 	return m.pathReference.pending || m.pathReference.loading
 }
 
-func sanitizePathReferenceDisplayText(path string) string {
+func terminalSafePathReferenceText(path string) string {
 	if path == "" {
 		return ""
 	}

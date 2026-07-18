@@ -86,6 +86,30 @@ func TestPathReferenceEnterDoesNotSubmitWhileQueryIsPending(t *testing.T) {
 	}
 }
 
+func TestPathReferenceAcceptanceKeyDoesNotSubmitUnusableProjectedPath(t *testing.T) {
+	for _, key := range []tea.KeyType{tea.KeyTab, tea.KeyEnter} {
+		t.Run(key.String(), func(t *testing.T) {
+			m, _ := newPathReferenceTestModel("echo @ab")
+			m.pathReference.matches = []uiPathReferenceCandidate{{Path: "\x1b[31m\x1b[0m"}}
+			m.pathReference.pending = false
+
+			updated := updateUIModel(t, m, tea.KeyMsg{Type: key})
+			if testMainInput(updated) != "echo @ab" {
+				t.Fatalf("input = %q, want unchanged draft", testMainInput(updated))
+			}
+			if updated.isBusy() {
+				t.Fatal("did not expect unusable completion to start submission")
+			}
+			if len(updated.queued) != 0 || len(updated.pendingInjected) != 0 {
+				t.Fatalf("did not expect unusable completion to queue input: queued=%+v pending=%+v", updated.queued, updated.pendingInjected)
+			}
+			if updated.transientStatus != "" {
+				t.Fatalf("unexpected status UI %q", updated.transientStatus)
+			}
+		})
+	}
+}
+
 func TestPathReferenceUIRecoversAfterBuildFailureInSameWorkspace(t *testing.T) {
 	m, search := newPathReferenceTestModel("@ab")
 	initialRequests := len(search.requests)
