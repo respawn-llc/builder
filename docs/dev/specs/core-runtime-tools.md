@@ -75,6 +75,7 @@
 - Patch targets are validated with real-path resolution.
 - `patch` has no timeout and no automatic retries.
 - Patch success persistence includes patch input plus apply-result metadata.
+- If a successful patch's whole-file deletion count facts cannot be matched to its prepared presentation, Kent does not fabricate a count or roll back the filesystem change. Debug builds panic at the completion boundary before the tool completion is persisted. Release builds persist the successful completion with its original path-only presentation, append one operator-only `developer_error_feedback` entry that is excluded from model history, and continue.
 - Outside-workspace edits are approval-gated unless explicitly enabled. `allow_non_cwd_edits=false` by default.
 - If outside-workspace approval is denied, Kent returns to the model an explicit non-circumvention tool error instructing manual user edits when essential.
 - `view_image` path resolution uses absolute and canonical real paths before access checks.

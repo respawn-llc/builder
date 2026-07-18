@@ -614,6 +614,86 @@ func TestPendingPatchToolUsesStructuredPathAndCounts(t *testing.T) {
 	}
 }
 
+func TestWholeFileDeletionBadgeUsesTypedRemovedCountInPendingOngoingAndDetail(t *testing.T) {
+	rendered := patchformat.Render(
+		"*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n",
+		"/workspace",
+	)
+	if removed := patchformat.RemovedLineCount(rendered.Files[0]); removed != nil {
+		t.Fatalf("pending deletion count = %v, want absent", removed)
+	}
+	_ = RenderPendingTool(clientui.TranscriptToolStart{
+		ToolCallID: "f0b891b5-f353-4c5c-b70f-3f907f2a7807",
+		ToolName:   "patch",
+		Presentation: &transcript.ToolCallMeta{
+			ToolName:    "patch",
+			PatchRender: &rendered,
+		},
+	}, 80, "", "⢎ ")
+
+	id := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
+	finalized, mismatch := patchformat.ApplyWholeFileDeletionFacts(rendered, []patchformat.WholeFileDeletionFact{{
+		PhysicalGroup: patchformat.WholeFileDeletionGroupID{FirstOperation: id},
+		OperationIDs:  []patchformat.WholeFileDeletionOperationID{id},
+		Removed:       0,
+	}})
+	if mismatch != nil {
+		t.Fatalf("finalize empty-file deletion: %+v", mismatch)
+	}
+	removed := patchformat.RemovedLineCount(finalized.Files[0])
+	if removed == nil || *removed != 0 {
+		t.Fatalf("shared removed projection = %v, want present zero", removed)
+	}
+	row := toolRow("patch", transcript.ToolPresentationDefault, finalized.DetailText(), false)
+	row.Tool.Presentation.PatchRender = &finalized
+
+	ongoing := RenderCommittedRow(row, 80, "", ModeOngoing)
+	if len(ongoing.Lines) != 1 {
+		t.Fatalf("ongoing deletion rows = %d, want one", len(ongoing.Lines))
+	}
+	t.Logf("empty deletion ongoing: %s", ongoing.Lines[0].Plain())
+	detail := RenderCommittedRow(row, 80, "", ModeDetailCollapsed)
+	if len(detail.Lines) != 1 {
+		t.Fatalf("detail deletion rows = %d, want one", len(detail.Lines))
+	}
+	t.Logf("empty deletion detail: %s", detail.Lines[0].Plain())
+}
+
+func TestWholeFileDeletionBadgeDeduplicatesPhysicalGroupPerFileAndProjectsAliases(t *testing.T) {
+	rendered := patchformat.Format(patchformat.Document{Hunks: []any{
+		patchformat.DeleteFile{Path: "target.txt"},
+		patchformat.DeleteFile{Path: "target.txt"},
+		patchformat.DeleteFile{Path: "alias.txt"},
+	}}, "/workspace")
+	first := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
+	finalized, mismatch := patchformat.ApplyWholeFileDeletionFacts(rendered, []patchformat.WholeFileDeletionFact{{
+		PhysicalGroup: patchformat.WholeFileDeletionGroupID{FirstOperation: first},
+		OperationIDs: []patchformat.WholeFileDeletionOperationID{
+			first,
+			{HunkOrdinal: 1},
+			{HunkOrdinal: 2},
+		},
+		Removed: 6,
+	}})
+	if mismatch != nil {
+		t.Fatalf("finalize alias deletion: %+v", mismatch)
+	}
+	for index, file := range finalized.Files {
+		removed := patchformat.RemovedLineCount(file)
+		if removed == nil || *removed != 6 {
+			t.Fatalf("alias file %d removed count = %v, want known 6", index, removed)
+		}
+	}
+	row := toolRow("patch", transcript.ToolPresentationDefault, finalized.DetailText(), false)
+	row.Tool.Presentation.PatchRender = &finalized
+
+	ongoing := RenderCommittedRow(row, 80, "", ModeOngoing)
+	if len(ongoing.Lines) != 2 {
+		t.Fatalf("ongoing alias rows = %d, want two", len(ongoing.Lines))
+	}
+	t.Logf("populated deletion ongoing: %s", ongoing.Lines[0].Plain())
+}
+
 func TestCommittedMultilineShellStacksHiddenLineCountBeforeStatus(t *testing.T) {
 	command := "body=$(kent task show KENT-224 --project . --json |\n  jq -r '.body')\necho \"$body\""
 	row := toolRow("exec_command", transcript.ToolPresentationShell, command, false)

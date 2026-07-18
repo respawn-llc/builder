@@ -1,0 +1,12 @@
+Manual Go TUI badge evidence
+Date: 2026-07-18
+
+Command:
+go test -v ./cli/tui/transcriptrender -run 'TestWholeFileDeletionBadgeUsesTypedRemovedCountInPendingOngoingAndDetail|TestWholeFileDeletionBadgeDeduplicatesPhysicalGroupPerFileAndProjectsAliases'
+
+Observed terminal rows:
+empty deletion ongoing: ⇄ ./target.txt -0
+empty deletion detail: ⇄ ./target.txt -0
+populated deletion ongoing: ⇄ ./target.txt -6
+
+Result: PASS

@@ -351,9 +351,9 @@ func renderPatchTool(
 		}
 		var spans []Span
 		spans = append(spans, roleSpan(path, role))
-		if file.Removed > 0 {
+		if removed := patchformat.RemovedLineCount(file); removed != nil {
 			spans = append(spans, roleSpan(" ", role))
-			spans = append(spans, SemanticSpan(fmt.Sprintf("-%d", file.Removed), StyleRoleToolError))
+			spans = append(spans, SemanticSpan(fmt.Sprintf("-%d", *removed), StyleRoleToolError))
 		}
 		if file.Added > 0 {
 			spans = append(spans, roleSpan(" ", role))

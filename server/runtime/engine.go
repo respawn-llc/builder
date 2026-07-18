@@ -96,6 +96,7 @@ func normalizeCacheWarningMode(mode config.CacheWarningMode) (config.CacheWarnin
 
 type Config struct {
 	Model                         string
+	Debug                         bool
 	Temperature                   float64
 	MaxTokens                     int
 	ThinkingLevel                 string

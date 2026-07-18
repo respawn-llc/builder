@@ -1,6 +1,9 @@
 package patchformat
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 type Document struct {
 	Hunks []any
@@ -13,6 +16,70 @@ type AddFile struct {
 
 type DeleteFile struct {
 	Path string
+}
+
+type WholeFileDeletionOperationID struct {
+	HunkOrdinal int `json:"hunk_ordinal"`
+}
+
+type WholeFileDeletionGroupID struct {
+	FirstOperation WholeFileDeletionOperationID `json:"first_operation"`
+}
+
+type WholeFileDeletionDisposition struct {
+	PhysicalGroup WholeFileDeletionGroupID `json:"physical_group"`
+	Removed       int                      `json:"removed"`
+}
+
+type WholeFileDeletionOperation struct {
+	ID          WholeFileDeletionOperationID  `json:"id"`
+	Disposition *WholeFileDeletionDisposition `json:"disposition"`
+}
+
+type WholeFileDeletionFact struct {
+	PhysicalGroup WholeFileDeletionGroupID
+	OperationIDs  []WholeFileDeletionOperationID
+	Removed       int
+}
+
+type WholeFileDeletionFactMismatchKind string
+
+const (
+	WholeFileDeletionFactMismatchMissingOperation    WholeFileDeletionFactMismatchKind = "missing_operation"
+	WholeFileDeletionFactMismatchUnexpectedOperation WholeFileDeletionFactMismatchKind = "unexpected_operation"
+	WholeFileDeletionFactMismatchDuplicateOperation  WholeFileDeletionFactMismatchKind = "duplicate_operation"
+	WholeFileDeletionFactMismatchInvalidCount        WholeFileDeletionFactMismatchKind = "invalid_count"
+	WholeFileDeletionFactMismatchInvalidGroup        WholeFileDeletionFactMismatchKind = "invalid_group"
+)
+
+type WholeFileDeletionFactMismatch struct {
+	Kind                 WholeFileDeletionFactMismatchKind
+	ExpectedOperationIDs []WholeFileDeletionOperationID
+	ReceivedOperationIDs []WholeFileDeletionOperationID
+	PhysicalGroup        *WholeFileDeletionGroupID
+	Removed              *int
+}
+
+func (m *WholeFileDeletionFactMismatch) Error() string {
+	if m == nil {
+		return "whole-file deletion fact mismatch"
+	}
+	group := "absent"
+	if m.PhysicalGroup != nil {
+		group = fmt.Sprintf("%+v", *m.PhysicalGroup)
+	}
+	removed := "absent"
+	if m.Removed != nil {
+		removed = fmt.Sprintf("%d", *m.Removed)
+	}
+	return fmt.Sprintf(
+		"whole-file deletion fact mismatch (kind=%q expected=%+v received=%+v physical_group=%s removed=%s)",
+		m.Kind,
+		m.ExpectedOperationIDs,
+		m.ReceivedOperationIDs,
+		group,
+		removed,
+	)
 }
 
 type UpdateFile struct {
@@ -44,11 +111,12 @@ type RenderedLine struct {
 }
 
 type RenderedFile struct {
-	AbsPath string
-	RelPath string
-	Added   int
-	Removed int
-	Diff    []string
+	AbsPath            string
+	RelPath            string
+	Added              int
+	Removed            int
+	Diff               []string
+	WholeFileDeletions []WholeFileDeletionOperation
 }
 
 type RenderedPatch struct {
@@ -67,6 +135,19 @@ func Clone(in *RenderedPatch) *RenderedPatch {
 		for _, file := range in.Files {
 			copyFile := file
 			copyFile.Diff = append([]string(nil), file.Diff...)
+			if len(file.WholeFileDeletions) > 0 {
+				copyFile.WholeFileDeletions = make(
+					[]WholeFileDeletionOperation,
+					len(file.WholeFileDeletions),
+				)
+				for index, operation := range file.WholeFileDeletions {
+					copyFile.WholeFileDeletions[index] = operation
+					if operation.Disposition != nil {
+						disposition := *operation.Disposition
+						copyFile.WholeFileDeletions[index].Disposition = &disposition
+					}
+				}
+			}
 			out.Files = append(out.Files, copyFile)
 		}
 	}

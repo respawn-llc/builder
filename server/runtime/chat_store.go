@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 
@@ -100,6 +101,7 @@ type chatMessageRecord struct {
 type localChatEntry struct {
 	Entry             ChatEntry
 	AfterMessageCount int
+	AfterToolCallID   *string
 	MarksBoundary     bool
 	Projected         bool
 }
@@ -142,6 +144,7 @@ func (s *chatStore) appendMessage(stepID string, msg llm.Message) {
 		ProviderItems: llm.ItemsFromMessages([]llm.Message{msg}),
 	})
 	s.applyMessageStatsLocked(msg)
+	s.placeAttachedLocalEntriesAfterMaterializedToolLocked(msg)
 	s.providerTokenEstimateDirty = true
 }
 func (s *chatStore) replaceHistory(stepID string, items []llm.ResponseItem) {
@@ -449,20 +452,52 @@ func cloneTranscriptStreamID(streamID *uuid.UUID) *uuid.UUID {
 	return &copied
 }
 
-func (s *chatStore) appendLocalEntryRecord(entry ChatEntry) {
+func (s *chatStore) appendLocalEntryRecord(entry ChatEntry, afterToolCallID *string) {
 	if strings.TrimSpace(entry.Text) == "" {
 		return
 	}
 	entry.Visibility = normalizeRuntimeEntryVisibility(entry.Visibility)
 	entry.CondensedText = strings.TrimSpace(entry.CondensedText)
 	entry.NoticeID = strings.TrimSpace(entry.NoticeID)
+	if afterToolCallID != nil {
+		callID := strings.TrimSpace(*afterToolCallID)
+		if callID == "" {
+			panic("append local transcript entry: after-tool call identity is empty")
+		}
+		afterToolCallID = &callID
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.local = append(s.local, localChatEntry{
 		Entry:             entry,
 		AfterMessageCount: len(s.messageRecords),
+		AfterToolCallID:   afterToolCallID,
 	})
 	s.transcriptEntryCount++
+}
+
+func (s *chatStore) placeAttachedLocalEntriesAfterMaterializedToolLocked(msg llm.Message) {
+	if msg.Role != llm.RoleTool {
+		return
+	}
+	callID := strings.TrimSpace(msg.ToolCallID)
+	if callID == "" {
+		return
+	}
+	changed := false
+	for index := range s.local {
+		attachedCallID := s.local[index].AfterToolCallID
+		if attachedCallID == nil || strings.TrimSpace(*attachedCallID) != callID {
+			continue
+		}
+		s.local[index].AfterMessageCount = len(s.messageRecords)
+		changed = true
+	}
+	if changed {
+		sort.SliceStable(s.local, func(left, right int) bool {
+			return s.local[left].AfterMessageCount < s.local[right].AfterMessageCount
+		})
+	}
 }
 
 func (s *chatStore) appendProjectedHistoryReplacementEntriesLocked(entries []ChatEntry) {

@@ -32,6 +32,7 @@
 - **Pending tool-call previews in live region use the same rendering/layout as committed tool-call previews, with no pending-only labels.**
 - A pending question's live row shows only the question text; it does not append the internal tool name or prompt kind.
 - **Tool completion appends exactly one final committed line in server emission order. Ongoing never recolors/mutates an earlier emitted tool line.**
+- A pending whole-file deletion keeps its path visible without a removal-count badge while the count is unavailable. In ongoing and detail, a failed whole-file deletion remains path-only, while a successful whole-file deletion uses the existing compact removal badge to show its logical removed-line count, including a known count of zero.
 - **A shell invocation that moves to the background renders both its committed tool row and volatile background-activity row with a secondary `$`, faint foreground command, and `· backgrounded` suffix. The command truncates before the suffix so the complete suffix remains visible whenever the terminal can fit it; these rows never label the state as `running`.**
 - **Parallel tool calls commit in server emission order with no ordering guarantee among concurrent calls.**
 - **In main-input mode, `Up`/`Down` are reserved for prompt-history recall at whole-buffer boundaries or multiline cursor movement. They do not scroll ongoing transcript.**
