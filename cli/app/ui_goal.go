@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"core/cli/app/commands"
+	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 	sharedtheme "core/shared/theme"
 
@@ -260,7 +261,7 @@ func (m *uiModel) applyGoalRuntimeDone(msg goalRuntimeDoneMsg) tea.Cmd {
 		if goalRuntimeOperationMutates(msg.operation) {
 			m.goalRuntimePending = goalRuntimePendingState{}
 		}
-		detailErr := formatRuntimeSubmissionError(msg.err)
+		detailErr := runtimeattach.FormatSubmissionError(msg.err)
 		if m.goal.open {
 			m.goal.error = detailErr
 			return nil

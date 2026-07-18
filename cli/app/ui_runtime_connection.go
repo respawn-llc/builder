@@ -1,19 +1,29 @@
 package app
 
 import (
-	"io"
 	"strings"
 
+	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 )
 
-const runtimeDisconnectedStatusMessage = "server connection lost"
+const runtimeDisconnectedStatusMessage = "server disconnected"
 
 func (m *uiModel) observeRuntimeRequestResult(err error) {
-	if m == nil || !m.hasRuntimeClient() || m.connectionState == nil {
+	if m == nil || !m.hasRuntimeClient() {
 		return
 	}
-	m.connectionState.ObserveUnary(err)
+	if err == nil {
+		m.setRuntimeDisconnected(false)
+		return
+	}
+	if runtimeattach.IsRuntimeConnectionError(err) {
+		m.setRuntimeDisconnected(true)
+		return
+	}
+	if runtimeattach.ConfirmsRuntimeReachability(err) {
+		m.setRuntimeDisconnected(false)
+	}
 }
 
 func (m *uiModel) runtimeDisconnectStatusVisible() bool {
@@ -57,27 +67,16 @@ func coalesceLatest[T any](ch chan T, msg T) {
 	}
 }
 
+func (m *uiModel) setRuntimeDisconnected(disconnected bool) {
+	if m == nil {
+		return
+	}
+	m.runtimeConnection = clientui.NewRuntimeConnectionLifecycle(disconnected)
+}
+
 func (m *uiModel) runtimeDisconnectedState() bool {
-	if m == nil || m.connectionState == nil {
+	if m == nil {
 		return false
 	}
-	return m.connectionState.IsDisconnected()
-}
-
-func (m *uiModel) setRuntimeDisconnected(disconnected bool) {
-	if m == nil || m.connectionState == nil {
-		return
-	}
-	if disconnected {
-		m.connectionState.ObserveUnary(io.EOF)
-		return
-	}
-	m.connectionState.ObserveUnary(nil)
-}
-
-func (m *uiModel) observeRuntimeStreamResult(err error) interactiveConnectionOutcome {
-	if m == nil || m.connectionState == nil {
-		return classifyInteractiveConnection(interactiveConnectionOperationStream, err)
-	}
-	return m.connectionState.ObserveStream(err)
+	return m.runtimeConnection.IsDisconnected()
 }

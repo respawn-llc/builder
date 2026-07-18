@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"core/cli/app/internal/runtimeattach"
 	"core/cli/tui"
 	tuiinput "core/cli/tui/input"
 	"core/shared/clientui"
@@ -491,8 +493,7 @@ func (c uiAskController) applyDeliveryResult(result promptAnswerDeliveryResultMs
 	}
 	c.cancelActiveDelivery()
 	m.activity = uiActivityQuestion
-	outcome := classifyInteractiveConnection(interactiveConnectionOperationUnary, result.err)
-	if outcome.Kind() == interactiveConnectionOutcomeSurfaceCanceled || outcome.IsConnectionLoss() {
+	if errors.Is(result.err, context.Canceled) || runtimeattach.IsRuntimeConnectionError(result.err) {
 		return nil
 	}
 	return m.sendTransientStatusWithNoticeID(result.err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")

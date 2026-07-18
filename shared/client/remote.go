@@ -194,7 +194,7 @@ func (c *Remote) GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatus
 	return callDedicatedRPC[serverapi.UpdateStatusRequest, serverapi.UpdateStatusResponse](
 		c,
 		ctx,
-		"get-update-status",
+		apicontract.UpdateStatusDedicatedRequestID,
 		protocol.MethodServerUpdateStatusGet,
 		req,
 	)

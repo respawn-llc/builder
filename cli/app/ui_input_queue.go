@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"core/cli/app/commands"
+	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 
@@ -472,7 +473,7 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 		m.removePendingInjectedByID(item.LocalID)
 		if item.State == injectedRuntimeQueuePendingCreate {
 			c.restoreInjectedTextIntoInput(item.Text)
-			detailErr := formatRuntimeSubmissionError(msg.err)
+			detailErr := runtimeattach.FormatSubmissionError(msg.err)
 			m.activity = uiActivityError
 			appendCmd := m.appendLocalEntryWithNoticeID(operatorErrorFeedbackRole, detailErr, "")
 			m.logf("queue_create.error err=%q", detailErr)

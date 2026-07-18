@@ -26,7 +26,7 @@
 ## TUI Update Discovery
 
 - The Kent server is authoritative for TUI update status. Update metadata is independent of session runtime state and does not participate in transcript or runtime ordering.
-- Release lookup is owned behind one server-side release-metadata source contract. Default production composition supplies the GitHub HTTP implementation through the server startup/core options boundary; alternate production-valid server compositions may supply another implementation through that same boundary.
+- Release lookup is owned behind one server-side release-metadata source contract. Production composition uses the GitHub HTTP implementation.
 - Release checks are lazy: the server checks GitHub only when a client requests update status and the previous completed attempt is at least one hour old. Concurrent requests share one bounded check, and every outcome is cached for the one-hour freshness window.
 - A newer valid release is returned as typed update metadata for client-owned presentation. HTTP 4xx/5xx responses, invalid release metadata, malformed non-development release versions, and unexpected internal states surface as update-check failures with their cause.
 - Network failures and timeouts complete as checked with no available update and no user-facing error.

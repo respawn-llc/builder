@@ -29,19 +29,15 @@ type Options struct {
 }
 
 func Run(ctx context.Context, opts Options) error {
-	connection := newInteractiveConnectionOwner()
 	return runner.RunInteractive(ctx, runnerRequestFromOptions(opts), runner.Dependencies[interactiveSessionServer, authInteractor, embeddedattach.StartupOptions]{
-		NewAuthInteractor: func() authInteractor {
-			return newInteractiveAuthInteractorWithConnection(connection)
-		},
+		NewAuthInteractor: newInteractiveAuthInteractor,
 		StartSessionServer: func(ctx context.Context, req runner.Request[embeddedattach.StartupOptions], interactor authInteractor, interactive bool) (interactiveSessionServer, error) {
-			return startSessionServerWithConnection(ctx, optionsFromRunnerRequest(req), interactor, interactive, connection)
+			return startSessionServer(ctx, optionsFromRunnerRequest(req), interactor, interactive)
 		},
 		RunSessionLifecycle: func(ctx context.Context, server interactiveSessionServer, interactor authInteractor, opts runner.SessionLifecycleOptions) error {
 			return runSessionLifecycleWithOptions(ctx, server, interactor, sessionLifecycleOptions{
-				Intent:     opts.Intent,
-				Overrides:  opts.Overrides,
-				Connection: connection,
+				Intent:    opts.Intent,
+				Overrides: opts.Overrides,
 			})
 		},
 	})

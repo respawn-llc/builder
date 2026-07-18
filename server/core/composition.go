@@ -53,7 +53,6 @@ func NewWithContext(ctx context.Context, cfg config.App, authSupport serverboots
 type Options struct {
 	RuntimeClientFactory runtimewire.RuntimeClientFactory
 	RootLease            *RootLockLease
-	ServerStatus         serverstatus.Dependencies
 }
 
 func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serverbootstrap.AuthSupport, runtimeSupport serverbootstrap.RuntimeSupport, opts Options) (*Core, error) {
@@ -159,7 +158,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	projectViews := projectService
 	authBootstrapService := authservice.NewBootstrapService(authSupport.AuthManager, authSupport.OAuthOptions, cfg.Settings, rpccontract.AllowedPreAuthMethods())
 	authStatusService := authservice.NewStatusService(authSupport.AuthManager, cfg.Settings)
-	updateStatusService := serverstatus.NewUpdateStatusService(config.Version, opts.ServerStatus)
+	updateStatusService := serverstatus.NewUpdateStatusService(config.Version, cfg.Settings.Debug)
 	serverStatusService := serverstatus.NewServerStatusService(authSupport.AuthManager, cfg, updateStatusService)
 	sessionViewService := sessionview.NewService(sessionStoreResolver, runtimeRegistry, metadataStore).
 		WithExecutionEnvironmentConfig(cfg).

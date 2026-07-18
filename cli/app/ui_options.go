@@ -44,14 +44,6 @@ func WithUILogger(logger uiLogger) UIOption {
 	}
 }
 
-func WithUIConnectionState(owner *interactiveConnectionOwner) UIOption {
-	return func(m *uiModelConstruction) {
-		if owner != nil {
-			m.connectionState = owner
-		}
-	}
-}
-
 func WithUIDebug(enabled bool) UIOption {
 	return func(m *uiModelConstruction) {
 		m.debugMode = enabled

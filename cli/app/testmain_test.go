@@ -34,17 +34,6 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	}
-	if configPath, configuredClientProcess := os.LookupEnv(appfixture.ConfiguredClientProcessConfigEnvName); configuredClientProcess {
-		processConfig, err := appfixture.ReadConfiguredClientProcessConfig(configPath)
-		if err == nil {
-			err = runConfiguredPTYClientProcess(context.Background(), processConfig)
-		}
-		if err != nil {
-			log.Print(err)
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
 	previousDuration := transientStatusDuration
 	previousSpinnerInterval := spinnerTickInterval
 	transientStatusDuration = 30 * time.Millisecond

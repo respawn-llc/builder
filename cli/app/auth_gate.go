@@ -55,14 +55,9 @@ type interactiveAuthInteractor struct {
 	pickConflict          func(authInteraction) (authConflictPickerResult, error)
 	showSuccess           func(authSuccessScreenData) error
 	promptReader          *bufio.Reader
-	connectionState       *interactiveConnectionOwner
 }
 
 func newInteractiveAuthInteractor() authInteractor {
-	return newInteractiveAuthInteractorWithConnection(nil)
-}
-
-func newInteractiveAuthInteractorWithConnection(connection *interactiveConnectionOwner) authInteractor {
 	return &interactiveAuthInteractor{
 		stdin:       os.Stdin,
 		stderr:      os.Stderr,
@@ -73,7 +68,6 @@ func newInteractiveAuthInteractorWithConnection(connection *interactiveConnectio
 		},
 		runDeviceFlow:   serverauth.RunOpenAIDeviceCodeFlow,
 		runCallbackPage: runAuthCallbackPage,
-		connectionState: connection,
 	}
 }
 

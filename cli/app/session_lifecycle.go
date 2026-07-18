@@ -9,6 +9,7 @@ import (
 	"core/cli/app/commands"
 	"core/shared/apicontract"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -43,19 +44,26 @@ type interactiveSessionServer interface {
 }
 
 type sessionLifecycleOptions struct {
-	Intent     *serverapi.SessionLaunchIntent
-	Overrides  serverapi.RunPromptOverrides
-	Connection *interactiveConnectionOwner
+	Intent    *serverapi.SessionLaunchIntent
+	Overrides serverapi.RunPromptOverrides
+}
+
+func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, interactor authInteractor, initialSessionID string) error {
+	var intent *serverapi.SessionLaunchIntent
+	if trimmed := strings.TrimSpace(initialSessionID); trimmed != "" {
+		sessionID, err := runtimeids.ParseSessionID(trimmed)
+		if err != nil {
+			return err
+		}
+		open := serverapi.OpenExistingSessionLaunchIntent(sessionID)
+		intent = &open
+	}
+	return runSessionLifecycleWithOptions(ctx, server, interactor, sessionLifecycleOptions{Intent: intent})
 }
 
 func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessionServer, interactor authInteractor, opts sessionLifecycleOptions) error {
-	connection := opts.Connection
-	if connection == nil {
-		return errors.New("interactive connection owner is required")
-	}
 	originalServer := server
 	boundServer, err := ensureInteractiveProjectBinding(ctx, server)
-	connection.ObserveUnary(err)
 	if err != nil {
 		return err
 	}
@@ -63,7 +71,7 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		defer func() { _ = boundServer.Close() }()
 	}
 	server = boundServer
-	planner := newSessionLaunchPlannerWithConnection(server, connection)
+	planner := newSessionLaunchPlanner(server)
 	next := serverapi.SelectSessionDirective(serverapi.SessionAuthPreparationKeepCurrent)
 	if opts.Intent != nil {
 		next = serverapi.LaunchSessionDirective(
@@ -102,7 +110,6 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 			case sessionPickerOpenResult:
 				sessionID := picked.sessionID
 				executionTarget, err := loadSelectedSessionExecutionTarget(ctx, server.SessionViewClient(), sessionID.String())
-				connection.ObserveUnary(err)
 				if err != nil {
 					pickerNotice = &startupPickerNotice{
 						Text:       "Could not inspect the selected session. Try again.",
@@ -113,7 +120,6 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 					continue
 				}
 				workspaceChangeAction, err := maybeHandlePickedSessionWorkspaceChange(ctx, server, sessionID.String(), executionTarget)
-				connection.ObserveUnary(err)
 				if err != nil {
 					return err
 				}
@@ -147,7 +153,6 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 			return errors.New("launch directive is missing preparation")
 		}
 		reboundServer, rebound, err := bindNavigationSessionContext(ctx, server, preparation)
-		connection.ObserveUnary(err)
 		if err != nil {
 			return err
 		}
@@ -156,14 +161,13 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 				defer func() { _ = reboundServer.Close() }()
 			}
 			server = reboundServer
-			planner = newSessionLaunchPlannerWithConnection(server, connection)
+			planner = newSessionLaunchPlanner(server)
 		}
 		launchRequest, err := sessionLaunchRequestFromIntent(intent, nextSessionOverrides)
 		if err != nil {
 			return err
 		}
 		plan, err := planner.PlanSession(ctx, launchRequest)
-		connection.ObserveUnary(err)
 		if err != nil {
 			return err
 		}
@@ -172,7 +176,7 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		if err != nil {
 			return err
 		}
-		runtimePlan, request, err := prepareSessionUIRunWithConnection(
+		runtimePlan, request, err := prepareSessionUIRun(
 			ctx,
 			server,
 			planner,
@@ -181,9 +185,7 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 			initialPromptHistoryRecorded,
 			transitionInput,
 			overrideStoredDraft,
-			connection,
 		)
-		connection.ObserveUnary(err)
 		if err != nil {
 			return err
 		}
@@ -209,7 +211,6 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 			return nil
 		}
 		resolved, err := resolveAndReleaseSessionAction(ctx, server, interactor, plan.SessionID, transition, runtimePlan)
-		connection.ObserveUnary(err)
 		if err != nil {
 			return err
 		}
@@ -256,30 +257,6 @@ func prepareSessionUIRun(
 	transitionInput string,
 	overrideStoredDraft bool,
 ) (*runtimeLaunchPlan, uiLoopRequest, error) {
-	return prepareSessionUIRunWithConnection(
-		ctx,
-		server,
-		planner,
-		plan,
-		initialPrompt,
-		initialPromptHistoryRecorded,
-		transitionInput,
-		overrideStoredDraft,
-		nil,
-	)
-}
-
-func prepareSessionUIRunWithConnection(
-	ctx context.Context,
-	server interactiveSessionServer,
-	planner *launchPlanner,
-	plan sessionLaunchPlan,
-	initialPrompt string,
-	initialPromptHistoryRecorded bool,
-	transitionInput string,
-	overrideStoredDraft bool,
-	connection *interactiveConnectionOwner,
-) (*runtimeLaunchPlan, uiLoopRequest, error) {
 	runtimePlan, err := planner.PrepareRuntime(ctx, plan, os.Stderr, "app.start session_id="+plan.SessionID+" workspace="+plan.ExecutionTarget.EffectiveWorkdir+" model="+plan.ActiveSettings.Model)
 	if err != nil {
 		return nil, uiLoopRequest{}, err
@@ -314,7 +291,6 @@ func prepareSessionUIRunWithConnection(
 		modelContractLocked:          plan.ModelContractLocked,
 		configuredModelName:          plan.ConfiguredModelName,
 		statusConfig:                 plan.StatusConfig,
-		connectionState:              connection,
 	}, nil
 }
 

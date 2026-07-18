@@ -1,4 +1,4 @@
-package app
+package runtimeattach
 
 import (
 	"context"
@@ -9,13 +9,13 @@ import (
 	"core/shared/llmerrors"
 )
 
-var errRuntimeSubmissionInterrupted = errors.New("interrupted")
+var ErrSubmissionInterrupted = errors.New("interrupted")
 
-func formatRuntimeSubmissionError(err error) string {
+func FormatSubmissionError(err error) string {
 	if err == nil {
 		return ""
 	}
-	if errors.Is(err, errRuntimeSubmissionInterrupted) || errors.Is(err, context.Canceled) {
+	if errors.Is(err, ErrSubmissionInterrupted) || errors.Is(err, context.Canceled) {
 		return ""
 	}
 	if formatted := llmerrors.UserFacingError(err); strings.TrimSpace(formatted) != "" {

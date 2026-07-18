@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -10,14 +11,9 @@ import (
 )
 
 type sessionPickerUpdateStatusMsg struct {
-	response *serverapi.UpdateStatusResponse
-	outcome  interactiveConnectionOutcome
+	response serverapi.UpdateStatusResponse
+	err      error
 }
-
-var (
-	errSessionPickerUpdateResponseRequired = errors.New("update status completion requires a response")
-	errSessionPickerUpdateOutcomeRequired  = errors.New("update status completion requires a valid outcome")
-)
 
 func (m *sessionPickerModel) collectUpdateStatusCmd() tea.Cmd {
 	if m == nil || m.header.updateStatus == nil {
@@ -28,72 +24,46 @@ func (m *sessionPickerModel) collectUpdateStatusCmd() tea.Cmd {
 	return func() tea.Msg {
 		response, err := client.GetUpdateStatus(ctx, serverapi.UpdateStatusRequest{})
 		if err != nil {
-			return sessionPickerUpdateStatusMsg{
-				outcome: classifyInteractiveConnection(interactiveConnectionOperationUnary, err),
-			}
+			return sessionPickerUpdateStatusMsg{err: err}
 		}
-		if err := response.Validate(); err != nil {
-			return sessionPickerUpdateStatusMsg{outcome: invalidInteractiveConnectionContract(err)}
-		}
-		return sessionPickerUpdateStatusMsg{
-			response: &response,
-			outcome:  classifyInteractiveConnection(interactiveConnectionOperationUnary, nil),
-		}
+		return sessionPickerUpdateStatusMsg{response: response}
 	}
 }
 
 func (m *sessionPickerModel) applyUpdateStatus(message sessionPickerUpdateStatusMsg) tea.Cmd {
-	outcome := message.outcome
-	if m.connection != nil {
-		m.connection.ObserveOutcome(outcome)
+	if errors.Is(message.err, context.Canceled) {
+		return nil
 	}
-	switch outcome.Kind() {
-	case interactiveConnectionOutcomeSuccess:
-		if message.response == nil {
-			return m.handleUpdateStatusInvalidContract(errSessionPickerUpdateResponseRequired)
-		}
-		if err := message.response.Validate(); err != nil {
-			return m.handleUpdateStatusInvalidContract(err)
-		}
-		result := message.response.Result
-		m.updateStatus = &result
-		m.ensureSelectedVisible(m.tab(m.activeTab))
+	if message.err != nil {
+		m.setUpdateStatusFailure(fmt.Errorf("request update status: %w", message.err))
 		return nil
-	case interactiveConnectionOutcomeSurfaceCanceled, interactiveConnectionOutcomeConnectionLoss:
-		return nil
-	case interactiveConnectionOutcomeReachableOperationFailure, interactiveConnectionOutcomeInconclusiveOperationFailure:
-		if outcome.Err() == nil {
-			return m.handleUpdateStatusInvalidContract(errSessionPickerUpdateOutcomeRequired)
-		}
-		m.recordPickerFailureForTab(
-			m.tab(m.activeTab),
-			sessionPickerOperationUpdateStatus,
-			0,
-			sessionPickerFailureUpdateRequest,
-			outcome.Err(),
-		)
-		return nil
-	case interactiveConnectionOutcomeInvalidContract:
-		return m.handleUpdateStatusInvalidContract(outcome.Err())
-	default:
-		return m.handleUpdateStatusInvalidContract(errSessionPickerUpdateOutcomeRequired)
 	}
+	if err := message.response.Validate(); err != nil {
+		m.handleUpdateStatusInvalidContract(err)
+		return nil
+	}
+	result := message.response.Result
+	m.updateStatus = &result
+	m.ensureSelectedVisible(m.tab(m.activeTab))
+	return nil
 }
 
-func (m *sessionPickerModel) handleUpdateStatusInvalidContract(err error) tea.Cmd {
+func (m *sessionPickerModel) handleUpdateStatusInvalidContract(err error) {
 	if err == nil {
-		err = errSessionPickerUpdateOutcomeRequired
+		err = errors.New("update status contract violation")
 	}
 	if m.header.StatusRequest.Settings.Debug {
 		panic(fmt.Sprintf("session picker update status contract violation: %v", err))
 	}
-	m.recordPickerFailureForTab(
-		m.tab(m.activeTab),
-		sessionPickerOperationUpdateStatus,
-		0,
-		sessionPickerFailureUpdateContract,
-		err,
-	)
-	m.result = newSessionPickerCancelResult()
-	return tea.Quit
+	m.setUpdateStatusFailure(fmt.Errorf("invalid update status response: %w", err))
+}
+
+func (m *sessionPickerModel) setUpdateStatusFailure(err error) {
+	cause := "unknown update status failure"
+	if err != nil {
+		cause = err.Error()
+	}
+	result := serverapi.FailedUpdateStatusResult(cause)
+	m.updateStatus = &result
+	m.ensureSelectedVisible(m.tab(m.activeTab))
 }

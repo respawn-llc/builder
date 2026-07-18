@@ -6,15 +6,9 @@ type readinessLog struct {
 
 func readinessLogFromAnalysis(analysis Analysis, dimensions Dimensions) readinessLog {
 	var log readinessLog
-	var nativeFrame nativeOngoingFrameReadiness
 	for _, operation := range analysis.Operations {
-		for _, record := range OperationRecords(operation) {
-			if boundary, ok := readinessBoundaryFromOperation(record, dimensions); ok {
-				log.append(boundary)
-			}
-			if boundary, ok := nativeFrame.observe(record, dimensions); ok {
-				log.append(boundary)
-			}
+		if boundary, ok := readinessBoundaryFromOperation(operation, dimensions); ok {
+			log.append(boundary)
 		}
 	}
 	for _, event := range analysis.PhaseEvents {

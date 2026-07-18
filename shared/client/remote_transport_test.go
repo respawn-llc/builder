@@ -114,13 +114,10 @@ func TestRemoteReleaseSessionRuntimePropagatesClosePolicy(t *testing.T) {
 	requireNoHandlerError(t, handlerErrs)
 }
 
-func TestRemoteUpdateStatusCancellationClosesDedicatedConnectionAndLeavesControlUsable(t *testing.T) {
-	var connectionCount atomic.Int32
+func TestRemoteUpdateStatusCancellationLeavesControlUsable(t *testing.T) {
 	updateStarted := make(chan struct{}, 1)
-	updateConnectionClosed := make(chan struct{}, 1)
 	handlerErrs := make(chan error, 8)
 	server := httptest.NewServer(rpcwire.NewWebSocketTransport().Handler(func(ctx context.Context, conn rpcwire.Conn) {
-		connectionCount.Add(1)
 		for event := range conn.Events() {
 			if event.Err != nil {
 				return
@@ -137,7 +134,6 @@ func TestRemoteUpdateStatusCancellationClosesDedicatedConnectionAndLeavesControl
 			case protocol.MethodServerUpdateStatusGet:
 				updateStarted <- struct{}{}
 				<-conn.Closed()
-				updateConnectionClosed <- struct{}{}
 				return
 			case protocol.MethodProjectList:
 				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.ProjectListResponse{}))); err != nil {
@@ -175,19 +171,11 @@ func TestRemoteUpdateStatusCancellationClosesDedicatedConnectionAndLeavesControl
 	if err := <-updateDone; !errors.Is(err, context.Canceled) {
 		t.Fatalf("GetUpdateStatus error = %v, want context canceled", err)
 	}
-	select {
-	case <-updateConnectionClosed:
-	case <-time.After(time.Second):
-		t.Fatal("update cancellation did not close its dedicated connection")
-	}
 
 	listCtx, cancelList := context.WithTimeout(context.Background(), time.Second)
 	defer cancelList()
 	if _, err := remote.ListProjects(listCtx, serverapi.ProjectListRequest{}); err != nil {
 		t.Fatalf("ListProjects after canceled update: %v", err)
-	}
-	if got := connectionCount.Load(); got != 2 {
-		t.Fatalf("connectionCount = %d, want control plus dedicated update connections", got)
 	}
 	requireNoHandlerError(t, handlerErrs)
 }

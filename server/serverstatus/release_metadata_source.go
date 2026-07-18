@@ -7,191 +7,143 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 
 	brand "core/shared/config"
 )
 
-const defaultLatestReleaseURL = "https://api.github.com/repos/" + brand.RepoSlug + "/releases/latest"
+const (
+	defaultLatestReleaseURL = "https://api.github.com/repos/" + brand.RepoSlug + "/releases/latest"
+	maxReleaseMetadataBytes = 64 * 1024
+)
 
-type ReleaseMetadata struct {
+type releaseMetadata struct {
 	Version string
 }
 
-type ReleaseMetadataSource interface {
-	LatestRelease(context.Context) (ReleaseMetadata, error)
+type releaseMetadataSource interface {
+	LatestRelease(context.Context) (releaseMetadata, error)
 }
 
-type ReleaseSourceConfigurationError struct {
+type releaseTransportError struct {
 	Cause error
 }
 
-func (e *ReleaseSourceConfigurationError) Error() string {
-	if e == nil || e.Cause == nil {
-		return "GitHub release source configuration is invalid"
-	}
-	return e.Cause.Error()
-}
-
-func (e *ReleaseSourceConfigurationError) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.Cause
-}
-
-type ReleaseTransportError struct {
-	Cause error
-}
-
-func (e *ReleaseTransportError) Error() string {
+func (e *releaseTransportError) Error() string {
 	if e == nil || e.Cause == nil {
 		return "release request transport failed"
 	}
 	return e.Cause.Error()
 }
 
-func (e *ReleaseTransportError) Unwrap() error {
+func (e *releaseTransportError) Unwrap() error {
 	if e == nil {
 		return nil
 	}
 	return e.Cause
 }
 
-type ReleaseHTTPStatusError struct {
+type releaseHTTPStatusError struct {
 	StatusCode int
 	Status     string
 }
 
-func (e *ReleaseHTTPStatusError) Error() string {
+func (e *releaseHTTPStatusError) Error() string {
 	if e == nil || strings.TrimSpace(e.Status) == "" {
 		return "release request returned an invalid HTTP status"
 	}
 	return e.Status
 }
 
-type ReleaseMetadataError struct {
+type releaseMetadataError struct {
 	Cause error
 }
 
-func (e *ReleaseMetadataError) Error() string {
+func (e *releaseMetadataError) Error() string {
 	if e == nil || e.Cause == nil {
 		return "release metadata is invalid"
 	}
 	return e.Cause.Error()
 }
 
-func (e *ReleaseMetadataError) Unwrap() error {
+func (e *releaseMetadataError) Unwrap() error {
 	if e == nil {
 		return nil
 	}
 	return e.Cause
 }
 
-type GitHubReleaseMetadataSource struct {
+type githubReleaseMetadataSource struct {
 	client    *http.Client
 	latestURL string
 }
 
-type releaseResponseReader struct {
-	io.Reader
-	failure error
-}
-
-func (r *releaseResponseReader) Read(buffer []byte) (int, error) {
-	read, err := r.Reader.Read(buffer)
-	if err != nil && !errors.Is(err, io.EOF) && r.failure == nil {
-		r.failure = err
-	}
-	return read, err
-}
-
-func (r *releaseResponseReader) decodeError(err error) error {
-	if r.failure != nil {
-		return &ReleaseTransportError{Cause: fmt.Errorf("read latest release response: %w", r.failure)}
-	}
-	return &ReleaseMetadataError{Cause: fmt.Errorf("decode latest release: %w", err)}
-}
-
-func NewDefaultGitHubReleaseMetadataSource() *GitHubReleaseMetadataSource {
+func newDefaultGitHubReleaseMetadataSource() *githubReleaseMetadataSource {
 	return newGitHubReleaseMetadataSource(nil, defaultLatestReleaseURL)
 }
 
-func NewGitHubReleaseMetadataSource(client *http.Client, latestURL string) (*GitHubReleaseMetadataSource, error) {
-	parsedURL, err := url.ParseRequestURI(strings.TrimSpace(latestURL))
-	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
-		if err == nil {
-			err = errors.New("custom GitHub release URL must be an absolute URL")
-		}
-		return nil, &ReleaseSourceConfigurationError{Cause: err}
-	}
-	return newGitHubReleaseMetadataSource(client, parsedURL.String()), nil
-}
-
-func newGitHubReleaseMetadataSource(client *http.Client, latestURL string) *GitHubReleaseMetadataSource {
+func newGitHubReleaseMetadataSource(client *http.Client, latestURL string) *githubReleaseMetadataSource {
 	if client == nil {
 		client = &http.Client{}
 	}
-	return &GitHubReleaseMetadataSource{client: client, latestURL: latestURL}
+	return &githubReleaseMetadataSource{client: client, latestURL: latestURL}
 }
 
-func (s *GitHubReleaseMetadataSource) LatestRelease(ctx context.Context) (metadata ReleaseMetadata, resultErr error) {
+func (s *githubReleaseMetadataSource) LatestRelease(ctx context.Context) (metadata releaseMetadata, resultErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, s.latestURL, nil)
 	if err != nil {
-		return ReleaseMetadata{}, &ReleaseTransportError{Cause: err}
+		return releaseMetadata{}, &releaseTransportError{Cause: err}
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("User-Agent", "kent")
 
 	response, err := s.client.Do(request)
 	if err != nil {
-		return ReleaseMetadata{}, &ReleaseTransportError{Cause: err}
+		return releaseMetadata{}, &releaseTransportError{Cause: err}
 	}
 	defer func() {
 		if closeErr := response.Body.Close(); closeErr != nil {
-			typedCloseErr := &ReleaseTransportError{Cause: fmt.Errorf("close latest release response: %w", closeErr)}
-			metadata = ReleaseMetadata{}
+			closeFailure := &releaseTransportError{Cause: fmt.Errorf("close latest release response: %w", closeErr)}
+			metadata = releaseMetadata{}
 			if resultErr == nil {
-				resultErr = typedCloseErr
-				return
+				resultErr = closeFailure
+			} else {
+				resultErr = errors.Join(resultErr, closeFailure)
 			}
-			resultErr = errors.Join(resultErr, typedCloseErr)
 		}
 	}()
+
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return ReleaseMetadata{}, &ReleaseHTTPStatusError{
+		return releaseMetadata{}, &releaseHTTPStatusError{
 			StatusCode: response.StatusCode,
 			Status:     response.Status,
 		}
 	}
 
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxReleaseMetadataBytes+1))
+	if err != nil {
+		return releaseMetadata{}, &releaseTransportError{Cause: fmt.Errorf("read latest release response: %w", err)}
+	}
+	if len(body) > maxReleaseMetadataBytes {
+		return releaseMetadata{}, &releaseMetadataError{Cause: errors.New("latest release metadata exceeds maximum size")}
+	}
+
 	var payload struct {
 		TagName *string `json:"tag_name"`
 	}
-	responseReader := &releaseResponseReader{Reader: response.Body}
-	decoder := json.NewDecoder(responseReader)
-	if err := decoder.Decode(&payload); err != nil {
-		return ReleaseMetadata{}, responseReader.decodeError(err)
-	}
-	var trailing json.RawMessage
-	if err := decoder.Decode(&trailing); responseReader.failure != nil {
-		return ReleaseMetadata{}, responseReader.decodeError(err)
-	} else if !errors.Is(err, io.EOF) {
-		if err == nil {
-			err = errors.New("unexpected trailing JSON value")
-		}
-		return ReleaseMetadata{}, responseReader.decodeError(err)
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return releaseMetadata{}, &releaseMetadataError{Cause: fmt.Errorf("decode latest release: %w", err)}
 	}
 	if payload.TagName == nil || strings.TrimSpace(*payload.TagName) == "" {
-		return ReleaseMetadata{}, &ReleaseMetadataError{Cause: errors.New("latest release tag is required")}
+		return releaseMetadata{}, &releaseMetadataError{Cause: errors.New("latest release tag is required")}
 	}
 	version, err := parseUpdateVersion(*payload.TagName)
 	if err != nil {
-		return ReleaseMetadata{}, &ReleaseMetadataError{Cause: fmt.Errorf("latest release tag is invalid: %w", err)}
+		return releaseMetadata{}, &releaseMetadataError{Cause: fmt.Errorf("latest release tag is invalid: %w", err)}
 	}
-	return ReleaseMetadata{Version: version.String()}, nil
+	return releaseMetadata{Version: version.String()}, nil
 }

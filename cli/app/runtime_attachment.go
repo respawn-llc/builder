@@ -8,9 +8,12 @@ import (
 	"strings"
 	"sync"
 
+	"core/cli/app/internal/runtimeattach"
 	"core/shared/apicontract"
 	"core/shared/serverapi"
 )
+
+const runtimeReleaseTimeout = runtimeattach.ReleaseTimeout
 
 type runtimeAttachmentSource interface {
 	RuntimeAttachmentClients() runtimeAttachmentClients
@@ -40,13 +43,13 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 		return nil, err
 	}
 	if clients.SessionTranscript == nil {
-		_ = releaseRuntime(clients.SessionRuntime, plan.SessionID, ownerID)
+		_ = runtimeattach.Release(clients.SessionRuntime, plan.SessionID, ownerID)
 		return nil, errors.New("session transcript service is required")
 	}
 	var attentionSubscription serverapi.AttentionNotificationSubscription
 	if clients.AttentionNotificationsSupported {
 		if clients.Attention == nil {
-			_ = releaseRuntime(clients.SessionRuntime, plan.SessionID, ownerID)
+			_ = runtimeattach.Release(clients.SessionRuntime, plan.SessionID, ownerID)
 			return nil, errors.New("attention notification service is required")
 		}
 		attentionSubscription, err = clients.Attention.SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{
@@ -54,7 +57,7 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 			IncludePendingPromptSnapshot: true,
 		})
 		if err != nil {
-			_ = releaseRuntime(clients.SessionRuntime, plan.SessionID, ownerID)
+			_ = runtimeattach.Release(clients.SessionRuntime, plan.SessionID, ownerID)
 			return nil, err
 		}
 	}
@@ -78,17 +81,17 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 		Wiring: wiring,
 		close: func() error {
 			stopStreams()
-			return releaseRuntime(clients.SessionRuntime, plan.SessionID, ownerID)
+			return runtimeattach.Release(clients.SessionRuntime, plan.SessionID, ownerID)
 		},
 		detachClose: func() error {
 			stopStreams()
-			return releaseRuntimeWithClosePolicy(clients.SessionRuntime, plan.SessionID, ownerID, serverapi.SessionRuntimeReleaseClosePolicyDetachOnly)
+			return runtimeattach.ReleaseWithClosePolicy(clients.SessionRuntime, plan.SessionID, ownerID, serverapi.SessionRuntimeReleaseClosePolicyDetachOnly)
 		},
 	}, nil
 }
 
 func activateSharedRuntime(ctx context.Context, clients runtimeAttachmentClients, plan sessionLaunchPlan) (*runtimeReactivator, string, error) {
-	lease, err := activateRuntime(ctx, clients.SessionRuntime, runtimeActivationRequest{
+	lease, err := runtimeattach.Activate(ctx, clients.SessionRuntime, runtimeattach.Request{
 		SessionID:      plan.SessionID,
 		ActiveSettings: plan.ActiveSettings,
 		EnabledTools:   plan.EnabledTools,

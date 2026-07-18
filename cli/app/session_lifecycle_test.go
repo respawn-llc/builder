@@ -32,31 +32,6 @@ import (
 
 func sessionLifecycleStringPtr(value string) *string { return &value }
 
-func runSessionLifecycleForTest(
-	ctx context.Context,
-	server interactiveSessionServer,
-	interactor authInteractor,
-	initialSessionID string,
-) error {
-	options := sessionLifecycleOptions{Connection: newInteractiveConnectionOwner()}
-	if initialSessionID != "" {
-		sessionID, err := runtimeids.ParseSessionID(initialSessionID)
-		if err != nil {
-			return err
-		}
-		intent := serverapi.OpenExistingSessionLaunchIntent(sessionID)
-		options.Intent = &intent
-	}
-	return runSessionLifecycleWithOptions(ctx, server, interactor, options)
-}
-
-func TestRunSessionLifecycleRequiresConnectionOwner(t *testing.T) {
-	err := runSessionLifecycleWithOptions(context.Background(), nil, nil, sessionLifecycleOptions{})
-	if err == nil {
-		t.Fatal("session lifecycle accepted missing interactive connection owner")
-	}
-}
-
 func TestRunSessionLifecycleReturnsMissingWorkspaceFailure(t *testing.T) {
 	missingWorkspace := filepath.Join(t.TempDir(), "workspace-removed")
 	containerDir := t.TempDir()
@@ -95,10 +70,7 @@ func TestRunSessionLifecycleReturnsMissingWorkspaceFailure(t *testing.T) {
 	}
 
 	createIntent := serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())
-	err := runSessionLifecycleWithOptions(context.Background(), server, nil, sessionLifecycleOptions{
-		Intent:     &createIntent,
-		Connection: newInteractiveConnectionOwner(),
-	})
+	err := runSessionLifecycleWithOptions(context.Background(), server, nil, sessionLifecycleOptions{Intent: &createIntent})
 	if err == nil {
 		t.Fatal("expected startup error for missing workspace")
 	}
@@ -130,9 +102,8 @@ func TestRunSessionLifecycleAppliesInitialAgentOverride(t *testing.T) {
 
 	createIntent := serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())
 	err := runSessionLifecycleWithOptions(context.Background(), server, nil, sessionLifecycleOptions{
-		Intent:     &createIntent,
-		Overrides:  serverapi.RunPromptOverrides{AgentRole: sessionLifecycleStringPtr("worker")},
-		Connection: newInteractiveConnectionOwner(),
+		Intent:    &createIntent,
+		Overrides: serverapi.RunPromptOverrides{AgentRole: sessionLifecycleStringPtr("worker")},
 	})
 	if !errors.Is(err, stopErr) {
 		t.Fatalf("runSessionLifecycle error = %v, want %v", err, stopErr)
@@ -201,9 +172,8 @@ func TestRunSessionLifecycleRejectsDifferentAgentRoleForLockedContinuation(t *te
 	sessionID := sessionLifecycleSessionID(t, store.Meta().SessionID)
 	openIntent := serverapi.OpenExistingSessionLaunchIntent(sessionID)
 	err = runSessionLifecycleWithOptions(ctx, server, nil, sessionLifecycleOptions{
-		Intent:     &openIntent,
-		Overrides:  serverapi.RunPromptOverrides{AgentRole: sessionLifecycleStringPtr("worker")},
-		Connection: newInteractiveConnectionOwner(),
+		Intent:    &openIntent,
+		Overrides: serverapi.RunPromptOverrides{AgentRole: sessionLifecycleStringPtr("worker")},
 	})
 	if !errors.Is(err, launch.ErrLockedAgentRoleChange) {
 		t.Fatalf("runSessionLifecycle error = %v, want locked role change", err)
@@ -386,7 +356,7 @@ func TestRunSessionLifecyclePickerWorkspaceChangeYesRetargetsSessionAndReplans(t
 		},
 	}
 
-	err := runSessionLifecycleForTest(context.Background(), server, nil, "")
+	err := runSessionLifecycle(context.Background(), server, nil, "")
 	if !errors.Is(err, stopErr) {
 		t.Fatalf("runSessionLifecycle error = %v, want %v", err, stopErr)
 	}
@@ -472,7 +442,7 @@ func TestRunSessionLifecyclePickerWorkspaceChangeNoReturnsToPicker(t *testing.T)
 		}},
 	}
 
-	err := runSessionLifecycleForTest(context.Background(), server, nil, "")
+	err := runSessionLifecycle(context.Background(), server, nil, "")
 	if err != nil {
 		t.Fatalf("runSessionLifecycle error = %v, want clean lifecycle stop", err)
 	}
@@ -587,7 +557,7 @@ func TestRunSessionLifecycleWorkspaceChangeLookupFailureReturnsToPickerAndOpensA
 		},
 	}
 
-	err := runSessionLifecycleForTest(context.Background(), server, nil, "")
+	err := runSessionLifecycle(context.Background(), server, nil, "")
 	if !errors.Is(err, stopErr) {
 		t.Fatalf("runSessionLifecycle error = %v, want %v", err, stopErr)
 	}
@@ -658,7 +628,7 @@ func TestRunSessionLifecycleExplicitSessionIDBypassesWorkspaceChangePrompt(t *te
 		},
 	}
 
-	err := runSessionLifecycleForTest(context.Background(), server, nil, store.Meta().SessionID)
+	err := runSessionLifecycle(context.Background(), server, nil, store.Meta().SessionID)
 	if !errors.Is(err, stopErr) {
 		t.Fatalf("runSessionLifecycle error = %v, want %v", err, stopErr)
 	}

@@ -82,62 +82,6 @@ func TestReadinessTrackerSeparatesInputAndSurfaceBoundaries(t *testing.T) {
 	}
 }
 
-func TestReadinessTrackerRecognizesOnlyCompleteNativeOngoingFrames(t *testing.T) {
-	tracker, err := NewReadinessTracker(MustDimensions(4, 16))
-	if err != nil {
-		t.Fatalf("new readiness tracker: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := tracker.Close(); err != nil {
-			t.Errorf("close readiness tracker: %v", err)
-		}
-	})
-
-	chunks := []Chunk{
-		NewChunk(0, time.Millisecond, []byte("\x1b[r")),
-		NewChunk(1, 2*time.Millisecond, []byte("\x1b[?6l\x1b[4;1Hstatus")),
-		NewChunk(2, 3*time.Millisecond, []byte("\x1b[?25l")),
-	}
-	for _, chunk := range chunks[:2] {
-		if err := tracker.AdvanceChunk(chunk); err != nil {
-			t.Fatalf("advance incomplete frame chunk %d: %v", chunk.Index, err)
-		}
-		if boundary, ok := tracker.LatestBoundaryAfter(ReadinessNativeOngoingFrame, 0); ok {
-			t.Fatalf("incomplete native frame produced boundary: %+v", boundary)
-		}
-	}
-	if err := tracker.AdvanceChunk(chunks[2]); err != nil {
-		t.Fatalf("advance frame completion: %v", err)
-	}
-	boundary, ok := tracker.LatestBoundaryAfter(ReadinessNativeOngoingFrame, 0)
-	if !ok {
-		t.Fatal("complete native ongoing frame did not produce boundary")
-	}
-	if boundary.ByteRange != (ByteRange{Start: 0, End: tracker.ByteCount()}) {
-		t.Fatalf("native frame boundary = %+v, want complete transaction [0,%d)", boundary.ByteRange, tracker.ByteCount())
-	}
-}
-
-func TestReadinessTrackerDoesNotTreatNativeBandResetAsRenderedFrame(t *testing.T) {
-	tracker, err := NewReadinessTracker(MustDimensions(4, 16))
-	if err != nil {
-		t.Fatalf("new readiness tracker: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := tracker.Close(); err != nil {
-			t.Errorf("close readiness tracker: %v", err)
-		}
-	})
-
-	reset := []byte("\x1b[r\x1b[?6l\x1b[4;1H\x1b[2K\x1b[?25l")
-	if err := tracker.AdvanceChunk(NewChunk(0, time.Millisecond, reset)); err != nil {
-		t.Fatalf("advance native band reset: %v", err)
-	}
-	if boundary, ok := tracker.LatestBoundaryAfter(ReadinessNativeOngoingFrame, 0); ok {
-		t.Fatalf("band reset without rendered content produced frame boundary: %+v", boundary)
-	}
-}
-
 func TestReadinessTrackerAndFullAnalysisUseEquivalentBoundaryLookup(t *testing.T) {
 	marker, err := EncodePhaseMarker(PhaseMarker{Sequence: 1, Phase: PhaseInputApplied})
 	if err != nil {
@@ -147,7 +91,6 @@ func TestReadinessTrackerAndFullAnalysisUseEquivalentBoundaryLookup(t *testing.T
 		NewChunk(0, time.Millisecond, marker),
 		NewChunk(1, 2*time.Millisecond, []byte("\x1b[2;1H")),
 		NewChunk(2, 3*time.Millisecond, []byte("\x1b[?1049l")),
-		NewChunk(3, 4*time.Millisecond, []byte("\x1b[r\x1b[?6l\x1b[2;1Hstatus\x1b[?25l")),
 	}
 	dimensions := MustDimensions(2, 16)
 	tracker, err := NewReadinessTracker(dimensions)
@@ -176,7 +119,6 @@ func TestReadinessTrackerAndFullAnalysisUseEquivalentBoundaryLookup(t *testing.T
 	kinds := []ReadinessBoundaryKind{
 		ReadinessInputApplied,
 		ReadinessRendererFrame,
-		ReadinessNativeOngoingFrame,
 		ReadinessNormalBufferRestored,
 	}
 	for _, kind := range kinds {

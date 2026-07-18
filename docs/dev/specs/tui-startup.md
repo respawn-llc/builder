@@ -77,12 +77,10 @@ Ordered gates; each gate is skipped when its condition does not apply, never byp
 ## Errors
 
 - Preflight server-connection failure at TUI startup exits the TUI with an actionable error message (endpoint + reason). No retry affordance, no per-surface handling.
-- The interactive entrypoint creates one connection-lifecycle owner before server attach. Attach/preflight failure still exits as specified above; after successful preflight, that same owner spans the initial auth gate, project/workspace binding and rebinding, every session-picker open, and handoff to the main UI. It is the sole connected/disconnected authority and surfaces `server connection lost` through the persisted status line. Individual surfaces never implement their own connection-error handling, widgets, or designs; if centralized handling is impossible in some path, the TUI crashes cleanly rather than growing ad-hoc handlers.
-- On auth/session-picker status lines, the existing surface-owned failure or notice projection remains authoritative. Persisted disconnect fills only an otherwise-empty status line; if the surface-owned content clears while the owner remains disconnected, the disconnect notice becomes visible.
-- Project/workspace rebinding prepares and validates the successor server connection completely before retiring the predecessor. A rejected successor is closed while the predecessor remains open and usable; rebinding never transfers ownership of the configured server to the TUI.
+- After startup, server-connection loss is handled by exactly one global centralized connection handler that surfaces `server connection lost` through the persisted status line. Individual surfaces never implement their own connection-error handling, widgets, or designs; if centralized handling is impossible in some path, the TUI crashes cleanly rather than growing ad-hoc handlers.
 - Any startup exit path (success, cancel, failure) restores the terminal best-effort: alt-screen exited, cursor restored, no residual control state. Ongoing-mode output already written to the normal buffer is permanent by design and is not restored.
 - Debug builds fail fast on startup invariant violations; release builds surface the error and recover or exit with a clear message. (owner: core-runtime-tools :: Configuration)
 
 ## Known Drift (Go TUI, frozen)
 
-The shipping Go TUI predates these decisions and diverges through an env-vs-saved auth conflict picker and client-side project-name derivation. These are drift, not spec.
+The shipping Go TUI predates these decisions and diverges: it has an embedded-server fallback, an env-vs-saved auth conflict picker, and client-side project-name derivation. These are drift, not spec.

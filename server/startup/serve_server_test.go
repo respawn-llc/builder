@@ -10,16 +10,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	"core/server/authservice"
-	"core/server/core"
 	"core/server/metadata"
-	"core/server/serverstatus"
 	rpccontract "core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
@@ -150,24 +147,6 @@ func startServingTestServer(t *testing.T, server *ServeServer) {
 			t.Errorf("Serve error = %v, want context canceled", serveErr)
 		}
 	})
-	waitForServeListener(t, server.Config())
-}
-
-func waitForServeListener(t *testing.T, cfg config.App) {
-	t.Helper()
-	address := net.JoinHostPort(cfg.Settings.ServerHost, strconv.Itoa(cfg.Settings.ServerPort))
-	var dialErr error
-	if !testsetup.Until(time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
-		conn, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
-		dialErr = err
-		if err != nil {
-			return false
-		}
-		_ = conn.Close()
-		return true
-	}) {
-		t.Fatalf("serve listener %s did not become dialable: %v", address, dialErr)
-	}
 }
 
 func waitForServeResponse(t *testing.T, httpClient *http.Client, url string) *http.Response {
@@ -584,66 +563,6 @@ openai_base_url = "http://127.0.0.1:11434/v1"
 	}
 }
 
-func TestStartServeServerWithOptionsExposesInjectedUpdateStatusThroughConfiguredRemote(t *testing.T) {
-	home := t.TempDir()
-	workspace := t.TempDir()
-	t.Setenv("HOME", home)
-	writeServeSettings(t, home, `
-model = "gpt-5"
-openai_base_url = "http://127.0.0.1:11434/v1"
-`)
-	configureServeTestServerPort(t)
-	cfg, err := config.Load(workspace, config.LoadOptions{})
-	if err != nil {
-		t.Fatalf("config.Load: %v", err)
-	}
-	if _, err := metadata.RegisterBinding(context.Background(), cfg.PersistenceRoot, workspace); err != nil {
-		t.Fatalf("RegisterBinding: %v", err)
-	}
-	source := &serveReleaseSource{metadata: serverstatus.ReleaseMetadata{Version: "1.2.0"}}
-	server, err := StartServeServerWithOptions(
-		context.Background(),
-		Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true, AllowUnauthenticated: true},
-		envAuthHandler{lookupEnv: func(string) string { return "" }},
-		noopOnboarding,
-		Options{Core: core.Options{ServerStatus: serverstatus.Dependencies{ReleaseSource: source}}},
-	)
-	if err != nil {
-		t.Fatalf("StartServeServerWithOptions: %v", err)
-	}
-	t.Cleanup(func() { _ = server.Close() })
-	if calls := source.calls.Load(); calls != 0 {
-		t.Fatalf("release checks during startup = %d, want 0", calls)
-	}
-	startServingTestServer(t, server)
-
-	remote, err := client.DialConfiguredRemote(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("DialConfiguredRemote: %v", err)
-	}
-	t.Cleanup(func() { _ = remote.Close() })
-	first, err := remote.GetUpdateStatus(context.Background(), serverapi.UpdateStatusRequest{})
-	if err != nil {
-		t.Fatalf("first GetUpdateStatus: %v", err)
-	}
-	second, err := remote.GetUpdateStatus(context.Background(), serverapi.UpdateStatusRequest{})
-	if err != nil {
-		t.Fatalf("second GetUpdateStatus: %v", err)
-	}
-	if first.Result.Kind() != serverapi.UpdateStatusAvailable || second.Result.Kind() != serverapi.UpdateStatusAvailable {
-		t.Fatalf("update results = %q/%q, want available", first.Result.Kind(), second.Result.Kind())
-	}
-	if calls := source.calls.Load(); calls != 1 {
-		t.Fatalf("injected release checks = %d, want shared singleton check", calls)
-	}
-	if err := server.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if _, err := server.ServerStatusClient().GetUpdateStatus(context.Background(), serverapi.UpdateStatusRequest{}); !errors.Is(err, serverstatus.ErrUpdateStatusServiceClosed) {
-		t.Fatalf("GetUpdateStatus after Close error = %v, want closed checker", err)
-	}
-}
-
 func TestMissingConfigServeStartsBootstrapSurfaceBeforeAuthReady(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
@@ -666,64 +585,12 @@ func TestMissingConfigServeStartsBootstrapSurfaceBeforeAuthReady(t *testing.T) {
 	if cause.Code != string(serverapi.ServerNotReadyOnboardingRequired) || cause.Severity != "error" || cause.Summary != nil || cause.NextAction != nil {
 		t.Fatalf("unexpected onboarding readiness cause: %+v", cause)
 	}
+	if _, err := server.deps.ServerStatusClient().GetUpdateStatus(context.Background(), serverapi.UpdateStatusRequest{}); !errors.Is(err, serverapi.ErrServerNotReadyOnboardingRequired) {
+		t.Fatalf("GetUpdateStatus before activation error = %v, want onboarding not ready", err)
+	}
 	if _, statErr := os.Stat(filepath.Join(home, config.ConfigDirName, "config.toml")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("settings file should remain absent before finalize, stat err=%v", statErr)
 	}
-}
-
-func TestDeferredOnboardingUpdateStatusFailsBeforeActivationWithoutChecking(t *testing.T) {
-	home := t.TempDir()
-	workspace := t.TempDir()
-	t.Setenv("HOME", home)
-	configureServeTestServerPort(t)
-	registerEmbeddedWorkspace(t, workspace)
-	source := &serveReleaseSource{metadata: serverstatus.ReleaseMetadata{Version: "1.2.0"}}
-	server, err := StartServeServerWithOptions(
-		context.Background(),
-		Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true},
-		envAuthHandler{lookupEnv: func(string) string { return "" }},
-		nil,
-		Options{Core: core.Options{ServerStatus: serverstatus.Dependencies{ReleaseSource: source}}},
-	)
-	if err != nil {
-		t.Fatalf("StartServeServerWithOptions: %v", err)
-	}
-	t.Cleanup(func() { _ = server.Close() })
-
-	_, err = server.deps.ServerStatusClient().GetUpdateStatus(context.Background(), serverapi.UpdateStatusRequest{})
-	if !errors.Is(err, serverapi.ErrServerNotReadyOnboardingRequired) {
-		t.Fatalf("GetUpdateStatus before activation error = %v, want onboarding not ready", err)
-	}
-	if calls := source.calls.Load(); calls != 0 {
-		t.Fatalf("release checks before activation = %d, want 0", calls)
-	}
-	if _, err := server.deps.OnboardingFinalizeClient().FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{}); err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
-	}
-	first, err := server.deps.ServerStatusClient().GetUpdateStatus(context.Background(), serverapi.UpdateStatusRequest{})
-	if err != nil {
-		t.Fatalf("GetUpdateStatus after activation: %v", err)
-	}
-	second, err := server.deps.ServerStatusClient().GetUpdateStatus(context.Background(), serverapi.UpdateStatusRequest{})
-	if err != nil {
-		t.Fatalf("second GetUpdateStatus after activation: %v", err)
-	}
-	if first.Result.Kind() != serverapi.UpdateStatusAvailable || second.Result.Kind() != serverapi.UpdateStatusAvailable {
-		t.Fatalf("activated update results = %q/%q, want available", first.Result.Kind(), second.Result.Kind())
-	}
-	if calls := source.calls.Load(); calls != 1 {
-		t.Fatalf("release checks after activation = %d, want active core singleton cache", calls)
-	}
-}
-
-type serveReleaseSource struct {
-	calls    atomic.Int32
-	metadata serverstatus.ReleaseMetadata
-}
-
-func (s *serveReleaseSource) LatestRelease(context.Context) (serverstatus.ReleaseMetadata, error) {
-	s.calls.Add(1)
-	return s.metadata, nil
 }
 
 func TestStartupControlSurfaceRejectsConfigThatAppearsBeforeRootLock(t *testing.T) {

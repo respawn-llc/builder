@@ -23,16 +23,13 @@ type sessionPickerOperationKind string
 const (
 	sessionPickerOperationBodyPage        sessionPickerOperationKind = "body_page"
 	sessionPickerOperationDirectionalPage sessionPickerOperationKind = "directional_page"
-	sessionPickerOperationUpdateStatus    sessionPickerOperationKind = "update_status"
 )
 
 type sessionPickerFailureKind string
 
 const (
-	sessionPickerFailurePageRequest    sessionPickerFailureKind = "page_request"
-	sessionPickerFailurePageContract   sessionPickerFailureKind = "page_contract"
-	sessionPickerFailureUpdateRequest  sessionPickerFailureKind = "update_request"
-	sessionPickerFailureUpdateContract sessionPickerFailureKind = "update_contract"
+	sessionPickerFailurePageRequest  sessionPickerFailureKind = "page_request"
+	sessionPickerFailurePageContract sessionPickerFailureKind = "page_contract"
 )
 
 type startupPickerStatusKey struct {
@@ -46,11 +43,10 @@ type startupPickerStatusRecord struct {
 }
 
 type startupPickerStatusModel struct {
-	notice     startupPickerNotice
-	failures   map[startupPickerStatusKey]startupPickerStatusRecord
-	sequence   uint64
-	activeTab  *sessioncontract.SessionCategory
-	connection *interactiveConnectionOwner
+	notice    startupPickerNotice
+	failures  map[startupPickerStatusKey]startupPickerStatusRecord
+	sequence  uint64
+	activeTab *sessioncontract.SessionCategory
 }
 
 func newStartupPickerStatusModel() *startupPickerStatusModel {
@@ -68,9 +64,7 @@ func (m *startupPickerStatusModel) Record(failure startupPickerStatusFailure) {
 	}
 	switch failure.Kind {
 	case sessionPickerFailurePageRequest,
-		sessionPickerFailurePageContract,
-		sessionPickerFailureUpdateRequest,
-		sessionPickerFailureUpdateContract:
+		sessionPickerFailurePageContract:
 	default:
 		panic(fmt.Sprintf("unknown session picker failure kind %q", failure.Kind))
 	}
@@ -107,9 +101,8 @@ func (m *startupPickerStatusModel) failure(tab sessioncontract.SessionCategory, 
 }
 
 type startupPickerStatusProjection struct {
-	Notice       startupPickerNotice
-	Failure      *startupPickerStatusFailure
-	Disconnected bool
+	Notice  startupPickerNotice
+	Failure *startupPickerStatusFailure
 }
 
 type startupPickerStatusRenderKind uint8
@@ -150,9 +143,6 @@ func projectStartupPickerStatus(model *startupPickerStatusModel) startupPickerSt
 	if found {
 		failure := newest.failure
 		projection.Failure = &failure
-	}
-	if projection.Failure == nil && strings.TrimSpace(projection.Notice.Text) == "" && model.connection != nil {
-		projection.Disconnected = model.connection.IsDisconnected()
 	}
 	return projection
 }
@@ -199,14 +189,7 @@ func projectStartupPickerStatusRender(projection startupPickerStatusProjection) 
 		}
 	}
 	if strings.TrimSpace(projection.Notice.Text) == "" {
-		if !projection.Disconnected {
-			return nil
-		}
-		return &startupPickerStatusRenderProjection{
-			Kind:    startupPickerStatusRenderFailure,
-			Text:    runtimeDisconnectedStatusMessage,
-			IsError: true,
-		}
+		return nil
 	}
 	return &startupPickerStatusRenderProjection{
 		Kind:    startupPickerStatusRenderNotice,
@@ -221,8 +204,7 @@ func renderStartupPickerNotice(notice startupPickerNotice, width int) string {
 
 func sessionPickerFailureOperatorText(kind sessionPickerFailureKind) string {
 	switch kind {
-	case sessionPickerFailurePageRequest, sessionPickerFailurePageContract,
-		sessionPickerFailureUpdateRequest, sessionPickerFailureUpdateContract:
+	case sessionPickerFailurePageRequest, sessionPickerFailurePageContract:
 		return "Sessions are unavailable. Try again."
 	default:
 		panic(fmt.Sprintf("unknown session picker failure kind %q", kind))

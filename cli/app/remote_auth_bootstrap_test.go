@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"io"
 	"testing"
 
 	"core/cli/app/internal/authui"
@@ -13,10 +12,8 @@ import (
 
 type stubAuthBootstrapClient struct {
 	status          serverapi.AuthGetBootstrapStatusResponse
-	statusErr       error
 	completeReq     serverapi.AuthCompleteBootstrapRequest
 	completeCalls   int
-	completeErrs    []error
 	completeResp    serverapi.AuthCompleteBootstrapResponse
 	acknowledgeReq  serverapi.AuthAcknowledgeNoAuthRequest
 	acknowledge     int
@@ -25,53 +22,12 @@ type stubAuthBootstrapClient struct {
 }
 
 func (c *stubAuthBootstrapClient) GetAuthBootstrapStatus(context.Context, serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error) {
-	return c.status, c.statusErr
-}
-
-func TestInteractiveConnectionAuthTransportLossAndRecovery(t *testing.T) {
-	owner := newInteractiveConnectionOwner()
-	pickerCalls := 0
-	interactor := &interactiveAuthInteractor{
-		connectionState: owner,
-		pickMethod: func(req authInteraction) (authMethodPickerResult, error) {
-			pickerCalls++
-			if pickerCalls == 2 {
-				if !owner.IsDisconnected() {
-					t.Fatal("auth surface retry did not retain the shared disconnect state")
-				}
-				if !errors.Is(req.FlowErr, io.EOF) {
-					t.Fatalf("auth surface flow error = %v, want transport loss", req.FlowErr)
-				}
-			}
-			return authMethodPickerResult{Choice: authMethodChoiceSkip}, nil
-		},
-	}
-	remote := &stubAuthBootstrapClient{
-		status: serverapi.AuthGetBootstrapStatusResponse{
-			AuthRequired:   true,
-			SupportedModes: []serverapi.AuthBootstrapMode{serverapi.AuthBootstrapModeNone},
-		},
-		completeErrs: []error{io.EOF},
-	}
-	if err := ensureRemoteAuthReady(context.Background(), remote, config.Settings{}, interactor, true); err != nil {
-		t.Fatalf("recovered auth bootstrap: %v", err)
-	}
-	if owner.IsDisconnected() {
-		t.Fatal("reachable auth response did not clear the interactive connection owner")
-	}
-	if pickerCalls != 2 {
-		t.Fatalf("auth picker calls = %d, want retry after transport loss", pickerCalls)
-	}
+	return c.status, nil
 }
 
 func (c *stubAuthBootstrapClient) CompleteAuthBootstrap(_ context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
 	c.completeCalls++
 	c.completeReq = req
-	if len(c.completeErrs) > 0 {
-		err := c.completeErrs[0]
-		c.completeErrs = c.completeErrs[1:]
-		return serverapi.AuthCompleteBootstrapResponse{}, err
-	}
 	if c.completeResp != (serverapi.AuthCompleteBootstrapResponse{}) {
 		return c.completeResp, nil
 	}

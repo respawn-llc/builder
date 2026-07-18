@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"io"
 	"reflect"
 	"testing"
 	"time"
@@ -40,10 +39,6 @@ func TestStartSessionTranscriptEventsWaitsForExplicitRehydrationAfterLoss(t *tes
 	}
 
 	stream.RequestRehydration()
-	reachable := nextTranscriptEvent(t, stream.Events)
-	if reachable.Kind != ongoingTranscriptEventConnectionObservation || reachable.Err != nil {
-		t.Fatalf("reconnect event = %+v, want reachable", reachable)
-	}
 	second := nextTranscriptEvent(t, stream.Events)
 	if second.Kind != ongoingTranscriptEventMessage || second.Message.Kind != clientui.TranscriptMessageHydration {
 		t.Fatalf("second event = %+v, want reopened hydration message", second)
@@ -86,10 +81,6 @@ func TestStartSessionTranscriptEventsReopensOnLocalRehydrationRequest(t *testing
 
 	stream.RequestRehydration()
 
-	reachable := nextTranscriptEvent(t, stream.Events)
-	if reachable.Kind != ongoingTranscriptEventConnectionObservation || reachable.Err != nil {
-		t.Fatalf("reconnect event = %+v, want reachable", reachable)
-	}
 	second := nextTranscriptEvent(t, stream.Events)
 	if second.Kind != ongoingTranscriptEventMessage || second.Message.Sequence != 1 {
 		t.Fatalf("second event = %+v, want reopened hydration", second)
@@ -99,58 +90,19 @@ func TestStartSessionTranscriptEventsReopensOnLocalRehydrationRequest(t *testing
 	}
 }
 
-func TestStartSessionTranscriptEventsPublishesResubscribeConnectionFailure(t *testing.T) {
-	connectionFailure := errors.New("server unavailable")
-	subscriber := &recordingTranscriptSubscriber{
-		results: []transcriptSubscribeResult{
-			{sub: &scriptedTranscriptSubscription{err: io.EOF}},
-			{err: connectionFailure},
-			{sub: &scriptedTranscriptSubscription{messages: []clientui.TranscriptMessage{ongoingHydrationMessage(1)}}},
-		},
-	}
-	stream := startSessionTranscriptEvents(context.Background(), "session-1", subscriber.SubscribeSessionTranscript)
-	defer stream.Stop()
-
-	loss := nextTranscriptEvent(t, stream.Events)
-	if loss.Kind != ongoingTranscriptEventLoss || !errors.Is(loss.Err, io.EOF) {
-		t.Fatalf("loss event = %+v, want graceful stream EOF", loss)
-	}
-	stream.RequestRehydration()
-
-	failed := nextTranscriptEvent(t, stream.Events)
-	if failed.Kind != ongoingTranscriptEventConnectionObservation || !errors.Is(failed.Err, connectionFailure) {
-		t.Fatalf("connection event = %+v, want failed resubscribe observation", failed)
-	}
-	reachable := nextTranscriptEvent(t, stream.Events)
-	if reachable.Kind != ongoingTranscriptEventConnectionObservation || reachable.Err != nil {
-		t.Fatalf("connection event = %+v, want reachable resubscribe observation", reachable)
-	}
-}
-
 type recordingTranscriptSubscriber struct {
 	sessionIDs []string
 	subs       []*scriptedTranscriptSubscription
-	results    []transcriptSubscribeResult
 }
 
 func (s *recordingTranscriptSubscriber) SubscribeSessionTranscript(_ context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
 	s.sessionIDs = append(s.sessionIDs, req.SessionID)
-	if len(s.results) > 0 {
-		result := s.results[0]
-		s.results = s.results[1:]
-		return result.sub, result.err
-	}
 	if len(s.subs) == 0 {
 		return nil, context.Canceled
 	}
 	sub := s.subs[0]
 	s.subs = s.subs[1:]
 	return sub, nil
-}
-
-type transcriptSubscribeResult struct {
-	sub serverapi.TranscriptSubscription
-	err error
 }
 
 type scriptedTranscriptSubscription struct {

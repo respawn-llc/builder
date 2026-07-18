@@ -29,19 +29,17 @@ func (m *uiModel) reduceOngoingMessage(msg tea.Msg) uiFeatureUpdateResult {
 }
 
 func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea.Cmd {
-	if m == nil {
+	if m == nil || m.ongoingTranscript == nil {
 		return nil
 	}
-	if event.Kind == ongoingTranscriptEventConnectionObservation {
-		m.observeRuntimeStreamResult(event.Err)
-		return m.batchWithNativeOngoingRepaint(nil)
-	}
-	if m.ongoingTranscript == nil {
-		return nil
-	}
+	var (
+		result ongoing.Result
+		err    error
+	)
 	switch event.Kind {
 	case ongoingTranscriptEventMessage:
-		result, stateCmd, err := m.ongoingTranscript.Accept(event.Message)
+		var stateCmd tea.Cmd
+		result, stateCmd, err = m.ongoingTranscript.Accept(event.Message)
 		if err != nil {
 			var developerErr ongoing.DeveloperError
 			if errors.As(err, &developerErr) {
@@ -59,13 +57,15 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 		if m.turnQueueHook != nil {
 			m.turnQueueHook.OnTurnQueueAborted()
 		}
-		m.observeRuntimeStreamResult(event.Err)
-		result := m.ongoingTranscript.HandleSubscriptionLoss()
-		return m.batchWithNativeOngoingRepaint(m.handleOngoingResult(result))
+		result = m.ongoingTranscript.HandleSubscriptionLoss()
 	default:
 		if m.debugMode {
 			panic("unknown ongoing transcript event kind")
 		}
 		return nil
 	}
+	if err != nil {
+		return m.handleOngoingSurfaceError(err)
+	}
+	return m.handleOngoingResult(result)
 }

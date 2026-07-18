@@ -11,7 +11,6 @@ import (
 
 type WorkspaceRootDialer func(context.Context, config.App, string, string) (*client.Remote, error)
 type WorkspaceIDDialer func(context.Context, config.App, string, string) (*client.Remote, error)
-type ValidateSuccessor func(context.Context, *client.Remote) error
 
 type ProjectWorkspaceBindingRequest struct {
 	Current           *client.Remote
@@ -22,7 +21,12 @@ type ProjectWorkspaceBindingRequest struct {
 	OwnedClose        func() error
 	DialWorkspaceRoot WorkspaceRootDialer
 	DialWorkspaceID   WorkspaceIDDialer
-	ValidateSuccessor ValidateSuccessor
+	// RootID, when non-empty, is pinned on the rebound remote so it keeps
+	// validating the expected persistence root on every reconnect, exactly like
+	// the initially attached remote. Without this, rebinding a workspace would
+	// hand back an unpinned remote that could silently reconnect to a different
+	// root over the fallback TCP endpoint.
+	RootID string
 }
 
 type ProjectWorkspaceBinding struct {
@@ -34,9 +38,6 @@ func BindProjectWorkspace(ctx context.Context, req ProjectWorkspaceBindingReques
 	if req.Current == nil {
 		return ProjectWorkspaceBinding{}, errors.New("remote server is required")
 	}
-	if req.ValidateSuccessor == nil {
-		return ProjectWorkspaceBinding{}, errors.New("successor validator is required")
-	}
 	projectID := strings.TrimSpace(req.ProjectID)
 	if projectID == "" {
 		return ProjectWorkspaceBinding{}, errors.New("project id is required")
@@ -46,7 +47,7 @@ func BindProjectWorkspace(ctx context.Context, req ProjectWorkspaceBindingReques
 	if err != nil {
 		return ProjectWorkspaceBinding{}, err
 	}
-	if err := req.ValidateSuccessor(ctx, nextRemote); err != nil {
+	if err := nextRemote.RequireRoot(req.RootID); err != nil {
 		return ProjectWorkspaceBinding{}, errors.Join(err, nextRemote.Close())
 	}
 	if req.Current.NoAuthBootstrapAcknowledgementEnabled() {

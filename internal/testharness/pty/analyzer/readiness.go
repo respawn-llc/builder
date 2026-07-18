@@ -3,7 +3,6 @@ package analyzer
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/gdamore/tcell/v3/vt"
@@ -22,19 +21,8 @@ type ReadinessTracker struct {
 	observedOperationCount int
 	observedModeCount      int
 	observedPhaseCount     int
-	nativeFrame            nativeOngoingFrameReadiness
 	readiness              readinessLog
 	closed                 bool
-}
-
-type nativeOngoingFrameReadiness struct {
-	startedAt       *ByteRange
-	originModeReset bool
-	contentWritten  bool
-}
-
-type readinessOperation struct {
-	operation Operation
 }
 
 func NewReadinessTracker(dimensions Dimensions) (*ReadinessTracker, error) {
@@ -139,13 +127,6 @@ func (t *ReadinessTracker) ByteCount() int64 {
 	return t.byteOffset
 }
 
-func (t *ReadinessTracker) ScreenSnapshot() ScreenSnapshot {
-	if t == nil {
-		return ScreenSnapshot{}
-	}
-	return t.backend.snapshot()
-}
-
 func (t *ReadinessTracker) Close() error {
 	if t == nil || t.closed {
 		return nil
@@ -168,13 +149,8 @@ func (t *ReadinessTracker) collectReadinessBoundaries() {
 	for _, operation := range operations {
 		records = append(records, OperationRecords(operation)...)
 	}
-	pending := make([]readinessOperation, 0,
-		len(records)-t.observedOperationCount+
-			len(t.sideChannel.privateModeChanges)-t.observedModeCount,
-	)
 	for ; t.observedOperationCount < len(records); t.observedOperationCount++ {
 		operation := records[t.observedOperationCount]
-		pending = append(pending, readinessOperation{operation: operation})
 		boundary, ok := readinessBoundaryFromOperation(operation, t.dimensions)
 		if ok && boundary.Kind == ReadinessRendererFrame {
 			t.readiness.append(boundary)
@@ -183,30 +159,14 @@ func (t *ReadinessTracker) collectReadinessBoundaries() {
 	for ; t.observedModeCount < len(t.sideChannel.privateModeChanges); t.observedModeCount++ {
 		change := t.sideChannel.privateModeChanges[t.observedModeCount]
 		changeCopy := change
-		operation := Operation{
+		boundary, ok := readinessBoundaryFromOperation(Operation{
 			Kind:        OperationModeChange,
 			ChunkIndex:  change.ChunkIndex,
 			ByteRange:   change.ByteRange,
 			PrivateMode: &changeCopy,
 			CapturedAt:  change.CapturedAt,
-		}
-		pending = append(pending, readinessOperation{operation: operation})
-		boundary, ok := readinessBoundaryFromOperation(operation, t.dimensions)
+		}, t.dimensions)
 		if ok && boundary.Kind == ReadinessNormalBufferRestored {
-			t.readiness.append(boundary)
-		}
-	}
-	slices.SortStableFunc(pending, func(left, right readinessOperation) int {
-		if left.operation.ByteRange.Start < right.operation.ByteRange.Start {
-			return -1
-		}
-		if left.operation.ByteRange.Start > right.operation.ByteRange.Start {
-			return 1
-		}
-		return 0
-	})
-	for _, item := range pending {
-		if boundary, ok := t.nativeFrame.observe(item.operation, t.dimensions); ok {
 			t.readiness.append(boundary)
 		}
 	}
@@ -217,54 +177,4 @@ func (t *ReadinessTracker) collectReadinessBoundaries() {
 			t.readiness.append(boundary)
 		}
 	}
-}
-
-func (state *nativeOngoingFrameReadiness) observe(
-	operation Operation,
-	dimensions Dimensions,
-) (ReadinessBoundary, bool) {
-	if operation.Kind == OperationScrollRegionChange &&
-		operation.Region == (Region{
-			Top:    0,
-			Bottom: dimensions.Rows,
-			Left:   0,
-			Right:  dimensions.Cols,
-		}) {
-		start := operation.ByteRange
-		state.startedAt = &start
-		state.originModeReset = false
-		state.contentWritten = false
-		return ReadinessBoundary{}, false
-	}
-	if state.startedAt == nil {
-		return ReadinessBoundary{}, false
-	}
-	if operation.Kind == OperationWrite {
-		state.contentWritten = true
-		return ReadinessBoundary{}, false
-	}
-	if operation.Kind != OperationModeChange || operation.PrivateMode == nil {
-		return ReadinessBoundary{}, false
-	}
-	if operation.PrivateMode.Mode == 6 && !operation.PrivateMode.Enabled {
-		state.originModeReset = true
-		return ReadinessBoundary{}, false
-	}
-	if operation.PrivateMode.Mode != 25 ||
-		!state.originModeReset ||
-		!state.contentWritten {
-		return ReadinessBoundary{}, false
-	}
-	boundary := ReadinessBoundary{
-		Kind: ReadinessNativeOngoingFrame,
-		ByteRange: ByteRange{
-			Start: state.startedAt.Start,
-			End:   operation.ByteRange.End,
-		},
-		CapturedAt: operation.CapturedAt,
-	}
-	state.startedAt = nil
-	state.originModeReset = false
-	state.contentWritten = false
-	return boundary, true
 }

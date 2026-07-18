@@ -41,12 +41,7 @@ func waitForTestCondition(t *testing.T, timeout time.Duration, label string, con
 }
 
 func newProjectedTestUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption) *uiModel {
-	opts = append([]UIOption{WithUIConnectionState(&interactiveConnectionOwner{})}, opts...)
 	return NewProjectedUIModel(runtimeClient, opts...).(*uiModel)
-}
-
-func testInteractiveConnectionState() *interactiveConnectionOwner {
-	return &interactiveConnectionOwner{}
 }
 
 func newProjectedClosedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption) *uiModel {

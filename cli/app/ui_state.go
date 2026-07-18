@@ -192,7 +192,7 @@ type uiStatusFeatureState struct {
 }
 
 type uiTranscriptFeatureState struct {
-	connectionState              *interactiveConnectionOwner
+	runtimeConnection            clientui.RuntimeConnectionLifecycle
 	runtimeMainViewToken         uint64
 	runtimeMainViewBusy          bool
 	runtimeMainViewActiveRequest runtimeMainViewRefreshRequest

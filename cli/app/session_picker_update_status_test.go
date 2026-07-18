@@ -3,28 +3,32 @@ package app
 import (
 	"context"
 	"errors"
-	"io"
 	"sync"
 	"testing"
 	"time"
 
-	"core/shared/config"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
+type updateStatusCompletion struct {
+	response serverapi.UpdateStatusResponse
+	err      error
+}
+
 type blockingUpdateStatusClient struct {
-	mu      sync.Mutex
-	calls   int
-	started chan context.Context
-	release chan serverapi.UpdateStatusResponse
+	mu         sync.Mutex
+	calls      int
+	started    chan context.Context
+	completion chan updateStatusCompletion
 }
 
 func newBlockingUpdateStatusClient() *blockingUpdateStatusClient {
 	return &blockingUpdateStatusClient{
-		started: make(chan context.Context, 4),
-		release: make(chan serverapi.UpdateStatusResponse, 4),
+		started:    make(chan context.Context, 4),
+		completion: make(chan updateStatusCompletion, 4),
 	}
 }
 
@@ -37,8 +41,8 @@ func (c *blockingUpdateStatusClient) GetUpdateStatus(
 	c.mu.Unlock()
 	c.started <- ctx
 	select {
-	case response := <-c.release:
-		return response, nil
+	case completion := <-c.completion:
+		return completion.response, completion.err
 	case <-ctx.Done():
 		return serverapi.UpdateStatusResponse{}, ctx.Err()
 	}
@@ -68,16 +72,14 @@ func TestSessionPickerUpdateStatusRunsIndependentlyOfInitialPageLoads(t *testing
 		updateStatus: updates,
 	})
 
-	batchMessage := model.Init()()
-	batch, ok := batchMessage.(tea.BatchMsg)
+	batch, ok := model.Init()().(tea.BatchMsg)
 	if !ok {
-		t.Fatalf("picker init message = %T, want batch", batchMessage)
+		t.Fatal("picker initialization did not schedule independent operations")
 	}
-
-	updateCompleted := make(chan tea.Msg, 1)
+	completed := make(chan tea.Msg, len(batch))
 	for _, command := range batch {
 		go func(command tea.Cmd) {
-			updateCompleted <- command()
+			completed <- command()
 		}(command)
 	}
 
@@ -86,97 +88,34 @@ func TestSessionPickerUpdateStatusRunsIndependentlyOfInitialPageLoads(t *testing
 	case <-time.After(time.Second):
 		t.Fatal("picker did not start update collection")
 	}
-
 	deadline := time.After(time.Second)
 	for model.main.bodyPhase == sessionPickerBodyInitialLoading || model.subagents.bodyPhase == sessionPickerBodyInitialLoading {
 		select {
-		case message := <-updateCompleted:
-			next, _ := model.Update(message)
-			updated, ok := next.(*sessionPickerModel)
-			if !ok || updated != model {
-				t.Fatalf("picker update replacement = %T/%p, want %p", next, updated, model)
-			}
+		case message := <-completed:
+			model.Update(message)
 		case <-deadline:
-			t.Fatalf("page loads did not complete while update request remained blocked: main=%q subagents=%q", model.main.bodyPhase, model.subagents.bodyPhase)
+			t.Fatal("session pages did not load while the update request remained blocked")
 		}
 	}
+	headerHeight := lipgloss.Height(model.renderHeader())
 
-	updates.release <- serverapi.UpdateStatusResponse{
-		Result: serverapi.AvailableUpdateStatusResult("1.0.0", "1.1.0"),
+	updates.completion <- updateStatusCompletion{
+		response: serverapi.UpdateStatusResponse{
+			Result: serverapi.AvailableUpdateStatusResult("1.0.0", "1.1.0"),
+		},
 	}
 	select {
-	case message := <-updateCompleted:
-		next, _ := model.Update(message)
-		if updated, ok := next.(*sessionPickerModel); !ok || updated != model {
-			t.Fatalf("picker update replacement = %T/%p, want %p", next, updated, model)
-		}
+	case message := <-completed:
+		model.Update(message)
 	case <-time.After(time.Second):
-		t.Fatal("blocked update request did not complete")
+		t.Fatal("update request did not complete")
 	}
-	if model.updateStatus == nil || model.updateStatus.Kind() != serverapi.UpdateStatusAvailable {
-		t.Fatalf("update result = %+v, want available", model.updateStatus)
-	}
-}
-
-func TestSessionPickerUpdateStatusMapsOnlyValidatedResultVariants(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		resp serverapi.UpdateStatusResponse
-		want serverapi.UpdateStatusResultKind
-	}{
-		{
-			name: "current",
-			resp: serverapi.UpdateStatusResponse{Result: serverapi.CurrentUpdateStatusResult("1.0.0", "1.0.0")},
-			want: serverapi.UpdateStatusCurrent,
-		},
-		{
-			name: "available",
-			resp: serverapi.UpdateStatusResponse{Result: serverapi.AvailableUpdateStatusResult("1.0.0", "1.1.0")},
-			want: serverapi.UpdateStatusAvailable,
-		},
-		{
-			name: "network unavailable",
-			resp: serverapi.UpdateStatusResponse{Result: serverapi.CheckUnavailableUpdateStatusResult()},
-			want: serverapi.UpdateStatusCheckUnavailable,
-		},
-		{
-			name: "release mode invariant failure",
-			resp: serverapi.UpdateStatusResponse{Result: serverapi.FailedUpdateStatusResult("internal invariant")},
-			want: serverapi.UpdateStatusCheckFailed,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			model := newUninitializedTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{})
-			next, command := model.Update(sessionPickerUpdateStatusMsg{
-				response: &test.resp,
-				outcome:  classifyInteractiveConnection(interactiveConnectionOperationUnary, nil),
-			})
-			if updated, ok := next.(*sessionPickerModel); !ok || updated != model {
-				t.Fatalf("picker update replacement = %T/%p, want %p", next, updated, model)
-			}
-			if command != nil {
-				t.Fatalf("validated result scheduled unexpected command %T", command)
-			}
-			if model.updateStatus == nil || model.updateStatus.Kind() != test.want {
-				t.Fatalf("update result = %+v, want kind %q", model.updateStatus, test.want)
-			}
-		})
+	if height := lipgloss.Height(model.renderHeader()); height != headerHeight+1 {
+		t.Fatalf("header height after update = %d, want %d", height, headerHeight+1)
 	}
 }
 
-func TestSessionPickerUpdateStatusPendingIsStructurallyAbsent(t *testing.T) {
-	t.Parallel()
-
-	model := newUninitializedTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{})
-	if model.updateStatus != nil {
-		t.Fatalf("initial update result = %+v, want nil pending state", model.updateStatus)
-	}
-}
-
-func TestSessionPickerUpdateStatusRequestsAgainForEachPickerOpen(t *testing.T) {
+func TestSessionPickerRequestsUpdateStatusForEachOpen(t *testing.T) {
 	t.Parallel()
 
 	updates := newBlockingUpdateStatusClient()
@@ -184,19 +123,15 @@ func TestSessionPickerUpdateStatusRequestsAgainForEachPickerOpen(t *testing.T) {
 		model := newSessionPickerModel(context.Background(), &recordingSessionPageLoader{}, "dark", sessionPickerHeaderInfo{
 			updateStatus: updates,
 		})
-		command := model.collectUpdateStatusCmd()
-		if command == nil {
-			t.Fatal("picker update command is nil")
-		}
 		completed := make(chan tea.Msg, 1)
-		go func() { completed <- command() }()
+		go func() { completed <- model.collectUpdateStatusCmd()() }()
 		select {
 		case <-updates.started:
 		case <-time.After(time.Second):
 			t.Fatal("picker did not request update status")
 		}
-		updates.release <- serverapi.UpdateStatusResponse{
-			Result: serverapi.CheckUnavailableUpdateStatusResult(),
+		updates.completion <- updateStatusCompletion{
+			response: serverapi.UpdateStatusResponse{Result: serverapi.CheckUnavailableUpdateStatusResult()},
 		}
 		select {
 		case message := <-completed:
@@ -210,119 +145,41 @@ func TestSessionPickerUpdateStatusRequestsAgainForEachPickerOpen(t *testing.T) {
 	}
 }
 
-func TestSessionPickerUpdateCompletionKeepsConnectionAndStatusOwnershipExhaustive(t *testing.T) {
+func TestSessionPickerUpdateOperationFailureStaysLocalToUpdateRow(t *testing.T) {
 	t.Parallel()
 
-	owner := newInteractiveConnectionOwner()
-	model := newUninitializedTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{
-		Notice:     &startupPickerNotice{Text: "surface notice"},
-		connection: owner,
-	})
-	original := model.updateStatus
+	model := newUninitializedTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{})
+	headerHeight := lipgloss.Height(model.renderHeader())
+	model.Update(sessionPickerUpdateStatusMsg{err: errors.New("server status unavailable")})
 
-	apply := func(outcome interactiveConnectionOutcome) {
-		t.Helper()
-		next, command := model.Update(sessionPickerUpdateStatusMsg{outcome: outcome})
-		if updated, ok := next.(*sessionPickerModel); !ok || updated != model {
-			t.Fatalf("picker update replacement = %T/%p, want %p", next, updated, model)
-		}
-		if command != nil {
-			t.Fatalf("operation outcome %q scheduled unexpected command", outcome.Kind())
-		}
-		if model.updateStatus != original {
-			t.Fatalf("operation outcome %q mutated update-row state from %+v to %+v", outcome.Kind(), original, model.updateStatus)
-		}
+	if height := lipgloss.Height(model.renderHeader()); height != headerHeight+1 {
+		t.Fatalf("header height after local update failure = %d, want %d", height, headerHeight+1)
 	}
-
-	apply(classifyInteractiveConnection(interactiveConnectionOperationUnary, context.Canceled))
-	if owner.IsDisconnected() {
-		t.Fatal("picker-context cancellation marked shared connection disconnected")
-	}
-	apply(classifyInteractiveConnection(interactiveConnectionOperationUnary, io.EOF))
-	if !owner.IsDisconnected() {
-		t.Fatal("connection-loss completion did not update the shared owner")
-	}
-	projection := projectStartupPickerStatus(model.startupStatus)
-	if projection.Notice.Text == "" || projection.Disconnected {
-		t.Fatalf("surface-owned notice lost precedence after disconnect: %+v", projection)
-	}
-	model.startupStatus.notice = startupPickerNotice{}
-	if !projectStartupPickerStatus(model.startupStatus).Disconnected {
-		t.Fatal("disconnect did not fill empty startup projection")
-	}
-	apply(classifyInteractiveConnection(interactiveConnectionOperationUnary, context.DeadlineExceeded))
-	if !owner.IsDisconnected() {
-		t.Fatal("reachability-inconclusive update failure cleared disconnect")
-	}
-	if _, ok := model.startupStatus.failure(model.activeTab, sessionPickerOperationUpdateStatus); !ok {
-		t.Fatal("reachability-inconclusive update failure did not use the startup error surface")
-	}
-	apply(classifyInteractiveConnection(interactiveConnectionOperationUnary, errors.New("server operation failed")))
-	if owner.IsDisconnected() {
-		t.Fatal("reachability-confirming update failure did not clear disconnect")
+	if rendered := newSessionPickerStatusSurface(model.startupStatus).RenderStatus(80); rendered != "" {
+		t.Fatalf("update operation failure leaked into session-list status: %q", rendered)
 	}
 }
 
-func TestSessionPickerUpdateStatusInvalidContractFailsFastOrExitsWithoutRowMutation(t *testing.T) {
-	t.Parallel()
-
-	invalidOutcome := invalidInteractiveConnectionContract(errors.New("malformed update status response"))
-	t.Run("release exits through startup error surface", func(t *testing.T) {
-		model := newUninitializedTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{})
-		before := model.updateStatus
-
-		next, command := model.Update(sessionPickerUpdateStatusMsg{outcome: invalidOutcome})
-		if updated, ok := next.(*sessionPickerModel); !ok || updated != model {
-			t.Fatalf("picker update replacement = %T/%p, want %p", next, updated, model)
-		}
-		if command == nil {
-			t.Fatal("invalid update contract did not schedule clean picker exit")
-		}
-		if model.updateStatus != before {
-			t.Fatalf("invalid update contract mutated update-row state from %+v to %+v", before, model.updateStatus)
-		}
-		if _, ok := model.startupStatus.failure(model.activeTab, sessionPickerOperationUpdateStatus); !ok {
-			t.Fatal("invalid update contract did not reach the startup error surface")
-		}
-		if _, ok := model.result.(sessionPickerCancelResult); !ok {
-			t.Fatalf("invalid update contract result = %T, want clean cancel", model.result)
-		}
-	})
-	t.Run("debug panics", func(t *testing.T) {
-		model := newUninitializedTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{
-			StatusRequest: uiStatusRequest{Settings: config.Settings{Debug: true}},
-		})
-		defer func() {
-			if recovered := recover(); recovered == nil {
-				t.Fatal("debug invalid update contract did not panic")
-			}
-		}()
-		model.Update(sessionPickerUpdateStatusMsg{outcome: invalidOutcome})
-	})
-}
-
-func TestSessionPickerLifecycleCloseCancelsOnlyUpdateRequestAndIgnoresLateCompletion(t *testing.T) {
+func TestSessionPickerLifecycleCloseCancelsUpdateRequestAndIgnoresCompletion(t *testing.T) {
 	t.Parallel()
 
 	updates := newBlockingUpdateStatusClient()
-	owner := newInteractiveConnectionOwner()
 	lifecycle := newSessionPickerLifecycle(sessionPickerLifecycleOptions{
 		Loader: &recordingSessionPageLoader{},
 		Theme:  "dark",
 		Header: sessionPickerHeaderInfo{
 			updateStatus: updates,
-			connection:   owner,
 		},
 	})
-	command := lifecycle.picker.collectUpdateStatusCmd()
 	completed := make(chan tea.Msg, 1)
-	go func() { completed <- command() }()
+	go func() { completed <- lifecycle.picker.collectUpdateStatusCmd()() }()
 	var requestContext context.Context
 	select {
 	case requestContext = <-updates.started:
 	case <-time.After(time.Second):
 		t.Fatal("picker update request did not start")
 	}
+	headerBeforeClose := lifecycle.picker.renderHeader()
 
 	lifecycle.Close()
 	select {
@@ -335,15 +192,11 @@ func TestSessionPickerLifecycleCloseCancelsOnlyUpdateRequestAndIgnoresLateComple
 	}
 	select {
 	case message := <-completed:
-		before := lifecycle.picker.updateStatus
 		lifecycle.Update(message)
-		if lifecycle.picker.updateStatus != before {
-			t.Fatalf("late update completion mutated closed picker from %+v to %+v", before, lifecycle.picker.updateStatus)
+		if header := lifecycle.picker.renderHeader(); header != headerBeforeClose {
+			t.Fatal("closed picker rendered late update completion")
 		}
 	case <-time.After(time.Second):
 		t.Fatal("canceled picker update command did not complete")
-	}
-	if owner.IsDisconnected() {
-		t.Fatal("picker-context cancellation marked shared connection disconnected")
 	}
 }

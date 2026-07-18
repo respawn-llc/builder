@@ -11,7 +11,6 @@ const (
 	ScopeTUIProjection        Scope = "tui_projection"
 	ScopeReadModelPublication Scope = "read_model_publication"
 	ScopeBackgroundEvent      Scope = "background_event"
-	ScopeUpdateStatus         Scope = "update_status"
 )
 
 type Field string
@@ -47,10 +46,6 @@ const (
 	FieldProposedStepID           Field = "proposed_step_id"
 	FieldProcessID                Field = "process_id"
 	FieldBackgroundState          Field = "background_state"
-	FieldCurrentVersion           Field = "current_version"
-	FieldLatestVersion            Field = "latest_version"
-	FieldCacheState               Field = "cache_state"
-	FieldInflightState            Field = "inflight_state"
 )
 
 type Diagnostic struct {
@@ -119,32 +114,6 @@ type BackgroundEventDiagnosticInput struct {
 	ProcessID string
 	State     string
 	Cause     string
-}
-
-type UpdateStatusDiagnosticInput struct {
-	Operation      string
-	CurrentVersion string
-	LatestVersion  *string
-	CacheState     string
-	InflightState  string
-	Cause          string
-}
-
-func UpdateStatusDiagnostic(input UpdateStatusDiagnosticInput) Diagnostic {
-	diagnosticFields := map[Field]string{
-		FieldOperation:      input.Operation,
-		FieldCurrentVersion: input.CurrentVersion,
-		FieldCacheState:     input.CacheState,
-		FieldInflightState:  input.InflightState,
-		FieldInvariantError: input.Cause,
-	}
-	if input.LatestVersion != nil {
-		diagnosticFields[FieldLatestVersion] = *input.LatestVersion
-	}
-	return Diagnostic{
-		Scope:  ScopeUpdateStatus,
-		Fields: diagnosticFields,
-	}
 }
 
 func BackgroundEventDiagnostic(input BackgroundEventDiagnosticInput) Diagnostic {

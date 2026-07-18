@@ -168,10 +168,9 @@ type SeedResult struct {
 }
 
 type AuthStageResult struct {
-	Auth           AuthInfo
-	Subscription   SubscriptionInfo
-	Warning        string
-	OperationError error
+	Auth         AuthInfo
+	Subscription SubscriptionInfo
+	Warning      string
 }
 
 type GitStageResult struct {

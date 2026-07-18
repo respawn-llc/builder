@@ -50,6 +50,15 @@ type UpdateStatusResult struct {
 	failureCause   *string
 }
 
+type UpdateStatusVersions struct {
+	Current string
+	Latest  string
+}
+
+type UpdateStatusFailure struct {
+	Cause string
+}
+
 func CurrentUpdateStatusResult(currentVersion string, latestVersion string) UpdateStatusResult {
 	return versionedUpdateStatusResult(UpdateStatusCurrent, currentVersion, latestVersion)
 }
@@ -85,18 +94,21 @@ func (r UpdateStatusResult) Kind() UpdateStatusResultKind {
 	return r.kind
 }
 
-func (r UpdateStatusResult) Versions() (currentVersion string, latestVersion string, ok bool) {
+func (r UpdateStatusResult) Versions() *UpdateStatusVersions {
 	if r.currentVersion == nil || r.latestVersion == nil {
-		return "", "", false
+		return nil
 	}
-	return *r.currentVersion, *r.latestVersion, true
+	return &UpdateStatusVersions{
+		Current: *r.currentVersion,
+		Latest:  *r.latestVersion,
+	}
 }
 
-func (r UpdateStatusResult) FailureCause() (string, bool) {
+func (r UpdateStatusResult) Failure() *UpdateStatusFailure {
 	if r.failureCause == nil {
-		return "", false
+		return nil
 	}
-	return *r.failureCause, true
+	return &UpdateStatusFailure{Cause: *r.failureCause}
 }
 
 func (r UpdateStatusResult) Validate() error {

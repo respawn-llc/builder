@@ -11,18 +11,15 @@ import (
 	"core/shared/config"
 )
 
-func validateSuccessor(context.Context, *client.Remote) error { return nil }
-
 func TestBindProjectWorkspaceDialsWorkspaceRootWithTrimmedProject(t *testing.T) {
 	var gotProjectID string
 	var gotWorkspaceRoot string
 	next := &client.Remote{}
 	bound, err := BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{
-		Current:           &client.Remote{},
-		Config:            config.App{WorkspaceRoot: "/workspace"},
-		ProjectID:         " project-1 ",
-		WorkspaceID:       " ",
-		ValidateSuccessor: validateSuccessor,
+		Current:     &client.Remote{},
+		Config:      config.App{WorkspaceRoot: "/workspace"},
+		ProjectID:   " project-1 ",
+		WorkspaceID: " ",
 		DialWorkspaceRoot: func(_ context.Context, _ config.App, projectID string, workspaceRoot string) (*client.Remote, error) {
 			gotProjectID = projectID
 			gotWorkspaceRoot = workspaceRoot
@@ -52,11 +49,10 @@ func TestBindProjectWorkspaceDialsWorkspaceIDWithoutReadingUnavailableWorkspaceR
 	}
 	next := &client.Remote{}
 	bound, err := BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{
-		Current:           &client.Remote{},
-		Config:            config.App{WorkspaceRoot: unavailableRoot},
-		ProjectID:         "project-1",
-		WorkspaceID:       " workspace-id ",
-		ValidateSuccessor: validateSuccessor,
+		Current:     &client.Remote{},
+		Config:      config.App{WorkspaceRoot: unavailableRoot},
+		ProjectID:   "project-1",
+		WorkspaceID: " workspace-id ",
 		DialWorkspaceRoot: func(context.Context, config.App, string, string) (*client.Remote, error) {
 			rootDialed = true
 			return nil, nil
@@ -83,9 +79,8 @@ func TestBindProjectWorkspaceDialsWorkspaceIDWithoutReadingUnavailableWorkspaceR
 func TestBindProjectWorkspaceRejectsMissingInputsBeforeDial(t *testing.T) {
 	dialed := false
 	_, err := BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{
-		Current:           &client.Remote{},
-		ProjectID:         " ",
-		ValidateSuccessor: validateSuccessor,
+		Current:   &client.Remote{},
+		ProjectID: " ",
 		DialWorkspaceRoot: func(context.Context, config.App, string, string) (*client.Remote, error) {
 			dialed = true
 			return &client.Remote{}, nil
@@ -97,18 +92,36 @@ func TestBindProjectWorkspaceRejectsMissingInputsBeforeDial(t *testing.T) {
 	if dialed {
 		t.Fatal("dialer should not be called for missing project id")
 	}
-	_, err = BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{ProjectID: "project-1", ValidateSuccessor: validateSuccessor})
+	_, err = BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{ProjectID: "project-1"})
 	if err == nil {
 		t.Fatal("expected missing current remote error")
+	}
+}
+
+func TestBindProjectWorkspacePinsRootOnReboundRemote(t *testing.T) {
+	// The rebound remote must validate the expected persistence root just like the
+	// initially attached one. The zero-value remote reports an empty root id, so a
+	// non-empty required RootID must reject it on mismatch rather than handing back
+	// an unpinned remote that could reconnect to a different root.
+	next := &client.Remote{}
+	_, err := BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{
+		Current:   &client.Remote{},
+		ProjectID: "project-1",
+		RootID:    "root-iso",
+		DialWorkspaceRoot: func(context.Context, config.App, string, string) (*client.Remote, error) {
+			return next, nil
+		},
+	})
+	if !errors.Is(err, client.ErrServerRootMismatch) {
+		t.Fatalf("error = %v, want ErrServerRootMismatch from rebound-remote root pin", err)
 	}
 }
 
 func TestBindProjectWorkspaceKeepsCurrentRemoteOpenWhenDialFails(t *testing.T) {
 	dialErr := errors.New("dial failed")
 	_, err := BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{
-		Current:           &client.Remote{},
-		ProjectID:         "project-1",
-		ValidateSuccessor: validateSuccessor,
+		Current:   &client.Remote{},
+		ProjectID: "project-1",
 		DialWorkspaceRoot: func(context.Context, config.App, string, string) (*client.Remote, error) {
 			return nil, dialErr
 		},
@@ -118,54 +131,13 @@ func TestBindProjectWorkspaceKeepsCurrentRemoteOpenWhenDialFails(t *testing.T) {
 	}
 }
 
-func TestBindProjectWorkspaceRejectsSuccessorBeforeRetiringCurrent(t *testing.T) {
-	current := &client.Remote{}
-	next := &client.Remote{}
-	want := errors.New("startup validation failed")
-	_, err := BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{
-		Current:   current,
-		ProjectID: "project-1",
-		ValidateSuccessor: func(context.Context, *client.Remote) error {
-			return want
-		},
-		DialWorkspaceRoot: func(context.Context, config.App, string, string) (*client.Remote, error) {
-			return next, nil
-		},
-	})
-	if !errors.Is(err, want) {
-		t.Fatalf("error = %v, want %v", err, want)
-	}
-	if err := current.RequireRoot(""); err != nil {
-		t.Fatalf("current remote was retired after successor validation failure: %v", err)
-	}
-}
-
-func TestBindProjectWorkspaceRequiresSuccessorValidatorBeforeDial(t *testing.T) {
-	dialed := false
-	_, err := BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{
-		Current:   &client.Remote{},
-		ProjectID: "project-1",
-		DialWorkspaceRoot: func(context.Context, config.App, string, string) (*client.Remote, error) {
-			dialed = true
-			return &client.Remote{}, nil
-		},
-	})
-	if err == nil {
-		t.Fatal("expected missing successor validator error")
-	}
-	if dialed {
-		t.Fatal("must not dial before required successor validator is supplied")
-	}
-}
-
 func TestBindProjectWorkspaceOwnedCloseClosesBoundAndOwnedServer(t *testing.T) {
 	next := &client.Remote{}
 	ownedCloseCalled := false
 	bound, err := BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{
-		Current:           &client.Remote{},
-		ProjectID:         "project-1",
-		OwnsServer:        true,
-		ValidateSuccessor: validateSuccessor,
+		Current:    &client.Remote{},
+		ProjectID:  "project-1",
+		OwnsServer: true,
 		OwnedClose: func() error {
 			ownedCloseCalled = true
 			return nil
@@ -191,9 +163,8 @@ func TestBindProjectWorkspaceOwnedCloseClosesBoundAndOwnedServer(t *testing.T) {
 func TestBindProjectWorkspaceDoesNotPromoteCloseFnToOwnership(t *testing.T) {
 	next := &client.Remote{}
 	bound, err := BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{
-		Current:           &client.Remote{},
-		ProjectID:         "project-1",
-		ValidateSuccessor: validateSuccessor,
+		Current:   &client.Remote{},
+		ProjectID: "project-1",
 		OwnedClose: func() error {
 			return nil
 		},

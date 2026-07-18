@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"core/cli/app/commands"
 	"core/cli/app/internal/remoteattach"
@@ -119,13 +118,7 @@ func (s *remoteAppServer) BindProjectWorkspace(ctx context.Context, projectID st
 		WorkspaceID: workspaceID,
 		OwnsServer:  s.owns,
 		OwnedClose:  s.closeFn,
-		ValidateSuccessor: func(ctx context.Context, remote *client.Remote) error {
-			var workspaceRoot *string
-			if root := strings.TrimSpace(s.cfg.WorkspaceRoot); root != "" {
-				workspaceRoot = &root
-			}
-			return validateConfiguredRemoteWithWorkspace(ctx, remote, config.ExplicitPersistenceRootID(s.cfg), workspaceRoot)
-		},
+		RootID:      config.ExplicitPersistenceRootID(s.cfg),
 	})
 	if err != nil {
 		return nil, err
@@ -226,7 +219,6 @@ func (s *remoteAppServer) Reauthenticate(ctx context.Context, interactor authInt
 		return errors.New("remote server is required")
 	}
 	status, err := s.remote.GetAuthBootstrapStatus(ctx, serverapi.AuthGetBootstrapStatusRequest{})
-	observeAuthConnection(interactor, err)
 	if err != nil {
 		return err
 	}

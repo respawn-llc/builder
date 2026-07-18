@@ -27,16 +27,6 @@ const (
 	KindDetailInitialPageApplied
 	KindScenarioFinalApplied
 	KindToolStarted
-	KindAppRunStarted
-	KindAuthPickerReady
-	KindSessionPickerReady
-	KindPickerRequestCanceled
-	KindTranscriptSubscriptionEstablished
-	KindInitialInputLoaded
-	KindTranscriptTransportLost
-	KindMainUIReady
-	KindMainRequestReachable
-	KindAppRunExited
 )
 
 func (kind Kind) Valid() bool {
@@ -59,16 +49,6 @@ var kindDescriptors = [...]kindDescriptor{
 	{kind: KindDetailInitialPageApplied, protocolName: "DetailInitialPageApplied"},
 	{kind: KindScenarioFinalApplied, protocolName: "ScenarioFinalApplied"},
 	{kind: KindToolStarted, protocolName: "ToolStarted"},
-	{kind: KindAppRunStarted, protocolName: "AppRunStarted"},
-	{kind: KindAuthPickerReady, protocolName: "AuthPickerReady"},
-	{kind: KindSessionPickerReady, protocolName: "SessionPickerReady"},
-	{kind: KindPickerRequestCanceled, protocolName: "PickerRequestCanceled"},
-	{kind: KindTranscriptSubscriptionEstablished, protocolName: "TranscriptSubscriptionEstablished"},
-	{kind: KindInitialInputLoaded, protocolName: "InitialInputLoaded"},
-	{kind: KindTranscriptTransportLost, protocolName: "TranscriptTransportLost"},
-	{kind: KindMainUIReady, protocolName: "MainUIReady"},
-	{kind: KindMainRequestReachable, protocolName: "MainRequestReachable"},
-	{kind: KindAppRunExited, protocolName: "AppRunExited"},
 }
 
 func descriptorForKind(kind Kind) (kindDescriptor, bool) {

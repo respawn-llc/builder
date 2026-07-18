@@ -168,10 +168,9 @@ func (c Collector) CollectAuth(ctx context.Context, req Request, _ Snapshot) Aut
 		if err != nil {
 			errText := err.Error()
 			return AuthStageResult{
-				Auth:           AuthInfo{Summary: "Auth unavailable", Details: []string{errText}, Visible: true},
-				Subscription:   SubscriptionInfo{Applicable: true, Summary: "Subscription unavailable: " + errText, Error: errText},
-				Warning:        "auth: " + errText,
-				OperationError: err,
+				Auth:         AuthInfo{Summary: "Auth unavailable", Details: []string{errText}, Visible: true},
+				Subscription: SubscriptionInfo{Applicable: true, Summary: "Subscription unavailable: " + errText, Error: errText},
+				Warning:      "auth: " + errText,
 			}
 		}
 		return AuthStageResult{

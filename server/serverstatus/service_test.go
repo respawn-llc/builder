@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"core/server/auth"
 	"core/shared/config"
@@ -114,8 +115,8 @@ func TestGetServerReadinessSurfacesAuthStoreErrorWhenStartupAuthRequired(t *test
 }
 
 func TestServerStatusSeparatesReadinessFromLazyUpdateStatus(t *testing.T) {
-	source := &countingReleaseSource{metadata: ReleaseMetadata{Version: "1.2.0"}}
-	updates := NewUpdateStatusService("1.1.0", Dependencies{ReleaseSource: source})
+	source := &countingReleaseSource{metadata: releaseMetadata{Version: "1.2.0"}}
+	updates := newUpdateStatusService("1.1.0", false, source, time.Now)
 	t.Cleanup(func() {
 		if err := updates.Close(); err != nil {
 			t.Fatalf("Close: %v", err)
@@ -139,46 +140,6 @@ func TestServerStatusSeparatesReadinessFromLazyUpdateStatus(t *testing.T) {
 	}
 	if calls := source.calls.Load(); calls != 1 {
 		t.Fatalf("release checks after update request = %d, want 1", calls)
-	}
-}
-
-func TestServerStatusDelegatesEveryUpdateResultKind(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want serverapi.UpdateStatusResultKind
-	}{
-		{name: "current", want: serverapi.UpdateStatusCurrent},
-		{name: "available", want: serverapi.UpdateStatusAvailable},
-		{name: "check unavailable", err: &ReleaseTransportError{Cause: errors.New("offline")}, want: serverapi.UpdateStatusCheckUnavailable},
-		{name: "check failed", err: &ReleaseHTTPStatusError{StatusCode: 403, Status: "403 Forbidden"}, want: serverapi.UpdateStatusCheckFailed},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			version := "1.1.0"
-			if test.want == serverapi.UpdateStatusCurrent {
-				version = "1.2.0"
-			}
-			updates := NewUpdateStatusService(version, Dependencies{
-				ReleaseSource: &countingReleaseSource{
-					metadata: ReleaseMetadata{Version: "1.2.0"},
-					err:      test.err,
-				},
-			})
-			t.Cleanup(func() {
-				if err := updates.Close(); err != nil {
-					t.Fatalf("Close: %v", err)
-				}
-			})
-			response, err := NewServerStatusService(nil, config.App{}, updates).
-				GetUpdateStatus(context.Background(), serverapi.UpdateStatusRequest{})
-			if err != nil {
-				t.Fatalf("GetUpdateStatus: %v", err)
-			}
-			if response.Result.Kind() != test.want {
-				t.Fatalf("result kind = %q, want %q", response.Result.Kind(), test.want)
-			}
-		})
 	}
 }
 

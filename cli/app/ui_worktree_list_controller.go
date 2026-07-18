@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"core/cli/app/internal/runtimeattach"
 	"core/cli/app/internal/worktreeui"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -177,12 +178,12 @@ func (c uiInputController) startSelectedWorktreeDelete(preferDeleteBranch bool) 
 		if errors.Is(err, worktreeui.ErrMainWorkspaceNotDeletable) {
 			return m, c.model.sendTransientStatusWithNoticeID("Main workspace is not deletable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 		}
-		status := formatRuntimeSubmissionError(err)
+		status := runtimeattach.FormatSubmissionError(err)
 		return m, c.model.sendTransientStatusWithNoticeID(status, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	identity, err := worktreeui.SelectionIdentityForItem(target)
 	if err != nil {
-		status := formatRuntimeSubmissionError(err)
+		status := runtimeattach.FormatSubmissionError(err)
 		return m, c.model.sendTransientStatusWithNoticeID(status, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	m.invalidateWorktreeDeleteTargetResolution()

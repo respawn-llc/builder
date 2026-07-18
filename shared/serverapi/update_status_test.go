@@ -63,40 +63,6 @@ func TestUpdateStatusResultJSONRoundTrip(t *testing.T) {
 	}
 }
 
-func TestUpdateStatusResultAccessorsAreVariantSpecific(t *testing.T) {
-	current := CurrentUpdateStatusResult("1.2.3", "1.2.3")
-	if current.Kind() != UpdateStatusCurrent {
-		t.Fatalf("current kind = %q, want %q", current.Kind(), UpdateStatusCurrent)
-	}
-	currentVersion, latestVersion, ok := current.Versions()
-	if !ok || currentVersion != "1.2.3" || latestVersion != "1.2.3" {
-		t.Fatalf("current versions = %q/%q/%v", currentVersion, latestVersion, ok)
-	}
-	if _, ok := current.FailureCause(); ok {
-		t.Fatal("current result exposed a failure cause")
-	}
-
-	failed := FailedUpdateStatusResult("invalid release metadata")
-	if failed.Kind() != UpdateStatusCheckFailed {
-		t.Fatalf("failed kind = %q, want %q", failed.Kind(), UpdateStatusCheckFailed)
-	}
-	if _, _, ok := failed.Versions(); ok {
-		t.Fatal("failed result exposed versions")
-	}
-	cause, ok := failed.FailureCause()
-	if !ok || cause != "invalid release metadata" {
-		t.Fatalf("failure cause = %q/%v", cause, ok)
-	}
-
-	unavailable := CheckUnavailableUpdateStatusResult()
-	if _, _, ok := unavailable.Versions(); ok {
-		t.Fatal("check-unavailable result exposed versions")
-	}
-	if _, ok := unavailable.FailureCause(); ok {
-		t.Fatal("check-unavailable result exposed a failure cause")
-	}
-}
-
 func TestUpdateStatusResultRejectsInvalidJSON(t *testing.T) {
 	for _, raw := range []string{
 		`{}`,
@@ -187,26 +153,26 @@ func assertUpdateStatusResultAccessors(t *testing.T, result UpdateStatusResult) 
 	t.Helper()
 	switch result.Kind() {
 	case UpdateStatusCurrent, UpdateStatusAvailable:
-		current, latest, ok := result.Versions()
-		if !ok || current == "" || latest == "" {
+		versions := result.Versions()
+		if versions == nil || versions.Current == "" || versions.Latest == "" {
 			t.Fatal("version result did not expose structurally present versions")
 		}
-		if _, ok := result.FailureCause(); ok {
+		if result.Failure() != nil {
 			t.Fatal("version result exposed a failure cause")
 		}
 	case UpdateStatusCheckUnavailable:
-		if _, _, ok := result.Versions(); ok {
+		if result.Versions() != nil {
 			t.Fatal("check-unavailable result exposed versions")
 		}
-		if _, ok := result.FailureCause(); ok {
+		if result.Failure() != nil {
 			t.Fatal("check-unavailable result exposed a failure cause")
 		}
 	case UpdateStatusCheckFailed:
-		if _, _, ok := result.Versions(); ok {
+		if result.Versions() != nil {
 			t.Fatal("check-failed result exposed versions")
 		}
-		cause, ok := result.FailureCause()
-		if !ok || cause == "" {
+		failure := result.Failure()
+		if failure == nil || failure.Cause == "" {
 			t.Fatal("check-failed result did not expose its structurally present cause")
 		}
 	default:

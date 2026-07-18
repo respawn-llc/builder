@@ -68,7 +68,6 @@ type sessionPickerModel struct {
 	spinnerSequence            uint64
 	scheduledSpinnerGeneration *uint64
 	startupStatus              *startupPickerStatusModel
-	connection                 *interactiveConnectionOwner
 	updateStatus               *serverapi.UpdateStatusResult
 	clock                      func() time.Time
 }
@@ -98,7 +97,6 @@ func newSessionPickerModel(
 		panic("session picker requires a page loader")
 	}
 	startupStatus := newStartupPickerStatusModel()
-	startupStatus.connection = header.connection
 	if header.Notice != nil {
 		startupStatus.notice = *header.Notice
 	}
@@ -114,7 +112,6 @@ func newSessionPickerModel(
 		theme:          theme,
 		styles:         newSessionPickerStyles(theme),
 		startupStatus:  startupStatus,
-		connection:     header.connection,
 		clock:          time.Now,
 	}
 }
@@ -124,7 +121,9 @@ func (m *sessionPickerModel) Init() tea.Cmd {
 		m.startBodyRequest(sessioncontract.SessionCategoryMain, sessionPickerBodyRequestInitial),
 		m.startBodyRequest(sessioncontract.SessionCategorySubagent, sessionPickerBodyRequestInitial),
 		collectSessionPickerStatusCmd(m.header),
-		m.collectUpdateStatusCmd(),
+	}
+	if updateStatus := m.collectUpdateStatusCmd(); updateStatus != nil {
+		commands = append(commands, updateStatus)
 	}
 	if tick := m.reconcileSpinnerTick(); tick != nil {
 		commands = append(commands, tick)
@@ -156,9 +155,6 @@ func (m *sessionPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinnerFrame++
 		return m, m.reconcileSpinnerTick()
 	case sessionPickerStatusMsg:
-		if message.connectionObserved && m.connection != nil {
-			m.connection.ObserveUnary(message.connectionErr)
-		}
 		m.header.CWD = sessionPickerStatusText(message.cwd)
 		m.header.Branch = sessionPickerStatusText(message.branch)
 		m.header.Auth = sessionPickerStatusText(message.auth)

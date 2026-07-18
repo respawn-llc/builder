@@ -18,7 +18,7 @@ func TestUpdateStatusRouteContract(t *testing.T) {
 		route.Auth != apicontract.AuthServer ||
 		route.Scope != apicontract.ScopeNone ||
 		route.Connection != apicontract.ConnectionDedicated ||
-		route.DedicatedRequestID != "get-update-status" ||
+		route.DedicatedRequestID != apicontract.UpdateStatusDedicatedRequestID ||
 		route.Dependency != apicontract.DependencyServerStatus {
 		t.Fatalf("update status route = %+v", route)
 	}

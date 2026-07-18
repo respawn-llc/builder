@@ -50,10 +50,6 @@ var localSocketListener = listenLocalSocket
 var errStartupControlSurfaceNotRequired = errors.New("startup control surface is not required")
 
 func StartServeServer(ctx context.Context, req Request, authHandler AuthHandler, onboardingHandler OnboardingHandler) (*ServeServer, error) {
-	return StartServeServerWithOptions(ctx, req, authHandler, onboardingHandler, Options{})
-}
-
-func StartServeServerWithOptions(ctx context.Context, req Request, authHandler AuthHandler, onboardingHandler OnboardingHandler, opts Options) (*ServeServer, error) {
 	if authHandler == nil {
 		return nil, errors.New("auth handler is required")
 	}
@@ -64,7 +60,7 @@ func StartServeServerWithOptions(ctx context.Context, req Request, authHandler A
 	}
 	cfg := resolved.Config
 	if cfg.Source.SettingsFileExists {
-		appCore, err := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, opts)
+		appCore, err := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, Options{})
 		if err != nil {
 			return nil, err
 		}
@@ -76,17 +72,17 @@ func StartServeServerWithOptions(ctx context.Context, req Request, authHandler A
 			return nil, err
 		}
 		if completed && onboardingCfg.Source.SettingsFileExists {
-			appCore, err := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, nil, opts)
+			appCore, err := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, nil, Options{})
 			if err != nil {
 				return nil, err
 			}
 			return &ServeServer{Core: appCore, cfg: appCore.Config()}, nil
 		}
 	}
-	cfg, deps, err := buildStartupControlSurface(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, opts)
+	cfg, deps, err := buildStartupControlSurface(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, Options{})
 	if err != nil {
 		if errors.Is(err, errStartupControlSurfaceNotRequired) {
-			appCore, coreErr := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, opts)
+			appCore, coreErr := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, Options{})
 			if coreErr != nil {
 				return nil, coreErr
 			}

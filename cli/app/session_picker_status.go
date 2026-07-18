@@ -11,12 +11,10 @@ import (
 )
 
 type sessionPickerStatusMsg struct {
-	cwd                *string
-	branch             *string
-	auth               *string
-	model              *string
-	connectionObserved bool
-	connectionErr      error
+	cwd    *string
+	branch *string
+	auth   *string
+	model  *string
 }
 
 func collectSessionPickerStatusCmd(header sessionPickerHeaderInfo) tea.Cmd {
@@ -33,13 +31,8 @@ func collectSessionPickerStatusCmd(header sessionPickerHeaderInfo) tea.Cmd {
 		base := collector.CollectBase(req)
 		gitResult := collector.CollectGit(ctx, req, base)
 		authInfo := status.FastAuthInfo(ctx, authManager, req.Settings)
-		var connectionErr error
-		connectionObserved := false
 		if authManager == nil && req.AuthStatus != nil {
-			authResult := collector.CollectAuth(ctx, req, base)
-			authInfo = authResult.Auth
-			connectionErr = authResult.OperationError
-			connectionObserved = true
+			authInfo = collector.CollectAuth(ctx, req, base).Auth
 		}
 
 		var branch *string
@@ -54,12 +47,10 @@ func collectSessionPickerStatusCmd(header sessionPickerHeaderInfo) tea.Cmd {
 			model = textutil.OptionalTrimmedString(base.Model.Summary)
 		}
 		return sessionPickerStatusMsg{
-			cwd:                textutil.OptionalTrimmedString(statusDisplayPath(base.Workdir, "")),
-			branch:             branch,
-			auth:               textutil.OptionalTrimmedString(status.AuthDisplayLabel(authInfo)),
-			model:              model,
-			connectionObserved: connectionObserved,
-			connectionErr:      connectionErr,
+			cwd:    textutil.OptionalTrimmedString(statusDisplayPath(base.Workdir, "")),
+			branch: branch,
+			auth:   textutil.OptionalTrimmedString(status.AuthDisplayLabel(authInfo)),
+			model:  model,
 		}
 	}
 }

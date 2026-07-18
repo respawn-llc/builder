@@ -107,33 +107,6 @@ func TestPolicyCheckTrueDoesNotRecord(t *testing.T) {
 	policy.Check(true, Diagnostic{Scope: ScopeTUIProjection})
 }
 
-func TestUpdateStatusDiagnosticModelsLatestVersionAbsenceStructurally(t *testing.T) {
-	base := UpdateStatusDiagnosticInput{
-		Operation:      "publish_update_status",
-		CurrentVersion: "1.2.3",
-		CacheState:     "absent",
-		InflightState:  "terminal_missing",
-		Cause:          "operation terminal was already published",
-	}
-	absent := UpdateStatusDiagnostic(base)
-	if _, exists := absent.Fields[FieldLatestVersion]; exists {
-		t.Fatal("absent latest version was represented as a diagnostic field")
-	}
-
-	blank := ""
-	presentBlank := UpdateStatusDiagnostic(UpdateStatusDiagnosticInput{
-		Operation:      base.Operation,
-		CurrentVersion: base.CurrentVersion,
-		LatestVersion:  &blank,
-		CacheState:     base.CacheState,
-		InflightState:  base.InflightState,
-		Cause:          base.Cause,
-	})
-	if latest, exists := presentBlank.Fields[FieldLatestVersion]; !exists || latest != "" {
-		t.Fatalf("present blank latest version = %q, exists = %v; want present empty field", latest, exists)
-	}
-}
-
 func assertDiagnosticField(t *testing.T, diagnostic Diagnostic, key Field, want string) {
 	t.Helper()
 	if got := diagnostic.Fields[key]; got != want {
