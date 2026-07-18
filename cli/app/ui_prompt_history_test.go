@@ -3,45 +3,121 @@ package app
 import (
 	"strconv"
 	"testing"
+
+	"core/cli/tui/ongoing"
+	"core/shared/serverapi"
 )
 
-func TestLoadPromptHistoryKeepsOnlyMostRecentHundred(t *testing.T) {
-	history := make([]string, 0, 125)
-	for i := range 125 {
+func TestLoadPromptHistoryKeepsOnlyNewestContractTailInRelease(t *testing.T) {
+	history := make([]string, 0, serverapi.SessionPromptHistoryMaxEntries+25)
+	for i := range serverapi.SessionPromptHistoryMaxEntries + 25 {
 		history = append(history, promptHistoryEntry(i))
 	}
 
-	m := newProjectedStaticUIModel(WithUIPromptHistory(history))
+	m := newProjectedStaticUIModel(WithUIDebug(false), WithUIPromptHistory(history))
 
-	if got, want := len(m.promptHistory), promptHistoryLimit; got != want {
+	if got, want := len(m.promptHistory), serverapi.SessionPromptHistoryMaxEntries; got != want {
 		t.Fatalf("prompt history length = %d, want %d", got, want)
 	}
 	if got, want := m.promptHistory[0], promptHistoryEntry(25); got != want {
 		t.Fatalf("oldest retained prompt = %q, want %q", got, want)
 	}
-	if got, want := m.promptHistory[len(m.promptHistory)-1], promptHistoryEntry(124); got != want {
+	if got, want := m.promptHistory[len(m.promptHistory)-1], promptHistoryEntry(serverapi.SessionPromptHistoryMaxEntries+24); got != want {
 		t.Fatalf("newest retained prompt = %q, want %q", got, want)
 	}
 }
 
-func TestRememberPromptHistoryLocallyDiscardsOldestPastHundred(t *testing.T) {
-	history := make([]string, 0, 100)
-	for i := range 100 {
+func TestManyPromptHistoryOptionsComposeBeforeRetainingNewestContractTail(t *testing.T) {
+	total := serverapi.SessionPromptHistoryMaxEntries + 50
+	options := make([]UIOption, 0, total+1)
+	options = append(options, WithUIDebug(false))
+	for i := range total {
+		options = append(options, WithUIPromptHistory([]string{promptHistoryEntry(i)}))
+	}
+
+	m := newProjectedStaticUIModel(options...)
+
+	if got, want := len(m.promptHistory), serverapi.SessionPromptHistoryMaxEntries; got != want {
+		t.Fatalf("prompt history length = %d, want %d", got, want)
+	}
+	if got, want := m.promptHistory[0], promptHistoryEntry(50); got != want {
+		t.Fatalf("oldest retained prompt = %q, want %q", got, want)
+	}
+	if got, want := m.promptHistory[len(m.promptHistory)-1], promptHistoryEntry(total-1); got != want {
+		t.Fatalf("newest retained prompt = %q, want %q", got, want)
+	}
+}
+
+func TestLoadPromptHistoryPanicsWithDeveloperDiagnosticWhenServerExceedsContractInDebug(t *testing.T) {
+	history := make([]string, 0, serverapi.SessionPromptHistoryMaxEntries+1)
+	for i := range serverapi.SessionPromptHistoryMaxEntries + 1 {
 		history = append(history, promptHistoryEntry(i))
 	}
-	m := newProjectedStaticUIModel(WithUIPromptHistory(history))
 
-	if !m.rememberPromptHistoryLocally(promptHistoryEntry(100)) {
+	for _, test := range []struct {
+		name    string
+		options []UIOption
+	}{
+		{
+			name: "debug before history",
+			options: []UIOption{
+				WithUIDebug(true),
+				WithUIPromptHistory(history),
+			},
+		},
+		{
+			name: "history before debug",
+			options: []UIOption{
+				WithUIPromptHistory(history),
+				WithUIDebug(true),
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recovered := capturePanic(func() {
+				_ = newProjectedStaticUIModel(test.options...)
+			})
+			developerErr, ok := recovered.(ongoing.DeveloperError)
+			if !ok {
+				t.Fatalf("panic = %T, want ongoing.DeveloperError", recovered)
+			}
+			if developerErr.Operation != "load_prompt_history" {
+				t.Fatalf("developer-error operation = %q", developerErr.Operation)
+			}
+			if developerErr.Reason == "" {
+				t.Fatal("developer error omitted reason")
+			}
+			if got := developerErr.Facts["actual_count"]; got != serverapi.SessionPromptHistoryMaxEntries+1 {
+				t.Fatalf("actual-count diagnostic = %#v", got)
+			}
+			if got := developerErr.Facts["maximum_count"]; got != serverapi.SessionPromptHistoryMaxEntries {
+				t.Fatalf("maximum-count diagnostic = %#v", got)
+			}
+			if developerErr.Stack == "" {
+				t.Fatal("developer error omitted stack trace")
+			}
+		})
+	}
+}
+
+func TestRememberPromptHistoryLocallyDiscardsOldestPastHundred(t *testing.T) {
+	history := make([]string, 0, serverapi.SessionPromptHistoryMaxEntries)
+	for i := range serverapi.SessionPromptHistoryMaxEntries {
+		history = append(history, promptHistoryEntry(i))
+	}
+	m := newProjectedStaticUIModel(WithUIDebug(true), WithUIPromptHistory(history))
+
+	if !m.rememberPromptHistoryLocally(promptHistoryEntry(serverapi.SessionPromptHistoryMaxEntries)) {
 		t.Fatal("remember prompt history returned false")
 	}
 
-	if got, want := len(m.promptHistory), promptHistoryLimit; got != want {
+	if got, want := len(m.promptHistory), serverapi.SessionPromptHistoryMaxEntries; got != want {
 		t.Fatalf("prompt history length = %d, want %d", got, want)
 	}
 	if got, want := m.promptHistory[0], promptHistoryEntry(1); got != want {
 		t.Fatalf("oldest retained prompt = %q, want %q", got, want)
 	}
-	if got, want := m.promptHistory[len(m.promptHistory)-1], promptHistoryEntry(100); got != want {
+	if got, want := m.promptHistory[len(m.promptHistory)-1], promptHistoryEntry(serverapi.SessionPromptHistoryMaxEntries); got != want {
 		t.Fatalf("newest retained prompt = %q, want %q", got, want)
 	}
 }

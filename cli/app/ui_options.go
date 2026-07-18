@@ -13,7 +13,7 @@ import (
 	"core/shared/serverapi"
 )
 
-type UIOption func(*uiModel)
+type UIOption func(*uiModelConstruction)
 
 type UIAction = serverapi.SessionTransitionAction
 
@@ -39,62 +39,62 @@ const (
 )
 
 func WithUILogger(logger uiLogger) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.logger = logger
 	}
 }
 
 func WithUIDebug(enabled bool) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.debugMode = enabled
 	}
 }
 
 func WithUITerminalCursorState(state *uiTerminalCursorState) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.terminalCursor = state
 	}
 }
 
 func WithUIRendererOutputGateState(state *uiRendererOutputGateState) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.rendererOutputGate = state
 		m.syncRendererOutputGate()
 	}
 }
 
 func WithUIModelName(model string) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.modelName = strings.TrimSpace(model)
 	}
 }
 
 func WithUIConfiguredModelName(model string) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.configuredModelName = strings.TrimSpace(model)
 	}
 }
 
 func WithUIThinkingLevel(thinkingLevel string) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.thinkingLevel = strings.TrimSpace(thinkingLevel)
 	}
 }
 
 func WithUIConversationFreshness(freshness clientui.ConversationFreshness) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.conversationFreshness = freshness
 	}
 }
 
 func WithUIModelContractLocked(locked bool) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.modelContractLocked = locked
 	}
 }
 
 func WithUITheme(theme string) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.theme = strings.TrimSpace(theme)
 		m.rebuildTranscriptView()
 	}
@@ -106,7 +106,7 @@ func WithUIMarkdownLinkPresentation(
 	if !linkPresentation.Valid() {
 		panic(fmt.Sprintf("configure UI with invalid Markdown link presentation %d", linkPresentation))
 	}
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.markdownLinks = linkPresentation
 		m.rebuildTranscriptView()
 	}
@@ -120,7 +120,7 @@ func (m *uiModel) rebuildTranscriptView() {
 }
 
 func WithUICommandRegistry(registry *commands.Registry) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		if registry == nil {
 			return
 		}
@@ -129,19 +129,19 @@ func WithUICommandRegistry(registry *commands.Registry) UIOption {
 }
 
 func WithUIStartupSubmit(text string) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.startupSubmit = text
 	}
 }
 
 func WithUIStartupSubmitPromptHistoryRecorded(recorded bool) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.startupSubmitPromptHistoryRecorded = recorded
 	}
 }
 
 func WithUIInitialInput(text string) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		if text == "" || m.mainEditor.Text() != "" {
 			return
 		}
@@ -150,44 +150,44 @@ func WithUIInitialInput(text string) UIOption {
 }
 
 func WithUIInitialRecoveryBuffers(buffers []serverapi.SessionDraftRecoveryBuffer) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.restoreSessionDraftRecoveryBuffers(buffers)
 	}
 }
 
 func WithUISessionName(name string) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.sessionName = strings.TrimSpace(name)
 	}
 }
 
 func WithUISessionID(sessionID string) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.sessionID = strings.TrimSpace(sessionID)
 	}
 }
 
 func WithUIProcessClient(client clientui.ProcessClient) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.processClient = client
 		m.processClientExplicit = true
 	}
 }
 
 func WithUIWorktreeClient(client apicontract.WorktreeService) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.worktreeClient = client
 	}
 }
 
 func WithUITurnQueueHook(hook *bellHooks) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.turnQueueHook = hook
 	}
 }
 
 func WithUITerminalFocusState(state *terminalFocusState) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		if state != nil {
 			m.terminalFocus = state
 		}
@@ -195,25 +195,25 @@ func WithUITerminalFocusState(state *terminalFocusState) UIOption {
 }
 
 func WithUIPromptHistory(history []string) UIOption {
-	return func(m *uiModel) {
-		m.loadPromptHistory(history)
+	return func(m *uiModelConstruction) {
+		m.appendInitialPromptHistory(history)
 	}
 }
 
 func WithUIStartupUpdateNotice(enabled bool) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.startupUpdateNotice = enabled
 	}
 }
 
 func WithUIClipboardPaster(paster uiClipboardPaster) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.clipboardPaster = paster
 	}
 }
 
 func WithUIClipboardTextCopier(copier uiClipboardTextCopier) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.clipboardTextCopier = copier
 	}
 }

@@ -3567,8 +3567,15 @@ LIMIT 1;
 
 -- name: ListSessionPromptHistoryText :many
 SELECT text
-FROM session_prompt_history_entries
-WHERE session_id = sqlc.arg(session_id)
+FROM (
+    SELECT
+        sequence,
+        text
+    FROM session_prompt_history_entries
+    WHERE session_id = sqlc.arg(session_id)
+    ORDER BY sequence DESC
+    LIMIT sqlc.arg(max_entries)
+)
 ORDER BY sequence ASC;
 
 -- name: ListWorkflowAttentionCandidates :many

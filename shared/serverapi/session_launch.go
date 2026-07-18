@@ -13,6 +13,8 @@ import (
 
 type SessionLaunchMode string
 
+const SessionPromptHistoryMaxEntries = 100
+
 const (
 	SessionLaunchModeInteractive SessionLaunchMode = "interactive"
 	SessionLaunchModeHeadless    SessionLaunchMode = "headless"

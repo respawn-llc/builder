@@ -5441,13 +5441,25 @@ func (q *Queries) ListSessionNamesByIDs(ctx context.Context, ids []string) ([]Li
 
 const listSessionPromptHistoryText = `-- name: ListSessionPromptHistoryText :many
 SELECT text
-FROM session_prompt_history_entries
-WHERE session_id = ?1
+FROM (
+    SELECT
+        sequence,
+        text
+    FROM session_prompt_history_entries
+    WHERE session_id = ?1
+    ORDER BY sequence DESC
+    LIMIT ?2
+)
 ORDER BY sequence ASC
 `
 
-func (q *Queries) ListSessionPromptHistoryText(ctx context.Context, sessionID string) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listSessionPromptHistoryText, sessionID)
+type ListSessionPromptHistoryTextParams struct {
+	SessionID  string
+	MaxEntries int64
+}
+
+func (q *Queries) ListSessionPromptHistoryText(ctx context.Context, arg ListSessionPromptHistoryTextParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionPromptHistoryText, arg.SessionID, arg.MaxEntries)
 	if err != nil {
 		return nil, err
 	}

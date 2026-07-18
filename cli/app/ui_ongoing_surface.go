@@ -19,20 +19,20 @@ type ongoingNormalBufferOwnedMsg struct {
 }
 
 func WithUIOngoingSurface(surface *ongoing.Surface) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.ongoingSurface = surface
 		m.syncRendererOutputGate()
 	}
 }
 
 func WithUIOngoingTranscriptEvents(events <-chan ongoingTranscriptEvent) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.eventDispatcher.transcriptEvents = events
 	}
 }
 
 func WithUIOngoingTranscriptReopen(request func()) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		m.requestOngoingOpen = request
 	}
 }
