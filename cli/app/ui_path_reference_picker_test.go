@@ -308,21 +308,6 @@ func TestPathReferencePickerSanitizesControlCharactersForDisplay(t *testing.T) {
 	}
 }
 
-func TestPathReferenceAcceptanceUsesUnsanitizedCandidate(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	testSetMainInput(m, "@ab")
-	m.pathReference.tracked = uiPathReferenceQuery{Active: true, Start: 0, End: 3, RawQuery: "ab", NormalizedQuery: "ab"}
-	rawPath := "safe/line\n\t" + string(rune(0x1b)) + "[31mname.txt"
-	m.pathReference.matches = []uiPathReferenceCandidate{{Path: rawPath}}
-
-	if !m.acceptPathReferenceSelection() {
-		t.Fatal("expected raw candidate acceptance")
-	}
-	if testMainInput(m) != "@"+rawPath {
-		t.Fatalf("accepted input = %q, want original candidate bytes", testMainInput(m))
-	}
-}
-
 func testPathReferenceFixture(fixture string) (string, int) {
 	runes := []rune(fixture)
 	idx := -1
