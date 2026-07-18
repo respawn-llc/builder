@@ -94,6 +94,26 @@ type GitHubReleaseMetadataSource struct {
 	latestURL string
 }
 
+type releaseResponseReader struct {
+	io.Reader
+	failure error
+}
+
+func (r *releaseResponseReader) Read(buffer []byte) (int, error) {
+	read, err := r.Reader.Read(buffer)
+	if err != nil && !errors.Is(err, io.EOF) && r.failure == nil {
+		r.failure = err
+	}
+	return read, err
+}
+
+func (r *releaseResponseReader) decodeError(err error) error {
+	if r.failure != nil {
+		return &ReleaseTransportError{Cause: fmt.Errorf("read latest release response: %w", r.failure)}
+	}
+	return &ReleaseMetadataError{Cause: fmt.Errorf("decode latest release: %w", err)}
+}
+
 func NewDefaultGitHubReleaseMetadataSource() *GitHubReleaseMetadataSource {
 	return newGitHubReleaseMetadataSource(nil, defaultLatestReleaseURL)
 }
@@ -152,16 +172,19 @@ func (s *GitHubReleaseMetadataSource) LatestRelease(ctx context.Context) (metada
 	var payload struct {
 		TagName *string `json:"tag_name"`
 	}
-	decoder := json.NewDecoder(response.Body)
+	responseReader := &releaseResponseReader{Reader: response.Body}
+	decoder := json.NewDecoder(responseReader)
 	if err := decoder.Decode(&payload); err != nil {
-		return ReleaseMetadata{}, &ReleaseMetadataError{Cause: fmt.Errorf("decode latest release: %w", err)}
+		return ReleaseMetadata{}, responseReader.decodeError(err)
 	}
 	var trailing json.RawMessage
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+	if err := decoder.Decode(&trailing); responseReader.failure != nil {
+		return ReleaseMetadata{}, responseReader.decodeError(err)
+	} else if !errors.Is(err, io.EOF) {
 		if err == nil {
 			err = errors.New("unexpected trailing JSON value")
 		}
-		return ReleaseMetadata{}, &ReleaseMetadataError{Cause: fmt.Errorf("decode latest release: %w", err)}
+		return ReleaseMetadata{}, responseReader.decodeError(err)
 	}
 	if payload.TagName == nil || strings.TrimSpace(*payload.TagName) == "" {
 		return ReleaseMetadata{}, &ReleaseMetadataError{Cause: errors.New("latest release tag is required")}

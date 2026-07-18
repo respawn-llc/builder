@@ -178,6 +178,40 @@ func TestGitHubReleaseMetadataSourceSurfacesResponseCloseFailure(t *testing.T) {
 	}
 }
 
+func TestGitHubReleaseMetadataSourceClassifiesResponseReadFailureAsTransportError(t *testing.T) {
+	for _, body := range []string{
+		`{"tag_name":"v1.`,
+		`{"tag_name":"v1.2.3"}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			readCause := errors.New("response body interrupted")
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Body: &readErrorBody{
+						Reader: strings.NewReader(body),
+						err:    readCause,
+					},
+				}, nil
+			})}
+
+			source, err := NewGitHubReleaseMetadataSource(client, "https://release.invalid/latest")
+			if err != nil {
+				t.Fatalf("NewGitHubReleaseMetadataSource: %v", err)
+			}
+			_, err = source.LatestRelease(context.Background())
+			var transportError *ReleaseTransportError
+			if !errors.As(err, &transportError) {
+				t.Fatalf("error = %T, want ReleaseTransportError", err)
+			}
+			if !errors.Is(err, readCause) {
+				t.Fatalf("error %v does not wrap read cause", err)
+			}
+		})
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -191,4 +225,23 @@ type closeErrorBody struct {
 
 func (b *closeErrorBody) Close() error {
 	return b.err
+}
+
+type readErrorBody struct {
+	io.Reader
+	err      error
+	returned bool
+}
+
+func (b *readErrorBody) Read(buffer []byte) (int, error) {
+	if !b.returned {
+		b.returned = true
+		read, _ := b.Reader.Read(buffer)
+		return read, b.err
+	}
+	return 0, io.EOF
+}
+
+func (b *readErrorBody) Close() error {
+	return nil
 }
