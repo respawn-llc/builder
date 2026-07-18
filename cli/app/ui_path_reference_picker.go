@@ -8,7 +8,7 @@ import (
 )
 
 func WithUIPathReferenceSearch(search uiPathReferenceSearch) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		if m.pathReferenceSearch != nil && m.pathReferenceSearch != search {
 			m.pathReferenceSearch.Stop()
 		}

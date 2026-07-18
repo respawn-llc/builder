@@ -17,8 +17,8 @@ const (
 	promptHistoryOverflowLocalSubmission
 )
 
-func (m *uiModel) finalizePromptHistory() {
-	history := m.retainPromptHistoryTail(m.promptHistory, promptHistoryOverflowInitialLoad)
+func (m *uiModel) loadInitialPromptHistory(initial []string) {
+	history := m.retainPromptHistoryTail(initial, promptHistoryOverflowInitialLoad)
 	var loaded []string
 	for _, raw := range history {
 		if text := preservePromptHistoryText(raw); text != "" {

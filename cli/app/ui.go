@@ -23,11 +23,11 @@ func (m *uiModel) clearReviewerState() {
 }
 
 func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption) tea.Model {
-	m := newUIModelDefaults(runtimeClient)
+	construction := newUIModelConstruction(runtimeClient)
 	for _, opt := range opts {
-		opt(m)
+		opt(construction)
 	}
-	m.finalizePromptHistory()
+	m := construction.finalize()
 	if m.pathReferenceSearch == nil {
 		m.pathReferenceSearch = newUIPathReferenceSearch()
 		m.pathReferenceEvents = m.pathReferenceSearch.Events()
@@ -66,6 +66,21 @@ func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption)
 	}
 	m.layout().syncViewport()
 	return m
+}
+
+type uiModelConstruction struct {
+	*uiModel
+	initialPromptHistory []string
+}
+
+func newUIModelConstruction(runtimeClient clientui.RuntimeClient) *uiModelConstruction {
+	return &uiModelConstruction{uiModel: newUIModelDefaults(runtimeClient)}
+}
+
+func (c *uiModelConstruction) finalize() *uiModel {
+	c.uiModel.loadInitialPromptHistory(c.initialPromptHistory)
+	c.initialPromptHistory = nil
+	return c.uiModel
 }
 
 func (m *uiModel) Init() tea.Cmd {

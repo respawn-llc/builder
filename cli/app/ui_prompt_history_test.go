@@ -27,6 +27,34 @@ func TestLoadPromptHistoryKeepsOnlyNewestContractTailInRelease(t *testing.T) {
 	}
 }
 
+func TestPromptHistoryOptionDoesNotPopulateRuntimeHistoryBeforeFinalization(t *testing.T) {
+	history := make([]string, 0, serverapi.SessionPromptHistoryMaxEntries+25)
+	for i := range serverapi.SessionPromptHistoryMaxEntries + 25 {
+		history = append(history, promptHistoryEntry(i))
+	}
+	construction := newUIModelConstruction(nil)
+
+	WithUIPromptHistory(history)(construction)
+
+	if got := len(construction.promptHistory); got != 0 {
+		t.Fatalf("runtime prompt history length before finalization = %d, want 0", got)
+	}
+	if got := len(construction.initialPromptHistory); got != len(history) {
+		t.Fatalf("staged prompt history length = %d, want %d", got, len(history))
+	}
+	if &construction.initialPromptHistory[0] != &history[0] {
+		t.Fatal("staged prompt history copied the source payload")
+	}
+
+	m := construction.finalize()
+	if got, want := len(m.promptHistory), serverapi.SessionPromptHistoryMaxEntries; got != want {
+		t.Fatalf("final prompt history length = %d, want %d", got, want)
+	}
+	if construction.initialPromptHistory != nil {
+		t.Fatal("construction retained initial prompt history after finalization")
+	}
+}
+
 func TestLoadPromptHistoryPanicsWithDeveloperDiagnosticWhenServerExceedsContractInDebug(t *testing.T) {
 	history := make([]string, 0, serverapi.SessionPromptHistoryMaxEntries+1)
 	for i := range serverapi.SessionPromptHistoryMaxEntries + 1 {

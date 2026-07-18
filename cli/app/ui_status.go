@@ -104,7 +104,7 @@ type defaultUIStatusCollector struct {
 }
 
 func WithUIStatusConfig(statusConfig uiStatusConfig) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		statusConfig.AuthManager = status.NormalizeAuthStateResolver(statusConfig.AuthManager)
 		m.statusConfig = statusConfig
 		if statusConfig.Settings.Debug {
@@ -117,7 +117,7 @@ func WithUIStatusConfig(statusConfig uiStatusConfig) UIOption {
 }
 
 func WithUIStatusCollector(collector uiStatusCollector) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		if collector != nil {
 			m.statusCollector = collector
 		}
@@ -125,7 +125,7 @@ func WithUIStatusCollector(collector uiStatusCollector) UIOption {
 }
 
 func WithUIStatusRepository(repository uiStatusRepository) UIOption {
-	return func(m *uiModel) {
+	return func(m *uiModelConstruction) {
 		if repository != nil {
 			m.statusRepository = repository
 		}
