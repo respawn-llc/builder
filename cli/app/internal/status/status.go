@@ -78,7 +78,6 @@ type Snapshot struct {
 	Auth                   AuthInfo
 	Context                ContextInfo
 	Model                  ModelInfo
-	Update                 UpdateInfo
 	Config                 ConfigInfo
 	Subscription           SubscriptionInfo
 	SkillPolicy            config.SkillPolicy
@@ -117,12 +116,6 @@ type ContextInfo struct {
 
 type ModelInfo struct {
 	Summary string
-}
-
-type UpdateInfo struct {
-	Checked       bool
-	Available     bool
-	LatestVersion string
 }
 
 type ConfigInfo struct {

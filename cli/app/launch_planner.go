@@ -85,6 +85,7 @@ type launchPlannerServer interface {
 	ProjectID() string
 	AuthStatusClient() apicontract.AuthStatusService
 	ProjectViewClient() apicontract.ProjectViewService
+	ServerStatusClient() apicontract.ServerStatusService
 	SessionLaunchClient() apicontract.SessionLaunchService
 	SessionViewClient() apicontract.SessionViewService
 }
@@ -285,6 +286,7 @@ func (p *launchPlanner) sessionPickerHeaderInfo(cfg config.App) sessionPickerHea
 		AuthManager:   status.NormalizeAuthStateResolver(authState.Resolver),
 		OwnsServer:    p != nil && p.server != nil && p.server.OwnsServer(),
 		ServerAddress: net.JoinHostPort(cfg.Settings.ServerHost, strconv.Itoa(cfg.Settings.ServerPort)),
+		updateStatus:  p.server.ServerStatusClient(),
 	}
 }
 

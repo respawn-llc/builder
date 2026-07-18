@@ -104,6 +104,8 @@ type Route struct {
 	ValidatesRequest   bool
 }
 
+const UpdateStatusDedicatedRequestID = "get-update-status"
+
 func unary[Req any, Resp any](method string, auth AuthPolicy, scope ScopePolicy, connection ConnectionStrategy, dependency Dependency) Route {
 	reqType := reflect.TypeOf((*Req)(nil)).Elem()
 	return Route{
@@ -181,6 +183,7 @@ func implementsValidator(t reflect.Type) bool {
 var routeContracts = []Route{
 	unary[protocol.HandshakeRequest, protocol.HandshakeResponse](protocol.MethodHandshake, AuthNone, ScopeNone, ConnectionControl, DependencyProtocol),
 	unary[serverapi.ServerReadinessRequest, serverapi.ServerReadinessResponse](protocol.MethodServerReadinessGet, AuthPreServerAuth, ScopeNone, ConnectionUnscoped, DependencyServerStatus),
+	dedicatedUnary[serverapi.UpdateStatusRequest, serverapi.UpdateStatusResponse](protocol.MethodServerUpdateStatusGet, UpdateStatusDedicatedRequestID, ScopeNone, DependencyServerStatus),
 	unary[serverapi.AuthGetBootstrapStatusRequest, serverapi.AuthGetBootstrapStatusResponse](protocol.MethodAuthGetBootstrapStatus, AuthPreServerAuth, ScopeNone, ConnectionUnscoped, DependencyAuthBootstrap),
 	unary[serverapi.AuthCompleteBootstrapRequest, serverapi.AuthCompleteBootstrapResponse](protocol.MethodAuthCompleteBootstrap, AuthPreServerAuth, ScopeNone, ConnectionUnscoped, DependencyAuthBootstrap),
 	unary[serverapi.AuthAcknowledgeNoAuthRequest, serverapi.AuthAcknowledgeNoAuthResponse](protocol.MethodAuthAcknowledgeNoAuth, AuthPreServerAuth, ScopeNone, ConnectionUnscoped, DependencyAuthBootstrap),

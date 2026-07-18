@@ -23,6 +23,16 @@
 - The release workflow smoke-tests `scripts/install.ps1` against staged Windows release assets before publishing.
 - GitHub artifact attestations are intentionally not part of the release pipeline.
 
+## TUI Update Discovery
+
+- The Kent server is authoritative for TUI update status. Update metadata is independent of session runtime state and does not participate in transcript or runtime ordering.
+- Release lookup is owned behind one server-side release-metadata source contract. Production composition uses the GitHub HTTP implementation.
+- Release checks are lazy: the server checks GitHub only when a client requests update status and the previous completed attempt is at least one hour old. Concurrent requests share one bounded check, and every outcome is cached for the one-hour freshness window.
+- A newer valid release is returned as typed update metadata for client-owned presentation. HTTP 4xx/5xx responses, invalid release metadata, malformed non-development release versions, and unexpected internal states surface as update-check failures with their cause.
+- Network failures and timeouts complete as checked with no available update and no user-facing error.
+- Intentional development builds compare as version `0.0.0`, allowing the shipping update-discovery path to be exercised during manual QA.
+- Kent releases advance the client/server protocol. The TUI does not reconcile application-version skew within one protocol version: its picker title remains the local client version while update discovery evaluates the attached server version.
+
 ## Installers
 
 - Windows one-command installs are served by `scripts/install.ps1`.

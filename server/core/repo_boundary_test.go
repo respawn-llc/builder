@@ -176,7 +176,6 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		"TranscriptWorkflowSession":                {},
 		"TranscriptWorktreeContext":                {},
 		"TranscriptWorktreeTransitionOutcome":      {},
-		"UpdateStatus":                             {},
 		"UserTurnSubmission":                       {},
 		"WorkflowSessionStatus":                    {},
 		"WorktreeTransitionFailure":                {},

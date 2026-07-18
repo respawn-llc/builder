@@ -96,7 +96,6 @@ func (c Collector) CollectBase(req Request) Snapshot {
 		OwnsServer:           req.OwnsServer,
 		Context:              contextInfo,
 		Model:                ModelInfo{Summary: ModelSummary(req)},
-		Update:               BuildUpdateInfo(req),
 		Config: ConfigInfo{
 			SettingsPath:    filepath.ToSlash(strings.TrimSpace(req.Source.SettingsPath)),
 			OverrideSources: ConfigOverrideSources(req.Source),

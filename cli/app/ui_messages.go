@@ -165,10 +165,6 @@ type clearTransientStatusMsg struct {
 	token uint64
 }
 
-type startupUpdateNoticeMsg struct {
-	version string
-}
-
 type uiModelProbeMessage interface {
 	probeUIModel(*uiModel)
 }
@@ -195,7 +191,6 @@ type runtimeMainViewRefreshCause string
 const (
 	runtimeMainViewRefreshCauseWorktreeMutation runtimeMainViewRefreshCause = "worktree_mutation"
 	runtimeMainViewRefreshCauseManual           runtimeMainViewRefreshCause = "manual"
-	runtimeMainViewRefreshCauseStartupUpdate    runtimeMainViewRefreshCause = "startup_update"
 )
 
 type detailTranscriptLoadMsg struct {

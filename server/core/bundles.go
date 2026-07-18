@@ -39,7 +39,6 @@ type Bundles struct {
 	Prompts     *PromptBundle
 	Runtime     *RuntimeBundle
 	Sessions    *SessionBundle
-	Updates     *UpdateBundle
 	Workflows   *WorkflowBundle
 	Worktrees   *WorktreeBundle
 }
@@ -106,10 +105,6 @@ type SessionBundle struct {
 	runPrompt        apicontract.RunPromptService
 }
 
-type UpdateBundle struct {
-	updateStatus *serverstatus.UpdateStatusService
-}
-
 type WorktreeBundle struct {
 	worktrees apicontract.WorktreeService
 }
@@ -157,9 +152,6 @@ func (b *Bundles) withDefaults() *Bundles {
 	}
 	if withDefaults.Sessions == nil {
 		withDefaults.Sessions = emptySessionBundle()
-	}
-	if withDefaults.Updates == nil {
-		withDefaults.Updates = &UpdateBundle{}
 	}
 	if withDefaults.Workflows == nil {
 		withDefaults.Workflows = &WorkflowBundle{}
@@ -217,6 +209,7 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 			{name: "persistence root lock", close: in.rootLease.Close},
 			{name: "metadata store", close: in.metadataStore.Close},
 			{name: "background manager", close: in.runtimeSupport.Background.Close},
+			{name: "update status service", close: in.updateStatusService.Close},
 			{name: "worktree transitions", close: func() error {
 				if in.worktreeService == nil {
 					return nil
@@ -248,7 +241,6 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 		Prompts:     newPromptBundle(in.askService, in.approvalService, in.promptControlService, in.attentionService),
 		Runtime:     newRuntimeBundle(in.runtimeSupport, in.runtimeRegistry, in.runtimeControlService, in.sessionRuntimeService),
 		Sessions:    newSessionBundle(in.sessionViewService, in.sessionLifecycleService),
-		Updates:     &UpdateBundle{updateStatus: in.updateStatusService},
 		Workflows:   newWorkflowBundle(in.workflowService, in.workflowScheduler),
 		Worktrees:   &WorktreeBundle{worktrees: in.worktreeService},
 	}

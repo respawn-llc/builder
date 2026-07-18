@@ -115,9 +115,6 @@ func (l uiViewLayout) statusOverlayContentLines(width int) []string {
 	appendSectionTitle("Session")
 	appendWrapped("CWD: "+statusValueOrFallback(snapshot.Workdir, "<unknown>"), boldStyle)
 	appendANSI(l.renderStatusModelLine(width, snapshot.Model.Summary))
-	if updateLine := l.renderStatusUpdateLine(width, snapshot.Update); updateLine != "" {
-		appendANSI(updateLine)
-	}
 	for _, line := range statusOverlaySessionLines(snapshot) {
 		switch line.Style {
 		case statusOverlayLineStyleBold:
@@ -243,15 +240,6 @@ func (l uiViewLayout) statusOverlayContentLines(width int) []string {
 		appendWrapped(warning, warningStyle)
 	}
 	return lines
-}
-
-func (l uiViewLayout) renderStatusUpdateLine(width int, update uiStatusUpdateInfo) string {
-	if !update.Available || strings.TrimSpace(update.LatestVersion) == "" {
-		return ""
-	}
-	text := "Update: available " + strings.TrimSpace(update.LatestVersion)
-	style := lipgloss.NewStyle().Foreground(sharedtheme.DefaultPalette().Status.Success.Adaptive()).Bold(true)
-	return padANSIRight(style.Render(truncateQueuedMessageLine(text, width)), width)
 }
 
 func (l uiViewLayout) statusSectionLoading(section uiStatusSection) bool {

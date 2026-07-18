@@ -157,6 +157,13 @@ func (s *embeddedAppServer) ProjectViewClient() apicontract.ProjectViewService {
 	return s.inner.ProjectViewClient()
 }
 
+func (s *embeddedAppServer) ServerStatusClient() apicontract.ServerStatusService {
+	if s == nil || s.inner == nil {
+		return nil
+	}
+	return s.inner.ServerStatusClient()
+}
+
 func (s *embeddedAppServer) RuntimeAttachmentClients() runtimeAttachmentClients {
 	if s == nil || s.inner == nil {
 		return runtimeAttachmentClients{}

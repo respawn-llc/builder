@@ -84,7 +84,6 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		)
 	}
 	nextSessionOverrides := opts.Overrides
-	showStartupUpdateNotice := true
 	var pickerNotice *startupPickerNotice
 	for {
 		switch next.Kind() {
@@ -186,13 +185,11 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 			initialPromptHistoryRecorded,
 			transitionInput,
 			overrideStoredDraft,
-			showStartupUpdateNotice,
 		)
 		if err != nil {
 			return err
 		}
 		finalModel, runErr := runUILoop(request)
-		showStartupUpdateNotice = shouldRetryStartupUpdateNotice(finalModel, showStartupUpdateNotice)
 		if runErr != nil {
 			if closeErr := runtimePlan.Close(); closeErr != nil {
 				return errors.Join(runErr, closeErr)
@@ -259,7 +256,6 @@ func prepareSessionUIRun(
 	initialPromptHistoryRecorded bool,
 	transitionInput string,
 	overrideStoredDraft bool,
-	startupUpdateNotice bool,
 ) (*runtimeLaunchPlan, uiLoopRequest, error) {
 	runtimePlan, err := planner.PrepareRuntime(ctx, plan, os.Stderr, "app.start session_id="+plan.SessionID+" workspace="+plan.ExecutionTarget.EffectiveWorkdir+" model="+plan.ActiveSettings.Model)
 	if err != nil {
@@ -295,7 +291,6 @@ func prepareSessionUIRun(
 		modelContractLocked:          plan.ModelContractLocked,
 		configuredModelName:          plan.ConfiguredModelName,
 		statusConfig:                 plan.StatusConfig,
-		startupUpdateNotice:          startupUpdateNotice,
 	}, nil
 }
 
@@ -311,14 +306,6 @@ func closeRuntimePlanAfterUIExit(runtimePlan *runtimeLaunchPlan, finalModel any)
 		return runtimePlan.DetachOnlyClose()
 	}
 	return runtimePlan.Close()
-}
-
-func shouldRetryStartupUpdateNotice(model any, enabled bool) bool {
-	if !enabled {
-		return false
-	}
-	ui, ok := model.(*uiModel)
-	return !ok || ui == nil || !ui.startupUpdateShown
 }
 
 func shouldCloseReboundServer(original appServerCore, rebound appServerCore) bool {

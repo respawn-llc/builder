@@ -2,205 +2,258 @@ package serverstatus
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"net/http"
+	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"core/shared/clientui"
-	brand "core/shared/config"
+	"core/shared/serverapi"
 )
 
-const defaultLatestReleaseURL = "https://api.github.com/repos/" + brand.RepoSlug + "/releases/latest"
+const (
+	updateStatusFreshness = time.Hour
+	updateStatusTimeout   = 2 * time.Second
+)
+
+var ErrUpdateStatusServiceClosed = errors.New("update status service is closed")
 
 type UpdateStatusService struct {
 	currentVersion string
-	latestURL      string
-	client         *http.Client
+	debug          bool
+	releaseSource  releaseMetadataSource
+	now            func() time.Time
+	lifecycle      context.Context
+	cancel         context.CancelFunc
 
-	mu       sync.Mutex
-	status   clientui.UpdateStatus
-	inflight chan struct{}
-	disabled bool
+	mu        sync.Mutex
+	workers   sync.WaitGroup
+	completed *completedUpdateStatus
+	inflight  *updateStatusOperation
+	closed    bool
 }
 
-type UpdateStatusOption func(*UpdateStatusService)
+type completedUpdateStatus struct {
+	result      serverapi.UpdateStatusResult
+	completedAt time.Time
+}
 
-func WithHTTPClient(client *http.Client) UpdateStatusOption {
-	return func(s *UpdateStatusService) {
-		if client != nil {
-			s.client = client
-		}
+type updateStatusOperation struct {
+	done   chan struct{}
+	result serverapi.UpdateStatusResult
+	err    error
+}
+
+func NewUpdateStatusService(currentVersion string, debug bool) *UpdateStatusService {
+	return newUpdateStatusService(currentVersion, debug, nil, time.Now)
+}
+
+func newUpdateStatusService(currentVersion string, debug bool, releaseSource releaseMetadataSource, now func() time.Time) *UpdateStatusService {
+	if releaseSource == nil {
+		releaseSource = newDefaultGitHubReleaseMetadataSource()
+	}
+	if now == nil {
+		now = time.Now
+	}
+	lifecycle, cancel := context.WithCancel(context.Background())
+	return &UpdateStatusService{
+		currentVersion: currentVersion,
+		debug:          debug,
+		releaseSource:  releaseSource,
+		now:            now,
+		lifecycle:      lifecycle,
+		cancel:         cancel,
 	}
 }
 
-func WithLatestReleaseURL(url string) UpdateStatusOption {
-	return func(s *UpdateStatusService) {
-		if strings.TrimSpace(url) != "" {
-			s.latestURL = strings.TrimSpace(url)
-		}
+func (s *UpdateStatusService) Status(ctx context.Context) (serverapi.UpdateStatusResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-}
 
-func NewUpdateStatusService(currentVersion string, opts ...UpdateStatusOption) *UpdateStatusService {
-	s := &UpdateStatusService{
-		currentVersion: strings.TrimPrefix(strings.TrimSpace(currentVersion), "v"),
-		latestURL:      defaultLatestReleaseURL,
-		client:         http.DefaultClient,
-		status: clientui.UpdateStatus{
-			CurrentVersion: strings.TrimPrefix(strings.TrimSpace(currentVersion), "v"),
-		},
-	}
-	for _, opt := range opts {
-		opt(s)
-	}
-	s.disabled = !isComparableVersion(s.currentVersion)
-	if s.disabled {
-		s.status.Checked = true
-	}
-	return s
-}
-
-func (s *UpdateStatusService) Status(ctx context.Context) clientui.UpdateStatus {
-	if s == nil {
-		return clientui.UpdateStatus{}
-	}
 	s.mu.Lock()
-	if s.disabled {
-		status := s.status
+	if s.closed {
 		s.mu.Unlock()
-		return status
+		return serverapi.UpdateStatusResult{}, ErrUpdateStatusServiceClosed
 	}
-	if s.status.Checked {
-		status := s.status
+	if s.completed != nil && isFreshUpdateStatusCache(s.now(), s.completed.completedAt) {
+		result := s.completed.result
 		s.mu.Unlock()
-		return status
+		return result, nil
 	}
+	s.completed = nil
 	if s.inflight == nil {
-		s.inflight = make(chan struct{})
-		done := s.inflight
-		go s.refresh(done)
+		s.inflight = &updateStatusOperation{done: make(chan struct{})}
+		s.workers.Add(1)
+		go s.runUpdateStatusCheck(s.inflight)
 	}
-	done := s.inflight
+	operation := s.inflight
 	s.mu.Unlock()
 
 	select {
-	case <-done:
+	case <-operation.done:
+		return operation.result, operation.err
 	case <-ctx.Done():
+		return serverapi.UpdateStatusResult{}, ctx.Err()
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.status
 }
 
-func (s *UpdateStatusService) Start() {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	if s.disabled {
-		s.mu.Unlock()
-		return
-	}
-	if s.status.Checked || s.inflight != nil {
-		s.mu.Unlock()
-		return
-	}
-	s.inflight = make(chan struct{})
-	done := s.inflight
-	s.mu.Unlock()
-	go s.refresh(done)
-}
+func (s *UpdateStatusService) runUpdateStatusCheck(operation *updateStatusOperation) {
+	defer s.workers.Done()
 
-func (s *UpdateStatusService) refresh(done chan struct{}) {
-	defer close(done)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(s.lifecycle, updateStatusTimeout)
 	defer cancel()
-	latest, err := s.fetchLatestVersion(ctx)
 
+	result := s.checkUpdateStatus(ctx)
+	if err := result.Validate(); err != nil {
+		result = s.invalidCalculatedResult(result, err)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	defer func() { s.inflight = nil }()
-	if err != nil {
-		s.status.Checked = true
+
+	if s.closed || s.inflight != operation {
 		return
 	}
-	s.status.Checked = true
-	s.status.LatestVersion = latest
-	s.status.Available = compareVersions(latest, s.currentVersion) > 0
+	s.completeOperationLocked(operation, result, nil, true)
 }
 
-func (s *UpdateStatusService) fetchLatestVersion(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.latestURL, nil)
+func (s *UpdateStatusService) invalidCalculatedResult(result serverapi.UpdateStatusResult, cause error) serverapi.UpdateStatusResult {
+	diagnostic := fmt.Sprintf(
+		"update status invariant violated: operation=publish calculated_kind=%q configured_version=%q cause=%v",
+		result.Kind(),
+		strings.TrimSpace(s.currentVersion),
+		cause,
+	)
+	if s.debug {
+		panic(diagnostic)
+	}
+	return serverapi.FailedUpdateStatusResult("internal update checker failure: " + cause.Error())
+}
+
+func (s *UpdateStatusService) checkUpdateStatus(ctx context.Context) serverapi.UpdateStatusResult {
+	currentVersion, err := parseConfiguredUpdateVersion(s.currentVersion)
+
 	if err != nil {
-		return "", err
+		return serverapi.FailedUpdateStatusResult(fmt.Sprintf("current release version is invalid: %v", err))
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "kent")
-	resp, err := s.client.Do(req)
+
+	metadata, err := s.releaseSource.LatestRelease(ctx)
 	if err != nil {
-		return "", err
+		return classifyReleaseSourceFailure(err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", errors.New(resp.Status)
+	latestVersion, err := parseUpdateVersion(metadata.Version)
+	if err != nil {
+		return serverapi.FailedUpdateStatusResult(fmt.Sprintf("latest release version is invalid: %v", err))
 	}
-	var payload struct {
-		TagName string `json:"tag_name"`
+
+	current := currentVersion.String()
+	latest := latestVersion.String()
+	if latestVersion.Compare(currentVersion) > 0 {
+		return serverapi.AvailableUpdateStatusResult(current, latest)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return "", err
-	}
-	latest := strings.TrimPrefix(strings.TrimSpace(payload.TagName), "v")
-	if !isComparableVersion(latest) {
-		return "", errors.New("latest release tag is not semantic")
-	}
-	return latest, nil
+	return serverapi.CurrentUpdateStatusResult(current, latest)
 }
 
-func isComparableVersion(version string) bool {
-	parts := versionParts(version)
-	return len(parts) == 3
+func classifyReleaseSourceFailure(err error) serverapi.UpdateStatusResult {
+	var httpStatusError *releaseHTTPStatusError
+	var metadataError *releaseMetadataError
+	if errors.As(err, &httpStatusError) || errors.As(err, &metadataError) {
+		return serverapi.FailedUpdateStatusResult(err.Error())
+	}
+	var transportError *releaseTransportError
+	var networkError net.Error
+	if errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, context.Canceled) ||
+		errors.As(err, &transportError) ||
+		errors.As(err, &networkError) {
+		return serverapi.CheckUnavailableUpdateStatusResult()
+	}
+	return serverapi.FailedUpdateStatusResult(err.Error())
 }
 
-func compareVersions(left string, right string) int {
-	leftParts := versionParts(left)
-	rightParts := versionParts(right)
-	if len(leftParts) != 3 || len(rightParts) != 3 {
-		return 0
+func (s *UpdateStatusService) completeOperationLocked(operation *updateStatusOperation, result serverapi.UpdateStatusResult, err error, cache bool) {
+	operation.result = result
+	operation.err = err
+	if cache {
+		s.completed = &completedUpdateStatus{result: result, completedAt: s.now()}
+	} else {
+		s.completed = nil
 	}
-	for idx := 0; idx < 3; idx++ {
-		if leftParts[idx] > rightParts[idx] {
-			return 1
+	s.inflight = nil
+	close(operation.done)
+}
+
+func (s *UpdateStatusService) Close() error {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	if !s.closed {
+		s.closed = true
+		s.cancel()
+		if s.inflight != nil {
+			s.completeOperationLocked(s.inflight, serverapi.UpdateStatusResult{}, ErrUpdateStatusServiceClosed, false)
+		} else {
+			s.completed = nil
 		}
-		if leftParts[idx] < rightParts[idx] {
+	}
+	s.mu.Unlock()
+	s.workers.Wait()
+	return nil
+}
+
+func isFreshUpdateStatusCache(observedAt time.Time, completedAt time.Time) bool {
+	return observedAt.Before(completedAt.Add(updateStatusFreshness))
+}
+
+type updateVersion struct {
+	components [3]uint64
+}
+
+func parseConfiguredUpdateVersion(raw string) (updateVersion, error) {
+	if strings.TrimSpace(raw) == "dev" {
+		return updateVersion{}, nil
+	}
+	return parseUpdateVersion(raw)
+}
+
+func parseUpdateVersion(raw string) (updateVersion, error) {
+	normalized := strings.TrimPrefix(strings.TrimSpace(raw), "v")
+	parts := strings.Split(normalized, ".")
+	if len(parts) != 3 {
+		return updateVersion{}, errors.New("version must contain exactly three numeric components")
+	}
+	var version updateVersion
+	for index, part := range parts {
+		if part == "" {
+			return updateVersion{}, fmt.Errorf("component %d is empty", index)
+		}
+		value, err := strconv.ParseUint(part, 10, 64)
+		if err != nil {
+			return updateVersion{}, fmt.Errorf("component %d is invalid: %w", index, err)
+		}
+		version.components[index] = value
+	}
+	return version, nil
+}
+
+func (v updateVersion) Compare(other updateVersion) int {
+	for index := range v.components {
+		switch {
+		case v.components[index] > other.components[index]:
+			return 1
+		case v.components[index] < other.components[index]:
 			return -1
 		}
 	}
 	return 0
 }
 
-func versionParts(version string) []int {
-	rawParts := strings.Split(strings.TrimPrefix(strings.TrimSpace(version), "v"), ".")
-	if len(rawParts) != 3 {
-		return nil
-	}
-	parts := make([]int, 0, 3)
-	for _, raw := range rawParts {
-		if raw == "" {
-			return nil
-		}
-		value := 0
-		for _, r := range raw {
-			if r < '0' || r > '9' {
-				return nil
-			}
-			value = value*10 + int(r-'0')
-		}
-		parts = append(parts, value)
-	}
-	return parts
+func (v updateVersion) String() string {
+	return strconv.FormatUint(v.components[0], 10) + "." +
+		strconv.FormatUint(v.components[1], 10) + "." +
+		strconv.FormatUint(v.components[2], 10)
 }
