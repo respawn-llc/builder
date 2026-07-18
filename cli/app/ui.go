@@ -27,6 +27,7 @@ func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption)
 	for _, opt := range opts {
 		opt(m)
 	}
+	m.finalizePromptHistory()
 	if m.pathReferenceSearch == nil {
 		m.pathReferenceSearch = newUIPathReferenceSearch()
 		m.pathReferenceEvents = m.pathReferenceSearch.Events()

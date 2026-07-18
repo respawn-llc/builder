@@ -17,13 +17,15 @@ const (
 	promptHistoryOverflowLocalSubmission
 )
 
-func (m *uiModel) loadPromptHistory(history []string) {
-	history = m.retainPromptHistoryTail(history, promptHistoryOverflowInitialLoad)
+func (m *uiModel) finalizePromptHistory() {
+	history := m.retainPromptHistoryTail(m.promptHistory, promptHistoryOverflowInitialLoad)
+	var loaded []string
 	for _, raw := range history {
 		if text := preservePromptHistoryText(raw); text != "" {
-			m.promptHistory = append(m.promptHistory, text)
+			loaded = append(loaded, text)
 		}
 	}
+	m.promptHistory = loaded
 }
 
 func preservePromptHistoryText(text string) string {

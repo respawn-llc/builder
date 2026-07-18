@@ -33,30 +33,49 @@ func TestLoadPromptHistoryPanicsWithDeveloperDiagnosticWhenServerExceedsContract
 		history = append(history, promptHistoryEntry(i))
 	}
 
-	recovered := capturePanic(func() {
-		_ = newProjectedStaticUIModel(
-			WithUIDebug(true),
-			WithUIPromptHistory(history),
-		)
-	})
-	developerErr, ok := recovered.(ongoing.DeveloperError)
-	if !ok {
-		t.Fatalf("panic = %T, want ongoing.DeveloperError", recovered)
-	}
-	if developerErr.Operation != "load_prompt_history" {
-		t.Fatalf("developer-error operation = %q", developerErr.Operation)
-	}
-	if developerErr.Reason != "session-opening prompt history exceeds contract maximum" {
-		t.Fatalf("developer-error reason = %q", developerErr.Reason)
-	}
-	if got := developerErr.Facts["actual_count"]; got != serverapi.SessionPromptHistoryMaxEntries+1 {
-		t.Fatalf("actual-count diagnostic = %#v", got)
-	}
-	if got := developerErr.Facts["maximum_count"]; got != serverapi.SessionPromptHistoryMaxEntries {
-		t.Fatalf("maximum-count diagnostic = %#v", got)
-	}
-	if developerErr.Stack == "" {
-		t.Fatal("developer error omitted stack trace")
+	for _, test := range []struct {
+		name    string
+		options []UIOption
+	}{
+		{
+			name: "debug before history",
+			options: []UIOption{
+				WithUIDebug(true),
+				WithUIPromptHistory(history),
+			},
+		},
+		{
+			name: "history before debug",
+			options: []UIOption{
+				WithUIPromptHistory(history),
+				WithUIDebug(true),
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recovered := capturePanic(func() {
+				_ = newProjectedStaticUIModel(test.options...)
+			})
+			developerErr, ok := recovered.(ongoing.DeveloperError)
+			if !ok {
+				t.Fatalf("panic = %T, want ongoing.DeveloperError", recovered)
+			}
+			if developerErr.Operation != "load_prompt_history" {
+				t.Fatalf("developer-error operation = %q", developerErr.Operation)
+			}
+			if developerErr.Reason == "" {
+				t.Fatal("developer error omitted reason")
+			}
+			if got := developerErr.Facts["actual_count"]; got != serverapi.SessionPromptHistoryMaxEntries+1 {
+				t.Fatalf("actual-count diagnostic = %#v", got)
+			}
+			if got := developerErr.Facts["maximum_count"]; got != serverapi.SessionPromptHistoryMaxEntries {
+				t.Fatalf("maximum-count diagnostic = %#v", got)
+			}
+			if developerErr.Stack == "" {
+				t.Fatal("developer error omitted stack trace")
+			}
+		})
 	}
 }
 

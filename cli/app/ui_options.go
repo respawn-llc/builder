@@ -196,7 +196,7 @@ func WithUITerminalFocusState(state *terminalFocusState) UIOption {
 
 func WithUIPromptHistory(history []string) UIOption {
 	return func(m *uiModel) {
-		m.loadPromptHistory(history)
+		m.promptHistory = append(m.promptHistory, history...)
 	}
 }
 
