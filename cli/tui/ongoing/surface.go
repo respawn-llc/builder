@@ -372,9 +372,21 @@ func (s *Surface) immutableScrollbackProduced() bool {
 	return s.groupRegister != nil || s.activeAssistant.promotedSourceBoundary > 0
 }
 
+func (s *Surface) physicalPreviousBandHeight(target Size) int {
+	if s.lastPaintedSize == nil || s.retainedBandHeight <= 0 {
+		return 0
+	}
+	previousHeight := min(s.retainedBandHeight, target.Height)
+	heightDelta := target.Height - s.lastPaintedSize.Height
+	if heightDelta > 0 {
+		previousHeight = min(target.Height, s.retainedBandHeight+heightDelta)
+	}
+	return previousHeight
+}
+
 func (s *Surface) ResetForScratchHydration(reason RehydrateReason, frame FrameInput) (Result, error) {
 	s.validateRenderFrame(frame, "reset_for_scratch_hydration")
-	linesToErase := min(s.retainedBandHeight, max(0, frame.Size.Height))
+	linesToErase := s.physicalPreviousBandHeight(frame.Size)
 	var transaction strings.Builder
 	transaction.WriteString(resetScrollRegionAndOriginMode())
 	transaction.WriteString(semanticOutputSequence())
@@ -386,6 +398,8 @@ func (s *Surface) ResetForScratchHydration(reason RehydrateReason, frame FrameIn
 	s.retainedBandHeight = 0
 	s.activeAssistant = activeAssistantState{}
 	s.groupRegister = nil
+	paintedSize := frame.Size
+	s.lastPaintedSize = &paintedSize
 	return Result{Action: ResultRequestScratchRehydration, Reason: reason}, nil
 }
 
@@ -643,10 +657,7 @@ func (s *Surface) writeFrameTransaction(frame FrameInput, immutableRows []string
 		liveLines = nil
 		frame.Cursor = Cursor{}
 	}
-	previousHeight := 0
-	if s.lastPaintedSize != nil && s.retainedBandHeight > 0 {
-		previousHeight = min(s.retainedBandHeight, frame.Size.Height)
-	}
+	previousHeight := s.physicalPreviousBandHeight(frame.Size)
 	contentHeight := len(liveLines)
 	releasableHeight := max(0, previousHeight-contentHeight)
 	releasedHeight := min(len(immutableRows), releasableHeight)
