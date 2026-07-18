@@ -521,6 +521,39 @@ func TestTaskListProjectionAcceptsTokenOwnedWorkflowScope(t *testing.T) {
 	}
 }
 
+func TestTaskListProjectionAcceptsLiveMixedTokenContinuationWithFrozenOneCardinality(t *testing.T) {
+	response := serverapi.WorkflowTaskListResponse{
+		Scope:                       taskListResponseScope("project-1", nil),
+		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
+		Tasks: []serverapi.WorkflowTaskListItem{
+			{
+				TaskID:     "task-1",
+				WorkflowID: taskListWorkflowID,
+				Status:     serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindQueued, NativeState: "queued"},
+			},
+			{
+				TaskID:     "task-2",
+				WorkflowID: taskListSecondWorkflowID,
+				Status:     serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindQueued, NativeState: "queued"},
+			},
+		},
+	}
+
+	projection, err := taskListProjectionFromResponse(response, taskListExpectedScope{
+		ProjectID:     "project-1",
+		WorkflowOwner: taskListExpectedWorkflowFromToken,
+	})
+	if err != nil {
+		t.Fatalf("taskListProjectionFromResponse: %v", err)
+	}
+	if len(projection.Rows) != 2 ||
+		projection.Rows[0].ShowWorkflow ||
+		projection.Rows[1].ShowWorkflow ||
+		projection.Output.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne {
+		t.Fatalf("projection = %+v, want live mixed rows with frozen no-label display", projection)
+	}
+}
+
 func TestTaskListRecoveryProjectionBuildsLockedCommandMatrix(t *testing.T) {
 	projectID := "project-1"
 	selectedWorkflowID := taskListWorkflowID

@@ -113,7 +113,8 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 		if selectedWorkflowID != nil && workflowID != *selectedWorkflowID {
 			return taskListProjection{}, fmt.Errorf("task list response task %q workflow %q does not match selected workflow %q", task.TaskID, workflowID, *selectedWorkflowID)
 		}
-		if resp.MatchingWorkflowCardinality == serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne {
+		if resp.MatchingWorkflowCardinality == serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne &&
+			expectedScope.WorkflowOwner == taskListExpectedWorkflowFromRequest {
 			if soleWorkflowID == nil {
 				value := workflowID
 				soleWorkflowID = &value
