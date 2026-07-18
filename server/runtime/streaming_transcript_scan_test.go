@@ -99,6 +99,63 @@ func TestStreamingTranscriptScanBoundarySeedOverriddenByLaterFinalAnswer(t *test
 	}
 }
 
+func TestStreamingTranscriptScanKeepsToolAttachedLocalEntryAfterMaterializedOutput(t *testing.T) {
+	callID := "call-fallback"
+	presentation := transcript.ToolCallMeta{
+		ToolName: string(toolspec.ToolPatch),
+	}
+	expectedPresentation := transcript.NormalizeToolCallMeta(presentation)
+	events := []session.Event{
+		streamScanTestEvent(t, "message", llm.Message{
+			Role: llm.RoleAssistant,
+			ToolCalls: []llm.ToolCall{{
+				ID:   callID,
+				Name: string(toolspec.ToolPatch),
+			}},
+		}),
+		streamScanTestEvent(t, "tool_completed", storedToolCompletion{
+			CallID:       callID,
+			Name:         string(toolspec.ToolPatch),
+			Output:       json.RawMessage(`{"ok":true}`),
+			Presentation: &presentation,
+		}),
+		streamScanTestEvent(t, "local_entry", storedLocalEntry{
+			Role:            string(transcript.EntryRoleDeveloperErrorFeedback),
+			Text:            "presentation fallback",
+			AfterToolCallID: &callID,
+		}),
+		streamScanTestEvent(t, "message", llm.Message{
+			Role:        llm.RoleTool,
+			ToolCallID:  callID,
+			Name:        string(toolspec.ToolPatch),
+			Content:     `{"ok":true}`,
+			MessageType: llm.ToolOutputMessageType(true),
+		}),
+		streamScanTestEvent(t, "message", llm.Message{
+			Role:    llm.RoleAssistant,
+			Phase:   llm.MessagePhaseFinal,
+			Content: "done",
+		}),
+	}
+
+	snapshot := fullStreamingProjection(t, events)
+	if got := len(snapshot.Entries); got != 4 {
+		t.Fatalf("entry count = %d, want one tool call, one tool result, one operator row, and one assistant row: %+v", got, snapshot.Entries)
+	}
+	if got := snapshot.Entries[0]; got.Role != "tool_call" || got.ToolCallID != callID {
+		t.Fatalf("entry[0] = %+v, want tool call row", got)
+	}
+	if got := snapshot.Entries[1]; got.Role != "tool_result_ok" || got.ToolCallID != callID || got.ToolCall == nil || !reflect.DeepEqual(*got.ToolCall, expectedPresentation) {
+		t.Fatalf("entry[1] = %+v, want one finalized tool result row", got)
+	}
+	if got := snapshot.Entries[2]; got.Role != string(transcript.EntryRoleDeveloperErrorFeedback) {
+		t.Fatalf("entry[2] = %+v, want operator feedback after tool output", got)
+	}
+	if got := snapshot.Entries[3]; got.Role != "assistant" {
+		t.Fatalf("entry[3] = %+v, want following assistant row", got)
+	}
+}
+
 func applyEventsToStreaming(t *testing.T, scan *streamingTranscriptScan, events []session.Event) {
 	t.Helper()
 	for _, evt := range events {

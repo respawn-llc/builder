@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -43,6 +44,8 @@ type turnBuffer struct {
 	callIDs           []string
 	materialized      []llm.Message
 	materializedSteps []string
+	localEntries      []storedLocalEntry
+	localEntrySteps   []string
 }
 
 func newStreamingTranscriptScan(req inMemoryTranscriptScanRequest, cacheWarningMode config.CacheWarningMode) *streamingTranscriptScan {
@@ -88,14 +91,27 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(evt session.Event) error {
 			Presentation:  completion.Presentation,
 		}
 	case "local_entry":
-		s.closeTurn()
 		var entry storedLocalEntry
 		if err := json.Unmarshal(evt.Payload, &entry); err != nil {
 			return fmt.Errorf("decode local_entry event: %w", err)
 		}
-		projected := *localEntryChatEntry(entry)
-		projected.StepID = strings.TrimSpace(evt.StepID)
-		s.scan.appendEntry(projected)
+		if entry.AfterToolCallID != nil {
+			callID := strings.TrimSpace(*entry.AfterToolCallID)
+			if callID == "" {
+				return errors.New("decode local_entry event: after-tool call identity is empty")
+			}
+			if s.turn.assistant == nil || !s.turnOwnsCall(callID) {
+				return fmt.Errorf(
+					"decode local_entry event: after-tool call identity is outside the buffered assistant turn (call_id=%q)",
+					callID,
+				)
+			}
+			s.turn.localEntries = append(s.turn.localEntries, entry)
+			s.turn.localEntrySteps = append(s.turn.localEntrySteps, strings.TrimSpace(evt.StepID))
+			return nil
+		}
+		s.closeTurn()
+		s.appendLocalEntry(entry, evt.StepID)
 	case sessionEventCacheWarning:
 		s.closeTurn()
 		var warning transcript.CacheWarning
@@ -178,6 +194,8 @@ func (s *streamingTranscriptScan) closeTurn() {
 	materialized := s.turn.materialized
 	materializedSteps := s.turn.materializedSteps
 	callIDs := s.turn.callIDs
+	localEntries := s.turn.localEntries
+	localEntrySteps := s.turn.localEntrySteps
 
 	for _, rm := range materialized {
 		if callID := strings.TrimSpace(rm.ToolCallID); callID != "" {
@@ -194,6 +212,15 @@ func (s *streamingTranscriptScan) closeTurn() {
 	if len(materializedSteps) != len(materialized) {
 		panic(fmt.Sprintf("persisted transcript tool-message step identity count mismatch: materialized_count=%d step_id_count=%d", len(materialized), len(materializedSteps)))
 	}
+	for index, entry := range localEntries {
+		if index >= len(localEntrySteps) {
+			panic(fmt.Sprintf("persisted transcript local-entry step identity missing: local_entry_index=%d local_entry_count=%d step_id_count=%d", index, len(localEntries), len(localEntrySteps)))
+		}
+		s.appendLocalEntry(entry, localEntrySteps[index])
+	}
+	if len(localEntrySteps) != len(localEntries) {
+		panic(fmt.Sprintf("persisted transcript local-entry step identity count mismatch: local_entry_count=%d step_id_count=%d", len(localEntries), len(localEntrySteps)))
+	}
 
 	for _, callID := range callIDs {
 		delete(s.completions, callID)
@@ -203,7 +230,15 @@ func (s *streamingTranscriptScan) closeTurn() {
 		callIDs:           callIDs[:0],
 		materialized:      materialized[:0],
 		materializedSteps: materializedSteps[:0],
+		localEntries:      localEntries[:0],
+		localEntrySteps:   localEntrySteps[:0],
 	}
+}
+
+func (s *streamingTranscriptScan) appendLocalEntry(entry storedLocalEntry, stepID string) {
+	projected := *localEntryChatEntry(entry)
+	projected.StepID = strings.TrimSpace(stepID)
+	s.scan.appendEntry(projected)
 }
 
 func (s *streamingTranscriptScan) PageSnapshot() transcriptPageSnapshot {

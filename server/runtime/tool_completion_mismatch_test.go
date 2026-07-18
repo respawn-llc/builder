@@ -53,6 +53,62 @@ func TestToolCompletionDeletionMismatchPanicsBeforePersistenceInDebug(t *testing
 }
 
 func TestToolCompletionDeletionMismatchReleaseFallbackUsesCommitReceiptAuthority(t *testing.T) {
+	t.Run("materialized tool output hydration", func(t *testing.T) {
+		store := mustCreateTestSession(t)
+		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+			Model: "gpt-5",
+			Debug: false,
+		})
+		result, _ := seedMismatchedDeletionCompletion(t, engine)
+
+		if err := engine.steer("step-delete", steerToolCompletionIntent(result)); err != nil {
+			t.Fatalf("persist release fallback: %v", err)
+		}
+		if err := engine.steer(
+			"step-delete",
+			steerMessagesWithPersistenceIntent(
+				steeringPriorityNormal,
+				steeringMessageEventDefault,
+				true,
+				[]llm.Message{{
+					Role:        llm.RoleTool,
+					MessageType: llm.ToolOutputMessageType(true),
+					ToolCallID:  result.CallID,
+					Name:        string(result.Name),
+					Content:     string(result.Output),
+				}},
+			),
+		); err != nil {
+			t.Fatalf("persist materialized tool output: %v", err)
+		}
+
+		assertDeletionFallbackHydration(t, engine, 2)
+		durable, err := sessiontest.CollectEvents(store)
+		if err != nil {
+			t.Fatalf("collect durable events: %v", err)
+		}
+		if len(durable) != 4 ||
+			durable[0].Kind != "message" ||
+			durable[1].Kind != "tool_completed" ||
+			durable[2].Kind != "local_entry" ||
+			durable[3].Kind != "message" {
+			t.Fatalf("durable fallback sequence = %+v", durable)
+		}
+		var feedback storedLocalEntry
+		if err := json.Unmarshal(durable[2].Payload, &feedback); err != nil {
+			t.Fatalf("decode fallback feedback: %v", err)
+		}
+		if feedback.AfterToolCallID == nil || *feedback.AfterToolCallID != result.CallID {
+			t.Fatalf("fallback feedback attachment = %+v, want call %q", feedback.AfterToolCallID, result.CallID)
+		}
+
+		reopened := mustOpenTestSession(t, store.Dir())
+		restored := mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{
+			Model: "gpt-5",
+		})
+		assertDeletionFallbackHydration(t, restored, 2)
+	})
+
 	t.Run("uncommitted append", func(t *testing.T) {
 		store := mustCreateTestSession(t)
 		var emitted []Event

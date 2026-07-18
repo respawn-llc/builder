@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"strings"
 
 	"core/server/llm"
 	"core/server/tools"
@@ -78,12 +79,20 @@ func (e *Engine) finalizeLiveToolCompletion(result tools.Result) finalizedToolCo
 	result.PresentationDelta = nil
 	fallback := transcript.NormalizeToolCallMeta(*callMeta)
 	result.Presentation = &fallback
+	callID := strings.TrimSpace(result.CallID)
+	if callID == "" {
+		panic(fmt.Sprintf(
+			"tool completion presentation fallback requires a call identity (tool=%q)",
+			result.Name,
+		))
+	}
 	return finalizedToolCompletion{
 		Result: result,
 		OperatorFeedback: &storedLocalEntry{
-			Visibility: transcript.EntryVisibilityAuto,
-			Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
-			Text:       failure.Error(),
+			Visibility:      transcript.EntryVisibilityAuto,
+			Role:            string(transcript.EntryRoleDeveloperErrorFeedback),
+			Text:            failure.Error(),
+			AfterToolCallID: &callID,
 		},
 	}
 }

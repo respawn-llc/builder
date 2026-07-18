@@ -63,6 +63,7 @@ func (e *Engine) persistFinalizedToolCompletionRaw(
 		)
 		e.transcriptRuntimeState().AppendLocalEntryRecord(
 			*localEntryChatEntry(feedback),
+			feedback.AfterToolCallID,
 		)
 	}
 	return receipt, err
@@ -185,7 +186,7 @@ func (e *Engine) appendPersistedLocalEntryRecordRaw(stepID string, entry storedL
 	}
 	_, receipt, err := e.store.AppendEvent(stepID, "local_entry", entry)
 	if receipt.Committed {
-		e.transcriptRuntimeState().AppendLocalEntryRecord(*localEntryChatEntry(entry))
+		e.transcriptRuntimeState().AppendLocalEntryRecord(*localEntryChatEntry(entry), entry.AfterToolCallID)
 		e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: localEntryChatEntry(entry), CommittedTranscriptChanged: true})
 	}
 	return receipt, err
@@ -197,6 +198,13 @@ func normalizeStoredLocalEntry(entry storedLocalEntry) (storedLocalEntry, bool) 
 	entry.CondensedText = strings.TrimSpace(entry.CondensedText)
 	entry.DiagnosticKey = strings.TrimSpace(entry.DiagnosticKey)
 	entry.NoticeID = strings.TrimSpace(entry.NoticeID)
+	if entry.AfterToolCallID != nil {
+		callID := strings.TrimSpace(*entry.AfterToolCallID)
+		if callID == "" {
+			return storedLocalEntry{}, false
+		}
+		entry.AfterToolCallID = &callID
+	}
 	if entry.Role == "" || entry.Text == "" {
 		return storedLocalEntry{}, false
 	}

@@ -682,6 +682,9 @@ type storedLocalEntry struct {
 	CondensedText string                     `json:"condensed_text,omitempty"`
 	DiagnosticKey string                     `json:"diagnostic_key,omitempty"`
 	NoticeID      string                     `json:"notice_id,omitempty"`
+	// AfterToolCallID keeps atomically persisted operator feedback visually
+	// attached after the tool result that caused it.
+	AfterToolCallID *string `json:"after_tool_call_id,omitempty"`
 }
 
 type historyReplacementPayload struct {
