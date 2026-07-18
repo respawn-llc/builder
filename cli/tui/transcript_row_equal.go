@@ -2,6 +2,7 @@ package tui
 
 import (
 	"core/shared/clientui"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -22,8 +23,8 @@ func transcriptUserRowEqual(left, right *clientui.TranscriptUserRow) bool {
 		return left == right
 	}
 	return left.Text == right.Text &&
-		pointersEqual(left.CondensedText, right.CondensedText) &&
-		pointersEqual(left.RollbackTargetID, right.RollbackTargetID)
+		textutil.EqualOptional(left.CondensedText, right.CondensedText) &&
+		textutil.EqualOptional(left.RollbackTargetID, right.RollbackTargetID)
 }
 
 func transcriptAssistantRowEqual(left, right *clientui.TranscriptAssistantRow) bool {
@@ -31,9 +32,9 @@ func transcriptAssistantRowEqual(left, right *clientui.TranscriptAssistantRow) b
 		return left == right
 	}
 	return left.Text == right.Text &&
-		pointersEqual(left.CondensedText, right.CondensedText) &&
+		textutil.EqualOptional(left.CondensedText, right.CondensedText) &&
 		left.Phase == right.Phase &&
-		pointersEqual(left.StreamID, right.StreamID)
+		textutil.EqualOptional(left.StreamID, right.StreamID)
 }
 
 func transcriptToolRowEqual(left, right *clientui.TranscriptToolRow) bool {
@@ -44,8 +45,8 @@ func transcriptToolRowEqual(left, right *clientui.TranscriptToolRow) bool {
 		left.ToolName == right.ToolName &&
 		left.Text == right.Text &&
 		left.IsError == right.IsError &&
-		pointersEqual(left.ResultSummary, right.ResultSummary) &&
-		pointersEqual(left.CondensedText, right.CondensedText) &&
+		textutil.EqualOptional(left.ResultSummary, right.ResultSummary) &&
+		textutil.EqualOptional(left.CondensedText, right.CondensedText) &&
 		transcript.ToolCallMetaEqual(
 			left.Presentation,
 			right.Presentation,
@@ -58,32 +59,25 @@ func transcriptNoticeRowEqual(left, right *clientui.TranscriptNoticeRow) bool {
 	}
 	return left.Reason == right.Reason &&
 		left.Severity == right.Severity &&
-		pointersEqual(left.StepID, right.StepID) &&
-		pointersEqual(left.MessageType, right.MessageType) &&
-		pointersEqual(left.LegacyText, right.LegacyText) &&
-		pointersEqual(left.NoticeID, right.NoticeID) &&
-		pointersEqual(left.SourcePath, right.SourcePath) &&
+		textutil.EqualOptional(left.StepID, right.StepID) &&
+		textutil.EqualOptional(left.MessageType, right.MessageType) &&
+		textutil.EqualOptional(left.LegacyText, right.LegacyText) &&
+		textutil.EqualOptional(left.NoticeID, right.NoticeID) &&
+		textutil.EqualOptional(left.SourcePath, right.SourcePath) &&
 		transcriptWorktreeContextEqual(left.Worktree, right.Worktree) &&
-		pointersEqual(left.CacheWarning, right.CacheWarning) &&
-		pointersEqual(left.Diagnostic, right.Diagnostic) &&
-		pointersEqual(left.Background, right.Background) &&
-		pointersEqual(left.CondensedText, right.CondensedText) &&
-		pointersEqual(left.CompactLabel, right.CompactLabel)
+		textutil.EqualOptional(left.CacheWarning, right.CacheWarning) &&
+		textutil.EqualOptional(left.Diagnostic, right.Diagnostic) &&
+		textutil.EqualOptional(left.Background, right.Background) &&
+		textutil.EqualOptional(left.CondensedText, right.CondensedText) &&
+		textutil.EqualOptional(left.CompactLabel, right.CompactLabel)
 }
 
 func transcriptWorktreeContextEqual(left, right *clientui.TranscriptWorktreeContext) bool {
 	if left == nil || right == nil {
 		return left == right
 	}
-	return pointersEqual(left.Branch, right.Branch) &&
+	return textutil.EqualOptional(left.Branch, right.Branch) &&
 		left.WorktreePath == right.WorktreePath &&
 		left.WorkspaceRoot == right.WorkspaceRoot &&
 		left.EffectiveCwd == right.EffectiveCwd
-}
-
-func pointersEqual[T comparable](left, right *T) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	return *left == *right
 }

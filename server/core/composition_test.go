@@ -124,9 +124,10 @@ func TestComposedWorkflowTaskSetupPrecedesFirstModelRequest(t *testing.T) {
 	if _, err := workflowStore.LinkWorkflow(ctx, project.Binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
+	persistedWorkflowID := string(workflowID)
 	task, err := appCore.WorkflowClient().CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
 		ProjectID:         project.Binding.ProjectID,
-		WorkflowID:        string(workflowID),
+		WorkflowID:        &persistedWorkflowID,
 		Title:             "Provision task worktree",
 		SourceWorkspaceID: project.Binding.WorkspaceID,
 	})

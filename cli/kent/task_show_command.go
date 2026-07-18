@@ -51,6 +51,11 @@ func taskShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		if requestedProjectID != "" && task.Summary.ProjectID != "" && task.Summary.ProjectID != requestedProjectID && task.Project.ProjectKey != "" {
 			fmt.Fprintf(stderr, "Note: This task belongs to another project %s\n", task.Project.ProjectKey)
 		}
+		task, err = workflowTaskDetailForCLI(task)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
 		if *jsonOut {
 			if _, err := taskStatusText(task.Status); err != nil {
 				fmt.Fprintln(stderr, err)

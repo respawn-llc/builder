@@ -49,6 +49,26 @@ func ParseCanonicalUUIDv4(raw string, field string) (uuid.UUID, error) {
 	return parsed, nil
 }
 
+func ParseCanonicalPrefixedUUIDv4(raw string, prefix string, field string) (uuid.UUID, error) {
+	const canonicalUUIDTextLength = 36
+	if prefix == "" {
+		return uuid.Nil, fmt.Errorf("%s prefix is required", field)
+	}
+	if len(raw) != len(prefix)+canonicalUUIDTextLength {
+		return uuid.Nil, fmt.Errorf("%s must use the %q prefix followed by a canonical UUIDv4", field, prefix)
+	}
+	for index := 0; index < len(prefix); index++ {
+		if raw[index] != prefix[index] {
+			return uuid.Nil, fmt.Errorf("%s must use the %q prefix followed by a canonical UUIDv4", field, prefix)
+		}
+	}
+	var uuidText [canonicalUUIDTextLength]byte
+	for index := range uuidText {
+		uuidText[index] = raw[len(prefix)+index]
+	}
+	return ParseCanonicalUUIDv4(string(uuidText[:]), field)
+}
+
 func newUUIDv4Value() uuidv4Value {
 	return uuidv4Value{value: uuid.New()}
 }

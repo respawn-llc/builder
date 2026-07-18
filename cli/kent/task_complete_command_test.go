@@ -374,7 +374,8 @@ func TestTaskCompleteAgentCrossSessionSelectorUsesServiceOwnershipError(t *testi
 	if _, linkErr, code := runWorkflowRootCommand("workflow", "link", binding.ProjectID, workflowID, "--default"); code != 0 {
 		t.Fatalf("workflow link exit=%d stderr=%q", code, linkErr)
 	}
-	created, err := remote.CreateWorkflowTask(context.Background(), serverapi.WorkflowTaskCreateRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID, Title: "Task", Body: "Body"})
+	persistedWorkflowID := workflowPersistedIDForTest(t, workflowID)
+	created, err := remote.CreateWorkflowTask(context.Background(), serverapi.WorkflowTaskCreateRequest{ProjectID: binding.ProjectID, WorkflowID: &persistedWorkflowID, Title: "Task", Body: "Body"})
 	if err != nil {
 		t.Fatalf("CreateWorkflowTask: %v", err)
 	}

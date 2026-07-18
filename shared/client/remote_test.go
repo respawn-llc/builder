@@ -1029,11 +1029,12 @@ func TestProtocolErrorMapsSentinelCodes(t *testing.T) {
 }
 
 func TestProtocolErrorDecodesWorkflowTaskListScopeError(t *testing.T) {
-	missing := serverapi.WorkflowTaskListScopeDimensionProject
+	projectID := "project-1"
+	workflowID := "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
 	source := &serverapi.WorkflowTaskListScopeError{
-		Kind:         serverapi.WorkflowTaskListScopeErrorKindAmbiguous,
-		MissingScope: &missing,
-		ProjectIDs:   []string{"project-1", "project-2"},
+		Reason:     serverapi.WorkflowTaskListScopeReasonWorkflowNotLinked,
+		ProjectID:  &projectID,
+		WorkflowID: &workflowID,
 	}
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeWorkflowTaskListScope,
@@ -1044,9 +1045,75 @@ func TestProtocolErrorDecodesWorkflowTaskListScopeError(t *testing.T) {
 	if !errors.As(err, &decoded) {
 		t.Fatalf("decoded error = %T %v, want WorkflowTaskListScopeError", err, err)
 	}
-	if decoded.Kind != source.Kind || decoded.MissingScope == nil || *decoded.MissingScope != missing || len(decoded.ProjectIDs) != 2 || decoded.ProjectIDs[0] != "project-1" || decoded.ProjectIDs[1] != "project-2" {
+	if decoded.Reason != source.Reason || decoded.ProjectID == nil || *decoded.ProjectID != "project-1" || decoded.WorkflowID == nil || *decoded.WorkflowID != workflowID {
 		t.Fatalf("decoded scope error = %+v, want %+v", decoded, source)
 	}
+}
+
+func TestProtocolErrorDecodesWorkflowTaskCreateSelectionError(t *testing.T) {
+	workflowID := "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+	source := &serverapi.WorkflowTaskCreateSelectionError{
+		Reason:     serverapi.WorkflowTaskCreateSelectionReasonWorkflowNotLinked,
+		ProjectID:  "project-1",
+		WorkflowID: &workflowID,
+	}
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeWorkflowTaskCreateSelection,
+		Message: "selection failed",
+		Data:    source.RPCErrorData(),
+	})
+	var decoded *serverapi.WorkflowTaskCreateSelectionError
+	if !errors.As(err, &decoded) {
+		t.Fatalf("decoded error = %T %v, want WorkflowTaskCreateSelectionError", err, err)
+	}
+	if decoded.Reason != source.Reason ||
+		decoded.ProjectID != source.ProjectID ||
+		decoded.WorkflowID == nil ||
+		*decoded.WorkflowID != workflowID {
+		t.Fatalf("decoded selection error = %+v, want %+v", decoded, source)
+	}
+	malformed := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeWorkflowTaskCreateSelection,
+		Message: "selection failed",
+		Data:    json.RawMessage(`{"type":"workflow_task_create_selection_error","reason":"workflow_not_linked","project_id":"project-1","workflow_id":"workflow-1"}`),
+	})
+	if errors.As(malformed, &decoded) {
+		t.Fatalf("malformed selection payload decoded as typed error: %+v", decoded)
+	}
+}
+
+func TestProtocolErrorDecodesWorkflowTaskCreateConflictError(t *testing.T) {
+	source := &serverapi.WorkflowTaskCreateConflictError{
+		Reason: serverapi.WorkflowTaskCreateConflictReasonSerialization,
+	}
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeWorkflowTaskCreateConflict,
+		Message: "task create conflicted",
+		Data:    source.RPCErrorData(),
+	})
+	var decoded *serverapi.WorkflowTaskCreateConflictError
+	if !errors.As(err, &decoded) || decoded.Reason != source.Reason {
+		t.Fatalf("decoded error = %T %v, want WorkflowTaskCreateConflictError", err, err)
+	}
+}
+
+func TestProtocolErrorDecodesSessionRetargetError(t *testing.T) {
+	source := &serverapi.SessionRetargetError{
+		Reason:        serverapi.SessionRetargetTargetProjectRequired,
+		SessionID:     "session-1",
+		SourceProject: serverapi.ProjectReference{ID: "project-source", Name: "Source"},
+		TargetRoot:    "/work/target",
+		CandidateProjects: []serverapi.ProjectReference{{
+			ID:   "project-target",
+			Name: "Target",
+		}},
+	}
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeSessionRetarget,
+		Message: source.Error(),
+		Data:    source.RPCErrorData(),
+	})
+	assertRemoteSessionRetargetError(t, err, source)
 }
 
 func TestRemoteSessionRetargetErrorRoundTrip(t *testing.T) {

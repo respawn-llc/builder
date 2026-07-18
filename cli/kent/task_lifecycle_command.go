@@ -23,7 +23,7 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	title := fs.String("title", "", "task title")
 	body := fs.String("body", "", "task body")
 	bodyFile := fs.String("body-file", "", "read the task body from this file")
-	workflowRef := fs.String("workflow", "", "workflow ID or exact name; defaults to the project's default workflow")
+	workflowRef := fs.String("workflow", "", "workflow UUID; defaults to the project's default workflow")
 	projectRef := fs.String("project", ".", "project ID or attached workspace path")
 	sourceURL := fs.String("source-url", "", "URL of the issue or document that originated the task")
 	sourceWorkspace := fs.String("source-workspace", "", "workspace ID or path used as the task's source checkout")
@@ -40,19 +40,25 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	var selectedWorkflow *workflowSelector
+	if flagWasProvided(fs, "workflow") {
+		selector, parseErr := parseWorkflowSelector(*workflowRef)
+		if parseErr != nil {
+			fmt.Fprintln(stderr, parseErr)
+			return 2
+		}
+		selectedWorkflow = &selector
+	}
 	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
 		projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, *projectRef)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		workflowID := ""
-		if strings.TrimSpace(*workflowRef) != "" {
-			workflowID, err = resolveWorkflowID(context.Background(), remote, *workflowRef)
-			if err != nil {
-				fmt.Fprintln(stderr, err)
-				return 1
-			}
+		var workflowID *string
+		if selectedWorkflow != nil {
+			value := selectedWorkflow.PersistedID()
+			workflowID = &value
 		}
 		sourceWorkspaceID := ""
 		if strings.TrimSpace(*sourceWorkspace) != "" {
@@ -66,12 +72,32 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		defer cancel()
 		resp, err := remote.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{ProjectID: projectID, WorkflowID: workflowID, Title: *title, Body: taskBody, SourceURL: *sourceURL, SourceWorkspaceID: sourceWorkspaceID})
 		if err != nil {
-			fmt.Fprintln(stderr, err)
+			var selectedWorkflowID *string
+			if selectedWorkflow != nil {
+				value := selectedWorkflow.String()
+				selectedWorkflowID = &value
+			}
+			writeTaskCreateError(stderr, err, taskCreateCommandContext{
+				ProjectRef:         *projectRef,
+				ResolvedProjectID:  projectID,
+				SelectedWorkflowID: selectedWorkflowID,
+				Title:              *title,
+				Body:               *body,
+				BodyFile:           *bodyFile,
+				SourceURL:          *sourceURL,
+				SourceWorkspace:    *sourceWorkspace,
+				JSON:               *jsonOut,
+			})
 			return 1
 		}
 		task, err := getWorkflowTaskByID(context.Background(), remote, resp.Task.ID)
 		if err != nil {
 			fmt.Fprintf(stderr, "created task %s but failed to load task detail for output: %v\n", resp.Task.ID, err)
+			return 1
+		}
+		task, err = workflowTaskDetailForCLI(task)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		if *jsonOut {
@@ -83,6 +109,47 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		}
 		return 0
 	})
+}
+
+func writeTaskCreateError(stderr io.Writer, err error, commandContext taskCreateCommandContext) {
+	var conflictErr *serverapi.WorkflowTaskCreateConflictError
+	if errors.As(err, &conflictErr) {
+		switch conflictErr.Reason {
+		case serverapi.WorkflowTaskCreateConflictReasonSerialization:
+			retryCommand := taskCreateRetryCommandArgs(commandContext, commandContext.SelectedWorkflowID)
+			fmt.Fprintln(stderr, "Task creation conflicted with a concurrent update. This failure is retryable; no task was created.")
+			fmt.Fprintf(stderr, "  %s\n", commandString(retryCommand))
+		default:
+			fmt.Fprintln(stderr, err)
+		}
+		return
+	}
+	var selectionErr *serverapi.WorkflowTaskCreateSelectionError
+	if !errors.As(err, &selectionErr) {
+		fmt.Fprintln(stderr, err)
+		return
+	}
+	recovery, projectionErr := taskCreateRecoveryForSelectionError(selectionErr, commandContext)
+	if projectionErr != nil {
+		fmt.Fprintln(stderr, projectionErr)
+		return
+	}
+	switch recovery.Kind {
+	case taskWorkflowRecoveryNoLinkedWorkflows:
+		fmt.Fprintln(stderr, "This project doesn't have any linked workflows yet. First, create a workflow or link an existing one, then retry.")
+	case taskWorkflowRecoveryWorkflowNotLinked:
+		fmt.Fprintln(stderr, "The selected workflow isn't linked to this project.")
+	case taskWorkflowRecoveryAmbiguousWithoutDefault:
+		fmt.Fprintf(
+			stderr,
+			"Tasks need both a project and a workflow binding, but your input leaves workflow choice ambiguous. Run `%s`, then retry with `--workflow <uuid>` or set a default with `%s`.\n",
+			commandString(recovery.Commands[0].Args),
+			commandString(recovery.Commands[2].Args),
+		)
+	}
+	for _, command := range recovery.Commands {
+		fmt.Fprintf(stderr, "  %s\n", commandString(command.Args))
+	}
 }
 
 func taskEditSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -149,6 +216,12 @@ func taskEditSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 1
 		}
 		if *jsonOut {
+			projected, projectionErr := workflowTaskSummaryForCLI(resp.Task)
+			if projectionErr != nil {
+				fmt.Fprintln(stderr, projectionErr)
+				return 1
+			}
+			resp.Task = projected
 			return writeCommandJSON(stdout, stderr, resp)
 		}
 		fmt.Fprintf(stdout, "Edited task %s.\n", taskSummaryDisplayID(resp.Task))
@@ -228,6 +301,11 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 			return writeCommandJSON(stdout, stderr, resp)
 		}
 		detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, taskID, applied.RunID, taskStartSessionPollTimeout, taskStartSessionPollInterval)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		detail, err = workflowTaskDetailForCLI(detail)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1

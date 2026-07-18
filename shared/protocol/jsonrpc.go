@@ -52,6 +52,8 @@ const (
 	ErrCodeWorktreeImmediateTransition       = -32042
 	ErrCodeSubagentLaunchDenied              = -32043
 	ErrCodeSubagentLaunchPolicy              = -32044
+	ErrCodeWorkflowTaskCreateSelection       = -32045
+	ErrCodeWorkflowTaskCreateConflict        = -32046
 )
 
 type Request struct {

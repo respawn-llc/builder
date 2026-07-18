@@ -9,6 +9,7 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/protocol"
+	"core/shared/textutil"
 )
 
 type workflowRequestValidator interface {
@@ -130,6 +131,16 @@ func TestWorkflowTransitionGroupDescriptionRequestValidation(t *testing.T) {
 
 func TestWorkflowTaskAndCommentRequestValidation(t *testing.T) {
 	setupOperationID := NewWorktreeSetupOperationID()
+	if err := (WorkflowTaskCreateRequest{ProjectID: "project-1", Title: "Task"}).Validate(); err != nil {
+		t.Fatalf("valid task create rejected: %v", err)
+	}
+	blankWorkflowID := " "
+	if err := (WorkflowTaskCreateRequest{ProjectID: "project-1", WorkflowID: &blankWorkflowID, Title: "Task"}).Validate(); !isWorkflowFieldError(err, "workflow_id", WorkflowRequestErrorRequired) {
+		t.Fatalf("blank present workflow id error = %#v, want required on workflow_id", err)
+	}
+	if err := (WorkflowTaskCreateRequest{ProjectID: "project-1", Title: "", Body: "Body"}).Validate(); !isWorkflowFieldError(err, "title", WorkflowRequestErrorRequired) {
+		t.Fatalf("empty title error = %#v, want required on title", err)
+	}
 	updateTitle := "Task"
 	blankTitle := " "
 	selectedOption := 1
@@ -569,7 +580,8 @@ func TestWorkflowTaskListRequestValidation(t *testing.T) {
 	}
 
 	testWorkflowFieldErrors(t, []workflowFieldErrorCase{
-		{name: "scope required without continuation token", request: WorkflowTaskListRequest{}, field: "scope", code: WorkflowRequestErrorRequired},
+		{name: "project scope required without continuation token", request: WorkflowTaskListRequest{}, field: "project_id", code: WorkflowRequestErrorRequired},
+		{name: "workflow requires project on first page", request: WorkflowTaskListRequest{WorkflowID: &workflowID}, field: "project_id", code: WorkflowRequestErrorRequired},
 		{name: "negative page size", request: WorkflowTaskListRequest{ProjectID: &projectID, PageSize: -1}, field: "page_size", code: WorkflowRequestErrorInvalidMode},
 		{name: "oversized page size", request: WorkflowTaskListRequest{ProjectID: &projectID, PageSize: WorkflowTaskListMaxPageSize + 1}, field: "page_size", code: WorkflowRequestErrorInvalidMode},
 		{name: "page token whitespace", request: WorkflowTaskListRequest{ProjectID: &projectID, PageToken: " token"}, field: "page_token", code: WorkflowRequestErrorInvalidMode},
@@ -585,12 +597,15 @@ func TestWorkflowTaskListRequestValidation(t *testing.T) {
 }
 
 func TestWorkflowTaskListResponseJSONShape(t *testing.T) {
+	selectedColumnKeys := []string{"plan", "qa"}
 	selected := WorkflowTaskListResponse{
-		ProjectID:         "project-1",
-		WorkflowID:        "workflow-1",
-		NextPageToken:     "next",
-		SelectedWorkflow:  &WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Main", Version: 3},
-		GeneratedAtUnixMs: 10,
+		Scope: WorkflowTaskListScope{
+			ProjectID:  "project-1",
+			WorkflowID: stringPointerForTest("workflow-1"),
+		},
+		MatchingWorkflowCardinality: WorkflowTaskListMatchingWorkflowCardinalityOne,
+		NextPageToken:               stringPointerForTest("next"),
+		GeneratedAtUnixMs:           10,
 		Tasks: []WorkflowTaskListItem{{
 			TaskID:          "task-1",
 			ShortID:         "BLD-1",
@@ -598,17 +613,28 @@ func TestWorkflowTaskListResponseJSONShape(t *testing.T) {
 			Title:           "Task",
 			CreatedAtUnixMs: 11,
 			UpdatedAtUnixMs: 12,
-			ColumnKeys:      []string{"plan", "qa"},
+			ColumnKeys:      &selectedColumnKeys,
 			Status:          WorkflowTaskStatus{Kind: WorkflowTaskStatusKindQueued, NativeState: "active", NodeIDs: []string{"node-1"}, RunIDs: []string{"run-1"}, AttentionTypes: []WorkflowTaskAttentionKind{WorkflowTaskAttentionKindApproval}},
 			RunCount:        2,
 		}},
 	}
-	raw, selectedShape := marshalWorkflowJSON[map[string]any](t, selected)
-	if got := selectedShape["workflow_id"]; got != "workflow-1" {
-		t.Fatalf("workflow_id = %#v, want workflow-1", got)
+	raw, err := json.Marshal(selected)
+	if err != nil {
+		t.Fatalf("marshal selected response: %v", err)
 	}
-	if _, ok := selectedShape["selected_workflow"]; !ok {
-		t.Fatalf("selected_workflow missing from selected response JSON: %s", raw)
+	var selectedShape map[string]any
+	if err := json.Unmarshal(raw, &selectedShape); err != nil {
+		t.Fatalf("unmarshal selected response: %v", err)
+	}
+	scope, ok := selectedShape["scope"].(map[string]any)
+	if !ok || scope["project_id"] != "project-1" || scope["workflow_id"] != "workflow-1" {
+		t.Fatalf("scope = %#v, want project and selected workflow", selectedShape["scope"])
+	}
+	if selectedShape["matching_workflow_cardinality"] != string(WorkflowTaskListMatchingWorkflowCardinalityOne) {
+		t.Fatalf("matching workflow cardinality = %#v", selectedShape["matching_workflow_cardinality"])
+	}
+	if selectedShape["next_page_token"] != "next" {
+		t.Fatalf("next page token = %#v, want present token", selectedShape["next_page_token"])
 	}
 	tasks, ok := selectedShape["tasks"].([]any)
 	if !ok || len(tasks) != 1 {
@@ -636,14 +662,108 @@ func TestWorkflowTaskListResponseJSONShape(t *testing.T) {
 		t.Fatalf("task status JSON unexpectedly contains label: %s", raw)
 	}
 
-	empty := WorkflowTaskListResponse{ProjectID: "project-1", WorkflowID: "", Tasks: []WorkflowTaskListItem{}}
-	raw, emptyShape := marshalWorkflowJSON[map[string]any](t, empty)
-	if got, ok := emptyShape["workflow_id"]; !ok || got != "" {
-		t.Fatalf("empty workflow_id = %#v present=%v, want present empty string", got, ok)
+	empty := WorkflowTaskListResponse{
+		Scope:                       WorkflowTaskListScope{ProjectID: "project-1"},
+		MatchingWorkflowCardinality: WorkflowTaskListMatchingWorkflowCardinalityNone,
+		Tasks:                       []WorkflowTaskListItem{},
 	}
-	if _, ok := emptyShape["selected_workflow"]; ok {
-		t.Fatalf("selected_workflow present in no-selected-workflow response JSON: %s", raw)
+	raw, err = json.Marshal(empty)
+	if err != nil {
+		t.Fatalf("marshal empty response: %v", err)
 	}
+	var emptyShape map[string]any
+	if err := json.Unmarshal(raw, &emptyShape); err != nil {
+		t.Fatalf("unmarshal empty response: %v", err)
+	}
+	emptyScope, ok := emptyShape["scope"].(map[string]any)
+	if !ok || emptyScope["project_id"] != "project-1" {
+		t.Fatalf("empty scope = %#v, want project-only scope", emptyShape["scope"])
+	}
+	if _, ok := emptyScope["workflow_id"]; ok {
+		t.Fatalf("workflow_id present in project-only scope JSON: %s", raw)
+	}
+	if _, ok := emptyShape["next_page_token"]; ok {
+		t.Fatalf("next_page_token present without continuation: %s", raw)
+	}
+	projectWide := WorkflowTaskListResponse{
+		Scope:                       WorkflowTaskListScope{ProjectID: "project-1"},
+		MatchingWorkflowCardinality: WorkflowTaskListMatchingWorkflowCardinalityMultiple,
+		Tasks:                       []WorkflowTaskListItem{{TaskID: "task-1", WorkflowID: "workflow-1", WorkflowName: stringPointerForTest("Workflow")}},
+	}
+	raw, err = json.Marshal(projectWide)
+	if err != nil {
+		t.Fatalf("marshal project-wide response: %v", err)
+	}
+	var projectWideShape map[string]any
+	if err := json.Unmarshal(raw, &projectWideShape); err != nil {
+		t.Fatalf("unmarshal project-wide response: %v", err)
+	}
+	tasks, ok = projectWideShape["tasks"].([]any)
+	if !ok || len(tasks) != 1 {
+		t.Fatalf("project-wide tasks shape = %#v", projectWideShape["tasks"])
+	}
+	projectWideTask, ok := tasks[0].(map[string]any)
+	if !ok {
+		t.Fatalf("project-wide task shape = %#v", tasks[0])
+	}
+	if _, ok := projectWideTask["column_keys"]; ok {
+		t.Fatalf("project-wide task unexpectedly contains column_keys: %s", raw)
+	}
+	if projectWideTask["workflow_name"] != "Workflow" {
+		t.Fatalf("project-wide task workflow_name = %#v, want present name", projectWideTask["workflow_name"])
+	}
+	emptyColumns := []string{}
+	narrowed := WorkflowTaskListResponse{
+		Scope:                       WorkflowTaskListScope{ProjectID: "project-1", WorkflowID: stringPointerForTest("workflow-1")},
+		MatchingWorkflowCardinality: WorkflowTaskListMatchingWorkflowCardinalityOne,
+		Tasks:                       []WorkflowTaskListItem{{TaskID: "task-1", WorkflowID: "workflow-1", ColumnKeys: &emptyColumns}},
+	}
+	raw, err = json.Marshal(narrowed)
+	if err != nil {
+		t.Fatalf("marshal narrowed response: %v", err)
+	}
+	var narrowedShape map[string]any
+	if err := json.Unmarshal(raw, &narrowedShape); err != nil {
+		t.Fatalf("unmarshal narrowed response: %v", err)
+	}
+	narrowedTasks, ok := narrowedShape["tasks"].([]any)
+	if !ok || len(narrowedTasks) != 1 {
+		t.Fatalf("narrowed tasks shape = %#v", narrowedShape["tasks"])
+	}
+	narrowedTask, ok := narrowedTasks[0].(map[string]any)
+	if !ok {
+		t.Fatalf("narrowed task shape = %#v", narrowedTasks[0])
+	}
+	if columnKeys, present := narrowedTask["column_keys"]; !present || !equalJSONArrays(columnKeys.([]any), []any{}) {
+		t.Fatalf("narrowed empty column_keys = %#v, want present empty array", narrowedTask["column_keys"])
+	}
+	if _, present := narrowedTask["workflow_name"]; present {
+		t.Fatalf("narrowed task unexpectedly contains workflow_name: %s", raw)
+	}
+}
+
+func TestOptionalWorkflowIdentityJSONOmitsAbsentValues(t *testing.T) {
+	_, validationShape := marshalWorkflowJSON[map[string]any](t, WorkflowValidationError{Code: "invalid"})
+	if _, present := validationShape["workflow_id"]; present {
+		t.Fatalf("validation workflow_id present without identity: %#v", validationShape)
+	}
+
+	_, attentionShape := marshalWorkflowJSON[map[string]any](t, WorkflowAttentionItem{ID: "attention-1", Kind: "approval"})
+	if _, present := attentionShape["workflow_id"]; present {
+		t.Fatalf("attention workflow_id present without identity: %#v", attentionShape)
+	}
+}
+
+func equalJSONArrays(got []any, want []any) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for index := range got {
+		if got[index] != want[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestWorkflowLifecycleJSONOmitsAbsentFacts(t *testing.T) {
@@ -700,15 +820,20 @@ func TestWorkflowLifecycleJSONOmitsAbsentFacts(t *testing.T) {
 }
 
 func TestWorkflowTaskListScopeErrorRoundTrip(t *testing.T) {
+	canonicalWorkflowID := "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
 	for _, original := range []*WorkflowTaskListScopeError{
 		{
-			Kind:         WorkflowTaskListScopeErrorKindNotLinked,
-			MissingScope: workflowTaskListScopeDimensionPointer(WorkflowTaskListScopeDimensionWorkflow),
+			Reason:    WorkflowTaskListScopeReasonNoLinkedWorkflows,
+			ProjectID: stringPointerForTest("project-1"),
 		},
 		{
-			Kind:         WorkflowTaskListScopeErrorKindAmbiguous,
-			MissingScope: workflowTaskListScopeDimensionPointer(WorkflowTaskListScopeDimensionWorkflow),
-			WorkflowIDs:  []string{"workflow-1", "workflow-2"},
+			Reason:     WorkflowTaskListScopeReasonWorkflowNotLinked,
+			ProjectID:  stringPointerForTest("project-1"),
+			WorkflowID: &canonicalWorkflowID,
+		},
+		{
+			Reason:    WorkflowTaskListScopeReasonWorkflowRequiredColumns,
+			ProjectID: stringPointerForTest("project-1"),
 		},
 	} {
 		decoded := DecodeWorkflowTaskListScopeError(original.RPCErrorData(), original.Error())
@@ -716,16 +841,94 @@ func TestWorkflowTaskListScopeErrorRoundTrip(t *testing.T) {
 		if !errors.As(decoded, &scopeErr) {
 			t.Fatalf("decoded scope error = %T %v, want WorkflowTaskListScopeError", decoded, decoded)
 		}
-		if scopeErr.Kind != original.Kind || scopeErr.MissingScope == nil || *scopeErr.MissingScope != *original.MissingScope || !slices.Equal(scopeErr.WorkflowIDs, original.WorkflowIDs) {
+		if scopeErr.Reason != original.Reason || !textutil.EqualOptional(scopeErr.ProjectID, original.ProjectID) || !textutil.EqualOptional(scopeErr.WorkflowID, original.WorkflowID) {
 			t.Fatalf("decoded scope error = %+v, want %+v", scopeErr, original)
 		}
 		if scopeErr.RPCErrorCode() != protocol.ErrCodeWorkflowTaskListScope {
 			t.Fatalf("scope error code = %d, want %d", scopeErr.RPCErrorCode(), protocol.ErrCodeWorkflowTaskListScope)
 		}
 	}
+	if decoded := DecodeWorkflowTaskListScopeError(
+		json.RawMessage(`{"type":"workflow_task_list_scope_error","kind":"ambiguous","workflow_ids":["workflow-1","workflow-2"]}`),
+		"legacy scope error",
+	); decoded == nil || decoded.Error() != "legacy scope error" {
+		t.Fatalf("legacy ambiguity payload decoded as %#v, want fallback error", decoded)
+	}
+	for name, payload := range map[string]string{
+		"no links missing project":        `{"type":"workflow_task_list_scope_error","reason":"no_linked_workflows"}`,
+		"no links with workflow":          `{"type":"workflow_task_list_scope_error","reason":"no_linked_workflows","project_id":"project-1","workflow_id":"` + canonicalWorkflowID + `"}`,
+		"not linked missing workflow":     `{"type":"workflow_task_list_scope_error","reason":"workflow_not_linked","project_id":"project-1"}`,
+		"columns with workflow":           `{"type":"workflow_task_list_scope_error","reason":"workflow_required_for_columns","project_id":"project-1","workflow_id":"` + canonicalWorkflowID + `"}`,
+		"padded project":                  `{"type":"workflow_task_list_scope_error","reason":"no_linked_workflows","project_id":" project-1"}`,
+		"malformed persisted workflow id": `{"type":"workflow_task_list_scope_error","reason":"workflow_not_linked","project_id":"project-1","workflow_id":"workflow-1"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			decoded := DecodeWorkflowTaskListScopeError(json.RawMessage(payload), "fallback")
+			var scopeErr *WorkflowTaskListScopeError
+			if errors.As(decoded, &scopeErr) {
+				t.Fatalf("invalid payload decoded as typed scope error: %+v", scopeErr)
+			}
+		})
+	}
 }
 
-func workflowTaskListScopeDimensionPointer(value WorkflowTaskListScopeDimension) *WorkflowTaskListScopeDimension {
+func TestWorkflowTaskCreateSelectionErrorRoundTrip(t *testing.T) {
+	original := &WorkflowTaskCreateSelectionError{
+		Reason:    WorkflowTaskCreateSelectionReasonNoLinkedWorkflows,
+		ProjectID: "project-1",
+	}
+	decoded := DecodeWorkflowTaskCreateSelectionError(original.RPCErrorData(), original.Error())
+	var selectionErr *WorkflowTaskCreateSelectionError
+	if !errors.As(decoded, &selectionErr) {
+		t.Fatalf("decoded selection error = %T %v, want WorkflowTaskCreateSelectionError", decoded, decoded)
+	}
+	if selectionErr.Reason != original.Reason ||
+		selectionErr.ProjectID != original.ProjectID ||
+		selectionErr.WorkflowID != nil {
+		t.Fatalf("decoded selection error = %+v, want %+v", selectionErr, original)
+	}
+	if selectionErr.RPCErrorCode() != protocol.ErrCodeWorkflowTaskCreateSelection {
+		t.Fatalf("selection error code = %d, want %d", selectionErr.RPCErrorCode(), protocol.ErrCodeWorkflowTaskCreateSelection)
+	}
+	canonicalWorkflowID := "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+	linked := &WorkflowTaskCreateSelectionError{
+		Reason:     WorkflowTaskCreateSelectionReasonWorkflowNotLinked,
+		ProjectID:  "project-1",
+		WorkflowID: &canonicalWorkflowID,
+	}
+	if decoded := DecodeWorkflowTaskCreateSelectionError(linked.RPCErrorData(), linked.Error()); !errors.As(decoded, &selectionErr) {
+		t.Fatalf("canonical workflow-not-linked error decoded as %T %v", decoded, decoded)
+	}
+	for name, payload := range map[string]string{
+		"padded project":     `{"type":"workflow_task_create_selection_error","reason":"no_linked_workflows","project_id":" project-1"}`,
+		"malformed workflow": `{"type":"workflow_task_create_selection_error","reason":"workflow_not_linked","project_id":"project-1","workflow_id":"workflow-1"}`,
+		"workflow forbidden": `{"type":"workflow_task_create_selection_error","reason":"no_linked_workflows","project_id":"project-1","workflow_id":"` + canonicalWorkflowID + `"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			decoded := DecodeWorkflowTaskCreateSelectionError(json.RawMessage(payload), "fallback")
+			var typed *WorkflowTaskCreateSelectionError
+			if errors.As(decoded, &typed) {
+				t.Fatalf("invalid payload decoded as typed selection error: %+v", typed)
+			}
+		})
+	}
+}
+
+func TestWorkflowTaskCreateConflictErrorRoundTrip(t *testing.T) {
+	original := &WorkflowTaskCreateConflictError{
+		Reason: WorkflowTaskCreateConflictReasonSerialization,
+	}
+	decoded := DecodeWorkflowTaskCreateConflictError(original.RPCErrorData(), original.Error())
+	var conflictErr *WorkflowTaskCreateConflictError
+	if !errors.As(decoded, &conflictErr) {
+		t.Fatalf("decoded conflict error = %T %v, want WorkflowTaskCreateConflictError", decoded, decoded)
+	}
+	if conflictErr.Reason != original.Reason || conflictErr.RPCErrorCode() != protocol.ErrCodeWorkflowTaskCreateConflict {
+		t.Fatalf("decoded conflict error = %+v, want %+v", conflictErr, original)
+	}
+}
+
+func stringPointerForTest(value string) *string {
 	return &value
 }
 
@@ -788,6 +991,86 @@ func TestWorkflowProjectLinkRequestValidation(t *testing.T) {
 		{name: "list rejects malformed token", request: WorkflowListRequest{PageToken: " 10"}, field: "page_token", code: WorkflowRequestErrorInvalidMode},
 		{name: "set default requires project", request: WorkflowSetDefaultProjectLinkRequest{WorkflowID: "workflow-1"}, field: "project_id", code: WorkflowRequestErrorRequired},
 	})
+	projectID := "project-1"
+	workflowID := "workflow-1"
+	if err := (WorkflowListRequest{ProjectID: &projectID, WorkflowID: &workflowID}).Validate(); err != nil {
+		t.Fatalf("valid project workflow filters rejected: %v", err)
+	}
+	blank := " "
+	if err := (WorkflowListRequest{ProjectID: &blank}).Validate(); !isWorkflowFieldError(err, "project_id", WorkflowRequestErrorRequired) {
+		t.Fatalf("blank project filter error = %#v, want required on project_id", err)
+	}
+	if err := (WorkflowListRequest{WorkflowID: &blank}).Validate(); !isWorkflowFieldError(err, "workflow_id", WorkflowRequestErrorRequired) {
+		t.Fatalf("blank workflow filter error = %#v, want required on workflow_id", err)
+	}
+	if err := (WorkflowListRequest{WorkflowID: &workflowID}).Validate(); err != nil {
+		t.Fatalf("global exact workflow filter rejected: %v", err)
+	}
+	if err := (WorkflowSetDefaultProjectLinkRequest{ProjectID: "project-1", WorkflowID: "workflow-1"}).Validate(); err != nil {
+		t.Fatalf("valid set default request rejected: %v", err)
+	}
+	if err := (WorkflowSetDefaultProjectLinkRequest{ProjectID: "", WorkflowID: "workflow-1"}).Validate(); !isWorkflowFieldError(err, "project_id", WorkflowRequestErrorRequired) {
+		t.Fatalf("empty project id error = %#v, want required on project_id", err)
+	}
+}
+
+func TestWorkflowListProjectContextJSONIsOptionalAndTyped(t *testing.T) {
+	projectID := "project-1"
+	workflowID := "workflow-1"
+	request := WorkflowListRequest{ProjectID: &projectID, WorkflowID: &workflowID}
+	data, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal workflow list request: %v", err)
+	}
+	var requestShape map[string]any
+	if err := json.Unmarshal(data, &requestShape); err != nil {
+		t.Fatalf("decode workflow list request: %v", err)
+	}
+	if requestShape["project_id"] != projectID || requestShape["workflow_id"] != workflowID {
+		t.Fatalf("request JSON = %#v, want typed project/workflow filters", requestShape)
+	}
+
+	response := WorkflowListResponse{
+		ProjectID: &projectID,
+		Workflows: []WorkflowRecord{{
+			ID:          workflowID,
+			Name:        "Workflow",
+			ProjectLink: &WorkflowListProjectLink{Default: true},
+		}},
+	}
+	data, err = json.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshal workflow list response: %v", err)
+	}
+	var responseShape map[string]any
+	if err := json.Unmarshal(data, &responseShape); err != nil {
+		t.Fatalf("decode workflow list response: %v", err)
+	}
+	if responseShape["project_id"] != projectID {
+		t.Fatalf("response JSON = %#v, want project context", responseShape)
+	}
+	workflows := responseShape["workflows"].([]any)
+	record := workflows[0].(map[string]any)
+	link := record["project_link"].(map[string]any)
+	if link["default"] != true {
+		t.Fatalf("project link JSON = %#v, want default=true", link)
+	}
+
+	globalData, err := json.Marshal(WorkflowListResponse{Workflows: []WorkflowRecord{{ID: workflowID, Name: "Workflow"}}})
+	if err != nil {
+		t.Fatalf("marshal global response: %v", err)
+	}
+	var globalShape map[string]any
+	if err := json.Unmarshal(globalData, &globalShape); err != nil {
+		t.Fatalf("decode global response: %v", err)
+	}
+	if _, exists := globalShape["project_id"]; exists {
+		t.Fatalf("global response JSON = %#v, must omit project_id", globalShape)
+	}
+	globalRecords := globalShape["workflows"].([]any)
+	if _, exists := globalRecords[0].(map[string]any)["project_link"]; exists {
+		t.Fatalf("global response JSON = %#v, must omit project_link", globalShape)
+	}
 }
 
 func TestWorkflowTaskStatusKindNativeState(t *testing.T) {

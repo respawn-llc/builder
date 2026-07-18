@@ -1,8 +1,10 @@
 package workflowstore
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -10,6 +12,9 @@ import (
 	"core/server/metadata"
 	"core/server/workflow"
 	"core/server/workflowscript"
+	"core/shared/config"
+	sqlitedriver "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 func TestTaskCreateStartCancelAndComments(t *testing.T) {
@@ -122,6 +127,544 @@ func TestTaskCreateStartCancelAndComments(t *testing.T) {
 	}
 	if !activeDone || activeNonTerminal {
 		t.Fatalf("placements after cancel = %+v, want active Done sink and no active non-terminal placement", placements)
+	}
+}
+
+func TestTaskCreateInfersLoneLinkedWorkflowWithoutDefault(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, false)
+
+	task, err := store.CreateTask(ctx, CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Lone workflow",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask lone linked workflow: %v", err)
+	}
+	if task.WorkflowID != workflowID {
+		t.Fatalf("task workflow = %q, want lone linked workflow %q", task.WorkflowID, workflowID)
+	}
+	link, err := store.GetProjectWorkflowLink(ctx, task.LinkID)
+	if err != nil {
+		t.Fatalf("GetProjectWorkflowLink selected link: %v", err)
+	}
+	if link.ProjectID != binding.ProjectID || link.WorkflowID != workflowID {
+		t.Fatalf("persisted task link = %+v, want project %q workflow %q", link, binding.ProjectID, workflowID)
+	}
+}
+
+func TestTaskCreateWithoutLinkedWorkflowsReturnsTypedErrorWithoutMutation(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	beforeSequence := projectNextTaskSequence(t, ctx, store, binding.ProjectID)
+
+	_, err := store.CreateTask(ctx, CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "No workflow",
+	})
+	var selectionErr TaskWorkflowSelectionError
+	if !errors.As(err, &selectionErr) {
+		t.Fatalf("CreateTask error = %v, want TaskWorkflowSelectionError", err)
+	}
+	if selectionErr.Reason != TaskWorkflowSelectionNoLinkedWorkflows ||
+		selectionErr.ProjectID != binding.ProjectID ||
+		selectionErr.WorkflowID != nil {
+		t.Fatalf("selection error = %+v", selectionErr)
+	}
+	assertTaskCreationUnchanged(t, ctx, store, binding.ProjectID, beforeSequence)
+}
+
+func TestTaskCreateRejectsPresentBlankWorkflowWithoutMutation(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	beforeSequence := projectNextTaskSequence(t, ctx, store, binding.ProjectID)
+	blankWorkflowID := workflow.WorkflowID(" ")
+
+	if _, err := store.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: &blankWorkflowID,
+		Title:      "Blank workflow",
+	}); err == nil {
+		t.Fatal("CreateTask accepted a present blank workflow id")
+	}
+	assertTaskCreationUnchanged(t, ctx, store, binding.ProjectID, beforeSequence)
+}
+
+func TestTaskCreateRejectsBlankProjectWithoutMutation(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	beforeSequence := projectNextTaskSequence(t, ctx, store, binding.ProjectID)
+	for _, projectID := range []string{"", " ", "\t\n"} {
+		t.Run(fmt.Sprintf("%q", projectID), func(t *testing.T) {
+			if _, err := store.CreateTask(ctx, CreateTaskRequest{
+				ProjectID: projectID,
+				Title:     "Blank project",
+				Body:      "Body",
+			}); err == nil {
+				t.Fatal("CreateTask accepted a blank project id")
+			}
+			assertTaskCreationUnchanged(t, ctx, store, binding.ProjectID, beforeSequence)
+		})
+	}
+}
+
+func TestTaskCreateMapsSQLiteBusyToTypedConflictWithoutMutation(t *testing.T) {
+	ctx, fixtureStore, binding, cfg := newTestStoreWithConfigContext(t)
+	createLinkedValidWorkflow(t, ctx, fixtureStore, binding.ProjectID)
+	createStore, lockStore := openConcurrentWorkflowStores(t, cfg)
+	if _, err := createStore.db.ExecContext(ctx, `PRAGMA busy_timeout = 0`); err != nil {
+		t.Fatalf("disable create-store busy timeout: %v", err)
+	}
+	beforeSequence := projectNextTaskSequence(t, ctx, createStore, binding.ProjectID)
+	lockTx, err := lockStore.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin lock transaction: %v", err)
+	}
+	defer func() { _ = lockTx.Rollback() }()
+	if _, err := lockTx.ExecContext(ctx, `UPDATE projects SET updated_at_unix_ms = updated_at_unix_ms WHERE id = ?`, binding.ProjectID); err != nil {
+		t.Fatalf("acquire project write lock: %v", err)
+	}
+
+	_, err = createStore.CreateTask(ctx, CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Conflicted task",
+	})
+	var conflictErr TaskCreateConflictError
+	if !errors.As(err, &conflictErr) || conflictErr.Reason != TaskCreateConflictSerialization {
+		t.Fatalf("CreateTask error = %T %v, want typed serialization conflict", err, err)
+	}
+	if err := lockTx.Rollback(); err != nil {
+		t.Fatalf("rollback lock transaction: %v", err)
+	}
+	assertTaskCreationUnchanged(t, ctx, createStore, binding.ProjectID, beforeSequence)
+}
+
+func TestTaskCreateWithSeveralLinksAndNoDefaultReturnsTypedErrorWithoutMutation(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	firstWorkflowID := createValidWorkflow(t, ctx, store)
+	secondWorkflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, firstWorkflowID, false)
+	linkWorkflow(t, ctx, store, binding.ProjectID, secondWorkflowID, false)
+	beforeSequence := projectNextTaskSequence(t, ctx, store, binding.ProjectID)
+
+	_, err := store.CreateTask(ctx, CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Ambiguous workflow",
+	})
+	var selectionErr TaskWorkflowSelectionError
+	if !errors.As(err, &selectionErr) {
+		t.Fatalf("CreateTask error = %v, want TaskWorkflowSelectionError", err)
+	}
+	if selectionErr.Reason != TaskWorkflowSelectionAmbiguousWithoutDefault ||
+		selectionErr.ProjectID != binding.ProjectID ||
+		selectionErr.WorkflowID != nil {
+		t.Fatalf("selection error = %+v", selectionErr)
+	}
+	assertTaskCreationUnchanged(t, ctx, store, binding.ProjectID, beforeSequence)
+}
+
+func TestTaskCreateWithExplicitUnlinkedWorkflowReturnsTypedErrorWithoutMutation(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	linkedWorkflowID := createValidWorkflow(t, ctx, store)
+	unlinkedWorkflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, linkedWorkflowID, true)
+	beforeSequence := projectNextTaskSequence(t, ctx, store, binding.ProjectID)
+
+	_, err := store.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: &unlinkedWorkflowID,
+		Title:      "Unlinked workflow",
+	})
+	var selectionErr TaskWorkflowSelectionError
+	if !errors.As(err, &selectionErr) {
+		t.Fatalf("CreateTask error = %v, want TaskWorkflowSelectionError", err)
+	}
+	if selectionErr.Reason != TaskWorkflowSelectionWorkflowNotLinked ||
+		selectionErr.ProjectID != binding.ProjectID ||
+		selectionErr.WorkflowID == nil ||
+		*selectionErr.WorkflowID != unlinkedWorkflowID {
+		t.Fatalf("selection error = %+v", selectionErr)
+	}
+	assertTaskCreationUnchanged(t, ctx, store, binding.ProjectID, beforeSequence)
+}
+
+func TestTaskCreateWithExplicitLinkedWorkflowPersistsSelectedLink(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	defaultWorkflowID := createValidWorkflow(t, ctx, store)
+	selectedWorkflowID := createValidWorkflow(t, ctx, store)
+	defaultLink, err := store.LinkWorkflow(ctx, binding.ProjectID, defaultWorkflowID, true)
+	if err != nil {
+		t.Fatalf("LinkWorkflow default: %v", err)
+	}
+	selectedLink, err := store.LinkWorkflow(ctx, binding.ProjectID, selectedWorkflowID, false)
+	if err != nil {
+		t.Fatalf("LinkWorkflow selected: %v", err)
+	}
+
+	task, err := store.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: &selectedWorkflowID,
+		Title:      "Explicit workflow",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask explicit linked workflow: %v", err)
+	}
+	if task.WorkflowID != selectedWorkflowID || task.LinkID != selectedLink.ID {
+		t.Fatalf("task selection = %+v, want workflow %q link %q", task, selectedWorkflowID, selectedLink.ID)
+	}
+	if task.LinkID == defaultLink.ID {
+		t.Fatalf("task used default link %q instead of explicit link %q", defaultLink.ID, selectedLink.ID)
+	}
+	persisted, err := store.queries.GetTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask persisted selection: %v", err)
+	}
+	if persisted.ProjectWorkflowLinkID != selectedLink.ID ||
+		persisted.WorkflowID != string(selectedWorkflowID) {
+		t.Fatalf("persisted task selection = %+v, want workflow %q link %q", persisted, selectedWorkflowID, selectedLink.ID)
+	}
+}
+
+func TestTaskCreateUsesDefaultWorkflowWhenSeveralAreLinked(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	defaultWorkflowID := createValidWorkflow(t, ctx, store)
+	otherWorkflowID := createValidWorkflow(t, ctx, store)
+	defaultLink, err := store.LinkWorkflow(ctx, binding.ProjectID, defaultWorkflowID, true)
+	if err != nil {
+		t.Fatalf("LinkWorkflow default: %v", err)
+	}
+	if _, err := store.LinkWorkflow(ctx, binding.ProjectID, otherWorkflowID, false); err != nil {
+		t.Fatalf("LinkWorkflow other: %v", err)
+	}
+
+	task, err := store.CreateTask(ctx, CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Default workflow",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask default workflow: %v", err)
+	}
+	if task.WorkflowID != defaultWorkflowID || task.LinkID != defaultLink.ID {
+		t.Fatalf("task selection = %+v, want default workflow %q link %q", task, defaultWorkflowID, defaultLink.ID)
+	}
+}
+
+func TestTaskCreateConcurrentSelectionMutationsRemainSnapshotConsistent(t *testing.T) {
+	t.Run("default mutation", func(t *testing.T) {
+		ctx, fixtureStore, binding, cfg := newTestStoreWithConfigContext(t)
+		firstWorkflowID := createValidWorkflow(t, ctx, fixtureStore)
+		secondWorkflowID := createValidWorkflow(t, ctx, fixtureStore)
+		firstLink, err := fixtureStore.LinkWorkflow(ctx, binding.ProjectID, firstWorkflowID, true)
+		if err != nil {
+			t.Fatalf("LinkWorkflow first default: %v", err)
+		}
+		secondLink, err := fixtureStore.LinkWorkflow(ctx, binding.ProjectID, secondWorkflowID, false)
+		if err != nil {
+			t.Fatalf("LinkWorkflow second: %v", err)
+		}
+		createStore, mutationStore := openConcurrentWorkflowStores(t, cfg)
+		beforeSequence := projectNextTaskSequence(t, ctx, createStore, binding.ProjectID)
+
+		task, createErr, mutationErr := raceTaskCreateWithMutation(
+			ctx,
+			createStore,
+			CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Concurrent default"},
+			func() error {
+				_, err := mutationStore.SetDefaultProjectWorkflowLink(ctx, binding.ProjectID, secondWorkflowID)
+				return err
+			},
+		)
+		assertConcurrentTaskCreateOutcome(
+			t,
+			ctx,
+			createStore,
+			binding.ProjectID,
+			beforeSequence,
+			task,
+			createErr,
+			mutationErr,
+			map[workflow.WorkflowID]string{
+				firstWorkflowID:  firstLink.ID,
+				secondWorkflowID: secondLink.ID,
+			},
+		)
+	})
+
+	t.Run("selected link unlink", func(t *testing.T) {
+		ctx, fixtureStore, binding, cfg := newTestStoreWithConfigContext(t)
+		selectedWorkflowID := createValidWorkflow(t, ctx, fixtureStore)
+		selectedLink, err := fixtureStore.LinkWorkflow(ctx, binding.ProjectID, selectedWorkflowID, false)
+		if err != nil {
+			t.Fatalf("LinkWorkflow selected: %v", err)
+		}
+		createStore, mutationStore := openConcurrentWorkflowStores(t, cfg)
+		beforeSequence := projectNextTaskSequence(t, ctx, createStore, binding.ProjectID)
+		var unlinkResult ProjectWorkflowUnlinkResult
+
+		task, createErr, mutationErr := raceTaskCreateWithMutation(
+			ctx,
+			createStore,
+			CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: &selectedWorkflowID, Title: "Concurrent unlink"},
+			func() error {
+				result, err := mutationStore.UnlinkProjectWorkflow(ctx, selectedLink.ID, "")
+				unlinkResult = result
+				return err
+			},
+		)
+		if createErr != nil {
+			var selectionErr TaskWorkflowSelectionError
+			if !isRetryableSQLiteConflict(createErr) &&
+				(!errors.As(createErr, &selectionErr) ||
+					selectionErr.Reason != TaskWorkflowSelectionWorkflowNotLinked ||
+					selectionErr.WorkflowID == nil ||
+					*selectionErr.WorkflowID != selectedWorkflowID) {
+				t.Fatalf("CreateTask concurrent unlink error = %v, want not-linked or retryable conflict", createErr)
+			}
+			if mutationErr != nil && !isRetryableSQLiteConflict(mutationErr) {
+				t.Fatalf("concurrent unlink error = %v, want success or retryable conflict", mutationErr)
+			}
+			if errors.As(createErr, &selectionErr) && (mutationErr != nil || !unlinkResult.Unlinked) {
+				t.Fatalf("not-linked create outcome requires committed unlink, result=%+v err=%v", unlinkResult, mutationErr)
+			}
+			assertTaskCreationUnchanged(t, ctx, createStore, binding.ProjectID, beforeSequence)
+			return
+		}
+		assertConcurrentTaskCreateOutcome(
+			t,
+			ctx,
+			createStore,
+			binding.ProjectID,
+			beforeSequence,
+			task,
+			createErr,
+			mutationErr,
+			map[workflow.WorkflowID]string{selectedWorkflowID: selectedLink.ID},
+		)
+		if mutationErr == nil && (unlinkResult.Unlinked || !hasProjectWorkflowUnlinkBlocker(unlinkResult.Blockers, "task_references", 1)) {
+			t.Fatalf("unlink after committed create = %+v, want task-reference blocker", unlinkResult)
+		}
+	})
+
+	t.Run("selected definition revision", func(t *testing.T) {
+		ctx, fixtureStore, binding, cfg := newTestStoreWithConfigContext(t)
+		selectedWorkflowID := createValidWorkflow(t, ctx, fixtureStore)
+		selectedLink, err := fixtureStore.LinkWorkflow(ctx, binding.ProjectID, selectedWorkflowID, false)
+		if err != nil {
+			t.Fatalf("LinkWorkflow selected: %v", err)
+		}
+		definition, record, err := fixtureStore.GetDefinition(ctx, selectedWorkflowID)
+		if err != nil {
+			t.Fatalf("GetDefinition selected: %v", err)
+		}
+		start, err := startNode(definition)
+		if err != nil {
+			t.Fatalf("startNode selected: %v", err)
+		}
+		revisionRequest := workflowGraphSaveRequestFromDefinition(selectedWorkflowID, record.Version, false, definition)
+		revisionRequest.Edges[0].PromptTemplate += " Concurrent revision."
+		createStore, mutationStore := openConcurrentWorkflowStores(t, cfg)
+		beforeSequence := projectNextTaskSequence(t, ctx, createStore, binding.ProjectID)
+
+		task, createErr, mutationErr := raceTaskCreateWithMutation(
+			ctx,
+			createStore,
+			CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: &selectedWorkflowID, Title: "Concurrent definition"},
+			func() error {
+				result, err := mutationStore.SaveWorkflowGraph(ctx, revisionRequest)
+				if err != nil {
+					return err
+				}
+				if !result.Saved || !result.Changed || result.Version != record.Version+1 {
+					return fmt.Errorf("concurrent definition revision was not saved: %+v", result)
+				}
+				return nil
+			},
+		)
+		assertConcurrentTaskCreateOutcome(
+			t,
+			ctx,
+			createStore,
+			binding.ProjectID,
+			beforeSequence,
+			task,
+			createErr,
+			mutationErr,
+			map[workflow.WorkflowID]string{selectedWorkflowID: selectedLink.ID},
+		)
+		if createErr == nil {
+			if task.Version != record.Version && task.Version != record.Version+1 {
+				t.Fatalf("created task workflow version = %d, want exact pre/post revision %d or %d", task.Version, record.Version, record.Version+1)
+			}
+			placements, err := createStore.ListPlacements(ctx, task.ID)
+			if err != nil {
+				t.Fatalf("ListPlacements concurrent definition: %v", err)
+			}
+			if len(placements) != 1 || placements[0].NodeID != workflow.NodeIDOf(start) {
+				t.Fatalf("created task placements = %+v, want immutable start node %q", placements, workflow.NodeIDOf(start))
+			}
+		}
+		_, current, err := createStore.GetDefinition(ctx, selectedWorkflowID)
+		if err != nil {
+			t.Fatalf("GetDefinition after concurrent revision: %v", err)
+		}
+		if mutationErr == nil && current.Version != record.Version+1 {
+			t.Fatalf("workflow version after committed revision = %d, want %d", current.Version, record.Version+1)
+		}
+		if mutationErr != nil && current.Version != record.Version {
+			t.Fatalf("workflow version after rejected revision = %d, want %d", current.Version, record.Version)
+		}
+	})
+}
+
+func openConcurrentWorkflowStores(t *testing.T, cfg config.App) (*Store, *Store) {
+	t.Helper()
+	open := func() *Store {
+		metadataStore, err := metadata.Open(cfg.PersistenceRoot)
+		if err != nil {
+			t.Fatalf("metadata.Open concurrent store: %v", err)
+		}
+		t.Cleanup(func() {
+			if err := metadataStore.Close(); err != nil {
+				t.Errorf("close concurrent metadata store: %v", err)
+			}
+		})
+		store, err := New(metadataStore)
+		if err != nil {
+			t.Fatalf("workflowstore.New concurrent store: %v", err)
+		}
+		return store
+	}
+	return open(), open()
+}
+
+func raceTaskCreateWithMutation(
+	ctx context.Context,
+	createStore *Store,
+	req CreateTaskRequest,
+	mutate func() error,
+) (TaskRecord, error, error) {
+	start := make(chan struct{})
+	type createResult struct {
+		task TaskRecord
+		err  error
+	}
+	createResults := make(chan createResult, 1)
+	mutationResults := make(chan error, 1)
+	go func() {
+		<-start
+		task, err := createStore.CreateTask(ctx, req)
+		createResults <- createResult{task: task, err: err}
+	}()
+	go func() {
+		<-start
+		mutationResults <- mutate()
+	}()
+	close(start)
+	created := <-createResults
+	return created.task, created.err, <-mutationResults
+}
+
+func assertConcurrentTaskCreateOutcome(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	projectID string,
+	beforeSequence int64,
+	task TaskRecord,
+	createErr error,
+	mutationErr error,
+	allowedLinks map[workflow.WorkflowID]string,
+) {
+	t.Helper()
+	if mutationErr != nil && !isRetryableSQLiteConflict(mutationErr) {
+		t.Fatalf("concurrent mutation error = %v, want success or retryable SQLite conflict", mutationErr)
+	}
+	if createErr != nil {
+		if !isRetryableSQLiteConflict(createErr) {
+			t.Fatalf("CreateTask concurrent error = %v, want retryable SQLite conflict", createErr)
+		}
+		assertTaskCreationUnchanged(t, ctx, store, projectID, beforeSequence)
+		return
+	}
+	wantLinkID, ok := allowedLinks[task.WorkflowID]
+	if !ok || task.LinkID != wantLinkID {
+		t.Fatalf("created task selection = %+v, allowed links = %+v", task, allowedLinks)
+	}
+	link, err := store.GetProjectWorkflowLink(ctx, task.LinkID)
+	if err != nil {
+		t.Fatalf("GetProjectWorkflowLink created task: %v", err)
+	}
+	if link.ProjectID != projectID || link.WorkflowID != task.WorkflowID {
+		t.Fatalf("created task link = %+v, task = %+v", link, task)
+	}
+	def, record, err := store.GetDefinition(ctx, task.WorkflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition created task workflow: %v", err)
+	}
+	if task.Version <= 0 || task.Version > record.Version {
+		t.Fatalf("created task workflow version = %d, current workflow version = %d", task.Version, record.Version)
+	}
+	start, err := startNode(def)
+	if err != nil {
+		t.Fatalf("startNode created task workflow: %v", err)
+	}
+	placements, err := store.ListPlacements(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListPlacements created task: %v", err)
+	}
+	if len(placements) != 1 ||
+		placements[0].TaskID != task.ID ||
+		placements[0].NodeID != workflow.NodeIDOf(start) ||
+		placements[0].State != "active" {
+		t.Fatalf("created task placements = %+v, want one active placement at %q", placements, workflow.NodeIDOf(start))
+	}
+	if got := projectNextTaskSequence(t, ctx, store, projectID); got != beforeSequence+1 {
+		t.Fatalf("project next task sequence = %d, want %d after committed create", got, beforeSequence+1)
+	}
+}
+
+func isRetryableSQLiteConflict(err error) bool {
+	var sqliteErr *sqlitedriver.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	switch sqliteErr.Code() & 0xff {
+	case sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED:
+		return true
+	default:
+		return false
+	}
+}
+
+func projectNextTaskSequence(t *testing.T, ctx context.Context, store *Store, projectID string) int64 {
+	t.Helper()
+	var sequence int64
+	if err := store.db.QueryRowContext(ctx, `SELECT next_task_seq FROM projects WHERE id = ?`, projectID).Scan(&sequence); err != nil {
+		t.Fatalf("query project next task sequence: %v", err)
+	}
+	return sequence
+}
+
+func assertTaskCreationUnchanged(t *testing.T, ctx context.Context, store *Store, projectID string, wantSequence int64) {
+	t.Helper()
+	if got := projectNextTaskSequence(t, ctx, store, projectID); got != wantSequence {
+		t.Fatalf("project next task sequence = %d, want unchanged %d", got, wantSequence)
+	}
+	var taskCount int64
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_records WHERE project_id = ?`, projectID).Scan(&taskCount); err != nil {
+		t.Fatalf("count project tasks: %v", err)
+	}
+	if taskCount != 0 {
+		t.Fatalf("project task count = %d, want 0", taskCount)
+	}
+	var placementCount int64
+	if err := store.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM task_node_placements placement
+JOIN task_records task ON task.id = placement.task_id
+WHERE task.project_id = ?`, projectID).Scan(&placementCount); err != nil {
+		t.Fatalf("count project task placements: %v", err)
+	}
+	if placementCount != 0 {
+		t.Fatalf("project task placement count = %d, want 0", placementCount)
 	}
 }
 

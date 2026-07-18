@@ -271,12 +271,11 @@ func TestGatewayRunPromptRejectsMixedTypedAndLegacyLaunchFields(t *testing.T) {
 
 func TestDecodeAndHandlePreservesWorkflowTaskListScopeError(t *testing.T) {
 	projectID := "project-1"
-	missing := serverapi.WorkflowTaskListScopeDimensionWorkflow
+	workflowID := "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
 	source := &serverapi.WorkflowTaskListScopeError{
-		Kind:         serverapi.WorkflowTaskListScopeErrorKindAmbiguous,
-		MissingScope: &missing,
-		ProjectIDs:   []string{projectID},
-		WorkflowIDs:  []string{"workflow-1", "workflow-2"},
+		Reason:     serverapi.WorkflowTaskListScopeReasonWorkflowNotLinked,
+		ProjectID:  &projectID,
+		WorkflowID: &workflowID,
 	}
 	response := decodeAndHandle[serverapi.WorkflowTaskListRequest, struct{}](
 		protocol.Request{ID: "scope-error", Params: mustJSON(t, serverapi.WorkflowTaskListRequest{ProjectID: &projectID})},
@@ -288,8 +287,53 @@ func TestDecodeAndHandlePreservesWorkflowTaskListScopeError(t *testing.T) {
 		t.Fatalf("response error = %+v, want task-list scope code", response.Error)
 	}
 	decoded, ok := serverapi.DecodeWorkflowTaskListScopeError(response.Error.Data, response.Error.Message).(*serverapi.WorkflowTaskListScopeError)
-	if !ok || decoded.Kind != source.Kind || decoded.MissingScope == nil || *decoded.MissingScope != missing || len(decoded.WorkflowIDs) != 2 {
+	if !ok || decoded.Reason != source.Reason || decoded.ProjectID == nil || *decoded.ProjectID != projectID || decoded.WorkflowID == nil || *decoded.WorkflowID != workflowID {
 		t.Fatalf("decoded scope error = %+v, want %+v", decoded, source)
+	}
+}
+
+func TestDecodeAndHandlePreservesWorkflowTaskCreateSelectionError(t *testing.T) {
+	workflowID := "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+	source := &serverapi.WorkflowTaskCreateSelectionError{
+		Reason:     serverapi.WorkflowTaskCreateSelectionReasonWorkflowNotLinked,
+		ProjectID:  "project-1",
+		WorkflowID: &workflowID,
+	}
+	response := decodeAndHandle[serverapi.WorkflowTaskCreateRequest, struct{}](
+		protocol.Request{ID: "selection-error", Params: mustJSON(t, serverapi.WorkflowTaskCreateRequest{ProjectID: "project-1", Title: "Task"})},
+		func(serverapi.WorkflowTaskCreateRequest) (struct{}, error) {
+			return struct{}{}, source
+		},
+	)
+	if response.Error == nil || response.Error.Code != protocol.ErrCodeWorkflowTaskCreateSelection {
+		t.Fatalf("response error = %+v, want task-create selection code", response.Error)
+	}
+	decoded, ok := serverapi.DecodeWorkflowTaskCreateSelectionError(response.Error.Data, response.Error.Message).(*serverapi.WorkflowTaskCreateSelectionError)
+	if !ok ||
+		decoded.Reason != source.Reason ||
+		decoded.ProjectID != source.ProjectID ||
+		decoded.WorkflowID == nil ||
+		*decoded.WorkflowID != *source.WorkflowID {
+		t.Fatalf("decoded selection error = %+v, want %+v", decoded, source)
+	}
+}
+
+func TestDecodeAndHandlePreservesWorkflowTaskCreateConflictError(t *testing.T) {
+	source := &serverapi.WorkflowTaskCreateConflictError{
+		Reason: serverapi.WorkflowTaskCreateConflictReasonSerialization,
+	}
+	response := decodeAndHandle[serverapi.WorkflowTaskCreateRequest, struct{}](
+		protocol.Request{ID: "create-conflict", Params: mustJSON(t, serverapi.WorkflowTaskCreateRequest{ProjectID: "project-1", Title: "Task"})},
+		func(serverapi.WorkflowTaskCreateRequest) (struct{}, error) {
+			return struct{}{}, source
+		},
+	)
+	if response.Error == nil || response.Error.Code != protocol.ErrCodeWorkflowTaskCreateConflict {
+		t.Fatalf("response error = %+v, want task-create conflict code", response.Error)
+	}
+	decoded, ok := serverapi.DecodeWorkflowTaskCreateConflictError(response.Error.Data, response.Error.Message).(*serverapi.WorkflowTaskCreateConflictError)
+	if !ok || decoded.Reason != source.Reason {
+		t.Fatalf("decoded conflict error = %+v, want %+v", decoded, source)
 	}
 }
 

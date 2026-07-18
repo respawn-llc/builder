@@ -6,7 +6,62 @@ import (
 	"strings"
 
 	"core/server/workflow"
+	sqlitedriver "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
+
+type TaskWorkflowSelectionReason string
+
+const (
+	TaskWorkflowSelectionNoLinkedWorkflows       TaskWorkflowSelectionReason = "no_linked_workflows"
+	TaskWorkflowSelectionAmbiguousWithoutDefault TaskWorkflowSelectionReason = "ambiguous_without_default"
+	TaskWorkflowSelectionWorkflowNotLinked       TaskWorkflowSelectionReason = "workflow_not_linked"
+)
+
+type TaskWorkflowSelectionError struct {
+	Reason     TaskWorkflowSelectionReason
+	ProjectID  string
+	WorkflowID *workflow.WorkflowID
+}
+
+func (e TaskWorkflowSelectionError) Error() string {
+	return fmt.Sprintf("task workflow selection failed for project %q: %s", e.ProjectID, e.Reason)
+}
+
+type TaskCreateConflictReason string
+
+const (
+	TaskCreateConflictSerialization TaskCreateConflictReason = "serialization_conflict"
+)
+
+type TaskCreateConflictError struct {
+	Reason TaskCreateConflictReason
+	Cause  error
+}
+
+func (e TaskCreateConflictError) Error() string {
+	return fmt.Sprintf("task create conflict: %s", e.Reason)
+}
+
+func (e TaskCreateConflictError) Unwrap() error {
+	return e.Cause
+}
+
+func taskCreateStoreError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var sqliteErr *sqlitedriver.Error
+	if !errors.As(err, &sqliteErr) {
+		return err
+	}
+	switch sqliteErr.Code() & 0xff {
+	case sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED:
+		return TaskCreateConflictError{Reason: TaskCreateConflictSerialization, Cause: err}
+	default:
+		return err
+	}
+}
 
 // Sentinel errors returned by the workflow store. Callers (including tests)
 // must match these with errors.Is/errors.As rather than comparing the rendered

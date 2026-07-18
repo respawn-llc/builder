@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strconv"
+	"time"
 
 	"core/shared/config"
 )
@@ -22,7 +24,7 @@ func writeEmbeddedUsage(fs *flag.FlagSet, name string, includeFlags bool) {
 	}
 	_, _ = io.WriteString(fs.Output(), string(data))
 	if includeFlags {
-		fs.PrintDefaults()
+		writeCommandFlagDefaults(fs)
 	}
 }
 
@@ -45,8 +47,67 @@ func (u commandUsage) write(fs *flag.FlagSet) {
 	}
 	if u.includeCommandFlags && flagSetHasDefinitions(fs) {
 		writeHelpSection(fs.Output(), "Flags:")
-		fs.PrintDefaults()
+		writeCommandFlagDefaults(fs)
 	}
+}
+
+func writeCommandFlagDefaults(fs *flag.FlagSet) {
+	if fs == nil {
+		return
+	}
+	fs.VisitAll(func(definition *flag.Flag) {
+		flagName := "--" + definition.Name
+		valueName, usage := flag.UnquoteUsage(definition)
+		if valueName != "" {
+			flagName += " " + valueName
+		}
+		_, _ = fmt.Fprintf(fs.Output(), "  %s\n    \t%s", flagName, usage)
+		if metadata := commandFlagDefaultMetadataFor(definition); metadata.Visible {
+			defaultValue := metadata.Value
+			if metadata.Quote {
+				defaultValue = strconv.Quote(defaultValue)
+			}
+			_, _ = fmt.Fprintf(fs.Output(), " (default %s)", defaultValue)
+		}
+		_, _ = fmt.Fprintln(fs.Output())
+	})
+}
+
+type commandFlagDefaultMetadata struct {
+	Value   string
+	Visible bool
+	Quote   bool
+}
+
+func commandFlagDefaultMetadataFor(definition *flag.Flag) commandFlagDefaultMetadata {
+	metadata := commandFlagDefaultMetadata{Value: definition.DefValue}
+	getter, ok := definition.Value.(flag.Getter)
+	if !ok {
+		metadata.Visible = metadata.Value != ""
+		return metadata
+	}
+	switch value := getter.Get().(type) {
+	case string:
+		metadata.Visible = value != ""
+		metadata.Quote = true
+	case bool:
+		metadata.Visible = value
+	case int:
+		metadata.Visible = value != 0
+	case int64:
+		metadata.Visible = value != 0
+	case time.Duration:
+		metadata.Visible = value != 0
+	case uint:
+		metadata.Visible = value != 0
+	case uint64:
+		metadata.Visible = value != 0
+	case float64:
+		metadata.Visible = value != 0
+	default:
+		metadata.Visible = metadata.Value != ""
+	}
+	return metadata
 }
 
 func flagSetHasDefinitions(fs *flag.FlagSet) bool {
@@ -100,7 +161,7 @@ var (
 	worktreeDeleteUsage     = leafCommandUsage(config.Command+" worktree delete [--session <id>] [--force] [--delete-branch] [--json] <selector>", "Delete a worktree; agent shell commands always retain branches.")
 	workflowUsage           = commandUsage{helpFile: "workflow.txt"}
 	workflowCreateUsage     = leafCommandUsage(config.Command+" workflow create [--description <text>] [--json] <name>", "Create a workflow with `backlog` start and `done` terminal nodes.")
-	workflowListUsage       = leafCommandUsage(config.Command+" workflow list [--page-size <n>] [--page-token <token>] [--json]", "List workflow definitions.")
+	workflowListUsage       = leafCommandUsage(config.Command+" workflow list [--project <path-or-id>] [--page-size <n>] [--page-token <token>] [--json]", "List workflow definitions.")
 	workflowNodeUsage       = leafCommandUsage(config.Command+" workflow node <add|update> ...", "Add or change workflow nodes.")
 	workflowNodeAddUsage    = leafCommandUsage(config.Command+" workflow node add <workflow> --key <key> --kind <kind> [flags]", "Add a node to a workflow.")
 	workflowNodeUpdateUsage = leafCommandUsage(config.Command+" workflow node update <workflow> <node-key> [flags]", "Change a workflow node.")
@@ -111,7 +172,7 @@ var (
 	workflowUnlinkUsage     = leafCommandUsage(config.Command+" workflow unlink <project> <workflow> [--json]", "Remove a workflow from a project.")
 	workflowDefaultUsage    = leafCommandUsage(config.Command+" workflow default <project> <workflow> [--json]", "Choose the workflow used when a project task omits `--workflow`.")
 	workflowValidateUsage   = leafCommandUsage(config.Command+" workflow validate <workflow> [--mode <mode>] [--json]", "Check whether a workflow is valid for draft editing, task creation, or execution.")
-	workflowInspectUsage    = leafCommandUsage(config.Command+" workflow inspect <workflow> [--json]", "Show a workflow's nodes, transitions, and configuration.")
+	workflowInspectUsage    = leafCommandUsage(config.Command+" workflow inspect <workflow> [--summary] [--json]", "Inspect a workflow graph or metadata summary.")
 	taskUsage               = commandUsage{helpFile: "task.txt"}
 	taskCreateUsage         = leafCommandUsage(config.Command+" task create --title <title> (--body <body>|--body-file <path>) [flags]", "Create a task in a project.")
 	taskEditUsage           = leafCommandUsage(config.Command+" task edit <task> [flags]", "Change a task's title, body, or source workspace.")

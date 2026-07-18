@@ -8,30 +8,10 @@ import (
 	"strings"
 
 	"core/shared/config"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
 const taskListDefaultPageSize = 100
-
-type taskListOutput struct {
-	ProjectID     string         `json:"project_id"`
-	WorkflowID    string         `json:"workflow_id"`
-	NextPageToken string         `json:"next_page_token,omitempty"`
-	Tasks         []taskListItem `json:"tasks"`
-}
-
-type taskListItem struct {
-	ShortID         string                       `json:"short_id"`
-	TaskID          string                       `json:"task_id"`
-	WorkflowID      string                       `json:"workflow_id"`
-	Status          serverapi.WorkflowTaskStatus `json:"status"`
-	ColumnKeys      []string                     `json:"column_keys"`
-	Title           string                       `json:"title"`
-	CreatedAtUnixMs int64                        `json:"created_at_unix_ms"`
-	UpdatedAtUnixMs int64                        `json:"updated_at_unix_ms"`
-	RunCount        int                          `json:"run_count"`
-}
 
 func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task list", stderr, taskListUsage)
@@ -79,18 +59,29 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	projectProvided := flagWasProvided(fs, "project")
 	workflowProvided := flagWasProvided(fs, "workflow")
 	var selectedWorkflowID *string
+	var selectedWorkflowSelector *string
 	if workflowProvided {
-		selectedWorkflowID, err = workflowPointer(*workflowID)
+		selector, parseErr := parseWorkflowSelector(*workflowID)
+		err = parseErr
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 2
 		}
+		persistedID := selector.PersistedID()
+		selectedWorkflowID = &persistedID
+		selectorValue := selector.String()
+		selectedWorkflowSelector = &selectorValue
 	}
 	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
+		projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, *projectRef)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
 		request := serverapi.WorkflowTaskListRequest{
+			ProjectID:      &projectID,
 			WorkflowID:     selectedWorkflowID,
 			ColumnKeys:     columnKeys,
 			StatusKinds:    statusKinds,
@@ -99,87 +90,84 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			PageSize:       *pageSize,
 			PageToken:      *pageToken,
 		}
-		var resp serverapi.WorkflowTaskListResponse
-		if projectProvided || (!workflowProvided && strings.TrimSpace(*pageToken) == "") {
-			resp, err = workflowTaskListForProject(context.Background(), cfg, remote, *projectRef, request)
-		} else {
-			resp, err = workflowTaskList(context.Background(), remote, request)
-		}
+		resp, err := workflowTaskList(context.Background(), remote, request)
 		if err != nil {
-			writeTaskListError(stderr, err)
+			writeTaskListError(stderr, err, taskListCommandContext{
+				ProjectRef:         *projectRef,
+				ResolvedProjectID:  projectID,
+				SelectedWorkflowID: selectedWorkflowSelector,
+				ColumnKeys:         columnKeys,
+				StatusKinds:        statusKinds,
+				AttentionKinds:     attentionKinds,
+				Sort:               sortSelectors,
+				PageSize:           *pageSize,
+				PageToken:          *pageToken,
+				JSON:               *jsonOut,
+			})
 			return 1
 		}
-		return writeTaskListResponse(stdout, stderr, resp, *jsonOut)
+		expectedScope := taskListExpectedScope{
+			ProjectID:  projectID,
+			WorkflowID: selectedWorkflowID,
+		}
+		if selectedWorkflowID == nil && strings.TrimSpace(*pageToken) != "" {
+			expectedScope.WorkflowOwner = taskListExpectedWorkflowFromToken
+		}
+		return writeTaskListResponse(stdout, stderr, resp, expectedScope, *jsonOut)
 	})
 }
 
-func writeTaskListResponse(stdout io.Writer, stderr io.Writer, resp serverapi.WorkflowTaskListResponse, jsonOut bool) int {
-	items := taskListItemsFromResponse(resp.Tasks)
-	if jsonOut {
-		return writeCommandJSON(stdout, stderr, taskListOutput{ProjectID: resp.ProjectID, WorkflowID: resp.WorkflowID, NextPageToken: resp.NextPageToken, Tasks: items})
+func writeTaskListResponse(stdout io.Writer, stderr io.Writer, resp serverapi.WorkflowTaskListResponse, expectedScope taskListExpectedScope, jsonOut bool) int {
+	projection, err := taskListProjectionFromResponse(resp, expectedScope)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
 	}
-	for _, item := range items {
-		statusText, err := taskStatusText(item.Status)
+	if jsonOut {
+		return writeCommandJSON(stdout, stderr, projection.Output)
+	}
+	for _, row := range projection.Rows {
+		statusText, err := taskStatusText(row.Item.Status)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		fmt.Fprintf(stdout, "%s: %s.\nStatus: %s\nColumns: %s\n", item.ShortID, item.Title, statusText, taskListColumnKeysText(item.ColumnKeys))
+		fmt.Fprintf(stdout, "%s: %s.\nStatus: %s\n", row.Item.ShortID, row.Item.Title, statusText)
+		if row.ShowWorkflow {
+			fmt.Fprintf(stdout, "Workflow: %s\n", row.WorkflowName)
+		}
+		if row.ShowColumns {
+			fmt.Fprintf(stdout, "Columns: %s\n", taskListColumnKeysText(*row.Item.ColumnKeys))
+		}
 	}
-	if strings.TrimSpace(resp.NextPageToken) != "" {
-		fmt.Fprintf(stderr, "Next page token: `%s`\n", resp.NextPageToken)
+	if resp.NextPageToken != nil {
+		fmt.Fprintf(stderr, "Next page token: `%s`\n", *resp.NextPageToken)
 	}
 	return 0
 }
 
-func writeTaskListError(stderr io.Writer, err error) {
+func writeTaskListError(stderr io.Writer, err error, commandContext taskListCommandContext) {
 	var scopeErr *serverapi.WorkflowTaskListScopeError
 	if !errors.As(err, &scopeErr) {
 		fmt.Fprintln(stderr, err)
 		return
 	}
-	switch scopeErr.Kind {
-	case serverapi.WorkflowTaskListScopeErrorKindAmbiguous:
-		fmt.Fprint(stderr, "Task list scope is ambiguous.")
-	case serverapi.WorkflowTaskListScopeErrorKindNotLinked:
-		fmt.Fprint(stderr, "Task list scope has no active project/workflow link.")
-	default:
-		fmt.Fprintln(stderr, err)
+	recovery, projectionErr := taskListRecoveryForScopeError(scopeErr, commandContext)
+	if projectionErr != nil {
+		fmt.Fprintln(stderr, projectionErr)
 		return
 	}
-	if scopeErr.MissingScope != nil {
-		switch *scopeErr.MissingScope {
-		case serverapi.WorkflowTaskListScopeDimensionProject:
-			fmt.Fprint(stderr, " Specify --project <project>.")
-		case serverapi.WorkflowTaskListScopeDimensionWorkflow:
-			fmt.Fprint(stderr, " Specify --workflow <uuid>.")
-		}
+	switch recovery.Kind {
+	case taskWorkflowRecoveryNoLinkedWorkflows:
+		fmt.Fprintln(stderr, "This project doesn't have any linked workflows yet. First, create a workflow or link an existing one, then retry.")
+	case taskWorkflowRecoveryWorkflowNotLinked:
+		fmt.Fprintln(stderr, "The selected workflow isn't linked to this project.")
+	case taskWorkflowRecoveryWorkflowRequiredColumns:
+		fmt.Fprintln(stderr, "Column filters and column sorting require an explicit workflow.")
 	}
-	if len(scopeErr.ProjectIDs) > 0 {
-		fmt.Fprintf(stderr, " Available project UUIDs: %s.", strings.Join(scopeErr.ProjectIDs, ", "))
+	for _, command := range recovery.Commands {
+		fmt.Fprintf(stderr, "  %s\n", commandString(command.Args))
 	}
-	if len(scopeErr.WorkflowIDs) > 0 {
-		fmt.Fprintf(stderr, " Available workflow UUIDs: %s.", strings.Join(workflowSelectorsForDisplay(scopeErr.WorkflowIDs), ", "))
-	}
-	fmt.Fprintln(stderr)
-}
-
-func workflowSelectorsForDisplay(workflowIDs []string) []string {
-	selectors := make([]string, 0, len(workflowIDs))
-	for _, workflowID := range workflowIDs {
-		selector, hasPrefix := strings.CutPrefix(workflowID, "workflow-")
-		if !hasPrefix {
-			selectors = append(selectors, workflowID)
-			continue
-		}
-		parsed, err := runtimeids.ParseCanonicalUUIDv4(selector, "workflow id")
-		if err != nil {
-			selectors = append(selectors, workflowID)
-			continue
-		}
-		selectors = append(selectors, parsed.String())
-	}
-	return selectors
 }
 
 func taskListColumnKeysText(columnKeys []string) string {
@@ -187,24 +175,6 @@ func taskListColumnKeysText(columnKeys []string) string {
 		return "(none)"
 	}
 	return strings.Join(columnKeys, ", ")
-}
-
-func taskListItemsFromResponse(tasks []serverapi.WorkflowTaskListItem) []taskListItem {
-	items := make([]taskListItem, 0, len(tasks))
-	for _, task := range tasks {
-		items = append(items, taskListItem{
-			ShortID:         task.ShortID,
-			TaskID:          task.TaskID,
-			WorkflowID:      task.WorkflowID,
-			Status:          task.Status,
-			ColumnKeys:      append([]string(nil), task.ColumnKeys...),
-			Title:           task.Title,
-			CreatedAtUnixMs: task.CreatedAtUnixMs,
-			UpdatedAtUnixMs: task.UpdatedAtUnixMs,
-			RunCount:        task.RunCount,
-		})
-	}
-	return items
 }
 
 func parseTaskListFilterValues(raw []string, name string) ([]string, error) {
@@ -259,15 +229,6 @@ func parseTaskListAttentionKinds(raw []string) ([]serverapi.WorkflowTaskAttentio
 		}
 	}
 	return out, nil
-}
-
-func workflowPointer(value string) (*string, error) {
-	selector, err := runtimeids.ParseCanonicalUUIDv4(value, "workflow selector")
-	if err != nil {
-		return nil, err
-	}
-	workflowID := "workflow-" + selector.String()
-	return &workflowID, nil
 }
 
 func parseTaskListSortSelectors(raw []string) ([]serverapi.WorkflowTaskListSort, error) {

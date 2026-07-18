@@ -270,6 +270,30 @@ Choose the source workspace before starting automation. Agents run in the enviro
 
 ![Kent Desktop task board and task detail view showing task actions, comments, and a pending question.](/desktop/desktop-workflow-tasks.webp)
 
+### CLI Workflow And Task Scope
+
+CLI workflow selectors are bare canonical UUIDv4 values. Copy them from `kent workflow list` or `kent workflow inspect --summary`; workflow names and persisted `workflow-...` IDs are not selectors.
+
+```bash
+kent workflow list --project .
+workflow_uuid="<uuid-from-workflow-list>"
+kent workflow inspect "$workflow_uuid" --summary
+```
+
+Project-filtered workflow listing returns the default first, followed by project activity and name. Task creation uses an explicit linked `--workflow` when supplied, otherwise the project default, or the lone linked workflow when no default exists. Several links without a default require an explicit selector.
+
+```bash
+kent task create --project . --title "Fix flaky tests" --body "Investigate and repair the failure."
+kent task create --project . --workflow "$workflow_uuid" --title "Fix flaky tests" --body "Investigate and repair the failure."
+```
+
+Task listing is always project-scoped. Omitting `--workflow` lists tasks across every workflow linked to the project; supplying it narrows the result. Project-wide rows omit workflow columns. `--column` and `--sort column` require explicit workflow narrowing.
+
+```bash
+kent task list --project .
+kent task list --project . --workflow "$workflow_uuid" --column review
+```
+
 ### Choose The Execution Target
 
 The workflow's execution-target policy chooses where executable agent and script nodes run:

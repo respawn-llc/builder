@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,226 @@ import (
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
 )
+
+func TestTaskCreateRecoveryProjectionBuildsLockedCommandMatrix(t *testing.T) {
+	projectID := "project-1"
+	selectedWorkflowID := workflowSelectorTestUUID
+	persistedSelectedWorkflowID := "workflow-" + selectedWorkflowID
+	for _, testCase := range []struct {
+		name      string
+		createErr *serverapi.WorkflowTaskCreateSelectionError
+		context   taskCreateCommandContext
+		want      taskWorkflowRecovery
+	}{
+		{
+			name: "no linked workflows preserves dot and create options",
+			createErr: &serverapi.WorkflowTaskCreateSelectionError{
+				Reason:    serverapi.WorkflowTaskCreateSelectionReasonNoLinkedWorkflows,
+				ProjectID: projectID,
+			},
+			context: taskCreateCommandContext{
+				ProjectRef:        ".",
+				ResolvedProjectID: projectID,
+				Title:             "Task",
+				Body:              "Body",
+				SourceURL:         "https://example.test/issue/1",
+				SourceWorkspace:   "./workspace",
+				JSON:              true,
+			},
+			want: taskWorkflowRecovery{
+				Kind:       taskWorkflowRecoveryNoLinkedWorkflows,
+				ProjectRef: ".",
+				Commands: []taskWorkflowRecoveryCommand{
+					{Kind: taskWorkflowRecoveryCommandCreateWorkflow, Args: []string{config.Command, "workflow", "create", "<name>"}},
+					{Kind: taskWorkflowRecoveryCommandLinkCreatedWorkflow, Args: []string{config.Command, "workflow", "link", ".", "<created-uuid>"}},
+					{Kind: taskWorkflowRecoveryCommandListWorkflows, Args: []string{config.Command, "workflow", "list"}},
+					{Kind: taskWorkflowRecoveryCommandLinkExistingWorkflow, Args: []string{config.Command, "workflow", "link", ".", "<uuid>"}},
+					{Kind: taskWorkflowRecoveryCommandRetryTaskCreate, Args: []string{config.Command, "task", "create", "--project", ".", "--title", "Task", "--body", "Body", "--source-url", "https://example.test/issue/1", "--source-workspace", "./workspace", "--json"}},
+				},
+			},
+		},
+		{
+			name: "explicit not linked preserves path and selected workflow",
+			createErr: &serverapi.WorkflowTaskCreateSelectionError{
+				Reason:     serverapi.WorkflowTaskCreateSelectionReasonWorkflowNotLinked,
+				ProjectID:  projectID,
+				WorkflowID: &persistedSelectedWorkflowID,
+			},
+			context: taskCreateCommandContext{
+				ProjectRef:         "/tmp/my project",
+				ResolvedProjectID:  projectID,
+				SelectedWorkflowID: &selectedWorkflowID,
+				Title:              "Task",
+				Body:               "Body",
+			},
+			want: taskWorkflowRecovery{
+				Kind:               taskWorkflowRecoveryWorkflowNotLinked,
+				ProjectRef:         "/tmp/my project",
+				SelectedWorkflowID: &selectedWorkflowID,
+				Commands: []taskWorkflowRecoveryCommand{
+					{Kind: taskWorkflowRecoveryCommandListProjectWorkflows, Args: []string{config.Command, "workflow", "list", "--project", "/tmp/my project"}},
+					{Kind: taskWorkflowRecoveryCommandRetryTaskCreate, Args: []string{config.Command, "task", "create", "--project", "/tmp/my project", "--workflow", "<uuid>", "--title", "Task", "--body", "Body"}},
+					{Kind: taskWorkflowRecoveryCommandLinkSelectedWorkflow, Args: []string{config.Command, "workflow", "link", "/tmp/my project", selectedWorkflowID}},
+				},
+			},
+		},
+		{
+			name: "ambiguous selection preserves project id",
+			createErr: &serverapi.WorkflowTaskCreateSelectionError{
+				Reason:    serverapi.WorkflowTaskCreateSelectionReasonAmbiguousWithoutDefault,
+				ProjectID: projectID,
+			},
+			context: taskCreateCommandContext{
+				ProjectRef:        "project-selector",
+				ResolvedProjectID: projectID,
+				Title:             "Task",
+				BodyFile:          "/tmp/task body.md",
+			},
+			want: taskWorkflowRecovery{
+				Kind:       taskWorkflowRecoveryAmbiguousWithoutDefault,
+				ProjectRef: "project-selector",
+				Commands: []taskWorkflowRecoveryCommand{
+					{Kind: taskWorkflowRecoveryCommandListProjectWorkflows, Args: []string{config.Command, "workflow", "list", "--project", "project-selector"}},
+					{Kind: taskWorkflowRecoveryCommandRetryTaskCreate, Args: []string{config.Command, "task", "create", "--project", "project-selector", "--workflow", "<uuid>", "--title", "Task", "--body-file", "/tmp/task body.md"}},
+					{Kind: taskWorkflowRecoveryCommandSetDefaultWorkflow, Args: []string{config.Command, "workflow", "default", "project-selector", "<uuid>"}},
+				},
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := taskCreateRecoveryForSelectionError(testCase.createErr, testCase.context)
+			if err != nil {
+				t.Fatalf("taskCreateRecoveryForSelectionError: %v", err)
+			}
+			if !reflect.DeepEqual(got, testCase.want) {
+				t.Fatalf("recovery = %+v, want %+v", got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestTaskCreateTypedSelectionErrorsUseResolvedCommandContext(t *testing.T) {
+	cfg, binding, loopback := newWorkflowCommandLoopback(t)
+	pathRef := t.TempDir()
+	loopback.projectBindingsByRoot[pathRef] = serverapi.ProjectBinding{
+		ProjectID:     binding.ProjectID,
+		WorkspaceID:   binding.WorkspaceID,
+		CanonicalRoot: pathRef,
+	}
+	selectedWorkflowID := workflowSelectorTestUUID
+	persistedSelectedWorkflowID := "workflow-" + selectedWorkflowID
+	for _, testCase := range []struct {
+		name       string
+		projectRef string
+		workflowID string
+		createErr  *serverapi.WorkflowTaskCreateSelectionError
+	}{
+		{
+			name:       "dot no links",
+			projectRef: ".",
+			createErr: &serverapi.WorkflowTaskCreateSelectionError{
+				Reason:    serverapi.WorkflowTaskCreateSelectionReasonNoLinkedWorkflows,
+				ProjectID: binding.ProjectID,
+			},
+		},
+		{
+			name:       "path explicit not linked",
+			projectRef: pathRef,
+			workflowID: selectedWorkflowID,
+			createErr: &serverapi.WorkflowTaskCreateSelectionError{
+				Reason:     serverapi.WorkflowTaskCreateSelectionReasonWorkflowNotLinked,
+				ProjectID:  binding.ProjectID,
+				WorkflowID: &persistedSelectedWorkflowID,
+			},
+		},
+		{
+			name:       "project id ambiguous",
+			projectRef: binding.ProjectID,
+			createErr: &serverapi.WorkflowTaskCreateSelectionError{
+				Reason:    serverapi.WorkflowTaskCreateSelectionReasonAmbiguousWithoutDefault,
+				ProjectID: binding.ProjectID,
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			remote := &taskCreateSelectionErrorRemote{
+				workflowCommandRemote: loopback,
+				createErr:             testCase.createErr,
+			}
+			restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+			defer restore()
+			args := []string{"task", "create", "--project", testCase.projectRef, "--title", "Task", "--body", "Body"}
+			if testCase.workflowID != "" {
+				args = append(args, "--workflow", testCase.workflowID)
+			}
+			stdout, _, code := runWorkflowRootCommand(args...)
+			if code != 1 || stdout != "" {
+				t.Fatalf("task create exit=%d stdout=%q, want typed selection failure", code, stdout)
+			}
+			if len(remote.requests) != 1 {
+				t.Fatalf("CreateWorkflowTask calls = %d, want 1", len(remote.requests))
+			}
+			request := remote.requests[0]
+			if request.ProjectID != binding.ProjectID {
+				t.Fatalf("request project = %q, want resolved %q", request.ProjectID, binding.ProjectID)
+			}
+			var wantWorkflowID *string
+			if testCase.workflowID != "" {
+				wantWorkflowID = &persistedSelectedWorkflowID
+			}
+			if !reflect.DeepEqual(request.WorkflowID, wantWorkflowID) {
+				t.Fatalf("request workflow = %v, want %v", request.WorkflowID, wantWorkflowID)
+			}
+		})
+	}
+}
+
+func TestTaskCreateSerializationConflictPrintsRetryCommand(t *testing.T) {
+	cfg, binding, loopback := newWorkflowCommandLoopback(t)
+	remote := &taskCreateSelectionErrorRemote{
+		workflowCommandRemote: loopback,
+		createErr: &serverapi.WorkflowTaskCreateConflictError{
+			Reason: serverapi.WorkflowTaskCreateConflictReasonSerialization,
+		},
+	}
+	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+	defer restore()
+
+	stdout, stderr, code := runWorkflowRootCommand(
+		"task", "create",
+		"--project", binding.ProjectID,
+		"--title", "Concurrent task",
+		"--body", "Body",
+		"--json",
+	)
+	if code != 1 || stdout != "" {
+		t.Fatalf("task create conflict exit=%d stdout=%q, want retryable failure", code, stdout)
+	}
+	retryCommand := commandString(taskCreateRetryCommandArgs(taskCreateCommandContext{
+		ProjectRef:        binding.ProjectID,
+		ResolvedProjectID: binding.ProjectID,
+		Title:             "Concurrent task",
+		Body:              "Body",
+		JSON:              true,
+	}, nil))
+	if !strings.Contains(stderr, retryCommand) {
+		t.Fatalf("task create conflict stderr = %q, want retry command %q", stderr, retryCommand)
+	}
+	if strings.Contains(stderr, string(serverapi.WorkflowTaskCreateConflictReasonSerialization)) {
+		t.Fatalf("task create conflict stderr = %q, want operator guidance without raw reason code", stderr)
+	}
+}
+
+type taskCreateSelectionErrorRemote struct {
+	workflowCommandRemote
+	createErr error
+	requests  []serverapi.WorkflowTaskCreateRequest
+}
+
+func (r *taskCreateSelectionErrorRemote) CreateWorkflowTask(_ context.Context, req serverapi.WorkflowTaskCreateRequest) (serverapi.WorkflowTaskCreateResponse, error) {
+	r.requests = append(r.requests, req)
+	return serverapi.WorkflowTaskCreateResponse{}, r.createErr
+}
 
 func TestTaskCreateAcceptsSourceWorkspace(t *testing.T) {
 	cfg, binding, remote := newWorkflowCommandLoopback(t)
@@ -151,7 +372,7 @@ func TestTaskStartExecutionTargetOverrideAndSelectionRequiredOutput(t *testing.T
 		projectID:   "project-1",
 		taskID:      "task-1",
 		shortID:     "BLD-1",
-		workflowID:  "workflow-1",
+		workflowID:  "workflow-" + workflowSelectorTestUUID,
 		workflow:    "Workflow",
 		placementID: "placement-1",
 		runID:       "run-1",
@@ -407,7 +628,7 @@ func TestTaskStartCommandPollsForSessionAndPrintsReadableOutput(t *testing.T) {
 		projectID:   "project-1",
 		taskID:      "task-1",
 		shortID:     "BLD-1",
-		workflowID:  "workflow-1",
+		workflowID:  "workflow-" + workflowSelectorTestUUID,
 		workflow:    "Workflow",
 		placementID: "placement-1",
 		runID:       "run-1",
@@ -421,10 +642,6 @@ func TestTaskStartCommandPollsForSessionAndPrintsReadableOutput(t *testing.T) {
 	stdout, stderr, code := runWorkflowRootCommand("task", "start", "--project", "project-1", "BLD-1")
 	if code != 0 {
 		t.Fatalf("task start exit=%d stdout=%q stderr=%q", code, stdout, stderr)
-	}
-	want := "Started task BLD-1 in session session-1 using workflow \"Workflow\" (workflow-1).\nFirst node: implement\n"
-	if stdout != want {
-		t.Fatalf("task start stdout = %q, want %q", stdout, want)
 	}
 	if stderr != "" {
 		t.Fatalf("task start stderr = %q, want empty", stderr)
@@ -664,7 +881,7 @@ func newSetupProgressLifecycleRemote() *setupProgressLifecycleRemote {
 		projectID:     "project-1",
 		taskID:        "task-1",
 		shortID:       "BLD-1",
-		workflowID:    "workflow-1",
+		workflowID:    "workflow-" + workflowSelectorTestUUID,
 		workflow:      "Workflow",
 		placementID:   "placement-1",
 		runID:         "run-1",

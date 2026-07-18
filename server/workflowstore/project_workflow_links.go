@@ -252,11 +252,42 @@ func (s *Store) UnlinkProjectWorkflow(ctx context.Context, linkID string, replac
 	return result, nil
 }
 
-func (s *Store) resolveTaskWorkflowLink(ctx context.Context, projectID string, workflowID workflow.WorkflowID) (sqlitegen.ProjectWorkflowLinkRecord, error) {
-	if strings.TrimSpace(string(workflowID)) == "" {
-		return s.queries.GetDefaultProjectWorkflowLink(ctx, projectID)
+func resolveTaskWorkflowLinkWithQueries(ctx context.Context, q *sqlitegen.Queries, projectID string, workflowID *workflow.WorkflowID) (sqlitegen.ProjectWorkflowLinkRecord, error) {
+	if workflowID == nil {
+		link, err := q.GetDefaultProjectWorkflowLink(ctx, projectID)
+		if err == nil {
+			return link, nil
+		}
+		if err != sql.ErrNoRows {
+			return sqlitegen.ProjectWorkflowLinkRecord{}, err
+		}
+		links, err := q.ListProjectWorkflowLinksForTaskSelection(ctx, projectID)
+		if err != nil {
+			return sqlitegen.ProjectWorkflowLinkRecord{}, err
+		}
+		if len(links) == 1 {
+			return links[0], nil
+		}
+		if len(links) == 0 {
+			return sqlitegen.ProjectWorkflowLinkRecord{}, TaskWorkflowSelectionError{
+				Reason:    TaskWorkflowSelectionNoLinkedWorkflows,
+				ProjectID: projectID,
+			}
+		}
+		return sqlitegen.ProjectWorkflowLinkRecord{}, TaskWorkflowSelectionError{
+			Reason:    TaskWorkflowSelectionAmbiguousWithoutDefault,
+			ProjectID: projectID,
+		}
 	}
-	return s.queries.GetActiveProjectWorkflowLinkByWorkflow(ctx, sqlitegen.GetActiveProjectWorkflowLinkByWorkflowParams{ProjectID: projectID, WorkflowID: string(workflowID)})
+	link, err := q.GetActiveProjectWorkflowLinkByWorkflow(ctx, sqlitegen.GetActiveProjectWorkflowLinkByWorkflowParams{ProjectID: projectID, WorkflowID: string(*workflowID)})
+	if err == sql.ErrNoRows {
+		return sqlitegen.ProjectWorkflowLinkRecord{}, TaskWorkflowSelectionError{
+			Reason:     TaskWorkflowSelectionWorkflowNotLinked,
+			ProjectID:  projectID,
+			WorkflowID: workflowID,
+		}
+	}
+	return link, err
 }
 
 func linkRecordFromRow(row sqlitegen.ProjectWorkflowLinkRecord) ProjectWorkflowLinkRecord {

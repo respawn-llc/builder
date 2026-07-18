@@ -216,7 +216,7 @@ func createFanoutJoinWorkflow(t *testing.T, ctx context.Context, store *Store) w
 
 func startFanoutTask(t *testing.T, ctx context.Context, store *Store, projectID string, workflowID workflow.WorkflowID) (TaskRecord, map[workflow.NodeID]workflow.RunID) {
 	t.Helper()
-	task, err := store.CreateTask(ctx, CreateTaskRequest{ProjectID: projectID, WorkflowID: workflowID, Title: "Task", Body: "Body"})
+	task, err := store.CreateTask(ctx, CreateTaskRequest{ProjectID: projectID, WorkflowID: &workflowID, Title: "Task", Body: "Body"})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}

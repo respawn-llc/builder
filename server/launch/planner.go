@@ -19,6 +19,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -625,10 +626,10 @@ func applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPlan, override
 	if roleOverride.Present && !roleOverride.Default {
 		requestedContinuationRole = cloneContinuationRole(&roleOverride.Role)
 	}
-	if roleOverride.Present && plan.ModelContractLocked && !sameContinuationRole(continuationAgentRole, requestedContinuationRole) && !options.AllowLockedAgentRoleChange {
+	if roleOverride.Present && plan.ModelContractLocked && !textutil.EqualOptional(continuationAgentRole, requestedContinuationRole) && !options.AllowLockedAgentRoleChange {
 		return SessionPlan{}, nil, fmt.Errorf("%w: current=%q requested=%q", ErrLockedAgentRoleChange, continuationRoleDisplay(continuationAgentRole), roleOverride.Role)
 	}
-	if roleOverride.Present && plan.ModelContractLocked && !sameContinuationRole(continuationAgentRole, requestedContinuationRole) && options.AllowLockedAgentRoleChange {
+	if roleOverride.Present && plan.ModelContractLocked && !textutil.EqualOptional(continuationAgentRole, requestedContinuationRole) && options.AllowLockedAgentRoleChange {
 		staleLockedPromptFacingContract = true
 	}
 	if roleOverride.Present {
@@ -749,13 +750,6 @@ func cloneContinuationRole(role *string) *string {
 	}
 	copyRole := *role
 	return &copyRole
-}
-
-func sameContinuationRole(left, right *string) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	return *left == *right
 }
 
 func validateRunPromptOverrideSettings(settings config.Settings, source config.SourceReport) (config.Settings, error) {

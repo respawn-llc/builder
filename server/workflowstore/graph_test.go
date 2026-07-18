@@ -2,6 +2,8 @@ package workflowstore
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -339,7 +341,8 @@ func TestWorkflowListPaginatesWithMostRecentOrderAndFilters(t *testing.T) {
 	if len(filtered.Workflows) != 1 || filtered.Workflows[0].ID != created["Beta Searchable"] {
 		t.Fatalf("filtered = %+v", filtered.Workflows)
 	}
-	exact, err := store.ListWorkflows(ctx, ListWorkflowsRequest{PageSize: 10, ExactName: "Beta"})
+	exactWorkflowID := created["Beta"]
+	exact, err := store.ListWorkflows(ctx, ListWorkflowsRequest{PageSize: 10, WorkflowID: &exactWorkflowID})
 	if err != nil {
 		t.Fatalf("ListWorkflows exact: %v", err)
 	}
@@ -373,6 +376,287 @@ func TestWorkflowListPaginatesWithMostRecentOrderAndFilters(t *testing.T) {
 	}
 	if filteredPage2.Workflows[0].ID != created["Beta"] {
 		t.Fatalf("filtered page2 order = %+v", filteredPage2.Workflows)
+	}
+}
+
+func TestWorkflowListRejectsInvalidPresentScopes(t *testing.T) {
+	ctx, store, _ := newTestStoreContext(t)
+	validProjectID := "project-1"
+	paddedProjectID := " project-1 "
+	blankProjectID := " "
+	malformedWorkflowID := workflow.WorkflowID("workflow-1")
+	paddedWorkflowID := workflow.WorkflowID(" workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0 ")
+	tests := []struct {
+		name string
+		req  ListWorkflowsRequest
+	}{
+		{name: "blank project", req: ListWorkflowsRequest{ProjectID: &blankProjectID}},
+		{name: "padded project", req: ListWorkflowsRequest{ProjectID: &paddedProjectID}},
+		{name: "malformed workflow", req: ListWorkflowsRequest{ProjectID: &validProjectID, WorkflowID: &malformedWorkflowID}},
+		{name: "padded workflow", req: ListWorkflowsRequest{ProjectID: &validProjectID, WorkflowID: &paddedWorkflowID}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := store.ListWorkflows(ctx, test.req); err == nil {
+				t.Fatalf("ListWorkflows accepted invalid scope: %+v", test.req)
+			}
+		})
+	}
+}
+
+func TestWorkflowListPageTokenRejectsMalformedOptionalScope(t *testing.T) {
+	const cursorWorkflowID = "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+	projectDefault := int64(0)
+	projectName := "workflow"
+	validProjectID := "project-1"
+	validFilterWorkflowID := "workflow-8e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+	activityAtUnixMs := int64(1)
+	base := workflowListPageTokenPayload{
+		Version:           workflowListPageTokenVersion,
+		ActivityAtUnixMs:  &activityAtUnixMs,
+		WorkflowID:        cursorWorkflowID,
+		FilterFingerprint: "fingerprint",
+	}
+	for name, mutate := range map[string]func(*workflowListPageTokenPayload){
+		"global missing activity": func(payload *workflowListPageTokenPayload) {
+			payload.ActivityAtUnixMs = nil
+		},
+		"malformed cursor workflow": func(payload *workflowListPageTokenPayload) {
+			payload.WorkflowID = "workflow-1"
+		},
+		"blank project": func(payload *workflowListPageTokenPayload) {
+			value := ""
+			payload.ProjectID = &value
+			payload.ProjectDefault = &projectDefault
+			payload.ProjectName = &projectName
+		},
+		"padded project": func(payload *workflowListPageTokenPayload) {
+			value := " project-1"
+			payload.ProjectID = &value
+			payload.ProjectDefault = &projectDefault
+			payload.ProjectName = &projectName
+		},
+		"padded project name": func(payload *workflowListPageTokenPayload) {
+			payload.ProjectID = &validProjectID
+			payload.ProjectDefault = &projectDefault
+			value := " workflow"
+			payload.ProjectName = &value
+		},
+		"non-canonical project name": func(payload *workflowListPageTokenPayload) {
+			payload.ProjectID = &validProjectID
+			payload.ProjectDefault = &projectDefault
+			value := "Workflow"
+			payload.ProjectName = &value
+		},
+		"padded search query": func(payload *workflowListPageTokenPayload) {
+			payload.SearchQuery = " workflow "
+		},
+		"non-canonical search query": func(payload *workflowListPageTokenPayload) {
+			payload.SearchQuery = "Workflow"
+		},
+		"blank exact workflow filter": func(payload *workflowListPageTokenPayload) {
+			value := ""
+			payload.FilterWorkflowID = &value
+		},
+		"padded exact workflow filter": func(payload *workflowListPageTokenPayload) {
+			value := " " + validFilterWorkflowID
+			payload.FilterWorkflowID = &value
+		},
+		"malformed exact workflow filter": func(payload *workflowListPageTokenPayload) {
+			value := "workflow-1"
+			payload.FilterWorkflowID = &value
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			payload := base
+			mutate(&payload)
+			encoded, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatalf("marshal token payload: %v", err)
+			}
+			if _, err := parseWorkflowListPageToken(base64.RawURLEncoding.EncodeToString(encoded)); err == nil {
+				t.Fatalf("parseWorkflowListPageToken accepted %s", name)
+			}
+		})
+	}
+
+	valid := base
+	valid.ProjectID = &validProjectID
+	valid.ProjectDefault = &projectDefault
+	valid.ProjectName = &projectName
+	valid.FilterWorkflowID = &validFilterWorkflowID
+	encoded, err := json.Marshal(valid)
+	if err != nil {
+		t.Fatalf("marshal valid token payload: %v", err)
+	}
+	if _, err := parseWorkflowListPageToken(base64.RawURLEncoding.EncodeToString(encoded)); err != nil {
+		t.Fatalf("parseWorkflowListPageToken rejected valid optional scope: %v", err)
+	}
+
+	valid.ActivityAtUnixMs = nil
+	encoded, err = json.Marshal(valid)
+	if err != nil {
+		t.Fatalf("marshal valid project token without activity: %v", err)
+	}
+	if _, err := parseWorkflowListPageToken(base64.RawURLEncoding.EncodeToString(encoded)); err != nil {
+		t.Fatalf("parseWorkflowListPageToken rejected absent project activity: %v", err)
+	}
+}
+
+func TestWorkflowListProjectScopeOrdersDefaultActivityAndName(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	defaultWorkflow, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Default"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow default: %v", err)
+	}
+	activeWorkflow, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Zulu Active"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow active: %v", err)
+	}
+	alphaWorkflow, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Alpha"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow alpha: %v", err)
+	}
+	unlinkedWorkflow, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Unlinked"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow unlinked: %v", err)
+	}
+	linkWorkflow(t, ctx, store, binding.ProjectID, defaultWorkflow.ID, true)
+	linkWorkflow(t, ctx, store, binding.ProjectID, activeWorkflow.ID, false)
+	linkWorkflow(t, ctx, store, binding.ProjectID, alphaWorkflow.ID, false)
+	task := createTask(t, ctx, store, CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: &activeWorkflow.ID,
+		Title:      "Active",
+		Body:       "Body",
+	})
+	for _, workflowID := range []workflow.WorkflowID{defaultWorkflow.ID, activeWorkflow.ID, alphaWorkflow.ID, unlinkedWorkflow.ID} {
+		if _, err := store.db.ExecContext(ctx, `UPDATE workflows SET updated_at_unix_ms = 10 WHERE id = ?`, string(workflowID)); err != nil {
+			t.Fatalf("force workflow timestamp: %v", err)
+		}
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE tasks SET updated_at_unix_ms = 100 WHERE id = ?`, string(task.ID)); err != nil {
+		t.Fatalf("force task timestamp: %v", err)
+	}
+
+	projectID := binding.ProjectID
+	page1, err := store.ListWorkflows(ctx, ListWorkflowsRequest{ProjectID: &projectID, PageSize: 2})
+	if err != nil {
+		t.Fatalf("ListWorkflows project page1: %v", err)
+	}
+	if len(page1.Workflows) != 2 || page1.NextPageToken == "" {
+		t.Fatalf("project page1 = %+v, want two workflows and token", page1)
+	}
+	if page1.Workflows[0].ID != defaultWorkflow.ID || page1.Workflows[0].ProjectLink == nil || !page1.Workflows[0].ProjectLink.Default {
+		t.Fatalf("project default row = %+v", page1.Workflows[0])
+	}
+	if page1.Workflows[1].ID != activeWorkflow.ID || page1.Workflows[1].ProjectLink == nil || page1.Workflows[1].ProjectLink.Default {
+		t.Fatalf("project active row = %+v", page1.Workflows[1])
+	}
+	page2, err := store.ListWorkflows(ctx, ListWorkflowsRequest{PageToken: page1.NextPageToken})
+	if err != nil {
+		t.Fatalf("ListWorkflows restored project page2: %v", err)
+	}
+	if len(page2.Workflows) != 1 || page2.Workflows[0].ID != alphaWorkflow.ID || page2.NextPageToken != "" {
+		t.Fatalf("project page2 = %+v, want alpha final row", page2)
+	}
+	for _, record := range append(page1.Workflows, page2.Workflows...) {
+		if record.ID == unlinkedWorkflow.ID {
+			t.Fatalf("project discovery included unlinked workflow: %+v", record)
+		}
+	}
+
+	otherProject := "project-other"
+	if _, err := store.ListWorkflows(ctx, ListWorkflowsRequest{ProjectID: &otherProject, PageToken: page1.NextPageToken}); err == nil {
+		t.Fatal("project cursor accepted conflicting project filter")
+	}
+}
+
+func TestWorkflowListProjectScopeUsesSQLiteUnicodeOrderKeyAcrossPages(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	for _, name := range []string{"Äworkflow", "Öworkflow"} {
+		record, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: name})
+		if err != nil {
+			t.Fatalf("CreateWorkflow %q: %v", name, err)
+		}
+		linkWorkflow(t, ctx, store, binding.ProjectID, record.ID, false)
+	}
+	projectID := binding.ProjectID
+	first, err := store.ListWorkflows(ctx, ListWorkflowsRequest{ProjectID: &projectID, PageSize: 1})
+	if err != nil {
+		t.Fatalf("ListWorkflows first page: %v", err)
+	}
+	if len(first.Workflows) != 1 || first.NextPageToken == "" {
+		t.Fatalf("first page = %+v, want one row and continuation", first)
+	}
+	second, err := store.ListWorkflows(ctx, ListWorkflowsRequest{PageToken: first.NextPageToken, PageSize: 1})
+	if err != nil {
+		t.Fatalf("ListWorkflows second page: %v", err)
+	}
+	if len(second.Workflows) != 1 || second.Workflows[0].ID == first.Workflows[0].ID {
+		t.Fatalf("paginated workflows first=%+v second=%+v, want distinct complete rows", first.Workflows, second.Workflows)
+	}
+}
+
+func TestWorkflowListProjectScopePreservesAbsentActivityAfterEpoch(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	created := map[string]WorkflowRecord{}
+	for _, name := range []string{"Epoch", "Alpha", "Beta"} {
+		record, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: name})
+		if err != nil {
+			t.Fatalf("CreateWorkflow %q: %v", name, err)
+		}
+		linkWorkflow(t, ctx, store, binding.ProjectID, record.ID, false)
+		created[name] = record
+	}
+	epochWorkflowID := created["Epoch"].ID
+	task := createTask(t, ctx, store, CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: &epochWorkflowID,
+		Title:      "Epoch activity",
+		Body:       "Body",
+	})
+	if _, err := store.db.ExecContext(ctx, `UPDATE tasks SET updated_at_unix_ms = 0 WHERE id = ?`, string(task.ID)); err != nil {
+		t.Fatalf("force epoch task timestamp: %v", err)
+	}
+
+	projectID := binding.ProjectID
+	first, err := store.ListWorkflows(ctx, ListWorkflowsRequest{ProjectID: &projectID, PageSize: 1})
+	if err != nil {
+		t.Fatalf("ListWorkflows first page: %v", err)
+	}
+	if len(first.Workflows) != 1 || first.Workflows[0].ID != epochWorkflowID || first.NextPageToken == "" {
+		t.Fatalf("first page = %+v, want epoch activity workflow and continuation", first)
+	}
+	firstCursor, err := parseWorkflowListPageToken(first.NextPageToken)
+	if err != nil {
+		t.Fatalf("parse first page token: %v", err)
+	}
+	if firstCursor.activityAtUnixMs == nil || *firstCursor.activityAtUnixMs != 0 {
+		t.Fatalf("first cursor activity = %v, want present Unix epoch", firstCursor.activityAtUnixMs)
+	}
+
+	second, err := store.ListWorkflows(ctx, ListWorkflowsRequest{PageToken: first.NextPageToken, PageSize: 1})
+	if err != nil {
+		t.Fatalf("ListWorkflows second page: %v", err)
+	}
+	if len(second.Workflows) != 1 || second.Workflows[0].ID != created["Alpha"].ID || second.NextPageToken == "" {
+		t.Fatalf("second page = %+v, want alpha no-activity workflow and continuation", second)
+	}
+	secondCursor, err := parseWorkflowListPageToken(second.NextPageToken)
+	if err != nil {
+		t.Fatalf("parse second page token: %v", err)
+	}
+	if secondCursor.activityAtUnixMs != nil {
+		t.Fatalf("second cursor activity = %v, want typed absence", secondCursor.activityAtUnixMs)
+	}
+
+	third, err := store.ListWorkflows(ctx, ListWorkflowsRequest{PageToken: second.NextPageToken, PageSize: 1})
+	if err != nil {
+		t.Fatalf("ListWorkflows third page: %v", err)
+	}
+	if len(third.Workflows) != 1 || third.Workflows[0].ID != created["Beta"].ID || third.NextPageToken != "" {
+		t.Fatalf("third page = %+v, want beta final row", third)
 	}
 }
 

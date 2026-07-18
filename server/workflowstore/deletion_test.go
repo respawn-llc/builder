@@ -51,14 +51,14 @@ func TestTaskCreateAllowsInvalidWorkflowBacklogButRejectsUnlinkedWorkflow(t *tes
 	}
 	valid := createValidWorkflow(t, ctx, store)
 	linkWorkflow(t, ctx, store, binding.ProjectID, valid, false)
-	if task := createTask(t, ctx, store, CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: valid, Title: "Explicit", Body: "Body"}); !strings.HasPrefix(task.ShortID, "WOR-2") {
+	if task := createTask(t, ctx, store, CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: &valid, Title: "Explicit", Body: "Body"}); !strings.HasPrefix(task.ShortID, "WOR-2") {
 		t.Fatalf("explicit task short id = %q, want WOR-2", task.ShortID)
 	}
 	unlinked, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Unlinked"})
 	if err != nil {
 		t.Fatalf("CreateWorkflow unlinked: %v", err)
 	}
-	if _, err := store.CreateTask(ctx, CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: unlinked.ID, Title: "Task", Body: "Body"}); err == nil {
+	if _, err := store.CreateTask(ctx, CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: &unlinked.ID, Title: "Task", Body: "Body"}); err == nil {
 		t.Fatalf("expected unlinked workflow task creation to fail")
 	}
 }
@@ -235,7 +235,7 @@ func TestWorkflowDeleteBlocksDefaultReplacementAndDetectsImpactChanges(t *testin
 
 	staleWorkflowID, _ := f.linkedWorkflow(t, false)
 	staleImpact := f.preview(t, staleWorkflowID)
-	createTask(t, f.ctx, f.store, CreateTaskRequest{ProjectID: f.projectID, WorkflowID: staleWorkflowID, Title: "Stale", Body: "Body"})
+	createTask(t, f.ctx, f.store, CreateTaskRequest{ProjectID: f.projectID, WorkflowID: &staleWorkflowID, Title: "Stale", Body: "Body"})
 	staleDelete := f.confirmDelete(t, staleImpact, false)
 	if staleDelete.Deleted || !hasWorkflowDeleteBlocker(staleDelete.Blockers, "impact_changed", 1) || staleDelete.Impact.TaskCount != 1 {
 		t.Fatalf("stale delete result = %+v, want impact_changed with refreshed task count", staleDelete)

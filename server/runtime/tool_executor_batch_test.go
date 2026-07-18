@@ -7,6 +7,7 @@ import (
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -200,18 +201,11 @@ func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
 			if result.Presentation.MovedToBackground != tt.wantMovedToBackground {
 				t.Fatalf("backgrounded = %t, want %t", result.Presentation.MovedToBackground, tt.wantMovedToBackground)
 			}
-			if !optionalIntEqual(result.Presentation.ShellExitCode, tt.wantShellExitCode) {
+			if !textutil.EqualOptional(result.Presentation.ShellExitCode, tt.wantShellExitCode) {
 				t.Fatalf("shell exit code = %v, want %v", result.Presentation.ShellExitCode, tt.wantShellExitCode)
 			}
 		})
 	}
-}
-
-func optionalIntEqual(left, right *int) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	return *left == *right
 }
 
 func TestLiveToolCompletionBoundaryRejectsHandlerFinalizedPresentation(t *testing.T) {

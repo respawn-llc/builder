@@ -11,17 +11,6 @@ import (
 	"core/shared/serverapi"
 )
 
-func workflowTaskListForProject(ctx context.Context, cfg config.App, remote workflowCommandRemote, projectRef string, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
-	projectID, err := resolveWorkflowProjectID(ctx, cfg, remote, projectRef)
-	if err != nil {
-		return serverapi.WorkflowTaskListResponse{}, err
-	}
-	req.ProjectID = &projectID
-	rpcCtx, cancel := context.WithTimeout(ctx, workflowCommandTimeout)
-	defer cancel()
-	return remote.ListWorkflowTasks(rpcCtx, req)
-}
-
 func workflowTaskList(ctx context.Context, remote workflowCommandRemote, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
 	rpcCtx, cancel := context.WithTimeout(ctx, workflowCommandTimeout)
 	defer cancel()

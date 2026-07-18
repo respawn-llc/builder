@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 
+	"core/shared/textutil"
+
 	"github.com/google/uuid"
 )
 
@@ -82,8 +84,8 @@ func CloneWorktreeReminderState(state *WorktreeReminderState) *WorktreeReminderS
 }
 
 func WorktreeContextEqual(left, right WorktreeContext) bool {
-	return optionalUUIDEqual(left.ContextID, right.ContextID) &&
-		optionalStringEqual(left.Branch, right.Branch) &&
+	return textutil.EqualOptional(left.ContextID, right.ContextID) &&
+		textutil.EqualOptional(left.Branch, right.Branch) &&
 		left.WorktreePath == right.WorktreePath &&
 		left.WorkspaceRoot == right.WorkspaceRoot &&
 		left.EffectiveCwd == right.EffectiveCwd
@@ -97,20 +99,6 @@ func WorktreeReminderTargetEqual(left, right WorktreeReminderState) bool {
 
 func WorktreeReminderStateEqual(left, right WorktreeReminderState) bool {
 	return left.Mode == right.Mode && WorktreeContextEqual(left.WorktreeContext, right.WorktreeContext)
-}
-
-func optionalUUIDEqual(left, right *uuid.UUID) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	return *left == *right
-}
-
-func optionalStringEqual(left, right *string) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	return *left == *right
 }
 
 func cloneUUID(value *uuid.UUID) *uuid.UUID {
