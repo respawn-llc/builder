@@ -383,23 +383,16 @@ func (s *testEmbeddedServer) WorktreeClient() apicontract.WorktreeService {
 }
 
 func (s *testEmbeddedServer) RuntimeAttachmentClients() runtimeAttachmentClients {
-	attention := s.attentionClient
-	supported := attention != nil
-	if attention == nil {
-		attention = &recordingAttentionNotificationClient{}
-	}
 	return runtimeAttachmentClients{
-		Attention:                       attention,
-		AttentionNotificationsSupported: supported,
-		ProcessControls:                 s.processControlClient,
-		ProcessOutput:                   s.processOutputClient,
-		ProcessViews:                    s.processViewClient,
-		PromptControl:                   s.promptControlClient,
-		RuntimeControls:                 s.RuntimeControlClient(),
-		SessionRuntime:                  s.sessionRuntime,
-		SessionTranscript:               s.sessionTranscript,
-		SessionViews:                    s.sessionViewClient,
-		Worktrees:                       s.WorktreeClient(),
+		ProcessControls:   s.processControlClient,
+		ProcessOutput:     s.processOutputClient,
+		ProcessViews:      s.processViewClient,
+		PromptControl:     s.promptControlClient,
+		RuntimeControls:   s.RuntimeControlClient(),
+		SessionRuntime:    s.sessionRuntime,
+		SessionTranscript: s.sessionTranscript,
+		SessionViews:      s.sessionViewClient,
+		Worktrees:         s.WorktreeClient(),
 	}
 }
 

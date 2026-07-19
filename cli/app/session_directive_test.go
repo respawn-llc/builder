@@ -153,6 +153,7 @@ func TestSessionLifecycleResultResumeReleasesThenUsesSamePickerWithoutPlan(t *te
 			releaseCalls++
 			return nil
 		}},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("resolveAndReleaseSessionAction: %v", err)

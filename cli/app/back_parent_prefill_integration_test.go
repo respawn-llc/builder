@@ -527,6 +527,7 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 					originReleased = true
 					return nil
 				}},
+				nil,
 			)
 			if err != nil {
 				t.Fatalf("resolve and release child handoff: %v", err)

@@ -10,9 +10,16 @@ import (
 func (m *uiModel) reduceAskMessage(msg tea.Msg) uiFeatureUpdateResult {
 	switch msg := msg.(type) {
 	case askEventMsg:
-		m.askController().acceptEvent(msg.event)
+		cmd := m.askController().acceptEvent(msg.event)
 		m.layout().syncViewport()
-		return handledUIFeatureUpdate(m, nil)
+		return handledUIFeatureUpdate(m, cmd)
+	case questionRenderResultMsg:
+		cmd, repaint := m.applyQuestionRenderResult(msg)
+		m.layout().syncViewport()
+		if repaint {
+			cmd = tea.Batch(cmd, m.renderNativeOngoingSurface())
+		}
+		return handledUIFeatureUpdate(m, cmd)
 	case promptAnswerDeliveryResultMsg:
 		cmd := m.askController().applyDeliveryResult(msg)
 		m.layout().syncViewport()

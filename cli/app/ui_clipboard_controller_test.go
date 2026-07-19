@@ -40,11 +40,10 @@ func setupClipboardTestInput(t *testing.T, m *uiModel, target clipboardTestInput
 		m.replaceMainInput("beforeafter", byteOffsetForRuneCursor("beforeafter", len([]rune("before"))))
 		return m
 	case clipboardTestInputAsk:
-		next, _ := m.Update(askEventMsg{event: testQuestionAskEvent(
+		updated := updateUIModel(t, m, askEventMsg{event: testQuestionAskEvent(
 			"clipboard-ask",
 			"Provide details",
 		)})
-		updated := next.(*uiModel)
 		if !updated.ask.freeform {
 			t.Fatal("expected freeform ask input")
 		}

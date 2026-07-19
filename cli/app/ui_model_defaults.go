@@ -56,8 +56,9 @@ func newUIPresentationFeatureState() uiPresentationFeatureState {
 
 func newUIConversationFeatureState() uiConversationFeatureState {
 	return uiConversationFeatureState{
-		interaction: uiInteractionState{Mode: uiInputModeMain},
-		ask:         uiAskState{editor: tuiinput.NewEditor()},
+		interaction:       uiInteractionState{Mode: uiInputModeMain},
+		ask:               uiAskState{editor: tuiinput.NewEditor()},
+		questionProjector: projectAskQuestionMarkdown,
 	}
 }
 

@@ -14,26 +14,19 @@ import (
 )
 
 type runtimeAttachmentTestServer struct {
-	runtime                         apicontract.SessionRuntimeService
-	attention                       apicontract.AttentionNotificationService
-	attentionNotificationsSupported *bool
-	sessionTranscript               apicontract.SessionTranscriptService
-	sessionViews                    apicontract.SessionViewService
-	runtimeControl                  apicontract.RuntimeControlService
+	runtime           apicontract.SessionRuntimeService
+	attention         apicontract.AttentionNotificationService
+	sessionTranscript apicontract.SessionTranscriptService
+	sessionViews      apicontract.SessionViewService
+	runtimeControl    apicontract.RuntimeControlService
 }
 
 func (s runtimeAttachmentTestServer) RuntimeAttachmentClients() runtimeAttachmentClients {
-	attentionSupported := s.attention != nil
-	if s.attentionNotificationsSupported != nil {
-		attentionSupported = *s.attentionNotificationsSupported
-	}
 	return runtimeAttachmentClients{
-		Attention:                       s.attention,
-		AttentionNotificationsSupported: attentionSupported,
-		RuntimeControls:                 s.runtimeControl,
-		SessionRuntime:                  s.runtime,
-		SessionTranscript:               s.sessionTranscript,
-		SessionViews:                    s.sessionViews,
+		RuntimeControls:   s.runtimeControl,
+		SessionRuntime:    s.runtime,
+		SessionTranscript: s.sessionTranscript,
+		SessionViews:      s.sessionViews,
 	}
 }
 
@@ -97,45 +90,9 @@ func TestRuntimeAttachmentRequiresTranscriptServiceAndReleasesRuntime(t *testing
 	}
 }
 
-func TestRuntimeAttachmentAttentionSubscribeFailureReleasesRuntime(t *testing.T) {
-	releaseCount := 0
-	subscribeErr := errors.New("attention stream unavailable")
-	server := runtimeAttachmentTestServer{
-		runtime: &recordingSessionRuntimeClient{
-			activate: func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
-				return serverapi.SessionRuntimeActivateResponse{}, nil
-			},
-			release: func(context.Context, serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
-				releaseCount++
-				return serverapi.SessionRuntimeReleaseResponse{}, nil
-			},
-		},
-		attention: &recordingAttentionNotificationClient{
-			subscribeSession: func(context.Context, serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
-				return nil, subscribeErr
-			},
-		},
-		sessionTranscript: &recordingTranscriptSubscriber{subs: []*scriptedTranscriptSubscription{{}}},
-		sessionViews:      &countingSessionViewClient{},
-		runtimeControl:    &reconnectRetryRuntimeControlClient{},
-	}
-
-	plan, err := prepareSharedRuntime(context.Background(), server, sessionLaunchPlan{SessionID: "session-1"}, io.Discard, "test")
-	if !errors.Is(err, subscribeErr) {
-		t.Fatalf("prepareSharedRuntime error = %v, want %v", err, subscribeErr)
-	}
-	if plan != nil {
-		t.Fatalf("plan = %+v, want nil", plan)
-	}
-	if releaseCount != 1 {
-		t.Fatalf("release count = %d, want 1", releaseCount)
-	}
-}
-
 func TestRuntimeAttachmentUnsupportedAttentionUsesTranscriptAndClosesLease(t *testing.T) {
 	releaseCount := 0
 	attentionCalls := 0
-	supported := false
 	sessionViews := &countingSessionViewClient{}
 	server := runtimeAttachmentTestServer{
 		runtime: &recordingSessionRuntimeClient{
@@ -153,10 +110,9 @@ func TestRuntimeAttachmentUnsupportedAttentionUsesTranscriptAndClosesLease(t *te
 				return nil, errors.New("unexpected attention subscription")
 			},
 		},
-		attentionNotificationsSupported: &supported,
-		sessionTranscript:               &recordingTranscriptSubscriber{subs: []*scriptedTranscriptSubscription{{}}},
-		sessionViews:                    sessionViews,
-		runtimeControl:                  &reconnectRetryRuntimeControlClient{},
+		sessionTranscript: &recordingTranscriptSubscriber{subs: []*scriptedTranscriptSubscription{{}}},
+		sessionViews:      sessionViews,
+		runtimeControl:    &reconnectRetryRuntimeControlClient{},
 	}
 
 	plan, err := prepareSharedRuntime(context.Background(), server, sessionLaunchPlan{SessionID: "session-1"}, io.Discard, "test")
@@ -172,6 +128,49 @@ func TestRuntimeAttachmentUnsupportedAttentionUsesTranscriptAndClosesLease(t *te
 	}
 	if got := sessionViews.mainViewCount.Load(); got != 0 {
 		t.Fatalf("startup main-view reads = %d, want 0 before feed hydration", got)
+	}
+}
+
+func TestRuntimeAttachmentSupportedAttentionStillUsesTranscriptWithoutSubscription(t *testing.T) {
+	releaseCount := 0
+	attentionCalls := 0
+	sessionViews := &countingSessionViewClient{}
+	server := runtimeAttachmentTestServer{
+		runtime: &recordingSessionRuntimeClient{
+			activate: func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
+				return serverapi.SessionRuntimeActivateResponse{}, nil
+			},
+			release: func(context.Context, serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
+				releaseCount++
+				return serverapi.SessionRuntimeReleaseResponse{}, nil
+			},
+		},
+		attention: &recordingAttentionNotificationClient{
+			subscribeSession: func(context.Context, serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+				attentionCalls++
+				return noOpAttentionNotificationSubscription{}, nil
+			},
+		},
+		sessionTranscript: &recordingTranscriptSubscriber{subs: []*scriptedTranscriptSubscription{{}}},
+		sessionViews:      sessionViews,
+		runtimeControl:    &reconnectRetryRuntimeControlClient{},
+	}
+
+	plan, err := prepareSharedRuntime(context.Background(), server, sessionLaunchPlan{SessionID: "session-1"}, io.Discard, "test")
+	if err != nil {
+		t.Fatalf("prepareSharedRuntime: %v", err)
+	}
+	if plan.Wiring.promptAttention == nil || plan.Wiring.promptAttention != plan.Wiring.turnQueueHook {
+		t.Fatal("runtime wiring did not make the existing bell hook authoritative for prompt activation")
+	}
+	if attentionCalls != 0 {
+		t.Fatalf("attention subscription calls = %d, want 0", attentionCalls)
+	}
+	if err := plan.Close(); err != nil {
+		t.Fatalf("close runtime plan: %v", err)
+	}
+	if releaseCount != 1 {
+		t.Fatalf("release count = %d, want 1", releaseCount)
 	}
 }
 

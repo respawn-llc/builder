@@ -9,6 +9,8 @@ import (
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 const terminalBell = "\a"
@@ -168,6 +170,10 @@ func newBellHooks(notifier terminalNotifier, title func() string, focused ...fun
 }
 
 func (h *bellHooks) OnAttentionNotification(evt clientui.AttentionNotificationEvent) {
+	h.onAttentionNotification(evt, nil)
+}
+
+func (h *bellHooks) onAttentionNotification(evt clientui.AttentionNotificationEvent, projectedBody *string) {
 	if h == nil {
 		return
 	}
@@ -178,10 +184,15 @@ func (h *bellHooks) OnAttentionNotification(evt clientui.AttentionNotificationEv
 	if !tuiSupportsAttentionNotification(*notification) {
 		return
 	}
-	body := notificationMarkdownPreview(
-		attentionNotificationBody(*notification),
-		currentTerminalCapabilities().MarkdownLinks,
-	)
+	body := ""
+	if projectedBody != nil {
+		body = strings.TrimSpace(*projectedBody)
+	} else {
+		body = notificationMarkdownPreview(
+			attentionNotificationBody(*notification),
+			currentTerminalCapabilities().MarkdownLinks,
+		)
+	}
 	if body == "" {
 		body = attentionNotificationFallbackBody(*notification)
 	}
@@ -191,6 +202,19 @@ func (h *bellHooks) OnAttentionNotification(evt clientui.AttentionNotificationEv
 		return
 	}
 	h.notifier.Notify(message)
+}
+
+func projectedQuestionNotificationPreview(rows []string) string {
+	plainRows := make([]string, 0, len(rows))
+	for _, row := range rows {
+		plainRows = append(plainRows, xansi.Strip(row))
+	}
+	normalized := terminalNotificationSingleLine(strings.Join(plainRows, " "))
+	runes := []rune(normalized)
+	if len(runes) <= terminalNotificationPreviewLimit {
+		return normalized
+	}
+	return string(runes[:terminalNotificationPreviewLimit-3]) + "..."
 }
 
 func attentionNotificationTitle(notification clientui.AttentionNotification) string {
