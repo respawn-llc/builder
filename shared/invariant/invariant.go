@@ -84,6 +84,10 @@ func (p Policy) Check(condition bool, diagnostic Diagnostic) {
 	if condition {
 		return
 	}
+	p.Violation(diagnostic)
+}
+
+func (p Policy) Violation(diagnostic Diagnostic) Diagnostic {
 	diagnostic = diagnostic.withStack()
 	if p.mode == ModePanic {
 		panic(diagnostic)
@@ -91,4 +95,5 @@ func (p Policy) Check(condition bool, diagnostic Diagnostic) {
 	if p.sink != nil {
 		p.sink.RecordInvariantDiagnostic(diagnostic)
 	}
+	return diagnostic
 }

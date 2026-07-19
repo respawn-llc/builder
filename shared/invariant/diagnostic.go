@@ -13,6 +13,7 @@ const (
 	ScopeReadModelPublication Scope = "read_model_publication"
 	ScopeBackgroundEvent      Scope = "background_event"
 	ScopeLifecycleEncoding    Scope = "lifecycle_encoding"
+	ScopeAttentionProjection  Scope = "attention_projection"
 )
 
 type Field string
@@ -54,6 +55,12 @@ const (
 	FieldMeasuredFixedBytes       Field = "measured_fixed_bytes"
 	FieldWholeObjectCapBytes      Field = "whole_object_cap_bytes"
 	FieldFieldByteLengths         Field = "field_byte_lengths"
+	FieldSubscriptionGeneration   Field = "subscription_generation"
+	FieldOpeningWatermark         Field = "opening_ordinary_watermark"
+	FieldObservedTaskBatchKey     Field = "observed_task_batch_key"
+	FieldIncomingTaskBatchKey     Field = "incoming_task_batch_key"
+	FieldAttentionEventSource     Field = "attention_event_source"
+	FieldAttentionEventRevision   Field = "attention_event_revision"
 )
 
 type Diagnostic struct {
@@ -158,6 +165,33 @@ func LifecycleEncodingDiagnostic(input LifecycleEncodingDiagnosticInput) Diagnos
 			FieldMeasuredFixedBytes:  strconv.Itoa(input.FixedBytes),
 			FieldWholeObjectCapBytes: strconv.Itoa(input.WholeObjectCap),
 			FieldFieldByteLengths:    input.FieldByteLength,
+		}),
+	}
+}
+
+type AttentionProjectionDiagnosticInput struct {
+	Operation              string
+	SessionID              string
+	SubscriptionGeneration string
+	OpeningWatermark       string
+	ObservedTaskBatchKey   string
+	IncomingTaskBatchKey   string
+	EventSource            string
+	EventRevision          string
+}
+
+func AttentionProjectionDiagnostic(input AttentionProjectionDiagnosticInput) Diagnostic {
+	return Diagnostic{
+		Scope: ScopeAttentionProjection,
+		Fields: fields(map[Field]string{
+			FieldOperation:              input.Operation,
+			FieldSessionID:              input.SessionID,
+			FieldSubscriptionGeneration: input.SubscriptionGeneration,
+			FieldOpeningWatermark:       input.OpeningWatermark,
+			FieldObservedTaskBatchKey:   input.ObservedTaskBatchKey,
+			FieldIncomingTaskBatchKey:   input.IncomingTaskBatchKey,
+			FieldAttentionEventSource:   input.EventSource,
+			FieldAttentionEventRevision: input.EventRevision,
 		}),
 	}
 }

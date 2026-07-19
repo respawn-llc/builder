@@ -2,13 +2,16 @@ package attentionnotify
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"sync"
 	"time"
 
 	"core/shared/clientui"
+	"core/shared/invariant"
 	"core/shared/serverapi"
 )
 
@@ -30,18 +33,21 @@ type RoutingScope struct {
 }
 
 type Broker struct {
-	mu          sync.Mutex
-	nextID      uint64
-	nextSeq     uint64
-	bufferSize  int
-	closed      bool
-	subscribers map[uint64]*Subscription
+	mu                     sync.Mutex
+	nextID                 uint64
+	nextSeq                uint64
+	nextSnapshotGeneration uint64
+	bufferSize             int
+	closed                 bool
+	subscribers            map[uint64]*Subscription
+	invariants             invariant.Policy
 }
 
 type Subscription struct {
 	filter  deliveryFilter
 	ch      chan attentionEnvelope
 	onClose func()
+	admit   func(attentionEnvelope) (bool, error)
 
 	mu   sync.Mutex
 	err  error
@@ -56,16 +62,38 @@ type SnapshotPendingDescriptor struct {
 type SnapshotSubscription struct {
 	live                     *Subscription
 	snapshot                 []attentionEnvelope
+	sessionID                string
+	generation               uint64
 	openingOrdinaryWatermark OrdinaryOccurrenceWatermark
+	observedTaskBatchKey     *TaskQuestionBatchKey
+	invariants               invariant.Policy
 
-	mu   sync.Mutex
-	next int
-	done bool
+	nextMu sync.Mutex
+	mu     sync.Mutex
+	next   int
+	done   bool
+	err    error
 }
 
 type attentionEnvelope struct {
 	event      clientui.AttentionNotificationEvent
 	occurrence OccurrenceMetadata
+}
+
+type AttentionProjectionDiscontinuity struct {
+	Diagnostic invariant.Diagnostic
+}
+
+func (e AttentionProjectionDiscontinuity) Error() string {
+	return fmt.Sprintf("attention projection discontinuity: %v", e.Diagnostic.Fields)
+}
+
+func (e AttentionProjectionDiscontinuity) Unwrap() error {
+	return serverapi.ErrStreamGap
+}
+
+func (e AttentionProjectionDiscontinuity) RequiresSnapshotReopen() bool {
+	return true
 }
 
 type deliveryFilter struct {
@@ -83,10 +111,21 @@ func WithBufferSize(size int) Option {
 	}
 }
 
+func WithAttentionProjectionInvariantPanic(enabled bool) Option {
+	return func(b *Broker) {
+		mode := invariant.ModeDiagnostic
+		if enabled {
+			mode = invariant.ModePanic
+		}
+		b.invariants = invariant.NewPolicy(invariant.WithMode(mode))
+	}
+}
+
 func NewBroker(options ...Option) *Broker {
 	broker := &Broker{
 		bufferSize:  defaultBufferSize,
 		subscribers: map[uint64]*Subscription{},
+		invariants:  invariant.NewPolicy(),
 	}
 	for _, option := range options {
 		if option != nil {
@@ -133,13 +172,12 @@ func (b *Broker) SubscribeSessionSnapshot(sessionID string, descriptors []Snapsh
 	}
 	id := b.nextID
 	b.nextID++
-	live.onClose = func() {
-		b.mu.Lock()
-		delete(b.subscribers, id)
-		b.mu.Unlock()
-	}
-	b.subscribers[id] = live
+	b.nextSnapshotGeneration++
+	generation := b.nextSnapshotGeneration
+	policy := b.invariants
 	snapshot := make([]attentionEnvelope, 0, len(descriptors)+1)
+	var observedTaskBatchKey *TaskQuestionBatchKey
+	var initialConflict *attentionEnvelope
 	for _, descriptor := range descriptors {
 		b.nextSeq++
 		event := clientui.AttentionNotificationEvent{
@@ -148,7 +186,17 @@ func (b *Broker) SubscribeSessionSnapshot(sessionID string, descriptors []Snapsh
 			Type:     clientui.AttentionNotificationEventPending,
 			Pending:  &descriptor.Notification,
 		}
-		snapshot = append(snapshot, attentionEnvelope{event: event, occurrence: descriptor.Occurrence.clone()})
+		envelope := attentionEnvelope{event: event, occurrence: descriptor.Occurrence.clone()}
+		snapshot = append(snapshot, envelope)
+		if key, ok := envelope.occurrence.TaskQuestionBatchKey(); ok {
+			switch {
+			case observedTaskBatchKey == nil:
+				observedTaskBatchKey = taskQuestionBatchKeyPointer(key)
+			case *observedTaskBatchKey != key && initialConflict == nil:
+				conflict := envelope
+				initialConflict = &conflict
+			}
+		}
 	}
 	b.nextSeq++
 	snapshot = append(snapshot, attentionEnvelope{event: clientui.AttentionNotificationEvent{
@@ -157,12 +205,27 @@ func (b *Broker) SubscribeSessionSnapshot(sessionID string, descriptors []Snapsh
 		Type:      clientui.AttentionNotificationEventSnapshotComplete,
 		SessionID: sessionID,
 	}})
-	b.mu.Unlock()
-	return &SnapshotSubscription{
+	subscription := &SnapshotSubscription{
 		live:                     live,
 		snapshot:                 snapshot,
+		sessionID:                sessionID,
+		generation:               generation,
 		openingOrdinaryWatermark: openingWatermark,
-	}, nil
+		observedTaskBatchKey:     observedTaskBatchKey,
+		invariants:               policy,
+	}
+	live.admit = subscription.admitLiveEnvelope
+	live.onClose = func() {
+		b.mu.Lock()
+		delete(b.subscribers, id)
+		b.mu.Unlock()
+	}
+	b.subscribers[id] = live
+	b.mu.Unlock()
+	if initialConflict != nil {
+		subscription.closeWithProjectionDiscontinuity(*initialConflict)
+	}
+	return subscription, nil
 }
 
 func (b *Broker) subscribe(filter deliveryFilter) (*Subscription, error) {
@@ -248,8 +311,8 @@ func (b *Broker) publish(scope RoutingScope, envelope attentionEnvelope) error {
 	}
 	b.mu.Unlock()
 	for _, sub := range subs {
-		if !sub.publish(envelope) {
-			sub.closeWithError(serverapi.ErrStreamGap)
+		if err := sub.publish(envelope); err != nil {
+			sub.closeWithError(err)
 		}
 	}
 	return nil
@@ -293,20 +356,32 @@ func deliveryMatches(filter deliveryFilter, scope RoutingScope) bool {
 	}
 }
 
-func (s *Subscription) publish(envelope attentionEnvelope) bool {
+func (s *Subscription) publish(envelope attentionEnvelope) error {
 	if s == nil {
-		return false
+		return io.EOF
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.done {
-		return false
+		if s.err != nil {
+			return s.err
+		}
+		return io.EOF
+	}
+	if s.admit != nil {
+		deliver, err := s.admit(envelope)
+		if err != nil {
+			return err
+		}
+		if !deliver {
+			return nil
+		}
 	}
 	select {
 	case s.ch <- envelope:
-		return true
+		return nil
 	default:
-		return false
+		return serverapi.ErrStreamGap
 	}
 }
 
@@ -370,23 +445,35 @@ func (s *SnapshotSubscription) Next(ctx context.Context) (clientui.AttentionNoti
 	if s == nil {
 		return clientui.AttentionNotificationEvent{}, io.EOF
 	}
-	s.mu.Lock()
-	if s.done {
+	s.nextMu.Lock()
+	defer s.nextMu.Unlock()
+	for {
+		s.mu.Lock()
+		if s.done {
+			err := s.err
+			s.mu.Unlock()
+			if err != nil {
+				return clientui.AttentionNotificationEvent{}, serverapi.NormalizeStreamError(err)
+			}
+			return clientui.AttentionNotificationEvent{}, io.EOF
+		}
+		if s.next < len(s.snapshot) {
+			event := s.snapshot[s.next].event
+			s.next++
+			s.mu.Unlock()
+			return event, nil
+		}
+		live := s.live
 		s.mu.Unlock()
-		return clientui.AttentionNotificationEvent{}, io.EOF
+		if live == nil {
+			return clientui.AttentionNotificationEvent{}, io.EOF
+		}
+		envelope, err := live.nextEnvelope(ctx)
+		if err != nil {
+			return clientui.AttentionNotificationEvent{}, err
+		}
+		return envelope.event, nil
 	}
-	if s.next < len(s.snapshot) {
-		event := s.snapshot[s.next].event
-		s.next++
-		s.mu.Unlock()
-		return event, nil
-	}
-	live := s.live
-	s.mu.Unlock()
-	if live == nil {
-		return clientui.AttentionNotificationEvent{}, io.EOF
-	}
-	return live.Next(ctx)
 }
 
 func (s *SnapshotSubscription) Close() error {
@@ -405,6 +492,95 @@ func (s *SnapshotSubscription) Close() error {
 		return nil
 	}
 	return live.Close()
+}
+
+func (s *SnapshotSubscription) admitLiveEnvelope(envelope attentionEnvelope) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.done {
+		err := s.err
+		if err != nil {
+			return false, err
+		}
+		return false, io.EOF
+	}
+	if ordinary, ok := envelope.occurrence.OrdinaryOrdinal(); ok && ordinary <= OrdinaryOccurrenceOrdinal(s.openingOrdinaryWatermark) {
+		return false, nil
+	}
+	incomingKey, hasIncomingKey := envelope.occurrence.TaskQuestionBatchKey()
+	if !hasIncomingKey {
+		return true, nil
+	}
+	if s.observedTaskBatchKey == nil {
+		if envelope.event.Type != clientui.AttentionNotificationEventResolved {
+			s.observedTaskBatchKey = taskQuestionBatchKeyPointer(incomingKey)
+		}
+		return true, nil
+	}
+	if *s.observedTaskBatchKey == incomingKey {
+		if envelope.event.Type == clientui.AttentionNotificationEventResolved {
+			s.observedTaskBatchKey = nil
+			return true, nil
+		}
+		return false, nil
+	}
+	return false, s.projectionDiscontinuityLocked(envelope)
+}
+
+func (s *SnapshotSubscription) closeWithProjectionDiscontinuity(envelope attentionEnvelope) error {
+	s.mu.Lock()
+	if s.done {
+		err := s.err
+		s.mu.Unlock()
+		if err != nil {
+			return serverapi.NormalizeStreamError(err)
+		}
+		return io.EOF
+	}
+	err := s.projectionDiscontinuityLocked(envelope)
+	live := s.live
+	s.mu.Unlock()
+	if live != nil {
+		live.closeWithError(err)
+	}
+	return err
+}
+
+func (s *SnapshotSubscription) projectionDiscontinuityLocked(envelope attentionEnvelope) error {
+	incomingKey, incomingOK := envelope.occurrence.TaskQuestionBatchKey()
+	if !incomingOK || s.observedTaskBatchKey == nil {
+		panic("attention projection discontinuity requires two task batch keys")
+	}
+	diagnostic := s.invariants.Violation(invariant.AttentionProjectionDiagnostic(invariant.AttentionProjectionDiagnosticInput{
+		Operation:              "attention_snapshot_second_task_batch_key",
+		SessionID:              s.sessionID,
+		SubscriptionGeneration: strconv.FormatUint(s.generation, 10),
+		OpeningWatermark:       strconv.FormatUint(uint64(s.openingOrdinaryWatermark), 10),
+		ObservedTaskBatchKey:   taskQuestionBatchKeyString(*s.observedTaskBatchKey),
+		IncomingTaskBatchKey:   taskQuestionBatchKeyString(incomingKey),
+		EventSource:            string(envelope.event.Source),
+		EventRevision:          attentionEventRevision(envelope.event),
+	}))
+	err := AttentionProjectionDiscontinuity{Diagnostic: diagnostic}
+	s.done = true
+	s.err = err
+	return err
+}
+
+func taskQuestionBatchKeyPointer(key TaskQuestionBatchKey) *TaskQuestionBatchKey {
+	out := key
+	return &out
+}
+
+func taskQuestionBatchKeyString(key TaskQuestionBatchKey) string {
+	return hex.EncodeToString(key[:])
+}
+
+func attentionEventRevision(event clientui.AttentionNotificationEvent) string {
+	if event.Pending == nil {
+		return ""
+	}
+	return strconv.FormatUint(event.Pending.Revision, 10)
 }
 
 func (s *SnapshotSubscription) OpeningOrdinaryWatermark() OrdinaryOccurrenceWatermark {

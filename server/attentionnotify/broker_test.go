@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"core/shared/clientui"
+	"core/shared/invariant"
 	"core/shared/serverapi"
 )
 
@@ -184,6 +185,295 @@ func TestBrokerKeepsOccurrenceMetadataInsideEnvelopes(t *testing.T) {
 	if !ok || !wantOK || key != wantKey {
 		t.Fatalf("snapshot task batch key = %v / %t, want %v / %t", key, ok, wantKey, wantOK)
 	}
+}
+
+func TestBrokerSnapshotSubscriptionSuppressesDelayedOrdinaryOccurrencesAtOpeningWatermark(t *testing.T) {
+	fixture := newBrokerFixture(t, WithBufferSize(1))
+	scope := RoutingScope{Kind: RoutingSessionPrompt, SessionID: "session-1"}
+	snapshotNotification := testSessionPromptNotification("snapshot-ordinary")
+	sub, err := fixture.SubscribeSessionSnapshot("session-1", []SnapshotPendingDescriptor{{
+		Notification: snapshotNotification,
+		Occurrence:   NewOrdinaryOccurrenceMetadata(1),
+	}}, 1)
+	fixture.noError("SubscribeSessionSnapshot", err)
+	_ = fixture.nextSnapshot(sub)
+	_ = fixture.nextSnapshot(sub)
+
+	fixture.noError("PublishPendingWithOccurrence delayed", fixture.PublishPendingWithOccurrence(
+		scope,
+		testSessionPromptNotification("delayed-pending"),
+		NewOrdinaryOccurrenceMetadata(1),
+	))
+	delayedID := attentionNotificationID(clientui.AttentionNotificationKindQuestion, "delayed-resolved")
+	fixture.noError("PublishResolvedWithOccurrence delayed", fixture.PublishResolvedWithOccurrence(
+		scope,
+		delayedID,
+		clientui.AttentionNotificationKindQuestion,
+		testTime(),
+		NewOrdinaryOccurrenceMetadata(1),
+	))
+	fixture.noError("PublishPendingWithOccurrence later", fixture.PublishPendingWithOccurrence(
+		scope,
+		testSessionPromptNotification("later-pending"),
+		NewOrdinaryOccurrenceMetadata(2),
+	))
+
+	event := fixture.nextSnapshot(sub)
+	if event.Type != clientui.AttentionNotificationEventPending || event.Pending == nil || event.Pending.ID.UUID != "later-pending" {
+		t.Fatalf("projected event = %+v, want only later ordinary pending", event)
+	}
+}
+
+func TestBrokerSnapshotSubscriptionInitializesTaskBatchKeyFromSnapshot(t *testing.T) {
+	fixture := newBrokerFixture(t, WithBufferSize(2))
+	scope := RoutingScope{Kind: RoutingWorkflowTask, SessionID: "session-1", TaskID: "task-1"}
+	occurrence := NewTaskQuestionBatchOccurrenceMetadata("batch-1")
+	sub, err := fixture.SubscribeSessionSnapshot("session-1", []SnapshotPendingDescriptor{{
+		Notification: testQuestionNotification("batch-1", 1),
+		Occurrence:   occurrence,
+	}}, 0)
+	fixture.noError("SubscribeSessionSnapshot", err)
+	_ = fixture.nextSnapshot(sub)
+	_ = fixture.nextSnapshot(sub)
+
+	fixture.noError("PublishPendingWithOccurrence", fixture.PublishPendingWithOccurrence(
+		scope,
+		testQuestionNotification("batch-1", 2),
+		occurrence,
+	))
+	id := attentionNotificationID(clientui.AttentionNotificationKindQuestion, "batch-1")
+	fixture.noError("PublishResolvedWithOccurrence", fixture.PublishResolvedWithOccurrence(
+		scope,
+		id,
+		clientui.AttentionNotificationKindQuestion,
+		testTime(),
+		occurrence,
+	))
+
+	event := fixture.nextSnapshot(sub)
+	if event.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(event, id) {
+		t.Fatalf("projected event = %+v, want final task batch resolved", event)
+	}
+	nextOccurrence := NewTaskQuestionBatchOccurrenceMetadata("batch-2")
+	fixture.noError("PublishPendingWithOccurrence after final resolve", fixture.PublishPendingWithOccurrence(
+		scope,
+		testQuestionNotification("batch-2", 1),
+		nextOccurrence,
+	))
+	event = fixture.nextSnapshot(sub)
+	if event.Type != clientui.AttentionNotificationEventPending || event.Pending == nil || event.Pending.ID.UUID != "batch-2" {
+		t.Fatalf("projected event after final task batch resolve = %+v, want new task batch pending", event)
+	}
+}
+
+func TestBrokerSnapshotSubscriptionProjectsFirstLiveTaskBatchOnlyOnceUntilResolved(t *testing.T) {
+	fixture := newBrokerFixture(t, WithBufferSize(1))
+	scope := RoutingScope{Kind: RoutingWorkflowTask, SessionID: "session-1", TaskID: "task-1"}
+	occurrence := NewTaskQuestionBatchOccurrenceMetadata("batch-1")
+	sub, err := fixture.SubscribeSessionSnapshot("session-1", nil, 0)
+	fixture.noError("SubscribeSessionSnapshot", err)
+	_ = fixture.nextSnapshot(sub)
+
+	fixture.noError("PublishPendingWithOccurrence first", fixture.PublishPendingWithOccurrence(
+		scope,
+		testQuestionNotification("batch-1", 7),
+		occurrence,
+	))
+	first := fixture.nextSnapshot(sub)
+	if first.Type != clientui.AttentionNotificationEventPending || first.Pending == nil || first.Pending.Revision != 7 {
+		t.Fatalf("first task batch event = %+v, want revision 7 pending", first)
+	}
+
+	fixture.noError("PublishPendingWithOccurrence duplicate", fixture.PublishPendingWithOccurrence(
+		scope,
+		testQuestionNotification("batch-1", 8),
+		occurrence,
+	))
+	id := attentionNotificationID(clientui.AttentionNotificationKindQuestion, "batch-1")
+	fixture.noError("PublishResolvedWithOccurrence", fixture.PublishResolvedWithOccurrence(
+		scope,
+		id,
+		clientui.AttentionNotificationKindQuestion,
+		testTime(),
+		occurrence,
+	))
+
+	event := fixture.nextSnapshot(sub)
+	if event.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(event, id) {
+		t.Fatalf("projected event = %+v, want final task batch resolved", event)
+	}
+}
+
+func TestBrokerSnapshotSubscriptionClosesWithTypedDiscontinuityForSecondTaskBatchKey(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", string(invariant.ModeDiagnostic))
+	fixture := newBrokerFixture(t, WithBufferSize(2))
+	scope := RoutingScope{Kind: RoutingWorkflowTask, SessionID: "session-1", TaskID: "task-1"}
+	firstKey := NewTaskQuestionBatchOccurrenceMetadata("batch-1")
+	sub, err := fixture.SubscribeSessionSnapshot("session-1", []SnapshotPendingDescriptor{{
+		Notification: testQuestionNotification("batch-1", 7),
+		Occurrence:   firstKey,
+	}}, 3)
+	fixture.noError("SubscribeSessionSnapshot", err)
+	_ = fixture.nextSnapshot(sub)
+	_ = fixture.nextSnapshot(sub)
+
+	secondKey := NewTaskQuestionBatchOccurrenceMetadata("batch-2")
+	fixture.noError("PublishPendingWithOccurrence second", fixture.PublishPendingWithOccurrence(
+		scope,
+		testQuestionNotification("batch-2", 8),
+		secondKey,
+	))
+
+	_, err = sub.Next(context.Background())
+	var discontinuity AttentionProjectionDiscontinuity
+	if !errors.As(err, &discontinuity) {
+		t.Fatalf("Next error = %T %v, want AttentionProjectionDiscontinuity", err, err)
+	}
+	if !errors.Is(err, serverapi.ErrStreamGap) {
+		t.Fatalf("Next error = %v, want ErrStreamGap", err)
+	}
+	if !discontinuity.RequiresSnapshotReopen() {
+		t.Fatal("typed discontinuity did not require a fresh snapshot")
+	}
+	if discontinuity.Diagnostic.Scope != invariant.ScopeAttentionProjection {
+		t.Fatalf("diagnostic scope = %q, want %q", discontinuity.Diagnostic.Scope, invariant.ScopeAttentionProjection)
+	}
+	for _, field := range []invariant.Field{
+		invariant.FieldSessionID,
+		invariant.FieldSubscriptionGeneration,
+		invariant.FieldOpeningWatermark,
+		invariant.FieldObservedTaskBatchKey,
+		invariant.FieldIncomingTaskBatchKey,
+		invariant.FieldAttentionEventSource,
+		invariant.FieldAttentionEventRevision,
+	} {
+		if discontinuity.Diagnostic.Fields[field] == "" {
+			t.Fatalf("diagnostic %q is empty: %+v", field, discontinuity.Diagnostic)
+		}
+	}
+	if discontinuity.Diagnostic.Stack == "" {
+		t.Fatal("typed discontinuity diagnostic has no stack")
+	}
+	fixture.mu.Lock()
+	subscriberCount := len(fixture.subscribers)
+	fixture.mu.Unlock()
+	if subscriberCount != 0 {
+		t.Fatalf("broker subscribers after discontinuity = %d, want 0", subscriberCount)
+	}
+	_, repeatErr := sub.Next(context.Background())
+	if !errors.As(repeatErr, &discontinuity) {
+		t.Fatalf("Next after close error = %T %v, want AttentionProjectionDiscontinuity", repeatErr, repeatErr)
+	}
+}
+
+func TestBrokerSnapshotSubscriptionPanicsForSecondTaskBatchKeyInDebug(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", string(invariant.ModePanic))
+	fixture := newBrokerFixture(t, WithBufferSize(2))
+	scope := RoutingScope{Kind: RoutingWorkflowTask, SessionID: "session-1", TaskID: "task-1"}
+	sub, err := fixture.SubscribeSessionSnapshot("session-1", []SnapshotPendingDescriptor{{
+		Notification: testQuestionNotification("batch-1", 1),
+		Occurrence:   NewTaskQuestionBatchOccurrenceMetadata("batch-1"),
+	}}, 0)
+	fixture.noError("SubscribeSessionSnapshot", err)
+	_ = fixture.nextSnapshot(sub)
+	_ = fixture.nextSnapshot(sub)
+
+	defer func() {
+		recovered := recover()
+		diagnostic, ok := recovered.(invariant.Diagnostic)
+		if !ok {
+			t.Fatalf("panic = %T %v, want invariant.Diagnostic", recovered, recovered)
+		}
+		if diagnostic.Scope != invariant.ScopeAttentionProjection {
+			t.Fatalf("panic diagnostic scope = %q, want %q", diagnostic.Scope, invariant.ScopeAttentionProjection)
+		}
+		if diagnostic.Stack == "" {
+			t.Fatal("panic diagnostic has no stack")
+		}
+		for _, field := range []invariant.Field{
+			invariant.FieldSessionID,
+			invariant.FieldSubscriptionGeneration,
+			invariant.FieldOpeningWatermark,
+			invariant.FieldObservedTaskBatchKey,
+			invariant.FieldIncomingTaskBatchKey,
+			invariant.FieldAttentionEventSource,
+			invariant.FieldAttentionEventRevision,
+		} {
+			if diagnostic.Fields[field] == "" {
+				t.Fatalf("panic diagnostic %q is empty: %+v", field, diagnostic)
+			}
+		}
+	}()
+	fixture.noError("PublishPendingWithOccurrence second", fixture.PublishPendingWithOccurrence(
+		scope,
+		testQuestionNotification("batch-2", 2),
+		NewTaskQuestionBatchOccurrenceMetadata("batch-2"),
+	))
+}
+
+func TestBrokerSnapshotSubscriptionClosesWithTypedDiscontinuityForConflictingSnapshotTaskKeys(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", string(invariant.ModeDiagnostic))
+	fixture := newBrokerFixture(t)
+	sub, err := fixture.SubscribeSessionSnapshot("session-1", []SnapshotPendingDescriptor{
+		{
+			Notification: testQuestionNotification("batch-1", 1),
+			Occurrence:   NewTaskQuestionBatchOccurrenceMetadata("batch-1"),
+		},
+		{
+			Notification: testQuestionNotification("batch-2", 2),
+			Occurrence:   NewTaskQuestionBatchOccurrenceMetadata("batch-2"),
+		},
+	}, 4)
+	fixture.noError("SubscribeSessionSnapshot", err)
+
+	_, err = sub.Next(context.Background())
+	var discontinuity AttentionProjectionDiscontinuity
+	if !errors.As(err, &discontinuity) {
+		t.Fatalf("Next error = %T %v, want AttentionProjectionDiscontinuity", err, err)
+	}
+	if discontinuity.Diagnostic.Fields[invariant.FieldAttentionEventSource] != string(clientui.AttentionNotificationSourceSnapshot) {
+		t.Fatalf("snapshot conflict source = %q, want %q", discontinuity.Diagnostic.Fields[invariant.FieldAttentionEventSource], clientui.AttentionNotificationSourceSnapshot)
+	}
+	if discontinuity.Diagnostic.Fields[invariant.FieldAttentionEventRevision] != "2" {
+		t.Fatalf("snapshot conflict revision = %q, want 2", discontinuity.Diagnostic.Fields[invariant.FieldAttentionEventRevision])
+	}
+	fixture.mu.Lock()
+	subscriberCount := len(fixture.subscribers)
+	fixture.mu.Unlock()
+	if subscriberCount != 0 {
+		t.Fatalf("broker subscribers after snapshot conflict = %d, want 0", subscriberCount)
+	}
+}
+
+func TestBrokerSnapshotSubscriptionPanicsForConflictingSnapshotTaskKeysInDebug(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", string(invariant.ModePanic))
+	fixture := newBrokerFixture(t)
+	defer func() {
+		recovered := recover()
+		diagnostic, ok := recovered.(invariant.Diagnostic)
+		if !ok {
+			t.Fatalf("panic = %T %v, want invariant.Diagnostic", recovered, recovered)
+		}
+		if diagnostic.Scope != invariant.ScopeAttentionProjection {
+			t.Fatalf("panic diagnostic scope = %q, want %q", diagnostic.Scope, invariant.ScopeAttentionProjection)
+		}
+		if diagnostic.Fields[invariant.FieldAttentionEventSource] != string(clientui.AttentionNotificationSourceSnapshot) {
+			t.Fatalf("panic snapshot conflict source = %q, want %q", diagnostic.Fields[invariant.FieldAttentionEventSource], clientui.AttentionNotificationSourceSnapshot)
+		}
+		if diagnostic.Stack == "" {
+			t.Fatal("panic diagnostic has no stack")
+		}
+	}()
+	_, _ = fixture.SubscribeSessionSnapshot("session-1", []SnapshotPendingDescriptor{
+		{
+			Notification: testQuestionNotification("batch-1", 1),
+			Occurrence:   NewTaskQuestionBatchOccurrenceMetadata("batch-1"),
+		},
+		{
+			Notification: testQuestionNotification("batch-2", 2),
+			Occurrence:   NewTaskQuestionBatchOccurrenceMetadata("batch-2"),
+		},
+	}, 0)
 }
 
 func TestQuestionBatchTrackerPublishesMaterializedUpdatesAndResolvesAfterClears(t *testing.T) {

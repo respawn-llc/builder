@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -327,6 +328,227 @@ func TestRuntimeRegistrySessionAttentionSnapshotCapturesOpeningOrdinaryWatermark
 	}
 }
 
+func TestRuntimeRegistrySessionAttentionSnapshotSuppressesDelayedOrdinaryPublication(t *testing.T) {
+	tests := []struct {
+		name string
+		req  askquestion.AskQuestionRequest
+	}{
+		{name: "question", req: ordinaryAttentionRequest("question-1", false)},
+		{name: "approval", req: ordinaryAttentionRequest("approval-1", true)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			broker := attentionnotify.NewBroker(attentionnotify.WithBufferSize(4))
+			registry := NewRuntimeRegistry().WithAttentionNotifications(broker)
+			engine := &runtime.Engine{}
+			registerReady(t, registry, "session-1", engine)
+			t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
+			entry := registry.directory.Entry("session-1")
+			if entry == nil {
+				t.Fatal("runtime entry is unavailable")
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			publishStarted := make(chan struct{})
+			releasePublish := make(chan struct{})
+			published := make(chan struct{})
+			awaitDone := make(chan error, 1)
+			go func() {
+				_, err := entry.pendingPrompts.Await(ctx, test.req, func(snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
+					switch eventType {
+					case pendingPromptEventPending:
+						close(publishStarted)
+						<-releasePublish
+						registry.publishAttentionPending("session-1", snapshot)
+						close(published)
+					case pendingPromptEventResolved:
+						registry.publishAttentionResolved("session-1", snapshot)
+					}
+				})
+				awaitDone <- err
+			}()
+			waitForPendingPromptSignal(t, publishStarted, "timed out waiting for delayed ordinary publication")
+
+			sub, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{
+				SessionID:                    "session-1",
+				IncludePendingPromptSnapshot: true,
+			})
+			if err != nil {
+				t.Fatalf("SubscribeSessionAttentionNotifications: %v", err)
+			}
+			t.Cleanup(func() { _ = sub.Close() })
+			close(releasePublish)
+			waitForPendingPromptSignal(t, published, "timed out waiting for delayed ordinary publication")
+
+			snapshot := nextRegistryAttentionEvent(t, sub)
+			if snapshot.Source != clientui.AttentionNotificationSourceSnapshot ||
+				snapshot.Type != clientui.AttentionNotificationEventPending ||
+				snapshot.Pending == nil ||
+				snapshot.Pending.ID.UUID != test.req.ID {
+				t.Fatalf("snapshot pending = %+v", snapshot)
+			}
+			if complete := nextRegistryAttentionEvent(t, sub); complete.Type != clientui.AttentionNotificationEventSnapshotComplete {
+				t.Fatalf("snapshot complete = %+v", complete)
+			}
+			requireNoRegistryAttentionEvent(t, sub, "delayed ordinary publication duplicated the snapshot")
+
+			_ = sub.Close()
+			cancel()
+			if err := <-awaitDone; !errors.Is(err, context.Canceled) {
+				t.Fatalf("Await error = %v, want context.Canceled", err)
+			}
+		})
+	}
+}
+
+func TestRuntimeRegistrySessionAttentionSnapshotDeliversOrdinaryPublicationAfterCapture(t *testing.T) {
+	tests := []struct {
+		name string
+		req  askquestion.AskQuestionRequest
+	}{
+		{name: "question", req: ordinaryAttentionRequest("question-1", false)},
+		{name: "approval", req: ordinaryAttentionRequest("approval-1", true)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			broker := attentionnotify.NewBroker(attentionnotify.WithBufferSize(4))
+			registry := NewRuntimeRegistry().WithAttentionNotifications(broker)
+			engine := &runtime.Engine{}
+			registerReady(t, registry, "session-1", engine)
+			t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
+			entry := registry.directory.Entry("session-1")
+			if entry == nil {
+				t.Fatal("runtime entry is unavailable")
+			}
+
+			insertStarted := make(chan struct{})
+			inserted := make(chan struct{})
+			var sub serverapi.AttentionNotificationSubscription
+			_, err := entry.pendingPrompts.WithLockedAttentionSnapshotResult(func(snapshot pendingAttentionSnapshot) (serverapi.AttentionNotificationSubscription, error) {
+				descriptors, err := registry.attentionSnapshotDescriptors("session-1", snapshot.items)
+				if err != nil {
+					return nil, err
+				}
+				sub, err = broker.SubscribeSessionSnapshot("session-1", descriptors, snapshot.ordinaryOccurrenceWatermark)
+				if err != nil {
+					return nil, err
+				}
+				go func() {
+					close(insertStarted)
+					entry.pendingPrompts.Begin(test.req, func(pending PendingPromptSnapshot, eventType pendingPromptEventType) {
+						if eventType == pendingPromptEventPending {
+							registry.publishAttentionPending("session-1", pending)
+						}
+					})
+					close(inserted)
+				}()
+				waitForPendingPromptSignal(t, insertStarted, "timed out starting ordinary insertion")
+				select {
+				case <-inserted:
+					t.Fatal("ordinary insertion completed while snapshot capture lock was held")
+				case <-time.After(10 * time.Millisecond):
+				}
+				return sub, nil
+			})
+			if err != nil {
+				t.Fatalf("WithLockedAttentionSnapshotResult: %v", err)
+			}
+			t.Cleanup(func() { _ = sub.Close() })
+			waitForPendingPromptSignal(t, inserted, "timed out waiting for ordinary insertion")
+
+			if complete := nextRegistryAttentionEvent(t, sub); complete.Type != clientui.AttentionNotificationEventSnapshotComplete {
+				t.Fatalf("snapshot complete = %+v", complete)
+			}
+			live := nextRegistryAttentionEvent(t, sub)
+			if live.Source != clientui.AttentionNotificationSourceLive ||
+				live.Type != clientui.AttentionNotificationEventPending ||
+				live.Pending == nil ||
+				live.Pending.ID.UUID != test.req.ID {
+				t.Fatalf("live ordinary publication = %+v", live)
+			}
+			requireNoRegistryAttentionEvent(t, sub, "ordinary publication was delivered more than once")
+		})
+	}
+}
+
+func TestRuntimeRegistrySessionAttentionSnapshotProjectsSerializedTaskBatchPerAttachment(t *testing.T) {
+	broker := attentionnotify.NewBroker(attentionnotify.WithBufferSize(8))
+	registry := NewRuntimeRegistry().WithAttentionNotifications(broker)
+	engine := &runtime.Engine{}
+	registerReady(t, registry, "session-1", engine)
+	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
+
+	existing, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{
+		SessionID:                    "session-1",
+		IncludePendingPromptSnapshot: true,
+	})
+	if err != nil {
+		t.Fatalf("SubscribeSessionAttentionNotifications existing: %v", err)
+	}
+	t.Cleanup(func() { _ = existing.Close() })
+	if complete := nextRegistryAttentionEvent(t, existing); complete.Type != clientui.AttentionNotificationEventSnapshotComplete {
+		t.Fatalf("existing snapshot complete = %+v", complete)
+	}
+
+	first := taskBatchAskRequest("ask-1")
+	firstDone := awaitRegistryPrompt(t, registry, first)
+	firstPending := nextRegistryAttentionEvent(t, existing)
+	if firstPending.Source != clientui.AttentionNotificationSourceLive ||
+		firstPending.Pending == nil ||
+		firstPending.Pending.Revision != 1 {
+		t.Fatalf("first task batch pending = %+v", firstPending)
+	}
+	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{RequestID: "ask-1", Answer: "yes"}, nil); err != nil {
+		t.Fatalf("SubmitPromptResponse ask-1: %v", err)
+	}
+	if err := <-firstDone; err != nil {
+		t.Fatalf("AwaitPromptResponse ask-1: %v", err)
+	}
+	registry.MarkTaskQuestionCleared(*first.QuestionBatch, "ask-1")
+
+	duringGap, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{
+		SessionID:                    "session-1",
+		IncludePendingPromptSnapshot: true,
+	})
+	if err != nil {
+		t.Fatalf("SubscribeSessionAttentionNotifications during gap: %v", err)
+	}
+	t.Cleanup(func() { _ = duringGap.Close() })
+	if complete := nextRegistryAttentionEvent(t, duringGap); complete.Type != clientui.AttentionNotificationEventSnapshotComplete {
+		t.Fatalf("gap snapshot complete = %+v", complete)
+	}
+
+	second := taskBatchAskRequest("ask-2")
+	secondDone := awaitRegistryPrompt(t, registry, second)
+	secondPending := nextRegistryAttentionEvent(t, duringGap)
+	if secondPending.Source != clientui.AttentionNotificationSourceLive ||
+		secondPending.Pending == nil ||
+		secondPending.Pending.Revision <= firstPending.Pending.Revision {
+		t.Fatalf("gap attachment task batch pending = %+v", secondPending)
+	}
+	requireNoRegistryAttentionEvent(t, existing, "existing attachment repeated the serialized task batch")
+
+	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{RequestID: "ask-2", Answer: "yes"}, nil); err != nil {
+		t.Fatalf("SubmitPromptResponse ask-2: %v", err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("AwaitPromptResponse ask-2: %v", err)
+	}
+	registry.MarkTaskQuestionCleared(*second.QuestionBatch, "ask-2")
+
+	for name, sub := range map[string]serverapi.AttentionNotificationSubscription{
+		"existing":   existing,
+		"during_gap": duringGap,
+	} {
+		resolved := nextRegistryAttentionEvent(t, sub)
+		if resolved.Type != clientui.AttentionNotificationEventResolved ||
+			!attentionNotificationEventIDMatches(resolved, attentionNotificationID(clientui.AttentionNotificationKindQuestion, "batch-1")) {
+			t.Fatalf("%s task batch resolved = %+v", name, resolved)
+		}
+	}
+}
+
 func TestRuntimeRegistrySessionAttentionSnapshotPreservesTaskQuestionBatch(t *testing.T) {
 	broker := attentionnotify.NewBroker()
 	registry := NewRuntimeRegistry().WithAttentionNotifications(broker)
@@ -379,11 +601,47 @@ func nextRegistryAttentionEvent(t *testing.T, sub serverapi.AttentionNotificatio
 	return event
 }
 
+func requireNoRegistryAttentionEvent(t *testing.T, sub serverapi.AttentionNotificationSubscription, failure string) {
+	t.Helper()
+	event, err := sub.Next(shortRegistryContext(t))
+	if err == nil {
+		t.Fatalf("%s: %+v", failure, event)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("%s: Next error = %v, want context deadline", failure, err)
+	}
+}
+
+func awaitRegistryPrompt(t *testing.T, registry *RuntimeRegistry, req askquestion.AskQuestionRequest) <-chan error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() {
+		_, err := registry.AwaitPromptResponse(context.Background(), "session-1", req)
+		done <- err
+	}()
+	return done
+}
+
 func shortRegistryContext(t *testing.T) context.Context {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	t.Cleanup(cancel)
 	return ctx
+}
+
+func ordinaryAttentionRequest(id string, approval bool) askquestion.AskQuestionRequest {
+	req := askquestion.AskQuestionRequest{
+		ID:       id,
+		Question: "Proceed?",
+	}
+	if approval {
+		req.Approval = true
+		req.ApprovalOptions = []askquestion.AskQuestionApprovalOption{
+			{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
+			{Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"},
+		}
+	}
+	return req
 }
 
 func attentionNotificationID(kind clientui.AttentionNotificationKind, uuid string) clientui.AttentionNotificationID {

@@ -96,7 +96,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, err
 	}
 	storeOptions := metadataStore.AuthoritativeSessionStoreOptions()
-	attentionBroker := attentionnotify.NewBroker()
+	attentionBroker := attentionnotify.NewBroker(attentionnotify.WithAttentionProjectionInvariantPanic(cfg.Settings.Debug))
 	runtimeRegistry := registry.NewRuntimeRegistry().WithAttentionNotifications(attentionBroker)
 	runtimeRegistry.WithTranscriptContractViolationPanic(cfg.Settings.Debug)
 	var workflowScheduler *workflowrunner.SchedulerService
