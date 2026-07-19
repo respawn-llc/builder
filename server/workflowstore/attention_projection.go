@@ -36,44 +36,44 @@ func (s *Store) PendingApprovalTransitionProjection(ctx context.Context, transit
 	if err != nil {
 		return ApprovalTransitionProjection{}, false, err
 	}
-	taskID, err := requiredAttentionCandidateString(row, "task_id", row.TaskID)
+	projection, err := approvalTransitionProjectionFromCandidate(row, id)
 	if err != nil {
 		return ApprovalTransitionProjection{}, false, err
+	}
+	return projection, true, nil
+}
+
+func approvalTransitionProjectionFromCandidate(row sqlitegen.WorkflowAttentionCandidate, transitionID string) (ApprovalTransitionProjection, error) {
+	taskID, err := requiredAttentionCandidateString(row, "task_id", row.TaskID)
+	if err != nil {
+		return ApprovalTransitionProjection{}, err
 	}
 	taskShortID, err := requiredAttentionCandidateString(row, "short_id", row.ShortID)
 	if err != nil {
-		return ApprovalTransitionProjection{}, false, err
+		return ApprovalTransitionProjection{}, err
 	}
 	taskTitle, err := requiredAttentionCandidateString(row, "title", row.Title)
 	if err != nil {
-		return ApprovalTransitionProjection{}, false, err
-	}
-	sourceRunID, err := requiredAttentionCandidateString(row, "run_id", row.RunID)
-	if err != nil {
-		return ApprovalTransitionProjection{}, false, err
-	}
-	sessionID, err := requiredAttentionCandidateString(row, "session_id", row.SessionID)
-	if err != nil {
-		return ApprovalTransitionProjection{}, false, err
+		return ApprovalTransitionProjection{}, err
 	}
 	candidateTransitionID, err := requiredAttentionCandidateString(row, "task_transition_id", row.TaskTransitionID)
 	if err != nil {
-		return ApprovalTransitionProjection{}, false, err
+		return ApprovalTransitionProjection{}, err
 	}
-	if candidateTransitionID != id {
-		return ApprovalTransitionProjection{}, false, fmt.Errorf("workflow attention candidate invariant violated: kind=%q id=%q task_transition_id=%q, want %q", row.Kind, row.ID, candidateTransitionID, id)
+	if candidateTransitionID != transitionID {
+		return ApprovalTransitionProjection{}, fmt.Errorf("workflow attention candidate invariant violated: kind=%q id=%q task_transition_id=%q, want %q", row.Kind, row.ID, candidateTransitionID, transitionID)
 	}
 	return ApprovalTransitionProjection{
-		TransitionID:     transitionID,
+		TransitionID:     workflow.TransitionID(transitionID),
 		ProjectID:        row.ProjectID,
 		WorkflowID:       row.WorkflowID,
 		TaskID:           workflow.TaskID(taskID),
 		TaskShortID:      taskShortID,
 		TaskTitle:        taskTitle,
-		SourceRunID:      workflow.RunID(sourceRunID),
-		SessionID:        sessionID,
+		SourceRunID:      workflow.RunID(optionalAttentionCandidateValue(row.RunID)),
+		SessionID:        optionalAttentionCandidateValue(row.SessionID),
 		OccurredAtUnixMs: row.OccurredAtUnixMs,
-	}, true, nil
+	}, nil
 }
 
 func (s *Store) PendingInterruptedRunAttentionProjection(ctx context.Context, runID workflow.RunID) (InterruptedRunAttentionProjection, bool, error) {
@@ -88,32 +88,36 @@ func (s *Store) PendingInterruptedRunAttentionProjection(ctx context.Context, ru
 	if err != nil {
 		return InterruptedRunAttentionProjection{}, false, err
 	}
-	taskID, err := requiredAttentionCandidateString(row, "task_id", row.TaskID)
+	projection, err := interruptedRunAttentionProjectionFromCandidate(row, id)
 	if err != nil {
 		return InterruptedRunAttentionProjection{}, false, err
+	}
+	return projection, true, nil
+}
+
+func interruptedRunAttentionProjectionFromCandidate(row sqlitegen.WorkflowAttentionCandidate, runID string) (InterruptedRunAttentionProjection, error) {
+	taskID, err := requiredAttentionCandidateString(row, "task_id", row.TaskID)
+	if err != nil {
+		return InterruptedRunAttentionProjection{}, err
 	}
 	taskShortID, err := requiredAttentionCandidateString(row, "short_id", row.ShortID)
 	if err != nil {
-		return InterruptedRunAttentionProjection{}, false, err
+		return InterruptedRunAttentionProjection{}, err
 	}
 	taskTitle, err := requiredAttentionCandidateString(row, "title", row.Title)
 	if err != nil {
-		return InterruptedRunAttentionProjection{}, false, err
+		return InterruptedRunAttentionProjection{}, err
 	}
 	candidateRunID, err := requiredAttentionCandidateString(row, "run_id", row.RunID)
 	if err != nil {
-		return InterruptedRunAttentionProjection{}, false, err
+		return InterruptedRunAttentionProjection{}, err
 	}
-	if candidateRunID != id {
-		return InterruptedRunAttentionProjection{}, false, fmt.Errorf("workflow attention candidate invariant violated: kind=%q id=%q run_id=%q, want %q", row.Kind, row.ID, candidateRunID, id)
-	}
-	sessionID, err := requiredAttentionCandidateString(row, "session_id", row.SessionID)
-	if err != nil {
-		return InterruptedRunAttentionProjection{}, false, err
+	if candidateRunID != runID {
+		return InterruptedRunAttentionProjection{}, fmt.Errorf("workflow attention candidate invariant violated: kind=%q id=%q run_id=%q, want %q", row.Kind, row.ID, candidateRunID, runID)
 	}
 	reason, err := requiredAttentionCandidateString(row, "interruption_reason", row.InterruptionReason)
 	if err != nil {
-		return InterruptedRunAttentionProjection{}, false, err
+		return InterruptedRunAttentionProjection{}, err
 	}
 	return InterruptedRunAttentionProjection{
 		ProjectID:              row.ProjectID,
@@ -121,12 +125,45 @@ func (s *Store) PendingInterruptedRunAttentionProjection(ctx context.Context, ru
 		TaskID:                 workflow.TaskID(taskID),
 		TaskShortID:            taskShortID,
 		TaskTitle:              taskTitle,
-		RunID:                  runID,
-		SessionID:              sessionID,
+		RunID:                  workflow.RunID(runID),
+		SessionID:              optionalAttentionCandidateValue(row.SessionID),
 		InterruptionReason:     reason,
 		InterruptionDetailJSON: optionalAttentionCandidateString(row.InterruptionDetailJson),
 		OccurredAtUnixMs:       row.OccurredAtUnixMs,
-	}, true, nil
+	}, nil
+}
+
+func taskAttentionResolution(ctx context.Context, q *sqlitegen.Queries, taskID string) (TaskAttentionResolution, error) {
+	rows, err := q.ListWorkflowTaskAttentionCandidates(ctx, taskID)
+	if err != nil {
+		return TaskAttentionResolution{}, err
+	}
+	var resolution TaskAttentionResolution
+	for _, row := range rows {
+		switch row.Kind {
+		case "approval":
+			transitionID, err := requiredAttentionCandidateString(row, "task_transition_id", row.TaskTransitionID)
+			if err != nil {
+				return TaskAttentionResolution{}, err
+			}
+			projection, err := approvalTransitionProjectionFromCandidate(row, transitionID)
+			if err != nil {
+				return TaskAttentionResolution{}, err
+			}
+			resolution.ResolvedApprovalTransitionProjections = append(resolution.ResolvedApprovalTransitionProjections, projection)
+		case "interrupted_run":
+			runID, err := requiredAttentionCandidateString(row, "run_id", row.RunID)
+			if err != nil {
+				return TaskAttentionResolution{}, err
+			}
+			projection, err := interruptedRunAttentionProjectionFromCandidate(row, runID)
+			if err != nil {
+				return TaskAttentionResolution{}, err
+			}
+			resolution.ResolvedInterruptedRunProjections = append(resolution.ResolvedInterruptedRunProjections, projection)
+		}
+	}
+	return resolution, nil
 }
 
 func requiredAttentionCandidateString(row sqlitegen.WorkflowAttentionCandidate, field string, value sql.NullString) (string, error) {
@@ -142,4 +179,11 @@ func optionalAttentionCandidateString(value sql.NullString) *string {
 	}
 	out := value.String
 	return &out
+}
+
+func optionalAttentionCandidateValue(value sql.NullString) string {
+	if !value.Valid {
+		return ""
+	}
+	return value.String
 }

@@ -1250,7 +1250,7 @@ func TestBoardNodeCardsArchiveCanceledTaskInDoneNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	if err := workflowStore.CancelTask(ctx, task.ID, "stop"); err != nil {
+	if _, err := workflowStore.CancelTask(ctx, task.ID, "stop"); err != nil {
 		t.Fatalf("CancelTask: %v", err)
 	}
 	forceCanceledBacklogPlacementWithoutTerminal(t, ctx, store, task.ID, workflowID)
@@ -1397,7 +1397,7 @@ func TestBoardNodeCardsDoNotArchiveCanceledTaskInAlternateTerminalNode(t *testin
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	if err := workflowStore.CancelTask(ctx, task.ID, "stop"); err != nil {
+	if _, err := workflowStore.CancelTask(ctx, task.ID, "stop"); err != nil {
 		t.Fatalf("CancelTask: %v", err)
 	}
 	forceCanceledBacklogPlacementWithoutTerminal(t, ctx, store, task.ID, workflowID)
@@ -1536,7 +1536,7 @@ func TestTaskDetailProjectsCancellationAndInterruptedRun(t *testing.T) {
 	if _, err := workflowStore.StartTask(ctx, task.ID); err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
-	if err := workflowStore.CancelTask(ctx, task.ID, "stop"); err != nil {
+	if _, err := workflowStore.CancelTask(ctx, task.ID, "stop"); err != nil {
 		t.Fatalf("CancelTask: %v", err)
 	}
 	detail, err := view.GetTask(ctx, string(task.ID))
@@ -1779,7 +1779,7 @@ func TestTaskDetailAndBoardUseCanonicalPrimaryStatusPrecedence(t *testing.T) {
 	if _, err := workflowStore.StartTask(ctx, canceled.ID); err != nil {
 		t.Fatalf("StartTask canceled: %v", err)
 	}
-	if err := workflowStore.CancelTask(ctx, canceled.ID, "stop"); err != nil {
+	if _, err := workflowStore.CancelTask(ctx, canceled.ID, "stop"); err != nil {
 		t.Fatalf("CancelTask: %v", err)
 	}
 
@@ -2182,7 +2182,7 @@ func TestTaskActivityListMergesDurableTaskEventsAndPaginatesStably(t *testing.T)
 	if err := workflowStore.InterruptRunGeneration(ctx, started.RunID, claimed.Generation, "manual", "{}"); err != nil {
 		t.Fatalf("InterruptRunGeneration: %v", err)
 	}
-	if err := workflowStore.CancelTask(ctx, task.ID, "stop"); err != nil {
+	if _, err := workflowStore.CancelTask(ctx, task.ID, "stop"); err != nil {
 		t.Fatalf("CancelTask: %v", err)
 	}
 	if _, err := store.DB().ExecContext(ctx, `UPDATE task_comments SET updated_at_unix_ms = 111 WHERE id = ?`, comment.ID); err != nil {

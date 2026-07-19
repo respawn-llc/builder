@@ -153,7 +153,7 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 	if _, err := workflowStore.StartTask(ctx, canceled.ID); err != nil {
 		t.Fatalf("StartTask canceled: %v", err)
 	}
-	if err := workflowStore.CancelTask(ctx, canceled.ID, "stop"); err != nil {
+	if _, err := workflowStore.CancelTask(ctx, canceled.ID, "stop"); err != nil {
 		t.Fatalf("CancelTask: %v", err)
 	}
 	forceCanceledBacklogPlacementWithoutTerminal(t, ctx, store, canceled.ID, workflowID)
@@ -246,7 +246,7 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 		}
 	}
 	for _, taskID := range []workflow.TaskID{approval.ID, question.ID, interrupted.ID} {
-		if err := workflowStore.CancelTask(ctx, taskID, "stop"); err != nil {
+		if _, err := workflowStore.CancelTask(ctx, taskID, "stop"); err != nil {
 			t.Fatalf("CancelTask %s: %v", taskID, err)
 		}
 		detail := mustTaskDetail(t, view, ctx, string(taskID))

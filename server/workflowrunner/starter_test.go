@@ -516,7 +516,7 @@ func TestWorkflowRuntimeStarterCancelTaskRunsStopsLiveRuntimeAfterTaskCancel(t *
 		t.Fatalf("Process: %v", err)
 	}
 	client.waitForCall(t)
-	if err := fixture.store.CancelTask(context.Background(), task.ID, "test cancel"); err != nil {
+	if _, err := fixture.store.CancelTask(context.Background(), task.ID, "test cancel"); err != nil {
 		t.Fatalf("CancelTask: %v", err)
 	}
 	if err := fixture.starter.CancelTaskRuns(context.Background(), task.ID); err != nil {
@@ -1551,10 +1551,10 @@ func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResumeTaskRuns: %v", err)
 	}
-	if len(resumedRuns) != 1 {
+	if len(resumedRuns.Runs) != 1 {
 		t.Fatalf("resumed runs = %+v, want one", resumedRuns)
 	}
-	resumed := resumedRuns[0]
+	resumed := resumedRuns.Runs[0]
 	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
 		t.Fatalf("Process resumed: %v", err)
 	}

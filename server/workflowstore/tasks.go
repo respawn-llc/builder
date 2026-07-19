@@ -119,6 +119,26 @@ type CompleteRunResult struct {
 	ResolvedInterruptedRunProjections     []InterruptedRunAttentionProjection
 }
 
+type TaskAttentionResolution struct {
+	ResolvedApprovalTransitionProjections []ApprovalTransitionProjection
+	ResolvedInterruptedRunProjections     []InterruptedRunAttentionProjection
+}
+
+type CancelTaskResult struct {
+	TaskRecord
+	TaskAttentionResolution
+}
+
+type DeleteTaskResult struct {
+	TaskRecord
+	TaskAttentionResolution
+}
+
+type ResumeTaskRunsResult struct {
+	Runs []RunRecord
+	TaskAttentionResolution
+}
+
 type ManualMoveRequest struct {
 	TaskID           workflow.TaskID
 	TargetNodeID     workflow.NodeID
@@ -294,35 +314,43 @@ func (s *Store) UpdateTask(ctx context.Context, req UpdateTaskRequest) (TaskReco
 	return taskRecordFromTask(row)
 }
 
-func (s *Store) DeleteTask(ctx context.Context, taskID workflow.TaskID) (TaskRecord, error) {
+func (s *Store) DeleteTask(ctx context.Context, taskID workflow.TaskID) (DeleteTaskResult, error) {
 	trimmedTaskID := strings.TrimSpace(string(taskID))
 	if trimmedTaskID == "" {
-		return TaskRecord{}, errors.New("task id is required")
+		return DeleteTaskResult{}, errors.New("task id is required")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return TaskRecord{}, err
+		return DeleteTaskResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
 	task, err := q.GetTask(ctx, trimmedTaskID)
 	if err != nil {
-		return TaskRecord{}, err
+		return DeleteTaskResult{}, err
+	}
+	taskRecord, err := taskRecordFromTask(task)
+	if err != nil {
+		return DeleteTaskResult{}, err
+	}
+	resolution, err := taskAttentionResolution(ctx, q, trimmedTaskID)
+	if err != nil {
+		return DeleteTaskResult{}, err
 	}
 	if err := deleteTaskScopedChildren(ctx, q, trimmedTaskID); err != nil {
-		return TaskRecord{}, err
+		return DeleteTaskResult{}, err
 	}
 	deleted, err := q.DeleteTask(ctx, trimmedTaskID)
 	if err != nil {
-		return TaskRecord{}, err
+		return DeleteTaskResult{}, err
 	}
 	if deleted != 1 {
-		return TaskRecord{}, sql.ErrNoRows
+		return DeleteTaskResult{}, sql.ErrNoRows
 	}
 	if err := tx.Commit(); err != nil {
-		return TaskRecord{}, err
+		return DeleteTaskResult{}, err
 	}
-	return taskRecordFromTask(task)
+	return DeleteTaskResult{TaskRecord: taskRecord, TaskAttentionResolution: resolution}, nil
 }
 
 func deleteTaskScopedChildren(ctx context.Context, q *sqlitegen.Queries, taskID string) error {
@@ -839,37 +867,45 @@ func transitionGroupRequiresApproval(group transitionContractSnapshot) bool {
 	return false
 }
 
-func (s *Store) CancelTask(ctx context.Context, taskID workflow.TaskID, reason string) error {
+func (s *Store) CancelTask(ctx context.Context, taskID workflow.TaskID, reason string) (CancelTaskResult, error) {
 	task, err := s.queries.GetTask(ctx, string(taskID))
 	if err != nil {
-		return err
+		return CancelTaskResult{}, err
+	}
+	taskRecord, err := taskRecordFromTask(task)
+	if err != nil {
+		return CancelTaskResult{}, err
 	}
 	def, _, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
 	if err != nil {
-		return err
+		return CancelTaskResult{}, err
 	}
 	terminal, err := terminalNode(def)
 	if err != nil {
-		return err
+		return CancelTaskResult{}, err
 	}
 	now := s.now().UnixMilli()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return CancelTaskResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	resolution, err := taskAttentionResolution(ctx, q, string(taskID))
+	if err != nil {
+		return CancelTaskResult{}, err
+	}
 	if updated, err := q.CancelTask(ctx, sqlitegen.CancelTaskParams{ID: string(taskID), CanceledAtUnixMs: sql.NullInt64{Int64: now, Valid: true}, CancellationReason: nullableString(strings.TrimSpace(reason)), UpdatedAtUnixMs: now}); err != nil {
-		return err
+		return CancelTaskResult{}, err
 	} else if updated != 1 {
-		return sql.ErrNoRows
+		return CancelTaskResult{}, sql.ErrNoRows
 	}
 	if _, err := q.InterruptActiveTaskRuns(ctx, sqlitegen.InterruptActiveTaskRunsParams{TaskID: string(taskID), UpdatedAtUnixMs: now, InterruptedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}, InterruptionReason: nullableString("task_canceled"), InterruptionDetailJson: "{}"}); err != nil {
-		return err
+		return CancelTaskResult{}, err
 	}
 	placements, err := q.ListTaskNodePlacements(ctx, string(taskID))
 	if err != nil {
-		return err
+		return CancelTaskResult{}, err
 	}
 	hasTerminalPlacement := false
 	for _, placement := range placements {
@@ -881,15 +917,18 @@ func (s *Store) CancelTask(ctx context.Context, taskID workflow.TaskID, reason s
 			continue
 		}
 		if _, err := q.UpdateTaskNodePlacementState(ctx, sqlitegen.UpdateTaskNodePlacementStateParams{ID: placement.ID, State: "completed", UpdatedAtUnixMs: now}); err != nil {
-			return err
+			return CancelTaskResult{}, err
 		}
 	}
 	if !hasTerminalPlacement {
 		if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: prefixedID("placement"), TaskID: string(taskID), NodeID: nullableString(string(workflow.NodeIDOf(terminal))), State: "active", CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
-			return err
+			return CancelTaskResult{}, err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return CancelTaskResult{}, err
+	}
+	return CancelTaskResult{TaskRecord: taskRecord, TaskAttentionResolution: resolution}, nil
 }
 
 func (s *Store) ListPlacements(ctx context.Context, taskID workflow.TaskID) ([]PlacementRecord, error) {

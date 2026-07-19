@@ -972,14 +972,14 @@ func (s *Service) ResumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
-	s.resolveWorkflowInterruptedRunAttention(ctx, runIDsFromRecords(resumed))
+	s.finalizeTaskAttentionResolution(ctx, resumed.TaskAttentionResolution)
 	if s.schedulerWake != nil {
 		s.schedulerWake.Notify()
 	}
 	if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "resumed", req.TaskID)
 	}
-	return serverapi.WorkflowTaskResumeResponse{Runs: workflowTaskRunSummaries(resumed)}, nil
+	return serverapi.WorkflowTaskResumeResponse{Runs: workflowTaskRunSummaries(resumed.Runs)}, nil
 }
 
 type TaskAutomationStartRequest struct {
@@ -1242,16 +1242,11 @@ func (s *Service) CancelWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if reason == "" {
 		reason = "user_canceled"
 	}
-	pendingApprovals, err := s.pendingApprovalTransitionIDs(ctx, workflow.TaskID(req.TaskID))
+	result, err := s.store.CancelTask(ctx, workflow.TaskID(req.TaskID), reason)
 	if err != nil {
 		return err
 	}
-	interruptedRunIDs := s.workflowInterruptedRunAttentionIDs(ctx, workflow.TaskID(req.TaskID))
-	if err := s.store.CancelTask(ctx, workflow.TaskID(req.TaskID), reason); err != nil {
-		return err
-	}
-	s.resolveActiveWorkflowApprovalAttention(ctx, pendingApprovals)
-	s.resolveWorkflowInterruptedRunAttention(ctx, interruptedRunIDs)
+	s.finalizeTaskAttentionResolution(ctx, result.TaskAttentionResolution)
 	if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "canceled", req.TaskID)
 	}
@@ -1274,11 +1269,6 @@ func (s *Service) DeleteWorkflowTask(ctx context.Context, req serverapi.Workflow
 			return err
 		}
 	}
-	pendingApprovals, err := s.pendingApprovalTransitionProjections(ctx, workflow.TaskID(req.TaskID))
-	if err != nil {
-		return err
-	}
-	interruptedRunIDs := s.workflowInterruptedRunAttentionIDs(ctx, workflow.TaskID(req.TaskID))
 	if s.runtimeCancel != nil {
 		if err := s.runtimeCancel.CancelTaskRuns(ctx, workflow.TaskID(req.TaskID)); err != nil {
 			return err
@@ -1289,13 +1279,12 @@ func (s *Service) DeleteWorkflowTask(ctx context.Context, req serverapi.Workflow
 			return err
 		}
 	}
-	task, err := s.store.DeleteTask(ctx, workflow.TaskID(req.TaskID))
+	result, err := s.store.DeleteTask(ctx, workflow.TaskID(req.TaskID))
 	if err != nil {
 		return err
 	}
-	s.finalizeWorkflowApprovalProjections(ctx, pendingApprovals)
-	s.resolveWorkflowInterruptedRunAttention(ctx, interruptedRunIDs)
-	s.publishWorkflowEvent(ctx, task.ProjectID, string(task.WorkflowID), "task", "deleted", req.TaskID)
+	s.finalizeTaskAttentionResolution(ctx, result.TaskAttentionResolution)
+	s.publishWorkflowEvent(ctx, result.ProjectID, string(result.WorkflowID), "task", "deleted", req.TaskID)
 	return nil
 }
 
@@ -1313,24 +1302,6 @@ func (s *Service) resolveWorkflowInterruptedRunAttention(ctx context.Context, ru
 		}
 		finalizer.ResolveActiveInterruptedRun(runID)
 	}
-}
-
-func (s *Service) workflowInterruptedRunAttentionIDs(ctx context.Context, taskID workflow.TaskID) []workflow.RunID {
-	if s == nil || s.view == nil || taskID == "" {
-		return nil
-	}
-	attention, err := s.view.ListTaskAttention(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(taskID)}, s.roleResolver)
-	if err != nil {
-		slog.Warn("workflow interrupted-run attention resolution lookup failed", "task_id", string(taskID), "error", err)
-		return nil
-	}
-	runIDs := make([]workflow.RunID, 0)
-	for _, item := range attention.Items {
-		if item.Kind == "interrupted_run" && strings.TrimSpace(item.RunID) != "" {
-			runIDs = append(runIDs, workflow.RunID(item.RunID))
-		}
-	}
-	return runIDs
 }
 
 func (s *Service) workflowInterruptedRunAttentionIDsByWorkflow(ctx context.Context, workflowID string) []workflow.RunID {
@@ -1364,14 +1335,6 @@ func (s *Service) workflowInterruptedRunAttentionIDsByWorkflow(ctx context.Conte
 	return runIDs
 }
 
-func runIDsFromRecords(runs []workflowstore.RunRecord) []workflow.RunID {
-	out := make([]workflow.RunID, 0, len(runs))
-	for _, run := range runs {
-		out = append(out, run.ID)
-	}
-	return out
-}
-
 func (s *Service) finalizeWorkflowApprovalProjections(ctx context.Context, projections []workflowstore.ApprovalTransitionProjection) {
 	if s == nil || s.attentionFinalizer == nil || len(projections) == 0 {
 		return
@@ -1382,14 +1345,15 @@ func (s *Service) finalizeWorkflowApprovalProjections(ctx context.Context, proje
 	s.attentionFinalizer.FinalizeTransition(finalizeCtx, workflowattention.TransitionResult{ResolvedApprovalProjections: resolved})
 }
 
-func (s *Service) resolveActiveWorkflowApprovalAttention(ctx context.Context, transitionIDs []workflow.TransitionID) {
-	if s == nil || s.attentionFinalizer == nil || len(transitionIDs) == 0 {
+func (s *Service) finalizeTaskAttentionResolution(ctx context.Context, resolution workflowstore.TaskAttentionResolution) {
+	if s == nil || s.attentionFinalizer == nil {
 		return
 	}
 	finalizeCtx, cancel := workflowAttentionContext(ctx)
 	defer cancel()
 	s.attentionFinalizer.FinalizeTransition(finalizeCtx, workflowattention.TransitionResult{
-		ResolvedApprovalTransitionIDs: append([]workflow.TransitionID(nil), transitionIDs...),
+		ResolvedApprovalProjections:       workflowattention.ApprovalProjections(resolution.ResolvedApprovalTransitionProjections),
+		ResolvedInterruptedRunProjections: workflowattention.InterruptedRunProjections(resolution.ResolvedInterruptedRunProjections),
 	})
 }
 
@@ -1398,29 +1362,6 @@ func workflowAttentionContext(ctx context.Context) (context.Context, context.Can
 		return context.WithTimeout(context.Background(), workflowAttentionFinalizationTimeout)
 	}
 	return context.WithTimeout(context.WithoutCancel(ctx), workflowAttentionFinalizationTimeout)
-}
-
-func (s *Service) pendingApprovalTransitionIDs(ctx context.Context, taskID workflow.TaskID) ([]workflow.TransitionID, error) {
-	if s == nil || s.store == nil {
-		return nil, nil
-	}
-	return s.store.ListPendingApprovalTransitionIDs(ctx, taskID)
-}
-
-func (s *Service) pendingApprovalTransitionProjections(ctx context.Context, taskID workflow.TaskID) ([]workflowstore.ApprovalTransitionProjection, error) {
-	transitionIDs, err := s.pendingApprovalTransitionIDs(ctx, taskID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]workflowstore.ApprovalTransitionProjection, 0, len(transitionIDs))
-	for _, transitionID := range transitionIDs {
-		projection, err := s.store.ApprovalTransitionProjection(ctx, transitionID)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, projection)
-	}
-	return out, nil
 }
 
 func (s *Service) ListWorkflowAttention(ctx context.Context, req serverapi.WorkflowAttentionListRequest) (serverapi.WorkflowAttentionListResponse, error) {

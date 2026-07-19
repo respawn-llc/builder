@@ -1392,8 +1392,46 @@ func TestServiceCancelTaskResolvesPendingApprovalAttention(t *testing.T) {
 	if err := fixture.service.CancelWorkflowTask(fixture.ctx, serverapi.WorkflowTaskCancelRequest{TaskID: fixture.taskID, Reason: "stop"}); err != nil {
 		t.Fatalf("CancelWorkflowTask: %v", err)
 	}
-	if len(fixture.finalizer.results) != 2 || len(fixture.finalizer.results[1].ResolvedApprovalTransitionIDs) != 1 || fixture.finalizer.results[1].ResolvedApprovalTransitionIDs[0] != workflow.TransitionID(fixture.pending.TransitionID) {
+	if len(fixture.finalizer.results) != 2 || len(fixture.finalizer.results[1].ResolvedApprovalProjections) != 1 || fixture.finalizer.results[1].ResolvedApprovalProjections[0].TransitionID != workflow.TransitionID(fixture.pending.TransitionID) {
 		t.Fatalf("attention finalizer results = %+v", fixture.finalizer.results)
+	}
+}
+
+func TestServiceCancelTaskResolvesCapturedApprovalWithFreshFinalizer(t *testing.T) {
+	fixture := newWorkflowServicePendingApprovalFixture(t)
+	publisher := &recordingWorkflowAttentionPublisher{}
+	fixture.service.attentionFinalizer = workflowattention.NewFinalizer(failingWorkflowPendingProjectionProvider{t: t}, publisher)
+
+	if err := fixture.service.CancelWorkflowTask(fixture.ctx, serverapi.WorkflowTaskCancelRequest{TaskID: fixture.taskID, Reason: "stop"}); err != nil {
+		t.Fatalf("CancelWorkflowTask: %v", err)
+	}
+	if len(publisher.resolved) != 1 || publisher.resolved[0].scope.WorkflowID != fixture.workflowID || publisher.resolved[0].scope.TaskID != fixture.taskID {
+		t.Fatalf("resolved notifications = %+v", publisher.resolved)
+	}
+}
+
+func TestServiceCancelTaskResolvesCapturedInterruptionWithFreshFinalizer(t *testing.T) {
+	ctx, service, _, workflowID, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
+	started := startWorkflowServiceTask(t, ctx, service, taskID)
+	claimed, err := service.store.ClaimRun(ctx, workflow.RunID(started.RunID), 0)
+	if err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	if err := service.store.InterruptRunGeneration(ctx, workflow.RunID(started.RunID), claimed.Generation, "cancel_interruption", `{"error":"cancel detail"}`); err != nil {
+		t.Fatalf("InterruptRunGeneration: %v", err)
+	}
+	publisher := &recordingWorkflowAttentionPublisher{}
+	service.attentionFinalizer = workflowattention.NewFinalizer(failingWorkflowPendingProjectionProvider{t: t}, publisher)
+
+	if err := service.CancelWorkflowTask(ctx, serverapi.WorkflowTaskCancelRequest{TaskID: taskID, Reason: "stop"}); err != nil {
+		t.Fatalf("CancelWorkflowTask: %v", err)
+	}
+	if len(publisher.resolved) != 1 {
+		t.Fatalf("resolved notifications = %+v, want one", publisher.resolved)
+	}
+	resolved := publisher.resolved[0]
+	if resolved.id.UUID != started.RunID || resolved.scope.WorkflowID != workflowID || resolved.scope.TaskID != taskID {
+		t.Fatalf("resolved interruption = %+v", resolved)
 	}
 }
 
@@ -1436,6 +1474,44 @@ func TestServiceDeleteTaskResolvesPendingApprovalAttention(t *testing.T) {
 	}
 	if len(fixture.finalizer.results) != 2 || len(fixture.finalizer.results[1].ResolvedApprovalProjections) != 1 || fixture.finalizer.results[1].ResolvedApprovalProjections[0].TransitionID != workflow.TransitionID(fixture.pending.TransitionID) {
 		t.Fatalf("attention finalizer results = %+v", fixture.finalizer.results)
+	}
+}
+
+func TestServiceDeleteTaskResolvesCapturedApprovalWithFreshFinalizer(t *testing.T) {
+	fixture := newWorkflowServicePendingApprovalFixture(t)
+	publisher := &recordingWorkflowAttentionPublisher{}
+	fixture.service.attentionFinalizer = workflowattention.NewFinalizer(failingWorkflowPendingProjectionProvider{t: t}, publisher)
+
+	if err := fixture.service.DeleteWorkflowTask(fixture.ctx, serverapi.WorkflowTaskDeleteRequest{TaskID: fixture.taskID}); err != nil {
+		t.Fatalf("DeleteWorkflowTask: %v", err)
+	}
+	if len(publisher.resolved) != 1 || publisher.resolved[0].scope.WorkflowID != fixture.workflowID || publisher.resolved[0].scope.TaskID != fixture.taskID {
+		t.Fatalf("resolved notifications = %+v", publisher.resolved)
+	}
+}
+
+func TestServiceDeleteTaskResolvesCapturedInterruptionWithFreshFinalizer(t *testing.T) {
+	ctx, service, _, workflowID, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
+	started := startWorkflowServiceTask(t, ctx, service, taskID)
+	claimed, err := service.store.ClaimRun(ctx, workflow.RunID(started.RunID), 0)
+	if err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	if err := service.store.InterruptRunGeneration(ctx, workflow.RunID(started.RunID), claimed.Generation, "delete_interruption", `{"error":"delete detail"}`); err != nil {
+		t.Fatalf("InterruptRunGeneration: %v", err)
+	}
+	publisher := &recordingWorkflowAttentionPublisher{}
+	service.attentionFinalizer = workflowattention.NewFinalizer(failingWorkflowPendingProjectionProvider{t: t}, publisher)
+
+	if err := service.DeleteWorkflowTask(ctx, serverapi.WorkflowTaskDeleteRequest{TaskID: taskID}); err != nil {
+		t.Fatalf("DeleteWorkflowTask: %v", err)
+	}
+	if len(publisher.resolved) != 1 {
+		t.Fatalf("resolved notifications = %+v, want one", publisher.resolved)
+	}
+	resolved := publisher.resolved[0]
+	if resolved.id.UUID != started.RunID || resolved.scope.WorkflowID != workflowID || resolved.scope.TaskID != taskID {
+		t.Fatalf("resolved interruption = %+v", resolved)
 	}
 }
 
@@ -1612,8 +1688,33 @@ func TestServiceResumeTaskRequeuesRunAndNotifiesScheduler(t *testing.T) {
 	if notifier.count != 1 {
 		t.Fatalf("scheduler notifications = %d, want 1", notifier.count)
 	}
-	if len(finalizer.resolvedRuns) != 1 || finalizer.resolvedRuns[0] != workflow.RunID(started.RunID) {
-		t.Fatalf("resolved interrupted runs = %+v, want %s", finalizer.resolvedRuns, started.RunID)
+	if len(finalizer.results) != 1 || len(finalizer.results[0].ResolvedInterruptedRunProjections) != 1 || finalizer.results[0].ResolvedInterruptedRunProjections[0].RunID != workflow.RunID(started.RunID) {
+		t.Fatalf("resolved interrupted runs = %+v, want %s", finalizer.results, started.RunID)
+	}
+}
+
+func TestServiceResumeTaskResolvesCapturedInterruptionWithFreshFinalizer(t *testing.T) {
+	ctx, service, _, workflowID, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
+	started := startWorkflowServiceTask(t, ctx, service, taskID)
+	claimed, err := service.store.ClaimRun(ctx, workflow.RunID(started.RunID), 0)
+	if err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	if err := service.store.InterruptRunGeneration(ctx, workflow.RunID(started.RunID), claimed.Generation, "manual_resume", `{"error":"resume detail"}`); err != nil {
+		t.Fatalf("InterruptRunGeneration: %v", err)
+	}
+	publisher := &recordingWorkflowAttentionPublisher{}
+	service.attentionFinalizer = workflowattention.NewFinalizer(failingWorkflowPendingProjectionProvider{t: t}, publisher)
+
+	if _, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{TaskID: taskID}); err != nil {
+		t.Fatalf("ResumeWorkflowTask: %v", err)
+	}
+	if len(publisher.resolved) != 1 {
+		t.Fatalf("resolved notifications = %+v, want one", publisher.resolved)
+	}
+	resolved := publisher.resolved[0]
+	if resolved.id.UUID != started.RunID || resolved.scope.WorkflowID != workflowID || resolved.scope.TaskID != taskID {
+		t.Fatalf("resolved interruption = %+v", resolved)
 	}
 }
 

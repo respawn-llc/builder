@@ -212,62 +212,71 @@ func (s *Store) ListWaitingAskRuns(ctx context.Context) ([]RunRecord, error) {
 	return out, nil
 }
 
-func (s *Store) ResumeTaskRuns(ctx context.Context, taskID workflow.TaskID) ([]RunRecord, error) {
+func (s *Store) ResumeTaskRuns(ctx context.Context, taskID workflow.TaskID) (ResumeTaskRunsResult, error) {
 	if strings.TrimSpace(string(taskID)) == "" {
-		return nil, errors.New("task id is required")
+		return ResumeTaskRunsResult{}, errors.New("task id is required")
 	}
 	task, err := s.queries.GetTask(ctx, string(taskID))
 	if err != nil {
-		return nil, err
+		return ResumeTaskRunsResult{}, err
 	}
 	if task.CanceledAtUnixMs.Valid {
-		return nil, ErrTaskCanceled
+		return ResumeTaskRunsResult{}, ErrTaskCanceled
 	}
 	candidates, err := s.queries.ListResumeTaskRunCandidates(ctx, string(taskID))
 	if err != nil {
-		return nil, err
+		return ResumeTaskRunsResult{}, err
 	}
 	if len(candidates) == 0 {
-		return nil, errors.New("task has no interrupted workflow run to resume")
+		return ResumeTaskRunsResult{}, errors.New("task has no interrupted workflow run to resume")
 	}
 	for _, candidate := range candidates {
 		snapshot := runStartSnapshot{}
 		if err := workflow.UnmarshalString(candidate.RunStartSnapshotJson, &snapshot); err != nil {
-			return nil, err
+			return ResumeTaskRunsResult{}, err
 		}
 		if snapshot.Node.Kind != workflow.NodeKindAgent {
 			continue
 		}
 		if err := s.validateRunnableRole(snapshot.Node.SubagentRole); err != nil {
-			return nil, err
+			return ResumeTaskRunsResult{}, err
 		}
 	}
 	now := s.now().UnixMilli()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return ResumeTaskRunsResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	resolution, err := taskAttentionResolution(ctx, q, string(taskID))
+	if err != nil {
+		return ResumeTaskRunsResult{}, err
+	}
 	resumed := make([]RunRecord, 0, len(candidates))
 	for _, candidate := range candidates {
 		updated, err := q.ResumeTaskRun(ctx, sqlitegen.ResumeTaskRunParams{UpdatedAtUnixMs: now, RunID: candidate.ID})
 		if err != nil {
-			return nil, err
+			return ResumeTaskRunsResult{}, err
 		}
 		if updated != 1 {
-			return nil, sql.ErrNoRows
+			return ResumeTaskRunsResult{}, sql.ErrNoRows
 		}
 		run, err := q.GetTaskRun(ctx, candidate.ID)
 		if err != nil {
-			return nil, err
+			return ResumeTaskRunsResult{}, err
 		}
 		resumed = append(resumed, runRecordFromTaskRun(run))
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return ResumeTaskRunsResult{}, err
 	}
-	return resumed, nil
+	return ResumeTaskRunsResult{
+		Runs: resumed,
+		TaskAttentionResolution: TaskAttentionResolution{
+			ResolvedInterruptedRunProjections: resolution.ResolvedInterruptedRunProjections,
+		},
+	}, nil
 }
 
 func (s *Store) validateRunnableRole(role string) error {
