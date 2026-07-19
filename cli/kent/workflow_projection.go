@@ -134,17 +134,5 @@ func workflowTaskDetailForCLI(detail serverapi.WorkflowTaskDetail) (serverapi.Wo
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	projected.Attention = append([]serverapi.WorkflowAttentionItem(nil), detail.Attention...)
-	for i := range projected.Attention {
-		if projected.Attention[i].WorkflowID == nil {
-			continue
-		}
-		workflowID, projectionErr := workflowIDForCLI(*projected.Attention[i].WorkflowID)
-		err = projectionErr
-		if err != nil {
-			return serverapi.WorkflowTaskDetail{}, err
-		}
-		projected.Attention[i].WorkflowID = &workflowID
-	}
 	return projected, nil
 }

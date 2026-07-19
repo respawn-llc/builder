@@ -840,7 +840,7 @@ func TestBoardColumnsUseWorkflowStructureInsteadOfDefinitionNodeOrder(t *testing
 		},
 	}
 
-	keys := workflowViewBoardColumnKeys(boardColumns(def))
+	keys := workflowViewBoardColumnKeys(boardColumns(definitionSnapshot{api: def}))
 	want := []string{"backlog", "plan", "plan_review", "implementation", "done"}
 	if strings.Join(keys, ",") != strings.Join(want, ",") {
 		t.Fatalf("board column keys = %+v, want structural order %+v", keys, want)
@@ -878,7 +878,7 @@ func TestBoardGroupsUseStructuralColumnOrderAndTraverseJoinNodes(t *testing.T) {
 		},
 	}
 
-	keys := workflowViewBoardColumnKeys(boardColumns(def))
+	keys := workflowViewBoardColumnKeys(boardColumns(definitionSnapshot{api: def}))
 	wantKeys := []string{"backlog", "alpha", "zeta", "synth", "done"}
 	if strings.Join(keys, ",") != strings.Join(wantKeys, ",") {
 		t.Fatalf("board column keys = %+v, want join-traversed order %+v", keys, wantKeys)
@@ -2037,12 +2037,19 @@ func TestTaskDetailProjectsWaitingAskRun(t *testing.T) {
 	if len(detail.Runs) != 1 || detail.Runs[0].WaitingAskID == nil || *detail.Runs[0].WaitingAskID != "ask-view-1" || detail.Runs[0].SessionID != sessionID {
 		t.Fatalf("runs do not project waiting ask: %+v", detail.Runs)
 	}
-	if len(detail.Attention) != 1 || detail.Attention[0].Kind != "question" || detail.Attention[0].AskID != "ask-view-1" || strings.TrimSpace(detail.Attention[0].Message) == "" || len(detail.Attention[0].Suggestions) != 3 || detail.Attention[0].RecommendedOptionIndex != 2 {
-		t.Fatalf("attention question options = %+v", detail.Attention)
+	if detail.AttentionCount != 1 {
+		t.Fatalf("attention count = %d, want 1", detail.AttentionCount)
 	}
-	for _, suggestion := range detail.Attention[0].Suggestions {
+	attention, err := view.ListTaskAttention(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(task.ID)}, testsetup.QuestionsEnabled("coder"))
+	if err != nil {
+		t.Fatalf("ListTaskAttention: %v", err)
+	}
+	if len(attention.Items) != 1 || attention.Items[0].Kind != "question" || attention.Items[0].AskID != "ask-view-1" || strings.TrimSpace(attention.Items[0].Message) == "" || len(attention.Items[0].Suggestions) != 3 || attention.Items[0].RecommendedOptionIndex != 2 {
+		t.Fatalf("attention question options = %+v", attention.Items)
+	}
+	for _, suggestion := range attention.Items[0].Suggestions {
 		if strings.TrimSpace(suggestion) == "" {
-			t.Fatalf("attention contains blank suggestion: %+v", detail.Attention)
+			t.Fatalf("attention contains blank suggestion: %+v", attention.Items)
 		}
 	}
 }
@@ -2072,7 +2079,14 @@ func TestTaskDetailProjectsRuntimeApprovalWaitingAskPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	assertRuntimeApprovalQuestionAttention(t, detail.Attention, string(task.ID), string(started.RunID), sessionID, askID)
+	if detail.AttentionCount != 1 {
+		t.Fatalf("attention count = %d, want 1", detail.AttentionCount)
+	}
+	taskAttention, err := view.ListTaskAttention(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(task.ID)}, testsetup.QuestionsEnabled("coder"))
+	if err != nil {
+		t.Fatalf("ListTaskAttention: %v", err)
+	}
+	assertRuntimeApprovalQuestionAttention(t, taskAttention.Items, string(task.ID), string(started.RunID), sessionID, askID)
 	list, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID}, testsetup.QuestionsEnabled("coder"))
 	if err != nil {
 		t.Fatalf("ListAttention: %v", err)
@@ -2089,8 +2103,15 @@ func TestTaskDetailPendingQuestionFallsBackWhenTranscriptLookupFails(t *testing.
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if len(detail.Attention) != 1 || detail.Attention[0].Kind != "question" || detail.Attention[0].AskID != "ask-missing-transcript" || detail.Attention[0].Message != pendingQuestionFallbackMessage {
-		t.Fatalf("attention = %+v", detail.Attention)
+	if detail.AttentionCount != 1 {
+		t.Fatalf("attention count = %d, want 1", detail.AttentionCount)
+	}
+	attention, err := view.ListTaskAttention(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(task.ID)}, testsetup.QuestionsEnabled("coder"))
+	if err != nil {
+		t.Fatalf("ListTaskAttention: %v", err)
+	}
+	if len(attention.Items) != 1 || attention.Items[0].Kind != "question" || attention.Items[0].AskID != "ask-missing-transcript" || attention.Items[0].Message != pendingQuestionFallbackMessage {
+		t.Fatalf("attention = %+v", attention.Items)
 	}
 }
 
@@ -2387,7 +2408,7 @@ func TestCompletedPlacementQuestionRunIsExcludedFromTaskAndAttentionProjections(
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if detail.Status.Kind == serverapi.WorkflowTaskStatusKindWaitingQuestion || len(detail.Status.RunIDs) != 0 || len(detail.Status.AttentionTypes) != 0 || len(detail.Attention) != 0 {
+	if detail.Status.Kind == serverapi.WorkflowTaskStatusKindWaitingQuestion || len(detail.Status.RunIDs) != 0 || len(detail.Status.AttentionTypes) != 0 || detail.AttentionCount != 0 {
 		t.Fatalf("detail = %+v, want no historical question state or attention", detail)
 	}
 	global, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID}, testsetup.QuestionsEnabled("coder"))

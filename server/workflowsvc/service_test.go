@@ -15,6 +15,7 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/requestmemo"
+	"core/server/runtime"
 	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowattention"
@@ -62,6 +63,78 @@ func waitWorkflowProjectActions(t *testing.T, sub serverapi.WorkflowProjectSubsc
 func isWorkflowServiceRequestFieldError(err error, field string) bool {
 	var validationErr serverapi.WorkflowRequestValidationError
 	return errors.As(err, &validationErr) && validationErr.Field == field
+}
+
+func TestGetWorkflowTaskCountsAttentionWithoutReadingTranscripts(t *testing.T) {
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	transcripts := &recordingWorkflowTaskTranscriptProvider{}
+	prompts := &recordingWorkflowTaskPromptSource{}
+	view, err := workflowview.New(
+		metadataStore,
+		workflowview.WithSessionTranscriptProvider(transcripts),
+		workflowview.WithPendingPromptSource(prompts),
+	)
+	if err != nil {
+		t.Fatalf("workflowview.New: %v", err)
+	}
+	service.view = view
+	task, runID, _ := createWorkflowServiceWaitingAsk(t, ctx, service, metadataStore, binding, "Attention count", "session-attention-count", "ask-attention-count")
+	if _, err := metadataStore.DB().ExecContext(ctx, `
+INSERT INTO task_transitions (
+    id,
+    task_id,
+    source_run_id,
+    source_placement_id,
+    source_node_key,
+    source_node_display_name,
+    transition_id,
+    transition_display_name,
+    workflow_revision_seen,
+    actor,
+    state,
+    commentary,
+    output_values_json,
+    created_at_unix_ms,
+    applied_at_unix_ms
+) VALUES (?, ?, ?, NULL, 'agent', 'Agent', 'approval', 'Approval', 1, 'agent', 'pending_approval', '', '{}', 2, NULL)`,
+		"transition-attention-count",
+		task.Task.ID,
+		runID,
+	); err != nil {
+		t.Fatalf("insert pending approval attention: %v", err)
+	}
+
+	response, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: task.Task.ID})
+	if err != nil {
+		t.Fatalf("GetWorkflowTask: %v", err)
+	}
+	if response.Task.AttentionCount != 2 {
+		t.Fatalf("attention count = %d, want 2", response.Task.AttentionCount)
+	}
+	if transcripts.calls != 0 {
+		t.Fatalf("transcript reads = %d, want 0", transcripts.calls)
+	}
+	if prompts.calls != 0 {
+		t.Fatalf("pending prompt reads = %d, want 0", prompts.calls)
+	}
+}
+
+type recordingWorkflowTaskTranscriptProvider struct {
+	calls int
+}
+
+func (p *recordingWorkflowTaskTranscriptProvider) SessionTranscriptTailEntries(context.Context, string) ([]runtime.ChatEntry, error) {
+	p.calls++
+	return nil, errors.New("task get must not read transcripts")
+}
+
+type recordingWorkflowTaskPromptSource struct {
+	calls int
+}
+
+func (p *recordingWorkflowTaskPromptSource) ListPendingPrompts(string) []workflowview.PendingPromptSnapshot {
+	p.calls++
+	return nil
 }
 
 func TestServiceCreatesValidatesLinksAndStartsDefaultWorkflowTask(t *testing.T) {

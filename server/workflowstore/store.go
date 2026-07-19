@@ -1061,7 +1061,7 @@ func workflowDefinitionFromQueries(ctx context.Context, q *sqlitegen.Queries, wo
 	def := workflow.Definition{ID: workflow.WorkflowID(row.ID), DisplayName: row.Name, ExecutionTargetPolicy: record.ExecutionTargetPolicy}
 	groupMemberIDs := map[string][]workflow.NodeID{}
 	for _, group := range nodeGroups {
-		def.NodeGroups = append(def.NodeGroups, workflow.NodeGroup{WorkflowID: workflow.WorkflowID(group.WorkflowID), ID: group.ID, Key: workflow.ModelKey(group.GroupKey), DisplayName: group.DisplayName})
+		def.NodeGroups = append(def.NodeGroups, workflow.NodeGroup{WorkflowID: workflow.WorkflowID(group.WorkflowID), ID: group.ID, Key: workflow.ModelKey(group.GroupKey), DisplayName: group.DisplayName, SortOrder: group.SortOrder})
 	}
 	for _, node := range nodes {
 		inputFields := []workflow.InputField{}

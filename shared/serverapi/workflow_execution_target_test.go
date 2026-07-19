@@ -252,6 +252,13 @@ func TestWorkflowExecutionTargetManagedOperationalFactsMayBeUnavailable(t *testi
 
 func TestWorkflowTaskDetailDoesNotDuplicateManagedWorktreeOrChangeBoardCards(t *testing.T) {
 	detailType := reflect.TypeOf(WorkflowTaskDetail{})
+	if _, exists := detailType.FieldByName("Attention"); exists {
+		t.Fatal("WorkflowTaskDetail still embeds attention items")
+	}
+	attentionCount, exists := detailType.FieldByName("AttentionCount")
+	if !exists || attentionCount.Type.Kind() != reflect.Int {
+		t.Fatalf("WorkflowTaskDetail attention count contract = %v, want int", attentionCount.Type)
+	}
 	if _, exists := detailType.FieldByName("ManagedWorktree"); exists {
 		t.Fatal("WorkflowTaskDetail still duplicates execution_target.managed_worktree")
 	}
@@ -293,6 +300,11 @@ func TestWorkflowTaskGetResponseValidatesExecutionTarget(t *testing.T) {
 	}
 	if err := invalid.Validate(); err == nil {
 		t.Fatal("task detail response accepted an invalid execution target")
+	}
+	invalid = valid
+	invalid.Task.AttentionCount = -1
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("task detail response accepted a negative attention count")
 	}
 }
 
