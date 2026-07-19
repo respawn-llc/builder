@@ -133,8 +133,9 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 	if drainErr := s.engine.drainActiveStepGoalMutations(stepID); drainErr != nil {
 		err = errors.Join(err, fmt.Errorf("drain active-step goal mutations: %w", drainErr))
 	}
+	agentErr := err
 	finishedAt := time.Now().UTC()
-	status := statusFromRunError(err)
+	status := statusFromRunError(agentErr)
 	snapshot := s.snapshotWithFinishedAt(finishedAt, status)
 	if status != RunStatusCompleted {
 		_ = s.engine.steer(stepID, steerClearStreamingStateIntent())
@@ -164,7 +165,7 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 		err = errors.Join(err, wrapped)
 	}
 	if options.EmitRunState {
-		s.engine.finishLiveRunStep(snapshot, status, err)
+		s.engine.finishLiveRunStep(snapshot, status, agentErr)
 	}
 	s.finishTerminalPublication()
 	if !errors.Is(err, errPendingModelRecoveryClear) {
