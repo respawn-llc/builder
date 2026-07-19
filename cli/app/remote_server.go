@@ -165,21 +165,26 @@ func (s *remoteAppServer) RuntimeAttachmentClients() runtimeAttachmentClients {
 		return runtimeAttachmentClients{}
 	}
 	return runtimeAttachmentClients{
-		Attention:                       s.remote,
-		AttentionNotificationsSupported: s.remote.Identity().Capabilities.AttentionNotifications,
-		ProcessControls:                 s.remote,
-		ProcessOutput:                   s.remote,
-		ProcessViews:                    s.remote,
-		PromptControl:                   s.remote,
-		RuntimeControls:                 s.remote,
-		SessionTranscript:               s.remote,
-		SessionRuntime:                  s.remote,
-		SessionViews:                    s.remote,
-		Worktrees:                       s.remote,
+		ProcessControls:   s.remote,
+		ProcessOutput:     s.remote,
+		ProcessViews:      s.remote,
+		PromptControl:     s.remote,
+		RuntimeControls:   s.remote,
+		SessionTranscript: s.remote,
+		SessionRuntime:    s.remote,
+		SessionViews:      s.remote,
+		Worktrees:         s.remote,
 	}
 }
 
 func (s *remoteAppServer) ProjectViewClient() apicontract.ProjectViewService {
+	if s == nil {
+		return nil
+	}
+	return s.remote
+}
+
+func (s *remoteAppServer) ServerStatusClient() apicontract.ServerStatusService {
 	if s == nil {
 		return nil
 	}

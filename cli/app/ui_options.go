@@ -200,12 +200,6 @@ func WithUIPromptHistory(history []string) UIOption {
 	}
 }
 
-func WithUIStartupUpdateNotice(enabled bool) UIOption {
-	return func(m *uiModelConstruction) {
-		m.startupUpdateNotice = enabled
-	}
-}
-
 func WithUIClipboardPaster(paster uiClipboardPaster) UIOption {
 	return func(m *uiModelConstruction) {
 		m.clipboardPaster = paster

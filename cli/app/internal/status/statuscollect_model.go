@@ -42,18 +42,6 @@ func ModelSummary(req Request) string {
 	return strings.Join(parts, " ")
 }
 
-func BuildUpdateInfo(req Request) UpdateInfo {
-	if req.Runtime == nil {
-		return UpdateInfo{}
-	}
-	status := req.Runtime.Status().Update
-	return UpdateInfo{
-		Checked:       status.Checked,
-		Available:     status.Available,
-		LatestVersion: strings.TrimSpace(status.LatestVersion),
-	}
-}
-
 func SupervisorLabel(enabled bool, mode string) string {
 	if !enabled {
 		return "off"

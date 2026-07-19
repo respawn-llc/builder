@@ -26,15 +26,18 @@ type uiInteractionState struct {
 }
 
 type uiAskState struct {
-	current        *askEvent
-	currentToken   uint64
-	queue          []askEvent
-	cursor         int
-	freeform       bool
-	freeformMode   askFreeformMode
-	activeDelivery *activePromptAnswerDelivery
-	answerPending  bool
-	editor         tuiinput.Editor
+	current                 *askEvent
+	currentToken            uint64
+	queue                   []askEvent
+	cursor                  int
+	freeform                bool
+	freeformMode            askFreeformMode
+	activeDelivery          *activePromptAnswerDelivery
+	answerPending           bool
+	editor                  tuiinput.Editor
+	activeProjection        *activeQuestionProjection
+	inFlightProjection      *questionRenderRequest
+	latestDesiredProjection *desiredQuestionProjection
 }
 
 type uiProcessListState struct {
@@ -165,6 +168,7 @@ func (m *uiModel) restorePrimaryInputMode() {
 	}
 	if m.ask.hasCurrent() && (m.view.Mode() == "" || m.view.Mode() == tui.ModeOngoing) {
 		m.setInputMode(uiInputModeAsk)
+		m.notifyPendingTranscriptPromptActivation()
 		return
 	}
 	m.setInputMode(uiInputModeMain)
@@ -172,12 +176,22 @@ func (m *uiModel) restorePrimaryInputMode() {
 
 func (m *uiModel) inputModeState() uiInputModeState {
 	mode := m.inputMode()
+	if mode == uiInputModeAsk && !m.askReadyForInteraction() {
+		return uiInputModeState{
+			Mode: mode,
+			Busy: m != nil && m.isBusy(),
+		}
+	}
 	return uiInputModeState{
 		Mode:           mode,
 		Busy:           m != nil && m.isBusy(),
 		ShowsMainInput: mode.showsMainInput(),
 		ShowsAskInput:  mode.showsAskInput(),
 	}
+}
+
+func (m *uiModel) askReadyForInteraction() bool {
+	return m != nil && m.ask.hasCurrent() && m.ask.activeProjection != nil
 }
 
 func (mode uiInputMode) showsMainInput() bool {

@@ -576,6 +576,61 @@ func TestAskSessionReplacementCancelsDeliveryAndClearsOldPrompt(t *testing.T) {
 	}
 }
 
+func TestAskSessionReplacementRunsQueuedProjectionBeforeReplacementPrompt(t *testing.T) {
+	model := sizedTestUIModel(newProjectedStaticUIModel(), 64, 20)
+	model.sessionID = runtimeids.NewSessionID().String()
+	next, firstProjection := model.Update(askEventMsg{event: testQuestionAskEvent(
+		"ask-old-current",
+		"Old current?",
+		"yes",
+	)})
+	model = next.(*uiModel)
+	next, _ = model.Update(firstProjection())
+	model = next.(*uiModel)
+	next, _ = model.Update(askEventMsg{event: testQuestionAskEvent(
+		"ask-old-queued",
+		"Old queued?",
+		"yes",
+	)})
+	model = next.(*uiModel)
+	if model.ask.activeProjection == nil || model.ask.inFlightProjection != nil || len(model.ask.queue) != 1 {
+		t.Fatal("test setup did not establish a visible current prompt and queued prompt")
+	}
+
+	replacementSessionID := runtimeids.NewSessionID()
+	replacementCmd := model.applyTranscriptSessionIdentity(clientui.TranscriptSessionIdentity{
+		SessionID:             replacementSessionID,
+		ConversationFreshness: clientui.ConversationFreshnessFresh,
+	})
+	if replacementCmd == nil {
+		t.Fatal("session replacement dropped prompt reconciliation projection work")
+	}
+	for _, msg := range collectCmdMessages(t, replacementCmd) {
+		next, _ = model.Update(msg)
+		model = next.(*uiModel)
+	}
+	if model.ask.inFlightProjection != nil {
+		t.Fatal("session replacement left an orphaned in-flight projection")
+	}
+
+	next, projectionCmd := model.Update(askEventMsg{event: testQuestionAskEvent(
+		"ask-new-session",
+		"New session?",
+		"yes",
+	)})
+	model = next.(*uiModel)
+	if projectionCmd == nil {
+		t.Fatal("replacement-session prompt could not start projection")
+	}
+	next, _ = model.Update(projectionCmd())
+	model = next.(*uiModel)
+	if model.ask.current == nil ||
+		model.ask.current.prompt.PromptID != "ask-new-session" ||
+		!model.askReadyForInteraction() {
+		t.Fatal("replacement-session prompt did not become visible")
+	}
+}
+
 func TestAskResolutionBeforeDeliveryCommandRunsDoesNotCallPromptControl(t *testing.T) {
 	control := &scriptedAskPromptControl{}
 	model := newProjectedStaticUIModel()

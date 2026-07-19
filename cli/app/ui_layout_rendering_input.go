@@ -3,9 +3,7 @@ package app
 import (
 	"strings"
 
-	"core/cli/tui"
 	tuiinput "core/cli/tui/input"
-	"core/cli/tui/transcriptrender"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -23,6 +21,11 @@ type uiInputPaneContentLine struct {
 	text      string
 	prompt    askPromptLine
 	cursorCol int
+}
+
+type askInputViewport struct {
+	lines  []uiInputPaneContentLine
+	cursor uiInputFieldCursor
 }
 
 func (l uiViewLayout) inputPaneProjection(width, height int, style uiStyles) uiInputPaneProjection {
@@ -64,20 +67,8 @@ func (l uiViewLayout) inputPaneProjection(width, height int, style uiStyles) uiI
 }
 
 func (l uiViewLayout) projectAskInputPane(width, maxContentLines int, style uiStyles) uiInputPaneProjection {
-	content, cursorLine := l.askInputPaneContent(width)
-	if len(content) == 0 {
-		content = []uiInputPaneContentLine{{prompt: askPromptLine{Kind: askPromptLineKindQuestion}}}
-	}
-	start := cursorAwareInputPaneViewportStart(len(content), maxContentLines, cursorLine)
-	end := min(len(content), start+maxContentLines)
-	visible := content[start:end]
-	var visibleCursorLine *int
-	if cursorLine != nil {
-		line := *cursorLine - start
-		if line >= 0 && line < len(visible) {
-			visibleCursorLine = &line
-		}
-	}
+	viewport := l.askInputViewport(width, maxContentLines)
+	visible := viewport.lines
 
 	lines := make([]string, 0, len(visible))
 	selectedStyle := lipgloss.NewStyle().Foreground(uiPalette(l.model.theme).primary).Bold(true)
@@ -86,7 +77,7 @@ func (l uiViewLayout) projectAskInputPane(width, maxContentLines int, style uiSt
 	for index, line := range visible {
 		lines = append(lines, renderAskPaneLine(
 			line,
-			visibleCursorLine != nil && index == *visibleCursorLine && l.shouldRenderSoftCursor(),
+			viewport.cursor.Visible && index == viewport.cursor.Row && l.shouldRenderSoftCursor(),
 			width,
 			style,
 			selectedStyle,
@@ -99,23 +90,26 @@ func (l uiViewLayout) projectAskInputPane(width, maxContentLines int, style uiSt
 		Lines:       renderFramedLines(width, lines, l.inputBorderStyle()),
 		PanelHeight: len(visible) + 2,
 	}
-	if visibleCursorLine != nil && l.shouldUseRealTerminalCursor() {
-		cursor := visible[*visibleCursorLine]
-		row, col := normalizeInputFieldCursorCell(*visibleCursorLine, cursor.cursorCol, width, len(visible))
+	if viewport.cursor.Visible && l.shouldUseRealTerminalCursor() {
+		row, col := normalizeInputFieldCursorCell(viewport.cursor.Row, viewport.cursor.Col, width, len(visible))
 		projection.Cursor = uiInputFieldCursor{Visible: true, Row: framedInputContentCursorRow(row), Col: col}
 	}
 	return projection
 }
 
-func (l uiViewLayout) askInputPaneContent(width int) ([]uiInputPaneContentLine, *int) {
-	promptLines := l.model.askController().renderPromptLines()
-	if len(promptLines) == 0 {
-		promptLines = []askPromptLine{{Kind: askPromptLineKindQuestion}}
+func (l uiViewLayout) askInputViewport(width, maxContentLines int) askInputViewport {
+	priorityLines, priorityCursor := l.askPriorityPaneContent(width)
+	questionRows := []string(nil)
+	if l.model.ask.activeProjection != nil {
+		questionRows = l.model.ask.activeProjection.rows
 	}
-	promptLines = renderMarkdownAskQuestionPromptLines(promptLines, l.model.theme, width, l.model.markdownLinks)
+	return projectBoundedAskViewport(questionRows, priorityLines, priorityCursor, width, maxContentLines)
+}
 
+func (l uiViewLayout) askPriorityPaneContent(width int) ([]uiInputPaneContentLine, uiInputFieldCursor) {
+	promptLines := l.model.askController().renderPriorityPromptLines()
 	content := make([]uiInputPaneContentLine, 0, len(promptLines)*2)
-	var cursorLine *int
+	cursor := uiInputFieldCursor{}
 	for _, prompt := range promptLines {
 		if prompt.Kind == askPromptLineKindInput {
 			field := tuiinput.NewField()
@@ -127,8 +121,7 @@ func (l uiViewLayout) askInputPaneContent(width int) ([]uiInputPaneContentLine, 
 				line := uiInputPaneContentLine{text: text, prompt: prompt}
 				if rendered.Cursor.Visible && index == rendered.Cursor.Row {
 					line.cursorCol = rendered.Cursor.Col
-					cursor := len(content)
-					cursorLine = &cursor
+					cursor = uiInputFieldCursor{Visible: true, Row: len(content), Col: rendered.Cursor.Col}
 				}
 				content = append(content, line)
 			}
@@ -142,7 +135,68 @@ func (l uiViewLayout) askInputPaneContent(width int) ([]uiInputPaneContentLine, 
 			content = append(content, uiInputPaneContentLine{text: text, prompt: prompt})
 		}
 	}
-	return content, cursorLine
+	return content, cursor
+}
+
+func projectBoundedAskViewport(
+	questionRows []string,
+	priorityLines []uiInputPaneContentLine,
+	priorityCursor uiInputFieldCursor,
+	width int,
+	maxContentLines int,
+) askInputViewport {
+	if maxContentLines < 1 {
+		return askInputViewport{}
+	}
+	if len(priorityLines) > maxContentLines {
+		var cursorLine *int
+		if priorityCursor.Visible {
+			row := priorityCursor.Row
+			cursorLine = &row
+		}
+		start := cursorAwareInputPaneViewportStart(len(priorityLines), maxContentLines, cursorLine)
+		end := min(len(priorityLines), start+maxContentLines)
+		viewport := askInputViewport{
+			lines: append([]uiInputPaneContentLine(nil), priorityLines[start:end]...),
+		}
+		if priorityCursor.Visible {
+			row := priorityCursor.Row - start
+			if row >= 0 && row < len(viewport.lines) {
+				viewport.cursor = uiInputFieldCursor{
+					Visible: true,
+					Row:     row,
+					Col:     priorityCursor.Col,
+				}
+			}
+		}
+		return viewport
+	}
+
+	questionCapacity := maxContentLines - len(priorityLines)
+	visibleQuestionCount := min(len(questionRows), questionCapacity)
+	questionTruncated := len(questionRows) > visibleQuestionCount
+	viewport := askInputViewport{
+		lines: make([]uiInputPaneContentLine, 0, visibleQuestionCount+len(priorityLines)),
+	}
+	for index := 0; index < visibleQuestionCount; index++ {
+		text := truncateANSIRight(questionRows[index], width)
+		if questionTruncated && index == visibleQuestionCount-1 {
+			text = truncateANSIRightWithEllipsis(questionRows[index], width, true)
+		}
+		viewport.lines = append(viewport.lines, uiInputPaneContentLine{
+			text:   text,
+			prompt: askPromptLine{Kind: askPromptLineKindQuestion},
+		})
+	}
+	viewport.lines = append(viewport.lines, priorityLines...)
+	if priorityCursor.Visible {
+		viewport.cursor = uiInputFieldCursor{
+			Visible: true,
+			Row:     visibleQuestionCount + priorityCursor.Row,
+			Col:     priorityCursor.Col,
+		}
+	}
+	return viewport
 }
 
 func cursorAwareInputPaneViewportStart(totalLines, maxLines int, cursorLine *int) int {
@@ -217,41 +271,6 @@ func renderRecommendedAskLine(text string, mutedSuffix string, width int, recomm
 
 func (l uiViewLayout) mainInputPrefix() string {
 	return "› "
-}
-
-func renderMarkdownAskQuestionPromptLines(
-	lines []askPromptLine,
-	theme string,
-	width int,
-	linkPresentation transcriptrender.MarkdownLinkPresentation,
-) []askPromptLine {
-	if len(lines) == 0 {
-		return nil
-	}
-	out := make([]askPromptLine, 0, len(lines))
-	for index := 0; index < len(lines); {
-		line := lines[index]
-		if line.Kind != askPromptLineKindQuestion {
-			out = append(out, line)
-			index++
-			continue
-		}
-		start := index
-		parts := make([]string, 0, 4)
-		for index < len(lines) && lines[index].Kind == askPromptLineKindQuestion {
-			parts = append(parts, lines[index].Text)
-			index++
-		}
-		rendered := tui.RenderAskQuestionMarkdownLines(strings.Join(parts, "\n"), theme, width, linkPresentation)
-		if len(rendered) == 0 {
-			out = append(out, lines[start:index]...)
-			continue
-		}
-		for _, text := range rendered {
-			out = append(out, askPromptLine{Text: text, Kind: askPromptLineKindQuestion})
-		}
-	}
-	return out
 }
 
 func framedInputContentCursorRow(contentRow int) int {

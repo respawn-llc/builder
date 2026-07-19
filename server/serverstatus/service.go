@@ -15,10 +15,11 @@ type ServerStatusService struct {
 	authManager *auth.Manager
 	endpoint    string
 	settings    config.Settings
+	updates     *UpdateStatusService
 }
 
-func NewServerStatusService(authManager *auth.Manager, cfg config.App) *ServerStatusService {
-	return &ServerStatusService{authManager: authManager, endpoint: config.ServerRPCURL(cfg), settings: cfg.Settings}
+func NewServerStatusService(authManager *auth.Manager, cfg config.App, updates *UpdateStatusService) *ServerStatusService {
+	return &ServerStatusService{authManager: authManager, endpoint: config.ServerRPCURL(cfg), settings: cfg.Settings, updates: updates}
 }
 
 func (s *ServerStatusService) GetServerReadiness(ctx context.Context, _ serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error) {
@@ -59,6 +60,20 @@ func (s *ServerStatusService) GetServerReadiness(ctx context.Context, _ serverap
 		}}
 	}
 	return response, nil
+}
+
+func (s *ServerStatusService) GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.UpdateStatusResponse{}, err
+	}
+	if s == nil || s.updates == nil {
+		return serverapi.UpdateStatusResponse{}, ErrUpdateStatusServiceClosed
+	}
+	result, err := s.updates.Status(ctx)
+	if err != nil {
+		return serverapi.UpdateStatusResponse{}, err
+	}
+	return serverapi.UpdateStatusResponse{Result: result}, nil
 }
 
 func subagentRoleSummaries(settings config.Settings) []serverapi.SubagentRoleSummary {

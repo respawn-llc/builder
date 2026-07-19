@@ -84,7 +84,6 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		)
 	}
 	nextSessionOverrides := opts.Overrides
-	showStartupUpdateNotice := true
 	var pickerNotice *startupPickerNotice
 	for {
 		switch next.Kind() {
@@ -186,34 +185,23 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 			initialPromptHistoryRecorded,
 			transitionInput,
 			overrideStoredDraft,
-			showStartupUpdateNotice,
 		)
 		if err != nil {
 			return err
 		}
 		finalModel, runErr := runUILoop(request)
-		showStartupUpdateNotice = shouldRetryStartupUpdateNotice(finalModel, showStartupUpdateNotice)
 		if runErr != nil {
-			if closeErr := runtimePlan.Close(); closeErr != nil {
-				return errors.Join(runErr, closeErr)
-			}
-			return runErr
+			return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, runErr)
 		}
 		if err := persistSessionDraftToServer(ctx, server, plan.SessionID, finalModel); err != nil {
-			if closeErr := runtimePlan.Close(); closeErr != nil {
-				return errors.Join(err, closeErr)
-			}
-			return err
+			return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, err)
 		}
 
 		transition := extractUITransition(finalModel)
 		if transition.Exit {
-			if err := closeRuntimePlanAfterUIExit(runtimePlan, finalModel); err != nil {
-				return err
-			}
-			return nil
+			return releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, nil)
 		}
-		resolved, err := resolveAndReleaseSessionAction(ctx, server, interactor, plan.SessionID, transition, runtimePlan)
+		resolved, err := resolveAndReleaseSessionAction(ctx, server, interactor, plan.SessionID, transition, runtimePlan, finalModel)
 		if err != nil {
 			return err
 		}
@@ -236,16 +224,18 @@ func bindNavigationSessionContext(ctx context.Context, server interactiveSession
 	return rebound, true, nil
 }
 
-func resolveAndReleaseSessionAction(ctx context.Context, server sessionTransitionServer, interactor authInteractor, sessionID string, transition UITransition, runtimePlan *runtimeLaunchPlan) (serverapi.SessionDirective, error) {
+func resolveAndReleaseSessionAction(
+	ctx context.Context,
+	server sessionTransitionServer,
+	interactor authInteractor,
+	sessionID string,
+	transition UITransition,
+	runtimePlan *runtimeLaunchPlan,
+	finalModel any,
+) (serverapi.SessionDirective, error) {
 	resolved, err := resolveSessionAction(ctx, server, interactor, sessionID, transition)
-	if err != nil {
-		if closeErr := runtimePlan.Close(); closeErr != nil {
-			return serverapi.SessionDirective{}, errors.Join(err, closeErr)
-		}
-		return serverapi.SessionDirective{}, err
-	}
-	if err := runtimePlan.Close(); err != nil {
-		return serverapi.SessionDirective{}, err
+	if releaseErr := releaseRuntimePlanAfterUIResult(runtimePlan, finalModel, err); releaseErr != nil {
+		return serverapi.SessionDirective{}, releaseErr
 	}
 	return resolved, nil
 }
@@ -259,7 +249,6 @@ func prepareSessionUIRun(
 	initialPromptHistoryRecorded bool,
 	transitionInput string,
 	overrideStoredDraft bool,
-	startupUpdateNotice bool,
 ) (*runtimeLaunchPlan, uiLoopRequest, error) {
 	runtimePlan, err := planner.PrepareRuntime(ctx, plan, os.Stderr, "app.start session_id="+plan.SessionID+" workspace="+plan.ExecutionTarget.EffectiveWorkdir+" model="+plan.ActiveSettings.Model)
 	if err != nil {
@@ -295,7 +284,6 @@ func prepareSessionUIRun(
 		modelContractLocked:          plan.ModelContractLocked,
 		configuredModelName:          plan.ConfiguredModelName,
 		statusConfig:                 plan.StatusConfig,
-		startupUpdateNotice:          startupUpdateNotice,
 	}, nil
 }
 
@@ -313,14 +301,16 @@ func closeRuntimePlanAfterUIExit(runtimePlan *runtimeLaunchPlan, finalModel any)
 	return runtimePlan.Close()
 }
 
-func shouldRetryStartupUpdateNotice(model any, enabled bool) bool {
-	if !enabled {
-		return false
+func releaseRuntimePlanAfterUIResult(runtimePlan *runtimeLaunchPlan, finalModel any, primaryErr error) error {
+	releaseErr := closeRuntimePlanAfterUIExit(runtimePlan, finalModel)
+	if primaryErr != nil && releaseErr != nil {
+		return errors.Join(primaryErr, releaseErr)
 	}
-	ui, ok := model.(*uiModel)
-	return !ok || ui == nil || !ui.startupUpdateShown
+	if primaryErr != nil {
+		return primaryErr
+	}
+	return releaseErr
 }
-
 func shouldCloseReboundServer(original appServerCore, rebound appServerCore) bool {
 	if original == nil || rebound == nil || original == rebound {
 		return false

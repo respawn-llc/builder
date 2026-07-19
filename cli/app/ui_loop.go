@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"core/cli/app/commands"
 	"core/cli/tui/ongoing"
@@ -18,6 +19,7 @@ type uiProgramComposition struct {
 	model   *uiModel
 	options []tea.ProgramOption
 	logger  uiLogger
+	output  io.Writer
 	close   func()
 }
 
@@ -33,7 +35,6 @@ type uiLoopRequest struct {
 	modelContractLocked          bool
 	configuredModelName          string
 	statusConfig                 uiStatusConfig
-	startupUpdateNotice          bool
 }
 
 func runUILoop(request uiLoopRequest) (tea.Model, error) {
@@ -58,6 +59,12 @@ func runUIProgram(composition *uiProgramComposition, initialModel tea.Model) (te
 			composition.logger.Logf("app.exit err=%q", runErr.Error())
 		}
 		return nil, runErr
+	}
+	if err := writeForcedLocalExitStatus(composition.output, finalModel); err != nil {
+		if composition.logger != nil {
+			composition.logger.Logf("app.exit fatal_status_error=%q", err.Error())
+		}
+		return finalModel, err
 	}
 	if composition.logger != nil {
 		composition.logger.Logf("app.exit ok")
@@ -132,7 +139,6 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUISessionName(request.sessionName),
 		WithUISessionID(sessionID),
 		WithUIStatusConfig(request.statusConfig),
-		WithUIStartupUpdateNotice(request.startupUpdateNotice),
 		WithUITerminalCursorState(terminalCursor),
 		WithUIRendererOutputGateState(rendererOutputGate),
 		WithUIOngoingSurface(ongoingSurface),
@@ -165,6 +171,7 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		model:   model,
 		options: options,
 		logger:  uiLogger,
+		output:  output,
 		close: func() {
 			model.Close()
 			if tuiLogger != nil {
@@ -172,6 +179,24 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 			}
 		},
 	}, nil
+}
+
+func writeForcedLocalExitStatus(output io.Writer, finalModel tea.Model) error {
+	if output == nil {
+		return nil
+	}
+	model, ok := finalModel.(*uiModel)
+	if !ok || model == nil || !model.forcedLocalExit {
+		return nil
+	}
+	message := strings.TrimSpace(model.transientStatus)
+	if message == "" {
+		return nil
+	}
+	if _, err := fmt.Fprintln(output, message); err != nil {
+		return fmt.Errorf("write fatal UI status after terminal restoration: %w", err)
+	}
+	return nil
 }
 
 func mainUIProgramOptionsWithOutput(

@@ -83,6 +83,7 @@ type RunPromptService interface {
 
 type ServerStatusService interface {
 	GetServerReadiness(ctx context.Context, req serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error)
+	GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error)
 }
 
 type RuntimeControlService interface {

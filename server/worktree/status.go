@@ -45,8 +45,8 @@ func (s *Service) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeS
 					metadataErr,
 				)
 			}
-			if strings.TrimSpace(gitMetadata.BranchRef) != "" {
-				branchRef := gitMetadata.BranchRef
+			if gitMetadata.Branch != nil {
+				branchRef := gitMetadata.Branch.Ref()
 				status.RecordedBranchRef = &branchRef
 			}
 		case errors.Is(err, sql.ErrNoRows):

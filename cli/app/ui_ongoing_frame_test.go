@@ -152,6 +152,59 @@ func TestOngoingTranscriptControllerPreservesWrappedDisplayCursorTargetWithPrepe
 	}
 }
 
+func TestOngoingFrameInputAskViewportAndCursorShareBoundedProjection(t *testing.T) {
+	const (
+		width  = 24
+		height = 10
+	)
+	m := sizedTestUIModel(newProjectedStaticUIModel(
+		WithUITerminalCursorState(newUITerminalCursorState()),
+	), width, height)
+	event := testQuestionAskEvent("ask-1", "Question source", "First", "Second")
+	testSetActiveAsk(m, &event)
+	m.ask.activeProjection.rows = []string{
+		"question row one",
+		"question row two",
+		"question row three",
+		"question row four",
+		"question row five",
+	}
+	m.ask.freeform = true
+	testSetAskInputAtRuneCursor(m, "draft text", 5)
+
+	pane := m.layout().inputPaneProjection(width, height, uiThemeStyles(m.theme))
+	if !pane.Cursor.Visible {
+		t.Fatal("bounded ask pane did not expose the editor cursor")
+	}
+	frame := m.ongoingFrameInput()
+	input, ok := frameSection(frame, ongoing.FrameSectionInput)
+	if !ok {
+		t.Fatal("bounded ask input section missing from ongoing frame")
+	}
+	if got, want := input.Lines, pane.Lines; !reflect.DeepEqual(got, want) {
+		t.Fatalf("frame input rows differ from bounded pane projection: got %d want %d", len(got), len(want))
+	}
+	if len(input.Lines) > inputContentLineLimit(height)+2 {
+		t.Fatalf("framed ask rows = %d, bounded maximum = %d", len(input.Lines), inputContentLineLimit(height)+2)
+	}
+	if frame.Cursor.Target == nil || frame.Cursor.Target.SectionKind != ongoing.FrameSectionInput {
+		t.Fatalf("frame cursor target = %+v, want input section", frame.Cursor.Target)
+	}
+	if got, want := frame.Cursor.Target.Row, pane.Cursor.Row; got != want {
+		t.Fatalf("frame cursor target row = %d, want bounded pane row %d", got, want)
+	}
+	inputStart, inputEnd, ok := ongoingFrameSectionTerminalRows(frame, ongoing.FrameSectionInput)
+	if !ok {
+		t.Fatal("bounded ask input section has no terminal rows")
+	}
+	if got, want := frame.Cursor.Row, inputStart+pane.Cursor.Row-1; got != want {
+		t.Fatalf("frame cursor terminal row = %d, want %d", got, want)
+	}
+	if frame.Cursor.Row < inputStart || frame.Cursor.Row > inputEnd {
+		t.Fatalf("frame cursor row %d outside bounded input rows %d..%d", frame.Cursor.Row, inputStart, inputEnd)
+	}
+}
+
 func TestOngoingFrameInputKeepsServerBackedQueuedStateTranscriptOwned(t *testing.T) {
 	m := sizedTestUIModel(newProjectedStaticUIModel(), 48, 10)
 	m.pendingInjected = []clientui.QueuedUserMessage{{

@@ -53,12 +53,6 @@ func TestRuntimeMainViewRefreshCommitsOnlyWhenReducerHandlesCandidate(t *testing
 		ReviewerFrequency: "edits",
 		ReviewerEnabled:   true,
 		ThinkingLevel:     "high",
-		Update: clientui.UpdateStatus{
-			Checked:        true,
-			Available:      true,
-			CurrentVersion: "1.0.0",
-			LatestVersion:  "1.1.0",
-		},
 	}
 	v10.Session.SessionName = "captured unary metadata"
 	v10.Session.ConversationFreshness = clientui.ConversationFreshnessEstablished
@@ -83,7 +77,7 @@ func TestRuntimeMainViewRefreshCommitsOnlyWhenReducerHandlesCandidate(t *testing
 		t.Fatalf("accept initial hydration: %v", err)
 	}
 
-	decision := m.startRuntimeMainViewRefreshRequest(runtimeMainViewRefreshRequestForCause(runtimeMainViewRefreshCauseStartupUpdate))
+	decision := m.startRuntimeMainViewRefreshRequest(runtimeMainViewRefreshRequestForCause(runtimeMainViewRefreshCauseManual))
 	if decision.cmd == nil {
 		t.Fatal("refresh request did not return a command")
 	}
@@ -104,7 +98,7 @@ func TestRuntimeMainViewRefreshCommitsOnlyWhenReducerHandlesCandidate(t *testing
 
 	got := runtimeClient.MainView()
 	assertRuntimeTupleView(t, got, v11)
-	if got.Status.ReviewerFrequency != "edits" || !got.Status.ReviewerEnabled || got.Status.Update.LatestVersion != "1.1.0" {
+	if got.Status.ReviewerFrequency != "edits" || !got.Status.ReviewerEnabled {
 		t.Fatalf("unary status metadata was not projected: %+v", got.Status)
 	}
 	if got.Session.SessionName != "captured unary metadata" || got.Session.ExecutionTarget.WorkspaceID != "workspace-1" {

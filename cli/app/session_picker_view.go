@@ -27,6 +27,7 @@ type sessionPickerStyles struct {
 	headerText     lipgloss.Style
 	headerWarning  lipgloss.Style
 	headerSuccess  lipgloss.Style
+	headerError    lipgloss.Style
 	row            lipgloss.Style
 	rowSelected    lipgloss.Style
 	marker         lipgloss.Style
@@ -185,6 +186,7 @@ func newSessionPickerStyles(theme string) sessionPickerStyles {
 		headerText:     lipgloss.NewStyle().Foreground(palette.foreground),
 		headerWarning:  lipgloss.NewStyle().Foreground(sharedtheme.DefaultPalette().Status.Warning.Adaptive()).Bold(true),
 		headerSuccess:  lipgloss.NewStyle().Foreground(sharedtheme.DefaultPalette().Status.Success.Adaptive()).Bold(true),
+		headerError:    lipgloss.NewStyle().Foreground(sharedtheme.DefaultPalette().Status.Error.Adaptive()).Bold(true),
 		row:            lipgloss.NewStyle().Foreground(palette.foreground),
 		rowSelected:    lipgloss.NewStyle().Foreground(palette.primary).Bold(true),
 		marker:         lipgloss.NewStyle().Foreground(palette.muted),

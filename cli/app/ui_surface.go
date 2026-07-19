@@ -85,6 +85,7 @@ func (m *uiModel) activateSurfaceFrom(prev, surface uiSurface, suppressAltScreen
 	}
 	m.activeSurface = surface
 	m.syncRendererOutputGate()
+	m.notifyPendingTranscriptPromptActivation()
 	if prev == surface || suppressAltScreen {
 		return nil
 	}

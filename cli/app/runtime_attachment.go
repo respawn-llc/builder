@@ -20,17 +20,15 @@ type runtimeAttachmentSource interface {
 }
 
 type runtimeAttachmentClients struct {
-	Attention                       apicontract.AttentionNotificationService
-	AttentionNotificationsSupported bool
-	ProcessControls                 apicontract.ProcessControlService
-	ProcessOutput                   apicontract.ProcessOutputService
-	ProcessViews                    apicontract.ProcessViewService
-	PromptControl                   apicontract.PromptControlService
-	RuntimeControls                 apicontract.RuntimeControlService
-	SessionTranscript               apicontract.SessionTranscriptService
-	SessionRuntime                  apicontract.SessionRuntimeService
-	SessionViews                    apicontract.SessionViewService
-	Worktrees                       apicontract.WorktreeService
+	ProcessControls   apicontract.ProcessControlService
+	ProcessOutput     apicontract.ProcessOutputService
+	ProcessViews      apicontract.ProcessViewService
+	PromptControl     apicontract.PromptControlService
+	RuntimeControls   apicontract.RuntimeControlService
+	SessionTranscript apicontract.SessionTranscriptService
+	SessionRuntime    apicontract.SessionRuntimeService
+	SessionViews      apicontract.SessionViewService
+	Worktrees         apicontract.WorktreeService
 }
 
 func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, plan sessionLaunchPlan, diagnosticWriter io.Writer, startLogLine string) (*runtimeLaunchPlan, error) {
@@ -46,34 +44,17 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 		_ = runtimeattach.Release(clients.SessionRuntime, plan.SessionID, ownerID)
 		return nil, errors.New("session transcript service is required")
 	}
-	var attentionSubscription serverapi.AttentionNotificationSubscription
-	if clients.AttentionNotificationsSupported {
-		if clients.Attention == nil {
-			_ = runtimeattach.Release(clients.SessionRuntime, plan.SessionID, ownerID)
-			return nil, errors.New("attention notification service is required")
-		}
-		attentionSubscription, err = clients.Attention.SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{
-			SessionID:                    plan.SessionID,
-			IncludePendingPromptSnapshot: true,
-		})
-		if err != nil {
-			_ = runtimeattach.Release(clients.SessionRuntime, plan.SessionID, ownerID)
-			return nil, err
-		}
-	}
 	_ = diagnosticWriter
 	_ = startLogLine
-	wiring, stopAttentionEvents, stopTranscriptEvents := prepareSharedRuntimeWiring(
+	wiring, stopTranscriptEvents := prepareSharedRuntimeWiring(
 		ctx,
 		clients,
 		plan,
-		attentionSubscription,
 		reactivator,
 	)
 	var stopStreamsOnce sync.Once
 	stopStreams := func() {
 		stopStreamsOnce.Do(func() {
-			stopAttentionEvents()
 			stopTranscriptEvents()
 		})
 	}
@@ -109,9 +90,8 @@ func prepareSharedRuntimeWiring(
 	ctx context.Context,
 	clients runtimeAttachmentClients,
 	plan sessionLaunchPlan,
-	attentionSubscription serverapi.AttentionNotificationSubscription,
 	reactivator *runtimeReactivator,
-) (*runtimeWiring, func(), func()) {
+) (*runtimeWiring, func()) {
 	runtimeClient := newUIRuntimeClientWithReads(plan.SessionID, clients.SessionViews, clients.RuntimeControls).(*sessionRuntimeClient)
 	if reactivator != nil {
 		runtimeClient.SetRuntimeReactivator(reactivator)
@@ -132,18 +112,11 @@ func prepareSharedRuntimeWiring(
 		}
 		return strings.TrimSpace(plan.SessionName)
 	}, terminalFocus.FocusedForAttention)
-	var promptAttention *bellHooks
-	if attentionSubscription == nil {
-		promptAttention = turnQueueHook
-	}
-	stopAttentionEvents := startAttentionNotificationEvents(ctx, attentionSubscription, func(ctx context.Context) (serverapi.AttentionNotificationSubscription, error) {
-		return clients.Attention.SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: plan.SessionID, IncludePendingPromptSnapshot: true})
-	}, turnQueueHook)
 	wiring := &runtimeWiring{
 		transcriptEvents:      transcriptEvents,
 		requestTranscriptOpen: requestTranscriptOpen,
 		promptAnswers:         newTranscriptPromptAnswerer(ctx, clients.PromptControl),
-		promptAttention:       promptAttention,
+		promptAttention:       turnQueueHook,
 		turnQueueHook:         turnQueueHook,
 		terminalFocus:         terminalFocus,
 		runtimeClient:         runtimeClient,
@@ -153,5 +126,5 @@ func prepareSharedRuntimeWiring(
 		processViews:          clients.ProcessViews,
 		promptHistory:         append([]string(nil), plan.PromptHistory...),
 	}
-	return wiring, stopAttentionEvents, stopTranscriptEvents
+	return wiring, stopTranscriptEvents
 }

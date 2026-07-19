@@ -60,10 +60,9 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 		}
 	case clientui.TranscriptMessagePromptPending:
 		prompt := *message.Payload.PromptPending
-		m.askController().acceptEvent(m.transcriptPromptEvent(prompt))
-		notifyTranscriptPromptFallback(m.promptAttention, prompt, clientui.AttentionNotificationSourceLive)
+		return m.askController().acceptEvent(m.transcriptPromptEvent(prompt))
 	case clientui.TranscriptMessagePromptResolved:
-		m.askController().resolvePrompt(string(message.Payload.PromptResolved.PromptID))
+		return m.askController().resolvePrompt(string(message.Payload.PromptResolved.PromptID))
 	case clientui.TranscriptMessageWorktreeTransitionOutcome:
 		return m.reconcileTranscriptWorktreeTransitionOutcome(*message.Payload.WorktreeTransitionOutcome)
 	case clientui.TranscriptMessageOperationalDiagnostic:
@@ -98,7 +97,7 @@ func (m *uiModel) applyTranscriptHydration(
 	}
 
 	m.reconcileTranscriptQueuedMessages(hydration.QueuedMessages)
-	m.reconcileTranscriptPrompts(hydration.PendingPrompts)
+	cmds = append(cmds, m.reconcileTranscriptPrompts(hydration.PendingPrompts))
 	for _, background := range hydration.BackgroundActivities {
 		m.applyTranscriptBackgroundActivity(background)
 	}
@@ -212,13 +211,16 @@ func (m *uiModel) applyTranscriptSessionIdentity(identity clientui.TranscriptSes
 	if previousSessionID == "" || previousSessionID == nextSessionID {
 		return titleCmd
 	}
-	m.reconcileTranscriptPrompts(nil)
+	promptCmd := m.reconcileTranscriptPrompts(nil)
 	rollbackCmd := m.discardRollbackStateForSessionReplacement()
 	cancelCmd := m.cancelPendingDetailTranscriptRequest()
 	m.detailTranscript.reset()
 	resetCmd := m.forwardToView(tui.ResetDetailTranscriptMsg{})
 	loadCmd := m.loadDetailTranscriptPageCmd(m.detailTranscript.requestedPageForDetailEntry())
-	return sequenceCmds(titleCmd, rollbackCmd, cancelCmd, resetCmd, loadCmd)
+	return tea.Batch(
+		promptCmd,
+		sequenceCmds(titleCmd, rollbackCmd, cancelCmd, resetCmd, loadCmd),
+	)
 }
 
 func (m *uiModel) applyTranscriptContextUsage(usage clientui.TranscriptContextUsage) {
@@ -337,7 +339,8 @@ func (m *uiModel) transcriptPromptEvent(prompt clientui.TranscriptPrompt) askEve
 	}
 }
 
-func (m *uiModel) reconcileTranscriptPrompts(prompts []clientui.TranscriptPrompt) {
+func (m *uiModel) reconcileTranscriptPrompts(prompts []clientui.TranscriptPrompt) tea.Cmd {
+	cmds := make([]tea.Cmd, 0, len(prompts)+1)
 	present := make(map[string]struct{}, len(prompts))
 	for _, prompt := range prompts {
 		present[string(prompt.PromptID)] = struct{}{}
@@ -356,12 +359,12 @@ func (m *uiModel) reconcileTranscriptPrompts(prompts []clientui.TranscriptPrompt
 		}
 	}
 	for _, id := range stale {
-		m.askController().resolvePrompt(id)
+		cmds = append(cmds, m.askController().resolvePrompt(id))
 	}
 	for _, prompt := range prompts {
-		m.askController().acceptEvent(m.transcriptPromptEvent(prompt))
-		notifyTranscriptPromptFallback(m.promptAttention, prompt, clientui.AttentionNotificationSourceSnapshot)
+		cmds = append(cmds, m.askController().acceptEvent(m.transcriptPromptEvent(prompt)))
 	}
+	return batchCmds(cmds...)
 }
 
 func (m *uiModel) applyTranscriptOperationalDiagnostic(diagnostic clientui.TranscriptOperationalDiagnostic) tea.Cmd {

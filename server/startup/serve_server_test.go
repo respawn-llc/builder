@@ -585,6 +585,9 @@ func TestMissingConfigServeStartsBootstrapSurfaceBeforeAuthReady(t *testing.T) {
 	if cause.Code != string(serverapi.ServerNotReadyOnboardingRequired) || cause.Severity != "error" || cause.Summary != nil || cause.NextAction != nil {
 		t.Fatalf("unexpected onboarding readiness cause: %+v", cause)
 	}
+	if _, err := server.deps.ServerStatusClient().GetUpdateStatus(context.Background(), serverapi.UpdateStatusRequest{}); !errors.Is(err, serverapi.ErrServerNotReadyOnboardingRequired) {
+		t.Fatalf("GetUpdateStatus before activation error = %v, want onboarding not ready", err)
+	}
 	if _, statErr := os.Stat(filepath.Join(home, config.ConfigDirName, "config.toml")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("settings file should remain absent before finalize, stat err=%v", statErr)
 	}

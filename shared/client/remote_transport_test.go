@@ -114,6 +114,72 @@ func TestRemoteReleaseSessionRuntimePropagatesClosePolicy(t *testing.T) {
 	requireNoHandlerError(t, handlerErrs)
 }
 
+func TestRemoteUpdateStatusCancellationLeavesControlUsable(t *testing.T) {
+	updateStarted := make(chan struct{}, 1)
+	handlerErrs := make(chan error, 8)
+	server := httptest.NewServer(rpcwire.NewWebSocketTransport().Handler(func(ctx context.Context, conn rpcwire.Conn) {
+		for event := range conn.Events() {
+			if event.Err != nil {
+				return
+			}
+			req := event.Frame.Request()
+			switch req.Method {
+			case protocol.MethodHandshake:
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{
+					Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
+				}))); err != nil {
+					reportHandlerError(handlerErrs, "send handshake response: %w", err)
+					return
+				}
+			case protocol.MethodServerUpdateStatusGet:
+				updateStarted <- struct{}{}
+				<-conn.Closed()
+				return
+			case protocol.MethodProjectList:
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.ProjectListResponse{}))); err != nil {
+					reportHandlerError(handlerErrs, "send project list response: %w", err)
+				}
+				return
+			default:
+				reportHandlerError(handlerErrs, "unexpected method %q", req.Method)
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	updateCtx, cancelUpdate := context.WithCancel(context.Background())
+	updateDone := make(chan error, 1)
+	go func() {
+		_, updateErr := remote.GetUpdateStatus(updateCtx, serverapi.UpdateStatusRequest{})
+		updateDone <- updateErr
+	}()
+	select {
+	case <-updateStarted:
+	case err := <-handlerErrs:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for update request")
+	}
+	cancelUpdate()
+	if err := <-updateDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("GetUpdateStatus error = %v, want context canceled", err)
+	}
+
+	listCtx, cancelList := context.WithTimeout(context.Background(), time.Second)
+	defer cancelList()
+	if _, err := remote.ListProjects(listCtx, serverapi.ProjectListRequest{}); err != nil {
+		t.Fatalf("ListProjects after canceled update: %v", err)
+	}
+	requireNoHandlerError(t, handlerErrs)
+}
+
 func TestDialConfiguredRemoteFallsBackToTCPWhenLocalUnixSocketMissing(t *testing.T) {
 	handlerErrs := make(chan error, 8)
 	server := httptest.NewServer(rpcwire.NewWebSocketTransport().Handler(func(ctx context.Context, conn rpcwire.Conn) {

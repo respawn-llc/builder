@@ -1,10 +1,14 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 
 	"core/cli/app/internal/status"
+	"core/shared/apicontract"
+	"core/shared/serverapi"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -21,12 +25,24 @@ type sessionPickerHeaderInfo struct {
 	OwnsServer    bool
 	ServerAddress string
 	Notice        *startupPickerNotice
+	updateStatus  apicontract.ServerStatusService
 }
 
 type sessionPickerHeaderLine struct {
-	plain  string
-	render string
+	role  sessionPickerHeaderRowRole
+	plain string
 }
+
+type sessionPickerHeaderRowRole uint8
+
+const (
+	sessionPickerHeaderRowTitle sessionPickerHeaderRowRole = iota + 1
+	sessionPickerHeaderRowUpdateAvailable
+	sessionPickerHeaderRowUpdateFailed
+	sessionPickerHeaderRowMetadata
+	sessionPickerHeaderRowOwnedServer
+	sessionPickerHeaderRowRemoteServer
+)
 
 func (m *sessionPickerModel) renderHeader() string {
 	maxOuterWidth := m.width
@@ -37,7 +53,7 @@ func (m *sessionPickerModel) renderHeader() string {
 	if maxInnerWidth < 1 {
 		maxInnerWidth = 1
 	}
-	lines := m.renderHeaderLines(maxInnerWidth)
+	lines := m.projectHeaderRows(maxInnerWidth)
 	innerWidth := maxRenderedHeaderLineWidth(lines)
 	if innerWidth < 1 {
 		innerWidth = 1
@@ -45,19 +61,22 @@ func (m *sessionPickerModel) renderHeader() string {
 	if innerWidth > maxInnerWidth {
 		innerWidth = maxInnerWidth
 	}
-	return m.styles.headerBox.Width(innerWidth + 2).Render(renderHeaderLines(lines, innerWidth))
+	return m.styles.headerBox.Width(innerWidth + 2).Render(m.renderHeaderLines(lines, innerWidth))
 }
 
-func (m *sessionPickerModel) renderHeaderLines(maxWidth int) []sessionPickerHeaderLine {
+func (m *sessionPickerModel) projectHeaderRows(maxWidth int) []sessionPickerHeaderLine {
 	info := m.normalizedHeaderInfo()
 	title := "Kent v" + info.Version
 	if maxWidth < 1 {
 		maxWidth = 1
 	}
 	lines := []sessionPickerHeaderLine{{
-		plain:  title,
-		render: m.styles.headerTitle.Render(truncateQueuedMessageLine(title, maxWidth)),
+		role:  sessionPickerHeaderRowTitle,
+		plain: truncateQueuedMessageLine(title, maxWidth),
 	}}
+	if updateLine := m.projectUpdateHeaderRow(maxWidth); updateLine != nil {
+		lines = append(lines, *updateLine)
+	}
 	lines = append(lines, m.renderHeaderPairLines(gitBranchHeaderSegment(info.Branch), info.CWD, maxWidth)...)
 	lines = append(lines, m.renderHeaderPairLines(info.Auth, info.Model, maxWidth)...)
 	serverLine := m.serverHeaderLine(info)
@@ -65,16 +84,80 @@ func (m *sessionPickerModel) renderHeaderLines(maxWidth int) []sessionPickerHead
 		if runewidth.StringWidth(serverLine) > maxWidth {
 			serverLine = truncateQueuedMessageLine(serverLine, maxWidth)
 		}
-		style := m.styles.headerSuccess
+		role := sessionPickerHeaderRowRemoteServer
 		if info.OwnsServer {
-			style = m.styles.headerWarning
+			role = sessionPickerHeaderRowOwnedServer
 		}
 		lines = append(lines, sessionPickerHeaderLine{
-			plain:  serverLine,
-			render: style.Render(serverLine),
+			role:  role,
+			plain: serverLine,
 		})
 	}
 	return lines
+}
+
+func (m *sessionPickerModel) projectUpdateHeaderRow(maxWidth int) *sessionPickerHeaderLine {
+	if maxWidth < 1 {
+		maxWidth = 1
+	}
+	if m.updateStatus == nil {
+		return nil
+	}
+	switch m.updateStatus.Kind() {
+	case serverapi.UpdateStatusCurrent, serverapi.UpdateStatusCheckUnavailable:
+		return nil
+	case serverapi.UpdateStatusAvailable:
+		versions := m.updateStatus.Versions()
+		if versions == nil {
+			return m.projectInvalidUpdateHeaderRow("available result is missing versions", maxWidth)
+		}
+		return m.renderUpdateHeaderRow(
+			sessionPickerHeaderRowUpdateAvailable,
+			"Update available: v"+versions.Latest,
+			maxWidth,
+		)
+	case serverapi.UpdateStatusCheckFailed:
+		failure := m.updateStatus.Failure()
+		if failure == nil {
+			return m.projectInvalidUpdateHeaderRow("failed result is missing a cause", maxWidth)
+		}
+		return m.renderUpdateHeaderRow(
+			sessionPickerHeaderRowUpdateFailed,
+			"Update check failed: "+failure.Cause,
+			maxWidth,
+		)
+	default:
+		return m.projectInvalidUpdateHeaderRow(
+			fmt.Sprintf("unknown validated result kind %q", m.updateStatus.Kind()),
+			maxWidth,
+		)
+	}
+}
+
+func (m *sessionPickerModel) projectInvalidUpdateHeaderRow(cause string, maxWidth int) *sessionPickerHeaderLine {
+	if m.header.StatusRequest.Settings.Debug {
+		panic(fmt.Sprintf(
+			"session picker update header invariant violated: kind=%q cause=%q",
+			m.updateStatus.Kind(),
+			cause,
+		))
+	}
+	return m.renderUpdateHeaderRow(
+		sessionPickerHeaderRowUpdateFailed,
+		"Update check failed: invalid update status: "+cause,
+		maxWidth,
+	)
+}
+
+func (m *sessionPickerModel) renderUpdateHeaderRow(
+	role sessionPickerHeaderRowRole,
+	text string,
+	maxWidth int,
+) *sessionPickerHeaderLine {
+	return &sessionPickerHeaderLine{
+		role:  role,
+		plain: truncateQueuedMessageLine(text, maxWidth),
+	}
 }
 
 func (m *sessionPickerModel) normalizedHeaderInfo() sessionPickerHeaderInfo {
@@ -106,8 +189,8 @@ func (m *sessionPickerModel) renderHeaderPairLines(first string, second string, 
 	row := first + statusLineSeparator + second
 	if runewidth.StringWidth(row) <= maxWidth {
 		return []sessionPickerHeaderLine{{
-			plain:  row,
-			render: m.styles.headerText.Render(row),
+			role:  sessionPickerHeaderRowMetadata,
+			plain: row,
 		}}
 	}
 	return []sessionPickerHeaderLine{
@@ -122,8 +205,8 @@ func (m *sessionPickerModel) renderHeaderTextLine(text string, maxWidth int) ses
 		renderedText = truncateSessionPickerHeaderSegment(renderedText, maxWidth)
 	}
 	return sessionPickerHeaderLine{
-		plain:  renderedText,
-		render: m.styles.headerText.Render(renderedText),
+		role:  sessionPickerHeaderRowMetadata,
+		plain: renderedText,
 	}
 }
 
@@ -154,12 +237,41 @@ func maxRenderedHeaderLineWidth(lines []sessionPickerHeaderLine) int {
 	return maxWidth
 }
 
-func renderHeaderLines(lines []sessionPickerHeaderLine, width int) string {
+func (m *sessionPickerModel) renderHeaderLines(lines []sessionPickerHeaderLine, width int) string {
 	rendered := make([]string, 0, len(lines))
 	for _, line := range lines {
-		rendered = append(rendered, " "+padANSIRight(line.render, width)+" ")
+		style, valid := m.sessionPickerHeaderRowStyle(line.role)
+		if !valid {
+			cause := fmt.Sprintf("unknown header row role %d", line.role)
+			if m.header.StatusRequest.Settings.Debug {
+				panic("session picker header invariant violated: " + cause)
+			}
+			line.plain = truncateQueuedMessageLine(
+				"Update check failed: invalid session picker header: "+cause,
+				width,
+			)
+		}
+		styled := style.Render(line.plain)
+		rendered = append(rendered, " "+padANSIRight(styled, width)+" ")
 	}
 	return strings.Join(rendered, "\n")
+}
+
+func (m *sessionPickerModel) sessionPickerHeaderRowStyle(role sessionPickerHeaderRowRole) (lipgloss.Style, bool) {
+	switch role {
+	case sessionPickerHeaderRowTitle:
+		return m.styles.headerTitle, true
+	case sessionPickerHeaderRowUpdateAvailable, sessionPickerHeaderRowRemoteServer:
+		return m.styles.headerSuccess, true
+	case sessionPickerHeaderRowUpdateFailed:
+		return m.styles.headerError, true
+	case sessionPickerHeaderRowMetadata:
+		return m.styles.headerText, true
+	case sessionPickerHeaderRowOwnedServer:
+		return m.styles.headerWarning, true
+	default:
+		return m.styles.headerError, false
+	}
 }
 
 func truncateSessionPickerHeaderSegment(segment string, width int) string {

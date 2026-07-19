@@ -218,8 +218,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			},
 			inputs:              []pty.InputEvent{{After: 1500 * time.Millisecond, Bytes: []byte("\r")}},
 			expectedAppends:     []string{"❮ question lifecycle complete"},
-			expectedAnyAppends:  []string{"? PTY_LIVE_QUESTION"},
-			forbiddenAnyAppends: []string{"? tool call"},
+			forbiddenAnyAppends: []string{"? PTY_LIVE_QUESTION", "? tool call"},
 		},
 		{
 			name: "live_background_shell_completion_style",

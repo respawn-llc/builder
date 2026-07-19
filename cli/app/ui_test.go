@@ -255,13 +255,12 @@ func TestAskQuestionTabFreeformFlow(t *testing.T) {
 	m, control := newProjectedPromptTestUIModel(t)
 	event := testQuestionAskEvent("ask-1", "Pick one", "a", "b")
 
-	next, _ := m.Update(askEventMsg{event: event})
-	updated := next.(*uiModel)
+	updated := updateUIModel(t, m, askEventMsg{event: event})
 	if testAskFreeform(updated) {
 		t.Fatal("expected picker mode first")
 	}
 
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyTab})
 	updated = next.(*uiModel)
 	if !testAskFreeform(updated) {
 		t.Fatal("expected tab to open freeform commentary")
@@ -295,9 +294,8 @@ func TestAskQuestionPickerSubmitPreservesPendingFreeformDraft(t *testing.T) {
 	m, control := newProjectedPromptTestUIModel(t)
 	event := testQuestionAskEvent("ask-1", "Pick one", "a", "b")
 
-	next, _ := m.Update(askEventMsg{event: event})
-	updated := next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated := updateUIModel(t, m, askEventMsg{event: event})
+	next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyTab})
 	updated = next.(*uiModel)
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("custom")})
 	updated = next.(*uiModel)
@@ -310,7 +308,7 @@ func TestAskQuestionPickerSubmitPreservesPendingFreeformDraft(t *testing.T) {
 	if testAskInput(updated) != "custom" {
 		t.Fatalf("expected pending freeform draft preserved, got %q", testAskInput(updated))
 	}
-	promptLines := updated.askController().renderPromptLines()
+	promptLines := updated.askController().renderPriorityPromptLines()
 	hasDisabledDraftPreview := false
 	hasHintLine := false
 	for _, line := range promptLines {
@@ -350,9 +348,8 @@ func TestAskQuestionTabRoundTripRestoresPendingFreeformDraftAndCursor(t *testing
 	m, control := newProjectedPromptTestUIModel(t)
 	event := testQuestionAskEvent("ask-1", "Pick one", "a", "b")
 
-	next, _ := m.Update(askEventMsg{event: event})
-	updated := next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated := updateUIModel(t, m, askEventMsg{event: event})
+	next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyTab})
 	updated = next.(*uiModel)
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("custom")})
 	updated = next.(*uiModel)
@@ -398,9 +395,8 @@ func TestAskQuestionFreeformSelectionEnterDropsIntoFreeformWhenEmpty(t *testing.
 	m := newProjectedStaticUIModel()
 	event := testQuestionAskEvent("ask-1", "Pick one", "a", "b")
 
-	next, _ := m.Update(askEventMsg{event: event})
-	updated := next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated := updateUIModel(t, m, askEventMsg{event: event})
+	next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
 	updated = next.(*uiModel)
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
 	updated = next.(*uiModel)
@@ -425,9 +421,8 @@ func TestAskQuestionFreeformSelectionEmptySubmitRequiresCommentary(t *testing.T)
 	m, control := newProjectedPromptTestUIModel(t)
 	event := testQuestionAskEvent("ask-1", "Pick one", "a", "b")
 
-	next, _ := m.Update(askEventMsg{event: event})
-	updated := next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated := updateUIModel(t, m, askEventMsg{event: event})
+	next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
 	updated = next.(*uiModel)
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
 	updated = next.(*uiModel)
@@ -459,9 +454,8 @@ func TestAskQuestionFreeformSelectionSubmitsFreeformOnly(t *testing.T) {
 	m, control := newProjectedPromptTestUIModel(t)
 	event := testQuestionAskEvent("ask-1", "Pick one", "a", "b")
 
-	next, _ := m.Update(askEventMsg{event: event})
-	updated := next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated := updateUIModel(t, m, askEventMsg{event: event})
+	next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
 	updated = next.(*uiModel)
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
 	updated = next.(*uiModel)
@@ -486,13 +480,12 @@ func TestAskFreeformUsesMainEditingStack(t *testing.T) {
 	m, control := newProjectedPromptTestUIModel(t)
 	event := testQuestionAskEvent("ask-1", "Type answer")
 
-	next, _ := m.Update(askEventMsg{event: event})
-	updated := next.(*uiModel)
+	updated := updateUIModel(t, m, askEventMsg{event: event})
 	if !testAskFreeform(updated) {
 		t.Fatal("expected freeform ask input")
 	}
 
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hello world")})
+	next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hello world")})
 	updated = next.(*uiModel)
 	for range 5 {
 		next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyLeft})
@@ -522,11 +515,10 @@ func TestAskFreeformCtrlUEditingMatchesMainInput(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	event := testQuestionAskEvent("ask-1", "Type answer")
 
-	next, _ := m.Update(askEventMsg{event: event})
-	updated := next.(*uiModel)
+	updated := updateUIModel(t, m, askEventMsg{event: event})
 	testSetAskInputAtRuneCursor(updated, "top\ncurrent\nbottom", len([]rune("top\ncur")))
 
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
 	updated = next.(*uiModel)
 
 	if goruntime.GOOS == "darwin" {
@@ -557,9 +549,8 @@ func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 		clientui.ApprovalDecisionDeny,
 	)
 
-	next, _ := m.Update(askEventMsg{event: event})
-	updated := next.(*uiModel)
-	promptLines := updated.askController().renderPromptLines()
+	updated := updateUIModel(t, m, askEventMsg{event: event})
+	promptLines := updated.askController().renderPriorityPromptLines()
 	optionLines := 0
 	hintLines := 0
 	for _, line := range promptLines {
@@ -578,15 +569,15 @@ func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 	}
 
 	for i := 0; i < 2; i++ {
-		next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+		next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyDown})
 		updated = next.(*uiModel)
 	}
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyTab})
 	updated = next.(*uiModel)
 	if !testAskFreeform(updated) {
 		t.Fatal("expected tab on deny selection to switch to commentary input")
 	}
-	promptLines = updated.askController().renderPromptLines()
+	promptLines = updated.askController().renderPriorityPromptLines()
 	if len(promptLines) != 2 || promptLines[0].Kind != askPromptLineKindHint || promptLines[1].Kind != askPromptLineKindInput {
 		t.Fatalf("expected commentary prompt to collapse to hint+input, got %+v", promptLines)
 	}
@@ -696,7 +687,7 @@ func TestAskQuestionMarkdownPromptCursorTracksInputAfterExpandedQuestion(t *test
 		"- Second item",
 	}, "\n")
 	m := newProjectedStaticUIModel()
-	m.terminalGeometry = terminalGeometryKnown(72, 12)
+	m.terminalGeometry = terminalGeometryKnown(64, 12)
 	m.layout().syncViewport()
 	event := testQuestionAskEvent("ask-1", question)
 	testSetActiveAsk(m, &event)
@@ -741,7 +732,7 @@ func TestAskQuestionMarkdownLinksWrapIntoIndependentBoundedRows(t *testing.T) {
 			m := newProjectedStaticUIModel(
 				WithUIMarkdownLinkPresentation(presentation.links),
 			)
-			m.terminalGeometry = terminalGeometryKnown(24, 12)
+			m.terminalGeometry = terminalGeometryKnown(12, 12)
 			m.layout().syncViewport()
 			event := testQuestionAskEvent(
 				"ask-1",
@@ -794,7 +785,7 @@ func TestAskQuestionPlainPRReferenceDoesNotCreateHyperlink(t *testing.T) {
 
 func TestAskQuestionViewportPrioritizesAnswerOptionsOverQuestionLines(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.terminalGeometry = terminalGeometryKnown(56, 9)
+	m.terminalGeometry = terminalGeometryKnown(48, 9)
 	m.layout().syncViewport()
 	event := testQuestionAskEvent(
 		"ask-1",

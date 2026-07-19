@@ -68,6 +68,7 @@ type sessionPickerModel struct {
 	spinnerSequence            uint64
 	scheduledSpinnerGeneration *uint64
 	startupStatus              *startupPickerStatusModel
+	updateStatus               *serverapi.UpdateStatusResult
 	clock                      func() time.Time
 }
 
@@ -121,6 +122,9 @@ func (m *sessionPickerModel) Init() tea.Cmd {
 		m.startBodyRequest(sessioncontract.SessionCategorySubagent, sessionPickerBodyRequestInitial),
 		collectSessionPickerStatusCmd(m.header),
 	}
+	if updateStatus := m.collectUpdateStatusCmd(); updateStatus != nil {
+		commands = append(commands, updateStatus)
+	}
 	if tick := m.reconcileSpinnerTick(); tick != nil {
 		commands = append(commands, tick)
 	}
@@ -157,6 +161,8 @@ func (m *sessionPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.header.Model = sessionPickerStatusText(message.model)
 		m.ensureSelectedVisible(m.tab(m.activeTab))
 		return m, nil
+	case sessionPickerUpdateStatusMsg:
+		return m, m.applyUpdateStatus(message)
 	case tea.WindowSizeMsg:
 		if message.Width > 0 {
 			m.width = message.Width

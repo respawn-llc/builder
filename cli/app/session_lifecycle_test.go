@@ -1147,6 +1147,107 @@ func TestForcedLocalExitPropagatesDetachReleaseFailure(t *testing.T) {
 	}
 }
 
+func TestSessionLifecycleProjectionFailureUsesDetachOnlyRelease(t *testing.T) {
+	model := projectionFailureFinalModel(t)
+	detachCalls := 0
+	plan := &runtimeLaunchPlan{
+		close: func() error {
+			t.Fatal("normal close must not run after projection failure")
+			return nil
+		},
+		detachClose: func() error {
+			detachCalls++
+			return nil
+		},
+	}
+
+	if err := releaseRuntimePlanAfterUIResult(plan, model, nil); err != nil {
+		t.Fatalf("release error = %v", err)
+	}
+	if detachCalls != 1 {
+		t.Fatalf("detach calls = %d, want 1", detachCalls)
+	}
+}
+
+func TestResolvedSessionActionUsesFinalModelDetachPolicy(t *testing.T) {
+	model := projectionFailureFinalModel(t)
+	detachCalls := 0
+	plan := &runtimeLaunchPlan{
+		close: func() error {
+			t.Fatal("normal close must not run for forced final model")
+			return nil
+		},
+		detachClose: func() error {
+			detachCalls++
+			return nil
+		},
+	}
+	server := narrowSessionLifecycleServer{lifecycle: &recordingSessionLifecycleClient{
+		resolveTransition: func(context.Context, serverapi.SessionResolveTransitionRequest) (serverapi.SessionDirective, error) {
+			return serverapi.SelectSessionDirective(serverapi.SessionAuthPreparationKeepCurrent), nil
+		},
+	}}
+
+	if _, err := resolveAndReleaseSessionAction(
+		context.Background(),
+		server,
+		nil,
+		"session",
+		UITransition{Action: UIActionExit},
+		plan,
+		model,
+	); err != nil {
+		t.Fatalf("resolve and release forced final model: %v", err)
+	}
+	if detachCalls != 1 {
+		t.Fatalf("detach calls = %d, want 1", detachCalls)
+	}
+}
+
+func TestSessionLifecycleProjectionFailureDraftErrorStillUsesDetachOnlyRelease(t *testing.T) {
+	model := projectionFailureFinalModel(t)
+	persistErr := errors.New("persist draft failed")
+	detachCalls := 0
+	plan := &runtimeLaunchPlan{
+		close: func() error {
+			t.Fatal("normal close must not run after projection failure")
+			return nil
+		},
+		detachClose: func() error {
+			detachCalls++
+			return nil
+		},
+	}
+
+	err := releaseRuntimePlanAfterUIResult(plan, model, persistErr)
+	if !errors.Is(err, persistErr) {
+		t.Fatalf("release error = %v, want persistence failure", err)
+	}
+	if detachCalls != 1 {
+		t.Fatalf("detach calls = %d, want 1", detachCalls)
+	}
+}
+
+func TestSessionLifecycleProjectionFailurePreservesDraftAndDetachErrors(t *testing.T) {
+	model := projectionFailureFinalModel(t)
+	persistErr := errors.New("persist draft failed")
+	detachErr := errors.New("detach failed")
+	plan := &runtimeLaunchPlan{
+		close: func() error {
+			t.Fatal("normal close must not run after projection failure")
+			return nil
+		},
+		detachClose: func() error {
+			return detachErr
+		},
+	}
+
+	err := releaseRuntimePlanAfterUIResult(plan, model, persistErr)
+	if !errors.Is(err, persistErr) || !errors.Is(err, detachErr) {
+		t.Fatalf("release error = %v, want persistence and detach failures", err)
+	}
+}
+
 type narrowSessionLifecycleServer struct {
 	lifecycle      apicontract.SessionLifecycleService
 	cfg            config.App

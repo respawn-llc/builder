@@ -145,6 +145,7 @@ type uiPresentationFeatureState struct {
 type uiConversationFeatureState struct {
 	interaction                        uiInteractionState
 	ask                                uiAskState
+	questionProjector                  questionProjector
 	promptAnswers                      *transcriptPromptAnswerer
 	promptAttention                    *bellHooks
 	startupSubmit                      string
@@ -187,8 +188,6 @@ type uiStatusFeatureState struct {
 	transientStatusToken     uint64
 	transientStatusQueue     []uiStatusNotice
 	localNoticeSequence      uint64
-	startupUpdateNotice      bool
-	startupUpdateShown       bool
 	debugKeys                bool
 	debugMode                bool
 }

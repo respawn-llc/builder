@@ -32,15 +32,10 @@ type ExecutionTargetResolver interface {
 	ResolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error)
 }
 
-type UpdateStatusProvider interface {
-	Status(ctx context.Context) clientui.UpdateStatus
-}
-
 type Service struct {
 	sessions         SessionStoreResolver
 	snapshots        *resolvedSessionSnapshotSource
 	targets          ExecutionTargetResolver
-	updates          UpdateStatusProvider
 	operations       *runtimeops.Coordinator
 	app              config.App
 	auth             servicecontract.AuthStatusService
@@ -100,14 +95,6 @@ func (s *Service) WithCacheWarningMode(mode config.CacheWarningMode) *Service {
 	return s
 }
 
-func (s *Service) WithUpdateStatusProvider(provider UpdateStatusProvider) *Service {
-	if s == nil {
-		return nil
-	}
-	s.updates = provider
-	return s
-}
-
 func (s *Service) cacheWarningModeValue() config.CacheWarningMode {
 	if s == nil {
 		return config.CacheWarningModeDefault
@@ -155,9 +142,6 @@ func (s *Service) GetSessionMainView(ctx context.Context, req serverapi.SessionM
 			return serverapi.SessionMainViewResponse{}, err
 		}
 		view.Session.ExecutionTarget = target
-	}
-	if s.updates != nil {
-		view.Status.Update = s.updates.Status(ctx)
 	}
 	if len(view.InputReconciliation.Operations) == 0 && len(req.PendingOperationRefs) > 0 {
 		reconciliation, err := s.operations.FeedSnapshot(strings.TrimSpace(req.SessionID), req.PendingOperationRefs)
@@ -331,10 +315,10 @@ func (s *Service) resolveBranch(
 			if entry.Detached {
 				return serverapi.UnavailableSessionExecutionBranch(serverapi.SessionExecutionBranchUnavailableDetachedHead)
 			}
-			if strings.TrimSpace(entry.BranchName) == "" {
+			if entry.Branch == nil {
 				return serverapi.UnavailableSessionExecutionBranch(serverapi.SessionExecutionBranchUnavailableNotGitRepository)
 			}
-			return serverapi.AvailableSessionExecutionBranch(entry.BranchName)
+			return serverapi.AvailableSessionExecutionBranch(entry.Branch.Name())
 		}
 	}
 	return serverapi.UnavailableSessionExecutionBranch(serverapi.SessionExecutionBranchUnavailableNotGitRepository)
