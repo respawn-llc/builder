@@ -1109,6 +1109,44 @@ func TestServiceManualMoveResolvesCapturedApprovalWithFreshFinalizer(t *testing.
 	}
 }
 
+func TestServiceManualMoveResolvesCapturedInterruptionWithFreshFinalizer(t *testing.T) {
+	ctx, service, projectID, workflowID, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
+	started := startWorkflowServiceTask(t, ctx, service, taskID)
+	claimed, err := service.store.ClaimRun(ctx, workflow.RunID(started.RunID), 0)
+	if err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	if err := service.store.InterruptRunGeneration(ctx, workflow.RunID(started.RunID), claimed.Generation, "manual_move", `{"error":"move detail"}`); err != nil {
+		t.Fatalf("InterruptRunGeneration: %v", err)
+	}
+	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	backlogID := workflowServiceNodeIDByKey(t, def.Definition, "backlog")
+	publisher := &recordingWorkflowAttentionPublisher{}
+	service.attentionFinalizer = workflowattention.NewFinalizer(failingWorkflowPendingProjectionProvider{t: t}, publisher)
+
+	if _, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		TaskID:           taskID,
+		TargetNodeID:     backlogID,
+		AllowMissingEdge: true,
+	}); err != nil {
+		t.Fatalf("MoveWorkflowTask: %v", err)
+	}
+	if len(publisher.resolved) != 1 {
+		t.Fatalf("resolved notifications = %+v, want one", publisher.resolved)
+	}
+	resolved := publisher.resolved[0]
+	if resolved.id.UUID != started.RunID ||
+		resolved.scope.ProjectID != projectID ||
+		resolved.scope.WorkflowID != workflowID ||
+		resolved.scope.TaskID != taskID {
+		t.Fatalf("resolved interruption = %+v", resolved)
+	}
+}
+
 func TestServiceApproveTerminalTransitionDoesNotResolveExecutionTarget(t *testing.T) {
 	ctx, service, _, _, _, transitionID := newWorkflowServicePendingCompletionApproval(t)
 	service.executionTargets = &recordingExecutionTargetInfrastructure{

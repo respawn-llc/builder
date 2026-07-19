@@ -49,6 +49,7 @@ func (s *Store) ApplyManualMove(ctx context.Context, preparation ManualMovePrepa
 	sourcePlacement := prepared.sourcePlacement
 	sourceNode := prepared.sourceNode
 	sourceRunID := prepared.sourceRunID
+	sourcePlacementRunID := prepared.sourcePlacementRunID
 	pendingApprovalTransitionID := prepared.pendingApprovalTransitionID
 	targetNode := prepared.targetNode
 	edge := prepared.edge
@@ -79,6 +80,7 @@ func (s *Store) ApplyManualMove(ctx context.Context, preparation ManualMovePrepa
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
 	var resolvedApprovalProjections []ApprovalTransitionProjection
+	var resolvedInterruptedRunProjections []InterruptedRunAttentionProjection
 	if autoApprovedExecutable {
 		if err := applyPreparedExecutionTargetMutation(ctx, q, task, targetMutation, now); err != nil {
 			return ManualMoveResult{}, err
@@ -86,6 +88,15 @@ func (s *Store) ApplyManualMove(ctx context.Context, preparation ManualMovePrepa
 	}
 	if err := rejectManualMoveDuringActiveRunWithQueries(ctx, q, req.TaskID); err != nil {
 		return ManualMoveResult{}, err
+	}
+	if sourcePlacementRunID != "" {
+		projection, ok, err := pendingInterruptedRunAttentionProjection(ctx, q, sourcePlacementRunID)
+		if err != nil {
+			return ManualMoveResult{}, err
+		}
+		if ok {
+			resolvedInterruptedRunProjections = append(resolvedInterruptedRunProjections, projection)
+		}
 	}
 	if pendingApprovalTransitionID != "" {
 		// The task is awaiting approval and has no active placement (its source
@@ -140,6 +151,7 @@ func (s *Store) ApplyManualMove(ctx context.Context, preparation ManualMovePrepa
 		State:                                 transitionState,
 		RequiresApproval:                      edge.RequiresApproval,
 		ResolvedApprovalTransitionProjections: resolvedApprovalProjections,
+		ResolvedInterruptedRunProjections:     resolvedInterruptedRunProjections,
 	}
 	targetPlacementID := ""
 	if transitionState == "applied" {
@@ -226,6 +238,7 @@ type preparedManualMove struct {
 	sourcePlacement             workflow.PlacementID
 	sourceNode                  workflow.Node
 	sourceRunID                 workflow.RunID
+	sourcePlacementRunID        workflow.RunID
 	pendingApprovalTransitionID string
 	targetNode                  workflow.Node
 	edge                        workflow.Edge
@@ -278,10 +291,11 @@ func (s *Store) prepareManualMove(ctx context.Context, req ManualMoveRequest) (p
 		}
 	}
 	group, edge, ok := definitionEdgeBetween(def, workflow.NodeIDOf(sourceNode), workflow.NodeIDOf(targetNode))
-	sourceRunID, sourceSessionID, err := s.latestRunForPlacement(ctx, sourcePlacement)
+	sourcePlacementRunID, sourceSessionID, err := s.latestRunForPlacement(ctx, sourcePlacement)
 	if err != nil {
 		return preparedManualMove{}, err
 	}
+	sourceRunID := sourcePlacementRunID
 	reusedOutputValues := map[string]string(nil)
 	if targetNode.Kind() == workflow.NodeKindTerminal && sourceNode.Kind() != workflow.NodeKindTerminal {
 		group, edge, ok = terminalArchiveManualMoveContract(sourceNode, targetNode)
@@ -355,6 +369,7 @@ func (s *Store) prepareManualMove(ctx context.Context, req ManualMoveRequest) (p
 		sourcePlacement:             sourcePlacement,
 		sourceNode:                  sourceNode,
 		sourceRunID:                 sourceRunID,
+		sourcePlacementRunID:        sourcePlacementRunID,
 		pendingApprovalTransitionID: pendingApprovalTransitionID,
 		targetNode:                  targetNode,
 		edge:                        edge,

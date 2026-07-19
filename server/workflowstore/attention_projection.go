@@ -81,7 +81,15 @@ func (s *Store) PendingInterruptedRunAttentionProjection(ctx context.Context, ru
 	if id == "" {
 		return InterruptedRunAttentionProjection{}, false, ErrRunIDRequired
 	}
-	row, err := s.queries.GetWorkflowInterruptedRunAttentionCandidateByRunID(ctx, id)
+	return pendingInterruptedRunAttentionProjection(ctx, s.queries, workflow.RunID(id))
+}
+
+func pendingInterruptedRunAttentionProjection(ctx context.Context, q *sqlitegen.Queries, runID workflow.RunID) (InterruptedRunAttentionProjection, bool, error) {
+	id := strings.TrimSpace(string(runID))
+	if id == "" {
+		return InterruptedRunAttentionProjection{}, false, ErrRunIDRequired
+	}
+	row, err := q.GetWorkflowInterruptedRunAttentionCandidateByRunID(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return InterruptedRunAttentionProjection{}, false, nil
 	}
