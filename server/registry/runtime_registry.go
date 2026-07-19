@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"core/server/attentionnotify"
 	"core/server/runtime"
@@ -33,6 +34,7 @@ type RuntimeRegistry struct {
 	nextStartID              uint64
 	operations               *runtimeops.Coordinator
 	readModels               *runtimeactivity.CoordinatorCache
+	pendingPrompts           *pendingPromptStore
 	attentionBroker          *attentionnotify.Broker
 	questionBatches          *attentionnotify.QuestionBatchTracker
 	executionTargetResolver  func(context.Context, string) (clientui.SessionExecutionTarget, error)
@@ -221,10 +223,6 @@ func (r *RuntimeRegistry) clearStartLocked(sessionID string, startID uint64) {
 	r.runStateCond.Broadcast()
 }
 
-type GuardedPromptResponder interface {
-	SubmitPromptResponse(resp askquestion.AskQuestionResponse, err error) error
-}
-
 type RuntimeInterestReason int
 
 const (
@@ -239,6 +237,7 @@ func NewRuntimeRegistry() *RuntimeRegistry {
 		blockedRuns:              make(map[string]int),
 		starts:                   make(map[string]map[uint64]runStartReservation),
 		readModels:               runtimeactivity.NewCoordinatorCache(runtimeactivity.DefaultCoordinatorCacheLimit),
+		pendingPrompts:           newPendingPromptStore(),
 	}
 	r.runStateCond = sync.NewCond(&r.runStateMu)
 	return r
@@ -303,6 +302,7 @@ func (r *RuntimeRegistry) finishEntryTeardown(sessionID string, entry *runtimeEn
 		return
 	}
 	r.unpinRuntimeReadModel(entry)
+	r.pendingPrompts.CloseSession(sessionID, io.EOF)
 	closeRuntimeEntry(entry, io.EOF)
 	if entry.teardown != nil {
 		entry.teardown()
@@ -343,7 +343,6 @@ type RuntimeGuard interface {
 	Generation() uint64
 	Rebind(workdir string) error
 	Retire(reason runtime.QueuedUserMessageFailureReason) error
-	GuardedPromptResponder
 	Release()
 }
 
@@ -508,7 +507,6 @@ func (r *RuntimeRegistry) runtimeActivityResolverSnapshot(ctx context.Context, s
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	entry := r.directory.Entry(id)
 	engine, err := r.ResolveRuntime(ctx, id)
 	if err != nil {
 		return runtimeactivity.ResolverSnapshot{}, err
@@ -518,7 +516,7 @@ func (r *RuntimeRegistry) runtimeActivityResolverSnapshot(ctx context.Context, s
 	if engine != nil {
 		snapshot.LiveRunActive = engine.HasActiveLiveRunGroup()
 	}
-	if entry != nil && len(entry.pendingPrompts.List()) > 0 {
+	if len(r.pendingPrompts.List(id)) > 0 {
 		snapshot.PromptWait = true
 	}
 	return snapshot, nil
@@ -810,17 +808,25 @@ func (r *RuntimeRegistry) SubscribeSessionTranscript(_ context.Context, req serv
 	}}, nil
 }
 
-func (r *RuntimeRegistry) BeginPendingPrompt(sessionID string, req askquestion.AskQuestionRequest) {
+func (r *RuntimeRegistry) PromptPending(resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, req askquestion.AskQuestionRequest, createdAt time.Time) {
 	if r == nil {
 		return
 	}
-	id := strings.TrimSpace(sessionID)
-	entry := r.directory.Entry(id)
-	if entry == nil {
+	if err := resource.Validate(); err != nil || scopeID.IsZero() {
+		panic(fmt.Sprintf("execution prompt pending projection has invalid identity: resource=%v scope_id=%s resource_error=%v", resource, scopeID, err))
+	}
+	r.projectPendingPrompt(resource.SessionID().String(), resource, scopeID, req, createdAt)
+}
+
+func (r *RuntimeRegistry) projectPendingPrompt(id string, resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, req askquestion.AskQuestionRequest, createdAt time.Time) {
+	if strings.TrimSpace(id) == "" {
 		return
 	}
-	_, ok := entry.pendingPrompts.Begin(req, func(snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
-		entry.PublishPendingPrompt(id, snapshot, eventType)
+	entry := r.directory.Entry(id)
+	_, ok := r.pendingPrompts.Begin(id, resource, scopeID, req, createdAt, func(snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
+		if entry != nil {
+			entry.PublishPendingPrompt(id, snapshot, eventType)
+		}
 		if eventType == pendingPromptEventPending {
 			r.publishAttentionPending(id, snapshot)
 		}
@@ -831,32 +837,33 @@ func (r *RuntimeRegistry) BeginPendingPrompt(sessionID string, req askquestion.A
 	r.publishCurrentRuntimeActivity(id)
 }
 
-func (r *RuntimeRegistry) CompletePendingPrompt(sessionID string, requestID string) {
+func (r *RuntimeRegistry) PromptResolved(resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, requestID string) {
 	if r == nil {
 		return
 	}
-	id := strings.TrimSpace(sessionID)
-	entry := r.directory.Entry(id)
-	if entry == nil {
+	if err := resource.Validate(); err != nil || scopeID.IsZero() {
+		panic(fmt.Sprintf("execution prompt resolved projection has invalid identity: resource=%v scope_id=%s resource_error=%v", resource, scopeID, err))
+	}
+	r.resolvePendingPrompt(resource.SessionID().String(), resource, scopeID, requestID)
+}
+
+func (r *RuntimeRegistry) resolvePendingPrompt(id string, resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, requestID string) {
+	if strings.TrimSpace(id) == "" {
 		return
 	}
-	snapshot, ok := entry.pendingPrompts.Complete(requestID)
+	entry := r.directory.Entry(id)
+	snapshot, ok := r.pendingPrompts.Complete(id, resource, scopeID, requestID)
 	if ok {
-		entry.PublishPendingPrompt(id, snapshot, pendingPromptEventResolved)
+		if entry != nil {
+			entry.PublishPendingPrompt(id, snapshot, pendingPromptEventResolved)
+		}
 		r.publishCurrentRuntimeActivity(id)
 		r.publishAttentionResolved(id, snapshot)
 	}
 }
 
 func (r *RuntimeRegistry) ListPendingPrompts(sessionID string) []PendingPromptSnapshot {
-	if r == nil {
-		return nil
-	}
-	entry := r.directory.Entry(sessionID)
-	if entry == nil {
-		return nil
-	}
-	return entry.pendingPrompts.List()
+	return r.pendingPrompts.List(sessionID)
 }
 
 func (r *RuntimeRegistry) AwaitPromptResponse(ctx context.Context, sessionID string, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
@@ -871,7 +878,7 @@ func (r *RuntimeRegistry) AwaitPromptResponse(ctx context.Context, sessionID str
 	if entry == nil {
 		return askquestion.AskQuestionResponse{}, fmt.Errorf("runtime %q is unavailable", id)
 	}
-	return entry.pendingPrompts.Await(ctx, req, func(snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
+	return r.pendingPrompts.Await(ctx, id, req, func(snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
 		entry.PublishPendingPrompt(id, snapshot, eventType)
 		if eventType == pendingPromptEventPending {
 			r.publishAttentionPending(id, snapshot)
@@ -886,13 +893,12 @@ func (r *RuntimeRegistry) SubmitPromptResponse(sessionID string, resp askquestio
 		return fmt.Errorf("runtime registry is required")
 	}
 	id := strings.TrimSpace(sessionID)
-	guard, guardErr := r.directory.BeginPromptResponseGuard(context.Background(), id, resp.RequestID)
-	if guardErr != nil {
-		return guardErr
+	entry := r.directory.Entry(id)
+	if entry == nil {
+		return fmt.Errorf("runtime %q is unavailable", id)
 	}
-	defer guard.Release()
-	submitErr := guard.entry.pendingPrompts.Submit(resp, err, func(snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
-		guard.entry.PublishPendingPrompt(id, snapshot, eventType)
+	submitErr := r.pendingPrompts.Submit(id, resp, err, func(snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
+		entry.PublishPendingPrompt(id, snapshot, eventType)
 		r.publishCurrentRuntimeActivity(id)
 		if eventType == pendingPromptEventPending {
 			r.publishAttentionPending(id, snapshot)

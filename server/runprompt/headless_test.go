@@ -43,14 +43,6 @@ import (
 	"core/shared/toolspec"
 )
 
-type recordingStoreRegistrar struct {
-	registered []*session.Store
-}
-
-func (r *recordingStoreRegistrar) RegisterStore(store *session.Store) {
-	r.registered = append(r.registered, store)
-}
-
 type recordingPromptHistoryStore struct {
 	entries []metadata.PromptHistoryEntry
 }
@@ -93,11 +85,10 @@ type headlessLaunchArtifactSnapshot struct {
 	PersistenceFiles    []string
 	WorktreeFiles       []string
 	WorktreeRecords     []metadata.WorktreeRecord
-	StoreRegistrations  int
 	RuntimePublications int
 }
 
-func snapshotHeadlessLaunchArtifacts(t *testing.T, ctx context.Context, meta *metadata.Store, projectID string, workspaceID string, containerDir string, persistenceRoot string, worktreeRoot string, stores *recordingStoreRegistrar, runtimes *recordingRuntimePublisher) headlessLaunchArtifactSnapshot {
+func snapshotHeadlessLaunchArtifacts(t *testing.T, ctx context.Context, meta *metadata.Store, projectID string, workspaceID string, containerDir string, persistenceRoot string, worktreeRoot string, runtimes *recordingRuntimePublisher) headlessLaunchArtifactSnapshot {
 	t.Helper()
 	sessionIDs, err := meta.ListProjectSessionIDs(ctx, projectID)
 	if err != nil {
@@ -113,7 +104,6 @@ func snapshotHeadlessLaunchArtifacts(t *testing.T, ctx context.Context, meta *me
 		PersistenceFiles:    snapshotArtifactPaths(t, persistenceRoot),
 		WorktreeFiles:       snapshotArtifactPaths(t, worktreeRoot),
 		WorktreeRecords:     worktreeRecords,
-		StoreRegistrations:  len(stores.registered),
 		RuntimePublications: runtimes.publications,
 	}
 }
@@ -286,17 +276,23 @@ func newTestHeadlessSessionLaunch(cfg config.App, containerDir string, authManag
 		ContainerDir:      containerDir,
 		StoreOptions:      persistence.Options(),
 		PersistedSessions: persistence,
-	}, registry.NewSessionStoreRegistry()).WithAuthStateReader(authManager)
+	}).WithAuthStateReader(authManager)
 }
 
-func newTestHeadlessSessionRuntime(root string, authManager *auth.Manager, runtimes *registry.RuntimeRegistry) *sessionruntime.Service {
-	return sessionruntime.NewService(root, nil, authManager, nil, nil, nil, runtimes, nil)
+func newTestHeadlessRuntimeAuthority(root string, authManager *auth.Manager, background *shelltool.Manager, storeOptions ...session.StoreOption) *sessionruntime.Authority {
+	return sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: root,
+		AuthManager:     authManager,
+		Background:      background,
+		StoreOptions:    storeOptions,
+	})
 }
 
 type selectedRunPromptFixture struct {
-	store    *session.Store
-	runtimes *registry.RuntimeRegistry
-	client   apicontract.RunPromptService
+	store     *session.Store
+	runtimes  *registry.RuntimeRegistry
+	authority *sessionruntime.Authority
+	client    apicontract.RunPromptService
 }
 
 func newSelectedRunPromptFixture(t *testing.T, providerURL string, history promptHistoryStore) selectedRunPromptFixture {
@@ -326,15 +322,16 @@ func newSelectedRunPromptFixture(t *testing.T, providerURL string, history promp
 		},
 	}
 	runtimes := registry.NewRuntimeRegistry()
+	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
 	return selectedRunPromptFixture{
-		store:    store,
-		runtimes: runtimes,
+		store:     store,
+		runtimes:  runtimes,
+		authority: authority,
 		client: NewInProcessRunPromptClient(HeadlessBootstrap{
-			SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
-			AuthManager:     authManager,
-			RuntimeRegistry: runtimes,
-			SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
-			PromptHistory:   history,
+			SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
+			RuntimeRegistry:  runtimes,
+			RuntimeAuthority: authority,
+			PromptHistory:    history,
 		}),
 	}
 }
@@ -356,7 +353,7 @@ func TestHeadlessRuntimeWorkdirUsesInheritedWorktreeReminderCWD(t *testing.T) {
 		t.Fatalf("SetWorktreeReminderState: %v", err)
 	}
 
-	got := headlessRuntimeWorkdir(launch.SessionPlan{Store: store, WorkspaceRoot: "/tmp/workspace"})
+	got := headlessRuntimeWorkdir(launch.SessionPlan{WorktreeReminder: store.Meta().WorktreeReminder, WorkspaceRoot: "/tmp/workspace"})
 	if got != "/tmp/worktree/pkg" {
 		t.Fatalf("headless runtime workdir = %q, want /tmp/worktree/pkg", got)
 	}
@@ -445,19 +442,18 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	stores := &recordingStoreRegistrar{}
 	runtimes := &recordingRuntimePublisher{}
 	sessionLauncher := sessionlaunch.NewService(launch.Planner{
 		Config:            cfg,
 		ContainerDir:      containerDir,
 		StoreOptions:      meta.AuthoritativeSessionStoreOptions(),
 		PersistedSessions: meta,
-	}, stores)
+	})
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch:   sessionLauncher,
 		RuntimeRegistry: runtimes,
 	})
-	before := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes)
+	before := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, runtimes)
 	role := "hidden"
 	parentID := parent.Meta().SessionID
 	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
@@ -471,13 +467,13 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialNotCallable {
 		t.Fatalf("RunPrompt error = %T %v, want workflow policy denial", err, err)
 	}
-	after := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes)
+	after := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, runtimes)
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("denied new-child launch changed artifacts: before=%+v after=%+v", before, after)
 	}
 	ordinaryCallerID := ordinaryCaller.Meta().SessionID
 	blockedRole := "blocked"
-	beforeOrdinaryTargetDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes)
+	beforeOrdinaryTargetDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, runtimes)
 	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
 		ClientRequestID: "ordinary-blocked-target-denial",
 		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRunPromptSessionID(t, ordinaryCallerID))),
@@ -488,7 +484,7 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialNotCallable {
 		t.Fatalf("ordinary blocked-target error = %T %v, want not-callable denial", err, err)
 	}
-	if afterOrdinaryTargetDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes); !reflect.DeepEqual(afterOrdinaryTargetDenial, beforeOrdinaryTargetDenial) {
+	if afterOrdinaryTargetDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, runtimes); !reflect.DeepEqual(afterOrdinaryTargetDenial, beforeOrdinaryTargetDenial) {
 		t.Fatalf("ordinary blocked-target denial changed artifacts: before=%+v after=%+v", beforeOrdinaryTargetDenial, afterOrdinaryTargetDenial)
 	}
 	selected, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
@@ -502,7 +498,7 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		t.Fatalf("SetContinuationContext selected: %v", err)
 	}
 	selectedBefore := selected.Meta()
-	beforeSelectedDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes)
+	beforeSelectedDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, runtimes)
 	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
 		ClientRequestID: "workflow-selected-denial-1",
 		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, selectedBefore.SessionID)),
@@ -526,7 +522,7 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		got.LastSequence != selectedBefore.LastSequence {
 		t.Fatalf("selected session changed on denied launch: before=%+v after=%+v", selectedBefore, got)
 	}
-	afterSelectedDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, stores, runtimes)
+	afterSelectedDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, runtimes)
 	if !reflect.DeepEqual(afterSelectedDenial, beforeSelectedDenial) {
 		t.Fatalf("denied selected-session launch changed artifacts: before=%+v after=%+v", beforeSelectedDenial, afterSelectedDenial)
 	}
@@ -542,10 +538,14 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	if err != nil {
 		t.Fatalf("substituted ordinary caller PlanLaunchSession: %v", err)
 	}
-	if got := substitutedPlan.Plan.Store.Meta().ParentAgentSessionID; got == nil || *got != substitutedCallerID {
+	substitutedStore, err := session.MaterializeSessionDescriptor(root, substitutedPlan.Plan.Descriptor, meta.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("materialize substituted caller plan: %v", err)
+	}
+	if got := substitutedStore.Meta().ParentAgentSessionID; got == nil || *got != substitutedCallerID {
 		t.Fatalf("substituted caller child parent-agent = %v, want %q", got, substitutedCaller)
 	}
-	if got := substitutedPlan.Plan.Store.Meta().Continuation; got == nil || got.AgentRole == nil || *got.AgentRole != role {
+	if got := substitutedStore.Meta().Continuation; got == nil || got.AgentRole == nil || *got.AgentRole != role {
 		t.Fatalf("substituted caller continuation = %+v, want hidden role", got)
 	}
 }
@@ -620,17 +620,17 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 		},
 	}
 	runtimes := registry.NewRuntimeRegistry()
+	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, meta.AuthoritativeSessionStoreOptions()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch: sessionlaunch.NewService(launch.Planner{
 			Config:            cfg,
 			ContainerDir:      containerDir,
 			StoreOptions:      meta.AuthoritativeSessionStoreOptions(),
 			PersistedSessions: meta,
-		}, registry.NewSessionStoreRegistry()).WithAuthStateReader(authManager),
-		AuthManager:     authManager,
-		RuntimeRegistry: runtimes,
-		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
-		PromptHistory:   meta,
+		}).WithAuthStateReader(authManager),
+		RuntimeRegistry:  runtimes,
+		RuntimeAuthority: authority,
+		PromptHistory:    meta,
 	})
 
 	worker := "worker"
@@ -646,8 +646,17 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 			return
 		}
 		sessionStarted++
-		if progress.SessionStarted == nil || !runtimes.IsSessionRuntimeActive(progress.SessionStarted.SessionID.String()) {
+		if progress.SessionStarted == nil {
 			t.Errorf("session_started published before the new runtime became active: %+v", progress)
+			return
+		}
+		sessionID, parseErr := runtimeids.ParseSessionID(progress.SessionStarted.SessionID.String())
+		if parseErr != nil {
+			t.Errorf("session_started session id: %v", parseErr)
+			return
+		}
+		if _, active := authority.SessionExecution(sessionID); !active {
+			t.Errorf("session_started published before the new execution became active: %+v", progress)
 		}
 	}))
 	if err != nil {
@@ -671,7 +680,11 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 	if got := childMeta.Continuation; got == nil || got.AgentRole == nil || *got.AgentRole != worker {
 		t.Fatalf("continuation = %+v, want worker role", got)
 	}
-	if runtimes.IsSessionRuntimeActive(response.SessionID) {
+	responseID, err := runtimeids.ParseSessionID(response.SessionID)
+	if err != nil {
+		t.Fatalf("parse response session id: %v", err)
+	}
+	if _, active := authority.SessionExecution(responseID); active {
 		t.Fatalf("completed headless launch left runtime active for %q", response.SessionID)
 	}
 
@@ -710,7 +723,11 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 			if childMeta.Continuation == nil || childMeta.Continuation.AgentRole == nil || *childMeta.Continuation.AgentRole != test.role {
 				t.Fatalf("continuation = %+v, want role %q", childMeta.Continuation, test.role)
 			}
-			if runtimes.IsSessionRuntimeActive(response.SessionID) {
+			responseID, err := runtimeids.ParseSessionID(response.SessionID)
+			if err != nil {
+				t.Fatalf("parse response session id: %v", err)
+			}
+			if _, active := authority.SessionExecution(responseID); active {
 				t.Fatalf("completed headless launch left runtime active for %q", response.SessionID)
 			}
 		})
@@ -783,12 +800,12 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 	}
 	runtimes := registry.NewRuntimeRegistry()
 	history := &recordingPromptHistoryStore{}
+	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
-		AuthManager:     authManager,
-		RuntimeRegistry: runtimes,
-		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
-		PromptHistory:   history,
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
+		RuntimeRegistry:  runtimes,
+		RuntimeAuthority: authority,
+		PromptHistory:    history,
 	})
 
 	var progresses []serverapi.RunPromptProgress
@@ -886,8 +903,10 @@ func TestInProcessRunPromptTimeoutCoversHistoryAndRunCleanup(t *testing.T) {
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("RunPrompt error = %v, want deadline exceeded", err)
 		}
-		if providerCalls != 0 || fixture.runtimes.IsSessionRuntimeActive(fixture.store.Meta().SessionID) {
-			t.Fatalf("provider calls=%d runtime active=%t, want 0/false", providerCalls, fixture.runtimes.IsSessionRuntimeActive(fixture.store.Meta().SessionID))
+		sessionID := mustRunPromptSessionID(t, fixture.store.Meta().SessionID)
+		_, active := fixture.authority.SessionExecution(sessionID)
+		if providerCalls != 0 || active {
+			t.Fatalf("provider calls=%d runtime active=%t, want 0/false", providerCalls, active)
 		}
 	})
 
@@ -928,15 +947,6 @@ func TestInProcessRunPromptTimeoutCoversHistoryAndRunCleanup(t *testing.T) {
 		case <-time.After(10 * time.Second):
 			t.Fatal("timed out waiting for provider request")
 		}
-		engine, err := fixture.runtimes.ResolveRuntime(context.Background(), fixture.store.Meta().SessionID)
-		if err != nil || engine == nil {
-			t.Fatalf("ResolveRuntime engine=%p err=%v", engine, err)
-		}
-		engine.QueueUserMessageForAutoDrain("restore me", "018fdd67-89ab-4cde-8123-456789abcdef")
-		if !engine.HasQueuedUserWork() {
-			t.Fatal("queued user work was not visible before timeout")
-		}
-
 		select {
 		case got := <-done:
 			if !errors.Is(got.err, context.DeadlineExceeded) {
@@ -948,8 +958,9 @@ func TestInProcessRunPromptTimeoutCoversHistoryAndRunCleanup(t *testing.T) {
 		case <-time.After(10 * time.Second):
 			t.Fatal("RunPrompt did not finish after timeout")
 		}
-		if engine.HasQueuedUserWork() || fixture.runtimes.IsSessionRuntimeActive(fixture.store.Meta().SessionID) {
-			t.Fatalf("queued=%t runtime active=%t, want false/false", engine.HasQueuedUserWork(), fixture.runtimes.IsSessionRuntimeActive(fixture.store.Meta().SessionID))
+		sessionID := mustRunPromptSessionID(t, fixture.store.Meta().SessionID)
+		if _, active := fixture.authority.SessionExecution(sessionID); active {
+			t.Fatal("timed out headless execution remained active")
 		}
 	})
 }
@@ -1015,8 +1026,10 @@ func TestInProcessRunPromptPublishesCommentaryBeforeHeadlessAskFollowupFails(t *
 			foundCommentary = true
 		}
 	}
-	if !foundCommentary || fixture.runtimes.IsSessionRuntimeActive(fixture.store.Meta().SessionID) {
-		t.Fatalf("commentary found=%t runtime active=%t", foundCommentary, fixture.runtimes.IsSessionRuntimeActive(fixture.store.Meta().SessionID))
+	sessionID := mustRunPromptSessionID(t, fixture.store.Meta().SessionID)
+	_, active := fixture.authority.SessionExecution(sessionID)
+	if !foundCommentary || active {
+		t.Fatalf("commentary found=%t runtime active=%t", foundCommentary, active)
 	}
 }
 
@@ -1109,12 +1122,11 @@ func TestInProcessRunPromptClientUsesActiveShellPostprocessorWithSuppliedBackgro
 		},
 	}
 	runtimes := registry.NewRuntimeRegistry()
+	authority := newTestHeadlessRuntimeAuthority(root, authManager, background, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
-		AuthManager:     authManager,
-		Background:      background,
-		RuntimeRegistry: runtimes,
-		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
+		RuntimeRegistry:  runtimes,
+		RuntimeAuthority: authority,
 	})
 
 	response, err := client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
@@ -1342,11 +1354,11 @@ func TestInProcessRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T)
 			Shell:         config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
 	}
+	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
-		AuthManager:     authManager,
-		RuntimeRegistry: runtimes,
-		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
+		RuntimeRegistry:  runtimes,
+		RuntimeAuthority: authority,
 	})
 
 	done := make(chan error, 1)
@@ -1364,15 +1376,9 @@ func TestInProcessRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T)
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for /responses request")
 	}
-	if !runtimes.IsSessionRuntimeActive(store.Meta().SessionID) {
-		t.Fatalf("expected run prompt runtime active while request is in flight")
-	}
-	activity, err := runtimes.RuntimeActivity(store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("RuntimeActivity: %v", err)
-	}
-	if !activity.ActiveForControl() {
-		t.Fatal("expected headless runtime to record an active server-side run while request is in flight")
+	sessionID := mustRunPromptSessionID(t, store.Meta().SessionID)
+	if _, active := authority.SessionExecution(sessionID); !active {
+		t.Fatal("expected headless execution active while request is in flight")
 	}
 	releaseOnce.Do(func() { close(release) })
 	select {
@@ -1383,8 +1389,8 @@ func TestInProcessRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T)
 	case <-time.After(2 * time.Second):
 		t.Fatal("RunPrompt did not finish")
 	}
-	if runtimes.IsSessionRuntimeActive(store.Meta().SessionID) {
-		t.Fatalf("expected run prompt runtime to unregister after completion")
+	if _, active := authority.SessionExecution(sessionID); active {
+		t.Fatal("expected headless execution to finalize after completion")
 	}
 }
 
@@ -1435,11 +1441,11 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 	cfg.Settings.OpenAIBaseURL = server.URL
 	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolPatch: true}
 	runtimes := registry.NewRuntimeRegistry()
+	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
-		AuthManager:     authManager,
-		RuntimeRegistry: runtimes,
-		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
+		RuntimeRegistry:  runtimes,
+		RuntimeAuthority: authority,
 	})
 
 	response, err := client.RunPrompt(context.Background(), serverapi.RunPromptRequest{

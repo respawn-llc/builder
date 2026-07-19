@@ -41,14 +41,10 @@ func (r *RuntimeRegistry) SubscribeSessionAttentionNotifications(_ context.Conte
 	if r == nil || r.attentionBroker == nil {
 		return nil, fmt.Errorf("attention notification stream is unavailable: %w", serverapi.ErrStreamUnavailable)
 	}
-	entry := r.directory.Entry(req.SessionID)
-	if entry == nil {
-		return nil, fmt.Errorf("runtime %q is unavailable", req.SessionID)
-	}
 	if !req.IncludePendingPromptSnapshot {
 		return r.attentionBroker.SubscribeSession(req.SessionID)
 	}
-	return entry.pendingPrompts.WithLockedAttentionSnapshotResult(func(items []PendingPromptSnapshot) (serverapi.AttentionNotificationSubscription, error) {
+	return r.pendingPrompts.WithLockedAttentionSnapshotResult(req.SessionID, func(items []PendingPromptSnapshot) (serverapi.AttentionNotificationSubscription, error) {
 		sub, err := r.attentionBroker.SubscribeSession(req.SessionID)
 		if err != nil {
 			return nil, err

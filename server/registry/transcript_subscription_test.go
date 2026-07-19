@@ -682,7 +682,7 @@ func TestSessionTranscriptFeedHydratesPromptsInCreationOrder(t *testing.T) {
 
 	const promptCount = 16
 	for index := 0; index < promptCount; index++ {
-		registry.BeginPendingPrompt(engine.SessionID(), tools.AskQuestionRequest{
+		projectPendingPromptForTest(registry, engine.SessionID(), tools.AskQuestionRequest{
 			ID:       fmt.Sprintf("ask-%02d", index),
 			Question: "Choose",
 			StepID:   registryTestStepID,
@@ -821,7 +821,7 @@ func TestSessionTranscriptFeedSequencerHydratesPendingPromptAndPublishesResoluti
 	registerReady(t, registry, engine.SessionID(), engine)
 	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
 
-	registry.BeginPendingPrompt(engine.SessionID(), tools.AskQuestionRequest{
+	projectPendingPromptForTest(registry, engine.SessionID(), tools.AskQuestionRequest{
 		ID:       "ask-1",
 		Question: "approve?",
 		Approval: true,
@@ -844,7 +844,7 @@ func TestSessionTranscriptFeedSequencerHydratesPendingPromptAndPublishesResoluti
 		t.Fatalf("hydration prompt = %+v, want pending approval ask-1", prompt)
 	}
 
-	registry.CompletePendingPrompt(engine.SessionID(), "ask-1")
+	resolvePendingPromptForTest(registry, engine.SessionID(), "ask-1")
 	live := nextTranscriptMessage(t, sub)
 	if live.Sequence != 2 || live.Kind != clientui.TranscriptMessagePromptResolved || live.Payload.PromptResolved == nil || live.Payload.PromptResolved.State != clientui.TranscriptPromptStateResolved {
 		t.Fatalf("live prompt = %+v, want seq=2 resolved prompt", live)

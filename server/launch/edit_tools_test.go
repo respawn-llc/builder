@@ -2,6 +2,7 @@ package launch
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"core/server/auth"
@@ -108,12 +109,11 @@ func TestApplyRunPromptOverridesSubagentExplicitEditToolWins(t *testing.T) {
 			},
 		},
 	}
-	plan := SessionPlan{
-		Store:          store,
+	plan := sessionPlanWithSnapshot(SessionPlan{
 		ActiveSettings: settings,
 		EnabledTools:   []toolspec.ID{toolspec.ToolPatch},
 		Source:         defaultToolSources(),
-	}
+	}, store, filepath.Dir(store.Dir()))
 
 	updated, _, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("worker")}, auth.EmptyState())
 	if err != nil {
@@ -144,13 +144,12 @@ func TestApplyRunPromptOverridesSubagentToolSourceSurvivesModelOverride(t *testi
 			},
 		},
 	}
-	plan := SessionPlan{
-		Store:          store,
+	plan := sessionPlanWithSnapshot(SessionPlan{
 		ActiveSettings: settings,
 		EnabledTools:   []toolspec.ID{toolspec.ToolPatch},
 		WorkspaceRoot:  t.TempDir(),
 		Source:         defaultToolSources(),
-	}
+	}, store, filepath.Dir(store.Dir()))
 
 	updated, _, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("worker"), Model: "gpt-5.6-sol"}, auth.EmptyState())
 	if err != nil {

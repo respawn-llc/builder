@@ -22,14 +22,13 @@ func TestApplyRunPromptOverridesCLIModelOverridePreservesExplicitThreshold(t *te
 		"context_compaction_threshold_tokens = 221000",
 	)
 	store := createTestSession(t, workspace)
-	plan := SessionPlan{
-		Store:               store,
+	plan := sessionPlanWithSnapshot(SessionPlan{
 		ActiveSettings:      loaded.Settings,
 		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
 		ConfiguredModelName: loaded.Settings.Model,
 		WorkspaceRoot:       workspace,
 		Source:              loaded.Source,
-	}
+	}, store, filepath.Dir(store.Dir()))
 
 	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{Model: "gpt-5.4-mini"}, auth.EmptyState())
 	if updated.ActiveSettings.Model != "gpt-5.4-mini" {
@@ -79,9 +78,10 @@ func TestPlannerInteractiveReopensSelectedSessionWithinActiveContainer(t *testin
 	if err != nil {
 		t.Fatalf("plan session: %v", err)
 	}
-	requireSameSessionDir(t, plan.Store.Dir(), selected.Dir())
-	if plan.Store.Meta().WorkspaceRoot != "/tmp/workspace-a" {
-		t.Fatalf("opened workspace root = %q, want /tmp/workspace-a", plan.Store.Meta().WorkspaceRoot)
+	opened := testStoreForPlannerPlan(t, planner, plan)
+	requireSameSessionDir(t, opened.Dir(), selected.Dir())
+	if opened.Meta().WorkspaceRoot != "/tmp/workspace-a" {
+		t.Fatalf("opened workspace root = %q, want /tmp/workspace-a", opened.Meta().WorkspaceRoot)
 	}
 }
 
@@ -113,8 +113,9 @@ func TestPlannerSelectedSessionUsesAuthoritativeMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plan session: %v", err)
 	}
-	if plan.Store.Meta().WorkspaceRoot != authoritative.WorkspaceRoot {
-		t.Fatalf("opened workspace root = %q, want authoritative %q", plan.Store.Meta().WorkspaceRoot, authoritative.WorkspaceRoot)
+	opened := testStoreForPlannerPlan(t, planner, plan)
+	if opened.Meta().WorkspaceRoot != authoritative.WorkspaceRoot {
+		t.Fatalf("opened workspace root = %q, want authoritative %q", opened.Meta().WorkspaceRoot, authoritative.WorkspaceRoot)
 	}
 }
 
@@ -138,7 +139,7 @@ func TestPlannerSelectedSessionIDUsesAuthoritativePersistedIdentity(t *testing.T
 	if err != nil {
 		t.Fatalf("plan session: %v", err)
 	}
-	requireSameSessionDir(t, plan.Store.Dir(), selected.Dir())
+	requireSameSessionDir(t, testStoreForPlannerPlan(t, planner, plan).Dir(), selected.Dir())
 }
 
 func TestPlannerSelectedSessionIDDoesNotOpenAcrossProjectContainers(t *testing.T) {

@@ -82,6 +82,142 @@ type metadataMutationCheckpoint struct {
 	persistedMetaVersion uint64
 }
 
+type sessionDescriptorData struct {
+	sessionID runtimeids.SessionID
+}
+
+type sessionDescriptorVariant interface {
+	descriptorData() sessionDescriptorData
+}
+
+type openSessionDescriptor struct {
+	sessionDescriptorData
+	containerDir *string
+}
+
+func (d openSessionDescriptor) descriptorData() sessionDescriptorData {
+	return d.sessionDescriptorData
+}
+
+type createSessionDescriptor struct {
+	sessionDescriptorData
+	containerDir  string
+	containerName string
+	workspaceRoot string
+	category      sessioncontract.SessionCategory
+}
+
+func (d createSessionDescriptor) descriptorData() sessionDescriptorData {
+	return d.sessionDescriptorData
+}
+
+type SessionDescriptor struct {
+	value sessionDescriptorVariant
+}
+
+func (d SessionDescriptor) Validate() error {
+	if d.value == nil || d.value.descriptorData().sessionID.IsZero() {
+		return errors.New("session descriptor is required")
+	}
+	return nil
+}
+
+func NewOpenSessionDescriptor(sessionID runtimeids.SessionID) (SessionDescriptor, error) {
+	if sessionID.IsZero() {
+		return SessionDescriptor{}, errors.New("session id is required")
+	}
+	return SessionDescriptor{value: openSessionDescriptor{
+		sessionDescriptorData: sessionDescriptorData{sessionID: sessionID},
+	}}, nil
+}
+
+func NewScopedOpenSessionDescriptor(sessionID runtimeids.SessionID, containerDir string) (SessionDescriptor, error) {
+	if sessionID.IsZero() {
+		return SessionDescriptor{}, errors.New("session id is required")
+	}
+	if strings.TrimSpace(containerDir) == "" {
+		return SessionDescriptor{}, errors.New("session container directory is required")
+	}
+	scopedContainer := filepath.Clean(containerDir)
+	return SessionDescriptor{value: openSessionDescriptor{
+		sessionDescriptorData: sessionDescriptorData{sessionID: sessionID},
+		containerDir:          &scopedContainer,
+	}}, nil
+}
+
+func NewCreateSessionDescriptor(
+	sessionID runtimeids.SessionID,
+	containerDir string,
+	containerName string,
+	workspaceRoot string,
+	category sessioncontract.SessionCategory,
+) (SessionDescriptor, error) {
+	if sessionID.IsZero() || !sessionID.IsCanonicalUUIDv4() {
+		return SessionDescriptor{}, errors.New("new session id must be a canonical UUIDv4")
+	}
+	validatedCategory, err := sessioncontract.ParseSessionCategory(string(category))
+	if err != nil {
+		return SessionDescriptor{}, err
+	}
+	return SessionDescriptor{value: createSessionDescriptor{
+		sessionDescriptorData: sessionDescriptorData{sessionID: sessionID},
+		containerDir:          containerDir,
+		containerName:         containerName,
+		workspaceRoot:         workspaceRoot,
+		category:              validatedCategory,
+	}}, nil
+}
+
+func (d SessionDescriptor) SessionID() runtimeids.SessionID {
+	if err := d.Validate(); err != nil {
+		panic(err.Error())
+	}
+	return d.value.descriptorData().sessionID
+}
+
+func MaterializeSessionDescriptor(persistenceRoot string, descriptor SessionDescriptor, options ...StoreOption) (*Store, error) {
+	if err := descriptor.Validate(); err != nil {
+		return nil, err
+	}
+	switch value := descriptor.value.(type) {
+	case openSessionDescriptor:
+		if value.containerDir != nil {
+			sessionDir, err := ResolveScopedSessionDir(*value.containerDir, value.sessionID.String())
+			if err != nil {
+				return nil, err
+			}
+			return Open(sessionDir, options...)
+		}
+		return OpenByID(persistenceRoot, value.sessionID.String(), options...)
+	case createSessionDescriptor:
+		store, err := NewLazyWithID(
+			value.sessionID,
+			value.containerDir,
+			value.containerName,
+			value.workspaceRoot,
+			value.category,
+			options...,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if err := InitializeCreationContext(
+			store,
+			nil,
+			SessionCreationSourceIndependent,
+			ChildContextOptions{},
+		); err != nil {
+			return nil, err
+		}
+		if err := store.EnsureDurable(); err != nil {
+			return nil, err
+		}
+		return store, nil
+	default:
+		return nil, fmt.Errorf("unsupported session descriptor %T", descriptor.value)
+	}
+}
+
 func Create(workspaceContainerDir, workspaceContainerName, workspaceRoot string, category sessioncontract.SessionCategory, options ...StoreOption) (*Store, error) {
 	s, err := NewLazy(workspaceContainerDir, workspaceContainerName, workspaceRoot, category, options...)
 	if err != nil {
@@ -104,16 +240,27 @@ func Create(workspaceContainerDir, workspaceContainerName, workspaceRoot string,
 }
 
 func NewLazy(workspaceContainerDir, workspaceContainerName, workspaceRoot string, category sessioncontract.SessionCategory, options ...StoreOption) (*Store, error) {
+	return NewLazyWithID(runtimeids.NewSessionID(), workspaceContainerDir, workspaceContainerName, workspaceRoot, category, options...)
+}
+
+func NewLazyWithID(sessionID runtimeids.SessionID, workspaceContainerDir, workspaceContainerName, workspaceRoot string, category sessioncontract.SessionCategory, options ...StoreOption) (*Store, error) {
+	if sessionID.IsZero() || !sessionID.IsCanonicalUUIDv4() {
+		return nil, errors.New("new session id must be a canonical UUIDv4")
+	}
 	storeOpts := normalizeStoreOptions(options...)
-	return newLazyWithStoreOptions(workspaceContainerDir, workspaceContainerName, workspaceRoot, category, storeOpts)
+	return newLazyWithIDAndStoreOptions(sessionID, workspaceContainerDir, workspaceContainerName, workspaceRoot, category, storeOpts)
 }
 
 func newLazyWithStoreOptions(workspaceContainerDir, workspaceContainerName, workspaceRoot string, category sessioncontract.SessionCategory, storeOpts storeOptions) (*Store, error) {
+	return newLazyWithIDAndStoreOptions(runtimeids.NewSessionID(), workspaceContainerDir, workspaceContainerName, workspaceRoot, category, storeOpts)
+}
+
+func newLazyWithIDAndStoreOptions(sessionID runtimeids.SessionID, workspaceContainerDir, workspaceContainerName, workspaceRoot string, category sessioncontract.SessionCategory, storeOpts storeOptions) (*Store, error) {
 	validatedCategory, err := sessioncontract.ParseSessionCategory(string(category))
 	if err != nil {
 		return nil, err
 	}
-	sid := runtimeids.NewSessionID().String()
+	sid := sessionID.String()
 	sessionDir := filepath.Join(workspaceContainerDir, sid)
 	now := storeTimestamp(storeOpts)
 	return &Store{

@@ -23,13 +23,14 @@ func TestPlannerCreateNewIntentCreatesWithAndWithoutValidatedParent(t *testing.T
 		if err != nil {
 			t.Fatalf("plan create-new session: %v", err)
 		}
-		if plan.Store.Meta().Category == nil || *plan.Store.Meta().Category != sessioncontract.SessionCategoryMain {
-			t.Fatalf("created category = %v, want main", plan.Store.Meta().Category)
+		meta := testStoreForPlannerPlan(t, planner, plan).Meta()
+		if meta.Category == nil || *meta.Category != sessioncontract.SessionCategoryMain {
+			t.Fatalf("created category = %v, want main", meta.Category)
 		}
-		if plan.Store.Meta().PreviousSessionID != nil || plan.Store.Meta().ParentAgentSessionID != nil {
-			t.Fatalf("provenance = previous:%v parent-agent:%v, want absent", plan.Store.Meta().PreviousSessionID, plan.Store.Meta().ParentAgentSessionID)
+		if meta.PreviousSessionID != nil || meta.ParentAgentSessionID != nil {
+			t.Fatalf("provenance = previous:%v parent-agent:%v, want absent", meta.PreviousSessionID, meta.ParentAgentSessionID)
 		}
-		if plan.Store.Dir() == containerDir {
+		if testStoreForPlannerPlan(t, planner, plan).Dir() == containerDir {
 			t.Fatal("expected a session directory below the container")
 		}
 	})
@@ -46,8 +47,9 @@ func TestPlannerCreateNewIntentCreatesWithAndWithoutValidatedParent(t *testing.T
 		if err != nil {
 			t.Fatalf("plan child session: %v", err)
 		}
-		if plan.Store.Meta().PreviousSessionID == nil || *plan.Store.Meta().PreviousSessionID != parentID {
-			t.Fatalf("previous session ID = %v, want %q", plan.Store.Meta().PreviousSessionID, parent.Meta().SessionID)
+		meta := testStoreForPlannerPlan(t, planner, plan).Meta()
+		if meta.PreviousSessionID == nil || *meta.PreviousSessionID != parentID {
+			t.Fatalf("previous session ID = %v, want %q", meta.PreviousSessionID, parent.Meta().SessionID)
 		}
 	})
 }
@@ -64,8 +66,8 @@ func TestPlannerOpenExistingIntentOpensTheRequestedSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plan open-existing session: %v", err)
 	}
-	if plan.Store.Meta().SessionID != target.Meta().SessionID {
-		t.Fatalf("opened session ID = %q, want %q", plan.Store.Meta().SessionID, target.Meta().SessionID)
+	if plan.Descriptor.SessionID().String() != target.Meta().SessionID {
+		t.Fatalf("opened session ID = %q, want %q", plan.Descriptor.SessionID(), target.Meta().SessionID)
 	}
 }
 
@@ -98,8 +100,9 @@ func TestPlannerOnlyInteractiveOpenExistingPromotesSubagentToMain(t *testing.T) 
 		if err != nil {
 			t.Fatalf("plan interactive resume: %v", err)
 		}
-		if plan.Store.Meta().Category == nil || *plan.Store.Meta().Category != sessioncontract.SessionCategoryMain {
-			t.Fatalf("interactive resumed category = %v, want main", plan.Store.Meta().Category)
+		meta := testStoreForPlannerPlan(t, planner, plan).Meta()
+		if meta.Category == nil || *meta.Category != sessioncontract.SessionCategoryMain {
+			t.Fatalf("interactive resumed category = %v, want main", meta.Category)
 		}
 	})
 
@@ -115,8 +118,9 @@ func TestPlannerOnlyInteractiveOpenExistingPromotesSubagentToMain(t *testing.T) 
 		if err != nil {
 			t.Fatalf("plan headless resume: %v", err)
 		}
-		if plan.Store.Meta().Category == nil || *plan.Store.Meta().Category != sessioncontract.SessionCategorySubagent {
-			t.Fatalf("headless resumed category = %v, want subagent", plan.Store.Meta().Category)
+		meta := testStoreForPlannerPlan(t, planner, plan).Meta()
+		if meta.Category == nil || *meta.Category != sessioncontract.SessionCategorySubagent {
+			t.Fatalf("headless resumed category = %v, want subagent", meta.Category)
 		}
 	})
 }

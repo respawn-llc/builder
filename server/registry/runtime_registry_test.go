@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +24,14 @@ const (
 	registryTestRunID  = "11111111-1111-4111-8111-111111111111"
 	registryTestStepID = "22222222-2222-4222-8222-222222222222"
 )
+
+func projectPendingPromptForTest(registry *RuntimeRegistry, sessionID string, request askquestion.AskQuestionRequest) {
+	registry.projectPendingPrompt(sessionID, runtimeids.SessionResourceRef{}, runtimeids.ExecutionScopeID{}, request, time.Now().UTC())
+}
+
+func resolvePendingPromptForTest(registry *RuntimeRegistry, sessionID string, requestID string) {
+	registry.resolvePendingPrompt(sessionID, runtimeids.SessionResourceRef{}, runtimeids.ExecutionScopeID{}, requestID)
+}
 
 func (registryRuntimeFakeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
 	return llm.Response{}, nil
@@ -387,8 +394,8 @@ func TestRuntimeRegistryTracksPendingPromptsPerSession(t *testing.T) {
 	registerReady(t, registry, "session-1", engine)
 	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
 
-	registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "one?"})
-	registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "approval-1", StepID: registryTestStepID, Question: "allow?"})
+	projectPendingPromptForTest(registry, "session-1", askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "one?"})
+	projectPendingPromptForTest(registry, "session-1", askquestion.AskQuestionRequest{ID: "approval-1", StepID: registryTestStepID, Question: "allow?"})
 
 	items := registry.ListPendingPrompts("session-1")
 	if len(items) != 2 {
@@ -398,7 +405,7 @@ func TestRuntimeRegistryTracksPendingPromptsPerSession(t *testing.T) {
 		t.Fatalf("unexpected pending prompts ordering: %+v", items)
 	}
 
-	registry.CompletePendingPrompt("session-1", "ask-1")
+	resolvePendingPromptForTest(registry, "session-1", "ask-1")
 	items = registry.ListPendingPrompts("session-1")
 	if len(items) != 1 || items[0].Request.ID != "approval-1" {
 		t.Fatalf("unexpected pending prompts after completion: %+v", items)
@@ -407,6 +414,35 @@ func TestRuntimeRegistryTracksPendingPromptsPerSession(t *testing.T) {
 	closeRuntime(registry, "session-1", engine)
 	if items := registry.ListPendingPrompts("session-1"); len(items) != 0 {
 		t.Fatalf("expected no pending prompts after unregister, got %+v", items)
+	}
+}
+
+func TestExecutionPromptProjectionRejectsStaleScopeResolution(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	sessionID := runtimeids.NewSessionID()
+	predecessor, err := runtimeids.NewSessionResourceRef(sessionID, 1)
+	if err != nil {
+		t.Fatalf("predecessor resource: %v", err)
+	}
+	successor, err := runtimeids.NewSessionResourceRef(sessionID, 2)
+	if err != nil {
+		t.Fatalf("successor resource: %v", err)
+	}
+	predecessorScope := runtimeids.NewExecutionScopeID()
+	successorScope := runtimeids.NewExecutionScopeID()
+	request := askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "Proceed?"}
+
+	registry.PromptPending(predecessor, predecessorScope, request, time.Now().UTC())
+	registry.PromptPending(successor, successorScope, request, time.Now().UTC())
+	registry.PromptResolved(predecessor, predecessorScope, request.ID)
+
+	items := registry.ListPendingPrompts(sessionID.String())
+	if len(items) != 1 || items[0].Resource != successor || items[0].ScopeID != successorScope {
+		t.Fatalf("pending prompts after stale resolution = %+v, want exact successor", items)
+	}
+	registry.PromptResolved(successor, successorScope, request.ID)
+	if items := registry.ListPendingPrompts(sessionID.String()); len(items) != 0 {
+		t.Fatalf("pending prompts after successor resolution = %+v, want none", items)
 	}
 }
 
@@ -844,28 +880,6 @@ func TestRuntimeRegistryAwaitPromptResponseContextCanceledRemovesPendingPrompt(t
 	}
 	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{RequestID: "ask-1", Answer: "late"}, nil); !errors.Is(err, serverapi.ErrPromptNotFound) {
 		t.Fatalf("late SubmitPromptResponse error=%v, want ErrPromptNotFound", err)
-	}
-}
-
-func TestPendingPromptStoreCloseDoesNotBlockWhenResponseAlreadyBuffered(t *testing.T) {
-	store := newPendingPromptStore()
-	pending := &pendingPromptEntry{
-		PendingPromptSnapshot: PendingPromptSnapshot{Request: askquestion.AskQuestionRequest{ID: "ask-1"}},
-		response:              make(chan promptResponseResult, 1),
-	}
-	pending.response <- promptResponseResult{response: askquestion.AskQuestionResponse{RequestID: "ask-1"}}
-	store.pending["ask-1"] = pending
-
-	done := make(chan struct{})
-	go func() {
-		store.Close(io.EOF)
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("closePendingPrompts blocked with buffered response")
 	}
 }
 

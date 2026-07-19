@@ -5,7 +5,6 @@ import (
 	"sync"
 
 	"core/server/runtime"
-	askquestion "core/server/tools"
 )
 
 type runtimeGuard struct {
@@ -47,15 +46,6 @@ func (g *runtimeGuard) Retire(reason runtime.QueuedUserMessageFailureReason) err
 		return fmt.Errorf("runtime registry is unavailable")
 	}
 	return g.registry.retireGuardedRuntime(g, reason)
-}
-
-func (g *runtimeGuard) SubmitPromptResponse(resp askquestion.AskQuestionResponse, err error) error {
-	if g == nil || g.entry == nil {
-		return fmt.Errorf("runtime guard is unavailable")
-	}
-	return g.entry.pendingPrompts.Submit(resp, err, func(snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
-		g.entry.PublishPendingPrompt(g.sessionID, snapshot, eventType)
-	})
 }
 
 func (g *runtimeGuard) Release() {

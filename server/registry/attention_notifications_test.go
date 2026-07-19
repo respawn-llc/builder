@@ -219,7 +219,7 @@ func TestRuntimeRegistrySessionAttentionSnapshotUsesPendingPromptStore(t *testin
 	engine := &runtime.Engine{}
 	registerReady(t, registry, "session-1", engine)
 	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-	registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "Proceed?"})
+	projectPendingPromptForTest(registry, "session-1", askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "Proceed?"})
 
 	sub, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1", IncludePendingPromptSnapshot: true})
 	if err != nil {
@@ -242,7 +242,7 @@ func TestRuntimeRegistrySessionAttentionSnapshotOverflowReturnsStreamGap(t *test
 	registerReady(t, registry, "session-1", engine)
 	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
 	for i := 0; i < 65; i++ {
-		registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: fmt.Sprintf("ask-%d", i), StepID: registryTestStepID, Question: "Proceed?"})
+		projectPendingPromptForTest(registry, "session-1", askquestion.AskQuestionRequest{ID: fmt.Sprintf("ask-%d", i), StepID: registryTestStepID, Question: "Proceed?"})
 	}
 
 	sub, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1", IncludePendingPromptSnapshot: true})
@@ -261,7 +261,7 @@ func TestRuntimeRegistrySessionAttentionSnapshotPreservesTaskQuestionBatch(t *te
 	registerReady(t, registry, "session-1", engine)
 	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
 	req := taskBatchAskRequest("ask-1")
-	registry.BeginPendingPrompt("session-1", req)
+	projectPendingPromptForTest(registry, "session-1", req)
 
 	sub, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1", IncludePendingPromptSnapshot: true})
 	if err != nil {

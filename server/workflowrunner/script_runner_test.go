@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"core/internal/testharness/testsetup"
+	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowstore"
 )
@@ -22,8 +23,10 @@ func TestExecuteWorkflowScriptUsesJSONStdinAndSeparatedStderr(t *testing.T) {
 	}
 	dir := t.TempDir()
 	stdinPath := filepath.Join(dir, "stdin.json")
+	workdirPath := filepath.Join(dir, "workdir.txt")
+	runIDPath := filepath.Join(dir, "run-id.txt")
 	scriptPath := filepath.Join(dir, "complete.sh")
-	script := "#!/bin/sh\ncat > " + shellQuote(stdinPath) + "\nprintf 'diagnostic' >&2\nprintf '{\"done\":\"ok\"}'\n"
+	script := "#!/bin/sh\npwd > " + shellQuote(workdirPath) + "\nprintf '%s' \"$KENT_WORKFLOW_RUN_ID\" > " + shellQuote(runIDPath) + "\ncat > " + shellQuote(stdinPath) + "\nprintf 'diagnostic' >&2\nprintf '{\"done\":\"ok\"}'\n"
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
@@ -38,16 +41,54 @@ func TestExecuteWorkflowScriptUsesJSONStdinAndSeparatedStderr(t *testing.T) {
 		},
 	}
 
-	result, err := executeWorkflowScript(context.Background(), req, input)
+	scriptRequest, _, err := workflowScriptExecutionRequest(req, input)
 	if err != nil {
-		t.Fatalf("execute script: %v detail=%s", err, scriptFailureDetailJSON(err, result))
+		t.Fatalf("build script execution request: %v", err)
+	}
+	if scriptRequest.Workflow == nil || *scriptRequest.Workflow != (sessionruntime.WorkflowExecutionRef{RunID: req.RunID, Generation: req.Generation}) {
+		t.Fatalf("workflow execution ref = %#v", scriptRequest.Workflow)
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	handle, err := authority.StartScriptExecution(context.Background(), scriptRequest)
+	if err != nil {
+		t.Fatalf("start script execution: %v", err)
+	}
+	execution, err := handle.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("wait script execution: %v", err)
+	}
+	if execution.Script == nil {
+		t.Fatal("script execution result is missing")
 	}
 
-	if string(result.Stdout) != `{"done":"ok"}` {
-		t.Fatalf("stdout = %q", string(result.Stdout))
+	if string(execution.Script.Stdout) != `{"done":"ok"}` {
+		t.Fatalf("stdout = %q", string(execution.Script.Stdout))
 	}
-	if string(result.Stderr) != "diagnostic" {
-		t.Fatalf("stderr = %q", string(result.Stderr))
+	if string(execution.Script.Stderr) != "diagnostic" {
+		t.Fatalf("stderr = %q", string(execution.Script.Stderr))
+	}
+	workdir, err := os.ReadFile(workdirPath)
+	if err != nil {
+		t.Fatalf("read script workdir: %v", err)
+	}
+	wantWorkdir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("resolve expected workdir: %v", err)
+	}
+	if strings.TrimSpace(string(workdir)) != wantWorkdir {
+		t.Fatalf("script workdir = %q, want %q", strings.TrimSpace(string(workdir)), wantWorkdir)
+	}
+	runID, err := os.ReadFile(runIDPath)
+	if err != nil {
+		t.Fatalf("read script run id: %v", err)
+	}
+	if string(runID) != string(req.RunID) {
+		t.Fatalf("script run id = %q, want %q", string(runID), req.RunID)
 	}
 	stdinBytes, err := os.ReadFile(stdinPath)
 	if err != nil {
@@ -118,7 +159,7 @@ func TestWorkflowScriptEnvIncludesManagedExecutionAndWorktreeRoots(t *testing.T)
 	}
 }
 
-func TestExecuteWorkflowScriptCancelKillsTermIgnoringProcess(t *testing.T) {
+func TestWorkflowScriptExecutionCancellationKillsTermIgnoringProcess(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture uses POSIX signal handling")
 	}
@@ -139,34 +180,34 @@ func TestExecuteWorkflowScriptCancelKillsTermIgnoringProcess(t *testing.T) {
 			SourceWorkspaceRoot: dir,
 		},
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	type scriptResult struct {
-		result workflowScriptResult
-		err    error
+	scriptRequest, _, err := workflowScriptExecutionRequest(req, input)
+	if err != nil {
+		t.Fatalf("build script execution request: %v", err)
 	}
-	done := make(chan scriptResult, 1)
-	go func() {
-		result, err := executeWorkflowScript(ctx, req, input)
-		done <- scriptResult{result: result, err: err}
-	}()
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	handle, err := authority.StartScriptExecution(context.Background(), scriptRequest)
+	if err != nil {
+		t.Fatalf("start script execution: %v", err)
+	}
 	identity := waitForWorkflowScriptProcessIdentity(t, identityPath, 5*time.Second)
-
-	cancel()
-
-	select {
-	case got := <-done:
-		var scriptErr workflowScriptError
-		if !errors.As(got.err, &scriptErr) || scriptErr.Reason != ReasonRuntimeCanceled {
-			t.Fatalf("execute error = %#v, want runtime cancellation", got.err)
-		}
-		if !got.result.Canceled {
-			t.Fatalf("result canceled = false, want true")
-		}
-		assertScriptProcessGroupGone(t, identity.ProcessGroupID)
-	case <-time.After(3 * time.Second):
-		t.Fatal("script cancellation did not kill TERM-ignoring process")
+	stopCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := handle.Stop(stopCtx); err != nil {
+		t.Fatalf("stop script execution: %v", err)
 	}
+	execution, err := handle.Wait(context.Background())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("script execution error = %v, want context cancellation", err)
+	}
+	if execution.Script == nil || !execution.Script.Canceled {
+		t.Fatalf("script execution result = %#v, want canceled script result", execution.Script)
+	}
+	assertScriptProcessGroupGone(t, identity.ProcessGroupID)
 }
 
 type workflowScriptProcessIdentity struct {

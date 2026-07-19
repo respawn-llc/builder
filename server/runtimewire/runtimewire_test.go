@@ -28,6 +28,7 @@ import (
 	"core/server/tools/shell/postprocess"
 	"core/shared/config"
 	"core/shared/invariant"
+	"core/shared/runtimeids"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
@@ -402,6 +403,146 @@ func TestLocalToolRegistryBindingRebindUpdatesExecCommandRoot(t *testing.T) {
 	}
 	if got := shellPwdOutput(t, binding.Registry()); got != canonicalPathForTest(t, rootB) {
 		t.Fatalf("pwd after rebind = %q, want %q", got, canonicalPathForTest(t, rootB))
+	}
+}
+
+func TestLocalToolRegistryBindingBindsExecutionCorrelationPerSuccessiveScope(t *testing.T) {
+	workspace := t.TempDir()
+	manager, err := shelltool.NewManager(
+		shelltool.WithMinimumExecToBgTime(50*time.Millisecond),
+		shelltool.WithPostprocessor(runtimeWirePostprocessor(t, config.ShellPostprocessingModeBuiltin, nil)),
+	)
+	if err != nil {
+		t.Fatalf("new shell manager: %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+
+	binding, _, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
+		WorkspaceRoot:       workspace,
+		Enabled:             []toolspec.ID{toolspec.ToolExecCommand},
+		MinimumExecToBgTime: 50 * time.Millisecond,
+		ShellOutputMaxChars: 16_000,
+		SupportsVision:      true,
+		Background:          manager,
+	})
+	if err != nil {
+		t.Fatalf("new local tool registry binding: %v", err)
+	}
+	events := make(chan shelltool.Event, 6)
+	manager.SetEventHandler(func(event shelltool.Event) {
+		events <- event
+	})
+	nextEvent := func() shelltool.Event {
+		t.Helper()
+		select {
+		case event := <-events:
+			return event
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for shell event")
+			return shelltool.Event{}
+		}
+	}
+	startBackground := func(callID string) shelltool.Snapshot {
+		t.Helper()
+		handler, ok := binding.Registry().Get(toolspec.ToolExecCommand)
+		if !ok {
+			t.Fatal("expected exec_command handler")
+		}
+		input, err := json.Marshal(map[string]any{
+			"cmd":           "sleep 1",
+			"shell":         "/bin/sh",
+			"login":         false,
+			"yield_time_ms": 50,
+		})
+		if err != nil {
+			t.Fatalf("marshal exec_command input: %v", err)
+		}
+		result, err := handler.Call(context.Background(), tools.Call{
+			ID:    callID,
+			Name:  toolspec.ToolExecCommand,
+			Input: input,
+		})
+		if err != nil {
+			t.Fatalf("exec_command call: %v", err)
+		}
+		if result.IsError {
+			t.Fatalf("exec_command result error: %s", string(result.Output))
+		}
+		if result.PresentationDelta == nil || !result.PresentationDelta.MovedToBackground {
+			t.Fatalf("exec_command result did not move to background: %+v", result.PresentationDelta)
+		}
+		event := nextEvent()
+		if event.Type != shelltool.EventBackgrounded {
+			t.Fatalf("event type = %q, want %q", event.Type, shelltool.EventBackgrounded)
+		}
+		return event.Snapshot
+	}
+	assertCorrelation := func(location string, got *runtimeids.ExecutionCorrelation, want *runtimeids.ExecutionCorrelation) {
+		t.Helper()
+		if want == nil {
+			if got != nil {
+				t.Fatalf("%s execution correlation = %#v, want nil", location, *got)
+			}
+			return
+		}
+		if got == nil {
+			t.Fatalf("%s execution correlation is nil", location)
+		}
+		if *got != *want {
+			t.Fatalf("%s execution correlation = %#v, want %#v", location, *got, *want)
+		}
+	}
+
+	correlationA, err := runtimeids.NewExecutionCorrelation(runtimeids.NewExecutionScopeID(), runtimeids.ResourceGeneration(1))
+	if err != nil {
+		t.Fatalf("new correlation A: %v", err)
+	}
+	if err := binding.BindExecutionCorrelation(&correlationA); err != nil {
+		t.Fatalf("bind correlation A: %v", err)
+	}
+	snapshotA := startBackground("scope-a")
+	assertCorrelation("scope A snapshot", snapshotA.ExecutionCorrelation, &correlationA)
+
+	correlationB, err := runtimeids.NewExecutionCorrelation(runtimeids.NewExecutionScopeID(), runtimeids.ResourceGeneration(1))
+	if err != nil {
+		t.Fatalf("new correlation B: %v", err)
+	}
+	if err := binding.BindExecutionCorrelation(&correlationB); err != nil {
+		t.Fatalf("bind correlation B: %v", err)
+	}
+	currentA, err := manager.Snapshot(snapshotA.ID)
+	if err != nil {
+		t.Fatalf("snapshot scope A after rebind: %v", err)
+	}
+	assertCorrelation("scope A snapshot after scope B bind", currentA.ExecutionCorrelation, &correlationA)
+	snapshotB := startBackground("scope-b")
+	assertCorrelation("scope B snapshot", snapshotB.ExecutionCorrelation, &correlationB)
+
+	if err := binding.BindExecutionCorrelation(nil); err != nil {
+		t.Fatalf("clear correlation: %v", err)
+	}
+	snapshotUnscoped := startBackground("scope-idle")
+	assertCorrelation("unscoped snapshot", snapshotUnscoped.ExecutionCorrelation, nil)
+
+	expectedByProcessID := map[string]*runtimeids.ExecutionCorrelation{
+		snapshotA.ID:        &correlationA,
+		snapshotB.ID:        &correlationB,
+		snapshotUnscoped.ID: nil,
+	}
+	for remaining := len(expectedByProcessID); remaining > 0; remaining-- {
+		event := nextEvent()
+		if event.Type != shelltool.EventCompleted {
+			t.Fatalf("terminal event type = %q, want %q", event.Type, shelltool.EventCompleted)
+		}
+		want, ok := expectedByProcessID[event.Snapshot.ID]
+		if !ok {
+			t.Fatalf("unexpected terminal process ID %q", event.Snapshot.ID)
+		}
+		assertCorrelation("terminal event", event.Snapshot.ExecutionCorrelation, want)
+		delete(expectedByProcessID, event.Snapshot.ID)
+	}
+	if len(expectedByProcessID) != 0 {
+		t.Fatalf("missing terminal events for %d processes", len(expectedByProcessID))
 	}
 }
 

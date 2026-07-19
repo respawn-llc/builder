@@ -10,6 +10,7 @@ import (
 
 	"core/server/tools"
 	"core/server/tools/shell/postprocess"
+	"core/shared/runtimeids"
 	"core/shared/transcript"
 )
 
@@ -26,16 +27,26 @@ type execCommandInput struct {
 }
 
 type ExecCommandTool struct {
-	workspaceRoot  string
-	defaultShell   string
-	defaultLogin   bool
-	outputLimit    int
-	background     *Manager
-	ownerSessionID string
-	postprocessor  *postprocess.Runner
+	workspaceRoot        string
+	defaultShell         string
+	defaultLogin         bool
+	outputLimit          int
+	background           *Manager
+	ownerSessionID       string
+	postprocessor        *postprocess.Runner
+	executionCorrelation *runtimeids.ExecutionCorrelation
 }
 
 func NewExecCommandTool(workspaceRoot string, outputLimit int, background *Manager, ownerSessionID string) *ExecCommandTool {
+	return NewExecCommandToolWithConfig(workspaceRoot, outputLimit, background, ownerSessionID, ExecCommandToolConfig{})
+}
+
+type ExecCommandToolConfig struct {
+	Postprocessor        *postprocess.Runner
+	ExecutionCorrelation *runtimeids.ExecutionCorrelation
+}
+
+func NewExecCommandToolWithConfig(workspaceRoot string, outputLimit int, background *Manager, ownerSessionID string, config ExecCommandToolConfig) *ExecCommandTool {
 	defaultShell := strings.TrimSpace(os.Getenv("SHELL"))
 	if defaultShell == "" {
 		defaultShell = "/bin/sh"
@@ -44,19 +55,21 @@ func NewExecCommandTool(workspaceRoot string, outputLimit int, background *Manag
 		outputLimit = defaultLimit
 	}
 	return &ExecCommandTool{
-		workspaceRoot:  workspaceRoot,
-		defaultShell:   defaultShell,
-		defaultLogin:   true,
-		outputLimit:    outputLimit,
-		background:     background,
-		ownerSessionID: strings.TrimSpace(ownerSessionID),
+		workspaceRoot:        workspaceRoot,
+		defaultShell:         defaultShell,
+		defaultLogin:         true,
+		outputLimit:          outputLimit,
+		background:           background,
+		ownerSessionID:       strings.TrimSpace(ownerSessionID),
+		postprocessor:        config.Postprocessor,
+		executionCorrelation: cloneExecutionCorrelation(config.ExecutionCorrelation),
 	}
 }
 
 func NewExecCommandToolWithPostprocessor(workspaceRoot string, outputLimit int, background *Manager, ownerSessionID string, runner *postprocess.Runner) *ExecCommandTool {
-	tool := NewExecCommandTool(workspaceRoot, outputLimit, background, ownerSessionID)
-	tool.postprocessor = runner
-	return tool
+	return NewExecCommandToolWithConfig(workspaceRoot, outputLimit, background, ownerSessionID, ExecCommandToolConfig{
+		Postprocessor: runner,
+	})
 }
 
 func (t *ExecCommandTool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
@@ -98,17 +111,18 @@ func (t *ExecCommandTool) Call(ctx context.Context, c tools.Call) (tools.Result,
 		maxChars = *in.MaxOutputTokens * 4
 	}
 	result, err := t.background.Start(ctx, ExecRequest{
-		Command:        argv,
-		DisplayCommand: cmdText,
-		OwnerSessionID: t.ownerSessionID,
-		OwnerRunID:     strings.TrimSpace(c.RunID),
-		OwnerStepID:    strings.TrimSpace(c.StepID),
-		Workdir:        workdir,
-		YieldTime:      yieldTime,
-		MaxOutputChars: maxChars,
-		KeepStdinOpen:  in.TTY,
-		Raw:            in.Raw,
-		Postprocessor:  t.postprocessor,
+		Command:              argv,
+		DisplayCommand:       cmdText,
+		OwnerSessionID:       t.ownerSessionID,
+		OwnerRunID:           strings.TrimSpace(c.RunID),
+		OwnerStepID:          strings.TrimSpace(c.StepID),
+		ExecutionCorrelation: cloneExecutionCorrelation(t.executionCorrelation),
+		Workdir:              workdir,
+		YieldTime:            yieldTime,
+		MaxOutputChars:       maxChars,
+		KeepStdinOpen:        in.TTY,
+		Raw:                  in.Raw,
+		Postprocessor:        t.postprocessor,
 	})
 	if err != nil {
 		return tools.ErrorResultWith(c, formatToolCallError("exec_command", err), marshalNoHTMLEscape), nil

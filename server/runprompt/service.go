@@ -42,7 +42,7 @@ func (s *inProcessRunPromptService) RunPrompt(ctx context.Context, req serverapi
 	})
 }
 
-func (s *inProcessRunPromptService) runPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
+func (s *inProcessRunPromptService) runPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (response serverapi.RunPromptResponse, err error) {
 	if s == nil || s.launcher == nil {
 		return serverapi.RunPromptResponse{}, errors.New("run prompt service is not configured")
 	}
@@ -56,9 +56,8 @@ func (s *inProcessRunPromptService) runPrompt(ctx context.Context, req serverapi
 	if err != nil {
 		return serverapi.RunPromptResponse{}, err
 	}
-	failed := false
 	defer func() {
-		runtimeHandle.plan.CloseWithFailure(failed)
+		err = errors.Join(err, runtimeHandle.plan.CloseWithFailure(err != nil))
 	}()
 
 	runCtx := ctx
@@ -76,21 +75,14 @@ func (s *inProcessRunPromptService) runPrompt(ctx context.Context, req serverapi
 			Text:      req.Prompt,
 		})
 		if err != nil {
-			failed = true
 			return serverapi.RunPromptResponse{}, err
 		}
 	}
-	response, dropped, runErr := runtimeHandle.submitUserMessage(runCtx, req.Prompt)
+	response, runErr := runtimeHandle.submitUserMessage(runCtx, req.Prompt)
 	response.Duration = time.Since(startedAt)
-	if dropped > 0 {
-		runtimeHandle.plan.diagLogger.Logf("runtime.event.drop.total=%d", dropped)
-	}
 	if runErr != nil {
-		failed = true
-		runtimeHandle.plan.diagLogger.Logf("app.run_prompt.exit err=%q", runErr.Error())
 		return response, runErr
 	}
-	runtimeHandle.plan.diagLogger.Logf("app.run_prompt.exit ok")
 	return response, nil
 }
 

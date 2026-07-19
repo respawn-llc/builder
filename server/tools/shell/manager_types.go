@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"core/server/tools/shell/postprocess"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 
 	"github.com/google/uuid"
@@ -59,7 +60,7 @@ type completionOutput struct {
 }
 
 func newBackgroundedEvent(snapshot Snapshot) Event {
-	return Event{Type: EventBackgrounded, Snapshot: snapshot}
+	return Event{Type: EventBackgrounded, Snapshot: snapshotWithExecutionCorrelationCopy(snapshot)}
 }
 
 func newFinalizedBackgroundEvent(eventType EventType, snapshot Snapshot, output string, warning postprocess.Warning, noticeSuppressed bool) Event {
@@ -93,7 +94,7 @@ func newTerminalBackgroundEvent(eventType EventType, snapshot Snapshot, output c
 	}
 	return Event{
 		Type:             eventType,
-		Snapshot:         snapshot,
+		Snapshot:         snapshotWithExecutionCorrelationCopy(snapshot),
 		NoticeSuppressed: noticeSuppressed,
 		completion:       &output,
 	}
@@ -105,6 +106,7 @@ type Snapshot struct {
 	OwnerSessionID          string
 	OwnerRunID              string
 	OwnerStepID             string
+	ExecutionCorrelation    *runtimeids.ExecutionCorrelation
 	State                   string
 	Command                 string
 	Workdir                 string
@@ -126,17 +128,18 @@ type Snapshot struct {
 }
 
 type ExecRequest struct {
-	Command        []string
-	DisplayCommand string
-	OwnerSessionID string
-	OwnerRunID     string
-	OwnerStepID    string
-	Workdir        string
-	YieldTime      time.Duration
-	MaxOutputChars int
-	KeepStdinOpen  bool
-	Raw            bool
-	Postprocessor  *postprocess.Runner
+	Command              []string
+	DisplayCommand       string
+	OwnerSessionID       string
+	OwnerRunID           string
+	OwnerStepID          string
+	ExecutionCorrelation *runtimeids.ExecutionCorrelation
+	Workdir              string
+	YieldTime            time.Duration
+	MaxOutputChars       int
+	KeepStdinOpen        bool
+	Raw                  bool
+	Postprocessor        *postprocess.Runner
 }
 
 type ExecResult struct {
@@ -216,38 +219,39 @@ func (e *PollingCanceledError) Unwrap() error {
 }
 
 type processEntry struct {
-	id             string
-	activityID     uuid.UUID
-	ownerSessionID string
-	ownerRunID     string
-	ownerStepID    string
-	command        string
-	workdir        string
-	raw            bool
-	postprocessor  *postprocess.Runner
-	preserveOutput bool
-	startedAt      time.Time
-	finishedAt     time.Time
-	exitCode       *int
-	state          string
-	backgrounded   bool
-	logPath        string
-	cmd            *exec.Cmd
-	stdin          io.WriteCloser
-	log            *asyncLogWriter
-	running        bool
-	stdinOpen      bool
-	lastUpdatedAt  time.Time
-	lastSignaledAt time.Time
-	recentOutput   []byte
-	pendingOutput  []byte
-	outputBytes    int64
-	notify         chan struct{}
-	done           chan struct{}
-	killRequested  bool
-	noticeConsumed bool
-	mu             sync.Mutex
-	interactMu     sync.Mutex
+	id                   string
+	activityID           uuid.UUID
+	ownerSessionID       string
+	ownerRunID           string
+	ownerStepID          string
+	executionCorrelation *runtimeids.ExecutionCorrelation
+	command              string
+	workdir              string
+	raw                  bool
+	postprocessor        *postprocess.Runner
+	preserveOutput       bool
+	startedAt            time.Time
+	finishedAt           time.Time
+	exitCode             *int
+	state                string
+	backgrounded         bool
+	logPath              string
+	cmd                  *exec.Cmd
+	stdin                io.WriteCloser
+	log                  *asyncLogWriter
+	running              bool
+	stdinOpen            bool
+	lastUpdatedAt        time.Time
+	lastSignaledAt       time.Time
+	recentOutput         []byte
+	pendingOutput        []byte
+	outputBytes          int64
+	notify               chan struct{}
+	done                 chan struct{}
+	killRequested        bool
+	noticeConsumed       bool
+	mu                   sync.Mutex
+	interactMu           sync.Mutex
 }
 
 func (p *processEntry) signal() {
@@ -268,6 +272,7 @@ func (p *processEntry) snapshotLocked() Snapshot {
 		OwnerSessionID:          p.ownerSessionID,
 		OwnerRunID:              p.ownerRunID,
 		OwnerStepID:             p.ownerStepID,
+		ExecutionCorrelation:    cloneExecutionCorrelation(p.executionCorrelation),
 		State:                   p.state,
 		Command:                 p.command,
 		Workdir:                 p.workdir,
@@ -287,6 +292,19 @@ func (p *processEntry) snapshotLocked() Snapshot {
 		KillRequested:           p.killRequested,
 		LastUpdatedAt:           p.lastUpdatedAt,
 	}
+}
+
+func cloneExecutionCorrelation(correlation *runtimeids.ExecutionCorrelation) *runtimeids.ExecutionCorrelation {
+	if correlation == nil {
+		return nil
+	}
+	copy := *correlation
+	return &copy
+}
+
+func snapshotWithExecutionCorrelationCopy(snapshot Snapshot) Snapshot {
+	snapshot.ExecutionCorrelation = cloneExecutionCorrelation(snapshot.ExecutionCorrelation)
+	return snapshot
 }
 
 func (p *processEntry) detachResourcesLocked() (io.Closer, *asyncLogWriter) {

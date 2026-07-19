@@ -6,12 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
+	"core/server/sessionruntime"
 	tools "core/server/tools"
-	shelltool "core/server/tools/shell"
 	"core/server/workflow"
 	"core/server/workflowattention"
 	"core/server/workflowruntime"
@@ -23,38 +22,36 @@ const (
 	ReasonScriptValidationFailed = workflowscript.ReasonValidationFailed
 	ReasonScriptExecutionFailed  = "workflow_script_execution_failed"
 	ReasonScriptCompletionFailed = "workflow_script_completion_failed"
-	scriptOutputLimitBytes       = 256 * 1024
-	scriptCancellationGrace      = 750 * time.Millisecond
 	scriptAttentionFinalizeLimit = 5 * time.Second
 )
 
 func (s *Starter) startScriptWorkflowRun(req SchedulerStartRunRequest, input workflowstore.RunStartContext) error {
-	runCtx, cancel := context.WithCancel(context.Background())
-	if !s.registerRun(req, cancel) {
-		cancel()
-		return errors.New("workflow runtime starter closed")
+	scriptReq, resolvedPath, err := workflowScriptExecutionRequest(req, input)
+	if err != nil {
+		return err
 	}
-	go s.runScript(runCtx, req, input)
-	return nil
+	scriptReq.Finalize = func(_ context.Context, _ sessionruntime.ExecutionScope, result sessionruntime.ScriptResult, runErr error) error {
+		return s.finalizeWorkflowScript(req, input, workflowScriptResultFromExecution(resolvedPath, result), runErr)
+	}
+	_, err = s.runtimeAuthority.StartScriptExecution(context.Background(), scriptReq)
+	return err
 }
 
-func (s *Starter) runScript(ctx context.Context, req SchedulerStartRunRequest, input workflowstore.RunStartContext) {
-	defer s.wg.Done()
-	defer s.finish(req.RunID, req.Generation)
-	result, err := executeWorkflowScript(ctx, req, input)
+func (s *Starter) finalizeWorkflowScript(req SchedulerStartRunRequest, input workflowstore.RunStartContext, result workflowScriptResult, runErr error) error {
+	err := workflowScriptRunError(result, runErr)
 	if err != nil {
 		s.interrupt(context.Background(), req.RunID, req.Generation, scriptFailureReason(err), scriptInterruptionError{err: err, detail: scriptFailureDetailJSON(err, result)})
-		return
+		return err
 	}
 	contract, err := s.scriptCompletionContract(context.Background(), req, input)
 	if err != nil {
 		s.interrupt(context.Background(), req.RunID, req.Generation, ReasonScriptCompletionFailed, scriptInterruptionError{err: err, detail: scriptFailureDetailJSON(err, result)})
-		return
+		return err
 	}
 	parsed, err := workflowruntime.DecodeCompletion(json.RawMessage(result.Stdout), contract)
 	if err != nil {
 		s.interrupt(context.Background(), req.RunID, req.Generation, ReasonScriptCompletionFailed, scriptInterruptionError{err: err, detail: scriptFailureDetailJSON(err, result)})
-		return
+		return err
 	}
 	completed, err := s.store.CompleteRun(context.Background(), workflowstore.CompleteRunRequest{
 		RunID:              req.RunID,
@@ -67,9 +64,10 @@ func (s *Starter) runScript(ctx context.Context, req SchedulerStartRunRequest, i
 	})
 	if err != nil {
 		s.interrupt(context.Background(), req.RunID, req.Generation, ReasonScriptCompletionFailed, scriptInterruptionError{err: err, detail: scriptFailureDetailJSON(err, result)})
-		return
+		return err
 	}
 	s.finalizeScriptCompletionAttention(context.Background(), completed)
+	return nil
 }
 
 func (s *Starter) scriptCompletionContract(ctx context.Context, req SchedulerStartRunRequest, input workflowstore.RunStartContext) (workflowruntime.CompletionContract, error) {
@@ -156,75 +154,64 @@ func scriptFailureReason(err error) string {
 	return ReasonScriptExecutionFailed
 }
 
-func executeWorkflowScript(ctx context.Context, req SchedulerStartRunRequest, input workflowstore.RunStartContext) (workflowScriptResult, error) {
+func workflowScriptRunError(result workflowScriptResult, err error) error {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return workflowScriptError{Reason: ReasonRuntimeCanceled, Err: err}
+	case err != nil:
+		return workflowScriptError{Reason: ReasonScriptExecutionFailed, Err: err}
+	case result.StdoutOverflow:
+		return workflowScriptError{Reason: ReasonScriptCompletionFailed, Err: errors.New("script stdout exceeded workflow completion limit")}
+	default:
+		return nil
+	}
+}
+
+func workflowScriptExecutionRequest(req SchedulerStartRunRequest, input workflowstore.RunStartContext) (sessionruntime.ScriptExecutionRequest, string, error) {
 	executionRoot, err := requireRunExecutionRoot(input)
 	if err != nil {
-		return workflowScriptResult{}, workflowScriptError{Reason: ReasonScriptValidationFailed, Err: err}
+		return sessionruntime.ScriptExecutionRequest{}, "", workflowScriptError{Reason: ReasonScriptValidationFailed, Err: err}
 	}
 	resolvedPath, err := resolveWorkflowScriptPath(input)
 	if err != nil {
-		return workflowScriptResult{}, workflowScriptError{Reason: ReasonScriptValidationFailed, Err: err}
+		return sessionruntime.ScriptExecutionRequest{}, "", workflowScriptError{Reason: ReasonScriptValidationFailed, Err: err}
 	}
 	stdin, err := workflowScriptStdin(req, input)
 	if err != nil {
-		return workflowScriptResult{ResolvedPath: resolvedPath}, workflowScriptError{Reason: ReasonScriptExecutionFailed, Err: err}
+		return sessionruntime.ScriptExecutionRequest{}, resolvedPath, workflowScriptError{Reason: ReasonScriptExecutionFailed, Err: err}
 	}
-	cmd := exec.Command(resolvedPath)
-	cmd.Dir = executionRoot.EffectiveRoot()
-	cmd.Env, err = workflowScriptEnv(req, input)
+	env, err := workflowScriptEnv(req, input)
 	if err != nil {
-		return workflowScriptResult{ResolvedPath: resolvedPath}, workflowScriptError{Reason: ReasonScriptExecutionFailed, Err: err}
+		return sessionruntime.ScriptExecutionRequest{}, resolvedPath, workflowScriptError{Reason: ReasonScriptExecutionFailed, Err: err}
 	}
-	cmd.Stdin = strings.NewReader(string(stdin))
-	prepareScriptCommand(cmd)
-	stdout := shelltool.NewBoundedOutput(scriptOutputLimitBytes)
-	stderr := shelltool.NewBoundedOutput(scriptOutputLimitBytes)
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	if err := cmd.Start(); err != nil {
-		return workflowScriptResult{ResolvedPath: resolvedPath}, workflowScriptError{Reason: ReasonScriptExecutionFailed, Err: err}
+	workdir := executionRoot.EffectiveRoot()
+	return sessionruntime.ScriptExecutionRequest{
+		Workflow: &sessionruntime.WorkflowExecutionRef{
+			RunID:      req.RunID,
+			Generation: req.Generation,
+		},
+		Command: sessionruntime.ScriptCommand{
+			Path:    resolvedPath,
+			Workdir: &workdir,
+			Env:     env,
+			Stdin:   stdin,
+		},
+	}, resolvedPath, nil
+}
+
+func workflowScriptResultFromExecution(resolvedPath string, execution sessionruntime.ScriptResult) workflowScriptResult {
+	result := workflowScriptResult{ResolvedPath: resolvedPath}
+	result.Stdout = execution.Stdout
+	result.Stderr = execution.Stderr
+	result.StdoutOverflow = execution.StdoutOverflow
+	result.StderrOverflow = execution.StderrOverflow
+	result.Canceled = execution.Canceled
+	if execution.ExitCode != nil && *execution.ExitCode >= 0 {
+		result.ExitCode = *execution.ExitCode
+	} else {
+		result.ExitCode = 1
 	}
-	waitCh := make(chan error, 1)
-	go func() {
-		waitCh <- cmd.Wait()
-	}()
-	canceled := false
-	var waitErr error
-	select {
-	case waitErr = <-waitCh:
-	case <-ctx.Done():
-		canceled = true
-		_ = terminateScriptProcess(cmd.Process)
-		grace := time.NewTimer(scriptCancellationGrace)
-		select {
-		case waitErr = <-waitCh:
-			if !grace.Stop() {
-				<-grace.C
-			}
-		case <-grace.C:
-			_ = killScriptProcess(cmd.Process)
-			waitErr = <-waitCh
-		}
-	}
-	result := workflowScriptResult{
-		ResolvedPath:   resolvedPath,
-		Stdout:         stdout.Bytes(),
-		Stderr:         stderr.Bytes(),
-		StdoutOverflow: stdout.Overflow(),
-		StderrOverflow: stderr.Overflow(),
-		ExitCode:       processExitCode(waitErr),
-		Canceled:       canceled,
-	}
-	switch {
-	case canceled:
-		return result, workflowScriptError{Reason: ReasonRuntimeCanceled, Err: context.Canceled}
-	case waitErr != nil:
-		return result, workflowScriptError{Reason: ReasonScriptExecutionFailed, Err: waitErr}
-	case result.StdoutOverflow:
-		return result, workflowScriptError{Reason: ReasonScriptCompletionFailed, Err: errors.New("script stdout exceeded workflow completion limit")}
-	default:
-		return result, nil
-	}
+	return result
 }
 
 func resolveWorkflowScriptPath(input workflowstore.RunStartContext) (string, error) {

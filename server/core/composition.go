@@ -39,6 +39,7 @@ import (
 	"core/server/worktree"
 	rpccontract "core/shared/apicontract"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -98,6 +99,23 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	attentionBroker := attentionnotify.NewBroker()
 	runtimeRegistry := registry.NewRuntimeRegistry().WithAttentionNotifications(attentionBroker)
 	runtimeRegistry.WithTranscriptContractViolationPanic(cfg.Settings.Debug)
+	var workflowScheduler *workflowrunner.SchedulerService
+	runtimeAuthority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: cfg.PersistenceRoot,
+		AuthManager:     authSupport.AuthManager,
+		Background:      runtimeSupport.Background,
+		StoreOptions:    storeOptions,
+		PromptFeed:      runtimeRegistry,
+		EventFeed: func(resource sessionruntime.AgentResourceDescriptor, event runtime.Event) {
+			runtimeRegistry.PublishRuntimeEvent(resource.Ref.SessionID().String(), event)
+		},
+		StepLifecycle: authorityStepLifecycle{registry: runtimeRegistry},
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(ref sessionruntime.WorkflowExecutionRef) {
+			if workflowScheduler != nil {
+				workflowScheduler.RuntimeFinished(ref.RunID, ref.Generation)
+			}
+		}),
+	})
 	sleepManager, sleepErr := sleepguard.NewManager(cfg.Settings.PreventSleep, func(err error) {
 		runtimeRegistry.PublishRuntimeEventToAll(runtime.Event{
 			Kind:  runtime.EventSleepGuardFailed,
@@ -171,7 +189,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithWorkspaceRetargeter(sessionWorkspaceRetargeter).
 		WithNavigationTargetResolver(metadataStore)
 	var workflowRuntimeStarter *workflowrunner.Starter
-	var workflowScheduler *workflowrunner.SchedulerService
 	cleanupNewFailure := func() {
 		sleepManager.Close()
 		_ = worktreeService.Close()
@@ -181,6 +198,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		if workflowRuntimeStarter != nil {
 			_ = workflowRuntimeStarter.Close()
 		}
+		_ = runtimeAuthority.Close(context.Background())
 		closeRootLeaseOnFailure()
 		_ = metadataStore.Close()
 		if runtimeSupport.Background != nil {
@@ -199,7 +217,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: view: %w", err)
 	}
 	workflowAttentionFinalizer := workflowattention.NewFinalizer(workflowApprovalProjection{store: workflowStore, view: workflowViewService, roleResolver: workflowRoleResolver}, attentionBroker)
-	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeSupport.Background, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, Worktrees: runtimeTaskWorktreeRestorer{service: worktreeService}, SessionRuntime: sessionRuntimeService, AttentionFinalizer: workflowAttentionFinalizer})
+	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, Worktrees: runtimeTaskWorktreeRestorer{service: worktreeService}, RuntimeAuthority: runtimeAuthority, AttentionFinalizer: workflowAttentionFinalizer})
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: runtime starter: %w", err)
@@ -209,8 +227,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: scheduler: %w", err)
 	}
-	workflowRuntimeStarter.SetRuntimeFinished(workflowScheduler.RuntimeFinished)
-	workflowService, err := workflowsvc.New(workflowStore, workflowViewService, workflowRoleResolver, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithTaskRuntimeCanceler(workflowRuntimeStarter), workflowsvc.WithSchedulerNotifier(workflowScheduler), workflowsvc.WithPromptResponder(runtimeRegistry), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer))
+	workflowService, err := workflowsvc.New(workflowStore, workflowViewService, workflowRoleResolver, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithTaskRuntimeCanceler(workflowRuntimeStarter), workflowsvc.WithSchedulerNotifier(workflowScheduler), workflowsvc.WithPromptResponder(authorityPromptResponder{authority: runtimeAuthority}), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer))
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: service: %w", err)
@@ -224,6 +241,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		metadataStore:           metadataStore,
 		sessionStoreRegistry:    sessionStoreRegistry,
 		runtimeRegistry:         runtimeRegistry,
+		runtimeAuthority:        runtimeAuthority,
 		projectViews:            projectViews,
 		authBootstrapService:    authBootstrapService,
 		authStatusService:       authStatusService,
@@ -511,6 +529,30 @@ func (d taskWorktreeDeleter) DeleteTaskWorktree(ctx context.Context, taskID stri
 	}
 	_, err := d.service.DeleteTaskWorktree(ctx, worktree.DeleteTaskWorktreeRequest{TaskID: taskID})
 	return err
+}
+
+type authorityPromptResponder struct {
+	authority *sessionruntime.Authority
+}
+
+func (r authorityPromptResponder) SubmitPromptResponse(sessionID string, response askquestion.AskQuestionResponse, submitErr error) error {
+	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	if err != nil {
+		return err
+	}
+	return r.authority.SubmitPromptResponse(id, response, submitErr)
+}
+
+type authorityStepLifecycle struct {
+	registry *registry.RuntimeRegistry
+}
+
+func (s authorityStepLifecycle) StepBegan(ctx context.Context, resource sessionruntime.AgentResourceDescriptor, _ sessionruntime.ExecutionScope, snapshot runtime.StepLifecycleSnapshot) error {
+	return runtimewire.NewStepLifecycleSink(resource.Ref.SessionID().String(), s.registry).StepBegan(ctx, snapshot)
+}
+
+func (s authorityStepLifecycle) StepEnded(ctx context.Context, resource sessionruntime.AgentResourceDescriptor, _ sessionruntime.ExecutionScope, snapshot runtime.StepLifecycleSnapshot) error {
+	return runtimewire.NewStepLifecycleSink(resource.Ref.SessionID().String(), s.registry).StepEnded(ctx, snapshot)
 }
 
 type runtimePendingAskResolver struct {

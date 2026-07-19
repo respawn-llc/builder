@@ -7,17 +7,12 @@ import (
 	"core/server/auth"
 	"core/server/launch"
 	"core/server/requestmemo"
-	"core/server/session"
 	"core/server/subagentpolicy"
 	servicecontract "core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
-
-type sessionStoreRegistrar interface {
-	RegisterStore(store *session.Store)
-}
 
 type authStateReader interface {
 	CurrentState(context.Context) (auth.State, error)
@@ -29,7 +24,6 @@ type promptHistoryReader interface {
 
 type Service struct {
 	planner       launch.Planner
-	stores        sessionStoreRegistrar
 	authStates    authStateReader
 	promptHistory promptHistoryReader
 	plans         *requestmemo.Memo[sessionPlanMemoRequest, PlanResult]
@@ -47,8 +41,8 @@ type sessionPlanMemoRequest struct {
 	Overrides       serverapi.RunPromptOverridesKey
 }
 
-func NewService(planner launch.Planner, stores sessionStoreRegistrar) *Service {
-	return &Service{planner: planner, stores: stores, plans: requestmemo.New[sessionPlanMemoRequest, PlanResult]()}
+func NewService(planner launch.Planner) *Service {
+	return &Service{planner: planner, plans: requestmemo.New[sessionPlanMemoRequest, PlanResult]()}
 }
 
 func (s *Service) WithAuthStateReader(reader authStateReader) *Service {
@@ -210,19 +204,16 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 		if err != nil {
 			return PlanResult{}, err
 		}
-		plan, warnings, err := launch.ApplyPreparedRunPromptOverrides(plan, req.Overrides, preparedOverrides)
+		plan, warnings, err := planner.ApplyPreparedRunPromptOverrides(plan, req.Overrides, preparedOverrides)
 		if err != nil {
 			return PlanResult{}, err
 		}
 		if s.promptHistory != nil {
-			history, err := s.promptHistory.ReadPromptHistory(ctx, plan.Store.Meta().SessionID)
+			history, err := s.promptHistory.ReadPromptHistory(ctx, plan.Descriptor.SessionID().String())
 			if err != nil {
 				return PlanResult{}, err
 			}
 			plan.PromptHistory = history
-		}
-		if s.stores != nil {
-			s.stores.RegisterStore(plan.Store)
 		}
 		return PlanResult{Plan: plan, Warnings: warnings}, nil
 	})
@@ -234,7 +225,7 @@ func sessionPlanResponseFromResult(result PlanResult) serverapi.SessionPlanRespo
 		enabledToolIDs = append(enabledToolIDs, string(id))
 	}
 	return serverapi.SessionPlanResponse{Plan: serverapi.SessionPlan{
-		SessionID:           result.Plan.Store.Meta().SessionID,
+		SessionID:           result.Plan.Descriptor.SessionID().String(),
 		ActiveSettings:      result.Plan.ActiveSettings,
 		EnabledToolIDs:      enabledToolIDs,
 		ConfiguredModelName: result.Plan.ConfiguredModelName,

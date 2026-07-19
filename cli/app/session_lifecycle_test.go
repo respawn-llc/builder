@@ -13,7 +13,6 @@ import (
 
 	"core/server/launch"
 	"core/server/metadata"
-	"core/server/registry"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -161,7 +160,7 @@ func TestRunSessionLifecycleRejectsDifferentAgentRoleForLockedContinuation(t *te
 		ContainerDir:      containerDir,
 		StoreOptions:      metadataStore.AuthoritativeSessionStoreOptions(),
 		PersistedSessions: metadataStore,
-	}, registry.NewSessionStoreRegistry())
+	})
 	server := &testEmbeddedServer{
 		cfg:               cfg,
 		projectID:         binding.ProjectID,

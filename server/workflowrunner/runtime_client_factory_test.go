@@ -3,19 +3,20 @@ package workflowrunner
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"core/internal/testharness/scriptedllm"
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/registry"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
 	"core/server/workflowstore"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 )
@@ -23,7 +24,7 @@ import (
 func TestWorkflowProviderCapabilitiesUseRuntimeClientFactory(t *testing.T) {
 	t.Parallel()
 
-	store := newWorkflowFactorySession(t)
+	session := newWorkflowFactorySession(t)
 	var got runtimewire.RuntimeClientRequest
 	client := NewScriptedClient(llm.ProviderCapabilities{ProviderID: "scripted-workflow", SupportsResponsesAPI: true})
 	starter := &Starter{runtimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, req runtimewire.RuntimeClientRequest) (llm.Client, error) {
@@ -32,7 +33,8 @@ func TestWorkflowProviderCapabilitiesUseRuntimeClientFactory(t *testing.T) {
 	})}
 
 	caps, resolvedClient, err := starter.workflowProviderCapabilities(context.Background(), launch.SessionPlan{
-		Store:          store,
+		Descriptor:     session.Descriptor,
+		Locked:         session.Locked,
 		ActiveSettings: config.Settings{Model: "gpt-5", ProviderIdentifier: "workflow-agent", ModelContextWindow: 200000},
 		EnabledTools:   []toolspec.ID{toolspec.ToolExecCommand},
 		WorkspaceRoot:  t.TempDir(),
@@ -45,7 +47,7 @@ func TestWorkflowProviderCapabilitiesUseRuntimeClientFactory(t *testing.T) {
 		t.Fatalf("caps/client = %+v/%T, want factory client", caps, resolvedClient)
 	}
 	if got.Purpose != runtimewire.RuntimeClientPurposeWorkflow ||
-		got.SessionID != store.Meta().SessionID ||
+		got.SessionID != session.Descriptor.SessionID().String() ||
 		got.ProviderSettings.Model != "gpt-5" ||
 		got.ProviderSettings.ProviderIdentifier != "workflow-agent" {
 		t.Fatalf("factory request = %+v, want workflow purpose and plan data", got)
@@ -55,14 +57,15 @@ func TestWorkflowProviderCapabilitiesUseRuntimeClientFactory(t *testing.T) {
 func TestWorkflowRuntimeClientFactoryErrorDoesNotFallbackToProvider(t *testing.T) {
 	t.Parallel()
 
-	store := newWorkflowFactorySession(t)
+	session := newWorkflowFactorySession(t)
 	wantErr := errors.New("workflow factory failed")
 	starter := &Starter{runtimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
 		return nil, wantErr
 	})}
 
 	_, _, err := starter.workflowProviderCapabilities(context.Background(), launch.SessionPlan{
-		Store:          store,
+		Descriptor:     session.Descriptor,
+		Locked:         session.Locked,
 		ActiveSettings: config.Settings{Model: "", ProviderOverride: "openai"},
 	}, nil)
 	if !errors.Is(err, wantErr) {
@@ -73,13 +76,14 @@ func TestWorkflowRuntimeClientFactoryErrorDoesNotFallbackToProvider(t *testing.T
 func TestWorkflowRuntimeClientFactoryRejectsNilClient(t *testing.T) {
 	t.Parallel()
 
-	store := newWorkflowFactorySession(t)
+	session := newWorkflowFactorySession(t)
 	starter := &Starter{runtimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
 		return nil, nil
 	})}
 
 	_, _, err := starter.workflowProviderCapabilities(context.Background(), launch.SessionPlan{
-		Store:          store,
+		Descriptor:     session.Descriptor,
+		Locked:         session.Locked,
 		ActiveSettings: config.Settings{Model: "gpt-5"},
 	}, nil)
 	if err == nil {
@@ -144,18 +148,28 @@ func TestWorkflowProviderClientPreservesLockedVerbosityAcrossConfigChanges(t *te
 func TestNewStarterRejectsLegacyAndRuntimeClientFactoriesTogether(t *testing.T) {
 	t.Parallel()
 
-	metadataStore, workflowStore, sessionRuntime := newStarterFactoryStores(t)
-	_, err := NewStarter(config.App{PersistenceRoot: t.TempDir()}, metadataStore, workflowStore, nil, nil, nil, StarterOptions{
+	metadataStore, workflowStore, runtimeAuthority := newStarterFactoryStores(t)
+	_, err := NewStarter(config.App{PersistenceRoot: t.TempDir()}, metadataStore, workflowStore, nil, nil, StarterOptions{
 		ClientFactory:        func(SchedulerStartRunRequest) llm.Client { return NewScriptedClient(llm.ProviderCapabilities{}) },
 		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) { return nil, nil }),
-		SessionRuntime:       sessionRuntime,
+		RuntimeAuthority:     runtimeAuthority,
 	})
 	if !errors.Is(err, runtimewire.ErrRuntimeClientFactoryConflict) {
 		t.Fatalf("error = %v, want factory conflict", err)
 	}
 }
 
-func newWorkflowFactorySession(t *testing.T) *session.Store {
+type workflowFactorySessionSnapshot struct {
+	Descriptor session.SessionDescriptor
+	Locked     *session.LockedContract
+}
+
+func newWorkflowFactorySession(t *testing.T) workflowFactorySessionSnapshot {
+	t.Helper()
+	return workflowFactorySessionSnapshotForStore(t, createWorkflowFactorySession(t))
+}
+
+func createWorkflowFactorySession(t *testing.T) *session.Store {
 	t.Helper()
 	store, err := session.Create(t.TempDir(), "factory", t.TempDir(), sessioncontract.SessionCategorySubagent, workflowFactorySessionPersistence.Options()...)
 	if err != nil {
@@ -164,11 +178,28 @@ func newWorkflowFactorySession(t *testing.T) *session.Store {
 	return store
 }
 
+func workflowFactorySessionSnapshotForStore(t *testing.T, store *session.Store) workflowFactorySessionSnapshot {
+	t.Helper()
+	meta := store.Meta()
+	sessionID, err := runtimeids.ParseSessionID(meta.SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	descriptor, err := session.NewScopedOpenSessionDescriptor(sessionID, filepath.Dir(store.Dir()))
+	if err != nil {
+		t.Fatalf("create session descriptor: %v", err)
+	}
+	return workflowFactorySessionSnapshot{
+		Descriptor: descriptor,
+		Locked:     meta.Locked,
+	}
+}
+
 var workflowFactorySessionPersistence = sessiontest.NewPersistence()
 
 func newLockedWorkflowProviderVerbosityPlan(t *testing.T, baseURL string) launch.SessionPlan {
 	t.Helper()
-	store := newWorkflowFactorySession(t)
+	store := createWorkflowFactorySession(t)
 	lockedVerbosity := true
 	if err := store.MarkModelDispatchLocked(session.LockedContract{
 		Model: "operator-alias",
@@ -182,8 +213,10 @@ func newLockedWorkflowProviderVerbosityPlan(t *testing.T, baseURL string) launch
 	}); err != nil {
 		t.Fatalf("lock workflow session: %v", err)
 	}
+	session := workflowFactorySessionSnapshotForStore(t, store)
 	return launch.SessionPlan{
-		Store: store,
+		Descriptor: session.Descriptor,
+		Locked:     session.Locked,
 		ActiveSettings: config.Settings{
 			Model:              "operator-alias",
 			ProviderOverride:   "openai",
@@ -200,7 +233,7 @@ func newLockedWorkflowProviderVerbosityPlan(t *testing.T, baseURL string) launch
 	}
 }
 
-func newStarterFactoryStores(t *testing.T) (*metadata.Store, *workflowstore.Store, *sessionruntime.Service) {
+func newStarterFactoryStores(t *testing.T) (*metadata.Store, *workflowstore.Store, *sessionruntime.Authority) {
 	t.Helper()
 	root := t.TempDir()
 	metadataStore, err := metadata.Open(root)
@@ -212,6 +245,14 @@ func newStarterFactoryStores(t *testing.T) (*metadata.Store, *workflowstore.Stor
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
 	}
-	sessionRuntime := sessionruntime.NewService(root, metadataStore, nil, nil, nil, nil, registry.NewRuntimeRegistry(), registry.NewSessionStoreRegistry(), metadataStore.AuthoritativeSessionStoreOptions()...)
-	return metadataStore, workflowStore, sessionRuntime
+	runtimeAuthority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: root,
+		StoreOptions:    metadataStore.AuthoritativeSessionStoreOptions(),
+	})
+	t.Cleanup(func() {
+		if err := runtimeAuthority.Close(context.Background()); err != nil {
+			t.Errorf("close runtime authority: %v", err)
+		}
+	})
+	return metadataStore, workflowStore, runtimeAuthority
 }

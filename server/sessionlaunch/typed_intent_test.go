@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"core/server/launch"
-	"core/server/registry"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/shared/config"
@@ -41,7 +40,7 @@ func TestServiceMapsTypedLaunchIntentsAndMemoizesByTypedIntent(t *testing.T) {
 		ContainerDir:      containerDir,
 		StoreOptions:      persistence.Options(),
 		PersistedSessions: persistence,
-	}, registry.NewSessionStoreRegistry())
+	})
 
 	createRequest := serverapi.SessionPlanRequest{
 		ClientRequestID: "same-request-id",
