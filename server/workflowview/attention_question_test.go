@@ -28,7 +28,7 @@ func TestAttentionQuestionRecoveryUsesLivePrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDefinitionProjection: %v", err)
 	}
-	attention, err := NewAttention(metadataStore, definitions, nil, staticPendingPromptSource{sessionID: {{
+	attention, err := NewAttention(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), nil, staticPendingPromptSource{sessionID: {{
 		Request: askquestion.AskQuestionRequest{
 			ID:                     askID,
 			Question:               "Choose a release channel",
@@ -40,7 +40,7 @@ func TestAttentionQuestionRecoveryUsesLivePrompt(t *testing.T) {
 		t.Fatalf("NewAttention: %v", err)
 	}
 
-	response, err := attention.ListTask(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(task.ID)}, testsetup.QuestionsEnabled("coder"))
+	response, err := attention.ListTask(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(task.ID)})
 	if err != nil {
 		t.Fatalf("ListTask: %v", err)
 	}
@@ -106,12 +106,12 @@ func TestAttentionQuestionRecoveryUsesDormantNewestActiveSegment(t *testing.T) {
 		t.Fatalf("NewDefinitionProjection: %v", err)
 	}
 	sessionViews := sessionview.NewService(singleSessionStoreResolver{store: sessionStore}, nil, nil)
-	attention, err := NewAttention(metadataStore, definitions, sessionViewActiveTranscriptProvider{views: sessionViews}, nil)
+	attention, err := NewAttention(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), sessionViewActiveTranscriptProvider{views: sessionViews}, nil)
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)
 	}
 
-	response, err := attention.ListTask(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(task.ID)}, testsetup.QuestionsEnabled("coder"))
+	response, err := attention.ListTask(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(task.ID)})
 	if err != nil {
 		t.Fatalf("ListTask: %v", err)
 	}
@@ -132,12 +132,12 @@ func TestAttentionQuestionRecoveryFallsBackLocally(t *testing.T) {
 		t.Fatalf("NewDefinitionProjection: %v", err)
 	}
 	transcripts := &failingActiveTranscriptProvider{}
-	attention, err := NewAttention(metadataStore, definitions, transcripts, nil)
+	attention, err := NewAttention(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), transcripts, nil)
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)
 	}
 
-	response, err := attention.ListTask(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(task.ID)}, testsetup.QuestionsEnabled("coder"))
+	response, err := attention.ListTask(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(task.ID)})
 	if err != nil {
 		t.Fatalf("ListTask: %v", err)
 	}

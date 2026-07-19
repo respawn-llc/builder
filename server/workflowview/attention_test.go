@@ -66,7 +66,7 @@ func TestAttentionReadsGlobalAndTaskCandidatesThroughFocusedInterface(t *testing
 	if err != nil {
 		t.Fatalf("NewDefinitionProjection: %v", err)
 	}
-	attention, err := NewAttention(metadataStore, definitions, nil, nil)
+	attention, err := NewAttention(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), nil, nil)
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestAttentionReadsGlobalAndTaskCandidatesThroughFocusedInterface(t *testing
 	var globalItems []serverapi.WorkflowAttentionItem
 	pageToken := ""
 	for {
-		page, err := attention.List(ctx, serverapi.WorkflowAttentionListRequest{PageSize: 1, PageToken: pageToken}, testsetup.QuestionsEnabled("coder"))
+		page, err := attention.List(ctx, serverapi.WorkflowAttentionListRequest{PageSize: 1, PageToken: pageToken})
 		if err != nil {
 			t.Fatalf("List: %v", err)
 		}
@@ -113,7 +113,7 @@ func TestAttentionReadsGlobalAndTaskCandidatesThroughFocusedInterface(t *testing
 		t.Fatalf("interrupted projection = %+v", interrupted)
 	}
 
-	taskAttention, err := attention.ListTask(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(fanout.task.ID)}, testsetup.QuestionsEnabled("coder"))
+	taskAttention, err := attention.ListTask(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(fanout.task.ID)})
 	if err != nil {
 		t.Fatalf("ListTask: %v", err)
 	}

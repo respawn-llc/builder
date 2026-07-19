@@ -17,29 +17,38 @@ import (
 	"core/shared/serverapi"
 )
 
+const attentionKindInterruptedRun = "interrupted_run"
+
+const interruptedRunAttentionMessage = "This task's run was stopped."
+
 type Attention struct {
-	queries     *sqlitegen.Queries
-	definitions *DefinitionProjection
-	transcripts SessionActiveTranscriptProvider
-	prompts     PendingPromptSource
+	queries      *sqlitegen.Queries
+	definitions  *DefinitionProjection
+	roleResolver workflow.RoleResolver
+	transcripts  SessionActiveTranscriptProvider
+	prompts      PendingPromptSource
 }
 
-func NewAttention(metadataStore *metadata.Store, definitions *DefinitionProjection, transcripts SessionActiveTranscriptProvider, prompts PendingPromptSource) (*Attention, error) {
+func NewAttention(metadataStore *metadata.Store, definitions *DefinitionProjection, roleResolver workflow.RoleResolver, transcripts SessionActiveTranscriptProvider, prompts PendingPromptSource) (*Attention, error) {
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
 	if definitions == nil {
 		return nil, errors.New("definition projection is required")
 	}
+	if roleResolver == nil {
+		return nil, errors.New("role resolver is required")
+	}
 	return &Attention{
-		queries:     metadataStore.Queries(),
-		definitions: definitions,
-		transcripts: transcripts,
-		prompts:     prompts,
+		queries:      metadataStore.Queries(),
+		definitions:  definitions,
+		roleResolver: roleResolver,
+		transcripts:  transcripts,
+		prompts:      prompts,
 	}, nil
 }
 
-func (a *Attention) List(ctx context.Context, req serverapi.WorkflowAttentionListRequest, roleResolver workflow.RoleResolver) (serverapi.WorkflowAttentionListResponse, error) {
+func (a *Attention) List(ctx context.Context, req serverapi.WorkflowAttentionListRequest) (serverapi.WorkflowAttentionListResponse, error) {
 	if a == nil {
 		return serverapi.WorkflowAttentionListResponse{}, errors.New("attention read model is required")
 	}
@@ -54,14 +63,14 @@ func (a *Attention) List(ctx context.Context, req serverapi.WorkflowAttentionLis
 	if err != nil {
 		return serverapi.WorkflowAttentionListResponse{}, err
 	}
-	items, nextPageToken, err := a.itemsPage(ctx, pageSize, cursor, roleResolver)
+	items, nextPageToken, err := a.itemsPage(ctx, pageSize, cursor)
 	if err != nil {
 		return serverapi.WorkflowAttentionListResponse{}, err
 	}
 	return serverapi.WorkflowAttentionListResponse{Items: items, NextPageToken: nextPageToken, GeneratedAtUnixMs: time.Now().UTC().UnixMilli()}, nil
 }
 
-func (a *Attention) ListTask(ctx context.Context, req serverapi.WorkflowTaskAttentionListRequest, roleResolver workflow.RoleResolver) (serverapi.WorkflowTaskAttentionListResponse, error) {
+func (a *Attention) ListTask(ctx context.Context, req serverapi.WorkflowTaskAttentionListRequest) (serverapi.WorkflowTaskAttentionListResponse, error) {
 	if a == nil {
 		return serverapi.WorkflowTaskAttentionListResponse{}, errors.New("attention read model is required")
 	}
@@ -80,7 +89,7 @@ func (a *Attention) ListTask(ctx context.Context, req serverapi.WorkflowTaskAtte
 	items := make([]serverapi.WorkflowAttentionItem, 0, len(candidates))
 	questions := newPendingQuestionResolver(a.transcripts, a.prompts)
 	for _, candidate := range candidates {
-		item, include, err := a.itemFromCandidate(ctx, candidate, roleResolver, questions)
+		item, include, err := a.itemFromCandidate(ctx, candidate, questions)
 		if err != nil {
 			return serverapi.WorkflowTaskAttentionListResponse{}, err
 		}
@@ -120,7 +129,7 @@ type attentionCandidateRow struct {
 	occurredAtUnixMs       int64
 }
 
-func (a *Attention) itemsPage(ctx context.Context, pageSize int, cursor attentionPageCursor, roleResolver workflow.RoleResolver) ([]serverapi.WorkflowAttentionItem, string, error) {
+func (a *Attention) itemsPage(ctx context.Context, pageSize int, cursor attentionPageCursor) ([]serverapi.WorkflowAttentionItem, string, error) {
 	items := make([]serverapi.WorkflowAttentionItem, 0, pageSize)
 	questions := newPendingQuestionResolver(a.transcripts, a.prompts)
 	current := cursor
@@ -141,7 +150,7 @@ func (a *Attention) itemsPage(ctx context.Context, pageSize int, cursor attentio
 		}
 		for i := range batch {
 			candidate := batch[i]
-			item, include, err := a.itemFromCandidate(ctx, candidate, roleResolver, questions)
+			item, include, err := a.itemFromCandidate(ctx, candidate, questions)
 			if err != nil {
 				return nil, "", err
 			}
@@ -205,7 +214,7 @@ func attentionCandidateRows(rows []sqlitegen.WorkflowAttentionCandidate) []atten
 	return items
 }
 
-func (a *Attention) itemFromCandidate(ctx context.Context, row attentionCandidateRow, roleResolver workflow.RoleResolver, questions *pendingQuestionResolver) (serverapi.WorkflowAttentionItem, bool, error) {
+func (a *Attention) itemFromCandidate(ctx context.Context, row attentionCandidateRow, questions *pendingQuestionResolver) (serverapi.WorkflowAttentionItem, bool, error) {
 	workflowID := row.workflowID
 	switch row.kind {
 	case "approval":
@@ -277,7 +286,7 @@ func (a *Attention) itemFromCandidate(ctx context.Context, row attentionCandidat
 		if err != nil {
 			return serverapi.WorkflowAttentionItem{}, false, err
 		}
-		validation := definitionExecutionValidation(snapshot.domain, roleResolver)
+		validation := definitionExecutionValidation(snapshot.domain, a.roleResolver)
 		if !validation.HasBlockingErrors() {
 			return serverapi.WorkflowAttentionItem{}, false, nil
 		}

@@ -1968,7 +1968,7 @@ func createWorkflowViewFanoutStatusFixture(t *testing.T, ctx context.Context, wo
 	}
 }
 
-func mustTaskDetail(t *testing.T, view *Service, ctx context.Context, taskID string) serverapi.WorkflowTaskDetail {
+func mustTaskDetail(t *testing.T, view *workflowViewTestService, ctx context.Context, taskID string) serverapi.WorkflowTaskDetail {
 	t.Helper()
 	detail, err := view.GetTask(ctx, taskID)
 	if err != nil {
@@ -2021,9 +2021,9 @@ func createWorkflowViewWaitingAskTask(
 
 func TestTaskDetailProjectsWaitingAskRun(t *testing.T) {
 	ctx, store, workflowStore, binding := newWorkflowViewTestContextStore(t)
-	view, err := New(store, WithSessionTranscriptProvider(staticTranscriptProvider{entries: map[string][]runtime.ChatEntry{
+	view, err := newWorkflowViewTestReadModels(store, staticTranscriptProvider{entries: map[string][]runtime.ChatEntry{
 		"session-view-waiting-ask": transcriptEntriesWithAskOptions("ask-view-1", "Waiting ask?", []string{"Trail mix", "Dark chocolate", "Pistachios"}, 2),
-	}}))
+	}}, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -2058,7 +2058,7 @@ func TestTaskDetailProjectsRuntimeApprovalWaitingAskPrompt(t *testing.T) {
 	ctx, store, workflowStore, binding := newWorkflowViewTestContextStore(t)
 	sessionID := "session-runtime-approval"
 	askID := "ask-runtime-approval"
-	view, err := New(store, WithPendingPromptSource(staticPendingPromptSource{sessionID: {{
+	view, err := newWorkflowViewTestReadModels(store, nil, staticPendingPromptSource{sessionID: {{
 		Request: askquestion.AskQuestionRequest{
 			ID:       askID,
 			Question: "Approve protected path?",
@@ -2069,7 +2069,7 @@ func TestTaskDetailProjectsRuntimeApprovalWaitingAskPrompt(t *testing.T) {
 				{Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"},
 			},
 		},
-	}}}))
+	}}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -2281,9 +2281,9 @@ func TestTaskActivityProjectsApprovalSnapshots(t *testing.T) {
 
 func TestAttentionListProjectsApprovalQuestionAndInterruptedRun(t *testing.T) {
 	ctx, store, workflowStore, binding := newWorkflowViewTestContextStore(t)
-	view, err := New(store, WithSessionTranscriptProvider(staticTranscriptProvider{entries: map[string][]runtime.ChatEntry{
+	view, err := newWorkflowViewTestReadModels(store, staticTranscriptProvider{entries: map[string][]runtime.ChatEntry{
 		"session-attention-question": transcriptEntriesWithAsk("ask-attention", "Attention ask?"),
-	}}))
+	}}, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -2436,7 +2436,7 @@ func TestCompletedPlacementQuestionRunIsExcludedFromTaskAndAttentionProjections(
 
 func TestAttentionListFillsPagePastDroppedCandidates(t *testing.T) {
 	ctx, store, workflowStore, binding := newWorkflowViewTestContextStore(t)
-	view, err := New(store)
+	view, err := newDefaultWorkflowViewTestReadModels(store)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -2581,17 +2581,17 @@ func newWorkflowViewTestContextStore(t *testing.T) (context.Context, *metadata.S
 	return context.Background(), store, workflowStore, binding
 }
 
-func newWorkflowViewTestService(t *testing.T) (*metadata.Store, *workflowstore.Store, metadata.Binding, *Service) {
+func newWorkflowViewTestService(t *testing.T) (*metadata.Store, *workflowstore.Store, metadata.Binding, *workflowViewTestService) {
 	t.Helper()
 	store, workflowStore, binding := newWorkflowViewTestStore(t)
-	view, err := New(store)
+	view, err := newDefaultWorkflowViewTestReadModels(store)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("newDefaultWorkflowViewTestReadModels: %v", err)
 	}
 	return store, workflowStore, binding, view
 }
 
-func newWorkflowViewTestContextService(t *testing.T) (context.Context, *metadata.Store, *workflowstore.Store, metadata.Binding, *Service) {
+func newWorkflowViewTestContextService(t *testing.T) (context.Context, *metadata.Store, *workflowstore.Store, metadata.Binding, *workflowViewTestService) {
 	t.Helper()
 	store, workflowStore, binding, view := newWorkflowViewTestService(t)
 	return context.Background(), store, workflowStore, binding, view
@@ -2841,7 +2841,7 @@ func mutateBoardNodeCardsToken(t *testing.T, token *string, mutate func(*boardNo
 
 func TestWorkflowViewRejectsMissingIDs(t *testing.T) {
 	store, _, _ := newWorkflowViewTestStore(t)
-	view, err := New(store)
+	view, err := newDefaultWorkflowViewTestReadModels(store)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

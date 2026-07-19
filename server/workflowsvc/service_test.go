@@ -70,15 +70,7 @@ func TestGetWorkflowTaskCountsAttentionWithoutReadingTranscripts(t *testing.T) {
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	transcripts := &recordingWorkflowTaskTranscriptProvider{}
 	prompts := &recordingWorkflowTaskPromptSource{}
-	view, err := workflowview.New(
-		metadataStore,
-		workflowview.WithSessionTranscriptProvider(transcripts),
-		workflowview.WithPendingPromptSource(prompts),
-	)
-	if err != nil {
-		t.Fatalf("workflowview.New: %v", err)
-	}
-	service.view = view
+	service.readModels = newWorkflowServiceReadModels(t, metadataStore, service.store, service.roleResolver, transcripts, prompts)
 	task, runID, _ := createWorkflowServiceWaitingAsk(t, ctx, service, metadataStore, binding, "Attention count", "session-attention-count", "ask-attention-count")
 	if _, err := metadataStore.DB().ExecContext(ctx, `
 INSERT INTO task_transitions (
@@ -1361,7 +1353,7 @@ func TestServiceInterruptTaskWithCustomReasonDoesNotSurfaceInterruptedRunAttenti
 		t.Fatalf("InterruptWorkflowTask: %v", err)
 	}
 
-	attention, err := service.view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{}, service.roleResolver)
+	attention, err := service.readModels.Attention.List(ctx, serverapi.WorkflowAttentionListRequest{})
 	if err != nil {
 		t.Fatalf("ListAttention: %v", err)
 	}
@@ -2443,6 +2435,29 @@ func newWorkflowServiceTestContextWithMetadata(t *testing.T) (context.Context, *
 	return context.Background(), service, binding, metadataStore
 }
 
+func TestNewRejectsEveryMissingReadModelCapability(t *testing.T) {
+	service, _, metadataStore := newWorkflowServiceTestServiceWithMetadata(t)
+	complete := newWorkflowServiceReadModels(t, metadataStore, service.store, service.roleResolver, nil, nil)
+	tests := []struct {
+		name       string
+		readModels ReadModels
+	}{
+		{name: "definitions", readModels: ReadModels{Board: complete.Board, TaskList: complete.TaskList, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "board", readModels: ReadModels{Definitions: complete.Definitions, TaskList: complete.TaskList, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "task list", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "task detail", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "activity", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskDetail: complete.TaskDetail, Attention: complete.Attention}},
+		{name: "attention", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskDetail: complete.TaskDetail, Activity: complete.Activity}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := New(service.store, tt.readModels, service.roleResolver); err == nil {
+				t.Fatal("New accepted a missing read-model capability")
+			}
+		})
+	}
+}
+
 func newWorkflowServiceTestServiceWithMetadata(t *testing.T) (*Service, metadata.Binding, *metadata.Store) {
 	t.Helper()
 	home := t.TempDir()
@@ -2466,15 +2481,56 @@ func newWorkflowServiceTestServiceWithMetadata(t *testing.T) (*Service, metadata
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
 	}
-	view, err := workflowview.New(metadataStore)
-	if err != nil {
-		t.Fatalf("workflowview.New: %v", err)
-	}
-	service, err := New(store, view, resolver)
+	readModels := newWorkflowServiceReadModels(t, metadataStore, store, resolver, nil, nil)
+	service, err := New(store, readModels, resolver)
 	if err != nil {
 		t.Fatalf("workflowsvc.New: %v", err)
 	}
 	return service, binding, metadataStore
+}
+
+func newWorkflowServiceReadModels(
+	t *testing.T,
+	metadataStore *metadata.Store,
+	store *workflowstore.Store,
+	resolver workflow.RoleResolver,
+	transcripts workflowview.SessionActiveTranscriptProvider,
+	prompts workflowview.PendingPromptSource,
+) ReadModels {
+	t.Helper()
+	definitions, err := workflowview.NewDefinitionProjection(store)
+	if err != nil {
+		t.Fatalf("workflowview.NewDefinitionProjection: %v", err)
+	}
+	projector := workflowview.NewTaskProjector()
+	board, err := workflowview.NewBoard(metadataStore, definitions, resolver, projector)
+	if err != nil {
+		t.Fatalf("workflowview.NewBoard: %v", err)
+	}
+	taskList, err := workflowview.NewTaskList(metadataStore, definitions, projector)
+	if err != nil {
+		t.Fatalf("workflowview.NewTaskList: %v", err)
+	}
+	taskDetail, err := workflowview.NewTaskDetail(metadataStore, definitions, projector, worktree.NewGitInspector(nil))
+	if err != nil {
+		t.Fatalf("workflowview.NewTaskDetail: %v", err)
+	}
+	activity, err := workflowview.NewActivity(metadataStore, definitions, projector)
+	if err != nil {
+		t.Fatalf("workflowview.NewActivity: %v", err)
+	}
+	attention, err := workflowview.NewAttention(metadataStore, definitions, resolver, transcripts, prompts)
+	if err != nil {
+		t.Fatalf("workflowview.NewAttention: %v", err)
+	}
+	return ReadModels{
+		Definitions: definitions,
+		Board:       board,
+		TaskList:    taskList,
+		TaskDetail:  taskDetail,
+		Activity:    activity,
+		Attention:   attention,
+	}
 }
 
 func stringPtr(value string) *string {

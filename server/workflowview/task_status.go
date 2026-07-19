@@ -13,20 +13,12 @@ type workflowTaskStatusFact struct {
 	Done   bool
 }
 
-func (s *Service) taskStatusFact(ctx context.Context, taskID string) (workflowTaskStatusFact, error) {
-	return loadWorkflowTaskStatusFact(ctx, s.queries, s.projector, taskID)
-}
-
 func loadWorkflowTaskStatusFact(ctx context.Context, queries *sqlitegen.Queries, projector *TaskProjector, taskID string) (workflowTaskStatusFact, error) {
 	row, err := queries.GetWorkflowTaskStatusRecord(ctx, taskID)
 	if err != nil {
 		return workflowTaskStatusFact{}, err
 	}
 	return workflowTaskStatusFactFromRecord(projector, row)
-}
-
-func (s *Service) taskStatusFacts(ctx context.Context, taskIDs []string) (map[string]workflowTaskStatusFact, error) {
-	return loadWorkflowTaskStatusFacts(ctx, s.queries, s.projector, taskIDs)
 }
 
 func loadWorkflowTaskStatusFacts(ctx context.Context, queries *sqlitegen.Queries, projector *TaskProjector, taskIDs []string) (map[string]workflowTaskStatusFact, error) {

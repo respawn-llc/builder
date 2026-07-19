@@ -26,7 +26,7 @@ import (
 
 type Service struct {
 	store               *workflowstore.Store
-	view                *workflowview.Service
+	readModels          ReadModels
 	roleResolver        workflow.RoleResolver
 	executionTargets    executionTargetInfrastructure
 	taskWorktreeCleanup taskWorktreeDeleter
@@ -161,16 +161,16 @@ func WithWorkflowAttentionFinalizer(finalizer workflowAttentionFinalizer) Option
 	}
 }
 
-func New(store *workflowstore.Store, view *workflowview.Service, roleResolver workflow.RoleResolver, opts ...Option) (*Service, error) {
+func New(store *workflowstore.Store, readModels ReadModels, roleResolver workflow.RoleResolver, opts ...Option) (*Service, error) {
 	if store == nil {
 		return nil, errors.New("workflow store is required")
 	}
-	if view == nil {
-		return nil, errors.New("workflow view is required")
+	if err := readModels.validate(); err != nil {
+		return nil, err
 	}
 	events := newWorkflowProjectEventBroker()
 	store.SetWorkflowEventPublisher(events)
-	service := &Service{store: store, view: view, roleResolver: roleResolver, events: events, questionMemo: requestmemo.New[taskQuestionAnswerMemoRequest, struct{}]()}
+	service := &Service{store: store, readModels: readModels, roleResolver: roleResolver, events: events, questionMemo: requestmemo.New[taskQuestionAnswerMemoRequest, struct{}]()}
 	for _, opt := range opts {
 		opt(service)
 	}
@@ -270,7 +270,7 @@ func (s *Service) GetWorkflow(ctx context.Context, req serverapi.WorkflowGetRequ
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowGetResponse{}, err
 	}
-	def, _, err := s.view.GetDefinition(ctx, req.WorkflowID)
+	def, _, err := s.readModels.Definitions.GetDefinition(ctx, req.WorkflowID)
 	if err != nil {
 		return serverapi.WorkflowGetResponse{}, err
 	}
@@ -611,7 +611,7 @@ func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.Workflow
 		return serverapi.WorkflowTaskCreateResponse{}, workflowTaskCreateError(err)
 	}
 	s.publishWorkflowEvent(ctx, task.ProjectID, string(task.WorkflowID), "task", "created", string(task.ID))
-	detail, err := s.view.GetTask(ctx, string(task.ID))
+	detail, err := s.readModels.TaskDetail.GetTask(ctx, string(task.ID))
 	if err != nil {
 		return serverapi.WorkflowTaskCreateResponse{}, err
 	}
@@ -661,7 +661,7 @@ func (s *Service) UpdateWorkflowTask(ctx context.Context, req serverapi.Workflow
 		return serverapi.WorkflowTaskUpdateResponse{}, err
 	}
 	s.publishWorkflowEvent(ctx, task.ProjectID, string(task.WorkflowID), "task", "updated", string(task.ID))
-	detail, err := s.view.GetTask(ctx, string(task.ID))
+	detail, err := s.readModels.TaskDetail.GetTask(ctx, string(task.ID))
 	if err != nil {
 		return serverapi.WorkflowTaskUpdateResponse{}, err
 	}
@@ -699,7 +699,7 @@ func (s *Service) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 	if s.schedulerWake != nil {
 		s.schedulerWake.Notify()
 	}
-	if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
+	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "started", req.TaskID, string(started.RunID))
 	}
 	return serverapi.WorkflowTaskStartResponse{
@@ -917,7 +917,7 @@ func (s *Service) InterruptWorkflowTask(ctx context.Context, req serverapi.Workf
 		return serverapi.WorkflowTaskInterruptResponse{}, err
 	}
 	cancelErr := s.cancelInterruptedRuntimes(ctx, workflow.TaskID(req.TaskID), req.SessionID, interrupted)
-	if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
+	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "interrupted", req.TaskID)
 	}
 	if cancelErr != nil {
@@ -966,7 +966,7 @@ func (s *Service) ResumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if s.schedulerWake != nil {
 		s.schedulerWake.Notify()
 	}
-	if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
+	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "resumed", req.TaskID)
 	}
 	return serverapi.WorkflowTaskResumeResponse{Runs: workflowTaskRunSummaries(resumed.Runs)}, nil
@@ -1108,7 +1108,7 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	if s.schedulerWake != nil {
 		s.schedulerWake.Notify()
 	}
-	if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
+	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "moved", req.TaskID, string(moved.TransitionID))
 	}
 	return serverapi.WorkflowTaskMoveResponse{
@@ -1237,7 +1237,7 @@ func (s *Service) CancelWorkflowTask(ctx context.Context, req serverapi.Workflow
 		return err
 	}
 	s.finalizeTaskAttentionResolution(ctx, result.TaskAttentionResolution)
-	if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
+	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "canceled", req.TaskID)
 	}
 	if s.runtimeCancel != nil {
@@ -1323,14 +1323,14 @@ func (s *Service) ListWorkflowAttention(ctx context.Context, req serverapi.Workf
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowAttentionListResponse{}, err
 	}
-	return s.view.ListAttention(ctx, req, s.roleResolver)
+	return s.readModels.Attention.List(ctx, req)
 }
 
 func (s *Service) ListWorkflowTaskAttention(ctx context.Context, req serverapi.WorkflowTaskAttentionListRequest) (serverapi.WorkflowTaskAttentionListResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskAttentionListResponse{}, err
 	}
-	return s.view.ListTaskAttention(ctx, req, s.roleResolver)
+	return s.readModels.Attention.ListTask(ctx, req)
 }
 
 func (s *Service) AnswerWorkflowTaskQuestion(ctx context.Context, req serverapi.WorkflowTaskQuestionAnswerRequest) error {
@@ -1369,7 +1369,7 @@ func (s *Service) AnswerWorkflowTaskQuestion(ctx context.Context, req serverapi.
 				return struct{}{}, err
 			}
 		}
-		if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
+		if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 			s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "question_answered", req.TaskID, string(run.ID), req.AskID)
 		}
 		return struct{}{}, nil
@@ -1397,7 +1397,7 @@ func (s *Service) AddWorkflowTaskComment(ctx context.Context, req serverapi.Work
 	if err != nil {
 		return serverapi.WorkflowTaskCommentAddResponse{}, err
 	}
-	if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
+	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "comment_added", req.TaskID, comment.ID)
 	}
 	return serverapi.WorkflowTaskCommentAddResponse{Comment: commentRecord(comment)}, nil
@@ -1492,21 +1492,21 @@ func (s *Service) ListWorkflowTaskActivity(ctx context.Context, req serverapi.Wo
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskActivityListResponse{}, err
 	}
-	return s.view.ListTaskActivity(ctx, req)
+	return s.readModels.Activity.List(ctx, req)
 }
 
 func (s *Service) ListWorkflowTasks(ctx context.Context, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
 	}
-	return s.view.ListTasks(ctx, req, s.roleResolver)
+	return s.readModels.TaskList.List(ctx, req)
 }
 
 func (s *Service) GetWorkflowBoard(ctx context.Context, req serverapi.WorkflowBoardRequest) (serverapi.WorkflowBoardResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowBoardResponse{}, err
 	}
-	board, err := s.view.GetBoard(ctx, req, s.roleResolver)
+	board, err := s.readModels.Board.Get(ctx, req)
 	if err != nil {
 		return serverapi.WorkflowBoardResponse{}, err
 	}
@@ -1517,7 +1517,7 @@ func (s *Service) ListWorkflowBoardNodeCards(ctx context.Context, req serverapi.
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
-	return s.view.ListBoardNodeCards(ctx, req, s.roleResolver)
+	return s.readModels.Board.ListNodeCards(ctx, req)
 }
 
 func (s *Service) SubscribeWorkflowProject(ctx context.Context, req serverapi.WorkflowProjectSubscribeRequest) (serverapi.WorkflowProjectSubscription, error) {
@@ -1547,11 +1547,11 @@ func (s *Service) GetWorkflowTask(ctx context.Context, req serverapi.WorkflowTas
 		err    error
 	)
 	if strings.TrimSpace(req.TaskID) != "" {
-		detail, err = s.view.GetTask(ctx, req.TaskID)
+		detail, err = s.readModels.TaskDetail.GetTask(ctx, req.TaskID)
 	} else if strings.TrimSpace(req.ProjectID) != "" {
-		detail, err = s.view.GetTaskByProjectShortID(ctx, req.ProjectID, req.ShortID)
+		detail, err = s.readModels.TaskDetail.GetTaskByProjectShortID(ctx, req.ProjectID, req.ShortID)
 	} else {
-		detail, err = s.view.GetTaskByShortID(ctx, req.ShortID)
+		detail, err = s.readModels.TaskDetail.GetTaskByShortID(ctx, req.ShortID)
 	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
