@@ -339,6 +339,15 @@ func (e *Engine) steerRuntimeClose(stepID string, intents ...steeringIntent) err
 	return e.steerOrdered(stepID, intents...)
 }
 
+func (e *Engine) steerRuntimeCloseEvent(stepID string, event Event) {
+	if e == nil {
+		return
+	}
+	if err := e.steerRuntimeClose(stepID, steerEventIntent(event)); err != nil {
+		panic(fmt.Sprintf("emit runtime-close event kind=%q step_id=%q: %v", event.Kind, stepID, err))
+	}
+}
+
 func (e *Engine) steerWithCommitReceipt(stepID string, intent steeringIntent) (session.CommitReceipt, error) {
 	if len(intent.items) != 1 {
 		return session.CommitReceipt{}, fmt.Errorf(

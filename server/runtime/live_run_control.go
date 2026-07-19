@@ -201,7 +201,7 @@ func (e *Engine) TryInterruptActiveRun() (bool, error) {
 		return interruptedSnapshot != nil, err
 	}
 	e.failStoppedLiveRunQueueItems(taggedQueueItems)
-	e.liveRun.commitCompletion(token)
+	e.publishLiveRunCompletion(token)
 	if snapshot == nil || !activeKindInterruptibleByLiveStop(snapshot.ActiveKind) {
 		return true, nil
 	}
@@ -263,7 +263,7 @@ func (e *Engine) QueueUserMessageForActiveRun(ctx context.Context, text string, 
 	admissionResolved := false
 	defer func() {
 		if !admissionResolved {
-			e.liveRun.commitCompletion(e.liveRun.rollbackAdmission(admission))
+			e.publishLiveRunCompletion(e.liveRun.rollbackAdmission(admission))
 		}
 	}()
 	if beforeQueue != nil {
@@ -279,7 +279,7 @@ func (e *Engine) QueueUserMessageForActiveRun(ctx context.Context, text string, 
 		e.markQueuedUserInjectionForAutoDrain(queueItemID)
 	})
 	admissionResolved = true
-	e.liveRun.commitCompletion(token)
+	e.publishLiveRunCompletion(token)
 	if err != nil {
 		return QueuedUserMessage{}, false, err
 	}
@@ -312,7 +312,7 @@ func (e *Engine) finishLiveRunStep(snapshot *RunSnapshot, status RunStatus, err 
 	e.ensureOrchestrationCollaborators()
 	stoppedQueueItems, token := e.liveRun.finishStep(snapshot, status, err, e.shouldHoldLiveRunForGoalLoopContinuation(snapshot, status))
 	e.failStoppedLiveRunQueueItems(stoppedQueueItems)
-	e.liveRun.commitCompletion(token)
+	e.publishLiveRunCompletion(token)
 }
 
 func (e *Engine) finishLiveRunGoalLoop() {
@@ -320,7 +320,7 @@ func (e *Engine) finishLiveRunGoalLoop() {
 		return
 	}
 	e.ensureOrchestrationCollaborators()
-	e.liveRun.commitCompletion(e.liveRun.finishGoalLoop())
+	e.publishLiveRunCompletion(e.liveRun.finishGoalLoop())
 }
 
 func (e *Engine) recordLiveRunAssistantFinalAnswer(stepID string, message llm.Message) {
@@ -362,7 +362,35 @@ func (e *Engine) completeLiveRunQueueItems(ids map[string]struct{}) {
 		return
 	}
 	e.ensureOrchestrationCollaborators()
-	e.liveRun.commitCompletion(e.liveRun.completeQueueItems(typedQueueItemIDSet(ids)))
+	e.publishLiveRunCompletion(e.liveRun.completeQueueItems(typedQueueItemIDSet(ids)))
+}
+
+// completeLiveRunQueueItemsWithinOutputMutation is deliberately limited to
+// mutation preparation. Slice 9 owns publication and post-unlock token commit
+// for this path because the queued-user flush already owns outputMutationMu.
+func (e *Engine) completeLiveRunQueueItemsWithinOutputMutation(ids map[string]struct{}) {
+	if e == nil || len(ids) == 0 {
+		return
+	}
+	e.ensureOrchestrationCollaborators()
+	if token := e.liveRun.completeQueueItems(typedQueueItemIDSet(ids)); token != nil {
+		panic("queued-user flush prepared a live-run completion token before slice 9 registered post-unlock publication")
+	}
+}
+
+func (e *Engine) publishLiveRunCompletion(token *liveRunCompletionToken) {
+	if e == nil || token == nil {
+		return
+	}
+	e.ensureOrchestrationCollaborators()
+	result, ok := e.liveRun.completionResult(token)
+	if !ok {
+		panic("publish live-run completion with an invalid token")
+	}
+	e.steerRuntimeCloseEvent(result.StepID.String(), liveRunBatchFinishedEvent(result))
+	if !e.liveRun.commitCompletion(token) {
+		panic("commit live-run completion after runtime sink acceptance")
+	}
 }
 
 func (e *Engine) failStoppedLiveRunQueueItems(ids map[runtimeids.QueueItemID]struct{}) {
@@ -643,6 +671,34 @@ func (c *liveRunCoordinator) commitCompletion(token *liveRunCompletionToken) boo
 	c.mu.Unlock()
 	close(group.done)
 	return true
+}
+
+func (c *liveRunCoordinator) completionResult(token *liveRunCompletionToken) (LiveRunResult, bool) {
+	if c == nil || token == nil || token.group == nil {
+		return LiveRunResult{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	group := token.group
+	if group.phase != liveRunPhasePrepared || group.completionToken != token || group.frozenResult == nil {
+		return LiveRunResult{}, false
+	}
+	return cloneLiveRunResult(*group.frozenResult), true
+}
+
+func liveRunBatchFinishedEvent(result LiveRunResult) Event {
+	if result.GroupID.IsZero() || result.RunID.IsZero() || result.StepID.IsZero() || result.Status == RunStatusRunning || result.ResultKind == "" {
+		panic(fmt.Sprintf(
+			"invalid live-run batch-finished result: group_id=%s run_id=%s step_id=%s status=%s result_kind=%s",
+			result.GroupID.String(),
+			result.RunID.String(),
+			result.StepID.String(),
+			result.Status,
+			result.ResultKind,
+		))
+	}
+	copyResult := cloneLiveRunResult(result)
+	return Event{Kind: EventLiveRunBatchFinished, LiveRunResult: &copyResult}
 }
 
 func (c *liveRunCoordinator) beginAdmission() (liveRunAdmission, error) {

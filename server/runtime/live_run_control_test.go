@@ -22,6 +22,333 @@ func TestLiveRunWaitIdleReturnsNoActive(t *testing.T) {
 	}
 }
 
+func TestLiveRunBatchFinishedEventIsAcceptedBeforeWaiterOrSuccessor(t *testing.T) {
+	store := mustCreateTestSession(t)
+	batchAccepted := make(chan Event, 1)
+	releaseBatchAcceptance := make(chan struct{})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			if event.Kind != EventLiveRunBatchFinished {
+				return
+			}
+			batchAccepted <- event
+			<-releaseBatchAcceptance
+		},
+	})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	eng.stepLifecycle = lifecycle
+
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- lifecycle.Run(context.Background(), exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(_ context.Context, stepID string) error {
+			eng.recordLiveRunAssistantFinalAnswer(stepID, llm.Message{Role: llm.RoleAssistant, Content: "done"})
+			close(firstStarted)
+			<-releaseFirst
+			return nil
+		})
+	}()
+	select {
+	case <-firstStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for first live step")
+	}
+	handle, err := eng.CaptureActiveRunResult(context.Background())
+	if err != nil {
+		t.Fatalf("capture live result: %v", err)
+	}
+
+	successorStarted := make(chan struct{})
+	releaseSuccessor := make(chan struct{})
+	successorDone := make(chan error, 1)
+	go func() {
+		successorDone <- lifecycle.RunNext(context.Background(), exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error {
+			close(successorStarted)
+			<-releaseSuccessor
+			return nil
+		})
+	}()
+
+	close(releaseFirst)
+	var batch Event
+	select {
+	case batch = <-batchAccepted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for batch-finished event")
+	}
+	if batch.LiveRunResult == nil || batch.LiveRunResult.ResultKind != LiveRunResultAssistantFinalAnswer {
+		t.Fatalf("batch-finished event result = %+v", batch.LiveRunResult)
+	}
+	batch.LiveRunResult.AssistantMessage.Content = "mutated by runtime sink"
+	waitDone := make(chan struct {
+		result LiveRunResult
+		err    error
+	}, 1)
+	go func() {
+		result, waitErr := handle.Wait()
+		waitDone <- struct {
+			result LiveRunResult
+			err    error
+		}{result: result, err: waitErr}
+	}()
+	select {
+	case <-waitDone:
+		t.Fatal("waiter released before batch event acceptance returned")
+	default:
+	}
+	select {
+	case <-successorStarted:
+		t.Fatal("successor started before batch event acceptance returned")
+	default:
+	}
+
+	close(releaseBatchAcceptance)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first live step: %v", err)
+	}
+	var waited struct {
+		result LiveRunResult
+		err    error
+	}
+	select {
+	case waited = <-waitDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("waiter did not release after batch event acceptance")
+	}
+	if waited.err != nil || waited.result.AssistantMessage.Content != "done" {
+		t.Fatalf("wait result = %+v err=%v", waited.result, waited.err)
+	}
+	select {
+	case <-successorStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("successor did not start after batch event acceptance")
+	}
+	close(releaseSuccessor)
+	if err := <-successorDone; err != nil {
+		t.Fatalf("successor step: %v", err)
+	}
+}
+
+func TestFailedLiveRunPublishesFrozenBatchFinishedResult(t *testing.T) {
+	store := mustCreateTestSession(t)
+	batchEvents := make(chan Event, 1)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			if event.Kind == EventLiveRunBatchFinished {
+				batchEvents <- event
+			}
+		},
+	})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	eng.stepLifecycle = lifecycle
+	diagnostic := errors.New("agent failed")
+
+	err := lifecycle.Run(context.Background(), exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error {
+		return diagnostic
+	})
+	if !errors.Is(err, diagnostic) {
+		t.Fatalf("live step error = %v, want diagnostic", err)
+	}
+	select {
+	case event := <-batchEvents:
+		if event.LiveRunResult == nil || event.LiveRunResult.ResultKind != LiveRunResultRuntimeFailure {
+			t.Fatalf("batch-finished result = %+v", event.LiveRunResult)
+		}
+		if event.LiveRunResult.FailureDiagnostic == nil || event.LiveRunResult.FailureDiagnostic.Detail != diagnostic.Error() {
+			t.Fatalf("batch-finished diagnostic = %+v", event.LiveRunResult.FailureDiagnostic)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for failed batch event")
+	}
+}
+
+func TestInterruptedLiveRunPublishesBatchFinishedResult(t *testing.T) {
+	store := mustCreateTestSession(t)
+	batchEvents := make(chan Event, 1)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			if event.Kind == EventLiveRunBatchFinished {
+				batchEvents <- event
+			}
+		},
+	})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	eng.stepLifecycle = lifecycle
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- lifecycle.Run(context.Background(), exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(ctx context.Context, _ string) error {
+			close(started)
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for live step")
+	}
+	stopped, err := eng.TryInterruptActiveRun()
+	if err != nil || !stopped {
+		t.Fatalf("TryInterruptActiveRun stopped=%t err=%v", stopped, err)
+	}
+	select {
+	case event := <-batchEvents:
+		if event.LiveRunResult == nil || event.LiveRunResult.ResultKind != LiveRunResultInterrupted {
+			t.Fatalf("batch-finished result = %+v", event.LiveRunResult)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for interrupted batch event")
+	}
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("interrupted live step = %v, want context canceled", err)
+	}
+}
+
+func TestLiveRunCompletionSourcesPublishBatchFinishedEvents(t *testing.T) {
+	t.Run("goal loop release", func(t *testing.T) {
+		eng, batchEvents := newLiveRunBatchEventTestEngine(t)
+		snapshot := liveRunBatchEventSnapshot(ActiveKindGoalLoop)
+		eng.liveRun.beginStep(snapshot)
+		completed := *snapshot
+		completed.Status = RunStatusCompleted
+		completed.FinishedAt = snapshot.StartedAt.Add(time.Second)
+		if _, token := eng.liveRun.finishStep(&completed, RunStatusCompleted, nil, true); token != nil {
+			t.Fatal("goal-loop step prepared before the goal loop released")
+		}
+		eng.finishLiveRunGoalLoop()
+		event := waitLiveRunBatchEvent(t, batchEvents)
+		if event.LiveRunResult == nil || event.LiveRunResult.ResultKind != LiveRunResultNonTaskActivity {
+			t.Fatalf("goal-loop batch result = %+v", event.LiveRunResult)
+		}
+	})
+
+	for _, testCase := range []struct {
+		name string
+		run  func(t *testing.T, eng *Engine, queued QueuedUserMessage)
+	}{
+		{
+			name: "queue completion",
+			run: func(_ *testing.T, eng *Engine, queued QueuedUserMessage) {
+				eng.completeLiveRunQueueItems(map[string]struct{}{queued.ID: {}})
+			},
+		},
+		{
+			name: "queue discard",
+			run: func(t *testing.T, eng *Engine, queued QueuedUserMessage) {
+				if !eng.DiscardQueuedUserMessage(queued.ID) {
+					t.Fatal("discarded queue item was not found")
+				}
+			},
+		},
+		{
+			name: "queue failure",
+			run: func(_ *testing.T, eng *Engine, _ QueuedUserMessage) {
+				eng.FailQueuedUserMessages(QueuedUserMessageFailureStopped)
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			eng, batchEvents := newLiveRunBatchEventTestEngine(t)
+			eng.pauseQueuedUserAutoDrain()
+			t.Cleanup(eng.resumeQueuedUserAutoDrain)
+			snapshot := liveRunBatchEventSnapshot(ActiveKindUserTurn)
+			eng.liveRun.beginStep(snapshot)
+			queued, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "queued", liveRunTestRequestID(t), nil)
+			if err != nil || !accepted {
+				t.Fatalf("queue active run accepted=%t err=%v", accepted, err)
+			}
+			completed := *snapshot
+			completed.Status = RunStatusCompleted
+			completed.FinishedAt = snapshot.StartedAt.Add(time.Second)
+			eng.finishLiveRunStep(&completed, RunStatusCompleted, nil)
+			testCase.run(t, eng, queued)
+			event := waitLiveRunBatchEvent(t, batchEvents)
+			if event.LiveRunResult == nil || event.LiveRunResult.ResultKind != LiveRunResultCompletedNoFinal {
+				t.Fatalf("queue completion batch result = %+v", event.LiveRunResult)
+			}
+			if eng.HasQueuedUserWork() && !eng.DiscardQueuedUserMessage(queued.ID) {
+				t.Fatal("queued test item was not discarded during cleanup")
+			}
+		})
+	}
+}
+
+func TestAdmissionRollbackPublishesBatchFinishedEvent(t *testing.T) {
+	eng, batchEvents := newLiveRunBatchEventTestEngine(t)
+	snapshot := liveRunBatchEventSnapshot(ActiveKindUserTurn)
+	eng.liveRun.beginStep(snapshot)
+	beforeStarted := make(chan struct{})
+	releaseBefore := make(chan struct{})
+	queueDone := make(chan error, 1)
+	rollbackErr := errors.New("queue admission failed")
+	go func() {
+		_, _, err := eng.QueueUserMessageForActiveRun(context.Background(), "queued", liveRunTestRequestID(t), func() error {
+			close(beforeStarted)
+			<-releaseBefore
+			return rollbackErr
+		})
+		queueDone <- err
+	}()
+	select {
+	case <-beforeStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for queue admission")
+	}
+	completed := *snapshot
+	completed.Status = RunStatusCompleted
+	completed.FinishedAt = snapshot.StartedAt.Add(time.Second)
+	eng.finishLiveRunStep(&completed, RunStatusCompleted, nil)
+	close(releaseBefore)
+	if err := <-queueDone; !errors.Is(err, rollbackErr) {
+		t.Fatalf("queue admission error = %v, want rollback error", err)
+	}
+	event := waitLiveRunBatchEvent(t, batchEvents)
+	if event.LiveRunResult == nil || event.LiveRunResult.ResultKind != LiveRunResultCompletedNoFinal {
+		t.Fatalf("rollback batch result = %+v", event.LiveRunResult)
+	}
+}
+
+func newLiveRunBatchEventTestEngine(t *testing.T) (*Engine, <-chan Event) {
+	t.Helper()
+	events := make(chan Event, 8)
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			if event.Kind == EventLiveRunBatchFinished {
+				events <- event
+			}
+		},
+	})
+	return eng, events
+}
+
+func liveRunBatchEventSnapshot(kind ActiveKind) *RunSnapshot {
+	return &RunSnapshot{
+		RunID:      "018fdd67-89ab-4cde-8123-456789abc001",
+		StepID:     "018fdd67-89ab-4cde-8123-456789abc002",
+		Status:     RunStatusRunning,
+		ActiveKind: kind,
+		GoalLoop:   kind == ActiveKindGoalLoop,
+		StartedAt:  time.Now().UTC(),
+	}
+}
+
+func waitLiveRunBatchEvent(t *testing.T, events <-chan Event) Event {
+	t.Helper()
+	select {
+	case event := <-events:
+		return event
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for batch-finished event")
+		return Event{}
+	}
+}
+
 func TestLiveRunPreparationFreezesFinalResultUntilCompletionTokenCommit(t *testing.T) {
 	coordinator := newLiveRunCoordinator()
 	startedAt := time.Now().UTC()

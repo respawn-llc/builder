@@ -358,7 +358,7 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch 
 			},
 		})
 	}
-	e.completeLiveRunQueueItems(queuedUserMessageIDSet(normalizedItems))
+	e.completeLiveRunQueueItemsWithinOutputMutation(queuedUserMessageIDSet(normalizedItems))
 	return appended.CommitReceipt, appendErr
 }
 
