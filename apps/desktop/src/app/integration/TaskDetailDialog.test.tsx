@@ -248,7 +248,7 @@ describe("TaskDetailSurface", () => {
       );
     });
     expect(screen.getByDisplayValue("Resolve blocker")).toBeInTheDocument();
-    expect(screen.queryByTestId("task-detail-island-stack")).toBeInTheDocument();
+    expect(screen.getByTestId("task-detail-island-stack")).toBeInTheDocument();
   });
 
   it("continues the exact pending approval with a task-local execution target", async () => {

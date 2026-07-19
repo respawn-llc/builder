@@ -94,7 +94,7 @@ export function TaskDetailList({
     () => comments.data?.pages.flatMap((page) => page.comments) ?? [],
     [comments.data],
   );
-  const attentionItems = attention.data?.items ?? [];
+  const attentionItems = useMemo(() => attention.data?.items ?? [], [attention.data]);
   const listItems = useMemo(
     () =>
       taskDetailListItems({

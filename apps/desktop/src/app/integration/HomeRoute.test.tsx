@@ -152,7 +152,7 @@ describe("HomeRoute", () => {
           { method: "workflow.task.get", result: taskDetailResponseWithQuestion },
           {
             method: "workflow.task.attention.list",
-            handler: () => attention.promise,
+            handler: async () => attention.promise,
           },
           { method: "workflow.task.activity.list", result: emptyActivityResponse },
           { method: "ask.listPendingBySession", result: { Asks: [] } },
