@@ -439,6 +439,25 @@ func TestTranscriptBackgroundActivityLifecycleIgnoresPreviewTruncation(t *testin
 	}
 }
 
+func TestTranscriptCompactionStatusPreservesAutomaticInitiatorForManualMode(t *testing.T) {
+	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind:   runtime.EventCompactionStarted,
+		StepID: transcriptProjectionStepID,
+		Compaction: &runtime.CompactionStatus{
+			Mode:      "manual",
+			Initiator: runtime.CompactionInitiatorAutomatic,
+		},
+	})
+
+	if len(messages) != 1 || messages[0].Payload.CompactionStatus == nil {
+		t.Fatalf("messages = %+v, want one compaction status", messages)
+	}
+	status := messages[0].Payload.CompactionStatus
+	if status.Mode != "manual" || status.Initiator != clientui.CompactionInitiatorAutomatic {
+		t.Fatalf("compaction status = %+v, want manual mode with automatic initiator", status)
+	}
+}
+
 func TestTranscriptBackgroundNoticeCarriesTypedExitCode(t *testing.T) {
 	exitCode := 3
 	activityID := uuid.New()

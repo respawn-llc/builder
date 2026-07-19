@@ -184,6 +184,7 @@ type ModelResponseTrace struct {
 
 type CompactionStatus struct {
 	Mode              string
+	Initiator         CompactionInitiator
 	Engine            string
 	Provider          string
 	TrimmedItemsCount *int

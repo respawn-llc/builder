@@ -227,9 +227,10 @@ func transcriptFeedStateMessages(evt runtime.Event) []clientui.TranscriptMessage
 
 func transcriptCompactionStatus(evt runtime.Event) clientui.TranscriptCompactionStatus {
 	status := clientui.TranscriptCompactionStatus{
-		StepID: mustTranscriptStepID(evt.StepID, "compaction status"),
-		Mode:   strings.TrimSpace(evt.Compaction.Mode),
-		Count:  evt.Compaction.Count,
+		StepID:    mustTranscriptStepID(evt.StepID, "compaction status"),
+		Mode:      strings.TrimSpace(evt.Compaction.Mode),
+		Initiator: clientui.CompactionInitiator(evt.Compaction.Initiator),
+		Count:     evt.Compaction.Count,
 	}
 	switch evt.Kind {
 	case runtime.EventCompactionStarted:

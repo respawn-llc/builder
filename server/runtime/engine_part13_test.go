@@ -173,7 +173,10 @@ func TestTriggerHandoffSchedulesCompactionAndAppendsFutureMessageWithoutManualCa
 	client := &fakeClient{
 		responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "summary"}}},
 	}
-	eng := mustNewHandoffTestEngine(t, store, client, Config{})
+	var events []Event
+	eng := mustNewHandoffTestEngine(t, store, client, Config{
+		OnEvent: func(evt Event) { events = append(events, evt) },
+	})
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
@@ -195,6 +198,15 @@ func TestTriggerHandoffSchedulesCompactionAndAppendsFutureMessageWithoutManualCa
 	}
 	if len(client.calls) != 1 {
 		t.Fatalf("expected one local-summary model call, got %d", len(client.calls))
+	}
+	var compactionStarted *CompactionStatus
+	for _, event := range events {
+		if event.Kind == EventCompactionStarted {
+			compactionStarted = event.Compaction
+		}
+	}
+	if compactionStarted == nil || compactionStarted.Initiator != CompactionInitiatorAutomatic {
+		t.Fatalf("handoff compaction initiator = %+v, want automatic", compactionStarted)
 	}
 
 	messages := eng.transcriptRuntimeState().SnapshotMessages()

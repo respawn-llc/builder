@@ -978,7 +978,7 @@ func (s *Starter) startAgentExecution(ctx context.Context, req SchedulerStartRun
 			turnErr := bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
 				if input.ContextMode == workflow.ContextModeCompactAndContinueSession &&
 					engine.LastCompactionWorkflowRunID() != string(req.RunID) {
-					if err := engine.CompactContext(engineCtx, ""); err != nil {
+					if err := engine.CompactContextForWorkflowContinuation(engineCtx); err != nil {
 						return err
 					}
 				}

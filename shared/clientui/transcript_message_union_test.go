@@ -206,9 +206,10 @@ func TestTranscriptMessagePayloadUnionAcceptsEveryTypedFact(t *testing.T) {
 				Sequence: 2,
 				Kind:     TranscriptMessageCompactionStatus,
 				Payload: TranscriptPayload{CompactionStatus: &TranscriptCompactionStatus{
-					StepID: transcriptTestStepID(t),
-					State:  CompactionStarted,
-					Mode:   "auto",
+					StepID:    transcriptTestStepID(t),
+					State:     CompactionStarted,
+					Mode:      "auto",
+					Initiator: CompactionInitiatorAutomatic,
 				}},
 			},
 		},

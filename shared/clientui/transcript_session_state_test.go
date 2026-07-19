@@ -25,10 +25,11 @@ func TestTranscriptContextGoalAndCompactionFactsValidateTypedState(t *testing.T)
 	}
 
 	compaction := TranscriptCompactionStatus{
-		StepID: transcriptTestStepID(t),
-		State:  CompactionStarted,
-		Mode:   "auto",
-		Count:  1,
+		StepID:    transcriptTestStepID(t),
+		State:     CompactionStarted,
+		Mode:      "auto",
+		Initiator: CompactionInitiatorAutomatic,
+		Count:     1,
 	}
 	if err := compaction.Validate(); err != nil {
 		t.Fatalf("validate compaction status: %v", err)
@@ -57,5 +58,20 @@ func TestTranscriptContextGoalAndCompactionFactsRejectInvalidState(t *testing.T)
 		Mode:   "auto",
 	}).Validate(); err == nil {
 		t.Fatal("accepted failed compaction without diagnostic")
+	}
+	if err := (TranscriptCompactionStatus{
+		StepID: transcriptTestStepID(t),
+		State:  CompactionStarted,
+		Mode:   "auto",
+	}).Validate(); err == nil {
+		t.Fatal("accepted compaction without initiator")
+	}
+	if err := (TranscriptCompactionStatus{
+		StepID:    transcriptTestStepID(t),
+		State:     CompactionStarted,
+		Mode:      "manual",
+		Initiator: CompactionInitiator("scripted"),
+	}).Validate(); err == nil {
+		t.Fatal("accepted compaction with unknown initiator")
 	}
 }

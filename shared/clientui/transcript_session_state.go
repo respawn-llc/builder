@@ -32,10 +32,27 @@ const (
 	CompactionFailed    CompactionState = "failed"
 )
 
+type CompactionInitiator string
+
+const (
+	CompactionInitiatorUserRequested CompactionInitiator = "user_requested"
+	CompactionInitiatorAutomatic     CompactionInitiator = "automatic"
+)
+
+func (i CompactionInitiator) Validate() error {
+	switch i {
+	case CompactionInitiatorUserRequested, CompactionInitiatorAutomatic:
+		return nil
+	default:
+		return fmt.Errorf("unknown compaction initiator %q", i)
+	}
+}
+
 type TranscriptCompactionStatus struct {
 	StepID     runtimeids.StepID
 	State      CompactionState
 	Mode       string
+	Initiator  CompactionInitiator
 	Count      int
 	Diagnostic *TranscriptDiagnostic
 }
@@ -85,6 +102,9 @@ func (s TranscriptCompactionStatus) Validate() error {
 	}
 	if strings.TrimSpace(s.Mode) == "" {
 		return fmt.Errorf("compaction mode is required")
+	}
+	if err := s.Initiator.Validate(); err != nil {
+		return err
 	}
 	if s.Count < 0 {
 		return fmt.Errorf("compaction count cannot be negative")

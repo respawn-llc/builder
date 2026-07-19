@@ -45,6 +45,7 @@ type backgroundNoticeScheduler interface {
 type contextCompactor interface {
 	CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) (session.CommitReceipt, error)
 	CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) (session.CommitReceipt, error)
+	CompactContextForWorkflowContinuation(ctx context.Context) error
 	TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error)
 	AutoCompactIfNeeded(ctx context.Context, stepID string, mode compactionMode) error
 	ShouldCompactBeforeUserMessage(ctx context.Context, text string) (bool, error)

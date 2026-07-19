@@ -30,10 +30,14 @@ func (p compactionPersistence) replaceHistory(stepID, engine string, mode compac
 	return e.steerWithCommitReceipt(stepID, steerHistoryReplacementIntent(engine, mode, workflowRunID, e.compactionRuntimeState().Count()+1, pendingHandoffFutureMessage, e.LastCommittedAssistantFinalAnswer(), items))
 }
 
-func (p compactionPersistence) emitStatus(stepID string, kind EventKind, mode compactionMode, engine, provider string, trimmed *int, count int, errText string) error {
+func (p compactionPersistence) emitStatus(stepID string, kind EventKind, mode compactionMode, initiator CompactionInitiator, engine, provider string, trimmed *int, count int, errText string) error {
 	e := p.engine
+	if !initiator.Valid() {
+		panic(fmt.Sprintf("compaction status has invalid initiator %q", initiator))
+	}
 	status := &CompactionStatus{
 		Mode:              string(mode),
+		Initiator:         initiator,
 		Engine:            strings.TrimSpace(engine),
 		Provider:          strings.TrimSpace(provider),
 		TrimmedItemsCount: textutil.Pointer(trimmed),
