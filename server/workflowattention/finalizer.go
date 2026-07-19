@@ -15,7 +15,6 @@ import (
 type TransitionResult struct {
 	TransitionID                      workflow.TransitionID
 	State                             string
-	ResolvedApprovalTransitionIDs     []workflow.TransitionID
 	ResolvedApprovalProjections       []ApprovalProjection
 	ResolvedInterruptedRunProjections []InterruptedRunProjection
 }
@@ -65,15 +64,8 @@ type Finalizer struct {
 	projection  PendingApprovalProjectionProvider
 	runs        PendingInterruptedRunProjectionProvider
 	publisher   Publisher
-	active      map[workflow.TransitionID]attentionnotify.RoutingScope
 	resolved    map[workflow.TransitionID]struct{}
-	runActive   map[workflow.RunID]interruptedRunActiveNotification
 	runResolved map[interruptedRunOccurrenceKey]struct{}
-}
-
-type interruptedRunActiveNotification struct {
-	scope      attentionnotify.RoutingScope
-	occurrence interruptedRunOccurrenceKey
 }
 
 type interruptedRunOccurrenceKey struct {
@@ -87,9 +79,7 @@ func NewFinalizer(projection PendingApprovalProjectionProvider, publisher Publis
 		projection:  projection,
 		runs:        runs,
 		publisher:   publisher,
-		active:      map[workflow.TransitionID]attentionnotify.RoutingScope{},
 		resolved:    map[workflow.TransitionID]struct{}{},
-		runActive:   map[workflow.RunID]interruptedRunActiveNotification{},
 		runResolved: map[interruptedRunOccurrenceKey]struct{}{},
 	}
 }
@@ -98,19 +88,11 @@ func (f *Finalizer) FinalizeTransition(ctx context.Context, result TransitionRes
 	if f == nil {
 		return
 	}
-	resolved := map[workflow.TransitionID]struct{}{}
 	for _, projection := range result.ResolvedApprovalProjections {
 		if projection.TransitionID == "" {
 			continue
 		}
 		f.ResolveApproval(projection)
-		resolved[projection.TransitionID] = struct{}{}
-	}
-	for _, transitionID := range result.ResolvedApprovalTransitionIDs {
-		if _, ok := resolved[transitionID]; ok {
-			continue
-		}
-		f.resolveActiveApproval(transitionID)
 	}
 	for _, projection := range result.ResolvedInterruptedRunProjections {
 		f.ResolveInterruptedRun(projection)
@@ -118,11 +100,8 @@ func (f *Finalizer) FinalizeTransition(ctx context.Context, result TransitionRes
 	if result.TransitionID == "" {
 		return
 	}
-	switch strings.TrimSpace(result.State) {
-	case "pending_approval":
+	if strings.TrimSpace(result.State) == "pending_approval" {
 		f.PublishPendingApproval(ctx, result.TransitionID)
-	case "approved":
-		f.resolveActiveApproval(result.TransitionID)
 	}
 }
 
@@ -154,7 +133,6 @@ func (f *Finalizer) PublishPendingInterruptedRun(ctx context.Context, runID work
 		slog.Warn("workflow interrupted-run attention publish failed", "run_id", string(runID), "task_id", string(projection.TaskID), "error", err)
 		return
 	}
-	f.runActive[runID] = interruptedRunActiveNotification{scope: scope, occurrence: occurrence}
 }
 
 func (f *Finalizer) ResolveApproval(projection ApprovalProjection) {
@@ -175,30 +153,10 @@ func (f *Finalizer) ResolveInterruptedRun(projection InterruptedRunProjection) {
 		f.mu.Unlock()
 		return
 	}
-	delete(f.runActive, runID)
 	f.runResolved[occurrence] = struct{}{}
 	f.mu.Unlock()
 	scope := interruptedRunRoutingScope(projection)
 	if err := f.publisher.PublishResolved(scope, interruptedRunNotificationID(runID), clientui.AttentionNotificationKindInterruptedRun, time.Now().UTC()); err != nil {
-		slog.Warn("workflow interrupted-run attention resolved publish failed", "run_id", string(runID), "error", err)
-	}
-}
-
-func (f *Finalizer) ResolveActiveInterruptedRun(runID workflow.RunID) {
-	if f == nil || f.publisher == nil || runID == "" {
-		return
-	}
-	f.mu.Lock()
-	active, ok := f.runActive[runID]
-	if ok {
-		delete(f.runActive, runID)
-		f.runResolved[active.occurrence] = struct{}{}
-	}
-	f.mu.Unlock()
-	if !ok {
-		return
-	}
-	if err := f.publisher.PublishResolved(active.scope, interruptedRunNotificationID(runID), clientui.AttentionNotificationKindInterruptedRun, time.Now().UTC()); err != nil {
 		slog.Warn("workflow interrupted-run attention resolved publish failed", "run_id", string(runID), "error", err)
 	}
 }
@@ -226,26 +184,6 @@ func (f *Finalizer) publishPending(ctx context.Context, transitionID workflow.Tr
 		slog.Warn("workflow approval attention publish failed", "transition_id", string(transitionID), "task_id", string(projection.TaskID), "error", err)
 		return
 	}
-	f.active[transitionID] = scope
-}
-
-func (f *Finalizer) resolveActiveApproval(transitionID workflow.TransitionID) {
-	if f.publisher == nil {
-		return
-	}
-	f.mu.Lock()
-	scope, ok := f.active[transitionID]
-	if ok {
-		delete(f.active, transitionID)
-	}
-	f.resolved[transitionID] = struct{}{}
-	f.mu.Unlock()
-	if !ok {
-		return
-	}
-	if err := f.publisher.PublishResolved(scope, approvalNotificationID(transitionID), clientui.AttentionNotificationKindApproval, time.Now().UTC()); err != nil {
-		slog.Warn("workflow approval attention resolved publish failed", "transition_id", string(transitionID), "error", err)
-	}
 }
 
 func (f *Finalizer) publishResolvedWithScope(transitionID workflow.TransitionID, scope attentionnotify.RoutingScope) {
@@ -253,7 +191,6 @@ func (f *Finalizer) publishResolvedWithScope(transitionID workflow.TransitionID,
 		return
 	}
 	f.mu.Lock()
-	delete(f.active, transitionID)
 	f.resolved[transitionID] = struct{}{}
 	f.mu.Unlock()
 	if err := f.publisher.PublishResolved(scope, approvalNotificationID(transitionID), clientui.AttentionNotificationKindApproval, time.Now().UTC()); err != nil {

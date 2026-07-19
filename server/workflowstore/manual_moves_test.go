@@ -249,9 +249,6 @@ func TestManualMoveFromPendingApprovalToBacklogDiscardsApproval(t *testing.T) {
 	if moved.State != "applied" || len(moved.PlacementIDs) != 1 {
 		t.Fatalf("approval-to-backlog move = %+v, want applied with one placement", moved)
 	}
-	if len(moved.ResolvedApprovalTransitionIDs) != 1 || moved.ResolvedApprovalTransitionIDs[0] != approval.TransitionID {
-		t.Fatalf("resolved approval ids = %+v, want %s", moved.ResolvedApprovalTransitionIDs, approval.TransitionID)
-	}
 	if len(moved.ResolvedApprovalTransitionProjections) != 1 {
 		t.Fatalf("resolved approval projections = %+v, want one", moved.ResolvedApprovalTransitionProjections)
 	}

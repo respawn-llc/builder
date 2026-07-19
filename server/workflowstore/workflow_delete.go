@@ -36,7 +36,6 @@ type WorkflowDeleteResult struct {
 	Deleted                               bool
 	Impact                                WorkflowDeleteImpact
 	Blockers                              []WorkflowDeleteBlocker
-	ResolvedApprovalTransitionIDs         []workflow.TransitionID
 	ResolvedApprovalTransitionProjections []ApprovalTransitionProjection
 	ResolvedInterruptedRunProjections     []InterruptedRunAttentionProjection
 }
@@ -121,18 +120,9 @@ func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (
 	return WorkflowDeleteResult{
 		Deleted:                               true,
 		Impact:                                impact,
-		ResolvedApprovalTransitionIDs:         workflowDeleteApprovalTransitionIDs(resolution.ResolvedApprovalTransitionProjections),
 		ResolvedApprovalTransitionProjections: resolution.ResolvedApprovalTransitionProjections,
 		ResolvedInterruptedRunProjections:     resolution.ResolvedInterruptedRunProjections,
 	}, nil
-}
-
-func workflowDeleteApprovalTransitionIDs(projections []ApprovalTransitionProjection) []workflow.TransitionID {
-	out := make([]workflow.TransitionID, 0, len(projections))
-	for _, projection := range projections {
-		out = append(out, projection.TransitionID)
-	}
-	return out
 }
 
 func workflowDeleteImpactFromRow(row sqlitegen.GetWorkflowDeleteImpactRow) WorkflowDeleteImpact {

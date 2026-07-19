@@ -114,7 +114,6 @@ type CompleteRunResult struct {
 	RunIDs                                []workflow.RunID
 	InterruptedRunIDs                     []workflow.RunID
 	RequiresApproval                      bool
-	ResolvedApprovalTransitionIDs         []workflow.TransitionID
 	ResolvedApprovalTransitionProjections []ApprovalTransitionProjection
 	ResolvedInterruptedRunProjections     []InterruptedRunAttentionProjection
 }

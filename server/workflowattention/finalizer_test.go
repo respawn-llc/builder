@@ -13,19 +13,20 @@ import (
 
 func TestFinalizerPublishesPendingApprovalAndResolvedForActiveTransition(t *testing.T) {
 	publisher := &recordingPublisher{}
+	projection := ApprovalProjection{
+		TransitionID:     "transition-1",
+		ProjectID:        "project-1",
+		WorkflowID:       "workflow-1",
+		TaskID:           "task-1",
+		TaskShortID:      "RUN-1",
+		TaskTitle:        "Task title",
+		RunID:            "run-1",
+		SessionID:        "session-1",
+		Message:          "Review generated work",
+		OccurredAtUnixMs: 1_700_000_000_000,
+	}
 	finalizer := NewFinalizer(approvalProjectionProviderFunc(func(context.Context, workflow.TransitionID) (ApprovalProjection, bool, error) {
-		return ApprovalProjection{
-			TransitionID:     "transition-1",
-			ProjectID:        "project-1",
-			WorkflowID:       "workflow-1",
-			TaskID:           "task-1",
-			TaskShortID:      "RUN-1",
-			TaskTitle:        "Task title",
-			RunID:            "run-1",
-			SessionID:        "session-1",
-			Message:          "Review generated work",
-			OccurredAtUnixMs: 1_700_000_000_000,
-		}, true, nil
+		return projection, true, nil
 	}), publisher)
 
 	finalizer.FinalizeTransition(context.Background(), TransitionResult{TransitionID: "transition-1", State: "pending_approval"})
@@ -53,6 +54,10 @@ func TestFinalizerPublishesPendingApprovalAndResolvedForActiveTransition(t *test
 	}
 
 	finalizer.FinalizeTransition(context.Background(), TransitionResult{TransitionID: "transition-1", State: "approved"})
+	if len(publisher.resolved) != 0 {
+		t.Fatalf("bare approved transition resolved publications = %+v, want none", publisher.resolved)
+	}
+	finalizer.FinalizeTransition(context.Background(), TransitionResult{ResolvedApprovalProjections: []ApprovalProjection{projection}})
 
 	if len(publisher.resolved) != 1 {
 		t.Fatalf("resolved publications = %+v, want one", publisher.resolved)
@@ -139,19 +144,20 @@ func TestFinalizerPublishesApprovalNotificationThroughAttentionBroker(t *testing
 	if err != nil {
 		t.Fatalf("SubscribeSession: %v", err)
 	}
+	projection := ApprovalProjection{
+		TransitionID:     "transition-1",
+		ProjectID:        "project-1",
+		WorkflowID:       "workflow-1",
+		TaskID:           "task-1",
+		TaskShortID:      "RUN-1",
+		TaskTitle:        "Task title",
+		RunID:            "run-1",
+		SessionID:        "session-1",
+		Message:          "Approve generated transition",
+		OccurredAtUnixMs: 1_700_000_000_000,
+	}
 	finalizer := NewFinalizer(approvalProjectionProviderFunc(func(context.Context, workflow.TransitionID) (ApprovalProjection, bool, error) {
-		return ApprovalProjection{
-			TransitionID:     "transition-1",
-			ProjectID:        "project-1",
-			WorkflowID:       "workflow-1",
-			TaskID:           "task-1",
-			TaskShortID:      "RUN-1",
-			TaskTitle:        "Task title",
-			RunID:            "run-1",
-			SessionID:        "session-1",
-			Message:          "Approve generated transition",
-			OccurredAtUnixMs: 1_700_000_000_000,
-		}, true, nil
+		return projection, true, nil
 	}), broker)
 
 	finalizer.FinalizeTransition(context.Background(), TransitionResult{TransitionID: "transition-1", State: "pending_approval"})
@@ -168,7 +174,7 @@ func TestFinalizerPublishesApprovalNotificationThroughAttentionBroker(t *testing
 		t.Fatalf("session pending event = %+v", sessionPending)
 	}
 
-	finalizer.FinalizeTransition(context.Background(), TransitionResult{TransitionID: "transition-1", State: "approved"})
+	finalizer.FinalizeTransition(context.Background(), TransitionResult{ResolvedApprovalProjections: []ApprovalProjection{projection}})
 	resolved := nextAttentionEvent(t, sub)
 	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, approvalNotificationID("transition-1")) {
 		t.Fatalf("resolved event = %+v", resolved)
@@ -181,20 +187,21 @@ func TestFinalizerPublishesApprovalNotificationThroughAttentionBroker(t *testing
 
 func TestFinalizerPublishesPendingInterruptedRunAndResolvedForActiveRun(t *testing.T) {
 	publisher := &recordingPublisher{}
+	projection := InterruptedRunProjection{
+		ProjectID:        "project-1",
+		WorkflowID:       "workflow-1",
+		TaskID:           "task-1",
+		TaskShortID:      "RUN-1",
+		TaskTitle:        "Task title",
+		RunID:            "run-1",
+		SessionID:        "session-1",
+		Message:          "Run interrupted: workflow_runtime_failed: model failed",
+		Reason:           "workflow_runtime_failed",
+		OccurredAtUnixMs: 1_700_000_000_000,
+	}
 	finalizer := NewFinalizer(combinedProjectionProvider{
 		run: func(context.Context, workflow.RunID) (InterruptedRunProjection, bool, error) {
-			return InterruptedRunProjection{
-				ProjectID:        "project-1",
-				WorkflowID:       "workflow-1",
-				TaskID:           "task-1",
-				TaskShortID:      "RUN-1",
-				TaskTitle:        "Task title",
-				RunID:            "run-1",
-				SessionID:        "session-1",
-				Message:          "Run interrupted: workflow_runtime_failed: model failed",
-				Reason:           "workflow_runtime_failed",
-				OccurredAtUnixMs: 1_700_000_000_000,
-			}, true, nil
+			return projection, true, nil
 		},
 	}, publisher)
 
@@ -219,7 +226,7 @@ func TestFinalizerPublishesPendingInterruptedRunAndResolvedForActiveRun(t *testi
 		t.Fatalf("pending target focus = %+v", pending.notification.Target.Focus)
 	}
 
-	finalizer.ResolveActiveInterruptedRun("run-1")
+	finalizer.ResolveInterruptedRun(projection)
 
 	if len(publisher.resolved) != 1 {
 		t.Fatalf("resolved publications = %+v, want one", publisher.resolved)
@@ -233,25 +240,28 @@ func TestFinalizerPublishesPendingInterruptedRunAndResolvedForActiveRun(t *testi
 func TestFinalizerAllowsSameRunToNotifyAfterNewInterruptionOccurrence(t *testing.T) {
 	publisher := &recordingPublisher{}
 	occurredAtUnixMs := int64(1_700_000_000_000)
+	projection := func() InterruptedRunProjection {
+		return InterruptedRunProjection{
+			ProjectID:        "project-1",
+			WorkflowID:       "workflow-1",
+			TaskID:           "task-1",
+			TaskShortID:      "RUN-1",
+			TaskTitle:        "Task title",
+			RunID:            "run-1",
+			SessionID:        "session-1",
+			Message:          "Run interrupted",
+			Reason:           "workflow_runtime_failed",
+			OccurredAtUnixMs: occurredAtUnixMs,
+		}
+	}
 	finalizer := NewFinalizer(combinedProjectionProvider{
 		run: func(context.Context, workflow.RunID) (InterruptedRunProjection, bool, error) {
-			return InterruptedRunProjection{
-				ProjectID:        "project-1",
-				WorkflowID:       "workflow-1",
-				TaskID:           "task-1",
-				TaskShortID:      "RUN-1",
-				TaskTitle:        "Task title",
-				RunID:            "run-1",
-				SessionID:        "session-1",
-				Message:          "Run interrupted",
-				Reason:           "workflow_runtime_failed",
-				OccurredAtUnixMs: occurredAtUnixMs,
-			}, true, nil
+			return projection(), true, nil
 		},
 	}, publisher)
 
 	finalizer.PublishPendingInterruptedRun(context.Background(), "run-1")
-	finalizer.ResolveActiveInterruptedRun("run-1")
+	finalizer.ResolveInterruptedRun(projection())
 	occurredAtUnixMs++
 	finalizer.PublishPendingInterruptedRun(context.Background(), "run-1")
 
@@ -339,9 +349,12 @@ func TestFinalizerResolvesReplacedApprovalBeforePublishingNewPendingApproval(t *
 	finalizer.FinalizeTransition(context.Background(), TransitionResult{TransitionID: "old", State: "pending_approval"})
 
 	finalizer.FinalizeTransition(context.Background(), TransitionResult{
-		TransitionID:                  "new",
-		State:                         "pending_approval",
-		ResolvedApprovalTransitionIDs: []workflow.TransitionID{"old"},
+		TransitionID: "new",
+		State:        "pending_approval",
+		ResolvedApprovalProjections: []ApprovalProjection{{
+			TransitionID: "old",
+			TaskID:       "task-1",
+		}},
 	})
 
 	want := []string{"pending|approval/old", "resolved|approval/old", "pending|approval/new"}

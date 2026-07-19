@@ -1805,8 +1805,7 @@ func (n *recordingSchedulerNotifier) Notify() {
 }
 
 type recordingWorkflowAttentionFinalizer struct {
-	results      []workflowattention.TransitionResult
-	resolvedRuns []workflow.RunID
+	results []workflowattention.TransitionResult
 }
 
 type failingWorkflowPendingProjectionProvider struct {
@@ -1849,10 +1848,6 @@ func (f *recordingWorkflowAttentionFinalizer) FinalizeTransition(_ context.Conte
 }
 
 func (f *recordingWorkflowAttentionFinalizer) PublishPendingInterruptedRun(context.Context, workflow.RunID) {
-}
-
-func (f *recordingWorkflowAttentionFinalizer) ResolveActiveInterruptedRun(runID workflow.RunID) {
-	f.resolvedRuns = append(f.resolvedRuns, runID)
 }
 
 type recordingTaskRuntimeCanceler struct {

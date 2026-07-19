@@ -141,9 +141,6 @@ func (s *Store) ApplyManualMove(ctx context.Context, preparation ManualMovePrepa
 		RequiresApproval:                      edge.RequiresApproval,
 		ResolvedApprovalTransitionProjections: resolvedApprovalProjections,
 	}
-	if pendingApprovalTransitionID != "" {
-		result.ResolvedApprovalTransitionIDs = []workflow.TransitionID{workflow.TransitionID(pendingApprovalTransitionID)}
-	}
 	targetPlacementID := ""
 	if transitionState == "applied" {
 		targetPlacementID = prefixedID("placement")
