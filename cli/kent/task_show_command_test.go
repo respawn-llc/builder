@@ -178,6 +178,13 @@ func TestTaskShowRejectsUnknownStatus(t *testing.T) {
 	}
 }
 
+func TestTaskShowOutputUsesServerAttentionCount(t *testing.T) {
+	output := taskShowOutputFromDetail(serverapi.WorkflowTaskDetail{AttentionCount: 3})
+	if output.AttentionCount != 3 {
+		t.Fatalf("attention count = %d, want 3", output.AttentionCount)
+	}
+}
+
 func createRunnableWorkflowForCommandTest(t *testing.T, name string) string {
 	t.Helper()
 	workflowID := workflowCreateForTest(t, name).ID

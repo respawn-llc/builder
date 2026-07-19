@@ -33,6 +33,7 @@ import (
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/server/workflowview"
+	"core/server/worktree"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -516,7 +517,7 @@ func TestWorkflowRuntimeStarterCancelTaskRunsStopsLiveRuntimeAfterTaskCancel(t *
 		t.Fatalf("Process: %v", err)
 	}
 	client.waitForCall(t)
-	if err := fixture.store.CancelTask(context.Background(), task.ID, "test cancel"); err != nil {
+	if _, err := fixture.store.CancelTask(context.Background(), task.ID, "test cancel"); err != nil {
 		t.Fatalf("CancelTask: %v", err)
 	}
 	if err := fixture.starter.CancelTaskRuns(context.Background(), task.ID); err != nil {
@@ -1551,10 +1552,10 @@ func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResumeTaskRuns: %v", err)
 	}
-	if len(resumedRuns) != 1 {
+	if len(resumedRuns.Runs) != 1 {
 		t.Fatalf("resumed runs = %+v, want one", resumedRuns)
 	}
-	resumed := resumedRuns[0]
+	resumed := resumedRuns.Runs[0]
 	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
 		t.Fatalf("Process resumed: %v", err)
 	}
@@ -1756,10 +1757,20 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
 	}
-	view, err := workflowview.New(metadataStore)
+	definitions, err := workflowview.NewDefinitionProjection(store)
 	if err != nil {
-		t.Fatalf("workflowview.New: %v", err)
+		t.Fatalf("workflowview.NewDefinitionProjection: %v", err)
 	}
+	taskDetail, err := workflowview.NewTaskDetail(
+		metadataStore,
+		definitions,
+		workflowview.NewTaskProjector(),
+		worktree.NewGitInspector(nil),
+	)
+	if err != nil {
+		t.Fatalf("workflowview.NewTaskDetail: %v", err)
+	}
+	view := taskDetail
 	worktrees := &metadataTaskWorktrees{t: t, metadata: metadataStore, workspaceID: binding.WorkspaceID, root: filepath.Join(home, "task-worktrees")}
 	client := NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}, steps...)
 	clientFactory := func(SchedulerStartRunRequest) llm.Client { return client }
@@ -2186,34 +2197,102 @@ func (f *recordingInterruptedRunFinalizer) FinalizeTransition(_ context.Context,
 	f.transitions = append(f.transitions, result)
 }
 
-func (f *recordingInterruptedRunFinalizer) FinalizeInterruptedRun(_ context.Context, runID workflow.RunID) {
+func (f *recordingInterruptedRunFinalizer) PublishPendingInterruptedRun(_ context.Context, runID workflow.RunID) {
 	f.interruptedRuns = append(f.interruptedRuns, runID)
 }
 
-func TestScriptCompletionAttentionFinalizesTransitionAndInterruptedRuns(t *testing.T) {
+func TestScriptCompletionAttentionForwardsCapturedResolutions(t *testing.T) {
+	publisher := &recordingScriptAttentionPublisher{t: t}
+	finalizer := workflowattention.NewFinalizer(failingScriptPendingProjectionProvider{t: t}, publisher)
+	starter := &Starter{attentionFinalizer: finalizer}
+
+	starter.finalizeScriptCompletionAttention(context.Background(), workflowstore.CompleteRunResult{
+		TransitionID: "transition-script",
+		State:        "applied",
+		ResolvedApprovalTransitionProjections: []workflowstore.ApprovalTransitionProjection{{
+			TransitionID: "transition-resolved",
+			ProjectID:    "project-1",
+			WorkflowID:   "workflow-1",
+			TaskID:       "task-1",
+			SourceRunID:  "run-approval",
+			SessionID:    "session-1",
+		}},
+		ResolvedInterruptedRunProjections: []workflowstore.InterruptedRunAttentionProjection{{
+			ProjectID:          "project-1",
+			WorkflowID:         "workflow-1",
+			TaskID:             "task-1",
+			RunID:              "run-resolved",
+			SessionID:          "session-1",
+			InterruptionReason: "runtime_failed",
+			OccurredAtUnixMs:   42,
+		}},
+	})
+
+	if len(publisher.resolved) != 2 {
+		t.Fatalf("resolved publications = %+v, want two", publisher.resolved)
+	}
+	byID := map[string]scriptResolvedPublication{}
+	for _, publication := range publisher.resolved {
+		byID[publication.id.UUID] = publication
+	}
+	approval := byID["transition-resolved"]
+	if approval.scope.ProjectID != "project-1" || approval.scope.WorkflowID != "workflow-1" || approval.scope.TaskID != "task-1" || approval.scope.SessionID != "session-1" {
+		t.Fatalf("resolved approval = %+v", approval)
+	}
+	interrupted := byID["run-resolved"]
+	if interrupted.scope.ProjectID != "project-1" || interrupted.scope.WorkflowID != "workflow-1" || interrupted.scope.TaskID != "task-1" || interrupted.scope.SessionID != "session-1" {
+		t.Fatalf("resolved interruption = %+v", interrupted)
+	}
+}
+
+func TestScriptCompletionAttentionPublishesNewInterruptedRuns(t *testing.T) {
 	finalizer := &recordingInterruptedRunFinalizer{}
 	starter := &Starter{attentionFinalizer: finalizer}
 
 	starter.finalizeScriptCompletionAttention(context.Background(), workflowstore.CompleteRunResult{
-		TransitionID:                  "transition-script",
-		State:                         "pending_approval",
-		ResolvedApprovalTransitionIDs: []workflow.TransitionID{"transition-resolved"},
-		InterruptedRunIDs:             []workflow.RunID{"run-interrupted"},
+		TransitionID:      "transition-script",
+		State:             "applied",
+		InterruptedRunIDs: []workflow.RunID{"run-interrupted"},
 	})
 
-	if len(finalizer.transitions) != 1 {
-		t.Fatalf("finalized transitions = %+v, want one", finalizer.transitions)
-	}
-	transition := finalizer.transitions[0]
-	if transition.TransitionID != "transition-script" || transition.State != "pending_approval" {
-		t.Fatalf("finalized transition = %+v", transition)
-	}
-	if len(transition.ResolvedApprovalTransitionIDs) != 1 || transition.ResolvedApprovalTransitionIDs[0] != "transition-resolved" {
-		t.Fatalf("resolved approvals = %+v", transition.ResolvedApprovalTransitionIDs)
-	}
 	if len(finalizer.interruptedRuns) != 1 || finalizer.interruptedRuns[0] != "run-interrupted" {
-		t.Fatalf("finalized interrupted runs = %+v", finalizer.interruptedRuns)
+		t.Fatalf("published interrupted runs = %+v", finalizer.interruptedRuns)
 	}
+}
+
+type failingScriptPendingProjectionProvider struct {
+	t *testing.T
+}
+
+func (p failingScriptPendingProjectionProvider) PendingApprovalProjection(context.Context, workflow.TransitionID) (workflowattention.ApprovalProjection, bool, error) {
+	p.t.Fatal("pending approval projection read during script resolution")
+	return workflowattention.ApprovalProjection{}, false, nil
+}
+
+func (p failingScriptPendingProjectionProvider) PendingInterruptedRunProjection(context.Context, workflow.RunID) (workflowattention.InterruptedRunProjection, bool, error) {
+	p.t.Fatal("pending interrupted-run projection read during script resolution")
+	return workflowattention.InterruptedRunProjection{}, false, nil
+}
+
+type scriptResolvedPublication struct {
+	scope attentionnotify.RoutingScope
+	id    clientui.AttentionNotificationID
+	kind  clientui.AttentionNotificationKind
+}
+
+type recordingScriptAttentionPublisher struct {
+	t        *testing.T
+	resolved []scriptResolvedPublication
+}
+
+func (p *recordingScriptAttentionPublisher) PublishPending(attentionnotify.RoutingScope, clientui.AttentionNotification) error {
+	p.t.Fatal("pending publication during captured script resolution")
+	return nil
+}
+
+func (p *recordingScriptAttentionPublisher) PublishResolved(scope attentionnotify.RoutingScope, id clientui.AttentionNotificationID, kind clientui.AttentionNotificationKind, _ time.Time) error {
+	p.resolved = append(p.resolved, scriptResolvedPublication{scope: scope, id: id, kind: kind})
+	return nil
 }
 
 func (f starterFixture) waitForCompletedRun(t *testing.T, taskID workflow.TaskID) {

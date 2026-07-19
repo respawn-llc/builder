@@ -114,7 +114,7 @@ func TestSchedulerDoesNotScheduleCanceledOrInterruptedTasks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartTask canceled: %v", err)
 	}
-	if err := store.CancelTask(ctx, canceledTask.ID, "stop"); err != nil {
+	if _, err := store.CancelTask(ctx, canceledTask.ID, "stop"); err != nil {
 		t.Fatalf("CancelTask: %v", err)
 	}
 	interrupted := createAndStartSchedulerTask(t, ctx, store, binding.ProjectID)

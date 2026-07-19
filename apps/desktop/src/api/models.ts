@@ -607,6 +607,11 @@ export type AttentionPage = Readonly<{
   generatedAt: number;
 }>;
 
+export type TaskAttention = Readonly<{
+  items: readonly AttentionItem[];
+  generatedAt: number;
+}>;
+
 export type TaskComment = Readonly<{
   id: string;
   taskID: string;
@@ -678,7 +683,7 @@ export type TaskDetail = Readonly<{
   sourceWorkspace: WorkspaceSummary;
   status: TaskStatus;
   actions: TaskActions;
-  attention: readonly AttentionItem[];
+  attentionCount: number;
   comments: readonly TaskComment[];
   runs: readonly TaskRun[];
   transitions: readonly TaskTransition[];

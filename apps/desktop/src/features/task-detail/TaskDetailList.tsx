@@ -1,7 +1,7 @@
 import { useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { ActivityItem, TaskComment, TaskDetail } from "@/api";
+import type { ActivityItem, AttentionItem, TaskComment, TaskDetail } from "@/api";
 import { errorMessage } from "@/api";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import { taskDetailInitialFocusRequestKey } from "@/app-facade";
@@ -13,7 +13,12 @@ import { TaskInbox } from "./TaskDetailInbox";
 import { DescriptionIsland, PropertiesIsland, TaskHeaderIsland, type TaskDraft } from "./TaskDetailRows";
 import { TaskTabs, type DetailTab } from "./TaskDetailTabs";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
-import type { useTaskActivity, useTaskComments, useTaskMutations } from "./useTaskDetailData";
+import type {
+  useTaskActivity,
+  useTaskAttention,
+  useTaskComments,
+  useTaskMutations,
+} from "./useTaskDetailData";
 
 type TaskDetailListItem =
   | Readonly<{ kind: "header" }>
@@ -32,6 +37,7 @@ type TaskDetailListItem =
 
 export function TaskDetailList({
   activity,
+  attention,
   comments,
   detail,
   disabled,
@@ -55,6 +61,7 @@ export function TaskDetailList({
   updatePending,
 }: Readonly<{
   activity: ReturnType<typeof useTaskActivity>;
+  attention: ReturnType<typeof useTaskAttention>;
   comments: ReturnType<typeof useTaskComments>;
   detail: TaskDetail;
   disabled: boolean;
@@ -87,28 +94,41 @@ export function TaskDetailList({
     () => comments.data?.pages.flatMap((page) => page.comments) ?? [],
     [comments.data],
   );
+  const attentionItems = useMemo(() => attention.data?.items ?? [], [attention.data]);
   const listItems = useMemo(
     () =>
       taskDetailListItems({
         activityItems,
         activityPending: activity.isPending,
         activityError: activity.error,
+        attentionFailed: attention.isError,
+        attentionItems,
+        attentionPending: attention.isPending,
         commentItems,
         commentsPending: comments.isPending,
         commentsError: comments.error,
         detail,
+        initialFocus,
         tab: selectedTab,
       }),
     [
       activity.error,
       activity.isPending,
       activityItems,
+      attention.isError,
+      attention.isPending,
+      attentionItems,
       commentItems,
       comments.error,
       comments.isPending,
       detail,
+      initialFocus,
       selectedTab,
     ],
+  );
+  const pinnedItemKeys = useMemo(
+    () => (attention.isPending || initialFocus !== undefined ? new Set(["inbox"]) : undefined),
+    [attention.isPending, initialFocus],
   );
   const paging = taskDetailPaging({ activity, comments, detailID: detail.id, selectedTab });
 
@@ -130,10 +150,13 @@ export function TaskDetailList({
       nonAdjustingResizeItemKey="body"
       onLoadMore={paging.loadMore}
       paddingStart={headerOffset}
+      pinnedItemKeys={pinnedItemKeys}
       rowSpacing="compact"
       renderItem={(item) => (
         <TaskDetailListRow
           activityCount={activityItems.length}
+          attentionItems={attentionItems}
+          attentionPending={attention.isPending}
           commentCount={detail.comments.length}
           detail={detail}
           disabled={disabled}
@@ -169,6 +192,8 @@ export function TaskDetailList({
 
 type TaskDetailListRowProps = Readonly<{
   activityCount: number;
+  attentionItems: readonly AttentionItem[];
+  attentionPending: boolean;
   commentCount: number;
   detail: TaskDetail;
   disabled: boolean;
@@ -274,6 +299,8 @@ function BodyRow({
 }
 
 function InboxRow({
+  attentionItems,
+  attentionPending,
   detail,
   disabled,
   initialFocus,
@@ -281,8 +308,12 @@ function InboxRow({
   onQuestionSelectionChange,
   questionSelections,
 }: TaskDetailListRowProps): ReactNode {
+  if (attentionPending) {
+    return <LoadingState appearanceDelayMs={0} fullPage={false} reveal={false} title={undefined} />;
+  }
   return (
     <TaskInbox
+      attentionItems={attentionItems}
       currentVersion={detail.workflowVersion}
       detail={detail}
       disabled={disabled}
@@ -378,23 +409,36 @@ function taskDetailListItems({
   activityError,
   activityItems,
   activityPending,
+  attentionFailed,
+  attentionItems,
+  attentionPending,
   commentItems,
   commentsError,
   commentsPending,
   detail,
+  initialFocus,
   tab,
 }: Readonly<{
   activityError: unknown;
   activityItems: readonly ActivityItem[];
   activityPending: boolean;
+  attentionFailed: boolean;
+  attentionItems: readonly AttentionItem[];
+  attentionPending: boolean;
   commentItems: readonly TaskComment[];
   commentsError: unknown;
   commentsPending: boolean;
   detail: TaskDetail;
+  initialFocus?: TaskDetailInitialFocus | undefined;
   tab: DetailTab;
 }>): readonly TaskDetailListItem[] {
   const staticItems: TaskDetailListItem[] = [{ kind: "header" }, { kind: "body" }];
-  if (detail.attention.length > 0) {
+  if (
+    !attentionFailed &&
+    (detail.attentionCount > 0 ||
+      attentionItems.length > 0 ||
+      (attentionPending && initialFocus !== undefined))
+  ) {
     staticItems.push({ kind: "inbox" });
   }
   staticItems.push({ kind: "tabs" });

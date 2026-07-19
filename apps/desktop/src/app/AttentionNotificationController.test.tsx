@@ -330,8 +330,8 @@ describe("AttentionNotificationController", () => {
       routes: [
         ...startupRoutes,
         {
-          method: "workflow.task.get",
-          result: taskDetailResult([]),
+          method: "workflow.task.attention.list",
+          result: taskAttentionResult([]),
         },
       ],
     });
@@ -345,7 +345,7 @@ describe("AttentionNotificationController", () => {
     });
     expect(native.notify).not.toHaveBeenCalled();
     expect(services.transport.calls).toContainEqual({
-      method: "workflow.task.get",
+      method: "workflow.task.attention.list",
       params: { task_id: "task-1" },
     });
   });
@@ -357,8 +357,8 @@ describe("AttentionNotificationController", () => {
       routes: [
         ...startupRoutes,
         {
-          method: "workflow.task.get",
-          result: taskDetailResult([]),
+          method: "workflow.task.attention.list",
+          result: taskAttentionResult([]),
         },
       ],
     });
@@ -378,19 +378,19 @@ describe("AttentionNotificationController", () => {
     {
       reason: "structured task-not-found errors",
       taskRoute: {
-        method: "workflow.task.get",
+        method: "workflow.task.attention.list",
         error: new RpcError({
           code: rpcErrorCodes.workflowTaskNotFound,
           message: "not localized",
-          method: "workflow.task.get",
+          method: "workflow.task.attention.list",
         }),
       },
     },
     {
       reason: "a reused ask id from another run",
       taskRoute: {
-        method: "workflow.task.get",
-        result: taskDetailResult([
+        method: "workflow.task.attention.list",
+        result: taskAttentionResult([
           durableAttentionItem({
             askID: "ask-1",
             runID: "run-2",
@@ -737,57 +737,9 @@ function deferred<T>(): Readonly<{
   };
 }
 
-function taskDetailResult(attention: readonly unknown[]): unknown {
+function taskAttentionResult(attention: readonly unknown[]): unknown {
   return {
-    task: {
-      summary: {
-        id: "task-1",
-        project_id: "project-1",
-        workflow_id: "workflow-1",
-        short_id: "KT-1",
-        title: "Needs answer",
-        created_at_unix_ms: 1,
-        updated_at_unix_ms: 1,
-        done: false,
-      },
-      project: { display_name: "Project" },
-      workflow: {
-        workflow_id: "workflow-1",
-        display_name: "Workflow",
-        description: "",
-        version: 1,
-        is_project_default: true,
-        valid_for_task_creation: true,
-        validation_errors: [],
-      },
-      body: "",
-      source_url: "",
-      source_workspace: {
-        workspace_id: "workspace-1",
-        display_name: "Workspace",
-        root_path: "/workspace",
-        availability: "available",
-        is_primary: true,
-        updated_at_unix_ms: 1,
-      },
-      status: {
-        kind: "active",
-        native_state: "active",
-        node_ids: [],
-        run_ids: [],
-        attention_types: [],
-      },
-      actions: {
-        can_start: false,
-        can_interrupt: false,
-        can_resume: false,
-        can_cancel: false,
-        manual_move_target_node_ids: [],
-      },
-      attention,
-      runs: [],
-      transitions: [],
-      comments: [],
-    },
+    items: attention,
+    generated_at_unix_ms: 1,
   };
 }

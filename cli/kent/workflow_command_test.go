@@ -18,6 +18,7 @@ import (
 	"core/server/workflowstore"
 	"core/server/workflowsvc"
 	"core/server/workflowview"
+	"core/server/worktree"
 	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -966,11 +967,39 @@ func newWorkflowCommandLoopback(t *testing.T) (config.App, metadata.Binding, *wo
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
 	}
-	view, err := workflowview.New(metadataStore)
+	definitions, err := workflowview.NewDefinitionProjection(store)
 	if err != nil {
-		t.Fatalf("workflowview.New: %v", err)
+		t.Fatalf("workflowview.NewDefinitionProjection: %v", err)
 	}
-	service, err := workflowsvc.New(store, view, resolver)
+	projector := workflowview.NewTaskProjector()
+	board, err := workflowview.NewBoard(metadataStore, definitions, resolver, projector)
+	if err != nil {
+		t.Fatalf("workflowview.NewBoard: %v", err)
+	}
+	taskList, err := workflowview.NewTaskList(metadataStore, definitions, projector)
+	if err != nil {
+		t.Fatalf("workflowview.NewTaskList: %v", err)
+	}
+	taskDetail, err := workflowview.NewTaskDetail(metadataStore, definitions, projector, worktree.NewGitInspector(nil))
+	if err != nil {
+		t.Fatalf("workflowview.NewTaskDetail: %v", err)
+	}
+	activity, err := workflowview.NewActivity(metadataStore, definitions, projector)
+	if err != nil {
+		t.Fatalf("workflowview.NewActivity: %v", err)
+	}
+	attention, err := workflowview.NewAttention(metadataStore, definitions, resolver, nil, nil)
+	if err != nil {
+		t.Fatalf("workflowview.NewAttention: %v", err)
+	}
+	service, err := workflowsvc.New(store, workflowsvc.ReadModels{
+		Definitions: definitions,
+		Board:       board,
+		TaskList:    taskList,
+		TaskDetail:  taskDetail,
+		Activity:    activity,
+		Attention:   attention,
+	}, resolver)
 	if err != nil {
 		t.Fatalf("workflowsvc.New: %v", err)
 	}

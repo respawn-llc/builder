@@ -229,7 +229,7 @@ func TestResumeTaskRunsSkipsAgentRoleValidationForScriptRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResumeTaskRuns: %v", err)
 	}
-	if len(resumed) != 1 || resumed[0].ID != started.RunID || resumed[0].InterruptedAt != nil {
+	if len(resumed.Runs) != 1 || resumed.Runs[0].ID != started.RunID || resumed.Runs[0].InterruptedAt != nil {
 		t.Fatalf("resumed = %+v, want script run requeued", resumed)
 	}
 }

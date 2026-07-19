@@ -168,7 +168,7 @@ func TestStartTaskRejectsCanceledAndAlreadyStartedTasks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTask canceled: %v", err)
 	}
-	if err := store.CancelTask(ctx, canceled.ID, "stop"); err != nil {
+	if _, err := store.CancelTask(ctx, canceled.ID, "stop"); err != nil {
 		t.Fatalf("CancelTask: %v", err)
 	}
 	if _, err := store.StartTask(ctx, canceled.ID); !errors.Is(err, ErrTaskCanceled) {

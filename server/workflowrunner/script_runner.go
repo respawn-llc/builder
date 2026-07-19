@@ -12,7 +12,6 @@ import (
 
 	tools "core/server/tools"
 	shelltool "core/server/tools/shell"
-	"core/server/workflow"
 	"core/server/workflowattention"
 	"core/server/workflowruntime"
 	"core/server/workflowscript"
@@ -92,9 +91,10 @@ func (s *Starter) finalizeScriptCompletionAttention(ctx context.Context, result 
 	finalizeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), scriptAttentionFinalizeLimit)
 	defer cancel()
 	s.attentionFinalizer.FinalizeTransition(finalizeCtx, workflowattention.TransitionResult{
-		TransitionID:                  result.TransitionID,
-		State:                         result.State,
-		ResolvedApprovalTransitionIDs: append([]workflow.TransitionID(nil), result.ResolvedApprovalTransitionIDs...),
+		TransitionID:                      result.TransitionID,
+		State:                             result.State,
+		ResolvedApprovalProjections:       workflowattention.ApprovalProjections(result.ResolvedApprovalTransitionProjections),
+		ResolvedInterruptedRunProjections: workflowattention.InterruptedRunProjections(result.ResolvedInterruptedRunProjections),
 	})
 	if finalizer, ok := s.attentionFinalizer.(workflowInterruptedRunFinalizer); ok {
 		for _, runID := range result.InterruptedRunIDs {
@@ -102,7 +102,7 @@ func (s *Starter) finalizeScriptCompletionAttention(ctx context.Context, result 
 				continue
 			}
 			runFinalizeCtx, runCancel := context.WithTimeout(context.WithoutCancel(ctx), scriptAttentionFinalizeLimit)
-			finalizer.FinalizeInterruptedRun(runFinalizeCtx, runID)
+			finalizer.PublishPendingInterruptedRun(runFinalizeCtx, runID)
 			runCancel()
 		}
 	}

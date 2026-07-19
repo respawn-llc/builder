@@ -193,12 +193,44 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: store: %w", err)
 	}
-	workflowViewService, err := workflowview.New(metadataStore, workflowview.WithSessionTranscriptProvider(sessionViewService), workflowview.WithPendingPromptSource(workflowViewPendingPromptSource{prompts: runtimeRegistry}))
+	workflowDefinitions, err := workflowview.NewDefinitionProjection(workflowStore)
 	if err != nil {
 		cleanupNewFailure()
-		return nil, fmt.Errorf("workflow bundle: view: %w", err)
+		return nil, fmt.Errorf("workflow bundle: definitions: %w", err)
 	}
-	workflowAttentionFinalizer := workflowattention.NewFinalizer(workflowApprovalProjection{store: workflowStore, view: workflowViewService, roleResolver: workflowRoleResolver}, attentionBroker)
+	workflowTaskProjector := workflowview.NewTaskProjector()
+	workflowBoard, err := workflowview.NewBoard(metadataStore, workflowDefinitions, workflowRoleResolver, workflowTaskProjector)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: board: %w", err)
+	}
+	workflowTaskList, err := workflowview.NewTaskList(metadataStore, workflowDefinitions, workflowTaskProjector)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: task list: %w", err)
+	}
+	workflowTaskDetail, err := workflowview.NewTaskDetail(metadataStore, workflowDefinitions, workflowTaskProjector, gitInspector)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: task detail: %w", err)
+	}
+	workflowActivity, err := workflowview.NewActivity(metadataStore, workflowDefinitions, workflowTaskProjector)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: activity: %w", err)
+	}
+	workflowAttention, err := workflowview.NewAttention(
+		metadataStore,
+		workflowDefinitions,
+		workflowRoleResolver,
+		workflowViewActiveTranscriptSource{views: sessionViewService},
+		workflowViewPendingPromptSource{prompts: runtimeRegistry},
+	)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: attention: %w", err)
+	}
+	workflowAttentionFinalizer := workflowattention.NewFinalizer(workflowApprovalProjection{store: workflowStore}, attentionBroker)
 	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeSupport.Background, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, Worktrees: runtimeTaskWorktreeRestorer{service: worktreeService}, SessionRuntime: sessionRuntimeService, AttentionFinalizer: workflowAttentionFinalizer})
 	if err != nil {
 		cleanupNewFailure()
@@ -210,7 +242,14 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: scheduler: %w", err)
 	}
 	workflowRuntimeStarter.SetRuntimeFinished(workflowScheduler.RuntimeFinished)
-	workflowService, err := workflowsvc.New(workflowStore, workflowViewService, workflowRoleResolver, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithTaskRuntimeCanceler(workflowRuntimeStarter), workflowsvc.WithSchedulerNotifier(workflowScheduler), workflowsvc.WithPromptResponder(runtimeRegistry), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer))
+	workflowService, err := workflowsvc.New(workflowStore, workflowsvc.ReadModels{
+		Definitions: workflowDefinitions,
+		Board:       workflowBoard,
+		TaskList:    workflowTaskList,
+		TaskDetail:  workflowTaskDetail,
+		Activity:    workflowActivity,
+		Attention:   workflowAttention,
+	}, workflowRoleResolver, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithTaskRuntimeCanceler(workflowRuntimeStarter), workflowsvc.WithSchedulerNotifier(workflowScheduler), workflowsvc.WithPromptResponder(runtimeRegistry), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer))
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: service: %w", err)
@@ -377,121 +416,35 @@ func (r runtimeTaskWorktreeRestorer) RestoreLockedTaskWorktree(ctx context.Conte
 }
 
 type workflowApprovalProjection struct {
-	store        *workflowstore.Store
-	view         *workflowview.Service
-	roleResolver workflow.RoleResolver
+	store *workflowstore.Store
 }
 
-func (p workflowApprovalProjection) ApprovalProjection(ctx context.Context, transitionID workflow.TransitionID) (workflowattention.ApprovalProjection, bool, error) {
-	if p.store == nil || p.view == nil {
+func (p workflowApprovalProjection) PendingApprovalProjection(ctx context.Context, transitionID workflow.TransitionID) (workflowattention.ApprovalProjection, bool, error) {
+	if p.store == nil {
 		return workflowattention.ApprovalProjection{}, false, nil
 	}
-	taskID, _, _, err := p.store.TaskIdentityForTransition(ctx, transitionID)
+	projection, ok, err := p.store.PendingApprovalTransitionProjection(ctx, transitionID)
 	if err != nil {
 		return workflowattention.ApprovalProjection{}, false, err
 	}
-	attention, err := p.view.ListTaskAttention(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: taskID}, p.roleResolver)
-	if err != nil {
-		return workflowattention.ApprovalProjection{}, false, err
+	if !ok {
+		return workflowattention.ApprovalProjection{}, false, nil
 	}
-	for _, item := range attention.Items {
-		if item.Kind != "approval" || item.TaskTransitionID != string(transitionID) {
-			continue
-		}
-		if strings.TrimSpace(item.RunID) == "" || strings.TrimSpace(item.SessionID) == "" {
-			break
-		}
-		if item.WorkflowID == nil {
-			break
-		}
-		return workflowattention.ApprovalProjection{
-			TransitionID:     transitionID,
-			ProjectID:        item.ProjectID,
-			WorkflowID:       *item.WorkflowID,
-			TaskID:           workflow.TaskID(item.TaskID),
-			TaskShortID:      item.TaskShortID,
-			TaskTitle:        item.TaskTitle,
-			RunID:            item.RunID,
-			SessionID:        item.SessionID,
-			Message:          item.Message,
-			OccurredAtUnixMs: item.OccurredAtUnixMs,
-		}, true, nil
-	}
-	transition, err := p.store.ApprovalTransitionProjection(ctx, transitionID)
-	if err != nil {
-		return workflowattention.ApprovalProjection{}, false, err
-	}
-	return workflowattention.ApprovalProjection{
-		TransitionID:     transition.TransitionID,
-		ProjectID:        transition.ProjectID,
-		WorkflowID:       transition.WorkflowID,
-		TaskID:           transition.TaskID,
-		TaskShortID:      transition.TaskShortID,
-		TaskTitle:        transition.TaskTitle,
-		RunID:            string(transition.SourceRunID),
-		SessionID:        transition.SessionID,
-		Message:          "action required",
-		OccurredAtUnixMs: transition.OccurredAtUnixMs,
-	}, true, nil
+	return workflowattention.ApprovalProjectionFromStore(projection), true, nil
 }
 
-func (p workflowApprovalProjection) InterruptedRunProjection(ctx context.Context, runID workflow.RunID) (workflowattention.InterruptedRunProjection, bool, error) {
-	if p.store == nil || p.view == nil || runID == "" {
+func (p workflowApprovalProjection) PendingInterruptedRunProjection(ctx context.Context, runID workflow.RunID) (workflowattention.InterruptedRunProjection, bool, error) {
+	if p.store == nil || runID == "" {
 		return workflowattention.InterruptedRunProjection{}, false, nil
 	}
-	run, err := p.store.GetRun(ctx, runID)
+	projection, ok, err := p.store.PendingInterruptedRunAttentionProjection(ctx, runID)
 	if err != nil {
 		return workflowattention.InterruptedRunProjection{}, false, err
 	}
-	if run.InterruptionReason == nil || run.InterruptedAt == nil || !workflowattention.ShouldNotifyInterruptedRun(*run.InterruptionReason) {
+	if !ok {
 		return workflowattention.InterruptedRunProjection{}, false, nil
 	}
-	if projection, ok, err := p.interruptedRunAttentionProjection(ctx, run); err != nil || ok {
-		return projection, ok, err
-	}
-	input, err := p.store.GetRunStartContext(ctx, runID)
-	if err != nil {
-		return workflowattention.InterruptedRunProjection{}, false, err
-	}
-	return workflowattention.InterruptedRunProjection{
-		ProjectID:        input.Task.ProjectID,
-		WorkflowID:       string(input.Task.WorkflowID),
-		TaskID:           input.Task.ID,
-		TaskShortID:      input.Task.ShortID,
-		TaskTitle:        input.Task.Title,
-		RunID:            run.ID,
-		SessionID:        run.SessionID,
-		Reason:           *run.InterruptionReason,
-		OccurredAtUnixMs: *run.InterruptedAt,
-	}, true, nil
-}
-
-func (p workflowApprovalProjection) interruptedRunAttentionProjection(ctx context.Context, run workflowstore.RunRecord) (workflowattention.InterruptedRunProjection, bool, error) {
-	attention, err := p.view.ListTaskAttention(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(run.TaskID)}, p.roleResolver)
-	if err != nil {
-		return workflowattention.InterruptedRunProjection{}, false, err
-	}
-	for _, item := range attention.Items {
-		if item.Kind != "interrupted_run" || item.RunID != string(run.ID) {
-			continue
-		}
-		if item.WorkflowID == nil {
-			continue
-		}
-		return workflowattention.InterruptedRunProjection{
-			ProjectID:        item.ProjectID,
-			WorkflowID:       *item.WorkflowID,
-			TaskID:           workflow.TaskID(item.TaskID),
-			TaskShortID:      item.TaskShortID,
-			TaskTitle:        item.TaskTitle,
-			RunID:            run.ID,
-			SessionID:        item.SessionID,
-			Message:          item.Message,
-			Reason:           *run.InterruptionReason,
-			OccurredAtUnixMs: item.OccurredAtUnixMs,
-		}, true, nil
-	}
-	return workflowattention.InterruptedRunProjection{}, false, nil
+	return workflowattention.InterruptedRunProjectionFromStore(projection), true, nil
 }
 
 type taskWorktreeDeleter struct {
@@ -523,6 +476,17 @@ type workflowViewPendingPromptSource struct {
 	prompts interface {
 		ListPendingPrompts(sessionID string) []registry.PendingPromptSnapshot
 	}
+}
+
+type workflowViewActiveTranscriptSource struct {
+	views *sessionview.Service
+}
+
+func (s workflowViewActiveTranscriptSource) SessionNewestActiveSegmentEntries(ctx context.Context, sessionID string) ([]runtime.ChatEntry, error) {
+	if s.views == nil {
+		return nil, errors.New("session view service is required")
+	}
+	return s.views.SessionTranscriptTailEntries(ctx, sessionID)
 }
 
 func (s workflowViewPendingPromptSource) ListPendingPrompts(sessionID string) []workflowview.PendingPromptSnapshot {

@@ -959,7 +959,6 @@ type WorkflowTaskInterruptResponse struct {
 }
 
 type WorkflowAttentionListRequest struct {
-	ProjectID string `json:"project_id,omitempty"`
 	PageSize  int    `json:"page_size,omitempty"`
 	PageToken string `json:"page_token,omitempty"`
 }
@@ -1465,7 +1464,7 @@ type WorkflowTaskDetail struct {
 	ExecutionTarget *WorkflowExecutionTarget `json:"execution_target,omitempty"`
 	Status          WorkflowTaskStatus       `json:"status"`
 	Actions         WorkflowTaskActions      `json:"actions"`
-	Attention       []WorkflowAttentionItem  `json:"attention,omitempty"`
+	AttentionCount  int                      `json:"attention_count"`
 	Placements      []WorkflowPlacement      `json:"placements"`
 	Runs            []WorkflowRun            `json:"runs"`
 	Transitions     []WorkflowTaskTransition `json:"transitions"`
@@ -2035,6 +2034,9 @@ func (r WorkflowTaskUpdateRequest) Validate() error {
 }
 
 func (r WorkflowTaskGetResponse) Validate() error {
+	if r.Task.AttentionCount < 0 {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "task.attention_count", "attention_count must be non-negative")
+	}
 	if r.Task.ExecutionTarget != nil {
 		return r.Task.ExecutionTarget.Validate()
 	}

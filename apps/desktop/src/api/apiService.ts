@@ -30,6 +30,7 @@ import type {
   ProjectPage,
   ProjectWorkflowLink,
   ServerReadiness,
+  TaskAttention,
   TaskApproveResponse,
   TaskComment,
   TaskDetail,
@@ -109,7 +110,8 @@ export interface ApiService {
     nodeID: string,
     pageToken?: string | null,
   ): Promise<BoardNodeCardsPage>;
-  listAttention(projectID: string, pageToken: string): Promise<AttentionPage>;
+  listAttention(pageToken: string): Promise<AttentionPage>;
+  listTaskAttention(taskID: string): Promise<TaskAttention>;
   createTask(input: TaskMutationInput): Promise<string>;
   updateTask(input: TaskEditInput): Promise<string>;
   startTask(

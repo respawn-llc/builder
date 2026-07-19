@@ -11,6 +11,7 @@ import { emptyQuestionSelection, type QuestionSelectionState } from "./TaskDetai
 import type { useTaskMutations } from "./useTaskDetailData";
 
 export function TaskInbox({
+  attentionItems,
   currentVersion,
   detail,
   disabled,
@@ -19,6 +20,7 @@ export function TaskInbox({
   questionSelections,
   onQuestionSelectionChange,
 }: Readonly<{
+  attentionItems: readonly AttentionItem[];
   currentVersion: number;
   detail: TaskDetail;
   disabled: boolean;
@@ -29,7 +31,7 @@ export function TaskInbox({
 }>) {
   const { logger } = useAppServices();
   const missingFocusLogKeyRef = useRef<TaskDetailInitialFocus | null>(null);
-  const focusedAttentionID = focusedAttentionItemID(detail.attention, initialFocus);
+  const focusedAttentionID = focusedAttentionItemID(attentionItems, initialFocus);
 
   useEffect(() => {
     if (initialFocus === undefined || focusedAttentionID !== undefined) {
@@ -47,7 +49,7 @@ export function TaskInbox({
 
   return (
     <>
-      {detail.attention.map((item) => (
+      {attentionItems.map((item) => (
         <InboxItem
           attention={item}
           currentVersion={currentVersion}

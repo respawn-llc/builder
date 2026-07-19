@@ -933,6 +933,30 @@ SELECT id
 FROM task_records
 WHERE workflow_id = sqlc.arg(workflow_id);
 
+-- name: DeleteWorkflowTaskTransitionsByWorkflowID :execrows
+DELETE FROM task_transitions
+WHERE task_id IN (
+    SELECT task_records.id
+    FROM task_records
+    WHERE workflow_id = sqlc.arg(workflow_id)
+);
+
+-- name: DeleteWorkflowTaskNodePlacementsByWorkflowID :execrows
+DELETE FROM task_node_placements
+WHERE task_id IN (
+    SELECT task_records.id
+    FROM task_records
+    WHERE workflow_id = sqlc.arg(workflow_id)
+);
+
+-- name: DeleteWorkflowTaskCommentsByWorkflowID :execrows
+DELETE FROM task_comments
+WHERE task_id IN (
+    SELECT task_records.id
+    FROM task_records
+    WHERE workflow_id = sqlc.arg(workflow_id)
+);
+
 -- name: DeleteWorkflowTasksByWorkflowID :execrows
 DELETE FROM tasks
 WHERE id IN (
@@ -2559,20 +2583,20 @@ WHERE id = sqlc.arg(transition_id)
 LIMIT 1;
 
 -- name: ListPendingApprovalTransitionIDsByWorkflow :many
-SELECT tt.id
-FROM task_transition_records tt
-JOIN task_records t ON t.id = tt.task_id
-WHERE t.workflow_id = sqlc.arg(workflow_id)
-  AND t.canceled_at_unix_ms IS NULL
-  AND tt.state = 'pending_approval'
-ORDER BY tt.created_at_unix_ms ASC, tt.id ASC;
+SELECT transition.id
+FROM workflow_attention_candidates candidate
+JOIN task_transition_records transition ON transition.id = candidate.task_transition_id
+WHERE candidate.kind = 'approval'
+  AND candidate.workflow_id = sqlc.arg(workflow_id)
+ORDER BY candidate.occurred_at_unix_ms ASC, transition.id ASC;
 
 -- name: ListPendingApprovalTransitionIDsByTask :many
-SELECT id
-FROM task_transition_records
-WHERE task_id = sqlc.arg(task_id)
-  AND state = 'pending_approval'
-ORDER BY created_at_unix_ms ASC, id ASC;
+SELECT transition.id
+FROM workflow_attention_candidates candidate
+JOIN task_transition_records transition ON transition.id = candidate.task_transition_id
+WHERE candidate.kind = 'approval'
+  AND candidate.task_id = CAST(sqlc.arg(task_id) AS TEXT)
+ORDER BY candidate.occurred_at_unix_ms ASC, transition.id ASC;
 
 -- name: ApprovePendingTransition :execrows
 UPDATE task_transitions
@@ -3579,135 +3603,6 @@ FROM (
 ORDER BY sequence ASC;
 
 -- name: ListWorkflowAttentionCandidates :many
-WITH attention_candidates(
-    kind,
-    id,
-    project_id,
-    workflow_id,
-    task_id,
-    short_id,
-    title,
-    run_id,
-    session_id,
-    ask_id,
-    task_transition_id,
-    interruption_reason,
-    interruption_detail_json,
-    occurred_at_unix_ms
-) AS (
-    SELECT
-        'approval' AS kind,
-        CAST('approval:' || tt.id AS TEXT) AS id,
-        t.project_id,
-        t.workflow_id,
-        t.id AS task_id,
-        t.short_id,
-        t.title,
-        '' AS run_id,
-        '' AS session_id,
-        '' AS ask_id,
-        tt.id AS task_transition_id,
-        NULL AS interruption_reason,
-        '' AS interruption_detail_json,
-        tt.created_at_unix_ms AS occurred_at_unix_ms
-    FROM task_transitions tt
-    JOIN task_records t ON t.id = tt.task_id
-    WHERE tt.state = 'pending_approval'
-      AND t.canceled_at_unix_ms IS NULL
-      AND (sqlc.arg(project_id) = '' OR t.project_id = sqlc.arg(project_id))
-      AND (sqlc.arg(task_id) = '' OR t.id = sqlc.arg(task_id))
-      AND (
-          CAST(sqlc.arg(cursor_active) AS INTEGER) = 0
-          OR tt.created_at_unix_ms < sqlc.arg(cursor_occurred_at_unix_ms)
-          OR (tt.created_at_unix_ms = sqlc.arg(cursor_occurred_at_unix_ms) AND ('approval:' || tt.id) < sqlc.arg(cursor_item_id))
-      )
-    UNION ALL
-    SELECT
-        'question' AS kind,
-        CAST('question:' || r.id || ':' || r.waiting_ask_id AS TEXT) AS id,
-        t.project_id,
-        t.workflow_id,
-        t.id AS task_id,
-        t.short_id,
-        t.title,
-        r.id AS run_id,
-        COALESCE(r.session_id, '') AS session_id,
-        r.waiting_ask_id AS ask_id,
-        '' AS task_transition_id,
-        NULL AS interruption_reason,
-        '' AS interruption_detail_json,
-        r.updated_at_unix_ms AS occurred_at_unix_ms
-    FROM workflow_task_current_run_records r
-    JOIN task_records t ON t.id = r.task_id
-    JOIN workflow_task_status_task_records status_task ON status_task.id = t.id
-    WHERE r.waiting_ask_id IS NOT NULL
-      AND r.completed_at_unix_ms IS NULL
-      AND r.interrupted_at_unix_ms IS NULL
-      AND status_task.canceled_at_unix_ms IS NULL
-      AND (sqlc.arg(project_id) = '' OR t.project_id = sqlc.arg(project_id))
-      AND (sqlc.arg(task_id) = '' OR t.id = sqlc.arg(task_id))
-      AND (
-          CAST(sqlc.arg(cursor_active) AS INTEGER) = 0
-          OR r.updated_at_unix_ms < sqlc.arg(cursor_occurred_at_unix_ms)
-          OR (r.updated_at_unix_ms = sqlc.arg(cursor_occurred_at_unix_ms) AND ('question:' || r.id || ':' || r.waiting_ask_id) < sqlc.arg(cursor_item_id))
-      )
-    UNION ALL
-    SELECT
-        'interrupted_run' AS kind,
-        CAST('interrupted_run:' || r.id AS TEXT) AS id,
-        t.project_id,
-        t.workflow_id,
-        t.id AS task_id,
-        t.short_id,
-        t.title,
-        r.id AS run_id,
-        COALESCE(r.session_id, '') AS session_id,
-        '' AS ask_id,
-        '' AS task_transition_id,
-        r.interruption_reason,
-        r.interruption_detail_json,
-        r.interrupted_at_unix_ms AS occurred_at_unix_ms
-    FROM task_run_records r
-    JOIN task_records t ON t.id = r.task_id
-    JOIN task_node_placements p ON p.id = r.placement_id
-    WHERE r.interrupted_at_unix_ms IS NOT NULL
-      AND r.completed_at_unix_ms IS NULL
-      AND trim(COALESCE(r.interruption_reason, '')) != ''
-      AND trim(COALESCE(r.interruption_reason, '')) NOT IN ('user_interrupt', 'workflow_runtime_canceled')
-      AND p.state IN ('active', 'waiting_approval')
-      AND t.canceled_at_unix_ms IS NULL
-      AND (sqlc.arg(project_id) = '' OR t.project_id = sqlc.arg(project_id))
-      AND (sqlc.arg(task_id) = '' OR t.id = sqlc.arg(task_id))
-      AND (
-        CAST(sqlc.arg(cursor_active) AS INTEGER) = 0
-        OR r.interrupted_at_unix_ms < sqlc.arg(cursor_occurred_at_unix_ms)
-        OR (r.interrupted_at_unix_ms = sqlc.arg(cursor_occurred_at_unix_ms) AND ('interrupted_run:' || r.id) < sqlc.arg(cursor_item_id))
-      )
-    UNION ALL
-    SELECT
-        'validation_blocker' AS kind,
-        CAST('validation_blocker:' || project_id || ':' || workflow_id AS TEXT) AS id,
-        project_id,
-        workflow_id,
-        '' AS task_id,
-        '' AS short_id,
-        '' AS title,
-        '' AS run_id,
-        '' AS session_id,
-        '' AS ask_id,
-        '' AS task_transition_id,
-        NULL AS interruption_reason,
-        '' AS interruption_detail_json,
-        updated_at_unix_ms AS occurred_at_unix_ms
-    FROM project_workflow_links
-    WHERE (sqlc.arg(project_id) = '' OR project_id = sqlc.arg(project_id))
-      AND sqlc.arg(task_id) = ''
-      AND (
-          CAST(sqlc.arg(cursor_active) AS INTEGER) = 0
-          OR updated_at_unix_ms < sqlc.arg(cursor_occurred_at_unix_ms)
-          OR (updated_at_unix_ms = sqlc.arg(cursor_occurred_at_unix_ms) AND ('validation_blocker:' || project_id || ':' || workflow_id) < sqlc.arg(cursor_item_id))
-      )
-)
 SELECT
     kind,
     id,
@@ -3723,57 +3618,118 @@ SELECT
     interruption_reason,
     interruption_detail_json,
     occurred_at_unix_ms
-FROM attention_candidates
+FROM workflow_attention_candidates
+WHERE (
+    CAST(sqlc.arg(cursor_active) AS INTEGER) = 0
+    OR occurred_at_unix_ms < sqlc.arg(cursor_occurred_at_unix_ms)
+    OR (occurred_at_unix_ms = sqlc.arg(cursor_occurred_at_unix_ms) AND id < sqlc.arg(cursor_item_id))
+)
 ORDER BY occurred_at_unix_ms DESC, id DESC
 LIMIT sqlc.arg(page_limit);
 
--- name: ListWorkflowApprovalAttentionItems :many
-SELECT tt.id AS task_transition_id, t.project_id, t.workflow_id, t.id AS task_id, t.short_id, t.title, tt.created_at_unix_ms
-FROM task_transitions tt
-JOIN task_records t ON t.id = tt.task_id
-WHERE tt.state = 'pending_approval'
-  AND t.canceled_at_unix_ms IS NULL
-  AND (sqlc.arg(project_id) = '' OR t.project_id = sqlc.arg(project_id))
-  AND (sqlc.arg(task_id) = '' OR t.id = sqlc.arg(task_id))
-ORDER BY tt.created_at_unix_ms DESC, tt.rowid DESC;
+-- name: ListWorkflowTaskAttentionCandidates :many
+SELECT
+    kind,
+    id,
+    project_id,
+    workflow_id,
+    task_id,
+    short_id,
+    title,
+    run_id,
+    session_id,
+    ask_id,
+    task_transition_id,
+    interruption_reason,
+    interruption_detail_json,
+    occurred_at_unix_ms
+FROM workflow_attention_candidates
+WHERE task_id = CAST(sqlc.arg(task_id) AS TEXT)
+ORDER BY occurred_at_unix_ms DESC, id DESC;
 
--- name: ListWorkflowQuestionAttentionItems :many
-SELECT r.id AS run_id, COALESCE(r.session_id, '') AS session_id, r.waiting_ask_id, t.project_id, t.workflow_id, t.id AS task_id, t.short_id, t.title, r.updated_at_unix_ms
-FROM workflow_task_current_run_records r
-JOIN task_records t ON t.id = r.task_id
-JOIN workflow_task_status_task_records status_task ON status_task.id = t.id
-WHERE r.waiting_ask_id IS NOT NULL
-  AND r.completed_at_unix_ms IS NULL
-  AND r.interrupted_at_unix_ms IS NULL
-  AND status_task.canceled_at_unix_ms IS NULL
-  AND (sqlc.arg(project_id) = '' OR t.project_id = sqlc.arg(project_id))
-  AND (sqlc.arg(task_id) = '' OR t.id = sqlc.arg(task_id))
-ORDER BY r.updated_at_unix_ms DESC, (
-    SELECT storage.rowid
-    FROM task_runs storage
-    WHERE storage.id = r.id
-) DESC;
+-- name: CountWorkflowTaskAttentionCandidates :one
+SELECT CAST(COUNT(*) AS INTEGER)
+FROM workflow_attention_candidates
+WHERE task_id = CAST(sqlc.arg(task_id) AS TEXT);
 
--- name: ListWorkflowInterruptedRunAttentionItems :many
-SELECT t.project_id, t.workflow_id, t.id AS task_id, t.short_id, t.title, r.id AS run_id, COALESCE(r.session_id, '') AS session_id, r.interruption_reason, r.interruption_detail_json, r.interrupted_at_unix_ms
-FROM task_run_records r
-JOIN task_records t ON t.id = r.task_id
-JOIN task_node_placements p ON p.id = r.placement_id
-WHERE r.interrupted_at_unix_ms IS NOT NULL
-  AND r.completed_at_unix_ms IS NULL
-  AND trim(COALESCE(r.interruption_reason, '')) != ''
-  AND trim(COALESCE(r.interruption_reason, '')) NOT IN ('user_interrupt', 'workflow_runtime_canceled')
-  AND p.state IN ('active', 'waiting_approval')
-  AND t.canceled_at_unix_ms IS NULL
-  AND (sqlc.arg(project_id) = '' OR t.project_id = sqlc.arg(project_id))
-  AND (sqlc.arg(task_id) = '' OR t.id = sqlc.arg(task_id))
-ORDER BY r.interrupted_at_unix_ms DESC, r.id DESC;
+-- name: ListWorkflowResolutionAttentionCandidates :many
+SELECT
+    kind,
+    id,
+    project_id,
+    workflow_id,
+    task_id,
+    short_id,
+    title,
+    run_id,
+    session_id,
+    ask_id,
+    task_transition_id,
+    interruption_reason,
+    interruption_detail_json,
+    occurred_at_unix_ms
+FROM workflow_attention_candidates
+WHERE workflow_id = sqlc.arg(workflow_id)
+  AND kind IN ('approval', 'interrupted_run')
+ORDER BY occurred_at_unix_ms ASC, id ASC;
 
--- name: ListWorkflowValidationAttentionItems :many
-SELECT project_id, workflow_id, updated_at_unix_ms
-FROM project_workflow_links
-WHERE (sqlc.arg(project_id) = '' OR project_id = sqlc.arg(project_id))
-ORDER BY updated_at_unix_ms DESC, rowid DESC;
+-- name: ListActionableInterruptedRunIDsByTask :many
+SELECT run.id
+FROM workflow_attention_candidates candidate
+JOIN task_run_records run ON run.id = candidate.run_id
+WHERE candidate.kind = 'interrupted_run'
+  AND candidate.task_id = CAST(sqlc.arg(task_id) AS TEXT)
+ORDER BY candidate.occurred_at_unix_ms ASC, run.id ASC;
+
+-- name: ListActionableInterruptedRunIDsByWorkflow :many
+SELECT run.id
+FROM workflow_attention_candidates candidate
+JOIN task_run_records run ON run.id = candidate.run_id
+WHERE candidate.kind = 'interrupted_run'
+  AND candidate.workflow_id = sqlc.arg(workflow_id)
+ORDER BY candidate.occurred_at_unix_ms ASC, run.id ASC;
+
+-- name: GetWorkflowApprovalAttentionCandidateByTransitionID :one
+SELECT
+    kind,
+    id,
+    project_id,
+    workflow_id,
+    task_id,
+    short_id,
+    title,
+    run_id,
+    session_id,
+    ask_id,
+    task_transition_id,
+    interruption_reason,
+    interruption_detail_json,
+    occurred_at_unix_ms
+FROM workflow_attention_candidates
+WHERE kind = 'approval'
+  AND task_transition_id = CAST(sqlc.arg(task_transition_id) AS TEXT)
+LIMIT 1;
+
+-- name: GetWorkflowInterruptedRunAttentionCandidateByRunID :one
+SELECT
+    kind,
+    id,
+    project_id,
+    workflow_id,
+    task_id,
+    short_id,
+    title,
+    run_id,
+    session_id,
+    ask_id,
+    task_transition_id,
+    interruption_reason,
+    interruption_detail_json,
+    occurred_at_unix_ms
+FROM workflow_attention_candidates
+WHERE kind = 'interrupted_run'
+  AND run_id = CAST(sqlc.arg(run_id) AS TEXT)
+LIMIT 1;
 
 -- name: ListWorkflowTaskActivityRows :many
 WITH activity(

@@ -286,6 +286,23 @@ type Workflow struct {
 	UpdatedAtUnixMs          int64
 }
 
+type WorkflowAttentionCandidate struct {
+	Kind                   string
+	ID                     string
+	ProjectID              string
+	WorkflowID             string
+	TaskID                 sql.NullString
+	ShortID                sql.NullString
+	Title                  sql.NullString
+	RunID                  sql.NullString
+	SessionID              sql.NullString
+	AskID                  sql.NullString
+	TaskTransitionID       sql.NullString
+	InterruptionReason     sql.NullString
+	InterruptionDetailJson sql.NullString
+	OccurredAtUnixMs       int64
+}
+
 type WorkflowEdge struct {
 	ID                     string
 	TransitionGroupID      string

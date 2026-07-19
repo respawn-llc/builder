@@ -596,6 +596,20 @@ func TestWorkflowTaskListRequestValidation(t *testing.T) {
 	})
 }
 
+func TestWorkflowAttentionListRequestJSONShape(t *testing.T) {
+	request := WorkflowAttentionListRequest{PageSize: 25, PageToken: "cursor-1"}
+	if err := request.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	encoded, shape := marshalWorkflowJSON[map[string]any](t, request)
+	if _, present := shape["project_id"]; present {
+		t.Fatalf("global attention request includes project scope: %s", encoded)
+	}
+	if shape["page_size"] != float64(25) || shape["page_token"] != "cursor-1" {
+		t.Fatalf("global attention request = %#v", shape)
+	}
+}
+
 func TestWorkflowTaskListResponseJSONShape(t *testing.T) {
 	selectedColumnKeys := []string{"plan", "qa"}
 	selected := WorkflowTaskListResponse{
