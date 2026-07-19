@@ -1063,8 +1063,8 @@ func TestServiceMoveTaskAutoApprovedReplacementResolvesOldPendingApproval(t *tes
 	if len(fixture.finalizer.results) != 2 {
 		t.Fatalf("attention finalizer results = %+v, want initial pending and approved replacement", fixture.finalizer.results)
 	}
-	resolved := fixture.finalizer.results[1].ResolvedApprovalTransitionIDs
-	if len(resolved) != 1 || resolved[0] != workflow.TransitionID(fixture.pending.TransitionID) {
+	resolved := fixture.finalizer.results[1].ResolvedApprovalProjections
+	if len(resolved) != 1 || resolved[0].TransitionID != workflow.TransitionID(fixture.pending.TransitionID) {
 		t.Fatalf("replacement resolved approvals = %+v, want old transition %s", resolved, fixture.pending.TransitionID)
 	}
 }

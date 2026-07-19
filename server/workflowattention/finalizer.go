@@ -13,10 +13,11 @@ import (
 )
 
 type TransitionResult struct {
-	TransitionID                  workflow.TransitionID
-	State                         string
-	ResolvedApprovalTransitionIDs []workflow.TransitionID
-	ResolvedApprovalProjections   []ApprovalProjection
+	TransitionID                      workflow.TransitionID
+	State                             string
+	ResolvedApprovalTransitionIDs     []workflow.TransitionID
+	ResolvedApprovalProjections       []ApprovalProjection
+	ResolvedInterruptedRunProjections []InterruptedRunProjection
 }
 
 type ApprovalProjection struct {
@@ -110,6 +111,9 @@ func (f *Finalizer) FinalizeTransition(ctx context.Context, result TransitionRes
 			continue
 		}
 		f.resolveActiveApproval(transitionID)
+	}
+	for _, projection := range result.ResolvedInterruptedRunProjections {
+		f.ResolveInterruptedRun(projection)
 	}
 	if result.TransitionID == "" {
 		return

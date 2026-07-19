@@ -116,6 +116,7 @@ type CompleteRunResult struct {
 	RequiresApproval                      bool
 	ResolvedApprovalTransitionIDs         []workflow.TransitionID
 	ResolvedApprovalTransitionProjections []ApprovalTransitionProjection
+	ResolvedInterruptedRunProjections     []InterruptedRunAttentionProjection
 }
 
 type ManualMoveRequest struct {

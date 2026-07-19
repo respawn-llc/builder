@@ -1196,10 +1196,10 @@ func (s *Service) finalizeWorkflowAttention(ctx context.Context, result workflow
 	finalizeCtx, cancel := workflowAttentionContext(ctx)
 	defer cancel()
 	s.attentionFinalizer.FinalizeTransition(finalizeCtx, workflowattention.TransitionResult{
-		TransitionID:                  result.TransitionID,
-		State:                         result.State,
-		ResolvedApprovalTransitionIDs: append([]workflow.TransitionID(nil), result.ResolvedApprovalTransitionIDs...),
-		ResolvedApprovalProjections:   workflowApprovalProjections(result.ResolvedApprovalTransitionProjections),
+		TransitionID:                      result.TransitionID,
+		State:                             result.State,
+		ResolvedApprovalProjections:       workflowattention.ApprovalProjections(result.ResolvedApprovalTransitionProjections),
+		ResolvedInterruptedRunProjections: workflowattention.InterruptedRunProjections(result.ResolvedInterruptedRunProjections),
 	})
 	for _, runID := range result.InterruptedRunIDs {
 		if runID == "" {
@@ -1250,7 +1250,7 @@ func (s *Service) CancelWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if err := s.store.CancelTask(ctx, workflow.TaskID(req.TaskID), reason); err != nil {
 		return err
 	}
-	s.finalizeWorkflowAttention(ctx, workflowstore.CompleteRunResult{ResolvedApprovalTransitionIDs: pendingApprovals})
+	s.resolveActiveWorkflowApprovalAttention(ctx, pendingApprovals)
 	s.resolveWorkflowInterruptedRunAttention(ctx, interruptedRunIDs)
 	if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "canceled", req.TaskID)
@@ -1376,29 +1376,21 @@ func (s *Service) finalizeWorkflowApprovalProjections(ctx context.Context, proje
 	if s == nil || s.attentionFinalizer == nil || len(projections) == 0 {
 		return
 	}
-	resolved := workflowApprovalProjections(projections)
+	resolved := workflowattention.ApprovalProjections(projections)
 	finalizeCtx, cancel := workflowAttentionContext(ctx)
 	defer cancel()
 	s.attentionFinalizer.FinalizeTransition(finalizeCtx, workflowattention.TransitionResult{ResolvedApprovalProjections: resolved})
 }
 
-func workflowApprovalProjections(projections []workflowstore.ApprovalTransitionProjection) []workflowattention.ApprovalProjection {
-	resolved := make([]workflowattention.ApprovalProjection, 0, len(projections))
-	for _, projection := range projections {
-		resolved = append(resolved, workflowattention.ApprovalProjection{
-			TransitionID:     projection.TransitionID,
-			ProjectID:        projection.ProjectID,
-			WorkflowID:       projection.WorkflowID,
-			TaskID:           projection.TaskID,
-			TaskShortID:      projection.TaskShortID,
-			TaskTitle:        projection.TaskTitle,
-			RunID:            string(projection.SourceRunID),
-			SessionID:        projection.SessionID,
-			Message:          workflowattention.ApprovalRequiredMessage,
-			OccurredAtUnixMs: projection.OccurredAtUnixMs,
-		})
+func (s *Service) resolveActiveWorkflowApprovalAttention(ctx context.Context, transitionIDs []workflow.TransitionID) {
+	if s == nil || s.attentionFinalizer == nil || len(transitionIDs) == 0 {
+		return
 	}
-	return resolved
+	finalizeCtx, cancel := workflowAttentionContext(ctx)
+	defer cancel()
+	s.attentionFinalizer.FinalizeTransition(finalizeCtx, workflowattention.TransitionResult{
+		ResolvedApprovalTransitionIDs: append([]workflow.TransitionID(nil), transitionIDs...),
+	})
 }
 
 func workflowAttentionContext(ctx context.Context) (context.Context, context.CancelFunc) {

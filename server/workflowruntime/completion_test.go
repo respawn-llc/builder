@@ -58,7 +58,25 @@ func TestSelectCompletionMode(t *testing.T) {
 }
 
 func TestStoreControllerFinalizesWorkflowAttentionAfterCompleteRun(t *testing.T) {
-	store := &recordingCompletionStore{result: workflowstore.CompleteRunResult{TransitionID: "transition-1", State: "pending_approval", InterruptedRunIDs: []workflow.RunID{"run-script"}}}
+	store := &recordingCompletionStore{result: workflowstore.CompleteRunResult{
+		TransitionID: "transition-1",
+		State:        "applied",
+		ResolvedApprovalTransitionProjections: []workflowstore.ApprovalTransitionProjection{{
+			TransitionID: "transition-resolved",
+			ProjectID:    "project-1",
+			WorkflowID:   "workflow-1",
+			TaskID:       "task-1",
+		}},
+		ResolvedInterruptedRunProjections: []workflowstore.InterruptedRunAttentionProjection{{
+			ProjectID:          "project-1",
+			WorkflowID:         "workflow-1",
+			TaskID:             "task-1",
+			RunID:              "run-resolved",
+			InterruptionReason: "runtime_failed",
+			OccurredAtUnixMs:   42,
+		}},
+		InterruptedRunIDs: []workflow.RunID{"run-script"},
+	}}
 	finalizer := &recordingCompletionAttentionFinalizer{}
 	controller := StoreController{Store: store, AttentionFinalizer: finalizer}
 
@@ -66,11 +84,17 @@ func TestStoreControllerFinalizesWorkflowAttentionAfterCompleteRun(t *testing.T)
 	if err != nil {
 		t.Fatalf("CompleteWorkflowRun: %v", err)
 	}
-	if result.TransitionID != "transition-1" || result.State != "pending_approval" {
+	if result.TransitionID != "transition-1" || result.State != "applied" {
 		t.Fatalf("completion result = %+v", result)
 	}
-	if len(finalizer.results) != 1 || finalizer.results[0].TransitionID != "transition-1" || finalizer.results[0].State != "pending_approval" {
+	if len(finalizer.results) != 1 || finalizer.results[0].TransitionID != "transition-1" || finalizer.results[0].State != "applied" {
 		t.Fatalf("attention finalizer results = %+v", finalizer.results)
+	}
+	if len(finalizer.results[0].ResolvedApprovalProjections) != 1 || finalizer.results[0].ResolvedApprovalProjections[0].TransitionID != "transition-resolved" {
+		t.Fatalf("resolved approval projections = %+v", finalizer.results[0].ResolvedApprovalProjections)
+	}
+	if len(finalizer.results[0].ResolvedInterruptedRunProjections) != 1 || finalizer.results[0].ResolvedInterruptedRunProjections[0].RunID != "run-resolved" {
+		t.Fatalf("resolved interruption projections = %+v", finalizer.results[0].ResolvedInterruptedRunProjections)
 	}
 	if len(finalizer.interruptedRuns) != 1 || finalizer.interruptedRuns[0] != "run-script" {
 		t.Fatalf("interrupted run finalizations = %+v, want run-script", finalizer.interruptedRuns)

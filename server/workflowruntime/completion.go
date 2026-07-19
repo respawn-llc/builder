@@ -189,9 +189,10 @@ func (c StoreController) CompleteWorkflowRun(ctx context.Context, req Completion
 		finalizeCtx, cancel := context.WithTimeout(context.Background(), attentionFinalizationTimeout)
 		defer cancel()
 		c.AttentionFinalizer.FinalizeTransition(finalizeCtx, workflowattention.TransitionResult{
-			TransitionID:                  result.TransitionID,
-			State:                         result.State,
-			ResolvedApprovalTransitionIDs: append([]workflow.TransitionID(nil), result.ResolvedApprovalTransitionIDs...),
+			TransitionID:                      result.TransitionID,
+			State:                             result.State,
+			ResolvedApprovalProjections:       workflowattention.ApprovalProjections(result.ResolvedApprovalTransitionProjections),
+			ResolvedInterruptedRunProjections: workflowattention.InterruptedRunProjections(result.ResolvedInterruptedRunProjections),
 		})
 		if finalizer, ok := c.AttentionFinalizer.(interruptedRunAttentionFinalizer); ok {
 			for _, runID := range result.InterruptedRunIDs {
