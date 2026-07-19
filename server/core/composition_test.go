@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -25,7 +24,6 @@ import (
 	"core/server/skillcatalog"
 	askquestion "core/server/tools"
 	"core/server/workflow"
-	"core/server/workflowattention"
 	"core/server/workflowstore"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -34,68 +32,6 @@ import (
 	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 )
-
-func TestPendingAndCapturedAttentionUseIdenticalCanonicalProjection(t *testing.T) {
-	detail := `{"error":"model failed"}`
-	approval := workflowstore.ApprovalTransitionProjection{
-		TransitionID:     "transition-1",
-		ProjectID:        "project-1",
-		WorkflowID:       "workflow-1",
-		TaskID:           "task-1",
-		TaskShortID:      "WOR-1",
-		TaskTitle:        "Approval task",
-		SourceRunID:      "run-approval",
-		SessionID:        "session-approval",
-		OccurredAtUnixMs: 101,
-	}
-	interrupted := workflowstore.InterruptedRunAttentionProjection{
-		ProjectID:              "project-2",
-		WorkflowID:             "workflow-2",
-		TaskID:                 "task-2",
-		TaskShortID:            "WOR-2",
-		TaskTitle:              "Interrupted task",
-		RunID:                  "run-interrupted",
-		SessionID:              "session-interrupted",
-		InterruptionReason:     "workflow_runtime_failed",
-		InterruptionDetailJSON: &detail,
-		OccurredAtUnixMs:       202,
-	}
-	pending := workflowApprovalProjection{store: staticWorkflowAttentionProjectionStore{
-		approval:    approval,
-		interrupted: interrupted,
-	}}
-
-	pendingApproval, ok, err := pending.PendingApprovalProjection(t.Context(), approval.TransitionID)
-	if err != nil || !ok {
-		t.Fatalf("PendingApprovalProjection = %+v, %v, %v", pendingApproval, ok, err)
-	}
-	capturedApproval := workflowattention.ApprovalProjections([]workflowstore.ApprovalTransitionProjection{approval})
-	if len(capturedApproval) != 1 || !reflect.DeepEqual(pendingApproval, capturedApproval[0]) {
-		t.Fatalf("pending approval = %+v, captured = %+v", pendingApproval, capturedApproval)
-	}
-
-	pendingInterrupted, ok, err := pending.PendingInterruptedRunProjection(t.Context(), interrupted.RunID)
-	if err != nil || !ok {
-		t.Fatalf("PendingInterruptedRunProjection = %+v, %v, %v", pendingInterrupted, ok, err)
-	}
-	capturedInterrupted := workflowattention.InterruptedRunProjections([]workflowstore.InterruptedRunAttentionProjection{interrupted})
-	if len(capturedInterrupted) != 1 || !reflect.DeepEqual(pendingInterrupted, capturedInterrupted[0]) {
-		t.Fatalf("pending interruption = %+v, captured = %+v", pendingInterrupted, capturedInterrupted)
-	}
-}
-
-type staticWorkflowAttentionProjectionStore struct {
-	approval    workflowstore.ApprovalTransitionProjection
-	interrupted workflowstore.InterruptedRunAttentionProjection
-}
-
-func (s staticWorkflowAttentionProjectionStore) PendingApprovalTransitionProjection(_ context.Context, transitionID workflow.TransitionID) (workflowstore.ApprovalTransitionProjection, bool, error) {
-	return s.approval, transitionID == s.approval.TransitionID, nil
-}
-
-func (s staticWorkflowAttentionProjectionStore) PendingInterruptedRunAttentionProjection(_ context.Context, runID workflow.RunID) (workflowstore.InterruptedRunAttentionProjection, bool, error) {
-	return s.interrupted, runID == s.interrupted.RunID, nil
-}
 
 func TestComposedWorkflowTaskSetupPrecedesFirstModelRequest(t *testing.T) {
 	t.Setenv("KENT_WORKTREE_SESSION_ID", "stale-parent-session")

@@ -415,13 +415,8 @@ func (r runtimeTaskWorktreeRestorer) RestoreLockedTaskWorktree(ctx context.Conte
 	return err
 }
 
-type workflowAttentionProjectionStore interface {
-	PendingApprovalTransitionProjection(context.Context, workflow.TransitionID) (workflowstore.ApprovalTransitionProjection, bool, error)
-	PendingInterruptedRunAttentionProjection(context.Context, workflow.RunID) (workflowstore.InterruptedRunAttentionProjection, bool, error)
-}
-
 type workflowApprovalProjection struct {
-	store workflowAttentionProjectionStore
+	store *workflowstore.Store
 }
 
 func (p workflowApprovalProjection) PendingApprovalProjection(ctx context.Context, transitionID workflow.TransitionID) (workflowattention.ApprovalProjection, bool, error) {
