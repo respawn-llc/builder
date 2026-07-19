@@ -31,6 +31,7 @@ type Service struct {
 	metadata    *metadata.Store
 	queries     *sqlitegen.Queries
 	definitions *DefinitionProjection
+	projector   *TaskProjector
 	git         *worktree.GitInspector
 	transcripts SessionTranscriptTailEntryProvider
 	prompts     PendingPromptSource
@@ -92,7 +93,13 @@ func New(metadataStore *metadata.Store, opts ...Option) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	svc := &Service{metadata: metadataStore, queries: metadataStore.Queries(), definitions: definitions, git: worktree.NewGitInspector(nil)}
+	svc := &Service{
+		metadata:    metadataStore,
+		queries:     metadataStore.Queries(),
+		definitions: definitions,
+		projector:   NewTaskProjector(),
+		git:         worktree.NewGitInspector(nil),
+	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(svc)
@@ -455,10 +462,11 @@ func (s *Service) ListBoardNodeCards(ctx context.Context, req serverapi.Workflow
 	projectID := strings.TrimSpace(req.ProjectID)
 	workflowID := strings.TrimSpace(req.WorkflowID)
 	nodeID := strings.TrimSpace(req.NodeID)
-	def, nodeKinds, err := s.definition(ctx, workflowID)
+	snapshot, err := s.definitions.snapshot(ctx, workflowID)
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
+	def := snapshot.api
 	if _, ok := workflowNodeByID(def)[nodeID]; !ok {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, errors.New("node_id is invalid for workflow")
 	}
@@ -520,7 +528,7 @@ func (s *Service) ListBoardNodeCards(ctx context.Context, req serverapi.Workflow
 	}
 	cards := make([]serverapi.WorkflowBoardTaskCard, 0, len(tasks))
 	for _, task := range tasks {
-		card, _ := s.taskCard(task, statusesByTaskID[task.ID], effectiveBoardPlacementsForTask(task, placementsByTaskID[task.ID], def, nodeKinds), runsByTaskID[task.ID], def, nodeKinds, sourceWorkspaceForTask(task, workspaceContext.byID, workspaceContext.primary))
+		card, _ := s.taskCard(task, statusesByTaskID[task.ID], placementsByTaskID[task.ID], runsByTaskID[task.ID], snapshot, sourceWorkspaceForTask(task, workspaceContext.byID, workspaceContext.primary))
 		cards = append(cards, card)
 	}
 	var previousPageToken *string
@@ -662,18 +670,6 @@ func pendingApprovalSourcePlacement(row sqlitegen.ListPendingApprovalSourcePlace
 	}
 }
 
-func taskNodePlacementNodeID(placement sqlitegen.TaskNodePlacementRecord) (string, bool) {
-	nodeID := nullableWorkflowViewNodeID(placement.NodeID)
-	return nodeID, nodeID != ""
-}
-
-func nullableWorkflowViewNodeID(value sql.NullString) string {
-	if !value.Valid {
-		return ""
-	}
-	return strings.TrimSpace(value.String)
-}
-
 func (s *Service) GetTask(ctx context.Context, taskID string) (serverapi.WorkflowTaskDetail, error) {
 	if s == nil {
 		return serverapi.WorkflowTaskDetail{}, errors.New("workflow view service is required")
@@ -685,10 +681,11 @@ func (s *Service) GetTask(ctx context.Context, taskID string) (serverapi.Workflo
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	def, nodeKinds, err := s.definition(ctx, task.WorkflowID)
+	snapshot, err := s.definitions.snapshot(ctx, task.WorkflowID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
+	def := snapshot.api
 	placements, err := s.queries.ListTaskNodePlacements(ctx, task.ID)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
@@ -730,43 +727,47 @@ func (s *Service) GetTask(ctx context.Context, taskID string) (serverapi.Workflo
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	status := statusFact.Status
-	summary := taskSummary(task, status, statusFact.Done)
-	actions := taskActions(task, summary.Done, placements, runs, def, nodeKinds)
+	facts := s.projector.ProjectTaskFacts(TaskFactsInput{
+		Task:       task,
+		Status:     statusFact,
+		Placements: placements,
+		Runs:       runs,
+		Definition: snapshot,
+	})
 	sourceWorkspace := sourceWorkspaceForTask(task, workspaceContext.byID, workspaceContext.primary)
 	executionTarget, err := s.executionTargetForTask(ctx, task, sourceWorkspace)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	detail := serverapi.WorkflowTaskDetail{Summary: summary, Project: projectBoardProject(project, workspaceContext), Workflow: workflowPickerItem(def, linkByWorkflowID[task.WorkflowID], nil), Body: task.Body, SourceURL: task.SourceUrl, SourceWorkspace: sourceWorkspace, ExecutionTarget: executionTarget, Status: status, Actions: actions}
+	detail := serverapi.WorkflowTaskDetail{Summary: facts.Summary, Project: projectBoardProject(project, workspaceContext), Workflow: workflowPickerItem(def, linkByWorkflowID[task.WorkflowID], nil), Body: task.Body, SourceURL: task.SourceUrl, SourceWorkspace: sourceWorkspace, ExecutionTarget: executionTarget, Status: facts.Status, Actions: facts.Actions}
 	attentionCount, err := s.queries.CountWorkflowTaskAttentionCandidates(ctx, task.ID)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
 	detail.AttentionCount = int(attentionCount)
 	for _, placement := range placements {
-		detail.Placements = append(detail.Placements, placementDTO(placement, nodeByID))
+		detail.Placements = append(detail.Placements, s.projector.ProjectPlacement(PlacementProjectionInput{Placement: placement, Nodes: nodeByID}))
 	}
 	sessionNames, err := s.sessionNamesByRun(ctx, runs)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
 	for _, run := range runs {
-		detail.Runs = append(detail.Runs, runDTO(run, nodeByID, sessionNames))
+		detail.Runs = append(detail.Runs, s.projector.ProjectRun(RunProjectionInput{Run: run, Nodes: nodeByID, SessionNames: sessionNames}))
 	}
 	edgesByTransitionID, err := s.transitionEdgesByTransitionID(ctx, transitions)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
 	for _, transition := range transitions {
-		dto, err := transitionDTO(transition, edgesByTransitionID[transition.ID])
+		dto, err := s.projector.ProjectTransition(TransitionProjectionInput{Transition: transition, Edges: edgesByTransitionID[transition.ID]})
 		if err != nil {
 			return serverapi.WorkflowTaskDetail{}, err
 		}
 		detail.Transitions = append(detail.Transitions, dto)
 	}
 	for _, comment := range comments {
-		detail.Comments = append(detail.Comments, commentDTO(comment))
+		detail.Comments = append(detail.Comments, s.projector.ProjectComment(comment))
 	}
 	return detail, nil
 }
@@ -1213,47 +1214,6 @@ func (s *Service) definition(ctx context.Context, workflowID string) (serverapi.
 	return s.definitions.GetDefinition(ctx, workflowID)
 }
 
-func taskSummary(task sqlitegen.TaskRecord, status serverapi.WorkflowTaskStatus, done bool) serverapi.WorkflowTaskSummary {
-	return serverapi.WorkflowTaskSummary{
-		ID:                task.ID,
-		ProjectID:         task.ProjectID,
-		WorkflowID:        task.WorkflowID,
-		ShortID:           task.ShortID,
-		Title:             task.Title,
-		BodyPreview:       bodyPreview(task.Body),
-		SourceWorkspaceID: strings.TrimSpace(task.SourceWorkspaceID.String),
-		CanceledAt:        metadata.OptionalInt64(task.CanceledAtUnixMs),
-		CancelReason:      metadata.OptionalString(task.CancellationReason),
-		CreatedAtUnixMs:   task.CreatedAtUnixMs,
-		UpdatedAtUnixMs:   task.UpdatedAtUnixMs,
-		Done:              done,
-		ActiveNodeIDs:     append([]string(nil), status.NodeIDs...),
-	}
-}
-
-func placementDTO(placement sqlitegen.TaskNodePlacementRecord, nodes map[string]serverapi.WorkflowNode) serverapi.WorkflowPlacement {
-	nodeID, _ := taskNodePlacementNodeID(placement)
-	dto := serverapi.WorkflowPlacement{ID: placement.ID, TaskID: placement.TaskID, NodeID: nodeID, State: placement.State, ParallelBatchTransitionID: strings.TrimSpace(placement.ParallelBatchTransitionID.String), ParallelBranchEdgeID: strings.TrimSpace(placement.ParallelBranchEdgeID.String)}
-	if node, ok := nodes[nodeID]; ok {
-		dto.NodeKey = node.Key
-		dto.NodeDisplayName = node.DisplayName
-		dto.NodeKind = node.Kind
-	}
-	return dto
-}
-
-func commentDTO(comment sqlitegen.TaskComment) serverapi.WorkflowTaskComment {
-	return serverapi.WorkflowTaskComment{ID: comment.ID, TaskID: comment.TaskID, Body: comment.Body, Author: comment.AuthorKind, AuthorID: comment.AuthorID, CreatedAtUnixMs: comment.CreatedAtUnixMs, UpdatedAt: comment.UpdatedAtUnixMs}
-}
-
-func workflowNodeByID(def serverapi.WorkflowDefinition) map[string]serverapi.WorkflowNode {
-	out := make(map[string]serverapi.WorkflowNode, len(def.Nodes))
-	for _, node := range def.Nodes {
-		out[node.ID] = node
-	}
-	return out
-}
-
 func workflowPickerItem(def serverapi.WorkflowDefinition, link sqlitegen.ProjectWorkflowLinkRecord, validation *workflow.ValidationResult) serverapi.WorkflowPickerItem {
 	item := serverapi.WorkflowPickerItem{WorkflowID: def.Workflow.ID, DisplayName: def.Workflow.Name, Description: def.Workflow.Description, Version: def.Workflow.Version, IsProjectDefault: link.ID != "" && link.IsDefault != 0, ValidForTaskCreation: link.ID != ""}
 	if validation != nil {
@@ -1341,14 +1301,14 @@ func (s *Service) activityItemsFromRows(task sqlitegen.TaskRecord, rows []taskAc
 				return nil, errors.New("activity comment source is missing")
 			}
 			item.Summary = "Comment"
-			dto := commentDTO(comment)
+			dto := s.projector.ProjectComment(comment)
 			item.Comment = &dto
 		case "transition":
 			transition, ok := transitions[row.sourceID]
 			if !ok {
 				return nil, errors.New("activity transition source is missing")
 			}
-			dto, err := transitionDTO(transition, edges[transition.ID])
+			dto, err := s.projector.ProjectTransition(TransitionProjectionInput{Transition: transition, Edges: edges[transition.ID]})
 			if err != nil {
 				return nil, err
 			}
@@ -1364,7 +1324,7 @@ func (s *Service) activityItemsFromRows(task sqlitegen.TaskRecord, rows []taskAc
 			if !ok {
 				return nil, errors.New("activity run source is missing")
 			}
-			runView := runDTO(run, nodes, sessionNames)
+			runView := s.projector.ProjectRun(RunProjectionInput{Run: run, Nodes: nodes, SessionNames: sessionNames})
 			item.Run = &runView
 			switch row.kind {
 			case "run_started":
@@ -1385,91 +1345,6 @@ func (s *Service) activityItemsFromRows(task sqlitegen.TaskRecord, rows []taskAc
 		items = append(items, item)
 	}
 	return items, nil
-}
-
-func runDTO(run sqlitegen.TaskRunRecord, nodes map[string]serverapi.WorkflowNode, sessionNames map[string]string) serverapi.WorkflowRun {
-	nodeID := nullableWorkflowViewNodeID(run.NodeID)
-	dto := serverapi.WorkflowRun{ID: run.ID, TaskID: run.TaskID, PlacementID: run.PlacementID, NodeID: nodeID, SessionID: run.SessionID.String, Generation: run.RunGeneration, StartedAtUnixMs: metadata.OptionalInt64(run.StartedAtUnixMs), CompletedAtUnixMs: metadata.OptionalInt64(run.CompletedAtUnixMs), InterruptedAtUnixMs: metadata.OptionalInt64(run.InterruptedAtUnixMs), InterruptionReason: metadata.OptionalString(run.InterruptionReason), InterruptionDetail: run.InterruptionDetailJson, WaitingAskID: metadata.OptionalString(run.WaitingAskID), Status: runStatus(run)}
-	if node, ok := nodes[nodeID]; ok {
-		dto.NodeKind = node.Kind
-		if node.ScriptPath != nil {
-			dto.ScriptPath = strings.TrimSpace(*node.ScriptPath)
-		}
-		dto.Role = node.SubagentRole
-	}
-	if name, ok := sessionNames[strings.TrimSpace(run.SessionID.String)]; ok {
-		dto.SessionName = name
-	}
-	return dto
-}
-
-func runStatus(run sqlitegen.TaskRunRecord) string {
-	switch {
-	case run.CompletedAtUnixMs.Valid:
-		return "completed"
-	case run.InterruptedAtUnixMs.Valid:
-		return "interrupted"
-	case run.WaitingAskID.Valid:
-		return "waiting_question"
-	case run.StartedAtUnixMs.Valid:
-		return "running"
-	default:
-		return "pending"
-	}
-}
-
-func transitionDTO(transition sqlitegen.TaskTransitionRecord, edges []sqlitegen.TaskTransitionEdgeRecord) (serverapi.WorkflowTaskTransition, error) {
-	outputs := map[string]string{}
-	if err := workflow.UnmarshalString(transition.OutputValuesJson, &outputs); err != nil {
-		return serverapi.WorkflowTaskTransition{}, err
-	}
-	dto := serverapi.WorkflowTaskTransition{
-		ID:                    transition.ID,
-		TaskID:                transition.TaskID,
-		SourceRunID:           strings.TrimSpace(transition.SourceRunID.String),
-		SourcePlacementID:     strings.TrimSpace(transition.SourcePlacementID.String),
-		SourceNodeID:          nullableWorkflowViewNodeID(transition.SourceNodeID),
-		SourceNodeKey:         transition.SourceNodeKey,
-		SourceNodeDisplayName: transition.SourceNodeDisplayName,
-		TransitionGroupID:     strings.TrimSpace(transition.TransitionGroupID.String),
-		TransitionID:          transition.TransitionID,
-		TransitionDisplayName: transition.TransitionDisplayName,
-		WorkflowRevisionSeen:  transition.WorkflowRevisionSeen,
-		Actor:                 transition.Actor,
-		State:                 transition.State,
-		Commentary:            transition.Commentary,
-		OutputValues:          outputs,
-		CreatedAt:             transition.CreatedAtUnixMs,
-		AppliedAtUnixMs:       metadata.OptionalInt64(transition.AppliedAtUnixMs),
-	}
-	for _, edge := range edges {
-		inputs := []serverapi.WorkflowInputBinding{}
-		if err := workflow.UnmarshalString(edge.InputBindingsJson, &inputs); err != nil {
-			return serverapi.WorkflowTaskTransition{}, err
-		}
-		requirements := []serverapi.WorkflowOutputRequirement{}
-		if err := workflow.UnmarshalString(edge.OutputRequirementsJson, &requirements); err != nil {
-			return serverapi.WorkflowTaskTransition{}, err
-		}
-		dto.Edges = append(dto.Edges, serverapi.WorkflowTransitionEdge{
-			ID:                    edge.ID,
-			TaskTransitionID:      edge.TaskTransitionID,
-			WorkflowEdgeID:        strings.TrimSpace(edge.WorkflowEdgeID.String),
-			EdgeKey:               edge.EdgeKey,
-			TargetNodeID:          strings.TrimSpace(edge.TargetNodeID.String),
-			TargetNodeKey:         edge.TargetNodeKey,
-			TargetNodeDisplayName: edge.TargetNodeDisplayName,
-			TargetNodeKind:        edge.TargetNodeKind,
-			TargetPlacementID:     strings.TrimSpace(edge.TargetPlacementID.String),
-			State:                 edge.State,
-			ContextMode:           edge.ContextMode,
-			RequiresApproval:      edge.RequiresApproval != 0,
-			InputBindings:         inputs,
-			OutputRequirements:    requirements,
-			WorkflowRevisionSeen:  edge.WorkflowRevisionSeen,
-		})
-	}
-	return dto, nil
 }
 
 func (s *Service) sessionNamesByRun(ctx context.Context, runs []sqlitegen.TaskRunRecord) (map[string]string, error) {
@@ -2016,138 +1891,15 @@ func boardVisibleNodeKind(kind string) bool {
 	return workflow.NodeKind(kind) != workflow.NodeKindJoin
 }
 
-func (s *Service) taskCard(task sqlitegen.TaskRecord, statusFact workflowTaskStatusFact, placements []sqlitegen.TaskNodePlacementRecord, runs []sqlitegen.TaskRunRecord, def serverapi.WorkflowDefinition, nodeKinds map[string]workflow.NodeKind, sourceWorkspace serverapi.ProjectWorkspaceSummary) (serverapi.WorkflowBoardTaskCard, bool) {
-	done := statusFact.Done || hasActiveTerminalPlacement(placements, nodeKinds)
-	actions := taskActions(task, done, placements, runs, def, nodeKinds)
-	return serverapi.WorkflowBoardTaskCard{TaskID: task.ID, ShortID: task.ShortID, Title: task.Title, Preview: markdownPreview(task.Body), WorkflowID: task.WorkflowID, ActiveNodeIDs: append([]string(nil), statusFact.Status.NodeIDs...), SourceWorkspace: sourceWorkspace, Status: statusFact.Status, Actions: actions, UpdatedAtUnixMs: task.UpdatedAtUnixMs}, done
-}
-
-func hasActiveTerminalPlacement(placements []sqlitegen.TaskNodePlacementRecord, nodeKinds map[string]workflow.NodeKind) bool {
-	for _, placement := range placements {
-		nodeID, ok := taskNodePlacementNodeID(placement)
-		if ok && placement.State == "active" && nodeKinds[nodeID] == workflow.NodeKindTerminal {
-			return true
-		}
-	}
-	return false
-}
-
-func taskActions(task sqlitegen.TaskRecord, done bool, placements []sqlitegen.TaskNodePlacementRecord, runs []sqlitegen.TaskRunRecord, def serverapi.WorkflowDefinition, nodeKinds map[string]workflow.NodeKind) serverapi.WorkflowTaskActions {
-	actions := serverapi.WorkflowTaskActions{CanCancel: !task.CanceledAtUnixMs.Valid && !done}
-	currentPlacementIDs := currentTaskPlacementIDs(placements)
-	runningRunIDs := []string{}
-	interruptedRunIDs := []string{}
-	waitingAskRunIDs := []string{}
-	waitingApproval := false
-	backlog := false
-	for _, placement := range placements {
-		if placement.State == "waiting_approval" {
-			waitingApproval = true
-		}
-		nodeID, ok := taskNodePlacementNodeID(placement)
-		if ok && placement.State == "active" && nodeKinds[nodeID] == workflow.NodeKindStart {
-			backlog = true
-		}
-	}
-	for _, run := range runs {
-		if !currentPlacementIDs[run.PlacementID] {
-			continue
-		}
-		if run.CompletedAtUnixMs.Valid {
-			continue
-		}
-		if run.WaitingAskID.Valid {
-			waitingAskRunIDs = append(waitingAskRunIDs, run.ID)
-		}
-		if run.InterruptedAtUnixMs.Valid {
-			interruptedRunIDs = append(interruptedRunIDs, run.ID)
-			continue
-		}
-		if run.StartedAtUnixMs.Valid {
-			runningRunIDs = append(runningRunIDs, run.ID)
-		}
-	}
-	actions.CanStart = !task.CanceledAtUnixMs.Valid && backlog && !waitingApproval && len(runningRunIDs) == 0 && len(waitingAskRunIDs) == 0
-	taskActive := !task.CanceledAtUnixMs.Valid
-	if taskActive && len(runningRunIDs) == 0 {
-		actions.ManualMoveTargetNodeIDs = manualMoveTargetNodeIDs(def, placements, nodeKinds)
-	}
-	actions.CanInterrupt = taskActive && len(runningRunIDs) >= 1
-	actions.CanResume = taskActive && len(interruptedRunIDs) >= 1
-	return actions
-}
-
-func currentTaskPlacementIDs(placements []sqlitegen.TaskNodePlacementRecord) map[string]bool {
-	ids := make(map[string]bool, len(placements))
-	for _, placement := range placements {
-		if placement.State != "active" && placement.State != "waiting_approval" {
-			continue
-		}
-		ids[placement.ID] = true
-	}
-	return ids
-}
-
-func manualMoveTargetNodeIDs(def serverapi.WorkflowDefinition, placements []sqlitegen.TaskNodePlacementRecord, nodeKinds map[string]workflow.NodeKind) []string {
-	sourceNodeID := ""
-	for _, placement := range placements {
-		nodeID, ok := taskNodePlacementNodeID(placement)
-		if !ok {
-			continue
-		}
-		nodeKind := nodeKinds[nodeID]
-		isCurrentSource := placement.State == "active" || placement.State == "waiting_approval"
-		if !isCurrentSource {
-			continue
-		}
-		if sourceNodeID != "" {
-			return []string{}
-		}
-		if nodeKind == workflow.NodeKindTerminal && placement.State != "active" {
-			return []string{}
-		}
-		sourceNodeID = nodeID
-	}
-	if sourceNodeID == "" {
-		return []string{}
-	}
-	groupIDs := map[string]bool{}
-	for _, group := range def.TransitionGroups {
-		if group.SourceNodeID == sourceNodeID {
-			groupIDs[group.ID] = true
-		}
-	}
-	derivedEdges := workflowDerivedEdgeWiringByID(def.DerivedWiring)
-	targets := []string{}
-	seen := map[string]bool{}
-	for _, node := range def.Nodes {
-		if workflow.NodeKind(node.Kind) == workflow.NodeKindTerminal {
-			if node.ID == sourceNodeID {
-				continue
-			}
-			seen[node.ID] = true
-			targets = append(targets, node.ID)
-		}
-	}
-	for _, edge := range def.Edges {
-		contextSource := workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(edge.ContextSource.Kind), NodeKey: workflow.ModelKey(edge.ContextSource.NodeKey)})
-		if !groupIDs[edge.TransitionGroupID] || edge.RequiresApproval || len(derivedEdges[edge.ID].RequiredProvisionFields) > 0 || contextSource.Kind == workflow.ContextSourceSelectedNode || contextSource.Kind == workflow.ContextSourcePreviousTarget {
-			continue
-		}
-		if !seen[edge.TargetNodeID] {
-			seen[edge.TargetNodeID] = true
-			targets = append(targets, edge.TargetNodeID)
-		}
-	}
-	return targets
-}
-
-func workflowDerivedEdgeWiringByID(derived serverapi.WorkflowDerivedWiring) map[string]serverapi.WorkflowDerivedEdgeWiring {
-	byID := make(map[string]serverapi.WorkflowDerivedEdgeWiring, len(derived.Edges))
-	for _, edge := range derived.Edges {
-		byID[edge.EdgeID] = edge
-	}
-	return byID
+func (s *Service) taskCard(task sqlitegen.TaskRecord, statusFact workflowTaskStatusFact, placements []sqlitegen.TaskNodePlacementRecord, runs []sqlitegen.TaskRunRecord, definition definitionSnapshot, sourceWorkspace serverapi.ProjectWorkspaceSummary) (serverapi.WorkflowBoardTaskCard, bool) {
+	facts := s.projector.ProjectTaskFacts(TaskFactsInput{
+		Task:       task,
+		Status:     statusFact,
+		Placements: placements,
+		Runs:       runs,
+		Definition: definition,
+	})
+	return serverapi.WorkflowBoardTaskCard{TaskID: task.ID, ShortID: task.ShortID, Title: task.Title, Preview: markdownPreview(task.Body), WorkflowID: task.WorkflowID, ActiveNodeIDs: append([]string(nil), facts.Status.NodeIDs...), SourceWorkspace: sourceWorkspace, Status: facts.Status, Actions: facts.Actions, UpdatedAtUnixMs: task.UpdatedAtUnixMs}, facts.Done
 }
 
 func (s *Service) applyBoardColumnTaskCounts(ctx context.Context, columns []serverapi.WorkflowBoardColumn, projectID string, workflowID string, canceledTerminalNodeID *string) error {
@@ -2180,74 +1932,6 @@ func nullableWorkflowViewString(value *string) sql.NullString {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: *value, Valid: true}
-}
-
-func effectiveBoardPlacements(placements []sqlitegen.TaskNodePlacementRecord, nodeKinds map[string]workflow.NodeKind) []sqlitegen.TaskNodePlacementRecord {
-	effective := make([]sqlitegen.TaskNodePlacementRecord, 0, len(placements))
-	for _, placement := range placements {
-		nodeID, ok := taskNodePlacementNodeID(placement)
-		if !ok {
-			continue
-		}
-		nodeKind := nodeKinds[nodeID]
-		if nodeKind == workflow.NodeKindTerminal {
-			if placement.State == "active" {
-				effective = append(effective, placement)
-			}
-			continue
-		}
-		if placement.State == "active" || placement.State == "waiting_approval" {
-			effective = append(effective, placement)
-		}
-	}
-	return effective
-}
-
-func effectiveBoardPlacementsForTask(task sqlitegen.TaskRecord, placements []sqlitegen.TaskNodePlacementRecord, def serverapi.WorkflowDefinition, nodeKinds map[string]workflow.NodeKind) []sqlitegen.TaskNodePlacementRecord {
-	active := effectiveBoardPlacements(placements, nodeKinds)
-	if !task.CanceledAtUnixMs.Valid {
-		return active
-	}
-	terminalNodeID := canceledBoardTerminalNodeID(def)
-	if terminalNodeID == nil {
-		return active
-	}
-	terminalPlacements := make([]sqlitegen.TaskNodePlacementRecord, 0, len(active))
-	for _, placement := range active {
-		nodeID, ok := taskNodePlacementNodeID(placement)
-		if ok && nodeKinds[nodeID] == workflow.NodeKindTerminal {
-			terminalPlacements = append(terminalPlacements, placement)
-		}
-	}
-	if len(terminalPlacements) > 0 {
-		return terminalPlacements
-	}
-	return []sqlitegen.TaskNodePlacementRecord{{
-		ID:              "",
-		TaskID:          task.ID,
-		NodeID:          sql.NullString{String: *terminalNodeID, Valid: true},
-		State:           "active",
-		CreatedAtUnixMs: task.UpdatedAtUnixMs,
-		UpdatedAtUnixMs: task.UpdatedAtUnixMs,
-	}}
-}
-
-func canceledBoardTerminalNodeID(def serverapi.WorkflowDefinition) *string {
-	var fallback *string
-	for _, node := range def.Nodes {
-		if workflow.NodeKind(node.Kind) != workflow.NodeKindTerminal {
-			continue
-		}
-		if fallback == nil {
-			value := node.ID
-			fallback = &value
-		}
-		if node.Key == "done" {
-			value := node.ID
-			return &value
-		}
-	}
-	return fallback
 }
 
 type boardNodeCardsPageCursor struct {

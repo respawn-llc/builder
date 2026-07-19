@@ -313,7 +313,13 @@ func (s *Service) listWorkflowTaskListRows(ctx context.Context, req workflowTask
 	}
 	out := make([]workflowTaskListRow, 0, len(rows))
 	for _, row := range rows {
-		status, err := workflowTaskStatusFromFields(row.ID, row.Kind, row.NodeIdsJson, row.RunIdsJson, row.AttentionTypesJson)
+		statusFact, err := s.projector.DecodeStatus(TaskStatusInput{
+			TaskID:             row.ID,
+			Kind:               row.Kind,
+			NodeIDsJSON:        row.NodeIdsJson,
+			RunIDsJSON:         row.RunIdsJson,
+			AttentionTypesJSON: row.AttentionTypesJson,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -351,7 +357,7 @@ func (s *Service) listWorkflowTaskListRows(ctx context.Context, req workflowTask
 				CreatedAtUnixMs: row.CreatedAtUnixMs,
 				UpdatedAtUnixMs: row.UpdatedAtUnixMs,
 				ColumnKeys:      columnKeys,
-				Status:          status,
+				Status:          statusFact.Status,
 				RunCount:        int(row.RunCount),
 			},
 			titleSort:             row.TitleSort,
