@@ -21,10 +21,12 @@ type LaunchRequest struct {
 
 // Owner owns one started process tree until Close returns.
 type Owner struct {
-	cmd       *exec.Cmd
+	process   processTree
 	done      chan struct{}
 	waitErr   error
 	waitOnce  sync.Once
+	termOnce  sync.Once
+	termErr   error
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -44,13 +46,13 @@ func Launch(request LaunchRequest) (*Owner, error) {
 	cmd.Stdin = request.Stdin
 	cmd.Stdout = request.Stdout
 	cmd.Stderr = request.Stderr
-	prepareCommand(cmd)
-	if err := cmd.Start(); err != nil {
+	process, err := startProcessTree(cmd)
+	if err != nil {
 		return nil, err
 	}
 	owner := &Owner{
-		cmd:  cmd,
-		done: make(chan struct{}),
+		process: process,
+		done:    make(chan struct{}),
 	}
 	go owner.reap()
 	return owner, nil
@@ -65,12 +67,15 @@ func (owner *Owner) Wait() error {
 	return owner.waitErr
 }
 
-// Terminate requests graceful termination of the owned process tree.
+// Terminate requests termination of the owned process tree.
 func (owner *Owner) Terminate() error {
 	if owner == nil {
 		return nil
 	}
-	return terminateTree(owner.cmd.Process)
+	owner.termOnce.Do(func() {
+		owner.termErr = owner.process.Terminate()
+	})
+	return owner.termErr
 }
 
 // Close forcefully removes the owned process tree and joins the root reaper.
@@ -81,26 +86,23 @@ func (owner *Owner) Close() error {
 	}
 	owner.closeOnce.Do(func() {
 		terminateErr := owner.Terminate()
-		killErr := killTree(owner.cmd.Process)
+		killErr := owner.process.Kill()
 		_ = owner.Wait()
-		joinErr := waitTree(owner.cmd.Process)
-		owner.closeErr = firstError(terminateErr, killErr, joinErr)
+		owner.closeErr = errors.Join(terminateErr, killErr, owner.process.Close())
 	})
 	return owner.closeErr
 }
 
 func (owner *Owner) reap() {
 	owner.waitOnce.Do(func() {
-		owner.waitErr = owner.cmd.Wait()
+		owner.waitErr = owner.process.Wait()
 		close(owner.done)
 	})
 }
 
-func firstError(errs ...error) error {
-	for _, err := range errs {
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+type processTree interface {
+	Wait() error
+	Terminate() error
+	Kill() error
+	Close() error
 }

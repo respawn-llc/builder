@@ -3,26 +3,41 @@
 package ownedprocess
 
 import (
-	"os"
 	"os/exec"
+	"sync"
 )
 
-func prepareCommand(*exec.Cmd) {}
-
-func terminateTree(process *os.Process) error {
-	if process == nil {
-		return nil
-	}
-	return process.Kill()
+type otherProcessTree struct {
+	cmd       *exec.Cmd
+	closeOnce sync.Once
+	closeErr  error
 }
 
-func killTree(process *os.Process) error {
-	if process == nil {
-		return nil
+func startProcessTree(cmd *exec.Cmd) (processTree, error) {
+	if err := cmd.Start(); err != nil {
+		return nil, err
 	}
-	return process.Kill()
+	return &otherProcessTree{cmd: cmd}, nil
 }
 
-func waitTree(*os.Process) error {
-	return nil
+func (tree *otherProcessTree) Wait() error {
+	return tree.cmd.Wait()
+}
+
+func (tree *otherProcessTree) Terminate() error {
+	if tree.cmd.Process == nil {
+		return nil
+	}
+	return tree.cmd.Process.Kill()
+}
+
+func (tree *otherProcessTree) Kill() error {
+	return tree.Terminate()
+}
+
+func (tree *otherProcessTree) Close() error {
+	tree.closeOnce.Do(func() {
+		tree.closeErr = nil
+	})
+	return tree.closeErr
 }

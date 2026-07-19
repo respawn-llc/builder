@@ -230,6 +230,14 @@ func scriptProcessExitCode(err error) *int {
 		exitCode := 0
 		return &exitCode
 	}
+	type exitCoder interface {
+		ExitCode() int
+	}
+	var coded exitCoder
+	if errors.As(err, &coded) {
+		exitCode := coded.ExitCode()
+		return &exitCode
+	}
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) {
 		return nil

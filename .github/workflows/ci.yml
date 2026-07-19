@@ -148,6 +148,9 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Test Windows owned process trees
+        run: go test -race ./shared/ownedprocess ./server/workflowrunner -run '^TestWindows' -count=1
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v6.0.9
         with:
