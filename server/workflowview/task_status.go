@@ -26,10 +26,14 @@ func loadWorkflowTaskStatusFact(ctx context.Context, queries *sqlitegen.Queries,
 }
 
 func (s *Service) taskStatusFacts(ctx context.Context, taskIDs []string) (map[string]workflowTaskStatusFact, error) {
+	return loadWorkflowTaskStatusFacts(ctx, s.queries, s.projector, taskIDs)
+}
+
+func loadWorkflowTaskStatusFacts(ctx context.Context, queries *sqlitegen.Queries, projector *TaskProjector, taskIDs []string) (map[string]workflowTaskStatusFact, error) {
 	if len(taskIDs) == 0 {
 		return map[string]workflowTaskStatusFact{}, nil
 	}
-	rows, err := s.queries.ListWorkflowTaskStatusRecordsByTasks(ctx, taskIDs)
+	rows, err := queries.ListWorkflowTaskStatusRecordsByTasks(ctx, taskIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +42,7 @@ func (s *Service) taskStatusFacts(ctx context.Context, taskIDs []string) (map[st
 		if _, exists := statuses[row.TaskID]; exists {
 			return nil, fmt.Errorf("workflow task status projection returned duplicate task %q", row.TaskID)
 		}
-		status, err := workflowTaskStatusFactFromRecord(s.projector, row)
+		status, err := workflowTaskStatusFactFromRecord(projector, row)
 		if err != nil {
 			return nil, err
 		}

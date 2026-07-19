@@ -3,11 +3,8 @@ package workflowview
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -120,7 +117,7 @@ func (s *Service) GetBoard(ctx context.Context, req serverapi.WorkflowBoardReque
 	if s == nil {
 		return serverapi.WorkflowBoard{}, errors.New("workflow view service is required")
 	}
-	board, err := NewBoard(s.metadata, s.definitions, roleResolver)
+	board, err := NewBoard(s.metadata, s.definitions, roleResolver, s.projector)
 	if err != nil {
 		return serverapi.WorkflowBoard{}, err
 	}
@@ -357,200 +354,15 @@ func validateWorkflowTaskListColumnKeys(columnKeys []string, columns []serverapi
 	return nil
 }
 
-func (s *Service) ListBoardNodeCards(ctx context.Context, req serverapi.WorkflowBoardNodeCardsListRequest, _ workflow.RoleResolver) (serverapi.WorkflowBoardNodeCardsListResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-	}
+func (s *Service) ListBoardNodeCards(ctx context.Context, req serverapi.WorkflowBoardNodeCardsListRequest, roleResolver workflow.RoleResolver) (serverapi.WorkflowBoardNodeCardsListResponse, error) {
 	if s == nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, errors.New("workflow view service is required")
 	}
-	projectID := strings.TrimSpace(req.ProjectID)
-	workflowID := strings.TrimSpace(req.WorkflowID)
-	nodeID := strings.TrimSpace(req.NodeID)
-	snapshot, err := s.definitions.snapshot(ctx, workflowID)
+	board, err := NewBoard(s.metadata, s.definitions, roleResolver, s.projector)
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
-	def := snapshot.api
-	if _, ok := workflowNodeByID(def)[nodeID]; !ok {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, errors.New("node_id is invalid for workflow")
-	}
-	pageSize := req.PageSize
-	if pageSize == 0 {
-		pageSize = serverapi.WorkflowBoardNodeCardsMaxPageSize
-	}
-	cursor, err := parseBoardNodeCardsPageToken(req.PageToken, projectID, workflowID, nodeID)
-	if err != nil {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-	}
-	cursorUpdatedAtUnixMs := sql.NullInt64{}
-	cursorTaskID := sql.NullString{}
-	if cursor.anchor != nil {
-		cursorUpdatedAtUnixMs = sql.NullInt64{Int64: cursor.anchor.updatedAtUnixMs, Valid: true}
-		cursorTaskID = sql.NullString{String: cursor.anchor.taskID, Valid: true}
-	}
-	rows, err := s.queries.ListBoardNodeTasks(ctx, sqlitegen.ListBoardNodeTasksParams{
-		ProjectID:              projectID,
-		WorkflowID:             workflowID,
-		CursorDirection:        string(cursor.direction),
-		CursorUpdatedAtUnixMs:  cursorUpdatedAtUnixMs,
-		CursorTaskID:           cursorTaskID,
-		NodeID:                 sql.NullString{String: nodeID, Valid: true},
-		CanceledTerminalNodeID: nullableWorkflowViewString(canceledBoardTerminalNodeID(def)),
-		LimitRows:              int64(pageSize + 1),
-	})
-	if err != nil {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-	}
-	tasks := boardNodeTaskRecords(rows)
-	hasExtra := len(tasks) > pageSize
-	if hasExtra {
-		tasks = tasks[:pageSize]
-	}
-	if cursor.direction == boardNodeCardsPageDirectionNewer {
-		slices.Reverse(tasks)
-	}
-	project, err := s.metadata.GetProjectOverview(ctx, projectID)
-	if err != nil {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-	}
-	workspaceContext := boardProjectWorkspaceContext(project)
-	placementsByTaskID, err := s.boardPlacementsByTask(ctx, tasks)
-	if err != nil {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-	}
-	candidateTaskIDs := make([]string, 0, len(tasks))
-	for _, task := range tasks {
-		candidateTaskIDs = append(candidateTaskIDs, task.ID)
-	}
-	statusesByTaskID, err := s.taskStatusFacts(ctx, candidateTaskIDs)
-	if err != nil {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-	}
-	runsByTaskID, err := s.taskRunsByTask(ctx, tasks)
-	if err != nil {
-		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-	}
-	cards := make([]serverapi.WorkflowBoardTaskCard, 0, len(tasks))
-	for _, task := range tasks {
-		card, _ := s.taskCard(task, statusesByTaskID[task.ID], placementsByTaskID[task.ID], runsByTaskID[task.ID], snapshot, sourceWorkspaceForTask(task, workspaceContext.byID, workspaceContext.primary))
-		cards = append(cards, card)
-	}
-	var previousPageToken *string
-	var nextPageToken *string
-	if len(tasks) > 0 {
-		first := tasks[0]
-		last := tasks[len(tasks)-1]
-		switch cursor.direction {
-		case boardNodeCardsPageDirectionOlder:
-			if cursor.anchor != nil {
-				previousPageToken, err = boardNodeCardsPageToken(projectID, workflowID, nodeID, boardNodeCardsPageDirectionNewer, first)
-				if err != nil {
-					return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-				}
-			}
-			if hasExtra {
-				nextPageToken, err = boardNodeCardsPageToken(projectID, workflowID, nodeID, boardNodeCardsPageDirectionOlder, last)
-				if err != nil {
-					return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-				}
-			}
-		case boardNodeCardsPageDirectionNewer:
-			if hasExtra {
-				previousPageToken, err = boardNodeCardsPageToken(projectID, workflowID, nodeID, boardNodeCardsPageDirectionNewer, first)
-				if err != nil {
-					return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-				}
-			}
-			nextPageToken, err = boardNodeCardsPageToken(projectID, workflowID, nodeID, boardNodeCardsPageDirectionOlder, last)
-			if err != nil {
-				return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-			}
-		default:
-			return serverapi.WorkflowBoardNodeCardsListResponse{}, ErrInvalidPageToken
-		}
-	}
-	return serverapi.WorkflowBoardNodeCardsListResponse{ProjectID: projectID, WorkflowID: workflowID, NodeID: nodeID, Cards: cards, PreviousPageToken: previousPageToken, NextPageToken: nextPageToken, GeneratedAtUnixMs: time.Now().UTC().UnixMilli()}, nil
-}
-
-func boardNodeTaskRecords(rows []sqlitegen.ListBoardNodeTasksRow) []sqlitegen.TaskRecord {
-	tasks := make([]sqlitegen.TaskRecord, 0, len(rows))
-	for _, row := range rows {
-		tasks = append(tasks, sqlitegen.TaskRecord{
-			ID:                          row.ID,
-			ProjectID:                   row.ProjectID,
-			ProjectWorkflowLinkID:       row.ProjectWorkflowLinkID,
-			WorkflowID:                  row.WorkflowID,
-			WorkflowRevisionSeen:        row.WorkflowRevisionSeen,
-			TaskSeq:                     row.TaskSeq,
-			ShortID:                     row.ShortID,
-			Title:                       row.Title,
-			Body:                        row.Body,
-			SourceUrl:                   row.SourceUrl,
-			SourceWorkspaceID:           row.SourceWorkspaceID,
-			ManagedWorktreeID:           row.ManagedWorktreeID,
-			ExecutionTargetMode:         row.ExecutionTargetMode,
-			ExecutionTargetRequestedRef: row.ExecutionTargetRequestedRef,
-			ExecutionTargetResolvedRef:  row.ExecutionTargetResolvedRef,
-			ExecutionTargetCommitOid:    row.ExecutionTargetCommitOid,
-			ExecutionTargetProvenance:   row.ExecutionTargetProvenance,
-			CanceledAtUnixMs:            row.CanceledAtUnixMs,
-			CancellationReason:          row.CancellationReason,
-			CreatedAtUnixMs:             row.CreatedAtUnixMs,
-			UpdatedAtUnixMs:             row.UpdatedAtUnixMs,
-			MetadataJson:                row.MetadataJson,
-		})
-	}
-	return tasks
-}
-
-func (s *Service) boardPlacementsByTask(ctx context.Context, tasks []sqlitegen.TaskRecord) (map[string][]sqlitegen.TaskNodePlacementRecord, error) {
-	if len(tasks) == 0 {
-		return map[string][]sqlitegen.TaskNodePlacementRecord{}, nil
-	}
-	taskIDs := make([]string, 0, len(tasks))
-	for _, task := range tasks {
-		taskIDs = append(taskIDs, task.ID)
-	}
-	placements, err := s.queries.ListTaskNodePlacementsByTasks(ctx, taskIDs)
-	if err != nil {
-		return nil, err
-	}
-	byTaskID := make(map[string][]sqlitegen.TaskNodePlacementRecord, len(tasks))
-	for _, placement := range placements {
-		byTaskID[placement.TaskID] = append(byTaskID[placement.TaskID], placement)
-	}
-	pendingApprovalPlacements, err := s.pendingApprovalSourcePlacementsByTask(ctx, taskIDs)
-	if err != nil {
-		return nil, err
-	}
-	for taskID, taskPlacements := range pendingApprovalPlacements {
-		byTaskID[taskID] = append(byTaskID[taskID], taskPlacements...)
-	}
-	return byTaskID, nil
-}
-
-func (s *Service) taskRunsByTask(ctx context.Context, tasks []sqlitegen.TaskRecord) (map[string][]sqlitegen.TaskRunRecord, error) {
-	if len(tasks) == 0 {
-		return map[string][]sqlitegen.TaskRunRecord{}, nil
-	}
-	taskIDs := make([]string, 0, len(tasks))
-	for _, task := range tasks {
-		taskIDs = append(taskIDs, task.ID)
-	}
-	runs, err := s.queries.ListTaskRunsByTasks(ctx, taskIDs)
-	if err != nil {
-		return nil, err
-	}
-	byTaskID := make(map[string][]sqlitegen.TaskRunRecord, len(tasks))
-	for _, run := range runs {
-		byTaskID[run.TaskID] = append(byTaskID[run.TaskID], run)
-	}
-	return byTaskID, nil
-}
-
-func (s *Service) pendingApprovalSourcePlacementsByTask(ctx context.Context, taskIDs []string) (map[string][]sqlitegen.TaskNodePlacementRecord, error) {
-	return loadPendingApprovalSourcePlacementsByTask(ctx, s.queries, taskIDs)
+	return board.ListNodeCards(ctx, req)
 }
 
 func (s *Service) GetTask(ctx context.Context, taskID string) (serverapi.WorkflowTaskDetail, error) {
@@ -648,101 +460,6 @@ func scriptPathDefinitionValidationErrors(def workflow.Definition, rootPath *str
 		}
 	}
 	return out
-}
-
-func (s *Service) taskCard(task sqlitegen.TaskRecord, statusFact workflowTaskStatusFact, placements []sqlitegen.TaskNodePlacementRecord, runs []sqlitegen.TaskRunRecord, definition definitionSnapshot, sourceWorkspace serverapi.ProjectWorkspaceSummary) (serverapi.WorkflowBoardTaskCard, bool) {
-	facts := s.projector.ProjectTaskFacts(TaskFactsInput{
-		Task:       task,
-		Status:     statusFact,
-		Placements: placements,
-		Runs:       runs,
-		Definition: definition,
-	})
-	return serverapi.WorkflowBoardTaskCard{TaskID: task.ID, ShortID: task.ShortID, Title: task.Title, Preview: markdownPreview(task.Body), WorkflowID: task.WorkflowID, ActiveNodeIDs: append([]string(nil), facts.Status.NodeIDs...), SourceWorkspace: sourceWorkspace, Status: facts.Status, Actions: facts.Actions, UpdatedAtUnixMs: task.UpdatedAtUnixMs}, facts.Done
-}
-
-type boardNodeCardsPageCursor struct {
-	direction boardNodeCardsPageDirection
-	anchor    *boardNodeCardsPageAnchor
-}
-
-type boardNodeCardsPageAnchor struct {
-	updatedAtUnixMs int64
-	taskID          string
-}
-
-type boardNodeCardsPageDirection string
-
-const (
-	boardNodeCardsPageDirectionOlder boardNodeCardsPageDirection = "older"
-	boardNodeCardsPageDirectionNewer boardNodeCardsPageDirection = "newer"
-	boardNodeCardsPageTokenVersion                               = 2
-)
-
-type boardNodeCardsPageTokenPayload struct {
-	Version         int                         `json:"version"`
-	ProjectID       string                      `json:"project_id"`
-	WorkflowID      string                      `json:"workflow_id"`
-	NodeID          string                      `json:"node_id"`
-	UpdatedAtUnixMs int64                       `json:"updated_at_unix_ms"`
-	TaskID          string                      `json:"task_id"`
-	Direction       boardNodeCardsPageDirection `json:"direction"`
-}
-
-func parseBoardNodeCardsPageToken(token *string, projectID string, workflowID string, nodeID string) (boardNodeCardsPageCursor, error) {
-	if token == nil {
-		return boardNodeCardsPageCursor{direction: boardNodeCardsPageDirectionOlder}, nil
-	}
-	if strings.TrimSpace(*token) == "" || strings.TrimSpace(*token) != *token {
-		return boardNodeCardsPageCursor{}, ErrInvalidPageToken
-	}
-	decoded, err := base64.RawURLEncoding.DecodeString(*token)
-	if err != nil {
-		return boardNodeCardsPageCursor{}, ErrInvalidPageToken
-	}
-	var payload boardNodeCardsPageTokenPayload
-	if err := json.Unmarshal(decoded, &payload); err != nil {
-		return boardNodeCardsPageCursor{}, ErrInvalidPageToken
-	}
-	if payload.Version != boardNodeCardsPageTokenVersion ||
-		payload.ProjectID != projectID ||
-		payload.WorkflowID != workflowID ||
-		payload.NodeID != nodeID ||
-		strings.TrimSpace(payload.ProjectID) == "" ||
-		strings.TrimSpace(payload.WorkflowID) == "" ||
-		strings.TrimSpace(payload.NodeID) == "" ||
-		strings.TrimSpace(payload.TaskID) == "" ||
-		payload.TaskID != strings.TrimSpace(payload.TaskID) ||
-		payload.UpdatedAtUnixMs < 0 {
-		return boardNodeCardsPageCursor{}, ErrInvalidPageToken
-	}
-	switch payload.Direction {
-	case boardNodeCardsPageDirectionOlder, boardNodeCardsPageDirectionNewer:
-	default:
-		return boardNodeCardsPageCursor{}, ErrInvalidPageToken
-	}
-	return boardNodeCardsPageCursor{
-		direction: payload.Direction,
-		anchor:    &boardNodeCardsPageAnchor{updatedAtUnixMs: payload.UpdatedAtUnixMs, taskID: payload.TaskID},
-	}, nil
-}
-
-func boardNodeCardsPageToken(projectID string, workflowID string, nodeID string, direction boardNodeCardsPageDirection, task sqlitegen.TaskRecord) (*string, error) {
-	payload := boardNodeCardsPageTokenPayload{
-		Version:         boardNodeCardsPageTokenVersion,
-		ProjectID:       projectID,
-		WorkflowID:      workflowID,
-		NodeID:          nodeID,
-		UpdatedAtUnixMs: task.UpdatedAtUnixMs,
-		TaskID:          task.ID,
-		Direction:       direction,
-	}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	token := base64.RawURLEncoding.EncodeToString(encoded)
-	return &token, nil
 }
 
 func apiContextSource(in workflow.ContextSource) serverapi.WorkflowContextSource {
