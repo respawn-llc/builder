@@ -183,7 +183,7 @@ func TestWorkflowPickerAndAttentionIncludeScriptPathDiagnostics(t *testing.T) {
 	if len(board.WorkflowPicker[0].ValidationErrors) != 1 || board.WorkflowPicker[0].ValidationErrors[0].Code != workflowscript.CodeMissingPath {
 		t.Fatalf("picker validation errors = %+v, want missing script path", board.WorkflowPicker[0].ValidationErrors)
 	}
-	attention, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID}, testsetup.QuestionsEnabled("coder"))
+	attention, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{}, testsetup.QuestionsEnabled("coder"))
 	if err != nil {
 		t.Fatalf("ListAttention: %v", err)
 	}
@@ -1372,7 +1372,7 @@ func TestBoardNodeCardsIgnoreInterruptedRunsFromCompletedPlacementsAfterResetToB
 	if !page.Cards[0].Actions.CanStart || page.Cards[0].Actions.CanResume {
 		t.Fatalf("reset backlog card actions = %+v, want start-only action state", page.Cards[0].Actions)
 	}
-	attention, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID}, testsetup.QuestionsEnabled("coder"))
+	attention, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{}, testsetup.QuestionsEnabled("coder"))
 	if err != nil {
 		t.Fatalf("ListAttention: %v", err)
 	}
@@ -2087,7 +2087,7 @@ func TestTaskDetailProjectsRuntimeApprovalWaitingAskPrompt(t *testing.T) {
 		t.Fatalf("ListTaskAttention: %v", err)
 	}
 	assertRuntimeApprovalQuestionAttention(t, taskAttention.Items, string(task.ID), string(started.RunID), sessionID, askID)
-	list, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID}, testsetup.QuestionsEnabled("coder"))
+	list, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{}, testsetup.QuestionsEnabled("coder"))
 	if err != nil {
 		t.Fatalf("ListAttention: %v", err)
 	}
@@ -2345,7 +2345,7 @@ func TestAttentionListProjectsApprovalQuestionAndInterruptedRun(t *testing.T) {
 		t.Fatalf("InterruptRunGeneration: %v", err)
 	}
 
-	resp, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID}, testsetup.QuestionsEnabled("coder"))
+	resp, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{}, testsetup.QuestionsEnabled("coder"))
 	if err != nil {
 		t.Fatalf("ListAttention: %v", err)
 	}
@@ -2356,14 +2356,14 @@ func TestAttentionListProjectsApprovalQuestionAndInterruptedRun(t *testing.T) {
 	if kinds["approval"].TaskTransitionID != string(pendingApproval.TransitionID) || kinds["question"].AskID != "ask-attention" || kinds["interrupted_run"].TaskID != string(interruptedTask.ID) || kinds["interrupted_run"].RunID != string(interruptedStarted.RunID) || kinds["interrupted_run"].Message != "Run interrupted: manual: role missing" {
 		t.Fatalf("attention items = %+v", resp.Items)
 	}
-	firstPage, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID, PageSize: 1}, testsetup.QuestionsEnabled("coder"))
+	firstPage, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{PageSize: 1}, testsetup.QuestionsEnabled("coder"))
 	if err != nil {
 		t.Fatalf("ListAttention first page: %v", err)
 	}
 	if len(firstPage.Items) != 1 || firstPage.NextPageToken == "" {
 		t.Fatalf("first attention page = %+v, want one item and next token", firstPage)
 	}
-	secondPage, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID, PageSize: 1, PageToken: firstPage.NextPageToken}, testsetup.QuestionsEnabled("coder"))
+	secondPage, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{PageSize: 1, PageToken: firstPage.NextPageToken}, testsetup.QuestionsEnabled("coder"))
 	if err != nil {
 		t.Fatalf("ListAttention second page: %v", err)
 	}
@@ -2411,7 +2411,7 @@ func TestCompletedPlacementQuestionRunIsExcludedFromTaskAndAttentionProjections(
 	if detail.Status.Kind == serverapi.WorkflowTaskStatusKindWaitingQuestion || len(detail.Status.RunIDs) != 0 || len(detail.Status.AttentionTypes) != 0 || detail.AttentionCount != 0 {
 		t.Fatalf("detail = %+v, want no historical question state or attention", detail)
 	}
-	global, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID}, testsetup.QuestionsEnabled("coder"))
+	global, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{}, testsetup.QuestionsEnabled("coder"))
 	if err != nil {
 		t.Fatalf("ListAttention: %v", err)
 	}
@@ -2434,7 +2434,7 @@ func TestCompletedPlacementQuestionRunIsExcludedFromTaskAndAttentionProjections(
 	}
 }
 
-func TestAttentionListFillsPagePastDroppedCandidatesAndScopesTokenToProject(t *testing.T) {
+func TestAttentionListFillsPagePastDroppedCandidates(t *testing.T) {
 	ctx, store, workflowStore, binding := newWorkflowViewTestContextStore(t)
 	view, err := New(store)
 	if err != nil {
@@ -2472,7 +2472,7 @@ func TestAttentionListFillsPagePastDroppedCandidatesAndScopesTokenToProject(t *t
 
 	// With pageSize 1 the dropped candidates fill the first fetch; the page must
 	// still surface the real approval item instead of coming back empty.
-	page, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID, PageSize: 1}, testsetup.QuestionsEnabled("coder"))
+	page, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{PageSize: 1}, testsetup.QuestionsEnabled("coder"))
 	if err != nil {
 		t.Fatalf("ListAttention: %v", err)
 	}
@@ -2483,10 +2483,6 @@ func TestAttentionListFillsPagePastDroppedCandidatesAndScopesTokenToProject(t *t
 		t.Fatal("expected a next page token while candidates remain")
 	}
 
-	// A token minted for this project must be rejected for a different project.
-	if _, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: "project-other", PageSize: 1, PageToken: page.NextPageToken}, testsetup.QuestionsEnabled("coder")); err == nil {
-		t.Fatal("expected attention page token to be rejected for a different project")
-	}
 }
 
 func TestAttentionListExcludesNonActionableInterruptions(t *testing.T) {
@@ -2541,7 +2537,7 @@ func TestAttentionListExcludesNonActionableInterruptions(t *testing.T) {
 			}
 			tt.interrupt(t, ctx, workflowStore, task, started, claimed)
 
-			resp, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID}, testsetup.QuestionsEnabled("coder"))
+			resp, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{}, testsetup.QuestionsEnabled("coder"))
 			if err != nil {
 				t.Fatalf("ListAttention: %v", err)
 			}

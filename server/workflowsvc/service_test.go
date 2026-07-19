@@ -1324,7 +1324,7 @@ func TestServiceInterruptTaskTargetsRunAndCancelsRuntime(t *testing.T) {
 }
 
 func TestServiceInterruptTaskWithCustomReasonDoesNotSurfaceInterruptedRunAttention(t *testing.T) {
-	ctx, service, projectID, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
+	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 	started := startWorkflowServiceTask(t, ctx, service, taskID)
 	if _, err := service.store.ClaimRun(ctx, workflow.RunID(started.RunID), 0); err != nil {
 		t.Fatalf("ClaimRun: %v", err)
@@ -1337,7 +1337,7 @@ func TestServiceInterruptTaskWithCustomReasonDoesNotSurfaceInterruptedRunAttenti
 		t.Fatalf("InterruptWorkflowTask: %v", err)
 	}
 
-	attention, err := service.view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: projectID}, service.roleResolver)
+	attention, err := service.view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{}, service.roleResolver)
 	if err != nil {
 		t.Fatalf("ListAttention: %v", err)
 	}
@@ -1478,6 +1478,62 @@ func TestServiceDeleteWorkflowResolvesInterruptedRunAttention(t *testing.T) {
 	}
 	if len(finalizer.resolvedRuns) != 1 || finalizer.resolvedRuns[0] != workflow.RunID(started.RunID) {
 		t.Fatalf("resolved interrupted runs = %+v, want %s", finalizer.resolvedRuns, started.RunID)
+	}
+}
+
+func TestServiceDeleteWorkflowResolvesInterruptedRunAttentionAcrossProjects(t *testing.T) {
+	ctx, service, firstProject, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	secondProject, err := metadataStore.CreateProjectForWorkspace(ctx, t.TempDir(), "Second workflow attention project")
+	if err != nil {
+		t.Fatalf("CreateProjectForWorkspace: %v", err)
+	}
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, firstProject.ProjectID, workflowID)
+	linkDefaultWorkflowServiceProject(t, ctx, service, secondProject.ProjectID, workflowID)
+
+	interrupt := func(projectID string, workflowID string) workflow.RunID {
+		t.Helper()
+		task := createWorkflowServiceTask(t, ctx, service, serverapi.WorkflowTaskCreateRequest{ProjectID: projectID, Title: "Interrupted task", Body: "Body"})
+		started := startWorkflowServiceTask(t, ctx, service, task.Task.ID)
+		claimed, err := service.store.ClaimRun(ctx, workflow.RunID(started.RunID), 0)
+		if err != nil {
+			t.Fatalf("ClaimRun: %v", err)
+		}
+		if err := service.store.InterruptRunGeneration(ctx, workflow.RunID(started.RunID), claimed.Generation, "workflow_runtime_failed", "{}"); err != nil {
+			t.Fatalf("InterruptRunGeneration: %v", err)
+		}
+		return workflow.RunID(started.RunID)
+	}
+
+	firstRunID := interrupt(firstProject.ProjectID, workflowID)
+	secondRunID := interrupt(secondProject.ProjectID, workflowID)
+	unrelatedWorkflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, secondProject.ProjectID, unrelatedWorkflowID)
+	unrelatedRunID := interrupt(secondProject.ProjectID, unrelatedWorkflowID)
+
+	finalizer := &recordingWorkflowAttentionFinalizer{}
+	service.attentionFinalizer = finalizer
+	preview, err := service.PreviewWorkflowDelete(ctx, serverapi.WorkflowDeletePreviewRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("PreviewWorkflowDelete: %v", err)
+	}
+	if _, err := service.DeleteWorkflow(ctx, serverapi.WorkflowDeleteRequest{
+		WorkflowID:           workflowID,
+		Confirmed:            true,
+		ExpectedVersion:      preview.Impact.Version,
+		ExpectedProjectCount: preview.Impact.ProjectCount,
+		ExpectedLinkCount:    preview.Impact.LinkCount,
+		ExpectedTaskCount:    preview.Impact.TaskCount,
+	}); err != nil {
+		t.Fatalf("DeleteWorkflow: %v", err)
+	}
+
+	resolved := make(map[workflow.RunID]bool, len(finalizer.resolvedRuns))
+	for _, runID := range finalizer.resolvedRuns {
+		resolved[runID] = true
+	}
+	if len(resolved) != 2 || !resolved[firstRunID] || !resolved[secondRunID] || resolved[unrelatedRunID] {
+		t.Fatalf("resolved interrupted runs = %+v, want only target workflow runs %s and %s", finalizer.resolvedRuns, firstRunID, secondRunID)
 	}
 }
 

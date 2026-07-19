@@ -959,7 +959,6 @@ type WorkflowTaskInterruptResponse struct {
 }
 
 type WorkflowAttentionListRequest struct {
-	ProjectID string `json:"project_id,omitempty"`
 	PageSize  int    `json:"page_size,omitempty"`
 	PageToken string `json:"page_token,omitempty"`
 }

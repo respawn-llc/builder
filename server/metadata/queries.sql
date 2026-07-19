@@ -3603,32 +3603,6 @@ WHERE (
 ORDER BY occurred_at_unix_ms DESC, id DESC
 LIMIT sqlc.arg(page_limit);
 
--- name: ListProjectWorkflowAttentionCandidates :many
-SELECT
-    kind,
-    id,
-    project_id,
-    workflow_id,
-    task_id,
-    short_id,
-    title,
-    run_id,
-    session_id,
-    ask_id,
-    task_transition_id,
-    interruption_reason,
-    interruption_detail_json,
-    occurred_at_unix_ms
-FROM workflow_attention_candidates
-WHERE project_id = sqlc.arg(project_id)
-  AND (
-      CAST(sqlc.arg(cursor_active) AS INTEGER) = 0
-      OR occurred_at_unix_ms < sqlc.arg(cursor_occurred_at_unix_ms)
-      OR (occurred_at_unix_ms = sqlc.arg(cursor_occurred_at_unix_ms) AND id < sqlc.arg(cursor_item_id))
-  )
-ORDER BY occurred_at_unix_ms DESC, id DESC
-LIMIT sqlc.arg(page_limit);
-
 -- name: ListWorkflowTaskAttentionCandidates :many
 SELECT
     kind,

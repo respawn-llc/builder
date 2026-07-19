@@ -111,8 +111,10 @@ type workflowInterruptedRunFinalizer interface {
 	ResolveInterruptedRun(context.Context, workflow.RunID)
 }
 
-const workflowAttentionResolutionPageSize = 200
-const workflowAttentionFinalizationTimeout = 5 * time.Second
+const (
+	workflowAttentionResolutionPageSize  = 200
+	workflowAttentionFinalizationTimeout = 5 * time.Second
+)
 
 type taskQuestionAnswerMemoRequest struct {
 	TaskID               string
@@ -462,7 +464,7 @@ func (s *Service) DeleteWorkflow(ctx context.Context, req serverapi.WorkflowDele
 	}
 	var interruptedRunIDs []workflow.RunID
 	if req.Confirmed {
-		interruptedRunIDs = s.workflowInterruptedRunAttentionIDsByWorkflow(ctx, req.WorkflowID, links)
+		interruptedRunIDs = s.workflowInterruptedRunAttentionIDsByWorkflow(ctx, req.WorkflowID)
 	}
 	result, err := s.store.DeleteWorkflow(ctx, workflowstore.WorkflowDeleteRequest{
 		WorkflowID:           workflow.WorkflowID(req.WorkflowID),
@@ -1332,46 +1334,33 @@ func (s *Service) workflowInterruptedRunAttentionIDs(ctx context.Context, taskID
 	return runIDs
 }
 
-func (s *Service) workflowInterruptedRunAttentionIDsByWorkflow(ctx context.Context, workflowID string, links []workflowstore.ProjectWorkflowLinkRecord) []workflow.RunID {
+func (s *Service) workflowInterruptedRunAttentionIDsByWorkflow(ctx context.Context, workflowID string) []workflow.RunID {
 	if s == nil || s.view == nil || strings.TrimSpace(workflowID) == "" {
 		return nil
 	}
-	projectIDs := make([]string, 0, len(links))
-	seenProjects := map[string]bool{}
-	for _, link := range links {
-		projectID := strings.TrimSpace(link.ProjectID)
-		if projectID == "" || seenProjects[projectID] {
-			continue
-		}
-		seenProjects[projectID] = true
-		projectIDs = append(projectIDs, projectID)
-	}
 	runIDs := make([]workflow.RunID, 0)
 	seenRuns := map[string]bool{}
-	for _, projectID := range projectIDs {
-		pageToken := ""
-		for {
-			attention, err := s.view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{
-				ProjectID: projectID,
-				PageSize:  workflowAttentionResolutionPageSize,
-				PageToken: pageToken,
-			}, s.roleResolver)
-			if err != nil {
-				slog.Warn("workflow interrupted-run attention resolution lookup failed", "workflow_id", workflowID, "project_id", projectID, "error", err)
-				break
-			}
-			for _, item := range attention.Items {
-				runID := strings.TrimSpace(item.RunID)
-				if item.Kind == "interrupted_run" && item.WorkflowID != nil && *item.WorkflowID == workflowID && runID != "" && !seenRuns[runID] {
-					seenRuns[runID] = true
-					runIDs = append(runIDs, workflow.RunID(runID))
-				}
-			}
-			if attention.NextPageToken == "" {
-				break
-			}
-			pageToken = attention.NextPageToken
+	pageToken := ""
+	for {
+		attention, err := s.view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{
+			PageSize:  workflowAttentionResolutionPageSize,
+			PageToken: pageToken,
+		}, s.roleResolver)
+		if err != nil {
+			slog.Warn("workflow interrupted-run attention resolution lookup failed", "workflow_id", workflowID, "error", err)
+			break
 		}
+		for _, item := range attention.Items {
+			runID := strings.TrimSpace(item.RunID)
+			if item.Kind == "interrupted_run" && item.WorkflowID != nil && *item.WorkflowID == workflowID && runID != "" && !seenRuns[runID] {
+				seenRuns[runID] = true
+				runIDs = append(runIDs, workflow.RunID(runID))
+			}
+		}
+		if attention.NextPageToken == "" {
+			break
+		}
+		pageToken = attention.NextPageToken
 	}
 	return runIDs
 }
