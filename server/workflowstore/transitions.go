@@ -111,11 +111,15 @@ func (s *Store) ApprovalTransitionProjection(ctx context.Context, transitionID w
 	if id == "" {
 		return ApprovalTransitionProjection{}, ErrTransitionIDRequired
 	}
-	transition, err := s.queries.GetTransitionApprovalState(ctx, id)
+	return approvalTransitionProjection(ctx, s.queries, id)
+}
+
+func approvalTransitionProjection(ctx context.Context, q *sqlitegen.Queries, transitionID string) (ApprovalTransitionProjection, error) {
+	transition, err := q.GetTransitionApprovalState(ctx, transitionID)
 	if err != nil {
 		return ApprovalTransitionProjection{}, err
 	}
-	task, err := s.queries.GetTask(ctx, transition.TaskID)
+	task, err := q.GetTask(ctx, transition.TaskID)
 	if err != nil {
 		return ApprovalTransitionProjection{}, err
 	}
@@ -123,12 +127,16 @@ func (s *Store) ApprovalTransitionProjection(ctx context.Context, transitionID w
 	sessionID := ""
 	if transition.SourceRunID.Valid && strings.TrimSpace(transition.SourceRunID.String) != "" {
 		runID = workflow.RunID(transition.SourceRunID.String)
-		if run, runErr := s.GetRun(ctx, runID); runErr == nil {
-			sessionID = run.SessionID
+		run, err := q.GetTaskRun(ctx, transition.SourceRunID.String)
+		if err != nil {
+			return ApprovalTransitionProjection{}, err
+		}
+		if run.SessionID.Valid {
+			sessionID = run.SessionID.String
 		}
 	}
 	return ApprovalTransitionProjection{
-		TransitionID:     workflow.TransitionID(id),
+		TransitionID:     workflow.TransitionID(transitionID),
 		ProjectID:        task.ProjectID,
 		WorkflowID:       task.WorkflowID,
 		TaskID:           workflow.TaskID(task.ID),
@@ -203,6 +211,10 @@ func (s *Store) approveTransition(ctx context.Context, transitionID workflow.Tra
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	resolvedApproval, err := approvalTransitionProjection(ctx, q, id)
+	if err != nil {
+		return CompleteRunResult{}, err
+	}
 	if requireExecutionTarget && requiresRoot {
 		if err := applyPreparedExecutionTargetMutation(ctx, q, task, targetMutation, now); err != nil {
 			return CompleteRunResult{}, err
@@ -229,7 +241,11 @@ func (s *Store) approveTransition(ctx context.Context, transitionID workflow.Tra
 	if err := touchTaskUpdatedAt(ctx, q, transition.TaskID, now); err != nil {
 		return CompleteRunResult{}, err
 	}
-	result := CompleteRunResult{TransitionID: workflow.TransitionID(id), State: "approved"}
+	result := CompleteRunResult{
+		TransitionID:                          workflow.TransitionID(id),
+		State:                                 "approved",
+		ResolvedApprovalTransitionProjections: []ApprovalTransitionProjection{resolvedApproval},
+	}
 	for _, edge := range edges {
 		if edge.State != "pending" {
 			continue

@@ -252,6 +252,13 @@ func TestManualMoveFromPendingApprovalToBacklogDiscardsApproval(t *testing.T) {
 	if len(moved.ResolvedApprovalTransitionIDs) != 1 || moved.ResolvedApprovalTransitionIDs[0] != approval.TransitionID {
 		t.Fatalf("resolved approval ids = %+v, want %s", moved.ResolvedApprovalTransitionIDs, approval.TransitionID)
 	}
+	if len(moved.ResolvedApprovalTransitionProjections) != 1 {
+		t.Fatalf("resolved approval projections = %+v, want one", moved.ResolvedApprovalTransitionProjections)
+	}
+	projection := moved.ResolvedApprovalTransitionProjections[0]
+	if projection.TransitionID != approval.TransitionID || projection.ProjectID != binding.ProjectID || projection.WorkflowID != string(workflowID) || projection.TaskID != task.ID {
+		t.Fatalf("resolved approval projection = %+v", projection)
+	}
 
 	transitions, err := store.ListTransitions(ctx, task.ID)
 	if err != nil {

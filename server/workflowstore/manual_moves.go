@@ -78,6 +78,7 @@ func (s *Store) ApplyManualMove(ctx context.Context, preparation ManualMovePrepa
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	var resolvedApprovalProjections []ApprovalTransitionProjection
 	if autoApprovedExecutable {
 		if err := applyPreparedExecutionTargetMutation(ctx, q, task, targetMutation, now); err != nil {
 			return ManualMoveResult{}, err
@@ -91,6 +92,11 @@ func (s *Store) ApplyManualMove(ctx context.Context, preparation ManualMovePrepa
 		// placement is already completed). Manually moving it overrides the
 		// proposed transition: reject the pending approval so the task leaves
 		// the approval state, then continue with the move below.
+		projection, err := approvalTransitionProjection(ctx, q, pendingApprovalTransitionID)
+		if err != nil {
+			return ManualMoveResult{}, err
+		}
+		resolvedApprovalProjections = append(resolvedApprovalProjections, projection)
 		if err := rejectPendingApprovalTransition(ctx, q, pendingApprovalTransitionID); err != nil {
 			return ManualMoveResult{}, err
 		}
@@ -129,7 +135,12 @@ func (s *Store) ApplyManualMove(ctx context.Context, preparation ManualMovePrepa
 	if err := q.InsertTaskTransition(ctx, sqlitegen.InsertTaskTransitionParams{ID: transitionID, TaskID: string(req.TaskID), SourceRunID: sql.NullString{String: string(sourceRunID), Valid: sourceRunID != ""}, SourcePlacementID: sql.NullString{String: string(sourcePlacement), Valid: true}, SourceNodeKey: string(workflow.NodeKey(prepared.sourceNode)), SourceNodeDisplayName: workflow.NodeDisplayName(prepared.sourceNode), TransitionID: groupSnapshot.TransitionID, TransitionDisplayName: groupSnapshot.DisplayName, WorkflowRevisionSeen: task.WorkflowRevisionSeen, Actor: prepared.actor, State: transitionState, Commentary: strings.TrimSpace(req.Commentary), OutputValuesJson: prepared.outputValuesJSON, CreatedAtUnixMs: now, AppliedAtUnixMs: appliedAt}); err != nil {
 		return ManualMoveResult{}, err
 	}
-	result := ManualMoveResult{TransitionID: workflow.TransitionID(transitionID), State: transitionState, RequiresApproval: edge.RequiresApproval}
+	result := ManualMoveResult{
+		TransitionID:                          workflow.TransitionID(transitionID),
+		State:                                 transitionState,
+		RequiresApproval:                      edge.RequiresApproval,
+		ResolvedApprovalTransitionProjections: resolvedApprovalProjections,
+	}
 	if pendingApprovalTransitionID != "" {
 		result.ResolvedApprovalTransitionIDs = []workflow.TransitionID{workflow.TransitionID(pendingApprovalTransitionID)}
 	}

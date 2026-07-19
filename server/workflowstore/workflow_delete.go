@@ -145,37 +145,11 @@ func workflowDeleteApprovalTransitionProjections(ctx context.Context, q *sqliteg
 		if strings.TrimSpace(id) == "" {
 			continue
 		}
-		transition, err := q.GetTransitionApprovalState(ctx, id)
+		projection, err := approvalTransitionProjection(ctx, q, id)
 		if err != nil {
 			return nil, err
 		}
-		task, err := q.GetTask(ctx, transition.TaskID)
-		if err != nil {
-			return nil, err
-		}
-		runID := workflow.RunID("")
-		sessionID := ""
-		if transition.SourceRunID.Valid && strings.TrimSpace(transition.SourceRunID.String) != "" {
-			runID = workflow.RunID(transition.SourceRunID.String)
-			run, err := q.GetTaskRun(ctx, transition.SourceRunID.String)
-			if err != nil {
-				return nil, err
-			}
-			if run.SessionID.Valid {
-				sessionID = run.SessionID.String
-			}
-		}
-		out = append(out, ApprovalTransitionProjection{
-			TransitionID:     workflow.TransitionID(id),
-			ProjectID:        task.ProjectID,
-			WorkflowID:       task.WorkflowID,
-			TaskID:           workflow.TaskID(task.ID),
-			TaskShortID:      task.ShortID,
-			TaskTitle:        task.Title,
-			SourceRunID:      runID,
-			SessionID:        sessionID,
-			OccurredAtUnixMs: transition.CreatedAtUnixMs,
-		})
+		out = append(out, projection)
 	}
 	return out, nil
 }

@@ -108,13 +108,14 @@ type ResetProtocolViolationBudgetRequest struct {
 }
 
 type CompleteRunResult struct {
-	TransitionID                  workflow.TransitionID
-	State                         string
-	PlacementIDs                  []workflow.PlacementID
-	RunIDs                        []workflow.RunID
-	InterruptedRunIDs             []workflow.RunID
-	RequiresApproval              bool
-	ResolvedApprovalTransitionIDs []workflow.TransitionID
+	TransitionID                          workflow.TransitionID
+	State                                 string
+	PlacementIDs                          []workflow.PlacementID
+	RunIDs                                []workflow.RunID
+	InterruptedRunIDs                     []workflow.RunID
+	RequiresApproval                      bool
+	ResolvedApprovalTransitionIDs         []workflow.TransitionID
+	ResolvedApprovalTransitionProjections []ApprovalTransitionProjection
 }
 
 type ManualMoveRequest struct {

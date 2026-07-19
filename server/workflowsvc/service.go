@@ -1199,6 +1199,7 @@ func (s *Service) finalizeWorkflowAttention(ctx context.Context, result workflow
 		TransitionID:                  result.TransitionID,
 		State:                         result.State,
 		ResolvedApprovalTransitionIDs: append([]workflow.TransitionID(nil), result.ResolvedApprovalTransitionIDs...),
+		ResolvedApprovalProjections:   workflowApprovalProjections(result.ResolvedApprovalTransitionProjections),
 	})
 	for _, runID := range result.InterruptedRunIDs {
 		if runID == "" {
@@ -1375,6 +1376,13 @@ func (s *Service) finalizeWorkflowApprovalProjections(ctx context.Context, proje
 	if s == nil || s.attentionFinalizer == nil || len(projections) == 0 {
 		return
 	}
+	resolved := workflowApprovalProjections(projections)
+	finalizeCtx, cancel := workflowAttentionContext(ctx)
+	defer cancel()
+	s.attentionFinalizer.FinalizeTransition(finalizeCtx, workflowattention.TransitionResult{ResolvedApprovalProjections: resolved})
+}
+
+func workflowApprovalProjections(projections []workflowstore.ApprovalTransitionProjection) []workflowattention.ApprovalProjection {
 	resolved := make([]workflowattention.ApprovalProjection, 0, len(projections))
 	for _, projection := range projections {
 		resolved = append(resolved, workflowattention.ApprovalProjection{
@@ -1386,13 +1394,11 @@ func (s *Service) finalizeWorkflowApprovalProjections(ctx context.Context, proje
 			TaskTitle:        projection.TaskTitle,
 			RunID:            string(projection.SourceRunID),
 			SessionID:        projection.SessionID,
-			Message:          "action required",
+			Message:          workflowattention.ApprovalRequiredMessage,
 			OccurredAtUnixMs: projection.OccurredAtUnixMs,
 		})
 	}
-	finalizeCtx, cancel := workflowAttentionContext(ctx)
-	defer cancel()
-	s.attentionFinalizer.FinalizeTransition(finalizeCtx, workflowattention.TransitionResult{ResolvedApprovalProjections: resolved})
+	return resolved
 }
 
 func workflowAttentionContext(ctx context.Context) (context.Context, context.CancelFunc) {

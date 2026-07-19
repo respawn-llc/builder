@@ -12,6 +12,7 @@ import (
 
 	"core/internal/testharness/testsetup"
 	"core/prompts"
+	"core/server/attentionnotify"
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/requestmemo"
@@ -1068,38 +1069,61 @@ func TestServiceMoveTaskAutoApprovedReplacementResolvesOldPendingApproval(t *tes
 	}
 }
 
+func TestServiceApproveCompletionResolvesCapturedApprovalWithFreshFinalizer(t *testing.T) {
+	ctx, service, projectID, workflowID, taskID, transitionID := newWorkflowServicePendingCompletionApproval(t)
+	publisher := &recordingWorkflowAttentionPublisher{}
+	service.attentionFinalizer = workflowattention.NewFinalizer(failingWorkflowPendingProjectionProvider{t: t}, publisher)
+
+	_, err := service.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		TaskTransitionID: transitionID,
+	})
+	if err != nil {
+		t.Fatalf("ApproveWorkflowTask: %v", err)
+	}
+	if len(publisher.resolved) != 1 {
+		t.Fatalf("resolved notifications = %+v, want one", publisher.resolved)
+	}
+	resolved := publisher.resolved[0]
+	if resolved.scope.ProjectID != projectID || resolved.scope.WorkflowID != workflowID || resolved.scope.TaskID != taskID {
+		t.Fatalf("resolved scope = %+v", resolved.scope)
+	}
+}
+
+func TestServiceManualMoveResolvesCapturedApprovalWithFreshFinalizer(t *testing.T) {
+	fixture := newWorkflowServicePendingApprovalFixture(t)
+	publisher := &recordingWorkflowAttentionPublisher{}
+	fixture.service.attentionFinalizer = workflowattention.NewFinalizer(failingWorkflowPendingProjectionProvider{t: t}, publisher)
+
+	_, err := fixture.service.MoveWorkflowTask(fixture.ctx, serverapi.WorkflowTaskMoveRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		TaskID:           fixture.taskID,
+		TargetNodeID:     fixture.planID,
+		AllowMissingEdge: true,
+		AutoApprove:      true,
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		},
+	})
+	if err != nil {
+		t.Fatalf("MoveWorkflowTask: %v", err)
+	}
+	if len(publisher.resolved) != 1 {
+		t.Fatalf("resolved notifications = %+v, want one", publisher.resolved)
+	}
+	resolved := publisher.resolved[0]
+	if resolved.scope.ProjectID == "" || resolved.scope.WorkflowID != fixture.workflowID || resolved.scope.TaskID != fixture.taskID {
+		t.Fatalf("resolved scope = %+v", resolved.scope)
+	}
+}
+
 func TestServiceApproveTerminalTransitionDoesNotResolveExecutionTarget(t *testing.T) {
-	ctx, service, _, workflowID, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
-	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
-	if err != nil {
-		t.Fatalf("GetWorkflow: %v", err)
-	}
-	var doneEdge serverapi.WorkflowEdge
-	for _, edge := range def.Definition.Edges {
-		if edge.Key == "done" {
-			doneEdge = edge
-			break
-		}
-	}
-	if doneEdge.ID == "" {
-		t.Fatalf("missing done edge in %+v", def.Definition.Edges)
-	}
-	if _, err := service.store.UpdateEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID(doneEdge.ID), WorkflowID: workflow.WorkflowID(workflowID), TransitionGroupID: workflow.TransitionGroupID(doneEdge.TransitionGroupID), Key: workflow.ModelKey(doneEdge.Key), TargetNodeID: workflow.NodeID(doneEdge.TargetNodeID), RequiresApproval: true, ContextMode: workflow.ContextMode(doneEdge.ContextMode), ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(doneEdge.ContextSource.Kind), NodeKey: workflow.ModelKey(doneEdge.ContextSource.NodeKey)}), PromptTemplate: doneEdge.PromptTemplate, Parameters: domainParameters(doneEdge.Parameters)}); err != nil {
-		t.Fatalf("enable done edge approval: %v", err)
-	}
-	started := startWorkflowServiceTask(t, ctx, service, taskID)
-	completed, err := service.store.CompleteRun(ctx, workflowstore.CompleteRunRequest{RunID: workflow.RunID(started.RunID), TransitionID: "done", Actor: "agent"})
-	if err != nil {
-		t.Fatalf("CompleteRun: %v", err)
-	}
-	if completed.State != "pending_approval" {
-		t.Fatalf("completion = %+v, want pending approval", completed)
-	}
+	ctx, service, _, _, _, transitionID := newWorkflowServicePendingCompletionApproval(t)
 	service.executionTargets = &recordingExecutionTargetInfrastructure{
 		resolveErr: errors.New("terminal approval must not resolve an execution target"),
 	}
 
-	approvedResponse, err := service.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskTransitionID: string(completed.TransitionID)})
+	approvedResponse, err := service.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskTransitionID: transitionID})
 	if err != nil {
 		t.Fatalf("ApproveWorkflowTask: %v", err)
 	}
@@ -1604,6 +1628,41 @@ func (n *recordingSchedulerNotifier) Notify() {
 type recordingWorkflowAttentionFinalizer struct {
 	results      []workflowattention.TransitionResult
 	resolvedRuns []workflow.RunID
+}
+
+type failingWorkflowPendingProjectionProvider struct {
+	t *testing.T
+}
+
+func (p failingWorkflowPendingProjectionProvider) PendingApprovalProjection(context.Context, workflow.TransitionID) (workflowattention.ApprovalProjection, bool, error) {
+	p.t.Fatal("pending approval projection read during captured resolution")
+	return workflowattention.ApprovalProjection{}, false, nil
+}
+
+func (p failingWorkflowPendingProjectionProvider) PendingInterruptedRunProjection(context.Context, workflow.RunID) (workflowattention.InterruptedRunProjection, bool, error) {
+	p.t.Fatal("pending interrupted-run projection read during captured resolution")
+	return workflowattention.InterruptedRunProjection{}, false, nil
+}
+
+type workflowResolvedPublication struct {
+	scope attentionnotify.RoutingScope
+	id    clientui.AttentionNotificationID
+	kind  clientui.AttentionNotificationKind
+}
+
+type recordingWorkflowAttentionPublisher struct {
+	pending  []clientui.AttentionNotification
+	resolved []workflowResolvedPublication
+}
+
+func (p *recordingWorkflowAttentionPublisher) PublishPending(_ attentionnotify.RoutingScope, notification clientui.AttentionNotification) error {
+	p.pending = append(p.pending, notification)
+	return nil
+}
+
+func (p *recordingWorkflowAttentionPublisher) PublishResolved(scope attentionnotify.RoutingScope, id clientui.AttentionNotificationID, kind clientui.AttentionNotificationKind, _ time.Time) error {
+	p.resolved = append(p.resolved, workflowResolvedPublication{scope: scope, id: id, kind: kind})
+	return nil
 }
 
 func (f *recordingWorkflowAttentionFinalizer) FinalizeTransition(_ context.Context, result workflowattention.TransitionResult) {
@@ -2117,6 +2176,41 @@ func newWorkflowServiceOrdinaryTaskFixture(t *testing.T) (context.Context, *Serv
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
 	return ctx, service, binding.ProjectID, workflowID, task.Task.ID
+}
+
+func newWorkflowServicePendingCompletionApproval(t *testing.T) (context.Context, *Service, string, string, string, string) {
+	t.Helper()
+	ctx, service, projectID, workflowID, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
+	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	var doneEdge serverapi.WorkflowEdge
+	for _, edge := range def.Definition.Edges {
+		if edge.Key == "done" {
+			doneEdge = edge
+			break
+		}
+	}
+	if doneEdge.ID == "" {
+		t.Fatalf("missing done edge in %+v", def.Definition.Edges)
+	}
+	if _, err := service.store.UpdateEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID(doneEdge.ID), WorkflowID: workflow.WorkflowID(workflowID), TransitionGroupID: workflow.TransitionGroupID(doneEdge.TransitionGroupID), Key: workflow.ModelKey(doneEdge.Key), TargetNodeID: workflow.NodeID(doneEdge.TargetNodeID), RequiresApproval: true, ContextMode: workflow.ContextMode(doneEdge.ContextMode), ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(doneEdge.ContextSource.Kind), NodeKey: workflow.ModelKey(doneEdge.ContextSource.NodeKey)}), PromptTemplate: doneEdge.PromptTemplate, Parameters: domainParameters(doneEdge.Parameters)}); err != nil {
+		t.Fatalf("enable done edge approval: %v", err)
+	}
+	started := startWorkflowServiceTask(t, ctx, service, taskID)
+	completed, err := service.store.CompleteRun(ctx, workflowstore.CompleteRunRequest{
+		RunID:        workflow.RunID(started.RunID),
+		TransitionID: "done",
+		Actor:        "agent",
+	})
+	if err != nil {
+		t.Fatalf("CompleteRun: %v", err)
+	}
+	if completed.State != "pending_approval" {
+		t.Fatalf("completion = %+v, want pending approval", completed)
+	}
+	return ctx, service, projectID, workflowID, taskID, string(completed.TransitionID)
 }
 
 type workflowServicePendingApprovalFixture struct {
