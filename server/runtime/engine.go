@@ -423,11 +423,7 @@ func (e *Engine) seedTranscriptLiveToolsFromDanglingToolCalls(stepID string) err
 		if restored, ok := e.transcriptRuntimeState().ToolCallSnapshot(start.ToolCallID); ok {
 			call = restored
 		}
-		if err := e.steer(stepID, steerEventIntent(Event{
-			Kind:     EventToolCallStarted,
-			StepID:   stepID,
-			ToolCall: &call,
-		})); err != nil {
+		if err := e.publishRecoveredToolStart(stepID, call); err != nil {
 			return fmt.Errorf("publish recovered tool start %q: %w", start.ToolCallID, err)
 		}
 	}
@@ -729,7 +725,9 @@ func (e *Engine) submitUserShellCommand(ctx context.Context, command string, onA
 		}
 		if _, ok := e.registry.Get(toolspec.ToolExecCommand); !ok {
 			transcriptCall := normalizeToolCallForTranscript(call, e.transcriptWorkingDir())
-			_ = e.steer(stepID, steerEventIntent(Event{Kind: EventToolCallStarted, StepID: stepID, ToolCall: &transcriptCall, CommittedTranscriptChanged: true}))
+			if startErr := e.publishLiveExecutionToolStart(stepID, transcriptCall, nil); startErr != nil {
+				return startErr
+			}
 			result = tools.Result{CallID: call.ID, Name: toolspec.ToolExecCommand, IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: "unknown tool"}
 			if err := e.steer(stepID, steerToolCompletionIntent(result)); err != nil {
 				return fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, call.ID, result.Name, err)

@@ -44,12 +44,11 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 		knownTool := prepared.knownTool
 		executableCall := prepared.call
 		transcriptCall := normalizeToolCallForTranscript(executableCall, workingDir)
-		started := Event{Kind: EventToolCallStarted, StepID: stepID, ToolCall: &transcriptCall, CommittedTranscriptChanged: true}
+		var committedEntryStart *int
 		if start, ok := e.pendingToolCallStart(call.ID); ok {
-			started.CommittedEntryStart = start
-			started.CommittedEntryStartSet = true
+			committedEntryStart = &start
 		}
-		if err := e.steer(stepID, steerEventIntent(started)); err != nil {
+		if err := e.publishLiveExecutionToolStart(stepID, transcriptCall, committedEntryStart); err != nil {
 			callErrs[i] = fmt.Errorf("persist tool started (call_id=%s tool=%s): %w", call.ID, executableCall.Name, err)
 			continue
 		}

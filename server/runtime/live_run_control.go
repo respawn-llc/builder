@@ -17,6 +17,7 @@ var ErrLiveRunNoFinalAnswer = errors.New("live run completed without a final ans
 
 type LiveRunResultKind string
 type LiveRunNoFinalAnswerReason string
+type liveStepToolStartCount uint8
 
 const (
 	LiveRunResultAssistantFinalAnswer LiveRunResultKind = "assistant_final_answer"
@@ -29,11 +30,18 @@ const (
 	LiveRunNoFinalAnswerReasonUnknown    LiveRunNoFinalAnswerReason = "unknown"
 )
 
+const (
+	liveStepToolStartsNone liveStepToolStartCount = iota
+	liveStepToolStartsOne
+	liveStepToolStartsMultiple
+)
+
 type LiveRunResult struct {
 	GroupID          runtimeids.LiveRunGroupID
 	RunID            runtimeids.RunID
 	StepID           runtimeids.StepID
 	Status           RunStatus
+	WorkPerformed    bool
 	ResultKind       LiveRunResultKind
 	NoFinalReason    LiveRunNoFinalAnswerReason
 	AssistantMessage llm.Message
@@ -61,6 +69,8 @@ type liveRunGroup struct {
 	id               runtimeids.LiveRunGroupID
 	runID            runtimeids.RunID
 	stepID           runtimeids.StepID
+	stepToolStarts   liveStepToolStartCount
+	workPerformed    bool
 	goalLoop         bool
 	status           RunStatus
 	resultKind       LiveRunResultKind
@@ -261,6 +271,32 @@ func (e *Engine) recordLiveRunAssistantFinalAnswer(stepID string, message llm.Me
 	e.liveRun.recordAssistantFinalAnswer(stepID, message)
 }
 
+func (e *Engine) publishLiveExecutionToolStart(stepID string, call llm.ToolCall, committedEntryStart *int) error {
+	event := Event{
+		Kind:                       EventToolCallStarted,
+		StepID:                     stepID,
+		ToolCall:                   &call,
+		CommittedTranscriptChanged: true,
+	}
+	if committedEntryStart != nil {
+		event.CommittedEntryStart = *committedEntryStart
+		event.CommittedEntryStartSet = true
+	}
+	if err := e.steer(stepID, steerEventIntent(event)); err != nil {
+		return err
+	}
+	e.liveRun.recordAcceptedToolStart(stepID)
+	return nil
+}
+
+func (e *Engine) publishRecoveredToolStart(stepID string, call llm.ToolCall) error {
+	return e.steer(stepID, steerEventIntent(Event{
+		Kind:     EventToolCallStarted,
+		StepID:   stepID,
+		ToolCall: &call,
+	}))
+}
+
 func (e *Engine) completeLiveRunQueueItems(ids map[string]struct{}) {
 	if e == nil || len(ids) == 0 {
 		return
@@ -351,6 +387,7 @@ func (c *liveRunCoordinator) beginStep(snapshot *RunSnapshot) {
 	if c.current != nil {
 		c.current.runID = mustRunID(snapshot.RunID)
 		c.current.stepID = mustStepID(snapshot.StepID)
+		c.current.stepToolStarts = liveStepToolStartsNone
 		c.current.goalLoop = snapshot.GoalLoop
 		c.current.status = RunStatusRunning
 		c.current.resultKindSet = false
@@ -385,6 +422,9 @@ func (c *liveRunCoordinator) finishStep(snapshot *RunSnapshot, status RunStatus,
 	group.status = status
 	group.err = err
 	group.finishedAt = snapshot.FinishedAt
+	if group.stepToolStarts == liveStepToolStartsMultiple {
+		group.workPerformed = true
+	}
 	if !group.resultKindSet {
 		group.resultKind = LiveRunResultNoFinalAnswer
 		group.resultKindSet = true
@@ -421,6 +461,17 @@ func (c *liveRunCoordinator) finishStep(snapshot *RunSnapshot, status RunStatus,
 		close(done)
 	}
 	return nil
+}
+
+func (c *liveRunCoordinator) recordAcceptedToolStart(stepID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.current == nil || c.current.stepID != mustStepID(stepID) {
+		return
+	}
+	if c.current.stepToolStarts < liveStepToolStartsMultiple {
+		c.current.stepToolStarts++
+	}
 }
 
 func (c *liveRunCoordinator) finishGoalLoop() {
@@ -741,6 +792,7 @@ func (h *LiveRunWaitHandle) Wait() (LiveRunResult, error) {
 		RunID:            h.group.runID,
 		StepID:           h.group.stepID,
 		Status:           h.group.status,
+		WorkPerformed:    h.group.workPerformed,
 		ResultKind:       h.group.resultKind,
 		NoFinalReason:    h.group.noFinalReason,
 		AssistantMessage: h.group.assistantMessage,

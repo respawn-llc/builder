@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/shared/runtimeids"
+	"core/shared/toolspec"
 )
 
 func TestLiveRunWaitIdleReturnsNoActive(t *testing.T) {
@@ -48,6 +50,324 @@ func TestCapturedActiveRunResultSurvivesFastCompletion(t *testing.T) {
 	}
 	if result.AssistantMessage.Content != "fast final" {
 		t.Fatalf("captured final = %q, want fast final", result.AssistantMessage.Content)
+	}
+}
+
+func TestCapturedActiveRunResultReportsWorkAfterTwoSuccessfulLocalToolStarts(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{responses: []llm.Response{
+		commentaryResponse("working",
+			llm.ToolCall{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"true"}`)},
+			llm.ToolCall{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"true"}`)},
+		),
+		finalTextResponse("done"),
+	}}
+	eng := mustNewFakeToolEngine(t, store, client, Config{Model: "gpt-5"}, toolspec.ToolExecCommand)
+
+	var handle *LiveRunWaitHandle
+	var captureErr error
+	if _, err := eng.SubmitUserMessageWithHooks(context.Background(), "run two tools", func() {
+		handle, captureErr = eng.CaptureActiveRunResult(context.Background())
+	}, nil); err != nil {
+		t.Fatalf("SubmitUserMessageWithHooks: %v", err)
+	}
+	if captureErr != nil || handle == nil {
+		t.Fatalf("CaptureActiveRunResult handle=%v err=%v, want captured active run", handle, captureErr)
+	}
+	result, err := handle.Wait()
+	if err != nil {
+		t.Fatalf("captured live wait: %v", err)
+	}
+	if !result.WorkPerformed {
+		t.Fatal("two accepted local tool starts reported no work performed")
+	}
+}
+
+func TestCapturedActiveRunResultDoesNotReportWorkAfterOneSuccessfulLocalToolStart(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{responses: []llm.Response{
+		commentaryResponse("working",
+			llm.ToolCall{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"true"}`)},
+		),
+		finalTextResponse("done"),
+	}}
+	eng := mustNewFakeToolEngine(t, store, client, Config{Model: "gpt-5"}, toolspec.ToolExecCommand)
+
+	var handle *LiveRunWaitHandle
+	var captureErr error
+	if _, err := eng.SubmitUserMessageWithHooks(context.Background(), "run one tool", func() {
+		handle, captureErr = eng.CaptureActiveRunResult(context.Background())
+	}, nil); err != nil {
+		t.Fatalf("SubmitUserMessageWithHooks: %v", err)
+	}
+	if captureErr != nil || handle == nil {
+		t.Fatalf("CaptureActiveRunResult handle=%v err=%v, want captured active run", handle, captureErr)
+	}
+	result, err := handle.Wait()
+	if err != nil {
+		t.Fatalf("captured live wait: %v", err)
+	}
+	if result.WorkPerformed {
+		t.Fatal("one accepted local tool start reported work performed")
+	}
+}
+
+func TestCapturedActiveRunResultCountsUnknownToolStartsAsWork(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{responses: []llm.Response{
+		commentaryResponse("trying tools",
+			llm.ToolCall{ID: "unknown-1", Name: "definitely_unknown", Input: json.RawMessage(`{}`)},
+			llm.ToolCall{ID: "unknown-2", Name: "still_unknown", Input: json.RawMessage(`{}`)},
+		),
+		finalTextResponse("done"),
+	}}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+
+	var handle *LiveRunWaitHandle
+	var captureErr error
+	if _, err := eng.SubmitUserMessageWithHooks(context.Background(), "try unknown tools", func() {
+		handle, captureErr = eng.CaptureActiveRunResult(context.Background())
+	}, nil); err != nil {
+		t.Fatalf("SubmitUserMessageWithHooks: %v", err)
+	}
+	if captureErr != nil || handle == nil {
+		t.Fatalf("CaptureActiveRunResult handle=%v err=%v, want captured active run", handle, captureErr)
+	}
+	result, err := handle.Wait()
+	if err != nil {
+		t.Fatalf("captured live wait: %v", err)
+	}
+	if !result.WorkPerformed {
+		t.Fatal("two accepted unknown-tool starts reported no work performed")
+	}
+}
+
+func TestCapturedActiveRunResultCountsStartsForToolsThatLaterFail(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{responses: []llm.Response{
+		commentaryResponse("trying tools",
+			llm.ToolCall{ID: "failing-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"false"}`)},
+			llm.ToolCall{ID: "failing-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"false"}`)},
+		),
+		finalTextResponse("done"),
+	}}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{
+		ID:      toolspec.ToolExecCommand,
+		Handler: toolErrorHandler{},
+	}), Config{Model: "gpt-5"})
+
+	var handle *LiveRunWaitHandle
+	var captureErr error
+	if _, err := eng.SubmitUserMessageWithHooks(context.Background(), "run failing tools", func() {
+		handle, captureErr = eng.CaptureActiveRunResult(context.Background())
+	}, nil); err == nil {
+		t.Fatal("SubmitUserMessageWithHooks unexpectedly hid tool execution errors")
+	}
+	if captureErr != nil || handle == nil {
+		t.Fatalf("CaptureActiveRunResult handle=%v err=%v, want captured active run", handle, captureErr)
+	}
+	result, waitErr := handle.Wait()
+	if waitErr == nil {
+		t.Fatal("captured live wait unexpectedly hid tool execution errors")
+	}
+	if !result.WorkPerformed {
+		t.Fatal("two accepted starts for tools that failed reported no work performed")
+	}
+}
+
+type toolErrorHandler struct{}
+
+func (toolErrorHandler) Call(context.Context, tools.Call) (tools.Result, error) {
+	return tools.Result{}, errors.New("tool execution failed")
+}
+
+func TestCapturedActiveRunResultCountsHostedToolStartsAsWork(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{responses: []llm.Response{
+		{
+			OutputItems: []llm.ResponseItem{
+				{
+					Type: llm.ResponseItemTypeOther,
+					Raw:  json.RawMessage(`{"type":"web_search_call","id":"hosted-1","status":"completed","action":{"type":"search","query":"one"}}`),
+				},
+				{
+					Type: llm.ResponseItemTypeOther,
+					Raw:  json.RawMessage(`{"type":"web_search_call","id":"hosted-2","status":"completed","action":{"type":"search","query":"two"}}`),
+				},
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		finalTextResponse("done"),
+	}}
+	client.caps = openAIFirstPartyNativeWebSearchCaps()
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
+		Model:         "gpt-5",
+		WebSearchMode: "native",
+		EnabledTools:  []toolspec.ID{toolspec.ToolWebSearch},
+	})
+
+	var handle *LiveRunWaitHandle
+	var captureErr error
+	if _, err := eng.SubmitUserMessageWithHooks(context.Background(), "search twice", func() {
+		handle, captureErr = eng.CaptureActiveRunResult(context.Background())
+	}, nil); err != nil {
+		t.Fatalf("SubmitUserMessageWithHooks: %v", err)
+	}
+	if captureErr != nil || handle == nil {
+		t.Fatalf("CaptureActiveRunResult handle=%v err=%v, want captured active run", handle, captureErr)
+	}
+	result, err := handle.Wait()
+	if err != nil {
+		t.Fatalf("captured live wait: %v", err)
+	}
+	if !result.WorkPerformed {
+		t.Fatal("two accepted hosted tool starts reported no work performed")
+	}
+}
+
+func TestCapturedActiveRunResultDoesNotCombineSingleToolStartsAcrossSteps(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	eng.stepLifecycle = lifecycle
+	eng.pauseQueuedUserAutoDrain()
+	t.Cleanup(eng.resumeQueuedUserAutoDrain)
+
+	var handle *LiveRunWaitHandle
+	var queued QueuedUserMessage
+	if err := lifecycle.Run(context.Background(), exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(_ context.Context, stepID string) error {
+		var err error
+		handle, err = eng.CaptureActiveRunResult(context.Background())
+		if err != nil {
+			return err
+		}
+		var accepted bool
+		queued, accepted, err = eng.QueueUserMessageForActiveRun(context.Background(), "successor", liveRunTestRequestID(t), nil)
+		if err != nil {
+			return err
+		}
+		if !accepted {
+			return errors.New("successor was not accepted into the live-run group")
+		}
+		return eng.publishLiveExecutionToolStart(stepID, llm.ToolCall{ID: "step-1-call", Name: string(toolspec.ToolExecCommand)}, nil)
+	}); err != nil {
+		t.Fatalf("first step: %v", err)
+	}
+	if err := lifecycle.Run(context.Background(), exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(_ context.Context, stepID string) error {
+		return eng.publishLiveExecutionToolStart(stepID, llm.ToolCall{ID: "step-2-call", Name: string(toolspec.ToolExecCommand)}, nil)
+	}); err != nil {
+		t.Fatalf("second step: %v", err)
+	}
+	eng.completeLiveRunQueueItems(map[string]struct{}{queued.ID: {}})
+
+	result, err := handle.Wait()
+	if !errors.Is(err, ErrLiveRunNoFinalAnswer) {
+		t.Fatalf("captured live wait error = %v, want ErrLiveRunNoFinalAnswer", err)
+	}
+	if result.WorkPerformed {
+		t.Fatal("single accepted starts in separate steps were combined into work performed")
+	}
+}
+
+func TestCapturedActiveRunResultPreservesQualifyingWorkAcrossSuccessorSteps(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	eng.stepLifecycle = lifecycle
+	eng.pauseQueuedUserAutoDrain()
+	t.Cleanup(eng.resumeQueuedUserAutoDrain)
+
+	var handle *LiveRunWaitHandle
+	var queued QueuedUserMessage
+	if err := lifecycle.Run(context.Background(), exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(_ context.Context, stepID string) error {
+		var err error
+		handle, err = eng.CaptureActiveRunResult(context.Background())
+		if err != nil {
+			return err
+		}
+		var accepted bool
+		queued, accepted, err = eng.QueueUserMessageForActiveRun(context.Background(), "successor", liveRunTestRequestID(t), nil)
+		if err != nil {
+			return err
+		}
+		if !accepted {
+			return errors.New("successor was not accepted into the live-run group")
+		}
+		if err := eng.publishLiveExecutionToolStart(stepID, llm.ToolCall{ID: "step-1-call-1", Name: string(toolspec.ToolExecCommand)}, nil); err != nil {
+			return err
+		}
+		return eng.publishLiveExecutionToolStart(stepID, llm.ToolCall{ID: "step-1-call-2", Name: string(toolspec.ToolExecCommand)}, nil)
+	}); err != nil {
+		t.Fatalf("first step: %v", err)
+	}
+	if err := lifecycle.Run(context.Background(), exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error {
+		return nil
+	}); err != nil {
+		t.Fatalf("second step: %v", err)
+	}
+	eng.completeLiveRunQueueItems(map[string]struct{}{queued.ID: {}})
+
+	result, err := handle.Wait()
+	if !errors.Is(err, ErrLiveRunNoFinalAnswer) {
+		t.Fatalf("captured live wait error = %v, want ErrLiveRunNoFinalAnswer", err)
+	}
+	if !result.WorkPerformed {
+		t.Fatal("qualifying work from an earlier step was lost after a successor step")
+	}
+}
+
+func TestRecoveryToolStartsRestoreProjectionWithoutCountingWork(t *testing.T) {
+	store := mustCreateTestSession(t)
+	var recoveredStarts []string
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			if event.Kind == EventToolCallStarted && event.ToolCall != nil {
+				recoveredStarts = append(recoveredStarts, event.ToolCall.ID)
+			}
+		},
+	})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	eng.stepLifecycle = lifecycle
+
+	var handle *LiveRunWaitHandle
+	if err := lifecycle.Run(context.Background(), exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(_ context.Context, stepID string) error {
+		var err error
+		handle, err = eng.CaptureActiveRunResult(context.Background())
+		if err != nil {
+			return err
+		}
+		if err := eng.steer(stepID, steerMessagesWithPersistenceIntent(
+			steeringPriorityNormal,
+			steeringMessageEventNone,
+			true,
+			[]llm.Message{{
+				Role: llm.RoleAssistant,
+				ToolCalls: []llm.ToolCall{
+					{ID: "recovered-local", Name: string(toolspec.ToolExecCommand)},
+					{ID: "recovered-hosted", Name: string(toolspec.ToolWebSearch)},
+				},
+			}},
+		)); err != nil {
+			return err
+		}
+		return eng.seedTranscriptLiveToolsFromDanglingToolCalls(stepID)
+	}); err != nil {
+		t.Fatalf("recovery projection step: %v", err)
+	}
+
+	result, err := handle.Wait()
+	if !errors.Is(err, ErrLiveRunNoFinalAnswer) {
+		t.Fatalf("captured live wait error = %v, want ErrLiveRunNoFinalAnswer", err)
+	}
+	if result.WorkPerformed {
+		t.Fatal("reconstructed tool starts counted as live work")
+	}
+	if len(recoveredStarts) != 2 {
+		t.Fatalf("recovered start events = %v, want both local and hosted starts", recoveredStarts)
+	}
+	if liveTools := eng.transcriptRuntimeState().AbortLiveTools(); len(liveTools) != 2 {
+		t.Fatalf("recovered live-tool projection = %+v, want two restored tools", liveTools)
 	}
 }
 

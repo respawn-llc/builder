@@ -621,12 +621,7 @@ func (s *defaultStepExecutor) appendHostedToolExecutionResults(stepID string, ho
 
 func (s *defaultStepExecutor) publishHostedToolStart(stepID string, call llm.ToolCall) error {
 	normalized := normalizeToolCallForTranscript(call, s.engine.transcriptWorkingDir())
-	return s.engine.steer(stepID, steerEventIntent(Event{
-		Kind:                       EventToolCallStarted,
-		StepID:                     stepID,
-		ToolCall:                   &normalized,
-		CommittedTranscriptChanged: true,
-	}))
+	return s.engine.publishLiveExecutionToolStart(stepID, normalized, nil)
 }
 
 func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Context, stepID string, content string) (bool, bool, error) {
