@@ -84,6 +84,32 @@ func TestEncoderPreservesMultibyteMarkdownAtExactSummaryLimit(t *testing.T) {
 	}
 }
 
+func TestLimitMarkdownSummaryPreservesUTF8AtByteBoundary(t *testing.T) {
+	input := strings.Repeat("界", 1366)
+	limited, truncated := LimitMarkdownSummary(input)
+	if !truncated {
+		t.Fatal("expected markdown summary truncation")
+	}
+	if !utf8.ValidString(limited) {
+		t.Fatalf("limited markdown is not valid UTF-8: %q", limited)
+	}
+	if got, want := len(limited), MarkdownSummaryLimitBytes-1; got != want {
+		t.Fatalf("limited markdown bytes = %d, want %d", got, want)
+	}
+	if got, want := limited, strings.Repeat("界", 1365); got != want {
+		t.Fatalf("limited markdown = %q, want %q", got, want)
+	}
+}
+
+func TestLimitMarkdownSummaryRejectsInvalidUTF8Source(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("invalid UTF-8 lifecycle markdown source did not fail fast")
+		}
+	}()
+	_, _ = LimitMarkdownSummary(string([]byte{0xff}))
+}
+
 func TestEncoderBudgetsOptionalContextWithinDeterministicWholeObjectLimit(t *testing.T) {
 	title := strings.Repeat("<", WholeObjectLimitBytes)
 	envelope, err := NewEnvelope(EnvelopeInput{

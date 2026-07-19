@@ -289,6 +289,18 @@ func TestTranscriptMessagePayloadUnionAcceptsEveryTypedFact(t *testing.T) {
 				}},
 			},
 		},
+		{
+			name: "live run batch finished",
+			message: TranscriptMessage{
+				Sequence: 2,
+				Kind:     TranscriptMessageLiveRunBatchFinished,
+				Payload: TranscriptPayload{LiveRunBatchFinished: &TranscriptLiveRunBatchFinished{
+					Disposition:        LiveRunBatchDispositionFinalAnswer,
+					FinishedAt:         time.Unix(1_700_000_000, 0),
+					FinalAnswerPreview: &TranscriptFinalAnswerPreview{Markdown: "Done"},
+				}},
+			},
+		},
 	}
 
 	for _, test := range tests {

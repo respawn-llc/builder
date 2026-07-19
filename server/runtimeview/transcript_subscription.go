@@ -8,6 +8,7 @@ import (
 	"core/server/runtime"
 	"core/server/session"
 	"core/shared/clientui"
+	"core/shared/lifecyclecontract"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/transcript"
@@ -40,6 +41,8 @@ func transcriptToolStartsFromRuntime(starts []runtime.TranscriptLiveToolStart) [
 
 func TranscriptMessagesFromRuntimeEvent(evt runtime.Event) []clientui.TranscriptMessage {
 	switch evt.Kind {
+	case runtime.EventLiveRunBatchFinished:
+		return transcriptLiveRunBatchFinishedMessages(evt)
 	case runtime.EventAssistantDelta:
 		if evt.AssistantDelta == "" {
 			return nil
@@ -112,6 +115,74 @@ func TranscriptMessagesFromRuntimeEvent(evt runtime.Event) []clientui.Transcript
 		messages = append(messages, transcriptCommittedRowMessages(evt)...)
 		return messages
 	}
+}
+
+func transcriptLiveRunBatchFinishedMessages(evt runtime.Event) []clientui.TranscriptMessage {
+	if evt.LiveRunResult == nil {
+		panic("runtime live-run batch-finished event has no result")
+	}
+	result := evt.LiveRunResult
+	fact := clientui.TranscriptLiveRunBatchFinished{
+		FinishedAt:    result.FinishedAt.UTC(),
+		WorkPerformed: result.WorkPerformed,
+	}
+	switch result.ResultKind {
+	case runtime.LiveRunResultAssistantFinalAnswer:
+		if result.FailureDiagnostic != nil {
+			panic("runtime final-answer live-run batch has a failure diagnostic")
+		}
+		preview, truncated := lifecyclecontract.LimitMarkdownSummary(result.AssistantMessage.Content)
+		finalAnswerPreview := clientui.TranscriptFinalAnswerPreview{Markdown: preview}
+		if truncated {
+			truncation := clientui.TranscriptFinalAnswerPreviewTruncationByteLimit
+			finalAnswerPreview.Truncation = &truncation
+		}
+		fact.Disposition = clientui.LiveRunBatchDispositionFinalAnswer
+		fact.FinalAnswerPreview = &finalAnswerPreview
+	case runtime.LiveRunResultRuntimeFailure:
+		if result.FailureDiagnostic == nil {
+			panic("runtime-failure live-run batch has no failure diagnostic")
+		}
+		if result.AssistantMessage.Content != "" {
+			panic("runtime-failure live-run batch has a final answer")
+		}
+		fact.Disposition = clientui.LiveRunBatchDispositionRuntimeFailure
+		fact.FailureDiagnostic = &clientui.TranscriptDiagnostic{
+			Code:   clientui.TranscriptDiagnosticCode(result.FailureDiagnostic.Code),
+			Detail: result.FailureDiagnostic.Detail,
+		}
+	case runtime.LiveRunResultCompletedNoFinal:
+		if result.FailureDiagnostic != nil || result.AssistantMessage.Content != "" {
+			panic("completed-no-final live-run batch has an invalid payload")
+		}
+		fact.Disposition = clientui.LiveRunBatchDispositionNoFinalAnswer
+	case runtime.LiveRunResultInterrupted:
+		if result.FailureDiagnostic != nil || result.AssistantMessage.Content != "" {
+			panic("interrupted live-run batch has an invalid payload")
+		}
+		fact.Disposition = clientui.LiveRunBatchDispositionInterrupted
+	case runtime.LiveRunResultWorkflowCompleted:
+		if result.NoFinalReason != runtime.LiveRunNoFinalAnswerReasonWorkflow ||
+			result.FailureDiagnostic != nil || result.AssistantMessage.Content != "" {
+			panic("workflow-completed live-run batch has an invalid payload")
+		}
+		exclusion := clientui.LiveRunBatchExclusionWorkflowCompleted
+		fact.Disposition = clientui.LiveRunBatchDispositionExcluded
+		fact.ExclusionReason = &exclusion
+	case runtime.LiveRunResultNonTaskActivity:
+		if result.FailureDiagnostic != nil || result.AssistantMessage.Content != "" {
+			panic("non-task live-run batch has an invalid payload")
+		}
+		exclusion := clientui.LiveRunBatchExclusionNonTaskActivity
+		fact.Disposition = clientui.LiveRunBatchDispositionExcluded
+		fact.ExclusionReason = &exclusion
+	default:
+		panic(fmt.Sprintf("runtime live-run batch has unknown result kind %q", result.ResultKind))
+	}
+	return []clientui.TranscriptMessage{transcriptMessage(
+		clientui.TranscriptMessageLiveRunBatchFinished,
+		clientui.TranscriptPayload{LiveRunBatchFinished: &fact},
+	)}
 }
 
 func transcriptFeedStateMessages(evt runtime.Event) []clientui.TranscriptMessage {

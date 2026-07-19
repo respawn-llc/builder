@@ -7,10 +7,11 @@ import (
 	"unicode/utf8"
 
 	"core/shared/invariant"
+	"core/shared/textutil"
 )
 
 const (
-	MarkdownSummaryLimitBytes = 4 * 1024
+	MarkdownSummaryLimitBytes = textutil.MarkdownSummaryLimitBytes
 	WholeObjectLimitBytes     = 32 * 1024
 )
 
@@ -209,7 +210,7 @@ func canonicalTruncation(fields map[TruncationField]struct{}) *Truncation {
 func limitMarkdownSummary(envelope *Envelope, truncated map[TruncationField]struct{}) {
 	switch envelope.details.kind {
 	case detailKindTaskComplete:
-		limited, didTruncate := truncateUTF8(envelope.details.taskComplete.FinalAnswer, MarkdownSummaryLimitBytes)
+		limited, didTruncate := LimitMarkdownSummary(envelope.details.taskComplete.FinalAnswer)
 		envelope.details.taskComplete.FinalAnswer = limited
 		if didTruncate {
 			truncated[TruncationFieldFinalAnswer] = struct{}{}
@@ -227,6 +228,16 @@ func limitMarkdownSummary(envelope *Envelope, truncated map[TruncationField]stru
 			truncated[TruncationFieldInputSummary] = struct{}{}
 		}
 	}
+}
+
+// LimitMarkdownSummary returns a valid UTF-8 prefix that fits the lifecycle
+// Markdown-summary byte cap and reports whether source content was removed.
+func LimitMarkdownSummary(value string) (string, bool) {
+	limited, truncated, err := textutil.LimitUTF8Bytes(value, MarkdownSummaryLimitBytes)
+	if err != nil {
+		panic(fmt.Sprintf("limit lifecycle markdown summary: %v", err))
+	}
+	return limited, truncated
 }
 
 func limitSessionTitleSource(envelope *Envelope, truncated map[TruncationField]struct{}) {
