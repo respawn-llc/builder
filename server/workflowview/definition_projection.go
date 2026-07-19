@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
@@ -25,6 +26,15 @@ func NewDefinitionProjection(store *workflowstore.Store) (*DefinitionProjection,
 		return nil, errors.New("workflow store is required")
 	}
 	return &DefinitionProjection{store: store}, nil
+}
+
+func workflowPickerItem(def serverapi.WorkflowDefinition, link sqlitegen.ProjectWorkflowLinkRecord, validation *workflow.ValidationResult) serverapi.WorkflowPickerItem {
+	item := serverapi.WorkflowPickerItem{WorkflowID: def.Workflow.ID, DisplayName: def.Workflow.Name, Description: def.Workflow.Description, Version: def.Workflow.Version, IsProjectDefault: link.ID != "" && link.IsDefault != 0, ValidForTaskCreation: link.ID != ""}
+	if validation != nil {
+		item.ValidForTaskCreation = link.ID != "" && !validation.HasBlockingErrors()
+		item.ValidationErrors = ValidationErrors(def.Workflow.ID, validation.Errors)
+	}
+	return item
 }
 
 func (p *DefinitionProjection) GetDefinition(ctx context.Context, workflowID string) (serverapi.WorkflowDefinition, map[string]workflow.NodeKind, error) {

@@ -14,11 +14,15 @@ type workflowTaskStatusFact struct {
 }
 
 func (s *Service) taskStatusFact(ctx context.Context, taskID string) (workflowTaskStatusFact, error) {
-	row, err := s.queries.GetWorkflowTaskStatusRecord(ctx, taskID)
+	return loadWorkflowTaskStatusFact(ctx, s.queries, s.projector, taskID)
+}
+
+func loadWorkflowTaskStatusFact(ctx context.Context, queries *sqlitegen.Queries, projector *TaskProjector, taskID string) (workflowTaskStatusFact, error) {
+	row, err := queries.GetWorkflowTaskStatusRecord(ctx, taskID)
 	if err != nil {
 		return workflowTaskStatusFact{}, err
 	}
-	return s.workflowTaskStatusFactFromRecord(row)
+	return workflowTaskStatusFactFromRecord(projector, row)
 }
 
 func (s *Service) taskStatusFacts(ctx context.Context, taskIDs []string) (map[string]workflowTaskStatusFact, error) {
@@ -34,7 +38,7 @@ func (s *Service) taskStatusFacts(ctx context.Context, taskIDs []string) (map[st
 		if _, exists := statuses[row.TaskID]; exists {
 			return nil, fmt.Errorf("workflow task status projection returned duplicate task %q", row.TaskID)
 		}
-		status, err := s.workflowTaskStatusFactFromRecord(row)
+		status, err := workflowTaskStatusFactFromRecord(s.projector, row)
 		if err != nil {
 			return nil, err
 		}
@@ -48,7 +52,7 @@ func (s *Service) taskStatusFacts(ctx context.Context, taskIDs []string) (map[st
 	return statuses, nil
 }
 
-func (s *Service) workflowTaskStatusFactFromRecord(row sqlitegen.WorkflowTaskStatusRecord) (workflowTaskStatusFact, error) {
+func workflowTaskStatusFactFromRecord(projector *TaskProjector, row sqlitegen.WorkflowTaskStatusRecord) (workflowTaskStatusFact, error) {
 	nodeIDsJSON, err := workflowTaskStatusProjectionJSON(row.TaskID, "node_ids_json", row.NodeIdsJson)
 	if err != nil {
 		return workflowTaskStatusFact{}, err
@@ -61,7 +65,7 @@ func (s *Service) workflowTaskStatusFactFromRecord(row sqlitegen.WorkflowTaskSta
 	if err != nil {
 		return workflowTaskStatusFact{}, err
 	}
-	return s.projector.DecodeStatus(TaskStatusInput{
+	return projector.DecodeStatus(TaskStatusInput{
 		TaskID:             row.TaskID,
 		Kind:               row.Kind,
 		NodeIDsJSON:        nodeIDsJSON,

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -32,7 +31,7 @@ type Service struct {
 	queries     *sqlitegen.Queries
 	definitions *DefinitionProjection
 	projector   *TaskProjector
-	git         *worktree.GitInspector
+	taskDetail  *TaskDetail
 	transcripts SessionTranscriptTailEntryProvider
 	prompts     PendingPromptSource
 }
@@ -93,12 +92,17 @@ func New(metadataStore *metadata.Store, opts ...Option) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	projector := NewTaskProjector()
+	taskDetail, err := NewTaskDetail(metadataStore, definitions, projector, worktree.NewGitInspector(nil))
+	if err != nil {
+		return nil, err
+	}
 	svc := &Service{
 		metadata:    metadataStore,
 		queries:     metadataStore.Queries(),
 		definitions: definitions,
-		projector:   NewTaskProjector(),
-		git:         worktree.NewGitInspector(nil),
+		projector:   projector,
+		taskDetail:  taskDetail,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -645,237 +649,28 @@ func (s *Service) taskRunsByTask(ctx context.Context, tasks []sqlitegen.TaskReco
 }
 
 func (s *Service) pendingApprovalSourcePlacementsByTask(ctx context.Context, taskIDs []string) (map[string][]sqlitegen.TaskNodePlacementRecord, error) {
-	rows, err := s.queries.ListPendingApprovalSourcePlacementsByTasks(ctx, taskIDs)
-	if err != nil {
-		return nil, err
-	}
-	byTaskID := make(map[string][]sqlitegen.TaskNodePlacementRecord)
-	for _, row := range rows {
-		byTaskID[row.TaskID] = append(byTaskID[row.TaskID], pendingApprovalSourcePlacement(row))
-	}
-	return byTaskID, nil
-}
-
-func pendingApprovalSourcePlacement(row sqlitegen.ListPendingApprovalSourcePlacementsByTasksRow) sqlitegen.TaskNodePlacementRecord {
-	return sqlitegen.TaskNodePlacementRecord{
-		ID:                        row.ID,
-		TaskID:                    row.TaskID,
-		NodeID:                    row.NodeID,
-		State:                     row.State,
-		CreatedByTransitionID:     row.CreatedByTransitionID,
-		ParallelBatchTransitionID: row.ParallelBatchTransitionID,
-		ParallelBranchEdgeID:      row.ParallelBranchEdgeID,
-		CreatedAtUnixMs:           row.CreatedAtUnixMs,
-		UpdatedAtUnixMs:           row.UpdatedAtUnixMs,
-	}
+	return loadPendingApprovalSourcePlacementsByTask(ctx, s.queries, taskIDs)
 }
 
 func (s *Service) GetTask(ctx context.Context, taskID string) (serverapi.WorkflowTaskDetail, error) {
 	if s == nil {
 		return serverapi.WorkflowTaskDetail{}, errors.New("workflow view service is required")
 	}
-	if strings.TrimSpace(taskID) == "" {
-		return serverapi.WorkflowTaskDetail{}, ErrTaskIDRequired
-	}
-	task, err := s.queries.GetTask(ctx, taskID)
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
-	snapshot, err := s.definitions.snapshot(ctx, task.WorkflowID)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
-	def := snapshot.api
-	placements, err := s.queries.ListTaskNodePlacements(ctx, task.ID)
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
-	pendingApprovalPlacements, err := s.pendingApprovalSourcePlacementsByTask(ctx, []string{task.ID})
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
-	placements = append(placements, pendingApprovalPlacements[task.ID]...)
-	runs, err := s.queries.ListTaskRuns(ctx, task.ID)
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
-	transitions, err := s.queries.ListTaskTransitions(ctx, task.ID)
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
-	comments, err := s.queries.ListTaskComments(ctx, sqlitegen.ListTaskCommentsParams{TaskID: task.ID, OffsetRows: 0, LimitRows: -1})
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
-	project, err := s.metadata.GetProjectOverview(ctx, task.ProjectID)
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
-	workspaceContext := boardProjectWorkspaceContext(project)
-	linkByWorkflowID := map[string]sqlitegen.ProjectWorkflowLinkRecord{}
-	links, err := s.queries.ListProjectWorkflowLinks(ctx, task.ProjectID)
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
-	for _, link := range links {
-		if linkByWorkflowID[link.WorkflowID].ID == "" {
-			linkByWorkflowID[link.WorkflowID] = link
-		}
-	}
-	nodeByID := workflowNodeByID(def)
-	statusFact, err := s.taskStatusFact(ctx, task.ID)
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
-	facts := s.projector.ProjectTaskFacts(TaskFactsInput{
-		Task:       task,
-		Status:     statusFact,
-		Placements: placements,
-		Runs:       runs,
-		Definition: snapshot,
-	})
-	sourceWorkspace := sourceWorkspaceForTask(task, workspaceContext.byID, workspaceContext.primary)
-	executionTarget, err := s.executionTargetForTask(ctx, task, sourceWorkspace)
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
-	detail := serverapi.WorkflowTaskDetail{Summary: facts.Summary, Project: projectBoardProject(project, workspaceContext), Workflow: workflowPickerItem(def, linkByWorkflowID[task.WorkflowID], nil), Body: task.Body, SourceURL: task.SourceUrl, SourceWorkspace: sourceWorkspace, ExecutionTarget: executionTarget, Status: facts.Status, Actions: facts.Actions}
-	attentionCount, err := s.queries.CountWorkflowTaskAttentionCandidates(ctx, task.ID)
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
-	detail.AttentionCount = int(attentionCount)
-	for _, placement := range placements {
-		detail.Placements = append(detail.Placements, s.projector.ProjectPlacement(PlacementProjectionInput{Placement: placement, Nodes: nodeByID}))
-	}
-	sessionNames, err := s.sessionNamesByRun(ctx, runs)
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
-	for _, run := range runs {
-		detail.Runs = append(detail.Runs, s.projector.ProjectRun(RunProjectionInput{Run: run, Nodes: nodeByID, SessionNames: sessionNames}))
-	}
-	edgesByTransitionID, err := s.transitionEdgesByTransitionID(ctx, transitions)
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
-	for _, transition := range transitions {
-		dto, err := s.projector.ProjectTransition(TransitionProjectionInput{Transition: transition, Edges: edgesByTransitionID[transition.ID]})
-		if err != nil {
-			return serverapi.WorkflowTaskDetail{}, err
-		}
-		detail.Transitions = append(detail.Transitions, dto)
-	}
-	for _, comment := range comments {
-		detail.Comments = append(detail.Comments, s.projector.ProjectComment(comment))
-	}
-	return detail, nil
-}
-
-func (s *Service) executionTargetForTask(ctx context.Context, task sqlitegen.TaskRecord, sourceWorkspace serverapi.ProjectWorkspaceSummary) (*serverapi.WorkflowExecutionTarget, error) {
-	if !task.ExecutionTargetMode.Valid {
-		if task.ExecutionTargetRequestedRef.Valid ||
-			task.ExecutionTargetResolvedRef.Valid ||
-			task.ExecutionTargetCommitOid.Valid ||
-			task.ExecutionTargetProvenance.Valid {
-			return nil, errors.New("unlocked task has execution target facts")
-		}
-		return nil, nil
-	}
-	target := &serverapi.WorkflowExecutionTarget{
-		Mode:         serverapi.WorkflowExecutionTargetMode(task.ExecutionTargetMode.String),
-		RequestedRef: metadata.OptionalString(task.ExecutionTargetRequestedRef),
-		ResolvedRef:  metadata.OptionalString(task.ExecutionTargetResolvedRef),
-		CommitOID:    metadata.OptionalString(task.ExecutionTargetCommitOid),
-		Provenance:   serverapi.WorkflowExecutionTargetProvenance(task.ExecutionTargetProvenance.String),
-	}
-	if target.Mode == serverapi.WorkflowExecutionTargetModeNone {
-		root := sourceWorkspace.RootPath
-		target.EffectiveRoot = &root
-		if err := target.Validate(); err != nil {
-			return nil, fmt.Errorf("project task execution target: %w", err)
-		}
-		return target, nil
-	}
-
-	worktreeID := strings.TrimSpace(task.ManagedWorktreeID.String)
-	if task.ManagedWorktreeID.Valid && worktreeID != "" {
-		row, err := s.queries.GetWorktreeByID(ctx, worktreeID)
-		switch {
-		case err == nil:
-			facts := worktreeKentFacts(row)
-			managedWorktree := serverapi.WorkflowExecutionTargetWorktree{
-				WorktreeID:    facts.WorktreeID,
-				DisplayName:   facts.DisplayName,
-				CanonicalRoot: facts.CanonicalRoot,
-				Availability:  worktree.InspectPath(facts.CanonicalRoot).Availability,
-				Managed:       facts.Managed,
-			}
-			target.ManagedWorktree = &managedWorktree
-			if managedWorktree.Availability == serverapi.WorktreePathAvailabilityAvailable {
-				root := facts.CanonicalRoot
-				target.EffectiveRoot = &root
-				if identity, inspectErr := s.git.ValidateManagedWorktreeIdentity(ctx, worktree.ManagedWorktreeIdentitySpec{
-					SourceWorkspaceRoot:  sourceWorkspace.RootPath,
-					ExpectedWorktreeRoot: facts.CanonicalRoot,
-				}); inspectErr == nil {
-					if branchName, ok := identity.NamedBranch(); ok {
-						target.CurrentBranch = &branchName
-					}
-				} else if ctxErr := ctx.Err(); ctxErr != nil {
-					return nil, ctxErr
-				}
-			} else if ctxErr := ctx.Err(); ctxErr != nil {
-				return nil, ctxErr
-			}
-		case !errors.Is(err, sql.ErrNoRows):
-			return nil, err
-		}
-	}
-	if err := target.Validate(); err != nil {
-		return nil, fmt.Errorf("project task execution target: %w", err)
-	}
-	return target, nil
+	return s.taskDetail.GetTask(ctx, taskID)
 }
 
 func (s *Service) GetTaskByProjectShortID(ctx context.Context, projectID string, shortID string) (serverapi.WorkflowTaskDetail, error) {
 	if s == nil {
 		return serverapi.WorkflowTaskDetail{}, errors.New("workflow view service is required")
 	}
-	trimmedProjectID := strings.TrimSpace(projectID)
-	if trimmedProjectID == "" {
-		return serverapi.WorkflowTaskDetail{}, errors.New("project_id is required")
-	}
-	trimmedShortID := strings.TrimSpace(shortID)
-	if trimmedShortID == "" {
-		return serverapi.WorkflowTaskDetail{}, errors.New("short_id is required")
-	}
-	task, err := s.queries.GetTaskByProjectShortID(ctx, sqlitegen.GetTaskByProjectShortIDParams{ProjectID: trimmedProjectID, ShortID: trimmedShortID})
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
-	return s.GetTask(ctx, task.ID)
+	return s.taskDetail.GetTaskByProjectShortID(ctx, projectID, shortID)
 }
 
 func (s *Service) GetTaskByShortID(ctx context.Context, shortID string) (serverapi.WorkflowTaskDetail, error) {
 	if s == nil {
 		return serverapi.WorkflowTaskDetail{}, errors.New("workflow view service is required")
 	}
-	trimmedShortID := strings.TrimSpace(shortID)
-	if trimmedShortID == "" {
-		return serverapi.WorkflowTaskDetail{}, errors.New("short_id is required")
-	}
-	tasks, err := s.queries.ListTasksByShortID(ctx, trimmedShortID)
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
-	if len(tasks) == 0 {
-		return serverapi.WorkflowTaskDetail{}, sql.ErrNoRows
-	}
-	if len(tasks) > 1 {
-		return serverapi.WorkflowTaskDetail{}, fmt.Errorf("task short_id %q is ambiguous; use task id", trimmedShortID)
-	}
-	return s.GetTask(ctx, tasks[0].ID)
+	return s.taskDetail.GetTaskByShortID(ctx, shortID)
 }
 
 func (s *Service) ListTaskActivity(ctx context.Context, req serverapi.WorkflowTaskActivityListRequest) (serverapi.WorkflowTaskActivityListResponse, error) {
@@ -1214,41 +1009,6 @@ func (s *Service) definition(ctx context.Context, workflowID string) (serverapi.
 	return s.definitions.GetDefinition(ctx, workflowID)
 }
 
-func workflowPickerItem(def serverapi.WorkflowDefinition, link sqlitegen.ProjectWorkflowLinkRecord, validation *workflow.ValidationResult) serverapi.WorkflowPickerItem {
-	item := serverapi.WorkflowPickerItem{WorkflowID: def.Workflow.ID, DisplayName: def.Workflow.Name, Description: def.Workflow.Description, Version: def.Workflow.Version, IsProjectDefault: link.ID != "" && link.IsDefault != 0, ValidForTaskCreation: link.ID != ""}
-	if validation != nil {
-		item.ValidForTaskCreation = link.ID != "" && !validation.HasBlockingErrors()
-		item.ValidationErrors = ValidationErrors(def.Workflow.ID, validation.Errors)
-	}
-	return item
-}
-
-func worktreeKentFacts(row sqlitegen.GetWorktreeByIDRow) serverapi.WorktreeKentFacts {
-	facts := serverapi.WorktreeKentFacts{
-		WorktreeID:    row.ID,
-		DisplayName:   displayNameForPath(row.CanonicalRootPath),
-		CanonicalRoot: row.CanonicalRootPath,
-		Managed:       row.Managed != 0,
-		CreatedBranch: row.CreatedBranch != 0,
-	}
-	if originSessionID := strings.TrimSpace(row.OriginSessionID); originSessionID != "" {
-		facts.OriginSessionID = &originSessionID
-	}
-	return facts
-}
-
-func displayNameForPath(path string) string {
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" {
-		return ""
-	}
-	base := filepath.Base(filepath.Clean(trimmed))
-	if base == "." || base == string(filepath.Separator) {
-		return ""
-	}
-	return base
-}
-
 type taskActivityRow struct {
 	activityID       string
 	kind             string
@@ -1348,47 +1108,11 @@ func (s *Service) activityItemsFromRows(task sqlitegen.TaskRecord, rows []taskAc
 }
 
 func (s *Service) sessionNamesByRun(ctx context.Context, runs []sqlitegen.TaskRunRecord) (map[string]string, error) {
-	sessionIDs := []string{}
-	seen := map[string]bool{}
-	for _, run := range runs {
-		sessionID := strings.TrimSpace(run.SessionID.String)
-		if sessionID == "" || seen[sessionID] {
-			continue
-		}
-		sessionIDs = append(sessionIDs, sessionID)
-		seen[sessionID] = true
-	}
-	if len(sessionIDs) == 0 {
-		return map[string]string{}, nil
-	}
-	rows, err := s.queries.ListSessionNamesByIDs(ctx, sessionIDs)
-	if err != nil {
-		return nil, err
-	}
-	out := map[string]string{}
-	for _, row := range rows {
-		out[row.ID] = row.Name
-	}
-	return out, nil
+	return loadSessionNamesByRun(ctx, s.queries, runs)
 }
 
 func (s *Service) transitionEdgesByTransitionID(ctx context.Context, transitions []sqlitegen.TaskTransitionRecord) (map[string][]sqlitegen.TaskTransitionEdgeRecord, error) {
-	transitionIDs := make([]string, 0, len(transitions))
-	for _, transition := range transitions {
-		transitionIDs = append(transitionIDs, transition.ID)
-	}
-	out := map[string][]sqlitegen.TaskTransitionEdgeRecord{}
-	if len(transitionIDs) == 0 {
-		return out, nil
-	}
-	rows, err := s.queries.ListTaskTransitionEdgesByTransitionIDs(ctx, transitionIDs)
-	if err != nil {
-		return nil, err
-	}
-	for _, edge := range rows {
-		out[edge.TaskTransitionID] = append(out[edge.TaskTransitionID], edge)
-	}
-	return out, nil
+	return loadTransitionEdgesByTransitionID(ctx, s.queries, transitions)
 }
 
 func (s *Service) commentsByID(ctx context.Context, ids []string) (map[string]sqlitegen.TaskComment, error) {
@@ -1683,66 +1407,6 @@ func interruptionErrorDetail(detailJSON string) string {
 		return ""
 	}
 	return strings.TrimSpace(detail.Error)
-}
-
-type boardProjectWorkspaceFacts struct {
-	primary   serverapi.ProjectWorkspaceSummary
-	byID      map[string]serverapi.ProjectWorkspaceSummary
-	count     int
-	defaultID string
-}
-
-func projectBoardProject(project clientui.ProjectOverview, workspaceContext boardProjectWorkspaceFacts) serverapi.ProjectBoardProject {
-	return serverapi.ProjectBoardProject{
-		ProjectKey:             project.Project.ProjectKey,
-		DisplayName:            project.Project.DisplayName,
-		DefaultWorkspaceID:     workspaceContext.defaultID,
-		AttachedWorkspaceCount: workspaceContext.count,
-	}
-}
-
-func projectWorkspaceSummary(workspace clientui.ProjectWorkspaceSummary) serverapi.ProjectWorkspaceSummary {
-	return serverapi.ProjectWorkspaceSummary{WorkspaceID: workspace.WorkspaceID, DisplayName: workspace.DisplayName, RootPath: workspace.RootPath, Availability: string(workspace.Availability), IsPrimary: workspace.IsPrimary, UpdatedAtUnixMs: workspace.UpdatedAt.UnixMilli()}
-}
-
-func boardProjectWorkspaceContext(project clientui.ProjectOverview) boardProjectWorkspaceFacts {
-	context := boardProjectWorkspaceFacts{
-		byID:  make(map[string]serverapi.ProjectWorkspaceSummary, len(project.Workspaces)),
-		count: len(project.Workspaces),
-	}
-	for _, workspace := range project.Workspaces {
-		dto := projectWorkspaceSummary(workspace)
-		context.byID[dto.WorkspaceID] = dto
-		if workspace.IsPrimary {
-			context.primary = dto
-			context.defaultID = dto.WorkspaceID
-		}
-	}
-	return context
-}
-
-func sourceWorkspaceForTask(task sqlitegen.TaskRecord, workspacesByID map[string]serverapi.ProjectWorkspaceSummary, fallback serverapi.ProjectWorkspaceSummary) serverapi.ProjectWorkspaceSummary {
-	if workspace, ok := workspacesByID[strings.TrimSpace(task.SourceWorkspaceID.String)]; ok {
-		return workspace
-	}
-	snapshot := struct {
-		SourceWorkspaceSnapshot struct {
-			WorkspaceID string `json:"workspace_id"`
-			DisplayName string `json:"display_name"`
-			RootPath    string `json:"root_path"`
-		} `json:"source_workspace_snapshot"`
-	}{}
-	if err := workflow.UnmarshalString(task.MetadataJson, &snapshot); err == nil {
-		if strings.TrimSpace(snapshot.SourceWorkspaceSnapshot.RootPath) != "" {
-			return serverapi.ProjectWorkspaceSummary{
-				WorkspaceID:  strings.TrimSpace(snapshot.SourceWorkspaceSnapshot.WorkspaceID),
-				DisplayName:  strings.TrimSpace(snapshot.SourceWorkspaceSnapshot.DisplayName),
-				RootPath:     strings.TrimSpace(snapshot.SourceWorkspaceSnapshot.RootPath),
-				Availability: string(clientui.ProjectAvailabilityUnlinked),
-			}
-		}
-	}
-	return fallback
 }
 
 func bodyPreview(body string) string {
