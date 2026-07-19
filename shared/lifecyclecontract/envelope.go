@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"core/shared/invariant"
 	"core/shared/runtimeids"
 )
 
@@ -254,26 +255,28 @@ func (e Envelope) Validate() error {
 }
 
 func (e Envelope) MarshalJSON() ([]byte, error) {
-	if err := e.Validate(); err != nil {
-		return nil, err
-	}
+	return NewEncoder(invariant.NewPolicy(invariant.WithMode(invariant.ModeDiagnostic))).Encode(e)
+}
+
+type envelopeWire struct {
+	SchemaVersion int                `json:"schema_version"`
+	CESPVersion   string             `json:"cesp_version"`
+	Scope         Scope              `json:"scope"`
+	Category      Category           `json:"category"`
+	HookEventName CompatibilityAlias `json:"hook_event_name"`
+	OccurredAt    time.Time          `json:"occurred_at"`
+	Focused       bool               `json:"focused"`
+	Context       Context            `json:"context"`
+	Details       any                `json:"details"`
+	Truncation    *Truncation        `json:"truncation,omitempty"`
+}
+
+func (e Envelope) wire() envelopeWire {
 	details, err := e.details.value()
 	if err != nil {
-		return nil, err
+		panic(fmt.Sprintf("lifecycle envelope details invariant violated: %v", err))
 	}
-	type wire struct {
-		SchemaVersion int                `json:"schema_version"`
-		CESPVersion   string             `json:"cesp_version"`
-		Scope         Scope              `json:"scope"`
-		Category      Category           `json:"category"`
-		HookEventName CompatibilityAlias `json:"hook_event_name"`
-		OccurredAt    time.Time          `json:"occurred_at"`
-		Focused       bool               `json:"focused"`
-		Context       Context            `json:"context"`
-		Details       any                `json:"details"`
-		Truncation    *Truncation        `json:"truncation,omitempty"`
-	}
-	return json.Marshal(wire{
+	return envelopeWire{
 		SchemaVersion: SchemaVersion,
 		CESPVersion:   CESPVersion,
 		Scope:         e.scope,
@@ -284,7 +287,7 @@ func (e Envelope) MarshalJSON() ([]byte, error) {
 		Context:       e.context,
 		Details:       details,
 		Truncation:    e.truncation,
-	})
+	}
 }
 
 func compatibilityAlias(category Category) (CompatibilityAlias, error) {
@@ -426,6 +429,23 @@ func (d Details) category() Category {
 	}
 }
 
+func (d Details) variantName() string {
+	switch d.kind {
+	case detailKindSessionStart:
+		return "session_start"
+	case detailKindTaskComplete:
+		return "task_complete"
+	case detailKindTaskError:
+		return "task_error"
+	case detailKindInputRequired:
+		return "input_required"
+	case detailKindResourceLimit:
+		return "resource_limit"
+	default:
+		return "invalid"
+	}
+}
+
 func (d Details) value() (any, error) {
 	switch d.kind {
 	case detailKindSessionStart:
@@ -458,9 +478,6 @@ func validateTruncation(truncation *Truncation, category Category, context Conte
 		seen[field] = struct{}{}
 		switch field {
 		case TruncationFieldSessionTitle:
-			if context.SessionTitle == nil {
-				return fmt.Errorf("truncation field %q requires context session_title", field)
-			}
 		case TruncationFieldFinalAnswer:
 			if category != CategoryTaskComplete {
 				return fmt.Errorf("truncation field %q does not apply to category %q", field, category)

@@ -2,6 +2,7 @@ package invariant
 
 import (
 	"runtime/debug"
+	"strconv"
 	"strings"
 )
 
@@ -11,6 +12,7 @@ const (
 	ScopeTUIProjection        Scope = "tui_projection"
 	ScopeReadModelPublication Scope = "read_model_publication"
 	ScopeBackgroundEvent      Scope = "background_event"
+	ScopeLifecycleEncoding    Scope = "lifecycle_encoding"
 )
 
 type Field string
@@ -46,6 +48,12 @@ const (
 	FieldProposedStepID           Field = "proposed_step_id"
 	FieldProcessID                Field = "process_id"
 	FieldBackgroundState          Field = "background_state"
+	FieldSchemaVersion            Field = "schema_version"
+	FieldCategory                 Field = "category"
+	FieldDetailVariant            Field = "detail_variant"
+	FieldMeasuredFixedBytes       Field = "measured_fixed_bytes"
+	FieldWholeObjectCapBytes      Field = "whole_object_cap_bytes"
+	FieldFieldByteLengths         Field = "field_byte_lengths"
 )
 
 type Diagnostic struct {
@@ -125,6 +133,31 @@ func BackgroundEventDiagnostic(input BackgroundEventDiagnosticInput) Diagnostic 
 			FieldProcessID:       input.ProcessID,
 			FieldBackgroundState: input.State,
 			FieldInvariantError:  input.Cause,
+		}),
+	}
+}
+
+type LifecycleEncodingDiagnosticInput struct {
+	Operation       string
+	SchemaVersion   int
+	Category        string
+	DetailVariant   string
+	FixedBytes      int
+	WholeObjectCap  int
+	FieldByteLength string
+}
+
+func LifecycleEncodingDiagnostic(input LifecycleEncodingDiagnosticInput) Diagnostic {
+	return Diagnostic{
+		Scope: ScopeLifecycleEncoding,
+		Fields: fields(map[Field]string{
+			FieldOperation:           input.Operation,
+			FieldSchemaVersion:       strconv.Itoa(input.SchemaVersion),
+			FieldCategory:            input.Category,
+			FieldDetailVariant:       input.DetailVariant,
+			FieldMeasuredFixedBytes:  strconv.Itoa(input.FixedBytes),
+			FieldWholeObjectCapBytes: strconv.Itoa(input.WholeObjectCap),
+			FieldFieldByteLengths:    input.FieldByteLength,
 		}),
 	}
 }
