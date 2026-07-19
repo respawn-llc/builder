@@ -20,7 +20,7 @@ import { TaskDetailContent } from "./TaskDetailContent";
 import { initialDescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
 import { DescriptionIsland, type TaskDraft } from "./TaskDetailRows";
 import { TaskDetailSurface } from "./TaskDetailSurface";
-import { useTaskActivity, useTaskComments } from "./useTaskDetailData";
+import { useTaskActivity, useTaskAttention, useTaskComments } from "./useTaskDetailData";
 
 describe("TaskDetailSurface editing", () => {
   afterEach(() => {
@@ -206,8 +206,15 @@ describe("TaskDetailSurface editing", () => {
               ...taskDetailNoInboxResponse.task.summary,
               updated_at_unix_ms: hasQuestion ? 99 : 2,
             },
-            attention: hasQuestion ? [questionAttention] : [],
+            attention_count: hasQuestion ? 1 : 0,
           },
+        }),
+      },
+      {
+        method: "workflow.task.attention.list",
+        handler: () => ({
+          items: hasQuestion ? [questionAttention] : [],
+          generated_at_unix_ms: hasQuestion ? 99 : 2,
         }),
       },
       { method: "ask.listPendingBySession", result: { Asks: [] } },
@@ -223,6 +230,8 @@ describe("TaskDetailSurface editing", () => {
 
     const question = await screen.findByRole("region", { name: "Question" });
     expect(await within(question).findByRole("radio", { name: /Trail mix/u })).toBeInTheDocument();
+    expect(getCallCount(services.transport.calls, "workflow.task.get")).toBeGreaterThanOrEqual(2);
+    expect(getCallCount(services.transport.calls, "workflow.task.attention.list")).toBeGreaterThanOrEqual(2);
   });
 
   it("keeps unsaved title and description edits across a live refresh", async () => {
@@ -297,8 +306,9 @@ function mountTaskDetail(...routes: readonly TestRoute[]) {
   window.history.pushState(null, "", "/tasks/task-1");
   const services = createTestServices([
     ...startupRoutes,
-    ...routes,
+    { method: "workflow.task.attention.list", result: { items: [], generated_at_unix_ms: 1 } },
     { method: "workflow.task.activity.list", result: activityResponse },
+    ...routes,
   ]);
   render(
     <TestAppProviders services={services}>
@@ -340,9 +350,16 @@ function renderWithAppProviders(content: ReactNode) {
 }
 function TaskDetailContentHarness({ detail }: Readonly<{ detail: TaskDetail }>) {
   const activity = useTaskActivity(detail.id, false);
+  const attention = useTaskAttention(detail.id, false);
   const comments = useTaskComments(detail.id, false);
   return (
-    <TaskDetailContent activity={activity} comments={comments} detail={detail} openLink={() => undefined} />
+    <TaskDetailContent
+      activity={activity}
+      attention={attention}
+      comments={comments}
+      detail={detail}
+      openLink={() => undefined}
+    />
   );
 }
 

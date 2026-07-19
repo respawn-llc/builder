@@ -12,7 +12,7 @@ import { TaskDetailList } from "./TaskDetailList";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
 import type { TaskDraft } from "./TaskDetailRows";
 import { useTaskMutations, useTaskDetailLiveRefresh } from "./useTaskDetailData";
-import type { useTaskActivity, useTaskComments } from "./useTaskDetailData";
+import type { useTaskActivity, useTaskAttention, useTaskComments } from "./useTaskDetailData";
 
 // TaskDraftState tracks the editable title/body draft alongside the server
 // snapshot (`base`) the draft last synced to. Comparing the draft to `base`
@@ -27,6 +27,7 @@ type TaskDraftState = Readonly<{
 
 export function TaskDetailContent({
   activity,
+  attention,
   comments,
   detail,
   initialFocus,
@@ -34,6 +35,7 @@ export function TaskDetailContent({
   openLink,
 }: Readonly<{
   activity: ReturnType<typeof useTaskActivity>;
+  attention: ReturnType<typeof useTaskAttention>;
   comments: ReturnType<typeof useTaskComments>;
   detail: TaskDetail;
   initialFocus?: TaskDetailInitialFocus | undefined;
@@ -97,6 +99,7 @@ export function TaskDetailContent({
   return (
     <TaskDetailList
       activity={activity}
+      attention={attention}
       comments={comments}
       detail={detail}
       disabled={connection.phase !== "connected"}

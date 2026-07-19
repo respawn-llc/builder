@@ -103,8 +103,8 @@ export async function reconcileActiveSurfaces(
       continue;
     }
     try {
-      const task = await api.getTask(record.notification.target.taskID);
-      if (!attentionTargetIsActive(task.attention, record.notification.target)) {
+      const attention = await api.listTaskAttention(record.notification.target.taskID);
+      if (!attentionTargetIsActive(attention.items, record.notification.target)) {
         staleIDs.push(id);
       }
     } catch (error) {

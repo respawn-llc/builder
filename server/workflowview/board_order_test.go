@@ -47,7 +47,7 @@ func TestBoardColumnsOrderVisibleReworkCycleByStructuralEntry(t *testing.T) {
 		},
 	}
 
-	keys := workflowViewBoardColumnKeys(boardColumns(def))
+	keys := workflowViewBoardColumnKeys(boardColumns(definitionSnapshot{api: def}))
 	wantKeys := []string{"backlog", "implementation", "code_review", "qa", "approval_gate", "pr_autoreview", "done"}
 	if strings.Join(keys, ",") != strings.Join(wantKeys, ",") {
 		t.Fatalf("board column keys = %+v, want structural rework-cycle order %+v", keys, wantKeys)

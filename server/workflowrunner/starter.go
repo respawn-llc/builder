@@ -100,7 +100,7 @@ type workflowAttentionFinalizer interface {
 }
 
 type workflowInterruptedRunFinalizer interface {
-	FinalizeInterruptedRun(context.Context, workflow.RunID)
+	PublishPendingInterruptedRun(context.Context, workflow.RunID)
 }
 
 func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStore, authManager *auth.Manager, runtimes RuntimeEventRegistry, opts StarterOptions) (*Starter, error) {
@@ -1062,7 +1062,7 @@ func (s *Starter) interrupt(ctx context.Context, runID workflow.RunID, generatio
 		return
 	}
 	if finalizer, ok := s.attentionFinalizer.(workflowInterruptedRunFinalizer); ok {
-		finalizer.FinalizeInterruptedRun(ctx, runID)
+		finalizer.PublishPendingInterruptedRun(ctx, runID)
 	}
 }
 

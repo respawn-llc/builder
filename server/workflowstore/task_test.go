@@ -90,10 +90,10 @@ func TestTaskCreateStartCancelAndComments(t *testing.T) {
 		t.Fatalf("deleted comment should be hidden, got %+v", comments)
 	}
 
-	if err := store.CancelTask(ctx, task.ID, "stop"); err != nil {
+	if _, err := store.CancelTask(ctx, task.ID, "stop"); err != nil {
 		t.Fatalf("CancelTask: %v", err)
 	}
-	if err := store.CancelTask(ctx, "task-missing", "stop"); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := store.CancelTask(ctx, "task-missing", "stop"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("CancelTask missing = %v, want sql.ErrNoRows", err)
 	}
 	runs, err = store.ListRuns(ctx, task.ID)
@@ -933,7 +933,7 @@ func TestCancelTaskAfterMovingOutOfDoneWritesCurrentTerminalPlacement(t *testing
 		t.Fatalf("ManualMoveTask reset: %v", err)
 	}
 
-	if err := store.CancelTask(ctx, task.ID, "stop"); err != nil {
+	if _, err := store.CancelTask(ctx, task.ID, "stop"); err != nil {
 		t.Fatalf("CancelTask: %v", err)
 	}
 
@@ -1126,7 +1126,7 @@ func TestTaskUpdateEditsTitleAndBodyAfterAutomationStarts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTask canceled: %v", err)
 	}
-	if err := store.CancelTask(ctx, canceled.ID, "stop"); err != nil {
+	if _, err := store.CancelTask(ctx, canceled.ID, "stop"); err != nil {
 		t.Fatalf("CancelTask: %v", err)
 	}
 	canceledTitle := "Canceled renamed"
@@ -1181,6 +1181,9 @@ func TestDeleteTaskHardDeletesAssociatedRecords(t *testing.T) {
 	}
 	if deleted.ID != task.ID || deleted.ProjectID != binding.ProjectID {
 		t.Fatalf("deleted task identity = %+v, want task %q project %q", deleted, task.ID, binding.ProjectID)
+	}
+	if len(deleted.ResolvedApprovalTransitionProjections) != 0 || len(deleted.ResolvedInterruptedRunProjections) != 0 {
+		t.Fatalf("deleted task resolution projections = %+v", deleted.TaskAttentionResolution)
 	}
 	if _, err := store.queries.GetTask(ctx, string(task.ID)); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("GetTask after DeleteTask = %v, want sql.ErrNoRows", err)

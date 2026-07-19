@@ -188,7 +188,9 @@
 - Irrelevant execution-target fields are omitted. Resolved and observed commits render as short monospaced hashes whose text-copy action copies the full hash.
 - Missing-field policy: hide expected-not-yet-created fields, show continuity fields empty/unassigned where useful, and render unexpected meaningful missing fields as unavailable/error states. Unavailable managed worktrees are omitted from execution-target facts.
 - Task detail allows title/body edit only while still in Backlog. Source URL is shown read-only in Properties and is never editable: valid `http(s)`/`mailto` values render as a compact link labeled with the bare host (e.g. `github.com`) opening in the system browser, and other values fall back to plain `Source: <text>`.
-- Task detail self-refreshes live while open: it subscribes to its project's workflow events and refetches its own read models (detail, activity, comments, pending asks) whenever a server event mutates the task — status, runs, transitions/approvals, comments, questions, or title/body — independent of the hosting surface (board sidebar, Home inbox, or standalone window). Refreshes reuse cached data so the update is flicker-free and never collapses the surface to a loading state.
+- Task detail loads core task detail, task attention, activity, and comments as independent parallel read models. Core detail renders without waiting for task attention; attention controls appear progressively when their bounded task-attention read completes.
+- The attention area has its own loading and retryable error states without disabling core task detail. When task detail opens for a specific Inbox item, it applies that requested focus after the matching task-attention item arrives.
+- Task detail self-refreshes live while open: it subscribes to its project's workflow events and refetches its own read models (detail, task attention, activity, comments, pending asks) whenever a server event mutates the task — status, runs, transitions/approvals, comments, questions, or title/body — independent of the hosting surface (board sidebar, Home inbox, or standalone window). Refreshes reuse cached data so the update is flicker-free and never collapses the surface to a loading state.
 - Live refresh never overwrites unsaved edits: a clean surface follows server updates, but in-progress title/body edits take priority and are preserved until the user saves or reverts them.
 
 ## Comments, Activity, Inbox
@@ -196,7 +198,8 @@
 - Activity feed uses server read model as source of truth and never loads full transcripts or `events.jsonl`.
 - Activity feed is newest-to-oldest and paginated for older entries.
 - Deleted comments are hidden unless backend later adds explicit delete audit rows.
-- Home Inbox lists/deep-links attention items. Answer/approval actions happen in task detail Inbox.
+- Home Inbox uses the global paginated attention feed and lists/deep-links attention items. Answer/approval actions happen in task detail Inbox.
+- Task detail uses a separate bounded, non-paginated task-attention read. Core task detail does not embed attention items, and there is no project-scoped attention feed.
 - Task detail sidebars opened from the Home Inbox expose live Previous/Next controls that step through the attention feed order. Navigation reflects the live inbox; after the open task is resolved and leaves the inbox, Next advances to the item that took its place. Controls are Inbox-only — board/standalone task detail has no Previous/Next.
 - Top detail action opens or focuses next/highest-priority unresolved attention item.
 - If multiple unresolved attention items exist, all get inline controls.

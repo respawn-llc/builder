@@ -109,12 +109,50 @@ func TestManualMoveRejectsActiveRunWithoutMutationAndRestartsAfterInterrupt(t *t
 	if err := store.InterruptRun(ctx, started.RunID, "manual", "{}"); err != nil {
 		t.Fatalf("InterruptRun: %v", err)
 	}
+	preparation, err := store.PrepareManualMove(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(start)})
+	if err != nil {
+		t.Fatalf("PrepareManualMove restart after interrupt: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+CREATE TRIGGER fail_interrupted_manual_move_transition
+BEFORE INSERT ON task_transitions
+BEGIN
+    SELECT RAISE(ABORT, 'forced manual move failure');
+END`); err != nil {
+		t.Fatalf("create forced manual move failure: %v", err)
+	}
+	failed, err := store.ApplyManualMove(ctx, preparation, nil)
+	if err == nil {
+		t.Fatal("ApplyManualMove succeeded with forced transition failure")
+	}
+	if failed.TransitionID != "" ||
+		len(failed.ResolvedApprovalTransitionProjections) != 0 ||
+		len(failed.ResolvedInterruptedRunProjections) != 0 {
+		t.Fatalf("failed manual move exposed resolution projections: %+v", failed)
+	}
+	if _, err := store.db.ExecContext(ctx, `DROP TRIGGER fail_interrupted_manual_move_transition`); err != nil {
+		t.Fatalf("drop forced manual move failure: %v", err)
+	}
+	if projection, ok, err := store.PendingInterruptedRunAttentionProjection(ctx, started.RunID); err != nil || !ok || projection.RunID != started.RunID {
+		t.Fatalf("pending interruption after rollback = %+v, %v, %v", projection, ok, err)
+	}
 	moved, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(start)})
 	if err != nil {
 		t.Fatalf("ManualMoveTask restart after interrupt: %v", err)
 	}
 	if moved.State != "applied" || len(moved.PlacementIDs) != 1 || len(moved.RunIDs) != 0 {
 		t.Fatalf("restart result = %+v, want applied start placement without a run", moved)
+	}
+	if len(moved.ResolvedInterruptedRunProjections) != 1 {
+		t.Fatalf("resolved interrupted-run projections = %+v, want one", moved.ResolvedInterruptedRunProjections)
+	}
+	resolved := moved.ResolvedInterruptedRunProjections[0]
+	if resolved.RunID != started.RunID ||
+		resolved.TaskID != task.ID ||
+		resolved.InterruptionReason != "manual" ||
+		resolved.InterruptionDetailJSON == nil ||
+		*resolved.InterruptionDetailJSON != "{}" {
+		t.Fatalf("resolved interrupted-run projection = %+v", resolved)
 	}
 }
 
@@ -249,8 +287,12 @@ func TestManualMoveFromPendingApprovalToBacklogDiscardsApproval(t *testing.T) {
 	if moved.State != "applied" || len(moved.PlacementIDs) != 1 {
 		t.Fatalf("approval-to-backlog move = %+v, want applied with one placement", moved)
 	}
-	if len(moved.ResolvedApprovalTransitionIDs) != 1 || moved.ResolvedApprovalTransitionIDs[0] != approval.TransitionID {
-		t.Fatalf("resolved approval ids = %+v, want %s", moved.ResolvedApprovalTransitionIDs, approval.TransitionID)
+	if len(moved.ResolvedApprovalTransitionProjections) != 1 {
+		t.Fatalf("resolved approval projections = %+v, want one", moved.ResolvedApprovalTransitionProjections)
+	}
+	projection := moved.ResolvedApprovalTransitionProjections[0]
+	if projection.TransitionID != approval.TransitionID || projection.ProjectID != binding.ProjectID || projection.WorkflowID != string(workflowID) || projection.TaskID != task.ID {
+		t.Fatalf("resolved approval projection = %+v", projection)
 	}
 
 	transitions, err := store.ListTransitions(ctx, task.ID)

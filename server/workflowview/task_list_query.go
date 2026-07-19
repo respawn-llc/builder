@@ -234,7 +234,10 @@ type workflowTaskListRow struct {
 	matchingWorkflowCount int
 }
 
-func (s *Service) listWorkflowTaskListRows(ctx context.Context, req workflowTaskListQueryRequest) ([]workflowTaskListRow, error) {
+func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryRequest) ([]workflowTaskListRow, error) {
+	if l == nil {
+		return nil, errors.New("task list is required")
+	}
 	workflowFilter := sql.NullString{}
 	canceledTerminalNodeID := sql.NullString{}
 	visibleColumnsJSON := sql.NullString{}
@@ -277,7 +280,7 @@ func (s *Service) listWorkflowTaskListRows(ctx context.Context, req workflowTask
 	if req.cursor.ColumnRank != nil {
 		cursorColumnRank = sql.NullInt64{Int64: int64(*req.cursor.ColumnRank), Valid: true}
 	}
-	rows, err := s.queries.ListWorkflowTaskListRows(ctx, sqlitegen.ListWorkflowTaskListRowsParams{
+	rows, err := l.queries.ListWorkflowTaskListRows(ctx, sqlitegen.ListWorkflowTaskListRowsParams{
 		ProjectID:               req.projectID,
 		WorkflowID:              workflowFilter,
 		CanceledTerminalNodeID:  canceledTerminalNodeID,
@@ -313,7 +316,13 @@ func (s *Service) listWorkflowTaskListRows(ctx context.Context, req workflowTask
 	}
 	out := make([]workflowTaskListRow, 0, len(rows))
 	for _, row := range rows {
-		status, err := workflowTaskStatusFromFields(row.ID, row.Kind, row.NodeIdsJson, row.RunIdsJson, row.AttentionTypesJson)
+		statusFact, err := l.projector.DecodeStatus(TaskStatusInput{
+			TaskID:             row.ID,
+			Kind:               row.Kind,
+			NodeIDsJSON:        row.NodeIdsJson,
+			RunIDsJSON:         row.RunIdsJson,
+			AttentionTypesJSON: row.AttentionTypesJson,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -351,7 +360,7 @@ func (s *Service) listWorkflowTaskListRows(ctx context.Context, req workflowTask
 				CreatedAtUnixMs: row.CreatedAtUnixMs,
 				UpdatedAtUnixMs: row.UpdatedAtUnixMs,
 				ColumnKeys:      columnKeys,
-				Status:          status,
+				Status:          statusFact.Status,
 				RunCount:        int(row.RunCount),
 			},
 			titleSort:             row.TitleSort,

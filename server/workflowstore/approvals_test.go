@@ -88,6 +88,13 @@ func TestApprovePendingTransitionStartsStoredTargetEdgeSnapshot(t *testing.T) {
 	if approved.State != "approved" || len(approved.PlacementIDs) != 1 || len(approved.RunIDs) != 0 {
 		t.Fatalf("approved result = %+v, want approved terminal placement without run", approved)
 	}
+	if len(approved.ResolvedApprovalTransitionProjections) != 1 {
+		t.Fatalf("resolved approval projections = %+v, want one", approved.ResolvedApprovalTransitionProjections)
+	}
+	projection := approved.ResolvedApprovalTransitionProjections[0]
+	if projection.TransitionID != completed.TransitionID || projection.ProjectID != binding.ProjectID || projection.WorkflowID != string(workflowID) || projection.TaskID != task.ID || projection.SourceRunID != started.RunID {
+		t.Fatalf("resolved approval projection = %+v", projection)
+	}
 	again, err := store.ApproveTransition(ctx, completed.TransitionID)
 	if err != nil {
 		t.Fatalf("ApproveTransition duplicate: %v", err)
@@ -115,6 +122,33 @@ func TestApprovePendingTransitionStartsStoredTargetEdgeSnapshot(t *testing.T) {
 	}
 	if len(placements) != 3 || placements[2].ID != approved.PlacementIDs[0] || placements[2].State != "active" {
 		t.Fatalf("placements after approval = %+v, want active terminal sink", placements)
+	}
+}
+
+func TestApprovePendingTransitionRollbackReturnsNoResolutionProjection(t *testing.T) {
+	fixture := newPendingAgentApprovalFixture(t)
+	if _, err := fixture.store.db.ExecContext(fixture.ctx, `
+UPDATE task_transition_edges
+SET metadata_json = '{"parameters":{}}'
+WHERE task_transition_id = ?`, string(fixture.transitionID)); err != nil {
+		t.Fatalf("corrupt transition edge metadata: %v", err)
+	}
+
+	result, err := fixture.store.ApproveTransition(fixture.ctx, fixture.transitionID)
+	if err == nil {
+		t.Fatal("ApproveTransition unexpectedly succeeded")
+	}
+	if len(result.ResolvedApprovalTransitionProjections) != 0 {
+		t.Fatalf("failed approval returned resolution projections = %+v", result.ResolvedApprovalTransitionProjections)
+	}
+	transitions, listErr := fixture.store.ListTransitions(fixture.ctx, fixture.taskID)
+	if listErr != nil {
+		t.Fatalf("ListTransitions: %v", listErr)
+	}
+	for _, transition := range transitions {
+		if transition.ID == fixture.transitionID && transition.State != "pending_approval" {
+			t.Fatalf("rolled-back transition state = %q, want pending_approval", transition.State)
+		}
 	}
 }
 

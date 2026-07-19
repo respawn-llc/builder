@@ -77,8 +77,7 @@ export function useProjectBoardSubscription(
           queryKey: queryKeys.boardNodeCardsRoot(projectID, selectedWorkflowID),
         });
       }
-      await queryClient.invalidateQueries({ queryKey: queryKeys.attention("") });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.attention(projectID) });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.attention });
     }
     async function refreshQuestionTask(event: WorkflowProjectEvent): Promise<void> {
       const taskID = workflowProjectQuestionTaskID(event);
@@ -178,12 +177,12 @@ export function useBoardTaskActions(
     await Promise.all([
       refresh(),
       queryClient.invalidateQueries({ queryKey: queryKeys.task(taskID) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.taskAttention(taskID) }),
       queryClient.invalidateQueries({ queryKey: queryKeys.activity(taskID) }),
       queryClient.invalidateQueries({ queryKey: queryKeys.allTasks }),
       queryClient.invalidateQueries({ queryKey: queryKeys.allActivity }),
       queryClient.invalidateQueries({ queryKey: queryKeys.allAttention }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.attention("") }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.attention(projectID) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.attention }),
     ]);
   }
   return {

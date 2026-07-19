@@ -146,9 +146,37 @@ describe("ApiClient", () => {
       runs: [],
       transitions: [],
       comments: [],
-      attention: [],
+      attentionCount: 0,
       sourceURL: "",
     });
+  });
+
+  it("uses separate global and task attention RPC contracts", async () => {
+    const transport = new FakeRpcTransport([
+      {
+        method: "workflow.attention.list",
+        result: { items: [], next_page_token: "", generated_at_unix_ms: 1 },
+      },
+      {
+        method: "workflow.task.attention.list",
+        result: { items: [], generated_at_unix_ms: 2 },
+      },
+    ]);
+    const client = new ApiClient(transport);
+
+    await expect(client.listAttention("cursor-1")).resolves.toMatchObject({ items: [], nextPageToken: "" });
+    await expect(client.listTaskAttention("task-1")).resolves.toMatchObject({ items: [], generatedAt: 2 });
+
+    expect(transport.calls).toEqual([
+      {
+        method: "workflow.attention.list",
+        params: { page_size: 40, page_token: "cursor-1" },
+      },
+      {
+        method: "workflow.task.attention.list",
+        params: { task_id: "task-1" },
+      },
+    ]);
   });
 
   it("parses task source URL into sourceURL", async () => {
@@ -855,7 +883,7 @@ const emptyTaskDetailResponse = {
       can_cancel: true,
       manual_move_target_node_ids: [],
     },
-    attention: null,
+    attention_count: 0,
     runs: null,
     transitions: null,
     comments: null,

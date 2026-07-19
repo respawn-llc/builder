@@ -34,8 +34,8 @@ export function useProjectPages() {
 export function useGlobalAttentionPages() {
   const { api } = useAppServices();
   return useInfiniteQuery({
-    queryKey: queryKeys.attention(""),
-    queryFn: async ({ pageParam }) => api.listAttention("", pageParam),
+    queryKey: queryKeys.attention,
+    queryFn: async ({ pageParam }) => api.listAttention(pageParam),
     initialPageParam: "",
     getNextPageParam: (lastPage) => (lastPage.nextPageToken.length > 0 ? lastPage.nextPageToken : undefined),
     placeholderData: keepPreviousData,
@@ -67,6 +67,10 @@ export function useGlobalAttentionEvents() {
         return;
       }
       void queryClient.invalidateQueries({ queryKey: queryKeys.task(taskID), refetchType: "active" });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.taskAttention(taskID),
+        refetchType: "active",
+      });
       void queryClient.invalidateQueries({ queryKey: queryKeys.activity(taskID), refetchType: "active" });
       void queryClient.invalidateQueries({ queryKey: queryKeys.allPendingAsks, refetchType: "active" });
     };

@@ -215,6 +215,9 @@
 ## Task Status And Listing
 
 - Task detail, workflow board cards, and paginated task lists use one server-authoritative typed task-status projection derived from durable placements/outcomes plus one immutable exact live snapshot.
+- Workflow attention has two read surfaces: a global paginated Inbox feed and a bounded non-paginated task feed. There is no project-scoped attention feed.
+- Core task detail does not embed attention items. It retains an unresolved-attention count for task-show output, and that count plus the rest of core task detail are database-backed without transcript reads.
+- Task attention may read the newest active transcript segment to recover unresolved question content. Desktop task detail starts this read independently in parallel so core detail is not blocked.
 - Task status is UI-neutral structured data. Clients render and localize status labels.
 - One primary status uses this precedence: done, live question, live or persisted workflow approval, running, queued, interrupted, backlog, active.
 - Running, queued, and live-question status require exact generation-matched live evidence. Interruption metadata annotates interrupted state but never proves liveness.

@@ -62,7 +62,7 @@ func (f runLifecycleFixture) resume(t *testing.T) []RunRecord {
 	if err != nil {
 		t.Fatalf("ResumeTaskRuns: %v", err)
 	}
-	return runs
+	return runs.Runs
 }
 
 func (f runLifecycleFixture) recordViolation(t *testing.T, req RecordProtocolViolationRequest) RecordProtocolViolationResult {
@@ -447,12 +447,23 @@ func TestResumeTaskRunRequeuesInterruptedRunWithSameSession(t *testing.T) {
 	if err := f.store.InterruptRunGeneration(f.ctx, f.started.RunID, claimed.Generation, "manual", `{"reason":"test"}`); err != nil {
 		t.Fatalf("InterruptRunGeneration: %v", err)
 	}
+	interrupted := f.runs(t)[0]
 
-	resumedRuns := f.resume(t)
-	if len(resumedRuns) != 1 {
-		t.Fatalf("resumed runs = %+v, want one", resumedRuns)
+	result, err := f.store.ResumeTaskRuns(f.ctx, f.task.ID)
+	if err != nil {
+		t.Fatalf("ResumeTaskRuns: %v", err)
 	}
-	resumed := resumedRuns[0]
+	if len(result.ResolvedInterruptedRunProjections) != 1 {
+		t.Fatalf("resolved interruption projections = %+v, want one", result.ResolvedInterruptedRunProjections)
+	}
+	projection := result.ResolvedInterruptedRunProjections[0]
+	if projection.RunID != f.started.RunID || projection.SessionID != sessionID || projection.InterruptionReason != "manual" || projection.InterruptionDetailJSON == nil || *projection.InterruptionDetailJSON != `{"reason":"test"}` || interrupted.InterruptedAt == nil || projection.OccurredAtUnixMs != *interrupted.InterruptedAt {
+		t.Fatalf("resolved interruption projection = %+v, interrupted run = %+v", projection, interrupted)
+	}
+	if len(result.Runs) != 1 {
+		t.Fatalf("resumed runs = %+v, want one", result.Runs)
+	}
+	resumed := result.Runs[0]
 	if resumed.ID != f.started.RunID || resumed.SessionID != sessionID || resumed.StartedAt != nil || resumed.InterruptedAt != nil || resumed.Generation <= claimed.Generation {
 		t.Fatalf("resumed run = %+v, want same run/session requeued with newer generation", resumed)
 	}
@@ -507,10 +518,10 @@ func TestResumeTaskRunAllowsDefaultAgentRoleWithoutResolver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResumeTaskRuns default role: %v", err)
 	}
-	if len(resumedRuns) != 1 {
+	if len(resumedRuns.Runs) != 1 {
 		t.Fatalf("resumed runs = %+v, want one", resumedRuns)
 	}
-	resumed := resumedRuns[0]
+	resumed := resumedRuns.Runs[0]
 	if resumed.ID != started.RunID || resumed.InterruptedAt != nil || resumed.StartedAt != nil {
 		t.Fatalf("resumed run = %+v, want default-role run requeued", resumed)
 	}
@@ -572,10 +583,10 @@ func TestInterruptTargetsBySessionAndResumeRequeuesAllRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResumeTaskRuns: %v", err)
 	}
-	if len(resumed) != 2 {
+	if len(resumed.Runs) != 2 {
 		t.Fatalf("resumed = %+v, want both runs", resumed)
 	}
-	for _, run := range resumed {
+	for _, run := range resumed.Runs {
 		if run.InterruptedAt != nil || run.StartedAt != nil {
 			t.Fatalf("resumed run = %+v, want reset", run)
 		}

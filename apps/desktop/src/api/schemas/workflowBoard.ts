@@ -9,6 +9,7 @@ import type {
   CommentPage,
   PendingAsk,
   TaskDetail,
+  TaskAttention,
   TaskApproveResponse,
   TaskMoveResponse,
   TaskStartResponse,
@@ -305,6 +306,16 @@ export const attentionPageSchema: z.ZodType<AttentionPage> = z
     generatedAt: value.generated_at_unix_ms,
   }));
 
+export const taskAttentionSchema: z.ZodType<TaskAttention> = z
+  .object({
+    items: z.array(attentionItemSchema),
+    generated_at_unix_ms: z.number(),
+  })
+  .transform((value) => ({
+    items: value.items,
+    generatedAt: value.generated_at_unix_ms,
+  }));
+
 export const taskDetailSchema: z.ZodType<TaskDetail> = z
   .object({
     task: z.object({
@@ -331,7 +342,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
       managed_worktree: z.never().optional(),
       status: taskStatusSchema,
       actions: taskActionsSchema,
-      attention: z.array(attentionItemSchema).nullish().transform(emptyArray),
+      attention_count: z.number().int().nonnegative(),
       runs: z.array(runSchema).nullish().transform(emptyArray),
       transitions: z.array(transitionSchema).nullish().transform(emptyArray),
       comments: z.array(commentSchema).nullish().transform(emptyArray),
@@ -351,7 +362,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
     sourceWorkspace: value.task.source_workspace,
     status: value.task.status,
     actions: value.task.actions,
-    attention: value.task.attention,
+    attentionCount: value.task.attention_count,
     comments: value.task.comments,
     runs: value.task.runs,
     transitions: value.task.transitions,

@@ -98,6 +98,7 @@ type NodeGroup struct {
 	ID            string
 	Key           ModelKey
 	DisplayName   string
+	SortOrder     int64
 	MemberNodeIDs []NodeID
 }
 

@@ -125,7 +125,6 @@ var allowedSmallPackages = map[string]string{
 	"server/session/sessiontest":                  "test-only helper package exposing full event-history collectors kept out of the production session surface so production code cannot materialize whole histories",
 	"server/workflowruntime":                      "runtime/workflow contract boundary imported by server runtime; merging into runner would invert dependencies",
 	"server/workflowscript":                       "shared workflow script path validation and resolution contract used by store, service, and runner without creating dependency cycles",
-	"server/workflowsvc":                          "workflow mutation service owner with service tests",
 	"shared/apicontract":                          "shared API route/service contract owner after absorbing RPC and service contracts",
 	"shared/auth":                                 "low-level shared auth contract required below server/auth and shared/serverapi",
 	"shared/llmerrors":                            "shared provider-error contract surfaced by CLI and server",

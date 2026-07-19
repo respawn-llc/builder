@@ -166,7 +166,7 @@ type StoreController struct {
 }
 
 type interruptedRunAttentionFinalizer interface {
-	FinalizeInterruptedRun(context.Context, workflow.RunID)
+	PublishPendingInterruptedRun(context.Context, workflow.RunID)
 }
 
 func (c StoreController) CompleteWorkflowRun(ctx context.Context, req CompletionRequest) (CompletionResult, error) {
@@ -189,9 +189,10 @@ func (c StoreController) CompleteWorkflowRun(ctx context.Context, req Completion
 		finalizeCtx, cancel := context.WithTimeout(context.Background(), attentionFinalizationTimeout)
 		defer cancel()
 		c.AttentionFinalizer.FinalizeTransition(finalizeCtx, workflowattention.TransitionResult{
-			TransitionID:                  result.TransitionID,
-			State:                         result.State,
-			ResolvedApprovalTransitionIDs: append([]workflow.TransitionID(nil), result.ResolvedApprovalTransitionIDs...),
+			TransitionID:                      result.TransitionID,
+			State:                             result.State,
+			ResolvedApprovalProjections:       workflowattention.ApprovalProjections(result.ResolvedApprovalTransitionProjections),
+			ResolvedInterruptedRunProjections: workflowattention.InterruptedRunProjections(result.ResolvedInterruptedRunProjections),
 		})
 		if finalizer, ok := c.AttentionFinalizer.(interruptedRunAttentionFinalizer); ok {
 			for _, runID := range result.InterruptedRunIDs {
@@ -199,7 +200,7 @@ func (c StoreController) CompleteWorkflowRun(ctx context.Context, req Completion
 					continue
 				}
 				runFinalizeCtx, runCancel := context.WithTimeout(context.Background(), attentionFinalizationTimeout)
-				finalizer.FinalizeInterruptedRun(runFinalizeCtx, runID)
+				finalizer.PublishPendingInterruptedRun(runFinalizeCtx, runID)
 				runCancel()
 			}
 		}
@@ -240,7 +241,7 @@ func (c StoreController) RecordWorkflowProtocolViolation(ctx context.Context, re
 		if finalizer, ok := c.AttentionFinalizer.(interruptedRunAttentionFinalizer); ok {
 			finalizeCtx, cancel := context.WithTimeout(context.Background(), attentionFinalizationTimeout)
 			defer cancel()
-			finalizer.FinalizeInterruptedRun(finalizeCtx, req.RunID)
+			finalizer.PublishPendingInterruptedRun(finalizeCtx, req.RunID)
 		}
 	}
 	return ViolationResult{Count: result.Count, Interrupted: result.Interrupted}, nil

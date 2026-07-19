@@ -2,9 +2,7 @@ package workflowview
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strings"
 
 	"core/server/metadata/sqlitegen"
 	"core/shared/serverapi"
@@ -15,19 +13,19 @@ type workflowTaskStatusFact struct {
 	Done   bool
 }
 
-func (s *Service) taskStatusFact(ctx context.Context, taskID string) (workflowTaskStatusFact, error) {
-	row, err := s.queries.GetWorkflowTaskStatusRecord(ctx, taskID)
+func loadWorkflowTaskStatusFact(ctx context.Context, queries *sqlitegen.Queries, projector *TaskProjector, taskID string) (workflowTaskStatusFact, error) {
+	row, err := queries.GetWorkflowTaskStatusRecord(ctx, taskID)
 	if err != nil {
 		return workflowTaskStatusFact{}, err
 	}
-	return workflowTaskStatusFactFromRecord(row)
+	return workflowTaskStatusFactFromRecord(projector, row)
 }
 
-func (s *Service) taskStatusFacts(ctx context.Context, taskIDs []string) (map[string]workflowTaskStatusFact, error) {
+func loadWorkflowTaskStatusFacts(ctx context.Context, queries *sqlitegen.Queries, projector *TaskProjector, taskIDs []string) (map[string]workflowTaskStatusFact, error) {
 	if len(taskIDs) == 0 {
 		return map[string]workflowTaskStatusFact{}, nil
 	}
-	rows, err := s.queries.ListWorkflowTaskStatusRecordsByTasks(ctx, taskIDs)
+	rows, err := queries.ListWorkflowTaskStatusRecordsByTasks(ctx, taskIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -36,7 +34,7 @@ func (s *Service) taskStatusFacts(ctx context.Context, taskIDs []string) (map[st
 		if _, exists := statuses[row.TaskID]; exists {
 			return nil, fmt.Errorf("workflow task status projection returned duplicate task %q", row.TaskID)
 		}
-		status, err := workflowTaskStatusFactFromRecord(row)
+		status, err := workflowTaskStatusFactFromRecord(projector, row)
 		if err != nil {
 			return nil, err
 		}
@@ -50,51 +48,27 @@ func (s *Service) taskStatusFacts(ctx context.Context, taskIDs []string) (map[st
 	return statuses, nil
 }
 
-func workflowTaskStatusFactFromRecord(row sqlitegen.WorkflowTaskStatusRecord) (workflowTaskStatusFact, error) {
-	status, err := workflowTaskStatusFromFields(row.TaskID, row.Kind, row.NodeIdsJson, row.RunIdsJson, row.AttentionTypesJson)
+func workflowTaskStatusFactFromRecord(projector *TaskProjector, row sqlitegen.WorkflowTaskStatusRecord) (workflowTaskStatusFact, error) {
+	nodeIDsJSON, err := workflowTaskStatusProjectionJSON(row.TaskID, "node_ids_json", row.NodeIdsJson)
 	if err != nil {
 		return workflowTaskStatusFact{}, err
 	}
-	return workflowTaskStatusFact{Status: status, Done: row.IsDone != 0}, nil
-}
-
-func workflowTaskStatusFromFields(taskID string, kindValue string, nodeIDsValue any, runIDsValue any, attentionTypesValue any) (serverapi.WorkflowTaskStatus, error) {
-	kind := serverapi.WorkflowTaskStatusKind(kindValue)
-	nativeState, valid := kind.NativeState()
-	if !valid {
-		return serverapi.WorkflowTaskStatus{}, fmt.Errorf("workflow task status record for task %q has invalid kind %q", taskID, kindValue)
-	}
-	nodeIDsJSON, err := workflowTaskStatusProjectionJSON(taskID, "node_ids_json", nodeIDsValue)
+	runIDsJSON, err := workflowTaskStatusProjectionJSON(row.TaskID, "run_ids_json", row.RunIdsJson)
 	if err != nil {
-		return serverapi.WorkflowTaskStatus{}, err
+		return workflowTaskStatusFact{}, err
 	}
-	nodeIDs, err := workflowTaskStatusIDs(taskID, "node_ids_json", nodeIDsJSON)
+	attentionTypesJSON, err := workflowTaskStatusProjectionJSON(row.TaskID, "attention_types_json", row.AttentionTypesJson)
 	if err != nil {
-		return serverapi.WorkflowTaskStatus{}, err
+		return workflowTaskStatusFact{}, err
 	}
-	runIDsJSON, err := workflowTaskStatusProjectionJSON(taskID, "run_ids_json", runIDsValue)
-	if err != nil {
-		return serverapi.WorkflowTaskStatus{}, err
-	}
-	runIDs, err := workflowTaskStatusIDs(taskID, "run_ids_json", runIDsJSON)
-	if err != nil {
-		return serverapi.WorkflowTaskStatus{}, err
-	}
-	attentionTypesJSON, err := workflowTaskStatusProjectionJSON(taskID, "attention_types_json", attentionTypesValue)
-	if err != nil {
-		return serverapi.WorkflowTaskStatus{}, err
-	}
-	attentionTypes, err := workflowTaskStatusAttentionTypes(taskID, attentionTypesJSON)
-	if err != nil {
-		return serverapi.WorkflowTaskStatus{}, err
-	}
-	return serverapi.WorkflowTaskStatus{
-		Kind:           kind,
-		NativeState:    nativeState,
-		NodeIDs:        nodeIDs,
-		RunIDs:         runIDs,
-		AttentionTypes: attentionTypes,
-	}, nil
+	return projector.DecodeStatus(TaskStatusInput{
+		TaskID:             row.TaskID,
+		Kind:               row.Kind,
+		NodeIDsJSON:        nodeIDsJSON,
+		RunIDsJSON:         runIDsJSON,
+		AttentionTypesJSON: attentionTypesJSON,
+		Done:               row.IsDone != 0,
+	})
 }
 
 func workflowTaskStatusProjectionJSON(taskID string, field string, value any) (string, error) {
@@ -103,41 +77,4 @@ func workflowTaskStatusProjectionJSON(taskID string, field string, value any) (s
 		return "", fmt.Errorf("workflow task status record for task %q has non-text %s", taskID, field)
 	}
 	return encoded, nil
-}
-
-func workflowTaskStatusIDs(taskID string, field string, encoded string) ([]string, error) {
-	var values []string
-	if err := json.Unmarshal([]byte(encoded), &values); err != nil {
-		return nil, fmt.Errorf("workflow task status record for task %q has malformed %s: %w", taskID, field, err)
-	}
-	for index, value := range values {
-		if strings.TrimSpace(value) == "" {
-			return nil, fmt.Errorf("workflow task status record for task %q has blank %s[%d]", taskID, field, index)
-		}
-		if index > 0 && values[index-1] >= value {
-			return nil, fmt.Errorf("workflow task status record for task %q has non-deterministic %s", taskID, field)
-		}
-	}
-	return values, nil
-}
-
-func workflowTaskStatusAttentionTypes(taskID string, encoded string) ([]serverapi.WorkflowTaskAttentionKind, error) {
-	var values []string
-	if err := json.Unmarshal([]byte(encoded), &values); err != nil {
-		return nil, fmt.Errorf("workflow task status record for task %q has malformed attention_types_json: %w", taskID, err)
-	}
-	out := make([]serverapi.WorkflowTaskAttentionKind, 0, len(values))
-	for index, value := range values {
-		kind := serverapi.WorkflowTaskAttentionKind(value)
-		switch kind {
-		case serverapi.WorkflowTaskAttentionKindApproval, serverapi.WorkflowTaskAttentionKindInterrupted, serverapi.WorkflowTaskAttentionKindQuestion:
-		default:
-			return nil, fmt.Errorf("workflow task status record for task %q has unknown attention_types_json[%d] %q", taskID, index, value)
-		}
-		if index > 0 && values[index-1] >= value {
-			return nil, fmt.Errorf("workflow task status record for task %q has non-deterministic attention_types_json", taskID)
-		}
-		out = append(out, kind)
-	}
-	return out, nil
 }

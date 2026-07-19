@@ -1,13 +1,15 @@
+const attentionKey = ["attention"] as const;
+
 export const queryKeys = {
   startup: ["startup"],
   readiness: ["startup", "readiness"],
   projects: ["projects"],
   allProjectEdits: ["project-edit"],
   projectEdit: (projectID: string) => ["project-edit", projectID],
-  attention: (projectID: string) => ["attention", projectID],
+  attention: attentionKey,
   allWorkspaces: ["workspaces"],
   workspaces: (projectID: string) => ["workspaces", projectID],
-  allAttention: ["attention"],
+  allAttention: attentionKey,
   allBoards: ["board"],
   allWorkflows: ["workflow"],
   allWorkflowDefinitions: ["workflow-definition"],
@@ -56,6 +58,7 @@ export const queryKeys = {
     nodeID,
   ],
   task: (taskID: string) => ["task", taskID],
+  taskAttention: (taskID: string) => ["task-attention", taskID],
   activity: (taskID: string) => ["activity", taskID],
   comments: (taskID: string) => ["comments", taskID],
   pendingAsks: (sessionID: string | null) => ["pending-asks", sessionID],

@@ -82,7 +82,7 @@ func taskShowOutputFromDetail(task serverapi.WorkflowTaskDetail) taskShowOutput 
 		ExecutionTarget: task.ExecutionTarget,
 		Status:          task.Status,
 		Actions:         task.Actions,
-		AttentionCount:  len(task.Attention),
+		AttentionCount:  task.AttentionCount,
 		PlacementCount:  len(task.Placements),
 		RunCount:        len(task.Runs),
 		TransitionCount: len(task.Transitions),
