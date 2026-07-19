@@ -1555,8 +1555,8 @@ func TestServiceDeleteWorkflowResolvesInterruptedRunAttention(t *testing.T) {
 	if err := service.store.InterruptRunGeneration(ctx, workflow.RunID(started.RunID), claimed.Generation, "workflow_runtime_failed", "{}"); err != nil {
 		t.Fatalf("InterruptRunGeneration: %v", err)
 	}
-	finalizer := &recordingWorkflowAttentionFinalizer{}
-	service.attentionFinalizer = finalizer
+	publisher := &recordingWorkflowAttentionPublisher{}
+	service.attentionFinalizer = workflowattention.NewFinalizer(failingWorkflowPendingProjectionProvider{t: t}, publisher)
 	preview, err := service.PreviewWorkflowDelete(ctx, serverapi.WorkflowDeletePreviewRequest{WorkflowID: workflowID})
 	if err != nil {
 		t.Fatalf("PreviewWorkflowDelete: %v", err)
@@ -1576,8 +1576,8 @@ func TestServiceDeleteWorkflowResolvesInterruptedRunAttention(t *testing.T) {
 	if !deleted.Deleted {
 		t.Fatalf("delete response = %+v, want deleted", deleted)
 	}
-	if len(finalizer.resolvedRuns) != 1 || finalizer.resolvedRuns[0] != workflow.RunID(started.RunID) {
-		t.Fatalf("resolved interrupted runs = %+v, want %s", finalizer.resolvedRuns, started.RunID)
+	if len(publisher.resolved) != 1 || publisher.resolved[0].id.UUID != started.RunID {
+		t.Fatalf("resolved interrupted runs = %+v, want %s", publisher.resolved, started.RunID)
 	}
 }
 
@@ -1590,8 +1590,9 @@ func TestServiceDeleteWorkflowResolvesInterruptedRunAttentionAcrossProjects(t *t
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, firstProject.ProjectID, workflowID)
 	linkDefaultWorkflowServiceProject(t, ctx, service, secondProject.ProjectID, workflowID)
+	requireWorkflowServiceEdgeApproval(t, ctx, service, workflowID, "done")
 
-	interrupt := func(projectID string, workflowID string) workflow.RunID {
+	interrupt := func(projectID string) (workflow.RunID, string) {
 		t.Helper()
 		task := createWorkflowServiceTask(t, ctx, service, serverapi.WorkflowTaskCreateRequest{ProjectID: projectID, Title: "Interrupted task", Body: "Body"})
 		started := startWorkflowServiceTask(t, ctx, service, task.Task.ID)
@@ -1602,17 +1603,38 @@ func TestServiceDeleteWorkflowResolvesInterruptedRunAttentionAcrossProjects(t *t
 		if err := service.store.InterruptRunGeneration(ctx, workflow.RunID(started.RunID), claimed.Generation, "workflow_runtime_failed", "{}"); err != nil {
 			t.Fatalf("InterruptRunGeneration: %v", err)
 		}
-		return workflow.RunID(started.RunID)
+		return workflow.RunID(started.RunID), task.Task.ID
+	}
+	pendingApproval := func(projectID string) (workflow.TransitionID, string) {
+		t.Helper()
+		task := createWorkflowServiceTask(t, ctx, service, serverapi.WorkflowTaskCreateRequest{ProjectID: projectID, Title: "Approval task", Body: "Body"})
+		started := startWorkflowServiceTask(t, ctx, service, task.Task.ID)
+		completed, err := service.store.CompleteRun(ctx, workflowstore.CompleteRunRequest{
+			RunID:        workflow.RunID(started.RunID),
+			TransitionID: "done",
+			Actor:        "agent",
+		})
+		if err != nil {
+			t.Fatalf("CompleteRun: %v", err)
+		}
+		if completed.State != "pending_approval" {
+			t.Fatalf("completion = %+v, want pending approval", completed)
+		}
+		return completed.TransitionID, task.Task.ID
 	}
 
-	firstRunID := interrupt(firstProject.ProjectID, workflowID)
-	secondRunID := interrupt(secondProject.ProjectID, workflowID)
+	firstRunID, firstInterruptedTaskID := interrupt(firstProject.ProjectID)
+	secondRunID, secondInterruptedTaskID := interrupt(secondProject.ProjectID)
+	firstTransitionID, firstApprovalTaskID := pendingApproval(firstProject.ProjectID)
+	secondTransitionID, secondApprovalTaskID := pendingApproval(secondProject.ProjectID)
 	unrelatedWorkflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, secondProject.ProjectID, unrelatedWorkflowID)
-	unrelatedRunID := interrupt(secondProject.ProjectID, unrelatedWorkflowID)
+	requireWorkflowServiceEdgeApproval(t, ctx, service, unrelatedWorkflowID, "done")
+	unrelatedRunID, _ := interrupt(secondProject.ProjectID)
+	unrelatedTransitionID, _ := pendingApproval(secondProject.ProjectID)
 
-	finalizer := &recordingWorkflowAttentionFinalizer{}
-	service.attentionFinalizer = finalizer
+	publisher := &recordingWorkflowAttentionPublisher{}
+	service.attentionFinalizer = workflowattention.NewFinalizer(failingWorkflowPendingProjectionProvider{t: t}, publisher)
 	preview, err := service.PreviewWorkflowDelete(ctx, serverapi.WorkflowDeletePreviewRequest{WorkflowID: workflowID})
 	if err != nil {
 		t.Fatalf("PreviewWorkflowDelete: %v", err)
@@ -1628,12 +1650,76 @@ func TestServiceDeleteWorkflowResolvesInterruptedRunAttentionAcrossProjects(t *t
 		t.Fatalf("DeleteWorkflow: %v", err)
 	}
 
-	resolved := make(map[workflow.RunID]bool, len(finalizer.resolvedRuns))
-	for _, runID := range finalizer.resolvedRuns {
-		resolved[runID] = true
+	resolved := make(map[clientui.AttentionNotificationID]attentionnotify.RoutingScope, len(publisher.resolved))
+	for _, publication := range publisher.resolved {
+		resolved[publication.id] = publication.scope
 	}
-	if len(resolved) != 2 || !resolved[firstRunID] || !resolved[secondRunID] || resolved[unrelatedRunID] {
-		t.Fatalf("resolved interrupted runs = %+v, want only target workflow runs %s and %s", finalizer.resolvedRuns, firstRunID, secondRunID)
+	if len(resolved) != 4 {
+		t.Fatalf("resolved workflow attention = %+v, want four", publisher.resolved)
+	}
+	assertResolution := func(kind clientui.AttentionNotificationKind, id string, projectID string, taskID string) {
+		t.Helper()
+		scope, ok := resolved[clientui.AttentionNotificationID{Kind: kind, UUID: id}]
+		if !ok || scope.ProjectID != projectID || scope.WorkflowID != workflowID || scope.TaskID != taskID {
+			t.Fatalf("resolved %s %s = %+v, want project %s workflow %s task %s", kind, id, scope, projectID, workflowID, taskID)
+		}
+	}
+	assertResolution(clientui.AttentionNotificationKindInterruptedRun, string(firstRunID), firstProject.ProjectID, firstInterruptedTaskID)
+	assertResolution(clientui.AttentionNotificationKindInterruptedRun, string(secondRunID), secondProject.ProjectID, secondInterruptedTaskID)
+	assertResolution(clientui.AttentionNotificationKindApproval, string(firstTransitionID), firstProject.ProjectID, firstApprovalTaskID)
+	assertResolution(clientui.AttentionNotificationKindApproval, string(secondTransitionID), secondProject.ProjectID, secondApprovalTaskID)
+	if _, ok := resolved[clientui.AttentionNotificationID{Kind: clientui.AttentionNotificationKindInterruptedRun, UUID: string(unrelatedRunID)}]; ok {
+		t.Fatalf("resolved workflow attention = %+v, must exclude unrelated run %s", publisher.resolved, unrelatedRunID)
+	}
+	if _, ok := resolved[clientui.AttentionNotificationID{Kind: clientui.AttentionNotificationKindApproval, UUID: string(unrelatedTransitionID)}]; ok {
+		t.Fatalf("resolved workflow attention = %+v, must exclude unrelated transition %s", publisher.resolved, unrelatedTransitionID)
+	}
+}
+
+func TestServiceDeleteWorkflowRollbackPublishesNoAttentionResolution(t *testing.T) {
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	taskID := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID).Task.ID
+	started := startWorkflowServiceTask(t, ctx, service, taskID)
+	claimed, err := service.store.ClaimRun(ctx, workflow.RunID(started.RunID), 0)
+	if err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	if err := service.store.InterruptRunGeneration(ctx, workflow.RunID(started.RunID), claimed.Generation, "workflow_runtime_failed", "{}"); err != nil {
+		t.Fatalf("InterruptRunGeneration: %v", err)
+	}
+	if _, err := metadataStore.DB().ExecContext(ctx, `
+CREATE TRIGGER fail_workflow_task_delete
+BEFORE DELETE ON tasks
+BEGIN
+    SELECT RAISE(ABORT, 'forced workflow deletion failure');
+END;`); err != nil {
+		t.Fatalf("create workflow deletion failure trigger: %v", err)
+	}
+	publisher := &recordingWorkflowAttentionPublisher{}
+	service.attentionFinalizer = workflowattention.NewFinalizer(failingWorkflowPendingProjectionProvider{t: t}, publisher)
+	preview, err := service.PreviewWorkflowDelete(ctx, serverapi.WorkflowDeletePreviewRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("PreviewWorkflowDelete: %v", err)
+	}
+
+	_, err = service.DeleteWorkflow(ctx, serverapi.WorkflowDeleteRequest{
+		WorkflowID:           workflowID,
+		Confirmed:            true,
+		ExpectedVersion:      preview.Impact.Version,
+		ExpectedProjectCount: preview.Impact.ProjectCount,
+		ExpectedLinkCount:    preview.Impact.LinkCount,
+		ExpectedTaskCount:    preview.Impact.TaskCount,
+	})
+	if err == nil {
+		t.Fatal("DeleteWorkflow succeeded, want forced rollback")
+	}
+	if len(publisher.resolved) != 0 || len(publisher.pending) != 0 {
+		t.Fatalf("attention publications after rollback = pending %+v resolved %+v, want none", publisher.pending, publisher.resolved)
+	}
+	if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: taskID}); err != nil {
+		t.Fatalf("GetWorkflowTask after rollback: %v", err)
 	}
 }
 
@@ -2282,23 +2368,7 @@ func newWorkflowServiceOrdinaryTaskFixture(t *testing.T) (context.Context, *Serv
 func newWorkflowServicePendingCompletionApproval(t *testing.T) (context.Context, *Service, string, string, string, string) {
 	t.Helper()
 	ctx, service, projectID, workflowID, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
-	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
-	if err != nil {
-		t.Fatalf("GetWorkflow: %v", err)
-	}
-	var doneEdge serverapi.WorkflowEdge
-	for _, edge := range def.Definition.Edges {
-		if edge.Key == "done" {
-			doneEdge = edge
-			break
-		}
-	}
-	if doneEdge.ID == "" {
-		t.Fatalf("missing done edge in %+v", def.Definition.Edges)
-	}
-	if _, err := service.store.UpdateEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID(doneEdge.ID), WorkflowID: workflow.WorkflowID(workflowID), TransitionGroupID: workflow.TransitionGroupID(doneEdge.TransitionGroupID), Key: workflow.ModelKey(doneEdge.Key), TargetNodeID: workflow.NodeID(doneEdge.TargetNodeID), RequiresApproval: true, ContextMode: workflow.ContextMode(doneEdge.ContextMode), ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(doneEdge.ContextSource.Kind), NodeKey: workflow.ModelKey(doneEdge.ContextSource.NodeKey)}), PromptTemplate: doneEdge.PromptTemplate, Parameters: domainParameters(doneEdge.Parameters)}); err != nil {
-		t.Fatalf("enable done edge approval: %v", err)
-	}
+	requireWorkflowServiceEdgeApproval(t, ctx, service, workflowID, "done")
 	started := startWorkflowServiceTask(t, ctx, service, taskID)
 	completed, err := service.store.CompleteRun(ctx, workflowstore.CompleteRunRequest{
 		RunID:        workflow.RunID(started.RunID),
@@ -2312,6 +2382,27 @@ func newWorkflowServicePendingCompletionApproval(t *testing.T) (context.Context,
 		t.Fatalf("completion = %+v, want pending approval", completed)
 	}
 	return ctx, service, projectID, workflowID, taskID, string(completed.TransitionID)
+}
+
+func requireWorkflowServiceEdgeApproval(t *testing.T, ctx context.Context, service *Service, workflowID, edgeKey string) {
+	t.Helper()
+	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	var targetEdge serverapi.WorkflowEdge
+	for _, edge := range def.Definition.Edges {
+		if edge.Key == edgeKey {
+			targetEdge = edge
+			break
+		}
+	}
+	if targetEdge.ID == "" {
+		t.Fatalf("missing %s edge in %+v", edgeKey, def.Definition.Edges)
+	}
+	if _, err := service.store.UpdateEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID(targetEdge.ID), WorkflowID: workflow.WorkflowID(workflowID), TransitionGroupID: workflow.TransitionGroupID(targetEdge.TransitionGroupID), Key: workflow.ModelKey(targetEdge.Key), TargetNodeID: workflow.NodeID(targetEdge.TargetNodeID), RequiresApproval: true, ContextMode: workflow.ContextMode(targetEdge.ContextMode), ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(targetEdge.ContextSource.Kind), NodeKey: workflow.ModelKey(targetEdge.ContextSource.NodeKey)}), PromptTemplate: targetEdge.PromptTemplate, Parameters: domainParameters(targetEdge.Parameters)}); err != nil {
+		t.Fatalf("enable %s edge approval: %v", edgeKey, err)
+	}
 }
 
 type workflowServicePendingApprovalFixture struct {

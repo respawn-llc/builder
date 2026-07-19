@@ -1084,6 +1084,57 @@ func (q *Queries) DeleteWorkflowNodeGroup(ctx context.Context, arg DeleteWorkflo
 	return result.RowsAffected()
 }
 
+const deleteWorkflowTaskCommentsByWorkflowID = `-- name: DeleteWorkflowTaskCommentsByWorkflowID :execrows
+DELETE FROM task_comments
+WHERE task_id IN (
+    SELECT task_records.id
+    FROM task_records
+    WHERE workflow_id = ?1
+)
+`
+
+func (q *Queries) DeleteWorkflowTaskCommentsByWorkflowID(ctx context.Context, workflowID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteWorkflowTaskCommentsByWorkflowID, workflowID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteWorkflowTaskNodePlacementsByWorkflowID = `-- name: DeleteWorkflowTaskNodePlacementsByWorkflowID :execrows
+DELETE FROM task_node_placements
+WHERE task_id IN (
+    SELECT task_records.id
+    FROM task_records
+    WHERE workflow_id = ?1
+)
+`
+
+func (q *Queries) DeleteWorkflowTaskNodePlacementsByWorkflowID(ctx context.Context, workflowID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteWorkflowTaskNodePlacementsByWorkflowID, workflowID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteWorkflowTaskTransitionsByWorkflowID = `-- name: DeleteWorkflowTaskTransitionsByWorkflowID :execrows
+DELETE FROM task_transitions
+WHERE task_id IN (
+    SELECT task_records.id
+    FROM task_records
+    WHERE workflow_id = ?1
+)
+`
+
+func (q *Queries) DeleteWorkflowTaskTransitionsByWorkflowID(ctx context.Context, workflowID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteWorkflowTaskTransitionsByWorkflowID, workflowID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteWorkflowTasksByWorkflowID = `-- name: DeleteWorkflowTasksByWorkflowID :execrows
 DELETE FROM tasks
 WHERE id IN (
@@ -7387,6 +7438,66 @@ func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowR
 			&i.ProjectActivityAtUnixMs,
 			&i.ProjectLinkDefault,
 			&i.ProjectNameOrderKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkflowResolutionAttentionCandidates = `-- name: ListWorkflowResolutionAttentionCandidates :many
+SELECT
+    kind,
+    id,
+    project_id,
+    workflow_id,
+    task_id,
+    short_id,
+    title,
+    run_id,
+    session_id,
+    ask_id,
+    task_transition_id,
+    interruption_reason,
+    interruption_detail_json,
+    occurred_at_unix_ms
+FROM workflow_attention_candidates
+WHERE workflow_id = ?1
+  AND kind IN ('approval', 'interrupted_run')
+ORDER BY occurred_at_unix_ms ASC, id ASC
+`
+
+func (q *Queries) ListWorkflowResolutionAttentionCandidates(ctx context.Context, workflowID string) ([]WorkflowAttentionCandidate, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkflowResolutionAttentionCandidates, workflowID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []WorkflowAttentionCandidate
+	for rows.Next() {
+		var i WorkflowAttentionCandidate
+		if err := rows.Scan(
+			&i.Kind,
+			&i.ID,
+			&i.ProjectID,
+			&i.WorkflowID,
+			&i.TaskID,
+			&i.ShortID,
+			&i.Title,
+			&i.RunID,
+			&i.SessionID,
+			&i.AskID,
+			&i.TaskTransitionID,
+			&i.InterruptionReason,
+			&i.InterruptionDetailJson,
+			&i.OccurredAtUnixMs,
 		); err != nil {
 			return nil, err
 		}

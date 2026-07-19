@@ -933,6 +933,30 @@ SELECT id
 FROM task_records
 WHERE workflow_id = sqlc.arg(workflow_id);
 
+-- name: DeleteWorkflowTaskTransitionsByWorkflowID :execrows
+DELETE FROM task_transitions
+WHERE task_id IN (
+    SELECT task_records.id
+    FROM task_records
+    WHERE workflow_id = sqlc.arg(workflow_id)
+);
+
+-- name: DeleteWorkflowTaskNodePlacementsByWorkflowID :execrows
+DELETE FROM task_node_placements
+WHERE task_id IN (
+    SELECT task_records.id
+    FROM task_records
+    WHERE workflow_id = sqlc.arg(workflow_id)
+);
+
+-- name: DeleteWorkflowTaskCommentsByWorkflowID :execrows
+DELETE FROM task_comments
+WHERE task_id IN (
+    SELECT task_records.id
+    FROM task_records
+    WHERE workflow_id = sqlc.arg(workflow_id)
+);
+
 -- name: DeleteWorkflowTasksByWorkflowID :execrows
 DELETE FROM tasks
 WHERE id IN (
@@ -3627,6 +3651,27 @@ ORDER BY occurred_at_unix_ms DESC, id DESC;
 SELECT CAST(COUNT(*) AS INTEGER)
 FROM workflow_attention_candidates
 WHERE task_id = CAST(sqlc.arg(task_id) AS TEXT);
+
+-- name: ListWorkflowResolutionAttentionCandidates :many
+SELECT
+    kind,
+    id,
+    project_id,
+    workflow_id,
+    task_id,
+    short_id,
+    title,
+    run_id,
+    session_id,
+    ask_id,
+    task_transition_id,
+    interruption_reason,
+    interruption_detail_json,
+    occurred_at_unix_ms
+FROM workflow_attention_candidates
+WHERE workflow_id = sqlc.arg(workflow_id)
+  AND kind IN ('approval', 'interrupted_run')
+ORDER BY occurred_at_unix_ms ASC, id ASC;
 
 -- name: ListActionableInterruptedRunIDsByTask :many
 SELECT run.id

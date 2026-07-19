@@ -107,12 +107,7 @@ type workflowAttentionFinalizer interface {
 	PublishPendingInterruptedRun(context.Context, workflow.RunID)
 }
 
-type workflowInterruptedRunFinalizer interface {
-	ResolveActiveInterruptedRun(workflow.RunID)
-}
-
 const (
-	workflowAttentionResolutionPageSize  = 200
 	workflowAttentionFinalizationTimeout = 5 * time.Second
 )
 
@@ -462,10 +457,6 @@ func (s *Service) DeleteWorkflow(ctx context.Context, req serverapi.WorkflowDele
 	if err != nil {
 		return serverapi.WorkflowDeleteResponse{}, err
 	}
-	var interruptedRunIDs []workflow.RunID
-	if req.Confirmed {
-		interruptedRunIDs = s.workflowInterruptedRunAttentionIDsByWorkflow(ctx, req.WorkflowID)
-	}
 	result, err := s.store.DeleteWorkflow(ctx, workflowstore.WorkflowDeleteRequest{
 		WorkflowID:           workflow.WorkflowID(req.WorkflowID),
 		Confirmed:            req.Confirmed,
@@ -482,8 +473,7 @@ func (s *Service) DeleteWorkflow(ctx context.Context, req serverapi.WorkflowDele
 	if !resp.Deleted {
 		return resp, nil
 	}
-	s.finalizeWorkflowApprovalProjections(ctx, result.ResolvedApprovalTransitionProjections)
-	s.resolveWorkflowInterruptedRunAttention(ctx, interruptedRunIDs)
+	s.finalizeWorkflowAttentionResolution(ctx, result)
 	s.publishWorkflowEvent(ctx, "", req.WorkflowID, "workflow", "deleted", req.WorkflowID)
 	seen := map[string]bool{}
 	for _, link := range links {
@@ -1288,53 +1278,6 @@ func (s *Service) DeleteWorkflowTask(ctx context.Context, req serverapi.Workflow
 	return nil
 }
 
-func (s *Service) resolveWorkflowInterruptedRunAttention(ctx context.Context, runIDs []workflow.RunID) {
-	if s == nil || len(runIDs) == 0 {
-		return
-	}
-	finalizer, ok := s.attentionFinalizer.(workflowInterruptedRunFinalizer)
-	if !ok {
-		return
-	}
-	for _, runID := range runIDs {
-		if runID == "" {
-			continue
-		}
-		finalizer.ResolveActiveInterruptedRun(runID)
-	}
-}
-
-func (s *Service) workflowInterruptedRunAttentionIDsByWorkflow(ctx context.Context, workflowID string) []workflow.RunID {
-	if s == nil || s.view == nil || strings.TrimSpace(workflowID) == "" {
-		return nil
-	}
-	runIDs := make([]workflow.RunID, 0)
-	seenRuns := map[string]bool{}
-	pageToken := ""
-	for {
-		attention, err := s.view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{
-			PageSize:  workflowAttentionResolutionPageSize,
-			PageToken: pageToken,
-		}, s.roleResolver)
-		if err != nil {
-			slog.Warn("workflow interrupted-run attention resolution lookup failed", "workflow_id", workflowID, "error", err)
-			break
-		}
-		for _, item := range attention.Items {
-			runID := strings.TrimSpace(item.RunID)
-			if item.Kind == "interrupted_run" && item.WorkflowID != nil && *item.WorkflowID == workflowID && runID != "" && !seenRuns[runID] {
-				seenRuns[runID] = true
-				runIDs = append(runIDs, workflow.RunID(runID))
-			}
-		}
-		if attention.NextPageToken == "" {
-			break
-		}
-		pageToken = attention.NextPageToken
-	}
-	return runIDs
-}
-
 func (s *Service) finalizeWorkflowApprovalProjections(ctx context.Context, projections []workflowstore.ApprovalTransitionProjection) {
 	if s == nil || s.attentionFinalizer == nil || len(projections) == 0 {
 		return
@@ -1343,6 +1286,18 @@ func (s *Service) finalizeWorkflowApprovalProjections(ctx context.Context, proje
 	finalizeCtx, cancel := workflowAttentionContext(ctx)
 	defer cancel()
 	s.attentionFinalizer.FinalizeTransition(finalizeCtx, workflowattention.TransitionResult{ResolvedApprovalProjections: resolved})
+}
+
+func (s *Service) finalizeWorkflowAttentionResolution(ctx context.Context, result workflowstore.WorkflowDeleteResult) {
+	if s == nil || s.attentionFinalizer == nil {
+		return
+	}
+	finalizeCtx, cancel := workflowAttentionContext(ctx)
+	defer cancel()
+	s.attentionFinalizer.FinalizeTransition(finalizeCtx, workflowattention.TransitionResult{
+		ResolvedApprovalProjections:       workflowattention.ApprovalProjections(result.ResolvedApprovalTransitionProjections),
+		ResolvedInterruptedRunProjections: workflowattention.InterruptedRunProjections(result.ResolvedInterruptedRunProjections),
+	})
 }
 
 func (s *Service) finalizeTaskAttentionResolution(ctx context.Context, resolution workflowstore.TaskAttentionResolution) {

@@ -138,6 +138,18 @@ func taskAttentionResolution(ctx context.Context, q *sqlitegen.Queries, taskID s
 	if err != nil {
 		return TaskAttentionResolution{}, err
 	}
+	return attentionResolutionFromCandidates(rows)
+}
+
+func workflowAttentionResolution(ctx context.Context, q *sqlitegen.Queries, workflowID string) (TaskAttentionResolution, error) {
+	rows, err := q.ListWorkflowResolutionAttentionCandidates(ctx, workflowID)
+	if err != nil {
+		return TaskAttentionResolution{}, err
+	}
+	return attentionResolutionFromCandidates(rows)
+}
+
+func attentionResolutionFromCandidates(rows []sqlitegen.WorkflowAttentionCandidate) (TaskAttentionResolution, error) {
 	var resolution TaskAttentionResolution
 	for _, row := range rows {
 		switch row.Kind {
