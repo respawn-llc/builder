@@ -22,6 +22,497 @@ func TestLiveRunWaitIdleReturnsNoActive(t *testing.T) {
 	}
 }
 
+func TestLiveRunPreparationFreezesFinalResultUntilCompletionTokenCommit(t *testing.T) {
+	coordinator := newLiveRunCoordinator()
+	startedAt := time.Now().UTC()
+	snapshot := &RunSnapshot{
+		RunID:      "018fdd67-89ab-4cde-8123-456789abc001",
+		StepID:     "018fdd67-89ab-4cde-8123-456789abc002",
+		Status:     RunStatusRunning,
+		ActiveKind: ActiveKindUserTurn,
+		StartedAt:  startedAt,
+	}
+	coordinator.beginStep(snapshot)
+	handle, err := coordinator.captureWait(context.Background())
+	if err != nil {
+		t.Fatalf("capture wait: %v", err)
+	}
+	message := llm.Message{
+		Role:    llm.RoleAssistant,
+		Content: "frozen final",
+		ToolCalls: []llm.ToolCall{{
+			ID:    "call-1",
+			Name:  "tool",
+			Input: json.RawMessage(`{"before":true}`),
+		}},
+	}
+	coordinator.recordAssistantFinalAnswer(snapshot.StepID, message)
+	completed := *snapshot
+	completed.Status = RunStatusCompleted
+	completed.FinishedAt = startedAt.Add(time.Second)
+	_, token := coordinator.finishStep(&completed, RunStatusCompleted, nil, false)
+	if token == nil {
+		t.Fatal("completion predicate did not prepare a token")
+	}
+	if !coordinator.hasActive() {
+		t.Fatal("prepared live-run group cleared before token commit")
+	}
+
+	waitDone := make(chan struct {
+		result LiveRunResult
+		err    error
+	}, 1)
+	go func() {
+		result, waitErr := handle.Wait()
+		waitDone <- struct {
+			result LiveRunResult
+			err    error
+		}{result: result, err: waitErr}
+	}()
+	select {
+	case <-waitDone:
+		t.Fatal("waiter released before completion token commit")
+	default:
+	}
+
+	message.Content = "mutated after preparation"
+	message.ToolCalls[0].Input[2] = 'X'
+	if !coordinator.commitCompletion(token) {
+		t.Fatal("completion token was not committed")
+	}
+	if coordinator.hasActive() {
+		t.Fatal("prepared live-run group remained active after token commit")
+	}
+	if coordinator.commitCompletion(token) {
+		t.Fatal("completion token committed more than once")
+	}
+	var waited struct {
+		result LiveRunResult
+		err    error
+	}
+	select {
+	case waited = <-waitDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("waiter did not release after completion token commit")
+	}
+	if waited.err != nil {
+		t.Fatalf("wait frozen result: %v", waited.err)
+	}
+	result := waited.result
+	if result.AssistantMessage.Content != "frozen final" {
+		t.Fatalf("frozen final content = %q", result.AssistantMessage.Content)
+	}
+	if got := string(result.AssistantMessage.ToolCalls[0].Input); got != `{"before":true}` {
+		t.Fatalf("frozen tool input = %q", got)
+	}
+	result.AssistantMessage.ToolCalls[0].Input[2] = 'Y'
+	again, err := handle.Wait()
+	if err != nil {
+		t.Fatalf("read frozen result again: %v", err)
+	}
+	if got := string(again.AssistantMessage.ToolCalls[0].Input); got != `{"before":true}` {
+		t.Fatalf("frozen result was aliased through a caller read: %q", got)
+	}
+}
+
+func TestLiveRunPreparationClassifiesRuntimeFailure(t *testing.T) {
+	coordinator := newLiveRunCoordinator()
+	startedAt := time.Now().UTC()
+	snapshot := &RunSnapshot{
+		RunID:      "018fdd67-89ab-4cde-8123-456789abc001",
+		StepID:     "018fdd67-89ab-4cde-8123-456789abc002",
+		Status:     RunStatusRunning,
+		ActiveKind: ActiveKindUserTurn,
+		StartedAt:  startedAt,
+	}
+	coordinator.beginStep(snapshot)
+	handle, err := coordinator.captureWait(context.Background())
+	if err != nil {
+		t.Fatalf("capture wait: %v", err)
+	}
+	diagnostic := errors.New("typed runtime failure")
+	finished := *snapshot
+	finished.Status = RunStatusFailed
+	finished.FinishedAt = startedAt.Add(time.Second)
+	_, token := coordinator.finishStep(&finished, RunStatusFailed, diagnostic, false)
+	if token == nil {
+		t.Fatal("failed run did not prepare a completion token")
+	}
+	if !coordinator.commitCompletion(token) {
+		t.Fatal("failed run completion token was not committed")
+	}
+	result, waitErr := handle.Wait()
+	if !errors.Is(waitErr, diagnostic) {
+		t.Fatalf("wait error = %v, want runtime diagnostic", waitErr)
+	}
+	if result.ResultKind != LiveRunResultRuntimeFailure {
+		t.Fatalf("result kind = %q, want runtime failure", result.ResultKind)
+	}
+	if result.FailureDiagnostic == nil {
+		t.Fatal("runtime failure did not freeze a typed diagnostic")
+	}
+	if result.FailureDiagnostic.Code != LiveRunFailureCodeRuntime || result.FailureDiagnostic.Detail != diagnostic.Error() {
+		t.Fatalf("failure diagnostic = %+v, want code=%q detail=%q", result.FailureDiagnostic, LiveRunFailureCodeRuntime, diagnostic)
+	}
+	result.FailureDiagnostic.Detail = "mutated after result read"
+	again, err := handle.Wait()
+	if !errors.Is(err, diagnostic) {
+		t.Fatalf("read frozen failure result again: %v", err)
+	}
+	if again.FailureDiagnostic == nil || again.FailureDiagnostic.Detail != diagnostic.Error() {
+		t.Fatalf("frozen failure diagnostic was aliased through a caller read: %+v", again.FailureDiagnostic)
+	}
+}
+
+func TestLiveRunPreparationFailureOverridesEarlierFinalAnswer(t *testing.T) {
+	coordinator := newLiveRunCoordinator()
+	startedAt := time.Now().UTC()
+	snapshot := &RunSnapshot{
+		RunID:      "018fdd67-89ab-4cde-8123-456789abc001",
+		StepID:     "018fdd67-89ab-4cde-8123-456789abc002",
+		Status:     RunStatusRunning,
+		ActiveKind: ActiveKindUserTurn,
+		StartedAt:  startedAt,
+	}
+	coordinator.beginStep(snapshot)
+	handle, err := coordinator.captureWait(context.Background())
+	if err != nil {
+		t.Fatalf("capture wait: %v", err)
+	}
+	coordinator.recordAssistantFinalAnswer(snapshot.StepID, llm.Message{Role: llm.RoleAssistant, Content: "provisional final"})
+	diagnostic := errors.New("terminal failure")
+	finished := *snapshot
+	finished.Status = RunStatusFailed
+	finished.FinishedAt = startedAt.Add(time.Second)
+	_, token := coordinator.finishStep(&finished, RunStatusFailed, diagnostic, false)
+	if token == nil {
+		t.Fatal("failed run did not prepare a completion token")
+	}
+	if !coordinator.commitCompletion(token) {
+		t.Fatal("completion token was not committed")
+	}
+	result, waitErr := handle.Wait()
+	if !errors.Is(waitErr, diagnostic) {
+		t.Fatalf("wait error = %v, want terminal diagnostic", waitErr)
+	}
+	if result.ResultKind != LiveRunResultRuntimeFailure {
+		t.Fatalf("result kind = %q, want runtime failure", result.ResultKind)
+	}
+}
+
+func TestLiveRunPreparationInterruptionOverridesEarlierFinalAnswer(t *testing.T) {
+	coordinator := newLiveRunCoordinator()
+	startedAt := time.Now().UTC()
+	snapshot := &RunSnapshot{
+		RunID:      "018fdd67-89ab-4cde-8123-456789abc001",
+		StepID:     "018fdd67-89ab-4cde-8123-456789abc002",
+		Status:     RunStatusRunning,
+		ActiveKind: ActiveKindUserTurn,
+		StartedAt:  startedAt,
+	}
+	coordinator.beginStep(snapshot)
+	handle, err := coordinator.captureWait(context.Background())
+	if err != nil {
+		t.Fatalf("capture wait: %v", err)
+	}
+	coordinator.recordAssistantFinalAnswer(snapshot.StepID, llm.Message{Role: llm.RoleAssistant, Content: "provisional final"})
+	finished := *snapshot
+	finished.Status = RunStatusInterrupted
+	finished.FinishedAt = startedAt.Add(time.Second)
+	_, token := coordinator.finishStep(&finished, RunStatusInterrupted, context.Canceled, false)
+	if token == nil {
+		t.Fatal("interrupted run did not prepare a completion token")
+	}
+	if !coordinator.commitCompletion(token) {
+		t.Fatal("completion token was not committed")
+	}
+	result, waitErr := handle.Wait()
+	if !errors.Is(waitErr, context.Canceled) {
+		t.Fatalf("wait error = %v, want context canceled", waitErr)
+	}
+	if result.ResultKind != LiveRunResultInterrupted {
+		t.Fatalf("result kind = %q, want interruption", result.ResultKind)
+	}
+}
+
+func TestLiveRunPreparationClassifiesNoFinalOutcomes(t *testing.T) {
+	testCases := []struct {
+		name       string
+		activeKind ActiveKind
+		status     RunStatus
+		err        error
+		wantKind   LiveRunResultKind
+		wantReason LiveRunNoFinalAnswerReason
+	}{
+		{
+			name:       "completed task without final answer",
+			activeKind: ActiveKindUserTurn,
+			status:     RunStatusCompleted,
+			wantKind:   LiveRunResultCompletedNoFinal,
+			wantReason: LiveRunNoFinalAnswerReasonUnknown,
+		},
+		{
+			name:       "interruption",
+			activeKind: ActiveKindUserTurn,
+			status:     RunStatusInterrupted,
+			err:        context.Canceled,
+			wantKind:   LiveRunResultInterrupted,
+			wantReason: LiveRunNoFinalAnswerReasonUnknown,
+		},
+		{
+			name:       "successful workflow completion",
+			activeKind: ActiveKindWorkflowTurn,
+			status:     RunStatusCompleted,
+			wantKind:   LiveRunResultWorkflowCompleted,
+			wantReason: LiveRunNoFinalAnswerReasonWorkflow,
+		},
+		{
+			name:       "non task activity",
+			activeKind: ActiveKindBackground,
+			status:     RunStatusCompleted,
+			wantKind:   LiveRunResultNonTaskActivity,
+			wantReason: LiveRunNoFinalAnswerReasonBackground,
+		},
+		{
+			name:       "goal loop activity",
+			activeKind: ActiveKindGoalLoop,
+			status:     RunStatusCompleted,
+			wantKind:   LiveRunResultNonTaskActivity,
+			wantReason: LiveRunNoFinalAnswerReasonGoalLoop,
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			coordinator := newLiveRunCoordinator()
+			startedAt := time.Now().UTC()
+			snapshot := &RunSnapshot{
+				RunID:      "018fdd67-89ab-4cde-8123-456789abc001",
+				StepID:     "018fdd67-89ab-4cde-8123-456789abc002",
+				Status:     RunStatusRunning,
+				ActiveKind: testCase.activeKind,
+				StartedAt:  startedAt,
+			}
+			coordinator.beginStep(snapshot)
+			handle, err := coordinator.captureWait(context.Background())
+			if err != nil {
+				t.Fatalf("capture wait: %v", err)
+			}
+			finished := *snapshot
+			finished.Status = testCase.status
+			finished.FinishedAt = startedAt.Add(time.Second)
+			_, token := coordinator.finishStep(&finished, testCase.status, testCase.err, false)
+			if token == nil {
+				t.Fatal("no-final outcome did not prepare a completion token")
+			}
+			if !coordinator.commitCompletion(token) {
+				t.Fatal("completion token was not committed")
+			}
+			result, waitErr := handle.Wait()
+			if testCase.err != nil {
+				if !errors.Is(waitErr, testCase.err) {
+					t.Fatalf("wait error = %v, want %v", waitErr, testCase.err)
+				}
+			} else if !errors.Is(waitErr, ErrLiveRunNoFinalAnswer) {
+				t.Fatalf("wait error = %v, want ErrLiveRunNoFinalAnswer", waitErr)
+			}
+			if result.ResultKind != testCase.wantKind || result.NoFinalReason != testCase.wantReason {
+				t.Fatalf("result = %+v, want kind=%q reason=%q", result, testCase.wantKind, testCase.wantReason)
+			}
+		})
+	}
+}
+
+func TestPreparedLiveRunGroupRejectsNewQueueMutationsAndWaitsForExistingAdmission(t *testing.T) {
+	coordinator := newLiveRunCoordinator()
+	startedAt := time.Now().UTC()
+	snapshot := &RunSnapshot{
+		RunID:      "018fdd67-89ab-4cde-8123-456789abc001",
+		StepID:     "018fdd67-89ab-4cde-8123-456789abc002",
+		Status:     RunStatusRunning,
+		ActiveKind: ActiveKindUserTurn,
+		StartedAt:  startedAt,
+	}
+	coordinator.beginStep(snapshot)
+	admission, err := coordinator.beginAdmission()
+	if err != nil {
+		t.Fatalf("begin admission: %v", err)
+	}
+	completed := *snapshot
+	completed.Status = RunStatusCompleted
+	completed.FinishedAt = startedAt.Add(time.Second)
+	_, token := coordinator.finishStep(&completed, RunStatusCompleted, nil, false)
+	if token != nil {
+		t.Fatal("completion prepared before an already admitted queue item finished")
+	}
+	if !coordinator.hasActive() {
+		t.Fatal("live-run group cleared before the admitted queue item finished")
+	}
+	queuedID := runtimeids.NewQueueItemID()
+	finished, admissionToken, err := coordinator.finishAdmission(admission, queuedID, nil)
+	if err != nil || !finished || admissionToken != nil {
+		t.Fatalf("finish existing admission finished=%t token=%v err=%v", finished, admissionToken, err)
+	}
+	token = coordinator.completeQueueItems(map[runtimeids.QueueItemID]struct{}{queuedID: {}})
+	if token == nil {
+		t.Fatal("completion did not prepare after the admitted queue item drained")
+	}
+
+	_, err = coordinator.beginAdmission()
+	assertLiveRunClosingRejection(t, err)
+	_, err = coordinator.beginQueueItemPublication(runtimeids.NewQueueItemID(), nil)
+	assertLiveRunClosingRejection(t, err)
+	if !coordinator.commitCompletion(token) {
+		t.Fatal("prepared completion token was not committed")
+	}
+}
+
+func TestInterruptedLiveRunWaitsForPreexistingAdmissionBeforePreparing(t *testing.T) {
+	coordinator := newLiveRunCoordinator()
+	startedAt := time.Now().UTC()
+	snapshot := &RunSnapshot{
+		RunID:      "018fdd67-89ab-4cde-8123-456789abc001",
+		StepID:     "018fdd67-89ab-4cde-8123-456789abc002",
+		Status:     RunStatusRunning,
+		ActiveKind: ActiveKindUserTurn,
+		StartedAt:  startedAt,
+	}
+	coordinator.beginStep(snapshot)
+	handle, err := coordinator.captureWait(context.Background())
+	if err != nil {
+		t.Fatalf("capture wait: %v", err)
+	}
+	admission, err := coordinator.beginAdmission()
+	if err != nil {
+		t.Fatalf("begin admission: %v", err)
+	}
+	interrupted, _, _, token := coordinator.interrupt()
+	if !interrupted {
+		t.Fatal("interrupt did not stop the live run")
+	}
+	if token != nil {
+		t.Fatal("interrupt prepared before the admitted queue item resolved")
+	}
+	waitDone := make(chan struct{}, 1)
+	go func() {
+		_, _ = handle.Wait()
+		waitDone <- struct{}{}
+	}()
+	select {
+	case <-waitDone:
+		t.Fatal("waiter released before the admitted queue item resolved")
+	default:
+	}
+
+	accepted, token, err := coordinator.finishAdmission(admission, runtimeids.NewQueueItemID(), nil)
+	if accepted {
+		t.Fatal("interrupted live run accepted a pre-existing admission")
+	}
+	assertLiveRunClosingRejection(t, err)
+	if token == nil {
+		t.Fatal("resolving the final admission did not prepare a token")
+	}
+	select {
+	case <-waitDone:
+		t.Fatal("waiter released before the resulting token commit")
+	default:
+	}
+	if !coordinator.commitCompletion(token) {
+		t.Fatal("completion token was not committed")
+	}
+	select {
+	case <-waitDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("waiter did not release after token commit")
+	}
+}
+
+func TestFailedLiveRunWaitsForPreexistingAdmissionBeforePreparing(t *testing.T) {
+	coordinator := newLiveRunCoordinator()
+	startedAt := time.Now().UTC()
+	snapshot := &RunSnapshot{
+		RunID:      "018fdd67-89ab-4cde-8123-456789abc001",
+		StepID:     "018fdd67-89ab-4cde-8123-456789abc002",
+		Status:     RunStatusRunning,
+		ActiveKind: ActiveKindUserTurn,
+		StartedAt:  startedAt,
+	}
+	coordinator.beginStep(snapshot)
+	handle, err := coordinator.captureWait(context.Background())
+	if err != nil {
+		t.Fatalf("capture wait: %v", err)
+	}
+	admission, err := coordinator.beginAdmission()
+	if err != nil {
+		t.Fatalf("begin admission: %v", err)
+	}
+	diagnostic := errors.New("runtime failed while admission was pending")
+	finished := *snapshot
+	finished.Status = RunStatusFailed
+	finished.FinishedAt = startedAt.Add(time.Second)
+	_, token := coordinator.finishStep(&finished, RunStatusFailed, diagnostic, false)
+	if token != nil {
+		t.Fatal("failure prepared before the admitted queue item resolved")
+	}
+	if interrupted, _, _, token := coordinator.interrupt(); interrupted || token != nil {
+		t.Fatalf("stop rewrote failed live run: interrupted=%t token=%v", interrupted, token)
+	}
+	accepted, token, err := coordinator.finishAdmission(admission, runtimeids.NewQueueItemID(), nil)
+	if accepted {
+		t.Fatal("failed live run accepted a pre-existing admission")
+	}
+	assertLiveRunClosingRejection(t, err)
+	if token == nil {
+		t.Fatal("resolving the final admission did not prepare a token")
+	}
+	if !coordinator.commitCompletion(token) {
+		t.Fatal("completion token was not committed")
+	}
+	result, waitErr := handle.Wait()
+	if !errors.Is(waitErr, diagnostic) {
+		t.Fatalf("wait error = %v, want failure diagnostic", waitErr)
+	}
+	if result.FailureDiagnostic == nil || result.FailureDiagnostic.Code != LiveRunFailureCodeRuntime || result.FailureDiagnostic.Detail != diagnostic.Error() {
+		t.Fatalf("failure diagnostic = %+v", result.FailureDiagnostic)
+	}
+}
+
+func TestQueueUserMessageForActiveRunReturnsClosingRejection(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	startedAt := time.Now().UTC()
+	snapshot := &RunSnapshot{
+		RunID:      "018fdd67-89ab-4cde-8123-456789abc001",
+		StepID:     "018fdd67-89ab-4cde-8123-456789abc002",
+		Status:     RunStatusRunning,
+		ActiveKind: ActiveKindUserTurn,
+		StartedAt:  startedAt,
+	}
+	eng.liveRun.beginStep(snapshot)
+	completed := *snapshot
+	completed.Status = RunStatusCompleted
+	completed.FinishedAt = startedAt.Add(time.Second)
+	_, token := eng.liveRun.finishStep(&completed, RunStatusCompleted, nil, false)
+	if token == nil {
+		t.Fatal("completion did not prepare a token")
+	}
+	_, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "too late", liveRunTestRequestID(t), nil)
+	if accepted {
+		t.Fatal("prepared live run accepted new queued work")
+	}
+	assertLiveRunClosingRejection(t, err)
+	if !eng.liveRun.commitCompletion(token) {
+		t.Fatal("completion token was not committed")
+	}
+}
+
+func assertLiveRunClosingRejection(t *testing.T, err error) {
+	t.Helper()
+	var rejection *LiveRunGroupClosingError
+	if !errors.As(err, &rejection) {
+		t.Fatalf("error = %v, want typed closing rejection", err)
+	}
+}
+
 func TestCapturedActiveRunResultSurvivesFastCompletion(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{{
@@ -791,18 +1282,26 @@ func TestQueueUserMessageForActiveRunStopCancelsBlockedAdmissionBeforeQueueMutat
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for replacement active step")
 	}
+	replacementHandle, err := eng.CaptureActiveRunResult(context.Background())
+	if err != nil {
+		t.Fatalf("capture replacement live run: %v", err)
+	}
 
 	close(releaseBefore)
 	queued := <-queueDone
-	if !errors.Is(queued.err, context.Canceled) || queued.accepted || queued.item.ID != "" {
-		t.Fatalf("blocked admission result = item=%+v accepted=%t err=%v, want canceled without queue metadata", queued.item, queued.accepted, queued.err)
+	if queued.accepted || queued.item.ID != "" {
+		t.Fatalf("blocked admission result = item=%+v accepted=%t err=%v, want rejection without queue metadata", queued.item, queued.accepted, queued.err)
 	}
+	assertLiveRunClosingRejection(t, queued.err)
 	if eng.HasQueuedUserWork() {
 		t.Fatal("stopped blocked admission queued stale work into replacement run")
 	}
 	close(releaseReplacement)
 	if err := <-replacementDone; err != nil {
 		t.Fatalf("replacement active step: %v", err)
+	}
+	if _, err := replacementHandle.Wait(); !errors.Is(err, ErrLiveRunNoFinalAnswer) {
+		t.Fatalf("replacement live run result error = %v, want ErrLiveRunNoFinalAnswer", err)
 	}
 	waitEngineLifecycleTasks(t, eng)
 	if got := client.callCount(); got != 0 {
@@ -1122,11 +1621,11 @@ func TestTryInterruptActiveRunDefersPublishingQueueItemFailureUntilAcceptedStatu
 	}
 
 	item := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: "race-safe steer", ClientRequestID: "req-publishing"}
-	tagged := eng.liveRun.beginQueueItemPublication(mustQueueItemID(item.ID), func(queueItemID string) {
+	tagged, publicationErr := eng.liveRun.beginQueueItemPublication(mustQueueItemID(item.ID), func(queueItemID string) {
 		eng.markQueuedUserInjectionForAutoDrain(queueItemID)
 	})
-	if !tagged || item.ID == "" {
-		t.Fatalf("publishing queue setup tagged=%t item=%+v", tagged, item)
+	if publicationErr != nil || !tagged || item.ID == "" {
+		t.Fatalf("publishing queue setup tagged=%t item=%+v err=%v", tagged, item, publicationErr)
 	}
 	item = eng.messageFlow.QueueUserMessageWithID(item)
 	stopped, err := eng.TryInterruptActiveRun()

@@ -531,9 +531,10 @@ func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestI
 	liveItem := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: text, ClientRequestID: clientRequestID}
 	waitedForLiveRunStep := false
 	for {
-		if e.liveRun.beginQueueItemPublication(mustQueueItemID(liveItem.ID), func(queueItemID string) {
+		tagged, _ := e.liveRun.beginQueueItemPublication(mustQueueItemID(liveItem.ID), func(queueItemID string) {
 			e.markQueuedUserInjectionForAutoDrain(queueItemID)
-		}) {
+		})
+		if tagged {
 			item := e.messageFlow.QueueUserMessageWithID(liveItem)
 			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 			queueItemID := mustQueueItemID(item.ID)
