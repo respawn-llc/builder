@@ -627,6 +627,46 @@ func TestCreateWorktreeAllowsExistingRefWithoutCreatingBranch(t *testing.T) {
 	}
 }
 
+func TestCreateWorktreeFromCheckedOutHEADRollsBackDetachedRegistration(t *testing.T) {
+	env := newServiceTestEnv(t)
+	createSpec := CreateSpec{BaseRef: "HEAD"}
+	expectedRoot, err := env.service.resolveRequestedWorktreeRoot("", env.binding.WorkspaceID, createSpec)
+	if err != nil {
+		t.Fatalf("resolveRequestedWorktreeRoot: %v", err)
+	}
+
+	_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "req-create-detached-head",
+		SessionID:        env.session.Meta().SessionID,
+		BaseRef:          "HEAD",
+	})
+	if err == nil {
+		t.Fatal("CreateWorktree from checked-out HEAD succeeded")
+	}
+	if _, statErr := os.Stat(expectedRoot); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("detached worktree root stat error = %v, want not exist", statErr)
+	}
+	worktrees, listErr := env.service.git.List(env.ctx, env.workspaceRoot)
+	if listErr != nil {
+		t.Fatalf("git worktree list: %v", listErr)
+	}
+	for _, worktree := range worktrees {
+		if worktree.Root == expectedRoot {
+			t.Fatalf("detached worktree remained registered: %+v", worktree)
+		}
+	}
+	records, listErr := env.store.ListWorktreeRecordsByWorkspaceID(env.ctx, env.binding.WorkspaceID)
+	if listErr != nil {
+		t.Fatalf("ListWorktreeRecordsByWorkspaceID: %v", listErr)
+	}
+	for _, record := range records {
+		if record.CanonicalRoot == expectedRoot {
+			t.Fatalf("detached Kent worktree record remained registered: %+v", record)
+		}
+	}
+}
+
 func TestListWorktreesDoesNotResetManagedProvenanceWhenRootIsReused(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/provenance-stale")
@@ -722,7 +762,7 @@ func TestSwitchWorktreeClampsCwdAndRecordsPendingReminder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorktreeRecordByID: %v", err)
 	}
-	previous := syncedWorktree{record: previousRecord, git: GitWorktree{Root: created.CanonicalRoot, BranchName: created.BranchName}}
+	previous := syncedWorktree{record: previousRecord, git: GitWorktree{Root: created.CanonicalRoot, Branch: mustLocalBranch(t, created.BranchName)}}
 	respTarget, err := env.service.switchSessionTarget(env.ctx, sessionWorkspaceContext{
 		target:        mustResolveServiceTestTarget(t, env),
 		projectID:     env.binding.ProjectID,

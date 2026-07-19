@@ -9,9 +9,8 @@ import (
 
 func TestGitMetadataRoundTripPreservesBranchIdentity(t *testing.T) {
 	source := GitWorktree{
-		HeadOID:    "deadbeef",
-		BranchRef:  "refs/heads/feature/round-trip",
-		BranchName: "feature/round-trip",
+		HeadOID: "deadbeef",
+		Branch:  mustLocalBranch(t, "feature/round-trip"),
 	}
 	encoded, err := marshalGitMetadata(source)
 	if err != nil {
@@ -21,8 +20,30 @@ func TestGitMetadataRoundTripPreservesBranchIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("worktreeGitMetadataFromRecord: %v", err)
 	}
-	if decoded.HeadOID != source.HeadOID || decoded.BranchRef != source.BranchRef || decoded.BranchName != source.BranchName {
+	if decoded.HeadOID != source.HeadOID ||
+		decoded.Branch == nil ||
+		decoded.Branch.Ref() != source.Branch.Ref() ||
+		decoded.Branch.Name() != source.Branch.Name() {
 		t.Fatalf("decoded metadata = %+v, want branch identity from %+v", decoded, source)
+	}
+}
+
+func TestGitMetadataDecodesLegacySingleBranchField(t *testing.T) {
+	for name, metadataJSON := range map[string]string{
+		"ref_only":  `{"branch_ref":"refs/heads/feature/legacy"}`,
+		"name_only": `{"branch_name":"feature/legacy"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			decoded, err := worktreeGitMetadataFromRecord(metadata.WorktreeRecord{GitMetadataJSON: metadataJSON})
+			if err != nil {
+				t.Fatalf("worktreeGitMetadataFromRecord: %v", err)
+			}
+			if decoded.Branch == nil ||
+				decoded.Branch.Ref() != "refs/heads/feature/legacy" ||
+				decoded.Branch.Name() != "feature/legacy" {
+				t.Fatalf("decoded legacy metadata = %+v", decoded)
+			}
+		})
 	}
 }
 

@@ -385,6 +385,15 @@ func runGit(t *testing.T, dir string, args ...string) string {
 	return testsetup.RunGit(t, dir, args...)
 }
 
+func mustLocalBranch(t *testing.T, name string) *localBranch {
+	t.Helper()
+	branch, err := newLocalBranchName(name)
+	if err != nil {
+		t.Fatalf("newLocalBranchName(%q): %v", name, err)
+	}
+	return &branch
+}
+
 func writeExecutableFile(t *testing.T, path string, body string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

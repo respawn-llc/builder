@@ -304,6 +304,9 @@ func (s *Service) materializeInitialTaskWorktree(ctx context.Context, taskID str
 			ExpectedWorktreeRoot: record.CanonicalRoot,
 		})
 		if identityErr == nil {
+			if _, ok := identity.NamedBranch(); !ok {
+				return TaskWorktreeMaterialization{}, &ManagedWorktreeIdentityError{Kind: ManagedWorktreeIdentityErrorDetachedHead}
+			}
 			reused, err := s.rebindHealthyManagedTaskWorktree(ctx, task, workspace, record, identity)
 			if err != nil {
 				return TaskWorktreeMaterialization{}, err
@@ -438,6 +441,9 @@ func (s *Service) restoreUnboundLockedTaskWorktree(ctx context.Context, req Lock
 		if identityErr != nil {
 			return TaskWorktreeMaterialization{}, lockedTaskWorktreeIdentityError(identityErr)
 		}
+		if _, ok := identity.NamedBranch(); !ok {
+			return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseDetachedHead}
+		}
 		return s.rebindHealthyManagedTaskWorktree(ctx, task, workspace, record, identity)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
@@ -461,16 +467,11 @@ func (s *Service) rebindHealthyManagedTaskWorktree(ctx context.Context, task sql
 	if err != nil {
 		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseGitFailure, Err: err}
 	}
-	branchRef := strings.TrimSpace(identity.SymbolicHead)
-	branchName, ok := identity.NamedBranch()
-	if !ok {
-		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseDetachedHead}
-	}
 	gitMetadata := GitWorktree{
-		Root:       record.CanonicalRoot,
-		HeadOID:    revision.CommitOID,
-		BranchRef:  branchRef,
-		BranchName: branchName,
+		Root:     record.CanonicalRoot,
+		HeadOID:  revision.CommitOID,
+		Branch:   identity.branch,
+		Detached: identity.branch == nil,
 	}
 	record.GitMetadataJSON, err = marshalGitMetadata(gitMetadata)
 	if err != nil {
@@ -513,10 +514,10 @@ func (s *Service) restoreMissingLockedTaskWorktree(ctx context.Context, req Lock
 	if err != nil {
 		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseInvalidRoot, Err: err}
 	}
-	branchName := strings.TrimSpace(gitMetadata.BranchName)
-	if gitMetadata.Detached || branchName == "" {
+	if gitMetadata.Detached || gitMetadata.Branch == nil {
 		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseMissingBranch}
 	}
+	branchName := gitMetadata.Branch.Name()
 	exists, err := s.git.BranchExists(ctx, workspace.RootPath, branchName)
 	if err != nil {
 		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseGitFailure, Err: err}
@@ -796,7 +797,11 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	var target syncedWorktree
 	targetFound := entry.Variant == serverapi.WorktreeTopologyVariantRegistered
 	if targetFound {
-		target = syncedWorktree{record: record, git: gitWorktreeFromFacts(entry.Registered.Git)}
+		gitEntry, err := gitWorktreeFromFacts(entry.Registered.Git)
+		if err != nil {
+			return DeleteTaskWorktreeResponse{}, err
+		}
+		target = syncedWorktree{record: record, git: gitEntry}
 	}
 	forceRemoval := false
 	if targetFound {
@@ -1074,11 +1079,15 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
+	branchName, named := worktreeNamedBranch(created.git)
+	if !named {
+		return serverapi.WorktreeCreateResponse{}, errors.New("created managed worktree does not have a named branch")
+	}
 	cleanup.active = false
 	if err := s.runSetupForWorktree(ctx, setupExecutionRequest{
 		SetupOperationID:    req.SetupOperationID,
 		SourceWorkspaceRoot: workspaceCtx.workspaceRoot,
-		BranchName:          strings.TrimSpace(created.git.BranchName),
+		BranchName:          branchName,
 		WorktreeRoot:        created.record.CanonicalRoot,
 		ScriptPayload: setupScriptPayload{
 			SessionID:   setupSessionID,
