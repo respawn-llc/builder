@@ -26,13 +26,13 @@ func TestTaskListQueriesFilterAndSortProjectedRowsThroughFocusedModule(t *testin
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
 	projector := NewTaskProjector()
-	taskList, err := NewTaskList(metadataStore, projector)
-	if err != nil {
-		t.Fatalf("NewTaskList: %v", err)
-	}
 	definitions, err := NewDefinitionProjection(workflowStore)
 	if err != nil {
 		t.Fatalf("NewDefinitionProjection: %v", err)
+	}
+	taskList, err := NewTaskList(metadataStore, definitions, projector)
+	if err != nil {
+		t.Fatalf("NewTaskList: %v", err)
 	}
 	snapshot, err := definitions.snapshot(ctx, string(workflowID))
 	if err != nil {
@@ -169,6 +169,147 @@ func TestTaskListQueriesFilterAndSortProjectedRowsThroughFocusedModule(t *testin
 		if row.item.WorkflowName == nil || strings.TrimSpace(*row.item.WorkflowName) == "" {
 			t.Fatalf("project-wide row omitted workflow name: %+v", row.item)
 		}
+	}
+}
+
+func TestTaskListScopesAndContinuationsThroughFocusedInterface(t *testing.T) {
+	ctx, metadataStore, workflowStore, binding := newWorkflowViewTestContextStore(t)
+	firstWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	secondWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, firstWorkflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow first: %v", err)
+	}
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, secondWorkflowID, false); err != nil {
+		t.Fatalf("LinkWorkflow second: %v", err)
+	}
+	for _, task := range []struct {
+		workflowID workflow.WorkflowID
+		title      string
+	}{
+		{workflowID: firstWorkflowID, title: "Alpha"},
+		{workflowID: firstWorkflowID, title: "Bravo"},
+		{workflowID: secondWorkflowID, title: "Zulu"},
+	} {
+		if _, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+			ProjectID:  binding.ProjectID,
+			WorkflowID: workflowIDPointerForTest(task.workflowID),
+			Title:      task.title,
+			Body:       "Body",
+		}); err != nil {
+			t.Fatalf("CreateTask %s: %v", task.title, err)
+		}
+	}
+	definitions, err := NewDefinitionProjection(workflowStore)
+	if err != nil {
+		t.Fatalf("NewDefinitionProjection: %v", err)
+	}
+	taskList, err := NewTaskList(metadataStore, definitions, NewTaskProjector())
+	if err != nil {
+		t.Fatalf("NewTaskList: %v", err)
+	}
+	projectID := binding.ProjectID
+	sortByTitle := []serverapi.WorkflowTaskListSort{{
+		Field:     serverapi.WorkflowTaskListSortFieldTitle,
+		Direction: serverapi.WorkflowTaskListSortDirectionAsc,
+	}}
+
+	projectWide, err := taskList.List(ctx, serverapi.WorkflowTaskListRequest{
+		ProjectID: &projectID,
+		PageSize:  1,
+		Sort:      sortByTitle,
+	})
+	if err != nil {
+		t.Fatalf("List project-wide: %v", err)
+	}
+	if projectWide.Scope.ProjectID != projectID ||
+		projectWide.Scope.WorkflowID != nil ||
+		projectWide.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple ||
+		len(projectWide.Tasks) != 1 ||
+		projectWide.Tasks[0].Title != "Alpha" ||
+		projectWide.Tasks[0].WorkflowName == nil ||
+		projectWide.NextPageToken == nil {
+		t.Fatalf("project-wide first page = %+v", projectWide)
+	}
+	continued, err := taskList.List(ctx, serverapi.WorkflowTaskListRequest{
+		PageToken: *projectWide.NextPageToken,
+		PageSize:  10,
+		Sort:      sortByTitle,
+	})
+	if err != nil {
+		t.Fatalf("List inferred continuation scope: %v", err)
+	}
+	if continued.Scope.ProjectID != projectID ||
+		continued.Scope.WorkflowID != nil ||
+		continued.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple ||
+		len(continued.Tasks) != 2 ||
+		continued.Tasks[0].Title != "Bravo" ||
+		continued.Tasks[1].Title != "Zulu" {
+		t.Fatalf("project-wide continuation = %+v", continued)
+	}
+	if _, err := taskList.List(ctx, serverapi.WorkflowTaskListRequest{
+		PageToken:   *projectWide.NextPageToken,
+		PageSize:    10,
+		Sort:        sortByTitle,
+		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindDone},
+	}); !errors.Is(err, ErrInvalidPageToken) {
+		t.Fatalf("changed-filter continuation error = %v, want ErrInvalidPageToken", err)
+	}
+
+	firstWorkflowIDString := string(firstWorkflowID)
+	narrowed, err := taskList.List(ctx, serverapi.WorkflowTaskListRequest{
+		ProjectID:  &projectID,
+		WorkflowID: &firstWorkflowIDString,
+		ColumnKeys: []string{"backlog"},
+		PageSize:   1,
+		Sort:       sortByTitle,
+	})
+	if err != nil {
+		t.Fatalf("List narrowed: %v", err)
+	}
+	if narrowed.Scope.WorkflowID == nil ||
+		*narrowed.Scope.WorkflowID != firstWorkflowIDString ||
+		narrowed.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne ||
+		len(narrowed.Tasks) != 1 ||
+		narrowed.Tasks[0].ColumnKeys == nil ||
+		!slices.Equal(*narrowed.Tasks[0].ColumnKeys, []string{"backlog"}) ||
+		narrowed.NextPageToken == nil {
+		t.Fatalf("narrowed first page = %+v", narrowed)
+	}
+	if _, err := workflowStore.AddNode(ctx, workflowstore.NodeRecord{
+		ID:          workflow.NodeID("node-stale-token-" + firstWorkflowIDString),
+		WorkflowID:  firstWorkflowID,
+		Key:         "archive",
+		Kind:        workflow.NodeKindTerminal,
+		DisplayName: "Archive",
+	}); err != nil {
+		t.Fatalf("AddNode stale token mutation: %v", err)
+	}
+	if _, err := taskList.List(ctx, serverapi.WorkflowTaskListRequest{
+		PageToken: *narrowed.NextPageToken,
+		PageSize:  10,
+		Sort:      sortByTitle,
+	}); !errors.Is(err, ErrInvalidPageToken) {
+		t.Fatalf("stale narrowed continuation error = %v, want ErrInvalidPageToken", err)
+	}
+
+	unlinkedWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	unlinkedWorkflowIDString := string(unlinkedWorkflowID)
+	_, err = taskList.List(ctx, serverapi.WorkflowTaskListRequest{
+		ProjectID:  &projectID,
+		WorkflowID: &unlinkedWorkflowIDString,
+	})
+	var scopeErr *serverapi.WorkflowTaskListScopeError
+	if !errors.As(err, &scopeErr) || scopeErr.Reason != serverapi.WorkflowTaskListScopeReasonWorkflowNotLinked {
+		t.Fatalf("unlinked workflow error = %+v", err)
+	}
+	_, err = taskList.List(ctx, serverapi.WorkflowTaskListRequest{
+		ProjectID:  &projectID,
+		WorkflowID: &firstWorkflowIDString,
+		ColumnKeys: []string{"missing"},
+	})
+	var validationErr serverapi.WorkflowRequestValidationError
+	if !errors.As(err, &validationErr) || validationErr.Field != "column_keys[0]" {
+		t.Fatalf("invalid column error = %+v", err)
 	}
 }
 

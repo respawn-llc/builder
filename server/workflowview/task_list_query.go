@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 
-	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -22,24 +21,6 @@ const (
 	workflowTaskListPageTokenVersion = 3
 	workflowTaskStatusModelVersion   = 1
 )
-
-type TaskList struct {
-	queries   *sqlitegen.Queries
-	projector *TaskProjector
-}
-
-func NewTaskList(metadataStore *metadata.Store, projector *TaskProjector) (*TaskList, error) {
-	if metadataStore == nil || metadataStore.Queries() == nil {
-		return nil, errors.New("metadata store is required")
-	}
-	if projector == nil {
-		return nil, errors.New("task projector is required")
-	}
-	return &TaskList{
-		queries:   metadataStore.Queries(),
-		projector: projector,
-	}, nil
-}
 
 func normalizeWorkflowTaskListSort(sortSelectors []serverapi.WorkflowTaskListSort) []serverapi.WorkflowTaskListSort {
 	if len(sortSelectors) == 0 {
