@@ -6,25 +6,32 @@ import (
 	"sync"
 	"time"
 
+	"core/server/attentionnotify"
 	askquestion "core/server/tools"
+	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
 type PendingPromptSnapshot struct {
-	Request   askquestion.AskQuestionRequest
-	CreatedAt time.Time
-	Resource  runtimeids.SessionResourceRef
-	ScopeID   runtimeids.ExecutionScopeID
+	Request    askquestion.AskQuestionRequest
+	CreatedAt  time.Time
+	Resource   runtimeids.SessionResourceRef
+	ScopeID    runtimeids.ExecutionScopeID
+	occurrence attentionnotify.OccurrenceMetadata
 }
 
 type pendingPromptStore struct {
-	mu      sync.RWMutex
-	pending map[string]map[string]PendingPromptSnapshot
+	mu                     sync.RWMutex
+	pending                map[string]map[string]PendingPromptSnapshot
+	nextOrdinaryOccurrence map[string]attentionnotify.OrdinaryOccurrenceOrdinal
 }
 
 func newPendingPromptStore() *pendingPromptStore {
-	return &pendingPromptStore{pending: make(map[string]map[string]PendingPromptSnapshot)}
+	return &pendingPromptStore{
+		pending:                make(map[string]map[string]PendingPromptSnapshot),
+		nextOrdinaryOccurrence: make(map[string]attentionnotify.OrdinaryOccurrenceOrdinal),
+	}
 }
 
 func (s *pendingPromptStore) Begin(sessionID string, resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, req askquestion.AskQuestionRequest, createdAt time.Time, publish func(PendingPromptSnapshot)) bool {
@@ -32,8 +39,8 @@ func (s *pendingPromptStore) Begin(sessionID string, resource runtimeids.Session
 	if id == "" || requestID == "" {
 		return false
 	}
-	snapshot := PendingPromptSnapshot{Request: req, CreatedAt: createdAt, Resource: resource, ScopeID: scopeID}
 	s.mu.Lock()
+	snapshot := s.newSnapshotLocked(id, resource, scopeID, req, createdAt)
 	pending := s.pending[id]
 	if pending == nil {
 		pending = make(map[string]PendingPromptSnapshot)
@@ -84,6 +91,7 @@ func (s *pendingPromptStore) CloseSession(sessionID string, resolve func(Pending
 	s.mu.Lock()
 	items := listPendingPrompts(s.pending[id])
 	delete(s.pending, id)
+	delete(s.nextOrdinaryOccurrence, id)
 	for _, item := range items {
 		if resolve != nil {
 			resolve(item)
@@ -92,10 +100,43 @@ func (s *pendingPromptStore) CloseSession(sessionID string, resolve func(Pending
 	s.mu.Unlock()
 }
 
-func (s *pendingPromptStore) WithLockedAttentionSnapshotResult(sessionID string, fn func([]PendingPromptSnapshot) (serverapi.AttentionNotificationSubscription, error)) (serverapi.AttentionNotificationSubscription, error) {
+type pendingAttentionSnapshot struct {
+	items                       []PendingPromptSnapshot
+	ordinaryOccurrenceWatermark attentionnotify.OrdinaryOccurrenceWatermark
+}
+
+func (s *pendingPromptStore) WithLockedAttentionSnapshotResult(sessionID string, fn func(pendingAttentionSnapshot) (serverapi.AttentionNotificationSubscription, error)) (serverapi.AttentionNotificationSubscription, error) {
+	id := strings.TrimSpace(sessionID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return fn(listPendingPrompts(s.pending[strings.TrimSpace(sessionID)]))
+	return fn(pendingAttentionSnapshot{
+		items:                       listPendingPrompts(s.pending[id]),
+		ordinaryOccurrenceWatermark: attentionnotify.OrdinaryOccurrenceWatermark(s.nextOrdinaryOccurrence[id]),
+	})
+}
+
+func (s *pendingPromptStore) newSnapshotLocked(
+	sessionID string,
+	resource runtimeids.SessionResourceRef,
+	scopeID runtimeids.ExecutionScopeID,
+	req askquestion.AskQuestionRequest,
+	createdAt time.Time,
+) PendingPromptSnapshot {
+	snapshot := PendingPromptSnapshot{
+		Request:   req,
+		CreatedAt: createdAt,
+		Resource:  resource,
+		ScopeID:   scopeID,
+	}
+	if req.QuestionBatch != nil &&
+		req.AttentionTarget != nil &&
+		req.AttentionTarget.Kind == clientui.AttentionNotificationTargetWorkflowTask {
+		snapshot.occurrence = attentionnotify.NewTaskQuestionBatchOccurrenceMetadata(req.QuestionBatch.BatchID)
+		return snapshot
+	}
+	s.nextOrdinaryOccurrence[sessionID]++
+	snapshot.occurrence = attentionnotify.NewOrdinaryOccurrenceMetadata(s.nextOrdinaryOccurrence[sessionID])
+	return snapshot
 }
 
 func listPendingPrompts(pending map[string]PendingPromptSnapshot) []PendingPromptSnapshot {

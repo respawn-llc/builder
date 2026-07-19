@@ -40,12 +40,32 @@ type Broker struct {
 
 type Subscription struct {
 	filter  deliveryFilter
-	ch      chan clientui.AttentionNotificationEvent
+	ch      chan attentionEnvelope
 	onClose func()
 
 	mu   sync.Mutex
 	err  error
 	done bool
+}
+
+type SnapshotPendingDescriptor struct {
+	Notification clientui.AttentionNotification
+	Occurrence   OccurrenceMetadata
+}
+
+type SnapshotSubscription struct {
+	live                     *Subscription
+	snapshot                 []attentionEnvelope
+	openingOrdinaryWatermark OrdinaryOccurrenceWatermark
+
+	mu   sync.Mutex
+	next int
+	done bool
+}
+
+type attentionEnvelope struct {
+	event      clientui.AttentionNotificationEvent
+	occurrence OccurrenceMetadata
 }
 
 type deliveryFilter struct {
@@ -87,11 +107,69 @@ func (b *Broker) SubscribeSession(sessionID string) (*Subscription, error) {
 	return b.subscribe(deliveryFilter{sessionID: sessionID})
 }
 
+func (b *Broker) SubscribeSessionSnapshot(sessionID string, descriptors []SnapshotPendingDescriptor, openingWatermark OrdinaryOccurrenceWatermark) (*SnapshotSubscription, error) {
+	if sessionID == "" {
+		return nil, fmt.Errorf("attention notification session subscription: %w", serverapi.ErrSessionIDRequired)
+	}
+	if b == nil {
+		return nil, fmt.Errorf("attention notification stream is unavailable: %w", serverapi.ErrStreamUnavailable)
+	}
+	for index, descriptor := range descriptors {
+		event := clientui.AttentionNotificationEvent{
+			Source:  clientui.AttentionNotificationSourceSnapshot,
+			Type:    clientui.AttentionNotificationEventPending,
+			Pending: &descriptor.Notification,
+		}
+		if err := serverapi.ValidateAttentionNotificationEvent(withSequenceForValidation(event)); err != nil {
+			return nil, fmt.Errorf("attention snapshot descriptor %d: %w", index, err)
+		}
+	}
+	live := &Subscription{filter: deliveryFilter{sessionID: sessionID}, ch: make(chan attentionEnvelope, b.bufferSize)}
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		live.closeWithError(io.EOF)
+		return &SnapshotSubscription{live: live, openingOrdinaryWatermark: openingWatermark, done: true}, nil
+	}
+	id := b.nextID
+	b.nextID++
+	live.onClose = func() {
+		b.mu.Lock()
+		delete(b.subscribers, id)
+		b.mu.Unlock()
+	}
+	b.subscribers[id] = live
+	snapshot := make([]attentionEnvelope, 0, len(descriptors)+1)
+	for _, descriptor := range descriptors {
+		b.nextSeq++
+		event := clientui.AttentionNotificationEvent{
+			Sequence: b.nextSeq,
+			Source:   clientui.AttentionNotificationSourceSnapshot,
+			Type:     clientui.AttentionNotificationEventPending,
+			Pending:  &descriptor.Notification,
+		}
+		snapshot = append(snapshot, attentionEnvelope{event: event, occurrence: descriptor.Occurrence.clone()})
+	}
+	b.nextSeq++
+	snapshot = append(snapshot, attentionEnvelope{event: clientui.AttentionNotificationEvent{
+		Sequence:  b.nextSeq,
+		Source:    clientui.AttentionNotificationSourceSnapshot,
+		Type:      clientui.AttentionNotificationEventSnapshotComplete,
+		SessionID: sessionID,
+	}})
+	b.mu.Unlock()
+	return &SnapshotSubscription{
+		live:                     live,
+		snapshot:                 snapshot,
+		openingOrdinaryWatermark: openingWatermark,
+	}, nil
+}
+
 func (b *Broker) subscribe(filter deliveryFilter) (*Subscription, error) {
 	if b == nil {
 		return nil, fmt.Errorf("attention notification stream is unavailable: %w", serverapi.ErrStreamUnavailable)
 	}
-	sub := &Subscription{filter: filter, ch: make(chan clientui.AttentionNotificationEvent, b.bufferSize)}
+	sub := &Subscription{filter: filter, ch: make(chan attentionEnvelope, b.bufferSize)}
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
@@ -110,32 +188,11 @@ func (b *Broker) subscribe(filter deliveryFilter) (*Subscription, error) {
 	return sub, nil
 }
 
-func (b *Broker) EnqueueInitial(sub *Subscription, scope RoutingScope, event clientui.AttentionNotificationEvent) error {
-	if b == nil || sub == nil {
-		return fmt.Errorf("attention notification stream is unavailable: %w", serverapi.ErrStreamUnavailable)
-	}
-	if !deliveryMatches(sub.filter, scope) {
-		return nil
-	}
-	if err := serverapi.ValidateAttentionNotificationEvent(withSequenceForValidation(event)); err != nil {
-		return err
-	}
-	b.mu.Lock()
-	if b.closed {
-		b.mu.Unlock()
-		return io.EOF
-	}
-	b.nextSeq++
-	event.Sequence = b.nextSeq
-	b.mu.Unlock()
-	if !sub.publish(event) {
-		sub.closeWithError(serverapi.ErrStreamGap)
-		return serverapi.ErrStreamGap
-	}
-	return nil
+func (b *Broker) PublishPending(scope RoutingScope, notification clientui.AttentionNotification) error {
+	return b.PublishPendingWithOccurrence(scope, notification, OccurrenceMetadata{})
 }
 
-func (b *Broker) PublishPending(scope RoutingScope, notification clientui.AttentionNotification) error {
+func (b *Broker) PublishPendingWithOccurrence(scope RoutingScope, notification clientui.AttentionNotification, occurrence OccurrenceMetadata) error {
 	event := clientui.AttentionNotificationEvent{
 		Source:  clientui.AttentionNotificationSourceLive,
 		Type:    clientui.AttentionNotificationEventPending,
@@ -144,10 +201,14 @@ func (b *Broker) PublishPending(scope RoutingScope, notification clientui.Attent
 	if err := serverapi.ValidateAttentionNotificationEvent(withSequenceForValidation(event)); err != nil {
 		return err
 	}
-	return b.publish(scope, event)
+	return b.publish(scope, attentionEnvelope{event: event, occurrence: occurrence.clone()})
 }
 
 func (b *Broker) PublishResolved(scope RoutingScope, id clientui.AttentionNotificationID, kind clientui.AttentionNotificationKind, occurredAt time.Time) error {
+	return b.PublishResolvedWithOccurrence(scope, id, kind, occurredAt, OccurrenceMetadata{})
+}
+
+func (b *Broker) PublishResolvedWithOccurrence(scope RoutingScope, id clientui.AttentionNotificationID, kind clientui.AttentionNotificationKind, occurredAt time.Time, occurrence OccurrenceMetadata) error {
 	resolvedID := id
 	resolvedAt := occurredAt
 	event := clientui.AttentionNotificationEvent{
@@ -160,7 +221,7 @@ func (b *Broker) PublishResolved(scope RoutingScope, id clientui.AttentionNotifi
 	if err := serverapi.ValidateAttentionNotificationEvent(withSequenceForValidation(event)); err != nil {
 		return err
 	}
-	return b.publish(scope, event)
+	return b.publish(scope, attentionEnvelope{event: event, occurrence: occurrence.clone()})
 }
 
 func withSequenceForValidation(event clientui.AttentionNotificationEvent) clientui.AttentionNotificationEvent {
@@ -168,7 +229,7 @@ func withSequenceForValidation(event clientui.AttentionNotificationEvent) client
 	return event
 }
 
-func (b *Broker) publish(scope RoutingScope, event clientui.AttentionNotificationEvent) error {
+func (b *Broker) publish(scope RoutingScope, envelope attentionEnvelope) error {
 	if b == nil {
 		return fmt.Errorf("attention notification stream is unavailable: %w", serverapi.ErrStreamUnavailable)
 	}
@@ -178,7 +239,7 @@ func (b *Broker) publish(scope RoutingScope, event clientui.AttentionNotificatio
 		return io.EOF
 	}
 	b.nextSeq++
-	event.Sequence = b.nextSeq
+	envelope.event.Sequence = b.nextSeq
 	subs := make([]*Subscription, 0, len(b.subscribers))
 	for _, sub := range b.subscribers {
 		if deliveryMatches(sub.filter, scope) {
@@ -187,7 +248,7 @@ func (b *Broker) publish(scope RoutingScope, event clientui.AttentionNotificatio
 	}
 	b.mu.Unlock()
 	for _, sub := range subs {
-		if !sub.publish(event) {
+		if !sub.publish(envelope) {
 			sub.closeWithError(serverapi.ErrStreamGap)
 		}
 	}
@@ -232,7 +293,7 @@ func deliveryMatches(filter deliveryFilter, scope RoutingScope) bool {
 	}
 }
 
-func (s *Subscription) publish(event clientui.AttentionNotificationEvent) bool {
+func (s *Subscription) publish(envelope attentionEnvelope) bool {
 	if s == nil {
 		return false
 	}
@@ -242,7 +303,7 @@ func (s *Subscription) publish(event clientui.AttentionNotificationEvent) bool {
 		return false
 	}
 	select {
-	case s.ch <- event:
+	case s.ch <- envelope:
 		return true
 	default:
 		return false
@@ -250,22 +311,30 @@ func (s *Subscription) publish(event clientui.AttentionNotificationEvent) bool {
 }
 
 func (s *Subscription) Next(ctx context.Context) (clientui.AttentionNotificationEvent, error) {
+	envelope, err := s.nextEnvelope(ctx)
+	if err != nil {
+		return clientui.AttentionNotificationEvent{}, err
+	}
+	return envelope.event, nil
+}
+
+func (s *Subscription) nextEnvelope(ctx context.Context) (attentionEnvelope, error) {
 	if s == nil {
-		return clientui.AttentionNotificationEvent{}, io.EOF
+		return attentionEnvelope{}, io.EOF
 	}
 	select {
 	case <-ctx.Done():
-		return clientui.AttentionNotificationEvent{}, ctx.Err()
-	case event, ok := <-s.ch:
+		return attentionEnvelope{}, ctx.Err()
+	case envelope, ok := <-s.ch:
 		if ok {
-			return event, nil
+			return envelope, nil
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if s.err != nil {
-			return clientui.AttentionNotificationEvent{}, serverapi.NormalizeStreamError(s.err)
+			return attentionEnvelope{}, serverapi.NormalizeStreamError(s.err)
 		}
-		return clientui.AttentionNotificationEvent{}, io.EOF
+		return attentionEnvelope{}, io.EOF
 	}
 }
 
@@ -297,6 +366,55 @@ func (s *Subscription) closeWithError(err error) {
 	}
 }
 
+func (s *SnapshotSubscription) Next(ctx context.Context) (clientui.AttentionNotificationEvent, error) {
+	if s == nil {
+		return clientui.AttentionNotificationEvent{}, io.EOF
+	}
+	s.mu.Lock()
+	if s.done {
+		s.mu.Unlock()
+		return clientui.AttentionNotificationEvent{}, io.EOF
+	}
+	if s.next < len(s.snapshot) {
+		event := s.snapshot[s.next].event
+		s.next++
+		s.mu.Unlock()
+		return event, nil
+	}
+	live := s.live
+	s.mu.Unlock()
+	if live == nil {
+		return clientui.AttentionNotificationEvent{}, io.EOF
+	}
+	return live.Next(ctx)
+}
+
+func (s *SnapshotSubscription) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	if s.done {
+		s.mu.Unlock()
+		return nil
+	}
+	s.done = true
+	live := s.live
+	s.mu.Unlock()
+	if live == nil {
+		return nil
+	}
+	return live.Close()
+}
+
+func (s *SnapshotSubscription) OpeningOrdinaryWatermark() OrdinaryOccurrenceWatermark {
+	if s == nil {
+		return 0
+	}
+	return s.openingOrdinaryWatermark
+}
+
 var _ serverapi.AttentionNotificationSubscription = (*Subscription)(nil)
+var _ serverapi.AttentionNotificationSubscription = (*SnapshotSubscription)(nil)
 
 var ErrBatchNotFound = errors.New("question batch is not registered")

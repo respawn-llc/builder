@@ -22,6 +22,7 @@ type QuestionBatch struct {
 	Preview        string
 	PreparedAskIDs []string
 	OccurredAt     time.Time
+	Occurrence     OccurrenceMetadata
 }
 
 type questionBatch struct {
@@ -60,6 +61,9 @@ func (t *QuestionBatchTracker) prepareLocked(batch QuestionBatch) error {
 	}
 	if _, ok := t.batches[batch.ID]; ok {
 		existing := t.batches[batch.ID]
+		if err := existing.mergeOccurrence(batch.Occurrence); err != nil {
+			return err
+		}
 		if existing.Preview == "" {
 			existing.Preview = batch.Preview
 		}
@@ -78,6 +82,18 @@ func (t *QuestionBatchTracker) prepareLocked(batch QuestionBatch) error {
 		status[askID] = questionAskPending
 	}
 	t.batches[batch.ID] = &questionBatch{QuestionBatch: batch, status: status}
+	return nil
+}
+
+func (b *questionBatch) mergeOccurrence(incoming OccurrenceMetadata) error {
+	existingKey, existingHasKey := b.Occurrence.TaskQuestionBatchKey()
+	incomingKey, incomingHasKey := incoming.TaskQuestionBatchKey()
+	switch {
+	case !existingHasKey && incomingHasKey:
+		b.Occurrence = incoming
+	case existingHasKey && incomingHasKey && existingKey != incomingKey:
+		return fmt.Errorf("question batch %q has conflicting occurrence metadata", b.ID)
+	}
 	return nil
 }
 
@@ -102,22 +118,22 @@ func (t *QuestionBatchTracker) MarkMaterialized(batchID string, askID string) er
 	return t.publishBatch(batch)
 }
 
-func (t *QuestionBatchTracker) EnqueueSnapshot(sub *Subscription, batch QuestionBatch, materializedAskIDs []string) error {
+func (t *QuestionBatchTracker) Snapshot(batch QuestionBatch, materializedAskIDs []string) (SnapshotPendingDescriptor, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if err := t.prepareLocked(batch); err != nil {
-		return err
+		return SnapshotPendingDescriptor{}, err
 	}
 	if len(materializedAskIDs) == 0 {
-		return fmt.Errorf("question batch snapshot materialized ask ids are required")
+		return SnapshotPendingDescriptor{}, fmt.Errorf("question batch snapshot materialized ask ids are required")
 	}
 	current := t.batches[batch.ID]
 	if current.resolved {
-		return nil
+		return SnapshotPendingDescriptor{}, nil
 	}
 	for _, askID := range materializedAskIDs {
 		if _, ok := current.status[askID]; !ok {
-			return fmt.Errorf("question batch %q does not contain ask %q", batch.ID, askID)
+			return SnapshotPendingDescriptor{}, fmt.Errorf("question batch %q does not contain ask %q", batch.ID, askID)
 		}
 		if current.status[askID] == questionAskPending {
 			current.status[askID] = questionAskMaterialized
@@ -127,11 +143,10 @@ func (t *QuestionBatchTracker) EnqueueSnapshot(sub *Subscription, batch Question
 	if current.revision == 0 {
 		current.revision = 1
 	}
-	return t.broker.EnqueueInitial(sub, current.Route, clientui.AttentionNotificationEvent{
-		Source:  clientui.AttentionNotificationSourceSnapshot,
-		Type:    clientui.AttentionNotificationEventPending,
-		Pending: current.notification(),
-	})
+	return SnapshotPendingDescriptor{
+		Notification: *current.notification(),
+		Occurrence:   current.Occurrence.clone(),
+	}, nil
 }
 
 func (t *QuestionBatchTracker) MarkSkipped(batchID string, askID string) error {
@@ -186,7 +201,7 @@ func (t *QuestionBatchTracker) publishBatch(batch *questionBatch) error {
 	batch.revision = nextRevision
 	notification := *batch.notification()
 	batch.revision = previousRevision
-	if err := t.broker.PublishPending(batch.Route, notification); err != nil {
+	if err := t.broker.PublishPendingWithOccurrence(batch.Route, notification, batch.Occurrence); err != nil {
 		return err
 	}
 	batch.revision = nextRevision
@@ -221,7 +236,7 @@ func (t *QuestionBatchTracker) resolveIfComplete(batch *questionBatch) error {
 		Kind: clientui.AttentionNotificationKindQuestion,
 		UUID: batch.ID,
 	}
-	if err := t.broker.PublishResolved(batch.Route, id, clientui.AttentionNotificationKindQuestion, time.Now().UTC()); err != nil {
+	if err := t.broker.PublishResolvedWithOccurrence(batch.Route, id, clientui.AttentionNotificationKindQuestion, time.Now().UTC(), batch.Occurrence); err != nil {
 		return err
 	}
 	batch.resolved = true

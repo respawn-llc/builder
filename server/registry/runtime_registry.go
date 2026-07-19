@@ -33,7 +33,14 @@ type RuntimeRegistry struct {
 	pendingPrompts           *pendingPromptStore
 	attentionBroker          *attentionnotify.Broker
 	questionBatches          *attentionnotify.QuestionBatchTracker
+	taskApprovalOccurrences  map[taskApprovalOccurrenceKey]attentionnotify.OccurrenceMetadata
+	taskApprovalOccurrenceMu sync.Mutex
 	executionTargetResolver  func(context.Context, string) (clientui.SessionExecutionTarget, error)
+}
+
+type taskApprovalOccurrenceKey struct {
+	sessionID string
+	askID     string
 }
 
 type authorityRuntimeEntry struct {
@@ -63,6 +70,7 @@ func NewRuntimeRegistry() *RuntimeRegistry {
 		blockingActivitySessions: make(map[string]bool),
 		readModels:               runtimeactivity.NewCoordinatorCache(runtimeactivity.DefaultCoordinatorCacheLimit),
 		pendingPrompts:           newPendingPromptStore(),
+		taskApprovalOccurrences:  make(map[taskApprovalOccurrenceKey]attentionnotify.OccurrenceMetadata),
 	}
 }
 
@@ -135,6 +143,7 @@ func (r *RuntimeRegistry) ResourceDraining(_ context.Context, resource sessionru
 	entry.mu.Unlock()
 
 	sessionID := ref.SessionID().String()
+	r.clearTaskApprovalOccurrences(sessionID)
 	r.pendingPrompts.CloseSession(sessionID, func(snapshot PendingPromptSnapshot) {
 		r.publishPromptResolution(entry, sessionID, snapshot)
 	})

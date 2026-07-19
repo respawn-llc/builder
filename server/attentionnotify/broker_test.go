@@ -80,34 +80,33 @@ func TestBrokerDeliversScopedResolvedWithoutActiveID(t *testing.T) {
 	}
 }
 
-func TestBrokerEnqueuesInitialEventsOnlyForRegisteredSubscriber(t *testing.T) {
+func TestBrokerSnapshotSubscriptionDoesNotReplayEarlierLiveEvents(t *testing.T) {
 	fixture := newBrokerFixture(t)
 	fixture.publishPending(RoutingScope{Kind: RoutingWorkflowTask}, testQuestionNotification("batch-1", 1))
-	sub := fixture.subscribeDesktop()
-	fixture.requireNoEvent(sub, "default subscription replayed old event")
-	initial := clientui.AttentionNotificationEvent{
-		Source:    clientui.AttentionNotificationSourceSnapshot,
-		Type:      clientui.AttentionNotificationEventSnapshotComplete,
-		SessionID: "session-1",
+	sub, err := fixture.SubscribeSessionSnapshot("session-1", nil, 0)
+	fixture.noError("SubscribeSessionSnapshot", err)
+	if event := fixture.nextSnapshot(sub); event.Type != clientui.AttentionNotificationEventSnapshotComplete {
+		t.Fatalf("snapshot complete = %+v", event)
 	}
-	fixture.enqueueInitial(sub, RoutingScope{Kind: RoutingWorkflowTask}, initial)
-	if event := fixture.next(sub); event.Type != clientui.AttentionNotificationEventSnapshotComplete {
-		t.Fatalf("initial event = %+v", event)
-	}
+	fixture.requireNoSnapshotEvent(sub, "snapshot subscription replayed old live event")
 }
 
 func TestBrokerSnapshotPendingActivatesLaterResolvedEvent(t *testing.T) {
 	fixture := newBrokerFixture(t)
-	sub := fixture.subscribeSession("session-1")
 	scope := RoutingScope{Kind: RoutingSessionPrompt, SessionID: "session-1"}
 	notification := testSessionPromptNotification("ask-1")
-	initial := snapshotPending(notification)
-	fixture.enqueueInitial(sub, scope, initial)
-	if event := fixture.next(sub); event.Type != clientui.AttentionNotificationEventPending || event.Pending.ID != notification.ID {
-		t.Fatalf("initial pending event = %+v", event)
+	sub, err := fixture.SubscribeSessionSnapshot("session-1", []SnapshotPendingDescriptor{{
+		Notification: notification,
+	}}, 0)
+	fixture.noError("SubscribeSessionSnapshot", err)
+	if event := fixture.nextSnapshot(sub); event.Type != clientui.AttentionNotificationEventPending || event.Pending.ID != notification.ID {
+		t.Fatalf("snapshot pending event = %+v", event)
+	}
+	if event := fixture.nextSnapshot(sub); event.Type != clientui.AttentionNotificationEventSnapshotComplete {
+		t.Fatalf("snapshot complete event = %+v", event)
 	}
 	fixture.publishResolved(scope, notification.ID, notification.Kind, testTime().Add(time.Second))
-	resolved := fixture.next(sub)
+	resolved := fixture.nextSnapshot(sub)
 	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, notification.ID) {
 		t.Fatalf("resolved event = %+v", resolved)
 	}
@@ -124,17 +123,67 @@ func TestBrokerClosesLaggingSubscriberWithStreamGap(t *testing.T) {
 	fixture.requireStreamGap("Next", err)
 }
 
-func TestBrokerInitialEnqueueOverflowReturnsStreamGap(t *testing.T) {
+func TestBrokerSnapshotSubscriptionDoesNotConsumeLiveBufferAndPreservesLiveOverflow(t *testing.T) {
 	fixture := newBrokerFixture(t, WithBufferSize(1))
-	sub := fixture.subscribeSession("session-1")
 	scope := RoutingScope{Kind: RoutingSessionPrompt, SessionID: "session-1"}
-	first := snapshotPending(testSessionPromptNotification("ask-1"))
-	second := snapshotPending(testSessionPromptNotification("ask-2"))
-	fixture.enqueueInitial(sub, scope, first)
-	fixture.requireStreamGap("EnqueueInitial overflow", fixture.EnqueueInitial(sub, scope, second))
-	_ = fixture.next(sub)
-	_, err := sub.Next(context.Background())
-	fixture.requireStreamGap("Next", err)
+	descriptors := []SnapshotPendingDescriptor{
+		{Notification: testSessionPromptNotification("ask-1")},
+		{Notification: testSessionPromptNotification("ask-2")},
+		{Notification: testSessionPromptNotification("ask-3")},
+	}
+	sub, err := fixture.SubscribeSessionSnapshot("session-1", descriptors, 0)
+	fixture.noError("SubscribeSessionSnapshot", err)
+	fixture.publishPending(scope, testSessionPromptNotification("live-1"))
+	fixture.publishPending(scope, testSessionPromptNotification("live-2"))
+
+	for range descriptors {
+		event := fixture.nextSnapshot(sub)
+		if event.Source != clientui.AttentionNotificationSourceSnapshot || event.Type != clientui.AttentionNotificationEventPending {
+			t.Fatalf("snapshot event = %+v", event)
+		}
+	}
+	if event := fixture.nextSnapshot(sub); event.Type != clientui.AttentionNotificationEventSnapshotComplete {
+		t.Fatalf("snapshot complete = %+v", event)
+	}
+	if event := fixture.nextSnapshot(sub); event.Pending == nil || event.Pending.ID.UUID != "live-1" {
+		t.Fatalf("first live event = %+v", event)
+	}
+	_, err = sub.Next(context.Background())
+	fixture.requireStreamGap("live overflow", err)
+}
+
+func TestBrokerKeepsOccurrenceMetadataInsideEnvelopes(t *testing.T) {
+	fixture := newBrokerFixture(t)
+	live := fixture.subscribeSession("session-1")
+	ordinary := NewOrdinaryOccurrenceMetadata(7)
+	fixture.noError("PublishPendingWithOccurrence", fixture.PublishPendingWithOccurrence(
+		RoutingScope{Kind: RoutingSessionPrompt, SessionID: "session-1"},
+		testSessionPromptNotification("ordinary"),
+		ordinary,
+	))
+	liveEnvelope, err := live.nextEnvelope(context.Background())
+	fixture.noError("nextEnvelope", err)
+	if ordinal, ok := liveEnvelope.occurrence.OrdinaryOrdinal(); !ok || ordinal != 7 {
+		t.Fatalf("live ordinary occurrence = %d / %t, want 7 / true", ordinal, ok)
+	}
+
+	batch := NewTaskQuestionBatchOccurrenceMetadata("batch-1")
+	snapshot, err := fixture.SubscribeSessionSnapshot("session-1", []SnapshotPendingDescriptor{{
+		Notification: testSessionPromptNotification("task-batch"),
+		Occurrence:   batch,
+	}}, 7)
+	fixture.noError("SubscribeSessionSnapshot", err)
+	if snapshot.OpeningOrdinaryWatermark() != 7 {
+		t.Fatalf("opening ordinary watermark = %d, want 7", snapshot.OpeningOrdinaryWatermark())
+	}
+	if len(snapshot.snapshot) != 2 {
+		t.Fatalf("snapshot envelopes = %+v, want descriptor plus complete marker", snapshot.snapshot)
+	}
+	key, ok := snapshot.snapshot[0].occurrence.TaskQuestionBatchKey()
+	wantKey, wantOK := batch.TaskQuestionBatchKey()
+	if !ok || !wantOK || key != wantKey {
+		t.Fatalf("snapshot task batch key = %v / %t, want %v / %t", key, ok, wantKey, wantOK)
+	}
 }
 
 func TestQuestionBatchTrackerPublishesMaterializedUpdatesAndResolvesAfterClears(t *testing.T) {
@@ -221,9 +270,11 @@ func (f brokerFixture) publishResolved(scope RoutingScope, id clientui.Attention
 	f.noError("PublishResolved", f.PublishResolved(scope, id, kind, occurredAt))
 }
 
-func (f brokerFixture) enqueueInitial(sub *Subscription, scope RoutingScope, event clientui.AttentionNotificationEvent) {
+func (f brokerFixture) nextSnapshot(sub *SnapshotSubscription) clientui.AttentionNotificationEvent {
 	f.Helper()
-	f.noError("EnqueueInitial", f.EnqueueInitial(sub, scope, event))
+	event, err := sub.Next(context.Background())
+	f.noError("SnapshotSubscription.Next", err)
+	return event
 }
 
 func (f brokerFixture) next(sub *Subscription) clientui.AttentionNotificationEvent {
@@ -234,6 +285,19 @@ func (f brokerFixture) next(sub *Subscription) clientui.AttentionNotificationEve
 }
 
 func (f brokerFixture) requireNoEvent(sub *Subscription, failure string) {
+	f.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	event, err := sub.Next(ctx)
+	if err == nil {
+		f.Fatalf("%s: %+v", failure, event)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		f.Fatalf("%s: Next error = %v, want context deadline", failure, err)
+	}
+}
+
+func (f brokerFixture) requireNoSnapshotEvent(sub *SnapshotSubscription, failure string) {
 	f.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
@@ -268,14 +332,6 @@ func (f brokerFixture) questionBatch() (*QuestionBatchTracker, QuestionBatch) {
 		Preview:        "question from agent",
 		PreparedAskIDs: []string{"ask-1", "ask-2"},
 		OccurredAt:     testTime(),
-	}
-}
-
-func snapshotPending(notification clientui.AttentionNotification) clientui.AttentionNotificationEvent {
-	return clientui.AttentionNotificationEvent{
-		Source:  clientui.AttentionNotificationSourceSnapshot,
-		Type:    clientui.AttentionNotificationEventPending,
-		Pending: &notification,
 	}
 }
 

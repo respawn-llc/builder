@@ -2,7 +2,6 @@ package registry
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -133,10 +132,23 @@ func TestRuntimeRegistryPublishesTaskApprovalPromptAsDurablyClearedQuestionAtten
 	if event, err := desktopSub.Next(shortRegistryContext(t)); err == nil {
 		t.Fatalf("prompt response resolved task approval before durable clear: %+v", event)
 	}
+	approvalOccurrenceKey := taskApprovalOccurrenceKey{sessionID: "session-1", askID: "approval-1"}
+	registry.taskApprovalOccurrenceMu.Lock()
+	occurrence, retained := registry.taskApprovalOccurrences[approvalOccurrenceKey]
+	registry.taskApprovalOccurrenceMu.Unlock()
+	if ordinal, ok := occurrence.OrdinaryOrdinal(); !retained || !ok || ordinal != 1 {
+		t.Fatalf("retained task approval occurrence = %d / %t / %t, want 1 / true / true", ordinal, ok, retained)
+	}
 	registry.MarkTaskApprovalQuestionCleared(target, "approval-1")
 	resolved := nextRegistryAttentionEvent(t, desktopSub)
 	if resolved.Type != clientui.AttentionNotificationEventResolved || resolved.Kind != clientui.AttentionNotificationKindQuestion || !attentionNotificationEventIDMatches(resolved, attentionNotificationID(clientui.AttentionNotificationKindQuestion, "approval-1")) {
 		t.Fatalf("durable clear resolved event = %+v", resolved)
+	}
+	registry.taskApprovalOccurrenceMu.Lock()
+	_, retained = registry.taskApprovalOccurrences[approvalOccurrenceKey]
+	registry.taskApprovalOccurrenceMu.Unlock()
+	if retained {
+		t.Fatal("task approval occurrence remained after durable clear")
 	}
 }
 
@@ -196,22 +208,122 @@ func TestRuntimeRegistrySessionAttentionSnapshotUsesPendingPromptStore(t *testin
 	}
 }
 
-func TestRuntimeRegistrySessionAttentionSnapshotOverflowReturnsStreamGap(t *testing.T) {
-	broker := attentionnotify.NewBroker()
+func TestRuntimeRegistrySessionAttentionSnapshotIsIndependentFromLiveBuffer(t *testing.T) {
+	tests := []struct {
+		name          string
+		liveBuffer    int
+		snapshotCount int
+	}{
+		{name: "empty snapshot", liveBuffer: 1},
+		{name: "buffer below snapshot cardinality", liveBuffer: 2, snapshotCount: 3},
+		{name: "buffer equals snapshot cardinality", liveBuffer: 3, snapshotCount: 3},
+		{name: "buffer above snapshot cardinality", liveBuffer: 4, snapshotCount: 3},
+		{name: "large snapshot with minimal live buffer", liveBuffer: 1, snapshotCount: 65},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			broker := attentionnotify.NewBroker(attentionnotify.WithBufferSize(test.liveBuffer))
+			registry := NewRuntimeRegistry().WithAttentionNotifications(broker)
+			engine := &runtime.Engine{}
+			registerReady(t, registry, "session-1", engine)
+			t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
+
+			for index := 0; index < test.snapshotCount; index++ {
+				projectPendingPromptForTest(registry, "session-1", askquestion.AskQuestionRequest{
+					ID:       fmt.Sprintf("snapshot-%03d", index),
+					StepID:   registryTestStepID,
+					Question: "Proceed?",
+				})
+			}
+
+			sub, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{
+				SessionID:                    "session-1",
+				IncludePendingPromptSnapshot: true,
+			})
+			if err != nil {
+				t.Fatalf("SubscribeSessionAttentionNotifications: %v", err)
+			}
+			t.Cleanup(func() { _ = sub.Close() })
+
+			projectPendingPromptForTest(registry, "session-1", askquestion.AskQuestionRequest{
+				ID:       "live-after-snapshot",
+				StepID:   registryTestStepID,
+				Question: "Proceed?",
+			})
+
+			for index := 0; index < test.snapshotCount; index++ {
+				event := nextRegistryAttentionEvent(t, sub)
+				wantID := attentionNotificationID(clientui.AttentionNotificationKindQuestion, fmt.Sprintf("snapshot-%03d", index))
+				if event.Source != clientui.AttentionNotificationSourceSnapshot ||
+					event.Type != clientui.AttentionNotificationEventPending ||
+					event.Pending == nil ||
+					event.Pending.ID != wantID {
+					t.Fatalf("snapshot event %d = %+v, want %s", index, event, wantID.UUID)
+				}
+			}
+			complete := nextRegistryAttentionEvent(t, sub)
+			if complete.Source != clientui.AttentionNotificationSourceSnapshot ||
+				complete.Type != clientui.AttentionNotificationEventSnapshotComplete {
+				t.Fatalf("snapshot complete = %+v", complete)
+			}
+			live := nextRegistryAttentionEvent(t, sub)
+			if live.Source != clientui.AttentionNotificationSourceLive ||
+				live.Type != clientui.AttentionNotificationEventPending ||
+				live.Pending == nil ||
+				live.Pending.ID != attentionNotificationID(clientui.AttentionNotificationKindQuestion, "live-after-snapshot") {
+				t.Fatalf("live event after snapshot = %+v", live)
+			}
+		})
+	}
+}
+
+func TestRuntimeRegistrySessionAttentionSnapshotCapturesOpeningOrdinaryWatermark(t *testing.T) {
+	broker := attentionnotify.NewBroker(attentionnotify.WithBufferSize(1))
 	registry := NewRuntimeRegistry().WithAttentionNotifications(broker)
 	engine := &runtime.Engine{}
 	registerReady(t, registry, "session-1", engine)
 	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-	for i := 0; i < 65; i++ {
-		projectPendingPromptForTest(registry, "session-1", askquestion.AskQuestionRequest{ID: fmt.Sprintf("ask-%d", i), StepID: registryTestStepID, Question: "Proceed?"})
+	projectPendingPromptForTest(registry, "session-1", askquestion.AskQuestionRequest{ID: "snapshot-1", StepID: registryTestStepID, Question: "Proceed?"})
+
+	sub, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{
+		SessionID:                    "session-1",
+		IncludePendingPromptSnapshot: true,
+	})
+	if err != nil {
+		t.Fatalf("SubscribeSessionAttentionNotifications: %v", err)
+	}
+	snapshot, ok := sub.(*attentionnotify.SnapshotSubscription)
+	if !ok {
+		t.Fatalf("snapshot subscription = %T, want *attentionnotify.SnapshotSubscription", sub)
+	}
+	if snapshot.OpeningOrdinaryWatermark() != 1 {
+		t.Fatalf("opening ordinary watermark = %d, want 1", snapshot.OpeningOrdinaryWatermark())
 	}
 
-	sub, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1", IncludePendingPromptSnapshot: true})
-	if !errors.Is(err, serverapi.ErrStreamGap) {
-		t.Fatalf("SubscribeSessionAttentionNotifications error = %v, want ErrStreamGap", err)
+	projectPendingPromptForTest(registry, "session-1", askquestion.AskQuestionRequest{ID: "live-2", StepID: registryTestStepID, Question: "Proceed?"})
+	pending := registry.ListPendingPrompts("session-1")
+	foundLivePending := false
+	for _, item := range pending {
+		if item.Request.ID != "live-2" {
+			continue
+		}
+		foundLivePending = true
+		ordinal, present := item.occurrence.OrdinaryOrdinal()
+		if !present || ordinal != 2 {
+			t.Fatalf("live ordinary occurrence = %d / %t, want 2 / true", ordinal, present)
+		}
+		break
 	}
-	if sub != nil {
-		t.Fatalf("SubscribeSessionAttentionNotifications returned subscription after snapshot overflow: %+v", sub)
+	if !foundLivePending {
+		t.Fatal("live pending prompt was not found")
+	}
+
+	_ = nextRegistryAttentionEvent(t, sub)
+	_ = nextRegistryAttentionEvent(t, sub)
+	live := nextRegistryAttentionEvent(t, sub)
+	if live.Source != clientui.AttentionNotificationSourceLive || live.Pending == nil || live.Pending.ID.UUID != "live-2" {
+		t.Fatalf("live event = %+v", live)
 	}
 }
 
