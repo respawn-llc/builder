@@ -123,7 +123,7 @@ type recordingWorkflowTaskTranscriptProvider struct {
 	calls int
 }
 
-func (p *recordingWorkflowTaskTranscriptProvider) SessionTranscriptTailEntries(context.Context, string) ([]runtime.ChatEntry, error) {
+func (p *recordingWorkflowTaskTranscriptProvider) SessionNewestActiveSegmentEntries(context.Context, string) ([]runtime.ChatEntry, error) {
 	p.calls++
 	return nil, errors.New("task get must not read transcripts")
 }

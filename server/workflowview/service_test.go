@@ -2871,7 +2871,7 @@ func (s staticPendingPromptSource) ListPendingPrompts(sessionID string) []Pendin
 	return append([]PendingPromptSnapshot(nil), s[strings.TrimSpace(sessionID)]...)
 }
 
-func (p staticTranscriptProvider) SessionTranscriptTailEntries(_ context.Context, sessionID string) ([]runtime.ChatEntry, error) {
+func (p staticTranscriptProvider) SessionNewestActiveSegmentEntries(_ context.Context, sessionID string) ([]runtime.ChatEntry, error) {
 	return append([]runtime.ChatEntry(nil), p.entries[strings.TrimSpace(sessionID)]...), nil
 }
 

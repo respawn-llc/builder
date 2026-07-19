@@ -193,7 +193,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: store: %w", err)
 	}
-	workflowViewService, err := workflowview.New(metadataStore, workflowview.WithSessionTranscriptProvider(sessionViewService), workflowview.WithPendingPromptSource(workflowViewPendingPromptSource{prompts: runtimeRegistry}))
+	workflowViewService, err := workflowview.New(metadataStore, workflowview.WithSessionTranscriptProvider(workflowViewActiveTranscriptSource{views: sessionViewService}), workflowview.WithPendingPromptSource(workflowViewPendingPromptSource{prompts: runtimeRegistry}))
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: view: %w", err)
@@ -523,6 +523,17 @@ type workflowViewPendingPromptSource struct {
 	prompts interface {
 		ListPendingPrompts(sessionID string) []registry.PendingPromptSnapshot
 	}
+}
+
+type workflowViewActiveTranscriptSource struct {
+	views *sessionview.Service
+}
+
+func (s workflowViewActiveTranscriptSource) SessionNewestActiveSegmentEntries(ctx context.Context, sessionID string) ([]runtime.ChatEntry, error) {
+	if s.views == nil {
+		return nil, errors.New("session view service is required")
+	}
+	return s.views.SessionTranscriptTailEntries(ctx, sessionID)
 }
 
 func (s workflowViewPendingPromptSource) ListPendingPrompts(sessionID string) []workflowview.PendingPromptSnapshot {

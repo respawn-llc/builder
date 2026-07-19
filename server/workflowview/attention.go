@@ -19,11 +19,11 @@ import (
 type Attention struct {
 	queries     *sqlitegen.Queries
 	definitions *DefinitionProjection
-	transcripts SessionTranscriptTailEntryProvider
+	transcripts SessionActiveTranscriptProvider
 	prompts     PendingPromptSource
 }
 
-func NewAttention(metadataStore *metadata.Store, definitions *DefinitionProjection, transcripts SessionTranscriptTailEntryProvider, prompts PendingPromptSource) (*Attention, error) {
+func NewAttention(metadataStore *metadata.Store, definitions *DefinitionProjection, transcripts SessionActiveTranscriptProvider, prompts PendingPromptSource) (*Attention, error) {
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}

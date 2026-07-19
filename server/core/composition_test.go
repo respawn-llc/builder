@@ -425,8 +425,15 @@ func TestComposedWorkflowTaskDetailResolvesPendingQuestionFromSessionTranscript(
 	if err != nil {
 		t.Fatalf("GetWorkflowTask: %v", err)
 	}
-	if len(detail.Task.Attention) != 1 || detail.Task.Attention[0].Message != "Question from composed session transcript?" {
-		t.Fatalf("attention = %+v", detail.Task.Attention)
+	if detail.Task.AttentionCount != 1 {
+		t.Fatalf("attention count = %d, want 1", detail.Task.AttentionCount)
+	}
+	attention, err := appCore.WorkflowClient().ListWorkflowTaskAttention(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(task.ID)})
+	if err != nil {
+		t.Fatalf("ListWorkflowTaskAttention: %v", err)
+	}
+	if len(attention.Items) != 1 || attention.Items[0].Message != "Question from composed session transcript?" {
+		t.Fatalf("attention = %+v", attention.Items)
 	}
 }
 

@@ -15,15 +15,11 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
-	"core/server/runtime"
-	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowscript"
 	"core/server/workflowstore"
 	"core/server/worktree"
-	"core/shared/clientui"
 	"core/shared/serverapi"
-	"core/shared/toolspec"
 )
 
 type Service struct {
@@ -33,8 +29,6 @@ type Service struct {
 	projector   *TaskProjector
 	taskDetail  *TaskDetail
 	attention   *Attention
-	transcripts SessionTranscriptTailEntryProvider
-	prompts     PendingPromptSource
 }
 
 const attentionKindInterruptedRun = "interrupted_run"
@@ -50,34 +44,24 @@ var (
 	// ErrInvalidPageToken is returned when a pagination page_token fails to
 	// decode or does not match its issuing query.
 	ErrInvalidPageToken = errors.New("page_token is invalid")
-	// ErrPendingQuestionNotFound is returned when no pending question matches the
-	// requested ask id in a session transcript.
-	ErrPendingQuestionNotFound = errors.New("pending question was not found")
 )
 
-type Option func(*Service)
-
-type SessionTranscriptTailEntryProvider interface {
-	SessionTranscriptTailEntries(ctx context.Context, sessionID string) ([]runtime.ChatEntry, error)
+type serviceOptions struct {
+	attentionTranscripts SessionActiveTranscriptProvider
+	attentionPrompts     PendingPromptSource
 }
 
-type PendingPromptSnapshot struct {
-	Request askquestion.AskQuestionRequest
-}
+type Option func(*serviceOptions)
 
-type PendingPromptSource interface {
-	ListPendingPrompts(sessionID string) []PendingPromptSnapshot
-}
-
-func WithSessionTranscriptProvider(provider SessionTranscriptTailEntryProvider) Option {
-	return func(s *Service) {
-		s.transcripts = provider
+func WithSessionTranscriptProvider(provider SessionActiveTranscriptProvider) Option {
+	return func(options *serviceOptions) {
+		options.attentionTranscripts = provider
 	}
 }
 
 func WithPendingPromptSource(source PendingPromptSource) Option {
-	return func(s *Service) {
-		s.prompts = source
+	return func(options *serviceOptions) {
+		options.attentionPrompts = source
 	}
 }
 
@@ -98,24 +82,24 @@ func New(metadataStore *metadata.Store, opts ...Option) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	svc := &Service{
+	options := serviceOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
+	attention, err := NewAttention(metadataStore, definitions, options.attentionTranscripts, options.attentionPrompts)
+	if err != nil {
+		return nil, err
+	}
+	return &Service{
 		metadata:    metadataStore,
 		queries:     metadataStore.Queries(),
 		definitions: definitions,
 		projector:   projector,
 		taskDetail:  taskDetail,
-	}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(svc)
-		}
-	}
-	attention, err := NewAttention(metadataStore, definitions, svc.transcripts, svc.prompts)
-	if err != nil {
-		return nil, err
-	}
-	svc.attention = attention
-	return svc, nil
+		attention:   attention,
+	}, nil
 }
 
 func (s *Service) GetDefinition(ctx context.Context, workflowID string) (serverapi.WorkflowDefinition, map[string]workflow.NodeKind, error) {
@@ -970,134 +954,6 @@ func parseActivityPageToken(token string) (activityPageCursor, error) {
 
 func activityPageToken(item serverapi.WorkflowTaskActivityItem) string {
 	return strconv.FormatInt(item.OccurredAtUnixMs, 10) + "|" + base64.RawURLEncoding.EncodeToString([]byte(item.ActivityID))
-}
-
-func workflowQuestionAttentionItem(id string, projectID string, workflowID string, taskID string, shortID string, title string, runID string, sessionID string, askID string, question pendingQuestion, occurredAtUnixMs int64) serverapi.WorkflowAttentionItem {
-	workflowIDValue := workflowID
-	return serverapi.WorkflowAttentionItem{ID: id, Kind: "question", ProjectID: projectID, WorkflowID: &workflowIDValue, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, RunID: runID, SessionID: sessionID, AskID: askID, Message: question.message, Suggestions: question.suggestions, RecommendedOptionIndex: question.recommendedOptionIndex, Question: question.prompt, OccurredAtUnixMs: occurredAtUnixMs}
-}
-
-const pendingQuestionFallbackMessage = "Question pending; open the task to answer."
-
-type pendingQuestionResolver struct {
-	transcripts SessionTranscriptTailEntryProvider
-	prompts     PendingPromptSource
-}
-
-type pendingQuestion struct {
-	message                string
-	suggestions            []string
-	recommendedOptionIndex int
-	prompt                 *serverapi.WorkflowAttentionQuestionPrompt
-}
-
-func newPendingQuestionResolver(transcripts SessionTranscriptTailEntryProvider, prompts PendingPromptSource) *pendingQuestionResolver {
-	return &pendingQuestionResolver{transcripts: transcripts, prompts: prompts}
-}
-
-func (r *pendingQuestionResolver) Question(ctx context.Context, sessionID string, askID string) (pendingQuestion, error) {
-	sessionID = strings.TrimSpace(sessionID)
-	askID = strings.TrimSpace(askID)
-	if question, ok, err := r.questionFromPendingPrompt(sessionID, askID); ok || err != nil {
-		return question, err
-	}
-	if r == nil || r.transcripts == nil {
-		return pendingQuestion{}, errors.New("session transcript provider is required to resolve pending question")
-	}
-	if sessionID == "" || askID == "" {
-		return pendingQuestion{}, errors.New("session_id and ask_id are required to resolve pending question")
-	}
-	entries, err := r.transcripts.SessionTranscriptTailEntries(ctx, sessionID)
-	if err != nil {
-		return pendingQuestion{}, fmt.Errorf("load session %q transcript tail for pending question %q: %w", sessionID, askID, err)
-	}
-	question := askQuestionFromTranscriptEntries(entries, askID)
-	if strings.TrimSpace(question.message) == "" {
-		return pendingQuestion{}, fmt.Errorf("pending question %q in session %q transcript: %w", askID, sessionID, ErrPendingQuestionNotFound)
-	}
-	return question, nil
-}
-
-func (r *pendingQuestionResolver) questionFromPendingPrompt(sessionID string, askID string) (pendingQuestion, bool, error) {
-	if r == nil || r.prompts == nil || sessionID == "" || askID == "" {
-		return pendingQuestion{}, false, nil
-	}
-	for _, snapshot := range r.prompts.ListPendingPrompts(sessionID) {
-		req := snapshot.Request
-		if strings.TrimSpace(req.ID) != askID {
-			continue
-		}
-		return pendingQuestionFromRequest(req)
-	}
-	return pendingQuestion{}, false, nil
-}
-
-func pendingQuestionFromRequest(req askquestion.AskQuestionRequest) (pendingQuestion, bool, error) {
-	if req.Approval {
-		decisions := make([]clientui.ApprovalDecision, 0, len(req.ApprovalOptions))
-		for _, option := range req.ApprovalOptions {
-			decision := clientui.ApprovalDecision(option.Decision)
-			switch decision {
-			case clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionAllowSession, clientui.ApprovalDecisionDeny:
-				decisions = append(decisions, decision)
-			default:
-				return pendingQuestion{}, true, fmt.Errorf("pending approval question %q has invalid decision %q", req.ID, option.Decision)
-			}
-		}
-		if len(decisions) == 0 {
-			return pendingQuestion{}, true, fmt.Errorf("pending approval question %q has no approval decisions", req.ID)
-		}
-		return pendingQuestion{
-			message: strings.TrimSpace(req.Question),
-			prompt: &serverapi.WorkflowAttentionQuestionPrompt{
-				Kind:              serverapi.WorkflowAttentionQuestionKindApproval,
-				ApprovalDecisions: decisions,
-			},
-		}, true, nil
-	}
-	suggestions := normalizedPendingQuestionSuggestions(req.Suggestions)
-	return pendingQuestion{
-		message:                strings.TrimSpace(req.Question),
-		suggestions:            suggestions,
-		recommendedOptionIndex: req.RecommendedOptionIndex,
-		prompt: &serverapi.WorkflowAttentionQuestionPrompt{
-			Kind:                   serverapi.WorkflowAttentionQuestionKindOrdinary,
-			Suggestions:            suggestions,
-			RecommendedOptionIndex: req.RecommendedOptionIndex,
-		},
-	}, true, nil
-}
-
-func normalizedPendingQuestionSuggestions(in []string) []string {
-	if len(in) == 0 {
-		return nil
-	}
-	return append([]string(nil), in...)
-}
-
-func askQuestionFromTranscriptEntries(entries []runtime.ChatEntry, askID string) pendingQuestion {
-	for _, entry := range entries {
-		entryAskID := strings.TrimSpace(entry.ToolCallID)
-		if strings.TrimSpace(entry.Role) != "tool_call" || entryAskID != askID || entry.ToolCall == nil {
-			continue
-		}
-		if strings.TrimSpace(entry.ToolCall.ToolName) != string(toolspec.ToolAskQuestion) {
-			continue
-		}
-		if question := strings.TrimSpace(entry.ToolCall.Question); question != "" {
-			return pendingQuestion{
-				message:                question,
-				suggestions:            append([]string(nil), entry.ToolCall.Suggestions...),
-				recommendedOptionIndex: entry.ToolCall.RecommendedOptionIndex,
-				prompt: &serverapi.WorkflowAttentionQuestionPrompt{
-					Kind:                   serverapi.WorkflowAttentionQuestionKindOrdinary,
-					Suggestions:            append([]string(nil), entry.ToolCall.Suggestions...),
-					RecommendedOptionIndex: entry.ToolCall.RecommendedOptionIndex,
-				},
-			}
-		}
-	}
-	return pendingQuestion{}
 }
 
 func interruptedRunMessage(reason *string, detailJSON string) string {
