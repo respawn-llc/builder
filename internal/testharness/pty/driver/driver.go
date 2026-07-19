@@ -253,18 +253,7 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 					cancel()
 					return
 				}
-				analysis, snapshotErr := stream.Snapshot()
 				mu.Unlock()
-				if snapshotErr != nil {
-					eventErrors.Add(fmt.Errorf("snapshot live PTY analysis: %w", snapshotErr))
-					cancel()
-					return
-				}
-				if err := dispatchPhaseInputs(phaseInputs.pending(analysis.PhaseEvents)); err != nil {
-					eventErrors.Add(err)
-					cancel()
-					return
-				}
 				requestAnalysis()
 			}
 			if err != nil {

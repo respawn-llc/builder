@@ -2,6 +2,7 @@ package sessionruntime
 
 import (
 	"context"
+	"log"
 	"strings"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 
 type runtimeIdleTimer struct {
 	generation uint64
+	delay      time.Duration
 	timer      *time.Timer
 }
 
@@ -95,6 +97,7 @@ func (s *Service) scheduleIdleUnload(sessionID string, delay time.Duration) {
 	}
 	state.generation++
 	generation := state.generation
+	state.delay = delay
 	if state.timer != nil {
 		state.timer.Stop()
 	}
@@ -102,6 +105,22 @@ func (s *Service) scheduleIdleUnload(sessionID string, delay time.Duration) {
 		s.runScheduledIdleUnload(trimmedSessionID, generation)
 	})
 	s.mu.Unlock()
+}
+
+func (s *Service) finishScheduledIdleUnload(sessionID string, generation uint64, retry bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state := s.idleTimers[sessionID]
+	if state == nil || state.generation != generation {
+		return
+	}
+	if retry {
+		state.timer = time.AfterFunc(state.delay, func() {
+			s.runScheduledIdleUnload(sessionID, generation)
+		})
+		return
+	}
+	delete(s.idleTimers, sessionID)
 }
 
 func (s *Service) runScheduledIdleUnload(sessionID string, generation uint64) {
@@ -121,18 +140,30 @@ func (s *Service) runScheduledIdleUnload(sessionID string, generation uint64) {
 	s.mu.Unlock()
 	claim := s.runtimes.RuntimeClaimFor(trimmedSessionID)
 	if claim == nil || claim.Closing() || claim.OwnerCount() > 0 {
+		s.finishScheduledIdleUnload(trimmedSessionID, generation, false)
 		return
 	}
 	if s.runtimeHasSubscribers(trimmedSessionID) {
+		s.finishScheduledIdleUnload(trimmedSessionID, generation, true)
 		return
 	}
-	if active, err := s.runtimeHasBlockingActivity(context.Background(), trimmedSessionID); err != nil || active {
+	active, err := s.runtimeHasBlockingActivity(context.Background(), trimmedSessionID)
+	if err != nil {
+		log.Printf("session runtime idle unload activity check failed for %q: %v", trimmedSessionID, err)
+		s.finishScheduledIdleUnload(trimmedSessionID, generation, false)
+		return
+	}
+	if active {
+		s.finishScheduledIdleUnload(trimmedSessionID, generation, true)
 		return
 	}
 	closed, err := claim.CloseIfIdle(context.Background(), 0, s.drainBeforeClose(claim))
-	if err == nil && closed {
-		s.clearScheduledIdleUnload(trimmedSessionID)
+	if err != nil {
+		log.Printf("session runtime idle unload close failed for %q: %v", trimmedSessionID, err)
+		s.finishScheduledIdleUnload(trimmedSessionID, generation, false)
+		return
 	}
+	s.finishScheduledIdleUnload(trimmedSessionID, generation, !closed)
 }
 
 func (s *Service) runtimeHasSubscribers(sessionID string) bool {

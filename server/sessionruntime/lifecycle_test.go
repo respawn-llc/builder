@@ -880,6 +880,10 @@ func TestIdleUnloadTimerReleasesOrphanedRuntime(t *testing.T) {
 	if !resp.Active {
 		t.Fatalf("release while active should orphan, got %+v", resp)
 	}
+	time.Sleep(3 * fixture.service.idleUnloadDelay)
+	if !reg.IsSessionRuntimeActive(sessionID) {
+		t.Fatal("orphaned runtime closed while its run was active")
+	}
 	finishRun()
 	<-runDone
 

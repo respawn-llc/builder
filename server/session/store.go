@@ -68,7 +68,7 @@ type Store struct {
 	persistedMetaVersion  uint64
 	options               storeOptions
 	eventsFileSizeBytes   int64
-	pendingFsyncWrites    int
+	recoveryErr           error
 }
 
 type persistenceObservation struct {
@@ -197,6 +197,9 @@ func openPersistedSession(sessionDir string, resolvedMeta *Meta, storeOpts store
 		return nil, fmt.Errorf("validate session worktree context: %w", err)
 	}
 	if err := validateMetaCategory(&s.meta); err != nil {
+		return nil, err
+	}
+	if err := s.recoverAppendTransaction(); err != nil {
 		return nil, err
 	}
 	s.metadataVersion = 1
@@ -374,7 +377,6 @@ func (s *Store) RemoveDurable() error {
 	}
 	s.persisted = false
 	s.eventsFileSizeBytes = 0
-	s.pendingFsyncWrites = 0
 	s.persistedMetaVersion = 0
 	return nil
 }
@@ -428,6 +430,16 @@ func (s *Store) restoreMetadataMutationLocked(checkpoint metadataMutationCheckpo
 	s.persistedMetaVersion = checkpoint.persistedMetaVersion
 }
 
+func (s *Store) closeMutationAuthorityLocked(operation string, err error) error {
+	recoveryErr := s.recoveryError(operation, err)
+	s.recoveryErr = recoveryErr
+	return recoveryErr
+}
+
+func (s *Store) recoveryError(operation string, err error) error {
+	return storeRecoveryError(s.meta.SessionID, operation, err)
+}
+
 func (s *Store) persistMetadataMutationWithCommitReceiptLocked(checkpoint metadataMutationCheckpoint) (CommitReceipt, error) {
 	observation, err := s.persistMetaLocked()
 	if err != nil {
@@ -435,14 +447,41 @@ func (s *Store) persistMetadataMutationWithCommitReceiptLocked(checkpoint metada
 		s.mu.Unlock()
 		return CommitReceipt{}, err
 	}
-	s.mu.Unlock()
-	if err := s.observePersistence(observation); err != nil {
-		s.mu.Lock()
-		s.restoreMetadataMutationLocked(checkpoint)
-		s.mu.Unlock()
-		return CommitReceipt{}, err
+	if !s.options.filelessEvents {
+		record, recordErr := s.newAppendRecoveryRecord(checkpoint.meta, s.meta, appendRecoveryCommitted, nil)
+		if recordErr == nil {
+			recordErr = s.writeAppendRecoveryRecord(record)
+		}
+		if recordErr != nil {
+			s.restoreMetadataMutationLocked(checkpoint)
+			if cleanupErr := s.clearAppendRecoveryRecord(); cleanupErr != nil {
+				recordErr = s.closeMutationAuthorityLocked("rollback metadata recovery", errors.Join(recordErr, cleanupErr))
+			}
+			s.mu.Unlock()
+			return CommitReceipt{}, recordErr
+		}
 	}
-	return CommitReceipt{Committed: true}, nil
+	s.mu.Unlock()
+	return CommitReceipt{Committed: true}, s.observePersistence(observation)
+}
+
+func (s *Store) observePendingCommitLocked(meta Meta) error {
+	record, err := s.readAppendRecoveryRecord()
+	if err != nil || record == nil {
+		return err
+	}
+	digest, err := digestMeta(meta)
+	if err != nil {
+		return err
+	}
+	if record.Phase != appendRecoveryCommitted || digest != record.Post.SHA256 {
+		return s.closeMutationAuthorityLocked("supersede unresolved recovery", errors.New("pending recovery does not describe current metadata"))
+	}
+	observation := &persistenceObservation{snapshot: &PersistedStoreSnapshot{SessionDir: s.sessionDir, Meta: cloneMeta(meta)}, version: s.metadataVersion}
+	s.mu.Unlock()
+	err = s.observePersistence(observation)
+	s.mu.Lock()
+	return err
 }
 
 func (s *Store) mutateLockedContractWithCommitStatus(mutator func(*LockedContract)) (LockedContractMutationResult, error) {
@@ -488,9 +527,9 @@ func (s *Store) mutateMetaAndReplaceLockedContractWithCommitStatus(metaMutator f
 	committed := cloneLockedContract(s.meta.Locked)
 	receipt, err := s.persistMetadataMutationWithCommitReceiptLocked(checkpoint)
 	if !receipt.Committed {
-		return LockedContractMutationResult{Committed: false, Locked: cloneLockedContract(checkpoint.meta.Locked)}, err
+		return LockedContractMutationResult{CommitReceipt: receipt, Locked: cloneLockedContract(checkpoint.meta.Locked)}, err
 	}
-	return LockedContractMutationResult{Committed: true, Locked: committed}, err
+	return LockedContractMutationResult{CommitReceipt: receipt, Locked: committed}, err
 }
 
 func (s *Store) EnsureDurable() error {
@@ -569,26 +608,15 @@ func (s *Store) persistPendingModelRecoveryEvent(kind string, stepID string, pay
 	s.mutationMu.Lock()
 	defer s.mutationMu.Unlock()
 	s.mu.Lock()
-	previousMeta := cloneMeta(s.meta)
-	previousFreshness := s.conversationFreshness
-	apply()
 	evt, err := s.buildEventLocked(stepID, kind, payload, time.Now().UTC())
 	if err != nil {
-		s.meta = previousMeta
-		s.conversationFreshness = previousFreshness
 		s.mu.Unlock()
 		return err
 	}
-	observation, committed, err := s.appendEventsAtomicLockedWithCommitStatus([]Event{evt})
-	if err != nil && !committed {
-		s.meta = previousMeta
-		s.conversationFreshness = previousFreshness
-	}
-	s.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	return s.observePersistence(observation)
+	_, _, err = s.appendObservedEventsWithMetaTransitionLocked([]Event{evt}, func(*Meta) {
+		apply()
+	})
+	return err
 }
 
 func (s *Store) SetName(name string) error {
@@ -696,6 +724,8 @@ func (s *Store) SetHeadlessActive(active bool) error {
 }
 
 func (s *Store) PromoteSubagentToMain() (bool, error) {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
 	s.mu.Lock()
 	if s.meta.Category == nil || *s.meta.Category == sessioncontract.SessionCategoryMain {
 		s.mu.Unlock()
@@ -710,6 +740,10 @@ func (s *Store) PromoteSubagentToMain() (bool, error) {
 			panic(fmt.Sprintf("unsupported session category %q passed category validation", category))
 		}
 		return false, InvalidSessionCategoryError{SessionID: sessionID, Category: category, Err: err}
+	}
+	if err := s.requireMetadataPersistenceLocked(); err != nil {
+		s.mu.Unlock()
+		return false, err
 	}
 	mainCategory := sessioncontract.SessionCategoryMain
 	s.meta.Category = &mainCategory
@@ -846,9 +880,8 @@ func (s *Store) SetActiveGoalWithEvents(goal GoalState, actor GoalActor, extraEv
 		s.mu.Unlock()
 		return GoalState{}, err
 	}
-	s.meta.Goal = cloneGoalState(&goal)
-	if err := s.appendGoalEventsLocked(events, func() {
-		s.meta.Goal = previousGoal
+	if err := s.appendGoalEventsLocked(events, func(meta *Meta) {
+		meta.Goal = cloneGoalState(&goal)
 	}); err != nil {
 		return GoalState{}, err
 	}
@@ -896,7 +929,6 @@ func (s *Store) transitionGoalStatus(status GoalStatus, actor GoalActor, allow f
 		return GoalState{}, false, nil
 	}
 	now := storeTimestamp(s.options)
-	previousGoalState := *cloneGoalState(s.meta.Goal)
 	goal := *cloneGoalState(s.meta.Goal)
 	previousStatus := goal.Status
 	goal.Status = normalizedStatus
@@ -914,9 +946,8 @@ func (s *Store) transitionGoalStatus(status GoalStatus, actor GoalActor, allow f
 		s.mu.Unlock()
 		return GoalState{}, false, err
 	}
-	s.meta.Goal = cloneGoalState(&goal)
-	if err := s.appendGoalEventsLocked(events, func() {
-		s.meta.Goal = cloneGoalState(&previousGoalState)
+	if err := s.appendGoalEventsLocked(events, func(meta *Meta) {
+		meta.Goal = cloneGoalState(&goal)
 	}); err != nil {
 		return GoalState{}, false, err
 	}
@@ -946,21 +977,17 @@ func (s *Store) ClearGoalWithEvents(actor GoalActor, extraEvents []EventInput) (
 		s.mu.Unlock()
 		return GoalState{}, err
 	}
-	s.meta.Goal = nil
-	if err := s.appendGoalEventsLocked(events, func() {
-		s.meta.Goal = cloneGoalState(&goal)
+	if err := s.appendGoalEventsLocked(events, func(meta *Meta) {
+		meta.Goal = nil
 	}); err != nil {
 		return GoalState{}, err
 	}
 	return goal, nil
 }
 
-func (s *Store) appendGoalEventsLocked(events []Event, rollback func()) error {
-	observation, _, err := s.appendEventsAtomicLockedWithCommitStatus(events)
-	if err != nil && rollback != nil {
-		rollback()
-	}
-	return s.unlockAndObservePersistence(observation, err)
+func (s *Store) appendGoalEventsLocked(events []Event, transition func(*Meta)) error {
+	_, _, err := s.appendObservedEventsWithMetaTransitionLocked(events, transition)
+	return err
 }
 
 func storeTimestamp(options storeOptions) time.Time {
@@ -1042,14 +1069,6 @@ func (s *Store) SetContinuationContextAndMarkLockedPromptFacingContractStale(ctx
 	return s.mutateMetaAndLockedContractWithCommitStatus(func(meta *Meta) {
 		meta.Continuation = normalized
 	}, markLockedPromptFacingContractStale, false)
-}
-
-func (s *Store) MarkGeneratedRecoveredWarningIssued() error {
-	return s.mutateAndPersist(func() error {
-		s.meta.GeneratedRecoveredWarningIssued = true
-		s.meta.UpdatedAt = time.Now().UTC()
-		return nil
-	})
 }
 
 func (s *Store) SetWorkflowSessionState(state *WorkflowSessionState) error {
@@ -1224,22 +1243,10 @@ func (s *Store) BackfillLockedRequestShape(fields LockedRequestShapeBackfill) (L
 	})
 }
 
-// CommitReceipt reports whether the requested durable mutation committed before
-// its returned operational error.
-type CommitReceipt struct {
-	Committed bool
-}
-
 type EventAppendResult struct {
 	Event Event
 	CommitReceipt
 	EndByteCursor *int64
-}
-
-type eventAppendOutcome struct {
-	event         Event
-	committed     bool
-	endByteCursor *int64
 }
 
 func (s *Store) AppendEvent(stepID, kind string, payload any) (Event, CommitReceipt, error) {
@@ -1250,8 +1257,22 @@ func (s *Store) appendEvent(stepID, kind string, payload any, transition func(*M
 	s.mutationMu.Lock()
 	defer s.mutationMu.Unlock()
 	s.mu.Lock()
-	outcome, err := s.appendEventLocked(stepID, kind, payload, transition)
-	return outcome.event, CommitReceipt{Committed: outcome.committed}, err
+	result, err := s.appendEventLocked(stepID, kind, payload, transition)
+	return result.Event, result.CommitReceipt, err
+}
+
+func (s *Store) AppendGeneratedRecoveredWarning(kind string, payload any) (CommitReceipt, error) {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+	s.mu.Lock()
+	if s.meta.GeneratedRecoveredWarningIssued {
+		defer s.mu.Unlock()
+		return CommitReceipt{Committed: true}, s.requireMetadataPersistenceLocked()
+	}
+	result, err := s.appendEventLocked("", kind, payload, func(meta *Meta) {
+		meta.GeneratedRecoveredWarningIssued = true
+	})
+	return result.CommitReceipt, err
 }
 
 // AppendCompactionHistoryReplacement appends the durable history replacement
@@ -1270,12 +1291,7 @@ func (s *Store) AppendEventWithEndByteCursor(stepID, kind string, payload any) (
 		s.mu.Unlock()
 		return EventAppendResult{}, errors.New("event-log byte cursor is unavailable with fileless event persistence")
 	}
-	outcome, err := s.appendEventLocked(stepID, kind, payload, nil)
-	result := EventAppendResult{
-		Event:         outcome.event,
-		CommitReceipt: CommitReceipt{Committed: outcome.committed},
-		EndByteCursor: textutil.Pointer(outcome.endByteCursor),
-	}
+	result, err := s.appendEventLocked(stepID, kind, payload, nil)
 	if err != nil {
 		return result, err
 	}
@@ -1285,18 +1301,14 @@ func (s *Store) AppendEventWithEndByteCursor(stepID, kind string, payload any) (
 	return result, nil
 }
 
-func (s *Store) appendEventLocked(stepID, kind string, payload any, transition func(*Meta)) (eventAppendOutcome, error) {
+func (s *Store) appendEventLocked(stepID, kind string, payload any, transition func(*Meta)) (EventAppendResult, error) {
 	evt, err := s.buildEventLocked(stepID, kind, payload, time.Now().UTC())
 	if err != nil {
 		s.mu.Unlock()
-		return eventAppendOutcome{}, err
+		return EventAppendResult{}, err
 	}
 	committed, endByteCursor, err := s.appendObservedEventsWithMetaTransitionLocked([]Event{evt}, transition)
-	return eventAppendOutcome{
-		event:         evt,
-		committed:     committed,
-		endByteCursor: endByteCursor,
-	}, err
+	return EventAppendResult{Event: evt, CommitReceipt: CommitReceipt{Committed: committed}, EndByteCursor: endByteCursor}, err
 }
 
 func (s *Store) buildEventLocked(stepID, kind string, payload any, now time.Time) (Event, error) {
@@ -1340,12 +1352,8 @@ func (s *Store) AppendTurnAtomic(stepID string, events []EventInput) ([]Event, C
 			Payload:   body,
 		})
 	}
-	committed, _, err := s.appendObservedEventsLockedWithCommitStatus(built)
-	receipt := CommitReceipt{Committed: committed}
-	if err != nil {
-		return built, receipt, err
-	}
-	return built, receipt, nil
+	committed, _, err := s.appendObservedEventsWithMetaTransitionLocked(built, nil)
+	return built, CommitReceipt{Committed: committed}, err
 }
 
 type ReplayEvent struct {
@@ -1357,17 +1365,15 @@ type ReplayEvent struct {
 type replayEventsAppendOutcome struct {
 	events        []Event
 	endByteCursor *int64
+	CommitReceipt
 }
 
-func (s *Store) AppendReplayEvents(events []ReplayEvent) ([]Event, error) {
+func (s *Store) AppendReplayEvents(events []ReplayEvent) ([]Event, CommitReceipt, error) {
 	s.mutationMu.Lock()
 	defer s.mutationMu.Unlock()
 	s.mu.Lock()
 	outcome, err := s.appendReplayEventsLocked(events)
-	if err != nil {
-		return nil, err
-	}
-	return outcome.events, nil
+	return outcome.events, outcome.CommitReceipt, err
 }
 
 func (s *Store) appendReplayEventsWithEndByteCursor(events []ReplayEvent) (replayEventsAppendOutcome, error) {
@@ -1407,18 +1413,18 @@ func (s *Store) appendReplayEventsLocked(events []ReplayEvent) (replayEventsAppe
 			Payload:   payload,
 		})
 	}
-	_, endByteCursor, err := s.appendObservedEventsLockedWithCommitStatus(built)
-	if err != nil {
-		return replayEventsAppendOutcome{events: built, endByteCursor: endByteCursor}, err
-	}
-	return replayEventsAppendOutcome{events: built, endByteCursor: endByteCursor}, nil
-}
-
-func (s *Store) appendObservedEventsLockedWithCommitStatus(events []Event) (bool, *int64, error) {
-	return s.appendObservedEventsWithMetaTransitionLocked(events, nil)
+	committed, endByteCursor, err := s.appendObservedEventsWithMetaTransitionLocked(built, nil)
+	return replayEventsAppendOutcome{
+		events: built, endByteCursor: endByteCursor,
+		CommitReceipt: CommitReceipt{Committed: committed},
+	}, err
 }
 
 func (s *Store) appendObservedEventsWithMetaTransitionLocked(events []Event, transition func(*Meta)) (bool, *int64, error) {
+	if err := s.observePendingCommitLocked(s.meta); err != nil {
+		s.mu.Unlock()
+		return false, nil, err
+	}
 	previousMeta := cloneMeta(s.meta)
 	previousFreshness := s.conversationFreshness
 	s.captureFirstPromptPreviewLocked(events)
@@ -1426,7 +1432,7 @@ func (s *Store) appendObservedEventsWithMetaTransitionLocked(events []Event, tra
 	if transition != nil {
 		transition(&s.meta)
 	}
-	observation, committed, err := s.appendEventsAtomicLockedWithCommitStatus(events)
+	observation, committed, err := s.appendEventsAtomicLockedWithCommitStatus(events, previousMeta)
 	var endByteCursor *int64
 	if committed && !s.options.filelessEvents {
 		cursor := s.eventsFileSizeBytes
@@ -1438,6 +1444,9 @@ func (s *Store) appendObservedEventsWithMetaTransitionLocked(events []Event, tra
 	}
 	s.mu.Unlock()
 	if err != nil {
+		if committed {
+			err = s.recoveryError("finalize committed append", err)
+		}
 		return committed, endByteCursor, err
 	}
 	return committed, endByteCursor, s.observePersistence(observation)
@@ -1507,7 +1516,7 @@ func (s *Store) WalkEvents(visit func(Event) error) error {
 }
 
 func (s *Store) persistMetaLocked() (*persistenceObservation, error) {
-	if err := s.requireMetadataPersistenceLocked(); err != nil {
+	if err := s.requireMetadataPersistenceAvailableLocked(); err != nil {
 		return nil, err
 	}
 	if s.options.filelessEvents {
@@ -1529,38 +1538,24 @@ func (s *Store) hasDurableMetadataLocked() bool {
 	return s.metadataVersion != 0 && s.persistedMetaVersion == s.metadataVersion
 }
 
-func (s *Store) appendEventsAtomicLockedWithCommitStatus(events []Event) (*persistenceObservation, bool, error) {
+func (s *Store) appendEventsAtomicLockedWithCommitStatus(events []Event, preMeta Meta) (*persistenceObservation, bool, error) {
 	if err := s.requireMetadataPersistenceLocked(); err != nil {
 		return nil, false, err
 	}
-
-	if s.options.filelessEvents {
-		for _, e := range events {
-			s.meta.LastSequence = e.Seq
-		}
-		s.meta.UpdatedAt = time.Now().UTC()
-		snapshot, err := s.persistMetaLocked()
-		if err != nil {
+	if !s.options.filelessEvents {
+		if err := s.ensurePersistedLocked(); err != nil {
 			return nil, false, err
 		}
-		return snapshot, true, nil
 	}
-
-	if err := s.ensurePersistedLocked(); err != nil {
-		return nil, false, err
-	}
-	if _, err := s.appendEventsLogLocked(events); err != nil {
-		return nil, false, err
-	}
-	for _, e := range events {
-		s.meta.LastSequence = e.Seq
-	}
+	s.meta.LastSequence = events[len(events)-1].Seq
 	s.meta.UpdatedAt = time.Now().UTC()
-	snapshot, err := s.persistMetaLocked()
-	if err != nil {
-		return nil, true, err
+	if !s.options.filelessEvents {
+		if _, receipt, err := s.appendEventsLogLocked(events, preMeta); err != nil {
+			return nil, receipt.Committed, err
+		}
 	}
-	return snapshot, true, nil
+	observation, err := s.persistMetaLocked()
+	return observation, true, err
 }
 
 func (s *Store) ensurePersistedLocked() error {
@@ -1574,7 +1569,6 @@ func (s *Store) ensurePersistedLocked() error {
 		return fmt.Errorf("initialize events file: %w", err)
 	}
 	s.eventsFileSizeBytes = 0
-	s.pendingFsyncWrites = 0
 	s.persisted = true
 	return nil
 }
@@ -1591,6 +1585,16 @@ func (s *Store) persistenceSnapshotLocked() *PersistedStoreSnapshot {
 }
 
 func (s *Store) requireMetadataPersistenceLocked() error {
+	if err := s.requireMetadataPersistenceAvailableLocked(); err != nil {
+		return err
+	}
+	return s.observePendingCommitLocked(s.meta)
+}
+
+func (s *Store) requireMetadataPersistenceAvailableLocked() error {
+	if s.recoveryErr != nil {
+		return s.recoveryErr
+	}
 	if s.options.filelessEvents {
 		return nil
 	}
@@ -1617,6 +1621,9 @@ func (s *Store) observePersistence(observation *persistenceObservation) error {
 		s.persistedMetaVersion = observation.version
 	}
 	s.mu.Unlock()
+	if err := s.clearAppendRecoveryRecord(); err != nil {
+		return storeRecoveryError(observation.snapshot.Meta.SessionID, "clear committed mutation", err)
+	}
 	return nil
 }
 

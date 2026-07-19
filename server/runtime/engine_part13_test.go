@@ -15,6 +15,7 @@ import (
 )
 
 func TestRunStepLoopDoesNotDuplicateCompactionSoonReminderAfterAutoCompactionIsDisabled(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeCompactionClient{
@@ -289,6 +290,7 @@ func TestPrepareModelTurnMaterializesWorktreeReminderAfterPendingHandoffCompacti
 }
 
 func TestPendingTriggerHandoffFailsToolCallsAndRetriesLocalSummary(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -365,6 +367,7 @@ func TestPendingTriggerHandoffFailsToolCallsAndRetriesLocalSummary(t *testing.T)
 }
 
 func TestPendingTriggerHandoffFailsMalformedToolCallWithEmptyID(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{{
@@ -421,6 +424,7 @@ func assertRequestsPreserveCacheIdentity(t *testing.T, first llm.Request, retry 
 }
 
 func TestPendingTriggerHandoffRetriesCustomToolCallOutput(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -482,6 +486,7 @@ func TestPendingTriggerHandoffRetriesCustomToolCallOutput(t *testing.T) {
 }
 
 func TestPendingTriggerHandoffLeavesRequestPendingWhenSummaryRetryStillToolCalls(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -559,6 +564,7 @@ func TestPendingTriggerHandoffLeavesRequestPendingWhenSummaryRetryStillToolCalls
 }
 
 func TestPendingTriggerHandoffRetriesAfterCompactionFailure(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -620,6 +626,7 @@ func TestPendingTriggerHandoffRetriesAfterCompactionFailure(t *testing.T) {
 }
 
 func TestPendingTriggerHandoffRetriesFutureMessageAfterAppendFailureWithoutRecompaction(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{{
@@ -697,6 +704,7 @@ func TestPendingTriggerHandoffRetriesFutureMessageAfterAppendFailureWithoutRecom
 }
 
 func TestReopenedSessionAfterTriggerHandoffFutureMessageAppendFailureRetriesWithoutRecompaction(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{{
@@ -835,6 +843,7 @@ func TestPendingHandoffFutureMessageConsumesCommittedObserverFailure(t *testing.
 }
 
 func TestRunStepLoopTriggerHandoffOmitsCallAndOutputFromFollowUpRequestAndKeepsFutureMessage(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{
@@ -913,6 +922,7 @@ func TestRunStepLoopTriggerHandoffOmitsCallAndOutputFromFollowUpRequestAndKeepsF
 }
 
 func TestRunStepLoopInjectsReminderBeforeTriggerHandoff(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{
@@ -976,6 +986,7 @@ func TestRunStepLoopInjectsReminderBeforeTriggerHandoff(t *testing.T) {
 }
 
 func TestReopenedSessionAfterTriggerHandoffUsesRotatedRequestSessionAndOmitsLingeringCallOutput(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	firstClient := &fakeClient{responses: []llm.Response{
@@ -1088,6 +1099,7 @@ func TestCacheWarningSteeringPropagatesCommittedAppendError(t *testing.T) {
 }
 
 func TestRunStepLoopBailsOnCanceledContextWithoutModelCall(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{
 		responses: []llm.Response{

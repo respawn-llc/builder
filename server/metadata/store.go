@@ -463,11 +463,10 @@ func (s *Store) UpdateSessionExecutionTarget(ctx context.Context, update Session
 		worktreeID = sql.NullString{String: trimmedWorktreeID, Valid: true}
 	}
 	params := sqlitegen.UpdateSessionExecutionTargetByIDParams{
-		WorkspaceID:     workspaceID,
-		WorktreeID:      worktreeID,
-		CwdRelpath:      normalizeSessionCwdRelpath(update.CwdRelpath),
-		UpdatedAtUnixMs: time.Now().UTC().UnixMilli(),
-		SessionID:       trimmedSessionID,
+		WorkspaceID: workspaceID,
+		WorktreeID:  worktreeID,
+		CwdRelpath:  normalizeSessionCwdRelpath(update.CwdRelpath),
+		SessionID:   trimmedSessionID,
 	}
 	rows, err := s.queries.UpdateSessionExecutionTargetByID(ctx, params)
 	if err != nil {

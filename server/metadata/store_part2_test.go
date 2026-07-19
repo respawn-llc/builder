@@ -231,8 +231,16 @@ func TestObservedSessionMetadataPersistencePreservesExecutionTarget(t *testing.T
 		t.Fatalf("MkdirAll worktreeSubdir: %v", err)
 	}
 	sess := createMetadataTestSession(t, store, cfg, binding)
+	pinned := time.Unix(123, 0).UTC()
+	if _, err := store.db.ExecContext(ctx, "UPDATE sessions SET updated_at_unix_ms = ? WHERE id = ?", pinned.UnixMilli(), sess.Meta().SessionID); err != nil {
+		t.Fatalf("pin session updated at: %v", err)
+	}
 	if err := store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{SessionID: sess.Meta().SessionID, Workspace: &SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &SessionExecutionTargetUpdateWorktree{ID: "worktree-a"}, CwdRelpath: "pkg"}); err != nil {
 		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
+	}
+	resolved, err := store.ResolvePersistedSession(ctx, sess.Meta().SessionID)
+	if err != nil || !resolved.Meta.UpdatedAt.Equal(pinned) {
+		t.Fatalf("resolved updated at = %v, error = %v, want %v", resolved.Meta.UpdatedAt, err, pinned)
 	}
 	reopened, err := session.OpenByID(cfg.PersistenceRoot, sess.Meta().SessionID, store.AuthoritativeSessionStoreOptions()...)
 	if err != nil {

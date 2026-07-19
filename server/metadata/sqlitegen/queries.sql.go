@@ -9689,17 +9689,15 @@ UPDATE sessions
 SET
     workspace_id = ?1,
     worktree_id = ?2,
-    cwd_relpath = ?3,
-    updated_at_unix_ms = ?4
-WHERE id = ?5
+    cwd_relpath = ?3
+WHERE id = ?4
 `
 
 type UpdateSessionExecutionTargetByIDParams struct {
-	WorkspaceID     sql.NullString
-	WorktreeID      sql.NullString
-	CwdRelpath      string
-	UpdatedAtUnixMs int64
-	SessionID       string
+	WorkspaceID sql.NullString
+	WorktreeID  sql.NullString
+	CwdRelpath  string
+	SessionID   string
 }
 
 func (q *Queries) UpdateSessionExecutionTargetByID(ctx context.Context, arg UpdateSessionExecutionTargetByIDParams) (int64, error) {
@@ -9707,7 +9705,6 @@ func (q *Queries) UpdateSessionExecutionTargetByID(ctx context.Context, arg Upda
 		arg.WorkspaceID,
 		arg.WorktreeID,
 		arg.CwdRelpath,
-		arg.UpdatedAtUnixMs,
 		arg.SessionID,
 	)
 	if err != nil {

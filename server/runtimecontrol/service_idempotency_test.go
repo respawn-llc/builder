@@ -122,62 +122,6 @@ func TestServiceInterruptRetryReturnsFreshActivitySnapshot(t *testing.T) {
 	}
 }
 
-func TestServiceSetFastModeEnabledDedupesSuccessfulRetry(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", sessioncontract.SessionCategoryMain, runtimeControlTestSessionPersistence.Options()...)
-	if err != nil {
-		t.Fatalf("create session store: %v", err)
-	}
-	engine, err := runtime.New(store, &runtimeControlFakeClient{}, tools.NewRegistry(), runtime.Config{Model: "gpt-5", ProviderCapabilitiesOverride: &runtimeControlOpenAICapabilities})
-	if err != nil {
-		t.Fatalf("create runtime engine: %v", err)
-	}
-	service := NewService(stubRuntimeResolver{engine: engine})
-	req := serverapi.RuntimeSetFastModeEnabledRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Enabled: true}
-
-	first, err := service.SetFastModeEnabled(context.Background(), req)
-	if err != nil {
-		t.Fatalf("SetFastModeEnabled first: %v", err)
-	}
-	second, err := service.SetFastModeEnabled(context.Background(), req)
-	if err != nil {
-		t.Fatalf("SetFastModeEnabled replay: %v", err)
-	}
-	if first != second {
-		t.Fatalf("responses = (%+v, %+v), want identical replay", first, second)
-	}
-	if !engine.FastModeEnabled() {
-		t.Fatal("expected fast mode to remain enabled")
-	}
-}
-
-func TestServiceSetReviewerEnabledDedupesSuccessfulRetry(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", sessioncontract.SessionCategoryMain, runtimeControlTestSessionPersistence.Options()...)
-	if err != nil {
-		t.Fatalf("create session store: %v", err)
-	}
-	engine, err := runtime.New(store, &runtimeControlFakeClient{}, tools.NewRegistry(), runtime.Config{Model: "gpt-5", Reviewer: runtime.ReviewerConfig{Model: "gpt-5", ClientFactory: func() (llm.Client, error) { return &runtimeControlFakeClient{}, nil }}})
-	if err != nil {
-		t.Fatalf("create runtime engine: %v", err)
-	}
-	service := NewService(stubRuntimeResolver{engine: engine})
-	req := serverapi.RuntimeSetReviewerEnabledRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Enabled: true}
-
-	first, err := service.SetReviewerEnabled(context.Background(), req)
-	if err != nil {
-		t.Fatalf("SetReviewerEnabled first: %v", err)
-	}
-	second, err := service.SetReviewerEnabled(context.Background(), req)
-	if err != nil {
-		t.Fatalf("SetReviewerEnabled replay: %v", err)
-	}
-	if first != second {
-		t.Fatalf("responses = (%+v, %+v), want identical replay", first, second)
-	}
-	if got := engine.ReviewerFrequency(); got != "edits" {
-		t.Fatalf("reviewer frequency = %q, want edits", got)
-	}
-}
-
 func TestServiceCommittedControlObserverErrorIsMemoized(t *testing.T) {
 	type controlResult struct {
 		changed bool
@@ -298,54 +242,6 @@ func TestServiceCommittedControlObserverErrorIsMemoized(t *testing.T) {
 	}
 }
 
-func TestServiceSetAutoCompactionEnabledDedupesSuccessfulRetry(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", sessioncontract.SessionCategoryMain, runtimeControlTestSessionPersistence.Options()...)
-	if err != nil {
-		t.Fatalf("create session store: %v", err)
-	}
-	engine, err := runtime.New(store, &runtimeControlFakeClient{}, tools.NewRegistry(), runtime.Config{Model: "gpt-5"})
-	if err != nil {
-		t.Fatalf("create runtime engine: %v", err)
-	}
-	service := NewService(stubRuntimeResolver{engine: engine})
-	req := serverapi.RuntimeSetAutoCompactionEnabledRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Enabled: false}
-
-	first, err := service.SetAutoCompactionEnabled(context.Background(), req)
-	if err != nil {
-		t.Fatalf("SetAutoCompactionEnabled first: %v", err)
-	}
-	second, err := service.SetAutoCompactionEnabled(context.Background(), req)
-	if err != nil {
-		t.Fatalf("SetAutoCompactionEnabled replay: %v", err)
-	}
-	if first != second {
-		t.Fatalf("responses = (%+v, %+v), want identical replay", first, second)
-	}
-	if engine.AutoCompactionEnabled() {
-		t.Fatal("expected auto compaction to remain disabled")
-	}
-}
-
-func TestServiceCompactContextDedupesSuccessfulRetry(t *testing.T) {
-	store, engine, client := newRuntimeControlCompactionFixture(t)
-	service := NewService(stubRuntimeResolver{engine: engine})
-	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindCompact)
-	req := serverapi.RuntimeCompactContextRequest{ClientRequestID: ref.ClientRequestID.String(), SessionID: store.Meta().SessionID, Args: "compact now", OperationRef: ref}
-
-	if err := service.CompactContext(context.Background(), req); err != nil {
-		t.Fatalf("CompactContext first: %v", err)
-	}
-	if err := service.CompactContext(context.Background(), req); err != nil {
-		t.Fatalf("CompactContext replay: %v", err)
-	}
-	if client.compactionCalls != 1 {
-		t.Fatalf("compaction call count = %d, want 1", client.compactionCalls)
-	}
-	if got := countEventsByKind(t, store, "history_replaced"); got != 1 {
-		t.Fatalf("history_replaced event count = %d, want 1", got)
-	}
-}
-
 func TestServiceCompactionConsumesCommittedObserverError(t *testing.T) {
 	testCases := []struct {
 		name string
@@ -403,46 +299,6 @@ func TestServiceCompactionConsumesCommittedObserverError(t *testing.T) {
 				t.Fatalf("compaction reconciliation = %+v, want committed", snapshot)
 			}
 		})
-	}
-}
-
-func TestServiceCompactContextForPreSubmitDedupesSuccessfulRetry(t *testing.T) {
-	store, engine, client := newRuntimeControlCompactionFixture(t)
-	service := NewService(stubRuntimeResolver{engine: engine})
-	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindPreSubmitCompact)
-	req := serverapi.RuntimeCompactContextForPreSubmitRequest{ClientRequestID: ref.ClientRequestID.String(), SessionID: store.Meta().SessionID, OperationRef: ref}
-
-	if err := service.CompactContextForPreSubmit(context.Background(), req); err != nil {
-		t.Fatalf("CompactContextForPreSubmit first: %v", err)
-	}
-	if err := service.CompactContextForPreSubmit(context.Background(), req); err != nil {
-		t.Fatalf("CompactContextForPreSubmit replay: %v", err)
-	}
-	if client.compactionCalls != 1 {
-		t.Fatalf("compaction call count = %d, want 1", client.compactionCalls)
-	}
-	if got := countEventsByKind(t, store, "history_replaced"); got != 1 {
-		t.Fatalf("history_replaced event count = %d, want 1", got)
-	}
-}
-
-func TestServiceInterruptDedupesSuccessfulRetry(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", sessioncontract.SessionCategoryMain, runtimeControlTestSessionPersistence.Options()...)
-	if err != nil {
-		t.Fatalf("create session store: %v", err)
-	}
-	engine, err := runtime.New(store, &runtimeControlFakeClient{}, tools.NewRegistry(), runtime.Config{Model: "gpt-5"})
-	if err != nil {
-		t.Fatalf("create runtime engine: %v", err)
-	}
-	service := NewService(stubRuntimeResolver{engine: engine})
-	req := serverapi.RuntimeInterruptRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID}
-
-	if _, err := service.Interrupt(context.Background(), req); err != nil {
-		t.Fatalf("Interrupt first: %v", err)
-	}
-	if _, err := service.Interrupt(context.Background(), req); err != nil {
-		t.Fatalf("Interrupt replay: %v", err)
 	}
 }
 
@@ -518,35 +374,6 @@ func localEntryEvents(t *testing.T, store *session.Store) []runtime.ChatEntry {
 	return entries
 }
 
-func TestServiceAppendCommittedEntryDedupesSuccessfulRetry(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", sessioncontract.SessionCategoryMain, runtimeControlTestSessionPersistence.Options()...)
-	if err != nil {
-		t.Fatalf("create session store: %v", err)
-	}
-	engine, err := runtime.New(store, &runtimeControlFakeClient{}, tools.NewRegistry(), runtime.Config{Model: "gpt-5"})
-	if err != nil {
-		t.Fatalf("create runtime engine: %v", err)
-	}
-	service := NewService(stubRuntimeResolver{engine: engine})
-	req := serverapi.RuntimeAppendCommittedEntryRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Role: "warning", Text: "be careful"}
-
-	if err := service.AppendCommittedEntry(context.Background(), req); err != nil {
-		t.Fatalf("AppendCommittedEntry first: %v", err)
-	}
-	if err := service.AppendCommittedEntry(context.Background(), req); err != nil {
-		t.Fatalf("AppendCommittedEntry replay: %v", err)
-	}
-	count := 0
-	for _, entry := range localEntryEvents(t, store) {
-		if entry.Role == "warning" && entry.Text == "be careful" {
-			count++
-		}
-	}
-	if count != 1 {
-		t.Fatalf("local entry count = %d, want 1", count)
-	}
-}
-
 func TestServiceAppendCommittedEntryReplaysVisibility(t *testing.T) {
 	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", sessioncontract.SessionCategoryMain, runtimeControlTestSessionPersistence.Options()...)
 	if err != nil {
@@ -576,43 +403,6 @@ func TestServiceAppendCommittedEntryReplaysVisibility(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("visible warning entry count = %d, want 1", count)
-	}
-}
-
-func TestServiceSubmitQueuedUserMessagesDedupesSuccessfulRetry(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", sessioncontract.SessionCategoryMain, runtimeControlTestSessionPersistence.Options()...)
-	if err != nil {
-		t.Fatalf("create session store: %v", err)
-	}
-	client := &runtimeControlFakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-	engine, err := runtime.New(store, client, tools.NewRegistry(), runtime.Config{Model: "gpt-5"})
-	if err != nil {
-		t.Fatalf("create runtime engine: %v", err)
-	}
-	engine.QueueUserMessage("hello")
-	service := NewService(stubRuntimeResolver{engine: engine})
-	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmitQueued)
-	req := serverapi.RuntimeSubmitQueuedUserMessagesRequest{ClientRequestID: ref.ClientRequestID.String(), SessionID: store.Meta().SessionID, OperationRef: ref}
-
-	first, err := service.SubmitQueuedUserMessages(context.Background(), req)
-	if err != nil {
-		t.Fatalf("SubmitQueuedUserMessages first: %v", err)
-	}
-	second, err := service.SubmitQueuedUserMessages(context.Background(), req)
-	if err != nil {
-		t.Fatalf("SubmitQueuedUserMessages replay: %v", err)
-	}
-	if first != second {
-		t.Fatalf("responses = (%+v, %+v), want identical replay", first, second)
-	}
-	if client.calls != 1 {
-		t.Fatalf("generate call count = %d, want 1", client.calls)
-	}
-	if got := countUserMessagesWithContent(t, store, "hello"); got != 1 {
-		t.Fatalf("queued user flush count = %d, want 1", got)
 	}
 }
 

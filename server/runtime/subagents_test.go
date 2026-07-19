@@ -297,6 +297,7 @@ func TestSubagentCatalogUsesSamePolicyOnBaseInjectionAndCompaction(t *testing.T)
 }
 
 func TestSubagentCatalogRemainsVisibleAcrossDepthPreservingSessionPathsAndLimits(t *testing.T) {
+	t.Parallel()
 	settings := config.Settings{
 		Model:         "gpt-5.5",
 		ThinkingLevel: "medium",

@@ -100,22 +100,19 @@ type recoveredWarningEntry struct {
 }
 
 func (s *Service) appendRecoveredWarningIfNeeded(store *session.Store) error {
-	warning, ok, _ := s.generatedRecoveredWarning()
+	warning, ok, err := s.generatedRecoveredWarning()
+	if err != nil {
+		return err
+	}
 	if !ok || warning == "" || store == nil {
 		return nil
 	}
-	if store.Meta().GeneratedRecoveredWarningIssued {
-		return nil
-	}
-	_, _, appendErr := store.AppendEvent("", "local_entry", recoveredWarningEntry{
+	_, err = store.AppendGeneratedRecoveredWarning("local_entry", recoveredWarningEntry{
 		Visibility: transcript.EntryVisibilityOngoing,
 		Role:       "warning",
 		Text:       warning,
 	})
-	if appendErr != nil {
-		return appendErr
-	}
-	return store.MarkGeneratedRecoveredWarningIssued()
+	return err
 }
 
 func (s *Service) generatedRecoveredWarning() (string, bool, error) {

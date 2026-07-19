@@ -64,6 +64,48 @@ func TestSetGoalPersistsMetadataAndEvent(t *testing.T) {
 	}
 }
 
+func TestCommittedGoalObserverFailureRecoversOnReopen(t *testing.T) {
+	root := t.TempDir()
+	observer := newBlockingFailingPersistenceObserver(sessionTestPersistence)
+	store, err := Create(
+		root,
+		"workspace-x",
+		"/tmp/work",
+		testSessionCategory,
+		WithPersistenceObserver(observer),
+		WithPersistedSessionResolver(sessionTestPersistence),
+	)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	observer.Arm()
+	close(observer.release)
+
+	_, err = store.SetGoal("recover committed goal", GoalActorUser)
+	if err == nil {
+		t.Fatal("SetGoal did not surface the observer failure")
+	}
+	goal := store.Meta().Goal
+	if goal == nil {
+		t.Fatal("committed observer failure rolled back the in-memory goal")
+	}
+
+	reopened, err := OpenByID(root, store.Meta().SessionID, sessionTestPersistence.options()...)
+	if err != nil {
+		t.Fatalf("OpenByID: %v", err)
+	}
+	if stored := reopened.Meta().Goal; stored == nil || stored.ID != goal.ID {
+		t.Fatalf("recovered goal = %+v, want %+v", stored, goal)
+	}
+	events, err := collectEvents(reopened)
+	if err != nil {
+		t.Fatalf("collect events: %v", err)
+	}
+	if len(events) != 1 || events[0].Kind != "goal_set" {
+		t.Fatalf("recovered events = %+v, want one goal_set", events)
+	}
+}
+
 func TestGoalWithEventsRollsBackMetadataWhenEventAppendFails(t *testing.T) {
 	store := newSessionTestStore(t)
 

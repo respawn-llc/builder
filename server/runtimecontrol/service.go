@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -171,11 +172,6 @@ type liveSteerMemoRequest struct {
 
 type liveStopMemoRequest struct {
 	SessionID runtimeids.SessionID
-}
-
-type turnSubmitMemoRequest struct {
-	SessionID string
-	Text      string
 }
 
 type queuedUserMessageMemoRequest struct {
@@ -389,6 +385,14 @@ func (s *Service) recordRuntimeAccessFailureOrCancellation(sessionID string, ref
 		return
 	}
 	s.operations.RecordRuntimeAccessFailure(sessionID, ref)
+}
+
+func (s *Service) recordOperationCompletion(sessionID string, ref clientui.RuntimeOperationRef, receipt session.CommitReceipt, err error, attempt runtimeops.Attempt, record func(string, clientui.RuntimeOperationRef, session.CommitReceipt, error)) {
+	if !receipt.Committed && s.operationAttemptCanceled(err, attempt) {
+		s.operations.RecordCanceledNotCommitted(sessionID, ref)
+	} else {
+		record(sessionID, ref, receipt, err)
+	}
 }
 
 func (s *Service) resolve(ctx context.Context, sessionID string) (*runtime.Engine, error) {
@@ -619,9 +623,9 @@ func (s *Service) SubmitUserShellCommand(ctx context.Context, req serverapi.Runt
 		})
 		if s.operationAttemptCanceled(err, attempt) {
 			s.operations.RecordCanceledNotCommitted(memoReq.SessionID, req.OperationRef)
-		} else {
-			s.operations.RecordShellCompletion(memoReq.SessionID, req.OperationRef, err)
+			return struct{}{}, err
 		}
+		s.operations.RecordShellCompletion(memoReq.SessionID, req.OperationRef, err)
 		return struct{}{}, err
 	})
 	return err
@@ -651,11 +655,7 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 			receipt = compactReceipt
 			return compactErr
 		})
-		if !receipt.Committed && s.operationAttemptCanceled(err, attempt) {
-			s.operations.RecordCanceledNotCommitted(memoReq.SessionID, req.OperationRef)
-		} else {
-			s.operations.RecordCompactCompletion(memoReq.SessionID, req.OperationRef, receipt, err)
-		}
+		s.recordOperationCompletion(memoReq.SessionID, req.OperationRef, receipt, err, attempt, s.operations.RecordCompactCompletion)
 		return struct{}{}, err
 	})
 	return err
@@ -685,11 +685,7 @@ func (s *Service) CompactContextForPreSubmit(ctx context.Context, req serverapi.
 			receipt = compactReceipt
 			return compactErr
 		})
-		if !receipt.Committed && s.operationAttemptCanceled(err, attempt) {
-			s.operations.RecordCanceledNotCommitted(memoReq.SessionID, req.OperationRef)
-		} else {
-			s.operations.RecordCompactCompletion(memoReq.SessionID, req.OperationRef, receipt, err)
-		}
+		s.recordOperationCompletion(memoReq.SessionID, req.OperationRef, receipt, err, attempt, s.operations.RecordCompactCompletion)
 		return struct{}{}, err
 	})
 	return err
@@ -732,11 +728,7 @@ func (s *Service) SubmitQueuedUserMessages(ctx context.Context, req serverapi.Ru
 			resp = serverapi.RuntimeSubmitQueuedUserMessagesResponse{Message: msg.Content}
 			return err
 		})
-		if !receipt.Committed && s.operationAttemptCanceled(err, attempt) {
-			s.operations.RecordCanceledNotCommitted(memoReq.SessionID, req.OperationRef)
-		} else {
-			s.operations.RecordSubmitQueuedCompletion(memoReq.SessionID, req.OperationRef, receipt, err)
-		}
+		s.recordOperationCompletion(memoReq.SessionID, req.OperationRef, receipt, err, attempt, s.operations.RecordSubmitQueuedCompletion)
 		return resp, err
 	})
 }
@@ -771,7 +763,7 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 			return serverapi.RuntimeInterruptResponse{}, err
 		}
 		interruptActive = !targetQueuedMessage && cancelResult.InterruptActive && s.runtimeActivityActiveForControl(ctx, sessionID, pendingRefs)
-		if !runtimeOperationRefsContain(pendingRefs, *req.TargetOperationRef) {
+		if !slices.Contains(pendingRefs, *req.TargetOperationRef) {
 			pendingRefs = append([]clientui.RuntimeOperationRef{*req.TargetOperationRef}, pendingRefs...)
 		}
 	}
@@ -969,65 +961,21 @@ func (s *Service) workflowTaskSession(ctx context.Context, sessionID string, eng
 	return false, nil
 }
 
-func sameSessionTextMemoRequest(a sessionTextMemoRequest, b sessionTextMemoRequest) bool {
-	return a.SessionID == b.SessionID && a.Text == b.Text
-}
+var (
+	sameSessionTextMemoRequest          = sameComparable[sessionTextMemoRequest]
+	sameRuntimeQueuedMessageMemoRequest = sameComparable[runtimeQueuedMessageMemoRequest]
+	sameLiveSteerMemoRequest            = sameComparable[liveSteerMemoRequest]
+	sameLiveStopMemoRequest             = sameComparable[liveStopMemoRequest]
+	sameQueuedUserMessageMemoRequest    = sameComparable[queuedUserMessageMemoRequest]
+	sameSessionStringMemoRequest        = sameComparable[sessionStringMemoRequest]
+	sameSessionBoolMemoRequest          = sameComparable[sessionBoolMemoRequest]
+	sameSessionCommandMemoRequest       = sameComparable[sessionCommandMemoRequest]
+	sameLocalEntryMemoRequest           = sameComparable[localEntryMemoRequest]
+	sameGoalSetMemoRequest              = sameComparable[goalSetMemoRequest]
+	sameGoalStatusMemoRequest           = sameComparable[goalStatusMemoRequest]
+	sameGoalClearMemoRequest            = sameComparable[goalClearMemoRequest]
+)
 
-func sameRuntimeQueuedMessageMemoRequest(a runtimeQueuedMessageMemoRequest, b runtimeQueuedMessageMemoRequest) bool {
-	return a.SessionID == b.SessionID && a.Text == b.Text && a.OperationRef == b.OperationRef
-}
-
-func sameLiveSteerMemoRequest(a liveSteerMemoRequest, b liveSteerMemoRequest) bool {
-	return a.SessionID == b.SessionID && a.Text == b.Text
-}
-
-func sameLiveStopMemoRequest(a liveStopMemoRequest, b liveStopMemoRequest) bool {
-	return a.SessionID == b.SessionID
-}
-
-func sameTurnSubmitMemoRequest(a turnSubmitMemoRequest, b turnSubmitMemoRequest) bool {
-	return a.SessionID == b.SessionID && a.Text == b.Text
-}
-
-func sameQueuedUserMessageMemoRequest(a queuedUserMessageMemoRequest, b queuedUserMessageMemoRequest) bool {
-	return a.SessionID == b.SessionID && a.QueueItemID == b.QueueItemID
-}
-
-func sameSessionStringMemoRequest(a sessionStringMemoRequest, b sessionStringMemoRequest) bool {
-	return a.SessionID == b.SessionID && a.Value == b.Value
-}
-
-func sameSessionBoolMemoRequest(a sessionBoolMemoRequest, b sessionBoolMemoRequest) bool {
-	return a.SessionID == b.SessionID && a.Enabled == b.Enabled
-}
-
-func sameSessionCommandMemoRequest(a sessionCommandMemoRequest, b sessionCommandMemoRequest) bool {
-	return a.SessionID == b.SessionID && a.Command == b.Command
-}
-
-func sameLocalEntryMemoRequest(a localEntryMemoRequest, b localEntryMemoRequest) bool {
-	return a.SessionID == b.SessionID && a.Role == b.Role && a.Text == b.Text && a.Visibility == b.Visibility && a.NoticeID == b.NoticeID
-}
-
-func sameGoalSetMemoRequest(a goalSetMemoRequest, b goalSetMemoRequest) bool {
-	return a.SessionID == b.SessionID && a.Objective == b.Objective && a.Actor == b.Actor && a.RunID == b.RunID && a.StepID == b.StepID
-}
-
-func sameGoalStatusMemoRequest(a goalStatusMemoRequest, b goalStatusMemoRequest) bool {
-	return a.SessionID == b.SessionID && a.Status == b.Status && a.Actor == b.Actor && a.RunID == b.RunID && a.StepID == b.StepID
-}
-
-func sameGoalClearMemoRequest(a goalClearMemoRequest, b goalClearMemoRequest) bool {
-	return a.SessionID == b.SessionID && a.Actor == b.Actor
-}
-
-func runtimeOperationRefsContain(refs []clientui.RuntimeOperationRef, want clientui.RuntimeOperationRef) bool {
-	for _, ref := range refs {
-		if ref == want {
-			return true
-		}
-	}
-	return false
-}
+func sameComparable[T comparable](a, b T) bool { return a == b }
 
 var _ servicecontract.RuntimeControlService = (*Service)(nil)

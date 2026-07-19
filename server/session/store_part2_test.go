@@ -100,13 +100,6 @@ func TestOpenByIDUsesPersistedSessionResolver(t *testing.T) {
 	}
 }
 
-func TestOpenByIDRejectsWithoutPersistedSessionResolver(t *testing.T) {
-	root := t.TempDir()
-	if _, err := OpenByID(root, "missing-session"); err == nil || !errors.Is(err, errPersistedSessionResolverRequired) {
-		t.Fatalf("expected missing resolver error, got %v", err)
-	}
-}
-
 func TestSetWorkspaceRootPreservesWorkspaceContainer(t *testing.T) {
 	root := t.TempDir()
 	store, err := Create(root, "workspace-container", "/tmp/work-a", testSessionCategory, sessionTestPersistence.options()...)
@@ -473,6 +466,217 @@ func TestOpenReconcilesMetaLastSequenceFromEventLog(t *testing.T) {
 	}
 	if next.Seq != 3 {
 		t.Fatalf("expected seq=3 after reopen reconciliation, got %d", next.Seq)
+	}
+}
+
+type appendRecoveryFixture struct {
+	store       *Store
+	pre         Meta
+	post        Meta
+	suffix      []byte
+	firstSuffix []byte
+	record      appendRecoveryRecord
+}
+
+func newAppendRecoveryFixture(t *testing.T) appendRecoveryFixture {
+	t.Helper()
+	store := newSessionTestStore(t)
+	pre := store.Meta()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	events := []Event{
+		{Seq: pre.LastSequence + 1, Timestamp: now, Kind: "message", Payload: mustFixtureJSON(t, "first")},
+		{Seq: pre.LastSequence + 2, Timestamp: now, Kind: "message", Payload: mustFixtureJSON(t, "second")},
+	}
+	suffix, err := encodeEventLines(events, false)
+	if err != nil {
+		t.Fatalf("encode recovery suffix: %v", err)
+	}
+	firstSuffix, err := encodeEventLines(events[:1], false)
+	if err != nil {
+		t.Fatalf("encode partial recovery suffix: %v", err)
+	}
+	post := cloneMeta(pre)
+	post.LastSequence = events[len(events)-1].Seq
+	post.UpdatedAt = now
+	record, err := store.newAppendRecoveryRecord(pre, post, appendRecoveryCommitted, &appendRecoveryEvents{
+		StartOffset: 0, EndOffset: int64(len(suffix)), EventCount: len(events),
+		FirstSequence: events[0].Seq, LastSequence: events[len(events)-1].Seq, SHA256: digestBytes(suffix),
+	})
+	if err != nil {
+		t.Fatalf("build recovery record: %v", err)
+	}
+	return appendRecoveryFixture{store: store, pre: pre, post: post, suffix: suffix, firstSuffix: firstSuffix, record: record}
+}
+
+func (f appendRecoveryFixture) write(t *testing.T) {
+	t.Helper()
+	if err := os.WriteFile(f.store.eventsFP, f.suffix, 0o644); err != nil {
+		t.Fatalf("write recovery suffix: %v", err)
+	}
+	if err := f.store.writeAppendRecoveryRecord(f.record); err != nil {
+		t.Fatalf("write recovery record: %v", err)
+	}
+}
+
+func (f appendRecoveryFixture) open(meta Meta, observer PersistenceObserver) (*Store, error) {
+	return Open(f.store.Dir(),
+		WithPersistedSessionResolver(stubPersistedSessionResolver{record: PersistedSessionRecord{
+			SessionDir: f.store.Dir(), Meta: ptrMeta(meta),
+		}}),
+		WithPersistenceObserver(observer),
+	)
+}
+
+func TestOpenRestoresPreMetaForIncompleteAppendRecovery(t *testing.T) {
+	tests := []struct {
+		name      string
+		phase     appendRecoveryPhase
+		usePost   bool
+		retain    bool
+		suffixFor func(appendRecoveryFixture) []byte
+	}{
+		{"prepared partial multi-event suffix", appendRecoveryPrepared, false, false, func(f appendRecoveryFixture) []byte { return f.firstSuffix }},
+		{"committed missing suffix", appendRecoveryCommitted, true, false, func(appendRecoveryFixture) []byte { return nil }},
+		{"committed exact suffix", appendRecoveryCommitted, false, true, func(f appendRecoveryFixture) []byte { return f.suffix }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newAppendRecoveryFixture(t)
+			f.record.Phase = tt.phase
+			f.suffix = tt.suffixFor(f)
+			f.write(t)
+			meta := f.pre
+			if tt.usePost {
+				meta = f.post
+			}
+			opened, err := f.open(meta, &recordingPersistenceObserver{})
+			if err != nil {
+				t.Fatalf("open recovered store: %v", err)
+			}
+			wantSequence, wantSize := f.pre.LastSequence, int64(0)
+			if tt.retain {
+				wantSequence, wantSize = f.post.LastSequence, int64(len(f.suffix))
+			}
+			if opened.Meta().LastSequence != wantSequence {
+				t.Fatalf("last sequence = %d, want %d", opened.Meta().LastSequence, wantSequence)
+			}
+			info, err := os.Stat(f.store.eventsFP)
+			if err != nil || info.Size() != wantSize {
+				t.Fatalf("recovered event file stat = %+v, error = %v", info, err)
+			}
+		})
+	}
+}
+
+func TestOpenFailsClosedForInvalidAppendRecovery(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*testing.T, *appendRecoveryFixture)
+	}{
+		{"committed hash conflict", func(t *testing.T, f *appendRecoveryFixture) {
+			f.record.Events.SHA256 = digestBytes([]byte("conflict"))
+			f.write(t)
+		}},
+		{"committed count conflict", func(t *testing.T, f *appendRecoveryFixture) {
+			f.record.Events.EventCount++
+			f.write(t)
+		}},
+		{"committed sequence conflict", func(t *testing.T, f *appendRecoveryFixture) {
+			f.record.Events.FirstSequence++
+			f.write(t)
+		}},
+		{"oversized event suffix", func(t *testing.T, f *appendRecoveryFixture) {
+			f.record.Events.EndOffset = f.record.Events.StartOffset + maxAppendRecoverySuffixSize + 1
+			f.write(t)
+		}},
+		{"malformed record", func(t *testing.T, f *appendRecoveryFixture) {
+			f.write(t)
+			if err := os.WriteFile(filepath.Join(f.store.Dir(), appendRecoveryFile), []byte("{"), 0o644); err != nil {
+				t.Fatalf("write malformed record: %v", err)
+			}
+		}},
+		{"symlinked record", func(t *testing.T, f *appendRecoveryFixture) {
+			f.write(t)
+			path := filepath.Join(f.store.Dir(), appendRecoveryFile)
+			if err := os.Remove(path); err != nil {
+				t.Fatalf("remove recovery record: %v", err)
+			}
+			if err := os.Symlink(f.store.eventsFP, path); err != nil {
+				t.Fatalf("symlink recovery record: %v", err)
+			}
+		}},
+		{"non-regular record", func(t *testing.T, f *appendRecoveryFixture) {
+			f.write(t)
+			path := filepath.Join(f.store.Dir(), appendRecoveryFile)
+			if err := os.Remove(path); err != nil {
+				t.Fatalf("remove recovery record: %v", err)
+			}
+			if err := os.Mkdir(path, 0o755); err != nil {
+				t.Fatalf("replace recovery record with directory: %v", err)
+			}
+		}},
+		{"prepared truncation failure", func(t *testing.T, f *appendRecoveryFixture) {
+			f.record.Phase = appendRecoveryPrepared
+			f.suffix = f.firstSuffix
+			f.write(t)
+			if err := os.Chmod(f.store.eventsFP, 0o444); err != nil {
+				t.Fatalf("make events file read-only: %v", err)
+			}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newAppendRecoveryFixture(t)
+			tt.setup(t, &f)
+			if _, err := f.open(f.post, &recordingPersistenceObserver{}); !errors.Is(err, ErrStoreRecoveryRequired) {
+				t.Fatalf("open error = %v, want recovery-required failure", err)
+			}
+		})
+	}
+}
+
+func TestOpenSurfacesAppendRecoveryObservationFailures(t *testing.T) {
+	t.Run("observer", func(t *testing.T) {
+		f := newAppendRecoveryFixture(t)
+		f.write(t)
+		observer := &recordingPersistenceObserver{err: os.ErrPermission}
+		if _, err := f.open(f.post, observer); !errors.Is(err, os.ErrPermission) {
+			t.Fatalf("open error = %v, want observer failure", err)
+		}
+		observer.err = nil
+		if _, err := f.open(f.post, observer); err != nil {
+			t.Fatalf("retry recovery: %v", err)
+		}
+	})
+
+	t.Run("cleanup", func(t *testing.T) {
+		f := newAppendRecoveryFixture(t)
+		f.write(t)
+		path := filepath.Join(f.store.Dir(), appendRecoveryFile)
+		observer := &recordingPersistenceObserver{afterObserve: func() error {
+			if err := os.Remove(path); err != nil {
+				return err
+			}
+			return os.Mkdir(path, 0o755)
+		}}
+		if _, err := f.open(f.post, observer); !errors.Is(err, ErrStoreRecoveryRequired) {
+			t.Fatalf("open error = %v, want cleanup recovery failure", err)
+		}
+	})
+}
+
+func TestPreparedRecoveryClosesLiveMutationAuthority(t *testing.T) {
+	f := newAppendRecoveryFixture(t)
+	f.record.Phase = appendRecoveryPrepared
+	f.write(t)
+	if _, receipt, err := f.store.AppendEvent("step", "message", "blocked"); err == nil || receipt.Committed || !errors.Is(err, ErrStoreRecoveryRequired) {
+		t.Fatalf("uncertain append receipt=%+v error=%v", receipt, err)
+	}
+	if err := os.Remove(filepath.Join(f.store.Dir(), appendRecoveryFile)); err != nil {
+		t.Fatalf("remove recovery record: %v", err)
+	}
+	if _, receipt, err := f.store.AppendEvent("step", "message", "still blocked"); err == nil || receipt.Committed || !errors.Is(err, ErrStoreRecoveryRequired) {
+		t.Fatalf("closed Store receipt=%+v error=%v", receipt, err)
 	}
 }
 

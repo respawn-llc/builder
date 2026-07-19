@@ -76,16 +76,13 @@ func streamChildFromParent(parent *Store, parentMeta Meta, forkName string, cate
 
 	derived, cutOrdinal, err := streamReplayIntoChild(parent, child, targetSeq)
 	if err != nil {
-		removeForkChild(child)
-		return nil, 0, fmt.Errorf("stream fork replay events: %w", err)
+		return nil, 0, removeForkChild(child, fmt.Errorf("stream fork replay events: %w", err))
 	}
 	if targetSeq > 0 && cutOrdinal == 0 {
-		removeForkChild(child)
-		return nil, 0, fmt.Errorf("user message seq %d is out of range", targetSeq)
+		return nil, 0, removeForkChild(child, fmt.Errorf("user message seq %d is out of range", targetSeq))
 	}
 	if err := child.applyForkDerivedState(derived); err != nil {
-		removeForkChild(child)
-		return nil, 0, fmt.Errorf("finalize fork replay: %w", err)
+		return nil, 0, removeForkChild(child, fmt.Errorf("finalize fork replay: %w", err))
 	}
 	return child, cutOrdinal, nil
 }
@@ -101,19 +98,26 @@ func streamReplayIntoChild(parent *Store, child *Store, targetSeq int64) (replay
 	cutOrdinal := 0
 	buffer := make([]ReplayEvent, 0, forkReplayFlushEventCount)
 	bufferedBytes := 0
+	var committedReplayErr error
 	var latestRollbackCandidate *rollbacktarget.CandidateLocator
 	flush := func() error {
 		if len(buffer) == 0 {
 			return nil
 		}
 		if child.options.filelessEvents {
-			if _, err := child.AppendReplayEvents(buffer); err != nil {
-				return err
+			if _, receipt, err := child.AppendReplayEvents(buffer); err != nil {
+				if !receipt.Committed {
+					return err
+				}
+				committedReplayErr = errors.Join(committedReplayErr, err)
 			}
 		} else {
 			appended, err := child.appendReplayEventsWithEndByteCursor(buffer)
 			if err != nil {
-				return err
+				if !appended.Committed {
+					return err
+				}
+				committedReplayErr = errors.Join(committedReplayErr, err)
 			}
 			for index := range buffer {
 				if !hasVisibleUserMessageEvent(buffer[index].Kind, buffer[index].Payload) {
@@ -160,12 +164,12 @@ func streamReplayIntoChild(parent *Store, child *Store, targetSeq int64) (replay
 		return nil
 	})
 	if walkErr != nil && !errors.Is(walkErr, errForkReplayBoundary) {
-		return derived, 0, walkErr
+		return derived, 0, errors.Join(committedReplayErr, walkErr)
 	}
 	if err := flush(); err != nil {
 		return derived, 0, err
 	}
-	return derived, cutOrdinal, nil
+	return derived, cutOrdinal, committedReplayErr
 }
 
 func rebaseHistoryReplacementRollbackCandidate(
@@ -215,11 +219,11 @@ func (s *Store) applyForkDerivedState(derived replayDerivedState) error {
 	return s.EnsureDurable()
 }
 
-func removeForkChild(child *Store) {
+func removeForkChild(child *Store, primary error) error {
 	if child == nil {
-		return
+		return primary
 	}
-	_ = child.RemoveDurable()
+	return errors.Join(primary, child.RemoveDurable())
 }
 
 func cloneLockedContract(in *LockedContract) *LockedContract {

@@ -181,13 +181,14 @@ func TestAppendRecoveredWarningIfNeededPersistsOnce(t *testing.T) {
 	}
 }
 
-func TestAppendRecoveredWarningIfNeededIgnoresProviderError(t *testing.T) {
+func TestAppendRecoveredWarningIfNeededSurfacesProviderError(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
+	providerErr := errors.New("recovered dir unreadable")
 	fixture.service.WithGeneratedRecoveredWarningProvider(func() (string, bool, error) {
-		return "", false, errors.New("recovered dir unreadable")
+		return "", false, providerErr
 	})
-	if err := fixture.service.appendRecoveredWarningIfNeeded(fixture.store); err != nil {
-		t.Fatalf("expected warning lookup errors to be non-fatal, got %v", err)
+	if err := fixture.service.appendRecoveredWarningIfNeeded(fixture.store); !errors.Is(err, providerErr) {
+		t.Fatalf("warning lookup error = %v, want %v", err, providerErr)
 	}
 }
 
@@ -459,7 +460,6 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 			SessionID:       sessionID,
 			OwnerID:         "interactive-owner",
 			DropOwner:       true,
-			ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
 		})
 	})
 

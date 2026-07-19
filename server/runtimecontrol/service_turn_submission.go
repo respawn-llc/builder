@@ -16,8 +16,8 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, err
 	}
-	memoReq := turnSubmitMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Text: req.Text}
-	return runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameTurnSubmitMemoRequest, func(ctx context.Context, attempt runtimeops.Attempt) (serverapi.RuntimeSubmitUserTurnResponse, error) {
+	memoReq := sessionTextMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Text: req.Text}
+	return runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameSessionTextMemoRequest, func(ctx context.Context, attempt runtimeops.Attempt) (serverapi.RuntimeSubmitUserTurnResponse, error) {
 		start, err := s.beginRunStart(req.SessionID)
 		if err != nil {
 			if errors.Is(err, serverapi.ErrSessionRunStarting) {
@@ -107,7 +107,7 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 	})
 }
 
-func (s *Service) trySubmitUserTurnAsActiveLiveSteer(ctx context.Context, attempt runtimeops.Attempt, memoReq turnSubmitMemoRequest, req serverapi.RuntimeSubmitUserTurnRequest) (serverapi.RuntimeSubmitUserTurnResponse, *runtime.Engine, bool, error) {
+func (s *Service) trySubmitUserTurnAsActiveLiveSteer(ctx context.Context, attempt runtimeops.Attempt, memoReq sessionTextMemoRequest, req serverapi.RuntimeSubmitUserTurnRequest) (serverapi.RuntimeSubmitUserTurnResponse, *runtime.Engine, bool, error) {
 	var resp serverapi.RuntimeSubmitUserTurnResponse
 	var recordEngine *runtime.Engine
 	steered := false
@@ -151,11 +151,7 @@ func (s *Service) runPreSubmitCompaction(ctx context.Context, sessionID string, 
 		receipt, compactErr := engine.CompactContextForPreSubmitWithActiveHook(runCtx, func() {
 			s.operations.MarkOperationActive(sessionID, ref)
 		})
-		if !receipt.Committed && s.operationAttemptCanceled(compactErr, attempt) {
-			s.operations.RecordCanceledNotCommitted(sessionID, ref)
-		} else {
-			s.operations.RecordCompactCompletion(sessionID, ref, receipt, compactErr)
-		}
+		s.recordOperationCompletion(sessionID, ref, receipt, compactErr, attempt, s.operations.RecordCompactCompletion)
 		return struct{}{}, compactErr
 	})
 	return err

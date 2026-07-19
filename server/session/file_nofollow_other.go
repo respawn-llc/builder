@@ -18,3 +18,8 @@ func openSessionFileReadOnly(path string) (*os.File, error) {
 func isSymlinkOpenError(err error) bool {
 	return err == errSessionFileSymlink
 }
+
+func syncSessionDirectory(path string) error {
+	dir, err := os.Open(path)
+	return syncAndClose(dir, err)
+}

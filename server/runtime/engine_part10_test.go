@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
@@ -439,14 +438,7 @@ func TestManualCompactionReinjectsOnlyActiveHeadlessState(t *testing.T) {
 }
 
 func TestSubmitUserMessagePersistsHeadlessModeTransitions(t *testing.T) {
-	prevHeadlessPrompt := prompts.HeadlessModePrompt
-	prevExitPrompt := prompts.HeadlessModeExitPrompt
-	prompts.HeadlessModePrompt = "headless mode instructions"
-	prompts.HeadlessModeExitPrompt = "interactive mode instructions"
-	defer func() {
-		prompts.HeadlessModePrompt = prevHeadlessPrompt
-		prompts.HeadlessModeExitPrompt = prevExitPrompt
-	}()
+	t.Parallel()
 
 	tests := []struct {
 		name           string

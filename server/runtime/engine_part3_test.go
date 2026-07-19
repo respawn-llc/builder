@@ -267,6 +267,7 @@ func TestHostedWebSearchExecutionRejectsHallucinatedSearchQuery(t *testing.T) {
 }
 
 func TestSubmitUserMessageContinuesAfterHostedToolOnlyTurn(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -346,6 +347,7 @@ func TestSubmitUserMessageContinuesAfterHostedToolOnlyTurn(t *testing.T) {
 }
 
 func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	var hostedStart *llm.ToolCall
 
@@ -454,6 +456,7 @@ func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {
 }
 
 func TestSubmitUserMessageFinalAnswerWithHostedToolCallMaterializesToolBeforeFinal(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -533,6 +536,7 @@ func TestSubmitUserMessageFinalAnswerWithHostedToolCallMaterializesToolBeforeFin
 }
 
 func TestSubmitUserMessageCommentaryWithoutToolCallsForcesNextLoop(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -609,6 +613,7 @@ func TestSubmitUserMessageCommentaryWithoutToolCallsForcesNextLoop(t *testing.T)
 }
 
 func TestSubmitUserMessageViewImageToolFollowsModelCapabilities(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name             string
 		model            string
@@ -774,6 +779,7 @@ func TestEnsureLocked_PersistsProviderCapabilityOverrideOverTransportMetadata(t 
 }
 
 func TestSubmitUserMessageMissingPhaseDefaultsToCommentaryAndWarns(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -861,6 +867,7 @@ func TestSubmitUserMessageMissingPhaseDefaultsToCommentaryAndWarns(t *testing.T)
 }
 
 func TestSubmitUserMessageMissingPhaseLegacyClientRemainsTerminal(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -906,6 +913,7 @@ func TestSubmitUserMessageMissingPhaseLegacyClientRemainsTerminal(t *testing.T) 
 }
 
 func TestSubmitUserMessageCompatibleResponsesMissingPhaseRemainsTerminal(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{
 		caps: llm.ProviderCapabilities{

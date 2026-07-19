@@ -237,6 +237,7 @@ func compatibleCommentaryResponse(content string, toolCalls ...llm.ToolCall) llm
 }
 
 func TestPhaseProtocolRejectsInconsistentProviderAndLegacyPhaseFacts(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{
 		caps: compatibleResponsesCapabilities(),
@@ -255,6 +256,7 @@ func TestPhaseProtocolRejectsInconsistentProviderAndLegacyPhaseFacts(t *testing.
 }
 
 func TestWorkflowToolModeExposesCompleteNodeDespiteEnabledTools(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	workflowCfg := testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool)
 	eng := mustNewWorkflowTestEngine(t, store, &fakeClient{}, workflowCfg, Config{
@@ -280,6 +282,7 @@ func TestWorkflowToolModeExposesCompleteNodeDespiteEnabledTools(t *testing.T) {
 }
 
 func TestCompleteNodeNotAdvertisedOutsideWorkflow(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolCompleteNode},
@@ -299,6 +302,7 @@ func TestCompleteNodeNotAdvertisedOutsideWorkflow(t *testing.T) {
 }
 
 func TestWorkflowGenerationToolChoiceMatchesEffectiveCompletionMode(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		mode config.WorkflowCompletionMode
@@ -327,6 +331,7 @@ func TestWorkflowGenerationToolChoiceMatchesEffectiveCompletionMode(t *testing.T
 }
 
 func TestWorkflowRequiredToolChoiceIncludesLocalAndHostedTools(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(
@@ -351,6 +356,7 @@ func TestWorkflowRequiredToolChoiceIncludesLocalAndHostedTools(t *testing.T) {
 }
 
 func TestWorkflowRequiredToolChoiceAcceptsHostedWebSearchOnly(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(
 		tools.HandlerRegistration{ID: toolspec.ToolWebSearch, Handler: fakeTool{name: toolspec.ToolWebSearch}},
@@ -370,6 +376,7 @@ func TestWorkflowRequiredToolChoiceAcceptsHostedWebSearchOnly(t *testing.T) {
 }
 
 func TestWorkflowRequiredToolChoiceRejectsEmptyEffectiveToolSet(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model:       "gpt-5",
@@ -382,6 +389,7 @@ func TestWorkflowRequiredToolChoiceRejectsEmptyEffectiveToolSet(t *testing.T) {
 }
 
 func TestWorkflowRequiredToolChoiceRejectsNonResponsesAdapter(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{caps: llm.ProviderCapabilities{
 		ProviderID:           "anthropic",
@@ -397,6 +405,7 @@ func TestWorkflowRequiredToolChoiceRejectsNonResponsesAdapter(t *testing.T) {
 }
 
 func TestAcceptedLiveWorkflowSteeringKeepsRequiredToolChoice(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := newWorkflowSteeringClient()
 	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool), Config{
@@ -444,6 +453,7 @@ func TestAcceptedLiveWorkflowSteeringKeepsRequiredToolChoice(t *testing.T) {
 }
 
 func TestWorkflowModePromptInjectedWithoutHeadlessOrUserPrompt(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{commentaryResponse("complete",
@@ -481,6 +491,7 @@ func TestWorkflowModePromptInjectedWithoutHeadlessOrUserPrompt(t *testing.T) {
 }
 
 func TestWorkflowModePromptExistingRunScopedMessageSkipsCommentCountQuery(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	if _, _, err := store.AppendEvent("seed", "message", llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeWorkflowMode, SourcePath: "run-1", Content: "existing workflow instructions"}); err != nil {
 		t.Fatalf("seed workflow message: %v", err)
@@ -515,6 +526,7 @@ func workflowPromptMessages(messages []llm.Message) []llm.Message {
 }
 
 func TestWorkflowStructuredModeUsesStructuredOutput(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	workflowCfg := testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeStructuredOutput)
 	client := &fakeClient{responses: []llm.Response{structuredFinalResponse(`{"commentary":"complete","summary":"done"}`)}}
@@ -545,6 +557,7 @@ func TestWorkflowStructuredModeUsesStructuredOutput(t *testing.T) {
 }
 
 func TestWorkflowRuntimeRejectsUnresolvedCompletionMode(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "legacy"}}
 	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeAuto), Config{
@@ -557,6 +570,7 @@ func TestWorkflowRuntimeRejectsUnresolvedCompletionMode(t *testing.T) {
 }
 
 func TestWorkflowShellAndUnstructuredModesOmitDynamicCompletionMetadata(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		mode config.WorkflowCompletionMode
@@ -592,6 +606,7 @@ func TestWorkflowShellAndUnstructuredModesOmitDynamicCompletionMetadata(t *testi
 }
 
 func TestWorkflowMixedCompleteNodeRunsSideEffects(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	sideEffect := &countingTool{name: toolspec.ToolExecCommand}
 	controller := &fakeWorkflowController{}
@@ -620,6 +635,7 @@ func TestWorkflowMixedCompleteNodeRunsSideEffects(t *testing.T) {
 }
 
 func TestWorkflowTerminalCompleteNodePersistsHostedToolResults(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{{
@@ -674,6 +690,7 @@ func TestWorkflowTerminalCompleteNodePersistsHostedToolResults(t *testing.T) {
 }
 
 func TestWorkflowDuplicateCompleteNodePreflightSkipsSideEffects(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
@@ -696,6 +713,7 @@ func TestWorkflowDuplicateCompleteNodePreflightSkipsSideEffects(t *testing.T) {
 }
 
 func TestWorkflowStructuredCompletionStopsWithoutAnotherTurn(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
@@ -717,6 +735,7 @@ func TestWorkflowStructuredCompletionStopsWithoutAnotherTurn(t *testing.T) {
 }
 
 func TestWorkflowUnstructuredFinalAnswerCompletesRun(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
@@ -748,6 +767,7 @@ func TestWorkflowUnstructuredFinalAnswerCompletesRun(t *testing.T) {
 }
 
 func TestWorkflowCompletionControllerFailureUsesInvalidCompletionCapWithoutTerminalState(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{completeErr: errors.New("workflow completion unavailable")}
 	client := &fakeClient{responses: []llm.Response{
@@ -781,6 +801,7 @@ func TestWorkflowCompletionControllerFailureUsesInvalidCompletionCapWithoutTermi
 }
 
 func TestCompatibleProviderPhaseAbsentWorkflowOutputCompletes(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mode   config.WorkflowCompletionMode
@@ -829,6 +850,7 @@ func TestCompatibleProviderPhaseAbsentWorkflowOutputCompletes(t *testing.T) {
 }
 
 func TestCompatibleProviderInvalidPhaseAbsentWorkflowOutputCanRetry(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []config.WorkflowCompletionMode{
 		config.WorkflowCompletionModeStructuredOutput,
 		config.WorkflowCompletionModeUnstructured,
@@ -867,6 +889,7 @@ func TestCompatibleProviderInvalidPhaseAbsentWorkflowOutputCanRetry(t *testing.T
 }
 
 func TestCompatibleProviderCommentaryContinuesWithoutCompletionSideEffects(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{
@@ -893,6 +916,7 @@ func TestCompatibleProviderCommentaryContinuesWithoutCompletionSideEffects(t *te
 }
 
 func TestCompatibleProviderCommentaryFlushesAcceptedSteeringBeforeContinuing(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	started := make(chan struct{})
@@ -960,6 +984,7 @@ func TestCompatibleProviderCommentaryFlushesAcceptedSteeringBeforeContinuing(t *
 }
 
 func TestWorkflowTerminalCompletionFailsQueuedSteeringAtRunRelease(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	started := make(chan struct{})
@@ -1014,6 +1039,7 @@ func hookClientCallCount(client *hookClient) int {
 }
 
 func TestWorkflowObservedDurableCompletionFailsQueuedSteeringDuringCloseDrain(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	controller.completedExternally.Store(true)
@@ -1053,6 +1079,7 @@ func TestWorkflowObservedDurableCompletionFailsQueuedSteeringDuringCloseDrain(t 
 }
 
 func TestWorkflowDurableCompletionBeforeModelTurnStopsWithoutRequest(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	controller.completedExternally.Store(true)
@@ -1072,6 +1099,7 @@ func TestWorkflowDurableCompletionBeforeModelTurnStopsWithoutRequest(t *testing.
 }
 
 func TestWorkflowDurableCompletionAfterModelResponseSkipsStalePersistence(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &hookClient{
@@ -1102,6 +1130,7 @@ func TestWorkflowDurableCompletionAfterModelResponseSkipsStalePersistence(t *tes
 }
 
 func TestWorkflowShellToolDurableCompletionStopsAfterToolResult(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	shellTool := &externalCompletionTool{controller: controller}
@@ -1129,6 +1158,7 @@ func TestWorkflowShellToolDurableCompletionStopsAfterToolResult(t *testing.T) {
 }
 
 func TestWorkflowDelayedDurableCompletionObservedBeforeNextModelTurn(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{completeExternallyAfterObservations: 4}
 	client := &fakeClient{responses: []llm.Response{
@@ -1150,6 +1180,7 @@ func TestWorkflowDelayedDurableCompletionObservedBeforeNextModelTurn(t *testing.
 }
 
 func TestWorkflowInvalidCompletionAttemptsInterruptAtCap(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
@@ -1168,6 +1199,7 @@ func TestWorkflowInvalidCompletionAttemptsInterruptAtCap(t *testing.T) {
 }
 
 func TestWorkflowInvalidCompletionFailClosedWhenConfiguredCapInvalid(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
@@ -1190,6 +1222,7 @@ func TestWorkflowInvalidCompletionFailClosedWhenConfiguredCapInvalid(t *testing.
 }
 
 func TestWorkflowFinalAnswersUseInvalidCompletionCap(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
@@ -1209,6 +1242,7 @@ func TestWorkflowFinalAnswersUseInvalidCompletionCap(t *testing.T) {
 }
 
 func TestCompatibleProviderPhaseAbsentProseConsumesWorkflowViolationAndCanRecover(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		mode      config.WorkflowCompletionMode
@@ -1277,6 +1311,7 @@ func TestCompatibleProviderPhaseAbsentProseConsumesWorkflowViolationAndCanRecove
 }
 
 func TestCompatibleProviderEmptyNoToolResponsesContinueWithoutWorkflowViolation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		response func(string) llm.Response

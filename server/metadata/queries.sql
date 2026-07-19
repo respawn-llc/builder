@@ -3517,8 +3517,7 @@ UPDATE sessions
 SET
     workspace_id = sqlc.arg(workspace_id),
     worktree_id = sqlc.narg(worktree_id),
-    cwd_relpath = sqlc.arg(cwd_relpath),
-    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+    cwd_relpath = sqlc.arg(cwd_relpath)
 WHERE id = sqlc.arg(session_id);
 
 -- name: DeleteSessionRecordByID :execrows

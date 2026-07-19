@@ -316,11 +316,7 @@ func (c *Coordinator) RecordQueuedMessageSubmitted(sessionID string, ref clientu
 }
 
 func (c *Coordinator) RecordSubmitQueuedCompletion(sessionID string, ref clientui.RuntimeOperationRef, receipt session.CommitReceipt, err error) {
-	if receipt.Committed || err == nil {
-		c.RecordQueuedMessageSubmitted(sessionID, ref)
-		return
-	}
-	c.RecordFailedWithRestore(sessionID, ref)
+	c.recordCompletionOutcome(sessionID, ref, receipt, err, c.RecordQueuedMessageSubmitted)
 }
 
 func (c *Coordinator) RecordCanceledNotCommitted(sessionID string, ref clientui.RuntimeOperationRef) {
@@ -348,8 +344,12 @@ func (c *Coordinator) RecordShellCompletion(sessionID string, ref clientui.Runti
 }
 
 func (c *Coordinator) RecordCompactCompletion(sessionID string, ref clientui.RuntimeOperationRef, receipt session.CommitReceipt, err error) {
+	c.recordCompletionOutcome(sessionID, ref, receipt, err, c.RecordCommitted)
+}
+
+func (c *Coordinator) recordCompletionOutcome(sessionID string, ref clientui.RuntimeOperationRef, receipt session.CommitReceipt, err error, recordCommitted func(string, clientui.RuntimeOperationRef)) {
 	if receipt.Committed || err == nil {
-		c.RecordCommitted(sessionID, ref)
+		recordCommitted(sessionID, ref)
 		return
 	}
 	c.RecordFailedWithRestore(sessionID, ref)

@@ -13,6 +13,7 @@ import (
 )
 
 func TestWorkflowToolModeTerminalCompletionCascadeCompletesActiveGoal(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
@@ -40,6 +41,7 @@ func TestWorkflowToolModeTerminalCompletionCascadeCompletesActiveGoal(t *testing
 }
 
 func TestWorkflowTerminalCompletionCascadeCompletesActiveGoal(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
@@ -64,6 +66,7 @@ func TestWorkflowTerminalCompletionCascadeCompletesActiveGoal(t *testing.T) {
 }
 
 func TestWorkflowTerminalCompletionLeavesPausedGoalIntact(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
@@ -86,6 +89,7 @@ func TestWorkflowTerminalCompletionLeavesPausedGoalIntact(t *testing.T) {
 }
 
 func TestWorkflowInvalidCompletionNudgeIncludesActiveGoalReminder(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
@@ -105,6 +109,7 @@ func TestWorkflowInvalidCompletionNudgeIncludesActiveGoalReminder(t *testing.T) 
 }
 
 func TestWorkflowTerminalCascadeRacesUserGoalMutationWithoutDeadlock(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	started := make(chan struct{})
@@ -158,6 +163,7 @@ func TestWorkflowTerminalCascadeRacesUserGoalMutationWithoutDeadlock(t *testing.
 }
 
 func TestWorkflowToolModeCascadeEmitsGoalCompletionAfterToolResult(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
@@ -192,6 +198,7 @@ func TestWorkflowToolModeCascadeEmitsGoalCompletionAfterToolResult(t *testing.T)
 }
 
 func TestWorkflowToolModeCascadeSkipsGoalPausedDuringRace(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	active, err := store.SetGoal("stay paused through completion", session.GoalActorUser)
 	if err != nil {
@@ -217,6 +224,7 @@ func TestWorkflowToolModeCascadeSkipsGoalPausedDuringRace(t *testing.T) {
 }
 
 func TestWorkflowToolModeCascadeEmitsGoalCompletionAfterHostedToolResult(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	completion := json.RawMessage(`{"commentary":"complete","summary":"done"}`)
@@ -269,6 +277,7 @@ func TestWorkflowToolModeCascadeEmitsGoalCompletionAfterHostedToolResult(t *test
 }
 
 func TestWorkflowObservedDurableCompletionCascadeCompletesActiveGoal(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	controller.completedExternally.Store(true)

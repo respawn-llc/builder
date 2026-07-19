@@ -200,6 +200,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 }
 
 func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
+	t.Parallel()
 	clearErr := errors.New("clear persistence failed")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateNamedTestSession(t, "ws", t.TempDir(), session.WithPersistenceObserver(gate))

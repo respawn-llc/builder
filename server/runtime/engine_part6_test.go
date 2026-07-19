@@ -603,7 +603,7 @@ func TestRestoreMessagesIgnoresLegacyReviewerRollbackHistoryReplacement(t *testi
 func TestRestoreMessagesFailsOnMalformedHistoryReplacementPayload(t *testing.T) {
 	t.Run("non-legacy payload still fails", func(t *testing.T) {
 		store := mustCreateTestSession(t)
-		if _, err := store.AppendReplayEvents([]session.ReplayEvent{{
+		if _, _, err := store.AppendReplayEvents([]session.ReplayEvent{{
 			StepID:  "legacy-step",
 			Kind:    "history_replaced",
 			Payload: json.RawMessage(`{"engine":"local","items":"not-an-array"}`),
@@ -618,7 +618,7 @@ func TestRestoreMessagesFailsOnMalformedHistoryReplacementPayload(t *testing.T) 
 
 	t.Run("legacy reviewer rollback payload is ignored", func(t *testing.T) {
 		store := mustCreateTestSession(t)
-		if _, err := store.AppendReplayEvents([]session.ReplayEvent{{
+		if _, _, err := store.AppendReplayEvents([]session.ReplayEvent{{
 			StepID:  "legacy-step",
 			Kind:    "history_replaced",
 			Payload: json.RawMessage(`{"engine":"reviewer_rollback","items":"not-an-array"}`),
@@ -633,6 +633,7 @@ func TestRestoreMessagesFailsOnMalformedHistoryReplacementPayload(t *testing.T) 
 }
 
 func TestReviewerSuggestionPresentation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name            string
 		verbose         bool

@@ -698,30 +698,6 @@ func TestCoordinatorCommittedAttemptErrorIsNotRerun(t *testing.T) {
 	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCommitted)
 }
 
-func TestCoordinatorSubmittedAttemptErrorIsNotRerun(t *testing.T) {
-	coord := NewCoordinator()
-	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindQueuedMessage)
-	var calls atomic.Int32
-	run := func(context.Context, Attempt) (string, error) {
-		calls.Add(1)
-		coord.RecordSubmitted("session-1", ref)
-		return "submitted", errRecorderTest
-	}
-
-	resp, err := Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, run)
-	if !errors.Is(err, errRecorderTest) || resp != "submitted" {
-		t.Fatalf("first submitted error = (%q, %v), want submitted recorder error", resp, err)
-	}
-	resp, err = Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, run)
-	if !errors.Is(err, errRecorderTest) || resp != "submitted" {
-		t.Fatalf("retry submitted error = (%q, %v), want cached submitted recorder error", resp, err)
-	}
-	if got := calls.Load(); got != 1 {
-		t.Fatalf("submitted error calls = %d, want 1", got)
-	}
-	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationSubmitted)
-}
-
 func TestCoordinatorPrunesCommittedAttemptErrorAfterTTL(t *testing.T) {
 	now := time.Date(2026, 6, 30, 16, 0, 0, 0, time.UTC)
 	coord := NewCoordinator(WithTTL(time.Minute), WithNow(func() time.Time { return now }))

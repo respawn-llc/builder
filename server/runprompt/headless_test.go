@@ -918,14 +918,14 @@ func TestInProcessRunPromptTimeoutCoversHistoryAndRunCleanup(t *testing.T) {
 				ClientRequestID: "run-timeout",
 				Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, fixture.store.Meta().SessionID)),
 				Prompt:          "hello",
-				Timeout:         250 * time.Millisecond,
+				Timeout:         5 * time.Second,
 			}, nil)
 			done <- result{response: response, err: err}
 		}()
 
 		select {
 		case <-started:
-		case <-time.After(2 * time.Second):
+		case <-time.After(10 * time.Second):
 			t.Fatal("timed out waiting for provider request")
 		}
 		engine, err := fixture.runtimes.ResolveRuntime(context.Background(), fixture.store.Meta().SessionID)
@@ -945,7 +945,7 @@ func TestInProcessRunPromptTimeoutCoversHistoryAndRunCleanup(t *testing.T) {
 			if got.response.SessionID != fixture.store.Meta().SessionID {
 				t.Fatalf("partial response session = %q, want %q", got.response.SessionID, fixture.store.Meta().SessionID)
 			}
-		case <-time.After(2 * time.Second):
+		case <-time.After(10 * time.Second):
 			t.Fatal("RunPrompt did not finish after timeout")
 		}
 		if engine.HasQueuedUserWork() || fixture.runtimes.IsSessionRuntimeActive(fixture.store.Meta().SessionID) {

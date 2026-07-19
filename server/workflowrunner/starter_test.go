@@ -193,10 +193,12 @@ func TestSchedulerRunsNewSessionWorkflowNodeWithStructuredOutput(t *testing.T) {
 func TestSchedulerRunsNoManagedWorktreeTargetFromSourceWorkspace(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"done"}`))
 	task := fixture.createStartedTaskWithoutManagedWorktree(t)
-	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
+	scheduler := fixture.scheduler(t)
+	if err := scheduler.Process(context.Background()); err != nil {
 		t.Fatalf("Process: %v", err)
 	}
 	fixture.waitForCompletedRun(t, task.ID)
+	fixture.waitForActiveCountZero(t, scheduler)
 	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("ListRuns = %+v, err %v", runs, err)
@@ -229,6 +231,7 @@ func TestSchedulerNamesFreshWorkflowSessionFromAcceptedTransition(t *testing.T) 
 		t.Fatalf("Process: %v", err)
 	}
 	fixture.waitForCompletedRun(t, task.ID)
+	fixture.waitForActiveCountZero(t, scheduler)
 
 	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil {
@@ -870,11 +873,13 @@ func TestStarterRestoresReusedSessionMetadataWhenSetupFailsAfterPlanning(t *test
 	disableCoderShell(t, &fixture)
 	fixture.rebuildStarter(t)
 	task := fixture.createStartedChainedTask(t, workflow.ContextModeContinueSession, "coder")
-	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
+	firstScheduler := fixture.scheduler(t)
+	if err := firstScheduler.Process(context.Background()); err != nil {
 		t.Fatalf("first Process: %v", err)
 	}
 	fixture.waitForRunCount(t, task.ID, 2)
 	fixture.waitForCompletedRunCount(t, task.ID, 1)
+	fixture.waitForActiveCountZero(t, firstScheduler)
 	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil {
 		t.Fatalf("ListRuns after first run: %v", err)
@@ -997,6 +1002,7 @@ func TestWorkflowRuntimeContinueSessionReusesSourceRunSession(t *testing.T) {
 	}
 	fixture.waitForRunCount(t, task.ID, 2)
 	fixture.waitForAllRunsCompleted(t, task.ID, 2)
+	fixture.waitForActiveCountZero(t, scheduler)
 
 	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil {
@@ -1036,6 +1042,7 @@ func TestWorkflowRuntimeContinueSessionKeepsLockedSetupAfterRoleConfigDrift(t *t
 		t.Fatalf("first Process: %v", err)
 	}
 	fixture.waitForRunCount(t, task.ID, 2)
+	fixture.waitForActiveCountZero(t, firstScheduler)
 	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil {
 		t.Fatalf("ListRuns after first run: %v", err)
@@ -1188,6 +1195,7 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 		t.Fatalf("second Process: %v", err)
 	}
 	fixture.waitForCompletedRunCount(t, task.ID, 2)
+	fixture.waitForActiveCountZero(t, scheduler)
 
 	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil {
@@ -1256,11 +1264,13 @@ func TestWorkflowRuntimeFanoutCompactAndContinueClonesUseBranchTransitionMetadat
 	task := fixture.createStartedTask(t)
 
 	ctx := context.Background()
-	if err := fixture.scheduler(t).Process(ctx); err != nil {
+	scheduler := fixture.scheduler(t)
+	if err := scheduler.Process(ctx); err != nil {
 		t.Fatalf("plan Process: %v", err)
 	}
 	fixture.waitForRunCount(t, task.ID, 3)
 	fixture.waitForCompletedRunCount(t, task.ID, 1)
+	fixture.waitForActiveCountZero(t, scheduler)
 
 	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil {
@@ -1287,6 +1297,9 @@ func TestWorkflowRuntimeFanoutCompactAndContinueClonesUseBranchTransitionMetadat
 	fixture.waitForCompletedRunCount(t, task.ID, 2)
 	startClaimedWorkflowRun(t, ctx, fixture, branchRecords["impl_b"])
 	fixture.waitForCompletedRunCount(t, task.ID, 3)
+	if err := fixture.starter.Close(); err != nil {
+		t.Fatalf("starter.Close: %v", err)
+	}
 
 	runs, err = fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil {
@@ -1555,10 +1568,12 @@ func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 		t.Fatalf("resumed runs = %+v, want one", resumedRuns)
 	}
 	resumed := resumedRuns[0]
-	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
+	scheduler := fixture.scheduler(t)
+	if err := scheduler.Process(context.Background()); err != nil {
 		t.Fatalf("Process resumed: %v", err)
 	}
 	fixture.waitForCompletedRun(t, task.ID)
+	fixture.waitForActiveCountZero(t, scheduler)
 	runs, err = fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil {
 		t.Fatalf("ListRuns resumed: %v", err)
@@ -1673,10 +1688,12 @@ func (e blockingStarterTaskWorktreeEnsurer) RestoreLockedTaskWorktree(_ context.
 func TestRemoveFanoutCloneDeletesOrphanedClone(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"done"}`))
 	task := fixture.createStartedTask(t)
-	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
+	scheduler := fixture.scheduler(t)
+	if err := scheduler.Process(context.Background()); err != nil {
 		t.Fatalf("Process: %v", err)
 	}
 	fixture.waitForCompletedRun(t, task.ID)
+	fixture.waitForActiveCountZero(t, scheduler)
 	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("ListRuns = %+v, err %v", runs, err)
