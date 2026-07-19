@@ -2186,7 +2186,7 @@ func (f *recordingInterruptedRunFinalizer) FinalizeTransition(_ context.Context,
 	f.transitions = append(f.transitions, result)
 }
 
-func (f *recordingInterruptedRunFinalizer) FinalizeInterruptedRun(_ context.Context, runID workflow.RunID) {
+func (f *recordingInterruptedRunFinalizer) PublishPendingInterruptedRun(_ context.Context, runID workflow.RunID) {
 	f.interruptedRuns = append(f.interruptedRuns, runID)
 }
 

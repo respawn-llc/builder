@@ -45,7 +45,7 @@ type SchedulerLogger interface {
 }
 
 type SchedulerInterruptedRunFinalizer interface {
-	FinalizeInterruptedRun(context.Context, workflow.RunID)
+	PublishPendingInterruptedRun(context.Context, workflow.RunID)
 }
 
 type SchedulerStartRunRequest struct {
@@ -352,7 +352,7 @@ func (s *SchedulerService) finalizeInterruptedRun(ctx context.Context, runID wor
 	if s == nil || s.attentionFinalizer == nil || runID == "" {
 		return
 	}
-	s.attentionFinalizer.FinalizeInterruptedRun(ctx, runID)
+	s.attentionFinalizer.PublishPendingInterruptedRun(ctx, runID)
 }
 
 func (s *SchedulerService) claimRunWithRetry(ctx context.Context, candidate workflowstore.RunnableRunRecord) (workflowstore.RunnableRunRecord, error) {

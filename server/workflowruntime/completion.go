@@ -166,7 +166,7 @@ type StoreController struct {
 }
 
 type interruptedRunAttentionFinalizer interface {
-	FinalizeInterruptedRun(context.Context, workflow.RunID)
+	PublishPendingInterruptedRun(context.Context, workflow.RunID)
 }
 
 func (c StoreController) CompleteWorkflowRun(ctx context.Context, req CompletionRequest) (CompletionResult, error) {
@@ -199,7 +199,7 @@ func (c StoreController) CompleteWorkflowRun(ctx context.Context, req Completion
 					continue
 				}
 				runFinalizeCtx, runCancel := context.WithTimeout(context.Background(), attentionFinalizationTimeout)
-				finalizer.FinalizeInterruptedRun(runFinalizeCtx, runID)
+				finalizer.PublishPendingInterruptedRun(runFinalizeCtx, runID)
 				runCancel()
 			}
 		}
@@ -240,7 +240,7 @@ func (c StoreController) RecordWorkflowProtocolViolation(ctx context.Context, re
 		if finalizer, ok := c.AttentionFinalizer.(interruptedRunAttentionFinalizer); ok {
 			finalizeCtx, cancel := context.WithTimeout(context.Background(), attentionFinalizationTimeout)
 			defer cancel()
-			finalizer.FinalizeInterruptedRun(finalizeCtx, req.RunID)
+			finalizer.PublishPendingInterruptedRun(finalizeCtx, req.RunID)
 		}
 	}
 	return ViolationResult{Count: result.Count, Interrupted: result.Interrupted}, nil

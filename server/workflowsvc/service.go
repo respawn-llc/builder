@@ -104,11 +104,11 @@ type pendingPromptResponder interface {
 
 type workflowAttentionFinalizer interface {
 	FinalizeTransition(context.Context, workflowattention.TransitionResult)
-	FinalizeInterruptedRun(context.Context, workflow.RunID)
+	PublishPendingInterruptedRun(context.Context, workflow.RunID)
 }
 
 type workflowInterruptedRunFinalizer interface {
-	ResolveInterruptedRun(context.Context, workflow.RunID)
+	ResolveActiveInterruptedRun(workflow.RunID)
 }
 
 const (
@@ -1205,7 +1205,7 @@ func (s *Service) finalizeWorkflowAttention(ctx context.Context, result workflow
 			continue
 		}
 		runFinalizeCtx, runCancel := workflowAttentionContext(ctx)
-		s.attentionFinalizer.FinalizeInterruptedRun(runFinalizeCtx, runID)
+		s.attentionFinalizer.PublishPendingInterruptedRun(runFinalizeCtx, runID)
 		runCancel()
 	}
 }
@@ -1310,9 +1310,7 @@ func (s *Service) resolveWorkflowInterruptedRunAttention(ctx context.Context, ru
 		if runID == "" {
 			continue
 		}
-		finalizeCtx, cancel := workflowAttentionContext(ctx)
-		finalizer.ResolveInterruptedRun(finalizeCtx, runID)
-		cancel()
+		finalizer.ResolveActiveInterruptedRun(runID)
 	}
 }
 

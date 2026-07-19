@@ -102,7 +102,7 @@ func (s *Starter) finalizeScriptCompletionAttention(ctx context.Context, result 
 				continue
 			}
 			runFinalizeCtx, runCancel := context.WithTimeout(context.WithoutCancel(ctx), scriptAttentionFinalizeLimit)
-			finalizer.FinalizeInterruptedRun(runFinalizeCtx, runID)
+			finalizer.PublishPendingInterruptedRun(runFinalizeCtx, runID)
 			runCancel()
 		}
 	}

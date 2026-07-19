@@ -13,6 +13,7 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/server/workflowattention"
 	"core/shared/serverapi"
 )
 
@@ -224,7 +225,7 @@ func (a *Attention) itemFromCandidate(ctx context.Context, row attentionCandidat
 		if err != nil {
 			return serverapi.WorkflowAttentionItem{}, false, err
 		}
-		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: "approval", ProjectID: row.projectID, WorkflowID: &workflowID, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, TaskTransitionID: transitionID, Message: "Approval required", OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
+		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: "approval", ProjectID: row.projectID, WorkflowID: &workflowID, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, TaskTransitionID: transitionID, Message: workflowattention.ApprovalRequiredMessage, OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
 	case "question":
 		taskID, err := requiredAttentionCandidateValue(row, "task_id", row.taskID)
 		if err != nil {
@@ -270,7 +271,7 @@ func (a *Attention) itemFromCandidate(ctx context.Context, row attentionCandidat
 			return serverapi.WorkflowAttentionItem{}, false, err
 		}
 		detailJSON := optionalAttentionCandidateValue(row.interruptionDetailJSON)
-		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: attentionKindInterruptedRun, ProjectID: row.projectID, WorkflowID: &workflowID, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, RunID: runID, SessionID: optionalAttentionCandidateValue(row.sessionID), Message: interruptedRunMessage(row.interruptionReason, detailJSON), DetailJSON: detailJSON, OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
+		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: attentionKindInterruptedRun, ProjectID: row.projectID, WorkflowID: &workflowID, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, RunID: runID, SessionID: optionalAttentionCandidateValue(row.sessionID), Message: workflowattention.InterruptedRunMessage(row.interruptionReason, detailJSON), DetailJSON: detailJSON, OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
 	case "validation_blocker":
 		snapshot, err := a.definitions.snapshot(ctx, row.workflowID)
 		if err != nil {

@@ -16,6 +16,7 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/server/workflowattention"
 	"core/server/workflowscript"
 	"core/server/workflowstore"
 	"core/server/worktree"
@@ -828,7 +829,7 @@ func (s *Service) activityItemsFromRows(task sqlitegen.TaskRecord, rows []taskAc
 			case "run_completed":
 				item.Summary = "Run completed"
 			case "run_interrupted":
-				item.Summary = interruptedRunMessage(metadata.OptionalString(run.InterruptionReason), run.InterruptionDetailJson)
+				item.Summary = workflowattention.InterruptedRunMessage(metadata.OptionalString(run.InterruptionReason), run.InterruptionDetailJson)
 				workflowID := task.WorkflowID
 				attention := serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + run.ID, Kind: attentionKindInterruptedRun, ProjectID: task.ProjectID, WorkflowID: &workflowID, TaskID: task.ID, TaskShortID: task.ShortID, TaskTitle: task.Title, RunID: run.ID, SessionID: run.SessionID.String, Message: item.Summary, DetailJSON: run.InterruptionDetailJson, OccurredAtUnixMs: run.InterruptedAtUnixMs.Int64}
 				item.Attention = &attention
@@ -954,31 +955,6 @@ func parseActivityPageToken(token string) (activityPageCursor, error) {
 
 func activityPageToken(item serverapi.WorkflowTaskActivityItem) string {
 	return strconv.FormatInt(item.OccurredAtUnixMs, 10) + "|" + base64.RawURLEncoding.EncodeToString([]byte(item.ActivityID))
-}
-
-func interruptedRunMessage(reason *string, detailJSON string) string {
-	message := "Run interrupted"
-	if reason != nil && strings.TrimSpace(*reason) != "" {
-		trimmedReason := strings.TrimSpace(*reason)
-		message += ": " + trimmedReason
-	}
-	if detail := interruptionErrorDetail(detailJSON); detail != "" {
-		message += ": " + detail
-	}
-	return message
-}
-
-func interruptionErrorDetail(detailJSON string) string {
-	if strings.TrimSpace(detailJSON) == "" {
-		return ""
-	}
-	var detail struct {
-		Error string `json:"error"`
-	}
-	if err := json.Unmarshal([]byte(detailJSON), &detail); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(detail.Error)
 }
 
 func bodyPreview(body string) string {

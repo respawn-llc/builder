@@ -198,7 +198,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: view: %w", err)
 	}
-	workflowAttentionFinalizer := workflowattention.NewFinalizer(workflowApprovalProjection{store: workflowStore, view: workflowViewService, roleResolver: workflowRoleResolver}, attentionBroker)
+	workflowAttentionFinalizer := workflowattention.NewFinalizer(workflowApprovalProjection{store: workflowStore}, attentionBroker)
 	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeSupport.Background, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, Worktrees: runtimeTaskWorktreeRestorer{service: worktreeService}, SessionRuntime: sessionRuntimeService, AttentionFinalizer: workflowAttentionFinalizer})
 	if err != nil {
 		cleanupNewFailure()
@@ -377,121 +377,62 @@ func (r runtimeTaskWorktreeRestorer) RestoreLockedTaskWorktree(ctx context.Conte
 }
 
 type workflowApprovalProjection struct {
-	store        *workflowstore.Store
-	view         *workflowview.Service
-	roleResolver workflow.RoleResolver
+	store *workflowstore.Store
 }
 
-func (p workflowApprovalProjection) ApprovalProjection(ctx context.Context, transitionID workflow.TransitionID) (workflowattention.ApprovalProjection, bool, error) {
-	if p.store == nil || p.view == nil {
+func (p workflowApprovalProjection) PendingApprovalProjection(ctx context.Context, transitionID workflow.TransitionID) (workflowattention.ApprovalProjection, bool, error) {
+	if p.store == nil {
 		return workflowattention.ApprovalProjection{}, false, nil
 	}
-	taskID, _, _, err := p.store.TaskIdentityForTransition(ctx, transitionID)
+	projection, ok, err := p.store.PendingApprovalTransitionProjection(ctx, transitionID)
 	if err != nil {
 		return workflowattention.ApprovalProjection{}, false, err
 	}
-	attention, err := p.view.ListTaskAttention(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: taskID}, p.roleResolver)
-	if err != nil {
-		return workflowattention.ApprovalProjection{}, false, err
-	}
-	for _, item := range attention.Items {
-		if item.Kind != "approval" || item.TaskTransitionID != string(transitionID) {
-			continue
-		}
-		if strings.TrimSpace(item.RunID) == "" || strings.TrimSpace(item.SessionID) == "" {
-			break
-		}
-		if item.WorkflowID == nil {
-			break
-		}
-		return workflowattention.ApprovalProjection{
-			TransitionID:     transitionID,
-			ProjectID:        item.ProjectID,
-			WorkflowID:       *item.WorkflowID,
-			TaskID:           workflow.TaskID(item.TaskID),
-			TaskShortID:      item.TaskShortID,
-			TaskTitle:        item.TaskTitle,
-			RunID:            item.RunID,
-			SessionID:        item.SessionID,
-			Message:          item.Message,
-			OccurredAtUnixMs: item.OccurredAtUnixMs,
-		}, true, nil
-	}
-	transition, err := p.store.ApprovalTransitionProjection(ctx, transitionID)
-	if err != nil {
-		return workflowattention.ApprovalProjection{}, false, err
+	if !ok {
+		return workflowattention.ApprovalProjection{}, false, nil
 	}
 	return workflowattention.ApprovalProjection{
-		TransitionID:     transition.TransitionID,
-		ProjectID:        transition.ProjectID,
-		WorkflowID:       transition.WorkflowID,
-		TaskID:           transition.TaskID,
-		TaskShortID:      transition.TaskShortID,
-		TaskTitle:        transition.TaskTitle,
-		RunID:            string(transition.SourceRunID),
-		SessionID:        transition.SessionID,
-		Message:          "action required",
-		OccurredAtUnixMs: transition.OccurredAtUnixMs,
+		TransitionID:     projection.TransitionID,
+		ProjectID:        projection.ProjectID,
+		WorkflowID:       projection.WorkflowID,
+		TaskID:           projection.TaskID,
+		TaskShortID:      projection.TaskShortID,
+		TaskTitle:        projection.TaskTitle,
+		RunID:            string(projection.SourceRunID),
+		SessionID:        projection.SessionID,
+		Message:          workflowattention.ApprovalRequiredMessage,
+		OccurredAtUnixMs: projection.OccurredAtUnixMs,
 	}, true, nil
 }
 
-func (p workflowApprovalProjection) InterruptedRunProjection(ctx context.Context, runID workflow.RunID) (workflowattention.InterruptedRunProjection, bool, error) {
-	if p.store == nil || p.view == nil || runID == "" {
+func (p workflowApprovalProjection) PendingInterruptedRunProjection(ctx context.Context, runID workflow.RunID) (workflowattention.InterruptedRunProjection, bool, error) {
+	if p.store == nil || runID == "" {
 		return workflowattention.InterruptedRunProjection{}, false, nil
 	}
-	run, err := p.store.GetRun(ctx, runID)
+	projection, ok, err := p.store.PendingInterruptedRunAttentionProjection(ctx, runID)
 	if err != nil {
 		return workflowattention.InterruptedRunProjection{}, false, err
 	}
-	if run.InterruptionReason == nil || run.InterruptedAt == nil || !workflowattention.ShouldNotifyInterruptedRun(*run.InterruptionReason) {
+	if !ok {
 		return workflowattention.InterruptedRunProjection{}, false, nil
 	}
-	if projection, ok, err := p.interruptedRunAttentionProjection(ctx, run); err != nil || ok {
-		return projection, ok, err
-	}
-	input, err := p.store.GetRunStartContext(ctx, runID)
-	if err != nil {
-		return workflowattention.InterruptedRunProjection{}, false, err
+	detailJSON := ""
+	if projection.InterruptionDetailJSON != nil {
+		detailJSON = *projection.InterruptionDetailJSON
 	}
 	return workflowattention.InterruptedRunProjection{
-		ProjectID:        input.Task.ProjectID,
-		WorkflowID:       string(input.Task.WorkflowID),
-		TaskID:           input.Task.ID,
-		TaskShortID:      input.Task.ShortID,
-		TaskTitle:        input.Task.Title,
-		RunID:            run.ID,
-		SessionID:        run.SessionID,
-		Reason:           *run.InterruptionReason,
-		OccurredAtUnixMs: *run.InterruptedAt,
+		ProjectID:        projection.ProjectID,
+		WorkflowID:       projection.WorkflowID,
+		TaskID:           projection.TaskID,
+		TaskShortID:      projection.TaskShortID,
+		TaskTitle:        projection.TaskTitle,
+		RunID:            projection.RunID,
+		SessionID:        projection.SessionID,
+		Message:          workflowattention.InterruptedRunMessage(&projection.InterruptionReason, detailJSON),
+		Reason:           projection.InterruptionReason,
+		DetailJSON:       detailJSON,
+		OccurredAtUnixMs: projection.OccurredAtUnixMs,
 	}, true, nil
-}
-
-func (p workflowApprovalProjection) interruptedRunAttentionProjection(ctx context.Context, run workflowstore.RunRecord) (workflowattention.InterruptedRunProjection, bool, error) {
-	attention, err := p.view.ListTaskAttention(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(run.TaskID)}, p.roleResolver)
-	if err != nil {
-		return workflowattention.InterruptedRunProjection{}, false, err
-	}
-	for _, item := range attention.Items {
-		if item.Kind != "interrupted_run" || item.RunID != string(run.ID) {
-			continue
-		}
-		if item.WorkflowID == nil {
-			continue
-		}
-		return workflowattention.InterruptedRunProjection{
-			ProjectID:        item.ProjectID,
-			WorkflowID:       *item.WorkflowID,
-			TaskID:           workflow.TaskID(item.TaskID),
-			TaskShortID:      item.TaskShortID,
-			TaskTitle:        item.TaskTitle,
-			RunID:            run.ID,
-			SessionID:        item.SessionID,
-			Message:          item.Message,
-			Reason:           *run.InterruptionReason,
-			OccurredAtUnixMs: item.OccurredAtUnixMs,
-		}, true, nil
-	}
-	return workflowattention.InterruptedRunProjection{}, false, nil
 }
 
 type taskWorktreeDeleter struct {
