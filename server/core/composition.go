@@ -415,8 +415,13 @@ func (r runtimeTaskWorktreeRestorer) RestoreLockedTaskWorktree(ctx context.Conte
 	return err
 }
 
+type workflowAttentionProjectionStore interface {
+	PendingApprovalTransitionProjection(context.Context, workflow.TransitionID) (workflowstore.ApprovalTransitionProjection, bool, error)
+	PendingInterruptedRunAttentionProjection(context.Context, workflow.RunID) (workflowstore.InterruptedRunAttentionProjection, bool, error)
+}
+
 type workflowApprovalProjection struct {
-	store *workflowstore.Store
+	store workflowAttentionProjectionStore
 }
 
 func (p workflowApprovalProjection) PendingApprovalProjection(ctx context.Context, transitionID workflow.TransitionID) (workflowattention.ApprovalProjection, bool, error) {
@@ -430,18 +435,7 @@ func (p workflowApprovalProjection) PendingApprovalProjection(ctx context.Contex
 	if !ok {
 		return workflowattention.ApprovalProjection{}, false, nil
 	}
-	return workflowattention.ApprovalProjection{
-		TransitionID:     projection.TransitionID,
-		ProjectID:        projection.ProjectID,
-		WorkflowID:       projection.WorkflowID,
-		TaskID:           projection.TaskID,
-		TaskShortID:      projection.TaskShortID,
-		TaskTitle:        projection.TaskTitle,
-		RunID:            string(projection.SourceRunID),
-		SessionID:        projection.SessionID,
-		Message:          workflowattention.ApprovalRequiredMessage,
-		OccurredAtUnixMs: projection.OccurredAtUnixMs,
-	}, true, nil
+	return workflowattention.ApprovalProjectionFromStore(projection), true, nil
 }
 
 func (p workflowApprovalProjection) PendingInterruptedRunProjection(ctx context.Context, runID workflow.RunID) (workflowattention.InterruptedRunProjection, bool, error) {
@@ -455,23 +449,7 @@ func (p workflowApprovalProjection) PendingInterruptedRunProjection(ctx context.
 	if !ok {
 		return workflowattention.InterruptedRunProjection{}, false, nil
 	}
-	detailJSON := ""
-	if projection.InterruptionDetailJSON != nil {
-		detailJSON = *projection.InterruptionDetailJSON
-	}
-	return workflowattention.InterruptedRunProjection{
-		ProjectID:        projection.ProjectID,
-		WorkflowID:       projection.WorkflowID,
-		TaskID:           projection.TaskID,
-		TaskShortID:      projection.TaskShortID,
-		TaskTitle:        projection.TaskTitle,
-		RunID:            projection.RunID,
-		SessionID:        projection.SessionID,
-		Message:          workflowattention.InterruptedRunMessage(&projection.InterruptionReason, detailJSON),
-		Reason:           projection.InterruptionReason,
-		DetailJSON:       detailJSON,
-		OccurredAtUnixMs: projection.OccurredAtUnixMs,
-	}, true, nil
+	return workflowattention.InterruptedRunProjectionFromStore(projection), true, nil
 }
 
 type taskWorktreeDeleter struct {
