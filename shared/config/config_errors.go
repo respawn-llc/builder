@@ -107,6 +107,18 @@ func (e *SettingsKeyTypeError) Error() string {
 	return fmt.Sprintf("invalid settings key %s: expected %s", e.Key, e.ExpectedType)
 }
 
+// SettingsFileLayerError reports a recognized setting placed in a config file
+// layer where that setting is not allowed.
+type SettingsFileLayerError struct {
+	Key          string
+	SettingsPath string
+	Layer        string
+}
+
+func (e *SettingsFileLayerError) Error() string {
+	return fmt.Sprintf("settings key %s is not allowed in %s config %s", e.Key, e.Layer, e.SettingsPath)
+}
+
 // DuplicateSettingsKeysError reports two settings keys that collapse to the same
 // normalized form. The original keys and normalized form are exposed.
 type DuplicateSettingsKeysError struct {
