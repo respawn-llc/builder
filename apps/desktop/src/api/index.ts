@@ -67,6 +67,7 @@ export type {
   SelectedWorkflowBoard,
   ServerReadiness,
   TaskComment,
+  TaskAttention,
   TaskDetail,
   TaskApproveApplied,
   TaskApproveResponse,

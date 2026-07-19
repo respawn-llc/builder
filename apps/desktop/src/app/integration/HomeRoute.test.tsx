@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { vi } from "vitest";
 import { z } from "zod";
 
@@ -123,6 +123,7 @@ describe("HomeRoute", () => {
       routes: [
         attentionListRoute(attentionItem({ kind: "question", message: "Pick answer" })),
         { method: "workflow.task.get", result: taskDetailResponse },
+        { method: "workflow.task.attention.list", result: taskAttentionResponse([]) },
         { method: "workflow.task.activity.list", result: emptyActivityResponse },
       ],
     });
@@ -136,8 +137,9 @@ describe("HomeRoute", () => {
     expect(services.transport.calls.some((call) => call.method === "workflow.board.get")).toBe(false);
   });
 
-  it("scrolls the Home task sidebar to the first question for question Inbox cards", async () => {
+  it("renders core task detail before deferred attention and focuses the requested question when it arrives", async () => {
     const scrollIntoView = vi.fn();
+    const attention = deferred<ReturnType<typeof taskAttentionResponse>>();
     const originalScrollIntoView = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
     Object.defineProperty(Element.prototype, "scrollIntoView", {
       configurable: true,
@@ -148,6 +150,10 @@ describe("HomeRoute", () => {
         routes: [
           attentionListRoute(attentionItem({ kind: "question", message: "Pick answer" })),
           { method: "workflow.task.get", result: taskDetailResponseWithQuestion },
+          {
+            method: "workflow.task.attention.list",
+            handler: () => attention.promise,
+          },
           { method: "workflow.task.activity.list", result: emptyActivityResponse },
           { method: "ask.listPendingBySession", result: { Asks: [] } },
         ],
@@ -156,6 +162,16 @@ describe("HomeRoute", () => {
       fireEvent.click(await screen.findByTestId("attention-row"));
 
       const sidebar = await screen.findByRole("complementary", { name: "Task" });
+      expect(await within(sidebar).findByDisplayValue("Resolve blocker")).toBeInTheDocument();
+      expect(within(sidebar).queryByRole("region", { name: "Question" })).not.toBeInTheDocument();
+
+      await act(async () => {
+        attention.resolve(
+          taskAttentionResponse([attentionItem({ kind: "question", message: "Pick answer" })]),
+        );
+        await attention.promise;
+      });
+
       expect(await within(sidebar).findByRole("region", { name: "Question" })).toBeInTheDocument();
       await waitFor(() => {
         expect(scrollIntoView).toHaveBeenCalledWith({ block: "start", behavior: "auto" });
@@ -168,6 +184,45 @@ describe("HomeRoute", () => {
         Reflect.deleteProperty(Element.prototype, "scrollIntoView");
       }
     }
+  });
+
+  it("keeps core task detail rendered when attention fails and retries the local read", async () => {
+    let attentionAvailable = false;
+    const services = mountHome({
+      routes: [
+        attentionListRoute(attentionItem({ kind: "question", message: "Pick answer" })),
+        { method: "workflow.task.get", result: taskDetailResponseWithQuestion },
+        {
+          method: "workflow.task.attention.list",
+          handler: () => {
+            if (!attentionAvailable) {
+              throw new Error("Task attention is temporarily unavailable.");
+            }
+            return taskAttentionResponse([attentionItem({ kind: "question", message: "Pick answer" })]);
+          },
+        },
+        { method: "workflow.task.activity.list", result: emptyActivityResponse },
+        { method: "ask.listPendingBySession", result: { Asks: [] } },
+      ],
+    });
+
+    fireEvent.click(await screen.findByTestId("attention-row"));
+
+    const sidebar = await screen.findByRole("complementary", { name: "Task" });
+    expect(await within(sidebar).findByDisplayValue("Resolve blocker")).toBeInTheDocument();
+    const retry = await within(sidebar).findByRole("button", { name: "Try again" });
+    const attentionCallsBeforeRetry = services.transport.calls.filter(
+      (call) => call.method === "workflow.task.attention.list",
+    ).length;
+    attentionAvailable = true;
+    fireEvent.click(retry);
+
+    expect(await within(sidebar).findByRole("region", { name: "Question" })).toBeInTheDocument();
+    expect(within(sidebar).getByDisplayValue("Resolve blocker")).toBeInTheDocument();
+    expect(services.transport.calls.filter((call) => call.method === "workflow.task.get")).toHaveLength(1);
+    expect(
+      services.transport.calls.filter((call) => call.method === "workflow.task.attention.list").length,
+    ).toBeGreaterThan(attentionCallsBeforeRetry);
   });
 
   it("opens workflow-only Inbox cards in the workflow editor", async () => {
@@ -242,6 +297,26 @@ function attentionListRoute(...items: readonly ReturnType<typeof attentionItem>[
       next_page_token: "",
     },
   } as const;
+}
+
+function taskAttentionResponse(items: readonly ReturnType<typeof attentionItem>[]) {
+  return {
+    generated_at_unix_ms: 1,
+    items,
+  };
+}
+
+function deferred<T>(): Readonly<{ promise: Promise<T>; resolve(value: T): void }> {
+  let resolvePromise: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve(value: T): void {
+      resolvePromise?.(value);
+    },
+  };
 }
 
 function createHomeRevisitServices() {
@@ -414,7 +489,7 @@ const taskDetailResponse = {
       can_cancel: true,
       manual_move_target_node_ids: [],
     },
-    attention: [],
+    attention_count: 0,
     runs: [],
     transitions: [],
     comments: [],
@@ -424,7 +499,7 @@ const taskDetailResponse = {
 const taskDetailResponseWithQuestion = {
   task: {
     ...taskDetailResponse.task,
-    attention: [attentionItem({ kind: "question", message: "Pick answer" })],
+    attention_count: 1,
   },
 };
 

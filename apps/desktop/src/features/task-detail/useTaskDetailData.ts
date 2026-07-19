@@ -34,6 +34,7 @@ export function useTaskDetailLiveRefresh(taskID: string, projectID: string, enab
         }
         void Promise.all([
           queryClient.invalidateQueries({ queryKey: queryKeys.task(taskID), refetchType: "active" }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.taskAttention(taskID), refetchType: "active" }),
           queryClient.invalidateQueries({ queryKey: queryKeys.activity(taskID), refetchType: "active" }),
           queryClient.invalidateQueries({ queryKey: queryKeys.comments(taskID), refetchType: "active" }),
           queryClient.invalidateQueries({ queryKey: queryKeys.allPendingAsks, refetchType: "active" }),
@@ -59,6 +60,15 @@ export function useTaskDetail(taskID: string, enabled: boolean) {
   return useQuery({
     queryKey: queryKeys.task(taskID),
     queryFn: async () => api.getTask(taskID),
+    enabled: enabled && taskID.length > 0,
+  });
+}
+
+export function useTaskAttention(taskID: string, enabled: boolean) {
+  const { api } = useAppServices();
+  return useQuery({
+    queryKey: queryKeys.taskAttention(taskID),
+    queryFn: async () => api.listTaskAttention(taskID),
     enabled: enabled && taskID.length > 0,
   });
 }
@@ -107,6 +117,7 @@ export function useTaskMutations(taskID: string, onChanged?: () => void) {
   const queryClient = useQueryClient();
   async function refresh(): Promise<void> {
     await queryClient.invalidateQueries({ queryKey: queryKeys.task(taskID) });
+    await queryClient.invalidateQueries({ queryKey: queryKeys.taskAttention(taskID) });
     await queryClient.invalidateQueries({ queryKey: queryKeys.activity(taskID) });
     await queryClient.invalidateQueries({ queryKey: queryKeys.comments(taskID) });
     await queryClient.invalidateQueries({ queryKey: queryKeys.projects });

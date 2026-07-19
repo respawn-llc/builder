@@ -41,6 +41,7 @@ import type {
   ProjectMutationResponse,
   ProjectPage,
   ServerReadiness,
+  TaskAttention,
   TaskComment,
   TaskDetail,
   TaskApproveResponse,
@@ -82,6 +83,7 @@ import {
   projectWorkflowLinksSchema,
   taskCreateResponseSchema,
   taskDetailSchema,
+  taskAttentionSchema,
   taskUpdateResponseSchema,
   workflowBoardSchema,
 } from "./schemas/workflowBoard";
@@ -467,18 +469,25 @@ export class ApiClient implements ApiService {
     );
   }
 
-  async listAttention(projectID: string, pageToken: string): Promise<AttentionPage> {
+  async listAttention(pageToken: string): Promise<AttentionPage> {
     return parse(
       "workflow.attention.list",
       attentionPageSchema,
       await this.#transport.call(
         "workflow.attention.list",
         compactJsonObject({
-          project_id: projectID.length > 0 ? projectID : undefined,
           page_size: 40,
           page_token: pageToken,
         }),
       ),
+    );
+  }
+
+  async listTaskAttention(taskID: string): Promise<TaskAttention> {
+    return parse(
+      "workflow.task.attention.list",
+      taskAttentionSchema,
+      await this.#transport.call("workflow.task.attention.list", { task_id: taskID }),
     );
   }
 

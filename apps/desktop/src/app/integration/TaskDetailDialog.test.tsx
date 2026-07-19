@@ -18,13 +18,17 @@ import {
   callParams,
   commentAddResponse,
   commentListResponse,
+  emptyTaskAttentionResponse,
   firstCommentListResponse,
+  getCallCount,
+  interruptedTaskAttentionResponse,
   isJsonObject,
   pendingAskResponse,
   questionAttention,
   secondCommentListResponse,
   taskDetailNoInboxResponse,
   taskDetailResponse,
+  taskAttentionResponse,
   taskDetailResponseWithInterruptedScriptRun,
   taskDetailResponseWithNewerActiveRun,
   taskDetailResponseWithScriptRun,
@@ -51,6 +55,7 @@ vi.mock("@/ui", async (importOriginal) => {
 });
 
 type TaskDetailFixtureOptions = Readonly<{
+  attention?: JsonValue;
   asks?: unknown;
   comments?: unknown;
   nativeBridge?: NativeBridge | undefined;
@@ -59,14 +64,22 @@ type TaskDetailFixtureOptions = Readonly<{
 }>;
 
 function taskDetailFixture(
-  task: unknown,
-  { asks, comments, nativeBridge, path = "/tasks/task-1", routes = [] }: TaskDetailFixtureOptions = {},
+  task: JsonValue,
+  {
+    asks,
+    attention = taskAttentionFixture(task),
+    comments,
+    nativeBridge,
+    path = "/tasks/task-1",
+    routes = [],
+  }: TaskDetailFixtureOptions = {},
 ): ReturnType<typeof createTestServices> {
   window.history.pushState(null, "", path);
   const services = createTestServices(
     [
       ...startupRoutes,
       { method: "workflow.task.get", result: task },
+      { method: "workflow.task.attention.list", result: attention },
       ...(comments === undefined ? [] : [{ method: "workflow.task.comment.list", result: comments }]),
       { method: "workflow.task.activity.list", result: activityResponse },
       ...(asks === undefined ? [] : [{ method: "ask.listPendingBySession", result: asks }]),
@@ -76,6 +89,16 @@ function taskDetailFixture(
   );
   render(<App services={services} />);
   return services;
+}
+
+function taskAttentionFixture(task: JsonValue): JsonValue {
+  if (task === taskDetailResponseWithInterruptedScriptRun) {
+    return interruptedTaskAttentionResponse;
+  }
+  if (isJsonObject(task) && isJsonObject(task.task) && task.task.attention_count === 0) {
+    return emptyTaskAttentionResponse;
+  }
+  return taskAttentionResponse;
 }
 
 describe("TaskDetailSurface", () => {
@@ -177,6 +200,55 @@ describe("TaskDetailSurface", () => {
     await waitFor(() => {
       expect(copied).toEqual(["kent --session=session-2"]);
     });
+  });
+
+  it("refreshes core detail and task attention after approval without collapsing the rendered task", async () => {
+    const services = taskDetailFixture(taskDetailResponse, {
+      routes: [
+        {
+          method: "workflow.task.get",
+          handler: (_params, callIndex) =>
+            callIndex === 0
+              ? taskDetailResponse
+              : {
+                  task: {
+                    ...taskDetailResponse.task,
+                    attention_count: 0,
+                    transitions: [],
+                  },
+                },
+        },
+        {
+          method: "workflow.task.attention.list",
+          handler: (_params, callIndex) =>
+            callIndex === 0 ? taskAttentionResponse : emptyTaskAttentionResponse,
+        },
+        {
+          method: "workflow.task.approve",
+          result: {
+            outcome: "applied",
+            applied: {
+              transition_id: "transition-1",
+              task_id: "task-1",
+              state: "approved",
+            },
+          },
+        },
+      ],
+    });
+
+    const approval = await screen.findByRole("region", { name: "Approval" });
+    fireEvent.click(within(approval).getByRole("button", { name: "Approve" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("region", { name: "Approval" })).not.toBeInTheDocument();
+      expect(getCallCount(services.transport.calls, "workflow.task.get")).toBeGreaterThanOrEqual(2);
+      expect(getCallCount(services.transport.calls, "workflow.task.attention.list")).toBeGreaterThanOrEqual(
+        2,
+      );
+    });
+    expect(screen.getByDisplayValue("Resolve blocker")).toBeInTheDocument();
+    expect(screen.queryByTestId("task-detail-island-stack")).toBeInTheDocument();
   });
 
   it("continues the exact pending approval with a task-local execution target", async () => {
@@ -714,22 +786,21 @@ describe("TaskDetailSurface", () => {
   });
 
   it("renders task question options from attention when pending asks are not available", async () => {
-    const detailWithAttentionOptions = {
-      task: {
-        ...taskDetailResponse.task,
-        attention: taskDetailResponse.task.attention.map((item) =>
-          item.kind === "question"
-            ? {
-                ...item,
-                message: "Choose snack",
-                recommended_option_index: 2,
-                suggestions: ["Trail mix", "Dark chocolate", "Pistachios"],
-              }
-            : item,
-        ),
-      },
+    const attentionWithOptions = {
+      ...taskAttentionResponse,
+      items: taskAttentionResponse.items.map((item) =>
+        item.kind === "question"
+          ? {
+              ...item,
+              message: "Choose snack",
+              recommended_option_index: 2,
+              suggestions: ["Trail mix", "Dark chocolate", "Pistachios"],
+            }
+          : item,
+      ),
     };
-    taskDetailFixture(detailWithAttentionOptions, {
+    taskDetailFixture(taskDetailResponse, {
+      attention: attentionWithOptions,
       asks: { Asks: [] },
     });
 
@@ -740,26 +811,25 @@ describe("TaskDetailSurface", () => {
   });
 
   it("renders and submits runtime approval prompts through the task question path", async () => {
-    const detailWithRuntimeApprovalQuestion = {
-      task: {
-        ...taskDetailResponse.task,
-        attention: taskDetailResponse.task.attention.map((item) =>
-          item.kind === "question"
-            ? {
-                ...item,
-                message: "Approve protected path?",
-                question: {
-                  kind: "approval",
-                  approval_decisions: ["allow_once", "allow_session", "deny"],
-                },
-                recommended_option_index: 0,
-                suggestions: [],
-              }
-            : item,
-        ),
-      },
+    const attentionWithRuntimeApprovalQuestion = {
+      ...taskAttentionResponse,
+      items: taskAttentionResponse.items.map((item) =>
+        item.kind === "question"
+          ? {
+              ...item,
+              message: "Approve protected path?",
+              question: {
+                kind: "approval",
+                approval_decisions: ["allow_once", "allow_session", "deny"],
+              },
+              recommended_option_index: 0,
+              suggestions: [],
+            }
+          : item,
+      ),
     };
-    const services = taskDetailFixture(detailWithRuntimeApprovalQuestion, {
+    const services = taskDetailFixture(taskDetailResponse, {
+      attention: attentionWithRuntimeApprovalQuestion,
       routes: [{ method: "workflow.task.question.answer", result: {} }],
     });
 
@@ -791,24 +861,23 @@ describe("TaskDetailSurface", () => {
     const scrollTargets: HTMLElement[] = [];
     const restoreScrollIntoView = installScrollIntoViewSpy(scrollTargets);
     const native = nativeBridgeWithActivation();
-    const detailWithQuestionBatch = {
-      task: {
-        ...taskDetailResponse.task,
-        attention: [
-          {
-            ...questionAttention,
-            id: "attention-ask-1",
-            ask_id: "ask-1",
-          },
-          {
-            ...questionAttention,
-            id: "attention-ask-2",
-            ask_id: "ask-2",
-          },
-        ],
-      },
+    const attentionWithQuestionBatch = {
+      items: [
+        {
+          ...questionAttention,
+          id: "attention-ask-1",
+          ask_id: "ask-1",
+        },
+        {
+          ...questionAttention,
+          id: "attention-ask-2",
+          ask_id: "ask-2",
+        },
+      ],
+      generated_at_unix_ms: 3,
     };
-    const services = taskDetailFixture(detailWithQuestionBatch, {
+    const services = taskDetailFixture(taskDetailResponse, {
+      attention: attentionWithQuestionBatch,
       asks: { Asks: [] },
       nativeBridge: native.bridge,
       path: "/",
@@ -940,9 +1009,7 @@ function propertyDefinitions(region: HTMLElement): HTMLElement[] {
 }
 
 function definitionsWithExactValue(definitions: readonly HTMLElement[], value: string): HTMLElement[] {
-  return definitions.filter(
-    (definition) => within(definition).queryByText(value, { exact: true }) !== null,
-  );
+  return definitions.filter((definition) => within(definition).queryByText(value, { exact: true }) !== null);
 }
 
 function definitionWithExactValue(definitions: readonly HTMLElement[], value: string): HTMLElement {

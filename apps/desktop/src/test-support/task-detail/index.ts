@@ -88,28 +88,7 @@ export const taskDetailResponse = {
       attention_types: ["question", "approval"],
     },
     actions: taskActions,
-    attention: [
-      {
-        ...attentionBase,
-        id: "attention-question",
-        kind: "question",
-        run_id: "run-1",
-        session_id: "session-1",
-        ask_id: "ask-1",
-        task_transition_id: "",
-        message: "",
-      },
-      {
-        ...attentionBase,
-        id: "attention-approval",
-        kind: "approval",
-        run_id: "run-1",
-        session_id: "session-1",
-        ask_id: "",
-        task_transition_id: "transition-1",
-        message: "Approve transition",
-      },
-    ],
+    attention_count: 2,
     runs: [
       {
         id: "run-1",
@@ -164,6 +143,37 @@ export const taskDetailResponse = {
   },
 };
 
+export const taskAttentionResponse = {
+  items: [
+    {
+      ...attentionBase,
+      id: "attention-question",
+      kind: "question",
+      run_id: "run-1",
+      session_id: "session-1",
+      ask_id: "ask-1",
+      task_transition_id: "",
+      message: "",
+    },
+    {
+      ...attentionBase,
+      id: "attention-approval",
+      kind: "approval",
+      run_id: "run-1",
+      session_id: "session-1",
+      ask_id: "",
+      task_transition_id: "transition-1",
+      message: "Approve transition",
+    },
+  ],
+  generated_at_unix_ms: 3,
+};
+
+export const emptyTaskAttentionResponse = {
+  items: [],
+  generated_at_unix_ms: 3,
+};
+
 export async function createTaskDetailFixture(): Promise<TaskDetail> {
   const client = new ApiClient(
     new FakeRpcTransport([{ method: "workflow.task.get", result: taskDetailResponse }]),
@@ -189,7 +199,7 @@ export const taskDetailResponseWithNewerActiveRun = {
 export const taskDetailNoInboxResponse = {
   task: {
     ...taskDetailResponse.task,
-    attention: [],
+    attention_count: 0,
     transitions: [],
   },
 };
@@ -226,20 +236,25 @@ export const taskDetailResponseWithInterruptedScriptRun = {
   task: {
     ...taskDetailResponseWithScriptRun.task,
     actions: { ...taskActions, can_interrupt: false, can_resume: true },
-    attention: [
-      {
-        ...attentionBase,
-        id: "attention-interrupted",
-        kind: "interrupted_run",
-        run_id: "run-script",
-        session_id: "",
-        ask_id: "",
-        task_transition_id: "",
-        message: "Script failed",
-        detail_json: '{"kind":"script_failure","stderr":"permission denied"}',
-      },
-    ],
+    attention_count: 1,
   },
+};
+
+export const interruptedTaskAttentionResponse = {
+  items: [
+    {
+      ...attentionBase,
+      id: "attention-interrupted",
+      kind: "interrupted_run",
+      run_id: "run-script",
+      session_id: "",
+      ask_id: "",
+      task_transition_id: "",
+      message: "Script failed",
+      detail_json: '{"kind":"script_failure","stderr":"permission denied"}',
+    },
+  ],
+  generated_at_unix_ms: 3,
 };
 
 export const questionAttention = {
