@@ -214,16 +214,24 @@ func (s *Service) deleteTarget(
 		if err != nil {
 			return nil, nil, err
 		}
-		target := syncedWorktree{record: record, git: gitWorktreeFromFacts(entry.Registered.Git)}
+		gitEntry, err := gitWorktreeFromFacts(entry.Registered.Git)
+		if err != nil {
+			return nil, nil, err
+		}
+		target := syncedWorktree{record: record, git: gitEntry}
 		return &target, &record, nil
 	case serverapi.WorktreeTopologyVariantExternal:
+		gitEntry, err := gitWorktreeFromFacts(entry.External.Git)
+		if err != nil {
+			return nil, nil, err
+		}
 		target := syncedWorktree{
 			record: metadata.WorktreeRecord{
 				WorkspaceID:   workspaceCtx.workspaceID,
 				CanonicalRoot: entry.External.Git.CanonicalRoot,
 				DisplayName:   filepath.Base(entry.External.Git.CanonicalRoot),
 			},
-			git: gitWorktreeFromFacts(entry.External.Git),
+			git: gitEntry,
 		}
 		return &target, nil, nil
 	case serverapi.WorktreeTopologyVariantMissing:
@@ -376,8 +384,8 @@ func (s *Service) cleanupDeletedBranch(
 	if err != nil {
 		return serverapi.WorktreeBranchCleanupOutcome{Kind: serverapi.WorktreeBranchCleanupOutcomeNotApplicable}
 	}
-	branchName := worktreeNamedBranch(gitEntry)
-	if branchName == "" {
+	branchName, named := worktreeNamedBranch(gitEntry)
+	if !named {
 		return serverapi.WorktreeBranchCleanupOutcome{Kind: serverapi.WorktreeBranchCleanupOutcomeNotApplicable}
 	}
 	switch policy {
@@ -434,10 +442,16 @@ func branchCleanupGitEntry(
 ) (GitWorktree, *GitWorktree, error) {
 	switch entry.Variant {
 	case serverapi.WorktreeTopologyVariantRegistered:
-		live := gitWorktreeFromFacts(entry.Registered.Git)
+		live, err := gitWorktreeFromFacts(entry.Registered.Git)
+		if err != nil {
+			return GitWorktree{}, nil, err
+		}
 		return live, &live, nil
 	case serverapi.WorktreeTopologyVariantExternal:
-		live := gitWorktreeFromFacts(entry.External.Git)
+		live, err := gitWorktreeFromFacts(entry.External.Git)
+		if err != nil {
+			return GitWorktree{}, nil, err
+		}
 		return live, &live, nil
 	case serverapi.WorktreeTopologyVariantMissing:
 		if record == nil {

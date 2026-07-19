@@ -136,11 +136,11 @@ func gitFactsFromEntry(entry GitWorktree) serverapi.WorktreeGitFacts {
 		IsMain:        entry.IsMain,
 		PathAvailable: PathAvailability(entry.Root) == serverapi.WorktreePathAvailabilityAvailable,
 	}
-	if value := strings.TrimSpace(entry.BranchRef); value != "" {
-		facts.BranchRef = &value
-	}
-	if value := strings.TrimSpace(entry.BranchName); value != "" {
-		facts.BranchName = &value
+	if entry.Branch != nil {
+		branchRef := entry.Branch.Ref()
+		branchName := entry.Branch.Name()
+		facts.BranchRef = &branchRef
+		facts.BranchName = &branchName
 	}
 	if value := strings.TrimSpace(entry.LockedReason); value != "" {
 		facts.LockedReason = &value

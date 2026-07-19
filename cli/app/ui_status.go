@@ -58,7 +58,6 @@ type uiStatusAuthInfo = status.AuthInfo
 type uiStatusGitInfo = status.GitInfo
 type uiStatusContextInfo = status.ContextInfo
 type uiStatusModelInfo = status.ModelInfo
-type uiStatusUpdateInfo = status.UpdateInfo
 type uiStatusConfigInfo = status.ConfigInfo
 type uiStatusSubscriptionInfo = status.SubscriptionInfo
 type uiStatusSubscriptionWindow = status.SubscriptionWindow

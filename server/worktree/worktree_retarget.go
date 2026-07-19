@@ -297,7 +297,7 @@ func worktreeReminderStateForTransition(previous *syncedWorktree, previousTarget
 		return session.WorktreeReminderState{
 			Mode: session.WorktreeReminderModeExit,
 			WorktreeContext: session.WorktreeContext{
-				Branch:        session.OptionalWorktreeBranch(previous.git.BranchName),
+				Branch:        optionalWorktreeBranchName(previous.git.Branch),
 				WorktreePath:  strings.TrimSpace(previous.record.CanonicalRoot),
 				WorkspaceRoot: strings.TrimSpace(nextTarget.WorkspaceRoot),
 				EffectiveCwd:  strings.TrimSpace(nextTarget.EffectiveWorkdir),
@@ -307,7 +307,7 @@ func worktreeReminderStateForTransition(previous *syncedWorktree, previousTarget
 	return session.WorktreeReminderState{
 		Mode: session.WorktreeReminderModeEnter,
 		WorktreeContext: session.WorktreeContext{
-			Branch:        session.OptionalWorktreeBranch(next.git.BranchName),
+			Branch:        optionalWorktreeBranchName(next.git.Branch),
 			WorktreePath:  strings.TrimSpace(next.record.CanonicalRoot),
 			WorkspaceRoot: strings.TrimSpace(nextTarget.WorkspaceRoot),
 			EffectiveCwd:  strings.TrimSpace(nextTarget.EffectiveWorkdir),
@@ -320,14 +320,10 @@ func worktreeReminderStateForExitedWorktree(worktree metadata.WorktreeRecord, ne
 	if err != nil {
 		return session.WorktreeReminderState{}, err
 	}
-	branchName := strings.TrimSpace(gitMetadata.BranchName)
-	if branchName == "" {
-		branchName = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(gitMetadata.BranchRef), "refs/heads/"))
-	}
 	return session.WorktreeReminderState{
 		Mode: session.WorktreeReminderModeExit,
 		WorktreeContext: session.WorktreeContext{
-			Branch:        session.OptionalWorktreeBranch(branchName),
+			Branch:        optionalWorktreeBranchName(gitMetadata.Branch),
 			WorktreePath:  strings.TrimSpace(worktree.CanonicalRoot),
 			WorkspaceRoot: strings.TrimSpace(nextTarget.WorkspaceRoot),
 			EffectiveCwd:  strings.TrimSpace(nextTarget.EffectiveWorkdir),
@@ -335,32 +331,39 @@ func worktreeReminderStateForExitedWorktree(worktree metadata.WorktreeRecord, ne
 	}, nil
 }
 
+func optionalWorktreeBranchName(branch *localBranch) *string {
+	if branch == nil {
+		return nil
+	}
+	name := branch.Name()
+	return &name
+}
+
 func worktreeGitMetadataFromRecord(worktree metadata.WorktreeRecord) (GitWorktree, error) {
 	metadataJSON := strings.TrimSpace(worktree.GitMetadataJSON)
 	if metadataJSON == "" {
 		return GitWorktree{}, nil
 	}
-	var persisted struct {
-		HeadOID        string `json:"head_oid"`
-		BranchRef      string `json:"branch_ref"`
-		BranchName     string `json:"branch_name"`
-		Detached       bool   `json:"detached"`
-		Bare           bool   `json:"bare"`
-		LockedReason   string `json:"locked_reason"`
-		PrunableReason string `json:"prunable_reason"`
-	}
+	var persisted persistedGitWorktree
 	if err := json.Unmarshal([]byte(metadataJSON), &persisted); err != nil {
 		return GitWorktree{}, fmt.Errorf("decode git worktree metadata: %w", err)
 	}
-	return GitWorktree{
+	branch, err := optionalLocalBranch(persisted.BranchRef, persisted.BranchName)
+	if err != nil {
+		return GitWorktree{}, fmt.Errorf("decode git worktree metadata: %w", err)
+	}
+	decoded := GitWorktree{
 		Root:           worktree.CanonicalRoot,
 		HeadOID:        persisted.HeadOID,
-		BranchRef:      persisted.BranchRef,
-		BranchName:     persisted.BranchName,
+		Branch:         branch,
 		Detached:       persisted.Detached,
 		Bare:           persisted.Bare,
 		LockedReason:   persisted.LockedReason,
 		PrunableReason: persisted.PrunableReason,
 		IsMain:         worktree.IsMain,
-	}, nil
+	}
+	if err := decoded.validateHead(); err != nil {
+		return GitWorktree{}, fmt.Errorf("decode git worktree metadata: %w", err)
+	}
+	return decoded, nil
 }

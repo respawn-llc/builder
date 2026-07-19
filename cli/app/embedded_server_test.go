@@ -210,6 +210,10 @@ func (s *testEmbeddedServer) ProjectViewClient() apicontract.ProjectViewService 
 	return service
 }
 
+func (s *testEmbeddedServer) ServerStatusClient() apicontract.ServerStatusService {
+	return nil
+}
+
 func (s *testEmbeddedServer) AskViewClient() apicontract.AskViewService { return s.askViewClient }
 
 func (s *testEmbeddedServer) ApprovalViewClient() apicontract.ApprovalViewService {

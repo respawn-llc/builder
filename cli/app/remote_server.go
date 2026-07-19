@@ -184,6 +184,13 @@ func (s *remoteAppServer) ProjectViewClient() apicontract.ProjectViewService {
 	return s.remote
 }
 
+func (s *remoteAppServer) ServerStatusClient() apicontract.ServerStatusService {
+	if s == nil {
+		return nil
+	}
+	return s.remote
+}
+
 func (s *remoteAppServer) SessionLaunchClient() apicontract.SessionLaunchService {
 	if s == nil {
 		return nil

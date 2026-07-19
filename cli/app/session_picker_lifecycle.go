@@ -46,7 +46,7 @@ func (l *sessionPickerLifecycle) Init() tea.Cmd {
 }
 
 func (l *sessionPickerLifecycle) Update(message tea.Msg) (tea.Model, tea.Cmd) {
-	if l == nil || l.picker == nil {
+	if l == nil || l.picker == nil || l.closed {
 		return l, nil
 	}
 	if size, ok := message.(tea.WindowSizeMsg); ok {

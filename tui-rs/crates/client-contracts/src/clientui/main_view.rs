@@ -50,8 +50,6 @@ pub struct RuntimeStatus {
     pub workflow_active: bool,
     #[serde(rename = "WorkflowSession", default)]
     pub workflow_session: Option<WorkflowSessionStatus>,
-    #[serde(rename = "Update")]
-    pub update: UpdateStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -84,18 +82,6 @@ pub enum RuntimeGoalStatus {
     Paused,
     #[serde(rename = "complete")]
     Complete,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct UpdateStatus {
-    #[serde(rename = "Checked")]
-    pub checked: bool,
-    #[serde(rename = "Available")]
-    pub available: bool,
-    #[serde(rename = "CurrentVersion")]
-    pub current_version: String,
-    #[serde(rename = "LatestVersion")]
-    pub latest_version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

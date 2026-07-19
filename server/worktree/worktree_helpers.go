@@ -32,25 +32,20 @@ func kentCreatedBranchForCleanup(record metadata.WorktreeRecord, live *GitWorktr
 	if err != nil {
 		return "", false, err
 	}
-	persistedRef := strings.TrimSpace(persisted.BranchRef)
-	if persistedRef == "" {
+	if persisted.Branch == nil {
 		return "", false, nil
 	}
-	branchName := worktreeNamedBranch(persisted)
-	if branchName == "" {
+	if live != nil && (live.Detached || live.Branch == nil || live.Branch.Ref() != persisted.Branch.Ref()) {
 		return "", false, nil
 	}
-	if live != nil && (live.Detached || strings.TrimSpace(live.BranchRef) != persistedRef) {
-		return "", false, nil
-	}
-	return branchName, true, nil
+	return persisted.Branch.Name(), true, nil
 }
 
-func worktreeNamedBranch(worktree GitWorktree) string {
-	if branchName := strings.TrimSpace(worktree.BranchName); branchName != "" {
-		return branchName
+func worktreeNamedBranch(worktree GitWorktree) (string, bool) {
+	if worktree.Branch == nil {
+		return "", false
 	}
-	return shortBranchName(strings.TrimSpace(worktree.BranchRef))
+	return worktree.Branch.Name(), true
 }
 
 type PathInspection struct {
@@ -80,11 +75,37 @@ func InspectPath(path string) PathInspection {
 }
 
 func marshalGitMetadata(entry GitWorktree) (string, error) {
-	body, err := json.Marshal(entry)
+	if err := entry.validateHead(); err != nil {
+		return "", err
+	}
+	persisted := persistedGitWorktree{
+		HeadOID:        entry.HeadOID,
+		Detached:       entry.Detached,
+		Bare:           entry.Bare,
+		LockedReason:   entry.LockedReason,
+		PrunableReason: entry.PrunableReason,
+	}
+	if entry.Branch != nil {
+		branchRef := entry.Branch.Ref()
+		branchName := entry.Branch.Name()
+		persisted.BranchRef = &branchRef
+		persisted.BranchName = &branchName
+	}
+	body, err := json.Marshal(persisted)
 	if err != nil {
 		return "", fmt.Errorf("marshal git worktree metadata: %w", err)
 	}
 	return string(body), nil
+}
+
+type persistedGitWorktree struct {
+	HeadOID        string  `json:"head_oid,omitempty"`
+	BranchRef      *string `json:"branch_ref,omitempty"`
+	BranchName     *string `json:"branch_name,omitempty"`
+	Detached       bool    `json:"detached,omitempty"`
+	Bare           bool    `json:"bare,omitempty"`
+	LockedReason   string  `json:"locked_reason,omitempty"`
+	PrunableReason string  `json:"prunable_reason,omitempty"`
 }
 
 func clampCwdRelpath(cwdRelpath string, nextBaseRoot string) string {

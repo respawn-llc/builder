@@ -71,15 +71,80 @@ func TestRestoreLockedTaskWorktreeAcceptsHealthyChangedNamedBranch(t *testing.T)
 	}
 }
 
-func TestRestoreLockedTaskWorktreeRejectsDetachedHead(t *testing.T) {
+func TestRestoreLockedTaskWorktreeReusesDetachedHeadWithoutRunningSetup(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, materialized, _ := materializeAndLockTaskWorktree(t, env)
+	worktreeID := taskWorktreeID(materialized.Worktree)
+	worktreeRoot := taskWorktreeRoot(materialized.Worktree)
+	runGit(t, worktreeRoot, "checkout", "--detach")
+	detachedRevision := resolveTaskWorktreeTestHEAD(t, env, worktreeRoot)
+	setupMarker := filepath.Join(t.TempDir(), "setup-ran")
+	setupScript := filepath.Join(t.TempDir(), "setup.sh")
+	writeExecutableFile(t, setupScript, fmt.Sprintf("#!/bin/sh\ntouch %q\n", setupMarker))
+	env.service.setupScript = setupScript
+
+	restored, err := env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{
+		TaskID:           task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if err != nil {
+		t.Fatalf("RestoreLockedTaskWorktree: %v", err)
+	}
+	if restored.Created ||
+		taskWorktreeID(restored.Worktree) != worktreeID ||
+		taskWorktreeRoot(restored.Worktree) != worktreeRoot ||
+		restored.Worktree.Registered == nil ||
+		!restored.Worktree.Registered.Git.Detached ||
+		restored.Worktree.Registered.Git.BranchRef != nil ||
+		restored.Worktree.Registered.Git.BranchName != nil {
+		t.Fatalf("restored worktree = %+v, want detached reuse of %q", restored, worktreeID)
+	}
+	record, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID)
+	if err != nil {
+		t.Fatalf("GetWorktreeRecordByID: %v", err)
+	}
+	persisted, err := worktreeGitMetadataFromRecord(record)
+	if err != nil {
+		t.Fatalf("worktreeGitMetadataFromRecord: %v", err)
+	}
+	if persisted.HeadOID != detachedRevision.CommitOID ||
+		!persisted.Detached ||
+		persisted.Branch != nil {
+		t.Fatalf("persisted detached metadata = %+v, want head %q", persisted, detachedRevision.CommitOID)
+	}
+	if _, err := os.Stat(setupMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("restore ran setup for reused detached worktree: %v", err)
+	}
+}
+
+func TestMaterializeInitialTaskWorktreeRejectsDetachedExistingCandidate(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	resolved := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
+	materialized, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: resolved,
+	})
+	if err != nil {
+		t.Fatalf("MaterializeInitialTaskWorktree first: %v", err)
+	}
+	worktreeID := taskWorktreeID(materialized.Worktree)
 	runGit(t, taskWorktreeRoot(materialized.Worktree), "checkout", "--detach")
 
-	_, err := env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID})
-	var lockedErr *LockedTaskWorktreeError
-	if !errors.As(err, &lockedErr) || lockedErr.Cause != LockedTaskWorktreeCauseDetachedHead {
-		t.Fatalf("RestoreLockedTaskWorktree error = %v, want detached-head locked target error", err)
+	_, err = env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: resolved,
+	})
+	var identityErr *ManagedWorktreeIdentityError
+	if !errors.As(err, &identityErr) || identityErr.Kind != ManagedWorktreeIdentityErrorDetachedHead {
+		t.Fatalf("MaterializeInitialTaskWorktree error = %v, want detached-head identity error", err)
+	}
+	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if !row.ManagedWorktreeID.Valid || row.ManagedWorktreeID.String != worktreeID {
+		t.Fatalf("task managed worktree id = %+v, want unchanged %q", row.ManagedWorktreeID, worktreeID)
 	}
 }
 
@@ -166,8 +231,8 @@ func TestRestoreLockedTaskWorktreeReportsConflictForRegisteredMissingRoot(t *tes
 	if err != nil {
 		t.Fatalf("worktreeGitMetadataFromRecord: %v", err)
 	}
-	if gitMetadata.BranchName != task.ShortID {
-		t.Fatalf("persisted branch = %q, want %q (metadata %s)", gitMetadata.BranchName, task.ShortID, record.GitMetadataJSON)
+	if gitMetadata.Branch == nil || gitMetadata.Branch.Name() != task.ShortID {
+		t.Fatalf("persisted branch = %+v, want %q (metadata %s)", gitMetadata.Branch, task.ShortID, record.GitMetadataJSON)
 	}
 	oldRoot := taskWorktreeRoot(materialized.Worktree)
 	if err := os.RemoveAll(oldRoot); err != nil {
@@ -258,6 +323,56 @@ func TestRestoreLockedTaskWorktreeRebindsHealthyDeterministicRoot(t *testing.T) 
 	}
 	if !row.ManagedWorktreeID.Valid || row.ManagedWorktreeID.String != taskWorktreeID(materialized.Worktree) {
 		t.Fatalf("task managed worktree id = %+v, want rebound %q", row.ManagedWorktreeID, taskWorktreeID(materialized.Worktree))
+	}
+}
+
+func TestRestoreLockedTaskWorktreeRejectsDetachedUnboundExistingRoot(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, materialized, _ := materializeAndLockTaskWorktree(t, env)
+	worktreeRoot := taskWorktreeRoot(materialized.Worktree)
+	updated, err := env.store.Queries().UpdateTaskManagedWorktree(env.ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+		ID:              string(task.ID),
+		UpdatedAtUnixMs: time.Now().UTC().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("clear task managed worktree: %v", err)
+	}
+	if updated != 1 {
+		t.Fatalf("clear task managed worktree updated %d rows, want 1", updated)
+	}
+	runGit(t, worktreeRoot, "checkout", "--detach")
+	setupMarker := filepath.Join(t.TempDir(), "setup-ran")
+	setupScript := filepath.Join(t.TempDir(), "setup.sh")
+	writeExecutableFile(t, setupScript, fmt.Sprintf("#!/bin/sh\ntouch %q\n", setupMarker))
+	env.service.setupScript = setupScript
+
+	_, err = env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{
+		TaskID:           task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	var lockedErr *LockedTaskWorktreeError
+	if !errors.As(err, &lockedErr) || lockedErr.Cause != LockedTaskWorktreeCauseDetachedHead {
+		t.Fatalf("RestoreLockedTaskWorktree error = %v, want detached-head locked target error", err)
+	}
+	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if row.ManagedWorktreeID.Valid {
+		t.Fatalf("task managed worktree id = %+v, want unbound", row.ManagedWorktreeID)
+	}
+	identity, err := env.service.git.ValidateManagedWorktreeIdentity(env.ctx, ManagedWorktreeIdentitySpec{
+		SourceWorkspaceRoot:  env.workspaceRoot,
+		ExpectedWorktreeRoot: worktreeRoot,
+	})
+	if err != nil {
+		t.Fatalf("ValidateManagedWorktreeIdentity: %v", err)
+	}
+	if branchName, named := identity.NamedBranch(); named {
+		t.Fatalf("rejected worktree branch name = %q, want detached", branchName)
+	}
+	if _, err := os.Stat(setupMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("restore ran setup for rejected detached repair: %v", err)
 	}
 }
 
