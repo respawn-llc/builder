@@ -200,5 +200,6 @@ Planning
   - use the `firefox-cli` skill to create a dedicated non-main Firefox window, open the harness URL there, and explicitly target that window for every browser snapshot, wait, click, and screenshot; open the seeded global Inbox item, verify the requested approval item is focused in task detail, approve it, and verify the same detail surface stays rendered while task status/actions and task attention refresh and the Inbox item disappears without a blocking loading collapse;
   - capture the browser screenshots through `firefox-cli`, collect relevant `.kent/qa/serve.log`/`.kent/qa/vite.log` excerpts, and stop with `.kent/qa/qa-harness.sh down`.
   Completion: the pre-browser smoke assertion proves a production-created pending approval with exactly one attention item; evidence is from the final tree/binary and covers the real-harness focus and mutation/invalidation flow; automated integration tests supply the separately captured pending/progressive and attention-only failure/retry proof.
+  - Implementation-agent disposition (2026-07-19): the user explicitly assigned this checklist item to the separate QA agent. It remains unchecked for that agent; implementation and automated self-verification are complete.
 
 Testing
