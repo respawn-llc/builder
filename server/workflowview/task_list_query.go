@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -21,6 +22,24 @@ const (
 	workflowTaskListPageTokenVersion = 3
 	workflowTaskStatusModelVersion   = 1
 )
+
+type TaskList struct {
+	queries   *sqlitegen.Queries
+	projector *TaskProjector
+}
+
+func NewTaskList(metadataStore *metadata.Store, projector *TaskProjector) (*TaskList, error) {
+	if metadataStore == nil || metadataStore.Queries() == nil {
+		return nil, errors.New("metadata store is required")
+	}
+	if projector == nil {
+		return nil, errors.New("task projector is required")
+	}
+	return &TaskList{
+		queries:   metadataStore.Queries(),
+		projector: projector,
+	}, nil
+}
 
 func normalizeWorkflowTaskListSort(sortSelectors []serverapi.WorkflowTaskListSort) []serverapi.WorkflowTaskListSort {
 	if len(sortSelectors) == 0 {
@@ -234,7 +253,10 @@ type workflowTaskListRow struct {
 	matchingWorkflowCount int
 }
 
-func (s *Service) listWorkflowTaskListRows(ctx context.Context, req workflowTaskListQueryRequest) ([]workflowTaskListRow, error) {
+func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryRequest) ([]workflowTaskListRow, error) {
+	if l == nil {
+		return nil, errors.New("task list is required")
+	}
 	workflowFilter := sql.NullString{}
 	canceledTerminalNodeID := sql.NullString{}
 	visibleColumnsJSON := sql.NullString{}
@@ -277,7 +299,7 @@ func (s *Service) listWorkflowTaskListRows(ctx context.Context, req workflowTask
 	if req.cursor.ColumnRank != nil {
 		cursorColumnRank = sql.NullInt64{Int64: int64(*req.cursor.ColumnRank), Valid: true}
 	}
-	rows, err := s.queries.ListWorkflowTaskListRows(ctx, sqlitegen.ListWorkflowTaskListRowsParams{
+	rows, err := l.queries.ListWorkflowTaskListRows(ctx, sqlitegen.ListWorkflowTaskListRowsParams{
 		ProjectID:               req.projectID,
 		WorkflowID:              workflowFilter,
 		CanceledTerminalNodeID:  canceledTerminalNodeID,
@@ -313,7 +335,7 @@ func (s *Service) listWorkflowTaskListRows(ctx context.Context, req workflowTask
 	}
 	out := make([]workflowTaskListRow, 0, len(rows))
 	for _, row := range rows {
-		statusFact, err := s.projector.DecodeStatus(TaskStatusInput{
+		statusFact, err := l.projector.DecodeStatus(TaskStatusInput{
 			TaskID:             row.ID,
 			Kind:               row.Kind,
 			NodeIDsJSON:        row.NodeIdsJson,

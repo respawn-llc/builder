@@ -22,6 +22,7 @@ type Service struct {
 	queries     *sqlitegen.Queries
 	definitions *DefinitionProjection
 	projector   *TaskProjector
+	taskList    *TaskList
 	taskDetail  *TaskDetail
 	activity    *Activity
 	attention   *Attention
@@ -74,6 +75,10 @@ func New(metadataStore *metadata.Store, opts ...Option) (*Service, error) {
 		return nil, err
 	}
 	projector := NewTaskProjector()
+	taskList, err := NewTaskList(metadataStore, projector)
+	if err != nil {
+		return nil, err
+	}
 	taskDetail, err := NewTaskDetail(metadataStore, definitions, projector, worktree.NewGitInspector(nil))
 	if err != nil {
 		return nil, err
@@ -97,6 +102,7 @@ func New(metadataStore *metadata.Store, opts ...Option) (*Service, error) {
 		queries:     metadataStore.Queries(),
 		definitions: definitions,
 		projector:   projector,
+		taskList:    taskList,
 		taskDetail:  taskDetail,
 		activity:    activity,
 		attention:   attention,
@@ -225,7 +231,7 @@ func (s *Service) ListTasks(ctx context.Context, req serverapi.WorkflowTaskListR
 			columnKeys:             req.ColumnKeys,
 		}
 	}
-	rows, err := s.listWorkflowTaskListRows(ctx, workflowTaskListQueryRequest{
+	rows, err := s.taskList.queryRows(ctx, workflowTaskListQueryRequest{
 		projectID:      projectID,
 		narrowed:       narrowedQuery,
 		statusKinds:    req.StatusKinds,

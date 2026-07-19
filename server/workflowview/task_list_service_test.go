@@ -19,6 +19,159 @@ func workflowIDPointerForTest(value workflow.WorkflowID) *workflow.WorkflowID {
 	return &value
 }
 
+func TestTaskListQueriesFilterAndSortProjectedRowsThroughFocusedModule(t *testing.T) {
+	ctx, metadataStore, workflowStore, binding := newWorkflowViewTestContextStore(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	projector := NewTaskProjector()
+	taskList, err := NewTaskList(metadataStore, projector)
+	if err != nil {
+		t.Fatalf("NewTaskList: %v", err)
+	}
+	definitions, err := NewDefinitionProjection(workflowStore)
+	if err != nil {
+		t.Fatalf("NewDefinitionProjection: %v", err)
+	}
+	snapshot, err := definitions.snapshot(ctx, string(workflowID))
+	if err != nil {
+		t.Fatalf("load definition: %v", err)
+	}
+	columns := boardColumns(snapshot)
+
+	backlog, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Zulu backlog",
+		Body:      "Body",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask backlog: %v", err)
+	}
+	running, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Alpha running",
+		Body:      "Body",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask running: %v", err)
+	}
+	runningStarted, err := workflowStore.StartTask(ctx, running.ID)
+	if err != nil {
+		t.Fatalf("StartTask running: %v", err)
+	}
+	if _, err := workflowStore.ClaimRun(ctx, runningStarted.RunID, 0); err != nil {
+		t.Fatalf("ClaimRun running: %v", err)
+	}
+	done, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Mike done",
+		Body:      "Body",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask done: %v", err)
+	}
+	doneStarted, err := workflowStore.StartTask(ctx, done.ID)
+	if err != nil {
+		t.Fatalf("StartTask done: %v", err)
+	}
+	if _, err := workflowStore.ClaimRun(ctx, doneStarted.RunID, 0); err != nil {
+		t.Fatalf("ClaimRun done: %v", err)
+	}
+	if _, err := workflowStore.CompleteRun(ctx, workflowstore.CompleteRunRequest{RunID: doneStarted.RunID, TransitionID: "done"}); err != nil {
+		t.Fatalf("CompleteRun done: %v", err)
+	}
+
+	narrowed := &workflowTaskListNarrowedQueryFacts{
+		workflowID:             string(workflowID),
+		canceledTerminalNodeID: canceledBoardTerminalNodeID(snapshot.api),
+		columns:                columns,
+	}
+	query := func(narrowedFacts *workflowTaskListNarrowedQueryFacts, statusKinds []serverapi.WorkflowTaskStatusKind, attentionKinds []serverapi.WorkflowTaskAttentionKind, sortSelectors ...serverapi.WorkflowTaskListSort) []workflowTaskListRow {
+		t.Helper()
+		rows, err := taskList.queryRows(ctx, workflowTaskListQueryRequest{
+			projectID:      binding.ProjectID,
+			narrowed:       narrowedFacts,
+			statusKinds:    statusKinds,
+			attentionKinds: attentionKinds,
+			sortSelectors:  sortSelectors,
+			limit:          100,
+		})
+		if err != nil {
+			t.Fatalf("queryRows: %v", err)
+		}
+		return rows
+	}
+
+	backlogFilter := *narrowed
+	backlogFilter.columnKeys = []string{"backlog"}
+	backlogRows := query(&backlogFilter, []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog}, nil)
+	if len(backlogRows) != 1 || backlogRows[0].item.TaskID != string(backlog.ID) {
+		t.Fatalf("backlog filter rows = %+v", backlogRows)
+	}
+	if backlogRows[0].item.ColumnKeys == nil || !slices.Equal(*backlogRows[0].item.ColumnKeys, []string{"backlog"}) {
+		t.Fatalf("backlog column facts = %+v", backlogRows[0].item.ColumnKeys)
+	}
+	if backlogRows[0].item.Status.Kind != serverapi.WorkflowTaskStatusKindBacklog ||
+		backlogRows[0].item.Status.NativeState != serverapi.WorkflowTaskNativeStateActive {
+		t.Fatalf("backlog status = %+v", backlogRows[0].item.Status)
+	}
+	if rows := query(narrowed, []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindRunning}, []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindApproval}); len(rows) != 0 {
+		t.Fatalf("combined unmatched filters = %+v, want none", rows)
+	}
+
+	assertOrder := func(field serverapi.WorkflowTaskListSortField, want ...workflow.TaskID) {
+		t.Helper()
+		rows := query(narrowed, nil, nil, serverapi.WorkflowTaskListSort{
+			Field:     field,
+			Direction: serverapi.WorkflowTaskListSortDirectionAsc,
+		})
+		got := make([]string, 0, len(rows))
+		for _, row := range rows {
+			got = append(got, row.item.TaskID)
+			if row.item.ColumnKeys == nil {
+				t.Fatalf("%s row omitted narrowed column facts: %+v", field, row.item)
+			}
+		}
+		wantIDs := make([]string, 0, len(want))
+		for _, taskID := range want {
+			wantIDs = append(wantIDs, string(taskID))
+		}
+		if !slices.Equal(got, wantIDs) {
+			t.Fatalf("%s order = %v, want %v", field, got, wantIDs)
+		}
+	}
+	runCountRows := query(
+		narrowed,
+		nil,
+		nil,
+		serverapi.WorkflowTaskListSort{Field: serverapi.WorkflowTaskListSortFieldRunCount, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+		serverapi.WorkflowTaskListSort{Field: serverapi.WorkflowTaskListSortFieldTitle, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+	)
+	if got := []string{runCountRows[0].item.TaskID, runCountRows[1].item.TaskID, runCountRows[2].item.TaskID}; !slices.Equal(got, []string{string(backlog.ID), string(running.ID), string(done.ID)}) {
+		t.Fatalf("run_count order = %v, want backlog then title-ordered one-run tasks", got)
+	}
+	assertOrder(serverapi.WorkflowTaskListSortFieldTitle, running.ID, done.ID, backlog.ID)
+	assertOrder(serverapi.WorkflowTaskListSortFieldStatus, done.ID, running.ID, backlog.ID)
+	assertOrder(serverapi.WorkflowTaskListSortFieldColumn, backlog.ID, running.ID, done.ID)
+
+	projectWideRows := query(nil, nil, nil, serverapi.WorkflowTaskListSort{
+		Field:     serverapi.WorkflowTaskListSortFieldTitle,
+		Direction: serverapi.WorkflowTaskListSortDirectionAsc,
+	})
+	if len(projectWideRows) != 3 {
+		t.Fatalf("project-wide rows = %+v", projectWideRows)
+	}
+	for _, row := range projectWideRows {
+		if row.item.ColumnKeys != nil || row.columnRank != nil {
+			t.Fatalf("project-wide row retained nullable column facts: %+v", row)
+		}
+		if row.item.WorkflowName == nil || strings.TrimSpace(*row.item.WorkflowName) == "" {
+			t.Fatalf("project-wide row omitted workflow name: %+v", row.item)
+		}
+	}
+}
+
 func TestListTasksFiltersTypedStatusAndColumn(t *testing.T) {
 	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
