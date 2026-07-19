@@ -320,16 +320,21 @@ func shouldEmitCommittedMessageEvent(msg llm.Message) bool {
 	return len(VisibleChatEntriesFromMessage(msg)) > 0
 }
 
-func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch []string, queueItems []QueuedUserMessage) (session.CommitReceipt, error) {
+func (e *Engine) appendQueuedUserMessageFlush(
+	stepID string,
+	text string,
+	batch []string,
+	queueItems []QueuedUserMessage,
+) (session.CommitReceipt, *liveRunCompletionToken, error) {
 	msg := normalizeMessageForTranscript(llm.Message{Role: llm.RoleUser, Content: text}, e.transcriptWorkingDir())
 	if strings.TrimSpace(msg.Content) == "" {
-		return session.CommitReceipt{}, nil
+		return session.CommitReceipt{}, nil, nil
 	}
 	normalizedItems := normalizedQueuedUserMessageStatusItems(queueItems)
 	normalizedIDs := queuedUserMessageStatusItemIDs(normalizedItems)
 	appended, appendErr := e.appendPersistedMessageEvent(stepID, msg)
 	if !appended.Committed {
-		return appended.CommitReceipt, appendErr
+		return appended.CommitReceipt, nil, appendErr
 	}
 	if mutation := tokenUsageMutationForMessage(msg); mutation == tokenUsageMutationSignificant {
 		e.markCurrentRequestShapeDirtyForSignificantMutation()
@@ -358,8 +363,15 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch 
 			},
 		})
 	}
-	e.completeLiveRunQueueItemsWithinOutputMutation(queuedUserMessageIDSet(normalizedItems))
-	return appended.CommitReceipt, appendErr
+	token := e.completeLiveRunQueueItemsWithinOutputMutation(queuedUserMessageIDSet(normalizedItems))
+	if token != nil {
+		result, ok := e.liveRun.completionResult(token)
+		if !ok {
+			panic("queued-user flush prepared an invalid live-run completion token")
+		}
+		e.emitRaw(liveRunBatchFinishedEvent(result))
+	}
+	return appended.CommitReceipt, token, appendErr
 }
 
 func normalizedQueuedUserMessageStatusItems(raw []QueuedUserMessage) []QueuedUserMessage {

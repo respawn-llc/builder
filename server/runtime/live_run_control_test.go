@@ -278,6 +278,149 @@ func TestLiveRunCompletionSourcesPublishBatchFinishedEvents(t *testing.T) {
 	}
 }
 
+func TestQueuedUserMessageFlushPublishesBatchBeforePostUnlockCompletion(t *testing.T) {
+	batchAccepted := make(chan struct{}, 1)
+	releaseBatchAcceptance := make(chan struct{})
+	var eventKinds []EventKind
+	eng, snapshot, item, handle := newPreparedQueuedUserMessageFlushTestEngine(t, func(event Event) {
+		eventKinds = append(eventKinds, event.Kind)
+		if event.Kind != EventLiveRunBatchFinished {
+			return
+		}
+		batchAccepted <- struct{}{}
+		<-releaseBatchAcceptance
+	})
+
+	steerDone := make(chan error, 1)
+	go func() {
+		steerDone <- eng.steerOrdered(
+			snapshot.StepID,
+			steerQueuedUserMessageFlushIntent(item.Text, []string{item.Text}, []QueuedUserMessage{item}),
+		)
+	}()
+	select {
+	case <-batchAccepted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for queued-flush batch event")
+	}
+
+	waitDone := make(chan error, 1)
+	go func() {
+		_, err := handle.Wait()
+		waitDone <- err
+	}()
+	select {
+	case err := <-waitDone:
+		t.Fatalf("waiter released before outer output mutation unlock: %v", err)
+	default:
+	}
+
+	close(releaseBatchAcceptance)
+	select {
+	case err := <-steerDone:
+		if err != nil {
+			t.Fatalf("queued flush steering: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("queued flush steering deadlocked")
+	}
+	select {
+	case err := <-waitDone:
+		if !errors.Is(err, ErrLiveRunNoFinalAnswer) {
+			t.Fatalf("waiter error = %v, want ErrLiveRunNoFinalAnswer", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("waiter did not release after outer output mutation unlock")
+	}
+	assertLiveRunBatchFlushEventOrder(t, eventKinds)
+}
+
+func TestQueuedUserMessageFlushCommitsAcceptedBatchAfterLaterSteeringError(t *testing.T) {
+	var eventKinds []EventKind
+	eng, snapshot, item, handle := newPreparedQueuedUserMessageFlushTestEngine(t, func(event Event) {
+		eventKinds = append(eventKinds, event.Kind)
+	})
+
+	err := eng.steerOrdered(
+		snapshot.StepID,
+		steerQueuedUserMessageFlushIntent(item.Text, []string{item.Text}, []QueuedUserMessage{item}),
+		steeringIntent{
+			priority: steeringPriorityNormal,
+			items: []steeringItem{{
+				completedResponseResolution: &steeringCompletedResponseResolution{},
+			}},
+		},
+	)
+	if err == nil {
+		t.Fatal("queued flush steering unexpectedly succeeded after malformed later item")
+	}
+	if eng.HasActiveLiveRunGroup() {
+		t.Fatal("accepted queued-flush batch token was not committed after later steering error")
+	}
+	if _, err := handle.Wait(); !errors.Is(err, ErrLiveRunNoFinalAnswer) {
+		t.Fatalf("waiter error = %v, want ErrLiveRunNoFinalAnswer", err)
+	}
+	assertLiveRunBatchFlushEventOrder(t, eventKinds)
+}
+
+func newPreparedQueuedUserMessageFlushTestEngine(
+	t *testing.T,
+	onEvent func(Event),
+) (*Engine, *RunSnapshot, QueuedUserMessage, *LiveRunWaitHandle) {
+	t.Helper()
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
+		Model:   "gpt-5",
+		OnEvent: onEvent,
+	})
+	snapshot := liveRunBatchEventSnapshot(ActiveKindUserTurn)
+	eng.liveRun.beginStep(snapshot)
+	admission, err := eng.liveRun.beginAdmission()
+	if err != nil {
+		t.Fatalf("begin live-run admission: %v", err)
+	}
+	item := QueuedUserMessage{
+		ID:              runtimeids.NewQueueItemID().String(),
+		Text:            "queued",
+		ClientRequestID: liveRunTestRequestID(t).String(),
+	}
+	accepted, token, err := eng.liveRun.finishAdmission(admission, mustQueueItemID(item.ID), nil)
+	if err != nil || !accepted || token != nil {
+		t.Fatalf("finish live-run admission accepted=%t token=%v err=%v", accepted, token, err)
+	}
+	eng.messageFlow.QueueUserMessageWithID(item)
+	if stopped := eng.liveRun.finishQueueItemPublication(mustQueueItemID(item.ID)); stopped {
+		t.Fatal("queued item publication was unexpectedly stopped")
+	}
+	handle, err := eng.CaptureActiveRunResult(context.Background())
+	if err != nil {
+		t.Fatalf("capture active live run: %v", err)
+	}
+	completed := *snapshot
+	completed.Status = RunStatusCompleted
+	completed.FinishedAt = snapshot.StartedAt.Add(time.Second)
+	if _, token := eng.liveRun.finishStep(&completed, RunStatusCompleted, nil, false); token != nil {
+		t.Fatal("live run prepared before queued item flush")
+	}
+	return eng, snapshot, item, handle
+}
+
+func assertLiveRunBatchFlushEventOrder(t *testing.T, got []EventKind) {
+	t.Helper()
+	want := []EventKind{
+		EventUserMessageFlushed,
+		EventQueuedUserMessageStatus,
+		EventLiveRunBatchFinished,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("queued-flush event kinds = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("queued-flush event kinds = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestAdmissionRollbackPublishesBatchFinishedEvent(t *testing.T) {
 	eng, batchEvents := newLiveRunBatchEventTestEngine(t)
 	snapshot := liveRunBatchEventSnapshot(ActiveKindUserTurn)

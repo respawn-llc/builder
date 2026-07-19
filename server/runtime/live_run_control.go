@@ -365,17 +365,12 @@ func (e *Engine) completeLiveRunQueueItems(ids map[string]struct{}) {
 	e.publishLiveRunCompletion(e.liveRun.completeQueueItems(typedQueueItemIDSet(ids)))
 }
 
-// completeLiveRunQueueItemsWithinOutputMutation is deliberately limited to
-// mutation preparation. Slice 9 owns publication and post-unlock token commit
-// for this path because the queued-user flush already owns outputMutationMu.
-func (e *Engine) completeLiveRunQueueItemsWithinOutputMutation(ids map[string]struct{}) {
+func (e *Engine) completeLiveRunQueueItemsWithinOutputMutation(ids map[string]struct{}) *liveRunCompletionToken {
 	if e == nil || len(ids) == 0 {
-		return
+		return nil
 	}
 	e.ensureOrchestrationCollaborators()
-	if token := e.liveRun.completeQueueItems(typedQueueItemIDSet(ids)); token != nil {
-		panic("queued-user flush prepared a live-run completion token before slice 9 registered post-unlock publication")
-	}
+	return e.liveRun.completeQueueItems(typedQueueItemIDSet(ids))
 }
 
 func (e *Engine) publishLiveRunCompletion(token *liveRunCompletionToken) {
