@@ -78,7 +78,7 @@ func TestActivityLoadsStableBoundedPagesAndOnlyReferencedSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDefinitionProjection: %v", err)
 	}
-	activity, err := NewActivity(metadataStore, definitions)
+	activity, err := NewActivity(metadataStore, definitions, NewTaskProjector())
 	if err != nil {
 		t.Fatalf("NewActivity: %v", err)
 	}
@@ -131,6 +131,150 @@ func TestActivityLoadsStableBoundedPagesAndOnlyReferencedSources(t *testing.T) {
 	if !slices.Equal(loadedIDs, wantIDs) {
 		t.Fatalf("paged activity ids = %v, want %v", loadedIDs, wantIDs)
 	}
+}
+
+func TestActivityProjectsEveryDurableTaskEventThroughFocusedInterface(t *testing.T) {
+	ctx, metadataStore, workflowStore, binding := newWorkflowViewTestContextStore(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	definitions, err := NewDefinitionProjection(workflowStore)
+	if err != nil {
+		t.Fatalf("NewDefinitionProjection: %v", err)
+	}
+	activity, err := NewActivity(metadataStore, definitions, NewTaskProjector())
+	if err != nil {
+		t.Fatalf("NewActivity: %v", err)
+	}
+
+	completedTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Completed activity",
+		Body:      "Body",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask completed: %v", err)
+	}
+	completedStarted, err := workflowStore.StartTask(ctx, completedTask.ID)
+	if err != nil {
+		t.Fatalf("StartTask completed: %v", err)
+	}
+	comment, err := workflowStore.AddComment(ctx, completedTask.ID, "note", "user", "nek")
+	if err != nil {
+		t.Fatalf("AddComment completed: %v", err)
+	}
+	if _, err := workflowStore.ClaimRun(ctx, completedStarted.RunID, 0); err != nil {
+		t.Fatalf("ClaimRun completed: %v", err)
+	}
+	completed, err := workflowStore.CompleteRun(ctx, workflowstore.CompleteRunRequest{
+		RunID:        completedStarted.RunID,
+		TransitionID: "done",
+		Commentary:   "finished",
+		Actor:        "agent",
+	})
+	if err != nil {
+		t.Fatalf("CompleteRun: %v", err)
+	}
+	completedPage, err := activity.List(ctx, serverapi.WorkflowTaskActivityListRequest{TaskID: string(completedTask.ID)})
+	if err != nil {
+		t.Fatalf("List completed activity: %v", err)
+	}
+	commentItem := requireActivityItem(t, completedPage.Items, "comment:"+comment.ID)
+	if commentItem.Comment == nil || commentItem.Comment.ID != comment.ID || commentItem.Run != nil || commentItem.Transition != nil || commentItem.Attention != nil {
+		t.Fatalf("comment activity = %+v", commentItem)
+	}
+	transitionItem := requireActivityItem(t, completedPage.Items, "transition:"+string(completed.TransitionID))
+	if transitionItem.Transition == nil ||
+		transitionItem.Transition.ID != string(completed.TransitionID) ||
+		transitionItem.Transition.Actor != "agent" ||
+		transitionItem.Transition.Commentary != "finished" ||
+		len(transitionItem.Transition.Edges) != 1 ||
+		transitionItem.Comment != nil ||
+		transitionItem.Run != nil ||
+		transitionItem.Attention != nil {
+		t.Fatalf("transition activity = %+v", transitionItem)
+	}
+	startedItem := requireActivityItem(t, completedPage.Items, "run_started:"+string(completedStarted.RunID))
+	if startedItem.Run == nil || startedItem.Run.ID != string(completedStarted.RunID) || startedItem.Type != "run_started" || startedItem.Attention != nil {
+		t.Fatalf("run-started activity = %+v", startedItem)
+	}
+	completedItem := requireActivityItem(t, completedPage.Items, "run_completed:"+string(completedStarted.RunID))
+	if completedItem.Run == nil || completedItem.Run.ID != string(completedStarted.RunID) || completedItem.Type != "run_completed" || completedItem.Attention != nil {
+		t.Fatalf("run-completed activity = %+v", completedItem)
+	}
+
+	interruptedTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Interrupted activity",
+		Body:      "Body",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask interrupted: %v", err)
+	}
+	interruptedStarted, err := workflowStore.StartTask(ctx, interruptedTask.ID)
+	if err != nil {
+		t.Fatalf("StartTask interrupted: %v", err)
+	}
+	claimed, err := workflowStore.ClaimRun(ctx, interruptedStarted.RunID, 0)
+	if err != nil {
+		t.Fatalf("ClaimRun interrupted: %v", err)
+	}
+	if err := workflowStore.InterruptRunGeneration(ctx, interruptedStarted.RunID, claimed.Generation, "manual", `{"source":"operator"}`); err != nil {
+		t.Fatalf("InterruptRunGeneration: %v", err)
+	}
+	interruptedPage, err := activity.List(ctx, serverapi.WorkflowTaskActivityListRequest{TaskID: string(interruptedTask.ID)})
+	if err != nil {
+		t.Fatalf("List interrupted activity: %v", err)
+	}
+	interruptedItem := requireActivityItem(t, interruptedPage.Items, "run_interrupted:"+string(interruptedStarted.RunID))
+	if interruptedItem.Run == nil ||
+		interruptedItem.Run.ID != string(interruptedStarted.RunID) ||
+		interruptedItem.Attention == nil ||
+		interruptedItem.Attention.ProjectID != binding.ProjectID ||
+		interruptedItem.Attention.WorkflowID == nil ||
+		*interruptedItem.Attention.WorkflowID != string(workflowID) ||
+		interruptedItem.Attention.TaskID != string(interruptedTask.ID) ||
+		interruptedItem.Attention.RunID != string(interruptedStarted.RunID) ||
+		interruptedItem.Attention.Message != interruptedItem.Summary ||
+		interruptedItem.Attention.OccurredAtUnixMs != interruptedItem.OccurredAtUnixMs {
+		t.Fatalf("run-interrupted activity = %+v", interruptedItem)
+	}
+
+	canceledTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Canceled activity",
+		Body:      "Body",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask canceled: %v", err)
+	}
+	if _, err := workflowStore.CancelTask(ctx, canceledTask.ID, "stopped"); err != nil {
+		t.Fatalf("CancelTask: %v", err)
+	}
+	canceledPage, err := activity.List(ctx, serverapi.WorkflowTaskActivityListRequest{TaskID: string(canceledTask.ID)})
+	if err != nil {
+		t.Fatalf("List canceled activity: %v", err)
+	}
+	canceledItem := requireActivityItem(t, canceledPage.Items, "task_canceled:"+string(canceledTask.ID))
+	if canceledItem.Type != "task_canceled" ||
+		canceledItem.Comment != nil ||
+		canceledItem.Transition != nil ||
+		canceledItem.Run != nil ||
+		canceledItem.Attention != nil {
+		t.Fatalf("task-canceled activity = %+v", canceledItem)
+	}
+}
+
+func requireActivityItem(t *testing.T, items []serverapi.WorkflowTaskActivityItem, activityID string) serverapi.WorkflowTaskActivityItem {
+	t.Helper()
+	for _, item := range items {
+		if item.ActivityID == activityID {
+			return item
+		}
+	}
+	t.Fatalf("activity %q not found in %+v", activityID, items)
+	return serverapi.WorkflowTaskActivityItem{}
 }
 
 func assertActivityPageOrdering(t *testing.T, rows []taskActivityRow) {

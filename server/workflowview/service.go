@@ -15,7 +15,6 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
-	"core/server/workflowattention"
 	"core/server/workflowscript"
 	"core/server/workflowstore"
 	"core/server/worktree"
@@ -83,7 +82,7 @@ func New(metadataStore *metadata.Store, opts ...Option) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	activity, err := NewActivity(metadataStore, definitions)
+	activity, err := NewActivity(metadataStore, definitions, projector)
 	if err != nil {
 		return nil, err
 	}
@@ -673,15 +672,7 @@ func (s *Service) ListTaskActivity(ctx context.Context, req serverapi.WorkflowTa
 	if s == nil {
 		return serverapi.WorkflowTaskActivityListResponse{}, errors.New("workflow view service is required")
 	}
-	page, err := s.activity.loadPage(ctx, req)
-	if err != nil {
-		return serverapi.WorkflowTaskActivityListResponse{}, err
-	}
-	items, err := s.activityItemsFromRows(page.task, page.rows, page.comments, page.transitions, page.edges, page.runs, page.nodes, page.sessionNames)
-	if err != nil {
-		return serverapi.WorkflowTaskActivityListResponse{}, err
-	}
-	return serverapi.WorkflowTaskActivityListResponse{Items: items, NextPageToken: page.nextPageToken, GeneratedAtUnixMs: time.Now().UTC().UnixMilli()}, nil
+	return s.activity.List(ctx, req)
 }
 
 func (s *Service) ListAttention(ctx context.Context, req serverapi.WorkflowAttentionListRequest, roleResolver workflow.RoleResolver) (serverapi.WorkflowAttentionListResponse, error) {
@@ -700,63 +691,6 @@ func (s *Service) ListTaskAttention(ctx context.Context, req serverapi.WorkflowT
 
 func (s *Service) definition(ctx context.Context, workflowID string) (serverapi.WorkflowDefinition, map[string]workflow.NodeKind, error) {
 	return s.definitions.GetDefinition(ctx, workflowID)
-}
-
-func (s *Service) activityItemsFromRows(task sqlitegen.TaskRecord, rows []taskActivityRow, comments map[string]sqlitegen.TaskComment, transitions map[string]sqlitegen.TaskTransitionRecord, edges map[string][]sqlitegen.TaskTransitionEdgeRecord, runs map[string]sqlitegen.TaskRunRecord, nodes map[string]serverapi.WorkflowNode, sessionNames map[string]string) ([]serverapi.WorkflowTaskActivityItem, error) {
-	items := make([]serverapi.WorkflowTaskActivityItem, 0, len(rows))
-	for _, row := range rows {
-		item := serverapi.WorkflowTaskActivityItem{ActivityID: row.activityID, Type: row.kind, TaskID: task.ID, OccurredAtUnixMs: row.occurredAtUnixMs, UpdatedAtUnixMs: row.updatedAtUnixMs, Actor: row.actor}
-		switch row.kind {
-		case "comment":
-			comment, ok := comments[row.sourceID]
-			if !ok {
-				return nil, errors.New("activity comment source is missing")
-			}
-			item.Summary = "Comment"
-			dto := s.projector.ProjectComment(comment)
-			item.Comment = &dto
-		case "transition":
-			transition, ok := transitions[row.sourceID]
-			if !ok {
-				return nil, errors.New("activity transition source is missing")
-			}
-			dto, err := s.projector.ProjectTransition(TransitionProjectionInput{Transition: transition, Edges: edges[transition.ID]})
-			if err != nil {
-				return nil, err
-			}
-			summary := strings.TrimSpace(dto.TransitionDisplayName)
-			if summary == "" {
-				summary = dto.TransitionID
-			}
-			item.Actor = transition.Actor
-			item.Summary = "Transition: " + summary
-			item.Transition = &dto
-		case "run_started", "run_completed", "run_interrupted":
-			run, ok := runs[row.sourceID]
-			if !ok {
-				return nil, errors.New("activity run source is missing")
-			}
-			runView := s.projector.ProjectRun(RunProjectionInput{Run: run, Nodes: nodes, SessionNames: sessionNames})
-			item.Run = &runView
-			switch row.kind {
-			case "run_started":
-				item.Summary = "Run started"
-			case "run_completed":
-				item.Summary = "Run completed"
-			case "run_interrupted":
-				item.Summary = workflowattention.InterruptedRunMessage(metadata.OptionalString(run.InterruptionReason), run.InterruptionDetailJson)
-				workflowID := task.WorkflowID
-				attention := serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + run.ID, Kind: attentionKindInterruptedRun, ProjectID: task.ProjectID, WorkflowID: &workflowID, TaskID: task.ID, TaskShortID: task.ShortID, TaskTitle: task.Title, RunID: run.ID, SessionID: run.SessionID.String, Message: item.Summary, DetailJSON: run.InterruptionDetailJson, OccurredAtUnixMs: run.InterruptedAtUnixMs.Int64}
-				item.Attention = &attention
-			}
-		case "task_canceled":
-			item.Summary = "Task canceled"
-		default:
-			return nil, errors.New("activity kind is unsupported")
-		}
-		items = append(items, item)
-	}
-	return items, nil
 }
 
 func bodyPreview(body string) string {
