@@ -58,10 +58,10 @@ func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, i
 		open := serverapi.OpenExistingSessionLaunchIntent(sessionID)
 		intent = &open
 	}
-	return runSessionLifecycleWithOptions(ctx, server, interactor, sessionLifecycleOptions{Intent: intent})
+	return runSessionLifecycleWithOptions(ctx, server, interactor, config.ClientSettings{}, sessionLifecycleOptions{Intent: intent})
 }
 
-func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessionServer, interactor authInteractor, opts sessionLifecycleOptions) error {
+func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessionServer, interactor authInteractor, _ config.ClientSettings, opts sessionLifecycleOptions) error {
 	originalServer := server
 	boundServer, err := ensureInteractiveProjectBinding(ctx, server)
 	if err != nil {

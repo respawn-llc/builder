@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 
+	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -35,8 +36,14 @@ type SessionLifecycleOptions struct {
 	Overrides serverapi.RunPromptOverrides
 }
 
+type InteractiveConfig struct {
+	Server config.App
+	Client config.ClientSettings
+}
+
 type Dependencies[S SessionServer, A any, SO any] struct {
-	NewAuthInteractor   func() A
-	StartSessionServer  func(context.Context, Request[SO], A, bool) (S, error)
-	RunSessionLifecycle func(context.Context, S, A, SessionLifecycleOptions) error
+	ResolveInteractiveConfig func(Request[SO]) (InteractiveConfig, error)
+	NewAuthInteractor        func() A
+	StartSessionServer       func(context.Context, Request[SO], A, bool, config.App) (S, error)
+	RunSessionLifecycle      func(context.Context, S, A, config.ClientSettings, SessionLifecycleOptions) error
 }

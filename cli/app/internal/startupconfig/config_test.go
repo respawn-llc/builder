@@ -2,7 +2,9 @@ package startupconfig
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"core/server/metadata"
@@ -10,6 +12,84 @@ import (
 	"core/shared/config"
 	"core/shared/sessioncontract"
 )
+
+func TestResolveInteractiveConfigReturnsServerAndClientSnapshots(t *testing.T) {
+	root := t.TempDir()
+	workspace := t.TempDir()
+	configPath := filepath.Join(root, "config.toml")
+	if err := os.WriteFile(configPath, []byte("[hooks.client]\nlifecycle = [\"notify\", \"fixed\"]\n"), 0o644); err != nil {
+		t.Fatalf("write global config: %v", err)
+	}
+
+	resolved, err := ResolveInteractiveConfig(Request{
+		WorkspaceRoot: workspace,
+		LoadOptions: config.LoadOptions{
+			ConfigRoot: root,
+			Model:      "resolved-model",
+		},
+	})
+	if err != nil {
+		t.Fatalf("ResolveInteractiveConfig: %v", err)
+	}
+	if resolved.Server.Settings.Model != "resolved-model" {
+		t.Fatalf("server model = %q, want resolved-model", resolved.Server.Settings.Model)
+	}
+	if got, want := resolved.Client.Hooks.LifecycleCommand(), []string{"notify", "fixed"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("client lifecycle command = %#v, want %#v", got, want)
+	}
+}
+
+func TestResolveInteractiveConfigRejectsInvalidClientConfiguration(t *testing.T) {
+	tests := map[string]func(*testing.T, string, string){
+		"malformed global file": func(t *testing.T, root string, _ string) {
+			t.Helper()
+			if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte("[hooks.client\n"), 0o644); err != nil {
+				t.Fatalf("write malformed config: %v", err)
+			}
+		},
+		"unreadable global path": func(t *testing.T, root string, _ string) {
+			t.Helper()
+			if err := os.Mkdir(filepath.Join(root, "config.toml"), 0o755); err != nil {
+				t.Fatalf("create config directory: %v", err)
+			}
+		},
+		"type-invalid global key": func(t *testing.T, root string, _ string) {
+			t.Helper()
+			if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte("[hooks.client]\nlifecycle = \"notify\"\n"), 0o644); err != nil {
+				t.Fatalf("write type-invalid config: %v", err)
+			}
+		},
+		"unknown global key": func(t *testing.T, root string, _ string) {
+			t.Helper()
+			if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte("unknown_startup_key = true\n"), 0o644); err != nil {
+				t.Fatalf("write unknown config: %v", err)
+			}
+		},
+		"client key in workspace": func(t *testing.T, _ string, workspace string) {
+			t.Helper()
+			configDir := filepath.Join(workspace, config.ConfigDirName)
+			if err := os.MkdirAll(configDir, 0o755); err != nil {
+				t.Fatalf("create workspace config dir: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("[hooks.client]\nlifecycle = [\"notify\"]\n"), 0o644); err != nil {
+				t.Fatalf("write workspace config: %v", err)
+			}
+		},
+	}
+	for name, arrange := range tests {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			workspace := t.TempDir()
+			arrange(t, root, workspace)
+			if _, err := ResolveInteractiveConfig(Request{
+				WorkspaceRoot: workspace,
+				LoadOptions:   config.LoadOptions{ConfigRoot: root},
+			}); err == nil {
+				t.Fatal("invalid interactive configuration succeeded")
+			}
+		})
+	}
+}
 
 func TestResolveWorkspaceRootUsesCWDWhenEmpty(t *testing.T) {
 	cwd := t.TempDir()

@@ -7,19 +7,14 @@ import (
 	"strings"
 
 	"core/cli/app/commands"
-	"core/cli/app/internal/startupconfig"
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/protocol"
 	"core/shared/serverapi"
 )
 
-func startSessionServer(ctx context.Context, opts Options, interactor authInteractor, interactive bool) (server interactiveSessionServer, returnErr error) {
+func startSessionServer(ctx context.Context, _ Options, interactor authInteractor, interactive bool, cfg config.App) (server interactiveSessionServer, returnErr error) {
 	promptRoots, err := commands.NewClientPromptRoots()
-	if err != nil {
-		return nil, err
-	}
-	cfg, err := startupconfig.ResolveSessionConfig(startupConfigRequest(opts))
 	if err != nil {
 		return nil, err
 	}

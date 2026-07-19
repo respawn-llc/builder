@@ -135,7 +135,7 @@ func TestRemoteNoAuthUnregisteredWorkspaceBindingCanPrepareRuntime(t *testing.T)
 			return authMethodPickerResult{Choice: authMethodChoiceSkip}, nil
 		},
 	}
-	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true, Model: "gpt-5"}, interactor, true)
+	server, err := startSessionServerForTest(t, context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true, Model: "gpt-5"}, interactor, true)
 	if err != nil {
 		t.Fatalf("startSessionServer: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestRemoteSessionStatusDoesNotReuseLocalAuthState(t *testing.T) {
 			return authMethodPickerResult{}, nil
 		},
 	}
-	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, interactor, true)
+	server, err := startSessionServerForTest(t, context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, interactor, true)
 	if err != nil {
 		t.Fatalf("startSessionServer: %v", err)
 	}

@@ -29,6 +29,11 @@ type RunPromptResult struct {
 	CallerContext         CallerContext
 }
 
+type InteractiveResult struct {
+	Server config.App
+	Client config.ClientSettings
+}
+
 type CallerKind string
 
 const (
@@ -61,6 +66,29 @@ func ResolveSessionConfig(req Request) (config.App, error) {
 		return config.App{}, err
 	}
 	return plan.Config, nil
+}
+
+func ResolveInteractiveConfig(req Request) (InteractiveResult, error) {
+	workspaceRoot, err := ResolveWorkspaceRoot(req.WorkspaceRoot)
+	if err != nil {
+		return InteractiveResult{}, err
+	}
+	target, err := bootstrap.ResolveConfigTarget(bootstrap.Request{
+		WorkspaceRoot:         workspaceRoot,
+		WorkspaceRootExplicit: req.WorkspaceRootExplicit,
+		SessionID:             req.SessionID,
+		OpenAIBaseURL:         req.OpenAIBaseURL,
+		OpenAIBaseURLExplicit: req.OpenAIBaseURLExplicit,
+		LoadOptions:           req.LoadOptions,
+	})
+	if err != nil {
+		return InteractiveResult{}, err
+	}
+	server, client, err := config.LoadInteractive(target.WorkspaceRoot, target.LoadOptions)
+	if err != nil {
+		return InteractiveResult{}, err
+	}
+	return InteractiveResult{Server: server, Client: client}, nil
 }
 
 func ResolveRunPromptConfig(req Request) (RunPromptResult, error) {

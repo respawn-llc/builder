@@ -60,7 +60,8 @@ func TestBackParentPrefillTransportParity(t *testing.T) {
 		defer stopServing()
 		waitForConfiguredRemoteIdentity(t, workspace)
 
-		server, err := startSessionServer(
+		server, err := startSessionServerForTest(
+			t,
 			context.Background(),
 			Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true},
 			newHeadlessAuthInteractor(),
@@ -270,7 +271,8 @@ func TestRemoteBackRebindsToParentProjectBeforeRuntimePreparation(t *testing.T) 
 	defer stopServing()
 	waitForConfiguredRemoteIdentity(t, workspaceA)
 
-	server, err := startSessionServer(
+	server, err := startSessionServerForTest(
+		t,
 		context.Background(),
 		Options{WorkspaceRoot: workspaceA, WorkspaceRootExplicit: true},
 		newHeadlessAuthInteractor(),

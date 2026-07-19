@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"core/cli/app/internal/startupconfig"
 	checkpoint "core/internal/testharness/pty/analyzer"
 	"core/internal/testharness/pty/appfixture"
 	"core/shared/runtimeids"
@@ -106,7 +107,11 @@ func runPTYFixtureProcess(ctx context.Context, processConfig appfixture.ProcessC
 	}
 	defer func() { _ = standingServer.Close() }()
 
-	server, err := startSessionServer(ctx, options, interactor, true)
+	cfg, err := startupconfig.ResolveSessionConfig(startupConfigRequest(options))
+	if err != nil {
+		return err
+	}
+	server, err := startSessionServer(ctx, options, interactor, true, cfg)
 	if err != nil {
 		return err
 	}
