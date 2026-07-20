@@ -9,9 +9,12 @@ import (
 )
 
 func migrationMemoryLimitResource() int {
-	// Resident pages are a subset of virtual address space, so a 128 MiB hard
-	// RLIMIT_AS is a conservative hard upper bound on resident memory.
-	return unix.RLIMIT_AS
+	// RLIMIT_AS includes the Go runtime, executable, and shared-library address
+	// mappings, so the same bounded workload can fail before allocating its
+	// working set as toolchain mapping strategy changes. RLIMIT_DATA applies the
+	// hard ceiling to heap and anonymous data mappings; peak RSS is checked
+	// separately after the fixture.
+	return unix.RLIMIT_DATA
 }
 
 func assertMigrationResidentMemoryWithinLimit() error {

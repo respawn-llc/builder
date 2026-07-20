@@ -13,15 +13,13 @@ import (
 
 func TestForkReplayUnderHardMemoryLimit(t *testing.T) {
 	if os.Getenv("KENT_FORK_MEMORY_LIMIT_CHILD") == "1" {
-		limited, err := applyMigrationHardMemoryLimit()
+		_, err := applyMigrationHardMemoryLimit()
 		if err != nil {
 			t.Fatalf("apply fork memory limit: %v", err)
 		}
 		runForkMemoryFixture(t)
-		if !limited {
-			if err := assertMigrationResidentMemoryWithinLimit(); err != nil {
-				t.Fatalf("fork resident memory limit: %v", err)
-			}
+		if err := assertMigrationResidentMemoryWithinLimit(); err != nil {
+			t.Fatalf("fork resident memory limit: %v", err)
 		}
 		return
 	}

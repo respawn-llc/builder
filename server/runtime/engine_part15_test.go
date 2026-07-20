@@ -381,13 +381,10 @@ func TestCommittedCompactionHistoryReplacementInvalidatesUsageAcrossImmediateReo
 	if err != nil {
 		t.Fatalf("reopen immediately after committed replacement: %v", err)
 	}
-	if usage := reopenedStore.Metadata().UsageState; usage == nil || usage.InputTokens != oldUsage.InputTokens {
-		t.Fatalf("metadata-only reopen changed persisted usage before event use: %+v", usage)
+	if usage := reopenedStore.Metadata().UsageState; usage != nil {
+		t.Fatalf("immediate reopen restored pre-compaction usage: %+v", usage)
 	}
 	reopened := mustNewExecTestEngine(t, reopenedStore, &fakeClient{}, Config{Model: "gpt-5"})
-	if usage := reopenedStore.Metadata().UsageState; usage != nil {
-		t.Fatalf("runtime event use retained pre-compaction usage: %+v", usage)
-	}
 	reopenedUsage := reopened.ContextUsage()
 	if reopenedUsage.UsedTokens <= 0 || reopenedUsage.UsedTokens >= oldUsage.InputTokens {
 		t.Fatalf("immediately reopened context usage = %+v, want compacted active-history estimate", reopenedUsage)
@@ -433,30 +430,30 @@ func TestCommittedHistoryReplacementPreventsStaleUsageFromLaterMetadataPersisten
 		return usage != nil && usage.InputTokens == compactedUsage.InputTokens
 	}, finalUsageErr)
 	usageReceipt, usageErr := eng.recordLastUsage(compactedUsage)
-	if usageReceipt.Committed || !errors.Is(usageErr, finalUsageErr) {
-		t.Fatalf("record compacted usage receipt=%+v error=%v, want uncommitted observer failure", usageReceipt, usageErr)
+	if !usageReceipt.Committed || !errors.Is(usageErr, finalUsageErr) {
+		t.Fatalf("record compacted usage receipt=%+v error=%v, want committed observer failure", usageReceipt, usageErr)
 	}
 	if err := store.SetName("post-compaction metadata write"); err != nil {
 		t.Fatalf("persist unrelated metadata: %v", err)
 	}
-	if usage := store.Metadata().UsageState; usage != nil {
-		t.Fatalf("later metadata write retained pre-compaction usage: %+v", usage)
+	if usage := store.Metadata().UsageState; usage == nil || usage.InputTokens != compactedUsage.InputTokens {
+		t.Fatalf("later metadata write lost compacted usage: %+v", usage)
 	}
 
 	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	if usage := reopenedStore.Metadata().UsageState; usage != nil {
-		t.Fatalf("reopened metadata restored pre-compaction usage: %+v", usage)
+	if usage := reopenedStore.Metadata().UsageState; usage == nil || usage.InputTokens != compactedUsage.InputTokens {
+		t.Fatalf("reopened metadata lost compacted usage: %+v", usage)
 	}
 	reopened := mustNewExecTestEngine(t, reopenedStore, &fakeClient{}, Config{Model: "gpt-5"})
 	reopenedUsage := reopened.ContextUsage()
 	if reopenedUsage.UsedTokens <= 0 || reopenedUsage.UsedTokens >= oldUsage.InputTokens {
 		t.Fatalf("reopened context usage = %+v, want compacted active-history estimate", reopenedUsage)
 	}
-	if reopenedUsage.HasCacheHitPercentage {
-		t.Fatalf("reopened cache usage restored stale pre-compaction counters: %+v", reopenedUsage)
+	if !reopenedUsage.HasCacheHitPercentage || reopenedUsage.CacheHitPercent != 100 {
+		t.Fatalf("reopened cache usage = %+v, want committed cumulative counters", reopenedUsage)
 	}
 }
 

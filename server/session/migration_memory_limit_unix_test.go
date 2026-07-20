@@ -22,7 +22,7 @@ const migrationHardMemoryLimitBytes = 128 << 20
 
 func TestMigrationValueLayerUnderHardMemoryLimit(t *testing.T) {
 	if os.Getenv("KENT_MIGRATION_MEMORY_LIMIT_CHILD") == "1" {
-		limited, err := applyMigrationHardMemoryLimit()
+		_, err := applyMigrationHardMemoryLimit()
 		if err != nil {
 			t.Fatalf("apply migration hard memory limit: %v", err)
 		}
@@ -31,10 +31,8 @@ func TestMigrationValueLayerUnderHardMemoryLimit(t *testing.T) {
 		runLargeStructuredAbsentSnapshotFallbackFixture(t, 80<<20)
 		runMigrationDepthFixture(t, migrationMaxJSONNesting, nil)
 		runMigrationDepthFixture(t, migrationMaxJSONNesting+1, errMigrationJSONComplex)
-		if !limited {
-			if err := assertMigrationResidentMemoryWithinLimit(); err != nil {
-				t.Fatalf("migration resident memory limit: %v", err)
-			}
+		if err := assertMigrationResidentMemoryWithinLimit(); err != nil {
+			t.Fatalf("migration resident memory limit: %v", err)
 		}
 		return
 	}
