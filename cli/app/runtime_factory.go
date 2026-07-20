@@ -18,4 +18,6 @@ type runtimeWiring struct {
 	processOutput         apicontract.ProcessOutputService
 	processViews          apicontract.ProcessViewService
 	promptHistory         []string
+	lifecycleHookIssues   <-chan lifecycleHookIssue
+	lifecycleHookDone     <-chan struct{}
 }

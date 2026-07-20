@@ -20,15 +20,16 @@ type runtimeAttachmentSource interface {
 }
 
 type runtimeAttachmentClients struct {
-	ProcessControls   apicontract.ProcessControlService
-	ProcessOutput     apicontract.ProcessOutputService
-	ProcessViews      apicontract.ProcessViewService
-	PromptControl     apicontract.PromptControlService
-	RuntimeControls   apicontract.RuntimeControlService
-	SessionTranscript apicontract.SessionTranscriptService
-	SessionRuntime    apicontract.SessionRuntimeService
-	SessionViews      apicontract.SessionViewService
-	Worktrees         apicontract.WorktreeService
+	AttentionNotifications apicontract.AttentionNotificationService
+	ProcessControls        apicontract.ProcessControlService
+	ProcessOutput          apicontract.ProcessOutputService
+	ProcessViews           apicontract.ProcessViewService
+	PromptControl          apicontract.PromptControlService
+	RuntimeControls        apicontract.RuntimeControlService
+	SessionTranscript      apicontract.SessionTranscriptService
+	SessionRuntime         apicontract.SessionRuntimeService
+	SessionViews           apicontract.SessionViewService
+	Worktrees              apicontract.WorktreeService
 }
 
 func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, plan sessionLaunchPlan, diagnosticWriter io.Writer, startLogLine string) (*runtimeLaunchPlan, error) {
@@ -95,15 +96,27 @@ func prepareSharedRuntimeWiring(
 	if reactivator != nil {
 		runtimeClient.SetRuntimeReactivator(reactivator)
 	}
+	terminalFocus := newTerminalFocusState()
+	lifecycleProxy := newClientLifecycleProxy(
+		ctx,
+		plan.ClientLifecycleCommand,
+		lifecycleInitialContext(plan.SessionID, plan.SessionName),
+		terminalFocus.FocusedForAttention,
+		clients.AttentionNotifications == nil,
+	)
 	subscribeTranscript := func(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
 		return clients.SessionTranscript.SubscribeSessionTranscript(ctx, req)
 	}
-	transcriptStream := startSessionTranscriptEvents(ctx, plan.SessionID, subscribeTranscript)
+	var transcriptStream ongoingTranscriptEventStream
+	if lifecycleProxy != nil {
+		transcriptStream = startSessionTranscriptEvents(ctx, plan.SessionID, subscribeTranscript, lifecycleProxy.AcceptTranscript)
+	} else {
+		transcriptStream = startSessionTranscriptEvents(ctx, plan.SessionID, subscribeTranscript)
+	}
 	transcriptEvents := transcriptStream.Events
 	eventDispatcher := newUIEventDispatcher(transcriptEvents)
 	requestTranscriptOpen := transcriptStream.RequestRehydration
-	stopTranscriptEvents := transcriptStream.Stop
-	terminalFocus := newTerminalFocusState()
+	stopAttention := startClientLifecycleAttention(ctx, plan.SessionID, clients.AttentionNotifications, lifecycleProxy)
 	turnQueueHook := newBellHooks(newTerminalNotifier(plan.ActiveSettings.NotificationMethod, os.Stdout, os.LookupEnv), func() string {
 		if runtimeClient != nil {
 			if sessionName := strings.TrimSpace(runtimeClient.MainView().Session.SessionName); sessionName != "" {
@@ -126,5 +139,16 @@ func prepareSharedRuntimeWiring(
 		processViews:          clients.ProcessViews,
 		promptHistory:         append([]string(nil), plan.PromptHistory...),
 	}
-	return wiring, stopTranscriptEvents
+	if lifecycleProxy != nil {
+		wiring.lifecycleHookIssues = lifecycleProxy.Issues()
+		wiring.lifecycleHookDone = lifecycleProxy.Done()
+		lifecycleProxy.AcceptSessionStart(plan.ClientLifecycleOpeningKind)
+	}
+	return wiring, func() {
+		transcriptStream.Stop()
+		stopAttention()
+		if lifecycleProxy != nil {
+			lifecycleProxy.Close()
+		}
+	}
 }

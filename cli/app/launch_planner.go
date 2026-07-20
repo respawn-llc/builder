@@ -13,6 +13,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/lifecyclecontract"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 
@@ -33,17 +34,19 @@ type sessionLaunchRequest struct {
 }
 
 type sessionLaunchPlan struct {
-	Mode                launchMode
-	SessionID           string
-	ActiveSettings      config.Settings
-	EnabledTools        []toolspec.ID
-	ConfiguredModelName string
-	SessionName         string
-	PromptHistory       []string
-	ModelContractLocked bool
-	StatusConfig        uiStatusConfig
-	ExecutionTarget     clientui.SessionExecutionTarget
-	Source              config.SourceReport
+	Mode                       launchMode
+	SessionID                  string
+	ActiveSettings             config.Settings
+	EnabledTools               []toolspec.ID
+	ConfiguredModelName        string
+	SessionName                string
+	PromptHistory              []string
+	ModelContractLocked        bool
+	StatusConfig               uiStatusConfig
+	ExecutionTarget            clientui.SessionExecutionTarget
+	Source                     config.SourceReport
+	ClientLifecycleCommand     []string
+	ClientLifecycleOpeningKind lifecyclecontract.OpeningKind
 }
 
 type resolvedSessionPlanRequest struct {

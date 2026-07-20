@@ -143,6 +143,7 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUIRendererOutputGateState(rendererOutputGate),
 		WithUIOngoingSurface(ongoingSurface),
 		WithUIOngoingTranscriptEvents(request.wiring.eventDispatcher.transcriptEvents),
+		WithUIClientLifecycleIssues(request.wiring.lifecycleHookIssues, request.wiring.lifecycleHookDone),
 		WithUIOngoingTranscriptReopen(request.wiring.requestTranscriptOpen),
 		WithUITerminalFocusState(request.wiring.terminalFocus),
 	)
