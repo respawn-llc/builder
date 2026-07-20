@@ -140,3 +140,4 @@ export type {
   TaskListItem,
   TaskListPage,
 } from "./workflowLabels";
+export { noTaskLabelFilter } from "./workflowLabels";

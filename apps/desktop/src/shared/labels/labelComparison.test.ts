@@ -21,4 +21,9 @@ describe("label comparison", () => {
       expect(Math.sign(compareLabelNames(test.left, test.right))).toBe(test.expected);
     }
   });
+
+  it("searches non-ASCII names through the shared Unicode fold", () => {
+    expect(labelNameContains("Straße", "STRASSE")).toBe(true);
+    expect(labelNameContains("Μῆνιν", "μῆνιν")).toBe(true);
+  });
 });

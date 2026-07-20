@@ -24,6 +24,8 @@ export type TaskLabelFilter =
       labelIDs: readonly string[];
     }>;
 
+export const noTaskLabelFilter = { kind: "none" } as const satisfies TaskLabelFilter;
+
 export type TaskListItem = Readonly<{
   id: string;
   shortID: string;

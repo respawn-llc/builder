@@ -7,7 +7,7 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useEffect } from "react";
 
-import type { BoardNodeCardsPage, WorkflowProjectEvent } from "@/api";
+import { noTaskLabelFilter, type BoardNodeCardsPage, type WorkflowProjectEvent } from "@/api";
 import { queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
@@ -16,8 +16,8 @@ import { workflowProjectQuestionTaskID } from "@/app-facade";
 export function useBoard(projectID: string, workflowID: string | undefined) {
   const { api } = useAppServices();
   return useQuery({
-    queryKey: queryKeys.board(projectID, workflowID),
-    queryFn: async () => api.getBoard(projectID, workflowID, { kind: "none" }),
+    queryKey: queryKeys.board(projectID, workflowID, noTaskLabelFilter),
+    queryFn: async () => api.getBoard(projectID, workflowID, noTaskLabelFilter),
     enabled: projectID.trim().length > 0,
   });
 }
@@ -31,13 +31,13 @@ export function useBoardNodeCards(projectID: string, workflowID: string, nodeID:
     readonly string[],
     string | null
   >({
-    queryKey: queryKeys.boardNodeCards(projectID, workflowID, nodeID),
+    queryKey: queryKeys.boardNodeCards(projectID, workflowID, nodeID, noTaskLabelFilter),
     queryFn: async ({ pageParam }) =>
       api.listBoardNodeCards({
         projectID,
         workflowID,
         nodeID,
-        labelFilter: { kind: "none" },
+        labelFilter: noTaskLabelFilter,
         pageToken: pageParam,
       }),
     initialPageParam: null,
@@ -75,13 +75,17 @@ export function useProjectBoardSubscription(
       return;
     }
     async function refresh(): Promise<void> {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.board(projectID, boardQueryWorkflowID) });
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.board(projectID, boardQueryWorkflowID, noTaskLabelFilter),
+      });
       if (selectedWorkflowID !== undefined && selectedWorkflowID !== boardQueryWorkflowID) {
-        await queryClient.invalidateQueries({ queryKey: queryKeys.board(projectID, selectedWorkflowID) });
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.board(projectID, selectedWorkflowID, noTaskLabelFilter),
+        });
       }
       if (selectedWorkflowID !== undefined) {
         await queryClient.invalidateQueries({
-          queryKey: queryKeys.boardNodeCardsRoot(projectID, selectedWorkflowID),
+          queryKey: queryKeys.boardNodeCardsRoot(projectID, selectedWorkflowID, noTaskLabelFilter),
         });
       }
       await queryClient.invalidateQueries({ queryKey: queryKeys.attention });
@@ -172,12 +176,16 @@ export function useBoardTaskActions(
   const { api } = useAppServices();
   const queryClient = useQueryClient();
   async function refresh(): Promise<void> {
-    await queryClient.invalidateQueries({ queryKey: queryKeys.board(projectID, boardQueryWorkflowID) });
+    await queryClient.invalidateQueries({
+      queryKey: queryKeys.board(projectID, boardQueryWorkflowID, noTaskLabelFilter),
+    });
     if (selectedWorkflowID !== boardQueryWorkflowID) {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.board(projectID, selectedWorkflowID) });
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.board(projectID, selectedWorkflowID, noTaskLabelFilter),
+      });
     }
     await queryClient.invalidateQueries({
-      queryKey: queryKeys.boardNodeCardsRoot(projectID, selectedWorkflowID),
+      queryKey: queryKeys.boardNodeCardsRoot(projectID, selectedWorkflowID, noTaskLabelFilter),
     });
   }
   async function refreshAfterTaskDelete(taskID: string): Promise<void> {

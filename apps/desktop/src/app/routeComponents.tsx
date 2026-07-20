@@ -8,7 +8,12 @@ import { StartupGate } from "@/features/startup";
 import { StandaloneTaskRoute } from "@/features/task-detail";
 import { LoadingState } from "@/ui";
 import { AppChrome } from "./AppChrome";
-import { readLastProjectRoute, writeLastProjectRoute } from "@/app-facade";
+import {
+  readBrowserStorage,
+  readLastProjectRoute,
+  writeBrowserStorage,
+  writeLastProjectRoute,
+} from "@/app-facade";
 import { RouteTransitionFrame } from "./RouteTransitionFrame";
 import { shouldSkipNativeDialogStartupGate } from "./routes";
 import { useWindowChromeTitle } from "@/app-facade";
@@ -85,28 +90,22 @@ function RoutePersistence() {
 }
 
 function claimRouteRestoreCheck(): boolean {
-  const storage = safeStorage("session");
-  if (storage === null) {
+  const stored = readBrowserStorage("session", routeRestoreSessionKey);
+  if (!stored.ok) {
     const shouldRestore = !routeRestoreCheckedFallback;
     routeRestoreCheckedFallback = true;
     return shouldRestore;
   }
-  if (storage.getItem(routeRestoreSessionKey) !== null) {
+  if (stored.value !== null) {
     return false;
   }
-  storage.setItem(routeRestoreSessionKey, "1");
-  return true;
-}
-
-function safeStorage(kind: "local" | "session"): Storage | null {
-  try {
-    if (kind === "local") {
-      return globalThis.localStorage;
-    }
-    return globalThis.sessionStorage;
-  } catch {
-    return null;
+  const written = writeBrowserStorage("session", routeRestoreSessionKey, "1");
+  if (!written.ok) {
+    const shouldRestore = !routeRestoreCheckedFallback;
+    routeRestoreCheckedFallback = true;
+    return shouldRestore;
   }
+  return true;
 }
 
 export function ProjectRoute() {

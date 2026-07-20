@@ -3,7 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 
-import type { BoardNodeCardsPage, WorkflowProjectEvent } from "@/api";
+import { noTaskLabelFilter, type BoardNodeCardsPage, type WorkflowProjectEvent } from "@/api";
 import { queryKeys } from "@/app-facade";
 import { AppServicesProvider } from "@/app-facade";
 import { createTestServices } from "@/test-support/app-services";
@@ -135,7 +135,9 @@ describe("shouldRefreshBoardFromProjectEvent", () => {
     view.unmount();
     await waitFor(() => {
       expect(
-        queryClient.getQueryData(queryKeys.boardNodeCards("project-1", "workflow-1", "node-1")),
+        queryClient.getQueryData(
+          queryKeys.boardNodeCards("project-1", "workflow-1", "node-1", noTaskLabelFilter),
+        ),
       ).toBeUndefined();
     });
   });

@@ -88,6 +88,10 @@ export function createTestServices(
     logger: createTestLogger(),
     nativeBridge,
     protocolVersion,
+    storageNamespace: {
+      kind: "browser-endpoint",
+      identity: "ws://127.0.0.1:53082/rpc",
+    },
     transport,
   };
 }
