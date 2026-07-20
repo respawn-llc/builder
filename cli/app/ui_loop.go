@@ -144,6 +144,7 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUIOngoingSurface(ongoingSurface),
 		WithUIOngoingTranscriptEvents(request.wiring.transcriptEvents),
 		WithUIOngoingTranscriptReopen(request.wiring.requestTranscriptOpen),
+		WithUIAttentionEvents(request.wiring.attentionEvents, request.wiring.requestAttentionReopen),
 		WithUITerminalFocusState(request.wiring.terminalFocus),
 	)
 	model, ok := rawModel.(*uiModel)

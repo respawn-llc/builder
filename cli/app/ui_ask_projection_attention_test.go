@@ -1,7 +1,6 @@
 package app
 
 import (
-	"strings"
 	"testing"
 
 	"core/shared/clientui"
@@ -9,10 +8,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func TestAskVisibleActivationUsesCompletedProjectionNotificationPreview(t *testing.T) {
+func TestAskVisibleActivationNormalizesMarkdownAfterProjectionCompletes(t *testing.T) {
 	ringer := &countRinger{}
 	model := sizedTestUIModel(newProjectedStaticUIModel(), 64, 20)
 	model.promptAttention = newUnfocusedBellHooks(ringer)
+	lifecycle := &recordingLifecycleAttentionSink{}
+	model.lifecycleAttention = lifecycle
 	model.questionProjector = func(request questionRenderRequest) questionRenderResultMsg {
 		return questionRenderResultMsg{
 			request: request,
@@ -32,11 +33,8 @@ func TestAskVisibleActivationUsesCompletedProjectionNotificationPreview(t *testi
 	if ready.ask.activeProjection == nil || ringer.notifications != 1 || len(ringer.messages) != 1 {
 		t.Fatalf("activation state = projection %+v notifications %d messages %q", ready.ask.activeProjection, ringer.notifications, ringer.messages)
 	}
-	if !strings.Contains(ringer.messages[0], "projected notification copy") {
-		t.Fatalf("activation notification did not use completed projection: %q", ringer.messages[0])
-	}
-	if strings.Contains(ringer.messages[0], "raw Markdown source") {
-		t.Fatalf("activation notification reparsed the raw question: %q", ringer.messages[0])
+	if len(lifecycle.facts) != 1 || lifecycle.facts[0].summary != "**raw Markdown source that must not reach activation notification rendering**" {
+		t.Fatalf("activation lifecycle facts = %+v, want one Markdown-source fact", lifecycle.facts)
 	}
 }
 

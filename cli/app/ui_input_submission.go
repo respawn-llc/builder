@@ -176,7 +176,7 @@ func (c uiInputController) notifyTurnQueueDrainedIfIdle() {
 	if m.turnQueueHook == nil || m.blocksRuntimeInput() || len(m.queued) > 0 || m.ask.hasCurrent() {
 		return
 	}
-	m.turnQueueHook.OnTurnQueueDrained()
+	m.turnQueueHook.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 }
 
 func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.Cmd) {
@@ -203,7 +203,7 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	m.discardQueuedInput(activeQueuedID)
 	if msg.err != nil {
 		if m.turnQueueHook != nil {
-			m.turnQueueHook.OnTurnQueueAborted()
+			m.turnQueueHook.ReduceNativeInput(nativeTurnQueueAbortedInput{})
 		}
 		restoreInjectedCmd := c.restorePendingInjectedIntoInput()
 		if restoreSubmittedText {
@@ -231,7 +231,7 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 		m.registerSteeredQueuedUserMessage(msg.queued)
 	}
 	if msg.silentFinal && m.turnQueueHook != nil {
-		m.turnQueueHook.OnTurnQueueAborted()
+		m.turnQueueHook.ReduceNativeInput(nativeTurnQueueAbortedInput{})
 	}
 	m.conversationFreshness = clientui.ConversationFreshnessEstablished
 	m.localConversationTurn = true
@@ -362,7 +362,7 @@ func (c uiInputController) notifyUserCompactionCompleted(origin uiCompactionOrig
 	}
 	switch origin {
 	case uiCompactionOriginManual, uiCompactionOriginQueued:
-		m.turnQueueHook.OnUserCompactionCompleted(queueDrained)
+		m.turnQueueHook.ReduceNativeInput(nativeUserCompactionCompletedInput{queueDrained: queueDrained})
 	}
 }
 

@@ -55,7 +55,7 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 		return tea.Batch(stateCmd, m.handleOngoingResult(result), m.reconcileSpinnerTicking(true))
 	case ongoingTranscriptEventLoss:
 		if m.turnQueueHook != nil {
-			m.turnQueueHook.OnTurnQueueAborted()
+			m.turnQueueHook.ReduceNativeInput(nativeTurnQueueAbortedInput{})
 		}
 		result = m.ongoingTranscript.HandleSubscriptionLoss()
 	default:

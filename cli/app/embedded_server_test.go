@@ -391,15 +391,16 @@ func (s *testEmbeddedServer) WorktreeClient() apicontract.WorktreeService {
 
 func (s *testEmbeddedServer) RuntimeAttachmentClients() runtimeAttachmentClients {
 	return runtimeAttachmentClients{
-		ProcessControls:   s.processControlClient,
-		ProcessOutput:     s.processOutputClient,
-		ProcessViews:      s.processViewClient,
-		PromptControl:     s.promptControlClient,
-		RuntimeControls:   s.RuntimeControlClient(),
-		SessionRuntime:    s.sessionRuntime,
-		SessionTranscript: s.sessionTranscript,
-		SessionViews:      s.sessionViewClient,
-		Worktrees:         s.WorktreeClient(),
+		AttentionNotifications: s.attentionClient,
+		ProcessControls:        s.processControlClient,
+		ProcessOutput:          s.processOutputClient,
+		ProcessViews:           s.processViewClient,
+		PromptControl:          s.promptControlClient,
+		RuntimeControls:        s.RuntimeControlClient(),
+		SessionRuntime:         s.sessionRuntime,
+		SessionTranscript:      s.sessionTranscript,
+		SessionViews:           s.sessionViewClient,
+		Worktrees:              s.WorktreeClient(),
 	}
 }
 

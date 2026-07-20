@@ -11,9 +11,9 @@ func tuiSupportsAttentionNotification(notification clientui.AttentionNotificatio
 	}
 }
 
-func notifyTranscriptPromptActivation(hook *bellHooks, prompt clientui.TranscriptPrompt, projectedPreview string) {
-	if hook == nil || prompt.State != clientui.TranscriptPromptStatePending {
-		return
+func normalizeTranscriptPromptActivation(prompt clientui.TranscriptPrompt) attentionStreamOutcome {
+	if prompt.State != clientui.TranscriptPromptStatePending {
+		return attentionStreamDiscontinuity{reason: attentionStreamDiscontinuityInvalidEvent}
 	}
 	kind := clientui.AttentionNotificationKindQuestion
 	if prompt.Kind == clientui.TranscriptPromptKindApproval {
@@ -33,22 +33,19 @@ func notifyTranscriptPromptActivation(hook *bellHooks, prompt clientui.Transcrip
 		},
 	}
 	if prompt.Kind == clientui.TranscriptPromptKindApproval {
-		notification.Approval = &clientui.AttentionNotificationApprovalState{Message: projectedPreview}
+		notification.Approval = &clientui.AttentionNotificationApprovalState{Message: prompt.Question}
 	} else {
 		promptID := string(prompt.PromptID)
 		notification.Question = &clientui.AttentionNotificationQuestionState{
 			PreparedAskIDs:          []string{promptID},
 			MaterializedAskIDs:      []string{promptID},
 			CurrentUnresolvedAskIDs: []string{promptID},
-			Preview:                 projectedPreview,
+			Preview:                 prompt.Question,
 			DisplayCount:            1,
 			MaterializedCount:       1,
 		}
 	}
-	hook.onAttentionNotification(clientui.AttentionNotificationEvent{
-		Type:    clientui.AttentionNotificationEventPending,
-		Pending: &notification,
-	}, &projectedPreview)
+	return normalizePendingAttentionNotification(notification)
 }
 
 func (m *uiModel) notifyPendingTranscriptPromptActivation() {
@@ -60,7 +57,12 @@ func (m *uiModel) notifyPendingTranscriptPromptActivation() {
 		m.ask.activeProjection.pendingActivationPreview == nil {
 		return
 	}
-	preview := *m.ask.activeProjection.pendingActivationPreview
 	m.ask.activeProjection.pendingActivationPreview = nil
-	notifyTranscriptPromptActivation(m.promptAttention, m.ask.current.prompt, preview)
+	if m.promptAttention == nil {
+		return
+	}
+	m.reduceAcceptedAttentionEventWithNative(
+		normalizeTranscriptPromptActivation(m.ask.current.prompt),
+		m.promptAttention,
+	)
 }

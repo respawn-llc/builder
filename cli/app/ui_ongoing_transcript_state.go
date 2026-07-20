@@ -19,7 +19,7 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	}
 	if m.turnQueueHook != nil {
 		if message.Kind == clientui.TranscriptMessageHydration {
-			m.turnQueueHook.OnTurnQueueAborted()
+			m.turnQueueHook.ReduceNativeInput(nativeTurnQueueAbortedInput{})
 		} else {
 			m.turnQueueHook.OnTranscriptMessage(message)
 		}

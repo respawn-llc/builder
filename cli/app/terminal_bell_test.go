@@ -535,6 +535,35 @@ func TestBellHooksCompactionCompletionPolicy(t *testing.T) {
 	})
 }
 
+func TestBellHooksReducesTypedLocalDecisionsSynchronously(t *testing.T) {
+	t.Run("compaction before drain has precedence", func(t *testing.T) {
+		ringer := &countRinger{}
+		hooks := newUnfocusedBellHooks(ringer)
+		recordToolHeavyBellTurn(hooks, 1)
+
+		hooks.ReduceNativeInput(nativeUserCompactionCompletedInput{queueDrained: false})
+		hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
+
+		if ringer.notifications != 1 {
+			t.Fatalf("compaction-before-drain emitted %d notifications, want one", ringer.notifications)
+		}
+	})
+
+	t.Run("abort clears turn and compaction", func(t *testing.T) {
+		ringer := &countRinger{}
+		hooks := newUnfocusedBellHooks(ringer)
+		recordToolHeavyBellTurn(hooks, 1)
+		hooks.ReduceNativeInput(nativeUserCompactionCompletedInput{queueDrained: false})
+
+		hooks.ReduceNativeInput(nativeTurnQueueAbortedInput{})
+		hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
+
+		if ringer.total() != 0 {
+			t.Fatalf("typed abort emitted %d events", ringer.total())
+		}
+	})
+}
+
 func testAttentionPendingEvent(id string, kind clientui.AttentionNotificationKind, body string) clientui.AttentionNotificationEvent {
 	notification := clientui.AttentionNotification{ID: attentionNotificationID(kind, id), Kind: kind}
 	if kind == clientui.AttentionNotificationKindApproval {

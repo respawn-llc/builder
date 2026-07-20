@@ -155,6 +155,24 @@ type bellHooks struct {
 	reviewerStep          *runtimeids.StepID
 }
 
+type nativeNotificationInput interface {
+	nativeNotificationInput()
+}
+
+type nativeTurnQueueDrainedInput struct{}
+
+func (nativeTurnQueueDrainedInput) nativeNotificationInput() {}
+
+type nativeTurnQueueAbortedInput struct{}
+
+func (nativeTurnQueueAbortedInput) nativeNotificationInput() {}
+
+type nativeUserCompactionCompletedInput struct {
+	queueDrained bool
+}
+
+func (nativeUserCompactionCompletedInput) nativeNotificationInput() {}
+
 func newBellHooks(notifier terminalNotifier, title func() string, focused ...func() bool) *bellHooks {
 	if notifier == nil {
 		notifier = newBELTerminalNotifier(io.Discard)
@@ -171,6 +189,26 @@ func newBellHooks(notifier terminalNotifier, title func() string, focused ...fun
 
 func (h *bellHooks) OnAttentionNotification(evt clientui.AttentionNotificationEvent) {
 	h.onAttentionNotification(evt, nil)
+}
+
+func (h *bellHooks) OnAttentionFact(fact attentionFact) {
+	if h == nil {
+		return
+	}
+	var kind clientui.AttentionNotificationKind
+	switch fact.kind {
+	case attentionFactKindQuestion:
+		kind = clientui.AttentionNotificationKindQuestion
+	case attentionFactKindApproval:
+		kind = clientui.AttentionNotificationKindApproval
+	default:
+		return
+	}
+	body := notificationMarkdownPreview(
+		fact.summary,
+		currentTerminalCapabilities().MarkdownLinks,
+	)
+	h.notifyAttention(kind, body)
 }
 
 func (h *bellHooks) onAttentionNotification(evt clientui.AttentionNotificationEvent, projectedBody *string) {
@@ -193,10 +231,14 @@ func (h *bellHooks) onAttentionNotification(evt clientui.AttentionNotificationEv
 			currentTerminalCapabilities().MarkdownLinks,
 		)
 	}
+	h.notifyAttention(notification.Kind, body)
+}
+
+func (h *bellHooks) notifyAttention(kind clientui.AttentionNotificationKind, body string) {
 	if body == "" {
-		body = attentionNotificationFallbackBody(*notification)
+		body = attentionNotificationFallbackBody(kind)
 	}
-	message := h.formatMessage(attentionNotificationTitle(*notification) + ": " + body)
+	message := h.formatMessage(attentionNotificationTitle(kind) + ": " + body)
 	if h.focusedForAttention() {
 		h.notifier.Bell()
 		return
@@ -217,8 +259,8 @@ func projectedQuestionNotificationPreview(rows []string) string {
 	return string(runes[:terminalNotificationPreviewLimit-3]) + "..."
 }
 
-func attentionNotificationTitle(notification clientui.AttentionNotification) string {
-	if notification.Kind == clientui.AttentionNotificationKindApproval {
+func attentionNotificationTitle(kind clientui.AttentionNotificationKind) string {
+	if kind == clientui.AttentionNotificationKindApproval {
 		return "Action required"
 	}
 	return "Question"
@@ -236,8 +278,8 @@ func attentionNotificationBody(notification clientui.AttentionNotification) stri
 	return ""
 }
 
-func attentionNotificationFallbackBody(notification clientui.AttentionNotification) string {
-	if notification.Kind == clientui.AttentionNotificationKindApproval {
+func attentionNotificationFallbackBody(kind clientui.AttentionNotificationKind) string {
+	if kind == clientui.AttentionNotificationKindApproval {
 		return "action required"
 	}
 	return "question from agent"
@@ -328,9 +370,24 @@ func (h *bellHooks) clearPendingTurnCompletionForSilentFinal(stepID runtimeids.S
 }
 
 func (h *bellHooks) OnTurnQueueDrained() {
+	h.ReduceNativeInput(nativeTurnQueueDrainedInput{})
+}
+
+func (h *bellHooks) ReduceNativeInput(input nativeNotificationInput) {
 	if h == nil {
 		return
 	}
+	switch input := input.(type) {
+	case nativeTurnQueueDrainedInput:
+		h.reduceTurnQueueDrained()
+	case nativeTurnQueueAbortedInput:
+		h.reduceTurnQueueAborted()
+	case nativeUserCompactionCompletedInput:
+		h.reduceUserCompactionCompleted(input.queueDrained)
+	}
+}
+
+func (h *bellHooks) reduceTurnQueueDrained() {
 	h.mu.Lock()
 	if h.pendingCompaction {
 		h.pendingCompaction = false
@@ -350,6 +407,10 @@ func (h *bellHooks) OnTurnQueueDrained() {
 }
 
 func (h *bellHooks) OnTurnQueueAborted() {
+	h.ReduceNativeInput(nativeTurnQueueAbortedInput{})
+}
+
+func (h *bellHooks) reduceTurnQueueAborted() {
 	if h == nil {
 		return
 	}
@@ -364,6 +425,10 @@ func (h *bellHooks) OnTurnQueueAborted() {
 const compactionCompletionNotificationMessage = "Compaction finished"
 
 func (h *bellHooks) OnUserCompactionCompleted(queueDrained bool) {
+	h.ReduceNativeInput(nativeUserCompactionCompletedInput{queueDrained: queueDrained})
+}
+
+func (h *bellHooks) reduceUserCompactionCompleted(queueDrained bool) {
 	if h == nil {
 		return
 	}
