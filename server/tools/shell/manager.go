@@ -259,6 +259,8 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 		OutputPath:         logPath,
 		RawOutputRequested: req.Raw,
 	}
+	entry.interactMu.Lock()
+	defer entry.interactMu.Unlock()
 	snapshot, backgrounded := entry.transitionToBackground()
 	if !backgrounded {
 		if pending := entry.drainPending(); len(pending) > 0 {
