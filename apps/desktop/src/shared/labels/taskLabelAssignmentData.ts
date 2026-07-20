@@ -19,6 +19,7 @@ export type TaskLabelAssignmentData = Readonly<{
 export function useManagedTaskLabelAssignment(
   taskID: string,
   availableLabelIDs: readonly string[],
+  enabled = true,
 ): TaskLabelAssignmentData {
   const { api } = useAppServices();
   const queryClient = useQueryClient();
@@ -45,12 +46,12 @@ export function useManagedTaskLabelAssignment(
       controller.replaceAuthoritative(assignment);
       return assignment;
     },
-    enabled: taskID.length > 0 && controller !== null,
+    enabled: enabled && taskID.length > 0 && controller !== null && !controller.getSnapshot().closed,
     retry: false,
   });
 
   useEffect(() => {
-    if (taskID.length === 0) {
+    if (!enabled || taskID.length === 0) {
       return;
     }
     const cachedAssignment = queryClient.getQueryData<TaskLabelAssignment>(queryKeys.taskLabels(taskID));
@@ -64,11 +65,13 @@ export function useManagedTaskLabelAssignment(
     return () => {
       lease.release();
     };
-  }, [availableLabelIDs, queryClient, refetch, registry, taskID, update]);
+  }, [availableLabelIDs, enabled, queryClient, refetch, registry, taskID, update]);
 
   useEffect(() => {
-    controller?.replaceAvailableLabelIDs(availableLabelIDs);
-  }, [availableLabelIDs, controller]);
+    if (enabled) {
+      controller?.replaceAvailableLabelIDs(availableLabelIDs);
+    }
+  }, [availableLabelIDs, controller, enabled]);
 
   const subscribe = useCallback(
     (listener: () => void) => controller?.subscribe(listener) ?? noOpUnsubscribe,

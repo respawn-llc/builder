@@ -6,7 +6,7 @@ import { queryKeys, useAppServices, useConnectionSnapshot } from "@/app-facade";
 import { useStableCallback } from "@/ui";
 import { createProjectLabelEffects, type LabelMembershipRefreshEffect } from "./labelEventEffects";
 import { ProjectLabelDataContext } from "./projectLabelContext";
-import { createProjectCatalogAuthority } from "./projectCatalogAuthority";
+import { projectCatalogAuthorityRegistryFor } from "./projectCatalogAuthorityRegistry";
 import { useManagedProjectLabelFilter } from "./projectLabelFilter";
 
 export function ProjectLabelsProvider({
@@ -23,15 +23,14 @@ export function ProjectLabelsProvider({
   const { api, logger } = useAppServices();
   const queryClient = useQueryClient();
   const connection = useConnectionSnapshot();
-  const authority = useMemo(
+  const authorityLease = useMemo(
     () =>
-      createProjectCatalogAuthority({
-        projectID,
-        queryClient,
-        listCatalog: async () => api.listProjectLabels(projectID),
-      }),
+      projectCatalogAuthorityRegistryFor(queryClient).prepare(projectID, async () =>
+        api.listProjectLabels(projectID),
+      ),
     [api, projectID, queryClient],
   );
+  const authority = authorityLease.authority;
   const catalog = useQuery({
     queryKey: queryKeys.projectLabels(projectID),
     queryFn: async ({ signal }) => authority.read(signal),
@@ -42,6 +41,7 @@ export function ProjectLabelsProvider({
     [catalog.data],
   );
   const filter = useManagedProjectLabelFilter(projectID, catalogLabelIDs);
+  useEffect(() => authorityLease.retain(filter.dispatch), [authorityLease, filter.dispatch]);
   const notifyMembershipRefresh = useStableCallback(async (effect: LabelMembershipRefreshEffect) => {
     await onMembershipRefresh?.(effect);
   });
@@ -56,12 +56,12 @@ export function ProjectLabelsProvider({
     () =>
       createProjectLabelEffects({
         authority,
-        onFilterAction: filter.dispatch,
+        onFilterAction: authorityLease.dispatchFilterAction,
         onMembershipRefresh: notifyMembershipRefresh,
         projectID,
         queryClient,
       }),
-    [authority, filter.dispatch, notifyMembershipRefresh, projectID, queryClient],
+    [authority, authorityLease.dispatchFilterAction, notifyMembershipRefresh, projectID, queryClient],
   );
   useEffect(() => {
     if (projectID.length === 0 || connection.phase !== "connected") {

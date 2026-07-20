@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 
 import type { ProjectLabelCatalog } from "@/api";
@@ -9,6 +9,7 @@ import { installTestStorage } from "@/test-support/storage";
 import {
   ProjectLabelsProvider,
   readPersistedLabelFilterState,
+  useProjectCatalogAuthority,
   useProjectLabelCatalog,
   useProjectLabelCatalogMutations,
   useProjectLabelFilter,
@@ -60,6 +61,137 @@ describe("Project label data", () => {
     expect(
       services.transport.calls.filter((call) => call.method === "workflow.project.label.list"),
     ).toHaveLength(1);
+  });
+
+  it("shares one catalog authority across simultaneous consumers of the same Project", async () => {
+    const services = createTestServices([
+      {
+        method: "workflow.project.label.list",
+        result: {
+          catalog: {
+            project_id: "project-1",
+            labels: [{ id: priorityID, name: "Priority" }],
+          },
+        },
+      },
+    ]);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const authorities: unknown[] = [];
+    const Consumer = () => {
+      authorities.push(useProjectCatalogAuthority());
+      return null;
+    };
+
+    render(
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        createElement(
+          AppServicesProvider,
+          { services, children: null },
+          createElement(
+            "div",
+            null,
+            createElement(ProjectLabelsProvider, {
+              projectID: "project-1",
+              children: createElement(Consumer),
+            }),
+            createElement(ProjectLabelsProvider, {
+              projectID: "project-1",
+              children: createElement(Consumer),
+            }),
+          ),
+        ),
+      ),
+    );
+
+    await waitFor(() => {
+      expect(authorities.length).toBeGreaterThanOrEqual(2);
+    });
+    expect(authorities[0]).toBe(authorities[1]);
+  });
+
+  it("prunes a filter immediately when a sibling consumer deletes its selected label", async () => {
+    const services = createTestServices([
+      {
+        method: "workflow.project.label.list",
+        result: {
+          catalog: {
+            project_id: "project-1",
+            labels: [{ id: priorityID, name: "Priority" }],
+          },
+        },
+      },
+      {
+        method: "workflow.project.label.delete",
+        result: { label_id: priorityID },
+      },
+    ]);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    function FilterConsumer() {
+      const filter = useProjectLabelFilter();
+      return createElement(
+        "button",
+        {
+          disabled: filter.persistence.status !== "ready",
+          onClick: () => {
+            filter.dispatch({ type: "named.toggle", labelID: priorityID });
+          },
+        },
+        `${filter.persistence.status}:${filter.state.filter.kind}`,
+      );
+    }
+
+    function DeleteConsumer() {
+      const mutations = useProjectLabelCatalogMutations();
+      return createElement(
+        "button",
+        {
+          onClick: () => {
+            void mutations.delete.mutateAsync(priorityID);
+          },
+        },
+        "delete",
+      );
+    }
+
+    render(
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        createElement(AppServicesProvider, {
+          services,
+          children: createElement(
+            "div",
+            null,
+            createElement(ProjectLabelsProvider, {
+              projectID: "project-1",
+              children: createElement(FilterConsumer),
+            }),
+            createElement(ProjectLabelsProvider, {
+              projectID: "project-1",
+              children: createElement(DeleteConsumer),
+            }),
+          ),
+        }),
+      ),
+    );
+    const filterButton = await screen.findByRole("button", { name: "ready:none" });
+
+    fireEvent.click(filterButton);
+    await waitFor(() => {
+      expect(filterButton).toHaveTextContent("ready:named");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "delete" }));
+
+    await waitFor(() => {
+      expect(filterButton).toHaveTextContent("ready:none");
+    });
   });
 
   it("patches an authoritative create result before catalog reconciliation", async () => {

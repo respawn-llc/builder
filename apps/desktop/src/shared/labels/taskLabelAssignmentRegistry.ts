@@ -84,8 +84,11 @@ class TaskLabelAssignmentRegistry {
     entry.stopCleanupWatch?.();
     entry.stopCleanupWatch = null;
     entry.stopCacheSync();
-    this.#entries.delete(taskID);
-    this.#emit(taskID);
+    entry.stopCacheSync = noOp;
+    if (entry.references === 0) {
+      this.#entries.delete(taskID);
+      this.#emit(taskID);
+    }
   }
 
   subscribe(taskID: string, listener: () => void): () => void {
@@ -222,4 +225,8 @@ function controllerHasUnsettledWork(controller: TaskLabelAssignmentController): 
 
 function labelIDListsEqual(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((labelID, index) => labelID === right[index]);
+}
+
+function noOp(): void {
+  return;
 }

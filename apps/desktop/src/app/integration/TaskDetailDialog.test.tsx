@@ -78,6 +78,24 @@ function taskDetailFixture(
   const services = createTestServices(
     [
       ...startupRoutes,
+      {
+        method: "workflow.project.label.list",
+        result: {
+          catalog: {
+            project_id: "project-1",
+            labels: [],
+          },
+        },
+      },
+      {
+        method: "workflow.task.labels.get",
+        result: {
+          assignment: {
+            task_id: "task-1",
+            label_ids: [],
+          },
+        },
+      },
       { method: "workflow.task.get", result: task },
       { method: "workflow.task.attention.list", result: attention },
       ...(comments === undefined ? [] : [{ method: "workflow.task.comment.list", result: comments }]),

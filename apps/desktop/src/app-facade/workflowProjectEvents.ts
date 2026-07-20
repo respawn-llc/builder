@@ -16,12 +16,16 @@ export function workflowProjectQuestionTaskID(event: WorkflowProjectEvent): stri
 // every task-affecting action (created/updated/started/interrupted/resumed/
 // approved/moved/canceled/completed/comment_*/question_*) with the task as its
 // typed primary entity, so callers do not depend on positional related IDs.
+// Label assignment changes are reconciled through the lightweight task-label
+// controller and intentionally do not reload the full task representation.
 export function workflowProjectEventAffectsTask(event: WorkflowProjectEvent, taskID: string): boolean {
   const trimmedTaskID = taskID.trim();
   if (trimmedTaskID.length === 0) {
     return false;
   }
-  return event.resource === "task" && event.primaryEntityID === trimmedTaskID;
+  return (
+    event.resource === "task" && event.action !== "labels_changed" && event.primaryEntityID === trimmedTaskID
+  );
 }
 
 const attentionResources = new Set(["task", "workflow", "workflow_link"]);

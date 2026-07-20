@@ -22,6 +22,7 @@ import { cx, fieldIslandInputClassName, useOpacityExit } from "@/ui";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
 import { taskStatusTone } from "./taskStatusTone";
 import { TaskExecutionTargetFacts } from "./TaskExecutionTargetFacts";
+import { TaskDetailLabels } from "./TaskDetailLabels";
 import { TaskPropertyLine } from "./TaskPropertyLine";
 import { taskExecutionRoot } from "./taskExecutionTarget";
 import type { useTaskMutations } from "./useTaskDetailData";
@@ -338,6 +339,7 @@ export function PropertiesIsland({
           label={t("task.identifier", { defaultValue: "ID" })}
           value={<span className="font-mono">{detail.shortID}</span>}
         />
+        <TaskDetailLabels disabled={disabled} />
         <TaskPropertyLine label={t("task.project")} value={detail.projectName} />
         <TaskPropertyLine
           label={t("task.status")}

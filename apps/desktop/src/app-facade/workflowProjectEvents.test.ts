@@ -52,6 +52,19 @@ describe("workflow project event helpers", () => {
     }
   });
 
+  it("leaves task label assignment events to the lightweight label controller", () => {
+    expect(
+      workflowProjectEventAffectsTask(
+        workflowEvent({
+          action: "labels_changed",
+          primaryEntityID: "task-1",
+          resource: "task",
+        }),
+        "task-1",
+      ),
+    ).toBe(false);
+  });
+
   it("ignores events for other tasks, other resources, or a blank task id", () => {
     expect(
       workflowProjectEventAffectsTask(

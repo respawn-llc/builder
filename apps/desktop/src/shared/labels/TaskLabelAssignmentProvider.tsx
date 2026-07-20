@@ -9,12 +9,12 @@ export function TaskLabelAssignmentProvider({
   children,
   taskID,
 }: Readonly<{
-  catalog: ProjectLabelCatalog;
+  catalog: ProjectLabelCatalog | null;
   children: ReactNode;
   taskID: string;
 }>) {
-  const availableLabelIDs = useMemo(() => catalog.labels.map((label) => label.id), [catalog]);
-  const assignment = useManagedTaskLabelAssignment(taskID, availableLabelIDs);
+  const availableLabelIDs = useMemo(() => catalog?.labels.map((label) => label.id) ?? [], [catalog]);
+  const assignment = useManagedTaskLabelAssignment(taskID, availableLabelIDs, catalog !== null);
   return (
     <TaskLabelAssignmentContext.Provider value={assignment}>{children}</TaskLabelAssignmentContext.Provider>
   );

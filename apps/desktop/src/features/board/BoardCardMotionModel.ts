@@ -171,7 +171,7 @@ function labelsEqual(left: KanbanCardVM["labels"], right: KanbanCardVM["labels"]
     left.length === right.length &&
     left.every((label, index) => {
       const rightLabel = right[index];
-      return rightLabel !== undefined && label.id === rightLabel.id && label.name === rightLabel.name;
+      return label.id === rightLabel?.id && label.name === rightLabel.name;
     })
   );
 }

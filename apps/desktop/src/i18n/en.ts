@@ -80,6 +80,10 @@ export const englishResources = {
       matchAny: "OR",
       matchAll: "AND",
       unlabeled: "No labels",
+      add: "Add label",
+      editAssignments: "Edit labels",
+      assignmentFailed: "The label change failed.",
+      assignmentRefreshFailed: "The task labels could not be refreshed.",
     },
     startup: {
       loadingTitle: "Connecting to Kent service",
