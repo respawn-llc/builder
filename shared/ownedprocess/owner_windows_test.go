@@ -18,8 +18,6 @@ import (
 	"unicode/utf16"
 
 	"core/internal/testharness/testsetup"
-
-	"golang.org/x/sys/windows"
 )
 
 const (
@@ -412,17 +410,5 @@ func waitForWindowsProcessIdentity(t *testing.T, path string) windowsProcessIden
 
 func assertWindowsProcessGoneEventually(t *testing.T, pid int) {
 	t.Helper()
-	testsetup.RequireUntil(t, time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
-		handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
-		if errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
-			return true
-		}
-		if err != nil {
-			t.Fatalf("open process %d: %v", pid, err)
-		}
-		if err := windows.CloseHandle(handle); err != nil {
-			t.Fatalf("close inspected process handle: %v", err)
-		}
-		return false
-	}, "process %d remained observable", pid)
+	testsetup.RequireProcessGone(t, time.Now().Add(5*time.Second), pid)
 }

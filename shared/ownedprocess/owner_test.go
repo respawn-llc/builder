@@ -210,26 +210,10 @@ func waitForProcessTreeIdentity(t *testing.T, path string) processTreeIdentity {
 
 func assertProcessGoneEventually(t *testing.T, pid int) {
 	t.Helper()
-	testsetup.RequireUntil(t, time.Now().Add(time.Second), 10*time.Millisecond, func() bool {
-		return processGone(t, pid)
-	}, "process %d remained observable", pid)
+	testsetup.RequireProcessGone(t, time.Now().Add(time.Second), pid)
 }
 
 func assertProcessGoneWhenCloseReturns(t *testing.T, pid int) {
 	t.Helper()
-	if !processGone(t, pid) {
-		t.Fatalf("process %d remained observable after Close returned", pid)
-	}
-}
-
-func processGone(t *testing.T, pid int) bool {
-	t.Helper()
-	err := syscall.Kill(pid, 0)
-	if errors.Is(err, syscall.ESRCH) {
-		return true
-	}
-	if err != nil && !errors.Is(err, syscall.EPERM) {
-		t.Fatalf("inspect process %d: %v", pid, err)
-	}
-	return false
+	testsetup.RequireProcessGoneNow(t, pid)
 }

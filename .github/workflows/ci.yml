@@ -149,7 +149,7 @@ jobs:
           cache: true
 
       - name: Test Windows owned process trees
-        run: go test -race ./shared/ownedprocess ./server/workflowrunner -run '^TestWindows' -count=1
+        run: go test -race ./shared/ownedprocess ./server/workflowrunner ./cli/app -run '^(TestWindows|TestLifecycleHookDispatcher(Timeout|Close)RemovesRootAndDescendant)$' -count=1
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6.0.9

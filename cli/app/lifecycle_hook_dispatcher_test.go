@@ -23,6 +23,7 @@ const (
 	lifecycleHookHelperReadyPathName   = "KENT_LIFECYCLE_HOOK_READY_PATH"
 	lifecycleHookHelperReleasePathName = "KENT_LIFECYCLE_HOOK_RELEASE_PATH"
 	lifecycleHookHelperOutcomeName     = "KENT_LIFECYCLE_HOOK_OUTCOME"
+	lifecycleHookHelperIdentityPath    = "KENT_LIFECYCLE_HOOK_IDENTITY_PATH"
 )
 
 type lifecycleHookHelperRecord struct {
@@ -30,6 +31,11 @@ type lifecycleHookHelperRecord struct {
 	Cwd         string          `json:"cwd"`
 	Environment string          `json:"environment"`
 	Payload     json.RawMessage `json:"payload"`
+}
+
+type lifecycleHookProcessIdentity struct {
+	RootPID       int `json:"root_pid"`
+	DescendantPID int `json:"descendant_pid"`
 }
 
 func TestLifecycleHookDispatcherInvokesCopiedArgvInFIFOOrder(t *testing.T) {
@@ -369,9 +375,51 @@ func TestLifecycleHookInvocationHasNoWorkingDirectoryAuthority(t *testing.T) {
 	}
 }
 
+func TestLifecycleHookDispatcherTimeoutRemovesRootAndDescendant(t *testing.T) {
+	identityPath := filepath.Join(t.TempDir(), "identity.json")
+	dispatcher := newLifecycleHookTreeDispatcher(t, identityPath)
+	t.Setenv(lifecycleHookHelperOutcomeName, "tree")
+
+	if accepted := dispatcher.EnqueueLifecycleEnvelope(dispatcherTestEnvelope(t, 1)); !accepted {
+		t.Fatal("tree timeout lifecycle event was rejected")
+	}
+	identity := waitForLifecycleHookProcessIdentity(t, identityPath)
+	issue := waitForLifecycleHookIssue(t, dispatcher.Issues())
+	if issue.Kind != lifecycleHookIssueTimeout {
+		t.Fatalf("tree timeout issue kind = %v, want timeout", issue.Kind)
+	}
+	testsetup.RequireProcessGone(t, time.Now().Add(5*time.Second), identity.RootPID)
+	testsetup.RequireProcessGone(t, time.Now().Add(5*time.Second), identity.DescendantPID)
+	if err := dispatcher.Close(); err != nil {
+		t.Fatalf("close timed-out tree dispatcher: %v", err)
+	}
+}
+
+func TestLifecycleHookDispatcherCloseRemovesRootAndDescendant(t *testing.T) {
+	identityPath := filepath.Join(t.TempDir(), "identity.json")
+	dispatcher := newLifecycleHookTreeDispatcher(t, identityPath)
+	t.Setenv(lifecycleHookHelperOutcomeName, "tree")
+
+	if accepted := dispatcher.EnqueueLifecycleEnvelope(dispatcherTestEnvelope(t, 1)); !accepted {
+		t.Fatal("tree close lifecycle event was rejected")
+	}
+	identity := waitForLifecycleHookProcessIdentity(t, identityPath)
+	if err := dispatcher.Close(); err != nil {
+		t.Fatalf("close active tree dispatcher: %v", err)
+	}
+	testsetup.RequireProcessGone(t, time.Now().Add(5*time.Second), identity.RootPID)
+	testsetup.RequireProcessGone(t, time.Now().Add(5*time.Second), identity.DescendantPID)
+}
+
 func TestLifecycleHookDispatcherHelper(t *testing.T) {
 	if os.Getenv(lifecycleHookHelperEnvironmentName) != "1" {
 		return
+	}
+	if os.Getenv(lifecycleHookHelperOutcomeName) == "descendant" {
+		ignoreLifecycleHookHelperTermination()
+		for {
+			time.Sleep(time.Second)
+		}
 	}
 	args := flag.Args()
 	if len(args) != 2 {
@@ -423,6 +471,43 @@ func TestLifecycleHookDispatcherHelper(t *testing.T) {
 		for {
 			time.Sleep(time.Second)
 		}
+	case "tree":
+		ignoreLifecycleHookHelperTermination()
+		descendant, err := os.StartProcess(
+			os.Args[0],
+			[]string{os.Args[0], "-test.run=^TestLifecycleHookDispatcherHelper$"},
+			&os.ProcAttr{
+				Env: append(os.Environ(),
+					lifecycleHookHelperEnvironmentName+"=1",
+					lifecycleHookHelperOutcomeName+"=descendant",
+				),
+			},
+		)
+		if err != nil {
+			t.Fatalf("start lifecycle hook descendant: %v", err)
+		}
+		identity := lifecycleHookProcessIdentity{
+			RootPID:       os.Getpid(),
+			DescendantPID: descendant.Pid,
+		}
+		body, err := json.Marshal(identity)
+		if err != nil {
+			t.Fatalf("marshal lifecycle hook process identity: %v", err)
+		}
+		identityPath := os.Getenv(lifecycleHookHelperIdentityPath)
+		temporaryPath := identityPath + ".tmp"
+		if err := os.WriteFile(temporaryPath, body, 0o600); err != nil {
+			t.Fatalf("write lifecycle hook process identity: %v", err)
+		}
+		if err := os.Rename(temporaryPath, identityPath); err != nil {
+			t.Fatalf("publish lifecycle hook process identity: %v", err)
+		}
+		if err := descendant.Release(); err != nil {
+			t.Fatalf("release lifecycle hook descendant handle: %v", err)
+		}
+		for {
+			time.Sleep(time.Second)
+		}
 	}
 	if readyPath := os.Getenv(lifecycleHookHelperReadyPathName); readyPath != "" {
 		if err := os.WriteFile(readyPath, []byte("ready"), 0o600); err != nil {
@@ -440,6 +525,55 @@ func TestLifecycleHookDispatcherHelper(t *testing.T) {
 			"lifecycle hook helper was not released",
 		)
 	}
+}
+
+func newLifecycleHookTreeDispatcher(
+	t *testing.T,
+	identityPath string,
+) *lifecycleHookDispatcher {
+	t.Helper()
+	recordPath := filepath.Join(t.TempDir(), "records.jsonl")
+	t.Setenv(lifecycleHookHelperEnvironmentName, "1")
+	t.Setenv(lifecycleHookHelperIdentityPath, identityPath)
+	dispatcher, err := newLifecycleHookDispatcher(
+		[]string{
+			os.Args[0],
+			"-test.run=^TestLifecycleHookDispatcherHelper$",
+			"--",
+			recordPath,
+			"fixed-tree",
+		},
+		lifecyclecontract.NewEncoder(invariant.NewPolicy(invariant.WithMode(invariant.ModeDiagnostic))),
+	)
+	if err != nil {
+		t.Fatalf("construct lifecycle hook tree dispatcher: %v", err)
+	}
+	return dispatcher
+}
+
+func waitForLifecycleHookProcessIdentity(
+	t *testing.T,
+	path string,
+) lifecycleHookProcessIdentity {
+	t.Helper()
+	var identity lifecycleHookProcessIdentity
+	testsetup.RequireUntil(
+		t,
+		time.Now().Add(5*time.Second),
+		10*time.Millisecond,
+		func() bool {
+			body, err := os.ReadFile(path)
+			if err != nil {
+				return false
+			}
+			if err := json.Unmarshal(body, &identity); err != nil {
+				t.Fatalf("decode lifecycle hook process identity: %v", err)
+			}
+			return identity.RootPID > 0 && identity.DescendantPID > 0
+		},
+		"lifecycle hook process tree identity was not published",
+	)
+	return identity
 }
 
 func dispatcherTestEnvelope(t *testing.T, index int) lifecyclecontract.Envelope {
