@@ -57,10 +57,25 @@ type stepLoopOptions struct {
 	OnQueuedUserFlushCommitted     func(session.CommitReceipt)
 }
 
-type userInjectionSelection struct {
-	all          bool
+func observeQueuedUserFlushCommit(options stepLoopOptions, receipt session.CommitReceipt) {
+	if receipt.Committed && options.OnQueuedUserFlushCommitted != nil {
+		options.OnQueuedUserFlushCommitted(receipt)
+	}
+}
+
+type userInjectionSelection interface {
+	userInjectionSelection()
+}
+
+type steerUserInjectionSelection struct {
 	queueItemIDs map[string]struct{}
 }
+
+func (steerUserInjectionSelection) userInjectionSelection() {}
+
+type allPendingUserInjectionSelection struct{}
+
+func (allPendingUserInjectionSelection) userInjectionSelection() {}
 
 type userInjectionCommitResult struct {
 	flushed               int
@@ -69,10 +84,10 @@ type userInjectionCommitResult struct {
 }
 
 func steerUserInjections(queueItemIDs map[string]struct{}) userInjectionSelection {
-	return userInjectionSelection{queueItemIDs: queueItemIDs}
+	return steerUserInjectionSelection{queueItemIDs: queueItemIDs}
 }
 
-func allPendingUserInjections() userInjectionSelection { return userInjectionSelection{all: true} }
+func allPendingUserInjections() userInjectionSelection { return allPendingUserInjectionSelection{} }
 
 type stepLoopResult struct {
 	Message                    llm.Message

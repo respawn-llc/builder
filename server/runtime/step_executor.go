@@ -347,17 +347,13 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 
 func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options stepLoopOptions) (int, error) {
 	flushed, receipt, err := s.messages.FlushPendingUserInjections(stepID, steerUserInjections(s.engine.queuedUserAutoDrainIDSnapshot()))
-	if receipt.Committed && options.OnQueuedUserFlushCommitted != nil {
-		options.OnQueuedUserFlushCommitted(receipt)
-	}
+	observeQueuedUserFlushCommit(options, receipt)
 	return flushed, err
 }
 
 func (s *defaultStepExecutor) commitPendingUserSteer(stepID string, options stepLoopOptions) error {
 	result, err := s.messages.CommitPendingUserInjections(stepID, steerUserInjections(s.engine.queuedUserAutoDrainIDSnapshot()))
-	if result.receipt.Committed && options.OnQueuedUserFlushCommitted != nil {
-		options.OnQueuedUserFlushCommitted(result.receipt)
-	}
+	observeQueuedUserFlushCommit(options, result.receipt)
 	return err
 }
 

@@ -315,10 +315,15 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, sele
 
 func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
 	var pending []queuedUserSteeringIntent
-	if selection.all {
+	switch selected := selection.(type) {
+	case allPendingUserInjectionSelection:
 		pending = m.queue.Drain()
-	} else if len(selection.queueItemIDs) > 0 {
-		pending = m.queue.DrainByID(selection.queueItemIDs)
+	case steerUserInjectionSelection:
+		if len(selected.queueItemIDs) > 0 {
+			pending = m.queue.DrainByID(selected.queueItemIDs)
+		}
+	default:
+		return userInjectionCommitResult{}, fmt.Errorf("unsupported user injection selection %T", selection)
 	}
 	pending = m.engine.dropStoppedLiveRunQueueItems(pending)
 	return m.commitPendingUserInjections(stepID, pending)
