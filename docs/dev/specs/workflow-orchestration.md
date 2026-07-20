@@ -20,6 +20,24 @@
 - Task lifecycle projection combines durable node placements and run outcomes with one immutable live snapshot; it is not a separate durable task-status enum.
 - Node placement is workflow/Kanban state; running, queued, and waiting conditions require exact generation-matched live evidence.
 - Terminal-node placements remain active sink placements. Board/read models infer done from an active placement whose node kind is terminal.
+- A Project owns one shared label catalog reused by every workflow board linked to that Project. Tasks may only use labels owned by their own Project.
+- Labels are many-to-many organizational metadata on tasks. They never affect workflow state, scheduling, prompts, task status, or execution.
+
+## Task Labels And Filtering
+
+- Each label has an immutable UUID v4 identity. Its mutable name is trimmed, 1–64 characters, preserves display capitalization, and permits Unicode letters and numbers, spaces, hyphens, underscores, and slashes.
+- Label names are case-insensitively unique within a Project. Capitalization-only rename is allowed without changing identity or task assignments.
+- A Project may own at most 100 labels. The server enforces the bound, and clients load the complete bounded catalog without pagination.
+- A task may use any subset of its Project's catalog; there is no separate per-task label limit.
+- Label creation, rename, deletion, assignment, and removal remain available regardless of whether affected tasks are Backlog, active, running, interrupted, done, or canceled.
+- Label catalog and assignment changes do not change task updated timestamps; label events refresh projections without reordering tasks or moving pagination anchors.
+- Task creation may atomically assign existing Project labels. Later assignment changes use idempotent add/remove semantics: adding an existing assignment or removing an absent assignment succeeds and returns the authoritative resulting label set.
+- Renaming takes effect everywhere without changing assignments. Deletion requires confirmation and atomically removes the label from every task; the confirmation does not require an affected-task count.
+- Labels have no color or manual ordering in the initial release. Label catalogs and assigned chips display in case-insensitive alphabetical order; label-based task sorting is not part of the initial release.
+- Label filtering is server-side for workflow boards and paginated task lists.
+- OR matches tasks carrying at least one selected named label. AND matches tasks carrying every selected named label while allowing additional labels. One selected label behaves identically in both modes.
+- `No labels` matches tasks with zero label assignments and is mutually exclusive with named-label selection. No selected labels means no label restriction.
+- The complete label expression is ANDed with every other active task-list filter type. Filtering then preserves existing sorting and cursor semantics and never loads a full board or task list into a client.
 
 ## Workflow Definitions
 
@@ -321,6 +339,7 @@
 - Project default pointers use `projects.default_project_workflow_link_id` and `projects.primary_workspace_id`, each constrained to rows owned by the same project.
 - Workspace/worktree labels, availability, primary/default status, and main-worktree status are read-model facts derived from canonical roots/pointers.
 - Workflow invalidation events are process-local live signals, not durable/replayable sequence state. SQLite does not store `workflow_events`.
+- Workflow Project events use typed resource and action enums in the shared contract. Label catalog and task-label changes reuse the existing Project event broker/subscription path; there is no parallel label event channel.
 - GUI clients refetch read models after subscription ACK/reconnect/error and treat live events as invalidation hints.
 - There is no product archive lifecycle for workflows or nodes.
 - Workflow deletion impact previews return counts only.

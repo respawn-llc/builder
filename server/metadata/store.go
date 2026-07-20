@@ -749,7 +749,7 @@ func (s *Store) UpdateProjectMetadata(ctx context.Context, projectID string, dis
 				UpdatedAtUnixMs: now,
 				ProjectID:       trimmedProjectID,
 			}); err != nil {
-				if isSQLiteUniqueConstraint(err) {
+				if IsSQLiteUniqueConstraint(err) {
 					return fmt.Errorf("%w: %q", ErrProjectKeyAlreadyInUse, normalizedKey)
 				}
 				return fmt.Errorf("set project key: %w", err)
@@ -1033,7 +1033,7 @@ func (s *Store) RebindWorkspace(ctx context.Context, oldWorkspaceRoot string, ne
 		if binding, lookupErr := s.lookupProjectWorkspaceBinding(ctx, oldWorkspace.ProjectID, newCanonicalRoot); lookupErr == nil && binding.WorkspaceID != oldWorkspace.ID {
 			return Binding{}, fmt.Errorf("workspace %q: %w", newCanonicalRoot, ErrWorkspaceAlreadyBound)
 		}
-		if isSQLiteUniqueConstraint(err) {
+		if IsSQLiteUniqueConstraint(err) {
 			return Binding{}, fmt.Errorf("workspace %q: %w", newCanonicalRoot, ErrWorkspaceAlreadyBound)
 		}
 		return Binding{}, fmt.Errorf("update workspace binding canonical root: %w", err)
@@ -1052,7 +1052,7 @@ func (s *Store) RebindWorkspace(ctx context.Context, oldWorkspaceRoot string, ne
 			UpdatedAtUnixMs:   now,
 		})
 		if updateErr != nil {
-			if isSQLiteUniqueConstraint(updateErr) {
+			if IsSQLiteUniqueConstraint(updateErr) {
 				return Binding{}, fmt.Errorf("worktree %q: %w", newWorktreeRoot, ErrWorktreeAlreadyBound)
 			}
 			return Binding{}, fmt.Errorf("update worktree canonical root: %w", updateErr)
@@ -1222,7 +1222,7 @@ func rebindDescendantPath(oldRoot string, newRoot string, descendant string) (st
 	return filepath.Clean(filepath.Join(newRoot, rel)), nil
 }
 
-func isSQLiteUniqueConstraint(err error) bool {
+func IsSQLiteUniqueConstraint(err error) bool {
 	var sqliteErr *sqlitedriver.Error
 	if !errors.As(err, &sqliteErr) {
 		return false
@@ -1296,7 +1296,7 @@ func setMissingProjectKey(ctx context.Context, q *sqlitegen.Queries, projectID s
 		key := suggestProjectKey(displayName, projectID, used)
 		updated, err := q.SetProjectKey(ctx, sqlitegen.SetProjectKeyParams{ProjectKey: key, UpdatedAtUnixMs: updatedAtUnixMs, ProjectID: projectID})
 		if err != nil {
-			if isSQLiteUniqueConstraint(err) {
+			if IsSQLiteUniqueConstraint(err) {
 				continue
 			}
 			return fmt.Errorf("set project key for %q: %w", projectID, err)
@@ -1327,7 +1327,7 @@ func setInitialProjectKey(ctx context.Context, q *sqlitegen.Queries, projectID s
 	}
 	updated, err := q.SetProjectKey(ctx, sqlitegen.SetProjectKeyParams{ProjectKey: normalizedKey, UpdatedAtUnixMs: updatedAtUnixMs, ProjectID: projectID})
 	if err != nil {
-		if isSQLiteUniqueConstraint(err) {
+		if IsSQLiteUniqueConstraint(err) {
 			return "", fmt.Errorf("%w: %q", ErrProjectKeyAlreadyInUse, normalizedKey)
 		}
 		return "", fmt.Errorf("set project key for %q: %w", projectID, err)
@@ -1374,7 +1374,7 @@ func (s *Store) SetProjectKey(ctx context.Context, projectID string, projectKey 
 		ProjectID:       trimmedProjectID,
 	})
 	if err != nil {
-		if isSQLiteUniqueConstraint(err) {
+		if IsSQLiteUniqueConstraint(err) {
 			return fmt.Errorf("%w: %q", ErrProjectKeyAlreadyInUse, normalizedKey)
 		}
 		return fmt.Errorf("set project key: %w", err)

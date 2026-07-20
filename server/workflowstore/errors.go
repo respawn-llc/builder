@@ -126,6 +126,15 @@ var (
 	ErrEdgeHasTaskHistory      = errors.New("workflow edge has task history references")
 	ErrWorkflowStartNodeExists = errors.New("workflow already has a start node; edit the existing start node instead")
 
+	// ErrProjectLabelNotFound marks a Project-qualified label lookup that found
+	// no matching label.
+	ErrProjectLabelNotFound = errors.New("project label not found")
+	// ErrProjectLabelNameConflict marks a case-fold-equivalent name collision
+	// within one Project catalog.
+	ErrProjectLabelNameConflict = errors.New("project label name conflicts with an existing label")
+	// ErrProjectLabelLimitReached marks a Project catalog at its bounded size.
+	ErrProjectLabelLimitReached = errors.New("project label catalog limit reached")
+
 	// Manual-move guards. Each names a distinct unsupported/invalid manual-move
 	// condition.
 	ErrManualMoveSelectedContextSource      = errors.New("manual move with selected context source is not supported")
@@ -139,6 +148,45 @@ var (
 	ErrManualMoveMultiplePendingApprovals   = errors.New("manual move with multiple pending approvals is not supported")
 	ErrManualMovePendingApprovalResolved    = errors.New("pending approval was resolved before the manual move could override it")
 )
+
+type ProjectLabelNotFoundError struct {
+	ProjectID string
+	LabelID   string
+}
+
+func (e ProjectLabelNotFoundError) Error() string {
+	return fmt.Sprintf("project label %q was not found in project %q", e.LabelID, e.ProjectID)
+}
+
+func (e ProjectLabelNotFoundError) Is(target error) bool {
+	return target == ErrProjectLabelNotFound
+}
+
+type ProjectLabelNameConflictError struct {
+	ProjectID string
+	Name      string
+}
+
+func (e ProjectLabelNameConflictError) Error() string {
+	return fmt.Sprintf("project %q already has a label named %q", e.ProjectID, e.Name)
+}
+
+func (e ProjectLabelNameConflictError) Is(target error) bool {
+	return target == ErrProjectLabelNameConflict
+}
+
+type ProjectLabelLimitError struct {
+	ProjectID string
+	Limit     int
+}
+
+func (e ProjectLabelLimitError) Error() string {
+	return fmt.Sprintf("project %q has reached its %d-label catalog limit", e.ProjectID, e.Limit)
+}
+
+func (e ProjectLabelLimitError) Is(target error) bool {
+	return target == ErrProjectLabelLimitReached
+}
 
 // ContextSourceKind identifies which context-source resolution failed to find a
 // completed run.

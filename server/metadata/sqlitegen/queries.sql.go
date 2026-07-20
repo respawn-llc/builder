@@ -884,6 +884,31 @@ func (q *Queries) DeleteProject(ctx context.Context, projectID string) (int64, e
 	return result.RowsAffected()
 }
 
+const deleteProjectLabel = `-- name: DeleteProjectLabel :one
+DELETE FROM project_labels
+WHERE id = ?1
+  AND project_id = ?2
+RETURNING id, project_id, name
+`
+
+type DeleteProjectLabelParams struct {
+	ID        string
+	ProjectID string
+}
+
+type DeleteProjectLabelRow struct {
+	ID        string
+	ProjectID string
+	Name      string
+}
+
+func (q *Queries) DeleteProjectLabel(ctx context.Context, arg DeleteProjectLabelParams) (DeleteProjectLabelRow, error) {
+	row := q.db.QueryRowContext(ctx, deleteProjectLabel, arg.ID, arg.ProjectID)
+	var i DeleteProjectLabelRow
+	err := row.Scan(&i.ID, &i.ProjectID, &i.Name)
+	return i, err
+}
+
 const deleteProjectTasks = `-- name: DeleteProjectTasks :exec
 DELETE FROM tasks
 WHERE id IN (
@@ -3032,6 +3057,58 @@ func (q *Queries) IncrementWorkflowVersion(ctx context.Context, arg IncrementWor
 	return version, err
 }
 
+const insertProjectLabel = `-- name: InsertProjectLabel :one
+INSERT INTO project_labels (
+    id,
+    project_id,
+    name,
+    created_at_unix_ms,
+    updated_at_unix_ms
+) SELECT
+    ?1,
+    ?2,
+    ?3,
+    ?4,
+    ?5
+FROM projects
+WHERE projects.id = ?2
+  AND (
+      SELECT COUNT(*)
+      FROM project_labels
+      WHERE project_labels.project_id = ?2
+  ) < CAST(?6 AS INTEGER)
+RETURNING id, project_id, name
+`
+
+type InsertProjectLabelParams struct {
+	ID              string
+	ProjectID       string
+	Name            string
+	CreatedAtUnixMs int64
+	UpdatedAtUnixMs int64
+	CatalogLimit    int64
+}
+
+type InsertProjectLabelRow struct {
+	ID        string
+	ProjectID string
+	Name      string
+}
+
+func (q *Queries) InsertProjectLabel(ctx context.Context, arg InsertProjectLabelParams) (InsertProjectLabelRow, error) {
+	row := q.db.QueryRowContext(ctx, insertProjectLabel,
+		arg.ID,
+		arg.ProjectID,
+		arg.Name,
+		arg.CreatedAtUnixMs,
+		arg.UpdatedAtUnixMs,
+		arg.CatalogLimit,
+	)
+	var i InsertProjectLabelRow
+	err := row.Scan(&i.ID, &i.ProjectID, &i.Name)
+	return i, err
+}
+
 const insertProjectWorkflowLink = `-- name: InsertProjectWorkflowLink :exec
 INSERT INTO project_workflow_links (
     id,
@@ -5065,6 +5142,43 @@ func (q *Queries) ListProjectKeyRows(ctx context.Context) ([]ListProjectKeyRowsR
 	for rows.Next() {
 		var i ListProjectKeyRowsRow
 		if err := rows.Scan(&i.ID, &i.DisplayName, &i.ProjectKey); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectLabels = `-- name: ListProjectLabels :many
+SELECT id, project_id, name
+FROM project_labels
+WHERE project_id = ?1
+ORDER BY name COLLATE kent_label_casefold_v1 ASC, id ASC
+LIMIT 101
+`
+
+type ListProjectLabelsRow struct {
+	ID        string
+	ProjectID string
+	Name      string
+}
+
+func (q *Queries) ListProjectLabels(ctx context.Context, projectID string) ([]ListProjectLabelsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectLabels, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListProjectLabelsRow
+	for rows.Next() {
+		var i ListProjectLabelsRow
+		if err := rows.Scan(&i.ID, &i.ProjectID, &i.Name); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -8781,6 +8895,41 @@ func (q *Queries) RejectPendingApprovalTransition(ctx context.Context, transitio
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const renameProjectLabel = `-- name: RenameProjectLabel :one
+UPDATE project_labels
+SET
+    name = ?1,
+    updated_at_unix_ms = ?2
+WHERE id = ?3
+  AND project_id = ?4
+RETURNING id, project_id, name
+`
+
+type RenameProjectLabelParams struct {
+	Name            string
+	UpdatedAtUnixMs int64
+	ID              string
+	ProjectID       string
+}
+
+type RenameProjectLabelRow struct {
+	ID        string
+	ProjectID string
+	Name      string
+}
+
+func (q *Queries) RenameProjectLabel(ctx context.Context, arg RenameProjectLabelParams) (RenameProjectLabelRow, error) {
+	row := q.db.QueryRowContext(ctx, renameProjectLabel,
+		arg.Name,
+		arg.UpdatedAtUnixMs,
+		arg.ID,
+		arg.ProjectID,
+	)
+	var i RenameProjectLabelRow
+	err := row.Scan(&i.ID, &i.ProjectID, &i.Name)
+	return i, err
 }
 
 const resetInvalidCompletionProtocolViolationBudget = `-- name: ResetInvalidCompletionProtocolViolationBudget :execrows

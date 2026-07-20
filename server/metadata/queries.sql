@@ -75,6 +75,50 @@ SET
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
 WHERE id = sqlc.arg(project_id);
 
+-- name: InsertProjectLabel :one
+INSERT INTO project_labels (
+    id,
+    project_id,
+    name,
+    created_at_unix_ms,
+    updated_at_unix_ms
+) SELECT
+    sqlc.arg(id),
+    sqlc.arg(project_id),
+    sqlc.arg(name),
+    sqlc.arg(created_at_unix_ms),
+    sqlc.arg(updated_at_unix_ms)
+FROM projects
+WHERE projects.id = sqlc.arg(project_id)
+  AND (
+      SELECT COUNT(*)
+      FROM project_labels
+      WHERE project_labels.project_id = sqlc.arg(project_id)
+  ) < CAST(sqlc.arg(catalog_limit) AS INTEGER)
+RETURNING id, project_id, name;
+
+-- name: ListProjectLabels :many
+SELECT id, project_id, name
+FROM project_labels
+WHERE project_id = sqlc.arg(project_id)
+ORDER BY name COLLATE kent_label_casefold_v1 ASC, id ASC
+LIMIT 101;
+
+-- name: RenameProjectLabel :one
+UPDATE project_labels
+SET
+    name = sqlc.arg(name),
+    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE id = sqlc.arg(id)
+  AND project_id = sqlc.arg(project_id)
+RETURNING id, project_id, name;
+
+-- name: DeleteProjectLabel :one
+DELETE FROM project_labels
+WHERE id = sqlc.arg(id)
+  AND project_id = sqlc.arg(project_id)
+RETURNING id, project_id, name;
+
 -- name: AllocateProjectTaskSequence :one
 UPDATE projects
 SET

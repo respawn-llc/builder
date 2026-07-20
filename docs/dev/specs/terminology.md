@@ -48,6 +48,10 @@ The purpose for validating a workflow graph, such as draft editing, task creatio
 
 An active project association with a reusable workflow definition. The link lets a project use a workflow without copying the workflow graph and is the task's project/workflow pairing source of truth.
 
+### Label
+
+A Project-owned user-defined organizational tag with an immutable UUID v4 identity and a mutable display name. A label is reusable across every workflow board linked to its Project, and tasks may use any subset of labels owned by their own Project. Labels do not affect workflow state, scheduling, prompts, or execution.
+
 ### Assignee
 
 The subagent role associated with an executable node. UI surfaces may present the role as the node's assignee.
