@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import type { JsonValue } from "@/api";
-import { App } from "../startup/App";
 import { createTestServices, startupRoutes } from "@/test-support/app-services";
 import {
   dispatchBoardDrag,
@@ -11,374 +10,180 @@ import {
   setScrollportGeometry,
   TestDataTransfer,
 } from "@/test-support/board-drag";
+import { App } from "../startup/App";
+
+let frames: FakeAnimationFrames;
+let state = { sourcePresent: true, workflowValid: true };
+const forgedDragPayload = {
+  taskID: "task-1",
+  canStart: true,
+  activeNodeIDs: ["backlog"],
+  statusKind: "backlog",
+  manualMoveTargetNodeIDs: ["recon"],
+};
+const boardChange = {
+  event: { action: "updated", occurred_at_unix_ms: 1, resource: "task" },
+};
+const taskMoveResult = {
+  outcome: "applied",
+  applied: { transition_id: "t", state: "applied", placement_ids: [], run_ids: [] },
+};
 
 describe("BoardRoute native drag lifecycle", () => {
-  let frames: FakeAnimationFrames;
-
   beforeEach(() => {
     frames = new FakeAnimationFrames();
+    state = { sourcePresent: true, workflowValid: true };
     vi.stubGlobal("requestAnimationFrame", frames.request);
     vi.stubGlobal("cancelAnimationFrame", frames.cancel);
     window.history.pushState(null, "KENT-230", "/projects/project-1?workflowId=workflow-1");
   });
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
+  afterEach(vi.unstubAllGlobals);
 
-  it("does not reconstruct an action payload from DataTransfer when no card drag is active", async () => {
-    const services = boardTestServices();
-    render(<App services={services} />);
+  it("rejects forged payloads and closes an active drag when the workflow becomes invalid", async () => {
+    const view = await renderBoard();
+    view.dataTransfer.setData("application/json", JSON.stringify(forgedDragPayload));
+    fireEvent.drop(view.recon, transfer(view));
 
-    const destination = await screen.findByRole("listitem", { name: "Recon" });
-    const dataTransfer = new TestDataTransfer();
-    dataTransfer.setData(
-      "application/json",
-      JSON.stringify({
-        taskID: "task-1",
-        canStart: false,
-        activeNodeIDs: ["backlog"],
-        statusKind: "backlog",
-        manualMoveTargetNodeIDs: ["recon"],
-      }),
-    );
+    startEdgeScroll(view, 196, 200);
+    expect(view.recon).toHaveAttribute("data-drop-state", "allowed");
 
-    fireEvent.drop(destination, { dataTransfer });
-
+    state.workflowValid = false;
+    emitBoardChange(view.services);
     await waitFor(() => {
-      expect(taskActionCalls(services.transport.calls)).toEqual([]);
-    });
-  });
-
-  it("allows a server-authorized post-start move when initial execution validation is blocked", async () => {
-    const services = boardTestServices(() => true, false);
-    render(<App services={services} />);
-    const source = await screen.findByRole("article", { name: "Drag source" });
-    const recon = screen.getByRole("listitem", { name: "Recon" });
-    const dataTransfer = new TestDataTransfer();
-
-    fireEvent.dragStart(source, { dataTransfer });
-    fireEvent.drop(recon, { dataTransfer });
-
-    await waitFor(() => {
-      const calls = taskActionCalls(services.transport.calls);
-      expect(calls).toHaveLength(1);
-      expect(calls[0]).toMatchObject({
-        method: "workflow.task.move",
-        params: { task_id: "task-1", target_node_id: "recon" },
-      });
-    });
-  });
-
-  it("activates from a real card and keeps both scrollports moving through an in-board null-target dragleave", async () => {
-    const { source, root, backlogScrollport: column, dataTransfer } = await renderActiveBoard(frames);
-    setScrollportGeometry(root, {
-      left: 0,
-      top: 0,
-      width: 500,
-      height: 400,
-      scrollWidth: 1_000,
-      scrollHeight: 400,
-    });
-    setScrollportGeometry(column, {
-      left: 300,
-      top: 0,
-      width: 180,
-      height: 400,
-      scrollWidth: 180,
-      scrollHeight: 1_000,
+      expect(view.source).toHaveAttribute("draggable", "false");
+      expect(view.recon).toHaveAttribute("data-drop-state", "idle");
+      expect(frames.pending).toBe(0);
     });
 
-    dispatchBoardDrag(source, "dragover", { clientX: 476, clientY: 396, dataTransfer });
+    dragOver(view, view.source, 196, 200);
     expect(frames.pending).toBe(0);
+    fireEvent.drop(view.recon, { dataTransfer: view.dataTransfer });
+    expect(taskActionCalls(view.services.transport.calls)).toEqual([]);
+  });
 
-    fireEvent.dragStart(source, { dataTransfer });
-    dispatchBoardDrag(source, "dragover", { clientX: 476, clientY: 396, dataTransfer });
-    expect(frames.pending).toBe(1);
+  it("activates both scrollports and survives an in-board null-target dragleave", async () => {
+    const view = await renderBoard();
 
-    dispatchBoardDrag(source, "dragleave", {
-      clientX: 476,
+    dragOver(view, view.source, 176, 396);
+    expect(frames.pending).toBe(0);
+    startEdgeScroll(view, 176, 396);
+    dispatchBoardDrag(view.source, "dragleave", {
+      clientX: 176,
       clientY: 396,
-      dataTransfer,
+      dataTransfer: view.dataTransfer,
       relatedTarget: null,
     });
-    expect(frames.pending).toBe(1);
-
     frames.step(0);
     frames.step(16);
-
-    expect(root.scrollLeft).toBeGreaterThan(0);
-    expect(column.scrollTop).toBeGreaterThan(0);
+    expect(view.root.scrollLeft).toBeGreaterThan(0);
+    expect(view.backlogScrollport.scrollTop).toBeGreaterThan(0);
   });
 
-  it("pauses outside the board, resumes on re-entry, and then submits one valid drop", async () => {
-    const { services, source, root, backlogScrollport, recon, dataTransfer } =
-      await renderActiveBoard(frames);
-    setScrollportGeometry(root, {
-      left: 0,
-      top: 0,
-      width: 500,
-      height: 400,
-      scrollWidth: 1_000,
-      scrollHeight: 400,
-    });
-    setScrollportGeometry(backlogScrollport, {
-      left: 300,
-      top: 0,
-      width: 180,
-      height: 400,
-      scrollWidth: 180,
-      scrollHeight: 1_000,
-    });
-
-    fireEvent.dragStart(source, { dataTransfer });
-    dispatchBoardDrag(source, "dragover", { clientX: 476, clientY: 396, dataTransfer });
+  it("pauses outside, resumes on re-entry, and submits one valid drop", async () => {
+    const view = await renderBoard();
+    startEdgeScroll(view, 176, 396);
     frames.step(0);
     frames.step(16);
-    const scrollLeftBeforePause = root.scrollLeft;
-    expect(scrollLeftBeforePause).toBeGreaterThan(0);
+    const pausedAt = view.root.scrollLeft;
+    expect(pausedAt).toBeGreaterThan(0);
 
-    dispatchBoardDrag(document.body, "dragover", { clientX: 600, clientY: 200, dataTransfer });
+    dragOver(view, document.body, 600, 200);
     expect(frames.pending).toBe(0);
-
-    dispatchBoardDrag(source, "dragover", { clientX: 476, clientY: 396, dataTransfer });
-    expect(frames.pending).toBe(1);
+    dragOver(view, view.source, 176, 396);
     frames.step(32);
     frames.step(48);
-    expect(root.scrollLeft).toBeGreaterThan(scrollLeftBeforePause);
+    expect(view.root.scrollLeft).toBeGreaterThan(pausedAt);
 
-    fireEvent.drop(recon, { dataTransfer });
-
-    await waitFor(() => {
-      const actionCalls = taskActionCalls(services.transport.calls);
-      expect(actionCalls).toHaveLength(1);
-      expect(actionCalls[0]).toMatchObject({
-        method: "workflow.task.move",
-        params: {
-          target_node_id: "recon",
-          task_id: "task-1",
-        },
-      });
-    });
-
-    fireEvent.drop(recon, { dataTransfer });
-    await waitFor(() => {
-      expect(taskActionCalls(services.transport.calls)).toHaveLength(1);
-    });
+    fireEvent.drop(view.recon, { dataTransfer: view.dataTransfer });
+    expect(taskActionCalls(view.services.transport.calls)).toMatchObject([
+      { method: "workflow.task.move", params: { target_node_id: "recon", task_id: "task-1" } },
+    ]);
+    fireEvent.drop(view.recon, { dataTransfer: view.dataTransfer });
+    expect(taskActionCalls(view.services.transport.calls)).toHaveLength(1);
   });
 
-  it("switches vertical targets and preserves horizontal motion outside all columns", async () => {
-    const { source, root, backlogScrollport, reconScrollport, dataTransfer } =
-      await renderActiveBoard(frames);
-    setScrollportGeometry(root, {
-      left: 0,
-      top: 0,
-      width: 500,
-      height: 400,
-      scrollWidth: 1_000,
-      scrollHeight: 400,
-    });
-    setScrollportGeometry(backlogScrollport, {
-      left: 0,
-      top: 0,
-      width: 180,
-      height: 400,
-      scrollWidth: 180,
-      scrollHeight: 1_000,
-    });
-    setScrollportGeometry(reconScrollport, {
-      left: 200,
-      top: 0,
-      width: 180,
-      height: 400,
-      scrollWidth: 180,
-      scrollHeight: 1_000,
-    });
-
-    backlogScrollport.scrollTop = 300;
-    fireEvent.dragStart(source, { dataTransfer });
-    dispatchBoardDrag(source, "dragover", { clientX: 100, clientY: 4, dataTransfer });
+  it("switches vertical targets and preserves horizontal motion outside columns", async () => {
+    const view = await renderBoard();
+    view.backlogScrollport.scrollTop = 300;
+    startEdgeScroll(view, 100, 4);
     frames.step(0);
     frames.step(16);
-    expect(backlogScrollport.scrollTop).toBeLessThan(300);
-    expect(reconScrollport.scrollTop).toBe(0);
+    expect(view.backlogScrollport.scrollTop).toBeLessThan(300);
 
-    dispatchBoardDrag(source, "dragover", { clientX: 300, clientY: 396, dataTransfer });
+    dragOver(view, view.source, 300, 396);
     frames.step(32);
-    expect(reconScrollport.scrollTop).toBeGreaterThan(0);
-    const reconScrollTopOutside = reconScrollport.scrollTop;
-
-    dispatchBoardDrag(root, "dragover", { clientX: 496, clientY: 200, dataTransfer });
+    const reconAt = view.reconScrollport.scrollTop;
+    expect(reconAt).toBeGreaterThan(0);
+    dragOver(view, view.root, 196, 200);
     frames.step(48);
-    expect(root.scrollLeft).toBeGreaterThan(0);
-    expect(reconScrollport.scrollTop).toBe(reconScrollTopOutside);
+    expect(view.root.scrollLeft).toBeGreaterThan(0);
+    expect(view.reconScrollport.scrollTop).toBe(reconAt);
   });
 
   it.each([
-    [
-      "outside drop",
-      ({ dataTransfer }: ActiveBoardTestContext) => {
-        fireEvent.drop(document.body, { dataTransfer });
-      },
-    ],
-    [
-      "card dragend",
-      ({ source, dataTransfer }: ActiveBoardTestContext) => {
-        fireEvent.dragEnd(source, { dataTransfer });
-      },
-    ],
-    [
-      "document dragend",
-      ({ dataTransfer }: ActiveBoardTestContext) => {
-        fireEvent.dragEnd(document, { dataTransfer });
-      },
-    ],
-    [
-      "duplicate cancellation notifications",
-      ({ source, dataTransfer }: ActiveBoardTestContext) => {
-        fireEvent.dragEnd(source, { dataTransfer });
-        fireEvent.dragEnd(document, { dataTransfer });
-      },
-    ],
-    [
-      "window blur",
-      () => {
-        fireEvent(window, new Event("blur"));
-      },
-    ],
-  ] as const)("clears active drag without a task action after %s", async (_reason, terminate) => {
-    const view = await renderActiveBoard(frames);
-    setScrollportGeometry(view.root, {
-      left: 0,
-      top: 0,
-      width: 500,
-      height: 400,
-      scrollWidth: 1_000,
-      scrollHeight: 400,
-    });
-
-    fireEvent.dragStart(view.source, { dataTransfer: view.dataTransfer });
-    dispatchBoardDrag(view.source, "dragover", {
-      clientX: 496,
-      clientY: 200,
-      dataTransfer: view.dataTransfer,
-    });
-    expect(frames.pending).toBe(1);
+    ["outside drop", (view: BoardView) => fireEvent.drop(document.body, transfer(view))],
+    ["card dragend", (view: BoardView) => fireEvent.dragEnd(view.source, transfer(view))],
+    ["document dragend", (view: BoardView) => fireEvent.dragEnd(document, transfer(view))],
+    ["window blur", () => fireEvent(window, new Event("blur"))],
+  ] as const)("clears drag state and evicts its source after %s", async (_reason, terminate) => {
+    const view = await renderBoard();
+    startEdgeScroll(view, 196, 200);
 
     terminate(view);
-    expect(frames.pending).toBe(0);
-
-    dispatchBoardDrag(view.source, "dragover", {
-      clientX: 496,
-      clientY: 200,
-      dataTransfer: view.dataTransfer,
-    });
+    terminate(view);
     expect(frames.pending).toBe(0);
     expect(taskActionCalls(view.services.transport.calls)).toEqual([]);
 
-    view.removeSource();
+    state.sourcePresent = false;
+    emitBoardChange(view.services);
     await waitFor(() => {
-      expect(screen.queryByRole("article", { name: "Drag source" })).not.toBeInTheDocument();
+      expect(screen.queryAllByRole("article", { name: "Drag source" })).toHaveLength(0);
     });
   });
 });
 
-type ActiveBoardTestContext = Awaited<ReturnType<typeof renderActiveBoard>>;
+type BoardView = Awaited<ReturnType<typeof renderBoard>>;
 
-async function renderActiveBoard(frames: FakeAnimationFrames) {
-  let sourcePresent = true;
-  const services = boardTestServices(() => sourcePresent);
+async function renderBoard() {
+  const services = boardTestServices();
   render(<App services={services} />);
   const root = await screen.findByTestId("board-scrollport");
   const source = await within(root).findByRole("article", { name: "Drag source" });
+  const backlogScrollport = screen.getByTestId("kanban-column-scroll-backlog");
+  const reconScrollport = screen.getByTestId("kanban-column-scroll-recon");
+  setGeometry(root, 0, false);
+  setGeometry(backlogScrollport, 0, true);
+  setGeometry(reconScrollport, 200, true);
   frames.step(0);
   return {
     services,
     source,
     root,
-    backlogScrollport: screen.getByTestId("kanban-column-scroll-backlog"),
+    backlogScrollport,
     recon: screen.getByRole("listitem", { name: "Recon" }),
-    reconScrollport: screen.getByTestId("kanban-column-scroll-recon"),
+    reconScrollport,
     dataTransfer: new TestDataTransfer(),
-    removeSource: () => {
-      sourcePresent = false;
-      services.transport.emit("workflow.project", {
-        event: {
-          action: "updated",
-          changed_ids: ["task-1"],
-          occurred_at_unix_ms: 1,
-          project_id: "project-1",
-          resource: "task",
-          workflow_id: "workflow-1",
-        },
-      });
-    },
   };
 }
 
-function boardTestServices(sourcePresent: () => boolean = () => true, validForTaskCreation = true) {
+function boardTestServices() {
   return createTestServices([
     ...startupRoutes,
-    {
-      method: "workflow.board.get",
-      handler: () => boardResponse(sourcePresent() ? 1 : 0, validForTaskCreation),
-    },
-    {
-      method: "workflow.board.nodeCards.list",
-      handler: (params: JsonValue) =>
-        nodeCardsResponse(nodeID(params), sourcePresent() && nodeID(params) === "backlog"),
-    },
-    {
-      method: "workflow.task.move",
-      result: {
-        outcome: "applied",
-        applied: {
-          transition_id: "transition-1",
-          state: "approved",
-          placement_ids: ["placement-1"],
-          run_ids: [],
-        },
-      },
-    },
+    { method: "workflow.board.get", handler: boardResponse },
+    { method: "workflow.board.nodeCards.list", handler: nodeCardsResponse },
+    { method: "workflow.task.move", result: taskMoveResult },
   ]);
 }
 
-function taskActionCalls(
-  calls: Readonly<{ method: string; params: JsonValue }>[],
-): Readonly<{ method: string; params: JsonValue }>[] {
-  return calls.filter(
-    (call) => call.method === "workflow.task.start" || call.method === "workflow.task.move",
-  );
-}
-
-function nodeID(params: JsonValue): string {
-  return nodeCardsRequestSchema.parse(params).node_id;
-}
-
-function nodeCardsResponse(nodeIDValue: string, includeSource: boolean) {
-  return {
-    project_id: "project-1",
+function boardResponse() {
+  const selectedWorkflow = {
     workflow_id: "workflow-1",
-    node_id: nodeIDValue,
-    cards: includeSource ? [sourceCard] : [],
-    previous_page_token: null,
-    next_page_token: null,
-    generated_at_unix_ms: 1,
+    display_name: "Workflow",
+    version: 1,
+    is_project_default: true,
+    valid_for_task_creation: state.workflowValid,
   };
-}
-
-const boardGroupID = "group-qa";
-const workflow = {
-  workflow_id: "workflow-1",
-  display_name: "Workflow",
-  description: "Board drag QA workflow",
-  version: 1,
-  is_project_default: true,
-  validation_errors: [],
-};
-
-function boardResponse(backlogTaskCount: number, validForTaskCreation = true) {
-  const selectedWorkflow = { ...workflow, valid_for_task_creation: validForTaskCreation };
   return {
     board: {
       project_id: "project-1",
@@ -389,64 +194,41 @@ function boardResponse(backlogTaskCount: number, validForTaskCreation = true) {
         attached_workspace_count: 1,
       },
       selected_workflow: selectedWorkflow,
-      workflows: [selectedWorkflow],
-      groups: [
-        {
-          group_id: boardGroupID,
-          key: "qa",
-          display_name: "QA",
-          sort_order: 0,
-          node_ids: ["backlog", "recon"],
-        },
-      ],
       columns: [
-        boardColumn({
-          id: "backlog",
-          kind: "backlog",
-          name: "Backlog",
-          sortOrder: 0,
-          isBacklog: true,
-          taskCount: backlogTaskCount,
-        }),
-        boardColumn({
-          id: "recon",
-          kind: "agent",
-          name: "Recon",
-          sortOrder: 1,
-          isBacklog: false,
-          taskCount: 0,
-        }),
+        boardColumn("backlog", "backlog", true, state.sourcePresent ? 1 : 0),
+        boardColumn("recon", "agent", false, 0),
       ],
       generated_at_unix_ms: 1,
     },
   };
 }
 
-function boardColumn(
-  input: Readonly<{
-    id: string;
-    kind: string;
-    name: string;
-    sortOrder: number;
-    isBacklog: boolean;
-    taskCount: number;
-  }>,
-) {
+function boardColumn(id: string, kind: string, isBacklog: boolean, taskCount: number) {
   return {
     node: {
-      node_id: input.id,
-      key: input.id,
-      kind: input.kind,
-      display_name: input.name,
-      assignee_role: "qa",
-      output_fields: [],
-      transition_output_fields: [],
+      node_id: id,
+      key: id,
+      kind,
+      display_name: isBacklog ? "Backlog" : "Recon",
     },
-    group_id: boardGroupID,
-    sort_order: input.sortOrder,
-    is_backlog: input.isBacklog,
+    group_id: "group-qa",
+    sort_order: isBacklog ? 0 : 1,
+    is_backlog: isBacklog,
     is_done: false,
-    task_count: input.taskCount,
+    task_count: taskCount,
+  };
+}
+
+function nodeCardsResponse(params: JsonValue) {
+  const nodeID = nodeCardsRequestSchema.parse(params).node_id;
+  return {
+    project_id: "project-1",
+    workflow_id: "workflow-1",
+    node_id: nodeID,
+    cards: state.sourcePresent && nodeID === "backlog" ? [sourceCard] : [],
+    previous_page_token: null,
+    next_page_token: null,
+    generated_at_unix_ms: 1,
   };
 }
 
@@ -468,9 +250,6 @@ const sourceCard = {
   status: {
     kind: "backlog",
     native_state: "backlog",
-    node_ids: [],
-    run_ids: [],
-    attention_types: [],
   },
   actions: {
     can_start: false,
@@ -481,5 +260,36 @@ const sourceCard = {
   },
   updated_at_unix_ms: 1,
 };
+
+function dragOver(view: BoardView, target: EventTarget, clientX: number, clientY: number) {
+  dispatchBoardDrag(target, "dragover", { clientX, clientY, dataTransfer: view.dataTransfer });
+}
+
+function startEdgeScroll(view: BoardView, clientX: number, clientY: number) {
+  fireEvent.dragStart(view.source, transfer(view));
+  dragOver(view, view.source, clientX, clientY);
+  expect(frames.pending).toBe(1);
+}
+
+const transfer = (view: BoardView) => ({ dataTransfer: view.dataTransfer });
+
+function setGeometry(element: HTMLElement, left: number, vertical: boolean) {
+  setScrollportGeometry(element, {
+    left,
+    top: 0,
+    width: vertical ? 180 : 200,
+    height: 400,
+    scrollWidth: vertical ? 180 : 1_000,
+    scrollHeight: vertical ? 1_000 : 400,
+  });
+}
+
+function emitBoardChange(services: ReturnType<typeof boardTestServices>) {
+  services.transport.emit("workflow.project", boardChange);
+}
+
+function taskActionCalls(calls: Readonly<{ method: string; params: JsonValue }>[]) {
+  return calls.filter(({ method }) => method === "workflow.task.start" || method === "workflow.task.move");
+}
 
 const nodeCardsRequestSchema = z.object({ node_id: z.string() });

@@ -181,6 +181,7 @@ export function BoardColumnMotionBoundary({
         cards={renderedCards}
         column={columnVM}
         columnRef={setRegisteredColumnElement}
+        dragDisabled={actionsDisabled || !board.selectedWorkflow.validForTaskCreation}
         scrollportRef={setRegisteredScrollElement}
         dropState={dropState}
         hasMoreCards={presentation.hasMoreCards}

@@ -1,5 +1,5 @@
 import type { DragEvent, SyntheticEvent } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { hasSelectedWorkflow, type BoardColumn, type SelectedWorkflowBoard } from "@/api";
@@ -150,12 +150,6 @@ function BoardContent({
   const { api, nativeBridge } = useAppServices();
   const navigation = useAppNavigation();
   const scrollportRef = useRef<HTMLDivElement | null>(null);
-  const dragAutoScroll = useBoardDragAutoScroll({ active: activeDrag !== null, rootRef: scrollportRef });
-  const stopDragAutoScroll = dragAutoScroll.stop;
-  const cancelActiveDrag = useCallback(() => {
-    stopDragAutoScroll();
-    setActiveDrag(null);
-  }, [stopDragAutoScroll]);
   const { openSidebar } = useSidebar();
   const connection = useConnectionSnapshot();
   const actions = useBoardTaskActions(board.projectID, boardQueryWorkflowID, board.selectedWorkflow.id);
@@ -182,6 +176,23 @@ function BoardContent({
     connection.phase !== "connected" ||
     executionTargetContinuation.running ||
     executionTargetContinuation.pending !== null;
+  const dragDisabled = actionsDisabled || !board.selectedWorkflow.validForTaskCreation;
+  const admittedDrag = dragDisabled ? null : activeDrag;
+  const dragAutoScroll = useBoardDragAutoScroll({ active: admittedDrag !== null, rootRef: scrollportRef });
+  const stopDragAutoScroll = dragAutoScroll.stop;
+  const cancelActiveDrag = useCallback(() => {
+    stopDragAutoScroll();
+    setActiveDrag(null);
+  }, [stopDragAutoScroll]);
+  useLayoutEffect(() => {
+    if (!dragDisabled || activeDrag === null) {
+      return;
+    }
+    stopDragAutoScroll();
+    queueMicrotask(() => {
+      setActiveDrag((current) => (current === activeDrag ? null : current));
+    });
+  }, [activeDrag, dragDisabled, stopDragAutoScroll]);
   const taskDeleteDialog = useNativeDialogFallback<TaskDeleteTarget>({
     errorNoticeID: "task-delete-window-error",
     errorTitle: t("board.deleteTaskWindowError"),
@@ -284,18 +295,14 @@ function BoardContent({
 
   function dropTask(event: DragEvent<HTMLElement>, column: BoardColumn): void {
     event.preventDefault();
-    const dragPayload = activeDrag === null ? null : activeDrag.payload;
+    const dragPayload = admittedDrag === null ? null : admittedDrag.payload;
     cancelActiveDrag();
-    if (dragPayload === null || actionsDisabled) {
+    if (dragPayload === null || dragDisabled) {
       reportRejectedDrop();
       return;
     }
     const dropAction = classifyDrop(column, dragPayload, firstActive?.id);
     if (dropAction.kind === "start") {
-      if (!board.selectedWorkflow.validForTaskCreation) {
-        reportRejectedDrop();
-        return;
-      }
       const pendingMove = { taskID: dragPayload.taskID, targetColumnID: column.id };
       runCardAction(startExecutionTargetAction(dragPayload.taskID), pendingMove);
       return;
@@ -385,17 +392,14 @@ function BoardContent({
   }
 
   function columnDropState(column: BoardColumn): BoardColumnDropState {
-    if (activeDrag === null) {
-      return "idle";
+    if (admittedDrag === null) {
+      return activeDrag === null ? "idle" : "blocked";
     }
-    if (actionsDisabled) {
-      return "blocked";
-    }
-    const action = classifyDrop(column, activeDrag.payload, firstActive?.id);
+    const action = classifyDrop(column, admittedDrag.payload, firstActive?.id);
     if (action.kind === "start") {
-      return board.selectedWorkflow.validForTaskCreation ? "allowed" : "blocked";
+      return "allowed";
     }
-    return activeDrag.payload.manualMoveTargetNodeIDs.includes(column.id) ? "allowed" : "blocked";
+    return admittedDrag.payload.manualMoveTargetNodeIDs.includes(column.id) ? "allowed" : "blocked";
   }
 
   function columnIsCollapsed(column: BoardColumn): boolean {
@@ -516,7 +520,7 @@ function BoardContent({
         role="list"
       >
         <BoardRailMotionController
-          activeDrag={activeDrag}
+          activeDrag={admittedDrag}
           actionsDisabled={actionsDisabled}
           board={board}
           columnDropState={columnDropState}
@@ -525,7 +529,9 @@ function BoardContent({
           onCardClick={openTask}
           onCardDragEnd={cancelActiveDrag}
           onCardDragStart={(drag) => {
-            setActiveDrag(drag);
+            if (!dragDisabled) {
+              setActiveDrag(drag);
+            }
           }}
           onCardsLoadError={reportCardsLoadError}
           onDeleteTask={deleteTask}

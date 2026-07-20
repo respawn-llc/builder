@@ -49,6 +49,7 @@ export type KanbanColumnProps = Readonly<{
   isCollapsed?: boolean;
   dropState: BoardColumnDropState;
   actionsDisabled: boolean;
+  dragDisabled: boolean;
   columnRef?: (element: HTMLElement | null) => void;
   scrollportRef?: (element: HTMLElement | null) => void;
   onCardClick: (taskID: string) => void;
@@ -109,6 +110,7 @@ export function KanbanColumn({
   isCollapsed = false,
   dropState,
   actionsDisabled,
+  dragDisabled,
   columnRef,
   scrollportRef,
   onCardClick,
@@ -225,6 +227,7 @@ export function KanbanColumn({
                   actionsDisabled={actionsDisabled}
                   card={card}
                   cardIndex={cardIndex}
+                  dragDisabled={dragDisabled}
                   instance={instance}
                   onCardClick={onCardClick}
                   onCardDragEnd={onCardDragEnd}
@@ -308,6 +311,7 @@ const TaskCard = memo(function TaskCard({
   actionsDisabled,
   card,
   cardIndex,
+  dragDisabled,
   instance,
   onCardClick,
   onCardDragEnd,
@@ -320,6 +324,7 @@ const TaskCard = memo(function TaskCard({
   cardIndex: number;
   instance: BoardCardInstance;
   actionsDisabled: boolean;
+  dragDisabled: boolean;
   onCardClick: (taskID: string) => void;
   onCardDragEnd: () => void;
   onCardDragStart: (drag: ActiveBoardCardDrag) => void;
@@ -337,7 +342,7 @@ const TaskCard = memo(function TaskCard({
     },
     [instanceColumnID, instanceTaskID, registerMotionCard],
   );
-  const canDrag = !actionsDisabled && card.statusKind !== "canceled";
+  const canDrag = !dragDisabled && card.statusKind !== "canceled";
   const waitingForAnswer = isWaitingForAnswer(card.statusKind);
   const availableActions = taskCardActionAvailability(card);
   const hasFooter =

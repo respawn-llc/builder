@@ -70,16 +70,18 @@ describe("KanbanColumn", () => {
     expect(onCardClick).not.toHaveBeenCalled();
   });
 
-  it("uses an icon-only resume control without opening task detail", () => {
+  it("keeps a server-authorized resume enabled when drag is disabled", () => {
     const onResumeTask = vi.fn();
     const onCardClick = vi.fn();
 
     renderColumn({
       cards: [testCard({ actions: { canResume: true } })],
+      dragDisabled: true,
       onCardClick,
       onResumeTask,
     });
 
+    expect(screen.getByRole("article", { name: "Task" })).toHaveAttribute("draggable", "false");
     const resumeButton = within(screen.getByTestId("task-card-footer")).getByRole("button", {
       name: "Resume",
     });
@@ -327,6 +329,7 @@ const defaultColumnProps = {
   actionsDisabled: false,
   cards: [card],
   column,
+  dragDisabled: false,
   dropState: "idle",
   hasMoreCards: false,
   isFirstActive: false,
