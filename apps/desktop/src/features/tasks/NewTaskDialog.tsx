@@ -1,5 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useEffect, useMemo, useRef } from "react";
+import { Plus } from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
@@ -7,9 +8,11 @@ import { z } from "zod";
 import { errorMessage } from "@/api";
 import { useConnectionSnapshot } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
+import { useStatusController } from "@/app-facade";
+import { LabelChooser, ProjectLabelsProvider, useProjectLabelCatalog } from "@/shared/labels";
 import { NativeDialogWindow } from "@/shared/native-dialog";
 import { useCreateTask, useWorkspaces } from "@/shared/task-mutations";
-import { Button, Dialog, SelectField, TextArea, TextInput } from "@/ui";
+import { Badge, Button, Dialog, FieldShell, SelectField, TextArea, TextInput } from "@/ui";
 import { cx } from "@/ui";
 
 const newTaskContentMaxWidth = "560px";
@@ -86,6 +89,37 @@ export function NewTaskWindowRoute({
 }
 
 export function NewTaskForm({
+  projectID,
+  ...props
+}: Readonly<{
+  boardQueryWorkflowID: string | undefined;
+  className?: string;
+  onSubmitted: () => void;
+  projectID: string;
+  workflowID: string;
+}>) {
+  const { t } = useTranslation();
+  const { push } = useStatusController();
+  const reportLabelError = useCallback(
+    (error: unknown) => {
+      push({
+        body: errorMessage(error),
+        durationMs: Infinity,
+        id: "new-task-label-load-error",
+        title: t("labels.loadFailed"),
+        tone: "danger",
+      });
+    },
+    [push, t],
+  );
+  return (
+    <ProjectLabelsProvider onBackgroundError={reportLabelError} projectID={projectID}>
+      <NewTaskFormContent projectID={projectID} {...props} />
+    </ProjectLabelsProvider>
+  );
+}
+
+function NewTaskFormContent({
   boardQueryWorkflowID,
   className,
   onSubmitted,
@@ -101,7 +135,16 @@ export function NewTaskForm({
   const { t } = useTranslation();
   const connection = useConnectionSnapshot();
   const workspaces = useWorkspaces(projectID);
+  const catalog = useProjectLabelCatalog();
   const createTask = useCreateTask(projectID, boardQueryWorkflowID, workflowID);
+  const [selectedLabelIDs, setSelectedLabelIDs] = useState<readonly string[]>([]);
+  const effectiveSelectedLabelIDs = useMemo(() => {
+    if (catalog.data === undefined) {
+      return selectedLabelIDs;
+    }
+    const availableLabelIDs = new Set(catalog.data.labels.map((label) => label.id));
+    return selectedLabelIDs.filter((labelID) => availableLabelIDs.has(labelID));
+  }, [catalog.data, selectedLabelIDs]);
   const defaultWorkspaceID = workspaces.data?.defaultWorkspaceID ?? "";
   const workspaceItems = useMemo(() => workspaces.data?.workspaces ?? [], [workspaces.data?.workspaces]);
   const initialWorkspaceID = initialSourceWorkspaceID(defaultWorkspaceID, workspaceItems);
@@ -121,21 +164,25 @@ export function NewTaskForm({
       initializedRef.current = true;
     }
   }, [form, initialWorkspaceID]);
-
   async function submit(values: NewTaskFormValues): Promise<void> {
     const sourceWorkspaceID = values.sourceWorkspaceID.trim() || initialWorkspaceID;
     if (sourceWorkspaceID.length === 0) {
       return;
     }
-    await createTask.mutateAsync({
-      projectID,
-      workflowID,
-      title: values.title,
-      body: values.body,
-      sourceWorkspaceID,
-      labelIDs: [],
-    });
-    onSubmitted();
+    const availableLabelIDs = new Set(catalog.data?.labels.map((label) => label.id) ?? []);
+    try {
+      await createTask.mutateAsync({
+        projectID,
+        workflowID,
+        title: values.title,
+        body: values.body,
+        sourceWorkspaceID,
+        labelIDs: effectiveSelectedLabelIDs.filter((labelID) => availableLabelIDs.has(labelID)),
+      });
+      onSubmitted();
+    } catch {
+      // The mutation state renders the persistent failure without clearing form input.
+    }
   }
 
   const workspaceOptions = useMemo(
@@ -163,6 +210,18 @@ export function NewTaskForm({
         placeholder={t("task.bodyPlaceholder")}
         rows={6}
         {...form.register("body")}
+      />
+      <NewTaskLabels
+        disabled={connection.phase !== "connected"}
+        onSelectionChange={(labelID, selected) => {
+          setSelectedLabelIDs((current) => {
+            if (selected) {
+              return current.includes(labelID) ? current : [...current, labelID];
+            }
+            return current.filter((candidate) => candidate !== labelID);
+          });
+        }}
+        selectedLabelIDs={effectiveSelectedLabelIDs}
       />
       {workspaceItems.length === 1 ? (
         <>
@@ -199,6 +258,61 @@ export function NewTaskForm({
         {t("task.create")}
       </Button>
     </form>
+  );
+}
+
+function NewTaskLabels({
+  disabled,
+  onSelectionChange,
+  selectedLabelIDs,
+}: Readonly<{
+  disabled: boolean;
+  onSelectionChange(labelID: string, selected: boolean): void;
+  selectedLabelIDs: readonly string[];
+}>) {
+  const { t } = useTranslation();
+  const catalog = useProjectLabelCatalog();
+  const inputID = useId();
+  const selected = new Set(selectedLabelIDs);
+  const labels = catalog.data?.labels.filter((label) => selected.has(label.id)) ?? [];
+  return (
+    <FieldShell
+      errorId={`${inputID}-error`}
+      hintId={`${inputID}-hint`}
+      inputId={inputID}
+      label={t("labels.filter")}
+    >
+      <LabelChooser
+        invocation={{
+          kind: "assignment",
+          selectedLabelIDs,
+          onSelectionChange,
+        }}
+        trigger={
+          <Button
+            aria-label={t("labels.editAssignments")}
+            className="min-h-11 h-auto w-full min-w-0 justify-start text-left"
+            disabled={disabled}
+            id={inputID}
+            variant="secondary"
+          >
+            <span className="flex min-w-0 flex-wrap items-center gap-[var(--space-1)]">
+              {labels.length === 0 ? (
+                <span className="inline-flex items-center gap-[var(--space-1)] text-[var(--color-muted)]">
+                  <Plus aria-hidden="true" size={14} />
+                  {t("labels.add")}
+                </span>
+              ) : null}
+              {labels.map((label) => (
+                <Badge key={label.id} tone="neutral">
+                  {label.name}
+                </Badge>
+              ))}
+            </span>
+          </Button>
+        }
+      />
+    </FieldShell>
   );
 }
 
