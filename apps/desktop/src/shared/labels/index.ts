@@ -30,3 +30,15 @@ export {
   type LabelFilterPersistenceStatus,
   type ProjectLabelFilterController,
 } from "./projectLabelFilter";
+export {
+  createTaskLabelAssignmentController,
+  type TaskLabelAssignmentController,
+  type TaskLabelAssignmentFailure,
+  type TaskLabelReconciliationFailure,
+  type TaskLabelAssignmentSnapshot,
+  type TaskLabelUpdateInput,
+} from "./taskLabelAssignmentController";
+export { patchExistingTaskLabelAssignment, patchExistingTaskLabelProjections } from "./taskLabelCache";
+export { type TaskLabelAssignmentData } from "./taskLabelAssignmentData";
+export { TaskLabelAssignmentProvider } from "./TaskLabelAssignmentProvider";
+export { useTaskLabelAssignment } from "./taskLabelAssignmentContext";

@@ -123,7 +123,7 @@ export function useTaskMutations(taskID: string, onChanged?: () => void) {
     await queryClient.invalidateQueries({ queryKey: queryKeys.projects });
     await queryClient.invalidateQueries({ queryKey: queryKeys.allAttention });
     await queryClient.invalidateQueries({ queryKey: queryKeys.allBoards });
-    await queryClient.invalidateQueries({ queryKey: ["board-node-cards"] });
+    await queryClient.invalidateQueries({ queryKey: queryKeys.allBoardNodeCards });
     await queryClient.invalidateQueries({ queryKey: queryKeys.allTasks });
     await queryClient.invalidateQueries({ queryKey: queryKeys.allActivity });
     await queryClient.invalidateQueries({ queryKey: queryKeys.allPendingAsks });

@@ -29,6 +29,8 @@ export const queryKeys = {
   allWorkflowGraphLayouts: ["workflow-graph-layout"],
   allProjectWorkflowLinks: ["project-workflow-links"],
   allTasks: ["task"],
+  allTaskLists: ["task-list"],
+  allBoardNodeCards: ["board-node-cards"],
   allProjectLabels: ["project-labels"],
   allTaskLabels: ["task-labels"],
   allActivity: ["activity"],
