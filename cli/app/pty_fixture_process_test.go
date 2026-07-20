@@ -138,7 +138,7 @@ func runPTYFixtureProcess(ctx context.Context, processConfig appfixture.ProcessC
 	if err != nil {
 		return err
 	}
-	runtimePlan, request, err := prepareSessionUIRun(ctx, server, planner, plan, "", false, "", false)
+	runtimePlan, request, err := prepareSessionUIRun(ctx, server, planner, plan, "", false, "", false, nil)
 	if err != nil {
 		return err
 	}

@@ -35,6 +35,7 @@ type uiLoopRequest struct {
 	modelContractLocked          bool
 	configuredModelName          string
 	statusConfig                 uiStatusConfig
+	hookAttachmentPlan           *clientHookAttachmentPlan
 }
 
 func runUILoop(request uiLoopRequest) (tea.Model, error) {

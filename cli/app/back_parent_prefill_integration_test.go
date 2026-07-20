@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"core/server/llm"
@@ -229,6 +230,7 @@ func TestBackReopensPreviousSessionAcrossProjects(t *testing.T) {
 		false,
 		"",
 		false,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("prepare embedded target parent UI: %v", err)
@@ -242,6 +244,7 @@ func TestBackReopensPreviousSessionAcrossProjects(t *testing.T) {
 func TestRemoteBackRebindsToParentProjectBeforeRuntimePreparation(t *testing.T) {
 	_, workspaceA := newRegisteredAppWorkspace(t)
 	workspaceB := t.TempDir()
+	clientSettings := loadClientSettingsWithLifecycleCommand(t, []string{"client-notifier", "--fixed"})
 	if err := os.MkdirAll(filepath.Join(workspaceB, config.ConfigDirName), 0o755); err != nil {
 		t.Fatalf("create target workspace config dir: %v", err)
 	}
@@ -389,6 +392,10 @@ func TestRemoteBackRebindsToParentProjectBeforeRuntimePreparation(t *testing.T) 
 	if plan.ActiveSettings.Model != "target-project-model" || plan.Source.Sources["model"] != "file" {
 		t.Fatalf("target plan model/source = %q/%q, want target-project-model/file", plan.ActiveSettings.Model, plan.Source.Sources["model"])
 	}
+	hookAttachmentPlan, err := deriveClientHookAttachmentPlan(clientSettings, intent, plan)
+	if err != nil {
+		t.Fatalf("derive rebound target hook attachment plan: %v", err)
+	}
 	runtimePlan, request, err := prepareSessionUIRun(
 		context.Background(),
 		targetServer,
@@ -398,6 +405,7 @@ func TestRemoteBackRebindsToParentProjectBeforeRuntimePreparation(t *testing.T) 
 		false,
 		"",
 		false,
+		hookAttachmentPlan,
 	)
 	if err != nil {
 		t.Fatalf("prepare target parent UI: %v", err)
@@ -405,6 +413,10 @@ func TestRemoteBackRebindsToParentProjectBeforeRuntimePreparation(t *testing.T) 
 	defer func() { _ = runtimePlan.Close() }()
 	if request.initialInput != "target project draft" || request.active.Model != "target-project-model" {
 		t.Fatalf("prepared target UI input/model = %q/%q", request.initialInput, request.active.Model)
+	}
+	if request.hookAttachmentPlan == nil ||
+		!reflect.DeepEqual(request.hookAttachmentPlan.Argv(), []string{"client-notifier", "--fixed"}) {
+		t.Fatalf("prepared rebound hook attachment plan = %+v, want captured client argv", request.hookAttachmentPlan)
 	}
 }
 
@@ -559,6 +571,7 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 				false,
 				wantInput,
 				true,
+				nil,
 			)
 			if err != nil {
 				t.Fatalf("prepare parent UI: %v", err)

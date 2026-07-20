@@ -61,7 +61,7 @@ func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, i
 	return runSessionLifecycleWithOptions(ctx, server, interactor, config.ClientSettings{}, sessionLifecycleOptions{Intent: intent})
 }
 
-func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessionServer, interactor authInteractor, _ config.ClientSettings, opts sessionLifecycleOptions) error {
+func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessionServer, interactor authInteractor, clientSettings config.ClientSettings, opts sessionLifecycleOptions) error {
 	originalServer := server
 	boundServer, err := ensureInteractiveProjectBinding(ctx, server)
 	if err != nil {
@@ -171,6 +171,10 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		if err != nil {
 			return err
 		}
+		hookAttachmentPlan, err := deriveClientHookAttachmentPlan(clientSettings, intent, plan)
+		if err != nil {
+			return err
+		}
 		nextSessionOverrides = serverapi.RunPromptOverrides{}
 		initialPrompt, initialPromptHistoryRecorded, transitionInput, overrideStoredDraft, err := sessionLaunchPreparationValues(preparation)
 		if err != nil {
@@ -185,6 +189,7 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 			initialPromptHistoryRecorded,
 			transitionInput,
 			overrideStoredDraft,
+			hookAttachmentPlan,
 		)
 		if err != nil {
 			return err
@@ -249,6 +254,7 @@ func prepareSessionUIRun(
 	initialPromptHistoryRecorded bool,
 	transitionInput string,
 	overrideStoredDraft bool,
+	hookAttachmentPlan *clientHookAttachmentPlan,
 ) (*runtimeLaunchPlan, uiLoopRequest, error) {
 	runtimePlan, err := planner.PrepareRuntime(ctx, plan, os.Stderr, "app.start session_id="+plan.SessionID+" workspace="+plan.ExecutionTarget.EffectiveWorkdir+" model="+plan.ActiveSettings.Model)
 	if err != nil {
@@ -284,6 +290,7 @@ func prepareSessionUIRun(
 		modelContractLocked:          plan.ModelContractLocked,
 		configuredModelName:          plan.ConfiguredModelName,
 		statusConfig:                 plan.StatusConfig,
+		hookAttachmentPlan:           hookAttachmentPlan,
 	}, nil
 }
 
