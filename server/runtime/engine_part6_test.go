@@ -136,6 +136,9 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 	if finalSnapshot.Entries[len(finalSnapshot.Entries)-1].Text != "later unrelated note" {
 		t.Fatalf("expected later unrelated note at transcript tail, got %+v", finalSnapshot.Entries[len(finalSnapshot.Entries)-1])
 	}
+	assertReviewerPresentation(t, finalSnapshot, 1)
+	restored := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
+	assertReviewerPresentation(t, restored.ChatSnapshot(), 1)
 }
 
 func TestAppendCommittedEntryEmitsRealtimeLocalEntryEvent(t *testing.T) {
@@ -630,53 +633,6 @@ func TestRestoreMessagesFailsOnMalformedHistoryReplacementPayload(t *testing.T) 
 			t.Fatalf("expected malformed legacy reviewer rollback payload to be ignored, got %v", err)
 		}
 	})
-}
-
-func TestReviewerSuggestionPresentation(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name            string
-		verbose         bool
-		wantSuggestions int
-	}{
-		{name: "default"},
-		{name: "verbose", verbose: true, wantSuggestions: 1},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			store := mustCreateTestSession(t)
-			mainClient := &fakeClient{responses: []llm.Response{
-				finalTextResponse("original final"),
-				finalTextResponse("updated final after review"),
-			}}
-			reviewerClient := &fakeClient{responses: []llm.Response{{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":["Add final verification notes."]}`},
-				Usage:     llm.Usage{WindowTokens: 200000},
-			}}}
-			eng := mustNewExecTestEngine(t, store, mainClient, Config{
-				Model: "gpt-5",
-				Reviewer: ReviewerConfig{
-					Frequency:     "all",
-					Model:         "gpt-5",
-					ThinkingLevel: "low",
-					VerboseOutput: tt.verbose,
-					Client:        reviewerClient,
-				},
-			})
-
-			msg, err := eng.SubmitUserMessage(context.Background(), "do task")
-			if err != nil {
-				t.Fatalf("submit: %v", err)
-			}
-			if msg.Content != "updated final after review" {
-				t.Fatalf("assistant content = %q, want updated final after review", msg.Content)
-			}
-			assertReviewerPresentation(t, eng.ChatSnapshot(), tt.wantSuggestions)
-
-			restored := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
-			assertReviewerPresentation(t, restored.ChatSnapshot(), tt.wantSuggestions)
-		})
-	}
 }
 
 func assertReviewerPresentation(t *testing.T, snapshot ChatSnapshot, wantSuggestions int) {

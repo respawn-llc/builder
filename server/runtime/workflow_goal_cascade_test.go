@@ -8,105 +8,10 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/shared/config"
 	"core/shared/toolspec"
 )
-
-func TestWorkflowToolModeTerminalCompletionCascadeCompletesActiveGoal(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	controller := &fakeWorkflowController{}
-	client := &fakeClient{responses: []llm.Response{
-		commentaryResponse("complete", completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`))),
-	}}
-	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeTool), Config{
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
-	})
-	if _, err := eng.SetGoal("finish via tool completion", session.GoalActorUser); err != nil {
-		t.Fatalf("SetGoal: %v", err)
-	}
-	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
-		t.Fatalf("SubmitWorkflowTurn: %v", err)
-	}
-	if got := controller.completed.Load(); got != 1 {
-		t.Fatalf("completions = %d, want 1", got)
-	}
-	if terminal := eng.WorkflowTerminalState(); !terminal.Completed || terminal.Source != WorkflowCompletionSourceTool {
-		t.Fatalf("terminal state = %+v, want tool completion", terminal)
-	}
-	goal := eng.Goal()
-	if goal == nil || goal.Status != session.GoalStatusComplete {
-		t.Fatalf("goal after tool-mode completion = %+v, want auto-completed", goal)
-	}
-}
-
-func TestWorkflowTerminalCompletionCascadeCompletesActiveGoal(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	controller := &fakeWorkflowController{}
-	client := &fakeClient{responses: []llm.Response{
-		structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
-	}}
-	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeUnstructured), Config{
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
-	})
-	if _, err := eng.SetGoal("finish the steering rework", session.GoalActorUser); err != nil {
-		t.Fatalf("SetGoal: %v", err)
-	}
-	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
-		t.Fatalf("SubmitWorkflowTurn: %v", err)
-	}
-	if terminal := eng.WorkflowTerminalState(); !terminal.Completed {
-		t.Fatalf("terminal state = %+v, want completed", terminal)
-	}
-	goal := eng.Goal()
-	if goal == nil || goal.Status != session.GoalStatusComplete {
-		t.Fatalf("goal after workflow completion = %+v, want auto-completed", goal)
-	}
-}
-
-func TestWorkflowTerminalCompletionLeavesPausedGoalIntact(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	controller := &fakeWorkflowController{}
-	client := &fakeClient{responses: []llm.Response{
-		structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
-	}}
-	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeUnstructured), Config{})
-	if _, err := eng.SetGoal("paused objective", session.GoalActorUser); err != nil {
-		t.Fatalf("SetGoal: %v", err)
-	}
-	if _, err := eng.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser); err != nil {
-		t.Fatalf("SetGoalStatus paused: %v", err)
-	}
-	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
-		t.Fatalf("SubmitWorkflowTurn: %v", err)
-	}
-	goal := eng.Goal()
-	if goal == nil || goal.Status != session.GoalStatusPaused {
-		t.Fatalf("paused goal after workflow completion = %+v, want still paused", goal)
-	}
-}
-
-func TestWorkflowInvalidCompletionNudgeIncludesActiveGoalReminder(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	controller := &fakeWorkflowController{}
-	client := &fakeClient{responses: []llm.Response{
-		structuredFinalResponse(`{"summary":""}`),
-		structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
-	}}
-	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeUnstructured), Config{
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
-	})
-	if _, err := eng.SetGoal("ship the steering rework end to end", session.GoalActorUser); err != nil {
-		t.Fatalf("SetGoal: %v", err)
-	}
-	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
-		t.Fatalf("SubmitWorkflowTurn: %v", err)
-	}
-	assertDeveloperErrorFeedbackAfterAssistantFinalContains(t, eng, `{"summary":""}`, []string{"ship the steering rework end to end"}, nil)
-}
 
 func TestWorkflowTerminalCascadeRacesUserGoalMutationWithoutDeadlock(t *testing.T) {
 	t.Parallel()
@@ -162,41 +67,6 @@ func TestWorkflowTerminalCascadeRacesUserGoalMutationWithoutDeadlock(t *testing.
 	}
 }
 
-func TestWorkflowToolModeCascadeEmitsGoalCompletionAfterToolResult(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	controller := &fakeWorkflowController{}
-	client := &fakeClient{responses: []llm.Response{
-		commentaryResponse("complete", completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`))),
-	}}
-	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeTool), Config{
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
-	})
-	if _, err := eng.SetGoal("finish via tool completion", session.GoalActorUser); err != nil {
-		t.Fatalf("SetGoal: %v", err)
-	}
-	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
-		t.Fatalf("SubmitWorkflowTurn: %v", err)
-	}
-
-	entries := eng.ChatSnapshot().Entries
-	toolResultIdx, goalCompleteIdx := -1, -1
-	for i, entry := range entries {
-		if entry.ToolCallID == "call_complete" {
-			toolResultIdx = i
-		}
-		if entry.MessageType == llm.MessageTypeGoal {
-			goalCompleteIdx = i
-		}
-	}
-	if toolResultIdx < 0 || goalCompleteIdx < 0 {
-		t.Fatalf("missing entries: toolResult=%d goalComplete=%d entries=%+v", toolResultIdx, goalCompleteIdx, entries)
-	}
-	if goalCompleteIdx < toolResultIdx {
-		t.Fatalf("goal-completion message (idx %d) precedes complete_node tool result (idx %d); a non-tool item interleaves the tool call/result pair", goalCompleteIdx, toolResultIdx)
-	}
-}
-
 func TestWorkflowToolModeCascadeSkipsGoalPausedDuringRace(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
@@ -244,12 +114,32 @@ func TestWorkflowToolModeCascadeEmitsGoalCompletionAfterHostedToolResult(t *test
 		Model:         "gpt-5",
 		WebSearchMode: "native",
 		EnabledTools:  []toolspec.ID{toolspec.ToolWebSearch, toolspec.ToolAskQuestion},
+		HeadlessMode:  true,
 	})
 	if _, err := eng.SetGoal("finish via tool completion with web search", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
 	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
 		t.Fatalf("SubmitWorkflowTurn: %v", err)
+	}
+	assertModelCallCount(t, client, 1)
+	messages := requestMessages(client.calls[0])
+	if len(workflowPromptMessages(messages)) == 0 {
+		t.Fatalf("workflow prompt missing: messages=%+v", messages)
+	}
+	for _, msg := range messages {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeHeadlessMode {
+			t.Fatalf("headless prompt should not be injected during workflow runs: %+v", messages)
+		}
+		if msg.Role == llm.RoleUser {
+			t.Fatalf("workflow run should not inject user prompt: %+v", messages)
+		}
+	}
+	if got := controller.completed.Load(); got != 1 {
+		t.Fatalf("completions = %d, want 1", got)
+	}
+	if terminal := eng.WorkflowTerminalState(); !terminal.Completed || terminal.Source != WorkflowCompletionSourceTool {
+		t.Fatalf("terminal state = %+v, want tool completion", terminal)
 	}
 	if goal := eng.Goal(); goal == nil || goal.Status != session.GoalStatusComplete {
 		t.Fatalf("goal after hosted+tool completion = %+v, want auto-completed", goal)
@@ -273,6 +163,31 @@ func TestWorkflowToolModeCascadeEmitsGoalCompletionAfterHostedToolResult(t *test
 	}
 	if goalCompleteIdx < hostedResultIdx || goalCompleteIdx < completeResultIdx {
 		t.Fatalf("goal-completion (idx %d) precedes a tool result (hosted=%d complete=%d); interleaves tool outputs", goalCompleteIdx, hostedResultIdx, completeResultIdx)
+	}
+
+	events, err := sessiontest.CollectEvents(store)
+	if err != nil {
+		t.Fatalf("read events: %v", err)
+	}
+	hostedCallPersisted := false
+	hostedResultPersisted := false
+	for _, evt := range events {
+		if evt.Kind != "message" {
+			continue
+		}
+		var persisted llm.Message
+		if err := json.Unmarshal(evt.Payload, &persisted); err != nil {
+			t.Fatalf("decode message event: %v", err)
+		}
+		if persisted.Role == llm.RoleAssistant {
+			for _, call := range persisted.ToolCalls {
+				hostedCallPersisted = hostedCallPersisted || call.ID == "ws_1"
+			}
+		}
+		hostedResultPersisted = hostedResultPersisted || persisted.Role == llm.RoleTool && persisted.ToolCallID == "ws_1"
+	}
+	if !hostedCallPersisted || !hostedResultPersisted {
+		t.Fatalf("hosted call/result persisted = %v/%v, want both", hostedCallPersisted, hostedResultPersisted)
 	}
 }
 

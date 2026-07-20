@@ -28,7 +28,8 @@ func TestReviewerRunsOnAllFrequencyWithoutToolCalls(t *testing.T) {
 	}}}
 
 	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model: "gpt-5",
+		Model:           "gpt-5",
+		FastModeEnabled: true,
 		Reviewer: ReviewerConfig{
 			Frequency:     "all",
 			Model:         "gpt-5",
@@ -47,6 +48,9 @@ func TestReviewerRunsOnAllFrequencyWithoutToolCalls(t *testing.T) {
 	}
 	if len(reviewerClient.calls) != 1 {
 		t.Fatalf("expected reviewer to be called once for frequency=all, got %d", len(reviewerClient.calls))
+	}
+	if !reviewerClient.calls[0].FastMode {
+		t.Fatal("expected reviewer request to inherit fast mode")
 	}
 	statuses := 0
 	for _, entry := range eng.ChatSnapshot().Entries {
@@ -199,40 +203,6 @@ func TestReviewerFrequencyOffDoesNotReadSystemPromptFile(t *testing.T) {
 	assertModelCallCount(t, reviewerClient, 0)
 	if locked := store.Meta().Locked; locked == nil || locked.HasReviewerPrompt || locked.ReviewerPrompt != "" {
 		t.Fatalf("locked reviewer prompt = %+v, want no reviewer prompt snapshot", locked)
-	}
-}
-
-func TestReviewerSuggestionsRequestInheritsFastMode(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	mainClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-	reviewerClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":[]}`},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-
-	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model:           "gpt-5",
-		FastModeEnabled: true,
-		Reviewer: ReviewerConfig{
-			Frequency:     "all",
-			Model:         "gpt-5",
-			ThinkingLevel: "low",
-			Client:        reviewerClient,
-		},
-	})
-
-	if _, err := eng.SubmitUserMessage(context.Background(), "hello"); err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if len(reviewerClient.calls) != 1 {
-		t.Fatalf("expected reviewer to be called once, got %d", len(reviewerClient.calls))
-	}
-	if !reviewerClient.calls[0].FastMode {
-		t.Fatal("expected reviewer request to inherit fast mode")
 	}
 }
 
@@ -416,19 +386,15 @@ func TestReviewerSuggestionsTriggerFollowUpAndNoopKeepsOriginalAnswer(t *testing
 		t.Fatalf("reviewer feedback messages = %d, want 1; messages=%+v", feedback, requestMessages(mainClient.calls[2]))
 	}
 
-	statuses := 0
 	snapshot := eng.ChatSnapshot()
 	for _, entry := range snapshot.Entries {
 		if entry.Text == reviewerNoopToken {
 			t.Fatalf("noop token leaked into chat snapshot: %+v", snapshot.Entries)
 		}
-		if transcript.EntryRole(entry.Role) == transcript.EntryRoleReviewerStatus {
-			statuses++
-		}
 	}
-	if statuses != 1 {
-		t.Fatalf("reviewer status entries = %d, want 1; entries=%+v", statuses, snapshot.Entries)
-	}
+	assertReviewerPresentation(t, snapshot, 0)
+	restored := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
+	assertReviewerPresentation(t, restored.ChatSnapshot(), 0)
 }
 
 func TestReviewerUsesStreamingClientWhenAvailable(t *testing.T) {
