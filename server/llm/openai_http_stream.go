@@ -270,7 +270,7 @@ func repairAssistantOutputItems(items []ResponseItem, text string, phase Message
 			Type:        ResponseItemTypeMessage,
 			OutputIndex: outputIndex,
 			Role:        textutil.Value(RoleAssistant),
-			Phase:       textutil.Value(phase),
+			Phase:       optionalMessagePhase(phase),
 			Content:     textutil.Value(text),
 		}
 		if !hasResolvedStream {
@@ -740,7 +740,7 @@ func buildOutputItemsFromStream(text string, phase MessagePhase, toolCalls []Too
 	if strings.TrimSpace(text) != "" {
 		items = append(items, ResponseItem{
 			Type: ResponseItemTypeMessage, Role: textutil.Value(RoleAssistant),
-			Phase: textutil.Value(phase), Content: textutil.Value(text),
+			Phase: optionalMessagePhase(phase), Content: textutil.Value(text),
 		})
 	}
 	for _, call := range toolCalls {
@@ -784,6 +784,13 @@ func buildOutputItemsFromStream(text string, phase MessagePhase, toolCalls []Too
 		})
 	}
 	return items
+}
+
+func optionalMessagePhase(phase MessagePhase) *MessagePhase {
+	if strings.TrimSpace(string(phase)) == "" {
+		return nil
+	}
+	return textutil.Value(phase)
 }
 
 type passthroughOutputAccumulator struct {

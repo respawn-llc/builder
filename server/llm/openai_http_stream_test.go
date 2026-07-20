@@ -696,6 +696,16 @@ func TestGenerateStream_PreservesStreamedAssistantTextWhenCompletedMessageIsEmpt
 	}
 }
 
+func TestBuildOutputItemsFromStreamPreservesAbsentPhase(t *testing.T) {
+	items := buildOutputItemsFromStream("streamed text", "", nil, nil, nil)
+	if len(items) != 1 {
+		t.Fatalf("output items = %+v, want one assistant message", items)
+	}
+	if items[0].Phase != nil {
+		t.Fatalf("assistant output phase = %v, want absent", items[0].Phase)
+	}
+}
+
 func TestGenerateStream_PreservesAssistantOutputItemPhaseWhenCompletedPhaseIsMissing(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Done"}]}}`,
