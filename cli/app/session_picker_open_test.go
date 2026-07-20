@@ -443,7 +443,7 @@ func TestSessionPickerWorkspaceChangeReturnsToSameSelectedRow(t *testing.T) {
 	}
 }
 
-func TestSessionPickerWorkspaceChangeNoClearsPendingAndKeepsSelection(t *testing.T) {
+func TestSessionPickerWorkspaceChangeCtrlCClearsPendingAndKeepsSelection(t *testing.T) {
 	sessionID := mustPickerSessionID(t, "workspace-decline")
 	model := newSessionPickerModel(
 		context.Background(),
@@ -489,7 +489,7 @@ func TestSessionPickerWorkspaceChangeNoClearsPendingAndKeepsSelection(t *testing
 		pickerUpdateCommand(
 			t,
 			model,
-			tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}},
+			tea.KeyMsg{Type: tea.KeyCtrlC},
 		),
 	)
 	if model.result != nil ||

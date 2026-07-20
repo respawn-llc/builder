@@ -58,15 +58,12 @@ func appendRecoveredWarning(store *session.Store, provider func() (string, bool,
 	if err != nil {
 		return session.MapEventLogMaterializationError(err)
 	}
-	_, _, err = eventLog.AppendRecord(nil, session.LocalEntryRecord{
+	_, err = eventLog.AppendGeneratedRecoveredWarning(session.LocalEntryRecord{
 		Visibility: session.EntryVisibilityOngoing,
 		Role:       "warning",
 		Text:       warning,
 	})
-	if err != nil {
-		return err
-	}
-	return store.MarkGeneratedRecoveredWarningIssued()
+	return err
 }
 
 func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {

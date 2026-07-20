@@ -136,6 +136,35 @@ func (c MaterializedEventLog) AppendCompactionHistoryReplacement(
 	return outcome.records[0], CommitReceipt{Committed: outcome.committed}, err
 }
 
+func (c MaterializedEventLog) AppendGeneratedRecoveredWarning(
+	record LocalEntryRecord,
+) (CommitReceipt, error) {
+	outcome, err := c.appendRecordInputsAtomic([]recordAppendInput{{
+		payload: record,
+	}}, func(meta *Meta) (bool, error) {
+		if meta.GeneratedRecoveredWarningIssued {
+			return false, nil
+		}
+		meta.GeneratedRecoveredWarningIssued = true
+		return true, nil
+	})
+	receipt := CommitReceipt{Committed: outcome.committed}
+	if err != nil {
+		return receipt, err
+	}
+	switch len(outcome.records) {
+	case 0:
+		return CommitReceipt{Committed: true}, nil
+	case 1:
+		return receipt, nil
+	default:
+		return receipt, fmt.Errorf(
+			"generated recovered warning append produced %d records, want at most 1",
+			len(outcome.records),
+		)
+	}
+}
+
 func (c MaterializedEventLog) AppendRecordWithEndByteCursor(
 	stepID *string,
 	payload EventRecordPayload,

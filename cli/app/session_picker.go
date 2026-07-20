@@ -142,16 +142,16 @@ func (m *sessionPickerModel) tab(category sessioncontract.SessionCategory) *sess
 }
 
 func (m *sessionPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if key, ok := msg.(tea.KeyMsg); ok &&
-		key.Type == tea.KeyCtrlC &&
-		m.pendingOpen != nil {
-		return m, m.cancelPendingOpen()
-	}
 	if tick, ok := msg.(sessionPickerSpinnerTickMsg); ok {
 		return m, m.applySpinnerTick(tick)
 	}
 	if m.workspacePrompt != nil {
 		return m, m.updateWorkspacePrompt(msg)
+	}
+	if key, ok := msg.(tea.KeyMsg); ok &&
+		key.Type == tea.KeyCtrlC &&
+		m.pendingOpen != nil {
+		return m, m.cancelPendingOpen()
 	}
 	switch message := msg.(type) {
 	case sessionPickerPageLoadedMsg:
