@@ -90,35 +90,6 @@ func TestStartSessionTranscriptEventsReopensOnLocalRehydrationRequest(t *testing
 	}
 }
 
-func TestStartSessionTranscriptEventsRejectsInvalidIdentityBeforeObservers(t *testing.T) {
-	invalid := clientui.TranscriptMessage{
-		Sequence: 1,
-		Kind:     clientui.TranscriptMessageHydration,
-		Payload: clientui.TranscriptPayload{Hydration: &clientui.TranscriptHydration{
-			SessionIdentity: clientui.TranscriptSessionIdentity{},
-		}},
-	}
-	subscriber := &recordingTranscriptSubscriber{
-		subs: []*scriptedTranscriptSubscription{{messages: []clientui.TranscriptMessage{invalid}}},
-	}
-	observed := false
-	stream := startSessionTranscriptEvents(
-		context.Background(),
-		"session-1",
-		subscriber.SubscribeSessionTranscript,
-		func(clientui.TranscriptMessage) { observed = true },
-	)
-	defer stream.Stop()
-
-	event := nextTranscriptEvent(t, stream.Events)
-	if event.Kind != ongoingTranscriptEventLoss || event.Err == nil {
-		t.Fatalf("event = %+v, want validation loss", event)
-	}
-	if observed {
-		t.Fatal("observer received invalid transcript identity")
-	}
-}
-
 type recordingTranscriptSubscriber struct {
 	sessionIDs []string
 	subs       []*scriptedTranscriptSubscription

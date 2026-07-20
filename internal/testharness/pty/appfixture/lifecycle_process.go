@@ -23,6 +23,7 @@ type LifecycleHookBehavior string
 const (
 	LifecycleHookBehaviorSuccess     LifecycleHookBehavior = "success"
 	LifecycleHookBehaviorNonzeroOnce LifecycleHookBehavior = "nonzero_once"
+	LifecycleHookBehaviorNonzero     LifecycleHookBehavior = "nonzero"
 )
 
 type LifecycleProcessConfig struct {
@@ -81,6 +82,10 @@ func (config LifecycleProcessConfig) Validate() error {
 	case LifecycleHookBehaviorNonzeroOnce:
 		if config.HookStatePath == nil || strings.TrimSpace(*config.HookStatePath) == "" {
 			return errors.New("non-zero-once lifecycle hook requires hook_state_path")
+		}
+	case LifecycleHookBehaviorNonzero:
+		if config.HookStatePath != nil {
+			return errors.New("non-zero lifecycle hook cannot contain hook_state_path")
 		}
 	default:
 		return errors.New("lifecycle PTY fixture hook_behavior is invalid")

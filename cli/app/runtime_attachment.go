@@ -104,7 +104,7 @@ func prepareSharedRuntimeWiring(
 	initialLifecycleContext := lifecyclecontract.Context{}
 	if len(plan.ClientLifecycleCommand) > 0 {
 		var err error
-		initialLifecycleContext, err = lifecycleInitialContext(plan.SessionID)
+		initialLifecycleContext, err = lifecycleInitialContext(plan.SessionID, plan.SessionName)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -135,14 +135,15 @@ func prepareSharedRuntimeWiring(
 		}
 		return strings.TrimSpace(plan.SessionName)
 	}, terminalFocus.FocusedForAttention)
+	var promptAttention promptAttentionSink = turnQueueHook
 	if lifecycleProxy != nil {
-		turnQueueHook.observeAcceptedAttention(lifecycleProxy.AcceptAttention)
+		promptAttention = newAcceptedAttentionFanout(turnQueueHook, lifecycleProxy.AcceptAttention)
 	}
 	wiring := &runtimeWiring{
 		eventDispatcher:       eventDispatcher,
 		requestTranscriptOpen: requestTranscriptOpen,
 		promptAnswers:         newTranscriptPromptAnswerer(ctx, clients.PromptControl),
-		promptAttention:       turnQueueHook,
+		promptAttention:       promptAttention,
 		turnQueueHook:         turnQueueHook,
 		terminalFocus:         terminalFocus,
 		runtimeClient:         runtimeClient,

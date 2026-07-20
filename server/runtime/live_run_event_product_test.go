@@ -97,18 +97,20 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 		}
 	})
 
-	t.Run("terminal callback does not hold waiters or successor runs", func(t *testing.T) {
+	t.Run("terminal callback does not hold waiters or queued successor scheduling", func(t *testing.T) {
 		store := mustCreateTestSession(t)
 		client := &fakeClient{responses: []llm.Response{
 			finalTextResponse("first"),
 			finalTextResponse("second"),
 		}}
+		stepLifecycle := newBlockingStepLifecycleSink()
 		callbackStarted := make(chan struct{})
 		releaseCallback := make(chan struct{})
 		var terminalCallbacks int
 		var callbackMu sync.Mutex
 		eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
-			Model: "gpt-5",
+			Model:         "gpt-5",
+			StepLifecycle: stepLifecycle,
 			OnEvent: func(event Event) {
 				if event.Kind != EventLiveRunFinished {
 					return
@@ -124,45 +126,40 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 			},
 		})
 
-		var handle *LiveRunWaitHandle
 		firstDone := make(chan error, 1)
 		go func() {
-			var captureErr error
-			_, submitErr := eng.SubmitUserMessageWithHooks(context.Background(), "first", func() {
-				handle, captureErr = eng.CaptureActiveRunResult(context.Background())
-			}, nil)
-			firstDone <- errors.Join(captureErr, submitErr)
+			_, err := eng.SubmitUserMessage(context.Background(), "first")
+			firstDone <- err
 		}()
+		select {
+		case <-stepLifecycle.endedStarted:
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for step terminal publication")
+		}
+		eng.QueueUserMessage("queued successor")
+		close(stepLifecycle.releaseEnded)
 		select {
 		case <-callbackStarted:
 		case <-time.After(3 * time.Second):
 			t.Fatal("timed out waiting for terminal callback")
 		}
-		if handle == nil {
-			t.Fatal("active run waiter was not captured")
-		}
-		waited, err := handle.Wait()
-		if err != nil || waited.AssistantMessage.Content != "first" {
-			t.Fatalf("waited result = %+v err=%v", waited, err)
-		}
 
-		secondDone := make(chan error, 1)
-		go func() {
-			_, err := eng.SubmitUserMessage(context.Background(), "second")
-			secondDone <- err
-		}()
-		select {
-		case err := <-secondDone:
-			if err != nil {
-				t.Fatalf("successor SubmitUserMessage: %v", err)
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			calls := fakeClientCallCount(client)
+			if calls >= 2 || !time.Now().Before(deadline) {
+				if calls < 2 {
+					t.Fatal("queued successor scheduling waited for prior terminal callback")
+				}
+				break
 			}
-		case <-time.After(3 * time.Second):
-			t.Fatal("successor run waited for prior terminal callback")
+			time.Sleep(10 * time.Millisecond)
 		}
 		close(releaseCallback)
 		if err := <-firstDone; err != nil {
 			t.Fatalf("first SubmitUserMessage: %v", err)
 		}
+		waitEngineLifecycleTasks(t, eng)
 	})
 }
 

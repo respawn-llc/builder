@@ -31,7 +31,6 @@ type Request struct {
 
 type ConfigPlan struct {
 	Config config.App
-	Client config.ClientSettings
 }
 
 func ValidateSessionExists(persistenceRoot string, sessionID string) error {
@@ -55,12 +54,9 @@ func ResolveConfig(req Request) (ConfigPlan, error) {
 		OpenAIBaseURL:    strings.TrimSpace(req.OpenAIBaseURL),
 		UseOpenAIBaseURL: req.OpenAIBaseURLExplicit,
 	}
-	cfg, clientSettings, err := loadConfig(req.LoadOptions, bootstrapPlan.WorkspaceRoot, bootstrapPlan.OpenAIBaseURL, bootstrapPlan.UseOpenAIBaseURL)
+	cfg, err := loadConfig(req.LoadOptions, bootstrapPlan.WorkspaceRoot, bootstrapPlan.OpenAIBaseURL, bootstrapPlan.UseOpenAIBaseURL)
 	if err != nil {
 		return ConfigPlan{}, err
-	}
-	if strings.TrimSpace(req.SessionID) == "" {
-		return ConfigPlan{Config: cfg, Client: clientSettings}, nil
 	}
 	bootstrapPlan, err = launch.ResolveBootstrapPlan(cfg.PersistenceRoot, launch.BootstrapRequest{
 		WorkspaceRoot:         strings.TrimSpace(req.WorkspaceRoot),
@@ -72,16 +68,11 @@ func ResolveConfig(req Request) (ConfigPlan, error) {
 	if err != nil {
 		return ConfigPlan{}, err
 	}
-	if bootstrapPlan.WorkspaceRoot == strings.TrimSpace(req.WorkspaceRoot) &&
-		bootstrapPlan.OpenAIBaseURL == strings.TrimSpace(req.OpenAIBaseURL) &&
-		bootstrapPlan.UseOpenAIBaseURL == req.OpenAIBaseURLExplicit {
-		return ConfigPlan{Config: cfg, Client: clientSettings}, nil
-	}
-	cfg, clientSettings, err = loadConfig(req.LoadOptions, bootstrapPlan.WorkspaceRoot, bootstrapPlan.OpenAIBaseURL, bootstrapPlan.UseOpenAIBaseURL)
+	cfg, err = loadConfig(req.LoadOptions, bootstrapPlan.WorkspaceRoot, bootstrapPlan.OpenAIBaseURL, bootstrapPlan.UseOpenAIBaseURL)
 	if err != nil {
 		return ConfigPlan{}, err
 	}
-	return ConfigPlan{Config: cfg, Client: clientSettings}, nil
+	return ConfigPlan{Config: cfg}, nil
 }
 
 func BuildAuthSupport(store auth.Store, lookupEnv func(string) string, now func() time.Time) (AuthSupport, error) {
@@ -136,15 +127,14 @@ func BuildGeneratedSupport(ctx context.Context, persistenceRoot string) (prompts
 	return prompts.GeneratedSync(ctx, prompts.GeneratedSyncOptions{ConfigRoot: strings.TrimSpace(persistenceRoot)})
 }
 
-func loadConfig(loadOpts config.LoadOptions, workspaceRoot, openAIBaseURL string, useOpenAIBaseURL bool) (config.App, config.ClientSettings, error) {
+func loadConfig(loadOpts config.LoadOptions, workspaceRoot, openAIBaseURL string, useOpenAIBaseURL bool) (config.App, error) {
 	if useOpenAIBaseURL {
 		loadOpts.OpenAIBaseURL = openAIBaseURL
 	} else {
 		loadOpts.OpenAIBaseURL = ""
 	}
 	if strings.TrimSpace(workspaceRoot) == "" {
-		cfg, err := config.LoadGlobal(loadOpts)
-		return cfg, config.ClientSettings{}, err
+		return config.LoadGlobal(loadOpts)
 	}
-	return config.LoadInteractive(workspaceRoot, loadOpts)
+	return config.Load(workspaceRoot, loadOpts)
 }

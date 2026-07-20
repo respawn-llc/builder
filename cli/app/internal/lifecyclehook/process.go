@@ -51,8 +51,5 @@ func (d *Dispatcher) invoke(event lifecyclecontract.Event) {
 }
 
 func (d *Dispatcher) report(issue Issue) {
-	select {
-	case <-d.ctx.Done():
-	case d.issues <- issue:
-	}
+	d.issues.Report(issue)
 }

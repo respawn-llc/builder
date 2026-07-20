@@ -9,6 +9,8 @@ import (
 
 	checkpoint "core/internal/testharness/pty/analyzer"
 	"core/internal/testharness/pty/appfixture"
+	"core/server/metadata"
+	"core/server/session"
 	"core/shared/lifecyclecontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -179,7 +181,32 @@ func prepareLifecyclePTYFixtureRuntime(
 	if err != nil {
 		return nil, nil, "", err
 	}
+	if err := setLifecycleFixtureSessionName(processConfig.PersistenceRoot, sessionID); err != nil {
+		return nil, nil, "", err
+	}
 	return state, runtime, sessionID, nil
+}
+
+const lifecycleFixtureSessionName = "Lifecycle fixture"
+
+func setLifecycleFixtureSessionName(persistenceRoot string, sessionID string) error {
+	metadataStore, err := metadata.Open(persistenceRoot)
+	if err != nil {
+		return fmt.Errorf("open lifecycle fixture metadata: %w", err)
+	}
+	defer func() { _ = metadataStore.Close() }()
+	store, err := session.OpenByID(
+		persistenceRoot,
+		sessionID,
+		metadataStore.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		return fmt.Errorf("open lifecycle fixture session: %w", err)
+	}
+	if err := store.SetName(lifecycleFixtureSessionName); err != nil {
+		return fmt.Errorf("name lifecycle fixture session: %w", err)
+	}
+	return nil
 }
 
 func runLifecycleHookServerFixtureProcess(

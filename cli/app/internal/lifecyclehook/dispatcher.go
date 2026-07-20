@@ -18,7 +18,7 @@ type Dispatcher struct {
 	cancel  context.CancelFunc
 	events  chan lifecyclecontract.Event
 	active  chan struct{}
-	issues  chan Issue
+	issues  *issueReporter
 	done    chan struct{}
 	closed  atomic.Bool
 }
@@ -34,7 +34,7 @@ func New(parent context.Context, command []string) *Dispatcher {
 		cancel:  cancel,
 		events:  make(chan lifecyclecontract.Event, eventCapacity),
 		active:  make(chan struct{}, activeLimit),
-		issues:  make(chan Issue, eventCapacity),
+		issues:  newIssueReporter(ctx, eventCapacity),
 		done:    make(chan struct{}),
 	}
 	go dispatcher.drain()
@@ -55,7 +55,7 @@ func (d *Dispatcher) Issues() <-chan Issue {
 	if d == nil {
 		return nil
 	}
-	return d.issues
+	return d.issues.Issues()
 }
 
 func (d *Dispatcher) Done() <-chan struct{} {

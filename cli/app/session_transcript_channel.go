@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -111,11 +110,6 @@ func pumpSessionTranscriptSubscription(
 				}
 				closeSub()
 				emitSessionTranscriptLoss(ctx, out, result.err)
-				return waitForTranscriptRehydrationRequest(ctx, requests)
-			}
-			if err := result.message.Validate(); err != nil {
-				closeSub()
-				emitSessionTranscriptLoss(ctx, out, fmt.Errorf("validate session transcript message: %w", err))
 				return waitForTranscriptRehydrationRequest(ctx, requests)
 			}
 			for _, observe := range observers {

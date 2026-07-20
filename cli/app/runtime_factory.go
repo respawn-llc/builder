@@ -11,7 +11,7 @@ type runtimeWiring struct {
 	eventDispatcher       *uiEventDispatcher
 	requestTranscriptOpen func()
 	promptAnswers         *transcriptPromptAnswerer
-	promptAttention       *bellHooks
+	promptAttention       promptAttentionSink
 	runtimeClient         clientui.RuntimeClient
 	worktrees             apicontract.WorktreeService
 	processControls       apicontract.ProcessControlService

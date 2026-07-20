@@ -168,9 +168,6 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 		publishLiveRunFinished = s.engine.finishLiveRunStep(snapshot, status, err)
 	}
 	s.finishTerminalPublication()
-	if publishLiveRunFinished != nil {
-		publishLiveRunFinished()
-	}
 	if !errors.Is(err, errPendingModelRecoveryClear) {
 		if status == RunStatusCompleted && snapshot != nil && snapshot.ActiveKind == ActiveKindUserTurn {
 			s.engine.resumeSuspendedGoalAfterSuccessfulUserTurn()
@@ -178,6 +175,9 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 		if startErr := s.scheduleIdleWork(status != RunStatusFailed); startErr != nil {
 			err = errors.Join(err, startErr)
 		}
+	}
+	if publishLiveRunFinished != nil {
+		publishLiveRunFinished()
 	}
 	return err
 }

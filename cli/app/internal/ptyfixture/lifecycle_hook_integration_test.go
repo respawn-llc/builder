@@ -94,6 +94,10 @@ func TestLifecycleHooksLocalConfiguredPTYRunsRepresentativeFlow(t *testing.T) {
 			t.Fatalf("missing lifecycle category %q in %+v", category, events)
 		}
 	}
+	started := events[lifecyclecontract.CategorySessionStart]
+	if started.Context.SessionTitle == nil || *started.Context.SessionTitle != "Lifecycle fixture" {
+		t.Fatalf("session start title = %v, want available launch title", started.Context.SessionTitle)
+	}
 	var complete struct {
 		WorkPerformed bool `json:"work_performed"`
 	}
@@ -207,7 +211,6 @@ func TestLifecycleHookFailureIsVisibleAndDoesNotBlockPTYRuntime(t *testing.T) {
 	root := t.TempDir()
 	scriptPath := filepath.Join(root, "script.json")
 	recordPath := filepath.Join(root, "hooks.jsonl")
-	statePath := filepath.Join(root, "nonzero-once")
 	if err := os.WriteFile(scriptPath, []byte(`{"final":"runtime continued"}`), 0o600); err != nil {
 		t.Fatalf("write failing-hook script: %v", err)
 	}
@@ -219,8 +222,7 @@ func TestLifecycleHookFailureIsVisibleAndDoesNotBlockPTYRuntime(t *testing.T) {
 		InitialPrompt:             "run after hook failure",
 		TargetFinalAssistantCount: 1,
 		HookRecordPath:            recordPath,
-		HookBehavior:              appfixture.LifecycleHookBehaviorNonzeroOnce,
-		HookStatePath:             &statePath,
+		HookBehavior:              appfixture.LifecycleHookBehaviorNonzero,
 	}
 	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
 		Path:       buildPTYFixtureBinary(t, ctx),
@@ -228,16 +230,13 @@ func TestLifecycleHookFailureIsVisibleAndDoesNotBlockPTYRuntime(t *testing.T) {
 		Dimensions: pty.MustDimensions(24, 80),
 		PhaseInputs: []pty.PhaseInputEvent{{
 			Phase: pty.PhaseScenarioFinalApplied,
-			After: 300 * time.Millisecond,
+			After: 2 * time.Second,
 			Bytes: []byte{0x03, 0x03},
 		}},
 		Timeout: 25 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("run failing-hook lifecycle PTY fixture: %v raw=%q", err, string(capture.Raw))
-	}
-	if _, err := os.Stat(statePath); err != nil {
-		t.Fatalf("failing lifecycle hook did not publish failure state: %v", err)
 	}
 	events := lifecycleEventsByCategory(t, waitForLifecycleHookRecords(t, recordPath, 2))
 	if _, ok := events[lifecyclecontract.CategoryTaskComplete]; !ok {
@@ -256,7 +255,7 @@ func TestLifecycleHookFailureIsVisibleAndDoesNotBlockPTYRuntime(t *testing.T) {
 		}
 	}
 	if !visibleError {
-		t.Fatalf("final PTY screen has no visible error-styled notice:\n%s", analysis.Screen.RenderText())
+		t.Fatalf("always-failing lifecycle hook produced no visible error-styled notice:\n%s", analysis.Screen.RenderText())
 	}
 }
 
@@ -301,6 +300,7 @@ func waitForLifecycleHookRecords(t *testing.T, path string, count int) []lifecyc
 
 type lifecycleEventEnvelope struct {
 	Category lifecyclecontract.Category `json:"category"`
+	Context  lifecyclecontract.Context  `json:"context"`
 	Details  json.RawMessage            `json:"details"`
 }
 

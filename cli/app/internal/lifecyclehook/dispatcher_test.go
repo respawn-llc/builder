@@ -94,7 +94,7 @@ func TestDispatcherOverlapsHooksAndSilentlyCapsActiveProcesses(t *testing.T) {
 	}
 }
 
-func TestDispatcherDoesNotDropProcessFailuresWhenIssueBufferIsFull(t *testing.T) {
+func TestDispatcherFailurePresentationDoesNotHoldActiveProcessSlots(t *testing.T) {
 	root := t.TempDir()
 	startDir := filepath.Join(root, "started")
 	t.Setenv(dispatcherProcessModeEnv, "fail")
@@ -105,15 +105,24 @@ func TestDispatcherDoesNotDropProcessFailuresWhenIssueBufferIsFull(t *testing.T)
 	for range 64 {
 		dispatcher.Submit(testLifecycleEvent())
 	}
-	waitForIssueBufferLength(t, dispatcher.Issues(), 64)
-	dispatcher.Submit(testLifecycleEvent())
-	waitForDispatcherProcessCount(t, startDir, 65)
+	waitForDispatcherProcessCount(t, startDir, 64)
+	for range 64 {
+		dispatcher.Submit(testLifecycleEvent())
+	}
+	waitForDispatcherProcessCount(t, startDir, 128)
+	waitForDispatcherProcessLaunchAfterSaturation(t, dispatcher, startDir, 129)
 
-	for index := range 65 {
+	totalFailures := 0
+	deadline := time.Now().Add(5 * time.Second)
+	for totalFailures < 129 && time.Now().Before(deadline) {
 		issue := waitForDispatcherIssue(t, dispatcher.Issues(), 3*time.Second)
 		if issue.Err == nil {
-			t.Fatalf("issue %d omitted failure", index)
+			t.Fatalf("issue omitted failure: %+v", issue)
 		}
+		totalFailures += issue.Count
+	}
+	if totalFailures != 129 {
+		t.Fatalf("reported failure count = %d, want 129", totalFailures)
 	}
 }
 
@@ -278,16 +287,22 @@ func dispatcherProcessCount(t *testing.T, dir string) int {
 	return len(entries)
 }
 
-func waitForIssueBufferLength(t *testing.T, issues <-chan lifecyclehook.Issue, want int) {
+func waitForDispatcherProcessLaunchAfterSaturation(
+	t *testing.T,
+	dispatcher *lifecyclehook.Dispatcher,
+	dir string,
+	want int,
+) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(issues) == want {
+		dispatcher.Submit(testLifecycleEvent())
+		if dispatcherProcessCount(t, dir) >= want {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("issue buffer length = %d, want %d", len(issues), want)
+	t.Fatalf("later hook did not launch after issue presentation saturated; process count = %d", dispatcherProcessCount(t, dir))
 }
 
 func mustDispatcherProcessWorkdir() string {

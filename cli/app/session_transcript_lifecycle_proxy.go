@@ -13,17 +13,25 @@ func (p *clientLifecycleProxy) AcceptTranscript(message clientui.TranscriptMessa
 	}
 	switch message.Kind {
 	case clientui.TranscriptMessageHydration:
-		p.acceptSessionIdentity(message.Payload.Hydration.SessionIdentity)
-		p.acceptSessionStatus(message.Payload.Hydration.SessionStatus)
+		if hydration := message.Payload.Hydration; hydration != nil {
+			p.acceptSessionIdentity(hydration.SessionIdentity)
+			p.acceptSessionStatus(hydration.SessionStatus)
+		}
 	case clientui.TranscriptMessageSessionIdentity:
-		p.acceptSessionIdentity(*message.Payload.SessionIdentity)
+		if identity := message.Payload.SessionIdentity; identity != nil {
+			p.acceptSessionIdentity(*identity)
+		}
 	case clientui.TranscriptMessageSessionStatus:
-		p.acceptSessionStatus(*message.Payload.SessionStatus)
+		if status := message.Payload.SessionStatus; status != nil {
+			p.acceptSessionStatus(*status)
+		}
 	case clientui.TranscriptMessageLiveRunFinished:
-		p.acceptLiveRunFinished(*message.Payload.LiveRunFinished)
+		if result := message.Payload.LiveRunFinished; result != nil {
+			p.acceptLiveRunFinished(*result)
+		}
 	case clientui.TranscriptMessageCompactionStatus:
 		status := message.Payload.CompactionStatus
-		if status.State == clientui.CompactionStarted {
+		if status != nil && status.State == clientui.CompactionStarted {
 			p.enqueue(lifecyclecontract.NewCompactionStarted(
 				time.Now().UTC(),
 				p.isFocused(),

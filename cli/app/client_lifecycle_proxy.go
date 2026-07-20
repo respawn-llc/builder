@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -117,6 +118,9 @@ func (p *clientLifecycleProxy) acceptLiveRunFinished(result clientui.TranscriptL
 }
 
 func (p *clientLifecycleProxy) acceptSessionIdentity(identity clientui.TranscriptSessionIdentity) {
+	if err := identity.Validate(); err != nil {
+		return
+	}
 	p.contextMu.Lock()
 	sessionID := identity.SessionID
 	p.eventContext.SessionID = &sessionID
@@ -125,6 +129,9 @@ func (p *clientLifecycleProxy) acceptSessionIdentity(identity clientui.Transcrip
 }
 
 func (p *clientLifecycleProxy) acceptSessionStatus(status clientui.TranscriptSessionStatus) {
+	if err := status.Validate(); err != nil {
+		return
+	}
 	p.contextMu.Lock()
 	if status.Workflow == nil {
 		p.eventContext.WorkflowTaskID = nil
@@ -161,12 +168,18 @@ func (p *clientLifecycleProxy) enqueue(event lifecyclecontract.Event) {
 	}
 }
 
-func lifecycleInitialContext(sessionID string) (lifecyclecontract.Context, error) {
+func lifecycleInitialContext(sessionID string, sessionTitle string) (lifecyclecontract.Context, error) {
 	parsed, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
 	if err != nil {
 		return lifecyclecontract.Context{}, fmt.Errorf("parse lifecycle session id: %w", err)
 	}
 	context := lifecyclecontract.Context{SessionID: &parsed}
+	if sessionTitle != "" {
+		if strings.TrimSpace(sessionTitle) == "" {
+			return lifecyclecontract.Context{}, errors.New("lifecycle session title cannot be blank")
+		}
+		context.SessionTitle = &sessionTitle
+	}
 	if err := context.Validate(); err != nil {
 		return lifecyclecontract.Context{}, err
 	}

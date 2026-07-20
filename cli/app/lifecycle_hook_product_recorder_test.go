@@ -42,6 +42,10 @@ func parseLifecycleHookProductRecorderInvocation(
 		if len(args) != 5 {
 			return lifecycleHookProductRecorderInvocation{}, false
 		}
+	case appfixture.LifecycleHookBehaviorNonzero:
+		if len(args) != 5 {
+			return lifecycleHookProductRecorderInvocation{}, false
+		}
 	case appfixture.LifecycleHookBehaviorNonzeroOnce:
 		if len(args) != 6 {
 			return lifecycleHookProductRecorderInvocation{}, false
@@ -93,6 +97,8 @@ func TestLifecycleHookProductRecorder(t *testing.T) {
 	switch invocation.behavior {
 	case appfixture.LifecycleHookBehaviorSuccess:
 		return
+	case appfixture.LifecycleHookBehaviorNonzero:
+		os.Exit(7)
 	case appfixture.LifecycleHookBehaviorNonzeroOnce:
 		if invocation.statePath == nil {
 			t.Fatal("non-zero-once lifecycle hook recorder requires a state path")

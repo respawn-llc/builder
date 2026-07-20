@@ -54,18 +54,42 @@ func ResolveSessionConfig(req Request) (SessionConfigResult, error) {
 	if err != nil {
 		return SessionConfigResult{}, err
 	}
-	plan, err := bootstrap.ResolveConfig(bootstrap.Request{
+	initialPlan := bootstrap.LaunchPlan{
+		WorkspaceRoot:    workspaceRoot,
+		OpenAIBaseURL:    strings.TrimSpace(req.OpenAIBaseURL),
+		UseOpenAIBaseURL: req.OpenAIBaseURLExplicit,
+	}
+	cfg, clientSettings, err := loadInteractive(req.LoadOptions, initialPlan)
+	if err != nil {
+		return SessionConfigResult{}, err
+	}
+	resolvedPlan, err := bootstrap.ResolveLaunchPlan(cfg.PersistenceRoot, bootstrap.LaunchRequest{
 		WorkspaceRoot:         workspaceRoot,
 		WorkspaceRootExplicit: req.WorkspaceRootExplicit,
-		SessionID:             req.SessionID,
+		SessionID:             strings.TrimSpace(req.SessionID),
 		OpenAIBaseURL:         req.OpenAIBaseURL,
 		OpenAIBaseURLExplicit: req.OpenAIBaseURLExplicit,
-		LoadOptions:           req.LoadOptions,
 	})
 	if err != nil {
 		return SessionConfigResult{}, err
 	}
-	return SessionConfigResult{Config: plan.Config, Client: plan.Client}, nil
+	if resolvedPlan == initialPlan {
+		return SessionConfigResult{Config: cfg, Client: clientSettings}, nil
+	}
+	cfg, clientSettings, err = loadInteractive(req.LoadOptions, resolvedPlan)
+	if err != nil {
+		return SessionConfigResult{}, err
+	}
+	return SessionConfigResult{Config: cfg, Client: clientSettings}, nil
+}
+
+func loadInteractive(loadOptions config.LoadOptions, plan bootstrap.LaunchPlan) (config.App, config.ClientSettings, error) {
+	if plan.UseOpenAIBaseURL {
+		loadOptions.OpenAIBaseURL = plan.OpenAIBaseURL
+	} else {
+		loadOptions.OpenAIBaseURL = ""
+	}
+	return config.LoadInteractive(plan.WorkspaceRoot, loadOptions)
 }
 
 func ResolveRunPromptConfig(req Request) (RunPromptResult, error) {
