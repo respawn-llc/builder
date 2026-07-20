@@ -149,6 +149,7 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 	}
 	authority.mu.Unlock()
 
+	var closeErr error
 	if e.resource != nil {
 		if e.resource.eventBridge != nil {
 			result.DroppedRuntimeEvents = e.resource.eventBridge.Dropped.Load()
@@ -163,11 +164,10 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 				e.resource.logger.Logf("runtime.event.drop.total=%d", result.DroppedRuntimeEvents)
 			}
 		}
-		e.resource.releasePin()
-	}
-	var closeErr error
-	if e.closeResource {
-		closeErr = authority.closeExecutionResource(context.Background(), e.resource)
+		if e.closeResource {
+			e.resource.requestRetirementIfOwnerless()
+		}
+		closeErr = e.resource.releasePin()
 	}
 	e.resultMu.Lock()
 	e.result = result
