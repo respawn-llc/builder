@@ -219,7 +219,7 @@ func (a *Authority) reserveScriptExecutionLocked(req ScriptExecutionRequest) (*e
 		prompts:   newExecutionPromptStore(scope, a.promptFeed),
 	}
 	if req.Workflow != nil {
-		reserved.script = &TaskScriptExecutionTarget{RunID: req.Workflow.RunID, Path: req.Command.Path}
+		reserved.script = &TaskScriptExecutionTarget{Path: req.Command.Path}
 	}
 	return reserved, nil
 }

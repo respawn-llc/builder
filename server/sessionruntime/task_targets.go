@@ -13,49 +13,84 @@ import (
 const MaxTaskExecutionTargets = serverapi.WorkflowTaskCurrentExecutionTargetsMax
 
 type TaskScriptExecutionTarget struct {
-	RunID workflow.RunID
-	Path  string
+	Path string
 }
 
-type TaskExecutionTargets struct {
-	HasExecutions bool
-	SessionIDs    []runtimeids.SessionID
-	Scripts       []TaskScriptExecutionTarget
+type TaskAgentExecutionTarget struct {
+	SessionID runtimeids.SessionID
 }
 
-func (a *Authority) CurrentTaskExecutionTargets(taskID workflow.TaskID) (TaskExecutionTargets, error) {
+type TaskExecution struct {
+	Ref             WorkflowExecutionRef
+	Agent           *TaskAgentExecutionTarget
+	Script          *TaskScriptExecutionTarget
+	WaitingQuestion bool
+}
+
+type TaskExecutionSnapshot struct {
+	Executions []TaskExecution
+}
+
+func (a *Authority) CurrentTaskExecutionSnapshot(taskID workflow.TaskID) (TaskExecutionSnapshot, error) {
 	if a == nil {
-		return TaskExecutionTargets{}, errors.New("session runtime authority is required")
+		return TaskExecutionSnapshot{}, errors.New("session runtime authority is required")
 	}
 	if strings.TrimSpace(string(taskID)) == "" {
-		return TaskExecutionTargets{}, errors.New("workflow task id is required")
+		return TaskExecutionSnapshot{}, errors.New("workflow task id is required")
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	targets := TaskExecutionTargets{}
+	snapshot := TaskExecutionSnapshot{Executions: make([]TaskExecution, 0)}
 	for ref, execution := range a.byWorkflow {
 		if ref.TaskID != taskID {
 			continue
 		}
-		targets.HasExecutions = true
+		if len(snapshot.Executions) >= MaxTaskExecutionTargets {
+			return TaskExecutionSnapshot{}, errors.New("workflow task has too many live executions")
+		}
+		target := TaskExecution{
+			Ref:             ref,
+			WaitingQuestion: execution.prompts.hasPending(),
+		}
 		if resource, ok := execution.scope.Resource(); ok {
-			if len(targets.SessionIDs) < MaxTaskExecutionTargets {
-				targets.SessionIDs = append(targets.SessionIDs, resource.SessionID())
+			target.Agent = &TaskAgentExecutionTarget{SessionID: resource.SessionID()}
+		} else {
+			if execution.script == nil {
+				return TaskExecutionSnapshot{}, errors.New("live workflow script execution is missing its target")
 			}
-			continue
+			target.Script = &TaskScriptExecutionTarget{Path: execution.script.Path}
 		}
-		if execution.script == nil {
-			return TaskExecutionTargets{}, errors.New("live workflow script execution is missing its target")
+		if err := target.validate(); err != nil {
+			return TaskExecutionSnapshot{}, err
 		}
-		if len(targets.Scripts) < MaxTaskExecutionTargets {
-			targets.Scripts = append(targets.Scripts, *execution.script)
+		snapshot.Executions = append(snapshot.Executions, target)
+	}
+	sort.Slice(snapshot.Executions, func(i, j int) bool {
+		if snapshot.Executions[i].Ref.RunID != snapshot.Executions[j].Ref.RunID {
+			return snapshot.Executions[i].Ref.RunID < snapshot.Executions[j].Ref.RunID
+		}
+		return snapshot.Executions[i].Ref.Generation < snapshot.Executions[j].Ref.Generation
+	})
+	return snapshot, nil
+}
+
+func (e TaskExecution) validate() error {
+	if err := e.Ref.Validate(); err != nil {
+		return err
+	}
+	if (e.Agent == nil) == (e.Script == nil) {
+		return errors.New("live workflow execution must have exactly one target")
+	}
+	if e.Agent != nil && e.Agent.SessionID.IsZero() {
+		return errors.New("live workflow agent execution has no session id")
+	}
+	if e.Script != nil {
+		if strings.TrimSpace(e.Script.Path) == "" {
+			return errors.New("live workflow script execution has no executable path")
+		}
+		if e.WaitingQuestion {
+			return errors.New("live workflow script execution cannot wait for a question")
 		}
 	}
-	sort.Slice(targets.SessionIDs, func(i, j int) bool {
-		return targets.SessionIDs[i].String() < targets.SessionIDs[j].String()
-	})
-	sort.Slice(targets.Scripts, func(i, j int) bool {
-		return targets.Scripts[i].RunID < targets.Scripts[j].RunID
-	})
-	return targets, nil
+	return nil
 }

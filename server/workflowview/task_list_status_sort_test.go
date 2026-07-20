@@ -180,15 +180,14 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 		t.Fatalf("all list tasks = %+v, want %d tasks", all.Tasks, len(wantByStatus))
 	}
 	for _, item := range all.Tasks {
-		detail, err := view.detail(t).GetTask(ctx, item.TaskID)
-		if err != nil {
-			t.Fatalf("GetTask %s: %v", item.TaskID, err)
-		}
-		if !reflect.DeepEqual(item.Status, detail.Status) {
-			t.Fatalf("list status for %s = %+v, want detail %+v", item.TaskID, item.Status, detail.Status)
-		}
 		if wantTaskID, ok := wantByStatus[item.Status.Kind]; !ok || wantTaskID != item.TaskID {
 			t.Fatalf("list item = %+v, unexpected status/task pairing", item)
+		}
+	}
+	for _, taskID := range []workflow.TaskID{queued.ID, running.ID, question.ID} {
+		detail := mustTaskDetail(t, view, ctx, string(taskID))
+		if detail.Status.Kind != serverapi.WorkflowTaskStatusKindActive || len(detail.Status.RunIDs) != 0 {
+			t.Fatalf("detail status for durable-only live task %s = %+v, want active", taskID, detail.Status)
 		}
 	}
 

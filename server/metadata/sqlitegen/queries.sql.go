@@ -7743,6 +7743,50 @@ func (q *Queries) ListWorkflowTaskAttentionCandidates(ctx context.Context, taskI
 	return items, nil
 }
 
+const listWorkflowTaskCurrentRunFacts = `-- name: ListWorkflowTaskCurrentRunFacts :many
+SELECT
+    r.id,
+    r.run_generation,
+    r.waiting_ask_id
+FROM task_run_records r
+JOIN task_node_placements p ON p.id = r.placement_id
+WHERE r.task_id = ?1
+  AND r.started_at_unix_ms IS NOT NULL
+  AND r.completed_at_unix_ms IS NULL
+  AND r.interrupted_at_unix_ms IS NULL
+  AND p.state = 'active'
+ORDER BY r.id ASC
+`
+
+type ListWorkflowTaskCurrentRunFactsRow struct {
+	ID            string
+	RunGeneration int64
+	WaitingAskID  sql.NullString
+}
+
+func (q *Queries) ListWorkflowTaskCurrentRunFacts(ctx context.Context, taskID string) ([]ListWorkflowTaskCurrentRunFactsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkflowTaskCurrentRunFacts, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListWorkflowTaskCurrentRunFactsRow
+	for rows.Next() {
+		var i ListWorkflowTaskCurrentRunFactsRow
+		if err := rows.Scan(&i.ID, &i.RunGeneration, &i.WaitingAskID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWorkflowTaskIDs = `-- name: ListWorkflowTaskIDs :many
 SELECT id
 FROM task_records

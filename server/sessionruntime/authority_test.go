@@ -781,14 +781,15 @@ func TestExactWorkflowExecutionCannotBeLiveAsAgentAndScript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start agent execution: %v", err)
 	}
-	targets, err := authority.CurrentTaskExecutionTargets(workflowRef.TaskID)
+	targets, err := authority.CurrentTaskExecutionSnapshot(workflowRef.TaskID)
 	if err != nil {
-		t.Fatalf("CurrentTaskExecutionTargets: %v", err)
+		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
-	if !targets.HasExecutions ||
-		len(targets.SessionIDs) != 1 ||
-		targets.SessionIDs[0] != sessionID ||
-		len(targets.Scripts) != 0 {
+	if len(targets.Executions) != 1 ||
+		targets.Executions[0].Ref != workflowRef ||
+		targets.Executions[0].Agent == nil ||
+		targets.Executions[0].Agent.SessionID != sessionID ||
+		targets.Executions[0].Script != nil {
 		t.Fatalf("agent targets = %+v", targets)
 	}
 
@@ -841,16 +842,19 @@ func TestAuthorityCurrentTaskExecutionTargetsPreservesParallelScriptRuns(t *test
 		handles = append(handles, handle)
 	}
 
-	targets, err := authority.CurrentTaskExecutionTargets(taskID)
+	targets, err := authority.CurrentTaskExecutionSnapshot(taskID)
 	if err != nil {
-		t.Fatalf("CurrentTaskExecutionTargets: %v", err)
+		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
 	}
-	if !targets.HasExecutions || len(targets.SessionIDs) != 0 || len(targets.Scripts) != 2 {
+	if len(targets.Executions) != 2 {
 		t.Fatalf("targets = %+v", targets)
 	}
 	for index, runID := range []workflow.RunID{"run-a", "run-b"} {
-		if targets.Scripts[index].RunID != runID || targets.Scripts[index].Path != sleepPath {
-			t.Fatalf("scripts = %+v", targets.Scripts)
+		if targets.Executions[index].Ref.RunID != runID ||
+			targets.Executions[index].Agent != nil ||
+			targets.Executions[index].Script == nil ||
+			targets.Executions[index].Script.Path != sleepPath {
+			t.Fatalf("executions = %+v", targets.Executions)
 		}
 	}
 
@@ -858,6 +862,56 @@ func TestAuthorityCurrentTaskExecutionTargetsPreservesParallelScriptRuns(t *test
 		if err := handle.Stop(context.Background()); err != nil {
 			t.Fatalf("stop script: %v", err)
 		}
+	}
+}
+
+func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
+	truePath, err := exec.LookPath("true")
+	if err != nil {
+		t.Skipf("true executable unavailable: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	taskID := workflow.TaskID("task-finalizing-script")
+	finalizeStarted := make(chan struct{})
+	releaseFinalize := make(chan struct{})
+	handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
+		Workflow: &WorkflowExecutionRef{TaskID: taskID, RunID: "run-finalizing-script", Generation: 1},
+		Command:  ScriptCommand{Path: truePath},
+		Finalize: func(context.Context, ExecutionScope, ScriptResult, error) error {
+			close(finalizeStarted)
+			<-releaseFinalize
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartScriptExecution: %v", err)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-releaseFinalize:
+		default:
+			close(releaseFinalize)
+		}
+		_ = handle.Close(context.Background())
+	})
+	<-finalizeStarted
+
+	targets, err := authority.CurrentTaskExecutionSnapshot(taskID)
+	if err != nil {
+		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
+	}
+	if len(targets.Executions) != 0 {
+		t.Fatalf("finalizing script remains interruptible: %+v", targets)
+	}
+
+	close(releaseFinalize)
+	if _, err := handle.Wait(context.Background()); err != nil {
+		t.Fatalf("Wait: %v", err)
 	}
 }
 
@@ -1284,10 +1338,16 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	request := tools.AskQuestionRequest{
 		ID: askID, StepID: uuid.NewString(), Question: "Proceed?",
 	}
+	workflowRef := WorkflowExecutionRef{
+		TaskID:     "task-pending-question",
+		RunID:      "run-pending-question",
+		Generation: 3,
+	}
 	responseDone := make(chan executionPromptResult, 1)
 	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
+		Workflow:   &workflowRef,
 		Resource:   OpenAgentResource{},
 		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
 			response, askErr := authority.AwaitPromptResponse(ctx, scope.ID(), request)
@@ -1303,6 +1363,18 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	pending := <-feed
 	if pending != (authorityPromptEvent{resource: resource, scopeID: handle.Scope().ID(), requestID: askID}) {
 		t.Fatalf("pending prompt = %+v, want exact resource %v scope %s ask %s", pending, resource, handle.Scope().ID(), askID)
+	}
+	snapshot, err := authority.CurrentTaskExecutionSnapshot(workflowRef.TaskID)
+	if err != nil {
+		t.Fatalf("CurrentTaskExecutionSnapshot: %v", err)
+	}
+	if len(snapshot.Executions) != 1 ||
+		snapshot.Executions[0].Ref != workflowRef ||
+		snapshot.Executions[0].Agent == nil ||
+		snapshot.Executions[0].Agent.SessionID != sessionID ||
+		snapshot.Executions[0].Script != nil ||
+		!snapshot.Executions[0].WaitingQuestion {
+		t.Fatalf("pending question snapshot = %+v", snapshot)
 	}
 
 	want := tools.AskQuestionResponse{RequestID: askID, Answer: "yes"}
