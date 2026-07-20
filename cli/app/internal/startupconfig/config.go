@@ -54,42 +54,34 @@ func ResolveSessionConfig(req Request) (SessionConfigResult, error) {
 	if err != nil {
 		return SessionConfigResult{}, err
 	}
-	initialPlan := bootstrap.LaunchPlan{
-		WorkspaceRoot:    workspaceRoot,
-		OpenAIBaseURL:    strings.TrimSpace(req.OpenAIBaseURL),
-		UseOpenAIBaseURL: req.OpenAIBaseURLExplicit,
+	loadOptions := req.LoadOptions
+	if req.OpenAIBaseURLExplicit {
+		loadOptions.OpenAIBaseURL = strings.TrimSpace(req.OpenAIBaseURL)
+	} else {
+		loadOptions.OpenAIBaseURL = ""
 	}
-	cfg, clientSettings, err := loadInteractive(req.LoadOptions, initialPlan)
+	cfg, clientSettings, err := config.LoadInteractive(workspaceRoot, loadOptions)
 	if err != nil {
 		return SessionConfigResult{}, err
 	}
-	resolvedPlan, err := bootstrap.ResolveLaunchPlan(cfg.PersistenceRoot, bootstrap.LaunchRequest{
+	plan, err := bootstrap.ResolveConfig(bootstrap.Request{
 		WorkspaceRoot:         workspaceRoot,
 		WorkspaceRootExplicit: req.WorkspaceRootExplicit,
 		SessionID:             strings.TrimSpace(req.SessionID),
 		OpenAIBaseURL:         req.OpenAIBaseURL,
 		OpenAIBaseURLExplicit: req.OpenAIBaseURLExplicit,
+		LoadOptions:           req.LoadOptions,
+		InitialConfig: &bootstrap.InitialConfigSnapshot{
+			Config:           cfg,
+			WorkspaceRoot:    workspaceRoot,
+			OpenAIBaseURL:    strings.TrimSpace(req.OpenAIBaseURL),
+			UseOpenAIBaseURL: req.OpenAIBaseURLExplicit,
+		},
 	})
 	if err != nil {
 		return SessionConfigResult{}, err
 	}
-	if resolvedPlan == initialPlan {
-		return SessionConfigResult{Config: cfg, Client: clientSettings}, nil
-	}
-	cfg, clientSettings, err = loadInteractive(req.LoadOptions, resolvedPlan)
-	if err != nil {
-		return SessionConfigResult{}, err
-	}
-	return SessionConfigResult{Config: cfg, Client: clientSettings}, nil
-}
-
-func loadInteractive(loadOptions config.LoadOptions, plan bootstrap.LaunchPlan) (config.App, config.ClientSettings, error) {
-	if plan.UseOpenAIBaseURL {
-		loadOptions.OpenAIBaseURL = plan.OpenAIBaseURL
-	} else {
-		loadOptions.OpenAIBaseURL = ""
-	}
-	return config.LoadInteractive(plan.WorkspaceRoot, loadOptions)
+	return SessionConfigResult{Config: plan.Config, Client: clientSettings}, nil
 }
 
 func ResolveRunPromptConfig(req Request) (RunPromptResult, error) {
