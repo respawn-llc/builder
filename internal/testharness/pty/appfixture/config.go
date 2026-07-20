@@ -18,6 +18,7 @@ func PrepareConfigAndBinding(ctx context.Context, persistenceRoot string, worksp
 }
 
 type ConfigOptions struct {
+	ServerPort                       *int
 	LifecycleHookCommand             []string
 	ModelContextWindow               *int
 	ContextCompactionThresholdTokens *int
@@ -32,12 +33,35 @@ func PrepareConfigAndBindingWithOptions(
 	workspaceRoot string,
 	options ConfigOptions,
 ) error {
+	if err := WriteConfigWithOptions(ctx, persistenceRoot, options); err != nil {
+		return err
+	}
+	if _, err := metadata.RegisterBinding(ctx, persistenceRoot, workspaceRoot); err != nil {
+		return fmt.Errorf("register fixture workspace binding: %w", err)
+	}
+	return nil
+}
+
+func WriteConfigWithOptions(
+	ctx context.Context,
+	persistenceRoot string,
+	options ConfigOptions,
+) error {
 	if err := os.MkdirAll(persistenceRoot, 0o755); err != nil {
 		return fmt.Errorf("create persistence root: %w", err)
 	}
-	port, err := freeTCPPort(ctx)
-	if err != nil {
-		return err
+	var port int
+	if options.ServerPort != nil {
+		port = *options.ServerPort
+		if port <= 0 {
+			return fmt.Errorf("fixture server port must be positive")
+		}
+	} else {
+		resolved, err := freeTCPPort(ctx)
+		if err != nil {
+			return err
+		}
+		port = resolved
 	}
 	configPath := filepath.Join(persistenceRoot, "config.toml")
 	var config strings.Builder
@@ -86,9 +110,6 @@ func PrepareConfigAndBindingWithOptions(
 	config.WriteString("\n[reviewer]\nfrequency = \"off\"\n")
 	if err := os.WriteFile(configPath, []byte(config.String()), 0o644); err != nil {
 		return fmt.Errorf("write fixture config: %w", err)
-	}
-	if _, err := metadata.RegisterBinding(ctx, persistenceRoot, workspaceRoot); err != nil {
-		return fmt.Errorf("register fixture workspace binding: %w", err)
 	}
 	return nil
 }

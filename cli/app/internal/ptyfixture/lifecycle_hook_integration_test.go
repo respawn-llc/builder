@@ -19,7 +19,9 @@ import (
 )
 
 type lifecycleServerProcessReady struct {
-	PID int `json:"pid"`
+	PID        int    `json:"pid"`
+	SessionID  string `json:"session_id"`
+	ServerPort int    `json:"server_port"`
 }
 
 type lifecycleHookProcessReady struct {
@@ -406,8 +408,229 @@ func TestLifecycleHooksHangingRecorderIsCanceledOnPTYShutdown(t *testing.T) {
 	}
 }
 
+func TestLifecycleHooksSimultaneousRemoteTUIsUseIndependentSnapshots(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	bin := buildPTYFixtureBinary(t, ctx)
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	persistenceRoot := filepath.Join(root, "persistence")
+	scriptPath := filepath.Join(root, "script.json")
+	firstRecordPath := filepath.Join(root, "first-hooks.jsonl")
+	secondRecordPath := filepath.Join(root, "second-hooks.jsonl")
+	readyPath := filepath.Join(root, "server-ready.json")
+	if err := os.WriteFile(scriptPath, []byte(`{"final":"unused simultaneous final"}`), 0o600); err != nil {
+		t.Fatalf("write simultaneous lifecycle script: %v", err)
+	}
+	serverConfigPath := filepath.Join(root, "server-process.json")
+	if err := appfixture.WriteLifecycleServerProcessConfig(
+		serverConfigPath,
+		appfixture.LifecycleServerProcessConfig{
+			WorkspaceRoot:   workspace,
+			PersistenceRoot: persistenceRoot,
+			ScriptPath:      scriptPath,
+			ReadyPath:       readyPath,
+			HookRecordPath:  firstRecordPath,
+			HookBehavior:    appfixture.LifecycleHookBehaviorSuccess,
+		},
+	); err != nil {
+		t.Fatalf("write simultaneous lifecycle server process config: %v", err)
+	}
+	serverCtx, stopServer := context.WithCancel(ctx)
+	defer stopServer()
+	var serverOutput bytes.Buffer
+	serverCommand := exec.CommandContext(serverCtx, bin)
+	serverCommand.Env = append(
+		os.Environ(),
+		appfixture.LifecycleServerProcessConfigEnvName+"="+serverConfigPath,
+	)
+	serverCommand.Stdout = &serverOutput
+	serverCommand.Stderr = &serverOutput
+	if err := serverCommand.Start(); err != nil {
+		t.Fatalf("start simultaneous lifecycle server process: %v", err)
+	}
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- serverCommand.Wait() }()
+	t.Cleanup(func() {
+		stopServer()
+		select {
+		case <-serverDone:
+		case <-time.After(5 * time.Second):
+			t.Errorf("simultaneous lifecycle server did not stop output=%q", serverOutput.String())
+		}
+	})
+	serverReady := waitForLifecycleServerReady(t, readyPath, serverDone, &serverOutput)
+	if serverReady.SessionID == "" || serverReady.ServerPort <= 0 {
+		t.Fatalf("simultaneous lifecycle server readiness is incomplete: %+v", serverReady)
+	}
+
+	firstConfig := appfixture.LifecycleProcessConfig{
+		WorkspaceRoot:             workspace,
+		PersistenceRoot:           persistenceRoot,
+		ServerMode:                appfixture.LifecycleServerModeRemote,
+		OpeningKind:               appfixture.LifecycleOpeningKindResumed,
+		SessionID:                 &serverReady.SessionID,
+		TargetFinalAssistantCount: 1,
+		HookRecordPath:            firstRecordPath,
+		HookBehavior:              appfixture.LifecycleHookBehaviorSuccess,
+	}
+	firstResult := runLifecyclePTYCommandAsync(
+		ctx,
+		bin,
+		lifecyclePTYProcessEnv(t, filepath.Join(root, "first"), firstConfig),
+	)
+	waitForLifecycleHookRecordCount(t, firstRecordPath, 1)
+
+	serverPort := serverReady.ServerPort
+	if err := appfixture.WriteConfigWithOptions(
+		ctx,
+		persistenceRoot,
+		appfixture.ConfigOptions{
+			ServerPort:           &serverPort,
+			LifecycleHookCommand: lifecycleRecorderCommandForTestBinary(bin, secondRecordPath),
+		},
+	); err != nil {
+		t.Fatalf("rewrite simultaneous lifecycle client config: %v", err)
+	}
+	secondConfig := firstConfig
+	secondConfig.HookRecordPath = secondRecordPath
+	secondResult := runLifecyclePTYCommandAsync(
+		ctx,
+		bin,
+		lifecyclePTYProcessEnv(t, filepath.Join(root, "second"), secondConfig),
+	)
+
+	firstCapture := firstResult.wait(t)
+	secondCapture := secondResult.wait(t)
+	firstRecords := readLifecycleHookRecords(t, firstRecordPath)
+	secondRecords := readLifecycleHookRecords(t, secondRecordPath)
+	if len(firstRecords) != 1 || len(secondRecords) != 1 {
+		t.Fatalf(
+			"simultaneous lifecycle record counts = %d/%d, want one each; first=%q second=%q",
+			len(firstRecords),
+			len(secondRecords),
+			string(firstCapture.Raw),
+			string(secondCapture.Raw),
+		)
+	}
+	if firstRecords[0].ParentPID == secondRecords[0].ParentPID ||
+		firstRecords[0].ParentPID == serverReady.PID ||
+		secondRecords[0].ParentPID == serverReady.PID {
+		t.Fatalf(
+			"simultaneous lifecycle parent PIDs = %d/%d server=%d, want two independent TUIs",
+			firstRecords[0].ParentPID,
+			secondRecords[0].ParentPID,
+			serverReady.PID,
+		)
+	}
+	for index, record := range []lifecycleHookRecord{firstRecords[0], secondRecords[0]} {
+		var envelope struct {
+			Category lifecyclecontract.Category `json:"category"`
+		}
+		if err := json.Unmarshal(record.Payload, &envelope); err != nil {
+			t.Fatalf("decode simultaneous lifecycle record %d: %v", index, err)
+		}
+		if envelope.Category != lifecyclecontract.CategorySessionStart {
+			t.Fatalf("simultaneous lifecycle category %d = %q, want session start", index, envelope.Category)
+		}
+	}
+}
+
+type lifecyclePTYCommandResult struct {
+	done chan lifecyclePTYCommandOutcome
+}
+
+type lifecyclePTYCommandOutcome struct {
+	capture pty.Capture
+	err     error
+}
+
+func runLifecyclePTYCommandAsync(
+	ctx context.Context,
+	bin string,
+	processEnv string,
+) lifecyclePTYCommandResult {
+	done := make(chan lifecyclePTYCommandOutcome, 1)
+	go func() {
+		capture, err := pty.RunCommand(ctx, pty.CommandSpec{
+			Path:       bin,
+			Env:        []string{processEnv},
+			Dimensions: pty.MustDimensions(24, 80),
+			PhaseInputs: []pty.PhaseInputEvent{{
+				Phase: pty.PhaseScenarioStart,
+				After: 3 * time.Second,
+				Bytes: []byte{0x03, 0x03},
+			}},
+			Timeout: 20 * time.Second,
+		})
+		done <- lifecyclePTYCommandOutcome{capture: capture, err: err}
+	}()
+	return lifecyclePTYCommandResult{done: done}
+}
+
+func (result lifecyclePTYCommandResult) wait(t *testing.T) pty.Capture {
+	t.Helper()
+	select {
+	case outcome := <-result.done:
+		if outcome.err != nil {
+			t.Fatalf("run simultaneous lifecycle PTY fixture: %v raw=%q", outcome.err, string(outcome.capture.Raw))
+		}
+		return outcome.capture
+	case <-time.After(15 * time.Second):
+		t.Fatal("simultaneous lifecycle PTY fixture did not exit")
+		return pty.Capture{}
+	}
+}
+
+func lifecycleRecorderCommandForTestBinary(bin string, recordPath string) []string {
+	return []string{
+		bin,
+		appfixture.LifecycleHookProductRecorderRunArg,
+		"--",
+		string(appfixture.LifecycleHookBehaviorSuccess),
+		recordPath,
+	}
+}
+
+func waitForLifecycleHookRecordCount(t *testing.T, path string, count int) {
+	t.Helper()
+	testsetup.RequireUntil(
+		t,
+		time.Now().Add(10*time.Second),
+		10*time.Millisecond,
+		func() bool {
+			file, err := os.Open(path)
+			if errors.Is(err, os.ErrNotExist) {
+				return false
+			}
+			if err != nil {
+				t.Fatalf("open lifecycle hook records while waiting: %v", err)
+			}
+			defer file.Close()
+			decoder := json.NewDecoder(file)
+			seen := 0
+			for {
+				var record lifecycleHookRecord
+				if err := decoder.Decode(&record); err != nil {
+					if err == io.EOF {
+						return seen >= count
+					}
+					t.Fatalf("decode lifecycle hook records while waiting: %v", err)
+				}
+				seen++
+			}
+		},
+		"lifecycle hook record count did not reach %d",
+		count,
+	)
+}
+
 func lifecyclePTYProcessEnv(t *testing.T, root string, config appfixture.LifecycleProcessConfig) string {
 	t.Helper()
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("create lifecycle PTY process config root: %v", err)
+	}
 	path := filepath.Join(root, "lifecycle-process.json")
 	if err := appfixture.WriteLifecycleProcessConfig(path, config); err != nil {
 		t.Fatalf("write lifecycle PTY process config: %v", err)

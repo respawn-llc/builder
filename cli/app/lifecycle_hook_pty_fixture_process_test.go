@@ -49,8 +49,9 @@ func runLifecycleHookPTYFixtureProcess(
 	if err != nil {
 		return fmt.Errorf("load lifecycle fixture interactive config: %w", err)
 	}
-	if !serverConfig.Settings.ProviderCapabilities.SupportsResponsesCompact ||
-		!serverConfig.Settings.ProviderCapabilities.SupportsRequestInputTokenCount {
+	if processConfig.LocalScriptPath != nil &&
+		(!serverConfig.Settings.ProviderCapabilities.SupportsResponsesCompact ||
+			!serverConfig.Settings.ProviderCapabilities.SupportsRequestInputTokenCount) {
 		return fmt.Errorf(
 			"lifecycle fixture provider capabilities do not support scripted compaction: %+v",
 			serverConfig.Settings.ProviderCapabilities,
@@ -91,8 +92,9 @@ func runLifecycleHookPTYFixtureProcess(
 	if err != nil {
 		return err
 	}
-	if !plan.ActiveSettings.ProviderCapabilities.SupportsResponsesCompact ||
-		!plan.ActiveSettings.ProviderCapabilities.SupportsRequestInputTokenCount {
+	if processConfig.LocalScriptPath != nil &&
+		(!plan.ActiveSettings.ProviderCapabilities.SupportsResponsesCompact ||
+			!plan.ActiveSettings.ProviderCapabilities.SupportsRequestInputTokenCount) {
 		return fmt.Errorf(
 			"lifecycle fixture session plan lost scripted compaction capabilities: %+v",
 			plan.ActiveSettings.ProviderCapabilities,
@@ -294,6 +296,17 @@ func runLifecycleHookServerFixtureProcess(
 	if err != nil {
 		return err
 	}
+	sessionID, err := runtime.SeedSession(ctx, processConfig.PersistenceRoot, processConfig.WorkspaceRoot)
+	if err != nil {
+		return err
+	}
+	serverConfig, _, err := config.LoadInteractive(
+		processConfig.WorkspaceRoot,
+		config.LoadOptions{ConfigRoot: processConfig.PersistenceRoot},
+	)
+	if err != nil {
+		return err
+	}
 	options := Options{
 		WorkspaceRoot:         processConfig.WorkspaceRoot,
 		WorkspaceRootExplicit: true,
@@ -312,8 +325,14 @@ func runLifecycleHookServerFixtureProcess(
 	}
 	defer func() { runErr = errors.Join(runErr, server.Close()) }()
 	ready, err := json.Marshal(struct {
-		PID int `json:"pid"`
-	}{PID: os.Getpid()})
+		PID        int    `json:"pid"`
+		SessionID  string `json:"session_id"`
+		ServerPort int    `json:"server_port"`
+	}{
+		PID:        os.Getpid(),
+		SessionID:  sessionID,
+		ServerPort: serverConfig.Settings.ServerPort,
+	})
 	if err != nil {
 		return fmt.Errorf("marshal lifecycle server fixture readiness: %w", err)
 	}
@@ -353,7 +372,7 @@ func lifecycleHookProductRecorderCommand(config appfixture.LifecycleProcessConfi
 	}
 	command := []string{
 		executable,
-		lifecycleHookProductRecorderRunArg,
+		appfixture.LifecycleHookProductRecorderRunArg,
 		"--",
 		string(config.HookBehavior),
 		config.HookRecordPath,

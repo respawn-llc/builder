@@ -10,6 +10,7 @@ import (
 
 const LifecycleProcessConfigEnvName = "KENT_LIFECYCLE_PTY_FIXTURE_CONFIG"
 const LifecycleServerProcessConfigEnvName = "KENT_LIFECYCLE_SERVER_PTY_FIXTURE_CONFIG"
+const LifecycleHookProductRecorderRunArg = "-test.run=^TestLifecycleHookProductRecorder$"
 
 type LifecycleServerMode string
 

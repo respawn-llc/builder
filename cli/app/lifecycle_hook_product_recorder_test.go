@@ -11,8 +11,6 @@ import (
 	"core/internal/testharness/pty/appfixture"
 )
 
-const lifecycleHookProductRecorderRunArg = "-test.run=^TestLifecycleHookProductRecorder$"
-
 type lifecycleHookProductRecorderInvocation struct {
 	behavior   appfixture.LifecycleHookBehavior
 	recordPath string
@@ -35,7 +33,7 @@ func parseLifecycleHookProductRecorderInvocation(args []string) (lifecycleHookPr
 	if len(args) != 5 && len(args) != 6 {
 		return lifecycleHookProductRecorderInvocation{}, false
 	}
-	if args[1] != lifecycleHookProductRecorderRunArg || args[2] != "--" {
+	if args[1] != appfixture.LifecycleHookProductRecorderRunArg || args[2] != "--" {
 		return lifecycleHookProductRecorderInvocation{}, false
 	}
 	invocation := lifecycleHookProductRecorderInvocation{
