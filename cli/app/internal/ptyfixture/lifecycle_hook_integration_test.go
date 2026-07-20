@@ -14,11 +14,17 @@ import (
 
 	"core/internal/testharness/pty"
 	"core/internal/testharness/pty/appfixture"
+	"core/internal/testharness/testsetup"
 	"core/shared/lifecyclecontract"
 )
 
 type lifecycleServerProcessReady struct {
 	PID int `json:"pid"`
+}
+
+type lifecycleHookProcessReady struct {
+	PID       int `json:"pid"`
+	ParentPID int `json:"parent_pid"`
 }
 
 type lifecycleHookRecord struct {
@@ -342,6 +348,64 @@ func TestLifecycleHooksRuntimeFailureAfterNonzeroDoesNotRecurse(t *testing.T) {
 	}
 }
 
+func TestLifecycleHooksHangingRecorderIsCanceledOnPTYShutdown(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	bin := buildPTYFixtureBinary(t, ctx)
+	root := t.TempDir()
+	scriptPath := filepath.Join(root, "script.json")
+	recordPath := filepath.Join(root, "hooks.jsonl")
+	readyPath := filepath.Join(root, "hook-ready.json")
+	if err := os.WriteFile(scriptPath, []byte(`{"final":"unused final"}`), 0o600); err != nil {
+		t.Fatalf("write hanging lifecycle script: %v", err)
+	}
+	processConfig := appfixture.LifecycleProcessConfig{
+		WorkspaceRoot:             filepath.Join(root, "workspace"),
+		PersistenceRoot:           filepath.Join(root, "persistence"),
+		ServerMode:                appfixture.LifecycleServerModeLocal,
+		OpeningKind:               appfixture.LifecycleOpeningKindNew,
+		LocalScriptPath:           &scriptPath,
+		TargetFinalAssistantCount: 1,
+		HookRecordPath:            recordPath,
+		HookBehavior:              appfixture.LifecycleHookBehaviorHang,
+		HookReadyPath:             &readyPath,
+	}
+	startedAt := time.Now()
+	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
+		Path:       bin,
+		Env:        []string{lifecyclePTYProcessEnv(t, root, processConfig)},
+		Dimensions: pty.MustDimensions(24, 80),
+		PhaseInputs: []pty.PhaseInputEvent{{
+			Phase: pty.PhaseScenarioStart,
+			After: 750 * time.Millisecond,
+			Bytes: []byte{0x03, 0x03},
+		}},
+		Timeout: 20 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("run hanging lifecycle PTY fixture: %v raw=%q", err, string(capture.Raw))
+	}
+	if elapsed := time.Since(startedAt); elapsed >= 5*time.Second {
+		t.Fatalf("hanging lifecycle PTY shutdown took %s, want less than hook deadline", elapsed)
+	}
+	ready := readLifecycleHookProcessReady(t, readyPath)
+	testsetup.RequireProcessGone(t, time.Now().Add(3*time.Second), ready.PID)
+	records := readLifecycleHookRecords(t, recordPath)
+	if len(records) != 1 {
+		t.Fatalf("hanging lifecycle hook record count = %d, want session start only: %+v", len(records), records)
+	}
+	var envelope struct {
+		Category lifecyclecontract.Category `json:"category"`
+	}
+	if err := json.Unmarshal(records[0].Payload, &envelope); err != nil {
+		t.Fatalf("decode hanging lifecycle hook payload: %v", err)
+	}
+	if envelope.Category != lifecyclecontract.CategorySessionStart {
+		t.Fatalf("hanging lifecycle category = %q, want session start", envelope.Category)
+	}
+}
+
 func lifecyclePTYProcessEnv(t *testing.T, root string, config appfixture.LifecycleProcessConfig) string {
 	t.Helper()
 	path := filepath.Join(root, "lifecycle-process.json")
@@ -370,6 +434,22 @@ func readLifecycleHookRecords(t *testing.T, path string) []lifecycleHookRecord {
 		}
 		records = append(records, record)
 	}
+}
+
+func readLifecycleHookProcessReady(t *testing.T, path string) lifecycleHookProcessReady {
+	t.Helper()
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read lifecycle hook process readiness: %v", err)
+	}
+	var ready lifecycleHookProcessReady
+	if err := json.Unmarshal(encoded, &ready); err != nil {
+		t.Fatalf("decode lifecycle hook process readiness: %v", err)
+	}
+	if ready.PID <= 0 || ready.ParentPID <= 0 {
+		t.Fatalf("lifecycle hook process readiness = %+v, want positive process identities", ready)
+	}
+	return ready
 }
 
 func waitForLifecycleServerReady(
