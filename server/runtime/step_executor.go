@@ -346,9 +346,9 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 }
 
 func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options stepLoopOptions) (int, error) {
-	flushed, receipt, err := s.messages.FlushPendingUserInjections(stepID, steerUserInjections(s.engine.queuedUserAutoDrainIDSnapshot()))
-	observeQueuedUserFlushCommit(options, receipt)
-	return flushed, err
+	result, err := s.messages.FlushPendingUserInjections(stepID, steerUserInjections(s.engine.queuedUserAutoDrainIDSnapshot()))
+	observeQueuedUserFlushCommit(options, result.receipt)
+	return result.flushed, err
 }
 
 func (s *defaultStepExecutor) commitPendingUserSteer(stepID string, options stepLoopOptions) error {

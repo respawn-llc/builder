@@ -294,23 +294,22 @@ func queuedUserMessagesForFlush(messages []queuedUserSteeringIntent) []QueuedUse
 	return items
 }
 
-func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, selection userInjectionSelection) (int, session.CommitReceipt, error) {
+func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
 	result, err := m.CommitPendingUserInjections(stepID, selection)
 	if err != nil || !result.continueCombinedFlush {
-		return result.flushed, result.receipt, err
+		return result, err
 	}
-	flushed := result.flushed
 	pendingNotices := []steeringIntent(nil)
 	if m.background != nil {
 		pendingNotices = m.background.DrainPendingNotices()
 	}
 	for _, notice := range pendingNotices {
 		if err := m.engine.steer(stepID, notice); err != nil {
-			return flushed, result.receipt, err
+			return result, err
 		}
-		flushed++
+		result.flushed++
 	}
-	return flushed, result.receipt, nil
+	return result, nil
 }
 
 func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
@@ -325,7 +324,6 @@ func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, sel
 	default:
 		return userInjectionCommitResult{}, fmt.Errorf("unsupported user injection selection %T", selection)
 	}
-	pending = m.engine.dropStoppedLiveRunQueueItems(pending)
 	return m.commitPendingUserInjections(stepID, pending)
 }
 
@@ -333,19 +331,17 @@ func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pen
 	e := m.engine
 	result := userInjectionCommitResult{continueCombinedFlush: true}
 
+	// Recheck immediately before commit because a live-run stop can race the drain.
+	pending = e.dropStoppedLiveRunQueueItems(pending)
 	queuedMessages := normalizeQueuedUserMessages(pending)
 	if len(queuedMessages) > 0 {
-		pending = e.dropStoppedLiveRunQueueItems(pending)
-		queuedMessages = normalizeQueuedUserMessages(pending)
-		if len(queuedMessages) == 0 {
-			result.continueCombinedFlush = false
-			return result, nil
-		}
+		queueItems := queuedUserMessagesForFlush(pending)
+		result.queueItemIDs = queuedUserMessageIDSet(queueItems)
 		joined := strings.Join(queuedMessages, "\n\n")
 		publishAllowed, err := e.commitLiveRunQueueItemsUnlessStopped(pending, func() error {
 			receipt, persistErr := e.steerWithCommitReceipt(
 				stepID,
-				steerQueuedUserMessageFlushIntent(joined, queuedMessages, queuedUserMessagesForFlush(pending)),
+				steerQueuedUserMessageFlushIntent(joined, queuedMessages, queueItems),
 			)
 			result.receipt = receipt
 			return persistErr

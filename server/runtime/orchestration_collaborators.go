@@ -80,6 +80,7 @@ func (allPendingUserInjectionSelection) userInjectionSelection() {}
 type userInjectionCommitResult struct {
 	flushed               int
 	receipt               session.CommitReceipt
+	queueItemIDs          map[string]struct{}
 	continueCombinedFlush bool
 }
 
@@ -110,7 +111,7 @@ type toolExecutor interface {
 type messageLifecycle interface {
 	RestoreMessages() error
 	CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error)
-	FlushPendingUserInjections(stepID string, selection userInjectionSelection) (int, session.CommitReceipt, error)
+	FlushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error)
 	DrainPendingUserInjections() []QueuedUserMessage
 	DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage
 	QueueUserMessage(text string, clientRequestID string) QueuedUserMessage
