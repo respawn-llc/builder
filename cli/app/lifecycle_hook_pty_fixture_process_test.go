@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -21,85 +22,14 @@ func runLifecycleHookPTYFixtureProcess(
 	if err := processConfig.Validate(); err != nil {
 		return err
 	}
-	if processConfig.ServerMode != appfixture.LifecycleServerModeLocal {
-		return errors.New("remote lifecycle PTY fixture process is not implemented")
-	}
-	if processConfig.LocalScriptPath == nil {
-		return errors.New("local lifecycle PTY fixture process requires a script path")
-	}
-	if err := os.MkdirAll(processConfig.WorkspaceRoot, 0o755); err != nil {
-		return fmt.Errorf("create lifecycle fixture workspace: %w", err)
-	}
-	recorderCommand, err := lifecycleHookProductRecorderCommand(processConfig)
-	if err != nil {
-		return err
-	}
-	contextWindow := 40000
-	compactionThreshold := 34000
-	preSubmitLead := 2000
-	compactionMode := config.CompactionMode("native")
-	if err := appfixture.PrepareConfigAndBindingWithOptions(
-		ctx,
-		processConfig.PersistenceRoot,
-		processConfig.WorkspaceRoot,
-		appfixture.ConfigOptions{
-			LifecycleHookCommand:             recorderCommand,
-			ModelContextWindow:               &contextWindow,
-			ContextCompactionThresholdTokens: &compactionThreshold,
-			PreSubmitCompactionLeadTokens:    &preSubmitLead,
-			CompactionMode:                   &compactionMode,
-			ProviderCapabilities: &config.ProviderCapabilitiesOverride{
-				ProviderID:                     "openai",
-				SupportsResponsesAPI:           true,
-				SupportsResponsesCompact:       true,
-				SupportsRequestInputTokenCount: true,
-				IsOpenAIFirstParty:             true,
-			},
-		},
-	); err != nil {
-		return err
-	}
 
 	terminal := newPTYCheckpointTerminalFile(os.Stdout)
 	if err := terminal.writer.QueueBeforeNextWrite(checkpoint.KindScenarioStart, nil); err != nil {
 		return fmt.Errorf("queue lifecycle scenario-start checkpoint: %w", err)
 	}
-	var scenarioState *ptyCheckpointScenarioState
-	runtime, err := appfixture.NewRuntime(*processConfig.LocalScriptPath, func(
-		targetFinalAssistantOrdinal appfixture.ScriptFinalAssistantOrdinal,
-	) func(context.Context) error {
-		scenarioState = newPTYCheckpointScenarioState(targetFinalAssistantOrdinal)
-		return func(context.Context) error {
-			if err := terminal.writer.Emit(checkpoint.KindScenarioComplete, nil); err != nil {
-				return err
-			}
-			scenarioState.markScenarioComplete()
-			return nil
-		}
-	})
+	scenarioState, runtime, sessionID, err := prepareLifecyclePTYFixtureRuntime(ctx, terminal, processConfig)
 	if err != nil {
 		return err
-	}
-	if scenarioState == nil {
-		panic("lifecycle PTY fixture runtime did not configure scenario completion state")
-	}
-	if processConfig.TargetFinalAssistantCount != uint64(runtime.TargetFinalAssistantOrdinal()) {
-		return fmt.Errorf(
-			"lifecycle fixture target final count = %d, script target = %d",
-			processConfig.TargetFinalAssistantCount,
-			runtime.TargetFinalAssistantOrdinal(),
-		)
-	}
-
-	var sessionID string
-	if processConfig.OpeningKind == appfixture.LifecycleOpeningKindResumed {
-		sessionID, err = runtime.SeedSession(ctx, processConfig.PersistenceRoot, processConfig.WorkspaceRoot)
-		if err != nil {
-			return err
-		}
-		if processConfig.SessionID != nil && *processConfig.SessionID != sessionID {
-			return fmt.Errorf("seeded lifecycle fixture session id = %q, configured = %q", sessionID, *processConfig.SessionID)
-		}
 	}
 	options := Options{
 		WorkspaceRoot:         processConfig.WorkspaceRoot,
@@ -108,7 +38,9 @@ func runLifecycleHookPTYFixtureProcess(
 		ConfigRoot:            processConfig.PersistenceRoot,
 		OpenAIBaseURL:         "http://127.0.0.1:1/v1",
 		OpenAIBaseURLExplicit: true,
-		startupOptions:        runtime.StartupOptions(),
+	}
+	if runtime != nil {
+		options.startupOptions = runtime.StartupOptions()
 	}
 	serverConfig, clientSettings, err := config.LoadInteractive(
 		processConfig.WorkspaceRoot,
@@ -125,22 +57,12 @@ func runLifecycleHookPTYFixtureProcess(
 		)
 	}
 	interactor := newInteractiveAuthInteractor()
-	standingServer, err := serverstartup.StartWithOptions(ctx, serverstartup.Request{
-		WorkspaceRoot:         options.WorkspaceRoot,
-		WorkspaceRootExplicit: options.WorkspaceRootExplicit,
-		SessionID:             options.SessionID,
-		OpenAIBaseURL:         options.OpenAIBaseURL,
-		OpenAIBaseURLExplicit: options.OpenAIBaseURLExplicit,
-		LoadOptions: config.LoadOptions{
-			ConfigRoot: options.ConfigRoot,
-		},
-	}, interactor, nil, runtime.StartupOptions())
-	if err != nil {
-		return fmt.Errorf("start lifecycle fixture configured server: %w", err)
-	}
-	defer func() { runErr = errors.Join(runErr, standingServer.Close()) }()
-	if err := standingServer.ServeBackground(); err != nil {
-		return fmt.Errorf("serve lifecycle fixture configured server: %w", err)
+	if processConfig.ServerMode == appfixture.LifecycleServerModeLocal {
+		standingServer, err := startLifecycleHookFixtureServer(ctx, options, interactor, runtime)
+		if err != nil {
+			return err
+		}
+		defer func() { runErr = errors.Join(runErr, standingServer.Close()) }()
 	}
 
 	server, err := startSessionServer(ctx, options, interactor, true, serverConfig)
@@ -216,6 +138,208 @@ func runLifecycleHookPTYFixtureProcess(
 		return fmt.Errorf("lifecycle PTY fixture inner final model has unexpected type %T", finalWrapped.inner)
 	}
 	return nil
+}
+
+func prepareLifecyclePTYFixtureRuntime(
+	ctx context.Context,
+	terminal *ptyCheckpointTerminalFile,
+	processConfig appfixture.LifecycleProcessConfig,
+) (*ptyCheckpointScenarioState, *appfixture.Runtime, string, error) {
+	switch processConfig.ServerMode {
+	case appfixture.LifecycleServerModeRemote:
+		if processConfig.TargetFinalAssistantCount == 0 {
+			return nil, nil, "", errors.New("remote lifecycle PTY fixture target final count is required")
+		}
+		state := newPTYCheckpointScenarioState(
+			appfixture.ScriptFinalAssistantOrdinal(processConfig.TargetFinalAssistantCount),
+		)
+		state.markScenarioComplete()
+		sessionID := ""
+		if processConfig.SessionID != nil {
+			sessionID = *processConfig.SessionID
+		}
+		return state, nil, sessionID, nil
+	case appfixture.LifecycleServerModeLocal:
+	default:
+		return nil, nil, "", fmt.Errorf("unsupported lifecycle PTY server mode %q", processConfig.ServerMode)
+	}
+	if processConfig.LocalScriptPath == nil {
+		return nil, nil, "", errors.New("local lifecycle PTY fixture process requires a script path")
+	}
+	if err := os.MkdirAll(processConfig.WorkspaceRoot, 0o755); err != nil {
+		return nil, nil, "", fmt.Errorf("create lifecycle fixture workspace: %w", err)
+	}
+	recorderCommand, err := lifecycleHookProductRecorderCommand(processConfig)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	contextWindow := 40000
+	compactionThreshold := 34000
+	preSubmitLead := 2000
+	compactionMode := config.CompactionMode("native")
+	if err := appfixture.PrepareConfigAndBindingWithOptions(
+		ctx,
+		processConfig.PersistenceRoot,
+		processConfig.WorkspaceRoot,
+		lifecycleHookFixtureConfigOptions(
+			recorderCommand,
+			&contextWindow,
+			&compactionThreshold,
+			&preSubmitLead,
+			&compactionMode,
+		),
+	); err != nil {
+		return nil, nil, "", err
+	}
+	var state *ptyCheckpointScenarioState
+	runtime, err := appfixture.NewRuntime(*processConfig.LocalScriptPath, func(
+		targetFinalAssistantOrdinal appfixture.ScriptFinalAssistantOrdinal,
+	) func(context.Context) error {
+		state = newPTYCheckpointScenarioState(targetFinalAssistantOrdinal)
+		return func(context.Context) error {
+			if err := terminal.writer.Emit(checkpoint.KindScenarioComplete, nil); err != nil {
+				return err
+			}
+			state.markScenarioComplete()
+			return nil
+		}
+	})
+	if err != nil {
+		return nil, nil, "", err
+	}
+	if state == nil {
+		panic("lifecycle PTY fixture runtime did not configure scenario completion state")
+	}
+	if processConfig.TargetFinalAssistantCount != uint64(runtime.TargetFinalAssistantOrdinal()) {
+		return nil, nil, "", fmt.Errorf(
+			"lifecycle fixture target final count = %d, script target = %d",
+			processConfig.TargetFinalAssistantCount,
+			runtime.TargetFinalAssistantOrdinal(),
+		)
+	}
+	var sessionID string
+	if processConfig.OpeningKind == appfixture.LifecycleOpeningKindResumed {
+		sessionID, err = runtime.SeedSession(ctx, processConfig.PersistenceRoot, processConfig.WorkspaceRoot)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		if processConfig.SessionID != nil && *processConfig.SessionID != sessionID {
+			return nil, nil, "", fmt.Errorf(
+				"seeded lifecycle fixture session id = %q, configured = %q",
+				sessionID,
+				*processConfig.SessionID,
+			)
+		}
+	}
+	return state, runtime, sessionID, nil
+}
+
+func startLifecycleHookFixtureServer(
+	ctx context.Context,
+	options Options,
+	interactor authInteractor,
+	runtime *appfixture.Runtime,
+) (*serverstartup.EmbeddedServer, error) {
+	if runtime == nil {
+		return nil, errors.New("local lifecycle fixture server requires a runtime")
+	}
+	standingServer, err := serverstartup.StartWithOptions(ctx, serverstartup.Request{
+		WorkspaceRoot:         options.WorkspaceRoot,
+		WorkspaceRootExplicit: options.WorkspaceRootExplicit,
+		SessionID:             options.SessionID,
+		OpenAIBaseURL:         options.OpenAIBaseURL,
+		OpenAIBaseURLExplicit: options.OpenAIBaseURLExplicit,
+		LoadOptions:           config.LoadOptions{ConfigRoot: options.ConfigRoot},
+	}, interactor, nil, runtime.StartupOptions())
+	if err != nil {
+		return nil, fmt.Errorf("start lifecycle fixture configured server: %w", err)
+	}
+	if err := standingServer.ServeBackground(); err != nil {
+		_ = standingServer.Close()
+		return nil, fmt.Errorf("serve lifecycle fixture configured server: %w", err)
+	}
+	return standingServer, nil
+}
+
+func runLifecycleHookServerFixtureProcess(
+	ctx context.Context,
+	processConfig appfixture.LifecycleServerProcessConfig,
+) (runErr error) {
+	if err := processConfig.Validate(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(processConfig.WorkspaceRoot, 0o755); err != nil {
+		return fmt.Errorf("create lifecycle server fixture workspace: %w", err)
+	}
+	recorderCommand, err := lifecycleHookProductRecorderCommand(appfixture.LifecycleProcessConfig{
+		HookRecordPath: processConfig.HookRecordPath,
+		HookBehavior:   processConfig.HookBehavior,
+	})
+	if err != nil {
+		return err
+	}
+	if err := appfixture.PrepareConfigAndBindingWithOptions(
+		ctx,
+		processConfig.PersistenceRoot,
+		processConfig.WorkspaceRoot,
+		lifecycleHookFixtureConfigOptions(recorderCommand, nil, nil, nil, nil),
+	); err != nil {
+		return err
+	}
+	runtime, err := appfixture.NewRuntime(processConfig.ScriptPath, nil)
+	if err != nil {
+		return err
+	}
+	options := Options{
+		WorkspaceRoot:         processConfig.WorkspaceRoot,
+		WorkspaceRootExplicit: true,
+		ConfigRoot:            processConfig.PersistenceRoot,
+		OpenAIBaseURL:         "http://127.0.0.1:1/v1",
+		OpenAIBaseURLExplicit: true,
+	}
+	server, err := startLifecycleHookFixtureServer(
+		ctx,
+		options,
+		newInteractiveAuthInteractor(),
+		runtime,
+	)
+	if err != nil {
+		return err
+	}
+	defer func() { runErr = errors.Join(runErr, server.Close()) }()
+	ready, err := json.Marshal(struct {
+		PID int `json:"pid"`
+	}{PID: os.Getpid()})
+	if err != nil {
+		return fmt.Errorf("marshal lifecycle server fixture readiness: %w", err)
+	}
+	if err := os.WriteFile(processConfig.ReadyPath, ready, 0o600); err != nil {
+		return fmt.Errorf("publish lifecycle server fixture readiness: %w", err)
+	}
+	select {}
+}
+
+func lifecycleHookFixtureConfigOptions(
+	recorderCommand []string,
+	contextWindow *int,
+	compactionThreshold *int,
+	preSubmitLead *int,
+	compactionMode *config.CompactionMode,
+) appfixture.ConfigOptions {
+	return appfixture.ConfigOptions{
+		LifecycleHookCommand:             recorderCommand,
+		ModelContextWindow:               contextWindow,
+		ContextCompactionThresholdTokens: compactionThreshold,
+		PreSubmitCompactionLeadTokens:    preSubmitLead,
+		CompactionMode:                   compactionMode,
+		ProviderCapabilities: &config.ProviderCapabilitiesOverride{
+			ProviderID:                     "openai",
+			SupportsResponsesAPI:           true,
+			SupportsResponsesCompact:       true,
+			SupportsRequestInputTokenCount: true,
+			IsOpenAIFirstParty:             true,
+		},
+	}
 }
 
 func lifecycleHookProductRecorderCommand(config appfixture.LifecycleProcessConfig) ([]string, error) {

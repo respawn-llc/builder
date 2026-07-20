@@ -9,6 +9,7 @@ import (
 )
 
 const LifecycleProcessConfigEnvName = "KENT_LIFECYCLE_PTY_FIXTURE_CONFIG"
+const LifecycleServerProcessConfigEnvName = "KENT_LIFECYCLE_SERVER_PTY_FIXTURE_CONFIG"
 
 type LifecycleServerMode string
 
@@ -44,6 +45,39 @@ type LifecycleProcessConfig struct {
 	HookRecordPath            string                `json:"hook_record_path"`
 	HookBehavior              LifecycleHookBehavior `json:"hook_behavior"`
 	HookReadyPath             *string               `json:"hook_ready_path,omitempty"`
+}
+
+type LifecycleServerProcessConfig struct {
+	WorkspaceRoot   string                `json:"workspace_root"`
+	PersistenceRoot string                `json:"persistence_root"`
+	ScriptPath      string                `json:"script_path"`
+	ReadyPath       string                `json:"ready_path"`
+	HookRecordPath  string                `json:"hook_record_path"`
+	HookBehavior    LifecycleHookBehavior `json:"hook_behavior"`
+}
+
+func (config LifecycleServerProcessConfig) Validate() error {
+	if strings.TrimSpace(config.WorkspaceRoot) == "" {
+		return errors.New("lifecycle server PTY fixture workspace_root is required")
+	}
+	if strings.TrimSpace(config.PersistenceRoot) == "" {
+		return errors.New("lifecycle server PTY fixture persistence_root is required")
+	}
+	if strings.TrimSpace(config.ScriptPath) == "" {
+		return errors.New("lifecycle server PTY fixture script_path is required")
+	}
+	if strings.TrimSpace(config.ReadyPath) == "" {
+		return errors.New("lifecycle server PTY fixture ready_path is required")
+	}
+	if strings.TrimSpace(config.HookRecordPath) == "" {
+		return errors.New("lifecycle server PTY fixture hook_record_path is required")
+	}
+	switch config.HookBehavior {
+	case LifecycleHookBehaviorSuccess, LifecycleHookBehaviorNonzero, LifecycleHookBehaviorHang:
+	default:
+		return errors.New("lifecycle server PTY fixture hook_behavior is invalid")
+	}
+	return nil
 }
 
 func (config LifecycleProcessConfig) Validate() error {
@@ -131,6 +165,41 @@ func ReadLifecycleProcessConfig(path string) (LifecycleProcessConfig, error) {
 	}
 	if err := config.Validate(); err != nil {
 		return LifecycleProcessConfig{}, err
+	}
+	return config, nil
+}
+
+func WriteLifecycleServerProcessConfig(path string, config LifecycleServerProcessConfig) error {
+	if strings.TrimSpace(path) == "" {
+		return errors.New("lifecycle server PTY fixture process config path is required")
+	}
+	if err := config.Validate(); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("marshal lifecycle server PTY fixture process config: %w", err)
+	}
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		return fmt.Errorf("write lifecycle server PTY fixture process config: %w", err)
+	}
+	return nil
+}
+
+func ReadLifecycleServerProcessConfig(path string) (LifecycleServerProcessConfig, error) {
+	if strings.TrimSpace(path) == "" {
+		return LifecycleServerProcessConfig{}, errors.New("lifecycle server PTY fixture process config path is required")
+	}
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		return LifecycleServerProcessConfig{}, fmt.Errorf("read lifecycle server PTY fixture process config: %w", err)
+	}
+	var config LifecycleServerProcessConfig
+	if err := json.Unmarshal(encoded, &config); err != nil {
+		return LifecycleServerProcessConfig{}, fmt.Errorf("decode lifecycle server PTY fixture process config: %w", err)
+	}
+	if err := config.Validate(); err != nil {
+		return LifecycleServerProcessConfig{}, err
 	}
 	return config, nil
 }

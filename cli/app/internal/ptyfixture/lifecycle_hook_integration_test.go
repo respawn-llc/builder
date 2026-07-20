@@ -1,10 +1,13 @@
 package ptyfixture
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,6 +16,10 @@ import (
 	"core/internal/testharness/pty/appfixture"
 	"core/shared/lifecyclecontract"
 )
+
+type lifecycleServerProcessReady struct {
+	PID int `json:"pid"`
+}
 
 type lifecycleHookRecord struct {
 	ParentPID int             `json:"parent_pid"`
@@ -148,6 +155,124 @@ func TestLifecycleHooksLocalConfiguredPTYRecordsAcceptedOrder(t *testing.T) {
 	}
 }
 
+func TestLifecycleHooksRemoteConfiguredPTYRecordsNewOpening(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	bin := buildPTYFixtureBinary(t, ctx)
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	persistenceRoot := filepath.Join(root, "persistence")
+	scriptPath := filepath.Join(root, "script.json")
+	recordPath := filepath.Join(root, "hooks.jsonl")
+	readyPath := filepath.Join(root, "server-ready.json")
+	script := []byte(`{"final":"remote lifecycle scenario complete"}`)
+	if err := os.WriteFile(scriptPath, script, 0o600); err != nil {
+		t.Fatalf("write remote lifecycle script: %v", err)
+	}
+	serverConfigPath := filepath.Join(root, "server-process.json")
+	if err := appfixture.WriteLifecycleServerProcessConfig(
+		serverConfigPath,
+		appfixture.LifecycleServerProcessConfig{
+			WorkspaceRoot:   workspace,
+			PersistenceRoot: persistenceRoot,
+			ScriptPath:      scriptPath,
+			ReadyPath:       readyPath,
+			HookRecordPath:  recordPath,
+			HookBehavior:    appfixture.LifecycleHookBehaviorSuccess,
+		},
+	); err != nil {
+		t.Fatalf("write remote lifecycle server process config: %v", err)
+	}
+	serverCtx, stopServer := context.WithCancel(ctx)
+	defer stopServer()
+	var serverOutput bytes.Buffer
+	serverCommand := exec.CommandContext(serverCtx, bin)
+	serverCommand.Env = append(
+		os.Environ(),
+		appfixture.LifecycleServerProcessConfigEnvName+"="+serverConfigPath,
+	)
+	serverCommand.Stdout = &serverOutput
+	serverCommand.Stderr = &serverOutput
+	if err := serverCommand.Start(); err != nil {
+		t.Fatalf("start remote lifecycle server process: %v", err)
+	}
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- serverCommand.Wait() }()
+	t.Cleanup(func() {
+		stopServer()
+		select {
+		case err := <-serverDone:
+			if err != nil && !errors.Is(serverCtx.Err(), context.Canceled) {
+				t.Errorf("remote lifecycle server process: %v output=%q", err, serverOutput.String())
+			}
+		case <-time.After(5 * time.Second):
+			t.Errorf("remote lifecycle server process did not stop output=%q", serverOutput.String())
+		}
+	})
+	serverReady := waitForLifecycleServerReady(t, readyPath, serverDone, &serverOutput)
+
+	prompt := "run remote lifecycle scenario"
+	processConfig := appfixture.LifecycleProcessConfig{
+		WorkspaceRoot:             workspace,
+		PersistenceRoot:           persistenceRoot,
+		ServerMode:                appfixture.LifecycleServerModeRemote,
+		OpeningKind:               appfixture.LifecycleOpeningKindNew,
+		InitialPrompt:             &prompt,
+		TargetFinalAssistantCount: 1,
+		HookRecordPath:            recordPath,
+		HookBehavior:              appfixture.LifecycleHookBehaviorSuccess,
+	}
+	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
+		Path:       bin,
+		Env:        []string{lifecyclePTYProcessEnv(t, root, processConfig)},
+		Dimensions: pty.MustDimensions(24, 80),
+		PhaseInputs: []pty.PhaseInputEvent{{
+			Phase: pty.PhaseScenarioFinalApplied,
+			After: 500 * time.Millisecond,
+			Bytes: []byte{0x03, 0x03},
+		}},
+		Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("run remote lifecycle PTY fixture: %v raw=%q server=%q", err, string(capture.Raw), serverOutput.String())
+	}
+	records := readLifecycleHookRecords(t, recordPath)
+	if len(records) != 2 {
+		t.Fatalf("remote lifecycle hook record count = %d, want two: %+v", len(records), records)
+	}
+	wantCategories := []lifecyclecontract.Category{
+		lifecyclecontract.CategorySessionStart,
+		lifecyclecontract.CategoryTaskComplete,
+	}
+	for index, record := range records {
+		if record.ParentPID == serverReady.PID {
+			t.Fatalf("remote server process executed lifecycle hook %d", index)
+		}
+		var envelope struct {
+			Category lifecyclecontract.Category `json:"category"`
+			Details  json.RawMessage            `json:"details"`
+		}
+		if err := json.Unmarshal(record.Payload, &envelope); err != nil {
+			t.Fatalf("decode remote lifecycle hook record %d: %v", index, err)
+		}
+		if envelope.Category != wantCategories[index] {
+			t.Fatalf("remote lifecycle category %d = %q, want %q", index, envelope.Category, wantCategories[index])
+		}
+		if index == 0 {
+			var details struct {
+				Kind lifecyclecontract.OpeningKind `json:"kind"`
+			}
+			if err := json.Unmarshal(envelope.Details, &details); err != nil {
+				t.Fatalf("decode remote session-start details: %v", err)
+			}
+			if details.Kind != lifecyclecontract.OpeningKindNew {
+				t.Fatalf("remote session start kind = %q, want new", details.Kind)
+			}
+		}
+	}
+}
+
 func lifecyclePTYProcessEnv(t *testing.T, root string, config appfixture.LifecycleProcessConfig) string {
 	t.Helper()
 	path := filepath.Join(root, "lifecycle-process.json")
@@ -176,4 +301,37 @@ func readLifecycleHookRecords(t *testing.T, path string) []lifecycleHookRecord {
 		}
 		records = append(records, record)
 	}
+}
+
+func waitForLifecycleServerReady(
+	t *testing.T,
+	path string,
+	done <-chan error,
+	output *bytes.Buffer,
+) lifecycleServerProcessReady {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		encoded, err := os.ReadFile(path)
+		if err == nil {
+			var ready lifecycleServerProcessReady
+			if err := json.Unmarshal(encoded, &ready); err != nil {
+				t.Fatalf("decode lifecycle server readiness: %v", err)
+			}
+			if ready.PID <= 0 {
+				t.Fatalf("lifecycle server readiness has invalid PID: %+v", ready)
+			}
+			return ready
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("read lifecycle server readiness: %v", err)
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("lifecycle server exited before readiness: %v output=%q", err, output.String())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	t.Fatalf("lifecycle server did not become ready output=%q", output.String())
+	return lifecycleServerProcessReady{}
 }

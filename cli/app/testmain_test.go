@@ -23,6 +23,20 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	}
+	if configPath, fixtureProcess := os.LookupEnv(appfixture.LifecycleServerProcessConfigEnvName); fixtureProcess {
+		processConfig, err := appfixture.ReadLifecycleServerProcessConfig(configPath)
+		if err == nil {
+			err = os.Setenv(config.PersistenceRootEnvName, processConfig.PersistenceRoot)
+		}
+		if err == nil {
+			err = runLifecycleHookServerFixtureProcess(context.Background(), processConfig)
+		}
+		if err != nil {
+			log.Print(err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if configPath, fixtureProcess := os.LookupEnv(appfixture.LifecycleProcessConfigEnvName); fixtureProcess {
 		processConfig, err := appfixture.ReadLifecycleProcessConfig(configPath)
 		if err == nil {
