@@ -501,8 +501,8 @@ func TestTaskDetailProjectsWaitingAskRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if len(detail.Runs) != 1 || detail.Runs[0].WaitingAskID == nil || *detail.Runs[0].WaitingAskID != "ask-view-1" || detail.Runs[0].SessionID != sessionID {
-		t.Fatalf("runs do not project waiting ask: %+v", detail.Runs)
+	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindWaitingQuestion || len(detail.Status.RunIDs) != 1 {
+		t.Fatalf("status = %+v, want waiting question", detail.Status)
 	}
 	if detail.AttentionCount != 1 {
 		t.Fatalf("attention count = %d, want 1", detail.AttentionCount)
@@ -511,7 +511,7 @@ func TestTaskDetailProjectsWaitingAskRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTaskAttention: %v", err)
 	}
-	if len(attention.Items) != 1 || attention.Items[0].Kind != "question" || attention.Items[0].AskID != "ask-view-1" || strings.TrimSpace(attention.Items[0].Message) == "" || len(attention.Items[0].Suggestions) != 3 || attention.Items[0].RecommendedOptionIndex != 2 {
+	if len(attention.Items) != 1 || attention.Items[0].Kind != "question" || attention.Items[0].AskID != "ask-view-1" || attention.Items[0].SessionID != sessionID || strings.TrimSpace(attention.Items[0].Message) == "" || len(attention.Items[0].Suggestions) != 3 || attention.Items[0].RecommendedOptionIndex != 2 {
 		t.Fatalf("attention question options = %+v", attention.Items)
 	}
 	for _, suggestion := range attention.Items[0].Suggestions {

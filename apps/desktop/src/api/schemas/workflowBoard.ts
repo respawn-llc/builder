@@ -24,12 +24,14 @@ import {
   boardGroupSchema,
   commentSchema,
   emptyString,
+  nonBlankString,
   nullableString,
   runSchema,
   stringList,
   taskActionsSchema,
   taskStatusSchema,
   transitionSchema,
+  workflowGraphNodeLimit,
   workflowPickerItemSchema,
   workspaceSummarySchema,
 } from "./common";
@@ -339,13 +341,19 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
       source_url: emptyString,
       source_workspace: workspaceSummarySchema,
       execution_target: workflowExecutionTargetSchema.optional().transform((value) => value ?? null),
-      managed_worktree: z.never().optional(),
+      worktree_path: nonBlankString.nullable(),
+      current_session_ids: z.array(nonBlankString).max(workflowGraphNodeLimit),
+      current_scripts: z.array(
+        z
+          .object({
+            run_id: nonBlankString,
+            path: nonBlankString,
+          })
+          .strict(),
+      ).max(workflowGraphNodeLimit),
       status: taskStatusSchema,
       actions: taskActionsSchema,
       attention_count: z.number().int().nonnegative(),
-      runs: z.array(runSchema).nullish().transform(emptyArray),
-      transitions: z.array(transitionSchema).nullish().transform(emptyArray),
-      comments: z.array(commentSchema).nullish().transform(emptyArray),
     }),
   })
   .transform((value) => ({
@@ -363,10 +371,13 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
     status: value.task.status,
     actions: value.task.actions,
     attentionCount: value.task.attention_count,
-    comments: value.task.comments,
-    runs: value.task.runs,
-    transitions: value.task.transitions,
     executionTarget: value.task.execution_target,
+    worktreePath: value.task.worktree_path,
+    currentSessionIDs: value.task.current_session_ids,
+    currentScripts: value.task.current_scripts.map((script) => ({
+      runID: script.run_id,
+      path: script.path,
+    })),
     createdAt: value.task.summary.created_at_unix_ms,
     updatedAt: value.task.summary.updated_at_unix_ms,
     done: value.task.summary.done,

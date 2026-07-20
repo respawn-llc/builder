@@ -377,15 +377,13 @@ func TestDecodeAndHandleRejectsInvalidWorkflowActionResponse(t *testing.T) {
 }
 
 func TestDecodeAndHandleRejectsInvalidWorkflowTaskDetailResponse(t *testing.T) {
-	blankRoot := " "
 	response := decodeAndHandle[struct{}, serverapi.WorkflowTaskGetResponse](
 		protocol.Request{ID: "invalid-workflow-task-detail-response", Params: mustJSON(t, struct{}{})},
 		func(struct{}) (serverapi.WorkflowTaskGetResponse, error) {
 			return serverapi.WorkflowTaskGetResponse{Task: serverapi.WorkflowTaskDetail{
 				ExecutionTarget: &serverapi.WorkflowExecutionTarget{
-					Mode:          serverapi.WorkflowExecutionTargetModeNone,
-					EffectiveRoot: &blankRoot,
-					Provenance:    serverapi.WorkflowExecutionTargetProvenanceResolved,
+					Mode:       serverapi.WorkflowExecutionTargetModeNone,
+					Provenance: serverapi.WorkflowExecutionTargetProvenanceLegacyObserved,
 				},
 			}}, nil
 		},

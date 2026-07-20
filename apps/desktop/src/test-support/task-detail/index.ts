@@ -77,19 +77,14 @@ export const taskDetailResponse = {
     source_workspace: workspace,
     execution_target: {
       mode: "head",
-      effective_root: "/tmp/worktree",
       requested_ref: "HEAD",
       resolved_ref: "refs/heads/main",
       commit_oid: "0123456789abcdef0123456789abcdef01234567",
       provenance: "resolved",
-      current_branch: "T-1",
-      managed_worktree: {
-        worktree_id: "worktree-1",
-        display_name: "T-1",
-        canonical_root: "/tmp/worktree",
-        availability: "available",
-      },
     },
+    worktree_path: "/tmp/worktree",
+    current_session_ids: ["session-1"],
+    current_scripts: [],
     status: {
       kind: "running",
       native_state: "running",
@@ -99,57 +94,6 @@ export const taskDetailResponse = {
     },
     actions: taskActions,
     attention_count: 2,
-    runs: [
-      {
-        id: "run-1",
-        task_id: "task-1",
-        placement_id: "placement-1",
-        node_id: "node-1",
-        session_id: "session-1",
-        session_name: "Kent session",
-        role: "agent",
-        status: "running",
-        generation: 1,
-        waiting_ask_id: "ask-1",
-        started_at_unix_ms: 1,
-        completed_at_unix_ms: null,
-        interrupted_at_unix_ms: null,
-      },
-    ],
-    transitions: [
-      {
-        id: "transition-1",
-        transition_id: "ship",
-        transition_display_name: "Ship",
-        source_node_display_name: "Implement",
-        state: "pending_approval",
-        commentary: "Looks good",
-        output_values: { result: "ok" },
-        edges: [
-          {
-            id: "transition-edge-1",
-            edge_key: "ship",
-            target_node_display_name: "Ship",
-            state: "pending",
-            requires_approval: true,
-            output_requirements: [],
-          },
-        ],
-        workflow_revision_seen: 7,
-        created_at_unix_ms: 2,
-        applied_at_unix_ms: null,
-      },
-    ],
-    comments: [
-      {
-        id: "comment-1",
-        task_id: "task-1",
-        body: "Existing comment",
-        author: guiTaskCommentAuthor,
-        created_at_unix_ms: 1,
-        updated_at_unix_ms: 1,
-      },
-    ],
   },
 };
 
@@ -174,6 +118,13 @@ export const taskAttentionResponse = {
       ask_id: "",
       task_transition_id: "transition-1",
       message: "Approve transition",
+      approval_snapshot: {
+        source_node_display_name: "Implement",
+        targets: [{ display_name: "Ship" }],
+        commentary: "Looks good",
+        output_values: { result: "ok" },
+        workflow_revision_seen: 7,
+      },
     },
   ],
   generated_at_unix_ms: 3,
@@ -194,15 +145,7 @@ export async function createTaskDetailFixture(): Promise<TaskDetail> {
 export const taskDetailResponseWithNewerActiveRun = {
   task: {
     ...taskDetailResponse.task,
-    runs: [
-      ...taskDetailResponse.task.runs,
-      {
-        ...taskDetailResponse.task.runs[0],
-        id: "run-2",
-        session_id: "session-2",
-        started_at_unix_ms: 2,
-      },
-    ],
+    current_session_ids: ["session-1", "session-2"],
   },
 };
 
@@ -210,35 +153,14 @@ export const taskDetailNoInboxResponse = {
   task: {
     ...taskDetailResponse.task,
     attention_count: 0,
-    transitions: [],
   },
 };
 
 export const taskDetailResponseWithScriptRun = {
   task: {
     ...taskDetailNoInboxResponse.task,
-    actions: { ...taskActions, can_interrupt: false },
-    runs: [
-      {
-        id: "run-script",
-        task_id: "task-1",
-        placement_id: "placement-script",
-        node_id: "node-script",
-        node_kind: "script",
-        script_path: "scripts/run",
-        session_id: "",
-        session_name: "",
-        role: "script",
-        status: "interrupted",
-        generation: 1,
-        waiting_ask_id: null,
-        started_at_unix_ms: 1,
-        completed_at_unix_ms: null,
-        interrupted_at_unix_ms: 2,
-        interruption_reason: "script failed",
-        interruption_detail_json: '{"kind":"script_failure"}',
-      },
-    ],
+    current_session_ids: [],
+    current_scripts: [{ run_id: "run-script", path: "scripts/run" }],
   },
 };
 
@@ -247,6 +169,7 @@ export const taskDetailResponseWithInterruptedScriptRun = {
     ...taskDetailResponseWithScriptRun.task,
     actions: { ...taskActions, can_interrupt: false, can_resume: true },
     attention_count: 1,
+    current_scripts: [],
   },
 };
 
@@ -347,7 +270,16 @@ export const commentAddResponse = {
 };
 
 export const commentListResponse = {
-  comments: taskDetailResponse.task.comments,
+  comments: [
+    {
+      id: "comment-1",
+      task_id: "task-1",
+      body: "Existing comment",
+      author: guiTaskCommentAuthor,
+      created_at_unix_ms: 1,
+      updated_at_unix_ms: 1,
+    },
+  ],
   next_page_token: "",
 };
 

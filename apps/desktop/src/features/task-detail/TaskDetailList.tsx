@@ -175,7 +175,7 @@ export function TaskDetailList({
           activityCount={activityItems.length}
           attentionItems={attentionItems}
           attentionPending={attention.isPending}
-          commentCount={displayedDetail.comments.length}
+          commentCount={commentItems.length}
           detail={displayedDetail}
           disabled={disabled}
           draft={draft}

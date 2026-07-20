@@ -33,7 +33,7 @@ func TestBoardAndTaskDetailUseDurableWorkflowMetadataOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
-	comment, err := workflowStore.AddComment(ctx, task.ID, "note", "user", "nek")
+	_, err = workflowStore.AddComment(ctx, task.ID, "note", "user", "nek")
 	if err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
@@ -80,11 +80,9 @@ func TestBoardAndTaskDetailUseDurableWorkflowMetadataOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if !detail.Summary.Done || len(detail.Placements) != 3 || len(detail.Runs) != 1 || len(detail.Transitions) != 2 || len(detail.Comments) != 1 {
-		t.Fatalf("detail = %+v", detail)
-	}
-	if detail.Comments[0].ID != comment.ID || detail.Transitions[0].TransitionID != "start" || detail.Transitions[1].TransitionID != "done" || detail.Transitions[1].Edges[0].EdgeKey != "done" {
-		t.Fatalf("detail history mismatch: %+v", detail)
+	if !detail.Summary.Done || detail.Status.Kind != serverapi.WorkflowTaskStatusKindDone ||
+		detail.CurrentSessionIDs == nil || detail.CurrentScripts == nil {
+		t.Fatalf("minimal detail = %+v", detail)
 	}
 }
 
@@ -387,21 +385,18 @@ func TestTaskDetailProjectsExecutionTargetOnlyAfterLockAndNoneUsesSourceWorkspac
 	locked := mustTaskDetail(t, view, ctx, string(task.ID))
 	if locked.ExecutionTarget == nil ||
 		locked.ExecutionTarget.Mode != serverapi.WorkflowExecutionTargetModeNone ||
-		locked.ExecutionTarget.EffectiveRoot == nil ||
-		*locked.ExecutionTarget.EffectiveRoot != binding.CanonicalRoot ||
 		locked.ExecutionTarget.Provenance != serverapi.WorkflowExecutionTargetProvenanceResolved {
 		t.Fatalf("locked none execution target = %+v", locked.ExecutionTarget)
 	}
 	if locked.ExecutionTarget.RequestedRef != nil ||
 		locked.ExecutionTarget.ResolvedRef != nil ||
 		locked.ExecutionTarget.CommitOID != nil ||
-		locked.ExecutionTarget.CurrentBranch != nil ||
-		locked.ExecutionTarget.ManagedWorktree != nil {
+		locked.WorktreePath != nil {
 		t.Fatalf("locked none execution target has managed facts: %+v", locked.ExecutionTarget)
 	}
 }
 
-func TestTaskDetailProjectsHealthyManagedExecutionTargetWithCurrentOperatorBranch(t *testing.T) {
+func TestTaskDetailProjectsDurableManagedExecutionTargetAndRecordedPath(t *testing.T) {
 	ctx, store, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
@@ -470,8 +465,6 @@ func TestTaskDetailProjectsHealthyManagedExecutionTargetWithCurrentOperatorBranc
 	target := detail.ExecutionTarget
 	if target == nil ||
 		target.Mode != serverapi.WorkflowExecutionTargetModeHead ||
-		target.EffectiveRoot == nil ||
-		*target.EffectiveRoot != canonicalWorktreeRoot ||
 		target.RequestedRef == nil ||
 		*target.RequestedRef != requestedRef ||
 		target.ResolvedRef == nil ||
@@ -479,21 +472,15 @@ func TestTaskDetailProjectsHealthyManagedExecutionTargetWithCurrentOperatorBranc
 		target.CommitOID == nil ||
 		*target.CommitOID != commitOID ||
 		target.Provenance != serverapi.WorkflowExecutionTargetProvenanceResolved ||
-		target.CurrentBranch == nil ||
-		*target.CurrentBranch != "operator-renamed" ||
-		target.ManagedWorktree == nil ||
-		target.ManagedWorktree.WorktreeID != worktreeID ||
-		target.ManagedWorktree.CanonicalRoot != canonicalWorktreeRoot ||
-		target.ManagedWorktree.Availability != serverapi.WorktreePathAvailabilityAvailable {
-		t.Fatalf("managed execution target = mode:%q root:%v requested:%v resolved:%v commit:%v provenance:%q branch:%v worktree:%+v",
+		detail.WorktreePath == nil ||
+		*detail.WorktreePath != canonicalWorktreeRoot {
+		t.Fatalf("managed execution target = mode:%q requested:%v resolved:%v commit:%v provenance:%q worktree_path:%v",
 			target.Mode,
-			target.EffectiveRoot,
 			target.RequestedRef,
 			target.ResolvedRef,
 			target.CommitOID,
 			target.Provenance,
-			target.CurrentBranch,
-			target.ManagedWorktree,
+			detail.WorktreePath,
 		)
 	}
 }
@@ -558,7 +545,8 @@ func TestTaskDetailPreservesManagedSelectionFactsWhenBindingIsMissing(t *testing
 		t.Fatalf("clear managed binding: %v", err)
 	}
 
-	target := mustTaskDetail(t, view, ctx, string(task.ID)).ExecutionTarget
+	detail := mustTaskDetail(t, view, ctx, string(task.ID))
+	target := detail.ExecutionTarget
 	if target == nil ||
 		target.Mode != serverapi.WorkflowExecutionTargetModeHead ||
 		target.RequestedRef == nil ||
@@ -570,12 +558,12 @@ func TestTaskDetailPreservesManagedSelectionFactsWhenBindingIsMissing(t *testing
 		target.Provenance != serverapi.WorkflowExecutionTargetProvenanceResolved {
 		t.Fatalf("managed selection facts = %+v", target)
 	}
-	if target.EffectiveRoot != nil || target.CurrentBranch != nil || target.ManagedWorktree != nil {
-		t.Fatalf("missing binding exposed current operational facts: %+v", target)
+	if detail.WorktreePath != nil {
+		t.Fatalf("missing binding exposed recorded worktree path: %+v", detail.WorktreePath)
 	}
 }
 
-func TestTaskDetailProjectsUnavailableLegacyObservedManagedTargetForNonDirectoryRoot(t *testing.T) {
+func TestTaskDetailDoesNotInspectRecordedLegacyWorktreePath(t *testing.T) {
 	ctx, store, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
@@ -639,32 +627,25 @@ func TestTaskDetailProjectsUnavailableLegacyObservedManagedTargetForNonDirectory
 		t.Fatalf("replace worktree root with file: %v", err)
 	}
 
-	target := mustTaskDetail(t, view, ctx, string(task.ID)).ExecutionTarget
+	detail := mustTaskDetail(t, view, ctx, string(task.ID))
+	target := detail.ExecutionTarget
 	if target == nil ||
 		target.Provenance != serverapi.WorkflowExecutionTargetProvenanceLegacyObserved ||
 		target.CommitOID == nil ||
 		*target.CommitOID != observedCommit ||
-		target.ManagedWorktree == nil ||
-		target.ManagedWorktree.WorktreeID != worktreeID ||
-		target.ManagedWorktree.CanonicalRoot != canonicalWorktreeRoot ||
-		target.ManagedWorktree.Availability != serverapi.WorktreePathAvailabilityInaccessible ||
-		!target.ManagedWorktree.Managed {
-		t.Fatalf("legacy observed target = %+v", target)
-	}
-	if target.EffectiveRoot != nil || target.CurrentBranch != nil {
-		t.Fatalf("unavailable legacy target exposed usable root or branch: %+v", target)
+		detail.WorktreePath == nil ||
+		*detail.WorktreePath != canonicalWorktreeRoot {
+		t.Fatalf("legacy observed detail = %+v", detail)
 	}
 
 	if err := os.Remove(worktreeRoot); err != nil {
 		t.Fatalf("remove replaced worktree root file: %v", err)
 	}
-	missing := mustTaskDetail(t, view, ctx, string(task.ID)).ExecutionTarget
-	if missing == nil ||
-		missing.ManagedWorktree == nil ||
-		missing.ManagedWorktree.Availability != serverapi.WorktreePathAvailabilityMissing ||
-		missing.EffectiveRoot != nil ||
-		missing.CurrentBranch != nil {
-		t.Fatalf("missing legacy target = %+v", missing)
+	missing := mustTaskDetail(t, view, ctx, string(task.ID))
+	if missing.ExecutionTarget == nil ||
+		missing.WorktreePath == nil ||
+		*missing.WorktreePath != canonicalWorktreeRoot {
+		t.Fatalf("missing legacy detail = %+v", missing)
 	}
 }
 
@@ -795,13 +776,7 @@ func TestBoardAndTaskDetailProjectParallelBranchPlacements(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	detailBranchPlacements := 0
-	for _, placement := range detail.Placements {
-		if placement.ParallelBatchTransitionID == string(split.Result.TransitionID) && placement.ParallelBranchEdgeID != "" {
-			detailBranchPlacements++
-		}
-	}
-	if detailBranchPlacements != 3 {
-		t.Fatalf("detail placements = %+v, want three branch placements with batch/branch ids", detail.Placements)
+	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindQueued || len(detail.Status.NodeIDs) != 3 {
+		t.Fatalf("detail status = %+v, want three queued branch nodes after %s", detail.Status, split.TransitionID)
 	}
 }

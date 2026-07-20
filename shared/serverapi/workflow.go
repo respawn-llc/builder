@@ -985,23 +985,36 @@ type WorkflowTaskAttentionListResponse struct {
 }
 
 type WorkflowAttentionItem struct {
-	ID                     string                           `json:"id"`
-	Kind                   string                           `json:"kind"`
-	ProjectID              string                           `json:"project_id,omitempty"`
-	WorkflowID             *string                          `json:"workflow_id,omitempty"`
-	TaskID                 string                           `json:"task_id,omitempty"`
-	TaskShortID            string                           `json:"task_short_id,omitempty"`
-	TaskTitle              string                           `json:"task_title,omitempty"`
-	RunID                  string                           `json:"run_id,omitempty"`
-	SessionID              string                           `json:"session_id,omitempty"`
-	AskID                  string                           `json:"ask_id,omitempty"`
-	TaskTransitionID       string                           `json:"task_transition_id,omitempty"`
-	Message                string                           `json:"message"`
-	DetailJSON             string                           `json:"detail_json,omitempty"`
-	Suggestions            []string                         `json:"suggestions,omitempty"`
-	RecommendedOptionIndex int                              `json:"recommended_option_index,omitempty"`
-	Question               *WorkflowAttentionQuestionPrompt `json:"question,omitempty"`
-	OccurredAtUnixMs       int64                            `json:"occurred_at_unix_ms"`
+	ID                     string                             `json:"id"`
+	Kind                   string                             `json:"kind"`
+	ProjectID              string                             `json:"project_id,omitempty"`
+	WorkflowID             *string                            `json:"workflow_id,omitempty"`
+	TaskID                 string                             `json:"task_id,omitempty"`
+	TaskShortID            string                             `json:"task_short_id,omitempty"`
+	TaskTitle              string                             `json:"task_title,omitempty"`
+	RunID                  string                             `json:"run_id,omitempty"`
+	SessionID              string                             `json:"session_id,omitempty"`
+	AskID                  string                             `json:"ask_id,omitempty"`
+	TaskTransitionID       string                             `json:"task_transition_id,omitempty"`
+	Message                string                             `json:"message"`
+	DetailJSON             string                             `json:"detail_json,omitempty"`
+	Suggestions            []string                           `json:"suggestions,omitempty"`
+	RecommendedOptionIndex int                                `json:"recommended_option_index,omitempty"`
+	Question               *WorkflowAttentionQuestionPrompt   `json:"question,omitempty"`
+	ApprovalSnapshot       *WorkflowAttentionApprovalSnapshot `json:"approval_snapshot,omitempty"`
+	OccurredAtUnixMs       int64                              `json:"occurred_at_unix_ms"`
+}
+
+type WorkflowAttentionApprovalSnapshot struct {
+	SourceNodeDisplayName string                            `json:"source_node_display_name"`
+	Targets               []WorkflowAttentionApprovalTarget `json:"targets"`
+	Commentary            string                            `json:"commentary,omitempty"`
+	OutputValues          map[string]string                 `json:"output_values"`
+	WorkflowRevisionSeen  int64                             `json:"workflow_revision_seen"`
+}
+
+type WorkflowAttentionApprovalTarget struct {
+	DisplayName string `json:"display_name"`
 }
 
 type WorkflowAttentionQuestionKind string
@@ -1461,21 +1474,27 @@ type WorkflowTaskSummary struct {
 }
 
 type WorkflowTaskDetail struct {
-	Summary         WorkflowTaskSummary      `json:"summary"`
-	Project         ProjectBoardProject      `json:"project"`
-	Workflow        WorkflowPickerItem       `json:"workflow"`
-	Body            string                   `json:"body"`
-	SourceURL       string                   `json:"source_url,omitempty"`
-	SourceWorkspace ProjectWorkspaceSummary  `json:"source_workspace"`
-	ExecutionTarget *WorkflowExecutionTarget `json:"execution_target,omitempty"`
-	Status          WorkflowTaskStatus       `json:"status"`
-	Actions         WorkflowTaskActions      `json:"actions"`
-	AttentionCount  int                      `json:"attention_count"`
-	Placements      []WorkflowPlacement      `json:"placements"`
-	Runs            []WorkflowRun            `json:"runs"`
-	Transitions     []WorkflowTaskTransition `json:"transitions"`
-	Comments        []WorkflowTaskComment    `json:"comments"`
+	Summary           WorkflowTaskSummary         `json:"summary"`
+	Project           ProjectBoardProject         `json:"project"`
+	Workflow          WorkflowPickerItem          `json:"workflow"`
+	Body              string                      `json:"body"`
+	SourceURL         string                      `json:"source_url,omitempty"`
+	SourceWorkspace   ProjectWorkspaceSummary     `json:"source_workspace"`
+	ExecutionTarget   *WorkflowExecutionTarget    `json:"execution_target,omitempty"`
+	WorktreePath      *string                     `json:"worktree_path"`
+	CurrentSessionIDs []string                    `json:"current_session_ids"`
+	CurrentScripts    []WorkflowTaskCurrentScript `json:"current_scripts"`
+	Status            WorkflowTaskStatus          `json:"status"`
+	Actions           WorkflowTaskActions         `json:"actions"`
+	AttentionCount    int                         `json:"attention_count"`
 }
+
+type WorkflowTaskCurrentScript struct {
+	RunID string `json:"run_id"`
+	Path  string `json:"path"`
+}
+
+const WorkflowTaskCurrentExecutionTargetsMax = WorkflowGraphDraftMaxNodes
 
 type WorkflowPlacement struct {
 	ID                        string `json:"id"`
@@ -2042,6 +2061,33 @@ func (r WorkflowTaskUpdateRequest) Validate() error {
 func (r WorkflowTaskGetResponse) Validate() error {
 	if r.Task.AttentionCount < 0 {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "task.attention_count", "attention_count must be non-negative")
+	}
+	if r.Task.WorktreePath != nil && strings.TrimSpace(*r.Task.WorktreePath) == "" {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "task.worktree_path", "worktree_path must be non-blank when present")
+	}
+	if r.Task.CurrentSessionIDs == nil {
+		return workflowRequestError(WorkflowRequestErrorRequired, "task.current_session_ids", "current_session_ids is required")
+	}
+	if len(r.Task.CurrentSessionIDs) > WorkflowTaskCurrentExecutionTargetsMax {
+		return workflowRequestError(WorkflowRequestErrorTooLong, "task.current_session_ids", "current_session_ids is too long")
+	}
+	for index, sessionID := range r.Task.CurrentSessionIDs {
+		if strings.TrimSpace(sessionID) == "" || (index > 0 && r.Task.CurrentSessionIDs[index-1] >= sessionID) {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "task.current_session_ids", "current_session_ids must contain sorted unique non-blank IDs")
+		}
+	}
+	if r.Task.CurrentScripts == nil {
+		return workflowRequestError(WorkflowRequestErrorRequired, "task.current_scripts", "current_scripts is required")
+	}
+	if len(r.Task.CurrentScripts) > WorkflowTaskCurrentExecutionTargetsMax {
+		return workflowRequestError(WorkflowRequestErrorTooLong, "task.current_scripts", "current_scripts is too long")
+	}
+	for index, script := range r.Task.CurrentScripts {
+		if strings.TrimSpace(script.RunID) == "" ||
+			strings.TrimSpace(script.Path) == "" ||
+			(index > 0 && r.Task.CurrentScripts[index-1].RunID >= script.RunID) {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "task.current_scripts", "current_scripts must contain sorted unique non-blank run targets")
+		}
 	}
 	if r.Task.ExecutionTarget != nil {
 		return r.Task.ExecutionTarget.Validate()

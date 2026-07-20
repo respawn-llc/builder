@@ -28,7 +28,11 @@ func TestAttentionReadsGlobalAndTaskCandidatesThroughFocusedInterface(t *testing
 	if err != nil {
 		t.Fatalf("StartTask approval: %v", err)
 	}
-	pendingApproval, err := workflowStore.CompleteRun(ctx, workflowstore.CompleteRunRequest{RunID: approvalStarted.RunID, TransitionID: "done"})
+	pendingApproval, err := workflowStore.CompleteRun(ctx, workflowstore.CompleteRunRequest{
+		RunID:        approvalStarted.RunID,
+		TransitionID: "done",
+		Commentary:   "Approval commentary",
+	})
 	if err != nil {
 		t.Fatalf("CompleteRun approval: %v", err)
 	}
@@ -66,7 +70,7 @@ func TestAttentionReadsGlobalAndTaskCandidatesThroughFocusedInterface(t *testing
 	if err != nil {
 		t.Fatalf("NewDefinitionProjection: %v", err)
 	}
-	attention, err := NewAttention(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), nil, nil)
+	attention, err := NewAttention(metadataStore, definitions, NewTaskProjector(), testsetup.QuestionsEnabled("coder"), nil, nil)
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)
 	}
@@ -107,6 +111,16 @@ func TestAttentionReadsGlobalAndTaskCandidatesThroughFocusedInterface(t *testing
 	approval := byKindAndProject["approval:"+firstProject.ProjectID]
 	if approval.TaskID != string(approvalTask.ID) || approval.TaskTransitionID != string(pendingApproval.Result.TransitionID) {
 		t.Fatalf("approval projection = %+v", approval)
+	}
+	if approval.ApprovalSnapshot == nil ||
+		approval.ApprovalSnapshot.SourceNodeDisplayName == "" ||
+		len(approval.ApprovalSnapshot.Targets) != 1 ||
+		approval.ApprovalSnapshot.Targets[0].DisplayName == "" ||
+		approval.ApprovalSnapshot.Commentary != "Approval commentary" ||
+		approval.ApprovalSnapshot.OutputValues == nil ||
+		len(approval.ApprovalSnapshot.OutputValues) != 0 ||
+		approval.ApprovalSnapshot.WorkflowRevisionSeen <= 0 {
+		t.Fatalf("approval snapshot = %+v", approval.ApprovalSnapshot)
 	}
 	interrupted := byKindAndProject["interrupted_run:"+secondProject.ProjectID]
 	if interrupted.TaskID != string(interruptedTask.ID) || interrupted.RunID != string(interruptedStarted.RunID) {

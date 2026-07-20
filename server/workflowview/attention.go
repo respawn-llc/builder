@@ -24,17 +24,21 @@ const interruptedRunAttentionMessage = "This task's run was stopped."
 type Attention struct {
 	queries      *sqlitegen.Queries
 	definitions  *DefinitionProjection
+	projector    *TaskProjector
 	roleResolver workflow.RoleResolver
 	transcripts  SessionActiveTranscriptProvider
 	prompts      PendingPromptSource
 }
 
-func NewAttention(metadataStore *metadata.Store, definitions *DefinitionProjection, roleResolver workflow.RoleResolver, transcripts SessionActiveTranscriptProvider, prompts PendingPromptSource) (*Attention, error) {
+func NewAttention(metadataStore *metadata.Store, definitions *DefinitionProjection, projector *TaskProjector, roleResolver workflow.RoleResolver, transcripts SessionActiveTranscriptProvider, prompts PendingPromptSource) (*Attention, error) {
 	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
 	if definitions == nil {
 		return nil, errors.New("definition projection is required")
+	}
+	if projector == nil {
+		return nil, errors.New("task projector is required")
 	}
 	if roleResolver == nil {
 		return nil, errors.New("role resolver is required")
@@ -42,6 +46,7 @@ func NewAttention(metadataStore *metadata.Store, definitions *DefinitionProjecti
 	return &Attention{
 		queries:      metadataStore.Queries(),
 		definitions:  definitions,
+		projector:    projector,
 		roleResolver: roleResolver,
 		transcripts:  transcripts,
 		prompts:      prompts,
@@ -234,7 +239,11 @@ func (a *Attention) itemFromCandidate(ctx context.Context, row attentionCandidat
 		if err != nil {
 			return serverapi.WorkflowAttentionItem{}, false, err
 		}
-		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: "approval", ProjectID: row.projectID, WorkflowID: &workflowID, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, TaskTransitionID: transitionID, Message: workflowattention.ApprovalRequiredMessage, OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
+		snapshot, err := a.approvalSnapshot(ctx, taskID, transitionID)
+		if err != nil {
+			return serverapi.WorkflowAttentionItem{}, false, err
+		}
+		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: "approval", ProjectID: row.projectID, WorkflowID: &workflowID, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, TaskTransitionID: transitionID, Message: workflowattention.ApprovalRequiredMessage, ApprovalSnapshot: &snapshot, OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
 	case "question":
 		taskID, err := requiredAttentionCandidateValue(row, "task_id", row.taskID)
 		if err != nil {
@@ -294,6 +303,41 @@ func (a *Attention) itemFromCandidate(ctx context.Context, row attentionCandidat
 	default:
 		return serverapi.WorkflowAttentionItem{}, false, fmt.Errorf("unknown attention item kind %q", row.kind)
 	}
+}
+
+func (a *Attention) approvalSnapshot(ctx context.Context, taskID string, transitionID string) (serverapi.WorkflowAttentionApprovalSnapshot, error) {
+	transitions, err := a.queries.ListTaskTransitionsByIDs(ctx, []string{transitionID})
+	if err != nil {
+		return serverapi.WorkflowAttentionApprovalSnapshot{}, err
+	}
+	if len(transitions) != 1 {
+		return serverapi.WorkflowAttentionApprovalSnapshot{}, fmt.Errorf("approval attention transition %q returned %d records", transitionID, len(transitions))
+	}
+	transition := transitions[0]
+	if transition.ID != transitionID || transition.TaskID != taskID || transition.State != "pending_approval" {
+		return serverapi.WorkflowAttentionApprovalSnapshot{}, fmt.Errorf("approval attention transition %q does not match pending task %q", transitionID, taskID)
+	}
+	edges, err := a.queries.ListTaskTransitionEdges(ctx, transitionID)
+	if err != nil {
+		return serverapi.WorkflowAttentionApprovalSnapshot{}, err
+	}
+	projected, err := a.projector.ProjectTransition(TransitionProjectionInput{Transition: transition, Edges: edges})
+	if err != nil {
+		return serverapi.WorkflowAttentionApprovalSnapshot{}, err
+	}
+	snapshot := serverapi.WorkflowAttentionApprovalSnapshot{
+		SourceNodeDisplayName: projected.SourceNodeDisplayName,
+		Targets:               make([]serverapi.WorkflowAttentionApprovalTarget, 0, len(projected.Edges)),
+		Commentary:            projected.Commentary,
+		OutputValues:          projected.OutputValues,
+		WorkflowRevisionSeen:  projected.WorkflowRevisionSeen,
+	}
+	for _, edge := range projected.Edges {
+		snapshot.Targets = append(snapshot.Targets, serverapi.WorkflowAttentionApprovalTarget{
+			DisplayName: edge.TargetNodeDisplayName,
+		})
+	}
+	return snapshot, nil
 }
 
 func requiredAttentionCandidateValue(row attentionCandidateRow, field string, value *string) (string, error) {

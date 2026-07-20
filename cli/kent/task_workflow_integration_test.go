@@ -52,8 +52,8 @@ func TestTaskCommandsUseWorkflowAPI(t *testing.T) {
 	if err := json.Unmarshal([]byte(taskShowJSONOut), &taskShowJSON); err != nil {
 		t.Fatalf("task show --json output = %q, want JSON: %v", taskShowJSONOut, err)
 	}
-	if taskShowJSON.Summary.ID != taskID || taskShowJSON.Summary.ShortID != shortID || taskShowJSON.Body != "Body" || taskShowJSON.PlacementCount == 0 {
-		t.Fatalf("task show --json output = %+v, want bounded task detail summary", taskShowJSON)
+	if taskShowJSON.Summary.ID != taskID || taskShowJSON.Summary.ShortID != shortID || taskShowJSON.Body != "Body" {
+		t.Fatalf("task show --json output = %+v, want minimal task detail summary", taskShowJSON)
 	}
 	var taskShowJSONFields map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(taskShowJSONOut), &taskShowJSONFields); err != nil {
@@ -107,7 +107,7 @@ func TestTaskCommandsUseWorkflowAPI(t *testing.T) {
 		t.Fatalf("InterruptRunGeneration for resume command: %v", err)
 	}
 	resumeOut, _ := runRootCommandOK(t, "task", "resume", "--project", binding.ProjectID, shortID)
-	if !strings.Contains(resumeOut, shortID) || !strings.Contains(resumeOut, resumeSessionID) || !strings.Contains(resumeOut, "implement") {
+	if !strings.Contains(resumeOut, shortID) || !strings.Contains(resumeOut, resumeSessionID) || !strings.Contains(resumeOut, string(claimed.NodeID)) {
 		t.Fatalf("resume output = %q, want task/node/session referenced", resumeOut)
 	}
 
