@@ -45,7 +45,7 @@ func TestExecuteWorkflowScriptUsesJSONStdinAndSeparatedStderr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build script execution request: %v", err)
 	}
-	if scriptRequest.Workflow == nil || *scriptRequest.Workflow != (sessionruntime.WorkflowExecutionRef{RunID: req.RunID, Generation: req.Generation}) {
+	if scriptRequest.Workflow == nil || *scriptRequest.Workflow != (sessionruntime.WorkflowExecutionRef{TaskID: req.TaskID, RunID: req.RunID, Generation: req.Generation}) {
 		t.Fatalf("workflow execution ref = %#v", scriptRequest.Workflow)
 	}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})

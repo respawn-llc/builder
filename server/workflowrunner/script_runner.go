@@ -187,6 +187,7 @@ func workflowScriptExecutionRequest(req SchedulerStartRunRequest, input workflow
 	workdir := executionRoot.EffectiveRoot()
 	return sessionruntime.ScriptExecutionRequest{
 		Workflow: &sessionruntime.WorkflowExecutionRef{
+			TaskID:     req.TaskID,
 			RunID:      req.RunID,
 			Generation: req.Generation,
 		},
