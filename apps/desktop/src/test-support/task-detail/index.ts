@@ -1,8 +1,18 @@
 import { z } from "zod";
+import { createElement } from "react";
+import { render } from "@testing-library/react";
 
 import { guiTaskCommentAuthor, type JsonObject, type JsonValue, type TaskDetail } from "@/api";
 import { ApiClient } from "@/api/composition";
-import { FakeRpcTransport } from "../api";
+import { TaskDetailSurface } from "@/features/task-detail";
+import { FakeRpcTransport, type FakeRoute } from "../api";
+import {
+  createTestServices,
+  startupRoutes,
+  TestAppProviders,
+  type TestAppServices,
+} from "../app-services";
+import type { NativeBridge } from "../native-bridge";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 
@@ -374,6 +384,65 @@ export const taskUpdateResponse = {
     id: "task-1",
   },
 };
+
+export type TaskDetailFixtureOptions = Readonly<{
+  attention?: JsonValue;
+  asks?: unknown;
+  comments?: unknown;
+  nativeBridge?: NativeBridge | undefined;
+  path?: string | undefined;
+  routes?: readonly FakeRoute[] | undefined;
+}>;
+
+export function createTaskDetailTestServices(
+  task: JsonValue,
+  {
+    asks,
+    attention = taskAttentionFixture(task),
+    comments,
+    nativeBridge,
+    path = "/tasks/task-1",
+    routes = [],
+  }: TaskDetailFixtureOptions = {},
+): TestAppServices {
+  window.history.pushState(null, "", path);
+  return createTestServices(
+    [
+      ...startupRoutes,
+      { method: "workflow.task.get", result: task },
+      { method: "workflow.task.attention.list", result: attention },
+      ...(comments === undefined ? [] : [{ method: "workflow.task.comment.list", result: comments }]),
+      { method: "workflow.task.activity.list", result: activityResponse },
+      ...(asks === undefined ? [] : [{ method: "ask.listPendingBySession", result: asks }]),
+      ...routes,
+    ],
+    nativeBridge,
+  );
+}
+
+export function mountTaskDetailSurface(
+  task: JsonValue,
+  options: TaskDetailFixtureOptions = {},
+): TestAppServices {
+  const services = createTaskDetailTestServices(task, options);
+  render(
+    createElement(TestAppProviders, {
+      children: createElement(TaskDetailSurface, { enabled: true, taskId: "task-1" }),
+      services,
+    }),
+  );
+  return services;
+}
+
+function taskAttentionFixture(task: JsonValue): JsonValue {
+  if (task === taskDetailResponseWithInterruptedScriptRun) {
+    return interruptedTaskAttentionResponse;
+  }
+  if (isJsonObject(task) && isJsonObject(task.task) && task.task.attention_count === 0) {
+    return emptyTaskAttentionResponse;
+  }
+  return taskAttentionResponse;
+}
 
 export function callParams(
   calls: readonly Readonly<{ method: string; params: JsonValue }>[],

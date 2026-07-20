@@ -331,9 +331,15 @@ func TestServiceCommentMutationsUpdateActivityAndPublishInvalidations(t *testing
 
 func TestServiceAnswersTaskQuestionWithoutControllerLease(t *testing.T) {
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
-	task, _, sessionID := createWorkflowServiceWaitingAsk(t, ctx, service, metadataStore, binding, "Question", "session-task-question", "ask-task-question")
+	task, runID, sessionID := createWorkflowServiceWaitingAsk(t, ctx, service, metadataStore, binding, "Question", "session-task-question", "ask-task-question")
 	responder := &recordingPromptResponder{}
 	service.prompts = responder
+	sub, err := service.SubscribeWorkflowProject(ctx, serverapi.WorkflowProjectSubscribeRequest{ProjectID: task.Task.ProjectID})
+	if err != nil {
+		t.Fatalf("SubscribeWorkflowProject: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+	service.readModels.TaskDetail = unavailableWorkflowTaskDetailReadModel{}
 
 	req := serverapi.WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-question", TaskID: task.Task.ID, AskID: "ask-task-question", FreeformAnswer: "ship it"}
 	if err := service.AnswerWorkflowTaskQuestion(ctx, req); err != nil {
@@ -344,6 +350,14 @@ func TestServiceAnswersTaskQuestionWithoutControllerLease(t *testing.T) {
 	}
 	if responder.response.SelectedOptionNumber != nil {
 		t.Fatalf("selected option = %v, want nil", *responder.response.SelectedOptionNumber)
+	}
+	event := nextWorkflowProjectEvent(t, sub)
+	if event.ProjectID != task.Task.ProjectID ||
+		event.WorkflowID != task.Task.WorkflowID ||
+		event.Resource != "task" ||
+		event.Action != "question_answered" ||
+		!sameStringSet(event.ChangedIDs, []string{task.Task.ID, runID, responder.response.RequestID}) {
+		t.Fatalf("question answered event = %+v", event)
 	}
 	if err := service.AnswerWorkflowTaskQuestion(ctx, req); err != nil {
 		t.Fatalf("AnswerWorkflowTaskQuestion replay: %v", err)
@@ -1980,6 +1994,20 @@ func (r *recordingPromptResponder) SubmitPromptResponse(sessionID string, resp a
 	r.response = resp
 	r.err = err
 	return nil
+}
+
+type unavailableWorkflowTaskDetailReadModel struct{}
+
+func (unavailableWorkflowTaskDetailReadModel) GetTask(context.Context, string) (serverapi.WorkflowTaskDetail, error) {
+	return serverapi.WorkflowTaskDetail{}, errors.New("task detail unavailable")
+}
+
+func (unavailableWorkflowTaskDetailReadModel) GetTaskByProjectShortID(context.Context, string, string) (serverapi.WorkflowTaskDetail, error) {
+	return serverapi.WorkflowTaskDetail{}, errors.New("task detail unavailable")
+}
+
+func (unavailableWorkflowTaskDetailReadModel) GetTaskByShortID(context.Context, string) (serverapi.WorkflowTaskDetail, error) {
+	return serverapi.WorkflowTaskDetail{}, errors.New("task detail unavailable")
 }
 
 func TestServiceWorkflowListPaginatesAndCreateLinkIsAtomic(t *testing.T) {

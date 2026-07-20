@@ -9247,37 +9247,21 @@ func (q *Queries) ResolveActiveRunCompletionTargetByTaskID(ctx context.Context, 
 
 const resolveTaskWaitingAsk = `-- name: ResolveTaskWaitingAsk :many
 SELECT
-    id,
-    task_id,
-    placement_id,
-    node_id,
-    session_id,
-    run_generation,
-    workflow_revision_seen,
-    automation_requested_at_unix_ms,
-    created_at_unix_ms,
-    updated_at_unix_ms,
-    started_at_unix_ms,
-    completed_at_unix_ms,
-    interrupted_at_unix_ms,
-    interruption_reason,
-    interruption_detail_json,
-    waiting_ask_id,
-    effective_completion_mode,
-    invalid_completion_count,
-    run_start_snapshot_json,
-    metadata_json
-FROM task_run_records
-WHERE task_id = ?1
-  AND waiting_ask_id = ?2
-  AND (?3 = '' OR id = ?3)
-  AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NULL
-  AND trim(COALESCE(session_id, '')) != ''
-ORDER BY updated_at_unix_ms DESC, (
+    runs.id, runs.task_id, runs.placement_id, runs.node_id, runs.session_id, runs.run_generation, runs.workflow_revision_seen, runs.automation_requested_at_unix_ms, runs.created_at_unix_ms, runs.updated_at_unix_ms, runs.started_at_unix_ms, runs.completed_at_unix_ms, runs.interrupted_at_unix_ms, runs.interruption_reason, runs.interruption_detail_json, runs.waiting_ask_id, runs.effective_completion_mode, runs.invalid_completion_count, runs.run_start_snapshot_json, runs.metadata_json,
+    tasks.project_id,
+    tasks.workflow_id
+FROM task_run_records runs
+JOIN task_records tasks ON tasks.id = runs.task_id
+WHERE runs.task_id = ?1
+  AND runs.waiting_ask_id = ?2
+  AND (?3 = '' OR runs.id = ?3)
+  AND runs.completed_at_unix_ms IS NULL
+  AND runs.interrupted_at_unix_ms IS NULL
+  AND trim(COALESCE(runs.session_id, '')) != ''
+ORDER BY runs.updated_at_unix_ms DESC, (
     SELECT storage.rowid
     FROM task_runs storage
-    WHERE storage.id = task_run_records.id
+    WHERE storage.id = runs.id
 ) DESC
 `
 
@@ -9287,36 +9271,44 @@ type ResolveTaskWaitingAskParams struct {
 	RunID  interface{}
 }
 
-func (q *Queries) ResolveTaskWaitingAsk(ctx context.Context, arg ResolveTaskWaitingAskParams) ([]TaskRunRecord, error) {
+type ResolveTaskWaitingAskRow struct {
+	TaskRunRecord TaskRunRecord
+	ProjectID     string
+	WorkflowID    string
+}
+
+func (q *Queries) ResolveTaskWaitingAsk(ctx context.Context, arg ResolveTaskWaitingAskParams) ([]ResolveTaskWaitingAskRow, error) {
 	rows, err := q.db.QueryContext(ctx, resolveTaskWaitingAsk, arg.TaskID, arg.AskID, arg.RunID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []TaskRunRecord
+	var items []ResolveTaskWaitingAskRow
 	for rows.Next() {
-		var i TaskRunRecord
+		var i ResolveTaskWaitingAskRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.PlacementID,
-			&i.NodeID,
-			&i.SessionID,
-			&i.RunGeneration,
-			&i.WorkflowRevisionSeen,
-			&i.AutomationRequestedAtUnixMs,
-			&i.CreatedAtUnixMs,
-			&i.UpdatedAtUnixMs,
-			&i.StartedAtUnixMs,
-			&i.CompletedAtUnixMs,
-			&i.InterruptedAtUnixMs,
-			&i.InterruptionReason,
-			&i.InterruptionDetailJson,
-			&i.WaitingAskID,
-			&i.EffectiveCompletionMode,
-			&i.InvalidCompletionCount,
-			&i.RunStartSnapshotJson,
-			&i.MetadataJson,
+			&i.TaskRunRecord.ID,
+			&i.TaskRunRecord.TaskID,
+			&i.TaskRunRecord.PlacementID,
+			&i.TaskRunRecord.NodeID,
+			&i.TaskRunRecord.SessionID,
+			&i.TaskRunRecord.RunGeneration,
+			&i.TaskRunRecord.WorkflowRevisionSeen,
+			&i.TaskRunRecord.AutomationRequestedAtUnixMs,
+			&i.TaskRunRecord.CreatedAtUnixMs,
+			&i.TaskRunRecord.UpdatedAtUnixMs,
+			&i.TaskRunRecord.StartedAtUnixMs,
+			&i.TaskRunRecord.CompletedAtUnixMs,
+			&i.TaskRunRecord.InterruptedAtUnixMs,
+			&i.TaskRunRecord.InterruptionReason,
+			&i.TaskRunRecord.InterruptionDetailJson,
+			&i.TaskRunRecord.WaitingAskID,
+			&i.TaskRunRecord.EffectiveCompletionMode,
+			&i.TaskRunRecord.InvalidCompletionCount,
+			&i.TaskRunRecord.RunStartSnapshotJson,
+			&i.TaskRunRecord.MetadataJson,
+			&i.ProjectID,
+			&i.WorkflowID,
 		); err != nil {
 			return nil, err
 		}

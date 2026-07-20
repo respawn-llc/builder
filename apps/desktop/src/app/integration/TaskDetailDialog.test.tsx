@@ -11,17 +11,14 @@ import { App } from "../startup/App";
 import { errorMessage, guiTaskCommentAuthor } from "@/api";
 import type { JsonValue } from "@/api";
 import { appI18n } from "@/i18n";
-import type { FakeRoute } from "@/test-support/api";
-import { createTestServices, startupRoutes } from "@/test-support/app-services";
 import {
-  activityResponse,
   callParams,
   commentAddResponse,
   commentListResponse,
+  createTaskDetailTestServices,
   emptyTaskAttentionResponse,
   firstCommentListResponse,
   getCallCount,
-  interruptedTaskAttentionResponse,
   isJsonObject,
   pendingAskResponse,
   questionAttention,
@@ -32,6 +29,7 @@ import {
   taskDetailResponseWithInterruptedScriptRun,
   taskDetailResponseWithNewerActiveRun,
   taskDetailResponseWithScriptRun,
+  type TaskDetailFixtureOptions,
 } from "@/test-support/task-detail";
 import { showStatusToast, type StatusNotice } from "@/ui";
 import type * as uiModule from "@/ui";
@@ -54,51 +52,13 @@ vi.mock("@/ui", async (importOriginal) => {
   };
 });
 
-type TaskDetailFixtureOptions = Readonly<{
-  attention?: JsonValue;
-  asks?: unknown;
-  comments?: unknown;
-  nativeBridge?: NativeBridge | undefined;
-  path?: string | undefined;
-  routes?: readonly FakeRoute[] | undefined;
-}>;
-
 function taskDetailFixture(
   task: JsonValue,
-  {
-    asks,
-    attention = taskAttentionFixture(task),
-    comments,
-    nativeBridge,
-    path = "/tasks/task-1",
-    routes = [],
-  }: TaskDetailFixtureOptions = {},
-): ReturnType<typeof createTestServices> {
-  window.history.pushState(null, "", path);
-  const services = createTestServices(
-    [
-      ...startupRoutes,
-      { method: "workflow.task.get", result: task },
-      { method: "workflow.task.attention.list", result: attention },
-      ...(comments === undefined ? [] : [{ method: "workflow.task.comment.list", result: comments }]),
-      { method: "workflow.task.activity.list", result: activityResponse },
-      ...(asks === undefined ? [] : [{ method: "ask.listPendingBySession", result: asks }]),
-      ...routes,
-    ],
-    nativeBridge,
-  );
+  options: TaskDetailFixtureOptions = {},
+): ReturnType<typeof createTaskDetailTestServices> {
+  const services = createTaskDetailTestServices(task, options);
   render(<App services={services} />);
   return services;
-}
-
-function taskAttentionFixture(task: JsonValue): JsonValue {
-  if (task === taskDetailResponseWithInterruptedScriptRun) {
-    return interruptedTaskAttentionResponse;
-  }
-  if (isJsonObject(task) && isJsonObject(task.task) && task.task.attention_count === 0) {
-    return emptyTaskAttentionResponse;
-  }
-  return taskAttentionResponse;
 }
 
 describe("TaskDetailSurface", () => {
@@ -155,8 +115,7 @@ describe("TaskDetailSurface", () => {
       expect(params.task_id).toBe("task-1");
     });
     await waitFor(() => {
-      expect(within(question).getByRole("radio", { name: /Use option A/u })).toBeDisabled();
-      expect(within(question).getByRole("button", { name: "Submit answer" })).toBeDisabled();
+      expect(screen.queryByRole("region", { name: "Question" })).not.toBeInTheDocument();
     });
 
     expect(screen.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
