@@ -119,13 +119,12 @@ WHERE id = sqlc.arg(id)
   AND project_id = sqlc.arg(project_id)
 RETURNING id, project_id, name;
 
--- name: ListTaskAssignedLabels :many
-SELECT pl.id, pl.project_id, pl.name
+-- name: ListTaskAssignedLabelIDsByTasks :many
+SELECT tla.task_id, pl.id AS label_id
 FROM task_label_assignments tla
 JOIN project_labels pl ON pl.id = tla.label_id
-WHERE tla.task_id = sqlc.arg(task_id)
-ORDER BY pl.name COLLATE kent_label_casefold_v1 ASC, pl.id ASC
-LIMIT 101;
+WHERE tla.task_id IN (sqlc.slice('task_ids'))
+ORDER BY tla.task_id ASC, pl.name COLLATE kent_label_casefold_v1 ASC, pl.id ASC;
 
 -- name: ListProjectLabelsByIDs :many
 SELECT id, project_id, name

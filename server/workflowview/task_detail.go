@@ -143,6 +143,10 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
+	labelIDsByTask, err := loadTaskLabelIDsByTask(ctx, d.queries, []string{task.ID})
+	if err != nil {
+		return serverapi.WorkflowTaskDetail{}, err
+	}
 	facts := d.projector.ProjectTaskFacts(TaskFactsInput{
 		Task:       task,
 		Status:     statusFact,
@@ -165,6 +169,7 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 		ExecutionTarget: executionTarget,
 		Status:          facts.Status,
 		Actions:         facts.Actions,
+		LabelIDs:        labelIDsByTask[task.ID],
 	}
 	attentionCount, err := d.queries.CountWorkflowTaskAttentionCandidates(ctx, task.ID)
 	if err != nil {

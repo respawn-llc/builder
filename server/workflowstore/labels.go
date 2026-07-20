@@ -380,7 +380,7 @@ func validateTaskLabelReferences(
 }
 
 func listTaskLabelIDs(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) ([]label.ID, error) {
-	rows, err := q.ListTaskAssignedLabels(ctx, string(taskID))
+	rows, err := q.ListTaskAssignedLabelIDsByTasks(ctx, []string{string(taskID)})
 	if err != nil {
 		return nil, err
 	}
@@ -394,7 +394,14 @@ func listTaskLabelIDs(ctx context.Context, q *sqlitegen.Queries, taskID workflow
 	}
 	ids := make([]label.ID, 0, len(rows))
 	for _, row := range rows {
-		id, err := label.ParseID(row.ID)
+		if row.TaskID != string(taskID) {
+			return nil, fmt.Errorf(
+				"task %q label read returned unrequested task %q",
+				taskID,
+				row.TaskID,
+			)
+		}
+		id, err := label.ParseID(row.LabelID)
 		if err != nil {
 			return nil, err
 		}

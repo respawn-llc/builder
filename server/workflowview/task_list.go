@@ -161,9 +161,18 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	if hasNext {
 		pageItems = pageItems[:pageSize]
 	}
+	pageTaskIDs := make([]string, 0, len(pageItems))
+	for _, row := range pageItems {
+		pageTaskIDs = append(pageTaskIDs, row.item.TaskID)
+	}
+	labelIDsByTask, err := loadTaskLabelIDsByTask(ctx, l.queries, pageTaskIDs)
+	if err != nil {
+		return serverapi.WorkflowTaskListResponse{}, err
+	}
 	responseItems := make([]serverapi.WorkflowTaskListItem, 0, len(pageItems))
 	for _, row := range pageItems {
 		item := row.item
+		item.LabelIDs = labelIDsByTask[item.TaskID]
 		if matchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple {
 			item.WorkflowName = nil
 		}

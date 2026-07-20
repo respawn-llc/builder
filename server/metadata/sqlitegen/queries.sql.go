@@ -6082,31 +6082,39 @@ func (q *Queries) ListStartedWorkflowRunRecoveryCandidates(ctx context.Context) 
 	return items, nil
 }
 
-const listTaskAssignedLabels = `-- name: ListTaskAssignedLabels :many
-SELECT pl.id, pl.project_id, pl.name
+const listTaskAssignedLabelIDsByTasks = `-- name: ListTaskAssignedLabelIDsByTasks :many
+SELECT tla.task_id, pl.id AS label_id
 FROM task_label_assignments tla
 JOIN project_labels pl ON pl.id = tla.label_id
-WHERE tla.task_id = ?1
-ORDER BY pl.name COLLATE kent_label_casefold_v1 ASC, pl.id ASC
-LIMIT 101
+WHERE tla.task_id IN (/*SLICE:task_ids*/?)
+ORDER BY tla.task_id ASC, pl.name COLLATE kent_label_casefold_v1 ASC, pl.id ASC
 `
 
-type ListTaskAssignedLabelsRow struct {
-	ID        string
-	ProjectID string
-	Name      string
+type ListTaskAssignedLabelIDsByTasksRow struct {
+	TaskID  string
+	LabelID string
 }
 
-func (q *Queries) ListTaskAssignedLabels(ctx context.Context, taskID string) ([]ListTaskAssignedLabelsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listTaskAssignedLabels, taskID)
+func (q *Queries) ListTaskAssignedLabelIDsByTasks(ctx context.Context, taskIds []string) ([]ListTaskAssignedLabelIDsByTasksRow, error) {
+	query := listTaskAssignedLabelIDsByTasks
+	var queryParams []interface{}
+	if len(taskIds) > 0 {
+		for _, v := range taskIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:task_ids*/?", strings.Repeat(",?", len(taskIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListTaskAssignedLabelsRow
+	var items []ListTaskAssignedLabelIDsByTasksRow
 	for rows.Next() {
-		var i ListTaskAssignedLabelsRow
-		if err := rows.Scan(&i.ID, &i.ProjectID, &i.Name); err != nil {
+		var i ListTaskAssignedLabelIDsByTasksRow
+		if err := rows.Scan(&i.TaskID, &i.LabelID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
