@@ -54,6 +54,40 @@ class TaskLabelAssignmentRegistry {
     return this.#entries.get(taskID)?.controller ?? null;
   }
 
+  deleteLabel(labelID: string): void {
+    for (const entry of this.#entries.values()) {
+      entry.controller.deleteLabel(labelID);
+    }
+  }
+
+  markDirty(taskID: string): boolean {
+    const controller = this.#entries.get(taskID)?.controller;
+    if (controller === undefined) {
+      return false;
+    }
+    controller.markDirty();
+    return true;
+  }
+
+  markAllDirty(): void {
+    for (const entry of this.#entries.values()) {
+      entry.controller.markDirty();
+    }
+  }
+
+  deleteTask(taskID: string): void {
+    const entry = this.#entries.get(taskID);
+    if (entry === undefined) {
+      return;
+    }
+    entry.controller.deleteTask();
+    entry.stopCleanupWatch?.();
+    entry.stopCleanupWatch = null;
+    entry.stopCacheSync();
+    this.#entries.delete(taskID);
+    this.#emit(taskID);
+  }
+
   subscribe(taskID: string, listener: () => void): () => void {
     const listeners = this.#listeners.get(taskID) ?? new Set<() => void>();
     listeners.add(listener);

@@ -4,10 +4,12 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import type { ProjectLabelCatalog } from "@/api";
 import type { ProjectCatalogAuthority } from "./projectCatalogAuthority";
 import type { ProjectLabelFilterController } from "./projectLabelFilter";
+import type { ProjectLabelEffects } from "./labelEventEffects";
 
 export type ProjectLabelDataContextValue = Readonly<{
   authority: ProjectCatalogAuthority;
   catalog: UseQueryResult<ProjectLabelCatalog>;
+  effects: ProjectLabelEffects;
   filter: ProjectLabelFilterController;
   projectID: string;
 }>;

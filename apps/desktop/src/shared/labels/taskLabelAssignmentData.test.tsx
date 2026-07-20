@@ -7,12 +7,15 @@ import { AppServicesProvider, queryKeys } from "@/app-facade";
 import { createTestServices } from "@/test-support/app-services";
 import { createTaskDetailFixture } from "@/test-support/task-detail";
 import {
+  createProjectCatalogAuthority,
+  createProjectLabelEffects,
   TaskLabelAssignmentProvider,
   useTaskLabelAssignment,
   type TaskLabelAssignmentController,
 } from "./index";
 
 const priorityID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
+const betaID = "942495c2-5958-4959-8445-94046ad74fbd";
 
 describe("task label assignment data", () => {
   it("loads the lightweight assignment and patches existing projections without a detail reload", async () => {
@@ -224,6 +227,156 @@ describe("task label assignment data", () => {
       expect(queryClient.getQueryData<TaskDetail>(queryKeys.task("task-1"))?.labelIDs).toEqual([]);
     });
   });
+
+  it("defers a task labels-changed event until the local mutation lane drains", async () => {
+    const updateResponse = deferred<unknown>();
+    const services = createTestServices([
+      {
+        method: "workflow.task.labels.get",
+        handler: (_params, callIndex) => ({
+          assignment: {
+            task_id: "task-1",
+            label_ids: callIndex === 0 ? [] : [betaID],
+          },
+        }),
+      },
+      {
+        method: "workflow.task.labels.update",
+        handler: async () => updateResponse.promise,
+      },
+    ]);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const { result } = renderHook(() => useTaskLabelAssignment(), {
+      wrapper: assignmentWrapper(services, queryClient, "task-1"),
+    });
+    await waitFor(() => {
+      expect(result.current.controller).not.toBeNull();
+      expect(
+        services.transport.calls.filter((call) => call.method === "workflow.task.labels.get"),
+      ).toHaveLength(1);
+    });
+    const controller = result.current.controller;
+    if (controller === null) {
+      throw new Error("task label assignment controller did not initialize");
+    }
+    const authority = createProjectCatalogAuthority({
+      projectID: "project-1",
+      queryClient,
+      listCatalog: async () => projectLabelCatalog(),
+    });
+    const effects = createProjectLabelEffects({
+      authority,
+      projectID: "project-1",
+      queryClient,
+    });
+
+    act(() => {
+      controller.setDesired(priorityID, true);
+    });
+    await act(async () => {
+      await effects.consumeProjectEvent({
+        action: "labels_changed",
+        occurredAtUnixMs: 1,
+        primaryEntityID: "task-1",
+        projectID: "project-1",
+        relatedIDs: [],
+        resource: "task",
+        workflowID: "workflow-1",
+      });
+    });
+
+    expect(controller.getSnapshot().dirty).toBe(true);
+    expect(
+      services.transport.calls.filter((call) => call.method === "workflow.task.labels.get"),
+    ).toHaveLength(1);
+
+    updateResponse.resolve({
+      assignment: {
+        task_id: "task-1",
+        label_ids: [priorityID],
+      },
+    });
+    await waitFor(() => {
+      expect(
+        services.transport.calls.filter((call) => call.method === "workflow.task.labels.get"),
+      ).toHaveLength(2);
+      expect(controller.getSnapshot().visibleLabelIDs).toEqual([betaID]);
+      expect(controller.getSnapshot().dirty).toBe(false);
+    });
+  });
+
+  it("closes the task lane before a late assignment response after task deletion", async () => {
+    const updateResponse = deferred<unknown>();
+    const services = createTestServices([
+      {
+        method: "workflow.task.labels.get",
+        result: {
+          assignment: {
+            task_id: "task-1",
+            label_ids: [],
+          },
+        },
+      },
+      {
+        method: "workflow.task.labels.update",
+        handler: async () => updateResponse.promise,
+      },
+    ]);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const { result } = renderHook(() => useTaskLabelAssignment(), {
+      wrapper: assignmentWrapper(services, queryClient, "task-1"),
+    });
+    await waitFor(() => {
+      expect(result.current.controller).not.toBeNull();
+    });
+    const controller = result.current.controller;
+    if (controller === null) {
+      throw new Error("task label assignment controller did not initialize");
+    }
+    const authority = createProjectCatalogAuthority({
+      projectID: "project-1",
+      queryClient,
+      listCatalog: async () => projectLabelCatalog(),
+    });
+    const effects = createProjectLabelEffects({
+      authority,
+      projectID: "project-1",
+      queryClient,
+    });
+
+    act(() => {
+      controller.setDesired(priorityID, true);
+    });
+    await act(async () => {
+      await effects.consumeProjectEvent({
+        action: "deleted",
+        occurredAtUnixMs: 1,
+        primaryEntityID: "task-1",
+        projectID: "project-1",
+        relatedIDs: [],
+        resource: "task",
+        workflowID: "workflow-1",
+      });
+    });
+
+    expect(controller.getSnapshot().closed).toBe(true);
+    expect(queryClient.getQueryData(queryKeys.taskLabels("task-1"))).toBeUndefined();
+
+    updateResponse.resolve({
+      assignment: {
+        task_id: "task-1",
+        label_ids: [priorityID],
+      },
+    });
+    await waitFor(() => {
+      expect(controller.getSnapshot().closed).toBe(true);
+      expect(queryClient.getQueryData(queryKeys.taskLabels("task-1"))).toBeUndefined();
+    });
+  });
 });
 
 function AssignmentControllerCapture({
@@ -263,7 +416,10 @@ function assignmentWrapper(
 function projectLabelCatalog() {
   return {
     projectID: "project-1",
-    labels: [{ id: priorityID, name: "Priority" }],
+    labels: [
+      { id: priorityID, name: "Priority" },
+      { id: betaID, name: "Beta" },
+    ],
   };
 }
 

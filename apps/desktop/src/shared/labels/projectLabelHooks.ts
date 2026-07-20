@@ -11,27 +11,20 @@ export function useProjectLabelCatalog() {
 
 export function useProjectLabelCatalogMutations() {
   const { api } = useAppServices();
-  const { authority, filter, projectID } = useProjectLabelData();
+  const { effects, projectID } = useProjectLabelData();
   return {
     create: useMutation({
       mutationFn: async (name: string) => api.createProjectLabel(projectID, name),
-      onSuccess: (label) => {
-        authority.applyCreate(label);
-      },
+      onSuccess: async (label) => effects.applyLocalCreate(label),
     }),
     rename: useMutation({
       mutationFn: async (input: Readonly<{ labelID: string; name: string }>) =>
         api.renameProjectLabel(projectID, input.labelID, input.name),
-      onSuccess: (label) => {
-        authority.applyRename(label);
-      },
+      onSuccess: async (label) => effects.applyLocalRename(label),
     }),
     delete: useMutation({
       mutationFn: async (labelID: string) => api.deleteProjectLabel(projectID, labelID),
-      onSuccess: (labelID) => {
-        authority.applyDelete(labelID);
-        filter.dispatch({ type: "label.deleted", labelID });
-      },
+      onSuccess: async (labelID) => effects.applyLocalDelete(labelID),
     }),
   };
 }

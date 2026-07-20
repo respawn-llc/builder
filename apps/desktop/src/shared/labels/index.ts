@@ -38,8 +38,18 @@ export {
   type TaskLabelAssignmentSnapshot,
   type TaskLabelUpdateInput,
 } from "./taskLabelAssignmentController";
-export { patchExistingTaskLabelAssignment, patchExistingTaskLabelProjections } from "./taskLabelCache";
+export {
+  patchExistingTaskLabelAssignment,
+  patchExistingTaskLabelProjections,
+  pruneDeletedLabelFromExistingCaches,
+  removeDeletedTaskFromExistingCaches,
+} from "./taskLabelCache";
 export { type TaskLabelAssignmentData } from "./taskLabelAssignmentData";
 export { TaskLabelAssignmentProvider } from "./TaskLabelAssignmentProvider";
 export { useTaskLabelAssignment } from "./taskLabelAssignmentContext";
 export { LabelChooser, type LabelChooserInvocation, type LabelChooserProps } from "./LabelChooser";
+export {
+  createProjectLabelEffects,
+  type LabelMembershipRefreshEffect,
+  type ProjectLabelEffects,
+} from "./labelEventEffects";

@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 
@@ -555,14 +555,13 @@ describe("LabelChooser", () => {
     render(<Harness />);
     await user.click(screen.getByRole("button", { name: "Open labels" }));
     const search = await screen.findByRole("textbox");
-    await user.type(search, "New label");
+    fireEvent.change(search, { target: { value: "New label" } });
 
     const create = createChoiceButton();
     expect(create).toBeDisabled();
     expect(create).toHaveAccessibleDescription();
 
-    await user.clear(search);
-    await user.type(search, "Label 001");
+    fireEvent.change(search, { target: { value: "Label 001" } });
     const existing = screen.getByRole("button", { name: "Label 001" });
     await user.click(existing);
     expect(existing).toHaveAttribute("aria-pressed", "true");
