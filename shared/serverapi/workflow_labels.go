@@ -251,6 +251,10 @@ func (r WorkflowProjectLabelCreateRequest) Validate() error {
 	)
 }
 
+func (r WorkflowProjectLabelCreateRequest) ValidateRPC() error {
+	return workflowLabelRPCValidationError(r.Validate(), r.ProjectID, "", true)
+}
+
 func (r WorkflowProjectLabelRenameRequest) Validate() error {
 	if err := validateRequiredFields(
 		requiredField("project_id", r.ProjectID),
@@ -316,6 +320,10 @@ func (r WorkflowTaskLabelsUpdateRequest) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (r WorkflowTaskLabelsUpdateRequest) ValidateRPC() error {
+	return workflowLabelRPCValidationError(r.Validate(), "", r.TaskID, false)
 }
 
 func (r WorkflowTaskLabelsUpdateResponse) Validate() error {
@@ -418,4 +426,24 @@ func validateLabelID(field string, id string) error {
 func validateLabelIDs(field string, ids []string) error {
 	_, err := validateUniqueLabelIDs(field, ids)
 	return err
+}
+
+func workflowLabelRPCValidationError(err error, projectID string, taskID string, nameIsInvalid bool) error {
+	if err == nil {
+		return nil
+	}
+	var validationErr WorkflowRequestValidationError
+	if !errors.As(err, &validationErr) {
+		return err
+	}
+	reason := WorkflowLabelErrorReasonInvalidMutation
+	if nameIsInvalid && validationErr.Field == "name" && strings.TrimSpace(projectID) != "" {
+		reason = WorkflowLabelErrorReasonInvalidName
+	}
+	return &WorkflowLabelError{
+		Reason:    reason,
+		ProjectID: projectID,
+		TaskID:    taskID,
+		Field:     validationErr.Field,
+	}
 }

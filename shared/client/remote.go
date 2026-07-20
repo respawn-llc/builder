@@ -456,6 +456,36 @@ func (c *Remote) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowGr
 	return callUnscopedRPC[serverapi.WorkflowGraphSaveRequest, serverapi.WorkflowGraphSaveResponse](c, ctx, protocol.MethodWorkflowGraphSave, req)
 }
 
+func (c *Remote) CreateWorkflowProjectLabel(ctx context.Context, req serverapi.WorkflowProjectLabelCreateRequest) (serverapi.WorkflowProjectLabelCreateResponse, error) {
+	response, err := callUnscopedRPC[serverapi.WorkflowProjectLabelCreateRequest, serverapi.WorkflowProjectLabelCreateResponse](c, ctx, protocol.MethodWorkflowProjectLabelCreate, req)
+	return validateWorkflowResponse("create workflow project label", response, err)
+}
+
+func (c *Remote) ListWorkflowProjectLabels(ctx context.Context, req serverapi.WorkflowProjectLabelCatalogRequest) (serverapi.WorkflowProjectLabelCatalogResponse, error) {
+	response, err := callUnscopedRPC[serverapi.WorkflowProjectLabelCatalogRequest, serverapi.WorkflowProjectLabelCatalogResponse](c, ctx, protocol.MethodWorkflowProjectLabelList, req)
+	return validateWorkflowResponse("list workflow project labels", response, err)
+}
+
+func (c *Remote) RenameWorkflowProjectLabel(ctx context.Context, req serverapi.WorkflowProjectLabelRenameRequest) (serverapi.WorkflowProjectLabelRenameResponse, error) {
+	response, err := callUnscopedRPC[serverapi.WorkflowProjectLabelRenameRequest, serverapi.WorkflowProjectLabelRenameResponse](c, ctx, protocol.MethodWorkflowProjectLabelRename, req)
+	return validateWorkflowResponse("rename workflow project label", response, err)
+}
+
+func (c *Remote) DeleteWorkflowProjectLabel(ctx context.Context, req serverapi.WorkflowProjectLabelDeleteRequest) (serverapi.WorkflowProjectLabelDeleteResponse, error) {
+	response, err := callUnscopedRPC[serverapi.WorkflowProjectLabelDeleteRequest, serverapi.WorkflowProjectLabelDeleteResponse](c, ctx, protocol.MethodWorkflowProjectLabelDelete, req)
+	return validateWorkflowResponse("delete workflow project label", response, err)
+}
+
+func (c *Remote) GetWorkflowTaskLabels(ctx context.Context, req serverapi.WorkflowTaskLabelsGetRequest) (serverapi.WorkflowTaskLabelsGetResponse, error) {
+	response, err := callUnscopedRPC[serverapi.WorkflowTaskLabelsGetRequest, serverapi.WorkflowTaskLabelsGetResponse](c, ctx, protocol.MethodWorkflowTaskLabelsGet, req)
+	return validateWorkflowResponse("get workflow task labels", response, err)
+}
+
+func (c *Remote) UpdateWorkflowTaskLabels(ctx context.Context, req serverapi.WorkflowTaskLabelsUpdateRequest) (serverapi.WorkflowTaskLabelsUpdateResponse, error) {
+	response, err := callUnscopedRPC[serverapi.WorkflowTaskLabelsUpdateRequest, serverapi.WorkflowTaskLabelsUpdateResponse](c, ctx, protocol.MethodWorkflowTaskLabelsUpdate, req)
+	return validateWorkflowResponse("update workflow task labels", response, err)
+}
+
 func (c *Remote) CreateWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskCreateRequest) (serverapi.WorkflowTaskCreateResponse, error) {
 	return callUnscopedRPC[serverapi.WorkflowTaskCreateRequest, serverapi.WorkflowTaskCreateResponse](c, ctx, protocol.MethodWorkflowTaskCreate, req)
 }

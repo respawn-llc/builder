@@ -395,3 +395,54 @@ func TestWorkflowLabelErrorRoundTripsEveryTypedFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkflowLabelRPCValidationUsesTypedMutationErrors(t *testing.T) {
+	raw101 := make([]string, WorkflowLabelMaxIDs+1)
+	for index := range raw101 {
+		raw101[index] = "not-a-uuid"
+	}
+	tests := []struct {
+		name    string
+		request interface{ ValidateRPC() error }
+		reason  WorkflowLabelErrorReason
+		field   string
+	}{
+		{
+			name: "invalid create name",
+			request: WorkflowProjectLabelCreateRequest{
+				ProjectID: "project-1",
+			},
+			reason: WorkflowLabelErrorReasonInvalidName,
+			field:  "name",
+		},
+		{
+			name: "raw assignment bound",
+			request: WorkflowTaskLabelsUpdateRequest{
+				TaskID:      "task-1",
+				AddLabelIDs: raw101,
+			},
+			reason: WorkflowLabelErrorReasonInvalidMutation,
+			field:  "add_label_ids",
+		},
+		{
+			name: "labeled task create",
+			request: WorkflowTaskCreateRequest{
+				ProjectID: "project-1",
+				Title:     "Task",
+				LabelIDs:  raw101,
+			},
+			reason: WorkflowLabelErrorReasonInvalidMutation,
+			field:  "label_ids",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.request.ValidateRPC()
+			var typed *WorkflowLabelError
+			if !errors.As(err, &typed) || typed.Reason != tt.reason || typed.Field != tt.field {
+				t.Fatalf("ValidateRPC() error = %T %+v, want reason %q field %q", err, err, tt.reason, tt.field)
+			}
+		})
+	}
+}

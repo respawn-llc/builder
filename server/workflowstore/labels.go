@@ -26,6 +26,11 @@ type TaskLabelUpdateRequest struct {
 	RemoveLabelIDs []string
 }
 
+type TaskLabelScope struct {
+	ProjectID  string
+	WorkflowID workflow.WorkflowID
+}
+
 func (s *Store) CreateProjectLabel(ctx context.Context, projectID string, rawName string) (ProjectLabelRecord, error) {
 	trimmedProjectID := strings.TrimSpace(projectID)
 	name, err := label.PrepareName(rawName)
@@ -194,6 +199,10 @@ func (s *Store) GetTaskLabelIDs(ctx context.Context, taskID workflow.TaskID) ([]
 	})
 }
 
+func (s *Store) GetTaskLabelScope(ctx context.Context, taskID workflow.TaskID) (TaskLabelScope, error) {
+	return taskLabelScope(ctx, s.queries, taskID)
+}
+
 func (s *Store) UpdateTaskLabels(ctx context.Context, req TaskLabelUpdateRequest) ([]label.ID, error) {
 	addIDs, removeIDs, err := prepareTaskLabelUpdate(req)
 	if err != nil {
@@ -310,14 +319,25 @@ func parseUniqueLabelIDs(
 }
 
 func taskProjectForLabels(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) (string, error) {
+	scope, err := taskLabelScope(ctx, q, taskID)
+	if err != nil {
+		return "", err
+	}
+	return scope.ProjectID, nil
+}
+
+func taskLabelScope(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) (TaskLabelScope, error) {
 	row, err := q.GetTaskProjectWorkflowIDs(ctx, string(taskID))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", TaskLabelTaskNotFoundError{TaskID: string(taskID)}
+			return TaskLabelScope{}, TaskLabelTaskNotFoundError{TaskID: string(taskID)}
 		}
-		return "", err
+		return TaskLabelScope{}, err
 	}
-	return row.ProjectID, nil
+	return TaskLabelScope{
+		ProjectID:  row.ProjectID,
+		WorkflowID: workflow.WorkflowID(row.WorkflowID),
+	}, nil
 }
 
 func validateTaskLabelReferences(

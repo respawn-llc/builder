@@ -267,6 +267,50 @@ func TestGatewayRunPromptRejectsMixedTypedAndLegacyLaunchFields(t *testing.T) {
 	}
 }
 
+func TestGatewayWorkflowProjectLabelsRoundTrip(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+	handshakeGateway(t, conn)
+	callGateway(t, conn, "attach-project-labels", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
+
+	var created serverapi.WorkflowProjectLabelCreateResponse
+	callGateway(t, conn, "create-project-label", protocol.MethodWorkflowProjectLabelCreate, serverapi.WorkflowProjectLabelCreateRequest{
+		ProjectID: appCore.ProjectID(),
+		Name:      "Priority",
+	}, &created)
+	if created.Label.ID == "" || created.Label.Name != "Priority" {
+		t.Fatalf("created label = %+v", created.Label)
+	}
+
+	var listed serverapi.WorkflowProjectLabelCatalogResponse
+	callGateway(t, conn, "list-project-labels", protocol.MethodWorkflowProjectLabelList, serverapi.WorkflowProjectLabelCatalogRequest{
+		ProjectID: appCore.ProjectID(),
+	}, &listed)
+	if listed.Catalog.ProjectID != appCore.ProjectID() ||
+		len(listed.Catalog.Labels) != 1 ||
+		listed.Catalog.Labels[0] != created.Label {
+		t.Fatalf("listed catalog = %+v, want created label", listed.Catalog)
+	}
+
+	duplicate := callGatewayExpectError(t, conn, "duplicate-project-label", protocol.MethodWorkflowProjectLabelCreate, serverapi.WorkflowProjectLabelCreateRequest{
+		ProjectID: appCore.ProjectID(),
+		Name:      "priority",
+	})
+	if duplicate.Code != protocol.ErrCodeWorkflowLabel {
+		t.Fatalf("duplicate label error = %+v, want workflow label code", duplicate)
+	}
+	decoded, ok := serverapi.DecodeWorkflowLabelError(duplicate.Data, duplicate.Message).(*serverapi.WorkflowLabelError)
+	if !ok ||
+		decoded.Reason != serverapi.WorkflowLabelErrorReasonNameConflict ||
+		decoded.ProjectID != appCore.ProjectID() {
+		t.Fatalf("decoded duplicate label error = %+v", decoded)
+	}
+}
+
 func TestDecodeAndHandlePreservesWorkflowTaskListScopeError(t *testing.T) {
 	projectID := "project-1"
 	workflowID := "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
@@ -333,6 +377,55 @@ func TestDecodeAndHandlePreservesWorkflowTaskCreateConflictError(t *testing.T) {
 	decoded, ok := serverapi.DecodeWorkflowTaskCreateConflictError(response.Error.Data, response.Error.Message).(*serverapi.WorkflowTaskCreateConflictError)
 	if !ok || decoded.Reason != source.Reason {
 		t.Fatalf("decoded conflict error = %+v, want %+v", decoded, source)
+	}
+}
+
+func TestDecodeAndHandlePreservesWorkflowLabelError(t *testing.T) {
+	source := &serverapi.WorkflowLabelError{
+		Reason:    serverapi.WorkflowLabelErrorReasonNameConflict,
+		ProjectID: "project-1",
+	}
+	response := decodeAndHandle[serverapi.WorkflowProjectLabelCreateRequest, struct{}](
+		protocol.Request{ID: "label-conflict", Params: mustJSON(t, serverapi.WorkflowProjectLabelCreateRequest{
+			ProjectID: "project-1",
+			Name:      "Priority",
+		})},
+		func(serverapi.WorkflowProjectLabelCreateRequest) (struct{}, error) {
+			return struct{}{}, source
+		},
+	)
+	if response.Error == nil || response.Error.Code != protocol.ErrCodeWorkflowLabel {
+		t.Fatalf("response error = %+v, want workflow label code", response.Error)
+	}
+	decoded, ok := serverapi.DecodeWorkflowLabelError(response.Error.Data, response.Error.Message).(*serverapi.WorkflowLabelError)
+	if !ok || decoded.Reason != source.Reason || decoded.ProjectID != source.ProjectID {
+		t.Fatalf("decoded label error = %+v, want %+v", decoded, source)
+	}
+}
+
+func TestDecodeAndHandleMapsMalformedTaskLabelMutationToTypedError(t *testing.T) {
+	raw101 := make([]string, serverapi.WorkflowLabelMaxIDs+1)
+	for index := range raw101 {
+		raw101[index] = "not-a-uuid"
+	}
+	response := decodeAndHandle[serverapi.WorkflowTaskLabelsUpdateRequest, struct{}](
+		protocol.Request{ID: "invalid-label-mutation", Params: mustJSON(t, serverapi.WorkflowTaskLabelsUpdateRequest{
+			TaskID:      "task-1",
+			AddLabelIDs: raw101,
+		})},
+		func(serverapi.WorkflowTaskLabelsUpdateRequest) (struct{}, error) {
+			t.Fatal("handler called for malformed task label mutation")
+			return struct{}{}, nil
+		},
+	)
+	if response.Error == nil || response.Error.Code != protocol.ErrCodeWorkflowLabel {
+		t.Fatalf("response error = %+v, want workflow label code", response.Error)
+	}
+	decoded, ok := serverapi.DecodeWorkflowLabelError(response.Error.Data, response.Error.Message).(*serverapi.WorkflowLabelError)
+	if !ok ||
+		decoded.Reason != serverapi.WorkflowLabelErrorReasonInvalidMutation ||
+		decoded.Field != "add_label_ids" {
+		t.Fatalf("decoded mutation error = %+v", decoded)
 	}
 }
 

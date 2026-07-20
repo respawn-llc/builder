@@ -2240,6 +2240,13 @@ func (r WorkflowTaskListItem) Validate() error {
 	return validateLabelIDs("label_ids", r.LabelIDs)
 }
 
+func (r WorkflowTaskCreateRequest) ValidateRPC() error {
+	if err := validateLabelIDs("label_ids", r.LabelIDs); err != nil {
+		return workflowLabelRPCValidationError(err, r.ProjectID, "", false)
+	}
+	return r.Validate()
+}
+
 func (r WorkflowTaskListResponse) Validate() error {
 	for index, task := range r.Tasks {
 		if err := task.Validate(); err != nil {

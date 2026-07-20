@@ -619,7 +619,7 @@ func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowG
 }
 
 func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskCreateRequest) (serverapi.WorkflowTaskCreateResponse, error) {
-	if err := req.Validate(); err != nil {
+	if err := req.ValidateRPC(); err != nil {
 		return serverapi.WorkflowTaskCreateResponse{}, err
 	}
 	var workflowID *workflow.WorkflowID
@@ -627,9 +627,17 @@ func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.Workflow
 		value := workflow.WorkflowID(*req.WorkflowID)
 		workflowID = &value
 	}
-	task, err := s.store.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: req.ProjectID, WorkflowID: workflowID, Title: req.Title, Body: req.Body, SourceURL: req.SourceURL, SourceWorkspaceID: req.SourceWorkspaceID})
+	task, err := s.store.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID:         req.ProjectID,
+		WorkflowID:        workflowID,
+		Title:             req.Title,
+		Body:              req.Body,
+		SourceURL:         req.SourceURL,
+		SourceWorkspaceID: req.SourceWorkspaceID,
+		LabelIDs:          req.LabelIDs,
+	})
 	if err != nil {
-		return serverapi.WorkflowTaskCreateResponse{}, workflowTaskCreateError(err)
+		return serverapi.WorkflowTaskCreateResponse{}, workflowTaskCreateError(err, req.ProjectID)
 	}
 	s.publishProjectWorkflowEvent(ctx, task.ProjectID, string(task.WorkflowID), serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionCreated, string(task.ID))
 	detail, err := s.readModels.TaskDetail.GetTask(ctx, string(task.ID))
@@ -639,7 +647,7 @@ func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.Workflow
 	return serverapi.WorkflowTaskCreateResponse{Task: detail.Summary}, nil
 }
 
-func workflowTaskCreateError(err error) error {
+func workflowTaskCreateError(err error, projectID string) error {
 	var selectionErr workflowstore.TaskWorkflowSelectionError
 	if errors.As(err, &selectionErr) {
 		var reason serverapi.WorkflowTaskCreateSelectionReason
@@ -670,7 +678,7 @@ func workflowTaskCreateError(err error) error {
 			Reason: serverapi.WorkflowTaskCreateConflictReasonSerialization,
 		}
 	}
-	return err
+	return workflowLabelError(err, projectID, "")
 }
 
 func (s *Service) UpdateWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskUpdateRequest) (serverapi.WorkflowTaskUpdateResponse, error) {
