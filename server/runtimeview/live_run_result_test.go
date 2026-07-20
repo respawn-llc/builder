@@ -49,6 +49,25 @@ func TestTranscriptProjectsLiveRunResultWithoutRuntimeIDs(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "failure after final answer",
+			result: runtime.LiveRunResult{
+				Status:           runtime.RunStatusFailed,
+				ResultKind:       runtime.LiveRunResultAssistantFinalAnswer,
+				AssistantMessage: llm.Message{Role: llm.RoleAssistant, Content: "partial final"},
+				Error:            errors.New("follow-up failed"),
+				StartedAt:        startedAt,
+				FinishedAt:       finishedAt,
+			},
+			check: func(t *testing.T, result clientui.TranscriptLiveRunResult) {
+				if result.FinalAnswer == nil || *result.FinalAnswer != "partial final" {
+					t.Fatalf("final answer = %+v", result.FinalAnswer)
+				}
+				if result.Failure == nil || *result.Failure != "follow-up failed" {
+					t.Fatalf("failure = %+v", result.Failure)
+				}
+			},
+		},
 	}
 
 	for _, test := range tests {

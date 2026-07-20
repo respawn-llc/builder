@@ -41,18 +41,19 @@ func (r TranscriptLiveRunResult) Validate() error {
 		if r.FinalAnswer == nil {
 			return fmt.Errorf("final-answer live run requires final answer")
 		}
-		if r.Failure != nil {
-			return fmt.Errorf("final-answer live run cannot carry failure")
-		}
 	case LiveRunResultNoFinalAnswer:
 		if r.FinalAnswer != nil {
 			return fmt.Errorf("no-final live run cannot carry final answer")
 		}
-		if r.Status == LiveRunStatusFailed && (r.Failure == nil || strings.TrimSpace(*r.Failure) == "") {
-			return fmt.Errorf("failed live run requires failure")
-		}
 	default:
 		return fmt.Errorf("unknown live-run result kind %q", r.ResultKind)
+	}
+	if r.Status == LiveRunStatusFailed {
+		if r.Failure == nil || strings.TrimSpace(*r.Failure) == "" {
+			return fmt.Errorf("failed live run requires failure")
+		}
+	} else if r.Failure != nil {
+		return fmt.Errorf("non-failed live run cannot carry failure")
 	}
 	if r.StartedAt.IsZero() || r.FinishedAt.IsZero() {
 		return fmt.Errorf("live-run timestamps are required")
