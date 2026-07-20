@@ -20,6 +20,66 @@ func (s *recordingLifecycleEnvelopeSink) EnqueueLifecycleEnvelope(envelope lifec
 	return true
 }
 
+func TestClientLifecycleCoordinatorMapsAttachmentOpenExactlyOnceWithoutHydrationReplay(t *testing.T) {
+	sink := &recordingLifecycleEnvelopeSink{}
+	taskID, err := lifecyclecontract.ParseWorkflowTaskID("task-1")
+	if err != nil {
+		t.Fatalf("parse workflow task id: %v", err)
+	}
+	sessionID := runtimeids.NewSessionID()
+	title := "opened session"
+	coordinator := newClientLifecycleCoordinator(
+		sink,
+		nil,
+		func() bool { return true },
+		nil,
+	)
+
+	coordinator.AcceptAttachmentOpen(clientHookAttachmentOpenFact{
+		occurredAt:     time.Unix(3, 0).UTC(),
+		openingKind:    lifecyclecontract.OpeningKindResumed,
+		sessionID:      sessionID,
+		sessionTitle:   &title,
+		workflowTaskID: &taskID,
+	})
+	coordinator.AcceptSessionIdentity(clientui.TranscriptSessionIdentity{
+		SessionID: sessionID,
+	})
+
+	if len(sink.envelopes) != 1 {
+		t.Fatalf("attachment open plus identity hydration emitted %d envelopes, want one", len(sink.envelopes))
+	}
+	raw, err := json.Marshal(sink.envelopes[0])
+	if err != nil {
+		t.Fatalf("marshal attachment open envelope: %v", err)
+	}
+	var got struct {
+		Category   lifecyclecontract.Category `json:"category"`
+		OccurredAt time.Time                  `json:"occurred_at"`
+		Focused    bool                       `json:"focused"`
+		Context    struct {
+			SessionID      string `json:"session_id"`
+			SessionTitle   string `json:"session_title"`
+			WorkflowTaskID string `json:"workflow_task_id"`
+		} `json:"context"`
+		Details struct {
+			Kind lifecyclecontract.OpeningKind `json:"kind"`
+		} `json:"details"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode attachment open envelope: %v", err)
+	}
+	if got.Category != lifecyclecontract.CategorySessionStart ||
+		!got.OccurredAt.Equal(time.Unix(3, 0).UTC()) ||
+		!got.Focused ||
+		got.Context.SessionID != sessionID.String() ||
+		got.Context.SessionTitle != title ||
+		got.Context.WorkflowTaskID != taskID.String() ||
+		got.Details.Kind != lifecyclecontract.OpeningKindResumed {
+		t.Fatalf("attachment open envelope = %+v", got)
+	}
+}
+
 func TestClientLifecycleCoordinatorEmitsImmediateTaskCompletion(t *testing.T) {
 	sink := &recordingLifecycleEnvelopeSink{}
 	coordinator := newClientLifecycleCoordinator(

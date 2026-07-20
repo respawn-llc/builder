@@ -42,7 +42,7 @@ func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.
 	defer closeRuntimeLaunchPlan(t, runtimePlan)
 
 	submissionDone, submissionFailed := startAppTestRuntimeSubmission(t, runtimePlan.Wiring.runtimeClient, "start prompt snapshot")
-	prompts := waitForRemoteTranscriptPrompts(t, runtimePlan.Wiring.transcriptEvents, 2, "", submissionFailed)
+	prompts := waitForRemoteTranscriptPrompts(t, runtimePlan.Wiring.eventDispatcher.transcriptEvents, 2, "", submissionFailed)
 	for _, prompt := range prompts {
 		switch prompt.Kind {
 		case clientui.TranscriptPromptKindQuestion:

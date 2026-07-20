@@ -9,7 +9,45 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/lifecyclecontract"
+	"core/shared/runtimeids"
 )
+
+func TestUIEventDispatcherDrainsAttachmentOpenBeforeReadyExternalSources(t *testing.T) {
+	transcriptEvents := make(chan ongoingTranscriptEvent, 1)
+	transcriptEvents <- ongoingTranscriptEvent{Kind: ongoingTranscriptEventLoss}
+	dispatcher := newUIEventDispatcher(transcriptEvents)
+	sessionID := runtimeids.NewSessionID()
+	opened := clientHookAttachmentOpenFact{
+		occurredAt:  time.Unix(1, 0).UTC(),
+		openingKind: lifecyclecontract.OpeningKindNew,
+		sessionID:   sessionID,
+	}
+	if installed := dispatcher.OpenClientHookAttachment(opened); !installed {
+		t.Fatal("first attachment open was not installed")
+	}
+	if installed := dispatcher.OpenClientHookAttachment(opened); installed {
+		t.Fatal("repeated attachment open installed a duplicate initial event")
+	}
+
+	first := dispatcher.wait()()
+	dispatched, ok := first.(uiDispatchedEventMsg)
+	if !ok {
+		t.Fatalf("first dispatcher message = %T, want typed dispatched event", first)
+	}
+	accepted, ok := dispatched.event.(uiAcceptedClientHookAttachmentOpen)
+	if !ok || accepted.fact.sessionID != sessionID {
+		t.Fatalf("first accepted event = %+v / %t, want attachment open", dispatched.event, ok)
+	}
+
+	second := dispatcher.wait()()
+	dispatched, ok = second.(uiDispatchedEventMsg)
+	if !ok {
+		t.Fatalf("second dispatcher message = %T, want typed dispatched event", second)
+	}
+	if _, ok := dispatched.event.(uiAcceptedTranscriptEvent); !ok {
+		t.Fatalf("second accepted event = %T, want ready transcript event", dispatched.event)
+	}
+}
 
 func TestUIEventDispatcherReducesAttentionDiscontinuityAndRequestsReopen(t *testing.T) {
 	attentionEvents := make(chan attentionStreamOutcome, 1)

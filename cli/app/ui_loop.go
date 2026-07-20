@@ -35,7 +35,6 @@ type uiLoopRequest struct {
 	modelContractLocked          bool
 	configuredModelName          string
 	statusConfig                 uiStatusConfig
-	hookAttachmentPlan           *clientHookAttachmentPlan
 }
 
 func runUILoop(request uiLoopRequest) (tea.Model, error) {
@@ -102,7 +101,8 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		}
 		return nil, errors.New("runtime client is required")
 	}
-	if request.wiring.transcriptEvents == nil {
+	if request.wiring.eventDispatcher == nil ||
+		request.wiring.eventDispatcher.transcriptEvents == nil {
 		if tuiLogger != nil {
 			_ = tuiLogger.Close()
 		}
@@ -143,9 +143,9 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUITerminalCursorState(terminalCursor),
 		WithUIRendererOutputGateState(rendererOutputGate),
 		WithUIOngoingSurface(ongoingSurface),
-		WithUIOngoingTranscriptEvents(request.wiring.transcriptEvents),
+		WithUIEventDispatcher(request.wiring.eventDispatcher),
 		WithUIOngoingTranscriptReopen(request.wiring.requestTranscriptOpen),
-		WithUIAttentionEvents(request.wiring.attentionEvents, request.wiring.requestAttentionReopen),
+		WithUIClientLifecycleCoordinator(request.wiring.lifecycleCoordinator),
 		WithUITerminalFocusState(request.wiring.terminalFocus),
 	)
 	model, ok := rawModel.(*uiModel)

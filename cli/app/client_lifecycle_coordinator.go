@@ -48,6 +48,29 @@ func newClientLifecycleCoordinator(
 	}
 }
 
+func (c *clientLifecycleCoordinator) AcceptAttachmentOpen(fact clientHookAttachmentOpenFact) {
+	if c == nil || c.sink == nil {
+		return
+	}
+	if err := fact.validate(); err != nil {
+		panic(fmt.Sprintf("accept client hook attachment open fact: %v", err))
+	}
+	sessionID := fact.sessionID
+	c.sessionID = &sessionID
+	c.sessionTitle = nil
+	if fact.sessionTitle != nil {
+		title := strings.Clone(*fact.sessionTitle)
+		c.sessionTitle = &title
+	}
+	c.emit(
+		lifecyclecontract.CategorySessionStart,
+		fact.occurredAt,
+		lifecyclecontract.NewSessionStartDetails(fact.openingKind),
+		nil,
+		fact.workflowTaskID,
+	)
+}
+
 func (c *clientLifecycleCoordinator) AcceptLiveRunBatchFinished(
 	fact clientui.TranscriptLiveRunBatchFinished,
 ) {

@@ -8,10 +8,9 @@ import (
 type runtimeWiring struct {
 	nativeTurnNotifications *nativeTurnNotificationObserver
 	terminalFocus           *terminalFocusState
-	transcriptEvents        <-chan ongoingTranscriptEvent
+	eventDispatcher         *uiEventDispatcher
+	lifecycleCoordinator    *clientLifecycleCoordinator
 	requestTranscriptOpen   func()
-	attentionEvents         <-chan attentionStreamOutcome
-	requestAttentionReopen  func()
 	promptAnswers           *transcriptPromptAnswerer
 	promptAttention         *nativeTurnNotificationObserver
 	runtimeClient           clientui.RuntimeClient

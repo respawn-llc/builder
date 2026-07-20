@@ -53,26 +53,41 @@ type resolvedSessionPlanRequest struct {
 }
 
 type runtimeLaunchPlan struct {
-	Wiring      *runtimeWiring
-	close       func() error
-	detachClose func() error
+	Wiring                  *runtimeWiring
+	lifecycleHookDispatcher *lifecycleHookDispatcher
+	close                   func() error
+	detachClose             func() error
 }
 
 func (p *runtimeLaunchPlan) Close() error {
-	if p == nil || p.close == nil {
+	if p == nil {
 		return nil
 	}
-	return p.close()
+	var hookErr error
+	if p.lifecycleHookDispatcher != nil {
+		hookErr = p.lifecycleHookDispatcher.Close()
+	}
+	if p.close == nil {
+		return hookErr
+	}
+	return errors.Join(hookErr, p.close())
 }
 
 func (p *runtimeLaunchPlan) DetachOnlyClose() error {
 	if p == nil {
 		return nil
 	}
-	if p.detachClose != nil {
-		return p.detachClose()
+	var hookErr error
+	if p.lifecycleHookDispatcher != nil {
+		hookErr = p.lifecycleHookDispatcher.Close()
 	}
-	return p.Close()
+	if p.detachClose != nil {
+		return errors.Join(hookErr, p.detachClose())
+	}
+	if p.close != nil {
+		return errors.Join(hookErr, p.close())
+	}
+	return hookErr
 }
 
 type sessionPickerRunner func(sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error)

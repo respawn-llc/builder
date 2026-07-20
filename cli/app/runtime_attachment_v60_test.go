@@ -112,7 +112,8 @@ func TestRuntimeAttachmentWithoutAttentionServiceUsesTranscriptFallback(t *testi
 	if err != nil {
 		t.Fatalf("prepareSharedRuntime: %v", err)
 	}
-	if plan.Wiring.attentionEvents != nil || plan.Wiring.requestAttentionReopen != nil {
+	if plan.Wiring.eventDispatcher.attentionEvents != nil ||
+		plan.Wiring.eventDispatcher.requestAttentionReopen != nil {
 		t.Fatal("runtime wiring created an attention stream without an attention service")
 	}
 	if plan.Wiring.promptAttention == nil || plan.Wiring.promptAttention != plan.Wiring.nativeTurnNotifications {
@@ -160,7 +161,8 @@ func TestRuntimeAttachmentSupportedAttentionSubscribesSessionSnapshot(t *testing
 	if plan.Wiring.promptAttention != nil {
 		t.Fatal("runtime wiring retained transcript prompt fallback alongside the attention stream")
 	}
-	if plan.Wiring.attentionEvents == nil || plan.Wiring.requestAttentionReopen == nil {
+	if plan.Wiring.eventDispatcher.attentionEvents == nil ||
+		plan.Wiring.eventDispatcher.requestAttentionReopen == nil {
 		t.Fatal("runtime wiring omitted the owned attention stream")
 	}
 	select {

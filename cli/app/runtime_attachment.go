@@ -102,6 +102,7 @@ func prepareSharedRuntimeWiring(
 	}
 	transcriptStream := startSessionTranscriptEvents(ctx, plan.SessionID, subscribeTranscript)
 	transcriptEvents := transcriptStream.Events
+	eventDispatcher := newUIEventDispatcher(transcriptEvents)
 	requestTranscriptOpen := transcriptStream.RequestRehydration
 	var attentionStream *attentionEventStream
 	if clients.AttentionNotifications != nil {
@@ -130,7 +131,7 @@ func prepareSharedRuntimeWiring(
 		promptAttention = nil
 	}
 	wiring := &runtimeWiring{
-		transcriptEvents:        transcriptEvents,
+		eventDispatcher:         eventDispatcher,
 		requestTranscriptOpen:   requestTranscriptOpen,
 		promptAnswers:           newTranscriptPromptAnswerer(ctx, clients.PromptControl),
 		promptAttention:         promptAttention,
@@ -144,8 +145,8 @@ func prepareSharedRuntimeWiring(
 		promptHistory:           append([]string(nil), plan.PromptHistory...),
 	}
 	if attentionStream != nil {
-		wiring.attentionEvents = attentionStream.events
-		wiring.requestAttentionReopen = attentionStream.RequestReopen
+		eventDispatcher.attentionEvents = attentionStream.events
+		eventDispatcher.requestAttentionReopen = attentionStream.RequestReopen
 	}
 	return wiring, stopEventStreams
 }

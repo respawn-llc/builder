@@ -278,6 +278,9 @@ func prepareSessionUIRun(
 	if err != nil {
 		return nil, uiLoopRequest{}, closeRuntimePlanAfterPreparationFailure(runtimePlan, err)
 	}
+	if err := openClientHookAttachment(runtimePlan, hookAttachmentPlan, plan.ActiveSettings.Debug); err != nil {
+		return nil, uiLoopRequest{}, closeRuntimePlanAfterPreparationFailure(runtimePlan, err)
+	}
 	return runtimePlan, uiLoopRequest{
 		wiring:                       runtimePlan.Wiring,
 		active:                       plan.ActiveSettings,
@@ -290,7 +293,6 @@ func prepareSessionUIRun(
 		modelContractLocked:          plan.ModelContractLocked,
 		configuredModelName:          plan.ConfiguredModelName,
 		statusConfig:                 plan.StatusConfig,
-		hookAttachmentPlan:           hookAttachmentPlan,
 	}, nil
 }
 

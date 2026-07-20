@@ -414,9 +414,9 @@ func TestRemoteBackRebindsToParentProjectBeforeRuntimePreparation(t *testing.T) 
 	if request.initialInput != "target project draft" || request.active.Model != "target-project-model" {
 		t.Fatalf("prepared target UI input/model = %q/%q", request.initialInput, request.active.Model)
 	}
-	if request.hookAttachmentPlan == nil ||
-		!reflect.DeepEqual(request.hookAttachmentPlan.Argv(), []string{"client-notifier", "--fixed"}) {
-		t.Fatalf("prepared rebound hook attachment plan = %+v, want captured client argv", request.hookAttachmentPlan)
+	if runtimePlan.lifecycleHookDispatcher == nil ||
+		!reflect.DeepEqual(runtimePlan.lifecycleHookDispatcher.argv, []string{"client-notifier", "--fixed"}) {
+		t.Fatalf("prepared rebound lifecycle dispatcher = %+v, want captured client argv", runtimePlan.lifecycleHookDispatcher)
 	}
 }
 

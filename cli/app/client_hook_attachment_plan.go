@@ -90,3 +90,17 @@ func (p clientHookAttachmentPlan) WorkflowTaskID() *lifecyclecontract.WorkflowTa
 	taskID := *p.workflowTaskID
 	return &taskID
 }
+
+func (p clientHookAttachmentPlan) lifecycleContext() lifecyclecontract.Context {
+	sessionID := p.sessionID
+	context := lifecyclecontract.Context{SessionID: &sessionID}
+	if p.sessionTitle != nil {
+		title := strings.Clone(*p.sessionTitle)
+		context.SessionTitle = &title
+	}
+	if p.workflowTaskID != nil {
+		taskID := *p.workflowTaskID
+		context.WorkflowTaskID = &taskID
+	}
+	return context
+}
