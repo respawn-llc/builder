@@ -184,15 +184,8 @@ type Engine struct {
 	activeStepGoalMutationsMu  sync.Mutex
 	activeStepGoalMutations    map[string][]activeStepGoalMutation
 	pendingGoalLoopStart       bool
-	// userInjectionScopeMu guards activeUserInjectionScope, the queued
-	// user-injection IDs the in-flight top-level step should flush. The engine
-	// owns this scope so the step executor derives it directly and reviewer
-	// follow-ups inherit it, instead of the supervisor threading injection IDs.
-	userInjectionScopeMu     sync.Mutex
-	activeUserInjectionScope map[string]struct{}
-
-	diagnostics    *diagnosticDedupeStore
-	toolCallStarts *pendingToolCallStartStore
+	diagnostics                *diagnosticDedupeStore
+	toolCallStarts             *pendingToolCallStartStore
 
 	usageState         *usageTrackingState
 	goalLoop           *goalLoopState
@@ -534,6 +527,11 @@ func (e *Engine) QueueUserMessageWithClientRequestID(text string, clientRequestI
 
 func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestID string, forceAutoDrain bool) QueuedUserMessage {
 	e.ensureOrchestrationCollaborators()
+	if !forceAutoDrain {
+		item := e.messageFlow.QueueUserMessage(text, clientRequestID)
+		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+		return item
+	}
 	liveItem := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: text, ClientRequestID: clientRequestID}
 	waitedForLiveRunStep := false
 	for {
@@ -562,10 +560,8 @@ func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestI
 	}
 	item := e.messageFlow.QueueUserMessage(text, clientRequestID)
 	e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-	if forceAutoDrain || (!waitedForLiveRunStep && e.stepLifecycle != nil && e.stepLifecycle.IsBusy()) {
-		e.markQueuedUserInjectionForAutoDrain(item.ID)
-		e.scheduleQueuedUserInjectionsIfIdle()
-	}
+	e.markQueuedUserInjectionForAutoDrain(item.ID)
+	e.scheduleQueuedUserInjectionsIfIdle()
 	return item
 }
 
@@ -758,16 +754,10 @@ func (e *Engine) submitUserShellCommand(ctx context.Context, command string, onA
 }
 
 func (e *Engine) runStepLoop(ctx context.Context, stepID string) (llm.Message, error) {
-	return e.runStepLoopWithPendingUserInjectionIDs(ctx, stepID, nil)
+	return e.runStepLoopWithPendingUserInjectionObserver(ctx, stepID, nil)
 }
 
-func (e *Engine) runStepLoopWithPendingUserInjectionIDs(ctx context.Context, stepID string, queueItemIDs map[string]struct{}) (llm.Message, error) {
-	return e.runStepLoopWithPendingUserInjectionObserver(ctx, stepID, queueItemIDs, nil)
-}
-
-func (e *Engine) runStepLoopWithPendingUserInjectionObserver(ctx context.Context, stepID string, queueItemIDs map[string]struct{}, onQueuedUserFlushCommitted func(session.CommitReceipt)) (llm.Message, error) {
-	restore := e.pushActiveUserInjectionScope(queueItemIDs)
-	defer restore()
+func (e *Engine) runStepLoopWithPendingUserInjectionObserver(ctx context.Context, stepID string, onQueuedUserFlushCommitted func(session.CommitReceipt)) (llm.Message, error) {
 	reviewerFrequency := e.ReviewerFrequency()
 	reviewerClient := e.reviewerRuntimeState().Client()
 	result, err := e.runStepLoopWithQueuedUserFlushObserver(ctx, stepID, reviewerFrequency, reviewerClient, true, onQueuedUserFlushCommitted)

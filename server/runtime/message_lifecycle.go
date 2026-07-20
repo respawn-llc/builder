@@ -294,31 +294,47 @@ func queuedUserMessagesForFlush(messages []queuedUserSteeringIntent) []QueuedUse
 	return items
 }
 
-// FlushPendingUserInjections flushes queued user injections for the step. An empty
-// queueItemIDs flushes every pending injection; a non-empty set flushes only those
-// IDs.
-func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, queueItemIDs map[string]struct{}) (int, session.CommitReceipt, error) {
-	var pending []queuedUserSteeringIntent
-	if len(queueItemIDs) == 0 {
-		pending = m.queue.Drain()
-	} else {
-		pending = m.queue.DrainByID(queueItemIDs)
+func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, selection userInjectionSelection) (int, session.CommitReceipt, error) {
+	result, err := m.CommitPendingUserInjections(stepID, selection)
+	if err != nil || !result.continueCombinedFlush {
+		return result.flushed, result.receipt, err
 	}
-	pending = m.engine.dropStoppedLiveRunQueueItems(pending)
-	return m.flushPendingUserInjections(stepID, pending)
+	flushed := result.flushed
+	pendingNotices := []steeringIntent(nil)
+	if m.background != nil {
+		pendingNotices = m.background.DrainPendingNotices()
+	}
+	for _, notice := range pendingNotices {
+		if err := m.engine.steer(stepID, notice); err != nil {
+			return flushed, result.receipt, err
+		}
+		flushed++
+	}
+	return flushed, result.receipt, nil
 }
 
-func (m *defaultMessageLifecycle) flushPendingUserInjections(stepID string, pending []queuedUserSteeringIntent) (int, session.CommitReceipt, error) {
+func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
+	var pending []queuedUserSteeringIntent
+	if selection.all {
+		pending = m.queue.Drain()
+	} else if len(selection.queueItemIDs) > 0 {
+		pending = m.queue.DrainByID(selection.queueItemIDs)
+	}
+	pending = m.engine.dropStoppedLiveRunQueueItems(pending)
+	return m.commitPendingUserInjections(stepID, pending)
+}
+
+func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pending []queuedUserSteeringIntent) (userInjectionCommitResult, error) {
 	e := m.engine
-	flushed := 0
-	var flushReceipt session.CommitReceipt
+	result := userInjectionCommitResult{continueCombinedFlush: true}
 
 	queuedMessages := normalizeQueuedUserMessages(pending)
 	if len(queuedMessages) > 0 {
 		pending = e.dropStoppedLiveRunQueueItems(pending)
 		queuedMessages = normalizeQueuedUserMessages(pending)
 		if len(queuedMessages) == 0 {
-			return flushed, flushReceipt, nil
+			result.continueCombinedFlush = false
+			return result, nil
 		}
 		joined := strings.Join(queuedMessages, "\n\n")
 		publishAllowed, err := e.commitLiveRunQueueItemsUnlessStopped(pending, func() error {
@@ -326,38 +342,29 @@ func (m *defaultMessageLifecycle) flushPendingUserInjections(stepID string, pend
 				stepID,
 				steerQueuedUserMessageFlushIntent(joined, queuedMessages, queuedUserMessagesForFlush(pending)),
 			)
-			flushReceipt = receipt
+			result.receipt = receipt
 			return persistErr
 		})
 		if err != nil {
-			if !flushReceipt.Committed {
+			if !result.receipt.Committed {
 				m.queue.RestoreFront(pending)
 			}
-			return flushed, flushReceipt, err
+			return result, err
 		}
 		if !publishAllowed {
 			for _, item := range pending {
 				e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
 				e.emitQueuedUserMessageStatus(item.message, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
 			}
-			return flushed, flushReceipt, nil
+			result.continueCombinedFlush = false
+			return result, nil
 		}
-		flushed++
+		result.flushed++
 	}
 	for _, item := range pending {
 		e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
 	}
-	pendingNotices := []steeringIntent(nil)
-	if m.background != nil {
-		pendingNotices = m.background.DrainPendingNotices()
-	}
-	for _, notice := range pendingNotices {
-		if err := e.steer(stepID, notice); err != nil {
-			return flushed, flushReceipt, err
-		}
-		flushed++
-	}
-	return flushed, flushReceipt, nil
+	return result, nil
 }
 
 func (m *defaultMessageLifecycle) QueueUserMessage(text string, clientRequestID string) QueuedUserMessage {

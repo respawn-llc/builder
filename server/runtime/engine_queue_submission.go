@@ -76,7 +76,7 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 			if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 				return err
 			}
-			flushed, flushReceipt, err := e.flushPendingUserInjections(stepID, queueItemIDs)
+			flushed, flushReceipt, err := e.flushPendingUserInjections(stepID, allPendingUserInjections())
 			if flushReceipt.Committed {
 				receipt = flushReceipt
 			}
@@ -86,7 +86,7 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 			if flushed == 0 {
 				return nil
 			}
-			msg, runErr := e.runStepLoopWithPendingUserInjectionObserver(stepCtx, stepID, queueItemIDs, func(flushReceipt session.CommitReceipt) {
+			msg, runErr := e.runStepLoopWithPendingUserInjectionObserver(stepCtx, stepID, func(flushReceipt session.CommitReceipt) {
 				receipt = flushReceipt
 			})
 			assistant = msg
@@ -220,10 +220,6 @@ func (e *Engine) scheduleQueuedUserInjectionsIfIdle() bool {
 		e.queuedUserWorkMu.Unlock()
 		return true
 	}
-	if len(e.queuedUserWorkAutoDrainIDs) == 0 {
-		e.queuedUserWorkMu.Unlock()
-		return false
-	}
 	e.queuedUserWorkScheduled = true
 	e.queuedUserWorkMu.Unlock()
 	if !e.launchLifecycleTask(e.processQueuedUserWork) {
@@ -241,14 +237,12 @@ func (e *Engine) processQueuedUserWork(ctx context.Context) {
 			return
 		}
 		e.ensureOrchestrationCollaborators()
-		if e.messageFlow.HasPendingUserInjections() && e.hasQueuedUserAutoDrainIDs() {
+		if e.messageFlow.HasPendingUserInjections() {
 			e.scheduleQueuedUserInjectionsIfIdle()
 		}
 	}()
-	if !e.hasQueuedUserAutoDrainIDs() {
-		if e.backgroundFlow != nil {
-			e.backgroundFlow.ScheduleIfIdle()
-		}
+	if err := e.waitQueuedUserAutoDrainAllowed(ctx); err != nil {
+		e.surfaceRunError(err)
 		return
 	}
 	ids := e.queuedUserAutoDrainIDSnapshot()
@@ -292,31 +286,6 @@ func (e *Engine) queuedUserAutoDrainIDSnapshot() map[string]struct{} {
 		out[id] = struct{}{}
 	}
 	return out
-}
-
-// pushActiveUserInjectionScope records the queued user-injection IDs the in-flight
-// step (and its nested reviewer follow-up) should flush, returning a restore func
-// that reinstates the prior scope. The step executor reads this scope so reviewer
-// follow-ups inherit it without the supervisor carrying injection IDs.
-func (e *Engine) pushActiveUserInjectionScope(ids map[string]struct{}) func() {
-	e.userInjectionScopeMu.Lock()
-	previous := e.activeUserInjectionScope
-	e.activeUserInjectionScope = cloneMapIfNonEmpty(ids)
-	e.userInjectionScopeMu.Unlock()
-	return func() {
-		e.userInjectionScopeMu.Lock()
-		e.activeUserInjectionScope = previous
-		e.userInjectionScopeMu.Unlock()
-	}
-}
-
-func (e *Engine) activeUserInjectionScopeSnapshot() map[string]struct{} {
-	if e == nil {
-		return nil
-	}
-	e.userInjectionScopeMu.Lock()
-	defer e.userInjectionScopeMu.Unlock()
-	return cloneMapIfNonEmpty(e.activeUserInjectionScope)
 }
 
 func cloneMapIfNonEmpty[M ~map[K]V, K comparable, V any](in M) M {

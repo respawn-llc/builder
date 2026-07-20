@@ -542,10 +542,10 @@ func TestCapturedActiveRunResultWaitsForTaggedQueuedDrainResult(t *testing.T) {
 	}()
 	client.waitStarted(t)
 
-	queued := eng.QueueUserMessageWithClientRequestID("steer into drain", "req-queued")
+	queued, accepted, queueErr := eng.QueueUserMessageForActiveRun(context.Background(), "steer into drain", liveRunTestRequestID(t), nil)
 	handle, captureErr := eng.CaptureActiveRunResult(context.Background())
-	if queued.ID == "" || captureErr != nil {
-		t.Fatalf("queued=%+v capture error=%v", queued, captureErr)
+	if queued.ID == "" || !accepted || queueErr != nil || captureErr != nil {
+		t.Fatalf("queued=%+v accepted=%t queue error=%v capture error=%v", queued, accepted, queueErr, captureErr)
 	}
 	handle, err := eng.CaptureActiveRunResult(context.Background())
 	if err != nil {
