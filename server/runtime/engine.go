@@ -128,9 +128,10 @@ type Config struct {
 	// GlobalConfigDir is the absolute persistence root that owns model-visible
 	// global context (global AGENTS.md, system prompt file, skills, generated
 	// assets). Empty falls back to ~/.kent so default-root behavior is preserved.
-	GlobalConfigDir string
-	OnEvent         func(Event)
-	StepLifecycle   StepLifecycleSink
+	GlobalConfigDir       string
+	OnEvent               func(Event)
+	StepLifecycle         StepLifecycleSink
+	LifecycleTaskFinished func() error
 }
 
 type ReviewerConfig struct {
@@ -506,7 +507,12 @@ func (e *Engine) launchLifecycleTask(task func(context.Context)) bool {
 	ctx := e.lifecycleCtx
 	e.lifecycleMu.Unlock()
 	go func(ctx context.Context) {
-		defer e.lifecycleWG.Done()
+		defer func() {
+			e.lifecycleWG.Done()
+			if e.cfg.LifecycleTaskFinished != nil {
+				e.surfaceRunError(e.cfg.LifecycleTaskFinished())
+			}
+		}()
 		task(ctx)
 	}(ctx)
 	return true

@@ -616,14 +616,22 @@ func (s *Store) lookupWorkspaceBinding(ctx context.Context, workspaceRoot string
 	if s == nil || s.queries == nil {
 		return Binding{}, errors.New("metadata store is required")
 	}
+	return lookupWorkspaceBindingWithQueries(ctx, s.queries, workspaceRoot)
+}
+
+func lookupWorkspaceBindingWithQueries(ctx context.Context, q *sqlitegen.Queries, workspaceRoot string) (Binding, error) {
 	canonicalRoot, err := config.CanonicalWorkspaceRoot(workspaceRoot)
 	if err != nil {
 		return Binding{}, err
 	}
-	rows, err := s.queries.ListWorkspaceBindingsByCanonicalRoot(ctx, canonicalRoot)
+	rows, err := q.ListWorkspaceBindingsByCanonicalRoot(ctx, canonicalRoot)
 	if err != nil {
 		return Binding{}, err
 	}
+	return bindingFromCanonicalRootRows(canonicalRoot, rows)
+}
+
+func bindingFromCanonicalRootRows(canonicalRoot string, rows []sqlitegen.ListWorkspaceBindingsByCanonicalRootRow) (Binding, error) {
 	switch len(rows) {
 	case 0:
 		return Binding{}, sql.ErrNoRows
@@ -1118,19 +1126,15 @@ func (s *Store) registerWorkspaceBindingConverged(ctx context.Context, canonical
 	if err != nil {
 		return Binding{}, fmt.Errorf("lookup workspace binding: %w", err)
 	}
-	switch len(rows) {
-	case 0:
-	case 1:
+	binding, err := bindingFromCanonicalRootRows(canonicalRoot, rows)
+	if err == nil {
 		if err := tx.Commit(); err != nil {
 			return Binding{}, fmt.Errorf("commit workspace registration lookup tx: %w", err)
 		}
-		return bindingFromCanonicalRootRow(rows[0]), nil
-	default:
-		projectIDs := make([]string, 0, len(rows))
-		for _, row := range rows {
-			projectIDs = append(projectIDs, row.ProjectID)
-		}
-		return Binding{}, serverapi.WorkspaceBindingAmbiguousError{CanonicalRoot: canonicalRoot, ProjectIDs: projectIDs}
+		return binding, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return Binding{}, err
 	}
 
 	now := time.Now().UTC()
@@ -2046,7 +2050,32 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 		}
 		snapshot.Meta.Continuation = continuation
 	}
-	existingTarget, targetErr := s.queries.GetSessionExecutionTargetByID(ctx, strings.TrimSpace(snapshot.Meta.SessionID))
+	relpath, err := relativePathWithinRoot(s.persistenceRoot, snapshot.SessionDir)
+	if err != nil {
+		return err
+	}
+	continuationJSON, err := marshalJSON(snapshot.Meta.Continuation)
+	if err != nil {
+		return err
+	}
+	lockedJSON, err := marshalJSON(snapshot.Meta.Locked)
+	if err != nil {
+		return err
+	}
+	usageStateJSON, err := marshalJSON(snapshot.Meta.UsageState)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin session snapshot import tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	if _, err := q.AcquireWorkspaceRegistrationLock(ctx); err != nil {
+		return fmt.Errorf("lock session snapshot import: %w", err)
+	}
+	existingTarget, targetErr := q.GetSessionExecutionTargetByID(ctx, strings.TrimSpace(snapshot.Meta.SessionID))
 	if targetErr != nil && !errors.Is(targetErr, sql.ErrNoRows) {
 		return fmt.Errorf("get existing session execution target: %w", targetErr)
 	}
@@ -2078,27 +2107,13 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 		worktreeID = existingTarget.WorktreeID
 		cwdRelpath = normalizeSessionCwdRelpath(existingTarget.CwdRelpath)
 	} else {
-		var err error
-		binding, err = s.EnsureWorkspaceBinding(ctx, snapshot.Meta.WorkspaceRoot)
+		binding, err = lookupWorkspaceBindingWithQueries(ctx, q, snapshot.Meta.WorkspaceRoot)
+		if errors.Is(err, sql.ErrNoRows) {
+			return serverapi.ErrWorkspaceNotRegistered
+		}
 		if err != nil {
 			return err
 		}
-	}
-	relpath, err := relativePathWithinRoot(s.persistenceRoot, snapshot.SessionDir)
-	if err != nil {
-		return err
-	}
-	continuationJSON, err := marshalJSON(snapshot.Meta.Continuation)
-	if err != nil {
-		return err
-	}
-	lockedJSON, err := marshalJSON(snapshot.Meta.Locked)
-	if err != nil {
-		return err
-	}
-	usageStateJSON, err := marshalJSON(snapshot.Meta.UsageState)
-	if err != nil {
-		return err
 	}
 	metadataJSON, err := marshalJSON(map[string]any{
 		"workspace_root":                     workspaceRoot,
@@ -2121,7 +2136,7 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 	if sessionLaunchVisible(snapshot.Meta) {
 		launchVisible = 1
 	}
-	return s.queries.UpsertSession(ctx, sqlitegen.UpsertSessionParams{
+	if err := q.UpsertSession(ctx, sqlitegen.UpsertSessionParams{
 		ID:                   snapshot.Meta.SessionID,
 		ProjectID:            binding.ProjectID,
 		WorkspaceID:          sql.NullString{String: binding.WorkspaceID, Valid: strings.TrimSpace(binding.WorkspaceID) != ""},
@@ -2143,7 +2158,13 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 		LockedJson:           lockedJSON,
 		UsageStateJson:       usageStateJSON,
 		MetadataJson:         metadataJSON,
-	})
+	}); err != nil {
+		return fmt.Errorf("upsert session snapshot: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit session snapshot import tx: %w", err)
+	}
+	return nil
 }
 
 func canonicalWorkspaceRootsEqual(left string, right string) (bool, error) {

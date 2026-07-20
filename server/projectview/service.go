@@ -490,7 +490,11 @@ func (s *Service) countBlockingRuntimeActivity(ctx context.Context, sessionIDs [
 	}
 	count := 0
 	for _, sessionID := range ids {
-		if _, active := s.authority.SessionExecution(sessionID); active {
+		active, err := s.authority.HasBlockingRuntimeActivity(ctx, sessionID.String())
+		if err != nil {
+			return 0, err
+		}
+		if active {
 			count++
 		}
 	}

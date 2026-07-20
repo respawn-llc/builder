@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
+	"core/server/attentionnotify"
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
@@ -23,6 +25,17 @@ type registryRetention chan struct{}
 
 func (retention registryRetention) Close() error {
 	close(retention)
+	return nil
+}
+
+type registryBlockingRetention struct {
+	closeStarted chan struct{}
+	release      <-chan struct{}
+}
+
+func (retention *registryBlockingRetention) Close() error {
+	close(retention.closeStarted)
+	<-retention.release
 	return nil
 }
 
@@ -132,18 +145,77 @@ func TestAuthorityRuntimeDrainClosesSubscriptionsAndReleasesRetention(t *testing
 	if err := registry.ResourceDraining(context.Background(), registryTestResource(ref)); err != nil {
 		t.Fatalf("drain authority runtime resource: %v", err)
 	}
+	var lastMessage clientui.TranscriptMessage
 	var nextErr error
 	for nextErr == nil {
-		_, nextErr = sub.Next(context.Background())
+		var message clientui.TranscriptMessage
+		message, nextErr = sub.Next(context.Background())
+		if nextErr == nil {
+			lastMessage = message
+		}
 	}
 	if !errors.Is(nextErr, io.EOF) {
 		t.Fatalf("subscription close error = %v, want EOF", nextErr)
+	}
+	if lastMessage.Kind != clientui.TranscriptMessageRuntimeReadModelUpdate ||
+		lastMessage.Payload.RuntimeReadModelUpdate == nil ||
+		lastMessage.Payload.RuntimeReadModelUpdate.Activity.State != clientui.RuntimeActivityUnavailable {
+		t.Fatalf("last transcript message before EOF = %+v, want unavailable runtime read-model update", lastMessage)
 	}
 	select {
 	case <-retentionClosed:
 	default:
 		t.Fatal("registry drain did not release transcript retention")
 	}
+}
+
+func TestAuthorityRuntimeDrainCannotRestoreAggregateActivityAfterTerminalState(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	ref := registryTestResourceRef(engine.SessionID())
+	retentionCloseStarted := make(chan struct{})
+	retentionRelease := make(chan struct{})
+	var releaseRetention sync.Once
+	release := func() {
+		releaseRetention.Do(func() { close(retentionRelease) })
+	}
+	t.Cleanup(release)
+	if err := registry.ResourceReady(context.Background(), registryTestResource(ref), engine, func() (io.Closer, error) {
+		return &registryBlockingRetention{closeStarted: retentionCloseStarted, release: retentionRelease}, nil
+	}); err != nil {
+		t.Fatalf("register authority runtime resource: %v", err)
+	}
+	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
+	defer func() { _ = sub.Close() }()
+	_ = nextTranscriptMessage(t, sub)
+	notifications := make(chan bool, 3)
+	registry.SetSleepObserver(func(active bool) { notifications <- active })
+	defer registry.SetSleepObserver(nil)
+
+	drainResult := make(chan error, 1)
+	go func() {
+		drainResult <- registry.ResourceDraining(context.Background(), registryTestResource(ref))
+	}()
+	select {
+	case <-retentionCloseStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for retention close")
+	}
+	if active := receiveSleepObserverState(t, notifications); !active {
+		t.Fatal("expected draining runtime to activate aggregate activity")
+	}
+	if active := receiveSleepObserverState(t, notifications); active {
+		t.Fatal("expected terminal runtime state to clear aggregate activity")
+	}
+
+	publishRunState(registry, engine.SessionID(), true)
+	assertNoSleepObserverState(t, notifications)
+
+	release()
+	if err := <-drainResult; err != nil {
+		t.Fatalf("drain authority runtime resource: %v", err)
+	}
+	assertNoSleepObserverState(t, notifications)
 }
 
 func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
@@ -221,6 +293,67 @@ func TestExecutionPromptProjectionRetainsExactAuthorityGeneration(t *testing.T) 
 	if len(items) != 1 || items[0].Resource != successor || items[0].ScopeID != successorScope {
 		t.Fatalf("pending prompts after stale resolution = %+v, want exact successor", items)
 	}
+}
+
+func TestResourceDrainingResolvesPendingPromptBeforeClosingStreams(t *testing.T) {
+	broker := attentionnotify.NewBroker()
+	registry := NewRuntimeRegistry().WithAttentionNotifications(broker)
+	engine := newRegistryTestRuntime(t, nil)
+	ref := registryTestResourceRef(engine.SessionID())
+	registerResource(t, registry, ref, engine)
+
+	transcriptSub := subscribeTranscriptForTest(t, registry, engine.SessionID())
+	defer func() { _ = transcriptSub.Close() }()
+	_ = nextTranscriptMessage(t, transcriptSub)
+	attentionSub, err := registry.SubscribeSessionAttentionNotifications(
+		context.Background(),
+		serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: engine.SessionID()},
+	)
+	if err != nil {
+		t.Fatalf("subscribe session attention notifications: %v", err)
+	}
+	defer func() { _ = attentionSub.Close() }()
+
+	scopeID := runtimeids.NewExecutionScopeID()
+	request := askquestion.AskQuestionRequest{
+		ID:       "ask-draining",
+		StepID:   registryTestStepID,
+		Question: "Proceed?",
+	}
+	registry.PromptPending(ref, scopeID, request, time.Now().UTC())
+	pendingTranscript := nextTranscriptMessageOfKind(t, transcriptSub, clientui.TranscriptMessagePromptPending)
+	if pendingTranscript.Payload.PromptPending == nil || pendingTranscript.Payload.PromptPending.PromptID != "ask-draining" {
+		t.Fatalf("pending transcript prompt = %+v", pendingTranscript.Payload.PromptPending)
+	}
+	pendingAttention := nextRegistryAttentionEvent(t, attentionSub)
+	if pendingAttention.Type != clientui.AttentionNotificationEventPending {
+		t.Fatalf("pending attention event = %+v", pendingAttention)
+	}
+
+	if err := registry.ResourceDraining(context.Background(), registryTestResource(ref)); err != nil {
+		t.Fatalf("drain resource: %v", err)
+	}
+
+	resolvedTranscript := nextTranscriptMessageOfKind(t, transcriptSub, clientui.TranscriptMessagePromptResolved)
+	if resolvedTranscript.Payload.PromptResolved == nil || resolvedTranscript.Payload.PromptResolved.PromptID != "ask-draining" {
+		t.Fatalf("resolved transcript prompt = %+v", resolvedTranscript.Payload.PromptResolved)
+	}
+	resolvedCtx, cancelResolved := context.WithTimeout(context.Background(), time.Second)
+	defer cancelResolved()
+	resolvedAttention, err := attentionSub.Next(resolvedCtx)
+	if err != nil {
+		t.Fatalf("next resolved attention event: %v", err)
+	}
+	promptID := attentionNotificationID(clientui.AttentionNotificationKindQuestion, "ask-draining")
+	if resolvedAttention.Type != clientui.AttentionNotificationEventResolved ||
+		!attentionNotificationEventIDMatches(resolvedAttention, promptID) {
+		t.Fatalf("resolved attention event = %+v", resolvedAttention)
+	}
+	if prompts := registry.ListPendingPrompts(engine.SessionID()); len(prompts) != 0 {
+		t.Fatalf("pending prompts after draining = %+v, want none", prompts)
+	}
+
+	registry.PromptResolved(ref, scopeID, request.ID)
 }
 
 func TestRuntimeRegistryAggregatesSleepObserverAcrossAuthorityResources(t *testing.T) {

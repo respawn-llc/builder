@@ -143,24 +143,27 @@ func (a *Authority) buildAgentResource(ctx context.Context, descriptor session.S
 	}
 	resourceContext, cancel := context.WithCancel(context.Background())
 	resource := &agentResource{
-		authority: a,
-		ref:       ref,
-		ctx:       resourceContext,
-		cancel:    cancel,
-		changed:   make(chan struct{}),
-		state:     AgentResourceBuilding,
-		owners:    make(map[string]struct{}),
-		store:     store,
+		authority:            a,
+		ref:                  ref,
+		ctx:                  resourceContext,
+		cancel:               cancel,
+		changed:              make(chan struct{}),
+		state:                AgentResourceBuilding,
+		owners:               make(map[string]struct{}),
+		ownerlessDisposition: agentResourceRemainAvailable,
+		store:                store,
 	}
 	logger, err := runlog.NewRunLogger(store.Dir(), func(diag runlog.RunLoggerDiagnostic) {
 		if plan.options.OnLoggingFailure != nil {
 			plan.options.OnLoggingFailure(diag.Message)
 		}
 	})
-	if err == nil {
-		for _, line := range plan.options.StartLogLines {
-			logger.Logf("%s", line)
-		}
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	for _, line := range plan.options.StartLogLines {
+		logger.Logf("%s", line)
 	}
 	wiring, err := a.newRuntimeWiringFromPlan(resource, store, logger, *plan)
 	if err != nil {
@@ -207,6 +210,9 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 		SkipContinuationAgentRoleValidation: options.SkipContinuationAgentRoleValidation,
 		GlobalConfigDir:                     a.options.persistenceRoot,
 		StepLifecycle:                       resource,
+		LifecycleTaskFinished: func() error {
+			return a.closeRetiringResource(context.Background(), resource)
+		},
 		OnEvent: func(event runtime.Event) {
 			logger.Logf("%s", runlog.FormatRuntimeEvent(event))
 			if transcriptdiag.Enabled(options.Settings.Debug, os.Getenv) {

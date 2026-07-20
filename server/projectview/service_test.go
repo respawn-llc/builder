@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"core/server/llm"
 	"core/server/metadata"
@@ -120,6 +121,91 @@ func TestServiceDeleteProjectBlocksActiveSession(t *testing.T) {
 	}
 	if _, err := os.Stat(created.Dir()); err != nil {
 		t.Fatalf("session dir should remain: %v", err)
+	}
+}
+
+func TestServiceProjectBlockersIncludeRuntimeMaintenance(t *testing.T) {
+	store, cfg, binding := newProjectViewMetadataStore(t)
+	created := createProjectViewSession(t, store, cfg, binding.ProjectID, cfg.WorkspaceRoot, "maintenance")
+	authority, sessionID, plan := newProjectViewRuntimeAuthority(t, store, cfg, created)
+	if _, err := authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   "project-view-maintenance",
+		Runtime:   &plan,
+	}); err != nil {
+		t.Fatalf("open runtime: %v", err)
+	}
+	svc := newProjectViewMetadataService(t, store, binding.ProjectID).WithRuntimeAuthority(authority)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	done := make(chan error, 1)
+	go func() {
+		done <- authority.RunSessionMaintenance(
+			context.Background(),
+			sessionID.String(),
+			func(context.Context, *session.Store, *sessionruntime.ActiveRuntimeMaintenance) error {
+				close(started)
+				<-release
+				return nil
+			},
+		)
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for project runtime maintenance")
+	}
+
+	blockers, err := svc.projectActiveSessionBlockers(context.Background(), []string{sessionID.String()})
+	if err != nil {
+		t.Fatalf("project active session blockers: %v", err)
+	}
+	if len(blockers) != 1 || blockers[0].Code != "active_sessions" || blockers[0].Count != 1 {
+		t.Fatalf("project blockers = %+v, want one active maintenance session", blockers)
+	}
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("run project session maintenance: %v", err)
+	}
+}
+
+func TestServiceProjectStartBlockExcludesRuntimeMaintenance(t *testing.T) {
+	store, cfg, binding := newProjectViewMetadataStore(t)
+	created := createProjectViewSession(t, store, cfg, binding.ProjectID, cfg.WorkspaceRoot, "maintenance-block")
+	authority, sessionID, plan := newProjectViewRuntimeAuthority(t, store, cfg, created)
+	if _, err := authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   "project-view-maintenance-block",
+		Runtime:   &plan,
+	}); err != nil {
+		t.Fatalf("open runtime: %v", err)
+	}
+	svc := newProjectViewMetadataService(t, store, binding.ProjectID).WithRuntimeAuthority(authority)
+	release, err := svc.blockSessionStarts(context.Background(), []string{sessionID.String()})
+	if err != nil {
+		t.Fatalf("block project session starts: %v", err)
+	}
+	defer release()
+
+	err = authority.RunSessionMaintenance(
+		context.Background(),
+		sessionID.String(),
+		func(context.Context, *session.Store, *sessionruntime.ActiveRuntimeMaintenance) error {
+			t.Fatal("project-blocked runtime maintenance callback ran")
+			return nil
+		},
+	)
+	if !errors.Is(err, sessionruntime.ErrSessionStartsBlocked) {
+		t.Fatalf("project-blocked runtime maintenance error = %v, want ErrSessionStartsBlocked", err)
 	}
 }
 
@@ -639,6 +725,31 @@ func (projectViewTestLLMClient) Generate(context.Context, llm.Request) (llm.Resp
 
 func newProjectViewActiveRuntimeAuthority(t testing.TB, store *metadata.Store, cfg config.App, sessionStore *session.Store) *sessionruntime.Authority {
 	t.Helper()
+	authority, sessionID, plan := newProjectViewRuntimeAuthority(t, store, cfg, sessionStore)
+	if _, err := authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
+		Descriptor: mustOpenProjectViewSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Resource:   sessionruntime.OpenAgentResource{},
+		Runner: func(ctx context.Context, _ sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
+			<-ctx.Done()
+			return context.Cause(ctx)
+		},
+	}); err != nil {
+		t.Fatalf("start active session execution: %v", err)
+	}
+	if _, active := authority.SessionExecution(sessionID); !active {
+		t.Fatal("session execution was not registered as active")
+	}
+	return authority
+}
+
+func newProjectViewRuntimeAuthority(
+	t testing.TB,
+	store *metadata.Store,
+	cfg config.App,
+	sessionStore *session.Store,
+) (*sessionruntime.Authority, runtimeids.SessionID, sessionruntime.AgentRuntimePlan) {
+	t.Helper()
 	sessionID, err := runtimeids.ParseSessionID(sessionStore.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("parse session ID: %v", err)
@@ -665,21 +776,7 @@ func newProjectViewActiveRuntimeAuthority(t testing.TB, store *metadata.Store, c
 	if err != nil {
 		t.Fatalf("new runtime plan: %v", err)
 	}
-	if _, err := authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
-		Descriptor: mustOpenProjectViewSessionDescriptor(t, sessionID),
-		Runtime:    &plan,
-		Resource:   sessionruntime.OpenAgentResource{},
-		Runner: func(ctx context.Context, _ sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
-			<-ctx.Done()
-			return context.Cause(ctx)
-		},
-	}); err != nil {
-		t.Fatalf("start active session execution: %v", err)
-	}
-	if _, active := authority.SessionExecution(sessionID); !active {
-		t.Fatal("session execution was not registered as active")
-	}
-	return authority
+	return authority, sessionID, plan
 }
 
 func mustOpenProjectViewSessionDescriptor(t testing.TB, sessionID runtimeids.SessionID) session.SessionDescriptor {

@@ -132,7 +132,7 @@ func (s *Service) executeDeleteLocked(
 			return serverapi.WorktreeDeleteCompletedResult{}, err
 		}
 	}
-	releaseRuns, blockers, err := s.freezeDeleteTargetSessions(ctx, workspaceCtx.sessionID, record)
+	mutationCtx, releaseRuns, blockers, err := s.freezeDeleteTargetSessions(ctx, workspaceCtx.sessionID, record)
 	if err != nil {
 		return serverapi.WorktreeDeleteCompletedResult{}, err
 	}
@@ -150,7 +150,7 @@ func (s *Service) executeDeleteLocked(
 	}
 	retargetCompensation := worktreeSessionRetargetCompensation{}
 	if record != nil {
-		retargetCompensation, err = s.retargetDeleteSessions(ctx, workspaceCtx, *record, currentSync)
+		retargetCompensation, err = s.retargetDeleteSessions(mutationCtx, workspaceCtx, *record, currentSync)
 		if err != nil {
 			return serverapi.WorktreeDeleteCompletedResult{}, err
 		}
@@ -169,7 +169,7 @@ func (s *Service) executeDeleteLocked(
 			if errors.As(err, &recoveryError) && recoveryError.Destructive {
 				return serverapi.WorktreeDeleteCompletedResult{}, err
 			}
-			return serverapi.WorktreeDeleteCompletedResult{}, errors.Join(err, retargetCompensation.rollback(ctx))
+			return serverapi.WorktreeDeleteCompletedResult{}, errors.Join(err, retargetCompensation.rollback(mutationCtx))
 		}
 	}
 	if record != nil {
@@ -271,13 +271,13 @@ func (s *Service) freezeDeleteTargetSessions(
 	ctx context.Context,
 	currentSessionID string,
 	record *metadata.WorktreeRecord,
-) (func(), []metadata.WorktreeSessionBlocker, error) {
+) (context.Context, func(), []metadata.WorktreeSessionBlocker, error) {
 	if record == nil {
-		return func() {}, nil, nil
+		return ctx, func() {}, nil, nil
 	}
 	sessions, err := s.metadata.ListSessionsTargetingWorktree(ctx, record.ID)
 	if err != nil {
-		return func() {}, nil, err
+		return ctx, func() {}, nil, err
 	}
 	sessionIDs := make([]string, 0, len(sessions))
 	for _, target := range sessions {
@@ -287,9 +287,10 @@ func (s *Service) freezeDeleteTargetSessions(
 	}
 	startBlock, err := s.blockSessionStarts(ctx, sessionIDs)
 	if err != nil {
-		return func() {}, nil, err
+		return ctx, func() {}, nil, err
 	}
 	release := func() { releaseSessionStarts(startBlock) }
+	mutationCtx := authorizeSessionMaintenance(ctx, startBlock)
 	activeBlockers := make([]metadata.WorktreeSessionBlocker, 0)
 	for _, target := range sessions {
 		sessionID := strings.TrimSpace(target.SessionID)
@@ -299,13 +300,13 @@ func (s *Service) freezeDeleteTargetSessions(
 		active, err := s.authority.HasBlockingRuntimeActivity(ctx, sessionID)
 		if err != nil {
 			release()
-			return func() {}, nil, err
+			return ctx, func() {}, nil, err
 		}
 		if active {
 			activeBlockers = append(activeBlockers, target)
 		}
 	}
-	return release, activeBlockers, nil
+	return mutationCtx, release, activeBlockers, nil
 }
 
 func activeDeleteBlockerError(blockers []metadata.WorktreeSessionBlocker) error {

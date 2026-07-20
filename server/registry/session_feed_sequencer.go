@@ -91,6 +91,31 @@ func (s *sessionFeedSequencer) PublishRuntimeReadModel(update clientui.RuntimeRe
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.publishRuntimeReadModelLocked(update)
+}
+
+func (s *sessionFeedSequencer) CloseWithRuntimeReadModel(update clientui.RuntimeReadModelUpdate, err error) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.publishRuntimeReadModelLocked(update)
+	s.broker.Close(err)
+}
+
+func (s *sessionFeedSequencer) Close(err error) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.broker.Close(err)
+}
+
+func (s *sessionFeedSequencer) publishRuntimeReadModelLocked(update clientui.RuntimeReadModelUpdate) {
 	copied := cloneRuntimeReadModelUpdate(update)
 	message := clientui.TranscriptMessage{
 		Kind:    clientui.TranscriptMessageRuntimeReadModelUpdate,
@@ -99,8 +124,6 @@ func (s *sessionFeedSequencer) PublishRuntimeReadModel(update clientui.RuntimeRe
 	if err := message.ValidatePayload(); err != nil {
 		panic(fmt.Sprintf("publish invalid canonical runtime read-model update: %+v: %v", update, err))
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.snapshot.runtimeReadModel = &copied
 	s.broker.Publish([]clientui.TranscriptMessage{message})
 }
