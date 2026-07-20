@@ -155,6 +155,7 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		}
 		return nil, errors.New("projected UI model has unexpected type")
 	}
+	model.lifecycleHookIssueSink = model
 	model.promptAnswers = request.wiring.promptAnswers.withConnectionOutcomeSink(func(err error) {
 		enqueueRuntimeConnectionStateChange(model.runtimeConnectionEvents, err)
 	})

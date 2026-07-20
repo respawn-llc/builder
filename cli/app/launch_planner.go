@@ -8,6 +8,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 
 	"core/cli/app/internal/status"
 	"core/shared/apicontract"
@@ -55,39 +56,45 @@ type resolvedSessionPlanRequest struct {
 type runtimeLaunchPlan struct {
 	Wiring                  *runtimeWiring
 	lifecycleHookDispatcher *lifecycleHookDispatcher
+	stopEventStreams        func()
 	close                   func() error
 	detachClose             func() error
+	closeOnce               sync.Once
+	closeErr                error
 }
 
 func (p *runtimeLaunchPlan) Close() error {
-	if p == nil {
-		return nil
-	}
-	var hookErr error
-	if p.lifecycleHookDispatcher != nil {
-		hookErr = p.lifecycleHookDispatcher.Close()
-	}
-	if p.close == nil {
-		return hookErr
-	}
-	return errors.Join(hookErr, p.close())
+	return p.closeWithPolicy(false)
 }
 
 func (p *runtimeLaunchPlan) DetachOnlyClose() error {
+	return p.closeWithPolicy(true)
+}
+
+func (p *runtimeLaunchPlan) closeWithPolicy(detachOnly bool) error {
 	if p == nil {
 		return nil
 	}
-	var hookErr error
-	if p.lifecycleHookDispatcher != nil {
-		hookErr = p.lifecycleHookDispatcher.Close()
-	}
-	if p.detachClose != nil {
-		return errors.Join(hookErr, p.detachClose())
-	}
-	if p.close != nil {
-		return errors.Join(hookErr, p.close())
-	}
-	return hookErr
+	p.closeOnce.Do(func() {
+		if p.stopEventStreams != nil {
+			p.stopEventStreams()
+		}
+		if p.Wiring != nil && p.Wiring.eventDispatcher != nil {
+			p.Wiring.eventDispatcher.Close()
+		}
+		var hookErr error
+		if p.lifecycleHookDispatcher != nil {
+			hookErr = p.lifecycleHookDispatcher.Close()
+		}
+		var releaseErr error
+		if detachOnly && p.detachClose != nil {
+			releaseErr = p.detachClose()
+		} else if p.close != nil {
+			releaseErr = p.close()
+		}
+		p.closeErr = errors.Join(hookErr, releaseErr)
+	})
+	return p.closeErr
 }
 
 type sessionPickerRunner func(sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error)

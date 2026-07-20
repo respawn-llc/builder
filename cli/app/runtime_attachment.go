@@ -60,13 +60,12 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 		})
 	}
 	return &runtimeLaunchPlan{
-		Wiring: wiring,
+		Wiring:           wiring,
+		stopEventStreams: stopStreams,
 		close: func() error {
-			stopStreams()
 			return lease.Release()
 		},
 		detachClose: func() error {
-			stopStreams()
 			return lease.ReleaseWithClosePolicy(serverapi.SessionRuntimeReleaseClosePolicyDetachOnly)
 		},
 	}, nil

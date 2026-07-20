@@ -47,10 +47,15 @@ type uiEventDispatcher struct {
 	initialMu                  sync.Mutex
 	initialClientHookOpen      *clientHookAttachmentOpenFact
 	clientHookAttachmentOpened bool
+	closeOnce                  sync.Once
+	closed                     chan struct{}
 }
 
 func newUIEventDispatcher(transcriptEvents <-chan ongoingTranscriptEvent) *uiEventDispatcher {
-	return &uiEventDispatcher{transcriptEvents: transcriptEvents}
+	return &uiEventDispatcher{
+		transcriptEvents: transcriptEvents,
+		closed:           make(chan struct{}),
+	}
 }
 
 func WithUIEventDispatcher(dispatcher *uiEventDispatcher) UIOption {
@@ -69,7 +74,7 @@ func WithUIAttentionEvents(events <-chan attentionStreamOutcome, requestReopen f
 }
 
 type lifecycleHookIssueSink interface {
-	AcceptLifecycleHookIssue(lifecycleHookIssue)
+	AcceptLifecycleHookIssue(lifecycleHookIssue) tea.Cmd
 }
 
 func WithUILifecycleHookIssues(
@@ -83,7 +88,7 @@ func WithUILifecycleHookIssues(
 }
 
 func (d *uiEventDispatcher) OpenClientHookAttachment(fact clientHookAttachmentOpenFact) bool {
-	if d == nil {
+	if d == nil || d.Closed() {
 		return false
 	}
 	copied := fact.clone()
@@ -97,7 +102,7 @@ func (d *uiEventDispatcher) OpenClientHookAttachment(fact clientHookAttachmentOp
 }
 
 func (d *uiEventDispatcher) wait() tea.Cmd {
-	if d == nil ||
+	if d == nil || d.Closed() ||
 		(!d.hasInitialClientHookAttachment() &&
 			d.transcriptEvents == nil && d.attentionEvents == nil && d.lifecycleHookIssues == nil) {
 		return nil
@@ -117,6 +122,8 @@ func (d *uiEventDispatcher) wait() tea.Cmd {
 				lifecycleHookIssueSignal = lifecycleHookIssues.Signal()
 			}
 			select {
+			case <-d.closed:
+				return nil
 			case event, ok := <-transcriptEvents:
 				if !ok {
 					transcriptEvents = nil
@@ -142,6 +149,33 @@ func (d *uiEventDispatcher) wait() tea.Cmd {
 			}
 		}
 		return nil
+	}
+}
+
+func (d *uiEventDispatcher) Close() {
+	if d == nil {
+		return
+	}
+	d.closeOnce.Do(func() {
+		d.initialMu.Lock()
+		d.initialClientHookOpen = nil
+		d.clientHookAttachmentOpened = true
+		d.initialMu.Unlock()
+		if d.closed != nil {
+			close(d.closed)
+		}
+	})
+}
+
+func (d *uiEventDispatcher) Closed() bool {
+	if d == nil || d.closed == nil {
+		return false
+	}
+	select {
+	case <-d.closed:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -182,10 +216,11 @@ func (m *uiModel) reduceDispatchedEvent(message tea.Msg) uiFeatureUpdateResult {
 		m.reduceAcceptedAttentionEvent(event.outcome)
 		return handledUIFeatureUpdate(m, m.eventDispatcher.wait())
 	case uiAcceptedLifecycleHookIssue:
+		var presentation tea.Cmd
 		if m.lifecycleHookIssueSink != nil {
-			m.lifecycleHookIssueSink.AcceptLifecycleHookIssue(event.issue)
+			presentation = m.lifecycleHookIssueSink.AcceptLifecycleHookIssue(event.issue)
 		}
-		return handledUIFeatureUpdate(m, m.eventDispatcher.wait())
+		return handledUIFeatureUpdate(m, tea.Batch(presentation, m.eventDispatcher.wait()))
 	case uiAcceptedClientHookAttachmentOpen:
 		if m.lifecycleCoordinator != nil {
 			m.lifecycleCoordinator.AcceptAttachmentOpen(event.fact)

@@ -10,6 +10,8 @@ import (
 	"core/shared/clientui"
 	"core/shared/lifecyclecontract"
 	"core/shared/runtimeids"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestUIEventDispatcherDrainsAttachmentOpenBeforeReadyExternalSources(t *testing.T) {
@@ -124,10 +126,8 @@ func TestUIEventDispatcherContinuesWithRemainingExternalSource(t *testing.T) {
 	attentionEvents := make(chan attentionStreamOutcome, 1)
 	close(transcriptEvents)
 	attentionEvents <- attentionStreamControl{kind: attentionStreamControlSnapshotComplete}
-	dispatcher := &uiEventDispatcher{
-		transcriptEvents: transcriptEvents,
-		attentionEvents:  attentionEvents,
-	}
+	dispatcher := newUIEventDispatcher(transcriptEvents)
+	dispatcher.attentionEvents = attentionEvents
 
 	message := dispatcher.wait()()
 	dispatched, ok := message.(uiDispatchedEventMsg)
@@ -165,6 +165,40 @@ func TestUIEventDispatcherSerializesTypedLifecycleHookIssues(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("lifecycle hook issue reduction did not schedule the next external event wait")
+	}
+}
+
+func TestUIEventDispatcherPresentsHookIssueWithoutLifecycleRecursion(t *testing.T) {
+	mailbox := newLifecycleHookIssueMailbox()
+	logger := &testUILogger{}
+	lifecycle := &recordingLifecycleEnvelopeSink{}
+	model := newProjectedStaticUIModel(
+		WithUILogger(logger),
+		WithUIClientLifecycleCoordinator(newClientLifecycleCoordinator(lifecycle, nil, nil, nil)),
+	)
+	model.eventDispatcher.lifecycleHookIssues = mailbox
+	model.lifecycleHookIssueSink = model
+	dropped := uint64(3)
+	mailbox.Report(lifecycleHookIssue{
+		Kind:         lifecycleHookIssueQueueOverload,
+		DroppedCount: &dropped,
+	})
+
+	message := model.eventDispatcher.wait()()
+	next, cmd := model.Update(message)
+	model = next.(*uiModel)
+
+	if len(logger.lines) != 1 {
+		t.Fatalf("hook issue log count = %d, want one structured diagnostic", len(logger.lines))
+	}
+	if model.transientStatusKind != uiStatusNoticeError || model.transientStatus == "" {
+		t.Fatalf("hook issue transient status = %q kind=%d, want visible error", model.transientStatus, model.transientStatusKind)
+	}
+	if len(lifecycle.envelopes) != 0 {
+		t.Fatalf("hook issue recursively emitted %d lifecycle envelopes", len(lifecycle.envelopes))
+	}
+	if cmd == nil {
+		t.Fatal("hook issue presentation did not continue the accepted-event wait")
 	}
 }
 
@@ -258,6 +292,7 @@ type recordingLifecycleHookIssueSink struct {
 	issues []lifecycleHookIssue
 }
 
-func (s *recordingLifecycleHookIssueSink) AcceptLifecycleHookIssue(issue lifecycleHookIssue) {
+func (s *recordingLifecycleHookIssueSink) AcceptLifecycleHookIssue(issue lifecycleHookIssue) tea.Cmd {
 	s.issues = append(s.issues, cloneLifecycleHookIssue(issue))
+	return nil
 }
