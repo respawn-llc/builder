@@ -17,6 +17,7 @@ type lifecycleHookProductRecorderInvocation struct {
 	behavior   appfixture.LifecycleHookBehavior
 	recordPath string
 	readyPath  *string
+	statePath  *string
 }
 
 type lifecycleHookProductRecord struct {
@@ -46,6 +47,12 @@ func parseLifecycleHookProductRecorderInvocation(args []string) (lifecycleHookPr
 		if len(args) != 5 {
 			return lifecycleHookProductRecorderInvocation{}, false
 		}
+	case appfixture.LifecycleHookBehaviorNonzeroOnce:
+		if len(args) != 6 {
+			return lifecycleHookProductRecorderInvocation{}, false
+		}
+		statePath := args[5]
+		invocation.statePath = &statePath
 	case appfixture.LifecycleHookBehaviorHang:
 		if len(args) != 6 {
 			return lifecycleHookProductRecorderInvocation{}, false
@@ -101,6 +108,21 @@ func TestLifecycleHookProductRecorder(t *testing.T) {
 		return
 	case appfixture.LifecycleHookBehaviorNonzero:
 		os.Exit(7)
+	case appfixture.LifecycleHookBehaviorNonzeroOnce:
+		if invocation.statePath == nil {
+			t.Fatal("non-zero-once lifecycle hook recorder requires a state path")
+		}
+		stateFile, err := os.OpenFile(*invocation.statePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			if closeErr := stateFile.Close(); closeErr != nil {
+				t.Fatalf("close non-zero-once lifecycle hook state: %v", closeErr)
+			}
+			os.Exit(7)
+		}
+		if !errors.Is(err, os.ErrExist) {
+			t.Fatalf("open non-zero-once lifecycle hook state: %v", err)
+		}
+		return
 	case appfixture.LifecycleHookBehaviorHang:
 		ready := struct {
 			PID       int `json:"pid"`

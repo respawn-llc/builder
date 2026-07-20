@@ -195,7 +195,11 @@ func prepareLifecyclePTYFixtureRuntime(
 	runtime, err := appfixture.NewRuntime(*processConfig.LocalScriptPath, func(
 		targetFinalAssistantOrdinal appfixture.ScriptFinalAssistantOrdinal,
 	) func(context.Context) error {
-		state = newPTYCheckpointScenarioState(targetFinalAssistantOrdinal)
+		checkpointTarget := targetFinalAssistantOrdinal
+		if checkpointTarget == 0 {
+			checkpointTarget = 1
+		}
+		state = newPTYCheckpointScenarioState(checkpointTarget)
 		return func(context.Context) error {
 			if err := terminal.writer.Emit(checkpoint.KindScenarioComplete, nil); err != nil {
 				return err
@@ -359,6 +363,12 @@ func lifecycleHookProductRecorderCommand(config appfixture.LifecycleProcessConfi
 			return nil, errors.New("hanging lifecycle recorder requires a ready path")
 		}
 		command = append(command, *config.HookReadyPath)
+	}
+	if config.HookBehavior == appfixture.LifecycleHookBehaviorNonzeroOnce {
+		if config.HookStatePath == nil {
+			return nil, errors.New("non-zero-once lifecycle recorder requires a state path")
+		}
+		command = append(command, *config.HookStatePath)
 	}
 	return command, nil
 }

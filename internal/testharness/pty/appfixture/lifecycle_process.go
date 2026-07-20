@@ -28,9 +28,10 @@ const (
 type LifecycleHookBehavior string
 
 const (
-	LifecycleHookBehaviorSuccess LifecycleHookBehavior = "success"
-	LifecycleHookBehaviorNonzero LifecycleHookBehavior = "nonzero"
-	LifecycleHookBehaviorHang    LifecycleHookBehavior = "hang"
+	LifecycleHookBehaviorSuccess     LifecycleHookBehavior = "success"
+	LifecycleHookBehaviorNonzero     LifecycleHookBehavior = "nonzero"
+	LifecycleHookBehaviorNonzeroOnce LifecycleHookBehavior = "nonzero_once"
+	LifecycleHookBehaviorHang        LifecycleHookBehavior = "hang"
 )
 
 type LifecycleProcessConfig struct {
@@ -45,6 +46,7 @@ type LifecycleProcessConfig struct {
 	HookRecordPath            string                `json:"hook_record_path"`
 	HookBehavior              LifecycleHookBehavior `json:"hook_behavior"`
 	HookReadyPath             *string               `json:"hook_ready_path,omitempty"`
+	HookStatePath             *string               `json:"hook_state_path,omitempty"`
 }
 
 type LifecycleServerProcessConfig struct {
@@ -73,7 +75,10 @@ func (config LifecycleServerProcessConfig) Validate() error {
 		return errors.New("lifecycle server PTY fixture hook_record_path is required")
 	}
 	switch config.HookBehavior {
-	case LifecycleHookBehaviorSuccess, LifecycleHookBehaviorNonzero, LifecycleHookBehaviorHang:
+	case LifecycleHookBehaviorSuccess,
+		LifecycleHookBehaviorNonzero,
+		LifecycleHookBehaviorNonzeroOnce,
+		LifecycleHookBehaviorHang:
 	default:
 		return errors.New("lifecycle server PTY fixture hook_behavior is invalid")
 	}
@@ -121,15 +126,24 @@ func (config LifecycleProcessConfig) Validate() error {
 		return errors.New("lifecycle PTY fixture hook_record_path is required")
 	}
 	switch config.HookBehavior {
-	case LifecycleHookBehaviorSuccess, LifecycleHookBehaviorNonzero, LifecycleHookBehaviorHang:
+	case LifecycleHookBehaviorSuccess,
+		LifecycleHookBehaviorNonzero,
+		LifecycleHookBehaviorNonzeroOnce,
+		LifecycleHookBehaviorHang:
 	default:
 		return errors.New("lifecycle PTY fixture hook_behavior is invalid")
 	}
 	if config.HookReadyPath != nil && strings.TrimSpace(*config.HookReadyPath) == "" {
 		return errors.New("lifecycle PTY fixture hook_ready_path cannot be blank")
 	}
+	if config.HookStatePath != nil && strings.TrimSpace(*config.HookStatePath) == "" {
+		return errors.New("lifecycle PTY fixture hook_state_path cannot be blank")
+	}
 	if config.HookBehavior == LifecycleHookBehaviorHang && config.HookReadyPath == nil {
 		return errors.New("hanging lifecycle PTY fixture hook requires hook_ready_path")
+	}
+	if config.HookBehavior == LifecycleHookBehaviorNonzeroOnce && config.HookStatePath == nil {
+		return errors.New("non-zero-once lifecycle PTY fixture hook requires hook_state_path")
 	}
 	return nil
 }

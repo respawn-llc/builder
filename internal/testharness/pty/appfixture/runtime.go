@@ -66,6 +66,7 @@ type SeedTranscriptEntryFile struct {
 
 type StepFile struct {
 	Final               string                           `json:"final"`
+	Error               *string                          `json:"error,omitempty"`
 	Commentary          string                           `json:"commentary"`
 	StreamDeltas        []string                         `json:"stream_deltas"`
 	StreamDelayMS       *int                             `json:"stream_delay_ms"`
@@ -248,10 +249,19 @@ func deriveTargetFinalAssistantOrdinal(steps []scriptedllm.Step) (ScriptFinalAss
 		return 0, errors.New("PTY fixture script requires at least one step")
 	}
 	var ordinal ScriptFinalAssistantOrdinal
-	for _, step := range steps {
+	for index, step := range steps {
+		if step.Err != nil && index != len(steps)-1 {
+			return 0, errors.New("PTY fixture runtime error must be the final script step")
+		}
 		if isFinalAssistantStep(step) {
 			ordinal++
 		}
+	}
+	if steps[len(steps)-1].Err != nil {
+		if ordinal != 0 {
+			return 0, errors.New("PTY fixture runtime error script cannot contain assistant final responses")
+		}
+		return 0, nil
 	}
 	if ordinal == 0 {
 		return 0, errors.New("PTY fixture script requires an assistant final response")
@@ -295,6 +305,15 @@ func scriptSteps(file ScriptFile) ([]scriptedllm.Step, error) {
 func scriptStep(spec StepFile) (scriptedllm.Step, error) {
 	var step scriptedllm.Step
 	switch {
+	case spec.Error != nil:
+		message := strings.TrimSpace(*spec.Error)
+		if message == "" {
+			return scriptedllm.Step{}, fmt.Errorf("script runtime error cannot be blank")
+		}
+		step = scriptedllm.RuntimeError(&llm.APIStatusError{
+			StatusCode: 400,
+			Body:       message,
+		})
 	case len(spec.ToolCalls) > 0:
 		calls := make([]llm.ToolCall, 0, len(spec.ToolCalls))
 		for _, call := range spec.ToolCalls {

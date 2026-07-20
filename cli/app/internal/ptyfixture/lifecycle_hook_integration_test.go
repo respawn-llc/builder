@@ -273,6 +273,75 @@ func TestLifecycleHooksRemoteConfiguredPTYRecordsNewOpening(t *testing.T) {
 	}
 }
 
+func TestLifecycleHooksRuntimeFailureAfterNonzeroDoesNotRecurse(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	bin := buildPTYFixtureBinary(t, ctx)
+	root := t.TempDir()
+	scriptPath := filepath.Join(root, "script.json")
+	recordPath := filepath.Join(root, "hooks.jsonl")
+	nonzeroStatePath := filepath.Join(root, "nonzero-once")
+	script := []byte(`{"steps":[{"error":"scripted terminal runtime failure"}]}`)
+	if err := os.WriteFile(scriptPath, script, 0o600); err != nil {
+		t.Fatalf("write failing lifecycle script: %v", err)
+	}
+	prompt := "run failing lifecycle scenario"
+	processConfig := appfixture.LifecycleProcessConfig{
+		WorkspaceRoot:             filepath.Join(root, "workspace"),
+		PersistenceRoot:           filepath.Join(root, "persistence"),
+		ServerMode:                appfixture.LifecycleServerModeLocal,
+		OpeningKind:               appfixture.LifecycleOpeningKindNew,
+		LocalScriptPath:           &scriptPath,
+		InitialPrompt:             &prompt,
+		TargetFinalAssistantCount: 0,
+		HookRecordPath:            recordPath,
+		HookBehavior:              appfixture.LifecycleHookBehaviorNonzeroOnce,
+		HookStatePath:             &nonzeroStatePath,
+	}
+	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
+		Path:       bin,
+		Env:        []string{lifecyclePTYProcessEnv(t, root, processConfig)},
+		Dimensions: pty.MustDimensions(24, 80),
+		PhaseInputs: []pty.PhaseInputEvent{{
+			Phase: pty.PhaseScenarioStart,
+			After: 3 * time.Second,
+			Bytes: []byte{0x03, 0x03},
+		}},
+		Timeout: 20 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("run failing lifecycle PTY fixture: %v raw=%q", err, string(capture.Raw))
+	}
+	if _, err := os.Stat(nonzeroStatePath); err != nil {
+		t.Fatalf("non-zero-once recorder did not publish its failure state: %v", err)
+	}
+	records := readLifecycleHookRecords(t, recordPath)
+	if len(records) != 2 {
+		t.Fatalf(
+			"failing lifecycle hook record count = %d, want start and task error only: %+v raw=%q",
+			len(records),
+			records,
+			string(capture.Raw),
+		)
+	}
+	wantCategories := []lifecyclecontract.Category{
+		lifecyclecontract.CategorySessionStart,
+		lifecyclecontract.CategoryTaskError,
+	}
+	for index, record := range records {
+		var envelope struct {
+			Category lifecyclecontract.Category `json:"category"`
+		}
+		if err := json.Unmarshal(record.Payload, &envelope); err != nil {
+			t.Fatalf("decode failing lifecycle hook record %d: %v", index, err)
+		}
+		if envelope.Category != wantCategories[index] {
+			t.Fatalf("failing lifecycle category %d = %q, want %q", index, envelope.Category, wantCategories[index])
+		}
+	}
+}
+
 func lifecyclePTYProcessEnv(t *testing.T, root string, config appfixture.LifecycleProcessConfig) string {
 	t.Helper()
 	path := filepath.Join(root, "lifecycle-process.json")
