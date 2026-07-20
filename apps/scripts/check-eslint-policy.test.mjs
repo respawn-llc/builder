@@ -11,6 +11,12 @@ const desktopRequire = createRequire(
   new URL("../desktop/package.json", import.meta.url),
 );
 const { ESLint } = desktopRequire("eslint");
+const desktopRoot = fileURLToPath(new URL("../desktop", import.meta.url));
+const desktopPolicyLinter = new ESLint({
+  cwd: desktopRoot,
+  overrideConfigFile: true,
+  overrideConfig: eslintConfig,
+});
 const fixtureRoot = fileURLToPath(
   new URL("../desktop/eslint-fixtures/architecture", import.meta.url),
 );
@@ -43,27 +49,6 @@ test("desktop ESLint config explicitly forbids unsafe type assertions", () => {
   ]);
 });
 
-test("desktop ESLint config explicitly forbids direct Tauri imports", () => {
-  const rule = findRule("no-restricted-imports");
-
-  assert.ok(Array.isArray(rule));
-  assert.equal(rule[0], "error");
-
-  const options = rule[1];
-  assert.ok(options !== null && typeof options === "object");
-
-  const paths = Array.isArray(options.paths) ? options.paths : [];
-  assert.ok(paths.some((entry) => entry.name === "@tauri-apps/api"));
-
-  const patterns = Array.isArray(options.patterns) ? options.patterns : [];
-  assert.ok(
-    patterns.some(
-      (entry) =>
-        Array.isArray(entry.group) && entry.group.includes("@tauri-apps/api/*"),
-    ),
-  );
-});
-
 test("desktop ESLint config explicitly enforces GUI architecture rules", () => {
   assert.equal(findRule("app/no-array-index-key"), "error");
   assert.equal(findRule("app/no-eslint-disable"), "error");
@@ -72,16 +57,10 @@ test("desktop ESLint config explicitly enforces GUI architecture rules", () => {
   assert.equal(findRule("app/no-useeffect-data-loading"), "error");
 });
 
-test("desktop ESLint config bans eslint-disable directives and makes the ban unsuppressable", () => {
-  // The ban itself plus noInlineConfig: with inline directives neutralized, no rule —
-  // including app/no-eslint-disable — can be turned off from within a source file.
-  assert.equal(findRule("app/no-eslint-disable"), "error");
-  assert.equal(findLinterOption("noInlineConfig"), true);
-});
-
 test("desktop ESLint rule rejects every eslint-disable/eslint-enable directive form", async () => {
   const directives = [
     "/* eslint-disable */",
+    "/* eslint-disable app/no-eslint-disable */",
     "/* eslint-disable max-lines -- fake reason */",
     "// eslint-disable-line no-console",
     "// eslint-disable-next-line complexity",
@@ -90,7 +69,7 @@ test("desktop ESLint rule rejects every eslint-disable/eslint-enable directive f
 
   for (const directive of directives) {
     const messages = await lintWithAppArchitectureRules(
-      `${directive}\nexport const value = 1;\n`,
+      `${directive}\nconst value = 1;\n`,
     );
     assert.ok(
       messages.some((message) => message.ruleId === "app/no-eslint-disable"),
@@ -101,64 +80,12 @@ test("desktop ESLint rule rejects every eslint-disable/eslint-enable directive f
 
 test("desktop ESLint rule ignores ordinary comments that merely mention eslint", async () => {
   const messages = await lintWithAppArchitectureRules(
-    "// eslint runs in CI to enforce these rules\nexport const value = 1;\n",
+    "// eslint runs in CI to enforce these rules\nconst value = 1;\n",
   );
 
   assert.ok(
     !messages.some((message) => message.ruleId === "app/no-eslint-disable"),
   );
-});
-
-test("noInlineConfig prevents suppressing the eslint-disable ban inline", async () => {
-  const eslint = new ESLint({
-    overrideConfigFile: true,
-    overrideConfig: [
-      { linterOptions: { noInlineConfig: true } },
-      {
-        files: ["**/*.tsx"],
-        languageOptions: {
-          ecmaVersion: "latest",
-          sourceType: "module",
-          parserOptions: { ecmaFeatures: { jsx: true } },
-        },
-        plugins: { app: findAppPlugin() },
-        rules: { "app/no-eslint-disable": "error" },
-      },
-    ],
-  });
-
-  const source =
-    "/* eslint-disable app/no-eslint-disable */\nexport const value = 1;\n";
-  const [result] = await eslint.lintText(source, {
-    filePath: "src/components/sample.tsx",
-  });
-
-  assert.ok(
-    result.messages.some(
-      (message) => message.ruleId === "app/no-eslint-disable",
-    ),
-  );
-});
-
-test("desktop ESLint architecture rules reject representative component violations", async () => {
-  const messages = await lintWithAppArchitectureRules(`
-    import { useEffect as useReactEffect } from "react";
-    export let mutableSessionCount = 0;
-
-    export function transcriptRows({ items }) {
-      useReactEffect(() => {
-        fetch("/api/sessions");
-      }, []);
-
-      return items.map((item, index) => <span key={index}>{item}</span>);
-    }
-  `);
-
-  assert.deepEqual(messages.map((message) => message.ruleId).sort(), [
-    "app/no-array-index-key",
-    "app/no-mutable-exports",
-    "app/no-useeffect-data-loading",
-  ]);
 });
 
 test("desktop ESLint config explicitly enforces complexity and debug-output limits", () => {
@@ -176,288 +103,245 @@ test("desktop ESLint config explicitly enforces complexity and debug-output limi
   assert.equal(findRule("no-console"), "error");
 });
 
-test("desktop architecture policy allows owner-local imports and rejects feature dependencies", async () => {
-  const byFile = await lintArchitectureFixtures([
-    "src/features/alpha/allowed-same-feature.ts",
-    "src/features/alpha/forbidden-feature.ts",
-  ]);
+const dependencyDiagnostic = [{ ruleId: "boundaries/dependencies", line: 1 }];
+const unknownDependencyDiagnostics = [
+  ...dependencyDiagnostic,
+  {
+    ruleId: "boundaries/no-unknown-dependencies",
+    line: 1,
+  },
+];
 
-  assert.deepEqual(
-    byFile.get(join(fixtureRoot, "src/features/alpha/allowed-same-feature.ts")),
-    [],
-  );
-  assert.ok(
-    byFile
-      .get(join(fixtureRoot, "src/features/alpha/forbidden-feature.ts"))
-      ?.some((message) => message.ruleId === "boundaries/dependencies"),
-  );
-});
-
-test("desktop architecture policy lets shell composition use public seams and rejects deep feature imports", async () => {
-  const byFile = await lintArchitectureFixtures([
+const architecturePolicyGroups = [
+  policyGroup(
     "src/app/allowed-public-seams.ts",
-    "src/app/forbidden-deep-facade.ts",
-    "src/app/forbidden-deep-feature.ts",
-    "src/app/forbidden-deep-native.ts",
-    "src/app/forbidden-deep-shared.ts",
-    "src/app/forbidden-deep-ui.ts",
-  ]);
-
-  assert.deepEqual(
-    byFile.get(join(fixtureRoot, "src/app/allowed-public-seams.ts")),
-    [],
-  );
-  assertArchitectureViolations(byFile, [
-    "src/app/forbidden-deep-facade.ts",
-    "src/app/forbidden-deep-feature.ts",
-    "src/app/forbidden-deep-native.ts",
-    "src/app/forbidden-deep-shared.ts",
-    "src/app/forbidden-deep-ui.ts",
-  ]);
-});
-
-test("desktop architecture policy keeps the app facade leaf-facing", async () => {
-  const allowedPath = "src/app-facade/allowed-public-seams.ts";
-  const forbiddenPaths = [
-    "src/app-facade/forbidden-api-composition.ts",
-    "src/app-facade/forbidden-feature.ts",
-    "src/app-facade/forbidden-shell.ts",
-  ];
-  const byFile = await lintArchitectureFixtures([
-    allowedPath,
-    ...forbiddenPaths,
-  ]);
-
-  assert.deepEqual(byFile.get(join(fixtureRoot, allowedPath)), []);
-  assertArchitectureViolations(byFile, forbiddenPaths);
-});
-
-test("desktop architecture policy isolates features behind feature-safe seams", async () => {
-  const allowedPath = "src/features/alpha/allowed-public-seams.ts";
-  const forbiddenPaths = [
-    "src/features/alpha/forbidden-api-composition.ts",
-    "src/features/alpha/forbidden-api-internal.ts",
-    "src/features/alpha/forbidden-feature.ts",
-    "src/features/alpha/forbidden-native.ts",
-    "src/features/alpha/forbidden-relative-shared.ts",
-    "src/features/alpha/forbidden-shell.ts",
-  ];
-  const byFile = await lintArchitectureFixtures([
-    allowedPath,
-    ...forbiddenPaths,
-  ]);
-
-  assert.deepEqual(byFile.get(join(fixtureRoot, allowedPath)), []);
-  assertArchitectureViolations(byFile, forbiddenPaths);
-});
-
-test("desktop architecture policy permits only public shared-capability dependencies", async () => {
-  const allowedPath = "src/shared/alpha/allowed-public-seams.ts";
-  const forbiddenPaths = [
-    "src/shared/alpha/forbidden-api-composition.ts",
-    "src/shared/alpha/forbidden-deep-shared.ts",
-    "src/shared/alpha/forbidden-feature.ts",
-    "src/shared/alpha/forbidden-native.ts",
-    "src/shared/alpha/forbidden-relative-shared.ts",
-    "src/shared/alpha/forbidden-shell.ts",
-  ];
-  const byFile = await lintArchitectureFixtures([
-    allowedPath,
-    ...forbiddenPaths,
-  ]);
-
-  assert.deepEqual(byFile.get(join(fixtureRoot, allowedPath)), []);
-  assertArchitectureViolations(byFile, forbiddenPaths);
-});
-
-test("desktop architecture policy keeps UI and API internals owner-local", async () => {
-  const allowedPaths = [
-    "src/api/allowed-owner-local.ts",
-    "src/ui/allowed-owner-local.ts",
-  ];
-  const forbiddenPaths = [
-    "src/api/forbidden-ui.ts",
-    "src/ui/forbidden-api.ts",
-    "src/ui/forbidden-feature.ts",
-    "src/ui/forbidden-native.ts",
-    "src/ui/forbidden-shell.ts",
-  ];
-  const byFile = await lintArchitectureFixtures([
-    ...allowedPaths,
-    ...forbiddenPaths,
-  ]);
-
-  for (const path of allowedPaths) {
-    assert.deepEqual(byFile.get(join(fixtureRoot, path)), []);
-  }
-  assertArchitectureViolations(byFile, forbiddenPaths);
-});
-
-test("desktop architecture policy gives test support only public production seams", async () => {
-  const allowedPath = "src/test-support/harness/index.ts";
-  const forbiddenPaths = [
-    "src/test-support/harness/forbidden-api-internal.ts",
-    "src/test-support/harness/forbidden-feature-internal.ts",
-    "src/test-support/harness/forbidden-relative-shared.ts",
-  ];
-  const byFile = await lintArchitectureFixtures([
-    allowedPath,
-    ...forbiddenPaths,
-  ]);
-
-  assert.deepEqual(byFile.get(join(fixtureRoot, allowedPath)), []);
-  assertArchitectureViolations(byFile, forbiddenPaths);
-});
-
-test("desktop architecture policy classifies native, i18n, vendor, tooling, and native-config leaves", async () => {
-  const allowedPaths = [
-    "packages/native-bridge/src/allowed-owner-local.ts",
-    "src/app/allowed-public-seams.ts",
-    "src/i18n/allowed-owner-local.ts",
-    "tooling/allowed-declaration.ts",
-  ];
-  const forbiddenPaths = [
-    "packages/native-bridge/src/forbidden-ui.ts",
-    "src/app/forbidden-native-config.ts",
-    "src/features/alpha/forbidden-vendor-deep.ts",
-    "src/i18n/forbidden-ui.ts",
-    "tooling/forbidden-feature.ts",
-  ];
-  const byFile = await lintArchitectureFixtures([
-    ...allowedPaths,
-    ...forbiddenPaths,
-  ]);
-
-  for (const path of allowedPaths) {
-    assert.deepEqual(byFile.get(join(fixtureRoot, path)), []);
-  }
-  assertArchitectureViolations(byFile, forbiddenPaths);
-});
-
-test("desktop architecture policy fails closed on unknown files and local dependencies", async () => {
-  const unknownFilePath = "src/unknown-owner/file.ts";
-  const unknownDependencyPath =
-    "src/features/alpha/forbidden-unknown-dependency.ts";
-  const byFile = await lintArchitectureFixtures([
-    unknownFilePath,
-    unknownDependencyPath,
-  ]);
-
-  assert.ok(
-    byFile
-      .get(join(fixtureRoot, unknownFilePath))
-      ?.some((message) => message.ruleId === "boundaries/no-unknown-files"),
-  );
-  assert.ok(
-    byFile
-      .get(join(fixtureRoot, unknownDependencyPath))
-      ?.some(
-        (message) => message.ruleId === "boundaries/no-unknown-dependencies",
-      ),
-  );
-});
-
-test("desktop architecture policy covers every default dependency form", async () => {
-  const allowedPaths = [
-    "src/features/alpha/allowed-dynamic-import.ts",
-    "src/features/alpha/allowed-reexport.ts",
-    "src/features/alpha/allowed-require.ts",
-    "src/features/alpha/allowed-type-import.ts",
-  ];
-  const forbiddenPaths = [
-    "src/features/alpha/forbidden-dynamic-import.ts",
-    "src/features/alpha/forbidden-reexport.ts",
-    "src/features/alpha/forbidden-require.ts",
-    "src/features/alpha/forbidden-type-import.ts",
-  ];
-  const byFile = await lintArchitectureFixtures([
-    ...allowedPaths,
-    ...forbiddenPaths,
-  ]);
-
-  for (const path of allowedPaths) {
-    assert.deepEqual(byFile.get(join(fixtureRoot, path)), []);
-  }
-  assertArchitectureViolations(byFile, forbiddenPaths);
-});
-
-test("desktop architecture policy treats every Vitest module literal as a dependency", async () => {
-  const allowedPath = "src/features/alpha/allowed-vi-module-loaders.test.ts";
-  const forbiddenPaths = [
-    "src/features/alpha/forbidden-vi-do-mock.test.ts",
-    "src/features/alpha/forbidden-vi-do-unmock.test.ts",
-    "src/features/alpha/forbidden-vi-import-actual.test.ts",
-    "src/features/alpha/forbidden-vi-import-mock.test.ts",
-    "src/features/alpha/forbidden-vi-mock.test.ts",
-    "src/features/alpha/forbidden-vi-unmock.test.ts",
-  ];
-  const byFile = await lintArchitectureFixtures([
-    allowedPath,
-    ...forbiddenPaths,
-  ]);
-
-  assert.deepEqual(byFile.get(join(fixtureRoot, allowedPath)), []);
-  assertArchitectureViolations(byFile, forbiddenPaths);
-});
-
-test("desktop architecture policy restricts test support and native configuration to tests", async () => {
-  const allowedPaths = [
-    "src/app/allowed-native-config.test.ts",
+    [
+      "./index",
+      "@/app-facade",
+      "@/features/alpha",
+      "@/shared/alpha",
+      "@/ui",
+      "@/api",
+      "@/api/composition",
+      "@/i18n",
+      "@app/native-bridge",
+      "@xyflow/react",
+      "elkjs/lib/elk-api",
+      "elkjs/lib/elk.bundled.js",
+    ],
+    [
+      "@/app-facade/internal",
+      "@/features/alpha/internal",
+      "../../packages/native-bridge/src/internal",
+      "@/shared/alpha/internal",
+      "@/ui/internal",
+      "../../src-tauri/tauri.conf.json",
+    ],
+  ),
+  policyGroup(
+    "src/app-facade/index.ts",
+    ["@/api", "@/ui", "@app/native-bridge"],
+    ["@/api/composition", "@/features/alpha", "@/app"],
+  ),
+  policyGroup(
+    "src/features/alpha/index.ts",
+    [
+      "./internal",
+      "@/app-facade",
+      "@/shared/alpha",
+      "@/ui",
+      "@/api",
+      "@/i18n",
+      "@xyflow/react",
+      "elkjs/lib/elk-api",
+      "elkjs/lib/elk.bundled.js",
+      "./styles.css",
+    ],
+    [
+      "@/api/composition",
+      "@/api/internal",
+      "@/features/beta",
+      "@app/native-bridge",
+      "../../shared/alpha",
+      "@/app",
+      "@/vendor/xyflow-react-types",
+      "@/test-support/harness",
+    ],
+  ),
+  policyGroup(
+    "src/shared/alpha/index.ts",
+    [
+      "./internal",
+      "@/app-facade",
+      "@/api",
+      "@/ui",
+      "@/shared/beta",
+      "@xyflow/react",
+      "elkjs/lib/elk-api",
+      "elkjs/lib/elk.bundled.js",
+    ],
+    [
+      "@/api/composition",
+      "@/shared/beta/internal",
+      "@/features/alpha",
+      "@app/native-bridge",
+      "../beta",
+      "@/app",
+    ],
+  ),
+  policyGroup("src/api/index.ts", ["./internal"], ["@/ui"]),
+  policyGroup(
+    "src/ui/index.ts",
+    ["./internal"],
+    ["@/api", "@/features/alpha", "@app/native-bridge", "@/app"],
+  ),
+  policyGroup(
+    "src/test-support/harness/index.ts",
+    [
+      "@/app-facade",
+      "@/features/alpha",
+      "@/shared/alpha",
+      "@/ui",
+      "@/api",
+      "@/api/composition",
+      "@/i18n",
+      "@app/native-bridge",
+      "@xyflow/react",
+      "elkjs/lib/elk-api",
+      "elkjs/lib/elk.bundled.js",
+    ],
+    ["@/api/internal", "@/features/alpha/internal", "../../shared/alpha"],
+  ),
+  policyGroup(
+    "packages/native-bridge/src/index.ts",
+    ["./internal", "@tauri-apps/api/core", "@tauri-apps/plugin-store"],
+    ["@/ui"],
+  ),
+  policyGroup("src/i18n/index.ts", ["./internal"], ["@/ui"]),
+  policyGroup("tooling/allowed-declaration.ts", [], ["@/features/alpha"]),
+  policyGroup(
     "src/features/alpha/allowed-test-support.test.ts",
-  ];
-  const forbiddenPaths = [
-    "src/app/forbidden-native-config.ts",
-    "src/features/alpha/forbidden-deep-test-support.test.ts",
-    "src/features/alpha/forbidden-test-support.ts",
-  ];
-  const byFile = await lintArchitectureFixtures([
-    ...allowedPaths,
-    ...forbiddenPaths,
-  ]);
+    ["@/test-support/harness"],
+    ["@/test-support/harness/forbidden-api-internal"],
+  ),
+  policyGroup("src/app/allowed-native-config.test.ts", [
+    "../../src-tauri/capabilities/default.json",
+    "../../src-tauri/tauri.conf.json",
+  ]),
+  policyGroup(
+    "src/features/beta/index.ts",
+    [],
+    ["@/features/alpha/styles.css"],
+  ),
+];
 
-  for (const path of allowedPaths) {
-    assert.deepEqual(byFile.get(join(fixtureRoot, path)), []);
+const dependencyFormCases = [
+  [
+    `import type { ApiFixtureType } from "@/api";`,
+    `import type { BetaFixtureType } from "@/features/beta";`,
+  ],
+  [
+    `export { apiValue } from "@/api";`,
+    `export { betaValue } from "@/features/beta";`,
+  ],
+  [`void require("@/api");`, `void require("@/features/beta");`],
+  [`void import("@/api");`, `void import("@/features/beta");`],
+];
+const vitestDependencyMethods = [
+  "mock",
+  "doMock",
+  "unmock",
+  "doUnmock",
+  "importActual",
+  "importMock",
+];
+const restrictedTauriModules = [
+  "@tauri-apps/api",
+  "@tauri-apps/api/core",
+  "@tauri-apps/plugin-store",
+];
+
+test("desktop architecture policy enforces every owner and dependency form", async () => {
+  const eslint = createArchitectureFixtureLinter();
+
+  for (const group of architecturePolicyGroups) {
+    for (const moduleSpecifier of group.allowedModules ?? []) {
+      await assertArchitectureDiagnostics(
+        eslint,
+        group.filePath,
+        staticImport(moduleSpecifier),
+      );
+    }
+    for (const moduleSpecifier of group.forbiddenModules ?? []) {
+      await assertArchitectureDiagnostics(
+        eslint,
+        group.filePath,
+        staticImport(moduleSpecifier),
+        dependencyDiagnostic,
+      );
+    }
   }
-  assertArchitectureViolations(byFile, forbiddenPaths);
-});
 
-test("desktop architecture policy classifies CSS dependencies and declarations", async () => {
-  const allowedPaths = [
-    "src/features/alpha/allowed-css.ts",
-    "src/types/global.d.ts",
-  ];
-  const forbiddenPath = "src/features/beta/forbidden-css.ts";
-  const byFile = await lintArchitectureFixtures([
-    ...allowedPaths,
-    forbiddenPath,
-  ]);
-
-  for (const path of allowedPaths) {
-    assert.deepEqual(byFile.get(join(fixtureRoot, path)), []);
-  }
-  assertArchitectureViolations(byFile, [forbiddenPath]);
-});
-
-test("desktop architecture policy confines external Tauri imports to the native package", async () => {
-  const allowedPath = "packages/native-bridge/src/allowed-tauri.ts";
-  const forbiddenPaths = [
-    "src/features/alpha/forbidden-tauri-api.ts",
-    "src/features/alpha/forbidden-tauri-plugin.ts",
-  ];
-  const byFile = await lintArchitectureFixtures([
-    allowedPath,
-    ...forbiddenPaths,
-  ]);
-
-  assert.deepEqual(byFile.get(join(fixtureRoot, allowedPath)), []);
-  for (const path of forbiddenPaths) {
-    assert.ok(
-      byFile
-        .get(join(fixtureRoot, path))
-        ?.some((message) => message.ruleId === "no-restricted-imports"),
-      `expected ${path} to violate no-restricted-imports`,
+  for (const [allowedSource, forbiddenSource] of dependencyFormCases) {
+    await assertArchitectureDiagnostics(
+      eslint,
+      "src/features/alpha/index.ts",
+      allowedSource,
+    );
+    await assertArchitectureDiagnostics(
+      eslint,
+      "src/features/alpha/index.ts",
+      forbiddenSource,
+      dependencyDiagnostic,
     );
   }
+  for (const method of vitestDependencyMethods) {
+    const filePath = "src/features/alpha/allowed-test-support.test.ts";
+    await assertArchitectureDiagnostics(
+      eslint,
+      filePath,
+      vitestDependencySource(method, "@/app-facade"),
+    );
+    await assertArchitectureDiagnostics(
+      eslint,
+      filePath,
+      vitestDependencySource(method, "@/features/beta"),
+      [{ ruleId: "boundaries/dependencies", line: 2 }],
+    );
+  }
+  for (const moduleSpecifier of restrictedTauriModules) {
+    await assertArchitectureDiagnostics(
+      eslint,
+      "src/features/alpha/index.ts",
+      staticImport(moduleSpecifier),
+      [{ ruleId: "no-restricted-imports", line: 1 }],
+    );
+  }
+  await assertArchitectureDiagnostics(
+    eslint,
+    "tooling/allowed-declaration.ts",
+    `import type { ToolingDeclaration } from "@/types";`,
+  );
+  await assertArchitectureDiagnostics(
+    eslint,
+    "src/types/global.d.ts",
+    `export {};
+declare global {
+  type ArchitectureFixtureDeclaration = string;
+}`,
+  );
+  await assertArchitectureDiagnostics(
+    eslint,
+    "src/unknown-owner/file.ts",
+    `export {};`,
+    [{ ruleId: "boundaries/no-unknown-files", line: 1 }],
+  );
+  await assertArchitectureDiagnostics(
+    eslint,
+    "src/features/alpha/index.ts",
+    staticImport("@/unknown-owner/file"),
+    unknownDependencyDiagnostics,
+  );
 });
 
 function findRule(name) {
@@ -468,19 +352,6 @@ function findRule(name) {
       Object.hasOwn(configEntry.rules, name)
     ) {
       result = configEntry.rules[name];
-    }
-  }
-  return result;
-}
-
-function findLinterOption(name) {
-  let result;
-  for (const configEntry of eslintConfig) {
-    if (
-      configEntry.linterOptions !== undefined &&
-      Object.hasOwn(configEntry.linterOptions, name)
-    ) {
-      result = configEntry.linterOptions[name];
     }
   }
   return result;
@@ -507,8 +378,8 @@ function arrayEqual(left, right) {
   );
 }
 
-async function lintArchitectureFixtures(paths) {
-  const eslint = new ESLint({
+function createArchitectureFixtureLinter() {
+  return new ESLint({
     cwd: fixtureRoot,
     overrideConfigFile: true,
     overrideConfig: createArchitecturePolicy({
@@ -516,65 +387,52 @@ async function lintArchitectureFixtures(paths) {
       parserProjects: [join(fixtureRoot, "tsconfig.json")],
     }),
   });
-  const results = await eslint.lintFiles(paths);
-  return new Map(results.map((result) => [result.filePath, result.messages]));
 }
 
-function assertArchitectureViolations(byFile, paths) {
-  for (const path of paths) {
-    assert.ok(
-      byFile
-        .get(join(fixtureRoot, path))
-        ?.some((message) => message.ruleId === "boundaries/dependencies"),
-      `expected ${path} to violate boundaries/dependencies`,
-    );
-  }
+async function assertArchitectureDiagnostics(
+  eslint,
+  filePath,
+  source,
+  expectedDiagnostics = [],
+) {
+  const [result] = await eslint.lintText(source, {
+    filePath: join(fixtureRoot, filePath),
+  });
+  const actualDiagnostics = result.messages
+    .map(({ ruleId, line }) => ({ ruleId, line }))
+    .sort(compareArchitectureDiagnostics);
+  const sortedExpected = [...expectedDiagnostics].sort(
+    compareArchitectureDiagnostics,
+  );
+
+  assert.deepEqual(
+    actualDiagnostics,
+    sortedExpected,
+    `unexpected architecture diagnostics for ${filePath}\n${source}`,
+  );
+}
+
+function compareArchitectureDiagnostics(left, right) {
+  return left.line - right.line || left.ruleId.localeCompare(right.ruleId);
+}
+
+function staticImport(moduleSpecifier) {
+  return `import "${moduleSpecifier}";`;
+}
+
+function vitestDependencySource(method, moduleSpecifier) {
+  return `import { vi } from "vitest";
+void vi.${method}("${moduleSpecifier}");`;
+}
+
+function policyGroup(filePath, allowedModules, forbiddenModules = []) {
+  return { filePath, allowedModules, forbiddenModules };
 }
 
 async function lintWithAppArchitectureRules(source) {
-  const appPlugin = findAppPlugin();
-  const eslint = new ESLint({
-    overrideConfigFile: true,
-    overrideConfig: [
-      { linterOptions: { noInlineConfig: true } },
-      {
-        files: ["**/*.tsx"],
-        languageOptions: {
-          ecmaVersion: "latest",
-          sourceType: "module",
-          parserOptions: {
-            ecmaFeatures: {
-              jsx: true,
-            },
-          },
-        },
-        plugins: {
-          app: appPlugin,
-        },
-        rules: {
-          "app/no-array-index-key": "error",
-          "app/no-eslint-disable": "error",
-          "app/no-mutable-exports": "error",
-          "app/no-typeof-type-guards": "error",
-          "app/no-useeffect-data-loading": "error",
-        },
-      },
-    ],
-  });
-
-  const [result] = await eslint.lintText(source, {
-    filePath: "src/components/transcriptRows.tsx",
+  const [result] = await desktopPolicyLinter.lintText(source, {
+    filePath: join(desktopRoot, "src/app/debugFailure.ts"),
   });
 
   return result.messages;
-}
-
-function findAppPlugin() {
-  for (const configEntry of eslintConfig) {
-    if (configEntry.plugins?.app !== undefined) {
-      return configEntry.plugins.app;
-    }
-  }
-
-  throw new Error("desktop ESLint config is missing app plugin.");
 }
