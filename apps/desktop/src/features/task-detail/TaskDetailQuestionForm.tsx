@@ -1,9 +1,10 @@
 import { type ReactNode, useId } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { ApprovalDecision, AttentionItem, PendingAsk } from "@/api";
+import { errorMessage, type ApprovalDecision, type AttentionItem, type PendingAsk } from "@/api";
+import type { QuestionAnswerInput } from "@/api";
 import { useOpenExternalLink } from "@/app-facade";
-import { Button, Island, MarkdownText, RadioGroup, RadioGroupItem } from "@/ui";
+import { Button, Island, MarkdownText, RadioGroup, RadioGroupItem, showStatusToast } from "@/ui";
 import { cx, fieldInputClassName } from "@/ui";
 import { emptyQuestionSelection, type QuestionSelectionState } from "./TaskDetailQuestionState";
 import { usePendingAsks, type useTaskMutations } from "./useTaskDetailData";
@@ -140,22 +141,21 @@ function OrdinaryQuestionForm({
       : suggestionRadioValue(selectedOption);
 
   async function submit(): Promise<void> {
-    await answerQuestion.mutateAsync({
-      kind: "ordinary",
-      clientRequestID: questionClientRequestID(attention.askID),
-      taskID: taskId,
-      runID: attention.runID,
-      askID: attention.askID,
-      selectedOptionNumber: selectedOption,
-      freeformAnswer: answer,
-    });
-    onSelectionStateChange({
-      answer: "",
-      approvalDecision: null,
-      askID: attention.askID,
-      selectedOption: null,
-      submitted: true,
-      userSelected: true,
+    await submitQuestionAnswer({
+      answerQuestion,
+      attention,
+      failureTitle: t("states.error"),
+      input: (clientRequestID) => ({
+        kind: "ordinary",
+        clientRequestID,
+        taskID: taskId,
+        runID: attention.runID,
+        askID: attention.askID,
+        selectedOptionNumber: selectedOption,
+        freeformAnswer: answer,
+      }),
+      onSelectionStateChange,
+      selection,
     });
   }
 
@@ -170,6 +170,7 @@ function OrdinaryQuestionForm({
           answer: nextAnswer,
           approvalDecision: null,
           askID: attention.askID,
+          clientRequestID: null,
           selectedOption,
           submitted: false,
           userSelected: selection.userSelected,
@@ -180,6 +181,7 @@ function OrdinaryQuestionForm({
           answer,
           approvalDecision: null,
           askID: attention.askID,
+          clientRequestID: null,
           selectedOption: selectedOptionFromRadioValue(value, suggestions),
           submitted: false,
           userSelected: true,
@@ -264,22 +266,21 @@ function ApprovalQuestionForm({
     if (selectedDecision === null) {
       return;
     }
-    await answerQuestion.mutateAsync({
-      kind: "approval",
-      clientRequestID: questionClientRequestID(attention.askID),
-      taskID: taskId,
-      runID: attention.runID,
-      askID: attention.askID,
-      decision: selectedDecision,
-      commentary: answer,
-    });
-    onSelectionStateChange({
-      answer: "",
-      approvalDecision: null,
-      askID: attention.askID,
-      selectedOption: null,
-      submitted: true,
-      userSelected: true,
+    await submitQuestionAnswer({
+      answerQuestion,
+      attention,
+      failureTitle: t("states.error"),
+      input: (clientRequestID) => ({
+        kind: "approval",
+        clientRequestID,
+        taskID: taskId,
+        runID: attention.runID,
+        askID: attention.askID,
+        decision: selectedDecision,
+        commentary: answer,
+      }),
+      onSelectionStateChange,
+      selection,
     });
   }
 
@@ -294,6 +295,7 @@ function ApprovalQuestionForm({
           answer: nextAnswer,
           approvalDecision: selectedDecision,
           askID: attention.askID,
+          clientRequestID: null,
           selectedOption: null,
           submitted: false,
           userSelected: selection.userSelected,
@@ -304,6 +306,7 @@ function ApprovalQuestionForm({
           answer,
           approvalDecision: approvalDecisionForValue(approvalDecisions, value),
           askID: attention.askID,
+          clientRequestID: null,
           selectedOption: null,
           submitted: false,
           userSelected: true,
@@ -475,6 +478,37 @@ function taskQuestionView(
 
 function questionClientRequestID(askID: string): string {
   return `gui-question-${askID}-${Date.now().toString()}`;
+}
+
+async function submitQuestionAnswer({
+  answerQuestion,
+  attention,
+  failureTitle,
+  input,
+  onSelectionStateChange,
+  selection,
+}: Readonly<{
+  answerQuestion: ReturnType<typeof useTaskMutations>["answerQuestion"];
+  attention: AttentionItem;
+  failureTitle: string;
+  input: (clientRequestID: string) => QuestionAnswerInput;
+  onSelectionStateChange: (selection: QuestionSelectionState) => void;
+  selection: QuestionSelectionState;
+}>): Promise<void> {
+  const clientRequestID = selection.clientRequestID ?? questionClientRequestID(attention.askID);
+  const submittedSelection = { ...selection, clientRequestID, submitted: true };
+  onSelectionStateChange(submittedSelection);
+  try {
+    await answerQuestion.mutateAsync(input(clientRequestID));
+  } catch (error: unknown) {
+    onSelectionStateChange({ ...submittedSelection, submitted: false });
+    showStatusToast({
+      body: errorMessage(error),
+      id: `task-question-answer-failed:${attention.askID}`,
+      title: failureTitle,
+      tone: "danger",
+    });
+  }
 }
 
 function selectionForAsk(selection: QuestionSelectionState, askID: string): QuestionSelectionState {

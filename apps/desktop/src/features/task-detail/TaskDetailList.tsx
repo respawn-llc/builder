@@ -1,7 +1,12 @@
 import { useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { ActivityItem, AttentionItem, TaskComment, TaskDetail } from "@/api";
+import type {
+  ActivityItem,
+  AttentionItem,
+  TaskComment,
+  TaskDetail,
+} from "@/api";
 import { errorMessage } from "@/api";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import { taskDetailInitialFocusRequestKey } from "@/app-facade";
@@ -94,7 +99,18 @@ export function TaskDetailList({
     () => comments.data?.pages.flatMap((page) => page.comments) ?? [],
     [comments.data],
   );
-  const attentionItems = useMemo(() => attention.data?.items ?? [], [attention.data]);
+  const sourceAttentionItems = useMemo(() => attention.data?.items ?? [], [attention.data]);
+  const attentionItems = useMemo(
+    () =>
+      sourceAttentionItems.filter(
+        (item) => item.kind !== "question" || questionSelections.get(item.askID)?.submitted !== true,
+      ),
+    [questionSelections, sourceAttentionItems],
+  );
+  const displayedDetail = useMemo(
+    () => optimisticQuestionAnswerDetail(detail, sourceAttentionItems, attentionItems),
+    [attentionItems, detail, sourceAttentionItems],
+  );
   const listItems = useMemo(
     () =>
       taskDetailListItems({
@@ -107,7 +123,7 @@ export function TaskDetailList({
         commentItems,
         commentsPending: comments.isPending,
         commentsError: comments.error,
-        detail,
+        detail: displayedDetail,
         initialFocus,
         tab: selectedTab,
       }),
@@ -121,7 +137,7 @@ export function TaskDetailList({
       commentItems,
       comments.error,
       comments.isPending,
-      detail,
+      displayedDetail,
       initialFocus,
       selectedTab,
     ],
@@ -130,7 +146,7 @@ export function TaskDetailList({
     () => (attention.isPending || initialFocus !== undefined ? new Set(["inbox"]) : undefined),
     [attention.isPending, initialFocus],
   );
-  const paging = taskDetailPaging({ activity, comments, detailID: detail.id, selectedTab });
+  const paging = taskDetailPaging({ activity, comments, detailID: displayedDetail.id, selectedTab });
 
   return (
     <VirtualizedInfiniteList
@@ -141,7 +157,9 @@ export function TaskDetailList({
       hasNextPage={paging.hasNextPage}
       initialScrollKey={initialFocus !== undefined ? "inbox" : undefined}
       initialScrollRequestKey={
-        initialFocus !== undefined ? taskDetailInitialFocusRequestKey(detail.id, initialFocus) : undefined
+        initialFocus !== undefined
+          ? taskDetailInitialFocusRequestKey(displayedDetail.id, initialFocus)
+          : undefined
       }
       isFetchingNextPage={paging.isFetchingNextPage}
       items={listItems}
@@ -157,8 +175,8 @@ export function TaskDetailList({
           activityCount={activityItems.length}
           attentionItems={attentionItems}
           attentionPending={attention.isPending}
-          commentCount={detail.comments.length}
-          detail={detail}
+          commentCount={displayedDetail.comments.length}
+          detail={displayedDetail}
           disabled={disabled}
           draft={draft}
           descriptionPresentation={descriptionPresentation}
@@ -363,6 +381,78 @@ function LoadingRow({ loadingTitle }: TaskDetailListRowProps): ReactNode {
 function ErrorRow({ errorTitle, item }: TaskDetailListRowProps): ReactNode {
   const error = item.kind === "comments-error" || item.kind === "activity-error" ? item.error : undefined;
   return <ErrorState body={errorMessage(error)} reveal={false} title={errorTitle} />;
+}
+
+function optimisticQuestionAnswerDetail(
+  detail: TaskDetail,
+  sourceAttentionItems: readonly AttentionItem[],
+  attentionItems: readonly AttentionItem[],
+): TaskDetail {
+  const answeredQuestionCount = sourceAttentionItems.length - attentionItems.length;
+  if (answeredQuestionCount === 0) {
+    return detail;
+  }
+  const statusKind = optimisticAttentionStatusKind(attentionItems);
+  return {
+    ...detail,
+    attentionCount: Math.max(0, detail.attentionCount - answeredQuestionCount),
+    status: {
+      ...detail.status,
+      kind: statusKind,
+      nativeState: optimisticNativeStatus(statusKind),
+      attentionTypes: optimisticAttentionTypes(attentionItems),
+    },
+  };
+}
+
+type OptimisticTaskStatusKind =
+  | "waiting_question"
+  | "waiting_approval"
+  | "interrupted"
+  | "running";
+
+function optimisticAttentionStatusKind(
+  attentionItems: readonly AttentionItem[],
+): OptimisticTaskStatusKind {
+  if (attentionItems.some((item) => item.kind === "question")) {
+    return "waiting_question";
+  }
+  if (attentionItems.some((item) => item.kind === "approval")) {
+    return "waiting_approval";
+  }
+  if (attentionItems.some((item) => item.kind === "interrupted_run")) {
+    return "interrupted";
+  }
+  return "running";
+}
+
+function optimisticNativeStatus(kind: OptimisticTaskStatusKind): string {
+  switch (kind) {
+    case "waiting_question":
+      return "waiting_ask";
+    case "waiting_approval":
+      return "waiting_approval";
+    case "interrupted":
+      return "interrupted";
+    case "running":
+      return "running";
+  }
+}
+
+function optimisticAttentionTypes(attentionItems: readonly AttentionItem[]): readonly string[] {
+  const kinds = new Set<string>();
+  for (const item of attentionItems) {
+    switch (item.kind) {
+      case "approval":
+      case "question":
+        kinds.add(item.kind);
+        break;
+      case "interrupted_run":
+        kinds.add("interrupted");
+        break;
+    }
+  }
+  return [...kinds].sort();
 }
 
 function CommentsEmptyRow({ noCommentsTitle }: TaskDetailListRowProps): ReactNode {

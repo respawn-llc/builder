@@ -1350,10 +1350,11 @@ func (s *Service) AnswerWorkflowTaskQuestion(ctx context.Context, req serverapi.
 		memoReq.ApprovalCommentary = req.Approval.Commentary
 	}
 	_, err := s.questionMemo.Do(ctx, req.ClientRequestID, memoReq, sameTaskQuestionAnswerMemoRequest, func(ctx context.Context) (struct{}, error) {
-		run, err := s.store.ResolveTaskWaitingAsk(ctx, workflow.TaskID(req.TaskID), workflow.RunID(req.RunID), req.AskID)
+		resolved, err := s.store.ResolveTaskWaitingAsk(ctx, workflow.TaskID(req.TaskID), workflow.RunID(req.RunID), req.AskID)
 		if err != nil {
 			return struct{}{}, err
 		}
+		run := resolved.Run
 		if strings.TrimSpace(req.ErrorMessage) != "" {
 			if err := s.prompts.SubmitPromptResponse(run.SessionID, askquestion.AskQuestionResponse{RequestID: req.AskID}, errors.New(req.ErrorMessage)); err != nil {
 				return struct{}{}, err
@@ -1373,9 +1374,7 @@ func (s *Service) AnswerWorkflowTaskQuestion(ctx context.Context, req serverapi.
 				return struct{}{}, err
 			}
 		}
-		if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
-			s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "question_answered", req.TaskID, string(run.ID), req.AskID)
-		}
+		s.publishWorkflowEvent(ctx, resolved.ProjectID, string(resolved.WorkflowID), "task", "question_answered", req.TaskID, string(run.ID), req.AskID)
 		return struct{}{}, nil
 	})
 	return err

@@ -158,7 +158,6 @@ export function useTaskMutations(taskID: string, onChanged?: () => void) {
     }),
     answerQuestion: useMutation({
       mutationFn: async (input: QuestionAnswerInput) => api.answerQuestion(input),
-      onSuccess: refresh,
     }),
   };
 }
