@@ -22,14 +22,14 @@ func (d *Dispatcher) invoke(event lifecyclecontract.Event) {
 	defer func() { <-d.active }()
 	payload, err := lifecyclecontract.Encode(event)
 	if err != nil {
-		d.report(Issue{Category: event.Category, Err: fmt.Errorf("encode lifecycle hook payload: %w", err)})
+		d.report(NewProcessIssue(event.Category, fmt.Errorf("encode lifecycle hook payload: %w", err), ""))
 		return
 	}
 	ctx, cancel := context.WithTimeout(d.ctx, timeout)
 	defer cancel()
 	stderr, writerErr := boundedio.NewWriter(stderrLimit)
 	if writerErr != nil {
-		d.report(Issue{Category: event.Category, Err: writerErr})
+		d.report(NewProcessIssue(event.Category, writerErr, ""))
 		return
 	}
 	command := exec.CommandContext(ctx, d.command[0], d.command[1:]...)
@@ -43,13 +43,9 @@ func (d *Dispatcher) invoke(event lifecyclecontract.Event) {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		err = fmt.Errorf("lifecycle hook timed out after %s", timeout)
 	}
-	d.report(Issue{
-		Category: event.Category,
-		Err:      err,
-		Stderr:   stderr.String(),
-	})
+	d.report(NewProcessIssue(event.Category, err, stderr.String()))
 }
 
 func (d *Dispatcher) report(issue Issue) {
-	d.issues.Report(issue)
+	d.Report(issue)
 }

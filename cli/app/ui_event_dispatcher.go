@@ -3,6 +3,8 @@ package app
 import (
 	"fmt"
 
+	"core/cli/app/internal/lifecyclehook"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -53,16 +55,33 @@ func (m *uiModel) reduceDispatchedEvent(message tea.Msg) uiFeatureUpdateResult {
 	}
 	if dispatched.issue != nil {
 		issue := *dispatched.issue
-		m.logf(
-			"lifecycle_hook.issue count=%d category=%q err=%q stderr=%q",
-			issue.Count,
-			issue.Category,
-			issue.Err,
-			issue.Stderr,
-		)
-		message := fmt.Sprintf("Lifecycle hook failed: %v", issue.Err)
-		if issue.Count > 1 {
-			message = fmt.Sprintf("%d lifecycle hooks failed; latest: %v", issue.Count, issue.Err)
+		var message string
+		switch detail := issue.Detail.(type) {
+		case lifecyclehook.ProcessIssue:
+			m.logf(
+				"lifecycle_hook.issue count=%d category=%q err=%q stderr=%q",
+				issue.Count,
+				detail.Category,
+				detail.Cause,
+				detail.Stderr,
+			)
+			message = fmt.Sprintf("Lifecycle hook failed: %v", detail.Cause)
+			if issue.Count > 1 {
+				message = fmt.Sprintf("%d lifecycle hooks failed; latest: %v", issue.Count, detail.Cause)
+			}
+		case lifecyclehook.ObservationIssue:
+			m.logf(
+				"lifecycle_hook.observation_issue count=%d fact=%q err=%q",
+				issue.Count,
+				detail.Fact,
+				detail.Cause,
+			)
+			message = fmt.Sprintf("Lifecycle hook context rejected: %v", detail.Cause)
+			if issue.Count > 1 {
+				message = fmt.Sprintf("%d lifecycle issues; latest context rejection: %v", issue.Count, detail.Cause)
+			}
+		default:
+			panic(fmt.Sprintf("unknown lifecycle issue detail %T", issue.Detail))
 		}
 		cmd := m.sendTransientStatusWithNoticeID(
 			message,

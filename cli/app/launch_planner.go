@@ -39,7 +39,7 @@ type sessionLaunchPlan struct {
 	ActiveSettings             config.Settings
 	EnabledTools               []toolspec.ID
 	ConfiguredModelName        string
-	SessionName                string
+	SessionTitle               *string
 	PromptHistory              []string
 	ModelContractLocked        bool
 	StatusConfig               uiStatusConfig
@@ -60,6 +60,16 @@ type runtimeLaunchPlan struct {
 	detachClose      func() error
 	closeOnce        sync.Once
 	closeErr         error
+}
+
+func optionalLaunchSessionTitle(value string) (*string, error) {
+	if value == "" {
+		return nil, nil
+	}
+	if strings.TrimSpace(value) == "" {
+		return nil, errors.New("session launch title cannot be blank")
+	}
+	return &value, nil
 }
 
 func (p *runtimeLaunchPlan) Close() error {
@@ -170,13 +180,17 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 	}
 	cfg := p.server.Config()
 	authState := launchPlannerAuthState(p.server)
+	sessionTitle, err := optionalLaunchSessionTitle(resp.Plan.SessionName)
+	if err != nil {
+		return sessionLaunchPlan{}, err
+	}
 	return sessionLaunchPlan{
 		Mode:                req.Mode,
 		SessionID:           resp.Plan.SessionID,
 		ActiveSettings:      resp.Plan.ActiveSettings,
 		EnabledTools:        enabledTools,
 		ConfiguredModelName: resp.Plan.ConfiguredModelName,
-		SessionName:         resp.Plan.SessionName,
+		SessionTitle:        sessionTitle,
 		PromptHistory:       append([]string(nil), resp.Plan.PromptHistory...),
 		ModelContractLocked: resp.Plan.ModelContractLocked,
 		StatusConfig: uiStatusConfig{

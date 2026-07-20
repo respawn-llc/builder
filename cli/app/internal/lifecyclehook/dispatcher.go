@@ -58,6 +58,13 @@ func (d *Dispatcher) Issues() <-chan Issue {
 	return d.issues.Issues()
 }
 
+func (d *Dispatcher) Report(issue Issue) {
+	if d == nil || d.closed.Load() {
+		return
+	}
+	d.issues.Report(issue)
+}
+
 func (d *Dispatcher) Done() <-chan struct{} {
 	if d == nil {
 		return nil

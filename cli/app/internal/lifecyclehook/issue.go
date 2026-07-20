@@ -7,11 +7,58 @@ import (
 	"core/shared/lifecyclecontract"
 )
 
-type Issue struct {
+type ObservationFact string
+
+const (
+	ObservationFactSessionIdentity ObservationFact = "session_identity"
+	ObservationFactSessionStatus   ObservationFact = "session_status"
+)
+
+type IssueDetail interface {
+	error
+	lifecycleIssueDetail()
+}
+
+type ProcessIssue struct {
 	Category lifecyclecontract.Category
-	Err      error
+	Cause    error
 	Stderr   string
-	Count    int
+}
+
+func (i ProcessIssue) Error() string {
+	if i.Cause == nil {
+		return "lifecycle hook process failed"
+	}
+	return i.Cause.Error()
+}
+
+func (ProcessIssue) lifecycleIssueDetail() {}
+
+type ObservationIssue struct {
+	Fact  ObservationFact
+	Cause error
+}
+
+func (i ObservationIssue) Error() string {
+	if i.Cause == nil {
+		return "lifecycle hook observation failed"
+	}
+	return i.Cause.Error()
+}
+
+func (ObservationIssue) lifecycleIssueDetail() {}
+
+type Issue struct {
+	Detail IssueDetail
+	Count  int
+}
+
+func NewProcessIssue(category lifecyclecontract.Category, cause error, stderr string) Issue {
+	return Issue{Detail: ProcessIssue{Category: category, Cause: cause, Stderr: stderr}}
+}
+
+func NewObservationIssue(fact ObservationFact, cause error) Issue {
+	return Issue{Detail: ObservationIssue{Fact: fact, Cause: cause}}
 }
 
 type issueReporter struct {
@@ -37,6 +84,9 @@ func (r *issueReporter) Issues() <-chan Issue {
 }
 
 func (r *issueReporter) Report(issue Issue) {
+	if issue.Detail == nil {
+		panic("report lifecycle issue without detail")
+	}
 	if issue.Count <= 0 {
 		issue.Count = 1
 	}

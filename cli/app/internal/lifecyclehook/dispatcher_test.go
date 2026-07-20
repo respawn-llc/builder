@@ -44,7 +44,8 @@ func TestDispatcherSurfacesLaunchAndBoundedStderrFailures(t *testing.T) {
 		t.Cleanup(dispatcher.Close)
 		dispatcher.Submit(testLifecycleEvent())
 		issue := waitForDispatcherIssue(t, dispatcher.Issues(), 3*time.Second)
-		if issue.Err == nil || issue.Category != lifecyclecontract.CategorySessionStart {
+		process := requireProcessIssue(t, issue)
+		if process.Cause == nil || process.Category != lifecyclecontract.CategorySessionStart {
 			t.Fatalf("issue = %+v", issue)
 		}
 	})
@@ -55,13 +56,14 @@ func TestDispatcherSurfacesLaunchAndBoundedStderrFailures(t *testing.T) {
 		t.Cleanup(dispatcher.Close)
 		dispatcher.Submit(testLifecycleEvent())
 		issue := waitForDispatcherIssue(t, dispatcher.Issues(), 3*time.Second)
-		if issue.Err == nil {
+		process := requireProcessIssue(t, issue)
+		if process.Cause == nil {
 			t.Fatal("missing nonzero exit error")
 		}
-		if len(issue.Stderr) > 4*1024 {
-			t.Fatalf("stderr length = %d, want at most 4096", len(issue.Stderr))
+		if len(process.Stderr) > 4*1024 {
+			t.Fatalf("stderr length = %d, want at most 4096", len(process.Stderr))
 		}
-		if issue.Stderr == "" {
+		if process.Stderr == "" {
 			t.Fatal("bounded stderr omitted hook diagnostics")
 		}
 	})
@@ -116,7 +118,7 @@ func TestDispatcherFailurePresentationDoesNotHoldActiveProcessSlots(t *testing.T
 	deadline := time.Now().Add(5 * time.Second)
 	for totalFailures < 129 && time.Now().Before(deadline) {
 		issue := waitForDispatcherIssue(t, dispatcher.Issues(), 3*time.Second)
-		if issue.Err == nil {
+		if requireProcessIssue(t, issue).Cause == nil {
 			t.Fatalf("issue omitted failure: %+v", issue)
 		}
 		totalFailures += issue.Count
@@ -134,9 +136,18 @@ func TestDispatcherTimesOutHooks(t *testing.T) {
 	dispatcher.Submit(testLifecycleEvent())
 
 	issue := waitForDispatcherIssue(t, dispatcher.Issues(), 35*time.Second)
-	if issue.Err == nil {
+	if requireProcessIssue(t, issue).Cause == nil {
 		t.Fatal("timeout omitted failure")
 	}
+}
+
+func requireProcessIssue(t *testing.T, issue lifecyclehook.Issue) lifecyclehook.ProcessIssue {
+	t.Helper()
+	process, ok := issue.Detail.(lifecyclehook.ProcessIssue)
+	if !ok {
+		t.Fatalf("issue detail = %T, want process issue", issue.Detail)
+	}
+	return process
 }
 
 func TestDispatcherCloseReturnsWithoutWaitingForHookProcess(t *testing.T) {

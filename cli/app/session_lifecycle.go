@@ -289,11 +289,18 @@ func prepareSessionUIRun(
 		initialPromptHistoryRecorded: initialPromptHistoryRecorded,
 		initialInput:                 initialState.Input,
 		recoveryBuffers:              initialState.RecoveryBuffers,
-		sessionName:                  plan.SessionName,
+		sessionName:                  optionalStringValue(plan.SessionTitle),
 		modelContractLocked:          plan.ModelContractLocked,
 		configuredModelName:          plan.ConfiguredModelName,
 		statusConfig:                 plan.StatusConfig,
 	}, nil
+}
+
+func optionalStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func closeRuntimePlanAfterPreparationFailure(runtimePlan *runtimeLaunchPlan, preparationErr error) error {

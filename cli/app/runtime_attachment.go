@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"core/cli/app/internal/lifecyclehook"
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/apicontract"
 	"core/shared/lifecyclecontract"
@@ -104,7 +105,7 @@ func prepareSharedRuntimeWiring(
 	initialLifecycleContext := lifecyclecontract.Context{}
 	if len(plan.ClientLifecycleCommand) > 0 {
 		var err error
-		initialLifecycleContext, err = lifecycleInitialContext(plan.SessionID, plan.SessionName)
+		initialLifecycleContext, err = lifecyclehook.InitialContext(plan.SessionID, plan.SessionTitle)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -133,7 +134,10 @@ func prepareSharedRuntimeWiring(
 				return sessionName
 			}
 		}
-		return strings.TrimSpace(plan.SessionName)
+		if plan.SessionTitle == nil {
+			return ""
+		}
+		return strings.TrimSpace(*plan.SessionTitle)
 	}, terminalFocus.FocusedForAttention)
 	var promptAttention promptAttentionSink = turnQueueHook
 	if lifecycleProxy != nil {

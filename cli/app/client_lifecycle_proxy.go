@@ -2,16 +2,11 @@ package app
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"strings"
-	"sync"
 	"time"
 
 	"core/cli/app/internal/lifecyclehook"
 	"core/shared/clientui"
 	"core/shared/lifecyclecontract"
-	"core/shared/runtimeids"
 )
 
 type lifecycleHookIssue = lifecyclehook.Issue
@@ -19,8 +14,7 @@ type lifecycleHookIssue = lifecyclehook.Issue
 type clientLifecycleProxy struct {
 	dispatcher   *lifecyclehook.Dispatcher
 	focused      func() bool
-	contextMu    sync.RWMutex
-	eventContext lifecyclecontract.Context
+	eventContext *lifecyclehook.EventContext
 }
 
 func newClientLifecycleProxy(
@@ -36,7 +30,7 @@ func newClientLifecycleProxy(
 	return &clientLifecycleProxy{
 		dispatcher:   dispatcher,
 		focused:      focused,
-		eventContext: initialContext,
+		eventContext: lifecyclehook.NewEventContext(initialContext),
 	}
 }
 
@@ -118,44 +112,27 @@ func (p *clientLifecycleProxy) acceptLiveRunFinished(result clientui.TranscriptL
 }
 
 func (p *clientLifecycleProxy) acceptSessionIdentity(identity clientui.TranscriptSessionIdentity) {
-	if err := identity.Validate(); err != nil {
+	if err := p.eventContext.AcceptSessionIdentity(identity); err != nil {
+		p.dispatcher.Report(lifecyclehook.NewObservationIssue(
+			lifecyclehook.ObservationFactSessionIdentity,
+			err,
+		))
 		return
 	}
-	p.contextMu.Lock()
-	sessionID := identity.SessionID
-	p.eventContext.SessionID = &sessionID
-	p.eventContext.SessionTitle = cloneOptionalString(identity.SessionName)
-	p.contextMu.Unlock()
 }
 
 func (p *clientLifecycleProxy) acceptSessionStatus(status clientui.TranscriptSessionStatus) {
-	if err := status.Validate(); err != nil {
+	if err := p.eventContext.AcceptSessionStatus(status); err != nil {
+		p.dispatcher.Report(lifecyclehook.NewObservationIssue(
+			lifecyclehook.ObservationFactSessionStatus,
+			err,
+		))
 		return
 	}
-	p.contextMu.Lock()
-	if status.Workflow == nil {
-		p.eventContext.WorkflowTaskID = nil
-	} else {
-		typed := lifecyclecontract.WorkflowTaskID(status.Workflow.TaskID)
-		p.eventContext.WorkflowTaskID = &typed
-	}
-	p.contextMu.Unlock()
 }
 
 func (p *clientLifecycleProxy) context() lifecyclecontract.Context {
-	p.contextMu.RLock()
-	defer p.contextMu.RUnlock()
-	context := p.eventContext
-	context.SessionTitle = cloneOptionalString(context.SessionTitle)
-	if context.SessionID != nil {
-		sessionID := *context.SessionID
-		context.SessionID = &sessionID
-	}
-	if context.WorkflowTaskID != nil {
-		taskID := *context.WorkflowTaskID
-		context.WorkflowTaskID = &taskID
-	}
-	return context
+	return p.eventContext.Snapshot()
 }
 
 func (p *clientLifecycleProxy) isFocused() bool {
@@ -166,30 +143,4 @@ func (p *clientLifecycleProxy) enqueue(event lifecyclecontract.Event) {
 	if p != nil {
 		p.dispatcher.Submit(event)
 	}
-}
-
-func lifecycleInitialContext(sessionID string, sessionTitle string) (lifecyclecontract.Context, error) {
-	parsed, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
-	if err != nil {
-		return lifecyclecontract.Context{}, fmt.Errorf("parse lifecycle session id: %w", err)
-	}
-	context := lifecyclecontract.Context{SessionID: &parsed}
-	if sessionTitle != "" {
-		if strings.TrimSpace(sessionTitle) == "" {
-			return lifecyclecontract.Context{}, errors.New("lifecycle session title cannot be blank")
-		}
-		context.SessionTitle = &sessionTitle
-	}
-	if err := context.Validate(); err != nil {
-		return lifecyclecontract.Context{}, err
-	}
-	return context, nil
-}
-
-func cloneOptionalString(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
 }
