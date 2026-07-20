@@ -366,3 +366,452 @@ func taskUpdatedAtUnixMs(t *testing.T, ctx context.Context, store *Store, taskID
 	}
 	return updatedAt
 }
+
+func TestTaskLabelsReadEmptyAndAddOne(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	projectLabel, err := store.CreateProjectLabel(ctx, binding.ProjectID, "area/runtime")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel: %v", err)
+	}
+
+	assigned, err := store.GetTaskLabelIDs(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskLabelIDs empty: %v", err)
+	}
+	if len(assigned) != 0 {
+		t.Fatalf("empty task labels = %+v", assigned)
+	}
+	before := taskUpdatedAtUnixMs(t, ctx, store, task.ID)
+	assigned, err = store.UpdateTaskLabels(ctx, TaskLabelUpdateRequest{
+		TaskID:      task.ID,
+		AddLabelIDs: []string{projectLabel.ID.String()},
+	})
+	if err != nil {
+		t.Fatalf("UpdateTaskLabels add: %v", err)
+	}
+	if len(assigned) != 1 || assigned[0] != projectLabel.ID {
+		t.Fatalf("assigned labels = %+v, want %s", assigned, projectLabel.ID.String())
+	}
+	if got := taskUpdatedAtUnixMs(t, ctx, store, task.ID); got != before {
+		t.Fatalf("task updated_at after assignment = %d, want %d", got, before)
+	}
+}
+
+func TestTaskLabelUpdateIsIdempotentAtomicAndAlphabeticallyOrdered(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	zulu, err := store.CreateProjectLabel(ctx, binding.ProjectID, "Zulu")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel Zulu: %v", err)
+	}
+	alpha, err := store.CreateProjectLabel(ctx, binding.ProjectID, "alpha")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel alpha: %v", err)
+	}
+	absent, err := store.CreateProjectLabel(ctx, binding.ProjectID, "absent")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel absent: %v", err)
+	}
+
+	assigned, err := store.UpdateTaskLabels(ctx, TaskLabelUpdateRequest{
+		TaskID:      task.ID,
+		AddLabelIDs: []string{zulu.ID.String(), alpha.ID.String()},
+	})
+	if err != nil {
+		t.Fatalf("UpdateTaskLabels add batch: %v", err)
+	}
+	if len(assigned) != 2 || assigned[0] != alpha.ID || assigned[1] != zulu.ID {
+		t.Fatalf("ordered assigned labels = %+v, want alpha then Zulu", assigned)
+	}
+	assigned, err = store.UpdateTaskLabels(ctx, TaskLabelUpdateRequest{
+		TaskID:         task.ID,
+		AddLabelIDs:    []string{alpha.ID.String()},
+		RemoveLabelIDs: []string{absent.ID.String()},
+	})
+	if err != nil {
+		t.Fatalf("UpdateTaskLabels idempotent add/remove: %v", err)
+	}
+	if len(assigned) != 2 || assigned[0] != alpha.ID || assigned[1] != zulu.ID {
+		t.Fatalf("idempotent assigned labels = %+v", assigned)
+	}
+	assigned, err = store.UpdateTaskLabels(ctx, TaskLabelUpdateRequest{
+		TaskID:         task.ID,
+		RemoveLabelIDs: []string{alpha.ID.String()},
+	})
+	if err != nil {
+		t.Fatalf("UpdateTaskLabels remove: %v", err)
+	}
+	if len(assigned) != 1 || assigned[0] != zulu.ID {
+		t.Fatalf("assigned labels after remove = %+v, want Zulu", assigned)
+	}
+}
+
+func TestTaskLabelUpdateRejectsMalformedCollectionsBeforeMutation(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	projectLabel, err := store.CreateProjectLabel(ctx, binding.ProjectID, "valid")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel: %v", err)
+	}
+
+	for _, test := range []struct {
+		name   string
+		req    TaskLabelUpdateRequest
+		reason TaskLabelMutationErrorReason
+	}{
+		{
+			name: "duplicate add",
+			req: TaskLabelUpdateRequest{
+				TaskID:      task.ID,
+				AddLabelIDs: []string{projectLabel.ID.String(), projectLabel.ID.String()},
+			},
+			reason: TaskLabelMutationDuplicateAdd,
+		},
+		{
+			name: "duplicate remove",
+			req: TaskLabelUpdateRequest{
+				TaskID:         task.ID,
+				RemoveLabelIDs: []string{projectLabel.ID.String(), projectLabel.ID.String()},
+			},
+			reason: TaskLabelMutationDuplicateRemove,
+		},
+		{
+			name: "overlap",
+			req: TaskLabelUpdateRequest{
+				TaskID:         task.ID,
+				AddLabelIDs:    []string{projectLabel.ID.String()},
+				RemoveLabelIDs: []string{projectLabel.ID.String()},
+			},
+			reason: TaskLabelMutationOverlap,
+		},
+		{
+			name: "invalid canonical ID",
+			req: TaskLabelUpdateRequest{
+				TaskID:      task.ID,
+				AddLabelIDs: []string{"not-a-label-id"},
+			},
+			reason: TaskLabelMutationInvalidID,
+		},
+		{
+			name: "raw 101 IDs precede ID parsing",
+			req: TaskLabelUpdateRequest{
+				TaskID:      task.ID,
+				AddLabelIDs: make([]string, label.MaxProjectLabels+1),
+			},
+			reason: TaskLabelMutationTooManyAdd,
+		},
+		{
+			name: "raw 101 remove IDs precede ID parsing",
+			req: TaskLabelUpdateRequest{
+				TaskID:         task.ID,
+				RemoveLabelIDs: make([]string, label.MaxProjectLabels+1),
+			},
+			reason: TaskLabelMutationTooManyRemove,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := store.UpdateTaskLabels(ctx, test.req)
+			var mutationErr TaskLabelMutationError
+			if !errors.As(err, &mutationErr) || mutationErr.Reason != test.reason {
+				t.Fatalf("UpdateTaskLabels error = %T %v, want reason %q", err, err, test.reason)
+			}
+			assigned, err := store.GetTaskLabelIDs(ctx, task.ID)
+			if err != nil {
+				t.Fatalf("GetTaskLabelIDs after rejection: %v", err)
+			}
+			if len(assigned) != 0 {
+				t.Fatalf("assignments after rejected mutation = %+v", assigned)
+			}
+		})
+	}
+}
+
+func TestTaskLabelUpdateRejectsMissingAndWrongProjectReferencesAtomically(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	own, err := store.CreateProjectLabel(ctx, binding.ProjectID, "own")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel own: %v", err)
+	}
+	other, err := store.metadata.CreateProjectForWorkspace(ctx, t.TempDir(), "Other Project")
+	if err != nil {
+		t.Fatalf("CreateProjectForWorkspace: %v", err)
+	}
+	foreign, err := store.CreateProjectLabel(ctx, other.ProjectID, "foreign")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel foreign: %v", err)
+	}
+	missing := label.NewID()
+
+	if _, err := store.UpdateTaskLabels(ctx, TaskLabelUpdateRequest{
+		TaskID:      task.ID,
+		AddLabelIDs: []string{own.ID.String(), foreign.ID.String()},
+	}); !errors.Is(err, ErrTaskLabelWrongProject) {
+		t.Fatalf("UpdateTaskLabels wrong project = %v, want ErrTaskLabelWrongProject", err)
+	}
+	if _, err := store.UpdateTaskLabels(ctx, TaskLabelUpdateRequest{
+		TaskID:      task.ID,
+		AddLabelIDs: []string{own.ID.String(), missing.String()},
+	}); !errors.Is(err, ErrTaskLabelNotFound) {
+		t.Fatalf("UpdateTaskLabels missing label = %v, want ErrTaskLabelNotFound", err)
+	}
+	if _, err := store.UpdateTaskLabels(ctx, TaskLabelUpdateRequest{
+		TaskID:      workflow.TaskID("missing-task"),
+		AddLabelIDs: []string{own.ID.String()},
+	}); !errors.Is(err, ErrTaskLabelTaskNotFound) {
+		t.Fatalf("UpdateTaskLabels missing task = %v, want ErrTaskLabelTaskNotFound", err)
+	}
+	assigned, err := store.GetTaskLabelIDs(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskLabelIDs after atomic failures: %v", err)
+	}
+	if len(assigned) != 0 {
+		t.Fatalf("assignments after atomic failures = %+v", assigned)
+	}
+	if _, err := store.GetTaskLabelIDs(ctx, workflow.TaskID("missing-task")); !errors.Is(err, ErrTaskLabelTaskNotFound) {
+		t.Fatalf("GetTaskLabelIDs missing task = %v, want ErrTaskLabelTaskNotFound", err)
+	}
+}
+
+func TestTaskLabelAssignmentSupportsEveryTaskLifecycleState(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	projectLabel, err := store.CreateProjectLabel(ctx, binding.ProjectID, "lifecycle")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel: %v", err)
+	}
+
+	backlog := createDefaultTask(t, ctx, store, binding.ProjectID)
+
+	active := createDefaultTask(t, ctx, store, binding.ProjectID)
+	startTask(t, ctx, store, active.ID)
+
+	running := createDefaultTask(t, ctx, store, binding.ProjectID)
+	runningStart := startTask(t, ctx, store, running.ID)
+	claimRunFixture(t, ctx, store, runningStart.RunID, 0)
+
+	interrupted := createDefaultTask(t, ctx, store, binding.ProjectID)
+	interruptedStart := startTask(t, ctx, store, interrupted.ID)
+	claimRunFixture(t, ctx, store, interruptedStart.RunID, 0)
+	if err := store.InterruptRun(ctx, interruptedStart.RunID, "test", "{}"); err != nil {
+		t.Fatalf("InterruptRun: %v", err)
+	}
+
+	done := createDefaultTask(t, ctx, store, binding.ProjectID)
+	doneStart := startTask(t, ctx, store, done.ID)
+	completeRun(t, ctx, store, CompleteRunRequest{RunID: doneStart.RunID, TransitionID: "done"})
+
+	canceled := createDefaultTask(t, ctx, store, binding.ProjectID)
+	if _, err := store.CancelTask(ctx, canceled.ID, "test"); err != nil {
+		t.Fatalf("CancelTask: %v", err)
+	}
+
+	for name, task := range map[string]TaskRecord{
+		"backlog":     backlog,
+		"active":      active,
+		"running":     running,
+		"interrupted": interrupted,
+		"done":        done,
+		"canceled":    canceled,
+	} {
+		t.Run(name, func(t *testing.T) {
+			assigned, err := store.UpdateTaskLabels(ctx, TaskLabelUpdateRequest{
+				TaskID:      task.ID,
+				AddLabelIDs: []string{projectLabel.ID.String()},
+			})
+			if err != nil {
+				t.Fatalf("UpdateTaskLabels: %v", err)
+			}
+			if len(assigned) != 1 || assigned[0] != projectLabel.ID {
+				t.Fatalf("assigned labels = %+v", assigned)
+			}
+			assigned, err = store.UpdateTaskLabels(ctx, TaskLabelUpdateRequest{
+				TaskID:         task.ID,
+				RemoveLabelIDs: []string{projectLabel.ID.String()},
+			})
+			if err != nil {
+				t.Fatalf("UpdateTaskLabels remove: %v", err)
+			}
+			if len(assigned) != 0 {
+				t.Fatalf("assigned labels after remove = %+v", assigned)
+			}
+		})
+	}
+}
+
+func TestTaskLabelUpdateAcceptsTheFullProjectCatalog(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	rawIDs := make([]string, 0, label.MaxProjectLabels)
+	for index := label.MaxProjectLabels - 1; index >= 0; index-- {
+		projectLabel, err := store.CreateProjectLabel(ctx, binding.ProjectID, fmt.Sprintf("label-%03d", index))
+		if err != nil {
+			t.Fatalf("CreateProjectLabel %d: %v", index, err)
+		}
+		rawIDs = append(rawIDs, projectLabel.ID.String())
+	}
+
+	assigned, err := store.UpdateTaskLabels(ctx, TaskLabelUpdateRequest{
+		TaskID:      task.ID,
+		AddLabelIDs: rawIDs,
+	})
+	if err != nil {
+		t.Fatalf("UpdateTaskLabels full catalog: %v", err)
+	}
+	if len(assigned) != label.MaxProjectLabels {
+		t.Fatalf("assigned label count = %d, want %d", len(assigned), label.MaxProjectLabels)
+	}
+	catalog, err := store.ListProjectLabels(ctx, binding.ProjectID)
+	if err != nil {
+		t.Fatalf("ListProjectLabels: %v", err)
+	}
+	for index := range catalog {
+		if assigned[index] != catalog[index].ID {
+			t.Fatalf("assigned order at %d = %s, want %s", index, assigned[index].String(), catalog[index].ID.String())
+		}
+	}
+}
+
+func TestTaskCreateCommitsLabelsAtomically(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	zulu, err := store.CreateProjectLabel(ctx, binding.ProjectID, "Zulu")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel Zulu: %v", err)
+	}
+	alpha, err := store.CreateProjectLabel(ctx, binding.ProjectID, "alpha")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel alpha: %v", err)
+	}
+
+	task, err := store.CreateTask(ctx, CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Labeled task",
+		Body:      "Body",
+		LabelIDs:  []string{zulu.ID.String(), alpha.ID.String()},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask labeled: %v", err)
+	}
+	assigned, err := store.GetTaskLabelIDs(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskLabelIDs: %v", err)
+	}
+	if len(assigned) != 2 || assigned[0] != alpha.ID || assigned[1] != zulu.ID {
+		t.Fatalf("created task labels = %+v, want alpha then Zulu", assigned)
+	}
+}
+
+func TestTaskCreateInvalidLabelsRollBackTaskPlacementAndAssignments(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	own, err := store.CreateProjectLabel(ctx, binding.ProjectID, "own")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel own: %v", err)
+	}
+	other, err := store.metadata.CreateProjectForWorkspace(ctx, t.TempDir(), "Other Project")
+	if err != nil {
+		t.Fatalf("CreateProjectForWorkspace: %v", err)
+	}
+	foreign, err := store.CreateProjectLabel(ctx, other.ProjectID, "foreign")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel foreign: %v", err)
+	}
+	missing := label.NewID()
+
+	for _, test := range []struct {
+		name     string
+		labelIDs []string
+		target   error
+	}{
+		{
+			name:     "missing label",
+			labelIDs: []string{own.ID.String(), missing.String()},
+			target:   ErrTaskLabelNotFound,
+		},
+		{
+			name:     "wrong project label",
+			labelIDs: []string{own.ID.String(), foreign.ID.String()},
+			target:   ErrTaskLabelWrongProject,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			beforeSequence := projectNextTaskSequence(t, ctx, store, binding.ProjectID)
+			if _, err := store.CreateTask(ctx, CreateTaskRequest{
+				ProjectID: binding.ProjectID,
+				Title:     "Invalid labeled task",
+				Body:      "Body",
+				LabelIDs:  test.labelIDs,
+			}); !errors.Is(err, test.target) {
+				t.Fatalf("CreateTask error = %v, want %v", err, test.target)
+			}
+			assertTaskCreationUnchanged(t, ctx, store, binding.ProjectID, beforeSequence)
+			var assignmentCount int
+			if err := store.db.QueryRowContext(
+				ctx,
+				`SELECT COUNT(*) FROM task_label_assignments`,
+			).Scan(&assignmentCount); err != nil {
+				t.Fatalf("count task label assignments: %v", err)
+			}
+			if assignmentCount != 0 {
+				t.Fatalf("assignment count after rollback = %d, want 0", assignmentCount)
+			}
+		})
+	}
+}
+
+func TestLabelDeleteRacingWithAssignmentConvergesWithoutOrphans(t *testing.T) {
+	ctx, fixtureStore, binding, cfg := newTestStoreWithConfigContext(t)
+	createLinkedValidWorkflow(t, ctx, fixtureStore, binding.ProjectID)
+	task := createDefaultTask(t, ctx, fixtureStore, binding.ProjectID)
+	projectLabel, err := fixtureStore.CreateProjectLabel(ctx, binding.ProjectID, "race")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel: %v", err)
+	}
+	assignStore, deleteStore := openConcurrentWorkflowStores(t, cfg)
+
+	start := make(chan struct{})
+	assignmentResult := make(chan error, 1)
+	deleteResult := make(chan error, 1)
+	go func() {
+		<-start
+		_, err := assignStore.UpdateTaskLabels(ctx, TaskLabelUpdateRequest{
+			TaskID:      task.ID,
+			AddLabelIDs: []string{projectLabel.ID.String()},
+		})
+		assignmentResult <- err
+	}()
+	go func() {
+		<-start
+		_, err := deleteStore.DeleteProjectLabel(ctx, binding.ProjectID, projectLabel.ID)
+		deleteResult <- err
+	}()
+	close(start)
+
+	if err := <-deleteResult; err != nil {
+		t.Fatalf("DeleteProjectLabel race: %v", err)
+	}
+	if err := <-assignmentResult; err != nil && !errors.Is(err, ErrTaskLabelNotFound) {
+		t.Fatalf("UpdateTaskLabels race = %v, want success or ErrTaskLabelNotFound", err)
+	}
+	labels, err := fixtureStore.ListProjectLabels(ctx, binding.ProjectID)
+	if err != nil {
+		t.Fatalf("ListProjectLabels after race: %v", err)
+	}
+	if len(labels) != 0 {
+		t.Fatalf("catalog after delete race = %+v, want empty", labels)
+	}
+	assigned, err := fixtureStore.GetTaskLabelIDs(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskLabelIDs after race: %v", err)
+	}
+	if len(assigned) != 0 {
+		t.Fatalf("assignments after delete race = %+v, want empty", assigned)
+	}
+}

@@ -119,6 +119,40 @@ WHERE id = sqlc.arg(id)
   AND project_id = sqlc.arg(project_id)
 RETURNING id, project_id, name;
 
+-- name: ListTaskAssignedLabels :many
+SELECT pl.id, pl.project_id, pl.name
+FROM task_label_assignments tla
+JOIN project_labels pl ON pl.id = tla.label_id
+WHERE tla.task_id = sqlc.arg(task_id)
+ORDER BY pl.name COLLATE kent_label_casefold_v1 ASC, pl.id ASC
+LIMIT 101;
+
+-- name: ListProjectLabelsByIDs :many
+SELECT id, project_id, name
+FROM project_labels
+WHERE id IN (sqlc.slice('label_ids'))
+ORDER BY id ASC;
+
+-- name: InsertTaskLabelAssignment :exec
+INSERT INTO task_label_assignments (task_id, label_id)
+VALUES (sqlc.arg(task_id), sqlc.arg(label_id))
+ON CONFLICT(task_id, label_id) DO NOTHING;
+
+-- name: AcquireTaskLabelWriteLock :one
+UPDATE projects
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE id = (
+    SELECT task_records.project_id
+    FROM task_records
+    WHERE task_records.id = sqlc.arg(task_id)
+)
+RETURNING id;
+
+-- name: DeleteTaskLabelAssignment :execrows
+DELETE FROM task_label_assignments
+WHERE task_id = sqlc.arg(task_id)
+  AND label_id = sqlc.arg(label_id);
+
 -- name: AllocateProjectTaskSequence :one
 UPDATE projects
 SET
@@ -1045,6 +1079,10 @@ WHERE task_id = sqlc.arg(task_id);
 
 -- name: DeleteTaskCommentsByTask :execrows
 DELETE FROM task_comments
+WHERE task_id = sqlc.arg(task_id);
+
+-- name: DeleteTaskLabelAssignmentsByTask :execrows
+DELETE FROM task_label_assignments
 WHERE task_id = sqlc.arg(task_id);
 
 -- name: DeleteTask :execrows

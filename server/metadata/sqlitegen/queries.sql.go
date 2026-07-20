@@ -25,6 +25,24 @@ func (q *Queries) AcquireProjectDeleteWriteLock(ctx context.Context, projectID s
 	return result.RowsAffected()
 }
 
+const acquireTaskLabelWriteLock = `-- name: AcquireTaskLabelWriteLock :one
+UPDATE projects
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE id = (
+    SELECT task_records.project_id
+    FROM task_records
+    WHERE task_records.id = ?1
+)
+RETURNING id
+`
+
+func (q *Queries) AcquireTaskLabelWriteLock(ctx context.Context, taskID string) (string, error) {
+	row := q.db.QueryRowContext(ctx, acquireTaskLabelWriteLock, taskID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const acquireWorkspaceRegistrationLock = `-- name: AcquireWorkspaceRegistrationLock :execrows
 UPDATE projects
 SET updated_at_unix_ms = updated_at_unix_ms
@@ -1019,6 +1037,38 @@ WHERE task_id = ?1
 
 func (q *Queries) DeleteTaskCommentsByTask(ctx context.Context, taskID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteTaskCommentsByTask, taskID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteTaskLabelAssignment = `-- name: DeleteTaskLabelAssignment :execrows
+DELETE FROM task_label_assignments
+WHERE task_id = ?1
+  AND label_id = ?2
+`
+
+type DeleteTaskLabelAssignmentParams struct {
+	TaskID  string
+	LabelID string
+}
+
+func (q *Queries) DeleteTaskLabelAssignment(ctx context.Context, arg DeleteTaskLabelAssignmentParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTaskLabelAssignment, arg.TaskID, arg.LabelID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteTaskLabelAssignmentsByTask = `-- name: DeleteTaskLabelAssignmentsByTask :execrows
+DELETE FROM task_label_assignments
+WHERE task_id = ?1
+`
+
+func (q *Queries) DeleteTaskLabelAssignmentsByTask(ctx context.Context, taskID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTaskLabelAssignmentsByTask, taskID)
 	if err != nil {
 		return 0, err
 	}
@@ -3293,6 +3343,22 @@ func (q *Queries) InsertTaskComment(ctx context.Context, arg InsertTaskCommentPa
 	return err
 }
 
+const insertTaskLabelAssignment = `-- name: InsertTaskLabelAssignment :exec
+INSERT INTO task_label_assignments (task_id, label_id)
+VALUES (?1, ?2)
+ON CONFLICT(task_id, label_id) DO NOTHING
+`
+
+type InsertTaskLabelAssignmentParams struct {
+	TaskID  string
+	LabelID string
+}
+
+func (q *Queries) InsertTaskLabelAssignment(ctx context.Context, arg InsertTaskLabelAssignmentParams) error {
+	_, err := q.db.ExecContext(ctx, insertTaskLabelAssignment, arg.TaskID, arg.LabelID)
+	return err
+}
+
 const insertTaskNodePlacement = `-- name: InsertTaskNodePlacement :exec
 INSERT INTO task_node_placements (
     id,
@@ -5192,6 +5258,52 @@ func (q *Queries) ListProjectLabels(ctx context.Context, projectID string) ([]Li
 	return items, nil
 }
 
+const listProjectLabelsByIDs = `-- name: ListProjectLabelsByIDs :many
+SELECT id, project_id, name
+FROM project_labels
+WHERE id IN (/*SLICE:label_ids*/?)
+ORDER BY id ASC
+`
+
+type ListProjectLabelsByIDsRow struct {
+	ID        string
+	ProjectID string
+	Name      string
+}
+
+func (q *Queries) ListProjectLabelsByIDs(ctx context.Context, labelIds []string) ([]ListProjectLabelsByIDsRow, error) {
+	query := listProjectLabelsByIDs
+	var queryParams []interface{}
+	if len(labelIds) > 0 {
+		for _, v := range labelIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:label_ids*/?", strings.Repeat(",?", len(labelIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:label_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListProjectLabelsByIDsRow
+	for rows.Next() {
+		var i ListProjectLabelsByIDsRow
+		if err := rows.Scan(&i.ID, &i.ProjectID, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjectSessionArtifacts = `-- name: ListProjectSessionArtifacts :many
 SELECT
     id,
@@ -5957,6 +6069,44 @@ func (q *Queries) ListStartedWorkflowRunRecoveryCandidates(ctx context.Context) 
 			&i.RunStartSnapshotJson,
 			&i.MetadataJson,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTaskAssignedLabels = `-- name: ListTaskAssignedLabels :many
+SELECT pl.id, pl.project_id, pl.name
+FROM task_label_assignments tla
+JOIN project_labels pl ON pl.id = tla.label_id
+WHERE tla.task_id = ?1
+ORDER BY pl.name COLLATE kent_label_casefold_v1 ASC, pl.id ASC
+LIMIT 101
+`
+
+type ListTaskAssignedLabelsRow struct {
+	ID        string
+	ProjectID string
+	Name      string
+}
+
+func (q *Queries) ListTaskAssignedLabels(ctx context.Context, taskID string) ([]ListTaskAssignedLabelsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskAssignedLabels, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTaskAssignedLabelsRow
+	for rows.Next() {
+		var i ListTaskAssignedLabelsRow
+		if err := rows.Scan(&i.ID, &i.ProjectID, &i.Name); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
