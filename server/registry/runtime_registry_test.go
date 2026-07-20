@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"core/server/attentionnotify"
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
@@ -221,6 +222,67 @@ func TestExecutionPromptProjectionRetainsExactAuthorityGeneration(t *testing.T) 
 	if len(items) != 1 || items[0].Resource != successor || items[0].ScopeID != successorScope {
 		t.Fatalf("pending prompts after stale resolution = %+v, want exact successor", items)
 	}
+}
+
+func TestResourceDrainingResolvesPendingPromptBeforeClosingStreams(t *testing.T) {
+	broker := attentionnotify.NewBroker()
+	registry := NewRuntimeRegistry().WithAttentionNotifications(broker)
+	engine := newRegistryTestRuntime(t, nil)
+	ref := registryTestResourceRef(engine.SessionID())
+	registerResource(t, registry, ref, engine)
+
+	transcriptSub := subscribeTranscriptForTest(t, registry, engine.SessionID())
+	defer func() { _ = transcriptSub.Close() }()
+	_ = nextTranscriptMessage(t, transcriptSub)
+	attentionSub, err := registry.SubscribeSessionAttentionNotifications(
+		context.Background(),
+		serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: engine.SessionID()},
+	)
+	if err != nil {
+		t.Fatalf("subscribe session attention notifications: %v", err)
+	}
+	defer func() { _ = attentionSub.Close() }()
+
+	scopeID := runtimeids.NewExecutionScopeID()
+	request := askquestion.AskQuestionRequest{
+		ID:       "ask-draining",
+		StepID:   registryTestStepID,
+		Question: "Proceed?",
+	}
+	registry.PromptPending(ref, scopeID, request, time.Now().UTC())
+	pendingTranscript := nextTranscriptMessageOfKind(t, transcriptSub, clientui.TranscriptMessagePromptPending)
+	if pendingTranscript.Payload.PromptPending == nil || pendingTranscript.Payload.PromptPending.PromptID != "ask-draining" {
+		t.Fatalf("pending transcript prompt = %+v", pendingTranscript.Payload.PromptPending)
+	}
+	pendingAttention := nextRegistryAttentionEvent(t, attentionSub)
+	if pendingAttention.Type != clientui.AttentionNotificationEventPending {
+		t.Fatalf("pending attention event = %+v", pendingAttention)
+	}
+
+	if err := registry.ResourceDraining(context.Background(), registryTestResource(ref)); err != nil {
+		t.Fatalf("drain resource: %v", err)
+	}
+
+	resolvedTranscript := nextTranscriptMessageOfKind(t, transcriptSub, clientui.TranscriptMessagePromptResolved)
+	if resolvedTranscript.Payload.PromptResolved == nil || resolvedTranscript.Payload.PromptResolved.PromptID != "ask-draining" {
+		t.Fatalf("resolved transcript prompt = %+v", resolvedTranscript.Payload.PromptResolved)
+	}
+	resolvedCtx, cancelResolved := context.WithTimeout(context.Background(), time.Second)
+	defer cancelResolved()
+	resolvedAttention, err := attentionSub.Next(resolvedCtx)
+	if err != nil {
+		t.Fatalf("next resolved attention event: %v", err)
+	}
+	promptID := attentionNotificationID(clientui.AttentionNotificationKindQuestion, "ask-draining")
+	if resolvedAttention.Type != clientui.AttentionNotificationEventResolved ||
+		!attentionNotificationEventIDMatches(resolvedAttention, promptID) {
+		t.Fatalf("resolved attention event = %+v", resolvedAttention)
+	}
+	if prompts := registry.ListPendingPrompts(engine.SessionID()); len(prompts) != 0 {
+		t.Fatalf("pending prompts after draining = %+v, want none", prompts)
+	}
+
+	registry.PromptResolved(ref, scopeID, request.ID)
 }
 
 func TestRuntimeRegistryAggregatesSleepObserverAcrossAuthorityResources(t *testing.T) {

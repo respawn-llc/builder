@@ -127,6 +127,9 @@ func (r *RuntimeRegistry) ResourceDraining(_ context.Context, resource sessionru
 	entry.mu.Unlock()
 
 	sessionID := ref.SessionID().String()
+	r.pendingPrompts.CloseSession(sessionID, func(snapshot PendingPromptSnapshot) {
+		r.publishPromptResolution(entry, sessionID, snapshot)
+	})
 	r.publishCurrentRuntimeActivity(sessionID)
 	entry.sessionFeed.broker.Close(io.EOF)
 	var retentionErr error
@@ -138,7 +141,6 @@ func (r *RuntimeRegistry) ResourceDraining(_ context.Context, resource sessionru
 		entry.sessionFeed.PublishRuntimeReadModel(update)
 		r.updateAggregateRuntimeActivityState(sessionID, false)
 	}
-	r.pendingPrompts.CloseSession(sessionID)
 	r.authorityMu.Lock()
 	if r.authorityBySession[sessionID] == entry {
 		delete(r.authorityBySession, sessionID)
@@ -610,14 +612,21 @@ func (r *RuntimeRegistry) PromptResolved(resource runtimeids.SessionResourceRef,
 	resolved := r.withCurrentAuthorityEntry(resource, func(entry *authorityRuntimeEntry) bool {
 		snapshot, ok := r.pendingPrompts.Complete(id, resource, scopeID, requestID)
 		if ok {
-			publishPendingPrompt(entry.sessionFeed, id, snapshot, pendingPromptEventResolved)
-			r.publishAttentionResolved(id, snapshot)
+			r.publishPromptResolution(entry, id, snapshot)
 		}
 		return ok
 	})
 	if resolved {
 		r.publishCurrentRuntimeActivity(id)
 	}
+}
+
+func (r *RuntimeRegistry) publishPromptResolution(entry *authorityRuntimeEntry, sessionID string, snapshot PendingPromptSnapshot) {
+	if r == nil || entry == nil {
+		return
+	}
+	publishPendingPrompt(entry.sessionFeed, sessionID, snapshot, pendingPromptEventResolved)
+	r.publishAttentionResolved(sessionID, snapshot)
 }
 
 func (r *RuntimeRegistry) ListPendingPrompts(sessionID string) []PendingPromptSnapshot {

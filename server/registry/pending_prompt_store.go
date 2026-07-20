@@ -79,10 +79,16 @@ func (s *pendingPromptStore) List(sessionID string) []PendingPromptSnapshot {
 	return items
 }
 
-func (s *pendingPromptStore) CloseSession(sessionID string) {
+func (s *pendingPromptStore) CloseSession(sessionID string, resolve func(PendingPromptSnapshot)) {
 	id := strings.TrimSpace(sessionID)
 	s.mu.Lock()
+	items := listPendingPrompts(s.pending[id])
 	delete(s.pending, id)
+	for _, item := range items {
+		if resolve != nil {
+			resolve(item)
+		}
+	}
 	s.mu.Unlock()
 }
 
