@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
+	"core/server/sessionruntime"
 	"core/server/skillcatalog"
 	askquestion "core/server/tools"
 	"core/server/workflow"
@@ -570,14 +572,26 @@ func newComposedCoreForAttentionTest(t *testing.T) *Core {
 
 func registerCoreRuntime(t *testing.T, appCore *Core, sessionID string) {
 	t.Helper()
-	claim, _, _ := appCore.bundles.Runtime.runtimeRegistry.AcquireRuntimeClaim(sessionID, "")
-	if claim == nil {
-		t.Fatalf("AcquireRuntimeClaim(%q) returned nil claim", sessionID)
+	id, err := runtimeids.ParseSessionID(sessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID(%q): %v", sessionID, err)
 	}
-	claim.Resolve(&runtime.Engine{}, nil, nil)
+	ref, err := runtimeids.NewSessionResourceRef(id, 1)
+	if err != nil {
+		t.Fatalf("NewSessionResourceRef(%q): %v", sessionID, err)
+	}
+	resource := sessionruntime.AgentResourceDescriptor{Ref: ref, State: sessionruntime.AgentResourceReady}
+	if err := appCore.bundles.Runtime.runtimeRegistry.ResourceReady(
+		context.Background(),
+		resource,
+		&runtime.Engine{},
+		func() (io.Closer, error) { return io.NopCloser(strings.NewReader("")), nil },
+	); err != nil {
+		t.Fatalf("ResourceReady(%q): %v", sessionID, err)
+	}
 	t.Cleanup(func() {
-		if active := appCore.bundles.Runtime.runtimeRegistry.RuntimeClaimFor(sessionID); active != nil {
-			_, _ = active.Close(context.Background(), nil)
+		if err := appCore.bundles.Runtime.runtimeRegistry.ResourceDraining(context.Background(), resource); err != nil {
+			t.Errorf("ResourceDraining(%q): %v", sessionID, err)
 		}
 	})
 }

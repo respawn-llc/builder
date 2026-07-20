@@ -2,9 +2,11 @@ package serverapi
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"core/shared/config"
+	"core/shared/runtimeids"
 )
 
 type SessionRuntimeActivateRequest struct {
@@ -16,12 +18,18 @@ type SessionRuntimeActivateRequest struct {
 	Source          config.SourceReport `json:"source"`
 }
 
-type SessionRuntimeActivateResponse struct{}
+type SessionRuntimeAttachment struct {
+	SessionID  string `json:"session_id"`
+	Generation uint64 `json:"generation"`
+}
+
+type SessionRuntimeActivateResponse struct {
+	Attachment SessionRuntimeAttachment `json:"attachment"`
+}
 
 type SessionRuntimeReleaseRequest struct {
 	ClientRequestID string                           `json:"client_request_id"`
-	SessionID       string                           `json:"session_id"`
-	OnlyIfIdle      bool                             `json:"only_if_idle,omitempty"`
+	Attachment      SessionRuntimeAttachment         `json:"attachment"`
 	DropOwner       bool                             `json:"drop_owner,omitempty"`
 	ClosePolicy     SessionRuntimeReleaseClosePolicy `json:"close_policy,omitempty"`
 	OwnerID         string                           `json:"owner_id,omitempty"`
@@ -49,11 +57,33 @@ func (r SessionRuntimeActivateRequest) Validate() error {
 	return nil
 }
 
+func (a SessionRuntimeAttachment) Validate() error {
+	if err := validateScopedSessionID(a.SessionID); err != nil {
+		return err
+	}
+	return runtimeids.ResourceGeneration(a.Generation).Validate()
+}
+
+func (r SessionRuntimeActivateResponse) ValidateForSession(sessionID string) error {
+	if err := r.Attachment.Validate(); err != nil {
+		return fmt.Errorf("validate session runtime activation response: %w", err)
+	}
+	expected := strings.TrimSpace(sessionID)
+	if r.Attachment.SessionID != expected {
+		return fmt.Errorf(
+			"session runtime activation returned attachment for session %q, want %q",
+			r.Attachment.SessionID,
+			expected,
+		)
+	}
+	return nil
+}
+
 func (r SessionRuntimeReleaseRequest) Validate() error {
 	if strings.TrimSpace(r.ClientRequestID) == "" {
 		return errors.New("client_request_id is required")
 	}
-	if err := validateScopedSessionID(r.SessionID); err != nil {
+	if err := r.Attachment.Validate(); err != nil {
 		return err
 	}
 	switch r.ClosePolicy {
@@ -69,11 +99,5 @@ func (r SessionRuntimeReleaseRequest) Validate() error {
 }
 
 func (r SessionRuntimeReleaseRequest) EffectiveClosePolicy() SessionRuntimeReleaseClosePolicy {
-	if r.ClosePolicy != "" {
-		return r.ClosePolicy
-	}
-	if r.OnlyIfIdle {
-		return SessionRuntimeReleaseClosePolicyCloseIfIdle
-	}
-	return ""
+	return r.ClosePolicy
 }

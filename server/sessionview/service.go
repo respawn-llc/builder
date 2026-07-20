@@ -13,6 +13,7 @@ import (
 	"core/server/runtime"
 	"core/server/runtimeops"
 	"core/server/session"
+	"core/server/sessionruntime"
 	"core/server/worktree"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
@@ -22,10 +23,6 @@ import (
 
 type SessionStoreResolver interface {
 	ResolveSessionStore(ctx context.Context, sessionID string) (*session.Store, error)
-}
-
-type RuntimeResolver interface {
-	ResolveRuntime(ctx context.Context, sessionID string) (*runtime.Engine, error)
 }
 
 type ExecutionTargetResolver interface {
@@ -65,14 +62,19 @@ func (s *Service) WithExecutionEnvironmentGit(inspector *worktree.GitInspector) 
 	return s
 }
 
-func NewService(sessions SessionStoreResolver, runtimes RuntimeResolver, targets ExecutionTargetResolver) *Service {
+func NewService(
+	sessions SessionStoreResolver,
+	activity runtimeReadModelSnapshotProvider,
+	authority *sessionruntime.Authority,
+	targets ExecutionTargetResolver,
+) *Service {
 	svc := &Service{
 		sessions:         sessions,
 		targets:          targets,
 		cacheWarningMode: config.CacheWarningModeDefault,
 		operations:       runtimeops.NewCoordinator(),
 	}
-	svc.snapshots = newResolvedSessionSnapshotSource(sessions, runtimes, svc.cacheWarningModeValue)
+	svc.snapshots = newResolvedSessionSnapshotSource(sessions, activity, authority, svc.cacheWarningModeValue)
 	return svc
 }
 

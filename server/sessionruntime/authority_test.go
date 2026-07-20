@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/runtimewirefixture"
+	"core/server/llm"
 	"core/server/runtime"
-	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
@@ -21,6 +22,38 @@ import (
 
 	"github.com/google/uuid"
 )
+
+type authorityLifecycleProbe struct {
+	draining chan struct{}
+	retain   AgentResourceRetainer
+}
+
+type authorityPromptEvent struct {
+	resource  runtimeids.SessionResourceRef
+	scopeID   runtimeids.ExecutionScopeID
+	requestID string
+	resolved  bool
+}
+
+type authorityPromptFeed chan authorityPromptEvent
+
+func (f authorityPromptFeed) PromptPending(resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, req tools.AskQuestionRequest, _ time.Time) {
+	f <- authorityPromptEvent{resource: resource, scopeID: scopeID, requestID: req.ID}
+}
+
+func (f authorityPromptFeed) PromptResolved(resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, requestID string) {
+	f <- authorityPromptEvent{resource: resource, scopeID: scopeID, requestID: requestID, resolved: true}
+}
+
+func (p *authorityLifecycleProbe) ResourceReady(_ context.Context, _ AgentResourceDescriptor, _ *runtime.Engine, retain AgentResourceRetainer) error {
+	p.retain = retain
+	return nil
+}
+
+func (p *authorityLifecycleProbe) ResourceDraining(context.Context, AgentResourceDescriptor) error {
+	p.draining <- struct{}{}
+	return nil
+}
 
 func TestStalePredecessorFinalizationCannotRemoveResumedSuccessor(t *testing.T) {
 	truePath, err := exec.LookPath("true")
@@ -218,10 +251,10 @@ func TestExactWorkflowExecutionCannotBeLiveAsAgentAndScript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
 	authority := NewAuthority(AuthorityOptions{
 		PersistenceRoot: fixture.config.PersistenceRoot,
 		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
-		RuntimeFactory:  authorityTestRuntimeFactory,
 	})
 	t.Cleanup(func() {
 		if err := authority.Close(context.Background()); err != nil {
@@ -235,6 +268,7 @@ func TestExactWorkflowExecutionCannotBeLiveAsAgentAndScript(t *testing.T) {
 	}
 	agent, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
 		Workflow:   &workflowRef,
 		Resource:   OpenAgentResource{},
 		Runner: func(ctx context.Context, _ ExecutionScope, _ AgentRuntimeBridge) error {
@@ -272,10 +306,10 @@ func TestStaleRuntimeAttachmentReleaseCannotAffectReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
 	authority := NewAuthority(AuthorityOptions{
 		PersistenceRoot: fixture.config.PersistenceRoot,
 		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
-		RuntimeFactory:  authorityTestRuntimeFactory,
 	})
 	t.Cleanup(func() {
 		if err := authority.Close(context.Background()); err != nil {
@@ -286,12 +320,14 @@ func TestStaleRuntimeAttachmentReleaseCannotAffectReplacement(t *testing.T) {
 	first, err := authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
 		SessionID: sessionID,
 		OwnerID:   "owner-a",
+		Runtime:   &plan,
 	})
 	if err != nil {
 		t.Fatalf("open first runtime: %v", err)
 	}
 	replacement, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
 		Resource:   ReplaceAgentResource{},
 		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
 			return nil
@@ -306,6 +342,7 @@ func TestStaleRuntimeAttachmentReleaseCannotAffectReplacement(t *testing.T) {
 	second, err := authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
 		SessionID: sessionID,
 		OwnerID:   "owner-b",
+		Runtime:   &plan,
 	})
 	if err != nil {
 		t.Fatalf("open replacement runtime: %v", err)
@@ -317,12 +354,13 @@ func TestStaleRuntimeAttachmentReleaseCannotAffectReplacement(t *testing.T) {
 	if _, err := first.Release(context.Background(), RuntimeReleaseDetach); err != nil {
 		t.Fatalf("release stale attachment: %v", err)
 	}
-	current, ok := second.Snapshot()
-	if !ok {
-		t.Fatal("replacement attachment became stale")
+	if err := authority.WithRuntime(context.Background(), second.Resource(), func(context.Context, *runtime.Engine) error {
+		return nil
+	}); err != nil {
+		t.Fatalf("stale release affected replacement: %v", err)
 	}
-	if current.OwnerCount != 1 {
-		t.Fatalf("replacement owner count = %d, want 1", current.OwnerCount)
+	if _, err := second.Release(context.Background(), RuntimeReleaseClose); err != nil {
+		t.Fatalf("release replacement attachment: %v", err)
 	}
 }
 
@@ -332,10 +370,12 @@ func TestResourceRetentionBlocksReplacementUntilReleased(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	lifecycle := &authorityLifecycleProbe{draining: make(chan struct{}, 2)}
 	authority := NewAuthority(AuthorityOptions{
-		PersistenceRoot: fixture.config.PersistenceRoot,
-		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
-		RuntimeFactory:  authorityTestRuntimeFactory,
+		PersistenceRoot:   fixture.config.PersistenceRoot,
+		StoreOptions:      fixture.metadata.AuthoritativeSessionStoreOptions(),
+		ResourceLifecycle: lifecycle,
 	})
 	t.Cleanup(func() {
 		if err := authority.Close(context.Background()); err != nil {
@@ -343,19 +383,21 @@ func TestResourceRetentionBlocksReplacementUntilReleased(t *testing.T) {
 		}
 	})
 
-	attachment, err := authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
+	_, err = authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
 		SessionID: sessionID,
 		OwnerID:   "owner-a",
+		Runtime:   &plan,
 	})
 	if err != nil {
 		t.Fatalf("open runtime: %v", err)
 	}
-	retention, err := authority.RetainResource(attachment.Resource())
+	retention, err := lifecycle.retain()
 	if err != nil {
 		t.Fatalf("retain resource: %v", err)
 	}
 	if _, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
 		Resource:   ReplaceAgentResource{},
 		Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
 	}); err == nil {
@@ -369,6 +411,7 @@ func TestResourceRetentionBlocksReplacementUntilReleased(t *testing.T) {
 	}
 	replacement, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
 		Resource:   ReplaceAgentResource{},
 		Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
 	})
@@ -392,30 +435,43 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = manager.Close() })
 
-	var binding *runtimewire.LocalToolRegistryBinding
+	toolResponse := func(callID string) llm.Response {
+		return llm.Response{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "scoped", Phase: llm.MessagePhaseCommentary},
+			ToolCalls: []llm.ToolCall{{
+				ID:    callID,
+				Name:  string(toolspec.ToolExecCommand),
+				Input: json.RawMessage(`{"cmd":"sleep 5","shell":"/bin/sh","login":false,"yield_time_ms":20}`),
+			}},
+			Usage: llm.Usage{WindowTokens: 200000},
+		}
+	}
+	done := llm.Response{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Usage:     llm.Usage{WindowTokens: 200000},
+	}
+	client := &sessionRuntimeTestLLMClient{responses: []llm.Response{
+		toolResponse("call-scoped"), done, toolResponse("call-idle"), done,
+	}}
+	settings := fixture.config.Settings
+	settings.Model = "gpt-5"
+	settings.ModelContextWindow = 200000
+	settings.MinimumExecToBgSeconds = 1
+	settings.ShellOutputMaxChars = 16_000
+	settings.Reviewer.Frequency = "off"
+	plan, err := NewAgentRuntimePlan(AgentRuntimePlanOptions{
+		Settings:     settings,
+		EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
+		Workdir:      fixture.config.WorkspaceRoot,
+		Client:       client,
+	})
+	if err != nil {
+		t.Fatalf("new runtime plan: %v", err)
+	}
 	authority := NewAuthority(AuthorityOptions{
 		PersistenceRoot: fixture.config.PersistenceRoot,
 		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
-		RuntimeFactory: func(_ context.Context, store *session.Store, _ AgentResourceDescriptor) (*runtimewire.RuntimeWiring, error) {
-			var buildErr error
-			binding, _, _, buildErr = runtimewire.NewLocalToolRegistryBinding(runtimewire.LocalToolRegistryOptions{
-				WorkspaceRoot:       fixture.config.WorkspaceRoot,
-				OwnerSessionID:      sessionID.String(),
-				Enabled:             []toolspec.ID{toolspec.ToolExecCommand},
-				MinimumExecToBgTime: 20 * time.Millisecond,
-				ShellOutputMaxChars: 16_000,
-				SupportsVision:      true,
-				Background:          manager,
-			})
-			if buildErr != nil {
-				return nil, buildErr
-			}
-			engine, buildErr := runtime.New(store, &sessionRuntimeTestLLMClient{}, binding.Registry(), runtime.Config{Model: "gpt-5"})
-			if buildErr != nil {
-				return nil, buildErr
-			}
-			return &runtimewire.RuntimeWiring{Engine: engine, LocalTools: binding, Background: manager}, nil
-		},
+		Background:      manager,
 	})
 	t.Cleanup(func() {
 		if err := authority.Close(context.Background()); err != nil {
@@ -424,33 +480,15 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	})
 
 	startBackground := func(callID string) (shelltool.Snapshot, error) {
-		handler, ok := binding.Registry().Get(toolspec.ToolExecCommand)
-		if !ok {
-			return shelltool.Snapshot{}, fmt.Errorf("exec_command handler is unavailable")
-		}
 		before := make(map[string]struct{})
 		for _, snapshot := range manager.List() {
 			before[snapshot.ID] = struct{}{}
 		}
-		input, marshalErr := json.Marshal(map[string]any{
-			"cmd":           "sleep 5",
-			"shell":         "/bin/sh",
-			"login":         false,
-			"yield_time_ms": 20,
-		})
-		if marshalErr != nil {
-			return shelltool.Snapshot{}, marshalErr
-		}
-		result, callErr := handler.Call(context.Background(), tools.Call{
-			ID:    callID,
-			Name:  toolspec.ToolExecCommand,
-			Input: input,
-		})
-		if callErr != nil {
-			return shelltool.Snapshot{}, callErr
-		}
-		if result.IsError {
-			return shelltool.Snapshot{}, fmt.Errorf("exec_command failed: %s", string(result.Output))
+		if err := authority.WithCurrentRuntime(context.Background(), sessionID, func(ctx context.Context, engine *runtime.Engine) error {
+			_, submitErr := engine.SubmitUserMessage(ctx, callID)
+			return submitErr
+		}); err != nil {
+			return shelltool.Snapshot{}, err
 		}
 		for _, snapshot := range manager.List() {
 			if _, existed := before[snapshot.ID]; !existed {
@@ -467,6 +505,7 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	attachment, err := authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
 		SessionID: sessionID,
 		OwnerID:   "test-owner",
+		Runtime:   &plan,
 	})
 	if err != nil {
 		t.Fatalf("open runtime: %v", err)
@@ -513,6 +552,51 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	}
 	if _, err := attachment.Release(context.Background(), RuntimeReleaseClose); err != nil {
 		t.Fatalf("release runtime: %v", err)
+	}
+}
+
+func TestBackgroundEventRoutesOnlyToExactCurrentResourceGeneration(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	updates := make(chan runtime.BackgroundShellEvent, 1)
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{}, func(event runtime.Event) {
+		if event.Kind == runtime.EventBackgroundUpdated && event.Background != nil {
+			updates <- *event.Background
+		}
+	})
+	authority := fixture.authority
+
+	predecessor := openLifecycleRuntime(t, authority, sessionID, "predecessor", &plan)
+	if _, err := predecessor.Release(context.Background(), RuntimeReleaseClose); err != nil {
+		t.Fatalf("release predecessor runtime: %v", err)
+	}
+	successor := openLifecycleRuntime(t, authority, sessionID, "successor", &plan)
+
+	event := runtimewirefixture.BackgroundCompletionEvent("1000", sessionID.String(), t.TempDir())
+	event.NoticeSuppressed = true
+	route := func(generation runtimeids.ResourceGeneration) {
+		correlation, err := runtimeids.NewExecutionCorrelation(runtimeids.NewExecutionScopeID(), generation)
+		if err != nil {
+			t.Fatalf("new execution correlation: %v", err)
+		}
+		event.Snapshot.ExecutionCorrelation = &correlation
+		authority.routeBackgroundEvent(event)
+	}
+	route(predecessor.Resource().Generation())
+	select {
+	case update := <-updates:
+		t.Fatalf("stale predecessor generation routed background update: %+v", update)
+	default:
+	}
+
+	route(successor.Resource().Generation())
+	select {
+	case update := <-updates:
+		if update.ID != event.Snapshot.ID || update.ActivityID != event.Snapshot.ActivityID {
+			t.Fatalf("current generation background update = %+v", update)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("current resource generation did not receive background update")
 	}
 }
 
@@ -622,18 +706,12 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
-	var broker *tools.AskQuestionBroker
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	feed := make(authorityPromptFeed, 2)
 	authority := NewAuthority(AuthorityOptions{
 		PersistenceRoot: fixture.config.PersistenceRoot,
 		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
-		RuntimeFactory: func(_ context.Context, store *session.Store, _ AgentResourceDescriptor) (*runtimewire.RuntimeWiring, error) {
-			broker = tools.NewAskQuestionBroker()
-			engine, buildErr := runtime.New(store, &sessionRuntimeTestLLMClient{}, tools.NewRegistry(), runtime.Config{Model: "gpt-5"})
-			if buildErr != nil {
-				return nil, buildErr
-			}
-			return &runtimewire.RuntimeWiring{Engine: engine, AskBroker: broker}, nil
-		},
+		PromptFeed:      feed,
 	})
 	t.Cleanup(func() {
 		if err := authority.Close(context.Background()); err != nil {
@@ -643,21 +721,16 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 
 	askID := uuid.NewString()
 	request := tools.AskQuestionRequest{
-		ID:       askID,
-		StepID:   uuid.NewString(),
-		Question: "Proceed?",
+		ID: askID, StepID: uuid.NewString(), Question: "Proceed?",
 	}
-	type promptResult struct {
-		response tools.AskQuestionResponse
-		err      error
-	}
-	responseDone := make(chan promptResult, 1)
+	responseDone := make(chan executionPromptResult, 1)
 	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
 		Resource:   OpenAgentResource{},
-		Runner: func(ctx context.Context, _ ExecutionScope, _ AgentRuntimeBridge) error {
-			response, askErr := broker.Ask(ctx, request)
-			responseDone <- promptResult{response: response, err: askErr}
+		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
+			response, askErr := authority.AwaitPromptResponse(ctx, scope.ID(), request)
+			responseDone <- executionPromptResult{response: response, err: askErr}
 			return askErr
 		},
 	})
@@ -665,46 +738,46 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 		t.Fatalf("start agent execution: %v", err)
 	}
 
-	var pending []ExecutionPromptSnapshot
-	deadline := time.Now().Add(3 * time.Second)
-	for len(pending) == 0 && time.Now().Before(deadline) {
-		pending = authority.PendingPrompts(sessionID)
-		if len(pending) == 0 {
-			time.Sleep(10 * time.Millisecond)
-		}
-	}
-	if len(pending) != 1 {
-		t.Fatalf("pending prompts = %+v, want one", pending)
-	}
-	if pending[0].Scope.ID() != handle.Scope().ID() || pending[0].Request.ID != askID {
-		t.Fatalf("pending prompt = %+v, want exact scope %s ask %s", pending[0], handle.Scope().ID(), askID)
+	resource, _ := handle.Scope().Resource()
+	pending := <-feed
+	if pending != (authorityPromptEvent{resource: resource, scopeID: handle.Scope().ID(), requestID: askID}) {
+		t.Fatalf("pending prompt = %+v, want exact resource %v scope %s ask %s", pending, resource, handle.Scope().ID(), askID)
 	}
 
 	want := tools.AskQuestionResponse{RequestID: askID, Answer: "yes"}
 	if err := authority.SubmitPromptResponse(sessionID, want, nil); err != nil {
 		t.Fatalf("submit prompt response: %v", err)
 	}
-	result := <-responseDone
-	if result.err != nil {
-		t.Fatalf("await prompt response: %v", result.err)
+	resolved := <-feed
+	if resolved != (authorityPromptEvent{resource: resource, scopeID: handle.Scope().ID(), requestID: askID, resolved: true}) {
+		t.Fatalf("resolved prompt = %+v, want exact resource %v scope %s ask %s", resolved, resource, handle.Scope().ID(), askID)
 	}
-	if result.response != want {
-		t.Fatalf("prompt response = %+v, want %+v", result.response, want)
+	if result := <-responseDone; result.err != nil || result.response != want {
+		t.Fatalf("prompt response = %+v error = %v, want %+v", result.response, result.err, want)
 	}
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait agent execution: %v", err)
 	}
-	if pending := authority.PendingPrompts(sessionID); len(pending) != 0 {
-		t.Fatalf("pending prompts after execution = %+v, want none", pending)
-	}
 }
 
-func authorityTestRuntimeFactory(_ context.Context, store *session.Store, _ AgentResourceDescriptor) (*runtimewire.RuntimeWiring, error) {
-	engine, err := runtime.New(store, &sessionRuntimeTestLLMClient{}, tools.NewRegistry(), runtime.Config{Model: "gpt-5"})
-	if err != nil {
-		return nil, err
+func authorityTestRuntimePlan(t *testing.T, fixture sessionRuntimeFixture, client llm.Client, onEvent ...func(runtime.Event)) AgentRuntimePlan {
+	settings := fixture.config.Settings
+	settings.Model = "gpt-5"
+	settings.ModelContextWindow = 200000
+	settings.Reviewer.Frequency = "off"
+	options := AgentRuntimePlanOptions{
+		Settings: settings,
+		Workdir:  fixture.config.WorkspaceRoot,
+		Client:   client,
 	}
-	return &runtimewire.RuntimeWiring{Engine: engine}, nil
+	if len(onEvent) != 0 {
+		options.OnEvent = onEvent[0]
+	}
+	plan, err := NewAgentRuntimePlan(options)
+	if err != nil {
+		t.Fatalf("new authority test runtime plan: %v", err)
+	}
+	return plan
 }
 
 func mustOpenSessionDescriptor(t *testing.T, sessionID runtimeids.SessionID) session.SessionDescriptor {

@@ -26,9 +26,9 @@ type sessionAdmissionGate struct {
 }
 
 type sessionStartBlockRelease struct {
-	authority *Authority
-	sessionID runtimeids.SessionID
-	reason    SessionStartBlockReason
+	authority  *Authority
+	sessionIDs []runtimeids.SessionID
+	reason     SessionStartBlockReason
 
 	mu       sync.Mutex
 	released bool
@@ -45,53 +45,61 @@ func (a *Authority) gateFor(sessionID runtimeids.SessionID) *sessionAdmissionGat
 	return gate
 }
 
-func (a *Authority) BlockSessionStarts(ctx context.Context, sessionID runtimeids.SessionID, reason SessionStartBlockReason) (SessionStartBlockRelease, error) {
+func (a *Authority) BlockSessionStarts(ctx context.Context, sessionIDs []runtimeids.SessionID, reason SessionStartBlockReason) (SessionStartBlockRelease, error) {
 	if a == nil {
 		return nil, errors.New("session runtime authority is required")
 	}
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
-	if sessionID.IsZero() {
-		return nil, errors.New("session id is required")
+	if len(sessionIDs) == 0 {
+		return nil, errors.New("session ids are required")
 	}
 	if reason == 0 {
 		return nil, errors.New("session start block reason is required")
 	}
-	gate := a.gateFor(sessionID)
-	gate.mu.Lock()
-	defer gate.mu.Unlock()
-	if err := context.Cause(ctx); err != nil {
-		return nil, err
+	release := &sessionStartBlockRelease{authority: a, reason: reason}
+	for _, sessionID := range sessionIDs {
+		if sessionID.IsZero() {
+			return nil, errors.Join(errors.New("session id is required"), release.Close(context.Background()))
+		}
+		gate := a.gateFor(sessionID)
+		gate.mu.Lock()
+		if err := context.Cause(ctx); err != nil {
+			gate.mu.Unlock()
+			return nil, errors.Join(err, release.Close(context.Background()))
+		}
+		if gate.blocks == nil {
+			gate.blocks = make(map[SessionStartBlockReason]int)
+		}
+		gate.blocks[reason]++
+		release.sessionIDs = append(release.sessionIDs, sessionID)
+		gate.mu.Unlock()
 	}
-	if gate.blocks == nil {
-		gate.blocks = make(map[SessionStartBlockReason]int)
-	}
-	gate.blocks[reason]++
-	return &sessionStartBlockRelease{authority: a, sessionID: sessionID, reason: reason}, nil
+	return release, nil
 }
 
-func (r *sessionStartBlockRelease) Close(ctx context.Context) error {
+func (r *sessionStartBlockRelease) Close(context.Context) error {
 	if r == nil {
 		return nil
-	}
-	if err := context.Cause(ctx); err != nil {
-		return err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.released {
 		return nil
 	}
-	gate := r.authority.gateFor(r.sessionID)
-	gate.mu.Lock()
-	defer gate.mu.Unlock()
-	if gate.blocks[r.reason] <= 0 {
-		panic(fmt.Sprintf("session start block %d for session %s underflow", r.reason, r.sessionID))
-	}
-	gate.blocks[r.reason]--
-	if gate.blocks[r.reason] == 0 {
-		delete(gate.blocks, r.reason)
+	for index := len(r.sessionIDs) - 1; index >= 0; index-- {
+		sessionID := r.sessionIDs[index]
+		gate := r.authority.gateFor(sessionID)
+		gate.mu.Lock()
+		if gate.blocks[r.reason] <= 0 {
+			panic(fmt.Sprintf("session start block %d for session %s underflow", r.reason, sessionID))
+		}
+		gate.blocks[r.reason]--
+		if gate.blocks[r.reason] == 0 {
+			delete(gate.blocks, r.reason)
+		}
+		gate.mu.Unlock()
 	}
 	r.released = true
 	return nil

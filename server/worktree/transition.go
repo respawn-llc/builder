@@ -87,7 +87,7 @@ func (s *Service) scheduleWorktreeTransition(
 	execute func(context.Context, transitionAuthority, transitionTargetSync) error,
 	origin *serverapi.RuntimeStepOrigin,
 ) (serverapi.WorktreeScheduledAcknowledgement, error) {
-	if s == nil || s.runtime == nil {
+	if s == nil || s.authority == nil || s.publisher == nil {
 		return serverapi.WorktreeScheduledAcknowledgement{}, errors.New("worktree transition runtime is required")
 	}
 	if execute == nil {
@@ -129,7 +129,7 @@ func (s *Service) runWorktreeTransition(
 	origin *serverapi.RuntimeStepOrigin,
 ) error {
 	defer s.transitionWG.Done()
-	err := s.runtime.RunWorktreeTransition(
+	err := s.authority.RunWorktreeTransition(
 		ctx,
 		request.sessionID,
 		origin,
@@ -149,9 +149,9 @@ func (s *Service) runWorktreeTransition(
 			outcome.State = clientui.WorktreeTransitionFailed
 			outcome.Failure = &clientui.WorktreeTransitionFailure{Diagnostic: err.Error()}
 		}
-		s.runtime.PublishWorktreeTransitionOutcome(request.sessionID, outcome)
+		s.publisher.PublishWorktreeTransitionOutcome(request.sessionID, outcome)
 		if err != nil {
-			_ = s.runtime.SteerWorktreeTransitionFailure(s.transitionCtx, request.sessionID, outcome)
+			_ = s.authority.SteerWorktreeTransitionFailure(s.transitionCtx, request.sessionID, outcome)
 		}
 	}
 	s.transitionMu.Lock()

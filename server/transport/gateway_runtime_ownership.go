@@ -1,35 +1,31 @@
 package transport
 
-import "strings"
+import "core/shared/serverapi"
 
-func (s *connectionState) recordOwnedRuntime(sessionID string) {
-	if s == nil {
-		return
-	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	if trimmedSessionID == "" {
+func (s *connectionState) recordOwnedRuntime(attachment serverapi.SessionRuntimeAttachment) {
+	if s == nil || attachment.Validate() != nil {
 		return
 	}
 	if s.ownedRuntimes == nil {
-		s.ownedRuntimes = make(map[string]struct{})
+		s.ownedRuntimes = make(map[serverapi.SessionRuntimeAttachment]struct{})
 	}
-	s.ownedRuntimes[trimmedSessionID] = struct{}{}
+	s.ownedRuntimes[attachment] = struct{}{}
 }
 
-func (s *connectionState) removeOwnedRuntime(sessionID string) {
+func (s *connectionState) removeOwnedRuntime(attachment serverapi.SessionRuntimeAttachment) {
 	if s == nil || len(s.ownedRuntimes) == 0 {
 		return
 	}
-	delete(s.ownedRuntimes, strings.TrimSpace(sessionID))
+	delete(s.ownedRuntimes, attachment)
 }
 
-func (s *connectionState) takeOwnedRuntimes() []string {
+func (s *connectionState) takeOwnedRuntimes() []serverapi.SessionRuntimeAttachment {
 	if s == nil || len(s.ownedRuntimes) == 0 {
 		return nil
 	}
-	owned := make([]string, 0, len(s.ownedRuntimes))
-	for sessionID := range s.ownedRuntimes {
-		owned = append(owned, sessionID)
+	owned := make([]serverapi.SessionRuntimeAttachment, 0, len(s.ownedRuntimes))
+	for attachment := range s.ownedRuntimes {
+		owned = append(owned, attachment)
 	}
 	s.ownedRuntimes = nil
 	return owned

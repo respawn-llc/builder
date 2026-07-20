@@ -7,9 +7,14 @@ import (
 	"strings"
 	"testing"
 
+	"core/server/llm"
+	"core/server/registry"
 	"core/server/runtime"
 	"core/server/session"
 	"core/server/session/sessiontest"
+	"core/server/sessionruntime"
+	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 )
 
@@ -36,25 +41,81 @@ func (r testSessionResolver) ResolveSessionStore(_ context.Context, sessionID st
 	return r.store, nil
 }
 
-type testRuntimeResolver struct {
-	engine *runtime.Engine
+type sessionViewRuntimeFixture struct {
+	authority *sessionruntime.Authority
+	activity  *registry.RuntimeRegistry
+	sessionID runtimeids.SessionID
 }
 
-func newTestRuntimeResolver(engine *runtime.Engine) RuntimeResolver {
-	if engine == nil {
-		return nil
+func newSessionViewRuntimeFixture(t *testing.T, store *session.Store, client llm.Client) sessionViewRuntimeFixture {
+	t.Helper()
+	if store == nil {
+		t.Fatal("session store is required")
 	}
-	return testRuntimeResolver{engine: engine}
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	settings := config.DefaultOnboardingSettings()
+	settings.ProviderOverride = "openai"
+	settings.Model = "gpt-5"
+	settings.Reviewer.Frequency = "off"
+	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
+		Settings: settings,
+		Workdir:  store.Meta().WorkspaceRoot,
+		Client:   client,
+	})
+	if err != nil {
+		t.Fatalf("new runtime plan: %v", err)
+	}
+	activity := registry.NewRuntimeRegistry()
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot:   t.TempDir(),
+		StoreOptions:      sessionViewTestPersistence.Options(),
+		ResourceLifecycle: activity,
+		EventFeed: func(resource sessionruntime.AgentResourceDescriptor, event runtime.Event) {
+			activity.PublishAuthorityRuntimeEvent(resource.Ref, event)
+		},
+	})
+	if _, err := authority.OpenRuntime(t.Context(), sessionruntime.RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   "sessionview-test",
+		Runtime:   &plan,
+	}); err != nil {
+		t.Fatalf("open runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	return sessionViewRuntimeFixture{
+		authority: authority,
+		activity:  activity,
+		sessionID: sessionID,
+	}
 }
 
-func (r testRuntimeResolver) ResolveRuntime(_ context.Context, sessionID string) (*runtime.Engine, error) {
-	if r.engine == nil {
-		return nil, nil
+func (f sessionViewRuntimeFixture) startUserTurn(t *testing.T, prompt string) sessionruntime.ExecutionHandle {
+	t.Helper()
+	descriptor, err := session.NewOpenSessionDescriptor(f.sessionID)
+	if err != nil {
+		t.Fatalf("new session descriptor: %v", err)
 	}
-	if strings.TrimSpace(sessionID) != strings.TrimSpace(r.engine.SessionID()) {
-		return nil, fmt.Errorf("session %q not available", strings.TrimSpace(sessionID))
+	handle, err := f.authority.StartAgentExecution(t.Context(), sessionruntime.AgentExecutionRequest{
+		Descriptor: descriptor,
+		Resource:   sessionruntime.CurrentAgentResource{},
+		Runner: func(ctx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
+			return bridge.WithEngine(ctx, func(callbackCtx context.Context, engine *runtime.Engine) error {
+				_, err := engine.SubmitUserMessage(callbackCtx, prompt)
+				return err
+			})
+		},
+	})
+	if err != nil {
+		t.Fatalf("start user turn: %v", err)
 	}
-	return r.engine, nil
+	return handle
 }
 
 func newSessionViewStore(t *testing.T, containerDir, containerName, workspaceRoot string) *session.Store {

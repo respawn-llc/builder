@@ -3,7 +3,6 @@ package sessionruntime
 import (
 	"context"
 	"errors"
-	"fmt"
 	"maps"
 	"os"
 	"strings"
@@ -23,8 +22,6 @@ import (
 	"core/shared/transcriptdiag"
 )
 
-type AgentRuntimeFactory func(context.Context, *session.Store, AgentResourceDescriptor) (*runtimewire.RuntimeWiring, error)
-
 type AgentRuntimePlanOptions struct {
 	Settings                            config.Settings
 	EnabledTools                        []toolspec.ID
@@ -43,6 +40,7 @@ type AgentRuntimePlanOptions struct {
 	OnEvent                             func(runtime.Event)
 	OnLoggingFailure                    func(string)
 	StartLogLines                       []string
+	RecoveredWarningProvider            func() (string, bool, error)
 }
 
 type AgentRuntimePlan struct {
@@ -92,48 +90,25 @@ func cloneStringPointer(value *string) *string {
 }
 
 type authorityRuntimeOptions struct {
-	persistenceRoot string
-	authManager     *auth.Manager
-	background      *shelltool.Manager
-	storeOptions    []session.StoreOption
-	wiring          runtimewire.RuntimeWiringOptions
-	runtimeFactory  AgentRuntimeFactory
-	eventFeed       AgentResourceEventFeed
-	stepLifecycle   AgentResourceStepLifecycle
+	persistenceRoot   string
+	authManager       *auth.Manager
+	background        *shelltool.Manager
+	storeOptions      []session.StoreOption
+	eventFeed         AgentResourceEventFeed
+	resourceLifecycle AgentResourceLifecycle
+	stepLifecycle     AgentResourceStepLifecycle
 }
 
 func newAuthorityRuntimeOptions(options AuthorityOptions) authorityRuntimeOptions {
 	return authorityRuntimeOptions{
-		persistenceRoot: options.PersistenceRoot,
-		authManager:     options.AuthManager,
-		background:      options.Background,
-		storeOptions:    append([]session.StoreOption(nil), options.StoreOptions...),
-		wiring:          cloneRuntimeWiringOptions(options.RuntimeWiring),
-		runtimeFactory:  options.RuntimeFactory,
-		eventFeed:       options.EventFeed,
-		stepLifecycle:   options.StepLifecycle,
+		persistenceRoot:   options.PersistenceRoot,
+		authManager:       options.AuthManager,
+		background:        options.Background,
+		storeOptions:      append([]session.StoreOption(nil), options.StoreOptions...),
+		eventFeed:         options.EventFeed,
+		resourceLifecycle: options.ResourceLifecycle,
+		stepLifecycle:     options.StepLifecycle,
 	}
-}
-
-func cloneRuntimeWiringOptions(options runtimewire.RuntimeWiringOptions) runtimewire.RuntimeWiringOptions {
-	cloned := options
-	cloned.Sources = cloneStringMap(options.Sources)
-	if options.ProviderCapabilitiesOverride != nil {
-		value := *options.ProviderCapabilitiesOverride
-		cloned.ProviderCapabilitiesOverride = &value
-	}
-	return cloned
-}
-
-func cloneStringMap(source map[string]string) map[string]string {
-	if source == nil {
-		return nil
-	}
-	result := make(map[string]string, len(source))
-	for key, value := range source {
-		result[key] = value
-	}
-	return result
 }
 
 func (a *Authority) buildAgentResource(ctx context.Context, descriptor session.SessionDescriptor, plan *AgentRuntimePlan) (*agentResource, error) {
@@ -143,6 +118,15 @@ func (a *Authority) buildAgentResource(ctx context.Context, descriptor session.S
 	sessionID := descriptor.SessionID()
 	store, err := session.MaterializeSessionDescriptor(a.options.persistenceRoot, descriptor, a.options.storeOptions...)
 	if err != nil {
+		return nil, err
+	}
+	if err := store.EnsureDurable(); err != nil {
+		return nil, err
+	}
+	if plan == nil {
+		return nil, errors.New("agent runtime plan is required")
+	}
+	if err := appendRecoveredWarning(store, plan.options.RecoveredWarningProvider); err != nil {
 		return nil, err
 	}
 	a.mu.Lock()
@@ -168,38 +152,25 @@ func (a *Authority) buildAgentResource(ctx context.Context, descriptor session.S
 		owners:    make(map[string]struct{}),
 		store:     store,
 	}
-	resourceDescriptor := resource.descriptor()
-	var wiring *runtimewire.RuntimeWiring
-	var logger *runlog.RunLogger
-	if plan != nil {
-		logger, err = runlog.NewRunLogger(store.Dir(), func(diag runlog.RunLoggerDiagnostic) {
-			if plan.options.OnLoggingFailure != nil {
-				plan.options.OnLoggingFailure(diag.Message)
-			}
-		})
-		if err == nil {
-			for _, line := range plan.options.StartLogLines {
-				logger.Logf("%s", line)
-			}
-			wiring, err = a.newRuntimeWiringFromPlan(resource, store, logger, *plan)
+	logger, err := runlog.NewRunLogger(store.Dir(), func(diag runlog.RunLoggerDiagnostic) {
+		if plan.options.OnLoggingFailure != nil {
+			plan.options.OnLoggingFailure(diag.Message)
 		}
-	} else if a.options.runtimeFactory != nil {
-		wiring, err = a.options.runtimeFactory(ctx, store, resourceDescriptor)
-	} else {
-		wiring, err = a.newRuntimeWiring(resource, store)
+	})
+	if err == nil {
+		for _, line := range plan.options.StartLogLines {
+			logger.Logf("%s", line)
+		}
 	}
+	wiring, err := a.newRuntimeWiringFromPlan(resource, store, logger, *plan)
 	if err != nil {
 		cancel()
-		if logger != nil {
-			err = errors.Join(err, logger.Close())
-		}
+		err = errors.Join(err, logger.Close())
 		return nil, err
 	}
 	if wiring == nil || wiring.Engine == nil {
 		cancel()
-		if logger != nil {
-			_ = logger.Close()
-		}
+		_ = logger.Close()
 		return nil, errors.New("agent runtime factory returned no engine")
 	}
 	resource.mu.Lock()
@@ -208,11 +179,10 @@ func (a *Authority) buildAgentResource(ctx context.Context, descriptor session.S
 	resource.logger = logger
 	resource.localTools = wiring.LocalTools
 	resource.askBroker = wiring.AskBroker
-	resource.close = wiring.Close
-	if logger != nil {
-		resource.close = func() error {
-			return errors.Join(wiring.Close(), logger.Close())
-		}
+	resource.backgroundLimit = plan.options.Settings.ShellOutputMaxChars
+	resource.backgroundMode = shelltool.NormalizeBackgroundOutputMode(string(plan.options.Settings.BGShellsOutput))
+	resource.close = func() error {
+		return errors.Join(wiring.Close(), logger.Close())
 	}
 	resource.state = AgentResourceReady
 	resource.signalLocked()
@@ -259,32 +229,5 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 		logger,
 		a.options.background,
 		wiringOptions,
-	)
-}
-
-func (a *Authority) newRuntimeWiring(resource *agentResource, store *session.Store) (*runtimewire.RuntimeWiring, error) {
-	workspaceRoot := store.Meta().WorkspaceRoot
-	app, err := config.Load(workspaceRoot, config.LoadOptions{ConfigRoot: a.options.persistenceRoot})
-	if err != nil {
-		return nil, fmt.Errorf("load agent runtime config: %w", err)
-	}
-	options := cloneRuntimeWiringOptions(a.options.wiring)
-	options.Context = resource.ctx
-	options.OnEvent = func(event runtime.Event) {
-		if a.options.eventFeed != nil {
-			a.options.eventFeed(resource.descriptor(), event)
-		}
-	}
-	options.StepLifecycle = resource
-	enabledTools := append([]toolspec.ID(nil), config.EnabledToolIDs(app.Settings)...)
-	return runtimewire.NewRuntimeWiringWithBackground(
-		store,
-		app.Settings,
-		enabledTools,
-		workspaceRoot,
-		a.options.authManager,
-		nil,
-		a.options.background,
-		options,
 	)
 }

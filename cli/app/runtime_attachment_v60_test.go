@@ -61,12 +61,12 @@ func TestRuntimeAttachmentRequiresTranscriptServiceAndReleasesRuntime(t *testing
 	releaseCount := 0
 	server := runtimeAttachmentTestServer{
 		runtime: &recordingSessionRuntimeClient{
-			activate: func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
-				return serverapi.SessionRuntimeActivateResponse{}, nil
+			activate: func(_ context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
+				return sessionRuntimeActivateResponse(req.SessionID, 1), nil
 			},
 			release: func(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
 				releaseCount++
-				if req.SessionID != "session-1" {
+				if req.Attachment.SessionID != "session-1" || req.Attachment.Generation != 1 {
 					t.Fatalf("unexpected release request: %+v", req)
 				}
 				deadline, ok := ctx.Deadline()
@@ -96,8 +96,8 @@ func TestRuntimeAttachmentUnsupportedAttentionUsesTranscriptAndClosesLease(t *te
 	sessionViews := &countingSessionViewClient{}
 	server := runtimeAttachmentTestServer{
 		runtime: &recordingSessionRuntimeClient{
-			activate: func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
-				return serverapi.SessionRuntimeActivateResponse{}, nil
+			activate: func(_ context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
+				return sessionRuntimeActivateResponse(req.SessionID, 1), nil
 			},
 			release: func(context.Context, serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
 				releaseCount++
@@ -137,8 +137,8 @@ func TestRuntimeAttachmentSupportedAttentionStillUsesTranscriptWithoutSubscripti
 	sessionViews := &countingSessionViewClient{}
 	server := runtimeAttachmentTestServer{
 		runtime: &recordingSessionRuntimeClient{
-			activate: func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
-				return serverapi.SessionRuntimeActivateResponse{}, nil
+			activate: func(_ context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
+				return sessionRuntimeActivateResponse(req.SessionID, 1), nil
 			},
 			release: func(context.Context, serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
 				releaseCount++
@@ -176,6 +176,7 @@ func TestRuntimeAttachmentSupportedAttentionStillUsesTranscriptWithoutSubscripti
 
 func TestRuntimeAttachmentReactivationUsesActivation(t *testing.T) {
 	activateCalls := 0
+	var released serverapi.SessionRuntimeAttachment
 	server := runtimeAttachmentTestServer{
 		runtime: &recordingSessionRuntimeClient{
 			activate: func(_ context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
@@ -183,11 +184,15 @@ func TestRuntimeAttachmentReactivationUsesActivation(t *testing.T) {
 				if req.SessionID != "session-recover" || req.ActiveSettings.Model != "gpt-test" {
 					t.Fatalf("unexpected activation request: %+v", req)
 				}
-				return serverapi.SessionRuntimeActivateResponse{}, nil
+				return sessionRuntimeActivateResponse(req.SessionID, uint64(activateCalls)), nil
+			},
+			release: func(_ context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
+				released = req.Attachment
+				return serverapi.SessionRuntimeReleaseResponse{}, nil
 			},
 		},
 	}
-	reactivator, _, err := activateSharedRuntime(context.Background(), server.RuntimeAttachmentClients(), sessionLaunchPlan{
+	reactivator, lease, err := activateSharedRuntime(context.Background(), server.RuntimeAttachmentClients(), sessionLaunchPlan{
 		SessionID:      "session-recover",
 		ActiveSettings: config.Settings{Model: "gpt-test"},
 	})
@@ -199,5 +204,11 @@ func TestRuntimeAttachmentReactivationUsesActivation(t *testing.T) {
 	}
 	if activateCalls != 2 {
 		t.Fatalf("activate calls = %d, want 2", activateCalls)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if released.SessionID != "session-recover" || released.Generation != 2 {
+		t.Fatalf("released attachment = %+v, want reactivated generation 2", released)
 	}
 }

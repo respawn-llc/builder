@@ -328,8 +328,7 @@ func TestAskRetryReportsDisconnectAndReachabilityBeforeFinalDelivery(t *testing.
 		}
 	}
 
-	_, engine := newAppRuntimeEngine(t, statusLineFakeClient{}, runtime.Config{ContextWindowTokens: 400_000})
-	model := newProjectedEngineUIModel(engine)
+	model := newProjectedAuthorityUIModel(t, statusLineFakeClient{}, runtime.Config{ContextWindowTokens: 400_000})
 	if model.runtimeConnectionEvents == nil {
 		t.Fatal("projected runtime model did not create the global connection event channel")
 	}
@@ -433,8 +432,7 @@ func TestAskResolutionCancelsConnectionBackoffWithoutFabricatingReachability(t *
 		return waitCtx.Err()
 	}
 
-	_, engine := newAppRuntimeEngine(t, statusLineFakeClient{}, runtime.Config{ContextWindowTokens: 400_000})
-	model := newProjectedEngineUIModel(engine)
+	model := newProjectedAuthorityUIModel(t, statusLineFakeClient{}, runtime.Config{ContextWindowTokens: 400_000})
 	model.promptAnswers = answerer.withConnectionOutcomeSink(func(err error) {
 		enqueueRuntimeConnectionStateChange(model.runtimeConnectionEvents, err)
 	})
@@ -487,8 +485,7 @@ func TestAskConnectionExhaustionUsesOnlyGlobalDisconnectNotice(t *testing.T) {
 	answerer := newTranscriptPromptAnswerer(context.Background(), control)
 	answerer.retryWait = func(context.Context, time.Duration) error { return nil }
 
-	_, engine := newAppRuntimeEngine(t, statusLineFakeClient{}, runtime.Config{ContextWindowTokens: 400_000})
-	model := newProjectedEngineUIModel(engine)
+	model := newProjectedAuthorityUIModel(t, statusLineFakeClient{}, runtime.Config{ContextWindowTokens: 400_000})
 	model.promptAnswers = answerer.withConnectionOutcomeSink(func(err error) {
 		enqueueRuntimeConnectionStateChange(model.runtimeConnectionEvents, err)
 	})

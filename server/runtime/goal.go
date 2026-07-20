@@ -51,6 +51,17 @@ func (e *Engine) GoalLoopSuspended() bool {
 	return e.goalLoopState().Suspended() && e.goalActive()
 }
 
+func (e *Engine) GoalLoopRunning() bool {
+	return e != nil && e.goalLoopState().Running()
+}
+
+func (e *Engine) WaitForGoalLoop(ctx context.Context) error {
+	if e == nil {
+		return nil
+	}
+	return e.goalLoopState().Wait(ctx)
+}
+
 func (e *Engine) GoalLoopContinuationEnforced() bool {
 	if e == nil {
 		return false

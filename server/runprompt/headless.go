@@ -34,11 +34,8 @@ type promptHistoryStore interface {
 }
 
 type HeadlessBootstrap struct {
-	SessionLaunch   *sessionlaunch.Service
-	FastModeState   *runtime.FastModeState
-	RuntimeRegistry interface {
-		PublishRuntimeEvent(sessionID string, evt runtime.Event)
-	}
+	SessionLaunch    *sessionlaunch.Service
+	FastModeState    *runtime.FastModeState
 	PromptHistory    promptHistoryStore
 	RuntimeAuthority *sessionruntime.Authority
 }
@@ -151,9 +148,6 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 			}
 		},
 		OnEvent: func(evt runtime.Event) {
-			if l.boot.RuntimeRegistry != nil {
-				l.boot.RuntimeRegistry.PublishRuntimeEvent(sessionID.String(), evt)
-			}
 			PublishRunPromptProgress(progress, evt)
 		},
 	})

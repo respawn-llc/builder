@@ -9,6 +9,7 @@ import (
 	"core/prompts"
 	"core/server/runtime"
 	"core/server/session"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -42,7 +43,7 @@ func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetReque
 	memoReq := goalSetMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Objective: trimmedObjective, Actor: strings.TrimSpace(req.Actor), RunID: strings.TrimSpace(req.RunID), StepID: strings.TrimSpace(req.StepID)}
 	return s.goals.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameGoalSetMemoRequest, func(ctx context.Context) (serverapi.RuntimeGoalShowResponse, error) {
 		var response serverapi.RuntimeGoalShowResponse
-		err := s.withGoalMutationAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
+		err := s.withGoalMutationAccess(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
 			if engine.WorkflowRunConfigured() && !requestOriginatesFromAgentStep(req.Actor, req.StepID) {
 				goal, err := engine.SetGoal(trimmedObjective, session.GoalActor(req.Actor))
 				if err != nil {
@@ -126,7 +127,7 @@ func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalSt
 	memoReq := goalStatusMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Status: strings.TrimSpace(string(status)), Actor: strings.TrimSpace(req.Actor), RunID: strings.TrimSpace(req.RunID), StepID: strings.TrimSpace(req.StepID)}
 	return s.goalStatuses.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameGoalStatusMemoRequest, func(ctx context.Context) (serverapi.RuntimeGoalShowResponse, error) {
 		var response serverapi.RuntimeGoalShowResponse
-		err := s.withGoalMutationAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
+		err := s.withGoalMutationAccess(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
 			if engine.WorkflowRunConfigured() && !requestOriginatesFromAgentStep(req.Actor, req.StepID) {
 				current := engine.Goal()
 				if status == session.GoalStatusActive && current != nil && current.Status == session.GoalStatusActive {
@@ -193,7 +194,7 @@ func (s *Service) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearR
 	}
 	memoReq := goalClearMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Actor: strings.TrimSpace(req.Actor)}
 	return s.goalClears.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameGoalClearMemoRequest, func(ctx context.Context) (serverapi.RuntimeGoalShowResponse, error) {
-		err := s.withGoalMutationAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
+		err := s.withGoalMutationAccess(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
 			_, queued, qErr := engine.QueueGoalClearForActiveStep(session.GoalActor(req.Actor))
 			if qErr != nil {
 				return qErr
@@ -208,8 +209,18 @@ func (s *Service) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearR
 	})
 }
 
-func (s *Service) withGoalMutationAccess(ctx context.Context, sessionID string, fn func(*runtime.Engine) error) error {
-	return s.withRuntimeAccess(ctx, sessionID, fn)
+func (s *Service) withGoalMutationAccess(ctx context.Context, sessionID string, fn func(context.Context, *runtime.Engine) error) error {
+	err := s.runAgentExecution(ctx, sessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+		return fn(runCtx, engine)
+	})
+	if !errors.Is(err, serverapi.ErrSessionRunStarting) {
+		return err
+	}
+	id, parseErr := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	if parseErr != nil {
+		return parseErr
+	}
+	return s.withLiveExecutionRuntime(ctx, id, fn)
 }
 
 func queueGoalSetForRequest(engine *runtime.Engine, req serverapi.RuntimeGoalSetRequest, objective string) (session.GoalState, bool, error) {

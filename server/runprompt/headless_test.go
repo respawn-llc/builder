@@ -23,10 +23,8 @@ import (
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/registry"
 	"core/server/requestmemo"
 	"core/server/runtime"
-	"core/server/runtimeactivity"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionlaunch"
@@ -59,36 +57,15 @@ func (s *blockingPromptHistoryStore) RecordPromptHistoryEntry(ctx context.Contex
 	return metadata.PromptHistoryRecord{}, false, ctx.Err()
 }
 
-type recordingRuntimePublisher struct {
-	publications int
-}
-
-func (r *recordingRuntimePublisher) PublishRuntimeEvent(string, runtime.Event) {
-	r.publications++
-}
-
-func (r *recordingRuntimePublisher) PublishRuntimeEventForEngine(string, *runtime.Engine, runtime.Event) {
-	r.publications++
-}
-
-func (r *recordingRuntimePublisher) PublishRuntimeReadModelUpdate(string, clientui.RuntimeReadModelUpdate) {
-	r.publications++
-}
-
-func (r *recordingRuntimePublisher) PublishRuntimeActivitySnapshot(string, runtimeactivity.ResponseSnapshot) {
-	r.publications++
-}
-
 type headlessLaunchArtifactSnapshot struct {
-	SessionIDs          []string
-	SessionArtifacts    []string
-	PersistenceFiles    []string
-	WorktreeFiles       []string
-	WorktreeRecords     []metadata.WorktreeRecord
-	RuntimePublications int
+	SessionIDs       []string
+	SessionArtifacts []string
+	PersistenceFiles []string
+	WorktreeFiles    []string
+	WorktreeRecords  []metadata.WorktreeRecord
 }
 
-func snapshotHeadlessLaunchArtifacts(t *testing.T, ctx context.Context, meta *metadata.Store, projectID string, workspaceID string, containerDir string, persistenceRoot string, worktreeRoot string, runtimes *recordingRuntimePublisher) headlessLaunchArtifactSnapshot {
+func snapshotHeadlessLaunchArtifacts(t *testing.T, ctx context.Context, meta *metadata.Store, projectID string, workspaceID string, containerDir string, persistenceRoot string, worktreeRoot string) headlessLaunchArtifactSnapshot {
 	t.Helper()
 	sessionIDs, err := meta.ListProjectSessionIDs(ctx, projectID)
 	if err != nil {
@@ -99,12 +76,11 @@ func snapshotHeadlessLaunchArtifacts(t *testing.T, ctx context.Context, meta *me
 		t.Fatalf("ListWorktreeRecordsByWorkspaceID snapshot: %v", err)
 	}
 	return headlessLaunchArtifactSnapshot{
-		SessionIDs:          sessionIDs,
-		SessionArtifacts:    snapshotArtifactPaths(t, containerDir),
-		PersistenceFiles:    snapshotArtifactPaths(t, persistenceRoot),
-		WorktreeFiles:       snapshotArtifactPaths(t, worktreeRoot),
-		WorktreeRecords:     worktreeRecords,
-		RuntimePublications: runtimes.publications,
+		SessionIDs:       sessionIDs,
+		SessionArtifacts: snapshotArtifactPaths(t, containerDir),
+		PersistenceFiles: snapshotArtifactPaths(t, persistenceRoot),
+		WorktreeFiles:    snapshotArtifactPaths(t, worktreeRoot),
+		WorktreeRecords:  worktreeRecords,
 	}
 }
 
@@ -290,7 +266,6 @@ func newTestHeadlessRuntimeAuthority(root string, authManager *auth.Manager, bac
 
 type selectedRunPromptFixture struct {
 	store     *session.Store
-	runtimes  *registry.RuntimeRegistry
 	authority *sessionruntime.Authority
 	client    apicontract.RunPromptService
 }
@@ -321,15 +296,12 @@ func newSelectedRunPromptFixture(t *testing.T, providerURL string, history promp
 			Shell:         config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
 	}
-	runtimes := registry.NewRuntimeRegistry()
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
 	return selectedRunPromptFixture{
 		store:     store,
-		runtimes:  runtimes,
 		authority: authority,
 		client: NewInProcessRunPromptClient(HeadlessBootstrap{
 			SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
-			RuntimeRegistry:  runtimes,
 			RuntimeAuthority: authority,
 			PromptHistory:    history,
 		}),
@@ -442,7 +414,6 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	runtimes := &recordingRuntimePublisher{}
 	sessionLauncher := sessionlaunch.NewService(launch.Planner{
 		Config:            cfg,
 		ContainerDir:      containerDir,
@@ -450,10 +421,9 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		PersistedSessions: meta,
 	})
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:   sessionLauncher,
-		RuntimeRegistry: runtimes,
+		SessionLaunch: sessionLauncher,
 	})
-	before := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, runtimes)
+	before := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot)
 	role := "hidden"
 	parentID := parent.Meta().SessionID
 	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
@@ -467,13 +437,13 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialNotCallable {
 		t.Fatalf("RunPrompt error = %T %v, want workflow policy denial", err, err)
 	}
-	after := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, runtimes)
+	after := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot)
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("denied new-child launch changed artifacts: before=%+v after=%+v", before, after)
 	}
 	ordinaryCallerID := ordinaryCaller.Meta().SessionID
 	blockedRole := "blocked"
-	beforeOrdinaryTargetDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, runtimes)
+	beforeOrdinaryTargetDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot)
 	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
 		ClientRequestID: "ordinary-blocked-target-denial",
 		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRunPromptSessionID(t, ordinaryCallerID))),
@@ -484,7 +454,7 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialNotCallable {
 		t.Fatalf("ordinary blocked-target error = %T %v, want not-callable denial", err, err)
 	}
-	if afterOrdinaryTargetDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, runtimes); !reflect.DeepEqual(afterOrdinaryTargetDenial, beforeOrdinaryTargetDenial) {
+	if afterOrdinaryTargetDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot); !reflect.DeepEqual(afterOrdinaryTargetDenial, beforeOrdinaryTargetDenial) {
 		t.Fatalf("ordinary blocked-target denial changed artifacts: before=%+v after=%+v", beforeOrdinaryTargetDenial, afterOrdinaryTargetDenial)
 	}
 	selected, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
@@ -498,7 +468,7 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		t.Fatalf("SetContinuationContext selected: %v", err)
 	}
 	selectedBefore := selected.Meta()
-	beforeSelectedDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, runtimes)
+	beforeSelectedDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot)
 	_, err = client.RunPrompt(ctx, serverapi.RunPromptRequest{
 		ClientRequestID: "workflow-selected-denial-1",
 		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustRunPromptSessionID(t, selectedBefore.SessionID)),
@@ -522,7 +492,7 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 		got.LastSequence != selectedBefore.LastSequence {
 		t.Fatalf("selected session changed on denied launch: before=%+v after=%+v", selectedBefore, got)
 	}
-	afterSelectedDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot, runtimes)
+	afterSelectedDenial := snapshotHeadlessLaunchArtifacts(t, ctx, meta, binding.ProjectID, binding.WorkspaceID, containerDir, root, worktreeRoot)
 	if !reflect.DeepEqual(afterSelectedDenial, beforeSelectedDenial) {
 		t.Fatalf("denied selected-session launch changed artifacts: before=%+v after=%+v", beforeSelectedDenial, afterSelectedDenial)
 	}
@@ -619,7 +589,6 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 			AgentCallableSet: true,
 		},
 	}
-	runtimes := registry.NewRuntimeRegistry()
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, meta.AuthoritativeSessionStoreOptions()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch: sessionlaunch.NewService(launch.Planner{
@@ -628,7 +597,6 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 			StoreOptions:      meta.AuthoritativeSessionStoreOptions(),
 			PersistedSessions: meta,
 		}).WithAuthStateReader(authManager),
-		RuntimeRegistry:  runtimes,
 		RuntimeAuthority: authority,
 		PromptHistory:    meta,
 	})
@@ -798,12 +766,10 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 			Shell:         config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
 	}
-	runtimes := registry.NewRuntimeRegistry()
 	history := &recordingPromptHistoryStore{}
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
-		RuntimeRegistry:  runtimes,
 		RuntimeAuthority: authority,
 		PromptHistory:    history,
 	})
@@ -1121,11 +1087,9 @@ func TestInProcessRunPromptClientUsesActiveShellPostprocessorWithSuppliedBackgro
 			},
 		},
 	}
-	runtimes := registry.NewRuntimeRegistry()
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, background, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
-		RuntimeRegistry:  runtimes,
 		RuntimeAuthority: authority,
 	})
 
@@ -1340,7 +1304,6 @@ func TestInProcessRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T)
 	}))
 	defer server.Close()
 
-	runtimes := registry.NewRuntimeRegistry()
 	authManager := auth.NewManager(auth.NewMemoryStore(auth.State{
 		Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},
 	}), nil, time.Now)
@@ -1357,7 +1320,6 @@ func TestInProcessRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T)
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
-		RuntimeRegistry:  runtimes,
 		RuntimeAuthority: authority,
 	})
 
@@ -1440,11 +1402,9 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 	cfg.Settings.Model = "base-model"
 	cfg.Settings.OpenAIBaseURL = server.URL
 	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolPatch: true}
-	runtimes := registry.NewRuntimeRegistry()
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
 		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, persistence),
-		RuntimeRegistry:  runtimes,
 		RuntimeAuthority: authority,
 	})
 

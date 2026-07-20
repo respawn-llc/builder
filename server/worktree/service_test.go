@@ -4,6 +4,7 @@ import (
 	"context"
 	"core/server/metadata"
 	"core/server/session"
+	"core/server/sessionruntime"
 	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -19,27 +20,6 @@ import (
 	"time"
 )
 
-type serviceTestRuntime struct {
-	mu                     sync.Mutex
-	rebindCalls            []serviceRuntimeCall
-	reminderCalls          []session.WorktreeReminderState
-	clearReminderSessions  []string
-	activeSessions         map[string]bool
-	runningSessions        map[string]bool
-	syncErrSessions        map[string]error
-	blockedRuns            map[string]int
-	blockRunsHook          func([]string)
-	rebindErr              error
-	rebindErrRoot          string
-	rebindHook             func(context.Context, string, string, string)
-	originActive           func() bool
-	transitionGate         <-chan struct{}
-	transitionStarted      chan<- struct{}
-	transitionOutcomes     []clientui.WorktreeTransitionOutcome
-	transitionOutcomeReady chan struct{}
-	steeredFailures        []clientui.WorktreeTransitionOutcome
-}
-
 func sessionTargetWorktreeID(target clientui.SessionExecutionTarget) string {
 	if target.Worktree == nil {
 		return ""
@@ -47,158 +27,26 @@ func sessionTargetWorktreeID(target clientui.SessionExecutionTarget) string {
 	return strings.TrimSpace(target.Worktree.ID)
 }
 
-func (r *serviceTestRuntime) blockedRunCount(sessionID string) int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.blockedRuns[strings.TrimSpace(sessionID)]
+type serviceTestPublisher struct {
+	mu       sync.Mutex
+	outcomes []clientui.WorktreeTransitionOutcome
+	ready    chan struct{}
 }
 
-type serviceRuntimeCall struct {
-	sessionID string
-	root      string
-}
+func (p *serviceTestPublisher) PublishSessionIdentity(string, *clientui.SessionExecutionTarget) {}
 
-func (r *serviceTestRuntime) SyncExecutionTarget(ctx context.Context, sessionID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	r.mu.Lock()
-	if reminder != nil {
-		r.reminderCalls = append(r.reminderCalls, *reminder)
+func (p *serviceTestPublisher) PublishWorktreeTransitionOutcome(_ string, outcome clientui.WorktreeTransitionOutcome) {
+	p.mu.Lock()
+	p.outcomes = append(p.outcomes, outcome)
+	if p.ready == nil {
+		p.ready = make(chan struct{}, 1)
 	}
-	if !r.activeSessions[trimmedSessionID] {
-		r.mu.Unlock()
-		return nil
-	}
-	if err := r.syncErrSessions[trimmedSessionID]; err != nil {
-		r.mu.Unlock()
-		return err
-	}
-	r.mu.Unlock()
-	root := strings.TrimSpace(target.EffectiveWorkdir)
-	if r.rebindHook != nil {
-		r.rebindHook(ctx, sessionID, "", root)
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.rebindCalls = append(r.rebindCalls, serviceRuntimeCall{sessionID: sessionID, root: root})
-	if r.rebindErr != nil && (strings.TrimSpace(r.rebindErrRoot) == "" || strings.TrimSpace(r.rebindErrRoot) == root) {
-		return r.rebindErr
-	}
-	return nil
-}
-
-func (r *serviceTestRuntime) ClearWorktreeReminder(_ context.Context, sessionID string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.clearReminderSessions = append(r.clearReminderSessions, strings.TrimSpace(sessionID))
-	return nil
-}
-
-func (r *serviceTestRuntime) HasBlockingRuntimeActivity(_ context.Context, sessionID string) (bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.runningSessions[strings.TrimSpace(sessionID)], nil
-}
-
-func (r *serviceTestRuntime) RunWorktreeTransition(
-	ctx context.Context,
-	sessionID string,
-	origin *serverapi.RuntimeStepOrigin,
-	fn func(context.Context, func(func() error) error, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
-) error {
-	if r.transitionStarted != nil {
-		r.transitionStarted <- struct{}{}
-	}
-	if r.transitionGate != nil {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-r.transitionGate:
-		}
-	}
-	var authority func(func() error) error
-	if origin != nil {
-		authority = func(apply func() error) error {
-			if r.originActive != nil && !r.originActive() {
-				return serverapi.NewWorktreeImmediateTransitionError(serverapi.WorktreeImmediateTransitionOriginInactive, errors.New("originating model step is no longer active"))
-			}
-			return apply()
-		}
-	}
-	err := fn(ctx, authority, func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-		return r.SyncExecutionTarget(syncCtx, sessionID, target, reminder)
-	})
-	if err != nil && origin != nil {
-		var immediate *serverapi.WorktreeImmediateTransitionError
-		if !errors.As(err, &immediate) {
-			err = serverapi.NewWorktreeImmediateTransitionError(serverapi.WorktreeImmediateTransitionApplyFailed, err)
-		}
-	}
-	return err
-}
-
-func (r *serviceTestRuntime) PublishWorktreeTransitionOutcome(_ string, outcome clientui.WorktreeTransitionOutcome) {
-	r.mu.Lock()
-	r.transitionOutcomes = append(r.transitionOutcomes, outcome)
-	if r.transitionOutcomeReady == nil {
-		r.transitionOutcomeReady = make(chan struct{}, 1)
-	}
-	ready := r.transitionOutcomeReady
-	r.mu.Unlock()
+	ready := p.ready
+	p.mu.Unlock()
 	select {
 	case ready <- struct{}{}:
 	default:
 	}
-}
-
-func (r *serviceTestRuntime) SteerWorktreeTransitionFailure(_ context.Context, _ string, outcome clientui.WorktreeTransitionOutcome) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.steeredFailures = append(r.steeredFailures, outcome)
-	return nil
-}
-
-func (r *serviceTestRuntime) IsSessionRuntimeActive(sessionID string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.activeSessions[strings.TrimSpace(sessionID)]
-}
-
-func (r *serviceTestRuntime) BlockSessionRuns(sessionIDs []string) func() {
-	r.mu.Lock()
-	if r.blockedRuns == nil {
-		r.blockedRuns = make(map[string]int)
-	}
-	blocked := make([]string, 0, len(sessionIDs))
-	for _, sessionID := range sessionIDs {
-		trimmed := strings.TrimSpace(sessionID)
-		if trimmed == "" {
-			continue
-		}
-		r.blockedRuns[trimmed]++
-		blocked = append(blocked, trimmed)
-	}
-	hook := r.blockRunsHook
-	r.mu.Unlock()
-	if hook != nil {
-		hook(append([]string(nil), blocked...))
-	}
-	return func() {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		for _, sessionID := range blocked {
-			if r.blockedRuns[sessionID] <= 1 {
-				delete(r.blockedRuns, sessionID)
-				continue
-			}
-			r.blockedRuns[sessionID]--
-		}
-	}
-}
-
-func (r *serviceTestRuntime) runsBlocked(sessionID string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.blockedRuns[strings.TrimSpace(sessionID)] > 0
 }
 
 type serviceTestProcessSource struct {
@@ -216,7 +64,8 @@ type serviceTestEnv struct {
 	cfg           config.App
 	binding       metadata.Binding
 	session       *session.Store
-	runtime       *serviceTestRuntime
+	authority     *sessionruntime.Authority
+	publisher     *serviceTestPublisher
 	processes     *serviceTestProcessSource
 	service       *Service
 	leaseID       string
@@ -295,12 +144,6 @@ func TestCreateWorktreeMarksProvenanceAndRunsSetupScriptWithProjectID(t *testing
 	}
 	if stdinPayload := waitForSetupPayload(t, stdinPath); !reflect.DeepEqual(stdinPayload, payload) {
 		t.Fatalf("stdin payload = %+v, want %+v", stdinPayload, payload)
-	}
-	if len(env.runtime.rebindCalls) != 0 {
-		t.Fatalf("create rebounded the runtime, got %+v", env.runtime.rebindCalls)
-	}
-	if len(env.runtime.reminderCalls) != 0 {
-		t.Fatalf("create issued a worktree reminder, got %+v", env.runtime.reminderCalls)
 	}
 	worktrees := mustListWorktrees(t, env)
 	created := findWorktreeByID(t, worktrees.Worktrees, createdView.WorktreeID)
@@ -785,22 +628,19 @@ func TestSwitchWorktreeClampsCwdAndRecordsPendingReminder(t *testing.T) {
 	if respTarget.EffectiveWorkdir != env.workspaceRoot {
 		t.Fatalf("effective workdir = %q, want %q", respTarget.EffectiveWorkdir, env.workspaceRoot)
 	}
-	if len(env.runtime.rebindCalls) == 0 || env.runtime.rebindCalls[len(env.runtime.rebindCalls)-1].root != env.workspaceRoot {
-		t.Fatalf("expected rebind to main workspace, got %+v", env.runtime.rebindCalls)
-	}
-	if len(env.runtime.reminderCalls) == 0 {
-		t.Fatal("expected pending worktree reminder")
-	}
-	reminder := env.runtime.reminderCalls[len(env.runtime.reminderCalls)-1]
-	if reminder.Mode != session.WorktreeReminderModeExit || reminder.EffectiveCwd != env.workspaceRoot {
-		t.Fatalf("unexpected reminder = %+v", reminder)
-	}
 	finalTarget, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
 	if sessionTargetWorktreeID(finalTarget) != "" || finalTarget.CwdRelpath != "." {
 		t.Fatalf("unexpected final target after switch: %+v", finalTarget)
+	}
+	reopened, err := session.OpenByID(env.cfg.PersistenceRoot, env.session.Meta().SessionID, env.store.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("OpenByID: %v", err)
+	}
+	if reminder := reopened.Meta().WorktreeReminder; reminder == nil || reminder.EffectiveCwd != env.workspaceRoot {
+		t.Fatalf("pending worktree reminder = %+v, want effective cwd %q", reminder, env.workspaceRoot)
 	}
 }
 
@@ -810,8 +650,6 @@ func TestListWorktreesReportsMissingCurrentWorktreeWithoutRetargeting(t *testing
 	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
 	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
 	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
-	env.runtime.rebindCalls = nil
-	env.runtime.reminderCalls = nil
 	runGit(t, env.workspaceRoot, "worktree", "remove", "--force", created.CanonicalRoot)
 
 	resp, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Meta().SessionID})
@@ -843,12 +681,6 @@ func TestListWorktreesReportsMissingCurrentWorktreeWithoutRetargeting(t *testing
 	}
 	if sessionTargetWorktreeID(otherTarget) != created.WorktreeID {
 		t.Fatalf("other session was retargeted during list: %+v", otherTarget)
-	}
-	if len(env.runtime.rebindCalls) != 0 {
-		t.Fatalf("list rebound runtimes: %+v", env.runtime.rebindCalls)
-	}
-	if len(env.runtime.reminderCalls) != 0 {
-		t.Fatalf("list emitted reminders: %+v", env.runtime.reminderCalls)
 	}
 }
 
@@ -895,8 +727,6 @@ func TestCreateWorktreeKeepsCreatedStateWhenPostSetupSwitchFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveRequestedWorktreeRoot: %v", err)
 	}
-	env.runtime.rebindErr = errors.New("boom")
-
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 		ClientRequestID:  "req-create-rollback",
@@ -908,8 +738,8 @@ func TestCreateWorktreeKeepsCreatedStateWhenPostSetupSwitchFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateWorktree error = %v, want successful create without switching", err)
 	}
-	if sessionTargetWorktreeID(resp.Target) != "" || len(env.runtime.rebindCalls) != 0 {
-		t.Fatalf("create changed target despite no-enter contract: target=%+v rebinds=%+v", resp.Target, env.runtime.rebindCalls)
+	if sessionTargetWorktreeID(resp.Target) != "" {
+		t.Fatalf("create changed target despite no-enter contract: target=%+v", resp.Target)
 	}
 	if _, statErr := os.Stat(expectedRoot); statErr != nil {
 		t.Fatalf("expected failed create worktree root kept, stat err=%v", statErr)

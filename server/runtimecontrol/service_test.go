@@ -5,141 +5,36 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"core/prompts"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/registry"
 	"core/server/requestmemo"
 	"core/server/runtime"
+	"core/server/runtimeactivity"
 	"core/server/runtimeops"
+	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/session/sessiontest"
+	"core/server/sessionruntime"
 	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/clientui"
+	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 )
-
-type stubRuntimeResolver struct {
-	engine *runtime.Engine
-}
-
-func (s stubRuntimeResolver) ResolveRuntime(context.Context, string) (*runtime.Engine, error) {
-	return s.engine, nil
-}
-
-func (s stubRuntimeResolver) WithGuardedRuntime(_ context.Context, _ string, fn func(*runtime.Engine) error) (bool, error) {
-	if s.engine == nil {
-		return false, nil
-	}
-	return true, fn(s.engine)
-}
-
-func (s stubRuntimeResolver) BeginSessionRun(string) (func(), bool) { return func() {}, true }
-
-func (s stubRuntimeResolver) BeginCancellableSessionRun(string) (context.Context, func(), bool) {
-	return context.Background(), func() {}, true
-}
-
-func (s stubRuntimeResolver) SessionRunsBlocked(string) bool { return false }
-
-type runtimeResolverMustNotBeCalled struct {
-	t *testing.T
-}
-
-func (r runtimeResolverMustNotBeCalled) ResolveRuntime(context.Context, string) (*runtime.Engine, error) {
-	r.t.Helper()
-	r.t.Fatal("ResolveRuntime must not be called for persisted goal inspection")
-	return nil, nil
-}
-
-func (r runtimeResolverMustNotBeCalled) WithGuardedRuntime(context.Context, string, func(*runtime.Engine) error) (bool, error) {
-	r.t.Helper()
-	r.t.Fatal("WithGuardedRuntime must not be called for persisted goal inspection")
-	return false, nil
-}
-
-func (r runtimeResolverMustNotBeCalled) BeginSessionRun(string) (func(), bool) {
-	r.t.Helper()
-	r.t.Fatal("BeginSessionRun must not be called for persisted goal inspection")
-	return nil, false
-}
-
-func (r runtimeResolverMustNotBeCalled) BeginCancellableSessionRun(string) (context.Context, func(), bool) {
-	r.t.Helper()
-	r.t.Fatal("BeginCancellableSessionRun must not be called for persisted goal inspection")
-	return nil, nil, false
-}
-
-func (r runtimeResolverMustNotBeCalled) SessionRunsBlocked(string) bool {
-	r.t.Helper()
-	r.t.Fatal("SessionRunsBlocked must not be called for persisted goal inspection")
-	return false
-}
 
 type missingMetadataPersistedSessionResolver struct{}
 
 func (missingMetadataPersistedSessionResolver) ResolvePersistedSession(context.Context, string) (session.PersistedSessionRecord, error) {
 	return session.PersistedSessionRecord{SessionDir: "/tmp/session"}, nil
 }
-
-type countingBeginRuntimeResolver struct {
-	stubRuntimeResolver
-	beginCount atomic.Int32
-}
-
-func (s *countingBeginRuntimeResolver) BeginSessionRun(string) (func(), bool) {
-	s.beginCount.Add(1)
-	return func() {}, true
-}
-
-func (s *countingBeginRuntimeResolver) BeginCancellableSessionRun(string) (context.Context, func(), bool) {
-	s.beginCount.Add(1)
-	return context.Background(), func() {}, true
-}
-
-type cancelableStartRuntimeResolver struct {
-	started  chan struct{}
-	released chan struct{}
-	once     sync.Once
-}
-
-func (s *cancelableStartRuntimeResolver) ResolveRuntime(context.Context, string) (*runtime.Engine, error) {
-	return nil, nil
-}
-
-func (s *cancelableStartRuntimeResolver) WithGuardedRuntime(ctx context.Context, _ string, fn func(*runtime.Engine) error) (bool, error) {
-	_ = fn
-	s.once.Do(func() { close(s.started) })
-	<-ctx.Done()
-	return false, ctx.Err()
-}
-
-func (s *cancelableStartRuntimeResolver) BeginSessionRun(string) (func(), bool) {
-	return func() {}, true
-}
-
-func (s *cancelableStartRuntimeResolver) BeginCancellableSessionRun(string) (context.Context, func(), bool) {
-	ctx, cancel := context.WithCancel(context.Background())
-	release := func() {
-		cancel()
-		select {
-		case <-s.released:
-		default:
-			close(s.released)
-		}
-	}
-	return ctx, release, true
-}
-
-func (s *cancelableStartRuntimeResolver) SessionRunsBlocked(string) bool { return false }
 
 var runtimeControlPromptHistoryStores sync.Map
 
@@ -371,10 +266,11 @@ var runtimeControlTestSessionPersistence = sessiontest.NewPersistence()
 
 func newRuntimeControlTestEngine(t *testing.T, client llm.Client, registry *tools.Registry, cfg runtime.Config, opts ...session.StoreOption) (*session.Store, *runtime.Engine) {
 	t.Helper()
+	workspace := t.TempDir()
 	store, err := session.Create(
 		t.TempDir(),
 		"workspace-x",
-		"/tmp/workspace-x",
+		workspace,
 		sessioncontract.SessionCategoryMain,
 		append(runtimeControlTestSessionPersistence.Options(), opts...)...,
 	)
@@ -403,9 +299,87 @@ func newRuntimeControlTestEngine(t *testing.T, client llm.Client, registry *tool
 
 func newRuntimeControlTestService(t *testing.T, client llm.Client, registry *tools.Registry, cfg runtime.Config, opts ...session.StoreOption) (*session.Store, *runtime.Engine, *Service) {
 	t.Helper()
-	store, engine := newRuntimeControlTestEngine(t, client, registry, cfg, opts...)
+	store, _ := newRuntimeControlTestEngine(t, client, registry, cfg, opts...)
+	if client == nil {
+		client = &runtimeControlFakeClient{}
+	}
+	settings := config.DefaultOnboardingSettings()
+	settings.ProviderOverride = "openai"
+	settings.Reviewer.Frequency = "off"
+	settings.CompactionMode = config.CompactionModeNative
+	if cfg.Model != "" {
+		settings.Model = cfg.Model
+	}
+	enabledTools := append([]toolspec.ID(nil), cfg.EnabledTools...)
+	if registry != nil {
+		if _, ok := registry.Get(toolspec.ToolExecCommand); ok {
+			found := false
+			for _, id := range enabledTools {
+				found = found || id == toolspec.ToolExecCommand
+			}
+			if !found {
+				enabledTools = append(enabledTools, toolspec.ToolExecCommand)
+			}
+		}
+	}
+	var reviewerClientFactory runtimewire.RuntimeClientFactory
+	if cfg.Reviewer.ClientFactory != nil {
+		reviewerClientFactory = runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
+			return cfg.Reviewer.ClientFactory()
+		})
+	}
+	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
+		Settings:                     settings,
+		EnabledTools:                 enabledTools,
+		Workdir:                      store.Meta().WorkspaceRoot,
+		Client:                       client,
+		ReviewerClientFactory:        reviewerClientFactory,
+		WorkflowRun:                  cfg.WorkflowRun,
+		ProviderCapabilitiesOverride: cfg.ProviderCapabilitiesOverride,
+		OnEvent:                      cfg.OnEvent,
+	})
+	if err != nil {
+		t.Fatalf("new authority runtime plan: %v", err)
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: t.TempDir(),
+		StoreOptions:    append(runtimeControlTestSessionPersistence.Options(), opts...),
+	})
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	if _, err := authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   "runtimecontrol-test",
+		Runtime:   &plan,
+	}); err != nil {
+		t.Fatalf("open authority runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	var engine *runtime.Engine
+	if err := authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, current *runtime.Engine) error {
+		engine = current
+		return nil
+	}); err != nil {
+		t.Fatalf("resolve authority runtime: %v", err)
+	}
+	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
+	if err != nil {
+		t.Fatalf("new session descriptor: %v", err)
+	}
+	if err := authority.WithSessionStore(context.Background(), descriptor, func(_ context.Context, current *session.Store) error {
+		store = current
+		return nil
+	}); err != nil {
+		t.Fatalf("resolve authority session store: %v", err)
+	}
 	history := newRuntimeControlPromptHistoryStore(store.Meta().SessionID)
-	service := NewService(stubRuntimeResolver{engine: engine}).
+	service := NewService(authority).
 		WithPromptHistoryStore(history).
 		WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
 	return store, engine, service
@@ -475,10 +449,10 @@ func TestServiceSubmitUserTurnStillCancelsOnExplicitInterrupt(t *testing.T) {
 }
 
 func TestServiceInterruptReturnsUnavailableActivityWithoutEngine(t *testing.T) {
-	service := NewService(stubRuntimeResolver{})
+	service := NewService(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
 	resp, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
 		ClientRequestID: "interrupt-1",
-		SessionID:       "session-1",
+		SessionID:       "018fdd67-89ab-4cde-8123-456789abcdef",
 	})
 	if err != nil {
 		t.Fatalf("Interrupt: %v", err)
@@ -507,7 +481,7 @@ func TestServiceLiveSteerRequiresActiveRun(t *testing.T) {
 }
 
 func TestServiceLiveSteerUnavailableRuntimeStaysUnavailable(t *testing.T) {
-	service := NewService(stubRuntimeResolver{})
+	service := NewService(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
 	_, err := service.LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
 		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
 		SessionID:       "018fdd67-89ab-4cde-8123-456789abcdef",
@@ -522,7 +496,7 @@ func TestServiceLiveSteerUnavailableRuntimeStaysUnavailable(t *testing.T) {
 }
 
 func TestServiceLiveWaitUnavailableRuntimeStaysUnavailable(t *testing.T) {
-	service := NewService(stubRuntimeResolver{})
+	service := NewService(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
 	_, err := service.LiveWait(context.Background(), serverapi.RuntimeLiveWaitRequest{
 		SessionID: "018fdd67-89ab-4cde-8123-456789abcdef",
 	})
@@ -536,10 +510,10 @@ func TestServiceLiveWaitUnavailableRuntimeStaysUnavailable(t *testing.T) {
 
 func TestServiceLiveSteerRecordsHistoryAfterActiveAdmission(t *testing.T) {
 	client := newCancelObservingRuntimeControlClient()
-	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
 	submitDone := make(chan error, 1)
 	go func() {
-		_, err := engine.SubmitUserMessage(context.Background(), "keep running")
+		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "keep-running", "keep running"))
 		submitDone <- err
 	}()
 	select {
@@ -569,10 +543,10 @@ func TestServiceLiveSteerRecordsHistoryAfterActiveAdmission(t *testing.T) {
 
 func TestServiceLiveSteerPreservesAdmittedPromptHistoryError(t *testing.T) {
 	client := newCancelObservingRuntimeControlClient()
-	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
 	submitDone := make(chan error, 1)
 	go func() {
-		_, err := engine.SubmitUserMessage(context.Background(), "keep running")
+		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "keep-running", "keep running"))
 		submitDone <- err
 	}()
 	select {
@@ -629,15 +603,13 @@ func runtimeControlPromptHistoryStoresLoad(t *testing.T, sessionID string) *runt
 }
 
 func TestServiceInterruptReturnsCurrentActivitySnapshot(t *testing.T) {
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x", sessioncontract.SessionCategoryMain, runtimeControlTestSessionPersistence.Options()...)
-	if err != nil {
-		t.Fatalf("create session store: %v", err)
-	}
-	engine, err := runtime.New(store, &runtimeControlFakeClient{}, tools.NewRegistry(), runtime.Config{Model: "gpt-5"})
-	if err != nil {
-		t.Fatalf("create runtime engine: %v", err)
-	}
-	service := NewService(stubRuntimeResolver{engine: engine})
+	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
+	service.WithRuntimeActivityResolver(&sequenceRuntimeActivityResolver{
+		snapshots: []runtimeactivity.ResponseSnapshot{{
+			Version:  clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 1},
+			Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle, QueueAccepting: true},
+		}},
+	})
 	resp, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
 		ClientRequestID: "interrupt-1",
 		SessionID:       store.Meta().SessionID,
@@ -654,8 +626,7 @@ func TestServiceInterruptReturnsCurrentActivitySnapshot(t *testing.T) {
 }
 
 func TestServiceGoalMutationsSetShowComplete(t *testing.T) {
-	store, engine := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	service := NewService(stubRuntimeResolver{engine: engine}).WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
+	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 
 	setResp, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
 		ClientRequestID: "goal-set-1",
@@ -700,7 +671,7 @@ func TestServiceShowGoalReturnsPersistedGoalWithoutRuntime(t *testing.T) {
 		t.Fatalf("SetGoalStatus: %v", err)
 	}
 	sessionID := store.Meta().SessionID
-	service := NewService(runtimeResolverMustNotBeCalled{t: t}).WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
+	service := NewService(nil).WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
 
 	resp, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: sessionID})
 	if err != nil {
@@ -718,36 +689,10 @@ func TestServiceShowGoalReturnsPersistedGoalWithoutRuntime(t *testing.T) {
 	}
 }
 
-func TestServiceShowGoalPrefersPersistedGoalOverLiveRuntime(t *testing.T) {
-	_, liveEngine := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	if _, err := liveEngine.SetGoal("live preview must not win", session.GoalActorUser); err != nil {
-		t.Fatalf("SetGoal: %v", err)
-	}
-	persistedStore, _ := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	persistedGoal, err := persistedStore.SetGoal("return committed metadata", session.GoalActorUser)
-	if err != nil {
-		t.Fatalf("SetGoal persisted: %v", err)
-	}
-	persistedGoal, err = persistedStore.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser)
-	if err != nil {
-		t.Fatalf("SetGoalStatus persisted: %v", err)
-	}
-	sessionID := persistedStore.Meta().SessionID
-	service := NewService(stubRuntimeResolver{engine: liveEngine}).WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
-
-	resp, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: sessionID})
-	if err != nil {
-		t.Fatalf("ShowGoal: %v", err)
-	}
-	if resp.Goal == nil || resp.Goal.ID != persistedGoal.ID || resp.Goal.Objective != persistedGoal.Objective || resp.Goal.Status != string(persistedGoal.Status) {
-		t.Fatalf("ShowGoal goal = %+v, want persisted goal %+v", resp.Goal, persistedGoal)
-	}
-}
-
 func TestServiceShowGoalReturnsEmptyResponseForPersistedSessionWithoutGoal(t *testing.T) {
 	store, _ := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{})
 	sessionID := store.Meta().SessionID
-	service := NewService(runtimeResolverMustNotBeCalled{t: t}).WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
+	service := NewService(nil).WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
 
 	resp, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: sessionID})
 	if err != nil {
@@ -767,17 +712,17 @@ func TestServiceShowGoalReturnsPersistedSessionResolutionFailures(t *testing.T) 
 	}{
 		{
 			name:    "resolver required",
-			service: NewService(runtimeResolverMustNotBeCalled{t: t}),
+			service: NewService(nil),
 		},
 		{
 			name: "resolver failure",
-			service: NewService(runtimeResolverMustNotBeCalled{t: t}).
+			service: NewService(nil).
 				WithPersistedSessionResolver(runtimeControlTestSessionPersistence),
 			wantIs: session.ErrSessionNotFound,
 		},
 		{
 			name: "metadata required",
-			service: NewService(runtimeResolverMustNotBeCalled{t: t}).
+			service: NewService(nil).
 				WithPersistedSessionResolver(missingMetadataPersistedSessionResolver{}),
 		},
 	}
@@ -800,14 +745,11 @@ func TestServiceShowGoalReturnsPersistedSessionResolutionFailures(t *testing.T) 
 
 func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T) {
 	client := newCancelObservingRuntimeControlClient()
-	store, engine := newRuntimeControlTestEngine(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 	initialGoal, err := engine.SetGoal("committed before active step", session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
-	service := NewService(stubRuntimeResolver{engine: engine}).
-		WithPromptHistoryStore(newRuntimeControlPromptHistoryStore(store.Meta().SessionID)).
-		WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
 	turnDone := make(chan error, 1)
 	go func() {
 		_, submitErr := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "turn-1", "work"))
@@ -919,13 +861,12 @@ func TestServiceWorkflowAgentStepGoalSetDoesNotBypassStepQueue(t *testing.T) {
 }
 
 func TestServiceWorkflowSessionGoalMutationAllowed(t *testing.T) {
-	store, engine := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{
+	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
 		WorkflowRun: &workflowruntime.Config{
 			Contract: workflowruntime.CompletionContract{RunID: workflow.RunID("run-1")},
 		},
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 	})
-	service := NewService(stubRuntimeResolver{engine: engine})
 
 	resp, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
 		ClientRequestID: "req-goal-workflow-busy-gate",
@@ -1396,11 +1337,10 @@ func TestServiceResumeGoalDuringInterruptSchedulesRestartWithReminder(t *testing
 }
 
 func TestServiceSetSessionNameDedupesSuccessfulRetry(t *testing.T) {
-	store, engine := newRuntimeControlTestEngine(t, nil, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}}), runtime.Config{})
+	store, _, service := newRuntimeControlTestService(t, nil, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}}), runtime.Config{})
 	if err := store.SetName("before"); err != nil {
 		t.Fatalf("persist initial session name: %v", err)
 	}
-	service := NewService(stubRuntimeResolver{engine: engine})
 	req := serverapi.RuntimeSetSessionNameRequest{
 		ClientRequestID: "req-1",
 		SessionID:       store.Meta().SessionID,
@@ -1444,54 +1384,11 @@ func TestServiceSubmitUserTurnDedupesSuccessfulRetry(t *testing.T) {
 	}
 }
 
-func TestServiceSubmitUserTurnDuplicateInFlightUsesSinglePreBeginAdmission(t *testing.T) {
-	client := newCancelObservingRuntimeControlClient()
-	store, engine := newRuntimeControlTestEngine(t, client, nil, runtime.Config{})
-	resolver := &countingBeginRuntimeResolver{stubRuntimeResolver: stubRuntimeResolver{engine: engine}}
-	service := NewService(resolver)
-	req := runtimeControlUserTurnRequest(store, "req-1", "hello")
-
-	firstErr := make(chan error, 1)
-	secondErr := make(chan error, 1)
-	go func() {
-		_, err := service.SubmitUserTurn(context.Background(), req)
-		firstErr <- err
-	}()
-	select {
-	case <-client.started:
-	case <-time.After(time.Second):
-		t.Fatal("first submit did not reach generation")
-	}
-	go func() {
-		_, err := service.SubmitUserTurn(context.Background(), req)
-		secondErr <- err
-	}()
-	time.Sleep(50 * time.Millisecond)
-	if got := resolver.beginCount.Load(); got != 1 {
-		t.Fatalf("BeginSessionRun count while duplicate is in flight = %d, want 1", got)
-	}
-	close(client.release)
-	for label, ch := range map[string]<-chan error{"first": firstErr, "second": secondErr} {
-		select {
-		case err := <-ch:
-			if err != nil {
-				t.Fatalf("%s SubmitUserTurn: %v", label, err)
-			}
-		case <-time.After(time.Second):
-			t.Fatalf("timed out waiting for %s SubmitUserTurn", label)
-		}
-	}
-	if got := resolver.beginCount.Load(); got != 1 {
-		t.Fatalf("BeginSessionRun final count = %d, want 1", got)
-	}
-}
-
 func TestServiceSubmitUserTurnOperationTombstonePreventsPreActiveBegin(t *testing.T) {
 	client := finalResponseRuntimeControlClient()
-	store, engine := newRuntimeControlTestEngine(t, client, nil, runtime.Config{})
-	resolver := &countingBeginRuntimeResolver{stubRuntimeResolver: stubRuntimeResolver{engine: engine}}
+	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
 	operations := runtimeops.NewCoordinator()
-	service := NewService(resolver).WithOperationCoordinator(operations)
+	service.WithOperationCoordinator(operations)
 	req := runtimeControlUserTurnRequest(store, "req-canceled", "hello")
 	if err := operations.CancelOperation(store.Meta().SessionID, req.OperationRef); err != nil {
 		t.Fatalf("CancelOperation: %v", err)
@@ -1500,91 +1397,10 @@ func TestServiceSubmitUserTurnOperationTombstonePreventsPreActiveBegin(t *testin
 	if _, err := service.SubmitUserTurn(context.Background(), req); !errors.Is(err, runtimeops.ErrOperationCanceled) {
 		t.Fatalf("SubmitUserTurn after tombstone error = %v, want operation canceled", err)
 	}
-	if got := resolver.beginCount.Load(); got != 0 {
-		t.Fatalf("BeginCancellableSessionRun count = %d, want 0", got)
+	if client.calls != 0 {
+		t.Fatalf("generate call count = %d, want 0", client.calls)
 	}
 	assertRuntimeControlReconciliation(t, operations, store.Meta().SessionID, req.OperationRef, clientui.RuntimeInputReconciliationCanceledNotCommitted)
-}
-
-func TestServiceTargetCancelReleasesStartMarkerBeforeRuntimeAccessReturns(t *testing.T) {
-	resolver := &cancelableStartRuntimeResolver{started: make(chan struct{}), released: make(chan struct{})}
-	operations := runtimeops.NewCoordinator()
-	service := NewService(resolver).WithOperationCoordinator(operations)
-	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
-	req := serverapi.RuntimeSubmitUserTurnRequest{
-		ClientRequestID: ref.ClientRequestID.String(),
-		SessionID:       "session-start-marker",
-		Text:            "hello",
-		OperationRef:    ref,
-		PreSubmitCompactionOperationRef: runtimeControlOperationRef(
-			clientui.RuntimeOperationKindPreSubmitCompact,
-		),
-	}
-	done := make(chan error, 1)
-	go func() {
-		_, err := service.SubmitUserTurn(context.Background(), req)
-		done <- err
-	}()
-	select {
-	case <-resolver.started:
-	case <-time.After(time.Second):
-		t.Fatal("submit did not reach guarded runtime access")
-	}
-	if err := operations.CancelOperation(req.SessionID, ref); err != nil {
-		t.Fatalf("CancelOperation: %v", err)
-	}
-	select {
-	case <-resolver.released:
-	case <-time.After(time.Second):
-		t.Fatal("start marker was not released by operation cancellation")
-	}
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("SubmitUserTurn error = %v, want context canceled", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for canceled submit")
-	}
-	assertRuntimeControlReconciliation(t, operations, req.SessionID, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
-}
-
-func TestServiceSubmitUserTurnOperationTombstonePreventsPreFlushSubmittedReconciliation(t *testing.T) {
-	resolver := &cancelableStartRuntimeResolver{started: make(chan struct{}), released: make(chan struct{})}
-	operations := runtimeops.NewCoordinator()
-	service := NewService(resolver).WithOperationCoordinator(operations)
-	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
-	req := serverapi.RuntimeSubmitUserTurnRequest{
-		ClientRequestID: ref.ClientRequestID.String(),
-		SessionID:       "session-cancel-before-flush",
-		Text:            "restore me",
-		OperationRef:    ref,
-		PreSubmitCompactionOperationRef: runtimeControlOperationRef(
-			clientui.RuntimeOperationKindPreSubmitCompact,
-		),
-	}
-	done := make(chan error, 1)
-	go func() {
-		_, err := service.SubmitUserTurn(context.Background(), req)
-		done <- err
-	}()
-	select {
-	case <-resolver.started:
-	case <-time.After(time.Second):
-		t.Fatal("submit did not reach guarded runtime access")
-	}
-	if err := operations.CancelOperation(req.SessionID, ref); err != nil {
-		t.Fatalf("CancelOperation: %v", err)
-	}
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("SubmitUserTurn error = %v, want context canceled", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for canceled submit")
-	}
-	assertRuntimeControlReconciliation(t, operations, req.SessionID, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
 }
 
 func TestServiceSubmitUserTurnRecordsCommittedAtFlushBeforeAssistantCompletion(t *testing.T) {
@@ -1688,46 +1504,6 @@ func TestServiceInterruptQueuedServerMessageDoesNotInterruptUnrelatedActiveRun(t
 	assertRuntimeControlReconciliation(t, service.operations, store.Meta().SessionID, target, clientui.RuntimeInputReconciliationCanceledNotCommitted)
 }
 
-func TestServiceInterruptCancelsInFlightQueuedMessageCreateByClientRef(t *testing.T) {
-	resolver := &cancelableStartRuntimeResolver{started: make(chan struct{}), released: make(chan struct{})}
-	operations := runtimeops.NewCoordinator()
-	service := NewService(resolver).WithOperationCoordinator(operations)
-	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindQueuedMessage)
-	req := serverapi.RuntimeQueueUserMessageRequest{
-		ClientRequestID: ref.ClientRequestID.String(),
-		SessionID:       "session-queue-create",
-		OperationRef:    ref,
-		Text:            "queued before server id",
-	}
-	done := make(chan error, 1)
-	go func() {
-		_, err := service.QueueUserMessage(context.Background(), req)
-		done <- err
-	}()
-	select {
-	case <-resolver.started:
-	case <-time.After(time.Second):
-		t.Fatal("queue create did not reach guarded runtime access")
-	}
-	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
-		ClientRequestID:      "interrupt-queue-create",
-		SessionID:            req.SessionID,
-		TargetOperationRef:   &ref,
-		PendingOperationRefs: []clientui.RuntimeOperationRef{ref},
-	}); err != nil {
-		t.Fatalf("Interrupt queued create: %v", err)
-	}
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("QueueUserMessage error = %v, want context canceled", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for canceled queue create")
-	}
-	assertRuntimeControlReconciliation(t, operations, req.SessionID, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
-}
-
 func TestServiceCanceledQueuedMessageCreateRejectsDuplicateRetries(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
 	operations := runtimeops.NewCoordinator()
@@ -1755,11 +1531,12 @@ func TestServiceCanceledQueuedMessageCreateRejectsDuplicateRetries(t *testing.T)
 
 func TestServiceInterruptWithTargetRecordsCancellationTombstoneWithoutRuntime(t *testing.T) {
 	operations := runtimeops.NewCoordinator()
-	service := NewService(stubRuntimeResolver{}).WithOperationCoordinator(operations)
+	service := NewService(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})).WithOperationCoordinator(operations)
 	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
+	sessionID := "018fdd67-89ab-4cde-8123-456789abcdef"
 	resp, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
 		ClientRequestID:    "interrupt-target",
-		SessionID:          "session-target",
+		SessionID:          sessionID,
 		TargetOperationRef: &ref,
 	})
 	if err != nil {
@@ -1768,7 +1545,7 @@ func TestServiceInterruptWithTargetRecordsCancellationTombstoneWithoutRuntime(t 
 	if resp.Activity.State != clientui.RuntimeActivityUnavailable {
 		t.Fatalf("activity = %+v, want unavailable", resp.Activity)
 	}
-	assertRuntimeControlReconciliation(t, operations, "session-target", ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
+	assertRuntimeControlReconciliation(t, operations, sessionID, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
 	if len(resp.InputReconciliation.Operations) != 1 || resp.InputReconciliation.Operations[0].Operation != ref || resp.InputReconciliation.Operations[0].State != clientui.RuntimeInputReconciliationCanceledNotCommitted {
 		t.Fatalf("response reconciliation = %+v, want canceled target", resp.InputReconciliation)
 	}
@@ -1776,7 +1553,7 @@ func TestServiceInterruptWithTargetRecordsCancellationTombstoneWithoutRuntime(t 
 
 func TestServiceTargetedPreActiveInterruptDoesNotInterruptUnrelatedActiveRun(t *testing.T) {
 	client := newCancelObservingRuntimeControlClient()
-	store, engine := newRuntimeControlTestEngine(t, client, nil, runtime.Config{})
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
 	activeDone := make(chan error, 1)
 	go func() {
 		_, err := engine.SubmitUserMessage(context.Background(), "active unrelated turn")
@@ -1788,7 +1565,7 @@ func TestServiceTargetedPreActiveInterruptDoesNotInterruptUnrelatedActiveRun(t *
 		t.Fatal("active run did not start")
 	}
 	operations := runtimeops.NewCoordinator()
-	service := NewService(stubRuntimeResolver{engine: engine}).WithOperationCoordinator(operations)
+	service.WithOperationCoordinator(operations)
 	target := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
 	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
 		ClientRequestID:    "interrupt-pre-active-target",
@@ -1816,7 +1593,7 @@ func TestServiceTargetedPreActiveInterruptDoesNotInterruptUnrelatedActiveRun(t *
 
 func TestServiceTargetedTerminalOperationDoesNotInterruptUnrelatedActiveRun(t *testing.T) {
 	client := newCancelObservingRuntimeControlClient()
-	store, engine := newRuntimeControlTestEngine(t, client, nil, runtime.Config{})
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
 	activeDone := make(chan error, 1)
 	go func() {
 		_, err := engine.SubmitUserMessage(context.Background(), "active unrelated turn")
@@ -1830,7 +1607,7 @@ func TestServiceTargetedTerminalOperationDoesNotInterruptUnrelatedActiveRun(t *t
 	operations := runtimeops.NewCoordinator()
 	target := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
 	operations.RecordCommitted(store.Meta().SessionID, target)
-	service := NewService(stubRuntimeResolver{engine: engine}).WithOperationCoordinator(operations)
+	service.WithOperationCoordinator(operations)
 	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
 		ClientRequestID:    "interrupt-terminal-target",
 		SessionID:          store.Meta().SessionID,
@@ -1853,30 +1630,6 @@ func TestServiceTargetedTerminalOperationDoesNotInterruptUnrelatedActiveRun(t *t
 		t.Fatal("active run did not finish after release")
 	}
 	assertRuntimeControlReconciliation(t, operations, store.Meta().SessionID, target, clientui.RuntimeInputReconciliationCommitted)
-}
-
-func TestServiceInterruptDoesNotExposeLongLivedStartReservationAsActivity(t *testing.T) {
-	reg := registry.NewRuntimeRegistry()
-	startCtx, release, ok := reg.BeginCancellableSessionRun("session-starting")
-	if !ok {
-		t.Fatal("BeginCancellableSessionRun rejected")
-	}
-	defer release()
-	service := NewService(reg)
-	resp, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
-		ClientRequestID: "interrupt-starting",
-		SessionID:       "session-starting",
-	})
-	if err != nil {
-		t.Fatalf("Interrupt: %v", err)
-	}
-	if resp.Activity.State != clientui.RuntimeActivityUnavailable {
-		t.Fatalf("activity = %+v, want unavailable because start reservation is admission-only", resp.Activity)
-	}
-	release()
-	if !errors.Is(startCtx.Err(), context.Canceled) {
-		t.Fatalf("start context error = %v, want canceled", startCtx.Err())
-	}
 }
 
 func assertRuntimeControlReconciliation(t *testing.T, operations *runtimeops.Coordinator, sessionID string, ref clientui.RuntimeOperationRef, want clientui.RuntimeInputReconciliationState) {

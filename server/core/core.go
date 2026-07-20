@@ -13,9 +13,7 @@ import (
 	"core/server/metadata"
 	"core/server/runprompt"
 	"core/server/runtime"
-	"core/server/session"
 	"core/server/sessionlaunch"
-	askquestion "core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/apicontract"
 	"core/shared/clientui"
@@ -298,7 +296,6 @@ func (s *Core) runPromptClientForProjectContext(projectCtx projectContext) apico
 	client := runprompt.NewInProcessRunPromptClient(runprompt.HeadlessBootstrap{
 		SessionLaunch:    s.sessionLaunchServiceForProjectContext(projectCtx),
 		FastModeState:    s.safeBundles().Runtime.fastModeState,
-		RuntimeRegistry:  s.safeBundles().Runtime.runtimeRegistry,
 		PromptHistory:    s.safeBundles().Persistence.metadataStore,
 		RuntimeAuthority: s.safeBundles().Runtime.runtimeAuthority,
 	})
@@ -552,34 +549,6 @@ func (s *Core) WorkflowClient() apicontract.WorkflowService {
 		return nil
 	}
 	return s.safeBundles().Workflows.workflows
-}
-
-func (s *Core) RegisterSessionStore(store *session.Store) {
-	if s == nil || s.safeBundles().Persistence.sessionStores == nil {
-		return
-	}
-	s.safeBundles().Persistence.sessionStores.RegisterStore(store)
-}
-
-func (s *Core) ResolveSessionStore(sessionID string) (*session.Store, error) {
-	if s == nil || s.safeBundles().Persistence.sessionStores == nil {
-		return nil, nil
-	}
-	return s.safeBundles().Persistence.sessionStores.ResolveStore(context.Background(), sessionID)
-}
-
-func (s *Core) PublishRuntimeEvent(sessionID string, evt runtime.Event) {
-	if s == nil || s.safeBundles().Runtime.runtimeRegistry == nil {
-		return
-	}
-	s.safeBundles().Runtime.runtimeRegistry.PublishRuntimeEvent(sessionID, evt)
-}
-
-func (s *Core) AwaitPromptResponse(ctx context.Context, sessionID string, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-	if s == nil || s.safeBundles().Runtime.runtimeRegistry == nil {
-		return askquestion.AskQuestionResponse{}, fmt.Errorf("runtime registry is required")
-	}
-	return s.safeBundles().Runtime.runtimeRegistry.AwaitPromptResponse(ctx, sessionID, req)
 }
 
 func (s *Core) RunPromptClient() apicontract.RunPromptService {

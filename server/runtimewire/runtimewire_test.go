@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"core/internal/testharness/runtimewirefixture"
 	"core/internal/testharness/scriptedllm"
 	"core/internal/testharness/testsetup"
 	"core/server/auth"
@@ -27,14 +26,12 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/server/tools/shell/postprocess"
 	"core/shared/config"
-	"core/shared/invariant"
 	"core/shared/runtimeids"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 
 	"core/shared/sessioncontract"
-	"github.com/google/uuid"
 )
 
 type mismatchedDeletionPresentationHandler struct{}
@@ -720,224 +717,6 @@ func TestLocalToolRegistryBindingRebindRejectsEmptyWorkspaceRoot(t *testing.T) {
 	binding := newRuntimeWireBinding(t, root, toolspec.ToolExecCommand)
 	if err := binding.Rebind("   "); !errors.Is(err, errWorkspaceRootRequired) {
 		t.Fatalf("rebind error = %v, want errWorkspaceRootRequired", err)
-	}
-}
-
-func TestBackgroundEventRouterSkipsDeveloperNoticeForOrphanedShells(t *testing.T) {
-	root := t.TempDir()
-	storeA := newRuntimeWireSession(t, root, "ws-a")
-	storeB := newRuntimeWireSession(t, root, "ws-b")
-	clientA := &busyToggleFakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "a", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200_000}}}}
-	clientB := &busyToggleFakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "b", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200_000}}}}
-	var mu sync.Mutex
-	backgroundUpdates := 0
-	_ = newRuntimeWireEngine(t, storeA, clientA)
-	engB := newRuntimeWireEngine(t, storeB, clientB, runtime.Config{Model: "gpt-5", OnEvent: func(evt runtime.Event) {
-		if evt.Kind == runtime.EventBackgroundUpdated {
-			mu.Lock()
-			backgroundUpdates++
-			mu.Unlock()
-		}
-	}})
-
-	router := &BackgroundEventRouter{}
-	router.SetActiveSession(storeB.Meta().SessionID, engB)
-	router.Handle(runtimewirefixture.BackgroundCompletionEvent("1000", storeA.Meta().SessionID, root))
-
-	time.Sleep(150 * time.Millisecond)
-	if got := clientB.CallCount(); got != 0 {
-		t.Fatalf("expected orphaned completion to skip model notice for active session, got %d client calls", got)
-	}
-	mu.Lock()
-	updates := backgroundUpdates
-	mu.Unlock()
-	if updates != 0 {
-		t.Fatalf("expected orphaned completion to stay isolated from foreign active sessions, got %d background updates", updates)
-	}
-	if got := clientA.CallCount(); got != 0 {
-		t.Fatalf("did not expect inactive owner engine to be called, got %d", got)
-	}
-}
-
-func TestBackgroundEventRouterRoutesCompletionToMatchingActiveOwnerSession(t *testing.T) {
-	root := t.TempDir()
-	storeA := newRuntimeWireSession(t, root, "ws-a")
-	storeB := newRuntimeWireSession(t, root, "ws-b")
-	clientA := &busyToggleFakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "a", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200_000}}}}
-	clientB := &busyToggleFakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "b", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200_000}}}}
-	engA := newRuntimeWireEngine(t, storeA, clientA)
-	engB := newRuntimeWireEngine(t, storeB, clientB)
-
-	router := &BackgroundEventRouter{}
-	router.SetActiveSession(storeA.Meta().SessionID, engA)
-	router.SetActiveSession(storeB.Meta().SessionID, engB)
-	router.Handle(runtimewirefixture.BackgroundCompletionEvent("1002", storeA.Meta().SessionID, root))
-
-	testsetup.RequireUntil(t, time.Now().Add(2*time.Second), 20*time.Millisecond, func() bool {
-		return clientA.CallCount() != 0
-	}, "expected owner session completion to route to its active engine even when another session is also active")
-	if got := clientB.CallCount(); got != 0 {
-		t.Fatalf("did not expect foreign active session to receive routed completion, got %d", got)
-	}
-}
-
-func TestBackgroundEventRouterClearActiveSessionDropsOnlyThatOwner(t *testing.T) {
-	root := t.TempDir()
-	storeA := newRuntimeWireSession(t, root, "ws-a")
-	storeB := newRuntimeWireSession(t, root, "ws-b")
-	clientA := &busyToggleFakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "a", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200_000}}}}
-	clientB := &busyToggleFakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "b", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200_000}}}}
-	engA := newRuntimeWireEngine(t, storeA, clientA)
-	engB := newRuntimeWireEngine(t, storeB, clientB)
-
-	router := &BackgroundEventRouter{}
-	router.SetActiveSession(storeA.Meta().SessionID, engA)
-	router.SetActiveSession(storeB.Meta().SessionID, engB)
-	router.ClearActiveSession(storeA.Meta().SessionID, engA)
-	router.Handle(runtimewirefixture.BackgroundCompletionEvent("1003", storeA.Meta().SessionID, root))
-	time.Sleep(150 * time.Millisecond)
-	if got := clientA.CallCount(); got != 0 {
-		t.Fatalf("expected cleared owner session to drop completions, got %d", got)
-	}
-	if got := clientB.CallCount(); got != 0 {
-		t.Fatalf("did not expect foreign active session to receive cleared-owner completion, got %d", got)
-	}
-
-	router.Handle(runtimewirefixture.BackgroundCompletionEvent("1004", storeB.Meta().SessionID, root))
-	testsetup.RequireUntil(t, time.Now().Add(2*time.Second), 20*time.Millisecond, func() bool {
-		return clientB.CallCount() != 0
-	}, "expected other active sessions to keep receiving their own completions after clearing a different owner")
-}
-
-func TestBackgroundEventRouterStaleClearKeepsReplacementForSameSession(t *testing.T) {
-	root := t.TempDir()
-	store := newRuntimeWireSession(t, root, "ws")
-	clientA := &busyToggleFakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "a", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200_000}}}}
-	clientB := &busyToggleFakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "b", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200_000}}}}
-	engA := newRuntimeWireEngine(t, store, clientA)
-	engB := newRuntimeWireEngine(t, store, clientB)
-
-	router := &BackgroundEventRouter{}
-	router.SetActiveSession(store.Meta().SessionID, engA)
-	router.SetActiveSession(store.Meta().SessionID, engB)
-	router.ClearActiveSession(store.Meta().SessionID, engA)
-	router.Handle(runtimewirefixture.BackgroundCompletionEvent("1005", store.Meta().SessionID, root))
-
-	testsetup.RequireUntil(t, time.Now().Add(2*time.Second), 20*time.Millisecond, func() bool {
-		return clientB.CallCount() != 0
-	}, "expected replacement active session to receive completion after stale clear")
-	if got := clientA.CallCount(); got != 0 {
-		t.Fatalf("did not expect stale active session to receive completion, got %d", got)
-	}
-}
-
-func TestBackgroundEventRouterDropsOrphanedTerminalEventBeforeInvariantHandling(t *testing.T) {
-	router := NewBackgroundEventRouterWithInvariantPolicy(nil, 16_000, shelltool.BackgroundOutputDefault, invariant.NewPolicy(invariant.WithMode(invariant.ModePanic)))
-	exitCode := 7
-	router.Handle(shelltool.Event{
-		Type: shelltool.EventCompleted,
-		Snapshot: shelltool.Snapshot{
-			ID:             "1000",
-			ActivityID:     uuid.New(),
-			OwnerSessionID: "inactive-owner",
-			State:          "completed",
-			ExitCode:       &exitCode,
-		},
-	})
-}
-
-func TestBackgroundEventRouterPanicsForInvalidTerminalEventInPanicMode(t *testing.T) {
-	root := t.TempDir()
-	store := newRuntimeWireSession(t, root, "panic")
-	router := NewBackgroundEventRouterWithInvariantPolicy(nil, 16_000, shelltool.BackgroundOutputDefault, invariant.NewPolicy(invariant.WithMode(invariant.ModePanic)))
-	router.SetActiveSession(store.Meta().SessionID, newRuntimeWireEngine(t, store, &busyToggleFakeClient{}))
-	exitCode := 7
-
-	defer func() {
-		recovered := recover()
-		diagnostic, ok := recovered.(invariant.Diagnostic)
-		if !ok {
-			t.Fatalf("panic = %#v, want invariant diagnostic", recovered)
-		}
-		if diagnostic.Scope != invariant.ScopeBackgroundEvent ||
-			diagnostic.Fields[invariant.FieldEventKind] != string(shelltool.EventCompleted) ||
-			diagnostic.Fields[invariant.FieldProcessID] != "1000" ||
-			diagnostic.Fields[invariant.FieldBackgroundState] != "completed" ||
-			diagnostic.Fields[invariant.FieldInvariantError] == "" ||
-			diagnostic.Stack == "" {
-			t.Fatalf("diagnostic = %+v", diagnostic)
-		}
-	}()
-
-	router.Handle(shelltool.Event{
-		Type: shelltool.EventCompleted,
-		Snapshot: shelltool.Snapshot{
-			ID:             "1000",
-			ActivityID:     uuid.New(),
-			OwnerSessionID: store.Meta().SessionID,
-			State:          "completed",
-			ExitCode:       &exitCode,
-		},
-	})
-}
-
-func TestBackgroundEventRouterRecoversInvalidTerminalEventInDiagnosticMode(t *testing.T) {
-	root := t.TempDir()
-	store := newRuntimeWireSession(t, root, "diagnostic")
-	client := &busyToggleFakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "handled", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200_000}}}}
-	var updates []runtime.BackgroundShellEvent
-	eng := newRuntimeWireEngine(t, store, client, runtime.Config{Model: "gpt-5", OnEvent: func(evt runtime.Event) {
-		if evt.Kind == runtime.EventBackgroundUpdated && evt.Background != nil {
-			updates = append(updates, *evt.Background)
-		}
-	}})
-	var diagnostics []invariant.Diagnostic
-	policy := invariant.NewPolicy(
-		invariant.WithMode(invariant.ModeDiagnostic),
-		invariant.WithSink(invariant.SinkFunc(func(d invariant.Diagnostic) {
-			diagnostics = append(diagnostics, d)
-		})),
-	)
-	router := NewBackgroundEventRouterWithInvariantPolicy(nil, 16_000, shelltool.BackgroundOutputDefault, policy)
-	router.SetActiveSession(store.Meta().SessionID, eng)
-	exitCode := 17
-	event := shelltool.Event{
-		Type: shelltool.EventCompleted,
-		Snapshot: shelltool.Snapshot{
-			ID:             "1000",
-			ActivityID:     uuid.New(),
-			OwnerSessionID: store.Meta().SessionID,
-			State:          "completed",
-			ExitCode:       &exitCode,
-			LogPath:        filepath.Join(root, "1000.log"),
-		},
-	}
-
-	router.Handle(event)
-
-	if len(diagnostics) != 1 {
-		t.Fatalf("diagnostics = %d, want 1", len(diagnostics))
-	}
-	diagnostic := diagnostics[0]
-	if diagnostic.Scope != invariant.ScopeBackgroundEvent ||
-		diagnostic.Fields[invariant.FieldProcessID] != event.Snapshot.ID ||
-		diagnostic.Fields[invariant.FieldBackgroundState] != event.Snapshot.State ||
-		diagnostic.Fields[invariant.FieldInvariantError] == "" ||
-		diagnostic.Stack == "" {
-		t.Fatalf("diagnostic = %+v", diagnostic)
-	}
-	if len(updates) != 1 {
-		t.Fatalf("background updates = %d, want 1", len(updates))
-	}
-	update := updates[0]
-	if update.Type != runtime.BackgroundShellEventCompleted ||
-		update.ID != event.Snapshot.ID ||
-		update.State != event.Snapshot.State ||
-		update.ExitCode == nil || *update.ExitCode != exitCode ||
-		update.LogPath != event.Snapshot.LogPath ||
-		update.NoticeText == "" ||
-		update.CompactText == "" {
-		t.Fatalf("recovered background update = %+v", update)
 	}
 }
 

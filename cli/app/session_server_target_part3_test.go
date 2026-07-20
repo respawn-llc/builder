@@ -9,7 +9,6 @@ import (
 
 	"core/internal/testharness/testsetup"
 	serverstartup "core/server/startup"
-	askquestion "core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/apicontract"
 	"core/shared/clientui"
@@ -20,67 +19,61 @@ import (
 
 func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspace(t)
+	t.Setenv("KENT_REVIEWER_FREQUENCY", "off")
+	model := newAppTestModelServer(t,
+		appTestModelStep{Calls: []appTestModelToolCall{
+			appTestAskCall("ask-remote-1", "Ask?", nil, 0),
+			appTestOutsidePatchCall("patch-remote-1", appTestOutsidePatchPath(t)),
+		}},
+		appTestModelStep{Final: "remote prompt snapshot complete"},
+	)
+	defer model.Close()
 
 	fixture := startConfiguredDaemonFixture(t, workspace, serverstartup.Request{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5",
+		OpenAIBaseURL:         model.URL,
+		OpenAIBaseURLExplicit: true,
 	}, apiKeyMemoryAuthHandler("test-key"))
 
 	server := fixture.attachRemoteSessionServer(t, Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, newHeadlessAuthInteractor())
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, io.Discard, "test remote prompt snapshot reads")
+	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, io.Discard, "test remote prompt snapshot reads")
 	defer closeRuntimeLaunchPlan(t, runtimePlan)
-	finishStep := beginAppTestModelPromptStep(t, fixture.daemon, plan.SessionID)
 
-	askDone := make(chan error, 1)
-	go func() {
-		_, err := fixture.daemon.AwaitPromptResponse(context.Background(), plan.SessionID, appTestModelPromptRequest("ask-remote-1", "Ask?"))
-		askDone <- err
-	}()
-	approvalDone := make(chan error, 1)
-	go func() {
-		request := appTestModelPromptRequest("approval-remote-1", "Approve?")
-		request.Approval = true
-		request.ApprovalOptions = []askquestion.AskQuestionApprovalOption{{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"}}
-		_, err := fixture.daemon.AwaitPromptResponse(context.Background(), plan.SessionID, request)
-		approvalDone <- err
-	}()
-
-	prompts := waitForRemoteTranscriptPrompts(t, runtimePlan.Wiring.transcriptEvents, 2, "")
+	submissionDone, submissionFailed := startAppTestRuntimeSubmission(t, runtimePlan.Wiring.runtimeClient, "start prompt snapshot")
+	prompts := waitForRemoteTranscriptPrompts(t, runtimePlan.Wiring.transcriptEvents, 2, "", submissionFailed)
 	for _, prompt := range prompts {
-		switch prompt.PromptID {
-		case "ask-remote-1":
+		switch prompt.Kind {
+		case clientui.TranscriptPromptKindQuestion:
+			if prompt.PromptID != "ask-remote-1" {
+				t.Fatalf("unexpected question prompt: %+v", prompt)
+			}
 			answerRemoteTranscriptPrompt(t, runtimePlan.Wiring.promptAnswers, prompt, clientui.PromptAnswer{
 				PromptID: string(prompt.PromptID),
 				Answer:   "done",
 			})
-		case "approval-remote-1":
+		case clientui.TranscriptPromptKindApproval:
 			answerRemoteTranscriptPrompt(t, runtimePlan.Wiring.promptAnswers, prompt, clientui.PromptAnswer{
 				PromptID: string(prompt.PromptID),
 				Approval: &clientui.ApprovalPromptAnswer{Decision: clientui.ApprovalDecisionAllowOnce},
 			})
 		default:
-			t.Fatalf("unexpected prompt event id %q", prompt.PromptID)
+			t.Fatalf("unexpected prompt: %+v", prompt)
 		}
 	}
 
 	select {
-	case err := <-askDone:
-		if err != nil {
-			t.Fatalf("AwaitPromptResponse ask: %v", err)
+	case result := <-submissionDone:
+		if result.err != nil {
+			t.Fatalf("SubmitUserMessage: %v", result.err)
+		}
+		if result.submission.Message != "remote prompt snapshot complete" {
+			t.Fatalf("assistant message = %q", result.submission.Message)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for remote ask response")
+		t.Fatal("timed out waiting for remote prompt snapshot completion")
 	}
-	select {
-	case err := <-approvalDone:
-		if err != nil {
-			t.Fatalf("AwaitPromptResponse approval: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for remote approval response")
-	}
-	finishStep()
 
 }
 

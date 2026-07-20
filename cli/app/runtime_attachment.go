@@ -36,12 +36,12 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 		return nil, errors.New("server is required")
 	}
 	clients := source.RuntimeAttachmentClients()
-	reactivator, ownerID, err := activateSharedRuntime(ctx, clients, plan)
+	reactivator, lease, err := activateSharedRuntime(ctx, clients, plan)
 	if err != nil {
 		return nil, err
 	}
 	if clients.SessionTranscript == nil {
-		_ = runtimeattach.Release(clients.SessionRuntime, plan.SessionID, ownerID)
+		_ = lease.Release()
 		return nil, errors.New("session transcript service is required")
 	}
 	_ = diagnosticWriter
@@ -62,16 +62,16 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 		Wiring: wiring,
 		close: func() error {
 			stopStreams()
-			return runtimeattach.Release(clients.SessionRuntime, plan.SessionID, ownerID)
+			return lease.Release()
 		},
 		detachClose: func() error {
 			stopStreams()
-			return runtimeattach.ReleaseWithClosePolicy(clients.SessionRuntime, plan.SessionID, ownerID, serverapi.SessionRuntimeReleaseClosePolicyDetachOnly)
+			return lease.ReleaseWithClosePolicy(serverapi.SessionRuntimeReleaseClosePolicyDetachOnly)
 		},
 	}, nil
 }
 
-func activateSharedRuntime(ctx context.Context, clients runtimeAttachmentClients, plan sessionLaunchPlan) (*runtimeReactivator, string, error) {
+func activateSharedRuntime(ctx context.Context, clients runtimeAttachmentClients, plan sessionLaunchPlan) (*runtimeReactivator, *runtimeattach.Activation, error) {
 	lease, err := runtimeattach.Activate(ctx, clients.SessionRuntime, runtimeattach.Request{
 		SessionID:      plan.SessionID,
 		ActiveSettings: plan.ActiveSettings,
@@ -79,11 +79,11 @@ func activateSharedRuntime(ctx context.Context, clients runtimeAttachmentClients
 		Source:         plan.Source,
 	})
 	if err != nil {
-		return nil, "", err
+		return nil, nil, err
 	}
 	reactivator := newRuntimeReactivator()
 	reactivator.SetReactivateFunc(lease.Reactivate)
-	return reactivator, lease.OwnerID, nil
+	return reactivator, lease, nil
 }
 
 func prepareSharedRuntimeWiring(

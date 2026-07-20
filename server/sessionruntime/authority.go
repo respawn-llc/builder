@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"core/server/auth"
-	"core/server/runtimewire"
 	"core/server/session"
 	shelltool "core/server/tools/shell"
 	"core/shared/runtimeids"
@@ -33,9 +32,8 @@ type AuthorityOptions struct {
 	AuthManager        *auth.Manager
 	Background         *shelltool.Manager
 	StoreOptions       []session.StoreOption
-	RuntimeWiring      runtimewire.RuntimeWiringOptions
-	RuntimeFactory     AgentRuntimeFactory
 	EventFeed          AgentResourceEventFeed
+	ResourceLifecycle  AgentResourceLifecycle
 	StepLifecycle      AgentResourceStepLifecycle
 	PromptFeed         ExecutionPromptFeed
 }
@@ -55,7 +53,7 @@ type Authority struct {
 }
 
 func NewAuthority(options AuthorityOptions) *Authority {
-	return &Authority{
+	authority := &Authority{
 		byScope:            make(map[runtimeids.ExecutionScopeID]*execution),
 		byWorkflow:         make(map[WorkflowExecutionRef]*execution),
 		resources:          make(map[runtimeids.SessionID]*agentResource),
@@ -64,6 +62,10 @@ func NewAuthority(options AuthorityOptions) *Authority {
 		promptFeed:         options.PromptFeed,
 		options:            newAuthorityRuntimeOptions(options),
 	}
+	if authority.options.background != nil {
+		authority.options.background.SetEventHandler(authority.routeBackgroundEvent)
+	}
+	return authority
 }
 
 func (a *Authority) nextGenerationsLocked() (ExecutionGeneration, runtimeids.ResourceGeneration) {

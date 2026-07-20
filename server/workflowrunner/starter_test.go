@@ -1726,7 +1726,7 @@ type starterFixture struct {
 }
 
 type starterRuntimeRegistry interface {
-	RuntimeEventRegistry
+	WorkflowAttentionRegistry
 	sessionruntime.ExecutionPromptFeed
 	ListPendingPrompts(sessionID string) []registry.PendingPromptSnapshot
 }
@@ -1789,7 +1789,8 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 				scheduler.RuntimeFinished(ref.RunID, ref.Generation)
 			}
 		}),
-		PromptFeed: runtimes,
+		PromptFeed:        runtimes,
+		ResourceLifecycle: runtimes,
 	})
 	starter, err := NewStarter(cfg, metadataStore, store, nil, runtimes, StarterOptions{
 		ClientFactory:    clientFactory,
@@ -2074,7 +2075,7 @@ type workflowAskHandlerFixture struct {
 func newWorkflowAskHandlerFixture() workflowAskHandlerFixture {
 	store := &recordingRuntimeStore{}
 	runtimes := &workflowAskHandlerRuntime{}
-	return workflowAskHandlerFixture{starter: &Starter{store: store, runtimes: runtimes}, store: store, runtimes: runtimes}
+	return workflowAskHandlerFixture{starter: &Starter{store: store, attention: runtimes}, store: store, runtimes: runtimes}
 }
 
 func (f workflowAskHandlerFixture) handle(ctx context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
@@ -2093,14 +2094,6 @@ type workflowAskHandlerRuntime struct {
 	cleared         []string
 	skipped         []string
 	approvalCleared []string
-}
-
-func (r *workflowAskHandlerRuntime) PublishRuntimeEvent(string, runtime.Event) {}
-
-func (r *workflowAskHandlerRuntime) PublishRuntimeEventForEngine(string, *runtime.Engine, runtime.Event) {
-}
-
-func (r *workflowAskHandlerRuntime) PublishRuntimeReadModelUpdate(string, clientui.RuntimeReadModelUpdate) {
 }
 
 func (r *workflowAskHandlerRuntime) AwaitPromptResponse(_ context.Context, _ string, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {

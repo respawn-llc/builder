@@ -3,21 +3,26 @@ package app
 import (
 	"context"
 	"core/cli/app/internal/startupconfig"
+	modelstub "core/internal/testharness/pty/blackbox"
 	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/runtime"
 	serverstartup "core/server/startup"
-	askquestion "core/server/tools"
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/protocol"
 	"core/shared/serverapi"
+	"core/shared/toolspec"
+	"encoding/json"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +31,120 @@ import (
 
 type configuredDaemonFixture struct {
 	daemon *serverstartup.ServeServer
+}
+
+type appTestModelToolCall struct {
+	ID        string
+	Name      toolspec.ID
+	Arguments map[string]any
+}
+
+type appTestModelStep struct {
+	Calls []appTestModelToolCall
+	Final string
+}
+
+type appTestRuntimeSubmissionResult struct {
+	submission clientui.UserTurnSubmission
+	err        error
+}
+
+func newAppTestModelServer(t *testing.T, steps ...appTestModelStep) *httptest.Server {
+	t.Helper()
+	var hits atomic.Int32
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelstub.HandleInputTokenCount(w, r, 11) {
+			return
+		}
+		if r.URL.Path != "/responses" {
+			t.Fatalf("unexpected model path %q", r.URL.Path)
+		}
+		index := int(hits.Add(1)) - 1
+		if index >= len(steps) {
+			t.Fatalf("unexpected model request index %d", index)
+		}
+		writeAppTestModelStep(t, w, steps[index])
+	}))
+}
+
+func writeAppTestModelStep(t *testing.T, w http.ResponseWriter, step appTestModelStep) {
+	t.Helper()
+	if len(step.Calls) == 0 {
+		modelstub.WriteCompletedResponseStream(w, step.Final, 11, 7)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	output := make([]map[string]any, 0, len(step.Calls))
+	for index, call := range step.Calls {
+		arguments, err := json.Marshal(call.Arguments)
+		if err != nil {
+			t.Fatalf("marshal model tool arguments: %v", err)
+		}
+		itemID := fmt.Sprintf("fc_%d", index)
+		output = append(output, map[string]any{
+			"id": itemID, "type": "function_call", "name": call.Name,
+			"call_id": call.ID, "arguments": string(arguments),
+		})
+	}
+	payload, err := json.Marshal(map[string]any{
+		"type": "response.completed",
+		"response": map[string]any{
+			"usage":  map[string]any{"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+			"output": output,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal model event: %v", err)
+	}
+	_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", payload)
+}
+
+func appTestAskCall(id, question string, suggestions []string, recommended int) appTestModelToolCall {
+	arguments := map[string]any{"question": question}
+	if len(suggestions) > 0 {
+		arguments["suggestions"] = suggestions
+		arguments["recommended_option_index"] = recommended
+	}
+	return appTestModelToolCall{ID: id, Name: toolspec.ToolAskQuestion, Arguments: arguments}
+}
+
+func appTestOutsidePatchCall(id, path string) appTestModelToolCall {
+	return appTestModelToolCall{
+		ID:   id,
+		Name: toolspec.ToolPatch,
+		Arguments: map[string]any{"patch": fmt.Sprintf(
+			"*** Begin Patch\n*** Add File: %s\n+approved\n*** End Patch\n",
+			path,
+		)},
+	}
+}
+
+func appTestOutsidePatchPath(t *testing.T) string {
+	t.Helper()
+	workingDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("resolve test working dir: %v", err)
+	}
+	dir, err := os.MkdirTemp(workingDir, "kent-prompt-outside-*")
+	if err != nil {
+		t.Fatalf("create outside-workspace test dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return filepath.Join(dir, "approved.txt")
+}
+
+func startAppTestRuntimeSubmission(t *testing.T, client clientui.RuntimeClient, text string) (<-chan appTestRuntimeSubmissionResult, <-chan error) {
+	t.Helper()
+	done := make(chan appTestRuntimeSubmissionResult, 1)
+	failed := make(chan error, 1)
+	go func() {
+		submission, err := submitRuntimeClientForTest(t, client, text)
+		if err != nil {
+			failed <- err
+		}
+		done <- appTestRuntimeSubmissionResult{submission: submission, err: err}
+	}()
+	return done, failed
 }
 
 func startConfiguredDaemonFixture(
@@ -347,7 +466,18 @@ func TestConfiguredDaemonEnvironmentContextUsesSessionWorkspaceRootForCWD(t *tes
 }
 
 func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorkspaces(t *testing.T) {
-	fixture := startRemoteMultiClientRuntimeFixture(t)
+	t.Setenv("KENT_REVIEWER_FREQUENCY", "off")
+	model := newAppTestModelServer(t,
+		appTestModelStep{Calls: []appTestModelToolCall{
+			appTestAskCall("ask-race-1", "Who answers first?", nil, 0),
+		}},
+		appTestModelStep{Calls: []appTestModelToolCall{
+			appTestOutsidePatchCall("patch-race-1", appTestOutsidePatchPath(t)),
+		}},
+		appTestModelStep{Final: "multi-client prompt flow complete"},
+	)
+	defer model.Close()
+	fixture := startRemoteMultiClientRuntimeFixture(t, model.URL)
 	if got, want := fixture.serverA.ProjectID(), fixture.serverB.ProjectID(); got != want {
 		t.Fatalf("project id mismatch across clients: a=%q b=%q", got, want)
 	}
@@ -357,21 +487,8 @@ func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorksp
 	if fixture.planB.SessionID != fixture.planA.SessionID {
 		t.Fatalf("expected second client to attach same session, a=%q b=%q", fixture.planA.SessionID, fixture.planB.SessionID)
 	}
-	finishStep := beginAppTestModelPromptStep(t, fixture.daemon, fixture.planA.SessionID)
-
-	askDone := make(chan struct {
-		resp askquestion.AskQuestionResponse
-		err  error
-	}, 1)
-	go func() {
-		resp, err := fixture.daemon.AwaitPromptResponse(context.Background(), fixture.planA.SessionID, appTestModelPromptRequest("ask-race-1", "Who answers first?"))
-		askDone <- struct {
-			resp askquestion.AskQuestionResponse
-			err  error
-		}{resp: resp, err: err}
-	}()
-
-	askPrompt := waitForRemoteTranscriptPrompt(t, fixture.runtimePlanA.Wiring.transcriptEvents, "ask-race-1")
+	submissionDone, submissionFailed := startAppTestRuntimeSubmission(t, fixture.runtimePlanA.Wiring.runtimeClient, "start prompt flow")
+	askPrompt := waitForRemoteTranscriptPrompt(t, fixture.runtimePlanA.Wiring.transcriptEvents, "ask-race-1", submissionFailed)
 	if askPrompt.Kind != clientui.TranscriptPromptKindQuestion || askPrompt.Question != "Who answers first?" {
 		t.Fatalf("unexpected ask prompt: %+v", askPrompt)
 	}
@@ -386,42 +503,15 @@ func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorksp
 		t.Fatalf("AnswerAsk from attached client B: %v", err)
 	}
 
-	select {
-	case result := <-askDone:
-		if result.err != nil {
-			t.Fatalf("AwaitPromptResponse ask: %v", result.err)
-		}
-		if result.resp.RequestID != "ask-race-1" || result.resp.Answer != "answer from client B" {
-			t.Fatalf("unexpected ask response: %+v", result.resp)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for ask response")
-	}
-
-	approvalDone := make(chan struct {
-		resp askquestion.AskQuestionResponse
-		err  error
-	}, 1)
-	go func() {
-		request := appTestModelPromptRequest("approval-race-1", "Allow the command?")
-		request.Approval = true
-		request.ApprovalOptions = []askquestion.AskQuestionApprovalOption{{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"}}
-		resp, err := fixture.daemon.AwaitPromptResponse(context.Background(), fixture.planA.SessionID, request)
-		approvalDone <- struct {
-			resp askquestion.AskQuestionResponse
-			err  error
-		}{resp: resp, err: err}
-	}()
-
-	approvalPrompt := waitForRemoteTranscriptPrompt(t, fixture.runtimePlanA.Wiring.transcriptEvents, "approval-race-1")
-	if approvalPrompt.Kind != clientui.TranscriptPromptKindApproval || approvalPrompt.Question != "Allow the command?" {
+	approvalPrompt := waitForRemoteTranscriptPrompt(t, fixture.runtimePlanA.Wiring.transcriptEvents, "", submissionFailed)
+	if approvalPrompt.Kind != clientui.TranscriptPromptKindApproval {
 		t.Fatalf("unexpected approval prompt: %+v", approvalPrompt)
 	}
 
 	if err := runtimeClientsB.PromptControl.AnswerApproval(context.Background(), serverapi.ApprovalAnswerRequest{
 		ClientRequestID: uuid.NewString(),
 		SessionID:       fixture.planA.SessionID,
-		ApprovalID:      "approval-race-1",
+		ApprovalID:      string(approvalPrompt.PromptID),
 		Decision:        clientui.ApprovalDecisionAllowOnce,
 		Commentary:      "approved by client B",
 	}); err != nil {
@@ -429,95 +519,15 @@ func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorksp
 	}
 
 	select {
-	case result := <-approvalDone:
+	case result := <-submissionDone:
 		if result.err != nil {
-			t.Fatalf("AwaitPromptResponse approval: %v", result.err)
+			t.Fatalf("SubmitUserMessage: %v", result.err)
 		}
-		if result.resp.RequestID != "approval-race-1" || result.resp.Approval == nil {
-			t.Fatalf("unexpected approval response: %+v", result.resp)
-		}
-		if result.resp.Approval.Decision != askquestion.AskQuestionApprovalDecisionAllowOnce || result.resp.Approval.Commentary != "approved by client B" {
-			t.Fatalf("unexpected approval response: %+v", result.resp)
+		if result.submission.Message != "multi-client prompt flow complete" {
+			t.Fatalf("assistant message = %q", result.submission.Message)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for approval response")
-	}
-	finishStep()
-}
-
-func appTestModelPromptRequest(id, question string) askquestion.AskQuestionRequest {
-	return askquestion.AskQuestionRequest{
-		ID:         id,
-		Question:   question,
-		Origin:     askquestion.AskQuestionOriginModelTool,
-		RunID:      ongoingTestRunID().String(),
-		StepID:     ongoingTestStepID().String(),
-		ToolCallID: id,
-	}
-}
-
-type appTestRuntimeReadModelPublisher interface {
-	RuntimeReadModelFeedSnapshot(context.Context, string, []clientui.RuntimeOperationRef) (clientui.RuntimeReadModelUpdate, error)
-	PublishRuntimeReadModelUpdate(string, clientui.RuntimeReadModelUpdate)
-}
-
-func beginAppTestModelPromptStep(t *testing.T, server *serverstartup.ServeServer, sessionID string) func() {
-	t.Helper()
-	if server == nil {
-		t.Fatal("model prompt test server is required")
-	}
-	publisher, ok := server.SessionTranscriptClient().(appTestRuntimeReadModelPublisher)
-	if !ok {
-		t.Fatalf("session transcript client %T cannot publish canonical runtime state", server.SessionTranscriptClient())
-	}
-	runID := ongoingTestRunID()
-	stepID := ongoingTestStepID()
-	startedAt := time.Now().UTC()
-	update, err := publisher.RuntimeReadModelFeedSnapshot(context.Background(), sessionID, nil)
-	if err != nil {
-		t.Fatalf("build model prompt runtime read model: %v", err)
-	}
-	update.Activity = clientui.RuntimeActivity{
-		State:          clientui.RuntimeActivityRunning,
-		QueueAccepting: update.Activity.QueueAccepting,
-		ActiveStep: &clientui.RuntimeActiveStep{
-			RunID:      runID,
-			StepID:     stepID,
-			ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
-		},
-	}
-	publisher.PublishRuntimeReadModelUpdate(sessionID, update)
-	server.PublishRuntimeEvent(sessionID, runtime.Event{
-		Kind:   runtime.EventRunStateChanged,
-		StepID: stepID.String(),
-		RunState: &runtime.RunState{
-			Lifecycle:  runtime.RunningRunLifecycle(runtime.RunModeTurn),
-			RunID:      runID.String(),
-			ActiveKind: runtime.ActiveKindUserTurn,
-			Status:     runtime.RunStatusRunning,
-			StartedAt:  startedAt,
-		},
-	})
-	return func() {
-		finishedAt := time.Now().UTC()
-		server.PublishRuntimeEvent(sessionID, runtime.Event{
-			Kind:   runtime.EventRunStateChanged,
-			StepID: stepID.String(),
-			RunState: &runtime.RunState{
-				Lifecycle:  runtime.FinishedRunLifecycle(runtime.RunModeTurn),
-				RunID:      runID.String(),
-				ActiveKind: runtime.ActiveKindUserTurn,
-				Status:     runtime.RunStatusCompleted,
-				StartedAt:  startedAt,
-				FinishedAt: finishedAt,
-			},
-		})
-		update, err := publisher.RuntimeReadModelFeedSnapshot(context.Background(), sessionID, nil)
-		if err != nil {
-			t.Errorf("build completed model prompt runtime read model: %v", err)
-			return
-		}
-		publisher.PublishRuntimeReadModelUpdate(sessionID, update)
+		t.Fatal("timed out waiting for model turn completion")
 	}
 }
 
@@ -530,7 +540,7 @@ type remoteMultiClientRuntimeFixture struct {
 	runtimePlanA *runtimeLaunchPlan
 }
 
-func startRemoteMultiClientRuntimeFixture(t *testing.T) *remoteMultiClientRuntimeFixture {
+func startRemoteMultiClientRuntimeFixture(t *testing.T, openAIBaseURL string) *remoteMultiClientRuntimeFixture {
 	t.Helper()
 
 	fixture := &remoteMultiClientRuntimeFixture{}
@@ -544,6 +554,8 @@ func startRemoteMultiClientRuntimeFixture(t *testing.T) *remoteMultiClientRuntim
 		WorkspaceRoot:         workspaceA,
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5",
+		OpenAIBaseURL:         openAIBaseURL,
+		OpenAIBaseURLExplicit: true,
 	}, apiKeyMemoryAuthHandler("test-key"))
 	fixture.daemon = configured.daemon
 	fixture.serverA = configured.attachRemoteSessionServer(t, Options{WorkspaceRoot: workspaceA, WorkspaceRootExplicit: true}, newHeadlessAuthInteractor())

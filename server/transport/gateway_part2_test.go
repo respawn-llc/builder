@@ -187,7 +187,6 @@ func TestGatewayScopesProcessAPIsToAttachedProject(t *testing.T) {
 	appCore.Background().SetMinimumExecToBgTime(time.Millisecond)
 
 	storeA := createGatewayAuthoritativeSession(t, appCore)
-	appCore.RegisterSessionStore(storeA)
 	storeB, err := session.Create(
 		filepath.Join(filepath.Join(resolvedB.Config.PersistenceRoot, "projects"), bindingB.ProjectID, "sessions"),
 		"workspace-b",
@@ -260,7 +259,6 @@ func TestGatewayRemoteResolveWorktreeCreateTarget(t *testing.T) {
 	initGatewayGitWorkspace(t, appCore.Config().WorkspaceRoot)
 
 	store := createGatewayAuthoritativeSession(t, appCore)
-	appCore.RegisterSessionStore(store)
 
 	remote, err := remoteclient.DialRemoteURLForProject(context.Background(), "ws"+server.URL[len("http"):], appCore.ProjectID())
 	if err != nil {
@@ -311,7 +309,6 @@ func TestGatewayProcessOutputSubscriptionStreamsOutputAndCompletion(t *testing.T
 	defer server.Close()
 	appCore.Background().SetMinimumExecToBgTime(time.Millisecond)
 	store := createGatewayAuthoritativeSession(t, appCore)
-	appCore.RegisterSessionStore(store)
 
 	result, err := appCore.Background().Start(context.Background(), shelltool.ExecRequest{
 		Command:        []string{"/bin/sh", "-lc", "printf 'hello\\n'; sleep 0.05"},

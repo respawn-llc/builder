@@ -67,8 +67,9 @@ type LockedTaskWorktreeRestoreRequest struct {
 	SetupOperationID serverapi.WorktreeSetupOperationID
 }
 
-type RuntimeEventRegistry interface {
-	PublishRuntimeEvent(sessionID string, evt runtime.Event)
+type WorkflowAttentionRegistry interface {
+	workflowattention.QuestionAttentionRegistry
+	workflowattention.ApprovalQuestionAttentionRegistry
 }
 
 type Starter struct {
@@ -76,7 +77,7 @@ type Starter struct {
 	metadata             *metadata.Store
 	store                RuntimeStore
 	authManager          *auth.Manager
-	runtimes             RuntimeEventRegistry
+	attention            WorkflowAttentionRegistry
 	runtimeAuthority     *sessionruntime.Authority
 	storeOptions         []session.StoreOption
 	clientFactory        func(SchedulerStartRunRequest) llm.Client
@@ -103,7 +104,7 @@ type workflowInterruptedRunFinalizer interface {
 	PublishPendingInterruptedRun(context.Context, workflow.RunID)
 }
 
-func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStore, authManager *auth.Manager, runtimes RuntimeEventRegistry, opts StarterOptions) (*Starter, error) {
+func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStore, authManager *auth.Manager, attention WorkflowAttentionRegistry, opts StarterOptions) (*Starter, error) {
 	if strings.TrimSpace(cfg.PersistenceRoot) == "" {
 		return nil, errors.New("workflow runtime persistence root is required")
 	}
@@ -124,7 +125,7 @@ func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStor
 		metadata:             metadataStore,
 		store:                store,
 		authManager:          authManager,
-		runtimes:             runtimes,
+		attention:            attention,
 		runtimeAuthority:     opts.RuntimeAuthority,
 		storeOptions:         metadataStore.AuthoritativeSessionStoreOptions(),
 		clientFactory:        opts.ClientFactory,
@@ -954,15 +955,10 @@ func (s *Starter) startAgentExecution(ctx context.Context, req SchedulerStartRun
 		SkipContinuationAgentRoleValidation: workflowRunPromptOverrides(input.Node.SubagentRole).HasAny(),
 		StartLogLines:                       startLogLines,
 		AskQuestionBatchSkipped: func(batch askquestion.AskQuestionBatchMetadata) {
-			if attention, ok := s.runtimes.(workflowattention.QuestionAttentionRegistry); ok {
-				if err := workflowattention.PrepareSkippedTaskQuestionBatch(attention, input, sessionID, req.RunID, batch, time.Now().UTC()); err != nil {
+			if s.attention != nil {
+				if err := workflowattention.PrepareSkippedTaskQuestionBatch(s.attention, input, sessionID, req.RunID, batch, time.Now().UTC()); err != nil {
 					slog.Warn("prepare skipped workflow question batch failed", "run_id", req.RunID, "task_id", req.TaskID, "batch_id", batch.BatchID, "prompt_id", batch.PromptID, "error", err)
 				}
-			}
-		},
-		OnEvent: func(evt runtime.Event) {
-			if s.runtimes != nil {
-				s.runtimes.PublishRuntimeEvent(sessionID, evt)
 			}
 		},
 	})
@@ -1013,11 +1009,7 @@ func (a executionPromptAwaiter) AwaitPromptResponse(ctx context.Context, _ strin
 
 func (s *Starter) handleWorkflowAsk(ctx context.Context, awaiter workflowattention.QuestionAwaiter, sessionID string, req SchedulerStartRunRequest, input workflowstore.RunStartContext, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
 	if askReq.Approval {
-		var approvalAttention workflowattention.ApprovalQuestionAttentionRegistry
-		if registry, ok := s.runtimes.(workflowattention.ApprovalQuestionAttentionRegistry); ok {
-			approvalAttention = registry
-		}
-		return workflowattention.HandleTaskApprovalQuestion(ctx, s.store, awaiter, approvalAttention, workflowattention.TaskQuestionRequest{
+		return workflowattention.HandleTaskApprovalQuestion(ctx, s.store, awaiter, s.attention, workflowattention.TaskQuestionRequest{
 			SessionID:  sessionID,
 			RunID:      req.RunID,
 			Generation: req.Generation,
@@ -1025,11 +1017,7 @@ func (s *Starter) handleWorkflowAsk(ctx context.Context, awaiter workflowattenti
 			Question:   askReq,
 		})
 	}
-	var attention workflowattention.QuestionAttentionRegistry
-	if registry, ok := s.runtimes.(workflowattention.QuestionAttentionRegistry); ok {
-		attention = registry
-	}
-	return workflowattention.HandleTaskQuestion(ctx, s.store, awaiter, attention, workflowattention.TaskQuestionRequest{
+	return workflowattention.HandleTaskQuestion(ctx, s.store, awaiter, s.attention, workflowattention.TaskQuestionRequest{
 		SessionID:  sessionID,
 		RunID:      req.RunID,
 		Generation: req.Generation,

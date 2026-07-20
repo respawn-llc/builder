@@ -4,93 +4,41 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
-	"sync"
-	"time"
 
-	"core/server/auth"
 	"core/server/metadata"
-	"core/server/registry"
 	"core/server/runlog"
 	"core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
-	askquestion "core/server/tools"
-	shelltool "core/server/tools/shell"
 	servicecontract "core/shared/apicontract"
-	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 	"core/shared/transcript"
-	"core/shared/transcriptdiag"
 )
 
-type Service struct {
-	persistenceRoot          string
+type API struct {
 	metadataStore            *metadata.Store
-	authManager              *auth.Manager
 	fastModeState            *runtime.FastModeState
-	background               *shelltool.Manager
-	backgroundRouter         *runtimewire.BackgroundEventRouter
-	runtimes                 *registry.RuntimeRegistry
-	sessionStores            *registry.SessionStoreRegistry
-	storeOptions             []session.StoreOption
-	recoveredWarning         string
 	recoveredWarningProvider func() (string, bool, error)
-
-	mu sync.Mutex
-
-	idleUnloadDelay        time.Duration
-	runFinishedUnloadDelay time.Duration
-	idleTimers             map[string]*runtimeIdleTimer
-	options                ServiceOptions
+	authority                *Authority
+	runtimeClientFactory     runtimewire.RuntimeClientFactory
 }
 
-type ServiceOptions struct {
-	RuntimeClientFactory runtimewire.RuntimeClientFactory
+type APIOptions struct {
+	RuntimeClientFactory     runtimewire.RuntimeClientFactory
+	RecoveredWarningProvider func() (string, bool, error)
 }
 
-func NewService(persistenceRoot string, metadataStore *metadata.Store, authManager *auth.Manager, fastModeState *runtime.FastModeState, background *shelltool.Manager, backgroundRouter *runtimewire.BackgroundEventRouter, runtimes *registry.RuntimeRegistry, sessionStores *registry.SessionStoreRegistry, storeOptions ...session.StoreOption) *Service {
-	return NewServiceWithOptions(persistenceRoot, metadataStore, authManager, fastModeState, background, backgroundRouter, runtimes, sessionStores, ServiceOptions{}, storeOptions...)
-}
-
-func NewServiceWithOptions(persistenceRoot string, metadataStore *metadata.Store, authManager *auth.Manager, fastModeState *runtime.FastModeState, background *shelltool.Manager, backgroundRouter *runtimewire.BackgroundEventRouter, runtimes *registry.RuntimeRegistry, sessionStores *registry.SessionStoreRegistry, options ServiceOptions, storeOptions ...session.StoreOption) *Service {
-	svc := &Service{
-		persistenceRoot:        strings.TrimSpace(persistenceRoot),
-		metadataStore:          metadataStore,
-		authManager:            authManager,
-		fastModeState:          fastModeState,
-		background:             background,
-		backgroundRouter:       backgroundRouter,
-		runtimes:               runtimes,
-		sessionStores:          sessionStores,
-		storeOptions:           append([]session.StoreOption(nil), storeOptions...),
-		idleUnloadDelay:        defaultRuntimeIdleUnloadDelay,
-		runFinishedUnloadDelay: defaultRunFinishedIdleUnloadDelay,
-		idleTimers:             make(map[string]*runtimeIdleTimer),
-		options:                options,
+func NewAPI(metadataStore *metadata.Store, fastModeState *runtime.FastModeState, authority *Authority, options APIOptions) *API {
+	return &API{
+		metadataStore:            metadataStore,
+		fastModeState:            fastModeState,
+		recoveredWarningProvider: options.RecoveredWarningProvider,
+		authority:                authority,
+		runtimeClientFactory:     options.RuntimeClientFactory,
 	}
-	if runtimes != nil {
-		runtimes.SetInterestObserver(svc.runtimeInterestChanged)
-	}
-	return svc
-}
-
-func (s *Service) WithGeneratedRecoveredWarning(warning string) *Service {
-	if s == nil {
-		return nil
-	}
-	s.recoveredWarning = strings.TrimSpace(warning)
-	return s
-}
-
-func (s *Service) WithGeneratedRecoveredWarningProvider(provider func() (string, bool, error)) *Service {
-	if s == nil {
-		return nil
-	}
-	s.recoveredWarningProvider = provider
-	return s
 }
 
 type recoveredWarningEntry struct {
@@ -99,8 +47,11 @@ type recoveredWarningEntry struct {
 	Text       string                     `json:"text"`
 }
 
-func (s *Service) appendRecoveredWarningIfNeeded(store *session.Store) error {
-	warning, ok, err := s.generatedRecoveredWarning()
+func appendRecoveredWarning(store *session.Store, provider func() (string, bool, error)) error {
+	if provider == nil {
+		return nil
+	}
+	warning, ok, err := provider()
 	if err != nil {
 		return err
 	}
@@ -115,498 +66,133 @@ func (s *Service) appendRecoveredWarningIfNeeded(store *session.Store) error {
 	return err
 }
 
-func (s *Service) generatedRecoveredWarning() (string, bool, error) {
-	if s == nil {
-		return "", false, nil
-	}
-	if s.recoveredWarningProvider != nil {
-		warning, ok, err := s.recoveredWarningProvider()
-		return strings.TrimSpace(warning), ok, err
-	}
-	warning := strings.TrimSpace(s.recoveredWarning)
-	return warning, warning != "", nil
-}
-
-func (s *Service) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
+func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionRuntimeActivateResponse{}, err
 	}
-	sessionID := strings.TrimSpace(req.SessionID)
 	ownerID := strings.TrimSpace(req.OwnerID)
-	if err := s.AcquireRuntime(ctx, sessionID, ownerID, s.interactiveRuntimeBuilder(req, sessionID)); err != nil {
+	if ownerID == "" {
+		return serverapi.SessionRuntimeActivateResponse{}, runtimeOwnerIDRequiredError()
+	}
+	if s == nil || s.authority == nil {
+		return serverapi.SessionRuntimeActivateResponse{}, errors.New("session runtime authority is required")
+	}
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.SessionID))
+	if err != nil {
 		return serverapi.SessionRuntimeActivateResponse{}, err
 	}
-	return activationResponse(), nil
-}
-
-type RuntimeBuildResult struct {
-	Engine       *runtime.Engine
-	LocalRebind  func(string) error
-	AfterResolve func()
-	Close        func()
-}
-
-var ErrSessionRunActive = errors.New("session has an active run")
-var ErrAcquiredRuntimeOvertaken = errors.New("acquired runtime was overtaken or closed before the operation completed")
-var ErrSessionRunsBlocked = errors.New("session runs are blocked while its worktree is being deleted")
-
-func (s *Service) RunOnAcquiredRuntime(ctx context.Context, sessionID string, engine *runtime.Engine, fn func(context.Context) error) error {
-	if fn == nil {
-		return nil
+	plan, err := s.interactiveRuntimePlan(ctx, req, sessionID.String())
+	if err != nil {
+		return serverapi.SessionRuntimeActivateResponse{}, err
 	}
-	if s.runtimes == nil {
-		return ErrAcquiredRuntimeOvertaken
-	}
-	acquired, err := s.runtimes.WithAcquiredRuntime(ctx, strings.TrimSpace(sessionID), engine, func(runCtx context.Context, guardedEngine *runtime.Engine) error {
-		return fn(runCtx)
+	attachment, err := s.authority.OpenRuntime(ctx, RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   ownerID,
+		Runtime:   &plan,
 	})
 	if err != nil {
-		if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-			return ErrAcquiredRuntimeOvertaken
-		}
-		return err
+		return serverapi.SessionRuntimeActivateResponse{}, err
 	}
-	if !acquired {
-		return ErrAcquiredRuntimeOvertaken
-	}
-	return nil
-}
-
-type RuntimeBuilder func(ctx context.Context) (RuntimeBuildResult, error)
-
-func (s *Service) AcquireRuntime(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder) error {
-	sessionID = strings.TrimSpace(sessionID)
-	ownerID = strings.TrimSpace(ownerID)
-	if ownerID == "" {
-		return runtimeOwnerIDRequiredError()
-	}
-	if s.runtimes == nil {
-		return runtimeUnavailableErr(sessionID)
-	}
-	for {
-		claim, reused, closing := s.runtimes.AcquireRuntimeClaim(sessionID, ownerID)
-		if claim == nil {
-			return runtimeUnavailableErr(sessionID)
-		}
-		if closing {
-			if err := claim.AwaitClosed(ctx); err != nil {
-				return err
-			}
-			continue
-		}
-		if !reused {
-			return s.buildIntoClaim(ctx, sessionID, claim, build)
-		}
-		if _, err := claim.AwaitReady(ctx); err != nil {
-			return err
-		}
-		outcome, activationErr := claim.JoinAsOwner(ownerID)
-		switch outcome {
-		case registry.ClaimJoined:
-			s.cancelScheduledIdleUnload(sessionID)
-			return nil
-		case registry.ClaimFailed:
-			return activationErr
-		case registry.ClaimClosing:
-			if err := claim.AwaitClosed(ctx); err != nil {
-				return err
-			}
-		}
-	}
-}
-
-func (s *Service) buildIntoClaim(ctx context.Context, sessionID string, claim *registry.RuntimeClaim, build RuntimeBuilder) (err error) {
-	var cleanup func()
-	defer func() {
-		if err == nil {
-			return
-		}
-		if cleanup != nil {
-			cleanup()
-		}
-		claim.Fail(err)
-	}()
-	var built RuntimeBuildResult
-	built, err = build(ctx)
-	if err != nil {
-		return err
-	}
-	engine := built.Engine
-	if engine == nil {
-		if built.Close != nil {
-			cleanup = built.Close
-		}
-		return errors.New("runtime build produced no engine")
-	}
-	rebind := runtimeRebindFunc(built.LocalRebind, engine)
-	if s.backgroundRouter != nil {
-		s.backgroundRouter.SetActiveSession(sessionID, engine)
-	}
-	teardown := func() {
-		if s.backgroundRouter != nil {
-			s.backgroundRouter.ClearActiveSession(sessionID, engine)
-		}
-		if built.Close != nil {
-			built.Close()
-		}
-	}
-	cleanup = teardown
-	if !claim.Resolve(engine, rebind, teardown) {
-		return runtimeUnavailableErr(sessionID)
-	}
-	if built.AfterResolve != nil {
-		built.AfterResolve()
-	}
-	s.cancelScheduledIdleUnload(sessionID)
-	cleanup = nil
-	return nil
-}
-
-type AcquiredRuntimeRelease func(ctx context.Context) error
-
-func (s *Service) RecreateRuntime(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder) (AcquiredRuntimeRelease, error) {
-	return s.recreateRuntime(ctx, sessionID, ownerID, build, nil, false)
-}
-
-func (s *Service) RecreateRuntimeRejectingActiveRun(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder) (AcquiredRuntimeRelease, error) {
-	return s.recreateRuntime(ctx, sessionID, ownerID, build, func(engine *runtime.Engine) error {
-		active, err := s.engineHasBlockingRuntimeActivity(sessionID, engine)
-		if err != nil {
-			return err
-		}
-		if engine != nil && (active || engine.HasQueuedUserWork()) {
-			return ErrSessionRunActive
-		}
-		return nil
-	}, true)
-}
-
-func (s *Service) beginRecreateRun(sessionID string, exclusive bool) (func(), error) {
-	if exclusive {
-		release, acquired, blocked := s.runtimes.BeginExclusiveSessionRun(sessionID)
-		if acquired {
-			return release, nil
-		}
-		if blocked {
-			return nil, errors.Join(ErrSessionRunsBlocked, fmt.Errorf("session %q runs are blocked", sessionID))
-		}
-		return nil, ErrSessionRunActive
-	}
-	release, ok := s.runtimes.BeginSessionRun(sessionID)
-	if !ok {
-		return nil, errors.Join(ErrSessionRunsBlocked, fmt.Errorf("session %q runs are blocked", sessionID))
-	}
-	return release, nil
-}
-
-func (s *Service) recreateRuntime(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder, beforeReplace func(*runtime.Engine) error, exclusive bool) (AcquiredRuntimeRelease, error) {
-	sessionID = strings.TrimSpace(sessionID)
-	ownerID = strings.TrimSpace(ownerID)
-	if sessionID == "" {
-		return nil, errors.New("session id is required")
-	}
-	if ownerID == "" {
-		return nil, runtimeOwnerIDRequiredError()
-	}
-	if s.runtimes == nil {
-		return nil, runtimeUnavailableErr(sessionID)
-	}
-	releaseRun, err := s.beginRecreateRun(sessionID, exclusive)
-	if err != nil {
-		return nil, err
-	}
-	claim, err := s.runtimes.ClaimFreshRuntime(ctx, sessionID, ownerID, beforeReplace)
-	if err != nil {
-		releaseRun()
-		return nil, err
-	}
-	if claim == nil {
-		releaseRun()
-		return nil, runtimeUnavailableErr(sessionID)
-	}
-	if err := s.buildIntoClaim(ctx, sessionID, claim, build); err != nil {
-		releaseRun()
-		return nil, err
-	}
-	var releaseOnce sync.Once
-	return func(ctx context.Context) error {
-		defer releaseOnce.Do(releaseRun)
-		return s.closeAcquiredClaim(ctx, sessionID, claim)
+	resource := attachment.Resource()
+	return serverapi.SessionRuntimeActivateResponse{
+		Attachment: serverapi.SessionRuntimeAttachment{
+			SessionID:  resource.SessionID().String(),
+			Generation: uint64(resource.Generation()),
+		},
 	}, nil
 }
 
-func (s *Service) closeAcquiredClaim(ctx context.Context, sessionID string, claim *registry.RuntimeClaim) error {
-	if claim == nil {
-		return nil
+func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionRuntimeActivateRequest, sessionID string) (AgentRuntimePlan, error) {
+	if s == nil || s.metadataStore == nil {
+		return AgentRuntimePlan{}, errors.New("metadata store is required")
 	}
-	sessionID = strings.TrimSpace(sessionID)
-	if _, err := claim.AwaitReady(ctx); err != nil {
-		_, _ = claim.Close(ctx, nil)
-		return err
+	target, err := s.metadataStore.ResolveSessionExecutionTarget(ctx, sessionID)
+	if err != nil {
+		return AgentRuntimePlan{}, err
 	}
-	engine := claim.Engine()
-	_, drainErr := claim.Close(ctx, func(ctx context.Context) error {
-		if engine == nil {
-			return nil
-		}
-		return engine.DrainQueuedUserMessagesBeforeClose(ctx)
+	if err := context.Cause(ctx); err != nil {
+		return AgentRuntimePlan{}, err
+	}
+	enabledTools, err := parseToolIDs(req.EnabledToolIDs)
+	if err != nil {
+		return AgentRuntimePlan{}, err
+	}
+	startLogLines := []string{
+		fmt.Sprintf(
+			"app.interactive.start session_id=%s workspace=%s workdir=%s model=%s",
+			sessionID,
+			target.WorkspaceRoot,
+			target.EffectiveWorkdir,
+			req.ActiveSettings.Model,
+		),
+		fmt.Sprintf(
+			"config.settings path=%s created=%t",
+			req.Source.SettingsPath,
+			req.Source.CreatedDefaultConfig,
+		),
+	}
+	for _, line := range runlog.FormatConfigSourceLines(req.Source.Sources) {
+		startLogLines = append(startLogLines, "config.source "+line)
+	}
+	return NewAgentRuntimePlan(AgentRuntimePlanOptions{
+		Settings:                 req.ActiveSettings,
+		EnabledTools:             enabledTools,
+		Workdir:                  target.EffectiveWorkdir,
+		Sources:                  req.Source.Sources,
+		FastMode:                 s.fastModeState,
+		ClientFactory:            s.runtimeClientFactory,
+		StartLogLines:            startLogLines,
+		RecoveredWarningProvider: s.recoveredWarningProvider,
 	})
-	s.clearScheduledIdleUnload(sessionID)
-	return drainErr
 }
 
-func (s *Service) interactiveRuntimeBuilder(req serverapi.SessionRuntimeActivateRequest, sessionID string) RuntimeBuilder {
-	return func(ctx context.Context) (RuntimeBuildResult, error) {
-		store, err := s.resolveStore(ctx, sessionID)
-		if err != nil {
-			return RuntimeBuildResult{}, err
-		}
-		if err := store.EnsureDurable(); err != nil {
-			return RuntimeBuildResult{}, err
-		}
-		if err := s.appendRecoveredWarningIfNeeded(store); err != nil {
-			return RuntimeBuildResult{}, err
-		}
-		target, err := s.resolveExecutionTarget(ctx, sessionID)
-		if err != nil {
-			return RuntimeBuildResult{}, err
-		}
-		if err := ctx.Err(); err != nil {
-			return RuntimeBuildResult{}, err
-		}
-		logger, err := runlog.NewRunLogger(store.Dir(), nil)
-		if err != nil {
-			return RuntimeBuildResult{}, err
-		}
-		logger.Logf("app.interactive.start session_id=%s workspace=%s workdir=%s model=%s", sessionID, target.WorkspaceRoot, target.EffectiveWorkdir, req.ActiveSettings.Model)
-		logger.Logf("config.settings path=%s created=%t", req.Source.SettingsPath, req.Source.CreatedDefaultConfig)
-		for _, line := range runlog.FormatConfigSourceLines(req.Source.Sources) {
-			logger.Logf("config.source %s", line)
-		}
-		enabledTools, err := parseToolIDs(req.EnabledToolIDs)
-		if err != nil {
-			_ = logger.Close()
-			return RuntimeBuildResult{}, err
-		}
-		runtimeEvents := runtimewire.NewOrderedRuntimeEventPublisher(sessionID, s.runtimes)
-		publishRuntimeEvent := func(evt runtime.Event) {
-			runtimeEvents.Publish(evt)
-		}
-		bindRuntimeEventEngine := func(engine *runtime.Engine) {
-			runtimeEvents.BindEngine(engine)
-		}
-		flushRuntimeEventsAfterResolve := func() {
-			runtimeEvents.FlushAfterResolve()
-		}
-		wiring, err := runtimewire.NewRuntimeWiringWithBackground(store, req.ActiveSettings, enabledTools, target.EffectiveWorkdir, s.authManager, logger, s.background, runtimewire.RuntimeWiringOptions{
-			Context:         ctx,
-			FastMode:        s.fastModeState,
-			Sources:         req.Source.Sources,
-			ClientFactory:   s.options.RuntimeClientFactory,
-			GlobalConfigDir: s.persistenceRoot,
-			StepLifecycle:   runtimewire.NewStepLifecycleSink(sessionID, s.runtimes),
-			OnEvent: func(evt runtime.Event) {
-				logger.Logf("%s", runlog.FormatRuntimeEvent(evt))
-				if transcriptdiag.Enabled(req.ActiveSettings.Debug, os.Getenv) {
-					logger.Logf("%s", runlog.FormatTranscriptRuntimeEventDiagnostic(sessionID, evt))
-				}
-				publishRuntimeEvent(evt)
-			},
-		})
-		if err != nil {
-			_ = logger.Close()
-			return RuntimeBuildResult{}, err
-		}
-		if wiring.AskBroker != nil && s.runtimes != nil {
-			wiring.AskBroker.SetAskHandler(func(req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-				return s.runtimes.AwaitPromptResponse(context.Background(), sessionID, req)
-			})
-		}
-		bindRuntimeEventEngine(wiring.Engine)
-		var localRebind func(string) error
-		if wiring.LocalTools != nil {
-			localRebind = wiring.LocalTools.Rebind
-		}
-		return RuntimeBuildResult{
-			Engine:       wiring.Engine,
-			LocalRebind:  localRebind,
-			AfterResolve: flushRuntimeEventsAfterResolve,
-			Close: func() {
-				_ = wiring.Close()
-				_ = logger.Close()
-			},
-		}, nil
-	}
-}
-
-func activationResponse() serverapi.SessionRuntimeActivateResponse {
-	return serverapi.SessionRuntimeActivateResponse{}
-}
-
-func (s *Service) runtimeBlockingActivity(ctx context.Context, sessionID string) (clientui.RuntimeActivity, error) {
-	if s == nil || s.runtimes == nil {
-		return clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable}, nil
-	}
-	id := strings.TrimSpace(sessionID)
-	if id == "" {
-		return clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable}, nil
-	}
-	engine, err := s.runtimes.ResolveRuntime(ctx, id)
-	if err != nil {
-		return clientui.RuntimeActivity{}, err
-	}
-	return s.resolveBlockingRuntimeActivity(id, engine)
-}
-
-func (s *Service) engineHasBlockingRuntimeActivity(sessionID string, engine *runtime.Engine) (bool, error) {
-	activity, err := s.resolveBlockingRuntimeActivity(sessionID, engine)
-	if err != nil {
-		return false, err
-	}
-	return activity.ActiveForControl(), nil
-}
-
-func (s *Service) resolveBlockingRuntimeActivity(sessionID string, engine *runtime.Engine) (clientui.RuntimeActivity, error) {
-	if s == nil || s.runtimes == nil {
-		return clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable}, nil
-	}
-	snapshot, err := s.runtimes.RuntimeReadModelSnapshot(context.Background(), strings.TrimSpace(sessionID), nil)
-	if err != nil {
-		return clientui.RuntimeActivity{}, err
-	}
-	return snapshot.Activity, nil
-}
-
-func (s *Service) WithRuntimeEngine(ctx context.Context, sessionID string, fn func(*runtime.Engine) error) error {
-	if s == nil || s.runtimes == nil {
-		return runtimeUnavailableErr(sessionID)
-	}
-	id := strings.TrimSpace(sessionID)
-	engine, err := s.runtimes.ResolveRuntime(ctx, id)
-	if err != nil {
-		return err
-	}
-	if engine == nil {
-		return runtimeUnavailableErr(id)
-	}
-	return fn(engine)
-}
-
-func runtimeUnavailableErr(sessionID string) error {
-	return errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("session %q has no active runtime available", strings.TrimSpace(sessionID)))
-}
-
-func runtimeRebindFunc(localRebind func(string) error, engine *runtime.Engine) func(string) error {
-	return func(workdir string) error {
-		if localRebind != nil {
-			if err := localRebind(workdir); err != nil {
-				return err
-			}
-		}
-		if engine != nil {
-			engine.SetTranscriptWorkingDir(workdir)
-		}
-		return nil
-	}
-}
-
-func (s *Service) ReleaseSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
+func (s *API) ReleaseSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionRuntimeReleaseResponse{}, err
 	}
-	sessionID := strings.TrimSpace(req.SessionID)
-	if strings.TrimSpace(req.OwnerID) == "" {
+	ownerID := strings.TrimSpace(req.OwnerID)
+	if ownerID == "" {
 		return serverapi.SessionRuntimeReleaseResponse{}, runtimeOwnerIDRequiredError()
 	}
-	if s.runtimes == nil {
-		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
+	if s == nil || s.authority == nil {
+		return serverapi.SessionRuntimeReleaseResponse{}, errors.New("session runtime authority is required")
 	}
-	claim := s.runtimes.RuntimeClaimFor(sessionID)
-	if claim == nil {
-		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
-	}
-	if _, err := claim.AwaitReady(ctx); err != nil {
-		_, _ = claim.Close(ctx, nil)
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.Attachment.SessionID))
+	if err != nil {
 		return serverapi.SessionRuntimeReleaseResponse{}, err
 	}
-	if req.EffectiveClosePolicy() == serverapi.SessionRuntimeReleaseClosePolicyDetachOnly {
-		s.markClaimOrphaned(sessionID, claim, req.OwnerID)
-		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
-	}
-	closeIfIdle := req.EffectiveClosePolicy() == serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle
-	decision, expectedRefs := claim.BeginRelease(req.OwnerID, req.DropOwner, closeIfIdle)
-	switch decision {
-	case registry.RuntimeReleaseStale, registry.RuntimeReleaseDroppedRef:
-		return serverapi.SessionRuntimeReleaseResponse{}, nil
-	case registry.RuntimeReleaseClosing, registry.RuntimeReleaseNotOwner:
-		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
-	case registry.RuntimeReleaseIdleCheck:
-		active, err := s.runtimeHasBlockingActivity(ctx, sessionID)
-		if err != nil {
-			return serverapi.SessionRuntimeReleaseResponse{}, err
-		}
-		if active {
-			if req.DropOwner {
-				s.markClaimOrphaned(sessionID, claim, req.OwnerID)
-			}
-			return serverapi.SessionRuntimeReleaseResponse{Active: true}, nil
-		}
-		if s.runtimeHasSubscribers(sessionID) {
-			if req.DropOwner {
-				s.markClaimOrphaned(sessionID, claim, req.OwnerID)
-			}
-			return serverapi.SessionRuntimeReleaseResponse{}, nil
-		}
-		closed, err := claim.CloseIfIdle(ctx, expectedRefs, s.drainBeforeClose(claim))
-		if err != nil {
-			return serverapi.SessionRuntimeReleaseResponse{}, err
-		}
-		if !closed {
-			return serverapi.SessionRuntimeReleaseResponse{}, nil
-		}
-		s.clearScheduledIdleUnload(sessionID)
-		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
-	default:
-		if _, err := claim.Close(ctx, s.drainBeforeClose(claim)); err != nil {
-			return serverapi.SessionRuntimeReleaseResponse{}, err
-		}
-		s.clearScheduledIdleUnload(sessionID)
-		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
-	}
-}
-
-func (s *Service) drainBeforeClose(claim *registry.RuntimeClaim) func(context.Context) error {
-	engine := claim.Engine()
-	return func(ctx context.Context) error {
-		if engine == nil {
-			return nil
-		}
-		return engine.DrainQueuedUserMessagesBeforeClose(ctx)
-	}
-}
-
-func (s *Service) runtimeHasBlockingActivity(ctx context.Context, sessionID string) (bool, error) {
-	activity, err := s.runtimeBlockingActivity(ctx, sessionID)
+	resource, err := runtimeids.NewSessionResourceRef(sessionID, runtimeids.ResourceGeneration(req.Attachment.Generation))
 	if err != nil {
-		return false, err
+		return serverapi.SessionRuntimeReleaseResponse{}, err
 	}
-	return activity.ActiveForControl(), nil
-}
-
-func (s *Service) markClaimOrphaned(sessionID string, claim *registry.RuntimeClaim, ownerID string) {
-	if s == nil || claim == nil {
-		return
+	var policy RuntimeReleasePolicy
+	switch req.EffectiveClosePolicy() {
+	case "":
+		policy = RuntimeReleaseClose
+	case serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle:
+		policy = RuntimeReleaseCloseIfIdle
+	case serverapi.SessionRuntimeReleaseClosePolicyDetachOnly:
+		policy = RuntimeReleaseDetach
+	default:
+		panic(fmt.Sprintf("validated runtime release has unsupported close policy %q", req.ClosePolicy))
 	}
-	claim.DropOwner(ownerID)
-	s.scheduleIdleUnload(strings.TrimSpace(sessionID), s.defaultIdleUnloadDelay())
+	result, err := s.authority.ReleaseRuntime(ctx, RuntimeReleaseRequest{
+		Resource:  resource,
+		OwnerID:   ownerID,
+		DropOwner: req.DropOwner,
+		Policy:    policy,
+	})
+	if err != nil {
+		return serverapi.SessionRuntimeReleaseResponse{}, err
+	}
+	return serverapi.SessionRuntimeReleaseResponse{
+		Released: result.Released,
+		Active:   result.Active,
+	}, nil
 }
 
-func (s *Service) HasBlockingRuntimeActivity(ctx context.Context, sessionID string) (bool, error) {
-	return s.runtimeHasBlockingActivity(ctx, sessionID)
-}
-
-// errUnknownToolID is returned when an enabled-tool id cannot be parsed into a known tool.
 var errUnknownToolID = errors.New("unknown tool id")
+var ErrRuntimeOwnerIDRequired = errors.New("runtime owner id is required")
 
 func parseToolIDs(raw []string) ([]toolspec.ID, error) {
 	if len(raw) == 0 {
@@ -624,7 +210,11 @@ func parseToolIDs(raw []string) ([]toolspec.ID, error) {
 }
 
 func runtimeOwnerIDRequiredError() error {
-	return errors.Join(registry.ErrRuntimeOwnerIDRequired, errors.New("runtime owner_id is required; upgrade the client or connect through the current Kent gateway"))
+	return errors.Join(ErrRuntimeOwnerIDRequired, errors.New("runtime owner_id is required; upgrade the client or connect through the current Kent gateway"))
 }
 
-var _ servicecontract.SessionRuntimeService = (*Service)(nil)
+func runtimeUnavailableErr(sessionID string) error {
+	return errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("session %q has no active runtime available", strings.TrimSpace(sessionID)))
+}
+
+var _ servicecontract.SessionRuntimeService = (*API)(nil)

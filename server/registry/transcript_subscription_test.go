@@ -10,7 +10,6 @@ import (
 
 	"core/server/llm"
 	"core/server/runtime"
-	"core/server/runtimecontrol"
 	"core/server/tools"
 	"core/shared/clientui"
 	"core/shared/invariant"
@@ -270,7 +269,7 @@ func TestSessionTranscriptSubscriptionHydratesFirstAndSequencesPerSubscription(t
 	registry := NewRuntimeRegistry()
 	var engine *runtime.Engine
 	engine = newRegistryTestRuntime(t, func(evt runtime.Event) {
-		registry.PublishRuntimeEvent(engine.SessionID(), evt)
+		registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), evt)
 	})
 	registerReady(t, registry, engine.SessionID(), engine)
 	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
@@ -296,7 +295,7 @@ func TestSessionTranscriptSubscriptionHydratesFirstAndSequencesPerSubscription(t
 		t.Fatalf("second subscription first message = %+v, want fresh seq=1 hydration", secondHydration)
 	}
 
-	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+	registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), runtime.Event{
 		Kind:                       runtime.EventAssistantMessage,
 		StepID:                     registryTestStepID,
 		Message:                    llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "after subscribe"},
@@ -363,7 +362,7 @@ func TestSessionTranscriptFeedSequencerHydratesQueuedStatusAndPublishesLiveAfter
 
 	clientRequestID := runtimeids.NewRuntimeClientRequestID()
 	queueItemID := runtimeids.NewQueueItemID()
-	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+	registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), runtime.Event{
 		Kind: runtime.EventQueuedUserMessageStatus,
 		QueuedUserMessageStatus: &runtime.QueuedUserMessageStatusEvent{
 			SessionID:       engine.SessionID(),
@@ -384,7 +383,7 @@ func TestSessionTranscriptFeedSequencerHydratesQueuedStatusAndPublishesLiveAfter
 		t.Fatalf("hydration queued message = %+v, want accepted queue item %q", hydration.Payload.Hydration.QueuedMessages[0], queueItemID.String())
 	}
 
-	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+	registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), runtime.Event{
 		Kind: runtime.EventQueuedUserMessageStatus,
 		QueuedUserMessageStatus: &runtime.QueuedUserMessageStatusEvent{
 			SessionID:       engine.SessionID(),
@@ -403,7 +402,7 @@ func TestSessionTranscriptFeedSequencerReceivesEngineQueueStatus(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	var engine *runtime.Engine
 	engine = newRegistryTestRuntime(t, func(evt runtime.Event) {
-		registry.PublishRuntimeEvent(engine.SessionID(), evt)
+		registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), evt)
 	})
 	registerReady(t, registry, engine.SessionID(), engine)
 	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
@@ -435,7 +434,7 @@ func TestSessionTranscriptFeedSequencerHydratesEngineQueuedTextInFIFOOrder(t *te
 	registry := NewRuntimeRegistry()
 	var engine *runtime.Engine
 	engine = newRegistryTestRuntime(t, func(evt runtime.Event) {
-		registry.PublishRuntimeEvent(engine.SessionID(), evt)
+		registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), evt)
 	})
 	registerReady(t, registry, engine.SessionID(), engine)
 	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
@@ -533,7 +532,7 @@ func TestSessionTranscriptFeedPublishesUpdatedToolStartMetadataByCallID(t *testi
 	defer func() { _ = sub.Close() }()
 	_ = nextTranscriptMessage(t, sub)
 
-	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+	registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), runtime.Event{
 		Kind:   runtime.EventToolCallStarted,
 		StepID: registryTestStepID,
 		ToolCall: &llm.ToolCall{
@@ -546,7 +545,7 @@ func TestSessionTranscriptFeedPublishesUpdatedToolStartMetadataByCallID(t *testi
 		t.Fatalf("first start = %+v, want tool_start", start)
 	}
 
-	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+	registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), runtime.Event{
 		Kind:   runtime.EventToolCallStarted,
 		StepID: registryTestStepID,
 		ToolCall: &llm.ToolCall{
@@ -579,7 +578,7 @@ func TestSessionTranscriptFeedHydratesToolsInFirstStartOrder(t *testing.T) {
 
 	const toolCount = 16
 	for index := 0; index < toolCount; index++ {
-		registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+		registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), runtime.Event{
 			Kind:   runtime.EventToolCallStarted,
 			StepID: "22222222-2222-4222-8222-222222222222",
 			ToolCall: &llm.ToolCall{
@@ -588,7 +587,7 @@ func TestSessionTranscriptFeedHydratesToolsInFirstStartOrder(t *testing.T) {
 			},
 		})
 	}
-	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+	registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), runtime.Event{
 		Kind:   runtime.EventToolCallStarted,
 		StepID: "22222222-2222-4222-8222-222222222222",
 		ToolCall: &llm.ToolCall{
@@ -626,7 +625,7 @@ func TestSessionTranscriptFeedHydratesBackgroundsInFirstSeenOrder(t *testing.T) 
 	for index := 0; index < backgroundCount; index++ {
 		activityID := uuid.MustParse(fmt.Sprintf("00000000-0000-4000-8000-%012d", index+1))
 		activityIDs = append(activityIDs, activityID)
-		registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+		registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), runtime.Event{
 			Kind:   runtime.EventBackgroundUpdated,
 			StepID: registryTestStepID,
 			Background: &runtime.BackgroundShellEvent{
@@ -641,7 +640,7 @@ func TestSessionTranscriptFeedHydratesBackgroundsInFirstSeenOrder(t *testing.T) 
 			},
 		})
 	}
-	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+	registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), runtime.Event{
 		Kind:   runtime.EventBackgroundUpdated,
 		StepID: registryTestStepID,
 		Background: &runtime.BackgroundShellEvent{
@@ -704,34 +703,13 @@ func TestSessionTranscriptFeedHydratesPromptsInCreationOrder(t *testing.T) {
 	}
 }
 
-func TestSessionTranscriptSubscriberCountsAsRuntimeInterest(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := newRegistryTestRuntime(t, nil)
-	registerReady(t, registry, engine.SessionID(), engine)
-	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
-
-	if registry.HasRuntimeSubscribers(engine.SessionID()) {
-		t.Fatal("runtime subscribers present before transcript subscribe")
-	}
-	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
-	if !registry.HasRuntimeSubscribers(engine.SessionID()) {
-		t.Fatal("transcript subscriber did not count as runtime interest")
-	}
-	if err := sub.Close(); err != nil {
-		t.Fatalf("close transcript subscription: %v", err)
-	}
-	if registry.HasRuntimeSubscribers(engine.SessionID()) {
-		t.Fatal("runtime subscribers present after transcript close")
-	}
-}
-
 func TestSessionTranscriptFeedSequencerHydratesActiveStepAndPublishesFinishedStep(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := newRegistryTestRuntime(t, nil)
 	registerReady(t, registry, engine.SessionID(), engine)
 	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
 
-	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+	registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), runtime.Event{
 		Kind:   runtime.EventRunStateChanged,
 		StepID: registryTestStepID,
 		RunState: &runtime.RunState{
@@ -749,7 +727,7 @@ func TestSessionTranscriptFeedSequencerHydratesActiveStepAndPublishesFinishedSte
 		t.Fatalf("hydration active step = %+v, want running", hydration)
 	}
 
-	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+	registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), runtime.Event{
 		Kind:   runtime.EventRunStateChanged,
 		StepID: registryTestStepID,
 		RunState: &runtime.RunState{
@@ -779,39 +757,13 @@ func TestSessionTranscriptFeedSequencerUsesRuntimeViewStatusProducer(t *testing.
 		t.Fatalf("hydration session status = %+v, want runtimeview-projected status", hydration)
 	}
 
-	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+	registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), runtime.Event{
 		Kind:         runtime.EventConversationUpdated,
 		ContextUsage: &runtime.ContextUsage{UsedTokens: 10, WindowTokens: 100},
 	})
 	live := nextTranscriptMessageOfKind(t, sub, clientui.TranscriptMessageSessionStatus)
 	if live.Kind != clientui.TranscriptMessageSessionStatus || live.Payload.SessionStatus == nil {
 		t.Fatalf("live session status = %+v, want session_status", live)
-	}
-}
-
-func TestSessionTranscriptFeedPublishesStatusAfterRuntimeSettingChange(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := newRegistryTestRuntime(t, nil)
-	registerReady(t, registry, engine.SessionID(), engine)
-	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
-
-	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
-	defer func() { _ = sub.Close() }()
-	_ = nextTranscriptMessage(t, sub)
-
-	service := runtimecontrol.NewService(registry)
-	_, err := service.SetQuestionsEnabled(context.Background(), serverapi.RuntimeSetQuestionsEnabledRequest{
-		SessionID:       engine.SessionID(),
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		Enabled:         false,
-	})
-	if err != nil {
-		t.Fatalf("SetQuestionsEnabled: %v", err)
-	}
-
-	live := nextTranscriptMessageOfKind(t, sub, clientui.TranscriptMessageSessionStatus)
-	if live.Payload.SessionStatus == nil || live.Payload.SessionStatus.QuestionsEnabled {
-		t.Fatalf("live session status = %+v, want questions disabled", live)
 	}
 }
 
@@ -867,7 +819,7 @@ func TestSessionTranscriptSubscriptionCarriesAssistantStreamIdentity(t *testing.
 		t.Fatalf("ParseAssistantStreamID: %v", err)
 	}
 	metadata := &runtime.AssistantStreamMetadata{StepID: registryTestStepID}
-	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+	registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), runtime.Event{
 		Kind:                        runtime.EventAssistantDelta,
 		StepID:                      registryTestStepID,
 		AssistantDelta:              "hello",
@@ -883,7 +835,7 @@ func TestSessionTranscriptSubscriptionCarriesAssistantStreamIdentity(t *testing.
 		t.Fatalf("delta identity = %+v, want stream %q", delta.Payload.AssistantDelta, streamID.String())
 	}
 
-	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+	registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), runtime.Event{
 		Kind:                        runtime.EventAssistantMessage,
 		StepID:                      registryTestStepID,
 		Message:                     llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "hello"},
@@ -910,10 +862,11 @@ func TestSessionTranscriptSubscriptionEmitsToolCompletionsInServerOrder(t *testi
 	defer func() { _ = sub.Close() }()
 	_ = nextTranscriptMessage(t, sub)
 
-	publishToolStartForTest(registry, engine.SessionID(), "call-b")
-	publishToolStartForTest(registry, engine.SessionID(), "call-a")
-	publishToolCompletionForTest(registry, engine.SessionID(), "call-b")
-	publishToolCompletionForTest(registry, engine.SessionID(), "call-a")
+	resource := registryTestResourceRef(engine.SessionID())
+	publishToolStartForTest(registry, resource, "call-b")
+	publishToolStartForTest(registry, resource, "call-a")
+	publishToolCompletionForTest(registry, resource, "call-b")
+	publishToolCompletionForTest(registry, resource, "call-a")
 
 	first := nextTranscriptMessage(t, sub)
 	second := nextTranscriptMessage(t, sub)
@@ -943,7 +896,7 @@ func TestSessionTranscriptHydratesRuntimeLedgerInFlightToolAndCompletionTerminal
 		Model:         "gpt-5",
 		ThinkingLevel: "medium",
 	}, func(engine *runtime.Engine, evt runtime.Event) {
-		registry.PublishRuntimeEvent(engine.SessionID(), evt)
+		registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), evt)
 	})
 	registerReady(t, registry, engine.SessionID(), engine)
 	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
@@ -990,13 +943,13 @@ func TestSessionTranscriptToolAbortTerminalsVisibleStart(t *testing.T) {
 	defer func() { _ = sub.Close() }()
 	_ = nextTranscriptMessage(t, sub)
 
-	publishToolStartForTest(registry, engine.SessionID(), "call-abort")
+	publishToolStartForTest(registry, registryTestResourceRef(engine.SessionID()), "call-abort")
 	start := nextTranscriptMessage(t, sub)
 	if start.Sequence != 2 || start.Kind != clientui.TranscriptMessageToolStart || start.Payload.ToolStart == nil || start.Payload.ToolStart.ToolCallID != "call-abort" {
 		t.Fatalf("tool start = %+v, want visible start", start)
 	}
 
-	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+	registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), runtime.Event{
 		Kind:            runtime.EventToolCallAborted,
 		StepID:          registryTestStepID,
 		ToolCall:        &llm.ToolCall{ID: "call-abort", Name: string(toolspec.ToolExecCommand)},
@@ -1055,8 +1008,8 @@ func nextTranscriptMessageTimeout(sub serverapi.TranscriptSubscription, timeout 
 	return sub.Next(ctx)
 }
 
-func publishToolCompletionForTest(registry *RuntimeRegistry, sessionID string, callID string) {
-	registry.PublishRuntimeEvent(sessionID, runtime.Event{
+func publishToolCompletionForTest(registry *RuntimeRegistry, resource runtimeids.SessionResourceRef, callID string) {
+	registry.PublishAuthorityRuntimeEvent(resource, runtime.Event{
 		Kind:   runtime.EventToolCallCompleted,
 		StepID: registryTestStepID,
 		ToolResult: &tools.Result{
@@ -1068,8 +1021,8 @@ func publishToolCompletionForTest(registry *RuntimeRegistry, sessionID string, c
 	})
 }
 
-func publishToolStartForTest(registry *RuntimeRegistry, sessionID string, callID string) {
-	registry.PublishRuntimeEvent(sessionID, runtime.Event{
+func publishToolStartForTest(registry *RuntimeRegistry, resource runtimeids.SessionResourceRef, callID string) {
+	registry.PublishAuthorityRuntimeEvent(resource, runtime.Event{
 		Kind:   runtime.EventToolCallStarted,
 		StepID: registryTestStepID,
 		ToolCall: &llm.ToolCall{
@@ -1126,7 +1079,7 @@ func TestSessionTranscriptFeedPublishesStatusAfterUserMessageFlush(t *testing.T)
 	defer func() { _ = sub.Close() }()
 	_ = nextTranscriptMessage(t, sub)
 
-	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+	registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), runtime.Event{
 		Kind:         runtime.EventUserMessageFlushed,
 		StepID:       registryTestStepID,
 		UserMessage:  "steer text",

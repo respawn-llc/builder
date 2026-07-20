@@ -105,7 +105,7 @@ func TestAttentionQuestionRecoveryUsesDormantNewestActiveSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDefinitionProjection: %v", err)
 	}
-	sessionViews := sessionview.NewService(singleSessionStoreResolver{store: sessionStore}, nil, nil)
+	sessionViews := sessionview.NewService(singleSessionStoreResolver{store: sessionStore}, nil, nil, nil)
 	attention, err := NewAttention(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), sessionViewActiveTranscriptProvider{views: sessionViews}, nil)
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)

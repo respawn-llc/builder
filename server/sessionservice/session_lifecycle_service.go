@@ -10,6 +10,7 @@ import (
 	"core/server/metadata"
 	"core/server/requestmemo"
 	"core/server/session"
+	"core/server/sessionruntime"
 	"core/shared/rollbacktarget"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -21,11 +22,10 @@ var errSessionWorkspaceRetargeterRequired = errors.New("session workspace retarg
 type SessionLifecycleService struct {
 	persistenceRoot string
 	containerDir    string
-	stores          sessionStoreResolver
+	authority       *sessionruntime.Authority
 	retargeter      sessionWorkspaceRetargeter
 	navigation      sessionNavigationTargetResolver
 	authManager     *auth.Manager
-	storeOptions    []session.StoreOption
 	drafts          *requestmemo.Memo[sessionDraftMemoRequest, serverapi.SessionPersistInputDraftResponse]
 	transitions     *requestmemo.Memo[sessionTransitionMemoRequest, serverapi.SessionResolveTransitionResponse]
 }
@@ -41,10 +41,6 @@ type sessionTransitionMemoRequest struct {
 	Transition serverapi.SessionTransition
 }
 
-type sessionStoreResolver interface {
-	ResolveStore(ctx context.Context, sessionID string) (*session.Store, error)
-}
-
 type sessionWorkspaceRetargeter interface {
 	RetargetWorkspace(ctx context.Context, req metadata.SessionWorkspaceRetargetRequest) (metadata.SessionWorkspaceRetargetResult, error)
 }
@@ -53,19 +49,30 @@ type sessionNavigationTargetResolver interface {
 	ResolveSessionNavigationBinding(ctx context.Context, sessionID string) (serverapi.SessionNavigationBinding, error)
 }
 
-func NewSessionLifecycleService(containerDir string, stores sessionStoreResolver, authManager *auth.Manager, storeOptions ...session.StoreOption) *SessionLifecycleService {
-	return &SessionLifecycleService{containerDir: strings.TrimSpace(containerDir), stores: stores, authManager: authManager, storeOptions: append([]session.StoreOption(nil), storeOptions...), drafts: requestmemo.New[sessionDraftMemoRequest, serverapi.SessionPersistInputDraftResponse](), transitions: requestmemo.New[sessionTransitionMemoRequest, serverapi.SessionResolveTransitionResponse]()}
+func NewSessionLifecycleService(persistenceRoot string, authority *sessionruntime.Authority, authManager *auth.Manager) *SessionLifecycleService {
+	return &SessionLifecycleService{
+		containerDir: strings.TrimSpace(persistenceRoot),
+		authority:    authority,
+		authManager:  authManager,
+		drafts:       requestmemo.New[sessionDraftMemoRequest, serverapi.SessionPersistInputDraftResponse](),
+		transitions:  requestmemo.New[sessionTransitionMemoRequest, serverapi.SessionResolveTransitionResponse](),
+	}
 }
 
-func NewGlobalSessionLifecycleService(persistenceRoot string, stores sessionStoreResolver, authManager *auth.Manager, storeOptions ...session.StoreOption) *SessionLifecycleService {
-	return &SessionLifecycleService{persistenceRoot: strings.TrimSpace(persistenceRoot), stores: stores, authManager: authManager, storeOptions: append([]session.StoreOption(nil), storeOptions...), drafts: requestmemo.New[sessionDraftMemoRequest, serverapi.SessionPersistInputDraftResponse](), transitions: requestmemo.New[sessionTransitionMemoRequest, serverapi.SessionResolveTransitionResponse]()}
+func NewGlobalSessionLifecycleService(persistenceRoot string, authority *sessionruntime.Authority, authManager *auth.Manager) *SessionLifecycleService {
+	return &SessionLifecycleService{
+		persistenceRoot: strings.TrimSpace(persistenceRoot),
+		authority:       authority,
+		authManager:     authManager,
+		drafts:          requestmemo.New[sessionDraftMemoRequest, serverapi.SessionPersistInputDraftResponse](),
+		transitions:     requestmemo.New[sessionTransitionMemoRequest, serverapi.SessionResolveTransitionResponse](),
+	}
 }
 
 func (s *SessionLifecycleService) WithPersistenceRoot(root string) *SessionLifecycleService {
-	if s == nil {
-		return nil
+	if s != nil {
+		s.persistenceRoot = strings.TrimSpace(root)
 	}
-	s.persistenceRoot = strings.TrimSpace(root)
 	return s
 }
 
@@ -85,25 +92,30 @@ func (s *SessionLifecycleService) WithNavigationTargetResolver(resolver sessionN
 	return s
 }
 
-func (s *SessionLifecycleService) GetInitialInput(_ context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
+func (s *SessionLifecycleService) GetInitialInput(ctx context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionInitialInputResponse{}, err
 	}
-	store, err := s.openStore(req.SessionID)
+	if strings.TrimSpace(req.SessionID) == "" {
+		return serverapi.SessionInitialInputResponse{Input: req.TransitionInput}, nil
+	}
+	var resp serverapi.SessionInitialInputResponse
+	err := s.withStore(ctx, req.SessionID, func(_ context.Context, store *session.Store) error {
+		if req.OverrideStoredDraft {
+			resp.Input = req.TransitionInput
+			return nil
+		}
+		meta := store.Meta()
+		resp = serverapi.SessionInitialInputResponse{
+			Input:           initialSessionInput(store, req.TransitionInput),
+			RecoveryBuffers: sessionRecoveryBuffersToAPI(meta.InputDraftRecoveryBuffers),
+		}
+		return nil
+	})
 	if err != nil {
 		return serverapi.SessionInitialInputResponse{}, err
 	}
-	if store == nil {
-		return serverapi.SessionInitialInputResponse{Input: req.TransitionInput}, nil
-	}
-	if req.OverrideStoredDraft {
-		return serverapi.SessionInitialInputResponse{Input: req.TransitionInput}, nil
-	}
-	meta := store.Meta()
-	return serverapi.SessionInitialInputResponse{
-		Input:           initialSessionInput(store, req.TransitionInput),
-		RecoveryBuffers: sessionRecoveryBuffersToAPI(meta.InputDraftRecoveryBuffers),
-	}, nil
+	return resp, nil
 }
 
 func (s *SessionLifecycleService) PersistInputDraft(ctx context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
@@ -111,15 +123,11 @@ func (s *SessionLifecycleService) PersistInputDraft(ctx context.Context, req ser
 		return serverapi.SessionPersistInputDraftResponse{}, err
 	}
 	memoReq := sessionDraftMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Input: req.Input, RecoveryBuffers: req.RecoveryBuffers}
-	return s.drafts.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionDraftMemoRequest, func(context.Context) (serverapi.SessionPersistInputDraftResponse, error) {
-		store, err := s.openStore(req.SessionID)
-		if err != nil {
-			return serverapi.SessionPersistInputDraftResponse{}, err
-		}
-		if err := persistSessionInputDraftRecovery(store, req.Input, req.RecoveryBuffers); err != nil {
-			return serverapi.SessionPersistInputDraftResponse{}, err
-		}
-		return serverapi.SessionPersistInputDraftResponse{}, nil
+	return s.drafts.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionDraftMemoRequest, func(runCtx context.Context) (serverapi.SessionPersistInputDraftResponse, error) {
+		err := s.withStore(runCtx, req.SessionID, func(_ context.Context, store *session.Store) error {
+			return persistSessionInputDraftRecovery(store, req.Input, req.RecoveryBuffers)
+		})
+		return serverapi.SessionPersistInputDraftResponse{}, err
 	})
 }
 
@@ -208,58 +216,17 @@ func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req
 			),
 		), nil
 	}
-	var (
-		store *session.Store
-		err   error
-	)
-	if req.Transition.Action == serverapi.SessionTransitionActionForkRollback {
-		store, err = s.openStore(req.SessionID)
-		if err != nil {
-			return serverapi.SessionResolveTransitionResponse{}, err
-		}
-		forkUserMessageSeq, resolveErr := rollbacktarget.DecodeUserMessageSeq(req.Transition.ForkRollbackTargetID)
-		if resolveErr != nil {
-			return serverapi.SessionResolveTransitionResponse{}, resolveErr
-		}
-		resolved, err := resolveSessionTransition(ctx, sessionTransitionResolveRequest{
-			Store: store,
-			Transition: sessionTransition{
-				Action:                       req.Transition.Action,
-				InitialPrompt:                req.Transition.InitialPrompt,
-				InitialPromptHistoryRecorded: req.Transition.InitialPromptHistoryRecorded,
-				InitialInput:                 req.Transition.InitialInput,
-				TargetSessionID:              req.Transition.TargetSessionID,
-				ForkUserMessageSeq:           forkUserMessageSeq,
-				PreviousSessionID:            req.Transition.PreviousSessionID,
-			},
+	if req.Transition.Action == serverapi.SessionTransitionActionForkRollback ||
+		req.Transition.Action == serverapi.SessionTransitionActionOpenSession {
+		var resolved serverapi.SessionResolveTransitionResponse
+		err := s.withStore(ctx, req.SessionID, func(runCtx context.Context, store *session.Store) error {
+			var err error
+			resolved, err = s.resolveStoreTransition(runCtx, req, store)
+			return err
 		})
-		if err != nil {
-			return serverapi.SessionResolveTransitionResponse{}, err
-		}
-		intent, ok := resolved.LaunchIntent()
-		if !ok {
-			return serverapi.SessionResolveTransitionResponse{}, errors.New("rollback transition did not resolve to a launch intent")
-		}
-		forkID, ok := intent.SessionID()
-		if !ok {
-			return serverapi.SessionResolveTransitionResponse{}, errors.New("rollback transition launch intent omitted fork session ID")
-		}
-		if err := s.preserveForkExecutionTarget(ctx, req.SessionID, forkID.String()); err != nil {
-			return serverapi.SessionResolveTransitionResponse{}, err
-		}
-		return resolved, nil
+		return resolved, err
 	}
-	if req.Transition.Action == serverapi.SessionTransitionActionOpenSession {
-		store, err = s.openStore(req.SessionID)
-		if err != nil {
-			return serverapi.SessionResolveTransitionResponse{}, err
-		}
-		if store == nil {
-			return serverapi.SessionResolveTransitionResponse{}, errors.New("current session is required for session navigation")
-		}
-	}
-	resolved, err := resolveSessionTransition(ctx, sessionTransitionResolveRequest{
-		Store: store,
+	return resolveSessionTransition(ctx, sessionTransitionResolveRequest{
 		Transition: sessionTransition{
 			Action:                       req.Transition.Action,
 			InitialPrompt:                req.Transition.InitialPrompt,
@@ -269,11 +236,48 @@ func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req
 			PreviousSessionID:            req.Transition.PreviousSessionID,
 		},
 	})
+}
+
+func (s *SessionLifecycleService) resolveStoreTransition(
+	ctx context.Context,
+	req serverapi.SessionResolveTransitionRequest,
+	store *session.Store,
+) (serverapi.SessionResolveTransitionResponse, error) {
+	transition := sessionTransition{
+		Action:                       req.Transition.Action,
+		InitialPrompt:                req.Transition.InitialPrompt,
+		InitialPromptHistoryRecorded: req.Transition.InitialPromptHistoryRecorded,
+		InitialInput:                 req.Transition.InitialInput,
+		TargetSessionID:              req.Transition.TargetSessionID,
+		PreviousSessionID:            req.Transition.PreviousSessionID,
+	}
+	if req.Transition.Action == serverapi.SessionTransitionActionForkRollback {
+		forkUserMessageSeq, err := rollbacktarget.DecodeUserMessageSeq(req.Transition.ForkRollbackTargetID)
+		if err != nil {
+			return serverapi.SessionResolveTransitionResponse{}, err
+		}
+		transition.ForkUserMessageSeq = forkUserMessageSeq
+	}
+	resolved, err := resolveSessionTransition(ctx, sessionTransitionResolveRequest{
+		Store:      store,
+		Transition: transition,
+	})
 	if err != nil {
 		return serverapi.SessionResolveTransitionResponse{}, err
 	}
 	if req.Transition.Action == serverapi.SessionTransitionActionOpenSession {
 		return s.authorizeNavigationTransition(ctx, store, resolved)
+	}
+	intent, ok := resolved.LaunchIntent()
+	if !ok {
+		return serverapi.SessionResolveTransitionResponse{}, errors.New("rollback transition did not resolve to a launch intent")
+	}
+	forkID, ok := intent.SessionID()
+	if !ok {
+		return serverapi.SessionResolveTransitionResponse{}, errors.New("rollback transition launch intent omitted fork session ID")
+	}
+	if err := s.preserveForkExecutionTarget(ctx, req.SessionID, forkID.String()); err != nil {
+		return serverapi.SessionResolveTransitionResponse{}, err
 	}
 	return resolved, nil
 }
@@ -351,27 +355,26 @@ func (s *SessionLifecycleService) preserveForkExecutionTarget(ctx context.Contex
 	return metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdateFromReadModel(trimmedChildID, target))
 }
 
-func (s *SessionLifecycleService) openStore(sessionID string) (*session.Store, error) {
-	trimmed := strings.TrimSpace(sessionID)
-	if trimmed == "" {
-		return nil, nil
+func (s *SessionLifecycleService) withStore(
+	ctx context.Context,
+	sessionID string,
+	callback func(context.Context, *session.Store) error,
+) error {
+	if s == nil || s.authority == nil {
+		return errors.New("session runtime authority is required")
 	}
-	if s != nil && s.stores != nil {
-		if store, err := s.stores.ResolveStore(context.Background(), trimmed); err != nil {
-			return nil, err
-		} else if store != nil {
-			return store, nil
-		}
-	}
-	if strings.TrimSpace(s.containerDir) == "" {
-		if strings.TrimSpace(s.persistenceRoot) == "" {
-			return nil, nil
-		}
-		return session.OpenByID(s.persistenceRoot, trimmed, s.storeOptions...)
-	}
-	sessionDir, err := session.ResolveScopedSessionDir(s.containerDir, trimmed)
+	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return session.Open(sessionDir, s.storeOptions...)
+	var descriptor session.SessionDescriptor
+	if containerDir := strings.TrimSpace(s.containerDir); containerDir != "" {
+		descriptor, err = session.NewScopedOpenSessionDescriptor(id, containerDir)
+	} else {
+		descriptor, err = session.NewOpenSessionDescriptor(id)
+	}
+	if err != nil {
+		return err
+	}
+	return s.authority.WithSessionStore(ctx, descriptor, callback)
 }

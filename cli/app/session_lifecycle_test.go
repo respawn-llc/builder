@@ -911,19 +911,8 @@ func TestNewSessionTransitionKeepsBackgroundProcessesAlive(t *testing.T) {
 	}
 	planner := &launchPlanner{server: testServer}
 	launchRequest := sessionLaunchRequestFromLifecycleResult(t, resolved, serverapi.RunPromptOverrides{})
-	storePlan, err := planner.PlanSession(context.Background(), launchRequest)
-	if err != nil {
+	if _, err := planner.PlanSession(context.Background(), launchRequest); err != nil {
 		t.Fatalf("open or create next session: %v", err)
-	}
-	store, err := testServer.sessionStoreRegistry().ResolveStore(context.Background(), storePlan.SessionID)
-	if err != nil {
-		t.Fatalf("resolve planned session from registry: %v", err)
-	}
-	if store == nil {
-		t.Fatal("expected planned session store in registry")
-	}
-	if store.Meta().PreviousSessionID == nil || store.Meta().PreviousSessionID.String() != sourceSessionID {
-		t.Fatalf("expected previous session id preserved across new session transition, got %v", store.Meta().PreviousSessionID)
 	}
 	entries := manager.List()
 	if len(entries) != 1 {

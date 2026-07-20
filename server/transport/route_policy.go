@@ -302,7 +302,7 @@ func routeSessionID(params any) (string, bool) {
 	case serverapi.SessionRuntimeActivateRequest:
 		return p.SessionID, true
 	case serverapi.SessionRuntimeReleaseRequest:
-		return p.SessionID, true
+		return p.Attachment.SessionID, true
 	case serverapi.WorktreeListRequest:
 		return p.SessionID, true
 	case serverapi.WorktreeStatusRequest:

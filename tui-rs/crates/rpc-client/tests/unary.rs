@@ -43,11 +43,13 @@ use client_contracts::session::{
     RunPromptOverrides, SessionAuthPreparation, SessionCreateOrigin, SessionInitialInputPolicy,
     SessionInitialInputRequest, SessionInitialInputResponse, SessionLaunchIntent,
     SessionLaunchMode, SessionLaunchPreparation, SessionMainViewRequest, SessionMainViewResponse,
-    SessionNavigationBinding, SessionPersistInputDraftRequest, SessionPersistInputDraftResponse, SessionPlanRequest,
-    SessionResolveTransitionRequest, SessionResolveTransitionResponse,
+    SessionNavigationBinding, SessionPersistInputDraftRequest, SessionPersistInputDraftResponse,
+    SessionPlanRequest, SessionResolveTransitionRequest, SessionResolveTransitionResponse,
     SessionRetargetWorkspaceRequest, SessionRetargetWorkspaceResponse,
-    SessionRuntimeActivateRequest, SessionRuntimeReleaseRequest, SessionTransition,
-    SessionTransitionAction, SessionTranscriptPageRequest, SessionTranscriptPageResponse,
+    SessionRuntimeActivateRequest, SessionRuntimeActivateResponse, SessionRuntimeAttachment,
+    SessionRuntimeReleaseClosePolicy, SessionRuntimeReleaseRequest, SessionRuntimeReleaseResponse,
+    SessionTransition, SessionTransitionAction, SessionTranscriptPageRequest,
+    SessionTranscriptPageResponse,
 };
 use client_contracts::worktree::{
     WorktreeCreateRequest, WorktreeCreateResponse, WorktreeCreateTargetResolution,
@@ -977,7 +979,15 @@ fn runtime_activate_wrapper_sends_contract_dto_and_method_name() {
     });
     let request: SessionRuntimeActivateRequest =
         serde_json::from_value(request_params.clone()).unwrap();
-    let connection = ScriptedConnection::new(vec![success_response("rpc-1", json!({}))]);
+    let connection = ScriptedConnection::new(vec![success_response(
+        "rpc-1",
+        json!({
+            "attachment": {
+                "session_id": "session-1",
+                "generation": 7
+            }
+        }),
+    )]);
     let mut client = Client::new(connection);
 
     let actual = client.activate_session_runtime(request).unwrap();
@@ -985,38 +995,101 @@ fn runtime_activate_wrapper_sends_contract_dto_and_method_name() {
 
     assert_eq!(
         actual,
-        client_contracts::session::SessionRuntimeActivateResponse {}
+        SessionRuntimeActivateResponse {
+            attachment: SessionRuntimeAttachment {
+                session_id: "session-1".to_owned(),
+                generation: 7.try_into().unwrap(),
+            },
+        }
     );
     assert_sent_methods(&connection.sent, &[("rpc-1", "session.runtime.activate")]);
     assert_eq!(connection.sent[0].request().params.unwrap(), request_params);
+    assert!(
+        serde_json::from_value::<SessionRuntimeActivateResponse>(json!({
+            "attachment": {
+                "session_id": "session-1",
+                "generation": 0
+            }
+        }))
+        .is_err()
+    );
 }
 
 #[test]
 fn runtime_release_wrapper_sends_contract_dto_and_method_name() {
-    let connection = ScriptedConnection::new(vec![success_response("rpc-1", json!({}))]);
+    let request_params = json!({
+        "client_request_id": "request-1",
+        "attachment": {
+            "session_id": "session-1",
+            "generation": 7
+        },
+        "drop_owner": true,
+        "close_policy": "close_if_idle",
+        "owner_id": "owner-1"
+    });
+    let request: SessionRuntimeReleaseRequest =
+        serde_json::from_value(request_params.clone()).unwrap();
+    let connection = ScriptedConnection::new(vec![success_response(
+        "rpc-1",
+        json!({"released": true, "active": false}),
+    )]);
     let mut client = Client::new(connection);
 
-    client
-        .release_session_runtime(SessionRuntimeReleaseRequest {
-            client_request_id: "request-1".to_owned(),
-            session_id: "session-1".to_owned(),
-            only_if_idle: true,
-            drop_owner: true,
-            owner_id: "owner-1".to_owned(),
-        })
-        .unwrap();
+    let actual = client.release_session_runtime(request).unwrap();
     let connection = client.into_connection();
 
-    assert_sent_methods(&connection.sent, &[("rpc-1", "session.runtime.release")]);
     assert_eq!(
-        connection.sent[0].request().params.unwrap(),
+        actual,
+        SessionRuntimeReleaseResponse {
+            released: true,
+            active: false,
+        }
+    );
+    assert_sent_methods(&connection.sent, &[("rpc-1", "session.runtime.release")]);
+    assert_eq!(connection.sent[0].request().params.unwrap(), request_params);
+    assert_eq!(
+        serde_json::from_value::<SessionRuntimeReleaseClosePolicy>(json!("detach_only")).unwrap(),
+        SessionRuntimeReleaseClosePolicy::DetachOnly
+    );
+    let detach_only_request: SessionRuntimeReleaseRequest = serde_json::from_value(json!({
+        "client_request_id": "request-2",
+        "attachment": {
+            "session_id": "session-1",
+            "generation": 8
+        }
+    }))
+    .unwrap();
+    assert_eq!(detach_only_request.close_policy, None);
+    assert_eq!(
+        serde_json::to_value(detach_only_request).unwrap(),
         json!({
-            "client_request_id":"request-1",
-            "session_id":"session-1",
-            "only_if_idle":true,
-            "drop_owner":true,
-            "owner_id":"owner-1"
+            "client_request_id": "request-2",
+            "attachment": {
+                "session_id": "session-1",
+                "generation": 8
+            }
         })
+    );
+    assert!(
+        serde_json::from_value::<SessionRuntimeReleaseRequest>(json!({
+            "client_request_id": "request-1",
+            "attachment": {
+                "session_id": "session-1",
+                "generation": 7
+            },
+            "only_if_idle": true
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<SessionRuntimeReleaseResponse>(json!({
+            "released": true,
+            "attachment": {
+                "session_id": "session-1",
+                "generation": 7
+            }
+        }))
+        .is_err()
     );
 }
 

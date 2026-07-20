@@ -9,8 +9,11 @@ import (
 	"core/server/runtimeactivity"
 	"core/server/runtimeview"
 	"core/server/session"
+	"core/server/sessionruntime"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/runtimeids"
+	"core/shared/serverapi"
 	"core/shared/textutil"
 )
 
@@ -26,25 +29,16 @@ type runtimeReadModelSnapshotProvider interface {
 
 func resolveRuntimeActivitySnapshot(
 	ctx context.Context,
-	runtimes RuntimeResolver,
+	activity runtimeReadModelSnapshotProvider,
 	sessionID string,
 	refs []clientui.RuntimeOperationRef,
 ) (runtimeactivity.ResponseSnapshot, error) {
-	if provider, ok := runtimes.(runtimeReadModelSnapshotProvider); ok {
-		return provider.RuntimeReadModelSnapshot(ctx, sessionID, refs)
+	if activity != nil {
+		return activity.RuntimeReadModelSnapshot(ctx, sessionID, refs)
 	}
-	var engine *runtime.Engine
-	var err error
-	if runtimes != nil {
-		engine, err = runtimes.ResolveRuntime(ctx, sessionID)
-	}
-	if err != nil {
-		return runtimeactivity.ResponseSnapshot{}, err
-	}
-	registry := runtimeactivity.RegistrySnapshot{Registered: engine != nil, QueueAccepting: true}
 	return runtimeactivity.BuildSnapshot(sessionID, func() (runtimeactivity.SnapshotInput, error) {
 		return runtimeactivity.SnapshotInput{
-			Resolver:            runtimeactivity.ResolverSnapshot{Registry: registry, Active: runtimeactivity.ActiveStepFromProvider(engine)},
+			Resolver:            runtimeactivity.ResolverSnapshot{},
 			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 		}, nil
 	})
@@ -75,14 +69,21 @@ func resultWithContext[T any](ctx context.Context, value T) (T, error) {
 
 type resolvedSessionSnapshotSource struct {
 	sessions         SessionStoreResolver
-	runtimes         RuntimeResolver
+	activity         runtimeReadModelSnapshotProvider
+	authority        *sessionruntime.Authority
 	cacheWarningMode func() config.CacheWarningMode
 }
 
-func newResolvedSessionSnapshotSource(sessions SessionStoreResolver, runtimes RuntimeResolver, cacheWarningMode func() config.CacheWarningMode) *resolvedSessionSnapshotSource {
+func newResolvedSessionSnapshotSource(
+	sessions SessionStoreResolver,
+	activity runtimeReadModelSnapshotProvider,
+	authority *sessionruntime.Authority,
+	cacheWarningMode func() config.CacheWarningMode,
+) *resolvedSessionSnapshotSource {
 	return &resolvedSessionSnapshotSource{
 		sessions:         sessions,
-		runtimes:         runtimes,
+		activity:         activity,
+		authority:        authority,
 		cacheWarningMode: cacheWarningMode,
 	}
 }
@@ -91,17 +92,27 @@ func (s *resolvedSessionSnapshotSource) resolveSessionSnapshot(ctx context.Conte
 	if s == nil {
 		return nil, errSessionStoreResolverRequired
 	}
-	if s.runtimes != nil {
-		engine, err := s.runtimes.ResolveRuntime(ctx, sessionID)
+	readModelSnapshot, err := resolveRuntimeActivitySnapshot(ctx, s.activity, sessionID, refs)
+	if err != nil {
+		return nil, err
+	}
+	if s.authority != nil {
+		id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
 		if err != nil {
 			return nil, err
 		}
-		if engine != nil {
-			snapshot, err := resolveRuntimeActivitySnapshot(ctx, s.runtimes, sessionID, refs)
-			if err != nil {
-				return nil, err
-			}
-			return liveRuntimeSessionSnapshot{engine: engine, snapshot: snapshot}, nil
+		err = s.authority.WithCurrentRuntime(ctx, id, func(context.Context, *runtime.Engine) error {
+			return nil
+		})
+		if err == nil {
+			return liveRuntimeSessionSnapshot{
+				authority: s.authority,
+				sessionID: id,
+				snapshot:  readModelSnapshot,
+			}, nil
+		}
+		if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+			return nil, err
 		}
 	}
 	if s.sessions == nil {
@@ -114,10 +125,6 @@ func (s *resolvedSessionSnapshotSource) resolveSessionSnapshot(ctx context.Conte
 	if store == nil {
 		return nil, errSessionStoreResolverRequired
 	}
-	readModelSnapshot, err := resolveRuntimeActivitySnapshot(ctx, s.runtimes, sessionID, refs)
-	if err != nil {
-		return nil, err
-	}
 	return dormantSessionSnapshot{
 		store:            store,
 		activity:         readModelSnapshot,
@@ -126,33 +133,50 @@ func (s *resolvedSessionSnapshotSource) resolveSessionSnapshot(ctx context.Conte
 }
 
 type liveRuntimeSessionSnapshot struct {
-	engine   *runtime.Engine
-	snapshot runtimeactivity.ResponseSnapshot
+	authority *sessionruntime.Authority
+	sessionID runtimeids.SessionID
+	snapshot  runtimeactivity.ResponseSnapshot
 }
 
 func (s liveRuntimeSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeMainView, error) {
-	if err := context.Cause(ctx); err != nil {
-		return clientui.RuntimeMainView{}, err
-	}
-	view := runtimeview.MainViewFromRuntimeActivity(s.engine, s.snapshot.Version, s.snapshot.Activity)
-	view.InputReconciliation = s.snapshot.InputReconciliation
-	return resultWithContext(ctx, view)
+	return withLiveRuntime(ctx, s.authority, s.sessionID, func(engine *runtime.Engine) (clientui.RuntimeMainView, error) {
+		view := runtimeview.MainViewFromRuntimeActivity(engine, s.snapshot.Version, s.snapshot.Activity)
+		view.InputReconciliation = s.snapshot.InputReconciliation
+		return view, nil
+	})
 }
 
 func (s liveRuntimeSessionSnapshot) TranscriptPage(ctx context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
-	return readWithContext(ctx, func() (clientui.TranscriptPage, error) {
-		return runtimeview.TranscriptPageFromRuntime(s.engine, req)
+	return withLiveRuntime(ctx, s.authority, s.sessionID, func(engine *runtime.Engine) (clientui.TranscriptPage, error) {
+		return runtimeview.TranscriptPageFromRuntime(engine, req)
 	})
 }
 
 func (s liveRuntimeSessionSnapshot) TranscriptTailEntries(ctx context.Context) ([]runtime.ChatEntry, error) {
-	return readWithContext(ctx, func() ([]runtime.ChatEntry, error) {
-		page, err := s.engine.TranscriptNewestSegmentPage()
+	return withLiveRuntime(ctx, s.authority, s.sessionID, func(engine *runtime.Engine) ([]runtime.ChatEntry, error) {
+		page, err := engine.TranscriptNewestSegmentPage()
 		if err != nil {
 			return nil, err
 		}
 		return append([]runtime.ChatEntry(nil), page.Snapshot.Entries...), nil
 	})
+}
+
+func withLiveRuntime[T any](
+	ctx context.Context,
+	authority *sessionruntime.Authority,
+	sessionID runtimeids.SessionID,
+	read func(*runtime.Engine) (T, error),
+) (T, error) {
+	var value T
+	err := authority.WithCurrentRuntime(ctx, sessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
+		var err error
+		value, err = readWithContext(callbackCtx, func() (T, error) {
+			return read(engine)
+		})
+		return err
+	})
+	return value, err
 }
 
 type dormantSessionSnapshot struct {

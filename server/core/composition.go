@@ -107,9 +107,10 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		StoreOptions:    storeOptions,
 		PromptFeed:      runtimeRegistry,
 		EventFeed: func(resource sessionruntime.AgentResourceDescriptor, event runtime.Event) {
-			runtimeRegistry.PublishRuntimeEvent(resource.Ref.SessionID().String(), event)
+			runtimeRegistry.PublishAuthorityRuntimeEvent(resource.Ref, event)
 		},
-		StepLifecycle: authorityStepLifecycle{registry: runtimeRegistry},
+		ResourceLifecycle: runtimeRegistry,
+		StepLifecycle:     authorityStepLifecycle{registry: runtimeRegistry},
 		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(ref sessionruntime.WorkflowExecutionRef) {
 			if workflowScheduler != nil {
 				workflowScheduler.RuntimeFinished(ref.RunID, ref.Generation)
@@ -128,7 +129,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	if observer := sleepManager.RuntimeActiveObserver(); observer != nil {
 		runtimeRegistry.SetSleepObserver(observer)
 	}
-	sessionStoreRegistry := registry.NewSessionStoreRegistry()
 	projectService, err := projectview.NewMetadataService(metadataStore, "")
 	if err != nil {
 		closeRootLeaseOnFailure()
@@ -140,8 +140,9 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	approvalService := promptcontrol.NewApprovalViewService(runtimeRegistry)
 	processService := processview.NewProcessViewService(runtimeSupport.Background)
 	processOutputService := processview.NewProcessOutputService(runtimeSupport.Background, runtimeSupport.Background)
-	sessionRuntimeService := sessionruntime.NewServiceWithOptions(cfg.PersistenceRoot, metadataStore, authSupport.AuthManager, runtimeSupport.FastModeState, runtimeSupport.Background, runtimeSupport.BackgroundRouter, runtimeRegistry, sessionStoreRegistry, sessionruntime.ServiceOptions{RuntimeClientFactory: opts.RuntimeClientFactory}, storeOptions...).
-		WithGeneratedRecoveredWarningProvider(func() (string, bool, error) {
+	sessionRuntimeAPI := sessionruntime.NewAPI(metadataStore, runtimeSupport.FastModeState, runtimeAuthority, sessionruntime.APIOptions{
+		RuntimeClientFactory: opts.RuntimeClientFactory,
+		RecoveredWarningProvider: func() (string, bool, error) {
 			nonEmpty, err := prompts.RecoveredRootNonEmptyFor(cfg.PersistenceRoot)
 			if err != nil {
 				return "", false, err
@@ -154,20 +155,22 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 				return "", false, warnErr
 			}
 			return warning, true, nil
-		})
-	projectService.WithRuntimeActivitySources(runtimeRegistry, sessionRuntimeService)
+		},
+	})
+	projectService.WithRuntimeAuthority(runtimeAuthority)
 	sessionStoreResolver := registry.NewGlobalPersistenceSessionResolver(cfg.PersistenceRoot, storeOptions...)
-	promptControlService := promptcontrol.NewPromptControlService(runtimeRegistry)
+	promptControlService := promptcontrol.NewPromptControlService(authorityPromptResponder{authority: runtimeAuthority})
 	runtimeOperations := runtimeops.NewCoordinator()
 	runtimeRegistry.WithOperationCoordinator(runtimeOperations)
 	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveSessionExecutionTarget)
-	runtimeControlService := runtimecontrol.NewService(runtimeRegistry).
+	runtimeControlService := runtimecontrol.NewService(runtimeAuthority).
+		WithRuntimeActivityResolver(runtimeRegistry).
 		WithOperationCoordinator(runtimeOperations).
 		WithPromptHistoryStore(metadataStore).
 		WithWorkflowSessionResolver(sessionStoreResolver).
 		WithPersistedSessionResolver(metadataStore)
 	gitInspector := worktree.NewGitInspector(nil)
-	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background, worktree.ServiceOptions{
+	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeAuthority, runtimeRegistry, runtimeSupport.Background, worktree.ServiceOptions{
 		BaseDir: cfg.Settings.Worktrees.BaseDir,
 		ResolveSetup: func(sourceWorkspaceRoot string) (config.WorktreeSettings, error) {
 			return config.LoadWorktreeSetupSettings(sourceWorkspaceRoot, cfg.PersistenceRoot)
@@ -178,14 +181,14 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	authStatusService := authservice.NewStatusService(authSupport.AuthManager, cfg.Settings)
 	updateStatusService := serverstatus.NewUpdateStatusService(config.Version, cfg.Settings.Debug)
 	serverStatusService := serverstatus.NewServerStatusService(authSupport.AuthManager, cfg, updateStatusService)
-	sessionViewService := sessionview.NewService(sessionStoreResolver, runtimeRegistry, metadataStore).
+	sessionViewService := sessionview.NewService(sessionStoreResolver, runtimeRegistry, runtimeAuthority, metadataStore).
 		WithExecutionEnvironmentConfig(cfg).
 		WithExecutionEnvironmentAuth(authStatusService).
 		WithExecutionEnvironmentGit(gitInspector).
 		WithOperationCoordinator(runtimeOperations).
 		WithCacheWarningMode(cfg.Settings.CacheWarningMode)
-	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background)
-	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, sessionStoreRegistry, authSupport.AuthManager, storeOptions...).
+	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeAuthority, runtimeRegistry, runtimeSupport.Background)
+	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, runtimeAuthority, authSupport.AuthManager).
 		WithWorkspaceRetargeter(sessionWorkspaceRetargeter).
 		WithNavigationTargetResolver(metadataStore)
 	var workflowRuntimeStarter *workflowrunner.Starter
@@ -278,7 +281,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		runtimeSupport:          runtimeSupport,
 		rootLease:               rootLease,
 		metadataStore:           metadataStore,
-		sessionStoreRegistry:    sessionStoreRegistry,
 		runtimeRegistry:         runtimeRegistry,
 		runtimeAuthority:        runtimeAuthority,
 		projectViews:            projectViews,
@@ -292,7 +294,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		attentionService:        runtimeRegistry,
 		runtimeControlService:   runtimeControlService,
 		serverStatusService:     serverStatusService,
-		sessionRuntimeService:   sessionRuntimeService,
+		sessionRuntimeAPI:       sessionRuntimeAPI,
 		sessionViewService:      sessionViewService,
 		sessionLifecycleService: sessionLifecycleService,
 		updateStatusService:     updateStatusService,

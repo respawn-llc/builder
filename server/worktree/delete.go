@@ -285,17 +285,18 @@ func (s *Service) freezeDeleteTargetSessions(
 			sessionIDs = append(sessionIDs, id)
 		}
 	}
-	release := func() {}
-	if s.active != nil && len(sessionIDs) > 0 {
-		release = s.active.BlockSessionRuns(sessionIDs)
+	startBlock, err := s.blockSessionStarts(ctx, sessionIDs)
+	if err != nil {
+		return func() {}, nil, err
 	}
+	release := func() { releaseSessionStarts(startBlock) }
 	activeBlockers := make([]metadata.WorktreeSessionBlocker, 0)
 	for _, target := range sessions {
 		sessionID := strings.TrimSpace(target.SessionID)
 		if sessionID == "" || sessionID == strings.TrimSpace(currentSessionID) {
 			continue
 		}
-		active, err := s.runtime.HasBlockingRuntimeActivity(ctx, sessionID)
+		active, err := s.authority.HasBlockingRuntimeActivity(ctx, sessionID)
 		if err != nil {
 			release()
 			return func() {}, nil, err
@@ -359,7 +360,7 @@ func (s *Service) syncDeleteSession(
 	if strings.TrimSpace(sessionID) == strings.TrimSpace(currentSessionID) && currentSync != nil {
 		return currentSync(ctx, target, reminder)
 	}
-	return s.runtime.SyncExecutionTarget(ctx, sessionID, target, reminder)
+	return s.syncExecutionTarget(ctx, sessionID, target, reminder)
 }
 
 func missingLeftoverRoot(entry serverapi.WorktreeTopologyEntry) *string {

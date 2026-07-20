@@ -15,6 +15,7 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -23,17 +24,8 @@ type sessionRetargetMetadata interface {
 	CommitSessionWorkspaceRetarget(context.Context, metadata.SessionWorkspaceRetargetPlan, time.Time) (metadata.SessionWorkspaceRetargetResult, error)
 }
 
-type sessionRetargetRunBlocker interface {
-	BlockSessionRuns(sessionIDs []string) func()
+type sessionIdentityPublisher interface {
 	PublishSessionIdentity(sessionID string, target *clientui.SessionExecutionTarget)
-}
-
-type sessionMaintenanceRunner interface {
-	RunSessionMaintenance(
-		ctx context.Context,
-		sessionID string,
-		fn func(context.Context, *session.Store, *sessionruntime.ActiveRuntimeMaintenance) error,
-	) error
 }
 
 type sessionProcessSource interface {
@@ -41,39 +33,45 @@ type sessionProcessSource interface {
 }
 
 type SessionWorkspaceRetargeter struct {
-	metadata    sessionRetargetMetadata
-	runs        sessionRetargetRunBlocker
-	maintenance sessionMaintenanceRunner
-	processes   sessionProcessSource
+	metadata  sessionRetargetMetadata
+	authority *sessionruntime.Authority
+	publisher sessionIdentityPublisher
+	processes sessionProcessSource
 }
 
 func NewSessionWorkspaceRetargeter(
 	metadataStore sessionRetargetMetadata,
-	runs sessionRetargetRunBlocker,
-	maintenance sessionMaintenanceRunner,
+	authority *sessionruntime.Authority,
+	publisher sessionIdentityPublisher,
 	processes sessionProcessSource,
 ) *SessionWorkspaceRetargeter {
 	return &SessionWorkspaceRetargeter{
-		metadata:    metadataStore,
-		runs:        runs,
-		maintenance: maintenance,
-		processes:   processes,
+		metadata:  metadataStore,
+		authority: authority,
+		publisher: publisher,
+		processes: processes,
 	}
 }
 
 func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req metadata.SessionWorkspaceRetargetRequest) (metadata.SessionWorkspaceRetargetResult, error) {
-	if s == nil || s.metadata == nil || s.runs == nil || s.maintenance == nil || s.processes == nil {
+	if s == nil || s.metadata == nil || s.authority == nil || s.publisher == nil || s.processes == nil {
 		return metadata.SessionWorkspaceRetargetResult{}, errors.New("session workspace retarget dependencies are required")
 	}
 	plan, err := s.metadata.PlanSessionWorkspaceRetarget(ctx, req)
 	if err != nil {
 		return metadata.SessionWorkspaceRetargetResult{}, err
 	}
-	releaseRuns := s.runs.BlockSessionRuns([]string{plan.SessionID})
-	defer releaseRuns()
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(plan.SessionID))
+	if err != nil {
+		return metadata.SessionWorkspaceRetargetResult{}, err
+	}
+	releaseStarts, err := s.authority.BlockSessionStarts(ctx, []runtimeids.SessionID{sessionID}, sessionruntime.SessionStartBlockMaintenance)
+	if err != nil {
+		return metadata.SessionWorkspaceRetargetResult{}, err
+	}
 
 	var result metadata.SessionWorkspaceRetargetResult
-	err = s.maintenance.RunSessionMaintenance(ctx, plan.SessionID, func(runCtx context.Context, store *session.Store, activeRuntime *sessionruntime.ActiveRuntimeMaintenance) error {
+	err = s.authority.RunSessionMaintenance(ctx, plan.SessionID, func(runCtx context.Context, store *session.Store, activeRuntime *sessionruntime.ActiveRuntimeMaintenance) error {
 		currentPlan, err := s.metadata.PlanSessionWorkspaceRetarget(runCtx, req)
 		if err != nil {
 			return err
@@ -120,25 +118,14 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req 
 			UpdatedAt:          updatedAt,
 		}, func() error {
 			if activeRuntime != nil {
-				if err := activeRuntime.Validate(); err != nil {
-					return err
-				}
 				if err := activeRuntime.Rebind(currentPlan.TargetWorkspaceRoot); err != nil {
 					return err
 				}
 			}
-			runtimeRebound := activeRuntime != nil
-			rollbackRuntime := func() error {
-				if !runtimeRebound {
-					return nil
-				}
-				runtimeRebound = false
-				return activeRuntime.Rebind(activeRuntime.PreviousWorkdir)
-			}
 			moved := false
 			if currentPlan.CrossProject() {
 				if err := os.Rename(currentPlan.SourceSessionDir, currentPlan.TargetSessionDir); err != nil {
-					return errors.Join(fmt.Errorf("move session artifact: %w", err), rollbackRuntime())
+					return fmt.Errorf("move session artifact: %w", err)
 				}
 				moved = true
 			}
@@ -150,24 +137,23 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req 
 						rollbackErr = fmt.Errorf("restore session artifact: %w", moveErr)
 					}
 				}
-				return errors.Join(err, rollbackErr, rollbackRuntime())
+				return errors.Join(err, rollbackErr)
 			}
-			runtimeRebound = false
 			return nil
 		})
-		if err != nil {
-			return err
-		}
-		s.runs.PublishSessionIdentity(currentPlan.SessionID, &clientui.SessionExecutionTarget{
+		return err
+	})
+	closeErr := releaseStarts.Close(context.Background())
+	if err == nil {
+		s.publisher.PublishSessionIdentity(plan.SessionID, &clientui.SessionExecutionTarget{
 			WorkspaceID:      result.Binding.WorkspaceID,
 			WorkspaceName:    result.Binding.WorkspaceName,
 			WorkspaceRoot:    result.Binding.CanonicalRoot,
 			CwdRelpath:       ".",
 			EffectiveWorkdir: result.Binding.CanonicalRoot,
 		})
-		return nil
-	})
-	return result, err
+	}
+	return result, errors.Join(err, closeErr)
 }
 
 func (s *SessionWorkspaceRetargeter) ownedBackgroundProcessActive(sessionID string) (bool, error) {

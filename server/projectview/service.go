@@ -12,24 +12,16 @@ import (
 	"time"
 
 	"core/server/metadata"
+	"core/server/sessionruntime"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
 
 type Service struct {
-	metadata        *metadata.Store
-	projectID       string
-	runBlocker      runtimeRunBlocker
-	activityChecker runtimeActivityChecker
-}
-
-type runtimeRunBlocker interface {
-	BlockSessionRuns(sessionIDs []string) func()
-}
-
-type runtimeActivityChecker interface {
-	HasBlockingRuntimeActivity(ctx context.Context, sessionID string) (bool, error)
+	metadata  *metadata.Store
+	projectID string
+	authority *sessionruntime.Authority
 }
 
 // ErrSessionArtifactEscapesRoot is returned when a session artifact path
@@ -63,12 +55,11 @@ func NewMetadataService(metadataStore *metadata.Store, projectID string) (*Servi
 	return &Service{metadata: metadataStore, projectID: strings.TrimSpace(projectID)}, nil
 }
 
-func (s *Service) WithRuntimeActivitySources(runBlocker runtimeRunBlocker, activityChecker runtimeActivityChecker) *Service {
+func (s *Service) WithRuntimeAuthority(authority *sessionruntime.Authority) *Service {
 	if s == nil {
 		return nil
 	}
-	s.runBlocker = runBlocker
-	s.activityChecker = activityChecker
+	s.authority = authority
 	return s
 }
 
@@ -332,7 +323,10 @@ func (s *Service) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.
 		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
 	}
 	if len(preflightBlockers) == 0 {
-		release := s.blockSessionRuns(sessionIDs)
+		release, err := s.blockSessionStarts(ctx, sessionIDs)
+		if err != nil {
+			return serverapi.ProjectWorkspaceUnlinkResponse{}, err
+		}
 		defer release()
 		preflightBlockers, err = s.workspaceActiveSessionBlockers(ctx, sessionIDs)
 		if err != nil {
@@ -342,7 +336,10 @@ func (s *Service) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.
 	var runtimeBlocker metadata.WorkspaceUnlinkRuntimeBlocker
 	if len(preflightBlockers) == 0 {
 		runtimeBlocker = func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
-			release := s.blockSessionRuns(sessionIDs)
+			release, err := s.blockSessionStarts(ctx, sessionIDs)
+			if err != nil {
+				return nil, nil, err
+			}
 			blockers, err := s.workspaceActiveSessionBlockers(ctx, sessionIDs)
 			if err != nil {
 				release()
@@ -400,7 +397,10 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 		return serverapi.ProjectDeleteResponse{}, err
 	}
 	if len(preflightBlockers) == 0 {
-		release := s.blockSessionRuns(sessionIDs)
+		release, err := s.blockSessionStarts(ctx, sessionIDs)
+		if err != nil {
+			return serverapi.ProjectDeleteResponse{}, err
+		}
 		defer release()
 		preflightBlockers, err = s.projectActiveSessionBlockers(ctx, sessionIDs)
 		if err != nil {
@@ -410,7 +410,10 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 	var runtimeBlocker metadata.ProjectDeleteRuntimeBlocker
 	if len(preflightBlockers) == 0 {
 		runtimeBlocker = func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
-			release := s.blockSessionRuns(sessionIDs)
+			release, err := s.blockSessionStarts(ctx, sessionIDs)
+			if err != nil {
+				return nil, nil, err
+			}
 			blockers, err := s.projectActiveSessionBlockers(ctx, sessionIDs)
 			if err != nil {
 				release()
@@ -431,11 +434,23 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 	return serverapi.ProjectDeleteResponse{ProjectID: projectID, Deleted: true}, nil
 }
 
-func (s *Service) blockSessionRuns(sessionIDs []string) func() {
-	if s == nil || s.runBlocker == nil {
-		return func() {}
+func (s *Service) blockSessionStarts(ctx context.Context, sessionIDs []string) (func(), error) {
+	if s == nil || s.authority == nil {
+		return func() {}, nil
 	}
-	return s.runBlocker.BlockSessionRuns(nonEmptySessionIDs(sessionIDs))
+	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
+	if err != nil || len(ids) == 0 {
+		return func() {}, err
+	}
+	release, err := s.authority.BlockSessionStarts(ctx, ids, sessionruntime.SessionStartBlockMaintenance)
+	if err != nil {
+		return nil, err
+	}
+	return func() {
+		if err := release.Close(context.Background()); err != nil {
+			panic(fmt.Sprintf("release project session start block: %v", err))
+		}
+	}, nil
 }
 
 func (s *Service) projectActiveSessionBlockers(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, error) {
@@ -463,37 +478,23 @@ func (s *Service) workspaceActiveSessionBlockers(ctx context.Context, sessionIDs
 }
 
 func (s *Service) countBlockingRuntimeActivity(ctx context.Context, sessionIDs []string) (int, error) {
-	if s == nil || s.activityChecker == nil {
+	if s == nil || s.authority == nil {
 		return 0, nil
 	}
+	if err := context.Cause(ctx); err != nil {
+		return 0, err
+	}
+	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
+	if err != nil {
+		return 0, err
+	}
 	count := 0
-	for _, sessionID := range nonEmptySessionIDs(sessionIDs) {
-		active, err := s.activityChecker.HasBlockingRuntimeActivity(ctx, sessionID)
-		if err != nil {
-			return 0, err
-		}
-		if active {
+	for _, sessionID := range ids {
+		if _, active := s.authority.SessionExecution(sessionID); active {
 			count++
 		}
 	}
 	return count, nil
-}
-
-func nonEmptySessionIDs(sessionIDs []string) []string {
-	out := make([]string, 0, len(sessionIDs))
-	seen := map[string]struct{}{}
-	for _, sessionID := range sessionIDs {
-		trimmed := strings.TrimSpace(sessionID)
-		if trimmed == "" {
-			continue
-		}
-		if _, ok := seen[trimmed]; ok {
-			continue
-		}
-		seen[trimmed] = struct{}{}
-		out = append(out, trimmed)
-	}
-	return out
 }
 
 func lockProjectDelete(projectID string) func() {

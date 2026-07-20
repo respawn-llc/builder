@@ -17,7 +17,6 @@ import (
 	"core/server/projectview"
 	"core/server/registry"
 	"core/server/runtime"
-	"core/server/runtimecontrol"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionlaunch"
@@ -54,7 +53,7 @@ type testEmbeddedServer struct {
 	sessionRuntime       apicontract.SessionRuntimeService
 	sessionTranscript    apicontract.SessionTranscriptService
 	sessionViewClient    apicontract.SessionViewService
-	sessionStores        *registry.SessionStoreRegistry
+	runtimeAuthority     *sessionruntime.Authority
 	sessionPersistence   *sessiontest.Persistence
 	metadataOnce         sync.Once
 	metadataStore        *metadata.Store
@@ -69,11 +68,20 @@ type recordingSessionRuntimeClient struct {
 	release  func(context.Context, serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error)
 }
 
+func sessionRuntimeActivateResponse(sessionID string, generation uint64) serverapi.SessionRuntimeActivateResponse {
+	return serverapi.SessionRuntimeActivateResponse{
+		Attachment: serverapi.SessionRuntimeAttachment{
+			SessionID:  sessionID,
+			Generation: generation,
+		},
+	}
+}
+
 func (c *recordingSessionRuntimeClient) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
 	if c.activate != nil {
 		return c.activate(ctx, req)
 	}
-	return serverapi.SessionRuntimeActivateResponse{}, nil
+	return sessionRuntimeActivateResponse(req.SessionID, 1), nil
 }
 
 func (c *recordingSessionRuntimeClient) ReleaseSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
@@ -137,7 +145,7 @@ func (s *testEmbeddedServer) BindProjectWorkspace(_ context.Context, projectID s
 		sessionRuntime:       s.sessionRuntime,
 		sessionTranscript:    s.sessionTranscript,
 		sessionViewClient:    s.sessionViewClient,
-		sessionStores:        s.sessionStores,
+		runtimeAuthority:     s.runtimeAuthority,
 		sessionPersistence:   s.sessionPersistence,
 		metadataStore:        s.metadataStore,
 		metadataBindingData:  s.metadataBindingData,
@@ -265,15 +273,17 @@ func (s *testEmbeddedServer) RuntimeControlClient() apicontract.RuntimeControlSe
 	if s.runtimeControlClient != nil {
 		return s.runtimeControlClient
 	}
-	registry := registry.NewRuntimeRegistry()
-	return runtimecontrol.NewService(registry)
+	return newUnavailableRuntimeControlService()
 }
 
-func (s *testEmbeddedServer) sessionStoreRegistry() *registry.SessionStoreRegistry {
-	if s.sessionStores == nil {
-		s.sessionStores = registry.NewSessionStoreRegistry()
+func (s *testEmbeddedServer) sessionAuthority(storeOptions ...session.StoreOption) *sessionruntime.Authority {
+	if s.runtimeAuthority == nil {
+		s.runtimeAuthority = sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+			PersistenceRoot: s.cfg.PersistenceRoot,
+			StoreOptions:    storeOptions,
+		})
 	}
-	return s.sessionStores
+	return s.runtimeAuthority
 }
 
 type testSessionProcessSource struct {
@@ -288,20 +298,13 @@ func (s testSessionProcessSource) List() []shelltool.Snapshot {
 }
 
 func (s *testEmbeddedServer) sessionWorkspaceRetargeter(metadataStore *metadata.Store) *sessionservice.SessionWorkspaceRetargeter {
-	stores := s.sessionStoreRegistry()
 	runtimes := registry.NewRuntimeRegistry()
-	maintenance := sessionruntime.NewService(
-		s.cfg.PersistenceRoot,
+	return sessionservice.NewSessionWorkspaceRetargeter(
 		metadataStore,
-		s.authManager,
-		s.fastModeState,
-		s.background,
-		nil,
+		s.sessionAuthority(metadataStore.AuthoritativeSessionStoreOptions()...),
 		runtimes,
-		stores,
-		metadataStore.AuthoritativeSessionStoreOptions()...,
+		testSessionProcessSource{manager: s.background},
 	)
-	return sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimes, maintenance, testSessionProcessSource{manager: s.background})
 }
 
 func (s *testEmbeddedServer) SessionLaunchClient() apicontract.SessionLaunchService {
@@ -337,9 +340,8 @@ func (s *testEmbeddedServer) SessionLifecycleClient() apicontract.SessionLifecyc
 	if metadataStore, binding, ok := s.metadataBinding(); ok {
 		service := sessionservice.NewSessionLifecycleService(
 			filepath.Join(filepath.Join(s.cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions"),
-			s.sessionStoreRegistry(),
+			s.sessionAuthority(metadataStore.AuthoritativeSessionStoreOptions()...),
 			s.authManager,
-			metadataStore.AuthoritativeSessionStoreOptions()...,
 		).WithPersistenceRoot(s.cfg.PersistenceRoot).
 			WithWorkspaceRetargeter(s.sessionWorkspaceRetargeter(metadataStore)).
 			WithNavigationTargetResolver(metadataStore)
@@ -353,7 +355,12 @@ func (s *testEmbeddedServer) SessionLifecycleClient() apicontract.SessionLifecyc
 		}
 		containerDir = filepath.Join(filepath.Join(s.cfg.PersistenceRoot, "projects"), projectID, "sessions")
 	}
-	service := sessionservice.NewSessionLifecycleService(containerDir, s.sessionStoreRegistry(), s.authManager).WithPersistenceRoot(s.cfg.PersistenceRoot)
+	var storeOptions []session.StoreOption
+	if s.sessionPersistence != nil {
+		storeOptions = s.sessionPersistence.Options()
+	}
+	service := sessionservice.NewSessionLifecycleService(containerDir, s.sessionAuthority(storeOptions...), s.authManager).
+		WithPersistenceRoot(s.cfg.PersistenceRoot)
 	return service
 }
 

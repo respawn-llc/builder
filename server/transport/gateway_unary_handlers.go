@@ -259,10 +259,14 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		return decodeAndHandle(req, func(params serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
 			params.OwnerID = state.runtimeOwnerID
 			resp, err := g.deps.SessionRuntimeClient().ActivateSessionRuntime(ctx, params)
-			if err == nil {
-				state.recordOwnedRuntime(params.SessionID)
+			if err != nil {
+				return serverapi.SessionRuntimeActivateResponse{}, err
 			}
-			return resp, err
+			if err := resp.ValidateForSession(params.SessionID); err != nil {
+				return serverapi.SessionRuntimeActivateResponse{}, err
+			}
+			state.recordOwnedRuntime(resp.Attachment)
+			return resp, nil
 		})
 	},
 	protocol.MethodSessionRuntimeRelease: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
@@ -270,7 +274,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			params.OwnerID = state.runtimeOwnerID
 			resp, err := g.deps.SessionRuntimeClient().ReleaseSessionRuntime(ctx, params)
 			if err == nil && (resp.Released || params.DropOwner) {
-				state.removeOwnedRuntime(params.SessionID)
+				state.removeOwnedRuntime(params.Attachment)
 			}
 			return resp, err
 		})

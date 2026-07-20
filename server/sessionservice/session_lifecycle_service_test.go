@@ -14,7 +14,6 @@ import (
 	"core/server/auth"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/registry"
 	"core/server/requestmemo"
 	"core/server/runlog"
 	"core/server/session"
@@ -55,10 +54,27 @@ func userMessageSeqAt(t *testing.T, store *session.Store, n int) int64 {
 }
 
 func newTestSessionLifecycleService(containerDir string, authManager *auth.Manager, options ...[]session.StoreOption) *SessionLifecycleService {
+	storeOptions := sessionServiceTestPersistence.Options()
 	if len(options) == 0 {
-		return NewSessionLifecycleService(containerDir, nil, authManager, sessionServiceTestPersistence.Options()...)
+		return newSessionLifecycleServiceWithOptions(containerDir, authManager, storeOptions)
 	}
-	return NewSessionLifecycleService(containerDir, nil, authManager, options[0]...)
+	return newSessionLifecycleServiceWithOptions(containerDir, authManager, options[0])
+}
+
+func newSessionLifecycleServiceWithOptions(root string, authManager *auth.Manager, storeOptions []session.StoreOption) *SessionLifecycleService {
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: root,
+		StoreOptions:    storeOptions,
+	})
+	return NewSessionLifecycleService(root, authority, authManager)
+}
+
+func newGlobalSessionLifecycleServiceWithOptions(root string, authManager *auth.Manager, storeOptions []session.StoreOption) *SessionLifecycleService {
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: root,
+		StoreOptions:    storeOptions,
+	})
+	return NewGlobalSessionLifecycleService(root, authority, authManager)
 }
 
 var sessionServiceTestPersistence = sessiontest.NewPersistence()
@@ -325,11 +341,10 @@ func TestServiceRestoresLegacyDraftRecoveryAndOrdinaryWriteDropsIdentity(t *test
 		t.Fatalf("seed legacy metadata: %v", err)
 	}
 
-	service := NewGlobalSessionLifecycleService(
+	service := newGlobalSessionLifecycleServiceWithOptions(
 		cfg.PersistenceRoot,
 		nil,
-		nil,
-		metadataStore.AuthoritativeSessionStoreOptions()...,
+		metadataStore.AuthoritativeSessionStoreOptions(),
 	)
 	resp, err := service.GetInitialInput(t.Context(), serverapi.SessionInitialInputRequest{
 		SessionID: sess.Meta().SessionID,
@@ -446,7 +461,7 @@ func TestServicePersistInputDraftPersistsAndDedupes(t *testing.T) {
 	if err := store.SetName("session name"); err != nil {
 		t.Fatalf("set session name: %v", err)
 	}
-	service := NewSessionLifecycleService(containerDir, nil, nil, sessionServiceTestPersistence.Options()...)
+	service := newTestSessionLifecycleService(containerDir, nil)
 	req := serverapi.SessionPersistInputDraftRequest{
 		ClientRequestID: "req-1",
 		SessionID:       store.Meta().SessionID,
@@ -741,7 +756,7 @@ func TestServiceResolveTransitionForkRollbackPreservesExecutionTarget(t *testing
 		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
 	}
 
-	service := NewGlobalSessionLifecycleService(cfg.PersistenceRoot, nil, nil, metadataStore.AuthoritativeSessionStoreOptions()...)
+	service := newGlobalSessionLifecycleServiceWithOptions(cfg.PersistenceRoot, nil, metadataStore.AuthoritativeSessionStoreOptions())
 	resp, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: "req-1",
 		SessionID:       sess.Meta().SessionID,
@@ -816,7 +831,7 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
 	}
 
-	lifecycle := NewGlobalSessionLifecycleService(cfg.PersistenceRoot, nil, nil, metadataStore.AuthoritativeSessionStoreOptions()...)
+	lifecycle := newGlobalSessionLifecycleServiceWithOptions(cfg.PersistenceRoot, nil, metadataStore.AuthoritativeSessionStoreOptions())
 	resolved, err := lifecycle.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: "req-1",
 		SessionID:       sess.Meta().SessionID,
@@ -835,23 +850,33 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 		t.Fatal("rollback result omitted fork session ID")
 	}
 
-	runtimeService := sessionruntime.NewService(cfg.PersistenceRoot, metadataStore, nil, nil, nil, nil, registry.NewRuntimeRegistry(), registry.NewSessionStoreRegistry(), metadataStore.AuthoritativeSessionStoreOptions()...)
+	runtimeAuthority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: cfg.PersistenceRoot,
+		StoreOptions:    metadataStore.AuthoritativeSessionStoreOptions(),
+	})
+	t.Cleanup(func() {
+		if err := runtimeAuthority.Close(context.Background()); err != nil {
+			t.Errorf("close runtime authority: %v", err)
+		}
+	})
+	runtimeService := sessionruntime.NewAPI(metadataStore, nil, runtimeAuthority, sessionruntime.APIOptions{})
 	activateSettings := cfg.Settings
 	activateSettings.Model = "gpt-5.4"
 	activateSettings.OpenAIBaseURL = "http://127.0.0.1:1/v1"
 	activateSettings.Shell.PostprocessingMode = config.ShellPostprocessingModeBuiltin
-	if _, err := runtimeService.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
+	activation, err := runtimeService.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "activate-1",
 		SessionID:       forkID.String(),
 		OwnerID:         "test-owner",
 		ActiveSettings:  activateSettings,
 		Source:          config.SourceReport{},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("ActivateSessionRuntime: %v", err)
 	}
 	if _, err := runtimeService.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
 		ClientRequestID: "release-1",
-		SessionID:       forkID.String(),
+		Attachment:      activation.Attachment,
 		OwnerID:         "test-owner",
 	}); err != nil {
 		t.Fatalf("ReleaseSessionRuntime: %v", err)

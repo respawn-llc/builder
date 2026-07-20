@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -319,22 +318,6 @@ func (s *executionPromptStore) Submit(resp tools.AskQuestionResponse, submitErr 
 	return nil
 }
 
-func (s *executionPromptStore) List() []ExecutionPromptSnapshot {
-	s.mu.RLock()
-	items := make([]ExecutionPromptSnapshot, 0, len(s.pending))
-	for _, entry := range s.pending {
-		items = append(items, cloneExecutionPromptSnapshot(entry.snapshot))
-	}
-	s.mu.RUnlock()
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
-			return items[i].Request.ID < items[j].Request.ID
-		}
-		return items[i].CreatedAt.Before(items[j].CreatedAt)
-	})
-	return items
-}
-
 func (s *executionPromptStore) Close(err error) {
 	if err == nil {
 		err = context.Canceled
@@ -401,14 +384,6 @@ func (a *Authority) SubmitPromptResponse(sessionID runtimeids.SessionID, resp to
 		return fmt.Errorf("session %s has no active execution", sessionID)
 	}
 	return execution.prompts.Submit(resp, err)
-}
-
-func (a *Authority) PendingPrompts(sessionID runtimeids.SessionID) []ExecutionPromptSnapshot {
-	execution := a.sessionExecution(sessionID)
-	if execution == nil {
-		return nil
-	}
-	return execution.prompts.List()
 }
 
 func (a *Authority) sessionExecution(sessionID runtimeids.SessionID) *execution {

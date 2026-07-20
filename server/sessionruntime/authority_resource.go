@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 
@@ -12,10 +13,15 @@ import (
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/tools"
+	shelltool "core/server/tools/shell"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 )
 
 type AgentResourceState uint8
+
+var ErrSessionRunActive = errors.New("session has an active run")
+var ErrSessionStartsBlocked = errors.New("session starts are blocked")
 
 const (
 	AgentResourceBuilding AgentResourceState = iota + 1
@@ -25,12 +31,18 @@ const (
 )
 
 type AgentResourceDescriptor struct {
-	Ref        runtimeids.SessionResourceRef
-	State      AgentResourceState
-	OwnerCount int
+	Ref   runtimeids.SessionResourceRef
+	State AgentResourceState
 }
 
 type AgentResourceEventFeed func(AgentResourceDescriptor, runtime.Event)
+
+type AgentResourceRetainer func() (io.Closer, error)
+
+type AgentResourceLifecycle interface {
+	ResourceReady(context.Context, AgentResourceDescriptor, *runtime.Engine, AgentResourceRetainer) error
+	ResourceDraining(context.Context, AgentResourceDescriptor) error
+}
 
 type AgentResourceStepLifecycle interface {
 	StepBegan(context.Context, AgentResourceDescriptor, ExecutionScope, runtime.StepLifecycleSnapshot) error
@@ -56,6 +68,7 @@ func (ReplaceAgentResource) agentResourceSelection() {}
 type RuntimeOpenRequest struct {
 	SessionID runtimeids.SessionID
 	OwnerID   string
+	Runtime   *AgentRuntimePlan
 }
 
 type RuntimeReleasePolicy uint8
@@ -71,6 +84,13 @@ type RuntimeReleaseResult struct {
 	Active   bool
 }
 
+type RuntimeReleaseRequest struct {
+	Resource  runtimeids.SessionResourceRef
+	OwnerID   string
+	DropOwner bool
+	Policy    RuntimeReleasePolicy
+}
+
 type RuntimeAttachment struct {
 	authority *Authority
 	resource  runtimeids.SessionResourceRef
@@ -81,29 +101,16 @@ func (a RuntimeAttachment) Resource() runtimeids.SessionResourceRef {
 	return a.resource
 }
 
-func (a RuntimeAttachment) Snapshot() (AgentResourceDescriptor, bool) {
-	if a.authority == nil || a.resource.Validate() != nil {
-		return AgentResourceDescriptor{}, false
-	}
-	a.authority.mu.Lock()
-	resource := a.authority.resources[a.resource.SessionID()]
-	a.authority.mu.Unlock()
-	if resource == nil {
-		return AgentResourceDescriptor{}, false
-	}
-	resource.mu.Lock()
-	defer resource.mu.Unlock()
-	if resource.ref != a.resource || resource.state == AgentResourceClosed {
-		return AgentResourceDescriptor{}, false
-	}
-	return resource.descriptorLocked(), true
-}
-
 func (a RuntimeAttachment) Release(ctx context.Context, policy RuntimeReleasePolicy) (RuntimeReleaseResult, error) {
 	if a.authority == nil {
 		return RuntimeReleaseResult{}, errors.New("runtime attachment is uninitialized")
 	}
-	return a.authority.releaseRuntimeAttachment(ctx, a, policy)
+	return a.authority.ReleaseRuntime(ctx, RuntimeReleaseRequest{
+		Resource:  a.resource,
+		OwnerID:   a.ownerID,
+		DropOwner: true,
+		Policy:    policy,
+	})
 }
 
 type ResourceRetention struct {
@@ -128,7 +135,7 @@ func (b AgentRuntimeBridge) WithEngine(ctx context.Context, callback func(contex
 	if b.authority == nil {
 		return errors.New("agent runtime bridge is uninitialized")
 	}
-	return b.authority.withAgentResource(ctx, b.resource, callback)
+	return b.authority.WithRuntime(ctx, b.resource, callback)
 }
 
 type AgentRunner func(context.Context, ExecutionScope, AgentRuntimeBridge) error
@@ -150,28 +157,31 @@ type agentResource struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 
-	mu          sync.Mutex
-	changed     chan struct{}
-	state       AgentResourceState
-	owners      map[string]struct{}
-	store       *session.Store
-	engine      *runtime.Engine
-	eventBridge *runtimewire.EventBridge
-	logger      *runlog.RunLogger
-	localTools  *runtimewire.LocalToolRegistryBinding
-	askBroker   *tools.AskQuestionBroker
-	askScope    *runtimeids.ExecutionScopeID
-	close       func() error
-	current     *execution
-	pins        int
-	callbacks   int
+	mu                sync.Mutex
+	changed           chan struct{}
+	state             AgentResourceState
+	owners            map[string]struct{}
+	store             *session.Store
+	engine            *runtime.Engine
+	eventBridge       *runtimewire.EventBridge
+	logger            *runlog.RunLogger
+	localTools        *runtimewire.LocalToolRegistryBinding
+	askBroker         *tools.AskQuestionBroker
+	askScope          *runtimeids.ExecutionScopeID
+	close             func() error
+	backgroundLimit   int
+	backgroundMode    shelltool.BackgroundOutputMode
+	current           *execution
+	pins              int
+	callbacks         int
+	lifecycleReady    bool
+	lifecycleDraining bool
 }
 
 func (r *agentResource) descriptorLocked() AgentResourceDescriptor {
 	return AgentResourceDescriptor{
-		Ref:        r.ref,
-		State:      r.state,
-		OwnerCount: len(r.owners),
+		Ref:   r.ref,
+		State: r.state,
 	}
 }
 
@@ -224,7 +234,10 @@ func (r *agentResource) withEngine(ctx context.Context, ref runtimeids.SessionRe
 	r.mu.Lock()
 	if r.ref != ref || r.state != AgentResourceReady || r.engine == nil {
 		r.mu.Unlock()
-		return fmt.Errorf("agent resource %s generation %d is unavailable", ref.SessionID(), ref.Generation())
+		return errors.Join(
+			serverapi.ErrRuntimeUnavailable,
+			fmt.Errorf("agent resource %s generation %d is unavailable", ref.SessionID(), ref.Generation()),
+		)
 	}
 	engine := r.engine
 	r.callbacks++
@@ -258,6 +271,28 @@ func (r *agentResource) withStore(ctx context.Context, callback func(context.Con
 	return callback(ctx, store)
 }
 
+func (r *agentResource) publishReady(ctx context.Context) error {
+	if r.authority.options.resourceLifecycle == nil {
+		return nil
+	}
+	r.mu.Lock()
+	if r.state != AgentResourceReady || r.engine == nil {
+		r.mu.Unlock()
+		return fmt.Errorf("agent resource %s generation %d is not ready", r.ref.SessionID(), r.ref.Generation())
+	}
+	if r.lifecycleReady {
+		r.mu.Unlock()
+		return nil
+	}
+	r.lifecycleReady = true
+	descriptor := r.descriptorLocked()
+	engine := r.engine
+	r.mu.Unlock()
+	return r.authority.options.resourceLifecycle.ResourceReady(ctx, descriptor, engine, func() (io.Closer, error) {
+		return r.authority.retainResource(r.ref)
+	})
+}
+
 func (r *agentResource) closeResource(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -274,6 +309,17 @@ func (r *agentResource) closeResource(ctx context.Context) error {
 	r.state = AgentResourceDraining
 	r.cancel()
 	r.signalLocked()
+	notifyDraining := r.lifecycleReady && !r.lifecycleDraining && r.authority.options.resourceLifecycle != nil
+	if notifyDraining {
+		r.lifecycleDraining = true
+	}
+	descriptor := r.descriptorLocked()
+	r.mu.Unlock()
+	var lifecycleErr error
+	if notifyDraining {
+		lifecycleErr = r.authority.options.resourceLifecycle.ResourceDraining(ctx, descriptor)
+	}
+	r.mu.Lock()
 	for r.pins != 0 || r.callbacks != 0 || r.current != nil {
 		changed := r.changed
 		r.mu.Unlock()
@@ -289,9 +335,9 @@ func (r *agentResource) closeResource(ctx context.Context) error {
 	r.signalLocked()
 	r.mu.Unlock()
 	if closeEngine == nil {
-		return nil
+		return lifecycleErr
 	}
-	return closeEngine()
+	return errors.Join(lifecycleErr, closeEngine())
 }
 
 func (r *agentResource) StepBegan(ctx context.Context, snapshot runtime.StepLifecycleSnapshot) error {
@@ -340,32 +386,39 @@ func (a *Authority) OpenRuntime(ctx context.Context, request RuntimeOpenRequest)
 	if err != nil {
 		return RuntimeAttachment{}, err
 	}
-	resource, err := a.openResource(ctx, descriptor, nil, &ownerID)
+	resource, err := a.openResource(ctx, descriptor, request.Runtime, &ownerID)
 	if err != nil {
 		return RuntimeAttachment{}, err
 	}
 	return RuntimeAttachment{authority: a, resource: resource.ref, ownerID: ownerID}, nil
 }
 
-func (a *Authority) releaseRuntimeAttachment(ctx context.Context, attachment RuntimeAttachment, policy RuntimeReleasePolicy) (RuntimeReleaseResult, error) {
+func (a *Authority) ReleaseRuntime(ctx context.Context, request RuntimeReleaseRequest) (RuntimeReleaseResult, error) {
+	if a == nil {
+		return RuntimeReleaseResult{}, errors.New("session runtime authority is required")
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := context.Cause(ctx); err != nil {
 		return RuntimeReleaseResult{}, err
 	}
-	if err := attachment.resource.Validate(); err != nil {
+	if err := request.Resource.Validate(); err != nil {
 		return RuntimeReleaseResult{}, err
 	}
-	if strings.TrimSpace(attachment.ownerID) == "" {
+	ownerID := strings.TrimSpace(request.OwnerID)
+	if ownerID == "" {
 		return RuntimeReleaseResult{}, errors.New("runtime attachment owner id is required")
 	}
-	switch policy {
+	switch request.Policy {
 	case RuntimeReleaseDetach, RuntimeReleaseCloseIfIdle, RuntimeReleaseClose:
 	default:
 		return RuntimeReleaseResult{}, errors.New("runtime release policy is required")
 	}
-	sessionID := attachment.resource.SessionID()
+	if request.Policy == RuntimeReleaseDetach && !request.DropOwner {
+		return RuntimeReleaseResult{}, errors.New("runtime detach release requires owner drop")
+	}
+	sessionID := request.Resource.SessionID()
 	gate := a.gateFor(sessionID)
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
@@ -373,7 +426,7 @@ func (a *Authority) releaseRuntimeAttachment(ctx context.Context, attachment Run
 	a.mu.Lock()
 	resource := a.resources[sessionID]
 	a.mu.Unlock()
-	if resource == nil || resource.ref != attachment.resource {
+	if resource == nil || resource.ref != request.Resource {
 		return RuntimeReleaseResult{Released: true}, nil
 	}
 	resource.mu.Lock()
@@ -381,19 +434,24 @@ func (a *Authority) releaseRuntimeAttachment(ctx context.Context, attachment Run
 		resource.mu.Unlock()
 		return RuntimeReleaseResult{Released: true}, nil
 	}
-	if _, owns := resource.owners[attachment.ownerID]; !owns {
+	if _, owns := resource.owners[ownerID]; !owns {
 		resource.mu.Unlock()
 		return RuntimeReleaseResult{Released: true}, nil
 	}
-	delete(resource.owners, attachment.ownerID)
-	resource.signalLocked()
-	if policy == RuntimeReleaseDetach {
+	if request.DropOwner {
+		delete(resource.owners, ownerID)
+		resource.signalLocked()
+	}
+	if request.Policy == RuntimeReleaseDetach {
 		resource.mu.Unlock()
 		return RuntimeReleaseResult{Released: true}, nil
 	}
-	if policy == RuntimeReleaseCloseIfIdle {
-		active := len(resource.owners) != 0 ||
-			resource.current != nil ||
+	if request.Policy == RuntimeReleaseCloseIfIdle {
+		if request.DropOwner && len(resource.owners) != 0 {
+			resource.mu.Unlock()
+			return RuntimeReleaseResult{}, nil
+		}
+		active := resource.current != nil ||
 			resource.pins != 0 ||
 			resource.callbacks != 0 ||
 			(resource.engine != nil && resource.engine.HasQueuedUserWork())
@@ -485,7 +543,7 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
 	if len(gate.blocks) != 0 {
-		return nil, errors.New("session starts are blocked")
+		return nil, errors.Join(ErrSessionStartsBlocked, fmt.Errorf("session %s starts are blocked", sessionID))
 	}
 	resource, closeResource, err := a.selectResource(ctx, request.Descriptor, request.Runtime, request.Resource)
 	if err != nil {
@@ -504,7 +562,7 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 	if resource.current != nil {
 		resource.mu.Unlock()
 		a.mu.Unlock()
-		return nil, fmt.Errorf("session %s already has an agent execution", sessionID)
+		return nil, errors.Join(ErrSessionRunActive, fmt.Errorf("session %s already has an agent execution", sessionID))
 	}
 	if err := resource.pinLocked(); err != nil {
 		resource.mu.Unlock()
@@ -573,7 +631,7 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 	return executionHandle{execution: execution}, nil
 }
 
-func (a *Authority) withAgentResource(ctx context.Context, ref runtimeids.SessionResourceRef, callback func(context.Context, *runtime.Engine) error) error {
+func (a *Authority) WithRuntime(ctx context.Context, ref runtimeids.SessionResourceRef, callback func(context.Context, *runtime.Engine) error) error {
 	if a == nil {
 		return errors.New("session runtime authority is required")
 	}
@@ -587,12 +645,34 @@ func (a *Authority) withAgentResource(ctx context.Context, ref runtimeids.Sessio
 	resource := a.resources[ref.SessionID()]
 	a.mu.Unlock()
 	if resource == nil {
-		return fmt.Errorf("agent resource %s generation %d is unavailable", ref.SessionID(), ref.Generation())
+		return errors.Join(
+			serverapi.ErrRuntimeUnavailable,
+			fmt.Errorf("agent resource %s generation %d is unavailable", ref.SessionID(), ref.Generation()),
+		)
 	}
 	return resource.withEngine(ctx, ref, callback)
 }
 
-func (a *Authority) RetainResource(ref runtimeids.SessionResourceRef) (*ResourceRetention, error) {
+func (a *Authority) WithCurrentRuntime(ctx context.Context, sessionID runtimeids.SessionID, callback func(context.Context, *runtime.Engine) error) error {
+	if a == nil {
+		return errors.New("session runtime authority is required")
+	}
+	if sessionID.IsZero() {
+		return errors.New("session id is required")
+	}
+	a.mu.Lock()
+	resource := a.resources[sessionID]
+	a.mu.Unlock()
+	if resource == nil {
+		return errors.Join(
+			serverapi.ErrRuntimeUnavailable,
+			fmt.Errorf("session %s has no active runtime available", sessionID),
+		)
+	}
+	return resource.withEngine(ctx, resource.ref, callback)
+}
+
+func (a *Authority) retainResource(ref runtimeids.SessionResourceRef) (*ResourceRetention, error) {
 	if a == nil {
 		return nil, errors.New("session runtime authority is required")
 	}
@@ -624,7 +704,10 @@ func (a *Authority) selectResource(ctx context.Context, descriptor session.Sessi
 		resource := a.resources[sessionID]
 		a.mu.Unlock()
 		if resource == nil {
-			return nil, false, fmt.Errorf("session %s has no registered runtime", sessionID)
+			return nil, false, errors.Join(
+				serverapi.ErrRuntimeUnavailable,
+				fmt.Errorf("session %s has no registered runtime", sessionID),
+			)
 		}
 		return resource, false, nil
 	case OpenAgentResource:
@@ -647,6 +730,7 @@ func (a *Authority) openResource(ctx context.Context, descriptor session.Session
 	}
 	resource := a.resources[sessionID]
 	a.mu.Unlock()
+	created := false
 	if resource == nil {
 		var err error
 		resource, err = a.buildAgentResource(ctx, descriptor, plan)
@@ -666,7 +750,18 @@ func (a *Authority) openResource(ctx context.Context, descriptor session.Session
 			resource = existing
 		} else {
 			a.resources[sessionID] = resource
+			created = true
 			a.mu.Unlock()
+		}
+	}
+	if created {
+		if err := resource.publishReady(ctx); err != nil {
+			a.mu.Lock()
+			if a.resources[sessionID] == resource {
+				delete(a.resources, sessionID)
+			}
+			a.mu.Unlock()
+			return nil, errors.Join(err, resource.closeResource(ctx))
 		}
 	}
 	resource.mu.Lock()

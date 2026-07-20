@@ -14,6 +14,7 @@ import (
 	"core/server/runtimeactivity"
 	"core/server/runtimeops"
 	"core/server/runtimeview"
+	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
@@ -21,17 +22,12 @@ import (
 )
 
 type RuntimeRegistry struct {
-	directory                *runtimeDirectory
-	observerMu               sync.Mutex
-	observer                 func(sessionID string, reason RuntimeInterestReason)
+	authorityMu              sync.RWMutex
+	authorityBySession       map[string]*authorityRuntimeEntry
 	sleepObserverMu          sync.Mutex
 	sleepObserver            func(active bool)
 	runStateMu               sync.Mutex
-	runStateCond             *sync.Cond
 	blockingActivitySessions map[string]bool
-	blockedRuns              map[string]int
-	starts                   map[string]map[uint64]runStartReservation
-	nextStartID              uint64
 	operations               *runtimeops.Coordinator
 	readModels               *runtimeactivity.CoordinatorCache
 	pendingPrompts           *pendingPromptStore
@@ -40,207 +36,183 @@ type RuntimeRegistry struct {
 	executionTargetResolver  func(context.Context, string) (clientui.SessionExecutionTarget, error)
 }
 
-type runStartReservation struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	exclusive bool
+type authorityRuntimeEntry struct {
+	ref         runtimeids.SessionResourceRef
+	engine      *runtime.Engine
+	sessionFeed *sessionFeedSequencer
+	retain      func() (io.Closer, error)
+
+	mu             sync.Mutex
+	draining       bool
+	nextRetention  uint64
+	retentions     map[uint64]io.Closer
+	readModelUnpin func()
 }
-
-type SessionRunStart struct {
-	registry  *RuntimeRegistry
-	sessionID string
-	startID   uint64
-	ctx       context.Context
-	cancel    context.CancelFunc
-	once      sync.Once
-}
-
-func (s *SessionRunStart) Context() context.Context {
-	if s == nil || s.ctx == nil {
-		return context.Background()
-	}
-	return s.ctx
-}
-
-func (s *SessionRunStart) Cancel() {
-	if s == nil || s.cancel == nil {
-		return
-	}
-	s.cancel()
-}
-
-func (s *SessionRunStart) Release() {
-	if s == nil || s.registry == nil {
-		return
-	}
-	s.once.Do(func() {
-		s.Cancel()
-		s.registry.runStateMu.Lock()
-		defer s.registry.runStateMu.Unlock()
-		s.registry.clearStartLocked(s.sessionID, s.startID)
-	})
-}
-
-func (r *RuntimeRegistry) BlockSessionRuns(sessionIDs []string) func() {
-	if r == nil {
-		return func() {}
-	}
-	blocked := make([]string, 0, len(sessionIDs))
-	r.runStateMu.Lock()
-	for _, sessionID := range sessionIDs {
-		trimmed := strings.TrimSpace(sessionID)
-		if trimmed == "" {
-			continue
-		}
-		r.blockedRuns[trimmed]++
-		blocked = append(blocked, trimmed)
-	}
-	for r.anyInFlightStartLocked(blocked) {
-		r.runStateCond.Wait()
-	}
-	r.runStateMu.Unlock()
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			r.runStateMu.Lock()
-			defer r.runStateMu.Unlock()
-			for _, sessionID := range blocked {
-				if r.blockedRuns[sessionID] <= 1 {
-					delete(r.blockedRuns, sessionID)
-					continue
-				}
-				r.blockedRuns[sessionID]--
-			}
-			r.runStateCond.Broadcast()
-		})
-	}
-}
-
-func (r *RuntimeRegistry) anyInFlightStartLocked(sessionIDs []string) bool {
-	for _, sessionID := range sessionIDs {
-		if len(r.starts[sessionID]) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func (r *RuntimeRegistry) SessionRunsBlocked(sessionID string) bool {
-	if r == nil {
-		return false
-	}
-	trimmed := strings.TrimSpace(sessionID)
-	if trimmed == "" {
-		return false
-	}
-	r.runStateMu.Lock()
-	defer r.runStateMu.Unlock()
-	return r.blockedRuns[trimmed] > 0
-}
-
-func (r *RuntimeRegistry) BeginSessionRun(sessionID string) (func(), bool) {
-	_, release, ok := r.BeginCancellableSessionRun(sessionID)
-	if !ok {
-		return nil, false
-	}
-	return release, true
-}
-
-func (r *RuntimeRegistry) BeginCancellableSessionRun(sessionID string) (context.Context, func(), bool) {
-	if r == nil {
-		return context.Background(), func() {}, true
-	}
-	trimmed := strings.TrimSpace(sessionID)
-	if trimmed == "" {
-		return context.Background(), func() {}, true
-	}
-	r.runStateMu.Lock()
-	if r.blockedRuns[trimmed] > 0 || len(r.starts[trimmed]) > 0 {
-		r.runStateMu.Unlock()
-		return nil, nil, false
-	}
-	startID := r.addStartLocked(trimmed, false)
-	reservation := r.starts[trimmed][startID]
-	r.runStateMu.Unlock()
-	token := &SessionRunStart{
-		registry:  r,
-		sessionID: trimmed,
-		startID:   startID,
-		ctx:       reservation.ctx,
-		cancel:    reservation.cancel,
-	}
-	return token.Context(), token.Release, true
-}
-
-func (r *RuntimeRegistry) BeginExclusiveSessionRun(sessionID string) (release func(), acquired bool, blocked bool) {
-	if r == nil {
-		return func() {}, true, false
-	}
-	trimmed := strings.TrimSpace(sessionID)
-	if trimmed == "" {
-		return func() {}, true, false
-	}
-	r.runStateMu.Lock()
-	if r.blockedRuns[trimmed] > 0 {
-		r.runStateMu.Unlock()
-		return nil, false, true
-	}
-	if len(r.starts[trimmed]) > 0 {
-		r.runStateMu.Unlock()
-		return nil, false, false
-	}
-	startID := r.addStartLocked(trimmed, true)
-	r.runStateMu.Unlock()
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			r.runStateMu.Lock()
-			defer r.runStateMu.Unlock()
-			r.clearStartLocked(trimmed, startID)
-		})
-	}, true, false
-}
-
-func (r *RuntimeRegistry) addStartLocked(sessionID string, exclusive bool) uint64 {
-	r.nextStartID++
-	startID := r.nextStartID
-	if r.starts[sessionID] == nil {
-		r.starts[sessionID] = make(map[uint64]runStartReservation)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	r.starts[sessionID][startID] = runStartReservation{ctx: ctx, cancel: cancel, exclusive: exclusive}
-	return startID
-}
-
-func (r *RuntimeRegistry) clearStartLocked(sessionID string, startID uint64) {
-	if reservation, ok := r.starts[sessionID][startID]; ok && reservation.cancel != nil {
-		reservation.cancel()
-	}
-	delete(r.starts[sessionID], startID)
-	if len(r.starts[sessionID]) == 0 {
-		delete(r.starts, sessionID)
-	}
-	r.runStateCond.Broadcast()
-}
-
-type RuntimeInterestReason int
-
-const (
-	RuntimeInterestChanged RuntimeInterestReason = iota
-	RuntimeInterestRunFinished
-)
 
 func NewRuntimeRegistry() *RuntimeRegistry {
-	r := &RuntimeRegistry{
-		directory:                newRuntimeDirectory(),
+	return &RuntimeRegistry{
+		authorityBySession:       make(map[string]*authorityRuntimeEntry),
 		blockingActivitySessions: make(map[string]bool),
-		blockedRuns:              make(map[string]int),
-		starts:                   make(map[string]map[uint64]runStartReservation),
 		readModels:               runtimeactivity.NewCoordinatorCache(runtimeactivity.DefaultCoordinatorCacheLimit),
 		pendingPrompts:           newPendingPromptStore(),
 	}
-	r.runStateCond = sync.NewCond(&r.runStateMu)
-	return r
+}
+
+func (r *RuntimeRegistry) ResourceReady(
+	_ context.Context,
+	resource sessionruntime.AgentResourceDescriptor,
+	engine *runtime.Engine,
+	retain sessionruntime.AgentResourceRetainer,
+) error {
+	if r == nil {
+		return errors.New("runtime registry is required")
+	}
+	ref := resource.Ref
+	if err := ref.Validate(); err != nil {
+		return err
+	}
+	if engine == nil {
+		return errors.New("authority runtime engine is required")
+	}
+	if retain == nil {
+		return errors.New("authority runtime retainer is required")
+	}
+	sessionID := ref.SessionID().String()
+	entry := &authorityRuntimeEntry{
+		ref:         ref,
+		engine:      engine,
+		sessionFeed: newSessionFeedSequencer(newTranscriptSubscriptionBroker()),
+		retain:      retain,
+		retentions:  make(map[uint64]io.Closer),
+	}
+	r.authorityMu.Lock()
+	if existing := r.authorityBySession[sessionID]; existing != nil {
+		r.authorityMu.Unlock()
+		return fmt.Errorf(
+			"authority runtime resource %s generation %d cannot replace registered generation %d",
+			sessionID,
+			ref.Generation(),
+			existing.ref.Generation(),
+		)
+	}
+	r.authorityBySession[sessionID] = entry
+	r.authorityMu.Unlock()
+	if r.readModels != nil {
+		entry.readModelUnpin = r.readModels.Pin(sessionID)
+	}
+	r.publishCurrentRuntimeActivity(sessionID)
+	return nil
+}
+
+func (r *RuntimeRegistry) ResourceDraining(_ context.Context, resource sessionruntime.AgentResourceDescriptor) error {
+	if r == nil {
+		return nil
+	}
+	ref := resource.Ref
+	if err := ref.Validate(); err != nil {
+		return err
+	}
+	entry := r.authorityEntryByRef(ref)
+	if entry == nil {
+		return nil
+	}
+	entry.mu.Lock()
+	if entry.draining {
+		entry.mu.Unlock()
+		return nil
+	}
+	entry.draining = true
+	retentions := entry.retentions
+	entry.retentions = nil
+	entry.mu.Unlock()
+
+	sessionID := ref.SessionID().String()
+	r.publishCurrentRuntimeActivity(sessionID)
+	entry.sessionFeed.broker.Close(io.EOF)
+	var retentionErr error
+	for _, retention := range retentions {
+		retentionErr = errors.Join(retentionErr, retention.Close())
+	}
+	update, err := r.unavailableRuntimeReadModelFeedSnapshot(sessionID)
+	if err == nil {
+		entry.sessionFeed.PublishRuntimeReadModel(update)
+		r.updateAggregateRuntimeActivityState(sessionID, false)
+	}
+	r.pendingPrompts.CloseSession(sessionID)
+	r.authorityMu.Lock()
+	if r.authorityBySession[sessionID] == entry {
+		delete(r.authorityBySession, sessionID)
+	}
+	r.authorityMu.Unlock()
+	if entry.readModelUnpin != nil {
+		entry.readModelUnpin()
+	}
+	return errors.Join(retentionErr, err)
+}
+
+func (r *RuntimeRegistry) authorityEntryBySession(sessionID string) *authorityRuntimeEntry {
+	if r == nil {
+		return nil
+	}
+	r.authorityMu.RLock()
+	entry := r.authorityBySession[strings.TrimSpace(sessionID)]
+	r.authorityMu.RUnlock()
+	return entry
+}
+
+func (r *RuntimeRegistry) authorityEntryByRef(ref runtimeids.SessionResourceRef) *authorityRuntimeEntry {
+	entry := r.authorityEntryBySession(ref.SessionID().String())
+	if entry != nil && entry.ref != ref {
+		return nil
+	}
+	return entry
+}
+
+func (r *RuntimeRegistry) withCurrentAuthorityEntry(ref runtimeids.SessionResourceRef, mutate func(*authorityRuntimeEntry) bool) bool {
+	entry := r.authorityEntryByRef(ref)
+	if entry == nil {
+		return false
+	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	return !entry.draining && mutate(entry)
+}
+
+func (e *authorityRuntimeEntry) retainSubscription() (uint64, error) {
+	if e == nil || e.retain == nil {
+		return 0, fmt.Errorf("authority runtime subscription is unavailable: %w", serverapi.ErrStreamUnavailable)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.draining {
+		return 0, fmt.Errorf("authority runtime subscription is draining: %w", serverapi.ErrStreamUnavailable)
+	}
+	retention, err := e.retain()
+	if err != nil {
+		return 0, err
+	}
+	e.nextRetention++
+	id := e.nextRetention
+	if id == 0 {
+		_ = retention.Close()
+		panic("authority runtime subscription retention id overflow")
+	}
+	e.retentions[id] = retention
+	return id, nil
+}
+
+func (e *authorityRuntimeEntry) releaseSubscription(id uint64) error {
+	if e == nil || id == 0 {
+		return nil
+	}
+	e.mu.Lock()
+	retention := e.retentions[id]
+	delete(e.retentions, id)
+	e.mu.Unlock()
+	if retention == nil {
+		return nil
+	}
+	return retention.Close()
 }
 
 func (r *RuntimeRegistry) WithOperationCoordinator(coordinator *runtimeops.Coordinator) *RuntimeRegistry {
@@ -265,140 +237,6 @@ func (r *RuntimeRegistry) WithTranscriptContractViolationPanic(enabled bool) *Ru
 	}
 	transcriptContractViolationsPanic = enabled
 	return r
-}
-
-func (r *RuntimeRegistry) closeEntry(ctx context.Context, sessionID string, engine *runtime.Engine, drain func(context.Context) error) (bool, error) {
-	if r == nil {
-		return false, nil
-	}
-	id, entry, drainRef := r.directory.BeginClose(sessionID, engine)
-	if id == "" || entry == nil || drainRef == nil {
-		return false, nil
-	}
-	r.publishCurrentRuntimeActivity(id)
-	return r.finishClose(ctx, id, engine, entry, drainRef, drain)
-}
-
-func (r *RuntimeRegistry) finishClose(ctx context.Context, sessionID string, engine *runtime.Engine, entry *runtimeEntry, drainRef *runtimeCloseDrainRef, drain func(context.Context) error) (bool, error) {
-	drainRef.WaitForGuards()
-	var drainErr error
-	if drain != nil {
-		drainErr = drain(ctx)
-	}
-	drainRef.WaitForGuards()
-	removedID, removedEntry := r.directory.RemoveClosing(sessionID, engine, entry)
-	if removedID == "" || removedEntry == nil {
-		drainRef.Release()
-		return false, drainErr
-	}
-	r.publishUnavailableRuntimeActivityToEntry(removedID, removedEntry)
-	drainRef.Release()
-	r.finishEntryTeardown(removedID, removedEntry)
-	return true, drainErr
-}
-
-func (r *RuntimeRegistry) finishEntryTeardown(sessionID string, entry *runtimeEntry) {
-	if entry == nil {
-		return
-	}
-	r.unpinRuntimeReadModel(entry)
-	r.pendingPrompts.CloseSession(sessionID, io.EOF)
-	closeRuntimeEntry(entry, io.EOF)
-	if entry.teardown != nil {
-		entry.teardown()
-	}
-	entry.signalClosed()
-}
-
-func (r *RuntimeRegistry) retireGuardedRuntime(guard *runtimeGuard, reason runtime.QueuedUserMessageFailureReason) error {
-	if r == nil || guard == nil || guard.entry == nil {
-		return fmt.Errorf("runtime guard is unavailable")
-	}
-	id := strings.TrimSpace(guard.sessionID)
-	if id == "" {
-		return fmt.Errorf("runtime session id is required")
-	}
-	if guard.engine != nil {
-		guard.engine.FailQueuedUserMessages(reason)
-	}
-	r.directory.mu.Lock()
-	if r.directory.entries[id] != guard.entry {
-		r.directory.mu.Unlock()
-		return ErrRuntimeGuardOvertaken
-	}
-	delete(r.directory.entries, id)
-	r.directory.mu.Unlock()
-	guard.entry.markClosing()
-	r.publishUnavailableRuntimeActivityToEntry(id, guard.entry)
-	var closeErr error
-	if guard.engine != nil {
-		closeErr = guard.engine.Close()
-	}
-	go r.finishEntryTeardown(id, guard.entry)
-	return closeErr
-}
-
-type RuntimeGuard interface {
-	Engine() *runtime.Engine
-	Generation() uint64
-	Rebind(workdir string) error
-	Retire(reason runtime.QueuedUserMessageFailureReason) error
-	Release()
-}
-
-func (r *RuntimeRegistry) BeginRuntimeGuard(ctx context.Context, sessionID string) (RuntimeGuard, error) {
-	if r == nil {
-		return nil, fmt.Errorf("runtime registry is required")
-	}
-	guard, err := r.directory.BeginGuard(ctx, sessionID)
-	if guard != nil {
-		guard.registry = r
-	}
-	return guard, err
-}
-
-func (r *RuntimeRegistry) ResolveRuntime(_ context.Context, sessionID string) (*runtime.Engine, error) {
-	if r == nil {
-		return nil, nil
-	}
-	return r.directory.Resolve(sessionID), nil
-}
-
-func (r *RuntimeRegistry) WithGuardedRuntime(ctx context.Context, sessionID string, fn func(*runtime.Engine) error) (bool, error) {
-	if r == nil {
-		return false, nil
-	}
-	guard, err := r.directory.BeginGuard(ctx, sessionID)
-	if err != nil {
-		if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-			return false, nil
-		}
-		return false, err
-	}
-	defer guard.Release()
-	return true, fn(guard.Engine())
-}
-
-func (r *RuntimeRegistry) WithAcquiredRuntime(ctx context.Context, sessionID string, engine *runtime.Engine, fn func(context.Context, *runtime.Engine) error) (bool, error) {
-	if r == nil {
-		return false, nil
-	}
-	guard, err := r.directory.BeginGuard(ctx, sessionID)
-	if err != nil {
-		return false, err
-	}
-	defer guard.Release()
-	if guard.Engine() != engine {
-		return false, nil
-	}
-	return true, fn(ctx, guard.Engine())
-}
-
-func (r *RuntimeRegistry) IsSessionRuntimeActive(sessionID string) bool {
-	if r == nil {
-		return false
-	}
-	return r.directory.Active(sessionID)
 }
 
 func (r *RuntimeRegistry) RuntimeActivity(sessionID string) (clientui.RuntimeActivity, error) {
@@ -475,30 +313,6 @@ func (r *RuntimeRegistry) unavailableRuntimeReadModelFeedSnapshot(sessionID stri
 	})
 }
 
-func (r *RuntimeRegistry) pinRuntimeReadModel(sessionID string, entry *runtimeEntry) {
-	if r == nil || r.readModels == nil || entry == nil {
-		return
-	}
-	entry.mu.Lock()
-	defer entry.mu.Unlock()
-	if entry.readModelUnpin == nil {
-		entry.readModelUnpin = r.readModels.Pin(sessionID)
-	}
-}
-
-func (r *RuntimeRegistry) unpinRuntimeReadModel(entry *runtimeEntry) {
-	if entry == nil {
-		return
-	}
-	entry.mu.Lock()
-	unpin := entry.readModelUnpin
-	entry.readModelUnpin = nil
-	entry.mu.Unlock()
-	if unpin != nil {
-		unpin()
-	}
-}
-
 func (r *RuntimeRegistry) runtimeActivityResolverSnapshot(ctx context.Context, sessionID string) (runtimeactivity.ResolverSnapshot, error) {
 	id := strings.TrimSpace(sessionID)
 	if r == nil || id == "" {
@@ -507,9 +321,9 @@ func (r *RuntimeRegistry) runtimeActivityResolverSnapshot(ctx context.Context, s
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	engine, err := r.ResolveRuntime(ctx, id)
-	if err != nil {
-		return runtimeactivity.ResolverSnapshot{}, err
+	var engine *runtime.Engine
+	if entry := r.authorityEntryBySession(id); entry != nil {
+		engine = entry.engine
 	}
 	snapshot := runtimeactivity.ResolverSnapshot{Registry: r.RuntimeActivityRegistrySnapshot(id)}
 	snapshot.Active = runtimeactivity.ActiveStepFromProvider(engine)
@@ -530,19 +344,17 @@ func (r *RuntimeRegistry) RuntimeActivityRegistrySnapshot(sessionID string) runt
 	if id == "" {
 		return runtimeactivity.RegistrySnapshot{}
 	}
-	entry := r.directory.Entry(id)
-	if entry == nil {
-		return runtimeactivity.RegistrySnapshot{}
+	if authorityEntry := r.authorityEntryBySession(id); authorityEntry != nil {
+		authorityEntry.mu.Lock()
+		draining := authorityEntry.draining
+		authorityEntry.mu.Unlock()
+		return runtimeactivity.RegistrySnapshot{
+			Registered:     true,
+			QueueAccepting: !draining,
+			Draining:       draining,
+		}
 	}
-	closing, draining := entry.closeState()
-	starting := entry.buildInProgress()
-	return runtimeactivity.RegistrySnapshot{
-		Registered:     true,
-		QueueAccepting: !closing && !draining,
-		Draining:       draining,
-		Closing:        closing && !draining,
-		Starting:       starting,
-	}
+	return runtimeactivity.RegistrySnapshot{}
 }
 
 func (r *RuntimeRegistry) publishCurrentRuntimeActivity(sessionID string) {
@@ -557,71 +369,44 @@ func (r *RuntimeRegistry) publishCurrentRuntimeActivity(sessionID string) {
 	r.PublishRuntimeReadModelUpdate(id, update)
 }
 
-func (r *RuntimeRegistry) publishUnavailableRuntimeActivityToEntry(sessionID string, entry *runtimeEntry) {
-	if r == nil || entry == nil || entry.sessionFeed == nil {
-		return
-	}
-	id := strings.TrimSpace(sessionID)
-	update, err := r.unavailableRuntimeReadModelFeedSnapshot(id)
-	if err != nil {
-		return
-	}
-	r.publishRuntimeReadModelUpdateToEntry(entry, update)
-	r.updateAggregateRuntimeActivityForEntry(id, entry, false)
-}
-
 func (r *RuntimeRegistry) PublishRuntimeEventToAll(evt runtime.Event) {
 	if r == nil {
 		return
 	}
-	for _, id := range r.directory.IDs() {
-		r.PublishRuntimeEvent(id, evt)
+	r.authorityMu.RLock()
+	authorityEntries := make([]*authorityRuntimeEntry, 0, len(r.authorityBySession))
+	for _, entry := range r.authorityBySession {
+		authorityEntries = append(authorityEntries, entry)
+	}
+	r.authorityMu.RUnlock()
+	for _, entry := range authorityEntries {
+		r.publishRuntimeEvent(entry, evt)
 	}
 }
 
-func (r *RuntimeRegistry) PublishRuntimeEvent(sessionID string, evt runtime.Event) {
+func (r *RuntimeRegistry) PublishAuthorityRuntimeEvent(ref runtimeids.SessionResourceRef, evt runtime.Event) {
 	if r == nil {
 		return
 	}
-	entry := r.directory.Entry(sessionID)
-	r.publishRuntimeEventToEntry(sessionID, entry, evt)
-}
-
-func (r *RuntimeRegistry) PublishRuntimeEventForEngine(sessionID string, engine *runtime.Engine, evt runtime.Event) {
-	if r == nil || engine == nil {
-		return
-	}
-	entry := r.directory.Entry(sessionID)
-	if entry == nil || entry.engineRef() != engine {
-		return
-	}
-	r.publishRuntimeEventToEntry(sessionID, entry, evt)
-}
-
-func (r *RuntimeRegistry) publishRuntimeEventToEntry(sessionID string, entry *runtimeEntry, evt runtime.Event) {
+	entry := r.authorityEntryByRef(ref)
 	if entry == nil {
 		return
 	}
-	if entry.sessionFeed != nil {
-		if !transcriptEventRequiresVisibleSubscriber(evt) || entry.sessionFeed.HasSubscribers() {
-			entry.sessionFeed.Publish(runtimeview.TranscriptMessagesFromRuntimeEvent(evt))
-		}
-		if engine := entry.engineRef(); engine != nil && runtimeEventShouldPublishSessionStatus(evt) {
-			status := runtimeview.TranscriptSessionStatusFromRuntime(engine)
-			entry.sessionFeed.Publish([]clientui.TranscriptMessage{{
-				Kind:    clientui.TranscriptMessageSessionStatus,
-				Payload: clientui.TranscriptPayload{SessionStatus: &status},
-			}})
-		}
+	r.publishRuntimeEvent(entry, evt)
+}
+
+func (r *RuntimeRegistry) publishRuntimeEvent(entry *authorityRuntimeEntry, evt runtime.Event) {
+	if !transcriptEventRequiresVisibleSubscriber(evt) || entry.sessionFeed.HasSubscribers() {
+		entry.sessionFeed.Publish(runtimeview.TranscriptMessagesFromRuntimeEvent(evt))
+	}
+	if runtimeEventShouldPublishSessionStatus(evt) {
+		status := runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
+		entry.sessionFeed.Publish([]clientui.TranscriptMessage{{
+			Kind:    clientui.TranscriptMessageSessionStatus,
+			Payload: clientui.TranscriptPayload{SessionStatus: &status},
+		}})
 	}
 	r.recordQueuedMessageOperationStatus(evt)
-	if evt.RunState != nil {
-		reason := RuntimeInterestChanged
-		if evt.RunState.Lifecycle.Phase == runtime.RunLifecycleFinished {
-			reason = RuntimeInterestRunFinished
-		}
-		r.notifyInterestChanged(sessionID, reason)
-	}
 }
 
 func (r *RuntimeRegistry) PublishSessionIdentity(sessionID string, target *clientui.SessionExecutionTarget) {
@@ -629,15 +414,11 @@ func (r *RuntimeRegistry) PublishSessionIdentity(sessionID string, target *clien
 		return
 	}
 	id := strings.TrimSpace(sessionID)
-	entry := r.directory.Entry(id)
-	if entry == nil || entry.sessionFeed == nil {
+	entry := r.authorityEntryBySession(id)
+	if entry == nil {
 		return
 	}
-	engine := entry.engineRef()
-	if engine == nil {
-		return
-	}
-	identity := runtimeview.TranscriptSessionIdentityFromRuntime(engine)
+	identity := runtimeview.TranscriptSessionIdentityFromRuntime(entry.engine)
 	if target != nil {
 		normalized := clientui.NormalizeSessionExecutionTarget(*target)
 		identity.ExecutionTarget = &normalized
@@ -654,15 +435,11 @@ func (r *RuntimeRegistry) PublishSessionStatus(sessionID string) {
 	if r == nil {
 		return
 	}
-	entry := r.directory.Entry(strings.TrimSpace(sessionID))
-	if entry == nil || entry.sessionFeed == nil {
+	entry := r.authorityEntryBySession(sessionID)
+	if entry == nil {
 		return
 	}
-	engine := entry.engineRef()
-	if engine == nil {
-		return
-	}
-	status := runtimeview.TranscriptSessionStatusFromRuntime(engine)
+	status := runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
 	entry.sessionFeed.Publish([]clientui.TranscriptMessage{{
 		Kind:    clientui.TranscriptMessageSessionStatus,
 		Payload: clientui.TranscriptPayload{SessionStatus: &status},
@@ -729,21 +506,10 @@ func (r *RuntimeRegistry) PublishRuntimeReadModelUpdate(sessionID string, update
 	if r == nil {
 		return
 	}
-	entry := r.directory.Entry(sessionID)
-	if entry == nil || entry.sessionFeed == nil {
-		return
+	if authorityEntry := r.authorityEntryBySession(sessionID); authorityEntry != nil {
+		authorityEntry.sessionFeed.PublishRuntimeReadModel(update)
+		r.updateAggregateRuntimeActivityForAuthority(sessionID, authorityEntry, update.Activity.ActiveForControl())
 	}
-	activeForControl := r.publishRuntimeReadModelUpdateToEntry(entry, update)
-	if r.updateAggregateRuntimeActivityForEntry(sessionID, entry, activeForControl) {
-		r.notifyInterestChanged(sessionID, RuntimeInterestChanged)
-	}
-}
-
-func (r *RuntimeRegistry) publishRuntimeReadModelUpdateToEntry(entry *runtimeEntry, update clientui.RuntimeReadModelUpdate) bool {
-	if entry.sessionFeed != nil {
-		entry.sessionFeed.PublishRuntimeReadModel(update)
-	}
-	return update.Activity.ActiveForControl()
 }
 
 func (r *RuntimeRegistry) PublishWorktreeTransitionOutcome(sessionID string, outcome clientui.WorktreeTransitionOutcome) {
@@ -753,8 +519,8 @@ func (r *RuntimeRegistry) PublishWorktreeTransitionOutcome(sessionID string, out
 	if err := outcome.Validate(); err != nil {
 		panic(fmt.Sprintf("publish invalid worktree transition outcome for session %q: %v", strings.TrimSpace(sessionID), err))
 	}
-	entry := r.directory.Entry(strings.TrimSpace(sessionID))
-	if entry == nil || entry.sessionFeed == nil {
+	entry := r.authorityEntryBySession(sessionID)
+	if entry == nil {
 		return
 	}
 	transcriptOutcome := clientui.TranscriptWorktreeTransitionOutcome{
@@ -779,20 +545,26 @@ func (r *RuntimeRegistry) SubscribeSessionTranscript(_ context.Context, req serv
 		return nil, fmt.Errorf("runtime registry is required")
 	}
 	id := strings.TrimSpace(req.SessionID)
-	entry := r.directory.Entry(id)
-	if entry == nil || entry.sessionFeed == nil {
-		return nil, fmt.Errorf("session transcript stream for %q is unavailable: %w", id, serverapi.ErrStreamUnavailable)
+	if authorityEntry := r.authorityEntryBySession(id); authorityEntry != nil {
+		return r.subscribeAuthorityTranscript(id, authorityEntry)
 	}
-	engine := entry.engineRef()
-	if engine == nil {
-		return nil, fmt.Errorf("session transcript stream for %q is unavailable: %w", id, serverapi.ErrStreamUnavailable)
+	return nil, fmt.Errorf("session transcript stream for %q is unavailable: %w", id, serverapi.ErrStreamUnavailable)
+}
+
+func (r *RuntimeRegistry) subscribeAuthorityTranscript(id string, entry *authorityRuntimeEntry) (serverapi.TranscriptSubscription, error) {
+	retentionID, err := entry.retainSubscription()
+	if err != nil {
+		return nil, err
+	}
+	releaseRetention := func() {
+		_ = entry.releaseSubscription(retentionID)
 	}
 	var sub *transcriptSubscription
-	err := engine.WithTranscriptHydrationSnapshot(func(snapshot runtime.TranscriptHydrationSnapshot) error {
+	err = entry.engine.WithTranscriptHydrationSnapshot(func(snapshot runtime.TranscriptHydrationSnapshot) error {
 		var subscribeErr error
 		hydration := runtimeview.TranscriptHydrationFromSnapshot(snapshot)
-		hydration.SessionStatus = runtimeview.TranscriptSessionStatusFromRuntime(engine)
-		hydration.SessionIdentity = runtimeview.TranscriptSessionIdentityFromRuntime(engine)
+		hydration.SessionStatus = runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
+		hydration.SessionIdentity = runtimeview.TranscriptSessionIdentityFromRuntime(entry.engine)
 		if target, ok := r.resolveSessionExecutionTarget(context.Background(), id); ok {
 			hydration.SessionIdentity.ExecutionTarget = &target
 		}
@@ -800,11 +572,11 @@ func (r *RuntimeRegistry) SubscribeSessionTranscript(_ context.Context, req serv
 		return subscribeErr
 	})
 	if err != nil {
+		releaseRetention()
 		return nil, err
 	}
-	r.notifyInterestChanged(id, RuntimeInterestChanged)
 	return &notifyingSessionTranscriptSubscription{TranscriptSubscription: sub, onClose: func() {
-		r.notifyInterestChanged(id, RuntimeInterestChanged)
+		releaseRetention()
 	}}, nil
 }
 
@@ -815,26 +587,16 @@ func (r *RuntimeRegistry) PromptPending(resource runtimeids.SessionResourceRef, 
 	if err := resource.Validate(); err != nil || scopeID.IsZero() {
 		panic(fmt.Sprintf("execution prompt pending projection has invalid identity: resource=%v scope_id=%s resource_error=%v", resource, scopeID, err))
 	}
-	r.projectPendingPrompt(resource.SessionID().String(), resource, scopeID, req, createdAt)
-}
-
-func (r *RuntimeRegistry) projectPendingPrompt(id string, resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, req askquestion.AskQuestionRequest, createdAt time.Time) {
-	if strings.TrimSpace(id) == "" {
-		return
-	}
-	entry := r.directory.Entry(id)
-	_, ok := r.pendingPrompts.Begin(id, resource, scopeID, req, createdAt, func(snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
-		if entry != nil {
-			entry.PublishPendingPrompt(id, snapshot, eventType)
-		}
-		if eventType == pendingPromptEventPending {
+	id := resource.SessionID().String()
+	projected := r.withCurrentAuthorityEntry(resource, func(entry *authorityRuntimeEntry) bool {
+		return r.pendingPrompts.Begin(id, resource, scopeID, req, createdAt, func(snapshot PendingPromptSnapshot) {
+			publishPendingPrompt(entry.sessionFeed, id, snapshot, pendingPromptEventPending)
 			r.publishAttentionPending(id, snapshot)
-		}
+		})
 	})
-	if !ok {
-		return
+	if projected {
+		r.publishCurrentRuntimeActivity(id)
 	}
-	r.publishCurrentRuntimeActivity(id)
 }
 
 func (r *RuntimeRegistry) PromptResolved(resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, requestID string) {
@@ -844,81 +606,22 @@ func (r *RuntimeRegistry) PromptResolved(resource runtimeids.SessionResourceRef,
 	if err := resource.Validate(); err != nil || scopeID.IsZero() {
 		panic(fmt.Sprintf("execution prompt resolved projection has invalid identity: resource=%v scope_id=%s resource_error=%v", resource, scopeID, err))
 	}
-	r.resolvePendingPrompt(resource.SessionID().String(), resource, scopeID, requestID)
-}
-
-func (r *RuntimeRegistry) resolvePendingPrompt(id string, resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, requestID string) {
-	if strings.TrimSpace(id) == "" {
-		return
-	}
-	entry := r.directory.Entry(id)
-	snapshot, ok := r.pendingPrompts.Complete(id, resource, scopeID, requestID)
-	if ok {
-		if entry != nil {
-			entry.PublishPendingPrompt(id, snapshot, pendingPromptEventResolved)
+	id := resource.SessionID().String()
+	resolved := r.withCurrentAuthorityEntry(resource, func(entry *authorityRuntimeEntry) bool {
+		snapshot, ok := r.pendingPrompts.Complete(id, resource, scopeID, requestID)
+		if ok {
+			publishPendingPrompt(entry.sessionFeed, id, snapshot, pendingPromptEventResolved)
+			r.publishAttentionResolved(id, snapshot)
 		}
+		return ok
+	})
+	if resolved {
 		r.publishCurrentRuntimeActivity(id)
-		r.publishAttentionResolved(id, snapshot)
 	}
 }
 
 func (r *RuntimeRegistry) ListPendingPrompts(sessionID string) []PendingPromptSnapshot {
 	return r.pendingPrompts.List(sessionID)
-}
-
-func (r *RuntimeRegistry) AwaitPromptResponse(ctx context.Context, sessionID string, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-	if r == nil {
-		return askquestion.AskQuestionResponse{}, fmt.Errorf("runtime registry is required")
-	}
-	if _, err := runtimeids.ParseStepID(req.StepID); err != nil {
-		return askquestion.AskQuestionResponse{}, fmt.Errorf("pending prompt step identity: %w", err)
-	}
-	id := strings.TrimSpace(sessionID)
-	entry := r.directory.Entry(id)
-	if entry == nil {
-		return askquestion.AskQuestionResponse{}, fmt.Errorf("runtime %q is unavailable", id)
-	}
-	return r.pendingPrompts.Await(ctx, id, req, func(snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
-		entry.PublishPendingPrompt(id, snapshot, eventType)
-		if eventType == pendingPromptEventPending {
-			r.publishAttentionPending(id, snapshot)
-		} else if eventType == pendingPromptEventResolved {
-			r.publishAttentionResolved(id, snapshot)
-		}
-	})
-}
-
-func (r *RuntimeRegistry) SubmitPromptResponse(sessionID string, resp askquestion.AskQuestionResponse, err error) error {
-	if r == nil {
-		return fmt.Errorf("runtime registry is required")
-	}
-	id := strings.TrimSpace(sessionID)
-	entry := r.directory.Entry(id)
-	if entry == nil {
-		return fmt.Errorf("runtime %q is unavailable", id)
-	}
-	submitErr := r.pendingPrompts.Submit(id, resp, err, func(snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
-		entry.PublishPendingPrompt(id, snapshot, eventType)
-		r.publishCurrentRuntimeActivity(id)
-		if eventType == pendingPromptEventPending {
-			r.publishAttentionPending(id, snapshot)
-		} else if eventType == pendingPromptEventResolved {
-			r.publishAttentionResolved(id, snapshot)
-		}
-	})
-	if submitErr == nil {
-		r.publishCurrentRuntimeActivity(id)
-	}
-	return submitErr
-}
-
-func (r *RuntimeRegistry) SetInterestObserver(observer func(sessionID string, reason RuntimeInterestReason)) {
-	if r == nil {
-		return
-	}
-	r.observerMu.Lock()
-	r.observer = observer
-	r.observerMu.Unlock()
 }
 
 func (r *RuntimeRegistry) SetSleepObserver(observer func(active bool)) {
@@ -930,49 +633,22 @@ func (r *RuntimeRegistry) SetSleepObserver(observer func(active bool)) {
 	r.sleepObserverMu.Unlock()
 }
 
-func (r *RuntimeRegistry) HasRuntimeSubscribers(sessionID string) bool {
-	if r == nil {
-		return false
-	}
-	entry := r.directory.Entry(sessionID)
-	if entry == nil {
-		return false
-	}
-	return entry.sessionFeed.HasSubscribers()
-}
-
-func (r *RuntimeRegistry) notifyInterestChanged(sessionID string, reason RuntimeInterestReason) {
-	if r == nil {
-		return
-	}
-	id := strings.TrimSpace(sessionID)
-	if id == "" {
-		return
-	}
-	r.observerMu.Lock()
-	observer := r.observer
-	r.observerMu.Unlock()
-	if observer != nil {
-		observer(id, reason)
-	}
-}
-
-func (r *RuntimeRegistry) updateAggregateRuntimeActivityForEntry(sessionID string, entry *runtimeEntry, activeForControl bool) bool {
-	if r == nil {
+func (r *RuntimeRegistry) updateAggregateRuntimeActivityForAuthority(sessionID string, entry *authorityRuntimeEntry, activeForControl bool) bool {
+	if r == nil || entry == nil {
 		return false
 	}
 	id := strings.TrimSpace(sessionID)
 	if id == "" {
 		return false
 	}
-	r.directory.mu.RLock()
-	current := r.directory.entries[id]
+	r.authorityMu.RLock()
+	current := r.authorityBySession[id]
 	if current != entry && (activeForControl || current != nil) {
-		r.directory.mu.RUnlock()
+		r.authorityMu.RUnlock()
 		return false
 	}
 	r.updateAggregateRuntimeActivityState(id, activeForControl)
-	r.directory.mu.RUnlock()
+	r.authorityMu.RUnlock()
 	return true
 }
 
