@@ -9,12 +9,12 @@ import (
 )
 
 func migrationMemoryLimitResource() int {
-	// RLIMIT_AS includes the Go runtime, executable, and shared-library address
-	// mappings, so the same bounded workload can fail before allocating its
-	// working set as toolchain mapping strategy changes. RLIMIT_DATA applies the
-	// hard ceiling to heap and anonymous data mappings; peak RSS is checked
-	// separately after the fixture.
-	return unix.RLIMIT_DATA
+	// Linux RLIMIT_AS and RLIMIT_DATA both account runtime/toolchain mappings
+	// that are unrelated to the fixture's resident working set. Go 1.26 can
+	// therefore fail small allocations while RSS is still below the contract.
+	// Use the kernel-reported peak resident set as the cross-toolchain oracle,
+	// matching the Darwin path.
+	return -1
 }
 
 func assertMigrationResidentMemoryWithinLimit() error {
