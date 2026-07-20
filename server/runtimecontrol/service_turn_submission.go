@@ -58,13 +58,10 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 				}
 			}
 			if compactionBusy {
-				queued, err := engine.QueueUserMessageForAutoDrain(
+				queued := engine.QueueUserMessageForAutoDrain(
 					memoReq.Text,
 					strings.TrimSpace(req.ClientRequestID),
 				)
-				if err != nil {
-					return err
-				}
 				recordAccepted(true)
 				resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, Steered: true, QueueItemID: queued.ID}
 				return nil

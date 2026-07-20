@@ -129,9 +129,9 @@ func (e *WorkflowLockedExecutionTargetError) RPCErrorCode() int {
 	return protocol.ErrCodeWorkflowLockedExecutionTarget
 }
 
-func (e *WorkflowLockedExecutionTargetError) RPCErrorData() (json.RawMessage, error) {
+func (e *WorkflowLockedExecutionTargetError) RPCErrorData() json.RawMessage {
 	if e == nil {
-		return nil, fmt.Errorf("locked workflow execution target error is required")
+		return nil
 	}
 	return marshalRPCErrorData(struct {
 		Type  string                             `json:"type"`
@@ -153,9 +153,9 @@ func (e *WorkflowExecutionTargetResolutionError) RPCErrorCode() int {
 	return protocol.ErrCodeWorkflowExecutionTargetResolution
 }
 
-func (e *WorkflowExecutionTargetResolutionError) RPCErrorData() (json.RawMessage, error) {
+func (e *WorkflowExecutionTargetResolutionError) RPCErrorData() json.RawMessage {
 	if e == nil {
-		return nil, fmt.Errorf("workflow execution target resolution error is required")
+		return nil
 	}
 	return marshalRPCErrorData(struct {
 		Type         string                                     `json:"type"`

@@ -98,14 +98,8 @@ func TestSessionPickerScrollsAndSelects(t *testing.T) {
 		t.Fatalf("offset should advance for scroll")
 	}
 
-	m.openController = successfulSessionPickerOpenController(
-		summaries[15].SessionID,
-	)
-	runSessionPickerCommands(
-		t,
-		m,
-		pickerUpdateCommand(t, m, tea.KeyMsg{Type: tea.KeyEnter}),
-	)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(*sessionPickerModel)
 	open, present := m.result.(sessionPickerOpenResult)
 	if !present || open.sessionID != summaries[15].SessionID {
 		t.Fatalf("selected=%+v want %s", m.result, summaries[15].SessionID.String())

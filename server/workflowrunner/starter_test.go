@@ -35,7 +35,6 @@ import (
 	"core/server/worktree"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -1713,39 +1712,6 @@ func TestRemoveFanoutCloneDeletesOrphanedClone(t *testing.T) {
 	fixture.starter.removeFanoutClone(context.Background(), containerDir, cloneID)
 	if _, err := os.Stat(cloneDir); !os.IsNotExist(err) {
 		t.Fatalf("clone dir should be removed, stat err = %v", err)
-	}
-}
-
-func TestCloneSourceSessionForFanoutReturnsStructuredMaterializationError(t *testing.T) {
-	fixture := newStarterFixture(
-		t,
-		config.WorkflowCompletionModeStructuredOutput,
-		ScriptedFinalAnswer(`{"commentary":"done"}`),
-	)
-	containerDir := filepath.Join(
-		filepath.Join(fixture.cfg.PersistenceRoot, "projects"),
-		fixture.projectID,
-		"sessions",
-	)
-	source, err := session.Create(
-		containerDir,
-		filepath.Base(containerDir),
-		fixture.cfg.WorkspaceRoot,
-		sessioncontract.SessionCategoryMain,
-		fixture.metadata.AuthoritativeSessionStoreOptions()...,
-	)
-	if err != nil {
-		t.Fatalf("session.Create: %v", err)
-	}
-	sessiontest.WriteUnsupportedEventLogVersion(t, source, session.EventLogVersionV1+1)
-
-	_, err = fixture.starter.cloneSourceSessionForFanout(containerDir, source.Metadata().SessionID)
-	var materialization *protocol.SessionEventLogMaterializationError
-	if !errors.As(err, &materialization) {
-		t.Fatalf("cloneSourceSessionForFanout error = %T %v", err, err)
-	}
-	if materialization.Reason != protocol.SessionEventLogMaterializationUnsupportedVersion {
-		t.Fatalf("materialization facts = %+v", materialization)
 	}
 }
 

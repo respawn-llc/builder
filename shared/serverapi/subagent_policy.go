@@ -37,15 +37,15 @@ func (e *SubagentLaunchDeniedError) RPCErrorCode() int {
 	return protocol.ErrCodeSubagentLaunchDenied
 }
 
-func (e *SubagentLaunchDeniedError) RPCErrorData() (json.RawMessage, error) {
+func (e *SubagentLaunchDeniedError) RPCErrorData() json.RawMessage {
 	if e == nil {
-		return nil, fmt.Errorf("subagent launch denial is required")
+		return nil
 	}
 	data, err := json.Marshal(e)
 	if err != nil {
-		return nil, fmt.Errorf("marshal subagent launch denial: %w", err)
+		panic("marshal subagent launch denial: " + err.Error())
 	}
-	return data, nil
+	return data
 }
 
 func DecodeSubagentLaunchDeniedError(data json.RawMessage, fallback string) error {

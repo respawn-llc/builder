@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -328,11 +327,7 @@ func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, queu
 	} else {
 		pending = m.queue.DrainByID(queueItemIDs)
 	}
-	var err error
-	pending, err = m.engine.dropStoppedLiveRunQueueItems(pending)
-	if err != nil {
-		return 0, session.CommitReceipt{}, err
-	}
+	pending = m.engine.dropStoppedLiveRunQueueItems(pending)
 	return m.flushPendingUserInjections(stepID, pending)
 }
 
@@ -343,11 +338,7 @@ func (m *defaultMessageLifecycle) flushPendingUserInjections(stepID string, pend
 
 	queuedMessages := normalizeQueuedUserMessages(pending)
 	if len(queuedMessages) > 0 {
-		var err error
-		pending, err = e.dropStoppedLiveRunQueueItems(pending)
-		if err != nil {
-			return flushed, flushReceipt, err
-		}
+		pending = e.dropStoppedLiveRunQueueItems(pending)
 		queuedMessages = normalizeQueuedUserMessages(pending)
 		if len(queuedMessages) == 0 {
 			return flushed, flushReceipt, nil
@@ -368,20 +359,11 @@ func (m *defaultMessageLifecycle) flushPendingUserInjections(stepID string, pend
 			return flushed, flushReceipt, err
 		}
 		if !publishAllowed {
-			var emitErr error
 			for _, item := range pending {
 				e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
-				emitErr = errors.Join(
-					emitErr,
-					e.emitQueuedUserMessageStatus(
-						item.message,
-						QueuedUserMessageFailed,
-						QueuedUserMessageFailureStopped,
-						true,
-					),
-				)
+				e.emitQueuedUserMessageStatus(item.message, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
 			}
-			return flushed, flushReceipt, emitErr
+			return flushed, flushReceipt, nil
 		}
 		flushed++
 	}

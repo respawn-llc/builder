@@ -18,57 +18,6 @@ import (
 	"core/shared/sessioncontract"
 )
 
-type recordingCaptureCloser struct {
-	name  string
-	order *[]string
-	err   error
-}
-
-func (c recordingCaptureCloser) Close() error {
-	*c.order = append(*c.order, c.name)
-	return c.err
-}
-
-func TestDiagnosticCaptureCleanupJoinsErrorsInOwnershipOrder(t *testing.T) {
-	for _, operationErr := range []error{
-		errors.New("request preparation failed"),
-		errors.New("request marshal failed"),
-	} {
-		t.Run(operationErr.Error(), func(t *testing.T) {
-			wiringErr := errors.New("wiring close failed")
-			backgroundErr := errors.New("background close failed")
-			leaseErr := errors.New("lease close failed")
-			var order []string
-			cleanup := diagnosticCaptureCleanup{
-				wiring: recordingCaptureCloser{
-					name: "wiring", order: &order, err: wiringErr,
-				},
-				background: recordingCaptureCloser{
-					name: "background", order: &order, err: backgroundErr,
-				},
-				lease: recordingCaptureCloser{
-					name: "lease", order: &order, err: leaseErr,
-				},
-			}
-
-			err := cleanup.Join(operationErr)
-			for _, expected := range []error{
-				operationErr,
-				wiringErr,
-				backgroundErr,
-				leaseErr,
-			} {
-				if !errors.Is(err, expected) {
-					t.Fatalf("joined cleanup error %v does not contain %v", err, expected)
-				}
-			}
-			if want := []string{"wiring", "background", "lease"}; !reflect.DeepEqual(order, want) {
-				t.Fatalf("cleanup order = %v, want %v", order, want)
-			}
-		})
-	}
-}
-
 func TestCaptureSessionRequestRestoresLegacyHistoryWithoutMutatingSource(t *testing.T) {
 	fixture := newLegacyCaptureFixture(t)
 	captured, err := captureSessionRequest(

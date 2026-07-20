@@ -38,7 +38,7 @@ func TestProtocolErrorDecodesSubagentLaunchPolicyError(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeSubagentLaunchPolicy,
 		Message: "launch rejected",
-		Data:    mustRPCErrorData(t, source),
+		Data:    source.RPCErrorData(),
 	})
 	var policyErr *protocol.SubagentLaunchPolicyError
 	if !errors.As(err, &policyErr) {

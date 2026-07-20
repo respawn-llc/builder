@@ -104,15 +104,15 @@ func (e *SubagentLaunchPolicyError) RPCErrorCode() int {
 	return ErrCodeSubagentLaunchPolicy
 }
 
-func (e *SubagentLaunchPolicyError) RPCErrorData() (json.RawMessage, error) {
+func (e *SubagentLaunchPolicyError) RPCErrorData() json.RawMessage {
 	if err := e.Validate(); err != nil {
-		return nil, err
+		panic("marshal subagent launch policy error: " + err.Error())
 	}
 	data, err := json.Marshal(e)
 	if err != nil {
-		return nil, fmt.Errorf("marshal subagent launch policy error: %w", err)
+		panic("marshal subagent launch policy error: " + err.Error())
 	}
-	return data, nil
+	return data
 }
 
 func DecodeSubagentLaunchPolicyError(data json.RawMessage, fallback string) error {

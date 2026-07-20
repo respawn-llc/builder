@@ -56,7 +56,7 @@ func appendRecoveredWarning(store *session.Store, provider func() (string, bool,
 	}
 	eventLog, err := store.MaterializeEventLog()
 	if err != nil {
-		return session.MapEventLogMaterializationError(err)
+		return err
 	}
 	_, err = eventLog.AppendGeneratedRecoveredWarning(session.LocalEntryRecord{
 		Visibility: session.EntryVisibilityOngoing,

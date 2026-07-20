@@ -412,13 +412,10 @@ func TestSessionTranscriptFeedSequencerReceivesEngineQueueStatus(t *testing.T) {
 	defer func() { _ = sub.Close() }()
 	_ = nextTranscriptMessage(t, sub)
 
-	item, err := engine.QueueUserMessageWithClientRequestID(
+	item := engine.QueueUserMessageWithClientRequestID(
 		"queued through engine",
 		runtimeids.NewRuntimeClientRequestID().String(),
 	)
-	if err != nil {
-		t.Fatalf("queue user message: %v", err)
-	}
 	queueItemID := mustRegistryQueueItemID(t, item.ID)
 	live := nextTranscriptMessage(t, sub)
 	if live.Sequence != 2 || live.Kind != clientui.TranscriptMessageQueuedMessageState || live.Payload.QueuedMessageState == nil || live.Payload.QueuedMessageState.QueueItemID != queueItemID || live.Payload.QueuedMessageState.Status != clientui.QueuedUserMessageAccepted {
@@ -428,11 +425,7 @@ func TestSessionTranscriptFeedSequencerReceivesEngineQueueStatus(t *testing.T) {
 		t.Fatalf("accepted queue text = %v, want queued through engine", live.Payload.QueuedMessageState.Text)
 	}
 
-	discardedItem, err := engine.DiscardQueuedUserMessage(item.ID)
-	if err != nil {
-		t.Fatalf("discard queued user message: %v", err)
-	}
-	if !discardedItem {
+	if !engine.DiscardQueuedUserMessage(item.ID) {
 		t.Fatalf("DiscardQueuedUserMessage(%q) returned false", item.ID)
 	}
 	discarded := nextTranscriptMessage(t, sub)
@@ -457,13 +450,10 @@ func TestSessionTranscriptFeedSequencerHydratesEngineQueuedTextInFIFOOrder(t *te
 		"third queued for hydration",
 		"fourth queued for hydration",
 	} {
-		item, err := engine.QueueUserMessageWithClientRequestID(
+		item := engine.QueueUserMessageWithClientRequestID(
 			text,
 			runtimeids.NewRuntimeClientRequestID().String(),
 		)
-		if err != nil {
-			t.Fatalf("queue %q: %v", text, err)
-		}
 		items = append(items, item)
 	}
 	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())

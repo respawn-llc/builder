@@ -203,12 +203,12 @@ func (e *Engine) appendPersistedLocalEntryRecordRaw(stepID string, entry storedL
 	if receipt.Committed {
 		projected := localEntryChatEntryForStep(entry, stepID)
 		e.transcriptRuntimeState().AppendLocalEntryRecord(*projected, entry.AfterToolCallID)
-		err = errors.Join(err, e.emitRaw(Event{
+		e.emitRaw(Event{
 			Kind:                       EventLocalEntryAdded,
 			StepID:                     stepID,
 			LocalEntry:                 projected,
 			CommittedTranscriptChanged: true,
-		}))
+		})
 	}
 	return receipt, err
 }
@@ -306,12 +306,12 @@ func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy st
 	e.transcriptRuntimeState().AppendMessage(stepID, msg)
 	currentCommittedCount := e.CommittedTranscriptEntryCount()
 	if eventPolicy != steeringMessageEventNone && currentCommittedCount > previousCommittedCount && shouldEmitCommittedMessageEvent(msg) {
-		appendErr = errors.Join(appendErr, e.emitRaw(Event{
+		e.emitRaw(Event{
 			Kind:                       EventConversationUpdated,
 			StepID:                     stepID,
 			CommittedTranscriptChanged: true,
 			Message:                    msg,
-		}))
+		})
 	}
 	return receipt, appendErr
 }
@@ -384,7 +384,7 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch 
 		e.markCurrentRequestShapeDirty()
 	}
 	e.transcriptRuntimeState().AppendMessage(stepID, msg)
-	emitErr := e.emitRaw(Event{
+	e.emitRaw(Event{
 		Kind:                         EventUserMessageFlushed,
 		StepID:                       stepID,
 		UserMessage:                  *msg.Content,
@@ -395,7 +395,7 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch 
 	})
 	for _, item := range normalizedItems {
 		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
-		emitErr = errors.Join(emitErr, e.emitRaw(Event{
+		e.emitRaw(Event{
 			Kind: EventQueuedUserMessageStatus,
 			QueuedUserMessageStatus: &QueuedUserMessageStatusEvent{
 				SessionID:       e.SessionID(),
@@ -403,10 +403,10 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch 
 				ClientRequestID: item.ClientRequestID,
 				Status:          QueuedUserMessageSubmitted,
 			},
-		}))
+		})
 	}
 	e.completeLiveRunQueueItems(queuedUserMessageIDSet(normalizedItems))
-	return appended.CommitReceipt, errors.Join(appendErr, emitErr)
+	return appended.CommitReceipt, appendErr
 }
 
 func normalizedQueuedUserMessageStatusItems(raw []QueuedUserMessage) []QueuedUserMessage {
@@ -467,9 +467,9 @@ func (e *Engine) emitQueuedUserMessageStatus(
 	status QueuedUserMessageStatus,
 	reason QueuedUserMessageFailureReason,
 	restore bool,
-) error {
+) {
 	if e == nil || item.ID == "" {
-		return errors.New("queued user message status requires runtime engine and item identity")
+		return
 	}
 	event := &QueuedUserMessageStatusEvent{
 		SessionID:       e.SessionID(),
@@ -484,26 +484,20 @@ func (e *Engine) emitQueuedUserMessageStatus(
 	if status == QueuedUserMessageAccepted {
 		event.RestoreText = item.Text
 	}
-	return e.emitRaw(Event{Kind: EventQueuedUserMessageStatus, QueuedUserMessageStatus: event})
+	e.emitRaw(Event{Kind: EventQueuedUserMessageStatus, QueuedUserMessageStatus: event})
 }
 
-func (e *Engine) FailQueuedUserMessages(
-	reason QueuedUserMessageFailureReason,
-) ([]QueuedUserMessage, error) {
+func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) []QueuedUserMessage {
 	e.ensureOrchestrationCollaborators()
 	pending := e.messageFlow.DrainPendingUserInjections()
 	messages := make([]QueuedUserMessage, 0, len(pending))
-	var resultErr error
 	for _, item := range pending {
 		messages = append(messages, item)
 		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
-		resultErr = errors.Join(
-			resultErr,
-			e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true),
-		)
+		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true)
 	}
 	e.completeLiveRunQueueItems(queuedUserMessageIDSet(messages))
-	return messages, resultErr
+	return messages
 }
 
 func (e *Engine) clearStreamingAssistantStateRaw() (*AssistantStreamMetadata, *uuid.UUID) {

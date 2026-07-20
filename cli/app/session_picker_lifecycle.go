@@ -8,11 +8,9 @@ import (
 )
 
 type sessionPickerLifecycleOptions struct {
-	Context        context.Context
-	Loader         sessionPageLoader
-	Theme          string
-	Header         sessionPickerHeaderInfo
-	OpenController sessionPickerOpenController
+	Loader sessionPageLoader
+	Theme  string
+	Header sessionPickerHeaderInfo
 }
 
 type sessionPickerLifecycle struct {
@@ -27,12 +25,8 @@ func newSessionPickerLifecycle(options sessionPickerLifecycleOptions) *sessionPi
 	if options.Loader == nil {
 		panic("session picker lifecycle requires a page loader")
 	}
-	parentContext := options.Context
-	if parentContext == nil {
-		parentContext = context.Background()
-	}
-	requestContext, cancel := context.WithCancel(parentContext)
-	lifecycle := &sessionPickerLifecycle{
+	requestContext, cancel := context.WithCancel(context.Background())
+	return &sessionPickerLifecycle{
 		picker: newSessionPickerModel(
 			requestContext,
 			options.Loader,
@@ -42,8 +36,6 @@ func newSessionPickerLifecycle(options sessionPickerLifecycleOptions) *sessionPi
 		geometry: terminalGeometryUnknown(),
 		cancel:   cancel,
 	}
-	lifecycle.picker.openController = options.OpenController
-	return lifecycle
 }
 
 func (l *sessionPickerLifecycle) Init() tea.Cmd {
@@ -106,11 +98,6 @@ func validateSessionPickerLifecycleResult(result sessionPickerResult) error {
 	case sessionPickerOpenResult:
 		if typed.sessionID.IsZero() {
 			return errors.New("session picker lifecycle open result requires a session ID")
-		}
-		if typed.plan.SessionID != typed.sessionID.String() {
-			return errors.New(
-				"session picker lifecycle open plan does not match its session ID",
-			)
 		}
 	default:
 		return errors.New("session picker lifecycle exited without a result")

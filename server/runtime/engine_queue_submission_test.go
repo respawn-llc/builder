@@ -138,10 +138,7 @@ func TestQueuedUserMessageStatusEventsCoverAcceptedSubmittedAndFailed(t *testing
 		t.Fatalf("SubmitQueuedUserMessages: %v", err)
 	}
 	second := mustQueueUserMessageWithClientRequestID(t, eng, "restore me", "req-2")
-	failed, err := eng.FailQueuedUserMessages(QueuedUserMessageFailureClosing)
-	if err != nil {
-		t.Fatalf("fail queued user messages: %v", err)
-	}
+	failed := eng.FailQueuedUserMessages(QueuedUserMessageFailureClosing)
 
 	if len(failed) != 1 || failed[0].ID != second.ID {
 		t.Fatalf("failed queued messages = %+v, want second queue item", failed)

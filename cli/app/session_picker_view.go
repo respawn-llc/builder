@@ -37,12 +37,11 @@ type sessionPickerStyles struct {
 }
 
 func (m *sessionPickerModel) View() string {
-	if m.workspacePrompt != nil {
-		return m.workspacePrompt.View()
-	}
 	var out strings.Builder
 	out.WriteString(m.renderHeader())
-	if status := m.renderStatus(); status != "" {
+	activeTab := m.activeTab
+	m.startupStatus.activeTab = &activeTab
+	if status := newSessionPickerStatusSurface(m.startupStatus).RenderStatus(m.width); status != "" {
 		out.WriteString("\n\n")
 		out.WriteString(status)
 	}
@@ -101,7 +100,9 @@ func (m *sessionPickerModel) visibleLineBudget() int {
 		tabLines = 2
 	}
 	statusLines := 0
-	if m.renderStatus() != "" {
+	activeTab := m.activeTab
+	m.startupStatus.activeTab = &activeTab
+	if newSessionPickerStatusSurface(m.startupStatus).RenderStatus(m.width) != "" {
 		statusLines = 2
 	}
 	rows := m.height - lipgloss.Height(m.renderHeader()) - tabLines - 2 - statusLines
@@ -109,18 +110,6 @@ func (m *sessionPickerModel) visibleLineBudget() int {
 		return 1
 	}
 	return rows
-}
-
-func (m *sessionPickerModel) renderStatus() string {
-	activeTab := m.activeTab
-	m.startupStatus.activeTab = &activeTab
-	status := newSessionPickerStatusSurface(m.startupStatus).RenderStatus(m.width)
-	if status == "" || m.pendingOpen == nil {
-		return status
-	}
-	return m.styles.row.Render(
-		pendingToolSpinnerFrame(m.spinnerFrame)+" ",
-	) + status
 }
 
 func (m *sessionPickerModel) renderRow(tab *sessionPickerTab, index int, showPreview bool) string {

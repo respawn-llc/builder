@@ -82,7 +82,7 @@ func TestWorktreeStructuredErrorsRoundTripTypedFacts(t *testing.T) {
 		}
 	}
 
-	decodedSelector := DecodeWorktreeRPCError(mustRPCErrorData(t, selector), selector.Error())
+	decodedSelector := DecodeWorktreeRPCError(selector.RPCErrorData(), selector.Error())
 	var selectorError *WorktreeSelectorError
 	if !errors.As(decodedSelector, &selectorError) {
 		t.Fatalf("selector decode = %T, want WorktreeSelectorError", decodedSelector)
@@ -94,7 +94,7 @@ func TestWorktreeStructuredErrorsRoundTripTypedFacts(t *testing.T) {
 		t.Fatalf("selector facts changed: %+v", selectorError)
 	}
 
-	decodedPending := DecodeWorktreeRPCError(mustRPCErrorData(t, pending), pending.Error())
+	decodedPending := DecodeWorktreeRPCError(pending.RPCErrorData(), pending.Error())
 	var pendingError *WorktreeTransitionPendingError
 	if !errors.As(decodedPending, &pendingError) {
 		t.Fatalf("pending decode = %T, want WorktreeTransitionPendingError", decodedPending)
@@ -106,7 +106,7 @@ func TestWorktreeStructuredErrorsRoundTripTypedFacts(t *testing.T) {
 		t.Fatalf("pending facts changed: %+v", pendingError)
 	}
 
-	decodedImmediate := DecodeWorktreeRPCError(mustRPCErrorData(t, immediate), immediate.Error())
+	decodedImmediate := DecodeWorktreeRPCError(immediate.RPCErrorData(), immediate.Error())
 	var immediateError *WorktreeImmediateTransitionError
 	if !errors.As(decodedImmediate, &immediateError) {
 		t.Fatalf("immediate decode = %T, want WorktreeImmediateTransitionError", decodedImmediate)
@@ -115,7 +115,7 @@ func TestWorktreeStructuredErrorsRoundTripTypedFacts(t *testing.T) {
 		t.Fatalf("immediate kind = %q, want origin inactive", immediateError.Kind)
 	}
 
-	decodedRetained := DecodeWorktreeRPCError(mustRPCErrorData(t, retained), retained.Error())
+	decodedRetained := DecodeWorktreeRPCError(retained.RPCErrorData(), retained.Error())
 	var retainedError *WorktreeSetupRetainedError
 	if !errors.As(decodedRetained, &retainedError) {
 		t.Fatalf("retained decode = %T, want WorktreeSetupRetainedError", decodedRetained)
@@ -127,7 +127,7 @@ func TestWorktreeStructuredErrorsRoundTripTypedFacts(t *testing.T) {
 		t.Fatalf("retained worktree facts changed: %+v", retainedError)
 	}
 
-	decodedPrecondition := DecodeWorktreeRPCError(mustRPCErrorData(t, precondition), precondition.Error())
+	decodedPrecondition := DecodeWorktreeRPCError(precondition.RPCErrorData(), precondition.Error())
 	var preconditionError *WorktreeDeletePreconditionError
 	if !errors.As(decodedPrecondition, &preconditionError) {
 		t.Fatalf("precondition decode = %T, want WorktreeDeletePreconditionError", decodedPrecondition)

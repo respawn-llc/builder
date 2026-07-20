@@ -46,6 +46,9 @@ func materializeInputContentItem(
 	item canonicalInputContentItem,
 ) (InputContent, error) {
 	value := func(slot int) (string, error) {
+		if item.materialized {
+			return item.materializedValues[slot], nil
+		}
 		return materializeJSONStringWindow(
 			reader,
 			item.values[slot],

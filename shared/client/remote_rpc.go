@@ -541,9 +541,6 @@ func protocolError(resp *protocol.ResponseError) error {
 	if resp.Code == protocol.ErrCodeSessionRetarget && len(resp.Data) > 0 {
 		return serverapi.DecodeSessionRetargetError(resp.Data, message)
 	}
-	if resp.Code == protocol.ErrCodeSessionEventLogMaterialization {
-		return protocol.DecodeSessionEventLogMaterializationError(resp.Data, message)
-	}
 	if resp.Code == protocol.ErrCodeRequestCanceled {
 		return requestCanceledError{message: message}
 	}

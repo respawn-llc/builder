@@ -457,39 +457,7 @@ func (e *Engine) seedTranscriptLiveToolsFromDanglingToolCalls(stepID string) err
 }
 
 func (e *Engine) pendingRecoveryStepHasTerminalAssistant(stepID string) (bool, error) {
-	var matchErr error
-	window, err := e.eventLog.ReadNewestSegmentBackward(compactionBoundaryMatcher(&matchErr))
-	if err != nil {
-		return false, err
-	}
-	if matchErr != nil {
-		return false, matchErr
-	}
-	for _, record := range window.Records {
-		recordStepID := record.StepID()
-		if recordStepID == nil || strings.TrimSpace(*recordStepID) != stepID {
-			continue
-		}
-		payload, err := record.Payload()
-		if err != nil {
-			return false, err
-		}
-		persisted, ok := payload.(session.MessageRecord)
-		if !ok {
-			continue
-		}
-		msg, err := llmMessageFromSessionRecord(persisted)
-		if err != nil {
-			return false, fmt.Errorf("restore pending-recovery message: %w", err)
-		}
-		if msg.Role == llm.RoleAssistant &&
-			msg.Phase != nil &&
-			*msg.Phase == llm.MessagePhaseFinal &&
-			len(msg.ToolCalls) == 0 {
-			return true, nil
-		}
-	}
-	return false, nil
+	return e.eventLog.PendingRecoveryStepHasTerminalAssistant(stepID)
 }
 
 func (e *Engine) Close() error {
@@ -555,22 +523,15 @@ type QueuedUserMessage struct {
 	ClientRequestID string
 }
 
-func (e *Engine) QueueUserMessage(text string) (QueuedUserMessage, error) {
+func (e *Engine) QueueUserMessage(text string) QueuedUserMessage {
 	return e.QueueUserMessageWithClientRequestID(text, "")
 }
 
-func (e *Engine) QueueUserMessageWithClientRequestID(
-	text string,
-	clientRequestID string,
-) (QueuedUserMessage, error) {
+func (e *Engine) QueueUserMessageWithClientRequestID(text string, clientRequestID string) QueuedUserMessage {
 	return e.queueUserMessageWithClientRequestID(text, clientRequestID, false)
 }
 
-func (e *Engine) queueUserMessageWithClientRequestID(
-	text string,
-	clientRequestID string,
-	forceAutoDrain bool,
-) (QueuedUserMessage, error) {
+func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestID string, forceAutoDrain bool) QueuedUserMessage {
 	e.ensureOrchestrationCollaborators()
 	liveItem := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: text, ClientRequestID: clientRequestID}
 	waitedForLiveRunStep := false
@@ -579,20 +540,14 @@ func (e *Engine) queueUserMessageWithClientRequestID(
 			e.markQueuedUserInjectionForAutoDrain(queueItemID)
 		}) {
 			item := e.messageFlow.QueueUserMessageWithID(liveItem)
-			if err := e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false); err != nil {
-				return item, err
-			}
+			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 			queueItemID := mustQueueItemID(item.ID)
 			if e.liveRun.finishQueueItemPublication(queueItemID) {
-				if err := e.failStoppedLiveRunQueueItems(
-					map[runtimeids.QueueItemID]struct{}{queueItemID: {}},
-				); err != nil {
-					return item, err
-				}
+				e.failStoppedLiveRunQueueItems(map[runtimeids.QueueItemID]struct{}{queueItemID: {}})
 			} else {
 				e.scheduleQueuedUserInjectionsIfIdle()
 			}
-			return item, nil
+			return item
 		}
 		if !e.waitingForLiveRunStepStart() {
 			break
@@ -601,22 +556,16 @@ func (e *Engine) queueUserMessageWithClientRequestID(
 		time.Sleep(time.Millisecond)
 	}
 	if waitedForLiveRunStep {
-		return liveItem, e.emitQueuedUserMessageStatus(
-			liveItem,
-			QueuedUserMessageFailed,
-			QueuedUserMessageFailureStopped,
-			true,
-		)
+		e.emitQueuedUserMessageStatus(liveItem, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
+		return liveItem
 	}
 	item := e.messageFlow.QueueUserMessage(text, clientRequestID)
-	if err := e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false); err != nil {
-		return item, err
-	}
+	e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 	if forceAutoDrain || (!waitedForLiveRunStep && e.stepLifecycle != nil && e.stepLifecycle.IsBusy()) {
 		e.markQueuedUserInjectionForAutoDrain(item.ID)
 		e.scheduleQueuedUserInjectionsIfIdle()
 	}
-	return item, nil
+	return item
 }
 
 func (e *Engine) waitingForLiveRunStepStart() bool {
@@ -643,22 +592,15 @@ func activeKindInterruptibleByLiveStop(kind ActiveKind) bool {
 	return kind.Valid() && kind != ActiveKindRuntimeMaintenance
 }
 
-func (e *Engine) DiscardQueuedUserMessage(queueItemID string) (bool, error) {
+func (e *Engine) DiscardQueuedUserMessage(queueItemID string) bool {
 	e.ensureOrchestrationCollaborators()
 	item, discarded := e.messageFlow.DiscardQueuedUserMessage(queueItemID)
 	if discarded {
 		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
 		e.completeLiveRunQueueItems(map[string]struct{}{item.ID: {}})
-		if err := e.emitQueuedUserMessageStatus(
-			item,
-			QueuedUserMessageDiscarded,
-			"",
-			false,
-		); err != nil {
-			return true, err
-		}
+		e.emitQueuedUserMessageStatus(item, QueuedUserMessageDiscarded, "", false)
 	}
-	return discarded, nil
+	return discarded
 }
 
 func (e *Engine) Interrupt() error {

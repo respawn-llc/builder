@@ -196,7 +196,7 @@ func (a *Authority) buildAgentResource(ctx context.Context, descriptor session.S
 func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *session.Store, logger *runlog.RunLogger, plan AgentRuntimePlan) (*runtimewire.RuntimeWiring, error) {
 	eventLog, err := store.MaterializeEventLog()
 	if err != nil {
-		return nil, session.MapEventLogMaterializationError(err)
+		return nil, err
 	}
 	options := plan.options
 	wiringOptions := runtimewire.RuntimeWiringOptions{

@@ -88,11 +88,7 @@ func TestTerminalWorkflowQueueFailureCompletesTaggedLiveItems(t *testing.T) {
 	}
 	eng.mu.Unlock()
 
-	failed, failErr := eng.failQueuedUserWorkIfTerminal()
-	if failErr != nil {
-		t.Fatalf("fail terminal queued user work: %v", failErr)
-	}
-	if !failed {
+	if !eng.failQueuedUserWorkIfTerminal() {
 		t.Fatal("terminal workflow did not fail queued user work")
 	}
 	if _, err := handle.Wait(); !errors.Is(err, ErrLiveRunNoFinalAnswer) {
@@ -848,12 +844,7 @@ func TestDroppedStoppedLiveRunQueueItemsClearAutoDrainState(t *testing.T) {
 	eng.liveRun.markStoppedQueueItemsLocked(map[runtimeids.QueueItemID]struct{}{queueItemID: {}})
 	eng.liveRun.mu.Unlock()
 
-	remaining, err := eng.dropStoppedLiveRunQueueItems(
-		[]queuedUserSteeringIntent{{message: item}},
-	)
-	if err != nil {
-		t.Fatalf("drop stopped live-run queue items: %v", err)
-	}
+	remaining := eng.dropStoppedLiveRunQueueItems([]queuedUserSteeringIntent{{message: item}})
 	if len(remaining) != 0 {
 		t.Fatalf("remaining stopped drained items = %+v, want none", remaining)
 	}

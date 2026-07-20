@@ -20,6 +20,15 @@ const (
 	workspaceChangePromptHeaderFallback = "Workspace changed"
 )
 
+var runWorkspaceChangePromptFlow = runWorkspaceChangePrompt
+
+type sessionWorkspaceChangeAction int
+
+const (
+	sessionWorkspaceChangeProceed sessionWorkspaceChangeAction = iota
+	sessionWorkspaceChangePickAgain
+)
+
 type workspaceChangePromptResult struct {
 	Rebind bool
 }
@@ -89,47 +98,49 @@ type workspaceChangePromptModel struct {
 	currentRoot  string
 	cursor       int
 	result       workspaceChangePromptResult
-	done         bool
 }
 
-func inspectPickedSessionWorkspaceChange(
-	server sessionWorkspaceChangeServer,
-	sessionID string,
-	executionTarget clientui.SessionExecutionTarget,
-) (*sessionPickerWorkspaceChange, error) {
+func maybeHandlePickedSessionWorkspaceChange(ctx context.Context, server sessionWorkspaceChangeServer, sessionID string, executionTarget clientui.SessionExecutionTarget) (sessionWorkspaceChangeAction, error) {
 	if server == nil {
-		return nil, errors.New("session server is required")
+		return sessionWorkspaceChangeProceed, errors.New("session server is required")
 	}
 	if strings.TrimSpace(sessionID) == "" {
-		return nil, errors.New("session id is required")
+		return sessionWorkspaceChangeProceed, errors.New("session id is required")
 	}
 	executionTarget = clientui.NormalizeSessionExecutionTarget(executionTarget)
 	if executionTarget.WorkspaceAvailability != clientui.ProjectAvailabilityAvailable {
-		return nil, nil
+		return sessionWorkspaceChangeProceed, nil
 	}
 	contextProvider, ok := server.(sessionWorkspaceRetargetContextProvider)
 	if !ok {
-		return nil, errors.New("workspace retarget context provider is required")
+		return sessionWorkspaceChangeProceed, errors.New("workspace retarget context provider is required")
 	}
 	retargetContext := contextProvider.workspaceRetargetContext()
 	if retargetContext == nil {
-		return nil, errors.New("workspace retarget context is required")
+		return sessionWorkspaceChangeProceed, errors.New("workspace retarget context is required")
 	}
 	currentRoot := normalizeWorkspaceChangeDisplayRoot(retargetContext.workspaceRoot)
 	selectedRoot := normalizeWorkspaceChangeDisplayRoot(executionTarget.WorkspaceRoot)
 	if comparableWorkspaceChangeRoot(currentRoot) == "" {
-		return nil, errors.New("current workspace root is required")
+		return sessionWorkspaceChangeProceed, errors.New("current workspace root is required")
 	}
 	if comparableWorkspaceChangeRoot(selectedRoot) == "" {
-		return nil, errors.New("selected session workspace root is required")
+		return sessionWorkspaceChangeProceed, errors.New("selected session workspace root is required")
 	}
 	if comparableWorkspaceChangeRoot(currentRoot) == comparableWorkspaceChangeRoot(selectedRoot) {
-		return nil, nil
+		return sessionWorkspaceChangeProceed, nil
 	}
-	return &sessionPickerWorkspaceChange{
-		selectedRoot: selectedRoot,
-		currentRoot:  currentRoot,
-	}, nil
+	result, err := runWorkspaceChangePromptFlow(selectedRoot, currentRoot, retargetContext.theme)
+	if err != nil {
+		return sessionWorkspaceChangeProceed, err
+	}
+	if !result.Rebind {
+		return sessionWorkspaceChangePickAgain, nil
+	}
+	if err := retargetInteractiveSessionWorkspace(ctx, server, sessionID, currentRoot); err != nil {
+		return sessionWorkspaceChangeProceed, err
+	}
+	return sessionWorkspaceChangeProceed, nil
 }
 
 func retargetInteractiveSessionWorkspace(ctx context.Context, server sessionLifecycleClientProvider, sessionID string, workspaceRoot string) error {
@@ -212,21 +223,17 @@ func (m *workspaceChangePromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.moveCursor(1)
 				case 'y':
 					m.result = workspaceChangePromptResult{Rebind: true}
-					m.done = true
 					return m, tea.Quit
 				case 'n', 'q':
 					m.result = workspaceChangePromptResult{}
-					m.done = true
 					return m, tea.Quit
 				}
 			}
 		case tea.KeyEnter:
 			m.result = workspaceChangePromptResult{Rebind: m.cursor == 0}
-			m.done = true
 			return m, tea.Quit
 		case tea.KeyEsc, tea.KeyCtrlC:
 			m.result = workspaceChangePromptResult{}
-			m.done = true
 			return m, tea.Quit
 		}
 	}
@@ -262,4 +269,18 @@ func (m *workspaceChangePromptModel) promptLines() []askPromptLine {
 		{Text: fmt.Sprintf("%d. %s", 1, "Yes"), Kind: askPromptLineKindOption, Selected: m.cursor == 0},
 		{Text: fmt.Sprintf("%d. %s", 2, "No"), Kind: askPromptLineKindOption, Selected: m.cursor == 1},
 	}
+}
+
+func runWorkspaceChangePrompt(selectedRoot string, currentRoot string, theme string) (workspaceChangePromptResult, error) {
+	model := newWorkspaceChangePromptModel(selectedRoot, currentRoot, theme)
+	program := tea.NewProgram(model, tea.WithAltScreen())
+	finalModel, err := program.Run()
+	if err != nil {
+		return workspaceChangePromptResult{}, err
+	}
+	finalized, ok := finalModel.(*workspaceChangePromptModel)
+	if !ok {
+		return workspaceChangePromptResult{}, fmt.Errorf("unexpected workspace change prompt model type %T", finalModel)
+	}
+	return finalized.result, nil
 }

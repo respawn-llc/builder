@@ -23,10 +23,11 @@ func assertMigrationResidentMemoryWithinLimit() error {
 		return fmt.Errorf("read migration child resident memory: %w", err)
 	}
 	maxResidentBytes := usage.Maxrss << 10
-	if maxResidentBytes > migrationHardMemoryLimitBytes {
+	if maxResidentBytes > migrationResidentMemoryOracleBytes {
 		return fmt.Errorf(
-			"peak resident memory %d exceeds limit %d",
+			"peak resident memory %d exceeds runtime-adjusted oracle %d for %d-byte migration working-set contract",
 			maxResidentBytes,
+			migrationResidentMemoryOracleBytes,
 			migrationHardMemoryLimitBytes,
 		)
 	}

@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -124,23 +123,6 @@ func (m *Manager) Close() error {
 	}
 	if len(pending) > 0 {
 		return fmt.Errorf("timed out waiting for background shells to exit: %s", strings.Join(pending, ", "))
-	}
-	return nil
-}
-
-// CloseOwnedManager closes a privately owned manager and removes its log
-// directory. Shared manager callers retain the ordinary Close contract, which
-// stops processes without changing the log-directory lifetime.
-func CloseOwnedManager(manager *Manager) error {
-	if manager == nil {
-		return nil
-	}
-	tempDir := manager.TempDir()
-	if err := manager.Close(); err != nil {
-		return err
-	}
-	if err := os.RemoveAll(tempDir); err != nil {
-		return fmt.Errorf("remove owned background shell temp directory: %w", err)
 	}
 	return nil
 }

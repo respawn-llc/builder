@@ -376,7 +376,7 @@ func (e *OnboardingFinalizeError) Is(target error) bool {
 }
 
 func (e *OnboardingFinalizeError) RPCErrorCode() int { return protocol.ErrCodeOnboardingFinalizeFailed }
-func (e *OnboardingFinalizeError) RPCErrorData() (json.RawMessage, error) {
+func (e *OnboardingFinalizeError) RPCErrorData() json.RawMessage {
 	return marshalRPCErrorData(OnboardingFinalizeErrorEnvelope{Type: "onboarding_finalize_error", Code: e.Code, Details: e.Details})
 }
 
@@ -410,16 +410,16 @@ func (e *ServerNotReadyError) Is(target error) bool {
 }
 
 func (e *ServerNotReadyError) RPCErrorCode() int { return protocol.ErrCodeServerNotReady }
-func (e *ServerNotReadyError) RPCErrorData() (json.RawMessage, error) {
+func (e *ServerNotReadyError) RPCErrorData() json.RawMessage {
 	return marshalRPCErrorData(ServerNotReadyEnvelope{Type: "server_not_ready", Reason: e.Reason, Details: e.Details})
 }
 
-func marshalRPCErrorData(value any) (json.RawMessage, error) {
+func marshalRPCErrorData(value any) json.RawMessage {
 	data, err := json.Marshal(value)
 	if err != nil {
-		return nil, fmt.Errorf("marshal RPC error data: %w", err)
+		return nil
 	}
-	return data, nil
+	return data
 }
 
 func NewOnboardingFinalizeError(code OnboardingFinalizeErrorCode, details any, cause error) *OnboardingFinalizeError {

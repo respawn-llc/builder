@@ -331,6 +331,34 @@ func TestMaterializedEventLogWalksTypedRecords(t *testing.T) {
 	assertCurrentRecordSequences(t, records, 1, 2)
 }
 
+func TestMaterializedEventLogFindsTerminalAssistantForPendingRecoveryStep(
+	t *testing.T,
+) {
+	store := newSessionTestStore(t)
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	stepID := "step-recovery"
+	content := "done"
+	finalPhase := MessagePhaseFinal
+	if _, _, err := eventLog.AppendRecord(&stepID, MessageRecord{
+		Role:    MessageRoleAssistant,
+		Content: &content,
+		Phase:   &finalPhase,
+	}); err != nil {
+		t.Fatalf("append terminal assistant: %v", err)
+	}
+
+	found, err := eventLog.PendingRecoveryStepHasTerminalAssistant(stepID)
+	if err != nil {
+		t.Fatalf("find terminal assistant: %v", err)
+	}
+	if !found {
+		t.Fatal("terminal assistant was not found")
+	}
+}
+
 func TestRemoveDurableInvalidatesMaterializedEventLogCapability(t *testing.T) {
 	store := newSessionTestStore(t)
 	eventLog := mustMaterializeSessionTestEventLog(t, store)

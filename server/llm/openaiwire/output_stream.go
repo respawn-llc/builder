@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"core/shared/boundedjson"
+	"github.com/go-json-experiment/json/jsontext"
 )
 
 type JSONSourceReader interface {
@@ -109,12 +110,7 @@ func writeProviderOutputValue(
 	}
 	switch first[0] {
 	case '"':
-		err = writeJSONStringRange(
-			writer,
-			reader,
-			boundedjson.Range{Start: 0, End: output.Size()},
-			stringWindow{end: -1},
-		)
+		_, err = io.CopyN(writer, reader, output.Size())
 	case '[':
 		isStructured := false
 		if structuredContent {
@@ -131,7 +127,10 @@ func writeProviderOutputValue(
 	return errors.Join(err, reader.Close())
 }
 
-const inputContentScannerBytes = 64 << 10
+const (
+	inputContentScannerBytes   = 64 << 10
+	inputContentLibraryMaxSize = inputContentScannerBytes
+)
 
 const (
 	inputContentTypeSlot = iota
@@ -166,11 +165,13 @@ func (w stringWindow) nonEmpty() bool {
 }
 
 type canonicalInputContentItem struct {
-	kind    string
-	detail  string
-	values  [inputContentFieldCount]boundedjson.Range
-	windows [inputContentFieldCount]stringWindow
-	present [inputContentFieldCount]bool
+	kind               string
+	detail             string
+	values             [inputContentFieldCount]boundedjson.Range
+	windows            [inputContentFieldCount]stringWindow
+	materializedValues [inputContentFieldCount]string
+	present            [inputContentFieldCount]bool
+	materialized       bool
 }
 
 func validatedInputContentSource(
@@ -190,6 +191,186 @@ func validatedInputContentSource(
 }
 
 func scanInputContentSource(
+	source ValidatedJSONSource,
+	scratch ScratchAllocator,
+	visit func(JSONSourceReader, canonicalInputContentItem) error,
+) error {
+	// jsontext owns normal structural parsing, duplicate-name semantics, and
+	// string decoding. Its decoder keeps an individual scalar contiguous, so
+	// oversized values use the bounded range scanner to preserve the migration
+	// hard-memory contract.
+	if source.Size() <= inputContentLibraryMaxSize {
+		return scanLibraryInputContentSource(source, scratch, visit)
+	}
+	return scanBoundedInputContentSource(source, scratch, visit)
+}
+
+func scanLibraryInputContentSource(
+	source ValidatedJSONSource,
+	scratch ScratchAllocator,
+	visit func(JSONSourceReader, canonicalInputContentItem) error,
+) (resultErr error) {
+	reader, err := source.Open()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, reader.Close())
+	}()
+	buffer, release, err := scratch.Acquire(int(source.Size()))
+	if err != nil {
+		return err
+	}
+	defer release()
+	if int64(len(buffer)) < source.Size() {
+		return fmt.Errorf(
+			"OpenAI wire output scratch buffer is too small: got=%d want=%d",
+			len(buffer),
+			source.Size(),
+		)
+	}
+	if _, err := io.ReadFull(reader, buffer[:source.Size()]); err != nil {
+		return err
+	}
+	decoder := jsontext.NewDecoder(
+		bytes.NewReader(buffer[:source.Size()]),
+		jsontext.AllowDuplicateNames(true),
+		jsontext.AllowInvalidUTF8(true),
+	)
+	token, err := decoder.ReadToken()
+	if err != nil || token.Kind() != '[' {
+		return &ValidationError{Kind: ValidationInvalidOutput}
+	}
+	for decoder.PeekKind() != ']' {
+		item, err := readLibraryInputContentItem(decoder)
+		if err != nil {
+			return err
+		}
+		if err := visit(reader, item); err != nil {
+			return err
+		}
+	}
+	token, err = decoder.ReadToken()
+	if err != nil || token.Kind() != ']' || decoder.PeekKind() != 0 {
+		return &ValidationError{Kind: ValidationInvalidOutput}
+	}
+	return nil
+}
+
+func readLibraryInputContentItem(
+	decoder *jsontext.Decoder,
+) (canonicalInputContentItem, error) {
+	if decoder.PeekKind() != '{' {
+		if err := decoder.SkipValue(); err != nil {
+			return canonicalInputContentItem{}, err
+		}
+		return canonicalInputContentItem{}, nil
+	}
+	if _, err := decoder.ReadToken(); err != nil {
+		return canonicalInputContentItem{}, err
+	}
+	var (
+		values            [inputContentFieldCount]string
+		present           [inputContentFieldCount]bool
+		invalidKnownValue bool
+	)
+	for decoder.PeekKind() != '}' {
+		key, err := decoder.ReadToken()
+		if err != nil || key.Kind() != '"' {
+			return canonicalInputContentItem{}, &ValidationError{Kind: ValidationInvalidOutput}
+		}
+		slot := inputContentFieldSlot(key.String())
+		if slot < 0 {
+			if err := decoder.SkipValue(); err != nil {
+				return canonicalInputContentItem{}, err
+			}
+			continue
+		}
+		present[slot] = true
+		switch decoder.PeekKind() {
+		case '"':
+			value, err := decoder.ReadToken()
+			if err != nil {
+				return canonicalInputContentItem{}, err
+			}
+			values[slot] = value.String()
+		case 'n':
+			if _, err := decoder.ReadToken(); err != nil {
+				return canonicalInputContentItem{}, err
+			}
+			values[slot] = ""
+		default:
+			invalidKnownValue = true
+			if err := decoder.SkipValue(); err != nil {
+				return canonicalInputContentItem{}, err
+			}
+		}
+	}
+	if _, err := decoder.ReadToken(); err != nil {
+		return canonicalInputContentItem{}, err
+	}
+	return normalizeMaterializedInputContentObject(values, present, invalidKnownValue), nil
+}
+
+func inputContentFieldSlot(name string) int {
+	for slot, known := range inputContentFields {
+		if strings.EqualFold(name, known) {
+			return slot
+		}
+	}
+	return -1
+}
+
+func normalizeMaterializedInputContentObject(
+	values [inputContentFieldCount]string,
+	present [inputContentFieldCount]bool,
+	invalidKnownValue bool,
+) canonicalInputContentItem {
+	item := canonicalInputContentItem{
+		materializedValues: values,
+		present:            present,
+		materialized:       true,
+	}
+	if invalidKnownValue {
+		return item
+	}
+	for slot := range values {
+		if slot != inputContentTextSlot {
+			item.materializedValues[slot] = strings.TrimSpace(values[slot])
+		}
+	}
+	switch strings.ToLower(item.materializedValues[inputContentTypeSlot]) {
+	case "input_text":
+		item.kind = "input_text"
+	case "input_image":
+		if !item.hasValue(inputContentImageURLSlot) &&
+			!item.hasValue(inputContentFileIDSlot) {
+			return canonicalInputContentItem{materialized: true}
+		}
+		item.kind = "input_image"
+		switch detail := strings.ToLower(item.materializedValues[inputContentDetailSlot]); detail {
+		case "low", "high", "auto":
+			item.detail = detail
+		}
+	case "input_file":
+		if !item.hasValue(inputContentFileDataSlot) &&
+			!item.hasValue(inputContentFileURLSlot) &&
+			!item.hasValue(inputContentFileIDSlot) {
+			return canonicalInputContentItem{materialized: true}
+		}
+		item.kind = "input_file"
+	}
+	return item
+}
+
+func (i canonicalInputContentItem) hasValue(slot int) bool {
+	if i.materialized {
+		return i.materializedValues[slot] != ""
+	}
+	return i.windows[slot].nonEmpty()
+}
+
+func scanBoundedInputContentSource(
 	source ValidatedJSONSource,
 	scratch ScratchAllocator,
 	visit func(JSONSourceReader, canonicalInputContentItem) error,
@@ -601,11 +782,14 @@ func writeCanonicalInputContentItem(
 		return err
 	}
 	writeSourceField := func(name string, slot int) error {
-		if !item.windows[slot].nonEmpty() {
+		if !item.hasValue(slot) {
 			return nil
 		}
 		if err := writeAll(writer, []byte(`,"`+name+`":`)); err != nil {
 			return err
+		}
+		if item.materialized {
+			return writeJSONValue(writer, item.materializedValues[slot])
 		}
 		return writeJSONStringRange(writer, reader, item.values[slot], item.windows[slot])
 	}

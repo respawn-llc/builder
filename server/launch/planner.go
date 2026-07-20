@@ -255,7 +255,7 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 	}
 	eventLog, err := store.MaterializeEventLog()
 	if err != nil {
-		return SessionPlan{}, session.MapEventLogMaterializationError(err)
+		return SessionPlan{}, err
 	}
 	if req.Mode == ModeHeadless {
 		if err := EnsureSubagentSessionName(store); err != nil {

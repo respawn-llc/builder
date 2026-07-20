@@ -69,7 +69,6 @@
 - If server is unreachable, GUI shows instructions to run the server.
 - Startup failures are summary-first: human-readable failure text plus next action;
 - Missing/expired/not-ready auth uses the same generic startup failure path as other readiness failures.
-- Session-log migration during session opening reuses the ordinary loading, error/toast, and retry surfaces; it adds no migration-specific dialog, progress meter, or settings. Retry preserves an unchanged legacy log after pre-commit failure or resumes metadata repair without remigration after the current-format log has been installed.
 - Home does not show runtime identity/header fluff such as endpoint, Kent version, auth mode, logo identity, or runtime metadata.
 
 ## Navigation

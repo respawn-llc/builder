@@ -54,7 +54,6 @@ const (
 	ErrCodeSubagentLaunchPolicy              = -32044
 	ErrCodeWorkflowTaskCreateSelection       = -32045
 	ErrCodeWorkflowTaskCreateConflict        = -32046
-	ErrCodeSessionEventLogMaterialization    = -32047
 )
 
 type Request struct {
@@ -80,7 +79,7 @@ type ResponseError struct {
 type StructuredRPCError interface {
 	error
 	RPCErrorCode() int
-	RPCErrorData() (json.RawMessage, error)
+	RPCErrorData() json.RawMessage
 }
 
 func (r Request) Validate() error {

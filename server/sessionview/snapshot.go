@@ -91,7 +91,7 @@ func resolveSessionStoreAndEventLog(
 	}
 	eventLog, err := store.MaterializeEventLog()
 	if err != nil {
-		return nil, session.MaterializedEventLog{}, session.MapEventLogMaterializationError(err)
+		return nil, session.MaterializedEventLog{}, err
 	}
 	return store, eventLog, nil
 }

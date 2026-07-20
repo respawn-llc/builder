@@ -18,7 +18,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const migrationHardMemoryLimitBytes = 128 << 20
+const (
+	migrationHardMemoryLimitBytes      = 128 << 20
+	migrationResidentMemoryOracleBytes = migrationHardMemoryLimitBytes + 8<<20
+)
 
 func TestMigrationValueLayerUnderHardMemoryLimit(t *testing.T) {
 	if os.Getenv("KENT_MIGRATION_MEMORY_LIMIT_CHILD") == "1" {

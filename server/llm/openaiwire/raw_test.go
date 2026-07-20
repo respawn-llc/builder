@@ -195,6 +195,41 @@ func TestFunctionCallOutputStreamingEncoderMatchesCanonicalContentSemantics(t *t
 	}
 }
 
+func TestFunctionCallOutputStreamingEncoderPreservesCanonicalSemanticsAboveLibraryBuffer(t *testing.T) {
+	fileData := " " + strings.Repeat("x", 70<<10) + " "
+	encodedFileData, err := json.Marshal(fileData)
+	if err != nil {
+		t.Fatalf("encode large structured file data: %v", err)
+	}
+	raw, err := openaiwire.NewFunctionCallOutput(
+		"call-large-structured",
+		json.RawMessage(`[{
+			"TYPE":" input_file ",
+			"file_data":`+string(encodedFileData)+`,
+			"filename":" artifact.txt ",
+			"future":true
+		}]`),
+	)
+	if err != nil {
+		t.Fatalf("construct large streamed function output: %v", err)
+	}
+	var decoded struct {
+		Output []map[string]any `json:"output"`
+	}
+	if err := json.Unmarshal(raw.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode large streamed function output: %v", err)
+	}
+	if len(decoded.Output) != 1 ||
+		decoded.Output[0]["type"] != "input_file" ||
+		decoded.Output[0]["file_data"] != strings.TrimSpace(fileData) ||
+		decoded.Output[0]["filename"] != "artifact.txt" {
+		t.Fatalf("large canonical structured output = %#v", decoded.Output)
+	}
+	if _, ok := decoded.Output[0]["future"]; ok {
+		t.Fatalf("unknown field survived large canonicalization: %#v", decoded.Output[0])
+	}
+}
+
 func TestInputContentItemsUsesCanonicalStructuredContentNormalization(t *testing.T) {
 	text := strings.Repeat("x", 2*boundedjson.MaxKnownFieldNameBytes)
 	encodedText, err := json.Marshal(text)

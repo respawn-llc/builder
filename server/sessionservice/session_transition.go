@@ -131,7 +131,7 @@ func resolveForkRollback(req sessionTransitionResolveRequest) (serverapi.Session
 	}
 	eventLog, err := req.Store.MaterializeEventLog()
 	if err != nil {
-		return serverapi.SessionDirective{}, session.MapEventLogMaterializationError(err)
+		return serverapi.SessionDirective{}, err
 	}
 	forkedStore, forkOrdinal, err := session.ForkAtUserMessage(eventLog, req.Transition.ForkUserMessageSeq, baseName, sessioncontract.SessionCategoryMain)
 	if err != nil {

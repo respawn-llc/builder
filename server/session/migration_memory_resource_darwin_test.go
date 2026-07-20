@@ -20,10 +20,11 @@ func assertMigrationResidentMemoryWithinLimit() error {
 	if err := unix.Getrusage(unix.RUSAGE_SELF, &usage); err != nil {
 		return fmt.Errorf("read migration child resident memory: %w", err)
 	}
-	if usage.Maxrss > migrationHardMemoryLimitBytes {
+	if usage.Maxrss > migrationResidentMemoryOracleBytes {
 		return fmt.Errorf(
-			"peak resident memory %d exceeds limit %d",
+			"peak resident memory %d exceeds runtime-adjusted oracle %d for %d-byte migration working-set contract",
 			usage.Maxrss,
+			migrationResidentMemoryOracleBytes,
 			migrationHardMemoryLimitBytes,
 		)
 	}

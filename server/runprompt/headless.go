@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"core/server/launch"
+	"core/server/llm"
 	"core/server/metadata"
 	"core/server/requestmemo"
 	"core/server/runlog"
@@ -181,16 +182,18 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 						prepared.onActive()
 					}
 				}, nil)
-				if assistant.Content != nil {
-					prepared.content = *assistant.Content
-				}
+				prepared.content = preservePresentAssistantContent(
+					prepared.content,
+					assistant,
+				)
 				prepared.name = engine.SessionName()
 				if waitHandle != nil {
 					result, waitErr := waitHandle.Wait()
 					if waitErr == nil {
-						if result.AssistantMessage.Content != nil {
-							prepared.content = *result.AssistantMessage.Content
-						}
+						prepared.content = preservePresentAssistantContent(
+							prepared.content,
+							result.AssistantMessage,
+						)
 					} else if submitErr == nil && !errors.Is(waitErr, runtime.ErrLiveRunNoFinalAnswer) {
 						submitErr = waitErr
 					}
@@ -223,6 +226,13 @@ func headlessRuntimeWorkdir(plan launch.SessionPlan) string {
 		}
 	}
 	return strings.TrimSpace(plan.WorkspaceRoot)
+}
+
+func preservePresentAssistantContent(current string, message llm.Message) string {
+	if message.Content == nil {
+		return current
+	}
+	return *message.Content
 }
 
 type headlessPromptRuntime struct {

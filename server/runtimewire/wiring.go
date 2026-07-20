@@ -2,7 +2,6 @@ package runtimewire
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -74,32 +73,6 @@ func NewRuntimeWiringWithBackground(
 	background *shelltool.Manager,
 	opts RuntimeWiringOptions,
 ) (*RuntimeWiring, error) {
-	return newRuntimeWiringWithBackgroundOwnership(
-		store,
-		eventLog,
-		active,
-		enabledTools,
-		workspaceRoot,
-		mgr,
-		logger,
-		background,
-		background == nil,
-		opts,
-	)
-}
-
-func newRuntimeWiringWithBackgroundOwnership(
-	store *session.Store,
-	eventLog session.MaterializedEventLog,
-	active config.Settings,
-	enabledTools []toolspec.ID,
-	workspaceRoot string,
-	mgr *auth.Manager,
-	logger Logger,
-	background *shelltool.Manager,
-	ownsBackground bool,
-	opts RuntimeWiringOptions,
-) (_ *RuntimeWiring, resultErr error) {
 	if opts.Client != nil && opts.ClientFactory != nil {
 		return nil, ErrRuntimeClientFactoryConflict
 	}
@@ -111,7 +84,7 @@ func newRuntimeWiringWithBackgroundOwnership(
 		return nil, fmt.Errorf("compile effective shell postprocessor: %w", err)
 	}
 	var eng *runtime.Engine
-	localTools, askBroker, background, err := newLocalToolRegistryBinding(LocalToolRegistryOptions{
+	localTools, askBroker, background, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
 		WorkspaceRoot:            workspaceRoot,
 		OwnerSessionID:           store.Metadata().SessionID,
 		Enabled:                  enabledTools,
@@ -130,20 +103,10 @@ func newRuntimeWiringWithBackgroundOwnership(
 			}
 			return eng.QuestionsEnabled()
 		},
-	}, ownsBackground)
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if resultErr != nil && ownsBackground {
-			if closeErr := shelltool.CloseOwnedManager(background); closeErr != nil {
-				resultErr = errors.Join(resultErr, fmt.Errorf(
-					"close private background manager after runtime wiring failure: %w",
-					closeErr,
-				))
-			}
-		}
-	}()
 	toolRegistry := localTools.Registry()
 	factoryContext := opts.Context
 	if factoryContext == nil {

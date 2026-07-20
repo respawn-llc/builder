@@ -2,13 +2,11 @@ package sessionservice
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"testing"
 
 	"core/server/session"
 	"core/server/session/sessiontest"
-	"core/shared/protocol"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 )
@@ -74,39 +72,5 @@ func TestResolveForkRollbackCreatesForkedSession(t *testing.T) {
 	}
 	if got := child.Metadata().Name; got != "parent \u2192 edit u2" {
 		t.Fatalf("forked session name = %q", got)
-	}
-}
-
-func TestResolveForkRollbackMapsUnsupportedEventLog(t *testing.T) {
-	root := t.TempDir()
-	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(
-		root,
-		"workspace-x",
-		"/tmp/work",
-		sessioncontract.SessionCategoryMain,
-		persistence.Options()...,
-	)
-	if err != nil {
-		t.Fatalf("create session store: %v", err)
-	}
-	sessiontest.WriteUnsupportedEventLogVersion(
-		t,
-		store,
-		session.EventLogVersionV1+1,
-	)
-	_, err = resolveForkRollback(sessionTransitionResolveRequest{
-		Store: store,
-		Transition: sessionTransition{
-			Action:             serverapi.SessionTransitionActionForkRollback,
-			ForkUserMessageSeq: 1,
-		},
-	})
-	var materialization *protocol.SessionEventLogMaterializationError
-	if !errors.As(err, &materialization) {
-		t.Fatalf("resolveForkRollback error = %T %v", err, err)
-	}
-	if materialization.Reason != protocol.SessionEventLogMaterializationUnsupportedVersion {
-		t.Fatalf("materialization facts = %+v", materialization)
 	}
 }

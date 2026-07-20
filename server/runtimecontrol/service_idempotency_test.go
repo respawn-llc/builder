@@ -430,18 +430,9 @@ func TestServiceSubmitQueuedUserMessagesConsumesCommittedObserverError(t *testin
 
 func TestServiceDiscardQueuedUserMessageDedupesSuccessfulRetry(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	firstQueued, err := engine.QueueUserMessage("same")
-	if err != nil {
-		t.Fatalf("queue first message: %v", err)
-	}
-	otherQueued, err := engine.QueueUserMessage("other")
-	if err != nil {
-		t.Fatalf("queue other message: %v", err)
-	}
-	duplicateQueued, err := engine.QueueUserMessage("same")
-	if err != nil {
-		t.Fatalf("queue duplicate message: %v", err)
-	}
+	firstQueued := engine.QueueUserMessage("same")
+	otherQueued := engine.QueueUserMessage("other")
+	duplicateQueued := engine.QueueUserMessage("same")
 	req := serverapi.RuntimeDiscardQueuedUserMessageRequest{ClientRequestID: "req-1", SessionID: store.Metadata().SessionID, QueueItemID: duplicateQueued.ID}
 
 	first, err := service.DiscardQueuedUserMessage(context.Background(), req)
@@ -455,25 +446,13 @@ func TestServiceDiscardQueuedUserMessageDedupesSuccessfulRetry(t *testing.T) {
 	if !first.Discarded || !second.Discarded {
 		t.Fatalf("discard results = (%t, %t), want both true", first.Discarded, second.Discarded)
 	}
-	firstRemaining, err := engine.DiscardQueuedUserMessage(firstQueued.ID)
-	if err != nil {
-		t.Fatalf("discard first remaining message: %v", err)
-	}
-	if !firstRemaining {
+	if !engine.DiscardQueuedUserMessage(firstQueued.ID) {
 		t.Fatal("expected first duplicate text item to remain")
 	}
-	otherRemaining, err := engine.DiscardQueuedUserMessage(otherQueued.ID)
-	if err != nil {
-		t.Fatalf("discard other remaining message: %v", err)
-	}
-	if !otherRemaining {
+	if !engine.DiscardQueuedUserMessage(otherQueued.ID) {
 		t.Fatal("expected other queued item to remain")
 	}
-	duplicateRemaining, err := engine.DiscardQueuedUserMessage(duplicateQueued.ID)
-	if err != nil {
-		t.Fatalf("discard already removed message: %v", err)
-	}
-	if duplicateRemaining {
+	if engine.DiscardQueuedUserMessage(duplicateQueued.ID) {
 		t.Fatal("did not expect discarded queue item to remain")
 	}
 }

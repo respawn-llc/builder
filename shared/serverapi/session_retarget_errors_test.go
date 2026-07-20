@@ -21,7 +21,7 @@ func TestSessionRetargetErrorRoundTripsStructuredFacts(t *testing.T) {
 					{ID: "project-a", Name: "Alpha"},
 				},
 			}
-			decodedErr := DecodeSessionRetargetError(mustRPCErrorData(t, source), source.Error())
+			decodedErr := DecodeSessionRetargetError(source.RPCErrorData(), source.Error())
 			var decoded *SessionRetargetError
 			if !errors.As(decodedErr, &decoded) {
 				t.Fatalf("decoded error = %T %v, want SessionRetargetError", decodedErr, decodedErr)

@@ -14,13 +14,13 @@ func TestSubagentLaunchPolicyErrorRoundTripsMaxDepthIncludingZero(t *testing.T) 
 		t.Fatalf("RPCErrorCode = %d, want %d", source.RPCErrorCode(), ErrCodeSubagentLaunchPolicy)
 	}
 	var fields map[string]any
-	if err := json.Unmarshal(mustRPCErrorData(t, source), &fields); err != nil {
+	if err := json.Unmarshal(source.RPCErrorData(), &fields); err != nil {
 		t.Fatalf("Unmarshal RPC data: %v", err)
 	}
 	if fields["kind"] != "max_depth_exceeded" || fields["attempted_depth"] != float64(1) || fields["max_depth"] != float64(0) {
 		t.Fatalf("RPC data = %+v", fields)
 	}
-	decodedErr := DecodeSubagentLaunchPolicyError(mustRPCErrorData(t, source), "fallback")
+	decodedErr := DecodeSubagentLaunchPolicyError(source.RPCErrorData(), "fallback")
 	var decoded *SubagentLaunchPolicyError
 	if !errors.As(decodedErr, &decoded) {
 		t.Fatalf("decoded error = %T %v, want SubagentLaunchPolicyError", decodedErr, decodedErr)
@@ -37,7 +37,7 @@ func TestSubagentLaunchPolicyErrorRoundTripsLineageCorruption(t *testing.T) {
 	visitedA := mustPolicySessionID(t, "visited-a")
 	visitedB := mustPolicySessionID(t, "visited-b")
 	source := NewLineageCorruptSubagentLaunchPolicyError(repeated, []runtimeids.SessionID{visitedA, visitedB})
-	decodedErr := DecodeSubagentLaunchPolicyError(mustRPCErrorData(t, source), "fallback")
+	decodedErr := DecodeSubagentLaunchPolicyError(source.RPCErrorData(), "fallback")
 	var decoded *SubagentLaunchPolicyError
 	if !errors.As(decodedErr, &decoded) {
 		t.Fatalf("decoded error = %T %v, want SubagentLaunchPolicyError", decodedErr, decodedErr)
@@ -79,7 +79,7 @@ func TestDecodeSubagentLaunchPolicyErrorRejectsMalformedTrailingBytes(t *testing
 	source := NewMaxDepthExceededSubagentLaunchPolicyError(1, 0)
 	for _, suffix := range []string{" garbage", " {", "\x00"} {
 		err := DecodeSubagentLaunchPolicyError(
-			append(mustRPCErrorData(t, source), []byte(suffix)...),
+			append(source.RPCErrorData(), []byte(suffix)...),
 			"generic fallback",
 		)
 		var typed *SubagentLaunchPolicyError

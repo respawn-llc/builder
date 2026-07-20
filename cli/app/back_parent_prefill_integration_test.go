@@ -377,7 +377,15 @@ func TestRemoteBackRebindsToParentProjectBeforeRuntimePreparation(t *testing.T) 
 		t.Fatalf("remote binding retarget root = %+v, want %q", remoteRetargetContext, workspaceB)
 	}
 
-	workspaceChange, err := inspectPickedSessionWorkspaceChange(
+	originalPrompt := runWorkspaceChangePromptFlow
+	defer func() { runWorkspaceChangePromptFlow = originalPrompt }()
+	promptCalls := 0
+	runWorkspaceChangePromptFlow = func(string, string, string) (workspaceChangePromptResult, error) {
+		promptCalls++
+		return workspaceChangePromptResult{Rebind: true}, nil
+	}
+	workspaceChangeAction, err := maybeHandlePickedSessionWorkspaceChange(
+		context.Background(),
 		targetServer,
 		parent.Metadata().SessionID,
 		clientui.SessionExecutionTarget{
@@ -386,13 +394,13 @@ func TestRemoteBackRebindsToParentProjectBeforeRuntimePreparation(t *testing.T) 
 		},
 	)
 	if err != nil {
-		t.Fatalf("inspect target picker selection after /back: %v", err)
+		t.Fatalf("handle target picker selection after /back: %v", err)
 	}
-	if workspaceChange != nil {
-		t.Fatalf(
-			"remote /back target unexpectedly requires workspace change: %+v",
-			workspaceChange,
-		)
+	if workspaceChangeAction != sessionWorkspaceChangeProceed {
+		t.Fatalf("target picker action after /back = %v, want proceed", workspaceChangeAction)
+	}
+	if promptCalls != 0 {
+		t.Fatalf("workspace-change prompts after remote /back = %d, want 0", promptCalls)
 	}
 	planner := newSessionLaunchPlanner(targetServer)
 	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: intent})

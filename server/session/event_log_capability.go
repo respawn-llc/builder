@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"core/shared/invariant"
@@ -309,6 +310,52 @@ func (c MaterializedEventLog) ReadNewestSegmentBackward(
 	}
 	defer release()
 	return log.readNewestSegmentBackward(activeTailReverseChunkBytes, match)
+}
+
+func (c MaterializedEventLog) PendingRecoveryStepHasTerminalAssistant(
+	stepID string,
+) (bool, error) {
+	stepID = strings.TrimSpace(stepID)
+	if stepID == "" {
+		return false, errors.New("pending recovery step identity is required")
+	}
+	var matchErr error
+	window, err := c.ReadNewestSegmentBackward(func(record EventRecord) bool {
+		payload, err := record.Payload()
+		if err != nil {
+			matchErr = err
+			return true
+		}
+		_, boundary := payload.(HistoryReplacementRecord)
+		return boundary
+	})
+	if err != nil {
+		return false, err
+	}
+	if matchErr != nil {
+		return false, matchErr
+	}
+	for _, record := range window.Records {
+		recordStepID := record.StepID()
+		if recordStepID == nil || strings.TrimSpace(*recordStepID) != stepID {
+			continue
+		}
+		payload, err := record.Payload()
+		if err != nil {
+			return false, err
+		}
+		message, ok := payload.(MessageRecord)
+		if !ok {
+			continue
+		}
+		if message.Role == MessageRoleAssistant &&
+			message.Phase != nil &&
+			*message.Phase == MessagePhaseFinal &&
+			len(message.ToolCalls) == 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (c MaterializedEventLog) ReadSegmentBackward(

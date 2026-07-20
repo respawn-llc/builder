@@ -39,7 +39,6 @@ import (
 	"core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
-	shelltool "core/server/tools/shell"
 	"core/server/workflowrunner"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
@@ -101,53 +100,6 @@ type capturedRequest struct {
 	Request     llm.Request     `json:"request"`
 }
 
-type diagnosticCaptureCloser interface {
-	Close() error
-}
-
-type diagnosticCaptureCleanup struct {
-	wiring     diagnosticCaptureCloser
-	background diagnosticCaptureCloser
-	lease      diagnosticCaptureCloser
-}
-
-type diagnosticOwnedBackground struct {
-	manager *shelltool.Manager
-}
-
-func (b diagnosticOwnedBackground) Close() error {
-	return shelltool.CloseOwnedManager(b.manager)
-}
-
-func (c diagnosticCaptureCleanup) Join(operationErr error) error {
-	var cleanupErrs []error
-	if c.wiring != nil {
-		if err := c.wiring.Close(); err != nil {
-			cleanupErrs = append(
-				cleanupErrs,
-				fmt.Errorf("close diagnostic runtime wiring: %w", err),
-			)
-		}
-	}
-	if c.background != nil {
-		if err := c.background.Close(); err != nil {
-			cleanupErrs = append(
-				cleanupErrs,
-				fmt.Errorf("close diagnostic background manager: %w", err),
-			)
-		}
-	}
-	if c.lease != nil {
-		if err := c.lease.Close(); err != nil {
-			cleanupErrs = append(
-				cleanupErrs,
-				fmt.Errorf("close diagnostic event-log artifact lease: %w", err),
-			)
-		}
-	}
-	return errors.Join(append([]error{operationErr}, cleanupErrs...)...)
-}
-
 // captureSessionRequest reproduces the production request-prep path for a session
 // and returns the prepared provider-agnostic request plus semantically equivalent
 // OpenAI payload JSON. No model turn runs and no HTTP is performed.
@@ -190,9 +142,16 @@ func captureSessionRequest(
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("materialize read-only session event log: %w", err)
 	}
-	cleanup := diagnosticCaptureCleanup{lease: lease}
 	defer func() {
-		resultErr = cleanup.Join(resultErr)
+		resultErr = errors.Join(
+			resultErr,
+			func() error {
+				if err := lease.Close(); err != nil {
+					return fmt.Errorf("close diagnostic event-log artifact lease: %w", err)
+				}
+				return nil
+			}(),
+		)
 	}()
 	activeSettings := resolved.ActiveSettings
 	activeToolIDs := resolved.EnabledTools
@@ -262,8 +221,33 @@ func captureSessionRequest(
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("construct runtime wiring: %w", err)
 	}
-	cleanup.wiring = wiring
-	cleanup.background = diagnosticOwnedBackground{manager: wiring.Background}
+	defer func() {
+		var closeErr error
+		if err := wiring.Close(); err != nil {
+			closeErr = errors.Join(
+				closeErr,
+				fmt.Errorf("close diagnostic runtime wiring: %w", err),
+			)
+		}
+		if wiring.Background != nil {
+			tempDir := wiring.Background.TempDir()
+			if err := wiring.Background.Close(); err != nil {
+				closeErr = errors.Join(
+					closeErr,
+					fmt.Errorf("close diagnostic background shell manager: %w", err),
+				)
+			} else if err := os.RemoveAll(tempDir); err != nil {
+				closeErr = errors.Join(
+					closeErr,
+					fmt.Errorf("remove diagnostic background shell artifacts: %w", err),
+				)
+			}
+		}
+		resultErr = errors.Join(
+			resultErr,
+			closeErr,
+		)
+	}()
 
 	req, err := runtime.PrepareInspectionRequest(ctx, wiring.Engine, allowTools)
 	if err != nil {

@@ -261,11 +261,6 @@ func TestSessionPickerResultsAreDiscriminated(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			model := newSessionPickerModel(context.Background(), loader, "dark", sessionPickerHeaderInfo{})
-			if test.wantID != "" {
-				model.openController = successfulSessionPickerOpenController(
-					mustPickerSessionID(t, test.wantID),
-				)
-			}
 			runSessionPickerCommands(t, model, model.Init())
 			for _, key := range test.keys {
 				runSessionPickerCommands(t, model, pickerUpdateCommand(t, model, key))

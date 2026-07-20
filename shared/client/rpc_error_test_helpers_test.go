@@ -12,9 +12,5 @@ func mustRPCErrorData(
 	source protocol.StructuredRPCError,
 ) json.RawMessage {
 	t.Helper()
-	data, err := source.RPCErrorData()
-	if err != nil {
-		t.Fatalf("encode RPC error data: %v", err)
-	}
-	return data
+	return source.RPCErrorData()
 }

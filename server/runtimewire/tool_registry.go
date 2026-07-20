@@ -232,21 +232,7 @@ type LocalToolRegistryOptions struct {
 	GlobalConfigDir          string
 }
 
-func NewLocalToolRegistryBinding(
-	opts LocalToolRegistryOptions,
-) (*LocalToolRegistryBinding, *askquestion.AskQuestionBroker, *shelltool.Manager, error) {
-	return newLocalToolRegistryBinding(opts, opts.Background == nil)
-}
-
-func newLocalToolRegistryBinding(
-	opts LocalToolRegistryOptions,
-	ownsBackground bool,
-) (
-	binding *LocalToolRegistryBinding,
-	broker *askquestion.AskQuestionBroker,
-	background *shelltool.Manager,
-	resultErr error,
-) {
+func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegistryBinding, *askquestion.AskQuestionBroker, *shelltool.Manager, error) {
 	trimmedRoot := strings.TrimSpace(opts.WorkspaceRoot)
 	if trimmedRoot == "" {
 		return nil, nil, nil, errWorkspaceRootRequired
@@ -256,29 +242,14 @@ func newLocalToolRegistryBinding(
 			return nil, nil, nil, fmt.Errorf("validate execution correlation: %w", err)
 		}
 	}
-	broker = askquestion.NewAskQuestionBroker()
-	background = opts.Background
-	var ownedBackground *shelltool.Manager
-	defer func() {
-		if resultErr != nil && ownedBackground != nil {
-			if closeErr := shelltool.CloseOwnedManager(ownedBackground); closeErr != nil {
-				resultErr = errors.Join(resultErr, fmt.Errorf(
-					"close private background manager after local tool registry failure: %w",
-					closeErr,
-				))
-			}
-		}
-	}()
+	broker := askquestion.NewAskQuestionBroker()
+	background := opts.Background
 	if background == nil {
-		ownsBackground = true
 		var err error
 		background, err = shelltool.NewManager(shelltool.WithMinimumExecToBgTime(opts.MinimumExecToBgTime))
 		if err != nil {
 			return nil, nil, nil, err
 		}
-	}
-	if ownsBackground {
-		ownedBackground = background
 	}
 	background.SetMinimumExecToBgTime(opts.MinimumExecToBgTime)
 	patchOutsideWorkspaceApprover := NewOutsideWorkspaceApprover(broker, "editing")
@@ -319,7 +290,7 @@ func newLocalToolRegistryBinding(
 			)
 		}),
 	}
-	binding = &LocalToolRegistryBinding{
+	binding := &LocalToolRegistryBinding{
 		registry: registry,
 		ctx:      ctx,
 		enabled:  append([]toolspec.ID(nil), opts.Enabled...),
