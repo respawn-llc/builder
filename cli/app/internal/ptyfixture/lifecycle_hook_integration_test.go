@@ -14,8 +14,11 @@ import (
 
 	"core/internal/testharness/pty"
 	"core/internal/testharness/pty/appfixture"
+	"core/internal/testharness/pty/driver"
 	"core/internal/testharness/testsetup"
 	"core/shared/lifecyclecontract"
+
+	"github.com/google/uuid"
 )
 
 type lifecycleServerProcessReady struct {
@@ -307,20 +310,14 @@ func TestLifecycleHooksRuntimeFailureAfterNonzeroDoesNotRecurse(t *testing.T) {
 		HookBehavior:              appfixture.LifecycleHookBehaviorNonzeroOnce,
 		HookStatePath:             &nonzeroStatePath,
 	}
-	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
-		Path:       bin,
-		Env:        []string{lifecyclePTYProcessEnv(t, root, processConfig)},
-		Dimensions: pty.MustDimensions(24, 80),
-		PhaseInputs: []pty.PhaseInputEvent{{
-			Phase: pty.PhaseScenarioStart,
-			After: 3 * time.Second,
-			Bytes: []byte{0x03, 0x03},
-		}},
-		Timeout: 20 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("run failing lifecycle PTY fixture: %v raw=%q", err, string(capture.Raw))
-	}
+	result := runLifecyclePTYCommandAsync(
+		t,
+		ctx,
+		bin,
+		lifecyclePTYProcessEnv(t, root, processConfig),
+	)
+	waitForLifecycleHookRecordCount(t, recordPath, 2)
+	capture := result.stopAndWait(t)
 	if _, err := os.Stat(nonzeroStatePath); err != nil {
 		t.Fatalf("non-zero-once recorder did not publish its failure state: %v", err)
 	}
@@ -374,24 +371,17 @@ func TestLifecycleHooksHangingRecorderIsCanceledOnPTYShutdown(t *testing.T) {
 		HookReadyPath:             &readyPath,
 	}
 	startedAt := time.Now()
-	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
-		Path:       bin,
-		Env:        []string{lifecyclePTYProcessEnv(t, root, processConfig)},
-		Dimensions: pty.MustDimensions(24, 80),
-		PhaseInputs: []pty.PhaseInputEvent{{
-			Phase: pty.PhaseScenarioStart,
-			After: 750 * time.Millisecond,
-			Bytes: []byte{0x03, 0x03},
-		}},
-		Timeout: 20 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("run hanging lifecycle PTY fixture: %v raw=%q", err, string(capture.Raw))
-	}
+	result := runLifecyclePTYCommandAsync(
+		t,
+		ctx,
+		bin,
+		lifecyclePTYProcessEnv(t, root, processConfig),
+	)
+	ready := waitForLifecycleHookProcessReady(t, readyPath)
+	result.stopAndWait(t)
 	if elapsed := time.Since(startedAt); elapsed >= 5*time.Second {
 		t.Fatalf("hanging lifecycle PTY shutdown took %s, want less than hook deadline", elapsed)
 	}
-	ready := readLifecycleHookProcessReady(t, readyPath)
 	testsetup.RequireProcessGone(t, time.Now().Add(3*time.Second), ready.PID)
 	records := readLifecycleHookRecords(t, recordPath)
 	if len(records) != 1 {
@@ -476,6 +466,7 @@ func TestLifecycleHooksSimultaneousRemoteTUIsUseIndependentSnapshots(t *testing.
 		HookBehavior:              appfixture.LifecycleHookBehaviorSuccess,
 	}
 	firstResult := runLifecyclePTYCommandAsync(
+		t,
 		ctx,
 		bin,
 		lifecyclePTYProcessEnv(t, filepath.Join(root, "first"), firstConfig),
@@ -496,13 +487,15 @@ func TestLifecycleHooksSimultaneousRemoteTUIsUseIndependentSnapshots(t *testing.
 	secondConfig := firstConfig
 	secondConfig.HookRecordPath = secondRecordPath
 	secondResult := runLifecyclePTYCommandAsync(
+		t,
 		ctx,
 		bin,
 		lifecyclePTYProcessEnv(t, filepath.Join(root, "second"), secondConfig),
 	)
+	waitForLifecycleHookRecordCount(t, secondRecordPath, 1)
 
-	firstCapture := firstResult.wait(t)
-	secondCapture := secondResult.wait(t)
+	firstCapture := firstResult.stopAndWait(t)
+	secondCapture := secondResult.stopAndWait(t)
 	firstRecords := readLifecycleHookRecords(t, firstRecordPath)
 	secondRecords := readLifecycleHookRecords(t, secondRecordPath)
 	if len(firstRecords) != 1 || len(secondRecords) != 1 {
@@ -538,49 +531,74 @@ func TestLifecycleHooksSimultaneousRemoteTUIsUseIndependentSnapshots(t *testing.
 }
 
 type lifecyclePTYCommandResult struct {
-	done chan lifecyclePTYCommandOutcome
-}
-
-type lifecyclePTYCommandOutcome struct {
-	capture pty.Capture
-	err     error
+	session *driver.Session
 }
 
 func runLifecyclePTYCommandAsync(
+	t *testing.T,
 	ctx context.Context,
 	bin string,
 	processEnv string,
 ) lifecyclePTYCommandResult {
-	done := make(chan lifecyclePTYCommandOutcome, 1)
+	t.Helper()
+	session, err := driver.StartSession(driver.SessionSpec{
+		Path:       bin,
+		Env:        append(os.Environ(), processEnv),
+		Dimensions: pty.MustDimensions(24, 80),
+	})
+	if err != nil {
+		t.Fatalf("start lifecycle PTY fixture: %v", err)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-session.Done():
+			return
+		default:
+		}
+		_ = session.ForceKill()
+		select {
+		case <-session.Done():
+		case <-time.After(time.Second):
+			t.Error("lifecycle PTY fixture did not exit during cleanup")
+		}
+	})
 	go func() {
-		capture, err := pty.RunCommand(ctx, pty.CommandSpec{
-			Path:       bin,
-			Env:        []string{processEnv},
-			Dimensions: pty.MustDimensions(24, 80),
-			PhaseInputs: []pty.PhaseInputEvent{{
-				Phase: pty.PhaseScenarioStart,
-				After: 3 * time.Second,
-				Bytes: []byte{0x03, 0x03},
-			}},
-			Timeout: 20 * time.Second,
-		})
-		done <- lifecyclePTYCommandOutcome{capture: capture, err: err}
+		for range session.Events() {
+		}
 	}()
-	return lifecyclePTYCommandResult{done: done}
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = session.ForceKill()
+		case <-session.Done():
+		}
+	}()
+	return lifecyclePTYCommandResult{session: session}
 }
 
-func (result lifecyclePTYCommandResult) wait(t *testing.T) pty.Capture {
+func (result lifecyclePTYCommandResult) stopAndWait(t *testing.T) pty.Capture {
 	t.Helper()
-	select {
-	case outcome := <-result.done:
-		if outcome.err != nil {
-			t.Fatalf("run simultaneous lifecycle PTY fixture: %v raw=%q", outcome.err, string(outcome.capture.Raw))
-		}
-		return outcome.capture
-	case <-time.After(15 * time.Second):
-		t.Fatal("simultaneous lifecycle PTY fixture did not exit")
-		return pty.Capture{}
+	if err := result.session.Enqueue(driver.SessionCommand{
+		ID:    uuid.New(),
+		Kind:  driver.SessionCommandRuntimeControlByte,
+		Bytes: []byte{0x03, 0x03},
+	}); err != nil {
+		t.Fatalf("stop lifecycle PTY fixture: %v", err)
 	}
+	select {
+	case <-result.session.Done():
+	case <-time.After(10 * time.Second):
+		_ = result.session.ForceKill()
+		t.Fatal("lifecycle PTY fixture did not exit")
+	}
+	capture, err := result.session.Capture()
+	if err != nil {
+		t.Fatalf("capture lifecycle PTY fixture: %v", err)
+	}
+	if capture.ProcessExit == nil || capture.ProcessExit.Code != 0 {
+		t.Fatalf("lifecycle PTY fixture exit = %+v raw=%q", capture.ProcessExit, string(capture.Raw))
+	}
+	return capture
 }
 
 func lifecycleRecorderCommandForTestBinary(bin string, recordPath string) []string {
@@ -659,19 +677,28 @@ func readLifecycleHookRecords(t *testing.T, path string) []lifecycleHookRecord {
 	}
 }
 
-func readLifecycleHookProcessReady(t *testing.T, path string) lifecycleHookProcessReady {
+func waitForLifecycleHookProcessReady(t *testing.T, path string) lifecycleHookProcessReady {
 	t.Helper()
-	encoded, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read lifecycle hook process readiness: %v", err)
-	}
 	var ready lifecycleHookProcessReady
-	if err := json.Unmarshal(encoded, &ready); err != nil {
-		t.Fatalf("decode lifecycle hook process readiness: %v", err)
-	}
-	if ready.PID <= 0 || ready.ParentPID <= 0 {
-		t.Fatalf("lifecycle hook process readiness = %+v, want positive process identities", ready)
-	}
+	testsetup.RequireUntil(
+		t,
+		time.Now().Add(10*time.Second),
+		10*time.Millisecond,
+		func() bool {
+			encoded, err := os.ReadFile(path)
+			if errors.Is(err, os.ErrNotExist) {
+				return false
+			}
+			if err != nil {
+				t.Fatalf("read lifecycle hook process readiness while waiting: %v", err)
+			}
+			if err := json.Unmarshal(encoded, &ready); err != nil {
+				t.Fatalf("decode lifecycle hook process readiness while waiting: %v", err)
+			}
+			return ready.PID > 0 && ready.ParentPID > 0
+		},
+		"lifecycle hook process did not publish readiness",
+	)
 	return ready
 }
 
