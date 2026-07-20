@@ -42,3 +42,4 @@ export { patchExistingTaskLabelAssignment, patchExistingTaskLabelProjections } f
 export { type TaskLabelAssignmentData } from "./taskLabelAssignmentData";
 export { TaskLabelAssignmentProvider } from "./TaskLabelAssignmentProvider";
 export { useTaskLabelAssignment } from "./taskLabelAssignmentContext";
+export { LabelChooser, type LabelChooserInvocation, type LabelChooserProps } from "./LabelChooser";
