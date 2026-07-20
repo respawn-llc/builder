@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	modelstub "core/internal/testharness/pty/blackbox"
 	"core/internal/testharness/pty/appfixture"
+	modelstub "core/internal/testharness/pty/blackbox"
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/session"
