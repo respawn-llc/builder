@@ -24,9 +24,17 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 			m.nativeTurnNotifications.OnTranscriptMessage(message)
 		}
 	}
-	if m.lifecycleCoordinator != nil &&
-		message.Kind == clientui.TranscriptMessageLiveRunBatchFinished {
-		m.lifecycleCoordinator.AcceptLiveRunBatchFinished(*message.Payload.LiveRunBatchFinished)
+	if m.lifecycleCoordinator != nil {
+		switch message.Kind {
+		case clientui.TranscriptMessageHydration:
+			m.lifecycleCoordinator.AcceptSessionIdentity(message.Payload.Hydration.SessionIdentity)
+		case clientui.TranscriptMessageSessionIdentity:
+			m.lifecycleCoordinator.AcceptSessionIdentity(*message.Payload.SessionIdentity)
+		case clientui.TranscriptMessageCompactionStatus:
+			m.lifecycleCoordinator.AcceptCompactionStatus(*message.Payload.CompactionStatus)
+		case clientui.TranscriptMessageLiveRunBatchFinished:
+			m.lifecycleCoordinator.AcceptLiveRunBatchFinished(*message.Payload.LiveRunBatchFinished)
+		}
 	}
 	switch message.Kind {
 	case clientui.TranscriptMessageHydration:

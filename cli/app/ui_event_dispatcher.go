@@ -106,15 +106,11 @@ func (m *uiModel) reduceAcceptedAttentionEventWithNative(outcome attentionStream
 	}
 }
 
-type lifecycleAttentionFactSink interface {
-	AcceptAttentionFact(attentionFact)
-}
-
 func (m *uiModel) fanOutAcceptedAttentionFact(fact attentionFact, native *nativeTurnNotificationObserver) {
 	if native != nil {
 		native.OnAttentionFact(fact)
 	}
-	if m.lifecycleAttention != nil {
-		m.lifecycleAttention.AcceptAttentionFact(fact)
+	if m.lifecycleCoordinator != nil {
+		m.lifecycleCoordinator.AcceptAttentionFact(fact)
 	}
 }

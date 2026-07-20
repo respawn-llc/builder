@@ -148,7 +148,6 @@ type uiConversationFeatureState struct {
 	questionProjector                  questionProjector
 	promptAnswers                      *transcriptPromptAnswerer
 	promptAttention                    *nativeTurnNotificationObserver
-	lifecycleAttention                 lifecycleAttentionFactSink
 	lifecycleCoordinator               *clientLifecycleCoordinator
 	startupSubmit                      string
 	startupSubmitPromptHistoryRecorded bool

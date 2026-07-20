@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"testing"
 
 	"core/shared/clientui"
@@ -12,8 +13,8 @@ func TestAskVisibleActivationNormalizesMarkdownAfterProjectionCompletes(t *testi
 	ringer := &countRinger{}
 	model := sizedTestUIModel(newProjectedStaticUIModel(), 64, 20)
 	model.promptAttention = newUnfocusedNativeTurnNotificationObserver(ringer)
-	lifecycle := &recordingLifecycleAttentionSink{}
-	model.lifecycleAttention = lifecycle
+	lifecycle := &recordingLifecycleEnvelopeSink{}
+	model.lifecycleCoordinator = newClientLifecycleCoordinator(lifecycle, nil, nil, nil)
 	model.questionProjector = func(request questionRenderRequest) questionRenderResultMsg {
 		return questionRenderResultMsg{
 			request: request,
@@ -33,8 +34,23 @@ func TestAskVisibleActivationNormalizesMarkdownAfterProjectionCompletes(t *testi
 	if ready.ask.activeProjection == nil || ringer.notifications != 1 || len(ringer.messages) != 1 {
 		t.Fatalf("activation state = projection %+v notifications %d messages %q", ready.ask.activeProjection, ringer.notifications, ringer.messages)
 	}
-	if len(lifecycle.facts) != 1 || lifecycle.facts[0].summary != "**raw Markdown source that must not reach activation notification rendering**" {
-		t.Fatalf("activation lifecycle facts = %+v, want one Markdown-source fact", lifecycle.facts)
+	if len(lifecycle.envelopes) != 1 {
+		t.Fatalf("activation lifecycle envelopes = %d, want one", len(lifecycle.envelopes))
+	}
+	raw, err := json.Marshal(lifecycle.envelopes[0])
+	if err != nil {
+		t.Fatalf("marshal activation lifecycle envelope: %v", err)
+	}
+	var got struct {
+		Details struct {
+			Summary string `json:"summary"`
+		} `json:"details"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode activation lifecycle envelope: %v", err)
+	}
+	if got.Details.Summary != "**raw Markdown source that must not reach activation notification rendering**" {
+		t.Fatalf("activation lifecycle summary = %q, want Markdown source", got.Details.Summary)
 	}
 }
 

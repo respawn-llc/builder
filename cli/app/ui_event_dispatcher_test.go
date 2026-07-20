@@ -1,12 +1,14 @@
 package app
 
 import (
+	"encoding/json"
 	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"core/shared/clientui"
+	"core/shared/lifecyclecontract"
 )
 
 func TestUIEventDispatcherReducesAttentionDiscontinuityAndRequestsReopen(t *testing.T) {
@@ -34,9 +36,11 @@ func TestUIEventDispatcherReducesAttentionDiscontinuityAndRequestsReopen(t *test
 func TestUIEventDispatcherFansAcceptedAttentionToNativeAndLifecycle(t *testing.T) {
 	attentionEvents := make(chan attentionStreamOutcome, 1)
 	ringer := &countRinger{}
-	lifecycle := &recordingLifecycleAttentionSink{}
-	model := newProjectedStaticUIModel(WithUINativeTurnNotificationObserver(newUnfocusedNativeTurnNotificationObserver(ringer)))
-	model.lifecycleAttention = lifecycle
+	lifecycle := &recordingLifecycleEnvelopeSink{}
+	model := newProjectedStaticUIModel(
+		WithUINativeTurnNotificationObserver(newUnfocusedNativeTurnNotificationObserver(ringer)),
+		WithUIClientLifecycleCoordinator(newClientLifecycleCoordinator(lifecycle, nil, nil, nil)),
+	)
 	model.eventDispatcher.attentionEvents = attentionEvents
 	attentionEvents <- &attentionFact{
 		notificationKey: attentionKeyForNotificationID(clientui.AttentionNotificationID{
@@ -55,11 +59,25 @@ func TestUIEventDispatcherFansAcceptedAttentionToNativeAndLifecycle(t *testing.T
 	if ringer.total() != 1 {
 		t.Fatalf("accepted attention emitted %d native events, want one", ringer.total())
 	}
-	if len(lifecycle.facts) != 1 {
-		t.Fatalf("accepted attention emitted %d lifecycle facts, want one", len(lifecycle.facts))
+	if len(lifecycle.envelopes) != 1 {
+		t.Fatalf("accepted attention emitted %d lifecycle envelopes, want one", len(lifecycle.envelopes))
 	}
-	if lifecycle.facts[0].notificationKey == (attentionNotificationKey{}) {
-		t.Fatal("lifecycle attention fact lost its notification key")
+	raw, err := json.Marshal(lifecycle.envelopes[0])
+	if err != nil {
+		t.Fatalf("marshal lifecycle attention envelope: %v", err)
+	}
+	var got struct {
+		Category lifecyclecontract.Category `json:"category"`
+		Details  struct {
+			Summary string `json:"summary"`
+		} `json:"details"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode lifecycle attention envelope: %v", err)
+	}
+	if got.Category != lifecyclecontract.CategoryInputRequired ||
+		got.Details.Summary != "What should happen next?" {
+		t.Fatalf("lifecycle attention envelope = %+v", got)
 	}
 }
 
@@ -172,12 +190,4 @@ func reduceNextAcceptedExternalEvent(t *testing.T, model *uiModel) *uiModel {
 	}
 	next, _ := model.Update(message)
 	return next.(*uiModel)
-}
-
-type recordingLifecycleAttentionSink struct {
-	facts []attentionFact
-}
-
-func (s *recordingLifecycleAttentionSink) AcceptAttentionFact(fact attentionFact) {
-	s.facts = append(s.facts, fact)
 }
