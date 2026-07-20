@@ -2,6 +2,7 @@ package lifecyclecontract
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
@@ -27,13 +28,13 @@ func TestEncodeClientLifecycleEvents(t *testing.T) {
 		event    Event
 		category Category
 		alias    CompatibilityAlias
-		detail   string
+		details  map[string]any
 	}{
-		{"session start", NewSessionStart(occurredAt, true, context, OpeningKindResumed), CategorySessionStart, CompatibilityAliasSessionStart, `"kind":"resumed"`},
-		{"task complete", NewTaskComplete(occurredAt, false, context, "done", true), CategoryTaskComplete, CompatibilityAliasStop, `"work_performed":true`},
-		{"task error", NewTaskError(occurredAt, false, context, "boom"), CategoryTaskError, CompatibilityAliasPostToolUseFailure, `"diagnostic":"boom"`},
-		{"input required", NewInputRequired(occurredAt, true, context, InputKindApproval, "approve?"), CategoryInputRequired, CompatibilityAliasPermissionRequest, `"kind":"approval"`},
-		{"compaction started", NewCompactionStarted(occurredAt, false, context, "manual"), CategoryResourceLimit, CompatibilityAliasPreCompact, `"compaction_mode":"manual"`},
+		{"session start", NewSessionStart(occurredAt, true, context, OpeningKindResumed), CategorySessionStart, CompatibilityAliasSessionStart, map[string]any{"kind": "resumed"}},
+		{"task complete", NewTaskComplete(occurredAt, false, context, "done", true), CategoryTaskComplete, CompatibilityAliasStop, map[string]any{"final_answer": "done", "work_performed": true}},
+		{"task error", NewTaskError(occurredAt, false, context, "boom"), CategoryTaskError, CompatibilityAliasPostToolUseFailure, map[string]any{"diagnostic": "boom"}},
+		{"input required", NewInputRequired(occurredAt, true, context, InputKindApproval, "approve?"), CategoryInputRequired, CompatibilityAliasPermissionRequest, map[string]any{"kind": "approval", "summary": "approve?"}},
+		{"compaction started", NewCompactionStarted(occurredAt, false, context, "manual"), CategoryResourceLimit, CompatibilityAliasPreCompact, map[string]any{"compaction_mode": "manual"}},
 	}
 
 	for _, test := range tests {
@@ -53,8 +54,8 @@ func TestEncodeClientLifecycleEvents(t *testing.T) {
 				decoded["hook_event_name"] != string(test.alias) {
 				t.Fatalf("identity = %#v", decoded)
 			}
-			if string(raw) == "" || !containsJSONFragment(raw, test.detail) {
-				t.Fatalf("payload %s does not contain %s", raw, test.detail)
+			if !reflect.DeepEqual(decoded["details"], test.details) {
+				t.Fatalf("details = %#v, want %#v", decoded["details"], test.details)
 			}
 			for _, forbidden := range []string{"run_id", "step_id", "prompt_id", "approval_id", "subscription_id", "workspace_path", "server_execution_root"} {
 				if _, present := decoded[forbidden]; present {
@@ -79,13 +80,4 @@ func TestEncodeOmitsAbsentLifecycleContext(t *testing.T) {
 	if len(decoded.Context) != 0 {
 		t.Fatalf("context = %#v, want empty object", decoded.Context)
 	}
-}
-
-func containsJSONFragment(raw []byte, fragment string) bool {
-	for index := 0; index+len(fragment) <= len(raw); index++ {
-		if string(raw[index:index+len(fragment)]) == fragment {
-			return true
-		}
-	}
-	return false
 }
