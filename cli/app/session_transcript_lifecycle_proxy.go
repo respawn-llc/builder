@@ -15,6 +15,11 @@ func (p *clientLifecycleProxy) AcceptTranscript(message clientui.TranscriptMessa
 	case clientui.TranscriptMessageHydration:
 		p.acceptSessionIdentity(message.Payload.Hydration.SessionIdentity)
 		p.acceptSessionStatus(message.Payload.Hydration.SessionStatus)
+		if p.transcriptAttention {
+			for _, prompt := range message.Payload.Hydration.PendingPrompts {
+				p.acceptTranscriptPrompt(prompt)
+			}
+		}
 	case clientui.TranscriptMessageSessionIdentity:
 		p.acceptSessionIdentity(*message.Payload.SessionIdentity)
 	case clientui.TranscriptMessageSessionStatus:

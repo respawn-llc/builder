@@ -138,6 +138,13 @@ func (p *clientLifecycleProxy) AcceptAttention(event clientui.AttentionNotificat
 
 func (p *clientLifecycleProxy) acceptLiveRunFinished(result clientui.TranscriptLiveRunResult) {
 	switch {
+	case result.Status == clientui.LiveRunStatusFailed && result.Failure != nil:
+		p.enqueue(lifecyclecontract.NewTaskError(
+			result.FinishedAt,
+			p.isFocused(),
+			p.context(),
+			*result.Failure,
+		))
 	case result.ResultKind == clientui.LiveRunResultAssistantFinalAnswer && result.FinalAnswer != nil:
 		p.enqueue(lifecyclecontract.NewTaskComplete(
 			result.FinishedAt,
@@ -145,13 +152,6 @@ func (p *clientLifecycleProxy) acceptLiveRunFinished(result clientui.TranscriptL
 			p.context(),
 			*result.FinalAnswer,
 			result.WorkPerformed,
-		))
-	case result.Status == clientui.LiveRunStatusFailed && result.Failure != nil:
-		p.enqueue(lifecyclecontract.NewTaskError(
-			result.FinishedAt,
-			p.isFocused(),
-			p.context(),
-			*result.Failure,
 		))
 	}
 }
