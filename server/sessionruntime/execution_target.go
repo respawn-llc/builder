@@ -223,7 +223,24 @@ func (a *Authority) HasBlockingRuntimeActivity(ctx context.Context, sessionID st
 	if err != nil {
 		return false, err
 	}
-	_, active := a.SessionExecution(id)
+	if a == nil {
+		return false, nil
+	}
+	a.mu.Lock()
+	resource := a.resources[id]
+	a.mu.Unlock()
+	if resource == nil {
+		return false, nil
+	}
+	resource.mu.Lock()
+	active := resource.state != AgentResourceReady ||
+		resource.current != nil ||
+		resource.steps != 0
+	engine := resource.engine
+	resource.mu.Unlock()
+	if !active && engine != nil {
+		active = engine.HasActiveLiveRunGroup()
+	}
 	return active, nil
 }
 
@@ -332,6 +349,12 @@ func (a *Authority) withMaintenanceResource(ctx context.Context, sessionID runti
 	gate := a.gateFor(sessionID)
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
+	if block := gate.unauthorizedMaintenanceBlock(ctx); block != nil {
+		return errors.Join(
+			ErrSessionStartsBlocked,
+			fmt.Errorf("session %s maintenance is blocked by session start block %d", sessionID, block.reason),
+		)
+	}
 	a.mu.Lock()
 	resource := a.resources[sessionID]
 	a.mu.Unlock()

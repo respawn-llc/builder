@@ -90,6 +90,7 @@ func (s *Service) retargetSessionsFromWorktree(
 		return worktreeSessionRetargetCompensation{}, err
 	}
 	defer releaseSessionStarts(releaseStarts)
+	ctx = authorizeSessionMaintenance(ctx, releaseStarts)
 	pending := make([]pendingWorktreeSessionRetarget, 0, len(blockers))
 	collected := make([]error, 0)
 	appendErr := func(sessionID string, err error) {
@@ -219,6 +220,7 @@ func (s *Service) switchSessionTargetWithSync(
 			return clientui.SessionExecutionTarget{}, err
 		}
 		defer releaseSessionStarts(release)
+		ctx = authorizeSessionMaintenance(ctx, release)
 	}
 	nextWorktreeID := strings.TrimSpace(next.record.ID)
 	nextBaseRoot := strings.TrimSpace(next.record.CanonicalRoot)

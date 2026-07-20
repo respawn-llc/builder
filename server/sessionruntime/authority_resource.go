@@ -457,6 +457,9 @@ func (a *Authority) OpenRuntime(ctx context.Context, request RuntimeOpenRequest)
 	gate := a.gateFor(request.SessionID)
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
+	if len(gate.blocks) != 0 {
+		return RuntimeAttachment{}, sessionStartsBlockedError(request.SessionID)
+	}
 	descriptor, err := session.NewOpenSessionDescriptor(request.SessionID)
 	if err != nil {
 		return RuntimeAttachment{}, err
@@ -634,7 +637,7 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
 	if len(gate.blocks) != 0 {
-		return nil, errors.Join(ErrSessionStartsBlocked, fmt.Errorf("session %s starts are blocked", sessionID))
+		return nil, sessionStartsBlockedError(sessionID)
 	}
 	resource, closeResource, err := a.selectResource(ctx, request.Descriptor, request.Runtime, request.Resource)
 	if err != nil {

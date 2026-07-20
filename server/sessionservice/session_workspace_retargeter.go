@@ -69,9 +69,10 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req 
 	if err != nil {
 		return metadata.SessionWorkspaceRetargetResult{}, err
 	}
+	maintenanceCtx := releaseStarts.AuthorizeMaintenance(ctx)
 
 	var result metadata.SessionWorkspaceRetargetResult
-	err = s.authority.RunSessionMaintenance(ctx, plan.SessionID, func(runCtx context.Context, store *session.Store, activeRuntime *sessionruntime.ActiveRuntimeMaintenance) error {
+	err = s.authority.RunSessionMaintenance(maintenanceCtx, plan.SessionID, func(runCtx context.Context, store *session.Store, activeRuntime *sessionruntime.ActiveRuntimeMaintenance) error {
 		currentPlan, err := s.metadata.PlanSessionWorkspaceRetarget(runCtx, req)
 		if err != nil {
 			return err
