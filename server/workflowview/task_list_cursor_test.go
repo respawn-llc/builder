@@ -158,6 +158,9 @@ func TestWorkflowTaskListRequestFingerprintCanonicalizesSetFilters(t *testing.T)
 		ColumnKeys:     []string{"done", "backlog", "done"},
 		StatusKinds:    []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindRunning, serverapi.WorkflowTaskStatusKindBacklog, serverapi.WorkflowTaskStatusKindRunning},
 		AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindQuestion, serverapi.WorkflowTaskAttentionKindApproval},
+	}, workflowTaskLabelFilterFacts{
+		Kind:     serverapi.WorkflowTaskLabelFilterKindNone,
+		LabelIDs: []string{},
 	}, sortSelectors, workflowTaskListFingerprintScope{
 		Narrowed: &workflowTaskListNarrowedFingerprintInvariants{ColumnStructureHash: "columns"},
 	})
@@ -169,6 +172,9 @@ func TestWorkflowTaskListRequestFingerprintCanonicalizesSetFilters(t *testing.T)
 		ColumnKeys:     []string{"backlog", "done"},
 		StatusKinds:    []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog, serverapi.WorkflowTaskStatusKindRunning},
 		AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindApproval, serverapi.WorkflowTaskAttentionKindQuestion},
+	}, workflowTaskLabelFilterFacts{
+		Kind:     serverapi.WorkflowTaskLabelFilterKindNone,
+		LabelIDs: []string{},
 	}, sortSelectors, workflowTaskListFingerprintScope{
 		Narrowed: &workflowTaskListNarrowedFingerprintInvariants{ColumnStructureHash: "columns"},
 	})
@@ -195,7 +201,15 @@ func TestWorkflowTaskListRequestFingerprintRequiresOneTypedScope(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := workflowTaskListRequestFingerprint(request, sortSelectors, scope); err == nil {
+			if _, err := workflowTaskListRequestFingerprint(
+				request,
+				workflowTaskLabelFilterFacts{
+					Kind:     serverapi.WorkflowTaskLabelFilterKindNone,
+					LabelIDs: []string{},
+				},
+				sortSelectors,
+				scope,
+			); err == nil {
 				t.Fatalf("workflowTaskListRequestFingerprint accepted %s", name)
 			}
 		})

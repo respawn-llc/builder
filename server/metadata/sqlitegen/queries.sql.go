@@ -8058,25 +8058,28 @@ args AS (
         CAST(?8 AS TEXT) AS status_kinds_json,
         CAST(?9 AS INTEGER) AS attention_filter_set,
         CAST(?10 AS TEXT) AS attention_kinds_json,
-        CAST(?11 AS INTEGER) AS cursor_set,
-        CAST(?12 AS INTEGER) AS cursor_created_at_unix_ms,
-        CAST(?13 AS INTEGER) AS cursor_updated_at_unix_ms,
-        CAST(?14 AS INTEGER) AS cursor_primary_status_rank,
-        CAST(?15 AS INTEGER) AS cursor_column_rank,
-        CAST(?16 AS INTEGER) AS cursor_run_count,
-        CAST(?17 AS TEXT) AS cursor_title_sort,
-        CAST(?18 AS TEXT) AS cursor_task_id,
-        CAST(?19 AS TEXT) AS sort_1_field,
-        CAST(?20 AS INTEGER) AS sort_1_desc,
-        CAST(?21 AS TEXT) AS sort_2_field,
-        CAST(?22 AS INTEGER) AS sort_2_desc,
-        CAST(?23 AS TEXT) AS sort_3_field,
-        CAST(?24 AS INTEGER) AS sort_3_desc,
-        CAST(?25 AS TEXT) AS sort_4_field,
-        CAST(?26 AS INTEGER) AS sort_4_desc,
-        CAST(?27 AS TEXT) AS sort_5_field,
-        CAST(?28 AS INTEGER) AS sort_5_desc,
-        CAST(?29 AS INTEGER) AS limit_rows
+        CAST(?11 AS TEXT) AS label_filter_kind,
+        CAST(?12 AS TEXT) AS label_filter_mode,
+        CAST(?13 AS TEXT) AS label_ids_json,
+        CAST(?14 AS INTEGER) AS cursor_set,
+        CAST(?15 AS INTEGER) AS cursor_created_at_unix_ms,
+        CAST(?16 AS INTEGER) AS cursor_updated_at_unix_ms,
+        CAST(?17 AS INTEGER) AS cursor_primary_status_rank,
+        CAST(?18 AS INTEGER) AS cursor_column_rank,
+        CAST(?19 AS INTEGER) AS cursor_run_count,
+        CAST(?20 AS TEXT) AS cursor_title_sort,
+        CAST(?21 AS TEXT) AS cursor_task_id,
+        CAST(?22 AS TEXT) AS sort_1_field,
+        CAST(?23 AS INTEGER) AS sort_1_desc,
+        CAST(?24 AS TEXT) AS sort_2_field,
+        CAST(?25 AS INTEGER) AS sort_2_desc,
+        CAST(?26 AS TEXT) AS sort_3_field,
+        CAST(?27 AS INTEGER) AS sort_3_desc,
+        CAST(?28 AS TEXT) AS sort_4_field,
+        CAST(?29 AS INTEGER) AS sort_4_desc,
+        CAST(?30 AS TEXT) AS sort_5_field,
+        CAST(?31 AS INTEGER) AS sort_5_desc,
+        CAST(?32 AS INTEGER) AS limit_rows
 ),
 visible_columns AS (
     SELECT
@@ -8276,6 +8279,42 @@ selected_rows AS (
               JOIN json_each(status.attention_types_json) task_attention ON task_attention.value = filter_attention.value
           )
       )
+      AND (
+          args.label_filter_kind = 'none'
+          OR (
+              args.label_filter_kind = 'named'
+              AND args.label_filter_mode = 'any'
+              AND EXISTS (
+                  SELECT 1
+                  FROM json_each(args.label_ids_json) selected_label
+                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                    ON assignment.label_id = selected_label.value
+                  WHERE assignment.task_id = t.id
+              )
+          )
+          OR (
+              args.label_filter_kind = 'named'
+              AND args.label_filter_mode = 'all'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(args.label_ids_json) selected_label
+                  WHERE NOT EXISTS (
+                      SELECT 1
+                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                      WHERE assignment.label_id = selected_label.value
+                        AND assignment.task_id = t.id
+                  )
+              )
+          )
+          OR (
+              args.label_filter_kind = 'unlabeled'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM task_label_assignments assignment
+                  WHERE assignment.task_id = t.id
+              )
+          )
+      )
 ),
 matching_workflows AS (
     SELECT task_link.workflow_id
@@ -8412,6 +8451,9 @@ type ListWorkflowTaskListRowsParams struct {
 	StatusKindsJson         string
 	AttentionFilterSet      int64
 	AttentionKindsJson      string
+	LabelFilterKind         string
+	LabelFilterMode         string
+	LabelIdsJson            string
 	CursorSet               int64
 	CursorCreatedAtUnixMs   int64
 	CursorUpdatedAtUnixMs   int64
@@ -8481,6 +8523,9 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 		arg.StatusKindsJson,
 		arg.AttentionFilterSet,
 		arg.AttentionKindsJson,
+		arg.LabelFilterKind,
+		arg.LabelFilterMode,
+		arg.LabelIdsJson,
 		arg.CursorSet,
 		arg.CursorCreatedAtUnixMs,
 		arg.CursorUpdatedAtUnixMs,

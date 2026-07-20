@@ -90,8 +90,12 @@ func TestTaskListQueriesFilterAndSortProjectedRowsThroughFocusedModule(t *testin
 			narrowed:       narrowedFacts,
 			statusKinds:    statusKinds,
 			attentionKinds: attentionKinds,
-			sortSelectors:  sortSelectors,
-			limit:          100,
+			labelFilter: workflowTaskLabelFilterFacts{
+				Kind:     serverapi.WorkflowTaskLabelFilterKindNone,
+				LabelIDs: []string{},
+			},
+			sortSelectors: sortSelectors,
+			limit:         100,
 		})
 		if err != nil {
 			t.Fatalf("queryRows: %v", err)

@@ -63,6 +63,10 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	if _, err := l.metadata.GetProjectOverview(ctx, projectID); err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
 	}
+	labelFilter, err := resolveWorkflowTaskLabelFilter(ctx, l.queries, projectID, req.LabelFilter)
+	if err != nil {
+		return serverapi.WorkflowTaskListResponse{}, err
+	}
 	var definition serverapi.WorkflowDefinition
 	var columns []serverapi.WorkflowBoardColumn
 	if workflowID == nil {
@@ -99,7 +103,7 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 			Narrowed: &workflowTaskListNarrowedFingerprintInvariants{ColumnStructureHash: value},
 		}
 	}
-	fingerprint, err := workflowTaskListRequestFingerprint(req, sortSelectors, fingerprintScope)
+	fingerprint, err := workflowTaskListRequestFingerprint(req, labelFilter, sortSelectors, fingerprintScope)
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
 	}
@@ -142,6 +146,7 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 		narrowed:       narrowedQuery,
 		statusKinds:    req.StatusKinds,
 		attentionKinds: req.AttentionKinds,
+		labelFilter:    labelFilter,
 		sortSelectors:  sortSelectors,
 		cursor:         cursor,
 		cursorSet:      hasPageToken,

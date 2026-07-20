@@ -1581,6 +1581,9 @@ args AS (
         CAST(sqlc.arg(status_kinds_json) AS TEXT) AS status_kinds_json,
         CAST(sqlc.arg(attention_filter_set) AS INTEGER) AS attention_filter_set,
         CAST(sqlc.arg(attention_kinds_json) AS TEXT) AS attention_kinds_json,
+        CAST(sqlc.arg(label_filter_kind) AS TEXT) AS label_filter_kind,
+        CAST(sqlc.arg(label_filter_mode) AS TEXT) AS label_filter_mode,
+        CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json,
         CAST(sqlc.arg(cursor_set) AS INTEGER) AS cursor_set,
         CAST(sqlc.arg(cursor_created_at_unix_ms) AS INTEGER) AS cursor_created_at_unix_ms,
         CAST(sqlc.arg(cursor_updated_at_unix_ms) AS INTEGER) AS cursor_updated_at_unix_ms,
@@ -1797,6 +1800,42 @@ selected_rows AS (
               SELECT 1
               FROM json_each(args.attention_kinds_json) filter_attention
               JOIN json_each(status.attention_types_json) task_attention ON task_attention.value = filter_attention.value
+          )
+      )
+      AND (
+          args.label_filter_kind = 'none'
+          OR (
+              args.label_filter_kind = 'named'
+              AND args.label_filter_mode = 'any'
+              AND EXISTS (
+                  SELECT 1
+                  FROM json_each(args.label_ids_json) selected_label
+                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                    ON assignment.label_id = selected_label.value
+                  WHERE assignment.task_id = t.id
+              )
+          )
+          OR (
+              args.label_filter_kind = 'named'
+              AND args.label_filter_mode = 'all'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(args.label_ids_json) selected_label
+                  WHERE NOT EXISTS (
+                      SELECT 1
+                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                      WHERE assignment.label_id = selected_label.value
+                        AND assignment.task_id = t.id
+                  )
+              )
+          )
+          OR (
+              args.label_filter_kind = 'unlabeled'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM task_label_assignments assignment
+                  WHERE assignment.task_id = t.id
+              )
           )
       )
 ),

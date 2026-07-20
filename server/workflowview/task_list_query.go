@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	workflowTaskListPageTokenVersion = 3
+	workflowTaskListPageTokenVersion = 4
 	workflowTaskStatusModelVersion   = 1
 )
 
@@ -131,7 +131,7 @@ type workflowTaskListFingerprintScope struct {
 	Narrowed    *workflowTaskListNarrowedFingerprintInvariants    `json:"narrowed,omitempty"`
 }
 
-func workflowTaskListRequestFingerprint(req serverapi.WorkflowTaskListRequest, sortSelectors []serverapi.WorkflowTaskListSort, scope workflowTaskListFingerprintScope) (string, error) {
+func workflowTaskListRequestFingerprint(req serverapi.WorkflowTaskListRequest, labelFilter workflowTaskLabelFilterFacts, sortSelectors []serverapi.WorkflowTaskListSort, scope workflowTaskListFingerprintScope) (string, error) {
 	if (scope.ProjectWide == nil) == (scope.Narrowed == nil) {
 		return "", errors.New("task list fingerprint requires exactly one scope mode")
 	}
@@ -152,6 +152,7 @@ func workflowTaskListRequestFingerprint(req serverapi.WorkflowTaskListRequest, s
 		ColumnKeys         []string                         `json:"column_keys"`
 		StatusKinds        []string                         `json:"status_kinds"`
 		AttentionKinds     []string                         `json:"attention_kinds"`
+		LabelFilter        workflowTaskLabelFilterFacts     `json:"label_filter"`
 		Sort               []serverapi.WorkflowTaskListSort `json:"sort"`
 		Scope              workflowTaskListFingerprintScope `json:"scope"`
 		StatusModelVersion int                              `json:"status_model_version"`
@@ -159,6 +160,7 @@ func workflowTaskListRequestFingerprint(req serverapi.WorkflowTaskListRequest, s
 		ColumnKeys:         dedupeSortedStrings(req.ColumnKeys),
 		StatusKinds:        dedupeSortedStrings(statusKinds),
 		AttentionKinds:     dedupeSortedStrings(attentionKinds),
+		LabelFilter:        labelFilter,
 		Sort:               sortSelectors,
 		Scope:              scope,
 		StatusModelVersion: workflowTaskStatusModelVersion,
@@ -213,6 +215,7 @@ type workflowTaskListQueryRequest struct {
 	narrowed       *workflowTaskListNarrowedQueryFacts
 	statusKinds    []serverapi.WorkflowTaskStatusKind
 	attentionKinds []serverapi.WorkflowTaskAttentionKind
+	labelFilter    workflowTaskLabelFilterFacts
 	sortSelectors  []serverapi.WorkflowTaskListSort
 	cursor         workflowTaskListCursor
 	cursorSet      bool
@@ -276,6 +279,10 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 	if err != nil {
 		return nil, err
 	}
+	labelIDsJSON, err := json.Marshal(req.labelFilter.LabelIDs)
+	if err != nil {
+		return nil, err
+	}
 	cursorColumnRank := sql.NullInt64{}
 	if req.cursor.ColumnRank != nil {
 		cursorColumnRank = sql.NullInt64{Int64: int64(*req.cursor.ColumnRank), Valid: true}
@@ -291,6 +298,9 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 		StatusKindsJson:         string(statusKindsJSON),
 		AttentionFilterSet:      boolInt64(len(req.attentionKinds) > 0),
 		AttentionKindsJson:      string(attentionKindsJSON),
+		LabelFilterKind:         string(req.labelFilter.Kind),
+		LabelFilterMode:         string(req.labelFilter.Mode),
+		LabelIdsJson:            string(labelIDsJSON),
 		CursorSet:               boolInt64(req.cursorSet),
 		CursorCreatedAtUnixMs:   req.cursor.CreatedAtUnixMs,
 		CursorUpdatedAtUnixMs:   req.cursor.UpdatedAtUnixMs,
