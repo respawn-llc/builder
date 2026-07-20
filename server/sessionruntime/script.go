@@ -5,11 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"time"
 
-	shelltool "core/server/tools/shell"
+	"core/shared/boundedio"
+	"core/shared/ownedprocess"
 )
 
 const (
@@ -53,9 +55,10 @@ func (r ScriptResult) clone() ScriptResult {
 }
 
 type scriptProcess struct {
-	cmd               *exec.Cmd
-	stdout            *shelltool.BoundedOutput
-	stderr            *shelltool.BoundedOutput
+	launchRequest     ownedprocess.LaunchRequest
+	owner             *ownedprocess.Owner
+	stdout            *boundedio.Writer
+	stderr            *boundedio.Writer
 	cancellationGrace time.Duration
 }
 
@@ -74,7 +77,7 @@ func (a *Authority) StartScriptExecution(ctx context.Context, req ScriptExecutio
 	a.mu.Lock()
 	execution, err := a.reserveScriptExecutionLocked(req)
 	if err == nil {
-		err = process.cmd.Start()
+		err = process.start()
 	}
 	if err != nil {
 		a.mu.Unlock()
@@ -116,72 +119,103 @@ func prepareAuthorityScriptProcess(command ScriptCommand) (*scriptProcess, error
 		}
 		cancellationGrace = *command.CancellationGrace
 	}
-	cmd := exec.Command(command.Path, command.Args...)
+	var workdir *string
 	if command.Workdir != nil {
 		if *command.Workdir == "" {
 			return nil, fmt.Errorf("script workdir must not be empty when present")
 		}
-		cmd.Dir = *command.Workdir
+		value := *command.Workdir
+		workdir = &value
 	}
-	if command.Env != nil {
-		cmd.Env = append([]string(nil), command.Env...)
-	}
+	var stdin io.Reader
 	if command.Stdin != nil {
-		cmd.Stdin = bytes.NewReader(command.Stdin)
+		stdin = bytes.NewReader(command.Stdin)
 	}
-	prepareScriptCommand(cmd)
-	stdout := shelltool.NewBoundedOutput(outputLimit)
-	stderr := shelltool.NewBoundedOutput(outputLimit)
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
+	stdout, err := boundedio.NewWriter(outputLimit)
+	if err != nil {
+		return nil, fmt.Errorf("initialize script stdout capture: %w", err)
+	}
+	stderr, err := boundedio.NewWriter(outputLimit)
+	if err != nil {
+		return nil, fmt.Errorf("initialize script stderr capture: %w", err)
+	}
 	return &scriptProcess{
-		cmd:               cmd,
+		launchRequest: ownedprocess.LaunchRequest{
+			Argv:   append([]string{command.Path}, command.Args...),
+			Cwd:    workdir,
+			Env:    append([]string(nil), command.Env...),
+			Stdin:  stdin,
+			Stdout: stdout,
+			Stderr: stderr,
+		},
 		stdout:            stdout,
 		stderr:            stderr,
 		cancellationGrace: cancellationGrace,
 	}, nil
 }
 
-func (p *scriptProcess) wait(ctx context.Context) (ScriptResult, error, error) {
-	waitCh := make(chan error, 1)
-	go func() {
-		waitCh <- p.cmd.Wait()
-	}()
+func (p *scriptProcess) start() error {
+	owner, err := ownedprocess.Launch(p.launchRequest)
+	if err != nil {
+		return err
+	}
+	p.owner = owner
+	return nil
+}
 
-	canceled := false
+func (p *scriptProcess) wait(ctx context.Context) (ScriptResult, error, error) {
+	wait := make(chan error, 1)
+	go func() {
+		wait <- p.owner.Wait()
+	}()
+	if ctx.Err() != nil {
+		return p.cancel(wait)
+	}
+	select {
+	case <-ctx.Done():
+		return p.cancel(wait)
+	case waitErr := <-wait:
+		if ctx.Err() != nil {
+			return p.cancel(readyScriptWait(waitErr))
+		}
+		closeErr := normalizeStoppedProcessError(p.owner.Close())
+		return p.result(waitErr, false), waitErr, closeErr
+	}
+}
+
+func (p *scriptProcess) cancel(wait <-chan error) (ScriptResult, error, error) {
+	terminationErr := normalizeStoppedProcessError(p.owner.Terminate())
+	grace := time.NewTimer(p.cancellationGrace)
 	var (
-		waitErr error
-		stopErr error
+		waitErr  error
+		closeErr error
 	)
 	select {
-	case waitErr = <-waitCh:
-	case <-ctx.Done():
-		canceled = true
-		stopErr = normalizeStoppedProcessError(terminateScriptProcess(p.cmd.Process))
-		timer := time.NewTimer(p.cancellationGrace)
-		select {
-		case waitErr = <-waitCh:
-			if !timer.Stop() {
-				<-timer.C
-			}
-		case <-timer.C:
-			stopErr = errors.Join(stopErr, normalizeStoppedProcessError(killScriptProcess(p.cmd.Process)))
-			waitErr = <-waitCh
-		}
+	case waitErr = <-wait:
+		<-grace.C
+		closeErr = normalizeStoppedProcessError(p.owner.Close())
+	case <-grace.C:
+		closeErr = normalizeStoppedProcessError(p.owner.Close())
+		waitErr = <-wait
 	}
-	exitCode := scriptProcessExitCode(waitErr)
-	result := ScriptResult{
+	return p.result(waitErr, true), context.Canceled, errors.Join(terminationErr, closeErr)
+}
+
+func (p *scriptProcess) result(waitErr error, canceled bool) ScriptResult {
+	return ScriptResult{
 		Stdout:         p.stdout.Bytes(),
 		Stderr:         p.stderr.Bytes(),
 		StdoutOverflow: p.stdout.Overflow(),
 		StderrOverflow: p.stderr.Overflow(),
-		ExitCode:       exitCode,
+		ExitCode:       scriptProcessExitCode(waitErr),
 		Canceled:       canceled,
 	}
-	if canceled {
-		return result, context.Canceled, stopErr
-	}
-	return result, waitErr, stopErr
+}
+
+func readyScriptWait(waitErr error) <-chan error {
+	wait := make(chan error, 1)
+	wait <- waitErr
+	return wait
 }
 
 func normalizeStoppedProcessError(err error) error {
