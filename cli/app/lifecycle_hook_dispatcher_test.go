@@ -22,6 +22,7 @@ const (
 	lifecycleHookHelperMarkerName      = "KENT_LIFECYCLE_HOOK_MARKER"
 	lifecycleHookHelperReadyPathName   = "KENT_LIFECYCLE_HOOK_READY_PATH"
 	lifecycleHookHelperReleasePathName = "KENT_LIFECYCLE_HOOK_RELEASE_PATH"
+	lifecycleHookHelperOutcomeName     = "KENT_LIFECYCLE_HOOK_OUTCOME"
 )
 
 type lifecycleHookHelperRecord struct {
@@ -155,6 +156,209 @@ func TestLifecycleHookDispatcherEnqueueDoesNotWaitForActiveProcess(t *testing.T)
 	waitForLifecycleHookHelperRecords(t, recordPath, 2)
 }
 
+func TestLifecycleHookDispatcherMissingExecutableDisablesAfterOneIssue(t *testing.T) {
+	dispatcher, err := newLifecycleHookDispatcher(
+		[]string{filepath.Join(t.TempDir(), "missing-lifecycle-hook")},
+		lifecyclecontract.NewEncoder(invariant.NewPolicy(invariant.WithMode(invariant.ModeDiagnostic))),
+	)
+	if err != nil {
+		t.Fatalf("construct missing-executable lifecycle hook dispatcher: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := dispatcher.Close(); err != nil {
+			t.Errorf("close missing-executable lifecycle hook dispatcher: %v", err)
+		}
+	})
+
+	if accepted := dispatcher.EnqueueLifecycleEnvelope(dispatcherTestEnvelope(t, 1)); !accepted {
+		t.Fatal("first missing-executable lifecycle event was not accepted for launch")
+	}
+	issue := waitForLifecycleHookIssue(t, dispatcher.Issues())
+	if issue.Kind != lifecycleHookIssueLaunchDisabled {
+		t.Fatalf("missing-executable issue kind = %v, want launch disabled", issue.Kind)
+	}
+	if issue.LaunchFailure == nil || *issue.LaunchFailure != lifecycleHookLaunchUnavailable {
+		t.Fatalf("missing-executable launch failure = %+v, want unavailable", issue.LaunchFailure)
+	}
+	if accepted := dispatcher.EnqueueLifecycleEnvelope(dispatcherTestEnvelope(t, 2)); accepted {
+		t.Fatal("disabled lifecycle dispatcher accepted a later event")
+	}
+}
+
+func TestLifecycleHookDispatcherNonzeroExitReportsBoundedIssueAndRemainsEligible(t *testing.T) {
+	recordPath := filepath.Join(t.TempDir(), "records.jsonl")
+	t.Setenv(lifecycleHookHelperEnvironmentName, "1")
+	t.Setenv(lifecycleHookHelperOutcomeName, "nonzero")
+	dispatcher, err := newLifecycleHookDispatcher(
+		[]string{
+			os.Args[0],
+			"-test.run=^TestLifecycleHookDispatcherHelper$",
+			"--",
+			recordPath,
+			"fixed-nonzero",
+		},
+		lifecyclecontract.NewEncoder(invariant.NewPolicy(invariant.WithMode(invariant.ModeDiagnostic))),
+	)
+	if err != nil {
+		t.Fatalf("construct nonzero lifecycle hook dispatcher: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := dispatcher.Close(); err != nil {
+			t.Errorf("close nonzero lifecycle hook dispatcher: %v", err)
+		}
+	})
+
+	if accepted := dispatcher.EnqueueLifecycleEnvelope(dispatcherTestEnvelope(t, 1)); !accepted {
+		t.Fatal("nonzero lifecycle event was rejected")
+	}
+	issue := waitForLifecycleHookIssue(t, dispatcher.Issues())
+	if issue.Kind != lifecycleHookIssueNonzeroExit {
+		t.Fatalf("nonzero issue kind = %v, want nonzero exit", issue.Kind)
+	}
+	if issue.ExitCode == nil || *issue.ExitCode != 7 {
+		t.Fatalf("nonzero exit code = %+v, want 7", issue.ExitCode)
+	}
+	if issue.Stderr == nil || len(*issue.Stderr) != lifecycleHookStderrLimitBytes {
+		t.Fatalf("bounded stderr length = %v, want %d", issue.Stderr, lifecycleHookStderrLimitBytes)
+	}
+	if issue.StderrOverflowBytes == nil || *issue.StderrOverflowBytes == 0 {
+		t.Fatalf("stderr overflow bytes = %+v, want positive", issue.StderrOverflowBytes)
+	}
+
+	t.Setenv(lifecycleHookHelperOutcomeName, "success")
+	if accepted := dispatcher.EnqueueLifecycleEnvelope(dispatcherTestEnvelope(t, 2)); !accepted {
+		t.Fatal("dispatcher did not remain eligible after nonzero exit")
+	}
+	waitForLifecycleHookHelperRecords(t, recordPath, 2)
+}
+
+func TestLifecycleHookDispatcherTimeoutReportsIssueAndRemainsEligible(t *testing.T) {
+	tempDir := t.TempDir()
+	recordPath := filepath.Join(tempDir, "records.jsonl")
+	readyPath := filepath.Join(tempDir, "ready")
+	t.Setenv(lifecycleHookHelperEnvironmentName, "1")
+	t.Setenv(lifecycleHookHelperOutcomeName, "timeout")
+	t.Setenv(lifecycleHookHelperReadyPathName, readyPath)
+	dispatcher, err := newLifecycleHookDispatcher(
+		[]string{
+			os.Args[0],
+			"-test.run=^TestLifecycleHookDispatcherHelper$",
+			"--",
+			recordPath,
+			"fixed-timeout",
+		},
+		lifecyclecontract.NewEncoder(invariant.NewPolicy(invariant.WithMode(invariant.ModeDiagnostic))),
+	)
+	if err != nil {
+		t.Fatalf("construct timeout lifecycle hook dispatcher: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := dispatcher.Close(); err != nil {
+			t.Errorf("close timeout lifecycle hook dispatcher: %v", err)
+		}
+	})
+
+	if accepted := dispatcher.EnqueueLifecycleEnvelope(dispatcherTestEnvelope(t, 1)); !accepted {
+		t.Fatal("timeout lifecycle event was rejected")
+	}
+	testsetup.RequireUntil(
+		t,
+		time.Now().Add(2*time.Second),
+		10*time.Millisecond,
+		func() bool {
+			_, err := os.Stat(readyPath)
+			return err == nil
+		},
+		"timeout lifecycle helper did not start",
+	)
+	issue := waitForLifecycleHookIssue(t, dispatcher.Issues())
+	if issue.Kind != lifecycleHookIssueTimeout {
+		t.Fatalf("timeout issue kind = %v, want timeout", issue.Kind)
+	}
+	if issue.Stderr == nil || len(*issue.Stderr) != lifecycleHookStderrLimitBytes {
+		t.Fatalf("timeout bounded stderr length = %v, want %d", issue.Stderr, lifecycleHookStderrLimitBytes)
+	}
+
+	t.Setenv(lifecycleHookHelperOutcomeName, "success")
+	t.Setenv(lifecycleHookHelperReadyPathName, "")
+	if accepted := dispatcher.EnqueueLifecycleEnvelope(dispatcherTestEnvelope(t, 2)); !accepted {
+		t.Fatal("dispatcher did not remain eligible after timeout")
+	}
+	waitForLifecycleHookHelperRecords(t, recordPath, 2)
+}
+
+func TestLifecycleHookDispatcherOverloadCoalescesAndCloseDropsQueuedEvents(t *testing.T) {
+	tempDir := t.TempDir()
+	recordPath := filepath.Join(tempDir, "records.jsonl")
+	readyPath := filepath.Join(tempDir, "ready")
+	releasePath := filepath.Join(tempDir, "release")
+	t.Setenv(lifecycleHookHelperEnvironmentName, "1")
+	t.Setenv(lifecycleHookHelperOutcomeName, "success")
+	t.Setenv(lifecycleHookHelperReadyPathName, readyPath)
+	t.Setenv(lifecycleHookHelperReleasePathName, releasePath)
+	dispatcher, err := newLifecycleHookDispatcher(
+		[]string{
+			os.Args[0],
+			"-test.run=^TestLifecycleHookDispatcherHelper$",
+			"--",
+			recordPath,
+			"fixed-overload",
+		},
+		lifecyclecontract.NewEncoder(invariant.NewPolicy(invariant.WithMode(invariant.ModeDiagnostic))),
+	)
+	if err != nil {
+		t.Fatalf("construct overload lifecycle hook dispatcher: %v", err)
+	}
+
+	if accepted := dispatcher.EnqueueLifecycleEnvelope(dispatcherTestEnvelope(t, 1)); !accepted {
+		t.Fatal("active overload lifecycle event was rejected")
+	}
+	testsetup.RequireUntil(
+		t,
+		time.Now().Add(2*time.Second),
+		10*time.Millisecond,
+		func() bool {
+			_, err := os.Stat(readyPath)
+			return err == nil
+		},
+		"overload lifecycle helper did not start",
+	)
+	for index := 0; index < lifecycleHookQueueCapacity; index++ {
+		if accepted := dispatcher.EnqueueLifecycleEnvelope(dispatcherTestEnvelope(t, index+2)); !accepted {
+			t.Fatalf("bounded queue rejected event %d before reaching capacity", index)
+		}
+	}
+	for index := 0; index < 3; index++ {
+		if accepted := dispatcher.EnqueueLifecycleEnvelope(dispatcherTestEnvelope(t, index+100)); accepted {
+			t.Fatalf("overload event %d was accepted beyond queue capacity", index)
+		}
+	}
+	issue := waitForLifecycleHookIssue(t, dispatcher.Issues())
+	if issue.Kind != lifecycleHookIssueQueueOverload ||
+		issue.DroppedCount == nil || *issue.DroppedCount != 3 {
+		t.Fatalf("overload issue = %+v, want one coalesced count of 3", issue)
+	}
+
+	startedAt := time.Now()
+	if err := dispatcher.Close(); err != nil {
+		t.Fatalf("close overloaded lifecycle dispatcher: %v", err)
+	}
+	if err := dispatcher.Close(); err != nil {
+		t.Fatalf("close overloaded lifecycle dispatcher twice: %v", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed > 2*time.Second {
+		t.Fatalf("overloaded lifecycle dispatcher close took %s", elapsed)
+	}
+	records := waitForLifecycleHookHelperRecords(t, recordPath, 1)
+	if len(records) != 1 {
+		t.Fatalf("overload helper records after joined close = %d, want only active invocation", len(records))
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := len(readLifecycleHookHelperRecords(t, recordPath)); got != 1 {
+		t.Fatalf("queued lifecycle invocations continued after close: %d records", got)
+	}
+}
+
 func TestLifecycleHookInvocationHasNoWorkingDirectoryAuthority(t *testing.T) {
 	invocationType := reflect.TypeOf(lifecycleHookInvocation{})
 	for index := 0; index < invocationType.NumField(); index++ {
@@ -186,22 +390,6 @@ func TestLifecycleHookDispatcherHelper(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get lifecycle hook helper cwd: %v", err)
 	}
-	if readyPath := os.Getenv(lifecycleHookHelperReadyPathName); readyPath != "" {
-		if err := os.WriteFile(readyPath, []byte("ready"), 0o600); err != nil {
-			t.Fatalf("write lifecycle hook helper ready marker: %v", err)
-		}
-		releasePath := os.Getenv(lifecycleHookHelperReleasePathName)
-		testsetup.RequireUntil(
-			t,
-			time.Now().Add(4*time.Second),
-			10*time.Millisecond,
-			func() bool {
-				_, err := os.Stat(releasePath)
-				return err == nil
-			},
-			"lifecycle hook helper was not released",
-		)
-	}
 	stdout := os.Stdout
 	stderr := os.Stderr
 	_, _ = stdout.Write([]byte(strings.Repeat("ignored stdout", 1024)))
@@ -222,6 +410,35 @@ func TestLifecycleHookDispatcherHelper(t *testing.T) {
 	}
 	if err := file.Close(); err != nil {
 		t.Fatalf("close lifecycle hook record file: %v", err)
+	}
+	switch os.Getenv(lifecycleHookHelperOutcomeName) {
+	case "nonzero":
+		os.Exit(7)
+	case "timeout":
+		if readyPath := os.Getenv(lifecycleHookHelperReadyPathName); readyPath != "" {
+			if err := os.WriteFile(readyPath, []byte("ready"), 0o600); err != nil {
+				t.Fatalf("write lifecycle hook helper ready marker: %v", err)
+			}
+		}
+		for {
+			time.Sleep(time.Second)
+		}
+	}
+	if readyPath := os.Getenv(lifecycleHookHelperReadyPathName); readyPath != "" {
+		if err := os.WriteFile(readyPath, []byte("ready"), 0o600); err != nil {
+			t.Fatalf("write lifecycle hook helper ready marker: %v", err)
+		}
+		releasePath := os.Getenv(lifecycleHookHelperReleasePathName)
+		testsetup.RequireUntil(
+			t,
+			time.Now().Add(4*time.Second),
+			10*time.Millisecond,
+			func() bool {
+				_, err := os.Stat(releasePath)
+				return err == nil
+			},
+			"lifecycle hook helper was not released",
+		)
 	}
 }
 
@@ -285,4 +502,25 @@ func waitForLifecycleHookHelperRecords(
 		count,
 	)
 	return records
+}
+
+func readLifecycleHookHelperRecords(t *testing.T, path string) []lifecycleHookHelperRecord {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open lifecycle hook records: %v", err)
+	}
+	defer file.Close()
+	var records []lifecycleHookHelperRecord
+	decoder := json.NewDecoder(file)
+	for {
+		var record lifecycleHookHelperRecord
+		if err := decoder.Decode(&record); err != nil {
+			if err == io.EOF {
+				return records
+			}
+			t.Fatalf("decode lifecycle hook records: %v", err)
+		}
+		records = append(records, record)
+	}
 }

@@ -170,6 +170,7 @@ type uiStatusFeatureState struct {
 	processList                 uiProcessListState
 	reasoningStatusHeader       string
 	nativeTurnNotifications     *nativeTurnNotificationObserver
+	lifecycleHookIssueSink      lifecycleHookIssueSink
 	statusConfig                uiStatusConfig
 	statusCollector             uiStatusCollector
 	statusRepository            uiStatusRepository

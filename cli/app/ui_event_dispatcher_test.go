@@ -106,6 +106,30 @@ func TestUIEventDispatcherContinuesWithRemainingExternalSource(t *testing.T) {
 	}
 }
 
+func TestUIEventDispatcherSerializesTypedLifecycleHookIssues(t *testing.T) {
+	mailbox := newLifecycleHookIssueMailbox()
+	sink := &recordingLifecycleHookIssueSink{}
+	model := newProjectedStaticUIModel(WithUILifecycleHookIssues(mailbox, sink))
+	exitCode := 7
+	mailbox.Report(lifecycleHookIssue{
+		Kind:     lifecycleHookIssueNonzeroExit,
+		ExitCode: &exitCode,
+	})
+
+	message := model.eventDispatcher.wait()()
+	next, cmd := model.Update(message)
+	model = next.(*uiModel)
+
+	if len(sink.issues) != 1 ||
+		sink.issues[0].Kind != lifecycleHookIssueNonzeroExit ||
+		sink.issues[0].ExitCode == nil || *sink.issues[0].ExitCode != exitCode {
+		t.Fatalf("accepted lifecycle hook issues = %+v", sink.issues)
+	}
+	if cmd == nil {
+		t.Fatal("lifecycle hook issue reduction did not schedule the next external event wait")
+	}
+}
+
 func TestBufferedTranscriptFactsCannotAffectCurrentReducerLocalDecision(t *testing.T) {
 	for _, test := range []struct {
 		name          string
@@ -190,4 +214,12 @@ func reduceNextAcceptedExternalEvent(t *testing.T, model *uiModel) *uiModel {
 	}
 	next, _ := model.Update(message)
 	return next.(*uiModel)
+}
+
+type recordingLifecycleHookIssueSink struct {
+	issues []lifecycleHookIssue
+}
+
+func (s *recordingLifecycleHookIssueSink) AcceptLifecycleHookIssue(issue lifecycleHookIssue) {
+	s.issues = append(s.issues, cloneLifecycleHookIssue(issue))
 }

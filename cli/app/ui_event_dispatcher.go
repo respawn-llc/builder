@@ -20,6 +20,12 @@ type uiAcceptedAttentionEvent struct {
 
 func (uiAcceptedAttentionEvent) uiAcceptedExternalEvent() {}
 
+type uiAcceptedLifecycleHookIssue struct {
+	issue lifecycleHookIssue
+}
+
+func (uiAcceptedLifecycleHookIssue) uiAcceptedExternalEvent() {}
+
 type uiDispatchedEventMsg struct {
 	event uiAcceptedExternalEvent
 }
@@ -27,6 +33,7 @@ type uiDispatchedEventMsg struct {
 type uiEventDispatcher struct {
 	transcriptEvents       <-chan ongoingTranscriptEvent
 	attentionEvents        <-chan attentionStreamOutcome
+	lifecycleHookIssues    *lifecycleHookIssueMailbox
 	requestAttentionReopen func()
 }
 
@@ -41,14 +48,34 @@ func WithUIAttentionEvents(events <-chan attentionStreamOutcome, requestReopen f
 	}
 }
 
+type lifecycleHookIssueSink interface {
+	AcceptLifecycleHookIssue(lifecycleHookIssue)
+}
+
+func WithUILifecycleHookIssues(
+	issues *lifecycleHookIssueMailbox,
+	sink lifecycleHookIssueSink,
+) UIOption {
+	return func(m *uiModelConstruction) {
+		m.eventDispatcher.lifecycleHookIssues = issues
+		m.lifecycleHookIssueSink = sink
+	}
+}
+
 func (d *uiEventDispatcher) wait() tea.Cmd {
-	if d == nil || (d.transcriptEvents == nil && d.attentionEvents == nil) {
+	if d == nil ||
+		(d.transcriptEvents == nil && d.attentionEvents == nil && d.lifecycleHookIssues == nil) {
 		return nil
 	}
 	return func() tea.Msg {
 		transcriptEvents := d.transcriptEvents
 		attentionEvents := d.attentionEvents
-		for transcriptEvents != nil || attentionEvents != nil {
+		lifecycleHookIssues := d.lifecycleHookIssues
+		for transcriptEvents != nil || attentionEvents != nil || lifecycleHookIssues != nil {
+			var lifecycleHookIssueSignal <-chan struct{}
+			if lifecycleHookIssues != nil {
+				lifecycleHookIssueSignal = lifecycleHookIssues.Signal()
+			}
 			select {
 			case event, ok := <-transcriptEvents:
 				if !ok {
@@ -62,6 +89,16 @@ func (d *uiEventDispatcher) wait() tea.Cmd {
 					continue
 				}
 				return uiDispatchedEventMsg{event: uiAcceptedAttentionEvent{outcome: outcome}}
+			case <-lifecycleHookIssueSignal:
+				issue, ok := lifecycleHookIssues.Take()
+				if ok {
+					return uiDispatchedEventMsg{
+						event: uiAcceptedLifecycleHookIssue{issue: issue},
+					}
+				}
+				if lifecycleHookIssues.ClosedAndEmpty() {
+					lifecycleHookIssues = nil
+				}
 			}
 		}
 		return nil
@@ -79,6 +116,11 @@ func (m *uiModel) reduceDispatchedEvent(message tea.Msg) uiFeatureUpdateResult {
 		return handledUIFeatureUpdate(result.model, tea.Batch(result.cmd, result.model.eventDispatcher.wait()))
 	case uiAcceptedAttentionEvent:
 		m.reduceAcceptedAttentionEvent(event.outcome)
+		return handledUIFeatureUpdate(m, m.eventDispatcher.wait())
+	case uiAcceptedLifecycleHookIssue:
+		if m.lifecycleHookIssueSink != nil {
+			m.lifecycleHookIssueSink.AcceptLifecycleHookIssue(event.issue)
+		}
 		return handledUIFeatureUpdate(m, m.eventDispatcher.wait())
 	default:
 		if m.debugMode {

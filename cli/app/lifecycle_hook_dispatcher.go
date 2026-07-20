@@ -32,9 +32,11 @@ type lifecycleHookDispatcher struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	done    chan struct{}
+	issues  *lifecycleHookIssueMailbox
 
 	mu        sync.Mutex
 	closed    bool
+	disabled  bool
 	closeOnce sync.Once
 }
 
@@ -60,6 +62,7 @@ func newLifecycleHookDispatcher(
 		ctx:     ctx,
 		cancel:  cancel,
 		done:    make(chan struct{}),
+		issues:  newLifecycleHookIssueMailbox(),
 	}
 	go dispatcher.run()
 	return dispatcher, nil
@@ -73,21 +76,33 @@ func (d *lifecycleHookDispatcher) EnqueueLifecycleEnvelope(
 	}
 	encoded, err := d.encoder.Encode(envelope)
 	if err != nil {
+		d.issues.Report(lifecycleHookIssue{
+			Kind:  lifecycleHookIssueEncoding,
+			Cause: err,
+		})
 		return false
 	}
 	payload := append([]byte(nil), encoded...)
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.closed {
+	if d.closed || d.disabled {
 		return false
 	}
 	select {
 	case d.queue <- payload:
 		return true
 	default:
+		d.issues.ReportOverload()
 		return false
 	}
+}
+
+func (d *lifecycleHookDispatcher) Issues() *lifecycleHookIssueMailbox {
+	if d == nil {
+		return nil
+	}
+	return d.issues
 }
 
 func (d *lifecycleHookDispatcher) Close() error {
@@ -100,6 +115,7 @@ func (d *lifecycleHookDispatcher) Close() error {
 		d.cancel()
 		d.mu.Unlock()
 		<-d.done
+		d.issues.Close()
 	})
 	return nil
 }
@@ -116,18 +132,33 @@ func (d *lifecycleHookDispatcher) run() {
 				return
 			default:
 			}
-			_ = invokeLifecycleHook(d.ctx, lifecycleHookInvocation{
+			result := invokeLifecycleHook(d.ctx, lifecycleHookInvocation{
 				argv:  d.argv,
 				stdin: payload,
 			})
+			if d.handleInvocationResult(result) {
+				return
+			}
 		}
 	}
 }
 
-func invokeLifecycleHook(ctx context.Context, invocation lifecycleHookInvocation) error {
+type lifecycleHookInvocationResult struct {
+	startErr            error
+	waitErr             error
+	closeErr            error
+	timedOut            bool
+	stderr              *string
+	stderrOverflowBytes *int64
+}
+
+func invokeLifecycleHook(
+	ctx context.Context,
+	invocation lifecycleHookInvocation,
+) lifecycleHookInvocationResult {
 	stderr, err := boundedio.NewWriter(lifecycleHookStderrLimitBytes)
 	if err != nil {
-		return err
+		return lifecycleHookInvocationResult{startErr: err}
 	}
 	owner, err := ownedprocess.Launch(ownedprocess.LaunchRequest{
 		Argv:   invocation.argv,
@@ -136,7 +167,7 @@ func invokeLifecycleHook(ctx context.Context, invocation lifecycleHookInvocation
 		Stderr: stderr,
 	})
 	if err != nil {
-		return err
+		return lifecycleHookInvocationResult{startErr: err}
 	}
 
 	wait := make(chan error, 1)
@@ -145,12 +176,90 @@ func invokeLifecycleHook(ctx context.Context, invocation lifecycleHookInvocation
 	}()
 	invocationCtx, cancel := context.WithTimeout(ctx, lifecycleHookInvocationLimit)
 	defer cancel()
+	result := lifecycleHookInvocationResult{}
 	select {
 	case waitErr := <-wait:
-		return errors.Join(waitErr, owner.Close())
+		result.waitErr = waitErr
+		result.closeErr = owner.Close()
 	case <-invocationCtx.Done():
-		closeErr := owner.Close()
-		waitErr := <-wait
-		return errors.Join(invocationCtx.Err(), waitErr, closeErr)
+		result.timedOut = errors.Is(invocationCtx.Err(), context.DeadlineExceeded)
+		result.closeErr = owner.Close()
+		result.waitErr = <-wait
 	}
+	if value := stderr.String(); value != "" {
+		result.stderr = &value
+	}
+	if overflow := stderr.OverflowBytes(); overflow > 0 {
+		result.stderrOverflowBytes = &overflow
+	}
+	return result
+}
+
+func (d *lifecycleHookDispatcher) handleInvocationResult(
+	result lifecycleHookInvocationResult,
+) (disabled bool) {
+	if result.startErr != nil {
+		if failure, deterministic := classifyLifecycleHookLaunchFailure(result.startErr); deterministic {
+			d.mu.Lock()
+			d.disabled = true
+			d.mu.Unlock()
+			d.issues.Report(lifecycleHookIssue{
+				Kind:          lifecycleHookIssueLaunchDisabled,
+				Cause:         result.startErr,
+				LaunchFailure: &failure,
+			})
+			return true
+		}
+		d.issues.Report(lifecycleHookIssue{
+			Kind:  lifecycleHookIssueLaunchFailed,
+			Cause: result.startErr,
+		})
+		return false
+	}
+	if result.timedOut {
+		d.issues.Report(lifecycleHookIssue{
+			Kind:                lifecycleHookIssueTimeout,
+			Cause:               context.DeadlineExceeded,
+			Stderr:              result.stderr,
+			StderrOverflowBytes: result.stderrOverflowBytes,
+		})
+		return false
+	}
+	if result.waitErr != nil {
+		issue := lifecycleHookIssue{
+			Kind:                lifecycleHookIssueNonzeroExit,
+			Cause:               errors.Join(result.waitErr, result.closeErr),
+			Stderr:              result.stderr,
+			StderrOverflowBytes: result.stderrOverflowBytes,
+		}
+		if code, ok := lifecycleHookExitCode(result.waitErr); ok {
+			issue.ExitCode = &code
+		}
+		d.issues.Report(issue)
+		return false
+	}
+	if result.closeErr != nil {
+		d.issues.Report(lifecycleHookIssue{
+			Kind:                lifecycleHookIssueLaunchFailed,
+			Cause:               result.closeErr,
+			Stderr:              result.stderr,
+			StderrOverflowBytes: result.stderrOverflowBytes,
+		})
+	}
+	return false
+}
+
+func lifecycleHookExitCode(err error) (int, bool) {
+	type exitCoder interface {
+		ExitCode() int
+	}
+	var coded exitCoder
+	if !errors.As(err, &coded) {
+		return 0, false
+	}
+	code := coded.ExitCode()
+	if code < 0 {
+		return 0, false
+	}
+	return code, true
 }
