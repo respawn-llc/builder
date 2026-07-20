@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"core/shared/clientui"
@@ -72,37 +74,184 @@ type attentionStreamOutcome interface {
 
 type attentionEventStream struct {
 	events <-chan attentionStreamOutcome
+	reopen *coalescingAttentionReopen
+	owner  *joinedSubscriptionOwner[serverapi.AttentionNotificationSubscription]
 }
 
-func startAttentionEventStream(ctx context.Context, subscription serverapi.AttentionNotificationSubscription) attentionEventStream {
+type attentionSessionSubscriber func(context.Context, serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error)
+
+type coalescingAttentionReopen struct {
+	requested atomic.Bool
+	signal    chan struct{}
+}
+
+func newCoalescingAttentionReopen() *coalescingAttentionReopen {
+	return &coalescingAttentionReopen{signal: make(chan struct{}, 1)}
+}
+
+func (r *coalescingAttentionReopen) Request() {
+	if r == nil || !r.requested.CompareAndSwap(false, true) {
+		return
+	}
+	select {
+	case r.signal <- struct{}{}:
+	default:
+	}
+}
+
+func (r *coalescingAttentionReopen) AllowNextRequest() {
+	if r != nil {
+		r.requested.Store(false)
+	}
+}
+
+func startAttentionEventStream(ctx context.Context, sessionID string, subscribe attentionSessionSubscriber) *attentionEventStream {
 	out := make(chan attentionStreamOutcome, attentionEventStreamOutputCapacity)
-	stream := attentionEventStream{events: out}
-	if subscription == nil {
+	reopen := newCoalescingAttentionReopen()
+	owner := newJoinedSubscriptionOwner[serverapi.AttentionNotificationSubscription](ctx)
+	stream := &attentionEventStream{
+		events: out,
+		reopen: reopen,
+		owner:  owner,
+	}
+	if subscribe == nil {
 		close(out)
+		owner.finish()
 		return stream
 	}
 	go func() {
-		defer func() {
-			if err := subscription.Close(); err != nil && ctx.Err() == nil {
-				emitAttentionStreamOutcome(ctx, out, attentionStreamDiscontinuity{reason: attentionStreamDiscontinuitySubscriptionCloseFailure})
-			}
-			close(out)
-		}()
+		defer owner.finish()
+		defer close(out)
 		for {
-			outcome, err := normalizeNextAttentionEvent(ctx, subscription)
+			subscription, err := resubscribeAttention(owner.ctx, sessionID, subscribe)
 			if err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				emitAttentionStreamOutcome(ctx, out, attentionStreamDiscontinuity{reason: attentionStreamDiscontinuitySubscriptionLoss})
 				return
 			}
-			if !emitAttentionStreamOutcome(ctx, out, outcome) {
+			owned := newOwnedSubscription(subscription)
+			if !owner.install(owned) {
+				_ = owned.Close()
+				return
+			}
+			reopenStream, stop := pumpAttentionSubscription(owner.ctx, owned, out, reopen)
+			owner.clear(owned)
+			if stop {
+				return
+			}
+			if !reopenStream {
 				return
 			}
 		}
 	}()
 	return stream
+}
+
+func (s *attentionEventStream) RequestReopen() {
+	if s == nil {
+		return
+	}
+	s.reopen.Request()
+}
+
+func (s *attentionEventStream) Close() {
+	if s == nil {
+		return
+	}
+	s.owner.Close()
+}
+
+func pumpAttentionSubscription(
+	ctx context.Context,
+	subscription *ownedSubscription[serverapi.AttentionNotificationSubscription],
+	out chan<- attentionStreamOutcome,
+	reopen *coalescingAttentionReopen,
+) (reopenStream bool, stop bool) {
+	closeReported := false
+	closeSubscription := func(report bool) {
+		err := subscription.Close()
+		if report && err != nil && !closeReported && ctx.Err() == nil {
+			closeReported = true
+			emitAttentionStreamOutcome(ctx, out, attentionStreamDiscontinuity{reason: attentionStreamDiscontinuitySubscriptionCloseFailure})
+		}
+	}
+	defer func() {
+		closeSubscription(true)
+	}()
+	for {
+		nextCtx, cancel := context.WithCancel(ctx)
+		next := beginSubscriptionNext(nextCtx, func(ctx context.Context) (attentionStreamOutcome, error) {
+			return normalizeNextAttentionEvent(ctx, subscription.subscription)
+		})
+		select {
+		case <-ctx.Done():
+			cancel()
+			closeSubscription(false)
+			<-next
+			return false, true
+		case <-reopen.signal:
+			cancel()
+			closeSubscription(true)
+			<-next
+			return true, false
+		case result := <-next:
+			cancel()
+			if result.err != nil {
+				if (errors.Is(result.err, context.Canceled) || errors.Is(result.err, context.DeadlineExceeded)) && ctx.Err() != nil {
+					return false, true
+				}
+				reopen.AllowNextRequest()
+				if !emitAttentionStreamOutcome(ctx, out, attentionStreamDiscontinuity{reason: attentionStreamDiscontinuitySubscriptionLoss}) {
+					return false, true
+				}
+				closeSubscription(true)
+				return waitForAttentionReopen(ctx, reopen)
+			}
+			outcome := result.value
+			if control, ok := outcome.(attentionStreamControl); ok && control.kind == attentionStreamControlSnapshotComplete {
+				reopen.AllowNextRequest()
+			}
+			if _, discontinuity := outcome.(attentionStreamDiscontinuity); discontinuity {
+				reopen.AllowNextRequest()
+			}
+			if !emitAttentionStreamOutcome(ctx, out, outcome) {
+				return false, true
+			}
+			if _, discontinuity := outcome.(attentionStreamDiscontinuity); discontinuity {
+				closeSubscription(true)
+				return waitForAttentionReopen(ctx, reopen)
+			}
+		}
+	}
+}
+
+func waitForAttentionReopen(ctx context.Context, reopen *coalescingAttentionReopen) (reopenStream bool, stop bool) {
+	select {
+	case <-ctx.Done():
+		return false, true
+	case <-reopen.signal:
+		return true, false
+	}
+}
+
+func resubscribeAttention(ctx context.Context, sessionID string, subscribe attentionSessionSubscriber) (serverapi.AttentionNotificationSubscription, error) {
+	request := serverapi.AttentionSessionNotificationSubscribeRequest{
+		SessionID:                    sessionID,
+		IncludePendingPromptSnapshot: true,
+	}
+	for {
+		subscription, err := subscribe(ctx, request)
+		if err == nil && subscription != nil {
+			return subscription, nil
+		}
+		if err == nil {
+			err = errors.New("attention notification subscription is required")
+		}
+		if (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) && ctx.Err() != nil {
+			return nil, err
+		}
+		if !waitSubscriptionRetry(ctx) {
+			return nil, ctx.Err()
+		}
+	}
 }
 
 func normalizeNextAttentionEvent(ctx context.Context, subscription serverapi.AttentionNotificationSubscription) (attentionStreamOutcome, error) {

@@ -102,7 +102,7 @@ func prepareSharedRuntimeWiring(
 	transcriptStream := startSessionTranscriptEvents(ctx, plan.SessionID, subscribeTranscript)
 	transcriptEvents := transcriptStream.Events
 	requestTranscriptOpen := transcriptStream.RequestRehydration
-	stopTranscriptEvents := transcriptStream.Stop
+	stopTranscriptEvents := transcriptStream.Close
 	terminalFocus := newTerminalFocusState()
 	turnQueueHook := newBellHooks(newTerminalNotifier(plan.ActiveSettings.NotificationMethod, os.Stdout, os.LookupEnv), func() string {
 		if runtimeClient != nil {

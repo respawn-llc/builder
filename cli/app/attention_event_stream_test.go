@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -65,7 +67,8 @@ func TestAttentionEventStreamBoundsQueuedFactsBeforeBlockedSend(t *testing.T) {
 		},
 		calls: make(chan int, 2),
 	}
-	stream := startAttentionEventStream(ctx, subscription)
+	stream := startAttentionEventStreamWithSubscription(ctx, subscription)
+	defer stream.Close()
 	if got, want := cap(stream.events), attentionEventStreamOutputCapacity; got != want {
 		t.Fatalf("stream output capacity = %d, want %d", got, want)
 	}
@@ -84,6 +87,33 @@ func TestAttentionEventStreamBoundsQueuedFactsBeforeBlockedSend(t *testing.T) {
 	if retained := attentionFactRetainedBytes(fact); retained > attentionFactMaxRetainedBytes {
 		t.Fatalf("queued fact retained bytes = %d, want <= %d", retained, attentionFactMaxRetainedBytes)
 	}
+}
+
+func TestAttentionEventStreamCloseJoinsBlockedSnapshotDelivery(t *testing.T) {
+	subscription := &scriptedAttentionSubscription{
+		events: []clientui.AttentionNotificationEvent{
+			adversarialQuestionAttentionEvent(),
+			adversarialApprovalAttentionEvent(),
+		},
+		calls: make(chan int, 2),
+	}
+	stream := startAttentionEventStreamWithSubscription(context.Background(), subscription)
+	waitForAttentionSubscriptionCalls(t, subscription.calls, 2)
+	if got := len(stream.events); got != attentionEventStreamOutputCapacity {
+		t.Fatalf("queued snapshot facts = %d, want %d", got, attentionEventStreamOutputCapacity)
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		stream.Close()
+		close(closed)
+	}()
+	waitForSignal(t, closed, "attention stream close during blocked snapshot delivery")
+
+	if _, ok := <-stream.events; !ok {
+		t.Fatal("queued snapshot fact was lost during joined close")
+	}
+	waitForAttentionStreamClose(t, stream.events)
 }
 
 func TestNormalizeNextAttentionEventReleasesRawPayloadBeforeBlockedSend(t *testing.T) {
@@ -155,7 +185,8 @@ func TestAttentionEventStreamNormalizesEveryPendingAndEmitsOnlyControlsOtherwise
 			SessionID: "session-1",
 		},
 	}}
-	stream := startAttentionEventStream(context.Background(), subscription)
+	stream := startAttentionEventStreamWithSubscription(context.Background(), subscription)
+	defer stream.Close()
 
 	for index := 0; index < 2; index++ {
 		outcome := nextAttentionStreamOutcome(t, stream.events)
@@ -172,9 +203,10 @@ func TestAttentionEventStreamNormalizesEveryPendingAndEmitsOnlyControlsOtherwise
 }
 
 func TestAttentionEventStreamEmitsTypedDiscontinuitiesWithoutRawPayload(t *testing.T) {
-	stream := startAttentionEventStream(context.Background(), &scriptedAttentionSubscription{
+	stream := startAttentionEventStreamWithSubscription(context.Background(), &scriptedAttentionSubscription{
 		events: []clientui.AttentionNotificationEvent{adversarialInterruptedRunAttentionEvent()},
 	})
+	defer stream.Close()
 	outcome := nextAttentionStreamOutcome(t, stream.events)
 	discontinuity, ok := outcome.(attentionStreamDiscontinuity)
 	if !ok {
@@ -184,7 +216,8 @@ func TestAttentionEventStreamEmitsTypedDiscontinuitiesWithoutRawPayload(t *testi
 		t.Fatalf("discontinuity reason = %d, want unsupported kind", discontinuity.reason)
 	}
 
-	loss := startAttentionEventStream(context.Background(), &scriptedAttentionSubscription{err: serverapi.ErrStreamGap})
+	loss := startAttentionEventStreamWithSubscription(context.Background(), &scriptedAttentionSubscription{err: serverapi.ErrStreamGap})
+	defer loss.Close()
 	outcome = nextAttentionStreamOutcome(t, loss.events)
 	discontinuity, ok = outcome.(attentionStreamDiscontinuity)
 	if !ok || discontinuity.reason != attentionStreamDiscontinuitySubscriptionLoss {
@@ -203,17 +236,19 @@ func TestAttentionEventStreamEmitsTypedDiscontinuitiesWithoutRawPayload(t *testi
 func TestAttentionEventStreamClosesSubscriptionOnCancellationAndLoss(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	subscription := &scriptedAttentionSubscription{}
-	stream := startAttentionEventStream(ctx, subscription)
+	stream := startAttentionEventStreamWithSubscription(ctx, subscription)
 	cancel()
 	waitForAttentionStreamClose(t, stream.events)
+	stream.Close()
 	if !subscription.isClosed() {
 		t.Fatal("attention subscription remained open after stream cancellation")
 	}
 
 	lostSubscription := &scriptedAttentionSubscription{err: serverapi.ErrStreamGap}
-	lostStream := startAttentionEventStream(context.Background(), lostSubscription)
+	lostStream := startAttentionEventStreamWithSubscription(context.Background(), lostSubscription)
 	_ = nextAttentionStreamOutcome(t, lostStream.events)
-	waitForAttentionStreamClose(t, lostStream.events)
+	lostStream.RequestReopen()
+	lostStream.Close()
 	if !lostSubscription.isClosed() {
 		t.Fatal("attention subscription remained open after stream loss")
 	}
@@ -222,14 +257,218 @@ func TestAttentionEventStreamClosesSubscriptionOnCancellationAndLoss(t *testing.
 		err:      serverapi.ErrStreamGap,
 		closeErr: context.DeadlineExceeded,
 	}
-	closeFailureStream := startAttentionEventStream(context.Background(), closeFailureSubscription)
+	closeFailureStream := startAttentionEventStreamWithSubscription(context.Background(), closeFailureSubscription)
 	if discontinuity, ok := nextAttentionStreamOutcome(t, closeFailureStream.events).(attentionStreamDiscontinuity); !ok || discontinuity.reason != attentionStreamDiscontinuitySubscriptionLoss {
 		t.Fatalf("subscription loss outcome = %+v / %t, want loss discontinuity", discontinuity, ok)
 	}
+	closeFailureStream.RequestReopen()
 	if discontinuity, ok := nextAttentionStreamOutcome(t, closeFailureStream.events).(attentionStreamDiscontinuity); !ok || discontinuity.reason != attentionStreamDiscontinuitySubscriptionCloseFailure {
 		t.Fatalf("subscription close outcome = %+v / %t, want close failure discontinuity", discontinuity, ok)
 	}
-	waitForAttentionStreamClose(t, closeFailureStream.events)
+	closeFailureStream.Close()
+}
+
+func TestAttentionEventStreamCloseUnblocksAndJoinsNext(t *testing.T) {
+	subscription := newBlockingAttentionSubscription()
+	stream := startAttentionEventStream(
+		context.Background(),
+		"session-1",
+		func(context.Context, serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+			return subscription, nil
+		},
+	)
+	waitForSignal(t, subscription.nextStarted, "attention Next start")
+
+	closed := make(chan struct{})
+	go func() {
+		stream.Close()
+		close(closed)
+	}()
+	waitForSignal(t, subscription.closeCalled, "attention subscription close")
+	assertNoSignal(t, closed, "attention stream close before Next joined")
+
+	subscription.releaseNext()
+	waitForSignal(t, subscription.nextReturned, "attention Next return")
+	waitForSignal(t, closed, "joined attention stream close")
+	stream.Close()
+
+	if calls := subscription.closeCalls.Load(); calls != 1 {
+		t.Fatalf("attention subscription close calls = %d, want 1", calls)
+	}
+	waitForAttentionStreamClose(t, stream.events)
+}
+
+func TestAttentionEventStreamReopensAfterEveryDiscontinuityUntilSnapshotComplete(t *testing.T) {
+	first := &scriptedAttentionSubscription{err: serverapi.ErrStreamGap}
+	second := &scriptedAttentionSubscription{err: serverapi.ErrStreamGap}
+	healthy := &scriptedAttentionSubscription{events: []clientui.AttentionNotificationEvent{{
+		Sequence:  1,
+		Source:    clientui.AttentionNotificationSourceSnapshot,
+		Type:      clientui.AttentionNotificationEventSnapshotComplete,
+		SessionID: "session-1",
+	}}}
+	subscriptions := []serverapi.AttentionNotificationSubscription{first, second, healthy}
+	var mu sync.Mutex
+	requests := make([]serverapi.AttentionSessionNotificationSubscribeRequest, 0, len(subscriptions))
+	stream := startAttentionEventStream(
+		context.Background(),
+		"session-1",
+		func(_ context.Context, req serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			requests = append(requests, req)
+			if len(subscriptions) == 0 {
+				return nil, context.Canceled
+			}
+			subscription := subscriptions[0]
+			subscriptions = subscriptions[1:]
+			return subscription, nil
+		},
+	)
+	defer stream.Close()
+	if cap(stream.reopen.signal) != 1 {
+		t.Fatalf("attention reopen capacity = %d, want 1", cap(stream.reopen.signal))
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		outcome := nextAttentionStreamOutcome(t, stream.events)
+		discontinuity, ok := outcome.(attentionStreamDiscontinuity)
+		if !ok || discontinuity.reason != attentionStreamDiscontinuitySubscriptionLoss {
+			t.Fatalf("attempt %d outcome = %+v / %t, want subscription loss", attempt+1, discontinuity, ok)
+		}
+		stream.RequestReopen()
+	}
+	control, ok := nextAttentionStreamOutcome(t, stream.events).(attentionStreamControl)
+	if !ok || control.kind != attentionStreamControlSnapshotComplete {
+		t.Fatalf("healthy outcome = %+v / %t, want snapshot complete", control, ok)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requests) != 3 {
+		t.Fatalf("attention subscribe requests = %d, want 3", len(requests))
+	}
+	for index, req := range requests {
+		if req.SessionID != "session-1" || !req.IncludePendingPromptSnapshot {
+			t.Fatalf("attention subscribe request %d = %+v, want session snapshot", index+1, req)
+		}
+	}
+}
+
+func TestAttentionEventStreamRetriesSnapshotSubscriptionUntilEstablished(t *testing.T) {
+	var attempts atomic.Int32
+	stream := startAttentionEventStream(
+		context.Background(),
+		"session-1",
+		func(context.Context, serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+			if attempts.Add(1) == 1 {
+				return nil, errors.New("temporary attention subscribe failure")
+			}
+			return &scriptedAttentionSubscription{events: []clientui.AttentionNotificationEvent{{
+				Sequence:  1,
+				Source:    clientui.AttentionNotificationSourceSnapshot,
+				Type:      clientui.AttentionNotificationEventSnapshotComplete,
+				SessionID: "session-1",
+			}}}, nil
+		},
+	)
+	defer stream.Close()
+
+	control, ok := nextAttentionStreamOutcome(t, stream.events).(attentionStreamControl)
+	if !ok || control.kind != attentionStreamControlSnapshotComplete {
+		t.Fatalf("retried outcome = %+v / %t, want snapshot complete", control, ok)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("attention subscribe attempts = %d, want 2", got)
+	}
+}
+
+func TestAttentionEventStreamCoalescesReducerReopenWhileClosingInvalidSnapshot(t *testing.T) {
+	first := &blockingCloseAttentionSubscription{
+		scriptedAttentionSubscription: scriptedAttentionSubscription{
+			events: []clientui.AttentionNotificationEvent{adversarialInterruptedRunAttentionEvent()},
+		},
+		closeStarted: make(chan struct{}),
+		allowClose:   make(chan struct{}),
+	}
+	second := newBlockingAttentionSubscription()
+	var subscribeCalls atomic.Int32
+	stream := startAttentionEventStream(
+		context.Background(),
+		"session-1",
+		func(context.Context, serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+			switch subscribeCalls.Add(1) {
+			case 1:
+				return first, nil
+			case 2:
+				return second, nil
+			default:
+				return nil, errors.New("unexpected extra attention reopen")
+			}
+		},
+	)
+	defer func() {
+		first.releaseClose()
+		second.releaseNext()
+		stream.Close()
+	}()
+
+	outcome := nextAttentionStreamOutcome(t, stream.events)
+	discontinuity, ok := outcome.(attentionStreamDiscontinuity)
+	if !ok || discontinuity.reason != attentionStreamDiscontinuityUnsupportedKind {
+		t.Fatalf("normalization outcome = %+v / %t, want unsupported-kind discontinuity", discontinuity, ok)
+	}
+	waitForSignal(t, first.closeStarted, "invalid snapshot subscription close")
+	stream.RequestReopen()
+	stream.RequestReopen()
+	first.releaseClose()
+
+	waitForSignal(t, second.nextStarted, "replacement snapshot Next start")
+	assertNoSignal(t, second.closeCalled, "duplicate reopen closing replacement snapshot")
+	if calls := subscribeCalls.Load(); calls != 2 {
+		t.Fatalf("attention subscribe calls = %d, want 2", calls)
+	}
+}
+
+func TestAttentionEventStreamReopenJoinsBlockedNextBeforeFreshSnapshot(t *testing.T) {
+	first := newBlockingAttentionSubscription()
+	second := &scriptedAttentionSubscription{events: []clientui.AttentionNotificationEvent{{
+		Sequence:  1,
+		Source:    clientui.AttentionNotificationSourceSnapshot,
+		Type:      clientui.AttentionNotificationEventSnapshotComplete,
+		SessionID: "session-1",
+	}}}
+	secondSubscribe := make(chan struct{})
+	var subscribeCalls atomic.Int32
+	stream := startAttentionEventStream(
+		context.Background(),
+		"session-1",
+		func(context.Context, serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+			switch subscribeCalls.Add(1) {
+			case 1:
+				return first, nil
+			case 2:
+				close(secondSubscribe)
+				return second, nil
+			default:
+				return nil, context.Canceled
+			}
+		},
+	)
+	defer stream.Close()
+	waitForSignal(t, first.nextStarted, "first attention Next start")
+
+	stream.RequestReopen()
+	waitForSignal(t, first.closeCalled, "first attention subscription close")
+	assertNoSignal(t, secondSubscribe, "attention reopen before first Next joined")
+
+	first.releaseNext()
+	waitForSignal(t, first.nextReturned, "first attention Next return")
+	waitForSignal(t, secondSubscribe, "second attention subscribe")
+	control, ok := nextAttentionStreamOutcome(t, stream.events).(attentionStreamControl)
+	if !ok || control.kind != attentionStreamControlSnapshotComplete {
+		t.Fatalf("reopened outcome = %+v / %t, want snapshot complete", control, ok)
+	}
 }
 
 type scriptedAttentionSubscription struct {
@@ -239,6 +478,69 @@ type scriptedAttentionSubscription struct {
 	calls    chan int
 	closed   bool
 	closeErr error
+}
+
+type blockingAttentionSubscription struct {
+	nextStarted     chan struct{}
+	closeCalled     chan struct{}
+	allowNextReturn chan struct{}
+	nextReturned    chan struct{}
+	closeOnce       sync.Once
+	releaseOnce     sync.Once
+	closeCalls      atomic.Int32
+}
+
+func newBlockingAttentionSubscription() *blockingAttentionSubscription {
+	return &blockingAttentionSubscription{
+		nextStarted:     make(chan struct{}),
+		closeCalled:     make(chan struct{}),
+		allowNextReturn: make(chan struct{}),
+		nextReturned:    make(chan struct{}),
+	}
+}
+
+func (s *blockingAttentionSubscription) Next(context.Context) (clientui.AttentionNotificationEvent, error) {
+	close(s.nextStarted)
+	<-s.closeCalled
+	<-s.allowNextReturn
+	close(s.nextReturned)
+	return clientui.AttentionNotificationEvent{}, context.Canceled
+}
+
+func (s *blockingAttentionSubscription) Close() error {
+	s.closeCalls.Add(1)
+	s.closeOnce.Do(func() {
+		close(s.closeCalled)
+	})
+	return nil
+}
+
+func (s *blockingAttentionSubscription) releaseNext() {
+	s.releaseOnce.Do(func() {
+		close(s.allowNextReturn)
+	})
+}
+
+type blockingCloseAttentionSubscription struct {
+	scriptedAttentionSubscription
+	closeStarted chan struct{}
+	allowClose   chan struct{}
+	closeOnce    sync.Once
+	releaseOnce  sync.Once
+}
+
+func (s *blockingCloseAttentionSubscription) Close() error {
+	s.closeOnce.Do(func() {
+		close(s.closeStarted)
+		<-s.allowClose
+	})
+	return nil
+}
+
+func (s *blockingCloseAttentionSubscription) releaseClose() {
+	s.releaseOnce.Do(func() {
+		close(s.allowClose)
+	})
 }
 
 func (s *scriptedAttentionSubscription) Next(ctx context.Context) (clientui.AttentionNotificationEvent, error) {
@@ -311,6 +613,24 @@ func waitForAttentionStreamClose(t *testing.T, events <-chan attentionStreamOutc
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for attention stream close")
 	}
+}
+
+func startAttentionEventStreamWithSubscription(ctx context.Context, subscription serverapi.AttentionNotificationSubscription) *attentionEventStream {
+	var once sync.Once
+	return startAttentionEventStream(
+		ctx,
+		"session-1",
+		func(context.Context, serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+			var opened serverapi.AttentionNotificationSubscription
+			once.Do(func() {
+				opened = subscription
+			})
+			if opened == nil {
+				return nil, context.Canceled
+			}
+			return opened, nil
+		},
+	)
 }
 
 func adversarialQuestionAttentionEvent() clientui.AttentionNotificationEvent {

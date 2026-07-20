@@ -22,29 +22,42 @@ type ongoingTranscriptEvent struct {
 }
 
 type ongoingTranscriptEventStream struct {
-	Events             <-chan ongoingTranscriptEvent
-	RequestRehydration func()
-	Stop               func()
+	Events   <-chan ongoingTranscriptEvent
+	requests chan struct{}
+	owner    *joinedSubscriptionOwner[serverapi.TranscriptSubscription]
 }
 
 type sessionTranscriptSubscriber func(context.Context, serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error)
 
-func startSessionTranscriptEvents(ctx context.Context, sessionID string, subscribe sessionTranscriptSubscriber) ongoingTranscriptEventStream {
+func startSessionTranscriptEvents(ctx context.Context, sessionID string, subscribe sessionTranscriptSubscriber) *ongoingTranscriptEventStream {
 	out := make(chan ongoingTranscriptEvent, 64)
 	requests := make(chan struct{}, 1)
+	owner := newJoinedSubscriptionOwner[serverapi.TranscriptSubscription](ctx)
+	stream := &ongoingTranscriptEventStream{
+		Events:   out,
+		requests: requests,
+		owner:    owner,
+	}
 	if subscribe == nil {
 		close(out)
-		return ongoingTranscriptEventStream{Events: out, RequestRehydration: func() {}, Stop: func() {}}
+		owner.finish()
+		return stream
 	}
-	pollCtx, cancel := context.WithCancel(ctx)
 	go func() {
+		defer owner.finish()
 		defer close(out)
 		for {
-			sub, err := resubscribeSessionTranscript(pollCtx, sessionID, subscribe)
+			sub, err := resubscribeSessionTranscript(owner.ctx, sessionID, subscribe)
 			if err != nil {
 				return
 			}
-			reopen, stop := pumpSessionTranscriptSubscription(pollCtx, sub, out, requests)
+			owned := newOwnedSubscription(sub)
+			if !owner.install(owned) {
+				_ = owned.Close()
+				return
+			}
+			reopen, stop := pumpSessionTranscriptSubscription(owner.ctx, owned, out, requests)
+			owner.clear(owned)
 			if stop {
 				return
 			}
@@ -53,43 +66,41 @@ func startSessionTranscriptEvents(ctx context.Context, sessionID string, subscri
 			}
 		}
 	}()
-	requestRehydration := func() {
-		select {
-		case requests <- struct{}{}:
-		default:
-		}
-	}
-	return ongoingTranscriptEventStream{Events: out, RequestRehydration: requestRehydration, Stop: cancel}
+	return stream
 }
 
-type transcriptNextResult struct {
-	message clientui.TranscriptMessage
-	err     error
+func (s *ongoingTranscriptEventStream) RequestRehydration() {
+	if s == nil || s.requests == nil {
+		return
+	}
+	select {
+	case s.requests <- struct{}{}:
+	default:
+	}
 }
 
-func pumpSessionTranscriptSubscription(ctx context.Context, sub serverapi.TranscriptSubscription, out chan<- ongoingTranscriptEvent, requests <-chan struct{}) (reopen bool, stop bool) {
-	subClosed := false
-	closeSub := func() {
-		if subClosed {
-			return
-		}
-		_ = sub.Close()
-		subClosed = true
+func (s *ongoingTranscriptEventStream) Close() {
+	if s == nil {
+		return
 	}
-	defer closeSub()
+	s.owner.Close()
+}
+
+func pumpSessionTranscriptSubscription(ctx context.Context, sub *ownedSubscription[serverapi.TranscriptSubscription], out chan<- ongoingTranscriptEvent, requests <-chan struct{}) (reopen bool, stop bool) {
+	defer func() { _ = sub.Close() }()
 	for {
 		nextCtx, cancel := context.WithCancel(ctx)
-		next := make(chan transcriptNextResult, 1)
-		go func() {
-			message, err := sub.Next(nextCtx)
-			next <- transcriptNextResult{message: message, err: err}
-		}()
+		next := beginSubscriptionNext(nextCtx, sub.subscription.Next)
 		select {
 		case <-ctx.Done():
 			cancel()
+			_ = sub.Close()
+			<-next
 			return false, true
 		case <-requests:
 			cancel()
+			_ = sub.Close()
+			<-next
 			return true, false
 		case result := <-next:
 			cancel()
@@ -97,14 +108,14 @@ func pumpSessionTranscriptSubscription(ctx context.Context, sub serverapi.Transc
 				if errors.Is(result.err, context.Canceled) && ctx.Err() != nil {
 					return false, true
 				}
-				closeSub()
+				_ = sub.Close()
 				emitSessionTranscriptLoss(ctx, out, result.err)
 				return waitForTranscriptRehydrationRequest(ctx, requests)
 			}
 			select {
 			case <-ctx.Done():
 				return false, true
-			case out <- ongoingTranscriptEvent{Kind: ongoingTranscriptEventMessage, Message: result.message}:
+			case out <- ongoingTranscriptEvent{Kind: ongoingTranscriptEventMessage, Message: result.value}:
 			}
 		}
 	}
