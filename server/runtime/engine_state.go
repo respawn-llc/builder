@@ -852,6 +852,12 @@ func (e *Engine) emitRaw(evt Event) {
 }
 
 func (e *Engine) publishLiveRunFinished(result LiveRunResult) {
+	if result.Status == RunStatusCompleted && result.ResultKind != LiveRunResultAssistantFinalAnswer {
+		return
+	}
+	if result.Status == RunStatusInterrupted || errors.Is(result.Error, context.Canceled) {
+		return
+	}
 	copyResult := result
 	e.emitRaw(Event{
 		Kind:          EventLiveRunFinished,

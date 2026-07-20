@@ -251,13 +251,19 @@ func (e *Engine) beginLiveRunStep(snapshot *RunSnapshot) {
 	e.liveRun.beginStep(snapshot)
 }
 
-func (e *Engine) finishLiveRunStep(snapshot *RunSnapshot, status RunStatus, err error) {
+func (e *Engine) finishLiveRunStep(snapshot *RunSnapshot, status RunStatus, err error) func() {
 	if e == nil || snapshot == nil {
-		return
+		return nil
 	}
 	e.ensureOrchestrationCollaborators()
-	stoppedQueueItems := e.liveRun.finishStep(snapshot, status, err, e.shouldHoldLiveRunForGoalLoopContinuation(snapshot, status))
+	stoppedQueueItems, result := e.liveRun.finishStepDeferred(snapshot, status, err, e.shouldHoldLiveRunForGoalLoopContinuation(snapshot, status))
 	e.failStoppedLiveRunQueueItems(stoppedQueueItems)
+	if result == nil {
+		return nil
+	}
+	return func() {
+		e.liveRun.publishCompleted(*result)
+	}
 }
 
 func (e *Engine) finishLiveRunGoalLoop() {
@@ -389,11 +395,19 @@ func (c *liveRunCoordinator) beginStep(snapshot *RunSnapshot) {
 }
 
 func (c *liveRunCoordinator) finishStep(snapshot *RunSnapshot, status RunStatus, err error, holdGoalLoop bool) map[runtimeids.QueueItemID]struct{} {
+	stoppedQueueItems, result := c.finishStepDeferred(snapshot, status, err, holdGoalLoop)
+	if result != nil {
+		c.publishCompleted(*result)
+	}
+	return stoppedQueueItems
+}
+
+func (c *liveRunCoordinator) finishStepDeferred(snapshot *RunSnapshot, status RunStatus, err error, holdGoalLoop bool) (map[runtimeids.QueueItemID]struct{}, *LiveRunResult) {
 	c.mu.Lock()
 	group := c.current
 	if group == nil {
 		c.mu.Unlock()
-		return nil
+		return nil, nil
 	}
 	group.runID = mustRunID(snapshot.RunID)
 	group.stepID = mustStepID(snapshot.StepID)
@@ -429,8 +443,7 @@ func (c *liveRunCoordinator) finishStep(snapshot *RunSnapshot, status RunStatus,
 		result := liveRunResultForGroup(group)
 		c.mu.Unlock()
 		close(done)
-		c.publishCompleted(result)
-		return stoppedQueueItems
+		return stoppedQueueItems, &result
 	}
 	group.goalLoopHolding = snapshot.GoalLoop && holdGoalLoop
 	if group.reservations == 0 && len(group.taggedQueueItems) == 0 && !group.goalLoopHolding {
@@ -440,9 +453,10 @@ func (c *liveRunCoordinator) finishStep(snapshot *RunSnapshot, status RunStatus,
 	c.mu.Unlock()
 	if done != nil {
 		close(done)
-		c.publishCompleted(liveRunResultForGroup(group))
+		result := liveRunResultForGroup(group)
+		return nil, &result
 	}
-	return nil
+	return nil, nil
 }
 
 func (c *liveRunCoordinator) finishGoalLoop() {

@@ -165,7 +165,12 @@ const (
 )
 
 type HandshakeRequest struct {
-	ProtocolVersion string `json:"protocol_version"`
+	ProtocolVersion    string              `json:"protocol_version"`
+	ClientCapabilities *ClientCapabilities `json:"client_capabilities,omitempty"`
+}
+
+type ClientCapabilities struct {
+	TranscriptLiveRunFinished bool `json:"transcript_live_run_finished"`
 }
 
 type HandshakeResponse struct {
@@ -840,6 +845,9 @@ type StreamCompleteParams struct {
 func (r HandshakeRequest) Validate() error {
 	if strings.TrimSpace(r.ProtocolVersion) == "" {
 		return errors.New("protocol_version is required")
+	}
+	if r.ClientCapabilities != nil && !r.ClientCapabilities.TranscriptLiveRunFinished {
+		return errors.New("client_capabilities must advertise at least one supported capability")
 	}
 	return nil
 }

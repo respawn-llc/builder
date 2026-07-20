@@ -19,14 +19,11 @@ func startSessionServer(ctx context.Context, opts Options, interactor authIntera
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := startupconfig.ResolveSessionConfig(startupConfigRequest(opts))
+	resolved, err := startupconfig.ResolveSessionConfig(startupConfigRequest(opts))
 	if err != nil {
 		return nil, err
 	}
-	_, clientSettings, err := config.LoadInteractive(cfg.WorkspaceRoot, startupConfigRequest(opts).LoadOptions)
-	if err != nil {
-		return nil, err
-	}
+	cfg := resolved.Config
 	remote, err := attachConfiguredStartupRemote(ctx, cfg)
 	if err != nil {
 		return nil, err
@@ -64,7 +61,7 @@ func startSessionServer(ctx context.Context, opts Options, interactor authIntera
 		}
 	}
 	closeRemote = false
-	remoteServer.clientSettings = clientSettings
+	remoteServer.clientSettings = resolved.Client
 	return server, nil
 }
 

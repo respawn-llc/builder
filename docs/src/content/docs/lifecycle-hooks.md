@@ -40,6 +40,8 @@ The command receives every supported category and filters the events it needs.
 
 Delivery follows the live event stream. Connection or subscription gaps may miss or repeat hooks; Kent does not reconstruct, acknowledge, retry, persist, or deduplicate them.
 
+The controlling Go TUI advertises terminal-fact support during its protocol handshake. Protocol-compatible clients that do not advertise support receive the legacy transcript stream without `live_run_finished`.
+
 ## JSON contract
 
 Each invocation receives one schema-v1 JSON object on stdin:

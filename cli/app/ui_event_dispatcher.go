@@ -55,12 +55,12 @@ func (m *uiModel) reduceDispatchedEvent(message tea.Msg) uiFeatureUpdateResult {
 		issue := *dispatched.issue
 		m.logf(
 			"lifecycle_hook.issue category=%q err=%q stderr=%q",
-			issue.category,
-			issue.err,
-			issue.stderr,
+			issue.Category,
+			issue.Err,
+			issue.Stderr,
 		)
 		cmd := m.sendTransientStatusWithNoticeID(
-			fmt.Sprintf("Lifecycle hook failed: %v", issue.err),
+			fmt.Sprintf("Lifecycle hook failed: %v", issue.Err),
 			uiStatusNoticeError,
 			transientStatusDuration,
 			uiStatusNoticeReplace,

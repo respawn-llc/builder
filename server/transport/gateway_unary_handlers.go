@@ -39,6 +39,9 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		if params.ProtocolVersion != protocol.Version {
 			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeProtocolVersionMismatch, fmt.Sprintf("unsupported protocol version %q; server requires %q, upgrade the older Kent process", params.ProtocolVersion, protocol.Version))
 		}
+		if params.ClientCapabilities != nil {
+			state.clientCapabilities = *params.ClientCapabilities
+		}
 		state.handshakeDone = true
 		return protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: g.identity})
 	},

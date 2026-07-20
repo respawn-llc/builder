@@ -293,16 +293,17 @@
 ## Client Lifecycle Hooks
 
 - One session-scoped TUI proxy observes existing typed backend request/subscription facts before forwarding each fact unchanged to ordinary TUI handling.
+- Protocol-64 clients explicitly advertise support for the `live_run_finished` transcript fact during handshake. The server suppresses that fact and preserves contiguous legacy transcript sequencing for clients that omit the capability.
 - Hook observation never blocks transcript delivery, server event handling, or TUI rendering. Accepted events enter a background channel with capacity 64; a full channel silently drops the new event.
 - The background drainer launches accepted hook invocations independently. Kent provides no launch, execution, or completion ordering guarantee.
 - At most 64 hook processes are active per TUI session. A new event is silently dropped while all active slots are occupied.
 - Every invocation has a 30-second timeout, inherits the controlling TUI's current directory and environment, receives one ordinary JSON object on stdin, ignores stdout, and retains at most 4 KiB of stderr for diagnostics.
 - Every event attempts the configured command. There is no missing-executable classification, attachment disablement, retry, acknowledgement, persistence, reconstruction, or deduplication.
-- Launch failures, non-zero exits, and timeouts produce one structured diagnostic log and transient TUI error. Hook failures never produce `task.error` and never change runtime behavior.
+- Launch failures, non-zero exits, and timeouts are delivered losslessly to one structured diagnostic log and transient TUI error while the session remains attached. Hook failures never produce `task.error` and never change runtime behavior.
 - Session close stops hook intake, requests cancellation of active direct hook processes, and returns immediately. Background command waiters reap processes later; Kent neither joins hook workers nor guarantees termination of descendants.
 - Stream gaps may miss or repeat hooks. The TUI does not maintain occurrence ordinals, watermarks, task-batch keys, discontinuity state, or exact duplicate suppression for lifecycle delivery.
 - One optional command is configured only in the controlling TUI client's global TOML as `[hooks.client] lifecycle = ["executable", "fixed-arg", ...]`. Workspace config, environment variables, CLI flags, subagent roles, and servers cannot set or override it. Empty arrays and blank arguments are invalid.
-- The client command snapshot is loaded at interactive TUI startup and captured by each session proxy. Config changes require restarting the controlling TUI. Every local or remote controlling Go TUI runs its own client-local command. Desktop, unattended headless, subagent, and server-only paths do not construct the proxy.
+- The client command snapshot is carried from the authoritative interactive startup config resolution and captured by each session proxy. Config changes require restarting the controlling TUI. Every local or remote controlling Go TUI runs its own client-local command. Desktop, unattended headless, subagent, and server-only paths do not construct the proxy.
 - The supported categories are:
   - `session.start` after a successful new or resumed session open;
   - `task.complete` when a live-run result ends with an assistant final answer;

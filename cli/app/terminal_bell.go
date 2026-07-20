@@ -149,6 +149,7 @@ type bellHooks struct {
 	notifier              terminalNotifier
 	title                 func() string
 	focused               func() bool
+	attentionObserver     func(clientui.AttentionNotificationEvent)
 	observedTurn          *observedNotificationTurn
 	pendingTurnCompletion *queuedTurnCompletion
 	pendingCompaction     bool
@@ -169,6 +170,12 @@ func newBellHooks(notifier terminalNotifier, title func() string, focused ...fun
 	return &bellHooks{notifier: notifier, title: title, focused: focusedProvider}
 }
 
+func (h *bellHooks) observeAcceptedAttention(observer func(clientui.AttentionNotificationEvent)) {
+	if h != nil {
+		h.attentionObserver = observer
+	}
+}
+
 func (h *bellHooks) OnAttentionNotification(evt clientui.AttentionNotificationEvent) {
 	h.onAttentionNotification(evt, nil)
 }
@@ -183,6 +190,9 @@ func (h *bellHooks) onAttentionNotification(evt clientui.AttentionNotificationEv
 	notification := evt.Pending
 	if !tuiSupportsAttentionNotification(*notification) {
 		return
+	}
+	if h.attentionObserver != nil {
+		h.attentionObserver(evt)
 	}
 	body := ""
 	if projectedBody != nil {

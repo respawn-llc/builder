@@ -29,6 +29,11 @@ type RunPromptResult struct {
 	CallerContext         CallerContext
 }
 
+type SessionConfigResult struct {
+	Config config.App
+	Client config.ClientSettings
+}
+
 type CallerKind string
 
 const (
@@ -44,10 +49,10 @@ func humanCallerContext() CallerContext {
 	return CallerContext{Kind: CallerKindHuman}
 }
 
-func ResolveSessionConfig(req Request) (config.App, error) {
+func ResolveSessionConfig(req Request) (SessionConfigResult, error) {
 	workspaceRoot, err := ResolveWorkspaceRoot(req.WorkspaceRoot)
 	if err != nil {
-		return config.App{}, err
+		return SessionConfigResult{}, err
 	}
 	plan, err := bootstrap.ResolveConfig(bootstrap.Request{
 		WorkspaceRoot:         workspaceRoot,
@@ -58,9 +63,9 @@ func ResolveSessionConfig(req Request) (config.App, error) {
 		LoadOptions:           req.LoadOptions,
 	})
 	if err != nil {
-		return config.App{}, err
+		return SessionConfigResult{}, err
 	}
-	return plan.Config, nil
+	return SessionConfigResult{Config: plan.Config, Client: plan.Client}, nil
 }
 
 func ResolveRunPromptConfig(req Request) (RunPromptResult, error) {

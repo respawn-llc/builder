@@ -152,6 +152,7 @@ func protocolSubscriptionMethodSet() map[string]struct{} {
 
 type connectionState struct {
 	handshakeDone         bool
+	clientCapabilities    protocol.ClientCapabilities
 	noAuthAccepted        bool
 	attachedProject       string
 	attachedWorkspaceID   string

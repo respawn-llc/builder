@@ -117,6 +117,13 @@ func acceptRemoteHandshake(t *testing.T, ws *websocket.Conn) protocol.Request {
 	if req.Method != protocol.MethodHandshake {
 		t.Fatalf("handshake method = %q", req.Method)
 	}
+	var params protocol.HandshakeRequest
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		t.Fatalf("decode handshake params: %v", err)
+	}
+	if params.ClientCapabilities == nil || !params.ClientCapabilities.TranscriptLiveRunFinished {
+		t.Fatalf("handshake client capabilities = %+v", params.ClientCapabilities)
+	}
 	if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
 		t.Fatalf("send handshake response: %v", err)
 	}

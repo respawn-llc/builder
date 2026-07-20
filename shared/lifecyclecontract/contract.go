@@ -2,6 +2,8 @@ package lifecyclecontract
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	"core/shared/runtimeids"
@@ -148,7 +150,23 @@ func NewCompactionStarted(occurredAt time.Time, focused bool, context Context, m
 }
 
 func Encode(event Event) ([]byte, error) {
+	if err := event.Context.Validate(); err != nil {
+		return nil, fmt.Errorf("validate lifecycle event context: %w", err)
+	}
 	return json.Marshal(event)
+}
+
+func (c Context) Validate() error {
+	if c.SessionID != nil && c.SessionID.IsZero() {
+		return fmt.Errorf("present session id is invalid")
+	}
+	if c.SessionTitle != nil && strings.TrimSpace(*c.SessionTitle) == "" {
+		return fmt.Errorf("present session title is blank")
+	}
+	if c.WorkflowTaskID != nil && strings.TrimSpace(string(*c.WorkflowTaskID)) == "" {
+		return fmt.Errorf("present workflow task id is blank")
+	}
+	return nil
 }
 
 func newEvent(

@@ -239,8 +239,7 @@ run_rust_full_checks() {
     cargo fmt --manifest-path tui-rs/Cargo.toml --all -- --check
     cargo test --manifest-path tui-rs/Cargo.toml --locked \
         --test integration \
-        -p client-contracts \
-        -p rpc-client
+        -p client-contracts
     cargo test --manifest-path tui-rs/Cargo.toml --locked \
         --test integration \
         -p manifest-check

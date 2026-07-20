@@ -10,6 +10,7 @@ import (
 
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/apicontract"
+	"core/shared/lifecyclecontract"
 	"core/shared/serverapi"
 )
 
@@ -20,16 +21,15 @@ type runtimeAttachmentSource interface {
 }
 
 type runtimeAttachmentClients struct {
-	AttentionNotifications apicontract.AttentionNotificationService
-	ProcessControls        apicontract.ProcessControlService
-	ProcessOutput          apicontract.ProcessOutputService
-	ProcessViews           apicontract.ProcessViewService
-	PromptControl          apicontract.PromptControlService
-	RuntimeControls        apicontract.RuntimeControlService
-	SessionTranscript      apicontract.SessionTranscriptService
-	SessionRuntime         apicontract.SessionRuntimeService
-	SessionViews           apicontract.SessionViewService
-	Worktrees              apicontract.WorktreeService
+	ProcessControls   apicontract.ProcessControlService
+	ProcessOutput     apicontract.ProcessOutputService
+	ProcessViews      apicontract.ProcessViewService
+	PromptControl     apicontract.PromptControlService
+	RuntimeControls   apicontract.RuntimeControlService
+	SessionTranscript apicontract.SessionTranscriptService
+	SessionRuntime    apicontract.SessionRuntimeService
+	SessionViews      apicontract.SessionViewService
+	Worktrees         apicontract.WorktreeService
 }
 
 func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, plan sessionLaunchPlan, diagnosticWriter io.Writer, startLogLine string) (*runtimeLaunchPlan, error) {
@@ -47,12 +47,16 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 	}
 	_ = diagnosticWriter
 	_ = startLogLine
-	wiring, stopTranscriptEvents := prepareSharedRuntimeWiring(
+	wiring, stopTranscriptEvents, err := prepareSharedRuntimeWiring(
 		ctx,
 		clients,
 		plan,
 		reactivator,
 	)
+	if err != nil {
+		_ = lease.Release()
+		return nil, err
+	}
 	var stopStreamsOnce sync.Once
 	stopStreams := func() {
 		stopStreamsOnce.Do(func() {
@@ -91,18 +95,25 @@ func prepareSharedRuntimeWiring(
 	clients runtimeAttachmentClients,
 	plan sessionLaunchPlan,
 	reactivator *runtimeReactivator,
-) (*runtimeWiring, func()) {
+) (*runtimeWiring, func(), error) {
 	runtimeClient := newUIRuntimeClientWithReads(plan.SessionID, clients.SessionViews, clients.RuntimeControls).(*sessionRuntimeClient)
 	if reactivator != nil {
 		runtimeClient.SetRuntimeReactivator(reactivator)
 	}
 	terminalFocus := newTerminalFocusState()
+	initialLifecycleContext := lifecyclecontract.Context{}
+	if len(plan.ClientLifecycleCommand) > 0 {
+		var err error
+		initialLifecycleContext, err = lifecycleInitialContext(plan.SessionID)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 	lifecycleProxy := newClientLifecycleProxy(
 		ctx,
 		plan.ClientLifecycleCommand,
-		lifecycleInitialContext(plan.SessionID, plan.SessionName),
+		initialLifecycleContext,
 		terminalFocus.FocusedForAttention,
-		clients.AttentionNotifications == nil,
 	)
 	subscribeTranscript := func(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
 		return clients.SessionTranscript.SubscribeSessionTranscript(ctx, req)
@@ -116,7 +127,6 @@ func prepareSharedRuntimeWiring(
 	transcriptEvents := transcriptStream.Events
 	eventDispatcher := newUIEventDispatcher(transcriptEvents)
 	requestTranscriptOpen := transcriptStream.RequestRehydration
-	stopAttention := startClientLifecycleAttention(ctx, plan.SessionID, clients.AttentionNotifications, lifecycleProxy)
 	turnQueueHook := newBellHooks(newTerminalNotifier(plan.ActiveSettings.NotificationMethod, os.Stdout, os.LookupEnv), func() string {
 		if runtimeClient != nil {
 			if sessionName := strings.TrimSpace(runtimeClient.MainView().Session.SessionName); sessionName != "" {
@@ -125,6 +135,9 @@ func prepareSharedRuntimeWiring(
 		}
 		return strings.TrimSpace(plan.SessionName)
 	}, terminalFocus.FocusedForAttention)
+	if lifecycleProxy != nil {
+		turnQueueHook.observeAcceptedAttention(lifecycleProxy.AcceptAttention)
+	}
 	wiring := &runtimeWiring{
 		eventDispatcher:       eventDispatcher,
 		requestTranscriptOpen: requestTranscriptOpen,
@@ -146,9 +159,8 @@ func prepareSharedRuntimeWiring(
 	}
 	return wiring, func() {
 		transcriptStream.Stop()
-		stopAttention()
 		if lifecycleProxy != nil {
 			lifecycleProxy.Close()
 		}
-	}
+	}, nil
 }
