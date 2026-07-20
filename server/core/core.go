@@ -13,9 +13,7 @@ import (
 	"core/server/metadata"
 	"core/server/runprompt"
 	"core/server/runtime"
-	"core/server/session"
 	"core/server/sessionlaunch"
-	askquestion "core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/apicontract"
 	"core/shared/clientui"
@@ -278,7 +276,7 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 		ReloadConfig: func() (config.App, error) {
 			return s.configForWorkspace(projectCtx.projectRoot)
 		},
-	}, s.safeBundles().Persistence.sessionStores).
+	}).
 		WithAuthStateReader(s.safeBundles().Auth.support.AuthManager).
 		WithPromptHistoryReader(s.safeBundles().Persistence.metadataStore)
 	s.safeBundles().Sessions.sessionServices[scopeKey] = service
@@ -296,14 +294,10 @@ func (s *Core) runPromptClientForProjectContext(projectCtx projectContext) apico
 		return cached
 	}
 	client := runprompt.NewInProcessRunPromptClient(runprompt.HeadlessBootstrap{
-		SessionLaunch:   s.sessionLaunchServiceForProjectContext(projectCtx),
-		AuthManager:     s.safeBundles().Auth.support.AuthManager,
-		FastModeState:   s.safeBundles().Runtime.fastModeState,
-		Background:      s.safeBundles().Runtime.background,
-		RuntimeRegistry: s.safeBundles().Runtime.runtimeRegistry,
-		PromptHistory:   s.safeBundles().Persistence.metadataStore,
-		SessionRuntime:  s.safeBundles().Runtime.sessionRuntimeService,
-		PersistenceRoot: projectCtx.config.PersistenceRoot,
+		SessionLaunch:    s.sessionLaunchServiceForProjectContext(projectCtx),
+		FastModeState:    s.safeBundles().Runtime.fastModeState,
+		PromptHistory:    s.safeBundles().Persistence.metadataStore,
+		RuntimeAuthority: s.safeBundles().Runtime.runtimeAuthority,
 	})
 	s.safeBundles().Sessions.runPromptMap[scopeKey] = client
 	return client
@@ -555,48 +549,6 @@ func (s *Core) WorkflowClient() apicontract.WorkflowService {
 		return nil
 	}
 	return s.safeBundles().Workflows.workflows
-}
-
-func (s *Core) RegisterSessionStore(store *session.Store) {
-	if s == nil || s.safeBundles().Persistence.sessionStores == nil {
-		return
-	}
-	s.safeBundles().Persistence.sessionStores.RegisterStore(store)
-}
-
-func (s *Core) ResolveSessionStore(sessionID string) (*session.Store, error) {
-	if s == nil || s.safeBundles().Persistence.sessionStores == nil {
-		return nil, nil
-	}
-	return s.safeBundles().Persistence.sessionStores.ResolveStore(context.Background(), sessionID)
-}
-
-func (s *Core) PublishRuntimeEvent(sessionID string, evt runtime.Event) {
-	if s == nil || s.safeBundles().Runtime.runtimeRegistry == nil {
-		return
-	}
-	s.safeBundles().Runtime.runtimeRegistry.PublishRuntimeEvent(sessionID, evt)
-}
-
-func (s *Core) BeginPendingPrompt(sessionID string, req askquestion.AskQuestionRequest) {
-	if s == nil || s.safeBundles().Runtime.runtimeRegistry == nil {
-		return
-	}
-	s.safeBundles().Runtime.runtimeRegistry.BeginPendingPrompt(sessionID, req)
-}
-
-func (s *Core) CompletePendingPrompt(sessionID string, requestID string) {
-	if s == nil || s.safeBundles().Runtime.runtimeRegistry == nil {
-		return
-	}
-	s.safeBundles().Runtime.runtimeRegistry.CompletePendingPrompt(sessionID, requestID)
-}
-
-func (s *Core) AwaitPromptResponse(ctx context.Context, sessionID string, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-	if s == nil || s.safeBundles().Runtime.runtimeRegistry == nil {
-		return askquestion.AskQuestionResponse{}, fmt.Errorf("runtime registry is required")
-	}
-	return s.safeBundles().Runtime.runtimeRegistry.AwaitPromptResponse(ctx, sessionID, req)
 }
 
 func (s *Core) RunPromptClient() apicontract.RunPromptService {

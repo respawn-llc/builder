@@ -13,7 +13,7 @@ export type AppNavigation = Readonly<{
   openHome(): Promise<void>;
   openProject(projectID: string, workflowID?: string): Promise<void>;
   openWorkflowEditor(input: Readonly<{ workflowID: string; projectID?: string | undefined }>): Promise<void>;
-  openWorkflowLibrary(): Promise<void>;
+  openWorkflowLibrary(): Promise<"completed" | "failed">;
   openTask(taskID: string): Promise<void>;
   openProjectTask(projectID: string, workflowID: string, taskID: string): Promise<void>;
   closeProjectTask(projectID: string, workflowID?: string): Promise<void>;
@@ -30,11 +30,13 @@ export function useAppNavigation(): AppNavigation {
   const router = useRouter();
   const { logger } = useAppServices();
   const runNavigation = useCallback(
-    async (action: () => Promise<void>): Promise<void> => {
+    async (action: () => Promise<void>): Promise<"completed" | "failed"> => {
       try {
         await runNavigationTransition(action);
+        return "completed";
       } catch (error) {
         await logger.append("warn", "Navigation failed", { error: errorMessage(error) });
+        return "failed";
       }
     },
     [logger],
@@ -85,7 +87,7 @@ export function useAppNavigation(): AppNavigation {
         });
       },
       async openWorkflowLibrary() {
-        await runNavigation(async () => {
+        return runNavigation(async () => {
           await navigate({ to: "/workflows" });
         });
       },

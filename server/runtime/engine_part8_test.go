@@ -37,7 +37,18 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 
 	started := make(chan struct{})
 	release := make(chan struct{})
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{Model: "gpt-5"})
+	var (
+		mu     sync.Mutex
+		events []Event
+	)
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
+		Model: "gpt-5",
+		OnEvent: func(evt Event) {
+			mu.Lock()
+			events = append(events, evt)
+			mu.Unlock()
+		},
+	})
 
 	submitDone := make(chan struct {
 		assistant llm.Message
@@ -69,6 +80,13 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 		State:      "completed",
 		NoticeText: "Background shell 1001 completed.\nExit code: 0\nOutput:\ndone-b",
 	}, true)
+
+	client.mu.Lock()
+	callCountWhileBusy := len(client.calls)
+	client.mu.Unlock()
+	if callCountWhileBusy != 1 {
+		t.Fatalf("expected queued notices to avoid immediate model calls while busy, got %d calls", callCountWhileBusy)
+	}
 
 	close(release)
 	result := <-submitDone
@@ -104,6 +122,27 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 	client.mu.Unlock()
 	if callCountAfterReturn != 2 {
 		t.Fatalf("did not expect a later batched continuation after turn completion, got %d calls", callCountAfterReturn)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	immediateUpdates := map[string]bool{"1000": false, "1001": false}
+	for _, evt := range events {
+		if evt.Kind != EventBackgroundUpdated || evt.Background == nil {
+			continue
+		}
+		if _, ok := immediateUpdates[evt.Background.ID]; !ok {
+			continue
+		}
+		if evt.CommittedEntryCount != 0 || evt.CommittedEntryStartSet {
+			t.Fatalf("background update should not claim committed transcript range, got %+v", evt)
+		}
+		immediateUpdates[evt.Background.ID] = true
+	}
+	for shellID, found := range immediateUpdates {
+		if !found {
+			t.Fatalf("expected immediate background_updated event for %s, got %+v", shellID, events)
+		}
 	}
 }
 
@@ -200,6 +239,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 }
 
 func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
+	t.Parallel()
 	clearErr := errors.New("clear persistence failed")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateNamedTestSession(t, "ws", t.TempDir(), session.WithPersistenceObserver(gate))

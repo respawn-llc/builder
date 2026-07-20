@@ -93,9 +93,12 @@ func TestRemoteReleaseSessionRuntimePropagatesClosePolicy(t *testing.T) {
 
 	resp, err := remote.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
 		ClientRequestID: "release-1",
-		SessionID:       "session-1",
-		DropOwner:       true,
-		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
+		Attachment: serverapi.SessionRuntimeAttachment{
+			SessionID:  "session-1",
+			Generation: 7,
+		},
+		DropOwner:   true,
+		ClosePolicy: serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
 	})
 	if err != nil {
 		t.Fatalf("ReleaseSessionRuntime: %v", err)
@@ -105,8 +108,8 @@ func TestRemoteReleaseSessionRuntimePropagatesClosePolicy(t *testing.T) {
 	}
 	select {
 	case req := <-releaseRequests:
-		if !req.DropOwner || req.ClosePolicy != serverapi.SessionRuntimeReleaseClosePolicyDetachOnly {
-			t.Fatalf("release request = %+v, want detach-only drop owner", req)
+		if req.Attachment.SessionID != "session-1" || req.Attachment.Generation != 7 || !req.DropOwner || req.ClosePolicy != serverapi.SessionRuntimeReleaseClosePolicyDetachOnly {
+			t.Fatalf("release request = %+v, want exact attachment and detach-only owner drop", req)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for release request")

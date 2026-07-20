@@ -14,11 +14,13 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/server/tools/shell/postprocess"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/toolspec"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -32,6 +34,7 @@ var errWorkspaceRootRequired = errors.New("workspace root is required")
 type LocalToolRuntimeContext struct {
 	WorkspaceRoot                   string
 	OwnerSessionID                  string
+	ExecutionCorrelation            *runtimeids.ExecutionCorrelation
 	ShellOutputMaxChars             int
 	AllowNonCwdEdits                bool
 	SupportsVision                  bool
@@ -50,6 +53,7 @@ type LocalToolRegistryBinding struct {
 	registry *tools.Registry
 	ctx      LocalToolRuntimeContext
 	enabled  []toolspec.ID
+	mu       sync.Mutex
 }
 
 func BuildLocalRuntimeHandler(def tools.Definition, ctx LocalToolRuntimeContext) (tools.Handler, error) {
@@ -58,7 +62,10 @@ func BuildLocalRuntimeHandler(def tools.Definition, ctx LocalToolRuntimeContext)
 		if ctx.BackgroundShellManager == nil {
 			return nil, fmt.Errorf("exec_command background manager is unavailable")
 		}
-		return shelltool.NewExecCommandToolWithPostprocessor(ctx.WorkspaceRoot, ctx.ShellOutputMaxChars, ctx.BackgroundShellManager, ctx.OwnerSessionID, ctx.ShellPostprocessor), nil
+		return shelltool.NewExecCommandToolWithConfig(ctx.WorkspaceRoot, ctx.ShellOutputMaxChars, ctx.BackgroundShellManager, ctx.OwnerSessionID, shelltool.ExecCommandToolConfig{
+			Postprocessor:        ctx.ShellPostprocessor,
+			ExecutionCorrelation: ctx.ExecutionCorrelation,
+		}), nil
 	case tools.LocalRuntimeBuilderWriteStdin:
 		if ctx.BackgroundShellManager == nil {
 			return nil, fmt.Errorf("write_stdin background manager is unavailable")
@@ -140,14 +147,44 @@ func (b *LocalToolRegistryBinding) Rebind(workspaceRoot string) error {
 	if trimmedRoot == "" {
 		return errWorkspaceRootRequired
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.ctx.WorkspaceRoot = trimmedRoot
-	return b.rebuild()
+	return b.rebuildLocked()
+}
+
+// BindExecutionCorrelation binds the exact execution scope for subsequently constructed local tool handlers.
+// Passing nil returns the registered resource to its unscoped idle state.
+func (b *LocalToolRegistryBinding) BindExecutionCorrelation(correlation *runtimeids.ExecutionCorrelation) error {
+	if b == nil {
+		return fmt.Errorf("local tool registry binding is required")
+	}
+	if correlation != nil {
+		if err := correlation.Validate(); err != nil {
+			return fmt.Errorf("validate execution correlation: %w", err)
+		}
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	previous := b.ctx.ExecutionCorrelation
+	b.ctx.ExecutionCorrelation = correlation
+	if err := b.rebuildLocked(); err != nil {
+		b.ctx.ExecutionCorrelation = previous
+		return err
+	}
+	return nil
 }
 
 func (b *LocalToolRegistryBinding) rebuild() error {
 	if b == nil {
 		return fmt.Errorf("local tool registry binding is required")
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.rebuildLocked()
+}
+
+func (b *LocalToolRegistryBinding) rebuildLocked() error {
 	if b.registry == nil {
 		b.registry = tools.NewRegistry()
 	}
@@ -180,6 +217,7 @@ func (b *LocalToolRegistryBinding) rebuild() error {
 type LocalToolRegistryOptions struct {
 	WorkspaceRoot            string
 	OwnerSessionID           string
+	ExecutionCorrelation     *runtimeids.ExecutionCorrelation
 	Enabled                  []toolspec.ID
 	MinimumExecToBgTime      time.Duration
 	ShellOutputMaxChars      int
@@ -197,6 +235,11 @@ func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegis
 	trimmedRoot := strings.TrimSpace(opts.WorkspaceRoot)
 	if trimmedRoot == "" {
 		return nil, nil, nil, errWorkspaceRootRequired
+	}
+	if opts.ExecutionCorrelation != nil {
+		if err := opts.ExecutionCorrelation.Validate(); err != nil {
+			return nil, nil, nil, fmt.Errorf("validate execution correlation: %w", err)
+		}
 	}
 	broker := askquestion.NewAskQuestionBroker()
 	background := opts.Background
@@ -222,6 +265,7 @@ func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegis
 	ctx := LocalToolRuntimeContext{
 		WorkspaceRoot:                trimmedRoot,
 		OwnerSessionID:               opts.OwnerSessionID,
+		ExecutionCorrelation:         opts.ExecutionCorrelation,
 		ShellOutputMaxChars:          opts.ShellOutputMaxChars,
 		AllowNonCwdEdits:             opts.AllowNonCwdEdits,
 		SupportsVision:               opts.SupportsVision,

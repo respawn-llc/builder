@@ -5,7 +5,6 @@ import (
 	"core/internal/testharness/testsetup"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/core"
-	"core/server/metadata"
 	"core/server/session"
 	remoteclient "core/shared/client"
 	"core/shared/protocol"
@@ -123,11 +122,10 @@ func newGatewayHTTPTestServer(t *testing.T, appCore *core.Core) *httptest.Server
 
 func createGatewayAuthoritativeSession(t *testing.T, appCore *core.Core) *session.Store {
 	t.Helper()
-	metadataStore, err := metadata.Open(appCore.Config().PersistenceRoot)
-	if err != nil {
-		t.Fatalf("metadata.Open: %v", err)
+	metadataStore := appCore.MetadataStore()
+	if metadataStore == nil {
+		t.Fatal("core metadata store is required")
 	}
-	t.Cleanup(func() { _ = metadataStore.Close() })
 	store, err := session.Create(
 		filepath.Join(filepath.Join(appCore.Config().PersistenceRoot, "projects"), appCore.ProjectID(), "sessions"),
 		filepath.Base(appCore.Config().WorkspaceRoot),

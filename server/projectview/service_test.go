@@ -5,13 +5,16 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+	"time"
 
+	"core/server/llm"
 	"core/server/metadata"
 	"core/server/session"
+	"core/server/sessionruntime"
 	"core/server/workflowstore"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 )
@@ -106,9 +109,8 @@ func TestServiceDeleteProjectBlocksActiveSession(t *testing.T) {
 	if err := created.SetName("active"); err != nil {
 		t.Fatalf("persist session: %v", err)
 	}
-	runtimeState := &projectViewRuntimeState{active: map[string]bool{created.Meta().SessionID: true}}
 	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
-	svc.WithRuntimeActivitySources(runtimeState, runtimeState)
+	svc.WithRuntimeAuthority(newProjectViewActiveRuntimeAuthority(t, store, cfg, created))
 
 	deleted, err := svc.DeleteProject(context.Background(), serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID})
 	if err != nil {
@@ -117,62 +119,93 @@ func TestServiceDeleteProjectBlocksActiveSession(t *testing.T) {
 	if deleted.Deleted || len(deleted.Blockers) != 1 || deleted.Blockers[0].Code != "active_sessions" {
 		t.Fatalf("delete response = %+v, want active_sessions blocker", deleted)
 	}
-	if len(runtimeState.blocked) != 0 {
-		t.Fatalf("active session delete blocked runtime starts before returning active blocker: %+v", runtimeState.blocked)
-	}
 	if _, err := os.Stat(created.Dir()); err != nil {
 		t.Fatalf("session dir should remain: %v", err)
 	}
 }
 
-func TestServiceDeleteProjectRechecksActiveSessionAfterRunBlocker(t *testing.T) {
+func TestServiceProjectBlockersIncludeRuntimeMaintenance(t *testing.T) {
 	store, cfg, binding := newProjectViewMetadataStore(t)
-	created := createProjectViewSession(t, store, cfg, binding.ProjectID, cfg.WorkspaceRoot, "starting")
-	runtimeState := &projectViewRuntimeState{
-		active:          map[string]bool{},
-		activateOnBlock: true,
+	created := createProjectViewSession(t, store, cfg, binding.ProjectID, cfg.WorkspaceRoot, "maintenance")
+	authority, sessionID, plan := newProjectViewRuntimeAuthority(t, store, cfg, created)
+	if _, err := authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   "project-view-maintenance",
+		Runtime:   &plan,
+	}); err != nil {
+		t.Fatalf("open runtime: %v", err)
 	}
-	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
-	svc.WithRuntimeActivitySources(runtimeState, runtimeState)
+	svc := newProjectViewMetadataService(t, store, binding.ProjectID).WithRuntimeAuthority(authority)
 
-	deleted, err := svc.DeleteProject(context.Background(), serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	done := make(chan error, 1)
+	go func() {
+		done <- authority.RunSessionMaintenance(
+			context.Background(),
+			sessionID.String(),
+			func(context.Context, *session.Store, *sessionruntime.ActiveRuntimeMaintenance) error {
+				close(started)
+				<-release
+				return nil
+			},
+		)
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for project runtime maintenance")
+	}
+
+	blockers, err := svc.projectActiveSessionBlockers(context.Background(), []string{sessionID.String()})
 	if err != nil {
-		t.Fatalf("DeleteProject: %v", err)
+		t.Fatalf("project active session blockers: %v", err)
 	}
-	if deleted.Deleted || len(deleted.Blockers) != 1 || deleted.Blockers[0].Code != "active_sessions" {
-		t.Fatalf("delete response = %+v, want active_sessions blocker from post-block recheck", deleted)
+	if len(blockers) != 1 || blockers[0].Code != "active_sessions" || blockers[0].Count != 1 {
+		t.Fatalf("project blockers = %+v, want one active maintenance session", blockers)
 	}
-	if len(runtimeState.blocked) != 1 || runtimeState.blocked[0] != created.Meta().SessionID {
-		t.Fatalf("blocked sessions = %+v, want %q", runtimeState.blocked, created.Meta().SessionID)
-	}
-	if _, err := os.Stat(created.Dir()); err != nil {
-		t.Fatalf("session dir should remain: %v", err)
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("run project session maintenance: %v", err)
 	}
 }
 
-func TestServiceDeleteProjectBlocksSessionCreatedAfterPreflightList(t *testing.T) {
+func TestServiceProjectStartBlockExcludesRuntimeMaintenance(t *testing.T) {
 	store, cfg, binding := newProjectViewMetadataStore(t)
-	var created *session.Store
-	runtimeState := &projectViewRuntimeState{active: map[string]bool{}}
-	runtimeState.beforeFirstBlock = func() {
-		created = createProjectViewSession(t, store, cfg, binding.ProjectID, cfg.WorkspaceRoot, "late-active")
-		runtimeState.active[created.Meta().SessionID] = true
+	created := createProjectViewSession(t, store, cfg, binding.ProjectID, cfg.WorkspaceRoot, "maintenance-block")
+	authority, sessionID, plan := newProjectViewRuntimeAuthority(t, store, cfg, created)
+	if _, err := authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   "project-view-maintenance-block",
+		Runtime:   &plan,
+	}); err != nil {
+		t.Fatalf("open runtime: %v", err)
 	}
-	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
-	svc.WithRuntimeActivitySources(runtimeState, runtimeState)
-
-	deleted, err := svc.DeleteProject(context.Background(), serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID})
+	svc := newProjectViewMetadataService(t, store, binding.ProjectID).WithRuntimeAuthority(authority)
+	release, err := svc.blockSessionStarts(context.Background(), []string{sessionID.String()})
 	if err != nil {
-		t.Fatalf("DeleteProject: %v", err)
+		t.Fatalf("block project session starts: %v", err)
 	}
-	if deleted.Deleted || len(deleted.Blockers) != 1 || deleted.Blockers[0].Code != "active_sessions" {
-		t.Fatalf("delete response = %+v, want active_sessions blocker from transaction-current session list", deleted)
-	}
-	if created == nil {
-		t.Fatal("late session was not created by test hook")
-	}
-	if len(runtimeState.blocked) == 0 || runtimeState.blocked[len(runtimeState.blocked)-1] != created.Meta().SessionID {
-		t.Fatalf("blocked sessions = %+v, want late session %q blocked inside delete transaction", runtimeState.blocked, created.Meta().SessionID)
+	defer release()
+
+	err = authority.RunSessionMaintenance(
+		context.Background(),
+		sessionID.String(),
+		func(context.Context, *session.Store, *sessionruntime.ActiveRuntimeMaintenance) error {
+			t.Fatal("project-blocked runtime maintenance callback ran")
+			return nil
+		},
+	)
+	if !errors.Is(err, sessionruntime.ErrSessionStartsBlocked) {
+		t.Fatalf("project-blocked runtime maintenance error = %v, want ErrSessionStartsBlocked", err)
 	}
 }
 
@@ -400,9 +433,8 @@ func TestMetadataServiceUnlinkWorkspaceBlocksActiveRuntimeSession(t *testing.T) 
 	store, cfg, binding := newProjectViewMetadataStore(t)
 	attached := attachProjectViewWorkspace(t, store, binding.ProjectID)
 	created := createProjectViewSession(t, store, cfg, binding.ProjectID, attached.CanonicalRoot, "active-workspace")
-	runtimeState := &projectViewRuntimeState{active: map[string]bool{created.Meta().SessionID: true}}
 	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
-	svc.WithRuntimeActivitySources(runtimeState, runtimeState)
+	svc.WithRuntimeAuthority(newProjectViewActiveRuntimeAuthority(t, store, cfg, created))
 
 	unlinked, err := svc.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
 		ProjectID:   binding.ProjectID,
@@ -413,65 +445,6 @@ func TestMetadataServiceUnlinkWorkspaceBlocksActiveRuntimeSession(t *testing.T) 
 	}
 	if unlinked.Unlinked || len(unlinked.Blockers) != 1 || unlinked.Blockers[0].Code != "active_sessions" {
 		t.Fatalf("unlink response = %+v, want active_sessions blocker", unlinked)
-	}
-	if len(runtimeState.blocked) != 0 {
-		t.Fatalf("active workspace unlink blocked runtime starts before returning active blocker: %+v", runtimeState.blocked)
-	}
-}
-
-func TestMetadataServiceUnlinkWorkspaceRechecksActiveSessionAfterRunBlocker(t *testing.T) {
-	store, cfg, binding := newProjectViewMetadataStore(t)
-	attached := attachProjectViewWorkspace(t, store, binding.ProjectID)
-	created := createProjectViewSession(t, store, cfg, binding.ProjectID, attached.CanonicalRoot, "starting-workspace")
-	runtimeState := &projectViewRuntimeState{
-		active:          map[string]bool{},
-		activateOnBlock: true,
-	}
-	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
-	svc.WithRuntimeActivitySources(runtimeState, runtimeState)
-
-	unlinked, err := svc.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
-		ProjectID:   binding.ProjectID,
-		WorkspaceID: attached.WorkspaceID,
-	})
-	if err != nil {
-		t.Fatalf("UnlinkWorkspaceFromProject: %v", err)
-	}
-	if unlinked.Unlinked || len(unlinked.Blockers) != 1 || unlinked.Blockers[0].Code != "active_sessions" {
-		t.Fatalf("unlink response = %+v, want active_sessions blocker from post-block recheck", unlinked)
-	}
-	if len(runtimeState.blocked) != 1 || runtimeState.blocked[0] != created.Meta().SessionID {
-		t.Fatalf("blocked sessions = %+v, want %q", runtimeState.blocked, created.Meta().SessionID)
-	}
-}
-
-func TestMetadataServiceUnlinkWorkspaceBlocksSessionAttachedAfterPreflightList(t *testing.T) {
-	store, cfg, binding := newProjectViewMetadataStore(t)
-	attached := attachProjectViewWorkspace(t, store, binding.ProjectID)
-	var created *session.Store
-	runtimeState := &projectViewRuntimeState{active: map[string]bool{}}
-	runtimeState.beforeFirstBlock = func() {
-		created = createProjectViewSession(t, store, cfg, binding.ProjectID, attached.CanonicalRoot, "late-workspace-active")
-		runtimeState.active[created.Meta().SessionID] = true
-	}
-	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
-	svc.WithRuntimeActivitySources(runtimeState, runtimeState)
-
-	unlinked, err := svc.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
-		ProjectID:   binding.ProjectID,
-		WorkspaceID: attached.WorkspaceID,
-	})
-	if err != nil {
-		t.Fatalf("UnlinkWorkspaceFromProject: %v", err)
-	}
-	if unlinked.Unlinked || len(unlinked.Blockers) != 1 || unlinked.Blockers[0].Code != "active_sessions" {
-		t.Fatalf("unlink response = %+v, want active_sessions blocker from transaction-current session list", unlinked)
-	}
-	if created == nil {
-		t.Fatal("late workspace session was not created by test hook")
-	}
-	if len(runtimeState.blocked) == 0 || runtimeState.blocked[len(runtimeState.blocked)-1] != created.Meta().SessionID {
-		t.Fatalf("blocked sessions = %+v, want late session %q blocked inside unlink transaction", runtimeState.blocked, created.Meta().SessionID)
 	}
 }
 
@@ -744,36 +717,75 @@ func createProjectViewSession(t testing.TB, store *metadata.Store, cfg config.Ap
 	return created
 }
 
-type projectViewRuntimeState struct {
-	active             map[string]bool
-	blocked            []string
-	activateOnBlock    bool
-	beforeFirstBlock   func()
-	beforeFirstBlocked bool
+type projectViewTestLLMClient struct{}
+
+func (projectViewTestLLMClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+	return llm.Response{}, nil
 }
 
-func (s *projectViewRuntimeState) BlockSessionRuns(sessionIDs []string) func() {
-	if s.beforeFirstBlock != nil && !s.beforeFirstBlocked {
-		s.beforeFirstBlocked = true
-		s.beforeFirstBlock()
+func newProjectViewActiveRuntimeAuthority(t testing.TB, store *metadata.Store, cfg config.App, sessionStore *session.Store) *sessionruntime.Authority {
+	t.Helper()
+	authority, sessionID, plan := newProjectViewRuntimeAuthority(t, store, cfg, sessionStore)
+	if _, err := authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
+		Descriptor: mustOpenProjectViewSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Resource:   sessionruntime.OpenAgentResource{},
+		Runner: func(ctx context.Context, _ sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
+			<-ctx.Done()
+			return context.Cause(ctx)
+		},
+	}); err != nil {
+		t.Fatalf("start active session execution: %v", err)
 	}
-	s.blocked = append(s.blocked, sessionIDs...)
-	if s.activateOnBlock {
-		if s.active == nil {
-			s.active = map[string]bool{}
-		}
-		for _, sessionID := range sessionIDs {
-			s.active[strings.TrimSpace(sessionID)] = true
-		}
+	if _, active := authority.SessionExecution(sessionID); !active {
+		t.Fatal("session execution was not registered as active")
 	}
-	return func() {}
+	return authority
 }
 
-func (s *projectViewRuntimeState) HasBlockingRuntimeActivity(_ context.Context, sessionID string) (bool, error) {
-	if s == nil {
-		return false, nil
+func newProjectViewRuntimeAuthority(
+	t testing.TB,
+	store *metadata.Store,
+	cfg config.App,
+	sessionStore *session.Store,
+) (*sessionruntime.Authority, runtimeids.SessionID, sessionruntime.AgentRuntimePlan) {
+	t.Helper()
+	sessionID, err := runtimeids.ParseSessionID(sessionStore.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session ID: %v", err)
 	}
-	return s.active[strings.TrimSpace(sessionID)], nil
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: cfg.PersistenceRoot,
+		StoreOptions:    store.AuthoritativeSessionStoreOptions(),
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close runtime authority: %v", err)
+		}
+	})
+
+	settings := cfg.Settings
+	settings.Model = "gpt-5"
+	settings.ModelContextWindow = 200000
+	settings.Reviewer.Frequency = "off"
+	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
+		Settings: settings,
+		Workdir:  sessionStore.Meta().WorkspaceRoot,
+		Client:   projectViewTestLLMClient{},
+	})
+	if err != nil {
+		t.Fatalf("new runtime plan: %v", err)
+	}
+	return authority, sessionID, plan
+}
+
+func mustOpenProjectViewSessionDescriptor(t testing.TB, sessionID runtimeids.SessionID) session.SessionDescriptor {
+	t.Helper()
+	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
+	if err != nil {
+		t.Fatalf("new open session descriptor: %v", err)
+	}
+	return descriptor
 }
 
 func newProjectViewMetadataStore(t testing.TB) (*metadata.Store, config.App, metadata.Binding) {

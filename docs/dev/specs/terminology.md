@@ -136,6 +136,18 @@ Per-transition-branch policy deciding which earlier run supplies the source sess
 
 One durable execution attempt for an executable node on a task. Agent runs create or continue a Kent session. Script runs execute a local server-side executable. A run may call tools, ask questions, produce a transition result, and terminate with a structured outcome.
 
+### Exact Execution Scope
+
+The opaque immutable identity of one live agent or script execution. It binds the workflow run when present, execution generation, and resource generation. An exact execution scope is the only execution-liveness authority; durable rows, transcript events, timestamps, goals, and client state cannot prove that it is live.
+
+### Execution Generation
+
+The immutable attempt generation of an agent or script run. Every Resume creates a successor execution generation, while accepted steering continues within the current generation. Handles and completion intents from an older generation cannot mutate a successor.
+
+### Resource Generation
+
+The immutable generation of the live runtime resources used by an exact execution scope. Replacing or recreating those resources advances the resource generation so stale handles cannot operate on the replacement.
+
 ### Script Node
 
 A workflow executable node that runs a local executable on the Kent server instead of starting an agent session. It reads incoming workflow parameter values from JSON stdin, writes workflow completion JSON to stdout, and uses stderr only for diagnostics.
@@ -162,7 +174,7 @@ Kent transcript/runtime artifact used by a run. A task may have many sessions be
 
 ### Session Run
 
-One live execution of a session through the runtime loop. A session can have multiple runtime activations over time through resume, queued user submissions, goal turns, compaction, or background continuation.
+One live agent execution of a session within one exact execution scope and execution generation. Steering remains within that generation; Resume creates a successor Session Run generation. Scripts have exact execution scopes but no Session Run.
 
 ### Node Transition
 
@@ -180,9 +192,17 @@ The branch placements created by one fan-out transition for one task. The batch 
 
 A non-agent fan-in node that waits for required inbound branches before continuing. The join exposes a read-only aggregate of incoming branch parameters. Same-key incoming parameter collisions are invalid.
 
-### Task Cancellation
+### Task Interrupt
 
-A task-level stop operation that prevents further automation, interrupts active runs with cancellation metadata, and archives the task to terminal/Done for board visibility.
+A resumable stop operation for one or every exact live execution on a task. It joins exact-scope finalization and records interruption metadata without deleting the task, session, worktree, or other execution artifacts.
+
+### Task Delete
+
+A server-authoritative operation exposed through a `can_delete` read-model fact. It revalidates task quiescence, removes reconstructible managed artifacts idempotently, preserves session artifacts, and deletes the durable task row last. Task Delete has no journal and does not substitute for whole-workflow deletion.
+
+### Quiescence
+
+The task lifecycle condition in which no exact live execution, automatic intent, or runtime gate exists. Task Delete and whole-workflow deletion revalidate quiescence before mutation.
 
 ### Question
 
@@ -196,9 +216,21 @@ An agent node whose transition prompts ask it to coordinate work. Orchestration 
 
 A workflow/task state where auto-execution stops because the task is done, interrupted, blocked, or awaiting manual/user action.
 
+### Workflow Execution
+
+The server control plane that owns workflow lifecycle mutations, the context-aware global mutation permit, volatile automatic intent, admission, configured automatic capacity, task affinity, and immutable live snapshots. It is the only workflow lifecycle orchestration authority.
+
+### Automatic Intent
+
+A typed in-memory request for Workflow Execution to start eligible workflow work automatically. Its membership and ordering are volatile and intentionally lost on restart; it is never reconstructed from durable state.
+
+### Immutable Live Snapshot
+
+One read-only, point-in-time projection of exact generation-matched execution scopes, automatic intents, and runtime gates. Workflow reads may combine it with durable facts and may become stale; mutations revalidate authoritative state before commit.
+
 ### Scheduler
 
-Server-owned automation scheduler. Runnable work is derived from durable task/run state; pending-work ordering and active runtime ownership are live scheduler/runtime state.
+An informal label for the automatic-admission responsibility inside Workflow Execution. Scheduler is not a separate lifecycle authority, durable queue, reconstruction worker, or owner of live execution.
 
 ### Task Comment
 
@@ -252,11 +284,27 @@ Terminal-owned history of normal-buffer output. Kent does not replay, clear, or 
 
 ### Active Session Runtime
 
-The single shared live runtime (engine) a session registers while active. There is exactly one engine per session; every interactive client and any headless or workflow run resolves and drives that same shared engine through its queue/steer/exclusive-step boundary. It exists independently of any particular client and may be registered but idle between activations.
+The single shared runtime resource a session registers while available. Every interactive client and any headless or workflow run resolves the same resource as an equal control surface. Live execution exists only when the exact execution authority exposes a generation-matched scope; a registered idle runtime is not a live execution.
 
 ### RuntimeActivity
 
-The server-owned live read model for whether a session runtime is unavailable, starting/reserved, registered idle, running, awaiting prompt/approval, draining, or closing, including the active kind for exclusive work such as a user turn, goal loop, compaction, shell, or background step. Clients use `RuntimeActivity` as the active/idle authority; session database run rows, transcript rows, goal status, and client-local booleans are not liveness sources.
+The server-owned live read model derived from the exact execution authority for whether a session runtime is unavailable, establishing, registered idle, running, awaiting a live prompt/approval, draining, or closing, including the active kind for exclusive work such as a user turn, goal loop, compaction, shell, or background step. Running and waiting require exact generation-matched live evidence. Clients project `RuntimeActivity`; durable rows and client-local fallback booleans are not liveness sources.
+
+### Runtime Command
+
+The sole typed ordering authority for model-visible human input, agent-originated workflow completion intent, goals, and technical input within one exact agent execution scope. It owns ordering, acceptance, supersession, persistence effects, and retryable restoration. Prompt answers resolve their exact live waiter directly.
+
+### Completion Fence
+
+The Workflow Execution boundary after which an actor-neutral completion intent may commit for an exact live scope or exact current idle workflow run. For an agent scope, accepted human steering before the fence supersedes completion and continues the same generation; input arriving after the fence is rejected with a typed retryable result so the client restores its draft.
+
+### Runtime Gate
+
+A volatile exact-scope guard held while Workflow Execution performs an execution-affecting lifecycle transition. It blocks conflicting mutation, is included in immutable live snapshots, and is never persisted or reconstructed after restart.
+
+### Append Certainty
+
+The Session Store result `{committed, error}` for a mutation. `committed=false` leaves retry ownership with the caller and applies no projection; `committed=true` consumes retry ownership and applies state exactly once even when a post-commit observer error is returned.
 
 ### ReadModelVersion
 
@@ -284,7 +332,7 @@ A typed inert category-and-text entry inside `DraftRecoveryBuffer`, such as acti
 
 ### Forced Local Detach
 
-The second-Ctrl+C exit path for a TUI client while interrupt is pending. The client exits locally and detaches its runtime owner reference without releasing or force-closing a shared daemon runtime; embedded process exit still cleans up local owner state before shutdown.
+The second-Ctrl+C exit path for a TUI client while interrupt is pending. The client exits locally and detaches its client attachment without releasing or force-closing a shared daemon runtime; embedded process exit still cleans up its attachment before shutdown.
 
 ### Agent Step
 
@@ -320,4 +368,4 @@ A persistent self/user-declared objective with a continuation loop (nudges, susp
 
 ### Goal Continuation Loop
 
-The driver that re-runs the step loop to keep working a goal across runs, injecting goal reminders. It does not run while a workflow run owns the session — the workflow turn loop is the single continuation driver there, and the goal stays a passive objective folded into the workflow's continuation nudge.
+The driver that re-runs the step loop to keep working a goal across runs, injecting goal reminders. It does not run while an exact workflow execution scope is driving the session — the workflow turn loop is the single continuation driver there, and the goal stays a passive objective folded into the workflow's continuation nudge.

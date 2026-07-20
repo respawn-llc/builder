@@ -3,7 +3,6 @@ package registry
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"sync"
 	"testing"
@@ -13,6 +12,7 @@ import (
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
+	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
@@ -21,10 +21,58 @@ import (
 
 type registryRuntimeFakeClient struct{}
 
+type registryRetention chan struct{}
+
+func (retention registryRetention) Close() error {
+	close(retention)
+	return nil
+}
+
+type registryBlockingRetention struct {
+	closeStarted chan struct{}
+	release      <-chan struct{}
+}
+
+func (retention *registryBlockingRetention) Close() error {
+	close(retention.closeStarted)
+	<-retention.release
+	return nil
+}
+
 const (
 	registryTestRunID  = "11111111-1111-4111-8111-111111111111"
 	registryTestStepID = "22222222-2222-4222-8222-222222222222"
 )
+
+func registryTestResourceRef(sessionID string) runtimeids.SessionResourceRef {
+	id, err := runtimeids.ParseSessionID(sessionID)
+	if err != nil {
+		panic(err)
+	}
+	ref, err := runtimeids.NewSessionResourceRef(id, 1)
+	if err != nil {
+		panic(err)
+	}
+	return ref
+}
+
+func registryTestResource(ref runtimeids.SessionResourceRef) sessionruntime.AgentResourceDescriptor {
+	return sessionruntime.AgentResourceDescriptor{Ref: ref, State: sessionruntime.AgentResourceReady}
+}
+
+func projectPendingPromptForTest(registry *RuntimeRegistry, sessionID string, request askquestion.AskQuestionRequest) {
+	registry.PromptPending(registryTestResourceRef(sessionID), runtimeids.NewExecutionScopeID(), request, time.Now().UTC())
+}
+
+func resolvePendingPromptForTest(registry *RuntimeRegistry, sessionID string, requestID string) {
+	for _, prompt := range registry.ListPendingPrompts(sessionID) {
+		if prompt.Request.ID == requestID {
+			registry.PromptResolved(prompt.Resource, prompt.ScopeID, requestID)
+			return
+		}
+	}
+	panic("pending prompt not found")
+}
 
 func (registryRuntimeFakeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
 	return llm.Response{}, nil
@@ -34,72 +82,24 @@ func (registryRuntimeFakeClient) ProviderCapabilities(context.Context) (llm.Prov
 	return llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}, nil
 }
 
-func registerReady(t *testing.T, r *RuntimeRegistry, sessionID string, engine *runtime.Engine) {
+func registerResource(t *testing.T, registry *RuntimeRegistry, ref runtimeids.SessionResourceRef, engine *runtime.Engine) {
 	t.Helper()
-	claim, _, _ := r.AcquireRuntimeClaim(sessionID, "test-owner")
-	if claim == nil {
-		t.Fatalf("AcquireRuntimeClaim(%q) returned nil claim", sessionID)
-	}
-	claim.Resolve(engine, nil, nil)
-}
-
-func TestRuntimeRegistryCancellableStartStaysAdmissionOnlyForRuntimeActivity(t *testing.T) {
-	r := NewRuntimeRegistry()
-	startCtx, release, ok := r.BeginCancellableSessionRun("session-starting")
-	if !ok {
-		t.Fatal("BeginCancellableSessionRun rejected first start")
-	}
-	if startCtx == nil {
-		t.Fatal("start context is required")
-	}
-	snapshot := r.RuntimeActivityRegistrySnapshot("session-starting")
-	activity, err := runtimeactivity.ResolveRuntimeActivity(runtimeactivity.ResolverSnapshot{Registry: snapshot})
-	if err != nil {
-		t.Fatalf("ResolveRuntimeActivity: %v", err)
-	}
-	if activity.State != clientui.RuntimeActivityUnavailable {
-		t.Fatalf("activity = %+v, want unavailable because long-lived starts are admission-only", activity)
-	}
-	release()
-	if err := startCtx.Err(); !errors.Is(err, context.Canceled) {
-		t.Fatalf("released start context error = %v, want canceled", err)
-	}
-	snapshot = r.RuntimeActivityRegistrySnapshot("session-starting")
-	if snapshot.Registered || snapshot.Starting {
-		t.Fatalf("snapshot after release = %+v, want unavailable/no start", snapshot)
+	if err := registry.ResourceReady(
+		context.Background(),
+		registryTestResource(ref),
+		engine,
+		func() (io.Closer, error) { return make(registryRetention), nil },
+	); err != nil {
+		t.Fatalf("register authority runtime resource %v: %v", ref, err)
 	}
 }
 
-func TestRuntimeRegistryStartReservationDoesNotMaskRegisteredIdleActivity(t *testing.T) {
-	r := NewRuntimeRegistry()
-	startCtx, release, ok := r.BeginCancellableSessionRun("session-registered")
-	if !ok {
-		t.Fatal("BeginCancellableSessionRun rejected first start")
-	}
-	defer release()
-	engine := &runtime.Engine{}
-	registerReady(t, r, "session-registered", engine)
-	t.Cleanup(func() { closeRuntime(r, "session-registered", engine) })
-
-	activity, err := r.RuntimeActivity("session-registered")
-	if err != nil {
-		t.Fatalf("RuntimeActivity: %v", err)
-	}
-	if activity.State != clientui.RuntimeActivityRegisteredIdle {
-		t.Fatalf("activity = %+v, want registered idle despite deferred control-operation start reservation", activity)
-	}
-	release()
-	if !errors.Is(startCtx.Err(), context.Canceled) {
-		t.Fatalf("released start context error = %v, want canceled", startCtx.Err())
-	}
+func registerReady(t *testing.T, registry *RuntimeRegistry, sessionID string, engine *runtime.Engine) {
+	registerResource(t, registry, registryTestResourceRef(sessionID), engine)
 }
 
-func closeRuntime(r *RuntimeRegistry, sessionID string, _ *runtime.Engine) {
-	claim := r.RuntimeClaimFor(sessionID)
-	if claim == nil {
-		return
-	}
-	_, _ = claim.Close(context.Background(), nil)
+func closeRuntime(registry *RuntimeRegistry, sessionID string, _ *runtime.Engine) {
+	_ = registry.ResourceDraining(context.Background(), registryTestResource(registryTestResourceRef(sessionID)))
 }
 
 func newRegistryTestRuntime(t *testing.T, onEvent func(runtime.Event)) *runtime.Engine {
@@ -128,195 +128,256 @@ func newRegistryRuntime(t *testing.T, client llm.Client, toolRegistry *askquesti
 	return engine
 }
 
-func TestRuntimeRegistryReportsRunFinishedInterestReason(t *testing.T) {
+func TestAuthorityRuntimeDrainClosesSubscriptionsAndReleasesRetention(t *testing.T) {
 	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-	reasons := make(chan RuntimeInterestReason, 1)
-	registry.SetInterestObserver(func(sessionID string, reason RuntimeInterestReason) {
-		if sessionID == "session-1" {
-			reasons <- reason
+	engine := newRegistryTestRuntime(t, nil)
+	retentionClosed := make(registryRetention)
+	ref := registryTestResourceRef(engine.SessionID())
+	if err := registry.ResourceReady(context.Background(), registryTestResource(ref), engine, func() (io.Closer, error) {
+		return retentionClosed, nil
+	}); err != nil {
+		t.Fatalf("register authority runtime resource: %v", err)
+	}
+	sub, err := registry.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{SessionID: engine.SessionID()})
+	if err != nil {
+		t.Fatalf("subscribe authority transcript: %v", err)
+	}
+	if err := registry.ResourceDraining(context.Background(), registryTestResource(ref)); err != nil {
+		t.Fatalf("drain authority runtime resource: %v", err)
+	}
+	var lastMessage clientui.TranscriptMessage
+	var nextErr error
+	for nextErr == nil {
+		var message clientui.TranscriptMessage
+		message, nextErr = sub.Next(context.Background())
+		if nextErr == nil {
+			lastMessage = message
 		}
-	})
-
-	registry.PublishRuntimeEvent("session-1", runtime.Event{
-		Kind:   runtime.EventRunStateChanged,
-		StepID: registryTestStepID,
-		RunState: &runtime.RunState{
-			Lifecycle:  runtime.FinishedRunLifecycle(runtime.RunModeTurn),
-			RunID:      registryTestStepID,
-			ActiveKind: runtime.ActiveKindUserTurn,
-			Status:     runtime.RunStatusCompleted,
-		},
-	})
-
+	}
+	if !errors.Is(nextErr, io.EOF) {
+		t.Fatalf("subscription close error = %v, want EOF", nextErr)
+	}
+	if lastMessage.Kind != clientui.TranscriptMessageRuntimeReadModelUpdate ||
+		lastMessage.Payload.RuntimeReadModelUpdate == nil ||
+		lastMessage.Payload.RuntimeReadModelUpdate.Activity.State != clientui.RuntimeActivityUnavailable {
+		t.Fatalf("last transcript message before EOF = %+v, want unavailable runtime read-model update", lastMessage)
+	}
 	select {
-	case reason := <-reasons:
-		if reason != RuntimeInterestRunFinished {
-			t.Fatalf("interest reason = %v, want run finished", reason)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for interest observer")
+	case <-retentionClosed:
+	default:
+		t.Fatal("registry drain did not release transcript retention")
 	}
 }
 
-func TestRuntimeRegistryNotifiesSleepObserverFromRuntimeActivitySnapshots(t *testing.T) {
+func TestAuthorityRuntimeDrainCannotRestoreAggregateActivityAfterTerminalState(t *testing.T) {
 	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	defer closeRuntime(registry, "session-1", engine)
-
-	notifications := make(chan bool, 2)
-	registry.SetSleepObserver(func(active bool) {
-		notifications <- active
-	})
-
-	publishRunState(registry, "session-1", true)
-	publishRunState(registry, "session-1", false)
-
-	if running := receiveSleepObserverState(t, notifications); !running {
-		t.Fatal("expected running sleep observer notification")
+	engine := newRegistryTestRuntime(t, nil)
+	ref := registryTestResourceRef(engine.SessionID())
+	retentionCloseStarted := make(chan struct{})
+	retentionRelease := make(chan struct{})
+	var releaseRetention sync.Once
+	release := func() {
+		releaseRetention.Do(func() { close(retentionRelease) })
 	}
-	if running := receiveSleepObserverState(t, notifications); running {
-		t.Fatal("expected stopped sleep observer notification")
+	t.Cleanup(release)
+	if err := registry.ResourceReady(context.Background(), registryTestResource(ref), engine, func() (io.Closer, error) {
+		return &registryBlockingRetention{closeStarted: retentionCloseStarted, release: retentionRelease}, nil
+	}); err != nil {
+		t.Fatalf("register authority runtime resource: %v", err)
+	}
+	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
+	defer func() { _ = sub.Close() }()
+	_ = nextTranscriptMessage(t, sub)
+	notifications := make(chan bool, 3)
+	registry.SetSleepObserver(func(active bool) { notifications <- active })
+	defer registry.SetSleepObserver(nil)
+
+	drainResult := make(chan error, 1)
+	go func() {
+		drainResult <- registry.ResourceDraining(context.Background(), registryTestResource(ref))
+	}()
+	select {
+	case <-retentionCloseStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for retention close")
+	}
+	if active := receiveSleepObserverState(t, notifications); !active {
+		t.Fatal("expected draining runtime to activate aggregate activity")
+	}
+	if active := receiveSleepObserverState(t, notifications); active {
+		t.Fatal("expected terminal runtime state to clear aggregate activity")
+	}
+
+	publishRunState(registry, engine.SessionID(), true)
+	assertNoSleepObserverState(t, notifications)
+
+	release()
+	if err := <-drainResult; err != nil {
+		t.Fatalf("drain authority runtime resource: %v", err)
+	}
+	assertNoSleepObserverState(t, notifications)
+}
+
+func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	ref := registryTestResourceRef(engine.SessionID())
+	registerReady(t, registry, engine.SessionID(), engine)
+	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
+	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
+	t.Cleanup(func() { _ = sub.Close() })
+	_ = nextTranscriptMessage(t, sub)
+
+	staleRef, err := runtimeids.NewSessionResourceRef(ref.SessionID(), ref.Generation()+1)
+	if err != nil {
+		t.Fatalf("new stale authority resource ref: %v", err)
+	}
+	registry.PublishAuthorityRuntimeEvent(staleRef, runtime.Event{
+		Kind:                       runtime.EventAssistantMessage,
+		StepID:                     registryTestStepID,
+		Message:                    llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "stale authority event"},
+		CommittedTranscriptChanged: true,
+	})
+	if message, nextErr := nextTranscriptMessageTimeout(sub, 20*time.Millisecond); nextErr == nil {
+		t.Fatalf("stale authority generation projected transcript event: %+v", message)
+	}
+	registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
+		Kind:                       runtime.EventAssistantMessage,
+		StepID:                     registryTestStepID,
+		Message:                    llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "authority event"},
+		CommittedTranscriptChanged: true,
+	})
+	message := nextTranscriptMessage(t, sub)
+	if message.Kind != clientui.TranscriptMessageCommittedRow {
+		t.Fatalf("authority event projection = %+v", message)
+	}
+
+	outcome := clientui.WorktreeTransitionOutcome{
+		OperationID: clientui.NewWorktreeTransitionID(),
+		Transition:  clientui.WorktreeTransitionEnter,
+		State:       clientui.WorktreeTransitionCompleted,
+	}
+	registry.PublishWorktreeTransitionOutcome(engine.SessionID(), outcome)
+
+	message = nextTranscriptMessageOfKind(t, sub, clientui.TranscriptMessageWorktreeTransitionOutcome)
+	if projected := message.Payload.WorktreeTransitionOutcome; projected == nil || projected.OperationID != outcome.OperationID {
+		t.Fatalf("worktree transition projection = %+v, want %+v", message.Payload.WorktreeTransitionOutcome, outcome)
 	}
 }
 
-func TestRuntimeRegistryAggregatesSleepObserverAcrossSessions(t *testing.T) {
+func TestExecutionPromptProjectionRetainsExactAuthorityGeneration(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	sessionID := runtimeids.NewSessionID()
+	predecessor := registryTestResourceRef(sessionID.String())
+	successor, err := runtimeids.NewSessionResourceRef(sessionID, 2)
+	if err != nil {
+		t.Fatalf("successor resource: %v", err)
+	}
+	predecessorScope := runtimeids.NewExecutionScopeID()
+	successorScope := runtimeids.NewExecutionScopeID()
+	request := askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "Proceed?"}
+
+	engine := &runtime.Engine{}
+	registerResource(t, registry, predecessor, engine)
+	registry.PromptPending(predecessor, predecessorScope, request, time.Now().UTC())
+	if err := registry.ResourceDraining(context.Background(), registryTestResource(predecessor)); err != nil {
+		t.Fatalf("drain predecessor: %v", err)
+	}
+	registerResource(t, registry, successor, engine)
+	t.Cleanup(func() { _ = registry.ResourceDraining(context.Background(), registryTestResource(successor)) })
+	registry.PromptPending(successor, successorScope, request, time.Now().UTC())
+	registry.PromptPending(predecessor, predecessorScope, request, time.Now().UTC())
+	registry.PromptResolved(predecessor, predecessorScope, request.ID)
+
+	items := registry.ListPendingPrompts(sessionID.String())
+	if len(items) != 1 || items[0].Resource != successor || items[0].ScopeID != successorScope {
+		t.Fatalf("pending prompts after stale resolution = %+v, want exact successor", items)
+	}
+}
+
+func TestResourceDrainingResolvesPendingPromptBeforeClosingStreams(t *testing.T) {
+	broker := attentionnotify.NewBroker()
+	registry := NewRuntimeRegistry().WithAttentionNotifications(broker)
+	engine := newRegistryTestRuntime(t, nil)
+	ref := registryTestResourceRef(engine.SessionID())
+	registerResource(t, registry, ref, engine)
+
+	transcriptSub := subscribeTranscriptForTest(t, registry, engine.SessionID())
+	defer func() { _ = transcriptSub.Close() }()
+	_ = nextTranscriptMessage(t, transcriptSub)
+	attentionSub, err := registry.SubscribeSessionAttentionNotifications(
+		context.Background(),
+		serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: engine.SessionID()},
+	)
+	if err != nil {
+		t.Fatalf("subscribe session attention notifications: %v", err)
+	}
+	defer func() { _ = attentionSub.Close() }()
+
+	scopeID := runtimeids.NewExecutionScopeID()
+	request := askquestion.AskQuestionRequest{
+		ID:       "ask-draining",
+		StepID:   registryTestStepID,
+		Question: "Proceed?",
+	}
+	registry.PromptPending(ref, scopeID, request, time.Now().UTC())
+	pendingTranscript := nextTranscriptMessageOfKind(t, transcriptSub, clientui.TranscriptMessagePromptPending)
+	if pendingTranscript.Payload.PromptPending == nil || pendingTranscript.Payload.PromptPending.PromptID != "ask-draining" {
+		t.Fatalf("pending transcript prompt = %+v", pendingTranscript.Payload.PromptPending)
+	}
+	pendingAttention := nextRegistryAttentionEvent(t, attentionSub)
+	if pendingAttention.Type != clientui.AttentionNotificationEventPending {
+		t.Fatalf("pending attention event = %+v", pendingAttention)
+	}
+
+	if err := registry.ResourceDraining(context.Background(), registryTestResource(ref)); err != nil {
+		t.Fatalf("drain resource: %v", err)
+	}
+
+	resolvedTranscript := nextTranscriptMessageOfKind(t, transcriptSub, clientui.TranscriptMessagePromptResolved)
+	if resolvedTranscript.Payload.PromptResolved == nil || resolvedTranscript.Payload.PromptResolved.PromptID != "ask-draining" {
+		t.Fatalf("resolved transcript prompt = %+v", resolvedTranscript.Payload.PromptResolved)
+	}
+	resolvedCtx, cancelResolved := context.WithTimeout(context.Background(), time.Second)
+	defer cancelResolved()
+	resolvedAttention, err := attentionSub.Next(resolvedCtx)
+	if err != nil {
+		t.Fatalf("next resolved attention event: %v", err)
+	}
+	promptID := attentionNotificationID(clientui.AttentionNotificationKindQuestion, "ask-draining")
+	if resolvedAttention.Type != clientui.AttentionNotificationEventResolved ||
+		!attentionNotificationEventIDMatches(resolvedAttention, promptID) {
+		t.Fatalf("resolved attention event = %+v", resolvedAttention)
+	}
+	if prompts := registry.ListPendingPrompts(engine.SessionID()); len(prompts) != 0 {
+		t.Fatalf("pending prompts after draining = %+v, want none", prompts)
+	}
+
+	registry.PromptResolved(ref, scopeID, request.ID)
+}
+
+func TestRuntimeRegistryAggregatesSleepObserverAcrossAuthorityResources(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engineA := &runtime.Engine{}
 	engineB := &runtime.Engine{}
 	registerReady(t, registry, "session-a", engineA)
 	registerReady(t, registry, "session-b", engineB)
-	defer closeRuntime(registry, "session-a", engineA)
-	defer closeRuntime(registry, "session-b", engineB)
-
-	notifications := make(chan bool, 4)
-	registry.SetSleepObserver(func(active bool) {
-		notifications <- active
-	})
+	t.Cleanup(func() { closeRuntime(registry, "session-a", engineA) })
+	t.Cleanup(func() { closeRuntime(registry, "session-b", engineB) })
+	notifications := make(chan bool, 2)
+	registry.SetSleepObserver(func(active bool) { notifications <- active })
+	defer registry.SetSleepObserver(nil)
 
 	publishRunState(registry, "session-a", true)
-	if active := receiveSleepObserverState(t, notifications); !active {
-		t.Fatal("expected aggregate active notification")
-	}
 	publishRunState(registry, "session-b", true)
 	publishRunState(registry, "session-a", false)
-	assertNoSleepObserverState(t, notifications)
-	publishRunState(registry, "session-b", false)
-
-	if active := receiveSleepObserverState(t, notifications); active {
-		t.Fatal("expected aggregate idle notification")
-	}
-	assertNoSleepObserverState(t, notifications)
-}
-
-func TestRuntimeRegistrySleepObserverDuplicateRunStateEventsAreIdempotent(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	defer closeRuntime(registry, "session-1", engine)
-
-	notifications := make(chan bool, 4)
-	registry.SetSleepObserver(func(active bool) {
-		notifications <- active
-	})
-
-	publishRunState(registry, "session-1", true)
-	publishRunState(registry, "session-1", true)
-	publishRunState(registry, "session-1", false)
-	publishRunState(registry, "session-1", false)
-
 	if active := receiveSleepObserverState(t, notifications); !active {
 		t.Fatal("expected aggregate active notification")
 	}
+	assertNoSleepObserverState(t, notifications)
+	publishRunState(registry, "session-b", false)
 	if active := receiveSleepObserverState(t, notifications); active {
 		t.Fatal("expected aggregate idle notification")
-	}
-	assertNoSleepObserverState(t, notifications)
-}
-
-func TestRuntimeRegistrySleepObserverConcurrentRunStateUpdates(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	for i := 0; i < 20; i++ {
-		id := fmt.Sprintf("session-%d", i)
-		registerReady(t, registry, id, &runtime.Engine{})
-	}
-
-	notifications := make(chan bool, 128)
-	registry.SetSleepObserver(func(active bool) {
-		notifications <- active
-	})
-
-	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
-		id := fmt.Sprintf("session-%d", i)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			publishRunState(registry, id, true)
-			publishRunState(registry, id, false)
-		}()
-	}
-	wg.Wait()
-
-	registry.runStateMu.Lock()
-	runningCount := len(registry.blockingActivitySessions)
-	registry.runStateMu.Unlock()
-	if runningCount != 0 {
-		t.Fatalf("running session count = %d, want 0", runningCount)
-	}
-}
-
-func TestRuntimeRegistrySleepObserverNotificationsDoNotOvertakeAggregateUpdates(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	defer closeRuntime(registry, "session-1", engine)
-
-	firstEntered := make(chan struct{})
-	releaseFirst := make(chan struct{})
-	notifications := make(chan bool, 2)
-	var once sync.Once
-	registry.SetSleepObserver(func(active bool) {
-		if active {
-			once.Do(func() {
-				close(firstEntered)
-				<-releaseFirst
-			})
-		}
-		notifications <- active
-	})
-
-	startDone := make(chan struct{})
-	go func() {
-		defer close(startDone)
-		publishRunState(registry, "session-1", true)
-	}()
-	<-firstEntered
-
-	finishDone := make(chan struct{})
-	go func() {
-		defer close(finishDone)
-		publishRunState(registry, "session-1", false)
-	}()
-
-	select {
-	case active := <-notifications:
-		t.Fatalf("notification overtook blocked active observer: %v", active)
-	default:
-	}
-
-	close(releaseFirst)
-	<-startDone
-	<-finishDone
-
-	if active := receiveSleepObserverState(t, notifications); !active {
-		t.Fatal("expected active notification first")
-	}
-	if active := receiveSleepObserverState(t, notifications); active {
-		t.Fatal("expected idle notification second")
 	}
 }
 
@@ -337,15 +398,6 @@ func assertNoSleepObserverState(t *testing.T, notifications <-chan bool) {
 	case active := <-notifications:
 		t.Fatalf("unexpected sleep observer notification: %v", active)
 	default:
-	}
-}
-
-func waitClosed(t *testing.T, ch <-chan struct{}) {
-	t.Helper()
-	select {
-	case <-ch:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for channel close")
 	}
 }
 
@@ -373,612 +425,9 @@ func publishRunState(registry *RuntimeRegistry, sessionID string, running bool) 
 			QueueAccepting: true,
 		}
 	}
-	version := runtimeactivity.NextReadModelVersion(sessionID)
 	registry.PublishRuntimeReadModelUpdate(sessionID, clientui.RuntimeReadModelUpdate{
-		Version:             version,
+		Version:             runtimeactivity.NextReadModelVersion(sessionID),
 		Activity:            activity,
 		InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 	})
-}
-
-func TestRuntimeRegistryTracksPendingPromptsPerSession(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-
-	registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "one?"})
-	registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "approval-1", StepID: registryTestStepID, Question: "allow?"})
-
-	items := registry.ListPendingPrompts("session-1")
-	if len(items) != 2 {
-		t.Fatalf("expected two pending prompts, got %+v", items)
-	}
-	if items[0].Request.ID != "ask-1" || items[1].Request.ID != "approval-1" {
-		t.Fatalf("unexpected pending prompts ordering: %+v", items)
-	}
-
-	registry.CompletePendingPrompt("session-1", "ask-1")
-	items = registry.ListPendingPrompts("session-1")
-	if len(items) != 1 || items[0].Request.ID != "approval-1" {
-		t.Fatalf("unexpected pending prompts after completion: %+v", items)
-	}
-
-	closeRuntime(registry, "session-1", engine)
-	if items := registry.ListPendingPrompts("session-1"); len(items) != 0 {
-		t.Fatalf("expected no pending prompts after unregister, got %+v", items)
-	}
-}
-
-func TestRuntimeRegistryRejectsPromptWithoutStepIdentity(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-
-	_, err := registry.AwaitPromptResponse(context.Background(), "session-1", askquestion.AskQuestionRequest{
-		ID:       "approval-1",
-		Question: "Approve?",
-		Approval: true,
-		ApprovalOptions: []askquestion.AskQuestionApprovalOption{
-			{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
-			{Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"},
-		},
-	})
-	if err == nil {
-		t.Fatal("AwaitPromptResponse accepted a prompt without a step identity")
-	}
-	if prompts := registry.ListPendingPrompts("session-1"); len(prompts) != 0 {
-		t.Fatalf("pending prompts = %+v, want none", prompts)
-	}
-}
-
-func TestRuntimeRegistrySubmitPromptResponseRemovesPendingPromptBeforeWaiterReturns(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-
-	responseDone := make(chan error, 1)
-	go func() {
-		_, err := registry.AwaitPromptResponse(context.Background(), "session-1", askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "Proceed?"})
-		responseDone <- err
-	}()
-
-	waitForPendingPrompt(t, registry, "session-1", "ask-1")
-
-	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{RequestID: "ask-1", Answer: "yes"}, nil); err != nil {
-		t.Fatalf("SubmitPromptResponse: %v", err)
-	}
-	if items := registry.ListPendingPrompts("session-1"); len(items) != 0 {
-		t.Fatalf("expected pending prompt removed immediately, got %+v", items)
-	}
-	select {
-	case err := <-responseDone:
-		if err != nil {
-			t.Fatalf("AwaitPromptResponse error: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for prompt response")
-	}
-}
-
-func TestRuntimeRegistrySubmitPromptResponseRejectsInvalidApprovalBeforeResolving(t *testing.T) {
-	broker := attentionnotify.NewBroker()
-	registry := NewRuntimeRegistry().WithAttentionNotifications(broker)
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-	sessionSub, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1"})
-	if err != nil {
-		t.Fatalf("SubscribeSessionAttentionNotifications: %v", err)
-	}
-	defer func() { _ = sessionSub.Close() }()
-
-	responseDone := make(chan error, 1)
-	go func() {
-		_, err := registry.AwaitPromptResponse(context.Background(), "session-1", askquestion.AskQuestionRequest{
-			ID:       "approval-1",
-			StepID:   registryTestStepID,
-			Question: "Approve?",
-			Approval: true,
-			ApprovalOptions: []askquestion.AskQuestionApprovalOption{
-				{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
-				{Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"},
-			},
-		})
-		responseDone <- err
-	}()
-	pendingEvent := nextRegistryAttentionEvent(t, sessionSub)
-	if pendingEvent.Type != clientui.AttentionNotificationEventPending {
-		t.Fatalf("pending event = %+v", pendingEvent)
-	}
-
-	err = registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{
-		RequestID: "approval-1",
-		Approval:  &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowSession},
-	}, nil)
-	if err == nil {
-		t.Fatal("expected invalid approval response to be rejected")
-	}
-	items := registry.ListPendingPrompts("session-1")
-	if len(items) != 1 || items[0].Request.ID != "approval-1" {
-		t.Fatalf("pending prompts after invalid response = %+v, want approval-1 still pending", items)
-	}
-	if event, err := sessionSub.Next(shortRegistryContext(t)); err == nil {
-		t.Fatalf("invalid approval response published resolved event: %+v", event)
-	}
-
-	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{
-		RequestID: "approval-1",
-		Approval:  &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionDeny, Commentary: "no"},
-	}, nil); err != nil {
-		t.Fatalf("valid SubmitPromptResponse: %v", err)
-	}
-	resolvedEvent := nextRegistryAttentionEvent(t, sessionSub)
-	if resolvedEvent.Type != clientui.AttentionNotificationEventResolved {
-		t.Fatalf("resolved event after valid response = %+v", resolvedEvent)
-	}
-	select {
-	case err := <-responseDone:
-		if err != nil {
-			t.Fatalf("AwaitPromptResponse error: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for prompt response")
-	}
-}
-
-func TestRuntimeRegistryBeginGuardWaitsForBuild(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	claim, _, _ := registry.AcquireRuntimeClaim("session-1", "owner-a")
-	engine := &runtime.Engine{}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	if _, err := registry.BeginRuntimeGuard(ctx, "session-1"); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("BeginRuntimeGuard on a building runtime err=%v, want a wait (context.DeadlineExceeded), not a guard over a nil engine", err)
-	}
-
-	claim.Resolve(engine, nil, func() {})
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-
-	guard, err := registry.BeginRuntimeGuard(context.Background(), "session-1")
-	if err != nil {
-		t.Fatalf("BeginRuntimeGuard after build: %v", err)
-	}
-	defer guard.Release()
-	if guard.Engine() != engine {
-		t.Fatal("guard must expose the freshly built engine")
-	}
-}
-
-func TestRuntimeGuardRetirePublishesQueuedFailureBeforeEntryRemoval(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	sessionID := "session-1"
-	var engine *runtime.Engine
-	engine = newRegistryTestRuntime(t, func(evt runtime.Event) {
-		registry.PublishRuntimeEventForEngine(sessionID, engine, evt)
-	})
-	registerReady(t, registry, sessionID, engine)
-	sub := subscribeTranscriptForTest(t, registry, sessionID)
-	defer func() { _ = sub.Close() }()
-	_ = nextTranscriptMessage(t, sub)
-	clientRequestID := runtimeids.NewRuntimeClientRequestID()
-	engine.QueueUserMessageWithClientRequestID("restore this", clientRequestID.String())
-	guard, err := registry.BeginRuntimeGuard(context.Background(), sessionID)
-	if err != nil {
-		t.Fatalf("BeginRuntimeGuard: %v", err)
-	}
-	defer guard.Release()
-	if err := guard.Retire(runtime.QueuedUserMessageFailureRuntimeUnavailable); err != nil {
-		t.Fatalf("Retire: %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	for {
-		message, err := sub.Next(ctx)
-		if err != nil {
-			t.Fatalf("Next queued failure: %v", err)
-		}
-		status := message.Payload.QueuedMessageState
-		if status == nil || status.Status != clientui.QueuedUserMessageFailed {
-			continue
-		}
-		if status.ClientRequestID != clientRequestID {
-			t.Fatalf("client request id = %q, want %q", status.ClientRequestID.String(), clientRequestID.String())
-		}
-		if status.FailureReason == nil || *status.FailureReason != clientui.QueuedUserMessageFailureRuntimeUnavailable {
-			t.Fatalf("failure reason = %v, want runtime_unavailable", status.FailureReason)
-		}
-		if status.Text == nil || *status.Text != "restore this" {
-			t.Fatalf("restore text = %v, want restore this", status.Text)
-		}
-		return
-	}
-}
-
-func TestRuntimeGuardRetireDelaysTeardownUntilGuardsRelease(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	sessionID := "session-1"
-	var engine *runtime.Engine
-	engine = newRegistryTestRuntime(t, func(evt runtime.Event) {
-		registry.PublishRuntimeEventForEngine(sessionID, engine, evt)
-	})
-	claim, _, _ := registry.AcquireRuntimeClaim(sessionID, "owner-a")
-	teardownDone := make(chan struct{})
-	claim.Resolve(engine, nil, func() { close(teardownDone) })
-	first, err := registry.BeginRuntimeGuard(context.Background(), sessionID)
-	if err != nil {
-		t.Fatalf("BeginRuntimeGuard first: %v", err)
-	}
-	second, err := registry.BeginRuntimeGuard(context.Background(), sessionID)
-	if err != nil {
-		t.Fatalf("BeginRuntimeGuard second: %v", err)
-	}
-	if err := first.Retire(runtime.QueuedUserMessageFailureRuntimeUnavailable); err != nil {
-		t.Fatalf("Retire: %v", err)
-	}
-	select {
-	case <-teardownDone:
-		t.Fatal("teardown ran while retiring guard was still held")
-	default:
-	}
-	first.Release()
-	select {
-	case <-teardownDone:
-		t.Fatal("teardown ran while second guard was still held")
-	case <-time.After(50 * time.Millisecond):
-	}
-	second.Release()
-	select {
-	case <-teardownDone:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for teardown after guards released")
-	}
-}
-
-func TestRuntimeGuardRetireTeardownDoesNotClearFreshActiveRuntime(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	sessionID := "session-1"
-	var oldEngine *runtime.Engine
-	oldEngine = newRegistryTestRuntime(t, func(evt runtime.Event) {
-		registry.PublishRuntimeEventForEngine(sessionID, oldEngine, evt)
-	})
-	oldClaim, _, _ := registry.AcquireRuntimeClaim(sessionID, "owner-a")
-	oldTeardownDone := make(chan struct{})
-	oldClaim.Resolve(oldEngine, nil, func() { close(oldTeardownDone) })
-	first, err := registry.BeginRuntimeGuard(context.Background(), sessionID)
-	if err != nil {
-		t.Fatalf("BeginRuntimeGuard first: %v", err)
-	}
-	second, err := registry.BeginRuntimeGuard(context.Background(), sessionID)
-	if err != nil {
-		t.Fatalf("BeginRuntimeGuard second: %v", err)
-	}
-	publishRunState(registry, sessionID, true)
-	if !registrySessionAggregateActive(registry, sessionID) {
-		t.Fatal("expected old active runtime to mark session active")
-	}
-	if err := first.Retire(runtime.QueuedUserMessageFailureRuntimeUnavailable); err != nil {
-		t.Fatalf("Retire: %v", err)
-	}
-	if registrySessionAggregateActive(registry, sessionID) {
-		t.Fatal("expected retired old runtime to clear session active state before fresh runtime starts")
-	}
-	var freshEngine *runtime.Engine
-	freshEngine = newRegistryTestRuntime(t, func(evt runtime.Event) {
-		registry.PublishRuntimeEventForEngine(sessionID, freshEngine, evt)
-	})
-	freshClaim, reused, closing := registry.AcquireRuntimeClaim(sessionID, "owner-b")
-	if freshClaim == nil || reused || closing {
-		t.Fatalf("fresh claim = (%v, reused=%t, closing=%t), want new claim", freshClaim, reused, closing)
-	}
-	if ok := freshClaim.Resolve(freshEngine, nil, func() { _ = freshEngine.Close() }); !ok {
-		t.Fatal("fresh claim resolve failed")
-	}
-	if current := registry.directory.Entry(sessionID); current == nil || current == oldClaim.entry {
-		t.Fatalf("fresh entry not current after resolve: current=%p old=%p", current, oldClaim.entry)
-	}
-	publishRunState(registry, sessionID, true)
-	if !registrySessionAggregateActive(registry, sessionID) {
-		t.Fatal("expected fresh active runtime to mark session active")
-	}
-	first.Release()
-	second.Release()
-	waitClosed(t, oldTeardownDone)
-	if !registrySessionAggregateActive(registry, sessionID) {
-		t.Fatal("old teardown cleared fresh active runtime state")
-	}
-	closeRuntime(registry, sessionID, freshEngine)
-	if registrySessionAggregateActive(registry, sessionID) {
-		t.Fatal("expected fresh runtime close to clear session active state")
-	}
-}
-
-func registrySessionAggregateActive(registry *RuntimeRegistry, sessionID string) bool {
-	registry.runStateMu.Lock()
-	defer registry.runStateMu.Unlock()
-	return registry.blockingActivitySessions[sessionID]
-}
-
-func TestRuntimeClaimRejectsOwnerlessLeaseMutation(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	claim, _, _ := registry.AcquireRuntimeClaim("session-1", "")
-	claim.Resolve(engine, nil, nil)
-
-	if claim.OwnerCount() != 0 {
-		t.Fatalf("owner count = %d, want no anonymous owner ref", claim.OwnerCount())
-	}
-	if outcome, err := claim.JoinAsOwner(" "); outcome != ClaimFailed || !errors.Is(err, ErrRuntimeOwnerIDRequired) {
-		t.Fatalf("JoinAsOwner empty = (%v, %v), want owner-id-required failure", outcome, err)
-	}
-	if decision, _ := claim.BeginRelease("", true, true); decision != RuntimeReleaseNotOwner {
-		t.Fatalf("BeginRelease empty owner = %v, want not-owner", decision)
-	}
-}
-
-func TestRuntimeClaimIdleReleaseDropsOwnerBeforeCloseRace(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	claim, _, _ := registry.AcquireRuntimeClaim("session-1", "owner-a")
-	claim.Resolve(engine, nil, nil)
-
-	decision, expectedRefs := claim.BeginRelease("owner-a", true, true)
-	if decision != RuntimeReleaseIdleCheck || expectedRefs != 0 {
-		t.Fatalf("BeginRelease owner-a decision=%v refs=%d, want idle check with zero refs", decision, expectedRefs)
-	}
-	if _, err := claim.JoinAsOwner("owner-b"); err != nil {
-		t.Fatalf("JoinAsOwner owner-b: %v", err)
-	}
-	closed, err := claim.CloseIfIdle(context.Background(), expectedRefs, nil)
-	if err != nil {
-		t.Fatalf("CloseIfIdle owner-a race: %v", err)
-	}
-	if closed {
-		t.Fatal("CloseIfIdle must lose after a new owner joins")
-	}
-
-	decision, expectedRefs = claim.BeginRelease("owner-b", true, true)
-	if decision != RuntimeReleaseIdleCheck || expectedRefs != 0 {
-		t.Fatalf("BeginRelease owner-b decision=%v refs=%d, want idle check with zero refs", decision, expectedRefs)
-	}
-	closed, err = claim.CloseIfIdle(context.Background(), expectedRefs, nil)
-	if err != nil {
-		t.Fatalf("CloseIfIdle owner-b: %v", err)
-	}
-	if !closed {
-		t.Fatal("runtime should close after the last real owner releases")
-	}
-}
-
-func TestRuntimeClaimResolveRejectsClosedClaim(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	claim, _, _ := registry.AcquireRuntimeClaim("session-1", "owner-a")
-	closed, err := claim.Close(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if !closed {
-		t.Fatal("expected building claim close to remove the entry")
-	}
-	if ok := claim.Resolve(&runtime.Engine{}, nil, nil); ok {
-		t.Fatal("Resolve must reject a claim that was closed before build completed")
-	}
-	if registry.IsSessionRuntimeActive("session-1") {
-		t.Fatal("closed stale build must not become active")
-	}
-}
-
-func TestRuntimeRegistrySubmitPromptResponseRejectedWhileClosing(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-
-	registry.directory.Entry("session-1").markClosing()
-
-	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{RequestID: "ask-1", Answer: "yes"}, nil); !errors.Is(err, serverapi.ErrPromptNotFound) {
-		t.Fatalf("SubmitPromptResponse error=%v, want ErrPromptNotFound for stale closing response", err)
-	}
-}
-
-func TestRuntimeRegistrySubmitPromptResponseAllowedForClosingDrainPrompt(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-
-	claim := registry.RuntimeClaimFor("session-1")
-	drainStarted := make(chan struct{})
-	closeDone := make(chan error, 1)
-	go func() {
-		_, err := claim.Close(context.Background(), func(ctx context.Context) error {
-			close(drainStarted)
-			resp, err := registry.AwaitPromptResponse(ctx, "session-1", askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "Proceed?"})
-			if err != nil {
-				return err
-			}
-			if resp.Answer != "yes" {
-				return fmt.Errorf("prompt answer = %q, want yes", resp.Answer)
-			}
-			return nil
-		})
-		closeDone <- err
-	}()
-
-	select {
-	case <-drainStarted:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for close drain")
-	}
-	waitForPendingPrompt(t, registry, "session-1", "ask-1")
-
-	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{RequestID: "ask-1", Answer: "yes"}, nil); err != nil {
-		t.Fatalf("SubmitPromptResponse while closing drain waits: %v", err)
-	}
-	select {
-	case err := <-closeDone:
-		if err != nil {
-			t.Fatalf("close drain: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("close drain hung after prompt response")
-	}
-}
-
-func TestRuntimeRegistryAwaitPromptResponseContextCanceledRemovesPendingPrompt(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registerReady(t, registry, "session-1", engine)
-	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	_, err := registry.AwaitPromptResponse(ctx, "session-1", askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "Proceed?"})
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("AwaitPromptResponse error=%v, want context.Canceled", err)
-	}
-	if items := registry.ListPendingPrompts("session-1"); len(items) != 0 {
-		t.Fatalf("expected canceled prompt removed, got %+v", items)
-	}
-	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{RequestID: "ask-1", Answer: "late"}, nil); !errors.Is(err, serverapi.ErrPromptNotFound) {
-		t.Fatalf("late SubmitPromptResponse error=%v, want ErrPromptNotFound", err)
-	}
-}
-
-func TestPendingPromptStoreCloseDoesNotBlockWhenResponseAlreadyBuffered(t *testing.T) {
-	store := newPendingPromptStore()
-	pending := &pendingPromptEntry{
-		PendingPromptSnapshot: PendingPromptSnapshot{Request: askquestion.AskQuestionRequest{ID: "ask-1"}},
-		response:              make(chan promptResponseResult, 1),
-	}
-	pending.response <- promptResponseResult{response: askquestion.AskQuestionResponse{RequestID: "ask-1"}}
-	store.pending["ask-1"] = pending
-
-	done := make(chan struct{})
-	go func() {
-		store.Close(io.EOF)
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("closePendingPrompts blocked with buffered response")
-	}
-}
-
-func TestRuntimeRegistryBlockSessionRunsRefCounts(t *testing.T) {
-	r := NewRuntimeRegistry()
-	if r.SessionRunsBlocked("s1") {
-		t.Fatal("s1 should start unblocked")
-	}
-	releaseA := r.BlockSessionRuns([]string{"s1", "s2"})
-	releaseB := r.BlockSessionRuns([]string{"s1"})
-	if !r.SessionRunsBlocked("s1") || !r.SessionRunsBlocked("s2") {
-		t.Fatal("s1 and s2 should be blocked while exclusions are held")
-	}
-	releaseB()
-	if !r.SessionRunsBlocked("s1") {
-		t.Fatal("s1 should remain blocked while the first exclusion still holds it")
-	}
-	releaseA()
-	if r.SessionRunsBlocked("s1") || r.SessionRunsBlocked("s2") {
-		t.Fatal("all sessions should be unblocked after every exclusion is released")
-	}
-}
-
-func TestRuntimeRegistryBeginSessionRunRejectedWhenBlocked(t *testing.T) {
-	r := NewRuntimeRegistry()
-	release := r.BlockSessionRuns([]string{"s1"})
-	defer release()
-	if _, ok := r.BeginSessionRun("s1"); ok {
-		t.Fatal("BeginSessionRun must be rejected while the session is blocked")
-	}
-	releaseRun, ok := r.BeginSessionRun("s2")
-	if !ok {
-		t.Fatal("an unrelated session must not be blocked")
-	}
-	releaseRun()
-}
-
-func TestRuntimeRegistryBlockSessionRunsWaitsForInFlightStart(t *testing.T) {
-	r := NewRuntimeRegistry()
-	releaseRun, ok := r.BeginSessionRun("s1")
-	if !ok {
-		t.Fatal("BeginSessionRun should succeed when unblocked")
-	}
-	blocked := make(chan func(), 1)
-	go func() {
-		blocked <- r.BlockSessionRuns([]string{"s1"})
-	}()
-	deadline := time.After(time.Second)
-	for !r.SessionRunsBlocked("s1") {
-		select {
-		case <-deadline:
-			t.Fatal("BlockSessionRuns never registered the block")
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-	select {
-	case <-blocked:
-		t.Fatal("BlockSessionRuns must wait for the in-flight start to drain")
-	default:
-	}
-	releaseRun()
-	select {
-	case release := <-blocked:
-		release()
-	case <-time.After(time.Second):
-		t.Fatal("BlockSessionRuns must return once the in-flight start drains")
-	}
-}
-
-func TestRuntimeRegistryBeginSessionRunRejectsParallelPreActiveStart(t *testing.T) {
-	r := NewRuntimeRegistry()
-	releaseFirst, ok := r.BeginSessionRun("s1")
-	if !ok {
-		t.Fatal("first BeginSessionRun should succeed")
-	}
-	if releaseSecond, ok := r.BeginSessionRun("s1"); ok {
-		releaseSecond()
-		t.Fatal("second BeginSessionRun should be rejected while first pre-active start is in flight")
-	}
-	blocked := make(chan func(), 1)
-	go func() {
-		blocked <- r.BlockSessionRuns([]string{"s1"})
-	}()
-	deadline := time.After(time.Second)
-	for !r.SessionRunsBlocked("s1") {
-		select {
-		case <-deadline:
-			t.Fatal("BlockSessionRuns never registered the block")
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-	releaseFirst()
-	select {
-	case release := <-blocked:
-		release()
-	case <-time.After(time.Second):
-		t.Fatal("BlockSessionRuns must return after the only in-flight start drains")
-	}
-}
-
-func TestRuntimeRegistryExclusiveStartRejectsNormalStartsUntilReleased(t *testing.T) {
-	r := NewRuntimeRegistry()
-	releaseExclusive, acquired, blocked := r.BeginExclusiveSessionRun("s1")
-	if !acquired || blocked {
-		t.Fatalf("BeginExclusiveSessionRun = acquired %t blocked %t, want acquired", acquired, blocked)
-	}
-	if _, ok := r.BeginSessionRun("s1"); ok {
-		t.Fatal("normal start must be rejected while exclusive start is reserved")
-	}
-	releaseExclusive()
-	releaseNormal, ok := r.BeginSessionRun("s1")
-	if !ok {
-		t.Fatal("normal start should succeed after exclusive reservation release")
-	}
-	releaseNormal()
 }

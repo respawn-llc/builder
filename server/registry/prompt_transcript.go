@@ -16,12 +16,13 @@ const (
 	pendingPromptEventResolved
 )
 
-func (e *runtimeEntry) PublishPendingPrompt(
+func publishPendingPrompt(
+	feed *sessionFeedSequencer,
 	sessionID string,
 	snapshot PendingPromptSnapshot,
 	eventType pendingPromptEventType,
 ) {
-	if e == nil || e.sessionFeed == nil || strings.TrimSpace(snapshot.Request.ID) == "" {
+	if feed == nil || strings.TrimSpace(snapshot.Request.ID) == "" {
 		return
 	}
 	prompt := transcriptPendingPromptFromSnapshot(sessionID, snapshot, eventType)
@@ -34,7 +35,7 @@ func (e *runtimeEntry) PublishPendingPrompt(
 		message.Payload.PromptPending = nil
 		message.Payload.PromptResolved = &prompt
 	}
-	e.sessionFeed.Publish([]clientui.TranscriptMessage{message})
+	feed.Publish([]clientui.TranscriptMessage{message})
 }
 
 func transcriptPendingPromptFromSnapshot(

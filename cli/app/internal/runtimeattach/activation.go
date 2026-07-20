@@ -3,6 +3,7 @@ package runtimeattach
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	servicecontract "core/shared/apicontract"
@@ -23,46 +24,69 @@ type Request struct {
 }
 
 type Activation struct {
-	OwnerID    string
-	Reactivate func(context.Context) error
+	mu         sync.Mutex
+	service    servicecontract.SessionRuntimeService
+	request    Request
+	ownerID    string
+	attachment serverapi.SessionRuntimeAttachment
 }
 
-func Activate(ctx context.Context, service servicecontract.SessionRuntimeService, req Request) (Activation, error) {
+func Activate(ctx context.Context, service servicecontract.SessionRuntimeService, req Request) (*Activation, error) {
 	if service == nil {
-		return Activation{}, errors.New("session runtime service is required")
+		return nil, errors.New("session runtime service is required")
 	}
 	ownerID := uuid.NewString()
-	if _, err := service.ActivateSessionRuntime(ctx, activateRequest(req, ownerID)); err != nil {
-		return Activation{}, err
+	attachment, err := activate(ctx, service, req, ownerID)
+	if err != nil {
+		return nil, err
 	}
-	return Activation{
-		OwnerID: ownerID,
-		Reactivate: func(ctx context.Context) error {
-			_, err := service.ActivateSessionRuntime(ctx, activateRequest(req, ownerID))
-			return err
-		},
+	return &Activation{
+		service:    service,
+		request:    req,
+		ownerID:    ownerID,
+		attachment: attachment,
 	}, nil
 }
 
-func Release(service servicecontract.SessionRuntimeService, sessionID string, ownerID string) error {
-	return ReleaseWithClosePolicy(service, sessionID, ownerID, serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle)
+func (a *Activation) Reactivate(ctx context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	attachment, err := activate(ctx, a.service, a.request, a.ownerID)
+	if err != nil {
+		return err
+	}
+	a.attachment = attachment
+	return nil
 }
 
-func ReleaseWithClosePolicy(service servicecontract.SessionRuntimeService, sessionID string, ownerID string, closePolicy serverapi.SessionRuntimeReleaseClosePolicy) error {
-	if service == nil {
-		return nil
-	}
+func (a *Activation) Release() error {
+	return a.ReleaseWithClosePolicy(serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle)
+}
+
+func (a *Activation) ReleaseWithClosePolicy(closePolicy serverapi.SessionRuntimeReleaseClosePolicy) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), ReleaseTimeout)
 	defer cancel()
-	_, err := service.ReleaseSessionRuntime(ctx, serverapi.SessionRuntimeReleaseRequest{
+	_, err := a.service.ReleaseSessionRuntime(ctx, serverapi.SessionRuntimeReleaseRequest{
 		ClientRequestID: uuid.NewString(),
-		SessionID:       sessionID,
-		OnlyIfIdle:      true,
+		Attachment:      a.attachment,
 		DropOwner:       true,
 		ClosePolicy:     closePolicy,
-		OwnerID:         ownerID,
+		OwnerID:         a.ownerID,
 	})
 	return err
+}
+
+func activate(ctx context.Context, service servicecontract.SessionRuntimeService, req Request, ownerID string) (serverapi.SessionRuntimeAttachment, error) {
+	response, err := service.ActivateSessionRuntime(ctx, activateRequest(req, ownerID))
+	if err != nil {
+		return serverapi.SessionRuntimeAttachment{}, err
+	}
+	if err := response.ValidateForSession(req.SessionID); err != nil {
+		return serverapi.SessionRuntimeAttachment{}, err
+	}
+	return response.Attachment, nil
 }
 
 func activateRequest(req Request, ownerID string) serverapi.SessionRuntimeActivateRequest {

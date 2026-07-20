@@ -11,7 +11,6 @@ import (
 	"core/cli/tui"
 	"core/server/llm"
 	"core/server/runtime"
-	"core/server/sessionview"
 	"core/shared/clientui"
 	"core/shared/rollbacktarget"
 
@@ -829,20 +828,13 @@ func TestRollbackPickerWorksAfterInterruptedRuntimeAndTUIRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen interrupted session: %v", err)
 	}
-	restartedEngine := newAppRuntimeEngineWithStore(t, reopenedStore, statusLineFakeClient{}, runtime.Config{})
-	t.Cleanup(func() {
-		if err := restartedEngine.Close(); err != nil {
-			t.Errorf("close restarted runtime: %v", err)
-		}
-	})
-	resolver := testSessionViewRuntimeResolver{engine: restartedEngine}
-	reads := sessionview.NewService(nil, resolver, nil)
+	restarted := newProjectedAuthorityRuntime(t, reopenedStore, persistence, statusLineFakeClient{}, runtime.Config{})
 	model := newSizedProjectedClosedUIModel(
-		newUIRuntimeClientFromEngine(restartedEngine),
+		restarted.client,
 		100,
 		20,
-		WithUISessionID(restartedEngine.SessionID()),
-		WithUIStatusConfig(uiStatusConfig{SessionViews: reads}),
+		WithUISessionID(restarted.sessionID),
+		WithUIStatusConfig(uiStatusConfig{SessionViews: restarted.reads}),
 	)
 	if model.blocksRuntimeInput() {
 		t.Fatal("restarted runtime remained input-blocked")

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -13,19 +12,16 @@ import (
 
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/registry"
 	runtimepkg "core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
-	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/server/tools/shell/postprocess"
-	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/toolspec"
-	"core/shared/transcript"
 )
 
 type sessionRuntimeTestLLMClient struct {
@@ -56,76 +52,19 @@ func (c *blockingLLMClient) Generate(_ context.Context, _ llm.Request) (llm.Resp
 	}, nil
 }
 
-type sessionRuntimeTestTool struct {
-	name toolspec.ID
-}
-
-func (t sessionRuntimeTestTool) Call(_ context.Context, c tools.Call) (tools.Result, error) {
-	out, _ := json.Marshal(map[string]string{"tool": string(t.name)})
-	return tools.Result{CallID: c.ID, Name: c.Name, Output: out}, nil
-}
-
-type patchDetailCapture struct {
-	mu    sync.Mutex
-	value string
-}
-
-func (c *patchDetailCapture) Set(value string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.value = value
-}
-
-func (c *patchDetailCapture) Get() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.value
-}
-
-func startRegisteredActiveRun(t *testing.T, fixture sessionRuntimeFixture, reg *registry.RuntimeRegistry) func() {
-	t.Helper()
-	client := &blockingLLMClient{entered: make(chan struct{}), release: make(chan struct{})}
-	engine, err := runtimepkg.New(fixture.store, client, tools.NewRegistry(), runtimepkg.Config{Model: "gpt-5"})
-	if err != nil {
-		t.Fatalf("runtime.New: %v", err)
-	}
-	claim, _, _ := reg.AcquireRuntimeClaim(fixture.store.Meta().SessionID, "test-owner")
-	claim.Resolve(engine, nil, nil)
-	t.Cleanup(func() { _ = engine.Close() })
-	done := make(chan error, 1)
-	go func() {
-		_, err := engine.SubmitUserMessage(context.Background(), "run")
-		done <- err
-	}()
-	select {
-	case <-client.entered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for active run to start")
-	}
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			close(client.release)
-			select {
-			case <-done:
-			case <-time.After(3 * time.Second):
-				t.Error("timed out waiting for active run to finish")
-			}
-		})
-	}
-}
-
 func TestAppendRecoveredWarningIfNeededPersistsOnce(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	warning := "generated warning"
 	if err := fixture.store.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable: %v", err)
 	}
-	fixture.service.WithGeneratedRecoveredWarning(warning)
-	if err := fixture.service.appendRecoveredWarningIfNeeded(fixture.store); err != nil {
+	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
+		RecoveredWarningProvider: func() (string, bool, error) { return warning, true, nil },
+	})
+	if err := appendRecoveredWarning(fixture.store, fixture.api.recoveredWarningProvider); err != nil {
 		t.Fatalf("append warning: %v", err)
 	}
-	if err := fixture.service.appendRecoveredWarningIfNeeded(fixture.store); err != nil {
+	if err := appendRecoveredWarning(fixture.store, fixture.api.recoveredWarningProvider); err != nil {
 		t.Fatalf("append duplicate warning: %v", err)
 	}
 	count := 0
@@ -157,7 +96,7 @@ func TestAppendRecoveredWarningIfNeededPersistsOnce(t *testing.T) {
 	if !reopened.Meta().GeneratedRecoveredWarningIssued {
 		t.Fatal("expected generated recovered warning marker to survive reopen")
 	}
-	if err := fixture.service.appendRecoveredWarningIfNeeded(reopened); err != nil {
+	if err := appendRecoveredWarning(reopened, fixture.api.recoveredWarningProvider); err != nil {
 		t.Fatalf("append warning after reopen: %v", err)
 	}
 	reopenedCount := 0
@@ -181,151 +120,21 @@ func TestAppendRecoveredWarningIfNeededPersistsOnce(t *testing.T) {
 	}
 }
 
-func TestAppendRecoveredWarningIfNeededIgnoresProviderError(t *testing.T) {
+func TestAppendRecoveredWarningIfNeededSurfacesProviderError(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
-	fixture.service.WithGeneratedRecoveredWarningProvider(func() (string, bool, error) {
-		return "", false, errors.New("recovered dir unreadable")
-	})
-	if err := fixture.service.appendRecoveredWarningIfNeeded(fixture.store); err != nil {
-		t.Fatalf("expected warning lookup errors to be non-fatal, got %v", err)
-	}
-}
-
-func TestSyncExecutionTargetPersistsReminderWithoutActiveRuntime(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-
-	err := fixture.service.SyncExecutionTarget(context.Background(), fixture.store.Meta().SessionID, clientui.SessionExecutionTarget{
-		WorkspaceRoot:    " /tmp/workspace ",
-		EffectiveWorkdir: " /tmp/workspace ",
-	}, &session.WorktreeReminderState{
-		Mode: session.WorktreeReminderModeExit,
-		WorktreeContext: session.WorktreeContext{
-			Branch:        session.OptionalWorktreeBranch(" feature/worktree "),
-			WorktreePath:  " /tmp/worktree-a ",
-			WorkspaceRoot: " /tmp/workspace ",
-			EffectiveCwd:  " /tmp/workspace ",
+	providerErr := errors.New("recovered dir unreadable")
+	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
+		RecoveredWarningProvider: func() (string, bool, error) {
+			return "", false, providerErr
 		},
 	})
-	if err != nil {
-		t.Fatalf("SyncExecutionTarget: %v", err)
-	}
-
-	resolved, err := fixture.service.resolveStore(context.Background(), fixture.store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("resolveStore: %v", err)
-	}
-	state := resolved.Meta().WorktreeReminder
-	if state == nil {
-		t.Fatal("expected persisted worktree reminder state")
-	}
-	if state.Mode != session.WorktreeReminderModeExit {
-		t.Fatalf("mode = %q, want exit", state.Mode)
-	}
-	if state.Branch == nil || *state.Branch != "feature/worktree" {
-		t.Fatalf("branch = %v, want feature/worktree", state.Branch)
-	}
-	if state.WorktreePath != "/tmp/worktree-a" {
-		t.Fatalf("worktree path = %q, want /tmp/worktree-a", state.WorktreePath)
-	}
-	if state.EffectiveCwd != "/tmp/workspace" {
-		t.Fatalf("effective cwd = %q, want /tmp/workspace", state.EffectiveCwd)
-	}
-	if state.ContextID == nil {
-		t.Fatal("worktree context id was not assigned")
-	}
-}
-
-func TestRuntimeRebindDoesNotAdvanceTranscriptWorkdirWhenLocalRebindFails(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	patchText := "*** Begin Patch\n*** Add File: probe.txt\n+hello\n*** End Patch\n"
-	client := &sessionRuntimeTestLLMClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "patching", Phase: llm.MessagePhaseCommentary},
-			ToolCalls: []llm.ToolCall{{ID: "call-patch", Name: string(toolspec.ToolPatch), Input: json.RawMessage(`{"patch":` + strconv.Quote(patchText) + `}`)}},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-	}}
-	var detail patchDetailCapture
-	engine, err := runtimepkg.New(fixture.store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: sessionRuntimeTestTool{name: toolspec.ToolPatch}}), runtimepkg.Config{
-		Model:                "gpt-5",
-		TranscriptWorkingDir: "/old-worktree",
-		OnEvent: func(evt runtimepkg.Event) {
-			if evt.Kind != runtimepkg.EventToolCallStarted || evt.ToolCall == nil {
-				return
-			}
-			meta, ok := transcript.DecodeToolCallMeta(evt.ToolCall.Presentation)
-			if ok {
-				detail.Set(meta.PatchDetail)
-			}
-		},
-	})
-	if err != nil {
-		t.Fatalf("runtime.New: %v", err)
-	}
-	defer func() { _ = engine.Close() }()
-	rebindErr := runtimeRebindFunc(func(string) error { return errors.New("local rebind failed") }, engine)("/new-worktree")
-	if rebindErr == nil || !strings.Contains(rebindErr.Error(), "local rebind failed") {
-		t.Fatalf("runtimeRebindFunc error = %v, want local rebind failed", rebindErr)
-	}
-	if _, err := engine.SubmitUserMessage(context.Background(), "apply patch"); err != nil {
-		t.Fatalf("SubmitUserMessage: %v", err)
-	}
-	gotDetail := detail.Get()
-	if !strings.Contains(gotDetail, "/old-worktree/probe.txt") {
-		t.Fatalf("expected patch detail to keep old workdir, got %q", gotDetail)
-	}
-	if strings.Contains(gotDetail, "/new-worktree/probe.txt") {
-		t.Fatalf("did not expect failed rebind workdir in patch detail, got %q", gotDetail)
-	}
-}
-
-func TestHasBlockingRuntimeActivity(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	reg := registry.NewRuntimeRegistry()
-	fixture.service.runtimes = reg
-	if active, err := fixture.service.HasBlockingRuntimeActivity(context.Background(), fixture.store.Meta().SessionID); err != nil || active {
-		t.Fatalf("HasBlockingRuntimeActivity before run = (%v, %v), want (false, nil)", active, err)
-	}
-	release := startRegisteredActiveRun(t, fixture, reg)
-	defer release()
-	active, err := fixture.service.HasBlockingRuntimeActivity(context.Background(), fixture.store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("HasBlockingRuntimeActivity: %v", err)
-	}
-	if !active {
-		t.Fatal("HasBlockingRuntimeActivity = false, want true while run active")
-	}
-	release()
-	if active, err := fixture.service.HasBlockingRuntimeActivity(context.Background(), fixture.store.Meta().SessionID); err != nil || active {
-		t.Fatalf("HasBlockingRuntimeActivity after run = (%v, %v), want (false, nil)", active, err)
-	}
-}
-
-func TestResolveStoreFallsBackThroughMetadataAuthority(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	resolved, err := fixture.service.resolveStore(context.Background(), fixture.store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("resolveStore: %v", err)
-	}
-	if resolved.Meta().SessionID != fixture.store.Meta().SessionID {
-		t.Fatalf("resolved session id = %q, want %q", resolved.Meta().SessionID, fixture.store.Meta().SessionID)
-	}
-}
-
-func TestResolveStoreRejectsUnknownSession(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	_, err := fixture.service.resolveStore(context.Background(), "session-missing")
-	if err == nil {
-		t.Fatal("expected resolveStore to reject unknown session")
+	if err := appendRecoveredWarning(fixture.store, fixture.api.recoveredWarningProvider); !errors.Is(err, providerErr) {
+		t.Fatalf("warning lookup error = %v, want %v", err, providerErr)
 	}
 }
 
 func TestActivateSessionRuntimeRejectsPathLikeSessionID(t *testing.T) {
-	svc := &Service{}
+	svc := &API{}
 	_, err := svc.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "req-1",
 		SessionID:       "../session-1",
@@ -337,18 +146,18 @@ func TestActivateSessionRuntimeRejectsPathLikeSessionID(t *testing.T) {
 }
 
 func TestActivateSessionRuntimeRejectsMissingOwnerID(t *testing.T) {
-	svc := &Service{}
+	svc := &API{}
 	_, err := svc.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "req-1",
 		SessionID:       "session-1",
 	})
-	if !errors.Is(err, registry.ErrRuntimeOwnerIDRequired) {
+	if !errors.Is(err, ErrRuntimeOwnerIDRequired) {
 		t.Fatalf("expected runtime owner id rejection, got %v", err)
 	}
 }
 
 func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
-	fixture := newSessionRuntimeFixtureWithRegistry(t)
+	fixture := newSessionRuntimeFixture(t)
 	calls := 0
 	factory := runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, req runtimewire.RuntimeClientRequest) (llm.Client, error) {
 		calls++
@@ -357,20 +166,9 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 		}
 		return &sessionRuntimeTestLLMClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200000}}}}, nil
 	})
-	fixture.service = NewServiceWithOptions(
-		fixture.config.PersistenceRoot,
-		fixture.metadata,
-		nil,
-		nil,
-		nil,
-		nil,
-		registry.NewRuntimeRegistry(),
-		registry.NewSessionStoreRegistry(),
-		ServiceOptions{RuntimeClientFactory: factory},
-		fixture.metadata.AuthoritativeSessionStoreOptions()...,
-	)
+	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{RuntimeClientFactory: factory})
 
-	_, err := fixture.service.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
+	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "activate-factory",
 		SessionID:       fixture.store.Meta().SessionID,
 		OwnerID:         "owner",
@@ -390,9 +188,9 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("factory calls = %d, want 1", calls)
 	}
-	_, _ = fixture.service.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
+	_, _ = fixture.api.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
 		ClientRequestID: "release-factory",
-		SessionID:       fixture.store.Meta().SessionID,
+		Attachment:      activation.Attachment,
 		OwnerID:         "owner",
 		DropOwner:       true,
 		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
@@ -415,12 +213,16 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 		t.Fatalf("new background shell manager: %v", err)
 	}
 	t.Cleanup(func() { _ = background.Close() })
-	backgroundRouter := runtimewire.NewBackgroundEventRouter(
-		background,
-		16_000,
-		shelltool.BackgroundOutputDefault,
-	)
-	runtimes := registry.NewRuntimeRegistry()
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		Background:      background,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close active-shell runtime authority: %v", err)
+		}
+	})
 	client := &sessionRuntimeTestLLMClient{responses: []llm.Response{
 		{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "running", Phase: llm.MessagePhaseCommentary},
@@ -436,34 +238,26 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
-	fixture.service = NewServiceWithOptions(
-		fixture.config.PersistenceRoot,
-		fixture.metadata,
-		nil,
-		nil,
-		background,
-		backgroundRouter,
-		runtimes,
-		registry.NewSessionStoreRegistry(),
-		ServiceOptions{
-			RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
-				return client, nil
-			}),
-		},
-		fixture.metadata.AuthoritativeSessionStoreOptions()...,
-	)
+	fixture.api = NewAPI(fixture.metadata, nil, authority, APIOptions{
+		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
+			return client, nil
+		}),
+	})
 	sessionID := fixture.store.Meta().SessionID
+	var attachment serverapi.SessionRuntimeAttachment
 	t.Cleanup(func() {
-		_, _ = fixture.service.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
+		if attachment.Validate() != nil {
+			return
+		}
+		_, _ = fixture.api.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
 			ClientRequestID: "release-active-shell",
-			SessionID:       sessionID,
+			Attachment:      attachment,
 			OwnerID:         "interactive-owner",
 			DropOwner:       true,
-			ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
 		})
 	})
 
-	_, err = fixture.service.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
+	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "activate-active-shell",
 		SessionID:       sessionID,
 		OwnerID:         "interactive-owner",
@@ -483,8 +277,13 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 	if err != nil {
 		t.Fatalf("ActivateSessionRuntime: %v", err)
 	}
+	attachment = activation.Attachment
 
-	err = fixture.service.WithRuntimeEngine(context.Background(), sessionID, func(engine *runtimepkg.Engine) error {
+	id, err := runtimeids.ParseSessionID(sessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	err = authority.WithCurrentRuntime(context.Background(), id, func(_ context.Context, engine *runtimepkg.Engine) error {
 		_, submitErr := engine.SubmitUserMessage(context.Background(), "run active shell")
 		return submitErr
 	})
@@ -533,11 +332,14 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 }
 
 func TestReleaseSessionRuntimeRejectsPathLikeSessionID(t *testing.T) {
-	svc := &Service{}
+	svc := &API{}
 	_, err := svc.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
 		ClientRequestID: "req-1",
-		SessionID:       "sessions/workspace-a/session-1",
-		OwnerID:         "owner-a",
+		Attachment: serverapi.SessionRuntimeAttachment{
+			SessionID:  "sessions/workspace-a/session-1",
+			Generation: 1,
+		},
+		OwnerID: "owner-a",
 	})
 	if !errors.Is(err, serverapi.ErrSessionIDNotSingle) {
 		t.Fatalf("expected path-like session id rejection, got %v", err)
@@ -545,23 +347,26 @@ func TestReleaseSessionRuntimeRejectsPathLikeSessionID(t *testing.T) {
 }
 
 func TestReleaseSessionRuntimeRejectsMissingOwnerID(t *testing.T) {
-	svc := &Service{}
+	svc := &API{}
 	_, err := svc.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
 		ClientRequestID: "req-1",
-		SessionID:       "session-1",
-		OnlyIfIdle:      true,
-		DropOwner:       true,
+		Attachment: serverapi.SessionRuntimeAttachment{
+			SessionID:  "session-1",
+			Generation: 1,
+		},
+		DropOwner: true,
 	})
-	if !errors.Is(err, registry.ErrRuntimeOwnerIDRequired) {
+	if !errors.Is(err, ErrRuntimeOwnerIDRequired) {
 		t.Fatalf("expected runtime owner id rejection, got %v", err)
 	}
 }
 
 type sessionRuntimeFixture struct {
-	config   config.App
-	metadata *metadata.Store
-	store    *session.Store
-	service  *Service
+	config    config.App
+	metadata  *metadata.Store
+	store     *session.Store
+	api       *API
+	authority *Authority
 }
 
 func newSessionRuntimeFixture(t *testing.T) sessionRuntimeFixture {
@@ -590,13 +395,15 @@ func newSessionRuntimeFixture(t *testing.T) sessionRuntimeFixture {
 	if err := store.SetName("session-a"); err != nil {
 		t.Fatalf("SetName: %v", err)
 	}
-	service := NewService(appCfg.PersistenceRoot, metadataStore, nil, nil, nil, nil, nil, registry.NewSessionStoreRegistry(), metadataStore.AuthoritativeSessionStoreOptions()...)
-	return sessionRuntimeFixture{config: appCfg, metadata: metadataStore, store: store, service: service}
-}
-
-func newSessionRuntimeFixtureWithRegistry(t *testing.T) sessionRuntimeFixture {
-	t.Helper()
-	fixture := newSessionRuntimeFixture(t)
-	fixture.service = NewService(fixture.config.PersistenceRoot, fixture.metadata, nil, nil, nil, nil, registry.NewRuntimeRegistry(), registry.NewSessionStoreRegistry(), fixture.metadata.AuthoritativeSessionStoreOptions()...)
-	return fixture
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: appCfg.PersistenceRoot,
+		StoreOptions:    metadataStore.AuthoritativeSessionStoreOptions(),
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close runtime authority: %v", err)
+		}
+	})
+	api := NewAPI(metadataStore, nil, authority, APIOptions{})
+	return sessionRuntimeFixture{config: appCfg, metadata: metadataStore, store: store, api: api, authority: authority}
 }

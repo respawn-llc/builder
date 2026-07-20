@@ -122,6 +122,11 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 	if workdir == "" {
 		return ExecResult{}, errors.New("workdir is required")
 	}
+	if req.ExecutionCorrelation != nil {
+		if err := req.ExecutionCorrelation.Validate(); err != nil {
+			return ExecResult{}, fmt.Errorf("validate execution correlation: %w", err)
+		}
+	}
 	yieldTime := m.normalizeExecYieldTime(req.YieldTime)
 	maxOutputChars := req.MaxOutputChars
 	if maxOutputChars <= 0 {
@@ -155,26 +160,27 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 		return ExecResult{}, fmt.Errorf("open log file: %w", err)
 	}
 	entry := &processEntry{
-		id:             id,
-		activityID:     uuid.New(),
-		ownerSessionID: ownerSessionID,
-		ownerRunID:     ownerRunID,
-		ownerStepID:    ownerStepID,
-		command:        strings.TrimSpace(req.DisplayCommand),
-		workdir:        workdir,
-		raw:            req.Raw,
-		postprocessor:  runner,
-		preserveOutput: runner.PreservesRawOutput(req.Raw),
-		startedAt:      time.Now().UTC(),
-		lastUpdatedAt:  time.Now().UTC(),
-		state:          "starting",
-		logPath:        logPath,
-		cmd:            cmd,
-		stdin:          stdin,
-		running:        true,
-		stdinOpen:      req.KeepStdinOpen,
-		notify:         make(chan struct{}, 1),
-		done:           make(chan struct{}),
+		id:                   id,
+		activityID:           uuid.New(),
+		ownerSessionID:       ownerSessionID,
+		ownerRunID:           ownerRunID,
+		ownerStepID:          ownerStepID,
+		executionCorrelation: cloneExecutionCorrelation(req.ExecutionCorrelation),
+		command:              strings.TrimSpace(req.DisplayCommand),
+		workdir:              workdir,
+		raw:                  req.Raw,
+		postprocessor:        runner,
+		preserveOutput:       runner.PreservesRawOutput(req.Raw),
+		startedAt:            time.Now().UTC(),
+		lastUpdatedAt:        time.Now().UTC(),
+		state:                "starting",
+		logPath:              logPath,
+		cmd:                  cmd,
+		stdin:                stdin,
+		running:              true,
+		stdinOpen:            req.KeepStdinOpen,
+		notify:               make(chan struct{}, 1),
+		done:                 make(chan struct{}),
 	}
 	entry.log = newAsyncLogWriter(logFile, entry.signal)
 	if entry.command == "" {

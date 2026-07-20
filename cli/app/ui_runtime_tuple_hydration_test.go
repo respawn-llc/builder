@@ -8,8 +8,6 @@ import (
 	"testing"
 
 	"core/cli/tui/ongoing"
-	"core/server/registry"
-	"core/server/runtimecontrol"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -19,7 +17,7 @@ import (
 func TestStaleContentCompleteHydrationFailsBeforeAnySideEffect(t *testing.T) {
 	runtimeClient := newTestSessionRuntimeClient(
 		&countingSessionViewClient{},
-		runtimecontrol.NewService(registry.NewRuntimeRegistry()),
+		newUnavailableRuntimeControlService(),
 	)
 	current := runtimeTupleTestView(11, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationCommitted))
 	current.Status.ThinkingLevel = "current"
@@ -72,7 +70,7 @@ func TestStaleHydrationDeveloperErrorPanicsInEveryModeBeforeSideEffects(t *testi
 		t.Run(map[bool]string{false: "release", true: "debug"}[debugMode], func(t *testing.T) {
 			runtimeClient := newTestSessionRuntimeClient(
 				&countingSessionViewClient{},
-				runtimecontrol.NewService(registry.NewRuntimeRegistry()),
+				newUnavailableRuntimeControlService(),
 			)
 			current := runtimeTupleTestView(11, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationCommitted))
 			runtimeClient.storeMainView(current)
@@ -141,7 +139,7 @@ func capturePanic(action func()) (recovered any) {
 func TestNonStaleContentCompleteHydrationAppliesWholeEvent(t *testing.T) {
 	runtimeClient := newTestSessionRuntimeClient(
 		&countingSessionViewClient{},
-		runtimecontrol.NewService(registry.NewRuntimeRegistry()),
+		newUnavailableRuntimeControlService(),
 	)
 	current := runtimeTupleTestView(10, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
 	runtimeClient.storeMainView(current)
@@ -191,7 +189,7 @@ func TestNonStaleContentCompleteHydrationAppliesWholeEvent(t *testing.T) {
 func TestAcceptedHydrationDoesNotAdvanceCacheWithUnaryRead(t *testing.T) {
 	v12 := runtimeTupleTestView(12, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
 	reads := &countingSessionViewClient{view: v12}
-	runtimeClient := newTestSessionRuntimeClient(reads, runtimecontrol.NewService(registry.NewRuntimeRegistry()))
+	runtimeClient := newTestSessionRuntimeClient(reads, newUnavailableRuntimeControlService())
 	runtimeClient.storeMainView(runtimeTupleTestView(
 		10,
 		runtimeTupleTestIdleActivity(),
@@ -239,7 +237,7 @@ func TestAcceptedHydrationDoesNotAdvanceCacheWithUnaryRead(t *testing.T) {
 func TestRejectedDuplicateHydrationDoesNotStartUnaryRefresh(t *testing.T) {
 	v12 := runtimeTupleTestView(12, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
 	reads := &countingSessionViewClient{view: v12}
-	runtimeClient := newTestSessionRuntimeClient(reads, runtimecontrol.NewService(registry.NewRuntimeRegistry()))
+	runtimeClient := newTestSessionRuntimeClient(reads, newUnavailableRuntimeControlService())
 	runtimeClient.storeMainView(runtimeTupleTestView(
 		10,
 		runtimeTupleTestIdleActivity(),

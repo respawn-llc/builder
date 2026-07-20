@@ -3,501 +3,29 @@ package sessionruntime
 import (
 	"context"
 	"errors"
-	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"core/server/llm"
-	"core/server/registry"
-	runtimepkg "core/server/runtime"
+	"core/server/runtime"
 	"core/server/session"
-	"core/server/tools"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/sessioncontract"
 )
 
-type lifecycleBuild struct {
-	engine     *runtimepkg.Engine
-	closeCount atomic.Int32
-	rebindDir  atomic.Value
-}
-
-func newLifecycleBuilder(t *testing.T, fixture sessionRuntimeFixture) (*lifecycleBuild, RuntimeBuilder) {
+func lifecycleSessionID(t *testing.T, fixture sessionRuntimeFixture) runtimeids.SessionID {
 	t.Helper()
-	state := &lifecycleBuild{}
-	build := func(ctx context.Context) (RuntimeBuildResult, error) {
-		engine, err := runtimepkg.New(fixture.store, &sessionRuntimeTestLLMClient{}, tools.NewRegistry(), runtimepkg.Config{Model: "gpt-5"})
-		if err != nil {
-			return RuntimeBuildResult{}, err
-		}
-		state.engine = engine
-		return RuntimeBuildResult{
-			Engine: engine,
-			LocalRebind: func(dir string) error {
-				state.rebindDir.Store(dir)
-				return nil
-			},
-			Close: func() {
-				state.closeCount.Add(1)
-				_ = engine.Close()
-			},
-		}, nil
-	}
-	return state, build
-}
-
-func newRuntimeServiceFixture(t *testing.T) (sessionRuntimeFixture, *registry.RuntimeRegistry) {
-	t.Helper()
-	fixture := newSessionRuntimeFixture(t)
-	reg := registry.NewRuntimeRegistry()
-	fixture.service.runtimes = reg
-	reg.SetInterestObserver(fixture.service.runtimeInterestChanged)
-	return fixture, reg
-}
-
-func releaseRequest(sessionID, ownerID string, onlyIfIdle, dropOwner bool) serverapi.SessionRuntimeReleaseRequest {
-	return serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: "rel",
-		SessionID:       sessionID,
-		OwnerID:         ownerID,
-		OnlyIfIdle:      onlyIfIdle,
-		DropOwner:       dropOwner,
-	}
-}
-
-func TestAcquireRuntimeRegistersActiveRuntime(t *testing.T) {
-	fixture, reg := newRuntimeServiceFixture(t)
-	sessionID := fixture.store.Meta().SessionID
-	_, build := newLifecycleBuilder(t, fixture)
-	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
-		t.Fatalf("AcquireRuntime: %v", err)
-	}
-	if !reg.IsSessionRuntimeActive(sessionID) {
-		t.Fatal("expected runtime active after acquire")
-	}
-}
-
-func TestAcquireRuntimeReuseSharesOwnership(t *testing.T) {
-	fixture, reg := newRuntimeServiceFixture(t)
-	sessionID := fixture.store.Meta().SessionID
-	state, build := newLifecycleBuilder(t, fixture)
-	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
-		t.Fatalf("AcquireRuntime owner-a: %v", err)
-	}
-	reuseBuild := func(ctx context.Context) (RuntimeBuildResult, error) {
-		t.Error("reuse acquire must not rebuild the runtime")
-		return RuntimeBuildResult{}, errors.New("unexpected build")
-	}
-	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-b", reuseBuild); err != nil {
-		t.Fatalf("AcquireRuntime owner-b: %v", err)
-	}
-
-	resp, err := fixture.service.ReleaseSessionRuntime(context.Background(), releaseRequest(sessionID, "owner-a", true, true))
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
 	if err != nil {
-		t.Fatalf("release owner-a: %v", err)
+		t.Fatalf("parse session id: %v", err)
 	}
-	if resp.Released {
-		t.Fatalf("dropping one of two owners should not release runtime: %+v", resp)
-	}
-	if !reg.IsSessionRuntimeActive(sessionID) {
-		t.Fatal("runtime must stay active while a second owner remains")
-	}
-	if state.closeCount.Load() != 0 {
-		t.Fatalf("runtime closed %d times, want 0", state.closeCount.Load())
-	}
-
-	resp, err = fixture.service.ReleaseSessionRuntime(context.Background(), releaseRequest(sessionID, "owner-b", true, true))
-	if err != nil {
-		t.Fatalf("release owner-b: %v", err)
-	}
-	if !resp.Released {
-		t.Fatalf("releasing last owner should release runtime: %+v", resp)
-	}
-	if reg.IsSessionRuntimeActive(sessionID) {
-		t.Fatal("runtime must be gone after last owner released")
-	}
-	if state.closeCount.Load() != 1 {
-		t.Fatalf("runtime closed %d times, want 1", state.closeCount.Load())
-	}
+	return sessionID
 }
 
-func TestReleaseOnlyIfIdleKeepsActiveRun(t *testing.T) {
-	fixture, reg := newRuntimeServiceFixture(t)
-	sessionID := fixture.store.Meta().SessionID
-	release := startRegisteredActiveRun(t, fixture, reg)
-	defer release()
-
-	resp, err := fixture.service.ReleaseSessionRuntime(context.Background(), releaseRequest(sessionID, "test-owner", true, false))
-	if err != nil {
-		t.Fatalf("ReleaseSessionRuntime: %v", err)
-	}
-	if !resp.Active || resp.Released {
-		t.Fatalf("release response = %+v, want active not released", resp)
-	}
-	if !reg.IsSessionRuntimeActive(sessionID) {
-		t.Fatal("runtime with an active run must stay registered")
-	}
-}
-
-func TestClientNavigationReleasesDoNotInterruptActiveServerRun(t *testing.T) {
-	navigations := []string{
-		"new",
-		"resume selected session",
-		"resume create session",
-		"back",
-		"review",
-		"init",
-		"exit",
-	}
-	for _, navigation := range navigations {
-		t.Run(navigation, func(t *testing.T) {
-			fixture, reg := newRuntimeServiceFixture(t)
-			sessionID := fixture.store.Meta().SessionID
-			client := &releaseObservingLLMClient{
-				entered:  make(chan struct{}),
-				release:  make(chan struct{}),
-				canceled: make(chan struct{}, 1),
-			}
-			engine, err := runtimepkg.New(fixture.store, client, tools.NewRegistry(), runtimepkg.Config{Model: "gpt-5"})
-			if err != nil {
-				t.Fatalf("runtime.New: %v", err)
-			}
-			t.Cleanup(func() { _ = engine.Close() })
-			claim, _, _ := reg.AcquireRuntimeClaim(sessionID, "origin-client")
-			claim.Resolve(engine, nil, nil)
-
-			runDone := make(chan error, 1)
-			go func() {
-				_, runErr := engine.SubmitUserMessage(context.Background(), "run")
-				runDone <- runErr
-			}()
-			select {
-			case <-client.entered:
-			case <-time.After(3 * time.Second):
-				t.Fatal("active run did not start")
-			}
-
-			resp, err := fixture.service.ReleaseSessionRuntime(context.Background(), releaseRequest(sessionID, "origin-client", true, true))
-			if err != nil {
-				t.Fatalf("release origin client: %v", err)
-			}
-			if !resp.Active || resp.Released {
-				t.Fatalf("release response = %+v, want active origin run retained", resp)
-			}
-			if !reg.IsSessionRuntimeActive(sessionID) {
-				t.Fatal("navigation release removed the active server runtime")
-			}
-			if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "independent-client", func(context.Context) (RuntimeBuildResult, error) {
-				t.Fatal("independent owner must attach to the live origin runtime")
-				return RuntimeBuildResult{}, nil
-			}); err != nil {
-				t.Fatalf("acquire independent owner: %v", err)
-			}
-			select {
-			case <-client.canceled:
-				t.Fatal("navigation release interrupted the active model run")
-			default:
-			}
-
-			close(client.release)
-			select {
-			case err := <-runDone:
-				if err != nil {
-					t.Fatalf("active run finished with %v", err)
-				}
-			case <-time.After(3 * time.Second):
-				t.Fatal("active run did not finish")
-			}
-			if _, err := fixture.service.ReleaseSessionRuntime(context.Background(), releaseRequest(sessionID, "independent-client", true, true)); err != nil {
-				t.Fatalf("release independent owner: %v", err)
-			}
-		})
-	}
-}
-
-type releaseObservingLLMClient struct {
-	entered  chan struct{}
-	release  chan struct{}
-	canceled chan struct{}
-}
-
-func (c *releaseObservingLLMClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
-	close(c.entered)
-	select {
-	case <-c.release:
-		return llm.Response{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		}, nil
-	case <-ctx.Done():
-		select {
-		case c.canceled <- struct{}{}:
-		default:
-		}
-		return llm.Response{}, ctx.Err()
-	}
-}
-
-func TestReleaseCloseIfIdlePolicyKeepsActiveRunWithoutLegacyOnlyIfIdle(t *testing.T) {
-	fixture, reg := newRuntimeServiceFixture(t)
-	sessionID := fixture.store.Meta().SessionID
-	release := startRegisteredActiveRun(t, fixture, reg)
-	defer release()
-
-	req := releaseRequest(sessionID, "test-owner", false, false)
-	req.ClosePolicy = serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle
-	resp, err := fixture.service.ReleaseSessionRuntime(context.Background(), req)
-	if err != nil {
-		t.Fatalf("ReleaseSessionRuntime: %v", err)
-	}
-	if !resp.Active || resp.Released {
-		t.Fatalf("release response = %+v, want active not released", resp)
-	}
-	if !reg.IsSessionRuntimeActive(sessionID) {
-		t.Fatal("close_if_idle policy must keep active runtime registered")
-	}
-}
-
-func TestReleaseOnlyIfIdleClosesIdleRuntime(t *testing.T) {
-	fixture, reg := newRuntimeServiceFixture(t)
-	sessionID := fixture.store.Meta().SessionID
-	state, build := newLifecycleBuilder(t, fixture)
-	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
-		t.Fatalf("AcquireRuntime: %v", err)
-	}
-	resp, err := fixture.service.ReleaseSessionRuntime(context.Background(), releaseRequest(sessionID, "owner-a", true, true))
-	if err != nil {
-		t.Fatalf("ReleaseSessionRuntime: %v", err)
-	}
-	if !resp.Released {
-		t.Fatalf("idle runtime should be released: %+v", resp)
-	}
-	if reg.IsSessionRuntimeActive(sessionID) {
-		t.Fatal("idle runtime must be torn down")
-	}
-	if state.closeCount.Load() != 1 {
-		t.Fatalf("runtime closed %d times, want 1", state.closeCount.Load())
-	}
-}
-
-func TestReleaseDetachOnlyDropsOwnerWithoutClosingIdleRuntime(t *testing.T) {
-	fixture, reg := newRuntimeServiceFixture(t)
-	sessionID := fixture.store.Meta().SessionID
-	state, build := newLifecycleBuilder(t, fixture)
-	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
-		t.Fatalf("AcquireRuntime: %v", err)
-	}
-	t.Cleanup(func() {
-		if claim := reg.RuntimeClaimFor(sessionID); claim != nil {
-			_, _ = claim.Close(context.Background(), nil)
-		}
-	})
-
-	req := releaseRequest(sessionID, "owner-a", true, true)
-	req.ClosePolicy = serverapi.SessionRuntimeReleaseClosePolicyDetachOnly
-	resp, err := fixture.service.ReleaseSessionRuntime(context.Background(), req)
-	if err != nil {
-		t.Fatalf("ReleaseSessionRuntime: %v", err)
-	}
-	if !resp.Released || resp.Active {
-		t.Fatalf("detach-only release response = %+v, want released without active close", resp)
-	}
-	if !reg.IsSessionRuntimeActive(sessionID) {
-		t.Fatal("detach-only release must keep the runtime registered")
-	}
-	if state.closeCount.Load() != 0 {
-		t.Fatalf("detach-only release closed runtime %d times, want 0", state.closeCount.Load())
-	}
-}
-
-func TestReleaseFromNonOwnerKeepsSharedRuntime(t *testing.T) {
-	fixture, reg := newRuntimeServiceFixture(t)
-	sessionID := fixture.store.Meta().SessionID
-	state, build := newLifecycleBuilder(t, fixture)
-	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
-		t.Fatalf("AcquireRuntime: %v", err)
-	}
-	resp, err := fixture.service.ReleaseSessionRuntime(context.Background(), releaseRequest(sessionID, "owner-other", true, true))
-	if err != nil {
-		t.Fatalf("ReleaseSessionRuntime: %v", err)
-	}
-	if !resp.Released {
-		t.Fatalf("non-owner release should report released no-op: %+v", resp)
-	}
-	if !reg.IsSessionRuntimeActive(sessionID) || state.closeCount.Load() != 0 {
-		t.Fatal("non-owner release must not tear down the shared runtime")
-	}
-}
-
-func TestRecreateRuntimeOvertakesExisting(t *testing.T) {
-	fixture, reg := newRuntimeServiceFixture(t)
-	sessionID := fixture.store.Meta().SessionID
-	first, firstBuild := newLifecycleBuilder(t, fixture)
-	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-a", firstBuild); err != nil {
-		t.Fatalf("AcquireRuntime: %v", err)
-	}
-	firstEngine := first.engine
-
-	second, secondBuild := newLifecycleBuilder(t, fixture)
-	release, err := fixture.service.RecreateRuntime(context.Background(), sessionID, "owner-b", secondBuild)
-	if err != nil {
-		t.Fatalf("RecreateRuntime: %v", err)
-	}
-	if first.closeCount.Load() != 1 {
-		t.Fatalf("previous runtime closed %d times, want 1", first.closeCount.Load())
-	}
-	engine, err := reg.ResolveRuntime(context.Background(), sessionID)
-	if err != nil {
-		t.Fatalf("ResolveRuntime: %v", err)
-	}
-	if engine == firstEngine || engine != second.engine {
-		t.Fatal("recreate must install the freshly built runtime")
-	}
-	if err := release(context.Background()); err != nil {
-		t.Fatalf("release: %v", err)
-	}
-	if reg.IsSessionRuntimeActive(sessionID) {
-		t.Fatal("runtime must be gone after recreate release")
-	}
-}
-
-func TestRecreateRuntimeHoldsRunBlockUntilRelease(t *testing.T) {
-	fixture, reg := newRuntimeServiceFixture(t)
-	sessionID := fixture.store.Meta().SessionID
-	_, build := newLifecycleBuilder(t, fixture)
-
-	release, err := fixture.service.RecreateRuntime(context.Background(), sessionID, "owner-a", build)
-	if err != nil {
-		t.Fatalf("RecreateRuntime: %v", err)
-	}
-
-	blocked := make(chan func(), 1)
-	go func() { blocked <- reg.BlockSessionRuns([]string{sessionID}) }()
-	deadline := time.After(time.Second)
-	for !reg.SessionRunsBlocked(sessionID) {
-		select {
-		case <-deadline:
-			t.Fatal("BlockSessionRuns never registered the block")
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-	select {
-	case <-blocked:
-		t.Fatal("BlockSessionRuns proceeded before the acquired runtime released its run block")
-	default:
-	}
-
-	if err := release(context.Background()); err != nil {
-		t.Fatalf("release: %v", err)
-	}
-	select {
-	case unblock := <-blocked:
-		unblock()
-	case <-time.After(2 * time.Second):
-		t.Fatal("BlockSessionRuns did not proceed after the acquired runtime released its run block")
-	}
-}
-
-func TestRecreateRejectingActiveRunRejectsInFlightStart(t *testing.T) {
-	fixture, reg := newRuntimeServiceFixture(t)
-	sessionID := fixture.store.Meta().SessionID
-	_, build := newLifecycleBuilder(t, fixture)
-
-	release, ok := reg.BeginSessionRun(sessionID)
-	if !ok {
-		t.Fatal("BeginSessionRun")
-	}
-
-	if _, err := fixture.service.RecreateRuntimeRejectingActiveRun(context.Background(), sessionID, "owner-headless", build); !errors.Is(err, ErrSessionRunActive) {
-		t.Fatalf("RecreateRuntimeRejectingActiveRun err=%v, want ErrSessionRunActive while a run start is in flight", err)
-	}
-	if reg.IsSessionRuntimeActive(sessionID) {
-		t.Fatal("rejected headless recreate must not build a runtime")
-	}
-
-	release()
-	acquiredRelease, err := fixture.service.RecreateRuntimeRejectingActiveRun(context.Background(), sessionID, "owner-headless", build)
-	if err != nil {
-		t.Fatalf("RecreateRuntimeRejectingActiveRun after start cleared: %v", err)
-	}
-	if err := acquiredRelease(context.Background()); err != nil {
-		t.Fatalf("release: %v", err)
-	}
-}
-
-func TestRecreateRejectingActiveRunRejectsQueuedUserWork(t *testing.T) {
-	fixture, reg := newRuntimeServiceFixture(t)
-	sessionID := fixture.store.Meta().SessionID
-	state, build := newLifecycleBuilder(t, fixture)
-	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
-		t.Fatalf("AcquireRuntime: %v", err)
-	}
-	state.engine.QueueUserMessageForAutoDrain("queued user work", "queue-1")
-
-	if _, err := fixture.service.RecreateRuntimeRejectingActiveRun(context.Background(), sessionID, "owner-headless", build); !errors.Is(err, ErrSessionRunActive) {
-		t.Fatalf("RecreateRuntimeRejectingActiveRun err=%v, want ErrSessionRunActive while queued user work is accepted", err)
-	}
-	if !reg.IsSessionRuntimeActive(sessionID) {
-		t.Fatal("rejected headless recreate must not close the queued runtime")
-	}
-	if !state.engine.HasQueuedUserWork() {
-		t.Fatal("rejected headless recreate must leave accepted queued user work intact")
-	}
-}
-
-func TestRecreateRuntimeRejectedWhileSessionBlocked(t *testing.T) {
-	fixture, reg := newRuntimeServiceFixture(t)
-	sessionID := fixture.store.Meta().SessionID
-	state, build := newLifecycleBuilder(t, fixture)
-
-	unblock := reg.BlockSessionRuns([]string{sessionID})
-	defer unblock()
-
-	if _, err := fixture.service.RecreateRuntime(context.Background(), sessionID, "owner-a", build); !errors.Is(err, ErrSessionRunsBlocked) {
-		t.Fatalf("RecreateRuntime error=%v, want ErrSessionRunsBlocked", err)
-	}
-	if reg.IsSessionRuntimeActive(sessionID) || state.engine != nil {
-		t.Fatal("blocked recreate must not build or install a runtime")
-	}
-
-	unblock()
-	if _, err := fixture.service.RecreateRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
-		t.Fatalf("RecreateRuntime after unblock: %v", err)
-	}
-	if !reg.IsSessionRuntimeActive(sessionID) {
-		t.Fatal("recreate must install the runtime once unblocked")
-	}
-}
-
-func TestSyncExecutionTargetRebindsActiveRuntime(t *testing.T) {
-	fixture, _ := newRuntimeServiceFixture(t)
-	sessionID := fixture.store.Meta().SessionID
-	state, build := newLifecycleBuilder(t, fixture)
-	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
-		t.Fatalf("AcquireRuntime: %v", err)
-	}
-	target := lifecycleWorkspaceExecutionTarget(fixture.config.WorkspaceRoot)
-	if err := fixture.service.SyncExecutionTarget(context.Background(), sessionID, target, nil); err != nil {
-		t.Fatalf("SyncExecutionTarget: %v", err)
-	}
-	if got, _ := state.rebindDir.Load().(string); got != fixture.config.WorkspaceRoot {
-		t.Fatalf("rebind workdir = %q, want %q", got, fixture.config.WorkspaceRoot)
-	}
-}
-
-func lifecycleWorkspaceExecutionTarget(workspaceRoot string) clientui.SessionExecutionTarget {
-	return clientui.SessionExecutionTarget{
-		WorkspaceRoot:         workspaceRoot,
-		WorkspaceAvailability: clientui.ProjectAvailabilityUnlinked,
-		CwdRelpath:            ".",
-		EffectiveWorkdir:      workspaceRoot,
-	}
-}
-
-func lifecycleWorktreeExecutionTarget(workspaceRoot, worktreeRoot string) clientui.SessionExecutionTarget {
+func lifecycleWorktreeTarget(workspaceRoot, worktreeRoot string) clientui.SessionExecutionTarget {
 	return clientui.SessionExecutionTarget{
 		WorkspaceID:           "workspace-1",
 		WorkspaceRoot:         workspaceRoot,
@@ -512,383 +40,557 @@ func lifecycleWorktreeExecutionTarget(workspaceRoot, worktreeRoot string) client
 	}
 }
 
-func TestRunSessionMaintenanceUsesRegisteredStoreAndRebindsRuntime(t *testing.T) {
-	fixture, reg := newRuntimeServiceFixture(t)
-	sessionID := fixture.store.Meta().SessionID
-	fixture.service.sessionStores.RegisterStore(fixture.store)
-	state, build := newLifecycleBuilder(t, fixture)
-	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
-		t.Fatalf("AcquireRuntime: %v", err)
-	}
-	targetWorkdir := t.TempDir()
-	err := fixture.service.RunSessionMaintenance(
-		context.Background(),
-		sessionID,
-		func(_ context.Context, store *session.Store, activeRuntime *ActiveRuntimeMaintenance) error {
-			if store != fixture.store {
-				t.Fatal("maintenance did not receive the registered runtime store")
-			}
-			if activeRuntime == nil {
-				t.Fatal("maintenance did not receive active runtime state")
-			}
-			if activeRuntime.PreviousWorkdir != fixture.store.Meta().WorkspaceRoot {
-				t.Fatalf("previous workdir = %q, want %q", activeRuntime.PreviousWorkdir, fixture.store.Meta().WorkspaceRoot)
-			}
-			return activeRuntime.Rebind(targetWorkdir)
+func lifecycleReminder(workspaceRoot, worktreeRoot string) *session.WorktreeReminderState {
+	return &session.WorktreeReminderState{
+		Mode: session.WorktreeReminderModeEnter,
+		WorktreeContext: session.WorktreeContext{
+			Branch:        session.OptionalWorktreeBranch("feature/lifecycle"),
+			WorktreePath:  worktreeRoot,
+			WorkspaceRoot: workspaceRoot,
+			EffectiveCwd:  worktreeRoot,
 		},
-	)
+	}
+}
+
+func openLifecycleRuntime(t *testing.T, authority *Authority, sessionID runtimeids.SessionID, ownerID string, plan *AgentRuntimePlan) RuntimeAttachment {
+	t.Helper()
+	attachment, err := authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   ownerID,
+		Runtime:   plan,
+	})
 	if err != nil {
-		t.Fatalf("RunSessionMaintenance: %v", err)
+		t.Fatalf("open runtime: %v", err)
 	}
-	if got, _ := state.rebindDir.Load().(string); got != targetWorkdir {
-		t.Fatalf("rebind workdir = %q, want %q", got, targetWorkdir)
-	}
-	engine, err := reg.ResolveRuntime(context.Background(), sessionID)
-	if err != nil {
-		t.Fatalf("ResolveRuntime: %v", err)
-	}
-	if engine == nil {
-		t.Fatal("runtime disappeared during maintenance")
-	}
+	return attachment
 }
 
-func TestRunSessionMaintenanceRepresentsInactiveRuntimeExplicitly(t *testing.T) {
-	fixture, _ := newRuntimeServiceFixture(t)
-	fixture.service.sessionStores.RegisterStore(fixture.store)
-	err := fixture.service.RunSessionMaintenance(
-		context.Background(),
-		fixture.store.Meta().SessionID,
-		func(_ context.Context, store *session.Store, activeRuntime *ActiveRuntimeMaintenance) error {
-			if store != fixture.store {
-				t.Fatal("maintenance did not receive the registered store")
-			}
-			if activeRuntime != nil {
-				t.Fatalf("inactive maintenance runtime = %+v, want nil", activeRuntime)
-			}
-			return nil
-		},
-	)
-	if err != nil {
-		t.Fatalf("RunSessionMaintenance: %v", err)
+type lifecycleReminderQueueObserver struct {
+	queue func()
+	once  sync.Once
+}
+
+func (o *lifecycleReminderQueueObserver) ObservePersistedStore(_ context.Context, snapshot session.PersistedStoreSnapshot) error {
+	if snapshot.Meta.WorktreeReminder != nil {
+		o.once.Do(o.queue)
 	}
+	return nil
 }
 
-type lifecycleRequestCaptureClient struct {
-	mu      sync.Mutex
-	calls   []llm.Request
-	callCh  chan struct{}
-	callOne sync.Once
-}
+type lifecycleRequestCaptureClient chan llm.Request
 
-func newLifecycleRequestCaptureClient() *lifecycleRequestCaptureClient {
-	return &lifecycleRequestCaptureClient{callCh: make(chan struct{})}
-}
-
-func (c *lifecycleRequestCaptureClient) Generate(_ context.Context, req llm.Request) (llm.Response, error) {
-	c.mu.Lock()
-	c.calls = append(c.calls, req)
-	c.mu.Unlock()
-	c.callOne.Do(func() { close(c.callCh) })
+func (c *lifecycleRequestCaptureClient) Generate(_ context.Context, request llm.Request) (llm.Response, error) {
+	*c <- request
 	return llm.Response{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}, nil
 }
 
-func (c *lifecycleRequestCaptureClient) firstCall(t *testing.T) llm.Request {
+func (c lifecycleRequestCaptureClient) await(t *testing.T) llm.Request {
 	t.Helper()
 	select {
-	case <-c.callCh:
+	case request := <-c:
+		return request
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for queued user model request")
+		t.Fatal("timed out waiting for queued user work to reach the model")
+		return llm.Request{}
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.calls) == 0 {
-		t.Fatal("expected captured model request")
-	}
-	return c.calls[0]
 }
 
-func TestSyncExecutionTargetPersistsReminderBeforeQueuedUserAutoDrain(t *testing.T) {
-	fixture, _ := newRuntimeServiceFixture(t)
-	sessionID := fixture.store.Meta().SessionID
-	client := newLifecycleRequestCaptureClient()
-	targetWorkdir := t.TempDir()
-	var engine *runtimepkg.Engine
-	build := func(context.Context) (RuntimeBuildResult, error) {
-		created, err := runtimepkg.New(fixture.store, client, tools.NewRegistry(), runtimepkg.Config{Model: "gpt-5"})
-		if err != nil {
-			return RuntimeBuildResult{}, err
+func TestAuthoritySyncExecutionTargetPersistsReminderBeforeQueuedUserDrain(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	client := make(lifecycleRequestCaptureClient, 1)
+	observer := &lifecycleReminderQueueObserver{}
+	authority := newLifecycleAuthority(t, fixture, observer, nil)
+	plan := authorityTestRuntimePlan(t, fixture, &client)
+	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
+	observer.queue = func() {
+		if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
+			engine.QueueUserMessageForAutoDrain("queued after switch", "request-after-switch")
+			return nil
+		}); err != nil {
+			t.Errorf("queue user work during reminder persistence: %v", err)
 		}
-		engine = created
-		return RuntimeBuildResult{
-			Engine: created,
-			LocalRebind: func(string) error {
-				created.QueueUserMessageForAutoDrain("queued after switch", "req-queued-after-switch")
-				return nil
-			},
-			Close: func() { _ = created.Close() },
-		}, nil
 	}
-	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
-		t.Fatalf("AcquireRuntime: %v", err)
+	worktreeRoot := t.TempDir()
+
+	if err := authority.SyncExecutionTarget(
+		context.Background(),
+		sessionID.String(),
+		lifecycleWorktreeTarget(fixture.config.WorkspaceRoot, worktreeRoot),
+		lifecycleReminder(fixture.config.WorkspaceRoot, worktreeRoot),
+	); err != nil {
+		t.Fatalf("sync execution target: %v", err)
 	}
-	if engine == nil {
-		t.Fatal("expected active engine")
-	}
-	err := fixture.service.SyncExecutionTarget(context.Background(), sessionID, lifecycleWorktreeExecutionTarget(
-		fixture.config.WorkspaceRoot,
-		targetWorkdir,
-	), &session.WorktreeReminderState{
-		Mode: session.WorktreeReminderModeEnter,
-		WorktreeContext: session.WorktreeContext{
-			Branch:        session.OptionalWorktreeBranch("feature/queued-switch"),
-			WorktreePath:  targetWorkdir,
-			WorkspaceRoot: fixture.config.WorkspaceRoot,
-			EffectiveCwd:  targetWorkdir,
-		},
-	})
-	if err != nil {
-		t.Fatalf("SyncExecutionTarget: %v", err)
-	}
-	req := client.firstCall(t)
-	for _, item := range req.Items {
+
+	request := client.await(t)
+	for _, item := range request.Items {
 		if item.Type == llm.ResponseItemTypeMessage &&
 			item.Role == llm.RoleDeveloper &&
 			item.MessageType == llm.MessageTypeWorktreeMode &&
 			item.WorktreeContext != nil &&
-			item.WorktreeContext.EffectiveCwd == targetWorkdir {
+			item.WorktreeContext.EffectiveCwd == worktreeRoot {
 			return
 		}
 	}
-	t.Fatalf("queued request missing worktree developer message: %+v", req.Items)
+	t.Fatalf("queued model request omitted the persisted worktree reminder: %+v", request.Items)
 }
 
-type armedWorktreeReminderFailObserver struct {
-	armed atomic.Bool
+type lifecyclePersistenceObserver struct {
+	failuresRemaining atomic.Int32
 }
 
-func (o *armedWorktreeReminderFailObserver) ObservePersistedStore(context.Context, session.PersistedStoreSnapshot) error {
-	if o.armed.Load() {
-		return errors.New("observer persistence failed")
+func (o *lifecyclePersistenceObserver) ObservePersistedStore(context.Context, session.PersistedStoreSnapshot) error {
+	if o.failuresRemaining.Load() > 0 {
+		o.failuresRemaining.Add(-1)
+		return errors.New("worktree reminder persistence failed")
 	}
 	return nil
 }
 
-func TestSyncExecutionTargetRollsBackRebindWhenReminderPersistenceFails(t *testing.T) {
-	observer := &armedWorktreeReminderFailObserver{}
-	workspaceRoot := t.TempDir()
-	store, err := session.Create(t.TempDir(), "workspace", workspaceRoot, sessioncontract.SessionCategoryMain, session.WithPersistenceObserver(observer))
-	if err != nil {
-		t.Fatalf("session.Create: %v", err)
-	}
-	reg := registry.NewRuntimeRegistry()
-	service := NewService("", nil, nil, nil, nil, nil, reg, registry.NewSessionStoreRegistry(), session.WithPersistenceObserver(observer))
-	sessionID := store.Meta().SessionID
-	targetWorkdir := t.TempDir()
-	var (
-		engine   *runtimepkg.Engine
-		rebindMu sync.Mutex
-		rebinds  []string
-	)
-	build := func(context.Context) (RuntimeBuildResult, error) {
-		created, err := runtimepkg.New(store, &sessionRuntimeTestLLMClient{}, tools.NewRegistry(), runtimepkg.Config{Model: "gpt-5"})
-		if err != nil {
-			return RuntimeBuildResult{}, err
+func newLifecycleAuthority(t *testing.T, fixture sessionRuntimeFixture, observer session.PersistenceObserver, lifecycle AgentResourceLifecycle) *Authority {
+	t.Helper()
+	storeOptions := append(fixture.metadata.AuthoritativeSessionStoreOptions(), session.WithPersistenceObserver(observer))
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot:   fixture.config.PersistenceRoot,
+		StoreOptions:      storeOptions,
+		ResourceLifecycle: lifecycle,
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close lifecycle authority: %v", err)
 		}
-		engine = created
-		return RuntimeBuildResult{
-			Engine: created,
-			LocalRebind: func(dir string) error {
-				rebindMu.Lock()
-				rebinds = append(rebinds, dir)
-				rebindMu.Unlock()
+	})
+	return authority
+}
+
+func TestAuthoritySyncExecutionTargetRecoversOrRetiresAfterPersistenceFailure(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		failures int32
+		retired  bool
+	}{
+		{name: "reminder failure rolls back runtime", failures: 1},
+		{name: "rollback failure retires exact resource", failures: 2, retired: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newSessionRuntimeFixture(t)
+			sessionID := lifecycleSessionID(t, fixture)
+			observer := &lifecyclePersistenceObserver{}
+			lifecycle := &authorityLifecycleProbe{draining: make(chan struct{}, 1)}
+			authority := newLifecycleAuthority(t, fixture, observer, lifecycle)
+			plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+			attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
+			var resource *agentResource
+			releaseCallback := make(chan struct{})
+			callbackDone := make(chan error, 1)
+			if test.retired {
+				authority.mu.Lock()
+				resource = authority.resources[sessionID]
+				authority.mu.Unlock()
+				entered := make(chan struct{})
+				go func() {
+					callbackDone <- authority.WithRuntime(context.Background(), attachment.Resource(), func(context.Context, *runtime.Engine) error {
+						close(entered)
+						<-releaseCallback
+						return nil
+					})
+				}()
+				<-entered
+			}
+			observer.failuresRemaining.Store(test.failures)
+			targetWorkdir := t.TempDir()
+			syncDone := make(chan error, 1)
+			go func() {
+				syncDone <- authority.SyncExecutionTarget(
+					context.Background(),
+					sessionID.String(),
+					lifecycleWorktreeTarget(fixture.config.WorkspaceRoot, targetWorkdir),
+					lifecycleReminder(fixture.config.WorkspaceRoot, targetWorkdir),
+				)
+			}()
+			if test.retired {
+				select {
+				case <-lifecycle.draining:
+				case <-time.After(3 * time.Second):
+					t.Fatal("retirement did not begin draining")
+				}
+				if state := resource.descriptor().State; state != AgentResourceDraining {
+					t.Fatalf("pinned retiring resource state = %v, want draining", state)
+				}
+				select {
+				case err := <-syncDone:
+					t.Fatalf("retirement completed before runtime callback release: %v", err)
+				default:
+				}
+				close(releaseCallback)
+				if callbackErr := <-callbackDone; callbackErr != nil {
+					t.Fatalf("runtime callback: %v", callbackErr)
+				}
+			}
+			err := <-syncDone
+			if err == nil {
+				t.Fatal("sync execution target succeeded despite persistence failure")
+			}
+			accessErr := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
+				if engine.TranscriptWorkingDir() != fixture.config.WorkspaceRoot || engine.WorktreeReminderState() != nil {
+					t.Fatalf("runtime target after rollback = workdir %q reminder %+v", engine.TranscriptWorkingDir(), engine.WorktreeReminderState())
+				}
+				return nil
+			})
+			if !test.retired {
+				if accessErr != nil {
+					t.Fatalf("inspect rolled-back runtime: %v", accessErr)
+				}
+				return
+			}
+			if !errors.Is(accessErr, serverapi.ErrRuntimeUnavailable) {
+				t.Fatalf("failed resource lookup error = %v, want runtime unavailable", accessErr)
+			}
+			if state := resource.descriptor().State; state != AgentResourceClosed {
+				t.Fatalf("retired resource state = %v, want closed", state)
+			}
+			replacement := openLifecycleRuntime(t, authority, sessionID, "owner-b", &plan)
+			if replacement.Resource() == attachment.Resource() {
+				t.Fatal("replacement reused the retired resource generation")
+			}
+		})
+	}
+}
+
+func TestAuthorityBlocksSessionStartsDuringMaintenance(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	release, err := fixture.authority.BlockSessionStarts(
+		context.Background(),
+		[]runtimeids.SessionID{sessionID},
+		SessionStartBlockMaintenance,
+	)
+	if err != nil {
+		t.Fatalf("block session starts: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := release.Close(context.Background()); err != nil {
+			t.Errorf("cleanup session-start block: %v", err)
+		}
+	})
+
+	request := AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Resource:   OpenAgentResource{},
+		Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
+	}
+	if _, err := fixture.authority.StartAgentExecution(context.Background(), request); !errors.Is(err, ErrSessionStartsBlocked) {
+		t.Fatalf("start while blocked error = %v, want ErrSessionStartsBlocked", err)
+	}
+	if _, err := fixture.authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   "owner-a",
+		Runtime:   &plan,
+	}); !errors.Is(err, ErrSessionStartsBlocked) {
+		t.Fatalf("open runtime while blocked error = %v, want ErrSessionStartsBlocked", err)
+	}
+	maintenanceCalled := false
+	err = fixture.authority.RunSessionMaintenance(
+		context.Background(),
+		sessionID.String(),
+		func(context.Context, *session.Store, *ActiveRuntimeMaintenance) error {
+			maintenanceCalled = true
+			return nil
+		},
+	)
+	if !errors.Is(err, ErrSessionStartsBlocked) {
+		t.Fatalf("unauthorized maintenance error = %v, want ErrSessionStartsBlocked", err)
+	}
+	if maintenanceCalled {
+		t.Fatal("blocked maintenance callback ran")
+	}
+	authorizedCtx := release.AuthorizeMaintenance(context.Background())
+	if err := fixture.authority.RunSessionMaintenance(
+		authorizedCtx,
+		sessionID.String(),
+		func(context.Context, *session.Store, *ActiveRuntimeMaintenance) error {
+			maintenanceCalled = true
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("authorized maintenance: %v", err)
+	}
+	if !maintenanceCalled {
+		t.Fatal("authorized maintenance callback did not run")
+	}
+	if err := release.Close(context.Background()); err != nil {
+		t.Fatalf("release session-start block: %v", err)
+	}
+}
+
+func TestNilAuthorityHasNoBlockingRuntimeActivity(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	var authority *Authority
+	active, err := authority.HasBlockingRuntimeActivity(context.Background(), fixture.store.Meta().SessionID)
+	if err != nil || active {
+		t.Fatalf("nil authority blocking activity = (%t, %v), want (false, nil)", active, err)
+	}
+}
+
+func TestAuthorityMaintenanceRequiresEveryActiveBlockAuthorization(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	outer, err := fixture.authority.BlockSessionStarts(
+		context.Background(),
+		[]runtimeids.SessionID{sessionID},
+		SessionStartBlockMaintenance,
+	)
+	if err != nil {
+		t.Fatalf("block outer session starts: %v", err)
+	}
+	defer func() {
+		if err := outer.Close(context.Background()); err != nil {
+			t.Errorf("release outer session-start block: %v", err)
+		}
+	}()
+	inner, err := fixture.authority.BlockSessionStarts(
+		context.Background(),
+		[]runtimeids.SessionID{sessionID},
+		SessionStartBlockMaintenance,
+	)
+	if err != nil {
+		t.Fatalf("block inner session starts: %v", err)
+	}
+	defer func() {
+		if err := inner.Close(context.Background()); err != nil {
+			t.Errorf("release inner session-start block: %v", err)
+		}
+	}()
+
+	callbackCalled := false
+	err = fixture.authority.RunSessionMaintenance(
+		inner.AuthorizeMaintenance(context.Background()),
+		sessionID.String(),
+		func(context.Context, *session.Store, *ActiveRuntimeMaintenance) error {
+			callbackCalled = true
+			return nil
+		},
+	)
+	if !errors.Is(err, ErrSessionStartsBlocked) {
+		t.Fatalf("partially authorized maintenance error = %v, want ErrSessionStartsBlocked", err)
+	}
+	if callbackCalled {
+		t.Fatal("partially authorized maintenance callback ran")
+	}
+
+	authorizedCtx := inner.AuthorizeMaintenance(outer.AuthorizeMaintenance(context.Background()))
+	if err := fixture.authority.RunSessionMaintenance(
+		authorizedCtx,
+		sessionID.String(),
+		func(context.Context, *session.Store, *ActiveRuntimeMaintenance) error {
+			callbackCalled = true
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("fully authorized maintenance: %v", err)
+	}
+	if !callbackCalled {
+		t.Fatal("fully authorized maintenance callback did not run")
+	}
+}
+
+func TestAuthorityBlockingRuntimeActivityIncludesMaintenanceStep(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	openLifecycleRuntime(t, fixture.authority, sessionID, "owner-a", &plan)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	done := make(chan error, 1)
+	go func() {
+		done <- fixture.authority.RunSessionMaintenance(
+			context.Background(),
+			sessionID.String(),
+			func(context.Context, *session.Store, *ActiveRuntimeMaintenance) error {
+				close(started)
+				<-release
 				return nil
 			},
-			Close: func() { _ = created.Close() },
-		}, nil
-	}
-	if err := service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
-		t.Fatalf("AcquireRuntime: %v", err)
-	}
-	if engine == nil {
-		t.Fatal("expected active engine")
-	}
-	observer.armed.Store(true)
-	err = service.SyncExecutionTarget(context.Background(), sessionID, lifecycleWorktreeExecutionTarget(
-		workspaceRoot,
-		targetWorkdir,
-	), &session.WorktreeReminderState{
-		Mode: session.WorktreeReminderModeEnter,
-		WorktreeContext: session.WorktreeContext{
-			Branch:        session.OptionalWorktreeBranch("feature/persist-fails"),
-			WorktreePath:  targetWorkdir,
-			WorkspaceRoot: workspaceRoot,
-			EffectiveCwd:  targetWorkdir,
-		},
-	})
-	if err == nil {
-		t.Fatal("expected SyncExecutionTarget to fail when reminder persistence fails")
-	}
-	rebindMu.Lock()
-	gotRebinds := append([]string(nil), rebinds...)
-	rebindMu.Unlock()
-	wantRebinds := []string{targetWorkdir, workspaceRoot}
-	if !reflect.DeepEqual(gotRebinds, wantRebinds) {
-		t.Fatalf("rebinds = %+v, want %+v", gotRebinds, wantRebinds)
-	}
-	if got := engine.TranscriptWorkingDir(); got != workspaceRoot {
-		t.Fatalf("transcript workdir after rollback = %q, want %q", got, workspaceRoot)
-	}
-}
+		)
+	}()
 
-func TestSyncExecutionTargetFailsQueuedUserWorkWhenRollbackRebindFails(t *testing.T) {
-	observer := &armedWorktreeReminderFailObserver{}
-	workspaceRoot := t.TempDir()
-	store, err := session.Create(t.TempDir(), "workspace", workspaceRoot, sessioncontract.SessionCategoryMain, session.WithPersistenceObserver(observer))
-	if err != nil {
-		t.Fatalf("session.Create: %v", err)
-	}
-	reg := registry.NewRuntimeRegistry()
-	service := NewService("", nil, nil, nil, nil, nil, reg, registry.NewSessionStoreRegistry(), session.WithPersistenceObserver(observer))
-	sessionID := store.Meta().SessionID
-	targetWorkdir := t.TempDir()
-	client := newLifecycleRequestCaptureClient()
-	var (
-		engine      *runtimepkg.Engine
-		rebindCount atomic.Int32
-	)
-	build := func(context.Context) (RuntimeBuildResult, error) {
-		created, err := runtimepkg.New(store, client, tools.NewRegistry(), runtimepkg.Config{Model: "gpt-5"})
-		if err != nil {
-			return RuntimeBuildResult{}, err
-		}
-		engine = created
-		return RuntimeBuildResult{
-			Engine: created,
-			LocalRebind: func(string) error {
-				if rebindCount.Add(1) == 1 {
-					created.QueueUserMessageForAutoDrain("queued during failing switch", "req-failing-switch")
-					return nil
-				}
-				return errors.New("rollback rebind failed")
-			},
-			Close: func() { _ = created.Close() },
-		}, nil
-	}
-	if err := service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
-		t.Fatalf("AcquireRuntime: %v", err)
-	}
-	if engine == nil {
-		t.Fatal("expected active engine")
-	}
-	observer.armed.Store(true)
-	err = service.SyncExecutionTarget(context.Background(), sessionID, lifecycleWorktreeExecutionTarget(
-		workspaceRoot,
-		targetWorkdir,
-	), &session.WorktreeReminderState{
-		Mode: session.WorktreeReminderModeEnter,
-		WorktreeContext: session.WorktreeContext{
-			Branch:        session.OptionalWorktreeBranch("feature/rollback-rebind-fails"),
-			WorktreePath:  targetWorkdir,
-			WorkspaceRoot: workspaceRoot,
-			EffectiveCwd:  targetWorkdir,
-		},
-	})
-	if err == nil {
-		t.Fatal("expected SyncExecutionTarget to fail when rollback rebind fails")
-	}
-	if got := rebindCount.Load(); got != 2 {
-		t.Fatalf("rebind count = %d, want 2", got)
-	}
-	if engine.HasQueuedUserWork() {
-		t.Fatal("queued user work must be failed when rollback cannot prove a coherent target")
-	}
 	select {
-	case <-client.callCh:
-		t.Fatal("queued user work reached the model after rollback failure")
-	case <-time.After(100 * time.Millisecond):
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for runtime maintenance")
 	}
-	if _, err := engine.SubmitUserMessage(context.Background(), "new work after failed switch"); !errors.Is(err, runtimepkg.ErrEngineClosed) {
-		t.Fatalf("SubmitUserMessage after failed rollback = %v, want ErrEngineClosed", err)
+	active, err := fixture.authority.HasBlockingRuntimeActivity(context.Background(), sessionID.String())
+	if err != nil {
+		t.Fatalf("check blocking runtime activity: %v", err)
 	}
-	observer.armed.Store(false)
-	var rebuiltEngine *runtimepkg.Engine
-	rebuilt := false
-	rebuild := func(context.Context) (RuntimeBuildResult, error) {
-		created, err := runtimepkg.New(store, &sessionRuntimeTestLLMClient{}, tools.NewRegistry(), runtimepkg.Config{Model: "gpt-5"})
-		if err != nil {
-			return RuntimeBuildResult{}, err
-		}
-		rebuilt = true
-		rebuiltEngine = created
-		return RuntimeBuildResult{Engine: created, Close: func() { _ = created.Close() }}, nil
+	if !active {
+		t.Fatal("runtime maintenance was not reported as blocking activity")
 	}
-	if err := service.AcquireRuntime(context.Background(), sessionID, "owner-b", rebuild); err != nil {
-		t.Fatalf("AcquireRuntime after retired rollback failure: %v", err)
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("run session maintenance: %v", err)
 	}
-	if !rebuilt {
-		t.Fatal("expected acquire after retired rollback failure to build a fresh runtime")
+	active, err = fixture.authority.HasBlockingRuntimeActivity(context.Background(), sessionID.String())
+	if err != nil {
+		t.Fatalf("check blocking runtime activity after maintenance: %v", err)
 	}
-	if rebuiltEngine == nil || rebuiltEngine == engine {
-		t.Fatalf("rebuilt engine = %p, old engine = %p", rebuiltEngine, engine)
+	if active {
+		t.Fatal("completed runtime maintenance remained blocking")
 	}
 }
 
-func TestIdleUnloadTimerReleasesOrphanedRuntime(t *testing.T) {
-	fixture, reg := newRuntimeServiceFixture(t)
-	fixture.service.idleUnloadDelay = 20 * time.Millisecond
-	fixture.service.runFinishedUnloadDelay = 20 * time.Millisecond
-	sessionID := fixture.store.Meta().SessionID
+func TestAuthorityBlockingRuntimeActivityIncludesOpenLiveRunGroup(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	client := &ownerlessRetirementLLMClient{
+		firstStarted: make(chan struct{}),
+		releaseFirst: make(chan struct{}),
+	}
+	plan := authorityTestRuntimePlan(t, fixture, client)
+	attachment := openLifecycleRuntime(t, fixture.authority, sessionID, "owner-a", &plan)
 
-	client := &blockingLLMClient{entered: make(chan struct{}), release: make(chan struct{})}
-	var engine *runtimepkg.Engine
-	build := func(ctx context.Context) (RuntimeBuildResult, error) {
-		e, err := runtimepkg.New(fixture.store, client, tools.NewRegistry(), runtimepkg.Config{
-			Model:         "gpt-5",
-			ThinkingLevel: "medium",
-			OnEvent:       func(evt runtimepkg.Event) { reg.PublishRuntimeEvent(sessionID, evt) },
-		})
-		if err != nil {
-			return RuntimeBuildResult{}, err
-		}
-		engine = e
-		return RuntimeBuildResult{Engine: e, Close: func() { _ = e.Close() }}, nil
-	}
-	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
-		t.Fatalf("AcquireRuntime: %v", err)
-	}
-	var once sync.Once
-	finishRun := func() { once.Do(func() { close(client.release) }) }
-	defer finishRun()
-	runDone := make(chan struct{})
+	submitDone := make(chan error, 1)
 	go func() {
-		_, _ = engine.SubmitUserMessage(context.Background(), "run")
-		close(runDone)
+		submitDone <- fixture.authority.WithRuntime(context.Background(), attachment.Resource(), func(ctx context.Context, engine *runtime.Engine) error {
+			_, err := engine.SubmitUserMessage(ctx, "first")
+			return err
+		})
 	}()
 	select {
-	case <-client.entered:
+	case <-client.firstStarted:
 	case <-time.After(3 * time.Second):
-		t.Fatal("active run did not start")
+		t.Fatal("timed out waiting for the first live step")
 	}
 
-	resp, err := fixture.service.ReleaseSessionRuntime(context.Background(), releaseRequest(sessionID, "owner-a", true, true))
-	if err != nil {
-		t.Fatalf("ReleaseSessionRuntime: %v", err)
-	}
-	if !resp.Active {
-		t.Fatalf("release while active should orphan, got %+v", resp)
-	}
-	finishRun()
-	<-runDone
-
-	deadline := time.After(3 * time.Second)
-	for reg.IsSessionRuntimeActive(sessionID) {
+	beforeQueueStarted := make(chan struct{})
+	releaseBeforeQueue := make(chan struct{})
+	defer func() {
 		select {
-		case <-deadline:
-			t.Fatal("orphaned idle runtime was not unloaded")
-		case <-time.After(10 * time.Millisecond):
+		case <-releaseBeforeQueue:
+		default:
+			close(releaseBeforeQueue)
 		}
+	}()
+	queueDone := make(chan error, 1)
+	go func() {
+		queueDone <- fixture.authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
+			item, accepted, err := engine.QueueUserMessageForActiveRun(
+				context.Background(),
+				"follow-up",
+				runtimeids.NewRuntimeClientRequestID(),
+				func() error {
+					close(beforeQueueStarted)
+					<-releaseBeforeQueue
+					return nil
+				},
+			)
+			if err == nil && (!accepted || item.ID == "") {
+				return errors.New("active live run rejected queued follow-up")
+			}
+			return err
+		})
+	}()
+	select {
+	case <-beforeQueueStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for live-run queue admission")
+	}
+
+	close(client.releaseFirst)
+	if err := <-submitDone; err != nil {
+		t.Fatalf("submit first live step: %v", err)
+	}
+	active, err := fixture.authority.HasBlockingRuntimeActivity(context.Background(), sessionID.String())
+	if err != nil {
+		t.Fatalf("check open live-run activity: %v", err)
+	}
+	if !active {
+		t.Fatal("open live-run group without an engine step was not reported as blocking")
+	}
+
+	close(releaseBeforeQueue)
+	if err := <-queueDone; err != nil {
+		t.Fatalf("queue live-run follow-up: %v", err)
+	}
+}
+
+func TestAuthorityBlockingRuntimeActivityIncludesDrainingResource(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	lifecycle := &authorityLifecycleProbe{draining: make(chan struct{}, 1)}
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot:   fixture.config.PersistenceRoot,
+		StoreOptions:      fixture.metadata.AuthoritativeSessionStoreOptions(),
+		ResourceLifecycle: lifecycle,
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
+
+	callbackStarted := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	defer func() {
+		select {
+		case <-releaseCallback:
+		default:
+			close(releaseCallback)
+		}
+	}()
+	callbackDone := make(chan error, 1)
+	go func() {
+		callbackDone <- authority.WithRuntime(context.Background(), attachment.Resource(), func(context.Context, *runtime.Engine) error {
+			close(callbackStarted)
+			<-releaseCallback
+			return nil
+		})
+	}()
+	select {
+	case <-callbackStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for runtime callback")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		_, err := attachment.Release(context.Background(), RuntimeReleaseClose)
+		closeDone <- err
+	}()
+	select {
+	case <-lifecycle.draining:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for runtime draining")
+	}
+	active, err := authority.HasBlockingRuntimeActivity(context.Background(), sessionID.String())
+	if err != nil {
+		t.Fatalf("check draining runtime activity: %v", err)
+	}
+	if !active {
+		t.Fatal("draining resource was not reported as blocking activity")
+	}
+
+	close(releaseCallback)
+	if err := <-callbackDone; err != nil {
+		t.Fatalf("runtime callback: %v", err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatalf("close draining runtime: %v", err)
 	}
 }

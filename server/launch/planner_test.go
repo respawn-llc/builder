@@ -60,7 +60,7 @@ func TestPlannerHeadlessCreatesNewSessionAndAppliesContinuationContext(t *testin
 	if err != nil {
 		t.Fatalf("plan session: %v", err)
 	}
-	meta := plan.Store.Meta()
+	meta := testStoreForPlannerPlan(t, planner, plan).Meta()
 	if meta.SessionID == "" {
 		t.Fatal("expected session id")
 	}
@@ -142,7 +142,7 @@ func TestPlannerReappliesPersistedSubagentRoleSettingsOnResume(t *testing.T) {
 	if plan.Source.Sources["thinking_level"] != "subagent" || plan.Source.Sources["tools.patch"] != "subagent" {
 		t.Fatalf("source report did not mark role overrides as subagent: %+v", plan.Source.Sources)
 	}
-	if got := plan.Store.Meta().Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("smart_reviewer")) {
+	if got := plan.Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("smart_reviewer")) {
 		t.Fatalf("continuation = %+v, want smart_reviewer preserved", got)
 	}
 }
@@ -213,7 +213,7 @@ func TestPlannerIgnoresMissingPersistedSubagentRoleOnResume(t *testing.T) {
 	if plan.ActiveSettings.ThinkingLevel != "medium" {
 		t.Fatalf("thinking level = %q, want base config when role is missing", plan.ActiveSettings.ThinkingLevel)
 	}
-	if got := plan.Store.Meta().Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("deleted_role")) {
+	if got := plan.Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("deleted_role")) {
 		t.Fatalf("continuation = %+v, want missing role preserved", got)
 	}
 }
@@ -279,11 +279,11 @@ func TestPlannerKeepsRoleBaseURLOutOfBaseSettingsOnResume(t *testing.T) {
 	if cleared.ActiveSettings.OpenAIBaseURL != "https://base.example/v1" {
 		t.Fatalf("cleared base url = %q, want base", cleared.ActiveSettings.OpenAIBaseURL)
 	}
-	if got := plan.Store.Meta().Continuation; got != nil && got.AgentRole != nil {
+	if got := cleared.Continuation; got != nil && got.AgentRole != nil {
 		t.Fatalf("continuation after clear = %+v, want no role", got)
 	}
 
-	if err := plan.Store.SetContinuationContext(session.ContinuationContext{OpenAIBaseURL: "https://worker.example/v1", AgentRole: sessiontest.AgentRole("worker")}); err != nil {
+	if err := testStoreForPlan(t, plan).SetContinuationContext(session.ContinuationContext{OpenAIBaseURL: "https://worker.example/v1", AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("reset continuation: %v", err)
 	}
 	switched, warnings, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("research")}, auth.EmptyState())
@@ -319,7 +319,7 @@ func TestApplyRunPromptOverridesDefaultCannotClearLockedRoleAfterSkippingPersist
 	if !errors.Is(err, ErrLockedAgentRoleChange) {
 		t.Fatalf("default locked-role clear error = %v, want %v", err, ErrLockedAgentRoleChange)
 	}
-	if got := plan.Store.Meta().Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("worker")) {
+	if got := plan.Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("worker")) {
 		t.Fatalf("locked continuation changed after rejected clear: %+v", got)
 	}
 }
@@ -380,7 +380,7 @@ func TestApplyRunPromptOverridesAllowsSameAgentRoleForLockedSession(t *testing.T
 		EnabledTools: []string{"shell"},
 	})
 	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("worker")}, auth.EmptyState())
-	if got := updated.Store.Meta().Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("worker")) {
+	if got := updated.Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("worker")) {
 		t.Fatalf("continuation = %+v, want worker", got)
 	}
 	if updated.ActiveSettings.Model != "locked-model" {
@@ -415,7 +415,7 @@ func TestApplyRunPromptOverridesOptionAllowsAgentRoleChangeForLockedSession(t *t
 	if err != nil {
 		t.Fatalf("ApplyRunPromptOverridesWithOptions: %v", err)
 	}
-	if got := updated.Store.Meta().Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("worker")) {
+	if got := updated.Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("worker")) {
 		t.Fatalf("continuation = %+v, want worker", got)
 	}
 	if updated.ActiveSettings.Model != "locked-model" {
@@ -473,8 +473,7 @@ func newLockedRoleOverridePlan(t *testing.T, workspace string, settings config.S
 		t.Fatalf("MarkModelDispatchLocked: %v", err)
 	}
 	effective := EffectiveSettings(settings, store.Meta().Locked)
-	return SessionPlan{
-		Store:               store,
+	return sessionPlanWithSnapshot(SessionPlan{
 		ActiveSettings:      effective,
 		BaseSettings:        effective,
 		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
@@ -483,7 +482,7 @@ func newLockedRoleOverridePlan(t *testing.T, workspace string, settings config.S
 		Source:              source,
 		BaseSource:          source,
 		ModelContractLocked: true,
-	}
+	}, store, filepath.Dir(store.Dir()))
 }
 
 func TestPlannerNewChildSessionPreservesParentWorktreeContext(t *testing.T) {
@@ -563,7 +562,7 @@ func TestPlannerNewChildSessionPreservesParentWorktreeContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanSession child: %v", err)
 	}
-	childMeta := plan.Store.Meta()
+	childMeta := testStoreForPlannerPlan(t, planner, plan).Meta()
 	parentID, err := runtimeids.ParseSessionID(parent.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ParseSessionID parent: %v", err)
@@ -665,8 +664,14 @@ func TestPlannerHeadlessChildWithRoleUsesFreshSystemPromptSnapshot(t *testing.T)
 		t.Fatalf("PlanSession child: %v", err)
 	}
 
-	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("code_review")}, auth.EmptyState())
-	if childLocked := updated.Store.Meta().Locked; childLocked != nil {
+	updated, warnings, err := planner.ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("code_review")}, auth.EmptyState())
+	if err != nil {
+		t.Fatalf("ApplyRunPromptOverrides: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %+v", warnings)
+	}
+	if childLocked := updated.Locked; childLocked != nil {
 		t.Fatalf("child lock = %+v, want headless child to use its own role contract", childLocked)
 	}
 	if updated.ActiveSettings.Model != "gpt-5.4-mini" {
@@ -681,7 +686,7 @@ func TestPlannerHeadlessChildWithRoleUsesFreshSystemPromptSnapshot(t *testing.T)
 	if len(updated.ActiveSettings.SystemPromptFiles) != 1 || updated.ActiveSettings.SystemPromptFiles[0].Path != rolePrompt {
 		t.Fatalf("active system prompt files = %+v, want role prompt %q", updated.ActiveSettings.SystemPromptFiles, rolePrompt)
 	}
-	if got := updated.Store.Meta().Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("code_review")) {
+	if got := updated.Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("code_review")) {
 		t.Fatalf("child continuation = %+v, want only selected role persisted", got)
 	}
 }
@@ -714,7 +719,7 @@ func TestPlannerNewChildSessionFallsBackWhenParentExecutionTargetIsNotMetadataBa
 	if err != nil {
 		t.Fatalf("PlanSession child: %v", err)
 	}
-	childMeta := plan.Store.Meta()
+	childMeta := testStoreForPlannerPlan(t, planner, plan).Meta()
 	parentID, err := runtimeids.ParseSessionID(parent.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ParseSessionID parent: %v", err)
@@ -753,7 +758,7 @@ func TestPlannerNewChildSessionResolvesPreviousSessionAcrossProjectContainers(t 
 	if err != nil {
 		t.Fatalf("PlanSession child: %v", err)
 	}
-	childMeta := plan.Store.Meta()
+	childMeta := testStoreForPlannerPlan(t, planner, plan).Meta()
 	parentID, err := runtimeids.ParseSessionID(parent.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ParseSessionID parent: %v", err)
@@ -943,7 +948,7 @@ func TestApplyRunPromptOverridesOverridesHeadlessSettingsWithoutMutatingBasePlan
 	if updated.ActiveSettings.OpenAIBaseURL != "http://override.local/v1" {
 		t.Fatalf("openai base url = %q, want http://override.local/v1", updated.ActiveSettings.OpenAIBaseURL)
 	}
-	if got := updated.Store.Meta().Continuation; got == nil || got.OpenAIBaseURL != "http://override.local/v1" {
+	if got := updated.Continuation; got == nil || got.OpenAIBaseURL != "http://override.local/v1" {
 		t.Fatalf("continuation = %+v, want override url", got)
 	}
 	if plan.ActiveSettings.Model != "base-model" {
@@ -978,7 +983,7 @@ func TestApplyPreparedRunPromptOverridesWithoutRolePreservesConfiguredModelAndCo
 	if updated.ActiveSettings.OpenAIBaseURL != "http://override.local/v1" {
 		t.Fatalf("openai base url = %q, want override url", updated.ActiveSettings.OpenAIBaseURL)
 	}
-	if got := updated.Store.Meta().Continuation; got == nil || got.OpenAIBaseURL != "http://override.local/v1" {
+	if got := updated.Continuation; got == nil || got.OpenAIBaseURL != "http://override.local/v1" {
 		t.Fatalf("continuation = %+v, want override url", got)
 	}
 }
@@ -1349,7 +1354,7 @@ func TestApplyRunPromptOverridesFailedConfigOverrideDoesNotPersistContinuation(t
 		"openai_base_url = \"https://worker.example/v1\"",
 	)
 	plan := newLoadedConfigPlan(t, workspace, loaded)
-	if err := plan.Store.SetContinuationContext(session.ContinuationContext{OpenAIBaseURL: loaded.Settings.OpenAIBaseURL}); err != nil {
+	if err := testStoreForPlan(t, plan).SetContinuationContext(session.ContinuationContext{OpenAIBaseURL: loaded.Settings.OpenAIBaseURL}); err != nil {
 		t.Fatalf("seed continuation: %v", err)
 	}
 
@@ -1360,7 +1365,7 @@ func TestApplyRunPromptOverridesFailedConfigOverrideDoesNotPersistContinuation(t
 	if err == nil {
 		t.Fatal("expected invalid tools override to fail")
 	}
-	got := plan.Store.Meta().Continuation
+	got := testStoreForPlan(t, plan).Meta().Continuation
 	if got == nil || got.OpenAIBaseURL != "https://base.example/v1" {
 		t.Fatalf("continuation = %+v, want unchanged base url", got)
 	}
@@ -1377,7 +1382,7 @@ func TestApplyRunPromptOverridesRoleOnlyOverridePersistsContinuation(t *testing.
 		"openai_base_url = \"https://worker.example/v1\"",
 	)
 	plan := newLoadedConfigPlan(t, workspace, loaded)
-	if err := plan.Store.SetContinuationContext(session.ContinuationContext{OpenAIBaseURL: loaded.Settings.OpenAIBaseURL}); err != nil {
+	if err := testStoreForPlan(t, plan).SetContinuationContext(session.ContinuationContext{OpenAIBaseURL: loaded.Settings.OpenAIBaseURL}); err != nil {
 		t.Fatalf("seed continuation: %v", err)
 	}
 
@@ -1385,7 +1390,7 @@ func TestApplyRunPromptOverridesRoleOnlyOverridePersistsContinuation(t *testing.
 	if updated.ActiveSettings.OpenAIBaseURL != "https://worker.example/v1" {
 		t.Fatalf("openai base url = %q, want worker override", updated.ActiveSettings.OpenAIBaseURL)
 	}
-	got := plan.Store.Meta().Continuation
+	got := updated.Continuation
 	if got == nil || got.OpenAIBaseURL != "https://worker.example/v1" || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("worker")) {
 		t.Fatalf("continuation = %+v, want worker base url and agent role", got)
 	}

@@ -1,17 +1,10 @@
-import { useCallback, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage } from "@/api";
-import { useAppServices } from "@/app-facade";
-import { useNativeDialogFallback } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
-import { WorkflowDeleteConfirmationFallbackDialog } from "./WorkflowDeleteConfirmationWindow";
-import {
-  workflowDeleteConfirmationTextKeys,
-  workflowDeleteConfirmationWindowOptions,
-} from "./workflowDeleteConfirmationModel";
+import { WorkflowGraphDeleteConfirmationDialog } from "./WorkflowGraphDeleteConfirmationDialog";
 import { workflowDeletionConfirmationCounts } from "./workflowDeleteConfirmationPolicy";
-import { useWorkflowGraphDeleteConfirmationListener } from "./useWorkflowGraphDeleteConfirmationListener";
 import {
   cascadeSummaryEquals,
   confirmationOperation,
@@ -23,8 +16,13 @@ import type { WorkflowEditorDraftAction, WorkflowEditorDraftState } from "./work
 import type { WorkflowGraphSelection } from "./workflowGraphSelection";
 
 export type WorkflowGraphDeleteConfirmation = Readonly<{
-  fallback: ReactNode;
-  open: (mutation: PendingGraphMutation) => Promise<void>;
+  dialog: ReactNode;
+  open: (mutation: PendingGraphMutation) => void;
+}>;
+
+type PendingConfirmation = Readonly<{
+  mutation: PendingGraphMutation;
+  ownerWorkflowID: string;
 }>;
 
 export function useWorkflowGraphDeleteConfirmation(
@@ -32,19 +30,27 @@ export function useWorkflowGraphDeleteConfirmation(
     closeDeletedNodeInspector: (selection: WorkflowGraphSelection) => void;
     dispatch: (action: WorkflowEditorDraftAction) => void;
     draftState: WorkflowEditorDraftState | null;
-    onPendingGraphMutationChange: (mutation: PendingGraphMutation | null) => void;
-    pendingRef: { current: PendingGraphMutation | null };
+    workflowID: string;
   }>,
 ): WorkflowGraphDeleteConfirmation {
-  const { closeDeletedNodeInspector, dispatch, draftState, onPendingGraphMutationChange, pendingRef } =
-    params;
+  const { closeDeletedNodeInspector, dispatch, draftState, workflowID } = params;
   const { t } = useTranslation();
-  const { nativeBridge } = useAppServices();
   const { push: pushStatus } = useStatusController();
+  const [pending, setPending] = useState<PendingConfirmation | null>(null);
+
+  useEffect(() => {
+    if (pending === null || pending.ownerWorkflowID === workflowID) {
+      return;
+    }
+    const stalePending = pending;
+    queueMicrotask(() => {
+      setPending((current) => (current === stalePending ? null : current));
+    });
+  }, [pending, workflowID]);
 
   const confirmPendingGraphMutation = useCallback(
     (mutationRequest: PendingGraphMutation) => {
-      onPendingGraphMutationChange(null);
+      setPending(null);
       if (draftState === null) {
         return;
       }
@@ -70,66 +76,36 @@ export function useWorkflowGraphDeleteConfirmation(
         return;
       }
       dispatchPendingGraphMutation(mutationRequest, dispatch);
-      if (mutationRequest.action.kind === "delete") {
+      if (mutationRequest.action.kind === "delete" && mutationRequest.action.selection.kind === "node") {
         closeDeletedNodeInspector(mutationRequest.action.selection);
       }
     },
-    [closeDeletedNodeInspector, dispatch, draftState, onPendingGraphMutationChange, pushStatus, t],
+    [closeDeletedNodeInspector, dispatch, draftState, pushStatus, t],
   );
 
-  const handleListenerError = useCallback(
-    (error: unknown) => {
-      pushStatus({
-        body: t("workflowEditor.deleteConfirmationListenerFailed", { message: errorMessage(error) }),
-        id: "workflow-delete-confirmation-listener-failed",
-        title: t("workflowEditor.deleteBlockedTitle"),
-        tone: "danger",
-      });
-    },
-    [pushStatus, t],
-  );
-
-  useWorkflowGraphDeleteConfirmationListener({
-    nativeBridge,
-    onConfirmed: confirmPendingGraphMutation,
-    onListenerError: handleListenerError,
-    pendingDeleteRef: pendingRef,
-  });
-
-  const deleteConfirmation = useNativeDialogFallback<PendingGraphMutation>({
-    errorNoticeID: "workflow-delete-confirmation-window-error",
-    errorTitle: t("workflowEditor.deleteCascadeTitle"),
-    nativeAvailable: nativeBridge.capabilities.dialogWindows,
-    openNative: async (deleteRequest) => {
-      const operation = confirmationOperation(deleteRequest);
-      const textKeys = workflowDeleteConfirmationTextKeys(deleteRequest.counts, operation);
-      await nativeBridge.dialogs.openWindow(
-        workflowDeleteConfirmationWindowOptions({
-          counts: deleteRequest.counts,
-          operation,
-          requestID: deleteRequest.requestID,
-          title: t(textKeys.titleKey),
-        }),
-      );
-    },
-    renderFallback: (mutationRequest, close) => (
-      <WorkflowDeleteConfirmationFallbackDialog
-        counts={mutationRequest.counts}
-        onCancel={() => {
-          onPendingGraphMutationChange(null);
-          close();
-        }}
-        onConfirm={() => {
-          confirmPendingGraphMutation(mutationRequest);
-          close();
-        }}
-        operation={confirmationOperation(mutationRequest)}
-      />
-    ),
-  });
-
+  const currentPending = pending?.ownerWorkflowID === workflowID ? pending : null;
   return {
-    fallback: deleteConfirmation.fallback,
-    open: deleteConfirmation.open,
+    dialog:
+      currentPending === null
+        ? null
+        : createPortal(
+            <WorkflowGraphDeleteConfirmationDialog
+              counts={currentPending.mutation.counts}
+              onCancel={() => {
+                setPending(null);
+              }}
+              onConfirm={() => {
+                confirmPendingGraphMutation(currentPending.mutation);
+              }}
+              operation={confirmationOperation(currentPending.mutation)}
+            />,
+            document.body,
+          ),
+    open: useCallback(
+      (mutation) => {
+        setPending({ mutation, ownerWorkflowID: workflowID });
+      },
+      [workflowID],
+    ),
   };
 }

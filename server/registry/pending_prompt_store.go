@@ -1,236 +1,110 @@
 package registry
 
 import (
-	"context"
-	"fmt"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	askquestion "core/server/tools"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
 type PendingPromptSnapshot struct {
 	Request   askquestion.AskQuestionRequest
 	CreatedAt time.Time
-}
-
-type pendingPromptEntry struct {
-	PendingPromptSnapshot
-	response chan promptResponseResult
-	closed   bool
-}
-
-type promptResponseResult struct {
-	response askquestion.AskQuestionResponse
-	err      error
+	Resource  runtimeids.SessionResourceRef
+	ScopeID   runtimeids.ExecutionScopeID
 }
 
 type pendingPromptStore struct {
 	mu      sync.RWMutex
-	pending map[string]*pendingPromptEntry
+	pending map[string]map[string]PendingPromptSnapshot
 }
 
 func newPendingPromptStore() *pendingPromptStore {
-	return &pendingPromptStore{pending: make(map[string]*pendingPromptEntry)}
+	return &pendingPromptStore{pending: make(map[string]map[string]PendingPromptSnapshot)}
 }
 
-func (s *pendingPromptStore) Begin(req askquestion.AskQuestionRequest, publish func(PendingPromptSnapshot, pendingPromptEventType)) (PendingPromptSnapshot, bool) {
-	if s == nil {
-		return PendingPromptSnapshot{}, false
+func (s *pendingPromptStore) Begin(sessionID string, resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, req askquestion.AskQuestionRequest, createdAt time.Time, publish func(PendingPromptSnapshot)) bool {
+	id, requestID := strings.TrimSpace(sessionID), strings.TrimSpace(req.ID)
+	if id == "" || requestID == "" {
+		return false
 	}
-	requestID := strings.TrimSpace(req.ID)
-	if requestID == "" {
-		return PendingPromptSnapshot{}, false
-	}
-	snapshot := PendingPromptSnapshot{Request: req, CreatedAt: time.Now()}
+	snapshot := PendingPromptSnapshot{Request: req, CreatedAt: createdAt, Resource: resource, ScopeID: scopeID}
 	s.mu.Lock()
-	s.pending[requestID] = &pendingPromptEntry{PendingPromptSnapshot: snapshot}
+	pending := s.pending[id]
+	if pending == nil {
+		pending = make(map[string]PendingPromptSnapshot)
+		s.pending[id] = pending
+	}
+	pending[requestID] = snapshot
 	s.mu.Unlock()
 	if publish != nil {
-		publish(snapshot, pendingPromptEventPending)
+		publish(snapshot)
 	}
-	return snapshot, true
+	return true
 }
 
-func (s *pendingPromptStore) Complete(requestID string) (PendingPromptSnapshot, bool) {
-	if s == nil {
+func (s *pendingPromptStore) Complete(sessionID string, resource runtimeids.SessionResourceRef, scopeID runtimeids.ExecutionScopeID, requestID string) (PendingPromptSnapshot, bool) {
+	id, askID := strings.TrimSpace(sessionID), strings.TrimSpace(requestID)
+	if id == "" || askID == "" {
 		return PendingPromptSnapshot{}, false
 	}
-	id := strings.TrimSpace(requestID)
-	if id == "" {
-		return PendingPromptSnapshot{}, false
-	}
-	var snapshot PendingPromptSnapshot
 	s.mu.Lock()
-	if pending, ok := s.pending[id]; ok {
-		pending.closed = true
-		snapshot = pending.PendingPromptSnapshot
+	pending := s.pending[id]
+	entry, exists := pending[askID]
+	if exists && resource.Validate() == nil && !scopeID.IsZero() &&
+		(entry.Resource != resource || entry.ScopeID != scopeID) {
+		exists = false
 	}
-	delete(s.pending, id)
+	if exists {
+		delete(pending, askID)
+	}
+	if len(pending) == 0 {
+		delete(s.pending, id)
+	}
 	s.mu.Unlock()
-	return snapshot, snapshot.Request.ID != ""
+	if !exists {
+		return PendingPromptSnapshot{}, false
+	}
+	return entry, true
 }
 
-func (s *pendingPromptStore) List() []PendingPromptSnapshot {
-	if s == nil {
-		return nil
-	}
+func (s *pendingPromptStore) List(sessionID string) []PendingPromptSnapshot {
 	s.mu.RLock()
-	items := s.listLocked()
+	items := listPendingPrompts(s.pending[strings.TrimSpace(sessionID)])
 	s.mu.RUnlock()
 	return items
 }
 
-func (s *pendingPromptStore) Has(requestID string) bool {
-	if s == nil {
-		return false
-	}
-	id := strings.TrimSpace(requestID)
-	if id == "" {
-		return false
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	pending := s.pending[id]
-	return pending != nil && !pending.closed
-}
-
-func (s *pendingPromptStore) Await(ctx context.Context, req askquestion.AskQuestionRequest, publish func(PendingPromptSnapshot, pendingPromptEventType)) (askquestion.AskQuestionResponse, error) {
-	if s == nil {
-		return askquestion.AskQuestionResponse{}, fmt.Errorf("pending prompt store is required")
-	}
-	requestID := strings.TrimSpace(req.ID)
-	if requestID == "" {
-		return askquestion.AskQuestionResponse{}, fmt.Errorf("session id and request id are required")
-	}
-	pending := &pendingPromptEntry{
-		PendingPromptSnapshot: PendingPromptSnapshot{Request: req, CreatedAt: time.Now()},
-		response:              make(chan promptResponseResult, 1),
-	}
+func (s *pendingPromptStore) CloseSession(sessionID string, resolve func(PendingPromptSnapshot)) {
+	id := strings.TrimSpace(sessionID)
 	s.mu.Lock()
-	if _, exists := s.pending[requestID]; exists {
-		s.mu.Unlock()
-		return askquestion.AskQuestionResponse{}, fmt.Errorf("prompt %q is already pending", requestID)
-	}
-	s.pending[requestID] = pending
-	s.mu.Unlock()
-	if publish != nil {
-		publish(pending.PendingPromptSnapshot, pendingPromptEventPending)
-	}
-	defer func() {
-		var shouldPublishResolved bool
-		s.mu.Lock()
-		current, ok := s.pending[requestID]
-		if ok && current == pending {
-			shouldPublishResolved = !current.closed
-			current.closed = true
-			delete(s.pending, requestID)
+	items := listPendingPrompts(s.pending[id])
+	delete(s.pending, id)
+	for _, item := range items {
+		if resolve != nil {
+			resolve(item)
 		}
-		s.mu.Unlock()
-		if shouldPublishResolved && publish != nil {
-			publish(pending.PendingPromptSnapshot, pendingPromptEventResolved)
-		}
-	}()
-	select {
-	case <-ctx.Done():
-		return askquestion.AskQuestionResponse{}, ctx.Err()
-	case result := <-pending.response:
-		return result.response, result.err
-	}
-}
-
-func (s *pendingPromptStore) Submit(resp askquestion.AskQuestionResponse, err error, publish func(PendingPromptSnapshot, pendingPromptEventType)) error {
-	if s == nil {
-		return fmt.Errorf("pending prompt store is required")
-	}
-	requestID := strings.TrimSpace(resp.RequestID)
-	if requestID == "" {
-		return fmt.Errorf("session id and request id are required")
-	}
-	s.mu.Lock()
-	pending := s.pending[requestID]
-	if pending == nil {
-		s.mu.Unlock()
-		return fmt.Errorf("prompt %q not found: %w", requestID, serverapi.ErrPromptNotFound)
-	}
-	if pending.closed {
-		s.mu.Unlock()
-		return fmt.Errorf("prompt %q is already resolved: %w", requestID, serverapi.ErrPromptAlreadyResolved)
-	}
-	if pending.response == nil {
-		s.mu.Unlock()
-		return fmt.Errorf("prompt %q cannot be answered through the shared boundary: %w", requestID, serverapi.ErrPromptUnsupported)
-	}
-	snapshot := pending.PendingPromptSnapshot
-	if err == nil {
-		if validateErr := askquestion.ValidateAskQuestionResponse(snapshot.Request, resp); validateErr != nil {
-			s.mu.Unlock()
-			return validateErr
-		}
-	}
-	pending.closed = true
-	ch := pending.response
-	delete(s.pending, requestID)
-	s.mu.Unlock()
-	ch <- promptResponseResult{response: resp, err: err}
-	publish(snapshot, pendingPromptEventResolved)
-	return nil
-}
-
-func (s *pendingPromptStore) Close(err error) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	items := make([]*pendingPromptEntry, 0, len(s.pending))
-	for id, pending := range s.pending {
-		if pending == nil {
-			delete(s.pending, id)
-			continue
-		}
-		pending.closed = true
-		items = append(items, pending)
-		delete(s.pending, id)
 	}
 	s.mu.Unlock()
-	for _, pending := range items {
-		if pending.response == nil {
-			continue
-		}
-		select {
-		case pending.response <- promptResponseResult{err: err}:
-		default:
-		}
-	}
 }
 
-func (s *pendingPromptStore) WithLockedAttentionSnapshotResult(fn func([]PendingPromptSnapshot) (serverapi.AttentionNotificationSubscription, error)) (serverapi.AttentionNotificationSubscription, error) {
-	if s == nil {
-		return nil, fmt.Errorf("pending prompt store is required")
-	}
+func (s *pendingPromptStore) WithLockedAttentionSnapshotResult(sessionID string, fn func([]PendingPromptSnapshot) (serverapi.AttentionNotificationSubscription, error)) (serverapi.AttentionNotificationSubscription, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return fn(s.listLocked())
+	return fn(listPendingPrompts(s.pending[strings.TrimSpace(sessionID)]))
 }
 
-func (s *pendingPromptStore) listLocked() []PendingPromptSnapshot {
-	items := make([]PendingPromptSnapshot, 0, len(s.pending))
-	for _, item := range s.pending {
-		if item == nil {
-			continue
-		}
-		items = append(items, item.PendingPromptSnapshot)
+func listPendingPrompts(pending map[string]PendingPromptSnapshot) []PendingPromptSnapshot {
+	items := make([]PendingPromptSnapshot, 0, len(pending))
+	for _, item := range pending {
+		items = append(items, item)
 	}
 	sort.Slice(items, func(i, j int) bool {
-		return pendingPromptOrderLess(
-			items[i].CreatedAt,
-			items[i].Request.ID,
-			items[j].CreatedAt,
-			items[j].Request.ID,
-		)
+		return pendingPromptOrderLess(items[i].CreatedAt, items[i].Request.ID, items[j].CreatedAt, items[j].Request.ID)
 	})
 	return items
 }

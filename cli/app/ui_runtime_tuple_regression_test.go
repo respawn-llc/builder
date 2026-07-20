@@ -5,15 +5,13 @@ import (
 	"testing"
 
 	"core/cli/tui/ongoing"
-	"core/server/registry"
-	"core/server/runtimecontrol"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
 func TestDelayedTranscriptRuntimeTupleCannotRollBackNewerUnaryState(t *testing.T) {
-	controls := runtimecontrol.NewService(registry.NewRuntimeRegistry())
+	controls := newUnavailableRuntimeControlService()
 	runtimeClient := newTestSessionRuntimeClient(&countingSessionViewClient{}, controls)
 	v9 := runtimeTupleTestView(9, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
 	runtimeClient.storeMainView(v9)
@@ -63,7 +61,7 @@ func TestRuntimeMainViewRefreshCommitsOnlyWhenReducerHandlesCandidate(t *testing
 		EffectiveWorkdir: "/workspace",
 	}
 	reads := &countingSessionViewClient{view: v10}
-	runtimeClient := newTestSessionRuntimeClient(reads, runtimecontrol.NewService(registry.NewRuntimeRegistry()))
+	runtimeClient := newTestSessionRuntimeClient(reads, newUnavailableRuntimeControlService())
 	v9 := runtimeTupleTestView(9, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationSubmitted))
 	runtimeClient.storeMainView(v9)
 	m := newProjectedTestUIModel(runtimeClient)
@@ -116,7 +114,7 @@ func TestRuntimeMainViewRefreshPreservesMetadataChangedAfterRequestStarted(t *te
 		ThinkingLevel:     "stale unary thinking",
 	}
 	reads := &countingSessionViewClient{view: v10}
-	runtimeClient := newTestSessionRuntimeClient(reads, runtimecontrol.NewService(registry.NewRuntimeRegistry()))
+	runtimeClient := newTestSessionRuntimeClient(reads, newUnavailableRuntimeControlService())
 	v9 := runtimeTupleTestView(9, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationSubmitted))
 	v9.Status = clientui.RuntimeStatus{ReviewerFrequency: "initial", ThinkingLevel: "initial"}
 	runtimeClient.storeMainView(v9)

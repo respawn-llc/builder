@@ -1,6 +1,6 @@
 //go:build !windows
 
-package workflowrunner
+package sessionruntime
 
 import (
 	"os"
@@ -30,16 +30,4 @@ func killScriptProcess(process *os.Process) error {
 		return err
 	}
 	return nil
-}
-
-func processExitCode(err error) int {
-	if err == nil {
-		return 0
-	}
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		if code := exitErr.ExitCode(); code >= 0 {
-			return code
-		}
-	}
-	return 1
 }

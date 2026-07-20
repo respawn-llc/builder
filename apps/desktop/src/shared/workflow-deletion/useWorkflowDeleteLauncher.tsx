@@ -1,146 +1,266 @@
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useMatchRoute } from "@tanstack/react-router";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 
 import type { WorkflowDeleteImpact } from "@/api";
 import { errorMessage } from "@/api";
 import {
+  queryKeys,
+  useAppNavigation,
   useAppServices,
   useConnectionSnapshot,
-  useNativeDialogFallback,
+  useSidebar,
   useStatusController,
+  type SidebarDestination,
 } from "@/app-facade";
-import { WorkflowDeleteFallbackDialog } from "./WorkflowDeleteFallbackDialog";
+import { Dialog } from "@/ui";
+import { WorkflowDeleteConfirmationContent } from "./WorkflowDeleteConfirmationContent";
 import {
   workflowDeleteBlockersMessage,
+  workflowDeleteDialogWidth,
   workflowDeleteInputFromImpact,
-  workflowDeleteWindowOptions,
-  type WorkflowDeleteTarget,
 } from "./workflowDeleteShared";
+
+type DeleteOperation = Readonly<{ impact: WorkflowDeleteImpact; ownerWorkflowID: string }>;
+type PreviewAdmission = Readonly<{ ownerWorkflowID: string }>;
 
 export function useWorkflowDeleteLauncher(workflowID: string): Readonly<{
   disabled: boolean;
-  fallback: ReactNode;
+  dialog: ReactNode;
   openWorkflowDelete: () => Promise<void>;
   opening: boolean;
 }> {
   const { t } = useTranslation();
-  const { api, nativeBridge } = useAppServices();
+  const { api } = useAppServices();
   const connection = useConnectionSnapshot();
+  const navigation = useAppNavigation();
+  const queryClient = useQueryClient();
+  const matchRoute = useMatchRoute();
+  const { activeDestination, closeSidebar } = useSidebar();
   const { push } = useStatusController();
-  const [opening, setOpening] = useState(false);
-  const [fallbackSubmitting, setFallbackSubmitting] = useState(false);
-  const fallbackSubmittingRef = useRef(false);
-  const disabled = connection.phase !== "connected" || opening;
+  const [pending, setPending] = useState<DeleteOperation | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [committedOwner, setCommittedOwner] = useState<string | null>(null);
+  const [openingOwner, setOpeningOwner] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const workflowIDRef = useRef(workflowID);
+  const activeDestinationRef = useRef(activeDestination);
+  const previewAdmissionRef = useRef<PreviewAdmission | null>(null);
+  const submitAdmissionRef = useRef<DeleteOperation | null>(null);
+  const committedOwnerRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    workflowIDRef.current = workflowID;
+    activeDestinationRef.current = activeDestination;
+  }, [activeDestination, workflowID]);
+
+  useEffect(() => {
+    const stalePreview = previewAdmissionRef.current;
+    const stalePending = pending;
+    const previewStale = stalePreview !== null && stalePreview.ownerWorkflowID !== workflowID;
+    const pendingStale =
+      stalePending !== null &&
+      stalePending.ownerWorkflowID !== workflowID &&
+      submitAdmissionRef.current !== stalePending;
+    if (!previewStale && !pendingStale) return;
+    queueMicrotask(() => {
+      if (previewStale && previewAdmissionRef.current === stalePreview) {
+        previewAdmissionRef.current = null;
+        setOpeningOwner((current) => (current === stalePreview.ownerWorkflowID ? null : current));
+      }
+      if (pendingStale) {
+        setPending((current) => (current === stalePending ? null : current));
+        setActionError(null);
+      }
+    });
+  }, [pending, workflowID]);
 
   const confirmDelete = useCallback(
-    async (impact: WorkflowDeleteImpact, close: () => void): Promise<void> => {
+    async (operation: DeleteOperation): Promise<void> => {
+      if (
+        submitAdmissionRef.current !== null ||
+        committedOwnerRef.current === operation.ownerWorkflowID ||
+        workflowIDRef.current !== operation.ownerWorkflowID
+      ) {
+        return;
+      }
+      submitAdmissionRef.current = operation;
+      setActionError(null);
+      setSubmitting(true);
+      const retry = (message: string): void => {
+        if (submitAdmissionRef.current === operation) submitAdmissionRef.current = null;
+        setSubmitting(false);
+        if (workflowIDRef.current === operation.ownerWorkflowID) {
+          setActionError(message);
+        } else {
+          setPending((current) => (current === operation ? null : current));
+        }
+      };
       try {
-        const response = await api.deleteWorkflow(workflowDeleteInputFromImpact(impact));
+        const response = await api.deleteWorkflow(workflowDeleteInputFromImpact(operation.impact));
         if (!response.deleted) {
-          push({
-            id: "workflow-delete-blocked",
-            tone: "danger",
-            title: t("workflowEditor.workflowDeleteBlocked"),
-            body: workflowDeleteBlockersMessage(response.blockers, t("workflowEditor.workflowDeleteBlocked")),
-          });
+          retry(
+            workflowDeleteBlockersMessage(response.blockers, t("workflowEditor.workflowDeleteBlocked")),
+          );
           return;
         }
-        close();
-        await nativeBridge.workflowDeletion.notifyDeleted({ workflowID: impact.workflowID });
+      } catch (error) {
+        retry(errorMessage(error));
+        return;
+      }
+
+      committedOwnerRef.current = operation.ownerWorkflowID;
+      setCommittedOwner(operation.ownerWorkflowID);
+      submitAdmissionRef.current = null;
+      setSubmitting(false);
+      setPending((current) => (current === operation ? null : current));
+      try {
+        await invalidateWorkflowDeleteQueries(queryClient, operation.ownerWorkflowID);
+        if (sidebarReferencesWorkflow(activeDestinationRef.current, operation.ownerWorkflowID)) {
+          closeSidebar("closed");
+        }
+        const routeMatches =
+          matchRoute({
+            to: "/workflows/$workflowId/editor",
+            params: { workflowId: operation.ownerWorkflowID },
+            pending: false,
+            fuzzy: false,
+            includeSearch: false,
+          }) !== false ||
+          matchRoute({
+            to: "/projects/$projectId",
+            search: { workflowId: operation.ownerWorkflowID },
+            pending: false,
+            fuzzy: false,
+            includeSearch: true,
+          }) !== false;
+        if (routeMatches) {
+          if (await navigation.openWorkflowLibrary() === "failed") {
+            throw new Error(t("workflowEditor.workflowDeleteNavigationError"));
+          }
+        }
+        push({
+          id: "workflow-delete-deleted",
+          tone: "success",
+          title: t("workflowEditor.workflowDeleted"),
+        });
       } catch (error) {
         push({
-          id: "workflow-delete-error",
+          id: "workflow-delete-committed-notify-error",
+          tone: "warning",
+          title: t("workflowEditor.workflowDeleteTitle"),
+          body: t("workflowEditor.workflowDeleteCommittedNotifyError", {
+            message: errorMessage(error),
+          }),
+        });
+      }
+    },
+    [api, closeSidebar, matchRoute, navigation, push, queryClient, t],
+  );
+
+  const openWorkflowDelete = useCallback(async (): Promise<void> => {
+    if (
+      previewAdmissionRef.current !== null ||
+      submitAdmissionRef.current !== null ||
+      pending?.ownerWorkflowID === workflowID ||
+      committedOwnerRef.current === workflowID
+    ) {
+      return;
+    }
+    const admission = { ownerWorkflowID: workflowID };
+    previewAdmissionRef.current = admission;
+    setOpeningOwner(workflowID);
+    try {
+      const impact = await api.previewWorkflowDelete(workflowID);
+      if (previewAdmissionRef.current === admission && workflowIDRef.current === workflowID) {
+        setPending({ impact, ownerWorkflowID: workflowID });
+      }
+    } catch (error) {
+      if (previewAdmissionRef.current === admission && workflowIDRef.current === workflowID) {
+        push({
+          id: "workflow-delete-preview-error",
           tone: "danger",
           title: t("workflowEditor.workflowDeleteTitle"),
           body: errorMessage(error),
         });
       }
-    },
-    [api, nativeBridge.workflowDeletion, push, t],
-  );
+    } finally {
+      if (previewAdmissionRef.current === admission) previewAdmissionRef.current = null;
+      setOpeningOwner((current) => (current === workflowID ? null : current));
+    }
+  }, [api, pending, push, t, workflowID]);
 
-  const confirmFallbackDelete = useCallback(
-    async (impact: WorkflowDeleteImpact, close: () => void): Promise<void> => {
-      if (fallbackSubmittingRef.current) {
-        return;
-      }
-      fallbackSubmittingRef.current = true;
-      setFallbackSubmitting(true);
-      try {
-        await confirmDelete(impact, close);
-      } finally {
-        fallbackSubmittingRef.current = false;
-        setFallbackSubmitting(false);
-      }
-    },
-    [confirmDelete],
-  );
-
-  const deleteDialog = useNativeDialogFallback<WorkflowDeleteTarget>({
-    errorNoticeID: "workflow-delete-window-error",
-    errorTitle: t("workflowEditor.workflowDeleteWindowError"),
-    nativeAvailable: nativeBridge.capabilities.dialogWindows,
-    openNative: async (target) => {
-      await nativeBridge.dialogs.openWindow(
-        workflowDeleteWindowOptions(target.impact, t("workflowEditor.workflowDeleteTitle")),
-      );
-    },
-    renderFallback: (target, close) => (
-      <WorkflowDeleteFallbackDialog
-        disabled={fallbackSubmitting}
-        impact={target.impact}
-        onCancel={close}
-        onConfirm={() => void confirmFallbackDelete(target.impact, close)}
-      />
-    ),
-  });
-
-  const openWorkflowDelete = useCallback(
-    async () =>
-      openWorkflowDeleteConfirmation({
-        open: deleteDialog.open,
-        preview: async (id) => api.previewWorkflowDelete(id),
-        setOpening,
-        pushError: (message) => {
-          push({
-            id: "workflow-delete-preview-error",
-            tone: "danger",
-            title: t("workflowEditor.workflowDeleteTitle"),
-            body: message,
-          });
-        },
-        workflowID,
-      }),
-    [api, deleteDialog.open, push, t, workflowID],
-  );
-
+  const cancelPending = useCallback(() => {
+    if (submitAdmissionRef.current !== null) return;
+    setPending(null);
+    setActionError(null);
+  }, []);
+  const currentPending = pending?.ownerWorkflowID === workflowID ? pending : null;
+  const opening = openingOwner === workflowID;
   return {
-    disabled,
-    fallback: deleteDialog.fallback,
+    disabled:
+      connection.phase !== "connected" ||
+      opening ||
+      submitting ||
+      currentPending !== null ||
+      committedOwner === workflowID,
+    dialog:
+      currentPending === null
+        ? null
+        : createPortal(
+            <Dialog
+              closeLabel={t("app.close")}
+              closeDisabled={submitting}
+              onClose={cancelPending}
+              open
+              style={{ width: `min(${workflowDeleteDialogWidth.toString()}px, calc(100vw - 32px))` }}
+              title={t("workflowEditor.workflowDeleteTitle")}
+            >
+              <WorkflowDeleteConfirmationContent
+                actionError={actionError ?? undefined}
+                disabled={submitting}
+                impact={currentPending.impact}
+                onCancel={cancelPending}
+                onConfirm={() => void confirmDelete(currentPending)}
+              />
+            </Dialog>,
+            document.body,
+          ),
     openWorkflowDelete,
     opening,
   };
 }
 
-async function openWorkflowDeleteConfirmation({
-  open,
-  preview,
-  setOpening,
-  pushError,
-  workflowID,
-}: Readonly<{
-  open: (target: WorkflowDeleteTarget) => Promise<void>;
-  preview: (workflowID: string) => Promise<WorkflowDeleteImpact>;
-  setOpening: (opening: boolean) => void;
-  pushError: (message: string) => void;
-  workflowID: string;
-}>): Promise<void> {
-  setOpening(true);
-  try {
-    await open({ impact: await preview(workflowID) });
-  } catch (error) {
-    pushError(errorMessage(error));
-  } finally {
-    setOpening(false);
+function sidebarReferencesWorkflow(destination: SidebarDestination | null, workflowID: string): boolean {
+  if (destination === null) return false;
+  switch (destination.kind) {
+    case "newTask":
+    case "workflowInspect":
+    case "workflowEditor":
+      return destination.workflowID === workflowID;
+    case "linkWorkflow":
+      return destination.selectedWorkflowID === workflowID;
+    case "taskDetail":
+    case "workflowCreate":
+    case "projectEdit":
+    case "custom":
+      return false;
   }
+}
+
+async function invalidateWorkflowDeleteQueries(queryClient: QueryClient, workflowID: string): Promise<void> {
+  queryClient.removeQueries({ queryKey: queryKeys.workflowDefinition(workflowID) });
+  queryClient.removeQueries({ queryKey: queryKeys.workflowValidation(workflowID, "execution") });
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: queryKeys.allWorkflows }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.allWorkflowDefinitions }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.allWorkflowValidations }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.allWorkflowGraphLayouts }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.allProjectWorkflowLinks }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.allBoards }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.allAttention }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.allTasks }),
+  ]);
 }

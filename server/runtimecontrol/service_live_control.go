@@ -13,6 +13,27 @@ import (
 
 var _ servicecontract.RuntimeLiveControlService = (*Service)(nil)
 
+func (s *Service) withLiveExecutionRuntime(ctx context.Context, sessionID runtimeids.SessionID, callback func(context.Context, *runtime.Engine) error) error {
+	if s == nil || s.authority == nil {
+		return errors.New("session runtime authority is required")
+	}
+	execution, ok := s.authority.SessionExecution(sessionID)
+	if !ok {
+		err := s.authority.WithCurrentRuntime(ctx, sessionID, func(context.Context, *runtime.Engine) error {
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		return serverapi.ErrRuntimeNoActiveRun
+	}
+	resource, ok := execution.Scope().Resource()
+	if !ok {
+		return errors.New("agent execution scope has no runtime resource")
+	}
+	return s.authority.WithRuntime(ctx, resource, callback)
+}
+
 func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerRequest) (serverapi.RuntimeLiveSteerResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeLiveSteerResponse{}, err
@@ -28,12 +49,12 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 	memoReq := liveSteerMemoRequest{SessionID: sessionID, Text: strings.TrimSpace(req.Text)}
 	return s.liveSteers.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameLiveSteerMemoRequest, func(ctx context.Context) (serverapi.RuntimeLiveSteerResponse, error) {
 		var resp serverapi.RuntimeLiveSteerResponse
-		err := s.withRuntimeAccess(ctx, memoReq.SessionID.String(), func(engine *runtime.Engine) error {
-			item, accepted, err := engine.QueueUserMessageForActiveRun(ctx, memoReq.Text, clientRequestID, func() error {
+		err := s.withLiveExecutionRuntime(ctx, memoReq.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
+			item, accepted, err := engine.QueueUserMessageForActiveRun(callbackCtx, memoReq.Text, clientRequestID, func() error {
 				if s == nil || s.promptStore == nil {
 					return nil
 				}
-				record, _, err := s.recordPromptHistory(ctx, memoReq.SessionID.String(), clientRequestID.String(), memoReq.Text)
+				record, _, err := s.recordPromptHistory(callbackCtx, memoReq.SessionID.String(), clientRequestID.String(), memoReq.Text)
 				if err != nil {
 					return err
 				}
@@ -67,7 +88,7 @@ func (s *Service) LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopReq
 	memoReq := liveStopMemoRequest{SessionID: sessionID}
 	return s.liveStops.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameLiveStopMemoRequest, func(ctx context.Context) (serverapi.RuntimeLiveStopResponse, error) {
 		resp := serverapi.RuntimeLiveStopResponse{Status: serverapi.RuntimeLiveStopStatusIdle}
-		err := s.withRuntimeAccess(ctx, memoReq.SessionID.String(), func(engine *runtime.Engine) error {
+		err := s.withLiveExecutionRuntime(ctx, memoReq.SessionID, func(_ context.Context, engine *runtime.Engine) error {
 			stopped, err := engine.TryInterruptActiveRun()
 			if err != nil {
 				return err
@@ -77,7 +98,7 @@ func (s *Service) LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopReq
 			}
 			return nil
 		})
-		if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		if errors.Is(err, serverapi.ErrRuntimeUnavailable) || errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
 			return resp, nil
 		}
 		return resp, err
@@ -95,8 +116,8 @@ func (s *Service) LiveWait(ctx context.Context, req serverapi.RuntimeLiveWaitReq
 	var resp serverapi.RuntimeLiveWaitResponse
 	var waitHandle *runtime.LiveRunWaitHandle
 	var sessionName string
-	err = s.withRuntimeAccess(ctx, sessionID.String(), func(engine *runtime.Engine) error {
-		handle, err := engine.CaptureActiveRunResult(ctx)
+	err = s.withLiveExecutionRuntime(ctx, sessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
+		handle, err := engine.CaptureActiveRunResult(callbackCtx)
 		if errors.Is(err, runtime.ErrNoActiveLiveRun) {
 			return serverapi.ErrRuntimeNoActiveRun
 		}

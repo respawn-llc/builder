@@ -8,13 +8,11 @@ import (
 	"time"
 
 	"core/server/llm"
-	"core/server/runtime"
 	"core/server/session"
-	"core/server/tools"
+	"core/server/sessionruntime"
 	"core/shared/clientui"
 	"core/shared/rollbacktarget"
 	"core/shared/serverapi"
-	"core/shared/toolspec"
 )
 
 func TestServiceDormantTranscriptPagesPreserveRollbackLocatorAcrossCandidateFreeCompactions(t *testing.T) {
@@ -52,7 +50,7 @@ func TestServiceDormantTranscriptPagesPreserveRollbackLocatorAcrossCandidateFree
 			t.Fatalf("append history replacement %d: %v", index, err)
 		}
 	}
-	dormant := NewService(newTestSessionResolver(store), nil, nil)
+	dormant := NewService(newTestSessionResolver(store), nil, nil, nil)
 
 	dormantNewest := mustTranscriptPage(t, dormant, store.Meta().SessionID, nil, nil)
 	if dormantNewest.LatestRollbackCandidate == nil || *dormantNewest.LatestRollbackCandidate != locator {
@@ -84,7 +82,7 @@ func TestServiceDormantTranscriptPagesPreserveRollbackLocatorAcrossCandidateFree
 
 func TestServiceTranscriptReadsHonorCanceledContext(t *testing.T) {
 	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
-	service := NewService(newTestSessionResolver(store), nil, nil)
+	service := NewService(newTestSessionResolver(store), nil, nil, nil)
 	cursor := int64(1)
 	requests := map[string]serverapi.SessionTranscriptPageRequest{
 		"newest page": {SessionID: store.Meta().SessionID},
@@ -108,8 +106,8 @@ func TestServiceTranscriptReadsHonorCanceledContext(t *testing.T) {
 }
 
 func TestLiveRuntimeSnapshotReturnsActiveRunWithoutSessionStore(t *testing.T) {
-	store, engine, release, done := startBlockingRuntimeRun(t)
-	live := NewService(nil, newTestRuntimeResolver(engine), nil)
+	store, fixture, release, handle := startBlockingRuntimeRun(t)
+	live := NewService(nil, fixture.activity, fixture.authority, nil)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := live.GetSessionMainView(ctx, serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID}); !errors.Is(err, context.Canceled) {
@@ -121,57 +119,30 @@ func TestLiveRuntimeSnapshotReturnsActiveRunWithoutSessionStore(t *testing.T) {
 	}
 
 	release()
-	if err := <-done; err != nil {
+	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("submit user message: %v", err)
 	}
 }
 
-func startBlockingRuntimeRun(t *testing.T) (*session.Store, *runtime.Engine, func(), chan error) {
+func startBlockingRuntimeRun(t *testing.T) (*session.Store, sessionViewRuntimeFixture, func(), sessionruntime.ExecutionHandle) {
 	t.Helper()
 	dir := t.TempDir()
 	store := newSessionViewStore(t, dir, "ws", dir)
 	started := make(chan struct{})
-	releaseTool := make(chan struct{})
+	releaseModel := make(chan struct{})
 	var releaseOnce sync.Once
 	release := func() {
-		releaseOnce.Do(func() { close(releaseTool) })
+		releaseOnce.Do(func() { close(releaseModel) })
 	}
-	client := &serviceFakeLLM{responses: []llm.Response{
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working", Phase: llm.MessagePhaseCommentary},
-			ToolCalls: []llm.ToolCall{{
-				ID:    "call_shell_1",
-				Name:  string(toolspec.ToolExecCommand),
-				Input: []byte(`{"command":"pwd"}`),
-			}},
-			Usage: llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-	}}
-	engine, err := runtime.New(store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: serviceBlockingTool{started: started, release: releaseTool}}), runtime.Config{Model: "gpt-5"})
-	if err != nil {
-		t.Fatalf("new engine: %v", err)
-	}
-	t.Cleanup(func() {
-		release()
-		if err := engine.Close(); err != nil {
-			t.Errorf("close engine: %v", err)
-		}
-	})
-	done := make(chan error, 1)
-	go func() {
-		_, submitErr := engine.SubmitUserMessage(context.Background(), "run tools")
-		done <- submitErr
-	}()
+	fixture := newSessionViewRuntimeFixture(t, store, &serviceBlockingLLM{started: started, release: releaseModel})
+	t.Cleanup(release)
+	handle := fixture.startUserTurn(t, "run tools")
 	select {
 	case <-started:
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for active run")
 	}
-	return store, engine, release, done
+	return store, fixture, release, handle
 }
 
 func mustMainView(t *testing.T, svc *Service, sessionID string) clientui.RuntimeMainView {

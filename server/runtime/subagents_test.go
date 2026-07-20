@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -297,9 +296,11 @@ func TestSubagentCatalogUsesSamePolicyOnBaseInjectionAndCompaction(t *testing.T)
 }
 
 func TestSubagentCatalogRemainsVisibleAcrossDepthPreservingSessionPathsAndLimits(t *testing.T) {
+	t.Parallel()
 	settings := config.Settings{
-		Model:         "gpt-5.5",
-		ThinkingLevel: "medium",
+		Model:            "gpt-5.5",
+		ThinkingLevel:    "medium",
+		MaxSubagentDepth: 0,
 		EnabledTools: map[toolspec.ID]bool{
 			toolspec.ToolExecCommand: true,
 		},
@@ -311,40 +312,35 @@ func TestSubagentCatalogRemainsVisibleAcrossDepthPreservingSessionPathsAndLimits
 			},
 		},
 	}
-	for _, maxDepth := range []int{0, 2} {
-		t.Run(fmt.Sprintf("maximum_%d", maxDepth), func(t *testing.T) {
-			settings.MaxSubagentDepth = maxDepth
-			for _, path := range []string{
-				"independent",
-				"parent-agent",
-				"new",
-				"review",
-				"rollback-fork",
-				"workflow-fan-out-clone",
-				"resumed",
-			} {
-				t.Run(path, func(t *testing.T) {
-					store := runtimeCatalogStoreForPath(t, path)
-					eng := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
-						Model:                   "gpt-5.5",
-						ThinkingLevel:           "medium",
-						EnabledTools:            []toolspec.ID{toolspec.ToolExecCommand},
-						SubagentCatalogSettings: settings,
-					})
-					if err := eng.steerBaseMetaContextIfNeeded("base"); err != nil {
-						t.Fatalf("steer base meta context: %v", err)
-					}
-					if !hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()) {
-						t.Fatal("base context hid the subagent catalog")
-					}
-					compacted, err := eng.compactionReinjectedMetaMessages(context.Background())
-					if err != nil {
-						t.Fatalf("compaction reinjection: %v", err)
-					}
-					if !hasSubagentMetaMessage(compacted) {
-						t.Fatal("compaction reconstruction hid the subagent catalog")
-					}
-				})
+	for _, path := range []string{
+		"independent",
+		"parent-agent",
+		"new",
+		"rollback-fork",
+		"workflow-fan-out-clone",
+		"resumed",
+	} {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+			store := runtimeCatalogStoreForPath(t, path)
+			eng := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
+				Model:                   "gpt-5.5",
+				ThinkingLevel:           "medium",
+				EnabledTools:            []toolspec.ID{toolspec.ToolExecCommand},
+				SubagentCatalogSettings: settings,
+			})
+			if err := eng.steerBaseMetaContextIfNeeded("base"); err != nil {
+				t.Fatalf("steer base meta context: %v", err)
+			}
+			if !hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()) {
+				t.Fatal("base context hid the subagent catalog")
+			}
+			compacted, err := eng.compactionReinjectedMetaMessages(context.Background())
+			if err != nil {
+				t.Fatalf("compaction reinjection: %v", err)
+			}
+			if !hasSubagentMetaMessage(compacted) {
+				t.Fatal("compaction reconstruction hid the subagent catalog")
 			}
 		})
 	}

@@ -303,30 +303,6 @@ describe("native bridge capabilities", () => {
     });
   });
 
-  it("keeps browser workflow delete confirmation events as no-ops", async () => {
-    const bridge = createBrowserNativeBridge();
-    const handler = vi.fn();
-
-    const unlisten = await bridge.workflowEditor.onGraphDeleteConfirmed(handler);
-    await bridge.workflowEditor.confirmGraphDelete({ requestID: "delete-1" });
-    unlisten();
-
-    expect(handler).not.toHaveBeenCalled();
-  });
-
-  it("dispatches browser workflow deletion events for fallback dialogs", async () => {
-    const bridge = createBrowserNativeBridge();
-    const handler = vi.fn();
-
-    const unlisten = await bridge.workflowDeletion.onDeleted(handler);
-    await bridge.workflowDeletion.notifyDeleted({ workflowID: "workflow-1" });
-    unlisten();
-    await bridge.workflowDeletion.notifyDeleted({ workflowID: "workflow-2" });
-
-    expect(handler).toHaveBeenCalledOnce();
-    expect(handler).toHaveBeenCalledWith({ workflowID: "workflow-1" });
-  });
-
   it("dispatches browser project deletion events for fallback dialogs", async () => {
     const bridge = createBrowserNativeBridge();
     const handler = vi.fn();

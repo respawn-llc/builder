@@ -158,7 +158,7 @@ type connectionState struct {
 	attachedWorkspaceRoot string
 	attachedSession       string
 	runtimeOwnerID        string
-	ownedRuntimes         map[string]struct{}
+	ownedRuntimes         map[serverapi.SessionRuntimeAttachment]struct{}
 }
 
 type gatewaySubscriptionHandler func(g *Gateway, conn rpcwire.Conn, ctx context.Context, state *connectionState, route apicontract.Route, req protocol.Request)
@@ -273,12 +273,11 @@ func (g *Gateway) cleanupConnectionRuntimes(state *connectionState) {
 		return
 	}
 	ownerID := strings.TrimSpace(state.runtimeOwnerID)
-	for _, sessionID := range owned {
+	for _, attachment := range owned {
 		ctx, cancel := context.WithTimeout(context.Background(), gatewayRuntimeCleanupTimeout)
 		_, _ = client.ReleaseSessionRuntime(ctx, serverapi.SessionRuntimeReleaseRequest{
 			ClientRequestID: uuid.NewString(),
-			SessionID:       sessionID,
-			OnlyIfIdle:      true,
+			Attachment:      attachment,
 			DropOwner:       true,
 			ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle,
 			OwnerID:         ownerID,

@@ -160,7 +160,7 @@ func TestLatestCommittedAssistantFinalAnswerFailsOnMalformedRelevantEvents(t *te
 				Phase:   llm.MessagePhaseFinal,
 				Content: "older answer",
 			})
-			if _, err := store.AppendReplayEvents([]session.ReplayEvent{{
+			if _, _, err := store.AppendReplayEvents([]session.ReplayEvent{{
 				StepID:  "step",
 				Kind:    tt.kind,
 				Payload: []byte(tt.payload),

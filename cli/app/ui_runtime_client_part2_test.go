@@ -9,8 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"core/server/registry"
-	"core/server/runtimecontrol"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -20,7 +18,7 @@ import (
 
 func TestRuntimeClientMainViewDoesNotRefreshCachedSnapshotBehindUIBack(t *testing.T) {
 	reads := &countingSessionViewClient{view: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1"}}}
-	controls := runtimecontrol.NewService(registry.NewRuntimeRegistry())
+	controls := newUnavailableRuntimeControlService()
 	runtimeClient := newTestSessionRuntimeClient(reads, controls)
 	runtimeClient.storeMainView(clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1"}})
 	notified := make(chan error, 1)

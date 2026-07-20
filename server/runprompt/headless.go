@@ -4,24 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
-	"core/server/auth"
 	"core/server/launch"
 	"core/server/metadata"
 	"core/server/requestmemo"
 	"core/server/runlog"
 	"core/server/runtime"
-	"core/server/runtimewire"
 	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
-	shelltool "core/server/tools/shell"
 	"core/shared/apicontract"
-	"core/shared/clientui"
 	"core/shared/serverapi"
-	"core/shared/transcriptdiag"
 
 	"github.com/google/uuid"
 )
@@ -40,21 +34,10 @@ type promptHistoryStore interface {
 }
 
 type HeadlessBootstrap struct {
-	SessionLaunch   *sessionlaunch.Service
-	AuthManager     *auth.Manager
-	FastModeState   *runtime.FastModeState
-	Background      *shelltool.Manager
-	RuntimeRegistry interface {
-		PublishRuntimeEvent(sessionID string, evt runtime.Event)
-		PublishRuntimeEventForEngine(sessionID string, engine *runtime.Engine, evt runtime.Event)
-		PublishRuntimeReadModelUpdate(sessionID string, update clientui.RuntimeReadModelUpdate)
-	}
-	PromptHistory  promptHistoryStore
-	SessionRuntime *sessionruntime.Service
-	// PersistenceRoot is the absolute persistence root that owns model-visible
-	// global context (AGENTS.md, system prompt, skills). Empty falls back to
-	// ~/.kent inside the runtime resolvers.
-	PersistenceRoot string
+	SessionLaunch    *sessionlaunch.Service
+	FastModeState    *runtime.FastModeState
+	PromptHistory    promptHistoryStore
+	RuntimeAuthority *sessionruntime.Authority
 }
 
 func NewInProcessRunPromptClient(boot HeadlessBootstrap) apicontract.RunPromptService {
@@ -74,12 +57,8 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 		return nil, errors.New("headless session launch service is required")
 	}
 	selectedSessionID, openingExisting := req.Intent.SessionID()
-	if openingExisting && l.boot.SessionRuntime != nil {
-		active, err := l.boot.SessionRuntime.HasBlockingRuntimeActivity(ctx, selectedSessionID.String())
-		if err != nil {
-			return nil, err
-		}
-		if active {
+	if openingExisting && l.boot.RuntimeAuthority != nil {
+		if _, active := l.boot.RuntimeAuthority.SessionExecution(selectedSessionID); active {
 			return nil, ErrSessionRunning
 		}
 	}
@@ -95,7 +74,7 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 		return nil, err
 	}
 	plan := result.Plan
-	if plan.Store.Meta().Goal != nil {
+	if plan.Goal != nil {
 		return nil, fmt.Errorf("%w", ErrHeadlessGoalSession)
 	}
 	runtimePlan, err := l.prepareRuntime(ctx, plan, progress)
@@ -120,133 +99,121 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 }
 
 type headlessRuntimePlan struct {
-	sessionRuntime *sessionruntime.Service
-	sessionID      string
-	engine         *runtime.Engine
-	diagLogger     *runlog.RunLogger
-	eventBridge    *runtimewire.EventBridge
-	close          func()
+	handle     sessionruntime.ExecutionHandle
+	sessionID  string
+	submission chan string
+	content    string
+	name       string
+	onActive   func()
 }
 
-func (p *headlessRuntimePlan) CloseWithFailure(failed bool) {
-	if p == nil || p.close == nil {
-		return
+func (p *headlessRuntimePlan) CloseWithFailure(failed bool) error {
+	if p == nil || p.handle == nil {
+		return nil
 	}
-	if failed && p.engine != nil {
-		p.engine.FailQueuedUserMessages(runtime.QueuedUserMessageFailureClosing)
+	var stopErr error
+	if failed {
+		stopErr = p.handle.Stop(context.Background())
 	}
-	p.close()
+	return errors.Join(stopErr, p.handle.Close(context.Background()))
 }
 
 func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch.SessionPlan, progress serverapi.RunPromptProgressSink) (*headlessRuntimePlan, error) {
-	if l.boot.SessionRuntime == nil {
-		return nil, errors.New("headless run prompt requires a session runtime service")
+	if l.boot.RuntimeAuthority == nil {
+		return nil, errors.New("headless run prompt requires a session runtime authority")
 	}
-	sessionID := plan.Store.Meta().SessionID
-	ownerID := uuid.NewString()
-	diagLogger, err := runlog.NewRunLogger(plan.Store.Dir(), func(diag runlog.RunLoggerDiagnostic) {
-		if progress == nil {
-			return
-		}
-		progress.PublishRunPromptProgress(serverapi.RunPromptProgress{
-			Kind:    serverapi.RunPromptProgressKindRunLoggingFailed,
-			Failure: runPromptFailure(diag.Message),
-		})
+	sessionID := plan.Descriptor.SessionID()
+	workdir := headlessRuntimeWorkdir(plan)
+	startLogLines := []string{
+		fmt.Sprintf("app.run_prompt.start session_id=%s workspace=%s workdir=%s model=%s", sessionID, plan.WorkspaceRoot, workdir, plan.ActiveSettings.Model),
+		fmt.Sprintf("config.settings path=%s created=%t", plan.Source.SettingsPath, plan.Source.CreatedDefaultConfig),
+	}
+	for _, line := range runlog.FormatConfigSourceLines(plan.Source.Sources) {
+		startLogLines = append(startLogLines, "config.source "+line)
+	}
+	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
+		Settings:      plan.ActiveSettings,
+		EnabledTools:  plan.EnabledTools,
+		Workdir:       workdir,
+		Sources:       plan.Source.Sources,
+		Headless:      true,
+		FastMode:      l.boot.FastModeState,
+		StartLogLines: startLogLines,
+		OnLoggingFailure: func(message string) {
+			if progress != nil {
+				progress.PublishRunPromptProgress(serverapi.RunPromptProgress{
+					Kind:    serverapi.RunPromptProgressKindRunLoggingFailed,
+					Failure: runPromptFailure(message),
+				})
+			}
+		},
+		OnEvent: func(evt runtime.Event) {
+			PublishRunPromptProgress(progress, evt)
+		},
 	})
 	if err != nil {
 		return nil, err
 	}
-	workdir := headlessRuntimeWorkdir(plan)
-	diagLogger.Logf("app.run_prompt.start session_id=%s workspace=%s workdir=%s model=%s", sessionID, plan.WorkspaceRoot, workdir, plan.ActiveSettings.Model)
-	diagLogger.Logf("config.settings path=%s created=%t", plan.Source.SettingsPath, plan.Source.CreatedDefaultConfig)
-	for _, line := range runlog.FormatConfigSourceLines(plan.Source.Sources) {
-		diagLogger.Logf("config.source %s", line)
+	prepared := &headlessRuntimePlan{
+		sessionID:  sessionID.String(),
+		submission: make(chan string),
 	}
-	var eventBridge *runtimewire.EventBridge
-	var acquiredEngine *runtime.Engine
-	build := func(ctx context.Context) (sessionruntime.RuntimeBuildResult, error) {
-		engineLogger, err := runlog.NewRunLogger(plan.Store.Dir(), nil)
-		if err != nil {
-			return sessionruntime.RuntimeBuildResult{}, err
-		}
-		runtimeEvents := runtimewire.NewOrderedRuntimeEventPublisher(sessionID, l.boot.RuntimeRegistry)
-		publishRuntimeEvent := func(evt runtime.Event) {
-			runtimeEvents.Publish(evt)
-		}
-		bindRuntimeEventEngine := func(engine *runtime.Engine) {
-			acquiredEngine = engine
-			runtimeEvents.BindEngine(engine)
-		}
-		flushRuntimeEventsAfterResolve := func() {
-			runtimeEvents.FlushAfterResolve()
-		}
-		wiring, err := runtimewire.NewRuntimeWiringWithBackground(plan.Store, plan.ActiveSettings, plan.EnabledTools, workdir, l.boot.AuthManager, engineLogger, l.boot.Background, runtimewire.RuntimeWiringOptions{
-			Headless:        true,
-			FastMode:        l.boot.FastModeState,
-			Sources:         plan.Source.Sources,
-			GlobalConfigDir: l.boot.PersistenceRoot,
-			StepLifecycle:   runtimewire.NewStepLifecycleSink(sessionID, l.boot.RuntimeRegistry),
-			OnEvent: func(evt runtime.Event) {
-				engineLogger.Logf("%s", runlog.FormatRuntimeEvent(evt))
-				if transcriptdiag.Enabled(plan.ActiveSettings.Debug, os.Getenv) {
-					engineLogger.Logf("%s", runlog.FormatTranscriptRuntimeEventDiagnostic(sessionID, evt))
+	handle, err := l.boot.RuntimeAuthority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
+		Descriptor: plan.Descriptor,
+		Runtime:    &runtimePlan,
+		Resource:   sessionruntime.ReplaceAgentResource{},
+		Ask: func(_ context.Context, _ sessionruntime.ExecutionScope, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+			return RunPromptAskHandler(req)
+		},
+		Runner: func(runCtx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
+			var prompt string
+			select {
+			case prompt = <-prepared.submission:
+			case <-runCtx.Done():
+				return context.Cause(runCtx)
+			}
+			return bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
+				var waitHandle *runtime.LiveRunWaitHandle
+				var waitStartErr error
+				assistant, submitErr := engine.SubmitUserMessageWithHooks(engineCtx, prompt, func() {
+					waitHandle, waitStartErr = engine.CaptureActiveRunResult(engineCtx)
+					if waitStartErr == nil && prepared.onActive != nil {
+						prepared.onActive()
+					}
+				}, nil)
+				prepared.content = assistant.Content
+				prepared.name = engine.SessionName()
+				if waitHandle != nil {
+					result, waitErr := waitHandle.Wait()
+					if waitErr == nil {
+						prepared.content = result.AssistantMessage.Content
+					} else if submitErr == nil && !errors.Is(waitErr, runtime.ErrLiveRunNoFinalAnswer) {
+						submitErr = waitErr
+					}
+				} else if waitStartErr != nil && submitErr == nil {
+					submitErr = waitStartErr
 				}
-				publishRuntimeEvent(evt)
-				PublishRunPromptProgress(progress, evt)
-			},
-		})
-		if err != nil {
-			_ = engineLogger.Close()
-			return sessionruntime.RuntimeBuildResult{}, err
-		}
-		bindRuntimeEventEngine(wiring.Engine)
-		if wiring.AskBroker != nil {
-			wiring.AskBroker.SetAskHandler(RunPromptAskHandler)
-		}
-		eventBridge = wiring.EventBridge
-		var localRebind func(string) error
-		if wiring.LocalTools != nil {
-			localRebind = wiring.LocalTools.Rebind
-		}
-		return sessionruntime.RuntimeBuildResult{
-			Engine:       wiring.Engine,
-			LocalRebind:  localRebind,
-			AfterResolve: flushRuntimeEventsAfterResolve,
-			Close: func() {
-				_ = wiring.Close()
-				_ = engineLogger.Close()
-			},
-		}, nil
-	}
-	releaseRuntime, err := l.boot.SessionRuntime.RecreateRuntimeRejectingActiveRun(ctx, sessionID, ownerID, build)
+				return submitErr
+			})
+		},
+	})
 	if err != nil {
-		_ = diagLogger.Close()
 		if errors.Is(err, sessionruntime.ErrSessionRunActive) {
 			return nil, ErrSessionRunning
 		}
 		return nil, err
 	}
-	return &headlessRuntimePlan{
-		sessionRuntime: l.boot.SessionRuntime,
-		sessionID:      sessionID,
-		engine:         acquiredEngine,
-		diagLogger:     diagLogger,
-		eventBridge:    eventBridge,
-		close: func() {
-			_ = releaseRuntime(context.Background())
-			_ = diagLogger.Close()
-		},
-	}, nil
+	prepared.handle = handle
+	return prepared, nil
 }
 
 func headlessRuntimeWorkdir(plan launch.SessionPlan) string {
-	meta := plan.Store.Meta()
-	if meta.WorktreeReminder != nil {
-		effectiveCwd := strings.TrimSpace(meta.WorktreeReminder.EffectiveCwd)
+	if plan.WorktreeReminder != nil {
+		effectiveCwd := strings.TrimSpace(plan.WorktreeReminder.EffectiveCwd)
 		if effectiveCwd != "" {
 			return effectiveCwd
 		}
-		worktreePath := strings.TrimSpace(meta.WorktreeReminder.WorktreePath)
+		worktreePath := strings.TrimSpace(plan.WorktreeReminder.WorktreePath)
 		if worktreePath != "" {
 			return worktreePath
 		}
@@ -261,47 +228,26 @@ type headlessPromptRuntime struct {
 	sessionStarted *serverapi.RunPromptSessionStarted
 }
 
-func (r *headlessPromptRuntime) submitUserMessage(ctx context.Context, prompt string) (serverapi.RunPromptResponse, uint64, error) {
-	var content string
-	var sessionName string
-	var err error
-	if r.plan.engine == nil {
-		err = errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("headless session %q has no acquired runtime", r.plan.sessionID))
-	} else {
-		err = r.plan.sessionRuntime.RunOnAcquiredRuntime(ctx, r.plan.sessionID, r.plan.engine, func(runCtx context.Context) error {
-			var waitHandle *runtime.LiveRunWaitHandle
-			var waitStartErr error
-			assistant, submitErr := r.plan.engine.SubmitUserMessageWithHooks(runCtx, prompt, func() {
-				waitHandle, waitStartErr = r.plan.engine.CaptureActiveRunResult(runCtx)
-				if waitStartErr == nil {
-					r.publishSessionStarted()
-				}
-			}, nil)
-			content = assistant.Content
-			sessionName = r.plan.engine.SessionName()
-			if waitHandle != nil {
-				result, waitErr := waitHandle.Wait()
-				if waitErr == nil {
-					content = result.AssistantMessage.Content
-				} else if submitErr == nil && !errors.Is(waitErr, runtime.ErrLiveRunNoFinalAnswer) {
-					submitErr = waitErr
-				}
-			} else if waitStartErr != nil && submitErr == nil {
-				submitErr = waitStartErr
-			}
-			return submitErr
-		})
+func (r *headlessPromptRuntime) submitUserMessage(ctx context.Context, prompt string) (serverapi.RunPromptResponse, error) {
+	if r.plan == nil || r.plan.handle == nil {
+		return serverapi.RunPromptResponse{}, errors.Join(serverapi.ErrRuntimeUnavailable, errors.New("headless runtime is unavailable"))
 	}
-	var dropped uint64
-	if r.plan.eventBridge != nil {
-		dropped = r.plan.eventBridge.Dropped.Load()
+	r.plan.onActive = r.publishSessionStarted
+	select {
+	case r.plan.submission <- prompt:
+	case <-ctx.Done():
+		return serverapi.RunPromptResponse{}, context.Cause(ctx)
+	}
+	_, err := r.plan.handle.Wait(ctx)
+	if err != nil && context.Cause(ctx) != nil {
+		err = errors.Join(err, r.plan.handle.Stop(context.Background()))
 	}
 	return serverapi.RunPromptResponse{
 		SessionID:   r.plan.sessionID,
-		SessionName: sessionName,
-		Result:      content,
+		SessionName: r.plan.name,
+		Result:      r.plan.content,
 		Warnings:    append([]string(nil), r.warnings...),
-	}, dropped, err
+	}, err
 }
 
 func (r *headlessPromptRuntime) publishSessionStarted() {

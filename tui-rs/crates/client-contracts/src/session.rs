@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use serde::{Deserialize, Serialize};
 
 use crate::project::ProjectBinding;
@@ -108,21 +110,40 @@ pub struct SessionRuntimeActivateRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct SessionRuntimeActivateResponse {}
+#[serde(deny_unknown_fields)]
+pub struct SessionRuntimeAttachment {
+    pub session_id: String,
+    pub generation: NonZeroU64,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionRuntimeActivateResponse {
+    pub attachment: SessionRuntimeAttachment,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SessionRuntimeReleaseRequest {
     pub client_request_id: String,
-    pub session_id: String,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub only_if_idle: bool,
+    pub attachment: SessionRuntimeAttachment,
     #[serde(default, skip_serializing_if = "is_false")]
     pub drop_owner: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_policy: Option<SessionRuntimeReleaseClosePolicy>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub owner_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionRuntimeReleaseClosePolicy {
+    CloseIfIdle,
+    DetachOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SessionRuntimeReleaseResponse {
     #[serde(default)]
     pub released: bool,

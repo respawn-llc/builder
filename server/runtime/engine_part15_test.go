@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -19,7 +20,16 @@ import (
 	"core/shared/toolspec"
 )
 
+func seedCompactionMessages(t *testing.T, store *session.Store, message llm.Message) {
+	t.Helper()
+	events := slices.Repeat([]session.ReplayEvent{{Kind: "message", Payload: mustJSON(message)}}, 128)
+	if _, receipt, err := store.AppendReplayEvents(events); err != nil || !receipt.Committed {
+		t.Fatalf("seed compaction messages receipt=%+v error=%v", receipt, err)
+	}
+}
+
 func TestRemoteCompactionUsesSublinearPreciseTokenCountCalls(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	maxItemsSeen := 0
@@ -41,12 +51,8 @@ func TestRemoteCompactionUsesSublinearPreciseTokenCountCalls(t *testing.T) {
 		},
 	}
 
+	seedCompactionMessages(t, store, llm.Message{Role: llm.RoleAssistant, Content: "a"})
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
-	for i := 0; i < 600; i++ {
-		if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Content: "a"}})); err != nil {
-			t.Fatalf("append assistant message %d: %v", i, err)
-		}
-	}
 
 	if err := eng.CompactContext(context.Background(), ""); err != nil {
 		t.Fatalf("compact: %v", err)
@@ -61,6 +67,7 @@ func TestRemoteCompactionUsesSublinearPreciseTokenCountCalls(t *testing.T) {
 }
 
 func TestLocalCompactionCarryoverUsesSublinearPreciseTokenCountCalls(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	maxItemsSeen := 0
@@ -76,16 +83,12 @@ func TestLocalCompactionCarryoverUsesSublinearPreciseTokenCountCalls(t *testing.
 		},
 	}
 
+	seedCompactionMessages(t, store, llm.Message{Role: llm.RoleUser, Content: "u"})
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:               "gpt-5",
 		ContextWindowTokens: 400_000,
 		CompactionMode:      "local",
 	})
-	for i := 0; i < 512; i++ {
-		if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "u"}})); err != nil {
-			t.Fatalf("append user message %d: %v", i, err)
-		}
-	}
 
 	if err := eng.CompactContext(context.Background(), ""); err != nil {
 		t.Fatalf("compact: %v", err)
@@ -431,30 +434,30 @@ func TestCommittedHistoryReplacementPreventsStaleUsageFromLaterMetadataPersisten
 		return usage != nil && usage.InputTokens == compactedUsage.InputTokens
 	}, finalUsageErr)
 	usageReceipt, usageErr := eng.recordLastUsage(compactedUsage)
-	if usageReceipt.Committed || !errors.Is(usageErr, finalUsageErr) {
-		t.Fatalf("record compacted usage receipt=%+v error=%v, want uncommitted observer failure", usageReceipt, usageErr)
+	if !usageReceipt.Committed || !errors.Is(usageErr, finalUsageErr) {
+		t.Fatalf("record compacted usage receipt=%+v error=%v, want committed observer failure", usageReceipt, usageErr)
 	}
 	if err := store.SetName("post-compaction metadata write"); err != nil {
 		t.Fatalf("persist unrelated metadata: %v", err)
 	}
-	if usage := store.Meta().UsageState; usage != nil {
-		t.Fatalf("later metadata write retained pre-compaction usage: %+v", usage)
+	if usage := store.Meta().UsageState; usage == nil || usage.InputTokens != compactedUsage.InputTokens {
+		t.Fatalf("later metadata write lost compacted usage: %+v", usage)
 	}
 
 	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	if usage := reopenedStore.Meta().UsageState; usage != nil {
-		t.Fatalf("reopened metadata restored pre-compaction usage: %+v", usage)
+	if usage := reopenedStore.Meta().UsageState; usage == nil || usage.InputTokens != compactedUsage.InputTokens {
+		t.Fatalf("reopened metadata lost compacted usage: %+v", usage)
 	}
 	reopened := mustNewExecTestEngine(t, reopenedStore, &fakeClient{}, Config{Model: "gpt-5"})
 	reopenedUsage := reopened.ContextUsage()
 	if reopenedUsage.UsedTokens <= 0 || reopenedUsage.UsedTokens >= oldUsage.InputTokens {
 		t.Fatalf("reopened context usage = %+v, want compacted active-history estimate", reopenedUsage)
 	}
-	if reopenedUsage.HasCacheHitPercentage {
-		t.Fatalf("reopened cache usage restored stale pre-compaction counters: %+v", reopenedUsage)
+	if !reopenedUsage.HasCacheHitPercentage || reopenedUsage.CacheHitPercent != 100 {
+		t.Fatalf("reopened cache usage = %+v, want committed cumulative counters", reopenedUsage)
 	}
 }
 
@@ -962,8 +965,8 @@ func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) 
 	if liveUsage.UsedTokens != fixture.client.inputTokenCount {
 		t.Fatalf("live context usage = %+v, want exact compacted input %d", liveUsage, fixture.client.inputTokenCount)
 	}
-	if usage := fixture.store.Meta().UsageState; usage != nil {
-		t.Fatalf("failed usage persistence leaked into Store metadata: %+v", usage)
+	if usage := fixture.store.Meta().UsageState; usage == nil || usage.InputTokens != fixture.client.inputTokenCount {
+		t.Fatalf("committed compacted usage = %+v, want input %d", usage, fixture.client.inputTokenCount)
 	}
 
 	reopenedStore, err := runtimeTestSessionPersistence.Open(fixture.store.Dir())
@@ -975,8 +978,8 @@ func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) 
 	if reopenedUsage.UsedTokens <= 0 || reopenedUsage.UsedTokens >= oldUsage.InputTokens {
 		t.Fatalf("reopened context usage = %+v, want compacted active-history estimate", reopenedUsage)
 	}
-	if reopenedUsage.HasCacheHitPercentage {
-		t.Fatalf("reopened cache usage restored an uncommitted metadata mutation: %+v", reopenedUsage)
+	if !reopenedUsage.HasCacheHitPercentage || reopenedUsage.CacheHitPercent != 100 {
+		t.Fatalf("reopened cache usage = %+v, want committed cumulative counters", reopenedUsage)
 	}
 }
 
@@ -999,8 +1002,8 @@ func TestCompactNowInvalidatesPromptSnapshotsWhenStaleMetadataObserverFails(t *t
 	if !ok || locked.HasSystemPrompt || locked.SystemPrompt != "" || locked.HasReviewerPrompt || locked.ReviewerPrompt != "" {
 		t.Fatalf("live prompt snapshots after committed replacement = %+v, want stale", locked)
 	}
-	if stored := fixture.store.Meta().Locked; stored == nil || !stored.HasSystemPrompt || !stored.HasReviewerPrompt {
-		t.Fatalf("stale metadata observer did not exercise rollback: %+v", stored)
+	if stored := fixture.store.Meta().Locked; stored == nil || stored.HasSystemPrompt || stored.HasReviewerPrompt {
+		t.Fatalf("committed stale prompt metadata = %+v", stored)
 	}
 	request, requestErr := fixture.engine.buildRequest(context.Background(), "step-next", false)
 	if requestErr != nil {

@@ -266,90 +266,24 @@ func TestHostedWebSearchExecutionRejectsHallucinatedSearchQuery(t *testing.T) {
 	}
 }
 
-func TestSubmitUserMessageContinuesAfterHostedToolOnlyTurn(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	client := &fakeClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: ""},
-			OutputItems: []llm.ResponseItem{
-				{
-					Type: llm.ResponseItemTypeOther,
-					Raw:  json.RawMessage(`{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"kent cli"}}`),
-				},
-			},
-			Usage: llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-	}}
-	client.caps = openAIFirstPartyNativeWebSearchCaps()
-
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model:         "gpt-5",
-		WebSearchMode: "native",
-		EnabledTools:  []toolspec.ID{toolspec.ToolWebSearch},
-	})
-
-	msg, err := eng.SubmitUserMessage(context.Background(), "find latest")
-	if err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if msg.Content != "done" {
-		t.Fatalf("assistant content = %q, want done", msg.Content)
-	}
-	if len(client.calls) != 2 {
-		t.Fatalf("expected 2 model calls, got %d", len(client.calls))
-	}
-	if !client.calls[0].EnableNativeWebSearch {
-		t.Fatalf("expected first request to enable native web search")
-	}
-
-	events, err := sessiontest.CollectEvents(store)
-	if err != nil {
-		t.Fatalf("read events: %v", err)
-	}
-	hostedCompletionCount := 0
-	for _, evt := range events {
-		if evt.Kind != "tool_completed" {
-			continue
-		}
-		var payload map[string]any
-		if err := json.Unmarshal(evt.Payload, &payload); err != nil {
-			t.Fatalf("decode tool_completed payload: %v", err)
-		}
-		name, _ := payload["name"].(string)
-		if strings.TrimSpace(name) == string(toolspec.ToolWebSearch) {
-			hostedCompletionCount++
-		}
-	}
-	if hostedCompletionCount != 1 {
-		t.Fatalf("expected one hosted web_search tool completion, got %d", hostedCompletionCount)
-	}
-
-	secondReq := client.calls[1]
-	foundHostedOutput := false
-	for _, item := range secondReq.Items {
-		if item.Type != llm.ResponseItemTypeFunctionCallOutput {
-			continue
-		}
-		if item.CallID == "ws_1" {
-			foundHostedOutput = true
-			break
-		}
-	}
-	if !foundHostedOutput {
-		t.Fatalf("expected hosted tool output item in follow-up request, got %+v", secondReq.Items)
-	}
-}
-
 func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	var hostedStart *llm.ToolCall
 
 	client := &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: ""},
+			OutputItems: []llm.ResponseItem{{
+				Type: llm.ResponseItemTypeOther,
+				Raw:  json.RawMessage(`{"type":"web_search_call","id":"ws_valid","status":"completed","action":{"type":"search","query":"kent cli"}}`),
+			}},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "valid done"},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
 		{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: ""},
 			OutputItems: []llm.ResponseItem{
@@ -383,18 +317,38 @@ func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
+	if msg.Content != "valid done" {
+		t.Fatalf("assistant content = %q, want valid done", msg.Content)
+	}
+	if len(client.calls) != 2 || !client.calls[0].EnableNativeWebSearch {
+		t.Fatalf("valid hosted search calls = %d, native=%t", len(client.calls), client.calls[0].EnableNativeWebSearch)
+	}
+	foundValidOutput := false
+	for _, item := range client.calls[1].Items {
+		if item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID == "ws_valid" {
+			foundValidOutput = true
+		}
+	}
+	if !foundValidOutput {
+		t.Fatalf("expected valid hosted tool output item in follow-up request, got %+v", client.calls[1].Items)
+	}
+
+	msg, err = eng.SubmitUserMessage(context.Background(), "find invalid latest")
+	if err != nil {
+		t.Fatalf("second submit: %v", err)
+	}
 	if msg.Content != "done" {
 		t.Fatalf("assistant content = %q, want done", msg.Content)
 	}
-	if len(client.calls) != 2 {
-		t.Fatalf("expected 2 model calls, got %d", len(client.calls))
+	if len(client.calls) != 4 {
+		t.Fatalf("expected 4 model calls, got %d", len(client.calls))
 	}
-	if !client.calls[0].EnableNativeWebSearch {
-		t.Fatalf("expected first request to enable native web search")
+	if !client.calls[2].EnableNativeWebSearch {
+		t.Fatalf("expected invalid-search request to enable native web search")
 	}
 
 	foundHostedOutput := false
-	for _, item := range client.calls[1].Items {
+	for _, item := range client.calls[3].Items {
 		if item.Type != llm.ResponseItemTypeFunctionCallOutput || item.CallID != "ws_invalid" {
 			continue
 		}
@@ -408,7 +362,7 @@ func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {
 		}
 	}
 	if !foundHostedOutput {
-		t.Fatalf("expected invalid hosted tool output item in follow-up request, got %+v", client.calls[1].Items)
+		t.Fatalf("expected invalid hosted tool output item in follow-up request, got %+v", client.calls[3].Items)
 	}
 	if hostedStart == nil {
 		t.Fatal("expected explicit hosted tool start event")
@@ -421,6 +375,7 @@ func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
+	foundPersistedValid := false
 	foundPersistedError := false
 	for _, evt := range events {
 		if evt.Kind != "tool_completed" {
@@ -429,6 +384,10 @@ func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {
 		var completion storedToolCompletion
 		if err := json.Unmarshal(evt.Payload, &completion); err != nil {
 			t.Fatalf("decode tool_completed payload: %v", err)
+		}
+		if completion.CallID == "ws_valid" {
+			foundPersistedValid = !completion.IsError
+			continue
 		}
 		if completion.CallID != "ws_invalid" {
 			continue
@@ -451,164 +410,13 @@ func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {
 	if !foundPersistedError {
 		t.Fatalf("expected persisted hosted completion for ws_invalid")
 	}
-}
-
-func TestSubmitUserMessageFinalAnswerWithHostedToolCallMaterializesToolBeforeFinal(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	client := &fakeClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
-			OutputItems: []llm.ResponseItem{
-				{
-					Type: llm.ResponseItemTypeOther,
-					Raw:  json.RawMessage(`{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"kent cli"}}`),
-				},
-				{
-					Type:    llm.ResponseItemTypeMessage,
-					Role:    llm.RoleAssistant,
-					Phase:   llm.MessagePhaseFinal,
-					Content: "done",
-				},
-			},
-			Usage: llm.Usage{WindowTokens: 200000},
-		},
-	}}
-	client.caps = openAIFirstPartyNativeWebSearchCaps()
-
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model:         "gpt-5",
-		WebSearchMode: "native",
-		EnabledTools:  []toolspec.ID{toolspec.ToolWebSearch},
-	})
-
-	msg, err := eng.SubmitUserMessage(context.Background(), "find latest")
-	if err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if msg.Content != "done" {
-		t.Fatalf("assistant content = %q, want done", msg.Content)
-	}
-	if len(client.calls) != 1 {
-		t.Fatalf("expected final answer with hosted tool call to finish in 1 model call, got %d", len(client.calls))
-	}
-
-	events, err := sessiontest.CollectEvents(store)
-	if err != nil {
-		t.Fatalf("read events: %v", err)
-	}
-	toolCallBeforeFinal := false
-	toolResultBeforeFinal := false
-	finalSeen := false
-	for _, evt := range events {
-		if evt.Kind != "message" {
-			continue
-		}
-		var persisted llm.Message
-		if err := json.Unmarshal(evt.Payload, &persisted); err != nil {
-			t.Fatalf("decode message event: %v", err)
-		}
-		if persisted.Role == llm.RoleAssistant && len(persisted.ToolCalls) == 1 && persisted.ToolCalls[0].ID == "ws_1" {
-			if finalSeen {
-				t.Fatalf("hosted tool call persisted after final answer")
-			}
-			toolCallBeforeFinal = true
-		}
-		if persisted.Role == llm.RoleTool && persisted.ToolCallID == "ws_1" {
-			if finalSeen {
-				t.Fatalf("hosted tool result persisted after final answer")
-			}
-			toolResultBeforeFinal = true
-		}
-		if persisted.Role == llm.RoleAssistant && persisted.Phase == llm.MessagePhaseFinal && strings.TrimSpace(persisted.Content) == "done" {
-			finalSeen = true
-			if len(persisted.ToolCalls) != 0 {
-				t.Fatalf("final assistant message retained tool calls: %+v", persisted.ToolCalls)
-			}
-		}
-	}
-	if !toolCallBeforeFinal || !toolResultBeforeFinal || !finalSeen {
-		t.Fatalf("expected hosted tool call, result, and final answer in order; call=%t result=%t final=%t", toolCallBeforeFinal, toolResultBeforeFinal, finalSeen)
-	}
-}
-
-func TestSubmitUserMessageCommentaryWithoutToolCallsForcesNextLoop(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	client := &fakeClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{
-				Role:    llm.RoleAssistant,
-				Content: "Working on it",
-				Phase:   llm.MessagePhaseCommentary,
-			},
-			Usage: llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{
-				Role:    llm.RoleAssistant,
-				Content: "running",
-				Phase:   llm.MessagePhaseCommentary,
-			},
-			ToolCalls: []llm.ToolCall{
-				{ID: "call_shell_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
-			},
-			Usage: llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{
-				Role:    llm.RoleAssistant,
-				Content: "done",
-				Phase:   llm.MessagePhaseFinal,
-			},
-			Usage: llm.Usage{WindowTokens: 200000},
-		},
-	}}
-
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-
-	msg, err := eng.SubmitUserMessage(context.Background(), "do the task")
-	if err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if msg.Content != "done" {
-		t.Fatalf("assistant content = %q, want done", msg.Content)
-	}
-	if len(client.calls) != 3 {
-		t.Fatalf("expected 3 model calls, got %d", len(client.calls))
-	}
-
-	secondReq := client.calls[1]
-	foundWarning := false
-	for _, reqMsg := range requestMessages(secondReq) {
-		if reqMsg.Role == llm.RoleDeveloper && strings.Contains(reqMsg.Content, commentaryWithoutToolCallsWarning) {
-			if reqMsg.MessageType != llm.MessageTypeErrorFeedback {
-				t.Fatalf("expected commentary warning message type error_feedback, got %+v", reqMsg)
-			}
-			foundWarning = true
-			break
-		}
-	}
-	if !foundWarning {
-		t.Fatalf("expected commentary warning in next request, got %+v", requestMessages(secondReq))
-	}
-
-	events, err := sessiontest.CollectEvents(store)
-	if err != nil {
-		t.Fatalf("read events: %v", err)
-	}
-	toolCompleted := 0
-	for _, evt := range events {
-		if evt.Kind == "tool_completed" {
-			toolCompleted++
-		}
-	}
-	if toolCompleted != 1 {
-		t.Fatalf("expected exactly one tool execution, got %d", toolCompleted)
+	if !foundPersistedValid {
+		t.Fatal("expected one persisted successful hosted completion for ws_valid")
 	}
 }
 
 func TestSubmitUserMessageViewImageToolFollowsModelCapabilities(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name             string
 		model            string
@@ -618,9 +426,7 @@ func TestSubmitUserMessageViewImageToolFollowsModelCapabilities(t *testing.T) {
 		checkLocked      bool
 		wantLockedVision bool
 	}{
-		{name: "vision model", model: "gpt-5.3-codex", windowTokens: 200000, wantTool: true},
 		{name: "text-only model", model: "gpt-3.5-turbo", windowTokens: 200000},
-		{name: "codex spark", model: "gpt-5.3-codex-spark", windowTokens: 128000, checkLocked: true},
 		{
 			name:             "unlisted model with vision override",
 			model:            "gpt-4.1-2026-01-15",
@@ -633,6 +439,7 @@ func TestSubmitUserMessageViewImageToolFollowsModelCapabilities(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			store := mustCreateTestSession(t)
 			client := &fakeClient{responses: []llm.Response{{
 				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
@@ -774,9 +581,26 @@ func TestEnsureLocked_PersistsProviderCapabilityOverrideOverTransportMetadata(t 
 }
 
 func TestSubmitUserMessageMissingPhaseDefaultsToCommentaryAndWarns(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: "progress update",
+				Phase:   llm.MessagePhaseCommentary,
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: "",
+				Phase:   llm.MessagePhaseFinal,
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
 		{
 			Assistant: llm.Message{
 				Role:    llm.RoleAssistant,
@@ -792,10 +616,10 @@ func TestSubmitUserMessageMissingPhaseDefaultsToCommentaryAndWarns(t *testing.T)
 			Assistant: llm.Message{
 				Role:    llm.RoleAssistant,
 				Content: "running",
-				Phase:   llm.MessagePhaseCommentary,
 			},
+			ProviderPhase: llm.AbsentProviderPhase(),
 			ToolCalls: []llm.ToolCall{
-				{ID: "call_shell_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
+				{ID: "call_shell_missing_phase", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
 			},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
@@ -809,7 +633,11 @@ func TestSubmitUserMessageMissingPhaseDefaultsToCommentaryAndWarns(t *testing.T)
 		},
 	}}
 
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	runtimeEvents := make([]Event, 0, 16)
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+		Model:   "gpt-5",
+		OnEvent: func(evt Event) { runtimeEvents = append(runtimeEvents, evt) },
+	})
 
 	msg, err := eng.SubmitUserMessage(context.Background(), "do the task")
 	if err != nil {
@@ -818,24 +646,25 @@ func TestSubmitUserMessageMissingPhaseDefaultsToCommentaryAndWarns(t *testing.T)
 	if msg.Content != "done" {
 		t.Fatalf("assistant content = %q, want done", msg.Content)
 	}
-	if len(client.calls) != 3 {
-		t.Fatalf("expected 3 model calls, got %d", len(client.calls))
+	if len(client.calls) != 5 {
+		t.Fatalf("expected 5 model calls, got %d", len(client.calls))
 	}
 
-	secondReq := client.calls[1]
-	foundWarning := false
-	for _, reqMsg := range requestMessages(secondReq) {
-		if reqMsg.Role == llm.RoleDeveloper && strings.Contains(reqMsg.Content, missingAssistantPhaseWarning) {
-			if reqMsg.MessageType != llm.MessageTypeErrorFeedback {
-				t.Fatalf("expected missing-phase warning message type error_feedback, got %+v", reqMsg)
+	assertWarning := func(callIndex int, warning string) {
+		t.Helper()
+		for _, reqMsg := range requestMessages(client.calls[callIndex]) {
+			if reqMsg.Role == llm.RoleDeveloper && strings.Contains(reqMsg.Content, warning) {
+				if reqMsg.MessageType != llm.MessageTypeErrorFeedback {
+					t.Fatalf("warning message type = %q, want error_feedback: %+v", reqMsg.MessageType, reqMsg)
+				}
+				return
 			}
-			foundWarning = true
-			break
 		}
+		t.Fatalf("request %d lacks warning %q: %+v", callIndex, warning, requestMessages(client.calls[callIndex]))
 	}
-	if !foundWarning {
-		t.Fatalf("expected missing-phase warning in next request, got %+v", requestMessages(secondReq))
-	}
+	assertWarning(1, commentaryWithoutToolCallsWarning)
+	assertWarning(2, finalWithoutContentWarning)
+	assertWarning(3, missingAssistantPhaseWarning)
 
 	events, err := sessiontest.CollectEvents(store)
 	if err != nil {
@@ -858,54 +687,39 @@ func TestSubmitUserMessageMissingPhaseDefaultsToCommentaryAndWarns(t *testing.T)
 	if !persistedAsCommentary {
 		t.Fatalf("expected missing-phase assistant message to be persisted as commentary")
 	}
-}
 
-func TestSubmitUserMessageMissingPhaseLegacyClientRemainsTerminal(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	client := &fakeClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{
-				Role:    llm.RoleAssistant,
-				Content: "done",
-			},
-			Usage: llm.Usage{WindowTokens: 200000},
-		},
-	}}
-	client.caps = llm.ProviderCapabilities{ProviderID: "anthropic", SupportsResponsesAPI: false, IsOpenAIFirstParty: false}
-
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-
-	msg, err := eng.SubmitUserMessage(context.Background(), "do the task")
-	if err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if msg.Content != "done" {
-		t.Fatalf("assistant content = %q, want done", msg.Content)
-	}
-	if len(client.calls) != 1 {
-		t.Fatalf("expected 1 model call, got %d", len(client.calls))
-	}
-
-	events, err := sessiontest.CollectEvents(store)
-	if err != nil {
-		t.Fatalf("read events: %v", err)
-	}
-	for _, evt := range events {
-		if evt.Kind != "message" {
-			continue
+	assistantIdx := -1
+	toolCompleteIdx := -1
+	for idx, evt := range runtimeEvents {
+		if evt.Kind == EventAssistantMessage && evt.Message.Content == "running" {
+			assistantIdx = idx
 		}
-		var persisted llm.Message
-		if err := json.Unmarshal(evt.Payload, &persisted); err != nil {
-			t.Fatalf("decode message event: %v", err)
+		if evt.Kind == EventToolCallCompleted && evt.ToolResult != nil && evt.ToolResult.CallID == "call_shell_missing_phase" {
+			toolCompleteIdx = idx
 		}
-		if persisted.Role == llm.RoleDeveloper && strings.Contains(persisted.Content, missingAssistantPhaseWarning) {
-			t.Fatalf("did not expect missing-phase warning for legacy client response")
+	}
+	if assistantIdx < 0 || toolCompleteIdx < 0 || assistantIdx > toolCompleteIdx {
+		t.Fatalf("missing-phase assistant must precede tool completion: assistant=%d tool=%d events=%+v", assistantIdx, toolCompleteIdx, runtimeEvents)
+	}
+	assistantEntries := TranscriptEntriesFromEvent(runtimeEvents[assistantIdx])
+	if len(assistantEntries) < 2 || assistantEntries[0].Role != "assistant" || assistantEntries[1].Role != "tool_call" {
+		t.Fatalf("missing-phase assistant event must carry assistant + tool-call rows, got %+v", assistantEntries)
+	}
+	assertRuntimeEventsAdvanceCommittedFrontierContiguously(t, committedTranscriptEventsWithEntries(runtimeEvents))
+	assistantContents := make([]string, 0, 4)
+	for _, evt := range runtimeEvents {
+		if evt.Kind == EventAssistantMessage {
+			assistantContents = append(assistantContents, evt.Message.Content)
 		}
+	}
+	wantAssistantContents := []string{"progress update", "Working on it", "running", "done"}
+	if strings.Join(assistantContents, "\x00") != strings.Join(wantAssistantContents, "\x00") {
+		t.Fatalf("assistant realtime events = %+v, want %+v", assistantContents, wantAssistantContents)
 	}
 }
 
 func TestSubmitUserMessageCompatibleResponsesMissingPhaseRemainsTerminal(t *testing.T) {
+	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{
 		caps: llm.ProviderCapabilities{

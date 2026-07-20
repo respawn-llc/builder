@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"core/internal/testharness/runtimewirefixture"
 	"core/internal/testharness/scriptedllm"
 	"core/internal/testharness/testsetup"
 	"core/server/auth"
@@ -27,13 +26,12 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/server/tools/shell/postprocess"
 	"core/shared/config"
-	"core/shared/invariant"
+	"core/shared/runtimeids"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 
 	"core/shared/sessioncontract"
-	"github.com/google/uuid"
 )
 
 type mismatchedDeletionPresentationHandler struct{}
@@ -405,6 +403,146 @@ func TestLocalToolRegistryBindingRebindUpdatesExecCommandRoot(t *testing.T) {
 	}
 }
 
+func TestLocalToolRegistryBindingBindsExecutionCorrelationPerSuccessiveScope(t *testing.T) {
+	workspace := t.TempDir()
+	manager, err := shelltool.NewManager(
+		shelltool.WithMinimumExecToBgTime(50*time.Millisecond),
+		shelltool.WithPostprocessor(runtimeWirePostprocessor(t, config.ShellPostprocessingModeBuiltin, nil)),
+	)
+	if err != nil {
+		t.Fatalf("new shell manager: %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+
+	binding, _, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
+		WorkspaceRoot:       workspace,
+		Enabled:             []toolspec.ID{toolspec.ToolExecCommand},
+		MinimumExecToBgTime: 50 * time.Millisecond,
+		ShellOutputMaxChars: 16_000,
+		SupportsVision:      true,
+		Background:          manager,
+	})
+	if err != nil {
+		t.Fatalf("new local tool registry binding: %v", err)
+	}
+	events := make(chan shelltool.Event, 6)
+	manager.SetEventHandler(func(event shelltool.Event) {
+		events <- event
+	})
+	nextEvent := func() shelltool.Event {
+		t.Helper()
+		select {
+		case event := <-events:
+			return event
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for shell event")
+			return shelltool.Event{}
+		}
+	}
+	startBackground := func(callID string) shelltool.Snapshot {
+		t.Helper()
+		handler, ok := binding.Registry().Get(toolspec.ToolExecCommand)
+		if !ok {
+			t.Fatal("expected exec_command handler")
+		}
+		input, err := json.Marshal(map[string]any{
+			"cmd":           "sleep 1",
+			"shell":         "/bin/sh",
+			"login":         false,
+			"yield_time_ms": 50,
+		})
+		if err != nil {
+			t.Fatalf("marshal exec_command input: %v", err)
+		}
+		result, err := handler.Call(context.Background(), tools.Call{
+			ID:    callID,
+			Name:  toolspec.ToolExecCommand,
+			Input: input,
+		})
+		if err != nil {
+			t.Fatalf("exec_command call: %v", err)
+		}
+		if result.IsError {
+			t.Fatalf("exec_command result error: %s", string(result.Output))
+		}
+		if result.PresentationDelta == nil || !result.PresentationDelta.MovedToBackground {
+			t.Fatalf("exec_command result did not move to background: %+v", result.PresentationDelta)
+		}
+		event := nextEvent()
+		if event.Type != shelltool.EventBackgrounded {
+			t.Fatalf("event type = %q, want %q", event.Type, shelltool.EventBackgrounded)
+		}
+		return event.Snapshot
+	}
+	assertCorrelation := func(location string, got *runtimeids.ExecutionCorrelation, want *runtimeids.ExecutionCorrelation) {
+		t.Helper()
+		if want == nil {
+			if got != nil {
+				t.Fatalf("%s execution correlation = %#v, want nil", location, *got)
+			}
+			return
+		}
+		if got == nil {
+			t.Fatalf("%s execution correlation is nil", location)
+		}
+		if *got != *want {
+			t.Fatalf("%s execution correlation = %#v, want %#v", location, *got, *want)
+		}
+	}
+
+	correlationA, err := runtimeids.NewExecutionCorrelation(runtimeids.NewExecutionScopeID(), runtimeids.ResourceGeneration(1))
+	if err != nil {
+		t.Fatalf("new correlation A: %v", err)
+	}
+	if err := binding.BindExecutionCorrelation(&correlationA); err != nil {
+		t.Fatalf("bind correlation A: %v", err)
+	}
+	snapshotA := startBackground("scope-a")
+	assertCorrelation("scope A snapshot", snapshotA.ExecutionCorrelation, &correlationA)
+
+	correlationB, err := runtimeids.NewExecutionCorrelation(runtimeids.NewExecutionScopeID(), runtimeids.ResourceGeneration(1))
+	if err != nil {
+		t.Fatalf("new correlation B: %v", err)
+	}
+	if err := binding.BindExecutionCorrelation(&correlationB); err != nil {
+		t.Fatalf("bind correlation B: %v", err)
+	}
+	currentA, err := manager.Snapshot(snapshotA.ID)
+	if err != nil {
+		t.Fatalf("snapshot scope A after rebind: %v", err)
+	}
+	assertCorrelation("scope A snapshot after scope B bind", currentA.ExecutionCorrelation, &correlationA)
+	snapshotB := startBackground("scope-b")
+	assertCorrelation("scope B snapshot", snapshotB.ExecutionCorrelation, &correlationB)
+
+	if err := binding.BindExecutionCorrelation(nil); err != nil {
+		t.Fatalf("clear correlation: %v", err)
+	}
+	snapshotUnscoped := startBackground("scope-idle")
+	assertCorrelation("unscoped snapshot", snapshotUnscoped.ExecutionCorrelation, nil)
+
+	expectedByProcessID := map[string]*runtimeids.ExecutionCorrelation{
+		snapshotA.ID:        &correlationA,
+		snapshotB.ID:        &correlationB,
+		snapshotUnscoped.ID: nil,
+	}
+	for remaining := len(expectedByProcessID); remaining > 0; remaining-- {
+		event := nextEvent()
+		if event.Type != shelltool.EventCompleted {
+			t.Fatalf("terminal event type = %q, want %q", event.Type, shelltool.EventCompleted)
+		}
+		want, ok := expectedByProcessID[event.Snapshot.ID]
+		if !ok {
+			t.Fatalf("unexpected terminal process ID %q", event.Snapshot.ID)
+		}
+		assertCorrelation("terminal event", event.Snapshot.ExecutionCorrelation, want)
+		delete(expectedByProcessID, event.Snapshot.ID)
+	}
+	if len(expectedByProcessID) != 0 {
+		t.Fatalf("missing terminal events for %d processes", len(expectedByProcessID))
+	}
+}
+
 func TestRuntimeWiringExecCommandUsesEffectiveBuiltinInsteadOfBootstrapNone(t *testing.T) {
 	root := t.TempDir()
 	store := newRuntimeWireSession(t, root, "effective-builtin")
@@ -579,224 +717,6 @@ func TestLocalToolRegistryBindingRebindRejectsEmptyWorkspaceRoot(t *testing.T) {
 	binding := newRuntimeWireBinding(t, root, toolspec.ToolExecCommand)
 	if err := binding.Rebind("   "); !errors.Is(err, errWorkspaceRootRequired) {
 		t.Fatalf("rebind error = %v, want errWorkspaceRootRequired", err)
-	}
-}
-
-func TestBackgroundEventRouterSkipsDeveloperNoticeForOrphanedShells(t *testing.T) {
-	root := t.TempDir()
-	storeA := newRuntimeWireSession(t, root, "ws-a")
-	storeB := newRuntimeWireSession(t, root, "ws-b")
-	clientA := &busyToggleFakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "a", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200_000}}}}
-	clientB := &busyToggleFakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "b", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200_000}}}}
-	var mu sync.Mutex
-	backgroundUpdates := 0
-	_ = newRuntimeWireEngine(t, storeA, clientA)
-	engB := newRuntimeWireEngine(t, storeB, clientB, runtime.Config{Model: "gpt-5", OnEvent: func(evt runtime.Event) {
-		if evt.Kind == runtime.EventBackgroundUpdated {
-			mu.Lock()
-			backgroundUpdates++
-			mu.Unlock()
-		}
-	}})
-
-	router := &BackgroundEventRouter{}
-	router.SetActiveSession(storeB.Meta().SessionID, engB)
-	router.Handle(runtimewirefixture.BackgroundCompletionEvent("1000", storeA.Meta().SessionID, root))
-
-	time.Sleep(150 * time.Millisecond)
-	if got := clientB.CallCount(); got != 0 {
-		t.Fatalf("expected orphaned completion to skip model notice for active session, got %d client calls", got)
-	}
-	mu.Lock()
-	updates := backgroundUpdates
-	mu.Unlock()
-	if updates != 0 {
-		t.Fatalf("expected orphaned completion to stay isolated from foreign active sessions, got %d background updates", updates)
-	}
-	if got := clientA.CallCount(); got != 0 {
-		t.Fatalf("did not expect inactive owner engine to be called, got %d", got)
-	}
-}
-
-func TestBackgroundEventRouterRoutesCompletionToMatchingActiveOwnerSession(t *testing.T) {
-	root := t.TempDir()
-	storeA := newRuntimeWireSession(t, root, "ws-a")
-	storeB := newRuntimeWireSession(t, root, "ws-b")
-	clientA := &busyToggleFakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "a", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200_000}}}}
-	clientB := &busyToggleFakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "b", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200_000}}}}
-	engA := newRuntimeWireEngine(t, storeA, clientA)
-	engB := newRuntimeWireEngine(t, storeB, clientB)
-
-	router := &BackgroundEventRouter{}
-	router.SetActiveSession(storeA.Meta().SessionID, engA)
-	router.SetActiveSession(storeB.Meta().SessionID, engB)
-	router.Handle(runtimewirefixture.BackgroundCompletionEvent("1002", storeA.Meta().SessionID, root))
-
-	testsetup.RequireUntil(t, time.Now().Add(2*time.Second), 20*time.Millisecond, func() bool {
-		return clientA.CallCount() != 0
-	}, "expected owner session completion to route to its active engine even when another session is also active")
-	if got := clientB.CallCount(); got != 0 {
-		t.Fatalf("did not expect foreign active session to receive routed completion, got %d", got)
-	}
-}
-
-func TestBackgroundEventRouterClearActiveSessionDropsOnlyThatOwner(t *testing.T) {
-	root := t.TempDir()
-	storeA := newRuntimeWireSession(t, root, "ws-a")
-	storeB := newRuntimeWireSession(t, root, "ws-b")
-	clientA := &busyToggleFakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "a", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200_000}}}}
-	clientB := &busyToggleFakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "b", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200_000}}}}
-	engA := newRuntimeWireEngine(t, storeA, clientA)
-	engB := newRuntimeWireEngine(t, storeB, clientB)
-
-	router := &BackgroundEventRouter{}
-	router.SetActiveSession(storeA.Meta().SessionID, engA)
-	router.SetActiveSession(storeB.Meta().SessionID, engB)
-	router.ClearActiveSession(storeA.Meta().SessionID, engA)
-	router.Handle(runtimewirefixture.BackgroundCompletionEvent("1003", storeA.Meta().SessionID, root))
-	time.Sleep(150 * time.Millisecond)
-	if got := clientA.CallCount(); got != 0 {
-		t.Fatalf("expected cleared owner session to drop completions, got %d", got)
-	}
-	if got := clientB.CallCount(); got != 0 {
-		t.Fatalf("did not expect foreign active session to receive cleared-owner completion, got %d", got)
-	}
-
-	router.Handle(runtimewirefixture.BackgroundCompletionEvent("1004", storeB.Meta().SessionID, root))
-	testsetup.RequireUntil(t, time.Now().Add(2*time.Second), 20*time.Millisecond, func() bool {
-		return clientB.CallCount() != 0
-	}, "expected other active sessions to keep receiving their own completions after clearing a different owner")
-}
-
-func TestBackgroundEventRouterStaleClearKeepsReplacementForSameSession(t *testing.T) {
-	root := t.TempDir()
-	store := newRuntimeWireSession(t, root, "ws")
-	clientA := &busyToggleFakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "a", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200_000}}}}
-	clientB := &busyToggleFakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "b", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200_000}}}}
-	engA := newRuntimeWireEngine(t, store, clientA)
-	engB := newRuntimeWireEngine(t, store, clientB)
-
-	router := &BackgroundEventRouter{}
-	router.SetActiveSession(store.Meta().SessionID, engA)
-	router.SetActiveSession(store.Meta().SessionID, engB)
-	router.ClearActiveSession(store.Meta().SessionID, engA)
-	router.Handle(runtimewirefixture.BackgroundCompletionEvent("1005", store.Meta().SessionID, root))
-
-	testsetup.RequireUntil(t, time.Now().Add(2*time.Second), 20*time.Millisecond, func() bool {
-		return clientB.CallCount() != 0
-	}, "expected replacement active session to receive completion after stale clear")
-	if got := clientA.CallCount(); got != 0 {
-		t.Fatalf("did not expect stale active session to receive completion, got %d", got)
-	}
-}
-
-func TestBackgroundEventRouterDropsOrphanedTerminalEventBeforeInvariantHandling(t *testing.T) {
-	router := NewBackgroundEventRouterWithInvariantPolicy(nil, 16_000, shelltool.BackgroundOutputDefault, invariant.NewPolicy(invariant.WithMode(invariant.ModePanic)))
-	exitCode := 7
-	router.Handle(shelltool.Event{
-		Type: shelltool.EventCompleted,
-		Snapshot: shelltool.Snapshot{
-			ID:             "1000",
-			ActivityID:     uuid.New(),
-			OwnerSessionID: "inactive-owner",
-			State:          "completed",
-			ExitCode:       &exitCode,
-		},
-	})
-}
-
-func TestBackgroundEventRouterPanicsForInvalidTerminalEventInPanicMode(t *testing.T) {
-	root := t.TempDir()
-	store := newRuntimeWireSession(t, root, "panic")
-	router := NewBackgroundEventRouterWithInvariantPolicy(nil, 16_000, shelltool.BackgroundOutputDefault, invariant.NewPolicy(invariant.WithMode(invariant.ModePanic)))
-	router.SetActiveSession(store.Meta().SessionID, newRuntimeWireEngine(t, store, &busyToggleFakeClient{}))
-	exitCode := 7
-
-	defer func() {
-		recovered := recover()
-		diagnostic, ok := recovered.(invariant.Diagnostic)
-		if !ok {
-			t.Fatalf("panic = %#v, want invariant diagnostic", recovered)
-		}
-		if diagnostic.Scope != invariant.ScopeBackgroundEvent ||
-			diagnostic.Fields[invariant.FieldEventKind] != string(shelltool.EventCompleted) ||
-			diagnostic.Fields[invariant.FieldProcessID] != "1000" ||
-			diagnostic.Fields[invariant.FieldBackgroundState] != "completed" ||
-			diagnostic.Fields[invariant.FieldInvariantError] == "" ||
-			diagnostic.Stack == "" {
-			t.Fatalf("diagnostic = %+v", diagnostic)
-		}
-	}()
-
-	router.Handle(shelltool.Event{
-		Type: shelltool.EventCompleted,
-		Snapshot: shelltool.Snapshot{
-			ID:             "1000",
-			ActivityID:     uuid.New(),
-			OwnerSessionID: store.Meta().SessionID,
-			State:          "completed",
-			ExitCode:       &exitCode,
-		},
-	})
-}
-
-func TestBackgroundEventRouterRecoversInvalidTerminalEventInDiagnosticMode(t *testing.T) {
-	root := t.TempDir()
-	store := newRuntimeWireSession(t, root, "diagnostic")
-	client := &busyToggleFakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "handled", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200_000}}}}
-	var updates []runtime.BackgroundShellEvent
-	eng := newRuntimeWireEngine(t, store, client, runtime.Config{Model: "gpt-5", OnEvent: func(evt runtime.Event) {
-		if evt.Kind == runtime.EventBackgroundUpdated && evt.Background != nil {
-			updates = append(updates, *evt.Background)
-		}
-	}})
-	var diagnostics []invariant.Diagnostic
-	policy := invariant.NewPolicy(
-		invariant.WithMode(invariant.ModeDiagnostic),
-		invariant.WithSink(invariant.SinkFunc(func(d invariant.Diagnostic) {
-			diagnostics = append(diagnostics, d)
-		})),
-	)
-	router := NewBackgroundEventRouterWithInvariantPolicy(nil, 16_000, shelltool.BackgroundOutputDefault, policy)
-	router.SetActiveSession(store.Meta().SessionID, eng)
-	exitCode := 17
-	event := shelltool.Event{
-		Type: shelltool.EventCompleted,
-		Snapshot: shelltool.Snapshot{
-			ID:             "1000",
-			ActivityID:     uuid.New(),
-			OwnerSessionID: store.Meta().SessionID,
-			State:          "completed",
-			ExitCode:       &exitCode,
-			LogPath:        filepath.Join(root, "1000.log"),
-		},
-	}
-
-	router.Handle(event)
-
-	if len(diagnostics) != 1 {
-		t.Fatalf("diagnostics = %d, want 1", len(diagnostics))
-	}
-	diagnostic := diagnostics[0]
-	if diagnostic.Scope != invariant.ScopeBackgroundEvent ||
-		diagnostic.Fields[invariant.FieldProcessID] != event.Snapshot.ID ||
-		diagnostic.Fields[invariant.FieldBackgroundState] != event.Snapshot.State ||
-		diagnostic.Fields[invariant.FieldInvariantError] == "" ||
-		diagnostic.Stack == "" {
-		t.Fatalf("diagnostic = %+v", diagnostic)
-	}
-	if len(updates) != 1 {
-		t.Fatalf("background updates = %d, want 1", len(updates))
-	}
-	update := updates[0]
-	if update.Type != runtime.BackgroundShellEventCompleted ||
-		update.ID != event.Snapshot.ID ||
-		update.State != event.Snapshot.State ||
-		update.ExitCode == nil || *update.ExitCode != exitCode ||
-		update.LogPath != event.Snapshot.LogPath ||
-		update.NoticeText == "" ||
-		update.CompactText == "" {
-		t.Fatalf("recovered background update = %+v", update)
 	}
 }
 

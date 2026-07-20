@@ -486,13 +486,14 @@ func TestGoalCommandSubprocessReadsDormantAndMutatesLiveSessionFromUnboundWorktr
 	settings := cfg.Settings
 	settings.Model = "gpt-5"
 	settings.ProviderOverride = "openai"
-	if _, err := remote.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
+	activation, err := remote.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "activate-goal-cli-e2e",
 		SessionID:       store.Meta().SessionID,
 		ActiveSettings:  settings,
 		EnabledToolIDs:  toolIDsAsStrings(config.EnabledToolIDs(settings)),
 		Source:          cfg.Source,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("ActivateSessionRuntime: %v", err)
 	}
 	assertGoalCommandSubprocessShow(record.Meta.Goal)
@@ -536,7 +537,7 @@ func TestGoalCommandSubprocessReadsDormantAndMutatesLiveSessionFromUnboundWorktr
 	}
 	if _, err := remote.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
 		ClientRequestID: "release-goal-cli-e2e",
-		SessionID:       store.Meta().SessionID,
+		Attachment:      activation.Attachment,
 	}); err != nil {
 		t.Fatalf("ReleaseSessionRuntime: %v", err)
 	}

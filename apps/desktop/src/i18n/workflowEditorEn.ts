@@ -234,10 +234,9 @@ export const workflowEditorEnglish = {
   workflowDeleteTasks: "Tasks: {{count}}",
   workflowDeleteConfirm: "Delete workflow",
   workflowDeleteBlocked: "Workflow cannot be deleted yet.",
-  workflowDeleteWindowError: "Workflow delete window failed",
+  workflowDeleteNavigationError: "Workflow Library navigation did not complete.",
   workflowDeleteCommittedNotifyError:
     "Workflow was deleted, but the main window could not be updated: {{message}}",
-  workflowDeleteCommittedCloseError: "Workflow was deleted, but this dialog could not close: {{message}}",
   workflowDeleted: "Workflow deleted",
   startNodeDeleteBlocked: "The initial node cannot be deleted.",
   lastTerminalDeleteBlocked: "At least one Terminal node must remain in the workflow.",

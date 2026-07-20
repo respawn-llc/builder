@@ -214,15 +214,12 @@ function editorCanvasTree({ dispatch, draftState, graph, inspect }: CanvasHarnes
       <StatusProvider>
         <WorkflowEditorCanvas
           closeDeletedNodeInspector={() => undefined}
-          deleteRequestIndexRef={{ current: 0 }}
           dispatch={dispatch}
           draftState={draftState}
           graph={graph}
           inspect={inspect}
-          onPendingGraphMutationChange={() => undefined}
-          openDeleteConfirmation={async () => undefined}
+          openDeleteConfirmation={() => undefined}
           surface="route"
-          workflowID="workflow-1"
         />
       </StatusProvider>
     </AppServicesProvider>

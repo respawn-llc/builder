@@ -21,7 +21,6 @@ import (
 	"core/server/metadata"
 	"core/server/registry"
 	"core/server/runtime"
-	"core/server/runtimecontrol"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -81,8 +80,21 @@ printf '{"processed":true,"replaced_output":"ROLE_ACTIVE:%s"}' "$KENT_SESSION_ID
 	}
 	t.Cleanup(func() { _ = globalManager.Close() })
 
+	if err := fixture.runtimeAuthority.Close(context.Background()); err != nil {
+		t.Fatalf("close prior runtime authority: %v", err)
+	}
+	fixture.runtimeAuthority = sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: fixture.cfg.PersistenceRoot,
+		Background:      globalManager,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(ref sessionruntime.WorkflowExecutionRef) {
+			if scheduler := *fixture.schedulerTarget; scheduler != nil {
+				scheduler.RuntimeFinished(ref.RunID, ref.Generation)
+			}
+		}),
+	})
+	fixture.rebuildStarter(t)
 	var factoryRequest runtimewire.RuntimeClientRequest
-	fixture.starter.background = globalManager
 	fixture.starter.clientFactory = nil
 	fixture.starter.runtimeClientFactory = runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, req runtimewire.RuntimeClientRequest) (llm.Client, error) {
 		factoryRequest = req
@@ -194,10 +206,12 @@ func TestSchedulerRunsNewSessionWorkflowNodeWithStructuredOutput(t *testing.T) {
 func TestSchedulerRunsNoManagedWorktreeTargetFromSourceWorkspace(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"done"}`))
 	task := fixture.createStartedTaskWithoutManagedWorktree(t)
-	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
+	scheduler := fixture.scheduler(t)
+	if err := scheduler.Process(context.Background()); err != nil {
 		t.Fatalf("Process: %v", err)
 	}
 	fixture.waitForCompletedRun(t, task.ID)
+	fixture.waitForActiveCountZero(t, scheduler)
 	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("ListRuns = %+v, err %v", runs, err)
@@ -230,6 +244,7 @@ func TestSchedulerNamesFreshWorkflowSessionFromAcceptedTransition(t *testing.T) 
 		t.Fatalf("Process: %v", err)
 	}
 	fixture.waitForCompletedRun(t, task.ID)
+	fixture.waitForActiveCountZero(t, scheduler)
 
 	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil {
@@ -320,7 +335,7 @@ func TestWorkflowRuntimeQuestionBatchResumesSameSessionAndPublishesOneAttention(
 	}
 	pending := nextWorkflowAttentionEvent(t, desktopSub)
 	assertTaskQuestionBatchPending(t, pending, fixture, task, first.SessionID, "call-ask-1")
-	if err := fixture.runtimes.SubmitPromptResponse(first.SessionID, askquestion.AskQuestionResponse{RequestID: "call-ask-1", Answer: "Ship it"}, nil); err != nil {
+	if err := fixture.submitPromptResponse(first.SessionID, askquestion.AskQuestionResponse{RequestID: "call-ask-1", Answer: "Ship it"}); err != nil {
 		t.Fatalf("SubmitPromptResponse first: %v", err)
 	}
 	second := fixture.waitForWaitingAsk(t, task.ID, "call-ask-2")
@@ -335,7 +350,7 @@ func TestWorkflowRuntimeQuestionBatchResumesSameSessionAndPublishesOneAttention(
 	if update.Pending.Question == nil || update.Pending.Question.MaterializedCount != 2 {
 		t.Fatalf("second batch question state = %+v, want both asks materialized", update.Pending.Question)
 	}
-	if err := fixture.runtimes.SubmitPromptResponse(second.SessionID, askquestion.AskQuestionResponse{RequestID: "call-ask-2", Answer: "Keep it safe"}, nil); err != nil {
+	if err := fixture.submitPromptResponse(second.SessionID, askquestion.AskQuestionResponse{RequestID: "call-ask-2", Answer: "Keep it safe"}); err != nil {
 		t.Fatalf("SubmitPromptResponse second: %v", err)
 	}
 	resolved := nextWorkflowAttentionEvent(t, desktopSub)
@@ -374,7 +389,7 @@ func TestWorkflowAskHandlerRejectsTaskQuestionWithoutBatchMetadata(t *testing.T)
 	starter := &Starter{}
 	req := SchedulerStartRunRequest{RunID: "run-1", Generation: 7}
 	input := workflowstore.RunStartContext{Task: workflowstore.TaskRecord{ID: "task-1"}}
-	_, err := starter.handleWorkflowAsk(context.Background(), "session-1", req, input, askquestion.AskQuestionRequest{
+	_, err := starter.handleWorkflowAsk(context.Background(), nil, "session-1", req, input, askquestion.AskQuestionRequest{
 		ID:         "ask-1",
 		Question:   "Missing metadata?",
 		StepID:     "step-1",
@@ -563,12 +578,6 @@ func TestWorkflowRuntimeInterruptReleasesBeforeInteractiveReactivation(t *testin
 	)
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeTool)
 	fixture.clientFactory = func(SchedulerStartRunRequest) llm.Client { return workflowClient }
-	fixture.runtimeClientFactory = runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, req runtimewire.RuntimeClientRequest) (llm.Client, error) {
-		if req.Purpose != runtimewire.RuntimeClientPurposeMain {
-			t.Fatalf("interactive client purpose = %v, want main", req.Purpose)
-		}
-		return interactiveClient, nil
-	})
 	fixture.rebuildStarter(t)
 	task := fixture.createStartedTask(t)
 	scheduler := fixture.scheduler(t)
@@ -585,91 +594,68 @@ func TestWorkflowRuntimeInterruptReleasesBeforeInteractiveReactivation(t *testin
 		t.Fatalf("runs = %+v, want one attached workflow session", runs)
 	}
 	run := runs[0]
-	sessionID := run.SessionID
-	reg := fixture.runtimes.(*registry.RuntimeRegistry)
-	if !reg.IsSessionRuntimeActive(sessionID) {
-		t.Fatal("specialized workflow runtime is not active")
+	sessionID, err := runtimeids.ParseSessionID(run.SessionID)
+	if err != nil {
+		t.Fatalf("parse workflow session id: %v", err)
+	}
+	workflowRef := sessionruntime.WorkflowExecutionRef{RunID: run.ID, Generation: run.Generation}
+	if _, active := fixture.runtimeAuthority.ExecutionByWorkflow(workflowRef); !active {
+		t.Fatal("workflow execution is not active")
 	}
 	workflowRequests := workflowClient.Requests()
 	if len(workflowRequests) != 1 || workflowRequests[0].ToolChoiceMode != llm.ToolChoiceModeRequired {
 		t.Fatalf("workflow requests = %+v, want one required-tool request", workflowRequests)
 	}
 
-	control := runtimecontrol.NewService(reg)
-	if _, err := control.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
-		ClientRequestID: "1fb086cc-a235-4d09-9dc4-983728c4fbb5",
-		SessionID:       sessionID,
-	}); err != nil {
-		t.Fatalf("Interrupt: %v", err)
+	if err := fixture.starter.CancelRun(context.Background(), run.ID); err != nil {
+		t.Fatalf("CancelRun: %v", err)
 	}
 	fixture.waitForInterruptedRun(t, scheduler, task.ID, ReasonRuntimeCanceled)
-	if reg.IsSessionRuntimeActive(sessionID) {
-		t.Fatal("specialized workflow runtime remained registered after interruption")
+	if _, active := fixture.runtimeAuthority.SessionExecution(sessionID); active {
+		t.Fatal("workflow execution remained active after interruption")
 	}
 
-	_, err = fixture.sessionRuntime.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: "f97ec9f0-e074-44ed-b51a-24c0e181c492",
-		SessionID:       sessionID,
-		OwnerID:         "interactive-owner",
-		ActiveSettings:  fixture.cfg.Settings,
-		EnabledToolIDs:  []string{string(toolspec.ToolExecCommand)},
-		Source:          fixture.cfg.Source,
+	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
+	if err != nil {
+		t.Fatalf("new open session descriptor: %v", err)
+	}
+	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
+		Settings:     fixture.cfg.Settings,
+		EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
+		Workdir:      fixture.cfg.WorkspaceRoot,
+		Client:       interactiveClient,
 	})
 	if err != nil {
-		t.Fatalf("ActivateSessionRuntime: %v", err)
+		t.Fatalf("new interactive runtime plan: %v", err)
 	}
-	if !reg.IsSessionRuntimeActive(sessionID) {
-		t.Fatal("ordinary interactive runtime was not activated")
-	}
-	t.Cleanup(func() {
-		_, _ = fixture.sessionRuntime.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-			ClientRequestID: "6c604d1b-301c-46f9-93a5-c7527478ec65",
-			SessionID:       sessionID,
-			OwnerID:         "interactive-owner",
-			OnlyIfIdle:      true,
-			DropOwner:       true,
-			ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle,
-		})
-	})
-
-	submitID := runtimeids.NewRuntimeClientRequestID()
-	response, err := control.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
-		ClientRequestID: submitID.String(),
-		SessionID:       sessionID,
-		Text:            "continue interactively",
-		OperationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindSubmit,
-			ClientRequestID: submitID,
-		},
-		PreSubmitCompactionOperationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindPreSubmitCompact,
-			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
+	var response string
+	handle, err := fixture.runtimeAuthority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
+		Descriptor: descriptor,
+		Runtime:    &runtimePlan,
+		Resource:   sessionruntime.ReplaceAgentResource{},
+		Runner: func(ctx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
+			return bridge.WithEngine(ctx, func(ctx context.Context, engine *runtime.Engine) error {
+				message, submitErr := engine.SubmitUserMessage(ctx, "continue interactively")
+				response = message.Content
+				return submitErr
+			})
 		},
 	})
 	if err != nil {
-		t.Fatalf("SubmitUserTurn: %v", err)
+		t.Fatalf("start interactive execution: %v", err)
 	}
-	if response.Message != "ordinary final answer" || response.Steered {
-		t.Fatalf("interactive response = %+v, want ordinary final answer", response)
+	if _, err := handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait interactive execution: %v", err)
+	}
+	if response != "ordinary final answer" {
+		t.Fatalf("interactive response = %q, want ordinary final answer", response)
 	}
 	interactiveRequests := interactiveClient.Requests()
 	if len(interactiveRequests) != 1 || interactiveRequests[0].ToolChoiceMode != llm.ToolChoiceModeAutomatic {
 		t.Fatalf("interactive requests = %+v, want one automatic-tool request", interactiveRequests)
 	}
-
-	released, err := fixture.sessionRuntime.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: "c8bc3bd9-0766-41ed-9272-cbfec0ba97f7",
-		SessionID:       sessionID,
-		OwnerID:         "interactive-owner",
-		OnlyIfIdle:      true,
-		DropOwner:       true,
-		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle,
-	})
-	if err != nil {
-		t.Fatalf("ReleaseSessionRuntime: %v", err)
-	}
-	if !released.Released || reg.IsSessionRuntimeActive(sessionID) {
-		t.Fatalf("interactive release = %+v, active=%t", released, reg.IsSessionRuntimeActive(sessionID))
+	if _, active := fixture.runtimeAuthority.SessionExecution(sessionID); active {
+		t.Fatal("interactive execution remained active after completion")
 	}
 }
 
@@ -871,11 +857,13 @@ func TestStarterRestoresReusedSessionMetadataWhenSetupFailsAfterPlanning(t *test
 	disableCoderShell(t, &fixture)
 	fixture.rebuildStarter(t)
 	task := fixture.createStartedChainedTask(t, workflow.ContextModeContinueSession, "coder")
-	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
+	firstScheduler := fixture.scheduler(t)
+	if err := firstScheduler.Process(context.Background()); err != nil {
 		t.Fatalf("first Process: %v", err)
 	}
 	fixture.waitForRunCount(t, task.ID, 2)
 	fixture.waitForCompletedRunCount(t, task.ID, 1)
+	fixture.waitForActiveCountZero(t, firstScheduler)
 	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil {
 		t.Fatalf("ListRuns after first run: %v", err)
@@ -998,6 +986,7 @@ func TestWorkflowRuntimeContinueSessionReusesSourceRunSession(t *testing.T) {
 	}
 	fixture.waitForRunCount(t, task.ID, 2)
 	fixture.waitForAllRunsCompleted(t, task.ID, 2)
+	fixture.waitForActiveCountZero(t, scheduler)
 
 	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil {
@@ -1037,6 +1026,7 @@ func TestWorkflowRuntimeContinueSessionKeepsLockedSetupAfterRoleConfigDrift(t *t
 		t.Fatalf("first Process: %v", err)
 	}
 	fixture.waitForRunCount(t, task.ID, 2)
+	fixture.waitForActiveCountZero(t, firstScheduler)
 	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil {
 		t.Fatalf("ListRuns after first run: %v", err)
@@ -1189,6 +1179,7 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 		t.Fatalf("second Process: %v", err)
 	}
 	fixture.waitForCompletedRunCount(t, task.ID, 2)
+	fixture.waitForActiveCountZero(t, scheduler)
 
 	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil {
@@ -1257,11 +1248,13 @@ func TestWorkflowRuntimeFanoutCompactAndContinueClonesUseBranchTransitionMetadat
 	task := fixture.createStartedTask(t)
 
 	ctx := context.Background()
-	if err := fixture.scheduler(t).Process(ctx); err != nil {
+	scheduler := fixture.scheduler(t)
+	if err := scheduler.Process(ctx); err != nil {
 		t.Fatalf("plan Process: %v", err)
 	}
 	fixture.waitForRunCount(t, task.ID, 3)
 	fixture.waitForCompletedRunCount(t, task.ID, 1)
+	fixture.waitForActiveCountZero(t, scheduler)
 
 	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil {
@@ -1288,6 +1281,9 @@ func TestWorkflowRuntimeFanoutCompactAndContinueClonesUseBranchTransitionMetadat
 	fixture.waitForCompletedRunCount(t, task.ID, 2)
 	startClaimedWorkflowRun(t, ctx, fixture, branchRecords["impl_b"])
 	fixture.waitForCompletedRunCount(t, task.ID, 3)
+	if err := fixture.starter.Close(); err != nil {
+		t.Fatalf("starter.Close: %v", err)
+	}
 
 	runs, err = fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil {
@@ -1522,17 +1518,20 @@ func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("planSession initial: %v", err)
 	}
-	if _, err := fixture.metadata.ResolvePersistedSession(context.Background(), plan.Store.Meta().SessionID); err != nil {
+	sessionID := plan.Descriptor.SessionID().String()
+	if _, err := fixture.metadata.ResolvePersistedSession(context.Background(), sessionID); err != nil {
 		t.Fatalf("ResolvePersistedSession: %v", err)
 	}
-	if err := plan.Store.MarkModelDispatchLocked(session.LockedContract{
-		Model:           fixture.cfg.Settings.Model,
-		EnabledTools:    []string{string(toolspec.ToolExecCommand)},
-		HasEnabledTools: true,
+	if err := fixture.runtimeAuthority.WithSessionStore(context.Background(), plan.Descriptor, func(_ context.Context, store *session.Store) error {
+		return store.MarkModelDispatchLocked(session.LockedContract{
+			Model:           fixture.cfg.Settings.Model,
+			EnabledTools:    []string{string(toolspec.ToolExecCommand)},
+			HasEnabledTools: true,
+		})
 	}); err != nil {
 		t.Fatalf("MarkModelDispatchLocked legacy contract: %v", err)
 	}
-	if err := fixture.store.AttachRunSession(context.Background(), claimed.ID, claimed.Generation, plan.Store.Meta().SessionID); err != nil {
+	if err := fixture.store.AttachRunSession(context.Background(), claimed.ID, claimed.Generation, sessionID); err != nil {
 		t.Fatalf("AttachRunSession: %v", err)
 	}
 	if err := fixture.store.InterruptRunGeneration(context.Background(), claimed.ID, claimed.Generation, "manual", "{}"); err != nil {
@@ -1556,10 +1555,12 @@ func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 		t.Fatalf("resumed runs = %+v, want one", resumedRuns)
 	}
 	resumed := resumedRuns.Runs[0]
-	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
+	scheduler := fixture.scheduler(t)
+	if err := scheduler.Process(context.Background()); err != nil {
 		t.Fatalf("Process resumed: %v", err)
 	}
 	fixture.waitForCompletedRun(t, task.ID)
+	fixture.waitForActiveCountZero(t, scheduler)
 	runs, err = fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil {
 		t.Fatalf("ListRuns resumed: %v", err)
@@ -1674,10 +1675,12 @@ func (e blockingStarterTaskWorktreeEnsurer) RestoreLockedTaskWorktree(_ context.
 func TestRemoveFanoutCloneDeletesOrphanedClone(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"done"}`))
 	task := fixture.createStartedTask(t)
-	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
+	scheduler := fixture.scheduler(t)
+	if err := scheduler.Process(context.Background()); err != nil {
 		t.Fatalf("Process: %v", err)
 	}
 	fixture.waitForCompletedRun(t, task.ID)
+	fixture.waitForActiveCountZero(t, scheduler)
 	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("ListRuns = %+v, err %v", runs, err)
@@ -1714,7 +1717,8 @@ type starterFixture struct {
 	clientFactory        func(SchedulerStartRunRequest) llm.Client
 	runtimeClientFactory runtimewire.RuntimeClientFactory
 	runtimes             starterRuntimeRegistry
-	sessionRuntime       *sessionruntime.Service
+	runtimeAuthority     *sessionruntime.Authority
+	schedulerTarget      **SchedulerService
 	starter              *Starter
 	workflowID           workflow.WorkflowID
 	projectID            string
@@ -1722,9 +1726,9 @@ type starterFixture struct {
 }
 
 type starterRuntimeRegistry interface {
-	RuntimeEventRegistry
+	WorkflowAttentionRegistry
+	sessionruntime.ExecutionPromptFeed
 	ListPendingPrompts(sessionID string) []registry.PendingPromptSnapshot
-	SubmitPromptResponse(sessionID string, resp askquestion.AskQuestionResponse, err error) error
 }
 
 func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps ...ScriptedRuntimeStep) starterFixture {
@@ -1776,21 +1780,22 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	clientFactory := func(SchedulerStartRunRequest) llm.Client { return client }
 	attentionBroker := attentionnotify.NewBroker()
 	runtimes := registry.NewRuntimeRegistry().WithAttentionNotifications(attentionBroker)
-	sessionRuntime := sessionruntime.NewService(
-		cfg.PersistenceRoot,
-		metadataStore,
-		nil,
-		nil,
-		nil,
-		nil,
-		runtimes,
-		registry.NewSessionStoreRegistry(),
-		metadataStore.AuthoritativeSessionStoreOptions()...,
-	)
-	starter, err := NewStarter(cfg, metadataStore, store, nil, nil, runtimes, StarterOptions{
-		ClientFactory:  clientFactory,
-		Worktrees:      worktrees,
-		SessionRuntime: sessionRuntime,
+	schedulerTarget := new(*SchedulerService)
+	runtimeAuthority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: cfg.PersistenceRoot,
+		StoreOptions:    metadataStore.AuthoritativeSessionStoreOptions(),
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(ref sessionruntime.WorkflowExecutionRef) {
+			if scheduler := *schedulerTarget; scheduler != nil {
+				scheduler.RuntimeFinished(ref.RunID, ref.Generation)
+			}
+		}),
+		PromptFeed:        runtimes,
+		ResourceLifecycle: runtimes,
+	})
+	starter, err := NewStarter(cfg, metadataStore, store, nil, runtimes, StarterOptions{
+		ClientFactory:    clientFactory,
+		Worktrees:        worktrees,
+		RuntimeAuthority: runtimeAuthority,
 	})
 	if err != nil {
 		t.Fatalf("NewStarter: %v", err)
@@ -1800,7 +1805,15 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	if _, err := store.LinkWorkflow(context.Background(), binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
-	return starterFixture{cfg: cfg, metadata: metadataStore, store: store, view: view, worktrees: worktrees, client: client, clientFactory: clientFactory, runtimes: runtimes, sessionRuntime: sessionRuntime, starter: starter, workflowID: workflowID, projectID: binding.ProjectID, attentionBroker: attentionBroker}
+	return starterFixture{cfg: cfg, metadata: metadataStore, store: store, view: view, worktrees: worktrees, client: client, clientFactory: clientFactory, runtimes: runtimes, runtimeAuthority: runtimeAuthority, schedulerTarget: schedulerTarget, starter: starter, workflowID: workflowID, projectID: binding.ProjectID, attentionBroker: attentionBroker}
+}
+
+func (f starterFixture) submitPromptResponse(sessionID string, response askquestion.AskQuestionResponse) error {
+	id, err := runtimeids.ParseSessionID(sessionID)
+	if err != nil {
+		return err
+	}
+	return f.runtimeAuthority.SubmitPromptResponse(id, response, nil)
 }
 
 func newChainedStarterFixture(t *testing.T) starterFixture {
@@ -1819,27 +1832,14 @@ func (f *starterFixture) rebuildStarter(t *testing.T) {
 	if f.runtimes == nil {
 		f.runtimes = registry.NewRuntimeRegistry()
 	}
-	sessionRuntime := sessionruntime.NewServiceWithOptions(
-		f.cfg.PersistenceRoot,
-		f.metadata,
-		nil,
-		nil,
-		nil,
-		nil,
-		f.runtimes.(*registry.RuntimeRegistry),
-		registry.NewSessionStoreRegistry(),
-		sessionruntime.ServiceOptions{RuntimeClientFactory: f.runtimeClientFactory},
-		f.metadata.AuthoritativeSessionStoreOptions()...,
-	)
-	starter, err := NewStarter(f.cfg, f.metadata, f.store, nil, nil, f.runtimes, StarterOptions{
-		ClientFactory:  f.clientFactory,
-		Worktrees:      f.worktrees,
-		SessionRuntime: sessionRuntime,
+	starter, err := NewStarter(f.cfg, f.metadata, f.store, nil, f.runtimes, StarterOptions{
+		ClientFactory:    f.clientFactory,
+		Worktrees:        f.worktrees,
+		RuntimeAuthority: f.runtimeAuthority,
 	})
 	if err != nil {
 		t.Fatalf("NewStarter: %v", err)
 	}
-	f.sessionRuntime = sessionRuntime
 	f.starter = starter
 	t.Cleanup(func() { _ = starter.Close() })
 }
@@ -1855,7 +1855,7 @@ func (f starterFixture) schedulerWithOptions(t *testing.T, opts ...SchedulerOpti
 	if err != nil {
 		t.Fatalf("scheduler.New: %v", err)
 	}
-	f.starter.SetRuntimeFinished(scheduler.RuntimeFinished)
+	*f.schedulerTarget = scheduler
 	t.Cleanup(func() { _ = scheduler.Close() })
 	return scheduler
 }
@@ -2075,11 +2075,11 @@ type workflowAskHandlerFixture struct {
 func newWorkflowAskHandlerFixture() workflowAskHandlerFixture {
 	store := &recordingRuntimeStore{}
 	runtimes := &workflowAskHandlerRuntime{}
-	return workflowAskHandlerFixture{starter: &Starter{store: store, runtimes: runtimes}, store: store, runtimes: runtimes}
+	return workflowAskHandlerFixture{starter: &Starter{store: store, attention: runtimes}, store: store, runtimes: runtimes}
 }
 
 func (f workflowAskHandlerFixture) handle(ctx context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-	return f.starter.handleWorkflowAsk(ctx, "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), req)
+	return f.starter.handleWorkflowAsk(ctx, f.runtimes, "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), req)
 }
 
 func workflowTestBatchQuestion(askID string, batch *askquestion.AskQuestionBatchMetadata) askquestion.AskQuestionRequest {
@@ -2094,14 +2094,6 @@ type workflowAskHandlerRuntime struct {
 	cleared         []string
 	skipped         []string
 	approvalCleared []string
-}
-
-func (r *workflowAskHandlerRuntime) PublishRuntimeEvent(string, runtime.Event) {}
-
-func (r *workflowAskHandlerRuntime) PublishRuntimeEventForEngine(string, *runtime.Engine, runtime.Event) {
-}
-
-func (r *workflowAskHandlerRuntime) PublishRuntimeReadModelUpdate(string, clientui.RuntimeReadModelUpdate) {
 }
 
 func (r *workflowAskHandlerRuntime) AwaitPromptResponse(_ context.Context, _ string, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
@@ -2136,6 +2128,10 @@ type recordingRuntimeStore struct {
 
 func (s *recordingRuntimeStore) GetRun(context.Context, workflow.RunID) (workflowstore.RunRecord, error) {
 	return workflowstore.RunRecord{}, nil
+}
+
+func (s *recordingRuntimeStore) ListRuns(context.Context, workflow.TaskID) ([]workflowstore.RunRecord, error) {
+	return nil, nil
 }
 
 func (s *recordingRuntimeStore) GetRunStartContext(context.Context, workflow.RunID) (workflowstore.RunStartContext, error) {

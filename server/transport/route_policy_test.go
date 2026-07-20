@@ -375,7 +375,6 @@ func newRoutePolicyFixture(t *testing.T) routePolicyFixture {
 	}
 	t.Cleanup(func() { _ = appCore.Close() })
 	ownStore := createGatewayAuthoritativeSession(t, appCore)
-	appCore.RegisterSessionStore(ownStore)
 	foreignStore, err := session.Create(
 		filepath.Join(filepath.Join(resolvedB.Config.PersistenceRoot, "projects"), bindingB.ProjectID, "sessions"),
 		"workspace-b",

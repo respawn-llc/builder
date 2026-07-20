@@ -2,29 +2,39 @@ package transport
 
 import (
 	"context"
+	"io"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"core/server/attentionnotify"
+	"core/server/core"
+	"core/server/registry"
+	"core/server/runtime"
+	"core/server/sessionruntime"
 	askquestion "core/server/tools"
+	"core/shared/apicontract"
 	remoteclient "core/shared/client"
 	"core/shared/clientui"
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
 func TestGatewayRemoteAttentionDesktopRouteIsRootGlobalAndLiveOnly(t *testing.T) {
-	appCore, server := newGatewayTestServer(t)
+	appCore, prompts, server := newGatewayAttentionTestServer(t)
 	defer func() { _ = appCore.Close() }()
 	defer server.Close()
 
 	sessionOne := createGatewayAuthoritativeSession(t, appCore)
-	appCore.RegisterSessionStore(sessionOne)
 	activateGatewayController(t, appCore, sessionOne.Meta().SessionID)
+	registerGatewayPromptRuntime(t, prompts, sessionOne.Meta().SessionID)
 	sessionTwo := createGatewayAuthoritativeSession(t, appCore)
-	appCore.RegisterSessionStore(sessionTwo)
 	activateGatewayController(t, appCore, sessionTwo.Meta().SessionID)
+	registerGatewayPromptRuntime(t, prompts, sessionTwo.Meta().SessionID)
 
-	appCore.BeginPendingPrompt(sessionOne.Meta().SessionID, gatewayTaskBatchAskRequest("old-ask", "project-old", "task-old", sessionOne.Meta().SessionID))
+	beginGatewayPendingPrompt(t, prompts, sessionOne.Meta().SessionID, gatewayTaskBatchAskRequest("old-ask", "project-old", "task-old", sessionOne.Meta().SessionID))
 	remote, err := remoteclient.DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
 	if err != nil {
 		t.Fatalf("DialRemoteURL: %v", err)
@@ -38,29 +48,27 @@ func TestGatewayRemoteAttentionDesktopRouteIsRootGlobalAndLiveOnly(t *testing.T)
 		t.Fatalf("desktop subscription replayed old pending attention: %+v", event)
 	}
 
-	appCore.BeginPendingPrompt(sessionOne.Meta().SessionID, gatewayTaskBatchAskRequest("ask-a", "project-a", "task-a", sessionOne.Meta().SessionID))
-	appCore.BeginPendingPrompt(sessionTwo.Meta().SessionID, gatewayTaskBatchAskRequest("ask-b", "project-b", "task-b", sessionTwo.Meta().SessionID))
+	beginGatewayPendingPrompt(t, prompts, sessionOne.Meta().SessionID, gatewayTaskBatchAskRequest("ask-a", "project-a", "task-a", sessionOne.Meta().SessionID))
+	beginGatewayPendingPrompt(t, prompts, sessionTwo.Meta().SessionID, gatewayTaskBatchAskRequest("ask-b", "project-b", "task-b", sessionTwo.Meta().SessionID))
 	first := nextGatewayAttentionEvent(t, desktop)
 	second := nextGatewayAttentionEvent(t, desktop)
 	if first.Pending.Target.ProjectID != "project-a" || second.Pending.Target.ProjectID != "project-b" {
 		t.Fatalf("desktop cross-project events = %+v then %+v", first, second)
 	}
 
-	appCore.BeginPendingPrompt(sessionOne.Meta().SessionID, askquestion.AskQuestionRequest{ID: "generic-ask", StepID: gatewayAttentionStepID, Question: "Generic?"})
+	beginGatewayPendingPrompt(t, prompts, sessionOne.Meta().SessionID, askquestion.AskQuestionRequest{ID: "generic-ask", StepID: gatewayAttentionStepID, Question: "Generic?"})
 	if event, err := desktop.Next(shortGatewayAttentionContext(t)); err == nil {
 		t.Fatalf("desktop received generic session prompt: %+v", event)
 	}
 }
 
 func TestGatewaySessionAttentionRouteRequiresAttachedSession(t *testing.T) {
-	appCore, server := newGatewayTestServer(t)
+	appCore, _, server := newGatewayAttentionTestServer(t)
 	defer func() { _ = appCore.Close() }()
 	defer server.Close()
 	sessionOne := createGatewayAuthoritativeSession(t, appCore)
-	appCore.RegisterSessionStore(sessionOne)
 	activateGatewayController(t, appCore, sessionOne.Meta().SessionID)
 	sessionTwo := createGatewayAuthoritativeSession(t, appCore)
-	appCore.RegisterSessionStore(sessionTwo)
 	activateGatewayController(t, appCore, sessionTwo.Meta().SessionID)
 
 	conn := dialGateway(t, server)
@@ -83,12 +91,12 @@ func TestGatewaySessionAttentionRouteRequiresAttachedSession(t *testing.T) {
 }
 
 func TestGatewayRemoteSessionAttentionReceivesAuthorizedGenericPrompt(t *testing.T) {
-	appCore, server := newGatewayTestServer(t)
+	appCore, prompts, server := newGatewayAttentionTestServer(t)
 	defer func() { _ = appCore.Close() }()
 	defer server.Close()
 	sessionStore := createGatewayAuthoritativeSession(t, appCore)
-	appCore.RegisterSessionStore(sessionStore)
 	activateGatewayController(t, appCore, sessionStore.Meta().SessionID)
+	registerGatewayPromptRuntime(t, prompts, sessionStore.Meta().SessionID)
 
 	remote, err := remoteclient.DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
 	if err != nil {
@@ -99,11 +107,63 @@ func TestGatewayRemoteSessionAttentionReceivesAuthorizedGenericPrompt(t *testing
 	if err != nil {
 		t.Fatalf("SubscribeSessionAttentionNotifications: %v", err)
 	}
-	appCore.BeginPendingPrompt(sessionStore.Meta().SessionID, askquestion.AskQuestionRequest{ID: "generic-ask", StepID: gatewayAttentionStepID, Question: "Generic?"})
+	beginGatewayPendingPrompt(t, prompts, sessionStore.Meta().SessionID, askquestion.AskQuestionRequest{ID: "generic-ask", StepID: gatewayAttentionStepID, Question: "Generic?"})
 	pending := nextGatewayAttentionEvent(t, sub)
 	if pending.Pending.Target.Kind != clientui.AttentionNotificationTargetSessionPrompt || pending.Pending.Target.SessionID != sessionStore.Meta().SessionID {
 		t.Fatalf("session prompt pending = %+v", pending)
 	}
+}
+
+type gatewayAttentionDependencies struct {
+	*core.Core
+	attention apicontract.AttentionNotificationService
+}
+
+func (d *gatewayAttentionDependencies) AttentionNotificationClient() apicontract.AttentionNotificationService {
+	return d.attention
+}
+
+func newGatewayAttentionTestServer(t *testing.T) (*core.Core, *registry.RuntimeRegistry, *httptest.Server) {
+	t.Helper()
+	appCore, _ := newGatewayTestCore(t, true, true)
+	prompts := registry.NewRuntimeRegistry().WithAttentionNotifications(attentionnotify.NewBroker())
+	gateway, err := NewGateway(
+		&gatewayAttentionDependencies{Core: appCore, attention: prompts},
+		protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	return appCore, prompts, httptest.NewServer(gateway.Handler())
+}
+
+func beginGatewayPendingPrompt(t *testing.T, prompts *registry.RuntimeRegistry, sessionID string, request askquestion.AskQuestionRequest) {
+	t.Helper()
+	prompts.PromptPending(gatewayPromptResource(sessionID), runtimeids.NewExecutionScopeID(), request, time.Now().UTC())
+}
+
+func registerGatewayPromptRuntime(t *testing.T, prompts *registry.RuntimeRegistry, sessionID string) {
+	t.Helper()
+	if err := prompts.ResourceReady(
+		context.Background(),
+		sessionruntime.AgentResourceDescriptor{Ref: gatewayPromptResource(sessionID), State: sessionruntime.AgentResourceReady},
+		&runtime.Engine{},
+		func() (io.Closer, error) { return io.NopCloser(strings.NewReader("")), nil },
+	); err != nil {
+		t.Fatalf("register prompt runtime: %v", err)
+	}
+}
+
+func gatewayPromptResource(sessionID string) runtimeids.SessionResourceRef {
+	id, err := runtimeids.ParseSessionID(sessionID)
+	if err != nil {
+		panic(err)
+	}
+	resource, err := runtimeids.NewSessionResourceRef(id, 1)
+	if err != nil {
+		panic(err)
+	}
+	return resource
 }
 
 func gatewayTaskBatchAskRequest(askID string, projectID string, taskID string, sessionID string) askquestion.AskQuestionRequest {

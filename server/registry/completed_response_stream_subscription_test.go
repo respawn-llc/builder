@@ -19,71 +19,6 @@ import (
 	"core/shared/transcript"
 )
 
-func TestSessionTranscriptSubscriptionContinuesAfterCanceledAskWithoutStreamCollision(t *testing.T) {
-	testSessionTranscriptSubscriptionContinuesAfterAskWithoutStreamCollision(
-		t,
-		tools.AskQuestionResponse{RequestID: "ask-1"},
-		context.Canceled,
-	)
-}
-
-func TestSessionTranscriptSubscriptionContinuesAfterAnsweredAskWithoutStreamCollision(t *testing.T) {
-	testSessionTranscriptSubscriptionContinuesAfterAskWithoutStreamCollision(
-		t,
-		tools.AskQuestionResponse{RequestID: "ask-1", FreeformAnswer: "answer"},
-		nil,
-	)
-}
-
-func testSessionTranscriptSubscriptionContinuesAfterAskWithoutStreamCollision(t *testing.T, promptResponse tools.AskQuestionResponse, promptErr error) {
-	t.Helper()
-	askBroker := tools.NewAskQuestionBroker()
-	firstStep := scriptedllm.ToolBatch("", llm.ToolCall{
-		ID:    "ask-1",
-		Name:  string(toolspec.ToolAskQuestion),
-		Input: json.RawMessage(`{"question":"What should happen next?"}`),
-	})
-	firstStep.StreamDeltas = []llm.AssistantDelta{{Text: "draft", Phase: llm.MessagePhaseCommentary}}
-	secondStep := scriptedllm.FinalAnswer("answer")
-	secondStep.StreamDeltas = []llm.AssistantDelta{{Text: "answer", Phase: llm.MessagePhaseFinal}}
-	secondStep.ExpectedToolResults = []scriptedllm.ExpectedToolResult{{CallID: "ask-1", Name: string(toolspec.ToolAskQuestion)}}
-	fixture := newStreamSubscriptionFixture(
-		t,
-		scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{firstStep, secondStep}}),
-		tools.NewRegistry(tools.HandlerRegistration{
-			ID:      toolspec.ToolAskQuestion,
-			Handler: tools.NewAskQuestionTool(askBroker, func() bool { return true }),
-		}),
-		[]toolspec.ID{toolspec.ToolAskQuestion},
-	)
-	askBroker.SetAskHandler(func(req tools.AskQuestionRequest) (tools.AskQuestionResponse, error) {
-		return fixture.registry.AwaitPromptResponse(context.Background(), fixture.engine.SessionID(), req)
-	})
-	submitDone := fixture.submitUserMessage("continue")
-
-	waitForPendingPrompt(t, fixture.registry, fixture.engine.SessionID(), "ask-1")
-	if err := fixture.registry.SubmitPromptResponse(fixture.engine.SessionID(), promptResponse, promptErr); err != nil {
-		t.Fatalf("resolve pending prompt: %v", err)
-	}
-	for fixture.lifecycle.finalAssistant == nil {
-		fixture.next()
-	}
-
-	fixture.lifecycle.assertCompleted(t)
-	if fixture.lifecycle.promptResolved == nil ||
-		fixture.lifecycle.toolCompletions["ask-1"] == nil ||
-		fixture.lifecycle.promptResolved.position >= fixture.lifecycle.toolCompletions["ask-1"].position ||
-		fixture.lifecycle.toolCompletions["ask-1"].position >= fixture.lifecycle.resumedDelta.position {
-		t.Fatalf("ask lifecycle = prompt:%+v completion:%+v resumed:%+v", fixture.lifecycle.promptResolved, fixture.lifecycle.toolCompletions["ask-1"], fixture.lifecycle.resumedDelta)
-	}
-	fixture.awaitSubmission(submitDone)
-	fixture.assertSubscriptionOpen()
-	hydration := fixture.freshCleanHydration()
-	if !hydrationContainsAssistantStream(hydration, fixture.lifecycle.resumedDelta.streamID) {
-		t.Fatalf("fresh hydration omitted committed resumed stream %s", fixture.lifecycle.resumedDelta.streamID)
-	}
-}
-
 func TestSessionTranscriptSubscriptionContinuesAfterConcurrentLocalToolsWithoutStreamCollision(t *testing.T) {
 	handler := newControlledToolHandler("call-a", "call-b")
 	firstStep := scriptedllm.ToolBatch("",
@@ -161,7 +96,7 @@ func newStreamSubscriptionFixture(t *testing.T, client llm.Client, toolRegistry 
 		ThinkingLevel: "medium",
 		EnabledTools:  append([]toolspec.ID(nil), enabledTools...),
 	}, func(engine *runtime.Engine, evt runtime.Event) {
-		registry.PublishRuntimeEvent(engine.SessionID(), evt)
+		registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), evt)
 	})
 	registerReady(t, registry, engine.SessionID(), engine)
 	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })

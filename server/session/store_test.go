@@ -410,17 +410,17 @@ func TestLockedContractMutationObserverCommitSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}
-	observer.err = os.ErrPermission
-	if err := store.MarkModelDispatchLocked(LockedContract{Model: "gpt-5", SystemPrompt: "prompt A", HasSystemPrompt: true}); err == nil {
-		t.Fatal("expected observer error on initial lock")
+	if err := store.MarkModelDispatchLocked(LockedContract{Model: "gpt-5", SystemPrompt: "prompt A", HasSystemPrompt: true}); err != nil {
+		t.Fatalf("initial lock: %v", err)
 	}
 	before := store.Meta().Locked
+	observer.err = os.ErrPermission
 	result, err := store.MarkLockedPromptFacingSnapshotsStale()
-	if err == nil || result.Committed {
-		t.Fatalf("observer result=%+v err=%v, want uncommitted failure", result, err)
+	if err == nil || !result.Committed {
+		t.Fatalf("observer result=%+v err=%v, want committed failure", result, err)
 	}
-	if after := store.Meta().Locked; before == nil || after == nil || after.SystemPrompt != before.SystemPrompt || !after.HasSystemPrompt {
-		t.Fatalf("lock after failed mutation = %+v, before %+v", after, before)
+	if after := store.Meta().Locked; before == nil || after == nil || after.SystemPrompt != "" || after.HasSystemPrompt {
+		t.Fatalf("lock after committed mutation = %+v, before %+v", after, before)
 	}
 }
 

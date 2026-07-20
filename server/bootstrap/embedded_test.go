@@ -60,9 +60,6 @@ func TestBuildRuntimeSupportUsesConfigSettings(t *testing.T) {
 	if support.Background == nil {
 		t.Fatal("expected background manager")
 	}
-	if support.BackgroundRouter == nil {
-		t.Fatal("expected background router")
-	}
 }
 
 func TestBuildGeneratedSupportUsesSharedSyncPath(t *testing.T) {

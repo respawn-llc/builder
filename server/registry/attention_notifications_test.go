@@ -29,11 +29,7 @@ func TestRuntimeRegistryKeepsGenericPromptAttentionOffDesktopRootStream(t *testi
 		t.Fatalf("SubscribeAttentionNotifications: %v", err)
 	}
 
-	done := make(chan error, 1)
-	go func() {
-		_, err := registry.AwaitPromptResponse(context.Background(), "session-1", askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "Proceed?"})
-		done <- err
-	}()
+	projectPendingPromptForTest(registry, "session-1", askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "Proceed?"})
 	pending := nextRegistryAttentionEvent(t, sessionSub)
 	promptID := attentionNotificationID(clientui.AttentionNotificationKindQuestion, "ask-1")
 	if pending.Source != clientui.AttentionNotificationSourceLive || pending.Type != clientui.AttentionNotificationEventPending || pending.Pending.ID != promptID || pending.Pending.Target.Kind != clientui.AttentionNotificationTargetSessionPrompt {
@@ -42,18 +38,13 @@ func TestRuntimeRegistryKeepsGenericPromptAttentionOffDesktopRootStream(t *testi
 	if event, err := desktopSub.Next(shortRegistryContext(t)); err == nil {
 		t.Fatalf("desktop received generic pending event: %+v", event)
 	}
-	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{RequestID: "ask-1", Answer: "yes"}, nil); err != nil {
-		t.Fatalf("SubmitPromptResponse: %v", err)
-	}
+	resolvePendingPromptForTest(registry, "session-1", "ask-1")
 	resolved := nextRegistryAttentionEvent(t, sessionSub)
 	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, promptID) {
 		t.Fatalf("resolved event = %+v", resolved)
 	}
 	if event, err := desktopSub.Next(shortRegistryContext(t)); err == nil {
 		t.Fatalf("desktop received generic resolved event: %+v", event)
-	}
-	if err := <-done; err != nil {
-		t.Fatalf("AwaitPromptResponse: %v", err)
 	}
 }
 
@@ -68,11 +59,7 @@ func TestRuntimeRegistryPublishesTaskQuestionBatchWithoutGenericResolve(t *testi
 		t.Fatalf("SubscribeAttentionNotifications: %v", err)
 	}
 	req := taskBatchAskRequest("ask-1")
-	done := make(chan error, 1)
-	go func() {
-		_, err := registry.AwaitPromptResponse(context.Background(), "session-1", req)
-		done <- err
-	}()
+	projectPendingPromptForTest(registry, "session-1", req)
 
 	pending := nextRegistryAttentionEvent(t, desktopSub)
 	batchID := attentionNotificationID(clientui.AttentionNotificationKindQuestion, "batch-1")
@@ -82,12 +69,7 @@ func TestRuntimeRegistryPublishesTaskQuestionBatchWithoutGenericResolve(t *testi
 	if pending.Pending.Question.DisplayCount != 2 || len(pending.Pending.Question.CurrentUnresolvedAskIDs) != 1 {
 		t.Fatalf("question state = %+v", pending.Pending.Question)
 	}
-	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{RequestID: "ask-1", Answer: "yes"}, nil); err != nil {
-		t.Fatalf("SubmitPromptResponse: %v", err)
-	}
-	if err := <-done; err != nil {
-		t.Fatalf("AwaitPromptResponse: %v", err)
-	}
+	resolvePendingPromptForTest(registry, "session-1", "ask-1")
 	if event, err := desktopSub.Next(shortRegistryContext(t)); err == nil {
 		t.Fatalf("task question resolved from prompt answer before durable clear: %+v", event)
 	}
@@ -135,11 +117,7 @@ func TestRuntimeRegistryPublishesTaskApprovalPromptAsDurablyClearedQuestionAtten
 			{Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"},
 		},
 	}
-	done := make(chan error, 1)
-	go func() {
-		_, err := registry.AwaitPromptResponse(context.Background(), "session-1", req)
-		done <- err
-	}()
+	projectPendingPromptForTest(registry, "session-1", req)
 
 	pending := nextRegistryAttentionEvent(t, desktopSub)
 	if pending.Type != clientui.AttentionNotificationEventPending || pending.Pending.Kind != clientui.AttentionNotificationKindQuestion || pending.Pending.Target.Kind != clientui.AttentionNotificationTargetWorkflowTask {
@@ -151,15 +129,7 @@ func TestRuntimeRegistryPublishesTaskApprovalPromptAsDurablyClearedQuestionAtten
 	if pending.Pending.Approval != nil {
 		t.Fatalf("task-scoped approval prompt must not publish approval attention: %+v", pending.Pending.Approval)
 	}
-	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{
-		RequestID: "approval-1",
-		Approval:  &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce},
-	}, nil); err != nil {
-		t.Fatalf("SubmitPromptResponse: %v", err)
-	}
-	if err := <-done; err != nil {
-		t.Fatalf("AwaitPromptResponse: %v", err)
-	}
+	resolvePendingPromptForTest(registry, "session-1", "approval-1")
 	if event, err := desktopSub.Next(shortRegistryContext(t)); err == nil {
 		t.Fatalf("prompt response resolved task approval before durable clear: %+v", event)
 	}
@@ -187,11 +157,7 @@ func TestRuntimeRegistrySkippedFirstTaskQuestionPreparesBatchBeforeMaterializati
 	registry.MarkTaskQuestionSkipped(*first.QuestionBatch)
 
 	second := taskBatchAskRequest("ask-2")
-	done := make(chan error, 1)
-	go func() {
-		_, err := registry.AwaitPromptResponse(context.Background(), "session-1", second)
-		done <- err
-	}()
+	projectPendingPromptForTest(registry, "session-1", second)
 
 	pending := nextRegistryAttentionEvent(t, desktopSub)
 	if pending.Type != clientui.AttentionNotificationEventPending || pending.Pending.Question.DisplayCount != 1 {
@@ -200,12 +166,7 @@ func TestRuntimeRegistrySkippedFirstTaskQuestionPreparesBatchBeforeMaterializati
 	if len(pending.Pending.Question.SkippedAskIDs) != 1 || pending.Pending.Question.SkippedAskIDs[0] != "ask-1" {
 		t.Fatalf("skipped ask ids = %+v", pending.Pending.Question)
 	}
-	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{RequestID: "ask-2", Answer: "yes"}, nil); err != nil {
-		t.Fatalf("SubmitPromptResponse: %v", err)
-	}
-	if err := <-done; err != nil {
-		t.Fatalf("AwaitPromptResponse: %v", err)
-	}
+	resolvePendingPromptForTest(registry, "session-1", "ask-2")
 	registry.MarkTaskQuestionCleared(*second.QuestionBatch, "ask-2")
 	resolved := nextRegistryAttentionEvent(t, desktopSub)
 	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, attentionNotificationID(clientui.AttentionNotificationKindQuestion, "batch-1")) {
@@ -219,7 +180,7 @@ func TestRuntimeRegistrySessionAttentionSnapshotUsesPendingPromptStore(t *testin
 	engine := &runtime.Engine{}
 	registerReady(t, registry, "session-1", engine)
 	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
-	registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "Proceed?"})
+	projectPendingPromptForTest(registry, "session-1", askquestion.AskQuestionRequest{ID: "ask-1", StepID: registryTestStepID, Question: "Proceed?"})
 
 	sub, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1", IncludePendingPromptSnapshot: true})
 	if err != nil {
@@ -242,7 +203,7 @@ func TestRuntimeRegistrySessionAttentionSnapshotOverflowReturnsStreamGap(t *test
 	registerReady(t, registry, "session-1", engine)
 	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
 	for i := 0; i < 65; i++ {
-		registry.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: fmt.Sprintf("ask-%d", i), StepID: registryTestStepID, Question: "Proceed?"})
+		projectPendingPromptForTest(registry, "session-1", askquestion.AskQuestionRequest{ID: fmt.Sprintf("ask-%d", i), StepID: registryTestStepID, Question: "Proceed?"})
 	}
 
 	sub, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1", IncludePendingPromptSnapshot: true})
@@ -261,7 +222,7 @@ func TestRuntimeRegistrySessionAttentionSnapshotPreservesTaskQuestionBatch(t *te
 	registerReady(t, registry, "session-1", engine)
 	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
 	req := taskBatchAskRequest("ask-1")
-	registry.BeginPendingPrompt("session-1", req)
+	projectPendingPromptForTest(registry, "session-1", req)
 
 	sub, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1", IncludePendingPromptSnapshot: true})
 	if err != nil {

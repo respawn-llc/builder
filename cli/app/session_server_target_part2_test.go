@@ -6,11 +6,9 @@ import (
 	"core/server/auth"
 	"core/server/authservice"
 	serverstartup "core/server/startup"
-	askquestion "core/server/tools"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
-	"core/shared/textutil"
 	"core/shared/toolspec"
 	"io"
 	"path/filepath"
@@ -308,70 +306,40 @@ func TestStartSessionServerUsesInvocationOverridesWhenAttachingToDiscoveredDaemo
 
 func TestStartSessionServerUsesConfiguredDaemonForPromptRoundTrip(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspace(t)
+	t.Setenv("KENT_REVIEWER_FREQUENCY", "off")
+	model := newAppTestModelServer(t,
+		appTestModelStep{Calls: []appTestModelToolCall{
+			appTestAskCall("ask-1", "Pick one", []string{"one", "two"}, 2),
+		}},
+		appTestModelStep{Calls: []appTestModelToolCall{
+			appTestOutsidePatchCall("patch-1", appTestOutsidePatchPath(t)),
+		}},
+		appTestModelStep{Final: "prompt round trip complete"},
+	)
+	defer model.Close()
 
 	fixture := startConfiguredDaemonFixture(t, workspace, serverstartup.Request{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5",
+		OpenAIBaseURL:         model.URL,
+		OpenAIBaseURLExplicit: true,
 	}, apiKeyMemoryAuthHandler("test-key"))
 
 	server := fixture.attachRemoteSessionServer(t, Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, readyMemoryAuthHandler())
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, io.Discard, "test remote prompt round trip")
+	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, io.Discard, "test remote prompt round trip")
 	defer closeRuntimeLaunchPlan(t, runtimePlan)
-	finishStep := beginAppTestModelPromptStep(t, fixture.daemon, plan.SessionID)
 
-	askDone := make(chan struct {
-		resp askquestion.AskQuestionResponse
-		err  error
-	}, 1)
-	askFailure := make(chan error, 1)
-	go func() {
-		request := appTestModelPromptRequest("ask-1", "Pick one")
-		request.Suggestions = []string{"one", "two"}
-		request.RecommendedOptionIndex = 2
-		resp, err := fixture.daemon.AwaitPromptResponse(context.Background(), plan.SessionID, request)
-		if err != nil {
-			askFailure <- err
-		}
-		askDone <- struct {
-			resp askquestion.AskQuestionResponse
-			err  error
-		}{resp: resp, err: err}
-	}()
-	askPrompt := waitForRemoteTranscriptPrompt(t, runtimePlan.Wiring.transcriptEvents, "ask-1", askFailure)
+	submissionDone, submissionFailed := startAppTestRuntimeSubmission(t, runtimePlan.Wiring.runtimeClient, "start prompt round trip")
+	askPrompt := waitForRemoteTranscriptPrompt(t, runtimePlan.Wiring.transcriptEvents, "ask-1", submissionFailed)
 	if askPrompt.Kind != clientui.TranscriptPromptKindQuestion || askPrompt.Question != "Pick one" {
 		t.Fatalf("unexpected ask prompt: %+v", askPrompt)
 	}
 	answerRemoteTranscriptPrompt(t, runtimePlan.Wiring.promptAnswers, askPrompt, clientui.PromptAnswer{
 		PromptID:             string(askPrompt.PromptID),
-		SelectedOptionNumber: textutil.Int(2),
+		SelectedOptionNumber: func() *int { selected := 2; return &selected }(),
 	})
-	select {
-	case result := <-askDone:
-		if result.err != nil {
-			t.Fatalf("AwaitPromptResponse ask: %v", result.err)
-		}
-		if result.resp.RequestID != "ask-1" || result.resp.SelectedOptionNumber == nil || *result.resp.SelectedOptionNumber != 2 {
-			t.Fatalf("unexpected ask response: %+v", result.resp)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for ask response")
-	}
-	approvalDone := make(chan struct {
-		resp askquestion.AskQuestionResponse
-		err  error
-	}, 1)
-	go func() {
-		request := appTestModelPromptRequest("approval-1", "Approve it?")
-		request.Approval = true
-		request.ApprovalOptions = []askquestion.AskQuestionApprovalOption{{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"}}
-		resp, err := fixture.daemon.AwaitPromptResponse(context.Background(), plan.SessionID, request)
-		approvalDone <- struct {
-			resp askquestion.AskQuestionResponse
-			err  error
-		}{resp: resp, err: err}
-	}()
-	approvalPrompt := waitForRemoteTranscriptPrompt(t, runtimePlan.Wiring.transcriptEvents, "approval-1")
+	approvalPrompt := waitForRemoteTranscriptPrompt(t, runtimePlan.Wiring.transcriptEvents, "", submissionFailed)
 	if approvalPrompt.Kind != clientui.TranscriptPromptKindApproval {
 		t.Fatalf("unexpected approval prompt: %+v", approvalPrompt)
 	}
@@ -383,15 +351,14 @@ func TestStartSessionServerUsesConfiguredDaemonForPromptRoundTrip(t *testing.T) 
 		},
 	})
 	select {
-	case result := <-approvalDone:
+	case result := <-submissionDone:
 		if result.err != nil {
-			t.Fatalf("AwaitPromptResponse approval: %v", result.err)
+			t.Fatalf("SubmitUserMessage: %v", result.err)
 		}
-		if result.resp.RequestID != "approval-1" || result.resp.Approval == nil || result.resp.Approval.Decision != askquestion.AskQuestionApprovalDecisionAllowOnce || result.resp.Approval.Commentary != "trusted" {
-			t.Fatalf("unexpected approval response: %+v", result.resp)
+		if result.submission.Message != "prompt round trip complete" {
+			t.Fatalf("assistant message = %q", result.submission.Message)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for approval response")
+		t.Fatal("timed out waiting for prompt round trip")
 	}
-	finishStep()
 }

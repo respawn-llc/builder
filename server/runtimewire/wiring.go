@@ -51,6 +51,7 @@ type RuntimeWiringOptions struct {
 	ProviderCapabilitiesOverride        *llm.ProviderCapabilities
 	SkipContinuationAgentRoleValidation bool
 	StepLifecycle                       runtime.StepLifecycleSink
+	LifecycleTaskFinished               func() error
 	// GlobalConfigDir is the absolute persistence root that owns model-visible
 	// global context (AGENTS.md, system prompt, skills). Empty falls back to
 	// ~/.kent inside the runtime resolvers.
@@ -238,7 +239,8 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 			}
 			eventBridge.Publish(evt)
 		},
-		StepLifecycle: opts.StepLifecycle,
+		StepLifecycle:         opts.StepLifecycle,
+		LifecycleTaskFinished: opts.LifecycleTaskFinished,
 	})
 	if err != nil {
 		return nil, err

@@ -23,7 +23,6 @@ import { SidebarProvider } from "./sidebarProvider";
 import { useStatusController } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useCurrentWindowChromeTitle } from "@/app-facade";
-import { completeWorkflowDeletion, useWorkflowDeletedEvents } from "./workflowDeletionEvents";
 
 export type AppChromeProps = Readonly<{
   children: ReactNode;
@@ -110,7 +109,6 @@ export function AppChrome({ children }: AppChromeProps) {
       <SidebarProvider>
         <WorkflowEditorDraftBridgeProvider>
           <ProjectDeletionEventHandler />
-          <WorkflowDeletionEventHandler />
           <AttentionNotificationController />
           <div
             className="app-region-no-drag relative flex min-h-0 min-w-0 w-full overflow-hidden"
@@ -183,63 +181,9 @@ function ProjectDeletionEventHandler() {
   return null;
 }
 
-function WorkflowDeletionEventHandler() {
-  const { t } = useTranslation();
-  const location = useLocation();
-  const queryClient = useQueryClient();
-  const { nativeBridge } = useAppServices();
-  const navigation = useAppNavigation();
-  const { activeDestination, closeSidebar } = useSidebar();
-  const { push } = useStatusController();
-  useWorkflowDeletedEvents(
-    nativeBridge,
-    useCallback(
-      (event) => {
-        const routeMatches = routeReferencesWorkflow(location.pathname, location.searchStr, event.workflowID);
-        const sidebarMatches = sidebarReferencesWorkflow(activeDestination, event.workflowID);
-        void completeWorkflowDeletion({
-          closeSidebar: routeMatches || sidebarMatches ? closeSidebar : noopCloseSidebar,
-          navigateWorkflowLibrary: routeMatches ? navigation.openWorkflowLibrary : noopNavigation,
-          pushDeletedToast: () => {
-            push({
-              id: "workflow-delete-deleted",
-              tone: "success",
-              title: t("workflowEditor.workflowDeleted"),
-            });
-          },
-          queryClient,
-          workflowID: event.workflowID,
-        });
-      },
-      [
-        activeDestination,
-        closeSidebar,
-        location.pathname,
-        location.searchStr,
-        navigation.openWorkflowLibrary,
-        push,
-        queryClient,
-        t,
-      ],
-    ),
-  );
-  return null;
-}
-
 function routeReferencesProject(pathname: string, projectID: string): boolean {
   const segments = pathname.split("/").filter((segment) => segment.length > 0);
   return segments[0] === "projects" && segments[1] === projectID;
-}
-
-function routeReferencesWorkflow(pathname: string, searchStr: string, workflowID: string): boolean {
-  const segments = pathname.split("/").filter((segment) => segment.length > 0);
-  if (segments[0] === "workflows" && segments[1] === workflowID) {
-    return true;
-  }
-  if (segments[0] !== "projects") {
-    return false;
-  }
-  return new URLSearchParams(searchStr).get("workflowId") === workflowID;
 }
 
 function sidebarReferencesProject(destination: SidebarDestination | null, projectID: string): boolean {
@@ -250,16 +194,6 @@ function sidebarReferencesProject(destination: SidebarDestination | null, projec
     return true;
   }
   return destination.kind === "linkWorkflow" && destination.projectID === projectID;
-}
-
-function sidebarReferencesWorkflow(destination: SidebarDestination | null, workflowID: string): boolean {
-  if (destination === null) {
-    return false;
-  }
-  if ("workflowID" in destination && destination.workflowID === workflowID) {
-    return true;
-  }
-  return destination.kind === "linkWorkflow" && destination.selectedWorkflowID === workflowID;
 }
 
 function noopCloseSidebar(): void {

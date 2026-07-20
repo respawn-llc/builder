@@ -1,9 +1,11 @@
 package launch
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"core/server/auth"
@@ -20,6 +22,8 @@ const (
 	testWorkspaceContainer = "workspace-a"
 	testProjectID          = "project-a"
 )
+
+var testSessionStores sync.Map
 
 func newTestPlanner(cfg config.App, containerDir string, storeOptions ...session.StoreOption) Planner {
 	return Planner{
@@ -49,6 +53,7 @@ func createTestSessionInContainer(t *testing.T, containerDir, workspaceContainer
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
+	testSessionStores.Store(store.Meta().SessionID, store)
 	return store
 }
 
@@ -76,14 +81,94 @@ func newSettingsPlan(t *testing.T, workspace string, settings config.Settings) S
 
 func newSettingsPlanWithSource(t *testing.T, workspace string, settings config.Settings, source config.SourceReport) SessionPlan {
 	t.Helper()
-	return SessionPlan{
-		Store:               createTestSessionInContainer(t, filepath.Join(t.TempDir(), "projects", "project-a", "sessions"), "workspace-a", workspace),
+	store := createTestSessionInContainer(t, filepath.Join(t.TempDir(), "projects", "project-a", "sessions"), "workspace-a", workspace)
+	return sessionPlanWithSnapshot(SessionPlan{
 		ActiveSettings:      settings,
 		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
 		ConfiguredModelName: settings.Model,
 		WorkspaceRoot:       workspace,
 		Source:              source,
+	}, store, filepath.Dir(store.Dir()))
+}
+
+func testStoreForPlan(t *testing.T, plan SessionPlan) *session.Store {
+	t.Helper()
+	if value, ok := testSessionStores.Load(plan.Descriptor.SessionID().String()); ok {
+		return value.(*session.Store)
 	}
+	t.Fatalf("no test store registered for session %q", plan.Descriptor.SessionID())
+	return nil
+}
+
+func testStoreForPlannerPlan(t *testing.T, planner Planner, plan SessionPlan) *session.Store {
+	t.Helper()
+	store, err := session.MaterializeSessionDescriptor(planner.Config.PersistenceRoot, plan.Descriptor, planner.StoreOptions...)
+	if err != nil {
+		t.Fatalf("materialize session descriptor: %v", err)
+	}
+	return store
+}
+
+func testPlannerForPlan(plan SessionPlan) (Planner, error) {
+	value, ok := testSessionStores.Load(plan.Descriptor.SessionID().String())
+	if !ok {
+		return Planner{}, fmt.Errorf("no test store registered for session %q", plan.Descriptor.SessionID())
+	}
+	store := value.(*session.Store)
+	return Planner{ContainerDir: filepath.Dir(store.Dir())}, nil
+}
+
+func ApplyRunPromptOverrides(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State) (SessionPlan, []string, error) {
+	planner, err := testPlannerForPlan(plan)
+	if err != nil {
+		return SessionPlan{}, nil, err
+	}
+	store := testStoreForPlanForOverride(plan)
+	if store == nil {
+		return SessionPlan{}, nil, fmt.Errorf("no test store registered for session %q", plan.Descriptor.SessionID())
+	}
+	return planner.applyRunPromptOverridesWithBudgetApplier(plan, store, overrides, authState, RunPromptOverrideOptions{}, applyDerivedModelContextBudgetOverrides)
+}
+
+func ApplyRunPromptOverridesWithOptions(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State, options RunPromptOverrideOptions) (SessionPlan, []string, error) {
+	planner, err := testPlannerForPlan(plan)
+	if err != nil {
+		return SessionPlan{}, nil, err
+	}
+	store := testStoreForPlanForOverride(plan)
+	if store == nil {
+		return SessionPlan{}, nil, fmt.Errorf("no test store registered for session %q", plan.Descriptor.SessionID())
+	}
+	return planner.applyRunPromptOverridesWithBudgetApplier(plan, store, overrides, authState, options, applyDerivedModelContextBudgetOverrides)
+}
+
+func ApplyPreparedRunPromptOverrides(plan SessionPlan, overrides serverapi.RunPromptOverrides, prepared PreparedRunPromptOverrides) (SessionPlan, []string, error) {
+	planner, err := testPlannerForPlan(plan)
+	if err != nil {
+		return SessionPlan{}, nil, err
+	}
+	store := testStoreForPlanForOverride(plan)
+	if store == nil {
+		return SessionPlan{}, nil, fmt.Errorf("no test store registered for session %q", plan.Descriptor.SessionID())
+	}
+	return planner.applyPreparedRunPromptOverridesWithBudgetApplier(plan, store, overrides, prepared, RunPromptOverrideOptions{}, applyDerivedModelContextBudgetOverrides)
+}
+
+func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State, options RunPromptOverrideOptions, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {
+	planner, err := testPlannerForPlan(plan)
+	if err != nil {
+		return SessionPlan{}, nil, err
+	}
+	store := testStoreForPlanForOverride(plan)
+	return planner.applyRunPromptOverridesWithBudgetApplier(plan, store, overrides, authState, options, applyBudget)
+}
+
+func testStoreForPlanForOverride(plan SessionPlan) *session.Store {
+	value, ok := testSessionStores.Load(plan.Descriptor.SessionID().String())
+	if !ok {
+		return nil
+	}
+	return value.(*session.Store)
 }
 
 func loadLaunchConfig(t *testing.T, workspace string, configLines ...string) config.App {

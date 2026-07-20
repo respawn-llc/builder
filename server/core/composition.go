@@ -39,6 +39,7 @@ import (
 	"core/server/worktree"
 	rpccontract "core/shared/apicontract"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -98,6 +99,24 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	attentionBroker := attentionnotify.NewBroker()
 	runtimeRegistry := registry.NewRuntimeRegistry().WithAttentionNotifications(attentionBroker)
 	runtimeRegistry.WithTranscriptContractViolationPanic(cfg.Settings.Debug)
+	var workflowScheduler *workflowrunner.SchedulerService
+	runtimeAuthority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: cfg.PersistenceRoot,
+		AuthManager:     authSupport.AuthManager,
+		Background:      runtimeSupport.Background,
+		StoreOptions:    storeOptions,
+		PromptFeed:      runtimeRegistry,
+		EventFeed: func(resource sessionruntime.AgentResourceDescriptor, event runtime.Event) {
+			runtimeRegistry.PublishAuthorityRuntimeEvent(resource.Ref, event)
+		},
+		ResourceLifecycle: runtimeRegistry,
+		StepLifecycle:     authorityStepLifecycle{registry: runtimeRegistry},
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(ref sessionruntime.WorkflowExecutionRef) {
+			if workflowScheduler != nil {
+				workflowScheduler.RuntimeFinished(ref.RunID, ref.Generation)
+			}
+		}),
+	})
 	sleepManager, sleepErr := sleepguard.NewManager(cfg.Settings.PreventSleep, func(err error) {
 		runtimeRegistry.PublishRuntimeEventToAll(runtime.Event{
 			Kind:  runtime.EventSleepGuardFailed,
@@ -110,7 +129,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	if observer := sleepManager.RuntimeActiveObserver(); observer != nil {
 		runtimeRegistry.SetSleepObserver(observer)
 	}
-	sessionStoreRegistry := registry.NewSessionStoreRegistry()
 	projectService, err := projectview.NewMetadataService(metadataStore, "")
 	if err != nil {
 		closeRootLeaseOnFailure()
@@ -122,8 +140,9 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	approvalService := promptcontrol.NewApprovalViewService(runtimeRegistry)
 	processService := processview.NewProcessViewService(runtimeSupport.Background)
 	processOutputService := processview.NewProcessOutputService(runtimeSupport.Background, runtimeSupport.Background)
-	sessionRuntimeService := sessionruntime.NewServiceWithOptions(cfg.PersistenceRoot, metadataStore, authSupport.AuthManager, runtimeSupport.FastModeState, runtimeSupport.Background, runtimeSupport.BackgroundRouter, runtimeRegistry, sessionStoreRegistry, sessionruntime.ServiceOptions{RuntimeClientFactory: opts.RuntimeClientFactory}, storeOptions...).
-		WithGeneratedRecoveredWarningProvider(func() (string, bool, error) {
+	sessionRuntimeAPI := sessionruntime.NewAPI(metadataStore, runtimeSupport.FastModeState, runtimeAuthority, sessionruntime.APIOptions{
+		RuntimeClientFactory: opts.RuntimeClientFactory,
+		RecoveredWarningProvider: func() (string, bool, error) {
 			nonEmpty, err := prompts.RecoveredRootNonEmptyFor(cfg.PersistenceRoot)
 			if err != nil {
 				return "", false, err
@@ -136,20 +155,22 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 				return "", false, warnErr
 			}
 			return warning, true, nil
-		})
-	projectService.WithRuntimeActivitySources(runtimeRegistry, sessionRuntimeService)
+		},
+	})
+	projectService.WithRuntimeAuthority(runtimeAuthority)
 	sessionStoreResolver := registry.NewGlobalPersistenceSessionResolver(cfg.PersistenceRoot, storeOptions...)
-	promptControlService := promptcontrol.NewPromptControlService(runtimeRegistry)
+	promptControlService := promptcontrol.NewPromptControlService(authorityPromptResponder{authority: runtimeAuthority})
 	runtimeOperations := runtimeops.NewCoordinator()
 	runtimeRegistry.WithOperationCoordinator(runtimeOperations)
 	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveSessionExecutionTarget)
-	runtimeControlService := runtimecontrol.NewService(runtimeRegistry).
+	runtimeControlService := runtimecontrol.NewService(runtimeAuthority).
+		WithRuntimeActivityResolver(runtimeRegistry).
 		WithOperationCoordinator(runtimeOperations).
 		WithPromptHistoryStore(metadataStore).
 		WithWorkflowSessionResolver(sessionStoreResolver).
 		WithPersistedSessionResolver(metadataStore)
 	gitInspector := worktree.NewGitInspector(nil)
-	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background, worktree.ServiceOptions{
+	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeAuthority, runtimeRegistry, runtimeSupport.Background, worktree.ServiceOptions{
 		BaseDir: cfg.Settings.Worktrees.BaseDir,
 		ResolveSetup: func(sourceWorkspaceRoot string) (config.WorktreeSettings, error) {
 			return config.LoadWorktreeSetupSettings(sourceWorkspaceRoot, cfg.PersistenceRoot)
@@ -160,18 +181,17 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	authStatusService := authservice.NewStatusService(authSupport.AuthManager, cfg.Settings)
 	updateStatusService := serverstatus.NewUpdateStatusService(config.Version, cfg.Settings.Debug)
 	serverStatusService := serverstatus.NewServerStatusService(authSupport.AuthManager, cfg, updateStatusService)
-	sessionViewService := sessionview.NewService(sessionStoreResolver, runtimeRegistry, metadataStore).
+	sessionViewService := sessionview.NewService(sessionStoreResolver, runtimeRegistry, runtimeAuthority, metadataStore).
 		WithExecutionEnvironmentConfig(cfg).
 		WithExecutionEnvironmentAuth(authStatusService).
 		WithExecutionEnvironmentGit(gitInspector).
 		WithOperationCoordinator(runtimeOperations).
 		WithCacheWarningMode(cfg.Settings.CacheWarningMode)
-	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background)
-	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, sessionStoreRegistry, authSupport.AuthManager, storeOptions...).
+	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeAuthority, runtimeRegistry, runtimeSupport.Background)
+	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, runtimeAuthority, authSupport.AuthManager).
 		WithWorkspaceRetargeter(sessionWorkspaceRetargeter).
 		WithNavigationTargetResolver(metadataStore)
 	var workflowRuntimeStarter *workflowrunner.Starter
-	var workflowScheduler *workflowrunner.SchedulerService
 	cleanupNewFailure := func() {
 		sleepManager.Close()
 		_ = worktreeService.Close()
@@ -181,6 +201,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		if workflowRuntimeStarter != nil {
 			_ = workflowRuntimeStarter.Close()
 		}
+		_ = runtimeAuthority.Close(context.Background())
 		closeRootLeaseOnFailure()
 		_ = metadataStore.Close()
 		if runtimeSupport.Background != nil {
@@ -231,7 +252,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: attention: %w", err)
 	}
 	workflowAttentionFinalizer := workflowattention.NewFinalizer(workflowApprovalProjection{store: workflowStore}, attentionBroker)
-	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeSupport.Background, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, Worktrees: runtimeTaskWorktreeRestorer{service: worktreeService}, SessionRuntime: sessionRuntimeService, AttentionFinalizer: workflowAttentionFinalizer})
+	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, Worktrees: runtimeTaskWorktreeRestorer{service: worktreeService}, RuntimeAuthority: runtimeAuthority, AttentionFinalizer: workflowAttentionFinalizer})
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: runtime starter: %w", err)
@@ -241,7 +262,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: scheduler: %w", err)
 	}
-	workflowRuntimeStarter.SetRuntimeFinished(workflowScheduler.RuntimeFinished)
 	workflowService, err := workflowsvc.New(workflowStore, workflowsvc.ReadModels{
 		Definitions: workflowDefinitions,
 		Board:       workflowBoard,
@@ -249,7 +269,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		TaskDetail:  workflowTaskDetail,
 		Activity:    workflowActivity,
 		Attention:   workflowAttention,
-	}, workflowRoleResolver, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithTaskRuntimeCanceler(workflowRuntimeStarter), workflowsvc.WithSchedulerNotifier(workflowScheduler), workflowsvc.WithPromptResponder(runtimeRegistry), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer))
+	}, workflowRoleResolver, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithTaskRuntimeCanceler(workflowRuntimeStarter), workflowsvc.WithSchedulerNotifier(workflowScheduler), workflowsvc.WithPromptResponder(authorityPromptResponder{authority: runtimeAuthority}), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer))
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: service: %w", err)
@@ -261,8 +281,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		runtimeSupport:          runtimeSupport,
 		rootLease:               rootLease,
 		metadataStore:           metadataStore,
-		sessionStoreRegistry:    sessionStoreRegistry,
 		runtimeRegistry:         runtimeRegistry,
+		runtimeAuthority:        runtimeAuthority,
 		projectViews:            projectViews,
 		authBootstrapService:    authBootstrapService,
 		authStatusService:       authStatusService,
@@ -274,7 +294,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		attentionService:        runtimeRegistry,
 		runtimeControlService:   runtimeControlService,
 		serverStatusService:     serverStatusService,
-		sessionRuntimeService:   sessionRuntimeService,
+		sessionRuntimeAPI:       sessionRuntimeAPI,
 		sessionViewService:      sessionViewService,
 		sessionLifecycleService: sessionLifecycleService,
 		updateStatusService:     updateStatusService,
@@ -464,6 +484,30 @@ func (d taskWorktreeDeleter) DeleteTaskWorktree(ctx context.Context, taskID stri
 	}
 	_, err := d.service.DeleteTaskWorktree(ctx, worktree.DeleteTaskWorktreeRequest{TaskID: taskID})
 	return err
+}
+
+type authorityPromptResponder struct {
+	authority *sessionruntime.Authority
+}
+
+func (r authorityPromptResponder) SubmitPromptResponse(sessionID string, response askquestion.AskQuestionResponse, submitErr error) error {
+	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	if err != nil {
+		return err
+	}
+	return r.authority.SubmitPromptResponse(id, response, submitErr)
+}
+
+type authorityStepLifecycle struct {
+	registry *registry.RuntimeRegistry
+}
+
+func (s authorityStepLifecycle) StepBegan(ctx context.Context, resource sessionruntime.AgentResourceDescriptor, _ sessionruntime.ExecutionScope, snapshot runtime.StepLifecycleSnapshot) error {
+	return runtimewire.NewStepLifecycleSink(resource.Ref.SessionID().String(), s.registry).StepBegan(ctx, snapshot)
+}
+
+func (s authorityStepLifecycle) StepEnded(ctx context.Context, resource sessionruntime.AgentResourceDescriptor, _ sessionruntime.ExecutionScope, snapshot runtime.StepLifecycleSnapshot) error {
+	return runtimewire.NewStepLifecycleSink(resource.Ref.SessionID().String(), s.registry).StepEnded(ctx, snapshot)
 }
 
 type runtimePendingAskResolver struct {

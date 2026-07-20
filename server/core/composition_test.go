@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
+	"core/server/sessionruntime"
 	"core/server/skillcatalog"
 	askquestion "core/server/tools"
 	"core/server/workflow"
@@ -440,34 +442,36 @@ func TestComposedWorkflowTaskDetailResolvesPendingQuestionFromSessionTranscript(
 func TestComposedAttentionClientUsesOneRootGlobalTaskDetailBroker(t *testing.T) {
 	ctx := context.Background()
 	appCore := newComposedCoreForAttentionTest(t)
-	registerCoreRuntime(t, appCore, "session-1")
-	registerCoreRuntime(t, appCore, "session-2")
+	sessionOne := runtimeids.NewSessionID().String()
+	sessionTwo := runtimeids.NewSessionID().String()
+	registerCoreRuntime(t, appCore, sessionOne)
+	registerCoreRuntime(t, appCore, sessionTwo)
 
 	desktop, err := appCore.AttentionNotificationClient().SubscribeAttentionNotifications(ctx, serverapi.AttentionNotificationSubscribeRequest{})
 	if err != nil {
 		t.Fatalf("SubscribeAttentionNotifications: %v", err)
 	}
-	sessionOne, err := appCore.AttentionNotificationClient().SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1"})
+	sessionOneSub, err := appCore.AttentionNotificationClient().SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: sessionOne})
 	if err != nil {
 		t.Fatalf("SubscribeSessionAttentionNotifications session-1: %v", err)
 	}
-	sessionTwo, err := appCore.AttentionNotificationClient().SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-2"})
+	sessionTwoSub, err := appCore.AttentionNotificationClient().SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: sessionTwo})
 	if err != nil {
 		t.Fatalf("SubscribeSessionAttentionNotifications session-2: %v", err)
 	}
 
-	appCore.BeginPendingPrompt("session-1", coreTaskBatchAskRequest("ask-a", "project-a", "task-a", "session-1"))
-	appCore.BeginPendingPrompt("session-2", coreTaskBatchAskRequest("ask-b", "project-b", "task-b", "session-2"))
+	projectCorePrompt(t, appCore, sessionOne, coreTaskBatchAskRequest("ask-a", "project-a", "task-a", sessionOne))
+	projectCorePrompt(t, appCore, sessionTwo, coreTaskBatchAskRequest("ask-b", "project-b", "task-b", sessionTwo))
 
 	firstDesktop := nextCoreAttentionEvent(t, desktop)
 	secondDesktop := nextCoreAttentionEvent(t, desktop)
 	if firstDesktop.Pending.Target.ProjectID != "project-a" || secondDesktop.Pending.Target.ProjectID != "project-b" {
 		t.Fatalf("desktop project delivery = %+v then %+v", firstDesktop, secondDesktop)
 	}
-	if event := nextCoreAttentionEvent(t, sessionOne); event.Pending.Target.TaskID != "task-a" {
+	if event := nextCoreAttentionEvent(t, sessionOneSub); event.Pending.Target.TaskID != "task-a" {
 		t.Fatalf("session-1 task-detail event = %+v", event)
 	}
-	if event := nextCoreAttentionEvent(t, sessionTwo); event.Pending.Target.TaskID != "task-b" {
+	if event := nextCoreAttentionEvent(t, sessionTwoSub); event.Pending.Target.TaskID != "task-b" {
 		t.Fatalf("session-2 task-detail event = %+v", event)
 	}
 }
@@ -475,18 +479,19 @@ func TestComposedAttentionClientUsesOneRootGlobalTaskDetailBroker(t *testing.T) 
 func TestComposedAttentionClientKeepsGenericPromptsOffDesktopRootStream(t *testing.T) {
 	ctx := context.Background()
 	appCore := newComposedCoreForAttentionTest(t)
-	registerCoreRuntime(t, appCore, "session-1")
+	sessionID := runtimeids.NewSessionID().String()
+	registerCoreRuntime(t, appCore, sessionID)
 
 	desktop, err := appCore.AttentionNotificationClient().SubscribeAttentionNotifications(ctx, serverapi.AttentionNotificationSubscribeRequest{})
 	if err != nil {
 		t.Fatalf("SubscribeAttentionNotifications: %v", err)
 	}
-	sessionSub, err := appCore.AttentionNotificationClient().SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1"})
+	sessionSub, err := appCore.AttentionNotificationClient().SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: sessionID})
 	if err != nil {
 		t.Fatalf("SubscribeSessionAttentionNotifications: %v", err)
 	}
 
-	appCore.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{
+	resource, scope := projectCorePrompt(t, appCore, sessionID, askquestion.AskQuestionRequest{
 		ID:         "ask-generic",
 		Question:   "Generic prompt?",
 		Origin:     askquestion.AskQuestionOriginModelTool,
@@ -502,7 +507,7 @@ func TestComposedAttentionClientKeepsGenericPromptsOffDesktopRootStream(t *testi
 		t.Fatalf("desktop received generic pending event: %+v", event)
 	}
 
-	appCore.CompletePendingPrompt("session-1", "ask-generic")
+	appCore.bundles.Runtime.runtimeRegistry.PromptResolved(resource, scope, "ask-generic")
 	resolved := nextCoreAttentionEvent(t, sessionSub)
 	genericID := clientui.AttentionNotificationID{
 		Kind: clientui.AttentionNotificationKindQuestion,
@@ -519,14 +524,15 @@ func TestComposedAttentionClientKeepsGenericPromptsOffDesktopRootStream(t *testi
 func TestComposedAttentionClientRoutesTargetlessTaskDetailResolvedToDesktop(t *testing.T) {
 	ctx := context.Background()
 	appCore := newComposedCoreForAttentionTest(t)
-	registerCoreRuntime(t, appCore, "session-1")
+	sessionID := runtimeids.NewSessionID().String()
+	registerCoreRuntime(t, appCore, sessionID)
 
 	desktop, err := appCore.AttentionNotificationClient().SubscribeAttentionNotifications(ctx, serverapi.AttentionNotificationSubscribeRequest{})
 	if err != nil {
 		t.Fatalf("SubscribeAttentionNotifications: %v", err)
 	}
-	req := coreTaskBatchAskRequest("ask-a", "project-a", "task-a", "session-1")
-	appCore.BeginPendingPrompt("session-1", req)
+	req := coreTaskBatchAskRequest("ask-a", "project-a", "task-a", sessionID)
+	projectCorePrompt(t, appCore, sessionID, req)
 	pending := nextCoreAttentionEvent(t, desktop)
 	if pending.Type != clientui.AttentionNotificationEventPending {
 		t.Fatalf("pending event = %+v", pending)
@@ -566,16 +572,43 @@ func newComposedCoreForAttentionTest(t *testing.T) *Core {
 
 func registerCoreRuntime(t *testing.T, appCore *Core, sessionID string) {
 	t.Helper()
-	claim, _, _ := appCore.bundles.Runtime.runtimeRegistry.AcquireRuntimeClaim(sessionID, "")
-	if claim == nil {
-		t.Fatalf("AcquireRuntimeClaim(%q) returned nil claim", sessionID)
+	id, err := runtimeids.ParseSessionID(sessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID(%q): %v", sessionID, err)
 	}
-	claim.Resolve(&runtime.Engine{}, nil, nil)
+	ref, err := runtimeids.NewSessionResourceRef(id, 1)
+	if err != nil {
+		t.Fatalf("NewSessionResourceRef(%q): %v", sessionID, err)
+	}
+	resource := sessionruntime.AgentResourceDescriptor{Ref: ref, State: sessionruntime.AgentResourceReady}
+	if err := appCore.bundles.Runtime.runtimeRegistry.ResourceReady(
+		context.Background(),
+		resource,
+		&runtime.Engine{},
+		func() (io.Closer, error) { return io.NopCloser(strings.NewReader("")), nil },
+	); err != nil {
+		t.Fatalf("ResourceReady(%q): %v", sessionID, err)
+	}
 	t.Cleanup(func() {
-		if active := appCore.bundles.Runtime.runtimeRegistry.RuntimeClaimFor(sessionID); active != nil {
-			_, _ = active.Close(context.Background(), nil)
+		if err := appCore.bundles.Runtime.runtimeRegistry.ResourceDraining(context.Background(), resource); err != nil {
+			t.Errorf("ResourceDraining(%q): %v", sessionID, err)
 		}
 	})
+}
+
+func projectCorePrompt(t *testing.T, appCore *Core, sessionID string, request askquestion.AskQuestionRequest) (runtimeids.SessionResourceRef, runtimeids.ExecutionScopeID) {
+	t.Helper()
+	id, err := runtimeids.ParseSessionID(sessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	resource, err := runtimeids.NewSessionResourceRef(id, 1)
+	if err != nil {
+		t.Fatalf("NewSessionResourceRef: %v", err)
+	}
+	scope := runtimeids.NewExecutionScopeID()
+	appCore.bundles.Runtime.runtimeRegistry.PromptPending(resource, scope, request, time.Now().UTC())
+	return resource, scope
 }
 
 func coreTaskBatchAskRequest(askID string, projectID string, taskID string, sessionID string) askquestion.AskQuestionRequest {

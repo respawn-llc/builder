@@ -28,7 +28,7 @@ func TestPlannerEnforcesParentAgentDepthAcrossRoles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plan permitted depth-2 child: %v", err)
 	}
-	if parent := permitted.Store.Meta().ParentAgentSessionID; parent == nil || parent.String() != child.Meta().SessionID {
+	if parent := testStoreForPlannerPlan(t, planner, permitted).Meta().ParentAgentSessionID; parent == nil || parent.String() != child.Meta().SessionID {
 		t.Fatalf("permitted child parent-agent session = %v, want %q", parent, child.Meta().SessionID)
 	}
 
@@ -59,8 +59,8 @@ func TestPlannerMaximumZeroRejectsFirstParentAgentChildButNotIndependentCreation
 	if err != nil {
 		t.Fatalf("plan independent scheduler/root session: %v", err)
 	}
-	if independent.Store.Meta().ParentAgentSessionID != nil {
-		t.Fatalf("independent session parent-agent provenance = %v, want absent", independent.Store.Meta().ParentAgentSessionID)
+	if testStoreForPlannerPlan(t, planner, independent).Meta().ParentAgentSessionID != nil {
+		t.Fatalf("independent session parent-agent provenance = %v, want absent", testStoreForPlannerPlan(t, planner, independent).Meta().ParentAgentSessionID)
 	}
 }
 
@@ -75,7 +75,7 @@ func TestPlannerTreatsWorkflowAgentSessionAsDepthZeroRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workflow-agent child at depth 1: %v", err)
 	}
-	if parent := plan.Store.Meta().ParentAgentSessionID; parent == nil || parent.String() != workflowRoot.Meta().SessionID {
+	if parent := testStoreForPlannerPlan(t, planner, plan).Meta().ParentAgentSessionID; parent == nil || parent.String() != workflowRoot.Meta().SessionID {
 		t.Fatalf("workflow child parent-agent session = %v, want %q", parent, workflowRoot.Meta().SessionID)
 	}
 }
@@ -116,7 +116,7 @@ func TestPlannerParentAgentAncestryFailureMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatalf("PlanSession with missing older ancestor: %v", err)
 			}
-			if plan.Store == nil {
+			if plan.Descriptor.SessionID().IsZero() {
 				t.Fatal("missing older ancestor did not produce a child session")
 			}
 		})
@@ -209,7 +209,7 @@ func TestPlannerReadsOlderAncestryAsMetadataWithoutOpeningTranscript(t *testing.
 	if err != nil {
 		t.Fatalf("PlanSession metadata-only ancestry: %v", err)
 	}
-	if plan.Store == nil {
+	if plan.Descriptor.SessionID().IsZero() {
 		t.Fatal("metadata-only ancestry did not create a child")
 	}
 	if want := []string{caller.Meta().SessionID, syntheticAncestorID.String()}; !reflect.DeepEqual(resolver.calls, want) {
@@ -310,8 +310,8 @@ func TestPlannerOpenExistingIsUnaffectedByMaximumDepth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open existing nested session: %v", err)
 	}
-	if plan.Store.Meta().SessionID != child.Meta().SessionID {
-		t.Fatalf("opened session = %q, want %q", plan.Store.Meta().SessionID, child.Meta().SessionID)
+	if plan.Descriptor.SessionID().String() != child.Meta().SessionID {
+		t.Fatalf("opened session = %q, want %q", plan.Descriptor.SessionID(), child.Meta().SessionID)
 	}
 }
 

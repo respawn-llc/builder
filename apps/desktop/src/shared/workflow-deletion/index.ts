@@ -4,6 +4,4 @@ export {
   workflowDeleteBlockersMessage,
   workflowDeleteDialogWidth,
   workflowDeleteInputFromImpact,
-  workflowDeleteNativeDialogPath,
-  type WorkflowDeleteTarget,
 } from "./workflowDeleteShared";

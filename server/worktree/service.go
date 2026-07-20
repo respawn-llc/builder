@@ -16,7 +16,7 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
-	"core/server/session"
+	"core/server/sessionruntime"
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
 	"core/shared/clientui"
@@ -29,23 +29,9 @@ const setupDiagnosticLimitBytes = 16 * 1024
 
 const rollbackSessionTargetTimeout = 5 * time.Second
 
-type runtimeController interface {
-	SyncExecutionTarget(ctx context.Context, sessionID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error
-	ClearWorktreeReminder(ctx context.Context, sessionID string) error
-	HasBlockingRuntimeActivity(ctx context.Context, sessionID string) (bool, error)
-	RunWorktreeTransition(
-		ctx context.Context,
-		sessionID string,
-		origin *serverapi.RuntimeStepOrigin,
-		fn func(context.Context, func(func() error) error, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
-	) error
+type runtimePublisher interface {
+	PublishSessionIdentity(sessionID string, target *clientui.SessionExecutionTarget)
 	PublishWorktreeTransitionOutcome(sessionID string, outcome clientui.WorktreeTransitionOutcome)
-	SteerWorktreeTransitionFailure(ctx context.Context, sessionID string, outcome clientui.WorktreeTransitionOutcome) error
-}
-
-type activeRuntimeSource interface {
-	IsSessionRuntimeActive(sessionID string) bool
-	BlockSessionRuns(sessionIDs []string) func()
 }
 
 type processSource interface {
@@ -62,8 +48,8 @@ type ServiceOptions struct {
 type Service struct {
 	metadata            *metadata.Store
 	git                 *GitInspector
-	runtime             runtimeController
-	active              activeRuntimeSource
+	authority           *sessionruntime.Authority
+	publisher           runtimePublisher
 	processes           processSource
 	baseDir             string
 	setupScript         string
@@ -205,21 +191,16 @@ type DeleteTaskWorktreeResponse struct {
 	BranchDeleted bool
 }
 
-func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, active activeRuntimeSource, runtime runtimeController, processes processSource, opts ServiceOptions) *Service {
+func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, authority *sessionruntime.Authority, publisher runtimePublisher, processes processSource, opts ServiceOptions) *Service {
 	if gitInspector == nil {
 		gitInspector = NewGitInspector(nil)
-	}
-	if active == nil {
-		if source, ok := runtime.(activeRuntimeSource); ok {
-			active = source
-		}
 	}
 	transitionCtx, cancelTransitions := context.WithCancel(context.Background())
 	return &Service{
 		metadata:            metadataStore,
 		git:                 gitInspector,
-		runtime:             runtime,
-		active:              active,
+		authority:           authority,
+		publisher:           publisher,
 		processes:           processes,
 		baseDir:             strings.TrimSpace(opts.BaseDir),
 		setupScript:         strings.TrimSpace(opts.SetupScript),
@@ -231,6 +212,33 @@ func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, activ
 		cancelTransitions:   cancelTransitions,
 		transitions:         make(map[string]pendingWorktreeTransition),
 	}
+}
+
+func (s *Service) blockSessionStarts(ctx context.Context, raw []string) (sessionruntime.SessionStartBlockRelease, error) {
+	if s == nil || s.authority == nil {
+		return nil, errors.New("worktree runtime authority is required")
+	}
+	ids, err := sessionruntime.ParseSessionIDs(raw)
+	if err != nil || len(ids) == 0 {
+		return nil, err
+	}
+	return s.authority.BlockSessionStarts(ctx, ids, sessionruntime.SessionStartBlockMaintenance)
+}
+
+func releaseSessionStarts(release sessionruntime.SessionStartBlockRelease) {
+	if release == nil {
+		return
+	}
+	if err := release.Close(context.Background()); err != nil {
+		panic(fmt.Sprintf("release worktree session start block: %v", err))
+	}
+}
+
+func authorizeSessionMaintenance(ctx context.Context, release sessionruntime.SessionStartBlockRelease) context.Context {
+	if release == nil {
+		return ctx
+	}
+	return release.AuthorizeMaintenance(ctx)
 }
 
 func (s *Service) Close() error {
@@ -781,11 +789,12 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	if record.IsMain {
 		return DeleteTaskWorktreeResponse{}, fmt.Errorf("cannot delete main workspace worktree: %w", serverapi.ErrWorktreeBlocked)
 	}
-	releaseDeletionSessionLeases, err := s.ensureTaskWorktreeDeletionUnblocked(ctx, taskID, record)
+	deletionCtx, releaseDeletionSessionLeases, err := s.ensureTaskWorktreeDeletionUnblocked(ctx, taskID, record)
 	if err != nil {
 		return DeleteTaskWorktreeResponse{}, err
 	}
 	defer releaseDeletionSessionLeases()
+	ctx = deletionCtx
 	topology, err := s.projectTopology(ctx, record.WorkspaceID, workspaceRoot)
 	if err != nil {
 		return DeleteTaskWorktreeResponse{}, err
@@ -888,9 +897,9 @@ func (s *Service) ensureNoOtherNonTerminalTasksManageWorktree(ctx context.Contex
 	return nil
 }
 
-func (s *Service) ensureTaskWorktreeDeletionUnblocked(ctx context.Context, taskID string, record metadata.WorktreeRecord) (func(), error) {
+func (s *Service) ensureTaskWorktreeDeletionUnblocked(ctx context.Context, taskID string, record metadata.WorktreeRecord) (context.Context, func(), error) {
 	if err := s.ensureNoOtherNonTerminalTasksManageWorktree(ctx, taskID, record); err != nil {
-		return func() {}, err
+		return ctx, func() {}, err
 	}
 	return s.ensureDeletionSessionAndProcessUnblocked(ctx, "", record.ID, record.CanonicalRoot)
 }
@@ -1384,10 +1393,10 @@ func (s *Service) resolveSessionWorkspaceContext(ctx context.Context, sessionID 
 	}, nil
 }
 
-func (s *Service) ensureDeletionSessionAndProcessUnblocked(ctx context.Context, currentSessionID string, worktreeID string, worktreeRoot string) (func(), error) {
+func (s *Service) ensureDeletionSessionAndProcessUnblocked(ctx context.Context, currentSessionID string, worktreeID string, worktreeRoot string) (context.Context, func(), error) {
 	blockers, err := s.metadata.ListSessionsTargetingWorktree(ctx, worktreeID)
 	if err != nil {
-		return func() {}, err
+		return ctx, func() {}, err
 	}
 	targetSessionIDs := make([]string, 0, len(blockers))
 	for _, blocker := range blockers {
@@ -1397,27 +1406,22 @@ func (s *Service) ensureDeletionSessionAndProcessUnblocked(ctx context.Context, 
 		}
 		targetSessionIDs = append(targetSessionIDs, sessionID)
 	}
-	release := func() {}
-	if s.active != nil && len(targetSessionIDs) > 0 {
-		release = s.active.BlockSessionRuns(targetSessionIDs)
+	startBlock, err := s.blockSessionStarts(ctx, targetSessionIDs)
+	if err != nil {
+		return ctx, func() {}, err
 	}
+	release := func() { releaseSessionStarts(startBlock) }
+	deletionCtx := authorizeSessionMaintenance(ctx, startBlock)
 	otherSessions := make([]metadata.WorktreeSessionBlocker, 0, len(blockers))
 	for _, blocker := range blockers {
 		sessionID := strings.TrimSpace(blocker.SessionID)
 		if sessionID == "" || sessionID == strings.TrimSpace(currentSessionID) {
 			continue
 		}
-		if s.active == nil {
-			otherSessions = append(otherSessions, blocker)
-			continue
-		}
-		if !s.active.IsSessionRuntimeActive(sessionID) {
-			continue
-		}
-		active, err := s.runtime.HasBlockingRuntimeActivity(ctx, sessionID)
+		active, err := s.authority.HasBlockingRuntimeActivity(ctx, sessionID)
 		if err != nil {
 			release()
-			return func() {}, err
+			return ctx, func() {}, err
 		}
 		if active {
 			otherSessions = append(otherSessions, blocker)
@@ -1436,14 +1440,14 @@ func (s *Service) ensureDeletionSessionAndProcessUnblocked(ctx context.Context, 
 			}
 			names = append(names, name)
 		}
-		return func() {}, errors.Join(serverapi.ErrWorktreeBlocked, fmt.Errorf("worktree is still targeted by active runs: %s", strings.Join(names, ", ")))
+		return ctx, func() {}, errors.Join(serverapi.ErrWorktreeBlocked, fmt.Errorf("worktree is still targeted by active runs: %s", strings.Join(names, ", ")))
 	}
 	processBlockers := s.backgroundProcessBlockers(worktreeRoot)
 	if len(processBlockers) > 0 {
 		release()
-		return func() {}, errors.Join(serverapi.ErrWorktreeBlocked, fmt.Errorf("worktree has active background processes: %s", strings.Join(processBlockers, ", ")))
+		return ctx, func() {}, errors.Join(serverapi.ErrWorktreeBlocked, fmt.Errorf("worktree has active background processes: %s", strings.Join(processBlockers, ", ")))
 	}
-	return release, nil
+	return deletionCtx, release, nil
 }
 
 func (s *Service) backgroundProcessBlockers(worktreeRoot string) []string {

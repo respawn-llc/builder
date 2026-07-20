@@ -67,4 +67,8 @@ func TestAppendEventWithEndByteCursorRetainsPositionWhenObserverFailsAfterCommit
 	if len(window.Events) != 1 || window.Events[0].Seq != appended.Event.Seq {
 		t.Fatalf("events after observer failure = %#v, want committed event %d", window.Events, appended.Event.Seq)
 	}
+	observer.err = nil
+	if _, _, err := store.AppendEvent("step-2", "message", "later mutation"); err != nil {
+		t.Fatalf("append after committed observer failure: %v", err)
+	}
 }

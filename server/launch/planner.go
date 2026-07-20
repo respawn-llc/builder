@@ -61,18 +61,57 @@ type SessionRequest struct {
 }
 
 type SessionPlan struct {
-	Store                               *session.Store
+	Descriptor                          session.SessionDescriptor
 	ActiveSettings                      config.Settings
 	BaseSettings                        config.Settings
 	EnabledTools                        []toolspec.ID
 	ConfiguredModelName                 string
 	SessionName                         string
+	FirstPromptPreview                  string
+	Goal                                *session.GoalState
+	WorktreeReminder                    *session.WorktreeReminderState
+	Continuation                        *session.ContinuationContext
+	Locked                              *session.LockedContract
+	WorkflowSession                     *session.WorkflowSessionState
 	PromptHistory                       []string
 	ModelContractLocked                 bool
 	SkipContinuationAgentRoleValidation bool
 	WorkspaceRoot                       string
 	Source                              config.SourceReport
 	BaseSource                          config.SourceReport
+}
+
+func sessionPlanWithSnapshot(plan SessionPlan, store *session.Store, containerDir string) SessionPlan {
+	if store == nil {
+		panic("session plan snapshot requires a store")
+	}
+	meta := store.Meta()
+	sessionID, err := runtimeids.ParseSessionID(meta.SessionID)
+	if err != nil {
+		panic(fmt.Sprintf("session plan snapshot has invalid session id %q: %v", meta.SessionID, err))
+	}
+	descriptor, err := session.NewScopedOpenSessionDescriptor(sessionID, containerDir)
+	if err != nil {
+		panic(fmt.Sprintf("session plan snapshot cannot scope session %q to %q: %v", meta.SessionID, containerDir, err))
+	}
+	plan.Descriptor = descriptor
+	plan.SessionName = meta.Name
+	plan.FirstPromptPreview = meta.FirstPromptPreview
+	plan.Goal = meta.Goal
+	plan.WorktreeReminder = meta.WorktreeReminder
+	plan.Continuation = meta.Continuation
+	plan.Locked = meta.Locked
+	plan.WorkflowSession = meta.WorkflowSession
+	plan.ModelContractLocked = meta.Locked != nil
+	return plan
+}
+
+func (p Planner) sessionPlanWithSnapshot(plan SessionPlan, store *session.Store) SessionPlan {
+	return sessionPlanWithSnapshot(plan, store, p.ContainerDir)
+}
+
+func (p Planner) materializePlanStore(plan SessionPlan) (*session.Store, error) {
+	return session.MaterializeSessionDescriptor(p.Config.PersistenceRoot, plan.Descriptor, p.StoreOptions...)
 }
 
 type RunPromptOverrideOptions struct {
@@ -157,7 +196,7 @@ func ResolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 			return SessionPlan{}, backfillErr
 		}
 	}
-	return plan, nil
+	return sessionPlanWithSnapshot(plan, store, filepath.Dir(store.Dir())), nil
 }
 
 func resolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipContinuationAgentRoleValidation bool) (SessionPlan, error) {
@@ -188,19 +227,17 @@ func resolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 	if meta.Locked == nil {
 		configuredModelName = active.Model
 	}
-	return SessionPlan{
-		Store:                               store,
+	return sessionPlanWithSnapshot(SessionPlan{
 		ActiveSettings:                      active,
 		BaseSettings:                        baseActive,
 		EnabledTools:                        enabledTools,
 		ConfiguredModelName:                 configuredModelName,
-		SessionName:                         meta.Name,
 		ModelContractLocked:                 meta.Locked != nil,
 		SkipContinuationAgentRoleValidation: skipContinuationAgentRoleValidation,
 		WorkspaceRoot:                       app.WorkspaceRoot,
 		Source:                              source,
 		BaseSource:                          baseSource,
-	}, nil
+	}, store, filepath.Dir(store.Dir())), nil
 }
 
 func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPlan, error) {
@@ -274,19 +311,17 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 	if meta.Locked == nil {
 		configuredModelName = active.Model
 	}
-	return SessionPlan{
-		Store:                               store,
+	return p.sessionPlanWithSnapshot(SessionPlan{
 		ActiveSettings:                      active,
 		BaseSettings:                        baseActive,
 		EnabledTools:                        enabledTools,
 		ConfiguredModelName:                 configuredModelName,
-		SessionName:                         meta.Name,
 		ModelContractLocked:                 meta.Locked != nil,
 		SkipContinuationAgentRoleValidation: req.SkipContinuationAgentRoleValidation,
 		WorkspaceRoot:                       p.Config.WorkspaceRoot,
 		Source:                              source,
 		BaseSource:                          baseSource,
-	}, nil
+	}, store), nil
 }
 
 func applyPersistedSubagentRoleSettings(base config.Settings, source config.SourceReport, roleName *string, allowModelOverride bool, validate bool) (config.Settings, config.SourceReport, error) {
@@ -344,19 +379,20 @@ func persistedRoleProviderID(settings config.Settings) string {
 	return string(provider)
 }
 
-func ApplyRunPromptOverrides(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State) (SessionPlan, []string, error) {
-	return ApplyRunPromptOverridesWithOptions(plan, overrides, authState, RunPromptOverrideOptions{})
+func (p Planner) ApplyRunPromptOverrides(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State) (SessionPlan, []string, error) {
+	return p.ApplyRunPromptOverridesWithOptions(plan, overrides, authState, RunPromptOverrideOptions{})
 }
 
-func ApplyRunPromptOverridesWithOptions(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State, options RunPromptOverrideOptions) (SessionPlan, []string, error) {
-	return applyRunPromptOverridesWithBudgetApplier(plan, overrides, authState, options, applyDerivedModelContextBudgetOverrides)
-}
-
-func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State, options RunPromptOverrideOptions, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {
-	var locked *session.LockedContract
-	if plan.Store != nil {
-		locked = plan.Store.Meta().Locked
+func (p Planner) ApplyRunPromptOverridesWithOptions(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State, options RunPromptOverrideOptions) (SessionPlan, []string, error) {
+	store, err := p.materializePlanStore(plan)
+	if err != nil {
+		return SessionPlan{}, nil, err
 	}
+	return p.applyRunPromptOverridesWithBudgetApplier(plan, store, overrides, authState, options, applyDerivedModelContextBudgetOverrides)
+}
+
+func (p Planner) applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, store *session.Store, overrides serverapi.RunPromptOverrides, authState auth.State, options RunPromptOverrideOptions, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {
+	locked := store.Meta().Locked
 	toolLock := locked
 	if options.AllowLockedAgentRoleChange {
 		toolLock = nil
@@ -373,7 +409,7 @@ func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides server
 	if err != nil {
 		return SessionPlan{}, nil, err
 	}
-	return applyPreparedRunPromptOverridesWithBudgetApplier(plan, overrides, prepared, options, applyBudget)
+	return p.applyPreparedRunPromptOverridesWithBudgetApplier(plan, store, overrides, prepared, options, applyBudget)
 }
 
 func baseConfigForPlan(plan SessionPlan) config.App {
@@ -568,17 +604,21 @@ func applyPreparedConfigOverrides(settings config.Settings, source config.Source
 	return settings, source, enabledTools, nil
 }
 
-func ApplyPreparedRunPromptOverrides(plan SessionPlan, overrides serverapi.RunPromptOverrides, prepared PreparedRunPromptOverrides) (SessionPlan, []string, error) {
-	return ApplyPreparedRunPromptOverridesWithOptions(plan, overrides, prepared, RunPromptOverrideOptions{})
+func (p Planner) ApplyPreparedRunPromptOverrides(plan SessionPlan, overrides serverapi.RunPromptOverrides, prepared PreparedRunPromptOverrides) (SessionPlan, []string, error) {
+	return p.ApplyPreparedRunPromptOverridesWithOptions(plan, overrides, prepared, RunPromptOverrideOptions{})
 }
 
-func ApplyPreparedRunPromptOverridesWithOptions(plan SessionPlan, overrides serverapi.RunPromptOverrides, prepared PreparedRunPromptOverrides, options RunPromptOverrideOptions) (SessionPlan, []string, error) {
-	return applyPreparedRunPromptOverridesWithBudgetApplier(plan, overrides, prepared, options, applyDerivedModelContextBudgetOverrides)
+func (p Planner) ApplyPreparedRunPromptOverridesWithOptions(plan SessionPlan, overrides serverapi.RunPromptOverrides, prepared PreparedRunPromptOverrides, options RunPromptOverrideOptions) (SessionPlan, []string, error) {
+	store, err := p.materializePlanStore(plan)
+	if err != nil {
+		return SessionPlan{}, nil, err
+	}
+	return p.applyPreparedRunPromptOverridesWithBudgetApplier(plan, store, overrides, prepared, options, applyDerivedModelContextBudgetOverrides)
 }
 
-func applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides serverapi.RunPromptOverrides, prepared PreparedRunPromptOverrides, options RunPromptOverrideOptions, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {
+func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPlan, store *session.Store, overrides serverapi.RunPromptOverrides, prepared PreparedRunPromptOverrides, options RunPromptOverrideOptions, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {
 	if !overrides.HasAny() && prepared.BaseTarget == nil {
-		return plan, nil, nil
+		return p.sessionPlanWithSnapshot(plan, store), nil, nil
 	}
 	var warnings []string
 	next := plan
@@ -592,8 +632,8 @@ func applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPlan, override
 	}
 	shouldPersistContinuation := false
 	var continuationAgentRole *string
-	if plan.Store.Meta().Continuation != nil {
-		continuationAgentRole = cloneContinuationRole(plan.Store.Meta().Continuation.AgentRole)
+	if store.Meta().Continuation != nil {
+		continuationAgentRole = cloneContinuationRole(store.Meta().Continuation.AgentRole)
 	}
 	staleLockedPromptFacingContract := false
 	persistContinuation := func() error {
@@ -602,10 +642,10 @@ func applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPlan, override
 			AgentRole:     continuationAgentRole,
 		}
 		if staleLockedPromptFacingContract {
-			_, err := next.Store.SetContinuationContextAndMarkLockedPromptFacingContractStale(ctx)
+			_, err := store.SetContinuationContextAndMarkLockedPromptFacingContractStale(ctx)
 			return err
 		}
-		return next.Store.SetContinuationContext(ctx)
+		return store.SetContinuationContext(ctx)
 	}
 	roleOverride := prepared.AgentRole
 	if !roleOverride.Present && prepared.BaseTarget != nil {
@@ -620,7 +660,7 @@ func applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPlan, override
 				return SessionPlan{}, nil, err
 			}
 		}
-		return next, warnings, nil
+		return p.sessionPlanWithSnapshot(next, store), warnings, nil
 	}
 	var requestedContinuationRole *string
 	if roleOverride.Present && !roleOverride.Default {
@@ -655,7 +695,7 @@ func applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPlan, override
 					return SessionPlan{}, nil, err
 				}
 			}
-			return next, warnings, nil
+			return p.sessionPlanWithSnapshot(next, store), warnings, nil
 		}
 	}
 	if roleOverride.Role != "" {
@@ -676,7 +716,7 @@ func applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPlan, override
 				return SessionPlan{}, nil, err
 			}
 		}
-		return next, warnings, nil
+		return p.sessionPlanWithSnapshot(next, store), warnings, nil
 	}
 	if !overrides.HasConfigOverrides() {
 		if shouldPersistContinuation {
@@ -684,10 +724,10 @@ func applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPlan, override
 				return SessionPlan{}, nil, err
 			}
 		}
-		return next, warnings, nil
+		return p.sessionPlanWithSnapshot(next, store), warnings, nil
 	}
 	loaded := prepared.OverrideConfig
-	locked := plan.Store.Meta().Locked
+	locked := store.Meta().Locked
 	var err error
 	if strings.TrimSpace(overrides.OpenAIBaseURL) != "" {
 		shouldPersistContinuation = true
@@ -718,7 +758,7 @@ func applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPlan, override
 			return SessionPlan{}, nil, err
 		}
 	}
-	return next, warnings, nil
+	return p.sessionPlanWithSnapshot(next, store), warnings, nil
 }
 
 func runPromptLoadOptions(overrides serverapi.RunPromptOverrides) config.LoadOptions {

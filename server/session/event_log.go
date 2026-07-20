@@ -15,7 +15,6 @@ import (
 const eventLogScanChunkSize = int64(4096)
 
 type parsedEvents struct {
-	events             []Event
 	totalBytes         int64
 	lastSequence       int64
 	droppedTrailingEOF bool
@@ -47,7 +46,6 @@ func (s *Store) bootstrapEventLogStateLocked() (*eventLogReconciliationObservati
 				return nil, fmt.Errorf("initialize missing events file: %w", writeErr)
 			}
 			s.eventsFileSizeBytes = 0
-			s.pendingFsyncWrites = 0
 			s.conversationFreshness = ConversationFreshnessFresh
 			if needsReconciliation {
 				observedLastSequence := s.meta.LastSequence
@@ -61,7 +59,6 @@ func (s *Store) bootstrapEventLogStateLocked() (*eventLogReconciliationObservati
 		return nil, err
 	}
 	s.eventsFileSizeBytes = info.Size()
-	s.pendingFsyncWrites = 0
 
 	window, err := readRecentEventsBackwardFile(s.eventsFP, 0, bootstrapTailRecoveryEvents, activeTailReverseChunkBytes)
 	if err != nil {
@@ -155,72 +152,86 @@ func (s *Store) persistEventLogReconciliationLocked(observedLastSequence int64, 
 	}, nil
 }
 
-func (s *Store) appendEventsLogLocked(events []Event) (int64, error) {
+func (s *Store) appendEventsLogLocked(events []Event, preMeta Meta) (written int64, receipt CommitReceipt, err error) {
 	fp, err := os.OpenFile(s.eventsFP, os.O_APPEND|os.O_RDWR, 0o644)
 	if err != nil {
-		return 0, fmt.Errorf("open events file for append: %w", err)
+		return 0, CommitReceipt{}, fmt.Errorf("open events file for append: %w", err)
 	}
-	defer func() { _ = fp.Close() }()
+	defer func() {
+		if closeErr := fp.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close events file after append: %w", closeErr))
+		}
+	}()
 
 	fileInfo, err := fp.Stat()
 	if err != nil {
-		return 0, fmt.Errorf("stat events file: %w", err)
+		return 0, CommitReceipt{}, fmt.Errorf("stat events file: %w", err)
 	}
 	currentSize := fileInfo.Size()
 	s.eventsFileSizeBytes = currentSize
 
 	needsSeparator, err := s.repairTrailingLineLocked(fp, currentSize)
 	if err != nil {
-		return 0, err
+		return 0, CommitReceipt{}, err
 	}
 
-	fileInfo, err = fp.Stat()
-	if err != nil {
-		return 0, fmt.Errorf("stat events file after repair: %w", err)
-	}
-	currentSize = fileInfo.Size()
-	s.eventsFileSizeBytes = currentSize
+	currentSize = s.eventsFileSizeBytes
 
+	if len(events) == 0 {
+		return 0, CommitReceipt{}, errors.New("event append requires at least one event")
+	}
 	payload, err := encodeEventLines(events, needsSeparator)
 	if err != nil {
-		return 0, err
+		return 0, CommitReceipt{}, err
+	}
+	startOffset := currentSize
+	record, err := s.newAppendRecoveryRecord(preMeta, s.meta, appendRecoveryPrepared, &appendRecoveryEvents{
+		StartOffset:   startOffset,
+		EndOffset:     startOffset + int64(len(payload)),
+		EventCount:    len(events),
+		FirstSequence: events[0].Seq,
+		LastSequence:  events[len(events)-1].Seq,
+		SHA256:        digestBytes(payload),
+	})
+	if err != nil {
+		return 0, CommitReceipt{}, err
+	}
+	if err := s.writeAppendRecoveryRecord(record); err != nil {
+		return 0, CommitReceipt{}, s.rollbackPreparedAppend(fp, startOffset, err)
 	}
 	writtenBytes, err := writeAll(fp, payload)
 	if err != nil {
-		return 0, err
+		return 0, CommitReceipt{}, s.rollbackPreparedAppend(fp, startOffset, err)
 	}
-	if err := s.maybeSyncEventsFileLocked(fp); err != nil {
-		return 0, err
+	if err := fp.Sync(); err != nil {
+		return 0, CommitReceipt{}, s.rollbackPreparedAppend(fp, startOffset, fmt.Errorf("fsync events file: %w", err))
 	}
 
-	written := int64(writtenBytes)
+	written = int64(writtenBytes)
 	s.eventsFileSizeBytes += written
-	return written, nil
+	record.Phase = appendRecoveryCommitted
+	if err := s.writeAppendRecoveryRecord(record); err != nil {
+		return 0, CommitReceipt{}, s.rollbackPreparedAppend(fp, startOffset, err)
+	}
+	return written, CommitReceipt{Committed: true}, nil
 }
 
-func (s *Store) maybeSyncEventsFileLocked(fp *os.File) error {
-	switch s.options.eventLog.fsyncPolicy {
-	case EventLogFSyncNever:
-		return nil
-	case EventLogFSyncAlways:
-		if err := fp.Sync(); err != nil {
-			return fmt.Errorf("fsync events file: %w", err)
-		}
-		s.pendingFsyncWrites = 0
-		return nil
-	case EventLogFSyncPeriodic:
-		s.pendingFsyncWrites++
-		if s.pendingFsyncWrites < s.options.eventLog.fsyncIntervalWrites {
-			return nil
-		}
-		if err := fp.Sync(); err != nil {
-			return fmt.Errorf("fsync events file: %w", err)
-		}
-		s.pendingFsyncWrites = 0
-		return nil
-	default:
-		return nil
+func (s *Store) rollbackPreparedAppend(fp *os.File, startOffset int64, appendErr error) error {
+	rollbackErr := fp.Truncate(startOffset)
+	if rollbackErr == nil {
+		rollbackErr = fp.Sync()
 	}
+	if rollbackErr == nil {
+		_, rollbackErr = fp.Seek(0, io.SeekEnd)
+	}
+	if rollbackErr == nil {
+		rollbackErr = s.clearAppendRecoveryRecord()
+	}
+	if rollbackErr != nil {
+		return s.closeMutationAuthorityLocked("rollback failed append", errors.Join(appendErr, rollbackErr))
+	}
+	s.eventsFileSizeBytes = startOffset
+	return appendErr
 }
 
 func (s *Store) repairTrailingLineLocked(fp *os.File, fileSize int64) (bool, error) {

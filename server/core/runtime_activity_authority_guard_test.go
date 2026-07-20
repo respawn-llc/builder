@@ -209,47 +209,72 @@ func TestRuntimeViewDoesNotExportGlobalLivenessMainViewHelper(t *testing.T) {
 	}
 }
 
-func TestProductionRuntimeConstructionWiresStepLifecycleSink(t *testing.T) {
+func TestProductionRuntimeAuthorityAdaptersStayCentralized(t *testing.T) {
 	repoRoot := findRepoRoot(t)
-	required := []string{
-		filepath.Join("server", "sessionruntime", "service.go"),
-		filepath.Join("server", "workflowrunner", "starter.go"),
-		filepath.Join("server", "runprompt", "headless.go"),
-	}
-	var violations []string
-	for _, relPath := range required {
-		path := filepath.Join(repoRoot, relPath)
+	compositionPath := filepath.Join("server", "core", "composition.go")
+	var authorityConfigured, foundSink bool
+	if err := walkProductionGoFiles(repoRoot, func(path, relPath string) error {
 		fileSet := token.NewFileSet()
 		file, err := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
 		if err != nil {
-			t.Fatalf("parse %s: %v", relPath, err)
+			return err
 		}
-		found := false
 		ast.Inspect(file, func(node ast.Node) bool {
+			if declaration, ok := node.(*ast.FuncDecl); ok {
+				if forbiddenRawEngineGetters[declaration.Name.Name] {
+					t.Errorf("%s:%d declares forbidden raw Engine getter %s", relPath, fileSet.Position(declaration.Name.Pos()).Line, declaration.Name.Name)
+				}
+				if rawEngineBridges[declaration.Name.Name] && filepath.ToSlash(filepath.Dir(relPath)) != "server/sessionruntime" {
+					t.Errorf("%s:%d declares raw Engine bridge %s outside sessionruntime", relPath, fileSet.Position(declaration.Name.Pos()).Line, declaration.Name.Name)
+				}
+				return true
+			}
 			call, ok := node.(*ast.CallExpr)
 			if !ok {
 				return true
 			}
 			selector, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || selector.Sel.Name != "NewStepLifecycleSink" {
+			if !ok {
 				return true
+			}
+			if rawEngineBridges[selector.Sel.Name] && !approvedRawEngineAdapterDirs[filepath.ToSlash(filepath.Dir(relPath))] {
+				t.Errorf("%s:%d calls raw Engine bridge %s outside an approved Authority adapter", relPath, fileSet.Position(selector.Sel.Pos()).Line, selector.Sel.Name)
 			}
 			pkg, ok := selector.X.(*ast.Ident)
-			if !ok || pkg.Name != "runtimewire" {
+			if !ok {
 				return true
 			}
-			found = true
-			return false
+			if relPath == compositionPath && pkg.Name == "sessionruntime" && selector.Sel.Name == "NewAuthority" && len(call.Args) == 1 {
+				if options, ok := call.Args[0].(*ast.CompositeLit); ok {
+					for _, element := range options.Elts {
+						if field, ok := element.(*ast.KeyValueExpr); ok {
+							key, ok := field.Key.(*ast.Ident)
+							authorityConfigured = authorityConfigured || ok && key.Name == "StepLifecycle"
+						}
+					}
+				}
+			}
+			if pkg.Name != "runtimewire" || selector.Sel.Name != "NewStepLifecycleSink" {
+				return true
+			}
+			foundSink = true
+			if relPath != compositionPath {
+				t.Errorf("%s constructs runtimewire.NewStepLifecycleSink outside Authority composition", relPath)
+			}
+			return true
 		})
-		if !found {
-			violations = append(violations, relPath+" must wire runtimewire.NewStepLifecycleSink into production runtime construction")
-		}
+		return nil
+	}); err != nil {
+		t.Fatalf("scan production StepLifecycle construction: %v", err)
 	}
-	if len(violations) > 0 {
-		sort.Strings(violations)
-		t.Fatalf("runtime construction StepLifecycle wiring guard violations:\n%s", strings.Join(violations, "\n"))
+	if !authorityConfigured || !foundSink {
+		t.Fatalf("%s Authority StepLifecycle composition = configured:%t sink:%t", compositionPath, authorityConfigured, foundSink)
 	}
 }
+
+var rawEngineBridges = map[string]bool{"WithRuntime": true, "WithCurrentRuntime": true, "WithEngine": true}
+var forbiddenRawEngineGetters = map[string]bool{"ResolveRuntime": true, "GetRuntime": true, "CurrentRuntime": true, "Runtime": true, "ResolveEngine": true, "GetEngine": true, "Engine": true}
+var approvedRawEngineAdapterDirs = map[string]bool{"server/sessionruntime": true, "server/runtimecontrol": true, "server/runprompt": true, "server/workflowrunner": true, "server/sessionview": true}
 
 func forbiddenRuntimeLivenessIdentifier(name string) (string, bool) {
 	switch name {

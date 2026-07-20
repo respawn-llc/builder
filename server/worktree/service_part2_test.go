@@ -5,6 +5,7 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 	"core/server/session"
+	"core/server/sessionruntime"
 	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -14,7 +15,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -174,134 +174,6 @@ func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *test
 	}
 }
 
-func TestRetargetSessionsFromMissingWorktreeRollsBackActiveSessionMetadataOnRuntimeError(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/missing-runtime-error")
-	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
-	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
-	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
-	record, err := env.store.GetWorktreeRecordByID(env.ctx, created.WorktreeID)
-	if err != nil {
-		t.Fatalf("GetWorktreeRecordByID: %v", err)
-	}
-	activeTargetBefore, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ResolveSessionExecutionTarget active before: %v", err)
-	}
-	env.runtime.rebindErrRoot = env.workspaceRoot
-	env.runtime.rebindErr = errors.New("runtime rebind failed")
-	env.runtime.activeSessions = map[string]bool{env.session.Meta().SessionID: true}
-	env.runtime.rebindCalls = nil
-	env.runtime.reminderCalls = nil
-
-	_, err = env.service.retargetSessionsFromWorktree(env.ctx, env.binding.WorkspaceID, env.workspaceRoot, record, worktreeSessionRetargetOptions{reminder: worktreeReminderStateForExitedWorktree})
-	if err == nil || !strings.Contains(err.Error(), "runtime rebind failed") {
-		t.Fatalf("retargetSessionsFromMissingWorktree error = %v, want runtime rebind failed", err)
-	}
-	activeTargetAfter, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ResolveSessionExecutionTarget active after: %v", err)
-	}
-	if sessionTargetWorktreeID(activeTargetAfter) != sessionTargetWorktreeID(activeTargetBefore) || activeTargetAfter.EffectiveWorkdir != activeTargetBefore.EffectiveWorkdir {
-		t.Fatalf("expected active session target rolled back after runtime failure, before=%+v after=%+v", activeTargetBefore, activeTargetAfter)
-	}
-	otherTarget, err := env.store.ResolveSessionExecutionTarget(env.ctx, otherSession.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ResolveSessionExecutionTarget other session: %v", err)
-	}
-	if sessionTargetWorktreeID(otherTarget) != "" || otherTarget.EffectiveWorkdir != env.workspaceRoot {
-		t.Fatalf("expected inactive session retargeted to main workspace, got %+v", otherTarget)
-	}
-	if len(env.runtime.rebindCalls) != 1 {
-		t.Fatalf("expected one active runtime rebind attempt, got %+v", env.runtime.rebindCalls)
-	}
-	if len(env.runtime.reminderCalls) != 2 {
-		t.Fatalf("expected reminder for both sessions, got %+v", env.runtime.reminderCalls)
-	}
-}
-
-func TestRetargetSessionsFromWorktreeStopsBeforeLaterMutationWhenPlanningFails(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/retarget-plan-failure")
-	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
-	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
-	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
-	record, err := env.store.GetWorktreeRecordByID(env.ctx, created.WorktreeID)
-	if err != nil {
-		t.Fatalf("GetWorktreeRecordByID: %v", err)
-	}
-	blockers, err := env.store.ListSessionsTargetingWorktree(env.ctx, created.WorktreeID)
-	if err != nil {
-		t.Fatalf("ListSessionsTargetingWorktree: %v", err)
-	}
-	if len(blockers) != 2 {
-		t.Fatalf("targeting sessions = %+v, want two", blockers)
-	}
-	failedSessionID := blockers[0].SessionID
-	laterSessionID := blockers[1].SessionID
-	laterTargetBefore, err := env.store.ResolveSessionExecutionTarget(env.ctx, laterSessionID)
-	if err != nil {
-		t.Fatalf("ResolveSessionExecutionTarget later before: %v", err)
-	}
-	env.runtime.blockRunsHook = func(blocked []string) {
-		if !slices.Contains(blocked, failedSessionID) {
-			t.Fatalf("blocked sessions = %+v, want failed session %q", blocked, failedSessionID)
-		}
-		if err := env.store.DeleteSessionRecordByID(env.ctx, failedSessionID); err != nil {
-			t.Fatalf("DeleteSessionRecordByID: %v", err)
-		}
-	}
-	_, err = env.service.retargetSessionsFromWorktree(env.ctx, env.binding.WorkspaceID, env.workspaceRoot, record, worktreeSessionRetargetOptions{
-		reminder:        worktreeReminderStateForExitedWorktree,
-		rollbackOnError: true,
-	})
-	if err == nil {
-		t.Fatal("retargetSessionsFromWorktree succeeded after planned session disappeared")
-	}
-	laterTargetAfter, err := env.store.ResolveSessionExecutionTarget(env.ctx, laterSessionID)
-	if err != nil {
-		t.Fatalf("ResolveSessionExecutionTarget later after: %v", err)
-	}
-	if sessionTargetWorktreeID(laterTargetAfter) != sessionTargetWorktreeID(laterTargetBefore) ||
-		laterTargetAfter.EffectiveWorkdir != laterTargetBefore.EffectiveWorkdir {
-		t.Fatalf("later session was mutated after planning failure: before=%+v after=%+v", laterTargetBefore, laterTargetAfter)
-	}
-	if len(env.runtime.rebindCalls) != 0 {
-		t.Fatalf("runtime targets changed after planning failure: %+v", env.runtime.rebindCalls)
-	}
-}
-
-func TestRetargetSessionsFromMissingWorktreeBlocksStartsUntilRuntimeSync(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/missing-block-runs")
-	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
-	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
-	record, err := env.store.GetWorktreeRecordByID(env.ctx, created.WorktreeID)
-	if err != nil {
-		t.Fatalf("GetWorktreeRecordByID: %v", err)
-	}
-	env.runtime.activeSessions = map[string]bool{otherSession.Meta().SessionID: true}
-	checked := make(chan struct{})
-	env.runtime.rebindHook = func(context.Context, string, string, string) {
-		if got := env.runtime.blockedRunCount(otherSession.Meta().SessionID); got == 0 {
-			t.Fatalf("session starts were not blocked while syncing retargeted runtime")
-		}
-		close(checked)
-	}
-
-	if _, err := env.service.retargetSessionsFromWorktree(env.ctx, env.binding.WorkspaceID, env.workspaceRoot, record, worktreeSessionRetargetOptions{reminder: worktreeReminderStateForExitedWorktree}); err != nil {
-		t.Fatalf("retargetSessionsFromWorktree: %v", err)
-	}
-	select {
-	case <-checked:
-	default:
-		t.Fatal("expected runtime sync hook to observe blocked session starts")
-	}
-	if got := env.runtime.blockedRunCount(otherSession.Meta().SessionID); got != 0 {
-		t.Fatalf("session starts still blocked after retarget = %d, want 0", got)
-	}
-}
-
 func TestNextAvailableWorktreeRootFailsAfterCollisionCap(t *testing.T) {
 	baseRoot := filepath.Join(t.TempDir(), "collision")
 	for idx := 0; idx < 1024; idx++ {
@@ -342,10 +214,18 @@ func newServiceTestEnv(t *testing.T) *serviceTestEnv {
 		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
 	}
 	sess := createServiceTestSession(t, store, cfg, binding)
-	runtime := &serviceTestRuntime{}
-	runtime.activeSessions = map[string]bool{sess.Meta().SessionID: true}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: cfg.PersistenceRoot,
+		StoreOptions:    store.AuthoritativeSessionStoreOptions(),
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	publisher := &serviceTestPublisher{}
 	processes := &serviceTestProcessSource{}
-	service := NewService(store, nil, runtime, runtime, processes, ServiceOptions{BaseDir: cfg.Settings.Worktrees.BaseDir})
+	service := NewService(store, nil, authority, publisher, processes, ServiceOptions{BaseDir: cfg.Settings.Worktrees.BaseDir})
 	return &serviceTestEnv{
 		t:             t,
 		ctx:           ctx,
@@ -353,7 +233,8 @@ func newServiceTestEnv(t *testing.T) *serviceTestEnv {
 		cfg:           cfg,
 		binding:       binding,
 		session:       sess,
-		runtime:       runtime,
+		authority:     authority,
+		publisher:     publisher,
 		processes:     processes,
 		service:       service,
 		leaseID:       "lease-1",

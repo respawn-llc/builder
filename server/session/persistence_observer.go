@@ -8,6 +8,11 @@ import (
 )
 
 var ErrEventLogReconciliationConflict = errors.New("session event-log reconciliation conflicted with newer metadata")
+var ErrStoreRecoveryRequired = errors.New("session store recovery is required")
+
+func storeRecoveryError(sessionID, operation string, err error) error {
+	return fmt.Errorf("%w: session %q failed to %s: %w", ErrStoreRecoveryRequired, sessionID, operation, err)
+}
 
 type EventLogReconciliationConflictError struct {
 	SessionID            string

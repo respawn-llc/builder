@@ -81,9 +81,15 @@ type LockedRequestShapeBackfill struct {
 	WebSearchMode   string
 }
 
-type LockedContractMutationResult struct {
+// CommitReceipt reports whether a Store mutation crossed its durable commit
+// fence before a returned operational error.
+type CommitReceipt struct {
 	Committed bool
-	Locked    *LockedContract
+}
+
+type LockedContractMutationResult struct {
+	CommitReceipt
+	Locked *LockedContract
 }
 
 type LockedModelCapabilities struct {

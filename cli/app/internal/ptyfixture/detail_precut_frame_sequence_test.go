@@ -73,7 +73,8 @@ func newDetailPrecutFramePlan() detailPrecutFramePlan {
 		}
 	}
 
-	appendInput(detailFrameShiftTab, pty.ReadinessRendererFrame)
+	finalAppliedPhase := pty.PhaseScenarioFinalApplied
+	plan.inputs[appendInput(detailFrameShiftTab, pty.ReadinessRendererFrame)].AfterPhase = &finalAppliedPhase
 	plan.initialNewestInputIndex = appendInput(detailFrameUp, pty.ReadinessRendererFrame)
 	detailPageAppliedPhase := pty.PhaseDetailInitialPageApplied
 	plan.inputs[plan.initialNewestInputIndex].AfterPhase = &detailPageAppliedPhase

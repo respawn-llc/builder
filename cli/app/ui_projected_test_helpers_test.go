@@ -6,14 +6,19 @@ import (
 	"time"
 
 	"core/internal/testharness/testsetup"
+	"core/server/llm"
 	"core/server/registry"
 	"core/server/runtime"
 	"core/server/runtimecontrol"
 	"core/server/runtimeview"
 	"core/server/session"
+	"core/server/session/sessiontest"
+	"core/server/sessionruntime"
 	"core/server/sessionview"
 	"core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -25,14 +30,6 @@ type testSessionViewSessionResolver struct {
 
 func (r testSessionViewSessionResolver) ResolveSessionStore(context.Context, string) (*session.Store, error) {
 	return r.store, nil
-}
-
-type testSessionViewRuntimeResolver struct {
-	engine *runtime.Engine
-}
-
-func (r testSessionViewRuntimeResolver) ResolveRuntime(context.Context, string) (*runtime.Engine, error) {
-	return r.engine, nil
 }
 
 func waitForTestCondition(t *testing.T, timeout time.Duration, label string, condition func() bool) {
@@ -135,38 +132,99 @@ func requireApprovalRequest(t *testing.T, control *recordingPromptControl) serve
 	}
 }
 
-func newProjectedEngineUIModel(engine *runtime.Engine, opts ...UIOption) *uiModel {
-	return newProjectedTestUIModel(newUIRuntimeClient(engine), opts...)
+type projectedAuthorityRuntime struct {
+	client    clientui.RuntimeClient
+	reads     *sessionview.Service
+	sessionID string
 }
 
-func newUIRuntimeClientFromEngine(engine *runtime.Engine) clientui.RuntimeClient {
-	if engine == nil {
-		return nil
+func newProjectedAuthorityUIModel(t *testing.T, client llm.Client, cfg runtime.Config, opts ...UIOption) *uiModel {
+	t.Helper()
+	store, persistence := createAuthoritativeTestSession(t, t.TempDir(), "ws", t.TempDir())
+	fixture := newProjectedAuthorityRuntime(t, store, persistence, client, cfg)
+	return newProjectedTestUIModel(fixture.client, opts...)
+}
+
+func newProjectedAuthorityRuntime(
+	t *testing.T,
+	store *session.Store,
+	persistence *sessiontest.Persistence,
+	client llm.Client,
+	cfg runtime.Config,
+) projectedAuthorityRuntime {
+	t.Helper()
+	if store == nil || persistence == nil {
+		t.Fatal("projected Authority runtime requires a durable session fixture")
 	}
-	resolver := testSessionViewRuntimeResolver{engine: engine}
-	reads := sessionview.NewService(nil, resolver, nil)
-	controlRegistry := registry.NewRuntimeRegistry()
-	registerUIRuntime(controlRegistry, engine.SessionID(), engine)
-	controls := runtimecontrol.NewService(controlRegistry)
-	runtimeClient := newUIRuntimeClientWithReads(engine.SessionID(), reads, controls).(*sessionRuntimeClient)
-	snapshot, err := controlRegistry.RuntimeReadModelSnapshot(context.Background(), engine.SessionID(), nil)
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
 	if err != nil {
-		panic(err)
+		t.Fatalf("parse session id: %v", err)
 	}
-	runtimeClient.storeMainView(runtimeview.MainViewFromRuntimeActivity(engine, snapshot.Version, snapshot.Activity))
-	return runtimeClient
+	settings := config.DefaultOnboardingSettings()
+	settings.ProviderOverride = "openai"
+	settings.Reviewer.Frequency = "off"
+	if cfg.Model == "" {
+		settings.Model = "gpt-5"
+	} else {
+		settings.Model = cfg.Model
+	}
+	if cfg.ContextWindowTokens > 0 {
+		settings.ModelContextWindow = cfg.ContextWindowTokens
+	}
+	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
+		Settings: settings,
+		Workdir:  store.Meta().WorkspaceRoot,
+		Client:   client,
+	})
+	if err != nil {
+		t.Fatalf("new projected runtime plan: %v", err)
+	}
+	activity := registry.NewRuntimeRegistry()
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot:   t.TempDir(),
+		StoreOptions:      persistence.Options(),
+		ResourceLifecycle: activity,
+		EventFeed: func(resource sessionruntime.AgentResourceDescriptor, event runtime.Event) {
+			activity.PublishAuthorityRuntimeEvent(resource.Ref, event)
+		},
+	})
+	if _, err := authority.OpenRuntime(t.Context(), sessionruntime.RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   "projected-ui-test",
+		Runtime:   &plan,
+	}); err != nil {
+		t.Fatalf("open projected runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close projected runtime: %v", err)
+		}
+	})
+	reads := sessionview.NewService(testSessionViewSessionResolver{store: store}, activity, authority, nil)
+	controls := runtimecontrol.NewService(authority).WithRuntimeActivityResolver(activity)
+	runtimeClient := newUIRuntimeClientWithReads(sessionID.String(), reads, controls).(*sessionRuntimeClient)
+	snapshot, err := activity.RuntimeReadModelSnapshot(context.Background(), sessionID.String(), nil)
+	if err != nil {
+		t.Fatalf("projected runtime snapshot: %v", err)
+	}
+	err = authority.WithCurrentRuntime(t.Context(), sessionID, func(_ context.Context, engine *runtime.Engine) error {
+		runtimeClient.storeMainView(runtimeview.MainViewFromRuntimeActivity(engine, snapshot.Version, snapshot.Activity))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("read projected runtime: %v", err)
+	}
+	return projectedAuthorityRuntime{
+		client:    runtimeClient,
+		reads:     reads,
+		sessionID: sessionID.String(),
+	}
 }
 
-func registerUIRuntime(r *registry.RuntimeRegistry, sessionID string, engine *runtime.Engine) {
-	claim, _, _ := r.AcquireRuntimeClaim(sessionID, "test-owner")
-	if claim == nil {
-		return
-	}
-	claim.Resolve(engine, nil, nil)
-}
-
-func newUIRuntimeClient(engine *runtime.Engine) clientui.RuntimeClient {
-	return newUIRuntimeClientFromEngine(engine)
+func newUnavailableRuntimeControlService() *runtimecontrol.Service {
+	activity := registry.NewRuntimeRegistry()
+	return runtimecontrol.NewService(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})).
+		WithRuntimeActivityResolver(activity)
 }
 
 func newTestSessionRuntimeClient(reads apicontract.SessionViewService, controls apicontract.RuntimeControlService) *sessionRuntimeClient {

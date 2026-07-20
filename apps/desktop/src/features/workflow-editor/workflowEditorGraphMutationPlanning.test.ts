@@ -7,7 +7,6 @@ import {
   confirmationOperation,
   dispatchGraphDeletion,
   dispatchPendingGraphMutation,
-  nextGraphDeleteRequestID,
   type PendingGraphMutation,
   type PendingGraphMutationAction,
 } from "./workflowEditorGraphMutationPlanning";
@@ -26,7 +25,6 @@ function pendingMutation(action: PendingGraphMutationAction): PendingGraphMutati
   return {
     action,
     counts: { nodeCount: 0, edgeCount: 0, promptCount: 0, transitionGroupCount: 0 },
-    requestID: "request-1",
     summary: summary(),
   };
 }
@@ -66,17 +64,6 @@ describe("cascadeSummaryEquals", () => {
     const left = summary({ removedEdgeIDs: ["edge-1"] });
     const right = summary({ removedEdgeIDs: ["edge-1", "edge-2"] });
     expect(cascadeSummaryEquals(left, right)).toBe(false);
-  });
-});
-
-describe("nextGraphDeleteRequestID", () => {
-  it("advances the shared index and yields distinct ids per call", () => {
-    const indexRef = { current: 0 };
-    const first = nextGraphDeleteRequestID("workflow-1", indexRef);
-    const second = nextGraphDeleteRequestID("workflow-1", indexRef);
-
-    expect(indexRef.current).toBe(2);
-    expect(first).not.toBe(second);
   });
 });
 

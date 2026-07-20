@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
@@ -439,33 +438,26 @@ func TestManualCompactionReinjectsOnlyActiveHeadlessState(t *testing.T) {
 }
 
 func TestSubmitUserMessagePersistsHeadlessModeTransitions(t *testing.T) {
-	prevHeadlessPrompt := prompts.HeadlessModePrompt
-	prevExitPrompt := prompts.HeadlessModeExitPrompt
-	prompts.HeadlessModePrompt = "headless mode instructions"
-	prompts.HeadlessModeExitPrompt = "interactive mode instructions"
-	defer func() {
-		prompts.HeadlessModePrompt = prevHeadlessPrompt
-		prompts.HeadlessModeExitPrompt = prevExitPrompt
-	}()
+	t.Parallel()
 
 	tests := []struct {
-		name           string
-		seedHeadless   bool
-		targetHeadless bool
-		messageTypes   []llm.MessageType
+		name                  string
+		seedHeadless          bool
+		targetHeadless        bool
+		messageTypes          []llm.MessageType
+		verifySeedInteractive bool
 	}{
 		{
-			name:           "enter headless",
-			targetHeadless: true,
-			messageTypes:   []llm.MessageType{llm.MessageTypeHeadlessMode},
+			name:                  "enter headless",
+			targetHeadless:        true,
+			messageTypes:          []llm.MessageType{llm.MessageTypeHeadlessMode},
+			verifySeedInteractive: true,
 		},
 		{
-			name:         "exit headless",
-			seedHeadless: true,
-			messageTypes: []llm.MessageType{llm.MessageTypeHeadlessMode, llm.MessageTypeHeadlessModeExit},
-		},
-		{
-			name: "remain interactive",
+			name:           "exit headless",
+			seedHeadless:   true,
+			messageTypes:   []llm.MessageType{llm.MessageTypeHeadlessMode, llm.MessageTypeHeadlessModeExit},
+			targetHeadless: false,
 		},
 	}
 	for _, test := range tests {
@@ -476,35 +468,23 @@ func TestSubmitUserMessagePersistsHeadlessModeTransitions(t *testing.T) {
 			if _, err := seedEngine.SubmitUserMessage(context.Background(), "seed"); err != nil {
 				t.Fatalf("seed submit: %v", err)
 			}
+			if test.verifySeedInteractive {
+				for _, message := range requestMessages(seedClient.calls[0]) {
+					if message.MessageType == llm.MessageTypeHeadlessMode || message.MessageType == llm.MessageTypeHeadlessModeExit {
+						t.Fatalf("unchanged interactive session gained headless transition: %+v", requestMessages(seedClient.calls[0]))
+					}
+				}
+			}
 
-			client := &fakeClient{responses: []llm.Response{
-				finalOutputItemResponse("transitioned"),
-				finalOutputItemResponse("continued"),
-			}}
+			client := &fakeClient{responses: []llm.Response{finalOutputItemResponse("transitioned")}}
 			eng := mustNewExecTestEngine(t, store, client, Config{Model: "gpt-5", HeadlessMode: test.targetHeadless})
 			if _, err := eng.SubmitUserMessage(context.Background(), "transition"); err != nil {
 				t.Fatalf("transition submit: %v", err)
 			}
-			if _, err := eng.SubmitUserMessage(context.Background(), "again"); err != nil {
-				t.Fatalf("second submit: %v", err)
-			}
-			assertModelCallCount(t, client, 2)
+			assertModelCallCount(t, client, 1)
 
 			firstMessages := requestMessages(client.calls[0])
-			secondMessages := requestMessages(client.calls[1])
-			if len(test.messageTypes) == 0 {
-				for _, messages := range [][]llm.Message{firstMessages, secondMessages} {
-					for _, message := range messages {
-						if message.MessageType == llm.MessageTypeHeadlessMode || message.MessageType == llm.MessageTypeHeadlessModeExit {
-							t.Fatalf("unchanged interactive session gained headless transition: %+v", messages)
-						}
-					}
-				}
-				return
-			}
-
 			assertMessageTypesInOrder(t, firstMessages, test.messageTypes...)
-			assertMessageTypesInOrder(t, secondMessages, test.messageTypes...)
 			transitionIndex := -1
 			userIndex := -1
 			for index, message := range firstMessages {

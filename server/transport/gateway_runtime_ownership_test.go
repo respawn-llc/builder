@@ -1,17 +1,24 @@
 package transport
 
-import "testing"
+import (
+	"testing"
 
-func TestConnectionStateRuntimeOwnershipRemovesOnlyMatchingSession(t *testing.T) {
+	"core/shared/serverapi"
+)
+
+func TestConnectionStateRuntimeOwnershipRemovesOnlyMatchingAttachment(t *testing.T) {
 	state := &connectionState{}
-	state.recordOwnedRuntime("session-1")
-	state.removeOwnedRuntime("session-other")
-	if owned := state.takeOwnedRuntimes(); len(owned) != 1 || owned[0] != "session-1" {
+	first := serverapi.SessionRuntimeAttachment{SessionID: "session-1", Generation: 1}
+	second := serverapi.SessionRuntimeAttachment{SessionID: "session-1", Generation: 2}
+	state.recordOwnedRuntime(first)
+	state.recordOwnedRuntime(second)
+	state.removeOwnedRuntime(first)
+	if owned := state.takeOwnedRuntimes(); len(owned) != 1 || owned[0] != second {
 		t.Fatalf("mismatched release removed ownership: %+v", owned)
 	}
 
-	state.recordOwnedRuntime("session-1")
-	state.removeOwnedRuntime("session-1")
+	state.recordOwnedRuntime(second)
+	state.removeOwnedRuntime(second)
 	if owned := state.takeOwnedRuntimes(); len(owned) != 0 {
 		t.Fatalf("matching explicit release left owned runtimes: %+v", owned)
 	}

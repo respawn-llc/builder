@@ -24,7 +24,7 @@ export function WorkflowActionsContextMenu({
 
   return (
     <>
-      {deleteLauncher.fallback}
+      {deleteLauncher.dialog}
       <ContextMenu>
         <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
         <ContextMenuContent>

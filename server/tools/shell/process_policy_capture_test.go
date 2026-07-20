@@ -9,7 +9,82 @@ import (
 
 	"core/server/tools/shell/postprocess"
 	"core/shared/config"
+	"core/shared/runtimeids"
 )
+
+func TestExecCommandCarriesExecutionCorrelationThroughSnapshotAndTerminalEvent(t *testing.T) {
+	workspace := t.TempDir()
+	manager := newManagerWithPostprocessor(t, replacementRunner(t, "RUNTIME"))
+	correlation, err := runtimeids.NewExecutionCorrelation(runtimeids.NewExecutionScopeID(), runtimeids.ResourceGeneration(7))
+	if err != nil {
+		t.Fatalf("new execution correlation: %v", err)
+	}
+	events := make(chan Event, 2)
+	manager.SetEventHandler(func(event Event) {
+		if event.Type == EventBackgrounded || event.Type == EventCompleted || event.Type == EventKilled {
+			events <- event
+		}
+	})
+	tool := NewExecCommandToolWithConfig(workspace, 16_000, manager, "owner", ExecCommandToolConfig{
+		Postprocessor:        replacementRunner(t, "RUNTIME"),
+		ExecutionCorrelation: &correlation,
+	})
+
+	result := callExecCommand(t, tool, "correlated-background", map[string]any{
+		"cmd":           "sleep 0.2",
+		"shell":         "/bin/sh",
+		"login":         false,
+		"yield_time_ms": 50,
+	})
+	if result.IsError {
+		t.Fatalf("correlated background start error: %s", string(result.Output))
+	}
+	if result.PresentationDelta == nil || !result.PresentationDelta.MovedToBackground {
+		t.Fatal("correlated process did not move to background")
+	}
+
+	snapshots := manager.List()
+	if len(snapshots) != 1 {
+		t.Fatalf("background process count = %d, want 1", len(snapshots))
+	}
+	assertExecutionCorrelation(t, snapshots[0].ExecutionCorrelation, correlation, "snapshot")
+	if snapshots[0].ExecutionCorrelation == &correlation {
+		t.Fatal("snapshot reused caller execution correlation pointer")
+	}
+
+	backgrounded := <-events
+	if backgrounded.Type != EventBackgrounded {
+		t.Fatalf("first event type = %q, want %q", backgrounded.Type, EventBackgrounded)
+	}
+	assertExecutionCorrelation(t, backgrounded.Snapshot.ExecutionCorrelation, correlation, "background event")
+	if backgrounded.Snapshot.ExecutionCorrelation == snapshots[0].ExecutionCorrelation {
+		t.Fatal("background event reused snapshot execution correlation pointer")
+	}
+
+	select {
+	case terminal := <-events:
+		if terminal.Type != EventCompleted {
+			t.Fatalf("terminal event type = %q, want %q", terminal.Type, EventCompleted)
+		}
+		assertExecutionCorrelation(t, terminal.Snapshot.ExecutionCorrelation, correlation, "terminal event")
+		if terminal.Snapshot.ExecutionCorrelation == backgrounded.Snapshot.ExecutionCorrelation {
+			t.Fatal("terminal event reused background event execution correlation pointer")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for correlated terminal event")
+	}
+	waitForManagerCount(t, manager, 0, time.Second)
+}
+
+func assertExecutionCorrelation(t *testing.T, got *runtimeids.ExecutionCorrelation, want runtimeids.ExecutionCorrelation, location string) {
+	t.Helper()
+	if got == nil {
+		t.Fatalf("%s execution correlation is nil", location)
+	}
+	if *got != want {
+		t.Fatalf("%s execution correlation = %#v, want %#v", location, *got, want)
+	}
+}
 
 func TestExecCommandUsesRuntimeBoundPolicyForForegroundCompletion(t *testing.T) {
 	workspace := t.TempDir()

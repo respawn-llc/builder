@@ -23,7 +23,6 @@ import type { WorkflowGraphSelection } from "./workflowGraphSelection";
 export type PendingGraphMutation = Readonly<{
   action: PendingGraphMutationAction;
   counts: WorkflowDeleteConfirmationCounts;
-  requestID: string;
   summary: WorkflowEditorCascadeSummary;
 }>;
 
@@ -148,11 +147,6 @@ function stringListEquals(left: readonly string[], right: readonly string[]): bo
     return false;
   }
   return left.every((value, index) => value === right[index]);
-}
-
-export function nextGraphDeleteRequestID(workflowID: string, indexRef: { current: number }): string {
-  indexRef.current += 1;
-  return `${workflowID}-delete-${indexRef.current.toString()}`;
 }
 
 export function confirmationOperation(

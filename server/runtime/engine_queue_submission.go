@@ -260,6 +260,15 @@ func (e *Engine) processQueuedUserWork(ctx context.Context) {
 	completed = true
 }
 
+func (e *Engine) HasScheduledQueuedUserWork() bool {
+	if e == nil {
+		return false
+	}
+	e.queuedUserWorkMu.Lock()
+	defer e.queuedUserWorkMu.Unlock()
+	return e.queuedUserWorkScheduled
+}
+
 func (e *Engine) clearQueuedUserWorkScheduled() {
 	e.queuedUserWorkMu.Lock()
 	e.queuedUserWorkScheduled = false

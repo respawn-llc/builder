@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"sync"
 
 	"core/server/authservice"
@@ -13,7 +14,6 @@ import (
 	"core/server/registry"
 	"core/server/runtime"
 	"core/server/runtimecontrol"
-	"core/server/runtimewire"
 	"core/server/serverstatus"
 	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
@@ -58,7 +58,6 @@ type CapabilityBundle struct {
 type PersistenceBundle struct {
 	rootLock      *RootLockLease
 	metadataStore *metadata.Store
-	sessionStores *registry.SessionStoreRegistry
 }
 
 type ProcessBundle struct {
@@ -83,14 +82,12 @@ type PromptBundle struct {
 type RuntimeBundle struct {
 	fastModeState       *runtime.FastModeState
 	background          *shelltool.Manager
-	backgroundRouter    *runtimewire.BackgroundEventRouter
 	runtimeRegistry     *registry.RuntimeRegistry
+	runtimeAuthority    *sessionruntime.Authority
 	runtimeControls     apicontract.RuntimeControlService
 	runtimeLiveControls apicontract.RuntimeLiveControlService
 	sessionRuntime      apicontract.SessionRuntimeService
 	sessionTranscript   apicontract.SessionTranscriptService
-
-	sessionRuntimeService *sessionruntime.Service
 }
 
 type SessionBundle struct {
@@ -177,8 +174,8 @@ type bundleCompositionInput struct {
 	runtimeSupport          serverbootstrap.RuntimeSupport
 	rootLease               *RootLockLease
 	metadataStore           *metadata.Store
-	sessionStoreRegistry    *registry.SessionStoreRegistry
 	runtimeRegistry         *registry.RuntimeRegistry
+	runtimeAuthority        *sessionruntime.Authority
 	projectViews            apicontract.ProjectViewService
 	authBootstrapService    *authservice.BootstrapService
 	authStatusService       *authservice.StatusService
@@ -190,7 +187,7 @@ type bundleCompositionInput struct {
 	attentionService        apicontract.AttentionNotificationService
 	runtimeControlService   *runtimecontrol.Service
 	serverStatusService     *serverstatus.ServerStatusService
-	sessionRuntimeService   *sessionruntime.Service
+	sessionRuntimeAPI       *sessionruntime.API
 	sessionViewService      *sessionview.Service
 	sessionLifecycleService *sessionservice.SessionLifecycleService
 	updateStatusService     *serverstatus.UpdateStatusService
@@ -222,6 +219,12 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 				}
 				return in.workflowRuntimeStarter.Close()
 			}},
+			{name: "session runtime authority", close: func() error {
+				if in.runtimeAuthority == nil {
+					return nil
+				}
+				return in.runtimeAuthority.Close(context.Background())
+			}},
 			{name: "workflow scheduler", close: func() error {
 				if in.workflowScheduler == nil {
 					return nil
@@ -235,11 +238,11 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 				return nil
 			}},
 		},
-		Persistence: newPersistenceBundle(in.rootLease, in.metadataStore, in.sessionStoreRegistry),
+		Persistence: newPersistenceBundle(in.rootLease, in.metadataStore),
 		Processes:   newProcessBundle(in.processService, in.processOutputService),
 		Projects:    newProjectBundle(in.cfg, in.projectViews),
 		Prompts:     newPromptBundle(in.askService, in.approvalService, in.promptControlService, in.attentionService),
-		Runtime:     newRuntimeBundle(in.runtimeSupport, in.runtimeRegistry, in.runtimeControlService, in.sessionRuntimeService),
+		Runtime:     newRuntimeBundle(in.runtimeSupport, in.runtimeRegistry, in.runtimeAuthority, in.runtimeControlService, in.sessionRuntimeAPI),
 		Sessions:    newSessionBundle(in.sessionViewService, in.sessionLifecycleService),
 		Workflows:   newWorkflowBundle(in.workflowService, in.workflowScheduler),
 		Worktrees:   &WorktreeBundle{worktrees: in.worktreeService},
@@ -260,11 +263,10 @@ func newCapabilityBundle(factsService *capabilityfacts.Service) *CapabilityBundl
 	return &CapabilityBundle{facts: factsService}
 }
 
-func newPersistenceBundle(rootLease *RootLockLease, metadataStore *metadata.Store, sessionStoreRegistry *registry.SessionStoreRegistry) *PersistenceBundle {
+func newPersistenceBundle(rootLease *RootLockLease, metadataStore *metadata.Store) *PersistenceBundle {
 	return &PersistenceBundle{
 		rootLock:      rootLease,
 		metadataStore: metadataStore,
-		sessionStores: sessionStoreRegistry,
 	}
 }
 
@@ -295,18 +297,16 @@ func newPromptBundle(askService *promptcontrol.AskViewService, approvalService *
 	}
 }
 
-func newRuntimeBundle(runtimeSupport serverbootstrap.RuntimeSupport, runtimeRegistry *registry.RuntimeRegistry, runtimeControlService *runtimecontrol.Service, sessionRuntimeService *sessionruntime.Service) *RuntimeBundle {
+func newRuntimeBundle(runtimeSupport serverbootstrap.RuntimeSupport, runtimeRegistry *registry.RuntimeRegistry, runtimeAuthority *sessionruntime.Authority, runtimeControlService *runtimecontrol.Service, sessionRuntimeAPI *sessionruntime.API) *RuntimeBundle {
 	return &RuntimeBundle{
 		fastModeState:       runtimeSupport.FastModeState,
 		background:          runtimeSupport.Background,
-		backgroundRouter:    runtimeSupport.BackgroundRouter,
 		runtimeRegistry:     runtimeRegistry,
+		runtimeAuthority:    runtimeAuthority,
 		runtimeControls:     runtimeControlService,
 		runtimeLiveControls: runtimeControlService,
-		sessionRuntime:      sessionRuntimeService,
+		sessionRuntime:      sessionRuntimeAPI,
 		sessionTranscript:   runtimeRegistry,
-
-		sessionRuntimeService: sessionRuntimeService,
 	}
 }
 
