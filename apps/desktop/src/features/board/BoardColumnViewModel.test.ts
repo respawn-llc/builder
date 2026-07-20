@@ -28,6 +28,7 @@ const card: BoardCard = {
     nodeIDs: [],
     runIDs: [],
   },
+  labelIDs: [],
   title: "Task",
   updatedAt: 1,
   workflowID: "workflow-1",

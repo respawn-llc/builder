@@ -17,7 +17,7 @@ export function useBoard(projectID: string, workflowID: string | undefined) {
   const { api } = useAppServices();
   return useQuery({
     queryKey: queryKeys.board(projectID, workflowID),
-    queryFn: async () => api.getBoard(projectID, workflowID),
+    queryFn: async () => api.getBoard(projectID, workflowID, { kind: "none" }),
     enabled: projectID.trim().length > 0,
   });
 }
@@ -32,7 +32,14 @@ export function useBoardNodeCards(projectID: string, workflowID: string, nodeID:
     string | null
   >({
     queryKey: queryKeys.boardNodeCards(projectID, workflowID, nodeID),
-    queryFn: async ({ pageParam }) => api.listBoardNodeCards(projectID, workflowID, nodeID, pageParam),
+    queryFn: async ({ pageParam }) =>
+      api.listBoardNodeCards({
+        projectID,
+        workflowID,
+        nodeID,
+        labelFilter: { kind: "none" },
+        pageToken: pageParam,
+      }),
     initialPageParam: null,
     enabled: enabled && projectID.length > 0 && workflowID.length > 0 && nodeID.length > 0,
     getPreviousPageParam: (firstPage) => firstPage.previousPageToken ?? undefined,

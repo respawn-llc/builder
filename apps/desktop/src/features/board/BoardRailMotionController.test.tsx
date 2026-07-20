@@ -180,6 +180,7 @@ function card(over: Partial<BoardCard>): BoardCard {
       canCancel: false,
       manualMoveTargetNodeIDs: [],
     },
+    labelIDs: [],
     updatedAt: 1,
     ...over,
   };

@@ -133,6 +133,7 @@ export function NewTaskForm({
       title: values.title,
       body: values.body,
       sourceWorkspaceID,
+      labelIDs: [],
     });
     onSubmitted();
   }

@@ -22,7 +22,11 @@ describe("BoardRoute live refresh", () => {
     await waitFor(() => {
       expect(boardCalls(services)).toContainEqual({
         method: "workflow.board.get",
-        params: { project_id: "project-1", workflow_id: "" },
+        params: {
+          project_id: "project-1",
+          workflow_id: "",
+          label_filter: { kind: "none" },
+        },
       });
     });
   });

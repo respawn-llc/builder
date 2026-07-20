@@ -1,9 +1,11 @@
 export type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
 export type {
+  BoardNodeCardsInput,
   QuestionAnswerInput,
   TaskEditInput,
   TaskMoveInput,
   TaskMutationInput,
+  TaskListInput,
   WorkflowCreateAndLinkInput,
   WorkflowCreateInput,
   WorkflowDeleteInput,
@@ -34,11 +36,14 @@ export {
   ContractError,
   ProtocolMismatchError,
   RpcError,
+  WorkflowLabelError,
+  decodeWorkflowLabelError,
   ServerRootMismatchError,
   StartupConfigurationError,
   TransportError,
   errorMessage,
 } from "./errors";
+export type { WorkflowLabelErrorReason } from "./errors";
 export { guiTaskCommentAuthor } from "./client";
 export type { JsonArray, JsonObject, JsonPrimitive, JsonValue } from "./json";
 export { newSetupOperationID, parseSetupOperationID, SetupOperationID } from "./setupOperationID";
@@ -127,3 +132,11 @@ export type {
   WorkspaceUnlinkBlocker,
   WorkspaceUnlinkResponse,
 } from "./models";
+export type {
+  ProjectLabel,
+  ProjectLabelCatalog,
+  TaskLabelAssignment,
+  TaskLabelFilter,
+  TaskListItem,
+  TaskListPage,
+} from "./workflowLabels";

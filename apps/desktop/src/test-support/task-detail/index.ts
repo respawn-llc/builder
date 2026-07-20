@@ -88,6 +88,7 @@ export const taskDetailResponse = {
       attention_types: ["question", "approval"],
     },
     actions: taskActions,
+    label_ids: [],
     attention_count: 2,
     runs: [
       {

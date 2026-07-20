@@ -49,6 +49,54 @@ describe("ApiClient workflow subscriptions", () => {
     expect(events).toEqual([workflowProjectEvent]);
   });
 
+  it("adapts label catalog and task assignment events through typed scopes", () => {
+    const transport = new FakeRpcTransport([]);
+    const client: ApiService = new ApiClient(transport);
+    const events: WorkflowProjectEvent[] = [];
+
+    client.subscribeProject("project-1", eventCollector(events));
+    transport.emit("workflow.project", {
+      event: {
+        action: "renamed",
+        occurred_at_unix_ms: 2,
+        primary_entity_id: "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf",
+        project_id: "project-1",
+        resource: "label",
+      },
+    });
+    transport.emit("workflow.project", {
+      event: {
+        action: "labels_changed",
+        occurred_at_unix_ms: 3,
+        primary_entity_id: "task-1",
+        project_id: "project-1",
+        resource: "task",
+        workflow_id: "workflow-1",
+      },
+    });
+
+    expect(events).toEqual([
+      {
+        action: "renamed",
+        occurredAtUnixMs: 2,
+        primaryEntityID: "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf",
+        projectID: "project-1",
+        relatedIDs: [],
+        resource: "label",
+        workflowID: null,
+      },
+      {
+        action: "labels_changed",
+        occurredAtUnixMs: 3,
+        primaryEntityID: "task-1",
+        projectID: "project-1",
+        relatedIDs: [],
+        resource: "task",
+        workflowID: "workflow-1",
+      },
+    ]);
+  });
+
   it("rejects subscription event methods that do not match the subscribed stream", () => {
     const transport = new FakeRpcTransport([]);
     const client: ApiService = new ApiClient(transport);

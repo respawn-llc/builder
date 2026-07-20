@@ -1,9 +1,11 @@
 import type { AttentionNotificationEventHandler } from "./attentionNotifications";
 import type {
+  BoardNodeCardsInput,
   QuestionAnswerInput,
   TaskEditInput,
   TaskMoveInput,
   TaskMutationInput,
+  TaskListInput,
   WorkflowCreateAndLinkInput,
   WorkflowCreateInput,
   WorkflowDeleteInput,
@@ -51,6 +53,13 @@ import type {
   WorkspaceList,
   WorkspaceUnlinkResponse,
 } from "./models";
+import type {
+  ProjectLabel,
+  ProjectLabelCatalog,
+  TaskLabelAssignment,
+  TaskLabelFilter,
+  TaskListPage,
+} from "./workflowLabels";
 import type { SetupOperationID } from "./setupOperationID";
 import type { WorktreeSetupEventHandler } from "./worktreeSetup";
 import type { WorkflowProjectEventHandler } from "./workflowProjectEvents";
@@ -82,7 +91,21 @@ export interface ApiService {
   setDefaultWorkspace(projectID: string, workspaceID: string): Promise<ProjectMutationResponse>;
   unlinkWorkspace(projectID: string, workspaceID: string): Promise<WorkspaceUnlinkResponse>;
   deleteProject(projectID: string): Promise<ProjectDeleteResponse>;
-  getBoard(projectID: string, workflowID: string | undefined): Promise<WorkflowBoard>;
+  listProjectLabels(projectID: string): Promise<ProjectLabelCatalog>;
+  createProjectLabel(projectID: string, name: string): Promise<ProjectLabel>;
+  renameProjectLabel(projectID: string, labelID: string, name: string): Promise<ProjectLabel>;
+  deleteProjectLabel(projectID: string, labelID: string): Promise<string>;
+  getTaskLabels(taskID: string): Promise<TaskLabelAssignment>;
+  updateTaskLabels(
+    taskID: string,
+    addLabelIDs: readonly string[],
+    removeLabelIDs: readonly string[],
+  ): Promise<TaskLabelAssignment>;
+  getBoard(
+    projectID: string,
+    workflowID: string | undefined,
+    labelFilter: TaskLabelFilter,
+  ): Promise<WorkflowBoard>;
   getWorkflow(workflowID: string): Promise<WorkflowDefinition>;
   listWorkflows(input?: WorkflowListInput): Promise<WorkflowPage>;
   createWorkflow(input: WorkflowCreateInput): Promise<WorkflowRecord>;
@@ -104,15 +127,11 @@ export interface ApiService {
   previewWorkflowDelete(workflowID: string): Promise<WorkflowDeleteImpact>;
   deleteWorkflow(input: WorkflowDeleteInput): Promise<WorkflowDeleteResponse>;
   listProjectWorkflowLinks(projectID: string): Promise<readonly ProjectWorkflowLink[]>;
-  listBoardNodeCards(
-    projectID: string,
-    workflowID: string,
-    nodeID: string,
-    pageToken?: string | null,
-  ): Promise<BoardNodeCardsPage>;
+  listBoardNodeCards(input: BoardNodeCardsInput): Promise<BoardNodeCardsPage>;
   listAttention(pageToken: string): Promise<AttentionPage>;
   listTaskAttention(taskID: string): Promise<TaskAttention>;
   createTask(input: TaskMutationInput): Promise<string>;
+  listTasks(input: TaskListInput): Promise<TaskListPage>;
   updateTask(input: TaskEditInput): Promise<string>;
   startTask(
     taskID: string,

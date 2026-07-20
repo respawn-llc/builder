@@ -9,10 +9,12 @@ import {
   workflowGraphSaveConfirmationPayload,
 } from "./clientWorkflowGraph";
 import type {
+  BoardNodeCardsInput,
   QuestionAnswerInput,
   TaskEditInput,
   TaskMoveInput,
   TaskMutationInput,
+  TaskListInput,
   WorkflowCreateAndLinkInput,
   WorkflowCreateInput,
   WorkflowDeleteInput,
@@ -62,6 +64,13 @@ import type {
   WorkspaceList,
   WorkspaceUnlinkResponse,
 } from "./models";
+import type {
+  ProjectLabel,
+  ProjectLabelCatalog,
+  TaskLabelAssignment,
+  TaskLabelFilter,
+  TaskListPage,
+} from "./workflowLabels";
 import {
   bindingPlanSchema,
   projectCreateSchema,
@@ -76,16 +85,13 @@ import { readinessSchema } from "./schemas/status";
 import {
   activityPageSchema,
   attentionPageSchema,
-  boardNodeCardsPageSchema,
   commentAddResponseSchema,
   commentPageSchema,
   pendingAskListSchema,
   projectWorkflowLinksSchema,
-  taskCreateResponseSchema,
   taskDetailSchema,
   taskAttentionSchema,
   taskUpdateResponseSchema,
-  workflowBoardSchema,
 } from "./schemas/workflowBoard";
 import {
   workflowCreateAndLinkSchema,
@@ -104,6 +110,8 @@ import {
 import type { RpcTransport } from "./transport";
 import type { WorkflowProjectEventHandler } from "./workflowProjectEvents";
 import { workflowProjectEventRpcHandler } from "./workflowProjectEvents";
+import * as workflowBoard from "./clientWorkflowBoard";
+import * as workflowLabels from "./clientWorkflowLabels";
 
 export const guiTaskCommentAuthor = "user";
 
@@ -237,18 +245,40 @@ export class ApiClient implements ApiService {
     );
   }
 
-  async getBoard(projectID: string, workflowID: string | undefined): Promise<WorkflowBoard> {
-    return parse(
-      "workflow.board.get",
-      workflowBoardSchema,
-      await this.#transport.call(
-        "workflow.board.get",
-        compactJsonObject({
-          project_id: projectID,
-          workflow_id: workflowID,
-        }),
-      ),
-    );
+  async listProjectLabels(projectID: string): Promise<ProjectLabelCatalog> {
+    return workflowLabels.listProjectLabels(this.#transport, projectID);
+  }
+
+  async createProjectLabel(projectID: string, name: string): Promise<ProjectLabel> {
+    return workflowLabels.createProjectLabel(this.#transport, projectID, name);
+  }
+
+  async renameProjectLabel(projectID: string, labelID: string, name: string): Promise<ProjectLabel> {
+    return workflowLabels.renameProjectLabel(this.#transport, projectID, labelID, name);
+  }
+
+  async deleteProjectLabel(projectID: string, labelID: string): Promise<string> {
+    return workflowLabels.deleteProjectLabel(this.#transport, projectID, labelID);
+  }
+
+  async getTaskLabels(taskID: string): Promise<TaskLabelAssignment> {
+    return workflowLabels.getTaskLabels(this.#transport, taskID);
+  }
+
+  async updateTaskLabels(
+    taskID: string,
+    addLabelIDs: readonly string[],
+    removeLabelIDs: readonly string[],
+  ): Promise<TaskLabelAssignment> {
+    return workflowLabels.updateTaskLabels(this.#transport, taskID, addLabelIDs, removeLabelIDs);
+  }
+
+  async getBoard(
+    projectID: string,
+    workflowID: string | undefined,
+    labelFilter: TaskLabelFilter,
+  ): Promise<WorkflowBoard> {
+    return workflowBoard.getBoard(this.#transport, projectID, workflowID, labelFilter);
   }
 
   async getWorkflow(workflowID: string): Promise<WorkflowDefinition> {
@@ -447,26 +477,8 @@ export class ApiClient implements ApiService {
     );
   }
 
-  async listBoardNodeCards(
-    projectID: string,
-    workflowID: string,
-    nodeID: string,
-    pageToken: string | null = null,
-  ): Promise<BoardNodeCardsPage> {
-    return parse(
-      "workflow.board.nodeCards.list",
-      boardNodeCardsPageSchema,
-      await this.#transport.call(
-        "workflow.board.nodeCards.list",
-        compactJsonObject({
-          project_id: projectID,
-          workflow_id: workflowID,
-          node_id: nodeID,
-          page_size: 25,
-          page_token: pageToken,
-        }),
-      ),
-    );
+  async listBoardNodeCards(input: BoardNodeCardsInput): Promise<BoardNodeCardsPage> {
+    return workflowBoard.listBoardNodeCards(this.#transport, input);
   }
 
   async listAttention(pageToken: string): Promise<AttentionPage> {
@@ -492,21 +504,11 @@ export class ApiClient implements ApiService {
   }
 
   async createTask(input: TaskMutationInput): Promise<string> {
-    const response = parse(
-      "workflow.task.create",
-      taskCreateResponseSchema,
-      await this.#transport.call(
-        "workflow.task.create",
-        compactJsonObject({
-          project_id: input.projectID,
-          workflow_id: input.workflowID,
-          title: input.title,
-          body: input.body,
-          source_workspace_id: input.sourceWorkspaceID,
-        }),
-      ),
-    );
-    return response.task.id;
+    return workflowLabels.createTask(this.#transport, input);
+  }
+
+  async listTasks(input: TaskListInput): Promise<TaskListPage> {
+    return workflowLabels.listTasks(this.#transport, input);
   }
 
   async updateTask(input: TaskEditInput): Promise<string> {

@@ -24,6 +24,7 @@ import type {
   WorkspaceAvailability,
   OrdinaryQuestionPrompt,
 } from "../models";
+import { labelIDListSchema } from "./workflowLabels";
 
 export const emptyString = z.string().optional().default("");
 export const numberValue = z.number().default(0);
@@ -324,6 +325,7 @@ export const boardCardSchema: z.ZodType<BoardCard> = z
     source_workspace: workspaceSummarySchema,
     status: taskStatusSchema,
     actions: taskActionsSchema,
+    label_ids: labelIDListSchema,
     updated_at_unix_ms: z.number(),
   })
   .strict()
@@ -337,6 +339,7 @@ export const boardCardSchema: z.ZodType<BoardCard> = z
     sourceWorkspace: value.source_workspace,
     status: value.status,
     actions: value.actions,
+    labelIDs: value.label_ids,
     updatedAt: value.updated_at_unix_ms,
   }));
 

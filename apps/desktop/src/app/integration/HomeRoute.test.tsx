@@ -489,6 +489,7 @@ const taskDetailResponse = {
       can_cancel: true,
       manual_move_target_node_ids: [],
     },
+    label_ids: [],
     attention_count: 0,
     runs: [],
     transitions: [],

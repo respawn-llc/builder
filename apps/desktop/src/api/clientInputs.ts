@@ -4,8 +4,10 @@ import type {
   WorkflowGraphDraft,
   WorkflowGraphMetadata,
   WorkflowGraphSaveConfirmation,
+  TaskStatusKind,
   WorkflowValidationMode,
 } from "./models";
+import type { TaskLabelFilter } from "./workflowLabels";
 import type { SetupOperationID } from "./setupOperationID";
 
 export type TaskMutationInput = Readonly<{
@@ -14,6 +16,32 @@ export type TaskMutationInput = Readonly<{
   title: string;
   body: string;
   sourceWorkspaceID: string;
+  labelIDs: readonly string[];
+}>;
+
+export type TaskListInput = Readonly<{
+  projectID?: string | undefined;
+  workflowID?: string | undefined;
+  columnKeys?: readonly string[] | undefined;
+  statusKinds?: readonly TaskStatusKind[] | undefined;
+  attentionKinds?: readonly ("question" | "approval" | "interrupted")[] | undefined;
+  labelFilter: TaskLabelFilter;
+  sort?:
+    | readonly Readonly<{
+        field: "created" | "updated" | "status" | "column" | "run_count" | "title";
+        direction: "asc" | "desc";
+      }>[]
+    | undefined;
+  pageSize: number;
+  pageToken?: string | undefined;
+}>;
+
+export type BoardNodeCardsInput = Readonly<{
+  projectID: string;
+  workflowID: string;
+  nodeID: string;
+  labelFilter: TaskLabelFilter;
+  pageToken?: string | null | undefined;
 }>;
 
 export type WorkflowListInput = Readonly<{

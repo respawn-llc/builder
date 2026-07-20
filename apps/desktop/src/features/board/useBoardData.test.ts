@@ -189,6 +189,7 @@ function boardCardsPage(index: number, previousPageToken: string | null, nextPag
           can_cancel: true,
           manual_move_target_node_ids: [],
         },
+        label_ids: [],
         updated_at_unix_ms: index,
       },
     ],
@@ -203,6 +204,7 @@ function boardCardsParams(pageToken: string | null) {
     project_id: "project-1",
     workflow_id: "workflow-1",
     node_id: "node-1",
+    label_filter: { kind: "none" },
     page_size: 25,
     page_token: pageToken,
   };

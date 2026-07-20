@@ -479,6 +479,7 @@ const sourceCard = {
     can_cancel: true,
     manual_move_target_node_ids: ["recon"],
   },
+  label_ids: [],
   updated_at_unix_ms: 1,
 };
 
