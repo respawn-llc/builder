@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"core/cli/tui/ongoing"
 	"core/shared/clientui"
@@ -273,6 +274,13 @@ func TestRejectedDuplicateHydrationDoesNotStartUnaryRefresh(t *testing.T) {
 	}
 }
 
+func TestRuntimeTupleRichHydrationFixtureSatisfiesClientContract(t *testing.T) {
+	hydration := runtimeTupleTestRichHydration(11).Payload.Hydration
+	if err := hydration.Validate(); err != nil {
+		t.Fatalf("runtime tuple rich hydration fixture: %v", err)
+	}
+}
+
 func TestHydrationAdmissionSerializesUnaryAndInterruptTupleCommitsUntilWholeEventCompletes(t *testing.T) {
 	v12 := runtimeTupleTestView(12, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
 	v12.Session.SessionID = ongoingTestSessionID().String()
@@ -301,7 +309,13 @@ func TestHydrationAdmissionSerializesUnaryAndInterruptTupleCommitsUntilWholeEven
 		_, _, err := controller.Accept(hydration)
 		acceptDone <- err
 	}()
-	<-surface.started
+	select {
+	case <-surface.started:
+	case err := <-acceptDone:
+		t.Fatalf("hydration admission ended before terminal apply started: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for terminal hydration apply")
+	}
 
 	wantV11 := runtimeTupleTestView(
 		11,
@@ -445,10 +459,11 @@ func runtimeTupleTestRichHydration(runtimeSequence uint64) clientui.TranscriptMe
 		State:  clientui.ReviewerStateRunning,
 	}
 	hydration.ActiveCompaction = &clientui.TranscriptCompactionStatus{
-		StepID: stepID,
-		State:  clientui.CompactionStarted,
-		Mode:   "auto",
-		Count:  1,
+		StepID:    stepID,
+		State:     clientui.CompactionStarted,
+		Initiator: clientui.CompactionInitiatorAutomatic,
+		Mode:      "auto",
+		Count:     1,
 	}
 	hydration.InFlightTools = []clientui.TranscriptToolStart{{
 		StepID:     stepID,
