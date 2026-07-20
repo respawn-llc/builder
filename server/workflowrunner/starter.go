@@ -645,7 +645,7 @@ func applyWorkflowSessionPromptOverrides(plan launch.SessionPlan, input workflow
 }
 
 type sessionListingMetadata struct {
-	Name               string
+	Name               *string
 	FirstPromptPreview string
 }
 
@@ -653,7 +653,11 @@ func restoreSessionListingMetadata(store *session.Store, metadata *sessionListin
 	if store == nil || metadata == nil {
 		return nil
 	}
-	return store.SetListingMetadata(metadata.Name, metadata.FirstPromptPreview)
+	name := ""
+	if metadata.Name != nil {
+		name = *metadata.Name
+	}
+	return store.SetListingMetadata(name, metadata.FirstPromptPreview)
 }
 
 func (s *Starter) applyWorkflowSessionMetadata(ctx context.Context, input workflowstore.RunStartContext, plan *launch.SessionPlan) error {
@@ -673,7 +677,7 @@ func (s *Starter) applyWorkflowSessionMetadata(ctx context.Context, input workfl
 	}); err != nil {
 		return err
 	}
-	plan.SessionName = name
+	plan.SessionName = &name
 	plan.FirstPromptPreview = preview
 	return nil
 }

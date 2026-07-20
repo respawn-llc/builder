@@ -105,6 +105,47 @@ func TestServicePlanSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {
 	}
 }
 
+func TestServicePlanSessionProjectsTypedOptionalSessionName(t *testing.T) {
+	root := t.TempDir()
+	workspace := t.TempDir()
+	containerDir := filepath.Join(root, "sessions")
+	store := createLaunchTestSession(t, containerDir, "initial", workspace)
+	service := newSessionLaunchTestService(config.App{
+		WorkspaceRoot:   workspace,
+		PersistenceRoot: root,
+		Settings:        config.Settings{Model: "gpt-5"},
+	}, containerDir)
+	request := serverapi.SessionPlanRequest{
+		ClientRequestID: "typed-session-name",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+	}
+
+	if err := store.SetName(""); err != nil {
+		t.Fatalf("clear session name: %v", err)
+	}
+	absent, err := service.PlanSession(t.Context(), request)
+	if err != nil {
+		t.Fatalf("PlanSession absent name: %v", err)
+	}
+	if absent.Plan.SessionName != nil {
+		t.Fatalf("absent session name = %v, want nil", absent.Plan.SessionName)
+	}
+
+	title := "Incident triage"
+	if err := store.SetName(title); err != nil {
+		t.Fatalf("set session name: %v", err)
+	}
+	request.ClientRequestID = "typed-session-name-present"
+	present, err := service.PlanSession(t.Context(), request)
+	if err != nil {
+		t.Fatalf("PlanSession present name: %v", err)
+	}
+	if present.Plan.SessionName == nil || *present.Plan.SessionName != title {
+		t.Fatalf("present session name = %v, want %q", present.Plan.SessionName, title)
+	}
+}
+
 func TestServicePlanSessionReturnsPlanWithoutRegisteringStore(t *testing.T) {
 	persistenceRoot := t.TempDir()
 	containerDir := t.TempDir()

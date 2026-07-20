@@ -31,7 +31,7 @@ type uiLoopRequest struct {
 	initialPromptHistoryRecorded bool
 	initialInput                 string
 	recoveryBuffers              []serverapi.SessionDraftRecoveryBuffer
-	sessionName                  string
+	sessionTitle                 *string
 	modelContractLocked          bool
 	configuredModelName          string
 	statusConfig                 uiStatusConfig
@@ -117,8 +117,7 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		sessionID = runtimeClient.MainView().Session.SessionID
 	}
 
-	rawModel := NewProjectedUIModel(
-		runtimeClient,
+	uiOptions := []UIOption{
 		WithUILogger(uiLogger),
 		WithUIModelName(request.active.Model),
 		WithUIConfiguredModelName(request.configuredModelName),
@@ -136,7 +135,6 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUIStartupSubmitPromptHistoryRecorded(request.initialPromptHistoryRecorded),
 		WithUIInitialInput(request.initialInput),
 		WithUIInitialRecoveryBuffers(request.recoveryBuffers),
-		WithUISessionName(request.sessionName),
 		WithUISessionID(sessionID),
 		WithUIStatusConfig(request.statusConfig),
 		WithUITerminalCursorState(terminalCursor),
@@ -146,7 +144,11 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUIClientLifecycleIssues(request.wiring.lifecycleHookIssues, request.wiring.lifecycleHookDone),
 		WithUIOngoingTranscriptReopen(request.wiring.requestTranscriptOpen),
 		WithUITerminalFocusState(request.wiring.terminalFocus),
-	)
+	}
+	if request.sessionTitle != nil {
+		uiOptions = append(uiOptions, WithUISessionName(*request.sessionTitle))
+	}
+	rawModel := NewProjectedUIModel(runtimeClient, uiOptions...)
 	model, ok := rawModel.(*uiModel)
 	if !ok {
 		if tuiLogger != nil {

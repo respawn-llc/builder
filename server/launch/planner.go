@@ -66,7 +66,7 @@ type SessionPlan struct {
 	BaseSettings                        config.Settings
 	EnabledTools                        []toolspec.ID
 	ConfiguredModelName                 string
-	SessionName                         string
+	SessionName                         *string
 	FirstPromptPreview                  string
 	Goal                                *session.GoalState
 	WorktreeReminder                    *session.WorktreeReminderState
@@ -95,7 +95,6 @@ func sessionPlanWithSnapshot(plan SessionPlan, store *session.Store, containerDi
 		panic(fmt.Sprintf("session plan snapshot cannot scope session %q to %q: %v", meta.SessionID, containerDir, err))
 	}
 	plan.Descriptor = descriptor
-	plan.SessionName = meta.Name
 	plan.FirstPromptPreview = meta.FirstPromptPreview
 	plan.Goal = meta.Goal
 	plan.WorktreeReminder = meta.WorktreeReminder
@@ -116,6 +115,16 @@ func (p Planner) materializePlanStore(plan SessionPlan) (*session.Store, error) 
 
 type RunPromptOverrideOptions struct {
 	AllowLockedAgentRoleChange bool
+}
+
+func optionalSessionName(name string) (*string, error) {
+	if name == "" {
+		return nil, nil
+	}
+	if strings.TrimSpace(name) == "" {
+		return nil, errors.New("session name cannot be blank")
+	}
+	return &name, nil
 }
 
 // PreparedRunPromptOverrides is the immutable, snapshot-bound portion of a
@@ -227,11 +236,16 @@ func resolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 	if meta.Locked == nil {
 		configuredModelName = active.Model
 	}
+	sessionName, err := optionalSessionName(meta.Name)
+	if err != nil {
+		return SessionPlan{}, err
+	}
 	return sessionPlanWithSnapshot(SessionPlan{
 		ActiveSettings:                      active,
 		BaseSettings:                        baseActive,
 		EnabledTools:                        enabledTools,
 		ConfiguredModelName:                 configuredModelName,
+		SessionName:                         sessionName,
 		ModelContractLocked:                 meta.Locked != nil,
 		SkipContinuationAgentRoleValidation: skipContinuationAgentRoleValidation,
 		WorkspaceRoot:                       app.WorkspaceRoot,
@@ -311,11 +325,16 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 	if meta.Locked == nil {
 		configuredModelName = active.Model
 	}
+	sessionName, err := optionalSessionName(meta.Name)
+	if err != nil {
+		return SessionPlan{}, err
+	}
 	return p.sessionPlanWithSnapshot(SessionPlan{
 		ActiveSettings:                      active,
 		BaseSettings:                        baseActive,
 		EnabledTools:                        enabledTools,
 		ConfiguredModelName:                 configuredModelName,
+		SessionName:                         sessionName,
 		ModelContractLocked:                 meta.Locked != nil,
 		SkipContinuationAgentRoleValidation: req.SkipContinuationAgentRoleValidation,
 		WorkspaceRoot:                       p.Config.WorkspaceRoot,

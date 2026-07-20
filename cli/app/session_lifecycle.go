@@ -289,18 +289,19 @@ func prepareSessionUIRun(
 		initialPromptHistoryRecorded: initialPromptHistoryRecorded,
 		initialInput:                 initialState.Input,
 		recoveryBuffers:              initialState.RecoveryBuffers,
-		sessionName:                  optionalStringValue(plan.SessionTitle),
+		sessionTitle:                 cloneOptionalSessionTitle(plan.SessionTitle),
 		modelContractLocked:          plan.ModelContractLocked,
 		configuredModelName:          plan.ConfiguredModelName,
 		statusConfig:                 plan.StatusConfig,
 	}, nil
 }
 
-func optionalStringValue(value *string) string {
+func cloneOptionalSessionTitle(value *string) *string {
 	if value == nil {
-		return ""
+		return nil
 	}
-	return *value
+	cloned := *value
+	return &cloned
 }
 
 func closeRuntimePlanAfterPreparationFailure(runtimePlan *runtimeLaunchPlan, preparationErr error) error {

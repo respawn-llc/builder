@@ -62,14 +62,15 @@ type runtimeLaunchPlan struct {
 	closeErr         error
 }
 
-func optionalLaunchSessionTitle(value string) (*string, error) {
-	if value == "" {
+func validateLaunchSessionTitle(value *string) (*string, error) {
+	if value == nil {
 		return nil, nil
 	}
-	if strings.TrimSpace(value) == "" {
+	if strings.TrimSpace(*value) == "" {
 		return nil, errors.New("session launch title cannot be blank")
 	}
-	return &value, nil
+	title := *value
+	return &title, nil
 }
 
 func (p *runtimeLaunchPlan) Close() error {
@@ -180,7 +181,7 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 	}
 	cfg := p.server.Config()
 	authState := launchPlannerAuthState(p.server)
-	sessionTitle, err := optionalLaunchSessionTitle(resp.Plan.SessionName)
+	sessionTitle, err := validateLaunchSessionTitle(resp.Plan.SessionName)
 	if err != nil {
 		return sessionLaunchPlan{}, err
 	}
