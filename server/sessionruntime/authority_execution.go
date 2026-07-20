@@ -41,6 +41,7 @@ type execution struct {
 	authority *Authority
 	resource  *agentResource
 	scope     ExecutionScope
+	script    *TaskScriptExecutionTarget
 	ctx       context.Context
 	cancel    context.CancelFunc
 	done      chan struct{}

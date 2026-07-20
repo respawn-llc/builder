@@ -133,10 +133,12 @@ func TestStalePredecessorFinalizationCannotRemoveResumedSuccessor(t *testing.T) 
 	}
 
 	predecessor := WorkflowExecutionRef{
+		TaskID:     workflow.TaskID(uuid.NewString()),
 		RunID:      workflow.RunID(uuid.NewString()),
 		Generation: 1,
 	}
 	successor := WorkflowExecutionRef{
+		TaskID:     predecessor.TaskID,
 		RunID:      predecessor.RunID,
 		Generation: 2,
 	}
@@ -763,6 +765,7 @@ func TestExactWorkflowExecutionCannotBeLiveAsAgentAndScript(t *testing.T) {
 	})
 
 	workflowRef := WorkflowExecutionRef{
+		TaskID:     workflow.TaskID(uuid.NewString()),
 		RunID:      workflow.RunID(uuid.NewString()),
 		Generation: 1,
 	}
@@ -778,6 +781,16 @@ func TestExactWorkflowExecutionCannotBeLiveAsAgentAndScript(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("start agent execution: %v", err)
+	}
+	targets, err := authority.CurrentTaskExecutionTargets(workflowRef.TaskID)
+	if err != nil {
+		t.Fatalf("CurrentTaskExecutionTargets: %v", err)
+	}
+	if !targets.HasExecutions ||
+		len(targets.SessionIDs) != 1 ||
+		targets.SessionIDs[0] != sessionID ||
+		len(targets.Scripts) != 0 {
+		t.Fatalf("agent targets = %+v", targets)
 	}
 
 	truePath, err := exec.LookPath("true")
@@ -797,6 +810,55 @@ func TestExactWorkflowExecutionCannotBeLiveAsAgentAndScript(t *testing.T) {
 
 	if err := agent.Stop(context.Background()); err != nil {
 		t.Fatalf("stop agent execution: %v", err)
+	}
+}
+
+func TestAuthorityCurrentTaskExecutionTargetsPreservesParallelScriptRuns(t *testing.T) {
+	sleepPath, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skipf("sleep executable unavailable: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	taskID := workflow.TaskID("task-a")
+	cancellationGrace := 50 * time.Millisecond
+	handles := make([]ExecutionHandle, 0, 2)
+	for _, runID := range []workflow.RunID{"run-a", "run-b"} {
+		handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
+			Workflow: &WorkflowExecutionRef{TaskID: taskID, RunID: runID, Generation: 1},
+			Command: ScriptCommand{
+				Path:              sleepPath,
+				Args:              []string{"30"},
+				CancellationGrace: &cancellationGrace,
+			},
+		})
+		if err != nil {
+			t.Fatalf("start script %s: %v", runID, err)
+		}
+		handles = append(handles, handle)
+	}
+
+	targets, err := authority.CurrentTaskExecutionTargets(taskID)
+	if err != nil {
+		t.Fatalf("CurrentTaskExecutionTargets: %v", err)
+	}
+	if !targets.HasExecutions || len(targets.SessionIDs) != 0 || len(targets.Scripts) != 2 {
+		t.Fatalf("targets = %+v", targets)
+	}
+	for index, runID := range []workflow.RunID{"run-a", "run-b"} {
+		if targets.Scripts[index].RunID != runID || targets.Scripts[index].Path != sleepPath {
+			t.Fatalf("scripts = %+v", targets.Scripts)
+		}
+	}
+
+	for _, handle := range handles {
+		if err := handle.Stop(context.Background()); err != nil {
+			t.Fatalf("stop script: %v", err)
+		}
 	}
 }
 

@@ -606,7 +606,7 @@ func TestWorkflowRuntimeInterruptReleasesBeforeInteractiveReactivation(t *testin
 	if err != nil {
 		t.Fatalf("parse workflow session id: %v", err)
 	}
-	workflowRef := sessionruntime.WorkflowExecutionRef{RunID: run.ID, Generation: run.Generation}
+	workflowRef := sessionruntime.WorkflowExecutionRef{TaskID: run.TaskID, RunID: run.ID, Generation: run.Generation}
 	if _, active := fixture.runtimeAuthority.ExecutionByWorkflow(workflowRef); !active {
 		t.Fatal("workflow execution is not active")
 	}
