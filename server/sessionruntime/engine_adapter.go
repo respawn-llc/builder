@@ -158,10 +158,12 @@ func (a *Authority) buildAgentResource(ctx context.Context, descriptor session.S
 			plan.options.OnLoggingFailure(diag.Message)
 		}
 	})
-	if err == nil {
-		for _, line := range plan.options.StartLogLines {
-			logger.Logf("%s", line)
-		}
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	for _, line := range plan.options.StartLogLines {
+		logger.Logf("%s", line)
 	}
 	wiring, err := a.newRuntimeWiringFromPlan(resource, store, logger, *plan)
 	if err != nil {

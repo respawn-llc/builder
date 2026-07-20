@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
@@ -13,6 +14,7 @@ import (
 
 	"core/internal/testharness/runtimewirefixture"
 	"core/server/llm"
+	"core/server/runlog"
 	"core/server/runtime"
 	"core/server/session"
 	"core/server/tools"
@@ -90,6 +92,33 @@ func (p *authorityLifecycleProbe) ResourceReady(_ context.Context, _ AgentResour
 func (p *authorityLifecycleProbe) ResourceDraining(context.Context, AgentResourceDescriptor) error {
 	p.draining <- struct{}{}
 	return nil
+}
+
+func TestOpenRuntimeReturnsRunLoggerCreationError(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(fixture.store.Dir(), runlog.RunLogFileName), 0o755); err != nil {
+		t.Fatalf("replace run log with directory: %v", err)
+	}
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+
+	_, err = fixture.authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   "owner-a",
+		Runtime:   &plan,
+	})
+	if err == nil {
+		t.Fatal("open runtime succeeded when the run log could not be opened")
+	}
+	err = fixture.authority.WithCurrentRuntime(context.Background(), sessionID, func(context.Context, *runtime.Engine) error {
+		return nil
+	})
+	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("failed runtime activation lookup error = %v, want runtime unavailable", err)
+	}
 }
 
 func TestStalePredecessorFinalizationCannotRemoveResumedSuccessor(t *testing.T) {
