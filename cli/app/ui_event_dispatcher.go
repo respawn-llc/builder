@@ -71,7 +71,11 @@ func (m *uiModel) reduceDispatchedEvent(message tea.Msg) uiFeatureUpdateResult {
 			uiStatusNoticeReplace,
 			"",
 		)
-		return handledUIFeatureUpdate(m, tea.Batch(cmd, m.eventDispatcher.wait()))
+		m.layout().syncViewport()
+		return handledUIFeatureUpdate(
+			m,
+			tea.Batch(m.batchWithNativeOngoingRepaint(cmd), m.eventDispatcher.wait()),
+		)
 	}
 	result := m.reduceOngoingMessage(dispatched.event)
 	return handledUIFeatureUpdate(result.model, tea.Batch(result.cmd, result.model.eventDispatcher.wait()))
