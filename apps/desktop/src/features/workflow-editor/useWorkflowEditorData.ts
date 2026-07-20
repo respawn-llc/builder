@@ -143,7 +143,7 @@ export function shouldNotifyWorkflowEditorRefresh(
     event.resource === "workflow_link" &&
     event.projectID === projectID &&
     workflowLinkActions.has(event.action) &&
-    (event.workflowID === workflowID || event.changedIDs.includes(workflowID))
+    event.workflowID === workflowID
   ) {
     return event.action !== "unlinked";
   }
@@ -167,7 +167,7 @@ export function shouldRefreshWorkflowLink(
     event.resource === "workflow_link" &&
     event.projectID === projectID &&
     workflowLinkActions.has(event.action) &&
-    (event.workflowID === workflowID || event.changedIDs.includes(workflowID))
+    event.workflowID === workflowID
   );
 }
 

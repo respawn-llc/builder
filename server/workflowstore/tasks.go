@@ -11,6 +11,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/server/workflow/label"
+	"core/shared/serverapi"
 )
 
 type CreateTaskRequest struct {
@@ -876,12 +877,15 @@ func runCompletedWorkflowEvent(ctx context.Context, q *sqlitegen.Queries, taskID
 	if err != nil {
 		return WorkflowEventRecord{}, fmt.Errorf("load completion event task identity: %w", err)
 	}
+	projectID := row.ProjectID
+	workflowID := row.WorkflowID
 	return WorkflowEventRecord{
-		ProjectID:        row.ProjectID,
-		WorkflowID:       row.WorkflowID,
-		Resource:         "task",
-		Action:           "completed",
-		ChangedIDs:       []string{taskID, transitionID, runID},
+		ProjectID:        &projectID,
+		WorkflowID:       &workflowID,
+		Resource:         serverapi.WorkflowProjectEventResourceTask,
+		Action:           serverapi.WorkflowProjectEventActionCompleted,
+		PrimaryEntityID:  taskID,
+		RelatedIDs:       []string{transitionID, runID},
 		OccurredAtUnixMs: now,
 	}, nil
 }

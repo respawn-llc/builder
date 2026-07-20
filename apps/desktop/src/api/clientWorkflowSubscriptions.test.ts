@@ -7,9 +7,10 @@ import type { WorkflowProjectEvent } from "./workflowProjectEvents";
 const workflowProjectWireEvent = {
   event: {
     action: "question_waiting",
-    changed_ids: ["task-1", "run-1", "ask-1"],
     occurred_at_unix_ms: 1,
+    primary_entity_id: "task-1",
     project_id: "project-1",
+    related_ids: ["run-1", "ask-1"],
     resource: "task",
     workflow_id: "workflow-1",
   },
@@ -17,9 +18,10 @@ const workflowProjectWireEvent = {
 
 const workflowProjectEvent: WorkflowProjectEvent = {
   action: "question_waiting",
-  changedIDs: ["task-1", "run-1", "ask-1"],
   occurredAtUnixMs: 1,
+  primaryEntityID: "task-1",
   projectID: "project-1",
+  relatedIDs: ["run-1", "ask-1"],
   resource: "task",
   workflowID: "workflow-1",
 };
@@ -70,9 +72,11 @@ describe("ApiClient workflow subscriptions", () => {
     client.subscribeWorkflow("workflow-1", eventCollector(events, errors));
     transport.emit("workflow.event", {
       event: {
-        action: "",
-        changed_ids: ["task-1", 2],
+        action: "linked",
+        primary_entity_id: "task-1",
+        project_id: "project-1",
         resource: "task",
+        workflow_id: "workflow-1",
       },
     });
 

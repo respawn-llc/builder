@@ -201,21 +201,42 @@ func (s *Service) CreateAndLinkWorkflowToProject(ctx context.Context, request se
 	if err != nil {
 		return serverapi.WorkflowCreateAndLinkProjectResponse{}, err
 	}
-	s.publishWorkflowEvent(ctx, request.ProjectID, string(created.ID), "workflow_link", "linked", link.ID)
+	s.publishProjectWorkflowEvent(ctx, request.ProjectID, string(created.ID), serverapi.WorkflowProjectEventResourceWorkflowLink, serverapi.WorkflowProjectEventActionLinked, link.ID)
 	return serverapi.WorkflowCreateAndLinkProjectResponse{Workflow: workflowRecord(created), Link: projectWorkflowLink(link)}, nil
 }
 
-func (s *Service) publishWorkflowEvent(ctx context.Context, projectID string, workflowID string, resource string, action string, changedIDs ...string) {
-	if err := s.store.PublishWorkflowEvent(ctx, workflowstore.WorkflowEventRecord{ProjectID: projectID, WorkflowID: workflowID, Resource: resource, Action: action, ChangedIDs: changedIDs}); err != nil {
-		slog.Warn("publish workflow event failed", "project_id", strings.TrimSpace(projectID), "workflow_id", strings.TrimSpace(workflowID), "resource", strings.TrimSpace(resource), "action", strings.TrimSpace(action), "changed_ids", changedIDs, "error", err)
+func (s *Service) publishWorkflowEvent(ctx context.Context, event workflowstore.WorkflowEventRecord) {
+	if err := s.store.PublishWorkflowEvent(ctx, event); err != nil {
+		slog.Warn("publish workflow event failed", "project_id", event.ProjectID, "workflow_id", event.WorkflowID, "resource", event.Resource, "action", event.Action, "primary_entity_id", event.PrimaryEntityID, "related_ids", event.RelatedIDs, "error", err)
 	}
 }
 
-func (s *Service) publishLinkedWorkflowEvent(ctx context.Context, workflowID string, resource string, action string, changedIDs ...string) {
-	s.publishWorkflowEvent(ctx, "", workflowID, resource, action, changedIDs...)
+func (s *Service) publishProjectWorkflowEvent(ctx context.Context, projectID string, workflowID string, resource serverapi.WorkflowProjectEventResource, action serverapi.WorkflowProjectEventAction, primaryEntityID string, relatedIDs ...string) {
+	s.publishWorkflowEvent(ctx, workflowstore.WorkflowEventRecord{
+		ProjectID:       &projectID,
+		WorkflowID:      &workflowID,
+		Resource:        resource,
+		Action:          action,
+		PrimaryEntityID: primaryEntityID,
+		RelatedIDs:      relatedIDs,
+	})
+}
+
+func (s *Service) publishGlobalWorkflowEvent(ctx context.Context, workflowID string, resource serverapi.WorkflowProjectEventResource, action serverapi.WorkflowProjectEventAction, primaryEntityID string, relatedIDs ...string) {
+	s.publishWorkflowEvent(ctx, workflowstore.WorkflowEventRecord{
+		WorkflowID:      &workflowID,
+		Resource:        resource,
+		Action:          action,
+		PrimaryEntityID: primaryEntityID,
+		RelatedIDs:      relatedIDs,
+	})
+}
+
+func (s *Service) publishLinkedWorkflowEvent(ctx context.Context, workflowID string, resource serverapi.WorkflowProjectEventResource, action serverapi.WorkflowProjectEventAction, primaryEntityID string, relatedIDs ...string) {
+	s.publishGlobalWorkflowEvent(ctx, workflowID, resource, action, primaryEntityID, relatedIDs...)
 	links, err := s.store.ListWorkflowProjectLinks(ctx, workflow.WorkflowID(workflowID))
 	if err != nil {
-		slog.Warn("list workflow project links for event failed", "workflow_id", strings.TrimSpace(workflowID), "resource", strings.TrimSpace(resource), "action", strings.TrimSpace(action), "changed_ids", changedIDs, "error", err)
+		slog.Warn("list workflow project links for event failed", "workflow_id", strings.TrimSpace(workflowID), "resource", resource, "action", action, "primary_entity_id", strings.TrimSpace(primaryEntityID), "related_ids", relatedIDs, "error", err)
 		return
 	}
 	seen := map[string]bool{}
@@ -225,7 +246,7 @@ func (s *Service) publishLinkedWorkflowEvent(ctx context.Context, workflowID str
 			continue
 		}
 		seen[projectID] = true
-		s.publishWorkflowEvent(ctx, projectID, workflowID, resource, action, changedIDs...)
+		s.publishProjectWorkflowEvent(ctx, projectID, workflowID, resource, action, primaryEntityID, relatedIDs...)
 	}
 }
 
@@ -236,7 +257,7 @@ func (s *Service) UpdateWorkflow(ctx context.Context, req serverapi.WorkflowUpda
 	if err := s.store.UpdateWorkflowInfo(ctx, workflow.WorkflowID(req.WorkflowID), req.Name, req.Description); err != nil {
 		return serverapi.WorkflowGetResponse{}, err
 	}
-	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, "workflow", "updated", req.WorkflowID)
+	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionUpdated, req.WorkflowID)
 	return s.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: req.WorkflowID})
 }
 
@@ -285,7 +306,7 @@ func (s *Service) AddWorkflowNode(ctx context.Context, req serverapi.WorkflowNod
 	if err != nil {
 		return serverapi.WorkflowNodeAddResponse{}, err
 	}
-	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, "workflow", "node_added", req.NodeID)
+	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionNodeAdded, req.NodeID)
 	return serverapi.WorkflowNodeAddResponse{Version: revision}, nil
 }
 
@@ -297,7 +318,7 @@ func (s *Service) UpdateWorkflowNode(ctx context.Context, req serverapi.Workflow
 	if err != nil {
 		return serverapi.WorkflowNodeUpdateResponse{}, err
 	}
-	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, "workflow", "node_updated", req.NodeID)
+	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionNodeUpdated, req.NodeID)
 	return serverapi.WorkflowNodeUpdateResponse{Version: revision}, nil
 }
 
@@ -309,7 +330,7 @@ func (s *Service) AddWorkflowNodeGroup(ctx context.Context, req serverapi.Workfl
 	if err != nil {
 		return serverapi.WorkflowNodeGroupResponse{}, err
 	}
-	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, "workflow", "node_group_added", group.ID)
+	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionNodeGroupAdded, group.ID)
 	return serverapi.WorkflowNodeGroupResponse{Group: workflowNodeGroup(group), Version: revision}, nil
 }
 
@@ -321,7 +342,7 @@ func (s *Service) UpdateWorkflowNodeGroup(ctx context.Context, req serverapi.Wor
 	if err != nil {
 		return serverapi.WorkflowNodeGroupResponse{}, err
 	}
-	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, "workflow", "node_group_updated", group.ID)
+	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionNodeGroupUpdated, group.ID)
 	return serverapi.WorkflowNodeGroupResponse{Group: workflowNodeGroup(group), Version: revision}, nil
 }
 
@@ -332,7 +353,7 @@ func (s *Service) DeleteWorkflowNodeGroup(ctx context.Context, req serverapi.Wor
 	if _, err := s.store.DeleteNodeGroup(ctx, workflow.WorkflowID(req.WorkflowID), req.GroupID); err != nil {
 		return err
 	}
-	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, "workflow", "node_group_deleted", req.GroupID)
+	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionNodeGroupDeleted, req.GroupID)
 	return nil
 }
 
@@ -344,7 +365,7 @@ func (s *Service) AddWorkflowTransitionGroup(ctx context.Context, req serverapi.
 	if err != nil {
 		return serverapi.WorkflowTransitionGroupAddResponse{}, err
 	}
-	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, "workflow", "transition_group_added", req.GroupID)
+	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionTransitionGroupAdded, req.GroupID)
 	return serverapi.WorkflowTransitionGroupAddResponse{Version: revision}, nil
 }
 
@@ -356,7 +377,7 @@ func (s *Service) UpdateWorkflowTransitionGroup(ctx context.Context, req servera
 	if err != nil {
 		return serverapi.WorkflowTransitionGroupUpdateResponse{}, err
 	}
-	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, "workflow", "transition_group_updated", req.GroupID)
+	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionTransitionGroupUpdated, req.GroupID)
 	return serverapi.WorkflowTransitionGroupUpdateResponse{Version: revision}, nil
 }
 
@@ -368,7 +389,7 @@ func (s *Service) AddWorkflowEdge(ctx context.Context, req serverapi.WorkflowEdg
 	if err != nil {
 		return serverapi.WorkflowEdgeAddResponse{}, err
 	}
-	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, "workflow", "edge_added", req.EdgeID)
+	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionEdgeAdded, req.EdgeID)
 	return serverapi.WorkflowEdgeAddResponse{Version: revision}, nil
 }
 
@@ -380,7 +401,7 @@ func (s *Service) UpdateWorkflowEdge(ctx context.Context, req serverapi.Workflow
 	if err != nil {
 		return serverapi.WorkflowEdgeUpdateResponse{}, err
 	}
-	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, "workflow", "edge_updated", req.EdgeID)
+	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionEdgeUpdated, req.EdgeID)
 	return serverapi.WorkflowEdgeUpdateResponse{Version: revision}, nil
 }
 
@@ -392,7 +413,7 @@ func (s *Service) LinkWorkflowToProject(ctx context.Context, request serverapi.W
 	if err != nil {
 		return serverapi.WorkflowLinkProjectResponse{}, err
 	}
-	s.publishWorkflowEvent(ctx, request.ProjectID, request.WorkflowID, "workflow_link", "linked", link.ID)
+	s.publishProjectWorkflowEvent(ctx, request.ProjectID, request.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflowLink, serverapi.WorkflowProjectEventActionLinked, link.ID)
 	return serverapi.WorkflowLinkProjectResponse{Link: projectWorkflowLink(link)}, nil
 }
 
@@ -419,7 +440,7 @@ func (s *Service) SetDefaultProjectWorkflowLink(ctx context.Context, req servera
 	if err != nil {
 		return serverapi.WorkflowSetDefaultProjectLinkResponse{}, err
 	}
-	s.publishWorkflowEvent(ctx, req.ProjectID, req.WorkflowID, "workflow_link", "default_changed", link.ID)
+	s.publishProjectWorkflowEvent(ctx, req.ProjectID, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflowLink, serverapi.WorkflowProjectEventActionDefaultChanged, link.ID)
 	return serverapi.WorkflowSetDefaultProjectLinkResponse{Link: projectWorkflowLink(link)}, nil
 }
 
@@ -433,7 +454,7 @@ func (s *Service) UnlinkWorkflowFromProject(ctx context.Context, req serverapi.W
 		return resp, err
 	}
 	if result.Unlinked {
-		s.publishWorkflowEvent(ctx, result.ProjectID, string(result.WorkflowID), "workflow_link", "unlinked", req.LinkID)
+		s.publishProjectWorkflowEvent(ctx, result.ProjectID, string(result.WorkflowID), serverapi.WorkflowProjectEventResourceWorkflowLink, serverapi.WorkflowProjectEventActionUnlinked, req.LinkID)
 	}
 	return resp, nil
 }
@@ -474,7 +495,7 @@ func (s *Service) DeleteWorkflow(ctx context.Context, req serverapi.WorkflowDele
 		return resp, nil
 	}
 	s.finalizeWorkflowAttentionResolution(ctx, result)
-	s.publishWorkflowEvent(ctx, "", req.WorkflowID, "workflow", "deleted", req.WorkflowID)
+	s.publishGlobalWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionDeleted, req.WorkflowID)
 	seen := map[string]bool{}
 	for _, link := range links {
 		projectID := strings.TrimSpace(link.ProjectID)
@@ -482,7 +503,7 @@ func (s *Service) DeleteWorkflow(ctx context.Context, req serverapi.WorkflowDele
 			continue
 		}
 		seen[projectID] = true
-		s.publishWorkflowEvent(ctx, projectID, req.WorkflowID, "workflow", "deleted", req.WorkflowID)
+		s.publishProjectWorkflowEvent(ctx, projectID, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionDeleted, req.WorkflowID)
 	}
 	return resp, nil
 }
@@ -592,7 +613,7 @@ func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowG
 	resp.Definition = &saved.Definition
 	resp.CurrentVersion = saved.Definition.Workflow.Version
 	if result.Changed {
-		s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, "workflow", "graph_saved", req.WorkflowID)
+		s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionGraphSaved, req.WorkflowID)
 	}
 	return resp, nil
 }
@@ -610,7 +631,7 @@ func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if err != nil {
 		return serverapi.WorkflowTaskCreateResponse{}, workflowTaskCreateError(err)
 	}
-	s.publishWorkflowEvent(ctx, task.ProjectID, string(task.WorkflowID), "task", "created", string(task.ID))
+	s.publishProjectWorkflowEvent(ctx, task.ProjectID, string(task.WorkflowID), serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionCreated, string(task.ID))
 	detail, err := s.readModels.TaskDetail.GetTask(ctx, string(task.ID))
 	if err != nil {
 		return serverapi.WorkflowTaskCreateResponse{}, err
@@ -660,7 +681,7 @@ func (s *Service) UpdateWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if err != nil {
 		return serverapi.WorkflowTaskUpdateResponse{}, err
 	}
-	s.publishWorkflowEvent(ctx, task.ProjectID, string(task.WorkflowID), "task", "updated", string(task.ID))
+	s.publishProjectWorkflowEvent(ctx, task.ProjectID, string(task.WorkflowID), serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionUpdated, string(task.ID))
 	detail, err := s.readModels.TaskDetail.GetTask(ctx, string(task.ID))
 	if err != nil {
 		return serverapi.WorkflowTaskUpdateResponse{}, err
@@ -700,7 +721,7 @@ func (s *Service) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 		s.schedulerWake.Notify()
 	}
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
-		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "started", req.TaskID, string(started.RunID))
+		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionStarted, req.TaskID, string(started.RunID))
 	}
 	return serverapi.WorkflowTaskStartResponse{
 		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
@@ -918,7 +939,7 @@ func (s *Service) InterruptWorkflowTask(ctx context.Context, req serverapi.Workf
 	}
 	cancelErr := s.cancelInterruptedRuntimes(ctx, workflow.TaskID(req.TaskID), req.SessionID, interrupted)
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
-		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "interrupted", req.TaskID)
+		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionInterrupted, req.TaskID)
 	}
 	if cancelErr != nil {
 		return serverapi.WorkflowTaskInterruptResponse{}, cancelErr
@@ -967,7 +988,7 @@ func (s *Service) ResumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 		s.schedulerWake.Notify()
 	}
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
-		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "resumed", req.TaskID)
+		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionResumed, req.TaskID)
 	}
 	return serverapi.WorkflowTaskResumeResponse{Runs: workflowTaskRunSummaries(resumed.Runs)}, nil
 }
@@ -1054,7 +1075,7 @@ func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.Workflo
 	if s.schedulerWake != nil {
 		s.schedulerWake.Notify()
 	}
-	s.publishWorkflowEvent(ctx, projectID, workflowID, "task", "approved", taskID, transitionID)
+	s.publishProjectWorkflowEvent(ctx, projectID, workflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionApproved, taskID, transitionID)
 	return serverapi.WorkflowTaskApproveResponse{
 		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 		Applied: &serverapi.WorkflowTaskApproveApplied{
@@ -1109,7 +1130,7 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		s.schedulerWake.Notify()
 	}
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
-		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "moved", req.TaskID, string(moved.TransitionID))
+		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionMoved, req.TaskID, string(moved.TransitionID))
 	}
 	return serverapi.WorkflowTaskMoveResponse{
 		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
@@ -1238,7 +1259,7 @@ func (s *Service) CancelWorkflowTask(ctx context.Context, req serverapi.Workflow
 	}
 	s.finalizeTaskAttentionResolution(ctx, result.TaskAttentionResolution)
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
-		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "canceled", req.TaskID)
+		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionCanceled, req.TaskID)
 	}
 	if s.runtimeCancel != nil {
 		return s.runtimeCancel.CancelTaskRuns(ctx, workflow.TaskID(req.TaskID))
@@ -1274,7 +1295,7 @@ func (s *Service) DeleteWorkflowTask(ctx context.Context, req serverapi.Workflow
 		return err
 	}
 	s.finalizeTaskAttentionResolution(ctx, result.TaskAttentionResolution)
-	s.publishWorkflowEvent(ctx, result.ProjectID, string(result.WorkflowID), "task", "deleted", req.TaskID)
+	s.publishProjectWorkflowEvent(ctx, result.ProjectID, string(result.WorkflowID), serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionDeleted, req.TaskID)
 	return nil
 }
 
@@ -1370,7 +1391,7 @@ func (s *Service) AnswerWorkflowTaskQuestion(ctx context.Context, req serverapi.
 			}
 		}
 		if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
-			s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "question_answered", req.TaskID, string(run.ID), req.AskID)
+			s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionQuestionAnswered, req.TaskID, string(run.ID), req.AskID)
 		}
 		return struct{}{}, nil
 	})
@@ -1398,7 +1419,7 @@ func (s *Service) AddWorkflowTaskComment(ctx context.Context, req serverapi.Work
 		return serverapi.WorkflowTaskCommentAddResponse{}, err
 	}
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
-		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "comment_added", req.TaskID, comment.ID)
+		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionCommentAdded, req.TaskID, comment.ID)
 	}
 	return serverapi.WorkflowTaskCommentAddResponse{Comment: commentRecord(comment)}, nil
 }
@@ -1469,7 +1490,7 @@ func (s *Service) ReplaceWorkflowTaskComment(ctx context.Context, req serverapi.
 	if err := s.store.ReplaceComment(ctx, req.CommentID, req.Body); err != nil {
 		return err
 	}
-	s.publishWorkflowEvent(ctx, projectID, workflowID, "task", "comment_updated", taskID, req.CommentID)
+	s.publishProjectWorkflowEvent(ctx, projectID, workflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionCommentUpdated, taskID, req.CommentID)
 	return nil
 }
 
@@ -1484,7 +1505,7 @@ func (s *Service) DeleteWorkflowTaskComment(ctx context.Context, req serverapi.W
 	if err := s.store.DeleteComment(ctx, req.CommentID); err != nil {
 		return err
 	}
-	s.publishWorkflowEvent(ctx, projectID, workflowID, "task", "comment_deleted", taskID, req.CommentID)
+	s.publishProjectWorkflowEvent(ctx, projectID, workflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionCommentDeleted, taskID, req.CommentID)
 	return nil
 }
 

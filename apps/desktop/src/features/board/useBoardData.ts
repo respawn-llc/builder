@@ -136,7 +136,7 @@ function isDeletedTaskEvent(event: WorkflowProjectEvent, taskID: string | undefi
   if (trimmedTaskID.length === 0) {
     return false;
   }
-  return event.resource === "task" && event.action === "deleted" && event.changedIDs.includes(trimmedTaskID);
+  return event.resource === "task" && event.action === "deleted" && event.primaryEntityID === trimmedTaskID;
 }
 
 export function shouldRefreshBoardFromProjectEvent(

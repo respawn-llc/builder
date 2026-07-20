@@ -71,11 +71,6 @@ var (
 	// ErrWorkflowNameRequired is returned when a workflow name is blank.
 	ErrWorkflowNameRequired = errors.New("workflow name is required")
 
-	// ErrEventResourceRequired and ErrEventActionRequired guard
-	// PublishWorkflowEvent inputs.
-	ErrEventResourceRequired = errors.New("event resource is required")
-	ErrEventActionRequired   = errors.New("event action is required")
-
 	// ErrCommentAuthorKindInvalid is returned when a comment author kind is not
 	// one of the accepted values.
 	ErrCommentAuthorKindInvalid = errors.New("comment author kind must be user or agent")

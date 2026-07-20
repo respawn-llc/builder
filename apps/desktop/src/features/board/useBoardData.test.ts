@@ -144,9 +144,10 @@ describe("shouldRefreshBoardFromProjectEvent", () => {
 function workflowEvent(overrides: Partial<WorkflowProjectEvent>): WorkflowProjectEvent {
   return {
     action: "updated",
-    changedIDs: [],
     occurredAtUnixMs: 1,
+    primaryEntityID: "task-1",
     projectID: "project-1",
+    relatedIDs: [],
     resource: "task",
     workflowID: "workflow-1",
     ...overrides,

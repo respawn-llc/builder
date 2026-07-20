@@ -41,9 +41,9 @@ func nextWorkflowProjectEvent(t *testing.T, sub serverapi.WorkflowProjectSubscri
 	return event
 }
 
-func waitWorkflowProjectActions(t *testing.T, sub serverapi.WorkflowProjectSubscription, resource string, expected ...string) []serverapi.WorkflowProjectEvent {
+func waitWorkflowProjectActions(t *testing.T, sub serverapi.WorkflowProjectSubscription, resource serverapi.WorkflowProjectEventResource, expected ...serverapi.WorkflowProjectEventAction) []serverapi.WorkflowProjectEvent {
 	t.Helper()
-	remaining := make(map[string]bool, len(expected))
+	remaining := make(map[serverapi.WorkflowProjectEventAction]bool, len(expected))
 	for _, action := range expected {
 		remaining[action] = true
 	}
@@ -877,7 +877,7 @@ func TestServiceCompleteWorkflowTaskFromAgentSessionCompletesWithoutSchedulerWak
 		t.Fatalf("attention finalizer results = %+v", finalizer.results)
 	}
 	event := nextWorkflowProjectEvent(t, sub)
-	if event.ProjectID != binding.ProjectID || event.WorkflowID != workflowID || event.Resource != "task" || event.Action != "completed" {
+	if !stringPointerEquals(event.ProjectID, binding.ProjectID) || !stringPointerEquals(event.WorkflowID, workflowID) || event.Resource != "task" || event.Action != "completed" {
 		t.Fatalf("completion event = %+v, want single store-owned task completed event", event)
 	}
 	noEventCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
@@ -1490,7 +1490,7 @@ func TestServiceDeleteTaskCancelsRuntimeAndPublishesEvent(t *testing.T) {
 		t.Fatalf("worktree cleanup tasks = %+v", worktreeCleanup.taskIDs)
 	}
 	event := nextWorkflowProjectEvent(t, sub)
-	if event.ProjectID != projectID || event.WorkflowID != workflowID || event.Resource != "task" || event.Action != "deleted" || !sameStringSet(event.ChangedIDs, []string{taskID}) {
+	if !stringPointerEquals(event.ProjectID, projectID) || !stringPointerEquals(event.WorkflowID, workflowID) || event.Resource != "task" || event.Action != "deleted" || event.PrimaryEntityID != taskID || len(event.RelatedIDs) != 0 {
 		t.Fatalf("delete event = %+v, want task deleted event", event)
 	}
 	if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: taskID}); err == nil {
@@ -2108,7 +2108,7 @@ func TestServiceWorkflowUnlinkRejectsTaskReferencesAndHardDeletesUnusedLinks(t *
 	}
 	events := waitWorkflowProjectActions(t, sub, "workflow_link", "unlinked")
 	unlinkEvent := events[len(events)-1]
-	if unlinkEvent.ProjectID != binding.ProjectID || unlinkEvent.WorkflowID != unusedWorkflowID {
+	if !stringPointerEquals(unlinkEvent.ProjectID, binding.ProjectID) || !stringPointerEquals(unlinkEvent.WorkflowID, unusedWorkflowID) {
 		t.Fatalf("unlink event = %+v, want project/workflow identity", unlinkEvent)
 	}
 }
@@ -2156,7 +2156,7 @@ func TestServiceWorkflowDeletePreviewsBlocksAndPublishesDeletion(t *testing.T) {
 		t.Fatalf("confirmed delete = %+v, want deleted without blockers", deleted)
 	}
 	event := nextWorkflowProjectEvent(t, sub)
-	if event.ProjectID != projectID || event.WorkflowID != workflowID || event.Resource != "workflow" || event.Action != "deleted" || !sameStringSet(event.ChangedIDs, []string{workflowID}) {
+	if !stringPointerEquals(event.ProjectID, projectID) || !stringPointerEquals(event.WorkflowID, workflowID) || event.Resource != "workflow" || event.Action != "deleted" || event.PrimaryEntityID != workflowID || len(event.RelatedIDs) != 0 {
 		t.Fatalf("event = %+v, want workflow deleted event", event)
 	}
 	eventCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -2165,7 +2165,7 @@ func TestServiceWorkflowDeletePreviewsBlocksAndPublishesDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workflow subscription delete next: %v", err)
 	}
-	if workflowEvent.ProjectID != "" || workflowEvent.WorkflowID != workflowID || workflowEvent.Resource != "workflow" || workflowEvent.Action != "deleted" || !sameStringSet(workflowEvent.ChangedIDs, []string{workflowID}) {
+	if workflowEvent.ProjectID != nil || !stringPointerEquals(workflowEvent.WorkflowID, workflowID) || workflowEvent.Resource != "workflow" || workflowEvent.Action != "deleted" || workflowEvent.PrimaryEntityID != workflowID || len(workflowEvent.RelatedIDs) != 0 {
 		t.Fatalf("workflow-scoped delete event = %+v, want projectless workflow delete event", workflowEvent)
 	}
 	if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: taskID}); err == nil {
@@ -2291,7 +2291,7 @@ func TestServiceWorkflowGraphValidatePreviewAndSave(t *testing.T) {
 		t.Fatalf("saved response transition description = %q, want edited transition description", workflowServiceTransitionGroupByID(t, *saved.Definition, "group-start-"+workflowID).Description)
 	}
 	for _, event := range waitWorkflowProjectActions(t, sub, "workflow", "graph_saved") {
-		if event.ProjectID != binding.ProjectID || event.WorkflowID != workflowID {
+		if !stringPointerEquals(event.ProjectID, binding.ProjectID) || !stringPointerEquals(event.WorkflowID, workflowID) {
 			t.Fatalf("event = %+v, want linked workflow event", event)
 		}
 	}
@@ -2301,7 +2301,7 @@ func TestServiceWorkflowGraphValidatePreviewAndSave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workflow subscription next: %v", err)
 	}
-	if workflowEvent.ProjectID != "" || workflowEvent.WorkflowID != workflowID || workflowEvent.Resource != "workflow" || workflowEvent.Action != "graph_saved" {
+	if workflowEvent.ProjectID != nil || !stringPointerEquals(workflowEvent.WorkflowID, workflowID) || workflowEvent.Resource != "workflow" || workflowEvent.Action != "graph_saved" {
 		t.Fatalf("workflow-scoped event = %+v, want graph_saved workflow event without project scope", workflowEvent)
 	}
 	canonical, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
@@ -2570,6 +2570,10 @@ func newWorkflowServiceReadModels(
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+func stringPointerEquals(value *string, expected string) bool {
+	return value != nil && *value == expected
 }
 
 func linkWorkflowServiceProject(t *testing.T, ctx context.Context, service *Service, req serverapi.WorkflowLinkProjectRequest) serverapi.WorkflowLinkProjectResponse {

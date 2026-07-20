@@ -1403,13 +1403,183 @@ type WorkflowSubscribeRequest struct {
 	WorkflowID string `json:"workflow_id"`
 }
 
+type WorkflowProjectEventResource = protocol.WorkflowProjectEventResource
+
+const (
+	WorkflowProjectEventResourceWorkflow     = protocol.WorkflowProjectEventResourceWorkflow
+	WorkflowProjectEventResourceWorkflowLink = protocol.WorkflowProjectEventResourceWorkflowLink
+	WorkflowProjectEventResourceTask         = protocol.WorkflowProjectEventResourceTask
+	WorkflowProjectEventResourceLabel        = protocol.WorkflowProjectEventResourceLabel
+)
+
+type WorkflowProjectEventAction = protocol.WorkflowProjectEventAction
+
+const (
+	WorkflowProjectEventActionCreated                = protocol.WorkflowProjectEventActionCreated
+	WorkflowProjectEventActionUpdated                = protocol.WorkflowProjectEventActionUpdated
+	WorkflowProjectEventActionRenamed                = protocol.WorkflowProjectEventActionRenamed
+	WorkflowProjectEventActionDeleted                = protocol.WorkflowProjectEventActionDeleted
+	WorkflowProjectEventActionNodeAdded              = protocol.WorkflowProjectEventActionNodeAdded
+	WorkflowProjectEventActionNodeUpdated            = protocol.WorkflowProjectEventActionNodeUpdated
+	WorkflowProjectEventActionNodeGroupAdded         = protocol.WorkflowProjectEventActionNodeGroupAdded
+	WorkflowProjectEventActionNodeGroupUpdated       = protocol.WorkflowProjectEventActionNodeGroupUpdated
+	WorkflowProjectEventActionNodeGroupDeleted       = protocol.WorkflowProjectEventActionNodeGroupDeleted
+	WorkflowProjectEventActionTransitionGroupAdded   = protocol.WorkflowProjectEventActionTransitionGroupAdded
+	WorkflowProjectEventActionTransitionGroupUpdated = protocol.WorkflowProjectEventActionTransitionGroupUpdated
+	WorkflowProjectEventActionEdgeAdded              = protocol.WorkflowProjectEventActionEdgeAdded
+	WorkflowProjectEventActionEdgeUpdated            = protocol.WorkflowProjectEventActionEdgeUpdated
+	WorkflowProjectEventActionGraphSaved             = protocol.WorkflowProjectEventActionGraphSaved
+	WorkflowProjectEventActionLinked                 = protocol.WorkflowProjectEventActionLinked
+	WorkflowProjectEventActionDefaultChanged         = protocol.WorkflowProjectEventActionDefaultChanged
+	WorkflowProjectEventActionUnlinked               = protocol.WorkflowProjectEventActionUnlinked
+	WorkflowProjectEventActionStarted                = protocol.WorkflowProjectEventActionStarted
+	WorkflowProjectEventActionInterrupted            = protocol.WorkflowProjectEventActionInterrupted
+	WorkflowProjectEventActionResumed                = protocol.WorkflowProjectEventActionResumed
+	WorkflowProjectEventActionApproved               = protocol.WorkflowProjectEventActionApproved
+	WorkflowProjectEventActionMoved                  = protocol.WorkflowProjectEventActionMoved
+	WorkflowProjectEventActionCanceled               = protocol.WorkflowProjectEventActionCanceled
+	WorkflowProjectEventActionCompleted              = protocol.WorkflowProjectEventActionCompleted
+	WorkflowProjectEventActionCommentAdded           = protocol.WorkflowProjectEventActionCommentAdded
+	WorkflowProjectEventActionCommentUpdated         = protocol.WorkflowProjectEventActionCommentUpdated
+	WorkflowProjectEventActionCommentDeleted         = protocol.WorkflowProjectEventActionCommentDeleted
+	WorkflowProjectEventActionQuestionWaiting        = protocol.WorkflowProjectEventActionQuestionWaiting
+	WorkflowProjectEventActionQuestionCleared        = protocol.WorkflowProjectEventActionQuestionCleared
+	WorkflowProjectEventActionQuestionAnswered       = protocol.WorkflowProjectEventActionQuestionAnswered
+	WorkflowProjectEventActionLabelsChanged          = protocol.WorkflowProjectEventActionLabelsChanged
+)
+
 type WorkflowProjectEvent struct {
-	ProjectID        string   `json:"project_id,omitempty"`
-	WorkflowID       string   `json:"workflow_id,omitempty"`
-	Resource         string   `json:"resource"`
-	Action           string   `json:"action"`
-	ChangedIDs       []string `json:"changed_ids,omitempty"`
-	OccurredAtUnixMs int64    `json:"occurred_at_unix_ms"`
+	ProjectID        *string                      `json:"project_id,omitempty"`
+	WorkflowID       *string                      `json:"workflow_id,omitempty"`
+	Resource         WorkflowProjectEventResource `json:"resource"`
+	Action           WorkflowProjectEventAction   `json:"action"`
+	PrimaryEntityID  string                       `json:"primary_entity_id"`
+	RelatedIDs       []string                     `json:"related_ids,omitempty"`
+	OccurredAtUnixMs int64                        `json:"occurred_at_unix_ms"`
+}
+
+func (e WorkflowProjectEvent) Validate() error {
+	if e.ProjectID != nil {
+		if err := validateRequired("project_id", *e.ProjectID); err != nil {
+			return err
+		}
+		if strings.TrimSpace(*e.ProjectID) != *e.ProjectID {
+			return workflowRequestError(WorkflowRequestErrorInvalidMode, "project_id", "project_id must not have leading or trailing whitespace")
+		}
+	}
+	if e.WorkflowID != nil {
+		if err := validateRequired("workflow_id", *e.WorkflowID); err != nil {
+			return err
+		}
+		if strings.TrimSpace(*e.WorkflowID) != *e.WorkflowID {
+			return workflowRequestError(WorkflowRequestErrorInvalidMode, "workflow_id", "workflow_id must not have leading or trailing whitespace")
+		}
+	}
+	if err := validateRequired("primary_entity_id", e.PrimaryEntityID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(e.PrimaryEntityID) != e.PrimaryEntityID {
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "primary_entity_id", "primary_entity_id must not have leading or trailing whitespace")
+	}
+	if e.OccurredAtUnixMs <= 0 {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "occurred_at_unix_ms", "occurred_at_unix_ms must be positive")
+	}
+	if !workflowProjectEventActionAllowed(e.Resource, e.Action) {
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "action", "action is not valid for resource")
+	}
+	switch e.Resource {
+	case WorkflowProjectEventResourceWorkflow:
+		if e.WorkflowID == nil {
+			return workflowRequestError(WorkflowRequestErrorRequired, "workflow_id", "workflow_id is required")
+		}
+	case WorkflowProjectEventResourceWorkflowLink, WorkflowProjectEventResourceTask:
+		if e.ProjectID == nil {
+			return workflowRequestError(WorkflowRequestErrorRequired, "project_id", "project_id is required")
+		}
+		if e.WorkflowID == nil {
+			return workflowRequestError(WorkflowRequestErrorRequired, "workflow_id", "workflow_id is required")
+		}
+	case WorkflowProjectEventResourceLabel:
+		if e.ProjectID == nil {
+			return workflowRequestError(WorkflowRequestErrorRequired, "project_id", "project_id is required")
+		}
+		if e.WorkflowID != nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidMode, "workflow_id", "workflow_id must be absent for label events")
+		}
+	default:
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "resource", "resource is invalid")
+	}
+	seen := map[string]struct{}{e.PrimaryEntityID: {}}
+	for _, relatedID := range e.RelatedIDs {
+		if err := validateRequired("related_ids", relatedID); err != nil {
+			return err
+		}
+		if strings.TrimSpace(relatedID) != relatedID {
+			return workflowRequestError(WorkflowRequestErrorInvalidMode, "related_ids", "related_ids must not have leading or trailing whitespace")
+		}
+		if _, exists := seen[relatedID]; exists {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "related_ids", "related_ids must be unique and must not repeat primary_entity_id")
+		}
+		seen[relatedID] = struct{}{}
+	}
+	return nil
+}
+
+func workflowProjectEventActionAllowed(resource WorkflowProjectEventResource, action WorkflowProjectEventAction) bool {
+	switch resource {
+	case WorkflowProjectEventResourceWorkflow:
+		switch action {
+		case WorkflowProjectEventActionUpdated,
+			WorkflowProjectEventActionDeleted,
+			WorkflowProjectEventActionNodeAdded,
+			WorkflowProjectEventActionNodeUpdated,
+			WorkflowProjectEventActionNodeGroupAdded,
+			WorkflowProjectEventActionNodeGroupUpdated,
+			WorkflowProjectEventActionNodeGroupDeleted,
+			WorkflowProjectEventActionTransitionGroupAdded,
+			WorkflowProjectEventActionTransitionGroupUpdated,
+			WorkflowProjectEventActionEdgeAdded,
+			WorkflowProjectEventActionEdgeUpdated,
+			WorkflowProjectEventActionGraphSaved:
+			return true
+		}
+	case WorkflowProjectEventResourceWorkflowLink:
+		switch action {
+		case WorkflowProjectEventActionLinked,
+			WorkflowProjectEventActionDefaultChanged,
+			WorkflowProjectEventActionUnlinked:
+			return true
+		}
+	case WorkflowProjectEventResourceTask:
+		switch action {
+		case WorkflowProjectEventActionCreated,
+			WorkflowProjectEventActionUpdated,
+			WorkflowProjectEventActionDeleted,
+			WorkflowProjectEventActionStarted,
+			WorkflowProjectEventActionInterrupted,
+			WorkflowProjectEventActionResumed,
+			WorkflowProjectEventActionApproved,
+			WorkflowProjectEventActionMoved,
+			WorkflowProjectEventActionCanceled,
+			WorkflowProjectEventActionCompleted,
+			WorkflowProjectEventActionCommentAdded,
+			WorkflowProjectEventActionCommentUpdated,
+			WorkflowProjectEventActionCommentDeleted,
+			WorkflowProjectEventActionQuestionWaiting,
+			WorkflowProjectEventActionQuestionCleared,
+			WorkflowProjectEventActionQuestionAnswered,
+			WorkflowProjectEventActionLabelsChanged:
+			return true
+		}
+	case WorkflowProjectEventResourceLabel:
+		switch action {
+		case WorkflowProjectEventActionCreated,
+			WorkflowProjectEventActionRenamed,
+			WorkflowProjectEventActionDeleted:
+			return true
+		}
+	}
+	return false
 }
 
 type WorkflowProjectSubscription interface {

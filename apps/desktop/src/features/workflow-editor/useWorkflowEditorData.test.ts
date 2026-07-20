@@ -59,7 +59,7 @@ describe("shouldRefreshWorkflowEditor", () => {
       shouldRefreshWorkflowEditor(
         workflowEvent({
           action: "unlinked",
-          changedIDs: ["link-1"],
+          primaryEntityID: "link-1",
           projectID: "project-1",
           resource: "workflow_link",
           workflowID: "workflow-1",
@@ -72,7 +72,7 @@ describe("shouldRefreshWorkflowEditor", () => {
       shouldRefreshWorkflowEditor(
         workflowEvent({
           action: "unlinked",
-          changedIDs: ["link-2"],
+          primaryEntityID: "link-2",
           projectID: "project-1",
           resource: "workflow_link",
           workflowID: "workflow-2",
@@ -103,7 +103,7 @@ describe("shouldRefreshWorkflowEditor", () => {
     });
     const linkEvent = workflowEvent({
       action: "default_changed",
-      changedIDs: ["link-1"],
+      primaryEntityID: "link-1",
       projectID: "project-1",
       resource: "workflow_link",
       workflowID: "workflow-1",
@@ -160,11 +160,12 @@ describe("shouldRefreshWorkflowEditor", () => {
 function workflowEvent(overrides: Partial<WorkflowProjectEvent>): WorkflowProjectEvent {
   return {
     action: "updated",
-    changedIDs: [],
     occurredAtUnixMs: 1,
+    primaryEntityID: "workflow-1",
     projectID: null,
+    relatedIDs: [],
     resource: "workflow",
-    workflowID: null,
+    workflowID: "workflow-1",
     ...overrides,
   };
 }

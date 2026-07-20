@@ -11,6 +11,7 @@ import (
 	"core/server/metadata"
 	"core/server/workflow"
 	"core/shared/config"
+	"core/shared/serverapi"
 )
 
 type runLifecycleFixture struct {
@@ -375,18 +376,18 @@ func TestSetAndClearRunWaitingAskPublishTaskEvents(t *testing.T) {
 		t.Fatalf("published records = %+v, want waiting and cleared events", sink.records)
 	}
 	for _, record := range sink.records {
-		if record.ProjectID != f.binding.ProjectID || record.WorkflowID != string(f.task.WorkflowID) || record.Resource != "task" {
+		if !workflowEventIDEquals(record.ProjectID, f.binding.ProjectID) || !workflowEventIDEquals(record.WorkflowID, string(f.task.WorkflowID)) || record.Resource != "task" {
 			t.Fatalf("published record identity = %+v", record)
 		}
 		if record.OccurredAtUnixMs != 1234 {
 			t.Fatalf("published record time = %d, want 1234", record.OccurredAtUnixMs)
 		}
-		if len(record.ChangedIDs) != 3 || record.ChangedIDs[0] != string(f.task.ID) || record.ChangedIDs[1] != string(f.started.RunID) || record.ChangedIDs[2] != "ask-1" {
-			t.Fatalf("published record changed ids = %+v", record.ChangedIDs)
+		if record.PrimaryEntityID != string(f.task.ID) || len(record.RelatedIDs) != 2 || record.RelatedIDs[0] != string(f.started.RunID) || record.RelatedIDs[1] != "ask-1" {
+			t.Fatalf("published record entity ids = %q %+v", record.PrimaryEntityID, record.RelatedIDs)
 		}
 	}
 	if sink.records[0].Action != "question_waiting" || sink.records[1].Action != "question_cleared" {
-		t.Fatalf("published actions = %+v, want question_waiting then question_cleared", []string{sink.records[0].Action, sink.records[1].Action})
+		t.Fatalf("published actions = %+v, want question_waiting then question_cleared", []serverapi.WorkflowProjectEventAction{sink.records[0].Action, sink.records[1].Action})
 	}
 }
 

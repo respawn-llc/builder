@@ -117,8 +117,8 @@ func (c *Remote) SubscribeWorkflowProject(ctx context.Context, req serverapi.Wor
 	if err != nil {
 		return nil, err
 	}
-	return newRemoteSubscription(conn, route, func(params protocol.WorkflowProjectEventParams) serverapi.WorkflowProjectEvent {
-		return serverapi.WorkflowProjectEvent{ProjectID: params.Event.ProjectID, WorkflowID: params.Event.WorkflowID, Resource: params.Event.Resource, Action: params.Event.Action, ChangedIDs: params.Event.ChangedIDs, OccurredAtUnixMs: params.Event.OccurredAtUnixMs}
+	return newRemoteSubscriptionWithError(conn, route, func(params protocol.WorkflowProjectEventParams) (serverapi.WorkflowProjectEvent, error) {
+		return workflowProjectEventFromProtocol(params.Event)
 	}), nil
 }
 
@@ -127,9 +127,33 @@ func (c *Remote) SubscribeWorkflow(ctx context.Context, req serverapi.WorkflowSu
 	if err != nil {
 		return nil, err
 	}
-	return newRemoteSubscription(conn, route, func(params protocol.WorkflowProjectEventParams) serverapi.WorkflowProjectEvent {
-		return serverapi.WorkflowProjectEvent{ProjectID: params.Event.ProjectID, WorkflowID: params.Event.WorkflowID, Resource: params.Event.Resource, Action: params.Event.Action, ChangedIDs: params.Event.ChangedIDs, OccurredAtUnixMs: params.Event.OccurredAtUnixMs}
+	return newRemoteSubscriptionWithError(conn, route, func(params protocol.WorkflowProjectEventParams) (serverapi.WorkflowProjectEvent, error) {
+		return workflowProjectEventFromProtocol(params.Event)
 	}), nil
+}
+
+func workflowProjectEventFromProtocol(event protocol.WorkflowProjectEvent) (serverapi.WorkflowProjectEvent, error) {
+	decoded := serverapi.WorkflowProjectEvent{
+		ProjectID:        cloneWorkflowProjectEventID(event.ProjectID),
+		WorkflowID:       cloneWorkflowProjectEventID(event.WorkflowID),
+		Resource:         serverapi.WorkflowProjectEventResource(event.Resource),
+		Action:           serverapi.WorkflowProjectEventAction(event.Action),
+		PrimaryEntityID:  event.PrimaryEntityID,
+		RelatedIDs:       append([]string(nil), event.RelatedIDs...),
+		OccurredAtUnixMs: event.OccurredAtUnixMs,
+	}
+	if err := decoded.Validate(); err != nil {
+		return serverapi.WorkflowProjectEvent{}, err
+	}
+	return decoded, nil
+}
+
+func cloneWorkflowProjectEventID(id *string) *string {
+	if id == nil {
+		return nil
+	}
+	value := *id
+	return &value
 }
 
 func (c *Remote) SubscribeWorktreeSetup(ctx context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {

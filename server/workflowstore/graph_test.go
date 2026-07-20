@@ -12,6 +12,7 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/workflow"
 	"core/server/workflowscript"
+	"core/shared/serverapi"
 )
 
 func TestWorkflowCreateUpdateReadAndGraphPersistence(t *testing.T) {
@@ -747,43 +748,68 @@ func TestAddNodeRejectsNodeGroupFromDifferentWorkflow(t *testing.T) {
 func TestWorkflowEventPublisherNormalizesAndDispatchesEvents(t *testing.T) {
 	ctx, store, _ := newTestStoreContext(t)
 	store.now = func() time.Time { return time.UnixMilli(1234).UTC() }
-	if err := store.PublishWorkflowEvent(ctx, WorkflowEventRecord{Action: "created"}); !errors.Is(err, ErrEventResourceRequired) {
-		t.Fatalf("missing resource error = %v", err)
-	}
-	if err := store.PublishWorkflowEvent(ctx, WorkflowEventRecord{Resource: "task"}); !errors.Is(err, ErrEventActionRequired) {
-		t.Fatalf("missing action error = %v", err)
-	}
-	if err := store.PublishWorkflowEvent(ctx, WorkflowEventRecord{Resource: "task", Action: "created"}); err != nil {
+	if err := store.PublishWorkflowEvent(ctx, WorkflowEventRecord{
+		ProjectID:       workflowEventID("project-1"),
+		WorkflowID:      workflowEventID("workflow-1"),
+		Resource:        serverapi.WorkflowProjectEventResourceTask,
+		Action:          serverapi.WorkflowProjectEventActionCreated,
+		PrimaryEntityID: "task-1",
+	}); err != nil {
 		t.Fatalf("PublishWorkflowEvent with default no-op sink: %v", err)
 	}
 
 	sink := &recordingWorkflowEventPublisher{}
 	store.SetWorkflowEventPublisher(sink)
-	changedIDs := []string{"task-1"}
+	relatedIDs := []string{"run-1"}
 	if err := store.PublishWorkflowEvent(ctx, WorkflowEventRecord{
-		ProjectID:  " project-1 ",
-		WorkflowID: " workflow-1 ",
-		Resource:   " task ",
-		Action:     " updated ",
-		ChangedIDs: changedIDs,
-	}); err != nil {
-		t.Fatalf("PublishWorkflowEvent: %v", err)
+		ProjectID:       workflowEventID(" project-1 "),
+		WorkflowID:      workflowEventID("workflow-1"),
+		Resource:        serverapi.WorkflowProjectEventResourceTask,
+		Action:          serverapi.WorkflowProjectEventActionStarted,
+		PrimaryEntityID: "task-1",
+		RelatedIDs:      relatedIDs,
+	}); err == nil {
+		t.Fatal("PublishWorkflowEvent accepted surrounding scope whitespace")
 	}
-	changedIDs[0] = "mutated"
+	if err := store.PublishWorkflowEvent(ctx, WorkflowEventRecord{
+		ProjectID:       workflowEventID("project-1"),
+		WorkflowID:      workflowEventID("workflow-1"),
+		Resource:        serverapi.WorkflowProjectEventResourceTask,
+		Action:          serverapi.WorkflowProjectEventActionStarted,
+		PrimaryEntityID: "task-1",
+		RelatedIDs:      relatedIDs,
+	}); err != nil {
+		t.Fatalf("PublishWorkflowEvent valid event: %v", err)
+	}
+	relatedIDs[0] = "mutated"
 	if len(sink.records) != 1 {
 		t.Fatalf("published records = %+v, want one", sink.records)
 	}
 	record := sink.records[0]
-	if record.ProjectID != "project-1" || record.WorkflowID != "workflow-1" || record.Resource != "task" || record.Action != "updated" || record.OccurredAtUnixMs != 1234 {
-		t.Fatalf("published record = %+v, want normalized fields and default timestamp", record)
+	if !workflowEventIDEquals(record.ProjectID, "project-1") || !workflowEventIDEquals(record.WorkflowID, "workflow-1") || record.Resource != serverapi.WorkflowProjectEventResourceTask || record.Action != serverapi.WorkflowProjectEventActionStarted || record.PrimaryEntityID != "task-1" || record.OccurredAtUnixMs != 1234 {
+		t.Fatalf("published record = %+v, want typed fields and default timestamp", record)
 	}
-	if len(record.ChangedIDs) != 1 || record.ChangedIDs[0] != "task-1" {
-		t.Fatalf("changed ids = %+v, want defensive copy", record.ChangedIDs)
+	if len(record.RelatedIDs) != 1 || record.RelatedIDs[0] != "run-1" {
+		t.Fatalf("related ids = %+v, want defensive copy", record.RelatedIDs)
 	}
 	store.SetWorkflowEventPublisher(nil)
-	if err := store.PublishWorkflowEvent(ctx, WorkflowEventRecord{Resource: "task", Action: "deleted"}); err != nil {
+	if err := store.PublishWorkflowEvent(ctx, WorkflowEventRecord{
+		ProjectID:       workflowEventID("project-1"),
+		WorkflowID:      workflowEventID("workflow-1"),
+		Resource:        serverapi.WorkflowProjectEventResourceTask,
+		Action:          serverapi.WorkflowProjectEventActionDeleted,
+		PrimaryEntityID: "task-1",
+	}); err != nil {
 		t.Fatalf("PublishWorkflowEvent after nil publisher reset: %v", err)
 	}
+}
+
+func workflowEventID(value string) *string {
+	return &value
+}
+
+func workflowEventIDEquals(id *string, expected string) bool {
+	return id != nil && *id == expected
 }
 
 type recordingWorkflowEventPublisher struct {

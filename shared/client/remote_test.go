@@ -582,6 +582,107 @@ func TestRemoteSessionTranscriptSubscriptionPreservesTypedCloseReason(t *testing
 	}
 }
 
+func TestRemoteWorkflowProjectSubscriptionDecodesTypedEvent(t *testing.T) {
+	var connections atomic.Int32
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		req := acceptRemoteHandshake(t, ws)
+		if connections.Add(1) == 1 {
+			if err := websocket.JSON.Receive(ws, &req); err != nil && !errors.Is(err, io.EOF) {
+				t.Fatalf("receive control connection close: %v", err)
+			}
+			return
+		}
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			t.Fatalf("receive workflow project subscribe: %v", err)
+		}
+		if req.Method != protocol.MethodWorkflowSubscribeProject {
+			t.Fatalf("subscribe method = %q, want %q", req.Method, protocol.MethodWorkflowSubscribeProject)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.SubscribeResponse{})); err != nil {
+			t.Fatalf("send subscribe response: %v", err)
+		}
+		params := protocol.WorkflowProjectEventParams{Event: protocol.WorkflowProjectEvent{
+			ProjectID:        remoteTestStringPointer("project-1"),
+			WorkflowID:       remoteTestStringPointer("workflow-1"),
+			Resource:         protocol.WorkflowProjectEventResourceTask,
+			Action:           protocol.WorkflowProjectEventActionQuestionWaiting,
+			PrimaryEntityID:  "task-1",
+			RelatedIDs:       []string{"run-1", "ask-1"},
+			OccurredAtUnixMs: 1,
+		}}
+		if err := websocket.JSON.Send(ws, protocol.Request{JSONRPC: protocol.JSONRPCVersion, Method: protocol.MethodWorkflowProjectEvent, Params: mustJSON(t, params)}); err != nil {
+			t.Fatalf("send workflow project event: %v", err)
+		}
+	})
+
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemote: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	sub, err := remote.SubscribeWorkflowProject(context.Background(), serverapi.WorkflowProjectSubscribeRequest{ProjectID: "project-1"})
+	if err != nil {
+		t.Fatalf("SubscribeWorkflowProject: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+
+	event, err := sub.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if event.Resource != serverapi.WorkflowProjectEventResourceTask ||
+		event.Action != serverapi.WorkflowProjectEventActionQuestionWaiting ||
+		event.PrimaryEntityID != "task-1" ||
+		!reflect.DeepEqual(event.RelatedIDs, []string{"run-1", "ask-1"}) {
+		t.Fatalf("event = %+v, want typed task question event", event)
+	}
+}
+
+func TestRemoteWorkflowProjectSubscriptionRejectsInvalidResourceActionCombination(t *testing.T) {
+	var connections atomic.Int32
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		req := acceptRemoteHandshake(t, ws)
+		if connections.Add(1) == 1 {
+			if err := websocket.JSON.Receive(ws, &req); err != nil && !errors.Is(err, io.EOF) {
+				t.Fatalf("receive control connection close: %v", err)
+			}
+			return
+		}
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			t.Fatalf("receive workflow project subscribe: %v", err)
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.SubscribeResponse{})); err != nil {
+			t.Fatalf("send subscribe response: %v", err)
+		}
+		params := protocol.WorkflowProjectEventParams{Event: protocol.WorkflowProjectEvent{
+			ProjectID:        remoteTestStringPointer("project-1"),
+			WorkflowID:       remoteTestStringPointer("workflow-1"),
+			Resource:         protocol.WorkflowProjectEventResourceTask,
+			Action:           protocol.WorkflowProjectEventActionLinked,
+			PrimaryEntityID:  "task-1",
+			OccurredAtUnixMs: 1,
+		}}
+		if err := websocket.JSON.Send(ws, protocol.Request{JSONRPC: protocol.JSONRPCVersion, Method: protocol.MethodWorkflowProjectEvent, Params: mustJSON(t, params)}); err != nil {
+			t.Fatalf("send invalid workflow project event: %v", err)
+		}
+	})
+
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemote: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	sub, err := remote.SubscribeWorkflowProject(context.Background(), serverapi.WorkflowProjectSubscribeRequest{ProjectID: "project-1"})
+	if err != nil {
+		t.Fatalf("SubscribeWorkflowProject: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+
+	if _, err := sub.Next(context.Background()); !errors.Is(err, serverapi.ErrStreamFailed) {
+		t.Fatalf("Next error = %v, want stream failure", err)
+	}
+}
+
 func TestRemoteDeleteWorktreeCarriesTypedCleanupPolicyAndResult(t *testing.T) {
 	operationID := serverapi.NewWorktreeOperationID()
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
@@ -1344,6 +1445,10 @@ func assertRemoteWorktreeStructuredError(t *testing.T, err error, source protoco
 }
 
 func remoteTestIntPointer(value int) *int {
+	return &value
+}
+
+func remoteTestStringPointer(value string) *string {
 	return &value
 }
 

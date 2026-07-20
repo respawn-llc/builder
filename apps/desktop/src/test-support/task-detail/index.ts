@@ -274,9 +274,10 @@ export const taskQuestionWaitingEvent = {
   event: {
     resource: "task",
     action: "question_waiting",
-    changed_ids: ["task-1", "run-1", "ask-1"],
     occurred_at_unix_ms: 1,
+    primary_entity_id: "task-1",
     project_id: "project-1",
+    related_ids: ["run-1", "ask-1"],
     workflow_id: "workflow-1",
   },
 };
@@ -285,8 +286,8 @@ export const taskUpdatedEvent = {
   event: {
     resource: "task",
     action: "updated",
-    changed_ids: ["task-1"],
     occurred_at_unix_ms: 1,
+    primary_entity_id: "task-1",
     project_id: "project-1",
     workflow_id: "workflow-1",
   },
