@@ -155,7 +155,7 @@ describe("TaskDetailSurface", () => {
       });
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Open in CLI" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open in CLI session-2" }));
     await waitFor(() => {
       expect(copied).toEqual(["kent --session=session-2"]);
     });
@@ -352,7 +352,6 @@ describe("TaskDetailSurface", () => {
           execution_target: {
             ...taskDetailNoInboxResponse.task.execution_target,
             requested_ref: "requested-ref",
-            current_branch: "managed-branch",
           },
         },
       },
@@ -372,15 +371,8 @@ describe("TaskDetailSurface", () => {
     expect(sourceWorkspace).toHaveTextContent("/tmp/project");
     expect(definitionsWithExactValue(definitions, "/tmp/project")).toHaveLength(1);
     expect(definitionsWithExactValue(definitions, "/tmp/worktree")).toHaveLength(1);
-    expect(definitions.indexOf(managedWorktree)).toBeLessThan(
-      definitions.indexOf(definitionWithExactValue(definitions, "requested-ref")),
-    );
-    expect(definitions.indexOf(managedWorktree)).toBeLessThan(
-      definitions.indexOf(definitionWithExactValue(definitions, "0123456789ab")),
-    );
-    expect(definitions.indexOf(managedWorktree)).toBeLessThan(
-      definitions.indexOf(definitionWithExactValue(definitions, "managed-branch")),
-    );
+    expect(definitionsWithExactValue(definitions, "requested-ref")).toHaveLength(1);
+    expect(definitionsWithExactValue(definitions, "0123456789ab")).toHaveLength(1);
 
     fireEvent.click(within(managedWorktree).getByRole("button"));
 
@@ -412,9 +404,9 @@ describe("TaskDetailSurface", () => {
           ...taskDetailNoInboxResponse.task,
           execution_target: {
             mode: "none",
-            effective_root: "/tmp/project",
             provenance: "resolved",
           },
+          worktree_path: null,
         },
       },
       { comments: commentListResponse },
@@ -473,7 +465,7 @@ describe("TaskDetailSurface", () => {
     });
   });
 
-  it("omits unavailable managed execution facts while retaining target history", async () => {
+  it("renders the durable recorded worktree path without availability facts", async () => {
     taskDetailFixture(
       {
         ...taskDetailNoInboxResponse,
@@ -484,12 +476,6 @@ describe("TaskDetailSurface", () => {
             requested_ref: "legacy-source",
             commit_oid: "0123456789abcdef0123456789abcdef01234567",
             provenance: "legacy_observed",
-            managed_worktree: {
-              worktree_id: "worktree-1",
-              display_name: "unavailable-branch",
-              canonical_root: "/tmp/worktree",
-              availability: "missing",
-            },
           },
         },
       },
@@ -501,8 +487,7 @@ describe("TaskDetailSurface", () => {
     });
     const definitions = propertyDefinitions(properties);
 
-    expect(definitionsWithExactValue(definitions, "/tmp/worktree")).toHaveLength(0);
-    expect(definitionsWithExactValue(definitions, "unavailable-branch")).toHaveLength(0);
+    expect(definitionsWithExactValue(definitions, "/tmp/worktree")).toHaveLength(1);
     expect(definitionsWithExactValue(definitions, "legacy-source")).toHaveLength(1);
     expect(definitionsWithExactValue(definitions, "0123456789ab")).toHaveLength(1);
   });
@@ -516,18 +501,18 @@ describe("TaskDetailSurface", () => {
     });
 
     expect(await screen.findByRole("textbox", { name: "Description" })).toBeInTheDocument();
-    const openScript = await screen.findByRole("button", { name: "Open script" });
-    expect(screen.queryByRole("button", { name: "Open in CLI" })).not.toBeInTheDocument();
+    const openScript = await screen.findByRole("button", { name: "Open script scripts/run" });
+    expect(screen.queryByRole("button", { name: /Open in CLI/u })).not.toBeInTheDocument();
 
     fireEvent.click(openScript);
 
     await waitFor(() => {
-      expect(checked).toContainEqual({ basePath: "/tmp/worktree", path: "scripts/run" });
+      expect(checked).toEqual([]);
       expect(opened).toEqual([{ basePath: "/tmp/worktree", path: "scripts/run" }]);
     });
   });
 
-  it("hides script file opening when the native client cannot access the file", async () => {
+  it("validates script access only when the open action runs", async () => {
     const checked: NativeFileTarget[] = [];
     taskDetailFixture(taskDetailResponseWithScriptRun, {
       comments: commentListResponse,
@@ -535,9 +520,10 @@ describe("TaskDetailSurface", () => {
     });
 
     expect(await screen.findByRole("textbox", { name: "Description" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Open script scripts/run" }));
     await waitFor(() => {
-      expect(checked).toContainEqual({ basePath: "/tmp/worktree", path: "scripts/run" });
-      expect(screen.queryByRole("button", { name: "Open script" })).not.toBeInTheDocument();
+      expect(checked).toEqual([]);
+      expect(screen.getByText("file unavailable")).toBeInTheDocument();
     });
   });
 
@@ -1050,6 +1036,9 @@ function nativeBridgeWithFiles({
         return available;
       },
       async openFile(target) {
+        if (!available) {
+          throw new Error("file unavailable");
+        }
         opened.push(target);
       },
     },

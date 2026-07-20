@@ -587,7 +587,6 @@ func TestWorkflowExecutionTargetErrorsExposeTypedFacts(t *testing.T) {
 func TestTaskStartSessionPollingTimeoutReportsStartedTask(t *testing.T) {
 	remote := &taskSessionPollingRemote{task: serverapi.WorkflowTaskDetail{
 		Summary: serverapi.WorkflowTaskSummary{ID: "task-1", ShortID: "BLD-1", Title: "Task"},
-		Runs:    []serverapi.WorkflowRun{{ID: "run-1"}},
 	}}
 	_, err := waitForWorkflowTaskRunSession(context.Background(), remote, "task-1", "run-1", 10*time.Millisecond, time.Millisecond)
 	if err == nil {
@@ -600,14 +599,9 @@ func TestTaskStartSessionPollingTimeoutReportsStartedTask(t *testing.T) {
 
 func TestTaskStartSessionPollingDoesNotWaitForScriptRunSession(t *testing.T) {
 	remote := &taskSessionPollingRemote{task: serverapi.WorkflowTaskDetail{
-		Summary:  serverapi.WorkflowTaskSummary{ID: "task-1", ShortID: "BLD-1", Title: "Task"},
-		Workflow: serverapi.WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Workflow"},
-		Placements: []serverapi.WorkflowPlacement{
-			{ID: "placement-1", TaskID: "task-1", NodeID: "node-script", NodeKey: "script"},
-		},
-		Runs: []serverapi.WorkflowRun{
-			{ID: "run-1", TaskID: "task-1", PlacementID: "placement-1", NodeID: "node-script", NodeKind: "script"},
-		},
+		Summary:        serverapi.WorkflowTaskSummary{ID: "task-1", ShortID: "BLD-1", Title: "Task"},
+		Workflow:       serverapi.WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Workflow"},
+		CurrentScripts: []serverapi.WorkflowTaskCurrentScript{{RunID: "run-1", Path: "script"}},
 	}}
 	detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, "task-1", "run-1", time.Second, time.Millisecond)
 	if err != nil {
@@ -615,7 +609,7 @@ func TestTaskStartSessionPollingDoesNotWaitForScriptRunSession(t *testing.T) {
 	}
 	var stdout bytes.Buffer
 	writeTaskStartResult(&stdout, detail, serverapi.WorkflowTaskStartApplied{RunID: "run-1", PlacementID: "placement-1", TransitionID: "transition-start"})
-	if got, want := stdout.String(), "Started task BLD-1 using workflow \"Workflow\" (workflow-1).\nFirst node: script\n"; got != want {
+	if got, want := stdout.String(), "Started task BLD-1 with script script using workflow \"Workflow\" (workflow-1).\n"; got != want {
 		t.Fatalf("start output = %q, want %q", got, want)
 	}
 }
@@ -837,15 +831,15 @@ func (r *taskStartPollingRemote) StartWorkflowTask(_ context.Context, req server
 }
 
 func (r *taskStartPollingRemote) taskDetail(sessionID string) serverapi.WorkflowTaskDetail {
+	currentSessionIDs := []string{}
+	if sessionID != "" {
+		currentSessionIDs = append(currentSessionIDs, sessionID)
+	}
 	return serverapi.WorkflowTaskDetail{
-		Summary:  serverapi.WorkflowTaskSummary{ID: r.taskID, ShortID: r.shortID, WorkflowID: r.workflowID, ProjectID: r.projectID, Title: "Task"},
-		Workflow: serverapi.WorkflowPickerItem{WorkflowID: r.workflowID, DisplayName: r.workflow},
-		Placements: []serverapi.WorkflowPlacement{
-			{ID: r.placementID, TaskID: r.taskID, NodeID: r.nodeID, NodeKey: r.nodeKey},
-		},
-		Runs: []serverapi.WorkflowRun{
-			{ID: r.runID, TaskID: r.taskID, PlacementID: r.placementID, NodeID: r.nodeID, SessionID: sessionID},
-		},
+		Summary:           serverapi.WorkflowTaskSummary{ID: r.taskID, ShortID: r.shortID, WorkflowID: r.workflowID, ProjectID: r.projectID, Title: "Task"},
+		Workflow:          serverapi.WorkflowPickerItem{WorkflowID: r.workflowID, DisplayName: r.workflow},
+		CurrentSessionIDs: currentSessionIDs,
+		CurrentScripts:    []serverapi.WorkflowTaskCurrentScript{},
 	}
 }
 
@@ -991,25 +985,15 @@ func (r *setupProgressLifecycleRemote) validateMutationContextAndSetupID(ctx con
 }
 
 func (r *setupProgressLifecycleRemote) taskDetail(sessionID string) serverapi.WorkflowTaskDetail {
+	currentSessionIDs := []string{}
+	if sessionID != "" {
+		currentSessionIDs = append(currentSessionIDs, sessionID)
+	}
 	return serverapi.WorkflowTaskDetail{
-		Summary:  serverapi.WorkflowTaskSummary{ID: r.taskID, ShortID: r.shortID, WorkflowID: r.workflowID, ProjectID: r.projectID, Title: "Task"},
-		Workflow: serverapi.WorkflowPickerItem{WorkflowID: r.workflowID, DisplayName: r.workflow},
-		Placements: []serverapi.WorkflowPlacement{
-			{ID: r.placementID, TaskID: r.taskID, NodeID: r.nodeID, NodeKey: r.nodeKey},
-		},
-		Runs: []serverapi.WorkflowRun{
-			{ID: r.runID, TaskID: r.taskID, PlacementID: r.placementID, NodeID: r.nodeID, SessionID: sessionID},
-		},
-		Transitions: []serverapi.WorkflowTaskTransition{
-			{
-				ID:            r.transitionID,
-				SourceNodeKey: r.nodeKey,
-				TransitionID:  "done",
-				Edges: []serverapi.WorkflowTransitionEdge{
-					{EdgeKey: "done", TargetNodeKey: "done", State: "applied"},
-				},
-			},
-		},
+		Summary:           serverapi.WorkflowTaskSummary{ID: r.taskID, ShortID: r.shortID, WorkflowID: r.workflowID, ProjectID: r.projectID, Title: "Task"},
+		Workflow:          serverapi.WorkflowPickerItem{WorkflowID: r.workflowID, DisplayName: r.workflow},
+		CurrentSessionIDs: currentSessionIDs,
+		CurrentScripts:    []serverapi.WorkflowTaskCurrentScript{},
 	}
 }
 

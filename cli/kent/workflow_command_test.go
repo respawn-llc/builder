@@ -14,11 +14,11 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 	"core/server/session"
+	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/server/workflowsvc"
 	"core/server/workflowview"
-	"core/server/worktree"
 	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -483,57 +483,10 @@ func TestTaskCommandsExposeJSONAndPersistState(t *testing.T) {
 	}
 }
 
-func TestTaskCommentAuthorForAddUsesCurrentWorkflowRun(t *testing.T) {
-	t.Setenv(sessionenv.SessionIDEnv, "session-workflow")
-	oldStartedAt := int64(20)
-	currentStartedAt := int64(10)
-	remote := &commentAuthorRemote{task: serverapi.WorkflowTaskDetail{
-		Status: serverapi.WorkflowTaskStatus{RunIDs: []string{"run-current"}},
-		Placements: []serverapi.WorkflowPlacement{
-			{NodeID: "node-old", NodeKey: "old"},
-			{NodeID: "node-current", NodeKey: "current"},
-		},
-		Runs: []serverapi.WorkflowRun{
-			{ID: "run-old", SessionID: "session-workflow", Role: "old-role", NodeID: "node-old", StartedAtUnixMs: &oldStartedAt},
-			{ID: "run-current", SessionID: "session-workflow", Role: "current-role", NodeID: "node-current", StartedAtUnixMs: &currentStartedAt},
-		},
-	}}
-	got := taskCommentAuthorForAdd(context.Background(), remote, "task-1", "", false)
-	if got.Kind != "agent" || got.ID != "current-role" {
-		t.Fatalf("taskCommentAuthorForAdd = %+v, want current workflow run role", got)
-	}
-}
-
 func TestTaskCommentAuthorForAddBoundaryCases(t *testing.T) {
 	t.Setenv(sessionenv.SessionIDEnv, "")
 	if got := taskCommentAuthorForAdd(context.Background(), &commentAuthorRemote{}, "task-1", "", false); got.Kind != "user" || got.ID != "" {
 		t.Fatalf("taskCommentAuthorForAdd without session = %+v, want user", got)
-	}
-
-	t.Setenv(sessionenv.SessionIDEnv, "session-workflow")
-	oldStartedAt := int64(10)
-	newStartedAt := int64(20)
-	nodeFallbackRemote := &commentAuthorRemote{task: serverapi.WorkflowTaskDetail{
-		Status:     serverapi.WorkflowTaskStatus{RunIDs: []string{"run-current"}},
-		Placements: []serverapi.WorkflowPlacement{{NodeID: "node-current", NodeKey: "current"}},
-		Runs:       []serverapi.WorkflowRun{{ID: "run-current", SessionID: "session-workflow", NodeID: "node-current"}},
-	}}
-	if got := taskCommentAuthorForAdd(context.Background(), nodeFallbackRemote, "task-1", "", false); got.Kind != "agent" || got.ID != "Node current agent" {
-		t.Fatalf("taskCommentAuthorForAdd node fallback = %+v, want current node agent", got)
-	}
-
-	latestRunRemote := &commentAuthorRemote{task: serverapi.WorkflowTaskDetail{
-		Placements: []serverapi.WorkflowPlacement{
-			{NodeID: "node-old", NodeKey: "old"},
-			{NodeID: "node-new", NodeKey: "new"},
-		},
-		Runs: []serverapi.WorkflowRun{
-			{ID: "run-old", SessionID: "session-workflow", NodeID: "node-old", StartedAtUnixMs: &oldStartedAt},
-			{ID: "run-new", SessionID: "session-workflow", NodeID: "node-new", StartedAtUnixMs: &newStartedAt},
-		},
-	}}
-	if got := taskCommentAuthorForAdd(context.Background(), latestRunRemote, "task-1", "", false); got.Kind != "agent" || got.ID != "Node new agent" {
-		t.Fatalf("taskCommentAuthorForAdd latest run fallback = %+v, want latest node agent", got)
 	}
 
 	t.Setenv(sessionenv.SessionIDEnv, "session-other")
@@ -980,7 +933,7 @@ func newWorkflowCommandLoopback(t *testing.T) (config.App, metadata.Binding, *wo
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskList: %v", err)
 	}
-	taskDetail, err := workflowview.NewTaskDetail(metadataStore, definitions, projector, worktree.NewGitInspector(nil))
+	taskDetail, err := workflowview.NewTaskDetail(metadataStore, projector, sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskDetail: %v", err)
 	}
@@ -988,7 +941,7 @@ func newWorkflowCommandLoopback(t *testing.T) (config.App, metadata.Binding, *wo
 	if err != nil {
 		t.Fatalf("workflowview.NewActivity: %v", err)
 	}
-	attention, err := workflowview.NewAttention(metadataStore, definitions, resolver, nil, nil)
+	attention, err := workflowview.NewAttention(metadataStore, definitions, projector, resolver, nil, nil)
 	if err != nil {
 		t.Fatalf("workflowview.NewAttention: %v", err)
 	}

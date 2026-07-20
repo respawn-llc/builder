@@ -746,8 +746,8 @@ func TestTaskDetailProjectsCancellationAndInterruptedRun(t *testing.T) {
 	if detail.Summary.CanceledAt == nil || *detail.Summary.CanceledAt == 0 || detail.Summary.CancelReason == nil || *detail.Summary.CancelReason != "stop" {
 		t.Fatalf("summary does not project cancellation: %+v", detail.Summary)
 	}
-	if len(detail.Runs) != 1 || detail.Runs[0].InterruptedAtUnixMs == nil || detail.Runs[0].InterruptionReason == nil || *detail.Runs[0].InterruptionReason != "task_canceled" {
-		t.Fatalf("runs do not project interruption: %+v", detail.Runs)
+	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindCanceled {
+		t.Fatalf("status = %+v, want canceled", detail.Status)
 	}
 	if detail.Actions.CanResume {
 		t.Fatalf("canceled task should not expose resume actions: %+v", detail.Actions)

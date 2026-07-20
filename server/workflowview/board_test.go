@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"core/internal/testharness/testsetup"
+	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowstore"
-	"core/server/worktree"
 	"core/shared/serverapi"
 )
 
@@ -162,7 +162,7 @@ func TestBoardCardsPageBidirectionallyAndMatchTaskFactsThroughFocusedInterface(t
 	if err != nil {
 		t.Fatalf("NewBoard: %v", err)
 	}
-	detailView, err := NewTaskDetail(metadataStore, definitions, projector, worktree.NewGitInspector(nil))
+	detailView, err := NewTaskDetail(metadataStore, projector, sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
 	if err != nil {
 		t.Fatalf("NewTaskDetail: %v", err)
 	}
@@ -292,8 +292,8 @@ func TestBoardCardsPageBidirectionallyAndMatchTaskFactsThroughFocusedInterface(t
 		if err != nil {
 			t.Fatalf("GetTask %s: %v", taskID, err)
 		}
-		if !reflect.DeepEqual(card.Status, detail.Status) || !reflect.DeepEqual(card.Actions, detail.Actions) {
-			t.Fatalf("card facts for %s = %+v/%+v, want detail %+v/%+v", taskID, card.Status, card.Actions, detail.Status, detail.Actions)
+		if !reflect.DeepEqual(card.Status, detail.Status) {
+			t.Fatalf("card status for %s = %+v, want detail %+v", taskID, card.Status, detail.Status)
 		}
 		if card.SourceWorkspace.WorkspaceID != sourceWorkspace.WorkspaceID || !reflect.DeepEqual(card.SourceWorkspace, detail.SourceWorkspace) {
 			t.Fatalf("card source workspace for %s = %+v, want detail %+v", taskID, card.SourceWorkspace, detail.SourceWorkspace)

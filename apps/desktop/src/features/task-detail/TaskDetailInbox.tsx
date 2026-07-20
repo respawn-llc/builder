@@ -60,7 +60,6 @@ export function TaskInbox({
           onQuestionSelectionChange={onQuestionSelectionChange}
           questionSelection={questionSelections.get(item.askID) ?? emptyQuestionSelection(item.askID)}
           taskId={detail.id}
-          transitions={detail.transitions}
         />
       ))}
     </>
@@ -113,7 +112,6 @@ function InboxItem({
   onQuestionSelectionChange,
   questionSelection,
   taskId,
-  transitions,
 }: Readonly<{
   attention: AttentionItem;
   currentVersion: number;
@@ -123,7 +121,6 @@ function InboxItem({
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
   questionSelection: QuestionSelectionState;
   taskId: string;
-  transitions: TaskDetail["transitions"];
 }>) {
   const { t } = useTranslation();
   const focusTargetRef = useRef<HTMLDivElement | null>(null);
@@ -170,7 +167,6 @@ function InboxItem({
           currentVersion={currentVersion}
           disabled={disabled}
           mutations={mutations}
-          transitions={transitions}
         />
       </div>
     );

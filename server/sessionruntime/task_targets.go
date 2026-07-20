@@ -7,9 +7,10 @@ import (
 
 	"core/server/workflow"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 )
 
-const MaxTaskExecutionTargets = 200
+const MaxTaskExecutionTargets = serverapi.WorkflowTaskCurrentExecutionTargetsMax
 
 type TaskScriptExecutionTarget struct {
 	RunID workflow.RunID
