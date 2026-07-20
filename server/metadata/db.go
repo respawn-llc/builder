@@ -17,6 +17,8 @@ import (
 //go:embed migrations/*.up.sql
 var migrationsFS embed.FS
 
+const metadataSQLiteConnectionPoolSize = 8
+
 // Goose logger is process-wide; metadata owns this setting and currently keeps
 // routine migration status output silent unless debug logging is explicitly enabled.
 var metadataMigrationDebugLogs = false
@@ -45,11 +47,12 @@ func openDatabaseAtPath(persistenceRoot string, databasePath string) (*sql.DB, e
 	if err != nil {
 		return nil, fmt.Errorf("open metadata db: %w", err)
 	}
-	db.SetMaxOpenConns(1)
 	if err := runMigrations(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
+	db.SetMaxOpenConns(metadataSQLiteConnectionPoolSize)
+	db.SetMaxIdleConns(metadataSQLiteConnectionPoolSize)
 	return db, nil
 }
 
