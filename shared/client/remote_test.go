@@ -1151,6 +1151,26 @@ func TestProtocolErrorDecodesWorkflowTaskCreateConflictError(t *testing.T) {
 	}
 }
 
+func TestProtocolErrorDecodesWorkflowLabelError(t *testing.T) {
+	source := &serverapi.WorkflowLabelError{
+		Reason:    serverapi.WorkflowLabelErrorReasonWrongProject,
+		ProjectID: "project-1",
+		LabelID:   "11111111-1111-4111-8111-111111111111",
+	}
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeWorkflowLabel,
+		Message: "label does not belong to project",
+		Data:    source.RPCErrorData(),
+	})
+	var decoded *serverapi.WorkflowLabelError
+	if !errors.As(err, &decoded) {
+		t.Fatalf("decoded error = %T %v, want WorkflowLabelError", err, err)
+	}
+	if *decoded != *source {
+		t.Fatalf("decoded error = %+v, want %+v", decoded, source)
+	}
+}
+
 func TestProtocolErrorDecodesSessionRetargetError(t *testing.T) {
 	source := &serverapi.SessionRetargetError{
 		Reason:        serverapi.SessionRetargetTargetProjectRequired,

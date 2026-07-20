@@ -36,6 +36,7 @@ func TestListTasksFiltersTypedStatusAndColumn(t *testing.T) {
 
 	projectID, workflowIDString := binding.ProjectID, string(workflowID)
 	backlogResp, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
 		ProjectID:   &projectID,
 		WorkflowID:  &workflowIDString,
 		ColumnKeys:  []string{"backlog"},
@@ -50,6 +51,7 @@ func TestListTasksFiltersTypedStatusAndColumn(t *testing.T) {
 	}
 
 	runningResp, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
 		ProjectID:   &projectID,
 		WorkflowID:  &workflowIDString,
 		ColumnKeys:  []string{"agent"},
@@ -175,7 +177,8 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 		serverapi.WorkflowTaskStatusKindCanceled:        string(canceled.ID),
 	}
 
-	all := list(serverapi.WorkflowTaskListRequest{})
+	all := list(serverapi.WorkflowTaskListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}})
 	if len(all.Tasks) != len(wantByStatus) {
 		t.Fatalf("all list tasks = %+v, want %d tasks", all.Tasks, len(wantByStatus))
 	}
@@ -193,7 +196,8 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 	}
 
 	for kind, taskID := range wantByStatus {
-		response := list(serverapi.WorkflowTaskListRequest{StatusKinds: []serverapi.WorkflowTaskStatusKind{kind}})
+		response := list(serverapi.WorkflowTaskListRequest{
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, StatusKinds: []serverapi.WorkflowTaskStatusKind{kind}})
 		if len(response.Tasks) != 1 || response.Tasks[0].TaskID != taskID || response.Tasks[0].Status.Kind != kind {
 			t.Fatalf("status filter %q = %+v, want task %q", kind, response.Tasks, taskID)
 		}
@@ -203,7 +207,8 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 		serverapi.WorkflowTaskAttentionKindQuestion:    string(question.ID),
 		serverapi.WorkflowTaskAttentionKindInterrupted: string(interrupted.ID),
 	} {
-		response := list(serverapi.WorkflowTaskListRequest{AttentionKinds: []serverapi.WorkflowTaskAttentionKind{attention}})
+		response := list(serverapi.WorkflowTaskListRequest{
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, AttentionKinds: []serverapi.WorkflowTaskAttentionKind{attention}})
 		if len(response.Tasks) != 1 || response.Tasks[0].TaskID != taskID {
 			t.Fatalf("attention filter %q = %+v, want task %q", attention, response.Tasks, taskID)
 		}
@@ -213,8 +218,9 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 		"done":    {string(done.ID): true, string(canceled.ID): true},
 	} {
 		response := list(serverapi.WorkflowTaskListRequest{
-			WorkflowID: &workflowIDString,
-			ColumnKeys: []string{columnKey},
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+			WorkflowID:  &workflowIDString,
+			ColumnKeys:  []string{columnKey},
 		})
 		if len(response.Tasks) != len(taskIDs) {
 			t.Fatalf("column filter %q = %+v, want task IDs %v", columnKey, response.Tasks, taskIDs)
@@ -226,6 +232,7 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 		}
 	}
 	approvalResponse := list(serverapi.WorkflowTaskListRequest{
+		LabelFilter:    serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
 		StatusKinds:    []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingApproval},
 		AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindApproval},
 	})
@@ -233,8 +240,8 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 		t.Fatalf("approval list item must preserve history count but exclude stale current facts: %+v", approvalResponse.Tasks[0])
 	}
 	for _, request := range []serverapi.WorkflowTaskListRequest{
-		{StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingApproval}, AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindQuestion}},
-		{WorkflowID: &workflowIDString, StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindRunning}, ColumnKeys: []string{"backlog"}},
+		{LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingApproval}, AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindQuestion}},
+		{LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, WorkflowID: &workflowIDString, StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindRunning}, ColumnKeys: []string{"backlog"}},
 	} {
 		if response := list(request); len(response.Tasks) != 0 {
 			t.Fatalf("combined filters %+v = %+v, want no tasks", request, response.Tasks)
@@ -254,15 +261,16 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 		serverapi.WorkflowTaskAttentionKindQuestion,
 		serverapi.WorkflowTaskAttentionKindInterrupted,
 	} {
-		if response := list(serverapi.WorkflowTaskListRequest{AttentionKinds: []serverapi.WorkflowTaskAttentionKind{attention}}); len(response.Tasks) != 0 {
+		if response := list(serverapi.WorkflowTaskListRequest{
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, AttentionKinds: []serverapi.WorkflowTaskAttentionKind{attention}}); len(response.Tasks) != 0 {
 			t.Fatalf("%s attention after cancellation = %+v, want none", attention, response.Tasks)
 		}
 	}
 
 	for _, request := range []serverapi.WorkflowTaskListRequest{
-		{StatusKinds: []serverapi.WorkflowTaskStatusKind{"invalid"}},
-		{AttentionKinds: []serverapi.WorkflowTaskAttentionKind{"invalid"}},
-		{WorkflowID: &workflowIDString, ColumnKeys: []string{"missing"}},
+		{LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, StatusKinds: []serverapi.WorkflowTaskStatusKind{"invalid"}},
+		{LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, AttentionKinds: []serverapi.WorkflowTaskAttentionKind{"invalid"}},
+		{LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, WorkflowID: &workflowIDString, ColumnKeys: []string{"missing"}},
 	} {
 		request.ProjectID = &projectID
 		_, err := view.tasks(t).List(ctx, request)
@@ -319,7 +327,8 @@ func TestListTasksSortAndCursorPagination(t *testing.T) {
 	}
 
 	projectID, workflowIDString := binding.ProjectID, string(workflowID)
-	baseRequest := serverapi.WorkflowTaskListRequest{ProjectID: &projectID, PageSize: 2}
+	baseRequest := serverapi.WorkflowTaskListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: &projectID, PageSize: 2}
 	listAllPages := func(request serverapi.WorkflowTaskListRequest) []serverapi.WorkflowTaskListItem {
 		t.Helper()
 		items := make([]serverapi.WorkflowTaskListItem, 0, 5)
@@ -347,9 +356,10 @@ func TestListTasksSortAndCursorPagination(t *testing.T) {
 	}
 	sortedRequest := func(field serverapi.WorkflowTaskListSortField, direction serverapi.WorkflowTaskListSortDirection) serverapi.WorkflowTaskListRequest {
 		request := serverapi.WorkflowTaskListRequest{
-			ProjectID: baseRequest.ProjectID,
-			PageSize:  baseRequest.PageSize,
-			Sort:      []serverapi.WorkflowTaskListSort{{Field: field, Direction: direction}},
+			ProjectID:   baseRequest.ProjectID,
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+			PageSize:    baseRequest.PageSize,
+			Sort:        []serverapi.WorkflowTaskListSort{{Field: field, Direction: direction}},
 		}
 		if field == serverapi.WorkflowTaskListSortFieldColumn {
 			request.WorkflowID = &workflowIDString
@@ -426,13 +436,13 @@ func TestListTasksSortAndCursorPagination(t *testing.T) {
 	changedProjectToken := token
 	changedProjectToken.Scope.ProjectID = "project-conflict"
 	invalidRequests := []serverapi.WorkflowTaskListRequest{
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, invalidVersionToken)},
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: *firstPage.NextPageToken, StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog}},
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: *firstPage.NextPageToken, Sort: []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldColumn, Direction: serverapi.WorkflowTaskListSortDirectionAsc}}},
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, changedWorkflowVersionToken)},
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, changedColumnStructureToken)},
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, changedStatusModelToken)},
-		{ProjectID: baseRequest.ProjectID, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, changedProjectToken)},
+		{ProjectID: baseRequest.ProjectID, LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, invalidVersionToken)},
+		{ProjectID: baseRequest.ProjectID, LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, PageSize: baseRequest.PageSize, PageToken: *firstPage.NextPageToken, StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog}},
+		{ProjectID: baseRequest.ProjectID, LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, PageSize: baseRequest.PageSize, PageToken: *firstPage.NextPageToken, Sort: []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldColumn, Direction: serverapi.WorkflowTaskListSortDirectionAsc}}},
+		{ProjectID: baseRequest.ProjectID, LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, changedWorkflowVersionToken)},
+		{ProjectID: baseRequest.ProjectID, LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, changedColumnStructureToken)},
+		{ProjectID: baseRequest.ProjectID, LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, changedStatusModelToken)},
+		{ProjectID: baseRequest.ProjectID, LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, PageSize: baseRequest.PageSize, PageToken: workflowTaskListPageTokenForTest(t, changedProjectToken)},
 	}
 	for _, request := range invalidRequests {
 		_, err := view.tasks(t).List(ctx, request)
@@ -450,8 +460,9 @@ func TestTaskListUsesTypedProjectWorkflowScope(t *testing.T) {
 	}
 	projectID, selectedWorkflowID := binding.ProjectID, string(workflowID)
 	response, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID:  &projectID,
-		WorkflowID: &selectedWorkflowID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		ProjectID:   &projectID,
+		WorkflowID:  &selectedWorkflowID,
 	})
 
 	if err != nil {
@@ -495,7 +506,8 @@ func TestTaskListProjectScopeSpansLinkedWorkflowsWithoutColumns(t *testing.T) {
 	}
 
 	projectID := binding.ProjectID
-	projectWide, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &projectID})
+	projectWide, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: &projectID})
 	if err != nil {
 		t.Fatalf("ListTasks project-wide: %v", err)
 	}
@@ -521,8 +533,9 @@ func TestTaskListProjectScopeSpansLinkedWorkflowsWithoutColumns(t *testing.T) {
 
 	selectedWorkflowID := string(secondWorkflowID)
 	narrowed, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID:  &projectID,
-		WorkflowID: &selectedWorkflowID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		ProjectID:   &projectID,
+		WorkflowID:  &selectedWorkflowID,
 	})
 
 	if err != nil {
@@ -596,12 +609,14 @@ WHERE id IN (?, ?)`, string(alpha.ID), string(alpha.ID), string(alpha.ID), strin
 		return response.Tasks
 	}
 	statusFiltered := list(serverapi.WorkflowTaskListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
 		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog},
 	})
 	if len(statusFiltered) != 1 || statusFiltered[0].TaskID != string(alpha.ID) {
 		t.Fatalf("backlog project-wide tasks = %+v, want alpha", statusFiltered)
 	}
 	attentionFiltered := list(serverapi.WorkflowTaskListRequest{
+		LabelFilter:    serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
 		AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindQuestion},
 	})
 	if len(attentionFiltered) != 1 || attentionFiltered[0].TaskID != string(zulu.ID) {
@@ -611,7 +626,8 @@ WHERE id IN (?, ?)`, string(alpha.ID), string(alpha.ID), string(alpha.ID), strin
 	assertOrder := func(field serverapi.WorkflowTaskListSortField, direction serverapi.WorkflowTaskListSortDirection, want ...workflow.TaskID) {
 		t.Helper()
 		items := list(serverapi.WorkflowTaskListRequest{
-			Sort: []serverapi.WorkflowTaskListSort{{Field: field, Direction: direction}},
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+			Sort:        []serverapi.WorkflowTaskListSort{{Field: field, Direction: direction}},
 		})
 		got := make([]string, 0, len(items))
 		for _, item := range items {
@@ -631,10 +647,12 @@ WHERE id IN (?, ?)`, string(alpha.ID), string(alpha.ID), string(alpha.ID), strin
 	assertOrder(serverapi.WorkflowTaskListSortFieldTitle, serverapi.WorkflowTaskListSortDirectionAsc, alpha.ID, zulu.ID)
 
 	statusAscending := list(serverapi.WorkflowTaskListRequest{
-		Sort: []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldStatus, Direction: serverapi.WorkflowTaskListSortDirectionAsc}},
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		Sort:        []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldStatus, Direction: serverapi.WorkflowTaskListSortDirectionAsc}},
 	})
 	statusDescending := list(serverapi.WorkflowTaskListRequest{
-		Sort: []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldStatus, Direction: serverapi.WorkflowTaskListSortDirectionDesc}},
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		Sort:        []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldStatus, Direction: serverapi.WorkflowTaskListSortDirectionDesc}},
 	})
 	if len(statusAscending) != 2 || len(statusDescending) != 2 ||
 		statusAscending[0].TaskID != statusDescending[1].TaskID ||
@@ -642,7 +660,8 @@ WHERE id IN (?, ?)`, string(alpha.ID), string(alpha.ID), string(alpha.ID), strin
 		t.Fatalf("status orders = asc %+v desc %+v, want reversed tasks", statusAscending, statusDescending)
 	}
 
-	bounded := list(serverapi.WorkflowTaskListRequest{PageSize: 1})
+	bounded := list(serverapi.WorkflowTaskListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, PageSize: 1})
 	if len(bounded) != 1 {
 		t.Fatalf("bounded project-wide tasks = %+v, want one row", bounded)
 	}

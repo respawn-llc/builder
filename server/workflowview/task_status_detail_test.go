@@ -41,7 +41,8 @@ func TestPendingApprovalTaskRemainsVisibleOnSourceBoardColumn(t *testing.T) {
 		t.Fatalf("completion state = %q, want pending_approval", pending.State)
 	}
 
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
@@ -53,7 +54,8 @@ func TestPendingApprovalTaskRemainsVisibleOnSourceBoardColumn(t *testing.T) {
 	if doneColumn.TaskCount != 0 {
 		t.Fatalf("done column task count = %d, want pending approval task not done yet", doneColumn.TaskCount)
 	}
-	sourcePage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: sourceColumn.Node.NodeID})
+	sourcePage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: sourceColumn.Node.NodeID})
 	if err != nil {
 		t.Fatalf("ListBoardNodeCards source: %v", err)
 	}
@@ -123,12 +125,14 @@ func TestTaskStatusIgnoresHistoricalRunUnderCompletedPlacement(t *testing.T) {
 		t.Fatalf("detail status = %+v, want waiting approval without stale run", detail.Status)
 	}
 
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
 	sourceColumn := workflowViewColumnByKey(t, board, "agent")
-	cards, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: sourceColumn.Node.NodeID})
+	cards, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: sourceColumn.Node.NodeID})
 	if err != nil {
 		t.Fatalf("ListBoardNodeCards: %v", err)
 	}
@@ -247,16 +251,18 @@ func TestTaskDetailAndBoardUseCanonicalPrimaryStatusPrecedence(t *testing.T) {
 		t.Fatalf("CancelTask: %v", err)
 	}
 
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
 	boardStatus := map[string]serverapi.WorkflowTaskStatus{}
 	for _, column := range board.Columns {
 		page, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-			ProjectID:  binding.ProjectID,
-			WorkflowID: string(workflowID),
-			NodeID:     column.Node.NodeID,
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+			ProjectID:   binding.ProjectID,
+			WorkflowID:  string(workflowID),
+			NodeID:      column.Node.NodeID,
 		})
 
 		if err != nil {
@@ -307,7 +313,8 @@ func TestTaskDetailAndBoardPreserveFanoutStatusUnions(t *testing.T) {
 		t.Fatalf("detail status = %+v, want kind/native/run/attention unions %+v", detail.Status, want)
 	}
 
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
@@ -315,9 +322,10 @@ func TestTaskDetailAndBoardPreserveFanoutStatusUnions(t *testing.T) {
 	for _, key := range []string{"impl_a", "impl_b", "impl_c"} {
 		column := workflowViewColumnByKey(t, board, key)
 		page, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-			ProjectID:  binding.ProjectID,
-			WorkflowID: string(fixture.workflowID),
-			NodeID:     column.Node.NodeID,
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+			ProjectID:   binding.ProjectID,
+			WorkflowID:  string(fixture.workflowID),
+			NodeID:      column.Node.NodeID,
 		})
 
 		if err != nil {
@@ -339,6 +347,7 @@ func TestTaskDetailAndBoardPreserveFanoutStatusUnions(t *testing.T) {
 	}
 	workflowIDString := string(fixture.workflowID)
 	tasks, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
 		ProjectID:   &binding.ProjectID,
 		WorkflowID:  &workflowIDString,
 		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingQuestion},

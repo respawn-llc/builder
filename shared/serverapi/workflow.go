@@ -665,12 +665,13 @@ type WorkflowValidationErrorDetails struct {
 }
 
 type WorkflowTaskCreateRequest struct {
-	ProjectID         string  `json:"project_id"`
-	WorkflowID        *string `json:"workflow_id,omitempty"`
-	Title             string  `json:"title"`
-	Body              string  `json:"body,omitempty"`
-	SourceURL         string  `json:"source_url,omitempty"`
-	SourceWorkspaceID string  `json:"source_workspace_id,omitempty"`
+	ProjectID         string   `json:"project_id"`
+	WorkflowID        *string  `json:"workflow_id,omitempty"`
+	Title             string   `json:"title"`
+	Body              string   `json:"body,omitempty"`
+	SourceURL         string   `json:"source_url,omitempty"`
+	SourceWorkspaceID string   `json:"source_workspace_id,omitempty"`
+	LabelIDs          []string `json:"label_ids"`
 }
 
 type WorkflowTaskCreateResponse struct {
@@ -1061,8 +1062,9 @@ type WorkflowTaskCommentDeleteRequest struct {
 }
 
 type WorkflowBoardRequest struct {
-	ProjectID  string  `json:"project_id"`
-	WorkflowID *string `json:"workflow_id,omitempty"`
+	ProjectID   string                  `json:"project_id"`
+	WorkflowID  *string                 `json:"workflow_id,omitempty"`
+	LabelFilter WorkflowTaskLabelFilter `json:"label_filter"`
 }
 
 type WorkflowTaskStatusKind string
@@ -1153,6 +1155,7 @@ type WorkflowTaskListRequest struct {
 	ColumnKeys     []string                    `json:"column_keys,omitempty"`
 	StatusKinds    []WorkflowTaskStatusKind    `json:"status_kinds,omitempty"`
 	AttentionKinds []WorkflowTaskAttentionKind `json:"attention_kinds,omitempty"`
+	LabelFilter    WorkflowTaskLabelFilter     `json:"label_filter"`
 	Sort           []WorkflowTaskListSort      `json:"sort,omitempty"`
 	PageSize       int                         `json:"page_size"`
 	PageToken      string                      `json:"page_token,omitempty"`
@@ -1190,6 +1193,7 @@ type WorkflowTaskListItem struct {
 	ColumnKeys      *[]string          `json:"column_keys,omitempty"`
 	Status          WorkflowTaskStatus `json:"status"`
 	RunCount        int                `json:"run_count"`
+	LabelIDs        []string           `json:"label_ids"`
 }
 
 type WorkflowTaskListScopeErrorReason string
@@ -1283,11 +1287,12 @@ type WorkflowBoardResponse struct {
 }
 
 type WorkflowBoardNodeCardsListRequest struct {
-	ProjectID  string  `json:"project_id"`
-	WorkflowID string  `json:"workflow_id"`
-	NodeID     string  `json:"node_id"`
-	PageSize   int     `json:"page_size"`
-	PageToken  *string `json:"page_token"`
+	ProjectID   string                  `json:"project_id"`
+	WorkflowID  string                  `json:"workflow_id"`
+	NodeID      string                  `json:"node_id"`
+	LabelFilter WorkflowTaskLabelFilter `json:"label_filter"`
+	PageSize    int                     `json:"page_size"`
+	PageToken   *string                 `json:"page_token"`
 }
 
 type WorkflowBoardNodeCardsListResponse struct {
@@ -1365,6 +1370,7 @@ type WorkflowBoardTaskCard struct {
 	SourceWorkspace ProjectWorkspaceSummary `json:"source_workspace"`
 	Status          WorkflowTaskStatus      `json:"status"`
 	Actions         WorkflowTaskActions     `json:"actions"`
+	LabelIDs        []string                `json:"label_ids"`
 	UpdatedAtUnixMs int64                   `json:"updated_at_unix_ms"`
 }
 
@@ -1464,6 +1470,7 @@ type WorkflowTaskDetail struct {
 	ExecutionTarget *WorkflowExecutionTarget `json:"execution_target,omitempty"`
 	Status          WorkflowTaskStatus       `json:"status"`
 	Actions         WorkflowTaskActions      `json:"actions"`
+	LabelIDs        []string                 `json:"label_ids"`
 	AttentionCount  int                      `json:"attention_count"`
 	Placements      []WorkflowPlacement      `json:"placements"`
 	Runs            []WorkflowRun            `json:"runs"`
@@ -2017,6 +2024,9 @@ func (r WorkflowTaskCreateRequest) Validate() error {
 	if err := validateRequiredFields(requiredField("project_id", r.ProjectID), requiredField("title", r.Title)); err != nil {
 		return err
 	}
+	if err := validateLabelIDs("label_ids", r.LabelIDs); err != nil {
+		return err
+	}
 	if r.WorkflowID != nil {
 		return validateRequired("workflow_id", *r.WorkflowID)
 	}
@@ -2034,6 +2044,9 @@ func (r WorkflowTaskUpdateRequest) Validate() error {
 }
 
 func (r WorkflowTaskGetResponse) Validate() error {
+	if err := r.Task.Validate(); err != nil {
+		return err
+	}
 	if r.Task.AttentionCount < 0 {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "task.attention_count", "attention_count must be non-negative")
 	}
@@ -2041,6 +2054,57 @@ func (r WorkflowTaskGetResponse) Validate() error {
 		return r.Task.ExecutionTarget.Validate()
 	}
 	return nil
+}
+
+func (r WorkflowTaskDetail) Validate() error {
+	if err := validateRequired("task.summary.id", r.Summary.ID); err != nil {
+		return err
+	}
+	return validateLabelIDs("task.label_ids", r.LabelIDs)
+}
+
+func (r WorkflowTaskListItem) Validate() error {
+	if err := validateRequired("task_id", r.TaskID); err != nil {
+		return err
+	}
+	return validateLabelIDs("label_ids", r.LabelIDs)
+}
+
+func (r WorkflowTaskListResponse) Validate() error {
+	for index, task := range r.Tasks {
+		if err := task.Validate(); err != nil {
+			return prefixWorkflowTaskProjectionValidationField("tasks", index, err)
+		}
+	}
+	return nil
+}
+
+func (r WorkflowBoardTaskCard) Validate() error {
+	if err := validateRequired("task_id", r.TaskID); err != nil {
+		return err
+	}
+	return validateLabelIDs("label_ids", r.LabelIDs)
+}
+
+func (r WorkflowBoardNodeCardsListResponse) Validate() error {
+	for index, card := range r.Cards {
+		if err := card.Validate(); err != nil {
+			return prefixWorkflowTaskProjectionValidationField("cards", index, err)
+		}
+	}
+	return nil
+}
+
+func prefixWorkflowTaskProjectionValidationField(field string, index int, err error) error {
+	var validationErr WorkflowRequestValidationError
+	if !errors.As(err, &validationErr) {
+		return err
+	}
+	return workflowRequestError(
+		validationErr.Code,
+		fmt.Sprintf("%s[%d].%s", field, index, validationErr.Field),
+		validationErr.Message,
+	)
 }
 
 func (r WorkflowTaskStartRequest) Validate() error {
@@ -2268,7 +2332,10 @@ func (r WorkflowBoardRequest) Validate() error {
 	if err := validateRequired("project_id", r.ProjectID); err != nil {
 		return err
 	}
-	return validateOptionalNonBlank("workflow_id", r.WorkflowID)
+	if err := validateOptionalNonBlank("workflow_id", r.WorkflowID); err != nil {
+		return err
+	}
+	return r.LabelFilter.Validate()
 }
 
 func (r WorkflowTaskListRequest) Validate() error {
@@ -2298,6 +2365,9 @@ func (r WorkflowTaskListRequest) Validate() error {
 	}
 	if strings.TrimSpace(r.PageToken) != r.PageToken {
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not have leading or trailing whitespace")
+	}
+	if err := r.LabelFilter.Validate(); err != nil {
+		return err
 	}
 	if len(r.Sort) > WorkflowTaskListMaxSortSelectors {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "sort", fmt.Sprintf("sort must include at most %d fields", WorkflowTaskListMaxSortSelectors))
@@ -2355,7 +2425,7 @@ func (r WorkflowBoardNodeCardsListRequest) Validate() error {
 	if r.PageToken != nil && strings.TrimSpace(*r.PageToken) != *r.PageToken {
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not have leading or trailing whitespace")
 	}
-	return nil
+	return r.LabelFilter.Validate()
 }
 
 func (r WorkflowProjectSubscribeRequest) Validate() error {

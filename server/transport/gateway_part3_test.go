@@ -276,7 +276,8 @@ func TestDecodeAndHandlePreservesWorkflowTaskListScopeError(t *testing.T) {
 		WorkflowID: &workflowID,
 	}
 	response := decodeAndHandle[serverapi.WorkflowTaskListRequest, struct{}](
-		protocol.Request{ID: "scope-error", Params: mustJSON(t, serverapi.WorkflowTaskListRequest{ProjectID: &projectID})},
+		protocol.Request{ID: "scope-error", Params: mustJSON(t, serverapi.WorkflowTaskListRequest{
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: &projectID})},
 		func(serverapi.WorkflowTaskListRequest) (struct{}, error) {
 			return struct{}{}, source
 		},

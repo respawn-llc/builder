@@ -207,12 +207,14 @@ func TestServiceListWorkflowTasksValidatesAndDelegates(t *testing.T) {
 	ctx, service, projectID, workflowID, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 
 	blankProjectID := " "
-	if _, err := service.ListWorkflowTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &blankProjectID}); !isWorkflowServiceRequestFieldError(err, "project_id") {
+	if _, err := service.ListWorkflowTasks(ctx, serverapi.WorkflowTaskListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: &blankProjectID}); !isWorkflowServiceRequestFieldError(err, "project_id") {
 		t.Fatalf("blank project error = %#v, want project_id validation", err)
 	}
 	resp, err := service.ListWorkflowTasks(ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID:  &projectID,
-		WorkflowID: &workflowID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		ProjectID:   &projectID,
+		WorkflowID:  &workflowID,
 	})
 	if err != nil {
 		t.Fatalf("ListWorkflowTasks: %v", err)

@@ -282,6 +282,7 @@ func TestWorkflowTaskDetailDoesNotDuplicateManagedWorktreeOrChangeBoardCards(t *
 func TestWorkflowTaskGetResponseValidatesExecutionTarget(t *testing.T) {
 	sourceRoot := "/source"
 	valid := WorkflowTaskGetResponse{Task: WorkflowTaskDetail{
+		Summary: WorkflowTaskSummary{ID: "task-1"},
 		ExecutionTarget: &WorkflowExecutionTarget{
 			Mode:          WorkflowExecutionTargetModeNone,
 			EffectiveRoot: &sourceRoot,

@@ -6,6 +6,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"core/shared/labelcontract"
 	"core/shared/runtimeids"
 
 	"github.com/google/uuid"
@@ -15,7 +16,7 @@ import (
 
 const (
 	MaxNameRunes      = 64
-	MaxProjectLabels  = 100
+	MaxProjectLabels  = labelcontract.MaxProjectLabels
 	ComparisonVersion = "kent-label-casefold-v1"
 )
 

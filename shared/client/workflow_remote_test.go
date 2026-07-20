@@ -110,7 +110,11 @@ func TestRemoteWorkflowTaskListRoundTripsTypedScope(t *testing.T) {
 		t.Fatalf("DialRemoteURL: %v", err)
 	}
 	defer func() { _ = remote.Close() }()
-	response, err := remote.ListWorkflowTasks(context.Background(), serverapi.WorkflowTaskListRequest{ProjectID: &projectID, WorkflowID: &workflowID})
+	response, err := remote.ListWorkflowTasks(context.Background(), serverapi.WorkflowTaskListRequest{
+		ProjectID:   &projectID,
+		WorkflowID:  &workflowID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+	})
 	if err != nil {
 		t.Fatalf("ListWorkflowTasks: %v", err)
 	}
