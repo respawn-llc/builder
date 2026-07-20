@@ -38,19 +38,35 @@ type osc9TerminalNotifier struct {
 	out io.Writer
 }
 
-type observedNotificationTurn struct {
-	stepID    runtimeids.StepID
-	toolCalls int
-	preview   *turnCompletionPreview
+type nativeToolObservation uint8
+
+const (
+	nativeToolObservationNone nativeToolObservation = iota
+	nativeToolObservationOne
+	nativeToolObservationMultiple
+)
+
+func (o nativeToolObservation) record() nativeToolObservation {
+	switch o {
+	case nativeToolObservationNone:
+		return nativeToolObservationOne
+	default:
+		return nativeToolObservationMultiple
+	}
 }
 
-type turnCompletionPreview struct {
-	stepID runtimeids.StepID
-	body   string
+type nativeObservedTurn struct {
+	stepID  runtimeids.StepID
+	tools   nativeToolObservation
+	preview *nativeTurnCompletionPreview
 }
 
-type queuedTurnCompletion struct {
-	preview  turnCompletionPreview
+type nativeTurnCompletionPreview struct {
+	body string
+}
+
+type nativePendingDrain struct {
+	preview  nativeTurnCompletionPreview
 	eligible bool
 }
 
@@ -144,13 +160,12 @@ func (r *osc9TerminalNotifier) Bell() {
 	_, _ = io.WriteString(r.out, terminalBell)
 }
 
-type bellHooks struct {
-	mu                    sync.Mutex
+type nativeTurnNotificationObserver struct {
 	notifier              terminalNotifier
 	title                 func() string
 	focused               func() bool
-	observedTurn          *observedNotificationTurn
-	pendingTurnCompletion *queuedTurnCompletion
+	observedTurn          *nativeObservedTurn
+	pendingTurnCompletion *nativePendingDrain
 	pendingCompaction     bool
 	reviewerStep          *runtimeids.StepID
 }
@@ -173,7 +188,7 @@ type nativeUserCompactionCompletedInput struct {
 
 func (nativeUserCompactionCompletedInput) nativeNotificationInput() {}
 
-func newBellHooks(notifier terminalNotifier, title func() string, focused ...func() bool) *bellHooks {
+func newNativeTurnNotificationObserver(notifier terminalNotifier, title func() string, focused ...func() bool) *nativeTurnNotificationObserver {
 	if notifier == nil {
 		notifier = newBELTerminalNotifier(io.Discard)
 	}
@@ -184,14 +199,14 @@ func newBellHooks(notifier terminalNotifier, title func() string, focused ...fun
 	if len(focused) > 0 && focused[0] != nil {
 		focusedProvider = focused[0]
 	}
-	return &bellHooks{notifier: notifier, title: title, focused: focusedProvider}
+	return &nativeTurnNotificationObserver{notifier: notifier, title: title, focused: focusedProvider}
 }
 
-func (h *bellHooks) OnAttentionNotification(evt clientui.AttentionNotificationEvent) {
+func (h *nativeTurnNotificationObserver) OnAttentionNotification(evt clientui.AttentionNotificationEvent) {
 	h.onAttentionNotification(evt, nil)
 }
 
-func (h *bellHooks) OnAttentionFact(fact attentionFact) {
+func (h *nativeTurnNotificationObserver) OnAttentionFact(fact attentionFact) {
 	if h == nil {
 		return
 	}
@@ -211,7 +226,7 @@ func (h *bellHooks) OnAttentionFact(fact attentionFact) {
 	h.notifyAttention(kind, body)
 }
 
-func (h *bellHooks) onAttentionNotification(evt clientui.AttentionNotificationEvent, projectedBody *string) {
+func (h *nativeTurnNotificationObserver) onAttentionNotification(evt clientui.AttentionNotificationEvent, projectedBody *string) {
 	if h == nil {
 		return
 	}
@@ -234,7 +249,7 @@ func (h *bellHooks) onAttentionNotification(evt clientui.AttentionNotificationEv
 	h.notifyAttention(notification.Kind, body)
 }
 
-func (h *bellHooks) notifyAttention(kind clientui.AttentionNotificationKind, body string) {
+func (h *nativeTurnNotificationObserver) notifyAttention(kind clientui.AttentionNotificationKind, body string) {
 	if body == "" {
 		body = attentionNotificationFallbackBody(kind)
 	}
@@ -299,41 +314,35 @@ func attentionNotificationApprovalMessage(notification clientui.AttentionNotific
 	return notification.Approval.Message
 }
 
-func (h *bellHooks) recordToolCall(stepID runtimeids.StepID) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+func (h *nativeTurnNotificationObserver) recordToolCall(stepID runtimeids.StepID) {
 	if h.observedTurn == nil || h.observedTurn.stepID != stepID {
-		h.observedTurn = &observedNotificationTurn{stepID: stepID}
+		h.observedTurn = &nativeObservedTurn{stepID: stepID}
 	}
-	h.observedTurn.toolCalls++
+	h.observedTurn.tools = h.observedTurn.tools.record()
 }
 
-func (h *bellHooks) recordTurnCompletion(stepID runtimeids.StepID, assistantContent string) {
+func (h *nativeTurnNotificationObserver) recordTurnCompletion(stepID runtimeids.StepID, assistantContent string) {
 	message := turnCompletionNotificationMessage(assistantContent)
-	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.reviewerStep != nil && *h.reviewerStep == stepID {
 		return
 	}
 	if h.observedTurn == nil {
-		h.observedTurn = &observedNotificationTurn{stepID: stepID}
+		h.observedTurn = &nativeObservedTurn{stepID: stepID}
 	}
 	if h.observedTurn.stepID != stepID {
 		return
 	}
-	h.observedTurn.preview = &turnCompletionPreview{stepID: stepID, body: message}
+	h.observedTurn.preview = &nativeTurnCompletionPreview{body: message}
 }
 
-func (h *bellHooks) recordStepFinished(stepID runtimeids.StepID) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+func (h *nativeTurnNotificationObserver) recordStepFinished(stepID runtimeids.StepID) {
 	if h.observedTurn != nil && h.observedTurn.stepID == stepID {
 		if h.observedTurn.preview != nil {
-			eligible := h.observedTurn.toolCalls >= 2
+			eligible := h.observedTurn.tools == nativeToolObservationMultiple
 			if h.pendingTurnCompletion != nil {
 				eligible = eligible || h.pendingTurnCompletion.eligible
 			}
-			h.pendingTurnCompletion = &queuedTurnCompletion{
+			h.pendingTurnCompletion = &nativePendingDrain{
 				preview:  *h.observedTurn.preview,
 				eligible: eligible,
 			}
@@ -345,9 +354,7 @@ func (h *bellHooks) recordStepFinished(stepID runtimeids.StepID) {
 	}
 }
 
-func (h *bellHooks) recordReviewerState(state clientui.TranscriptReviewerState) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+func (h *nativeTurnNotificationObserver) recordReviewerState(state clientui.TranscriptReviewerState) {
 	switch state.State {
 	case clientui.ReviewerStateRunning:
 		stepID := state.StepID
@@ -357,9 +364,7 @@ func (h *bellHooks) recordReviewerState(state clientui.TranscriptReviewerState) 
 	}
 }
 
-func (h *bellHooks) clearPendingTurnCompletionForSilentFinal(stepID runtimeids.StepID) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+func (h *nativeTurnNotificationObserver) clearPendingTurnCompletionForSilentFinal(stepID runtimeids.StepID) {
 	if h.reviewerStep != nil && *h.reviewerStep == stepID {
 		return
 	}
@@ -369,11 +374,7 @@ func (h *bellHooks) clearPendingTurnCompletionForSilentFinal(stepID runtimeids.S
 	}
 }
 
-func (h *bellHooks) OnTurnQueueDrained() {
-	h.ReduceNativeInput(nativeTurnQueueDrainedInput{})
-}
-
-func (h *bellHooks) ReduceNativeInput(input nativeNotificationInput) {
+func (h *nativeTurnNotificationObserver) ReduceNativeInput(input nativeNotificationInput) {
 	if h == nil {
 		return
 	}
@@ -387,60 +388,43 @@ func (h *bellHooks) ReduceNativeInput(input nativeNotificationInput) {
 	}
 }
 
-func (h *bellHooks) reduceTurnQueueDrained() {
-	h.mu.Lock()
+func (h *nativeTurnNotificationObserver) reduceTurnQueueDrained() {
 	if h.pendingCompaction {
 		h.pendingCompaction = false
 		h.pendingTurnCompletion = nil
-		h.mu.Unlock()
 		h.notifyIfUnfocused(compactionCompletionNotificationMessage)
 		return
 	}
 	if h.pendingTurnCompletion == nil || !h.pendingTurnCompletion.eligible {
-		h.mu.Unlock()
 		return
 	}
 	message := h.pendingTurnCompletion.preview.body
 	h.pendingTurnCompletion = nil
-	h.mu.Unlock()
 	h.notifyIfUnfocused(message)
 }
 
-func (h *bellHooks) OnTurnQueueAborted() {
-	h.ReduceNativeInput(nativeTurnQueueAbortedInput{})
-}
-
-func (h *bellHooks) reduceTurnQueueAborted() {
+func (h *nativeTurnNotificationObserver) reduceTurnQueueAborted() {
 	if h == nil {
 		return
 	}
-	h.mu.Lock()
 	h.observedTurn = nil
 	h.pendingTurnCompletion = nil
 	h.pendingCompaction = false
 	h.reviewerStep = nil
-	h.mu.Unlock()
 }
 
 const compactionCompletionNotificationMessage = "Compaction finished"
 
-func (h *bellHooks) OnUserCompactionCompleted(queueDrained bool) {
-	h.ReduceNativeInput(nativeUserCompactionCompletedInput{queueDrained: queueDrained})
-}
-
-func (h *bellHooks) reduceUserCompactionCompleted(queueDrained bool) {
+func (h *nativeTurnNotificationObserver) reduceUserCompactionCompleted(queueDrained bool) {
 	if h == nil {
 		return
 	}
-	h.mu.Lock()
 	if !queueDrained {
 		h.pendingCompaction = true
-		h.mu.Unlock()
 		return
 	}
 	h.pendingCompaction = false
 	h.pendingTurnCompletion = nil
-	h.mu.Unlock()
 	h.notifyIfUnfocused(compactionCompletionNotificationMessage)
 }
 
@@ -473,7 +457,7 @@ func notificationMarkdownPreview(
 	return string(runes[:terminalNotificationPreviewLimit])
 }
 
-func (h *bellHooks) formatMessage(message string) string {
+func (h *nativeTurnNotificationObserver) formatMessage(message string) string {
 	title := defaultSessionTitle
 	if h != nil && h.title != nil {
 		title = sessionTitle(h.title())
@@ -497,7 +481,7 @@ func terminalNotificationSingleLine(text string) string {
 	)
 }
 
-func (h *bellHooks) notifyIfUnfocused(message string) {
+func (h *nativeTurnNotificationObserver) notifyIfUnfocused(message string) {
 	if h == nil {
 		return
 	}
@@ -507,12 +491,9 @@ func (h *bellHooks) notifyIfUnfocused(message string) {
 	h.notifier.Notify(h.formatMessage(message))
 }
 
-func (h *bellHooks) focusedForAttention() bool {
+func (h *nativeTurnNotificationObserver) focusedForAttention() bool {
 	if h == nil {
 		return false
 	}
-	h.mu.Lock()
-	focusedProvider := h.focused
-	h.mu.Unlock()
-	return focusedProvider != nil && focusedProvider()
+	return h.focused != nil && h.focused()
 }

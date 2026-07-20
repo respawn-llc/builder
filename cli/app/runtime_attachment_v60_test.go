@@ -115,7 +115,7 @@ func TestRuntimeAttachmentWithoutAttentionServiceUsesTranscriptFallback(t *testi
 	if plan.Wiring.attentionEvents != nil || plan.Wiring.requestAttentionReopen != nil {
 		t.Fatal("runtime wiring created an attention stream without an attention service")
 	}
-	if plan.Wiring.promptAttention == nil || plan.Wiring.promptAttention != plan.Wiring.turnQueueHook {
+	if plan.Wiring.promptAttention == nil || plan.Wiring.promptAttention != plan.Wiring.nativeTurnNotifications {
 		t.Fatal("runtime wiring did not retain transcript prompt attention fallback")
 	}
 	plan.Close()

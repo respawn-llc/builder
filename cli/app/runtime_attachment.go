@@ -117,7 +117,7 @@ func prepareSharedRuntimeWiring(
 		}
 	}
 	terminalFocus := newTerminalFocusState()
-	turnQueueHook := newBellHooks(newTerminalNotifier(plan.ActiveSettings.NotificationMethod, os.Stdout, os.LookupEnv), func() string {
+	nativeTurnNotifications := newNativeTurnNotificationObserver(newTerminalNotifier(plan.ActiveSettings.NotificationMethod, os.Stdout, os.LookupEnv), func() string {
 		if runtimeClient != nil {
 			if sessionName := strings.TrimSpace(runtimeClient.MainView().Session.SessionName); sessionName != "" {
 				return sessionName
@@ -125,23 +125,23 @@ func prepareSharedRuntimeWiring(
 		}
 		return strings.TrimSpace(plan.SessionName)
 	}, terminalFocus.FocusedForAttention)
-	promptAttention := turnQueueHook
+	promptAttention := nativeTurnNotifications
 	if attentionStream != nil {
 		promptAttention = nil
 	}
 	wiring := &runtimeWiring{
-		transcriptEvents:      transcriptEvents,
-		requestTranscriptOpen: requestTranscriptOpen,
-		promptAnswers:         newTranscriptPromptAnswerer(ctx, clients.PromptControl),
-		promptAttention:       promptAttention,
-		turnQueueHook:         turnQueueHook,
-		terminalFocus:         terminalFocus,
-		runtimeClient:         runtimeClient,
-		worktrees:             clients.Worktrees,
-		processControls:       clients.ProcessControls,
-		processOutput:         clients.ProcessOutput,
-		processViews:          clients.ProcessViews,
-		promptHistory:         append([]string(nil), plan.PromptHistory...),
+		transcriptEvents:        transcriptEvents,
+		requestTranscriptOpen:   requestTranscriptOpen,
+		promptAnswers:           newTranscriptPromptAnswerer(ctx, clients.PromptControl),
+		promptAttention:         promptAttention,
+		nativeTurnNotifications: nativeTurnNotifications,
+		terminalFocus:           terminalFocus,
+		runtimeClient:           runtimeClient,
+		worktrees:               clients.Worktrees,
+		processControls:         clients.ProcessControls,
+		processOutput:           clients.ProcessOutput,
+		processViews:            clients.ProcessViews,
+		promptHistory:           append([]string(nil), plan.PromptHistory...),
 	}
 	if attentionStream != nil {
 		wiring.attentionEvents = attentionStream.events

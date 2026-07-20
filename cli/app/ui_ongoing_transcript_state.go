@@ -17,12 +17,16 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	if m == nil {
 		return nil
 	}
-	if m.turnQueueHook != nil {
+	if m.nativeTurnNotifications != nil {
 		if message.Kind == clientui.TranscriptMessageHydration {
-			m.turnQueueHook.ReduceNativeInput(nativeTurnQueueAbortedInput{})
+			m.nativeTurnNotifications.ReduceNativeInput(nativeTurnQueueAbortedInput{})
 		} else {
-			m.turnQueueHook.OnTranscriptMessage(message)
+			m.nativeTurnNotifications.OnTranscriptMessage(message)
 		}
+	}
+	if m.lifecycleCoordinator != nil &&
+		message.Kind == clientui.TranscriptMessageLiveRunBatchFinished {
+		m.lifecycleCoordinator.AcceptLiveRunBatchFinished(*message.Payload.LiveRunBatchFinished)
 	}
 	switch message.Kind {
 	case clientui.TranscriptMessageHydration:

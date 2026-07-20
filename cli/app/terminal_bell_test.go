@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"core/cli/tui/transcriptrender"
@@ -31,8 +32,8 @@ func (r *countRinger) total() int {
 	return r.notifications + r.bells
 }
 
-func newUnfocusedBellHooks(ringer *countRinger) *bellHooks {
-	return newBellHooks(ringer, nil, func() bool { return false })
+func newUnfocusedNativeTurnNotificationObserver(ringer *countRinger) *nativeTurnNotificationObserver {
+	return newNativeTurnNotificationObserver(ringer, nil, func() bool { return false })
 }
 
 func TestTerminalNotifierProtocolOutput(t *testing.T) {
@@ -81,9 +82,9 @@ func TestOSC9NotifierEncodesFormattedMessageVerbatim(t *testing.T) {
 	}
 }
 
-func TestBellHooksAttentionNotificationPolicy(t *testing.T) {
+func TestNativeTurnNotificationObserverAttentionNotificationPolicy(t *testing.T) {
 	unfocused := &countRinger{}
-	hooks := newUnfocusedBellHooks(unfocused)
+	hooks := newUnfocusedNativeTurnNotificationObserver(unfocused)
 	hooks.OnAttentionNotification(testAttentionPendingEvent("question-1", clientui.AttentionNotificationKindQuestion, "question"))
 	hooks.OnAttentionNotification(testAttentionPendingEvent("approval-1", clientui.AttentionNotificationKindApproval, "approval"))
 	hooks.OnAttentionNotification(testAttentionPendingEvent("interrupted-1", clientui.AttentionNotificationKindInterruptedRun, "interrupted"))
@@ -92,7 +93,7 @@ func TestBellHooksAttentionNotificationPolicy(t *testing.T) {
 	}
 
 	focused := &countRinger{}
-	newBellHooks(focused, nil, func() bool { return true }).OnAttentionNotification(
+	newNativeTurnNotificationObserver(focused, nil, func() bool { return true }).OnAttentionNotification(
 		testAttentionPendingEvent("question-2", clientui.AttentionNotificationKindQuestion, "question"),
 	)
 	if focused.notifications != 0 || focused.bells != 1 {
@@ -100,9 +101,9 @@ func TestBellHooksAttentionNotificationPolicy(t *testing.T) {
 	}
 }
 
-func TestBellHooksAttentionNotificationsPropagateDynamicMarkdownPreview(t *testing.T) {
+func TestNativeTurnNotificationObserverAttentionNotificationsPropagateDynamicMarkdownPreview(t *testing.T) {
 	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
+	hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 	questionPreview := "dynamic-question-preview"
 	approvalPreview := "dynamic-approval-preview"
 
@@ -130,10 +131,10 @@ func TestBellHooksAttentionNotificationsPropagateDynamicMarkdownPreview(t *testi
 	}
 }
 
-func TestBellHooksTextNotificationsHaveNonEmptyStructuralFallbacks(t *testing.T) {
+func TestNativeTurnNotificationObserverTextNotificationsHaveNonEmptyStructuralFallbacks(t *testing.T) {
 	ringer := &countRinger{}
 	title := "dynamic-session"
-	hooks := newBellHooks(ringer, func() string { return title }, func() bool { return false })
+	hooks := newNativeTurnNotificationObserver(ringer, func() string { return title }, func() bool { return false })
 
 	hooks.OnAttentionNotification(testAttentionPendingEvent(
 		"question-empty",
@@ -149,7 +150,7 @@ func TestBellHooksTextNotificationsHaveNonEmptyStructuralFallbacks(t *testing.T)
 	hooks.OnTranscriptMessage(bellToolStartMessage(1))
 	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, " \n\t "))
 	hooks.OnTranscriptMessage(bellStepFinishedMessage(1))
-	hooks.OnTurnQueueDrained()
+	hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 
 	if len(ringer.messages) != 3 {
 		t.Fatalf("fallback notification count = %d, want three", len(ringer.messages))
@@ -164,16 +165,16 @@ func TestBellHooksTextNotificationsHaveNonEmptyStructuralFallbacks(t *testing.T)
 	}
 }
 
-func TestBellHooksCapsCompleteNotificationAtNotifierBoundary(t *testing.T) {
+func TestNativeTurnNotificationObserverCapsCompleteNotificationAtNotifierBoundary(t *testing.T) {
 	ringer := &countRinger{}
 	title := strings.Repeat("session-", 4)
-	hooks := newBellHooks(ringer, func() string { return title }, func() bool { return false })
+	hooks := newNativeTurnNotificationObserver(ringer, func() string { return title }, func() bool { return false })
 
 	hooks.OnTranscriptMessage(bellToolStartMessage(1))
 	hooks.OnTranscriptMessage(bellToolStartMessage(1))
 	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, strings.Repeat("answer", 30)))
 	hooks.OnTranscriptMessage(bellStepFinishedMessage(1))
-	hooks.OnTurnQueueDrained()
+	hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 
 	if len(ringer.messages) != 1 {
 		t.Fatalf("formatted notification count = %d, want one", len(ringer.messages))
@@ -256,12 +257,12 @@ func TestTerminalNotificationFormattingSlicesUnicodeSafely(t *testing.T) {
 	}
 }
 
-func TestBellHooksCompactionUsesCompleteMessageFormatter(t *testing.T) {
+func TestNativeTurnNotificationObserverCompactionUsesCompleteMessageFormatter(t *testing.T) {
 	ringer := &countRinger{}
 	title := strings.Repeat("dynamic-session-title", 6)
-	hooks := newBellHooks(ringer, func() string { return title }, func() bool { return false })
+	hooks := newNativeTurnNotificationObserver(ringer, func() string { return title }, func() bool { return false })
 
-	hooks.OnUserCompactionCompleted(true)
+	hooks.ReduceNativeInput(nativeUserCompactionCompletedInput{queueDrained: true})
 
 	if len(ringer.messages) != 1 {
 		t.Fatalf("compaction notification count = %d, want one", len(ringer.messages))
@@ -277,7 +278,7 @@ func TestBellHooksCompactionUsesCompleteMessageFormatter(t *testing.T) {
 
 func TestUIAskLifecycleDoesNotDuplicateAttentionNotifications(t *testing.T) {
 	ringer := &countRinger{}
-	model := newProjectedStaticUIModel(WithUITurnQueueHook(newUnfocusedBellHooks(ringer)))
+	model := newProjectedStaticUIModel(WithUINativeTurnNotificationObserver(newUnfocusedNativeTurnNotificationObserver(ringer)))
 
 	next, _ := model.Update(askEventMsg{event: askEvent{prompt: bellTestPrompt("ask-1", "First?")}})
 	model = next.(*uiModel)
@@ -290,13 +291,13 @@ func TestUIAskLifecycleDoesNotDuplicateAttentionNotifications(t *testing.T) {
 	}
 }
 
-func TestBellHooksToolHeavyTurnCompletion(t *testing.T) {
+func TestNativeTurnNotificationObserverToolHeavyTurnCompletion(t *testing.T) {
 	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
+	hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 
 	hooks.OnTranscriptMessage(bellToolStartMessage(1))
 	hooks.OnTranscriptMessage(bellAssistantFinalMessage(1))
-	hooks.OnTurnQueueDrained()
+	hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 	if ringer.notifications != 0 {
 		t.Fatalf("single-tool turn emitted %d notifications", ringer.notifications)
 	}
@@ -305,16 +306,16 @@ func TestBellHooksToolHeavyTurnCompletion(t *testing.T) {
 	if ringer.notifications != 0 {
 		t.Fatalf("tool-heavy turn notified before queue drain")
 	}
-	hooks.OnTurnQueueDrained()
-	hooks.OnTurnQueueDrained()
+	hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
+	hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 	if ringer.notifications != 1 {
 		t.Fatalf("tool-heavy queue drain emitted %d notifications, want one", ringer.notifications)
 	}
 }
 
-func TestBellHooksSupervisorTurnUsesPreFeedbackPreview(t *testing.T) {
+func TestNativeTurnNotificationObserverSupervisorTurnUsesPreFeedbackPreview(t *testing.T) {
 	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
+	hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 	preFeedback := "original answer before review"
 	followUp := "distinct answer after review"
 
@@ -325,7 +326,7 @@ func TestBellHooksSupervisorTurnUsesPreFeedbackPreview(t *testing.T) {
 	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, followUp))
 	hooks.OnTranscriptMessage(bellReviewerStateMessage(1, clientui.ReviewerStateCompleted))
 	hooks.OnTranscriptMessage(bellStepFinishedMessage(1))
-	hooks.OnTurnQueueDrained()
+	hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 
 	if ringer.notifications != 1 {
 		t.Fatalf("supervisor turn emitted %d notifications, want one", ringer.notifications)
@@ -338,9 +339,9 @@ func TestBellHooksSupervisorTurnUsesPreFeedbackPreview(t *testing.T) {
 	}
 }
 
-func TestBellHooksSupervisorToolThresholdSpansReview(t *testing.T) {
+func TestNativeTurnNotificationObserverSupervisorToolThresholdSpansReview(t *testing.T) {
 	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
+	hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 
 	hooks.OnTranscriptMessage(bellToolStartMessage(1))
 	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, "answer before review"))
@@ -348,21 +349,21 @@ func TestBellHooksSupervisorToolThresholdSpansReview(t *testing.T) {
 	hooks.OnTranscriptMessage(bellToolStartMessage(1))
 	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, "answer after review"))
 	hooks.OnTranscriptMessage(bellReviewerStateMessage(1, clientui.ReviewerStateCompleted))
-	hooks.OnTurnQueueDrained()
+	hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 	if ringer.total() != 0 {
 		t.Fatalf("supervisor turn notified before step finish")
 	}
 
 	hooks.OnTranscriptMessage(bellStepFinishedMessage(1))
-	hooks.OnTurnQueueDrained()
+	hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 	if ringer.notifications != 1 {
 		t.Fatalf("split-threshold supervisor turn emitted %d notifications, want one", ringer.notifications)
 	}
 }
 
-func TestBellHooksSupervisorNoopFollowUpPreservesTurn(t *testing.T) {
+func TestNativeTurnNotificationObserverSupervisorNoopFollowUpPreservesTurn(t *testing.T) {
 	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
+	hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 	preFeedback := "answer preserved across silent review"
 
 	hooks.OnTranscriptMessage(bellToolStartMessage(1))
@@ -372,7 +373,7 @@ func TestBellHooksSupervisorNoopFollowUpPreservesTurn(t *testing.T) {
 	hooks.OnTranscriptMessage(bellAssistantDeltaMessage(1, uiNoopFinalToken))
 	hooks.OnTranscriptMessage(bellReviewerStateMessage(1, clientui.ReviewerStateCompleted))
 	hooks.OnTranscriptMessage(bellStepFinishedMessage(1))
-	hooks.OnTurnQueueDrained()
+	hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 
 	if ringer.notifications != 1 {
 		t.Fatalf("silent reviewer follow-up emitted %d notifications, want one", ringer.notifications)
@@ -382,16 +383,16 @@ func TestBellHooksSupervisorNoopFollowUpPreservesTurn(t *testing.T) {
 	}
 }
 
-func TestBellHooksQueuedTurnsUseLatestPreviewAndEarlierEligibility(t *testing.T) {
+func TestNativeTurnNotificationObserverQueuedTurnsUseLatestPreviewAndEarlierEligibility(t *testing.T) {
 	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
+	hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 	latest := "latest observed queued answer"
 
 	recordToolHeavyBellTurn(hooks, 1)
 	hooks.OnTranscriptMessage(bellToolStartMessage(2))
 	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(2, latest))
 	hooks.OnTranscriptMessage(bellStepFinishedMessage(2))
-	hooks.OnTurnQueueDrained()
+	hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 
 	if ringer.notifications != 1 {
 		t.Fatalf("queued turns emitted %d notifications, want one", ringer.notifications)
@@ -401,14 +402,14 @@ func TestBellHooksQueuedTurnsUseLatestPreviewAndEarlierEligibility(t *testing.T)
 	}
 }
 
-func TestBellHooksDrainUsesOnlyObservedFacts(t *testing.T) {
+func TestNativeTurnNotificationObserverDrainUsesOnlyObservedFacts(t *testing.T) {
 	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
+	hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 
 	hooks.OnTranscriptMessage(bellToolStartMessage(1))
 	hooks.OnTranscriptMessage(bellToolStartMessage(1))
 	hooks.OnTranscriptMessage(bellAssistantFinalMessage(1))
-	hooks.OnTurnQueueDrained()
+	hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 	if ringer.total() != 0 {
 		t.Fatalf("drain emitted %d events before step finish was observed", ringer.total())
 	}
@@ -417,18 +418,69 @@ func TestBellHooksDrainUsesOnlyObservedFacts(t *testing.T) {
 	if ringer.total() != 0 {
 		t.Fatalf("late step finish scheduled %d delayed events", ringer.total())
 	}
-	hooks.OnTurnQueueDrained()
+	hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 	if ringer.notifications != 1 {
 		t.Fatalf("later ordinary drain emitted %d notifications, want one", ringer.notifications)
 	}
 }
 
-func TestBellHooksTurnCompletionFocusPolicy(t *testing.T) {
+func TestNativeTurnNotificationObserverNeverUsesServerBatchPreviewOrWork(t *testing.T) {
+	t.Run("server work cannot make one observed tool eligible", func(t *testing.T) {
+		ringer := &countRinger{}
+		observer := newUnfocusedNativeTurnNotificationObserver(ringer)
+		observer.OnTranscriptMessage(bellToolStartMessage(1))
+		observer.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, "observed one-tool answer"))
+		observer.OnTranscriptMessage(bellBatchFinishedMessage("server-only preview", true))
+		observer.OnTranscriptMessage(bellStepFinishedMessage(1))
+
+		observer.ReduceNativeInput(nativeTurnQueueDrainedInput{})
+
+		if ringer.total() != 0 {
+			t.Fatalf("server work fact made one observed tool emit %d native events", ringer.total())
+		}
+	})
+
+	t.Run("observed work and preview remain authoritative", func(t *testing.T) {
+		ringer := &countRinger{}
+		observer := newUnfocusedNativeTurnNotificationObserver(ringer)
+		observedPreview := "observed transcript preview"
+		observer.OnTranscriptMessage(bellToolStartMessage(1))
+		observer.OnTranscriptMessage(bellToolStartMessage(1))
+		observer.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, observedPreview))
+		observer.OnTranscriptMessage(bellBatchFinishedMessage("different server preview", false))
+		observer.OnTranscriptMessage(bellStepFinishedMessage(1))
+
+		observer.ReduceNativeInput(nativeTurnQueueDrainedInput{})
+
+		if len(ringer.messages) != 1 || ringer.messages[0] != defaultSessionTitle+": "+observedPreview {
+			t.Fatalf("native messages = %q, want observed transcript preview", ringer.messages)
+		}
+	})
+
+	t.Run("batch arrival cannot fill transcript lag", func(t *testing.T) {
+		ringer := &countRinger{}
+		observer := newUnfocusedNativeTurnNotificationObserver(ringer)
+		observer.OnTranscriptMessage(bellBatchFinishedMessage("server lag fallback", true))
+
+		observer.ReduceNativeInput(nativeTurnQueueDrainedInput{})
+		if ringer.total() != 0 {
+			t.Fatalf("batch-only lag emitted %d native events", ringer.total())
+		}
+
+		recordToolHeavyBellTurn(observer, 1)
+		observer.ReduceNativeInput(nativeTurnQueueDrainedInput{})
+		if ringer.notifications != 1 {
+			t.Fatalf("later observed transcript emitted %d notifications, want one", ringer.notifications)
+		}
+	})
+}
+
+func TestNativeTurnNotificationObserverTurnCompletionFocusPolicy(t *testing.T) {
 	t.Run("focused suppresses", func(t *testing.T) {
 		ringer := &countRinger{}
-		hooks := newBellHooks(ringer, nil, func() bool { return true })
+		hooks := newNativeTurnNotificationObserver(ringer, nil, func() bool { return true })
 		recordToolHeavyBellTurn(hooks, 1)
-		hooks.OnTurnQueueDrained()
+		hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 		if ringer.total() != 0 {
 			t.Fatalf("focused completion emitted %d events", ringer.total())
 		}
@@ -436,109 +488,129 @@ func TestBellHooksTurnCompletionFocusPolicy(t *testing.T) {
 	t.Run("unknown focus notifies", func(t *testing.T) {
 		ringer := &countRinger{}
 		focus := newTerminalFocusState()
-		hooks := newBellHooks(ringer, nil, focus.FocusedForAttention)
+		hooks := newNativeTurnNotificationObserver(ringer, nil, focus.FocusedForAttention)
 		recordToolHeavyBellTurn(hooks, 1)
-		hooks.OnTurnQueueDrained()
+		hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 		if ringer.notifications != 1 {
 			t.Fatalf("unknown-focus completion emitted %d notifications", ringer.notifications)
 		}
 	})
 }
 
-func TestBellHooksNoopFinalizationScope(t *testing.T) {
+func TestNativeTurnNotificationObserverSamplesFocusAtEachDrain(t *testing.T) {
+	ringer := &countRinger{}
+	focus := newTerminalFocusState()
+	observer := newNativeTurnNotificationObserver(ringer, nil, focus.FocusedForAttention)
+
+	recordToolHeavyBellTurn(observer, 1)
+	focus.MarkFocused()
+	observer.ReduceNativeInput(nativeTurnQueueDrainedInput{})
+	if ringer.total() != 0 {
+		t.Fatalf("focused drain emitted %d events", ringer.total())
+	}
+
+	recordToolHeavyBellTurn(observer, 2)
+	focus.MarkBlurred()
+	observer.ReduceNativeInput(nativeTurnQueueDrainedInput{})
+	if ringer.notifications != 1 {
+		t.Fatalf("blurred drain emitted %d notifications, want one", ringer.notifications)
+	}
+}
+
+func TestNativeTurnNotificationObserverNoopFinalizationScope(t *testing.T) {
 	t.Run("clears pending completion", func(t *testing.T) {
 		ringer := &countRinger{}
-		hooks := newUnfocusedBellHooks(ringer)
+		hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 		recordToolHeavyBellTurn(hooks, 1)
 		hooks.OnTranscriptMessage(bellAssistantDeltaMessage(2, uiNoopFinalToken))
-		hooks.OnTurnQueueDrained()
+		hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 		if ringer.total() != 0 {
 			t.Fatalf("NO_OP finalization emitted %d events", ringer.total())
 		}
 	})
 	t.Run("preserves unrelated active turn", func(t *testing.T) {
 		ringer := &countRinger{}
-		hooks := newUnfocusedBellHooks(ringer)
+		hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 		recordToolHeavyBellTurn(hooks, 1)
 		hooks.OnTranscriptMessage(bellToolStartMessage(2))
 		hooks.OnTranscriptMessage(bellAssistantDeltaMessage(3, uiNoopFinalToken))
 		recordToolHeavyBellTurn(hooks, 2)
-		hooks.OnTurnQueueDrained()
+		hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 		if ringer.notifications != 1 {
 			t.Fatalf("unrelated active turn emitted %d notifications", ringer.notifications)
 		}
 	})
 }
 
-func TestBellHooksCorrelateQueuedTurnSteps(t *testing.T) {
+func TestNativeTurnNotificationObserverCorrelateQueuedTurnSteps(t *testing.T) {
 	t.Run("mismatched final is ignored", func(t *testing.T) {
 		ringer := &countRinger{}
-		hooks := newUnfocusedBellHooks(ringer)
+		hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 		hooks.OnTranscriptMessage(bellToolStartMessage(1))
 		hooks.OnTranscriptMessage(bellToolStartMessage(1))
 		hooks.OnTranscriptMessage(bellAssistantFinalMessage(2))
 		hooks.OnTranscriptMessage(bellStepFinishedMessage(1))
-		hooks.OnTurnQueueDrained()
+		hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 		if ringer.total() != 0 {
 			t.Fatalf("mismatched final emitted %d events", ringer.total())
 		}
 	})
 	t.Run("multiple queued turns notify once", func(t *testing.T) {
 		ringer := &countRinger{}
-		hooks := newUnfocusedBellHooks(ringer)
+		hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 		recordToolHeavyBellTurn(hooks, 1)
 		recordToolHeavyBellTurn(hooks, 2)
-		hooks.OnTurnQueueDrained()
+		hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 		if ringer.notifications != 1 {
 			t.Fatalf("queued turns emitted %d notifications", ringer.notifications)
 		}
 	})
 }
 
-func TestBellHooksAbortClearsPendingCompletion(t *testing.T) {
+func TestNativeTurnNotificationObserverAbortClearsPendingCompletion(t *testing.T) {
 	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
+	hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 	recordToolHeavyBellTurn(hooks, 1)
-	hooks.OnTurnQueueAborted()
-	hooks.OnTurnQueueDrained()
+	hooks.ReduceNativeInput(nativeTurnQueueAbortedInput{})
+	hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 	if ringer.total() != 0 {
 		t.Fatalf("aborted queue emitted %d events", ringer.total())
 	}
 }
 
-func TestBellHooksCompactionCompletionPolicy(t *testing.T) {
+func TestNativeTurnNotificationObserverCompactionCompletionPolicy(t *testing.T) {
 	t.Run("unfocused immediate", func(t *testing.T) {
 		ringer := &countRinger{}
-		newUnfocusedBellHooks(ringer).OnUserCompactionCompleted(true)
+		newUnfocusedNativeTurnNotificationObserver(ringer).ReduceNativeInput(nativeUserCompactionCompletedInput{queueDrained: true})
 		if ringer.notifications != 1 {
 			t.Fatalf("immediate compaction emitted %d notifications", ringer.notifications)
 		}
 	})
 	t.Run("focused suppressed", func(t *testing.T) {
 		ringer := &countRinger{}
-		newBellHooks(ringer, nil, func() bool { return true }).OnUserCompactionCompleted(true)
+		newNativeTurnNotificationObserver(ringer, nil, func() bool { return true }).ReduceNativeInput(nativeUserCompactionCompletedInput{queueDrained: true})
 		if ringer.total() != 0 {
 			t.Fatalf("focused compaction emitted %d events", ringer.total())
 		}
 	})
 	t.Run("deferred until drain", func(t *testing.T) {
 		ringer := &countRinger{}
-		hooks := newUnfocusedBellHooks(ringer)
-		hooks.OnUserCompactionCompleted(false)
+		hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
+		hooks.ReduceNativeInput(nativeUserCompactionCompletedInput{queueDrained: false})
 		if ringer.total() != 0 {
 			t.Fatalf("deferred compaction emitted before drain")
 		}
-		hooks.OnTurnQueueDrained()
+		hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 		if ringer.notifications != 1 {
 			t.Fatalf("deferred compaction emitted %d notifications", ringer.notifications)
 		}
 	})
 }
 
-func TestBellHooksReducesTypedLocalDecisionsSynchronously(t *testing.T) {
+func TestNativeTurnNotificationObserverReducesTypedLocalDecisionsSynchronously(t *testing.T) {
 	t.Run("compaction before drain has precedence", func(t *testing.T) {
 		ringer := &countRinger{}
-		hooks := newUnfocusedBellHooks(ringer)
+		hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 		recordToolHeavyBellTurn(hooks, 1)
 
 		hooks.ReduceNativeInput(nativeUserCompactionCompletedInput{queueDrained: false})
@@ -551,7 +623,7 @@ func TestBellHooksReducesTypedLocalDecisionsSynchronously(t *testing.T) {
 
 	t.Run("abort clears turn and compaction", func(t *testing.T) {
 		ringer := &countRinger{}
-		hooks := newUnfocusedBellHooks(ringer)
+		hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 		recordToolHeavyBellTurn(hooks, 1)
 		hooks.ReduceNativeInput(nativeUserCompactionCompletedInput{queueDrained: false})
 
@@ -669,7 +741,24 @@ func bellAssistantDeltaMessage(step int, delta string) clientui.TranscriptMessag
 	}
 }
 
-func recordToolHeavyBellTurn(hooks *bellHooks, step int) {
+func bellBatchFinishedMessage(preview string, workPerformed bool) clientui.TranscriptMessage {
+	return clientui.TranscriptMessage{
+		Sequence: 2,
+		Kind:     clientui.TranscriptMessageLiveRunBatchFinished,
+		Payload: clientui.TranscriptPayload{
+			LiveRunBatchFinished: &clientui.TranscriptLiveRunBatchFinished{
+				Disposition:   clientui.LiveRunBatchDispositionFinalAnswer,
+				FinishedAt:    time.Unix(1, 0).UTC(),
+				WorkPerformed: workPerformed,
+				FinalAnswerPreview: &clientui.TranscriptFinalAnswerPreview{
+					Markdown: preview,
+				},
+			},
+		},
+	}
+}
+
+func recordToolHeavyBellTurn(hooks *nativeTurnNotificationObserver, step int) {
 	hooks.OnTranscriptMessage(bellToolStartMessage(step))
 	hooks.OnTranscriptMessage(bellToolStartMessage(step))
 	hooks.OnTranscriptMessage(bellAssistantFinalMessage(step))

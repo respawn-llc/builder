@@ -128,7 +128,7 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUIMarkdownLinkPresentation(terminalCapabilities.MarkdownLinks),
 		WithUIDebug(request.active.Debug),
 		WithUICommandRegistry(request.commandRegistry),
-		WithUITurnQueueHook(request.wiring.turnQueueHook),
+		WithUINativeTurnNotificationObserver(request.wiring.nativeTurnNotifications),
 		WithUIProcessClient(newUIProcessClientWithReads(request.wiring.processViews, request.wiring.processControls)),
 		WithUIWorktreeClient(request.wiring.worktrees),
 		WithUIPromptHistory(request.wiring.promptHistory),

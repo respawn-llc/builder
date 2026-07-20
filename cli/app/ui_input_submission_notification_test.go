@@ -9,11 +9,11 @@ import (
 
 func TestSubmitDoneDispatchesQueuedTurnWithoutNotificationTranscriptFacts(t *testing.T) {
 	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
+	hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 	hooks.OnTranscriptMessage(bellToolStartMessage(1))
 	hooks.OnTranscriptMessage(bellToolStartMessage(1))
 
-	model := newProjectedStaticUIModel(WithUITurnQueueHook(hooks))
+	model := newProjectedStaticUIModel(WithUINativeTurnNotificationObserver(hooks))
 	model.activeSubmit = activeSubmitState{token: 1, text: "current turn"}
 	model.setRuntimeActivityBusyForTest(true)
 	model.queued = queuedInputsForTest("next queued turn")
@@ -37,17 +37,17 @@ func TestSubmitDoneDispatchesQueuedTurnWithoutNotificationTranscriptFacts(t *tes
 
 func TestTranscriptHydrationClearsNotificationStateWithoutReplayingRows(t *testing.T) {
 	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
+	hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 	recordToolHeavyBellTurn(hooks, 1)
 
-	model := newProjectedStaticUIModel(WithUITurnQueueHook(hooks))
+	model := newProjectedStaticUIModel(WithUINativeTurnNotificationObserver(hooks))
 	hydration := ongoingHydrationMessage(1)
 	hydratedFinal := bellAssistantFinalMessageWithText(2, "hydrated historical answer")
 	hydration.Payload.Hydration.CommittedRows = []clientui.TranscriptCommittedRow{
 		*hydratedFinal.Payload.CommittedRow,
 	}
 	model.applyAdmittedTranscriptMessageState(hydration, runtimeTupleMergeResult{})
-	hooks.OnTurnQueueDrained()
+	hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 
 	if ringer.total() != 0 {
 		t.Fatalf("hydration emitted %d historical notification events", ringer.total())
@@ -56,16 +56,16 @@ func TestTranscriptHydrationClearsNotificationStateWithoutReplayingRows(t *testi
 
 func TestTranscriptSubscriptionLossClearsNotificationState(t *testing.T) {
 	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
+	hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 	recordToolHeavyBellTurn(hooks, 1)
 
-	model := newProjectedStaticUIModel(WithUITurnQueueHook(hooks))
+	model := newProjectedStaticUIModel(WithUINativeTurnNotificationObserver(hooks))
 	model.ongoingTranscript = newNoopOngoingTranscriptController(
 		&ongoingSurfaceSpy{},
 		ongoingTestFrameProvider,
 	)
 	model.handleOngoingTranscriptEvent(ongoingTranscriptEvent{Kind: ongoingTranscriptEventLoss})
-	hooks.OnTurnQueueDrained()
+	hooks.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 
 	if ringer.total() != 0 {
 		t.Fatalf("subscription loss retained %d notification events", ringer.total())
@@ -74,9 +74,9 @@ func TestTranscriptSubscriptionLossClearsNotificationState(t *testing.T) {
 
 func TestQueuedCompactionCompletionReducesBeforeDrainInSameReducerFlow(t *testing.T) {
 	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
+	hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 	recordToolHeavyBellTurn(hooks, 1)
-	model := newProjectedStaticUIModel(WithUITurnQueueHook(hooks))
+	model := newProjectedStaticUIModel(WithUINativeTurnNotificationObserver(hooks))
 	model.compactionOrigin = uiCompactionOriginManual
 	model.queued = queuedInputsForTest("next queued turn")
 
@@ -99,9 +99,9 @@ func TestQueuedCompactionCompletionReducesBeforeDrainInSameReducerFlow(t *testin
 
 func TestQueuedCompactionAbortClearsCompactionAndTurnCompletion(t *testing.T) {
 	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
+	hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 	recordToolHeavyBellTurn(hooks, 1)
-	model := newProjectedStaticUIModel(WithUITurnQueueHook(hooks))
+	model := newProjectedStaticUIModel(WithUINativeTurnNotificationObserver(hooks))
 	model.compactionOrigin = uiCompactionOriginManual
 	model.queued = queuedInputsForTest("next queued turn")
 
@@ -126,7 +126,7 @@ func TestQueuedCompactionAbortClearsCompactionAndTurnCompletion(t *testing.T) {
 
 func TestImmediateManualCompactionCompletionNotifiesOnce(t *testing.T) {
 	ringer := &countRinger{}
-	model := newProjectedStaticUIModel(WithUITurnQueueHook(newUnfocusedBellHooks(ringer)))
+	model := newProjectedStaticUIModel(WithUINativeTurnNotificationObserver(newUnfocusedNativeTurnNotificationObserver(ringer)))
 	model.compactionOrigin = uiCompactionOriginManual
 
 	_, _ = model.Update(compactDoneMsg{})
@@ -137,9 +137,9 @@ func TestImmediateManualCompactionCompletionNotifiesOnce(t *testing.T) {
 
 func TestInjectedWorkDefersCompactionNotificationUntilDrain(t *testing.T) {
 	ringer := &countRinger{}
-	hooks := newUnfocusedBellHooks(ringer)
+	hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 	recordToolHeavyBellTurn(hooks, 1)
-	model := newProjectedStaticUIModel(WithUITurnQueueHook(hooks))
+	model := newProjectedStaticUIModel(WithUINativeTurnNotificationObserver(hooks))
 	model.injectedQueueToken = 1
 	model.queuedRuntimeWorkCheckCompactionOrigin = uiCompactionOriginManual
 

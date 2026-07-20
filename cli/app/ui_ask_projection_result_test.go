@@ -14,7 +14,7 @@ import (
 func TestAskProjectionStaleProjectorPanicIsIgnored(t *testing.T) {
 	ringer := &countRinger{}
 	model := sizedTestUIModel(newProjectedStaticUIModel(WithUIDebug(true)), 64, 20)
-	model.promptAttention = newUnfocusedBellHooks(ringer)
+	model.promptAttention = newUnfocusedNativeTurnNotificationObserver(ringer)
 	model.questionProjector = func(questionRenderRequest) questionRenderResultMsg {
 		panic("stale renderer panic")
 	}
@@ -125,7 +125,7 @@ func TestAskProjectionAuthoritativeFailureExitsWithoutMutatingPrompt(t *testing.
 	logger := &testUILogger{}
 	ringer := &countRinger{}
 	model := sizedTestUIModel(newProjectedStaticUIModel(WithUILogger(logger)), 64, 20)
-	model.promptAttention = newUnfocusedBellHooks(ringer)
+	model.promptAttention = newUnfocusedNativeTurnNotificationObserver(ringer)
 	model.questionProjector = func(request questionRenderRequest) questionRenderResultMsg {
 		return questionRenderResultMsg{
 			request: request,

@@ -173,10 +173,10 @@ func (c uiInputController) finishRuntimeOperationAffordance(compacting bool) {
 
 func (c uiInputController) notifyTurnQueueDrainedIfIdle() {
 	m := c.model
-	if m.turnQueueHook == nil || m.blocksRuntimeInput() || len(m.queued) > 0 || m.ask.hasCurrent() {
+	if m.nativeTurnNotifications == nil || m.blocksRuntimeInput() || len(m.queued) > 0 || m.ask.hasCurrent() {
 		return
 	}
-	m.turnQueueHook.ReduceNativeInput(nativeTurnQueueDrainedInput{})
+	m.nativeTurnNotifications.ReduceNativeInput(nativeTurnQueueDrainedInput{})
 }
 
 func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.Cmd) {
@@ -202,8 +202,8 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	}
 	m.discardQueuedInput(activeQueuedID)
 	if msg.err != nil {
-		if m.turnQueueHook != nil {
-			m.turnQueueHook.ReduceNativeInput(nativeTurnQueueAbortedInput{})
+		if m.nativeTurnNotifications != nil {
+			m.nativeTurnNotifications.ReduceNativeInput(nativeTurnQueueAbortedInput{})
 		}
 		restoreInjectedCmd := c.restorePendingInjectedIntoInput()
 		if restoreSubmittedText {
@@ -230,8 +230,8 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	if msg.queued.ID != "" {
 		m.registerSteeredQueuedUserMessage(msg.queued)
 	}
-	if msg.silentFinal && m.turnQueueHook != nil {
-		m.turnQueueHook.ReduceNativeInput(nativeTurnQueueAbortedInput{})
+	if msg.silentFinal && m.nativeTurnNotifications != nil {
+		m.nativeTurnNotifications.ReduceNativeInput(nativeTurnQueueAbortedInput{})
 	}
 	m.conversationFreshness = clientui.ConversationFreshnessEstablished
 	m.localConversationTurn = true
@@ -357,12 +357,12 @@ func (c uiInputController) handleCompactDone(msg compactDoneMsg) (tea.Model, tea
 
 func (c uiInputController) notifyUserCompactionCompleted(origin uiCompactionOrigin, queueDrained bool) {
 	m := c.model
-	if m == nil || m.turnQueueHook == nil {
+	if m == nil || m.nativeTurnNotifications == nil {
 		return
 	}
 	switch origin {
 	case uiCompactionOriginManual, uiCompactionOriginQueued:
-		m.turnQueueHook.ReduceNativeInput(nativeUserCompactionCompletedInput{queueDrained: queueDrained})
+		m.nativeTurnNotifications.ReduceNativeInput(nativeUserCompactionCompletedInput{queueDrained: queueDrained})
 	}
 }
 

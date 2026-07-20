@@ -35,7 +35,7 @@ func TestUIEventDispatcherFansAcceptedAttentionToNativeAndLifecycle(t *testing.T
 	attentionEvents := make(chan attentionStreamOutcome, 1)
 	ringer := &countRinger{}
 	lifecycle := &recordingLifecycleAttentionSink{}
-	model := newProjectedStaticUIModel(WithUITurnQueueHook(newUnfocusedBellHooks(ringer)))
+	model := newProjectedStaticUIModel(WithUINativeTurnNotificationObserver(newUnfocusedNativeTurnNotificationObserver(ringer)))
 	model.lifecycleAttention = lifecycle
 	model.eventDispatcher.attentionEvents = attentionEvents
 	attentionEvents <- &attentionFact{
@@ -107,10 +107,10 @@ func TestBufferedTranscriptFactsCannotAffectCurrentReducerLocalDecision(t *testi
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ringer := &countRinger{}
-			hooks := newUnfocusedBellHooks(ringer)
+			hooks := newUnfocusedNativeTurnNotificationObserver(ringer)
 			transcriptEvents := make(chan ongoingTranscriptEvent, 8)
 			model := newProjectedStaticUIModel(
-				WithUITurnQueueHook(hooks),
+				WithUINativeTurnNotificationObserver(hooks),
 				WithUIOngoingTranscriptEvents(transcriptEvents),
 			)
 			model.ongoingTranscript = newOngoingTranscriptController(

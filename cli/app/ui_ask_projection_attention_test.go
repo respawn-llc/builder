@@ -11,7 +11,7 @@ import (
 func TestAskVisibleActivationNormalizesMarkdownAfterProjectionCompletes(t *testing.T) {
 	ringer := &countRinger{}
 	model := sizedTestUIModel(newProjectedStaticUIModel(), 64, 20)
-	model.promptAttention = newUnfocusedBellHooks(ringer)
+	model.promptAttention = newUnfocusedNativeTurnNotificationObserver(ringer)
 	lifecycle := &recordingLifecycleAttentionSink{}
 	model.lifecycleAttention = lifecycle
 	model.questionProjector = func(request questionRenderRequest) questionRenderResultMsg {
@@ -129,7 +129,7 @@ func TestAskInitialProjectionReadinessKeepsHelpAndGlobalCtrlC(t *testing.T) {
 func TestAskVisibleActivationOwnsNotificationTiming(t *testing.T) {
 	ringer := &countRinger{}
 	model := sizedTestUIModel(newProjectedStaticUIModel(), 64, 20)
-	model.promptAttention = newUnfocusedBellHooks(ringer)
+	model.promptAttention = newUnfocusedNativeTurnNotificationObserver(ringer)
 	prompt := testQuestionPrompt("ask-1", "Question?", "yes")
 	message := clientui.TranscriptMessage{
 		Kind: clientui.TranscriptMessagePromptPending,
@@ -191,7 +191,7 @@ func TestAskVisibleActivationOwnsNotificationTiming(t *testing.T) {
 func TestAskHydrationAdmissionEmitsNoAttentionBeforeProjection(t *testing.T) {
 	ringer := &countRinger{}
 	model := sizedTestUIModel(newProjectedStaticUIModel(), 64, 20)
-	model.promptAttention = newUnfocusedBellHooks(ringer)
+	model.promptAttention = newUnfocusedNativeTurnNotificationObserver(ringer)
 	prompt := testQuestionPrompt("ask-1", "Hydrated question?", "yes")
 
 	command := model.reconcileTranscriptPrompts([]clientui.TranscriptPrompt{prompt})

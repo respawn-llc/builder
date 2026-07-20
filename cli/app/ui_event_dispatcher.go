@@ -89,10 +89,10 @@ func (m *uiModel) reduceDispatchedEvent(message tea.Msg) uiFeatureUpdateResult {
 }
 
 func (m *uiModel) reduceAcceptedAttentionEvent(outcome attentionStreamOutcome) {
-	m.reduceAcceptedAttentionEventWithNative(outcome, m.turnQueueHook)
+	m.reduceAcceptedAttentionEventWithNative(outcome, m.nativeTurnNotifications)
 }
 
-func (m *uiModel) reduceAcceptedAttentionEventWithNative(outcome attentionStreamOutcome, native *bellHooks) {
+func (m *uiModel) reduceAcceptedAttentionEventWithNative(outcome attentionStreamOutcome, native *nativeTurnNotificationObserver) {
 	if m == nil {
 		return
 	}
@@ -110,7 +110,7 @@ type lifecycleAttentionFactSink interface {
 	AcceptAttentionFact(attentionFact)
 }
 
-func (m *uiModel) fanOutAcceptedAttentionFact(fact attentionFact, native *bellHooks) {
+func (m *uiModel) fanOutAcceptedAttentionFact(fact attentionFact, native *nativeTurnNotificationObserver) {
 	if native != nil {
 		native.OnAttentionFact(fact)
 	}
