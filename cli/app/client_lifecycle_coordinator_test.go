@@ -15,8 +15,9 @@ type recordingLifecycleEnvelopeSink struct {
 	envelopes []lifecyclecontract.Envelope
 }
 
-func (s *recordingLifecycleEnvelopeSink) AcceptLifecycleEnvelope(envelope lifecyclecontract.Envelope) {
+func (s *recordingLifecycleEnvelopeSink) EnqueueLifecycleEnvelope(envelope lifecyclecontract.Envelope) bool {
 	s.envelopes = append(s.envelopes, envelope)
+	return true
 }
 
 func TestClientLifecycleCoordinatorEmitsImmediateTaskCompletion(t *testing.T) {

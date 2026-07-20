@@ -12,7 +12,7 @@ import (
 )
 
 type lifecycleEnvelopeSink interface {
-	AcceptLifecycleEnvelope(lifecyclecontract.Envelope)
+	EnqueueLifecycleEnvelope(lifecyclecontract.Envelope) bool
 }
 
 type clientLifecycleCoordinator struct {
@@ -170,7 +170,7 @@ func (c *clientLifecycleCoordinator) emit(
 	if err != nil {
 		panic(fmt.Sprintf("build client lifecycle envelope for %q: %v", category, err))
 	}
-	c.sink.AcceptLifecycleEnvelope(envelope)
+	c.sink.EnqueueLifecycleEnvelope(envelope)
 }
 
 func (c *clientLifecycleCoordinator) currentContext() lifecyclecontract.Context {
