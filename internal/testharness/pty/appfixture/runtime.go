@@ -27,12 +27,21 @@ import (
 )
 
 type ScriptFile struct {
-	Prompt         string                    `json:"prompt"`
-	StreamDeltas   []string                  `json:"stream_deltas"`
-	StreamDelayMS  *int                      `json:"stream_delay_ms"`
-	Final          string                    `json:"final"`
-	Steps          []StepFile                `json:"steps"`
-	SeedTranscript []SeedTranscriptEntryFile `json:"seed_transcript"`
+	Prompt              string                    `json:"prompt"`
+	StreamDeltas        []string                  `json:"stream_deltas"`
+	StreamDelayMS       *int                      `json:"stream_delay_ms"`
+	Final               string                    `json:"final"`
+	Steps               []StepFile                `json:"steps"`
+	SeedTranscript      []SeedTranscriptEntryFile `json:"seed_transcript"`
+	InputTokenCount     *int                      `json:"input_token_count"`
+	ContextWindowTokens *int                      `json:"context_window_tokens"`
+	Compactions         []CompactionFile          `json:"compactions"`
+}
+
+type CompactionFile struct {
+	Summary           string `json:"summary"`
+	TrimmedItemsCount int    `json:"trimmed_items_count"`
+	InputTokensAfter  int    `json:"input_tokens_after"`
 }
 
 type SeedTranscriptEntryFile struct {
@@ -186,7 +195,52 @@ func loadScript(
 	if newAfterResponse != nil {
 		steps[len(steps)-1].AfterResponse = newAfterResponse(targetFinalAssistantOrdinal)
 	}
-	return file, scriptedllm.Script{Steps: steps}, targetFinalAssistantOrdinal, nil
+	compactions, err := scriptedCompactions(file.Compactions)
+	if err != nil {
+		return ScriptFile{}, scriptedllm.Script{}, 0, err
+	}
+	return file, scriptedllm.Script{
+		Steps:               steps,
+		Compactions:         compactions,
+		InputTokenCount:     file.InputTokenCount,
+		ContextWindowTokens: file.ContextWindowTokens,
+	}, targetFinalAssistantOrdinal, nil
+}
+
+func scriptedCompactions(specs []CompactionFile) ([]llm.CompactionResponse, error) {
+	responses := make([]llm.CompactionResponse, 0, len(specs))
+	for index, spec := range specs {
+		if strings.TrimSpace(spec.Summary) == "" {
+			return nil, fmt.Errorf("compaction %d summary is required", index)
+		}
+		if spec.TrimmedItemsCount < 0 {
+			return nil, fmt.Errorf("compaction %d trimmed_items_count must not be negative", index)
+		}
+		if spec.InputTokensAfter <= 0 {
+			return nil, fmt.Errorf("compaction %d input_tokens_after must be positive", index)
+		}
+		trimmed := spec.TrimmedItemsCount
+		responses = append(responses, llm.CompactionResponse{
+			OutputItems: []llm.ResponseItem{
+				{
+					Type:    llm.ResponseItemTypeMessage,
+					Role:    llm.RoleUser,
+					Content: spec.Summary,
+				},
+				{
+					Type:             llm.ResponseItemTypeCompaction,
+					ID:               fmt.Sprintf("fixture-compaction-%d", index+1),
+					EncryptedContent: fmt.Sprintf("fixture-encrypted-compaction-%d", index+1),
+				},
+			},
+			Usage: llm.Usage{
+				InputTokens:  spec.InputTokensAfter,
+				WindowTokens: spec.InputTokensAfter,
+			},
+			TrimmedItemsCount: &trimmed,
+		})
+	}
+	return responses, nil
 }
 
 func deriveTargetFinalAssistantOrdinal(steps []scriptedllm.Step) (ScriptFinalAssistantOrdinal, error) {

@@ -74,6 +74,9 @@ func (c *Client) Compact(_ context.Context, req llm.CompactionRequest) (llm.Comp
 	}
 	response := c.compactions[0]
 	c.compactions = c.compactions[1:]
+	if response.Usage.InputTokens > 0 {
+		c.inputTokens = response.Usage.InputTokens
+	}
 	response.TrimmedItemsCount = textutil.Pointer(response.TrimmedItemsCount)
 	return response, nil
 }
@@ -92,7 +95,13 @@ func materializeCapabilities(caps *llm.ProviderCapabilities) llm.ProviderCapabil
 }
 
 func DefaultProviderCapabilities() llm.ProviderCapabilities {
-	return llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}
+	return llm.ProviderCapabilities{
+		ProviderID:                     "openai",
+		SupportsResponsesAPI:           true,
+		SupportsResponsesCompact:       true,
+		SupportsRequestInputTokenCount: true,
+		IsOpenAIFirstParty:             true,
+	}
 }
 
 func (c *Client) CountRequestInputTokens(context.Context, llm.Request) (int, error) {

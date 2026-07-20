@@ -114,6 +114,17 @@ func TestClientCompactionCapabilitiesTokensAndContextWindow(t *testing.T) {
 	}
 }
 
+func TestClientDefaultCapabilitiesAdvertiseImplementedCompactionContracts(t *testing.T) {
+	client := scriptedllm.NewClient(scriptedllm.Script{})
+	caps, err := client.ProviderCapabilities(context.Background())
+	if err != nil {
+		t.Fatalf("ProviderCapabilities: %v", err)
+	}
+	if !caps.SupportsResponsesCompact || !caps.SupportsRequestInputTokenCount {
+		t.Fatalf("default scripted capabilities = %+v, want compaction and exact token counting", caps)
+	}
+}
+
 func TestClientCompactionPreservesReportedZeroAndUnavailableCount(t *testing.T) {
 	zero := 0
 	client := scriptedllm.NewClient(scriptedllm.Script{
