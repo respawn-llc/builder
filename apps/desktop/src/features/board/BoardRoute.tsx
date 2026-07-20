@@ -292,10 +292,6 @@ function BoardContent({
     }
     const dropAction = classifyDrop(column, dragPayload, firstActive?.id);
     if (dropAction.kind === "start") {
-      if (!board.selectedWorkflow.validForTaskCreation) {
-        reportRejectedDrop();
-        return;
-      }
       const pendingMove = { taskID: dragPayload.taskID, targetColumnID: column.id };
       runCardAction(startExecutionTargetAction(dragPayload.taskID), pendingMove);
       return;
@@ -392,9 +388,7 @@ function BoardContent({
       return "blocked";
     }
     const action = classifyDrop(column, activeDrag.payload, firstActive?.id);
-    if (action.kind === "start") {
-      return board.selectedWorkflow.validForTaskCreation ? "allowed" : "blocked";
-    }
+    if (action.kind === "start") return "allowed";
     return activeDrag.payload.manualMoveTargetNodeIDs.includes(column.id) ? "allowed" : "blocked";
   }
 

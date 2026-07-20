@@ -70,6 +70,37 @@ describe("BoardRoute native drag lifecycle", () => {
     });
   });
 
+  it("starts an existing Backlog task even when the workflow cannot create another task", async () => {
+    const services = boardTestServices(
+      () => true,
+      false,
+      {
+        ...sourceCard,
+        actions: {
+          ...sourceCard.actions,
+          can_start: true,
+          manual_move_target_node_ids: [],
+        },
+      },
+    );
+    render(<App services={services} />);
+    const source = await screen.findByRole("article", { name: "Drag source" });
+    const recon = screen.getByRole("listitem", { name: "Recon" });
+    const dataTransfer = new TestDataTransfer();
+
+    fireEvent.dragStart(source, { dataTransfer });
+    fireEvent.drop(recon, { dataTransfer });
+
+    await waitFor(() => {
+      const calls = taskActionCalls(services.transport.calls);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        method: "workflow.task.start",
+        params: { task_id: "task-1" },
+      });
+    });
+  });
+
   it("activates from a real card and keeps both scrollports moving through an in-board null-target dragleave", async () => {
     const { source, root, backlogScrollport: column, dataTransfer } = await renderActiveBoard(frames);
     setScrollportGeometry(root, {
@@ -316,7 +347,11 @@ async function renderActiveBoard(frames: FakeAnimationFrames) {
   };
 }
 
-function boardTestServices(sourcePresent: () => boolean = () => true, validForTaskCreation = true) {
+function boardTestServices(
+  sourcePresent: () => boolean = () => true,
+  validForTaskCreation = true,
+  card = sourceCard,
+) {
   return createTestServices([
     ...startupRoutes,
     {
@@ -326,7 +361,18 @@ function boardTestServices(sourcePresent: () => boolean = () => true, validForTa
     {
       method: "workflow.board.nodeCards.list",
       handler: (params: JsonValue) =>
-        nodeCardsResponse(nodeID(params), sourcePresent() && nodeID(params) === "backlog"),
+        nodeCardsResponse(nodeID(params), sourcePresent() && nodeID(params) === "backlog", card),
+    },
+    {
+      method: "workflow.task.start",
+      result: {
+        outcome: "applied",
+        applied: {
+          task_id: "task-1",
+          placement_ids: ["placement-1"],
+          run_ids: ["run-1"],
+        },
+      },
     },
     {
       method: "workflow.task.move",
@@ -355,12 +401,12 @@ function nodeID(params: JsonValue): string {
   return nodeCardsRequestSchema.parse(params).node_id;
 }
 
-function nodeCardsResponse(nodeIDValue: string, includeSource: boolean) {
+function nodeCardsResponse(nodeIDValue: string, includeSource: boolean, card = sourceCard) {
   return {
     project_id: "project-1",
     workflow_id: "workflow-1",
     node_id: nodeIDValue,
-    cards: includeSource ? [sourceCard] : [],
+    cards: includeSource ? [card] : [],
     previous_page_token: null,
     next_page_token: null,
     generated_at_unix_ms: 1,

@@ -138,18 +138,10 @@ func (e *execution) stopError() error {
 
 func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) {
 	cleanupErr := e.cleanup()
+	e.retire()
 
 	authority := e.authority
 	workflowRef, hasWorkflow := e.scope.Workflow()
-	authority.mu.Lock()
-	if authority.byScope[e.scope.ID()] == e {
-		delete(authority.byScope, e.scope.ID())
-	}
-	if hasWorkflow && authority.byWorkflow[workflowRef] == e {
-		delete(authority.byWorkflow, workflowRef)
-	}
-	authority.mu.Unlock()
-
 	var closeErr error
 	if e.resource != nil {
 		if e.resource.eventBridge != nil {
@@ -179,6 +171,19 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 		authority.executionFinalized.ExecutionFinalized(workflowRef)
 	}
 	close(e.done)
+}
+
+func (e *execution) retire() {
+	authority := e.authority
+	workflowRef, hasWorkflow := e.scope.Workflow()
+	authority.mu.Lock()
+	if authority.byScope[e.scope.ID()] == e {
+		delete(authority.byScope, e.scope.ID())
+	}
+	if hasWorkflow && authority.byWorkflow[workflowRef] == e {
+		delete(authority.byWorkflow, workflowRef)
+	}
+	authority.mu.Unlock()
 }
 
 func (e *execution) cleanup() error {
@@ -339,6 +344,12 @@ func (s *executionPromptStore) Close(err error) {
 		entry.response <- executionPromptResult{err: err}
 		s.publishResolved(entry.snapshot)
 	}
+}
+
+func (s *executionPromptStore) hasPending() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.pending) != 0
 }
 
 func (s *executionPromptStore) publishPending(snapshot ExecutionPromptSnapshot) {

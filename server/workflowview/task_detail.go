@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 
 	"core/server/metadata"
@@ -102,6 +104,10 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
+	currentRunFacts, err := d.queries.ListWorkflowTaskCurrentRunFacts(ctx, task.ID)
+	if err != nil {
+		return serverapi.WorkflowTaskDetail{}, err
+	}
 	projectState, err := d.queries.GetProjectKeyState(ctx, task.ProjectID)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
@@ -129,10 +135,15 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	targets, err := d.authority.CurrentTaskExecutionTargets(workflow.TaskID(task.ID))
+	snapshot, err := d.authority.CurrentTaskExecutionSnapshot(workflow.TaskID(task.ID))
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
+	currentExecutions, err := currentTaskExecutions(task.ID, currentRunFacts, snapshot.Executions)
+	if err != nil {
+		return serverapi.WorkflowTaskDetail{}, err
+	}
+	statusFact = taskDetailStatusFact(statusFact, currentExecutions)
 	attentionCount, err := d.queries.CountWorkflowTaskAttentionCandidates(ctx, task.ID)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
@@ -159,22 +170,127 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 		SourceWorkspace:   sourceWorkspace,
 		ExecutionTarget:   executionTarget,
 		WorktreePath:      worktreePath,
-		CurrentSessionIDs: make([]string, 0, len(targets.SessionIDs)),
-		CurrentScripts:    make([]serverapi.WorkflowTaskCurrentScript, 0, len(targets.Scripts)),
+		CurrentSessionIDs: make([]string, 0, len(currentExecutions)),
+		CurrentScripts:    make([]serverapi.WorkflowTaskCurrentScript, 0, len(currentExecutions)),
 		Status:            statusFact.Status,
-		Actions:           taskDetailActions(task, statusFact, targets.HasExecutions),
+		Actions:           taskDetailActions(task, statusFact, len(currentExecutions) != 0),
 		AttentionCount:    int(attentionCount),
 	}
-	for _, sessionID := range targets.SessionIDs {
-		detail.CurrentSessionIDs = append(detail.CurrentSessionIDs, sessionID.String())
+	for _, execution := range currentExecutions {
+		switch {
+		case execution.Agent != nil:
+			detail.CurrentSessionIDs = append(detail.CurrentSessionIDs, execution.Agent.SessionID.String())
+		case execution.Script != nil:
+			detail.CurrentScripts = append(detail.CurrentScripts, serverapi.WorkflowTaskCurrentScript{
+				RunID: string(execution.Ref.RunID),
+				Path:  execution.Script.Path,
+			})
+		default:
+			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("task %q live execution %q has no target", task.ID, execution.Ref.RunID)
+		}
 	}
-	for _, script := range targets.Scripts {
-		detail.CurrentScripts = append(detail.CurrentScripts, serverapi.WorkflowTaskCurrentScript{
-			RunID: string(script.RunID),
-			Path:  script.Path,
+	sort.Strings(detail.CurrentSessionIDs)
+	return detail, nil
+}
+
+func currentTaskExecutions(taskID string, rows []sqlitegen.ListWorkflowTaskCurrentRunFactsRow, executions []sessionruntime.TaskExecution) ([]sessionruntime.TaskExecution, error) {
+	type durableRunFact struct {
+		waitingQuestion bool
+	}
+	durable := make(map[sessionruntime.WorkflowExecutionRef]durableRunFact, len(rows))
+	for _, row := range rows {
+		ref := sessionruntime.WorkflowExecutionRef{
+			TaskID:     workflow.TaskID(taskID),
+			RunID:      workflow.RunID(row.ID),
+			Generation: row.RunGeneration,
+		}
+		if _, exists := durable[ref]; exists {
+			return nil, fmt.Errorf("task %q has duplicate current run %q generation %d", taskID, row.ID, row.RunGeneration)
+		}
+		durable[ref] = durableRunFact{waitingQuestion: row.WaitingAskID.Valid}
+	}
+	current := make([]sessionruntime.TaskExecution, 0, len(executions))
+	for _, execution := range executions {
+		fact, exists := durable[execution.Ref]
+		if !exists {
+			continue
+		}
+		execution.WaitingQuestion = execution.WaitingQuestion && fact.waitingQuestion
+		current = append(current, execution)
+	}
+	return current, nil
+}
+
+func taskDetailStatusFact(durable workflowTaskStatusFact, current []sessionruntime.TaskExecution) workflowTaskStatusFact {
+	if durable.Done || durable.Status.Kind == serverapi.WorkflowTaskStatusKindCanceled {
+		return durable
+	}
+	liveRunIDs := make([]string, 0, len(current))
+	hasWaitingQuestion := false
+	for _, execution := range current {
+		liveRunIDs = append(liveRunIDs, string(execution.Ref.RunID))
+		hasWaitingQuestion = hasWaitingQuestion || execution.WaitingQuestion
+	}
+	sort.Strings(liveRunIDs)
+	switch {
+	case hasWaitingQuestion:
+		return workflowTaskStatusFact{
+			Status: taskDetailStatus(durable.Status, serverapi.WorkflowTaskStatusKindWaitingQuestion, liveRunIDs, true),
+		}
+	case durable.Status.Kind == serverapi.WorkflowTaskStatusKindWaitingApproval:
+		durable.Status.RunIDs = sortedUniqueStrings(durable.Status.RunIDs, liveRunIDs)
+		return durable
+	case len(current) != 0:
+		return workflowTaskStatusFact{
+			Status: taskDetailStatus(durable.Status, serverapi.WorkflowTaskStatusKindRunning, liveRunIDs, false),
+		}
+	case durable.Status.Kind == serverapi.WorkflowTaskStatusKindRunning ||
+		durable.Status.Kind == serverapi.WorkflowTaskStatusKindQueued ||
+		durable.Status.Kind == serverapi.WorkflowTaskStatusKindWaitingQuestion:
+		return workflowTaskStatusFact{
+			Status: taskDetailStatus(durable.Status, serverapi.WorkflowTaskStatusKindActive, nil, false),
+		}
+	default:
+		return durable
+	}
+}
+
+func sortedUniqueStrings(groups ...[]string) []string {
+	seen := make(map[string]struct{})
+	for _, group := range groups {
+		for _, value := range group {
+			seen[value] = struct{}{}
+		}
+	}
+	values := make([]string, 0, len(seen))
+	for value := range seen {
+		values = append(values, value)
+	}
+	sort.Strings(values)
+	return values
+}
+
+func taskDetailStatus(current serverapi.WorkflowTaskStatus, kind serverapi.WorkflowTaskStatusKind, runIDs []string, question bool) serverapi.WorkflowTaskStatus {
+	nativeState, ok := kind.NativeState()
+	if !ok {
+		panic(fmt.Sprintf("task detail status kind %q has no native state", kind))
+	}
+	current.Kind = kind
+	current.NativeState = nativeState
+	current.RunIDs = append([]string(nil), runIDs...)
+	current.AttentionTypes = slices.DeleteFunc(
+		append([]serverapi.WorkflowTaskAttentionKind(nil), current.AttentionTypes...),
+		func(value serverapi.WorkflowTaskAttentionKind) bool {
+			return value == serverapi.WorkflowTaskAttentionKindQuestion
+		},
+	)
+	if question {
+		current.AttentionTypes = append(current.AttentionTypes, serverapi.WorkflowTaskAttentionKindQuestion)
+		sort.Slice(current.AttentionTypes, func(i, j int) bool {
+			return current.AttentionTypes[i] < current.AttentionTypes[j]
 		})
 	}
-	return detail, nil
+	return current
 }
 
 func (d *TaskDetail) sourceWorkspace(ctx context.Context, task sqlitegen.TaskRecord, primaryWorkspaceID string) (serverapi.ProjectWorkspaceSummary, error) {

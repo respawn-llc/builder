@@ -1312,6 +1312,20 @@ FROM workflow_task_status_records
 WHERE task_id = sqlc.arg(task_id)
 LIMIT 1;
 
+-- name: ListWorkflowTaskCurrentRunFacts :many
+SELECT
+    r.id,
+    r.run_generation,
+    r.waiting_ask_id
+FROM task_run_records r
+JOIN task_node_placements p ON p.id = r.placement_id
+WHERE r.task_id = sqlc.arg(task_id)
+  AND r.started_at_unix_ms IS NOT NULL
+  AND r.completed_at_unix_ms IS NULL
+  AND r.interrupted_at_unix_ms IS NULL
+  AND p.state = 'active'
+ORDER BY r.id ASC;
+
 -- name: ListWorkflowTaskStatusRecordsByTasks :many
 SELECT
     task_id,
