@@ -818,6 +818,9 @@ func (e *Engine) modelRequests() *modelRequestRuntimeState {
 }
 
 func (e *Engine) emitRaw(evt Event) {
+	if evt.Kind == EventToolCallStarted && e.liveRun != nil {
+		e.liveRun.recordToolStart(evt.StepID)
+	}
 	evt.TranscriptRevision = e.TranscriptRevision()
 	carriesCommittedRange := eventShouldCarryCommittedEntryCount(evt)
 	if !carriesCommittedRange {
@@ -846,6 +849,15 @@ func (e *Engine) emitRaw(evt Event) {
 	if e.cfg.OnEvent != nil {
 		e.cfg.OnEvent(evt)
 	}
+}
+
+func (e *Engine) publishLiveRunFinished(result LiveRunResult) {
+	copyResult := result
+	e.emitRaw(Event{
+		Kind:          EventLiveRunFinished,
+		StepID:        result.StepID.String(),
+		LiveRunResult: &copyResult,
+	})
 }
 
 func eventShouldCarryContextUsage(evt Event) bool {

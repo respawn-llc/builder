@@ -43,6 +43,7 @@ const (
 	EventPromptHistoryPersistFailed EventKind = "prompt_history_persist_failed"
 	EventGoalStatusUpdated          EventKind = "goal_status_updated"
 	EventQueuedUserMessageStatus    EventKind = "queued_user_message_status"
+	EventLiveRunFinished            EventKind = "live_run_finished"
 
 	AssistantStreamAbortSuperseded AssistantStreamAbortReason = "superseded"
 )
@@ -129,6 +130,7 @@ type Event struct {
 	Background                   *BackgroundShellEvent
 	GoalStatus                   *GoalStatusUpdate
 	QueuedUserMessageStatus      *QueuedUserMessageStatusEvent
+	LiveRunResult                *LiveRunResult
 }
 
 type GoalStatusUpdate struct {
