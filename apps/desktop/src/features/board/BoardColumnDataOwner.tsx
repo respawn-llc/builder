@@ -6,6 +6,7 @@ import { errorMessage } from "@/api";
 import type { VirtualizedInfiniteListBoundaryState } from "@/ui";
 import { cardBelongsToColumn } from "./BoardCardMotionModel";
 import { toKanbanCardVM, type KanbanCardVM } from "./BoardColumnViewModel";
+import { useBoardFilterGeneration } from "./BoardFilterGenerationRuntime";
 import { useBoardNodeCards } from "./useBoardData";
 import { useObservedInterruptedRuns } from "./useObservedInterruptedRuns";
 
@@ -58,6 +59,7 @@ export function BoardColumnDataOwner({
   onReportColumnSnapshot: (columnID: string, snapshot: BoardColumnQuerySnapshot) => void;
 }>) {
   const { t } = useTranslation();
+  const filterGeneration = useBoardFilterGeneration();
   const cardsQuery = useBoardNodeCards(board.projectID, board.selectedWorkflow.id, column.id, true);
   const generationRef = useRef(0);
   const hasHydratedRef = useRef(false);
@@ -92,22 +94,28 @@ export function BoardColumnDataOwner({
     isFetching,
     isFetchingNextPage,
     isFetchingPreviousPage,
+    isPlaceholderData,
     isPending,
     refetch,
   } = cardsQuery;
+  const requestEnabled =
+    !filterGeneration.snapshot.active.retiring && filterGeneration.snapshot.desiredFilter === null;
+  const paginationEnabled = requestEnabled && !isPlaceholderData && cardsQuery.data !== undefined;
   const retryInitial = useCallback(() => {
-    void refetch();
-  }, [refetch]);
+    if (requestEnabled) {
+      void refetch();
+    }
+  }, [refetch, requestEnabled]);
   const loadNewer = useCallback(() => {
-    if (hasPreviousPage && !isFetchingPreviousPage) {
+    if (paginationEnabled && hasPreviousPage && !isFetchingPreviousPage) {
       void fetchPreviousPage();
     }
-  }, [fetchPreviousPage, hasPreviousPage, isFetchingPreviousPage]);
+  }, [fetchPreviousPage, hasPreviousPage, isFetchingPreviousPage, paginationEnabled]);
   const loadOlder = useCallback(() => {
-    if (hasNextPage && !isFetchingNextPage) {
+    if (paginationEnabled && hasNextPage && !isFetchingNextPage) {
       void fetchNextPage();
     }
-  }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage, paginationEnabled]);
   const initialBoundary = useMemo<VirtualizedInfiniteListBoundaryState | undefined>(
     () =>
       cardsQuery.data === undefined
@@ -152,15 +160,15 @@ export function BoardColumnDataOwner({
   const dataView = useMemo<BoardColumnDataView>(
     () => ({
       cards: cardVMs,
-      hasNextPage,
-      hasPreviousPage,
+      hasNextPage: paginationEnabled && hasNextPage,
+      hasPreviousPage: paginationEnabled && hasPreviousPage,
       initialBoundary,
-      isFetchingNextPage,
-      isFetchingPreviousPage,
-      nextBoundary,
+      isFetchingNextPage: paginationEnabled && isFetchingNextPage,
+      isFetchingPreviousPage: paginationEnabled && isFetchingPreviousPage,
+      nextBoundary: paginationEnabled ? nextBoundary : undefined,
       onLoadMore: loadOlder,
       onLoadPrevious: loadNewer,
-      previousBoundary,
+      previousBoundary: paginationEnabled ? previousBoundary : undefined,
     }),
     [
       cardVMs,
@@ -172,6 +180,7 @@ export function BoardColumnDataOwner({
       loadOlder,
       loadNewer,
       nextBoundary,
+      paginationEnabled,
       previousBoundary,
     ],
   );

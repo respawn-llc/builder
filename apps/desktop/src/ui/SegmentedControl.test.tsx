@@ -30,9 +30,9 @@ describe("SegmentedControl", () => {
 
     render(<Harness />);
 
-    const any = screen.getByRole("radio", { name: "OR" });
+    const anyOption = screen.getByRole("radio", { name: "OR" });
     const all = screen.getByRole("radio", { name: "AND" });
-    expect(any).toBeChecked();
+    expect(anyOption).toBeChecked();
     expect(all).not.toBeChecked();
 
     await user.click(all);
@@ -40,7 +40,7 @@ describe("SegmentedControl", () => {
     expect(all).toBeChecked();
 
     act(() => {
-      any.focus();
+      anyOption.focus();
     });
     await user.keyboard("{ArrowRight}");
     expect(onValueChange).toHaveBeenLastCalledWith("all");

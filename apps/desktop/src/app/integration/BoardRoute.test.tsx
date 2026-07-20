@@ -1,12 +1,25 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { App } from "../startup/App";
 import { appI18n, initializeI18n } from "@/i18n";
 import { createTestServices, startupRoutes } from "@/test-support/app-services";
+import { installTestStorage } from "@/test-support/storage";
+import { showStatusToast } from "@/ui";
+import type * as UiModule from "@/ui";
+
+vi.mock("@/ui", async (importOriginal) => ({
+  ...(await importOriginal<typeof UiModule>()),
+  showStatusToast: vi.fn(),
+}));
 
 void initializeI18n();
 
 describe("BoardRoute live refresh", () => {
+  beforeEach(() => {
+    installTestStorage("localStorage");
+    vi.mocked(showStatusToast).mockClear();
+  });
+
   it("preserves an explicitly empty route selector at the transport boundary", async () => {
     window.history.pushState(null, "", "/projects/project-1?workflowId=");
     const services = createTestServices([
@@ -135,10 +148,230 @@ describe("BoardRoute live refresh", () => {
 
     expect(await screen.findByRole("list")).toBeInTheDocument();
     expect(screen.getByRole("navigation")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: appI18n.t("labels.filter") })).toBeEnabled();
     expect(screen.getByRole("button", { name: appI18n.t("board.newTask") })).toBeEnabled();
     expect(
       screen.queryByRole("button", { name: appI18n.t("workflowLibrary.createWorkflow") }),
     ).not.toBeInTheDocument();
+  });
+
+  it("reactively requests the persisted unlabeled expression from the board filter", async () => {
+    window.history.pushState(null, "", "/projects/project-1?workflowId=workflow-1");
+    const services = createTestServices([
+      ...startupRoutes,
+      {
+        method: "workflow.board.get",
+        result: boardWithWorkflowResponse,
+      },
+    ]);
+
+    render(<App services={services} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: appI18n.t("labels.filter") }));
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("labels.unlabeled") }));
+
+    await waitFor(() => {
+      expect(boardCalls(services).at(-1)?.params).toEqual({
+        project_id: "project-1",
+        workflow_id: "workflow-1",
+        label_filter: { kind: "unlabeled" },
+      });
+    });
+    expect(
+      screen.getByRole("button", {
+        expanded: true,
+        name: appI18n.t("labels.unlabeled"),
+      }),
+    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: appI18n.t("labels.clearFilter") })).toBeEnabled();
+  });
+
+  it("keeps the current board visible without a loader while a replacement filter is pending", async () => {
+    window.history.pushState(null, "", "/projects/project-1?workflowId=workflow-1");
+    let resolveFilteredBoard: ((value: typeof boardWithWorkflowResponse) => void) | undefined;
+    const filteredBoard = new Promise<typeof boardWithWorkflowResponse>((resolve) => {
+      resolveFilteredBoard = resolve;
+    });
+    const services = createTestServices([
+      ...startupRoutes,
+      {
+        method: "workflow.board.get",
+        handler: async (_params, callIndex) => {
+          if (callIndex === 0) {
+            return boardWithWorkflowResponse;
+          }
+          return filteredBoard;
+        },
+      },
+    ]);
+
+    render(<App services={services} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: appI18n.t("labels.filter") }));
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("labels.unlabeled") }));
+    await waitFor(() => {
+      expect(boardCalls(services)).toHaveLength(2);
+    });
+
+    expect(screen.getByTestId("board-scrollport")).toBeInTheDocument();
+    expect(screen.queryByTestId("loading-state")).not.toBeInTheDocument();
+    act(() => {
+      resolveFilteredBoard?.(boardWithWorkflowResponse);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("board-scrollport")).toBeInTheDocument();
+    });
+  });
+
+  it("keeps the current board visible and offers Retry after the newest filter fails", async () => {
+    window.history.pushState(null, "", "/projects/project-1?workflowId=workflow-1");
+    let rejectFilteredBoard: ((error: Error) => void) | undefined;
+    const filteredBoard = new Promise<never>((_resolve, reject) => {
+      rejectFilteredBoard = reject;
+    });
+    const services = createTestServices([
+      ...startupRoutes,
+      {
+        method: "workflow.board.get",
+        handler: async (_params, callIndex) => {
+          if (callIndex === 0) {
+            return boardWithWorkflowResponse;
+          }
+          return filteredBoard;
+        },
+      },
+    ]);
+
+    render(<App services={services} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: appI18n.t("labels.filter") }));
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("labels.unlabeled") }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        expanded: true,
+        name: appI18n.t("labels.unlabeled"),
+      }),
+    );
+    await waitFor(() => {
+      expect(boardCalls(services)).toHaveLength(2);
+    });
+    act(() => {
+      rejectFilteredBoard?.(new Error("filtered board failed"));
+    });
+
+    await waitFor(
+      () => {
+        expect(boardCalls(services)).toHaveLength(3);
+      },
+      { timeout: 2_500 },
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("board-scrollport")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: appI18n.t("app.retry") })).toBeEnabled();
+    });
+  });
+
+  it("restores one Project filter across relaunch and another linked workflow", async () => {
+    window.history.pushState(null, "", "/projects/project-1?workflowId=workflow-1");
+    const firstServices = createTestServices([
+      ...startupRoutes,
+      {
+        method: "workflow.board.get",
+        result: boardWithWorkflowResponse,
+      },
+    ]);
+    const view = render(<App services={firstServices} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: appI18n.t("labels.filter") }));
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("labels.unlabeled") }));
+    await waitFor(() => {
+      expect(boardCalls(firstServices).at(-1)?.params).toMatchObject({
+        label_filter: { kind: "unlabeled" },
+      });
+      expect(globalThis.localStorage.length).toBeGreaterThan(0);
+    });
+    view.unmount();
+
+    window.history.pushState(null, "", "/projects/project-1?workflowId=workflow-2");
+    const secondServices = createTestServices([
+      ...startupRoutes,
+      {
+        method: "workflow.board.get",
+        result: boardWithWorkflowResponse,
+      },
+    ]);
+    render(<App services={secondServices} />);
+
+    await waitFor(() => {
+      expect(boardCalls(secondServices)).toHaveLength(1);
+    });
+    expect(boardCalls(secondServices)[0]?.params).toEqual({
+      project_id: "project-1",
+      workflow_id: "workflow-2",
+      label_filter: { kind: "unlabeled" },
+    });
+  });
+
+  it("replaces displayed column counts with the active server-filtered counts", async () => {
+    window.history.pushState(null, "", "/projects/project-1?workflowId=workflow-1");
+    const services = createTestServices([
+      ...startupRoutes,
+      {
+        method: "workflow.board.get",
+        handler: (_params, callIndex) =>
+          callIndex === 0 ? boardWithBacklogCount(7) : boardWithBacklogCount(2),
+      },
+      {
+        method: "workflow.board.nodeCards.list",
+        result: emptyBacklogCards,
+      },
+    ]);
+
+    render(<App services={services} />);
+
+    expect(await screen.findByTestId("kanban-column-task-count-backlog")).toHaveTextContent("7");
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("labels.filter") }));
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("labels.unlabeled") }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("kanban-column-task-count-backlog")).toHaveTextContent("2");
+    });
+  });
+
+  it("keeps filtering in memory and visibly reports a persistence failure", async () => {
+    window.history.pushState(null, "", "/projects/project-1?workflowId=workflow-1");
+    const storage = globalThis.localStorage;
+    const services = createTestServices([
+      ...startupRoutes,
+      {
+        method: "workflow.board.get",
+        result: boardWithWorkflowResponse,
+      },
+    ]);
+
+    render(<App services={services} />);
+
+    const filterButton = await screen.findByRole("button", { name: appI18n.t("labels.filter") });
+    storage.setItem = () => {
+      throw new Error("storage write failed");
+    };
+    fireEvent.click(filterButton);
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("labels.unlabeled") }));
+
+    await waitFor(() => {
+      expect(boardCalls(services).at(-1)?.params).toMatchObject({
+        label_filter: { kind: "unlabeled" },
+      });
+    });
+    await waitFor(() => {
+      expect(showStatusToast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "board-load-error",
+          title: appI18n.t("board.loadFailed"),
+          tone: "danger",
+        }),
+      );
+    });
   });
 });
 
@@ -178,4 +411,49 @@ const boardWithWorkflowResponse = {
     selected_workflow: selectedWorkflow,
     workflows: [selectedWorkflow],
   },
+};
+
+function boardWithBacklogCount(taskCount: number) {
+  return {
+    board: {
+      ...boardWithWorkflowResponse.board,
+      groups: [
+        {
+          group_id: "group-backlog",
+          key: "backlog",
+          display_name: "Backlog",
+          sort_order: 0,
+          node_ids: ["backlog"],
+        },
+      ],
+      columns: [
+        {
+          node: {
+            node_id: "backlog",
+            key: "backlog",
+            kind: "backlog",
+            display_name: "Backlog",
+            assignee_role: "",
+            output_fields: [],
+            transition_output_fields: [],
+          },
+          group_id: "group-backlog",
+          sort_order: 0,
+          is_backlog: true,
+          is_done: false,
+          task_count: taskCount,
+        },
+      ],
+    },
+  };
+}
+
+const emptyBacklogCards = {
+  project_id: "project-1",
+  workflow_id: "workflow-1",
+  node_id: "backlog",
+  cards: [],
+  previous_page_token: null,
+  next_page_token: null,
+  generated_at_unix_ms: 1,
 };

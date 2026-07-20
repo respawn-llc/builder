@@ -53,6 +53,7 @@ export function createProjectLabelEffects({
 }>): ProjectLabelEffects {
   const registry = taskLabelAssignmentRegistryFor(queryClient);
   const refreshMembership = async (effect: LabelMembershipRefreshEffect): Promise<void> => {
+    await onMembershipRefresh?.(effect);
     await Promise.all([
       queryClient.invalidateQueries({
         queryKey: queryKeys.allBoards,
@@ -66,7 +67,6 @@ export function createProjectLabelEffects({
         queryKey: queryKeys.allTaskLists,
         refetchType: "active",
       }),
-      Promise.resolve(onMembershipRefresh?.(effect)),
     ]);
   };
   const deleteLabel = async (labelID: string): Promise<void> => {

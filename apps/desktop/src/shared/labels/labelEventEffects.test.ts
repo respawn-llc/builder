@@ -1,4 +1,4 @@
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { waitFor } from "@testing-library/react";
 
 import type { ProjectLabelCatalog, WorkflowProjectEvent } from "@/api";
@@ -178,6 +178,45 @@ describe("Project label event effects", () => {
 
     await effects.consumeProjectEvent(taskEvent("updated", "task-2"));
     expect(membershipEffects).toHaveLength(1);
+  });
+
+  it("lets the host close request admission before broad membership invalidation refetches", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const authority = createProjectCatalogAuthority({
+      projectID: "project-1",
+      queryClient,
+      listCatalog: async () => pendingCatalog.promise,
+    });
+    let admissionClosed = false;
+    let admittedTransportCalls = 0;
+    const boardKey = queryKeys.board("project-1", "workflow-1", { kind: "none" });
+    const observer = new QueryObserver(queryClient, {
+      queryKey: boardKey,
+      queryFn: async () => {
+        if (!admissionClosed) {
+          admittedTransportCalls += 1;
+        }
+        return { projectID: "project-1" };
+      },
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    await observer.refetch();
+    admittedTransportCalls = 0;
+    const effects = createProjectLabelEffects({
+      authority,
+      onMembershipRefresh: () => {
+        admissionClosed = true;
+      },
+      projectID: "project-1",
+      queryClient,
+    });
+
+    await effects.consumeProjectEvent(taskEvent("labels_changed", "task-1"));
+
+    expect(admittedTransportCalls).toBe(0);
+    unsubscribe();
   });
 
   it("removes a deleted task before refreshing membership", async () => {

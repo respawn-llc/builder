@@ -146,4 +146,13 @@ export const startupRoutes: readonly FakeRoute[] = [
       next_page_token: "",
     },
   },
+  {
+    method: "workflow.project.label.list",
+    result: {
+      catalog: {
+        project_id: "project-1",
+        labels: [],
+      },
+    },
+  },
 ];

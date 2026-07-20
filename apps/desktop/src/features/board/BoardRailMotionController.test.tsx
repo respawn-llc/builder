@@ -7,6 +7,7 @@ import type { BoardCard, BoardColumn, SelectedWorkflowBoard, WorkflowPickerItem 
 import { appI18n, initializeI18n } from "@/i18n";
 import { TestDataTransfer } from "@/test-support/board-drag";
 import type { PendingBoardCardMove } from "./BoardCardMotionModel";
+import type { BoardColumnDataView } from "./BoardColumnDataOwner";
 import type { KanbanCardVM } from "./BoardColumnViewModel";
 import type { BoardCardDragPayload } from "./BoardDragTypes";
 
@@ -22,6 +23,7 @@ type NodeSnapshot = Readonly<{
   isFetching: boolean;
   isFetchingNextPage?: boolean | undefined;
   isFetchingPreviousPage?: boolean | undefined;
+  isPlaceholderData?: boolean | undefined;
   isPending: boolean;
   hasData: boolean;
 }>;
@@ -38,6 +40,16 @@ const mountedQueryOwners = new Set<string>();
 const fetchNextByNode = new Map<string, ReturnType<typeof vi.fn>>();
 const fetchPreviousByNode = new Map<string, ReturnType<typeof vi.fn>>();
 const refetchByNode = new Map<string, ReturnType<typeof vi.fn>>();
+type FilterGenerationSnapshot = Readonly<{
+  active: Readonly<{ retiring: boolean }>;
+  desiredFilter: Readonly<{ kind: "unlabeled" }> | null;
+}>;
+const openFilterGenerationSnapshot: FilterGenerationSnapshot = {
+  active: { retiring: false },
+  desiredFilter: null,
+};
+let filterGenerationSnapshot = openFilterGenerationSnapshot;
+const filterGenerationListeners = new Set<() => void>();
 function emit(): void {
   for (const listener of listeners) listener();
 }
@@ -89,6 +101,7 @@ vi.mock("./useBoardData", () => ({
         isFetchPreviousPageError: snapshot.error !== undefined && snapshot.failureDirection === "newer",
         isFetchingNextPage: snapshot.isFetchingNextPage ?? false,
         isFetchingPreviousPage: snapshot.isFetchingPreviousPage ?? false,
+        isPlaceholderData: snapshot.isPlaceholderData ?? false,
         hasNextPage: snapshot.hasNextPage ?? false,
         hasPreviousPage: snapshot.hasPreviousPage ?? false,
         fetchNextPage,
@@ -100,7 +113,23 @@ vi.mock("./useBoardData", () => ({
   },
 }));
 
+vi.mock("./BoardFilterGenerationRuntime", () => ({
+  useBoardFilterGeneration: () => {
+    const snapshot = useSyncExternalStore(
+      (listener) => {
+        filterGenerationListeners.add(listener);
+        return () => {
+          filterGenerationListeners.delete(listener);
+        };
+      },
+      () => filterGenerationSnapshot,
+    );
+    return { snapshot };
+  },
+}));
+
 // Imported after the mocks above are registered.
+const { BoardColumnDataOwner } = await import("./BoardColumnDataOwner");
 const { BoardRailMotionController } = await import("./BoardRailMotionController");
 
 const workflow: WorkflowPickerItem = {
@@ -327,6 +356,8 @@ beforeEach(() => {
   fetchNextByNode.clear();
   fetchPreviousByNode.clear();
   refetchByNode.clear();
+  filterGenerationSnapshot = openFilterGenerationSnapshot;
+  filterGenerationListeners.clear();
   harnessState = initialHarnessState();
 });
 
@@ -535,6 +566,109 @@ describe("BoardRailMotionController bounded column lifecycle", () => {
       expect(scrollport.scrollTop).toBe(346);
     },
   );
+
+  it("disables every pagination trigger while a desired filter is pending", async () => {
+    const cards = numberedCards(12);
+    setNode("backlog", cards, {
+      hasNextPage: true,
+      hasPreviousPage: true,
+    });
+    updateHarness({ board: board(cards.length, 0) });
+    renderHarness();
+    const backlog = screen.getByRole("listitem", { name: "Backlog" });
+    await setIntersecting(true, backlog);
+    fetchNextByNode.get("backlog")?.mockClear();
+    fetchPreviousByNode.get("backlog")?.mockClear();
+
+    await act(async () => {
+      filterGenerationSnapshot = {
+        active: { retiring: true },
+        desiredFilter: { kind: "unlabeled" },
+      };
+      for (const listener of filterGenerationListeners) {
+        listener();
+      }
+      await Promise.resolve();
+    });
+    const scrollport = screen.getByTestId("kanban-column-scroll-backlog");
+    scrollport.scrollTop = 0;
+    fireEvent.scroll(scrollport);
+    scrollport.scrollTop = 10_000;
+    fireEvent.scroll(scrollport);
+    await flush();
+
+    expect(fetchNextByNode.get("backlog")).not.toHaveBeenCalled();
+    expect(fetchPreviousByNode.get("backlog")).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("virtual-boundary-next")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("virtual-boundary-previous")).not.toBeInTheDocument();
+  });
+
+  it("keeps retained placeholder pages non-pageable until the promoted first page is accepted", async () => {
+    const cards = numberedCards(12);
+    let dataView: BoardColumnDataView | undefined;
+    setNode("backlog", cards, {
+      hasNextPage: true,
+      hasPreviousPage: true,
+      isPlaceholderData: true,
+    });
+    const selectedBoard = board(cards.length, 0);
+    const backlog = selectedBoard.columns[0];
+    if (backlog === undefined) {
+      throw new Error("Expected the test board to contain a backlog column.");
+    }
+    render(
+      <I18nextProvider i18n={appI18n}>
+        <BoardColumnDataOwner
+          board={selectedBoard}
+          column={backlog}
+          onCardsLoadError={() => undefined}
+          onDataViewChange={(value) => {
+            dataView = value;
+          }}
+          onDataViewRelease={() => undefined}
+          onInterruptedRunObserved={() => undefined}
+          onReportColumnSnapshot={() => undefined}
+        />
+      </I18nextProvider>,
+    );
+
+    expect(dataView).toMatchObject({
+      hasNextPage: false,
+      hasPreviousPage: false,
+      nextBoundary: undefined,
+      previousBoundary: undefined,
+    });
+
+    await updateNode("backlog", cards, {
+      error: new Error("promoted first page failed"),
+      failureDirection: "initial",
+      hasNextPage: true,
+      hasPreviousPage: true,
+      isPlaceholderData: true,
+    });
+    expect(dataView).toMatchObject({
+      hasNextPage: false,
+      hasPreviousPage: false,
+      nextBoundary: undefined,
+      previousBoundary: undefined,
+    });
+
+    await updateNode("backlog", cards, {
+      hasNextPage: true,
+      hasPreviousPage: true,
+      isPlaceholderData: false,
+    });
+    fetchNextByNode.get("backlog")?.mockClear();
+    fetchPreviousByNode.get("backlog")?.mockClear();
+    expect(dataView).toMatchObject({
+      hasNextPage: true,
+      hasPreviousPage: true,
+    });
+    dataView?.onLoadMore();
+    dataView?.onLoadPrevious();
+    expect(fetchNextByNode.get("backlog")).toHaveBeenCalledTimes(1);
+    expect(fetchPreviousByNode.get("backlog")).toHaveBeenCalledTimes(1);
+  });
 
   it("tracks fan-out card instances independently and parses Markdown only after each instance intersects", async () => {
     const sharedCard = card({

@@ -56,6 +56,9 @@ export const englishResources = {
       },
     },
     labels: {
+      filter: "Labels",
+      filterCount: "Labels · {{count}}",
+      clearFilter: "Clear label filter",
       search: "Search or create labels",
       loadFailed: "Labels could not be loaded.",
       create: "Create “{{name}}”",
