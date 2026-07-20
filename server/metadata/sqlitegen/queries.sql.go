@@ -4189,7 +4189,14 @@ func (q *Queries) ListActiveManualMoveSources(ctx context.Context, taskID string
 }
 
 const listBoardColumnTaskCounts = `-- name: ListBoardColumnTaskCounts :many
-WITH effective_board_placements AS (
+WITH
+label_filter_args AS (
+    SELECT
+        CAST(?1 AS TEXT) AS label_filter_kind,
+        CAST(?2 AS TEXT) AS label_filter_mode,
+        CAST(?3 AS TEXT) AS label_ids_json
+),
+effective_board_placements AS (
     SELECT
         t.id AS task_id,
         p.node_id AS node_id
@@ -4199,22 +4206,22 @@ WITH effective_board_placements AS (
     WHERE (
           p.state IN ('active', 'waiting_approval')
       )
-      AND t.project_id = ?1
-      AND t.workflow_id = ?2
+      AND t.project_id = ?4
+      AND t.workflow_id = ?5
       AND (
           t.canceled_at_unix_ms IS NULL
           OR n.kind = 'terminal'
-          OR ?3 IS NULL
+          OR ?6 IS NULL
       )
     UNION
     SELECT
         t.id AS task_id,
-        ?3 AS node_id
+        ?6 AS node_id
     FROM task_records t
-    WHERE t.project_id = ?1
-      AND t.workflow_id = ?2
+    WHERE t.project_id = ?4
+      AND t.workflow_id = ?5
       AND t.canceled_at_unix_ms IS NOT NULL
-      AND ?3 IS NOT NULL
+      AND ?6 IS NOT NULL
       AND NOT EXISTS (
           SELECT 1
           FROM task_node_placements p
@@ -4230,11 +4237,11 @@ WITH effective_board_placements AS (
     FROM task_transition_records tt
     JOIN task_records t ON t.id = tt.task_id
     WHERE tt.state = 'pending_approval'
-      AND t.project_id = ?1
-      AND t.workflow_id = ?2
+      AND t.project_id = ?4
+      AND t.workflow_id = ?5
       AND (
           t.canceled_at_unix_ms IS NULL
-          OR ?3 IS NULL
+          OR ?6 IS NULL
       )
       AND trim(tt.source_node_id) != ''
 )
@@ -4242,11 +4249,49 @@ SELECT
     node_id,
     CAST(COUNT(DISTINCT task_id) AS INTEGER) AS task_count
 FROM effective_board_placements
+JOIN label_filter_args
+WHERE label_filter_args.label_filter_kind = 'none'
+   OR (
+       label_filter_args.label_filter_kind = 'named'
+       AND label_filter_args.label_filter_mode = 'any'
+       AND EXISTS (
+           SELECT 1
+           FROM json_each(label_filter_args.label_ids_json) selected_label
+           JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+             ON assignment.label_id = selected_label.value
+           WHERE assignment.task_id = effective_board_placements.task_id
+       )
+   )
+   OR (
+       label_filter_args.label_filter_kind = 'named'
+       AND label_filter_args.label_filter_mode = 'all'
+       AND NOT EXISTS (
+           SELECT 1
+           FROM json_each(label_filter_args.label_ids_json) selected_label
+           WHERE NOT EXISTS (
+               SELECT 1
+               FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+               WHERE assignment.label_id = selected_label.value
+                 AND assignment.task_id = effective_board_placements.task_id
+           )
+       )
+   )
+   OR (
+       label_filter_args.label_filter_kind = 'unlabeled'
+       AND NOT EXISTS (
+           SELECT 1
+           FROM task_label_assignments assignment
+           WHERE assignment.task_id = effective_board_placements.task_id
+       )
+   )
 GROUP BY node_id
 ORDER BY node_id ASC
 `
 
 type ListBoardColumnTaskCountsParams struct {
+	LabelFilterKind        string
+	LabelFilterMode        string
+	LabelIdsJson           string
 	ProjectID              string
 	WorkflowID             string
 	CanceledTerminalNodeID interface{}
@@ -4258,7 +4303,14 @@ type ListBoardColumnTaskCountsRow struct {
 }
 
 func (q *Queries) ListBoardColumnTaskCounts(ctx context.Context, arg ListBoardColumnTaskCountsParams) ([]ListBoardColumnTaskCountsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listBoardColumnTaskCounts, arg.ProjectID, arg.WorkflowID, arg.CanceledTerminalNodeID)
+	rows, err := q.db.QueryContext(ctx, listBoardColumnTaskCounts,
+		arg.LabelFilterKind,
+		arg.LabelFilterMode,
+		arg.LabelIdsJson,
+		arg.ProjectID,
+		arg.WorkflowID,
+		arg.CanceledTerminalNodeID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -4287,12 +4339,48 @@ WITH board_node_tasks AS (
     WHERE t.project_id = ?1
       AND t.workflow_id = ?2
       AND (
+          ?3 = 'none'
+          OR (
+              ?3 = 'named'
+              AND ?4 = 'any'
+              AND EXISTS (
+                  SELECT 1
+                  FROM json_each(?5) selected_label
+                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                    ON assignment.label_id = selected_label.value
+                  WHERE assignment.task_id = t.id
+              )
+          )
+          OR (
+              ?3 = 'named'
+              AND ?4 = 'all'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(?5) selected_label
+                  WHERE NOT EXISTS (
+                      SELECT 1
+                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                      WHERE assignment.label_id = selected_label.value
+                        AND assignment.task_id = t.id
+                  )
+              )
+          )
+          OR (
+              ?3 = 'unlabeled'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM task_label_assignments assignment
+                  WHERE assignment.task_id = t.id
+              )
+          )
+      )
+      AND (
           EXISTS (
               SELECT 1
               FROM task_node_placements p
               JOIN workflow_nodes n ON n.id = p.node_id
               WHERE p.task_id = t.id
-                AND p.node_id = ?3
+                AND p.node_id = ?6
                 AND p.state IN ('active', 'waiting_approval')
                 AND (
                     t.canceled_at_unix_ms IS NULL
@@ -4303,17 +4391,17 @@ WITH board_node_tasks AS (
               SELECT 1
               FROM task_transition_records tt
               WHERE tt.task_id = t.id
-                AND tt.source_node_id = ?3
+                AND tt.source_node_id = ?6
                 AND tt.state = 'pending_approval'
                 AND t.canceled_at_unix_ms IS NULL
           )
           OR (
               t.canceled_at_unix_ms IS NOT NULL
-              AND ?3 = ?4
+              AND ?6 = ?7
               AND EXISTS (
                   SELECT 1
                   FROM workflow_nodes n
-                  WHERE n.id = ?3
+                  WHERE n.id = ?6
                     AND n.kind = 'terminal'
               )
               AND NOT EXISTS (
@@ -4330,32 +4418,32 @@ WITH board_node_tasks AS (
 older_page AS (
     SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_seen, task_seq, short_id, title, body, source_url, source_workspace_id, managed_worktree_id, execution_target_mode, execution_target_requested_ref, execution_target_resolved_ref, execution_target_commit_oid, execution_target_provenance, canceled_at_unix_ms, cancellation_reason, created_at_unix_ms, updated_at_unix_ms, metadata_json
     FROM board_node_tasks t
-    WHERE ?5 = 'older'
+    WHERE ?8 = 'older'
       AND (
-          ?6 IS NULL
-          OR t.updated_at_unix_ms < ?6
+          ?9 IS NULL
+          OR t.updated_at_unix_ms < ?9
           OR (
-              t.updated_at_unix_ms = ?6
-              AND t.id < ?7
+              t.updated_at_unix_ms = ?9
+              AND t.id < ?10
           )
       )
     ORDER BY t.updated_at_unix_ms DESC, t.id DESC
-    LIMIT ?8
+    LIMIT ?11
 ),
 newer_page AS (
     SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_seen, task_seq, short_id, title, body, source_url, source_workspace_id, managed_worktree_id, execution_target_mode, execution_target_requested_ref, execution_target_resolved_ref, execution_target_commit_oid, execution_target_provenance, canceled_at_unix_ms, cancellation_reason, created_at_unix_ms, updated_at_unix_ms, metadata_json
     FROM board_node_tasks t
-    WHERE ?5 = 'newer'
-      AND ?6 IS NOT NULL
+    WHERE ?8 = 'newer'
+      AND ?9 IS NOT NULL
       AND (
-          t.updated_at_unix_ms > ?6
+          t.updated_at_unix_ms > ?9
           OR (
-              t.updated_at_unix_ms = ?6
-              AND t.id > ?7
+              t.updated_at_unix_ms = ?9
+              AND t.id > ?10
           )
       )
     ORDER BY t.updated_at_unix_ms ASC, t.id ASC
-    LIMIT ?8
+    LIMIT ?11
 )
 SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_seen, task_seq, short_id, title, body, source_url, source_workspace_id, managed_worktree_id, execution_target_mode, execution_target_requested_ref, execution_target_resolved_ref, execution_target_commit_oid, execution_target_provenance, canceled_at_unix_ms, cancellation_reason, created_at_unix_ms, updated_at_unix_ms, metadata_json FROM older_page
 UNION ALL
@@ -4365,6 +4453,9 @@ SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_
 type ListBoardNodeTasksParams struct {
 	ProjectID              string
 	WorkflowID             string
+	LabelFilterKind        interface{}
+	LabelFilterMode        interface{}
+	LabelIdsJson           interface{}
 	NodeID                 sql.NullString
 	CanceledTerminalNodeID interface{}
 	CursorDirection        interface{}
@@ -4402,6 +4493,9 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 	rows, err := q.db.QueryContext(ctx, listBoardNodeTasks,
 		arg.ProjectID,
 		arg.WorkflowID,
+		arg.LabelFilterKind,
+		arg.LabelFilterMode,
+		arg.LabelIdsJson,
 		arg.NodeID,
 		arg.CanceledTerminalNodeID,
 		arg.CursorDirection,

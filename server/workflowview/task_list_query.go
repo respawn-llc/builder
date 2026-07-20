@@ -279,7 +279,7 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 	if err != nil {
 		return nil, err
 	}
-	labelIDsJSON, err := json.Marshal(req.labelFilter.LabelIDs)
+	labelFilterArgs, err := req.labelFilter.queryArgs()
 	if err != nil {
 		return nil, err
 	}
@@ -298,9 +298,9 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 		StatusKindsJson:         string(statusKindsJSON),
 		AttentionFilterSet:      boolInt64(len(req.attentionKinds) > 0),
 		AttentionKindsJson:      string(attentionKindsJSON),
-		LabelFilterKind:         string(req.labelFilter.Kind),
-		LabelFilterMode:         string(req.labelFilter.Mode),
-		LabelIdsJson:            string(labelIDsJSON),
+		LabelFilterKind:         labelFilterArgs.kind,
+		LabelFilterMode:         labelFilterArgs.mode,
+		LabelIdsJson:            labelFilterArgs.labelIDsJSON,
 		CursorSet:               boolInt64(req.cursorSet),
 		CursorCreatedAtUnixMs:   req.cursor.CreatedAtUnixMs,
 		CursorUpdatedAtUnixMs:   req.cursor.UpdatedAtUnixMs,

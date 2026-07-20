@@ -1511,7 +1511,14 @@ GROUP BY workflow_id
 ORDER BY latest_updated_at_unix_ms DESC, workflow_id ASC;
 
 -- name: ListBoardColumnTaskCounts :many
-WITH effective_board_placements AS (
+WITH
+label_filter_args AS (
+    SELECT
+        CAST(sqlc.arg(label_filter_kind) AS TEXT) AS label_filter_kind,
+        CAST(sqlc.arg(label_filter_mode) AS TEXT) AS label_filter_mode,
+        CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json
+),
+effective_board_placements AS (
     SELECT
         t.id AS task_id,
         p.node_id AS node_id
@@ -1564,6 +1571,41 @@ SELECT
     node_id,
     CAST(COUNT(DISTINCT task_id) AS INTEGER) AS task_count
 FROM effective_board_placements
+JOIN label_filter_args
+WHERE label_filter_args.label_filter_kind = 'none'
+   OR (
+       label_filter_args.label_filter_kind = 'named'
+       AND label_filter_args.label_filter_mode = 'any'
+       AND EXISTS (
+           SELECT 1
+           FROM json_each(label_filter_args.label_ids_json) selected_label
+           JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+             ON assignment.label_id = selected_label.value
+           WHERE assignment.task_id = effective_board_placements.task_id
+       )
+   )
+   OR (
+       label_filter_args.label_filter_kind = 'named'
+       AND label_filter_args.label_filter_mode = 'all'
+       AND NOT EXISTS (
+           SELECT 1
+           FROM json_each(label_filter_args.label_ids_json) selected_label
+           WHERE NOT EXISTS (
+               SELECT 1
+               FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+               WHERE assignment.label_id = selected_label.value
+                 AND assignment.task_id = effective_board_placements.task_id
+           )
+       )
+   )
+   OR (
+       label_filter_args.label_filter_kind = 'unlabeled'
+       AND NOT EXISTS (
+           SELECT 1
+           FROM task_label_assignments assignment
+           WHERE assignment.task_id = effective_board_placements.task_id
+       )
+   )
 GROUP BY node_id
 ORDER BY node_id ASC;
 
@@ -1968,6 +2010,42 @@ WITH board_node_tasks AS (
     FROM task_records t
     WHERE t.project_id = sqlc.arg(project_id)
       AND t.workflow_id = sqlc.arg(workflow_id)
+      AND (
+          sqlc.arg(label_filter_kind) = 'none'
+          OR (
+              sqlc.arg(label_filter_kind) = 'named'
+              AND sqlc.arg(label_filter_mode) = 'any'
+              AND EXISTS (
+                  SELECT 1
+                  FROM json_each(sqlc.arg(label_ids_json)) selected_label
+                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                    ON assignment.label_id = selected_label.value
+                  WHERE assignment.task_id = t.id
+              )
+          )
+          OR (
+              sqlc.arg(label_filter_kind) = 'named'
+              AND sqlc.arg(label_filter_mode) = 'all'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(sqlc.arg(label_ids_json)) selected_label
+                  WHERE NOT EXISTS (
+                      SELECT 1
+                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                      WHERE assignment.label_id = selected_label.value
+                        AND assignment.task_id = t.id
+                  )
+              )
+          )
+          OR (
+              sqlc.arg(label_filter_kind) = 'unlabeled'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM task_label_assignments assignment
+                  WHERE assignment.task_id = t.id
+              )
+          )
+      )
       AND (
           EXISTS (
               SELECT 1

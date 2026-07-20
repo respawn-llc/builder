@@ -2,7 +2,9 @@ package workflowview
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"slices"
 	"sort"
 
 	"core/server/metadata/sqlitegen"
@@ -17,6 +19,53 @@ type workflowTaskLabelFilterFacts struct {
 
 type workflowProjectLabelByIDReader interface {
 	ListProjectLabelsByIDs(context.Context, []string) ([]sqlitegen.ListProjectLabelsByIDsRow, error)
+}
+
+type workflowTaskLabelFilterQueryArgs struct {
+	kind         string
+	mode         string
+	labelIDsJSON string
+}
+
+func (f workflowTaskLabelFilterFacts) queryArgs() (workflowTaskLabelFilterQueryArgs, error) {
+	labelIDsJSON, err := json.Marshal(f.LabelIDs)
+	if err != nil {
+		return workflowTaskLabelFilterQueryArgs{}, err
+	}
+	return workflowTaskLabelFilterQueryArgs{
+		kind:         string(f.Kind),
+		mode:         string(f.Mode),
+		labelIDsJSON: string(labelIDsJSON),
+	}, nil
+}
+
+func (f workflowTaskLabelFilterFacts) validCanonical() bool {
+	if f.LabelIDs == nil {
+		return false
+	}
+	switch f.Kind {
+	case serverapi.WorkflowTaskLabelFilterKindNone, serverapi.WorkflowTaskLabelFilterKindUnlabeled:
+		return f.Mode == "" && len(f.LabelIDs) == 0
+	case serverapi.WorkflowTaskLabelFilterKindNamed:
+		if !sort.StringsAreSorted(f.LabelIDs) {
+			return false
+		}
+		return (serverapi.WorkflowTaskLabelFilter{
+			Kind: f.Kind,
+			Named: &serverapi.WorkflowTaskNamedLabelFilter{
+				Mode:     f.Mode,
+				LabelIDs: f.LabelIDs,
+			},
+		}).Validate() == nil
+	default:
+		return false
+	}
+}
+
+func (f workflowTaskLabelFilterFacts) equal(other workflowTaskLabelFilterFacts) bool {
+	return f.Kind == other.Kind &&
+		f.Mode == other.Mode &&
+		slices.Equal(f.LabelIDs, other.LabelIDs)
 }
 
 func resolveWorkflowTaskLabelFilter(
