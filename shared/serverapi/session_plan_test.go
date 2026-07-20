@@ -1,7 +1,6 @@
 package serverapi
 
 import (
-	"bytes"
 	"encoding/json"
 	"testing"
 )
@@ -15,8 +14,20 @@ func TestSessionPlanUsesTypedOptionalNameOnWire(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal absent session name: %v", err)
 	}
-	if !bytes.Contains(encoded, []byte(`"session_name":null`)) {
-		t.Fatalf("absent session name wire payload = %s, want explicit null", encoded)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatalf("decode absent session name fields: %v", err)
+	}
+	rawName, fieldPresent := fields["session_name"]
+	if !fieldPresent {
+		t.Fatal("absent session name omitted its required wire field")
+	}
+	var decodedName *string
+	if err := json.Unmarshal(rawName, &decodedName); err != nil {
+		t.Fatalf("decode absent session name value: %v", err)
+	}
+	if decodedName != nil {
+		t.Fatalf("absent session name = %v, want null", decodedName)
 	}
 
 	for name, value := range map[string]string{"empty": "", "blank": " \t "} {
