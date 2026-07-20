@@ -210,11 +210,14 @@ func closeRuntimeLaunchPlan(t *testing.T, plan *runtimeLaunchPlan) {
 
 func waitForConfiguredRemoteIdentity(t *testing.T, workspace string) protocol.ServerIdentity {
 	t.Helper()
-	opts := Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}
+	cfg, err := loadRemoteAttachConfig(Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true})
+	if err != nil {
+		t.Fatalf("resolve configured remote: %v", err)
+	}
 	var identity protocol.ServerIdentity
 	testsetup.RequireUntil(t, time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
-		remote, ok := tryDialMatchingConfiguredRemoteWithRequirement(context.Background(), opts, nil, nil, true)
-		if ok {
+		remote, err := attachConfiguredStartupRemote(context.Background(), cfg)
+		if err == nil {
 			identity = remote.Identity()
 			_ = remote.Close()
 			return true

@@ -83,4 +83,4 @@ Ordered gates; each gate is skipped when its condition does not apply, never byp
 
 ## Known Drift (Go TUI, frozen)
 
-The shipping Go TUI predates these decisions and diverges: it has an embedded-server fallback, an env-vs-saved auth conflict picker, and client-side project-name derivation. These are drift, not spec.
+The shipping Go TUI diverges through an env-vs-saved auth conflict picker and client-side project-name derivation. These are drift, not spec.

@@ -672,39 +672,39 @@ func TestCLIAppDoesNotReintroduceEmbeddedServerServiceLocator(t *testing.T) {
 
 func TestCLIAppStartupEntrypointsUseServerAttach(t *testing.T) {
 	repoRoot := findRepoRoot(t)
-	for _, relPath := range []string{
-		filepath.Join("cli", "app", "session_server_target.go"),
-		filepath.Join("cli", "app", "run_prompt_target.go"),
-	} {
-		path := filepath.Join(repoRoot, relPath)
-		fileSet := token.NewFileSet()
-		file, err := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
+	runPath := filepath.Join("cli", "app", "run_prompt_target.go")
+	sessionPath := filepath.Join("cli", "app", "session_server_target.go")
+	serverAttachDir := filepath.Join("cli", "app", "internal", "serverattach")
+	violations := make([]string, 0)
+	walkRepositoryGoSources(t, repoRoot, repositoryGoSourceScan{
+		Operation:    "scan cli app server attachment topology",
+		Root:         filepath.Join("cli", "app"),
+		Recursive:    true,
+		IncludeTests: false,
+		Mode:         parser.ImportsOnly,
+		Selection:    allRepositoryGoSources{},
+	}, func(source parsedGoSource) {
+		for _, spec := range source.File.Imports {
+			switch strings.Trim(spec.Path.Value, "\"") {
+			case "core/cli/app/internal/serverattach":
+				if source.RelPath != runPath {
+					violations = append(violations, source.RelPath+": only run_prompt_target.go may import serverattach")
+				}
+			case "core/cli/app/internal/daemonlaunch", "core/cli/app/internal/embeddedattach":
+				if filepath.Dir(source.RelPath) == serverAttachDir {
+					violations = append(violations, source.RelPath+": attach-only package must not import daemon or embedded startup")
+				}
+			case "core/cli/app/internal/targetstartup", "core/cli/app/internal/targetresolve":
+				violations = append(violations, source.RelPath+": startup entrypoint must not import a legacy startup package")
+			}
+		}
+	})
+	for _, relPath := range []string{sessionPath, runPath} {
+		file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(repoRoot, relPath), nil, parser.SkipObjectResolution)
 		if err != nil {
 			t.Fatalf("parse %s: %v", relPath, err)
 		}
-		importsServerAttach := false
-		importsClient := false
-		violations := make([]string, 0)
-		for _, spec := range file.Imports {
-			importPath := strings.Trim(spec.Path.Value, "\"")
-			switch importPath {
-			case "core/cli/app/internal/serverattach":
-				importsServerAttach = true
-			case "core/shared/client":
-				importsClient = true
-			case "core/cli/app/internal/targetstartup", "core/cli/app/internal/targetresolve":
-				violations = append(violations, relPath+": startup entrypoint must use serverattach instead of "+importPath)
-			}
-		}
-		if relPath == filepath.Join("cli", "app", "session_server_target.go") {
-			if !importsClient {
-				violations = append(violations, relPath+": pure-client startup must import the remote client")
-			}
-		} else if !importsServerAttach {
-			violations = append(violations, relPath+": startup entrypoint must import serverattach")
-		}
-		usesResolve := false
-		usesConfiguredDial := false
+		usesAttachRunPrompt, usesConfiguredDial := false, false
 		ast.Inspect(file, func(node ast.Node) bool {
 			selector, ok := node.(*ast.SelectorExpr)
 			if !ok {
@@ -714,8 +714,13 @@ func TestCLIAppStartupEntrypointsUseServerAttach(t *testing.T) {
 			if !ok {
 				return true
 			}
-			if ident.Name == "serverattach" && selector.Sel.Name == "Resolve" {
-				usesResolve = true
+			if ident.Name == "serverattach" {
+				switch selector.Sel.Name {
+				case "AttachRunPrompt":
+					usesAttachRunPrompt = true
+				case "Resolve":
+					violations = append(violations, relPath+": startup entrypoint must not reintroduce generic serverattach.Resolve")
+				}
 			}
 			if ident.Name == "client" && selector.Sel.Name == "DialConfiguredRemote" {
 				usesConfiguredDial = true
@@ -725,15 +730,15 @@ func TestCLIAppStartupEntrypointsUseServerAttach(t *testing.T) {
 			}
 			return true
 		})
-		if relPath != filepath.Join("cli", "app", "session_server_target.go") && !usesResolve {
-			violations = append(violations, relPath+": startup entrypoint must resolve targets through serverattach.Resolve")
+		if relPath == runPath && !usesAttachRunPrompt {
+			violations = append(violations, relPath+": run startup must attach through serverattach.AttachRunPrompt")
 		}
-		if relPath == filepath.Join("cli", "app", "session_server_target.go") && !usesConfiguredDial {
+		if relPath == sessionPath && !usesConfiguredDial {
 			violations = append(violations, relPath+": pure-client startup must dial the configured remote")
 		}
-		if len(violations) > 0 {
-			t.Fatalf("startup server attach boundary violations:\n%s", strings.Join(violations, "\n"))
-		}
+	}
+	if len(violations) > 0 {
+		t.Fatalf("startup server attach boundary violations:\n%s", strings.Join(violations, "\n"))
 	}
 }
 
@@ -965,7 +970,6 @@ func TestCLIAppInternalPackageBoundaries(t *testing.T) {
 		{Name: "RuntimeAttach", Packages: []string{"runtimeattach"}, Label: "runtime connection package", ForbidServer: true},
 		{Name: "AuthUI", Packages: []string{"authui"}, Label: "auth UI package"},
 		{Name: "ServerAttach", Packages: []string{"serverattach"}, Label: "server attach package", ForbidServer: true},
-		{Name: "DaemonLaunch", Packages: []string{"daemonlaunch"}, Label: "daemon launch package", ForbidAllCore: true},
 		{Name: "RemoteAttach", Packages: []string{"remoteattach"}, Label: "remote attach package", ForbidServer: true},
 		{Name: "ProjectBinding", Packages: []string{"projectbinding"}, Label: "project binding package", ForbidServer: true},
 		{Name: "WorktreeUI", Packages: []string{"worktreeui"}, Label: "worktree UI package", ForbidServer: true},
