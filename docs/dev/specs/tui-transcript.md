@@ -290,6 +290,36 @@
 - OSC 9 notifications still emit a separate BEL.
 - OSC 9 is disabled when `WT_SESSION` is set.
 
+## Client Lifecycle Hooks
+
+- Lifecycle hooks execute independently for every interactive controlling TUI attachment, including a TUI attached to a server on another machine. Desktop clients, unattended headless/subagent runs, and server-only processes do not execute them.
+- One optional client-local command is configured as a TOML argument array at `[hooks.client] lifecycle = ["executable", "fixed-arg", ...]` in the controlling TUI client's global config. Workspace configuration, environment variables, command-line flags, and servers cannot set or override it; a present empty array or blank argument is invalid.
+- The effective command is captured when the TUI opens a session and remains fixed for that attachment. Config changes apply after reopening the session or restarting the controlling TUI.
+- Malformed or unreadable global client config prevents TUI session opening with the ordinary configuration error. Nonblocking hook-failure handling applies only after valid client config has been captured.
+- Hook eligibility does not depend on whether the TUI owns the server, server endpoint locality, server paths, or `OwnsServer()`. Kent does not map server paths, synchronize hook config with a server, or treat the server execution root as client filesystem authority.
+- The command receives one JSON object on stdin for every event with required `schema_version = 1`, `scope = "client"`, and an authoritative CESP category. JSON stdin is the only event-data contract; command arguments stay fixed.
+- The supported categories are:
+  - `session.start`: the TUI opens a new or resumed session after successful session planning and attachment preparation. The payload identifies the opening kind from the original launch intent and includes the materialized session ID for both kinds. Later identity hydration does not emit a second start.
+  - `task.complete`: one drained batch ends with a final answer after queued work is idle and the supervisor has completed or is disabled.
+  - `task.error`: the agent stops without a final answer and no exclusion applies.
+  - `input.required`: an unresolved question or approval blocks progress.
+  - `resource.limit`: automatic context compaction starts. User-requested compaction does not emit it.
+- The payload also carries a lean compatibility alias for `SessionStart`, `Stop`, `PostToolUseFailure`, `PermissionRequest`, or `PreCompact`. Compatibility aliases never change Kent event meaning or fabricate tool details.
+- One drained batch emits exactly one terminal category: `task.complete` or `task.error`, never both. `task.complete` is not suppressed by client focus or amount of work.
+- `task.error` excludes every interrupted outcome and a successful workflow completion without an ordinary final answer. Client/server connection loss does not prove the agent stopped and remains an ordinary visible TUI error rather than a lifecycle event.
+- `task.complete`, `task.error`, and `resource.limit` are live-only and are not reconstructed from transcript hydration.
+- The opening pending snapshot emits `input.required` once for each supported unresolved question or approval. During an uninterrupted attention subscription, only the first live pending revision of an occurrence emits; later revisions do not. After a stream gap and reopen, the replacement snapshot may repeat unresolved items within the same TUI attachment. Lifecycle hooks add no server-side pending-item cap.
+- Every payload includes whether the current client surface is focused. `task.complete` additionally includes `work_performed`, which is true when any turn in the drained batch performed at least two tool calls.
+- Payload context includes the session ID and title when available, event time, optional workflow Task ID, and event-specific details. Schema version 1 omits the server execution root and all workspace paths. Optional context is absent when unavailable and never represented by an empty value. It never exposes internal run, step, prompt, approval, or subscription identifiers.
+- Event-specific text is the original user-visible Markdown source: the last final-answer preview for `task.complete`, question or approval text for `input.required`, and the diagnostic for `task.error`. It never includes transcript history, tool inputs, hidden reasoning, credentials, or full command output.
+- Each text summary is capped at 4 KiB and the complete JSON payload is capped at 32 KiB. The payload explicitly reports truncation.
+- Hook execution is ordered, best-effort, at most once, and never delays agent work or TUI interaction. Events are not retried, and each invocation has a five-second deadline.
+- The hook inherits the controlling TUI process's current directory and environment; Kent does not set a subprocess working directory. It has stdout ignored and bounded stderr available for failure diagnostics. Hook output never changes Kent behavior.
+- Launch failures, timeouts, non-zero exits, and delivery overload produce a non-blocking TUI error and diagnostic log. Hook failures never emit `task.error`.
+- An unavailable or non-executable program disables lifecycle hooks for the attachment after one visible error. A command that starts but exits non-zero or times out remains eligible for later events.
+- TUI shutdown cancels the running hook, drops queued best-effort events, and exits without detached children or waiting for the full hook deadline.
+- Kent does not provide hook-side debounce or per-event enable/disable settings; the configured command receives every supported event and applies its own policy.
+
 ## Reviewer
 
 - Post-turn reviewer exists behind config and defaults to `reviewer.frequency = "edits"`.
