@@ -175,7 +175,7 @@ func (f *configuredDaemonFixture) attachRemoteSessionServer(
 	interactor authInteractor,
 ) *remoteAppServer {
 	t.Helper()
-	server, err := startSessionServerForTest(t, context.Background(), options, interactor, false)
+	server, err := startSessionServer(context.Background(), options, interactor, false)
 	if err != nil {
 		t.Fatalf("startSessionServer: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) 
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5",
 	}
-	firstServer, err := startSessionServerForTest(t, context.Background(), firstOptions, firstInteractor, true)
+	firstServer, err := startSessionServer(context.Background(), firstOptions, firstInteractor, true)
 	if err != nil {
 		t.Fatalf("first startSessionServer: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) 
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5",
 	}
-	secondServer, err := startSessionServerForTest(t, context.Background(), secondOptions, secondInteractor, true)
+	secondServer, err := startSessionServer(context.Background(), secondOptions, secondInteractor, true)
 	if err != nil {
 		t.Fatalf("second startSessionServer: %v", err)
 	}

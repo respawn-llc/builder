@@ -43,7 +43,6 @@ const (
 	EventPromptHistoryPersistFailed EventKind = "prompt_history_persist_failed"
 	EventGoalStatusUpdated          EventKind = "goal_status_updated"
 	EventQueuedUserMessageStatus    EventKind = "queued_user_message_status"
-	EventLiveRunBatchFinished       EventKind = "live_run_batch_finished"
 
 	AssistantStreamAbortSuperseded AssistantStreamAbortReason = "superseded"
 )
@@ -130,7 +129,6 @@ type Event struct {
 	Background                   *BackgroundShellEvent
 	GoalStatus                   *GoalStatusUpdate
 	QueuedUserMessageStatus      *QueuedUserMessageStatusEvent
-	LiveRunResult                *LiveRunResult
 }
 
 type GoalStatusUpdate struct {
@@ -184,7 +182,6 @@ type ModelResponseTrace struct {
 
 type CompactionStatus struct {
 	Mode              string
-	Initiator         CompactionInitiator
 	Engine            string
 	Provider          string
 	TrimmedItemsCount *int

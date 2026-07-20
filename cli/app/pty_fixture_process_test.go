@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 
-	"core/cli/app/internal/startupconfig"
 	checkpoint "core/internal/testharness/pty/analyzer"
 	"core/internal/testharness/pty/appfixture"
 	"core/shared/runtimeids"
@@ -107,11 +106,7 @@ func runPTYFixtureProcess(ctx context.Context, processConfig appfixture.ProcessC
 	}
 	defer func() { _ = standingServer.Close() }()
 
-	cfg, err := startupconfig.ResolveSessionConfig(startupConfigRequest(options))
-	if err != nil {
-		return err
-	}
-	server, err := startSessionServer(ctx, options, interactor, true, cfg)
+	server, err := startSessionServer(ctx, options, interactor, true)
 	if err != nil {
 		return err
 	}
@@ -138,7 +133,7 @@ func runPTYFixtureProcess(ctx context.Context, processConfig appfixture.ProcessC
 	if err != nil {
 		return err
 	}
-	runtimePlan, request, err := prepareSessionUIRun(ctx, server, planner, plan, "", false, "", false, nil)
+	runtimePlan, request, err := prepareSessionUIRun(ctx, server, planner, plan, "", false, "", false)
 	if err != nil {
 		return err
 	}

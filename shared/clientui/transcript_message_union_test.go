@@ -206,10 +206,9 @@ func TestTranscriptMessagePayloadUnionAcceptsEveryTypedFact(t *testing.T) {
 				Sequence: 2,
 				Kind:     TranscriptMessageCompactionStatus,
 				Payload: TranscriptPayload{CompactionStatus: &TranscriptCompactionStatus{
-					StepID:    transcriptTestStepID(t),
-					State:     CompactionStarted,
-					Mode:      "auto",
-					Initiator: CompactionInitiatorAutomatic,
+					StepID: transcriptTestStepID(t),
+					State:  CompactionStarted,
+					Mode:   "auto",
 				}},
 			},
 		},
@@ -287,18 +286,6 @@ func TestTranscriptMessagePayloadUnionAcceptsEveryTypedFact(t *testing.T) {
 				Payload: TranscriptPayload{OperationalDiagnostic: &TranscriptOperationalDiagnostic{
 					Code:   OperationalDiagnosticSleepGuardFailed,
 					Detail: "operating system rejected sleep prevention",
-				}},
-			},
-		},
-		{
-			name: "live run batch finished",
-			message: TranscriptMessage{
-				Sequence: 2,
-				Kind:     TranscriptMessageLiveRunBatchFinished,
-				Payload: TranscriptPayload{LiveRunBatchFinished: &TranscriptLiveRunBatchFinished{
-					Disposition:        LiveRunBatchDispositionFinalAnswer,
-					FinishedAt:         time.Unix(1_700_000_000, 0),
-					FinalAnswerPreview: &TranscriptFinalAnswerPreview{Markdown: "Done"},
 				}},
 			},
 		},

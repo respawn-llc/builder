@@ -169,16 +169,15 @@ func (s *embeddedAppServer) RuntimeAttachmentClients() runtimeAttachmentClients 
 		return runtimeAttachmentClients{}
 	}
 	return runtimeAttachmentClients{
-		AttentionNotifications: s.inner.AttentionNotificationClient(),
-		ProcessControls:        s.inner.ProcessControlClient(),
-		ProcessOutput:          s.inner.ProcessOutputClient(),
-		ProcessViews:           s.inner.ProcessViewClient(),
-		PromptControl:          s.inner.PromptControlClient(),
-		RuntimeControls:        s.inner.RuntimeControlClient(),
-		SessionTranscript:      s.inner.SessionTranscriptClient(),
-		SessionRuntime:         s.inner.SessionRuntimeClient(),
-		SessionViews:           s.inner.SessionViewClient(),
-		Worktrees:              s.inner.WorktreeClient(),
+		ProcessControls:   s.inner.ProcessControlClient(),
+		ProcessOutput:     s.inner.ProcessOutputClient(),
+		ProcessViews:      s.inner.ProcessViewClient(),
+		PromptControl:     s.inner.PromptControlClient(),
+		RuntimeControls:   s.inner.RuntimeControlClient(),
+		SessionTranscript: s.inner.SessionTranscriptClient(),
+		SessionRuntime:    s.inner.SessionRuntimeClient(),
+		SessionViews:      s.inner.SessionViewClient(),
+		Worktrees:         s.inner.WorktreeClient(),
 	}
 }
 

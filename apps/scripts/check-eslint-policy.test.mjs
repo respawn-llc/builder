@@ -460,19 +460,6 @@ test("desktop architecture policy confines external Tauri imports to the native 
   }
 });
 
-test("desktop architecture policy excludes lifecycle executable adapters from the native package", async () => {
-  const forbiddenPath =
-    "packages/native-bridge/src/forbidden-lifecycle-executable-adapter.ts";
-  const byFile = await lintArchitectureFixtures([forbiddenPath]);
-
-  assert.ok(
-    byFile
-      .get(join(fixtureRoot, forbiddenPath))
-      ?.some((message) => message.ruleId === "no-restricted-imports"),
-    `expected ${forbiddenPath} to violate no-restricted-imports`,
-  );
-});
-
 function findRule(name) {
   let result;
   for (const configEntry of eslintConfig) {

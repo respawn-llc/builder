@@ -92,18 +92,6 @@ type ShellSettings struct {
 	PostprocessHook    *string
 }
 
-type ClientSettings struct {
-	Hooks ClientHooks
-}
-
-type ClientHooks struct {
-	lifecycleCommand []string
-}
-
-func (h ClientHooks) LifecycleCommand() []string {
-	return append([]string(nil), h.lifecycleCommand...)
-}
-
 type SubagentRole struct {
 	Settings            Settings
 	Sources             map[string]string

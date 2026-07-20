@@ -285,7 +285,7 @@ func TestEmitCompactionStatusStillPublishesFailureEventWhenErrorPersistenceFails
 	})
 	mustBlockTestEventLogAppends(t, store)
 
-	err := newCompactionPersistence(eng).emitStatus("step-1", EventCompactionFailed, compactionModeAuto, CompactionInitiatorAutomatic, "remote", "openai", nil, 2, "quota exceeded")
+	err := newCompactionPersistence(eng).emitStatus("step-1", EventCompactionFailed, compactionModeAuto, "remote", "openai", nil, 2, "quota exceeded")
 	if err == nil {
 		t.Fatal("emitCompactionStatus did not surface the event-log append failure")
 	}
@@ -552,7 +552,7 @@ func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	if _, _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, CompactionInitiatorUserRequested, "", false); err != nil {
+	if _, _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, "", false); err != nil {
 		t.Fatalf("compactNow: %v", err)
 	}
 
@@ -585,7 +585,7 @@ func TestRemoteCompactionTaskCommentCountErrorDoesNotReplaceHistory(t *testing.T
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	_, _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, CompactionInitiatorUserRequested, "", false)
+	_, _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, "", false)
 	if !errors.Is(err, countErr) {
 		t.Fatalf("compactNow error = %v, want %v", err, countErr)
 	}
@@ -644,7 +644,7 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 			if err := engine.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
 				t.Fatalf("append seed: %v", err)
 			}
-			if _, _, err := engine.compactNow(context.Background(), "step-1", compactionModeManual, CompactionInitiatorUserRequested, "", false); err != nil {
+			if _, _, err := engine.compactNow(context.Background(), "step-1", compactionModeManual, "", false); err != nil {
 				t.Fatalf("compactNow: %v", err)
 			}
 			if got := activeGoalContinuationMessages(engine.transcriptRuntimeState().SnapshotItems()); len(got) != 0 {
@@ -678,7 +678,7 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndManualCarryoverA
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	if _, _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, CompactionInitiatorUserRequested, "", true); err != nil {
+	if _, _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, "", true); err != nil {
 		t.Fatalf("compactNow: %v", err)
 	}
 
@@ -860,7 +860,7 @@ func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testin
 	}
 	gate.FailNext(observerErr)
 
-	_, receipt, err := fixture.engine.compactNow(context.Background(), "step-compact", compactionModeManual, CompactionInitiatorUserRequested, "", false)
+	_, receipt, err := fixture.engine.compactNow(context.Background(), "step-compact", compactionModeManual, "", false)
 	if !receipt.Committed || !errors.Is(err, observerErr) {
 		t.Fatalf("compactNow receipt=%+v error=%v, want committed observer failure", receipt, err)
 	}
@@ -954,7 +954,7 @@ func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) 
 		return usage != nil && usage.WindowTokens == oldUsage.WindowTokens && usage.InputTokens != oldUsage.InputTokens
 	}, observerErr)
 
-	_, receipt, err := fixture.engine.compactNow(context.Background(), "step-compact", compactionModeManual, CompactionInitiatorUserRequested, "", false)
+	_, receipt, err := fixture.engine.compactNow(context.Background(), "step-compact", compactionModeManual, "", false)
 	if !receipt.Committed || !errors.Is(err, observerErr) {
 		t.Fatalf("compactNow receipt=%+v error=%v, want committed usage observer failure", receipt, err)
 	}
@@ -994,7 +994,7 @@ func TestCompactNowInvalidatesPromptSnapshotsWhenStaleMetadataObserverFails(t *t
 			!locked.HasReviewerPrompt && locked.ReviewerPrompt == ""
 	}, observerErr)
 
-	_, receipt, err := fixture.engine.compactNow(context.Background(), "step-compact", compactionModeManual, CompactionInitiatorUserRequested, "", false)
+	_, receipt, err := fixture.engine.compactNow(context.Background(), "step-compact", compactionModeManual, "", false)
 	if !receipt.Committed || !errors.Is(err, observerErr) {
 		t.Fatalf("compactNow receipt=%+v error=%v, want committed stale-snapshot observer failure", receipt, err)
 	}
@@ -1071,7 +1071,7 @@ func TestWorkflowRequestAfterCompactionDoesNotDuplicateReinjectedWorkflowPrompt(
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
-	if _, _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, CompactionInitiatorUserRequested, "", false); err != nil {
+	if _, _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, "", false); err != nil {
 		t.Fatalf("compactNow: %v", err)
 	}
 	client.responses = []llm.Response{commentaryResponse("complete",
@@ -1175,7 +1175,7 @@ func TestManualRemoteCompactionRebuildsCanonicalPrefixOrder(t *testing.T) {
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	if _, _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, CompactionInitiatorUserRequested, "", false); err != nil {
+	if _, _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, "", false); err != nil {
 		t.Fatalf("compactNow: %v", err)
 	}
 

@@ -1,7 +1,7 @@
 package app
 
 import (
-	"encoding/json"
+	"strings"
 	"testing"
 
 	"core/shared/clientui"
@@ -9,12 +9,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func TestAskVisibleActivationNormalizesMarkdownAfterProjectionCompletes(t *testing.T) {
+func TestAskVisibleActivationUsesCompletedProjectionNotificationPreview(t *testing.T) {
 	ringer := &countRinger{}
 	model := sizedTestUIModel(newProjectedStaticUIModel(), 64, 20)
-	model.promptAttention = newUnfocusedNativeTurnNotificationObserver(ringer)
-	lifecycle := &recordingLifecycleEnvelopeSink{}
-	model.lifecycleCoordinator = newClientLifecycleCoordinator(lifecycle, nil, nil, nil)
+	model.promptAttention = newUnfocusedBellHooks(ringer)
 	model.questionProjector = func(request questionRenderRequest) questionRenderResultMsg {
 		return questionRenderResultMsg{
 			request: request,
@@ -34,23 +32,11 @@ func TestAskVisibleActivationNormalizesMarkdownAfterProjectionCompletes(t *testi
 	if ready.ask.activeProjection == nil || ringer.notifications != 1 || len(ringer.messages) != 1 {
 		t.Fatalf("activation state = projection %+v notifications %d messages %q", ready.ask.activeProjection, ringer.notifications, ringer.messages)
 	}
-	if len(lifecycle.envelopes) != 1 {
-		t.Fatalf("activation lifecycle envelopes = %d, want one", len(lifecycle.envelopes))
+	if !strings.Contains(ringer.messages[0], "projected notification copy") {
+		t.Fatalf("activation notification did not use completed projection: %q", ringer.messages[0])
 	}
-	raw, err := json.Marshal(lifecycle.envelopes[0])
-	if err != nil {
-		t.Fatalf("marshal activation lifecycle envelope: %v", err)
-	}
-	var got struct {
-		Details struct {
-			Summary string `json:"summary"`
-		} `json:"details"`
-	}
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("decode activation lifecycle envelope: %v", err)
-	}
-	if got.Details.Summary != "**raw Markdown source that must not reach activation notification rendering**" {
-		t.Fatalf("activation lifecycle summary = %q, want Markdown source", got.Details.Summary)
+	if strings.Contains(ringer.messages[0], "raw Markdown source") {
+		t.Fatalf("activation notification reparsed the raw question: %q", ringer.messages[0])
 	}
 }
 
@@ -145,7 +131,7 @@ func TestAskInitialProjectionReadinessKeepsHelpAndGlobalCtrlC(t *testing.T) {
 func TestAskVisibleActivationOwnsNotificationTiming(t *testing.T) {
 	ringer := &countRinger{}
 	model := sizedTestUIModel(newProjectedStaticUIModel(), 64, 20)
-	model.promptAttention = newUnfocusedNativeTurnNotificationObserver(ringer)
+	model.promptAttention = newUnfocusedBellHooks(ringer)
 	prompt := testQuestionPrompt("ask-1", "Question?", "yes")
 	message := clientui.TranscriptMessage{
 		Kind: clientui.TranscriptMessagePromptPending,
@@ -207,7 +193,7 @@ func TestAskVisibleActivationOwnsNotificationTiming(t *testing.T) {
 func TestAskHydrationAdmissionEmitsNoAttentionBeforeProjection(t *testing.T) {
 	ringer := &countRinger{}
 	model := sizedTestUIModel(newProjectedStaticUIModel(), 64, 20)
-	model.promptAttention = newUnfocusedNativeTurnNotificationObserver(ringer)
+	model.promptAttention = newUnfocusedBellHooks(ringer)
 	prompt := testQuestionPrompt("ask-1", "Hydrated question?", "yes")
 
 	command := model.reconcileTranscriptPrompts([]clientui.TranscriptPrompt{prompt})

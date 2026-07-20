@@ -147,8 +147,7 @@ type uiConversationFeatureState struct {
 	ask                                uiAskState
 	questionProjector                  questionProjector
 	promptAnswers                      *transcriptPromptAnswerer
-	promptAttention                    *nativeTurnNotificationObserver
-	lifecycleCoordinator               *clientLifecycleCoordinator
+	promptAttention                    *bellHooks
 	startupSubmit                      string
 	startupSubmitPromptHistoryRecorded bool
 }
@@ -169,8 +168,7 @@ type uiSessionTransitionFeatureState struct {
 type uiStatusFeatureState struct {
 	processList                 uiProcessListState
 	reasoningStatusHeader       string
-	nativeTurnNotifications     *nativeTurnNotificationObserver
-	lifecycleHookIssueSink      lifecycleHookIssueSink
+	turnQueueHook               *bellHooks
 	statusConfig                uiStatusConfig
 	statusCollector             uiStatusCollector
 	statusRepository            uiStatusRepository

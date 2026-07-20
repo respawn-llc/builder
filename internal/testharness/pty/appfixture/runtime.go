@@ -27,21 +27,12 @@ import (
 )
 
 type ScriptFile struct {
-	Prompt              string                    `json:"prompt"`
-	StreamDeltas        []string                  `json:"stream_deltas"`
-	StreamDelayMS       *int                      `json:"stream_delay_ms"`
-	Final               string                    `json:"final"`
-	Steps               []StepFile                `json:"steps"`
-	SeedTranscript      []SeedTranscriptEntryFile `json:"seed_transcript"`
-	InputTokenCount     *int                      `json:"input_token_count"`
-	ContextWindowTokens *int                      `json:"context_window_tokens"`
-	Compactions         []CompactionFile          `json:"compactions"`
-}
-
-type CompactionFile struct {
-	Summary           string `json:"summary"`
-	TrimmedItemsCount int    `json:"trimmed_items_count"`
-	InputTokensAfter  int    `json:"input_tokens_after"`
+	Prompt         string                    `json:"prompt"`
+	StreamDeltas   []string                  `json:"stream_deltas"`
+	StreamDelayMS  *int                      `json:"stream_delay_ms"`
+	Final          string                    `json:"final"`
+	Steps          []StepFile                `json:"steps"`
+	SeedTranscript []SeedTranscriptEntryFile `json:"seed_transcript"`
 }
 
 type SeedTranscriptEntryFile struct {
@@ -66,7 +57,6 @@ type SeedTranscriptEntryFile struct {
 
 type StepFile struct {
 	Final               string                           `json:"final"`
-	Error               *string                          `json:"error,omitempty"`
 	Commentary          string                           `json:"commentary"`
 	StreamDeltas        []string                         `json:"stream_deltas"`
 	StreamDelayMS       *int                             `json:"stream_delay_ms"`
@@ -196,52 +186,7 @@ func loadScript(
 	if newAfterResponse != nil {
 		steps[len(steps)-1].AfterResponse = newAfterResponse(targetFinalAssistantOrdinal)
 	}
-	compactions, err := scriptedCompactions(file.Compactions)
-	if err != nil {
-		return ScriptFile{}, scriptedllm.Script{}, 0, err
-	}
-	return file, scriptedllm.Script{
-		Steps:               steps,
-		Compactions:         compactions,
-		InputTokenCount:     file.InputTokenCount,
-		ContextWindowTokens: file.ContextWindowTokens,
-	}, targetFinalAssistantOrdinal, nil
-}
-
-func scriptedCompactions(specs []CompactionFile) ([]llm.CompactionResponse, error) {
-	responses := make([]llm.CompactionResponse, 0, len(specs))
-	for index, spec := range specs {
-		if strings.TrimSpace(spec.Summary) == "" {
-			return nil, fmt.Errorf("compaction %d summary is required", index)
-		}
-		if spec.TrimmedItemsCount < 0 {
-			return nil, fmt.Errorf("compaction %d trimmed_items_count must not be negative", index)
-		}
-		if spec.InputTokensAfter <= 0 {
-			return nil, fmt.Errorf("compaction %d input_tokens_after must be positive", index)
-		}
-		trimmed := spec.TrimmedItemsCount
-		responses = append(responses, llm.CompactionResponse{
-			OutputItems: []llm.ResponseItem{
-				{
-					Type:    llm.ResponseItemTypeMessage,
-					Role:    llm.RoleUser,
-					Content: spec.Summary,
-				},
-				{
-					Type:             llm.ResponseItemTypeCompaction,
-					ID:               fmt.Sprintf("fixture-compaction-%d", index+1),
-					EncryptedContent: fmt.Sprintf("fixture-encrypted-compaction-%d", index+1),
-				},
-			},
-			Usage: llm.Usage{
-				InputTokens:  spec.InputTokensAfter,
-				WindowTokens: spec.InputTokensAfter,
-			},
-			TrimmedItemsCount: &trimmed,
-		})
-	}
-	return responses, nil
+	return file, scriptedllm.Script{Steps: steps}, targetFinalAssistantOrdinal, nil
 }
 
 func deriveTargetFinalAssistantOrdinal(steps []scriptedllm.Step) (ScriptFinalAssistantOrdinal, error) {
@@ -249,19 +194,10 @@ func deriveTargetFinalAssistantOrdinal(steps []scriptedllm.Step) (ScriptFinalAss
 		return 0, errors.New("PTY fixture script requires at least one step")
 	}
 	var ordinal ScriptFinalAssistantOrdinal
-	for index, step := range steps {
-		if step.Err != nil && index != len(steps)-1 {
-			return 0, errors.New("PTY fixture runtime error must be the final script step")
-		}
+	for _, step := range steps {
 		if isFinalAssistantStep(step) {
 			ordinal++
 		}
-	}
-	if steps[len(steps)-1].Err != nil {
-		if ordinal != 0 {
-			return 0, errors.New("PTY fixture runtime error script cannot contain assistant final responses")
-		}
-		return 0, nil
 	}
 	if ordinal == 0 {
 		return 0, errors.New("PTY fixture script requires an assistant final response")
@@ -305,15 +241,6 @@ func scriptSteps(file ScriptFile) ([]scriptedllm.Step, error) {
 func scriptStep(spec StepFile) (scriptedllm.Step, error) {
 	var step scriptedllm.Step
 	switch {
-	case spec.Error != nil:
-		message := strings.TrimSpace(*spec.Error)
-		if message == "" {
-			return scriptedllm.Step{}, fmt.Errorf("script runtime error cannot be blank")
-		}
-		step = scriptedllm.RuntimeError(&llm.APIStatusError{
-			StatusCode: 400,
-			Body:       message,
-		})
 	case len(spec.ToolCalls) > 0:
 		calls := make([]llm.ToolCall, 0, len(spec.ToolCalls))
 		for _, call := range spec.ToolCalls {

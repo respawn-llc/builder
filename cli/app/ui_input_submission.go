@@ -173,10 +173,10 @@ func (c uiInputController) finishRuntimeOperationAffordance(compacting bool) {
 
 func (c uiInputController) notifyTurnQueueDrainedIfIdle() {
 	m := c.model
-	if m.nativeTurnNotifications == nil || m.blocksRuntimeInput() || len(m.queued) > 0 || m.ask.hasCurrent() {
+	if m.turnQueueHook == nil || m.blocksRuntimeInput() || len(m.queued) > 0 || m.ask.hasCurrent() {
 		return
 	}
-	m.nativeTurnNotifications.ReduceNativeInput(nativeTurnQueueDrainedInput{})
+	m.turnQueueHook.OnTurnQueueDrained()
 }
 
 func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.Cmd) {
@@ -202,8 +202,8 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	}
 	m.discardQueuedInput(activeQueuedID)
 	if msg.err != nil {
-		if m.nativeTurnNotifications != nil {
-			m.nativeTurnNotifications.ReduceNativeInput(nativeTurnQueueAbortedInput{})
+		if m.turnQueueHook != nil {
+			m.turnQueueHook.OnTurnQueueAborted()
 		}
 		restoreInjectedCmd := c.restorePendingInjectedIntoInput()
 		if restoreSubmittedText {
@@ -230,8 +230,8 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	if msg.queued.ID != "" {
 		m.registerSteeredQueuedUserMessage(msg.queued)
 	}
-	if msg.silentFinal && m.nativeTurnNotifications != nil {
-		m.nativeTurnNotifications.ReduceNativeInput(nativeTurnQueueAbortedInput{})
+	if msg.silentFinal && m.turnQueueHook != nil {
+		m.turnQueueHook.OnTurnQueueAborted()
 	}
 	m.conversationFreshness = clientui.ConversationFreshnessEstablished
 	m.localConversationTurn = true
@@ -357,12 +357,12 @@ func (c uiInputController) handleCompactDone(msg compactDoneMsg) (tea.Model, tea
 
 func (c uiInputController) notifyUserCompactionCompleted(origin uiCompactionOrigin, queueDrained bool) {
 	m := c.model
-	if m == nil || m.nativeTurnNotifications == nil {
+	if m == nil || m.turnQueueHook == nil {
 		return
 	}
 	switch origin {
 	case uiCompactionOriginManual, uiCompactionOriginQueued:
-		m.nativeTurnNotifications.ReduceNativeInput(nativeUserCompactionCompletedInput{queueDrained: queueDrained})
+		m.turnQueueHook.OnUserCompactionCompleted(queueDrained)
 	}
 }
 

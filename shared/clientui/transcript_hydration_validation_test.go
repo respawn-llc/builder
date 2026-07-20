@@ -93,10 +93,9 @@ func TestTranscriptHydrationRejectsStepScopedFactsOutsideCanonicalActiveStep(t *
 			name: "compaction",
 			mutate: func(hydration *TranscriptHydration) {
 				hydration.ActiveCompaction = &TranscriptCompactionStatus{
-					StepID:    otherStepID,
-					State:     CompactionStarted,
-					Mode:      "auto",
-					Initiator: CompactionInitiatorAutomatic,
+					StepID: otherStepID,
+					State:  CompactionStarted,
+					Mode:   "auto",
 				}
 			},
 		},

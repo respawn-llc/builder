@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"strconv"
@@ -14,7 +13,6 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/lifecyclecontract"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 
@@ -45,7 +43,6 @@ type sessionLaunchPlan struct {
 	ModelContractLocked bool
 	StatusConfig        uiStatusConfig
 	ExecutionTarget     clientui.SessionExecutionTarget
-	WorkflowTaskID      *lifecyclecontract.WorkflowTaskID
 	Source              config.SourceReport
 }
 
@@ -54,13 +51,12 @@ type resolvedSessionPlanRequest struct {
 }
 
 type runtimeLaunchPlan struct {
-	Wiring                  *runtimeWiring
-	lifecycleHookDispatcher *lifecycleHookDispatcher
-	stopEventStreams        func()
-	close                   func() error
-	detachClose             func() error
-	closeOnce               sync.Once
-	closeErr                error
+	Wiring           *runtimeWiring
+	stopEventStreams func()
+	close            func() error
+	detachClose      func() error
+	closeOnce        sync.Once
+	closeErr         error
 }
 
 func (p *runtimeLaunchPlan) Close() error {
@@ -79,20 +75,11 @@ func (p *runtimeLaunchPlan) closeWithPolicy(detachOnly bool) error {
 		if p.stopEventStreams != nil {
 			p.stopEventStreams()
 		}
-		if p.Wiring != nil && p.Wiring.eventDispatcher != nil {
-			p.Wiring.eventDispatcher.Close()
-		}
-		var hookErr error
-		if p.lifecycleHookDispatcher != nil {
-			hookErr = p.lifecycleHookDispatcher.Close()
-		}
-		var releaseErr error
 		if detachOnly && p.detachClose != nil {
-			releaseErr = p.detachClose()
+			p.closeErr = p.detachClose()
 		} else if p.close != nil {
-			releaseErr = p.close()
+			p.closeErr = p.close()
 		}
-		p.closeErr = errors.Join(hookErr, releaseErr)
 	})
 	return p.closeErr
 }
@@ -168,11 +155,10 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 	if err != nil {
 		return sessionLaunchPlan{}, err
 	}
-	materialization, err := loadSelectedSessionMaterialization(ctx, p.server.SessionViewClient(), resp.Plan.SessionID)
+	executionTarget, err := loadSelectedSessionExecutionTarget(ctx, p.server.SessionViewClient(), resp.Plan.SessionID)
 	if err != nil {
 		return sessionLaunchPlan{}, err
 	}
-	executionTarget := materialization.executionTarget
 	enabledTools := make([]toolspec.ID, 0, len(resp.Plan.EnabledToolIDs))
 	for _, raw := range resp.Plan.EnabledToolIDs {
 		if id, ok := toolspec.ParseID(raw); ok {
@@ -203,7 +189,6 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 			OwnsServer:      p.server.OwnsServer(),
 		},
 		ExecutionTarget: executionTarget,
-		WorkflowTaskID:  materialization.workflowTaskID,
 		Source:          resp.Plan.Source,
 	}, nil
 }
@@ -220,41 +205,14 @@ func launchPlannerAuthState(server launchPlannerServer) launchPlannerAuthStateMe
 }
 
 func loadSelectedSessionExecutionTarget(ctx context.Context, sessionViews sessionViewReader, sessionID string) (clientui.SessionExecutionTarget, error) {
-	materialization, err := loadSelectedSessionMaterialization(ctx, sessionViews, sessionID)
-	if err != nil {
-		return clientui.SessionExecutionTarget{}, err
-	}
-	return materialization.executionTarget, nil
-}
-
-type selectedSessionMaterialization struct {
-	executionTarget clientui.SessionExecutionTarget
-	workflowTaskID  *lifecyclecontract.WorkflowTaskID
-}
-
-func loadSelectedSessionMaterialization(
-	ctx context.Context,
-	sessionViews sessionViewReader,
-	sessionID string,
-) (selectedSessionMaterialization, error) {
 	if sessionViews == nil {
-		return selectedSessionMaterialization{}, errors.New("session view client is required")
+		return clientui.SessionExecutionTarget{}, errors.New("session view client is required")
 	}
 	resp, err := sessionViews.GetSessionMainView(ctx, serverapi.SessionMainViewRequest{SessionID: strings.TrimSpace(sessionID)})
 	if err != nil {
-		return selectedSessionMaterialization{}, err
+		return clientui.SessionExecutionTarget{}, err
 	}
-	materialization := selectedSessionMaterialization{
-		executionTarget: clientui.NormalizeSessionExecutionTarget(resp.MainView.Session.ExecutionTarget),
-	}
-	if workflow := resp.MainView.Status.WorkflowSession; workflow != nil {
-		taskID, err := lifecyclecontract.ParseWorkflowTaskID(strings.Clone(workflow.TaskID))
-		if err != nil {
-			return selectedSessionMaterialization{}, fmt.Errorf("load selected session workflow task id: %w", err)
-		}
-		materialization.workflowTaskID = &taskID
-	}
-	return materialization, nil
+	return clientui.NormalizeSessionExecutionTarget(resp.MainView.Session.ExecutionTarget), nil
 }
 
 func (p *launchPlanner) PrepareRuntime(ctx context.Context, plan sessionLaunchPlan, diagnosticWriter io.Writer, startLogLine string) (*runtimeLaunchPlan, error) {

@@ -5,7 +5,7 @@ import (
 	"core/shared/transcript"
 )
 
-func (h *nativeTurnNotificationObserver) OnTranscriptMessage(message clientui.TranscriptMessage) {
+func (h *bellHooks) OnTranscriptMessage(message clientui.TranscriptMessage) {
 	switch message.Kind {
 	case clientui.TranscriptMessageAssistantDelta:
 		if delta := message.Payload.AssistantDelta; delta != nil && isNoopFinalText(delta.Delta) {

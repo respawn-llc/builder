@@ -7,14 +7,12 @@ import (
 	"time"
 
 	"core/shared/apicontract"
-	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
 
 type runtimeAttachmentTestServer struct {
 	runtime           apicontract.SessionRuntimeService
-	attention         apicontract.AttentionNotificationService
 	sessionTranscript apicontract.SessionTranscriptService
 	sessionViews      apicontract.SessionViewService
 	runtimeControl    apicontract.RuntimeControlService
@@ -22,39 +20,11 @@ type runtimeAttachmentTestServer struct {
 
 func (s runtimeAttachmentTestServer) RuntimeAttachmentClients() runtimeAttachmentClients {
 	return runtimeAttachmentClients{
-		AttentionNotifications: s.attention,
-		RuntimeControls:        s.runtimeControl,
-		SessionRuntime:         s.runtime,
-		SessionTranscript:      s.sessionTranscript,
-		SessionViews:           s.sessionViews,
+		RuntimeControls:   s.runtimeControl,
+		SessionRuntime:    s.runtime,
+		SessionTranscript: s.sessionTranscript,
+		SessionViews:      s.sessionViews,
 	}
-}
-
-type noOpAttentionNotificationSubscription struct{}
-
-func (noOpAttentionNotificationSubscription) Next(context.Context) (clientui.AttentionNotificationEvent, error) {
-	return clientui.AttentionNotificationEvent{}, io.EOF
-}
-
-func (noOpAttentionNotificationSubscription) Close() error { return nil }
-
-type recordingAttentionNotificationClient struct {
-	subscribe        func(context.Context, serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error)
-	subscribeSession func(context.Context, serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error)
-}
-
-func (c *recordingAttentionNotificationClient) SubscribeAttentionNotifications(ctx context.Context, req serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
-	if c.subscribe != nil {
-		return c.subscribe(ctx, req)
-	}
-	return noOpAttentionNotificationSubscription{}, nil
-}
-
-func (c *recordingAttentionNotificationClient) SubscribeSessionAttentionNotifications(ctx context.Context, req serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
-	if c.subscribeSession != nil {
-		return c.subscribeSession(ctx, req)
-	}
-	return noOpAttentionNotificationSubscription{}, nil
 }
 
 func TestRuntimeAttachmentRequiresTranscriptServiceAndReleasesRuntime(t *testing.T) {
@@ -90,7 +60,7 @@ func TestRuntimeAttachmentRequiresTranscriptServiceAndReleasesRuntime(t *testing
 	}
 }
 
-func TestRuntimeAttachmentWithoutAttentionServiceUsesTranscriptFallback(t *testing.T) {
+func TestRuntimeAttachmentUsesTranscriptBellHook(t *testing.T) {
 	releaseCount := 0
 	sessionViews := &countingSessionViewClient{}
 	server := runtimeAttachmentTestServer{
@@ -112,12 +82,11 @@ func TestRuntimeAttachmentWithoutAttentionServiceUsesTranscriptFallback(t *testi
 	if err != nil {
 		t.Fatalf("prepareSharedRuntime: %v", err)
 	}
-	if plan.Wiring.eventDispatcher.attentionEvents != nil ||
-		plan.Wiring.eventDispatcher.requestAttentionReopen != nil {
-		t.Fatal("runtime wiring created an attention stream without an attention service")
+	if plan.Wiring.eventDispatcher == nil || plan.Wiring.eventDispatcher.transcriptEvents == nil {
+		t.Fatal("runtime wiring omitted the transcript event dispatcher")
 	}
-	if plan.Wiring.promptAttention == nil || plan.Wiring.promptAttention != plan.Wiring.nativeTurnNotifications {
-		t.Fatal("runtime wiring did not retain transcript prompt attention fallback")
+	if plan.Wiring.promptAttention == nil || plan.Wiring.promptAttention != plan.Wiring.turnQueueHook {
+		t.Fatal("runtime wiring did not make the bell hook authoritative for prompt activation")
 	}
 	plan.Close()
 	if releaseCount != 1 {
@@ -125,62 +94,6 @@ func TestRuntimeAttachmentWithoutAttentionServiceUsesTranscriptFallback(t *testi
 	}
 	if got := sessionViews.mainViewCount.Load(); got != 0 {
 		t.Fatalf("startup main-view reads = %d, want 0 before feed hydration", got)
-	}
-}
-
-func TestRuntimeAttachmentSupportedAttentionSubscribesSessionSnapshot(t *testing.T) {
-	releaseCount := 0
-	attentionRequests := make(chan serverapi.AttentionSessionNotificationSubscribeRequest, 1)
-	attentionSubscription := &scriptedAttentionSubscription{}
-	sessionViews := &countingSessionViewClient{}
-	server := runtimeAttachmentTestServer{
-		runtime: &recordingSessionRuntimeClient{
-			activate: func(_ context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
-				return sessionRuntimeActivateResponse(req.SessionID, 1), nil
-			},
-			release: func(context.Context, serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
-				releaseCount++
-				return serverapi.SessionRuntimeReleaseResponse{}, nil
-			},
-		},
-		attention: &recordingAttentionNotificationClient{
-			subscribeSession: func(_ context.Context, req serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
-				attentionRequests <- req
-				return attentionSubscription, nil
-			},
-		},
-		sessionTranscript: &recordingTranscriptSubscriber{subs: []*scriptedTranscriptSubscription{{}}},
-		sessionViews:      sessionViews,
-		runtimeControl:    &reconnectRetryRuntimeControlClient{},
-	}
-
-	plan, err := prepareSharedRuntime(context.Background(), server, sessionLaunchPlan{SessionID: "session-1"}, io.Discard, "test")
-	if err != nil {
-		t.Fatalf("prepareSharedRuntime: %v", err)
-	}
-	if plan.Wiring.promptAttention != nil {
-		t.Fatal("runtime wiring retained transcript prompt fallback alongside the attention stream")
-	}
-	if plan.Wiring.eventDispatcher.attentionEvents == nil ||
-		plan.Wiring.eventDispatcher.requestAttentionReopen == nil {
-		t.Fatal("runtime wiring omitted the owned attention stream")
-	}
-	select {
-	case request := <-attentionRequests:
-		if request.SessionID != "session-1" || !request.IncludePendingPromptSnapshot {
-			t.Fatalf("attention request = %+v, want session snapshot", request)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("runtime attachment did not subscribe to session attention")
-	}
-	if err := plan.Close(); err != nil {
-		t.Fatalf("close runtime plan: %v", err)
-	}
-	if !attentionSubscription.isClosed() {
-		t.Fatal("runtime attachment left the attention subscription open")
-	}
-	if releaseCount != 1 {
-		t.Fatalf("release count = %d, want 1", releaseCount)
 	}
 }
 

@@ -11,9 +11,6 @@ import (
 )
 
 func RunInteractive[S SessionServer, A any, SO any](ctx context.Context, req Request[SO], deps Dependencies[S, A, SO]) error {
-	if deps.ResolveInteractiveConfig == nil {
-		return errors.New("interactive config resolver is required")
-	}
 	if deps.NewAuthInteractor == nil {
 		return errors.New("auth interactor factory is required")
 	}
@@ -23,12 +20,8 @@ func RunInteractive[S SessionServer, A any, SO any](ctx context.Context, req Req
 	if deps.RunSessionLifecycle == nil {
 		return errors.New("session lifecycle runner is required")
 	}
-	resolved, err := deps.ResolveInteractiveConfig(req)
-	if err != nil {
-		return err
-	}
 	authInteractor := deps.NewAuthInteractor()
-	server, err := deps.StartSessionServer(ctx, req, authInteractor, true, resolved.Server)
+	server, err := deps.StartSessionServer(ctx, req, authInteractor, true)
 	if err != nil {
 		return err
 	}
@@ -37,7 +30,7 @@ func RunInteractive[S SessionServer, A any, SO any](ctx context.Context, req Req
 	if err != nil {
 		return err
 	}
-	return deps.RunSessionLifecycle(ctx, server, authInteractor, resolved.Client, options)
+	return deps.RunSessionLifecycle(ctx, server, authInteractor, options)
 }
 
 func SessionLifecycleOptionsFor[SO any](req Request[SO]) (SessionLifecycleOptions, error) {

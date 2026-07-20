@@ -11,7 +11,7 @@ import (
 func TestAskEventDefersWhileDetailModeActive(t *testing.T) {
 	m, control := newProjectedPromptTestUIModel(t)
 	ringer := &countRinger{}
-	m.promptAttention = newUnfocusedNativeTurnNotificationObserver(ringer)
+	m.promptAttention = newUnfocusedBellHooks(ringer)
 	m.terminalGeometry = terminalGeometryKnown(90, 12)
 	testSetMainInput(m, "hidden draft")
 	m.layout().syncViewport()
@@ -68,7 +68,7 @@ func TestAskEventDefersWhileDetailModeActive(t *testing.T) {
 func TestAskEventDefersWhileProcessListOverlayIsOpen(t *testing.T) {
 	m, control := newProjectedPromptTestUIModel(t)
 	ringer := &countRinger{}
-	m.promptAttention = newUnfocusedNativeTurnNotificationObserver(ringer)
+	m.promptAttention = newUnfocusedBellHooks(ringer)
 	m.terminalGeometry = terminalGeometryKnown(100, 14)
 	testSetMainInput(m, "/ps")
 

@@ -1080,12 +1080,6 @@ func TestWorkflowRuntimeCompactAndContinueReusesSourceSessionWithRealCompaction(
 	}
 	fixture.waitForRunCount(t, task.ID, 2)
 	fixture.waitForActiveCountZero(t, scheduler)
-	runtimeRegistry, ok := fixture.runtimes.(*registry.RuntimeRegistry)
-	if !ok {
-		t.Fatalf("runtime registry = %T, want *registry.RuntimeRegistry", fixture.runtimes)
-	}
-	recordingRuntimes := &recordingStarterRuntimeRegistry{RuntimeRegistry: runtimeRegistry}
-	fixture.starter.runtimes = recordingRuntimes
 	if err := scheduler.Process(context.Background()); err != nil {
 		t.Fatalf("second Process: %v", err)
 	}
@@ -1140,18 +1134,6 @@ func TestWorkflowRuntimeCompactAndContinueReusesSourceSessionWithRealCompaction(
 	// recompaction while a fresh in-place handoff recompacts.
 	if runID := fixture.historyReplacedWorkflowRunID(t, runs[1].SessionID); runID != string(runs[1].ID) {
 		t.Fatalf("history_replaced workflow_run_id = %q, want run %q", runID, runs[1].ID)
-	}
-	var compactionStarted *runtime.CompactionStatus
-	for _, event := range recordingRuntimes.Events() {
-		if event.Kind == runtime.EventCompactionStarted {
-			compactionStarted = event.Compaction
-			break
-		}
-	}
-	if compactionStarted == nil ||
-		compactionStarted.Mode != "manual" ||
-		compactionStarted.Initiator != runtime.CompactionInitiatorAutomatic {
-		t.Fatalf("workflow continuation compaction status = %+v, want manual mode with automatic initiator", compactionStarted)
 	}
 }
 
@@ -1741,35 +1723,6 @@ type starterFixture struct {
 	workflowID           workflow.WorkflowID
 	projectID            string
 	attentionBroker      *attentionnotify.Broker
-}
-
-type recordingStarterRuntimeRegistry struct {
-	*registry.RuntimeRegistry
-
-	mu     sync.Mutex
-	events []runtime.Event
-}
-
-func (r *recordingStarterRuntimeRegistry) PublishRuntimeEvent(sessionID string, evt runtime.Event) {
-	r.record(evt)
-	r.RuntimeRegistry.PublishRuntimeEvent(sessionID, evt)
-}
-
-func (r *recordingStarterRuntimeRegistry) PublishRuntimeEventForEngine(sessionID string, engine *runtime.Engine, evt runtime.Event) {
-	r.record(evt)
-	r.RuntimeRegistry.PublishRuntimeEventForEngine(sessionID, engine, evt)
-}
-
-func (r *recordingStarterRuntimeRegistry) Events() []runtime.Event {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]runtime.Event(nil), r.events...)
-}
-
-func (r *recordingStarterRuntimeRegistry) record(evt runtime.Event) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.events = append(r.events, evt)
 }
 
 type starterRuntimeRegistry interface {

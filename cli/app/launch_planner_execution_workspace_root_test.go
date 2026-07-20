@@ -9,9 +9,8 @@ import (
 )
 
 type executionTargetReader struct {
-	request  serverapi.SessionMainViewRequest
-	target   clientui.SessionExecutionTarget
-	workflow *clientui.WorkflowSessionStatus
+	request serverapi.SessionMainViewRequest
+	target  clientui.SessionExecutionTarget
 }
 
 func (r *executionTargetReader) GetSessionMainView(
@@ -22,7 +21,6 @@ func (r *executionTargetReader) GetSessionMainView(
 	return serverapi.SessionMainViewResponse{
 		MainView: clientui.RuntimeMainView{
 			Session: clientui.RuntimeSessionView{ExecutionTarget: r.target},
-			Status:  clientui.RuntimeStatus{WorkflowSession: r.workflow},
 		},
 	}, nil
 }
@@ -61,19 +59,5 @@ func TestLoadSelectedSessionExecutionTargetPreservesUnavailableTarget(t *testing
 	}
 	if target.WorkspaceAvailability != clientui.ProjectAvailabilityMissing {
 		t.Fatalf("execution target = %+v, want missing", target)
-	}
-}
-
-func TestLoadSelectedSessionMaterializationCapturesTypedWorkflowTaskID(t *testing.T) {
-	reader := &executionTargetReader{
-		workflow: &clientui.WorkflowSessionStatus{TaskID: "task-1"},
-	}
-
-	materialization, err := loadSelectedSessionMaterialization(context.Background(), reader, "selected-session")
-	if err != nil {
-		t.Fatalf("load selected session materialization: %v", err)
-	}
-	if materialization.workflowTaskID == nil || materialization.workflowTaskID.String() != "task-1" {
-		t.Fatalf("workflow task id = %+v, want task-1", materialization.workflowTaskID)
 	}
 }

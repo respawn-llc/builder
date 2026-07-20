@@ -272,15 +272,11 @@ func ptyCheckpointTranscriptEvent(msg tea.Msg) (ongoingTranscriptEvent, bool) {
 	if !ok {
 		return ongoingTranscriptEvent{}, false
 	}
-	transcript, ok := dispatched.event.(uiAcceptedTranscriptEvent)
-	if !ok {
-		return ongoingTranscriptEvent{}, false
-	}
-	return transcript.event, true
+	return dispatched.event, true
 }
 
 func dispatchPTYCheckpointTranscriptEvent(event ongoingTranscriptEvent) uiDispatchedEventMsg {
-	return uiDispatchedEventMsg{event: uiAcceptedTranscriptEvent{event: event}}
+	return uiDispatchedEventMsg{event: event}
 }
 
 type ptyOngoingTargetFinalDrainCandidate struct {

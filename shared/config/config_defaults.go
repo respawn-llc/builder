@@ -94,11 +94,6 @@ func settingsTOMLWithRenderingOptions(settings Settings, includeToolSection bool
 		out.WriteString("\n[shell]\n")
 		writeDefaultLines(&out, shellLines)
 	}
-	clientHookLines := annotateRenderedLines(filterDefaultLines(lines, "hooks.client"), filterDefaultLines(defaultLines, "hooks.client"), nil)
-	if len(clientHookLines) > 0 {
-		out.WriteString("\n[hooks.client]\n")
-		writeDefaultLines(&out, clientHookLines)
-	}
 	if len(worktreeLines) > 0 {
 		out.WriteString("\n[worktrees]\n")
 		writeDefaultLines(&out, worktreeLines)

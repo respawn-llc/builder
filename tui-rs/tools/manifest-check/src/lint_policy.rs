@@ -5,17 +5,18 @@ use walkdir::WalkDir;
 
 pub fn check(repo_root: &Path) -> Result<(), Vec<Finding>> {
     let rust_root = repo_root.join("tui-rs");
-    let mut findings = Vec::new();
-    if rust_root.exists() {
-        let rust_files = rust_files(&rust_root, repo_root);
-        for path in &rust_files {
-            check_rust_file(repo_root, path, &mut findings);
-        }
-        check_integration_harnesses(repo_root, &rust_root, &mut findings);
-        check_library_doctest_policy(repo_root, &rust_root, &mut findings);
-        check_production_src_file_size(repo_root, &rust_files, &mut findings);
+    if !rust_root.exists() {
+        return Ok(());
     }
-    crate::desktop_lifecycle_boundary::check(repo_root, &mut findings);
+
+    let mut findings = Vec::new();
+    let rust_files = rust_files(&rust_root, repo_root);
+    for path in &rust_files {
+        check_rust_file(repo_root, path, &mut findings);
+    }
+    check_integration_harnesses(repo_root, &rust_root, &mut findings);
+    check_library_doctest_policy(repo_root, &rust_root, &mut findings);
+    check_production_src_file_size(repo_root, &rust_files, &mut findings);
 
     if findings.is_empty() {
         Ok(())
@@ -68,7 +69,7 @@ fn check_rust_file(repo_root: &Path, path: &Path, findings: &mut Vec<Finding>) {
     }
 }
 
-pub(crate) fn rust_files(rust_root: &Path, repo_root: &Path) -> Vec<PathBuf> {
+fn rust_files(rust_root: &Path, repo_root: &Path) -> Vec<PathBuf> {
     WalkDir::new(rust_root)
         .into_iter()
         .filter_entry(|entry| !entry.path().ends_with("target"))
@@ -554,7 +555,7 @@ fn check_library_doctest(repo_root: &Path, manifest_path: &Path, findings: &mut 
     }
 }
 
-pub(crate) fn read_cargo_manifest(
+fn read_cargo_manifest(
     repo_root: &Path,
     manifest_path: &Path,
     findings: &mut Vec<Finding>,

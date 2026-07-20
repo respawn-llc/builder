@@ -984,7 +984,7 @@ func TestSettingsTOMLRoundTripsCapabilityOverrides(t *testing.T) {
 	}
 	state := configRegistry.defaultState()
 	sources := configRegistry.defaultSourceMap()
-	if err := configRegistry.applyFile(raw, path, settingsFileLayerGlobal, &state, sources); err != nil {
+	if err := configRegistry.applyFile(raw, path, &state, sources); err != nil {
 		t.Fatalf("apply file: %v", err)
 	}
 	if !state.Settings.ModelCapabilities.SupportsReasoningEffort {

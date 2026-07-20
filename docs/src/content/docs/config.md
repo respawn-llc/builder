@@ -27,10 +27,6 @@ Interactive session flows resolve workspace-local config from the session worksp
 - Global settings live at: `~/.kent/config.toml`, and this location (along with all other data storage) is overridable via `--persistence-root`. The flag also relocates the root's model-visible global context — global `AGENTS.md`, the global system-prompt file, global skills, and generated assets.
 `kent service` is also root-aware. Each `--persistence-root` install bakes the root into the registration. The OS still holds a single service, so install with the root you want managed.
 
-### Client-only settings
-
-`hooks.client.lifecycle` is valid only in the controlling TUI client's global `config.toml`. Workspace config, environment variables, CLI flags, and servers cannot set or override it. See [Lifecycle Hooks](../lifecycle-hooks/) for the argv and JSON contracts.
-
 ## Example
 
 ```toml
@@ -146,7 +142,6 @@ verbose_output = false # show supervisor suggestions in ongoing transcript
 | `bg_shells_output` | string | `default` | `KENT_BG_SHELLS_OUTPUT` |  | Background-shell output mode (injection of shell outputs into model context). Allowed: `default`, `verbose`, `concise`. Verbose dumps all output into the main agent's model. Concise forces it to read output files. Default outputs truncated previews + gives a file path. |
 | `shell.postprocessing_mode` | string | `builtin` | `KENT_SHELL_POSTPROCESSING_MODE` |  | Semantic post-processing mode for `exec_command`. Allowed: `none`, `builtin`, `user`, `all`. `builtin` enables Kent processors only. `all` runs Kent processors first, then your hook. |
 | `shell.postprocess_hook` | optional string | unset | `KENT_SHELL_POSTPROCESS_HOOK` |  | Executable/script path for a single local command post-processing hook. Omit the TOML key or unset the environment variable when unused; empty and whitespace-only values are invalid. Kent sends JSON on stdin and expects JSON on stdout. |
-| `hooks.client.lifecycle` | string array | unset |  |  | Client-local lifecycle receiver argv for interactive controlling TUIs. Global TOML only; see [Lifecycle Hooks](../lifecycle-hooks/). |
 | `prevent_sleep` | string | `active` | `KENT_PREVENT_SLEEP` |  | Prevent system sleep while Kent is running. Allowed: `always` (while the server process is live), `active` (while any agent is working, plus up to one minute of idle-confirmation grace), `never` (disabled). Only system sleep is inhibited; screensaver and display sleep are unaffected. |
 | `timeouts.model_request_seconds` | int | `400` | `KENT_TIMEOUTS_MODEL_REQUEST_SECONDS` | `kent run --model-timeout-seconds` | Model request timeout. Must be `> 0`. For non-streaming requests it bounds the whole request. For streaming responses it is a per-event idle window: the request is only aborted when no streaming activity arrives within this duration (measured from dispatch, so it also bounds time-to-first-event), letting a healthy long generation stream past it while a dead stream fails fast. |
 

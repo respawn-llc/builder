@@ -7,8 +7,6 @@ import (
 
 	"core/cli/app/internal/embeddedattach"
 	"core/cli/app/internal/runner"
-	"core/cli/app/internal/startupconfig"
-	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -32,19 +30,12 @@ type Options struct {
 
 func Run(ctx context.Context, opts Options) error {
 	return runner.RunInteractive(ctx, runnerRequestFromOptions(opts), runner.Dependencies[interactiveSessionServer, authInteractor, embeddedattach.StartupOptions]{
-		ResolveInteractiveConfig: func(req runner.Request[embeddedattach.StartupOptions]) (runner.InteractiveConfig, error) {
-			resolved, err := startupconfig.ResolveInteractiveConfig(startupConfigRequest(optionsFromRunnerRequest(req)))
-			if err != nil {
-				return runner.InteractiveConfig{}, err
-			}
-			return runner.InteractiveConfig{Server: resolved.Server, Client: resolved.Client}, nil
-		},
 		NewAuthInteractor: newInteractiveAuthInteractor,
-		StartSessionServer: func(ctx context.Context, req runner.Request[embeddedattach.StartupOptions], interactor authInteractor, interactive bool, cfg config.App) (interactiveSessionServer, error) {
-			return startSessionServer(ctx, optionsFromRunnerRequest(req), interactor, interactive, cfg)
+		StartSessionServer: func(ctx context.Context, req runner.Request[embeddedattach.StartupOptions], interactor authInteractor, interactive bool) (interactiveSessionServer, error) {
+			return startSessionServer(ctx, optionsFromRunnerRequest(req), interactor, interactive)
 		},
-		RunSessionLifecycle: func(ctx context.Context, server interactiveSessionServer, interactor authInteractor, clientSettings config.ClientSettings, opts runner.SessionLifecycleOptions) error {
-			return runSessionLifecycleWithOptions(ctx, server, interactor, clientSettings, sessionLifecycleOptions{
+		RunSessionLifecycle: func(ctx context.Context, server interactiveSessionServer, interactor authInteractor, opts runner.SessionLifecycleOptions) error {
+			return runSessionLifecycleWithOptions(ctx, server, interactor, sessionLifecycleOptions{
 				Intent:    opts.Intent,
 				Overrides: opts.Overrides,
 			})

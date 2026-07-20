@@ -69,7 +69,7 @@ func TestRunSessionLifecycleReturnsMissingWorkspaceFailure(t *testing.T) {
 	}
 
 	createIntent := serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())
-	err := runSessionLifecycleWithOptions(context.Background(), server, nil, config.ClientSettings{}, sessionLifecycleOptions{Intent: &createIntent})
+	err := runSessionLifecycleWithOptions(context.Background(), server, nil, sessionLifecycleOptions{Intent: &createIntent})
 	if err == nil {
 		t.Fatal("expected startup error for missing workspace")
 	}
@@ -100,7 +100,7 @@ func TestRunSessionLifecycleAppliesInitialAgentOverride(t *testing.T) {
 	}
 
 	createIntent := serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())
-	err := runSessionLifecycleWithOptions(context.Background(), server, nil, config.ClientSettings{}, sessionLifecycleOptions{
+	err := runSessionLifecycleWithOptions(context.Background(), server, nil, sessionLifecycleOptions{
 		Intent:    &createIntent,
 		Overrides: serverapi.RunPromptOverrides{AgentRole: sessionLifecycleStringPtr("worker")},
 	})
@@ -170,7 +170,7 @@ func TestRunSessionLifecycleRejectsDifferentAgentRoleForLockedContinuation(t *te
 
 	sessionID := sessionLifecycleSessionID(t, store.Meta().SessionID)
 	openIntent := serverapi.OpenExistingSessionLaunchIntent(sessionID)
-	err = runSessionLifecycleWithOptions(ctx, server, nil, config.ClientSettings{}, sessionLifecycleOptions{
+	err = runSessionLifecycleWithOptions(ctx, server, nil, sessionLifecycleOptions{
 		Intent:    &openIntent,
 		Overrides: serverapi.RunPromptOverrides{AgentRole: sessionLifecycleStringPtr("worker")},
 	})

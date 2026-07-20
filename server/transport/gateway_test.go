@@ -561,7 +561,7 @@ func TestGatewayHandshakeRejectsPreviousProtocolGeneration(t *testing.T) {
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 
-	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "63"})
+	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "62"})
 	if respErr.Code != protocol.ErrCodeProtocolVersionMismatch {
 		t.Fatalf("expected previous protocol generation rejection, got %+v", respErr)
 	}

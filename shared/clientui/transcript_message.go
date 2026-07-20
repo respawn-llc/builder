@@ -30,7 +30,6 @@ const (
 	TranscriptMessagePromptResolved            TranscriptMessageKind = "prompt_resolved"
 	TranscriptMessageWorktreeTransitionOutcome TranscriptMessageKind = "worktree_transition_outcome"
 	TranscriptMessageOperationalDiagnostic     TranscriptMessageKind = "operational_diagnostic"
-	TranscriptMessageLiveRunBatchFinished      TranscriptMessageKind = "live_run_batch_finished"
 )
 
 type TranscriptMessage struct {
@@ -63,7 +62,6 @@ type TranscriptPayload struct {
 	PromptResolved            *TranscriptPrompt
 	WorktreeTransitionOutcome *TranscriptWorktreeTransitionOutcome
 	OperationalDiagnostic     *TranscriptOperationalDiagnostic
-	LiveRunBatchFinished      *TranscriptLiveRunBatchFinished
 }
 
 type TranscriptHydration struct {
@@ -145,7 +143,6 @@ func (p TranscriptPayload) validateCardinality(kind TranscriptMessageKind) error
 		p.PromptResolved != nil,
 		p.WorktreeTransitionOutcome != nil,
 		p.OperationalDiagnostic != nil,
-		p.LiveRunBatchFinished != nil,
 	} {
 		if present {
 			count++
@@ -209,8 +206,6 @@ func (p TranscriptPayload) validatorForKind(kind TranscriptMessageKind) (transcr
 		return p.WorktreeTransitionOutcome, p.WorktreeTransitionOutcome != nil
 	case TranscriptMessageOperationalDiagnostic:
 		return p.OperationalDiagnostic, p.OperationalDiagnostic != nil
-	case TranscriptMessageLiveRunBatchFinished:
-		return p.LiveRunBatchFinished, p.LiveRunBatchFinished != nil
 	default:
 		return nil, false
 	}

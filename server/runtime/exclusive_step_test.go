@@ -33,6 +33,12 @@ type blockingStepLifecycleSink struct {
 	releaseEnded chan struct{}
 }
 
+type callbackStepLifecycleSink struct {
+	onTransition func(StepLifecycleTransition) error
+	mu           sync.Mutex
+	transitions  []StepLifecycleTransition
+}
+
 func newBlockingStepLifecycleSink() *blockingStepLifecycleSink {
 	return &blockingStepLifecycleSink{endedStarted: make(chan StepLifecycleSnapshot, 1), releaseEnded: make(chan struct{})}
 }
@@ -45,6 +51,35 @@ func (s *blockingStepLifecycleSink) StepEnded(_ context.Context, snapshot StepLi
 	s.endedStarted <- snapshot
 	<-s.releaseEnded
 	return nil
+}
+
+func (s *callbackStepLifecycleSink) StepBegan(context.Context, StepLifecycleSnapshot) error {
+	return s.record(StepLifecycleTransitionBegan)
+}
+
+func (s *callbackStepLifecycleSink) StepEnded(context.Context, StepLifecycleSnapshot) error {
+	return s.record(StepLifecycleTransitionEnded)
+}
+
+func (s *callbackStepLifecycleSink) record(transition StepLifecycleTransition) error {
+	s.mu.Lock()
+	s.transitions = append(s.transitions, transition)
+	s.mu.Unlock()
+	if s.onTransition != nil {
+		return s.onTransition(transition)
+	}
+	return nil
+}
+
+func (s *callbackStepLifecycleSink) seen(transition StepLifecycleTransition) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, item := range s.transitions {
+		if item == transition {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *stubBackgroundNoticeScheduler) HandleBackgroundShellUpdate(BackgroundShellEvent, bool) {}

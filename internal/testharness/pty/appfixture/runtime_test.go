@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"core/server/llm"
-
 	"github.com/google/uuid"
 )
 
@@ -78,49 +76,6 @@ func TestRuntimeRejectsScriptThatDoesNotEndWithAssistantFinal(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("runtime accepted a script whose final step is not an assistant final")
-	}
-}
-
-func TestRuntimeMaterializesTokenPressureAndCompactionScript(t *testing.T) {
-	inputTokens := 900
-	contextWindow := 1000
-	runtime, err := NewRuntime(
-		writeRuntimeScriptFile(t, ScriptFile{
-			Final:               "done",
-			InputTokenCount:     &inputTokens,
-			ContextWindowTokens: &contextWindow,
-			Compactions: []CompactionFile{{
-				Summary:           "compacted context",
-				TrimmedItemsCount: 2,
-				InputTokensAfter:  100,
-			}},
-		}),
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("create runtime: %v", err)
-	}
-	if got, err := runtime.Client.CountRequestInputTokens(context.Background(), llm.Request{}); err != nil || got != inputTokens {
-		t.Fatalf("input token count = %d, %v; want %d", got, err, inputTokens)
-	}
-	if got, err := runtime.Client.ResolveModelContextWindow(context.Background(), "gpt-5"); err != nil || got != contextWindow {
-		t.Fatalf("context window = %d, %v; want %d", got, err, contextWindow)
-	}
-	compacted, err := runtime.Client.Compact(context.Background(), llm.CompactionRequest{})
-	if err != nil {
-		t.Fatalf("compact scripted runtime: %v", err)
-	}
-	if len(compacted.OutputItems) != 2 ||
-		compacted.OutputItems[0].Type != llm.ResponseItemTypeMessage ||
-		compacted.OutputItems[0].Role != llm.RoleUser ||
-		compacted.OutputItems[0].Content != "compacted context" ||
-		compacted.OutputItems[1].Type != llm.ResponseItemTypeCompaction ||
-		compacted.OutputItems[1].EncryptedContent == "" ||
-		compacted.TrimmedItemsCount == nil || *compacted.TrimmedItemsCount != 2 {
-		t.Fatalf("scripted compaction = %+v", compacted)
-	}
-	if got, err := runtime.Client.CountRequestInputTokens(context.Background(), llm.Request{}); err != nil || got != 100 {
-		t.Fatalf("post-compaction input token count = %d, %v; want 100", got, err)
 	}
 }
 

@@ -135,9 +135,8 @@ func TestTranscriptEntriesFromEventOmitsPrePersistCompactionStatusRows(t *testin
 			evt: Event{
 				Kind: EventCompactionCompleted,
 				Compaction: &CompactionStatus{
-					Mode:      "auto",
-					Initiator: CompactionInitiatorAutomatic,
-					Count:     1,
+					Mode:  "auto",
+					Count: 1,
 				},
 			},
 		},
@@ -146,9 +145,8 @@ func TestTranscriptEntriesFromEventOmitsPrePersistCompactionStatusRows(t *testin
 			evt: Event{
 				Kind: EventCompactionFailed,
 				Compaction: &CompactionStatus{
-					Mode:      "manual",
-					Initiator: CompactionInitiatorUserRequested,
-					Error:     "quota exceeded",
+					Mode:  "manual",
+					Error: "quota exceeded",
 				},
 			},
 		},

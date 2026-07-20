@@ -20,16 +20,15 @@ type runtimeAttachmentSource interface {
 }
 
 type runtimeAttachmentClients struct {
-	AttentionNotifications apicontract.AttentionNotificationService
-	ProcessControls        apicontract.ProcessControlService
-	ProcessOutput          apicontract.ProcessOutputService
-	ProcessViews           apicontract.ProcessViewService
-	PromptControl          apicontract.PromptControlService
-	RuntimeControls        apicontract.RuntimeControlService
-	SessionTranscript      apicontract.SessionTranscriptService
-	SessionRuntime         apicontract.SessionRuntimeService
-	SessionViews           apicontract.SessionViewService
-	Worktrees              apicontract.WorktreeService
+	ProcessControls   apicontract.ProcessControlService
+	ProcessOutput     apicontract.ProcessOutputService
+	ProcessViews      apicontract.ProcessViewService
+	PromptControl     apicontract.PromptControlService
+	RuntimeControls   apicontract.RuntimeControlService
+	SessionTranscript apicontract.SessionTranscriptService
+	SessionRuntime    apicontract.SessionRuntimeService
+	SessionViews      apicontract.SessionViewService
+	Worktrees         apicontract.WorktreeService
 }
 
 func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, plan sessionLaunchPlan, diagnosticWriter io.Writer, startLogLine string) (*runtimeLaunchPlan, error) {
@@ -47,7 +46,7 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 	}
 	_ = diagnosticWriter
 	_ = startLogLine
-	wiring, stopEventStreams := prepareSharedRuntimeWiring(
+	wiring, stopTranscriptEvents := prepareSharedRuntimeWiring(
 		ctx,
 		clients,
 		plan,
@@ -56,7 +55,7 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 	var stopStreamsOnce sync.Once
 	stopStreams := func() {
 		stopStreamsOnce.Do(func() {
-			stopEventStreams()
+			stopTranscriptEvents()
 		})
 	}
 	return &runtimeLaunchPlan{
@@ -103,21 +102,9 @@ func prepareSharedRuntimeWiring(
 	transcriptEvents := transcriptStream.Events
 	eventDispatcher := newUIEventDispatcher(transcriptEvents)
 	requestTranscriptOpen := transcriptStream.RequestRehydration
-	var attentionStream *attentionEventStream
-	if clients.AttentionNotifications != nil {
-		subscribeAttention := func(ctx context.Context, req serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
-			return clients.AttentionNotifications.SubscribeSessionAttentionNotifications(ctx, req)
-		}
-		attentionStream = startAttentionEventStream(ctx, plan.SessionID, subscribeAttention)
-	}
-	stopEventStreams := func() {
-		transcriptStream.Close()
-		if attentionStream != nil {
-			attentionStream.Close()
-		}
-	}
+	stopTranscriptEvents := transcriptStream.Stop
 	terminalFocus := newTerminalFocusState()
-	nativeTurnNotifications := newNativeTurnNotificationObserver(newTerminalNotifier(plan.ActiveSettings.NotificationMethod, os.Stdout, os.LookupEnv), func() string {
+	turnQueueHook := newBellHooks(newTerminalNotifier(plan.ActiveSettings.NotificationMethod, os.Stdout, os.LookupEnv), func() string {
 		if runtimeClient != nil {
 			if sessionName := strings.TrimSpace(runtimeClient.MainView().Session.SessionName); sessionName != "" {
 				return sessionName
@@ -125,27 +112,19 @@ func prepareSharedRuntimeWiring(
 		}
 		return strings.TrimSpace(plan.SessionName)
 	}, terminalFocus.FocusedForAttention)
-	promptAttention := nativeTurnNotifications
-	if attentionStream != nil {
-		promptAttention = nil
-	}
 	wiring := &runtimeWiring{
-		eventDispatcher:         eventDispatcher,
-		requestTranscriptOpen:   requestTranscriptOpen,
-		promptAnswers:           newTranscriptPromptAnswerer(ctx, clients.PromptControl),
-		promptAttention:         promptAttention,
-		nativeTurnNotifications: nativeTurnNotifications,
-		terminalFocus:           terminalFocus,
-		runtimeClient:           runtimeClient,
-		worktrees:               clients.Worktrees,
-		processControls:         clients.ProcessControls,
-		processOutput:           clients.ProcessOutput,
-		processViews:            clients.ProcessViews,
-		promptHistory:           append([]string(nil), plan.PromptHistory...),
+		eventDispatcher:       eventDispatcher,
+		requestTranscriptOpen: requestTranscriptOpen,
+		promptAnswers:         newTranscriptPromptAnswerer(ctx, clients.PromptControl),
+		promptAttention:       turnQueueHook,
+		turnQueueHook:         turnQueueHook,
+		terminalFocus:         terminalFocus,
+		runtimeClient:         runtimeClient,
+		worktrees:             clients.Worktrees,
+		processControls:       clients.ProcessControls,
+		processOutput:         clients.ProcessOutput,
+		processViews:          clients.ProcessViews,
+		promptHistory:         append([]string(nil), plan.PromptHistory...),
 	}
-	if attentionStream != nil {
-		eventDispatcher.attentionEvents = attentionStream.events
-		eventDispatcher.requestAttentionReopen = attentionStream.RequestReopen
-	}
-	return wiring, stopEventStreams
+	return wiring, stopTranscriptEvents
 }

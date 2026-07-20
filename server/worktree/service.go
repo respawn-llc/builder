@@ -19,7 +19,6 @@ import (
 	"core/server/sessionruntime"
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
-	"core/shared/boundedio"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -1681,14 +1680,8 @@ func (s *Service) runSetupScript(ctx context.Context, scriptPath string, payload
 	if err != nil {
 		return &setupScriptError{Message: fmt.Sprintf("build setup environment: %v", err), ScriptPath: scriptPath, WorktreeRoot: payload.WorktreeRoot}
 	}
-	stdout, err := boundedio.NewWriter(setupDiagnosticLimitBytes)
-	if err != nil {
-		return &setupScriptError{Message: fmt.Sprintf("initialize setup stdout capture: %v", err), ScriptPath: scriptPath, WorktreeRoot: payload.WorktreeRoot}
-	}
-	stderr, err := boundedio.NewWriter(setupDiagnosticLimitBytes)
-	if err != nil {
-		return &setupScriptError{Message: fmt.Sprintf("initialize setup stderr capture: %v", err), ScriptPath: scriptPath, WorktreeRoot: payload.WorktreeRoot}
-	}
+	stdout := shelltool.NewBoundedOutput(setupDiagnosticLimitBytes)
+	stderr := shelltool.NewBoundedOutput(setupDiagnosticLimitBytes)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	configureSetupCommand(cmd)

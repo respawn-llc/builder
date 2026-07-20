@@ -215,73 +215,6 @@ func TestAutoCompactionStatusEventDoesNotPublishCommittedEntryStart(t *testing.T
 	if compactionEvt.CommittedEntryStartSet {
 		t.Fatalf("expected compaction status event to stay pre-commit, got %+v", compactionEvt)
 	}
-	if compactionEvt.Compaction == nil || compactionEvt.Compaction.Initiator != CompactionInitiatorAutomatic {
-		t.Fatalf("auto compaction initiator = %+v, want automatic", compactionEvt.Compaction)
-	}
-}
-
-func TestCompactionInitiatorDistinguishesUserAndPreSubmitManualMode(t *testing.T) {
-	tests := []struct {
-		name          string
-		start         func(*Engine) error
-		wantInitiator CompactionInitiator
-	}{
-		{
-			name: "explicit compact",
-			start: func(eng *Engine) error {
-				return eng.CompactContext(context.Background(), "")
-			},
-			wantInitiator: CompactionInitiatorUserRequested,
-		},
-		{
-			name: "pre-submit",
-			start: func(eng *Engine) error {
-				return eng.CompactContextForPreSubmit(context.Background())
-			},
-			wantInitiator: CompactionInitiatorAutomatic,
-		},
-		{
-			name: "workflow continuation",
-			start: func(eng *Engine) error {
-				return eng.CompactContextForWorkflowContinuation(context.Background())
-			},
-			wantInitiator: CompactionInitiatorAutomatic,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			store := mustCreateTestSession(t)
-			var events []Event
-			eng := mustNewTestEngine(t, store, &fakeClient{responses: []llm.Response{{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "summary"},
-			}}}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-				Model:          "gpt-5",
-				CompactionMode: "local",
-				OnEvent:        func(evt Event) { events = append(events, evt) },
-			})
-			if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
-				t.Fatalf("append seed message: %v", err)
-			}
-
-			if err := test.start(eng); err != nil {
-				t.Fatalf("start compaction: %v", err)
-			}
-
-			for _, kind := range []EventKind{EventCompactionStarted, EventCompactionCompleted} {
-				var status *CompactionStatus
-				for _, event := range events {
-					if event.Kind == kind {
-						status = event.Compaction
-						break
-					}
-				}
-				if status == nil || status.Mode != string(compactionModeManual) || status.Initiator != test.wantInitiator {
-					t.Fatalf("%s compaction status = %+v, want manual mode and %q initiator", kind, status, test.wantInitiator)
-				}
-			}
-		})
-	}
 }
 
 func TestReplaceHistoryPublishesProjectedTranscriptEntriesBeforeCompactionStatus(t *testing.T) {
@@ -306,7 +239,7 @@ func TestReplaceHistoryPublishesProjectedTranscriptEntriesBeforeCompactionStatus
 		t.Fatalf("replace history: %v", err)
 	}
 	trimmed := 2
-	if err := newCompactionPersistence(eng).emitStatus("step-1", EventCompactionCompleted, compactionModeManual, CompactionInitiatorUserRequested, "local", "", &trimmed, 1, ""); err != nil {
+	if err := newCompactionPersistence(eng).emitStatus("step-1", EventCompactionCompleted, compactionModeManual, "local", "", &trimmed, 1, ""); err != nil {
 		t.Fatalf("emit compaction status: %v", err)
 	}
 

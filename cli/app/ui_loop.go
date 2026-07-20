@@ -101,8 +101,7 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		}
 		return nil, errors.New("runtime client is required")
 	}
-	if request.wiring.eventDispatcher == nil ||
-		request.wiring.eventDispatcher.transcriptEvents == nil {
+	if request.wiring.eventDispatcher == nil || request.wiring.eventDispatcher.transcriptEvents == nil {
 		if tuiLogger != nil {
 			_ = tuiLogger.Close()
 		}
@@ -129,7 +128,7 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUIMarkdownLinkPresentation(terminalCapabilities.MarkdownLinks),
 		WithUIDebug(request.active.Debug),
 		WithUICommandRegistry(request.commandRegistry),
-		WithUINativeTurnNotificationObserver(request.wiring.nativeTurnNotifications),
+		WithUITurnQueueHook(request.wiring.turnQueueHook),
 		WithUIProcessClient(newUIProcessClientWithReads(request.wiring.processViews, request.wiring.processControls)),
 		WithUIWorktreeClient(request.wiring.worktrees),
 		WithUIPromptHistory(request.wiring.promptHistory),
@@ -143,9 +142,8 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUITerminalCursorState(terminalCursor),
 		WithUIRendererOutputGateState(rendererOutputGate),
 		WithUIOngoingSurface(ongoingSurface),
-		WithUIEventDispatcher(request.wiring.eventDispatcher),
+		WithUIOngoingTranscriptEvents(request.wiring.eventDispatcher.transcriptEvents),
 		WithUIOngoingTranscriptReopen(request.wiring.requestTranscriptOpen),
-		WithUIClientLifecycleCoordinator(request.wiring.lifecycleCoordinator),
 		WithUITerminalFocusState(request.wiring.terminalFocus),
 	)
 	model, ok := rawModel.(*uiModel)
@@ -155,7 +153,6 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		}
 		return nil, errors.New("projected UI model has unexpected type")
 	}
-	model.lifecycleHookIssueSink = model
 	model.promptAnswers = request.wiring.promptAnswers.withConnectionOutcomeSink(func(err error) {
 		enqueueRuntimeConnectionStateChange(model.runtimeConnectionEvents, err)
 	})

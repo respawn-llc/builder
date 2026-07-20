@@ -58,10 +58,10 @@ func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, i
 		open := serverapi.OpenExistingSessionLaunchIntent(sessionID)
 		intent = &open
 	}
-	return runSessionLifecycleWithOptions(ctx, server, interactor, config.ClientSettings{}, sessionLifecycleOptions{Intent: intent})
+	return runSessionLifecycleWithOptions(ctx, server, interactor, sessionLifecycleOptions{Intent: intent})
 }
 
-func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessionServer, interactor authInteractor, clientSettings config.ClientSettings, opts sessionLifecycleOptions) error {
+func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessionServer, interactor authInteractor, opts sessionLifecycleOptions) error {
 	originalServer := server
 	boundServer, err := ensureInteractiveProjectBinding(ctx, server)
 	if err != nil {
@@ -171,10 +171,6 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		if err != nil {
 			return err
 		}
-		hookAttachmentPlan, err := deriveClientHookAttachmentPlan(clientSettings, intent, plan)
-		if err != nil {
-			return err
-		}
 		nextSessionOverrides = serverapi.RunPromptOverrides{}
 		initialPrompt, initialPromptHistoryRecorded, transitionInput, overrideStoredDraft, err := sessionLaunchPreparationValues(preparation)
 		if err != nil {
@@ -189,7 +185,6 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 			initialPromptHistoryRecorded,
 			transitionInput,
 			overrideStoredDraft,
-			hookAttachmentPlan,
 		)
 		if err != nil {
 			return err
@@ -254,7 +249,6 @@ func prepareSessionUIRun(
 	initialPromptHistoryRecorded bool,
 	transitionInput string,
 	overrideStoredDraft bool,
-	hookAttachmentPlan *clientHookAttachmentPlan,
 ) (*runtimeLaunchPlan, uiLoopRequest, error) {
 	runtimePlan, err := planner.PrepareRuntime(ctx, plan, os.Stderr, "app.start session_id="+plan.SessionID+" workspace="+plan.ExecutionTarget.EffectiveWorkdir+" model="+plan.ActiveSettings.Model)
 	if err != nil {
@@ -276,9 +270,6 @@ func prepareSessionUIRun(
 		overrideStoredDraft,
 	)
 	if err != nil {
-		return nil, uiLoopRequest{}, closeRuntimePlanAfterPreparationFailure(runtimePlan, err)
-	}
-	if err := openClientHookAttachment(runtimePlan, hookAttachmentPlan, plan.ActiveSettings.Debug); err != nil {
 		return nil, uiLoopRequest{}, closeRuntimePlanAfterPreparationFailure(runtimePlan, err)
 	}
 	return runtimePlan, uiLoopRequest{

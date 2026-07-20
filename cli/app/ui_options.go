@@ -180,15 +180,9 @@ func WithUIWorktreeClient(client apicontract.WorktreeService) UIOption {
 	}
 }
 
-func WithUINativeTurnNotificationObserver(hook *nativeTurnNotificationObserver) UIOption {
+func WithUITurnQueueHook(hook *bellHooks) UIOption {
 	return func(m *uiModelConstruction) {
-		m.nativeTurnNotifications = hook
-	}
-}
-
-func WithUIClientLifecycleCoordinator(coordinator *clientLifecycleCoordinator) UIOption {
-	return func(m *uiModelConstruction) {
-		m.lifecycleCoordinator = coordinator
+		m.turnQueueHook = hook
 	}
 }
 

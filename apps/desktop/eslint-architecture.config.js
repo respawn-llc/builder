@@ -138,29 +138,6 @@ export const architectureAdditionalDependencyNodes = Object.freeze(
   ),
 );
 
-const lifecycleExecutableAdapterImportRestrictions = Object.freeze({
-  paths: Object.freeze([
-    Object.freeze({
-      name: "@tauri-apps/plugin-shell",
-      message: "Desktop clients do not own lifecycle executable adapters.",
-    }),
-    Object.freeze({
-      name: "child_process",
-      message: "Desktop clients do not own lifecycle executable adapters.",
-    }),
-    Object.freeze({
-      name: "node:child_process",
-      message: "Desktop clients do not own lifecycle executable adapters.",
-    }),
-  ]),
-  patterns: Object.freeze([
-    Object.freeze({
-      group: Object.freeze(["@tauri-apps/plugin-shell/*"]),
-      message: "Desktop clients do not own lifecycle executable adapters.",
-    }),
-  ]),
-});
-
 const shellDependencyPolicies = Object.freeze([
   allowOwnerDependency({
     from: architectureOwners.SHELL,
@@ -493,15 +470,6 @@ export function createArchitecturePolicy({ rootPath, parserProjects }) {
       },
     },
     {
-      files: ["src/**/*.{ts,tsx}", "packages/**/*.{ts,tsx}"],
-      rules: {
-        "no-restricted-imports": [
-          "error",
-          lifecycleExecutableAdapterImportRestrictions,
-        ],
-      },
-    },
-    {
       files: ["**/*.{ts,tsx}"],
       ignores: ["packages/native-bridge/**"],
       rules: {
@@ -509,14 +477,12 @@ export function createArchitecturePolicy({ rootPath, parserProjects }) {
           "error",
           {
             paths: [
-              ...lifecycleExecutableAdapterImportRestrictions.paths,
               {
                 name: "@tauri-apps/api",
                 message: "Import Tauri APIs only inside the native bridge package.",
               },
             ],
             patterns: [
-              ...lifecycleExecutableAdapterImportRestrictions.patterns,
               {
                 group: ["@tauri-apps/api/*", "@tauri-apps/plugin-*"],
                 message: "Import Tauri APIs only inside the native bridge package.",

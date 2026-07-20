@@ -1,11 +1,9 @@
 package runtime
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"core/internal/testharness/filemode"
@@ -18,41 +16,6 @@ import (
 	"core/shared/sessioncontract"
 	"core/shared/toolspec"
 )
-
-type callbackStepLifecycleSink struct {
-	onTransition func(StepLifecycleTransition) error
-	mu           sync.Mutex
-	transitions  []StepLifecycleTransition
-}
-
-func (s *callbackStepLifecycleSink) StepBegan(context.Context, StepLifecycleSnapshot) error {
-	return s.record(StepLifecycleTransitionBegan)
-}
-
-func (s *callbackStepLifecycleSink) StepEnded(context.Context, StepLifecycleSnapshot) error {
-	return s.record(StepLifecycleTransitionEnded)
-}
-
-func (s *callbackStepLifecycleSink) record(transition StepLifecycleTransition) error {
-	s.mu.Lock()
-	s.transitions = append(s.transitions, transition)
-	s.mu.Unlock()
-	if s.onTransition != nil {
-		return s.onTransition(transition)
-	}
-	return nil
-}
-
-func (s *callbackStepLifecycleSink) seen(transition StepLifecycleTransition) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, item := range s.transitions {
-		if item == transition {
-			return true
-		}
-	}
-	return false
-}
 
 func backgroundShellEventTypeForTest(eventType shelltool.EventType) BackgroundShellEventType {
 	switch eventType {

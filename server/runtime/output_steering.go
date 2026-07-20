@@ -339,15 +339,6 @@ func (e *Engine) steerRuntimeClose(stepID string, intents ...steeringIntent) err
 	return e.steerOrdered(stepID, intents...)
 }
 
-func (e *Engine) steerRuntimeCloseEvent(stepID string, event Event) {
-	if e == nil {
-		return
-	}
-	if err := e.steerRuntimeClose(stepID, steerEventIntent(event)); err != nil {
-		panic(fmt.Sprintf("emit runtime-close event kind=%q step_id=%q: %v", event.Kind, stepID, err))
-	}
-}
-
 func (e *Engine) steerWithCommitReceipt(stepID string, intent steeringIntent) (session.CommitReceipt, error) {
 	if len(intent.items) != 1 {
 		return session.CommitReceipt{}, fmt.Errorf(
@@ -372,24 +363,19 @@ func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
 	if len(ordered) == 0 {
 		return nil
 	}
+	e.outputMutationMu.Lock()
+	defer e.outputMutationMu.Unlock()
 	sort.SliceStable(ordered, func(i, j int) bool {
 		return ordered[i].priority < ordered[j].priority
 	})
-	var acceptedTokens []*liveRunCompletionToken
-	e.outputMutationMu.Lock()
-	var applyErr error
-apply:
 	for _, intent := range ordered {
 		for _, item := range intent.items {
-			if err := e.applySteeringItem(stepID, item, &acceptedTokens); err != nil {
-				applyErr = err
-				break apply
+			if err := e.applySteeringItem(stepID, item); err != nil {
+				return err
 			}
 		}
 	}
-	e.outputMutationMu.Unlock()
-	e.commitAcceptedLiveRunCompletions(acceptedTokens)
-	return applyErr
+	return nil
 }
 
 func (e *Engine) resolveCompletedResponseStream(stepID string, instruction completedResponseResolutionInstruction) (completedResponseResolutionOutcome, error) {
@@ -403,11 +389,7 @@ func (e *Engine) resolveCompletedResponseStream(stepID string, instruction compl
 	return outcome, nil
 }
 
-func (e *Engine) applySteeringItem(
-	stepID string,
-	item steeringItem,
-	acceptedTokens *[]*liveRunCompletionToken,
-) error {
+func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	if item.message != nil {
 		receipt, err := e.appendMessageRaw(stepID, item.message.message, item.message.eventPolicy, item.message.persist)
 		item.recordCommitReceipt(receipt)
@@ -459,14 +441,8 @@ func (e *Engine) applySteeringItem(
 		return err
 	}
 	if item.queuedFlush != nil {
-		receipt, token, err := e.appendQueuedUserMessageFlush(stepID, item.queuedFlush.text, item.queuedFlush.batch, item.queuedFlush.queueItems)
+		receipt, err := e.appendQueuedUserMessageFlush(stepID, item.queuedFlush.text, item.queuedFlush.batch, item.queuedFlush.queueItems)
 		item.recordCommitReceipt(receipt)
-		if token != nil {
-			if acceptedTokens == nil {
-				panic("queued-user flush accepted a live-run completion token without a post-unlock commit list")
-			}
-			*acceptedTokens = append(*acceptedTokens, token)
-		}
 		return err
 	}
 	if item.event != nil {
@@ -543,25 +519,6 @@ func (e *Engine) applySteeringItem(
 		return nil
 	}
 	return nil
-}
-
-func (e *Engine) commitAcceptedLiveRunCompletions(tokens []*liveRunCompletionToken) {
-	if len(tokens) == 0 {
-		return
-	}
-	seen := make(map[*liveRunCompletionToken]struct{}, len(tokens))
-	for _, token := range tokens {
-		if token == nil {
-			panic("post-unlock live-run completion list contains a nil token")
-		}
-		if _, duplicate := seen[token]; duplicate {
-			panic("post-unlock live-run completion list contains a duplicate token")
-		}
-		seen[token] = struct{}{}
-		if !e.liveRun.commitCompletion(token) {
-			panic("commit accepted live-run completion after output mutation unlock")
-		}
-	}
 }
 
 func (item steeringItem) recordCommitReceipt(receipt session.CommitReceipt) {

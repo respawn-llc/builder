@@ -140,7 +140,7 @@ func (s *chatStore) appendMessage(stepID string, msg llm.Message) {
 	msg = normalizeMessageForTranscript(msg, s.cwd)
 	s.messageRecords = append(s.messageRecords, chatMessageRecord{
 		StepID:        strings.TrimSpace(stepID),
-		Message:       cloneLLMMessage(msg),
+		Message:       cloneChatStoreMessage(msg),
 		ProviderItems: llm.ItemsFromMessages([]llm.Message{msg}),
 	})
 	s.applyMessageStatsLocked(msg)
@@ -672,7 +672,7 @@ func (s *chatStore) activeProviderItemsLocked() []llm.ResponseItem {
 	return llm.CloneResponseItems(items)
 }
 
-func cloneLLMMessage(msg llm.Message) llm.Message {
+func cloneChatStoreMessage(msg llm.Message) llm.Message {
 	cloned := msg
 	cloned.WorktreeContext = session.CloneWorktreeContext(msg.WorktreeContext)
 	cloned.BackgroundExitCode = textutil.Pointer(msg.BackgroundExitCode)

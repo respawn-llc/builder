@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -87,12 +86,11 @@ func TestRunInteractivePassesTypedInitialIntentToLifecycle(t *testing.T) {
 	err := RunInteractive(t.Context(), Request[NoStartupOptions]{
 		AgentRole: runnerStringPtr("reviewer"),
 	}, Dependencies[*fakeServer, struct{}, NoStartupOptions]{
-		ResolveInteractiveConfig: resolveEmptyInteractiveConfig[NoStartupOptions],
-		NewAuthInteractor:        func() struct{} { return struct{}{} },
-		StartSessionServer: func(_ context.Context, _ Request[NoStartupOptions], _ struct{}, _ bool, _ config.App) (*fakeServer, error) {
+		NewAuthInteractor: func() struct{} { return struct{}{} },
+		StartSessionServer: func(_ context.Context, _ Request[NoStartupOptions], _ struct{}, _ bool) (*fakeServer, error) {
 			return server, nil
 		},
-		RunSessionLifecycle: func(_ context.Context, _ *fakeServer, _ struct{}, _ config.ClientSettings, opts SessionLifecycleOptions) error {
+		RunSessionLifecycle: func(_ context.Context, _ *fakeServer, _ struct{}, opts SessionLifecycleOptions) error {
 			if (*opts.Intent).Kind() != serverapi.SessionLaunchIntentCreateNew {
 				t.Fatalf("intent kind = %q, want create_new", (*opts.Intent).Kind())
 			}

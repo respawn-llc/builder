@@ -43,7 +43,6 @@ pub fn check_repository(repo_root: &Path) -> Result<(), Vec<Finding>> {
     lint_policy::check(repo_root)
 }
 
-mod desktop_lifecycle_boundary;
 pub mod lint_policy;
 
 fn relative_path(repo_root: &Path, path: &Path) -> Option<PathBuf> {

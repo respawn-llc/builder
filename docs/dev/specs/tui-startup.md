@@ -1,6 +1,6 @@
 # TUI Startup And Attach
 
-Covers interactive TUI launch end-to-end: process start → configured-server attach → auth gate → first-time-setup check → workspace resolution → project binding → session selection → workspace-change prompt → session planning/materialization → attachment preparation → handoff to the main UI.
+Covers interactive TUI launch end-to-end: process start → server attach → auth gate → first-time-setup check → workspace resolution → project binding → session selection → workspace-change prompt → lazy session open/attach → handoff to the main UI.
 
 Excludes: onboarding wizard content (own spec), headless startup (core-runtime-tools :: Headless Mode), main-UI/ongoing behavior (ongoing-scrollback-buffer.md, tui-transcript.md).
 
@@ -22,13 +22,13 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 
 Ordered gates; each gate is skipped when its condition does not apply, never bypassed by flags:
 
-1. **Server attach.** The TUI is a pure client and embeds no server. It attaches through the configured server interface; explicit `server_host`/`server_port` overrides stay authoritative. Preflight connection failure exits with an actionable endpoint/reason error; there is no embedded-server fallback or retry UI.
+1. **Server attach.** The TUI is a pure client and embeds no server, like `kent run`. It attaches to the configured server endpoint; explicit `server_host`/`server_port` overrides stay authoritative. When the preflight connection fails, the TUI exits with an actionable error (endpoint + reason) — no embedded-server fallback, no retry UI.
 2. **Auth gate.** Blocks only when the resolved provider path requires Kent-managed auth. (owner: core-runtime-tools :: Auth)
 3. **First-time setup.** After first successful auth, missing `config.toml` triggers first-time setup before session selection. (owner: core-runtime-tools :: Configuration)
 4. **Workspace resolution.** Workspace-first. Unregistered cwd enters the explicit post-auth binding flow; no auto-registration. (owner: core-runtime-tools :: Sessions And Persistence; tui-transcript :: Startup And Session Selection)
 5. **Session selection** (or directly new-session setup when no sessions exist). (owner: tui-transcript :: Startup And Session Selection)
 6. **Workspace-change prompt** when the picked session's stored root differs from the current root. (owner: tui-transcript :: Startup And Session Selection)
-7. **Plan, materialize, prepare, and hand off.** Successful `PlanSession` materializes the selected new or resumed session before TUI attachment preparation. The first user message or other agentic-loop trigger remains the first model-request boundary. (owner: core-runtime-tools :: Sessions And Persistence)
+7. **Lazy open and handoff.** Session creation/initialization is lazy — first user message or loop trigger. (owner: core-runtime-tools :: Sessions And Persistence)
 
 - `Esc` on a startup surface navigates back one gate where a previous gate exists; on the first visible surface it exits the TUI cleanly. The session picker is an explicit exception: its `Esc` key is a no-op.
 
@@ -83,4 +83,4 @@ Ordered gates; each gate is skipped when its condition does not apply, never byp
 
 ## Known Drift (Go TUI, frozen)
 
-The shipping Go TUI predates these decisions and diverges through its embedded-server fallback, env-vs-saved auth conflict picker, and client-side project-name derivation. These are drift, not spec.
+The shipping Go TUI predates these decisions and diverges: it has an embedded-server fallback, an env-vs-saved auth conflict picker, and client-side project-name derivation. These are drift, not spec.
