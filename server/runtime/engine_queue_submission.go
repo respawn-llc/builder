@@ -76,7 +76,7 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 			if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 				return err
 			}
-			flushed, flushReceipt, err := e.flushPendingUserInjections(stepID, allPendingUserInjections())
+			flushed, flushReceipt, err := e.flushPendingUserInjections(stepID, allPendingUserInjectionSelection{})
 			if flushReceipt.Committed {
 				receipt = flushReceipt
 			}

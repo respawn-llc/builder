@@ -87,8 +87,6 @@ func steerUserInjections(queueItemIDs map[string]struct{}) userInjectionSelectio
 	return steerUserInjectionSelection{queueItemIDs: queueItemIDs}
 }
 
-func allPendingUserInjections() userInjectionSelection { return allPendingUserInjectionSelection{} }
-
 type stepLoopResult struct {
 	Message                    llm.Message
 	ExecutedToolCall           bool
