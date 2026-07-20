@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,8 +11,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	modelstub "core/internal/testharness/pty/blackbox"
+	"core/internal/testharness/pty/appfixture"
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/session"
@@ -271,6 +274,84 @@ func TestRunPromptFastRoleUsesRoleLevelProviderSettingsForHeuristics(t *testing.
 	store := openAuthoritativeWorkspaceSessionStore(t, workspace, server.URL, result.SessionID)
 	if store.Meta().Continuation == nil || store.Meta().Continuation.OpenAIBaseURL != server.URL {
 		t.Fatalf("unexpected continuation context: %+v", store.Meta().Continuation)
+	}
+}
+
+func TestLifecycleHookExcludedFromServerHeadlessAndSubagentRuns(t *testing.T) {
+	home, workspace := newRegisteredAppWorkspace(t)
+	recordPath := filepath.Join(t.TempDir(), "lifecycle.jsonl")
+	recorderCommand, err := lifecycleHookProductRecorderCommand(appfixture.LifecycleProcessConfig{
+		HookRecordPath: recordPath,
+		HookBehavior:   appfixture.LifecycleHookBehaviorSuccess,
+	})
+	if err != nil {
+		t.Fatalf("lifecycle recorder command: %v", err)
+	}
+	persistenceRoot := filepath.Join(home, config.ConfigDirName)
+	if err := appfixture.WriteConfigWithOptions(
+		context.Background(),
+		persistenceRoot,
+		appfixture.ConfigOptions{LifecycleHookCommand: recorderCommand},
+	); err != nil {
+		t.Fatalf("write configured lifecycle hook: %v", err)
+	}
+	saveReadyAppAuthState(t, workspace)
+
+	responses, _ := newFakeResponsesServer(t, []string{
+		"ordinary headless response",
+		"fast subagent response",
+	})
+	defer responses.Close()
+	stopServer := startStandingRunPromptServer(t, workspace, responses.URL)
+	defer stopServer()
+	requireNoLifecycleHookProductRecords(t, recordPath)
+
+	run := func(name string, agentRole *string, want string) {
+		t.Helper()
+		result, err := RunPrompt(context.Background(), Options{
+			WorkspaceRoot:         workspace,
+			WorkspaceRootExplicit: true,
+			AgentRole:             agentRole,
+			Model:                 "gpt-5",
+			OpenAIBaseURL:         responses.URL,
+			OpenAIBaseURLExplicit: true,
+		}, name, 0, nil)
+		if err != nil {
+			t.Fatalf("%s RunPrompt: %v", name, err)
+		}
+		if result.Result != want {
+			t.Fatalf("%s result = %q, want %q", name, result.Result, want)
+		}
+		requireNoLifecycleHookProductRecords(t, recordPath)
+	}
+
+	run("ordinary headless", nil, "ordinary headless response")
+	run(
+		"fast subagent",
+		sessionLifecycleStringPtr(config.BuiltInSubagentRoleFast),
+		"fast subagent response",
+	)
+}
+
+func requireNoLifecycleHookProductRecords(t *testing.T, recordPath string) {
+	t.Helper()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		_, err := os.Stat(recordPath)
+		if err == nil {
+			data, readErr := os.ReadFile(recordPath)
+			if readErr != nil {
+				t.Fatalf("read unexpected lifecycle hook records: %v", readErr)
+			}
+			t.Fatalf("unexpected lifecycle hook records: %s", data)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stat lifecycle hook records: %v", err)
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
