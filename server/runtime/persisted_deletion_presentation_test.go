@@ -19,8 +19,8 @@ func TestPersistedToolCompletionRestoresDeletionDispositionWithoutFilesystemAcce
 		want        *int
 	}{
 		{name: "explicit null"},
-		{name: "present zero", disposition: deletionDisposition(id, 0), want: textutil.Int(0)},
-		{name: "present positive", disposition: deletionDisposition(id, 5), want: textutil.Int(5)},
+		{name: "present zero", disposition: deletionDisposition(id, 0), want: textutil.Value(0)},
+		{name: "present positive", disposition: deletionDisposition(id, 5), want: textutil.Value(5)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -70,28 +70,30 @@ func restoredDeletionPresentation(t *testing.T, presentation any) *transcript.To
 	if err != nil {
 		t.Fatalf("marshal presentation: %v", err)
 	}
-	completion, err := json.Marshal(map[string]any{
-		"call_id": callID, "name": "patch",
-		"output": json.RawMessage(`{"ok":true}`), "presentation": presentation,
-	})
-	if err != nil {
-		t.Fatalf("marshal completion: %v", err)
-	}
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
-	events := []session.Event{
+	events := []session.EventRecord{
 		mustPersistedScanEvent(t, "message", llm.Message{
 			Role: llm.RoleAssistant,
 			ToolCalls: []llm.ToolCall{{
 				ID: callID, Name: "patch", Custom: true,
-				CustomInput:  "*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n",
+				CustomInput:  textutil.Value("*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n"),
 				Presentation: rawPresentation,
 			}},
 		}),
-		{Kind: "tool_completed", Payload: completion},
+		mustPersistedScanEvent(t, "tool_completed", storedToolCompletion{
+			CallID: callID, Name: "patch", Output: json.RawMessage(`{"ok":true}`),
+			Presentation: func() *transcript.ToolCallMeta {
+				decoded, ok := transcript.DecodeToolCallMeta(rawPresentation)
+				if !ok {
+					t.Fatal("decode presentation")
+				}
+				return decoded
+			}(),
+		}),
 	}
 	for _, event := range events {
 		if err := scan.ApplyPersistedEvent(event); err != nil {
-			t.Fatalf("restore %s: %v", event.Kind, err)
+			t.Fatalf("restore %s: %v", mustSessionEventKind(event), err)
 		}
 	}
 	for _, entry := range scan.CollectedPageSnapshot().Entries {

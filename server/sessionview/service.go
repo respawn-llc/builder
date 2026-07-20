@@ -186,14 +186,14 @@ func (s *Service) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, re
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, err
 	}
-	if s == nil || s.sessions == nil {
+	if s == nil {
 		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, errSessionStoreResolverRequired
 	}
-	store, err := s.sessions.ResolveSessionStore(ctx, req.SessionID)
+	_, eventLog, err := resolveSessionStoreAndEventLog(ctx, s.sessions, req.SessionID)
 	if err != nil {
 		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, err
 	}
-	answer, err := runtime.LatestCommittedAssistantFinalAnswerFromStore(store)
+	answer, err := runtime.LatestCommittedAssistantFinalAnswerFromEventLog(eventLog)
 	if err != nil {
 		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, err
 	}
@@ -214,7 +214,7 @@ func (s *Service) GetSessionExecutionEnvironment(ctx context.Context, req server
 	if err != nil {
 		return serverapi.SessionExecutionEnvironmentResponse{}, err
 	}
-	meta := store.Meta()
+	meta := store.Metadata()
 	if strings.TrimSpace(meta.SessionID) != req.SessionID.String() {
 		return serverapi.SessionExecutionEnvironmentResponse{}, fmt.Errorf("session execution environment identity mismatch: requested %q, resolved %q", req.SessionID.String(), meta.SessionID)
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"core/server/llm"
+	"core/shared/textutil"
 )
 
 type blockingBackgroundStepLifecycle struct {
@@ -61,7 +62,7 @@ func TestBackgroundNoticeSchedulerCancelsQueuedContinuationOnEngineClose(t *test
 	eng := &Engine{}
 	scheduler := &defaultBackgroundNoticeScheduler{engine: eng, steps: steps}
 
-	scheduler.QueueDeveloperNotice(llm.Message{Role: llm.RoleDeveloper, Content: "queued background notice"})
+	scheduler.QueueDeveloperNotice(llm.Message{Role: llm.RoleDeveloper, Content: textutil.Value("queued background notice")})
 
 	select {
 	case <-steps.started:
@@ -119,10 +120,10 @@ func TestBackgroundNoticeSchedulerSchedulingRaceWithEngineCloseDoesNotPanic(t *t
 		}
 
 		runSafe(func() {
-			scheduler.QueueDeveloperNotice(llm.Message{Role: llm.RoleDeveloper, Content: "queued background notice"})
+			scheduler.QueueDeveloperNotice(llm.Message{Role: llm.RoleDeveloper, Content: textutil.Value("queued background notice")})
 		})
 		runSafe(func() {
-			scheduler.QueueDeveloperNotice(llm.Message{Role: llm.RoleDeveloper, Content: "queued schedule-if-idle"})
+			scheduler.QueueDeveloperNotice(llm.Message{Role: llm.RoleDeveloper, Content: textutil.Value("queued schedule-if-idle")})
 			scheduler.ScheduleIfIdle()
 		})
 		runSafe(func() {

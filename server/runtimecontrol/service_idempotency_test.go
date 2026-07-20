@@ -2,7 +2,6 @@ package runtimecontrol
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 
@@ -16,6 +15,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -40,7 +40,7 @@ func (r *sessionStatusCountingResolver) PublishSessionStatus(string) {
 
 func TestServiceSetThinkingLevelDedupesSuccessfulRetry(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	req := serverapi.RuntimeSetThinkingLevelRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Level: "high"}
+	req := serverapi.RuntimeSetThinkingLevelRequest{ClientRequestID: "req-1", SessionID: store.Metadata().SessionID, Level: "high"}
 
 	if err := service.SetThinkingLevel(context.Background(), req); err != nil {
 		t.Fatalf("SetThinkingLevel first: %v", err)
@@ -190,11 +190,11 @@ func TestServiceCommittedControlObserverErrorIsMemoized(t *testing.T) {
 			service.WithRuntimeActivityResolver(resolver)
 			gate.FailNext(observerErr)
 
-			first, err := testCase.run(service, engine, store.Meta().SessionID, "req-committed-control")
+			first, err := testCase.run(service, engine, store.Metadata().SessionID, "req-committed-control")
 			if !errors.Is(err, observerErr) {
 				t.Fatalf("first control error = %v, want observer error", err)
 			}
-			second, err := testCase.run(service, engine, store.Meta().SessionID, "req-committed-control")
+			second, err := testCase.run(service, engine, store.Metadata().SessionID, "req-committed-control")
 			if !errors.Is(err, observerErr) {
 				t.Fatalf("replayed control error = %v, want cached observer error", err)
 			}
@@ -251,10 +251,10 @@ func TestServiceCompactionConsumesCommittedObserverError(t *testing.T) {
 			ref := runtimeControlOperationRef(testCase.kind)
 			gate.FailNext(observerErr)
 
-			if err := testCase.run(service, store.Meta().SessionID, ref); !errors.Is(err, observerErr) {
+			if err := testCase.run(service, store.Metadata().SessionID, ref); !errors.Is(err, observerErr) {
 				t.Fatalf("first compaction error = %v, want observer error", err)
 			}
-			if err := testCase.run(service, store.Meta().SessionID, ref); !errors.Is(err, observerErr) {
+			if err := testCase.run(service, store.Metadata().SessionID, ref); !errors.Is(err, observerErr) {
 				t.Fatalf("replayed compaction error = %v, want cached observer error", err)
 			}
 			if client.compactionCalls != 1 {
@@ -263,7 +263,7 @@ func TestServiceCompactionConsumesCommittedObserverError(t *testing.T) {
 			if got := countEventsByKind(t, store, "history_replaced"); got != 1 {
 				t.Fatalf("history_replaced event count = %d, want 1", got)
 			}
-			snapshot := runtimeControlFeedSnapshot(t, operations, store.Meta().SessionID, []clientui.RuntimeOperationRef{ref})
+			snapshot := runtimeControlFeedSnapshot(t, operations, store.Metadata().SessionID, []clientui.RuntimeOperationRef{ref})
 			if len(snapshot.Operations) != 1 || snapshot.Operations[0].State != clientui.RuntimeInputReconciliationCommitted {
 				t.Fatalf("compaction reconciliation = %+v, want committed", snapshot)
 			}
@@ -276,13 +276,13 @@ func newRuntimeControlCompactionFixture(t *testing.T, options ...session.StoreOp
 	trimmed := 1
 	client := &runtimeControlFakeClient{
 		responses: []llm.Response{{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		}},
 		compactionResponses: []llm.CompactionResponse{{
 			OutputItems: []llm.ResponseItem{
-				{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"},
-				{Type: llm.ResponseItemTypeCompaction, EncryptedContent: "checkpoint"},
+				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")},
+				{Type: llm.ResponseItemTypeCompaction, EncryptedContent: textutil.Value("checkpoint")},
 			},
 			Usage:             llm.Usage{WindowTokens: 200000},
 			TrimmedItemsCount: &trimmed,
@@ -300,13 +300,17 @@ func newRuntimeControlCompactionFixture(t *testing.T, options ...session.StoreOp
 
 func countEventsByKind(t *testing.T, store *session.Store, kind string) int {
 	t.Helper()
-	events, err := sessiontest.CollectEvents(store)
+	events, err := sessiontest.CollectRecords(store)
 	if err != nil {
 		t.Fatalf("ReadEvents: %v", err)
 	}
 	count := 0
 	for _, evt := range events {
-		if evt.Kind == kind {
+		eventKind, kindErr := evt.Kind()
+		if kindErr != nil {
+			t.Fatalf("event kind: %v", kindErr)
+		}
+		if string(eventKind) == kind {
 			count++
 		}
 	}
@@ -315,27 +319,41 @@ func countEventsByKind(t *testing.T, store *session.Store, kind string) int {
 
 func localEntryEvents(t *testing.T, store *session.Store) []runtime.ChatEntry {
 	t.Helper()
-	events, err := sessiontest.CollectEvents(store)
+	events, err := sessiontest.CollectRecords(store)
 	if err != nil {
 		t.Fatalf("ReadEvents: %v", err)
 	}
 	entries := make([]runtime.ChatEntry, 0)
 	for _, evt := range events {
-		if evt.Kind != "local_entry" {
+		kind, kindErr := evt.Kind()
+		if kindErr != nil {
+			t.Fatalf("event kind: %v", kindErr)
+		}
+		if kind != session.EventKindLocalEntry {
 			continue
 		}
-		var entry runtime.ChatEntry
-		if err := json.Unmarshal(evt.Payload, &entry); err != nil {
-			t.Fatalf("decode local_entry: %v", err)
+		payload, payloadErr := evt.Payload()
+		if payloadErr != nil {
+			t.Fatalf("local_entry payload: %v", payloadErr)
 		}
-		entries = append(entries, entry)
+		entryRecord, ok := payload.(session.LocalEntryRecord)
+		if !ok {
+			t.Fatalf("local_entry payload = %T, want session.LocalEntryRecord", payload)
+		}
+		entries = append(entries, runtime.ChatEntry{
+			Role: entryRecord.Role,
+			Text: entryRecord.Text,
+			Visibility: transcript.NormalizeEntryVisibility(
+				transcript.EntryVisibility(entryRecord.Visibility),
+			),
+		})
 	}
 	return entries
 }
 
 func TestServiceAppendCommittedEntryReplaysVisibility(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	req := serverapi.RuntimeAppendCommittedEntryRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Role: "warning", Text: "visible warning", Visibility: string(transcript.EntryVisibilityOngoing)}
+	req := serverapi.RuntimeAppendCommittedEntryRequest{ClientRequestID: "req-1", SessionID: store.Metadata().SessionID, Role: "warning", Text: "visible warning", Visibility: string(transcript.EntryVisibilityOngoing)}
 
 	if err := service.AppendCommittedEntry(context.Background(), req); err != nil {
 		t.Fatalf("AppendCommittedEntry first: %v", err)
@@ -361,7 +379,7 @@ func TestServiceSubmitQueuedUserMessagesConsumesCommittedObserverError(t *testin
 	observerErr := errors.New("queued flush observer failed")
 	gate := sessiontest.NewPersistenceGate(runtimeControlTestSessionPersistence)
 	client := &runtimeControlFakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "seeded", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("seeded"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{}, session.WithPersistenceObserver(gate))
@@ -376,7 +394,7 @@ func TestServiceSubmitQueuedUserMessagesConsumesCommittedObserverError(t *testin
 	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmitQueued)
 	req := serverapi.RuntimeSubmitQueuedUserMessagesRequest{
 		ClientRequestID: ref.ClientRequestID.String(),
-		SessionID:       store.Meta().SessionID,
+		SessionID:       store.Metadata().SessionID,
 		OperationRef:    ref,
 	}
 	gate.FailNext(observerErr)
@@ -404,7 +422,7 @@ func TestServiceSubmitQueuedUserMessagesConsumesCommittedObserverError(t *testin
 	if got := engine.CommittedTranscriptEntryCount(); got != entriesBeforeSubmit+1 {
 		t.Fatalf("projected transcript entries = %d, want %d", got, entriesBeforeSubmit+1)
 	}
-	snapshot := runtimeControlFeedSnapshot(t, operations, store.Meta().SessionID, []clientui.RuntimeOperationRef{ref})
+	snapshot := runtimeControlFeedSnapshot(t, operations, store.Metadata().SessionID, []clientui.RuntimeOperationRef{ref})
 	if len(snapshot.Operations) != 1 || snapshot.Operations[0].State != clientui.RuntimeInputReconciliationSubmitted {
 		t.Fatalf("queued submission reconciliation = %+v, want submitted", snapshot)
 	}
@@ -412,10 +430,19 @@ func TestServiceSubmitQueuedUserMessagesConsumesCommittedObserverError(t *testin
 
 func TestServiceDiscardQueuedUserMessageDedupesSuccessfulRetry(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	firstQueued := engine.QueueUserMessage("same")
-	otherQueued := engine.QueueUserMessage("other")
-	duplicateQueued := engine.QueueUserMessage("same")
-	req := serverapi.RuntimeDiscardQueuedUserMessageRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, QueueItemID: duplicateQueued.ID}
+	firstQueued, err := engine.QueueUserMessage("same")
+	if err != nil {
+		t.Fatalf("queue first message: %v", err)
+	}
+	otherQueued, err := engine.QueueUserMessage("other")
+	if err != nil {
+		t.Fatalf("queue other message: %v", err)
+	}
+	duplicateQueued, err := engine.QueueUserMessage("same")
+	if err != nil {
+		t.Fatalf("queue duplicate message: %v", err)
+	}
+	req := serverapi.RuntimeDiscardQueuedUserMessageRequest{ClientRequestID: "req-1", SessionID: store.Metadata().SessionID, QueueItemID: duplicateQueued.ID}
 
 	first, err := service.DiscardQueuedUserMessage(context.Background(), req)
 	if err != nil {
@@ -428,22 +455,34 @@ func TestServiceDiscardQueuedUserMessageDedupesSuccessfulRetry(t *testing.T) {
 	if !first.Discarded || !second.Discarded {
 		t.Fatalf("discard results = (%t, %t), want both true", first.Discarded, second.Discarded)
 	}
-	if !engine.DiscardQueuedUserMessage(firstQueued.ID) {
+	firstRemaining, err := engine.DiscardQueuedUserMessage(firstQueued.ID)
+	if err != nil {
+		t.Fatalf("discard first remaining message: %v", err)
+	}
+	if !firstRemaining {
 		t.Fatal("expected first duplicate text item to remain")
 	}
-	if !engine.DiscardQueuedUserMessage(otherQueued.ID) {
+	otherRemaining, err := engine.DiscardQueuedUserMessage(otherQueued.ID)
+	if err != nil {
+		t.Fatalf("discard other remaining message: %v", err)
+	}
+	if !otherRemaining {
 		t.Fatal("expected other queued item to remain")
 	}
-	if engine.DiscardQueuedUserMessage(duplicateQueued.ID) {
+	duplicateRemaining, err := engine.DiscardQueuedUserMessage(duplicateQueued.ID)
+	if err != nil {
+		t.Fatalf("discard already removed message: %v", err)
+	}
+	if duplicateRemaining {
 		t.Fatal("did not expect discarded queue item to remain")
 	}
 }
 
 func TestServiceRecordPromptHistoryDedupesSuccessfulRetry(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	history := newRuntimeControlPromptHistoryStore(store.Meta().SessionID)
+	history := newRuntimeControlPromptHistoryStore(store.Metadata().SessionID)
 	service.WithPromptHistoryStore(history)
-	req := serverapi.RuntimeRecordPromptHistoryRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Text: "/resume"}
+	req := serverapi.RuntimeRecordPromptHistoryRequest{ClientRequestID: "req-1", SessionID: store.Metadata().SessionID, Text: "/resume"}
 
 	if err := service.RecordPromptHistory(context.Background(), req); err != nil {
 		t.Fatalf("RecordPromptHistory first: %v", err)

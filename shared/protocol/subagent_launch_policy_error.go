@@ -28,8 +28,8 @@ type SubagentLaunchPolicyError struct {
 func NewMaxDepthExceededSubagentLaunchPolicyError(attemptedDepth int, maxDepth int) *SubagentLaunchPolicyError {
 	return &SubagentLaunchPolicyError{
 		Kind:           SubagentLaunchPolicyMaxDepthExceeded,
-		AttemptedDepth: textutil.Int(attemptedDepth),
-		MaxDepth:       textutil.Int(maxDepth),
+		AttemptedDepth: textutil.Value(attemptedDepth),
+		MaxDepth:       textutil.Value(maxDepth),
 	}
 }
 
@@ -104,15 +104,15 @@ func (e *SubagentLaunchPolicyError) RPCErrorCode() int {
 	return ErrCodeSubagentLaunchPolicy
 }
 
-func (e *SubagentLaunchPolicyError) RPCErrorData() json.RawMessage {
+func (e *SubagentLaunchPolicyError) RPCErrorData() (json.RawMessage, error) {
 	if err := e.Validate(); err != nil {
-		panic("marshal subagent launch policy error: " + err.Error())
+		return nil, err
 	}
 	data, err := json.Marshal(e)
 	if err != nil {
-		panic("marshal subagent launch policy error: " + err.Error())
+		return nil, fmt.Errorf("marshal subagent launch policy error: %w", err)
 	}
-	return data
+	return data, nil
 }
 
 func DecodeSubagentLaunchPolicyError(data json.RawMessage, fallback string) error {

@@ -372,7 +372,7 @@ func TestRemoteRunPromptPreservesTypedSubagentDepthPolicyWithoutProgress(t *test
 			request.ID,
 			source.RPCErrorCode(),
 			source.Error(),
-			source.RPCErrorData(),
+			mustRPCErrorData(t, source),
 		)); err != nil {
 			t.Fatalf("send typed policy error: %v", err)
 		}
@@ -1093,7 +1093,7 @@ func TestProtocolErrorDecodesWorkflowTaskListScopeError(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeWorkflowTaskListScope,
 		Message: "scope resolution failed",
-		Data:    source.RPCErrorData(),
+		Data:    mustRPCErrorData(t, source),
 	})
 	var decoded *serverapi.WorkflowTaskListScopeError
 	if !errors.As(err, &decoded) {
@@ -1114,7 +1114,7 @@ func TestProtocolErrorDecodesWorkflowTaskCreateSelectionError(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeWorkflowTaskCreateSelection,
 		Message: "selection failed",
-		Data:    source.RPCErrorData(),
+		Data:    mustRPCErrorData(t, source),
 	})
 	var decoded *serverapi.WorkflowTaskCreateSelectionError
 	if !errors.As(err, &decoded) {
@@ -1143,7 +1143,7 @@ func TestProtocolErrorDecodesWorkflowTaskCreateConflictError(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeWorkflowTaskCreateConflict,
 		Message: "task create conflicted",
-		Data:    source.RPCErrorData(),
+		Data:    mustRPCErrorData(t, source),
 	})
 	var decoded *serverapi.WorkflowTaskCreateConflictError
 	if !errors.As(err, &decoded) || decoded.Reason != source.Reason {
@@ -1165,9 +1165,113 @@ func TestProtocolErrorDecodesSessionRetargetError(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeSessionRetarget,
 		Message: source.Error(),
-		Data:    source.RPCErrorData(),
+		Data:    mustRPCErrorData(t, source),
 	})
 	assertRemoteSessionRetargetError(t, err, source)
+}
+
+func TestProtocolErrorDecodesSessionEventLogMaterializationError(t *testing.T) {
+	source := &protocol.SessionEventLogMaterializationError{
+		Reason:        protocol.SessionEventLogMaterializationReconciliationPending,
+		Stage:         protocol.SessionEventLogMaterializationReconciliation,
+		Committed:     true,
+		PendingRepair: true,
+	}
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeSessionEventLogMaterialization,
+		Message: "native diagnostic text",
+		Data:    mustRPCErrorData(t, source),
+	})
+	var decoded *protocol.SessionEventLogMaterializationError
+	if !errors.As(err, &decoded) {
+		t.Fatalf(
+			"decoded error = %T %v, want SessionEventLogMaterializationError",
+			err,
+			err,
+		)
+	}
+	if decoded.Reason != source.Reason ||
+		decoded.Stage != source.Stage ||
+		decoded.Committed != source.Committed ||
+		decoded.PendingRepair != source.PendingRepair {
+		t.Fatalf("decoded = %+v, want %+v", decoded, source)
+	}
+}
+
+func TestProtocolErrorRejectsMalformedSessionEventLogMaterializationData(t *testing.T) {
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeSessionEventLogMaterialization,
+		Message: "materialization fallback",
+		Data: json.RawMessage(
+			`{"type":"session_event_log_materialization_error","reason":"materialization_failure","stage":"preparation","committed":false,"pending_repair":false,"unknown":true}`,
+		),
+	})
+	var decoded *protocol.SessionEventLogMaterializationError
+	if errors.As(err, &decoded) {
+		t.Fatalf("malformed data decoded as typed error: %+v", decoded)
+	}
+	if err.Error() != "materialization fallback" {
+		t.Fatalf("fallback error = %q", err)
+	}
+}
+
+func TestRemoteSessionEventLogMaterializationErrorRoundTrip(t *testing.T) {
+	found := 2
+	supported := 1
+	source := &protocol.SessionEventLogMaterializationError{
+		Reason:           protocol.SessionEventLogMaterializationUnsupportedVersion,
+		Stage:            protocol.SessionEventLogMaterializationPreparation,
+		FoundVersion:     &found,
+		SupportedVersion: &supported,
+	}
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		req := acceptRemoteHandshake(t, ws)
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			t.Fatalf("receive plan session request: %v", err)
+		}
+		if err := websocket.JSON.Send(
+			ws,
+			protocol.NewErrorResponseWithData(
+				req.ID,
+				source.RPCErrorCode(),
+				source.Error(),
+				mustRPCErrorData(t, source),
+			),
+		); err != nil {
+			t.Fatalf("send materialization error: %v", err)
+		}
+	})
+	defer server.Close()
+
+	remote, err := DialRemoteURL(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	_, err = remote.PlanSession(
+		context.Background(),
+		serverapi.SessionPlanRequest{
+			ClientRequestID: "materialization-round-trip",
+			Mode:            serverapi.SessionLaunchModeInteractive,
+			Intent: serverapi.OpenExistingSessionLaunchIntent(
+				mustRemoteSessionID(t, "00000000-0000-4000-8000-000000000001"),
+			),
+		},
+	)
+	var decoded *protocol.SessionEventLogMaterializationError
+	if !errors.As(err, &decoded) {
+		t.Fatalf("remote error = %T %v", err, err)
+	}
+	if decoded.Reason != source.Reason ||
+		decoded.FoundVersion == nil ||
+		*decoded.FoundVersion != found ||
+		decoded.SupportedVersion == nil ||
+		*decoded.SupportedVersion != supported {
+		t.Fatalf("decoded = %+v, want %+v", decoded, source)
+	}
 }
 
 func TestRemoteSessionRetargetErrorRoundTrip(t *testing.T) {
@@ -1186,7 +1290,7 @@ func TestRemoteSessionRetargetErrorRoundTrip(t *testing.T) {
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			t.Fatalf("receive session retarget request: %v", err)
 		}
-		if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(req.ID, source.RPCErrorCode(), source.Error(), source.RPCErrorData())); err != nil {
+		if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(req.ID, source.RPCErrorCode(), source.Error(), mustRPCErrorData(t, source))); err != nil {
 			t.Fatalf("send session retarget error: %v", err)
 		}
 	})
@@ -1230,7 +1334,7 @@ func TestRemoteWorktreeStructuredErrorsRoundTrip(t *testing.T) {
 				if err := websocket.JSON.Receive(ws, &req); err != nil {
 					t.Fatalf("receive worktree request: %v", err)
 				}
-				if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(req.ID, source.RPCErrorCode(), source.Error(), source.RPCErrorData())); err != nil {
+				if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(req.ID, source.RPCErrorCode(), source.Error(), mustRPCErrorData(t, source))); err != nil {
 					t.Fatalf("send structured worktree error: %v", err)
 				}
 			})
@@ -1335,7 +1439,7 @@ func TestProtocolErrorDecodesWorkflowExecutionTargetResolutionError(t *testing.T
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeWorkflowExecutionTargetResolution,
 		Message: "execution target resolution failed",
-		Data:    source.RPCErrorData(),
+		Data:    mustRPCErrorData(t, source),
 	})
 	var decoded *serverapi.WorkflowExecutionTargetResolutionError
 	if !errors.As(err, &decoded) {
@@ -1353,7 +1457,7 @@ func TestProtocolErrorDecodesWorkflowLockedExecutionTargetError(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeWorkflowLockedExecutionTarget,
 		Message: "locked execution target is unavailable",
-		Data:    source.RPCErrorData(),
+		Data:    mustRPCErrorData(t, source),
 	})
 	var decoded *serverapi.WorkflowLockedExecutionTargetError
 	if !errors.As(err, &decoded) {

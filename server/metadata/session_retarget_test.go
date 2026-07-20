@@ -72,14 +72,14 @@ func TestPlanSessionWorkspaceRetargetRejectsForeignOnlyDefaultWithoutMutation(t 
 	}
 
 	_, err := fixture.store.PlanSessionWorkspaceRetarget(context.Background(), SessionWorkspaceRetargetRequest{
-		SessionID:     fixture.session.Meta().SessionID,
+		SessionID:     fixture.session.Metadata().SessionID,
 		WorkspaceRoot: targetRoot,
 	})
 	var retargetErr *serverapi.SessionRetargetError
 	if !errors.As(err, &retargetErr) || retargetErr.Reason != serverapi.SessionRetargetTargetProjectRequired {
 		t.Fatalf("PlanSessionWorkspaceRetarget error = %v, want target-project-required", err)
 	}
-	target, err := fixture.store.ResolveSessionExecutionTarget(context.Background(), fixture.session.Meta().SessionID)
+	target, err := fixture.store.ResolveSessionExecutionTarget(context.Background(), fixture.session.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestCommitSessionWorkspaceRetargetUsesSourceBindingWhenPathIsShared(t *test
 	}
 
 	plan, err := fixture.store.PlanSessionWorkspaceRetarget(context.Background(), SessionWorkspaceRetargetRequest{
-		SessionID:     fixture.session.Meta().SessionID,
+		SessionID:     fixture.session.Metadata().SessionID,
 		WorkspaceRoot: targetRoot,
 	})
 	if err != nil {
@@ -121,7 +121,7 @@ func TestCommitSessionWorkspaceRetargetMovesProjectAndAutoAttachesWorkspace(t *t
 	targetProjectID := fixture.targetProject.ProjectID
 
 	plan, err := fixture.store.PlanSessionWorkspaceRetarget(context.Background(), SessionWorkspaceRetargetRequest{
-		SessionID:     fixture.session.Meta().SessionID,
+		SessionID:     fixture.session.Metadata().SessionID,
 		WorkspaceRoot: targetRoot,
 		ProjectID:     &targetProjectID,
 	})
@@ -138,7 +138,7 @@ func TestCommitSessionWorkspaceRetargetMovesProjectAndAutoAttachesWorkspace(t *t
 	if result.Binding.ProjectID != targetProjectID {
 		t.Fatalf("target project = %q, want %q", result.Binding.ProjectID, targetProjectID)
 	}
-	belongs, err := fixture.store.SessionBelongsToProject(context.Background(), fixture.session.Meta().SessionID, targetProjectID)
+	belongs, err := fixture.store.SessionBelongsToProject(context.Background(), fixture.session.Metadata().SessionID, targetProjectID)
 	if err != nil {
 		t.Fatalf("SessionBelongsToProject: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestPlanSessionWorkspaceRetargetRejectsExplicitForeignBindingWithoutMutatio
 	requestedProjectID := requestedProject.ProjectID
 
 	_, err = fixture.store.PlanSessionWorkspaceRetarget(context.Background(), SessionWorkspaceRetargetRequest{
-		SessionID:     fixture.session.Meta().SessionID,
+		SessionID:     fixture.session.Metadata().SessionID,
 		WorkspaceRoot: targetRoot,
 		ProjectID:     &requestedProjectID,
 	})
@@ -179,7 +179,7 @@ func TestPlanSessionWorkspaceRetargetRejectsExplicitForeignBindingWithoutMutatio
 	if len(after) != len(before) {
 		t.Fatalf("requested project workspace count = %d, want unchanged %d", len(after), len(before))
 	}
-	belongs, err := fixture.store.SessionBelongsToProject(context.Background(), fixture.session.Meta().SessionID, fixture.source.ProjectID)
+	belongs, err := fixture.store.SessionBelongsToProject(context.Background(), fixture.session.Metadata().SessionID, fixture.source.ProjectID)
 	if err != nil {
 		t.Fatalf("SessionBelongsToProject source: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestPlanSessionWorkspaceRetargetRejectsWorkflowOwnedCrossProject(t *testing
 	targetProjectID := fixture.targetProject.ProjectID
 
 	_, err := fixture.store.PlanSessionWorkspaceRetarget(context.Background(), SessionWorkspaceRetargetRequest{
-		SessionID:     fixture.session.Meta().SessionID,
+		SessionID:     fixture.session.Metadata().SessionID,
 		WorkspaceRoot: t.TempDir(),
 		ProjectID:     &targetProjectID,
 	})

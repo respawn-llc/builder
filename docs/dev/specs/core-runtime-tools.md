@@ -133,8 +133,10 @@
 
 ## Sessions And Persistence
 
-- **Full transcript history is expected to weigh dozens of gigabytes. Production code must never load full `events.jsonl` into memory or walk the entire file under any circumstance. Session forking or cloning is the only accepted production full-walk operation because it explicitly copies history to the fork point.**
+- **Full transcript history is expected to weigh dozens of gigabytes. Production code must never load full `events.jsonl` into memory or walk the entire file except when session forking or cloning explicitly copies history to the fork point, when a bounded-memory authoritative format migration converts that file, or when bounded-memory read-only fileless diagnostics transform a legacy log into a removable current-format artifact. Fileless transformation never mutates the source log or reconciles its metadata, and its temporary artifacts are removed when the diagnostic scope closes.**
 - Sessions support stop/resume.
+- Supported older session-log formats migrate automatically when the transcript is first opened or the session is continued. Migration keeps the original file authoritative until the replacement is complete and durable. Failures before atomic replacement leave the original unchanged and retryable. Atomic replacement commits the current-format file; a later reconciliation failure leaves that file installed with metadata repair pending, and retry resumes repair without remigration. Normal transcript access never retains an older-format fallback.
+- A session whose log uses a newer unsupported format remains visible in session lists, but transcript access and continuation fail with an upgrade-required error and never modify the file.
 - Persistence root is configurable; default is `~/.kent`.
 - Durable domain model is `project > workspace > worktree`.
 - SQLite is authoritative for structured metadata and server-owned resources.

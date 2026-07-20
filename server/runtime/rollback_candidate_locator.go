@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"core/server/llm"
@@ -50,26 +49,28 @@ func (t rollbackCandidateLocatorTracker) Resolve(activeWindowEndByte int64) (*ro
 	return &locator, nil
 }
 
-func rollbackCandidateLocatorFromActiveWindow(window session.SegmentWindow) (*rollbacktarget.CandidateLocator, error) {
+func rollbackCandidateLocatorFromActiveWindow(window session.EventRecordWindow) (*rollbacktarget.CandidateLocator, error) {
 	var tracker rollbackCandidateLocatorTracker
-	for _, event := range window.Events {
-		switch event.Kind {
-		case "message":
-			var message llm.Message
-			if err := json.Unmarshal(event.Payload, &message); err != nil {
-				return nil, fmt.Errorf("decode message event for rollback candidate locator: %w", err)
+	for _, record := range window.Records {
+		payload, err := record.Payload()
+		if err != nil {
+			return nil, err
+		}
+		switch payload := payload.(type) {
+		case session.MessageRecord:
+			message, err := llmMessageFromSessionRecord(payload)
+			if err != nil {
+				return nil, fmt.Errorf("restore session message record for rollback candidate locator: %w", err)
 			}
-			if err := tracker.ObserveMessage(event.Seq, message); err != nil {
+			if err := tracker.ObserveMessage(record.Seq(), message); err != nil {
 				return nil, err
 			}
-		case sessionEventHistoryReplaced:
-			payload, ignoredLegacy, err := decodePersistedHistoryReplacementPayload(event.Payload)
+		case session.HistoryReplacementRecord:
+			replacement, err := historyReplacementPayloadFromSessionRecord(payload)
 			if err != nil {
-				return nil, fmt.Errorf("%w: %w", errDecodeHistoryReplacedEvent, err)
+				return nil, fmt.Errorf("restore session history replacement record: %w", err)
 			}
-			if !ignoredLegacy {
-				tracker.ObserveHistoryReplacement(payload)
-			}
+			tracker.ObserveHistoryReplacement(replacement)
 		}
 	}
 	return tracker.Resolve(window.EndOffset)

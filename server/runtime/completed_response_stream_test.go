@@ -10,6 +10,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -125,7 +126,7 @@ func TestCompletedResponseExternalWorkflowCompletionDiscardsActiveStreamWithoutP
 		if message.Role == llm.RoleAssistant {
 			t.Fatalf("stale assistant response was persisted: %+v", eng.transcriptRuntimeState().SnapshotMessages())
 		}
-		if message.Role == llm.RoleTool && message.ToolCallID == "call-stale" {
+		if message.Role == llm.RoleTool && message.ToolCallID != nil && *message.ToolCallID == "call-stale" {
 			t.Fatalf("stale tool result was persisted: %+v", eng.transcriptRuntimeState().SnapshotMessages())
 		}
 	}
@@ -182,8 +183,8 @@ func TestCompletedResponseReasoningOnlyAbortsBeforeContinuation(t *testing.T) {
 			}},
 			OutputItems: []llm.ResponseItem{{
 				Type:             llm.ResponseItemTypeReasoning,
-				ID:               "reasoning-1",
-				EncryptedContent: "encrypted",
+				ID:               textutil.Value("reasoning-1"),
+				EncryptedContent: textutil.Value("encrypted"),
 			}},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
@@ -218,7 +219,7 @@ func TestCompletedResponseFinalAnswerWithToolsFinalizesAfterToolPersistence(t *t
 		Name:  string(toolspec.ToolExecCommand),
 		Input: json.RawMessage(`{"cmd":"true"}`),
 	})
-	step.Response.Assistant.Phase = llm.MessagePhaseFinal
+	step.Response.Assistant.Phase = textutil.Value(llm.MessagePhaseFinal)
 	step.StreamDeltas = []llm.AssistantDelta{{Text: "done", Phase: llm.MessagePhaseFinal}}
 	events := make([]Event, 0, 12)
 	eng := mustNewExecTestEngine(
@@ -244,7 +245,7 @@ func TestCompletedResponseFinalAnswerWithToolsFinalizesAfterToolPersistence(t *t
 	}
 	final := firstRuntimeEventObservation(events, func(event Event) bool {
 		return event.Kind == EventAssistantMessage &&
-			event.Message.Phase == llm.MessagePhaseFinal &&
+			event.Message.Phase != nil && *event.Message.Phase == llm.MessagePhaseFinal &&
 			event.AssistantTranscriptStreamID != nil
 	})
 	toolStart := firstRuntimeEventObservation(events, func(event Event) bool {
@@ -266,6 +267,53 @@ func TestCompletedResponseFinalAnswerWithToolsFinalizesAfterToolPersistence(t *t
 	}
 	if resets[0].AssistantStreamAbortReason != "" {
 		t.Fatalf("finalization reset abort reason = %q, want empty", resets[0].AssistantStreamAbortReason)
+	}
+}
+
+func TestCompletedResponseFinalizationPropagatesResetPublicationFailure(t *testing.T) {
+	store := mustCreateTestSession(t)
+	var removeErr error
+	eng := mustNewTestEngine(
+		t,
+		store,
+		scriptedllm.NewClient(scriptedllm.Script{}),
+		tools.NewRegistry(),
+		Config{
+			Model: "gpt-5",
+			OnEvent: func(evt Event) {
+				if evt.Kind == EventAssistantMessage {
+					removeErr = store.RemoveDurable()
+				}
+			},
+		},
+	)
+	if err := eng.applySteeringItem("step-1", steeringItem{
+		streaming: &steeringStreamingOutput{
+			assistantDelta: &llm.AssistantDelta{
+				Text:  "done",
+				Phase: llm.MessagePhaseFinal,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("seed active assistant stream: %v", err)
+	}
+
+	_, err := eng.resolveCompletedResponseStreamRaw("step-1", completedResponseResolutionInstruction{
+		kind: completedResponseResolutionInstructionFinalize,
+		committedAssistant: &steeringCommittedAssistantMessage{
+			message: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("done"),
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+			},
+			coordinate: &committedAssistantCoordinate{start: 0},
+		},
+	})
+	if removeErr != nil {
+		t.Fatalf("invalidate materialized event log: %v", removeErr)
+	}
+	if err == nil {
+		t.Fatal("completed response finalization swallowed reset publication failure")
 	}
 }
 

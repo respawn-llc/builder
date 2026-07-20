@@ -395,8 +395,8 @@ func newRoutePolicyFixture(t *testing.T) routePolicyFixture {
 		gateway:          gateway,
 		bindingA:         bindingA,
 		bindingB:         bindingB,
-		ownSessionID:     ownStore.Meta().SessionID,
-		foreignSessionID: foreignStore.Meta().SessionID,
+		ownSessionID:     ownStore.Metadata().SessionID,
+		foreignSessionID: foreignStore.Metadata().SessionID,
 		workspaceB:       resolvedB.Config.WorkspaceRoot,
 	}
 }

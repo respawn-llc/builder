@@ -44,8 +44,9 @@ func transcriptToolCallMeta(call llm.ToolCall, workingDir string) *transcript.To
 		return meta
 	}
 	input := call.Input
-	if call.Custom && strings.TrimSpace(call.CustomInput) != "" {
-		input = normalizeRuntimeToolInput(call.CustomInput)
+	if call.Custom && call.CustomInput != nil &&
+		strings.TrimSpace(*call.CustomInput) != "" {
+		input = normalizeRuntimeToolInput(*call.CustomInput)
 	}
 	built := tools.BuildCallTranscriptMeta(call.Name, tools.ToolCallContext{
 		WorkingDir:       workingDir,

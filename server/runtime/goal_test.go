@@ -12,11 +12,11 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
-	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/clientui"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -61,6 +61,39 @@ func TestGoalSetEmitsCommittedGoalFeedbackEvent(t *testing.T) {
 	}
 }
 
+func TestGoalSetAtomicallyPersistsGoalMessage(t *testing.T) {
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
+	beforeRevision := mustEventLogRevision(engine.eventLog)
+
+	goal, err := engine.SetGoal("ship goal mode", session.GoalActorUser)
+	if err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+
+	if goal.Objective != "ship goal mode" || goal.Status != session.GoalStatusActive {
+		t.Fatalf("goal = %+v, want active goal", goal)
+	}
+	if got := mustEventLogRevision(engine.eventLog); got != beforeRevision+1 {
+		t.Fatalf("event-log revision = %d, want %d", got, beforeRevision+1)
+	}
+	if persisted := store.Metadata().Goal; persisted == nil || persisted.ID != goal.ID {
+		t.Fatalf("persisted goal = %+v, want %+v", persisted, goal)
+	}
+	window, err := engine.eventLog.ReadRecentRecords(1)
+	if err != nil {
+		t.Fatalf("read persisted goal message: %v", err)
+	}
+	if len(window.Records) != 1 {
+		t.Fatalf("goal records = %d, want 1", len(window.Records))
+	}
+	message, ok := mustSessionEventPayload(window.Records[0]).(session.MessageRecord)
+	if !ok || message.Role != session.MessageRoleDeveloper ||
+		message.MessageType == nil || *message.MessageType != session.MessageTypeGoal {
+		t.Fatalf("goal record payload = %#v, want developer goal MessageRecord", mustSessionEventPayload(window.Records[0]))
+	}
+}
+
 func TestQueuedAgentShellGoalSetDrainsAfterToolCompletion(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -77,7 +110,7 @@ func TestQueuedAgentShellGoalSetDrainsAfterToolCompletion(t *testing.T) {
 	}
 	assistant := llm.Message{
 		Role:  llm.RoleAssistant,
-		Phase: llm.MessagePhaseCommentary,
+		Phase: textutil.Value(llm.MessagePhaseCommentary),
 		ToolCalls: []llm.ToolCall{{
 			ID:   "call-shell",
 			Name: string(toolspec.ToolExecCommand),
@@ -90,7 +123,7 @@ func TestQueuedAgentShellGoalSetDrainsAfterToolCompletion(t *testing.T) {
 		CallID:  "call-shell",
 		Name:    toolspec.ToolExecCommand,
 		Output:  json.RawMessage(`{"output":"ok","exit_code":0,"truncated":false}`),
-		Summary: "ok",
+		Summary: textutil.Value("ok"),
 	}
 	if err := engine.steer("step-1", steerToolCompletionIntent(result)); err != nil {
 		t.Fatalf("append tool completion: %v", err)
@@ -108,10 +141,10 @@ func TestQueuedAgentShellGoalSetDrainsAfterToolCompletion(t *testing.T) {
 		if msg.Role == llm.RoleAssistant && len(msg.ToolCalls) == 1 && msg.ToolCalls[0].ID == "call-shell" {
 			assistantIdx = idx
 		}
-		if msg.Role == llm.RoleTool && msg.ToolCallID == "call-shell" {
+		if msg.Role == llm.RoleTool && msg.ToolCallID != nil && *msg.ToolCallID == "call-shell" {
 			toolIdx = idx
 		}
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeGoal {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeGoal {
 			goalIdx = idx
 		}
 	}
@@ -334,7 +367,7 @@ func TestConcurrentGoalMutationsDoNotInterleaveBetweenMetadataAndStatusEvent(t *
 		secondDone <- err
 	}()
 	time.Sleep(50 * time.Millisecond)
-	if goal := store.Meta().Goal; goal == nil || goal.Objective != "first goal" {
+	if goal := store.Metadata().Goal; goal == nil || goal.Objective != "first goal" {
 		t.Fatalf("second mutation interleaved before first status event completed: %+v", goal)
 	}
 	eventsMu.Lock()
@@ -366,12 +399,12 @@ func waitForGoalObjective(t *testing.T, store *session.Store, objective string) 
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if goal := store.Meta().Goal; goal != nil && goal.Objective == objective {
+		if goal := store.Metadata().Goal; goal != nil && goal.Objective == objective {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for goal objective %q, got %+v", objective, store.Meta().Goal)
+	t.Fatalf("timed out waiting for goal objective %q, got %+v", objective, store.Metadata().Goal)
 }
 
 func assertGoalStatusEventObjective(t *testing.T, events []Event, start int, objective string) {
@@ -522,7 +555,7 @@ func TestGoalTurnAppendsNudgePromptAndRunsModel(t *testing.T) {
 		t.Fatalf("runGoalTurn: %v", err)
 	}
 	assertModelCallCount(t, client, 1)
-	events, err := sessiontest.CollectEvents(store)
+	events, err := collectTestEventRecords(store)
 	if err != nil {
 		t.Fatalf("ReadEvents: %v", err)
 	}
@@ -530,11 +563,11 @@ func TestGoalTurnAppendsNudgePromptAndRunsModel(t *testing.T) {
 	if len(messages) < 2 {
 		t.Fatalf("goal developer messages len = %d, want at least 2", len(messages))
 	}
-	if got := messages[1].Content; got != prompts.RenderGoalNudgePrompt("ship goal mode", "active") {
+	if got := messageContent(messages[1]); got != prompts.RenderGoalNudgePrompt("ship goal mode", "active") {
 		t.Fatalf("nudge prompt = %q", got)
 	}
-	if got := messages[1].CompactContent; clientui.GoalNudgeCompactLabel == "" || got != clientui.GoalNudgeCompactLabel {
-		t.Fatalf("nudge compact content = %q, want non-empty shared label %q", got, clientui.GoalNudgeCompactLabel)
+	if got := messages[1].CompactContent; clientui.GoalNudgeCompactLabel == "" || got == nil || *got != clientui.GoalNudgeCompactLabel {
+		t.Fatalf("nudge compact content = %v, want non-empty shared label %q", got, clientui.GoalNudgeCompactLabel)
 	}
 }
 
@@ -553,16 +586,16 @@ func TestGoalTurnRejectsNoopFinalWithoutAppendingExtraNudge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runGoalTurn: %v", err)
 	}
-	if msg.Content != "working" {
-		t.Fatalf("assistant content = %q, want working", msg.Content)
+	if messageContent(msg) != "working" {
+		t.Fatalf("assistant content = %q, want working", messageContent(msg))
 	}
 	assertModelCallCount(t, client, 2)
 	secondReq := requestMessages(client.calls[1])
 	foundWarning := false
 	for _, reqMsg := range secondReq {
-		if reqMsg.Role == llm.RoleDeveloper && reqMsg.Content == goalNoopFinalWarning {
-			if reqMsg.MessageType != llm.MessageTypeErrorFeedback {
-				t.Fatalf("NO_OP warning message type = %q, want error_feedback", reqMsg.MessageType)
+		if reqMsg.Role == llm.RoleDeveloper && messageContent(reqMsg) == goalNoopFinalWarning {
+			if reqMsg.MessageType == nil || *reqMsg.MessageType != llm.MessageTypeErrorFeedback {
+				t.Fatalf("NO_OP warning message type = %v, want error_feedback", reqMsg.MessageType)
 			}
 			foundWarning = true
 		}
@@ -571,7 +604,7 @@ func TestGoalTurnRejectsNoopFinalWithoutAppendingExtraNudge(t *testing.T) {
 		t.Fatalf("expected NO_OP warning in second request, got %+v", secondReq)
 	}
 
-	events, err := sessiontest.CollectEvents(store)
+	events, err := collectTestEventRecords(store)
 	if err != nil {
 		t.Fatalf("ReadEvents: %v", err)
 	}
@@ -580,7 +613,7 @@ func TestGoalTurnRejectsNoopFinalWithoutAppendingExtraNudge(t *testing.T) {
 		t.Fatalf("goal developer messages len = %d, want set+nudge only: %+v", len(messages), messages)
 	}
 	for _, msg := range messages {
-		if msg.Content == goalNoopFinalWarning {
+		if messageContent(msg) == goalNoopFinalWarning {
 			t.Fatalf("NO_OP rejection should use error feedback, not goal feedback: %+v", msg)
 		}
 	}
@@ -589,9 +622,9 @@ func TestGoalTurnRejectsNoopFinalWithoutAppendingExtraNudge(t *testing.T) {
 func TestGoalDeveloperMessageVisibleInOngoingWithDetailPrompt(t *testing.T) {
 	msg := llm.Message{
 		Role:           llm.RoleDeveloper,
-		MessageType:    llm.MessageTypeGoal,
-		Content:        prompts.RenderGoalNudgePrompt("ship goal mode", "active"),
-		CompactContent: clientui.GoalNudgeCompactLabel,
+		MessageType:    textutil.Value(llm.MessageTypeGoal),
+		Content:        textutil.Value(prompts.RenderGoalNudgePrompt("ship goal mode", "active")),
+		CompactContent: textutil.Value(clientui.GoalNudgeCompactLabel),
 	}
 
 	entries := VisibleChatEntriesFromMessage(msg)
@@ -605,10 +638,10 @@ func TestGoalDeveloperMessageVisibleInOngoingWithDetailPrompt(t *testing.T) {
 	if entry.Visibility != transcript.EntryVisibilityOngoing {
 		t.Fatalf("goal visibility = %q, want ongoing", entry.Visibility)
 	}
-	if entry.Text != msg.Content {
+	if entry.Text != messageContent(msg) {
 		t.Fatalf("goal detail text = %q, want full prompt", entry.Text)
 	}
-	if entry.CondensedText != msg.CompactContent {
+	if msg.CompactContent == nil || entry.CondensedText != *msg.CompactContent {
 		t.Fatalf("goal condensed text = %q, want compact", entry.CondensedText)
 	}
 }
@@ -982,7 +1015,7 @@ func TestGoalResumeWhileInterruptIsPublishingSchedulesRestart(t *testing.T) {
 
 	releaseCall(1)
 	client.waitStarted(t, 2)
-	events, err := sessiontest.CollectEvents(store)
+	events, err := collectTestEventRecords(store)
 	if err != nil {
 		t.Fatalf("ReadEvents: %v", err)
 	}
@@ -1088,7 +1121,7 @@ func TestNewDoesNotRestartPersistedActiveGoalLoop(t *testing.T) {
 	if got := client.callCount(); got != 0 {
 		t.Fatalf("model calls after reopen = %d, want 0", got)
 	}
-	events, err := sessiontest.CollectEvents(reopenedStore)
+	events, err := collectTestEventRecords(reopenedStore)
 	if err != nil {
 		t.Fatalf("ReadEvents: %v", err)
 	}
@@ -1132,18 +1165,15 @@ func TestNewOpensPersistedActiveGoalWhenAskQuestionDisabled(t *testing.T) {
 	}
 }
 
-func goalDeveloperMessages(t *testing.T, events []session.Event) []llm.Message {
+func goalDeveloperMessages(t *testing.T, events []testPersistedEvent) []llm.Message {
 	t.Helper()
 	out := []llm.Message{}
 	for _, evt := range events {
 		if evt.Kind != "message" {
 			continue
 		}
-		var msg llm.Message
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			t.Fatalf("decode message: %v", err)
-		}
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeGoal {
+		msg := persistedMessageForTest(t, evt)
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeGoal {
 			out = append(out, msg)
 		}
 	}
@@ -1191,7 +1221,7 @@ func (c *scriptedGoalLoopClient) Generate(ctx context.Context, _ llm.Request) (l
 	if beforeReturn != nil {
 		beforeReturn(call)
 	}
-	return llm.Response{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal}}, nil
+	return llm.Response{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)}}, nil
 }
 
 func (c *scriptedGoalLoopClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {

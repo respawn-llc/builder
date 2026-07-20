@@ -196,7 +196,7 @@ func TestWorkflowExecutionTargetDetailAndExplicitRefErrorEncoding(t *testing.T) 
 	}
 
 	resolutionErr := &WorkflowExecutionTargetResolutionError{Code: WorkflowExecutionTargetResolutionErrorInvalidRevision, RequestedRef: "not-a-ref"}
-	data = resolutionErr.RPCErrorData()
+	data = mustRPCErrorData(t, resolutionErr)
 	decoded := DecodeWorkflowExecutionTargetResolutionError(data, "fallback")
 	var typed *WorkflowExecutionTargetResolutionError
 	if !errors.As(decoded, &typed) || typed.Code != WorkflowExecutionTargetResolutionErrorInvalidRevision || typed.RequestedRef != "not-a-ref" {
@@ -207,7 +207,7 @@ func TestWorkflowExecutionTargetDetailAndExplicitRefErrorEncoding(t *testing.T) 
 	}
 
 	lockedErr := &WorkflowLockedExecutionTargetError{Cause: WorkflowLockedExecutionTargetCauseMissingBranch}
-	lockedData := lockedErr.RPCErrorData()
+	lockedData := mustRPCErrorData(t, lockedErr)
 	decodedLocked := DecodeWorkflowLockedExecutionTargetError(lockedData, "fallback")
 	var typedLocked *WorkflowLockedExecutionTargetError
 	if !errors.As(decodedLocked, &typedLocked) || typedLocked.Cause != WorkflowLockedExecutionTargetCauseMissingBranch {

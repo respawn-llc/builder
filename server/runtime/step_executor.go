@@ -9,6 +9,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/server/workflowruntime"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -162,7 +163,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				}
 			}
 			if phaseTurn.MissingAssistantPhase {
-				if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeErrorFeedback, Content: missingAssistantPhaseWarning}})); err != nil {
+				if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(missingAssistantPhaseWarning)}})); err != nil {
 					return stepLoopResult{}, err
 				}
 			}
@@ -178,8 +179,9 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		if len(localToolCalls) == 0 &&
 			len(hostedToolExecutions) == 0 &&
 			phaseTurn.EffectivePhase.Is(llm.MessagePhaseFinal) &&
-			strings.TrimSpace(assistantMsg.Content) != "" {
-			handled, terminal, err := s.handleWorkflowCompletionSubmission(ctx, stepID, assistantMsg.Content)
+			assistantMsg.Content != nil &&
+			strings.TrimSpace(*assistantMsg.Content) != "" {
+			handled, terminal, err := s.handleWorkflowCompletionSubmission(ctx, stepID, *assistantMsg.Content)
 			if err != nil {
 				return stepLoopResult{}, err
 			}
@@ -201,8 +203,8 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				}
 				continue
 			}
-			if phaseTurn.EnforcePhaseProtocol && assistantMsg.Phase != llm.MessagePhaseFinal {
-				if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeErrorFeedback, Content: commentaryWithoutToolCallsWarning}})); err != nil {
+			if phaseTurn.EnforcePhaseProtocol && !messagePhaseIs(assistantMsg, llm.MessagePhaseFinal) {
+				if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(commentaryWithoutToolCallsWarning)}})); err != nil {
 					return stepLoopResult{}, err
 				}
 				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
@@ -210,8 +212,8 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				}
 				continue
 			}
-			if !e.workflowRunActive() && phaseTurn.EnforcePhaseProtocol && assistantMsg.Phase == llm.MessagePhaseFinal && strings.TrimSpace(assistantMsg.Content) == "" && !noopFinalAnswer {
-				if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeErrorFeedback, Content: finalWithoutContentWarning}})); err != nil {
+			if !e.workflowRunActive() && phaseTurn.EnforcePhaseProtocol && messagePhaseIs(assistantMsg, llm.MessagePhaseFinal) && assistantMsg.Content == nil && !noopFinalAnswer {
+				if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(finalWithoutContentWarning)}})); err != nil {
 					return stepLoopResult{}, err
 				}
 				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
@@ -225,7 +227,10 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				return stepLoopResult{}, err
 			}
 			if flushed > 0 {
-				if assistantMsg.Phase == llm.MessagePhaseFinal && strings.TrimSpace(assistantMsg.Content) != "" && !noopFinalAnswer {
+				if messagePhaseIs(assistantMsg, llm.MessagePhaseFinal) &&
+					assistantMsg.Content != nil &&
+					strings.TrimSpace(*assistantMsg.Content) != "" &&
+					!noopFinalAnswer {
 					deferredFinal = assistantMsg
 					deferredFinalCommittedCoordinate = cloneCommittedAssistantCoordinate(assistantCommittedCoordinate)
 					deferredFinalEventEmitted = assistantEventEmitted
@@ -238,9 +243,12 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				continue
 			}
 			if e.workflowRunActive() && e.cfg.WorkflowRun.Controller != nil {
-				content := strings.TrimSpace(assistantMsg.Content)
+				content := ""
+				if assistantMsg.Content != nil {
+					content = strings.TrimSpace(*assistantMsg.Content)
+				}
 				if content == "" && !noopFinalAnswer {
-					if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeErrorFeedback, Content: finalWithoutContentWarning}})); err != nil {
+					if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(finalWithoutContentWarning)}})); err != nil {
 						return stepLoopResult{}, err
 					}
 					continue
@@ -280,7 +288,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			if resolvedNoopFinalAnswer {
 				resolvedCommittedStart, resolvedCommittedStartSet := committedAssistantCoordinateFields(resolvedCommittedCoordinate)
 				if e.goalActive() {
-					if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeErrorFeedback, Content: goalNoopFinalWarning}})); err != nil {
+					if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(goalNoopFinalWarning)}})); err != nil {
 						return stepLoopResult{}, err
 					}
 					continue
@@ -398,8 +406,9 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 		}, nil
 	}
 
-	finalAnswerWithToolCalls := assistantMsg.Phase == llm.MessagePhaseFinal &&
-		strings.TrimSpace(assistantMsg.Content) != "" &&
+	finalAnswerWithToolCalls := messagePhaseIs(assistantMsg, llm.MessagePhaseFinal) &&
+		assistantMsg.Content != nil &&
+		strings.TrimSpace(*assistantMsg.Content) != "" &&
 		executedToolCall
 	patchEditsApplied := false
 	if finalAnswerWithToolCalls {
@@ -435,12 +444,17 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	}
 
 	if !noopFinalAnswer {
+		assistantChars := 0
+		assistantPhase, _ := textutil.OptionalValue(assistantMsg.Phase)
+		if assistantMsg.Content != nil {
+			assistantChars = len(*assistantMsg.Content)
+		}
 		if err := e.steer(stepID, steerEventIntent(Event{
 			Kind:   EventModelResponse,
 			StepID: stepID,
 			ModelResponse: &ModelResponseTrace{
-				AssistantPhase:   assistantMsg.Phase,
-				AssistantChars:   len(assistantMsg.Content),
+				AssistantPhase:   assistantPhase,
+				AssistantChars:   assistantChars,
 				ToolCallsCount:   len(resp.ToolCalls),
 				OutputItemsCount: len(resp.OutputItems),
 				OutputItemTypes:  summarizeOutputItemTypes(resp.OutputItems),
@@ -510,7 +524,7 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 	e := s.engine
 	toolCallMessage := llm.Message{
 		Role:      llm.RoleAssistant,
-		Phase:     llm.MessagePhaseCommentary,
+		Phase:     textutil.Value(llm.MessagePhaseCommentary),
 		ToolCalls: append([]llm.ToolCall(nil), localToolCalls...),
 	}
 	for _, hosted := range hostedToolExecutions {
@@ -575,7 +589,10 @@ func (s *defaultStepExecutor) executeLocalToolCallsAndAppendResults(ctx context.
 		if !result.IsError && (result.Name == toolspec.ToolPatch || result.Name == toolspec.ToolEdit) {
 			patchEditsApplied = true
 		}
-		msg := llm.Message{Role: llm.RoleTool, Content: string(result.Output), ToolCallID: result.CallID, Name: string(result.Name)}
+		msg := llm.Message{
+			Role: llm.RoleTool, Content: textutil.Value(string(result.Output)),
+			ToolCallID: textutil.Value(result.CallID), Name: textutil.Value(string(result.Name)),
+		}
 		msg.MessageType = llm.ToolOutputMessageType(customToolCalls[result.CallID])
 		if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg})); err != nil {
 			return false, false, err
@@ -608,7 +625,11 @@ func (s *defaultStepExecutor) appendHostedToolExecutionResults(stepID string, ho
 		if err := e.steer(stepID, steerToolCompletionIntent(hosted.Result)); err != nil {
 			return err
 		}
-		msg := llm.Message{Role: llm.RoleTool, Content: string(hosted.Result.Output), ToolCallID: hosted.Result.CallID, Name: string(hosted.Result.Name)}
+		msg := llm.Message{
+			Role: llm.RoleTool, Content: textutil.Value(string(hosted.Result.Output)),
+			ToolCallID: textutil.Value(hosted.Result.CallID),
+			Name:       textutil.Value(string(hosted.Result.Name)),
+		}
 		if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg})); err != nil {
 			return err
 		}
@@ -658,7 +679,7 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 		if record.Interrupted {
 			return true, true, nil
 		}
-		if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeErrorFeedback, Content: workflowFinalAnswerNudge}})); err != nil {
+		if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(workflowFinalAnswerNudge)}})); err != nil {
 			return true, false, err
 		}
 		return true, false, nil
@@ -713,7 +734,7 @@ func (s *defaultStepExecutor) appendWorkflowInvalidCompletionNudge(ctx context.C
 	if renderErr != nil {
 		return false, renderErr
 	}
-	return false, e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeErrorFeedback, Content: content}}))
+	return false, e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(content)}}))
 }
 
 func (e *Engine) currentWorkflowCompletionInstructions(ctx context.Context) (string, error) {

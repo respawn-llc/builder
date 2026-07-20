@@ -6,14 +6,15 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
-func applyPersistedScanEvents(t *testing.T, scan *PersistedTranscriptScan, events []session.Event) {
+func applyPersistedScanEvents(t *testing.T, scan *PersistedTranscriptScan, events []session.EventRecord) {
 	t.Helper()
 	for _, evt := range events {
 		if err := scan.ApplyPersistedEvent(evt); err != nil {
-			t.Fatalf("ApplyPersistedEvent(%q): %v", evt.Kind, err)
+			t.Fatalf("ApplyPersistedEvent(%q): %v", mustSessionEventKind(evt), err)
 		}
 	}
 }
@@ -24,12 +25,12 @@ func TestPersistedTranscriptScanReconstructsPersistedTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal tool output: %v", err)
 	}
-	applyPersistedScanEvents(t, scan, []session.Event{
-		mustPersistedEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: "hello"}),
+	applyPersistedScanEvents(t, scan, []session.EventRecord{
+		mustPersistedEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: textutil.Value("hello")}),
 		mustPersistedEvent(t, "message", llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}}}),
-		mustPersistedEvent(t, "tool_completed", map[string]any{"call_id": "call-1", "name": string(toolspec.ToolExecCommand), "output": json.RawMessage(toolOutput)}),
+		mustPersistedEvent(t, "tool_completed", storedToolCompletion{CallID: "call-1", Name: string(toolspec.ToolExecCommand), Output: toolOutput}),
 		mustPersistedEvent(t, "local_entry", storedLocalEntry{Role: "system", Text: "persisted note"}),
-		mustPersistedEvent(t, "message", llm.Message{Role: llm.RoleAssistant, Content: "final answer", Phase: llm.MessagePhaseFinal}),
+		mustPersistedEvent(t, "message", llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("final answer"), Phase: textutil.Value(llm.MessagePhaseFinal)}),
 	})
 
 	snapshot := scan.CollectedPageSnapshot()
@@ -52,9 +53,9 @@ func TestPersistedTranscriptScanReconstructsPersistedTranscript(t *testing.T) {
 
 func TestPersistedTranscriptScanSurfacesPersistedCompactionSummaries(t *testing.T) {
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
-	applyPersistedScanEvents(t, scan, []session.Event{
-		mustPersistedEvent(t, "message", llm.Message{Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "user summary"}),
-		mustPersistedEvent(t, "message", llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "developer handoff"}),
+	applyPersistedScanEvents(t, scan, []session.EventRecord{
+		mustPersistedEvent(t, "message", llm.Message{Role: llm.RoleUser, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("user summary")}),
+		mustPersistedEvent(t, "message", llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("developer handoff")}),
 	})
 
 	snapshot := scan.CollectedPageSnapshot()
@@ -71,7 +72,7 @@ func TestPersistedTranscriptScanSurfacesPersistedCompactionSummaries(t *testing.
 
 func TestPersistedTranscriptScanPreservesErrorLocalEntries(t *testing.T) {
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
-	applyPersistedScanEvents(t, scan, []session.Event{
+	applyPersistedScanEvents(t, scan, []session.EventRecord{
 		mustPersistedEvent(t, "local_entry", storedLocalEntry{Role: "error", Text: "Exact token counting failed"}),
 	})
 
@@ -86,8 +87,8 @@ func TestPersistedTranscriptScanPreservesErrorLocalEntries(t *testing.T) {
 
 func TestPersistedTranscriptScanPreservesPersistedLocalEntryNoticeID(t *testing.T) {
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
-	applyPersistedScanEvents(t, scan, []session.Event{
-		mustPersistedEvent(t, "local_entry", storedLocalEntry{Role: "system", Text: "Mirrored notice", NoticeID: "notice-1"}),
+	applyPersistedScanEvents(t, scan, []session.EventRecord{
+		mustPersistedEvent(t, "local_entry", storedLocalEntry{Role: "system", Text: "Mirrored notice", NoticeID: textutil.Value("notice-1")}),
 	})
 
 	snapshot := scan.CollectedPageSnapshot()
@@ -99,11 +100,7 @@ func TestPersistedTranscriptScanPreservesPersistedLocalEntryNoticeID(t *testing.
 	}
 }
 
-func mustPersistedEvent(t *testing.T, kind string, payload any) session.Event {
+func mustPersistedEvent(t *testing.T, kind string, payload any) session.EventRecord {
 	t.Helper()
-	body, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("marshal %q payload: %v", kind, err)
-	}
-	return session.Event{Kind: kind, Payload: body}
+	return streamScanTestEvent(t, kind, payload)
 }

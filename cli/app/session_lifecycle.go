@@ -85,12 +85,21 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 	}
 	nextSessionOverrides := opts.Overrides
 	var pickerNotice *startupPickerNotice
+	var pickerPlan *sessionLaunchPlan
 	for {
 		switch next.Kind() {
 		case serverapi.SessionDirectiveStop:
 			return nil
 		case serverapi.SessionDirectiveSelectSession:
-			picked, err := planner.selectSession(ctx, pickerNotice)
+			picked, err := planner.selectSession(
+				ctx,
+				pickerNotice,
+				lifecycleSessionPickerOpenController{
+					server:    server,
+					planner:   planner,
+					overrides: nextSessionOverrides,
+				},
+			)
 			if err != nil {
 				return err
 			}
@@ -109,24 +118,11 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 				)
 			case sessionPickerOpenResult:
 				sessionID := picked.sessionID
-				executionTarget, err := loadSelectedSessionExecutionTarget(ctx, server.SessionViewClient(), sessionID.String())
-				if err != nil {
-					pickerNotice = &startupPickerNotice{
-						Text:       "Could not inspect the selected session. Try again.",
-						Kind:       startupPickerNoticeError,
-						Diagnostic: err,
-					}
-					next = serverapi.SelectSessionDirective(serverapi.SessionAuthPreparationKeepCurrent)
-					continue
-				}
-				workspaceChangeAction, err := maybeHandlePickedSessionWorkspaceChange(ctx, server, sessionID.String(), executionTarget)
-				if err != nil {
+				if err := validateSessionPickerLifecycleResult(picked); err != nil {
 					return err
 				}
-				if workspaceChangeAction == sessionWorkspaceChangePickAgain {
-					next = serverapi.SelectSessionDirective(serverapi.SessionAuthPreparationKeepCurrent)
-					continue
-				}
+				plan := picked.plan
+				pickerPlan = &plan
 				next = serverapi.LaunchSessionDirective(
 					serverapi.OpenExistingSessionLaunchIntent(sessionID),
 					serverapi.NewSessionLaunchPreparation(
@@ -163,13 +159,22 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 			server = reboundServer
 			planner = newSessionLaunchPlanner(server)
 		}
-		launchRequest, err := sessionLaunchRequestFromIntent(intent, nextSessionOverrides)
-		if err != nil {
-			return err
-		}
-		plan, err := planner.PlanSession(ctx, launchRequest)
-		if err != nil {
-			return err
+		var plan sessionLaunchPlan
+		if pickerPlan != nil {
+			plan = *pickerPlan
+			pickerPlan = nil
+		} else {
+			launchRequest, err := sessionLaunchRequestFromIntent(
+				intent,
+				nextSessionOverrides,
+			)
+			if err != nil {
+				return err
+			}
+			plan, err = planner.PlanSession(ctx, launchRequest)
+			if err != nil {
+				return err
+			}
 		}
 		nextSessionOverrides = serverapi.RunPromptOverrides{}
 		initialPrompt, initialPromptHistoryRecorded, transitionInput, overrideStoredDraft, err := sessionLaunchPreparationValues(preparation)
@@ -207,6 +212,72 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		}
 		next = resolved
 	}
+}
+
+type lifecycleSessionPickerOpenController struct {
+	server    interactiveSessionServer
+	planner   *launchPlanner
+	overrides serverapi.RunPromptOverrides
+}
+
+func (c lifecycleSessionPickerOpenController) Inspect(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+) (sessionPickerOpenInspection, error) {
+	if c.server == nil {
+		return sessionPickerOpenInspection{}, errors.New(
+			"session picker open server is required",
+		)
+	}
+	executionTarget, err := loadSelectedSessionExecutionTarget(
+		ctx,
+		c.server.SessionViewClient(),
+		sessionID.String(),
+	)
+	if err != nil {
+		return sessionPickerOpenInspection{}, err
+	}
+	change, err := inspectPickedSessionWorkspaceChange(
+		c.server,
+		sessionID.String(),
+		executionTarget,
+	)
+	if err != nil {
+		return sessionPickerOpenInspection{}, err
+	}
+	return sessionPickerOpenInspection{workspaceChange: change}, nil
+}
+
+func (c lifecycleSessionPickerOpenController) Retarget(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	workspaceRoot string,
+) error {
+	return retargetInteractiveSessionWorkspace(
+		ctx,
+		c.server,
+		sessionID.String(),
+		workspaceRoot,
+	)
+}
+
+func (c lifecycleSessionPickerOpenController) Plan(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+) (sessionLaunchPlan, error) {
+	if c.planner == nil {
+		return sessionLaunchPlan{}, errors.New(
+			"session picker launch planner is required",
+		)
+	}
+	request, err := sessionLaunchRequestFromIntent(
+		serverapi.OpenExistingSessionLaunchIntent(sessionID),
+		c.overrides,
+	)
+	if err != nil {
+		return sessionLaunchPlan{}, err
+	}
+	return c.planner.PlanSession(ctx, request)
 }
 
 func bindNavigationSessionContext(ctx context.Context, server interactiveSessionServer, preparation serverapi.SessionLaunchPreparation) (interactiveSessionServer, bool, error) {

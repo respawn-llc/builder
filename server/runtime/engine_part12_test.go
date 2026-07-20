@@ -7,6 +7,7 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"encoding/json"
 	"strings"
@@ -34,7 +35,7 @@ func TestShouldCompactBeforeUserMessageSkipsExactCountWhenProviderOverrideDisabl
 		},
 		PreSubmitCompactionLeadTokens: 50,
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: strings.Repeat("a", 3400)}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("a", 3400))}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 
@@ -70,7 +71,7 @@ func TestShouldCompactBeforeUserMessageSkipsExactCountWhenLockedContractDisables
 		ContextWindowTokens:           1000,
 		PreSubmitCompactionLeadTokens: 50,
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: strings.Repeat("a", 3400)}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("a", 3400))}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 
@@ -97,9 +98,9 @@ func TestShouldAutoCompactRechecksProviderBeforeCompactingOnLargeEstimate(t *tes
 	})
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 		Role:       llm.RoleTool,
-		ToolCallID: "call-1",
-		Name:       string(toolspec.ToolViewImage),
-		Content:    `[{"type":"input_image","image_url":"data:image/png;base64,` + strings.Repeat("A", 24_000) + `"}]`,
+		ToolCallID: textutil.Value("call-1"),
+		Name:       textutil.Value(string(toolspec.ToolViewImage)),
+		Content:    textutil.Value(`[{"type":"input_image","image_url":"data:image/png;base64,` + strings.Repeat("A", 24_000) + `"}]`),
 	}})); err != nil {
 		t.Fatalf("append tool message: %v", err)
 	}
@@ -121,7 +122,7 @@ func TestShouldAutoCompactPrefersConfiguredThresholdOverResolvedContextWindow(t 
 		ContextWindowTokens:   400_000,
 		AutoCompactTokenLimit: 360_000,
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "short"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("short")}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 
@@ -148,7 +149,7 @@ func TestShouldAutoCompactAccountsForReservedOutputBudget(t *testing.T) {
 		AutoCompactTokenLimit: 900,
 		MaxTokens:             100,
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "short"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("short")}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 
@@ -166,7 +167,7 @@ func TestShouldAutoCompactSkipsPreciseCountWhenFarBelowThreshold(t *testing.T) {
 		ContextWindowTokens:   400_000,
 		AutoCompactTokenLimit: 100_000,
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "short"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("short")}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 
@@ -209,7 +210,7 @@ func TestCompactionSoonReminderStaysSingleShotAfterReEnablingAutoCompactionAbove
 		AutoCompactTokenLimit: 1_000,
 		CompactionMode:        "local",
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 890, WindowTokens: 2_000})
@@ -279,10 +280,10 @@ func TestReopenedSessionRestoresCompactionSoonReminderIssuedState(t *testing.T) 
 		AutoCompactTokenLimit: 1_000,
 		CompactionMode:        "local",
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
-	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSoonReminder, Content: prompts.RenderCompactionSoonReminderPrompt(false, eng.estimatedToolCallsUntilForcedHandoff())}})); err != nil {
+	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSoonReminder), Content: textutil.Value(prompts.RenderCompactionSoonReminderPrompt(false, eng.estimatedToolCallsUntilForcedHandoff()))}})); err != nil {
 		t.Fatalf("append reminder: %v", err)
 	}
 
@@ -300,7 +301,7 @@ func TestReopenedSessionRestoresCompactionSoonReminderIssuedState(t *testing.T) 
 	if !restored.compactionRuntimeState().SoonReminderIssued() {
 		t.Fatal("expected reopened session to restore reminder-issued state")
 	}
-	if !reopenedStore.Meta().CompactionSoonReminderIssued {
+	if !reopenedStore.Metadata().CompactionSoonReminderIssued {
 		t.Fatal("expected reopened session meta to persist reminder-issued state")
 	}
 	if err := newCompactionReminderCoordinator(restored).maybeAppend(context.Background(), "step-restore"); err != nil {
@@ -320,18 +321,18 @@ func TestForkedSessionBeforeReminderDoesNotCopyReminderIssuedState(t *testing.T)
 		AutoCompactTokenLimit: 1_000,
 		CompactionMode:        "local",
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	if err := eng.persistCompactionSoonReminderIssued(true); err != nil {
 		t.Fatalf("persist reminder-issued state: %v", err)
 	}
 
-	forkedStore, _, err := session.ForkAtUserMessage(store, userMessageSeqAt(t, store, 1), "Parent -> edit", sessioncontract.SessionCategoryMain)
+	forkedStore, _, err := session.ForkAtUserMessage(mustMaterializeTestEventLog(t, store), userMessageSeqAt(t, store, 1), "Parent -> edit", sessioncontract.SessionCategoryMain)
 	if err != nil {
 		t.Fatalf("fork session: %v", err)
 	}
-	if forkedStore.Meta().CompactionSoonReminderIssued {
+	if forkedStore.Metadata().CompactionSoonReminderIssued {
 		t.Fatal("expected fork before reminder to clear reminder-issued state")
 	}
 	forked := mustNewTestEngine(t, forkedStore, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
@@ -359,22 +360,22 @@ func TestForkedSessionDoesNotCopyPersistedUsageState(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 410_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	if _, err := eng.recordLastUsage(llm.Usage{InputTokens: 900, WindowTokens: 410_000}); err != nil {
 		t.Fatalf("record last usage: %v", err)
 	}
-	if store.Meta().UsageState == nil {
+	if store.Metadata().UsageState == nil {
 		t.Fatal("expected parent session to persist usage state")
 	}
 
-	forkedStore, _, err := session.ForkAtUserMessage(store, userMessageSeqAt(t, store, 1), "Parent -> edit", sessioncontract.SessionCategoryMain)
+	forkedStore, _, err := session.ForkAtUserMessage(mustMaterializeTestEventLog(t, store), userMessageSeqAt(t, store, 1), "Parent -> edit", sessioncontract.SessionCategoryMain)
 	if err != nil {
 		t.Fatalf("fork session: %v", err)
 	}
-	if forkedStore.Meta().UsageState != nil {
-		t.Fatalf("expected forked session usage state cleared, got %+v", forkedStore.Meta().UsageState)
+	if forkedStore.Metadata().UsageState != nil {
+		t.Fatalf("expected forked session usage state cleared, got %+v", forkedStore.Metadata().UsageState)
 	}
 }
 
@@ -387,24 +388,24 @@ func TestForkedSessionAfterReminderPreservesCompactionSoonReminderIssuedState(t 
 		AutoCompactTokenLimit: 1_000,
 		CompactionMode:        "local",
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	if err := eng.persistCompactionSoonReminderIssued(true); err != nil {
 		t.Fatalf("persist reminder-issued state: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSoonReminder, Content: "compact soon"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSoonReminder), Content: textutil.Value("compact soon")}})); err != nil {
 		t.Fatalf("append reminder message: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "after reminder"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("after reminder")}})); err != nil {
 		t.Fatalf("append second user message: %v", err)
 	}
 
-	forkedStore, _, err := session.ForkAtUserMessage(store, userMessageSeqAt(t, store, 2), "Parent -> edit", sessioncontract.SessionCategoryMain)
+	forkedStore, _, err := session.ForkAtUserMessage(mustMaterializeTestEventLog(t, store), userMessageSeqAt(t, store, 2), "Parent -> edit", sessioncontract.SessionCategoryMain)
 	if err != nil {
 		t.Fatalf("fork session: %v", err)
 	}
-	if !forkedStore.Meta().CompactionSoonReminderIssued {
+	if !forkedStore.Metadata().CompactionSoonReminderIssued {
 		t.Fatal("expected fork after reminder to preserve reminder-issued state")
 	}
 }
@@ -413,7 +414,7 @@ func TestRealCompactionClearsPersistedCompactionSoonReminderStateAcrossReopenAnd
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "condensed summary"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("condensed summary")},
 		Usage:     llm.Usage{InputTokens: 200, WindowTokens: 2_000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
@@ -422,21 +423,21 @@ func TestRealCompactionClearsPersistedCompactionSoonReminderStateAcrossReopenAnd
 		AutoCompactTokenLimit: 1_000,
 		CompactionMode:        "local",
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 890, WindowTokens: 2_000})
 	if err := newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-warning"); err != nil {
 		t.Fatalf("append reminder: %v", err)
 	}
-	if !store.Meta().CompactionSoonReminderIssued {
+	if !store.Metadata().CompactionSoonReminderIssued {
 		t.Fatal("expected reminder-issued state persisted before compaction")
 	}
 
 	if err := eng.CompactContext(context.Background(), "compact now"); err != nil {
 		t.Fatalf("compact context: %v", err)
 	}
-	if store.Meta().CompactionSoonReminderIssued {
+	if store.Metadata().CompactionSoonReminderIssued {
 		t.Fatal("expected real compaction to clear reminder-issued state in session meta")
 	}
 
@@ -453,15 +454,15 @@ func TestRealCompactionClearsPersistedCompactionSoonReminderStateAcrossReopenAnd
 	if restored.compactionRuntimeState().SoonReminderIssued() {
 		t.Fatal("expected reopened compacted session to start with cleared reminder-issued state")
 	}
-	if reopenedStore.Meta().CompactionSoonReminderIssued {
+	if reopenedStore.Metadata().CompactionSoonReminderIssued {
 		t.Fatal("expected reopened compacted session metadata to remain cleared")
 	}
 
-	forkedStore, _, err := session.ForkAtUserMessage(reopenedStore, userMessageSeqAt(t, reopenedStore, 1), "Parent -> edit", sessioncontract.SessionCategoryMain)
+	forkedStore, _, err := session.ForkAtUserMessage(mustMaterializeTestEventLog(t, reopenedStore), userMessageSeqAt(t, reopenedStore, 1), "Parent -> edit", sessioncontract.SessionCategoryMain)
 	if err != nil {
 		t.Fatalf("fork compacted session: %v", err)
 	}
-	if forkedStore.Meta().CompactionSoonReminderIssued {
+	if forkedStore.Metadata().CompactionSoonReminderIssued {
 		t.Fatal("expected fork of compacted session to inherit cleared reminder-issued state")
 	}
 	forked := mustNewTestEngine(t, forkedStore, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
@@ -472,35 +473,6 @@ func TestRealCompactionClearsPersistedCompactionSoonReminderStateAcrossReopenAnd
 	})
 	if forked.compactionRuntimeState().SoonReminderIssued() {
 		t.Fatal("expected forked compacted session to start with cleared reminder-issued state")
-	}
-}
-
-func TestLegacyReviewerRollbackHistoryReplacementIsIgnoredAcrossReopen(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 410_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
-		t.Fatalf("append seed message: %v", err)
-	}
-	if _, err := eng.recordLastUsage(llm.Usage{InputTokens: 900, WindowTokens: 410_000}); err != nil {
-		t.Fatalf("record last usage: %v", err)
-	}
-	if store.Meta().UsageState == nil {
-		t.Fatal("expected usage state persisted before rollback")
-	}
-	if _, _, err := store.AppendEvent("step-rollback", "history_replaced", historyReplacementPayload{Engine: "reviewer_rollback", Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: "rolled back"}})}); err != nil {
-		t.Fatalf("append legacy reviewer rollback history replacement: %v", err)
-	}
-	if store.Meta().UsageState == nil {
-		t.Fatal("expected ignored legacy reviewer rollback to leave persisted usage state intact")
-	}
-
-	reopenedStore, err := runtimeTestSessionPersistence.Open(store.Dir())
-	if err != nil {
-		t.Fatalf("re-open store: %v", err)
-	}
-	if reopenedStore.Meta().UsageState == nil {
-		t.Fatal("expected reopened session to keep usage state intact after ignored legacy reviewer rollback")
 	}
 }
 
@@ -525,7 +497,7 @@ func TestCompactionSoonReminderSkipsPreciseCountingWhenSuppressed(t *testing.T) 
 				AutoCompactTokenLimit: 1_000,
 				CompactionMode:        tt.compactionMode,
 			})
-			if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+			if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 				t.Fatalf("append seed message: %v", err)
 			}
 			eng.setLastUsage(llm.Usage{InputTokens: 890, WindowTokens: 2_000})
@@ -559,11 +531,11 @@ func TestRunStepLoopSkipsCompactionSoonReminderWhenImmediateAutoCompactionRuns(t
 	store := mustCreateTestSession(t)
 
 	client := &fakeCompactionClient{
-		responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal}}},
+		responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)}}},
 		compactionResponses: []llm.CompactionResponse{{
 			OutputItems: []llm.ResponseItem{
-				{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "seed"},
-				{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("seed")},
+				{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 			},
 			Usage: llm.Usage{InputTokens: 100, WindowTokens: 2_000},
 		}},
@@ -576,7 +548,7 @@ func TestRunStepLoopSkipsCompactionSoonReminderWhenImmediateAutoCompactionRuns(t
 		MaxTokens:             20,
 		CompactionMode:        "native",
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 9_990, WindowTokens: 20_000})
@@ -585,14 +557,14 @@ func TestRunStepLoopSkipsCompactionSoonReminderWhenImmediateAutoCompactionRuns(t
 	if err != nil {
 		t.Fatalf("runStepLoop: %v", err)
 	}
-	if msg.Content != "done" {
+	if messageContent(msg) != "done" {
 		t.Fatalf("unexpected assistant message: %+v", msg)
 	}
 	if len(client.calls) != 1 {
 		t.Fatalf("expected one model request after compaction, got %d", len(client.calls))
 	}
 	for _, reqMsg := range requestMessages(client.calls[0]) {
-		if reqMsg.Role == llm.RoleDeveloper && reqMsg.MessageType == llm.MessageTypeCompactionSoonReminder {
+		if reqMsg.Role == llm.RoleDeveloper && reqMsg.MessageType != nil && *reqMsg.MessageType == llm.MessageTypeCompactionSoonReminder {
 			t.Fatalf("did not expect compaction-soon reminder in request after immediate auto-compaction, messages=%+v", requestMessages(client.calls[0]))
 		}
 	}
@@ -610,7 +582,7 @@ func TestRunStepLoopInjectsCompactionSoonReminderBeforeFinalAnswerRequest(t *tes
 
 	client := &fakeCompactionClient{
 		responses: []llm.Response{{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{InputTokens: 890, WindowTokens: 2_000},
 		}},
 	}
@@ -621,7 +593,7 @@ func TestRunStepLoopInjectsCompactionSoonReminderBeforeFinalAnswerRequest(t *tes
 		AutoCompactTokenLimit: 1_000,
 		CompactionMode:        "local",
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 890, WindowTokens: 2_000})
@@ -630,7 +602,7 @@ func TestRunStepLoopInjectsCompactionSoonReminderBeforeFinalAnswerRequest(t *tes
 	if err != nil {
 		t.Fatalf("runStepLoop: %v", err)
 	}
-	if msg.Content != "done" {
+	if messageContent(msg) != "done" {
 		t.Fatalf("unexpected assistant message: %+v", msg)
 	}
 	if len(client.calls) != 1 {
@@ -638,7 +610,7 @@ func TestRunStepLoopInjectsCompactionSoonReminderBeforeFinalAnswerRequest(t *tes
 	}
 	remindersInRequest := 0
 	for _, reqMsg := range requestMessages(client.calls[0]) {
-		if reqMsg.Role == llm.RoleDeveloper && reqMsg.MessageType == llm.MessageTypeCompactionSoonReminder {
+		if reqMsg.Role == llm.RoleDeveloper && reqMsg.MessageType != nil && *reqMsg.MessageType == llm.MessageTypeCompactionSoonReminder {
 			remindersInRequest++
 		}
 	}
@@ -673,12 +645,12 @@ func TestRunStepLoopAppendsCompactionSoonReminderImmediatelyAfterToolOutputBound
 	client := &fakeCompactionClient{
 		responses: []llm.Response{
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "checking", Phase: llm.MessagePhaseCommentary},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("checking"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 				ToolCalls: []llm.ToolCall{{ID: "call_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
 				Usage:     llm.Usage{InputTokens: 100, WindowTokens: 2_000},
 			},
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 				Usage:     llm.Usage{InputTokens: 920, WindowTokens: 2_000},
 			},
 		},
@@ -703,7 +675,7 @@ func TestRunStepLoopAppendsCompactionSoonReminderImmediatelyAfterToolOutputBound
 		AutoCompactTokenLimit: 1_000,
 		CompactionMode:        "local",
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 
@@ -711,7 +683,7 @@ func TestRunStepLoopAppendsCompactionSoonReminderImmediatelyAfterToolOutputBound
 	if err != nil {
 		t.Fatalf("runStepLoop: %v", err)
 	}
-	if msg.Content != "done" {
+	if messageContent(msg) != "done" {
 		t.Fatalf("unexpected assistant message: %+v", msg)
 	}
 	if len(client.calls) != 2 {
@@ -719,7 +691,7 @@ func TestRunStepLoopAppendsCompactionSoonReminderImmediatelyAfterToolOutputBound
 	}
 	remindersInSecondRequest := 0
 	for _, reqMsg := range requestMessages(client.calls[1]) {
-		if reqMsg.Role == llm.RoleDeveloper && reqMsg.MessageType == llm.MessageTypeCompactionSoonReminder {
+		if reqMsg.Role == llm.RoleDeveloper && reqMsg.MessageType != nil && *reqMsg.MessageType == llm.MessageTypeCompactionSoonReminder {
 			remindersInSecondRequest++
 		}
 	}

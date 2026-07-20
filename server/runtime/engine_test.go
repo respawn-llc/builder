@@ -7,6 +7,7 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"encoding/json"
 	"errors"
@@ -364,7 +365,7 @@ func (f *fakeStreamClient) GenerateStream(_ context.Context, req llm.Request, on
 			onDelta("final")
 		}
 		return llm.Response{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "final"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("final")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		}, nil
 	}
@@ -374,10 +375,10 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingReminderEntries(t *testin
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "final handoff"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSoonReminder, Content: "heads up"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSoonReminder), Content: textutil.Value("heads up")}})); err != nil {
 		t.Fatalf("append reminder: %v", err)
 	}
 
@@ -390,10 +391,10 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingErrorFeedback(t *testing.
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "final handoff"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeErrorFeedback, Content: "phase mismatch"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value("phase mismatch")}})); err != nil {
 		t.Fatalf("append warning: %v", err)
 	}
 
@@ -406,10 +407,10 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingHandoffFutureMessage(t *t
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "final handoff"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeHandoffFutureMessage, Content: "resume with tests"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHandoffFutureMessage), Content: textutil.Value("resume with tests")}})); err != nil {
 		t.Fatalf("append handoff future message: %v", err)
 	}
 
@@ -422,10 +423,10 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingReviewerFeedback(t *testi
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "final handoff"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeReviewerFeedback, Content: "reviewer suggestions"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeReviewerFeedback), Content: textutil.Value("reviewer suggestions")}})); err != nil {
 		t.Fatalf("append reviewer feedback: %v", err)
 	}
 
@@ -438,10 +439,10 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingGoalFeedback(t *testing.T
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "final handoff"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{normalizeMessageForTranscript(llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeGoal, Content: prompts.RenderGoalSetPrompt("ship goal mode"), CompactContent: "Goal set: \"ship goal mode\""}, eng.transcriptWorkingDir())})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{normalizeMessageForTranscript(llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeGoal), Content: textutil.Value(prompts.RenderGoalSetPrompt("ship goal mode")), CompactContent: textutil.Value("Goal set: \"ship goal mode\"")}, eng.transcriptWorkingDir())})); err != nil {
 		t.Fatalf("append goal feedback: %v", err)
 	}
 
@@ -454,10 +455,10 @@ func TestLastCommittedAssistantFinalAnswerDoesNotSkipTrailingUntypedDeveloperMes
 	store := mustCreateTestSession(t)
 
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "final handoff"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")}})); err != nil {
 		t.Fatalf("append assistant final: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, Content: "User ran shell command directly:\npwd"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("User ran shell command directly:\npwd")}})); err != nil {
 		t.Fatalf("append developer message: %v", err)
 	}
 
@@ -479,7 +480,7 @@ func (fakeAsyncLateDeltaClient) GenerateStream(_ context.Context, _ llm.Request,
 		}()
 	}
 	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "final"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("final")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}, nil
 }
@@ -493,7 +494,7 @@ func (fakeNoopStreamClient) GenerateStream(_ context.Context, _ llm.Request, onD
 		onDelta(reviewerNoopToken)
 	}
 	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: reviewerNoopToken, Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(reviewerNoopToken), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}, nil
 }
@@ -511,8 +512,8 @@ func (fakeReasoningStreamClient) GenerateStreamWithEvents(_ context.Context, _ l
 		callbacks.OnAssistantDelta(llm.AssistantDelta{Text: "done", Phase: llm.MessagePhaseFinal})
 	}
 	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
-		Reasoning: []llm.ReasoningEntry{{Role: "reasoning", Text: "Plan summary"}},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
+		Reasoning: []llm.ReasoningEntry{{Role: textutil.Value("reasoning"), Text: "Plan summary"}},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}, nil
 }
@@ -606,7 +607,7 @@ func TestLocksAtFirstDispatch(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 
@@ -621,7 +622,7 @@ func TestLocksAtFirstDispatch(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 
-	meta := store.Meta()
+	meta := store.Metadata()
 	if meta.Locked == nil {
 		t.Fatalf("expected locked contract after first dispatch")
 	}
@@ -652,7 +653,7 @@ func TestHeadlessSessionLocksToolPreamblesOff(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 
@@ -668,7 +669,7 @@ func TestHeadlessSessionLocksToolPreamblesOff(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 
-	meta := store.Meta()
+	meta := store.Metadata()
 	if meta.Locked == nil {
 		t.Fatalf("expected locked contract after first dispatch")
 	}
@@ -681,7 +682,7 @@ func TestLockedToolPreamblesPersistAcrossResume(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	firstClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "first"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	firstEngine := mustNewTestEngine(t, store, firstClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
@@ -692,12 +693,12 @@ func TestLockedToolPreamblesPersistAcrossResume(t *testing.T) {
 	if _, err := firstEngine.SubmitUserMessage(context.Background(), "first"); err != nil {
 		t.Fatalf("submit first: %v", err)
 	}
-	if store.Meta().Locked == nil || store.Meta().Locked.ToolPreambles == nil || *store.Meta().Locked.ToolPreambles {
-		t.Fatalf("expected first session to lock tool_preambles=false, got %+v", store.Meta().Locked)
+	if store.Metadata().Locked == nil || store.Metadata().Locked.ToolPreambles == nil || *store.Metadata().Locked.ToolPreambles {
+		t.Fatalf("expected first session to lock tool_preambles=false, got %+v", store.Metadata().Locked)
 	}
 
 	resumedClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "second"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("second")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	resumedEngine := mustNewTestEngine(t, store, resumedClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
@@ -708,8 +709,8 @@ func TestLockedToolPreamblesPersistAcrossResume(t *testing.T) {
 	if _, err := resumedEngine.SubmitUserMessage(context.Background(), "second"); err != nil {
 		t.Fatalf("submit second: %v", err)
 	}
-	if store.Meta().Locked == nil || store.Meta().Locked.ToolPreambles == nil || *store.Meta().Locked.ToolPreambles {
-		t.Fatalf("expected resumed session to preserve locked tool_preambles=false, got %+v", store.Meta().Locked)
+	if store.Metadata().Locked == nil || store.Metadata().Locked.ToolPreambles == nil || *store.Metadata().Locked.ToolPreambles {
+		t.Fatalf("expected resumed session to preserve locked tool_preambles=false, got %+v", store.Metadata().Locked)
 	}
 }
 
@@ -717,7 +718,7 @@ func TestLockedContextWindowKeepsSystemPromptToolCallEstimateStableAcrossResume(
 	store := mustCreateTestSession(t)
 
 	firstClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "first"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first")},
 		Usage:     llm.Usage{WindowTokens: 272_000},
 	}}}
 	firstEngine := mustNewTestEngine(t, store, firstClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
@@ -728,7 +729,7 @@ func TestLockedContextWindowKeepsSystemPromptToolCallEstimateStableAcrossResume(
 	if _, err := firstEngine.SubmitUserMessage(context.Background(), "first"); err != nil {
 		t.Fatalf("submit first: %v", err)
 	}
-	locked := store.Meta().Locked
+	locked := store.Metadata().Locked
 	if locked == nil || locked.ContextWindow != 272_000 || locked.ContextPercent != 95 {
 		t.Fatalf("expected locked context budget, got %+v", locked)
 	}
@@ -745,7 +746,7 @@ func TestLockedContextWindowKeepsSystemPromptToolCallEstimateStableAcrossResume(
 	}
 
 	resumedClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "second"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("second")},
 		Usage:     llm.Usage{WindowTokens: 400_000},
 	}}}
 	resumedEngine := mustNewTestEngine(t, store, resumedClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
@@ -762,11 +763,11 @@ func TestLockedContextWindowKeepsSystemPromptToolCallEstimateStableAcrossResume(
 	if resumedClient.calls[0].PromptCacheKey != firstPromptCacheKey {
 		t.Fatalf("expected resumed prompt cache key = %q, got %q", firstPromptCacheKey, resumedClient.calls[0].PromptCacheKey)
 	}
-	if got := resumedEngine.estimatedToolCallsForLockedContext(*store.Meta().Locked); got != 185 {
+	if got := resumedEngine.estimatedToolCallsForLockedContext(*store.Metadata().Locked); got != 185 {
 		t.Fatalf("resumed estimated tool calls = %d, want 185", got)
 	}
 
-	alteredLocked := *store.Meta().Locked
+	alteredLocked := *store.Metadata().Locked
 	alteredLocked.ContextWindow = 400_000
 	if got := resumedEngine.estimatedToolCallsForLockedContext(alteredLocked); got != 271 {
 		t.Fatalf("altered estimated tool calls = %d, want 271", got)
@@ -795,7 +796,7 @@ func TestSystemPromptSnapshotUsesLocalFileAndSurvivesMidSessionFileChanges(t *te
 
 	store := mustCreateNamedTestSession(t, "ws", workspace)
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "first"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
@@ -825,7 +826,7 @@ func TestSystemPromptSnapshotUsesLocalFileAndSurvivesMidSessionFileChanges(t *te
 		t.Fatalf("reopen store: %v", err)
 	}
 	reopenedClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "second"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("second")},
 		Usage:     llm.Usage{WindowTokens: 400000},
 	}}}
 	reopenedEngine := mustNewTestEngine(t, reopened, reopenedClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
@@ -843,7 +844,7 @@ func TestSystemPromptSnapshotUsesLocalFileAndSurvivesMidSessionFileChanges(t *te
 	if got := reopenedClient.calls[0].PromptCacheKey; got != firstCacheKey {
 		t.Fatalf("prompt cache key changed after SYSTEM.md edit: got %q want %q", got, firstCacheKey)
 	}
-	if got := reopened.Meta().Locked.SystemPrompt; got != firstPrompt {
+	if got := reopened.Metadata().Locked.SystemPrompt; got != firstPrompt {
 		t.Fatalf("locked system prompt mismatch\ngot: %q\nwant: %q", got, firstPrompt)
 	}
 }
@@ -861,10 +862,10 @@ func TestSystemPromptSnapshotRefreshesAfterCompaction(t *testing.T) {
 	autoCompactionEnabled := false
 	store := mustCreateNamedTestSession(t, "ws", workspace)
 	client := &fakeClient{responses: []llm.Response{
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "first"}, Usage: llm.Usage{WindowTokens: 200000}},
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "second"}, Usage: llm.Usage{WindowTokens: 200000}},
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "summary"}, Usage: llm.Usage{WindowTokens: 200000}},
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "third"}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first")}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("second")}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("third")}, Usage: llm.Usage{WindowTokens: 200000}},
 	}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:                 "gpt-5",
@@ -903,7 +904,7 @@ func TestSystemPromptSnapshotRefreshesAfterCompaction(t *testing.T) {
 	if got := client.calls[3].PromptCacheKey; got == "" || got == firstCacheKey {
 		t.Fatalf("post-compaction cache key = %q, want rotated from %q", got, firstCacheKey)
 	}
-	if locked := store.Meta().Locked; locked == nil || !locked.HasSystemPrompt || locked.SystemPrompt != "prompt B" {
+	if locked := store.Metadata().Locked; locked == nil || !locked.HasSystemPrompt || locked.SystemPrompt != "prompt B" {
 		t.Fatalf("locked prompt after refresh = %+v, want prompt B", locked)
 	}
 }
@@ -915,9 +916,9 @@ func TestSystemPromptRefreshFailureKeepsStaleLockAndRetries(t *testing.T) {
 	autoCompactionEnabled := false
 	store := mustCreateTestSession(t, workspace)
 	client := &fakeClient{responses: []llm.Response{
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "first"}, Usage: llm.Usage{WindowTokens: 200000}},
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "summary"}, Usage: llm.Usage{WindowTokens: 200000}},
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "second"}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first")}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("second")}, Usage: llm.Usage{WindowTokens: 200000}},
 	}}
 	eng := mustNewExecTestEngine(t, store, client, Config{
 		CompactionMode:        "local",
@@ -937,7 +938,7 @@ func TestSystemPromptRefreshFailureKeepsStaleLockAndRetries(t *testing.T) {
 	if _, err := eng.SubmitUserMessage(context.Background(), "fails"); err == nil {
 		t.Fatal("expected invalid prompt refresh to fail")
 	}
-	if locked := store.Meta().Locked; locked == nil || locked.HasSystemPrompt || strings.TrimSpace(locked.SystemPrompt) != "" {
+	if locked := store.Metadata().Locked; locked == nil || locked.HasSystemPrompt || strings.TrimSpace(locked.SystemPrompt) != "" {
 		t.Fatalf("locked prompt after failed refresh = %+v, want stale cleared lock", locked)
 	}
 	writeTestFile(t, systemPath, "prompt B")
@@ -962,8 +963,8 @@ func TestPendingSystemPromptRefreshRunsAfterReopen(t *testing.T) {
 	autoCompactionEnabled := false
 	store := mustCreateTestSession(t, workspace)
 	client := &fakeClient{responses: []llm.Response{
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "first"}, Usage: llm.Usage{WindowTokens: 200000}},
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "summary"}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first")}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")}, Usage: llm.Usage{WindowTokens: 200000}},
 	}}
 	eng := mustNewExecTestEngine(t, store, client, Config{
 		CompactionMode:        "local",
@@ -978,7 +979,7 @@ func TestPendingSystemPromptRefreshRunsAfterReopen(t *testing.T) {
 	if err := eng.CompactContext(context.Background(), ""); err != nil {
 		t.Fatalf("compact: %v", err)
 	}
-	if locked := store.Meta().Locked; locked == nil || locked.HasSystemPrompt || locked.SystemPrompt != "" {
+	if locked := store.Metadata().Locked; locked == nil || locked.HasSystemPrompt || locked.SystemPrompt != "" {
 		t.Fatalf("locked prompt after compaction = %+v, want stale", locked)
 	}
 	if err := eng.Close(); err != nil {
@@ -988,7 +989,7 @@ func TestPendingSystemPromptRefreshRunsAfterReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	reopenedClient := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "second"}, Usage: llm.Usage{WindowTokens: 200000}}}}
+	reopenedClient := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("second")}, Usage: llm.Usage{WindowTokens: 200000}}}}
 	reopened := mustNewExecTestEngine(t, reopenedStore, reopenedClient, Config{
 		ToolPreambles:        false,
 		TranscriptWorkingDir: workspace,
@@ -1013,7 +1014,7 @@ func TestLegacyNonBooleanSystemPromptSnapshotIsNotRefreshed(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("mark locked: %v", err)
 	}
-	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"}, Usage: llm.Usage{WindowTokens: 200000}}}}
+	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")}, Usage: llm.Usage{WindowTokens: 200000}}}}
 	eng := mustNewExecTestEngine(t, store, client, Config{SystemPromptFiles: []config.SystemPromptFile{{Path: filepath.Join(t.TempDir(), "new.md"), Scope: config.SystemPromptFileScopeWorkspaceConfig}}})
 	if _, err := eng.SubmitUserMessage(context.Background(), "hello"); err != nil {
 		t.Fatalf("submit: %v", err)

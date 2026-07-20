@@ -53,7 +53,7 @@ func createTestSessionInContainer(t *testing.T, containerDir, workspaceContainer
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	testSessionStores.Store(store.Meta().SessionID, store)
+	testSessionStores.Store(store.Metadata().SessionID, store)
 	return store
 }
 

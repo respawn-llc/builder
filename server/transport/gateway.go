@@ -361,7 +361,20 @@ func sendResponse(ctx context.Context, conn rpcwire.Conn, resp protocol.Response
 func responseForError(id string, err error) protocol.Response {
 	var structured protocol.StructuredRPCError
 	if errors.As(err, &structured) {
-		return protocol.NewErrorResponseWithData(id, structured.RPCErrorCode(), err.Error(), structured.RPCErrorData())
+		data, dataErr := structured.RPCErrorData()
+		if dataErr != nil {
+			return protocol.NewErrorResponse(
+				id,
+				protocol.ErrCodeInternalError,
+				errors.Join(err, dataErr).Error(),
+			)
+		}
+		return protocol.NewErrorResponseWithData(
+			id,
+			structured.RPCErrorCode(),
+			err.Error(),
+			data,
+		)
 	}
 	code, message := protocolError(err)
 	return protocol.NewErrorResponse(id, code, message)

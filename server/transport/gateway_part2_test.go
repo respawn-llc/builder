@@ -148,7 +148,7 @@ func TestGatewayAttachSessionClearsWorkspaceOverrideForLaterPlans(t *testing.T) 
 		t.Fatalf("AttachProjectRequestForWorkspaceRoot: %v", err)
 	}
 	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, attachWorkspaceA, nil)
-	callGateway(t, conn, "attach-session", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: storeB.Meta().SessionID}, nil)
+	callGateway(t, conn, "attach-session", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: storeB.Metadata().SessionID}, nil)
 
 	var planResp serverapi.SessionPlanResponse
 	callGateway(t, conn, "session-plan", protocol.MethodSessionPlan, serverapi.SessionPlanRequest{
@@ -202,7 +202,7 @@ func TestGatewayScopesProcessAPIsToAttachedProject(t *testing.T) {
 	ownResult, err := appCore.Background().Start(context.Background(), shelltool.ExecRequest{
 		Command:        []string{"/bin/sh", "-lc", "printf own\\n; sleep 1"},
 		DisplayCommand: "printf own; sleep 1",
-		OwnerSessionID: storeA.Meta().SessionID,
+		OwnerSessionID: storeA.Metadata().SessionID,
 		Workdir:        appCore.Config().WorkspaceRoot,
 		YieldTime:      time.Millisecond,
 	})
@@ -212,7 +212,7 @@ func TestGatewayScopesProcessAPIsToAttachedProject(t *testing.T) {
 	foreignResult, err := appCore.Background().Start(context.Background(), shelltool.ExecRequest{
 		Command:        []string{"/bin/sh", "-lc", "printf foreign\\n; sleep 1"},
 		DisplayCommand: "printf foreign; sleep 1",
-		OwnerSessionID: storeB.Meta().SessionID,
+		OwnerSessionID: storeB.Metadata().SessionID,
 		Workdir:        resolvedB.Config.WorkspaceRoot,
 		YieldTime:      time.Millisecond,
 	})
@@ -267,7 +267,7 @@ func TestGatewayRemoteResolveWorktreeCreateTarget(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 
 	resp, err := remote.ResolveWorktreeCreateTarget(context.Background(), serverapi.WorktreeCreateTargetResolveRequest{
-		SessionID: store.Meta().SessionID,
+		SessionID: store.Metadata().SessionID,
 		Target:    "HEAD",
 	})
 	if err != nil {
@@ -313,7 +313,7 @@ func TestGatewayProcessOutputSubscriptionStreamsOutputAndCompletion(t *testing.T
 	result, err := appCore.Background().Start(context.Background(), shelltool.ExecRequest{
 		Command:        []string{"/bin/sh", "-lc", "printf 'hello\\n'; sleep 0.05"},
 		DisplayCommand: "printf 'hello\\n'; sleep 0.05",
-		OwnerSessionID: store.Meta().SessionID,
+		OwnerSessionID: store.Metadata().SessionID,
 		Workdir:        appCore.Config().WorkspaceRoot,
 		YieldTime:      time.Millisecond,
 	})

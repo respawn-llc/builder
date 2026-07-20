@@ -155,7 +155,7 @@ func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
 				ID:          "0f63b1c2-6b29-4dc0-9b0f-405a92a23904",
 				Name:        string(toolspec.ToolPatch),
 				Custom:      true,
-				CustomInput: "*** Begin Patch\n*** Add File: a.txt\n+hello\n*** End Patch",
+				CustomInput: textutil.Value("*** Begin Patch\n*** Add File: a.txt\n+hello\n*** End Patch"),
 			},
 			wantPatch: true,
 		},
@@ -176,7 +176,7 @@ func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
 				CallID:            tt.call.ID,
 				Name:              toolspec.ID(tt.call.Name),
 				IsError:           true,
-				Summary:           "failed",
+				Summary:           textutil.Value("failed"),
 				PresentationDelta: tt.delta,
 			}, tt.call, t.TempDir())
 			if mismatch != nil {

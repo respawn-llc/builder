@@ -181,12 +181,16 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 						prepared.onActive()
 					}
 				}, nil)
-				prepared.content = assistant.Content
+				if assistant.Content != nil {
+					prepared.content = *assistant.Content
+				}
 				prepared.name = engine.SessionName()
 				if waitHandle != nil {
 					result, waitErr := waitHandle.Wait()
 					if waitErr == nil {
-						prepared.content = result.AssistantMessage.Content
+						if result.AssistantMessage.Content != nil {
+							prepared.content = *result.AssistantMessage.Content
+						}
 					} else if submitErr == nil && !errors.Is(waitErr, runtime.ErrLiveRunNoFinalAnswer) {
 						submitErr = waitErr
 					}

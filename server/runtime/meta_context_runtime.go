@@ -9,6 +9,7 @@ import (
 	"core/server/session"
 	"core/server/workflow"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -33,7 +34,7 @@ func (e *Engine) ensureMetaContextForCompaction(ctx context.Context, stepID stri
 }
 
 func (e *Engine) activeMetaContextBuilder(model string, skillPolicy config.SkillPolicy) metaContextBuilder {
-	return newActiveMetaContextBuilder(e.store.Meta(), model, e.ThinkingLevel(), e.cfg.GlobalConfigDir, skillPolicy, time.Now()).
+	return newActiveMetaContextBuilder(e.store.Metadata(), model, e.ThinkingLevel(), e.cfg.GlobalConfigDir, skillPolicy, time.Now()).
 		withSubagents(e.cfg.SubagentCatalogSettings, e.cfg.EnabledTools)
 }
 
@@ -68,7 +69,7 @@ func latestActiveMetaContextMatches(items []llm.ResponseItem, desired llm.Messag
 			continue
 		}
 		classification, classified := classifyMetaContextMessage(llm.Message{
-			Role:            item.Role,
+			Role:            roleOrUser(item.Role),
 			MessageType:     item.MessageType,
 			SourcePath:      item.SourcePath,
 			WorktreeContext: item.WorktreeContext,
@@ -164,7 +165,7 @@ func (e *Engine) steerHeadlessModeTransitionIfNeeded(stepID string) error {
 	if e.workflowRunActive() {
 		return nil
 	}
-	if e.cfg.HeadlessMode == e.store.Meta().HeadlessActive {
+	if e.cfg.HeadlessMode == e.store.Metadata().HeadlessActive {
 		return nil
 	}
 	builder := e.activeMetaContextBuilder(e.cfg.Model, e.cfg.SkillPolicy)
@@ -195,8 +196,8 @@ func (e *Engine) steerWorkflowModeIfNeeded(ctx context.Context, stepID string) e
 	runID := strings.TrimSpace(string(e.cfg.WorkflowRun.Contract.RunID))
 	if latestActiveMetaContextMatches(e.transcriptRuntimeState().SnapshotItems(), llm.Message{
 		Role:        llm.RoleDeveloper,
-		MessageType: llm.MessageTypeWorkflowMode,
-		SourcePath:  runID,
+		MessageType: textutil.Value(llm.MessageTypeWorkflowMode),
+		SourcePath:  textutil.Value(runID),
 	}) {
 		return nil
 	}
@@ -220,8 +221,15 @@ func (e *Engine) steerWorkflowModeIfNeeded(ctx context.Context, stepID string) e
 	return e.steerMetaContextIfChanged(stepID, steeringPriorityRuntimeContext, metaResult.Workflow)
 }
 
+func roleOrUser(role *llm.Role) llm.Role {
+	if role == nil {
+		return llm.RoleUser
+	}
+	return *role
+}
+
 func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Message, error) {
-	meta := e.store.Meta()
+	meta := e.store.Metadata()
 	skillPolicy, err := e.reconstructionSkillPolicy(ctx)
 	if err != nil {
 		return nil, err

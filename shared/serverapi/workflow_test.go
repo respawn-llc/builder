@@ -850,7 +850,7 @@ func TestWorkflowTaskListScopeErrorRoundTrip(t *testing.T) {
 			ProjectID: stringPointerForTest("project-1"),
 		},
 	} {
-		decoded := DecodeWorkflowTaskListScopeError(original.RPCErrorData(), original.Error())
+		decoded := DecodeWorkflowTaskListScopeError(mustRPCErrorData(t, original), original.Error())
 		var scopeErr *WorkflowTaskListScopeError
 		if !errors.As(decoded, &scopeErr) {
 			t.Fatalf("decoded scope error = %T %v, want WorkflowTaskListScopeError", decoded, decoded)
@@ -891,7 +891,7 @@ func TestWorkflowTaskCreateSelectionErrorRoundTrip(t *testing.T) {
 		Reason:    WorkflowTaskCreateSelectionReasonNoLinkedWorkflows,
 		ProjectID: "project-1",
 	}
-	decoded := DecodeWorkflowTaskCreateSelectionError(original.RPCErrorData(), original.Error())
+	decoded := DecodeWorkflowTaskCreateSelectionError(mustRPCErrorData(t, original), original.Error())
 	var selectionErr *WorkflowTaskCreateSelectionError
 	if !errors.As(decoded, &selectionErr) {
 		t.Fatalf("decoded selection error = %T %v, want WorkflowTaskCreateSelectionError", decoded, decoded)
@@ -910,7 +910,7 @@ func TestWorkflowTaskCreateSelectionErrorRoundTrip(t *testing.T) {
 		ProjectID:  "project-1",
 		WorkflowID: &canonicalWorkflowID,
 	}
-	if decoded := DecodeWorkflowTaskCreateSelectionError(linked.RPCErrorData(), linked.Error()); !errors.As(decoded, &selectionErr) {
+	if decoded := DecodeWorkflowTaskCreateSelectionError(mustRPCErrorData(t, linked), linked.Error()); !errors.As(decoded, &selectionErr) {
 		t.Fatalf("canonical workflow-not-linked error decoded as %T %v", decoded, decoded)
 	}
 	for name, payload := range map[string]string{
@@ -932,7 +932,7 @@ func TestWorkflowTaskCreateConflictErrorRoundTrip(t *testing.T) {
 	original := &WorkflowTaskCreateConflictError{
 		Reason: WorkflowTaskCreateConflictReasonSerialization,
 	}
-	decoded := DecodeWorkflowTaskCreateConflictError(original.RPCErrorData(), original.Error())
+	decoded := DecodeWorkflowTaskCreateConflictError(mustRPCErrorData(t, original), original.Error())
 	var conflictErr *WorkflowTaskCreateConflictError
 	if !errors.As(decoded, &conflictErr) {
 		t.Fatalf("decoded conflict error = %T %v, want WorkflowTaskCreateConflictError", decoded, decoded)

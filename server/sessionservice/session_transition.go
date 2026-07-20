@@ -31,7 +31,7 @@ func initialSessionInput(store *session.Store, transitionInput string) string {
 	if store == nil {
 		return transitionInput
 	}
-	if draft := store.Meta().InputDraft; draft != "" {
+	if draft := store.Metadata().InputDraft; draft != "" {
 		return draft
 	}
 	return transitionInput
@@ -124,19 +124,23 @@ func resolveForkRollback(req sessionTransitionResolveRequest) (serverapi.Session
 	if req.Transition.ForkUserMessageSeq <= 0 {
 		return serverapi.SessionDirective{}, errors.New("rollback fork user message seq must be > 0")
 	}
-	parentMeta := req.Store.Meta()
+	parentMeta := req.Store.Metadata()
 	baseName := strings.TrimSpace(parentMeta.Name)
 	if baseName == "" {
 		baseName = parentMeta.SessionID
 	}
-	forkedStore, forkOrdinal, err := session.ForkAtUserMessage(req.Store, req.Transition.ForkUserMessageSeq, baseName, sessioncontract.SessionCategoryMain)
+	eventLog, err := req.Store.MaterializeEventLog()
+	if err != nil {
+		return serverapi.SessionDirective{}, session.MapEventLogMaterializationError(err)
+	}
+	forkedStore, forkOrdinal, err := session.ForkAtUserMessage(eventLog, req.Transition.ForkUserMessageSeq, baseName, sessioncontract.SessionCategoryMain)
 	if err != nil {
 		return serverapi.SessionDirective{}, err
 	}
 	if err := forkedStore.SetName(strings.TrimSpace(baseName + " \u2192 edit u" + strconv.Itoa(forkOrdinal))); err != nil {
 		return serverapi.SessionDirective{}, errors.Join(err, forkedStore.RemoveDurable())
 	}
-	forkID, err := runtimeids.ParseSessionID(forkedStore.Meta().SessionID)
+	forkID, err := runtimeids.ParseSessionID(forkedStore.Metadata().SessionID)
 	if err != nil {
 		return serverapi.SessionDirective{}, errors.Join(err, forkedStore.RemoveDurable())
 	}

@@ -2,6 +2,7 @@ package runtimewire
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -58,11 +59,47 @@ type RuntimeWiringOptions struct {
 	GlobalConfigDir string
 }
 
-func NewRuntimeWiring(store *session.Store, active config.Settings, enabledTools []toolspec.ID, workspaceRoot string, mgr *auth.Manager, logger Logger, opts RuntimeWiringOptions) (*RuntimeWiring, error) {
-	return NewRuntimeWiringWithBackground(store, active, enabledTools, workspaceRoot, mgr, logger, nil, opts)
+func NewRuntimeWiring(store *session.Store, eventLog session.MaterializedEventLog, active config.Settings, enabledTools []toolspec.ID, workspaceRoot string, mgr *auth.Manager, logger Logger, opts RuntimeWiringOptions) (*RuntimeWiring, error) {
+	return NewRuntimeWiringWithBackground(store, eventLog, active, enabledTools, workspaceRoot, mgr, logger, nil, opts)
 }
 
-func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings, enabledTools []toolspec.ID, workspaceRoot string, mgr *auth.Manager, logger Logger, background *shelltool.Manager, opts RuntimeWiringOptions) (*RuntimeWiring, error) {
+func NewRuntimeWiringWithBackground(
+	store *session.Store,
+	eventLog session.MaterializedEventLog,
+	active config.Settings,
+	enabledTools []toolspec.ID,
+	workspaceRoot string,
+	mgr *auth.Manager,
+	logger Logger,
+	background *shelltool.Manager,
+	opts RuntimeWiringOptions,
+) (*RuntimeWiring, error) {
+	return newRuntimeWiringWithBackgroundOwnership(
+		store,
+		eventLog,
+		active,
+		enabledTools,
+		workspaceRoot,
+		mgr,
+		logger,
+		background,
+		background == nil,
+		opts,
+	)
+}
+
+func newRuntimeWiringWithBackgroundOwnership(
+	store *session.Store,
+	eventLog session.MaterializedEventLog,
+	active config.Settings,
+	enabledTools []toolspec.ID,
+	workspaceRoot string,
+	mgr *auth.Manager,
+	logger Logger,
+	background *shelltool.Manager,
+	ownsBackground bool,
+	opts RuntimeWiringOptions,
+) (_ *RuntimeWiring, resultErr error) {
 	if opts.Client != nil && opts.ClientFactory != nil {
 		return nil, ErrRuntimeClientFactoryConflict
 	}
@@ -74,14 +111,14 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 		return nil, fmt.Errorf("compile effective shell postprocessor: %w", err)
 	}
 	var eng *runtime.Engine
-	localTools, askBroker, background, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
+	localTools, askBroker, background, err := newLocalToolRegistryBinding(LocalToolRegistryOptions{
 		WorkspaceRoot:            workspaceRoot,
-		OwnerSessionID:           store.Meta().SessionID,
+		OwnerSessionID:           store.Metadata().SessionID,
 		Enabled:                  enabledTools,
 		MinimumExecToBgTime:      time.Duration(active.MinimumExecToBgSeconds) * time.Second,
 		ShellOutputMaxChars:      active.ShellOutputMaxChars,
 		AllowNonCwdEdits:         active.AllowNonCwdEdits,
-		SupportsVision:           llm.LockedContractSupportsVisionInputs(store.Meta().Locked, active.Model),
+		SupportsVision:           llm.LockedContractSupportsVisionInputs(store.Metadata().Locked, active.Model),
 		Logger:                   logger,
 		Background:               background,
 		ShellPostprocessor:       shellPostprocessor,
@@ -93,10 +130,20 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 			}
 			return eng.QuestionsEnabled()
 		},
-	})
+	}, ownsBackground)
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if resultErr != nil && ownsBackground {
+			if closeErr := shelltool.CloseOwnedManager(background); closeErr != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf(
+					"close private background manager after runtime wiring failure: %w",
+					closeErr,
+				))
+			}
+		}
+	}()
 	toolRegistry := localTools.Registry()
 	factoryContext := opts.Context
 	if factoryContext == nil {
@@ -104,14 +151,14 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 	}
 
 	mainProvider := mainProviderRuntimeSettings(active)
-	if resolvedCapabilities, ok := llm.ProviderCapabilitiesFromLockedOrOverride(store.Meta().Locked, active.ProviderCapabilities); ok {
+	if resolvedCapabilities, ok := llm.ProviderCapabilitiesFromLockedOrOverride(store.Metadata().Locked, active.ProviderCapabilities); ok {
 		mainProvider.ProviderCapabilitiesOverride = &resolvedCapabilities
 	}
 	var client llm.Client
 	if opts.Client != nil {
 		client = opts.Client
 	} else if opts.ClientFactory != nil {
-		client, err = newRuntimeClientFromFactory(factoryContext, opts.ClientFactory, RuntimeClientPurposeMain, store.Meta().SessionID, active, enabledTools, workspaceRoot, opts.Sources, mainProvider)
+		client, err = newRuntimeClientFromFactory(factoryContext, opts.ClientFactory, RuntimeClientPurposeMain, store.Metadata().SessionID, active, enabledTools, workspaceRoot, opts.Sources, mainProvider)
 		if err != nil {
 			return nil, err
 		}
@@ -140,10 +187,10 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 	reviewerProvider := reviewerProviderRuntimeSettings(active)
 	newReviewerClient := func() (llm.Client, error) {
 		if opts.ClientFactory != nil {
-			return newRuntimeClientFromFactory(factoryContext, opts.ClientFactory, RuntimeClientPurposeReviewer, store.Meta().SessionID, active, enabledTools, workspaceRoot, opts.Sources, reviewerProvider)
+			return newRuntimeClientFromFactory(factoryContext, opts.ClientFactory, RuntimeClientPurposeReviewer, store.Metadata().SessionID, active, enabledTools, workspaceRoot, opts.Sources, reviewerProvider)
 		}
 		if opts.ReviewerClientFactory != nil {
-			return newRuntimeClientFromFactory(factoryContext, opts.ReviewerClientFactory, RuntimeClientPurposeReviewer, store.Meta().SessionID, active, enabledTools, workspaceRoot, opts.Sources, reviewerProvider)
+			return newRuntimeClientFromFactory(factoryContext, opts.ReviewerClientFactory, RuntimeClientPurposeReviewer, store.Metadata().SessionID, active, enabledTools, workspaceRoot, opts.Sources, reviewerProvider)
 		}
 		var reviewerAuth llm.AuthHeaderProvider
 		if mgr != nil && !strings.EqualFold(strings.TrimSpace(reviewerProvider.Auth), "none") {
@@ -192,7 +239,7 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 	if opts.ProviderCapabilitiesOverride != nil {
 		providerCapabilitiesOverride = opts.ProviderCapabilitiesOverride
 	}
-	eng, err = runtime.New(store, client, toolRegistry, runtime.Config{
+	eng, err = runtime.New(store, eventLog, client, toolRegistry, runtime.Config{
 		Model:                         active.Model,
 		Debug:                         active.Debug,
 		Temperature:                   1,

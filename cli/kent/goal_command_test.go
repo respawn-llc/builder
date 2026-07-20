@@ -417,7 +417,7 @@ func TestGoalCommandSubprocessReadsDormantAndMutatesLiveSessionFromUnboundWorktr
 	if err := store.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable: %v", err)
 	}
-	record, err := metadataStore.ResolvePersistedSession(context.Background(), store.Meta().SessionID)
+	record, err := metadataStore.ResolvePersistedSession(context.Background(), store.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("ResolvePersistedSession: %v", err)
 	}
@@ -427,11 +427,11 @@ func TestGoalCommandSubprocessReadsDormantAndMutatesLiveSessionFromUnboundWorktr
 
 	cleanup := startBindingCommandServer(t, unboundWorktree)
 	defer cleanup()
-	t.Setenv(sessionenv.SessionIDEnv, store.Meta().SessionID)
+	t.Setenv(sessionenv.SessionIDEnv, store.Metadata().SessionID)
 
 	assertGoalCommandSubprocessShow := func(want *session.GoalState) {
 		t.Helper()
-		showOutput, showErr := runGoalCommandSubprocess(t, kentPath, unboundWorktree, store.Meta().SessionID, "show", "--json")
+		showOutput, showErr := runGoalCommandSubprocess(t, kentPath, unboundWorktree, store.Metadata().SessionID, "show", "--json")
 		if showErr != "" {
 			t.Fatalf("goal show stderr = %q", showErr)
 		}
@@ -460,7 +460,7 @@ func TestGoalCommandSubprocessReadsDormantAndMutatesLiveSessionFromUnboundWorktr
 
 	assertGoalCommandSubprocessShow(record.Meta.Goal)
 
-	dormantOutput, dormantErr, dormantRunErr := runGoalCommandSubprocessRaw(t, kentPath, unboundWorktree, store.Meta().SessionID, "set", "replacement dormant goal CLI")
+	dormantOutput, dormantErr, dormantRunErr := runGoalCommandSubprocessRaw(t, kentPath, unboundWorktree, store.Metadata().SessionID, "set", "replacement dormant goal CLI")
 	if dormantRunErr == nil {
 		t.Fatal("dormant goal mutation unexpectedly succeeded")
 	}
@@ -470,7 +470,7 @@ func TestGoalCommandSubprocessReadsDormantAndMutatesLiveSessionFromUnboundWorktr
 	if got := nonEmptyLineCount(t, dormantErr); got != 1 {
 		t.Fatalf("dormant goal mutation stderr lines = %d, want 1", got)
 	}
-	record, err = metadataStore.ResolvePersistedSession(context.Background(), store.Meta().SessionID)
+	record, err = metadataStore.ResolvePersistedSession(context.Background(), store.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("ResolvePersistedSession after dormant mutation: %v", err)
 	}
@@ -488,7 +488,7 @@ func TestGoalCommandSubprocessReadsDormantAndMutatesLiveSessionFromUnboundWorktr
 	settings.ProviderOverride = "openai"
 	activation, err := remote.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "activate-goal-cli-e2e",
-		SessionID:       store.Meta().SessionID,
+		SessionID:       store.Metadata().SessionID,
 		ActiveSettings:  settings,
 		EnabledToolIDs:  toolIDsAsStrings(config.EnabledToolIDs(settings)),
 		Source:          cfg.Source,
@@ -498,14 +498,14 @@ func TestGoalCommandSubprocessReadsDormantAndMutatesLiveSessionFromUnboundWorktr
 	}
 	assertGoalCommandSubprocessShow(record.Meta.Goal)
 
-	overwriteOutput, overwriteErr, overwriteRunErr := runGoalCommandSubprocessRaw(t, kentPath, unboundWorktree, store.Meta().SessionID, "set", "replacement live goal CLI")
+	overwriteOutput, overwriteErr, overwriteRunErr := runGoalCommandSubprocessRaw(t, kentPath, unboundWorktree, store.Metadata().SessionID, "set", "replacement live goal CLI")
 	if overwriteRunErr == nil {
 		t.Fatalf("goal set overwrite unexpectedly succeeded stdout=%q stderr=%q", overwriteOutput, overwriteErr)
 	}
 	if overwriteOutput != "" {
 		t.Fatalf("goal set overwrite stdout = %q, want empty", overwriteOutput)
 	}
-	record, err = metadataStore.ResolvePersistedSession(context.Background(), store.Meta().SessionID)
+	record, err = metadataStore.ResolvePersistedSession(context.Background(), store.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("ResolvePersistedSession after rejected overwrite: %v", err)
 	}
@@ -516,7 +516,7 @@ func TestGoalCommandSubprocessReadsDormantAndMutatesLiveSessionFromUnboundWorktr
 	shellRequestID := runtimeids.NewRuntimeClientRequestID()
 	if err := remote.SubmitUserShellCommand(context.Background(), serverapi.RuntimeSubmitUserShellCommandRequest{
 		ClientRequestID: shellRequestID.String(),
-		SessionID:       store.Meta().SessionID,
+		SessionID:       store.Metadata().SessionID,
 		Command:         shellQuote(kentPath) + " goal complete --confirm",
 		OperationRef: clientui.RuntimeOperationRef{
 			Kind:            clientui.RuntimeOperationKindUserShell,
@@ -525,7 +525,7 @@ func TestGoalCommandSubprocessReadsDormantAndMutatesLiveSessionFromUnboundWorktr
 	}); err != nil {
 		t.Fatalf("shell goal complete: %v", err)
 	}
-	record, err = metadataStore.ResolvePersistedSession(context.Background(), store.Meta().SessionID)
+	record, err = metadataStore.ResolvePersistedSession(context.Background(), store.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("ResolvePersistedSession after complete: %v", err)
 	}

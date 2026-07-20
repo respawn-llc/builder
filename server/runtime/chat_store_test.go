@@ -8,6 +8,7 @@ import (
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 
@@ -18,27 +19,27 @@ const chatStoreTestStepID = "11111111-1111-4111-8111-111111111111"
 
 func TestChatStoreProviderHistoryUsesLatestCompactionCheckpoint(t *testing.T) {
 	s := newChatStore()
-	s.appendMessage(chatStoreTestStepID, llm.Message{Role: llm.RoleUser, Content: "before"})
+	s.appendMessage(chatStoreTestStepID, llm.Message{Role: llm.RoleUser, Content: textutil.Value("before")})
 	s.replaceHistory(chatStoreTestStepID, []llm.ResponseItem{{
 		Type:    llm.ResponseItemTypeMessage,
-		Role:    llm.RoleUser,
-		Content: "summary-1",
+		Role:    textutil.Value(llm.RoleUser),
+		Content: textutil.Value("summary-1"),
 	}})
-	s.appendMessage(chatStoreTestStepID, llm.Message{Role: llm.RoleUser, Content: "between"})
+	s.appendMessage(chatStoreTestStepID, llm.Message{Role: llm.RoleUser, Content: textutil.Value("between")})
 
 	s.replaceHistory(chatStoreTestStepID, []llm.ResponseItem{
-		{Type: llm.ResponseItemTypeMessage, Role: llm.RoleDeveloper, Content: "context"},
-		{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "summary-2"},
+		{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleDeveloper), Content: textutil.Value("context")},
+		{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("summary-2")},
 	})
-	s.appendMessage(chatStoreTestStepID, llm.Message{Role: llm.RoleAssistant, Content: "after"})
+	s.appendMessage(chatStoreTestStepID, llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("after")})
 
 	items := s.snapshotItems()
 	if len(items) != 3 {
 		t.Fatalf("provider items = %+v, want latest checkpoint plus active tail", items)
 	}
-	if items[0].Role != llm.RoleDeveloper || items[0].Content != "context" ||
-		items[1].Role != llm.RoleUser || items[1].Content != "summary-2" ||
-		items[2].Role != llm.RoleAssistant || items[2].Content != "after" {
+	if !textutil.EqualOptional(items[0].Role, textutil.Value(llm.RoleDeveloper)) || !textutil.EqualOptional(items[0].Content, textutil.Value("context")) ||
+		!textutil.EqualOptional(items[1].Role, textutil.Value(llm.RoleUser)) || !textutil.EqualOptional(items[1].Content, textutil.Value("summary-2")) ||
+		!textutil.EqualOptional(items[2].Role, textutil.Value(llm.RoleAssistant)) || !textutil.EqualOptional(items[2].Content, textutil.Value("after")) {
 		t.Fatalf("provider items = %+v, want only latest checkpoint plus active tail", items)
 	}
 }
@@ -70,11 +71,11 @@ func TestChatStoreCompactionPrunesWorkingStateAndPreservesCommittedCount(t *test
 
 	s.replaceHistory(chatStoreTestStepID, []llm.ResponseItem{{
 		Type:        llm.ResponseItemTypeMessage,
-		Role:        llm.RoleUser,
-		MessageType: llm.MessageTypeCompactionSummary,
-		Content:     "summary",
+		Role:        textutil.Value(llm.RoleUser),
+		MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+		Content:     textutil.Value("summary"),
 	}})
-	s.appendMessage(chatStoreTestStepID, llm.Message{Role: llm.RoleUser, Content: "after"})
+	s.appendMessage(chatStoreTestStepID, llm.Message{Role: llm.RoleUser, Content: textutil.Value("after")})
 
 	if len(s.messageRecords) != 1 || len(s.local) != 1 {
 		t.Fatalf("retained cache state after compaction: messages=%d local=%d, want one active message and one projected checkpoint row", len(s.messageRecords), len(s.local))
@@ -123,9 +124,9 @@ func TestChatStoreProviderItemsOrderMixedMaterializedAndPendingToolOutputs(t *te
 
 	s.appendMessage(chatStoreTestStepID, llm.Message{
 		Role:       llm.RoleTool,
-		ToolCallID: "call-1",
-		Name:       string(toolspec.ToolExecCommand),
-		Content:    `{"output":"/tmp"}`,
+		ToolCallID: textutil.Value("call-1"),
+		Name:       textutil.Value(string(toolspec.ToolExecCommand)),
+		Content:    textutil.Value(`{"output":"/tmp"}`),
 	})
 	if got := s.committedEntryCount(); got != 4 {
 		t.Fatalf("materialized tool result double-counted: committed entry count = %d, want 4", got)
@@ -145,7 +146,7 @@ func TestChatStoreProviderItemsOrderMixedMaterializedAndPendingToolOutputs(t *te
 		t.Fatalf("provider items = %+v, want %d ordered call/output items", items, len(want))
 	}
 	for i, expected := range want {
-		if items[i].Type != expected.itemType || items[i].CallID != expected.callID {
+		if items[i].Type != expected.itemType || !textutil.EqualOptional(items[i].CallID, textutil.Value(expected.callID)) {
 			t.Fatalf("provider item[%d] = %+v, want type=%q call_id=%q", i, items[i], expected.itemType, expected.callID)
 		}
 	}
@@ -162,8 +163,8 @@ func TestChatStoreFinalizedStreamIdentityUsesActiveSegmentCoordinates(t *testing
 	})
 	s.appendMessage(chatStoreTestStepID, llm.Message{
 		Role:    llm.RoleAssistant,
-		Content: "streamed before compaction",
-		Phase:   llm.MessagePhaseFinal,
+		Content: textutil.Value("streamed before compaction"),
+		Phase:   textutil.Value(llm.MessagePhaseFinal),
 	})
 	preCompactionStreamID := uuid.New()
 	s.recordAssistantStreamFinalization(1, &preCompactionStreamID)
@@ -183,8 +184,8 @@ func TestChatStoreFinalizedStreamIdentityUsesActiveSegmentCoordinates(t *testing
 	}
 	s.appendMessage(chatStoreTestStepID, llm.Message{
 		Role:    llm.RoleAssistant,
-		Content: "streamed after compaction",
-		Phase:   llm.MessagePhaseFinal,
+		Content: textutil.Value("streamed after compaction"),
+		Phase:   textutil.Value(llm.MessagePhaseFinal),
 	})
 	postCompactionStreamID := uuid.New()
 	s.recordAssistantStreamFinalization(activeSegmentStart, &postCompactionStreamID)
@@ -204,7 +205,7 @@ func TestChatStoreDeliveryIncludesCompleteActiveSegment(t *testing.T) {
 	for i := 0; i < count; i++ {
 		s.appendMessage(chatStoreTestStepID, llm.Message{
 			Role:    llm.RoleUser,
-			Content: fmt.Sprintf("message-%03d", i),
+			Content: textutil.Value(fmt.Sprintf("message-%03d", i)),
 		})
 	}
 
@@ -222,7 +223,7 @@ func TestChatStoreDeliveryIncludesCompleteActiveSegment(t *testing.T) {
 
 func TestChatStoreDeliveryPreservesTypedAndLegacyLocalRowsAfterCompaction(t *testing.T) {
 	s := newChatStore()
-	s.appendMessage(chatStoreTestStepID, llm.Message{Role: llm.RoleUser, Content: "before"})
+	s.appendMessage(chatStoreTestStepID, llm.Message{Role: llm.RoleUser, Content: textutil.Value("before")})
 	activeSegmentStart := s.committedEntryCount()
 	s.replaceHistoryAtCommittedEntryStart(chatStoreTestStepID, nil, &activeSegmentStart)
 
@@ -279,11 +280,11 @@ func TestChatStoreDeliveryMatchesLiveProjectedCompactionRows(t *testing.T) {
 	s := newChatStore()
 	activeSegmentStart := 7
 	items := llm.ItemsFromMessages([]llm.Message{
-		{Role: llm.RoleUser, Content: "user text"},
+		{Role: llm.RoleUser, Content: textutil.Value("user text")},
 		{
 			Role:    llm.RoleAssistant,
-			Content: "assistant text",
-			Phase:   llm.MessagePhaseFinal,
+			Content: textutil.Value("assistant text"),
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
 			ToolCalls: []llm.ToolCall{{
 				ID:   "call-1",
 				Name: string(toolspec.ToolExecCommand),
@@ -291,9 +292,9 @@ func TestChatStoreDeliveryMatchesLiveProjectedCompactionRows(t *testing.T) {
 		},
 		{
 			Role:       llm.RoleTool,
-			ToolCallID: "call-1",
-			Name:       string(toolspec.ToolExecCommand),
-			Content:    `{"output":"done"}`,
+			ToolCallID: textutil.Value("call-1"),
+			Name:       textutil.Value(string(toolspec.ToolExecCommand)),
+			Content:    textutil.Value(`{"output":"done"}`),
 		},
 	})
 	s.replaceHistoryAtCommittedEntryStart(chatStoreTestStepID, items, &activeSegmentStart)

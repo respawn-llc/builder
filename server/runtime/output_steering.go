@@ -11,6 +11,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/transcript"
 
 	"github.com/google/uuid"
@@ -120,7 +121,7 @@ type steeringCacheWarning struct {
 }
 
 type steeringCacheObservation struct {
-	events     []session.EventInput
+	records    []session.EventRecordPayload
 	response   persistedCacheResponseObserved
 	warning    transcript.CacheWarning
 	hasWarning bool
@@ -173,10 +174,10 @@ func steerHistoryReplacementIntent(engine string, mode compactionMode, workflowR
 	payload := historyReplacementPayload{
 		Engine:                            normalizeHistoryReplacementEngine(engine),
 		Mode:                              string(mode),
-		WorkflowRunID:                     workflowRunID,
-		CompactionNumber:                  compactionNumber,
-		PendingHandoffFutureMessage:       pendingHandoffFutureMessage,
-		LastCommittedAssistantFinalAnswer: lastCommittedAssistantFinalAnswer,
+		WorkflowRunID:                     textutil.OptionalExactString(workflowRunID),
+		CompactionNumber:                  textutil.Value(compactionNumber),
+		PendingHandoffFutureMessage:       textutil.OptionalExactString(pendingHandoffFutureMessage),
+		LastCommittedAssistantFinalAnswer: textutil.OptionalExactString(lastCommittedAssistantFinalAnswer),
 		Items:                             llm.CloneResponseItems(preparedItems),
 	}
 	return steeringIntent{
@@ -305,9 +306,8 @@ func steerCacheWarningIntent(warning transcript.CacheWarning, visibility transcr
 	}
 }
 
-func steerCacheObservationIntent(events []session.EventInput, response persistedCacheResponseObserved, warning *transcript.CacheWarning, visibility transcript.EntryVisibility, emit bool) steeringIntent {
-	copyEvents := make([]session.EventInput, len(events))
-	copy(copyEvents, events)
+func steerCacheObservationIntent(records []session.EventRecordPayload, response persistedCacheResponseObserved, warning *transcript.CacheWarning, visibility transcript.EntryVisibility, emit bool) steeringIntent {
+	copyRecords := append([]session.EventRecordPayload(nil), records...)
 	var copyWarning transcript.CacheWarning
 	if warning != nil {
 		copyWarning = *warning
@@ -315,7 +315,7 @@ func steerCacheObservationIntent(events []session.EventInput, response persisted
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,
 		items: []steeringItem{{cacheObservation: &steeringCacheObservation{
-			events:     copyEvents,
+			records:    copyRecords,
 			response:   response,
 			warning:    copyWarning,
 			hasWarning: warning != nil,
@@ -427,15 +427,15 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		if receipt.Committed {
 			result := cloneToolResult(completion.Result)
 			e.transcriptRuntimeState().CompleteLiveTool(result.CallID)
-			e.emitRaw(Event{Kind: EventToolCallCompleted, StepID: stepID, ToolResult: &result, CommittedTranscriptChanged: true})
+			err = errors.Join(err, e.emitRaw(Event{Kind: EventToolCallCompleted, StepID: stepID, ToolResult: &result, CommittedTranscriptChanged: true}))
 			if completion.OperatorFeedback != nil {
 				entry := localEntryChatEntryForStep(*completion.OperatorFeedback, stepID)
-				e.emitRaw(Event{
+				err = errors.Join(err, e.emitRaw(Event{
 					Kind:                       EventLocalEntryAdded,
 					StepID:                     stepID,
 					LocalEntry:                 entry,
 					CommittedTranscriptChanged: true,
-				})
+				}))
 			}
 		}
 		return err
@@ -455,25 +455,29 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 				return err
 			}
 		}
-		e.emitRaw(evt)
+		return e.emitRaw(evt)
 	}
 	if item.cacheWarning != nil {
 		warning := item.cacheWarning.warning
 		visibility := normalizeRuntimeEntryVisibility(item.cacheWarning.visibility)
-		_, receipt, appendErr := e.store.AppendEvent(stepID, sessionEventCacheWarning, warning)
+		record, adaptErr := sessionCacheWarningRecordFromRuntime(warning)
+		if adaptErr != nil {
+			return fmt.Errorf("adapt cache warning record: %w", adaptErr)
+		}
+		_, receipt, appendErr := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
 		item.recordCommitReceipt(receipt)
 		if appendErr != nil && !receipt.Committed {
 			return appendErr
 		}
 		e.transcriptRuntimeState().AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), visibility)
 		if item.cacheWarning.emit {
-			e.emitRaw(Event{Kind: EventCacheWarning, StepID: stepID, CacheWarning: copyCacheWarning(&warning), CacheWarningVisibility: visibility, CommittedTranscriptChanged: true})
+			appendErr = errors.Join(appendErr, e.emitRaw(Event{Kind: EventCacheWarning, StepID: stepID, CacheWarning: copyCacheWarning(&warning), CacheWarningVisibility: visibility, CommittedTranscriptChanged: true}))
 		}
 		return appendErr
 	}
 	if item.cacheObservation != nil {
 		observation := item.cacheObservation
-		_, receipt, appendErr := e.store.AppendTurnAtomic(stepID, observation.events)
+		_, receipt, appendErr := e.eventLog.AppendRecordsAtomic(textutil.OptionalExactString(stepID), observation.records)
 		item.recordCommitReceipt(receipt)
 		if !receipt.Committed {
 			return appendErr
@@ -484,14 +488,13 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			visibility := normalizeRuntimeEntryVisibility(observation.visibility)
 			e.transcriptRuntimeState().AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), visibility)
 			if observation.emit {
-				e.emitRaw(Event{Kind: EventCacheWarning, StepID: stepID, CacheWarning: copyCacheWarning(&warning), CacheWarningVisibility: visibility, CommittedTranscriptChanged: true})
+				appendErr = errors.Join(appendErr, e.emitRaw(Event{Kind: EventCacheWarning, StepID: stepID, CacheWarning: copyCacheWarning(&warning), CacheWarningVisibility: visibility, CommittedTranscriptChanged: true}))
 			}
 		}
 		return appendErr
 	}
 	if item.liveToolAbort != nil {
-		e.emitLiveToolAbortsRaw(stepID, item.liveToolAbort.reason)
-		return nil
+		return e.emitLiveToolAbortsRaw(stepID, item.liveToolAbort.reason)
 	}
 	if item.streaming != nil {
 		if item.streaming.assistantDelta != nil {
@@ -499,14 +502,16 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			if delta.Text == "" {
 				return nil
 			}
-			metadata, streamID := e.transcriptRuntimeState().AppendStreamingDelta(stepID, e.TranscriptRevision(), e.CommittedTranscriptEntryCount(), delta.Text, delta.Phase)
-			e.emitRaw(Event{Kind: EventAssistantDelta, StepID: stepID, AssistantDelta: delta.Text, AssistantDeltaPhase: delta.Phase, AssistantStreamMetadata: metadata, AssistantTranscriptStreamID: streamID})
-			return nil
+			revision, err := e.TranscriptRevision()
+			if err != nil {
+				return err
+			}
+			metadata, streamID := e.transcriptRuntimeState().AppendStreamingDelta(stepID, revision, e.CommittedTranscriptEntryCount(), delta.Text, delta.Phase)
+			return e.emitRaw(Event{Kind: EventAssistantDelta, StepID: stepID, AssistantDelta: delta.Text, AssistantDeltaPhase: delta.Phase, AssistantStreamMetadata: metadata, AssistantTranscriptStreamID: streamID})
 		}
 		if item.streaming.reasoningDelta != nil {
 			delta := *item.streaming.reasoningDelta
-			e.emitRaw(Event{Kind: EventReasoningDelta, StepID: stepID, ReasoningDelta: &delta})
-			return nil
+			return e.emitRaw(Event{Kind: EventReasoningDelta, StepID: stepID, ReasoningDelta: &delta})
 		}
 		var clearedMetadata *AssistantStreamMetadata
 		var clearedStreamID *uuid.UUID
@@ -514,7 +519,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			clearedMetadata, clearedStreamID = e.clearStreamingAssistantStateRaw()
 		}
 		if item.streaming.resetEvents {
-			e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata, clearedStreamID, item.streaming.abortReason)
+			return e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata, clearedStreamID, item.streaming.abortReason)
 		}
 		return nil
 	}
@@ -533,7 +538,14 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	replacement.payload.CommittedEntryStart = &projectedStart
 	preparedItems := llm.CloneResponseItems(replacement.payload.Items)
 	replacement.payload.LatestRollbackCandidate = e.transcriptRuntimeState().LatestRollbackCandidate()
-	_, receipt, appendErr := e.store.AppendCompactionHistoryReplacement(stepID, replacement.payload)
+	record, adaptErr := sessionHistoryReplacementRecordFromRuntime(replacement.payload)
+	if adaptErr != nil {
+		return session.CommitReceipt{}, fmt.Errorf("adapt history replacement record: %w", adaptErr)
+	}
+	_, receipt, appendErr := e.eventLog.AppendCompactionHistoryReplacement(
+		textutil.OptionalExactString(stepID),
+		record,
+	)
 	if appendErr != nil && !receipt.Committed {
 		return receipt, appendErr
 	}
@@ -546,13 +558,22 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	// provenance; mirror it into runtime state so an in-process gate sees it
 	// without re-reading the transcript, matching what restore reconstructs.
 	e.compactionRuntimeState().SetLastWorkflowRunID(replacement.workflowRunID)
-	e.compactionRuntimeState().SetCount(replacement.payload.CompactionNumber)
+	if replacement.payload.CompactionNumber != nil {
+		e.compactionRuntimeState().SetCount(*replacement.payload.CompactionNumber)
+	}
 	e.resetCurrentPreciseInputTracking()
 	e.resetLocalDiagnostics()
 	e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(stepID, preparedItems, &projectedStart)
 	e.compactionRuntimeState().SetSoonReminderIssued(false)
-	e.emitProjectedHistoryReplacementEntriesRaw(stepID, projectedStart, replacement.projectedEntries)
-	e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID})
+	emitErr := e.emitProjectedHistoryReplacementEntriesRaw(
+		stepID,
+		projectedStart,
+		replacement.projectedEntries,
+	)
+	emitErr = errors.Join(
+		emitErr,
+		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID}),
+	)
 	// The durable history replacement is the compaction boundary. Apply that
 	// committed replacement in memory before resetting workflow-adjacent state,
 	// so any reset failure cannot make the live engine diverge from restore.
@@ -560,13 +581,18 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	return receipt, errors.Join(
 		appendErr,
 		budgetResetErr,
+		emitErr,
 		e.store.SetCompactionSoonReminderIssued(reminderIssued),
 	)
 }
 
-func (e *Engine) emitProjectedHistoryReplacementEntriesRaw(stepID string, start int, entries []ChatEntry) {
+func (e *Engine) emitProjectedHistoryReplacementEntriesRaw(
+	stepID string,
+	start int,
+	entries []ChatEntry,
+) error {
 	if e == nil || len(entries) == 0 {
-		return
+		return nil
 	}
 	// Live subscribers must observe the same committed transcript progression that
 	// restart hydration reconstructs from history_replaced. Emit projected
@@ -576,7 +602,7 @@ func (e *Engine) emitProjectedHistoryReplacementEntriesRaw(stepID string, start 
 	}
 	for idx, entry := range entries {
 		copyEntry := clonePersistedChatEntry(entry)
-		e.emitRaw(Event{
+		if err := e.emitRaw(Event{
 			Kind:                       EventLocalEntryAdded,
 			StepID:                     stepID,
 			LocalEntry:                 &copyEntry,
@@ -585,8 +611,11 @@ func (e *Engine) emitProjectedHistoryReplacementEntriesRaw(stepID string, start 
 			CommittedEntryStart:        start + idx,
 			CommittedEntryStartSet:     true,
 			CommittedEntryCount:        start + idx + 1,
-		})
+		}); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func cloneToolResult(result tools.Result) tools.Result {

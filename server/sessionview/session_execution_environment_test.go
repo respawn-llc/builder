@@ -413,7 +413,7 @@ func TestSessionExecutionEnvironmentModelFieldMapping(t *testing.T) {
 
 func sessionExecutionEnvironmentSessionID(t *testing.T, store *session.Store) runtimeids.SessionID {
 	t.Helper()
-	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(store.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("ParseSessionID: %v", err)
 	}

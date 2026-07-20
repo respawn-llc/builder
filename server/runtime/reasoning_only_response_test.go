@@ -8,6 +8,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -30,8 +31,8 @@ func TestWorkflowReasoningOnlyResponseContinuesWithoutFeedback(t *testing.T) {
 			}},
 			OutputItems: []llm.ResponseItem{{
 				Type:             llm.ResponseItemTypeReasoning,
-				ID:               "rs_1",
-				EncryptedContent: "encrypted-reasoning",
+				ID:               textutil.Value("rs_1"),
+				EncryptedContent: textutil.Value("encrypted-reasoning"),
 			}},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
@@ -58,7 +59,9 @@ func TestWorkflowReasoningOnlyResponseContinuesWithoutFeedback(t *testing.T) {
 	}
 	reasoningPersisted := false
 	for _, item := range client.calls[1].Items {
-		if item.Type == llm.ResponseItemTypeReasoning && item.ID == "rs_1" && item.EncryptedContent == "encrypted-reasoning" {
+		if item.Type == llm.ResponseItemTypeReasoning &&
+			item.ID != nil && *item.ID == "rs_1" &&
+			item.EncryptedContent != nil && *item.EncryptedContent == "encrypted-reasoning" {
 			reasoningPersisted = true
 		}
 	}
@@ -66,7 +69,7 @@ func TestWorkflowReasoningOnlyResponseContinuesWithoutFeedback(t *testing.T) {
 		t.Fatalf("continuation request omitted reasoning output: %+v", client.calls[1].Items)
 	}
 	for _, message := range requestMessages(client.calls[1]) {
-		if message.Role == llm.RoleDeveloper && message.MessageType == llm.MessageTypeErrorFeedback {
+		if message.Role == llm.RoleDeveloper && message.MessageType != nil && *message.MessageType == llm.MessageTypeErrorFeedback {
 			t.Fatalf("reasoning-only response added feedback: %+v", message)
 		}
 	}
@@ -79,15 +82,14 @@ func TestWorkflowEmptyFinalResponseUsesGenericEmptyFinalFeedback(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{
 		{
 			Assistant: llm.Message{
-				Role:    llm.RoleAssistant,
-				Phase:   llm.MessagePhaseFinal,
-				Content: "",
+				Role:  llm.RoleAssistant,
+				Phase: textutil.Value(llm.MessagePhaseFinal),
 			},
 			OutputItems: []llm.ResponseItem{{
 				Type:    llm.ResponseItemTypeMessage,
-				Role:    llm.RoleAssistant,
-				Phase:   llm.MessagePhaseFinal,
-				Content: "",
+				Role:    textutil.Value(llm.RoleAssistant),
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+				Content: textutil.Value(""),
 			}},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},

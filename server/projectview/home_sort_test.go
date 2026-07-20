@@ -85,7 +85,7 @@ func TestMetadataServiceSortsProjectHomeByLatestTaskActivityOrEdit(t *testing.T)
 		t.Fatalf("SetName: %v", err)
 	}
 	sessionActivityUnixMs := taskActivityUnixMs + 2
-	if _, err := store.DB().ExecContext(ctx, `UPDATE sessions SET updated_at_unix_ms = ? WHERE id = ?`, sessionActivityUnixMs, sess.Meta().SessionID); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `UPDATE sessions SET updated_at_unix_ms = ? WHERE id = ?`, sessionActivityUnixMs, sess.Metadata().SessionID); err != nil {
 		t.Fatalf("touch session activity: %v", err)
 	}
 	home, err = svc.ListProjectHome(ctx, serverapi.ProjectHomeListRequest{PageSize: 2})

@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"core/shared/config"
 	"core/shared/rpcwire"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 
@@ -165,6 +165,7 @@ type Engine struct {
 	closed          atomic.Bool
 
 	store    *session.Store
+	eventLog session.MaterializedEventLog
 	llm      llm.Client
 	registry *tools.Registry
 	cfg      Config
@@ -228,9 +229,18 @@ type handoffRequest struct {
 	futureAgentMessage string
 }
 
-func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg Config) (*Engine, error) {
+func New(
+	store *session.Store,
+	eventLog session.MaterializedEventLog,
+	client llm.Client,
+	registry *tools.Registry,
+	cfg Config,
+) (*Engine, error) {
 	if store == nil || client == nil || registry == nil {
 		return nil, errors.New("store, llm client, and tool registry are required")
+	}
+	if err := eventLog.ValidateOwner(store); err != nil {
+		return nil, fmt.Errorf("runtime event log: %w", err)
 	}
 	if strings.TrimSpace(cfg.Model) == "" {
 		return nil, ErrModelRequired
@@ -275,6 +285,7 @@ func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg 
 	}
 	eng := &Engine{
 		store:              store,
+		eventLog:           eventLog,
 		llm:                client,
 		registry:           registry,
 		cfg:                cfg,
@@ -286,7 +297,7 @@ func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg 
 		handoffState:       newHandoffRuntimeState(),
 		phaseState:         newPhaseProtocolState(),
 		reviewerState:      newReviewerRuntimeState(cfg.Reviewer.Client),
-		transcriptState:    newTranscriptRuntimeState(transcriptWorkingDir(cfg.TranscriptWorkingDir, store.Meta().WorkspaceRoot)),
+		transcriptState:    newTranscriptRuntimeState(transcriptWorkingDir(cfg.TranscriptWorkingDir, store.Metadata().WorkspaceRoot)),
 		lockedState:        newLockedContractState(),
 		modelRequestsState: newModelRequestRuntimeState(),
 		compactionPlanner:  newCompactionPlanner(),
@@ -306,21 +317,21 @@ func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg 
 		}
 	}
 
-	meta := store.Meta()
+	meta := store.Metadata()
 	if meta.Locked != nil {
 		if meta.Locked.ContextWindow <= 0 || meta.Locked.ContextPercent <= 0 {
 			budget := eng.promptContextBudgetFromConfig()
 			if err := store.BackfillLockedContextBudget(budget.window, budget.percent); err != nil {
 				return nil, err
 			}
-			meta = store.Meta()
+			meta = store.Metadata()
 		}
 		if strings.TrimSpace(meta.Locked.ProviderContract.ProviderID) == "" {
 			if caps, err := eng.currentProviderCapabilities(context.Background()); err == nil {
 				if err := store.BackfillLockedProviderContract(llm.LockedProviderCapabilitiesFromContract(caps)); err != nil {
 					return nil, err
 				}
-				meta = store.Meta()
+				meta = store.Metadata()
 			}
 		}
 		copyLocked := *meta.Locked
@@ -330,6 +341,10 @@ func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg 
 	if err := eng.restoreMessages(); err != nil {
 		return nil, err
 	}
+	// Restoring messages is the runtime's first event-use boundary. Existing
+	// stores reconcile event-derived metadata there, so subsequent metadata
+	// reads must use the refreshed authoritative snapshot.
+	meta = store.Metadata()
 	recoveryStepID := ""
 	if meta.PendingModelRecovery != nil {
 		recoveryStepID = meta.PendingModelRecovery.StepID
@@ -351,7 +366,7 @@ func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg 
 			return nil, err
 		}
 		if needsMarker {
-			if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeInterruption, Content: interruptMessage}})); err != nil {
+			if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeInterruption), Content: textutil.Value(interruptMessage)}})); err != nil {
 				return nil, err
 			}
 		}
@@ -442,19 +457,35 @@ func (e *Engine) seedTranscriptLiveToolsFromDanglingToolCalls(stepID string) err
 }
 
 func (e *Engine) pendingRecoveryStepHasTerminalAssistant(stepID string) (bool, error) {
-	events, err := e.store.ReadEventsBackwardUntil(isCompactionSegmentBoundary)
+	var matchErr error
+	window, err := e.eventLog.ReadNewestSegmentBackward(compactionBoundaryMatcher(&matchErr))
 	if err != nil {
 		return false, err
 	}
-	for _, evt := range events {
-		if strings.TrimSpace(evt.StepID) != stepID || evt.Kind != "message" {
+	if matchErr != nil {
+		return false, matchErr
+	}
+	for _, record := range window.Records {
+		recordStepID := record.StepID()
+		if recordStepID == nil || strings.TrimSpace(*recordStepID) != stepID {
 			continue
 		}
-		var msg llm.Message
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
+		payload, err := record.Payload()
+		if err != nil {
+			return false, err
+		}
+		persisted, ok := payload.(session.MessageRecord)
+		if !ok {
 			continue
 		}
-		if msg.Role == llm.RoleAssistant && msg.Phase == llm.MessagePhaseFinal && len(msg.ToolCalls) == 0 {
+		msg, err := llmMessageFromSessionRecord(persisted)
+		if err != nil {
+			return false, fmt.Errorf("restore pending-recovery message: %w", err)
+		}
+		if msg.Role == llm.RoleAssistant &&
+			msg.Phase != nil &&
+			*msg.Phase == llm.MessagePhaseFinal &&
+			len(msg.ToolCalls) == 0 {
 			return true, nil
 		}
 	}
@@ -524,15 +555,22 @@ type QueuedUserMessage struct {
 	ClientRequestID string
 }
 
-func (e *Engine) QueueUserMessage(text string) QueuedUserMessage {
+func (e *Engine) QueueUserMessage(text string) (QueuedUserMessage, error) {
 	return e.QueueUserMessageWithClientRequestID(text, "")
 }
 
-func (e *Engine) QueueUserMessageWithClientRequestID(text string, clientRequestID string) QueuedUserMessage {
+func (e *Engine) QueueUserMessageWithClientRequestID(
+	text string,
+	clientRequestID string,
+) (QueuedUserMessage, error) {
 	return e.queueUserMessageWithClientRequestID(text, clientRequestID, false)
 }
 
-func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestID string, forceAutoDrain bool) QueuedUserMessage {
+func (e *Engine) queueUserMessageWithClientRequestID(
+	text string,
+	clientRequestID string,
+	forceAutoDrain bool,
+) (QueuedUserMessage, error) {
 	e.ensureOrchestrationCollaborators()
 	liveItem := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: text, ClientRequestID: clientRequestID}
 	waitedForLiveRunStep := false
@@ -541,14 +579,20 @@ func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestI
 			e.markQueuedUserInjectionForAutoDrain(queueItemID)
 		}) {
 			item := e.messageFlow.QueueUserMessageWithID(liveItem)
-			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+			if err := e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false); err != nil {
+				return item, err
+			}
 			queueItemID := mustQueueItemID(item.ID)
 			if e.liveRun.finishQueueItemPublication(queueItemID) {
-				e.failStoppedLiveRunQueueItems(map[runtimeids.QueueItemID]struct{}{queueItemID: {}})
+				if err := e.failStoppedLiveRunQueueItems(
+					map[runtimeids.QueueItemID]struct{}{queueItemID: {}},
+				); err != nil {
+					return item, err
+				}
 			} else {
 				e.scheduleQueuedUserInjectionsIfIdle()
 			}
-			return item
+			return item, nil
 		}
 		if !e.waitingForLiveRunStepStart() {
 			break
@@ -557,16 +601,22 @@ func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestI
 		time.Sleep(time.Millisecond)
 	}
 	if waitedForLiveRunStep {
-		e.emitQueuedUserMessageStatus(liveItem, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
-		return liveItem
+		return liveItem, e.emitQueuedUserMessageStatus(
+			liveItem,
+			QueuedUserMessageFailed,
+			QueuedUserMessageFailureStopped,
+			true,
+		)
 	}
 	item := e.messageFlow.QueueUserMessage(text, clientRequestID)
-	e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+	if err := e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false); err != nil {
+		return item, err
+	}
 	if forceAutoDrain || (!waitedForLiveRunStep && e.stepLifecycle != nil && e.stepLifecycle.IsBusy()) {
 		e.markQueuedUserInjectionForAutoDrain(item.ID)
 		e.scheduleQueuedUserInjectionsIfIdle()
 	}
-	return item
+	return item, nil
 }
 
 func (e *Engine) waitingForLiveRunStepStart() bool {
@@ -593,15 +643,22 @@ func activeKindInterruptibleByLiveStop(kind ActiveKind) bool {
 	return kind.Valid() && kind != ActiveKindRuntimeMaintenance
 }
 
-func (e *Engine) DiscardQueuedUserMessage(queueItemID string) bool {
+func (e *Engine) DiscardQueuedUserMessage(queueItemID string) (bool, error) {
 	e.ensureOrchestrationCollaborators()
 	item, discarded := e.messageFlow.DiscardQueuedUserMessage(queueItemID)
 	if discarded {
 		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
 		e.completeLiveRunQueueItems(map[string]struct{}{item.ID: {}})
-		e.emitQueuedUserMessageStatus(item, QueuedUserMessageDiscarded, "", false)
+		if err := e.emitQueuedUserMessageStatus(
+			item,
+			QueuedUserMessageDiscarded,
+			"",
+			false,
+		); err != nil {
+			return true, err
+		}
 	}
-	return discarded
+	return discarded, nil
 }
 
 func (e *Engine) Interrupt() error {
@@ -657,7 +714,7 @@ func (e *Engine) submitUserMessage(ctx context.Context, text string, onActive fu
 		if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 			return err
 		}
-		userMessage := llm.Message{Role: llm.RoleUser, Content: text}
+		userMessage := llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)}
 		intents := []steeringIntent{steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventNone, true, []llm.Message{userMessage})}
 		if flushed := flushedUserMessageEvent(userMessage, stepID); flushed != nil {
 			intents = append(intents, steerEventIntent(*flushed))
@@ -734,11 +791,15 @@ func (e *Engine) submitUserShellCommand(ctx context.Context, command string, onA
 		if _, ok := e.registry.Get(toolspec.ToolExecCommand); !ok {
 			transcriptCall := normalizeToolCallForTranscript(call, e.transcriptWorkingDir())
 			_ = e.steer(stepID, steerEventIntent(Event{Kind: EventToolCallStarted, StepID: stepID, ToolCall: &transcriptCall, CommittedTranscriptChanged: true}))
-			result = tools.Result{CallID: call.ID, Name: toolspec.ToolExecCommand, IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: "unknown tool"}
+			result = tools.Result{
+				CallID: call.ID, Name: toolspec.ToolExecCommand, IsError: true,
+				Output:  mustJSON(map[string]any{"error": "unknown tool"}),
+				Summary: textutil.Value("unknown tool"),
+			}
 			if err := e.steer(stepID, steerToolCompletionIntent(result)); err != nil {
 				return fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, call.ID, result.Name, err)
 			}
-			if appendErr := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, Content: string(result.Output), ToolCallID: result.CallID, Name: string(result.Name)}})); appendErr != nil {
+			if appendErr := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, Content: textutil.Value(string(result.Output)), ToolCallID: textutil.Value(result.CallID), Name: textutil.Value(string(result.Name))}})); appendErr != nil {
 				return appendErr
 			}
 			return errUnknownTool
@@ -749,7 +810,7 @@ func (e *Engine) submitUserShellCommand(ctx context.Context, command string, onA
 			return errors.New("shell tool execution returned no result")
 		}
 		result = results[0]
-		if appendErr := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, Content: string(result.Output), ToolCallID: result.CallID, Name: string(result.Name)}})); appendErr != nil {
+		if appendErr := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, Content: textutil.Value(string(result.Output)), ToolCallID: textutil.Value(result.CallID), Name: textutil.Value(string(result.Name))}})); appendErr != nil {
 			return errors.Join(execErr, appendErr)
 		}
 		return execErr
@@ -958,8 +1019,12 @@ func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, cli
 			resp, attemptErr = streamingClient.GenerateStream(ctx, req, onTextDelta)
 		} else {
 			resp, attemptErr = client.Generate(ctx, req)
-			if attemptErr == nil && attemptOnDelta != nil && resp.Assistant.Content != "" {
-				attemptOnDelta(llm.AssistantDelta{Text: resp.Assistant.Content, Phase: resp.Assistant.Phase})
+			if attemptErr == nil && attemptOnDelta != nil && resp.Assistant.Content != nil {
+				delta := llm.AssistantDelta{Text: *resp.Assistant.Content}
+				if resp.Assistant.Phase != nil {
+					delta.Phase = *resp.Assistant.Phase
+				}
+				attemptOnDelta(delta)
 			}
 		}
 		attemptDone.Store(true)

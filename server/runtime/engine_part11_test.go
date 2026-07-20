@@ -7,19 +7,19 @@ import (
 	"testing"
 
 	"core/server/llm"
-	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
 func TestQueuedUserMessageFlushesWhenAssistantReturnsWithoutTools(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "first"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "after flush"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("after flush")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -33,13 +33,13 @@ func TestQueuedUserMessageFlushesWhenAssistantReturnsWithoutTools(t *testing.T) 
 		},
 	})
 
-	eng.QueueUserMessage("steer now")
+	mustQueueUserMessage(t, eng, "steer now")
 	msg, err := eng.SubmitUserMessage(context.Background(), "start")
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if msg.Content != "after flush" {
-		t.Fatalf("assistant content = %q, want after flush", msg.Content)
+	if messageContent(msg) != "after flush" {
+		t.Fatalf("assistant content = %q, want after flush", messageContent(msg))
 	}
 	if !seenFlushed {
 		t.Fatal("expected user_message_flushed event")
@@ -50,7 +50,7 @@ func TestQueuedUserMessageFlushesWhenAssistantReturnsWithoutTools(t *testing.T) 
 	second := client.calls[1]
 	hasInjected := false
 	for _, m := range requestMessages(second) {
-		if m.Role == llm.RoleUser && m.Content == "steer now" {
+		if m.Role == llm.RoleUser && messageContent(m) == "steer now" {
 			hasInjected = true
 			break
 		}
@@ -63,11 +63,11 @@ func TestQueuedUserMessageFlushesWhenAssistantReturnsWithoutTools(t *testing.T) 
 func TestQueuedUserMessageFlushAfterFinalAssistantPublishesCommittedAssistantFirst(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "first final", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "after flush", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("after flush"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -79,19 +79,19 @@ func TestQueuedUserMessageFlushAfterFinalAssistantPublishesCommittedAssistantFir
 		},
 	})
 
-	eng.QueueUserMessage("steer now")
+	mustQueueUserMessage(t, eng, "steer now")
 	msg, err := eng.SubmitUserMessage(context.Background(), "start")
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if msg.Content != "after flush" {
-		t.Fatalf("assistant content = %q, want after flush", msg.Content)
+	if messageContent(msg) != "after flush" {
+		t.Fatalf("assistant content = %q, want after flush", messageContent(msg))
 	}
 
 	assistantIndex := -1
 	flushIndex := -1
 	for idx, evt := range events {
-		if evt.Kind == EventAssistantMessage && evt.Message.Content == "first final" {
+		if evt.Kind == EventAssistantMessage && messageContent(evt.Message) == "first final" {
 			assistantIndex = idx
 		}
 		if evt.Kind == EventUserMessageFlushed && evt.UserMessage == "steer now" {
@@ -123,14 +123,14 @@ func TestQueuedUserMessageFlushAfterFinalAssistantPublishesCommittedAssistantFir
 func TestQueuedUserMessageFlushAfterFinalAssistantWithReasoningPublishesAssistantFirst(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "first final", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Reasoning: []llm.ReasoningEntry{
-				{Role: "reasoning", Text: "Plan summary"},
+				{Role: textutil.Value("reasoning"), Text: "Plan summary"},
 			},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "after flush", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("after flush"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -142,7 +142,7 @@ func TestQueuedUserMessageFlushAfterFinalAssistantWithReasoningPublishesAssistan
 		},
 	})
 
-	eng.QueueUserMessage("steer now")
+	mustQueueUserMessage(t, eng, "steer now")
 	if _, err := eng.SubmitUserMessage(context.Background(), "start"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestQueuedUserMessageFlushAfterFinalAssistantWithReasoningPublishesAssistan
 		t.Fatalf("expected initial user flush event, got %+v", committedEvents)
 	}
 	assistant := committedEvents[userIdx+1]
-	if assistant.Kind != EventAssistantMessage || assistant.Message.Content != "first final" {
+	if assistant.Kind != EventAssistantMessage || messageContent(assistant.Message) != "first final" {
 		t.Fatalf("committed event after initial user = %+v, want first final assistant before reasoning/queued rows; all=%+v", assistant, committedEvents)
 	}
 	assertRuntimeEventsAdvanceCommittedFrontierContiguously(t, committedEvents)
@@ -171,7 +171,7 @@ func TestQueuedUserMessageFlushAfterFinalAssistantWithReasoningPublishesAssistan
 func TestDirectUserMessageWithQueuedInjectionPublishesUserBeforeToolEvents(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working", Phase: llm.MessagePhaseCommentary},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: []llm.ToolCall{{
 				ID:    "call_shell_1",
 				Name:  string(toolspec.ToolExecCommand),
@@ -180,7 +180,7 @@ func TestDirectUserMessageWithQueuedInjectionPublishesUserBeforeToolEvents(t *te
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -192,7 +192,7 @@ func TestDirectUserMessageWithQueuedInjectionPublishesUserBeforeToolEvents(t *te
 		},
 	})
 
-	eng.QueueUserMessage("queued steer")
+	mustQueueUserMessage(t, eng, "queued steer")
 	if _, err := eng.SubmitUserMessage(context.Background(), "start"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -264,7 +264,7 @@ func assertRuntimeEventsAdvanceCommittedFrontierContiguously(t *testing.T, event
 
 func TestModelResponseEventCarriesContextUsage(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{InputTokens: 420, WindowTokens: 1_000},
 	}}}
 	var usage *ContextUsage
@@ -292,11 +292,11 @@ func TestModelResponseEventCarriesContextUsage(t *testing.T) {
 func TestQueuedUserMessageFlushDoesNotEmitConversationUpdatedForInjectedMessage(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "first"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "after flush"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("after flush")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -316,7 +316,7 @@ func TestQueuedUserMessageFlushDoesNotEmitConversationUpdatedForInjectedMessage(
 		},
 	})
 
-	eng.QueueUserMessage("steer now")
+	mustQueueUserMessage(t, eng, "steer now")
 	if _, err := eng.SubmitUserMessage(context.Background(), "start"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestQueuedUserMessageFlushDoesNotEmitConversationUpdatedForInjectedMessage(
 
 func TestDirectUserMessageFlushDoesNotEmitConversationUpdated(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 
@@ -363,11 +363,11 @@ func TestDirectUserMessageFlushDoesNotEmitConversationUpdated(t *testing.T) {
 func TestQueuedUserMessagesCoalesceIntoSingleFlush(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "first"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "after flush"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("after flush")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -385,14 +385,14 @@ func TestQueuedUserMessagesCoalesceIntoSingleFlush(t *testing.T) {
 		},
 	})
 
-	eng.QueueUserMessage("steer now")
-	eng.QueueUserMessage("and keep tests focused")
+	mustQueueUserMessage(t, eng, "steer now")
+	mustQueueUserMessage(t, eng, "and keep tests focused")
 	msg, err := eng.SubmitUserMessage(context.Background(), "start")
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if msg.Content != "after flush" {
-		t.Fatalf("assistant content = %q, want after flush", msg.Content)
+	if messageContent(msg) != "after flush" {
+		t.Fatalf("assistant content = %q, want after flush", messageContent(msg))
 	}
 	if flushed.UserMessage != "steer now\n\nand keep tests focused" {
 		t.Fatalf("unexpected flushed user message %q", flushed.UserMessage)
@@ -417,7 +417,7 @@ func TestQueuedUserMessagesCoalesceIntoSingleFlush(t *testing.T) {
 		t.Fatalf("expected initial and flushed user messages, got %+v", requestMessages(second))
 	}
 	last := userMessages[len(userMessages)-1]
-	if last.Content != "steer now\n\nand keep tests focused" {
+	if messageContent(last) != "steer now\n\nand keep tests focused" {
 		t.Fatalf("expected coalesced flushed user message, got %+v", userMessages)
 	}
 }
@@ -427,13 +427,13 @@ func TestRequestMessagesPreserveANSIEscapes(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{})
 
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: seedContent}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(seedContent)}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 
@@ -448,7 +448,7 @@ func TestRequestMessagesPreserveANSIEscapes(t *testing.T) {
 	for _, req := range client.calls {
 		foundSeed := false
 		for _, msg := range requestMessages(req) {
-			if msg.Role == llm.RoleUser && msg.Content == seedContent {
+			if msg.Role == llm.RoleUser && messageContent(msg) == seedContent {
 				foundSeed = true
 			}
 		}
@@ -463,9 +463,9 @@ func TestReasoningSummaryVisibleAndEncryptedReasoningRoundTrips(t *testing.T) {
 
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "first"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first")},
 			Reasoning: []llm.ReasoningEntry{
-				{Role: "reasoning", Text: "Plan summary"},
+				{Role: textutil.Value("reasoning"), Text: "Plan summary"},
 			},
 			ReasoningItems: []llm.ReasoningItem{
 				{ID: "rs_1", EncryptedContent: "enc_1"},
@@ -473,7 +473,7 @@ func TestReasoningSummaryVisibleAndEncryptedReasoningRoundTrips(t *testing.T) {
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "second"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("second")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -493,7 +493,7 @@ func TestReasoningSummaryVisibleAndEncryptedReasoningRoundTrips(t *testing.T) {
 	secondReq := client.calls[1]
 	foundReasoningItem := false
 	for _, msg := range requestMessages(secondReq) {
-		if msg.Role != llm.RoleAssistant || msg.Content != "first" {
+		if msg.Role != llm.RoleAssistant || messageContent(msg) != "first" {
 			continue
 		}
 		if len(msg.ReasoningItems) == 1 &&
@@ -506,7 +506,7 @@ func TestReasoningSummaryVisibleAndEncryptedReasoningRoundTrips(t *testing.T) {
 		t.Fatalf("expected prior assistant message to carry encrypted reasoning item, got %+v", requestMessages(secondReq))
 	}
 	for _, msg := range requestMessages(secondReq) {
-		if strings.Contains(msg.Content, "Plan summary") {
+		if strings.Contains(messageContent(msg), "Plan summary") {
 			t.Fatalf("reasoning summary text should not be sent back to model input, found in %+v", requestMessages(secondReq))
 		}
 	}
@@ -523,7 +523,7 @@ func TestReasoningSummaryVisibleAndEncryptedReasoningRoundTrips(t *testing.T) {
 		t.Fatalf("expected reasoning summary in chat snapshot entries, got %+v", snap.Entries)
 	}
 
-	events, err := sessiontest.CollectEvents(store)
+	events, err := collectTestEventRecords(store)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -532,10 +532,7 @@ func TestReasoningSummaryVisibleAndEncryptedReasoningRoundTrips(t *testing.T) {
 		if evt.Kind != "local_entry" {
 			continue
 		}
-		var entry storedLocalEntry
-		if err := json.Unmarshal(evt.Payload, &entry); err != nil {
-			t.Fatalf("decode local_entry: %v", err)
-		}
+		entry := persistedLocalEntryForTest(t, evt)
 		if entry.Role == "reasoning" && entry.Text == "Plan summary" {
 			sawLocal = true
 		}
@@ -548,11 +545,11 @@ func TestReasoningSummaryVisibleAndEncryptedReasoningRoundTrips(t *testing.T) {
 func TestDiscardQueuedUserMessageRemovesExactQueuedEntry(t *testing.T) {
 	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{})
 
-	first := eng.QueueUserMessage("same")
-	eng.QueueUserMessage("other")
-	duplicate := eng.QueueUserMessage("same")
+	first := mustQueueUserMessage(t, eng, "same")
+	mustQueueUserMessage(t, eng, "other")
+	duplicate := mustQueueUserMessage(t, eng, "same")
 
-	if removed := eng.DiscardQueuedUserMessage(duplicate.ID); !removed {
+	if removed := mustDiscardQueuedUserMessage(t, eng, duplicate.ID); !removed {
 		t.Fatal("expected duplicate queued item removed")
 	}
 
@@ -583,7 +580,7 @@ func TestContextUsageUsesLastUsageWhenAvailable(t *testing.T) {
 
 func TestContextUsageFallsBackToEstimatedTokens(t *testing.T) {
 	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{ContextWindowTokens: 410_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "estimate me"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("estimate me")}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 
@@ -603,8 +600,8 @@ func TestContextUsageTracksWeightedCacheHitPercentageFromModelUsage(t *testing.T
 		t.Fatalf("expected cache hit percentage to be unavailable before model usage, got %+v", usage)
 	}
 
-	eng.setLastUsage(llm.Usage{InputTokens: 100, CachedInputTokens: 40, HasCachedInputTokens: true})
-	eng.setLastUsage(llm.Usage{InputTokens: 300, CachedInputTokens: 60, HasCachedInputTokens: true})
+	eng.setLastUsage(llm.Usage{InputTokens: 100, CachedInputTokens: textutil.Value(40)})
+	eng.setLastUsage(llm.Usage{InputTokens: 300, CachedInputTokens: textutil.Value(60)})
 	eng.setLastUsage(llm.Usage{InputTokens: 999})
 
 	usage := eng.ContextUsage()
@@ -619,7 +616,7 @@ func TestContextUsageTracksWeightedCacheHitPercentageFromModelUsage(t *testing.T
 func TestContextUsageUsesEstimatedTokensWhenLastUsageIsStale(t *testing.T) {
 	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{ContextWindowTokens: 410_000})
 	eng.setLastUsage(llm.Usage{InputTokens: 100, OutputTokens: 0, WindowTokens: 410_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: strings.Repeat("x", 1600)}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("x", 1600))}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 
@@ -637,12 +634,12 @@ func TestContextUsageUsesEstimatedTokensWhenLastUsageIsStale(t *testing.T) {
 
 func TestContextUsageAddsOnlyPostCheckpointEstimateDelta(t *testing.T) {
 	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{ContextWindowTokens: 410_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: strings.Repeat("seed-", 100)}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("seed-", 100))}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	checkpointEstimate := estimateItemsTokens(eng.transcriptRuntimeState().SnapshotItems())
 	eng.setLastUsage(llm.Usage{InputTokens: 900, OutputTokens: 120, WindowTokens: 410_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: strings.Repeat("delta-", 40)}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("delta-", 40))}})); err != nil {
 		t.Fatalf("append delta message: %v", err)
 	}
 
@@ -662,14 +659,14 @@ func TestContextUsageAddsOnlyPostCheckpointEstimateDelta(t *testing.T) {
 func TestReopenedSessionRestoresUsageCheckpointDeltaAccounting(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{ContextWindowTokens: 410_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: strings.Repeat("seed-", 100)}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("seed-", 100))}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	checkpointEstimate := estimateItemsTokens(eng.transcriptRuntimeState().SnapshotItems())
-	if _, err := eng.recordLastUsage(llm.Usage{InputTokens: 900, OutputTokens: 120, WindowTokens: 410_000, CachedInputTokens: 45, HasCachedInputTokens: true}); err != nil {
+	if _, err := eng.recordLastUsage(llm.Usage{InputTokens: 900, OutputTokens: 120, WindowTokens: 410_000, CachedInputTokens: textutil.Value(45)}); err != nil {
 		t.Fatalf("record last usage: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: strings.Repeat("delta-", 40)}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("delta-", 40))}})); err != nil {
 		t.Fatalf("append delta message: %v", err)
 	}
 
@@ -695,8 +692,8 @@ func TestReopenedSessionRestoresLastAssistantFinalAnswerAcrossCompaction(t *test
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{
-		{Role: llm.RoleUser, Content: "do the thing"},
-		{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "the final answer"},
+		{Role: llm.RoleUser, Content: textutil.Value("do the thing")},
+		{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("the final answer")},
 	})); err != nil {
 		t.Fatalf("append messages: %v", err)
 	}
@@ -705,7 +702,7 @@ func TestReopenedSessionRestoresLastAssistantFinalAnswerAcrossCompaction(t *test
 	}
 
 	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{
-		{Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "summary so far"},
+		{Role: llm.RoleUser, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary so far")},
 	})); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
@@ -726,14 +723,14 @@ func TestHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
 	if err := eng.steerPersistedDiagnosticEntry("step-1", preciseTokenCountFailureDiagnostic, "error", "first fallback"); err != nil {
 		t.Fatalf("append first diagnostic: %v", err)
 	}
-	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, Content: "summary"}})); err != nil {
+	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, Content: textutil.Value("summary")}})); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
 	if err := eng.steerPersistedDiagnosticEntry("step-2", preciseTokenCountFailureDiagnostic, "error", "second fallback"); err != nil {
 		t.Fatalf("append second diagnostic: %v", err)
 	}
 
-	events, err := sessiontest.CollectEvents(store)
+	events, err := collectTestEventRecords(store)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -742,11 +739,8 @@ func TestHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
 		if evt.Kind != "local_entry" {
 			continue
 		}
-		var entry storedLocalEntry
-		if err := json.Unmarshal(evt.Payload, &entry); err != nil {
-			t.Fatalf("decode local entry: %v", err)
-		}
-		if entry.DiagnosticKey == preciseTokenCountFailureDiagnostic {
+		entry := persistedLocalEntryForTest(t, evt)
+		if entry.DiagnosticKey != nil && *entry.DiagnosticKey == preciseTokenCountFailureDiagnostic {
 			count++
 		}
 	}
@@ -761,7 +755,7 @@ func TestReopenedSessionHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
 	if err := eng.steerPersistedDiagnosticEntry("step-1", preciseTokenCountFailureDiagnostic, "error", "first fallback"); err != nil {
 		t.Fatalf("append first diagnostic: %v", err)
 	}
-	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, Content: "summary"}})); err != nil {
+	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleAssistant, Content: textutil.Value("summary")}})); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
 
@@ -771,7 +765,7 @@ func TestReopenedSessionHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
 		t.Fatalf("append second diagnostic after reopen: %v", err)
 	}
 
-	events, err := sessiontest.CollectEvents(reopenedStore)
+	events, err := collectTestEventRecords(reopenedStore)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -780,11 +774,8 @@ func TestReopenedSessionHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
 		if evt.Kind != "local_entry" {
 			continue
 		}
-		var entry storedLocalEntry
-		if err := json.Unmarshal(evt.Payload, &entry); err != nil {
-			t.Fatalf("decode local entry: %v", err)
-		}
-		if entry.DiagnosticKey == preciseTokenCountFailureDiagnostic {
+		entry := persistedLocalEntryForTest(t, evt)
+		if entry.DiagnosticKey != nil && *entry.DiagnosticKey == preciseTokenCountFailureDiagnostic {
 			count++
 		}
 	}
@@ -797,13 +788,13 @@ func TestEstimateItemsTokensDoesNotTreatInlineImagePayloadAsPlainText(t *testing
 	base64Payload := strings.Repeat("A", 24_000)
 	item := llm.ResponseItem{
 		Type:   llm.ResponseItemTypeFunctionCallOutput,
-		Name:   string(toolspec.ToolViewImage),
-		CallID: "call-1",
+		Name:   textutil.Value(string(toolspec.ToolViewImage)),
+		CallID: textutil.Value("call-1"),
 		Output: json.RawMessage(`[{"type":"input_image","image_url":"data:image/png;base64,` + base64Payload + `"}]`),
 	}
 
 	estimated := estimateItemsTokens([]llm.ResponseItem{item})
-	naive := (len(item.Name) + len(item.CallID) + len(item.Output) + 3) / 4
+	naive := (len(*item.Name) + len(*item.CallID) + len(item.Output) + 3) / 4
 	if estimated <= 0 {
 		t.Fatalf("expected multimodal estimate > 0, got %d", estimated)
 	}
@@ -819,9 +810,9 @@ func TestContextUsageDoesNotInflateInlineImagePayloadByBase64Length(t *testing.T
 	eng.setLastUsage(llm.Usage{InputTokens: 100, OutputTokens: 0, WindowTokens: 410_000})
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 		Role:       llm.RoleTool,
-		ToolCallID: "call-1",
-		Name:       string(toolspec.ToolViewImage),
-		Content:    `[{"type":"input_image","image_url":"data:image/png;base64,` + strings.Repeat("A", 24_000) + `"}]`,
+		ToolCallID: textutil.Value("call-1"),
+		Name:       textutil.Value(string(toolspec.ToolViewImage)),
+		Content:    textutil.Value(`[{"type":"input_image","image_url":"data:image/png;base64,` + strings.Repeat("A", 24_000) + `"}]`),
 	}})); err != nil {
 		t.Fatalf("append tool message: %v", err)
 	}
@@ -844,7 +835,7 @@ func TestShouldAutoCompactAccountsForMessagesAppendedAfterLastUsage(t *testing.T
 		AutoCompactTokenLimit: 300,
 	})
 	eng.setLastUsage(llm.Usage{InputTokens: 120, OutputTokens: 0, WindowTokens: 410_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: strings.Repeat("stale-usage-gap-", 120)}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("stale-usage-gap-", 120))}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 
@@ -862,7 +853,7 @@ func TestShouldAutoCompactUsesPreciseRequestInputTokenCountWhenAvailable(t *test
 		ContextWindowTokens:   400_000,
 		AutoCompactTokenLimit: 900,
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "short"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("short")}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 
@@ -920,7 +911,7 @@ func TestShouldCompactBeforeUserMessageUsesPromptGrowthBelowPreSubmitBand(t *tes
 		ContextWindowTokens:           1000,
 		PreSubmitCompactionLeadTokens: 50,
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: strings.Repeat("a", 3400)}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("a", 3400))}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 
@@ -947,7 +938,7 @@ func TestShouldCompactBeforeUserMessageFallsBackWhenExactCountUnsupported(t *tes
 		ContextWindowTokens:           1000,
 		PreSubmitCompactionLeadTokens: 50,
 	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: strings.Repeat("a", 3400)}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("a", 3400))}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 

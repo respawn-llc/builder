@@ -15,6 +15,7 @@ import (
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/rollbacktarget"
+	"core/shared/textutil"
 	"core/shared/transcript"
 
 	"github.com/google/uuid"
@@ -22,7 +23,11 @@ import (
 
 func (e *Engine) persistToolCompletionRaw(stepID string, r tools.Result) (session.CommitReceipt, error) {
 	payload, backgroundSessionID, hasBackgroundSession := e.prepareStoredToolCompletion(r)
-	_, receipt, err := e.store.AppendEvent(stepID, "tool_completed", payload)
+	record, adaptErr := sessionToolCompletionRecordFromStored(payload)
+	if adaptErr != nil {
+		return session.CommitReceipt{}, fmt.Errorf("adapt tool completion record: %w", adaptErr)
+	}
+	_, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
 	if receipt.Committed {
 		e.applyCommittedStoredToolCompletion(
 			payload,
@@ -52,10 +57,18 @@ func (e *Engine) persistFinalizedToolCompletionRaw(
 			normalizeErr,
 		))
 	}
-	_, receipt, err := e.store.AppendTurnAtomic(stepID, []session.EventInput{
-		{Kind: "tool_completed", Payload: payload},
-		{Kind: "local_entry", Payload: feedback},
-	})
+	completionRecord, adaptErr := sessionToolCompletionRecordFromStored(payload)
+	if adaptErr != nil {
+		return session.CommitReceipt{}, fmt.Errorf("adapt tool completion record: %w", adaptErr)
+	}
+	feedbackRecord, adaptErr := sessionLocalEntryRecordFromRuntime(feedback)
+	if adaptErr != nil {
+		return session.CommitReceipt{}, fmt.Errorf("adapt operator feedback record: %w", adaptErr)
+	}
+	_, receipt, err := e.eventLog.AppendRecordsAtomic(
+		textutil.OptionalExactString(stepID),
+		[]session.EventRecordPayload{completionRecord, feedbackRecord},
+	)
 	if receipt.Committed {
 		e.applyCommittedStoredToolCompletion(
 			payload,
@@ -124,10 +137,7 @@ func (e *Engine) providerItemsForToolCompletion(r tools.Result) []llm.ResponseIt
 		if !isToolCallItem(item.Type) {
 			continue
 		}
-		itemCallID := strings.TrimSpace(item.CallID)
-		if itemCallID == "" {
-			itemCallID = strings.TrimSpace(item.ID)
-		}
+		itemCallID, _ := textutil.FirstOptionalTrimmed(item.CallID, item.ID)
 		if itemCallID != callID {
 			continue
 		}
@@ -138,12 +148,13 @@ func (e *Engine) providerItemsForToolCompletion(r tools.Result) []llm.ResponseIt
 	name := strings.TrimSpace(string(r.Name))
 	if callItem != nil {
 		custom = callItem.Type == llm.ResponseItemTypeCustomToolCall
-		name = firstNonEmpty(name, strings.TrimSpace(callItem.Name))
+		itemName, _ := textutil.OptionalTrimmed(callItem.Name)
+		name = firstNonEmpty(name, itemName)
 	}
 	return llm.PrepareOpenAIInputItems([]llm.ResponseItem{{
 		Type:   llm.ToolOutputItemType(custom),
-		CallID: callID,
-		Name:   name,
+		CallID: textutil.Value(callID),
+		Name:   textutil.OptionalExactString(name),
 		Output: append(json.RawMessage(nil), r.Output...),
 	}})
 }
@@ -164,11 +175,10 @@ func (e *Engine) steerPersistedDiagnosticEntry(stepID, diagnosticKey, role, text
 		Visibility:    transcript.EntryVisibilityAuto,
 		Role:          role,
 		Text:          text,
-		DiagnosticKey: diagnosticKey,
+		DiagnosticKey: textutil.Value(diagnosticKey),
 	}
 	entry.Role = strings.TrimSpace(entry.Role)
 	entry.Text = strings.TrimSpace(entry.Text)
-	entry.DiagnosticKey = strings.TrimSpace(entry.DiagnosticKey)
 	if entry.Role == "" || entry.Text == "" {
 		e.diagnosticDedupeStore().ClearLocal(diagnosticKey)
 		return nil
@@ -185,11 +195,20 @@ func (e *Engine) appendPersistedLocalEntryRecordRaw(stepID string, entry storedL
 	if err != nil {
 		return session.CommitReceipt{}, fmt.Errorf("normalize local entry: %w", err)
 	}
-	_, receipt, err := e.store.AppendEvent(stepID, "local_entry", entry)
+	record, adaptErr := sessionLocalEntryRecordFromRuntime(entry)
+	if adaptErr != nil {
+		return session.CommitReceipt{}, fmt.Errorf("adapt local entry record: %w", adaptErr)
+	}
+	_, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
 	if receipt.Committed {
 		projected := localEntryChatEntryForStep(entry, stepID)
 		e.transcriptRuntimeState().AppendLocalEntryRecord(*projected, entry.AfterToolCallID)
-		e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: projected, CommittedTranscriptChanged: true})
+		err = errors.Join(err, e.emitRaw(Event{
+			Kind:                       EventLocalEntryAdded,
+			StepID:                     stepID,
+			LocalEntry:                 projected,
+			CommittedTranscriptChanged: true,
+		}))
 	}
 	return receipt, err
 }
@@ -197,9 +216,9 @@ func (e *Engine) appendPersistedLocalEntryRecordRaw(stepID string, entry storedL
 func normalizeStoredLocalEntry(entry storedLocalEntry) (storedLocalEntry, error) {
 	entry.Role = strings.TrimSpace(entry.Role)
 	entry.Text = strings.TrimSpace(entry.Text)
-	entry.CondensedText = strings.TrimSpace(entry.CondensedText)
-	entry.DiagnosticKey = strings.TrimSpace(entry.DiagnosticKey)
-	entry.NoticeID = strings.TrimSpace(entry.NoticeID)
+	entry.CondensedText = normalizeOptionalStoredLocalFact(entry.CondensedText)
+	entry.DiagnosticKey = normalizeOptionalStoredLocalFact(entry.DiagnosticKey)
+	entry.NoticeID = normalizeOptionalStoredLocalFact(entry.NoticeID)
 	if entry.AfterToolCallID != nil {
 		callID := strings.TrimSpace(*entry.AfterToolCallID)
 		if callID == "" {
@@ -217,13 +236,26 @@ func normalizeStoredLocalEntry(entry storedLocalEntry) (storedLocalEntry, error)
 }
 
 func localEntryChatEntry(entry storedLocalEntry) *ChatEntry {
+	condensedText, _ := textutil.OptionalExact(entry.CondensedText)
+	noticeID, _ := textutil.OptionalExact(entry.NoticeID)
 	return &ChatEntry{
 		Visibility:    normalizeRuntimeEntryVisibility(entry.Visibility),
 		Role:          strings.TrimSpace(entry.Role),
 		Text:          strings.TrimSpace(entry.Text),
-		CondensedText: strings.TrimSpace(entry.CondensedText),
-		NoticeID:      strings.TrimSpace(entry.NoticeID),
+		CondensedText: condensedText,
+		NoticeID:      noticeID,
 	}
+}
+
+func normalizeOptionalStoredLocalFact(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return value
+	}
+	return &trimmed
 }
 
 func localEntryChatEntryForStep(entry storedLocalEntry, stepID string) *ChatEntry {
@@ -274,46 +306,61 @@ func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy st
 	e.transcriptRuntimeState().AppendMessage(stepID, msg)
 	currentCommittedCount := e.CommittedTranscriptEntryCount()
 	if eventPolicy != steeringMessageEventNone && currentCommittedCount > previousCommittedCount && shouldEmitCommittedMessageEvent(msg) {
-		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true, Message: msg})
+		appendErr = errors.Join(appendErr, e.emitRaw(Event{
+			Kind:                       EventConversationUpdated,
+			StepID:                     stepID,
+			CommittedTranscriptChanged: true,
+			Message:                    msg,
+		}))
 	}
 	return receipt, appendErr
 }
 
-func (e *Engine) appendPersistedMessageEvent(stepID string, msg llm.Message) (session.EventAppendResult, error) {
-	if !isRollbackCandidateMessage(msg) {
-		event, receipt, err := e.store.AppendEvent(stepID, "message", msg)
-		return session.EventAppendResult{Event: event, CommitReceipt: receipt}, err
+func (e *Engine) appendPersistedMessageEvent(stepID string, msg llm.Message) (session.EventRecordAppendResult, error) {
+	record, err := sessionMessageRecordFromLLM(msg)
+	if err != nil {
+		return session.EventRecordAppendResult{}, fmt.Errorf("adapt message record: %w", err)
 	}
-	appended, err := e.store.AppendEventWithEndByteCursor(stepID, "message", msg)
+	if !isRollbackCandidateMessage(msg) {
+		appended, receipt, appendErr := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
+		return session.EventRecordAppendResult{
+			Record:        appended,
+			CommitReceipt: receipt,
+		}, appendErr
+	}
+	appended, err := e.eventLog.AppendRecordWithEndByteCursor(textutil.OptionalExactString(stepID), record)
 	if appended.Committed {
 		if appended.EndByteCursor == nil {
 			panic(fmt.Sprintf(
 				"committed rollback candidate message is missing its event-log end-byte cursor (event_seq=%d)",
-				appended.Event.Seq,
+				appended.Record.Seq(),
 			))
 		}
 		e.transcriptRuntimeState().SetLatestRollbackCandidate(rollbacktarget.CandidateLocator{
-			UserMessageSeq:       appended.Event.Seq,
+			UserMessageSeq:       appended.Record.Seq(),
 			CandidatePageEndByte: *appended.EndByteCursor,
 		})
 	}
 	return appended, err
 }
 
-func (e *Engine) emitLiveToolAbortsRaw(stepID string, reason string) {
+func (e *Engine) emitLiveToolAbortsRaw(stepID string, reason string) error {
 	if e == nil || e.store == nil {
-		return
+		return errors.New("runtime engine is required")
 	}
 	starts := e.transcriptRuntimeState().AbortLiveTools()
 	for _, start := range starts {
 		call := llm.ToolCall{ID: start.ToolCallID, Name: start.ToolName}
-		e.emitRaw(Event{
+		if err := e.emitRaw(Event{
 			Kind:            EventToolCallAborted,
 			StepID:          strings.TrimSpace(stepID),
 			ToolCall:        &call,
 			ToolAbortReason: strings.TrimSpace(reason),
-		})
+		}); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func shouldEmitCommittedMessageEvent(msg llm.Message) bool {
@@ -321,8 +368,8 @@ func shouldEmitCommittedMessageEvent(msg llm.Message) bool {
 }
 
 func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch []string, queueItems []QueuedUserMessage) (session.CommitReceipt, error) {
-	msg := normalizeMessageForTranscript(llm.Message{Role: llm.RoleUser, Content: text}, e.transcriptWorkingDir())
-	if strings.TrimSpace(msg.Content) == "" {
+	msg := normalizeMessageForTranscript(llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)}, e.transcriptWorkingDir())
+	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
 		return session.CommitReceipt{}, nil
 	}
 	normalizedItems := normalizedQueuedUserMessageStatusItems(queueItems)
@@ -337,10 +384,10 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch 
 		e.markCurrentRequestShapeDirty()
 	}
 	e.transcriptRuntimeState().AppendMessage(stepID, msg)
-	e.emitRaw(Event{
+	emitErr := e.emitRaw(Event{
 		Kind:                         EventUserMessageFlushed,
 		StepID:                       stepID,
-		UserMessage:                  msg.Content,
+		UserMessage:                  *msg.Content,
 		UserMessageBatch:             append([]string(nil), batch...),
 		UserMessageBatchQueueItemIDs: normalizedIDs,
 		UserMessageBatchQueuedItems:  queuedUserMessageIdentities(normalizedItems),
@@ -348,7 +395,7 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch 
 	})
 	for _, item := range normalizedItems {
 		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
-		e.emitRaw(Event{
+		emitErr = errors.Join(emitErr, e.emitRaw(Event{
 			Kind: EventQueuedUserMessageStatus,
 			QueuedUserMessageStatus: &QueuedUserMessageStatusEvent{
 				SessionID:       e.SessionID(),
@@ -356,10 +403,10 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch 
 				ClientRequestID: item.ClientRequestID,
 				Status:          QueuedUserMessageSubmitted,
 			},
-		})
+		}))
 	}
 	e.completeLiveRunQueueItems(queuedUserMessageIDSet(normalizedItems))
-	return appended.CommitReceipt, appendErr
+	return appended.CommitReceipt, errors.Join(appendErr, emitErr)
 }
 
 func normalizedQueuedUserMessageStatusItems(raw []QueuedUserMessage) []QueuedUserMessage {
@@ -415,9 +462,14 @@ func queuedUserMessageIDSet(items []QueuedUserMessage) map[string]struct{} {
 	return ids
 }
 
-func (e *Engine) emitQueuedUserMessageStatus(item QueuedUserMessage, status QueuedUserMessageStatus, reason QueuedUserMessageFailureReason, restore bool) {
+func (e *Engine) emitQueuedUserMessageStatus(
+	item QueuedUserMessage,
+	status QueuedUserMessageStatus,
+	reason QueuedUserMessageFailureReason,
+	restore bool,
+) error {
 	if e == nil || item.ID == "" {
-		return
+		return errors.New("queued user message status requires runtime engine and item identity")
 	}
 	event := &QueuedUserMessageStatusEvent{
 		SessionID:       e.SessionID(),
@@ -432,34 +484,47 @@ func (e *Engine) emitQueuedUserMessageStatus(item QueuedUserMessage, status Queu
 	if status == QueuedUserMessageAccepted {
 		event.RestoreText = item.Text
 	}
-	e.emitRaw(Event{Kind: EventQueuedUserMessageStatus, QueuedUserMessageStatus: event})
+	return e.emitRaw(Event{Kind: EventQueuedUserMessageStatus, QueuedUserMessageStatus: event})
 }
 
-func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) []QueuedUserMessage {
+func (e *Engine) FailQueuedUserMessages(
+	reason QueuedUserMessageFailureReason,
+) ([]QueuedUserMessage, error) {
 	e.ensureOrchestrationCollaborators()
 	pending := e.messageFlow.DrainPendingUserInjections()
 	messages := make([]QueuedUserMessage, 0, len(pending))
+	var resultErr error
 	for _, item := range pending {
 		messages = append(messages, item)
 		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
-		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true)
+		resultErr = errors.Join(
+			resultErr,
+			e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true),
+		)
 	}
 	e.completeLiveRunQueueItems(queuedUserMessageIDSet(messages))
-	return messages
+	return messages, resultErr
 }
 
 func (e *Engine) clearStreamingAssistantStateRaw() (*AssistantStreamMetadata, *uuid.UUID) {
 	return e.transcriptRuntimeState().ClearStreamingAssistantState()
 }
 
-func (e *Engine) emitStreamingAssistantResetEventsRaw(stepID string, metadata *AssistantStreamMetadata, streamID *uuid.UUID, abortReason *AssistantStreamAbortReason) {
+func (e *Engine) emitStreamingAssistantResetEventsRaw(
+	stepID string,
+	metadata *AssistantStreamMetadata,
+	streamID *uuid.UUID,
+	abortReason *AssistantStreamAbortReason,
+) error {
 	abortReasonValue := ""
 	if abortReason != nil {
 		abortReasonValue = string(*abortReason)
 	}
-	e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID})
-	e.emitRaw(Event{Kind: EventAssistantDeltaReset, StepID: stepID, AssistantStreamMetadata: cloneAssistantStreamMetadata(metadata), AssistantTranscriptStreamID: cloneTranscriptStreamID(streamID), AssistantStreamAbortReason: abortReasonValue})
-	e.emitRaw(Event{Kind: EventReasoningDeltaReset, StepID: stepID})
+	return errors.Join(
+		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID}),
+		e.emitRaw(Event{Kind: EventAssistantDeltaReset, StepID: stepID, AssistantStreamMetadata: cloneAssistantStreamMetadata(metadata), AssistantTranscriptStreamID: cloneTranscriptStreamID(streamID), AssistantStreamAbortReason: abortReasonValue}),
+		e.emitRaw(Event{Kind: EventReasoningDeltaReset, StepID: stepID}),
+	)
 }
 
 func (e *Engine) emitCommittedAssistantMessageRaw(stepID string, committed steeringCommittedAssistantMessage) error {
@@ -479,8 +544,7 @@ func (e *Engine) emitCommittedAssistantMessageEventRaw(stepID string, committed 
 		event.CommittedEntryStart = committed.coordinate.start
 		event.CommittedEntryStartSet = true
 	}
-	e.emitRaw(event)
-	return nil
+	return e.emitRaw(event)
 }
 
 func (e *Engine) resolveCompletedResponseStreamRaw(stepID string, instruction completedResponseResolutionInstruction) (completedResponseResolutionOutcome, error) {
@@ -524,7 +588,9 @@ func (e *Engine) resolveCompletedResponseStreamRaw(stepID string, instruction co
 				committedAssistantEventPublished: true,
 			}, nil
 		}
-		e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata, clearedStreamID, nil)
+		if err := e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata, clearedStreamID, nil); err != nil {
+			return completedResponseResolutionOutcome{}, err
+		}
 		return completedResponseResolutionOutcome{
 			kind:                             completedResponseResolutionFinalized,
 			streamID:                         cloneTranscriptStreamID(clearedStreamID),
@@ -535,7 +601,9 @@ func (e *Engine) resolveCompletedResponseStreamRaw(stepID string, instruction co
 	if clearedStreamID == nil {
 		return completedResponseResolutionOutcome{kind: completedResponseResolutionAbsent}, nil
 	}
-	e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata, clearedStreamID, instruction.abortReason)
+	if err := e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata, clearedStreamID, instruction.abortReason); err != nil {
+		return completedResponseResolutionOutcome{}, err
+	}
 	return completedResponseResolutionOutcome{
 		kind:     completedResponseResolutionDiscarded,
 		streamID: cloneTranscriptStreamID(clearedStreamID),
@@ -546,13 +614,14 @@ func flushedUserMessageEvent(msg llm.Message, stepID string) *Event {
 	if msg.Role != llm.RoleUser {
 		return nil
 	}
-	if msg.MessageType == llm.MessageTypeCompactionSummary {
+	if msg.MessageType != nil &&
+		*msg.MessageType == llm.MessageTypeCompactionSummary {
 		return nil
 	}
-	if strings.TrimSpace(msg.Content) == "" {
+	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
 		return nil
 	}
-	return &Event{Kind: EventUserMessageFlushed, StepID: stepID, UserMessage: msg.Content, UserMessageBatch: []string{msg.Content}, CommittedTranscriptChanged: true}
+	return &Event{Kind: EventUserMessageFlushed, StepID: stepID, UserMessage: *msg.Content, UserMessageBatch: []string{*msg.Content}, CommittedTranscriptChanged: true}
 }
 
 func (e *Engine) flushPendingUserInjections(stepID string, queueItemIDs map[string]struct{}) (int, session.CommitReceipt, error) {

@@ -16,7 +16,7 @@ func TestResolveScopedSessionDirReturnsRealPathInsideContainer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	resolvedDir, err := ResolveScopedSessionDir(containerDir, store.Meta().SessionID)
+	resolvedDir, err := ResolveScopedSessionDir(containerDir, store.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveScopedSessionDir: %v", err)
 	}

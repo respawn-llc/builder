@@ -30,6 +30,7 @@ type sessionPickerCreateResult struct{}
 type sessionPickerCancelResult struct{}
 type sessionPickerOpenResult struct {
 	sessionID runtimeids.SessionID
+	plan      sessionLaunchPlan
 }
 
 func newSessionPickerCreateResult() sessionPickerResult {
@@ -40,33 +41,31 @@ func newSessionPickerCancelResult() sessionPickerResult {
 	return sessionPickerCancelResult{}
 }
 
-func newSessionPickerOpenResult(sessionID runtimeids.SessionID) sessionPickerResult {
-	if sessionID.IsZero() {
-		panic("session picker open result requires a session ID")
-	}
-	return sessionPickerOpenResult{sessionID: sessionID}
-}
-
 func (sessionPickerCreateResult) isSessionPickerResult() {}
 func (sessionPickerCancelResult) isSessionPickerResult() {}
 func (sessionPickerOpenResult) isSessionPickerResult()   {}
 
 type sessionPickerModel struct {
-	loader         sessionPageLoader
-	requestContext context.Context
-	header         sessionPickerHeaderInfo
-	activeTab      sessioncontract.SessionCategory
-	main           sessionPickerTab
-	subagents      sessionPickerTab
-	width          int
-	height         int
-	theme          string
-	styles         sessionPickerStyles
-	result         sessionPickerResult
+	loader          sessionPageLoader
+	requestContext  context.Context
+	header          sessionPickerHeaderInfo
+	activeTab       sessioncontract.SessionCategory
+	main            sessionPickerTab
+	subagents       sessionPickerTab
+	width           int
+	height          int
+	theme           string
+	styles          sessionPickerStyles
+	result          sessionPickerResult
+	openController  sessionPickerOpenController
+	pendingOpen     *sessionPickerPendingOpen
+	openFailure     *sessionPickerOpenFailure
+	workspacePrompt *workspaceChangePromptModel
 
 	spinnerFrame               int
 	spinnerSequence            uint64
 	scheduledSpinnerGeneration *uint64
+	openSequence               uint64
 	startupStatus              *startupPickerStatusModel
 	updateStatus               *serverapi.UpdateStatusResult
 	clock                      func() time.Time
@@ -143,17 +142,21 @@ func (m *sessionPickerModel) tab(category sessioncontract.SessionCategory) *sess
 }
 
 func (m *sessionPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok &&
+		key.Type == tea.KeyCtrlC &&
+		m.pendingOpen != nil {
+		return m, m.cancelPendingOpen()
+	}
+	if tick, ok := msg.(sessionPickerSpinnerTickMsg); ok {
+		return m, m.applySpinnerTick(tick)
+	}
+	if m.workspacePrompt != nil {
+		return m, m.updateWorkspacePrompt(msg)
+	}
 	switch message := msg.(type) {
 	case sessionPickerPageLoadedMsg:
 		cmd := m.applyPageLoaded(message)
 		return m, tea.Batch(cmd, m.reconcileSpinnerTick())
-	case sessionPickerSpinnerTickMsg:
-		if m.scheduledSpinnerGeneration == nil || message.generation != *m.scheduledSpinnerGeneration {
-			return m, nil
-		}
-		m.scheduledSpinnerGeneration = nil
-		m.spinnerFrame++
-		return m, m.reconcileSpinnerTick()
 	case sessionPickerStatusMsg:
 		m.header.CWD = sessionPickerStatusText(message.cwd)
 		m.header.Branch = sessionPickerStatusText(message.branch)
@@ -163,6 +166,12 @@ func (m *sessionPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case sessionPickerUpdateStatusMsg:
 		return m, m.applyUpdateStatus(message)
+	case sessionPickerOpenInspectedMsg:
+		return m, m.applyOpenInspection(message)
+	case sessionPickerOpenPlannedMsg:
+		return m, m.applyOpenPlan(message)
+	case sessionPickerOpenRetargetedMsg:
+		return m, m.applyOpenRetarget(message)
 	case tea.WindowSizeMsg:
 		if message.Width > 0 {
 			m.width = message.Width
@@ -180,6 +189,18 @@ func (m *sessionPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *sessionPickerModel) applySpinnerTick(
+	message sessionPickerSpinnerTickMsg,
+) tea.Cmd {
+	if m.scheduledSpinnerGeneration == nil ||
+		message.generation != *m.scheduledSpinnerGeneration {
+		return nil
+	}
+	m.scheduledSpinnerGeneration = nil
+	m.spinnerFrame++
+	return m.reconcileSpinnerTick()
+}
+
 func sessionPickerStatusText(value *string) string {
 	if value == nil {
 		return ""
@@ -188,6 +209,12 @@ func sessionPickerStatusText(value *string) string {
 }
 
 func (m *sessionPickerModel) handleKey(key tea.KeyMsg) tea.Cmd {
+	if m.pendingOpen != nil {
+		if key.Type == tea.KeyCtrlC {
+			return m.cancelPendingOpen()
+		}
+		return nil
+	}
 	switch key.Type {
 	case tea.KeyUp:
 		return m.moveSelection(-1)
@@ -216,6 +243,9 @@ func (m *sessionPickerModel) handleKey(key tea.KeyMsg) tea.Cmd {
 			return tea.Quit
 		}
 	case tea.KeyEnter:
+		if m.pendingOpen != nil {
+			return nil
+		}
 		tab := m.tab(m.activeTab)
 		if tab.bodyPhase == sessionPickerBodyFailed {
 			return m.startBodyRequest(m.activeTab, sessionPickerBodyRequestRetry)
@@ -225,8 +255,7 @@ func (m *sessionPickerModel) handleKey(key tea.KeyMsg) tea.Cmd {
 			m.result = newSessionPickerCreateResult()
 			return tea.Quit
 		case sessionPickerSessionSelection:
-			m.result = newSessionPickerOpenResult(selected.sessionID)
-			return tea.Quit
+			return m.startOpenSession(selected.sessionID)
 		}
 	case tea.KeyCtrlC:
 		m.result = newSessionPickerCancelResult()
@@ -518,7 +547,8 @@ func (m *sessionPickerModel) maybeCompleteAllEmpty() tea.Cmd {
 
 func (m *sessionPickerModel) hasPendingPageRequest() bool {
 	return m.main.bodyRequest != nil || m.main.directional != nil ||
-		m.subagents.bodyRequest != nil || m.subagents.directional != nil
+		m.subagents.bodyRequest != nil || m.subagents.directional != nil ||
+		m.pendingOpen != nil
 }
 
 func (m *sessionPickerModel) reconcileSpinnerTick() tea.Cmd {
@@ -533,11 +563,19 @@ func (m *sessionPickerModel) reconcileSpinnerTick() tea.Cmd {
 	})
 }
 
-func runSessionPicker(loader sessionPageLoader, theme string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
+func runSessionPicker(
+	ctx context.Context,
+	loader sessionPageLoader,
+	theme string,
+	header sessionPickerHeaderInfo,
+	openController sessionPickerOpenController,
+) (sessionPickerResult, error) {
 	lifecycle := newSessionPickerLifecycle(sessionPickerLifecycleOptions{
-		Loader: loader,
-		Theme:  theme,
-		Header: header,
+		Context:        ctx,
+		Loader:         loader,
+		Theme:          theme,
+		Header:         header,
+		OpenController: openController,
 	})
 	defer lifecycle.Close()
 	terminal := sessionPickerTerminal{state: sessionPickerTerminalInactive}

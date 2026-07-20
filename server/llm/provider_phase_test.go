@@ -70,8 +70,8 @@ func TestOpenAIClientProjectsProviderPhaseFromOneAuthoritativeFact(t *testing.T)
 	if !resp.ProviderPhase.Is(MessagePhaseFinal) {
 		t.Fatalf("provider phase = %#v, want final", resp.ProviderPhase)
 	}
-	if resp.Assistant.Phase != MessagePhaseFinal {
-		t.Fatalf("legacy assistant phase = %q, want %q", resp.Assistant.Phase, MessagePhaseFinal)
+	if resp.Assistant.Phase == nil || *resp.Assistant.Phase != MessagePhaseFinal {
+		t.Fatalf("legacy assistant phase = %v, want %q", resp.Assistant.Phase, MessagePhaseFinal)
 	}
 }
 
@@ -93,8 +93,8 @@ func TestGenerateDecodesAbsentProviderPhaseStructurally(t *testing.T) {
 			if !resp.ProviderPhase.IsAbsent() {
 				t.Fatalf("provider phase = %#v, want absent", resp.ProviderPhase)
 			}
-			if resp.Assistant.Phase != "" {
-				t.Fatalf("legacy assistant phase = %q, want unchanged absent projection", resp.Assistant.Phase)
+			if resp.Assistant.Phase != nil {
+				t.Fatalf("legacy assistant phase = %v, want unchanged absent projection", resp.Assistant.Phase)
 			}
 		})
 	}

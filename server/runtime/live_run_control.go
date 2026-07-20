@@ -136,20 +136,20 @@ func (e *Engine) TryInterruptActiveRun() (bool, error) {
 		}
 		return interruptedSnapshot != nil, err
 	}
-	e.failStoppedLiveRunQueueItems(taggedQueueItems)
+	failErr := e.failStoppedLiveRunQueueItems(taggedQueueItems)
 	if snapshot == nil || !activeKindInterruptibleByLiveStop(snapshot.ActiveKind) {
-		return true, nil
+		return true, failErr
 	}
 	tracker := goalLoopInterruptTracker{engine: e, match: goalLoop}
 	interruptedSnapshot, err := e.stepLifecycle.InterruptCurrent(tracker.onSnapshot)
 	tracker.resolve(err, interruptedSnapshot)
 	if err != nil {
-		return true, err
+		return true, errors.Join(failErr, err)
 	}
 	if goalLoop && !tracker.pending && e.goalActive() {
 		e.goalLoopState().Suspend()
 	}
-	return true, nil
+	return true, failErr
 }
 
 type goalLoopInterruptTracker struct {
@@ -218,10 +218,21 @@ func (e *Engine) QueueUserMessageForActiveRun(ctx context.Context, text string, 
 	}
 	committed = true
 	item = e.messageFlow.QueueUserMessageWithID(item)
-	e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+	if err := e.emitQueuedUserMessageStatus(
+		item,
+		QueuedUserMessageAccepted,
+		"",
+		false,
+	); err != nil {
+		return item, true, err
+	}
 	queueItemID := mustQueueItemID(item.ID)
 	if e.liveRun.finishQueueItemPublication(queueItemID) {
-		e.failStoppedLiveRunQueueItems(map[runtimeids.QueueItemID]struct{}{queueItemID: {}})
+		if err := e.failStoppedLiveRunQueueItems(
+			map[runtimeids.QueueItemID]struct{}{queueItemID: {}},
+		); err != nil {
+			return item, true, err
+		}
 	} else {
 		e.scheduleQueuedUserInjectionsIfIdle()
 	}
@@ -242,7 +253,7 @@ func (e *Engine) finishLiveRunStep(snapshot *RunSnapshot, status RunStatus, err 
 	}
 	e.ensureOrchestrationCollaborators()
 	stoppedQueueItems := e.liveRun.finishStep(snapshot, status, err, e.shouldHoldLiveRunForGoalLoopContinuation(snapshot, status))
-	e.failStoppedLiveRunQueueItems(stoppedQueueItems)
+	e.surfaceRunError(e.failStoppedLiveRunQueueItems(stoppedQueueItems))
 }
 
 func (e *Engine) finishLiveRunGoalLoop() {
@@ -269,9 +280,11 @@ func (e *Engine) completeLiveRunQueueItems(ids map[string]struct{}) {
 	e.liveRun.completeQueueItems(typedQueueItemIDSet(ids))
 }
 
-func (e *Engine) failStoppedLiveRunQueueItems(ids map[runtimeids.QueueItemID]struct{}) {
+func (e *Engine) failStoppedLiveRunQueueItems(
+	ids map[runtimeids.QueueItemID]struct{},
+) error {
 	if e == nil || len(ids) == 0 {
-		return
+		return nil
 	}
 	stringIDs := stringQueueItemIDSet(ids)
 	rawIDs := make([]string, 0, len(stringIDs))
@@ -280,16 +293,28 @@ func (e *Engine) failStoppedLiveRunQueueItems(ids map[runtimeids.QueueItemID]str
 	}
 	e.unmarkQueuedUserInjectionForAutoDrain(rawIDs...)
 	failed := map[runtimeids.QueueItemID]struct{}{}
+	var emitErr error
 	for _, item := range e.messageFlow.DrainPendingUserInjectionsByID(stringIDs) {
 		failed[mustQueueItemID(item.ID)] = struct{}{}
-		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
+		emitErr = errors.Join(
+			emitErr,
+			e.emitQueuedUserMessageStatus(
+				item,
+				QueuedUserMessageFailed,
+				QueuedUserMessageFailureStopped,
+				true,
+			),
+		)
 	}
 	e.liveRun.clearStoppedQueueItems(failed)
+	return emitErr
 }
 
-func (e *Engine) dropStoppedLiveRunQueueItems(items []queuedUserSteeringIntent) []queuedUserSteeringIntent {
+func (e *Engine) dropStoppedLiveRunQueueItems(
+	items []queuedUserSteeringIntent,
+) ([]queuedUserSteeringIntent, error) {
 	if e == nil || len(items) == 0 {
-		return items
+		return items, nil
 	}
 	ids := make(map[runtimeids.QueueItemID]struct{}, len(items))
 	for _, item := range items {
@@ -297,19 +322,28 @@ func (e *Engine) dropStoppedLiveRunQueueItems(items []queuedUserSteeringIntent) 
 	}
 	stopped := e.liveRun.takeStoppedQueueItems(ids)
 	if len(stopped) == 0 {
-		return items
+		return items, nil
 	}
 	filtered := items[:0]
+	var emitErr error
 	for _, item := range items {
 		id := mustQueueItemID(item.message.ID)
 		if _, ok := stopped[id]; ok {
 			e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
-			e.emitQueuedUserMessageStatus(item.message, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
+			emitErr = errors.Join(
+				emitErr,
+				e.emitQueuedUserMessageStatus(
+					item.message,
+					QueuedUserMessageFailed,
+					QueuedUserMessageFailureStopped,
+					true,
+				),
+			)
 			continue
 		}
 		filtered = append(filtered, item)
 	}
-	return filtered
+	return filtered, emitErr
 }
 
 func (e *Engine) commitLiveRunQueueItemsUnlessStopped(items []queuedUserSteeringIntent, commit func() error) (bool, error) {

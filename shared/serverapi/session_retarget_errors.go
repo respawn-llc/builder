@@ -103,9 +103,12 @@ func (e *SessionRetargetError) RPCErrorCode() int {
 	return protocol.ErrCodeSessionRetarget
 }
 
-func (e *SessionRetargetError) RPCErrorData() json.RawMessage {
-	if e == nil || e.Validate() != nil {
-		return nil
+func (e *SessionRetargetError) RPCErrorData() (json.RawMessage, error) {
+	if e == nil {
+		return nil, fmt.Errorf("session retarget error is required")
+	}
+	if err := e.Validate(); err != nil {
+		return nil, err
 	}
 	normalized := *e
 	normalized.CandidateProjects = e.SortedCandidateProjects()

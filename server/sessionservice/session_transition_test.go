@@ -2,12 +2,13 @@ package sessionservice
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
-	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
+	"core/shared/protocol"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 )
@@ -42,26 +43,17 @@ func TestResolveForkRollbackCreatesForkedSession(t *testing.T) {
 	if err := store.SetName("parent"); err != nil {
 		t.Fatalf("set session name: %v", err)
 	}
-	if _, _, err := store.AppendEvent("s1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("s1", "message", llm.Message{Role: llm.RoleAssistant, Content: "a1"}); err != nil {
-		t.Fatalf("append assistant message: %v", err)
-	}
-	u2Evt, _, err := store.AppendEvent("s2", "message", llm.Message{Role: llm.RoleUser, Content: "u2"})
-	if err != nil {
-		t.Fatalf("append second user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("s2", "message", llm.Message{Role: llm.RoleAssistant, Content: "a2"}); err != nil {
-		t.Fatalf("append second assistant message: %v", err)
-	}
+	appendSessionMessage(t, store, "s1", session.MessageRoleUser, "u1")
+	appendSessionMessage(t, store, "s1", session.MessageRoleAssistant, "a1")
+	u2Evt := appendSessionMessage(t, store, "s2", session.MessageRoleUser, "u2")
+	appendSessionMessage(t, store, "s2", session.MessageRoleAssistant, "a2")
 
 	resolved, err := resolveSessionTransition(context.Background(), sessionTransitionResolveRequest{
 		Store: store,
 		Transition: sessionTransition{
 			Action:             serverapi.SessionTransitionActionForkRollback,
 			InitialPrompt:      "edited user message",
-			ForkUserMessageSeq: u2Evt.Seq,
+			ForkUserMessageSeq: u2Evt.Seq(),
 		},
 	})
 	if err != nil {
@@ -69,7 +61,7 @@ func TestResolveForkRollbackCreatesForkedSession(t *testing.T) {
 	}
 	intent, preparation := requireSessionLifecycleLaunch(t, resolved)
 	forkID, ok := intent.SessionID()
-	if !ok || forkID.String() == store.Meta().SessionID {
+	if !ok || forkID.String() == store.Metadata().SessionID {
 		t.Fatalf("expected new fork session id, got %q/%v", forkID.String(), ok)
 	}
 	prompt, ok := preparation.InitialPrompt()
@@ -80,7 +72,41 @@ func TestResolveForkRollbackCreatesForkedSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open forked session: %v", err)
 	}
-	if got := child.Meta().Name; got != "parent \u2192 edit u2" {
+	if got := child.Metadata().Name; got != "parent \u2192 edit u2" {
 		t.Fatalf("forked session name = %q", got)
+	}
+}
+
+func TestResolveForkRollbackMapsUnsupportedEventLog(t *testing.T) {
+	root := t.TempDir()
+	persistence := sessiontest.NewPersistence()
+	store, err := session.Create(
+		root,
+		"workspace-x",
+		"/tmp/work",
+		sessioncontract.SessionCategoryMain,
+		persistence.Options()...,
+	)
+	if err != nil {
+		t.Fatalf("create session store: %v", err)
+	}
+	sessiontest.WriteUnsupportedEventLogVersion(
+		t,
+		store,
+		session.EventLogVersionV1+1,
+	)
+	_, err = resolveForkRollback(sessionTransitionResolveRequest{
+		Store: store,
+		Transition: sessionTransition{
+			Action:             serverapi.SessionTransitionActionForkRollback,
+			ForkUserMessageSeq: 1,
+		},
+	})
+	var materialization *protocol.SessionEventLogMaterializationError
+	if !errors.As(err, &materialization) {
+		t.Fatalf("resolveForkRollback error = %T %v", err, err)
+	}
+	if materialization.Reason != protocol.SessionEventLogMaterializationUnsupportedVersion {
+		t.Fatalf("materialization facts = %+v", materialization)
 	}
 }

@@ -497,7 +497,7 @@ func TestRebindSubcommandRetargetsSessionWorkspace(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := rebindSubcommand([]string{sess.Meta().SessionID, newWorkspace}, &stdout, &stderr); code != 0 {
+	if code := rebindSubcommand([]string{sess.Metadata().SessionID, newWorkspace}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit code = %d, want 0 stderr=%q", code, stderr.String())
 	}
 	resolvedBinding, err := store.EnsureWorkspaceBinding(context.Background(), newWorkspace)
@@ -510,7 +510,7 @@ func TestRebindSubcommandRetargetsSessionWorkspace(t *testing.T) {
 	if resolvedBinding.ProjectID != binding.ProjectID {
 		t.Fatalf("new workspace project id = %q, want %q", resolvedBinding.ProjectID, binding.ProjectID)
 	}
-	target, err := store.ResolveSessionExecutionTarget(context.Background(), sess.Meta().SessionID)
+	target, err := store.ResolveSessionExecutionTarget(context.Background(), sess.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
@@ -559,11 +559,11 @@ func TestRebindSubcommandRejectsInvalidInputs(t *testing.T) {
 	}
 
 	assertRebindError([]string{"session-missing", targetWorkspace}, session.ErrSessionNotFound.Error())
-	assertRebindError([]string{sess.Meta().SessionID, missingWorkspace}, missingWorkspace)
+	assertRebindError([]string{sess.Metadata().SessionID, missingWorkspace}, missingWorkspace)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := rebindSubcommand([]string{sess.Meta().SessionID}, &stdout, &stderr); code != 2 {
+	if code := rebindSubcommand([]string{sess.Metadata().SessionID}, &stdout, &stderr); code != 2 {
 		t.Fatalf("exit code = %d, want 2 stderr=%q", code, stderr.String())
 	}
 	if got := stderr.String(); !bytes.Contains([]byte(got), []byte("rebind requires <session-id> and <new-path>")) {

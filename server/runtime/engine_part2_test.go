@@ -8,6 +8,7 @@ import (
 	"core/server/tools"
 	"core/shared/config"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"encoding/json"
 	"os"
@@ -33,7 +34,7 @@ func TestSystemPromptSnapshotUsesStoredWorkspaceRootWhenTranscriptWorkdirIsNeste
 
 	store := mustCreateTestSession(t, workspace)
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewExecTestEngine(t, store, client, Config{
@@ -182,7 +183,7 @@ func TestSystemPromptSnapshotUsesTranscriptWorkingDirForRetargetedSession(t *tes
 
 	store := mustCreateTestSession(t, canonical)
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewExecTestEngine(t, store, client, Config{
@@ -226,7 +227,11 @@ func TestLegacyLockedSessionBackfillsSystemPromptSnapshotOnce(t *testing.T) {
 	}
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok again")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -234,14 +239,14 @@ func TestLegacyLockedSessionBackfillsSystemPromptSnapshotOnce(t *testing.T) {
 		EnabledTools:         []toolspec.ID{toolspec.ToolExecCommand},
 		TranscriptWorkingDir: workspace,
 	})
-	if snapshot := store.Meta().Locked.SystemPrompt; snapshot != "" {
+	if snapshot := store.Metadata().Locked.SystemPrompt; snapshot != "" {
 		t.Fatalf("system prompt snapshot before first dispatch = %q, want empty", snapshot)
 	}
 	writeTestFile(t, systemPath, "legacy {{.EstimatedToolCallsForContext}}")
 	if _, err := eng.SubmitUserMessage(context.Background(), "hello"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	snapshot := store.Meta().Locked.SystemPrompt
+	snapshot := store.Metadata().Locked.SystemPrompt
 	if snapshot != "legacy 185" {
 		t.Fatalf("system prompt snapshot = %q, want legacy 185", snapshot)
 	}
@@ -255,7 +260,7 @@ func TestLegacyLockedSessionBackfillsSystemPromptSnapshotOnce(t *testing.T) {
 	if got := client.calls[1].SystemPrompt; got != snapshot {
 		t.Fatalf("second request used changed system prompt\ngot: %q\nwant: %q", got, snapshot)
 	}
-	if got := store.Meta().Locked.SystemPrompt; got != snapshot {
+	if got := store.Metadata().Locked.SystemPrompt; got != snapshot {
 		t.Fatalf("stored system prompt changed\ngot: %q\nwant: %q", got, snapshot)
 	}
 }
@@ -287,8 +292,11 @@ func TestChildSessionSnapshotsRoleSystemPromptOnFirstRequest(t *testing.T) {
 	if err := session.InitializeCreationContext(child, parent, session.SessionCreationSourceParentAgent, session.ChildContextOptions{}); err != nil {
 		t.Fatalf("InitializeCreationContext: %v", err)
 	}
+	if err := child.EnsureDurable(); err != nil {
+		t.Fatalf("persist child: %v", err)
+	}
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewExecTestEngine(t, child, client, Config{
@@ -313,7 +321,7 @@ func TestChildSessionSnapshotsRoleSystemPromptOnFirstRequest(t *testing.T) {
 	if got := client.calls[0].Model; got != "role-model" {
 		t.Fatalf("request model = %q, want role model", got)
 	}
-	if locked := child.Meta().Locked; locked == nil || locked.Model != "role-model" || !locked.HasSystemPrompt || locked.SystemPrompt != "code review system prompt" {
+	if locked := child.Metadata().Locked; locked == nil || locked.Model != "role-model" || !locked.HasSystemPrompt || locked.SystemPrompt != "code review system prompt" {
 		t.Fatalf("child locked contract = %+v, want role model and prompt", locked)
 	} else if locked.HasReviewerPrompt || locked.ReviewerPrompt != "" {
 		t.Fatalf("child reviewer prompt lock = %+v, want no parent reviewer prompt inherited", locked)
@@ -334,11 +342,11 @@ func TestEmptySystemPromptFileIsSkippedAndFallbackSnapshotIsReused(t *testing.T)
 	store := mustCreateTestSession(t, workspace)
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "still ok"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("still ok")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -354,7 +362,7 @@ func TestEmptySystemPromptFileIsSkippedAndFallbackSnapshotIsReused(t *testing.T)
 	if strings.TrimSpace(firstPrompt) == "" || firstPrompt == "changed" {
 		t.Fatalf("first system prompt = %q, want built-in fallback", firstPrompt)
 	}
-	if locked := store.Meta().Locked; locked == nil || !locked.HasSystemPrompt || locked.SystemPrompt != firstPrompt {
+	if locked := store.Metadata().Locked; locked == nil || !locked.HasSystemPrompt || locked.SystemPrompt != firstPrompt {
 		t.Fatalf("locked system prompt snapshot = %+v, want built-in fallback snapshot", locked)
 	}
 	if err := eng.Close(); err != nil {
@@ -365,11 +373,11 @@ func TestEmptySystemPromptFileIsSkippedAndFallbackSnapshotIsReused(t *testing.T)
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	if locked := reopened.Meta().Locked; locked == nil || !locked.HasSystemPrompt || locked.SystemPrompt != firstPrompt {
+	if locked := reopened.Metadata().Locked; locked == nil || !locked.HasSystemPrompt || locked.SystemPrompt != firstPrompt {
 		t.Fatalf("reopened locked system prompt snapshot = %+v, want built-in fallback snapshot", locked)
 	}
 	reopenedClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "still ok"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("still ok")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	reopenedEngine := mustNewExecTestEngine(t, reopened, reopenedClient, Config{
@@ -383,7 +391,7 @@ func TestEmptySystemPromptFileIsSkippedAndFallbackSnapshotIsReused(t *testing.T)
 	if got := reopenedClient.calls[0].SystemPrompt; got != firstPrompt {
 		t.Fatalf("second system prompt = %q, want locked fallback snapshot %q", got, firstPrompt)
 	}
-	if locked := reopened.Meta().Locked; locked == nil || !locked.HasSystemPrompt || locked.SystemPrompt != firstPrompt {
+	if locked := reopened.Metadata().Locked; locked == nil || !locked.HasSystemPrompt || locked.SystemPrompt != firstPrompt {
 		t.Fatalf("stored system prompt snapshot changed: %+v", locked)
 	}
 }
@@ -403,7 +411,7 @@ func TestLegacyLockedSessionBackfillsContextBudgetOnce(t *testing.T) {
 		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
 		ContextWindowTokens: 272_000,
 	})
-	locked := store.Meta().Locked
+	locked := store.Metadata().Locked
 	if locked == nil || locked.ContextWindow != 272_000 || locked.ContextPercent != 95 {
 		t.Fatalf("expected legacy lock backfilled from first resume config, got %+v", locked)
 	}
@@ -416,7 +424,7 @@ func TestLegacyLockedSessionBackfillsContextBudgetOnce(t *testing.T) {
 		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
 		ContextWindowTokens: 400_000,
 	})
-	locked = store.Meta().Locked
+	locked = store.Metadata().Locked
 	if locked == nil || locked.ContextWindow != 272_000 || locked.ContextPercent != 95 {
 		t.Fatalf("expected legacy lock backfill to stay pinned, got %+v", locked)
 	}
@@ -430,8 +438,8 @@ func TestThinkingLevelCanChangeAfterLock(t *testing.T) {
 	store := mustCreateTestSessionAt(t, dir)
 
 	client := &fakeClient{responses: []llm.Response{
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "one"}, Usage: llm.Usage{WindowTokens: 200000}},
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "two"}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("one")}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("two")}, Usage: llm.Usage{WindowTokens: 200000}},
 	}}
 
 	eng := mustNewExecTestEngine(t, store, client, Config{
@@ -491,7 +499,7 @@ func TestPoisonedLockedSessionFallsBackToModelReasoningSupport(t *testing.T) {
 		t.Fatalf("mark locked: %v", err)
 	}
 
-	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"}}}}
+	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")}}}}
 	eng := mustNewExecTestEngine(t, store, client, Config{
 		Model:         "gpt-5.4",
 		ThinkingLevel: "high",
@@ -516,8 +524,8 @@ func TestFastModeCanChangeAfterLock(t *testing.T) {
 
 	client := &fakeClient{
 		responses: []llm.Response{
-			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "one"}, Usage: llm.Usage{WindowTokens: 200000}},
-			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "two"}, Usage: llm.Usage{WindowTokens: 200000}},
+			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("one")}, Usage: llm.Usage{WindowTokens: 200000}},
+			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("two")}, Usage: llm.Usage{WindowTokens: 200000}},
 		},
 		caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true},
 	}
@@ -794,20 +802,20 @@ func TestSetAutoCompactionDisabledConcurrentWithBusyStepSkipsCompactionForCurren
 	client := &fakeCompactionClient{
 		responses: []llm.Response{
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working", Phase: llm.MessagePhaseCommentary},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 				ToolCalls: []llm.ToolCall{{ID: "call_shell_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
 				Usage:     llm.Usage{InputTokens: 390000, OutputTokens: 1000, WindowTokens: 400000},
 			},
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 				Usage:     llm.Usage{WindowTokens: 400000},
 			},
 		},
 		compactionResponses: []llm.CompactionResponse{
 			{
 				OutputItems: []llm.ResponseItem{
-					{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "run tools"},
-					{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+					{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("run tools")},
+					{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 				},
 				Usage: llm.Usage{InputTokens: 8000, OutputTokens: 500, WindowTokens: 400000},
 			},
@@ -934,7 +942,7 @@ func TestSetReviewerWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing
 func TestSetReviewerEnabledFailsWhenReviewerClientMissing(t *testing.T) {
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
-	eng, err := New(store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng, err := New(store, mustMaterializeTestEventLog(t, store), &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
 		Reviewer: ReviewerConfig{
 			Frequency:     "off",

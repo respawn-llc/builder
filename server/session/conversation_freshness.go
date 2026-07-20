@@ -1,7 +1,5 @@
 package session
 
-import "encoding/json"
-
 type ConversationFreshness uint8
 
 const (
@@ -13,17 +11,44 @@ func (f ConversationFreshness) IsFresh() bool {
 	return f == ConversationFreshnessFresh
 }
 
-func advanceConversationFreshness(current ConversationFreshness, evt Event) ConversationFreshness {
-	if current == ConversationFreshnessEstablished {
-		return current
+func hasVisibleUserMessageRecord(record EventRecord) (bool, error) {
+	payload, err := record.Payload()
+	if err != nil {
+		return false, err
 	}
-	if hasVisibleUserMessageEvent(evt.Kind, evt.Payload) {
-		return ConversationFreshnessEstablished
+	switch payload := payload.(type) {
+	case MessageRecord:
+		return hasVisibleUserMessageFields(
+			payload.Role,
+			payload.MessageType,
+			payload.Content,
+		), nil
+	case HistoryReplacementRecord:
+		for _, item := range payload.Items {
+			if item.Type == ProviderHistoryItemTypeMessage &&
+				item.Role != nil &&
+				hasVisibleUserMessageFields(*item.Role, item.MessageType, item.Content) {
+				return true, nil
+			}
+		}
+		return false, nil
+	default:
+		return false, nil
 	}
-	return current
 }
 
-func hasVisibleUserMessageEvent(kind string, payload json.RawMessage) bool {
-	_, ok := visibleUserMessageFromEvent(kind, payload)
-	return ok
+func hasVisibleUserMessageFields(
+	role MessageRole,
+	messageType *MessageType,
+	content *string,
+) bool {
+	var messageTypeText string
+	if messageType != nil {
+		messageTypeText = string(*messageType)
+	}
+	var text string
+	if content != nil {
+		text = *content
+	}
+	return isVisibleUserMessageFields(string(role), messageTypeText, text)
 }

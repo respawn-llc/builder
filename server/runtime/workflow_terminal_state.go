@@ -42,7 +42,7 @@ func (e *Engine) WorkflowSessionState() WorkflowSessionState {
 	if e.store == nil {
 		return WorkflowSessionState{}
 	}
-	meta := e.store.Meta()
+	meta := e.store.Metadata()
 	workflowSession := meta.WorkflowSession
 	if workflowSession == nil {
 		return WorkflowSessionState{}
@@ -68,12 +68,12 @@ func (e *Engine) WorkflowTerminalState() WorkflowTerminalState {
 // ties workflow completion to queued-user-work failure, so scheduling and
 // submission code can gate on terminal completion without inspecting workflow
 // state directly.
-func (e *Engine) failQueuedUserWorkIfTerminal() bool {
+func (e *Engine) failQueuedUserWorkIfTerminal() (bool, error) {
 	if e == nil || !e.WorkflowTerminalState().Completed {
-		return false
+		return false, nil
 	}
-	e.FailQueuedUserMessages(QueuedUserMessageFailureTerminalWorkflowCompletion)
-	return true
+	_, err := e.FailQueuedUserMessages(QueuedUserMessageFailureTerminalWorkflowCompletion)
+	return true, err
 }
 
 func (e *Engine) setWorkflowTerminalState(source WorkflowCompletionSource) {

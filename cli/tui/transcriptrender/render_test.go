@@ -9,6 +9,7 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 
@@ -1197,7 +1198,7 @@ func TestCacheWarningNoticeRendersStructuredPayload(t *testing.T) {
 	warning := transcript.CacheWarning{
 		Scope:           transcript.CacheWarningScopeReviewer,
 		Reason:          transcript.CacheWarningReasonNonPostfix,
-		LostInputTokens: 1500,
+		LostInputTokens: textutil.Value(1500),
 	}
 	row := clientui.TranscriptCommittedRow{
 		Kind: clientui.TranscriptRowNotice,
@@ -1207,7 +1208,7 @@ func TestCacheWarningNoticeRendersStructuredPayload(t *testing.T) {
 			CacheWarning: &clientui.TranscriptCacheWarning{
 				Scope:           string(warning.Scope),
 				Reason:          string(warning.Reason),
-				LostInputTokens: warning.LostInputTokens,
+				LostInputTokens: *warning.LostInputTokens,
 				Visibility:      transcript.EntryVisibilityOngoing,
 			},
 		},

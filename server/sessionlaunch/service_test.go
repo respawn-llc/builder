@@ -75,11 +75,19 @@ func TestServicePlanSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
-	if _, _, err := store.AppendEvent("", "prompt_history", map[string]any{"text": "json-history"}); err != nil {
-		t.Fatalf("append legacy prompt history event: %v", err)
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	if _, receipt, err := eventLog.AppendRecord(nil, session.LocalEntryRecord{
+		Visibility: session.EntryVisibilityHidden,
+		Role:       "system",
+		Text:       "event-log history must not become prompt history",
+	}); err != nil || !receipt.Committed {
+		t.Fatalf("append event-log entry: receipt=%+v error=%v", receipt, err)
 	}
 	if _, _, err := meta.RecordPromptHistoryEntry(ctx, metadata.PromptHistoryEntry{
-		SessionID: store.Meta().SessionID,
+		SessionID: store.Metadata().SessionID,
 		SourceID:  "req-1",
 		Text:      "db-history",
 	}); err != nil {
@@ -95,7 +103,7 @@ func TestServicePlanSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {
 	resp, err := service.PlanSession(ctx, serverapi.SessionPlanRequest{
 		ClientRequestID: "plan-1",
 		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Metadata().SessionID)),
 	})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
@@ -348,7 +356,7 @@ func TestPlanLaunchSessionUsesResolvedCallerWorkflowOrigin(t *testing.T) {
 		PersistedSessions: meta,
 	})
 	worker := "worker"
-	workflowCallerID := workflowCaller.Meta().SessionID
+	workflowCallerID := workflowCaller.Metadata().SessionID
 	workflowCallerRuntimeID := mustSessionLaunchIntentID(t, workflowCallerID)
 	_, err = service.PlanLaunchSession(ctx, serverapi.SessionPlanRequest{
 		ClientRequestID: "workflow-caller-target",
@@ -362,7 +370,7 @@ func TestPlanLaunchSessionUsesResolvedCallerWorkflowOrigin(t *testing.T) {
 		t.Fatalf("workflow caller error = %T %v, want not-callable denial", err, err)
 	}
 
-	ordinaryCallerID := ordinaryCaller.Meta().SessionID
+	ordinaryCallerID := ordinaryCaller.Metadata().SessionID
 	ordinaryCallerRuntimeID := mustSessionLaunchIntentID(t, ordinaryCallerID)
 	if _, err := service.PlanLaunchSession(ctx, serverapi.SessionPlanRequest{
 		ClientRequestID: "ordinary-caller-target",
@@ -403,7 +411,7 @@ func TestServicePlanSessionRetainsLockedToolsForPreparedNamedTarget(t *testing.T
 	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID: "locked-named-tools",
 		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Metadata().SessionID)),
 		Overrides: serverapi.RunPromptOverrides{
 			AgentRole: &role,
 			Tools:     "patch,edit",
@@ -443,7 +451,7 @@ func TestServicePlanSessionPreparesOmittedSelectedRoleBeforeMaterialization(t *t
 	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID: "omitted-selected-role",
 		Mode:            serverapi.SessionLaunchModeHeadless,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Metadata().SessionID)),
 		Overrides:       serverapi.RunPromptOverrides{Tools: "patch"},
 	})
 	if err != nil {
@@ -541,7 +549,7 @@ func TestServicePlanSessionCanClearInvalidPersistedRoleBeforeValidation(t *testi
 	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID: "req-1",
 		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Metadata().SessionID)),
 		Overrides:       serverapi.RunPromptOverrides{AgentRole: sessionLaunchStringPtr(config.DefaultSubagentRole)},
 	})
 	if err != nil {
@@ -554,7 +562,7 @@ func TestServicePlanSessionCanClearInvalidPersistedRoleBeforeValidation(t *testi
 	if err != nil {
 		t.Fatalf("reopen session: %v", err)
 	}
-	if got := reopened.Meta().Continuation; got != nil && got.AgentRole != nil {
+	if got := reopened.Metadata().Continuation; got != nil && got.AgentRole != nil {
 		t.Fatalf("continuation = %+v, want cleared agent role", got)
 	}
 }
@@ -583,7 +591,7 @@ func TestServicePlanSessionConfigOnlyOverrideDoesNotSkipInvalidPersistedRoleVali
 	_, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID: "req-1",
 		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Metadata().SessionID)),
 		Overrides:       serverapi.RunPromptOverrides{Model: "gpt-5.6-sol"},
 	})
 	if err == nil {
@@ -613,13 +621,13 @@ func TestPlanLaunchSessionHeadlessSelectedSessionAllowsHumanContinuationOfNonCal
 	result, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID: "req-persisted-role",
 		Mode:            serverapi.SessionLaunchModeHeadless,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Metadata().SessionID)),
 	})
 	if err != nil {
 		t.Fatalf("PlanLaunchSession: %v", err)
 	}
-	if result.Plan.Descriptor.SessionID().String() != store.Meta().SessionID {
-		t.Fatalf("session id = %q, want selected %q", result.Plan.Descriptor.SessionID(), store.Meta().SessionID)
+	if result.Plan.Descriptor.SessionID().String() != store.Metadata().SessionID {
+		t.Fatalf("session id = %q, want selected %q", result.Plan.Descriptor.SessionID(), store.Metadata().SessionID)
 	}
 }
 
@@ -636,7 +644,7 @@ func TestPlanLaunchSessionHeadlessSelectedSessionAllowsRemovedContinuationRole(t
 	result, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID: "req-removed-persisted-role",
 		Mode:            serverapi.SessionLaunchModeHeadless,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Metadata().SessionID)),
 	})
 	if err != nil {
 		t.Fatalf("PlanLaunchSession: %v", err)
@@ -656,7 +664,7 @@ func TestPlanLaunchSessionHeadlessSelectedSessionKeepsOmittedContinuationRoleDef
 	result, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
 		ClientRequestID: "req-omitted-persisted-role",
 		Mode:            serverapi.SessionLaunchModeHeadless,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Metadata().SessionID)),
 	})
 	if err != nil {
 		t.Fatalf("PlanLaunchSession: %v", err)
@@ -692,7 +700,7 @@ func TestServicePlanSessionInvalidRoleOverridePrecedesPersistedRoleValidation(t 
 			_, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
 				ClientRequestID: "req-" + role,
 				Mode:            serverapi.SessionLaunchModeInteractive,
-				Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+				Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Metadata().SessionID)),
 				Overrides:       serverapi.RunPromptOverrides{AgentRole: sessionLaunchStringPtr(role)},
 			})
 			if err == nil {

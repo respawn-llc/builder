@@ -18,7 +18,7 @@ func updateWorktreeStatusTarget(t *testing.T, env *serviceTestEnv, worktreeID st
 	updateServiceTestSessionTarget(
 		t,
 		env,
-		env.session.Meta().SessionID,
+		env.session.Metadata().SessionID,
 		env.binding.WorkspaceID,
 		worktreeID,
 		cwdRelpath,
@@ -28,7 +28,7 @@ func updateWorktreeStatusTarget(t *testing.T, env *serviceTestEnv, worktreeID st
 func mustGetWorktreeStatus(t *testing.T, env *serviceTestEnv) serverapi.WorktreeStatusResponse {
 	t.Helper()
 	status, err := env.service.GetWorktreeStatus(env.ctx, serverapi.WorktreeStatusRequest{
-		SessionID: env.session.Meta().SessionID,
+		SessionID: env.session.Metadata().SessionID,
 	})
 	if err != nil {
 		t.Fatalf("GetWorktreeStatus: %v", err)
@@ -38,7 +38,7 @@ func mustGetWorktreeStatus(t *testing.T, env *serviceTestEnv) serverapi.Worktree
 
 func TestWorktreeStatusInspectsOnlyTheRecordedTarget(t *testing.T) {
 	env := newServiceTestEnv(t)
-	before, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Meta().SessionID)
+	before, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget before: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestWorktreeStatusInspectsOnlyTheRecordedTarget(t *testing.T) {
 	if status.Worktree.RecordedRoot != env.workspaceRoot || status.Worktree.ObservedRoot == nil || *status.Worktree.ObservedRoot != env.workspaceRoot {
 		t.Fatalf("status worktree = %+v", status.Worktree)
 	}
-	after, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Meta().SessionID)
+	after, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget after: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestWorktreeStatusSurfacesInvalidRecordedGitMetadata(t *testing.T) {
 	}
 
 	if _, err := env.service.GetWorktreeStatus(env.ctx, serverapi.WorktreeStatusRequest{
-		SessionID: env.session.Meta().SessionID,
+		SessionID: env.session.Metadata().SessionID,
 	}); err == nil {
 		t.Fatal("GetWorktreeStatus succeeded with invalid recorded Git metadata")
 	}
@@ -149,7 +149,7 @@ func TestWorktreeStatusPropagatesGitInspectionCancellation(t *testing.T) {
 	env.service.git = NewGitInspector(canceledGitCommandRunner{})
 
 	_, err := env.service.GetWorktreeStatus(env.ctx, serverapi.WorktreeStatusRequest{
-		SessionID: env.session.Meta().SessionID,
+		SessionID: env.session.Metadata().SessionID,
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("GetWorktreeStatus error = %v, want context canceled", err)
@@ -199,7 +199,7 @@ func TestWorktreeStatusPropagatesRecordedRefInspectionCancellation(t *testing.T)
 	env.service.git = NewGitInspector(statusRefFailingGitRunner{err: context.Canceled, exitCode: -1})
 
 	_, err := env.service.GetWorktreeStatus(env.ctx, serverapi.WorktreeStatusRequest{
-		SessionID: env.session.Meta().SessionID,
+		SessionID: env.session.Metadata().SessionID,
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("GetWorktreeStatus error = %v, want context canceled", err)

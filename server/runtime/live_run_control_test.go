@@ -9,6 +9,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 )
 
 func TestLiveRunWaitIdleReturnsNoActive(t *testing.T) {
@@ -23,7 +24,7 @@ func TestLiveRunWaitIdleReturnsNoActive(t *testing.T) {
 func TestCapturedActiveRunResultSurvivesFastCompletion(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "fast final", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("fast final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
@@ -36,8 +37,8 @@ func TestCapturedActiveRunResultSurvivesFastCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitUserMessageWithHooks: %v", err)
 	}
-	if assistant.Content != "fast final" {
-		t.Fatalf("assistant content = %q, want fast final", assistant.Content)
+	if messageContent(assistant) != "fast final" {
+		t.Fatalf("assistant content = %q, want fast final", messageContent(assistant))
 	}
 	if captureErr != nil || handle == nil {
 		t.Fatalf("CaptureActiveRunResult handle=%v err=%v, want captured active run", handle, captureErr)
@@ -46,8 +47,8 @@ func TestCapturedActiveRunResultSurvivesFastCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("captured live wait after fast completion: %v", err)
 	}
-	if result.AssistantMessage.Content != "fast final" {
-		t.Fatalf("captured final = %q, want fast final", result.AssistantMessage.Content)
+	if messageContent(result.AssistantMessage) != "fast final" {
+		t.Fatalf("captured final = %q, want fast final", messageContent(result.AssistantMessage))
 	}
 }
 
@@ -87,7 +88,11 @@ func TestTerminalWorkflowQueueFailureCompletesTaggedLiveItems(t *testing.T) {
 	}
 	eng.mu.Unlock()
 
-	if !eng.failQueuedUserWorkIfTerminal() {
+	failed, failErr := eng.failQueuedUserWorkIfTerminal()
+	if failErr != nil {
+		t.Fatalf("fail terminal queued user work: %v", failErr)
+	}
+	if !failed {
 		t.Fatal("terminal workflow did not fail queued user work")
 	}
 	if _, err := handle.Wait(); !errors.Is(err, ErrLiveRunNoFinalAnswer) {
@@ -495,7 +500,7 @@ func TestWaitForActiveRunResultReturnsAssistantFinalAnswer(t *testing.T) {
 	modelEntered := make(chan struct{})
 	releaseModel := make(chan struct{})
 	client := &hookClient{
-		response: llm.Response{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "final answer", Phase: llm.MessagePhaseFinal}},
+		response: llm.Response{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("final answer"), Phase: textutil.Value(llm.MessagePhaseFinal)}},
 		beforeReturn: func() error {
 			close(modelEntered)
 			<-releaseModel
@@ -526,7 +531,7 @@ func TestWaitForActiveRunResultReturnsAssistantFinalAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("captured live run result: %v", err)
 	}
-	if waited.ResultKind != LiveRunResultAssistantFinalAnswer || waited.AssistantMessage.Content != "final answer" {
+	if waited.ResultKind != LiveRunResultAssistantFinalAnswer || messageContent(waited.AssistantMessage) != "final answer" {
 		t.Fatalf("wait result = %+v", waited)
 	}
 }
@@ -542,10 +547,9 @@ func TestCapturedActiveRunResultWaitsForTaggedQueuedDrainResult(t *testing.T) {
 	}()
 	client.waitStarted(t)
 
-	queued := eng.QueueUserMessageWithClientRequestID("steer into drain", "req-queued")
-	handle, captureErr := eng.CaptureActiveRunResult(context.Background())
-	if queued.ID == "" || captureErr != nil {
-		t.Fatalf("queued=%+v capture error=%v", queued, captureErr)
+	queued := mustQueueUserMessageWithClientRequestID(t, eng, "steer into drain", "req-queued")
+	if queued.ID == "" {
+		t.Fatalf("queued=%+v", queued)
 	}
 	handle, err := eng.CaptureActiveRunResult(context.Background())
 	if err != nil {
@@ -578,7 +582,7 @@ func TestCapturedActiveRunResultWaitsForTaggedQueuedDrainResult(t *testing.T) {
 	if waited.err != nil {
 		t.Fatalf("captured live run result: %v", waited.err)
 	}
-	if waited.result.AssistantMessage.Content != "queued work handled" {
+	if messageContent(waited.result.AssistantMessage) != "queued work handled" {
 		t.Fatalf("wait result = %+v, want queued work handled", waited.result)
 	}
 }
@@ -844,7 +848,12 @@ func TestDroppedStoppedLiveRunQueueItemsClearAutoDrainState(t *testing.T) {
 	eng.liveRun.markStoppedQueueItemsLocked(map[runtimeids.QueueItemID]struct{}{queueItemID: {}})
 	eng.liveRun.mu.Unlock()
 
-	remaining := eng.dropStoppedLiveRunQueueItems([]queuedUserSteeringIntent{{message: item}})
+	remaining, err := eng.dropStoppedLiveRunQueueItems(
+		[]queuedUserSteeringIntent{{message: item}},
+	)
+	if err != nil {
+		t.Fatalf("drop stopped live-run queue items: %v", err)
+	}
 	if len(remaining) != 0 {
 		t.Fatalf("remaining stopped drained items = %+v, want none", remaining)
 	}
@@ -853,11 +862,11 @@ func TestDroppedStoppedLiveRunQueueItemsClearAutoDrainState(t *testing.T) {
 	}
 	assertStoppedQueuedStatus(t, statuses, item.ID)
 
-	idle := eng.QueueUserMessage("idle after stopped drain")
+	idle := mustQueueUserMessage(t, eng, "idle after stopped drain")
 	if eng.hasQueuedUserAutoDrainIDs() {
 		t.Fatal("later idle queue was marked for auto-drain by stale stopped state")
 	}
-	if !eng.DiscardQueuedUserMessage(idle.ID) {
+	if !mustDiscardQueuedUserMessage(t, eng, idle.ID) {
 		t.Fatal("later idle queue was not left pending")
 	}
 }

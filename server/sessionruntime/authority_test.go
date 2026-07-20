@@ -23,6 +23,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 
 	"github.com/google/uuid"
@@ -65,7 +66,7 @@ func (c *ownerlessRetirementLLMClient) Generate(ctx context.Context, _ llm.Reque
 		}
 	}
 	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}, nil
 }
@@ -96,7 +97,7 @@ func (p *authorityLifecycleProbe) ResourceDraining(context.Context, AgentResourc
 
 func TestOpenRuntimeReturnsRunLoggerCreationError(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
@@ -241,8 +242,8 @@ func TestNewLazyWithIDUsesExactCanonicalSessionIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lazy with id: %v", err)
 	}
-	if store.Meta().SessionID != sessionID.String() {
-		t.Fatalf("session id = %q, want %q", store.Meta().SessionID, sessionID)
+	if store.Metadata().SessionID != sessionID.String() {
+		t.Fatalf("session id = %q, want %q", store.Metadata().SessionID, sessionID)
 	}
 	wantDir := filepath.Join(containerDir, sessionID.String())
 	if store.Dir() != wantDir {
@@ -731,7 +732,7 @@ func TestNewLazyStillAllocatesCanonicalSessionIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lazy session: %v", err)
 	}
-	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(store.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("parse allocated session id: %v", err)
 	}
@@ -746,7 +747,7 @@ func TestNewLazyStillAllocatesCanonicalSessionIdentity(t *testing.T) {
 
 func TestExactWorkflowExecutionCannotBeLiveAsAgentAndScript(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
@@ -801,7 +802,7 @@ func TestExactWorkflowExecutionCannotBeLiveAsAgentAndScript(t *testing.T) {
 
 func TestStaleRuntimeAttachmentReleaseCannotAffectReplacement(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
@@ -865,7 +866,7 @@ func TestStaleRuntimeAttachmentReleaseCannotAffectReplacement(t *testing.T) {
 
 func TestResourceRetentionBlocksReplacementUntilReleased(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
@@ -924,7 +925,7 @@ func TestResourceRetentionBlocksReplacementUntilReleased(t *testing.T) {
 
 func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
@@ -936,7 +937,7 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 
 	toolResponse := func(callID string) llm.Response {
 		return llm.Response{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "scoped", Phase: llm.MessagePhaseCommentary},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("scoped"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: []llm.ToolCall{{
 				ID:    callID,
 				Name:  string(toolspec.ToolExecCommand),
@@ -946,7 +947,7 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 		}
 	}
 	done := llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}
 	client := &sessionRuntimeTestLLMClient{responses: []llm.Response{
@@ -1101,7 +1102,7 @@ func TestBackgroundEventRoutesOnlyToExactCurrentResourceGeneration(t *testing.T)
 
 func TestDormantSessionStoreCallbacksAreSerialized(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
@@ -1174,8 +1175,8 @@ func TestAuthorityMaterializesCreateSessionDescriptor(t *testing.T) {
 	})
 
 	err = authority.WithSessionStore(context.Background(), descriptor, func(_ context.Context, store *session.Store) error {
-		if store.Meta().SessionID != sessionID.String() {
-			t.Fatalf("materialized session id = %q, want %q", store.Meta().SessionID, sessionID)
+		if store.Metadata().SessionID != sessionID.String() {
+			t.Fatalf("materialized session id = %q, want %q", store.Metadata().SessionID, sessionID)
 		}
 		wantDir := filepath.Join(containerDir, sessionID.String())
 		if store.Dir() != wantDir {
@@ -1194,14 +1195,14 @@ func TestAuthorityMaterializesCreateSessionDescriptor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen materialized session: %v", err)
 	}
-	if reopened.Meta().SessionID != sessionID.String() {
-		t.Fatalf("reopened session id = %q, want %q", reopened.Meta().SessionID, sessionID)
+	if reopened.Metadata().SessionID != sessionID.String() {
+		t.Fatalf("reopened session id = %q, want %q", reopened.Metadata().SessionID, sessionID)
 	}
 }
 
 func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}

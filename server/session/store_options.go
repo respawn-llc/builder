@@ -1,14 +1,28 @@
 package session
 
 import (
+	"strings"
 	"time"
 )
 
-const defaultPersistenceObserverTimeout = 2 * time.Second
+type EventLogFSyncPolicy string
+
+const (
+	EventLogFSyncNever    EventLogFSyncPolicy = "never"
+	EventLogFSyncAlways   EventLogFSyncPolicy = "always"
+	EventLogFSyncPeriodic EventLogFSyncPolicy = "periodic"
+)
+
+const (
+	defaultEventLogFSyncPolicy         = EventLogFSyncPeriodic
+	defaultEventLogFSyncIntervalWrites = 16
+	defaultPersistenceObserverTimeout  = 2 * time.Second
+)
 
 type StoreOption func(*storeOptions)
 
 type storeOptions struct {
+	eventLog        eventLogOptions
 	observer        PersistenceObserver
 	reconciler      EventLogReconciliationObserver
 	resolver        PersistedSessionResolver
@@ -17,10 +31,17 @@ type storeOptions struct {
 	now             func() time.Time
 }
 
+type eventLogOptions struct {
+	fsyncPolicy         EventLogFSyncPolicy
+	fsyncIntervalWrites int
+}
+
 func WithPersistenceObserver(observer PersistenceObserver) StoreOption {
 	return func(options *storeOptions) {
 		options.observer = observer
-		options.reconciler, _ = observer.(EventLogReconciliationObserver)
+		if reconciler, ok := observer.(EventLogReconciliationObserver); ok {
+			options.reconciler = reconciler
+		}
 	}
 }
 
@@ -48,6 +69,10 @@ func WithClock(now func() time.Time) StoreOption {
 
 func normalizeStoreOptions(options ...StoreOption) storeOptions {
 	result := storeOptions{
+		eventLog: eventLogOptions{
+			fsyncPolicy:         defaultEventLogFSyncPolicy,
+			fsyncIntervalWrites: defaultEventLogFSyncIntervalWrites,
+		},
 		observerTimeout: defaultPersistenceObserverTimeout,
 	}
 	for _, option := range options {
@@ -56,6 +81,7 @@ func normalizeStoreOptions(options ...StoreOption) storeOptions {
 		}
 		option(&result)
 	}
+	result.eventLog = normalizeEventLogOptions(result.eventLog)
 	if result.observerTimeout <= 0 {
 		result.observerTimeout = defaultPersistenceObserverTimeout
 	}
@@ -65,4 +91,21 @@ func normalizeStoreOptions(options ...StoreOption) storeOptions {
 		}
 	}
 	return result
+}
+
+func normalizeEventLogOptions(options eventLogOptions) eventLogOptions {
+	switch EventLogFSyncPolicy(strings.ToLower(strings.TrimSpace(string(options.fsyncPolicy)))) {
+	case EventLogFSyncNever:
+		options.fsyncPolicy = EventLogFSyncNever
+	case EventLogFSyncAlways:
+		options.fsyncPolicy = EventLogFSyncAlways
+	case EventLogFSyncPeriodic:
+		options.fsyncPolicy = EventLogFSyncPeriodic
+	default:
+		options.fsyncPolicy = defaultEventLogFSyncPolicy
+	}
+	if options.fsyncIntervalWrites <= 0 {
+		options.fsyncIntervalWrites = defaultEventLogFSyncIntervalWrites
+	}
+	return options
 }

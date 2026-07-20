@@ -1,7 +1,6 @@
 package session
 
 import (
-	"encoding/json"
 	"time"
 
 	"core/shared/runtimeids"
@@ -119,7 +118,7 @@ type ContinuationContext struct {
 
 // NavigationTargetSessionID returns the authoritative human-navigation target
 // for a session, preferring its immediate previous session over agent ancestry.
-func NavigationTargetSessionID(meta Meta) *runtimeids.SessionID {
+func NavigationTargetSessionID(meta Metadata) *runtimeids.SessionID {
 	source := meta.PreviousSessionID
 	if source == nil {
 		source = meta.ParentAgentSessionID
@@ -186,23 +185,6 @@ type GoalState struct {
 	UpdatedAt time.Time  `json:"updated_at"`
 }
 
-type GoalSetEvent struct {
-	Goal           GoalState `json:"goal"`
-	Actor          GoalActor `json:"actor"`
-	ReplacedGoalID string    `json:"replaced_goal_id,omitempty"`
-}
-
-type GoalStatusUpdatedEvent struct {
-	Goal           GoalState  `json:"goal"`
-	Actor          GoalActor  `json:"actor"`
-	PreviousStatus GoalStatus `json:"previous_status"`
-}
-
-type GoalClearedEvent struct {
-	Goal  GoalState `json:"goal"`
-	Actor GoalActor `json:"actor"`
-}
-
 type Meta struct {
 	SessionID                       string                           `json:"session_id"`
 	Category                        *sessioncontract.SessionCategory `json:"category,omitempty"`
@@ -250,12 +232,4 @@ type WorkflowSessionState struct {
 	RunID      string `json:"run_id,omitempty"`
 	TaskID     string `json:"task_id,omitempty"`
 	WorkflowID string `json:"workflow_id,omitempty"`
-}
-
-type Event struct {
-	Seq       int64           `json:"seq"`
-	Timestamp time.Time       `json:"timestamp"`
-	Kind      string          `json:"kind"`
-	StepID    string          `json:"step_id,omitempty"`
-	Payload   json.RawMessage `json:"payload"`
 }

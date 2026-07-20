@@ -702,9 +702,9 @@ func (e *WorkflowTaskCreateSelectionError) RPCErrorCode() int {
 	return protocol.ErrCodeWorkflowTaskCreateSelection
 }
 
-func (e *WorkflowTaskCreateSelectionError) RPCErrorData() json.RawMessage {
+func (e *WorkflowTaskCreateSelectionError) RPCErrorData() (json.RawMessage, error) {
 	if e == nil {
-		return nil
+		return nil, fmt.Errorf("workflow task create selection error is required")
 	}
 	return marshalRPCErrorData(struct {
 		Type       string                            `json:"type"`
@@ -777,9 +777,9 @@ func (e *WorkflowTaskCreateConflictError) RPCErrorCode() int {
 	return protocol.ErrCodeWorkflowTaskCreateConflict
 }
 
-func (e *WorkflowTaskCreateConflictError) RPCErrorData() json.RawMessage {
+func (e *WorkflowTaskCreateConflictError) RPCErrorData() (json.RawMessage, error) {
 	if e == nil {
-		return nil
+		return nil, fmt.Errorf("workflow task create conflict error is required")
 	}
 	return marshalRPCErrorData(struct {
 		Type   string                           `json:"type"`
@@ -1217,9 +1217,9 @@ func (e *WorkflowTaskListScopeError) RPCErrorCode() int {
 	return protocol.ErrCodeWorkflowTaskListScope
 }
 
-func (e *WorkflowTaskListScopeError) RPCErrorData() json.RawMessage {
+func (e *WorkflowTaskListScopeError) RPCErrorData() (json.RawMessage, error) {
 	if e == nil {
-		return nil
+		return nil, fmt.Errorf("workflow task list scope error is required")
 	}
 	return marshalRPCErrorData(struct {
 		Type       string                           `json:"type"`

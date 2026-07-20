@@ -438,7 +438,7 @@ func TestConfiguredDaemonEnvironmentContextUsesSessionWorkspaceRootForCWD(t *tes
 	if err != nil {
 		t.Fatalf("readStoredMessages: %v", err)
 	}
-	authoritativeWorkspace := store.Meta().WorkspaceRoot
+	authoritativeWorkspace := store.Metadata().WorkspaceRoot
 	if authoritativeWorkspace == "" {
 		t.Fatal("expected authoritative workspace root in session metadata")
 	}
@@ -448,8 +448,10 @@ func TestConfiguredDaemonEnvironmentContextUsesSessionWorkspaceRootForCWD(t *tes
 		t.Fatalf("os.Getwd: %v", err)
 	}
 	for _, msg := range messages {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeEnvironment {
-			envContent = msg.Content
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeEnvironment {
+			if msg.Content != nil {
+				envContent = *msg.Content
+			}
 			break
 		}
 	}

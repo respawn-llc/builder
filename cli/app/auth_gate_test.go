@@ -219,7 +219,7 @@ func TestResolveSessionActionLogoutUsesBootstrapAuthInteractor(t *testing.T) {
 		ctx,
 		&testEmbeddedServer{cfg: config.App{PersistenceRoot: root, Settings: config.Settings{Model: "gpt-5"}}, authManager: mgr},
 		interactor,
-		store.Meta().SessionID,
+		store.Metadata().SessionID,
 		UITransition{Action: UIActionLogout},
 	)
 	if err != nil {
@@ -228,7 +228,7 @@ func TestResolveSessionActionLogoutUsesBootstrapAuthInteractor(t *testing.T) {
 	if pickerCalls != 1 {
 		t.Fatalf("expected auth picker to be called once, got %d", pickerCalls)
 	}
-	if got := requireSessionOpenDestination(t, resolved); got != store.Meta().SessionID {
+	if got := requireSessionOpenDestination(t, resolved); got != store.Metadata().SessionID {
 		t.Fatalf("expected session to continue in place, got %q", got)
 	}
 	if resolved.Kind() != serverapi.SessionDirectiveLaunch {

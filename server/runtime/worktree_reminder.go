@@ -8,6 +8,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/clientui"
+	"core/shared/textutil"
 )
 
 func (e *Engine) SteerWorktreeTransitionFailure(outcome clientui.WorktreeTransitionOutcome) error {
@@ -20,18 +21,18 @@ func (e *Engine) SteerWorktreeTransitionFailure(outcome clientui.WorktreeTransit
 	diagnostic := strings.TrimSpace(outcome.Failure.Diagnostic)
 	return e.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 		Role:        llm.RoleDeveloper,
-		MessageType: llm.MessageTypeErrorFeedback,
-		Content: fmt.Sprintf(
+		MessageType: textutil.Value(llm.MessageTypeErrorFeedback),
+		Content: textutil.Value(fmt.Sprintf(
 			"Scheduled worktree %s transition %s failed: %s",
 			outcome.Transition,
 			outcome.OperationID.String(),
 			diagnostic,
-		),
+		)),
 	}}))
 }
 
 func (e *Engine) materializePendingWorktreeReminder(stepID string) error {
-	state := session.CloneWorktreeReminderState(e.store.Meta().WorktreeReminder)
+	state := session.CloneWorktreeReminderState(e.store.Metadata().WorktreeReminder)
 	if state == nil {
 		return nil
 	}

@@ -18,6 +18,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -128,7 +129,7 @@ func TestWorkflowProviderClientPreservesLockedVerbosityAcrossConfigChanges(t *te
 			}
 			request := llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 				Model: "operator-alias",
-				Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: "hello"}}),
+				Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("hello")}}),
 			}
 			if _, err := client.Generate(context.Background(), request); err != nil {
 				t.Fatalf("generate: %v", err)
@@ -180,7 +181,7 @@ func createWorkflowFactorySession(t *testing.T) *session.Store {
 
 func workflowFactorySessionSnapshotForStore(t *testing.T, store *session.Store) workflowFactorySessionSnapshot {
 	t.Helper()
-	meta := store.Meta()
+	meta := store.Metadata()
 	sessionID, err := runtimeids.ParseSessionID(meta.SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)

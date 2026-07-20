@@ -16,6 +16,7 @@ import (
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -25,12 +26,12 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working", Phase: llm.MessagePhaseCommentary},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: []llm.ToolCall{{ID: "call_shell_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -93,8 +94,8 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 	if result.err != nil {
 		t.Fatalf("submit: %v", result.err)
 	}
-	if result.assistant.Content != "done" {
-		t.Fatalf("assistant content = %q, want done", result.assistant.Content)
+	if messageContent(result.assistant) != "done" {
+		t.Fatalf("assistant content = %q, want done", messageContent(result.assistant))
 	}
 
 	client.mu.Lock()
@@ -106,7 +107,7 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 
 	containsNotice := func(req llm.Request, shellID string) bool {
 		for _, msg := range requestMessages(req) {
-			if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeBackgroundNotice && strings.Contains(msg.Content, "Background shell "+shellID+" completed.") {
+			if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeBackgroundNotice && strings.Contains(messageContent(msg), "Background shell "+shellID+" completed.") {
 				return true
 			}
 		}
@@ -158,7 +159,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "start background", Phase: llm.MessagePhaseCommentary},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("start background"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: []llm.ToolCall{{
 				ID:    "call_exec_1",
 				Name:  string(toolspec.ToolExecCommand),
@@ -167,7 +168,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "wait for it", Phase: llm.MessagePhaseCommentary},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("wait for it"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: []llm.ToolCall{{
 				ID:    "call_poll_1",
 				Name:  string(toolspec.ToolWriteStdin),
@@ -176,16 +177,16 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "unexpected extra turn", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("unexpected extra turn"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
 	registry := tools.NewRegistry(
-		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(store.Meta().WorkspaceRoot, 16_000, manager, store.Meta().SessionID)},
+		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(store.Metadata().WorkspaceRoot, 16_000, manager, store.Metadata().SessionID)},
 		tools.HandlerRegistration{ID: toolspec.ToolWriteStdin, Handler: shelltool.NewWriteStdinTool(16_000, manager)},
 	)
 	eng := mustNewTestEngine(t, store, client, registry, Config{Model: "gpt-5"})
@@ -213,15 +214,15 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 				return &out
 			}(),
 			NoticeSuppressed: evt.NoticeSuppressed,
-		}, strings.TrimSpace(evt.Snapshot.OwnerSessionID) == store.Meta().SessionID && !evt.NoticeSuppressed)
+		}, strings.TrimSpace(evt.Snapshot.OwnerSessionID) == store.Metadata().SessionID && !evt.NoticeSuppressed)
 	})
 
 	assistant, err := eng.SubmitUserMessage(context.Background(), "run and wait")
 	if err != nil {
 		t.Fatalf("submit user message: %v", err)
 	}
-	if assistant.Content != "done" {
-		t.Fatalf("assistant content = %q, want done", assistant.Content)
+	if messageContent(assistant) != "done" {
+		t.Fatalf("assistant content = %q, want done", messageContent(assistant))
 	}
 	time.Sleep(50 * time.Millisecond)
 
@@ -232,7 +233,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 		t.Fatalf("model call count = %d, want 3", callCount)
 	}
 	for _, msg := range eng.transcriptRuntimeState().SnapshotMessages() {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeBackgroundNotice {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeBackgroundNotice {
 			t.Fatalf("did not expect background notice after write_stdin harvested completion: %+v", msg)
 		}
 	}
@@ -246,7 +247,7 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 	sessionDir := store.Dir()
 
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 
@@ -272,8 +273,8 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 	})
 
 	msg, err := eng.SubmitUserMessage(context.Background(), "hi")
-	if msg.Content != "done" {
-		t.Fatalf("assistant content = %q, want done", msg.Content)
+	if messageContent(msg) != "done" {
+		t.Fatalf("assistant content = %q, want done", messageContent(msg))
 	}
 	if !errors.Is(err, errPendingModelRecoveryClear) {
 		t.Fatalf("expected errPendingModelRecoveryClear, got %v", err)
@@ -300,14 +301,14 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 	if openErr != nil {
 		t.Fatalf("re-open session store: %v", openErr)
 	}
-	if reopened.Meta().PendingModelRecovery != nil {
-		t.Fatalf("committed pending model recovery clear retained retry ownership: %+v", reopened.Meta().PendingModelRecovery)
+	if reopened.Metadata().PendingModelRecovery != nil {
+		t.Fatalf("committed pending model recovery clear retained retry ownership: %+v", reopened.Metadata().PendingModelRecovery)
 	}
 }
 
 func TestNewConsumesPendingModelRecoveryOnReopen(t *testing.T) {
 	store := mustCreateTestSession(t)
-	if _, _, err := store.AppendEvent("legacy-step", "message", llm.Message{Role: llm.RoleUser, Content: "hello"}); err != nil {
+	if _, _, err := appendTestEvent(t, store, "legacy-step", llm.Message{Role: llm.RoleUser, Content: textutil.Value("hello")}); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "recovery-1", StepID: "legacy-step", Reason: "test", CreatedAt: time.Now().UTC()}); err != nil {
@@ -319,7 +320,7 @@ func TestNewConsumesPendingModelRecoveryOnReopen(t *testing.T) {
 		t.Fatalf("re-open store: %v", err)
 	}
 	restored := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if reopenedStore.Meta().PendingModelRecovery != nil {
+	if reopenedStore.Metadata().PendingModelRecovery != nil {
 		t.Fatal("expected reopen path to clear pending model recovery")
 	}
 	messages := restored.transcriptRuntimeState().SnapshotMessages()
@@ -327,28 +328,27 @@ func TestNewConsumesPendingModelRecoveryOnReopen(t *testing.T) {
 		t.Fatalf("expected original user message plus interruption marker, got %+v", messages)
 	}
 	last := messages[len(messages)-1]
-	if last.Role != llm.RoleDeveloper || last.MessageType != llm.MessageTypeInterruption || last.Content != interruptMessage {
+	if last.Role != llm.RoleDeveloper || last.MessageType == nil || *last.MessageType != llm.MessageTypeInterruption || messageContent(last) != interruptMessage {
 		t.Fatalf("expected interruption developer message, got %+v", last)
 	}
-	events, err := sessiontest.CollectEvents(reopenedStore)
+	events, err := collectTestEventRecords(reopenedStore)
 	if err != nil {
 		t.Fatalf("read reopened events: %v", err)
 	}
 	seenInterruptionEvent := false
-	seenConsumedEvent := false
 	for _, evt := range events {
 		switch evt.Kind {
 		case "message":
-			var msg llm.Message
-			if err := json.Unmarshal(evt.Payload, &msg); err == nil && msg.MessageType == llm.MessageTypeInterruption {
+			msg := persistedMessageForTest(t, evt)
+			if msg.MessageType != nil && *msg.MessageType == llm.MessageTypeInterruption {
 				seenInterruptionEvent = true
 			}
-		case "model_recovery_consumed":
-			seenConsumedEvent = true
+		case "model_recovery_pending", "model_recovery_consumed", "model_recovery_discarded":
+			t.Fatalf("recovery metadata mutation emitted readerless event: %+v", evt)
 		}
 	}
-	if !seenInterruptionEvent || !seenConsumedEvent {
-		t.Fatalf("expected persisted interruption and recovery-consumed events on reopen, got %+v", events)
+	if !seenInterruptionEvent {
+		t.Fatalf("expected persisted interruption transcript event on reopen, got %+v", events)
 	}
 }
 
@@ -358,7 +358,7 @@ func TestNewPublishesRecoveredDanglingToolStartOnReopen(t *testing.T) {
 		callID = "call-recovered-after-restart"
 	)
 	store := mustCreateTestSession(t)
-	if _, _, err := store.AppendEvent(stepID, "message", llm.Message{
+	if _, _, err := appendTestEvent(t, store, stepID, llm.Message{
 		Role: llm.RoleAssistant,
 		ToolCalls: []llm.ToolCall{{
 			ID:   callID,
@@ -402,10 +402,10 @@ func TestNewPublishesRecoveredDanglingToolStartOnReopen(t *testing.T) {
 
 func TestNewConsumesPendingModelRecoveryWithoutMarkerWhenStepCompleted(t *testing.T) {
 	store := mustCreateTestSession(t)
-	if _, _, err := store.AppendEvent("completed-step", "message", llm.Message{Role: llm.RoleUser, Content: "hello"}); err != nil {
+	if _, _, err := appendTestEvent(t, store, "completed-step", llm.Message{Role: llm.RoleUser, Content: textutil.Value("hello")}); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
-	if _, _, err := store.AppendEvent("completed-step", "message", llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal}); err != nil {
+	if _, _, err := appendTestEvent(t, store, "completed-step", llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)}); err != nil {
 		t.Fatalf("append terminal assistant message: %v", err)
 	}
 	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "recovery-completed", StepID: "completed-step", Reason: "test", CreatedAt: time.Now().UTC()}); err != nil {
@@ -417,11 +417,11 @@ func TestNewConsumesPendingModelRecoveryWithoutMarkerWhenStepCompleted(t *testin
 		t.Fatalf("re-open store: %v", err)
 	}
 	restored := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	if reopenedStore.Meta().PendingModelRecovery != nil {
+	if reopenedStore.Metadata().PendingModelRecovery != nil {
 		t.Fatal("expected reopen path to clear pending model recovery")
 	}
 	for _, msg := range restored.transcriptRuntimeState().SnapshotMessages() {
-		if msg.MessageType == llm.MessageTypeInterruption {
+		if msg.MessageType != nil && *msg.MessageType == llm.MessageTypeInterruption {
 			t.Fatalf("did not expect interruption marker for completed step, messages=%+v", restored.transcriptRuntimeState().SnapshotMessages())
 		}
 	}
@@ -438,26 +438,20 @@ func TestNewDiscardsPendingModelRecoveryWithoutConcreteStep(t *testing.T) {
 		t.Fatalf("re-open store: %v", err)
 	}
 	restored := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	if reopenedStore.Meta().PendingModelRecovery != nil {
+	if reopenedStore.Metadata().PendingModelRecovery != nil {
 		t.Fatal("expected reopen path to clear pending model recovery")
 	}
 	for _, msg := range restored.transcriptRuntimeState().SnapshotMessages() {
-		if msg.MessageType == llm.MessageTypeInterruption {
+		if msg.MessageType != nil && *msg.MessageType == llm.MessageTypeInterruption {
 			t.Fatalf("did not expect interruption marker without concrete step, messages=%+v", restored.transcriptRuntimeState().SnapshotMessages())
 		}
 	}
-	events, err := sessiontest.CollectEvents(reopenedStore)
+	events, err := collectTestEventRecords(reopenedStore)
 	if err != nil {
 		t.Fatalf("read reopened events: %v", err)
 	}
-	seenDiscard := false
-	for _, evt := range events {
-		if evt.Kind == "model_recovery_discarded" {
-			seenDiscard = true
-		}
-	}
-	if !seenDiscard {
-		t.Fatalf("expected observable recovery discard event, got %+v", events)
+	if len(events) != 0 {
+		t.Fatalf("metadata-only recovery discard emitted events: %+v", events)
 	}
 }
 
@@ -499,7 +493,7 @@ func TestReopenCarriesInterruptedApprovalBackedPatchToolAttemptIntoNextModelRequ
 		ID:          "call_patch",
 		Name:        string(toolspec.ToolPatch),
 		Custom:      true,
-		CustomInput: "*** Begin Patch\n*** Add File: ../outside.txt\n+hello\n*** End Patch\n",
+		CustomInput: textutil.Value("*** Begin Patch\n*** Add File: ../outside.txt\n+hello\n*** End Patch\n"),
 	})
 }
 
@@ -507,10 +501,10 @@ func testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t *testing.T, c
 	t.Helper()
 
 	store := mustCreateTestSession(t)
-	if _, _, err := store.AppendEvent("legacy-step", "message", llm.Message{Role: llm.RoleUser, Content: "do the thing"}); err != nil {
+	if _, _, err := appendTestEvent(t, store, "legacy-step", llm.Message{Role: llm.RoleUser, Content: textutil.Value("do the thing")}); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
-	if _, _, err := store.AppendEvent("legacy-step", "message", llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}); err != nil {
+	if _, _, err := appendTestEvent(t, store, "legacy-step", llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}); err != nil {
 		t.Fatalf("append assistant tool call message: %v", err)
 	}
 	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "recovery-tool", StepID: "legacy-step", Reason: "test", CreatedAt: time.Now().UTC()}); err != nil {
@@ -522,11 +516,11 @@ func testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t *testing.T, c
 		t.Fatalf("re-open store: %v", err)
 	}
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "decided anew", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("decided anew"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	restored := mustNewTestEngine(t, reopenedStore, client, tools.NewRegistry(), Config{Model: "gpt-5"})
-	if reopenedStore.Meta().PendingModelRecovery != nil {
+	if reopenedStore.Metadata().PendingModelRecovery != nil {
 		t.Fatal("expected reopen path to clear pending model recovery")
 	}
 
@@ -534,8 +528,8 @@ func testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t *testing.T, c
 	if err != nil {
 		t.Fatalf("submit after reopen: %v", err)
 	}
-	if msg.Content != "decided anew" {
-		t.Fatalf("assistant content = %q, want decided anew", msg.Content)
+	if messageContent(msg) != "decided anew" {
+		t.Fatalf("assistant content = %q, want decided anew", messageContent(msg))
 	}
 	if len(client.calls) != 1 {
 		t.Fatalf("expected one resumed model call, got %d", len(client.calls))
@@ -547,13 +541,13 @@ func testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t *testing.T, c
 	)
 	for _, item := range client.calls[0].Items {
 		switch {
-		case item.Type == llm.ResponseItemTypeFunctionCall && item.CallID == call.ID && item.Name == call.Name:
+		case item.Type == llm.ResponseItemTypeFunctionCall && item.CallID != nil && *item.CallID == call.ID && item.Name != nil && *item.Name == call.Name:
 			foundPriorAttempt = true
-		case item.Type == llm.ResponseItemTypeCustomToolCall && item.CallID == call.ID && item.Name == call.Name:
+		case item.Type == llm.ResponseItemTypeCustomToolCall && item.CallID != nil && *item.CallID == call.ID && item.Name != nil && *item.Name == call.Name:
 			foundPriorAttempt = true
-		case item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID == call.ID:
+		case item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID != nil && *item.CallID == call.ID:
 			foundUnexpectedReply = true
-		case item.Type == llm.ResponseItemTypeCustomToolOutput && item.CallID == call.ID:
+		case item.Type == llm.ResponseItemTypeCustomToolOutput && item.CallID != nil && *item.CallID == call.ID:
 			foundUnexpectedReply = true
 		}
 	}
@@ -566,7 +560,7 @@ func testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t *testing.T, c
 
 	seenInterruption := false
 	for _, reqMsg := range requestMessages(client.calls[0]) {
-		if reqMsg.Role == llm.RoleDeveloper && reqMsg.MessageType == llm.MessageTypeInterruption && reqMsg.Content == interruptMessage {
+		if reqMsg.Role == llm.RoleDeveloper && reqMsg.MessageType != nil && *reqMsg.MessageType == llm.MessageTypeInterruption && messageContent(reqMsg) == interruptMessage {
 			seenInterruption = true
 			break
 		}
@@ -598,7 +592,7 @@ func TestSubmitUserShellCommandPersistsDeveloperNoticeAndToolEntries(t *testing.
 	for _, msg := range messages {
 		switch msg.Role {
 		case llm.RoleDeveloper:
-			if strings.Contains(msg.Content, "User ran shell command directly:") {
+			if strings.Contains(messageContent(msg), "User ran shell command directly:") {
 				t.Fatalf("unexpected duplicate developer notice for user shell command, msg=%+v", msg)
 			}
 		case llm.RoleAssistant:
@@ -606,7 +600,7 @@ func TestSubmitUserShellCommandPersistsDeveloperNoticeAndToolEntries(t *testing.
 				foundAssistantToolCall = true
 			}
 		case llm.RoleTool:
-			if msg.Name == string(toolspec.ToolExecCommand) && strings.TrimSpace(msg.Content) != "" {
+			if msg.Name != nil && *msg.Name == string(toolspec.ToolExecCommand) && strings.TrimSpace(messageContent(msg)) != "" {
 				foundToolOutput = true
 			}
 		}
@@ -640,7 +634,7 @@ func TestSubmitUserShellCommandPersistsDeveloperNoticeAndToolEntries(t *testing.
 func TestSubmitUserShellCommandReturnsUnknownToolErrorWhenShellNotRegistered(t *testing.T) {
 	store := mustCreateTestSession(t)
 
-	eng, err := New(store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng, err := New(store, mustMaterializeTestEventLog(t, store), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 
 	result, err := eng.SubmitUserShellCommand(context.Background(), "pwd")
 	if !errors.Is(err, errUnknownTool) {
@@ -665,7 +659,7 @@ func TestSubmitUserShellCommandReturnsUnknownToolErrorWhenShellNotRegistered(t *
 		if msg.Role != llm.RoleTool {
 			continue
 		}
-		if msg.Name != string(toolspec.ToolExecCommand) {
+		if msg.Name == nil || *msg.Name != string(toolspec.ToolExecCommand) {
 			continue
 		}
 		foundToolOutput = true
@@ -688,7 +682,7 @@ func TestParallelToolsReturnDeclaredOrder(t *testing.T) {
 
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working")},
 			ToolCalls: []llm.ToolCall{
 				{ID: "a", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
 				{ID: "b", Name: string(toolspec.ToolPatch), Input: json.RawMessage(`{}`)},
@@ -696,7 +690,7 @@ func TestParallelToolsReturnDeclaredOrder(t *testing.T) {
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -707,7 +701,7 @@ func TestParallelToolsReturnDeclaredOrder(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 
-	events, err := sessiontest.CollectEvents(store)
+	events, err := collectTestEventRecords(store)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -717,10 +711,7 @@ func TestParallelToolsReturnDeclaredOrder(t *testing.T) {
 		if evt.Kind != "message" {
 			continue
 		}
-		var msg llm.Message
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			t.Fatalf("decode message: %v", err)
-		}
+		msg := persistedMessageForTest(t, evt)
 		if msg.Role == llm.RoleTool {
 			toolMessages = append(toolMessages, msg)
 		}
@@ -729,8 +720,9 @@ func TestParallelToolsReturnDeclaredOrder(t *testing.T) {
 	if len(toolMessages) != 2 {
 		t.Fatalf("tool message count = %d, want 2", len(toolMessages))
 	}
-	if toolMessages[0].ToolCallID != "a" || toolMessages[1].ToolCallID != "b" {
-		t.Fatalf("tool order mismatch: first=%s second=%s", toolMessages[0].ToolCallID, toolMessages[1].ToolCallID)
+	if toolMessages[0].ToolCallID == nil || *toolMessages[0].ToolCallID != "a" ||
+		toolMessages[1].ToolCallID == nil || *toolMessages[1].ToolCallID != "b" {
+		t.Fatalf("tool order mismatch: first=%v second=%v", toolMessages[0].ToolCallID, toolMessages[1].ToolCallID)
 	}
 
 	if len(client.calls) < 2 {
@@ -757,7 +749,7 @@ func TestParallelToolCompletionAppearsInChatSnapshotBeforeAllToolsFinish(t *test
 
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working")},
 			ToolCalls: []llm.ToolCall{
 				{ID: "a", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
 				{ID: "b", Name: string(toolspec.ToolPatch), Input: json.RawMessage(`{}`)},
@@ -765,7 +757,7 @@ func TestParallelToolCompletionAppearsInChatSnapshotBeforeAllToolsFinish(t *test
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -952,14 +944,14 @@ func TestPersistedAssistantToolCallsContainNoUIDisplayMarkers(t *testing.T) {
 
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working")},
 			ToolCalls: []llm.ToolCall{
 				{ID: "a", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
 			},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -970,7 +962,7 @@ func TestPersistedAssistantToolCallsContainNoUIDisplayMarkers(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 
-	events, err := sessiontest.CollectEvents(store)
+	events, err := collectTestEventRecords(store)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -980,10 +972,7 @@ func TestPersistedAssistantToolCallsContainNoUIDisplayMarkers(t *testing.T) {
 		if evt.Kind != "message" {
 			continue
 		}
-		var msg llm.Message
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			t.Fatalf("decode message: %v", err)
-		}
+		msg := persistedMessageForTest(t, evt)
 		if msg.Role != llm.RoleAssistant || len(msg.ToolCalls) == 0 {
 			continue
 		}

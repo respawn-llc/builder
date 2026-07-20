@@ -2,7 +2,6 @@ package startup
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -16,10 +15,8 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	"core/server/authservice"
-	"core/server/llm"
 	"core/server/metadata"
 	"core/server/session"
-	"core/server/session/sessiontest"
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -27,6 +24,10 @@ import (
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 )
+
+func startupStringPointer(value string) *string {
+	return &value
+}
 
 func registerEmbeddedWorkspace(t *testing.T, workspace string) {
 	t.Helper()
@@ -76,7 +77,14 @@ func createEmbeddedProjectSession(t *testing.T, server *EmbeddedServer, workspac
 	}
 	if err := metadataStore.ImportSessionSnapshot(context.Background(), session.PersistedStoreSnapshot{
 		SessionDir: store.Dir(),
-		Meta:       store.Meta(),
+		Meta: session.Meta{
+			SessionID:          store.Metadata().SessionID,
+			Category:           store.Metadata().Category,
+			WorkspaceRoot:      store.Metadata().WorkspaceRoot,
+			WorkspaceContainer: store.Metadata().WorkspaceContainer,
+			CreatedAt:          store.Metadata().CreatedAt,
+			UpdatedAt:          store.Metadata().UpdatedAt,
+		},
 	}); err != nil {
 		t.Fatalf("import project session snapshot: %v", err)
 	}
@@ -194,29 +202,36 @@ func TestRunPromptClientRunsLoopbackThroughEmbeddedServer(t *testing.T) {
 	}
 
 	store := openEmbeddedSessionByID(t, server, response.SessionID)
-	if store.Meta().Continuation == nil || store.Meta().Continuation.OpenAIBaseURL != responseServer.URL {
-		t.Fatalf("unexpected continuation context: %+v", store.Meta().Continuation)
+	if store.Metadata().Continuation == nil || store.Metadata().Continuation.OpenAIBaseURL != responseServer.URL {
+		t.Fatalf("unexpected continuation context: %+v", store.Metadata().Continuation)
 	}
-	events, err := sessiontest.CollectEvents(store)
+	eventLog, err := store.MaterializeEventLog()
 	if err != nil {
-		t.Fatalf("read events: %v", err)
+		t.Fatalf("materialize event log: %v", err)
 	}
 	var sawUser bool
 	var sawAssistant bool
-	for _, evt := range events {
-		if evt.Kind != "message" {
-			continue
+	if err := eventLog.WalkRecords(func(record session.EventRecord) error {
+		payload, err := record.Payload()
+		if err != nil {
+			return err
 		}
-		var msg llm.Message
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			t.Fatalf("unmarshal message: %v", err)
+		msg, ok := payload.(session.MessageRecord)
+		if !ok {
+			return nil
 		}
-		if msg.Role == llm.RoleUser && msg.Content == "hello from user" {
+		if msg.Content == nil {
+			return nil
+		}
+		if msg.Role == session.MessageRoleUser && *msg.Content == "hello from user" {
 			sawUser = true
 		}
-		if msg.Role == llm.RoleAssistant && msg.Content == "hello from embedded" {
+		if msg.Role == session.MessageRoleAssistant && *msg.Content == "hello from embedded" {
 			sawAssistant = true
 		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk typed event records: %v", err)
 	}
 	if !sawUser || !sawAssistant {
 		t.Fatalf("expected persisted user and assistant messages, sawUser=%t sawAssistant=%t", sawUser, sawAssistant)
@@ -265,8 +280,15 @@ func TestSessionViewClientReadsDormantSessionByIDWithoutMutatingFiles(t *testing
 	if err := store.SetName("incident triage"); err != nil {
 		t.Fatalf("set name: %v", err)
 	}
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "hello"}); err != nil {
-		t.Fatalf("append user message: %v", err)
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	if _, receipt, err := eventLog.AppendRecord(startupStringPointer("step-1"), session.MessageRecord{
+		Role:    session.MessageRoleUser,
+		Content: startupStringPointer("hello"),
+	}); err != nil || !receipt.Committed {
+		t.Fatalf("append typed user message: receipt=%+v error=%v", receipt, err)
 	}
 
 	eventsPath := filepath.Join(store.Dir(), "events.jsonl")
@@ -275,7 +297,7 @@ func TestSessionViewClientReadsDormantSessionByIDWithoutMutatingFiles(t *testing
 		t.Fatalf("read events file before: %v", err)
 	}
 
-	resp, err := server.SessionViewClient().GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
+	resp, err := server.SessionViewClient().GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Metadata().SessionID})
 	if err != nil {
 		t.Fatalf("get session main view: %v", err)
 	}

@@ -26,7 +26,7 @@ func TestEnterWorktreePreflightObservesCancellationWhileWorkspaceMutationLocked(
 	go func() {
 		_, err := env.service.EnterWorktree(ctx, serverapi.WorktreeEnterRequest{
 			OperationID: serverapi.NewWorktreeOperationID(),
-			SessionID:   env.session.Meta().SessionID,
+			SessionID:   env.session.Metadata().SessionID,
 			Selector:    "main",
 		})
 		result <- err
@@ -60,7 +60,7 @@ func TestEnterWorktreeRejectsInvalidSelectorsBeforeScheduling(t *testing.T) {
 	} {
 		_, err := env.service.EnterWorktree(env.ctx, serverapi.WorktreeEnterRequest{
 			OperationID: serverapi.NewWorktreeOperationID(),
-			SessionID:   env.session.Meta().SessionID,
+			SessionID:   env.session.Metadata().SessionID,
 			Selector:    testCase.selector,
 		})
 		var selectorErr *serverapi.WorktreeSelectorError
@@ -75,7 +75,7 @@ func TestModelStepEnterRejectsInactiveExactExecution(t *testing.T) {
 	createExternalWorktree(t, env, "feature/model-step-enter")
 	ack, err := env.service.EnterWorktree(env.ctx, serverapi.WorktreeEnterRequest{
 		OperationID: serverapi.NewWorktreeOperationID(),
-		SessionID:   env.session.Meta().SessionID,
+		SessionID:   env.session.Metadata().SessionID,
 		Selector:    "feature/model-step-enter",
 		Origin: &serverapi.RuntimeStepOrigin{
 			RunID:  "018fdd67-89ab-4cde-8123-456789abc001",

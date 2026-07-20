@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"core/server/llm"
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/shared/clientui"
@@ -22,43 +21,33 @@ func TestServiceDormantTranscriptPagesPreserveRollbackLocatorAcrossCandidateFree
 	)
 	dir := t.TempDir()
 	store, _ := newSessionViewParentAgentChild(t, dir, "ws", dir)
-	appended, err := store.AppendEventWithEndByteCursor(
-		userStepID,
-		"message",
-		llm.Message{Role: llm.RoleUser, Content: "candidate before dormant compactions"},
-	)
-	if err != nil {
-		t.Fatalf("append rollback candidate: %v", err)
-	}
+	appended := appendSessionViewRecordWithCursor(t, store, userStepID, session.MessageRecord{
+		Role:    session.MessageRoleUser,
+		Content: sessionViewStringPointer("candidate before dormant compactions"),
+	})
 	if appended.EndByteCursor == nil {
 		t.Fatal("rollback candidate append did not return a page cursor")
 	}
 	locator := rollbacktarget.CandidateLocator{
-		UserMessageSeq:       appended.Event.Seq,
+		UserMessageSeq:       appended.Record.Seq(),
 		CandidatePageEndByte: *appended.EndByteCursor,
 	}
 	for index := 0; index < 3; index++ {
-		if _, _, err := store.AppendEvent(compactStepID, "history_replaced", map[string]any{
-			"engine":                    "local",
-			"latest_rollback_candidate": locator,
-			"items": llm.ItemsFromMessages([]llm.Message{{
-				Role:        llm.RoleUser,
-				MessageType: llm.MessageTypeCompactionSummary,
-				Content:     "candidate-free summary",
-			}}),
-		}); err != nil {
-			t.Fatalf("append history replacement %d: %v", index, err)
-		}
+		appendSessionViewHistoryReplacement(t, store, compactStepID, session.HistoryReplacementRecord{
+			Engine:                  "local",
+			Mode:                    session.CompactionModeAuto,
+			LatestRollbackCandidate: &locator,
+		})
 	}
 	dormant := NewService(newTestSessionResolver(store), nil, nil, nil)
 
-	dormantNewest := mustTranscriptPage(t, dormant, store.Meta().SessionID, nil, nil)
+	dormantNewest := mustTranscriptPage(t, dormant, store.Metadata().SessionID, nil, nil)
 	if dormantNewest.LatestRollbackCandidate == nil || *dormantNewest.LatestRollbackCandidate != locator {
 		t.Fatalf("dormant newest locator = %#v, want %#v", dormantNewest.LatestRollbackCandidate, locator)
 	}
 
 	cursor := locator.CandidatePageEndByte
-	dormantCandidate := mustTranscriptPage(t, dormant, store.Meta().SessionID, &cursor, nil)
+	dormantCandidate := mustTranscriptPage(t, dormant, store.Metadata().SessionID, &cursor, nil)
 	if dormantCandidate.LatestRollbackCandidate == nil || *dormantCandidate.LatestRollbackCandidate != locator {
 		t.Fatalf("dormant candidate-page locator = %#v, want %#v", dormantCandidate.LatestRollbackCandidate, locator)
 	}
@@ -74,7 +63,7 @@ func TestServiceDormantTranscriptPagesPreserveRollbackLocatorAcrossCandidateFree
 		t.Fatalf("dormant direct candidate page did not contain rollback target %q", wantTarget)
 	}
 
-	dormantNewer := mustTranscriptPage(t, dormant, store.Meta().SessionID, nil, &cursor)
+	dormantNewer := mustTranscriptPage(t, dormant, store.Metadata().SessionID, nil, &cursor)
 	if dormantNewer.LatestRollbackCandidate == nil || *dormantNewer.LatestRollbackCandidate != locator {
 		t.Fatalf("dormant newer-page locator = %#v, want %#v", dormantNewer.LatestRollbackCandidate, locator)
 	}
@@ -85,9 +74,9 @@ func TestServiceTranscriptReadsHonorCanceledContext(t *testing.T) {
 	service := NewService(newTestSessionResolver(store), nil, nil, nil)
 	cursor := int64(1)
 	requests := map[string]serverapi.SessionTranscriptPageRequest{
-		"newest page": {SessionID: store.Meta().SessionID},
-		"older page":  {SessionID: store.Meta().SessionID, Cursor: &cursor},
-		"newer page":  {SessionID: store.Meta().SessionID, NewerCursor: &cursor},
+		"newest page": {SessionID: store.Metadata().SessionID},
+		"older page":  {SessionID: store.Metadata().SessionID, Cursor: &cursor},
+		"newer page":  {SessionID: store.Metadata().SessionID, NewerCursor: &cursor},
 	}
 	for name, request := range requests {
 		t.Run(name, func(t *testing.T) {
@@ -100,7 +89,7 @@ func TestServiceTranscriptReadsHonorCanceledContext(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := service.SessionTranscriptTailEntries(ctx, store.Meta().SessionID); !errors.Is(err, context.Canceled) {
+	if _, err := service.SessionTranscriptTailEntries(ctx, store.Metadata().SessionID); !errors.Is(err, context.Canceled) {
 		t.Fatalf("tail error = %v, want context canceled", err)
 	}
 }
@@ -110,10 +99,10 @@ func TestLiveRuntimeSnapshotReturnsActiveRunWithoutSessionStore(t *testing.T) {
 	live := NewService(nil, fixture.activity, fixture.authority, nil)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := live.GetSessionMainView(ctx, serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID}); !errors.Is(err, context.Canceled) {
+	if _, err := live.GetSessionMainView(ctx, serverapi.SessionMainViewRequest{SessionID: store.Metadata().SessionID}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled live main-view error = %v, want context canceled", err)
 	}
-	liveMain := mustMainView(t, live, store.Meta().SessionID)
+	liveMain := mustMainView(t, live, store.Metadata().SessionID)
 	if liveMain.Activity.State != clientui.RuntimeActivityRunning {
 		t.Fatalf("expected running activity, got %+v", liveMain.Activity)
 	}

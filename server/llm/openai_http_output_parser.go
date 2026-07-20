@@ -154,14 +154,18 @@ func (messageOutputItemParser) Parse(item responses.ResponseOutputItemUnion, pro
 	}
 	text := strings.Join(textParts, "")
 	phase := providerPhaseProjection(providerPhase)
+	var typedPhase *MessagePhase
+	if phase != "" {
+		typedPhase = textutil.Value(phase)
+	}
 	raw := json.RawMessage(item.RawJSON())
 	parsed := parsedResponseOutputItem{
 		CanonicalItems: []ResponseItem{{
 			Type:    ResponseItemTypeMessage,
-			Role:    role,
-			Phase:   phase,
-			ID:      item.ID,
-			Content: text,
+			Role:    textutil.Value(role),
+			Phase:   typedPhase,
+			ID:      textutil.OptionalExactString(item.ID),
+			Content: textutil.Value(text),
 			Raw:     raw,
 		}},
 	}
@@ -185,9 +189,9 @@ func (functionCallOutputItemParser) Parse(item responses.ResponseOutputItemUnion
 	return parsedResponseOutputItem{
 		CanonicalItems: []ResponseItem{{
 			Type:      ResponseItemTypeFunctionCall,
-			ID:        strings.TrimSpace(call.ID),
-			CallID:    callID,
-			Name:      call.Name,
+			ID:        textutil.OptionalTrimmedString(call.ID),
+			CallID:    textutil.OptionalTrimmedString(callID),
+			Name:      textutil.OptionalExactString(call.Name),
 			Arguments: arguments,
 			Raw:       raw,
 		}},
@@ -214,10 +218,10 @@ func (customToolCallOutputItemParser) Parse(item responses.ResponseOutputItemUni
 	return parsedResponseOutputItem{
 		CanonicalItems: []ResponseItem{{
 			Type:        ResponseItemTypeCustomToolCall,
-			ID:          strings.TrimSpace(call.ID),
-			CallID:      callID,
-			Name:        call.Name,
-			CustomInput: call.Input,
+			ID:          textutil.OptionalTrimmedString(call.ID),
+			CallID:      textutil.OptionalTrimmedString(callID),
+			Name:        textutil.OptionalExactString(call.Name),
+			CustomInput: textutil.OptionalExactString(call.Input),
 			Raw:         raw,
 		}},
 		ToolCalls: []ToolCall{{
@@ -225,7 +229,7 @@ func (customToolCallOutputItemParser) Parse(item responses.ResponseOutputItemUni
 			Name:        call.Name,
 			Input:       normalizeToolInput(call.Input),
 			Custom:      true,
-			CustomInput: call.Input,
+			CustomInput: textutil.OptionalExactString(call.Input),
 		}},
 	}
 }
@@ -239,7 +243,7 @@ func (reasoningOutputItemParser) Parse(item responses.ResponseOutputItemUnion, _
 		if text == "" {
 			continue
 		}
-		entry := ReasoningEntry{Role: reasoningRoleSummary, Text: text}
+		entry := ReasoningEntry{Role: textutil.Value(reasoningRoleSummary), Text: text}
 		summaries = append(summaries, entry)
 		reasoning = append(reasoning, entry)
 	}
@@ -247,9 +251,9 @@ func (reasoningOutputItemParser) Parse(item responses.ResponseOutputItemUnion, _
 	parsed := parsedResponseOutputItem{
 		CanonicalItems: []ResponseItem{{
 			Type:             ResponseItemTypeReasoning,
-			ID:               strings.TrimSpace(reasoningItem.ID),
+			ID:               textutil.OptionalTrimmedString(reasoningItem.ID),
 			ReasoningSummary: summaries,
-			EncryptedContent: strings.TrimSpace(reasoningItem.EncryptedContent),
+			EncryptedContent: textutil.OptionalTrimmedString(reasoningItem.EncryptedContent),
 			Raw:              raw,
 		}},
 		Reasoning: reasoning,
@@ -269,8 +273,8 @@ func (compactionOutputItemParser) Parse(item responses.ResponseOutputItemUnion, 
 	return parsedResponseOutputItem{
 		CanonicalItems: []ResponseItem{{
 			Type:             ResponseItemTypeCompaction,
-			ID:               strings.TrimSpace(compactionItem.ID),
-			EncryptedContent: strings.TrimSpace(compactionItem.EncryptedContent),
+			ID:               textutil.OptionalTrimmedString(compactionItem.ID),
+			EncryptedContent: textutil.OptionalTrimmedString(compactionItem.EncryptedContent),
 			Raw:              json.RawMessage(item.RawJSON()),
 		}},
 	}

@@ -12,6 +12,16 @@ func TestOptionalTrimmedStringNormalizesPresence(t *testing.T) {
 	}
 }
 
+func TestOptionalExactStringPreservesPresentWhitespace(t *testing.T) {
+	if OptionalExactString(" \t ") != nil {
+		t.Fatal("blank exact optional string is present")
+	}
+	value := OptionalExactString(" value \n\n")
+	if value == nil || *value != " value \n\n" {
+		t.Fatalf("exact optional string = %#v, want lexical value", value)
+	}
+}
+
 func TestPointerCopiesOptionalValue(t *testing.T) {
 	if Pointer[int](nil) != nil {
 		t.Fatal("nil pointer copy is not nil")
@@ -21,6 +31,42 @@ func TestPointerCopiesOptionalValue(t *testing.T) {
 	source = 9
 	if copied == nil || *copied != 7 {
 		t.Fatalf("pointer copy = %+v, want independent value 7", copied)
+	}
+}
+
+func TestOptionalExtractorsPreservePresenceAndNormalization(t *testing.T) {
+	if value, present := OptionalValue[int](nil); present || value != 0 {
+		t.Fatalf("absent optional value = (%d, %t)", value, present)
+	}
+	number := 7
+	if value, present := OptionalValue(&number); !present || value != 7 {
+		t.Fatalf("present optional value = (%d, %t)", value, present)
+	}
+
+	type namedString string
+	exact := namedString(" value \n")
+	if value, present := OptionalExact(&exact); !present || value != " value \n" {
+		t.Fatalf("exact optional string = (%q, %t)", value, present)
+	}
+	blank := namedString(" \t ")
+	if value, present := OptionalTrimmed(&blank); present || value != "" {
+		t.Fatalf("blank trimmed optional string = (%q, %t)", value, present)
+	}
+	trimmed := namedString(" value ")
+	if value, present := OptionalTrimmed(&trimmed); !present || value != "value" {
+		t.Fatalf("trimmed optional string = (%q, %t)", value, present)
+	}
+	first := namedString(" ")
+	second := namedString(" second ")
+	if value, present := FirstOptionalTrimmed(nil, &first, &second); !present || value != "second" {
+		t.Fatalf("first optional trimmed string = (%q, %t)", value, present)
+	}
+}
+
+func TestValueCreatesPresentValue(t *testing.T) {
+	value := Value("present")
+	if value == nil || *value != "present" {
+		t.Fatalf("value = %#v, want present pointer", value)
 	}
 }
 

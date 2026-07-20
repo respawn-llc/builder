@@ -35,6 +35,7 @@ import (
 	"core/server/worktree"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -134,10 +135,12 @@ printf '{"processed":true,"replaced_output":"ROLE_ACTIVE:%s"}' "$KENT_SESSION_ID
 	}
 	var toolOutput string
 	for _, msg := range llm.MessagesFromItems(requests[1].Items) {
-		if msg.Role != llm.RoleTool || msg.Name != string(toolspec.ToolExecCommand) {
+		if msg.Role != llm.RoleTool || msg.Name == nil || *msg.Name != string(toolspec.ToolExecCommand) {
 			continue
 		}
-		toolOutput = msg.Content
+		if msg.Content != nil {
+			toolOutput = *msg.Content
+		}
 	}
 	if want := "ROLE_ACTIVE:" + runs[0].SessionID; toolOutput != want {
 		t.Fatalf("exec_command tool output = %q, want role postprocess output with owner session %q", toolOutput, want)
@@ -371,8 +374,14 @@ func TestWorkflowRuntimeQuestionBatchResumesSameSessionAndPublishesOneAttention(
 	}
 	seenAskResults := map[string]bool{}
 	for _, msg := range askResults {
-		seenAskResults[msg.ToolCallID] = true
-		trimmed := strings.TrimSpace(msg.Content)
+		if msg.ToolCallID == nil {
+			t.Fatalf("ask_question tool result has no call id: %+v", msg)
+		}
+		seenAskResults[*msg.ToolCallID] = true
+		if msg.Content == nil {
+			continue
+		}
+		trimmed := strings.TrimSpace(*msg.Content)
 		var payload map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(trimmed), &payload); err == nil {
 			if _, ok := payload["error"]; ok {
@@ -636,7 +645,9 @@ func TestWorkflowRuntimeInterruptReleasesBeforeInteractiveReactivation(t *testin
 		Runner: func(ctx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
 			return bridge.WithEngine(ctx, func(ctx context.Context, engine *runtime.Engine) error {
 				message, submitErr := engine.SubmitUserMessage(ctx, "continue interactively")
-				response = message.Content
+				if message.Content != nil {
+					response = *message.Content
+				}
 				return submitErr
 			})
 		},
@@ -1204,13 +1215,13 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open source session: %v", err)
 	}
-	if got := sourceStore.Meta().Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("reviewer")) {
+	if got := sourceStore.Metadata().Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("reviewer")) {
 		t.Fatalf("continuation role = %+v, want reviewer", got)
 	}
-	if got := sourceStore.Meta().PromptCacheLineageGeneration; got != 1 {
+	if got := sourceStore.Metadata().PromptCacheLineageGeneration; got != 1 {
 		t.Fatalf("prompt cache lineage generation = %d, want fresh target generation 1", got)
 	}
-	if locked := sourceStore.Meta().Locked; locked == nil || !locked.HasSystemPrompt || !locked.HasEnabledTools {
+	if locked := sourceStore.Metadata().Locked; locked == nil || !locked.HasSystemPrompt || !locked.HasEnabledTools {
 		t.Fatalf("locked prompt-facing contract = %+v, want refreshed prompt and request shape", locked)
 	} else if !lockedContractHasTool(locked, toolspec.ToolEdit) || lockedContractHasTool(locked, toolspec.ToolExecCommand) {
 		t.Fatalf("locked enabled tools = %+v, want refreshed reviewer role tools", locked.EnabledTools)
@@ -1332,7 +1343,7 @@ func TestWorkflowRuntimeDefaultRoleClearsInvalidPersistedRoleBeforeValidation(t 
 
 	plan, _, err := fixture.starter.planSession(context.Background(), workflowstore.RunStartContext{
 		ContextMode:     workflow.ContextModeContinueSession,
-		SourceSessionID: source.Meta().SessionID,
+		SourceSessionID: source.Metadata().SessionID,
 		Task: workflowstore.TaskRecord{
 			ID:        "task-1",
 			ProjectID: fixture.projectID,
@@ -1354,7 +1365,7 @@ func TestWorkflowRuntimeDefaultRoleClearsInvalidPersistedRoleBeforeValidation(t 
 	if err != nil {
 		t.Fatalf("open source session: %v", err)
 	}
-	if got := reopened.Meta().Continuation; got != nil && got.AgentRole != nil {
+	if got := reopened.Metadata().Continuation; got != nil && got.AgentRole != nil {
 		t.Fatalf("continuation = %+v, want cleared role", got)
 	}
 }
@@ -1372,7 +1383,7 @@ func TestWorkflowRuntimeLockedBaseSessionAcceptsTargetRole(t *testing.T) {
 
 	plan, _, err := fixture.starter.planSession(context.Background(), workflowstore.RunStartContext{
 		ContextMode:     workflow.ContextModeContinueSession,
-		SourceSessionID: source.Meta().SessionID,
+		SourceSessionID: source.Metadata().SessionID,
 		Task: workflowstore.TaskRecord{
 			ID:        "task-1",
 			ProjectID: fixture.projectID,
@@ -1394,7 +1405,7 @@ func TestWorkflowRuntimeLockedBaseSessionAcceptsTargetRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open source session: %v", err)
 	}
-	if got := reopened.Meta().Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("coder")) {
+	if got := reopened.Metadata().Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("coder")) {
 		t.Fatalf("continuation = %+v, want coder role persisted", got)
 	}
 }
@@ -1702,6 +1713,39 @@ func TestRemoveFanoutCloneDeletesOrphanedClone(t *testing.T) {
 	fixture.starter.removeFanoutClone(context.Background(), containerDir, cloneID)
 	if _, err := os.Stat(cloneDir); !os.IsNotExist(err) {
 		t.Fatalf("clone dir should be removed, stat err = %v", err)
+	}
+}
+
+func TestCloneSourceSessionForFanoutReturnsStructuredMaterializationError(t *testing.T) {
+	fixture := newStarterFixture(
+		t,
+		config.WorkflowCompletionModeStructuredOutput,
+		ScriptedFinalAnswer(`{"commentary":"done"}`),
+	)
+	containerDir := filepath.Join(
+		filepath.Join(fixture.cfg.PersistenceRoot, "projects"),
+		fixture.projectID,
+		"sessions",
+	)
+	source, err := session.Create(
+		containerDir,
+		filepath.Base(containerDir),
+		fixture.cfg.WorkspaceRoot,
+		sessioncontract.SessionCategoryMain,
+		fixture.metadata.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+	sessiontest.WriteUnsupportedEventLogVersion(t, source, session.EventLogVersionV1+1)
+
+	_, err = fixture.starter.cloneSourceSessionForFanout(containerDir, source.Metadata().SessionID)
+	var materialization *protocol.SessionEventLogMaterializationError
+	if !errors.As(err, &materialization) {
+		t.Fatalf("cloneSourceSessionForFanout error = %T %v", err, err)
+	}
+	if materialization.Reason != protocol.SessionEventLogMaterializationUnsupportedVersion {
+		t.Fatalf("materialization facts = %+v", materialization)
 	}
 }
 
@@ -2446,7 +2490,7 @@ func (f starterFixture) sessionEventsText(t *testing.T, sessionID string) string
 	return string(data)
 }
 
-func (f starterFixture) sessionMeta(t *testing.T, sessionID string) session.Meta {
+func (f starterFixture) sessionMeta(t *testing.T, sessionID string) session.Metadata {
 	t.Helper()
 	record, err := f.metadata.ResolvePersistedSession(context.Background(), sessionID)
 	if err != nil {
@@ -2456,7 +2500,7 @@ func (f starterFixture) sessionMeta(t *testing.T, sessionID string) session.Meta
 	if err != nil {
 		t.Fatalf("Open session: %v", err)
 	}
-	return store.Meta()
+	return store.Metadata()
 }
 
 func renderedPromptForRun(t *testing.T, store *workflowstore.Store, runID workflow.RunID) string {
@@ -2494,10 +2538,13 @@ func workflowRequestAskQuestionToolMessages(reqs []llm.Request) []llm.Message {
 	messages := []llm.Message{}
 	for _, req := range reqs {
 		for _, msg := range llm.MessagesFromItems(req.Items) {
-			if msg.Role != llm.RoleTool || msg.Name != string(toolspec.ToolAskQuestion) {
+			if msg.Role != llm.RoleTool || msg.Name == nil || *msg.Name != string(toolspec.ToolAskQuestion) {
 				continue
 			}
-			switch msg.ToolCallID {
+			if msg.ToolCallID == nil {
+				continue
+			}
+			switch *msg.ToolCallID {
 			case "call-ask-1", "call-ask-2":
 				messages = append(messages, msg)
 			}
@@ -2810,7 +2857,9 @@ func assertPromptContains(t *testing.T, req llm.Request, needles []string) {
 func requestPromptText(req llm.Request) string {
 	var haystack strings.Builder
 	for _, item := range req.Items {
-		haystack.WriteString(item.Content)
+		if item.Content != nil {
+			haystack.WriteString(*item.Content)
+		}
 		haystack.WriteString("\n")
 	}
 	return haystack.String()
@@ -2820,15 +2869,17 @@ func assertRequestHasSkillEntry(t *testing.T, req llm.Request, name string, skil
 	t.Helper()
 	wantLine := "- " + name + ": " + filepath.ToSlash(skillPath) + " . " + description
 	for _, item := range req.Items {
-		if item.Role != llm.RoleDeveloper || item.MessageType != llm.MessageTypeSkills {
+		if item.Role == nil || *item.Role != llm.RoleDeveloper ||
+			item.MessageType == nil || *item.MessageType != llm.MessageTypeSkills ||
+			item.Content == nil {
 			continue
 		}
-		for _, line := range strings.Split(item.Content, "\n") {
+		for _, line := range strings.Split(*item.Content, "\n") {
 			if line == wantLine {
 				return
 			}
 		}
-		t.Fatalf("skills message missing setup-created skill entry %q: %q", wantLine, item.Content)
+		t.Fatalf("skills message missing setup-created skill entry %q: %q", wantLine, *item.Content)
 	}
 	t.Fatalf("request missing structured skills message: %+v", req.Items)
 }
@@ -2837,8 +2888,8 @@ func assertNoUserPrompt(t *testing.T, req llm.Request) {
 	t.Helper()
 	userPrompts := []string{}
 	for _, item := range req.Items {
-		if item.Role == llm.RoleUser {
-			userPrompts = append(userPrompts, item.Content)
+		if item.Role != nil && *item.Role == llm.RoleUser && item.Content != nil {
+			userPrompts = append(userPrompts, *item.Content)
 		}
 	}
 	if len(userPrompts) == 0 {

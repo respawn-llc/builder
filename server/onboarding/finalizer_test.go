@@ -677,7 +677,11 @@ func TestProductionProviderCatalogUUIDsAreStableV4Values(t *testing.T) {
 
 func TestFinalizeErrorSentinelsSurviveRemoteDecode(t *testing.T) {
 	encoded := serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeConfigAlreadyExists, serverapi.OnboardingConfigAlreadyExistsDetails{SettingsPath: "/tmp/config.toml"}, nil)
-	decoded := serverapi.DecodeOnboardingFinalizeError(encoded.RPCErrorData(), encoded.Error())
+	data, err := encoded.RPCErrorData()
+	if err != nil {
+		t.Fatalf("encode onboarding RPC error data: %v", err)
+	}
+	decoded := serverapi.DecodeOnboardingFinalizeError(data, encoded.Error())
 
 	if !errors.Is(decoded, serverapi.ErrOnboardingFinalizeConfigAlreadyExists) {
 		t.Fatalf("decoded error = %v, want config_already_exists sentinel", decoded)

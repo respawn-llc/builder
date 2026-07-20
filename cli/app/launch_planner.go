@@ -72,7 +72,13 @@ func (p *runtimeLaunchPlan) DetachOnlyClose() error {
 	return p.Close()
 }
 
-type sessionPickerRunner func(sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error)
+type sessionPickerRunner func(
+	context.Context,
+	sessionPageLoader,
+	string,
+	sessionPickerHeaderInfo,
+	sessionPickerOpenController,
+) (sessionPickerResult, error)
 
 type sessionViewReader interface {
 	GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error)
@@ -112,8 +118,20 @@ type launchPlanner struct {
 func newSessionLaunchPlanner(server launchPlannerServer) *launchPlanner {
 	return &launchPlanner{
 		server: server,
-		pickSession: func(loader sessionPageLoader, theme string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
-			return runSessionPickerFlow(loader, theme, header)
+		pickSession: func(
+			ctx context.Context,
+			loader sessionPageLoader,
+			theme string,
+			header sessionPickerHeaderInfo,
+			openController sessionPickerOpenController,
+		) (sessionPickerResult, error) {
+			return runSessionPickerFlow(
+				ctx,
+				loader,
+				theme,
+				header,
+				openController,
+			)
 		},
 	}
 }
@@ -231,7 +249,11 @@ func (p *launchPlanner) resolvePlanRequest(ctx context.Context, req sessionLaunc
 	}}, nil
 }
 
-func (p *launchPlanner) selectSession(ctx context.Context, notice *startupPickerNotice) (sessionPickerResult, error) {
+func (p *launchPlanner) selectSession(
+	ctx context.Context,
+	notice *startupPickerNotice,
+	openController sessionPickerOpenController,
+) (sessionPickerResult, error) {
 	if p == nil || p.server == nil || p.server.ProjectViewClient() == nil {
 		return nil, errors.New("session picker project view client is required")
 	}
@@ -248,7 +270,13 @@ func (p *launchPlanner) selectSession(ctx context.Context, notice *startupPicker
 	}
 	header := p.sessionPickerHeaderInfo(p.server.Config())
 	header.Notice = notice
-	return p.pickSession(loader, p.server.PresentationTheme(), header)
+	return p.pickSession(
+		ctx,
+		loader,
+		p.server.PresentationTheme(),
+		header,
+		openController,
+	)
 }
 
 func (p *launchPlanner) sessionPickerHeaderInfo(cfg config.App) sessionPickerHeaderInfo {

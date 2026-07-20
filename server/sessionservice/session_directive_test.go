@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"core/server/auth"
-	"core/server/llm"
 	"core/server/requestmemo"
 	"core/server/session"
 	"core/shared/rollbacktarget"
@@ -94,17 +93,13 @@ func TestSessionTransitionMapsEveryActionToTypedLifecycleResult(t *testing.T) {
 
 func TestSessionTransitionRollbackLaunchesCreatedFork(t *testing.T) {
 	_, containerDir, store := createPersistedSession(t)
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleAssistant, Content: "a1"}); err != nil {
-		t.Fatalf("append assistant message: %v", err)
-	}
+	appendSessionMessage(t, store, "step-1", session.MessageRoleUser, "u1")
+	appendSessionMessage(t, store, "step-1", session.MessageRoleAssistant, "a1")
 
 	service := newTestSessionLifecycleService(containerDir, nil)
 	result, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: "rollback-result",
-		SessionID:       store.Meta().SessionID,
+		SessionID:       store.Metadata().SessionID,
 		Transition: serverapi.SessionTransition{
 			Action:                       serverapi.SessionTransitionActionForkRollback,
 			InitialPrompt:                "edited prompt",
@@ -123,7 +118,7 @@ func TestSessionTransitionRollbackLaunchesCreatedFork(t *testing.T) {
 	if !ok {
 		t.Fatal("rollback launch omitted fork session ID")
 	}
-	if forkID.String() == store.Meta().SessionID {
+	if forkID.String() == store.Metadata().SessionID {
 		t.Fatal("rollback launch targeted the parent")
 	}
 	if _, err := session.Open(filepath.Join(containerDir, forkID.String()), sessionServiceTestPersistence.Options()...); err != nil {

@@ -139,7 +139,7 @@ func TestSessionCategoryMigrationAddsNullableConstrainedIndexedStorage(t *testin
 func TestSessionCategoryStorageRejectsInvalidValues(t *testing.T) {
 	store, cfg, binding := newMetadataTestStore(t)
 	sess := createMetadataTestSession(t, store, cfg, binding)
-	if _, err := store.db.Exec(`UPDATE sessions SET category = 'worker' WHERE id = ?`, sess.Meta().SessionID); err == nil {
+	if _, err := store.db.Exec(`UPDATE sessions SET category = 'worker' WHERE id = ?`, sess.Metadata().SessionID); err == nil {
 		t.Fatal("sessions.category accepted an invalid value")
 	}
 }

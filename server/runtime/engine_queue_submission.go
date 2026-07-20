@@ -58,8 +58,8 @@ func (e *Engine) SubmitQueuedUserMessagesWithActiveHook(ctx context.Context, onA
 func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[string]struct{}, onActive func()) (assistant llm.Message, receipt session.CommitReceipt, err error) {
 	e.ensureOrchestrationCollaborators()
 	for {
-		if e.failQueuedUserWorkIfTerminal() {
-			return llm.Message{}, receipt, nil
+		if failed, failErr := e.failQueuedUserWorkIfTerminal(); failed {
+			return llm.Message{}, receipt, failErr
 		}
 		if len(queueItemIDs) > 0 {
 			if err := e.waitQueuedUserAutoDrainAllowed(ctx); err != nil {
@@ -70,8 +70,8 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 			if onActive != nil {
 				onActive()
 			}
-			if e.failQueuedUserWorkIfTerminal() {
-				return nil
+			if failed, failErr := e.failQueuedUserWorkIfTerminal(); failed {
+				return failErr
 			}
 			if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 				return err
@@ -153,7 +153,10 @@ func (e *Engine) SubmitUserMessageOrSteerWithHooks(ctx context.Context, text str
 		}
 	})
 	if errors.Is(err, ErrAgentBusy) {
-		item := e.QueueUserMessageForAutoDrain(text, clientRequestID)
+		item, queueErr := e.QueueUserMessageForAutoDrain(text, clientRequestID)
+		if queueErr != nil {
+			return llm.Message{}, nil, queueErr
+		}
 		if onAccepted != nil {
 			onAccepted(true)
 		}
@@ -162,7 +165,10 @@ func (e *Engine) SubmitUserMessageOrSteerWithHooks(ctx context.Context, text str
 	return msg, nil, err
 }
 
-func (e *Engine) QueueUserMessageForAutoDrain(text string, clientRequestID string) QueuedUserMessage {
+func (e *Engine) QueueUserMessageForAutoDrain(
+	text string,
+	clientRequestID string,
+) (QueuedUserMessage, error) {
 	return e.queueUserMessageWithClientRequestID(text, clientRequestID, true)
 }
 
@@ -212,7 +218,8 @@ func (e *Engine) scheduleQueuedUserInjectionsIfIdle() bool {
 	if !e.messageFlow.HasPendingUserInjections() {
 		return false
 	}
-	if e.failQueuedUserWorkIfTerminal() {
+	if failed, err := e.failQueuedUserWorkIfTerminal(); failed {
+		e.surfaceRunError(err)
 		return false
 	}
 	e.queuedUserWorkMu.Lock()
@@ -330,22 +337,22 @@ func (e *Engine) DrainQueuedUserMessagesBeforeClose(ctx context.Context) error {
 	if e == nil {
 		return nil
 	}
-	if e.failQueuedUserWorkIfTerminal() {
-		return nil
+	if failed, failErr := e.failQueuedUserWorkIfTerminal(); failed {
+		return failErr
 	}
 	if !e.HasQueuedUserWork() {
 		return nil
 	}
 	_, err := e.SubmitQueuedUserMessages(ctx)
 	if err != nil {
-		if e.failQueuedUserWorkIfTerminal() {
-			return nil
+		if failed, failErr := e.failQueuedUserWorkIfTerminal(); failed {
+			return failErr
 		}
 		if !e.HasQueuedUserWork() {
 			return err
 		}
-		e.FailQueuedUserMessages(QueuedUserMessageFailureClosing)
-		return err
+		_, failErr := e.FailQueuedUserMessages(QueuedUserMessageFailureClosing)
+		return errors.Join(err, failErr)
 	}
 	return nil
 }

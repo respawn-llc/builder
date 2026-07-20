@@ -1,7 +1,6 @@
 package session
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -15,40 +14,124 @@ import (
 )
 
 var errForkReplayBoundary = errors.New("fork replay boundary reached")
-var errDecodeForkHistoryReplacement = errors.New("decode history replacement for fork replay")
 
 // forkReplayFlushEventCount and forkReplayFlushByteBudget bound how much of the
 // parent conversation is buffered in memory before a chunk is flushed to the
 // child store. Fork/clone stream the parent event log instead of materializing
 // it so arbitrarily large histories never load fully into memory.
-var (
+const (
 	forkReplayFlushEventCount = 512
 	forkReplayFlushByteBudget = 1 << 20
 )
+
+type forkReplayResourceSnapshot struct {
+	BufferedRecords         int
+	MaxBufferedRecords      int
+	BufferedEncodedBytes    int
+	MaxBufferedEncodedBytes int
+	LargestRecordBytes      int
+}
+
+type forkReplayBatch struct {
+	records []EventRecord
+	stats   forkReplayResourceSnapshot
+}
+
+func newForkReplayBatch() *forkReplayBatch {
+	return &forkReplayBatch{
+		records: make([]EventRecord, 0, forkReplayFlushEventCount),
+	}
+}
+
+func (b *forkReplayBatch) shouldFlushBefore(recordBytes int) bool {
+	if b == nil || len(b.records) == 0 {
+		return false
+	}
+	return len(b.records) >= forkReplayFlushEventCount ||
+		recordBytes > forkReplayFlushByteBudget-b.stats.BufferedEncodedBytes
+}
+
+func (b *forkReplayBatch) add(record EventRecord, recordBytes int) error {
+	if b == nil {
+		return errors.New("fork replay batch is required")
+	}
+	if recordBytes <= 0 {
+		return fmt.Errorf("fork replay record bytes must be positive: %d", recordBytes)
+	}
+	if b.shouldFlushBefore(recordBytes) {
+		return fmt.Errorf(
+			"fork replay batch must flush before retaining record %d: records=%d bytes=%d next=%d",
+			record.Seq(),
+			len(b.records),
+			b.stats.BufferedEncodedBytes,
+			recordBytes,
+		)
+	}
+	b.records = append(b.records, record)
+	b.stats.BufferedRecords = len(b.records)
+	b.stats.BufferedEncodedBytes += recordBytes
+	if b.stats.BufferedRecords > b.stats.MaxBufferedRecords {
+		b.stats.MaxBufferedRecords = b.stats.BufferedRecords
+	}
+	if b.stats.BufferedEncodedBytes > b.stats.MaxBufferedEncodedBytes {
+		b.stats.MaxBufferedEncodedBytes = b.stats.BufferedEncodedBytes
+	}
+	if recordBytes > b.stats.LargestRecordBytes {
+		b.stats.LargestRecordBytes = recordBytes
+	}
+	return nil
+}
+
+func (b *forkReplayBatch) reset() {
+	if b == nil {
+		return
+	}
+	clear(b.records)
+	b.records = b.records[:0]
+	b.stats.BufferedRecords = 0
+	b.stats.BufferedEncodedBytes = 0
+}
+
+func (b *forkReplayBatch) snapshot() forkReplayResourceSnapshot {
+	if b == nil {
+		return forkReplayResourceSnapshot{}
+	}
+	return b.stats
+}
+
+func (b *forkReplayBatch) validateDrained() error {
+	stats := b.snapshot()
+	maxAllowedBytes := forkReplayFlushByteBudget
+	if stats.LargestRecordBytes > maxAllowedBytes {
+		maxAllowedBytes = stats.LargestRecordBytes
+	}
+	if stats.BufferedRecords != 0 || stats.BufferedEncodedBytes != 0 {
+		return fmt.Errorf("fork replay batch retained resources after replay: %+v", stats)
+	}
+	if stats.MaxBufferedRecords > forkReplayFlushEventCount ||
+		stats.MaxBufferedEncodedBytes > maxAllowedBytes {
+		return fmt.Errorf("fork replay resource budget exceeded: %+v", stats)
+	}
+	return nil
+}
 
 // ForkAtUserMessage creates a child session whose history is the parent's
 // conversation up to (but excluding) the visible user message persisted at
 // userMessageSeq. It returns the forked store and the 1-based ordinal of that
 // user message among the parent's visible user messages (for naming/display).
-func ForkAtUserMessage(parent *Store, userMessageSeq int64, forkName string, category sessioncontract.SessionCategory) (*Store, int, error) {
-	if parent == nil {
-		return nil, 0, fmt.Errorf("parent store is required")
-	}
+func ForkAtUserMessage(parentLog MaterializedEventLog, userMessageSeq int64, forkName string, category sessioncontract.SessionCategory) (*Store, int, error) {
 	if userMessageSeq <= 0 {
 		return nil, 0, fmt.Errorf("user message seq must be >= 1")
 	}
-	return streamChildFromParent(parent, parent.Meta(), forkName, category, userMessageSeq)
+	return streamChildFromParent(parentLog, forkName, category, userMessageSeq)
 }
 
 // CloneSession creates a child session that replays the parent's entire
 // conversation history. Workflow compact-and-continue fan-out branches use this
 // so each parallel continuation compacts its own isolated copy of the source
 // conversation instead of mutating the shared source session.
-func CloneSession(parent *Store, forkName string, category sessioncontract.SessionCategory) (*Store, error) {
-	if parent == nil {
-		return nil, fmt.Errorf("parent store is required")
-	}
-	child, _, err := streamChildFromParent(parent, parent.Meta(), forkName, category, 0)
+func CloneSession(parentLog MaterializedEventLog, forkName string, category sessioncontract.SessionCategory) (*Store, error) {
+	child, _, err := streamChildFromParent(parentLog, forkName, category, 0)
 	return child, err
 }
 
@@ -57,12 +140,23 @@ func CloneSession(parent *Store, forkName string, category sessioncontract.Sessi
 // visible user message persisted at that sequence (fork-at-message); targetSeq
 // == 0 clones everything. It returns the 1-based ordinal of the cut user
 // message among the parent's visible user messages (0 when cloning).
-func streamChildFromParent(parent *Store, parentMeta Meta, forkName string, category sessioncontract.SessionCategory, targetSeq int64) (*Store, int, error) {
+func streamChildFromParent(parentLog MaterializedEventLog, forkName string, category sessioncontract.SessionCategory, targetSeq int64) (_ *Store, _ int, resultErr error) {
+	parent, err := materializedForkParent(parentLog)
+	if err != nil {
+		return nil, 0, err
+	}
+	parentMeta := parent.Metadata()
 	containerDir := filepath.Dir(parent.Dir())
 	child, err := newLazyWithStoreOptions(containerDir, parentMeta.WorkspaceContainer, parentMeta.WorkspaceRoot, category, parent.options)
 	if err != nil {
 		return nil, 0, err
 	}
+	keepChild := false
+	defer func() {
+		if !keepChild {
+			resultErr = errors.Join(resultErr, child.RemoveDurable())
+		}
+	}()
 	if err := InitializeCreationContext(child, parent, SessionCreationSourcePreviousSession, ChildContextOptions{
 		InheritLockedContract: true,
 		InheritContinuation:   true,
@@ -74,17 +168,36 @@ func streamChildFromParent(parent *Store, parentMeta Meta, forkName string, cate
 	child.meta.Name = strings.TrimSpace(forkName)
 	child.mu.Unlock()
 
-	derived, cutOrdinal, err := streamReplayIntoChild(parent, child, targetSeq)
+	if err := child.EnsureDurable(); err != nil {
+		return nil, 0, fmt.Errorf("persist fork child before replay: %w", err)
+	}
+	childLog, err := child.MaterializeEventLog()
 	if err != nil {
-		return nil, 0, removeForkChild(child, fmt.Errorf("stream fork replay events: %w", err))
+		return nil, 0, fmt.Errorf("materialize fork child event log: %w", err)
+	}
+	derived, cutOrdinal, err := streamReplayIntoChild(parentLog, childLog, targetSeq)
+	if err != nil {
+		return nil, 0, fmt.Errorf("stream fork replay events: %w", err)
 	}
 	if targetSeq > 0 && cutOrdinal == 0 {
-		return nil, 0, removeForkChild(child, fmt.Errorf("user message seq %d is out of range", targetSeq))
+		return nil, 0, fmt.Errorf("user message seq %d is out of range", targetSeq)
 	}
 	if err := child.applyForkDerivedState(derived); err != nil {
-		return nil, 0, removeForkChild(child, fmt.Errorf("finalize fork replay: %w", err))
+		return nil, 0, fmt.Errorf("finalize fork replay: %w", err)
 	}
+	keepChild = true
 	return child, cutOrdinal, nil
+}
+
+func materializedForkParent(parentLog MaterializedEventLog) (*Store, error) {
+	parent := parentLog.store
+	if parent == nil {
+		return nil, fmt.Errorf("parent materialized event log is required")
+	}
+	if err := parentLog.ValidateOwner(parent); err != nil {
+		return nil, fmt.Errorf("validate parent materialized event log: %w", err)
+	}
+	return parent, nil
 }
 
 // streamReplayIntoChild walks the parent event log and appends each event to the
@@ -92,121 +205,135 @@ func streamChildFromParent(parent *Store, parentMeta Meta, forkName string, cate
 // targetSeq > 0 it stops just before the visible user message persisted at that
 // sequence and returns that message's 1-based visible-user-message ordinal; it
 // returns 0 when the target is not found (or when cloning the whole log).
-func streamReplayIntoChild(parent *Store, child *Store, targetSeq int64) (replayDerivedState, int, error) {
+func streamReplayIntoChild(parentLog MaterializedEventLog, childLog MaterializedEventLog, targetSeq int64) (replayDerivedState, int, error) {
 	derived := replayDerivedState{}
 	visibleUserCount := 0
 	cutOrdinal := 0
-	buffer := make([]ReplayEvent, 0, forkReplayFlushEventCount)
-	bufferedBytes := 0
-	var committedReplayErr error
+	batch := newForkReplayBatch()
 	var latestRollbackCandidate *rollbacktarget.CandidateLocator
 	flush := func() error {
-		if len(buffer) == 0 {
+		if len(batch.records) == 0 {
 			return nil
 		}
-		if child.options.filelessEvents {
-			if _, receipt, err := child.AppendReplayEvents(buffer); err != nil {
-				if !receipt.Committed {
-					return err
-				}
-				committedReplayErr = errors.Join(committedReplayErr, err)
-			}
-		} else {
-			appended, err := child.appendReplayEventsWithEndByteCursor(buffer)
+		appended, err := childLog.appendReplayRecordsWithEndByteCursor(batch.records)
+		if err != nil {
+			return err
+		}
+		for index := range batch.records {
+			visible, err := isForkVisibleUserMessage(batch.records[index])
 			if err != nil {
-				if !appended.Committed {
-					return err
-				}
-				committedReplayErr = errors.Join(committedReplayErr, err)
+				return err
 			}
-			for index := range buffer {
-				if !hasVisibleUserMessageEvent(buffer[index].Kind, buffer[index].Payload) {
-					continue
-				}
-				latestRollbackCandidate = &rollbacktarget.CandidateLocator{
-					UserMessageSeq:       appended.events[index].Seq,
-					CandidatePageEndByte: *appended.endByteCursor,
-				}
+			if !visible {
+				continue
+			}
+			latestRollbackCandidate = &rollbacktarget.CandidateLocator{
+				UserMessageSeq:       appended.records[index].Seq(),
+				CandidatePageEndByte: *appended.endByteCursor,
 			}
 		}
-		buffer = buffer[:0]
-		bufferedBytes = 0
+		batch.reset()
 		return nil
 	}
-	walkErr := parent.WalkEvents(func(evt Event) error {
-		if hasVisibleUserMessageEvent(evt.Kind, evt.Payload) {
+	walkErr := parentLog.WalkRecords(func(record EventRecord) error {
+		visible, err := isForkVisibleUserMessage(record)
+		if err != nil {
+			return err
+		}
+		if visible {
 			visibleUserCount++
-			if targetSeq > 0 && evt.Seq == targetSeq {
+			if targetSeq > 0 && record.Seq() == targetSeq {
 				cutOrdinal = visibleUserCount
 				return errForkReplayBoundary
 			}
 		}
-		replayEvent := ReplayEvent{StepID: evt.StepID, Kind: evt.Kind, Payload: append([]byte(nil), evt.Payload...)}
-		if replayEvent.Kind == "history_replaced" {
+		payload, err := record.Payload()
+		if err != nil {
+			return err
+		}
+		if replacement, ok := payload.(HistoryReplacementRecord); ok {
 			if err := flush(); err != nil {
 				return err
 			}
-			rebasedPayload, err := rebaseHistoryReplacementRollbackCandidate(
-				replayEvent.Payload,
+			rebasedReplacement := rebaseHistoryReplacementRollbackCandidate(
+				replacement,
 				latestRollbackCandidate,
+			)
+			rebasedRecord, err := NewEventRecord(
+				record.Seq(),
+				record.StepID(),
+				rebasedReplacement,
 			)
 			if err != nil {
 				return err
 			}
-			replayEvent.Payload = rebasedPayload
+			record = rebasedRecord
 		}
-		derived.apply(replayEvent)
-		buffer = append(buffer, replayEvent)
-		bufferedBytes += len(replayEvent.Payload)
-		if len(buffer) >= forkReplayFlushEventCount || bufferedBytes >= forkReplayFlushByteBudget {
+		recordBytes, err := replayRecordByteSize(record)
+		if err != nil {
+			return err
+		}
+		if batch.shouldFlushBefore(recordBytes) {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+		if err := derived.apply(record); err != nil {
+			return err
+		}
+		if err := batch.add(record, recordBytes); err != nil {
+			return err
+		}
+		if len(batch.records) >= forkReplayFlushEventCount ||
+			batch.stats.BufferedEncodedBytes >= forkReplayFlushByteBudget {
 			return flush()
 		}
 		return nil
 	})
 	if walkErr != nil && !errors.Is(walkErr, errForkReplayBoundary) {
-		return derived, 0, errors.Join(committedReplayErr, walkErr)
+		return derived, 0, walkErr
 	}
 	if err := flush(); err != nil {
 		return derived, 0, err
 	}
-	return derived, cutOrdinal, committedReplayErr
+	if err := batch.validateDrained(); err != nil {
+		return derived, 0, err
+	}
+	return derived, cutOrdinal, nil
+}
+
+func isForkVisibleUserMessage(record EventRecord) (bool, error) {
+	payload, err := record.Payload()
+	if err != nil {
+		return false, err
+	}
+	message, ok := payload.(MessageRecord)
+	return ok && hasVisibleUserMessageFields(
+		message.Role,
+		message.MessageType,
+		message.Content,
+	), nil
 }
 
 func rebaseHistoryReplacementRollbackCandidate(
-	payload json.RawMessage,
+	replacement HistoryReplacementRecord,
 	locator *rollbacktarget.CandidateLocator,
-) (json.RawMessage, error) {
-	var engine historyReplacementEngine
-	if err := json.Unmarshal(payload, &engine); err != nil {
-		return nil, fmt.Errorf("%w: %w", errDecodeForkHistoryReplacement, err)
-	}
-	if IsLegacyReviewerRollbackHistoryReplacementEngine(engine.Engine) {
-		return append(json.RawMessage(nil), payload...), nil
-	}
-
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(payload, &fields); err != nil {
-		return nil, fmt.Errorf("%w: %w", errDecodeForkHistoryReplacement, err)
-	}
-	const locatorField = "latest_rollback_candidate"
-	_, carriesLocator := fields[locatorField]
+) HistoryReplacementRecord {
 	if locator == nil {
-		if !carriesLocator {
-			return append(json.RawMessage(nil), payload...), nil
-		}
-		delete(fields, locatorField)
-	} else {
-		encoded, err := json.Marshal(locator)
-		if err != nil {
-			return nil, fmt.Errorf("encode rebased rollback candidate locator: %w", err)
-		}
-		fields[locatorField] = encoded
+		replacement.LatestRollbackCandidate = nil
+		return replacement
 	}
-	rebased, err := json.Marshal(fields)
+	candidate := *locator
+	replacement.LatestRollbackCandidate = &candidate
+	return replacement
+}
+
+func replayRecordByteSize(record EventRecord) (int, error) {
+	encoded, err := encodeEventRecordV1(record)
 	if err != nil {
-		return nil, fmt.Errorf("encode rebased history replacement: %w", err)
+		return 0, fmt.Errorf("encode replay record %d for bounded chunking: %w", record.Seq(), err)
 	}
-	return rebased, nil
+	return len(encoded) + 1, nil
 }
 
 func (s *Store) applyForkDerivedState(derived replayDerivedState) error {
@@ -217,13 +344,6 @@ func (s *Store) applyForkDerivedState(derived replayDerivedState) error {
 		return err
 	}
 	return s.EnsureDurable()
-}
-
-func removeForkChild(child *Store, primary error) error {
-	if child == nil {
-		return primary
-	}
-	return errors.Join(primary, child.RemoveDurable())
 }
 
 func cloneLockedContract(in *LockedContract) *LockedContract {
@@ -293,9 +413,9 @@ func InitializeCreationContext(child *Store, source *Store, kind SessionCreation
 	default:
 		return fmt.Errorf("session creation source kind is invalid")
 	}
-	var sourceMeta Meta
+	var sourceMeta Metadata
 	if source != nil {
-		sourceMeta = source.Meta()
+		sourceMeta = source.Metadata()
 	}
 	child.mutationMu.Lock()
 	defer child.mutationMu.Unlock()
@@ -351,42 +471,33 @@ type replayDerivedState struct {
 	reminderIssued bool
 }
 
-func (d *replayDerivedState) apply(evt ReplayEvent) {
-	switch evt.Kind {
-	case "message":
-		var msg reminderEventMessage
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			return
-		}
-		if strings.TrimSpace(msg.Role) == "developer" {
-			switch strings.TrimSpace(msg.MessageType) {
-			case "headless_mode":
+func (d *replayDerivedState) apply(record EventRecord) error {
+	payload, err := record.Payload()
+	if err != nil {
+		return err
+	}
+	switch payload := payload.(type) {
+	case MessageRecord:
+		if payload.Role == MessageRoleDeveloper && payload.MessageType != nil {
+			switch *payload.MessageType {
+			case MessageTypeHeadlessMode:
 				d.headlessActive = true
-			case "headless_mode_exit":
+			case MessageTypeHeadlessModeExit:
 				d.headlessActive = false
 			}
 		}
-		if isCompactionSoonReminderMessage(msg) {
+		if isCompactionSoonReminderMessage(payload) {
 			d.reminderIssued = true
 		}
-	case "history_replaced":
-		var replacement historyReplacementEngine
-		if err := json.Unmarshal(evt.Payload, &replacement); err != nil {
-			return
-		}
-		if IsLegacyReviewerRollbackHistoryReplacementEngine(replacement.Engine) {
-			return
-		}
+	case HistoryReplacementRecord:
 		d.reminderIssued = false
 	}
+	return nil
 }
 
-func isCompactionSoonReminderMessage(msg reminderEventMessage) bool {
-	return strings.TrimSpace(msg.Role) == "developer" && strings.TrimSpace(msg.MessageType) == "compaction_soon_reminder" && strings.TrimSpace(msg.Content) != ""
-}
-
-type reminderEventMessage struct {
-	Role        string `json:"role"`
-	MessageType string `json:"message_type"`
-	Content     string `json:"content"`
+func isCompactionSoonReminderMessage(message MessageRecord) bool {
+	return message.Role == MessageRoleDeveloper &&
+		message.MessageType != nil &&
+		*message.MessageType == MessageTypeCompactionSoonReminder &&
+		message.Content != nil
 }

@@ -403,10 +403,10 @@ func TestToolCallBlocksUntilQueuedAnswerSubmitted(t *testing.T) {
 	default:
 	}
 
-	if err := b.Submit("call-queued", AskQuestionResponse{SelectedOptionNumber: textutil.Int(2), FreeformAnswer: "need extra context"}); err != nil {
+	if err := b.Submit("call-queued", AskQuestionResponse{SelectedOptionNumber: textutil.Value(2), FreeformAnswer: "need extra context"}); err != nil {
 		t.Fatalf("submit answer: %v", err)
 	}
-	if err := b.Submit("call-queued", AskQuestionResponse{SelectedOptionNumber: textutil.Int(1)}); err == nil {
+	if err := b.Submit("call-queued", AskQuestionResponse{SelectedOptionNumber: textutil.Value(1)}); err == nil {
 		t.Fatal("expected duplicate submission to fail after queued tool answer")
 	}
 
@@ -618,7 +618,7 @@ func TestToolCallSerializesResponsesAsPlainText(t *testing.T) {
 			"beta\nUser also said:\nneed extra context",
 			AskQuestionResponse{
 				RequestID:            "call-structured",
-				SelectedOptionNumber: textutil.Int(2),
+				SelectedOptionNumber: textutil.Value(2),
 				FreeformAnswer:       "need extra context",
 			},
 		},
@@ -645,8 +645,8 @@ func TestToolCallSerializesResponsesAsPlainText(t *testing.T) {
 			if payload == "" {
 				t.Fatal("expected non-empty plain-text summary")
 			}
-			if result.CondensedText != tt.condensedText {
-				t.Fatalf("condensed text = %q, want %q", result.CondensedText, tt.condensedText)
+			if result.CondensedText == nil || *result.CondensedText != tt.condensedText {
+				t.Fatalf("condensed text = %v, want %q", result.CondensedText, tt.condensedText)
 			}
 		})
 	}

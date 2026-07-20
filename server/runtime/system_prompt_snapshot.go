@@ -103,7 +103,7 @@ func (e *Engine) systemPromptWorkspaceRootLocked() string {
 	if activeRoot == "" {
 		activeRoot = strings.TrimSpace(e.cfg.TranscriptWorkingDir)
 	}
-	persistedRoot := strings.TrimSpace(e.store.Meta().WorkspaceRoot)
+	persistedRoot := strings.TrimSpace(e.store.Metadata().WorkspaceRoot)
 	if activeRoot == "" {
 		return persistedRoot
 	}

@@ -18,6 +18,7 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -186,8 +187,8 @@ func (b metaContextBuilder) Build(opts metaContextBuildOptions) (metaContextBuil
 		if len(result.Skills) > 0 {
 			collector.addMessages([]llm.Message{{
 				Role:        llm.RoleDeveloper,
-				MessageType: llm.MessageTypeSkills,
-				Content:     renderSkillsContext(result.Skills),
+				MessageType: textutil.Value(llm.MessageTypeSkills),
+				Content:     textutil.Value(renderSkillsContext(result.Skills)),
 			}})
 		}
 	}
@@ -205,8 +206,8 @@ func (b metaContextBuilder) Build(opts metaContextBuildOptions) (metaContextBuil
 		}
 		collector.addMessages([]llm.Message{{
 			Role:        llm.RoleDeveloper,
-			MessageType: llm.MessageTypeEnvironment,
-			Content:     environmentMessage,
+			MessageType: textutil.Value(llm.MessageTypeEnvironment),
+			Content:     textutil.Value(environmentMessage),
 		}})
 	}
 
@@ -233,7 +234,9 @@ func (b metaContextBuilder) Build(opts metaContextBuildOptions) (metaContextBuil
 		}
 		if ok {
 			if opts.WorkflowRun != nil {
-				message.SourcePath = strings.TrimSpace(string(opts.WorkflowRun.Contract.RunID))
+				message.SourcePath = textutil.OptionalTrimmedString(
+					string(opts.WorkflowRun.Contract.RunID),
+				)
 			}
 			collector.addMessages([]llm.Message{message})
 		}
@@ -264,9 +267,9 @@ func activeGoalContinuationMetaMessage(goal session.GoalState) (llm.Message, boo
 	}
 	return llm.Message{
 		Role:           llm.RoleDeveloper,
-		MessageType:    llm.MessageTypeActiveGoalContinuation,
-		Content:        content,
-		CompactContent: clientui.GoalNudgeCompactLabel,
+		MessageType:    textutil.Value(llm.MessageTypeActiveGoalContinuation),
+		Content:        textutil.Value(content),
+		CompactContent: textutil.Value(clientui.GoalNudgeCompactLabel),
 	}, true
 }
 
@@ -301,9 +304,9 @@ func (b metaContextBuilder) discoverAgents(permissive bool) ([]llm.Message, erro
 		}
 		out = append(out, llm.Message{
 			Role:        llm.RoleDeveloper,
-			MessageType: llm.MessageTypeAgentsMD,
-			SourcePath:  path,
-			Content:     fmt.Sprintf("%s\nsource: %s\n\n```%s\n%s\n```", agentsInjectedHeader, path, agentsInjectedFenceLabel, string(data)),
+			MessageType: textutil.Value(llm.MessageTypeAgentsMD),
+			SourcePath:  textutil.Value(path),
+			Content:     textutil.Value(fmt.Sprintf("%s\nsource: %s\n\n```%s\n%s\n```", agentsInjectedHeader, path, agentsInjectedFenceLabel, string(data))),
 		})
 	}
 	return out, nil
@@ -329,7 +332,7 @@ func (b metaContextBuilder) subagentsMetaMessage(context config.SubagentInvocati
 	}
 	lines = append(lines, "---")
 	lines = append(lines, "Invoke with `"+prompts.LaunchCommand()+" run --agent=<role> \"<prompt>\"`.")
-	return llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeSubagents, Content: strings.Join(lines, "\n")}, true
+	return llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeSubagents), Content: textutil.Value(strings.Join(lines, "\n"))}, true
 }
 
 type renderedSubagentRole struct {
@@ -418,7 +421,7 @@ func headlessModeMetaMessage() (llm.Message, bool) {
 	if content == "" {
 		return llm.Message{}, false
 	}
-	return llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeHeadlessMode, Content: content}, true
+	return llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHeadlessMode), Content: textutil.Value(content)}, true
 }
 
 func headlessModeExitMetaMessage() (llm.Message, bool) {
@@ -426,7 +429,7 @@ func headlessModeExitMetaMessage() (llm.Message, bool) {
 	if content == "" {
 		return llm.Message{}, false
 	}
-	return llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeHeadlessModeExit, Content: content}, true
+	return llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHeadlessModeExit), Content: textutil.Value(content)}, true
 }
 
 func workflowModeMetaMessage(mode workflowruntime.CompletionMode, cfg *workflowruntime.Config, taskCommentCount int64) (llm.Message, bool, error) {
@@ -438,7 +441,7 @@ func workflowModeMetaMessage(mode workflowruntime.CompletionMode, cfg *workflowr
 		if strings.TrimSpace(content) == "" {
 			return llm.Message{}, false, nil
 		}
-		return llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeWorkflowMode, Content: content}, true, nil
+		return llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), Content: textutil.Value(content)}, true, nil
 	}
 	content := ""
 	var err error
@@ -449,7 +452,7 @@ func workflowModeMetaMessage(mode workflowruntime.CompletionMode, cfg *workflowr
 	if content == "" {
 		return llm.Message{}, false, nil
 	}
-	return llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeWorkflowMode, Content: content}, true, nil
+	return llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), Content: textutil.Value(content)}, true, nil
 }
 
 func workflowTaskInstructionsContent(mode workflowruntime.CompletionMode, cfg *workflowruntime.Config, taskCommentCount int64) (string, error) {
@@ -552,9 +555,9 @@ func worktreeModeMetaMessage(state session.WorktreeReminderState) (llm.Message, 
 	}
 	return llm.Message{
 		Role:            llm.RoleDeveloper,
-		MessageType:     llm.MessageTypeWorktreeMode,
+		MessageType:     textutil.Value(llm.MessageTypeWorktreeMode),
 		WorktreeContext: session.CloneWorktreeContext(&state.WorktreeContext),
-		Content:         content,
+		Content:         textutil.Value(content),
 	}, true
 }
 
@@ -565,9 +568,9 @@ func worktreeModeExitMetaMessage(state session.WorktreeReminderState) (llm.Messa
 	}
 	return llm.Message{
 		Role:            llm.RoleDeveloper,
-		MessageType:     llm.MessageTypeWorktreeModeExit,
+		MessageType:     textutil.Value(llm.MessageTypeWorktreeModeExit),
 		WorktreeContext: session.CloneWorktreeContext(&state.WorktreeContext),
-		Content:         content,
+		Content:         textutil.Value(content),
 	}, true
 }
 
@@ -755,12 +758,13 @@ func splitMetaContextMessages(messages []llm.Message) ([]llm.Message, []llm.Mess
 }
 
 func classifyMetaContextMessage(message llm.Message) (metaContextClassification, bool) {
-	if message.Role != llm.RoleDeveloper {
+	if message.Role != llm.RoleDeveloper || message.MessageType == nil {
 		return metaContextClassification{}, false
 	}
-	switch message.MessageType {
+	sourcePath, _ := textutil.OptionalTrimmed(message.SourcePath)
+	switch *message.MessageType {
 	case llm.MessageTypeAgentsMD:
-		sourcePath := agentSourceKey(message.SourcePath)
+		sourcePath = agentSourceKey(sourcePath)
 		if sourcePath == "" {
 			return metaContextClassification{}, false
 		}
@@ -786,14 +790,14 @@ func classifyMetaContextMessage(message llm.Message) (metaContextClassification,
 		return metaContextClassification{
 			kind:        metaContextKindWorkflow,
 			key:         "workflow",
-			sourcePath:  strings.TrimSpace(message.SourcePath),
+			sourcePath:  sourcePath,
 			messageType: llm.MessageTypeWorkflowMode,
 		}, true
 	case llm.MessageTypeWorktreeMode:
 		return metaContextClassification{
 			kind:            metaContextKindWorktree,
 			key:             "worktree",
-			sourcePath:      strings.TrimSpace(message.SourcePath),
+			sourcePath:      sourcePath,
 			worktreeContext: message.WorktreeContext,
 			messageType:     llm.MessageTypeWorktreeMode,
 		}, true
@@ -801,7 +805,7 @@ func classifyMetaContextMessage(message llm.Message) (metaContextClassification,
 		return metaContextClassification{
 			kind:            metaContextKindWorktreeExit,
 			key:             "worktree_exit",
-			sourcePath:      strings.TrimSpace(message.SourcePath),
+			sourcePath:      sourcePath,
 			worktreeContext: message.WorktreeContext,
 			messageType:     llm.MessageTypeWorktreeModeExit,
 		}, true
@@ -811,7 +815,7 @@ func classifyMetaContextMessage(message llm.Message) (metaContextClassification,
 
 func canonicalizeMetaContextMessage(message llm.Message, classification metaContextClassification) llm.Message {
 	message.Role = llm.RoleDeveloper
-	message.MessageType = classification.messageType
+	message.MessageType = textutil.Value(classification.messageType)
 	return message
 }
 

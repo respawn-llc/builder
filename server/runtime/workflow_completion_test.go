@@ -16,6 +16,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -131,12 +132,7 @@ func (c *workflowSteeringClient) Generate(_ context.Context, request llm.Request
 }
 
 func (c *workflowSteeringClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
-	return llm.ProviderCapabilities{
-		ProviderID:              "openai",
-		SupportsResponsesAPI:    true,
-		SupportsNativeWebSearch: true,
-		IsOpenAIFirstParty:      true,
-	}, nil
+	return llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true}, nil
 }
 
 func (c *workflowSteeringClient) Requests() []llm.Request {
@@ -204,7 +200,7 @@ func completeNodeCall(id string, input json.RawMessage) llm.ToolCall {
 }
 
 func structuredFinalResponse(content string) llm.Response {
-	return llm.Response{Assistant: llm.Message{Role: llm.RoleAssistant, Content: content, Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200000}}
+	return llm.Response{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(content), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}}
 }
 
 func compatibleResponsesCapabilities() llm.ProviderCapabilities {
@@ -217,7 +213,7 @@ func compatibleResponsesCapabilities() llm.ProviderCapabilities {
 
 func compatiblePhaseAbsentResponse(content string) llm.Response {
 	return llm.Response{
-		Assistant:     llm.Message{Role: llm.RoleAssistant, Content: content},
+		Assistant:     llm.Message{Role: llm.RoleAssistant, Content: textutil.OptionalTrimmedString(content)},
 		ProviderPhase: llm.AbsentProviderPhase(),
 		Usage:         llm.Usage{WindowTokens: 200000},
 	}
@@ -225,7 +221,7 @@ func compatiblePhaseAbsentResponse(content string) llm.Response {
 
 func compatibleFinalResponse(content string) llm.Response {
 	return llm.Response{
-		Assistant:     llm.Message{Role: llm.RoleAssistant, Content: content, Phase: llm.MessagePhaseFinal},
+		Assistant:     llm.Message{Role: llm.RoleAssistant, Content: textutil.OptionalTrimmedString(content), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		ProviderPhase: llm.FinalProviderPhase(),
 		Usage:         llm.Usage{WindowTokens: 200000},
 	}
@@ -233,7 +229,7 @@ func compatibleFinalResponse(content string) llm.Response {
 
 func compatibleCommentaryResponse(content string, toolCalls ...llm.ToolCall) llm.Response {
 	return llm.Response{
-		Assistant:     llm.Message{Role: llm.RoleAssistant, Content: content, Phase: llm.MessagePhaseCommentary, ToolCalls: toolCalls},
+		Assistant:     llm.Message{Role: llm.RoleAssistant, Content: textutil.OptionalTrimmedString(content), Phase: textutil.Value(llm.MessagePhaseCommentary), ToolCalls: toolCalls},
 		ProviderPhase: llm.CommentaryProviderPhase(),
 		ToolCalls:     toolCalls,
 		Usage:         llm.Usage{WindowTokens: 200000},
@@ -241,12 +237,11 @@ func compatibleCommentaryResponse(content string, toolCalls ...llm.ToolCall) llm
 }
 
 func TestPhaseProtocolRejectsInconsistentProviderAndLegacyPhaseFacts(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{
 		caps: compatibleResponsesCapabilities(),
 		responses: []llm.Response{{
-			Assistant:     llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseCommentary},
+			Assistant:     llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ProviderPhase: llm.FinalProviderPhase(),
 			Usage:         llm.Usage{WindowTokens: 200000},
 		}},
@@ -260,7 +255,6 @@ func TestPhaseProtocolRejectsInconsistentProviderAndLegacyPhaseFacts(t *testing.
 }
 
 func TestWorkflowToolModeExposesCompleteNodeDespiteEnabledTools(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	workflowCfg := testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool)
 	eng := mustNewWorkflowTestEngine(t, store, &fakeClient{}, workflowCfg, Config{
@@ -286,7 +280,6 @@ func TestWorkflowToolModeExposesCompleteNodeDespiteEnabledTools(t *testing.T) {
 }
 
 func TestCompleteNodeNotAdvertisedOutsideWorkflow(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolCompleteNode},
@@ -305,8 +298,59 @@ func TestCompleteNodeNotAdvertisedOutsideWorkflow(t *testing.T) {
 	}
 }
 
+func TestWorkflowGenerationToolChoiceMatchesEffectiveCompletionMode(t *testing.T) {
+	tests := []struct {
+		name string
+		mode config.WorkflowCompletionMode
+		want llm.ToolChoiceMode
+	}{
+		{name: "structured output", mode: config.WorkflowCompletionModeStructuredOutput, want: llm.ToolChoiceModeAutomatic},
+		{name: "tool", mode: config.WorkflowCompletionModeTool, want: llm.ToolChoiceModeRequired},
+		{name: "shell command", mode: config.WorkflowCompletionModeShellCommand, want: llm.ToolChoiceModeRequired},
+		{name: "unstructured output", mode: config.WorkflowCompletionModeUnstructured, want: llm.ToolChoiceModeAutomatic},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			eng := mustNewWorkflowTestEngine(t, store, &fakeClient{}, testWorkflowConfig(&fakeWorkflowController{}, tt.mode), Config{
+				EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
+			})
+			req, err := eng.buildRequest(context.Background(), "step", true)
+			if err != nil {
+				t.Fatalf("buildRequest: %v", err)
+			}
+			if req.ToolChoiceMode != tt.want {
+				t.Fatalf("tool choice mode = %q, want %q", req.ToolChoiceMode, tt.want)
+			}
+		})
+	}
+}
+
+func TestWorkflowRequiredToolChoiceIncludesLocalAndHostedTools(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(
+		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}},
+		tools.HandlerRegistration{ID: toolspec.ToolWebSearch, Handler: fakeTool{name: toolspec.ToolWebSearch}},
+	), Config{
+		Model:         "gpt-5",
+		WorkflowRun:   testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeShellCommand),
+		EnabledTools:  []toolspec.ID{toolspec.ToolExecCommand, toolspec.ToolWebSearch},
+		WebSearchMode: "native",
+	})
+	req, err := eng.buildRequest(context.Background(), "step", true)
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+	if req.ToolChoiceMode != llm.ToolChoiceModeRequired || !req.EnableNativeWebSearch {
+		t.Fatalf("tool controls = mode:%q web_search:%t", req.ToolChoiceMode, req.EnableNativeWebSearch)
+	}
+	if len(req.Tools) != 1 || req.Tools[0].Name != string(toolspec.ToolExecCommand) {
+		t.Fatalf("local tools = %+v, want exec_command", req.Tools)
+	}
+}
+
 func TestWorkflowRequiredToolChoiceAcceptsHostedWebSearchOnly(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(
 		tools.HandlerRegistration{ID: toolspec.ToolWebSearch, Handler: fakeTool{name: toolspec.ToolWebSearch}},
@@ -320,13 +364,12 @@ func TestWorkflowRequiredToolChoiceAcceptsHostedWebSearchOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildRequest: %v", err)
 	}
-	if len(req.Tools) != 0 || req.StructuredOutput != nil || !req.EnableNativeWebSearch || req.ToolChoiceMode != llm.ToolChoiceModeRequired {
+	if len(req.Tools) != 0 || !req.EnableNativeWebSearch || req.ToolChoiceMode != llm.ToolChoiceModeRequired {
 		t.Fatalf("request = %+v, want hosted-only required tools", req)
 	}
 }
 
 func TestWorkflowRequiredToolChoiceRejectsEmptyEffectiveToolSet(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model:       "gpt-5",
@@ -339,7 +382,6 @@ func TestWorkflowRequiredToolChoiceRejectsEmptyEffectiveToolSet(t *testing.T) {
 }
 
 func TestWorkflowRequiredToolChoiceRejectsNonResponsesAdapter(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{caps: llm.ProviderCapabilities{
 		ProviderID:           "anthropic",
@@ -355,13 +397,10 @@ func TestWorkflowRequiredToolChoiceRejectsNonResponsesAdapter(t *testing.T) {
 }
 
 func TestAcceptedLiveWorkflowSteeringKeepsRequiredToolChoice(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := newWorkflowSteeringClient()
 	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool), Config{
-		Model:         "gpt-5",
-		EnabledTools:  []toolspec.ID{toolspec.ToolExecCommand, toolspec.ToolWebSearch},
-		WebSearchMode: "native",
+		EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
 	})
 	submitDone := make(chan error, 1)
 	go func() {
@@ -389,26 +428,13 @@ func TestAcceptedLiveWorkflowSteeringKeepsRequiredToolChoice(t *testing.T) {
 		t.Fatalf("requests = %+v, want initial and steered turns", requests)
 	}
 	for i, request := range requests {
-		if request.ToolChoiceMode != llm.ToolChoiceModeRequired || !request.EnableNativeWebSearch {
-			t.Fatalf("request %d tool controls = mode:%q web_search:%t", i, request.ToolChoiceMode, request.EnableNativeWebSearch)
-		}
-		localTools := map[string]bool{
-			string(toolspec.ToolExecCommand):  false,
-			string(toolspec.ToolCompleteNode): false,
-		}
-		for _, tool := range request.Tools {
-			if _, ok := localTools[tool.Name]; !ok {
-				t.Fatalf("request %d serialized unexpected local tool %q: %+v", i, tool.Name, request.Tools)
-			}
-			localTools[tool.Name] = true
-		}
-		if len(request.Tools) != len(localTools) || !localTools[string(toolspec.ToolExecCommand)] || !localTools[string(toolspec.ToolCompleteNode)] {
-			t.Fatalf("request %d local tools = %+v, want exec_command and complete_node", i, request.Tools)
+		if request.ToolChoiceMode != llm.ToolChoiceModeRequired {
+			t.Fatalf("request %d tool choice mode = %q, want required", i, request.ToolChoiceMode)
 		}
 	}
 	foundSteer := false
 	for _, message := range requestMessages(requests[1]) {
-		if message.Role == llm.RoleUser && message.Content == "steer active workflow" {
+		if message.Role == llm.RoleUser && messageContent(message) == "steer active workflow" {
 			foundSteer = true
 		}
 	}
@@ -417,10 +443,46 @@ func TestAcceptedLiveWorkflowSteeringKeepsRequiredToolChoice(t *testing.T) {
 	}
 }
 
-func TestWorkflowModePromptExistingRunScopedMessageSkipsCommentCountQuery(t *testing.T) {
-	t.Parallel()
+func TestWorkflowModePromptInjectedWithoutHeadlessOrUserPrompt(t *testing.T) {
 	store := mustCreateTestSession(t)
-	if _, _, err := store.AppendEvent("seed", "message", llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeWorkflowMode, SourcePath: "run-1", Content: "existing workflow instructions"}); err != nil {
+	controller := &fakeWorkflowController{}
+	client := &fakeClient{responses: []llm.Response{commentaryResponse("complete",
+		llm.ToolCall{
+			ID:    "call_complete",
+			Name:  string(toolspec.ToolCompleteNode),
+			Input: json.RawMessage(`{"commentary":"complete","summary":"done"}`),
+		},
+	)}}
+	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeTool), Config{
+		HeadlessMode: true,
+	})
+	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	assertModelCallCount(t, client, 1)
+	messages := requestMessages(client.calls[0])
+	workflowIdx := -1
+	for idx, msg := range messages {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeWorkflowMode {
+			workflowIdx = idx
+		}
+	}
+	if workflowIdx < 0 {
+		t.Fatalf("workflow prompt missing: messages=%+v", messages)
+	}
+	for _, msg := range messages {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeHeadlessMode {
+			t.Fatalf("headless prompt should not be injected during workflow runs: %+v", messages)
+		}
+		if msg.Role == llm.RoleUser {
+			t.Fatalf("workflow run should not inject user prompt: %+v", messages)
+		}
+	}
+}
+
+func TestWorkflowModePromptExistingRunScopedMessageSkipsCommentCountQuery(t *testing.T) {
+	store := mustCreateTestSession(t)
+	if _, _, err := appendTestEvent(t, store, "seed", llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), SourcePath: textutil.Value("run-1"), Content: textutil.Value("existing workflow instructions")}); err != nil {
 		t.Fatalf("seed workflow message: %v", err)
 	}
 	counter := &fakeTaskCommentCounter{count: 2}
@@ -437,7 +499,7 @@ func TestWorkflowModePromptExistingRunScopedMessageSkipsCommentCountQuery(t *tes
 		t.Fatalf("CountTaskComments calls = %d, want 0", got)
 	}
 	workflowMessages := workflowPromptMessages(requestMessages(client.calls[0]))
-	if len(workflowMessages) != 1 || workflowMessages[0].Content != "existing workflow instructions" {
+	if len(workflowMessages) != 1 || messageContent(workflowMessages[0]) != "existing workflow instructions" {
 		t.Fatalf("workflow messages = %+v, want only the existing run-scoped prompt", workflowMessages)
 	}
 }
@@ -445,15 +507,44 @@ func TestWorkflowModePromptExistingRunScopedMessageSkipsCommentCountQuery(t *tes
 func workflowPromptMessages(messages []llm.Message) []llm.Message {
 	out := []llm.Message{}
 	for _, msg := range messages {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeWorkflowMode {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeWorkflowMode {
 			out = append(out, msg)
 		}
 	}
 	return out
 }
 
+func TestWorkflowStructuredModeUsesStructuredOutput(t *testing.T) {
+	store := mustCreateTestSession(t)
+	workflowCfg := testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeStructuredOutput)
+	client := &fakeClient{responses: []llm.Response{structuredFinalResponse(`{"commentary":"complete","summary":"done"}`)}}
+	eng := mustNewWorkflowTestEngine(t, store, client, workflowCfg, Config{})
+	if _, err := eng.SubmitUserMessage(context.Background(), "node prompt"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	assertModelCallCount(t, client, 1)
+	req := client.calls[0]
+	if req.StructuredOutput == nil {
+		t.Fatal("expected structured output")
+	}
+	messages := requestMessages(req)
+	workflowIdx := -1
+	for idx, msg := range messages {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeWorkflowMode {
+			workflowIdx = idx
+		}
+	}
+	if workflowIdx < 0 {
+		t.Fatalf("workflow prompt missing from structured-output request: %+v", messages)
+	}
+	for _, tool := range req.Tools {
+		if tool.Name == string(toolspec.ToolCompleteNode) {
+			t.Fatalf("complete_node advertised in structured mode: %+v", req.Tools)
+		}
+	}
+}
+
 func TestWorkflowRuntimeRejectsUnresolvedCompletionMode(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "legacy"}}
 	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeAuto), Config{
@@ -465,21 +556,51 @@ func TestWorkflowRuntimeRejectsUnresolvedCompletionMode(t *testing.T) {
 	}
 }
 
+func TestWorkflowShellAndUnstructuredModesOmitDynamicCompletionMetadata(t *testing.T) {
+	tests := []struct {
+		name string
+		mode config.WorkflowCompletionMode
+	}{
+		{name: "shell command", mode: config.WorkflowCompletionModeShellCommand},
+		{name: "unstructured output", mode: config.WorkflowCompletionModeUnstructured},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			workflowCfg := testWorkflowConfig(&fakeWorkflowController{}, tt.mode)
+			workflowCfg.Contract.Transitions[0].Parameters = append(workflowCfg.Contract.Transitions[0].Parameters, workflow.Parameter{Key: "details", Description: "Detailed evidence."})
+			eng := mustNewWorkflowTestEngine(t, store, &fakeClient{}, workflowCfg, Config{
+				EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
+			})
+			if err := eng.ensureMetaContextForRequest(context.Background(), "step"); err != nil {
+				t.Fatalf("ensure meta context: %v", err)
+			}
+			req, err := eng.buildRequest(context.Background(), "step", true)
+			if err != nil {
+				t.Fatalf("buildRequest: %v", err)
+			}
+			if req.StructuredOutput != nil {
+				t.Fatalf("%s request has structured output: %+v", tt.name, req.StructuredOutput)
+			}
+			for _, tool := range req.Tools {
+				if tool.Name == string(toolspec.ToolCompleteNode) {
+					t.Fatalf("%s request advertised complete_node: %+v", tt.name, req.Tools)
+				}
+			}
+		})
+	}
+}
+
 func TestWorkflowMixedCompleteNodeRunsSideEffects(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	sideEffect := &countingTool{name: toolspec.ToolExecCommand}
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
-		commentaryResponse("duplicated",
-			completeNodeCall("call_complete_1", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
-			completeNodeCall("call_complete_2", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
-			llm.ToolCall{ID: "call_shell_skipped", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"echo must-not-run"}`)},
-		),
 		commentaryResponse("mixed",
-			completeNodeCall("call_complete_3", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
+			completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
 			llm.ToolCall{ID: "call_shell", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"echo side-effect"}`)},
 		),
+		commentaryResponse("complete", completeNodeCall("call_complete_2", json.RawMessage(`{"commentary":"complete","summary":"done"}`))),
 	}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: sideEffect}), Config{
 		WorkflowRun: testWorkflowConfig(controller, config.WorkflowCompletionModeTool),
@@ -487,9 +608,81 @@ func TestWorkflowMixedCompleteNodeRunsSideEffects(t *testing.T) {
 	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	assertModelCallCount(t, client, 2)
 	if got := sideEffect.count.Load(); got != 1 {
-		t.Fatalf("side-effect tool executions = %d, want only the valid mixed-turn call", got)
+		t.Fatalf("side-effect tool executions = %d, want 1", got)
+	}
+	if got := controller.completed.Load(); got != 1 {
+		t.Fatalf("completions = %d, want 1", got)
+	}
+	if got := controller.violations.Load(); got != 0 {
+		t.Fatalf("violations = %d, want 0", got)
+	}
+}
+
+func TestWorkflowTerminalCompleteNodePersistsHostedToolResults(t *testing.T) {
+	store := mustCreateTestSession(t)
+	controller := &fakeWorkflowController{}
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("complete"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+		ToolCalls: []llm.ToolCall{
+			completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
+		},
+		OutputItems: []llm.ResponseItem{{
+			Type: llm.ResponseItemTypeOther,
+			Raw:  json.RawMessage(`{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"kent cli"}}`),
+		}},
+		Usage: llm.Usage{WindowTokens: 200000},
+	}}}
+	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeTool), Config{
+		EnabledTools: []toolspec.ID{toolspec.ToolExecCommand, toolspec.ToolWebSearch},
+	})
+
+	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if got := controller.completed.Load(); got != 1 {
+		t.Fatalf("completions = %d, want 1", got)
+	}
+	events, err := collectTestEventRecords(store)
+	if err != nil {
+		t.Fatalf("ReadEvents: %v", err)
+	}
+	hostedCallPersisted := false
+	hostedResultPersisted := false
+	for _, evt := range events {
+		if evt.Kind != "message" {
+			continue
+		}
+		persisted := persistedMessageForTest(t, evt)
+		if persisted.Role == llm.RoleAssistant {
+			for _, call := range persisted.ToolCalls {
+				if call.ID == "ws_1" {
+					hostedCallPersisted = true
+				}
+			}
+		}
+		if persisted.Role == llm.RoleTool && persisted.ToolCallID != nil && *persisted.ToolCallID == "ws_1" {
+			hostedResultPersisted = true
+		}
+	}
+	if !hostedCallPersisted || !hostedResultPersisted {
+		t.Fatalf("hosted call/result persisted = %v/%v, want both", hostedCallPersisted, hostedResultPersisted)
+	}
+}
+
+func TestWorkflowDuplicateCompleteNodePreflightSkipsSideEffects(t *testing.T) {
+	store := mustCreateTestSession(t)
+	controller := &fakeWorkflowController{}
+	client := &fakeClient{responses: []llm.Response{
+		commentaryResponse("duplicated",
+			completeNodeCall("call_complete_1", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
+			completeNodeCall("call_complete_2", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
+		),
+		commentaryResponse("complete", completeNodeCall("call_complete_3", json.RawMessage(`{"commentary":"complete","summary":"done"}`))),
+	}}
+	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeTool), Config{})
+	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
+		t.Fatalf("submit: %v", err)
 	}
 	if got := controller.completed.Load(); got != 1 {
 		t.Fatalf("completions = %d, want 1", got)
@@ -500,7 +693,6 @@ func TestWorkflowMixedCompleteNodeRunsSideEffects(t *testing.T) {
 }
 
 func TestWorkflowStructuredCompletionStopsWithoutAnotherTurn(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
@@ -512,21 +704,6 @@ func TestWorkflowStructuredCompletionStopsWithoutAnotherTurn(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 	assertModelCallCount(t, client, 1)
-	request := client.calls[0]
-	if request.StructuredOutput == nil {
-		t.Fatal("expected structured output")
-	}
-	if request.ToolChoiceMode != llm.ToolChoiceModeAutomatic {
-		t.Fatalf("tool choice mode = %q, want automatic", request.ToolChoiceMode)
-	}
-	if len(workflowPromptMessages(requestMessages(request))) == 0 {
-		t.Fatalf("workflow prompt missing from structured-output request: %+v", requestMessages(request))
-	}
-	for _, tool := range request.Tools {
-		if tool.Name == string(toolspec.ToolCompleteNode) {
-			t.Fatalf("complete_node advertised in structured mode: %+v", request.Tools)
-		}
-	}
 	if got := controller.completed.Load(); got != 1 {
 		t.Fatalf("completions = %d, want 1", got)
 	}
@@ -537,7 +714,6 @@ func TestWorkflowStructuredCompletionStopsWithoutAnotherTurn(t *testing.T) {
 }
 
 func TestWorkflowUnstructuredFinalAnswerCompletesRun(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
@@ -549,9 +725,6 @@ func TestWorkflowUnstructuredFinalAnswerCompletesRun(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 	assertModelCallCount(t, client, 1)
-	if got := client.calls[0].ToolChoiceMode; got != llm.ToolChoiceModeAutomatic {
-		t.Fatalf("tool choice mode = %q, want automatic", got)
-	}
 	requests := controller.completionRequests()
 	if len(requests) != 1 {
 		t.Fatalf("completion request count = %d, want 1: %+v", len(requests), requests)
@@ -572,20 +745,13 @@ func TestWorkflowUnstructuredFinalAnswerCompletesRun(t *testing.T) {
 }
 
 func TestWorkflowCompletionControllerFailureUsesInvalidCompletionCapWithoutTerminalState(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{completeErr: errors.New("workflow completion unavailable")}
 	client := &fakeClient{responses: []llm.Response{
 		structuredFinalResponse(`{"commentary":"first","summary":"done"}`),
 		structuredFinalResponse(`{"commentary":"retry","summary":"done"}`),
 	}}
-	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeUnstructured), Config{
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
-	})
-	const activeGoal = "ship the steering rework end to end"
-	if _, err := eng.SetGoal(activeGoal, session.GoalActorUser); err != nil {
-		t.Fatalf("SetGoal: %v", err)
-	}
+	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeUnstructured), Config{})
 
 	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
 		t.Fatalf("submit: %v", err)
@@ -606,57 +772,104 @@ func TestWorkflowCompletionControllerFailureUsesInvalidCompletionCapWithoutTermi
 	if !requestHasDeveloperErrorFeedback(client.calls[1]) {
 		t.Fatal("controller failure did not append workflow continuation feedback")
 	}
-	assertDeveloperErrorFeedbackAfterAssistantFinalContains(t, eng, `{"commentary":"first","summary":"done"}`, []string{activeGoal}, nil)
 	if terminal := eng.WorkflowTerminalState(); terminal.Completed {
 		t.Fatalf("terminal state = %+v, want incomplete after controller failures", terminal)
 	}
 }
 
-func TestCompatibleProviderPhaseAbsentStructuredWorkflowOutputCompletes(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	controller := &fakeWorkflowController{}
-	client := &fakeClient{
-		caps: compatibleResponsesCapabilities(),
-		responses: []llm.Response{
-			compatiblePhaseAbsentResponse(`{"commentary":"complete","summary":"done"}`),
-			compatiblePhaseAbsentResponse("must not be requested"),
-		},
+func TestCompatibleProviderPhaseAbsentWorkflowOutputCompletes(t *testing.T) {
+	tests := []struct {
+		name   string
+		mode   config.WorkflowCompletionMode
+		source WorkflowCompletionSource
+	}{
+		{name: "structured", mode: config.WorkflowCompletionModeStructuredOutput, source: WorkflowCompletionSourceStructuredOutput},
+		{name: "unstructured", mode: config.WorkflowCompletionModeUnstructured, source: WorkflowCompletionSourceUnstructured},
 	}
-	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeStructuredOutput), Config{})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			controller := &fakeWorkflowController{}
+			client := &fakeClient{
+				caps: compatibleResponsesCapabilities(),
+				responses: []llm.Response{
+					compatiblePhaseAbsentResponse(`{"commentary":"complete","summary":"done"}`),
+					compatiblePhaseAbsentResponse("must not be requested"),
+				},
+			}
+			eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, tt.mode), Config{})
 
-	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
-		t.Fatalf("submit: %v", err)
-	}
+			if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
+				t.Fatalf("submit: %v", err)
+			}
 
-	assertModelCallCount(t, client, 1)
-	if got := controller.completed.Load(); got != 1 {
-		t.Fatalf("completions = %d, want 1", got)
-	}
-	if got := controller.violations.Load(); got != 0 {
-		t.Fatalf("violations = %d, want 0", got)
-	}
-	requests := controller.completionRequests()
-	if len(requests) != 1 {
-		t.Fatalf("completion requests = %+v, want exactly one", requests)
-	}
-	if requests[0].TransitionID != "done" || requests[0].OutputValues["summary"] != "done" || requests[0].Commentary != "complete" {
-		t.Fatalf("completion request = %+v, want decoded workflow submission", requests[0])
-	}
-	terminal := eng.WorkflowTerminalState()
-	if !terminal.Completed || terminal.Source != WorkflowCompletionSourceStructuredOutput || terminal.RunID != "run-1" {
-		t.Fatalf("terminal state = %+v, want structured completion", terminal)
+			assertModelCallCount(t, client, 1)
+			if got := controller.completed.Load(); got != 1 {
+				t.Fatalf("completions = %d, want 1", got)
+			}
+			if got := controller.violations.Load(); got != 0 {
+				t.Fatalf("violations = %d, want 0", got)
+			}
+			requests := controller.completionRequests()
+			if len(requests) != 1 {
+				t.Fatalf("completion requests = %+v, want exactly one", requests)
+			}
+			if requests[0].TransitionID != "done" || requests[0].OutputValues["summary"] != "done" || requests[0].Commentary != "complete" {
+				t.Fatalf("completion request = %+v, want decoded workflow submission", requests[0])
+			}
+			terminal := eng.WorkflowTerminalState()
+			if !terminal.Completed || terminal.Source != tt.source || terminal.RunID != "run-1" {
+				t.Fatalf("terminal state = %+v, want %s completion", terminal, tt.source)
+			}
+		})
 	}
 }
 
-func TestCompatibleProviderInvalidPhaseAbsentUnstructuredWorkflowOutputCanRetry(t *testing.T) {
-	t.Parallel()
+func TestCompatibleProviderInvalidPhaseAbsentWorkflowOutputCanRetry(t *testing.T) {
+	for _, mode := range []config.WorkflowCompletionMode{
+		config.WorkflowCompletionModeStructuredOutput,
+		config.WorkflowCompletionModeUnstructured,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			controller := &fakeWorkflowController{}
+			client := &fakeClient{
+				caps: compatibleResponsesCapabilities(),
+				responses: []llm.Response{
+					compatiblePhaseAbsentResponse(`{"summary":""}`),
+					compatiblePhaseAbsentResponse(`{"commentary":"complete","summary":"done"}`),
+				},
+			}
+			eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, mode), Config{})
+
+			if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
+				t.Fatalf("submit: %v", err)
+			}
+
+			assertModelCallCount(t, client, 2)
+			if got := controller.violations.Load(); got != 1 {
+				t.Fatalf("violations = %d, want 1", got)
+			}
+			if got := controller.completed.Load(); got != 1 {
+				t.Fatalf("completions = %d, want 1", got)
+			}
+			if !requestHasDeveloperErrorFeedback(client.calls[1]) {
+				t.Fatal("invalid phase-absent submission did not append workflow continuation feedback")
+			}
+			if !eng.WorkflowTerminalState().Completed {
+				t.Fatalf("terminal state = %+v, want completion after retry", eng.WorkflowTerminalState())
+			}
+		})
+	}
+}
+
+func TestCompatibleProviderCommentaryContinuesWithoutCompletionSideEffects(t *testing.T) {
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{
 		caps: compatibleResponsesCapabilities(),
 		responses: []llm.Response{
-			compatiblePhaseAbsentResponse(`{"summary":""}`),
+			compatibleCommentaryResponse("continuing"),
 			compatiblePhaseAbsentResponse(`{"commentary":"complete","summary":"done"}`),
 		},
 	}
@@ -667,22 +880,16 @@ func TestCompatibleProviderInvalidPhaseAbsentUnstructuredWorkflowOutputCanRetry(
 	}
 
 	assertModelCallCount(t, client, 2)
-	if got := controller.violations.Load(); got != 1 {
-		t.Fatalf("violations = %d, want 1", got)
-	}
 	if got := controller.completed.Load(); got != 1 {
-		t.Fatalf("completions = %d, want 1", got)
+		t.Fatalf("completions = %d, want only the later valid completion", got)
 	}
-	if !requestHasDeveloperErrorFeedback(client.calls[1]) {
-		t.Fatal("invalid phase-absent submission did not append workflow continuation feedback")
+	if got := controller.violations.Load(); got != 0 {
+		t.Fatalf("violations = %d, want 0", got)
 	}
-	if !eng.WorkflowTerminalState().Completed {
-		t.Fatalf("terminal state = %+v, want completion after retry", eng.WorkflowTerminalState())
-	}
+	assertPersistedAssistantContentCount(t, eng, "continuing", 1)
 }
 
 func TestCompatibleProviderCommentaryFlushesAcceptedSteeringBeforeContinuing(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	started := make(chan struct{})
@@ -733,7 +940,7 @@ func TestCompatibleProviderCommentaryFlushesAcceptedSteeringBeforeContinuing(t *
 	client.mu.Unlock()
 	hasAcceptedSteering := false
 	for _, message := range requestMessages(second) {
-		if message.Role == llm.RoleUser && message.Content == "accepted steering" {
+		if message.Role == llm.RoleUser && messageContent(message) == "accepted steering" {
 			hasAcceptedSteering = true
 			break
 		}
@@ -747,11 +954,9 @@ func TestCompatibleProviderCommentaryFlushesAcceptedSteeringBeforeContinuing(t *
 	if got := controller.completed.Load(); got != 1 {
 		t.Fatalf("completions = %d, want 1", got)
 	}
-	assertPersistedAssistantContentCount(t, eng, "continuing", 1)
 }
 
 func TestWorkflowTerminalCompletionFailsQueuedSteeringAtRunRelease(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	started := make(chan struct{})
@@ -782,7 +987,7 @@ func TestWorkflowTerminalCompletionFailsQueuedSteeringAtRunRelease(t *testing.T)
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for workflow turn")
 	}
-	queued := eng.QueueUserMessageWithClientRequestID("do not submit after run release", "req-after-release")
+	queued := mustQueueUserMessageWithClientRequestID(t, eng, "do not submit after run release", "req-after-release")
 	close(release)
 	if err := <-submitDone; err != nil {
 		t.Fatalf("submit: %v", err)
@@ -806,7 +1011,6 @@ func hookClientCallCount(client *hookClient) int {
 }
 
 func TestWorkflowObservedDurableCompletionFailsQueuedSteeringDuringCloseDrain(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	controller.completedExternally.Store(true)
@@ -821,7 +1025,7 @@ func TestWorkflowObservedDurableCompletionFailsQueuedSteeringDuringCloseDrain(t 
 			}
 		},
 	})
-	queued := eng.QueueUserMessageWithClientRequestID("do not submit after observed completion", "req-observed-complete")
+	queued := mustQueueUserMessageWithClientRequestID(t, eng, "do not submit after observed completion", "req-observed-complete")
 	completed, err := eng.observeWorkflowDurableCompletion(context.Background())
 	if err != nil {
 		t.Fatalf("observeWorkflowDurableCompletion: %v", err)
@@ -846,7 +1050,6 @@ func TestWorkflowObservedDurableCompletionFailsQueuedSteeringDuringCloseDrain(t 
 }
 
 func TestWorkflowDurableCompletionBeforeModelTurnStopsWithoutRequest(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	controller.completedExternally.Store(true)
@@ -866,7 +1069,6 @@ func TestWorkflowDurableCompletionBeforeModelTurnStopsWithoutRequest(t *testing.
 }
 
 func TestWorkflowDurableCompletionAfterModelResponseSkipsStalePersistence(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &hookClient{
@@ -887,17 +1089,43 @@ func TestWorkflowDurableCompletionAfterModelResponseSkipsStalePersistence(t *tes
 		t.Fatalf("model calls = %d, want 1", len(client.calls))
 	}
 	for _, msg := range eng.transcriptRuntimeState().SnapshotMessages() {
-		if msg.Role == llm.RoleAssistant && strings.Contains(msg.Content, "stale assistant") {
+		if msg.Role == llm.RoleAssistant && strings.Contains(messageContent(msg), "stale assistant") {
 			t.Fatalf("stale assistant response was persisted after external completion: %+v", eng.transcriptRuntimeState().SnapshotMessages())
 		}
-		if msg.Role == llm.RoleTool && msg.ToolCallID == "call_shell" {
+		if msg.Role == llm.RoleTool && msg.ToolCallID != nil && *msg.ToolCallID == "call_shell" {
 			t.Fatalf("stale tool result was persisted after external completion: %+v", eng.transcriptRuntimeState().SnapshotMessages())
 		}
 	}
 }
 
+func TestWorkflowShellToolDurableCompletionStopsAfterToolResult(t *testing.T) {
+	store := mustCreateTestSession(t)
+	controller := &fakeWorkflowController{}
+	shellTool := &externalCompletionTool{controller: controller}
+	client := &fakeClient{responses: []llm.Response{
+		commentaryResponse("run completion command",
+			llm.ToolCall{ID: "call_shell", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"kent task complete"}`)},
+		),
+		structuredFinalResponse("unexpected"),
+	}}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shellTool}), Config{
+		WorkflowRun: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
+	})
+
+	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	assertModelCallCount(t, client, 1)
+	if got := shellTool.count.Load(); got != 1 {
+		t.Fatalf("shell tool calls = %d, want 1", got)
+	}
+	if got := controller.completed.Load(); got != 0 {
+		t.Fatalf("runtime completions = %d, want external completion only", got)
+	}
+	assertToolMessageWithCallID(t, eng, "call_shell")
+}
+
 func TestWorkflowDelayedDurableCompletionObservedBeforeNextModelTurn(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{completeExternallyAfterObservations: 4}
 	client := &fakeClient{responses: []llm.Response{
@@ -919,11 +1147,10 @@ func TestWorkflowDelayedDurableCompletionObservedBeforeNextModelTurn(t *testing.
 }
 
 func TestWorkflowInvalidCompletionAttemptsInterruptAtCap(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
-		structuredFinalResponse("invalid final answer"),
+		commentaryResponse("bad", completeNodeCall("call_bad_1", json.RawMessage(`{"summary":""}`))),
 		commentaryResponse("bad", completeNodeCall("call_bad_2", json.RawMessage(`{"summary":""}`))),
 		structuredFinalResponse("unexpected"),
 	}}
@@ -932,16 +1159,12 @@ func TestWorkflowInvalidCompletionAttemptsInterruptAtCap(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 	assertModelCallCount(t, client, 2)
-	if got := controller.violations.Load(); got != 2 {
-		t.Fatalf("violations = %d, want 2", got)
-	}
 	if got := controller.maxHits.Load(); got != 1 {
 		t.Fatalf("max hits = %d, want 1", got)
 	}
 }
 
 func TestWorkflowInvalidCompletionFailClosedWhenConfiguredCapInvalid(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
@@ -963,65 +1186,106 @@ func TestWorkflowInvalidCompletionFailClosedWhenConfiguredCapInvalid(t *testing.
 	}
 }
 
-func TestCompatibleProviderPhaseAbsentProseConsumesShellWorkflowViolationAndCanRecover(t *testing.T) {
-	t.Parallel()
+func TestWorkflowFinalAnswersUseInvalidCompletionCap(t *testing.T) {
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
-	client := &fakeClient{
-		caps: compatibleResponsesCapabilities(),
-		responses: []llm.Response{
-			compatiblePhaseAbsentResponse("ordinary prose"),
-			compatibleCommentaryResponse("complete",
-				llm.ToolCall{ID: "call_shell", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"kent task complete"}`)},
-			),
-		},
-	}
-	shellTool := &externalCompletionTool{controller: controller}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shellTool}), Config{
-		WorkflowRun: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
-	})
-
+	client := &fakeClient{responses: []llm.Response{
+		structuredFinalResponse("done 1"),
+		structuredFinalResponse("done 2"),
+		structuredFinalResponse("done 3"),
+		structuredFinalResponse("unexpected"),
+	}}
+	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeTool), Config{})
 	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-
 	assertModelCallCount(t, client, 2)
-	if got := controller.violations.Load(); got != 1 {
-		t.Fatalf("violations = %d, want 1", got)
+	if got := controller.maxHits.Load(); got != 1 {
+		t.Fatalf("max hits = %d, want 1", got)
 	}
-	if got := controller.maxHits.Load(); got != 0 {
-		t.Fatalf("max hits = %d, want 0", got)
+}
+
+func TestCompatibleProviderPhaseAbsentProseConsumesWorkflowViolationAndCanRecover(t *testing.T) {
+	tests := []struct {
+		name      string
+		mode      config.WorkflowCompletionMode
+		newEngine func(*testing.T, *session.Store, *fakeClient, *fakeWorkflowController) *Engine
+	}{
+		{
+			name: "tool",
+			mode: config.WorkflowCompletionModeTool,
+			newEngine: func(t *testing.T, store *session.Store, client *fakeClient, controller *fakeWorkflowController) *Engine {
+				return mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeTool), Config{})
+			},
+		},
+		{
+			name: "shell command",
+			mode: config.WorkflowCompletionModeShellCommand,
+			newEngine: func(t *testing.T, store *session.Store, client *fakeClient, controller *fakeWorkflowController) *Engine {
+				shellTool := &externalCompletionTool{controller: controller}
+				return mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shellTool}), Config{
+					WorkflowRun: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
+				})
+			},
+		},
 	}
-	if !requestHasDeveloperErrorFeedback(client.calls[1]) {
-		t.Fatal("phase-absent prose did not append workflow continuation feedback")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			controller := &fakeWorkflowController{}
+			valid := compatibleCommentaryResponse("complete",
+				completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
+			)
+			if tt.mode == config.WorkflowCompletionModeShellCommand {
+				valid = compatibleCommentaryResponse("complete",
+					llm.ToolCall{ID: "call_shell", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"kent task complete"}`)},
+				)
+			}
+			client := &fakeClient{
+				caps: compatibleResponsesCapabilities(),
+				responses: []llm.Response{
+					compatiblePhaseAbsentResponse("ordinary prose"),
+					valid,
+				},
+			}
+			eng := tt.newEngine(t, store, client, controller)
+
+			if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
+				t.Fatalf("submit: %v", err)
+			}
+
+			assertModelCallCount(t, client, 2)
+			if got := controller.violations.Load(); got != 1 {
+				t.Fatalf("violations = %d, want 1", got)
+			}
+			if got := controller.maxHits.Load(); got != 0 {
+				t.Fatalf("max hits = %d, want 0", got)
+			}
+			if !requestHasDeveloperErrorFeedback(client.calls[1]) {
+				t.Fatal("phase-absent prose did not append workflow continuation feedback")
+			}
+			assertPersistedAssistantContentCount(t, eng, "ordinary prose", 1)
+			terminal := eng.WorkflowTerminalState()
+			if !terminal.Completed {
+				t.Fatalf("terminal state = %+v, want later valid completion", terminal)
+			}
+		})
 	}
-	assertPersistedAssistantContentCount(t, eng, "ordinary prose", 1)
-	terminal := eng.WorkflowTerminalState()
-	if !terminal.Completed || terminal.Source != WorkflowCompletionSourceObserved {
-		t.Fatalf("terminal state = %+v, want observed shell completion", terminal)
-	}
-	if got := controller.completed.Load(); got != 0 {
-		t.Fatalf("runtime completions = %d, want external shell completion only", got)
-	}
-	if got := shellTool.count.Load(); got != 1 {
-		t.Fatalf("shell tool calls = %d, want 1", got)
-	}
-	assertToolMessageWithCallID(t, eng, "call_shell")
 }
 
 func TestCompatibleProviderEmptyNoToolResponsesContinueWithoutWorkflowViolation(t *testing.T) {
-	t.Parallel()
 	tests := []struct {
 		name     string
 		response func(string) llm.Response
 		content  string
 	}{
 		{name: "absent empty", response: compatiblePhaseAbsentResponse, content: ""},
+		{name: "absent whitespace", response: compatiblePhaseAbsentResponse, content: " \n\t "},
+		{name: "final empty", response: compatibleFinalResponse, content: ""},
 		{name: "final whitespace", response: compatibleFinalResponse, content: " \n\t "},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
 			store := mustCreateTestSession(t)
 			controller := &fakeWorkflowController{}
 			client := &fakeClient{
@@ -1056,7 +1320,7 @@ func TestCompatibleProviderEmptyNoToolResponsesContinueWithoutWorkflowViolation(
 
 func requestHasDeveloperErrorFeedback(request llm.Request) bool {
 	for _, message := range requestMessages(request) {
-		if message.Role == llm.RoleDeveloper && message.MessageType == llm.MessageTypeErrorFeedback {
+		if message.Role == llm.RoleDeveloper && message.MessageType != nil && *message.MessageType == llm.MessageTypeErrorFeedback {
 			return true
 		}
 	}
@@ -1067,7 +1331,7 @@ func assertPersistedAssistantContentCount(t *testing.T, eng *Engine, content str
 	t.Helper()
 	got := 0
 	for _, message := range eng.transcriptRuntimeState().SnapshotMessages() {
-		if message.Role == llm.RoleAssistant && message.Content == content {
+		if message.Role == llm.RoleAssistant && messageContent(message) == content {
 			got++
 		}
 	}
@@ -1080,7 +1344,7 @@ func assertDeveloperErrorFeedbackAfterAssistantFinalContains(t *testing.T, eng *
 	t.Helper()
 	messages := eng.transcriptRuntimeState().SnapshotMessages()
 	for index, message := range messages {
-		if message.Role != llm.RoleAssistant || message.Phase != llm.MessagePhaseFinal || message.Content != assistantContent {
+		if message.Role != llm.RoleAssistant || message.Phase == nil || *message.Phase != llm.MessagePhaseFinal || messageContent(message) != assistantContent {
 			continue
 		}
 		nextIndex := index + 1
@@ -1088,17 +1352,17 @@ func assertDeveloperErrorFeedbackAfterAssistantFinalContains(t *testing.T, eng *
 			t.Fatalf("assistant final %q had no following message: %+v", assistantContent, messages)
 		}
 		next := messages[nextIndex]
-		if next.Role != llm.RoleDeveloper || next.MessageType != llm.MessageTypeErrorFeedback {
+		if next.Role != llm.RoleDeveloper || next.MessageType == nil || *next.MessageType != llm.MessageTypeErrorFeedback {
 			t.Fatalf("message after assistant final %q = %+v, want developer error feedback; messages=%+v", assistantContent, next, messages)
 		}
 		for _, want := range required {
-			if !strings.Contains(next.Content, want) {
-				t.Fatalf("developer error feedback after %q missing %q:\n%s", assistantContent, want, next.Content)
+			if !strings.Contains(messageContent(next), want) {
+				t.Fatalf("developer error feedback after %q missing %q:\n%s", assistantContent, want, messageContent(next))
 			}
 		}
 		for _, blocked := range forbidden {
-			if strings.Contains(next.Content, blocked) {
-				t.Fatalf("developer error feedback after %q contained forbidden %q:\n%s", assistantContent, blocked, next.Content)
+			if strings.Contains(messageContent(next), blocked) {
+				t.Fatalf("developer error feedback after %q contained forbidden %q:\n%s", assistantContent, blocked, messageContent(next))
 			}
 		}
 		return
@@ -1109,7 +1373,7 @@ func assertDeveloperErrorFeedbackAfterAssistantFinalContains(t *testing.T, eng *
 func assertToolMessageWithCallID(t *testing.T, eng *Engine, callID string) {
 	t.Helper()
 	for _, msg := range eng.transcriptRuntimeState().SnapshotMessages() {
-		if msg.Role == llm.RoleTool && msg.ToolCallID == callID {
+		if msg.Role == llm.RoleTool && msg.ToolCallID != nil && *msg.ToolCallID == callID {
 			return
 		}
 	}

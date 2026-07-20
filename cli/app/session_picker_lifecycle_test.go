@@ -116,19 +116,112 @@ func TestSessionPickerLifecycleResumesAtSupportedGeometryWithoutLegacyDefaults(t
 func TestSessionPickerLifecycleResultValidationIsExhaustive(t *testing.T) {
 	t.Parallel()
 
+	sessionID := mustPickerSessionID(t, "lifecycle-open")
+	plan := sessionLaunchPlan{SessionID: sessionID.String()}
 	for _, result := range []sessionPickerResult{
 		newSessionPickerCreateResult(),
 		newSessionPickerCancelResult(),
-		newSessionPickerOpenResult(mustPickerSessionID(t, "lifecycle-open")),
+		sessionPickerOpenResult{sessionID: sessionID, plan: plan},
 	} {
 		if err := validateSessionPickerLifecycleResult(result); err != nil {
 			t.Fatalf("validate %T: %v", result, err)
 		}
 	}
-	for _, result := range []sessionPickerResult{nil, sessionPickerOpenResult{}} {
+	mismatchedPlan := sessionLaunchPlan{SessionID: "different-session"}
+	for _, result := range []sessionPickerResult{
+		nil,
+		sessionPickerOpenResult{},
+		sessionPickerOpenResult{sessionID: sessionID},
+		sessionPickerOpenResult{sessionID: sessionID, plan: mismatchedPlan},
+	} {
 		if err := validateSessionPickerLifecycleResult(result); err == nil {
 			t.Fatalf("validate %T unexpectedly succeeded", result)
 		}
+	}
+}
+
+func TestSessionPickerLifecycleParentCancellationCancelsOpenRequest(t *testing.T) {
+	parentContext, cancelParent := context.WithCancel(context.Background())
+	started := make(chan context.Context, 1)
+	sessionID := mustPickerSessionID(t, "open-context-cancellation")
+	options := lifecycleTestOptions(t)
+	options.Context = parentContext
+	options.OpenController = sessionPickerOpenControllerStub{
+		inspect: func(
+			ctx context.Context,
+			_ runtimeids.SessionID,
+		) (sessionPickerOpenInspection, error) {
+			started <- ctx
+			<-ctx.Done()
+			return sessionPickerOpenInspection{}, ctx.Err()
+		},
+	}
+	lifecycle := newSessionPickerLifecycle(options)
+	defer lifecycle.Close()
+	lifecycle.picker.main.replaceSegments(serverapi.SessionPageResponse{
+		ProjectID: options.Loader.ProjectID(),
+		Category:  sessioncontract.SessionCategoryMain,
+		Sessions: []clientui.SessionSummary{{
+			SessionID: sessionID,
+			Category:  sessioncontract.SessionCategoryMain,
+		}},
+	})
+	lifecycle.picker.main.selected = newSessionPickerSessionSelection(sessionID)
+
+	_, command := lifecycle.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("open request did not start")
+	}
+	batch, ok := command().(tea.BatchMsg)
+	if !ok || len(batch) == 0 {
+		t.Fatalf("open command = %T, want non-empty batch", command())
+	}
+	completed := make(chan tea.Msg, 1)
+	go func() {
+		completed <- batch[0]()
+	}()
+	var requestContext context.Context
+	select {
+	case requestContext = <-started:
+	case <-time.After(time.Second):
+		t.Fatal("open inspection did not start")
+	}
+	cancelParent()
+	select {
+	case <-requestContext.Done():
+		if !errors.Is(requestContext.Err(), context.Canceled) {
+			t.Fatalf(
+				"open request context error = %v, want canceled",
+				requestContext.Err(),
+			)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("parent cancellation did not reach open request")
+	}
+	select {
+	case message := <-completed:
+		inspected, ok := message.(sessionPickerOpenInspectedMsg)
+		if !ok || !errors.Is(inspected.err, context.Canceled) {
+			t.Fatalf("open completion = %#v, want canceled inspection", message)
+		}
+		_, command := lifecycle.Update(message)
+		if command == nil {
+			t.Fatal("canceled open completion did not quit the picker")
+		}
+		if _, ok := lifecycle.Result().(sessionPickerCancelResult); !ok {
+			t.Fatalf(
+				"canceled open lifecycle result = %T, want cancel",
+				lifecycle.Result(),
+			)
+		}
+		if lifecycle.picker.pendingOpen != nil {
+			t.Fatalf(
+				"canceled open retained pending state %+v",
+				lifecycle.picker.pendingOpen,
+			)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled open request did not complete")
 	}
 }
 
@@ -148,12 +241,18 @@ func TestSessionPickerLifecycleCloseCancelsInitialAndDirectionalPageRequestsOnEv
 				t.Parallel()
 
 				loader := newBlockingSessionPageLoader()
-				lifecycle := newSessionPickerLifecycle(sessionPickerLifecycleOptions{
+				options := sessionPickerLifecycleOptions{
 					Loader: loader,
 					Theme:  "dark",
 					Header: sessionPickerHeaderInfo{},
-				})
+				}
 				sessionID := mustPickerSessionID(t, "page-cancellation-session")
+				if exit == exitOpen {
+					options.OpenController = successfulSessionPickerOpenController(
+						sessionID,
+					)
+				}
+				lifecycle := newSessionPickerLifecycle(options)
 				var command tea.Cmd
 				switch requestKind {
 				case "initial":

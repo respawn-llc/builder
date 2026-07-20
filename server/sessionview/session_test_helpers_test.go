@@ -35,7 +35,7 @@ func (r testSessionResolver) ResolveSessionStore(_ context.Context, sessionID st
 	if r.store == nil {
 		return nil, errors.New("session store is required")
 	}
-	if strings.TrimSpace(sessionID) != strings.TrimSpace(r.store.Meta().SessionID) {
+	if strings.TrimSpace(sessionID) != strings.TrimSpace(r.store.Metadata().SessionID) {
 		return nil, fmt.Errorf("session %q not available", strings.TrimSpace(sessionID))
 	}
 	return r.store, nil
@@ -52,7 +52,7 @@ func newSessionViewRuntimeFixture(t *testing.T, store *session.Store, client llm
 	if store == nil {
 		t.Fatal("session store is required")
 	}
-	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(store.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
@@ -62,7 +62,7 @@ func newSessionViewRuntimeFixture(t *testing.T, store *session.Store, client llm
 	settings.Reviewer.Frequency = "off"
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: settings,
-		Workdir:  store.Meta().WorkspaceRoot,
+		Workdir:  store.Metadata().WorkspaceRoot,
 		Client:   client,
 	})
 	if err != nil {
@@ -127,6 +127,90 @@ func newSessionViewStore(t *testing.T, containerDir, containerName, workspaceRoo
 	return store
 }
 
+func appendSessionViewRecord(
+	t *testing.T,
+	store *session.Store,
+	stepID string,
+	payload session.EventRecordPayload,
+) session.EventRecord {
+	t.Helper()
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("ensure session is durable: %v", err)
+	}
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	step := stepID
+	record, receipt, err := eventLog.AppendRecord(&step, payload)
+	if err != nil || !receipt.Committed {
+		t.Fatalf("append typed event: receipt=%+v error=%v", receipt, err)
+	}
+	return record
+}
+
+func appendSessionViewRecordWithCursor(
+	t *testing.T,
+	store *session.Store,
+	stepID string,
+	payload session.EventRecordPayload,
+) session.EventRecordAppendResult {
+	t.Helper()
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("ensure session is durable: %v", err)
+	}
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	step := stepID
+	result, err := eventLog.AppendRecordWithEndByteCursor(&step, payload)
+	if err != nil || !result.Committed {
+		t.Fatalf("append typed event with cursor: result=%+v error=%v", result, err)
+	}
+	return result
+}
+
+func appendSessionViewMessage(
+	t *testing.T,
+	store *session.Store,
+	stepID string,
+	role session.MessageRole,
+	content string,
+	phase *session.MessagePhase,
+	messageType *session.MessageType,
+) session.EventRecord {
+	t.Helper()
+	return appendSessionViewRecord(t, store, stepID, session.MessageRecord{
+		Role:        role,
+		Content:     &content,
+		Phase:       phase,
+		MessageType: messageType,
+	})
+}
+
+func appendSessionViewHistoryReplacement(
+	t *testing.T,
+	store *session.Store,
+	stepID string,
+	record session.HistoryReplacementRecord,
+) session.EventRecord {
+	t.Helper()
+	return appendSessionViewRecord(t, store, stepID, record)
+}
+
+func sessionViewStringPointer(value string) *string {
+	return &value
+}
+
+func sessionViewMessageTypePointer(value session.MessageType) *session.MessageType {
+	return &value
+}
+
+func sessionViewMessagePhasePointer(value session.MessagePhase) *session.MessagePhase {
+	return &value
+}
+
 func newSessionViewParentAgentChild(t *testing.T, containerDir, containerName, workspaceRoot string) (*session.Store, string) {
 	t.Helper()
 	parent := newSessionViewStore(t, containerDir, containerName, workspaceRoot)
@@ -137,5 +221,5 @@ func newSessionViewParentAgentChild(t *testing.T, containerDir, containerName, w
 	if err := session.InitializeCreationContext(child, parent, session.SessionCreationSourceParentAgent, session.ChildContextOptions{}); err != nil {
 		t.Fatalf("initialize child provenance: %v", err)
 	}
-	return child, parent.Meta().SessionID
+	return child, parent.Metadata().SessionID
 }

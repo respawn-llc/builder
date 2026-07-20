@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"core/server/auth"
-	"core/server/llm"
 	"core/server/metadata"
 	"core/server/requestmemo"
 	"core/server/runlog"
@@ -25,31 +24,52 @@ import (
 	"core/shared/sessioncontract"
 )
 
+func appendSessionMessage(t *testing.T, store *session.Store, stepID string, role session.MessageRole, content string) session.EventRecord {
+	t.Helper()
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	step := stepID
+	message := content
+	record, receipt, err := eventLog.AppendRecord(&step, session.MessageRecord{
+		Role:    role,
+		Content: &message,
+	})
+	if err != nil || !receipt.Committed {
+		t.Fatalf("append typed message: receipt=%+v error=%v", receipt, err)
+	}
+	return record
+}
+
 func userMessageSeqAt(t *testing.T, store *session.Store, n int) int64 {
 	t.Helper()
-	window, err := store.ReadRecentEvents(10_000)
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	window, err := eventLog.ReadRecentRecords(10_000)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
 	visible := 0
-	for _, evt := range window.Events {
-		if evt.Kind != "message" {
+	for _, record := range window.Records {
+		payload, err := record.Payload()
+		if err != nil {
+			t.Fatalf("read persisted event payload: %v", err)
+		}
+		message, ok := payload.(session.MessageRecord)
+		if !ok {
 			continue
 		}
-		var msg struct {
-			Role string `json:"role"`
-		}
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			continue
-		}
-		if msg.Role == "user" {
+		if message.Role == session.MessageRoleUser {
 			visible++
 			if visible == n {
-				return evt.Seq
+				return record.Seq()
 			}
 		}
 	}
-	t.Fatalf("user message %d not found among %d events", n, len(window.Events))
+	t.Fatalf("user message %d not found among %d events", n, len(window.Records))
 	return 0
 }
 
@@ -150,7 +170,7 @@ func TestServiceGetInitialInputPrefersStoredDraft(t *testing.T) {
 
 	service := newTestSessionLifecycleService(containerDir, nil)
 	resp, err := service.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{
-		SessionID:       store.Meta().SessionID,
+		SessionID:       store.Metadata().SessionID,
 		TransitionInput: "transition input",
 	})
 	if err != nil {
@@ -185,7 +205,7 @@ func TestServiceGetInitialInputOverrideReturnsOnlyExactTransitionInput(t *testin
 			service := newTestSessionLifecycleService(containerDir, nil)
 			_, err := service.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
 				ClientRequestID: "persist-parent-draft",
-				SessionID:       store.Meta().SessionID,
+				SessionID:       store.Metadata().SessionID,
 				Input:           "conflicting parent draft",
 				RecoveryBuffers: []serverapi.SessionDraftRecoveryBuffer{
 					{
@@ -203,7 +223,7 @@ func TestServiceGetInitialInputOverrideReturnsOnlyExactTransitionInput(t *testin
 			}
 
 			resp, err := service.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{
-				SessionID:           store.Meta().SessionID,
+				SessionID:           store.Metadata().SessionID,
 				TransitionInput:     tt.transitionInput,
 				OverrideStoredDraft: true,
 			})
@@ -252,7 +272,7 @@ func TestServicePersistInputDraftWritesBySessionID(t *testing.T) {
 	service := newTestSessionLifecycleService(containerDir, nil)
 	if _, err := service.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
 		ClientRequestID: "req-1",
-		SessionID:       store.Meta().SessionID,
+		SessionID:       store.Metadata().SessionID,
 		Input:           "saved by service",
 	}); err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
@@ -262,8 +282,8 @@ func TestServicePersistInputDraftWritesBySessionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen session store: %v", err)
 	}
-	if reopened.Meta().InputDraft != "saved by service" {
-		t.Fatalf("input draft = %q, want %q", reopened.Meta().InputDraft, "saved by service")
+	if reopened.Metadata().InputDraft != "saved by service" {
+		t.Fatalf("input draft = %q, want %q", reopened.Metadata().InputDraft, "saved by service")
 	}
 }
 
@@ -279,14 +299,14 @@ func TestServicePersistInputDraftRoundTripsStructuredRecoveryBuffers(t *testing.
 	}}
 	if _, err := service.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
 		ClientRequestID: "draft-recovery-1",
-		SessionID:       store.Meta().SessionID,
+		SessionID:       store.Metadata().SessionID,
 		Input:           "visible draft",
 		RecoveryBuffers: recovery,
 	}); err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
 	}
 
-	resp, err := service.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{SessionID: store.Meta().SessionID})
+	resp, err := service.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{SessionID: store.Metadata().SessionID})
 	if err != nil {
 		t.Fatalf("GetInitialInput: %v", err)
 	}
@@ -336,7 +356,7 @@ func TestServiceRestoresLegacyDraftRecoveryAndOrdinaryWriteDropsIdentity(t *test
 		"UPDATE sessions SET input_draft = ?, metadata_json = ? WHERE id = ?",
 		"visible draft",
 		string(legacyMetadata),
-		sess.Meta().SessionID,
+		sess.Metadata().SessionID,
 	); err != nil {
 		t.Fatalf("seed legacy metadata: %v", err)
 	}
@@ -347,7 +367,7 @@ func TestServiceRestoresLegacyDraftRecoveryAndOrdinaryWriteDropsIdentity(t *test
 		metadataStore.AuthoritativeSessionStoreOptions(),
 	)
 	resp, err := service.GetInitialInput(t.Context(), serverapi.SessionInitialInputRequest{
-		SessionID: sess.Meta().SessionID,
+		SessionID: sess.Metadata().SessionID,
 	})
 	if err != nil {
 		t.Fatalf("GetInitialInput: %v", err)
@@ -362,7 +382,7 @@ func TestServiceRestoresLegacyDraftRecoveryAndOrdinaryWriteDropsIdentity(t *test
 
 	reopened, err := session.OpenByID(
 		cfg.PersistenceRoot,
-		sess.Meta().SessionID,
+		sess.Metadata().SessionID,
 		metadataStore.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
@@ -375,7 +395,7 @@ func TestServiceRestoresLegacyDraftRecoveryAndOrdinaryWriteDropsIdentity(t *test
 	if err := metadataStore.DB().QueryRowContext(
 		t.Context(),
 		"SELECT metadata_json FROM sessions WHERE id = ?",
-		sess.Meta().SessionID,
+		sess.Metadata().SessionID,
 	).Scan(&rewrittenMetadata); err != nil {
 		t.Fatalf("read rewritten metadata: %v", err)
 	}
@@ -400,7 +420,7 @@ func TestServiceGetInitialInputLegacyDraftHasNoRecoveryBuffers(t *testing.T) {
 		t.Fatalf("set input draft: %v", err)
 	}
 	service := newTestSessionLifecycleService(containerDir, nil)
-	resp, err := service.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{SessionID: store.Meta().SessionID})
+	resp, err := service.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{SessionID: store.Metadata().SessionID})
 	if err != nil {
 		t.Fatalf("GetInitialInput: %v", err)
 	}
@@ -464,7 +484,7 @@ func TestServicePersistInputDraftPersistsAndDedupes(t *testing.T) {
 	service := newTestSessionLifecycleService(containerDir, nil)
 	req := serverapi.SessionPersistInputDraftRequest{
 		ClientRequestID: "req-1",
-		SessionID:       store.Meta().SessionID,
+		SessionID:       store.Metadata().SessionID,
 		Input:           "saved by service",
 	}
 
@@ -478,8 +498,8 @@ func TestServicePersistInputDraftPersistsAndDedupes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen session store: %v", err)
 	}
-	if reopened.Meta().InputDraft != "saved by service" {
-		t.Fatalf("input draft = %q, want %q", reopened.Meta().InputDraft, "saved by service")
+	if reopened.Metadata().InputDraft != "saved by service" {
+		t.Fatalf("input draft = %q, want %q", reopened.Metadata().InputDraft, "saved by service")
 	}
 }
 
@@ -491,7 +511,7 @@ func TestServicePersistInputDraftRejectsClientRequestIDPayloadMismatch(t *testin
 	service := newTestSessionLifecycleService(containerDir, nil)
 	first := serverapi.SessionPersistInputDraftRequest{
 		ClientRequestID: "req-1",
-		SessionID:       store.Meta().SessionID,
+		SessionID:       store.Metadata().SessionID,
 		Input:           "saved by service",
 	}
 
@@ -507,8 +527,8 @@ func TestServicePersistInputDraftRejectsClientRequestIDPayloadMismatch(t *testin
 	if err != nil {
 		t.Fatalf("reopen session store: %v", err)
 	}
-	if reopened.Meta().InputDraft != "saved by service" {
-		t.Fatalf("input draft = %q, want %q", reopened.Meta().InputDraft, "saved by service")
+	if reopened.Metadata().InputDraft != "saved by service" {
+		t.Fatalf("input draft = %q, want %q", reopened.Metadata().InputDraft, "saved by service")
 	}
 }
 
@@ -577,10 +597,10 @@ func TestServiceResolveTransitionOpenSessionAuthorizesProvenanceTargetAndReturns
 
 	response, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: "authorized-navigation",
-		SessionID:       child.Meta().SessionID,
+		SessionID:       child.Metadata().SessionID,
 		Transition: serverapi.SessionTransition{
 			Action:          serverapi.SessionTransitionActionOpenSession,
-			TargetSessionID: parent.Meta().SessionID,
+			TargetSessionID: parent.Metadata().SessionID,
 			InitialInput:    "draft reply",
 		},
 	})
@@ -589,14 +609,14 @@ func TestServiceResolveTransitionOpenSessionAuthorizesProvenanceTargetAndReturns
 	}
 	intent, preparation := requireSessionLifecycleLaunch(t, response)
 	targetID, present := intent.SessionID()
-	if !present || targetID.String() != parent.Meta().SessionID {
-		t.Fatalf("navigation target = %q/%t, want %q", targetID.String(), present, parent.Meta().SessionID)
+	if !present || targetID.String() != parent.Metadata().SessionID {
+		t.Fatalf("navigation target = %q/%t, want %q", targetID.String(), present, parent.Metadata().SessionID)
 	}
 	binding, present := preparation.NavigationBinding()
 	if !present || binding.ProjectID != "project-target" || binding.WorkspaceID != "workspace-target" {
 		t.Fatalf("navigation binding = %+v/%t", binding, present)
 	}
-	if len(resolver.calls) != 1 || resolver.calls[0] != parent.Meta().SessionID {
+	if len(resolver.calls) != 1 || resolver.calls[0] != parent.Metadata().SessionID {
 		t.Fatalf("target resolver calls = %#v, want parent once", resolver.calls)
 	}
 }
@@ -624,7 +644,7 @@ func TestServiceResolveTransitionOpenSessionRejectsNonProvenanceTargetBeforeReso
 
 	_, err = service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: "unauthorized-navigation",
-		SessionID:       child.Meta().SessionID,
+		SessionID:       child.Metadata().SessionID,
 		Transition: serverapi.SessionTransition{
 			Action:          serverapi.SessionTransitionActionOpenSession,
 			TargetSessionID: "arbitrary-session",
@@ -640,23 +660,15 @@ func TestServiceResolveTransitionOpenSessionRejectsNonProvenanceTargetBeforeReso
 
 func TestServiceResolveTransitionForkRollbackCreatesFork(t *testing.T) {
 	_, containerDir, store := createPersistedSession(t)
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleAssistant, Content: "a1"}); err != nil {
-		t.Fatalf("append assistant message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-2", "message", llm.Message{Role: llm.RoleUser, Content: "u2"}); err != nil {
-		t.Fatalf("append second user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-2", "message", llm.Message{Role: llm.RoleAssistant, Content: "a2"}); err != nil {
-		t.Fatalf("append second assistant message: %v", err)
-	}
+	appendSessionMessage(t, store, "step-1", session.MessageRoleUser, "u1")
+	appendSessionMessage(t, store, "step-1", session.MessageRoleAssistant, "a1")
+	appendSessionMessage(t, store, "step-2", session.MessageRoleUser, "u2")
+	appendSessionMessage(t, store, "step-2", session.MessageRoleAssistant, "a2")
 
 	service := newTestSessionLifecycleService(containerDir, nil)
 	resp, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: "req-1",
-		SessionID:       store.Meta().SessionID,
+		SessionID:       store.Metadata().SessionID,
 		Transition: serverapi.SessionTransition{
 			Action:               "fork_rollback",
 			InitialPrompt:        "edited prompt",
@@ -668,7 +680,7 @@ func TestServiceResolveTransitionForkRollbackCreatesFork(t *testing.T) {
 	}
 	intent, preparation := requireSessionLifecycleLaunch(t, resp)
 	forkID, ok := intent.SessionID()
-	if !ok || forkID.String() == store.Meta().SessionID {
+	if !ok || forkID.String() == store.Metadata().SessionID {
 		t.Fatalf("unexpected fork session id %q/%v", forkID.String(), ok)
 	}
 	prompt, ok := preparation.InitialPrompt()
@@ -682,23 +694,15 @@ func TestServiceResolveTransitionForkRollbackCreatesFork(t *testing.T) {
 
 func TestServiceResolveTransitionForkRollbackUsesTargetToken(t *testing.T) {
 	_, containerDir, store := createPersistedSession(t)
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleAssistant, Content: "a1"}); err != nil {
-		t.Fatalf("append assistant message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-2", "message", llm.Message{Role: llm.RoleUser, Content: "u2"}); err != nil {
-		t.Fatalf("append second user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-2", "message", llm.Message{Role: llm.RoleAssistant, Content: "a2"}); err != nil {
-		t.Fatalf("append second assistant message: %v", err)
-	}
+	appendSessionMessage(t, store, "step-1", session.MessageRoleUser, "u1")
+	appendSessionMessage(t, store, "step-1", session.MessageRoleAssistant, "a1")
+	appendSessionMessage(t, store, "step-2", session.MessageRoleUser, "u2")
+	appendSessionMessage(t, store, "step-2", session.MessageRoleAssistant, "a2")
 
 	service := newTestSessionLifecycleService(containerDir, nil)
 	resp, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: "req-1",
-		SessionID:       store.Meta().SessionID,
+		SessionID:       store.Metadata().SessionID,
 		Transition: serverapi.SessionTransition{
 			Action:               "fork_rollback",
 			InitialPrompt:        "edited prompt",
@@ -725,18 +729,10 @@ func TestServiceResolveTransitionForkRollbackUsesTargetToken(t *testing.T) {
 func TestServiceResolveTransitionForkRollbackPreservesExecutionTarget(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg, metadataStore, binding, sess := createAuthoritativeSessionLifecycleSession(t, workspaceRoot)
-	if _, _, err := sess.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := sess.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleAssistant, Content: "a1"}); err != nil {
-		t.Fatalf("append assistant message: %v", err)
-	}
-	if _, _, err := sess.AppendEvent("step-2", "message", llm.Message{Role: llm.RoleUser, Content: "u2"}); err != nil {
-		t.Fatalf("append second user message: %v", err)
-	}
-	if _, _, err := sess.AppendEvent("step-2", "message", llm.Message{Role: llm.RoleAssistant, Content: "a2"}); err != nil {
-		t.Fatalf("append second assistant message: %v", err)
-	}
+	appendSessionMessage(t, sess, "step-1", session.MessageRoleUser, "u1")
+	appendSessionMessage(t, sess, "step-1", session.MessageRoleAssistant, "a1")
+	appendSessionMessage(t, sess, "step-2", session.MessageRoleUser, "u2")
+	appendSessionMessage(t, sess, "step-2", session.MessageRoleAssistant, "a2")
 
 	worktreeRoot := filepath.Join(t.TempDir(), "feature-a")
 	if err := os.MkdirAll(filepath.Join(worktreeRoot, "pkg"), 0o755); err != nil {
@@ -752,14 +748,14 @@ func TestServiceResolveTransitionForkRollbackPreservesExecutionTarget(t *testing
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	if err := metadataStore.UpdateSessionExecutionTarget(context.Background(), metadata.SessionExecutionTargetUpdate{SessionID: sess.Meta().SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "wt-1"}, CwdRelpath: "pkg"}); err != nil {
+	if err := metadataStore.UpdateSessionExecutionTarget(context.Background(), metadata.SessionExecutionTargetUpdate{SessionID: sess.Metadata().SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "wt-1"}, CwdRelpath: "pkg"}); err != nil {
 		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
 	}
 
 	service := newGlobalSessionLifecycleServiceWithOptions(cfg.PersistenceRoot, nil, metadataStore.AuthoritativeSessionStoreOptions())
 	resp, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: "req-1",
-		SessionID:       sess.Meta().SessionID,
+		SessionID:       sess.Metadata().SessionID,
 		Transition: serverapi.SessionTransition{
 			Action:               "fork_rollback",
 			InitialPrompt:        "edited prompt",
@@ -800,18 +796,10 @@ func TestServiceResolveTransitionForkRollbackPreservesExecutionTarget(t *testing
 func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg, metadataStore, binding, sess := createAuthoritativeSessionLifecycleSession(t, workspaceRoot)
-	if _, _, err := sess.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := sess.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleAssistant, Content: "a1"}); err != nil {
-		t.Fatalf("append assistant message: %v", err)
-	}
-	if _, _, err := sess.AppendEvent("step-2", "message", llm.Message{Role: llm.RoleUser, Content: "u2"}); err != nil {
-		t.Fatalf("append second user message: %v", err)
-	}
-	if _, _, err := sess.AppendEvent("step-2", "message", llm.Message{Role: llm.RoleAssistant, Content: "a2"}); err != nil {
-		t.Fatalf("append second assistant message: %v", err)
-	}
+	appendSessionMessage(t, sess, "step-1", session.MessageRoleUser, "u1")
+	appendSessionMessage(t, sess, "step-1", session.MessageRoleAssistant, "a1")
+	appendSessionMessage(t, sess, "step-2", session.MessageRoleUser, "u2")
+	appendSessionMessage(t, sess, "step-2", session.MessageRoleAssistant, "a2")
 
 	worktreeRoot := filepath.Join(t.TempDir(), "feature-a")
 	if err := os.MkdirAll(filepath.Join(worktreeRoot, "pkg"), 0o755); err != nil {
@@ -827,14 +815,14 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	if err := metadataStore.UpdateSessionExecutionTarget(context.Background(), metadata.SessionExecutionTargetUpdate{SessionID: sess.Meta().SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "wt-1"}, CwdRelpath: "pkg"}); err != nil {
+	if err := metadataStore.UpdateSessionExecutionTarget(context.Background(), metadata.SessionExecutionTargetUpdate{SessionID: sess.Metadata().SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "wt-1"}, CwdRelpath: "pkg"}); err != nil {
 		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
 	}
 
 	lifecycle := newGlobalSessionLifecycleServiceWithOptions(cfg.PersistenceRoot, nil, metadataStore.AuthoritativeSessionStoreOptions())
 	resolved, err := lifecycle.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: "req-1",
-		SessionID:       sess.Meta().SessionID,
+		SessionID:       sess.Metadata().SessionID,
 		Transition: serverapi.SessionTransition{
 			Action:               "fork_rollback",
 			InitialPrompt:        "edited prompt",
@@ -905,17 +893,13 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 
 func TestServiceResolveTransitionForkRollbackRejectsInvalidTargetToken(t *testing.T) {
 	_, containerDir, store := createPersistedSession(t)
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleAssistant, Content: "a1"}); err != nil {
-		t.Fatalf("append assistant message: %v", err)
-	}
+	appendSessionMessage(t, store, "step-1", session.MessageRoleUser, "u1")
+	appendSessionMessage(t, store, "step-1", session.MessageRoleAssistant, "a1")
 
 	service := newTestSessionLifecycleService(containerDir, nil)
 	_, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: "req-1",
-		SessionID:       store.Meta().SessionID,
+		SessionID:       store.Metadata().SessionID,
 		Transition: serverapi.SessionTransition{
 			Action:               "fork_rollback",
 			ForkRollbackTargetID: "not-valid",
@@ -948,7 +932,7 @@ func TestServiceGetInitialInputRejectsSessionOutsideContainer(t *testing.T) {
 	}
 
 	service := newTestSessionLifecycleService(containerA, nil)
-	_, err = service.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{SessionID: store.Meta().SessionID})
+	_, err = service.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{SessionID: store.Metadata().SessionID})
 	if err == nil {
 		t.Fatal("expected foreign session lookup rejection")
 	}
@@ -981,7 +965,7 @@ func TestServicePersistInputDraftRejectsSessionOutsideContainer(t *testing.T) {
 	service := newTestSessionLifecycleService(containerA, nil)
 	_, err = service.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
 		ClientRequestID: "req-1",
-		SessionID:       store.Meta().SessionID,
+		SessionID:       store.Metadata().SessionID,
 		Input:           "should fail",
 	})
 	if err == nil {

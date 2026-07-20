@@ -64,9 +64,9 @@ func (e *WorktreeSelectorError) RPCErrorCode() int {
 	return protocol.ErrCodeWorktreeSelector
 }
 
-func (e *WorktreeSelectorError) RPCErrorData() json.RawMessage {
+func (e *WorktreeSelectorError) RPCErrorData() (json.RawMessage, error) {
 	if e == nil {
-		return nil
+		return nil, fmt.Errorf("worktree selector error is required")
 	}
 	return marshalRPCErrorData(struct {
 		Type       string                      `json:"type"`
@@ -168,9 +168,9 @@ func (e *WorktreeImmediateTransitionError) RPCErrorCode() int {
 	return protocol.ErrCodeWorktreeImmediateTransition
 }
 
-func (e *WorktreeImmediateTransitionError) RPCErrorData() json.RawMessage {
+func (e *WorktreeImmediateTransitionError) RPCErrorData() (json.RawMessage, error) {
 	if e == nil {
-		return nil
+		return nil, fmt.Errorf("worktree transition pending error is required")
 	}
 	return marshalRPCErrorData(struct {
 		Type string                               `json:"type"`
@@ -190,9 +190,9 @@ func (e *WorktreeTransitionPendingError) RPCErrorCode() int {
 	return protocol.ErrCodeWorktreeTransitionPending
 }
 
-func (e *WorktreeTransitionPendingError) RPCErrorData() json.RawMessage {
+func (e *WorktreeTransitionPendingError) RPCErrorData() (json.RawMessage, error) {
 	if e == nil {
-		return nil
+		return nil, fmt.Errorf("worktree setup retained error is required")
 	}
 	return marshalRPCErrorData(struct {
 		Type               string              `json:"type"`
@@ -252,9 +252,9 @@ func (e *WorktreeSetupRetainedError) RPCErrorCode() int {
 	return protocol.ErrCodeWorktreeSetupRetained
 }
 
-func (e *WorktreeSetupRetainedError) RPCErrorData() json.RawMessage {
+func (e *WorktreeSetupRetainedError) RPCErrorData() (json.RawMessage, error) {
 	if e == nil {
-		return nil
+		return nil, fmt.Errorf("worktree setup retained error is required")
 	}
 	return marshalRPCErrorData(struct {
 		Type       string                `json:"type"`
@@ -358,9 +358,9 @@ func (e *WorktreeDeletePreconditionError) RPCErrorCode() int {
 	return protocol.ErrCodeWorktreeDeletePrecondition
 }
 
-func (e *WorktreeDeletePreconditionError) RPCErrorData() json.RawMessage {
+func (e *WorktreeDeletePreconditionError) RPCErrorData() (json.RawMessage, error) {
 	if e == nil {
-		return nil
+		return nil, fmt.Errorf("worktree delete precondition error is required")
 	}
 	return marshalRPCErrorData(struct {
 		Type       string             `json:"type"`

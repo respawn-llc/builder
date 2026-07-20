@@ -62,6 +62,7 @@ type SessionRequest struct {
 
 type SessionPlan struct {
 	Descriptor                          session.SessionDescriptor
+	EventLog                            session.MaterializedEventLog
 	ActiveSettings                      config.Settings
 	BaseSettings                        config.Settings
 	EnabledTools                        []toolspec.ID
@@ -85,7 +86,7 @@ func sessionPlanWithSnapshot(plan SessionPlan, store *session.Store, containerDi
 	if store == nil {
 		panic("session plan snapshot requires a store")
 	}
-	meta := store.Meta()
+	meta := store.Metadata()
 	sessionID, err := runtimeids.ParseSessionID(meta.SessionID)
 	if err != nil {
 		panic(fmt.Sprintf("session plan snapshot has invalid session id %q: %v", meta.SessionID, err))
@@ -185,7 +186,7 @@ func ResolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 	if err != nil {
 		return SessionPlan{}, err
 	}
-	meta := store.Meta()
+	meta := store.Metadata()
 	if meta.Locked != nil && (!meta.Locked.HasEnabledTools || strings.TrimSpace(meta.Locked.WebSearchMode) == "") {
 		backfill, backfillErr := store.BackfillLockedRequestShape(session.LockedRequestShapeBackfill{
 			EnabledTools:    toolspec.IDStrings(plan.EnabledTools),
@@ -203,7 +204,7 @@ func resolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 	if store == nil {
 		return SessionPlan{}, errors.New("session store is required")
 	}
-	meta := store.Meta()
+	meta := store.Metadata()
 	baseActive := EffectiveSettings(app.Settings, meta.Locked)
 	baseSource := app.Source
 	active, source := baseActive, baseSource
@@ -252,12 +253,16 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 	if err != nil {
 		return SessionPlan{}, err
 	}
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		return SessionPlan{}, session.MapEventLogMaterializationError(err)
+	}
 	if req.Mode == ModeHeadless {
 		if err := EnsureSubagentSessionName(store); err != nil {
 			return SessionPlan{}, err
 		}
 	}
-	meta := store.Meta()
+	meta := store.Metadata()
 	baseActive := EffectiveSettings(p.Config.Settings, meta.Locked)
 	baseSource := p.Config.Source
 	var continuationAgentRole *string
@@ -312,6 +317,7 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 		configuredModelName = active.Model
 	}
 	return p.sessionPlanWithSnapshot(SessionPlan{
+		EventLog:                            eventLog,
 		ActiveSettings:                      active,
 		BaseSettings:                        baseActive,
 		EnabledTools:                        enabledTools,
@@ -392,7 +398,7 @@ func (p Planner) ApplyRunPromptOverridesWithOptions(plan SessionPlan, overrides 
 }
 
 func (p Planner) applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, store *session.Store, overrides serverapi.RunPromptOverrides, authState auth.State, options RunPromptOverrideOptions, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {
-	locked := store.Meta().Locked
+	locked := store.Metadata().Locked
 	toolLock := locked
 	if options.AllowLockedAgentRoleChange {
 		toolLock = nil
@@ -632,8 +638,8 @@ func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPl
 	}
 	shouldPersistContinuation := false
 	var continuationAgentRole *string
-	if store.Meta().Continuation != nil {
-		continuationAgentRole = cloneContinuationRole(store.Meta().Continuation.AgentRole)
+	if store.Metadata().Continuation != nil {
+		continuationAgentRole = cloneContinuationRole(store.Metadata().Continuation.AgentRole)
 	}
 	staleLockedPromptFacingContract := false
 	persistContinuation := func() error {
@@ -727,7 +733,7 @@ func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPl
 		return p.sessionPlanWithSnapshot(next, store), warnings, nil
 	}
 	loaded := prepared.OverrideConfig
-	locked := store.Meta().Locked
+	locked := store.Metadata().Locked
 	var err error
 	if strings.TrimSpace(overrides.OpenAIBaseURL) != "" {
 		shouldPersistContinuation = true
@@ -889,7 +895,7 @@ func (p Planner) SelectedSessionLockedContract(sessionID runtimeids.SessionID) (
 	if err != nil {
 		return nil, err
 	}
-	return store.Meta().Locked, nil
+	return store.Metadata().Locked, nil
 }
 
 // SelectedSessionPromptFacingTarget resolves a selected session's persisted
@@ -917,7 +923,7 @@ func (p Planner) SelectedSessionContinuationAgentRole(sessionID runtimeids.Sessi
 	if err != nil {
 		return nil, err
 	}
-	continuation := store.Meta().Continuation
+	continuation := store.Metadata().Continuation
 	if continuation == nil {
 		return nil, nil
 	}
@@ -960,7 +966,7 @@ func (p Planner) createSession(ctx context.Context, origin serverapi.SessionCrea
 	if origin.Kind() == serverapi.SessionCreateOriginParentAgent {
 		if err := (parentAgentDepthPolicy{sessions: p.PersistedSessions}).enforce(
 			ctx,
-			source.Meta(),
+			source.Metadata(),
 			p.Config.Settings.MaxSubagentDepth,
 			p.Config.Settings.Debug,
 		); err != nil {
@@ -1011,7 +1017,7 @@ func (p Planner) initializeChildSessionContext(ctx context.Context, child *sessi
 	if !hasTarget {
 		return nil
 	}
-	if err := p.updateChildExecutionTarget(ctx, child.Meta().SessionID, target); err != nil {
+	if err := p.updateChildExecutionTarget(ctx, child.Metadata().SessionID, target); err != nil {
 		return errors.Join(err, p.rollbackChildSession(child))
 	}
 	return nil
@@ -1070,7 +1076,7 @@ func (p Planner) rollbackChildSession(child *session.Store) error {
 	if child == nil {
 		return nil
 	}
-	childMeta := child.Meta()
+	childMeta := child.Metadata()
 	rollbackCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	var rollbackErrs []error
@@ -1094,7 +1100,7 @@ func EnsureSubagentSessionName(store *session.Store) error {
 	if store == nil {
 		return errors.New("session store is required")
 	}
-	meta := store.Meta()
+	meta := store.Metadata()
 	if strings.TrimSpace(meta.Name) != "" {
 		return nil
 	}

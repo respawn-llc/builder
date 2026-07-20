@@ -26,7 +26,7 @@ func TestServiceMapsTypedLaunchIntentsAndMemoizesByTypedIntent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create target session: %v", err)
 	}
-	targetID, err := runtimeids.ParseSessionID(target.Meta().SessionID)
+	targetID, err := runtimeids.ParseSessionID(target.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("parse target session ID: %v", err)
 	}

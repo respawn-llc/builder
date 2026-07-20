@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"core/server/session/sessiontest"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func TestRunPromptCreatesSessionAndPersistsDurableTranscript(t *testing.T) {
@@ -77,7 +79,7 @@ func TestRunPromptCreatesSessionAndPersistsDurableTranscript(t *testing.T) {
 
 	cfg := loadAppTestConfig(t, workspace, config.LoadOptions{OpenAIBaseURL: server.URL})
 	store := openAuthoritativeAppSession(t, cfg.PersistenceRoot, result.SessionID)
-	meta := store.Meta()
+	meta := store.Metadata()
 	wantWorkspaceRoot, err := config.CanonicalWorkspaceRoot(cfg.WorkspaceRoot)
 	if err != nil {
 		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
@@ -92,7 +94,7 @@ func TestRunPromptCreatesSessionAndPersistsDurableTranscript(t *testing.T) {
 		t.Fatalf("unexpected continuation context: %+v", meta.Continuation)
 	}
 
-	events, err := sessiontest.CollectEvents(store)
+	events, err := sessiontest.CollectRecords(store)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -101,17 +103,22 @@ func TestRunPromptCreatesSessionAndPersistsDurableTranscript(t *testing.T) {
 		sawAssistant bool
 	)
 	for _, evt := range events {
-		if evt.Kind != "message" {
+		if string(mustSessionEventKind(evt)) != "message" {
 			continue
 		}
-		var msg llm.Message
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			t.Fatalf("unmarshal message payload: %v", err)
+		record, ok := mustSessionEventPayload(evt).(session.MessageRecord)
+		if !ok {
+			t.Fatalf("message payload = %T, want session.MessageRecord", mustSessionEventPayload(evt))
 		}
-		if msg.Role == llm.RoleUser && msg.Content == "hello from user" {
+		msg := appMessageFromRecord(record)
+		if msg.Role == llm.RoleUser && msg.Content != nil && *msg.Content == "hello from user" {
 			sawUser = true
 		}
-		if msg.Role == llm.RoleAssistant && msg.Content == "hello from fake" && msg.Phase == llm.MessagePhaseFinal {
+		if msg.Role == llm.RoleAssistant &&
+			msg.Content != nil &&
+			*msg.Content == "hello from fake" &&
+			msg.Phase != nil &&
+			*msg.Phase == llm.MessagePhaseFinal {
 			sawAssistant = true
 		}
 	}
@@ -158,7 +165,7 @@ func TestRunPromptWorkspaceContextCreatesChildWithParentWorktreeContext(t *testi
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	if err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{SessionID: parent.Meta().SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "worktree-feature"}, CwdRelpath: "pkg"}); err != nil {
+	if err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{SessionID: parent.Metadata().SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "worktree-feature"}, CwdRelpath: "pkg"}); err != nil {
 		t.Fatalf("UpdateSessionExecutionTarget parent: %v", err)
 	}
 	if err := parent.SetWorktreeReminderState(&session.WorktreeReminderState{
@@ -180,7 +187,7 @@ func TestRunPromptWorkspaceContextCreatesChildWithParentWorktreeContext(t *testi
 
 	result, err := RunPrompt(ctx, Options{
 		WorkspaceRoot:             worktreeSubdir,
-		WorkspaceContextSessionID: parent.Meta().SessionID,
+		WorkspaceContextSessionID: parent.Metadata().SessionID,
 		Model:                     "gpt-5",
 		OpenAIBaseURL:             fakeResponses.URL,
 		OpenAIBaseURLExplicit:     true,
@@ -189,9 +196,9 @@ func TestRunPromptWorkspaceContextCreatesChildWithParentWorktreeContext(t *testi
 		t.Fatalf("RunPrompt: %v", err)
 	}
 	child := openAuthoritativeAppSession(t, cfg.PersistenceRoot, result.SessionID)
-	childMeta := child.Meta()
-	if childMeta.ParentAgentSessionID == nil || childMeta.ParentAgentSessionID.String() != parent.Meta().SessionID {
-		t.Fatalf("child parent-agent session id = %v, want %q", childMeta.ParentAgentSessionID, parent.Meta().SessionID)
+	childMeta := child.Metadata()
+	if childMeta.ParentAgentSessionID == nil || childMeta.ParentAgentSessionID.String() != parent.Metadata().SessionID {
+		t.Fatalf("child parent-agent session id = %v, want %q", childMeta.ParentAgentSessionID, parent.Metadata().SessionID)
 	}
 	if childMeta.WorktreeReminder == nil {
 		t.Fatal("expected child worktree reminder")
@@ -269,8 +276,8 @@ func TestRunPromptFastRoleUsesRoleLevelProviderSettingsForHeuristics(t *testing.
 		t.Fatalf("model payload = %#v, want gpt-5.6-terra", got)
 	}
 	store := openAuthoritativeWorkspaceSessionStore(t, workspace, server.URL, result.SessionID)
-	if store.Meta().Continuation == nil || store.Meta().Continuation.OpenAIBaseURL != server.URL {
-		t.Fatalf("unexpected continuation context: %+v", store.Meta().Continuation)
+	if store.Metadata().Continuation == nil || store.Metadata().Continuation.OpenAIBaseURL != server.URL {
+		t.Fatalf("unexpected continuation context: %+v", store.Metadata().Continuation)
 	}
 }
 
@@ -352,7 +359,7 @@ func TestHeadlessRunPromptClientResumesExistingSessionByID(t *testing.T) {
 	assertMessagePresent(t, messages, llm.RoleAssistant, "first response")
 	assertMessagePresent(t, messages, llm.RoleUser, "second prompt")
 	assertMessagePresent(t, messages, llm.RoleAssistant, "second response")
-	if got := store.Meta().FirstPromptPreview; got != "first prompt" {
+	if got := store.Metadata().FirstPromptPreview; got != "first prompt" {
 		t.Fatalf("first prompt preview = %q, want %q", got, "first prompt")
 	}
 }
@@ -400,8 +407,8 @@ func TestHeadlessRunPromptClientRestoresContinuationContextFromSelectedSession(t
 	}
 
 	store := openAuthoritativeWorkspaceSessionStore(t, workspace, server.URL, created.SessionID)
-	if store.Meta().Continuation == nil || store.Meta().Continuation.OpenAIBaseURL != server.URL {
-		t.Fatalf("unexpected continuation context: %+v", store.Meta().Continuation)
+	if store.Metadata().Continuation == nil || store.Metadata().Continuation.OpenAIBaseURL != server.URL {
+		t.Fatalf("unexpected continuation context: %+v", store.Metadata().Continuation)
 	}
 }
 
@@ -459,20 +466,42 @@ func openAuthoritativeWorkspaceSessionStore(t *testing.T, workspaceRoot, openAIB
 	return openAuthoritativeAppSession(t, cfg.PersistenceRoot, sessionID)
 }
 
+func appMessageFromRecord(record session.MessageRecord) llm.Message {
+	message := llm.Message{
+		Role:    llm.Role(record.Role),
+		Content: textutil.Value(valueOrEmpty(record.Content)),
+	}
+	if record.MessageType != nil {
+		message.MessageType = textutil.Value(llm.MessageType(*record.MessageType))
+	}
+	if record.Phase != nil {
+		message.Phase = textutil.Value(llm.MessagePhase(*record.Phase))
+	}
+	return message
+}
+
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
 func readStoredMessages(store *session.Store) ([]llm.Message, error) {
-	events, err := sessiontest.CollectEvents(store)
+	events, err := sessiontest.CollectRecords(store)
 	if err != nil {
 		return nil, err
 	}
 	messages := make([]llm.Message, 0, len(events))
 	for _, evt := range events {
-		if evt.Kind != "message" {
+		if string(mustSessionEventKind(evt)) != "message" {
 			continue
 		}
-		var msg llm.Message
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			return nil, err
+		record, ok := mustSessionEventPayload(evt).(session.MessageRecord)
+		if !ok {
+			return nil, fmt.Errorf("message payload = %T, want session.MessageRecord", mustSessionEventPayload(evt))
 		}
+		msg := appMessageFromRecord(record)
 		messages = append(messages, msg)
 	}
 	return messages, nil
@@ -482,7 +511,11 @@ func assertEnvironmentCWD(t *testing.T, messages []llm.Message, cwd string) {
 	t.Helper()
 	want := "\nCWD: " + cwd + "\n"
 	for _, msg := range messages {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeEnvironment && strings.Contains(msg.Content, want) {
+		if msg.Role == llm.RoleDeveloper &&
+			msg.MessageType != nil &&
+			*msg.MessageType == llm.MessageTypeEnvironment &&
+			msg.Content != nil &&
+			strings.Contains(*msg.Content, want) {
 			return
 		}
 	}
@@ -493,11 +526,14 @@ func assertWorktreeReminderMessage(t *testing.T, messages []llm.Message, branch 
 	t.Helper()
 	sawWorktreeReminder := false
 	for _, msg := range messages {
-		if msg.Role != llm.RoleDeveloper || msg.MessageType != llm.MessageTypeWorktreeMode {
+		if msg.Role != llm.RoleDeveloper || msg.MessageType == nil || *msg.MessageType != llm.MessageTypeWorktreeMode {
 			continue
 		}
 		sawWorktreeReminder = true
-		if strings.Contains(msg.Content, branch) && strings.Contains(msg.Content, cwd) && strings.Contains(msg.Content, workspaceRoot) {
+		if msg.Content != nil &&
+			strings.Contains(*msg.Content, branch) &&
+			strings.Contains(*msg.Content, cwd) &&
+			strings.Contains(*msg.Content, workspaceRoot) {
 			return
 		}
 	}
@@ -510,7 +546,7 @@ func assertWorktreeReminderMessage(t *testing.T, messages []llm.Message, branch 
 func assertMessagePresent(t *testing.T, messages []llm.Message, role llm.Role, content string) {
 	t.Helper()
 	for _, msg := range messages {
-		if msg.Role == role && msg.Content == content {
+		if msg.Role == role && msg.Content != nil && *msg.Content == content {
 			return
 		}
 	}

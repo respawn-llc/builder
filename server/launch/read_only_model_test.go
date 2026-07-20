@@ -11,7 +11,7 @@ import (
 )
 
 func TestReadOnlyModelUsesLockedModelWithoutBackfill(t *testing.T) {
-	meta := session.Meta{
+	meta := session.Metadata{
 		Locked: &session.LockedContract{
 			Model: "gpt-locked-model",
 		},
@@ -35,7 +35,7 @@ func TestReadOnlyModelUsesLockedModelWithoutBackfill(t *testing.T) {
 }
 
 func TestReadOnlyModelUsesLockedProviderContract(t *testing.T) {
-	meta := session.Meta{
+	meta := session.Metadata{
 		Locked: &session.LockedContract{
 			Model: "provider-owned-model",
 			ProviderContract: session.LockedProviderCapabilities{
@@ -65,7 +65,7 @@ func TestReadOnlyModelUsesCurrentConfigAndContinuationRole(t *testing.T) {
 		},
 	}
 	role := "worker"
-	meta := session.Meta{
+	meta := session.Metadata{
 		Continuation: &session.ContinuationContext{AgentRole: &role},
 	}
 	resolved, err := ResolveReadOnlySessionModel(app, meta)
@@ -92,7 +92,7 @@ func TestReadOnlyModelContinuationRoleInheritsBaseModel(t *testing.T) {
 				},
 			},
 		},
-	}, session.Meta{
+	}, session.Metadata{
 		Continuation: &session.ContinuationContext{AgentRole: &role},
 	})
 	if err != nil {
@@ -107,7 +107,7 @@ func TestReadOnlyModelAppliesFastRoleHeuristics(t *testing.T) {
 	role := config.BuiltInSubagentRoleFast
 	resolved, err := ResolveReadOnlySessionModel(config.App{
 		Settings: config.Settings{Model: "gpt-base-model"},
-	}, session.Meta{
+	}, session.Metadata{
 		Continuation: &session.ContinuationContext{AgentRole: &role},
 	})
 	if err != nil {
@@ -119,7 +119,7 @@ func TestReadOnlyModelAppliesFastRoleHeuristics(t *testing.T) {
 }
 
 func TestReadOnlyModelRejectsLegacyPartialContractWithoutRepair(t *testing.T) {
-	meta := session.Meta{
+	meta := session.Metadata{
 		Locked: &session.LockedContract{},
 	}
 	before := *meta.Locked
@@ -132,7 +132,7 @@ func TestReadOnlyModelRejectsLegacyPartialContractWithoutRepair(t *testing.T) {
 }
 
 func TestReadOnlyModelReportsMissingCurrentModelAsUnavailable(t *testing.T) {
-	_, err := ResolveReadOnlySessionModel(config.App{}, session.Meta{})
+	_, err := ResolveReadOnlySessionModel(config.App{}, session.Metadata{})
 	if err == nil {
 		t.Fatal("ResolveReadOnlySessionModel accepted missing current model")
 	}
@@ -148,7 +148,7 @@ func TestReadOnlyModelReportsMissingCurrentModelAsUnavailable(t *testing.T) {
 func TestReadOnlyModelReportsProviderInferenceFailureAsInvalid(t *testing.T) {
 	_, err := ResolveReadOnlySessionModel(config.App{
 		Settings: config.Settings{Model: "provider-unknown-model"},
-	}, session.Meta{})
+	}, session.Metadata{})
 	if err == nil {
 		t.Fatal("ResolveReadOnlySessionModel accepted a model without a provider contract")
 	}
@@ -164,7 +164,7 @@ func TestReadOnlyModelPreservesExplicitProviderWithoutInference(t *testing.T) {
 			Model:            "provider-owned-model",
 			ProviderOverride: "custom-provider",
 		},
-	}, session.Meta{})
+	}, session.Metadata{})
 	if err != nil {
 		t.Fatalf("ResolveReadOnlySessionModel: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestReadOnlyModelUsesConfiguredProviderCapabilitiesID(t *testing.T) {
 				ProviderID: "openai-compatible",
 			},
 		},
-	}, session.Meta{})
+	}, session.Metadata{})
 	if err != nil {
 		t.Fatalf("ResolveReadOnlySessionModel: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestReadOnlyModelUsesConfiguredOpenAICompatibleBaseURL(t *testing.T) {
 			Model:         "provider-owned-model",
 			OpenAIBaseURL: "https://example.test/v1",
 		},
-	}, session.Meta{})
+	}, session.Metadata{})
 	if err != nil {
 		t.Fatalf("ResolveReadOnlySessionModel: %v", err)
 	}

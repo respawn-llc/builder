@@ -11,6 +11,7 @@ import (
 	"core/server/llm"
 	"core/server/skillcatalog"
 	brand "core/shared/config"
+	"core/shared/textutil"
 )
 
 func skillPolicyWithDisabled(names ...string) brand.SkillPolicy {
@@ -184,87 +185,87 @@ func TestSkillsContextMessageFailsOnUnreadableSkillsDirectory(t *testing.T) {
 }
 
 func TestSplitMetaContextMessagesSeparatesMetaContextWithoutDeduplication(t *testing.T) {
-	skillsMessage := llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeSkills, Content: "## Skills\n### Available skills"}
+	skillsMessage := llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeSkills), Content: textutil.Value("## Skills\n### Available skills")}
 	messages := []llm.Message{
 		skillsMessage,
 		skillsMessage,
-		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeEnvironment, Content: environmentInjectedHeader + "\nOS: darwin"},
-		{Role: llm.RoleUser, Content: "request"},
+		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeEnvironment), Content: textutil.Value(environmentInjectedHeader + "\nOS: darwin")},
+		{Role: llm.RoleUser, Content: textutil.Value("request")},
 	}
 
 	meta, transcript := splitMetaContextMessages(messages)
 	if len(meta) != 3 {
 		t.Fatalf("expected split to preserve duplicate meta candidates, got %d", len(meta))
 	}
-	if meta[0].MessageType != llm.MessageTypeSkills {
+	if meta[0].MessageType == nil || *meta[0].MessageType != llm.MessageTypeSkills {
 		t.Fatalf("expected first meta message to be skills context, got %+v", meta[0])
 	}
-	if meta[1].MessageType != llm.MessageTypeSkills {
+	if meta[1].MessageType == nil || *meta[1].MessageType != llm.MessageTypeSkills {
 		t.Fatalf("expected second meta message to remain duplicate skills context, got %+v", meta[1])
 	}
-	if meta[2].MessageType != llm.MessageTypeEnvironment {
+	if meta[2].MessageType == nil || *meta[2].MessageType != llm.MessageTypeEnvironment {
 		t.Fatalf("expected third meta message to be environment context, got %+v", meta[2])
 	}
-	if len(transcript) != 1 || transcript[0].Role != llm.RoleUser || transcript[0].Content != "request" {
+	if len(transcript) != 1 || transcript[0].Role != llm.RoleUser || messageContent(transcript[0]) != "request" {
 		t.Fatalf("expected transcript to contain only user request, got %+v", transcript)
 	}
 }
 
 func TestSplitMetaContextMessagesTreatsHeadlessContextAsMeta(t *testing.T) {
-	headless := llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeHeadlessMode, Content: "headless mode instructions"}
+	headless := llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHeadlessMode), Content: textutil.Value("headless mode instructions")}
 	messages := []llm.Message{
 		headless,
 		headless,
-		{Role: llm.RoleUser, Content: "request"},
+		{Role: llm.RoleUser, Content: textutil.Value("request")},
 	}
 
 	meta, transcript := splitMetaContextMessages(messages)
 	if len(meta) != 2 {
 		t.Fatalf("expected split to preserve duplicate headless meta messages, got %d", len(meta))
 	}
-	if meta[0].MessageType != llm.MessageTypeHeadlessMode {
+	if meta[0].MessageType == nil || *meta[0].MessageType != llm.MessageTypeHeadlessMode {
 		t.Fatalf("expected headless meta message, got %+v", meta[0])
 	}
-	if len(transcript) != 1 || transcript[0].Role != llm.RoleUser || transcript[0].Content != "request" {
+	if len(transcript) != 1 || transcript[0].Role != llm.RoleUser || messageContent(transcript[0]) != "request" {
 		t.Fatalf("expected transcript to contain only user request, got %+v", transcript)
 	}
 }
 
 func TestSplitMetaContextMessagesTreatsHeadlessExitContextAsMeta(t *testing.T) {
-	headlessExit := llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeHeadlessModeExit, Content: "interactive mode instructions"}
+	headlessExit := llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHeadlessModeExit), Content: textutil.Value("interactive mode instructions")}
 	messages := []llm.Message{
 		headlessExit,
 		headlessExit,
-		{Role: llm.RoleUser, Content: "request"},
+		{Role: llm.RoleUser, Content: textutil.Value("request")},
 	}
 
 	meta, transcript := splitMetaContextMessages(messages)
 	if len(meta) != 2 {
 		t.Fatalf("expected split to preserve duplicate headless exit meta messages, got %d", len(meta))
 	}
-	if meta[0].MessageType != llm.MessageTypeHeadlessModeExit {
+	if meta[0].MessageType == nil || *meta[0].MessageType != llm.MessageTypeHeadlessModeExit {
 		t.Fatalf("expected headless exit meta message, got %+v", meta[0])
 	}
-	if len(transcript) != 1 || transcript[0].Role != llm.RoleUser || transcript[0].Content != "request" {
+	if len(transcript) != 1 || transcript[0].Role != llm.RoleUser || messageContent(transcript[0]) != "request" {
 		t.Fatalf("expected transcript to contain only user request, got %+v", transcript)
 	}
 }
 
 func TestBuildReviewerTranscriptMessagesSkipsSkillsContextEntries(t *testing.T) {
 	messages := []llm.Message{
-		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeSkills, Content: "## Skills\n### Available skills\n- demo: desc"},
-		{Role: llm.RoleUser, Content: "request"},
+		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeSkills), Content: textutil.Value("## Skills\n### Available skills\n- demo: desc")},
+		{Role: llm.RoleUser, Content: textutil.Value("request")},
 	}
 
 	transcript := buildReviewerTranscriptMessages(messages)
 	if len(transcript) != 1 {
 		t.Fatalf("expected one transcript entry, got %d", len(transcript))
 	}
-	if !strings.Contains(transcript[0].Content, "User:") || !strings.Contains(transcript[0].Content, "request") {
-		t.Fatalf("expected transcript entry to include user request, got %q", transcript[0].Content)
+	if !strings.Contains(messageContent(transcript[0]), "User:") || !strings.Contains(messageContent(transcript[0]), "request") {
+		t.Fatalf("expected transcript entry to include user request, got %q", messageContent(transcript[0]))
 	}
-	if strings.Contains(transcript[0].Content, "## Skills") {
-		t.Fatalf("did not expect skills context in transcript entry, got %q", transcript[0].Content)
+	if strings.Contains(messageContent(transcript[0]), "## Skills") {
+		t.Fatalf("did not expect skills context in transcript entry, got %q", messageContent(transcript[0]))
 	}
 }
 
@@ -399,7 +400,7 @@ func TestBuildReviewerRequestMessagesDoesNotRediscoverMissingSkills(t *testing.T
 	writeTestSkill(t, filepath.Join(home, brand.ConfigDirName, "skills", "home-skill"), "Home Skill", "from home")
 	writeTestSkill(t, filepath.Join(workspace, brand.ConfigDirName, "skills", "workspace-skill"), "Workspace Skill", "from workspace")
 
-	messages := []llm.Message{{Role: llm.RoleUser, Content: "request"}}
+	messages := []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("request")}}
 	got, err := buildReviewerRequestMessagesWithBuilder(
 		messages,
 		newMetaContextBuilder(workspace, "gpt-5", "high", skillPolicyWithDisabled("workspace skill"), time.Now()),
@@ -409,7 +410,7 @@ func TestBuildReviewerRequestMessagesDoesNotRediscoverMissingSkills(t *testing.T
 		t.Fatalf("buildReviewerRequestMessages: %v", err)
 	}
 	for _, msg := range got {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeSkills {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeSkills {
 			t.Fatalf("reviewer rediscovered skills outside generation reconstruction: %+v", got)
 		}
 	}
@@ -440,5 +441,5 @@ func skillsContextMessage(workspaceRoot string, policy brand.SkillPolicy) (strin
 	if len(metaResult.Skills) == 0 {
 		return "", false, nil
 	}
-	return metaResult.Skills[0].Content, true, nil
+	return messageContent(metaResult.Skills[0]), true, nil
 }

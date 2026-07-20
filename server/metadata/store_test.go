@@ -17,6 +17,28 @@ import (
 	"time"
 )
 
+func appendMetadataMessage(t *testing.T, store *session.Store, stepID string, role session.MessageRole, content string) session.EventRecord {
+	t.Helper()
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	step := stepID
+	text := content
+	record, receipt, err := eventLog.AppendRecord(&step, session.MessageRecord{
+		Role:    role,
+		Content: &text,
+	})
+	if err != nil || !receipt.Committed {
+		t.Fatalf("append typed message: receipt=%+v error=%v", receipt, err)
+	}
+	return record
+}
+
+func metadataStringPointer(value string) *string {
+	return &value
+}
+
 func TestEnsureWorkspaceBindingDoesNotRegisterUnknownWorkspace(t *testing.T) {
 	store, cfg := newMetadataTestStoreWithoutBinding(t)
 
@@ -587,7 +609,7 @@ func TestCommitSessionWorkspaceRetargetAttachesTargetAndUpdatesSession(t *testin
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	if err := store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{SessionID: sess.Meta().SessionID, Workspace: &SessionExecutionTargetUpdateWorkspace{ID: bindingA.WorkspaceID}, Worktree: &SessionExecutionTargetUpdateWorktree{ID: "worktree-a"}, CwdRelpath: "pkg"}); err != nil {
+	if err := store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{SessionID: sess.Metadata().SessionID, Workspace: &SessionExecutionTargetUpdateWorkspace{ID: bindingA.WorkspaceID}, Worktree: &SessionExecutionTargetUpdateWorktree{ID: "worktree-a"}, CwdRelpath: "pkg"}); err != nil {
 		t.Fatalf("UpdateSessionExecutionTarget before retarget: %v", err)
 	}
 	if err := sess.SetWorktreeReminderState(&session.WorktreeReminderState{
@@ -602,7 +624,7 @@ func TestCommitSessionWorkspaceRetargetAttachesTargetAndUpdatesSession(t *testin
 		t.Fatalf("SetWorktreeReminderState before retarget: %v", err)
 	}
 
-	retargeted := planAndCommitSessionWorkspaceRetarget(t, ctx, store, sess.Meta().SessionID, workspaceB)
+	retargeted := planAndCommitSessionWorkspaceRetarget(t, ctx, store, sess.Metadata().SessionID, workspaceB)
 	canonicalWorkspaceB, err := config.CanonicalWorkspaceRoot(workspaceB)
 	if err != nil {
 		t.Fatalf("CanonicalWorkspaceRoot workspaceB: %v", err)
@@ -622,7 +644,7 @@ func TestCommitSessionWorkspaceRetargetAttachesTargetAndUpdatesSession(t *testin
 		t.Fatalf("workspaceB project id = %q, want %q", resolvedBinding.ProjectID, bindingA.ProjectID)
 	}
 
-	target, err := store.ResolveSessionExecutionTarget(ctx, sess.Meta().SessionID)
+	target, err := store.ResolveSessionExecutionTarget(ctx, sess.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
@@ -645,15 +667,15 @@ func TestCommitSessionWorkspaceRetargetAttachesTargetAndUpdatesSession(t *testin
 		t.Fatalf("target effective workdir leaked previous worktree path %q", target.EffectiveWorkdir)
 	}
 
-	reopened, err := session.OpenByID(cfg.PersistenceRoot, sess.Meta().SessionID, store.AuthoritativeSessionStoreOptions()...)
+	reopened, err := session.OpenByID(cfg.PersistenceRoot, sess.Metadata().SessionID, store.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.OpenByID: %v", err)
 	}
-	if reopened.Meta().WorkspaceRoot != canonicalWorkspaceB {
-		t.Fatalf("reopened workspace root = %q, want %q", reopened.Meta().WorkspaceRoot, canonicalWorkspaceB)
+	if reopened.Metadata().WorkspaceRoot != canonicalWorkspaceB {
+		t.Fatalf("reopened workspace root = %q, want %q", reopened.Metadata().WorkspaceRoot, canonicalWorkspaceB)
 	}
-	if reopened.Meta().WorktreeReminder != nil {
-		t.Fatalf("expected stale worktree reminder cleared after workspace retarget, got %+v", reopened.Meta().WorktreeReminder)
+	if reopened.Metadata().WorktreeReminder != nil {
+		t.Fatalf("expected stale worktree reminder cleared after workspace retarget, got %+v", reopened.Metadata().WorktreeReminder)
 	}
 }
 
@@ -671,7 +693,7 @@ func TestCommitSessionWorkspaceRetargetClearsSameWorkspaceStaleWorktreeTarget(t 
 	}
 	canonicalWorktreeRoot := createMetadataTestWorktree(t, ctx, store, binding.WorkspaceID, "worktree-stale", worktreeRoot)
 	if err := store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{
-		SessionID:  sess.Meta().SessionID,
+		SessionID:  sess.Metadata().SessionID,
 		Workspace:  &SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID},
 		Worktree:   &SessionExecutionTargetUpdateWorktree{ID: "worktree-stale"},
 		CwdRelpath: "pkg",
@@ -693,18 +715,18 @@ func TestCommitSessionWorkspaceRetargetClearsSameWorkspaceStaleWorktreeTarget(t 
 		t.Fatalf("RemoveAll stale worktree root: %v", err)
 	}
 
-	retargeted := planAndCommitSessionWorkspaceRetarget(t, ctx, store, sess.Meta().SessionID, cfg.WorkspaceRoot)
+	retargeted := planAndCommitSessionWorkspaceRetarget(t, ctx, store, sess.Metadata().SessionID, cfg.WorkspaceRoot)
 	if retargeted.WorkspaceID != binding.WorkspaceID {
 		t.Fatalf("retargeted workspace id = %q, want %q", retargeted.WorkspaceID, binding.WorkspaceID)
 	}
 	var storedWorktreeID sql.NullString
-	if err := store.db.QueryRowContext(ctx, "SELECT worktree_id FROM sessions WHERE id = ?", sess.Meta().SessionID).Scan(&storedWorktreeID); err != nil {
+	if err := store.db.QueryRowContext(ctx, "SELECT worktree_id FROM sessions WHERE id = ?", sess.Metadata().SessionID).Scan(&storedWorktreeID); err != nil {
 		t.Fatalf("scan session worktree_id: %v", err)
 	}
 	if storedWorktreeID.Valid {
 		t.Fatalf("stored worktree_id = %+v, want SQL NULL", storedWorktreeID)
 	}
-	target, err := store.ResolveSessionExecutionTarget(ctx, sess.Meta().SessionID)
+	target, err := store.ResolveSessionExecutionTarget(ctx, sess.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
@@ -717,15 +739,15 @@ func TestCommitSessionWorkspaceRetargetClearsSameWorkspaceStaleWorktreeTarget(t 
 	if target.EffectiveWorkdir != retargeted.CanonicalRoot {
 		t.Fatalf("target effective workdir = %q, want %q", target.EffectiveWorkdir, retargeted.CanonicalRoot)
 	}
-	reopened, err := session.OpenByID(cfg.PersistenceRoot, sess.Meta().SessionID, store.AuthoritativeSessionStoreOptions()...)
+	reopened, err := session.OpenByID(cfg.PersistenceRoot, sess.Metadata().SessionID, store.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.OpenByID: %v", err)
 	}
-	if reopened.Meta().WorkspaceRoot != retargeted.CanonicalRoot {
-		t.Fatalf("reopened workspace root = %q, want %q", reopened.Meta().WorkspaceRoot, retargeted.CanonicalRoot)
+	if reopened.Metadata().WorkspaceRoot != retargeted.CanonicalRoot {
+		t.Fatalf("reopened workspace root = %q, want %q", reopened.Metadata().WorkspaceRoot, retargeted.CanonicalRoot)
 	}
-	if reopened.Meta().WorktreeReminder != nil {
-		t.Fatalf("reopened worktree reminder = %+v, want nil", reopened.Meta().WorktreeReminder)
+	if reopened.Metadata().WorktreeReminder != nil {
+		t.Fatalf("reopened worktree reminder = %+v, want nil", reopened.Metadata().WorktreeReminder)
 	}
 }
 
@@ -744,7 +766,7 @@ func TestResolvePersistedSessionRoundTripsRequiredStructuredMetadata(t *testing.
 	if err := sess.SetWorktreeReminderState(reminder); err != nil {
 		t.Fatalf("SetWorktreeReminderState: %v", err)
 	}
-	reminder = session.CloneWorktreeReminderState(sess.Meta().WorktreeReminder)
+	reminder = session.CloneWorktreeReminderState(sess.Metadata().WorktreeReminder)
 	goal, err := sess.SetGoal("ship durable goal metadata", session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
@@ -766,15 +788,9 @@ func TestResolvePersistedSessionRoundTripsRequiredStructuredMetadata(t *testing.
 	if err := sess.SetPendingModelRecovery(recovery); err != nil {
 		t.Fatalf("SetPendingModelRecovery: %v", err)
 	}
-	if _, _, err := sess.AppendEvent(
-		"step-2",
-		"message",
-		map[string]string{"role": "user", "content": "establish conversation"},
-	); err != nil {
-		t.Fatalf("AppendEvent: %v", err)
-	}
+	appendMetadataMessage(t, sess, "step-2", session.MessageRoleUser, "establish conversation")
 
-	record, err := store.ResolvePersistedSession(t.Context(), sess.Meta().SessionID)
+	record, err := store.ResolvePersistedSession(t.Context(), sess.Metadata().SessionID)
 	if err != nil {
 		t.Fatalf("ResolvePersistedSession: %v", err)
 	}
@@ -812,16 +828,10 @@ func TestResolvePersistedSessionRoundTripsRequiredStructuredMetadata(t *testing.
 	}
 }
 
-func TestMissingEventLogRepairPersistsFreshConversationState(t *testing.T) {
+func TestMissingEventLogRepairOccursAtEventUse(t *testing.T) {
 	store, cfg, binding := newMetadataTestStore(t)
 	sess := createMetadataTestSession(t, store, cfg, binding)
-	if _, _, err := sess.AppendEvent(
-		"step-1",
-		"message",
-		map[string]string{"role": "user", "content": "establish conversation"},
-	); err != nil {
-		t.Fatalf("AppendEvent: %v", err)
-	}
+	appendMetadataMessage(t, sess, "step-1", session.MessageRoleUser, "establish conversation")
 	eventsPath := filepath.Join(sess.Dir(), "events.jsonl")
 	if err := os.Remove(eventsPath); err != nil {
 		t.Fatalf("remove events artifact: %v", err)
@@ -829,32 +839,43 @@ func TestMissingEventLogRepairPersistsFreshConversationState(t *testing.T) {
 
 	repaired, err := session.OpenByID(
 		cfg.PersistenceRoot,
-		sess.Meta().SessionID,
+		sess.Metadata().SessionID,
 		store.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
 		t.Fatalf("session.OpenByID repair: %v", err)
 	}
-	if repaired.Meta().LastSequence != 0 || repaired.Meta().ConversationEstablished {
-		t.Fatalf("repaired metadata = %+v, want fresh empty conversation", repaired.Meta())
+	if _, err := os.Stat(eventsPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("metadata-only open repaired missing event log: %v", err)
 	}
-	if repaired.ConversationFreshness() != session.ConversationFreshnessFresh {
-		t.Fatalf("repaired freshness = %q, want fresh", repaired.ConversationFreshness())
+	repairedEventLog, err := repaired.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize missing event log: %v", err)
+	}
+	if mustEventLogRevision(repairedEventLog) != 0 {
+		t.Fatalf("repaired event-log revision = %d, want fresh empty conversation", mustEventLogRevision(repairedEventLog))
+	}
+	if mustEventLogFreshness(repairedEventLog) != session.ConversationFreshnessFresh {
+		t.Fatalf("repaired freshness = %q, want fresh", mustEventLogFreshness(repairedEventLog))
 	}
 
 	reopened, err := session.OpenByID(
 		cfg.PersistenceRoot,
-		sess.Meta().SessionID,
+		sess.Metadata().SessionID,
 		store.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
 		t.Fatalf("session.OpenByID reopen: %v", err)
 	}
-	if reopened.Meta().LastSequence != 0 || reopened.Meta().ConversationEstablished {
-		t.Fatalf("reopened metadata = %+v, want fresh empty conversation", reopened.Meta())
+	reopenedEventLog, err := reopened.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize reopened event log: %v", err)
 	}
-	if reopened.ConversationFreshness() != session.ConversationFreshnessFresh {
-		t.Fatalf("reopened freshness = %q, want fresh", reopened.ConversationFreshness())
+	if mustEventLogRevision(reopenedEventLog) != 0 {
+		t.Fatalf("reopened event-log revision = %d, want fresh empty conversation", mustEventLogRevision(reopenedEventLog))
+	}
+	if mustEventLogFreshness(reopenedEventLog) != session.ConversationFreshnessFresh {
+		t.Fatalf("reopened freshness = %q, want fresh", mustEventLogFreshness(reopenedEventLog))
 	}
 }
 
@@ -898,7 +919,7 @@ func TestRebindWorkspaceRetargetsDescendantWorktrees(t *testing.T) {
 	if err := sess.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable: %v", err)
 	}
-	sessionID := sess.Meta().SessionID
+	sessionID := sess.Metadata().SessionID
 	if _, err := store.db.ExecContext(ctx, "UPDATE sessions SET worktree_id = ? WHERE id = ?", worktreeID, sessionID); err != nil {
 		t.Fatalf("attach worktree to session: %v", err)
 	}
@@ -938,7 +959,7 @@ func TestRebindWorkspaceRetargetsDescendantWorktrees(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session.OpenByID: %v", err)
 	}
-	if got := reopened.Meta().WorkspaceRoot; got != rebound.CanonicalRoot {
+	if got := reopened.Metadata().WorkspaceRoot; got != rebound.CanonicalRoot {
 		t.Fatalf("reopened workspace root = %q, want %q", got, rebound.CanonicalRoot)
 	}
 }

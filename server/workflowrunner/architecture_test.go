@@ -27,7 +27,7 @@ func TestWorkflowRunnerDoesNotReadFullSessionEventLog(t *testing.T) {
 				return true
 			}
 			switch selector.Sel.Name {
-			case "ReadEvents", "WalkEvents", "SnapshotFromDir":
+			case "ReadEvents", "WalkRecords", "SnapshotFromDir":
 				t.Fatalf("workflowrunner must not scan session event logs; found %s in %s", selector.Sel.Name, file)
 			}
 			return true

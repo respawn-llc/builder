@@ -45,7 +45,7 @@ func TestGatewaySessionAttachEstablishesProjectForUnboundServer(t *testing.T) {
 	remote, err := remoteclient.DialRemoteURLForSession(
 		context.Background(),
 		"ws"+server.URL[len("http"):],
-		store.Meta().SessionID,
+		store.Metadata().SessionID,
 	)
 	if err != nil {
 		t.Fatalf("DialRemoteURLForSession: %v", err)
@@ -53,7 +53,7 @@ func TestGatewaySessionAttachEstablishesProjectForUnboundServer(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 	status, err := remote.GetWorktreeStatus(
 		context.Background(),
-		serverapi.WorktreeStatusRequest{SessionID: store.Meta().SessionID},
+		serverapi.WorktreeStatusRequest{SessionID: store.Metadata().SessionID},
 	)
 	if err != nil {
 		t.Fatalf("GetWorktreeStatus: %v", err)

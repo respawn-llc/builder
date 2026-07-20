@@ -28,7 +28,7 @@ type RuntimeActivityResolver interface {
 }
 
 type sessionIdentityPublisher interface {
-	PublishSessionIdentity(sessionID string, target *clientui.SessionExecutionTarget)
+	PublishSessionIdentity(sessionID string, target *clientui.SessionExecutionTarget) error
 }
 
 type sessionStatusPublisher interface {
@@ -343,7 +343,7 @@ func (s *Service) SetSessionName(ctx context.Context, req serverapi.RuntimeSetSe
 				return err
 			}
 			if publisher, ok := s.activity.(sessionIdentityPublisher); ok {
-				publisher.PublishSessionIdentity(req.SessionID, nil)
+				return publisher.PublishSessionIdentity(req.SessionID, nil)
 			}
 			return nil
 		})
@@ -610,7 +610,9 @@ func (s *Service) SubmitQueuedUserMessages(ctx context.Context, req serverapi.Ru
 				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
 			})
 			receipt = flushReceipt
-			resp = serverapi.RuntimeSubmitQueuedUserMessagesResponse{Message: msg.Content}
+			if msg.Content != nil {
+				resp = serverapi.RuntimeSubmitQueuedUserMessagesResponse{Message: *msg.Content}
+			}
 			return err
 		})
 		s.recordOperationCompletion(memoReq.SessionID, req.OperationRef, receipt, err, attempt, s.operations.RecordSubmitQueuedCompletion)
@@ -660,13 +662,20 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 		}
 		if req.TargetOperationRef != nil &&
 			req.TargetOperationRef.Kind == clientui.RuntimeOperationKindQueuedMessage &&
-			req.TargetOperationRef.QueueItemID != nil &&
-			engine.DiscardQueuedUserMessage(req.TargetOperationRef.QueueItemID.String()) {
-			return s.operations.RecordQueuedMessageStatus(
-				sessionID,
-				*req.TargetOperationRef,
-				clientui.RuntimeInputReconciliationCanceledNotCommitted,
+			req.TargetOperationRef.QueueItemID != nil {
+			discarded, err := engine.DiscardQueuedUserMessage(
+				req.TargetOperationRef.QueueItemID.String(),
 			)
+			if err != nil {
+				return err
+			}
+			if discarded {
+				return s.operations.RecordQueuedMessageStatus(
+					sessionID,
+					*req.TargetOperationRef,
+					clientui.RuntimeInputReconciliationCanceledNotCommitted,
+				)
+			}
 		}
 		return nil
 	})
@@ -747,7 +756,13 @@ func (s *Service) QueueUserMessage(ctx context.Context, req serverapi.RuntimeQue
 					}
 					text = record.Text
 				}
-				item := engine.QueueUserMessageWithClientRequestID(text, strings.TrimSpace(req.ClientRequestID))
+				item, err := engine.QueueUserMessageWithClientRequestID(
+					text,
+					strings.TrimSpace(req.ClientRequestID),
+				)
+				if err != nil {
+					return err
+				}
 				queueItemID, err := runtimeids.ParseQueueItemID(item.ID)
 				if err != nil {
 					return fmt.Errorf("parse queued runtime item identity: %w", err)
@@ -791,8 +806,9 @@ func (s *Service) DiscardQueuedUserMessage(ctx context.Context, req serverapi.Ru
 	return s.queuedDiscards.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameQueuedUserMessageMemoRequest, func(ctx context.Context) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
 		var resp serverapi.RuntimeDiscardQueuedUserMessageResponse
 		err := s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
-			resp = serverapi.RuntimeDiscardQueuedUserMessageResponse{Discarded: engine.DiscardQueuedUserMessage(memoReq.QueueItemID)}
-			return nil
+			var err error
+			resp.Discarded, err = engine.DiscardQueuedUserMessage(memoReq.QueueItemID)
+			return err
 		})
 		return resp, err
 	})
@@ -843,7 +859,7 @@ func (s *Service) workflowTaskSession(ctx context.Context, sessionID string, eng
 		if err != nil {
 			return false, err
 		}
-		if store != nil && store.Meta().WorkflowSession != nil {
+		if store != nil && store.Metadata().WorkflowSession != nil {
 			return true, nil
 		}
 	}

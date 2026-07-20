@@ -15,6 +15,7 @@ import (
 	"core/shared/invariant"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 
@@ -298,7 +299,7 @@ func TestSessionTranscriptSubscriptionHydratesFirstAndSequencesPerSubscription(t
 	registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), runtime.Event{
 		Kind:                       runtime.EventAssistantMessage,
 		StepID:                     registryTestStepID,
-		Message:                    llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "after subscribe"},
+		Message:                    llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("after subscribe")},
 		CommittedTranscriptChanged: true,
 	})
 	live := nextTranscriptMessageOfKind(t, first, clientui.TranscriptMessageCommittedRow)
@@ -411,7 +412,13 @@ func TestSessionTranscriptFeedSequencerReceivesEngineQueueStatus(t *testing.T) {
 	defer func() { _ = sub.Close() }()
 	_ = nextTranscriptMessage(t, sub)
 
-	item := engine.QueueUserMessageWithClientRequestID("queued through engine", runtimeids.NewRuntimeClientRequestID().String())
+	item, err := engine.QueueUserMessageWithClientRequestID(
+		"queued through engine",
+		runtimeids.NewRuntimeClientRequestID().String(),
+	)
+	if err != nil {
+		t.Fatalf("queue user message: %v", err)
+	}
 	queueItemID := mustRegistryQueueItemID(t, item.ID)
 	live := nextTranscriptMessage(t, sub)
 	if live.Sequence != 2 || live.Kind != clientui.TranscriptMessageQueuedMessageState || live.Payload.QueuedMessageState == nil || live.Payload.QueuedMessageState.QueueItemID != queueItemID || live.Payload.QueuedMessageState.Status != clientui.QueuedUserMessageAccepted {
@@ -421,7 +428,11 @@ func TestSessionTranscriptFeedSequencerReceivesEngineQueueStatus(t *testing.T) {
 		t.Fatalf("accepted queue text = %v, want queued through engine", live.Payload.QueuedMessageState.Text)
 	}
 
-	if !engine.DiscardQueuedUserMessage(item.ID) {
+	discardedItem, err := engine.DiscardQueuedUserMessage(item.ID)
+	if err != nil {
+		t.Fatalf("discard queued user message: %v", err)
+	}
+	if !discardedItem {
 		t.Fatalf("DiscardQueuedUserMessage(%q) returned false", item.ID)
 	}
 	discarded := nextTranscriptMessage(t, sub)
@@ -439,11 +450,21 @@ func TestSessionTranscriptFeedSequencerHydratesEngineQueuedTextInFIFOOrder(t *te
 	registerReady(t, registry, engine.SessionID(), engine)
 	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
 
-	items := []runtime.QueuedUserMessage{
-		engine.QueueUserMessageWithClientRequestID("first queued for hydration", runtimeids.NewRuntimeClientRequestID().String()),
-		engine.QueueUserMessageWithClientRequestID("second queued for hydration", runtimeids.NewRuntimeClientRequestID().String()),
-		engine.QueueUserMessageWithClientRequestID("third queued for hydration", runtimeids.NewRuntimeClientRequestID().String()),
-		engine.QueueUserMessageWithClientRequestID("fourth queued for hydration", runtimeids.NewRuntimeClientRequestID().String()),
+	items := make([]runtime.QueuedUserMessage, 0, 4)
+	for _, text := range []string{
+		"first queued for hydration",
+		"second queued for hydration",
+		"third queued for hydration",
+		"fourth queued for hydration",
+	} {
+		item, err := engine.QueueUserMessageWithClientRequestID(
+			text,
+			runtimeids.NewRuntimeClientRequestID().String(),
+		)
+		if err != nil {
+			t.Fatalf("queue %q: %v", text, err)
+		}
+		items = append(items, item)
 	}
 	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
 	defer func() { _ = sub.Close() }()
@@ -838,7 +859,7 @@ func TestSessionTranscriptSubscriptionCarriesAssistantStreamIdentity(t *testing.
 	registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), runtime.Event{
 		Kind:                        runtime.EventAssistantMessage,
 		StepID:                      registryTestStepID,
-		Message:                     llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "hello"},
+		Message:                     llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("hello")},
 		AssistantStreamMetadata:     metadata,
 		AssistantTranscriptStreamID: &streamUUID,
 		CommittedTranscriptChanged:  true,

@@ -17,6 +17,7 @@ func TestPrepareInspectionRequestKeepsMetaContextEphemeral(t *testing.T) {
 	if err := persisted.SetName("inspection"); err != nil {
 		t.Fatalf("persist session metadata: %v", err)
 	}
+	_ = mustMaterializeTestEventLog(t, persisted)
 	eventsPath := filepath.Join(persisted.Dir(), "events.jsonl")
 	before, err := os.ReadFile(eventsPath)
 	if err != nil {
@@ -30,9 +31,14 @@ func TestPrepareInspectionRequestKeepsMetaContextEphemeral(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open inspection session: %v", err)
 	}
-	engine := mustNewTestEngine(
-		t,
+	eventLog, lease, err := inspectionStore.MaterializeFilelessEventLog(context.Background())
+	if err != nil {
+		t.Fatalf("materialize fileless event log: %v", err)
+	}
+	t.Cleanup(func() { _ = lease.Close() })
+	engine, err := New(
 		inspectionStore,
+		eventLog,
 		&fakeClient{},
 		tools.NewRegistry(),
 		Config{
@@ -40,6 +46,9 @@ func TestPrepareInspectionRequestKeepsMetaContextEphemeral(t *testing.T) {
 			GlobalConfigDir: t.TempDir(),
 		},
 	)
+	if err != nil {
+		t.Fatalf("new inspection engine: %v", err)
+	}
 	request, err := PrepareInspectionRequest(context.Background(), engine, true)
 	if err != nil {
 		t.Fatalf("PrepareInspectionRequest: %v", err)

@@ -4,27 +4,19 @@ import (
 	"testing"
 
 	"core/server/llm"
-	"core/shared/config"
+	"core/server/tools"
 	"core/shared/rollbacktarget"
+	"core/shared/textutil"
 )
 
 func TestPostCompactionSegmentRollbackTargetEncodesGlobalEventSeq(t *testing.T) {
 	store := mustCreateTestSession(t)
-	if _, _, err := store.AppendEvent("s1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
-		t.Fatalf("append u1: %v", err)
-	}
-	if _, _, err := store.AppendEvent("s1", "message", llm.Message{Role: llm.RoleAssistant, Content: "a1"}); err != nil {
-		t.Fatalf("append a1: %v", err)
-	}
-	if _, _, err := store.AppendEvent("s1", "history_replaced", map[string]any{"engine": "compaction", "items": []map[string]any{}}); err != nil {
-		t.Fatalf("append compaction boundary: %v", err)
-	}
-	u2Evt, _, err := store.AppendEvent("s2", "message", llm.Message{Role: llm.RoleUser, Content: "u2"})
-	if err != nil {
-		t.Fatalf("append u2: %v", err)
-	}
+	mustAppendTestEvent(t, store, "s1", llm.Message{Role: llm.RoleUser, Content: textutil.Value("u1")})
+	mustAppendTestEvent(t, store, "s1", llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("a1")})
+	mustAppendTestEvent(t, store, "s1", historyReplacementPayload{Engine: "compaction", Mode: "auto"})
+	u2Evt := mustAppendTestEvent(t, store, "s2", llm.Message{Role: llm.RoleUser, Content: textutil.Value("u2")})
 
-	page, err := TranscriptNewestSegmentPageFromStore(store, config.CacheWarningModeDefault)
+	page, err := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{}).TranscriptNewestSegmentPage()
 	if err != nil {
 		t.Fatalf("project newest segment: %v", err)
 	}
@@ -45,7 +37,7 @@ func TestPostCompactionSegmentRollbackTargetEncodesGlobalEventSeq(t *testing.T) 
 	if err != nil {
 		t.Fatalf("decode rollback target id: %v", err)
 	}
-	if seq != u2Evt.Seq {
-		t.Fatalf("rollback target seq = %d, want global event seq %d (segment-local index would be 1)", seq, u2Evt.Seq)
+	if seq != u2Evt.Seq() {
+		t.Fatalf("rollback target seq = %d, want global event seq %d (segment-local index would be 1)", seq, u2Evt.Seq())
 	}
 }
