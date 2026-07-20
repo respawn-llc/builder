@@ -454,7 +454,7 @@ func TestMetadataPersistenceRetriesSameValueUntilObserverSucceeds(t *testing.T) 
 	}
 }
 
-func TestSetUsageStateReportsCommitAndRollsBackObserverFailure(t *testing.T) {
+func TestSetUsageStateReportsCommittedObserverFailureAndRetries(t *testing.T) {
 	observer := &flakyPersistenceObserver{failuresRemaining: 1}
 	store, err := NewLazy(t.TempDir(), "workspace-x", "/tmp/work", testSessionCategory, WithPersistenceObserver(observer))
 	if err != nil {
@@ -463,11 +463,11 @@ func TestSetUsageStateReportsCommitAndRollsBackObserverFailure(t *testing.T) {
 	usage := &UsageState{InputTokens: 900, WindowTokens: 200_000}
 
 	receipt, err := store.SetUsageState(usage)
-	if err == nil || receipt.Committed {
-		t.Fatalf("first SetUsageState receipt=%+v error=%v, want uncommitted observer failure", receipt, err)
+	if err == nil || !receipt.Committed {
+		t.Fatalf("first SetUsageState receipt=%+v error=%v, want committed observer failure", receipt, err)
 	}
-	if stored := store.Metadata().UsageState; stored != nil {
-		t.Fatalf("failed usage mutation leaked into Store metadata: %+v", stored)
+	if stored := store.Metadata().UsageState; stored == nil || stored.InputTokens != usage.InputTokens {
+		t.Fatalf("committed usage state = %+v, want %+v", stored, usage)
 	}
 
 	receipt, err = store.SetUsageState(usage)
@@ -542,7 +542,7 @@ func TestPersistenceSnapshotsAreImmutable(t *testing.T) {
 	}
 }
 
-func TestFailedObservationRollsBackBeforeLaterMutation(t *testing.T) {
+func TestCommittedObservationFailurePrecedesLaterMutation(t *testing.T) {
 	observer := newBlockingFailingPersistenceObserver(sessionTestPersistence)
 	root := t.TempDir()
 	store, err := Create(
@@ -583,8 +583,8 @@ func TestFailedObservationRollsBackBeforeLaterMutation(t *testing.T) {
 	close(observer.release)
 
 	first := <-firstDone
-	if first.err == nil || first.result.Committed {
-		t.Fatalf("first mutation result = %+v, error = %v, want observer failure", first.result, first.err)
+	if first.err == nil || !first.result.Committed {
+		t.Fatalf("first mutation result = %+v, error = %v, want committed observer failure", first.result, first.err)
 	}
 	if err := <-secondDone; err != nil {
 		t.Fatalf("SetName: %v", err)
@@ -592,8 +592,8 @@ func TestFailedObservationRollsBackBeforeLaterMutation(t *testing.T) {
 	if store.Metadata().Name != "later mutation" {
 		t.Fatalf("session name = %q, want later mutation", store.Metadata().Name)
 	}
-	if store.Metadata().Continuation != nil {
-		t.Fatalf("failed continuation mutation remained in memory: %+v", store.Metadata().Continuation)
+	if continuation := store.Metadata().Continuation; continuation == nil || continuation.AgentRole == nil || *continuation.AgentRole != "reviewer" {
+		t.Fatalf("committed continuation mutation = %+v, want reviewer", continuation)
 	}
 
 	reopened, err := OpenByID(root, store.Metadata().SessionID, sessionTestPersistence.options()...)
@@ -603,7 +603,7 @@ func TestFailedObservationRollsBackBeforeLaterMutation(t *testing.T) {
 	if reopened.Metadata().Name != "later mutation" {
 		t.Fatalf("reopened name = %q, want later mutation", reopened.Metadata().Name)
 	}
-	if reopened.Metadata().Continuation != nil {
-		t.Fatalf("failed continuation mutation persisted: %+v", reopened.Metadata().Continuation)
+	if continuation := reopened.Metadata().Continuation; continuation == nil || continuation.AgentRole == nil || *continuation.AgentRole != "reviewer" {
+		t.Fatalf("reopened continuation = %+v, want reviewer", continuation)
 	}
 }

@@ -274,7 +274,7 @@ func removeFilelessEventLogArtifact(root string) error {
 }
 
 func (c MaterializedEventLog) Revision() (int64, error) {
-	log, release, err := c.currentLogForUse()
+	log, release, err := c.currentLogForQuery()
 	if err != nil {
 		return 0, err
 	}
@@ -283,13 +283,11 @@ func (c MaterializedEventLog) Revision() (int64, error) {
 }
 
 func (c MaterializedEventLog) ConversationFreshness() (ConversationFreshness, error) {
-	_, release, err := c.currentLogForUse()
+	_, release, err := c.currentLogForQuery()
 	if err != nil {
 		return ConversationFreshnessFresh, err
 	}
 	defer release()
-	c.store.mu.Lock()
-	defer c.store.mu.Unlock()
 	return c.store.conversationFreshness, nil
 }
 
@@ -393,4 +391,34 @@ func (c MaterializedEventLog) currentLogForUse() (*currentEventLog, func(), erro
 	log := c.log
 	c.store.mu.Unlock()
 	return log, c.store.mutationMu.Unlock, nil
+}
+
+// currentLogForQuery snapshots event-derived scalar state while holding only
+// Store.mu. Persistence observers run while mutationMu remains held so later
+// mutations cannot overtake their committed snapshot; scalar queries must
+// remain reentrant from those observers.
+func (c MaterializedEventLog) currentLogForQuery() (*currentEventLog, func(), error) {
+	if c.store == nil {
+		err := errors.New("materialized event log invariant violated: owning Store is missing")
+		invariant.NewPolicy().Check(false, invariant.FailureDiagnostic(
+			invariant.ScopeSessionPersistence,
+			"use_materialized_event_log",
+			err,
+		))
+		return nil, nil, err
+	}
+	c.store.mu.Lock()
+	if c.log == nil || c.store.materializedEventLog != c.log {
+		c.store.mu.Unlock()
+		err := errors.New(
+			"materialized event log invariant violated: Store capability is missing",
+		)
+		invariant.NewPolicy().Check(false, invariant.FailureDiagnostic(
+			invariant.ScopeSessionPersistence,
+			"use_materialized_event_log",
+			err,
+		))
+		return nil, nil, err
+	}
+	return c.log, c.store.mu.Unlock, nil
 }

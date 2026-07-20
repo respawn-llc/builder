@@ -964,8 +964,8 @@ func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) 
 	if liveUsage.UsedTokens != fixture.client.inputTokenCount {
 		t.Fatalf("live context usage = %+v, want exact compacted input %d", liveUsage, fixture.client.inputTokenCount)
 	}
-	if usage := fixture.store.Metadata().UsageState; usage != nil {
-		t.Fatalf("failed usage persistence leaked into Store metadata: %+v", usage)
+	if usage := fixture.store.Metadata().UsageState; usage == nil || usage.InputTokens != fixture.client.inputTokenCount {
+		t.Fatalf("committed compacted usage = %+v, want input %d", usage, fixture.client.inputTokenCount)
 	}
 
 	reopenedStore, err := runtimeTestSessionPersistence.Open(fixture.store.Dir())
@@ -977,8 +977,8 @@ func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) 
 	if reopenedUsage.UsedTokens <= 0 || reopenedUsage.UsedTokens >= oldUsage.InputTokens {
 		t.Fatalf("reopened context usage = %+v, want compacted active-history estimate", reopenedUsage)
 	}
-	if reopenedUsage.HasCacheHitPercentage {
-		t.Fatalf("reopened cache usage restored an uncommitted metadata mutation: %+v", reopenedUsage)
+	if !reopenedUsage.HasCacheHitPercentage || reopenedUsage.CacheHitPercent != 100 {
+		t.Fatalf("reopened cache usage = %+v, want committed cumulative counters", reopenedUsage)
 	}
 }
 
@@ -1001,8 +1001,8 @@ func TestCompactNowInvalidatesPromptSnapshotsWhenStaleMetadataObserverFails(t *t
 	if !ok || locked.HasSystemPrompt || locked.SystemPrompt != "" || locked.HasReviewerPrompt || locked.ReviewerPrompt != "" {
 		t.Fatalf("live prompt snapshots after committed replacement = %+v, want stale", locked)
 	}
-	if stored := fixture.store.Metadata().Locked; stored == nil || !stored.HasSystemPrompt || !stored.HasReviewerPrompt {
-		t.Fatalf("stale metadata observer did not exercise rollback: %+v", stored)
+	if stored := fixture.store.Metadata().Locked; stored == nil || stored.HasSystemPrompt || stored.HasReviewerPrompt {
+		t.Fatalf("committed stale prompt metadata = %+v", stored)
 	}
 	request, requestErr := fixture.engine.buildRequest(context.Background(), "step-next", false)
 	if requestErr != nil {
