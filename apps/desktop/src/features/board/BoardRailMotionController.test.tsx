@@ -12,6 +12,12 @@ import type { KanbanCardVM } from "./BoardColumnViewModel";
 import type { BoardCardDragPayload } from "./BoardDragTypes";
 
 const animateElementMock = vi.fn(() => ({ finished: Promise.resolve() }));
+const emptyProjectLabelCatalog = vi.hoisted(() => ({
+  data: {
+    labels: [],
+    projectID: "p1",
+  },
+}));
 
 // ---- controllable fake board-node-cards query ----
 type NodeSnapshot = Readonly<{
@@ -128,6 +134,10 @@ vi.mock("./BoardFilterGenerationRuntime", () => ({
   },
 }));
 
+vi.mock("@/shared/labels", () => ({
+  useProjectLabelCatalog: () => emptyProjectLabelCatalog,
+}));
+
 // Imported after the mocks above are registered.
 const { BoardColumnDataOwner } = await import("./BoardColumnDataOwner");
 const { BoardRailMotionController } = await import("./BoardRailMotionController");
@@ -239,6 +249,7 @@ function toTestCardVM(value: BoardCard): KanbanCardVM {
     },
     borderTone: "default",
     id: value.id,
+    labels: [],
     preview: value.preview,
     shortID: value.shortID,
     statusKind: value.status.kind,

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { App } from "../startup/App";
 import { appI18n, initializeI18n } from "@/i18n";
@@ -373,10 +373,83 @@ describe("BoardRoute live refresh", () => {
       );
     });
   });
+
+  it("updates informational card labels from the catalog and drops deleted IDs", async () => {
+    window.history.pushState(null, "", "/projects/project-1?workflowId=workflow-1");
+    const labelID = "38bf0da7-a3f7-4c15-bc5f-c8fca538e667";
+    const services = createTestServices([
+      ...startupRoutes,
+      {
+        method: "workflow.project.label.list",
+        handler: (_params, callIndex) => ({
+          catalog: {
+            project_id: "project-1",
+            labels:
+              callIndex === 0
+                ? [{ id: labelID, name: "Alpha" }]
+                : callIndex === 1
+                  ? [{ id: labelID, name: "Renamed" }]
+                  : [],
+          },
+        }),
+      },
+      {
+        method: "workflow.board.get",
+        result: boardWithBacklogCount(1),
+      },
+      {
+        method: "workflow.board.nodeCards.list",
+        result: labeledBacklogCards(labelID),
+      },
+    ]);
+
+    render(<App services={services} />);
+
+    const card = await screen.findByRole("article", { name: "Labeled task" });
+    expect(within(card).getByRole("group", { name: appI18n.t("labels.filter") })).toHaveTextContent("Alpha");
+    expect(nodeCardCalls(services)).toHaveLength(1);
+
+    act(() => {
+      services.transport.emit("workflow.project", {
+        event: {
+          action: "renamed",
+          occurred_at_unix_ms: 1,
+          primary_entity_id: labelID,
+          project_id: "project-1",
+          resource: "label",
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(within(card).getByRole("group", { name: appI18n.t("labels.filter") })).toHaveTextContent(
+        "Renamed",
+      );
+    });
+    expect(nodeCardCalls(services)).toHaveLength(1);
+
+    act(() => {
+      services.transport.emit("workflow.project", {
+        event: {
+          action: "deleted",
+          occurred_at_unix_ms: 2,
+          primary_entity_id: labelID,
+          project_id: "project-1",
+          resource: "label",
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(within(card).queryByRole("group", { name: appI18n.t("labels.filter") })).not.toBeInTheDocument();
+    });
+  });
 });
 
 function boardCalls(services: ReturnType<typeof createTestServices>) {
   return services.transport.calls.filter((call) => call.method === "workflow.board.get");
+}
+
+function nodeCardCalls(services: ReturnType<typeof createTestServices>) {
+  return services.transport.calls.filter((call) => call.method === "workflow.board.nodeCards.list");
 }
 
 const boardWithoutWorkflowResponse = {
@@ -457,3 +530,43 @@ const emptyBacklogCards = {
   next_page_token: null,
   generated_at_unix_ms: 1,
 };
+
+function labeledBacklogCards(labelID: string) {
+  return {
+    ...emptyBacklogCards,
+    cards: [
+      {
+        task_id: "task-labeled",
+        short_id: "PRO-1",
+        title: "Labeled task",
+        preview: { markdown: "Body", truncated: false },
+        workflow_id: "workflow-1",
+        active_node_ids: ["backlog"],
+        source_workspace: {
+          workspace_id: "workspace-1",
+          display_name: "Workspace",
+          root_path: "/workspace",
+          availability: "available",
+          is_primary: true,
+          updated_at_unix_ms: 1,
+        },
+        status: {
+          kind: "backlog",
+          native_state: "backlog",
+          node_ids: ["backlog"],
+          run_ids: [],
+          attention_types: [],
+        },
+        actions: {
+          can_start: true,
+          can_interrupt: false,
+          can_resume: false,
+          can_cancel: true,
+          manual_move_target_node_ids: [],
+        },
+        label_ids: [labelID],
+        updated_at_unix_ms: 1,
+      },
+    ],
+  };
+}

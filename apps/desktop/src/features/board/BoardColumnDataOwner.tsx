@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import type { BoardColumn, SelectedWorkflowBoard } from "@/api";
 import { errorMessage } from "@/api";
+import { useProjectLabelCatalog } from "@/shared/labels";
 import type { VirtualizedInfiniteListBoundaryState } from "@/ui";
 import { cardBelongsToColumn } from "./BoardCardMotionModel";
 import { toKanbanCardVM, type KanbanCardVM } from "./BoardColumnViewModel";
@@ -59,6 +60,7 @@ export function BoardColumnDataOwner({
   onReportColumnSnapshot: (columnID: string, snapshot: BoardColumnQuerySnapshot) => void;
 }>) {
   const { t } = useTranslation();
+  const labelCatalog = useProjectLabelCatalog();
   const filterGeneration = useBoardFilterGeneration();
   const cardsQuery = useBoardNodeCards(board.projectID, board.selectedWorkflow.id, column.id, true);
   const generationRef = useRef(0);
@@ -75,12 +77,16 @@ export function BoardColumnDataOwner({
     }),
     [board.attachedWorkspaceCount, board.defaultWorkspaceID],
   );
+  const labelNamesByID = useMemo(
+    () => new Map(labelCatalog.data?.labels.map((label) => [label.id, label.name]) ?? []),
+    [labelCatalog.data?.labels],
+  );
   const cardVMs = useMemo(
     () =>
       queryCards
-        .map((card) => toKanbanCardVM(card, workspaceContext))
+        .map((card) => toKanbanCardVM(card, workspaceContext, labelNamesByID))
         .filter((card) => cardBelongsToColumn(column, card)),
-    [column, queryCards, workspaceContext],
+    [column, labelNamesByID, queryCards, workspaceContext],
   );
   const {
     error,

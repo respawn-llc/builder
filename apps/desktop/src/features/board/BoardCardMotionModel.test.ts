@@ -85,6 +85,37 @@ describe("BoardCardMotionModel", () => {
     ).toBe(false);
   });
 
+  it("treats catalog rename and deletion as card-content changes", () => {
+    const labeled = {
+      ...card("task-1"),
+      labels: [{ id: "label-alpha", name: "Alpha" }],
+    };
+    const snapshot = boardCardSnapshotFromEntries([["backlog", [labeled]]]);
+
+    expect(
+      boardCardSnapshotsEqual(
+        snapshot,
+        boardCardSnapshotFromEntries([
+          [
+            "backlog",
+            [
+              {
+                ...labeled,
+                labels: [{ id: "label-alpha", name: "Renamed" }],
+              },
+            ],
+          ],
+        ]),
+      ),
+    ).toBe(false);
+    expect(
+      boardCardSnapshotsEqual(
+        snapshot,
+        boardCardSnapshotFromEntries([["backlog", [{ ...labeled, labels: [] }]]]),
+      ),
+    ).toBe(false);
+  });
+
   it("detects dirty columns from board read-model task count changes", () => {
     const board = {
       columns: [
@@ -119,6 +150,7 @@ function card(id: string): KanbanCardVM {
     },
     preview: { markdown: "Body", truncated: false },
     id,
+    labels: [],
     shortID: id,
     workspaceChipLabel: null,
     borderTone: "default",

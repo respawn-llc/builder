@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -23,6 +24,7 @@ import {
   IconTooltipButton,
   InfiniteListBoundary,
   MarkdownPlainText,
+  OneLineOverflowRow,
   Spinner,
   VirtualizedInfiniteList,
   type VirtualizedInfiniteListBoundaryState,
@@ -340,9 +342,18 @@ const TaskCard = memo(function TaskCard({
   const canDrag = !actionsDisabled && card.statusKind !== "canceled";
   const waitingForAnswer = isWaitingForAnswer(card.statusKind);
   const availableActions = taskCardActionAvailability(card);
+  const labelItems = useMemo(
+    () =>
+      card.labels.map((label) => ({
+        content: <Badge tone="neutral">{label.name}</Badge>,
+        id: label.id,
+      })),
+    [card.labels],
+  );
   const hasFooter =
     card.statusKind === "running" ||
     card.workspaceChipLabel !== null ||
+    card.labels.length > 0 ||
     availableActions.canInterrupt ||
     availableActions.canResume;
   const dragPayload = {
@@ -417,7 +428,7 @@ const TaskCard = memo(function TaskCard({
               data-testid="task-card-footer"
             >
               <div
-                className="flex min-w-0 flex-1 flex-wrap items-center gap-[var(--space-2)] text-xs text-[var(--color-muted)]"
+                className="flex min-w-0 flex-1 items-center gap-[var(--space-2)] overflow-hidden text-xs text-[var(--color-muted)]"
                 data-testid="task-card-chips"
               >
                 {card.statusKind === "running" ? (
@@ -428,10 +439,18 @@ const TaskCard = memo(function TaskCard({
                   />
                 ) : null}
                 {card.workspaceChipLabel !== null ? (
-                  <span className="inline-flex items-center" data-testid="task-card-chip-slot">
+                  <span className="inline-flex shrink-0 items-center" data-testid="task-card-chip-slot">
                     <Badge tone="neutral">{card.workspaceChipLabel}</Badge>
                   </span>
                 ) : null}
+                {labelItems.length === 0 ? null : (
+                  <OneLineOverflowRow
+                    ariaLabel={t("labels.filter")}
+                    className="min-w-0 flex-1"
+                    items={labelItems}
+                    renderOverflow={(hiddenCount) => <Badge tone="neutral">+{hiddenCount}</Badge>}
+                  />
+                )}
               </div>
               <TaskCardActions
                 actionsDisabled={actionsDisabled}

@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { I18nextProvider } from "react-i18next";
 import { beforeAll, vi } from "vitest";
 
 import { appI18n, initializeI18n } from "@/i18n";
 import { createBoardDragEvent, TestDataTransfer } from "@/test-support/board-drag";
+import { installOneLineOverflowGeometry, visibleOneLineOverflowText } from "@/test-support/one-line-overflow";
 import { KanbanColumn, type KanbanColumnProps } from "./BoardColumns";
 import type { KanbanCardVM, KanbanColumnVM } from "./BoardColumnViewModel";
 import { boardCardDragPayloadType } from "./BoardDragTypes";
@@ -45,6 +46,68 @@ describe("KanbanColumn", () => {
     renderColumn();
 
     expect(screen.queryByTestId("task-card-footer")).not.toBeInTheDocument();
+  });
+
+  it("renders label chips as informational footer content without stealing card activation", () => {
+    const onCardClick = vi.fn();
+    renderColumn({
+      cards: [
+        testCard({
+          labels: [
+            { id: "label-alpha", name: "Alpha" },
+            { id: "label-beta", name: "Beta" },
+          ],
+        }),
+      ],
+      onCardClick,
+    });
+
+    const card = screen.getByRole("article", { name: "Task" });
+    const labels = within(card).getByRole("group", { name: appI18n.t("labels.filter") });
+    expect(labels).toHaveTextContent("Alpha");
+    expect(labels).toHaveTextContent("Beta");
+    expect(within(labels).queryByRole("button")).not.toBeInTheDocument();
+
+    fireEvent.click(within(labels).getByText("Alpha"));
+    expect(onCardClick).toHaveBeenCalledWith("task-1");
+  });
+
+  it("uses the final fitting label position for overflow and restores exact-fit labels after resize", () => {
+    const geometry = installOneLineOverflowGeometry({
+      availableWidth: 96,
+      gap: 4,
+      itemWidth: 32,
+      overflowWidth: 24,
+    });
+    try {
+      renderColumn({
+        cards: [
+          testCard({
+            labels: [
+              { id: "label-one", name: "One" },
+              { id: "label-two", name: "Two" },
+              { id: "label-three", name: "Three" },
+              { id: "label-four", name: "Four" },
+            ],
+          }),
+        ],
+      });
+      act(() => {
+        geometry.notify();
+      });
+
+      const labels = screen.getByRole("group", { name: appI18n.t("labels.filter") });
+      expect(visibleOneLineOverflowText(labels)).toBe("OneTwo+2");
+
+      geometry.setAvailableWidth(140);
+      act(() => {
+        geometry.notify();
+      });
+
+      expect(visibleOneLineOverflowText(labels)).toBe("OneTwoThreeFour");
+    } finally {
+      geometry.restore();
+    }
   });
 
   it("keeps action buttons in the chip row, uses danger interrupt, and omits run count chip", () => {
@@ -302,6 +365,7 @@ const card: KanbanCardVM = {
   },
   preview: { markdown: "Body", truncated: false },
   id: "task-1",
+  labels: [],
   shortID: "T-1",
   workspaceChipLabel: null,
   borderTone: "default",
