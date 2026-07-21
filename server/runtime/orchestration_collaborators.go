@@ -54,8 +54,38 @@ type stepLoopOptions struct {
 	ReviewerFrequency              string
 	ReviewerClient                 llm.Client
 	RefreshReviewerConfigOnResolve bool
-	PendingUserInjectionIDs        map[string]struct{}
 	OnQueuedUserFlushCommitted     func(session.CommitReceipt)
+}
+
+func observeQueuedUserFlushCommit(options stepLoopOptions, receipt session.CommitReceipt) {
+	if receipt.Committed && options.OnQueuedUserFlushCommitted != nil {
+		options.OnQueuedUserFlushCommitted(receipt)
+	}
+}
+
+type userInjectionSelection interface {
+	userInjectionSelection()
+}
+
+type steerUserInjectionSelection struct {
+	queueItemIDs map[string]struct{}
+}
+
+func (steerUserInjectionSelection) userInjectionSelection() {}
+
+type allPendingUserInjectionSelection struct{}
+
+func (allPendingUserInjectionSelection) userInjectionSelection() {}
+
+type userInjectionCommitResult struct {
+	flushed               int
+	receipt               session.CommitReceipt
+	queueItemIDs          map[string]struct{}
+	continueCombinedFlush bool
+}
+
+func steerUserInjections(queueItemIDs map[string]struct{}) userInjectionSelection {
+	return steerUserInjectionSelection{queueItemIDs: queueItemIDs}
 }
 
 type stepLoopResult struct {
@@ -80,7 +110,8 @@ type toolExecutor interface {
 
 type messageLifecycle interface {
 	RestoreMessages() error
-	FlushPendingUserInjections(stepID string, queueItemIDs map[string]struct{}) (int, session.CommitReceipt, error)
+	CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error)
+	FlushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error)
 	DrainPendingUserInjections() []QueuedUserMessage
 	DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage
 	QueueUserMessage(text string, clientRequestID string) QueuedUserMessage

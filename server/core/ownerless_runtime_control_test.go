@@ -21,7 +21,7 @@ import (
 
 func TestSecondClientLiveControlsActiveRun(t *testing.T) {
 	t.Run("live steer", func(t *testing.T) {
-		runSecondClientLiveControlsActiveRun(t, func(t *testing.T, appCore *Core, sessionID string) {
+		runSecondClientLiveControlsActiveRun(t, "steered final answer", func(t *testing.T, appCore *Core, sessionID string) {
 			steerResp, err := appCore.RuntimeLiveControlClient().LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
 				ClientRequestID: uuid.NewString(),
 				SessionID:       sessionID,
@@ -36,7 +36,7 @@ func TestSecondClientLiveControlsActiveRun(t *testing.T) {
 		})
 	})
 	t.Run("runtime control queue user message", func(t *testing.T) {
-		runSecondClientLiveControlsActiveRun(t, func(t *testing.T, appCore *Core, sessionID string) {
+		runSecondClientLiveControlsActiveRun(t, "first answer before steering", func(t *testing.T, appCore *Core, sessionID string) {
 			clientRequestID := uuid.NewString()
 			operationID, err := runtimeids.ParseRuntimeClientRequestID(clientRequestID)
 			if err != nil {
@@ -57,7 +57,7 @@ func TestSecondClientLiveControlsActiveRun(t *testing.T) {
 		})
 	})
 	t.Run("runtime control submit user turn", func(t *testing.T) {
-		runSecondClientLiveControlsActiveRun(t, func(t *testing.T, appCore *Core, sessionID string) {
+		runSecondClientLiveControlsActiveRun(t, "steered final answer", func(t *testing.T, appCore *Core, sessionID string) {
 			clientRequestID := uuid.NewString()
 			operationID, err := runtimeids.ParseRuntimeClientRequestID(clientRequestID)
 			if err != nil {
@@ -83,7 +83,7 @@ func TestSecondClientLiveControlsActiveRun(t *testing.T) {
 	})
 }
 
-func runSecondClientLiveControlsActiveRun(t *testing.T, steer func(*testing.T, *Core, string)) {
+func runSecondClientLiveControlsActiveRun(t *testing.T, wantCurrentResult string, steer func(*testing.T, *Core, string)) {
 	t.Helper()
 	home := t.TempDir()
 	workspace := t.TempDir()
@@ -91,7 +91,9 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, steer func(*testing.T, *
 
 	release := make(chan struct{})
 	started := make(chan struct{})
+	secondStarted := make(chan struct{})
 	var startOnce sync.Once
+	var secondOnce sync.Once
 	var releaseOnce sync.Once
 	var requestMu sync.Mutex
 	requestIndex := 0
@@ -110,6 +112,9 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, steer func(*testing.T, *
 		currentRequest := requestIndex
 		requestMu.Unlock()
 		startOnce.Do(func() { close(started) })
+		if currentRequest == 2 {
+			secondOnce.Do(func() { close(secondStarted) })
+		}
 		if currentRequest == 1 {
 			<-release
 			modelstub.WriteCompletedResponseStream(w, "first answer before steering", 1, 1)
@@ -214,8 +219,8 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, steer func(*testing.T, *
 		t.Fatalf("timed out waiting for RunPrompt to finish after %d model requests", count)
 	}
 	resp := <-runResult
-	if resp.Result != "steered final answer" {
-		t.Fatalf("RunPrompt result = %q, want steered final answer", resp.Result)
+	if resp.Result != wantCurrentResult {
+		t.Fatalf("RunPrompt result = %q, want %q", resp.Result, wantCurrentResult)
 	}
 	select {
 	case waitErr := <-waitDone:
@@ -226,7 +231,12 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, steer func(*testing.T, *
 		t.Fatal("timed out waiting for LiveWait to finish")
 	}
 	waitResp := <-waitResult
-	if waitResp.Result == nil || *waitResp.Result != "steered final answer" {
-		t.Fatalf("LiveWait result = %v, want steered final answer", waitResp.Result)
+	if waitResp.Result == nil || *waitResp.Result != wantCurrentResult {
+		t.Fatalf("LiveWait result = %v, want %q", waitResp.Result, wantCurrentResult)
+	}
+	select {
+	case <-secondStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for queued or steered follow-up request")
 	}
 }

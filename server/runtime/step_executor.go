@@ -52,10 +52,6 @@ type completedResponsePreflightRejection struct {
 
 func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID string, options stepLoopOptions) (stepLoopResult, error) {
 	e := s.engine
-	// The engine owns the queued user-injection scope for the in-flight top-level
-	// step; derive it here so reviewer follow-ups inherit it without the supervisor
-	// threading injection IDs through stepLoopOptions.
-	options.PendingUserInjectionIDs = e.activeUserInjectionScopeSnapshot()
 	executedToolCall := false
 	patchEditsApplied := false
 	deferredFinal := llm.Message{}
@@ -83,6 +79,9 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			ctx,
 			stepID,
 			func() (llm.Request, error) {
+				if err := s.commitPendingUserSteer(stepID, options); err != nil {
+					return llm.Request{}, err
+				}
 				requestPlan, buildErr := e.buildRequestPlanWithExtraItems(ctx, stepID, nil, true)
 				if buildErr != nil {
 					return llm.Request{}, buildErr
@@ -347,11 +346,15 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 }
 
 func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options stepLoopOptions) (int, error) {
-	flushed, receipt, err := s.messages.FlushPendingUserInjections(stepID, options.PendingUserInjectionIDs)
-	if receipt.Committed && options.OnQueuedUserFlushCommitted != nil {
-		options.OnQueuedUserFlushCommitted(receipt)
-	}
-	return flushed, err
+	result, err := s.messages.FlushPendingUserInjections(stepID, steerUserInjections(s.engine.queuedUserAutoDrainIDSnapshot()))
+	observeQueuedUserFlushCommit(options, result.receipt)
+	return result.flushed, err
+}
+
+func (s *defaultStepExecutor) commitPendingUserSteer(stepID string, options stepLoopOptions) error {
+	result, err := s.messages.CommitPendingUserInjections(stepID, steerUserInjections(s.engine.queuedUserAutoDrainIDSnapshot()))
+	observeQueuedUserFlushCommit(options, result.receipt)
+	return err
 }
 
 func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, stepID string, resp llm.Response) (preparedCompletedResponse, error) {
