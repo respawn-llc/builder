@@ -6,7 +6,7 @@ Use these terms consistently in specs, code names, CLI/API contracts, and implem
 
 ### Task
 
-A durable user-facing unit of work. A task owns workflow state, task metadata, node history, transition history, question associations, comments, and execution artifacts. Kent sessions are artifacts under a task.
+A durable user-facing unit of work. A task owns its current workflow Nodes, task metadata, unresolved workflow interactions, comments, and Session associations. A Task may have several current Nodes while parallel work is active. Completed Node execution and workflow movement are not retained as separate history.
 
 ### Task Short ID
 
@@ -18,7 +18,7 @@ A short, human-facing, uppercase project prefix applied to new task short IDs. U
 
 ### Workflow Version
 
-A monotonic workflow definition counter incremented by persisted definition edits. Metadata-only changes and graph changes each increment it once, combined metadata+graph saves increment it once, and no-op saves do not increment it. It provides traceability for tasks, runs, transitions, approvals, and stale-warning UX without immutable graph versioning.
+A monotonic workflow definition counter incremented by persisted definition edits. Metadata-only changes and graph changes each increment it once, combined metadata+graph saves increment it once, and no-op saves do not increment it. It provides current-definition and pending-approval stale-warning data without immutable graph versioning.
 
 ### Workflow
 
@@ -58,7 +58,11 @@ The subagent role associated with an executable node. UI surfaces may present th
 
 ### Node
 
-A workflow graph state. Agent, start, and terminal nodes can map to user-visible workflow states or Kanban columns/statuses. Join nodes are internal merge plumbing omitted from board columns and shown in workflow editor visuals as inspectable merge nodes. Node identity is execution identity.
+A workflow graph state. Agent, start, and terminal nodes can map to user-visible workflow states or Kanban columns/statuses. Join nodes are internal merge plumbing omitted from board columns and shown in workflow editor visuals as inspectable merge nodes.
+
+### Current Nodes
+
+The Node or Nodes a Task is in at this moment. A Task usually has one current Node and may have several only while parallel branches are active. Current Nodes are task-owned state with no independent entity IDs. An executable current Node stores only the state needed to execute or resume that work, including its optional Session binding; leaving the Node removes that current state.
 
 ### Node Group
 
@@ -70,7 +74,7 @@ The node where new tasks enter a workflow. A start node is non-executable and ha
 
 ### Task Start
 
-An explicit operation that moves a newly created task from start/backlog into the first executable placement by applying the start node's outgoing transition.
+An explicit operation that moves a newly created Task from start/backlog into its first executable current Node by applying the Start Node's outgoing Transition.
 
 ### Terminal Node
 
@@ -90,11 +94,11 @@ One target branch of a transition. The branch owns target-specific invocation be
 
 ### Fan-Out Transition
 
-A transition with multiple branches that starts parallel target placements from one source-node decision.
+A Transition with multiple branches that adds several parallel target Nodes to a Task's Current Nodes from one source-node decision.
 
 ### Parameter
 
-A stable-key string fact produced by an agent source when it applies a transition. Parameters are declared on transition branches, are required when declared, and can be used by target prompts, previous-transition prompt references, joins, terminal transition history, and validation.
+A stable-key string fact produced by an agent source when it applies a Transition. Parameters are declared on Transition Branches, are required when declared, and can be materialized into target prompts, later-node prompt references, joins, and validation.
 
 ### Transition Prompt
 
@@ -102,11 +106,11 @@ A prompt template owned by a transition branch into an agent node. Transitions i
 
 ### Transition Result
 
-Structured data produced by a node run for a selected transition. It includes the selected transition key when the source node has multiple outgoing transitions, optional `commentary`, and top-level parameter values required by the selected transition.
+Structured data produced when an executable current Node completes and selects a Transition. It includes the selected Transition Key when the source Node has multiple outgoing Transitions, optional `commentary`, and top-level Parameter values required by the selected Transition.
 
 ### Parameter Requirements
 
-Runtime requirements for transition parameters that must be present before the run can continue. Parameter requirements are derived from the selected transition and its fan-out branches.
+Requirements for Transition Parameters that must be present before a current Node can complete. They are derived from the selected Transition and its fan-out branches.
 
 ### Parameter Binding
 
@@ -134,19 +138,11 @@ Per-transition-branch policy for the next node's execution context:
 
 ### Context Source
 
-Per-transition-branch policy deciding which earlier run supplies the source session for continuation modes. `immediate_source` uses the run that produced the selected transition. `node:<node_key>` selects the latest completed run for a guaranteed-prior agent node. `previous_target` selects the latest completed run of the transition branch target and requires that a matching run exists. `previous_target_or_new` selects the latest completed target run when one exists and otherwise starts the target with an effective new session.
-
-### Run
-
-One durable execution attempt for an executable node on a task. Agent runs create or continue a Kent session. Script runs execute a local server-side executable. A run may call tools, ask questions, produce a transition result, and terminate with a structured outcome.
+Per-Transition-Branch policy deciding which retained Session supplies context for continuation modes. `immediate_source` uses the Session bound to the source current Node. `node:<node_key>` selects the latest retained Session associated with a guaranteed-prior agent Node. `previous_target` selects the latest retained Session associated with the Transition Branch target and requires that one exists. `previous_target_or_new` selects that Session when one exists and otherwise starts a new Session. While parallel work is active, every selection is scoped to the same Transition Branch Key as the source current Node.
 
 ### Exact Execution Scope
 
-The opaque immutable identity of one live agent or script execution. It binds the workflow run when present, execution generation, and resource generation. An exact execution scope is the only execution-liveness authority; durable rows, transcript events, timestamps, goals, and client state cannot prove that it is live.
-
-### Execution Generation
-
-The immutable attempt generation of an agent or script run. Every Resume creates a successor execution generation, while accepted steering continues within the current generation. Handles and completion intents from an older generation cannot mutate a successor.
+The opaque immutable identity of one live agent or script execution for a Task's current Node and parallel branch when applicable. Resume creates a new scope after the previous scope has fully stopped. An Exact Execution Scope is the only execution-liveness authority; durable state, transcript events, timestamps, goals, and client state cannot prove that execution is live.
 
 ### Resource Generation
 
@@ -156,49 +152,29 @@ The immutable generation of the live runtime resources used by an exact executio
 
 A workflow executable node that runs a local executable on the Kent server instead of starting an agent session. It reads incoming workflow parameter values from JSON stdin, writes workflow completion JSON to stdout, and uses stderr only for diagnostics.
 
-### Interrupted Run
-
-A run stopped before producing a valid transition result. Its session and worktree state remain available so execution can continue from the interruption point.
-
 ### Session Contract
 
 The execution setup captured by a Kent session for one contract generation. Model/provider setup, generation parameters, active enabled tool IDs, and native web-search mode stay locked within that generation. `compact_and_continue_session` starts a fresh target-node contract generation; ordinary compaction can lazily refresh system and reviewer prompt snapshots from current config/source truth within its generation. Developer meta context messages are transcript entries, not lazy-refreshed session-contract snapshots. Tool declarations for locked tool IDs are runtime-defined and are not persisted as session snapshots.
 
 ### Runtime Parameter Contract
 
-The run-start snapshot of possible and required transition parameters for a node run. Runtime parameter contracts are derived from outgoing transitions, fan-out branch unions, previous-transition references, and join aggregates, then frozen for in-flight work.
-
-### Run Start Context
-
-The typed aggregate materialized for the runner before a workflow run starts. It combines task, run, node, workspace/worktree, run-start snapshot, accepted transition branch invocation facts, parameter values, context-preservation mode, and context source provenance. It is a store materialization interface, not an opaque persisted JSON envelope.
+The current possible and required Transition Parameters for an executable current Node. It is derived from the latest Workflow definition when execution starts or resumes rather than retained as historical execution state.
 
 ### Session
 
-Kent transcript/runtime artifact used by a run. A task may have many sessions because of loops, branches, retries, or context-preservation choices.
-
-### Session Run
-
-One live agent execution of a session within one exact execution scope and execution generation. Steering remains within that generation; Resume creates a successor Session Run generation. Scripts have exact execution scopes but no Session Run.
+Kent transcript/runtime artifact associated with an agent Node on a Task and, while parallel work is active, its Transition Branch Key. A Task may retain many Sessions because of loops, parallel branches, retries, or context-preservation choices. Script Nodes have no Session.
 
 ### Node Transition
 
-A task movement from one node to another through a transition branch. It evaluates transition conditions, applies parameter bindings, applies context preservation, and schedules or blocks the next run.
-
-### Node Placement
-
-An occurrence of a task in a node. A task can have multiple active placements only when a workflow explicitly runs parallel branches.
-
-### Parallel Batch
-
-The branch placements created by one fan-out transition for one task. The batch gives joins a correlation identity.
+An atomic Task state change through a Transition Branch. It removes completed source Nodes from Current Nodes, applies Parameter bindings and context preservation, and adds or blocks the target Nodes. Applied transitions are not retained as workflow movement history.
 
 ### Join
 
-A non-agent fan-in node that waits for required inbound branches before continuing. The join exposes a read-only aggregate of incoming branch parameters. Same-key incoming parameter collisions are invalid.
+A non-agent fan-in Node that waits for the required current parallel branches before continuing. It exposes a read-only aggregate of incoming branch Parameters. Same-key incoming Parameter collisions are invalid.
 
 ### Task Interrupt
 
-A resumable stop operation for one or every exact live execution on a task. It joins exact-scope finalization and records interruption metadata without deleting the task, session, worktree, or other execution artifacts.
+A resumable stop operation for one Session or every Exact Execution Scope on a Task. It joins scope finalization and records interruption state on the affected current Nodes without deleting the Task, Session, or worktree.
 
 ### Task Delete
 
@@ -210,11 +186,11 @@ The task lifecycle condition in which no exact live execution, automatic intent,
 
 ### Question
 
-A user-blocking ask emitted by a run through `ask_question`. Questions carry prompt text, optional suggestions/options, optional recommended option index, and schema-backed answer expectations.
+A user-blocking ask emitted by a Session through `ask_question`. Questions carry prompt text, optional suggestions/options, optional recommended option index, and schema-backed answer expectations.
 
 ### Orchestrator
 
-An agent node whose transition prompts ask it to coordinate work. Orchestration may happen inside one agent run or through workflow graph branches.
+An agent Node whose Transition Prompts ask it to coordinate work. Orchestration may happen inside one Session or through Workflow graph branches.
 
 ### Operational Stop State
 
@@ -230,7 +206,7 @@ A typed in-memory request for Workflow Execution to start eligible workflow work
 
 ### Immutable Live Snapshot
 
-One read-only, point-in-time projection of exact generation-matched execution scopes, automatic intents, and runtime gates. Workflow reads may combine it with durable facts and may become stale; mutations revalidate authoritative state before commit.
+One read-only, point-in-time projection of Exact Execution Scopes, Automatic Intents, and runtime gates. Workflow reads may combine it with durable facts and may become stale; mutations revalidate authoritative state before commit.
 
 ### Scheduler
 
@@ -250,7 +226,7 @@ A transient or persistent global notification surfaced by the desktop app. Toast
 
 ### Streaming Message
 
-The in-progress assistant turn while the model is generating, modeled server-side as a single provisional message (`chatStore.streaming`) that grows as deltas arrive. It is held outside provider history and is never persisted; it is exposed to clients as a sibling of the committed transcript (the trailing message), not as a committed entry. Each completed model response resolves its active streaming message exactly once. An authoritative committed assistant-text row finalizes the streaming message and receives its stream UUID. A completed response without such a row discards an active streaming message with the typed `superseded` reason before the next model generation or before the response exits; this includes accepted tool-call-only ask, local-tool, and hosted-tool continuations, plus responses omitted from persistence by workflow preflight, external durable workflow completion, reasoning or no-op retry disposition, or final-answer-with-tools terminalization before final-text persistence. Established response side effects may precede supersession, but a subsequent assistant delta may not. A completed response with no active streaming message emits no stream terminal. Interrupts and abnormal run termination also discard an active streaming message. "Ongoing"/"detail" are TUI render postures only and must never appear in server/shared domain naming; the server has no knowledge of how clients render the streaming message.
+The in-progress assistant turn while the model is generating, modeled server-side as a single provisional message (`chatStore.streaming`) that grows as deltas arrive. It is held outside provider history and is never persisted; it is exposed to clients as a sibling of the committed transcript (the trailing message), not as a committed entry. Each completed model response resolves its active streaming message exactly once. An authoritative committed assistant-text row finalizes the streaming message and receives its stream UUID. A completed response without such a row discards an active streaming message with the typed `superseded` reason before the next model generation or before the response exits; this includes accepted tool-call-only ask, local-tool, and hosted-tool continuations, plus responses omitted from persistence by workflow preflight, external durable workflow completion, reasoning or no-op retry disposition, or final-answer-with-tools terminalization before final-text persistence. Established response side effects may precede supersession, but a subsequent assistant delta may not. A completed response with no active streaming message emits no stream terminal. Interrupts and abnormal execution termination also discard an active streaming message. "Ongoing"/"detail" are TUI render postures only and must never appear in server/shared domain naming; the server has no knowledge of how clients render the streaming message.
 
 ### Ongoing Mode
 
@@ -288,11 +264,11 @@ Terminal-owned history of normal-buffer output. Kent does not replay, clear, or 
 
 ### Active Session Runtime
 
-The single shared runtime resource a session registers while available. Every interactive client and any headless or workflow run resolves the same resource as an equal control surface. Live execution exists only when the exact execution authority exposes a generation-matched scope; a registered idle runtime is not a live execution.
+The single shared runtime resource a Session registers while available. Every interactive client and any headless or workflow-controlled execution resolves the same resource as an equal control surface. Live execution exists only while the exact execution authority exposes a matching scope; a registered idle runtime is not a live execution.
 
 ### RuntimeActivity
 
-The server-owned live read model derived from the exact execution authority for whether a session runtime is unavailable, establishing, registered idle, running, awaiting a live prompt/approval, draining, or closing, including the active kind for exclusive work such as a user turn, goal loop, compaction, shell, or background step. Running and waiting require exact generation-matched live evidence. Clients project `RuntimeActivity`; durable rows and client-local fallback booleans are not liveness sources.
+The server-owned live read model derived from the exact execution authority for whether a Session runtime is unavailable, establishing, registered idle, running, awaiting a live prompt/approval, draining, or closing, including the active kind for exclusive work such as a user turn, goal loop, workflow-controlled execution, compaction, shell, or background step. Running and waiting require matching Exact Execution Scope evidence. Clients project `RuntimeActivity`; durable state and client-local fallback booleans are not liveness sources.
 
 ### Runtime Command
 
@@ -300,7 +276,7 @@ The sole typed ordering authority for model-visible human input, agent-originate
 
 ### Completion Fence
 
-The Workflow Execution boundary after which an actor-neutral completion intent may commit for an exact live scope or exact current idle workflow run. For an agent scope, accepted human steering before the fence supersedes completion and continues the same generation; input arriving after the fence is rejected with a typed retryable result so the client restores its draft.
+The Workflow Execution boundary after which an actor-neutral completion intent may commit for an Exact Execution Scope or one unambiguous current idle executable Node on a Task. For an agent scope, accepted human steering before the fence supersedes completion and continues the same live execution; input arriving after the fence is rejected with a typed retryable result so the client restores its draft.
 
 ### Runtime Gate
 
@@ -360,8 +336,8 @@ Every client attached to a session is an equal, full-control surface over the sh
 
 ### Goal
 
-A persistent self/user-declared objective with a continuation loop (nudges, suspend/resume, premature-stop reminders) that drives turns until the goal is completed, paused, or cleared. A goal may be set by the user or by the model itself, including inside a workflow run.
+A persistent self/user-declared objective with a continuation loop (nudges, suspend/resume, premature-stop reminders) that drives turns until the goal is completed, paused, or cleared. A goal may be set by the user or by the model itself, including inside a workflow-controlled Session.
 
 ### Goal Continuation Loop
 
-The driver that re-runs the step loop to keep working a goal across runs, injecting goal reminders. It does not run while an exact workflow execution scope is driving the session — the workflow turn loop is the single continuation driver there, and the goal stays a passive objective folded into the workflow's continuation nudge.
+The driver that repeats the step loop to keep working a goal across Agent Turns, injecting goal reminders. It does not operate while an Exact Execution Scope is driving the Session for Workflow Execution—the workflow turn loop is the single continuation driver there, and the Goal stays a passive objective folded into the workflow's continuation nudge.

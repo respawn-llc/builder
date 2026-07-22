@@ -105,7 +105,7 @@
 - Normal runtime lifecycle states—idle, starting, running, awaiting a prompt, draining, and closing—appear only in the later-designed runtime/Thinking/status surface and create no transcript rows.
 - Runtime unavailable appears only in the runtime/connection error surface and creates no transcript row.
 - Active-work kind—user turn, workflow turn, goal loop, compaction, pre-submit compaction, user shell, background work, or runtime maintenance—only drives the later-designed Thinking/status label, icon, and controls; transitions create no transcript rows.
-- Step/run started, completed, interrupted, and failed lifecycle remains in runtime/status and creates no transcript markers. Actual user, assistant, tool, and error-feedback rows own history.
+- Agent Step and workflow-controlled execution lifecycle remains in runtime/status and creates no transcript markers. Actual user, assistant, tool, and error-feedback rows own history.
 - Compaction started/completed/failed lifecycle appears only in Thinking/status/Context and creates no lifecycle transcript rows. Failure uses Sonner and any authoritative durable error-feedback row; the committed compaction summary owns history.
 - Goal active/suspended/paused/complete lifecycle appears only in the Goal/status control surface and creates no lifecycle transcript rows. Committed Goal feedback owns history.
 - Live background activity and process controls appear only in a new dedicated contextual-sidebar destination and create no duplicate live transcript rows. Chronological committed Background process rows remain in the transcript.
@@ -124,8 +124,7 @@
 - Previous-session lineage creates no transcript row. When present, the session-facts area begins with a compact action row using a left-arrow icon and the exact label `To parent chat`; activating it opens the previous session at latest.
 - Parent-agent-session lineage is omitted from ordinary Chat settings and transcript. It belongs only to Subagent UX.
 - Every session setting requires its own later design decision.
-- Raw workflow active/run/task/workflow IDs are not TUI-visible Chat status facts; the server transports them for behavior gating. They create no transcript/status item.
-- A workflow-linked Chat exposes one typed Task navigation row showing the Task short ID and title and opening Task Detail. Raw Run and Workflow IDs remain omitted.
+- Raw workflow execution and Workflow IDs are not Chat status facts. A workflow-linked Chat exposes one typed Task navigation row showing the Task short ID and title and opening Task Detail.
 - Transient notices and errors that the TUI emits through its status line map to Sonner on Desktop. Chat does not invent per-feature status/error surfaces for them.
 - Persistent live controls exist only where explicitly designed, including Thinking, Context, Goal, and Pending Work.
 - Worktree-transition outcomes create no duplicate transcript row; the initiating control updates, and transient outcome feedback uses Sonner.

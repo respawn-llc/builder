@@ -119,7 +119,7 @@ func captureSessionRequest(
 	store, err := session.OpenByID(
 		persistenceRoot,
 		sessionID,
-		session.WithPersistedSessionResolver(md),
+		md.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("open read-only session: %w", err)
