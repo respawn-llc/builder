@@ -183,7 +183,7 @@ func sharedTargetNodeGroupDisplayName(def workflow.Definition, edges []workflow.
 	for _, group := range def.NodeGroups {
 		nodeGroupsByID[group.ID] = group
 	}
-	sharedGroupID := ""
+	var sharedGroupID *string
 	for _, edge := range edges {
 		target, ok := nodes[edge.TargetNodeID]
 		if !ok {
@@ -193,17 +193,17 @@ func sharedTargetNodeGroupDisplayName(def workflow.Definition, edges []workflow.
 		if groupID == "" {
 			return nil, nil
 		}
-		if sharedGroupID == "" {
-			sharedGroupID = groupID
+		if sharedGroupID == nil {
+			sharedGroupID = &groupID
 			continue
 		}
-		if groupID != sharedGroupID {
+		if groupID != *sharedGroupID {
 			return nil, nil
 		}
 	}
-	group, ok := nodeGroupsByID[sharedGroupID]
+	group, ok := nodeGroupsByID[*sharedGroupID]
 	if !ok {
-		return nil, fmt.Errorf("snapshot fanout target node group %q missing", sharedGroupID)
+		return nil, fmt.Errorf("snapshot fanout target node group %q missing", *sharedGroupID)
 	}
 	displayName := group.DisplayName
 	return &displayName, nil
