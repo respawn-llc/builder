@@ -204,6 +204,41 @@ func TestExclusiveStepLifecycleClearsPendingRecoveryBeforeSchedulingBackground(t
 	}
 }
 
+func TestExclusiveStepLifecycleDoesNotClearSuccessorPendingRecovery(t *testing.T) {
+	const (
+		successorRecoveryID = "00000000-0000-4000-8000-000000000051"
+		successorStepID     = "00000000-0000-4000-8000-000000000052"
+	)
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
+
+	if err := lifecycle.Run(
+		context.Background(),
+		exclusiveStepOptions{ActiveKind: ActiveKindUserTurn},
+		func(_ context.Context, stepID string) error {
+			if err := engine.markProviderVisibleModelRecovery(stepID); err != nil {
+				return err
+			}
+			return store.SetPendingModelRecovery(session.PendingModelRecovery{
+				RecoveryID: successorRecoveryID,
+				StepID:     successorStepID,
+				Reason:     "provider_visible_output_persisted",
+				CreatedAt:  time.Unix(0, 0).UTC(),
+			})
+		},
+	); err != nil {
+		t.Fatalf("run exclusive step: %v", err)
+	}
+	recovery := store.Meta().PendingModelRecovery
+	if recovery == nil {
+		t.Fatal("exclusive step cleared successor pending recovery")
+	}
+	if recovery.StepID != successorStepID {
+		t.Fatalf("pending recovery step = %q, want successor step", recovery.StepID)
+	}
+}
+
 func TestReopenCarriesInterruptedAskQuestionToolAttemptIntoNextModelRequest(t *testing.T) {
 	testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t, llm.ToolCall{
 		ID:    "interrupted-question-call",
