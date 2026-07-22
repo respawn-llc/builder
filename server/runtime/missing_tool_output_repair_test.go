@@ -80,6 +80,21 @@ func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 	}
 }
 
+func TestMissingToolOutputRepairLeavesUnrelated400Unrepaired(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{
+		errors: []error{&llm.APIStatusError{StatusCode: 400, Body: "malformed request"}},
+	}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+
+	if _, err := eng.SubmitUserMessage(context.Background(), "continue"); err == nil {
+		t.Fatal("expected unrelated provider 400 to surface")
+	}
+	if len(client.calls) != 1 {
+		t.Fatalf("model calls = %d, want no repair retry", len(client.calls))
+	}
+}
+
 func repairRequestHasToolCall(items []llm.ResponseItem, callID string) bool {
 	for _, item := range items {
 		if !isToolCallItem(item.Type) {
