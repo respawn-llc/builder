@@ -226,6 +226,39 @@ func TestRepairMissingToolOutputsPersistSyntheticErrorPresentation(t *testing.T)
 	t.Fatal("missing synthetic completion")
 }
 
+func TestCompactionMissingToolOutputRepairAppendsAndRetries(t *testing.T) {
+	store := mustCreateTestSession(t)
+	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
+		Role:      llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)}},
+	}); err != nil {
+		t.Fatalf("append dangling tool call: %v", err)
+	}
+	client := &fakeCompactionClient{
+		compactionErrors: []error{&llm.APIStatusError{StatusCode: 400}, nil},
+		compactionResponses: []llm.CompactionResponse{{
+			Usage: llm.Usage{WindowTokens: 100},
+		}},
+	}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	request := llm.CompactionRequest{
+		Model:      "gpt-5",
+		SessionID:  store.Meta().SessionID,
+		InputItems: eng.transcriptRuntimeState().SnapshotItems(),
+	}
+
+	if _, _, _, err := eng.compactWithContextRepairRetry(context.Background(), "step", client, request); err != nil {
+		t.Fatalf("compact with repair retry: %v", err)
+	}
+	if len(client.compactionCalls) != 2 {
+		t.Fatalf("compaction calls = %d, want initial 400 plus repaired retry", len(client.compactionCalls))
+	}
+	if !repairRequestHasToolCall(client.compactionCalls[1].InputItems, "missing") ||
+		!repairRequestHasToolOutput(client.compactionCalls[1].InputItems, "missing") {
+		t.Fatal("repaired compaction retry did not preserve the call with its synthetic output")
+	}
+}
+
 func repairRequestHasToolCall(items []llm.ResponseItem, callID string) bool {
 	for _, item := range items {
 		if !isToolCallItem(item.Type) {
