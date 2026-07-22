@@ -95,7 +95,7 @@ type AskQuestionBroker struct {
 	queue []*pending
 	// onAsk switches the broker into synchronous handler mode. When unset, Ask
 	// uses queued submit mode and requests complete only via Submit.
-	onAsk func(AskQuestionRequest) (AskQuestionResponse, error)
+	onAsk func(context.Context, AskQuestionRequest) (AskQuestionResponse, error)
 }
 
 type pending struct {
@@ -113,7 +113,7 @@ func NewAskQuestionBroker() *AskQuestionBroker {
 	return &AskQuestionBroker{}
 }
 
-func (b *AskQuestionBroker) SetAskHandler(handler func(AskQuestionRequest) (AskQuestionResponse, error)) {
+func (b *AskQuestionBroker) SetAskHandler(handler func(context.Context, AskQuestionRequest) (AskQuestionResponse, error)) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.onAsk = handler
@@ -143,17 +143,17 @@ func (b *AskQuestionBroker) Ask(ctx context.Context, req AskQuestionRequest) (As
 	return b.askQueued(ctx, req)
 }
 
-func (b *AskQuestionBroker) askHandler() func(AskQuestionRequest) (AskQuestionResponse, error) {
+func (b *AskQuestionBroker) askHandler() func(context.Context, AskQuestionRequest) (AskQuestionResponse, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.onAsk
 }
 
-func (b *AskQuestionBroker) askSync(ctx context.Context, req AskQuestionRequest, handler func(AskQuestionRequest) (AskQuestionResponse, error)) (AskQuestionResponse, error) {
+func (b *AskQuestionBroker) askSync(ctx context.Context, req AskQuestionRequest, handler func(context.Context, AskQuestionRequest) (AskQuestionResponse, error)) (AskQuestionResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return AskQuestionResponse{}, err
 	}
-	resp, err := handler(req)
+	resp, err := handler(ctx, req)
 	if err != nil {
 		return AskQuestionResponse{}, err
 	}

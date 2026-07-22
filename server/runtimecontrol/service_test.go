@@ -527,6 +527,105 @@ func TestServiceSubmitUserTurnStillCancelsOnExplicitInterrupt(t *testing.T) {
 	}
 }
 
+func TestServiceCanceledAskQuestionTurnReleasesExecutionForNextUserTurn(t *testing.T) {
+	toolStarted := make(chan struct{})
+	client := &runtimeControlFakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant},
+			ToolCalls: []llm.ToolCall{{
+				ID:    "ask-cancel",
+				Name:  string(toolspec.ToolAskQuestion),
+				Input: json.RawMessage(`{"question":"Continue?"}`),
+			},
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("next turn completed"),
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+	}}
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		OnEvent: func(event runtime.Event) {
+			if event.Kind != runtime.EventToolCallStarted || event.ToolCall == nil || event.ToolCall.ID != "ask-cancel" {
+				return
+			}
+			select {
+			case <-toolStarted:
+			default:
+				close(toolStarted)
+			}
+		},
+	})
+
+	firstRequest := runtimeControlUserTurnRequest(store, "ask-cancel", "ask then cancel")
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := service.SubmitUserTurn(context.Background(), firstRequest)
+		firstDone <- err
+	}()
+	select {
+	case <-toolStarted:
+	case err := <-firstDone:
+		t.Fatalf("ask_question turn ended before tool start: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for ask_question to start")
+	}
+	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID:    "interrupt-ask-cancel",
+		SessionID:          store.Meta().SessionID,
+		TargetOperationRef: &firstRequest.OperationRef,
+	}); err != nil {
+		t.Fatalf("interrupt canceled ask_question turn: %v", err)
+	}
+	select {
+	case err := <-firstDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled ask_question turn error = %v, want context canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("canceled ask_question turn retained its execution")
+	}
+	if _, err := service.LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
+		ClientRequestID: "b8349273-19d6-4a4b-94fb-895b48103d02",
+		SessionID:       store.Meta().SessionID,
+		Text:            "must not join the canceled execution",
+	}); !errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
+		t.Fatalf("live steer after canceled ask_question error = %v, want no active run", err)
+	}
+
+	next, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "after-ask-cancel", "next user message"))
+	if err != nil {
+		t.Fatalf("submit next user turn after canceled ask_question: %v", err)
+	}
+	if next.Message != "next turn completed" {
+		t.Fatalf("next user turn response = %+v, want completed response", next)
+	}
+	if engine.HasActiveLiveRunGroup() {
+		t.Fatal("canceled ask_question turn retained live-run ownership after next user turn")
+	}
+	nextUserMessageCommitted := false
+	if err := engine.WithTranscriptHydrationSnapshot(func(snapshot runtime.TranscriptHydrationSnapshot) error {
+		for _, row := range snapshot.CommittedRows {
+			if row.Kind == runtime.TranscriptCommittedRowFactUser && row.User != nil && row.User.Text == "next user message" {
+				nextUserMessageCommitted = true
+				return nil
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read transcript hydration snapshot: %v", err)
+	}
+	if !nextUserMessageCommitted {
+		t.Fatal("next user message was not committed to the transcript")
+	}
+}
+
 func TestServiceInterruptReturnsUnavailableActivityWithoutEngine(t *testing.T) {
 	service := NewService(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
 	resp, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
