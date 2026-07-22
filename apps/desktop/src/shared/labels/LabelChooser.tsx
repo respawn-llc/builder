@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
 import { useTranslation } from "react-i18next";
 
-import { decodeWorkflowLabelError, errorMessage } from "@/api";
+import { decodeWorkflowLabelError, errorMessage, workflowLabelMaxIDs } from "@/api";
 import {
   Button,
   InteractiveChip,
@@ -23,8 +23,6 @@ import {
 import { labelNameContains, labelNamesEqual } from "./labelComparison";
 import type { LabelFilterAction, LabelFilterState } from "./labelFilterState";
 import { useProjectLabelCatalog, useProjectLabelCatalogMutations } from "./projectLabelHooks";
-
-const maxProjectLabels = 100;
 
 export type LabelChooserInvocation =
   | Readonly<{
@@ -83,7 +81,7 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
   );
   const canCreate =
     preparedSearch.length > 0 && !labels.some((label) => labelNamesEqual(label.name, preparedSearch));
-  const catalogAtLimit = (catalog.data?.labels.length ?? 0) >= maxProjectLabels;
+  const catalogAtLimit = (catalog.data?.labels.length ?? 0) >= workflowLabelMaxIDs;
   const choiceCount = labels.length + (canCreate ? 1 : 0);
 
   const createAndSelect = async () => {

@@ -7,13 +7,14 @@ import {
   type BrowserStorageError,
   type BrowserStorageResult,
 } from "@/app-facade";
+import { workflowLabelMaxIDs } from "@/api";
 import { createLabelFilterState, reconcileLabelFilterState, type LabelFilterState } from "./labelFilterState";
 
 const labelFilterStoragePrefix = "desktop.projectLabelFilter.v1";
 const labelFilterModeSchema = z.enum(["any", "all"]);
 const storedLabelIDsSchema = z
   .array(z.uuidv4())
-  .max(100)
+  .max(workflowLabelMaxIDs)
   .refine((labelIDs) => new Set(labelIDs).size === labelIDs.length);
 const storedLabelFilterSchema = z.discriminatedUnion("kind", [
   z

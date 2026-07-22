@@ -1,6 +1,4 @@
-import type { TaskLabelAssignment } from "@/api";
-
-const maxTaskLabels = 100;
+import { workflowLabelMaxIDs, type TaskLabelAssignment } from "@/api";
 
 export type TaskLabelUpdateInput = Readonly<{
   addLabelIDs: readonly string[];
@@ -403,9 +401,9 @@ class TaskLabelAssignmentControllerImpl implements TaskLabelAssignmentController
 
   #addPending(labelID: string, selected: boolean): void {
     const alreadyPending = this.#pending.has(labelID);
-    if (!alreadyPending && this.#pending.size === maxTaskLabels) {
+    if (!alreadyPending && this.#pending.size === workflowLabelMaxIDs) {
       throw new Error(
-        `Task label assignment pending intents exceeded the 100-label bound for Task ${this.#taskID}.`,
+        `Task label assignment pending intents exceeded the ${String(workflowLabelMaxIDs)}-label bound for Task ${this.#taskID}.`,
       );
     }
     this.#pending.set(labelID, selected);
@@ -420,8 +418,10 @@ class TaskLabelAssignmentControllerImpl implements TaskLabelAssignmentController
 }
 
 function boundedLabelSet(labelIDs: readonly string[], taskID: string, operation: string): Set<string> {
-  if (labelIDs.length > maxTaskLabels) {
-    throw new Error(`Task label assignment ${operation} exceeded the 100-label bound for Task ${taskID}.`);
+  if (labelIDs.length > workflowLabelMaxIDs) {
+    throw new Error(
+      `Task label assignment ${operation} exceeded the ${String(workflowLabelMaxIDs)}-label bound for Task ${taskID}.`,
+    );
   }
   const unique = new Set(labelIDs);
   if (unique.size !== labelIDs.length) {

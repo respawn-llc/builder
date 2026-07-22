@@ -50,6 +50,7 @@ export { newSetupOperationID, parseSetupOperationID, SetupOperationID } from "./
 export { rpcErrorCodes } from "./rpcErrorCodes";
 export type { WorktreeSetupEvent, WorktreeSetupEventHandler, WorktreeSetupPhase } from "./worktreeSetup";
 export type { WorkflowProjectEvent, WorkflowProjectEventHandler } from "./workflowProjectEvents";
+export { workflowLabelMaxIDs } from "./workflowLabelContract";
 export type { ConnectionPhase, ConnectionSnapshot } from "./connectionStore";
 export type {
   ActivityItem,

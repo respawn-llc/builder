@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import type { JsonValue } from "./json";
 import { labelIDSchema } from "./schemas/workflowLabels";
+import { workflowLabelMaxIDs } from "./workflowLabelContract";
 
 export type RpcErrorInfo = Readonly<{
   code: number;
@@ -103,8 +104,12 @@ const workflowLabelErrorDataSchema = z
         break;
       case "catalog_limit":
         required("project_id");
-        if (data.limit !== 100) {
-          context.addIssue({ code: "custom", message: "limit must be 100", path: ["limit"] });
+        if (data.limit !== workflowLabelMaxIDs) {
+          context.addIssue({
+            code: "custom",
+            message: `limit must be ${String(workflowLabelMaxIDs)}`,
+            path: ["limit"],
+          });
         }
         break;
       case "label_not_found":

@@ -1,11 +1,12 @@
 import { z } from "zod";
 
 import type { ProjectLabel, ProjectLabelCatalog, TaskLabelAssignment } from "../workflowLabels";
+import { workflowLabelMaxIDs } from "../workflowLabelContract";
 
 export const labelIDSchema = z.uuidv4();
 export const labelIDListSchema = z
   .array(labelIDSchema)
-  .max(100)
+  .max(workflowLabelMaxIDs)
   .superRefine((labelIDs, context) => {
     const seen = new Set<string>();
     for (const [index, labelID] of labelIDs.entries()) {
@@ -32,7 +33,7 @@ export const projectLabelCatalogSchema: z.ZodType<ProjectLabelCatalog> = z
     catalog: z
       .object({
         project_id: z.string().min(1),
-        labels: z.array(projectLabelSchema).max(100),
+        labels: z.array(projectLabelSchema).max(workflowLabelMaxIDs),
       })
       .strict(),
   })

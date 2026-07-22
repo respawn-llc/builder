@@ -1,10 +1,8 @@
 import { CancelledError, type QueryClient } from "@tanstack/react-query";
 
-import type { ProjectLabel, ProjectLabelCatalog } from "@/api";
+import { workflowLabelMaxIDs, type ProjectLabel, type ProjectLabelCatalog } from "@/api";
 import { queryKeys } from "@/app-facade";
 import { compareLabelNames } from "./labelComparison";
-
-const maxProjectLabels = 100;
 
 export type ProjectCatalogAuthority = Readonly<{
   read(signal: AbortSignal): Promise<ProjectLabelCatalog>;
@@ -74,9 +72,9 @@ class ProjectCatalogAuthorityImpl implements ProjectCatalogAuthority {
   applyDelete(labelID: string): void {
     this.#advance();
     this.#deletedLabelIDs.add(labelID);
-    if (this.#deletedLabelIDs.size > maxProjectLabels) {
+    if (this.#deletedLabelIDs.size > workflowLabelMaxIDs) {
       throw new Error(
-        `Project catalog authority tombstones exceeded the 100-label bound for Project ${this.#projectID}.`,
+        `Project catalog authority tombstones exceeded the ${String(workflowLabelMaxIDs)}-label bound for Project ${this.#projectID}.`,
       );
     }
     this.#queryClient.setQueryData<ProjectLabelCatalog>(this.#queryKey, (catalog) => {
