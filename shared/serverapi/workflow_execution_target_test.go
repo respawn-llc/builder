@@ -3,6 +3,7 @@ package serverapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -299,6 +300,25 @@ func TestWorkflowTaskGetResponseValidatesExecutionTarget(t *testing.T) {
 	invalid.Task.CurrentScripts = []WorkflowTaskCurrentScript{{RunID: "run-b", Path: "script"}, {RunID: "run-a", Path: "script"}}
 	if err := invalid.Validate(); err == nil {
 		t.Fatal("task detail response accepted non-deterministic current scripts")
+	}
+}
+
+func TestWorkflowTaskGetResponseAcceptsEveryCurrentExecutionTarget(t *testing.T) {
+	currentSessionIDs := make([]string, 0, 201)
+	currentScripts := make([]WorkflowTaskCurrentScript, 0, 201)
+	for index := range 201 {
+		currentSessionIDs = append(currentSessionIDs, fmt.Sprintf("session-%03d", index))
+		currentScripts = append(currentScripts, WorkflowTaskCurrentScript{
+			RunID: fmt.Sprintf("run-%03d", index),
+			Path:  "script",
+		})
+	}
+	response := WorkflowTaskGetResponse{Task: WorkflowTaskDetail{
+		CurrentSessionIDs: currentSessionIDs,
+		CurrentScripts:    currentScripts,
+	}}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("all current execution targets rejected: %v", err)
 	}
 }
 

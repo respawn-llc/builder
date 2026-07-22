@@ -214,14 +214,13 @@
 
 ## Task Status And Listing
 
-- Task detail uses a server-authoritative typed task-status projection derived from durable placements/outcomes plus one immutable exact live snapshot.
-- User-ratified temporary exception (July 22, 2026): workflow board cards and paginated task lists retain their durable status projection until KENT-323. KENT-323 must replace that divergence with one shared typed projection across task detail, board cards, and task lists, including exact-live-aware list filtering, sorting, and cursor pagination.
+- Task detail, workflow board cards, and paginated task lists use one server-authoritative typed task-status projection derived from durable placements/outcomes plus one immutable exact live snapshot.
 - Workflow attention has two read surfaces: a global paginated Inbox feed and a bounded non-paginated task feed. There is no project-scoped attention feed.
 - Core task detail does not embed attention items. It retains an unresolved-attention count for task-show output, and that count plus the rest of core task detail are database-backed without transcript reads.
 - Task attention may read the newest active transcript segment to recover unresolved question content. Desktop task detail starts this read independently in parallel so core detail is not blocked.
 - Task status is UI-neutral structured data. Clients render and localize status labels.
 - One primary status uses this precedence: done, live question, live or persisted workflow approval, running, queued, interrupted, backlog, active.
-- Running, queued, and live-question status require exact generation-matched live evidence. Interruption metadata annotates interrupted state but never proves liveness. The temporary KENT-323 exception above permits the existing board/list durable projection to violate this requirement until that task lands; it does not permit new durable-liveness consumers.
+- Running, queued, and live-question status require exact generation-matched live evidence. Interruption metadata annotates interrupted state but never proves liveness.
 - Task read models expose server-authoritative `can_delete` derived from the same snapshot. The Delete mutation treats it as advisory and revalidates quiescence before changing artifacts or persistence.
 - The status projection preserves all applicable typed attention kinds and run references even when parallel branches have different conditions.
 - Workflow validity is workflow-level state and is not a task status.
@@ -265,7 +264,7 @@
 - When a locked managed root or metadata binding is missing, the initiating action or workflow runner may synchronously invoke the single worktree materializer to conservatively restore an existing named branch at a collision-safe managed root, persist the relation, and run setup for the recreated root.
 - Conservative repair never recreates a missing branch from the old base commit, overwrites an existing directory, resets or renames a branch, accepts detached HEAD, repairs another repository, or infers ownership by scanning arbitrary roots. Unsafe or ambiguous states return one typed locked-target error with a small product-level cause.
 - There is no target-replacement flow. A locked target is never converted to no managed worktree.
-- Task-detail read models always expose the source workspace. After lock they expose the current target mode and derived execution root when available, plus the requested revision and resolved commit when applicable. Managed targets show the current named branch only while the root is available and do not persist branch name in the target snapshot. Desktop task detail presents this contract without standalone Source root or Execution root rows: source identity and path share the Source workspace row, and an available managed root appears only in the Managed worktree row.
+- Task-detail read models always expose the source workspace. After lock they expose durable target provenance plus the recorded managed-worktree path when present. They do not inspect live path availability or the current Git branch: branch discovery is an expensive worktree-owned operation and would duplicate worktree metadata on the hot task-detail read. Desktop task detail presents source identity and path in the Source workspace row and the recorded managed root in the Managed worktree row.
 - Human task detail shortens the resolved commit for readability. Structured JSON retains the full commit value.
 - Initial managed worktree creation uses the task short ID as the branch name.
 - Worktree creation reuses existing worktree branch/root collision handling.
