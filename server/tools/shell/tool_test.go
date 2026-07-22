@@ -476,7 +476,7 @@ func TestWriteStdinPollingPreservesTerminalLifecycleForAllCompletionShapes(t *te
 
 			poll := callWriteStdin(t, pollTool, "poll-complete", map[string]any{
 				"session_id":    sessionID,
-				"yield_time_ms": 800,
+				"yield_time_ms": 15_000,
 			})
 			if poll.IsError {
 				t.Fatalf("unexpected write_stdin error: %s", string(poll.Output))
@@ -500,6 +500,56 @@ func TestWriteStdinPollingPreservesTerminalLifecycleForAllCompletionShapes(t *te
 			waitForManagerCount(t, manager, 0, time.Second)
 		})
 	}
+}
+
+func TestWriteStdinRejectsShortTimedOutputPolls(t *testing.T) {
+	workspace := t.TempDir()
+	manager := newShellTestManager(t, 50*time.Millisecond)
+	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+	pollTool := NewWriteStdinTool(16_000, manager)
+
+	start := callExecCommand(t, execTool, "short-poll-start", map[string]any{
+		"cmd":           "sleep 0.15",
+		"shell":         "/bin/sh",
+		"login":         false,
+		"yield_time_ms": 50,
+	})
+	if start.IsError {
+		t.Fatalf("unexpected exec_command error: %s", string(start.Output))
+	}
+
+	for _, yieldTimeMS := range []int{14_999, 0, -1} {
+		rejected := callWriteStdin(t, pollTool, "short-poll-rejected", map[string]any{
+			"session_id":    1000,
+			"yield_time_ms": yieldTimeMS,
+		})
+		if !rejected.IsError {
+			t.Fatalf("expected %dms timed output poll to fail, got %+v", yieldTimeMS, rejected)
+		}
+		var envelope struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(rejected.Output, &envelope); err != nil {
+			t.Fatalf("decode rejected write_stdin output: %v", err)
+		}
+		if envelope.Error == "" {
+			t.Fatal("expected rejected write_stdin error value")
+		}
+		if rejected.Summary == "" {
+			t.Fatal("expected rejected write_stdin summary")
+		}
+		if rejected.Summary != envelope.Error {
+			t.Fatalf("rejected summary = %q, want error value %q", rejected.Summary, envelope.Error)
+		}
+	}
+
+	accepted := callWriteStdin(t, pollTool, "short-poll-accepted", map[string]any{
+		"session_id": 1000,
+	})
+	if accepted.IsError {
+		t.Fatalf("expected process to remain usable after rejection: %s", string(accepted.Output))
+	}
+	waitForManagerCount(t, manager, 0, time.Second)
 }
 
 func TestWriteStdinCancellationReportsActiveProcess(t *testing.T) {
@@ -532,7 +582,7 @@ func TestWriteStdinCancellationReportsActiveProcess(t *testing.T) {
 		}
 		pollInput, _ := json.Marshal(map[string]any{
 			"session_id":    sessionID,
-			"yield_time_ms": 5_000,
+			"yield_time_ms": 15_000,
 		})
 		pollResult, err := pollTool.Call(ctx, tools.Call{ID: "cancel-poll", Name: toolspec.ToolWriteStdin, Input: pollInput})
 		if err != nil {
@@ -654,8 +704,7 @@ func TestWriteStdinWarnsAndRetriesWhenFullLogReadFails(t *testing.T) {
 	}
 
 	pollInput := map[string]any{
-		"session_id":    sessionID,
-		"yield_time_ms": 20,
+		"session_id": sessionID,
 	}
 	first := callWriteStdin(t, pollTool, "log-missing-1", pollInput)
 	if first.IsError {
@@ -735,9 +784,10 @@ func TestWriteStdinPollHonorsRequestedDuration(t *testing.T) {
 	pollTool := NewWriteStdinTool(16_000, manager)
 
 	result := callExecCommand(t, execTool, "poll-duration-exec", map[string]any{
-		"cmd":           "sleep 0.6",
+		"cmd":           "read line; sleep 0.6",
 		"shell":         "/bin/sh",
 		"login":         false,
+		"tty":           true,
 		"yield_time_ms": 50,
 	})
 	if result.IsError {
@@ -746,6 +796,7 @@ func TestWriteStdinPollHonorsRequestedDuration(t *testing.T) {
 
 	pollInput := map[string]any{
 		"session_id":        1000,
+		"chars":             "\n",
 		"yield_time_ms":     300,
 		"max_output_tokens": 32,
 	}

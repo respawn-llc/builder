@@ -137,7 +137,7 @@ func TestRawBackgroundOutputPathsPreserveAnsi(t *testing.T) {
 
 	pollResult := callWriteStdin(t, stdinTool, "raw-bg-poll", map[string]any{
 		"session_id":    1000,
-		"yield_time_ms": 800,
+		"yield_time_ms": 15_000,
 	})
 	if pollResult.IsError {
 		t.Fatalf("unexpected write_stdin error: %s", string(pollResult.Output))

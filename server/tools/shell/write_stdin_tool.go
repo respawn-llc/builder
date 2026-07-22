@@ -19,6 +19,11 @@ type writeStdinInput struct {
 	MaxOutputTokens *int   `json:"max_output_tokens,omitempty"`
 }
 
+const (
+	minimumOutputPollWaitMS = 15_000
+	shortOutputPollError    = "Avoid polling repeatedly for short intervals, prefer 3-15min polls depending on task. Pick a better interval and retry"
+)
+
 type WriteStdinTool struct {
 	outputLimit int
 	background  *Manager
@@ -49,6 +54,9 @@ func (t *WriteStdinTool) Call(ctx context.Context, c tools.Call) (tools.Result, 
 	}
 	if in.SessionID <= 0 {
 		return tools.ErrorResultWith(c, "session_id is required", marshalNoHTMLEscape), nil
+	}
+	if in.Chars == "" && in.YieldTimeMS != nil && *in.YieldTimeMS < minimumOutputPollWaitMS {
+		return tools.ErrorResultWith(c, shortOutputPollError, marshalNoHTMLEscape), nil
 	}
 	yieldTime := defaultWriteYieldTime
 	if in.YieldTimeMS != nil {
