@@ -175,3 +175,69 @@ func TestBuildRequestPreservesMaterializedToolOutputOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestHistoryReplacementPrunesPriorToolWorkingState(t *testing.T) {
+	store := mustCreateTestSession(t)
+	calls := []llm.ToolCall{
+		{ID: "pruned-one", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
+		{ID: "pruned-two", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
+	}
+	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
+		Role:      llm.RoleAssistant,
+		ToolCalls: calls,
+	}); err != nil {
+		t.Fatalf("append pre-compaction tool calls: %v", err)
+	}
+	for _, call := range calls {
+		if _, _, err := appendTestEvent(t, store, "step", storedToolCompletion{
+			CallID: call.ID,
+			Name:   call.Name,
+			Output: json.RawMessage(`{"ok":true}`),
+			ProviderItems: []llm.ResponseItem{{
+				Type:   llm.ResponseItemTypeFunctionCallOutput,
+				CallID: textutil.Value(call.ID),
+				Name:   textutil.Value(call.Name),
+				Output: json.RawMessage(`{"ok":true}`),
+			}},
+		}); err != nil {
+			t.Fatalf("append pre-compaction completion for %s: %v", call.ID, err)
+		}
+	}
+	if _, _, err := appendTestEvent(t, store, "step", historyReplacementPayload{
+		Engine: "local",
+		Mode:   string(compactionModeAuto),
+		Items: llm.ItemsFromMessages([]llm.Message{{
+			Role:        llm.RoleUser,
+			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+			Content:     textutil.Value("summary"),
+		}}),
+	}); err != nil {
+		t.Fatalf("append history replacement: %v", err)
+	}
+	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
+		Role:    llm.RoleUser,
+		Content: textutil.Value("active input"),
+	}); err != nil {
+		t.Fatalf("append active input: %v", err)
+	}
+
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	for _, call := range calls {
+		if _, ok := engine.transcriptRuntimeState().ToolCompletionSnapshot(call.ID); ok {
+			t.Fatalf("history replacement retained prior tool completion %q", call.ID)
+		}
+	}
+	items := engine.transcriptRuntimeState().SnapshotItems()
+	if len(items) != 2 {
+		t.Fatalf("active provider items = %+v, want summary and active input", items)
+	}
+	if items[0].MessageType == nil || *items[0].MessageType != llm.MessageTypeCompactionSummary ||
+		items[1].Role == nil || *items[1].Role != llm.RoleUser || items[1].MessageType != nil {
+		t.Fatalf("active provider items = %+v, want typed summary plus user input", items)
+	}
+	for _, item := range items {
+		if isToolCallItem(item.Type) || isToolOutputItem(item.Type) {
+			t.Fatalf("history replacement retained a prior tool item: %+v", item)
+		}
+	}
+}
