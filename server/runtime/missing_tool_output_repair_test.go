@@ -11,6 +11,7 @@ import (
 	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -79,6 +80,60 @@ func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 	}
 	if warning == nil || strings.TrimSpace(warning.Text) == "" {
 		t.Fatalf("missing operator-facing repair warning: %+v", warning)
+	}
+}
+
+func TestMissingToolOutputRepairRetryIncludesQueuedSteering(t *testing.T) {
+	store := mustCreateTestSession(t)
+	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
+		Role:      llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)}},
+	}); err != nil {
+		t.Fatalf("append dangling tool call: %v", err)
+	}
+
+	queued := false
+	var eng *Engine
+	client := &hookClient{
+		errors:   []error{&llm.APIStatusError{StatusCode: 400}},
+		response: finalTextResponse("result"),
+		beforeReturn: func() error {
+			if queued {
+				return nil
+			}
+			queued = true
+			if _, accepted, err := eng.QueueUserMessageForActiveRun(
+				context.Background(),
+				"queued steering",
+				runtimeids.NewRuntimeClientRequestID(),
+				nil,
+			); err != nil {
+				return err
+			} else if !accepted {
+				return ErrNoActiveLiveRun
+			}
+			return nil
+		},
+	}
+	eng = mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+
+	if _, err := eng.SubmitUserMessage(context.Background(), "continue"); err != nil {
+		t.Fatalf("submit user message: %v", err)
+	}
+	if len(client.calls) != 2 {
+		t.Fatalf("model calls = %d, want initial 400 plus repaired retry", len(client.calls))
+	}
+	countUserItems := func(items []llm.ResponseItem) int {
+		count := 0
+		for _, item := range items {
+			if item.Type == llm.ResponseItemTypeMessage && item.Role != nil && *item.Role == llm.RoleUser {
+				count++
+			}
+		}
+		return count
+	}
+	if got, want := countUserItems(client.calls[1].Items), countUserItems(client.calls[0].Items)+1; got != want {
+		t.Fatalf("retry user-message count = %d, want queued steering to add one item to %d", got, want)
 	}
 }
 
