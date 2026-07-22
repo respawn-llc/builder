@@ -259,6 +259,35 @@ func TestCompactionMissingToolOutputRepairAppendsAndRetries(t *testing.T) {
 	}
 }
 
+func TestCompactionMissingToolOutputRepairRunsSinglePass(t *testing.T) {
+	store := mustCreateTestSession(t)
+	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
+		Role:      llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)}},
+	}); err != nil {
+		t.Fatalf("append dangling tool call: %v", err)
+	}
+	client := &fakeCompactionClient{
+		compactionErrors: []error{
+			&llm.APIStatusError{StatusCode: 400},
+			&llm.APIStatusError{StatusCode: 400},
+		},
+	}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	request := llm.CompactionRequest{
+		Model:      "gpt-5",
+		SessionID:  store.Meta().SessionID,
+		InputItems: eng.transcriptRuntimeState().SnapshotItems(),
+	}
+
+	if _, _, _, err := eng.compactWithContextRepairRetry(context.Background(), "step", client, request); !llm.HasHTTPStatus(err, 400) {
+		t.Fatalf("compaction error = %v, want second HTTP 400 to surface", err)
+	}
+	if len(client.compactionCalls) != 2 {
+		t.Fatalf("compaction calls = %d, want one repair retry", len(client.compactionCalls))
+	}
+}
+
 func repairRequestHasToolCall(items []llm.ResponseItem, callID string) bool {
 	for _, item := range items {
 		if !isToolCallItem(item.Type) {
