@@ -34,6 +34,10 @@ type authorityLifecycleProbe struct {
 	retain   AgentResourceRetainer
 }
 
+type authorityAutoReleaseLifecycle struct {
+	release func() error
+}
+
 type authorityPromptEvent struct {
 	resource  runtimeids.SessionResourceRef
 	scopeID   runtimeids.ExecutionScopeID
@@ -93,6 +97,22 @@ func (p *authorityLifecycleProbe) ResourceReady(_ context.Context, _ AgentResour
 func (p *authorityLifecycleProbe) ResourceDraining(context.Context, AgentResourceDescriptor) error {
 	p.draining <- struct{}{}
 	return nil
+}
+
+func (l *authorityAutoReleaseLifecycle) ResourceReady(_ context.Context, _ AgentResourceDescriptor, _ *runtime.Engine, retain AgentResourceRetainer) error {
+	retention, err := retain()
+	if err != nil {
+		return err
+	}
+	l.release = retention.Close
+	return nil
+}
+
+func (l *authorityAutoReleaseLifecycle) ResourceDraining(context.Context, AgentResourceDescriptor) error {
+	if l.release == nil {
+		return nil
+	}
+	return l.release()
 }
 
 func TestOpenRuntimeReturnsRunLoggerCreationError(t *testing.T) {
@@ -334,8 +354,8 @@ func TestCloseIfIdleRetiresOwnerlessRuntimeAfterCurrentExecutionFinishes(t *test
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait current agent execution: %v", err)
 	}
-	if !errors.Is(accessErr, serverapi.ErrRuntimeUnavailable) {
-		t.Fatalf("ownerless retiring runtime accepted new callback: %v", accessErr)
+	if accessErr != nil {
+		t.Fatalf("ready ownerless runtime rejected callback before retirement: %v", accessErr)
 	}
 	assertRuntimeUnavailable(t, authority, attachment.Resource(), "execution finished")
 }
@@ -451,6 +471,137 @@ func TestCloseIfIdleRetiresOwnerlessRuntimeAfterRetentionRelease(t *testing.T) {
 		t.Fatalf("release runtime retention: %v", err)
 	}
 	assertRuntimeUnavailable(t, authority, attachment.Resource(), "retention released")
+}
+
+func TestExecutionRetirementKeepsRetainedRuntimeSteerableUntilDrain(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	lifecycle := &authorityLifecycleProbe{draining: make(chan struct{}, 1)}
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot:   fixture.config.PersistenceRoot,
+		StoreOptions:      fixture.metadata.AuthoritativeSessionStoreOptions(),
+		ResourceLifecycle: lifecycle,
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	executionStarted := make(chan struct{})
+	finishExecution := make(chan struct{})
+	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Resource:   OpenAgentResource{},
+		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
+			close(executionStarted)
+			<-finishExecution
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("start ownerless execution: %v", err)
+	}
+	resource, hasResource := handle.Scope().Resource()
+	if !hasResource {
+		t.Fatal("ownerless agent execution has no resource")
+	}
+	<-executionStarted
+	if lifecycle.retain == nil {
+		t.Fatal("resource lifecycle did not expose retention")
+	}
+	retention, err := lifecycle.retain()
+	if err != nil {
+		t.Fatalf("retain execution resource: %v", err)
+	}
+
+	close(finishExecution)
+	if _, err := handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait ownerless execution: %v", err)
+	}
+	if err := authority.WithRuntime(context.Background(), resource, func(_ context.Context, engine *runtime.Engine) error {
+		item := engine.QueueUserMessage("steer retained runtime")
+		if !engine.DiscardQueuedUserMessage(item.ID) {
+			return errors.New("discard retained runtime steering")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("retained ownerless runtime rejected steering: %v", err)
+	}
+
+	if err := retention.Close(); err != nil {
+		t.Fatalf("release execution resource retention: %v", err)
+	}
+	assertRuntimeUnavailable(t, authority, resource, "execution retention released")
+}
+
+func TestExecutionRetirementDrainsAcceptedQueuedWorkBeforeClosing(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	releaseModel := make(chan struct{})
+	close(releaseModel)
+	client := &ownerlessRetirementLLMClient{
+		firstStarted: make(chan struct{}),
+		releaseFirst: releaseModel,
+	}
+	var statusMu sync.Mutex
+	var statuses []runtime.QueuedUserMessageStatusEvent
+	authority := newAuthorityWithEventFeed(t, fixture, func(_ AgentResourceDescriptor, event runtime.Event) {
+		if event.QueuedUserMessageStatus == nil {
+			return
+		}
+		statusMu.Lock()
+		statuses = append(statuses, *event.QueuedUserMessageStatus)
+		statusMu.Unlock()
+	})
+	plan := authorityTestRuntimePlan(t, fixture, client)
+	executionStarted := make(chan struct{})
+	finishExecution := make(chan struct{})
+	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Resource:   OpenAgentResource{},
+		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
+			close(executionStarted)
+			<-finishExecution
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("start ownerless execution: %v", err)
+	}
+	resource, hasResource := handle.Scope().Resource()
+	if !hasResource {
+		t.Fatal("ownerless agent execution has no resource")
+	}
+	<-executionStarted
+	if err := authority.WithRuntime(context.Background(), resource, func(_ context.Context, engine *runtime.Engine) error {
+		item := engine.QueueUserMessage("accepted before execution exit")
+		if item.ID == "" {
+			return errors.New("queued user message has no id")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("queue accepted user work: %v", err)
+	}
+
+	close(finishExecution)
+	if _, err := handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait execution retirement: %v", err)
+	}
+	if calls := client.callCount(); calls != 1 {
+		t.Fatalf("model calls = %d, want accepted queue drained before retirement", calls)
+	}
+	assertRuntimeUnavailable(t, authority, resource, "accepted queue drained")
+
+	statusMu.Lock()
+	defer statusMu.Unlock()
+	if len(statuses) != 2 ||
+		statuses[0].Status != runtime.QueuedUserMessageAccepted ||
+		statuses[1].Status != runtime.QueuedUserMessageSubmitted {
+		t.Fatalf("queued message statuses = %+v, want accepted then submitted", statuses)
+	}
 }
 
 func TestCloseIfIdleRetiresAfterActiveAutoDrainFinishes(t *testing.T) {
@@ -980,7 +1131,7 @@ func TestStaleRuntimeAttachmentReleaseCannotAffectReplacement(t *testing.T) {
 	}
 }
 
-func TestResourceRetentionBlocksReplacementUntilReleased(t *testing.T) {
+func TestResourceReplacementWaitsForRetainedGenerationToDrain(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
 	if err != nil {
@@ -1011,13 +1162,26 @@ func TestResourceRetentionBlocksReplacementUntilReleased(t *testing.T) {
 	if err != nil {
 		t.Fatalf("retain resource: %v", err)
 	}
-	if _, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-		Descriptor: mustOpenSessionDescriptor(t, sessionID),
-		Runtime:    &plan,
-		Resource:   ReplaceAgentResource{},
-		Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
-	}); err == nil {
-		t.Fatal("replacement succeeded while an exact resource retention was live")
+	type replacementResult struct {
+		handle ExecutionHandle
+		err    error
+	}
+	replaced := make(chan replacementResult, 1)
+	go func() {
+		handle, replaceErr := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+			Descriptor: mustOpenSessionDescriptor(t, sessionID),
+			Runtime:    &plan,
+			Resource:   ReplaceAgentResource{},
+			Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
+		})
+		replaced <- replacementResult{handle: handle, err: replaceErr}
+	}()
+	select {
+	case outcome := <-replaced:
+		t.Fatalf("replacement returned before retained generation drained: %v", outcome.err)
+	case <-lifecycle.draining:
+	case <-time.After(3 * time.Second):
+		t.Fatal("replacement did not begin retained generation drain")
 	}
 	if err := retention.Close(); err != nil {
 		t.Fatalf("release resource retention: %v", err)
@@ -1025,16 +1189,11 @@ func TestResourceRetentionBlocksReplacementUntilReleased(t *testing.T) {
 	if err := retention.Close(); err != nil {
 		t.Fatalf("release resource retention again: %v", err)
 	}
-	replacement, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-		Descriptor: mustOpenSessionDescriptor(t, sessionID),
-		Runtime:    &plan,
-		Resource:   ReplaceAgentResource{},
-		Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
-	})
-	if err != nil {
-		t.Fatalf("replace after retention release: %v", err)
+	outcome := <-replaced
+	if outcome.err != nil {
+		t.Fatalf("replace after retained generation drain: %v", outcome.err)
 	}
-	if _, err := replacement.Wait(context.Background()); err != nil {
+	if _, err := outcome.handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait replacement: %v", err)
 	}
 }
@@ -1391,6 +1550,77 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	}
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait agent execution: %v", err)
+	}
+}
+
+func TestQuestionCompletionReplacesRetainedRuntimeAfterDrain(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	promptFeed := make(authorityPromptFeed, 1)
+	lifecycle := &authorityAutoReleaseLifecycle{}
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot:   fixture.config.PersistenceRoot,
+		StoreOptions:      fixture.metadata.AuthoritativeSessionStoreOptions(),
+		PromptFeed:        promptFeed,
+		ResourceLifecycle: lifecycle,
+	})
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	askID := uuid.NewString()
+	request := tools.AskQuestionRequest{
+		ID: askID, StepID: uuid.NewString(), Question: "Proceed?",
+	}
+	workflowRef := WorkflowExecutionRef{
+		TaskID:     "task-question-replacement",
+		RunID:      "run-question-replacement",
+		Generation: 1,
+	}
+	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Workflow:   &workflowRef,
+		Resource:   OpenAgentResource{},
+		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
+			_, awaitErr := authority.AwaitPromptResponse(ctx, scope.ID(), request)
+			return awaitErr
+		},
+	})
+	if err != nil {
+		t.Fatalf("start questioning execution: %v", err)
+	}
+	pending := <-promptFeed
+	if pending.scopeID != handle.Scope().ID() || pending.requestID != askID {
+		t.Fatalf("pending question = %+v", pending)
+	}
+	if err := authority.SubmitPromptResponse(sessionID, tools.AskQuestionResponse{
+		RequestID: askID,
+		Answer:    "yes",
+	}, nil); err != nil {
+		t.Fatalf("submit prompt response: %v", err)
+	}
+	if _, err := handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait questioning execution: %v", err)
+	}
+
+	successorRef := WorkflowExecutionRef{
+		TaskID:     workflowRef.TaskID,
+		RunID:      "run-question-successor",
+		Generation: 1,
+	}
+	successor, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Workflow:   &successorRef,
+		Resource:   ReplaceAgentResource{},
+		Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("replace retained runtime after question completion: %v", err)
+	}
+	if _, err := successor.Wait(context.Background()); err != nil {
+		t.Fatalf("wait successor execution: %v", err)
+	}
+	if err := authority.Close(context.Background()); err != nil {
+		t.Fatalf("close authority: %v", err)
 	}
 }
 
