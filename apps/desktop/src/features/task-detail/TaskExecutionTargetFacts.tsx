@@ -11,12 +11,16 @@ export function TaskExecutionTargetFacts({ detail }: Readonly<{ detail: TaskDeta
       <TaskPropertyLine
         label={t("task.sourceWorkspace")}
         value={
-          <TaskDetailCopyableValue
-            clipboardValue={detail.sourceWorkspace.rootPath}
-            kind={{ kind: "source_workspace_path" }}
-          >
-            <span title={detail.sourceWorkspace.rootPath}>{detail.sourceWorkspace.name}</span>
-          </TaskDetailCopyableValue>
+          <span className="grid min-w-0">
+            <span>{detail.sourceWorkspace.name}</span>
+            <TaskDetailCopyableValue
+              className="break-all font-mono"
+              clipboardValue={detail.sourceWorkspace.rootPath}
+              kind={{ kind: "source_workspace_path" }}
+            >
+              {detail.sourceWorkspace.rootPath}
+            </TaskDetailCopyableValue>
+          </span>
         }
       />
       {detail.executionTarget === null ? null : (

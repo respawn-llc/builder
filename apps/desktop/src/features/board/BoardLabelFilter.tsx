@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { FilterIcon, XIcon } from "lucide-react";
 
@@ -113,11 +113,8 @@ export function BoardLabelFilterChrome() {
 function AnimatedFilterSummary({ text }: Readonly<{ text: string }>) {
   const measurementRef = useRef<HTMLSpanElement | null>(null);
   const [width, setWidth] = useState<number | null>(null);
-  const [transition, setTransition] = useState<FilterSummaryTransition>(() => ({
-    current: text,
-    outgoing: null,
-    revision: 0,
-  }));
+  const deferredText = useDeferredValue(text);
+  const outgoingText = deferredText === text ? null : deferredText;
   useLayoutEffect(() => {
     const measurement = measurementRef.current;
     if (measurement === null) {
@@ -125,17 +122,6 @@ function AnimatedFilterSummary({ text }: Readonly<{ text: string }>) {
     }
     const nextWidth = Math.ceil(measurement.getBoundingClientRect().width);
     setWidth((current) => (current === nextWidth ? current : nextWidth));
-  }, [text]);
-  useLayoutEffect(() => {
-    setTransition((current) =>
-      current.current === text
-        ? current
-        : {
-            current: text,
-            outgoing: current.current,
-            revision: current.revision + 1,
-          },
-    );
   }, [text]);
   return (
     <span
@@ -149,30 +135,24 @@ function AnimatedFilterSummary({ text }: Readonly<{ text: string }>) {
       >
         {text}
       </span>
-      {transition.outgoing === null ? null : (
+      {outgoingText === null ? null : (
         <span
           aria-hidden="true"
           className="board-label-filter-summary-outgoing pointer-events-none absolute top-0 left-0 inline-block w-max whitespace-nowrap"
-          key={`outgoing-${transition.revision.toString()}`}
+          key={`outgoing-${outgoingText}`}
         >
-          {transition.outgoing}
+          {outgoingText}
         </span>
       )}
       <span
         className={cx(
           "inline-block w-max whitespace-nowrap",
-          transition.outgoing !== null && "board-label-filter-summary-incoming",
+          outgoingText !== null && "board-label-filter-summary-incoming",
         )}
-        key={`incoming-${transition.revision.toString()}`}
+        key={`incoming-${text}`}
       >
-        {transition.current}
+        {text}
       </span>
     </span>
   );
 }
-
-type FilterSummaryTransition = Readonly<{
-  current: string;
-  outgoing: string | null;
-  revision: number;
-}>;

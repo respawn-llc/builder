@@ -211,15 +211,6 @@ func (s *Store) approveTransition(ctx context.Context, transitionID workflow.Tra
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
-	resolvedApproval, err := approvalTransitionProjection(ctx, q, id)
-	if err != nil {
-		return CompleteRunResult{}, err
-	}
-	if requireExecutionTarget && requiresRoot {
-		if err := applyPreparedExecutionTargetMutation(ctx, q, task, targetMutation, now); err != nil {
-			return CompleteRunResult{}, err
-		}
-	}
 	updatedCount, err := q.ApprovePendingTransition(ctx, sqlitegen.ApprovePendingTransitionParams{
 		AppliedAtUnixMs: sql.NullInt64{Int64: now, Valid: true},
 		TransitionID:    id,
@@ -237,6 +228,15 @@ func (s *Store) approveTransition(ctx context.Context, transitionID workflow.Tra
 			return s.approvedTransitionResult(ctx, id, currentState)
 		}
 		return CompleteRunResult{}, sql.ErrNoRows
+	}
+	resolvedApproval, err := approvalTransitionProjection(ctx, q, id)
+	if err != nil {
+		return CompleteRunResult{}, err
+	}
+	if requireExecutionTarget && requiresRoot {
+		if err := applyPreparedExecutionTargetMutation(ctx, q, task, targetMutation, now); err != nil {
+			return CompleteRunResult{}, err
+		}
 	}
 	if err := touchTaskUpdatedAt(ctx, q, transition.TaskID, now); err != nil {
 		return CompleteRunResult{}, err

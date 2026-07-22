@@ -1,4 +1,11 @@
-import { useCallback, useLayoutEffect, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
+import {
+  useCallback,
+  useRef,
+  useSyncExternalStore,
+  type HTMLAttributes,
+  type ReactNode,
+  type RefObject,
+} from "react";
 
 import { cx } from "./classes";
 import { oneLineOverflowLayout, type OneLineOverflowLayout } from "./oneLineOverflowGeometry";
@@ -34,70 +41,14 @@ export function OneLineOverflowRow({
   const gapEndRef = useRef<HTMLSpanElement | null>(null);
   const overflowRef = useRef<HTMLSpanElement | null>(null);
   const itemRefs = useRef(new Map<string, HTMLSpanElement>());
-  const [layout, setLayout] = useState<OneLineOverflowLayout>({
-    hiddenCount: 0,
-    visibleCount: items.length,
+  const layout = useOneLineOverflowLayout({
+    gapEndRef,
+    gapStartRef,
+    itemRefs,
+    items,
+    overflowRef,
+    rowRef,
   });
-  const measure = useCallback(() => {
-    const row = rowRef.current;
-    const gapStart = gapStartRef.current;
-    const gapEnd = gapEndRef.current;
-    if (row === null || gapStart === null || gapEnd === null) {
-      return;
-    }
-    if (items.length === 0) {
-      setLayout(emptyLayout);
-      return;
-    }
-    const overflow = overflowRef.current;
-    if (overflow === null) {
-      return;
-    }
-    const itemWidths: number[] = [];
-    for (const item of items) {
-      const itemElement = itemRefs.current.get(item.id);
-      if (itemElement === undefined) {
-        return;
-      }
-      itemWidths.push(itemElement.getBoundingClientRect().width);
-    }
-    const overflowItemWidth = overflow.getBoundingClientRect().width;
-    const nextLayout = oneLineOverflowLayout({
-      availableWidth: row.getBoundingClientRect().width,
-      gap: Math.max(0, gapEnd.getBoundingClientRect().left - gapStart.getBoundingClientRect().right),
-      itemWidths,
-      overflowWidth: () => overflowItemWidth,
-    });
-    setLayout((current) => (layoutsEqual(current, nextLayout) ? current : nextLayout));
-  }, [items]);
-
-  useLayoutEffect(() => {
-    measure();
-    if (typeof ResizeObserver === "undefined") {
-      if (typeof requestAnimationFrame === "undefined" || typeof cancelAnimationFrame === "undefined") {
-        return;
-      }
-      const frame = requestAnimationFrame(measure);
-      return () => {
-        cancelAnimationFrame(frame);
-      };
-    }
-    const observer = new ResizeObserver(measure);
-    const row = rowRef.current;
-    const overflow = overflowRef.current;
-    if (row !== null) {
-      observer.observe(row);
-    }
-    if (overflow !== null) {
-      observer.observe(overflow);
-    }
-    for (const item of itemRefs.current.values()) {
-      observer.observe(item);
-    }
-    return () => {
-      observer.disconnect();
-    };
-  }, [measure]);
 
   const overflowCount = layout.hiddenCount === 0 ? items.length : layout.hiddenCount;
 
@@ -165,6 +116,98 @@ const emptyLayout = {
   hiddenCount: 0,
   visibleCount: 0,
 } satisfies OneLineOverflowLayout;
+
+function noOverflowLayoutCleanup(): void {
+  return undefined;
+}
+
+function useOneLineOverflowLayout({
+  gapEndRef,
+  gapStartRef,
+  itemRefs,
+  items,
+  overflowRef,
+  rowRef,
+}: Readonly<{
+  gapEndRef: RefObject<HTMLSpanElement | null>;
+  gapStartRef: RefObject<HTMLSpanElement | null>;
+  itemRefs: RefObject<Map<string, HTMLSpanElement>>;
+  items: readonly OneLineOverflowItem[];
+  overflowRef: RefObject<HTMLSpanElement | null>;
+  rowRef: RefObject<HTMLDivElement | null>;
+}>): OneLineOverflowLayout {
+  const layoutRef = useRef<OneLineOverflowLayout>(emptyLayout);
+  const measure = useCallback((): OneLineOverflowLayout | null => {
+    const row = rowRef.current;
+    const gapStart = gapStartRef.current;
+    const gapEnd = gapEndRef.current;
+    if (row === null || gapStart === null || gapEnd === null) {
+      return null;
+    }
+    if (items.length === 0) {
+      return emptyLayout;
+    }
+    const overflow = overflowRef.current;
+    if (overflow === null) {
+      return null;
+    }
+    const itemWidths: number[] = [];
+    for (const item of items) {
+      const itemElement = itemRefs.current.get(item.id);
+      if (itemElement === undefined) {
+        return null;
+      }
+      itemWidths.push(itemElement.getBoundingClientRect().width);
+    }
+    const overflowItemWidth = overflow.getBoundingClientRect().width;
+    return oneLineOverflowLayout({
+      availableWidth: row.getBoundingClientRect().width,
+      gap: Math.max(0, gapEnd.getBoundingClientRect().left - gapStart.getBoundingClientRect().right),
+      itemWidths,
+      overflowWidth: () => overflowItemWidth,
+    });
+  }, [gapEndRef, gapStartRef, itemRefs, items, overflowRef, rowRef]);
+  const getSnapshot = useCallback(() => layoutRef.current, []);
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      const update = () => {
+        const nextLayout = measure();
+        if (nextLayout === null || layoutsEqual(layoutRef.current, nextLayout)) {
+          return;
+        }
+        layoutRef.current = nextLayout;
+        onStoreChange();
+      };
+      update();
+      if (typeof ResizeObserver === "undefined") {
+        if (typeof requestAnimationFrame === "undefined" || typeof cancelAnimationFrame === "undefined") {
+          return noOverflowLayoutCleanup;
+        }
+        const frame = requestAnimationFrame(update);
+        return () => {
+          cancelAnimationFrame(frame);
+        };
+      }
+      const observer = new ResizeObserver(update);
+      const row = rowRef.current;
+      const overflow = overflowRef.current;
+      if (row !== null) {
+        observer.observe(row);
+      }
+      if (overflow !== null) {
+        observer.observe(overflow);
+      }
+      for (const item of itemRefs.current.values()) {
+        observer.observe(item);
+      }
+      return () => {
+        observer.disconnect();
+      };
+    },
+    [itemRefs, measure, overflowRef, rowRef],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
 
 function layoutsEqual(left: OneLineOverflowLayout, right: OneLineOverflowLayout): boolean {
   return left.hiddenCount === right.hiddenCount && left.visibleCount === right.visibleCount;
