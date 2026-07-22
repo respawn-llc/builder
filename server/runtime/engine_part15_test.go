@@ -20,6 +20,9 @@ import (
 	"core/shared/toolspec"
 )
 
+const sublinearCompactionProbeItems = 64
+const sublinearCompactionProbeTokensPerItem = 10_000
+
 func TestRemoteCompactionUsesSublinearPreciseTokenCountCalls(t *testing.T) {
 	store := mustCreateTestSession(t)
 
@@ -29,7 +32,7 @@ func TestRemoteCompactionUsesSublinearPreciseTokenCountCalls(t *testing.T) {
 			if len(req.Items) > maxItemsSeen {
 				maxItemsSeen = len(req.Items)
 			}
-			return len(req.Items) * 1000
+			return len(req.Items) * sublinearCompactionProbeTokensPerItem
 		},
 		compactionResponses: []llm.CompactionResponse{
 			{
@@ -43,7 +46,7 @@ func TestRemoteCompactionUsesSublinearPreciseTokenCountCalls(t *testing.T) {
 	}
 
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
-	for i := 0; i < 600; i++ {
+	for i := 0; i < sublinearCompactionProbeItems; i++ {
 		if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Content: textutil.Value("a")}})); err != nil {
 			t.Fatalf("append assistant message %d: %v", i, err)
 		}
@@ -70,7 +73,7 @@ func TestLocalCompactionCarryoverUsesSublinearPreciseTokenCountCalls(t *testing.
 			if len(req.Items) > maxItemsSeen {
 				maxItemsSeen = len(req.Items)
 			}
-			return len(req.Items) * 1000
+			return len(req.Items) * sublinearCompactionProbeTokensPerItem
 		},
 		responses: []llm.Response{
 			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")}, Usage: llm.Usage{WindowTokens: 400000}},
@@ -82,7 +85,7 @@ func TestLocalCompactionCarryoverUsesSublinearPreciseTokenCountCalls(t *testing.
 		ContextWindowTokens: 400_000,
 		CompactionMode:      "local",
 	})
-	for i := 0; i < 512; i++ {
+	for i := 0; i < sublinearCompactionProbeItems; i++ {
 		if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("u")}})); err != nil {
 			t.Fatalf("append user message %d: %v", i, err)
 		}
