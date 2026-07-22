@@ -57,7 +57,7 @@ describe("label filter state", () => {
       labelID: priorityID,
     });
     const all = reduceLabelFilterState(selected, { type: "named.mode", mode: "all" });
-    const unlabeled = reduceLabelFilterState(all, { type: "unlabeled.select" });
+    const unlabeled = reduceLabelFilterState(all, { type: "unlabeled.toggle" });
 
     expect(unlabeled).toEqual({
       filter: { kind: "unlabeled" },
@@ -65,6 +65,10 @@ describe("label filter state", () => {
     });
     expect(reduceLabelFilterState(unlabeled, { type: "named.toggle", labelID: urgentID })).toEqual({
       filter: { kind: "named", mode: "all", labelIDs: [urgentID] },
+      namedMode: "all",
+    });
+    expect(reduceLabelFilterState(unlabeled, { type: "unlabeled.toggle" })).toEqual({
+      filter: { kind: "none" },
       namedMode: "all",
     });
   });

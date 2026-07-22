@@ -72,6 +72,7 @@ export function OneLineOverflowRow({
   }, [items]);
 
   useLayoutEffect(() => {
+    measure();
     if (typeof ResizeObserver === "undefined") {
       if (typeof requestAnimationFrame === "undefined" || typeof cancelAnimationFrame === "undefined") {
         return;

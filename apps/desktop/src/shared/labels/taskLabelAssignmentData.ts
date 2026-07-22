@@ -1,4 +1,9 @@
-import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import {
+  useQuery,
+  useQueryClient,
+  type UseQueryOptions,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 
 import type { TaskLabelAssignment } from "@/api";
@@ -20,12 +25,14 @@ export function useManagedTaskLabelAssignment(
   {
     availableLabelIDs,
     enabled = true,
+    initialAssignment,
     projectID,
     taskID,
     workflowID,
   }: Readonly<{
     availableLabelIDs: readonly string[];
     enabled?: boolean | undefined;
+    initialAssignment: TaskLabelAssignment | null;
     projectID: string;
     taskID: string;
     workflowID: string;
@@ -46,7 +53,7 @@ export function useManagedTaskLabelAssignment(
   );
   const getController = useCallback(() => registry.get(taskID), [registry, taskID]);
   const controller = useSyncExternalStore(subscribeController, getController, getController);
-  const assignment = useQuery({
+  const assignmentOptions = {
     queryKey: queryKeys.taskLabels(taskID),
     queryFn: async () => {
       if (controller === null) {
@@ -56,7 +63,10 @@ export function useManagedTaskLabelAssignment(
     },
     enabled: enabled && taskID.length > 0 && controller !== null && !controller.getSnapshot().closed,
     retry: false,
-  });
+    staleTime: initialAssignment === null ? 0 : Infinity,
+    ...(initialAssignment === null ? {} : { initialData: initialAssignment }),
+  } satisfies UseQueryOptions<TaskLabelAssignment>;
+  const assignment = useQuery<TaskLabelAssignment>(assignmentOptions);
 
   useEffect(() => {
     if (!enabled || taskID.length === 0) {
@@ -65,7 +75,7 @@ export function useManagedTaskLabelAssignment(
     const cachedAssignment = queryClient.getQueryData<TaskLabelAssignment>(queryKeys.taskLabels(taskID));
     const lease = registry.acquire({
       availableLabelIDs,
-      initialAssignment: cachedAssignment ?? null,
+      initialAssignment: cachedAssignment ?? initialAssignment,
       projectID,
       refetch,
       taskID,
@@ -75,7 +85,18 @@ export function useManagedTaskLabelAssignment(
     return () => {
       lease.release();
     };
-  }, [availableLabelIDs, enabled, projectID, queryClient, refetch, registry, taskID, update, workflowID]);
+  }, [
+    availableLabelIDs,
+    enabled,
+    initialAssignment,
+    projectID,
+    queryClient,
+    refetch,
+    registry,
+    taskID,
+    update,
+    workflowID,
+  ]);
 
   useEffect(() => {
     if (enabled) {

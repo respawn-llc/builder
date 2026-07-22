@@ -4,8 +4,13 @@ export { AdaptiveLineClamp } from "./AdaptiveLineClamp";
 export type { AdaptiveLineClampProps } from "./AdaptiveLineClamp";
 export { Button } from "./Button";
 export type { ButtonSize, ButtonVariant } from "./Button";
-export { InteractiveChip } from "./InteractiveChip";
-export type { InteractiveChipProps, InteractiveChipSize, InteractiveChipTone } from "./InteractiveChip";
+export { Chip, InteractiveChip } from "./InteractiveChip";
+export type {
+  ChipProps,
+  InteractiveChipProps,
+  InteractiveChipSize,
+  InteractiveChipTone,
+} from "./InteractiveChip";
 export { ActionableListRow } from "./ActionableListRow";
 export type { ActionableListRowProps } from "./ActionableListRow";
 export { OneLineOverflowRow } from "./OneLineOverflowRow";

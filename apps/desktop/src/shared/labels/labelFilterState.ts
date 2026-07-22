@@ -15,7 +15,7 @@ export type LabelFilterAction =
       mode: "any" | "all";
     }>
   | Readonly<{
-      type: "unlabeled.select";
+      type: "unlabeled.toggle";
     }>
   | Readonly<{
       type: "clear";
@@ -38,9 +38,9 @@ export function reduceLabelFilterState(state: LabelFilterState, action: LabelFil
       return toggleNamedLabel(state, action.labelID);
     case "named.mode":
       return setNamedMode(state, action.mode);
-    case "unlabeled.select":
+    case "unlabeled.toggle":
       return {
-        filter: { kind: "unlabeled" },
+        filter: state.filter.kind === "unlabeled" ? { kind: "none" } : { kind: "unlabeled" },
         namedMode: state.namedMode,
       };
     case "clear":

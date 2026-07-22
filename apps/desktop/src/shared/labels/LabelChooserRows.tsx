@@ -1,9 +1,18 @@
 import { Check, Pencil, Trash2, X } from "lucide-react";
-import { useId } from "react";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { ProjectLabel } from "@/api";
-import { ActionableListRow, Button, fieldInputClassName, IconTooltipButton } from "@/ui";
+import {
+  ActionableListRow,
+  Button,
+  Chip,
+  IconTooltipButton,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  fieldInputClassName,
+} from "@/ui";
 
 export type RenameState = Readonly<{
   labelID: string;
@@ -17,45 +26,6 @@ export type DeleteState = Readonly<{
   error: string | null;
   pending: boolean;
 }>;
-
-export function LabelDeleteConfirmation({
-  deletion,
-  label,
-  onCancel,
-  onConfirm,
-}: Readonly<{
-  deletion: DeleteState;
-  label: ProjectLabel;
-  onCancel(): void;
-  onConfirm(): void;
-}>) {
-  const { t } = useTranslation();
-  return (
-    <div role="listitem">
-      <section
-        aria-label={t("labels.deleteConfirmation", { name: label.name })}
-        className="grid gap-[var(--space-2)] rounded-[var(--radius-s)] border border-[color-mix(in_srgb,var(--color-error)_45%,transparent)] bg-[var(--color-island-1)] p-[var(--space-2)]"
-        role="group"
-      >
-        <span className="text-sm font-bold">{label.name}</span>
-        <span className="text-xs text-[var(--color-muted)]">{t("labels.deleteBody")}</span>
-        {deletion.error === null ? null : (
-          <span className="text-xs text-[var(--color-error)]" role="alert">
-            {deletion.error}
-          </span>
-        )}
-        <div className="flex justify-end gap-[var(--space-2)]">
-          <Button disabled={deletion.pending} onClick={onCancel} variant="ghost">
-            {t("app.cancel")}
-          </Button>
-          <Button disabled={deletion.pending} onClick={onConfirm} variant="danger">
-            {t("labels.confirmDelete")}
-          </Button>
-        </div>
-      </section>
-    </div>
-  );
-}
 
 export function LabelRenameEditor({
   onCancel,
@@ -117,98 +87,121 @@ export function LabelRenameEditor({
 }
 
 export function LabelResultRow({
+  deletion,
   highlighted,
   label,
-  onDelete,
-  onPointerEnter,
+  onDeleteConfirm,
+  onDeleteOpenChange,
   onRename,
   onSelect,
   selected,
 }: Readonly<{
+  deletion: DeleteState | null;
   highlighted: boolean;
   label: ProjectLabel;
-  onDelete(): void;
-  onPointerEnter(): void;
+  onDeleteConfirm(): void;
+  onDeleteOpenChange(open: boolean): void;
   onRename(): void;
   onSelect(): void;
   selected: boolean;
 }>) {
   const { t } = useTranslation();
-  return (
-    <ActionableListRow
-      actions={
-        <IconTooltipButton label={t("labels.rename", { name: label.name })} onClick={onRename} size="icon-sm">
-          <Pencil aria-hidden="true" size={14} strokeWidth={1.8} />
-        </IconTooltipButton>
-      }
-      className={highlighted ? "bg-[var(--color-island-1)]" : undefined}
-      contextualActions={
-        <IconTooltipButton
-          label={t("labels.delete", { name: label.name })}
-          onClick={onDelete}
-          size="icon-sm"
-          variant="danger"
-        >
-          <Trash2 aria-hidden="true" size={14} strokeWidth={1.8} />
-        </IconTooltipButton>
-      }
-      onPointerEnter={onPointerEnter}
-      role="listitem"
-      selected={selected}
-      selectButtonProps={{ onClick: onSelect }}
-    >
-      <span className="flex min-w-0 items-center gap-[var(--space-2)]">
-        <span className="min-w-0 flex-1 truncate">{label.name}</span>
-        {selected ? (
-          <Check
+  const deleteAction = (
+    <Popover onOpenChange={onDeleteOpenChange} open={deletion !== null}>
+      <PopoverTrigger asChild>
+        <Button aria-label={t("labels.delete", { name: label.name })} size="icon-sm" variant="ghost">
+          <Trash2
             aria-hidden="true"
-            className="shrink-0 text-[var(--color-success)]"
+            className="text-[var(--color-error)]"
             size={14}
-            strokeWidth={2}
+            strokeWidth={1.8}
           />
-        ) : null}
-      </span>
-    </ActionableListRow>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-56" level={4} side="top">
+        <span className="text-sm text-[var(--color-muted)]">{t("labels.deleteBody")}</span>
+        {deletion?.error === null || deletion === null ? null : (
+          <span className="text-xs text-[var(--color-error)]" role="alert">
+            {deletion.error}
+          </span>
+        )}
+        <Button disabled={deletion?.pending === true} onClick={onDeleteConfirm} variant="danger">
+          {t("app.confirm")}
+        </Button>
+      </PopoverContent>
+    </Popover>
+  );
+  return (
+    <LabelSelectionRow
+      contextualActions={
+        <>
+          {deleteAction}
+          <IconTooltipButton label={t("labels.rename", { name: label.name })} onClick={onRename} size="icon-sm">
+            <Pencil aria-hidden="true" size={14} strokeWidth={1.8} />
+          </IconTooltipButton>
+        </>
+      }
+      highlighted={highlighted}
+      name={label.name}
+      onSelect={onSelect}
+      selected={selected}
+    />
   );
 }
 
-export function CreateLabelRow({
-  atLimit,
+export function UnlabeledResultRow({
   highlighted,
   name,
-  onPointerEnter,
   onSelect,
-  pending,
+  selected,
 }: Readonly<{
-  atLimit: boolean;
   highlighted: boolean;
   name: string;
-  onPointerEnter(): void;
   onSelect(): void;
-  pending: boolean;
+  selected: boolean;
 }>) {
-  const { t } = useTranslation();
-  const limitDescriptionID = useId();
+  return (
+    <LabelSelectionRow
+      highlighted={highlighted}
+      name={name}
+      onSelect={onSelect}
+      selected={selected}
+    />
+  );
+}
+
+function LabelSelectionRow({
+  contextualActions,
+  highlighted,
+  name,
+  onSelect,
+  selected,
+}: Readonly<{
+  contextualActions?: ReactNode;
+  highlighted: boolean;
+  name: string;
+  onSelect(): void;
+  selected: boolean;
+}>) {
   return (
     <ActionableListRow
       className={highlighted ? "bg-[var(--color-island-1)]" : undefined}
-      onPointerEnter={onPointerEnter}
+      contextualActions={contextualActions}
       role="listitem"
-      selectButtonProps={{
-        "aria-describedby": atLimit ? limitDescriptionID : undefined,
-        "aria-label": t("labels.create", { name }),
-        disabled: atLimit || pending,
-        onClick: onSelect,
-      }}
+      selectButtonProps={{ onClick: onSelect }}
+      selected={selected}
     >
-      <span className="grid gap-[var(--space-1)]">
-        <span>{t("labels.create", { name })}</span>
-        {atLimit ? (
-          <span className="text-xs text-[var(--color-muted)]" id={limitDescriptionID}>
-            {t("labels.catalogLimit")}
-          </span>
-        ) : null}
-      </span>
+      <Chip className="min-w-[calc(3ch+var(--space-4))] justify-center" selected={selected}>
+        <span className="min-w-0 truncate text-center">{name}</span>
+      </Chip>
+      {selected ? (
+        <Check
+          aria-hidden="true"
+          className="pointer-events-none absolute top-1/2 right-[var(--space-2)] -translate-y-1/2 text-[var(--color-success)]"
+          size={14}
+          strokeWidth={2}
+        />
+      ) : null}
     </ActionableListRow>
   );
 }

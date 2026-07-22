@@ -1,22 +1,28 @@
-import { useMemo, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
+import { useId, useMemo, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
 import { useTranslation } from "react-i18next";
+import { PlusIcon, SearchIcon } from "lucide-react";
 
-import { decodeWorkflowLabelError, errorMessage, workflowLabelMaxIDs } from "@/api";
+import {
+  decodeWorkflowLabelError,
+  errorMessage,
+  workflowLabelMaxIDs,
+  type ProjectLabel,
+} from "@/api";
 import {
   Button,
+  IconTooltipButton,
   InteractiveChip,
   Popover,
   PopoverContent,
   PopoverTrigger,
   SegmentedControl,
   Spinner,
-  TextInput,
+  fieldInputClassName,
 } from "@/ui";
 import {
-  CreateLabelRow,
-  LabelDeleteConfirmation,
   LabelRenameEditor,
   LabelResultRow,
+  UnlabeledResultRow,
   type DeleteState,
   type RenameState,
 } from "./LabelChooserRows";
@@ -41,16 +47,21 @@ export type LabelChooserProps = Readonly<{
   trigger: ReactElement;
 }>;
 
+type LabelChooserChoice =
+  | Readonly<{ kind: "unlabeled" }>
+  | Readonly<{ kind: "label"; label: ProjectLabel }>;
+
 export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
   const { t } = useTranslation();
   const catalog = useProjectLabelCatalog();
   const mutations = useProjectLabelCatalogMutations();
   const [search, setSearch] = useState("");
-  const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const [keyboardHighlightedIndex, setKeyboardHighlightedIndex] = useState<number | null>(null);
   const [open, setOpen] = useState(false);
   const [rename, setRename] = useState<RenameState | null>(null);
   const [deletion, setDeletion] = useState<DeleteState | null>(null);
   const outsideInteractionRef = useRef(false);
+  const searchErrorID = useId();
   const mutationErrorMessage = (error: unknown): string => {
     const labelError = decodeWorkflowLabelError(error);
     if (labelError === null) {
@@ -82,41 +93,75 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
   const canCreate =
     preparedSearch.length > 0 && !labels.some((label) => labelNamesEqual(label.name, preparedSearch));
   const catalogAtLimit = (catalog.data?.labels.length ?? 0) >= workflowLabelMaxIDs;
-  const choiceCount = labels.length + (canCreate ? 1 : 0);
+  const unlabeledName = t("labels.unlabeled");
+  const showUnlabeledChoice =
+    invocation.kind === "filter" &&
+    (catalog.data?.labels.length ?? 0) > 0 &&
+    labelNameContains(unlabeledName, preparedSearch);
+  const choices = useMemo<readonly LabelChooserChoice[]>(
+    () => [
+      ...(showUnlabeledChoice ? ([{ kind: "unlabeled" }] as const) : []),
+      ...labels.map((label) => ({ kind: "label" as const, label })),
+    ],
+    [labels, showUnlabeledChoice],
+  );
+  const choiceCount = choices.length;
+  const createError = mutations.create.isError ? mutationErrorMessage(mutations.create.error) : null;
 
-  const createAndSelect = async () => {
+  const createLabel = async () => {
     try {
       const label = await mutations.create.mutateAsync(preparedSearch);
-      selectLabel(invocation, label.id, true);
+      if (invocation.kind === "assignment") {
+        selectLabel(invocation, label.id, true);
+      }
+      setSearch("");
+      setKeyboardHighlightedIndex(null);
+      mutations.create.reset();
     } catch {
       // The mutation owns the visible error state.
     }
   };
   const activateChoice = (index: number) => {
-    const label = labels[index];
-    if (label !== undefined) {
-      const selected = isLabelSelected(invocation, label.id);
-      selectLabel(invocation, label.id, !selected);
+    const choice = choices[index];
+    if (choice === undefined) {
       return;
     }
-    if (canCreate && !catalogAtLimit && index === labels.length) {
-      void createAndSelect();
+    if (choice.kind === "unlabeled") {
+      selectUnlabeled(invocation);
+      return;
     }
+    const selected = isLabelSelected(invocation, choice.label.id);
+    selectLabel(invocation, choice.label.id, !selected);
   };
   const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "ArrowDown" && choiceCount > 0) {
       event.preventDefault();
-      setHighlightedIndex((current) => (current + 1) % choiceCount);
+      setKeyboardHighlightedIndex((current) =>
+        current === null ? 0 : (current + 1) % choiceCount,
+      );
       return;
     }
     if (event.key === "ArrowUp" && choiceCount > 0) {
       event.preventDefault();
-      setHighlightedIndex((current) => (current - 1 + choiceCount) % choiceCount);
+      setKeyboardHighlightedIndex((current) =>
+        current === null ? choiceCount - 1 : (current - 1 + choiceCount) % choiceCount,
+      );
+      return;
+    }
+    if (
+      event.key === "Enter" &&
+      choiceCount === 0 &&
+      canCreate &&
+      !catalogAtLimit &&
+      !mutations.create.isPending
+    ) {
+      event.preventDefault();
+      void createLabel();
       return;
     }
     if (event.key === "Enter" && choiceCount > 0) {
       event.preventDefault();
-      activateChoice(Math.min(highlightedIndex, choiceCount - 1));
+      activateChoice(Math.min(keyboardHighlightedIndex ?? 0, choiceCount - 1));
     }
   };
   const commitRename = async () => {
@@ -177,7 +222,7 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
         setOpen(nextOpen);
         if (!nextOpen) {
           setSearch("");
-          setHighlightedIndex(0);
+          setKeyboardHighlightedIndex(null);
           setRename(null);
           setDeletion(null);
           mutations.create.reset();
@@ -190,7 +235,7 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent
         align="start"
-        className="w-[min(22rem,calc(100vw-24px))] gap-[var(--space-2)] p-[var(--space-2)]"
+        className="w-[min(25.3rem,calc(100vw-24px))] gap-[var(--space-2)] p-[var(--space-2)]"
         collisionPadding={12}
         level={3}
         onEscapeKeyDown={(event) => {
@@ -205,22 +250,75 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
           outsideInteractionRef.current = true;
         }}
       >
-        <TextInput
-          autoComplete="off"
-          error={mutations.create.isError ? mutationErrorMessage(mutations.create.error) : undefined}
-          label={t("labels.search")}
-          onChange={(event) => {
-            setSearch(event.currentTarget.value);
-            setHighlightedIndex(0);
-            mutations.create.reset();
-          }}
-          onKeyDown={handleSearchKeyDown}
-          value={search}
-        />
-        {invocation.kind === "filter" ? (
-          <div className="flex items-center justify-between gap-[var(--space-2)]">
+        <div className="flex items-start gap-[var(--space-2)]">
+          <div className="grid min-w-0 flex-1 gap-[var(--space-2)]">
+            <span className="relative block">
+              <SearchIcon
+                aria-hidden="true"
+                className="pointer-events-none absolute top-1/2 left-[var(--space-2)] -translate-y-1/2 text-[var(--color-muted)]"
+                size={16}
+                strokeWidth={1.8}
+              />
+              <input
+                aria-describedby={createError === null ? undefined : searchErrorID}
+                aria-invalid={createError === null ? undefined : true}
+                aria-label={t("labels.search")}
+                autoComplete="off"
+                className={`${fieldInputClassName} text-sm`}
+                onChange={(event) => {
+                  setSearch(event.currentTarget.value);
+                  setKeyboardHighlightedIndex(null);
+                  mutations.create.reset();
+                }}
+                onKeyDown={handleSearchKeyDown}
+                inputMode="search"
+                style={{
+                  height: "var(--space-6)",
+                  paddingBlock: "var(--space-0)",
+                  paddingInlineEnd: "calc(var(--space-6) + var(--space-1))",
+                  paddingInlineStart: "calc(var(--space-2) + var(--space-4) + var(--space-1))",
+                }}
+                type="text"
+                value={search}
+              />
+              {canCreate ? (
+                <span className="absolute top-1/2 right-[var(--space-1)] -translate-y-1/2">
+                  <IconTooltipButton
+                    disabled={catalogAtLimit || mutations.create.isPending}
+                    label={
+                      catalogAtLimit
+                        ? t("labels.catalogLimit")
+                        : t("labels.create", { name: preparedSearch })
+                    }
+                    onClick={() => {
+                      void createLabel();
+                    }}
+                    size="icon-sm"
+                  >
+                    <PlusIcon aria-hidden="true" size={14} strokeWidth={1.8} />
+                  </IconTooltipButton>
+                </span>
+              ) : null}
+            </span>
+            {choiceCount === 0 && canCreate && !catalogAtLimit ? (
+              <span className="px-[var(--space-2)] py-[var(--space-1)] text-sm leading-relaxed text-[var(--color-muted)]">
+                {t("labels.noMatchesCreateHint")}
+              </span>
+            ) : null}
+            {createError === null ? null : (
+              <span
+                className="px-[var(--space-1)] text-xs text-[var(--color-error)]"
+                id={searchErrorID}
+                role="alert"
+              >
+                {createError}
+              </span>
+            )}
+          </div>
+          {invocation.kind === "filter" ? (
             <SegmentedControl
               ariaLabel={t("labels.matchMode")}
+              className="shrink-0"
               disabled={invocation.state.filter.kind === "unlabeled"}
               onValueChange={(mode) => {
                 invocation.onAction({ type: "named.mode", mode });
@@ -231,17 +329,8 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
               ]}
               value={invocation.state.namedMode}
             />
-            <InteractiveChip
-              onClick={() => {
-                invocation.onAction({ type: "unlabeled.select" });
-              }}
-              selected={invocation.state.filter.kind === "unlabeled"}
-              size="compact"
-            >
-              {t("labels.unlabeled")}
-            </InteractiveChip>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
         {catalog.isPending ? (
           <div className="grid min-h-20 place-items-center" role="status">
             <Spinner />
@@ -261,24 +350,26 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
         ) : (
           <div
             className="grid max-h-[min(calc(10*2.25rem+9*var(--space-1)),calc(var(--radix-popover-content-available-height)-10rem))] gap-[var(--space-1)] overflow-y-auto overscroll-contain pr-[var(--space-1)]"
+            onPointerMove={() => {
+              setKeyboardHighlightedIndex(null);
+            }}
             role="list"
           >
-            {labels.map((label, index) => {
-              if (deletion?.labelID === label.id) {
+            {choices.map((choice, index) => {
+              if (choice.kind === "unlabeled") {
                 return (
-                  <LabelDeleteConfirmation
-                    deletion={deletion}
-                    key={label.id}
-                    label={label}
-                    onCancel={() => {
-                      setDeletion(null);
+                  <UnlabeledResultRow
+                    highlighted={index === keyboardHighlightedIndex}
+                    key="unlabeled"
+                    name={unlabeledName}
+                    onSelect={() => {
+                      selectUnlabeled(invocation);
                     }}
-                    onConfirm={() => {
-                      void confirmDelete();
-                    }}
+                    selected={invocation.kind === "filter" && invocation.state.filter.kind === "unlabeled"}
                   />
                 );
               }
+              const { label } = choice;
               if (rename?.labelID === label.id) {
                 return (
                   <LabelRenameEditor
@@ -297,20 +388,28 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
                 );
               }
               const selected = isLabelSelected(invocation, label.id);
+              const labelDeletion = deletion?.labelID === label.id ? deletion : null;
               return (
                 <LabelResultRow
-                  highlighted={index === highlightedIndex}
+                  deletion={labelDeletion}
+                  highlighted={index === keyboardHighlightedIndex}
                   key={label.id}
                   label={label}
-                  onDelete={() => {
-                    setDeletion({
-                      labelID: label.id,
-                      error: null,
-                      pending: false,
-                    });
+                  onDeleteConfirm={() => {
+                    void confirmDelete();
                   }}
-                  onPointerEnter={() => {
-                    setHighlightedIndex(index);
+                  onDeleteOpenChange={(nextOpen) => {
+                    if (nextOpen) {
+                      setDeletion({
+                        labelID: label.id,
+                        error: null,
+                        pending: false,
+                      });
+                      return;
+                    }
+                    setDeletion((current) =>
+                      current?.labelID === label.id && current.pending ? current : null,
+                    );
                   }}
                   onRename={() => {
                     setRename({
@@ -327,20 +426,6 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
                 />
               );
             })}
-            {canCreate ? (
-              <CreateLabelRow
-                atLimit={catalogAtLimit}
-                highlighted={labels.length === highlightedIndex}
-                name={preparedSearch}
-                onPointerEnter={() => {
-                  setHighlightedIndex(labels.length);
-                }}
-                onSelect={() => {
-                  void createAndSelect();
-                }}
-                pending={mutations.create.isPending}
-              />
-            ) : null}
           </div>
         )}
       </PopoverContent>
@@ -360,6 +445,12 @@ function selectLabel(invocation: LabelChooserInvocation, labelID: string, select
     return;
   }
   invocation.onSelectionChange(labelID, selected);
+}
+
+function selectUnlabeled(invocation: LabelChooserInvocation): void {
+  if (invocation.kind === "filter") {
+    invocation.onAction({ type: "unlabeled.toggle" });
+  }
 }
 
 function removeDeletedSelection(invocation: LabelChooserInvocation, labelID: string): void {

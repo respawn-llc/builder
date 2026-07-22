@@ -113,10 +113,10 @@ func Compare(left Name, right Name) int {
 }
 
 func validNameRune(character rune) bool {
-	return character == ' ' ||
-		character == '-' ||
-		character == '_' ||
-		character == '/' ||
-		unicode.IsLetter(character) ||
-		unicode.IsNumber(character)
+	switch character {
+	case ' ', ':', '&', '*', '%', '$', '#', '@', '!', '?', '.', ',', '/', '\\', '+', '|', '-', '_', '~', '\'':
+		return true
+	default:
+		return unicode.IsLetter(character) || unicode.IsNumber(character)
+	}
 }

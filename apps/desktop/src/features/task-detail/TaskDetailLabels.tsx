@@ -15,7 +15,8 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
     () => new Map(catalog.data?.labels.map((label) => [label.id, label.name]) ?? []),
     [catalog.data?.labels],
   );
-  const selectedLabelIDs = assignment.snapshot?.visibleLabelIDs ?? [];
+  const selectedLabelIDs =
+    assignment.snapshot?.visibleLabelIDs ?? assignment.assignment.data?.labelIDs ?? [];
   const visibleLabels = selectedLabelIDs.flatMap((labelID) => {
     const name = labelNamesByID.get(labelID);
     return name === undefined ? [] : [{ id: labelID, name }];
@@ -40,14 +41,15 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
                 aria-label={t("labels.editAssignments")}
                 className="min-h-7 h-auto w-full min-w-0 justify-start text-left"
                 disabled={triggerDisabled}
+                style={{ padding: "var(--space-0)" }}
                 variant="ghost"
               >
                 <span className="flex min-w-0 flex-wrap items-center gap-[var(--space-1)]">
                   {assignment.assignment.isPending ? <Spinner size="sm" /> : null}
                   {visibleLabels.length === 0 && !assignment.assignment.isPending ? (
                     <span className="inline-flex items-center gap-[var(--space-1)] text-[var(--color-muted)]">
-                      <Plus aria-hidden="true" size={14} />
                       {t("labels.add")}
+                      <Plus aria-hidden="true" size={14} />
                     </span>
                   ) : null}
                   {visibleLabels.map((label) => (
