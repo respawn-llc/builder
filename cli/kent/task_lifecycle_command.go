@@ -27,6 +27,8 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	projectRef := fs.String("project", ".", "project ID or attached workspace path")
 	sourceURL := fs.String("source-url", "", "URL of the issue or document that originated the task")
 	sourceWorkspace := fs.String("source-workspace", "", "workspace ID or path used as the task's source checkout")
+	var labelSelectors repeatedStringFlag
+	fs.Var(&labelSelectors, "label", "existing Project label name or canonical UUIDv4; repeat for multiple labels")
 	jsonOut := fs.Bool("json", false, "write the created task detail as JSON")
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
@@ -60,6 +62,19 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 			value := selectedWorkflow.PersistedID()
 			workflowID = &value
 		}
+		labelIDs := []string(nil)
+		if len(labelSelectors) > 0 {
+			_, snapshot, err := loadWorkflowProjectLabelCatalog(context.Background(), remote, projectID)
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+			labelIDs, err = resolveWorkflowProjectLabelSelectors(snapshot, labelSelectors)
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+		}
 		sourceWorkspaceID := ""
 		if strings.TrimSpace(*sourceWorkspace) != "" {
 			sourceWorkspaceID, err = resolveWorkflowSourceWorkspaceID(context.Background(), cfg, remote, *sourceWorkspace)
@@ -70,7 +85,15 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
-		resp, err := remote.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{ProjectID: projectID, WorkflowID: workflowID, Title: *title, Body: taskBody, SourceURL: *sourceURL, SourceWorkspaceID: sourceWorkspaceID})
+		resp, err := remote.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
+			ProjectID:         projectID,
+			WorkflowID:        workflowID,
+			Title:             *title,
+			Body:              taskBody,
+			SourceURL:         *sourceURL,
+			SourceWorkspaceID: sourceWorkspaceID,
+			LabelIDs:          labelIDs,
+		})
 		if err != nil {
 			var selectedWorkflowID *string
 			if selectedWorkflow != nil {
@@ -86,13 +109,30 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 				BodyFile:           *bodyFile,
 				SourceURL:          *sourceURL,
 				SourceWorkspace:    *sourceWorkspace,
+				LabelSelectors:     append([]string(nil), labelSelectors...),
 				JSON:               *jsonOut,
 			})
+			return 1
+		}
+		if strings.TrimSpace(resp.Task.ID) == "" {
+			fmt.Fprintln(stderr, "task create response is missing task ID")
+			return 1
+		}
+		if resp.Task.ProjectID != projectID {
+			fmt.Fprintf(stderr, "task create response project %q does not match requested project %q\n", resp.Task.ProjectID, projectID)
 			return 1
 		}
 		task, err := getWorkflowTaskByID(context.Background(), remote, resp.Task.ID)
 		if err != nil {
 			fmt.Fprintf(stderr, "created task %s but failed to load task detail for output: %v\n", resp.Task.ID, err)
+			return 1
+		}
+		if task.Summary.ID != resp.Task.ID {
+			fmt.Fprintf(stderr, "created task detail ID %q does not match create response task %q\n", task.Summary.ID, resp.Task.ID)
+			return 1
+		}
+		if task.Summary.ProjectID != projectID {
+			fmt.Fprintf(stderr, "created task detail project %q does not match requested project %q\n", task.Summary.ProjectID, projectID)
 			return 1
 		}
 		task, err = workflowTaskDetailForCLI(task)
@@ -103,7 +143,12 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		if *jsonOut {
 			return writeCommandJSON(stdout, stderr, taskShowOutputFromDetail(task))
 		}
-		if err := writeTaskDetail(stdout, task); err != nil {
+		labelNames, err := taskLabelNamesForHumanOutput(context.Background(), remote, task.Summary.ProjectID, task.LabelIDs)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if err := writeTaskDetailWithLabelNames(stdout, task, labelNames); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}

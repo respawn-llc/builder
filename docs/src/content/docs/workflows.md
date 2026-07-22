@@ -278,6 +278,8 @@ Assign labels atomically when creating a task or update them immediately from ta
 
 Board label filters run on the server. OR, the default, matches any selected label; AND requires every selected label; No labels matches tasks without assignments. The selected filter persists locally for each project and desktop installation across workflows, navigation, and relaunches.
 
+The CLI manages the same Project catalog with `kent task label create`, `list`, `rename`, and `delete`. `add` and `remove` update a task's memberships atomically; `task create --label` assigns existing labels in the creation transaction. Label selectors are repeatable literal values: canonical UUIDv4 text selects identity, while every other value is trimmed and matched against the complete case-insensitive Unicode name. `kent task list --label` defaults to any-match; use `--label-match all` for every selected label or `--unlabeled` for tasks without assignments. `--unlabeled` cannot be combined with label selectors or an explicit match mode.
+
 ### CLI Workflow And Task Scope
 
 CLI workflow selectors are bare canonical UUIDv4 values. Copy them from `kent workflow list` or `kent workflow inspect --summary`; workflow names and persisted `workflow-...` IDs are not selectors.

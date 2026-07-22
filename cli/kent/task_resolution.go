@@ -18,31 +18,33 @@ func workflowTaskList(ctx context.Context, remote workflowCommandRemote, req ser
 }
 
 func resolveWorkflowTaskID(ctx context.Context, cfg config.App, remote workflowCommandRemote, projectRef string, ref string) (string, error) {
+	task, err := resolveWorkflowTask(ctx, cfg, remote, projectRef, ref)
+	if err != nil {
+		return "", err
+	}
+	return task.Summary.ID, nil
+}
+
+func resolveWorkflowTask(ctx context.Context, cfg config.App, remote workflowCommandRemote, projectRef string, ref string) (serverapi.WorkflowTaskDetail, error) {
 	trimmed := strings.TrimSpace(ref)
 	if trimmed == "" {
-		return "", errors.New("task id is required")
+		return serverapi.WorkflowTaskDetail{}, errors.New("task id is required")
 	}
 	if strings.HasPrefix(trimmed, "task-") {
-		rpcCtx, cancel := context.WithTimeout(ctx, workflowCommandTimeout)
-		defer cancel()
-		resp, err := remote.GetWorkflowTask(rpcCtx, serverapi.WorkflowTaskGetRequest{TaskID: trimmed})
-		if err != nil {
-			return "", err
-		}
-		return resp.Task.Summary.ID, nil
+		return getWorkflowTaskByID(ctx, remote, trimmed)
 	}
 	projectID, err := resolveWorkflowProjectID(ctx, cfg, remote, projectRef)
 	if err != nil {
-		return "", err
+		return serverapi.WorkflowTaskDetail{}, err
 	}
 	detail, err := getWorkflowTaskByProjectShortID(ctx, remote, projectID, trimmed)
 	if err != nil {
 		if errors.Is(err, serverapi.ErrWorkflowTaskNotFound) || errors.Is(err, sql.ErrNoRows) {
-			return "", fmt.Errorf("task %q not found in project %s", trimmed, projectID)
+			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("task %q not found in project %s", trimmed, projectID)
 		}
-		return "", err
+		return serverapi.WorkflowTaskDetail{}, err
 	}
-	return detail.Summary.ID, nil
+	return detail, nil
 }
 
 func isWorkflowTaskNotFound(err error) bool {

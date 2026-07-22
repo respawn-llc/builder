@@ -27,6 +27,7 @@ type taskListItem struct {
 	CreatedAtUnixMs int64                        `json:"created_at_unix_ms"`
 	UpdatedAtUnixMs int64                        `json:"updated_at_unix_ms"`
 	RunCount        int                          `json:"run_count"`
+	LabelIDs        []string                     `json:"label_ids"`
 }
 
 type taskListProjection struct {
@@ -37,6 +38,7 @@ type taskListProjection struct {
 type taskListRenderItem struct {
 	Item         taskListItem
 	WorkflowName string
+	LabelNames   []string
 	ShowWorkflow bool
 	ShowColumns  bool
 }
@@ -155,6 +157,7 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 			CreatedAtUnixMs: task.CreatedAtUnixMs,
 			UpdatedAtUnixMs: task.UpdatedAtUnixMs,
 			RunCount:        task.RunCount,
+			LabelIDs:        normalizedLabelIDs(task.LabelIDs),
 		}
 		items = append(items, item)
 		rows = append(rows, taskListRenderItem{

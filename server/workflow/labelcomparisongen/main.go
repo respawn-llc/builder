@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"unicode/utf8"
 
-	"core/server/workflow/label"
+	"core/shared/labelcontract"
 )
 
 func main() {
@@ -54,8 +54,8 @@ func generateDesktopComparison(fixtureJSON []byte) ([]byte, error) {
 	if err := json.Unmarshal(fixtureJSON, &fixture); err != nil {
 		return nil, fmt.Errorf("decode shared comparison fixture: %w", err)
 	}
-	if fixture.Version != label.ComparisonVersion {
-		return nil, fmt.Errorf("shared comparison fixture version %q does not match %q", fixture.Version, label.ComparisonVersion)
+	if fixture.Version != labelcontract.ComparisonVersion {
+		return nil, fmt.Errorf("shared comparison fixture version %q does not match %q", fixture.Version, labelcontract.ComparisonVersion)
 	}
 	foldByCodePoint := make(map[string]string)
 	for character := rune(0); character <= utf8.MaxRune; character++ {
@@ -63,14 +63,14 @@ func generateDesktopComparison(fixtureJSON []byte) ([]byte, error) {
 			continue
 		}
 		source := string(character)
-		folded := label.Fold(source)
+		folded := labelcontract.Fold(source)
 		if folded == source {
 			continue
 		}
 		foldByCodePoint[strconv.FormatInt(int64(character), 10)] = folded
 	}
 	generated, err := json.MarshalIndent(generatedDesktopComparison{
-		Version:         label.ComparisonVersion,
+		Version:         labelcontract.ComparisonVersion,
 		FoldByCodePoint: foldByCodePoint,
 		Fixture:         json.RawMessage(fixtureJSON),
 	}, "", "  ")

@@ -10,14 +10,12 @@ import (
 	"core/shared/runtimeids"
 
 	"github.com/google/uuid"
-	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
 
 const (
-	MaxNameRunes      = 64
-	MaxProjectLabels  = labelcontract.MaxProjectLabels
-	ComparisonVersion = "kent-label-casefold-v1"
+	MaxNameRunes     = 64
+	MaxProjectLabels = labelcontract.MaxProjectLabels
 )
 
 type ID struct {
@@ -96,20 +94,16 @@ func (name Name) String() string {
 	return string(name)
 }
 
-func Fold(value string) string {
-	return norm.NFC.String(cases.Fold().String(norm.NFC.String(value)))
-}
-
 func Equal(left Name, right Name) bool {
-	return Compare(left, right) == 0
+	return labelcontract.Equal(left.String(), right.String())
 }
 
 func Contains(name Name, query string) bool {
-	return strings.Contains(Fold(name.String()), Fold(query))
+	return labelcontract.Contains(name.String(), query)
 }
 
 func Compare(left Name, right Name) int {
-	return strings.Compare(Fold(left.String()), Fold(right.String()))
+	return labelcontract.Compare(left.String(), right.String())
 }
 
 func validNameRune(character rune) bool {
