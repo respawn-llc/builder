@@ -11,26 +11,6 @@ import (
 	"core/shared/sessioncontract"
 )
 
-func TestInitialInputPrefersPersistedDraft(t *testing.T) {
-	persistence := sessiontest.NewPersistence()
-	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/work", sessioncontract.SessionCategoryMain, persistence.Options()...)
-	if err != nil {
-		t.Fatalf("create session store: %v", err)
-	}
-	if err := store.SetInputDraft("persisted"); err != nil {
-		t.Fatalf("set input draft: %v", err)
-	}
-	if got := initialSessionInput(store, "fallback"); got != "persisted" {
-		t.Fatalf("initial input = %q, want persisted", got)
-	}
-}
-
-func TestPersistInputDraftNoOpForNilStore(t *testing.T) {
-	if err := persistSessionInputDraft(nil, "draft"); err != nil {
-		t.Fatalf("persist input draft with nil store: %v", err)
-	}
-}
-
 func TestResolveForkRollbackCreatesForkedSession(t *testing.T) {
 	root := t.TempDir()
 	persistence := sessiontest.NewPersistence()

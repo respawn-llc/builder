@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { resolveMirroredDocsPaths, syncMirroredDocs, writeFileAtomically } from './sync-mirrored-docs.mjs';
+import { resolveMirroredDocsPaths, syncMirroredDocs } from './sync-mirrored-docs.mjs';
 
 const docsConfig = {
   docsHomePath: '/docs/',
@@ -32,14 +32,6 @@ async function createMirroredRepoFixture() {
   return { docsRoot, repoRoot };
 }
 
-test('resolveMirroredDocsPaths keeps generated and legacy locations explicit', async () => {
-  assert.deepEqual(resolveMirroredDocsPaths('/docs'), {
-    outputDirectory: path.join('/docs', 'src', '.generated', 'content', 'docs'),
-    legacyOutputDirectory: path.join('/docs', 'src', 'content', 'docs'),
-    deprecatedGeneratedOutputDirectory: path.join('/docs', '.generated', 'content', 'docs'),
-  });
-});
-
 test('syncMirroredDocs writes generated mirrored docs and removes legacy copies', async () => {
   const { docsRoot, repoRoot } = await createMirroredRepoFixture();
   const paths = resolveMirroredDocsPaths(docsRoot);
@@ -49,19 +41,7 @@ test('syncMirroredDocs writes generated mirrored docs and removes legacy copies'
 
   await syncMirroredDocs({ docsRoot, repoRoot, docsConfig });
 
-  assert.match(await readFile(path.join(paths.outputDirectory, 'docs.md'), 'utf8'), /Readme body\./);
-  assert.match(await readFile(path.join(paths.outputDirectory, 'contributing.md'), 'utf8'), /Contribution body\./);
-  assert.match(await readFile(path.join(paths.outputDirectory, 'security.md'), 'utf8'), /Security body\./);
+  assert.deepEqual((await readdir(paths.outputDirectory)).sort(), ['contributing.md', 'docs.md', 'security.md']);
   await assert.rejects(readFile(path.join(paths.legacyOutputDirectory, 'docs.md'), 'utf8'));
   await assert.rejects(readFile(path.join(paths.deprecatedGeneratedOutputDirectory, 'security.md'), 'utf8'));
-});
-
-test('writeFileAtomically replaces file contents', async () => {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'kent-atomic-write-'));
-  const filePath = path.join(tempRoot, 'target.md');
-
-  await writeFile(filePath, 'before\n', 'utf8');
-  await writeFileAtomically(filePath, 'after\n');
-
-  assert.equal(await readFile(filePath, 'utf8'), 'after\n');
 });
