@@ -198,37 +198,53 @@ func TestHistoryReplacementAppendObserverFailureUpdatesLiveActiveListForNextTurn
 	}
 }
 
-func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testing.T) {
-	observerErr := errors.New("history replacement observer failure")
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	client := &fakeCompactionClient{
-		inputTokenCount: 2_000,
-		compactionResponses: []llm.CompactionResponse{{
-			OutputItems: []llm.ResponseItem{
-				{
-					Type:        llm.ResponseItemTypeMessage,
-					Role:        textutil.Value(llm.RoleUser),
-					MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
-					Content:     textutil.Value("summary"),
+type committedRemoteCompactionFixture struct {
+	store         *session.Store
+	engine        *Engine
+	client        *fakeCompactionClient
+	previousUsage llm.Usage
+	events        []Event
+}
+
+func newCommittedRemoteCompactionFixture(
+	t *testing.T,
+	observer session.PersistenceObserver,
+) *committedRemoteCompactionFixture {
+	t.Helper()
+	fixture := &committedRemoteCompactionFixture{
+		store: mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(observer)),
+		client: &fakeCompactionClient{
+			inputTokenCount: 2_000,
+			compactionResponses: []llm.CompactionResponse{{
+				OutputItems: []llm.ResponseItem{
+					{
+						Type:        llm.ResponseItemTypeMessage,
+						Role:        textutil.Value(llm.RoleUser),
+						MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+						Content:     textutil.Value("summary"),
+					},
+					{
+						Type:             llm.ResponseItemTypeCompaction,
+						ID:               textutil.Value("cmp-1"),
+						EncryptedContent: textutil.Value("encrypted"),
+					},
 				},
-				{
-					Type:             llm.ResponseItemTypeCompaction,
-					ID:               textutil.Value("cmp-1"),
-					EncryptedContent: textutil.Value("encrypted"),
-				},
-			},
-			Usage: llm.Usage{InputTokens: 1_000, OutputTokens: 100, WindowTokens: 200_000},
-		}},
+				Usage: llm.Usage{InputTokens: 1_000, OutputTokens: 100, WindowTokens: 200_000},
+			}},
+		},
+		previousUsage: llm.Usage{
+			InputTokens:       190_000,
+			WindowTokens:      200_000,
+			CachedInputTokens: textutil.Value(190_000),
+		},
 	}
-	var events []Event
-	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
+	fixture.engine = mustNewTestEngine(t, fixture.store, fixture.client, tools.NewRegistry(), Config{
 		Model: "gpt-5",
 		OnEvent: func(event Event) {
-			events = append(events, event)
+			fixture.events = append(fixture.events, event)
 		},
 	})
-	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
+	if err := fixture.engine.steer("seed", steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
 		steeringMessageEventNone,
 		true,
@@ -236,17 +252,21 @@ func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testin
 	)); err != nil {
 		t.Fatalf("persist seed message: %v", err)
 	}
-	if usageReceipt, usageErr := engine.recordLastUsage(llm.Usage{
-		InputTokens:  190_000,
-		WindowTokens: 200_000,
-	}); usageErr != nil || !usageReceipt.Committed {
-		t.Fatalf("persist pre-compaction usage: receipt=%+v error=%v", usageReceipt, usageErr)
+	if receipt, err := fixture.engine.recordLastUsage(fixture.previousUsage); err != nil || !receipt.Committed {
+		t.Fatalf("persist pre-compaction usage: receipt=%+v error=%v", receipt, err)
 	}
+	return fixture
+}
+
+func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testing.T) {
+	observerErr := errors.New("history replacement observer failure")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	fixture := newCommittedRemoteCompactionFixture(t, gate)
 	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
 		return snapshot.Meta.LastSequence >= 2 && snapshot.Meta.UsageState == nil
 	}, observerErr)
 
-	_, receipt, err := engine.compactNow(
+	_, receipt, err := fixture.engine.compactNow(
 		context.Background(),
 		"compact",
 		compactionModeManual,
@@ -259,7 +279,7 @@ func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testin
 
 	completed := 0
 	failed := 0
-	for _, event := range events {
+	for _, event := range fixture.events {
 		switch event.Kind {
 		case EventCompactionCompleted:
 			completed++
@@ -268,13 +288,13 @@ func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testin
 		}
 	}
 	if completed != 1 || failed != 0 {
-		t.Fatalf("compaction terminal events: completed=%d failed=%d events=%+v", completed, failed, events)
+		t.Fatalf("compaction terminal events: completed=%d failed=%d events=%+v", completed, failed, fixture.events)
 	}
-	if generation := engine.compactionRuntimeState().Count(); generation != 1 {
+	if generation := fixture.engine.compactionRuntimeState().Count(); generation != 1 {
 		t.Fatalf("committed compaction generation = %d, want 1", generation)
 	}
 
-	window, readErr := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	window, readErr := mustMaterializeTestEventLog(t, fixture.store).ReadRecentRecords(16)
 	if readErr != nil {
 		t.Fatalf("read bounded committed records: %v", readErr)
 	}
@@ -284,12 +304,60 @@ func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testin
 			replacements++
 		}
 	}
-	if replacements != 1 || len(client.compactionCalls) != 1 {
+	if replacements != 1 || len(fixture.client.compactionCalls) != 1 {
 		t.Fatalf(
 			"committed compaction replacements=%d compaction-calls=%d, want one each",
 			replacements,
-			len(client.compactionCalls),
+			len(fixture.client.compactionCalls),
 		)
+	}
+}
+
+func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) {
+	observerErr := errors.New("compaction usage observer failure")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	fixture := newCommittedRemoteCompactionFixture(t, gate)
+	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		usage := snapshot.Meta.UsageState
+		return usage != nil &&
+			usage.WindowTokens == fixture.previousUsage.WindowTokens &&
+			usage.InputTokens != fixture.previousUsage.InputTokens
+	}, observerErr)
+
+	_, receipt, err := fixture.engine.compactNow(
+		context.Background(),
+		"compact",
+		compactionModeManual,
+		"",
+		false,
+	)
+	if !receipt.Committed || !errors.Is(err, observerErr) {
+		t.Fatalf("compactNow outcome: receipt=%+v error=%v", receipt, err)
+	}
+
+	liveUsage := fixture.engine.ContextUsage()
+	if liveUsage.UsedTokens != fixture.client.inputTokenCount {
+		t.Fatalf("live compacted usage = %+v, want input tokens %d", liveUsage, fixture.client.inputTokenCount)
+	}
+	if persisted := fixture.store.Meta().UsageState; persisted == nil ||
+		persisted.InputTokens != fixture.client.inputTokenCount ||
+		persisted.WindowTokens != fixture.previousUsage.WindowTokens {
+		t.Fatalf("persisted compacted usage = %+v", persisted)
+	}
+
+	reopened := mustNewTestEngine(
+		t,
+		mustOpenTestSession(t, fixture.store.Dir()),
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	reopenedUsage := reopened.ContextUsage()
+	if reopenedUsage.UsedTokens <= 0 || reopenedUsage.UsedTokens >= fixture.previousUsage.InputTokens {
+		t.Fatalf("reopened compacted usage = %+v", reopenedUsage)
+	}
+	if !reopenedUsage.HasCacheHitPercentage || reopenedUsage.CacheHitPercent != 100 {
+		t.Fatalf("reopened compacted cache counters = %+v", reopenedUsage)
 	}
 }
 
