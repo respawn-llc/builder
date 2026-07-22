@@ -1,0 +1,34 @@
+{{.Indent}}{{.FilterKind}} = 'none'
+{{.Indent}}OR (
+{{.Indent}}    {{.FilterKind}} = 'named'
+{{.Indent}}    AND {{.FilterMode}} = 'any'
+{{.Indent}}    AND EXISTS (
+{{.Indent}}        SELECT 1
+{{.Indent}}        FROM json_each({{.LabelIDs}}) selected_label
+{{.Indent}}        JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+{{.Indent}}          ON assignment.label_id = selected_label.value
+{{.Indent}}        WHERE assignment.task_id = {{.TaskID}}
+{{.Indent}}    )
+{{.Indent}})
+{{.Indent}}OR (
+{{.Indent}}    {{.FilterKind}} = 'named'
+{{.Indent}}    AND {{.FilterMode}} = 'all'
+{{.Indent}}    AND NOT EXISTS (
+{{.Indent}}        SELECT 1
+{{.Indent}}        FROM json_each({{.LabelIDs}}) selected_label
+{{.Indent}}        WHERE NOT EXISTS (
+{{.Indent}}            SELECT 1
+{{.Indent}}            FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+{{.Indent}}            WHERE assignment.label_id = selected_label.value
+{{.Indent}}              AND assignment.task_id = {{.TaskID}}
+{{.Indent}}        )
+{{.Indent}}    )
+{{.Indent}})
+{{.Indent}}OR (
+{{.Indent}}    {{.FilterKind}} = 'unlabeled'
+{{.Indent}}    AND NOT EXISTS (
+{{.Indent}}        SELECT 1
+{{.Indent}}        FROM task_label_assignments assignment
+{{.Indent}}        WHERE assignment.task_id = {{.TaskID}}
+{{.Indent}}    )
+{{.Indent}}){{"" -}}

@@ -22,10 +22,23 @@ export function useCreateTask(
   return useMutation({
     mutationFn: async (input: TaskMutationInput) => api.createTask(input),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.board(projectID, boardQueryWorkflowID) });
-      if (selectedWorkflowID !== boardQueryWorkflowID) {
-        await queryClient.invalidateQueries({ queryKey: queryKeys.board(projectID, selectedWorkflowID) });
+      const workflowIDs = new Set<string | undefined>([boardQueryWorkflowID, selectedWorkflowID]);
+      const invalidations: Promise<void>[] = [];
+      for (const workflowID of workflowIDs) {
+        invalidations.push(
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.boardWorkflowRoot(projectID, workflowID),
+          }),
+        );
+        if (workflowID !== undefined) {
+          invalidations.push(
+            queryClient.invalidateQueries({
+              queryKey: queryKeys.boardNodeCardsWorkflowRoot(projectID, workflowID),
+            }),
+          );
+        }
       }
+      await Promise.all(invalidations);
     },
   });
 }

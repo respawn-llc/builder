@@ -154,9 +154,13 @@ func TestWorkflowTaskListRequestFingerprintCanonicalizesSetFilters(t *testing.T)
 		{Field: serverapi.WorkflowTaskListSortFieldStatus, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
 	}
 	first, err := workflowTaskListRequestFingerprint(serverapi.WorkflowTaskListRequest{
+		LabelFilter:    serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
 		ColumnKeys:     []string{"done", "backlog", "done"},
 		StatusKinds:    []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindRunning, serverapi.WorkflowTaskStatusKindBacklog, serverapi.WorkflowTaskStatusKindRunning},
 		AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindQuestion, serverapi.WorkflowTaskAttentionKindApproval},
+	}, workflowTaskLabelFilterFacts{
+		Kind:     serverapi.WorkflowTaskLabelFilterKindNone,
+		LabelIDs: []string{},
 	}, sortSelectors, workflowTaskListFingerprintScope{
 		Narrowed: &workflowTaskListNarrowedFingerprintInvariants{ColumnStructureHash: "columns"},
 	})
@@ -164,9 +168,13 @@ func TestWorkflowTaskListRequestFingerprintCanonicalizesSetFilters(t *testing.T)
 		t.Fatalf("first fingerprint: %v", err)
 	}
 	second, err := workflowTaskListRequestFingerprint(serverapi.WorkflowTaskListRequest{
+		LabelFilter:    serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
 		ColumnKeys:     []string{"backlog", "done"},
 		StatusKinds:    []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog, serverapi.WorkflowTaskStatusKindRunning},
 		AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindApproval, serverapi.WorkflowTaskAttentionKindQuestion},
+	}, workflowTaskLabelFilterFacts{
+		Kind:     serverapi.WorkflowTaskLabelFilterKindNone,
+		LabelIDs: []string{},
 	}, sortSelectors, workflowTaskListFingerprintScope{
 		Narrowed: &workflowTaskListNarrowedFingerprintInvariants{ColumnStructureHash: "columns"},
 	})
@@ -179,7 +187,8 @@ func TestWorkflowTaskListRequestFingerprintCanonicalizesSetFilters(t *testing.T)
 }
 
 func TestWorkflowTaskListRequestFingerprintRequiresOneTypedScope(t *testing.T) {
-	request := serverapi.WorkflowTaskListRequest{}
+	request := serverapi.WorkflowTaskListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}}
 	sortSelectors := normalizeWorkflowTaskListSort(nil)
 	for name, scope := range map[string]workflowTaskListFingerprintScope{
 		"missing mode": {},
@@ -192,7 +201,15 @@ func TestWorkflowTaskListRequestFingerprintRequiresOneTypedScope(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := workflowTaskListRequestFingerprint(request, sortSelectors, scope); err == nil {
+			if _, err := workflowTaskListRequestFingerprint(
+				request,
+				workflowTaskLabelFilterFacts{
+					Kind:     serverapi.WorkflowTaskLabelFilterKindNone,
+					LabelIDs: []string{},
+				},
+				sortSelectors,
+				scope,
+			); err == nil {
 				t.Fatalf("workflowTaskListRequestFingerprint accepted %s", name)
 			}
 		})
@@ -225,14 +242,16 @@ func TestTaskListInfersScopeFromContinuationToken(t *testing.T) {
 		}
 	}
 	projectID, workflowIDValue := binding.ProjectID, string(workflowID)
-	firstPage, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &projectID, WorkflowID: &workflowIDValue, PageSize: 1})
+	firstPage, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: &projectID, WorkflowID: &workflowIDValue, PageSize: 1})
 	if err != nil {
 		t.Fatalf("ListTasks first page: %v", err)
 	}
 	if firstPage.NextPageToken == nil {
 		t.Fatal("expected continuation token")
 	}
-	nextPage, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{PageToken: *firstPage.NextPageToken, PageSize: 1})
+	nextPage, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, PageToken: *firstPage.NextPageToken, PageSize: 1})
 	if err != nil {
 		t.Fatalf("ListTasks token-only continuation: %v", err)
 	}
@@ -240,7 +259,8 @@ func TestTaskListInfersScopeFromContinuationToken(t *testing.T) {
 		t.Fatalf("token-only continuation = %+v, want resolved second page", nextPage)
 	}
 	otherProjectID := "project-conflict"
-	_, err = view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &otherProjectID, PageToken: *firstPage.NextPageToken, PageSize: 1})
+	_, err = view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: &otherProjectID, PageToken: *firstPage.NextPageToken, PageSize: 1})
 	if !errors.Is(err, ErrInvalidPageToken) {
 		t.Fatalf("ListTasks conflicting token scope error = %v, want ErrInvalidPageToken", err)
 	}

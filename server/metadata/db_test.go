@@ -207,36 +207,74 @@ func TestOpenConfiguresSQLitePragmasThroughPathSafeDSN(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
+	requireMetadataSQLitePragmas(t, store.db)
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Fatalf("database path was not created at expected path: %v", err)
+	}
+}
+
+func TestOpenConfiguresEightConnectionSQLitePool(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	if got := store.db.Stats().MaxOpenConnections; got != 8 {
+		t.Fatalf("max open connections = %d, want 8", got)
+	}
+	connections := make([]*sql.Conn, 0, 8)
+	for range 8 {
+		connection, err := store.db.Conn(t.Context())
+		if err != nil {
+			t.Fatalf("acquire pooled connection: %v", err)
+		}
+		connections = append(connections, connection)
+		requireMetadataSQLitePragmas(t, connection)
+	}
+	for _, connection := range connections {
+		if err := connection.Close(); err != nil {
+			t.Fatalf("return pooled connection: %v", err)
+		}
+	}
+	if got := store.db.Stats().Idle; got != 8 {
+		t.Fatalf("idle connections = %d, want 8", got)
+	}
+}
+
+type sqlitePragmaQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func requireMetadataSQLitePragmas(t testing.TB, queryer sqlitePragmaQueryer) {
+	t.Helper()
 	var foreignKeys int64
-	if err := store.db.QueryRow("PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
+	if err := queryer.QueryRowContext(t.Context(), "PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
 		t.Fatalf("PRAGMA foreign_keys: %v", err)
 	}
 	if foreignKeys != 1 {
 		t.Fatalf("foreign_keys = %d, want 1", foreignKeys)
 	}
 	var journalMode string
-	if err := store.db.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil {
+	if err := queryer.QueryRowContext(t.Context(), "PRAGMA journal_mode").Scan(&journalMode); err != nil {
 		t.Fatalf("PRAGMA journal_mode: %v", err)
 	}
 	if journalMode != "wal" {
 		t.Fatalf("journal_mode = %q, want wal", journalMode)
 	}
 	var synchronous int64
-	if err := store.db.QueryRow("PRAGMA synchronous").Scan(&synchronous); err != nil {
+	if err := queryer.QueryRowContext(t.Context(), "PRAGMA synchronous").Scan(&synchronous); err != nil {
 		t.Fatalf("PRAGMA synchronous: %v", err)
 	}
 	if synchronous != 1 {
 		t.Fatalf("synchronous = %d, want NORMAL(1)", synchronous)
 	}
 	var busyTimeout int64
-	if err := store.db.QueryRow("PRAGMA busy_timeout").Scan(&busyTimeout); err != nil {
+	if err := queryer.QueryRowContext(t.Context(), "PRAGMA busy_timeout").Scan(&busyTimeout); err != nil {
 		t.Fatalf("PRAGMA busy_timeout: %v", err)
 	}
 	if busyTimeout != 5000 {
 		t.Fatalf("busy_timeout = %d, want 5000", busyTimeout)
-	}
-	if _, err := os.Stat(dbPath); err != nil {
-		t.Fatalf("database path was not created at expected path: %v", err)
 	}
 }
 
@@ -1311,6 +1349,9 @@ func openDatabaseAtVersionForTest(t *testing.T, root string, dbPath string, vers
 
 func openDatabaseAtPathWithoutMigrationsForTest(root string, dbPath string) (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		return nil, err
+	}
+	if err := registerMetadataSQLiteCollations(); err != nil {
 		return nil, err
 	}
 	db, err := sql.Open("sqlite", metadataSQLiteDSN(dbPath))

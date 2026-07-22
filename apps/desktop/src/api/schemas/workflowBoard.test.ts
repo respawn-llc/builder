@@ -61,6 +61,7 @@ const card = {
     can_cancel: true,
     manual_move_target_node_ids: [],
   },
+  label_ids: ["f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf"],
   updated_at_unix_ms: 1,
 };
 
@@ -157,6 +158,7 @@ describe("workflow board schemas", () => {
     });
 
     expect(page.cards[0]).toMatchObject({
+      labelIDs: ["f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf"],
       preview: {
         markdown: "Bounded Markdown **preview**",
         truncated: true,

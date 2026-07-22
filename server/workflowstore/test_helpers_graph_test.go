@@ -207,7 +207,7 @@ func completeRun(t *testing.T, ctx context.Context, store *Store, req CompleteRu
 	if err != nil {
 		t.Fatalf("CompleteRun: %v", err)
 	}
-	return completed
+	return completed.Result
 }
 
 func createValidWorkflow(t *testing.T, ctx context.Context, store *Store) workflow.WorkflowID {

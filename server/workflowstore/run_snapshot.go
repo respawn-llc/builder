@@ -1,6 +1,7 @@
 package workflowstore
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -31,12 +32,13 @@ type nodeContractSnapshot struct {
 }
 
 type transitionContractSnapshot struct {
-	ID           workflow.TransitionGroupID `json:"id"`
-	SourceNodeID workflow.NodeID            `json:"source_node_id,omitempty"`
-	TransitionID string                     `json:"transition_id"`
-	DisplayName  string                     `json:"display_name"`
-	Description  string                     `json:"description,omitempty"`
-	Edges        []edgeContractSnapshot     `json:"edges"`
+	ID                               workflow.TransitionGroupID `json:"id"`
+	SourceNodeID                     workflow.NodeID            `json:"source_node_id,omitempty"`
+	TransitionID                     string                     `json:"transition_id"`
+	DisplayName                      string                     `json:"display_name"`
+	Description                      string                     `json:"description,omitempty"`
+	SharedTargetNodeGroupDisplayName *string                    `json:"shared_target_node_group_display_name,omitempty"`
+	Edges                            []edgeContractSnapshot     `json:"edges"`
 }
 
 type edgeContractSnapshot struct {
@@ -164,9 +166,52 @@ func newRunStartSnapshot(def workflow.Definition, record WorkflowRecord, nodeID 
 			}
 			groupSnapshot.Edges = append(groupSnapshot.Edges, edgeSnapshotWithDerivedWiring(edge, source, target, derived))
 		}
+		sharedTargetNodeGroupDisplayName, err := sharedTargetNodeGroupDisplayName(def, edgesByGroup[group.ID])
+		if err != nil {
+			return runStartSnapshot{}, err
+		}
+		groupSnapshot.SharedTargetNodeGroupDisplayName = sharedTargetNodeGroupDisplayName
 		snapshot.TransitionGroups = append(snapshot.TransitionGroups, groupSnapshot)
 	}
 	return snapshot, nil
+}
+
+func sharedTargetNodeGroupDisplayName(def workflow.Definition, edges []workflow.Edge) (*string, error) {
+	if len(edges) < 2 {
+		return nil, nil
+	}
+	var sharedGroup *workflow.NodeGroup
+	for index := range def.NodeGroups {
+		group := &def.NodeGroups[index]
+		if strings.TrimSpace(group.ID) == "" {
+			return nil, errors.New("snapshot node group has a blank id")
+		}
+		if !nodeGroupContainsAllTargets(*group, edges) {
+			continue
+		}
+		if sharedGroup != nil {
+			return nil, fmt.Errorf("snapshot fanout targets have ambiguous shared node groups %q and %q", sharedGroup.ID, group.ID)
+		}
+		sharedGroup = group
+	}
+	if sharedGroup == nil {
+		return nil, nil
+	}
+	displayName := sharedGroup.DisplayName
+	return &displayName, nil
+}
+
+func nodeGroupContainsAllTargets(group workflow.NodeGroup, edges []workflow.Edge) bool {
+	members := make(map[workflow.NodeID]struct{}, len(group.MemberNodeIDs))
+	for _, nodeID := range group.MemberNodeIDs {
+		members[nodeID] = struct{}{}
+	}
+	for _, edge := range edges {
+		if _, ok := members[edge.TargetNodeID]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func nodeSnapshotWithDerivedWiring(node workflow.Node, derived workflow.DerivedWiring) nodeContractSnapshot {

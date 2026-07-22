@@ -13,7 +13,8 @@ func TestTaskListProjectScopeFailuresAreTyped(t *testing.T) {
 	t.Run("no linked workflows", func(t *testing.T) {
 		ctx, _, _, binding, view := newWorkflowViewTestContextFixture(t)
 		projectID := binding.ProjectID
-		_, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &projectID})
+		_, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: &projectID})
 		var scopeErr *serverapi.WorkflowTaskListScopeError
 		if !errors.As(err, &scopeErr) ||
 			scopeErr.Reason != serverapi.WorkflowTaskListScopeReasonNoLinkedWorkflows ||
@@ -32,8 +33,9 @@ func TestTaskListProjectScopeFailuresAreTyped(t *testing.T) {
 		}
 		projectID, workflowID := binding.ProjectID, string(unlinkedWorkflowID)
 		_, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
-			ProjectID:  &projectID,
-			WorkflowID: &workflowID,
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+			ProjectID:   &projectID,
+			WorkflowID:  &workflowID,
 		})
 
 		var scopeErr *serverapi.WorkflowTaskListScopeError
@@ -53,8 +55,9 @@ func TestTaskListProjectScopeFailuresAreTyped(t *testing.T) {
 		}
 		projectID := binding.ProjectID
 		_, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
-			ProjectID:  &projectID,
-			ColumnKeys: []string{"backlog"},
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+			ProjectID:   &projectID,
+			ColumnKeys:  []string{"backlog"},
 		})
 
 		var scopeErr *serverapi.WorkflowTaskListScopeError
@@ -72,7 +75,8 @@ func TestTaskListMatchingWorkflowCardinalityUsesFullFilteredSet(t *testing.T) {
 		ctx, _, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
 		createTwoLinkedWorkflowViewWorkflows(t, ctx, workflowStore, binding.ProjectID)
 		projectID := binding.ProjectID
-		response, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &projectID})
+		response, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: &projectID})
 		if err != nil {
 			t.Fatalf("ListTasks: %v", err)
 		}
@@ -111,6 +115,7 @@ func TestTaskListMatchingWorkflowCardinalityUsesFullFilteredSet(t *testing.T) {
 
 		projectID := binding.ProjectID
 		response, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
 			ProjectID:   &projectID,
 			StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog},
 		})
@@ -144,9 +149,10 @@ func TestTaskListMatchingWorkflowCardinalityUsesFullFilteredSet(t *testing.T) {
 		}
 		projectID := binding.ProjectID
 		response, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
-			ProjectID: &projectID,
-			PageSize:  1,
-			Sort:      []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldTitle, Direction: serverapi.WorkflowTaskListSortDirectionAsc}},
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+			ProjectID:   &projectID,
+			PageSize:    1,
+			Sort:        []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldTitle, Direction: serverapi.WorkflowTaskListSortDirectionAsc}},
 		})
 
 		if err != nil {
@@ -175,9 +181,10 @@ func TestTaskListProjectWidePaginationFreezesCardinalityWhileRowsRemainLive(t *t
 		projectID := binding.ProjectID
 		sortByTitle := []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldTitle, Direction: serverapi.WorkflowTaskListSortDirectionAsc}}
 		firstPage, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
-			ProjectID: &projectID,
-			PageSize:  1,
-			Sort:      sortByTitle,
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+			ProjectID:   &projectID,
+			PageSize:    1,
+			Sort:        sortByTitle,
 		})
 
 		if err != nil {
@@ -187,6 +194,7 @@ func TestTaskListProjectWidePaginationFreezesCardinalityWhileRowsRemainLive(t *t
 			t.Fatalf("first page = %+v, want one and continuation", firstPage)
 		}
 		if _, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
 			PageToken:   *firstPage.NextPageToken,
 			StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindDone},
 			Sort:        sortByTitle,
@@ -195,9 +203,10 @@ func TestTaskListProjectWidePaginationFreezesCardinalityWhileRowsRemainLive(t *t
 		}
 		selectedWorkflowID := string(secondWorkflowID)
 		if _, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
-			WorkflowID: &selectedWorkflowID,
-			PageToken:  *firstPage.NextPageToken,
-			Sort:       sortByTitle,
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+			WorkflowID:  &selectedWorkflowID,
+			PageToken:   *firstPage.NextPageToken,
+			Sort:        sortByTitle,
 		}); !errors.Is(err, ErrInvalidPageToken) {
 			t.Fatalf("conflicting continuation scope error = %v, want ErrInvalidPageToken", err)
 		}
@@ -210,9 +219,10 @@ func TestTaskListProjectWidePaginationFreezesCardinalityWhileRowsRemainLive(t *t
 			t.Fatalf("CreateTask Zulu: %v", err)
 		}
 		nextPage, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
-			PageToken: *firstPage.NextPageToken,
-			PageSize:  10,
-			Sort:      sortByTitle,
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+			PageToken:   *firstPage.NextPageToken,
+			PageSize:    10,
+			Sort:        sortByTitle,
 		})
 
 		if err != nil {
@@ -253,6 +263,7 @@ func TestTaskListProjectWidePaginationFreezesCardinalityWhileRowsRemainLive(t *t
 		sortByTitle := []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldTitle, Direction: serverapi.WorkflowTaskListSortDirectionAsc}}
 		statusFilter := []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog}
 		firstPage, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
 			ProjectID:   &projectID,
 			StatusKinds: statusFilter,
 			PageSize:    1,
@@ -269,6 +280,7 @@ func TestTaskListProjectWidePaginationFreezesCardinalityWhileRowsRemainLive(t *t
 			t.Fatalf("StartTask Zulu: %v", err)
 		}
 		nextPage, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
 			StatusKinds: statusFilter,
 			PageToken:   *firstPage.NextPageToken,
 			PageSize:    10,

@@ -51,6 +51,7 @@ type Request struct {
 	AuthStatePath         string
 	SessionName           string
 	SessionID             string
+	AgentRole             *string
 	ConfiguredModelName   string
 	ModelName             string
 	ThinkingLevel         string
@@ -69,6 +70,7 @@ type Snapshot struct {
 	Workdir                string
 	SessionName            string
 	SessionID              string
+	AgentRole              *string
 	PreviousSessionID      *runtimeids.SessionID
 	PreviousSessionName    string
 	ParentAgentSessionID   *runtimeids.SessionID

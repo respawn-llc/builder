@@ -89,6 +89,7 @@ func (a *Authority) StartScriptExecution(ctx context.Context, req ScriptExecutio
 
 	go func() {
 		result, runErr, stopErr := process.wait(execution.ctx)
+		execution.retire()
 		var finalizeErr error
 		if req.Finalize != nil {
 			finalizeErr = req.Finalize(context.WithoutCancel(execution.ctx), execution.scope, result.clone(), runErr)

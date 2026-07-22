@@ -243,7 +243,15 @@ func (g *Gateway) serveWorktreeSetupSubscription(conn rpcwire.Conn, ctx context.
 }
 
 func workflowProjectEventParams(evt serverapi.WorkflowProjectEvent) protocol.WorkflowProjectEventParams {
-	return protocol.WorkflowProjectEventParams{Event: protocol.WorkflowProjectEvent{ProjectID: evt.ProjectID, WorkflowID: evt.WorkflowID, Resource: evt.Resource, Action: evt.Action, ChangedIDs: evt.ChangedIDs, OccurredAtUnixMs: evt.OccurredAtUnixMs}}
+	return protocol.WorkflowProjectEventParams{Event: protocol.WorkflowProjectEvent{
+		ProjectID:        evt.ProjectID,
+		WorkflowID:       evt.WorkflowID,
+		Resource:         protocol.WorkflowProjectEventResource(evt.Resource),
+		Action:           protocol.WorkflowProjectEventAction(evt.Action),
+		PrimaryEntityID:  evt.PrimaryEntityID,
+		RelatedIDs:       append([]string(nil), evt.RelatedIDs...),
+		OccurredAtUnixMs: evt.OccurredAtUnixMs,
+	}}
 }
 
 func worktreeSetupEventParams(evt serverapi.WorktreeSetupEvent) protocol.WorktreeSetupEventParams {

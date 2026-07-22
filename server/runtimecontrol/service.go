@@ -89,12 +89,6 @@ type sessionTextMemoRequest struct {
 	Text      string
 }
 
-type runtimeQueuedMessageMemoRequest struct {
-	SessionID    string
-	Text         string
-	OperationRef clientui.RuntimeOperationRef
-}
-
 type liveSteerMemoRequest struct {
 	SessionID runtimeids.SessionID
 	Text      string
@@ -655,21 +649,24 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 		}
 	}
 	err := s.withRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
-		if interruptActive {
-			if err := engine.Interrupt(); err != nil {
+		for _, ref := range pendingRefs {
+			if ref.Kind != clientui.RuntimeOperationKindQueuedMessage || ref.QueueItemID == nil {
+				continue
+			}
+			if !engine.DiscardQueuedUserMessage(ref.QueueItemID.String()) {
+				continue
+			}
+			if err := s.operations.RecordQueuedMessageStatus(
+				sessionID,
+				ref,
+				clientui.RuntimeInputReconciliationCanceledNotCommitted,
+			); err != nil {
 				return err
 			}
 		}
-		if req.TargetOperationRef != nil &&
-			req.TargetOperationRef.Kind == clientui.RuntimeOperationKindQueuedMessage &&
-			req.TargetOperationRef.QueueItemID != nil {
-			discarded := engine.DiscardQueuedUserMessage(req.TargetOperationRef.QueueItemID.String())
-			if discarded {
-				return s.operations.RecordQueuedMessageStatus(
-					sessionID,
-					*req.TargetOperationRef,
-					clientui.RuntimeInputReconciliationCanceledNotCommitted,
-				)
+		if interruptActive {
+			if err := engine.Interrupt(); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -727,67 +724,6 @@ func (s *Service) interruptInputReconciliation(sessionID string, snapshot runtim
 		return snapshot.InputReconciliation, nil
 	}
 	return s.operations.FeedSnapshot(sessionID, refs)
-}
-
-func (s *Service) QueueUserMessage(ctx context.Context, req serverapi.RuntimeQueueUserMessageRequest) (serverapi.RuntimeQueueUserMessageResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeQueueUserMessageResponse{}, err
-	}
-	memoReq := runtimeQueuedMessageMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Text: req.Text, OperationRef: req.OperationRef}
-	return runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameRuntimeQueuedMessageMemoRequest, func(ctx context.Context, attempt runtimeops.Attempt) (serverapi.RuntimeQueueUserMessageResponse, error) {
-		var resp serverapi.RuntimeQueueUserMessageResponse
-		runCtx, stopRunCtx := mergeOperationContexts(ctx, attempt.Context())
-		defer stopRunCtx()
-		err := s.withRuntime(runCtx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
-			if err := attempt.Context().Err(); err != nil {
-				return err
-			}
-			committed, err := s.operations.TryCommitOperationMutation(memoReq.SessionID, memoReq.OperationRef, func() error {
-				text := memoReq.Text
-				if s != nil && s.promptStore != nil {
-					record, _, err := s.recordPromptHistory(runCtx, memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), memoReq.Text)
-					if err != nil {
-						return err
-					}
-					text = record.Text
-				}
-				item := engine.QueueUserMessageWithClientRequestID(
-					text,
-					strings.TrimSpace(req.ClientRequestID),
-				)
-				queueItemID, err := runtimeids.ParseQueueItemID(item.ID)
-				if err != nil {
-					return fmt.Errorf("parse queued runtime item identity: %w", err)
-				}
-				canonicalRef := memoReq.OperationRef
-				canonicalRef.QueueItemID = &queueItemID
-				if err := s.operations.RecordQueuedMessageStatus(
-					memoReq.SessionID,
-					canonicalRef,
-					clientui.RuntimeInputReconciliationAccepted,
-				); err != nil {
-					return err
-				}
-				resp = serverapi.RuntimeQueueUserMessageResponse{QueueItemID: item.ID, Text: item.Text, ClientRequestID: item.ClientRequestID}
-				return nil
-			})
-			if err != nil {
-				return err
-			}
-			if !committed {
-				return runtimeops.ErrOperationCanceled
-			}
-			return nil
-		})
-		if s.operationAttemptCanceled(err, attempt) {
-			s.operations.RecordCanceledNotCommitted(memoReq.SessionID, memoReq.OperationRef)
-		} else if err != nil {
-			s.operations.RecordQueuedMessageFailed(memoReq.SessionID, memoReq.OperationRef)
-		} else {
-			s.operations.RecordCommitted(memoReq.SessionID, memoReq.OperationRef)
-		}
-		return resp, err
-	})
 }
 
 func (s *Service) DiscardQueuedUserMessage(ctx context.Context, req serverapi.RuntimeDiscardQueuedUserMessageRequest) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
@@ -858,18 +794,17 @@ func (s *Service) workflowTaskSession(ctx context.Context, sessionID string, eng
 }
 
 var (
-	sameSessionTextMemoRequest          = sameComparable[sessionTextMemoRequest]
-	sameRuntimeQueuedMessageMemoRequest = sameComparable[runtimeQueuedMessageMemoRequest]
-	sameLiveSteerMemoRequest            = sameComparable[liveSteerMemoRequest]
-	sameLiveStopMemoRequest             = sameComparable[liveStopMemoRequest]
-	sameQueuedUserMessageMemoRequest    = sameComparable[queuedUserMessageMemoRequest]
-	sameSessionStringMemoRequest        = sameComparable[sessionStringMemoRequest]
-	sameSessionBoolMemoRequest          = sameComparable[sessionBoolMemoRequest]
-	sameSessionCommandMemoRequest       = sameComparable[sessionCommandMemoRequest]
-	sameLocalEntryMemoRequest           = sameComparable[localEntryMemoRequest]
-	sameGoalSetMemoRequest              = sameComparable[goalSetMemoRequest]
-	sameGoalStatusMemoRequest           = sameComparable[goalStatusMemoRequest]
-	sameGoalClearMemoRequest            = sameComparable[goalClearMemoRequest]
+	sameSessionTextMemoRequest       = sameComparable[sessionTextMemoRequest]
+	sameLiveSteerMemoRequest         = sameComparable[liveSteerMemoRequest]
+	sameLiveStopMemoRequest          = sameComparable[liveStopMemoRequest]
+	sameQueuedUserMessageMemoRequest = sameComparable[queuedUserMessageMemoRequest]
+	sameSessionStringMemoRequest     = sameComparable[sessionStringMemoRequest]
+	sameSessionBoolMemoRequest       = sameComparable[sessionBoolMemoRequest]
+	sameSessionCommandMemoRequest    = sameComparable[sessionCommandMemoRequest]
+	sameLocalEntryMemoRequest        = sameComparable[localEntryMemoRequest]
+	sameGoalSetMemoRequest           = sameComparable[goalSetMemoRequest]
+	sameGoalStatusMemoRequest        = sameComparable[goalStatusMemoRequest]
+	sameGoalClearMemoRequest         = sameComparable[goalClearMemoRequest]
 )
 
 func sameComparable[T comparable](a, b T) bool { return a == b }

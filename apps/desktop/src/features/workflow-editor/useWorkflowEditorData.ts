@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import type { WorkflowProjectEvent } from "@/api";
+import { noTaskLabelFilter, type WorkflowProjectEvent } from "@/api";
 import { queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
@@ -49,7 +49,9 @@ export function useWorkflowEditorData(rawProjectID: string, workflowID: string) 
     async function refresh(notify: boolean): Promise<void> {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.projectWorkflowLinks(projectID) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.board(projectID, workflowID) }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.board(projectID, workflowID, noTaskLabelFilter),
+        }),
         queryClient.invalidateQueries({ queryKey: queryKeys.workflowDefinition(workflowID) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.workflowValidation(workflowID, "execution") }),
       ]);
@@ -143,7 +145,7 @@ export function shouldNotifyWorkflowEditorRefresh(
     event.resource === "workflow_link" &&
     event.projectID === projectID &&
     workflowLinkActions.has(event.action) &&
-    (event.workflowID === workflowID || event.changedIDs.includes(workflowID))
+    event.workflowID === workflowID
   ) {
     return event.action !== "unlinked";
   }
@@ -167,7 +169,7 @@ export function shouldRefreshWorkflowLink(
     event.resource === "workflow_link" &&
     event.projectID === projectID &&
     workflowLinkActions.has(event.action) &&
-    (event.workflowID === workflowID || event.changedIDs.includes(workflowID))
+    event.workflowID === workflowID
   );
 }
 

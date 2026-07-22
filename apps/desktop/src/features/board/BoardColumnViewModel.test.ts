@@ -28,6 +28,7 @@ const card: BoardCard = {
     nodeIDs: [],
     runIDs: [],
   },
+  labelIDs: [],
   title: "Task",
   updatedAt: 1,
   workflowID: "workflow-1",
@@ -102,6 +103,7 @@ describe("toKanbanCardVM", () => {
           },
         },
         { attachedWorkspaceCount, defaultWorkspaceID },
+        new Map(),
       );
 
       expect(viewModel.workspaceChipLabel).toBe(expectedWorkspaceChipLabel);
@@ -120,7 +122,27 @@ describe("toKanbanCardVM", () => {
           status: { ...card.status, kind: statusKind },
         },
         { attachedWorkspaceCount: 2, defaultWorkspaceID: "workspace-default" },
+        new Map(),
       ).borderTone,
     ).toBe(borderTone);
+  });
+
+  it("resolves ordered label chips from the Project catalog and omits deleted IDs", () => {
+    const viewModel = toKanbanCardVM(
+      {
+        ...card,
+        labelIDs: ["label-beta", "label-deleted", "label-alpha"],
+      },
+      { attachedWorkspaceCount: 2, defaultWorkspaceID: "workspace-default" },
+      new Map([
+        ["label-alpha", "Alpha"],
+        ["label-beta", "Beta"],
+      ]),
+    );
+
+    expect(viewModel.labels).toEqual([
+      { id: "label-beta", name: "Beta" },
+      { id: "label-alpha", name: "Alpha" },
+    ]);
   });
 });

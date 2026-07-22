@@ -59,6 +59,10 @@ type routePreflightResult struct {
 func (e routePolicyExecutor) preflight(ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) routePreflightResult {
 	params, err := decodeRouteParams(route, req.Params)
 	if err != nil {
+		var structured protocol.StructuredRPCError
+		if errors.As(err, &structured) {
+			return routePreflightResult{resp: responseForError(req.ID, err), failed: true}
+		}
 		return routePreflightResult{resp: protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error()), failed: true}
 	}
 	if err := e.authorizeScope(ctx, state, route, params); err != nil {
@@ -150,7 +154,11 @@ func decodeRouteParams(route rpccontract.Route, raw json.RawMessage) (any, error
 		}
 	}
 	params := ptr.Elem().Interface()
-	if validator, ok := params.(interface{ Validate() error }); ok {
+	if validator, ok := params.(interface{ ValidateRPC() error }); ok {
+		if err := validator.ValidateRPC(); err != nil {
+			return nil, err
+		}
+	} else if validator, ok := params.(interface{ Validate() error }); ok {
 		if err := validator.Validate(); err != nil {
 			return nil, err
 		}
@@ -348,8 +356,6 @@ func routeSessionID(params any) (string, bool) {
 	case serverapi.RuntimeSubmitQueuedUserMessagesRequest:
 		return p.SessionID, true
 	case serverapi.RuntimeInterruptRequest:
-		return p.SessionID, true
-	case serverapi.RuntimeQueueUserMessageRequest:
 		return p.SessionID, true
 	case serverapi.RuntimeLiveSteerRequest:
 		return p.SessionID, true

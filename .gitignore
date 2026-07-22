@@ -50,8 +50,7 @@ cover.out
 go.work.sum
 
 # Rust/Tauri build artifacts
-target/
-**/target/
+target
 
 # Vendored dependencies (enable if vendoring is used)
 # vendor/

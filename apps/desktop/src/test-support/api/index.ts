@@ -67,4 +67,28 @@ export class FakeRpcTransport implements RpcTransport {
       subscriber.handler.onEvent(method, params);
     }
   }
+
+  open(subscriptionMethod: string): void {
+    for (const subscriber of this.#subscribersFor(subscriptionMethod)) {
+      subscriber.handler.onOpen?.();
+    }
+  }
+
+  complete(subscriptionMethod: string, code: number, message: string): void {
+    for (const subscriber of this.#subscribersFor(subscriptionMethod)) {
+      subscriber.handler.onComplete(code, message);
+    }
+  }
+
+  fail(subscriptionMethod: string, error: Error): void {
+    for (const subscriber of this.#subscribersFor(subscriptionMethod)) {
+      subscriber.handler.onError(error);
+    }
+  }
+
+  #subscribersFor(
+    subscriptionMethod: string,
+  ): readonly Readonly<{ method: string; params: JsonValue; handler: RpcEventHandler }>[] {
+    return this.#subscribers.filter((subscriber) => subscriber.method === subscriptionMethod);
+  }
 }

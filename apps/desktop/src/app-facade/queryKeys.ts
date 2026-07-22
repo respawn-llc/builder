@@ -1,4 +1,16 @@
+import type { TaskLabelFilter } from "@/api";
+
 const attentionKey = ["attention"] as const;
+
+function labelFilterKey(filter: TaskLabelFilter): readonly string[] {
+  switch (filter.kind) {
+    case "none":
+    case "unlabeled":
+      return [filter.kind];
+    case "named":
+      return [filter.kind, filter.mode, ...[...filter.labelIDs].sort()];
+  }
+}
 
 export const queryKeys = {
   startup: ["startup"],
@@ -17,10 +29,25 @@ export const queryKeys = {
   allWorkflowGraphLayouts: ["workflow-graph-layout"],
   allProjectWorkflowLinks: ["project-workflow-links"],
   allTasks: ["task"],
+  allTaskLists: ["task-list"],
+  allBoardNodeCards: ["board-node-cards"],
+  allProjectLabels: ["project-labels"],
+  allTaskLabels: ["task-labels"],
   allActivity: ["activity"],
   allComments: ["comments"],
   allPendingAsks: ["pending-asks"],
-  board: (projectID: string, workflowID: string | undefined) => ["board", projectID, workflowID],
+  boardWorkflowRoot: (projectID: string, workflowID: string | undefined) => [
+    "board",
+    projectID,
+    workflowID,
+  ],
+  projectBoardsRoot: (projectID: string) => ["board", projectID],
+  board: (projectID: string, workflowID: string | undefined, labelFilter: TaskLabelFilter) => [
+    "board",
+    projectID,
+    workflowID,
+    ...labelFilterKey(labelFilter),
+  ],
   workflows: (query: string) => ["workflow", query],
   workflowDefinition: (workflowID: string) => ["workflow-definition", workflowID],
   workflowDraftValidation: (
@@ -50,13 +77,28 @@ export const queryKeys = {
     errors,
   ],
   projectWorkflowLinks: (projectID: string) => ["project-workflow-links", projectID],
-  boardNodeCardsRoot: (projectID: string, workflowID: string) => ["board-node-cards", projectID, workflowID],
-  boardNodeCards: (projectID: string, workflowID: string, nodeID: string) => [
+  projectLabels: (projectID: string) => ["project-labels", projectID],
+  taskLabels: (taskID: string) => ["task-labels", taskID],
+  projectBoardNodeCardsRoot: (projectID: string) => ["board-node-cards", projectID],
+  boardNodeCardsWorkflowRoot: (projectID: string, workflowID: string) => [
     "board-node-cards",
     projectID,
     workflowID,
+  ],
+  boardNodeCardsRoot: (projectID: string, workflowID: string, labelFilter: TaskLabelFilter) => [
+    "board-node-cards",
+    projectID,
+    workflowID,
+    ...labelFilterKey(labelFilter),
+  ],
+  boardNodeCards: (projectID: string, workflowID: string, nodeID: string, labelFilter: TaskLabelFilter) => [
+    "board-node-cards",
+    projectID,
+    workflowID,
+    ...labelFilterKey(labelFilter),
     nodeID,
   ],
+  projectTaskListsRoot: (projectID: string) => ["task-list", projectID],
   task: (taskID: string) => ["task", taskID],
   taskAttention: (taskID: string) => ["task-attention", taskID],
   activity: (taskID: string) => ["activity", taskID],

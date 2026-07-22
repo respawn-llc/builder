@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/requestmemo"
 	"core/server/runtime"
+	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowattention"
@@ -41,9 +43,9 @@ func nextWorkflowProjectEvent(t *testing.T, sub serverapi.WorkflowProjectSubscri
 	return event
 }
 
-func waitWorkflowProjectActions(t *testing.T, sub serverapi.WorkflowProjectSubscription, resource string, expected ...string) []serverapi.WorkflowProjectEvent {
+func waitWorkflowProjectActions(t *testing.T, sub serverapi.WorkflowProjectSubscription, resource serverapi.WorkflowProjectEventResource, expected ...serverapi.WorkflowProjectEventAction) []serverapi.WorkflowProjectEvent {
 	t.Helper()
-	remaining := make(map[string]bool, len(expected))
+	remaining := make(map[serverapi.WorkflowProjectEventAction]bool, len(expected))
 	for _, action := range expected {
 		remaining[action] = true
 	}
@@ -207,12 +209,14 @@ func TestServiceListWorkflowTasksValidatesAndDelegates(t *testing.T) {
 	ctx, service, projectID, workflowID, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 
 	blankProjectID := " "
-	if _, err := service.ListWorkflowTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &blankProjectID}); !isWorkflowServiceRequestFieldError(err, "project_id") {
+	if _, err := service.ListWorkflowTasks(ctx, serverapi.WorkflowTaskListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: &blankProjectID}); !isWorkflowServiceRequestFieldError(err, "project_id") {
 		t.Fatalf("blank project error = %#v, want project_id validation", err)
 	}
 	resp, err := service.ListWorkflowTasks(ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID:  &projectID,
-		WorkflowID: &workflowID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		ProjectID:   &projectID,
+		WorkflowID:  &workflowID,
 	})
 	if err != nil {
 		t.Fatalf("ListWorkflowTasks: %v", err)
@@ -331,9 +335,15 @@ func TestServiceCommentMutationsUpdateActivityAndPublishInvalidations(t *testing
 
 func TestServiceAnswersTaskQuestionWithoutControllerLease(t *testing.T) {
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
-	task, _, sessionID := createWorkflowServiceWaitingAsk(t, ctx, service, metadataStore, binding, "Question", "session-task-question", "ask-task-question")
+	task, runID, sessionID := createWorkflowServiceWaitingAsk(t, ctx, service, metadataStore, binding, "Question", "session-task-question", "ask-task-question")
 	responder := &recordingPromptResponder{}
 	service.prompts = responder
+	sub, err := service.SubscribeWorkflowProject(ctx, serverapi.WorkflowProjectSubscribeRequest{ProjectID: task.Task.ProjectID})
+	if err != nil {
+		t.Fatalf("SubscribeWorkflowProject: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+	service.readModels.TaskDetail = unavailableWorkflowTaskDetailReadModel{}
 
 	req := serverapi.WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-question", TaskID: task.Task.ID, AskID: "ask-task-question", FreeformAnswer: "ship it"}
 	if err := service.AnswerWorkflowTaskQuestion(ctx, req); err != nil {
@@ -344,6 +354,17 @@ func TestServiceAnswersTaskQuestionWithoutControllerLease(t *testing.T) {
 	}
 	if responder.response.SelectedOptionNumber != nil {
 		t.Fatalf("selected option = %v, want nil", *responder.response.SelectedOptionNumber)
+	}
+	event := nextWorkflowProjectEvent(t, sub)
+	if event.ProjectID == nil ||
+		*event.ProjectID != task.Task.ProjectID ||
+		event.WorkflowID == nil ||
+		*event.WorkflowID != task.Task.WorkflowID ||
+		event.Resource != serverapi.WorkflowProjectEventResourceTask ||
+		event.Action != serverapi.WorkflowProjectEventActionQuestionAnswered ||
+		event.PrimaryEntityID != task.Task.ID ||
+		!sameStringSet(event.RelatedIDs, []string{runID, responder.response.RequestID}) {
+		t.Fatalf("question answered event = %+v", event)
 	}
 	if err := service.AnswerWorkflowTaskQuestion(ctx, req); err != nil {
 		t.Fatalf("AnswerWorkflowTaskQuestion replay: %v", err)
@@ -770,10 +791,294 @@ func TestServiceTaskCreateMapsRetryableStoreConflict(t *testing.T) {
 	err := workflowTaskCreateError(workflowstore.TaskCreateConflictError{
 		Reason: workflowstore.TaskCreateConflictSerialization,
 		Cause:  errors.New("database locked"),
-	})
+	}, "project-1")
 	var conflictErr *serverapi.WorkflowTaskCreateConflictError
 	if !errors.As(err, &conflictErr) || conflictErr.Reason != serverapi.WorkflowTaskCreateConflictReasonSerialization {
 		t.Fatalf("workflowTaskCreateError = %T %v, want typed serialization conflict", err, err)
+	}
+}
+
+func TestServiceCreatesAndListsProjectLabels(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	sub, err := service.SubscribeWorkflowProject(ctx, serverapi.WorkflowProjectSubscribeRequest{ProjectID: binding.ProjectID})
+	if err != nil {
+		t.Fatalf("SubscribeWorkflowProject: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+
+	created, err := service.CreateWorkflowProjectLabel(ctx, serverapi.WorkflowProjectLabelCreateRequest{
+		ProjectID: binding.ProjectID,
+		Name:      "  Priority  ",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflowProjectLabel: %v", err)
+	}
+	if created.Label.ID == "" || created.Label.Name != "Priority" {
+		t.Fatalf("created label = %+v", created.Label)
+	}
+
+	listed, err := service.ListWorkflowProjectLabels(ctx, serverapi.WorkflowProjectLabelCatalogRequest{ProjectID: binding.ProjectID})
+	if err != nil {
+		t.Fatalf("ListWorkflowProjectLabels: %v", err)
+	}
+	if listed.Catalog.ProjectID != binding.ProjectID || !reflect.DeepEqual(listed.Catalog.Labels, []serverapi.WorkflowProjectLabel{created.Label}) {
+		t.Fatalf("catalog = %+v, want created label", listed.Catalog)
+	}
+
+	event := nextWorkflowProjectEvent(t, sub)
+	if !stringPointerEquals(event.ProjectID, binding.ProjectID) ||
+		event.WorkflowID != nil ||
+		event.Resource != serverapi.WorkflowProjectEventResourceLabel ||
+		event.Action != serverapi.WorkflowProjectEventActionCreated ||
+		event.PrimaryEntityID != created.Label.ID ||
+		len(event.RelatedIDs) != 0 {
+		t.Fatalf("event = %+v, want project-scoped label created event", event)
+	}
+}
+
+func TestServiceRenamesAndDeletesProjectLabels(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	created, err := service.CreateWorkflowProjectLabel(ctx, serverapi.WorkflowProjectLabelCreateRequest{
+		ProjectID: binding.ProjectID,
+		Name:      "Priority",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflowProjectLabel: %v", err)
+	}
+	sub, err := service.SubscribeWorkflowProject(ctx, serverapi.WorkflowProjectSubscribeRequest{ProjectID: binding.ProjectID})
+	if err != nil {
+		t.Fatalf("SubscribeWorkflowProject: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+
+	renamed, err := service.RenameWorkflowProjectLabel(ctx, serverapi.WorkflowProjectLabelRenameRequest{
+		ProjectID: binding.ProjectID,
+		LabelID:   created.Label.ID,
+		Name:      "Urgent",
+	})
+	if err != nil {
+		t.Fatalf("RenameWorkflowProjectLabel: %v", err)
+	}
+	if renamed.Label.ID != created.Label.ID || renamed.Label.Name != "Urgent" {
+		t.Fatalf("renamed label = %+v", renamed.Label)
+	}
+	renameEvent := nextWorkflowProjectEvent(t, sub)
+	if renameEvent.Action != serverapi.WorkflowProjectEventActionRenamed ||
+		renameEvent.PrimaryEntityID != created.Label.ID ||
+		!stringPointerEquals(renameEvent.ProjectID, binding.ProjectID) ||
+		renameEvent.WorkflowID != nil {
+		t.Fatalf("rename event = %+v", renameEvent)
+	}
+
+	deleted, err := service.DeleteWorkflowProjectLabel(ctx, serverapi.WorkflowProjectLabelDeleteRequest{
+		ProjectID: binding.ProjectID,
+		LabelID:   created.Label.ID,
+	})
+	if err != nil {
+		t.Fatalf("DeleteWorkflowProjectLabel: %v", err)
+	}
+	if deleted.LabelID != created.Label.ID {
+		t.Fatalf("deleted response = %+v", deleted)
+	}
+	deleteEvent := nextWorkflowProjectEvent(t, sub)
+	if deleteEvent.Action != serverapi.WorkflowProjectEventActionDeleted ||
+		deleteEvent.PrimaryEntityID != created.Label.ID ||
+		!stringPointerEquals(deleteEvent.ProjectID, binding.ProjectID) ||
+		deleteEvent.WorkflowID != nil {
+		t.Fatalf("delete event = %+v", deleteEvent)
+	}
+}
+
+func TestServiceGetsAndUpdatesTaskLabels(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	zulu, err := service.CreateWorkflowProjectLabel(ctx, serverapi.WorkflowProjectLabelCreateRequest{ProjectID: binding.ProjectID, Name: "Zulu"})
+	if err != nil {
+		t.Fatalf("CreateWorkflowProjectLabel Zulu: %v", err)
+	}
+	alpha, err := service.CreateWorkflowProjectLabel(ctx, serverapi.WorkflowProjectLabelCreateRequest{ProjectID: binding.ProjectID, Name: "alpha"})
+	if err != nil {
+		t.Fatalf("CreateWorkflowProjectLabel alpha: %v", err)
+	}
+	sub, err := service.SubscribeWorkflowProject(ctx, serverapi.WorkflowProjectSubscribeRequest{ProjectID: binding.ProjectID})
+	if err != nil {
+		t.Fatalf("SubscribeWorkflowProject: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+
+	empty, err := service.GetWorkflowTaskLabels(ctx, serverapi.WorkflowTaskLabelsGetRequest{TaskID: task.Task.ID})
+	if err != nil {
+		t.Fatalf("GetWorkflowTaskLabels empty: %v", err)
+	}
+	if empty.Assignment.TaskID != task.Task.ID || len(empty.Assignment.LabelIDs) != 0 {
+		t.Fatalf("empty assignment = %+v", empty.Assignment)
+	}
+
+	updated, err := service.UpdateWorkflowTaskLabels(ctx, serverapi.WorkflowTaskLabelsUpdateRequest{
+		TaskID:      task.Task.ID,
+		AddLabelIDs: []string{zulu.Label.ID, alpha.Label.ID},
+	})
+	if err != nil {
+		t.Fatalf("UpdateWorkflowTaskLabels: %v", err)
+	}
+	if !reflect.DeepEqual(updated.Assignment.LabelIDs, []string{alpha.Label.ID, zulu.Label.ID}) {
+		t.Fatalf("updated assignment = %+v, want alphabetical IDs", updated.Assignment)
+	}
+	event := nextWorkflowProjectEvent(t, sub)
+	if !stringPointerEquals(event.ProjectID, binding.ProjectID) ||
+		!stringPointerEquals(event.WorkflowID, workflowID) ||
+		event.Resource != serverapi.WorkflowProjectEventResourceTask ||
+		event.Action != serverapi.WorkflowProjectEventActionLabelsChanged ||
+		event.PrimaryEntityID != task.Task.ID ||
+		len(event.RelatedIDs) != 0 {
+		t.Fatalf("event = %+v, want task labels-changed event", event)
+	}
+
+	reloaded, err := service.GetWorkflowTaskLabels(ctx, serverapi.WorkflowTaskLabelsGetRequest{TaskID: task.Task.ID})
+	if err != nil {
+		t.Fatalf("GetWorkflowTaskLabels reloaded: %v", err)
+	}
+	if reloaded.Assignment.TaskID != updated.Assignment.TaskID ||
+		!reflect.DeepEqual(reloaded.Assignment.LabelIDs, updated.Assignment.LabelIDs) {
+		t.Fatalf("reloaded assignment = %+v, want %+v", reloaded, updated)
+	}
+}
+
+func TestServiceCreatesWorkflowTaskWithAtomicLabels(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	projectLabel, err := service.CreateWorkflowProjectLabel(ctx, serverapi.WorkflowProjectLabelCreateRequest{
+		ProjectID: binding.ProjectID,
+		Name:      "Priority",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflowProjectLabel: %v", err)
+	}
+
+	created, err := service.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Labeled task",
+		LabelIDs:  []string{projectLabel.Label.ID},
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflowTask: %v", err)
+	}
+	assignment, err := service.GetWorkflowTaskLabels(ctx, serverapi.WorkflowTaskLabelsGetRequest{TaskID: created.Task.ID})
+	if err != nil {
+		t.Fatalf("GetWorkflowTaskLabels: %v", err)
+	}
+	if !reflect.DeepEqual(assignment.Assignment.LabelIDs, []string{projectLabel.Label.ID}) {
+		t.Fatalf("assignment = %+v, want created label", assignment.Assignment)
+	}
+}
+
+func TestServiceMapsWorkflowLabelFailures(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	created, err := service.CreateWorkflowProjectLabel(ctx, serverapi.WorkflowProjectLabelCreateRequest{
+		ProjectID: binding.ProjectID,
+		Name:      "Priority",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflowProjectLabel: %v", err)
+	}
+	if _, err := service.CreateWorkflowProjectLabel(ctx, serverapi.WorkflowProjectLabelCreateRequest{
+		ProjectID: binding.ProjectID,
+		Name:      "priority",
+	}); !workflowLabelErrorHasReason(err, serverapi.WorkflowLabelErrorReasonNameConflict) {
+		t.Fatalf("duplicate create error = %T %v", err, err)
+	}
+	if _, err := service.RenameWorkflowProjectLabel(ctx, serverapi.WorkflowProjectLabelRenameRequest{
+		ProjectID: binding.ProjectID,
+		LabelID:   created.Label.ID,
+		Name:      "invalid\tname",
+	}); !workflowLabelErrorHasReason(err, serverapi.WorkflowLabelErrorReasonInvalidName) {
+		t.Fatalf("invalid rename error = %T %v", err, err)
+	}
+	if _, err := service.ListWorkflowProjectLabels(ctx, serverapi.WorkflowProjectLabelCatalogRequest{
+		ProjectID: "project-missing",
+	}); !workflowLabelErrorHasReason(err, serverapi.WorkflowLabelErrorReasonProjectNotFound) {
+		t.Fatalf("missing project error = %T %v", err, err)
+	}
+	if _, err := service.DeleteWorkflowProjectLabel(ctx, serverapi.WorkflowProjectLabelDeleteRequest{
+		ProjectID: binding.ProjectID,
+		LabelID:   "11111111-1111-4111-8111-111111111111",
+	}); !workflowLabelErrorHasReason(err, serverapi.WorkflowLabelErrorReasonLabelNotFound) {
+		t.Fatalf("missing label error = %T %v", err, err)
+	}
+	if _, err := service.GetWorkflowTaskLabels(ctx, serverapi.WorkflowTaskLabelsGetRequest{
+		TaskID: "task-missing",
+	}); !workflowLabelErrorHasReason(err, serverapi.WorkflowLabelErrorReasonTaskNotFound) {
+		t.Fatalf("missing task error = %T %v", err, err)
+	}
+	for index := 1; index < serverapi.WorkflowLabelMaxIDs; index++ {
+		if _, err := service.CreateWorkflowProjectLabel(ctx, serverapi.WorkflowProjectLabelCreateRequest{
+			ProjectID: binding.ProjectID,
+			Name:      fmt.Sprintf("Label %03d", index),
+		}); err != nil {
+			t.Fatalf("CreateWorkflowProjectLabel %d: %v", index, err)
+		}
+	}
+	if _, err := service.CreateWorkflowProjectLabel(ctx, serverapi.WorkflowProjectLabelCreateRequest{
+		ProjectID: binding.ProjectID,
+		Name:      "Overflow",
+	}); !workflowLabelErrorHasReason(err, serverapi.WorkflowLabelErrorReasonCatalogLimit) {
+		t.Fatalf("catalog limit error = %T %v", err, err)
+	}
+}
+
+func TestServiceMapsWorkflowTaskLabelScopeFailures(t *testing.T) {
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	other, err := metadataStore.CreateProjectForWorkspace(ctx, t.TempDir(), "Other")
+	if err != nil {
+		t.Fatalf("CreateProjectForWorkspace other: %v", err)
+	}
+	foreign, err := service.CreateWorkflowProjectLabel(ctx, serverapi.WorkflowProjectLabelCreateRequest{
+		ProjectID: other.ProjectID,
+		Name:      "Foreign",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflowProjectLabel foreign: %v", err)
+	}
+
+	if _, err := service.UpdateWorkflowTaskLabels(ctx, serverapi.WorkflowTaskLabelsUpdateRequest{
+		TaskID:      task.Task.ID,
+		AddLabelIDs: []string{"11111111-1111-4111-8111-111111111111"},
+	}); !workflowLabelErrorHasReason(err, serverapi.WorkflowLabelErrorReasonLabelNotFound) {
+		t.Fatalf("missing label error = %T %v", err, err)
+	}
+	if _, err := service.UpdateWorkflowTaskLabels(ctx, serverapi.WorkflowTaskLabelsUpdateRequest{
+		TaskID:      task.Task.ID,
+		AddLabelIDs: []string{foreign.Label.ID},
+	}); !workflowLabelErrorHasReason(err, serverapi.WorkflowLabelErrorReasonWrongProject) {
+		t.Fatalf("wrong project error = %T %v", err, err)
+	}
+	if _, err := service.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Foreign label",
+		LabelIDs:  []string{foreign.Label.ID},
+	}); !workflowLabelErrorHasReason(err, serverapi.WorkflowLabelErrorReasonWrongProject) {
+		t.Fatalf("labeled task create wrong project error = %T %v", err, err)
+	}
+	raw101 := make([]string, serverapi.WorkflowLabelMaxIDs+1)
+	for index := range raw101 {
+		raw101[index] = "not-a-uuid"
+	}
+	_, err = service.UpdateWorkflowTaskLabels(ctx, serverapi.WorkflowTaskLabelsUpdateRequest{
+		TaskID:      task.Task.ID,
+		AddLabelIDs: raw101,
+	})
+	var mutationErr *serverapi.WorkflowLabelError
+	if !errors.As(err, &mutationErr) ||
+		mutationErr.Reason != serverapi.WorkflowLabelErrorReasonInvalidMutation ||
+		mutationErr.Field == nil ||
+		*mutationErr.Field != "add_label_ids" {
+		t.Fatalf("invalid mutation error = %T %+v", err, err)
 	}
 }
 
@@ -875,7 +1180,7 @@ func TestServiceCompleteWorkflowTaskFromAgentSessionCompletesWithoutSchedulerWak
 		t.Fatalf("attention finalizer results = %+v", finalizer.results)
 	}
 	event := nextWorkflowProjectEvent(t, sub)
-	if event.ProjectID != binding.ProjectID || event.WorkflowID != workflowID || event.Resource != "task" || event.Action != "completed" {
+	if !stringPointerEquals(event.ProjectID, binding.ProjectID) || !stringPointerEquals(event.WorkflowID, workflowID) || event.Resource != "task" || event.Action != "completed" {
 		t.Fatalf("completion event = %+v, want single store-owned task completed event", event)
 	}
 	noEventCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
@@ -1488,7 +1793,7 @@ func TestServiceDeleteTaskCancelsRuntimeAndPublishesEvent(t *testing.T) {
 		t.Fatalf("worktree cleanup tasks = %+v", worktreeCleanup.taskIDs)
 	}
 	event := nextWorkflowProjectEvent(t, sub)
-	if event.ProjectID != projectID || event.WorkflowID != workflowID || event.Resource != "task" || event.Action != "deleted" || !sameStringSet(event.ChangedIDs, []string{taskID}) {
+	if !stringPointerEquals(event.ProjectID, projectID) || !stringPointerEquals(event.WorkflowID, workflowID) || event.Resource != "task" || event.Action != "deleted" || event.PrimaryEntityID != taskID || len(event.RelatedIDs) != 0 {
 		t.Fatalf("delete event = %+v, want task deleted event", event)
 	}
 	if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: taskID}); err == nil {
@@ -1647,10 +1952,11 @@ func TestServiceDeleteWorkflowResolvesInterruptedRunAttentionAcrossProjects(t *t
 		if err != nil {
 			t.Fatalf("CompleteRun: %v", err)
 		}
-		if completed.State != "pending_approval" {
+		result := completed.Result
+		if result.State != "pending_approval" {
 			t.Fatalf("completion = %+v, want pending approval", completed)
 		}
-		return completed.TransitionID, task.Task.ID
+		return result.TransitionID, task.Task.ID
 	}
 
 	firstRunID, firstInterruptedTaskID := interrupt(firstProject.ProjectID)
@@ -1982,6 +2288,20 @@ func (r *recordingPromptResponder) SubmitPromptResponse(sessionID string, resp a
 	return nil
 }
 
+type unavailableWorkflowTaskDetailReadModel struct{}
+
+func (unavailableWorkflowTaskDetailReadModel) GetTask(context.Context, string) (serverapi.WorkflowTaskDetail, error) {
+	return serverapi.WorkflowTaskDetail{}, errors.New("task detail unavailable")
+}
+
+func (unavailableWorkflowTaskDetailReadModel) GetTaskByProjectShortID(context.Context, string, string) (serverapi.WorkflowTaskDetail, error) {
+	return serverapi.WorkflowTaskDetail{}, errors.New("task detail unavailable")
+}
+
+func (unavailableWorkflowTaskDetailReadModel) GetTaskByShortID(context.Context, string) (serverapi.WorkflowTaskDetail, error) {
+	return serverapi.WorkflowTaskDetail{}, errors.New("task detail unavailable")
+}
+
 func TestServiceWorkflowListPaginatesAndCreateLinkIsAtomic(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	for _, name := range []string{"Gamma", "Alpha", "Beta"} {
@@ -2106,7 +2426,7 @@ func TestServiceWorkflowUnlinkRejectsTaskReferencesAndHardDeletesUnusedLinks(t *
 	}
 	events := waitWorkflowProjectActions(t, sub, "workflow_link", "unlinked")
 	unlinkEvent := events[len(events)-1]
-	if unlinkEvent.ProjectID != binding.ProjectID || unlinkEvent.WorkflowID != unusedWorkflowID {
+	if !stringPointerEquals(unlinkEvent.ProjectID, binding.ProjectID) || !stringPointerEquals(unlinkEvent.WorkflowID, unusedWorkflowID) {
 		t.Fatalf("unlink event = %+v, want project/workflow identity", unlinkEvent)
 	}
 }
@@ -2154,7 +2474,7 @@ func TestServiceWorkflowDeletePreviewsBlocksAndPublishesDeletion(t *testing.T) {
 		t.Fatalf("confirmed delete = %+v, want deleted without blockers", deleted)
 	}
 	event := nextWorkflowProjectEvent(t, sub)
-	if event.ProjectID != projectID || event.WorkflowID != workflowID || event.Resource != "workflow" || event.Action != "deleted" || !sameStringSet(event.ChangedIDs, []string{workflowID}) {
+	if !stringPointerEquals(event.ProjectID, projectID) || !stringPointerEquals(event.WorkflowID, workflowID) || event.Resource != "workflow" || event.Action != "deleted" || event.PrimaryEntityID != workflowID || len(event.RelatedIDs) != 0 {
 		t.Fatalf("event = %+v, want workflow deleted event", event)
 	}
 	eventCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -2163,7 +2483,7 @@ func TestServiceWorkflowDeletePreviewsBlocksAndPublishesDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workflow subscription delete next: %v", err)
 	}
-	if workflowEvent.ProjectID != "" || workflowEvent.WorkflowID != workflowID || workflowEvent.Resource != "workflow" || workflowEvent.Action != "deleted" || !sameStringSet(workflowEvent.ChangedIDs, []string{workflowID}) {
+	if workflowEvent.ProjectID != nil || !stringPointerEquals(workflowEvent.WorkflowID, workflowID) || workflowEvent.Resource != "workflow" || workflowEvent.Action != "deleted" || workflowEvent.PrimaryEntityID != workflowID || len(workflowEvent.RelatedIDs) != 0 {
 		t.Fatalf("workflow-scoped delete event = %+v, want projectless workflow delete event", workflowEvent)
 	}
 	if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: taskID}); err == nil {
@@ -2289,7 +2609,7 @@ func TestServiceWorkflowGraphValidatePreviewAndSave(t *testing.T) {
 		t.Fatalf("saved response transition description = %q, want edited transition description", workflowServiceTransitionGroupByID(t, *saved.Definition, "group-start-"+workflowID).Description)
 	}
 	for _, event := range waitWorkflowProjectActions(t, sub, "workflow", "graph_saved") {
-		if event.ProjectID != binding.ProjectID || event.WorkflowID != workflowID {
+		if !stringPointerEquals(event.ProjectID, binding.ProjectID) || !stringPointerEquals(event.WorkflowID, workflowID) {
 			t.Fatalf("event = %+v, want linked workflow event", event)
 		}
 	}
@@ -2299,7 +2619,7 @@ func TestServiceWorkflowGraphValidatePreviewAndSave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workflow subscription next: %v", err)
 	}
-	if workflowEvent.ProjectID != "" || workflowEvent.WorkflowID != workflowID || workflowEvent.Resource != "workflow" || workflowEvent.Action != "graph_saved" {
+	if workflowEvent.ProjectID != nil || !stringPointerEquals(workflowEvent.WorkflowID, workflowID) || workflowEvent.Resource != "workflow" || workflowEvent.Action != "graph_saved" {
 		t.Fatalf("workflow-scoped event = %+v, want graph_saved workflow event without project scope", workflowEvent)
 	}
 	canonical, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
@@ -2403,10 +2723,11 @@ func newWorkflowServicePendingCompletionApproval(t *testing.T) (context.Context,
 	if err != nil {
 		t.Fatalf("CompleteRun: %v", err)
 	}
-	if completed.State != "pending_approval" {
+	result := completed.Result
+	if result.State != "pending_approval" {
 		t.Fatalf("completion = %+v, want pending approval", completed)
 	}
-	return ctx, service, projectID, workflowID, taskID, string(completed.TransitionID)
+	return ctx, service, projectID, workflowID, taskID, string(result.TransitionID)
 }
 
 func requireWorkflowServiceEdgeApproval(t *testing.T, ctx context.Context, service *Service, workflowID, edgeKey string) {
@@ -2544,7 +2865,7 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskList: %v", err)
 	}
-	taskDetail, err := workflowview.NewTaskDetail(metadataStore, definitions, projector, worktree.NewGitInspector(nil))
+	taskDetail, err := workflowview.NewTaskDetail(metadataStore, projector, sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskDetail: %v", err)
 	}
@@ -2552,7 +2873,7 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewActivity: %v", err)
 	}
-	attention, err := workflowview.NewAttention(metadataStore, definitions, resolver, transcripts, prompts)
+	attention, err := workflowview.NewAttention(metadataStore, definitions, projector, resolver, transcripts, prompts)
 	if err != nil {
 		t.Fatalf("workflowview.NewAttention: %v", err)
 	}
@@ -2568,6 +2889,15 @@ func newWorkflowServiceReadModels(
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+func stringPointerEquals(value *string, expected string) bool {
+	return value != nil && *value == expected
+}
+
+func workflowLabelErrorHasReason(err error, reason serverapi.WorkflowLabelErrorReason) bool {
+	var labelErr *serverapi.WorkflowLabelError
+	return errors.As(err, &labelErr) && labelErr.Reason == reason
 }
 
 func linkWorkflowServiceProject(t *testing.T, ctx context.Context, service *Service, req serverapi.WorkflowLinkProjectRequest) serverapi.WorkflowLinkProjectResponse {

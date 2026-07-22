@@ -22,6 +22,7 @@ export type KanbanCardVM = Readonly<{
   activeNodeIDs: readonly string[];
   statusKind: TaskStatusKind;
   statusRunIDs: readonly string[];
+  labels: readonly KanbanCardLabelVM[];
   workspaceChipLabel: string | null;
   borderTone: BoardCardBorderTone;
   actions: Readonly<{
@@ -30,6 +31,11 @@ export type KanbanCardVM = Readonly<{
     canStart: boolean;
     manualMoveTargetNodeIDs: readonly string[];
   }>;
+}>;
+
+export type KanbanCardLabelVM = Readonly<{
+  id: string;
+  name: string;
 }>;
 
 export type BoardWorkspaceContext = Readonly<{
@@ -56,7 +62,11 @@ export function toKanbanColumnVM(column: BoardColumn): KanbanColumnVM {
   };
 }
 
-export function toKanbanCardVM(card: BoardCard, workspaceContext: BoardWorkspaceContext): KanbanCardVM {
+export function toKanbanCardVM(
+  card: BoardCard,
+  workspaceContext: BoardWorkspaceContext,
+  labelNamesByID: ReadonlyMap<string, string>,
+): KanbanCardVM {
   return {
     id: card.id,
     shortID: card.shortID,
@@ -66,6 +76,7 @@ export function toKanbanCardVM(card: BoardCard, workspaceContext: BoardWorkspace
     activeNodeIDs: card.activeNodeIDs,
     statusKind: card.status.kind,
     statusRunIDs: card.status.runIDs,
+    labels: cardLabels(card.labelIDs, labelNamesByID),
     workspaceChipLabel: workspaceChipLabel(card, workspaceContext),
     borderTone: boardCardBorderTone(card.status.kind),
     actions: {
@@ -75,6 +86,20 @@ export function toKanbanCardVM(card: BoardCard, workspaceContext: BoardWorkspace
       manualMoveTargetNodeIDs: card.actions.manualMoveTargetNodeIDs,
     },
   };
+}
+
+function cardLabels(
+  labelIDs: readonly string[],
+  labelNamesByID: ReadonlyMap<string, string>,
+): readonly KanbanCardLabelVM[] {
+  const labels: KanbanCardLabelVM[] = [];
+  for (const labelID of labelIDs) {
+    const name = labelNamesByID.get(labelID);
+    if (name !== undefined) {
+      labels.push({ id: labelID, name });
+    }
+  }
+  return labels;
 }
 
 function workspaceChipLabel(card: BoardCard, context: BoardWorkspaceContext): string | null {

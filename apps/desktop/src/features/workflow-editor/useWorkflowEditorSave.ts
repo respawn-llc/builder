@@ -2,8 +2,12 @@ import { useCallback, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
-import type { WorkflowGraphSavePreview, WorkflowGraphValidationResults } from "@/api";
-import { errorMessage } from "@/api";
+import {
+  errorMessage,
+  noTaskLabelFilter,
+  type WorkflowGraphSavePreview,
+  type WorkflowGraphValidationResults,
+} from "@/api";
 import { queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import {
@@ -82,7 +86,9 @@ export function useWorkflowEditorSave(
         data.validationQuery.refetch(),
         queryClient.invalidateQueries({ queryKey: queryKeys.allWorkflows }),
         data.projectContext
-          ? queryClient.invalidateQueries({ queryKey: queryKeys.board(projectID, workflowID) })
+          ? queryClient.invalidateQueries({
+              queryKey: queryKeys.board(projectID, workflowID, noTaskLabelFilter),
+            })
           : Promise.resolve(),
       ]);
     },

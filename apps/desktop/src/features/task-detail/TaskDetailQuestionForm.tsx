@@ -1,9 +1,10 @@
 import { type ReactNode, useId } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { ApprovalDecision, AttentionItem, PendingAsk } from "@/api";
+import { errorMessage, type ApprovalDecision, type AttentionItem, type PendingAsk } from "@/api";
+import type { QuestionAnswerInput } from "@/api";
 import { useOpenExternalLink } from "@/app-facade";
-import { Button, Island, MarkdownText, RadioGroup, RadioGroupItem } from "@/ui";
+import { Button, Island, MarkdownText, RadioGroup, RadioGroupItem, showStatusToast } from "@/ui";
 import { cx, fieldInputClassName } from "@/ui";
 import { emptyQuestionSelection, type QuestionSelectionState } from "./TaskDetailQuestionState";
 import { usePendingAsks, type useTaskMutations } from "./useTaskDetailData";
@@ -131,7 +132,7 @@ function OrdinaryQuestionForm({
   // A real option can submit on its own; otherwise any typed freeform answer is
   // submittable, including freeform-only asks where no option is selected.
   const canSubmit = (selectedOption !== null && selectedOption > 0) || answer.trim().length > 0;
-  const interactionDisabled = disabled || answerQuestion.isPending || selection.submitted;
+  const interactionDisabled = disabled || answerQuestion.isPending || selection.submission !== "idle";
   const selectedNeither = selection.userSelected && selectedOption === null;
   const radioValue = selectedNeither
     ? neitherRadioValue
@@ -140,22 +141,21 @@ function OrdinaryQuestionForm({
       : suggestionRadioValue(selectedOption);
 
   async function submit(): Promise<void> {
-    await answerQuestion.mutateAsync({
-      kind: "ordinary",
-      clientRequestID: questionClientRequestID(attention.askID),
-      taskID: taskId,
-      runID: attention.runID,
-      askID: attention.askID,
-      selectedOptionNumber: selectedOption,
-      freeformAnswer: answer,
-    });
-    onSelectionStateChange({
-      answer: "",
-      approvalDecision: null,
-      askID: attention.askID,
-      selectedOption: null,
-      submitted: true,
-      userSelected: true,
+    await submitQuestionAnswer({
+      answerQuestion,
+      attention,
+      failureTitle: t("states.error"),
+      input: (clientRequestID) => ({
+        kind: "ordinary",
+        clientRequestID,
+        taskID: taskId,
+        runID: attention.runID,
+        askID: attention.askID,
+        selectedOptionNumber: selectedOption,
+        freeformAnswer: answer,
+      }),
+      onSelectionStateChange,
+      selection,
     });
   }
 
@@ -170,8 +170,9 @@ function OrdinaryQuestionForm({
           answer: nextAnswer,
           approvalDecision: null,
           askID: attention.askID,
+          clientRequestID: null,
           selectedOption,
-          submitted: false,
+          submission: "idle",
           userSelected: selection.userSelected,
         });
       }}
@@ -180,8 +181,9 @@ function OrdinaryQuestionForm({
           answer,
           approvalDecision: null,
           askID: attention.askID,
+          clientRequestID: null,
           selectedOption: selectedOptionFromRadioValue(value, suggestions),
-          submitted: false,
+          submission: "idle",
           userSelected: true,
         });
       }}
@@ -211,6 +213,7 @@ function OrdinaryQuestionForm({
       }
       question={question}
       radioValue={radioValue}
+      submitting={selection.submission === "submitting"}
     />
   );
 }
@@ -258,28 +261,27 @@ function ApprovalQuestionForm({
   const answer = selection.answer;
   const answerID = useId();
   const canSubmit = selectedDecision !== null && (selectedDecision !== "deny" || answer.trim().length > 0);
-  const interactionDisabled = disabled || answerQuestion.isPending || selection.submitted;
+  const interactionDisabled = disabled || answerQuestion.isPending || selection.submission !== "idle";
 
   async function submit(): Promise<void> {
     if (selectedDecision === null) {
       return;
     }
-    await answerQuestion.mutateAsync({
-      kind: "approval",
-      clientRequestID: questionClientRequestID(attention.askID),
-      taskID: taskId,
-      runID: attention.runID,
-      askID: attention.askID,
-      decision: selectedDecision,
-      commentary: answer,
-    });
-    onSelectionStateChange({
-      answer: "",
-      approvalDecision: null,
-      askID: attention.askID,
-      selectedOption: null,
-      submitted: true,
-      userSelected: true,
+    await submitQuestionAnswer({
+      answerQuestion,
+      attention,
+      failureTitle: t("states.error"),
+      input: (clientRequestID) => ({
+        kind: "approval",
+        clientRequestID,
+        taskID: taskId,
+        runID: attention.runID,
+        askID: attention.askID,
+        decision: selectedDecision,
+        commentary: answer,
+      }),
+      onSelectionStateChange,
+      selection,
     });
   }
 
@@ -294,8 +296,9 @@ function ApprovalQuestionForm({
           answer: nextAnswer,
           approvalDecision: selectedDecision,
           askID: attention.askID,
+          clientRequestID: null,
           selectedOption: null,
-          submitted: false,
+          submission: "idle",
           userSelected: selection.userSelected,
         });
       }}
@@ -304,8 +307,9 @@ function ApprovalQuestionForm({
           answer,
           approvalDecision: approvalDecisionForValue(approvalDecisions, value),
           askID: attention.askID,
+          clientRequestID: null,
           selectedOption: null,
-          submitted: false,
+          submission: "idle",
           userSelected: true,
         });
       }}
@@ -322,6 +326,7 @@ function ApprovalQuestionForm({
       ))}
       question={question}
       radioValue={selectedDecision ?? ""}
+      submitting={selection.submission === "submitting"}
     />
   );
 }
@@ -337,6 +342,7 @@ function QuestionFormFrame({
   optionGroup,
   question,
   radioValue,
+  submitting,
 }: Readonly<{
   answer: string;
   answerID: string;
@@ -348,6 +354,7 @@ function QuestionFormFrame({
   optionGroup?: ReactNode;
   question: string | undefined;
   radioValue: string;
+  submitting: boolean;
 }>) {
   const { t } = useTranslation();
   const openLink = useOpenExternalLink();
@@ -392,8 +399,8 @@ function QuestionFormFrame({
         rows={3}
         value={answer}
       />
-      <Button disabled={submitDisabled} type="submit" variant="primary">
-        {t("task.submitAnswer")}
+      <Button aria-busy={submitting} disabled={submitDisabled} type="submit" variant="primary">
+        {submitting ? t("task.submittingAnswer") : t("task.submitAnswer")}
       </Button>
     </form>
   );
@@ -475,6 +482,38 @@ function taskQuestionView(
 
 function questionClientRequestID(askID: string): string {
   return `gui-question-${askID}-${Date.now().toString()}`;
+}
+
+async function submitQuestionAnswer({
+  answerQuestion,
+  attention,
+  failureTitle,
+  input,
+  onSelectionStateChange,
+  selection,
+}: Readonly<{
+  answerQuestion: ReturnType<typeof useTaskMutations>["answerQuestion"];
+  attention: AttentionItem;
+  failureTitle: string;
+  input: (clientRequestID: string) => QuestionAnswerInput;
+  onSelectionStateChange: (selection: QuestionSelectionState) => void;
+  selection: QuestionSelectionState;
+}>): Promise<void> {
+  const clientRequestID = selection.clientRequestID ?? questionClientRequestID(attention.askID);
+  const submittingSelection = { ...selection, clientRequestID, submission: "submitting" as const };
+  onSelectionStateChange(submittingSelection);
+  try {
+    await answerQuestion.mutateAsync(input(clientRequestID));
+    onSelectionStateChange({ ...submittingSelection, submission: "accepted" });
+  } catch (error: unknown) {
+    onSelectionStateChange({ ...submittingSelection, submission: "idle" });
+    showStatusToast({
+      body: errorMessage(error),
+      id: `task-question-answer-failed:${attention.askID}`,
+      title: failureTitle,
+      tone: "danger",
+    });
+  }
 }
 
 function selectionForAsk(selection: QuestionSelectionState, askID: string): QuestionSelectionState {

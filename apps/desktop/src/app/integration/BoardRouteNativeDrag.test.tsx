@@ -6,6 +6,7 @@ import type { JsonValue } from "@/api";
 import { App } from "../startup/App";
 import { createTestServices, startupRoutes } from "@/test-support/app-services";
 import {
+  createBoardDragEvent,
   dispatchBoardDrag,
   FakeAnimationFrames,
   setScrollportGeometry,
@@ -66,6 +67,37 @@ describe("BoardRoute native drag lifecycle", () => {
       expect(calls[0]).toMatchObject({
         method: "workflow.task.move",
         params: { task_id: "task-1", target_node_id: "recon" },
+      });
+    });
+  });
+
+  it("starts an existing Backlog task even when the workflow cannot create another task", async () => {
+    const services = boardTestServices(
+      () => true,
+      false,
+      {
+        ...sourceCard,
+        actions: {
+          ...sourceCard.actions,
+          can_start: true,
+          manual_move_target_node_ids: [],
+        },
+      },
+    );
+    render(<App services={services} />);
+    const source = await screen.findByRole("article", { name: "Drag source" });
+    const recon = screen.getByRole("listitem", { name: "Recon" });
+    const dataTransfer = new TestDataTransfer();
+
+    fireEvent.dragStart(source, { dataTransfer });
+    fireEvent.drop(recon, { dataTransfer });
+
+    await waitFor(() => {
+      const calls = taskActionCalls(services.transport.calls);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        method: "workflow.task.start",
+        params: { task_id: "task-1" },
       });
     });
   });
@@ -240,12 +272,6 @@ describe("BoardRoute native drag lifecycle", () => {
         fireEvent.dragEnd(document, { dataTransfer });
       },
     ],
-    [
-      "window blur",
-      () => {
-        fireEvent(window, new Event("blur"));
-      },
-    ],
   ] as const)("clears active drag without a task action after %s", async (_reason, terminate) => {
     const view = await renderActiveBoard(frames);
     setScrollportGeometry(view.root, {
@@ -281,6 +307,42 @@ describe("BoardRoute native drag lifecycle", () => {
       expect(screen.queryByRole("article", { name: "Drag source" })).not.toBeInTheDocument();
     });
   });
+
+  it("keeps a native card drag active across transient window blur", async () => {
+    const services = boardTestServices(
+      () => true,
+      false,
+      {
+        ...sourceCard,
+        actions: {
+          ...sourceCard.actions,
+          can_start: true,
+          manual_move_target_node_ids: [],
+        },
+      },
+    );
+    render(<App services={services} />);
+    const source = await screen.findByRole("article", { name: "Drag source" });
+    const recon = screen.getByRole("listitem", { name: "Recon" });
+    const dataTransfer = new TestDataTransfer();
+
+    fireEvent.dragStart(source, { dataTransfer });
+    fireEvent(window, new Event("blur"));
+    dataTransfer.clearData();
+    const dragOver = createBoardDragEvent("dragover", { dataTransfer });
+    fireEvent(recon, dragOver);
+    expect(dragOver.defaultPrevented).toBe(true);
+    fireEvent(recon, createBoardDragEvent("drop", { dataTransfer }));
+
+    await waitFor(() => {
+      const calls = taskActionCalls(services.transport.calls);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        method: "workflow.task.start",
+        params: { task_id: "task-1" },
+      });
+    });
+  });
 });
 
 type ActiveBoardTestContext = Awaited<ReturnType<typeof renderActiveBoard>>;
@@ -305,8 +367,8 @@ async function renderActiveBoard(frames: FakeAnimationFrames) {
       services.transport.emit("workflow.project", {
         event: {
           action: "updated",
-          changed_ids: ["task-1"],
           occurred_at_unix_ms: 1,
+          primary_entity_id: "task-1",
           project_id: "project-1",
           resource: "task",
           workflow_id: "workflow-1",
@@ -316,7 +378,11 @@ async function renderActiveBoard(frames: FakeAnimationFrames) {
   };
 }
 
-function boardTestServices(sourcePresent: () => boolean = () => true, validForTaskCreation = true) {
+function boardTestServices(
+  sourcePresent: () => boolean = () => true,
+  validForTaskCreation = true,
+  card = sourceCard,
+) {
   return createTestServices([
     ...startupRoutes,
     {
@@ -326,7 +392,18 @@ function boardTestServices(sourcePresent: () => boolean = () => true, validForTa
     {
       method: "workflow.board.nodeCards.list",
       handler: (params: JsonValue) =>
-        nodeCardsResponse(nodeID(params), sourcePresent() && nodeID(params) === "backlog"),
+        nodeCardsResponse(nodeID(params), sourcePresent() && nodeID(params) === "backlog", card),
+    },
+    {
+      method: "workflow.task.start",
+      result: {
+        outcome: "applied",
+        applied: {
+          task_id: "task-1",
+          placement_ids: ["placement-1"],
+          run_ids: ["run-1"],
+        },
+      },
     },
     {
       method: "workflow.task.move",
@@ -355,12 +432,12 @@ function nodeID(params: JsonValue): string {
   return nodeCardsRequestSchema.parse(params).node_id;
 }
 
-function nodeCardsResponse(nodeIDValue: string, includeSource: boolean) {
+function nodeCardsResponse(nodeIDValue: string, includeSource: boolean, card = sourceCard) {
   return {
     project_id: "project-1",
     workflow_id: "workflow-1",
     node_id: nodeIDValue,
-    cards: includeSource ? [sourceCard] : [],
+    cards: includeSource ? [card] : [],
     previous_page_token: null,
     next_page_token: null,
     generated_at_unix_ms: 1,
@@ -479,6 +556,7 @@ const sourceCard = {
     can_cancel: true,
     manual_move_target_node_ids: ["recon"],
   },
+  label_ids: [],
   updated_at_unix_ms: 1,
 };
 

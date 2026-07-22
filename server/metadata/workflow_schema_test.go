@@ -50,6 +50,8 @@ func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
 		"task_transitions",
 		"task_transition_edges",
 		"task_comments",
+		"project_labels",
+		"task_label_assignments",
 	} {
 		if !tableExists(t, store.db, table) {
 			t.Fatalf("expected table %s to exist", table)
@@ -133,6 +135,14 @@ func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
 	if !columnExists(t, store.db, "tasks", "source_url") {
 		t.Fatal("tasks.source_url should stay as a structured task field")
 	}
+	for _, column := range []string{"normalized_name", "revision", "color", "sort_order"} {
+		if columnExists(t, store.db, "project_labels", column) {
+			t.Fatalf("project_labels.%s should not exist", column)
+		}
+	}
+	if !indexExists(t, store.db, "task_label_assignments_label_task_idx") {
+		t.Fatal("task_label_assignments_label_task_idx should support reverse label membership")
+	}
 	if columnExists(t, store.db, "task_runs", "task_id") {
 		t.Fatal("task_runs.task_id should not exist; run task is derived from placement_id")
 	}
@@ -185,6 +195,102 @@ func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
 	}
 	if foreignKeys != 1 {
 		t.Fatalf("foreign_keys = %d, want 1", foreignKeys)
+	}
+}
+
+func TestProjectLabelSchemaEnforcesCatalogIdentityScopeAndCascades(t *testing.T) {
+	store, _, binding := newMetadataTestStore(t)
+	ctx := t.Context()
+	other, err := store.CreateProjectForWorkspace(ctx, t.TempDir(), "Other Project")
+	if err != nil {
+		t.Fatalf("CreateProjectForWorkspace: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+
+	const (
+		projectLabelID = "9e7bab10-773a-4a16-9d4f-4e7bd2321327"
+		otherLabelID   = "7af5b40b-10db-4e66-a6eb-8043d758fd90"
+		conflictID     = "fd3082ef-cc11-4824-ad3a-2d7863efeb07"
+	)
+	if _, err := store.db.Exec(
+		`INSERT INTO project_labels (id, project_id, name, created_at_unix_ms, updated_at_unix_ms)
+VALUES (?, ?, 'Straße', ?, ?)`,
+		projectLabelID,
+		binding.ProjectID,
+		now,
+		now,
+	); err != nil {
+		t.Fatalf("insert project label: %v", err)
+	}
+	if _, err := store.db.Exec(
+		`INSERT INTO project_labels (id, project_id, name, created_at_unix_ms, updated_at_unix_ms)
+VALUES (?, ?, 'STRASSE', ?, ?)`,
+		conflictID,
+		binding.ProjectID,
+		now,
+		now,
+	); err == nil {
+		t.Fatal("case-fold-equivalent label insert succeeded within one project")
+	}
+	if _, err := store.db.Exec(
+		`INSERT INTO project_labels (id, project_id, name, created_at_unix_ms, updated_at_unix_ms)
+VALUES (?, ?, 'STRASSE', ?, ?)`,
+		otherLabelID,
+		other.ProjectID,
+		now,
+		now,
+	); err != nil {
+		t.Fatalf("insert same folded name in another project: %v", err)
+	}
+	if _, err := store.db.Exec(
+		`UPDATE project_labels SET name = 'straße', updated_at_unix_ms = ? WHERE id = ?`,
+		now+1,
+		projectLabelID,
+	); err != nil {
+		t.Fatalf("capitalization-only rename: %v", err)
+	}
+
+	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
+	seedWorkflowTask(t, store, binding.ProjectID, "BLD-1")
+	if _, err := store.db.Exec(
+		`INSERT INTO task_label_assignments (task_id, label_id) VALUES ('task-1', ?)`,
+		projectLabelID,
+	); err != nil {
+		t.Fatalf("insert same-project task label assignment: %v", err)
+	}
+	if _, err := store.db.Exec(
+		`INSERT INTO task_label_assignments (task_id, label_id) VALUES ('task-1', ?)`,
+		otherLabelID,
+	); err == nil {
+		t.Fatal("cross-project task label assignment insert succeeded")
+	}
+	if _, err := store.db.Exec(
+		`UPDATE task_label_assignments SET label_id = ? WHERE task_id = 'task-1' AND label_id = ?`,
+		otherLabelID,
+		projectLabelID,
+	); err == nil {
+		t.Fatal("cross-project task label assignment update succeeded")
+	}
+	if _, err := store.db.Exec(
+		`UPDATE project_labels SET project_id = ? WHERE id = ?`,
+		other.ProjectID,
+		projectLabelID,
+	); err == nil {
+		t.Fatal("moving an assigned label to another project succeeded")
+	}
+
+	if _, err := store.db.Exec(`DELETE FROM project_labels WHERE id = ?`, projectLabelID); err != nil {
+		t.Fatalf("delete assigned project label: %v", err)
+	}
+	var assignmentCount int
+	if err := store.db.QueryRow(
+		`SELECT COUNT(*) FROM task_label_assignments WHERE label_id = ?`,
+		projectLabelID,
+	).Scan(&assignmentCount); err != nil {
+		t.Fatalf("count assignments after label delete: %v", err)
+	}
+	if assignmentCount != 0 {
+		t.Fatalf("assignment count after label delete = %d, want 0", assignmentCount)
 	}
 }
 

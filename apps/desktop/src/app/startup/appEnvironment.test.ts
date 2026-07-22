@@ -8,6 +8,7 @@ import {
   installProductionContextMenuGuard,
   parseBrowserRpcEndpoint,
   readBrowserRpcEndpoint,
+  resolveAppStorageNamespace,
   toggleInMemoryThemeOverride,
 } from "./appEnvironment";
 
@@ -72,6 +73,33 @@ describe("browser RPC endpoint configuration", () => {
     const services = await createDefaultAppServices();
 
     expect(services.endpoint).toBe("ws://127.0.0.1:53101/rpc");
+  });
+
+  it("namespaces browser persistence by endpoint and native persistence by resolved root", () => {
+    expect(
+      resolveAppStorageNamespace("browser", {
+        endpoint: "ws://127.0.0.1:53101/rpc",
+        persistenceRoot: null,
+      }),
+    ).toEqual({
+      kind: "browser-endpoint",
+      identity: "ws://127.0.0.1:53101/rpc",
+    });
+    expect(
+      resolveAppStorageNamespace("macos", {
+        endpoint: "ws://127.0.0.1:53082/rpc",
+        persistenceRoot: "/Users/nek/.kent",
+      }),
+    ).toEqual({
+      kind: "native-persistence-root",
+      identity: "/Users/nek/.kent",
+    });
+    expect(
+      resolveAppStorageNamespace("macos", {
+        endpoint: "ws://127.0.0.1:53082/rpc",
+        persistenceRoot: "",
+      }),
+    ).toBeNull();
   });
 });
 

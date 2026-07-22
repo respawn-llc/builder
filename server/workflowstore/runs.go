@@ -9,6 +9,7 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/serverapi"
 )
 
 func (s *Store) ListRunnableRuns(ctx context.Context, limit int64) ([]RunnableRunRecord, error) {
@@ -623,7 +624,7 @@ func (s *Store) SetRunWaitingAsk(ctx context.Context, runID workflow.RunID, expe
 	if updated != 1 {
 		return sql.ErrNoRows
 	}
-	event, err := runWaitingAskWorkflowEvent(ctx, s.queries, string(runID), "question_waiting", trimmedAskID, now)
+	event, err := runWaitingAskWorkflowEvent(ctx, s.queries, string(runID), serverapi.WorkflowProjectEventActionQuestionWaiting, trimmedAskID, now)
 	if err != nil {
 		return err
 	}
@@ -648,7 +649,7 @@ func (s *Store) ClearRunWaitingAsk(ctx context.Context, runID workflow.RunID, ex
 	if updated != 1 {
 		return sql.ErrNoRows
 	}
-	event, err := runWaitingAskWorkflowEvent(ctx, s.queries, string(runID), "question_cleared", trimmedAskID, now)
+	event, err := runWaitingAskWorkflowEvent(ctx, s.queries, string(runID), serverapi.WorkflowProjectEventActionQuestionCleared, trimmedAskID, now)
 	if err != nil {
 		return err
 	}
@@ -659,7 +660,7 @@ func runWaitingAskWorkflowEvent(
 	ctx context.Context,
 	q *sqlitegen.Queries,
 	runID string,
-	action string,
+	action serverapi.WorkflowProjectEventAction,
 	askID string,
 	occurredAtUnixMs int64,
 ) (WorkflowEventRecord, error) {
@@ -667,25 +668,28 @@ func runWaitingAskWorkflowEvent(
 	if err != nil {
 		return WorkflowEventRecord{}, fmt.Errorf("load waiting ask event run identity: %w", err)
 	}
+	projectID := row.ProjectID
+	workflowID := row.WorkflowID
 	return WorkflowEventRecord{
-		ProjectID:        row.ProjectID,
-		WorkflowID:       row.WorkflowID,
-		Resource:         "task",
+		ProjectID:        &projectID,
+		WorkflowID:       &workflowID,
+		Resource:         serverapi.WorkflowProjectEventResourceTask,
 		Action:           action,
-		ChangedIDs:       []string{row.TaskID, strings.TrimSpace(runID), strings.TrimSpace(askID)},
+		PrimaryEntityID:  row.TaskID,
+		RelatedIDs:       []string{strings.TrimSpace(runID), strings.TrimSpace(askID)},
 		OccurredAtUnixMs: occurredAtUnixMs,
 	}, nil
 }
 
-func (s *Store) ResolveTaskWaitingAsk(ctx context.Context, taskID workflow.TaskID, runID workflow.RunID, askID string) (RunRecord, error) {
+func (s *Store) ResolveTaskWaitingAsk(ctx context.Context, taskID workflow.TaskID, runID workflow.RunID, askID string) (ResolvedWaitingAsk, error) {
 	trimmedTaskID := strings.TrimSpace(string(taskID))
 	trimmedRunID := strings.TrimSpace(string(runID))
 	trimmedAskID := strings.TrimSpace(askID)
 	if trimmedTaskID == "" {
-		return RunRecord{}, errors.New("task id is required")
+		return ResolvedWaitingAsk{}, errors.New("task id is required")
 	}
 	if trimmedAskID == "" {
-		return RunRecord{}, errors.New("ask id is required")
+		return ResolvedWaitingAsk{}, errors.New("ask id is required")
 	}
 	rows, err := s.queries.ResolveTaskWaitingAsk(ctx, sqlitegen.ResolveTaskWaitingAskParams{
 		TaskID: trimmedTaskID,
@@ -693,14 +697,21 @@ func (s *Store) ResolveTaskWaitingAsk(ctx context.Context, taskID workflow.TaskI
 		RunID:  trimmedRunID,
 	})
 	if err != nil {
-		return RunRecord{}, err
+		return ResolvedWaitingAsk{}, err
 	}
-	matches := runRecordsFromTaskRunRecords(rows)
+	matches := make([]ResolvedWaitingAsk, 0, len(rows))
+	for _, row := range rows {
+		matches = append(matches, ResolvedWaitingAsk{
+			Run:        runRecordFromTaskRun(row.TaskRunRecord),
+			ProjectID:  row.ProjectID,
+			WorkflowID: workflow.WorkflowID(row.WorkflowID),
+		})
+	}
 	if len(matches) == 0 {
-		return RunRecord{}, ErrTaskAskNotPending
+		return ResolvedWaitingAsk{}, ErrTaskAskNotPending
 	}
 	if trimmedRunID == "" && len(matches) != 1 {
-		return RunRecord{}, fmt.Errorf("task has multiple matching pending asks; %w", ErrRunIDRequired)
+		return ResolvedWaitingAsk{}, fmt.Errorf("task has multiple matching pending asks; %w", ErrRunIDRequired)
 	}
 	return matches[0], nil
 }

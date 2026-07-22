@@ -321,10 +321,21 @@ func decodeAndHandle[TReq any, TResp any](req protocol.Request, handler func(TRe
 	if err != nil {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
 	}
-	if validator, ok := any(params).(interface{ Validate() error }); ok {
-		if err := validator.Validate(); err != nil {
-			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
+	var validationErr error
+	if validator, ok := any(params).(interface{ ValidateRPC() error }); ok {
+		validationErr = validator.ValidateRPC()
+	} else if validator, ok := any(params).(interface{ Validate() error }); ok {
+		validationErr = validator.Validate()
+	}
+	if validationErr != nil {
+		var rpcErr interface {
+			RPCErrorCode() int
+			RPCErrorData() json.RawMessage
 		}
+		if errors.As(validationErr, &rpcErr) {
+			return responseForError(req.ID, validationErr)
+		}
+		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, validationErr.Error())
 	}
 	resp, err := handler(params)
 	if err != nil {

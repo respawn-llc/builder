@@ -270,6 +270,24 @@ test("desktop architecture policy permits only public shared-capability dependen
   assertArchitectureViolations(byFile, forbiddenPaths);
 });
 
+test("desktop architecture policy keeps the labels capability on public leaf seams", async () => {
+  const allowedPath = "src/shared/labels/allowed-public-seams.ts";
+  const forbiddenPaths = [
+    "src/features/alpha/forbidden-deep-labels.ts",
+    "src/shared/labels/forbidden-api-internal.ts",
+    "src/shared/labels/forbidden-feature.ts",
+    "src/shared/labels/forbidden-native.ts",
+    "src/shared/labels/forbidden-shell.ts",
+  ];
+  const byFile = await lintArchitectureFixtures([
+    allowedPath,
+    ...forbiddenPaths,
+  ]);
+
+  assert.deepEqual(byFile.get(join(fixtureRoot, allowedPath)), []);
+  assertArchitectureViolations(byFile, forbiddenPaths);
+});
+
 test("desktop architecture policy keeps UI and API internals owner-local", async () => {
   const allowedPaths = [
     "src/api/allowed-owner-local.ts",

@@ -93,7 +93,7 @@ func TestWorkflowAttentionCandidateRelationIsAuthoritative(t *testing.T) {
 	requireNullAttentionCandidateIdentity(t, global[1].TaskTransitionID, "question transition")
 	requireNullAttentionCandidateIdentity(t, global[0].TaskTransitionID, "interruption transition")
 	requireAttentionCandidateIdentity(t, global[2].RunID, string(approvalStarted.RunID), "approval run")
-	requireAttentionCandidateIdentity(t, global[2].TaskTransitionID, string(approval.TransitionID), "approval transition")
+	requireAttentionCandidateIdentity(t, global[2].TaskTransitionID, string(approval.Result.TransitionID), "approval transition")
 
 	taskCandidates, err := metadataStore.Queries().ListWorkflowTaskAttentionCandidates(ctx, string(questionTask.ID))
 	if err != nil {
@@ -122,14 +122,14 @@ func TestWorkflowAttentionCandidateRelationIsAuthoritative(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPendingApprovalTransitionIDsByTask: %v", err)
 	}
-	if len(taskApprovalIDs) != 1 || taskApprovalIDs[0] != string(approval.TransitionID) {
+	if len(taskApprovalIDs) != 1 || taskApprovalIDs[0] != string(approval.Result.TransitionID) {
 		t.Fatalf("task approval ids = %+v", taskApprovalIDs)
 	}
 	workflowApprovalIDs, err := transactionQueries.ListPendingApprovalTransitionIDsByWorkflow(ctx, string(workflowID))
 	if err != nil {
 		t.Fatalf("ListPendingApprovalTransitionIDsByWorkflow: %v", err)
 	}
-	if len(workflowApprovalIDs) != 1 || workflowApprovalIDs[0] != string(approval.TransitionID) {
+	if len(workflowApprovalIDs) != 1 || workflowApprovalIDs[0] != string(approval.Result.TransitionID) {
 		t.Fatalf("workflow approval ids = %+v", workflowApprovalIDs)
 	}
 	taskInterruptedIDs, err := transactionQueries.ListActionableInterruptedRunIDsByTask(ctx, string(interruptedTask.ID))
@@ -147,7 +147,7 @@ func TestWorkflowAttentionCandidateRelationIsAuthoritative(t *testing.T) {
 		t.Fatalf("workflow interrupted ids = %+v", workflowInterruptedIDs)
 	}
 
-	approvalCandidate, err := transactionQueries.GetWorkflowApprovalAttentionCandidateByTransitionID(ctx, string(approval.TransitionID))
+	approvalCandidate, err := transactionQueries.GetWorkflowApprovalAttentionCandidateByTransitionID(ctx, string(approval.Result.TransitionID))
 	if err != nil {
 		t.Fatalf("GetWorkflowApprovalAttentionCandidateByTransitionID: %v", err)
 	}

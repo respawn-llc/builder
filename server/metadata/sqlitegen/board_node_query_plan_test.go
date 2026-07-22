@@ -54,7 +54,14 @@ CREATE TABLE task_transition_records (
 	task_id TEXT NOT NULL,
 	source_node_id TEXT,
 	state TEXT NOT NULL
-);`); err != nil {
+);
+CREATE TABLE task_label_assignments (
+	task_id TEXT NOT NULL,
+	label_id TEXT NOT NULL,
+	PRIMARY KEY (task_id, label_id)
+);
+CREATE INDEX task_label_assignments_label_task_idx
+	ON task_label_assignments(label_id, task_id);`); err != nil {
 		t.Fatalf("create query-plan fixture: %v", err)
 	}
 
@@ -67,6 +74,9 @@ CREATE TABLE task_transition_records (
 				"tasks_project_workflow_updated_idx",
 				"project-1",
 				"workflow-1",
+				"none",
+				"",
+				"[]",
 				"node-1",
 				"node-done",
 				direction,
@@ -74,6 +84,39 @@ CREATE TABLE task_transition_records (
 				"task-anchor",
 				int64(26),
 			)
+		})
+	}
+	for _, query := range []struct {
+		name string
+		sql  string
+		args []any
+	}{
+		{
+			name: "column counts",
+			sql:  listBoardColumnTaskCounts,
+			args: []any{"none", "", "[]", "project-1", "workflow-1", "node-done"},
+		},
+		{
+			name: "node cards",
+			sql:  listBoardNodeTasks,
+			args: []any{
+				"project-1",
+				"workflow-1",
+				"none",
+				"",
+				"[]",
+				"node-1",
+				"node-done",
+				"older",
+				int64(100),
+				"task-anchor",
+				int64(26),
+			},
+		},
+	} {
+		t.Run(query.name+" label indexes", func(t *testing.T) {
+			requireQueryUsesIndex(t, db, query.sql, "sqlite_autoindex_task_label_assignments_1", query.args...)
+			requireQueryUsesIndex(t, db, query.sql, "task_label_assignments_label_task_idx", query.args...)
 		})
 	}
 }

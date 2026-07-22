@@ -3,10 +3,11 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 
-import type { BoardNodeCardsPage, WorkflowProjectEvent } from "@/api";
+import { noTaskLabelFilter, type BoardNodeCardsPage, type WorkflowProjectEvent } from "@/api";
 import { queryKeys } from "@/app-facade";
 import { AppServicesProvider } from "@/app-facade";
 import { createTestServices } from "@/test-support/app-services";
+import { BoardFilterGenerationProvider } from "./BoardFilterGenerationContext";
 import { shouldRefreshBoardFromProjectEvent } from "./useBoardData";
 import { useBoardNodeCards } from "./useBoardData";
 
@@ -85,7 +86,13 @@ describe("shouldRefreshBoardFromProjectEvent", () => {
       createElement(
         QueryClientProvider,
         { client: queryClient },
-        createElement(AppServicesProvider, { services, children }),
+        createElement(AppServicesProvider, {
+          services,
+          children: createElement(BoardFilterGenerationProvider, {
+            children,
+            initialFilter: noTaskLabelFilter,
+          }),
+        }),
       );
     const view = renderHook(() => useBoardNodeCards("project-1", "workflow-1", "node-1", true), { wrapper });
 
@@ -135,18 +142,173 @@ describe("shouldRefreshBoardFromProjectEvent", () => {
     view.unmount();
     await waitFor(() => {
       expect(
-        queryClient.getQueryData(queryKeys.boardNodeCards("project-1", "workflow-1", "node-1")),
+        queryClient.getQueryData(
+          queryKeys.boardNodeCards("project-1", "workflow-1", "node-1", noTaskLabelFilter),
+        ),
       ).toBeUndefined();
     });
+  });
+
+  it("uses the active canonical named filter in card keys and server requests", async () => {
+    const labelFilter = {
+      kind: "named",
+      mode: "any",
+      labelIDs: ["22222222-2222-4222-8222-222222222222", "11111111-1111-4111-8111-111111111111"],
+    } as const;
+    const services = createTestServices([
+      {
+        method: "workflow.board.nodeCards.list",
+        result: boardCardsPage(0, null, null),
+      },
+    ]);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const wrapper = ({ children }: Readonly<{ children: ReactNode }>) =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        createElement(AppServicesProvider, {
+          services,
+          children: createElement(BoardFilterGenerationProvider, {
+            children,
+            initialFilter: labelFilter,
+          }),
+        }),
+      );
+
+    const view = renderHook(() => useBoardNodeCards("project-1", "workflow-1", "node-1", true), { wrapper });
+
+    await waitFor(() => {
+      expect(view.result.current.isSuccess).toBe(true);
+    });
+    const canonicalFilter = {
+      kind: "named",
+      mode: "any",
+      labelIDs: ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"],
+    } as const;
+    expect(services.transport.calls.at(-1)?.params).toEqual({
+      ...boardCardsParams(null),
+      label_filter: {
+        kind: "named",
+        named: {
+          mode: "any",
+          label_ids: canonicalFilter.labelIDs,
+        },
+      },
+    });
+    expect(
+      queryClient.getQueryData(
+        queryKeys.boardNodeCards("project-1", "workflow-1", "node-1", canonicalFilter),
+      ),
+    ).toBeDefined();
+  });
+
+  it("uses the active canonical named-all filter in card keys and server requests", async () => {
+    const labelFilter = {
+      kind: "named",
+      mode: "all",
+      labelIDs: ["22222222-2222-4222-8222-222222222222", "11111111-1111-4111-8111-111111111111"],
+    } as const;
+    const services = createTestServices([
+      {
+        method: "workflow.board.nodeCards.list",
+        result: boardCardsPage(0, null, null),
+      },
+    ]);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const wrapper = ({ children }: Readonly<{ children: ReactNode }>) =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        createElement(AppServicesProvider, {
+          services,
+          children: createElement(BoardFilterGenerationProvider, {
+            children,
+            initialFilter: labelFilter,
+          }),
+        }),
+      );
+
+    const view = renderHook(() => useBoardNodeCards("project-1", "workflow-1", "node-1", true), {
+      wrapper,
+    });
+
+    await waitFor(() => {
+      expect(view.result.current.isSuccess).toBe(true);
+    });
+    const canonicalFilter = {
+      kind: "named",
+      mode: "all",
+      labelIDs: ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"],
+    } as const;
+    expect(services.transport.calls.at(-1)?.params).toEqual({
+      ...boardCardsParams(null),
+      label_filter: {
+        kind: "named",
+        named: {
+          mode: "all",
+          label_ids: canonicalFilter.labelIDs,
+        },
+      },
+    });
+    expect(
+      queryClient.getQueryData(
+        queryKeys.boardNodeCards("project-1", "workflow-1", "node-1", canonicalFilter),
+      ),
+    ).toBeDefined();
+  });
+
+  it("uses the active unlabeled filter in card keys and server requests", async () => {
+    const labelFilter = { kind: "unlabeled" } as const;
+    const services = createTestServices([
+      {
+        method: "workflow.board.nodeCards.list",
+        result: boardCardsPage(0, null, null),
+      },
+    ]);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const wrapper = ({ children }: Readonly<{ children: ReactNode }>) =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        createElement(AppServicesProvider, {
+          services,
+          children: createElement(BoardFilterGenerationProvider, {
+            children,
+            initialFilter: labelFilter,
+          }),
+        }),
+      );
+
+    const view = renderHook(() => useBoardNodeCards("project-1", "workflow-1", "node-1", true), {
+      wrapper,
+    });
+
+    await waitFor(() => {
+      expect(view.result.current.isSuccess).toBe(true);
+    });
+    expect(services.transport.calls.at(-1)?.params).toEqual({
+      ...boardCardsParams(null),
+      label_filter: { kind: "unlabeled" },
+    });
+    expect(
+      queryClient.getQueryData(queryKeys.boardNodeCards("project-1", "workflow-1", "node-1", labelFilter)),
+    ).toBeDefined();
   });
 });
 
 function workflowEvent(overrides: Partial<WorkflowProjectEvent>): WorkflowProjectEvent {
   return {
     action: "updated",
-    changedIDs: [],
     occurredAtUnixMs: 1,
+    primaryEntityID: "task-1",
     projectID: "project-1",
+    relatedIDs: [],
     resource: "task",
     workflowID: "workflow-1",
     ...overrides,
@@ -188,6 +350,7 @@ function boardCardsPage(index: number, previousPageToken: string | null, nextPag
           can_cancel: true,
           manual_move_target_node_ids: [],
         },
+        label_ids: [],
         updated_at_unix_ms: index,
       },
     ],
@@ -202,6 +365,7 @@ function boardCardsParams(pageToken: string | null) {
     project_id: "project-1",
     workflow_id: "workflow-1",
     node_id: "node-1",
+    label_filter: { kind: "none" },
     page_size: 25,
     page_token: pageToken,
   };

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"core/server/runtime"
 	"core/server/tools"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -41,6 +42,7 @@ type execution struct {
 	authority *Authority
 	resource  *agentResource
 	scope     ExecutionScope
+	script    *TaskScriptExecutionTarget
 	ctx       context.Context
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -136,27 +138,21 @@ func (e *execution) stopError() error {
 }
 
 func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) {
+	drainErr := e.drainQueuedWorkBeforeRetirement(runErr, stopErr)
 	cleanupErr := e.cleanup()
+	e.retire()
 
 	authority := e.authority
 	workflowRef, hasWorkflow := e.scope.Workflow()
-	authority.mu.Lock()
-	if authority.byScope[e.scope.ID()] == e {
-		delete(authority.byScope, e.scope.ID())
-	}
-	if hasWorkflow && authority.byWorkflow[workflowRef] == e {
-		delete(authority.byWorkflow, workflowRef)
-	}
-	authority.mu.Unlock()
-
+	executionErr := errors.Join(runErr, drainErr)
 	var closeErr error
 	if e.resource != nil {
 		if e.resource.eventBridge != nil {
 			result.DroppedRuntimeEvents = e.resource.eventBridge.Dropped.Load()
 		}
 		if e.resource.logger != nil {
-			if runErr != nil {
-				e.resource.logger.Logf("runtime.execution.exit scope_id=%s error=%q", e.scope.ID(), runErr.Error())
+			if executionErr != nil {
+				e.resource.logger.Logf("runtime.execution.exit scope_id=%s error=%q", e.scope.ID(), executionErr.Error())
 			} else {
 				e.resource.logger.Logf("runtime.execution.exit scope_id=%s ok", e.scope.ID())
 			}
@@ -171,13 +167,39 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 	}
 	e.resultMu.Lock()
 	e.result = result
-	e.runErr = errors.Join(runErr, cleanupErr, closeErr)
-	e.stopErr = errors.Join(stopErr, cleanupErr, closeErr)
+	e.runErr = errors.Join(executionErr, cleanupErr, closeErr)
+	e.stopErr = errors.Join(stopErr, drainErr, cleanupErr, closeErr)
 	e.resultMu.Unlock()
 	if hasWorkflow && authority.executionFinalized != nil {
 		authority.executionFinalized.ExecutionFinalized(workflowRef)
 	}
 	close(e.done)
+}
+
+func (e *execution) drainQueuedWorkBeforeRetirement(runErr error, stopErr error) error {
+	if e.resource == nil ||
+		!e.closeResource ||
+		runErr != nil ||
+		stopErr != nil ||
+		context.Cause(e.ctx) != nil {
+		return nil
+	}
+	return e.resource.withEngine(e.ctx, e.resource.ref, func(ctx context.Context, engine *runtime.Engine) error {
+		return engine.DrainQueuedUserMessagesBeforeClose(ctx)
+	})
+}
+
+func (e *execution) retire() {
+	authority := e.authority
+	workflowRef, hasWorkflow := e.scope.Workflow()
+	authority.mu.Lock()
+	if authority.byScope[e.scope.ID()] == e {
+		delete(authority.byScope, e.scope.ID())
+	}
+	if hasWorkflow && authority.byWorkflow[workflowRef] == e {
+		delete(authority.byWorkflow, workflowRef)
+	}
+	authority.mu.Unlock()
 }
 
 func (e *execution) cleanup() error {
@@ -338,6 +360,12 @@ func (s *executionPromptStore) Close(err error) {
 		entry.response <- executionPromptResult{err: err}
 		s.publishResolved(entry.snapshot)
 	}
+}
+
+func (s *executionPromptStore) hasPending() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.pending) != 0
 }
 
 func (s *executionPromptStore) publishPending(snapshot ExecutionPromptSnapshot) {

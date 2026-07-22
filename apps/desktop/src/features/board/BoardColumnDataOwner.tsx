@@ -3,9 +3,11 @@ import { useTranslation } from "react-i18next";
 
 import type { BoardColumn, SelectedWorkflowBoard } from "@/api";
 import { errorMessage } from "@/api";
+import { useProjectLabelCatalog } from "@/shared/labels";
 import type { VirtualizedInfiniteListBoundaryState } from "@/ui";
 import { cardBelongsToColumn } from "./BoardCardMotionModel";
 import { toKanbanCardVM, type KanbanCardVM } from "./BoardColumnViewModel";
+import { useBoardFilterGeneration } from "./BoardFilterGenerationRuntime";
 import { useBoardNodeCards } from "./useBoardData";
 import { useObservedInterruptedRuns } from "./useObservedInterruptedRuns";
 
@@ -58,9 +60,11 @@ export function BoardColumnDataOwner({
   onReportColumnSnapshot: (columnID: string, snapshot: BoardColumnQuerySnapshot) => void;
 }>) {
   const { t } = useTranslation();
+  const labelCatalog = useProjectLabelCatalog();
+  const filterGeneration = useBoardFilterGeneration();
   const cardsQuery = useBoardNodeCards(board.projectID, board.selectedWorkflow.id, column.id, true);
   const generationRef = useRef(0);
-  const hasHydratedRef = useRef(false);
+  const hydratedFilterGenerationRef = useRef<number | null>(null);
   const paginationInFlightRef = useRef(false);
   const queryCards = useMemo(
     () => cardsQuery.data?.pages.flatMap((page) => page.cards) ?? [],
@@ -73,12 +77,16 @@ export function BoardColumnDataOwner({
     }),
     [board.attachedWorkspaceCount, board.defaultWorkspaceID],
   );
+  const labelNamesByID = useMemo(
+    () => new Map(labelCatalog.data?.labels.map((label) => [label.id, label.name]) ?? []),
+    [labelCatalog.data?.labels],
+  );
   const cardVMs = useMemo(
     () =>
       queryCards
-        .map((card) => toKanbanCardVM(card, workspaceContext))
+        .map((card) => toKanbanCardVM(card, workspaceContext, labelNamesByID))
         .filter((card) => cardBelongsToColumn(column, card)),
-    [column, queryCards, workspaceContext],
+    [column, labelNamesByID, queryCards, workspaceContext],
   );
   const {
     error,
@@ -92,22 +100,28 @@ export function BoardColumnDataOwner({
     isFetching,
     isFetchingNextPage,
     isFetchingPreviousPage,
+    isPlaceholderData,
     isPending,
     refetch,
   } = cardsQuery;
+  const requestEnabled =
+    !filterGeneration.snapshot.active.retiring && filterGeneration.snapshot.desiredFilter === null;
+  const paginationEnabled = requestEnabled && !isPlaceholderData && cardsQuery.data !== undefined;
   const retryInitial = useCallback(() => {
-    void refetch();
-  }, [refetch]);
+    if (requestEnabled) {
+      void refetch();
+    }
+  }, [refetch, requestEnabled]);
   const loadNewer = useCallback(() => {
-    if (hasPreviousPage && !isFetchingPreviousPage) {
+    if (paginationEnabled && hasPreviousPage && !isFetchingPreviousPage) {
       void fetchPreviousPage();
     }
-  }, [fetchPreviousPage, hasPreviousPage, isFetchingPreviousPage]);
+  }, [fetchPreviousPage, hasPreviousPage, isFetchingPreviousPage, paginationEnabled]);
   const loadOlder = useCallback(() => {
-    if (hasNextPage && !isFetchingNextPage) {
+    if (paginationEnabled && hasNextPage && !isFetchingNextPage) {
       void fetchNextPage();
     }
-  }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage, paginationEnabled]);
   const initialBoundary = useMemo<VirtualizedInfiniteListBoundaryState | undefined>(
     () =>
       cardsQuery.data === undefined
@@ -152,15 +166,15 @@ export function BoardColumnDataOwner({
   const dataView = useMemo<BoardColumnDataView>(
     () => ({
       cards: cardVMs,
-      hasNextPage,
-      hasPreviousPage,
+      hasNextPage: paginationEnabled && hasNextPage,
+      hasPreviousPage: paginationEnabled && hasPreviousPage,
       initialBoundary,
-      isFetchingNextPage,
-      isFetchingPreviousPage,
-      nextBoundary,
+      isFetchingNextPage: paginationEnabled && isFetchingNextPage,
+      isFetchingPreviousPage: paginationEnabled && isFetchingPreviousPage,
+      nextBoundary: paginationEnabled ? nextBoundary : undefined,
       onLoadMore: loadOlder,
       onLoadPrevious: loadNewer,
-      previousBoundary,
+      previousBoundary: paginationEnabled ? previousBoundary : undefined,
     }),
     [
       cardVMs,
@@ -172,6 +186,7 @@ export function BoardColumnDataOwner({
       loadOlder,
       loadNewer,
       nextBoundary,
+      paginationEnabled,
       previousBoundary,
     ],
   );
@@ -193,7 +208,8 @@ export function BoardColumnDataOwner({
   }, [isFetchNextPageError, isFetchPreviousPageError, isFetchingNextPage, isFetchingPreviousPage]);
 
   useEffect(() => {
-    const cause: BoardColumnUpdateCause = !hasHydratedRef.current
+    const activeFilterGeneration = filterGeneration.snapshot.active.generation;
+    const cause: BoardColumnUpdateCause = hydratedFilterGenerationRef.current !== activeFilterGeneration
       ? "hydration"
       : paginationInFlightRef.current
         ? "pagination"
@@ -210,8 +226,8 @@ export function BoardColumnDataOwner({
         taskCount: column.taskCount,
       },
     });
-    if (cardsQuery.data !== undefined) {
-      hasHydratedRef.current = true;
+    if (cardsQuery.data !== undefined && !isPlaceholderData) {
+      hydratedFilterGenerationRef.current = activeFilterGeneration;
     }
     if (!isFetchingPreviousPage && !isFetchingNextPage) {
       paginationInFlightRef.current = false;
@@ -221,10 +237,12 @@ export function BoardColumnDataOwner({
     cardsQuery.data,
     column.id,
     column.taskCount,
+    filterGeneration.snapshot.active.generation,
     isFetching,
     isFetchingNextPage,
     isFetchingPreviousPage,
     isPending,
+    isPlaceholderData,
     onReportColumnSnapshot,
   ]);
 

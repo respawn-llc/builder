@@ -20,6 +20,24 @@
 - Task lifecycle projection combines durable node placements and run outcomes with one immutable live snapshot; it is not a separate durable task-status enum.
 - Node placement is workflow/Kanban state; running, queued, and waiting conditions require exact generation-matched live evidence.
 - Terminal-node placements remain active sink placements. Board/read models infer done from an active placement whose node kind is terminal.
+- A Project owns one shared label catalog reused by every workflow board linked to that Project. Tasks may only use labels owned by their own Project.
+- Labels are many-to-many organizational metadata on tasks. They never affect workflow state, scheduling, prompts, task status, or execution.
+
+## Task Labels And Filtering
+
+- Each label has an immutable UUID v4 identity. Its mutable name is trimmed, 1–64 characters, preserves display capitalization, and permits Unicode letters and numbers, spaces, hyphens, underscores, and slashes.
+- Label names are case-insensitively unique within a Project. Capitalization-only rename is allowed without changing identity or task assignments.
+- A Project may own at most 100 labels. The server enforces the bound, and clients load the complete bounded catalog without pagination.
+- A task may use any subset of its Project's catalog; there is no separate per-task label limit.
+- Label creation, rename, deletion, assignment, and removal remain available regardless of whether affected tasks are Backlog, active, running, interrupted, done, or canceled.
+- Label catalog and assignment changes do not change task updated timestamps; label events refresh projections without reordering tasks or moving pagination anchors.
+- Task creation may atomically assign existing Project labels. Later assignment changes use idempotent add/remove semantics: adding an existing assignment or removing an absent assignment succeeds and returns the authoritative resulting label set.
+- Renaming takes effect everywhere without changing assignments. Deletion requires confirmation and atomically removes the label from every task; the confirmation does not require an affected-task count.
+- Labels have no color or manual ordering in the initial release. Label catalogs and assigned chips display in case-insensitive alphabetical order; label-based task sorting is not part of the initial release.
+- Label filtering is server-side for workflow boards and paginated task lists.
+- OR matches tasks carrying at least one selected named label. AND matches tasks carrying every selected named label while allowing additional labels. One selected label behaves identically in both modes.
+- `No labels` matches tasks with zero label assignments and is mutually exclusive with named-label selection. No selected labels means no label restriction.
+- The complete label expression is ANDed with every other active task-list filter type. Filtering then preserves existing sorting and cursor semantics and never loads a full board or task list into a client.
 
 ## Workflow Definitions
 
@@ -264,7 +282,7 @@
 - When a locked managed root or metadata binding is missing, the initiating action or workflow runner may synchronously invoke the single worktree materializer to conservatively restore an existing named branch at a collision-safe managed root, persist the relation, and run setup for the recreated root.
 - Conservative repair never recreates a missing branch from the old base commit, overwrites an existing directory, resets or renames a branch, accepts detached HEAD, repairs another repository, or infers ownership by scanning arbitrary roots. Unsafe or ambiguous states return one typed locked-target error with a small product-level cause.
 - There is no target-replacement flow. A locked target is never converted to no managed worktree.
-- Task-detail read models always expose the source workspace. After lock they expose the current target mode and derived execution root when available, plus the requested revision and resolved commit when applicable. Managed targets show the current named branch only while the root is available and do not persist branch name in the target snapshot. Desktop task detail presents this contract without standalone Source root or Execution root rows: source identity and path share the Source workspace row, and an available managed root appears only in the Managed worktree row.
+- Task-detail read models always expose the source workspace. After lock they expose durable target provenance plus the recorded managed-worktree path when present. They do not inspect live path availability or the current Git branch: branch discovery is an expensive worktree-owned operation and would duplicate worktree metadata on the hot task-detail read. Desktop task detail presents source identity and path in the Source workspace row and the recorded managed root in the Managed worktree row.
 - Human task detail shortens the resolved commit for readability. Structured JSON retains the full commit value.
 - Initial managed worktree creation uses the task short ID as the branch name.
 - Worktree creation reuses existing worktree branch/root collision handling.
@@ -321,6 +339,7 @@
 - Project default pointers use `projects.default_project_workflow_link_id` and `projects.primary_workspace_id`, each constrained to rows owned by the same project.
 - Workspace/worktree labels, availability, primary/default status, and main-worktree status are read-model facts derived from canonical roots/pointers.
 - Workflow invalidation events are process-local live signals, not durable/replayable sequence state. SQLite does not store `workflow_events`.
+- Workflow Project events use typed resource and action enums in the shared contract. Label catalog and task-label changes reuse the existing Project event broker/subscription path; there is no parallel label event channel.
 - GUI clients refetch read models after subscription ACK/reconnect/error and treat live events as invalidation hints.
 - There is no product archive lifecycle for workflows or nodes.
 - Workflow deletion impact previews return counts only.
@@ -356,11 +375,15 @@
 - High-level workflow mutation subcommands are the complete agent editing path; workflow import/export is a separate sharing feature, not the primary edit interface.
 - High-level workflow mutation commands use a CLI-local draft-edit module, then persist through batch graph save. The server does not expose row-level or semantic edit RPC routes for workflow graph mutation. Extract the draft-edit module only when a second Go caller exists.
 - Row-level workflow graph RPC methods, client methods, protocol constants, and route entries are removed in the graph-save cutover instead of preserved as migration stubs.
-- CLI output must include stable IDs needed by later commands.
+- CLI output must include stable IDs needed by later commands. The plain-text `kent task complete` handoff acknowledgement is exempt and omits task, run, transition, node, and other stable IDs; JSON completion output remains machine-readable.
 - `kent task list` exposes one typed task status. `--status` filters primary status, `--attention` filters typed attention, and `--column` filters workflow node keys.
 - `kent task list` filters and sorts before pagination through server-owned structured request fields. Multiple values for one filter are ORed; different filter types are ANDed. Tasks with multiple current placements expose all matching column keys in workflow order.
 - `kent task list` default ordering is `status:asc,updated:desc`, where `status` uses primary typed-status precedence and `updated` is newest-first. Custom `--sort` accepts ordered `field:direction` selectors for `created`, `updated`, `status`, `column`, `run_count`, and `title`; selectors can be comma-separated in one flag and may be supplied by repeated flags.
 - `kent task complete` accepts dynamic parameter flags, repeatable `--param name=value`, and `--json`/`--json-file` completion payload input. JSON input modes print JSON responses.
+- Plain-text `kent task complete` output is a model-facing handoff acknowledgement: `Completion scheduled. The transition <source display name> → <destination display name> will execute now. Your next agent turn will begin with the next workflow instructions.`
+- The acknowledgement uses the target node display name for an ordinary transition. A fan-out uses its shared target node-group display name when present and otherwise its transition display name.
+- The same acknowledgement is used for agent-session and forced human completion. It always promises a next agent turn regardless of context-preservation mode or whether another turn occurs, and it does not expose approval or transition state.
+- JSON completion output keeps its existing field set and does not include the plain-text handoff facts.
 - `kent task edit <task>` mutates an existing task's title, body, and source workspace through `UpdateWorkflowTask`. It requires at least one of `--title`/`--body`/`--body-file`/`--source-workspace`, reuses the current title when `--title` is omitted, and is available to agents like `task create` (no human-only gate). `--json` prints the update response.
 - `kent task create` and `kent task edit` accept `--source-workspace` as either a workspace id or a path; a path is resolved through its project binding. An omitted source workspace leaves it unchanged on edit.
 - Workflow/task CLI commands report remote-close failures to stderr after command work finishes. A close failure does not change a successful exit code, and an operation failure keeps its existing nonzero exit code.

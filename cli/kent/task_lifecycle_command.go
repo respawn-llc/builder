@@ -717,10 +717,13 @@ func waitForWorkflowTaskRunSession(ctx context.Context, remote workflowCommandRe
 			}
 			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("started task %s with run %s but failed to load task detail while waiting for session id: %w", taskID, trimmedRunID, err)
 		}
-		if run, ok := workflowTaskRunByID(detail, trimmedRunID); ok {
-			if workflowTaskRunDoesNotRequireSession(run) || strings.TrimSpace(run.SessionID) != "" {
+		for _, script := range detail.CurrentScripts {
+			if script.RunID == trimmedRunID {
 				return detail, nil
 			}
+		}
+		if len(detail.CurrentSessionIDs) > 0 {
+			return detail, nil
 		}
 		timer := time.NewTimer(interval)
 		select {
@@ -730,8 +733,4 @@ func waitForWorkflowTaskRunSession(ctx context.Context, remote workflowCommandRe
 		case <-timer.C:
 		}
 	}
-}
-
-func workflowTaskRunDoesNotRequireSession(run serverapi.WorkflowRun) bool {
-	return serverapi.WorkflowNodeKind(strings.TrimSpace(run.NodeKind)) == serverapi.WorkflowNodeKindScript
 }

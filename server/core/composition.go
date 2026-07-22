@@ -230,7 +230,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task list: %w", err)
 	}
-	workflowTaskDetail, err := workflowview.NewTaskDetail(metadataStore, workflowDefinitions, workflowTaskProjector, gitInspector)
+	workflowTaskDetail, err := workflowview.NewTaskDetail(metadataStore, workflowTaskProjector, runtimeAuthority)
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task detail: %w", err)
@@ -243,6 +243,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	workflowAttention, err := workflowview.NewAttention(
 		metadataStore,
 		workflowDefinitions,
+		workflowTaskProjector,
 		workflowRoleResolver,
 		workflowViewActiveTranscriptSource{views: sessionViewService},
 		workflowViewPendingPromptSource{prompts: runtimeRegistry},

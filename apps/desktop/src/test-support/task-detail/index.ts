@@ -1,8 +1,18 @@
 import { z } from "zod";
+import { createElement } from "react";
+import { render } from "@testing-library/react";
 
 import { guiTaskCommentAuthor, type JsonObject, type JsonValue, type TaskDetail } from "@/api";
 import { ApiClient } from "@/api/composition";
-import { FakeRpcTransport } from "../api";
+import { TaskDetailSurface } from "@/features/task-detail";
+import { FakeRpcTransport, type FakeRoute } from "../api";
+import {
+  createTestServices,
+  startupRoutes,
+  TestAppProviders,
+  type TestAppServices,
+} from "../app-services";
+import type { NativeBridge } from "../native-bridge";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 
@@ -16,11 +26,7 @@ export const taskUpdateParamsSchema = jsonObjectSchema.and(
 const workflow = {
   workflow_id: "workflow-1",
   display_name: "Delivery",
-  description: "",
   version: 1,
-  is_project_default: true,
-  valid_for_task_creation: true,
-  validation_errors: [],
 };
 
 const workspace = {
@@ -67,19 +73,14 @@ export const taskDetailResponse = {
     source_workspace: workspace,
     execution_target: {
       mode: "head",
-      effective_root: "/tmp/worktree",
       requested_ref: "HEAD",
       resolved_ref: "refs/heads/main",
       commit_oid: "0123456789abcdef0123456789abcdef01234567",
       provenance: "resolved",
-      current_branch: "T-1",
-      managed_worktree: {
-        worktree_id: "worktree-1",
-        display_name: "T-1",
-        canonical_root: "/tmp/worktree",
-        availability: "available",
-      },
     },
+    worktree_path: "/tmp/worktree",
+    current_session_ids: ["session-1"],
+    current_scripts: [],
     status: {
       kind: "running",
       native_state: "running",
@@ -88,58 +89,8 @@ export const taskDetailResponse = {
       attention_types: ["question", "approval"],
     },
     actions: taskActions,
+    label_ids: [],
     attention_count: 2,
-    runs: [
-      {
-        id: "run-1",
-        task_id: "task-1",
-        placement_id: "placement-1",
-        node_id: "node-1",
-        session_id: "session-1",
-        session_name: "Kent session",
-        role: "agent",
-        status: "running",
-        generation: 1,
-        waiting_ask_id: "ask-1",
-        started_at_unix_ms: 1,
-        completed_at_unix_ms: null,
-        interrupted_at_unix_ms: null,
-      },
-    ],
-    transitions: [
-      {
-        id: "transition-1",
-        transition_id: "ship",
-        transition_display_name: "Ship",
-        source_node_display_name: "Implement",
-        state: "pending_approval",
-        commentary: "Looks good",
-        output_values: { result: "ok" },
-        edges: [
-          {
-            id: "transition-edge-1",
-            edge_key: "ship",
-            target_node_display_name: "Ship",
-            state: "pending",
-            requires_approval: true,
-            output_requirements: [],
-          },
-        ],
-        workflow_revision_seen: 7,
-        created_at_unix_ms: 2,
-        applied_at_unix_ms: null,
-      },
-    ],
-    comments: [
-      {
-        id: "comment-1",
-        task_id: "task-1",
-        body: "Existing comment",
-        author: guiTaskCommentAuthor,
-        created_at_unix_ms: 1,
-        updated_at_unix_ms: 1,
-      },
-    ],
   },
 };
 
@@ -164,6 +115,13 @@ export const taskAttentionResponse = {
       ask_id: "",
       task_transition_id: "transition-1",
       message: "Approve transition",
+      approval_snapshot: {
+        source_node_display_name: "Implement",
+        targets: [{ display_name: "Ship" }],
+        commentary: "Looks good",
+        output_values: { result: "ok" },
+        workflow_revision_seen: 7,
+      },
     },
   ],
   generated_at_unix_ms: 3,
@@ -184,15 +142,7 @@ export async function createTaskDetailFixture(): Promise<TaskDetail> {
 export const taskDetailResponseWithNewerActiveRun = {
   task: {
     ...taskDetailResponse.task,
-    runs: [
-      ...taskDetailResponse.task.runs,
-      {
-        ...taskDetailResponse.task.runs[0],
-        id: "run-2",
-        session_id: "session-2",
-        started_at_unix_ms: 2,
-      },
-    ],
+    current_session_ids: ["session-1", "session-2"],
   },
 };
 
@@ -200,35 +150,14 @@ export const taskDetailNoInboxResponse = {
   task: {
     ...taskDetailResponse.task,
     attention_count: 0,
-    transitions: [],
   },
 };
 
 export const taskDetailResponseWithScriptRun = {
   task: {
     ...taskDetailNoInboxResponse.task,
-    actions: { ...taskActions, can_interrupt: false },
-    runs: [
-      {
-        id: "run-script",
-        task_id: "task-1",
-        placement_id: "placement-script",
-        node_id: "node-script",
-        node_kind: "script",
-        script_path: "scripts/run",
-        session_id: "",
-        session_name: "",
-        role: "script",
-        status: "interrupted",
-        generation: 1,
-        waiting_ask_id: null,
-        started_at_unix_ms: 1,
-        completed_at_unix_ms: null,
-        interrupted_at_unix_ms: 2,
-        interruption_reason: "script failed",
-        interruption_detail_json: '{"kind":"script_failure"}',
-      },
-    ],
+    current_session_ids: [],
+    current_scripts: [{ run_id: "run-script", path: "scripts/run" }],
   },
 };
 
@@ -237,6 +166,7 @@ export const taskDetailResponseWithInterruptedScriptRun = {
     ...taskDetailResponseWithScriptRun.task,
     actions: { ...taskActions, can_interrupt: false, can_resume: true },
     attention_count: 1,
+    current_scripts: [],
   },
 };
 
@@ -274,9 +204,10 @@ export const taskQuestionWaitingEvent = {
   event: {
     resource: "task",
     action: "question_waiting",
-    changed_ids: ["task-1", "run-1", "ask-1"],
     occurred_at_unix_ms: 1,
+    primary_entity_id: "task-1",
     project_id: "project-1",
+    related_ids: ["run-1", "ask-1"],
     workflow_id: "workflow-1",
   },
 };
@@ -285,8 +216,8 @@ export const taskUpdatedEvent = {
   event: {
     resource: "task",
     action: "updated",
-    changed_ids: ["task-1"],
     occurred_at_unix_ms: 1,
+    primary_entity_id: "task-1",
     project_id: "project-1",
     workflow_id: "workflow-1",
   },
@@ -337,7 +268,16 @@ export const commentAddResponse = {
 };
 
 export const commentListResponse = {
-  comments: taskDetailResponse.task.comments,
+  comments: [
+    {
+      id: "comment-1",
+      task_id: "task-1",
+      body: "Existing comment",
+      author: guiTaskCommentAuthor,
+      created_at_unix_ms: 1,
+      updated_at_unix_ms: 1,
+    },
+  ],
   next_page_token: "",
 };
 
@@ -374,6 +314,83 @@ export const taskUpdateResponse = {
     id: "task-1",
   },
 };
+
+export type TaskDetailFixtureOptions = Readonly<{
+  attention?: JsonValue;
+  asks?: unknown;
+  comments?: unknown;
+  nativeBridge?: NativeBridge | undefined;
+  path?: string | undefined;
+  routes?: readonly FakeRoute[] | undefined;
+}>;
+
+export function createTaskDetailTestServices(
+  task: JsonValue,
+  {
+    asks,
+    attention = taskAttentionFixture(task),
+    comments,
+    nativeBridge,
+    path = "/tasks/task-1",
+    routes = [],
+  }: TaskDetailFixtureOptions = {},
+): TestAppServices {
+  window.history.pushState(null, "", path);
+  return createTestServices(
+    [
+      ...startupRoutes,
+      {
+        method: "workflow.project.label.list",
+        result: {
+          catalog: {
+            project_id: "project-1",
+            labels: [],
+          },
+        },
+      },
+      {
+        method: "workflow.task.labels.get",
+        result: {
+          assignment: {
+            task_id: "task-1",
+            label_ids: [],
+          },
+        },
+      },
+      { method: "workflow.task.get", result: task },
+      { method: "workflow.task.attention.list", result: attention },
+      ...(comments === undefined ? [] : [{ method: "workflow.task.comment.list", result: comments }]),
+      { method: "workflow.task.activity.list", result: activityResponse },
+      ...(asks === undefined ? [] : [{ method: "ask.listPendingBySession", result: asks }]),
+      ...routes,
+    ],
+    nativeBridge,
+  );
+}
+
+export function mountTaskDetailSurface(
+  task: JsonValue,
+  options: TaskDetailFixtureOptions = {},
+): TestAppServices {
+  const services = createTaskDetailTestServices(task, options);
+  render(
+    createElement(TestAppProviders, {
+      children: createElement(TaskDetailSurface, { enabled: true, taskId: "task-1" }),
+      services,
+    }),
+  );
+  return services;
+}
+
+function taskAttentionFixture(task: JsonValue): JsonValue {
+  if (task === taskDetailResponseWithInterruptedScriptRun) {
+    return interruptedTaskAttentionResponse;
+  }
+  if (isJsonObject(task) && isJsonObject(task.task) && task.task.attention_count === 0) {
+    return emptyTaskAttentionResponse;
+  }
+  return taskAttentionResponse;
+}
 
 export function callParams(
   calls: readonly Readonly<{ method: string; params: JsonValue }>[],

@@ -270,6 +270,14 @@ Choose the source workspace before starting automation. Agents run in the enviro
 
 ![Kent Desktop task board and task detail view showing task actions, comments, and a pending question.](/desktop/desktop-workflow-tasks.webp)
 
+### Project Labels
+
+A project owns a shared catalog of up to 100 reusable labels across its linked workflows. You can create and rename labels from the label chooser; deleting a label removes it from every task in the project.
+
+Assign labels atomically when creating a task or update them immediately from task detail. Board cards show assigned labels as neutral chips and summarize labels that do not fit.
+
+Board label filters run on the server. OR, the default, matches any selected label; AND requires every selected label; No labels matches tasks without assignments. The selected filter persists locally for each project and desktop installation across workflows, navigation, and relaunches.
+
 ### CLI Workflow And Task Scope
 
 CLI workflow selectors are bare canonical UUIDv4 values. Copy them from `kent workflow list` or `kent workflow inspect --summary`; workflow names and persisted `workflow-...` IDs are not selectors.
@@ -321,6 +329,6 @@ kent task approve <transition-id> --execution-target none|head|default-branch|re
 kent task move <task> <target-node-id> --execution-target none|head|default-branch|ref:<revision>
 ```
 
-These task actions never prompt. Their override applies only to an unlocked task and does not edit the workflow. If selection is required, rerun the same action with one concrete selector. `kent task show` reports the source workspace and, after lock, the target mode, execution root, requested revision, resolved commit, current named branch when available, and managed worktree.
+These task actions never prompt. Their override applies only to an unlocked task and does not edit the workflow. If selection is required, rerun the same action with one concrete selector. `kent task show` reports the source workspace and, after lock, the durable target mode, requested revision, resolved revision, resolved commit, and recorded managed-worktree path when present. It also reports every exact current session and script target. Task detail does not perform live Git branch discovery; inspect the worktree when branch identity is needed.
 
 More about worktrees on the [Worktree](../worktrees/) page.

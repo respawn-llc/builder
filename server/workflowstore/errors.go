@@ -71,11 +71,6 @@ var (
 	// ErrWorkflowNameRequired is returned when a workflow name is blank.
 	ErrWorkflowNameRequired = errors.New("workflow name is required")
 
-	// ErrEventResourceRequired and ErrEventActionRequired guard
-	// PublishWorkflowEvent inputs.
-	ErrEventResourceRequired = errors.New("event resource is required")
-	ErrEventActionRequired   = errors.New("event action is required")
-
 	// ErrCommentAuthorKindInvalid is returned when a comment author kind is not
 	// one of the accepted values.
 	ErrCommentAuthorKindInvalid = errors.New("comment author kind must be user or agent")
@@ -126,6 +121,18 @@ var (
 	ErrEdgeHasTaskHistory      = errors.New("workflow edge has task history references")
 	ErrWorkflowStartNodeExists = errors.New("workflow already has a start node; edit the existing start node instead")
 
+	// ErrProjectLabelNotFound marks a Project-qualified label lookup that found
+	// no matching label.
+	ErrProjectLabelNotFound = errors.New("project label not found")
+	// ErrProjectLabelNameConflict marks a case-fold-equivalent name collision
+	// within one Project catalog.
+	ErrProjectLabelNameConflict = errors.New("project label name conflicts with an existing label")
+	// ErrProjectLabelLimitReached marks a Project catalog at its bounded size.
+	ErrProjectLabelLimitReached = errors.New("project label catalog limit reached")
+	ErrTaskLabelTaskNotFound    = errors.New("task for label assignment not found")
+	ErrTaskLabelNotFound        = errors.New("task label reference not found")
+	ErrTaskLabelWrongProject    = errors.New("task label belongs to another project")
+
 	// Manual-move guards. Each names a distinct unsupported/invalid manual-move
 	// condition.
 	ErrManualMoveSelectedContextSource      = errors.New("manual move with selected context source is not supported")
@@ -139,6 +146,128 @@ var (
 	ErrManualMoveMultiplePendingApprovals   = errors.New("manual move with multiple pending approvals is not supported")
 	ErrManualMovePendingApprovalResolved    = errors.New("pending approval was resolved before the manual move could override it")
 )
+
+type ProjectLabelNotFoundError struct {
+	ProjectID string
+	LabelID   string
+}
+
+func (e ProjectLabelNotFoundError) Error() string {
+	return fmt.Sprintf("project label %q was not found in project %q", e.LabelID, e.ProjectID)
+}
+
+func (e ProjectLabelNotFoundError) Is(target error) bool {
+	return target == ErrProjectLabelNotFound
+}
+
+type ProjectLabelNameConflictError struct {
+	ProjectID string
+	Name      string
+}
+
+func (e ProjectLabelNameConflictError) Error() string {
+	return fmt.Sprintf("project %q already has a label named %q", e.ProjectID, e.Name)
+}
+
+func (e ProjectLabelNameConflictError) Is(target error) bool {
+	return target == ErrProjectLabelNameConflict
+}
+
+type ProjectLabelLimitError struct {
+	ProjectID string
+	Limit     int
+}
+
+func (e ProjectLabelLimitError) Error() string {
+	return fmt.Sprintf("project %q has reached its %d-label catalog limit", e.ProjectID, e.Limit)
+}
+
+func (e ProjectLabelLimitError) Is(target error) bool {
+	return target == ErrProjectLabelLimitReached
+}
+
+type TaskLabelTaskNotFoundError struct {
+	TaskID string
+}
+
+func (e TaskLabelTaskNotFoundError) Error() string {
+	return fmt.Sprintf("task %q was not found for label assignment", e.TaskID)
+}
+
+func (e TaskLabelTaskNotFoundError) Is(target error) bool {
+	return target == ErrTaskLabelTaskNotFound
+}
+
+type TaskLabelNotFoundError struct {
+	LabelID string
+}
+
+func (e TaskLabelNotFoundError) Error() string {
+	return fmt.Sprintf("task label %q was not found", e.LabelID)
+}
+
+func (e TaskLabelNotFoundError) Is(target error) bool {
+	return target == ErrTaskLabelNotFound
+}
+
+type TaskLabelWrongProjectError struct {
+	TaskID         string
+	TaskProjectID  string
+	LabelID        string
+	LabelProjectID string
+}
+
+func (e TaskLabelWrongProjectError) Error() string {
+	return fmt.Sprintf(
+		"label %q belongs to project %q, not task %q project %q",
+		e.LabelID,
+		e.LabelProjectID,
+		e.TaskID,
+		e.TaskProjectID,
+	)
+}
+
+func (e TaskLabelWrongProjectError) Is(target error) bool {
+	return target == ErrTaskLabelWrongProject
+}
+
+type TaskLabelMutationErrorReason string
+
+const (
+	TaskLabelMutationTooManyAdd      TaskLabelMutationErrorReason = "too_many_add_label_ids"
+	TaskLabelMutationTooManyRemove   TaskLabelMutationErrorReason = "too_many_remove_label_ids"
+	TaskLabelMutationDuplicateAdd    TaskLabelMutationErrorReason = "duplicate_add_label_id"
+	TaskLabelMutationDuplicateRemove TaskLabelMutationErrorReason = "duplicate_remove_label_id"
+	TaskLabelMutationOverlap         TaskLabelMutationErrorReason = "add_remove_overlap"
+	TaskLabelMutationInvalidID       TaskLabelMutationErrorReason = "invalid_label_id"
+)
+
+type TaskLabelMutationError struct {
+	Reason  TaskLabelMutationErrorReason
+	Field   string
+	LabelID *string
+	Limit   *int
+	Cause   error
+}
+
+func (e TaskLabelMutationError) Error() string {
+	switch e.Reason {
+	case TaskLabelMutationTooManyAdd, TaskLabelMutationTooManyRemove:
+		return fmt.Sprintf("%s must contain at most %d label IDs", e.Field, *e.Limit)
+	case TaskLabelMutationDuplicateAdd, TaskLabelMutationDuplicateRemove:
+		return fmt.Sprintf("%s contains duplicate label ID %q", e.Field, *e.LabelID)
+	case TaskLabelMutationOverlap:
+		return fmt.Sprintf("label ID %q cannot be both added and removed", *e.LabelID)
+	case TaskLabelMutationInvalidID:
+		return fmt.Sprintf("%s contains invalid label ID %q", e.Field, *e.LabelID)
+	default:
+		return "task label mutation is invalid"
+	}
+}
+
+func (e TaskLabelMutationError) Unwrap() error {
+	return e.Cause
+}
 
 // ContextSourceKind identifies which context-source resolution failed to find a
 // completed run.

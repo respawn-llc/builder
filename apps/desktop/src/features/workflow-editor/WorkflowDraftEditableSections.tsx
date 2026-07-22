@@ -22,6 +22,7 @@ import type { WorkflowDefinition, WorkflowParameter } from "@/api";
 import {
   Button,
   identifierInputAttributes,
+  InteractiveChip,
   IslandSurface,
   SelectField,
   Tooltip,
@@ -135,14 +136,10 @@ function PromptPlaceholderChip({
 }>) {
   const { t } = useTranslation();
   const [infoOpen, setInfoOpen] = useState(false);
-  const className = cx(
-    promptPlaceholderChipBaseClassName,
-    promptPlaceholderChipToneClassNames[placeholder.tone],
-  );
+  const tone = placeholder.tone === "primary" ? "primary" : "neutral";
   if (placeholder.kind === "insert") {
     return (
-      <button
-        className={className}
+      <InteractiveChip
         data-placeholder-tone={placeholder.tone}
         onClick={() => {
           onInsert(placeholder.value);
@@ -150,18 +147,18 @@ function PromptPlaceholderChip({
         onPointerDown={(event) => {
           event.preventDefault();
         }}
-        type="button"
+        size="compact"
+        tone={tone}
       >
         {placeholder.label}
-      </button>
+      </InteractiveChip>
     );
   }
   return (
     <Tooltip onOpenChange={setInfoOpen} open={infoOpen}>
       <TooltipTrigger asChild>
-        <button
+        <InteractiveChip
           aria-label={placeholder.label}
-          className={className}
           data-placeholder-tone={placeholder.tone}
           onBlur={() => {
             setInfoOpen(false);
@@ -181,10 +178,11 @@ function PromptPlaceholderChip({
           onPointerLeave={() => {
             setInfoOpen(false);
           }}
-          type="button"
+          size="compact"
+          tone={tone}
         >
           {placeholder.label}
-        </button>
+        </InteractiveChip>
       </TooltipTrigger>
       <TooltipContent
         className="grid max-w-[24rem] gap-[var(--space-1)] whitespace-normal text-left"
@@ -202,16 +200,6 @@ function PromptPlaceholderChip({
     </Tooltip>
   );
 }
-
-const promptPlaceholderChipBaseClassName =
-  "rounded-full border px-[var(--space-1)] py-px text-[11px] font-semibold leading-4 transition-colors focus-visible:outline-none focus-visible:ring-[2px]";
-
-const promptPlaceholderChipToneClassNames = {
-  muted:
-    "border-[var(--color-outline)] bg-[color-mix(in_srgb,var(--color-on-background)_5%,transparent)] text-[var(--color-muted)] hover:bg-[color-mix(in_srgb,var(--color-on-background)_8%,transparent)] focus-visible:ring-[color-mix(in_srgb,var(--color-muted)_35%,transparent)]",
-  primary:
-    "border-[color-mix(in_srgb,var(--color-primary)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-primary)_10%,transparent)] text-[var(--color-primary)] hover:bg-[color-mix(in_srgb,var(--color-primary)_16%,transparent)] focus-visible:ring-[color-mix(in_srgb,var(--color-primary)_35%,transparent)]",
-} satisfies Record<PromptTemplatePlaceholder["tone"], string>;
 
 export function EditableEdgeParameters({
   controller,

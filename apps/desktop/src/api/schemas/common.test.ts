@@ -52,6 +52,24 @@ describe("attentionItemSchema", () => {
       }),
     ).toThrow();
   });
+
+  it("accepts every server-projected approval target", () => {
+    const targets = Array.from({ length: 201 }, (_, index) => ({
+      display_name: `Target ${String(index)}`,
+    }));
+    const item = attentionItemSchema.parse({
+      ...baseAttentionItem,
+      approval_snapshot: {
+        source_node_display_name: "Review",
+        targets,
+        commentary: "",
+        output_values: {},
+        workflow_revision_seen: 1,
+      },
+    });
+
+    expect(item.approvalSnapshot?.targets).toHaveLength(201);
+  });
 });
 
 describe("taskStatusSchema", () => {

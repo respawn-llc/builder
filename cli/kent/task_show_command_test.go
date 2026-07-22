@@ -245,14 +245,17 @@ func (r *crossProjectTaskShowRemote) GetWorkflowTask(_ context.Context, req serv
 		return serverapi.WorkflowTaskGetResponse{Task: serverapi.WorkflowTaskDetail{
 			Summary:  serverapi.WorkflowTaskSummary{ID: "task-other", ProjectID: "project-other", WorkflowID: "workflow-" + workflowSelectorTestUUID, ShortID: "OTH-1", Title: "Other Task"},
 			Project:  serverapi.ProjectBoardProject{ProjectKey: "OTH", DisplayName: "Other"},
-			Workflow: serverapi.WorkflowPickerItem{WorkflowID: "workflow-" + workflowSelectorTestUUID, DisplayName: "Workflow"},
+			Workflow: serverapi.WorkflowTaskWorkflowSummary{WorkflowID: "workflow-" + workflowSelectorTestUUID, DisplayName: "Workflow"},
 			Status:   serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindBacklog},
 		}}, nil
 	}
 	return serverapi.WorkflowTaskGetResponse{}, sql.ErrNoRows
 }
 
-func TestWriteTaskDetailIncludesParallelBranchIDs(t *testing.T) {
+func TestWriteTaskDetailIncludesCurrentExecutionTargets(t *testing.T) {
+	worktreePath := "/workspace-task"
+	requestedRef := "HEAD"
+	commitOID := "0123456789abcdef"
 	var stdout bytes.Buffer
 	if err := writeTaskDetail(&stdout, serverapi.WorkflowTaskDetail{
 		Summary: serverapi.WorkflowTaskSummary{
@@ -264,25 +267,20 @@ func TestWriteTaskDetailIncludesParallelBranchIDs(t *testing.T) {
 			CreatedAtUnixMs: 1735689600000,
 		},
 		Project:         serverapi.ProjectBoardProject{DisplayName: "Project"},
-		Workflow:        serverapi.WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Workflow"},
+		Workflow:        serverapi.WorkflowTaskWorkflowSummary{WorkflowID: "workflow-1", DisplayName: "Workflow"},
 		Body:            "Do the work.",
 		SourceWorkspace: serverapi.ProjectWorkspaceSummary{RootPath: "/workspace"},
 		ExecutionTarget: &serverapi.WorkflowExecutionTarget{
-			Mode: serverapi.WorkflowExecutionTargetModeHead,
-			ManagedWorktree: &serverapi.WorkflowExecutionTargetWorktree{
-				WorktreeID:    "worktree-1",
-				CanonicalRoot: "/workspace-task",
-				DisplayName:   "workspace-task",
-				Availability:  serverapi.WorktreePathAvailabilityAvailable,
-				Managed:       true,
-			},
+			Mode:         serverapi.WorkflowExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			CommitOID:    &commitOID,
+			Provenance:   serverapi.WorkflowExecutionTargetProvenanceResolved,
 		},
-		SourceURL: "https://example.test/source",
-		Status:    serverapi.WorkflowTaskStatus{Kind: "backlog"},
-		Runs: []serverapi.WorkflowRun{
-			{ID: "run-1"},
-			{ID: "run-2"},
-		},
+		WorktreePath:      &worktreePath,
+		CurrentSessionIDs: []string{"session-1"},
+		CurrentScripts:    []serverapi.WorkflowTaskCurrentScript{{RunID: "run-2", Path: "script.sh"}},
+		SourceURL:         "https://example.test/source",
+		Status:            serverapi.WorkflowTaskStatus{Kind: "backlog"},
 	}); err != nil {
 		t.Fatalf("writeTaskDetail: %v", err)
 	}
@@ -294,9 +292,10 @@ func TestWriteTaskDetailIncludesParallelBranchIDs(t *testing.T) {
 		"Project: \"Project\" (project-1)\n",
 		"Workflow: \"Workflow\" (workflow-1)\n",
 		"Created at 2025-01-01T00:00:00Z UTC\n",
-		"Total agent runs: 2\n",
 		"Main workspace: /workspace\n",
 		"Worktree: /workspace-task\n",
+		"Current session: session-1\n",
+		"Current script: script.sh (run-2)\n",
 		"Imported from: https://example.test/source\n",
 	} {
 		if !strings.Contains(output, want) {
@@ -309,35 +308,26 @@ func TestWriteTaskDetailIncludesParallelBranchIDs(t *testing.T) {
 }
 
 func TestTaskDetailExecutionTargetHumanAndJSONFacts(t *testing.T) {
-	effectiveRoot := "/workspace-task"
+	worktreePath := "/workspace-task"
 	requestedRef := "release/v1"
 	resolvedRef := "refs/remotes/origin/release/v1"
 	commitOID := "0123456789abcdef0123456789abcdef01234567"
-	currentBranch := "operator-renamed"
 	task := serverapi.WorkflowTaskDetail{
 		Summary:  serverapi.WorkflowTaskSummary{ID: "task-1", ProjectID: "project-1", ShortID: "WOR-1", Title: "Task", CreatedAtUnixMs: 1735689600000},
 		Project:  serverapi.ProjectBoardProject{DisplayName: "Project"},
-		Workflow: serverapi.WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Workflow"},
+		Workflow: serverapi.WorkflowTaskWorkflowSummary{WorkflowID: "workflow-1", DisplayName: "Workflow"},
 		SourceWorkspace: serverapi.ProjectWorkspaceSummary{
 			RootPath: "/workspace",
 		},
 		ExecutionTarget: &serverapi.WorkflowExecutionTarget{
-			Mode:          serverapi.WorkflowExecutionTargetModeCustomRef,
-			EffectiveRoot: &effectiveRoot,
-			RequestedRef:  &requestedRef,
-			ResolvedRef:   &resolvedRef,
-			CommitOID:     &commitOID,
-			Provenance:    serverapi.WorkflowExecutionTargetProvenanceLegacyObserved,
-			CurrentBranch: &currentBranch,
-			ManagedWorktree: &serverapi.WorkflowExecutionTargetWorktree{
-				WorktreeID:    "worktree-1",
-				CanonicalRoot: effectiveRoot,
-				DisplayName:   "workspace-task",
-				Availability:  serverapi.WorktreePathAvailabilityAvailable,
-				Managed:       true,
-			},
+			Mode:         serverapi.WorkflowExecutionTargetModeCustomRef,
+			RequestedRef: &requestedRef,
+			ResolvedRef:  &resolvedRef,
+			CommitOID:    &commitOID,
+			Provenance:   serverapi.WorkflowExecutionTargetProvenanceLegacyObserved,
 		},
-		Status: serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindBacklog},
+		WorktreePath: &worktreePath,
+		Status:       serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindBacklog},
 	}
 
 	var human bytes.Buffer
@@ -346,11 +336,10 @@ func TestTaskDetailExecutionTargetHumanAndJSONFacts(t *testing.T) {
 	}
 	for _, fact := range []string{
 		string(task.ExecutionTarget.Mode),
-		effectiveRoot,
+		worktreePath,
 		requestedRef,
 		resolvedRef,
 		commitOID[:12],
-		currentBranch,
 	} {
 		if !strings.Contains(human.String(), fact) {
 			t.Fatalf("human task detail omitted target fact %q: %s", fact, human.String())
@@ -371,18 +360,10 @@ func TestTaskDetailExecutionTargetHumanAndJSONFacts(t *testing.T) {
 
 func TestWriteTaskDetailComments(t *testing.T) {
 	var stdout bytes.Buffer
-	if err := writeTaskDetail(&stdout, serverapi.WorkflowTaskDetail{
-		Summary:  serverapi.WorkflowTaskSummary{ProjectID: "project-1", ShortID: "WOR-1", Title: "Task", CreatedAtUnixMs: 1735689600000},
-		Project:  serverapi.ProjectBoardProject{DisplayName: "Project"},
-		Workflow: serverapi.WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Workflow"},
-		Status:   serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindBacklog},
-		Comments: []serverapi.WorkflowTaskComment{
-			{ID: "comment-old", Author: "user", Body: "old", CreatedAtUnixMs: 1735689600000},
-			{ID: "comment-new", Author: "agent", AuthorID: "reviewer", Body: "new", CreatedAtUnixMs: 1735776000000},
-		},
-	}); err != nil {
-		t.Fatalf("writeTaskDetail: %v", err)
-	}
+	writeTaskDetailComments(&stdout, "WOR-1", []serverapi.WorkflowTaskComment{
+		{ID: "comment-old", Author: "user", Body: "old", CreatedAtUnixMs: 1735689600000},
+		{ID: "comment-new", Author: "agent", AuthorID: "reviewer", Body: "new", CreatedAtUnixMs: 1735776000000},
+	})
 
 	output := stdout.String()
 	want := "Comments (2):\nreviewer at 2025-01-02T00:00:00Z UTC:\nnew\n---\nUser at 2025-01-01T00:00:00Z UTC:\nold\n"
@@ -397,15 +378,7 @@ func TestWriteTaskDetailCommentOverflowPointsToCommentCommand(t *testing.T) {
 		comments[i] = serverapi.WorkflowTaskComment{ID: fmt.Sprintf("comment-%d", i), Author: "user", Body: "comment", CreatedAtUnixMs: 1735689600000 + int64(i)}
 	}
 	var stdout bytes.Buffer
-	if err := writeTaskDetail(&stdout, serverapi.WorkflowTaskDetail{
-		Summary:  serverapi.WorkflowTaskSummary{ProjectID: "project-1", ShortID: "WOR-1", Title: "Task", CreatedAtUnixMs: 1735689600000},
-		Project:  serverapi.ProjectBoardProject{DisplayName: "Project"},
-		Workflow: serverapi.WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Workflow"},
-		Status:   serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindBacklog},
-		Comments: comments,
-	}); err != nil {
-		t.Fatalf("writeTaskDetail: %v", err)
-	}
+	writeTaskDetailComments(&stdout, "WOR-1", comments)
 
 	output := stdout.String()
 	if !strings.Contains(output, "Comments under this task: 10. `kent task comment list WOR-1` to show them.\n") {

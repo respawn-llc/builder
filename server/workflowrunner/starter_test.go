@@ -32,7 +32,6 @@ import (
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/server/workflowview"
-	"core/server/worktree"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -606,7 +605,7 @@ func TestWorkflowRuntimeInterruptReleasesBeforeInteractiveReactivation(t *testin
 	if err != nil {
 		t.Fatalf("parse workflow session id: %v", err)
 	}
-	workflowRef := sessionruntime.WorkflowExecutionRef{RunID: run.ID, Generation: run.Generation}
+	workflowRef := sessionruntime.WorkflowExecutionRef{TaskID: run.TaskID, RunID: run.ID, Generation: run.Generation}
 	if _, active := fixture.runtimeAuthority.ExecutionByWorkflow(workflowRef); !active {
 		t.Fatal("workflow execution is not active")
 	}
@@ -1771,20 +1770,6 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
 	}
-	definitions, err := workflowview.NewDefinitionProjection(store)
-	if err != nil {
-		t.Fatalf("workflowview.NewDefinitionProjection: %v", err)
-	}
-	taskDetail, err := workflowview.NewTaskDetail(
-		metadataStore,
-		definitions,
-		workflowview.NewTaskProjector(),
-		worktree.NewGitInspector(nil),
-	)
-	if err != nil {
-		t.Fatalf("workflowview.NewTaskDetail: %v", err)
-	}
-	view := taskDetail
 	worktrees := &metadataTaskWorktrees{t: t, metadata: metadataStore, workspaceID: binding.WorkspaceID, root: filepath.Join(home, "task-worktrees")}
 	client := NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}, steps...)
 	clientFactory := func(SchedulerStartRunRequest) llm.Client { return client }
@@ -1802,6 +1787,15 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 		PromptFeed:        runtimes,
 		ResourceLifecycle: runtimes,
 	})
+	taskDetail, err := workflowview.NewTaskDetail(
+		metadataStore,
+		workflowview.NewTaskProjector(),
+		runtimeAuthority,
+	)
+	if err != nil {
+		t.Fatalf("workflowview.NewTaskDetail: %v", err)
+	}
+	view := taskDetail
 	starter, err := NewStarter(cfg, metadataStore, store, nil, runtimes, StarterOptions{
 		ClientFactory:    clientFactory,
 		Worktrees:        worktrees,
@@ -2129,11 +2123,14 @@ func (r *workflowAskHandlerRuntime) MarkTaskApprovalQuestionCleared(_ clientui.A
 }
 
 type recordingRuntimeStore struct {
-	waitingAskID    string
-	clearedAskID    string
-	setErr          error
-	clearErr        error
-	runStartContext workflowstore.RunStartContext
+	waitingAskID         string
+	clearedAskID         string
+	setErr               error
+	clearErr             error
+	runStartContext      workflowstore.RunStartContext
+	runCompletionContext workflowstore.RunCompletionContext
+	completionOutcome    workflowstore.CompleteRunOutcome
+	completionRequest    workflowstore.CompleteRunRequest
 }
 
 func (s *recordingRuntimeStore) GetRun(context.Context, workflow.RunID) (workflowstore.RunRecord, error) {
@@ -2149,7 +2146,7 @@ func (s *recordingRuntimeStore) GetRunStartContext(context.Context, workflow.Run
 }
 
 func (s *recordingRuntimeStore) GetRunCompletionContext(context.Context, workflow.RunID) (workflowstore.RunCompletionContext, error) {
-	panic("GetRunCompletionContext not expected")
+	return s.runCompletionContext, nil
 }
 
 func (s *recordingRuntimeStore) AttachRunSession(context.Context, workflow.RunID, int64, string) error {
@@ -2170,8 +2167,9 @@ func (s *recordingRuntimeStore) ClearRunWaitingAsk(_ context.Context, _ workflow
 	return s.clearErr
 }
 
-func (s *recordingRuntimeStore) CompleteRun(context.Context, workflowstore.CompleteRunRequest) (workflowstore.CompleteRunResult, error) {
-	panic("CompleteRun not expected")
+func (s *recordingRuntimeStore) CompleteRun(_ context.Context, request workflowstore.CompleteRunRequest) (workflowstore.CompleteRunOutcome, error) {
+	s.completionRequest = request
+	return s.completionOutcome, nil
 }
 
 func (s *recordingRuntimeStore) RecordProtocolViolation(context.Context, workflowstore.RecordProtocolViolationRequest) (workflowstore.RecordProtocolViolationResult, error) {
@@ -2205,6 +2203,52 @@ func (f *recordingInterruptedRunFinalizer) FinalizeTransition(_ context.Context,
 
 func (f *recordingInterruptedRunFinalizer) PublishPendingInterruptedRun(_ context.Context, runID workflow.RunID) {
 	f.interruptedRuns = append(f.interruptedRuns, runID)
+}
+
+func TestFinalizeWorkflowScriptUsesBaseCompletionResultForAttention(t *testing.T) {
+	finalizer := &recordingInterruptedRunFinalizer{}
+	store := &recordingRuntimeStore{
+		runCompletionContext: workflowstore.RunCompletionContext{
+			TransitionIDs: []string{"done"},
+		},
+		completionOutcome: workflowstore.CompleteRunOutcome{
+			Result: workflowstore.CompleteRunResult{
+				TransitionID: "transition-base",
+				State:        "applied",
+				ResolvedApprovalTransitionProjections: []workflowstore.ApprovalTransitionProjection{{
+					TransitionID: "transition-resolved",
+					ProjectID:    "project-1",
+					WorkflowID:   "workflow-1",
+					TaskID:       "task-1",
+				}},
+			},
+			Handoff: workflowstore.CompletionHandoff{
+				SourceNodeDisplayName:  "Source",
+				DestinationDisplayName: "Destination",
+			},
+		},
+	}
+	starter := &Starter{store: store, attentionFinalizer: finalizer}
+	request := SchedulerStartRunRequest{RunID: "run-script", Generation: 4}
+	input := workflowstore.RunStartContext{
+		Run:           workflowstore.RunRecord{ID: request.RunID, Generation: request.Generation},
+		TransitionIDs: []string{"done"},
+	}
+
+	err := starter.finalizeWorkflowScript(request, input, workflowScriptResult{Stdout: []byte(`{"transition":"done"}`)}, nil)
+	if err != nil {
+		t.Fatalf("finalizeWorkflowScript: %v", err)
+	}
+	if store.completionRequest.RunID != request.RunID || store.completionRequest.Actor != "script" {
+		t.Fatalf("script completion request = %+v", store.completionRequest)
+	}
+	if len(finalizer.transitions) != 1 ||
+		finalizer.transitions[0].TransitionID != "transition-base" ||
+		finalizer.transitions[0].State != "applied" ||
+		len(finalizer.transitions[0].ResolvedApprovalProjections) != 1 ||
+		finalizer.transitions[0].ResolvedApprovalProjections[0].TransitionID != "transition-resolved" {
+		t.Fatalf("script attention finalization = %+v, want base transition result", finalizer.transitions)
+	}
 }
 
 func TestScriptCompletionAttentionForwardsCapturedResolutions(t *testing.T) {

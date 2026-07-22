@@ -75,6 +75,83 @@ SET
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
 WHERE id = sqlc.arg(project_id);
 
+-- name: InsertProjectLabel :one
+INSERT INTO project_labels (
+    id,
+    project_id,
+    name,
+    created_at_unix_ms,
+    updated_at_unix_ms
+) SELECT
+    sqlc.arg(id),
+    sqlc.arg(project_id),
+    sqlc.arg(name),
+    sqlc.arg(created_at_unix_ms),
+    sqlc.arg(updated_at_unix_ms)
+FROM projects
+WHERE projects.id = sqlc.arg(project_id)
+  AND (
+      SELECT COUNT(*)
+      FROM project_labels
+      WHERE project_labels.project_id = sqlc.arg(project_id)
+  ) < CAST(sqlc.arg(catalog_limit) AS INTEGER)
+RETURNING id, project_id, name;
+
+-- name: ListProjectLabels :many
+SELECT id, project_id, name
+FROM project_labels
+WHERE project_id = sqlc.arg(project_id)
+ORDER BY name COLLATE kent_label_casefold_v1 ASC, id ASC
+LIMIT 101;
+
+-- name: RenameProjectLabel :one
+UPDATE project_labels
+SET
+    name = sqlc.arg(name),
+    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE id = sqlc.arg(id)
+  AND project_id = sqlc.arg(project_id)
+RETURNING id, project_id, name;
+
+-- name: DeleteProjectLabel :one
+DELETE FROM project_labels
+WHERE id = sqlc.arg(id)
+  AND project_id = sqlc.arg(project_id)
+RETURNING id, project_id, name;
+
+-- name: ListTaskAssignedLabelIDsByTasks :many
+SELECT tla.task_id, pl.id AS label_id
+FROM task_label_assignments tla
+JOIN project_labels pl ON pl.id = tla.label_id
+WHERE tla.task_id IN (sqlc.slice('task_ids'))
+ORDER BY tla.task_id ASC, pl.name COLLATE kent_label_casefold_v1 ASC, pl.id ASC;
+
+-- name: ListProjectLabelsByIDs :many
+SELECT id, project_id, name
+FROM project_labels
+WHERE id IN (sqlc.slice('label_ids'))
+ORDER BY id ASC;
+
+-- name: InsertTaskLabelAssignment :exec
+INSERT INTO task_label_assignments (task_id, label_id)
+VALUES (sqlc.arg(task_id), sqlc.arg(label_id))
+ON CONFLICT(task_id, label_id) DO NOTHING;
+
+-- name: AcquireTaskLabelWriteLock :one
+UPDATE projects
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE id = (
+    SELECT task_records.project_id
+    FROM task_records
+    WHERE task_records.id = sqlc.arg(task_id)
+)
+RETURNING id;
+
+-- name: DeleteTaskLabelAssignment :execrows
+DELETE FROM task_label_assignments
+WHERE task_id = sqlc.arg(task_id)
+  AND label_id = sqlc.arg(label_id);
+
 -- name: AllocateProjectTaskSequence :one
 UPDATE projects
 SET
@@ -1003,6 +1080,10 @@ WHERE task_id = sqlc.arg(task_id);
 DELETE FROM task_comments
 WHERE task_id = sqlc.arg(task_id);
 
+-- name: DeleteTaskLabelAssignmentsByTask :execrows
+DELETE FROM task_label_assignments
+WHERE task_id = sqlc.arg(task_id);
+
 -- name: DeleteTask :execrows
 DELETE FROM tasks
 WHERE id = sqlc.arg(id);
@@ -1312,6 +1393,20 @@ FROM workflow_task_status_records
 WHERE task_id = sqlc.arg(task_id)
 LIMIT 1;
 
+-- name: ListWorkflowTaskCurrentRunFacts :many
+SELECT
+    r.id,
+    r.run_generation,
+    r.waiting_ask_id
+FROM task_run_records r
+JOIN task_node_placements p ON p.id = r.placement_id
+WHERE r.task_id = sqlc.arg(task_id)
+  AND r.started_at_unix_ms IS NOT NULL
+  AND r.completed_at_unix_ms IS NULL
+  AND r.interrupted_at_unix_ms IS NULL
+  AND p.state = 'active'
+ORDER BY r.id ASC;
+
 -- name: ListWorkflowTaskStatusRecordsByTasks :many
 SELECT
     task_id,
@@ -1430,7 +1525,14 @@ GROUP BY workflow_id
 ORDER BY latest_updated_at_unix_ms DESC, workflow_id ASC;
 
 -- name: ListBoardColumnTaskCounts :many
-WITH effective_board_placements AS (
+WITH
+label_filter_args AS (
+    SELECT
+        CAST(sqlc.arg(label_filter_kind) AS TEXT) AS label_filter_kind,
+        CAST(sqlc.narg(label_filter_mode) AS TEXT) AS label_filter_mode,
+        CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json
+),
+effective_board_placements AS (
     SELECT
         t.id AS task_id,
         p.node_id AS node_id
@@ -1483,6 +1585,43 @@ SELECT
     node_id,
     CAST(COUNT(DISTINCT task_id) AS INTEGER) AS task_count
 FROM effective_board_placements
+JOIN label_filter_args
+WHERE (
+    label_filter_args.label_filter_kind = 'none'
+    OR (
+        label_filter_args.label_filter_kind = 'named'
+        AND label_filter_args.label_filter_mode = 'any'
+        AND EXISTS (
+            SELECT 1
+            FROM json_each(label_filter_args.label_ids_json) selected_label
+            JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+              ON assignment.label_id = selected_label.value
+            WHERE assignment.task_id = effective_board_placements.task_id
+        )
+    )
+    OR (
+        label_filter_args.label_filter_kind = 'named'
+        AND label_filter_args.label_filter_mode = 'all'
+        AND NOT EXISTS (
+            SELECT 1
+            FROM json_each(label_filter_args.label_ids_json) selected_label
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                WHERE assignment.label_id = selected_label.value
+                  AND assignment.task_id = effective_board_placements.task_id
+            )
+        )
+    )
+    OR (
+        label_filter_args.label_filter_kind = 'unlabeled'
+        AND NOT EXISTS (
+            SELECT 1
+            FROM task_label_assignments assignment
+            WHERE assignment.task_id = effective_board_placements.task_id
+        )
+    )
+)
 GROUP BY node_id
 ORDER BY node_id ASC;
 
@@ -1500,6 +1639,9 @@ args AS (
         CAST(sqlc.arg(status_kinds_json) AS TEXT) AS status_kinds_json,
         CAST(sqlc.arg(attention_filter_set) AS INTEGER) AS attention_filter_set,
         CAST(sqlc.arg(attention_kinds_json) AS TEXT) AS attention_kinds_json,
+        CAST(sqlc.arg(label_filter_kind) AS TEXT) AS label_filter_kind,
+        CAST(sqlc.narg(label_filter_mode) AS TEXT) AS label_filter_mode,
+        CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json,
         CAST(sqlc.arg(cursor_set) AS INTEGER) AS cursor_set,
         CAST(sqlc.arg(cursor_created_at_unix_ms) AS INTEGER) AS cursor_created_at_unix_ms,
         CAST(sqlc.arg(cursor_updated_at_unix_ms) AS INTEGER) AS cursor_updated_at_unix_ms,
@@ -1718,6 +1860,42 @@ selected_rows AS (
               JOIN json_each(status.attention_types_json) task_attention ON task_attention.value = filter_attention.value
           )
       )
+      AND (
+          args.label_filter_kind = 'none'
+          OR (
+              args.label_filter_kind = 'named'
+              AND args.label_filter_mode = 'any'
+              AND EXISTS (
+                  SELECT 1
+                  FROM json_each(args.label_ids_json) selected_label
+                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                    ON assignment.label_id = selected_label.value
+                  WHERE assignment.task_id = t.id
+              )
+          )
+          OR (
+              args.label_filter_kind = 'named'
+              AND args.label_filter_mode = 'all'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(args.label_ids_json) selected_label
+                  WHERE NOT EXISTS (
+                      SELECT 1
+                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                      WHERE assignment.label_id = selected_label.value
+                        AND assignment.task_id = t.id
+                  )
+              )
+          )
+          OR (
+              args.label_filter_kind = 'unlabeled'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM task_label_assignments assignment
+                  WHERE assignment.task_id = t.id
+              )
+          )
+      )
 ),
 matching_workflows AS (
     SELECT task_link.workflow_id
@@ -1848,6 +2026,42 @@ WITH board_node_tasks AS (
     FROM task_records t
     WHERE t.project_id = sqlc.arg(project_id)
       AND t.workflow_id = sqlc.arg(workflow_id)
+      AND (
+          sqlc.arg(label_filter_kind) = 'none'
+          OR (
+              sqlc.arg(label_filter_kind) = 'named'
+              AND sqlc.narg(label_filter_mode) = 'any'
+              AND EXISTS (
+                  SELECT 1
+                  FROM json_each(sqlc.arg(label_ids_json)) selected_label
+                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                    ON assignment.label_id = selected_label.value
+                  WHERE assignment.task_id = t.id
+              )
+          )
+          OR (
+              sqlc.arg(label_filter_kind) = 'named'
+              AND sqlc.narg(label_filter_mode) = 'all'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(sqlc.arg(label_ids_json)) selected_label
+                  WHERE NOT EXISTS (
+                      SELECT 1
+                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                      WHERE assignment.label_id = selected_label.value
+                        AND assignment.task_id = t.id
+                  )
+              )
+          )
+          OR (
+              sqlc.arg(label_filter_kind) = 'unlabeled'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM task_label_assignments assignment
+                  WHERE assignment.task_id = t.id
+              )
+          )
+      )
       AND (
           EXISTS (
               SELECT 1
@@ -4091,37 +4305,21 @@ WHERE r.id = sqlc.arg(run_id);
 
 -- name: ResolveTaskWaitingAsk :many
 SELECT
-    id,
-    task_id,
-    placement_id,
-    node_id,
-    session_id,
-    run_generation,
-    workflow_revision_seen,
-    automation_requested_at_unix_ms,
-    created_at_unix_ms,
-    updated_at_unix_ms,
-    started_at_unix_ms,
-    completed_at_unix_ms,
-    interrupted_at_unix_ms,
-    interruption_reason,
-    interruption_detail_json,
-    waiting_ask_id,
-    effective_completion_mode,
-    invalid_completion_count,
-    run_start_snapshot_json,
-    metadata_json
-FROM task_run_records
-WHERE task_id = sqlc.arg(task_id)
-  AND waiting_ask_id = sqlc.arg(ask_id)
-  AND (sqlc.arg(run_id) = '' OR id = sqlc.arg(run_id))
-  AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NULL
-  AND trim(COALESCE(session_id, '')) != ''
-ORDER BY updated_at_unix_ms DESC, (
+    sqlc.embed(runs),
+    tasks.project_id,
+    tasks.workflow_id
+FROM task_run_records runs
+JOIN task_records tasks ON tasks.id = runs.task_id
+WHERE runs.task_id = sqlc.arg(task_id)
+  AND runs.waiting_ask_id = sqlc.arg(ask_id)
+  AND (sqlc.arg(run_id) = '' OR runs.id = sqlc.arg(run_id))
+  AND runs.completed_at_unix_ms IS NULL
+  AND runs.interrupted_at_unix_ms IS NULL
+  AND trim(COALESCE(runs.session_id, '')) != ''
+ORDER BY runs.updated_at_unix_ms DESC, (
     SELECT storage.rowid
     FROM task_runs storage
-    WHERE storage.id = task_run_records.id
+    WHERE storage.id = runs.id
 ) DESC;
 
 -- name: CompleteRunUpdateRun :execrows

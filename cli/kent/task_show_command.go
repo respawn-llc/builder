@@ -13,20 +13,19 @@ import (
 )
 
 type taskShowOutput struct {
-	Summary         serverapi.WorkflowTaskSummary      `json:"summary"`
-	Body            string                             `json:"body"`
-	SourceURL       string                             `json:"source_url,omitempty"`
-	Project         serverapi.ProjectBoardProject      `json:"project"`
-	Workflow        serverapi.WorkflowPickerItem       `json:"workflow"`
-	SourceWorkspace serverapi.ProjectWorkspaceSummary  `json:"source_workspace"`
-	ExecutionTarget *serverapi.WorkflowExecutionTarget `json:"execution_target,omitempty"`
-	Status          serverapi.WorkflowTaskStatus       `json:"status"`
-	Actions         serverapi.WorkflowTaskActions      `json:"actions"`
-	AttentionCount  int                                `json:"attention_count"`
-	PlacementCount  int                                `json:"placement_count"`
-	RunCount        int                                `json:"run_count"`
-	TransitionCount int                                `json:"transition_count"`
-	CommentCount    int                                `json:"comment_count"`
+	Summary           serverapi.WorkflowTaskSummary         `json:"summary"`
+	Body              string                                `json:"body"`
+	SourceURL         string                                `json:"source_url,omitempty"`
+	Project           serverapi.ProjectBoardProject         `json:"project"`
+	Workflow          serverapi.WorkflowTaskWorkflowSummary `json:"workflow"`
+	SourceWorkspace   serverapi.ProjectWorkspaceSummary     `json:"source_workspace"`
+	ExecutionTarget   *serverapi.WorkflowExecutionTarget    `json:"execution_target,omitempty"`
+	WorktreePath      *string                               `json:"worktree_path"`
+	CurrentSessionIDs []string                              `json:"current_session_ids"`
+	CurrentScripts    []serverapi.WorkflowTaskCurrentScript `json:"current_scripts"`
+	Status            serverapi.WorkflowTaskStatus          `json:"status"`
+	Actions           serverapi.WorkflowTaskActions         `json:"actions"`
+	AttentionCount    int                                   `json:"attention_count"`
 }
 
 func taskShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -73,20 +72,19 @@ func taskShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func taskShowOutputFromDetail(task serverapi.WorkflowTaskDetail) taskShowOutput {
 	return taskShowOutput{
-		Summary:         task.Summary,
-		Body:            task.Body,
-		SourceURL:       task.SourceURL,
-		Project:         task.Project,
-		Workflow:        task.Workflow,
-		SourceWorkspace: task.SourceWorkspace,
-		ExecutionTarget: task.ExecutionTarget,
-		Status:          task.Status,
-		Actions:         task.Actions,
-		AttentionCount:  task.AttentionCount,
-		PlacementCount:  len(task.Placements),
-		RunCount:        len(task.Runs),
-		TransitionCount: len(task.Transitions),
-		CommentCount:    len(task.Comments),
+		Summary:           task.Summary,
+		Body:              task.Body,
+		SourceURL:         task.SourceURL,
+		Project:           task.Project,
+		Workflow:          task.Workflow,
+		SourceWorkspace:   task.SourceWorkspace,
+		ExecutionTarget:   task.ExecutionTarget,
+		WorktreePath:      task.WorktreePath,
+		CurrentSessionIDs: task.CurrentSessionIDs,
+		CurrentScripts:    task.CurrentScripts,
+		Status:            task.Status,
+		Actions:           task.Actions,
+		AttentionCount:    task.AttentionCount,
 	}
 }
 
@@ -140,29 +138,29 @@ func writeTaskDetail(stdout io.Writer, task serverapi.WorkflowTaskDetail) error 
 	fmt.Fprintf(stdout, "Project: %q (%s)\n", task.Project.DisplayName, task.Summary.ProjectID)
 	fmt.Fprintf(stdout, "Workflow: %q (%s)\n", task.Workflow.DisplayName, task.Workflow.WorkflowID)
 	fmt.Fprintf(stdout, "Created at %s UTC\n", time.UnixMilli(task.Summary.CreatedAtUnixMs).UTC().Format(time.RFC3339))
-	if len(task.Runs) > 0 {
-		fmt.Fprintf(stdout, "Total agent runs: %d\n", len(task.Runs))
-	}
 	if strings.TrimSpace(task.SourceWorkspace.RootPath) != "" {
 		fmt.Fprintf(stdout, "Main workspace: %s\n", task.SourceWorkspace.RootPath)
 	}
 	if task.ExecutionTarget != nil {
 		writeTaskExecutionTarget(stdout, *task.ExecutionTarget)
 	}
+	if task.WorktreePath != nil {
+		fmt.Fprintf(stdout, "Worktree: %s\n", *task.WorktreePath)
+	}
+	for _, sessionID := range task.CurrentSessionIDs {
+		fmt.Fprintf(stdout, "Current session: %s\n", sessionID)
+	}
+	for _, script := range task.CurrentScripts {
+		fmt.Fprintf(stdout, "Current script: %s (%s)\n", script.Path, script.RunID)
+	}
 	if strings.TrimSpace(task.SourceURL) != "" {
 		fmt.Fprintf(stdout, "Imported from: %s\n", task.SourceURL)
 	}
-	writeTaskDetailComments(stdout, task.Summary.ShortID, task.Comments)
 	return nil
 }
 
 func writeTaskExecutionTarget(stdout io.Writer, target serverapi.WorkflowExecutionTarget) {
 	fmt.Fprintf(stdout, "Execution target: %s\n", target.Mode)
-	if target.EffectiveRoot != nil {
-		fmt.Fprintf(stdout, "Execution root: %s\n", *target.EffectiveRoot)
-	} else if target.Mode != serverapi.WorkflowExecutionTargetModeNone {
-		fmt.Fprintln(stdout, "Execution root: unavailable")
-	}
 	if target.RequestedRef != nil {
 		fmt.Fprintf(stdout, "Requested revision: %s\n", *target.RequestedRef)
 	}
@@ -175,15 +173,6 @@ func writeTaskExecutionTarget(stdout io.Writer, target serverapi.WorkflowExecuti
 			label = "Observed commit (legacy)"
 		}
 		fmt.Fprintf(stdout, "%s: %s\n", label, shortCommitOID(*target.CommitOID))
-	}
-	if target.CurrentBranch != nil {
-		fmt.Fprintf(stdout, "Current branch: %s\n", *target.CurrentBranch)
-	}
-	if target.ManagedWorktree != nil {
-		worktreeRoot := strings.TrimSpace(target.ManagedWorktree.CanonicalRoot)
-		if worktreeRoot != "" {
-			fmt.Fprintf(stdout, "Worktree: %s\n", worktreeRoot)
-		}
 	}
 }
 

@@ -138,26 +138,19 @@ func TestWorkflowValidationForCLIProjectsWorkflowIDs(t *testing.T) {
 	}
 }
 
-func TestWorkflowTaskDetailForCLIProjectsSummaryAndPickerWorkflowIDs(t *testing.T) {
+func TestWorkflowTaskDetailForCLIProjectsSummaryAndWorkflowIDs(t *testing.T) {
 	persistedID := "workflow-" + workflowSelectorTestUUID
 	serverDetail := serverapi.WorkflowTaskDetail{
-		Summary: serverapi.WorkflowTaskSummary{WorkflowID: persistedID},
-		Workflow: serverapi.WorkflowPickerItem{
-			WorkflowID:       persistedID,
-			ValidationErrors: []serverapi.WorkflowValidationError{{WorkflowID: &persistedID}, {}},
-		},
+		Summary:  serverapi.WorkflowTaskSummary{WorkflowID: persistedID},
+		Workflow: serverapi.WorkflowTaskWorkflowSummary{WorkflowID: persistedID},
 	}
 	projected, err := workflowTaskDetailForCLI(serverDetail)
 	if err != nil {
 		t.Fatalf("workflowTaskDetailForCLI: %v", err)
 	}
-	if projected.Workflow.ValidationErrors[0].WorkflowID == nil {
-		t.Fatal("projected optional workflow identity is absent")
-	}
 	for label, got := range map[string]string{
-		"summary":    projected.Summary.WorkflowID,
-		"picker":     projected.Workflow.WorkflowID,
-		"validation": *projected.Workflow.ValidationErrors[0].WorkflowID,
+		"summary":  projected.Summary.WorkflowID,
+		"workflow": projected.Workflow.WorkflowID,
 	} {
 		if got != workflowSelectorTestUUID {
 			t.Fatalf("%s workflow id = %q, want bare UUID", label, got)
@@ -165,9 +158,6 @@ func TestWorkflowTaskDetailForCLIProjectsSummaryAndPickerWorkflowIDs(t *testing.
 	}
 	if serverDetail.Summary.WorkflowID != persistedID {
 		t.Fatal("workflowTaskDetailForCLI mutated server detail")
-	}
-	if projected.Workflow.ValidationErrors[1].WorkflowID != nil {
-		t.Fatal("absent optional workflow identities became present")
 	}
 }
 

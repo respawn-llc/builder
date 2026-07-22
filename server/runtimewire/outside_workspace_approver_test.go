@@ -11,7 +11,7 @@ import (
 func TestOutsideWorkspaceApprovalRetainsExecutingToolIdentity(t *testing.T) {
 	broker := askquestion.NewAskQuestionBroker()
 	var received askquestion.AskQuestionRequest
-	broker.SetAskHandler(func(request askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+	broker.SetAskHandler(func(_ context.Context, request askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
 		received = request
 		return askquestion.AskQuestionResponse{
 			RequestID: request.ID,

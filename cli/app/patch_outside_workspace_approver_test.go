@@ -66,7 +66,7 @@ func TestOutsideWorkspaceApprovalFromResponseRejectsMissingOrInvalidPayload(t *t
 func TestPatchOutsideWorkspaceApproverCachesSessionDecision(t *testing.T) {
 	broker := askquestion.NewAskQuestionBroker()
 	askCalls := 0
-	broker.SetAskHandler(func(req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+	broker.SetAskHandler(func(_ context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
 		askCalls++
 		if !req.Approval {
 			t.Fatalf("expected approval=true for outside-workspace ask")
@@ -113,7 +113,7 @@ func TestPatchOutsideWorkspaceApproverCachesSessionDecision(t *testing.T) {
 
 func TestPatchOutsideWorkspaceApproverPropagatesAskError(t *testing.T) {
 	broker := askquestion.NewAskQuestionBroker()
-	broker.SetAskHandler(func(askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+	broker.SetAskHandler(func(context.Context, askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
 		return askquestion.AskQuestionResponse{}, errors.New("ask failed")
 	})
 
@@ -127,7 +127,7 @@ func TestPatchOutsideWorkspaceApproverPropagatesAskError(t *testing.T) {
 func TestOutsideWorkspaceApproverUsesReadPromptText(t *testing.T) {
 	broker := askquestion.NewAskQuestionBroker()
 	askCalls := 0
-	broker.SetAskHandler(func(req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+	broker.SetAskHandler(func(_ context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
 		askCalls++
 		if !strings.Contains(req.Question, "Allow reading /tmp/x.pdf (outside workspace dir)?") {
 			t.Fatalf("unexpected read approval question text: %q", req.Question)

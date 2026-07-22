@@ -1,9 +1,11 @@
 export type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
 export type {
+  BoardNodeCardsInput,
   QuestionAnswerInput,
   TaskEditInput,
   TaskMoveInput,
   TaskMutationInput,
+  TaskListInput,
   WorkflowCreateAndLinkInput,
   WorkflowCreateInput,
   WorkflowDeleteInput,
@@ -34,17 +36,21 @@ export {
   ContractError,
   ProtocolMismatchError,
   RpcError,
+  WorkflowLabelError,
+  decodeWorkflowLabelError,
   ServerRootMismatchError,
   StartupConfigurationError,
   TransportError,
   errorMessage,
 } from "./errors";
+export type { WorkflowLabelErrorReason } from "./errors";
 export { guiTaskCommentAuthor } from "./client";
 export type { JsonArray, JsonObject, JsonPrimitive, JsonValue } from "./json";
 export { newSetupOperationID, parseSetupOperationID, SetupOperationID } from "./setupOperationID";
 export { rpcErrorCodes } from "./rpcErrorCodes";
 export type { WorktreeSetupEvent, WorktreeSetupEventHandler, WorktreeSetupPhase } from "./worktreeSetup";
 export type { WorkflowProjectEvent, WorkflowProjectEventHandler } from "./workflowProjectEvents";
+export { workflowLabelMaxIDs } from "./workflowLabelContract";
 export type { ConnectionPhase, ConnectionSnapshot } from "./connectionStore";
 export type {
   ActivityItem,
@@ -73,6 +79,7 @@ export type {
   TaskApproveResponse,
   TaskMoveApplied,
   TaskMoveResponse,
+  ApprovalSnapshot,
   TaskStartApplied,
   TaskStartResponse,
   TaskRun,
@@ -96,8 +103,6 @@ export type {
   WorkflowExecutionTargetSelectionMode,
   WorkflowExecutionTargetSelectionRequirement,
   WorkflowExecutionTargetUnavailableCause,
-  WorkflowExecutionTargetWorktree,
-  WorkflowExecutionTargetWorktreeAvailability,
   WorkflowManagedExecutionTarget,
   WorkflowNoManagedExecutionTarget,
   WorkflowGraphDraft,
@@ -127,3 +132,12 @@ export type {
   WorkspaceUnlinkBlocker,
   WorkspaceUnlinkResponse,
 } from "./models";
+export type {
+  ProjectLabel,
+  ProjectLabelCatalog,
+  TaskLabelAssignment,
+  TaskLabelFilter,
+  TaskListItem,
+  TaskListPage,
+} from "./workflowLabels";
+export { noTaskLabelFilter } from "./workflowLabels";

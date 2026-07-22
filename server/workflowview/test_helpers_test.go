@@ -22,7 +22,7 @@ import (
 	"core/shared/transcript"
 )
 
-func newWorkflowViewTestStore(t *testing.T) (*metadata.Store, *workflowstore.Store, metadata.Binding) {
+func newWorkflowViewTestStore(t testing.TB) (*metadata.Store, *workflowstore.Store, metadata.Binding) {
 	t.Helper()
 	home := t.TempDir()
 	workspaceRoot := t.TempDir()
@@ -121,7 +121,7 @@ WHERE edge_key = 'done'
 	}
 }
 
-func createWorkflowViewValidWorkflow(t *testing.T, ctx context.Context, store *workflowstore.Store) workflow.WorkflowID {
+func createWorkflowViewValidWorkflow(t testing.TB, ctx context.Context, store *workflowstore.Store) workflow.WorkflowID {
 	t.Helper()
 	created, err := store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Workflow"})
 	if err != nil {
@@ -220,7 +220,7 @@ func createWorkflowViewFanoutWorkflow(t *testing.T, ctx context.Context, store *
 	return created.ID
 }
 
-func workflowViewNodeByKind(t *testing.T, def workflow.Definition, kind workflow.NodeKind) workflow.Node {
+func workflowViewNodeByKind(t testing.TB, def workflow.Definition, kind workflow.NodeKind) workflow.Node {
 	t.Helper()
 	for _, node := range def.Nodes {
 		if node.Kind() == kind {
@@ -281,13 +281,14 @@ func workflowViewBoardCardIDs(cards []serverapi.WorkflowBoardTaskCard) []string 
 }
 
 type boardNodeCardsTokenFixture struct {
-	Version         int    `json:"version"`
-	ProjectID       string `json:"project_id"`
-	WorkflowID      string `json:"workflow_id"`
-	NodeID          string `json:"node_id"`
-	UpdatedAtUnixMs int64  `json:"updated_at_unix_ms"`
-	TaskID          string `json:"task_id"`
-	Direction       string `json:"direction"`
+	Version         int                          `json:"version"`
+	ProjectID       string                       `json:"project_id"`
+	WorkflowID      string                       `json:"workflow_id"`
+	NodeID          string                       `json:"node_id"`
+	LabelFilter     workflowTaskLabelFilterFacts `json:"label_filter"`
+	UpdatedAtUnixMs int64                        `json:"updated_at_unix_ms"`
+	TaskID          string                       `json:"task_id"`
+	Direction       string                       `json:"direction"`
 }
 
 func mutateBoardNodeCardsToken(t *testing.T, token *string, mutate func(*boardNodeCardsTokenFixture)) string {

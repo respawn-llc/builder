@@ -568,6 +568,13 @@ func (e *Engine) SessionID() string {
 	return strings.TrimSpace(e.store.Meta().SessionID)
 }
 
+func (e *Engine) ContinuationAgentRole() *string {
+	if e == nil || e.store == nil {
+		return nil
+	}
+	return session.ContinuationAgentRole(e.store.Meta())
+}
+
 func conversationPromptCacheKey(sessionID string, compactionCount int) string {
 	trimmed := strings.TrimSpace(sessionID)
 	if trimmed == "" {

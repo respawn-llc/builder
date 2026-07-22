@@ -11,11 +11,15 @@ import (
 type ExecutionGeneration uint64
 
 type WorkflowExecutionRef struct {
+	TaskID     workflow.TaskID
 	RunID      workflow.RunID
 	Generation int64
 }
 
 func (r WorkflowExecutionRef) Validate() error {
+	if strings.TrimSpace(string(r.TaskID)) == "" {
+		return fmt.Errorf("workflow task id is required")
+	}
 	if strings.TrimSpace(string(r.RunID)) == "" {
 		return fmt.Errorf("workflow run id is required")
 	}

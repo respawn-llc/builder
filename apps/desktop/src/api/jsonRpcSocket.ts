@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { ProtocolMismatchError, RpcError, ServerRootMismatchError, TransportError } from "./errors";
-import type { JsonValue } from "./json";
+import { jsonValueSchema, type JsonValue } from "./json";
 import type { RpcEventHandler } from "./transport";
 
 export const protocolVersion = __KENT_PROTOCOL_VERSION__;
@@ -17,6 +17,7 @@ export const responseSchema = z.object({
     .object({
       code: z.number(),
       message: z.string(),
+      data: jsonValueSchema.optional().catch(undefined),
     })
     .optional(),
 });
@@ -165,12 +166,12 @@ export async function sendSocketRequest(
 
 export function socketRequestError(
   method: string,
-  error: Readonly<{ code: number; message: string }>,
+  error: Readonly<{ code: number; message: string; data?: JsonValue | undefined }>,
 ): Error {
   if (method === handshakeMethod && error.code === protocolVersionMismatchErrorCode) {
     return new ProtocolMismatchError(error.message);
   }
-  return new RpcError({ code: error.code, message: error.message, method });
+  return new RpcError({ code: error.code, message: error.message, method, data: error.data });
 }
 
 export async function waitForSubscriptionEnd(socket: WebSocket, signal: AbortSignal): Promise<void> {

@@ -1,13 +1,290 @@
 package workflowstore
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
 	"core/server/workflow"
 )
+
+func TestCompleteRunReturnsHandoffForOrdinaryTransition(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+
+	completed, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: started.RunID, TransitionID: "done"})
+	if err != nil {
+		t.Fatalf("CompleteRun: %v", err)
+	}
+	if completed.Handoff.SourceNodeDisplayName != "Agent" || completed.Handoff.DestinationDisplayName != "Done" {
+		t.Fatalf("completion handoff = %+v, want Agent -> Done", completed.Handoff)
+	}
+
+	snapshot := loadRunStartSnapshot(t, ctx, store, started.RunID)
+	group := snapshotTransition(t, snapshot, "done")
+	if group.SharedTargetNodeGroupDisplayName != nil {
+		t.Fatalf("ordinary transition snapshot group = %+v, want no persisted destination label", group)
+	}
+}
+
+func TestCompleteRunReturnsFrozenGroupedFanoutHandoff(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	addGroupedFanoutSnapshotFixture(t, ctx, store, workflowID, "Implementation")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+
+	snapshot := loadRunStartSnapshot(t, ctx, store, started.RunID)
+	group := snapshotTransition(t, snapshot, "split")
+	if group.SharedTargetNodeGroupDisplayName == nil || *group.SharedTargetNodeGroupDisplayName != "Implementation" {
+		t.Fatalf("grouped fanout snapshot group = %+v, want frozen Implementation label", group)
+	}
+
+	renameFanoutNodeGroupFixture(t, ctx, store, workflowID, "Changed implementation")
+	completed, err := store.CompleteRun(ctx, CompleteRunRequest{
+		RunID:        started.RunID,
+		TransitionID: "split",
+		OutputValues: map[string]string{"summary": "plan"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteRun: %v", err)
+	}
+	if completed.Handoff.SourceNodeDisplayName != "Plan" || completed.Handoff.DestinationDisplayName != "Implementation" {
+		t.Fatalf("completion handoff = %+v, want frozen Plan -> Implementation", completed.Handoff)
+	}
+}
+
+func TestCompleteRunReturnsTransitionLabelForUngroupedAndLegacyFanout(t *testing.T) {
+	t.Run("ungrouped", func(t *testing.T) {
+		ctx, store, binding := newTestStoreContext(t)
+		workflowID := createFanoutJoinWorkflow(t, ctx, store)
+		linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+		task := createDefaultTask(t, ctx, store, binding.ProjectID)
+		started := startTask(t, ctx, store, task.ID)
+
+		snapshot := loadRunStartSnapshot(t, ctx, store, started.RunID)
+		group := snapshotTransition(t, snapshot, "split")
+		if group.SharedTargetNodeGroupDisplayName != nil {
+			t.Fatalf("ungrouped fanout snapshot group = %+v, want no persisted destination label", group)
+		}
+
+		completed, err := store.CompleteRun(ctx, CompleteRunRequest{
+			RunID:        started.RunID,
+			TransitionID: "split",
+			OutputValues: map[string]string{"summary": "plan"},
+		})
+		if err != nil {
+			t.Fatalf("CompleteRun: %v", err)
+		}
+		if completed.Handoff.SourceNodeDisplayName != "Plan" || completed.Handoff.DestinationDisplayName != "Split" {
+			t.Fatalf("completion handoff = %+v, want Plan -> Split", completed.Handoff)
+		}
+	})
+
+	t.Run("legacy grouped snapshot", func(t *testing.T) {
+		ctx, store, binding := newTestStoreContext(t)
+		workflowID := createFanoutJoinWorkflow(t, ctx, store)
+		addGroupedFanoutSnapshotFixture(t, ctx, store, workflowID, "Implementation")
+		linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+		task := createDefaultTask(t, ctx, store, binding.ProjectID)
+		started := startTask(t, ctx, store, task.ID)
+		mutateRunStartSnapshot(t, ctx, store, started.RunID, func(t *testing.T, snapshot *runStartSnapshot) {
+			mutateSnapshotTransition(t, snapshot, "split", func(group *transitionContractSnapshot) {
+				group.SharedTargetNodeGroupDisplayName = nil
+			})
+		})
+
+		completed, err := store.CompleteRun(ctx, CompleteRunRequest{
+			RunID:        started.RunID,
+			TransitionID: "split",
+			OutputValues: map[string]string{"summary": "plan"},
+		})
+		if err != nil {
+			t.Fatalf("CompleteRun: %v", err)
+		}
+		if completed.Handoff.SourceNodeDisplayName != "Plan" || completed.Handoff.DestinationDisplayName != "Split" {
+			t.Fatalf("completion handoff = %+v, want legacy Plan -> Split", completed.Handoff)
+		}
+	})
+}
+
+func TestCompleteRunRejectsBlankHandoffLabelsBeforeMutation(t *testing.T) {
+	tests := []struct {
+		name         string
+		workflowID   func(*testing.T, context.Context, *Store) workflow.WorkflowID
+		transitionID string
+		outputValues map[string]string
+		mutate       func(*testing.T, *runStartSnapshot)
+	}{
+		{
+			name:         "source",
+			workflowID:   createValidWorkflow,
+			transitionID: "done",
+			mutate: func(_ *testing.T, snapshot *runStartSnapshot) {
+				snapshot.Node.DisplayName = " "
+			},
+		},
+		{
+			name:         "ordinary destination",
+			workflowID:   createValidWorkflow,
+			transitionID: "done",
+			mutate: func(t *testing.T, snapshot *runStartSnapshot) {
+				mutateSnapshotTransition(t, snapshot, "done", func(group *transitionContractSnapshot) {
+					group.Edges[0].TargetNode.DisplayName = " "
+				})
+			},
+		},
+		{
+			name:         "grouped fanout destination",
+			workflowID:   createFanoutJoinWorkflow,
+			transitionID: "split",
+			outputValues: map[string]string{"summary": "plan"},
+			mutate: func(t *testing.T, snapshot *runStartSnapshot) {
+				mutateSnapshotTransition(t, snapshot, "split", func(group *transitionContractSnapshot) {
+					blank := " "
+					group.SharedTargetNodeGroupDisplayName = &blank
+				})
+			},
+		},
+		{
+			name:         "ungrouped fanout destination",
+			workflowID:   createFanoutJoinWorkflow,
+			transitionID: "split",
+			outputValues: map[string]string{"summary": "plan"},
+			mutate: func(t *testing.T, snapshot *runStartSnapshot) {
+				mutateSnapshotTransition(t, snapshot, "split", func(group *transitionContractSnapshot) {
+					group.DisplayName = " "
+				})
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, store, binding := newTestStoreContext(t)
+			workflowID := tt.workflowID(t, ctx, store)
+			if tt.name == "grouped fanout destination" {
+				addGroupedFanoutSnapshotFixture(t, ctx, store, workflowID, "Implementation")
+			}
+			linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+			task := createDefaultTask(t, ctx, store, binding.ProjectID)
+			started := startTask(t, ctx, store, task.ID)
+			mutateRunStartSnapshot(t, ctx, store, started.RunID, tt.mutate)
+
+			if _, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: started.RunID, TransitionID: tt.transitionID, OutputValues: tt.outputValues}); err == nil {
+				t.Fatal("CompleteRun succeeded with a blank handoff label")
+			}
+			run, err := store.GetRun(ctx, started.RunID)
+			if err != nil {
+				t.Fatalf("GetRun: %v", err)
+			}
+			if run.CompletedAt != nil {
+				t.Fatalf("run after rejected handoff = %+v, want incomplete", run)
+			}
+		})
+	}
+}
+
+func TestSharedTargetNodeGroupDisplayNameUsesStructuralMembership(t *testing.T) {
+	definition := workflow.Definition{
+		NodeGroups: []workflow.NodeGroup{{
+			ID:            "group-code-review",
+			DisplayName:   "Code review parallel",
+			MemberNodeIDs: []workflow.NodeID{"node-review-a", "node-review-b", "node-review-join"},
+		}},
+	}
+	edges := []workflow.Edge{
+		{TargetNodeID: "node-review-a"},
+		{TargetNodeID: "node-review-b"},
+	}
+
+	displayName, err := sharedTargetNodeGroupDisplayName(definition, edges)
+	if err != nil {
+		t.Fatalf("sharedTargetNodeGroupDisplayName: %v", err)
+	}
+	if displayName == nil || *displayName != "Code review parallel" {
+		t.Fatalf("shared target node group display name = %v, want Code review parallel", displayName)
+	}
+}
+
+func TestSharedTargetNodeGroupDisplayNameRejectsBlankGroupID(t *testing.T) {
+	definition := workflow.Definition{
+		NodeGroups: []workflow.NodeGroup{{
+			DisplayName:   "Code review parallel",
+			MemberNodeIDs: []workflow.NodeID{"node-review-a", "node-review-b"},
+		}},
+	}
+	edges := []workflow.Edge{
+		{TargetNodeID: "node-review-a"},
+		{TargetNodeID: "node-review-b"},
+	}
+
+	if _, err := sharedTargetNodeGroupDisplayName(definition, edges); err == nil {
+		t.Fatal("sharedTargetNodeGroupDisplayName accepted a blank node-group ID")
+	}
+}
+
+func loadRunStartSnapshot(t *testing.T, ctx context.Context, store *Store, runID workflow.RunID) runStartSnapshot {
+	t.Helper()
+	run, err := store.queries.GetTaskRun(ctx, string(runID))
+	if err != nil {
+		t.Fatalf("GetTaskRun: %v", err)
+	}
+	snapshot := runStartSnapshot{}
+	if err := workflow.UnmarshalString(run.RunStartSnapshotJson, &snapshot); err != nil {
+		t.Fatalf("unmarshal run-start snapshot: %v", err)
+	}
+	return snapshot
+}
+
+func snapshotTransition(t *testing.T, snapshot runStartSnapshot, transitionID string) transitionContractSnapshot {
+	t.Helper()
+	group, ok := snapshot.transitionByID(transitionID)
+	if !ok {
+		t.Fatalf("snapshot transition %q missing from %+v", transitionID, snapshot.TransitionGroups)
+	}
+	return group
+}
+
+func addGroupedFanoutSnapshotFixture(t *testing.T, ctx context.Context, store *Store, workflowID workflow.WorkflowID, displayName string) {
+	t.Helper()
+	def, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	groupID := "node-group-implementation-" + string(workflowID)
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		req.NodeGroups = append(req.NodeGroups, NodeGroupRecord{
+			ID:          groupID,
+			WorkflowID:  workflowID,
+			Key:         "implementation",
+			DisplayName: displayName,
+		})
+		for _, key := range []string{"impl_a", "impl_b", "join"} {
+			node := workflowGraphSaveNodeRecord(t, req.Nodes, workflow.NodeIDOf(nodeByKey(t, def, key)))
+			node.GroupID = groupID
+			node.GroupKey = "implementation"
+		}
+	})
+}
+
+func renameFanoutNodeGroupFixture(t *testing.T, ctx context.Context, store *Store, workflowID workflow.WorkflowID, displayName string) {
+	t.Helper()
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		for index := range req.NodeGroups {
+			if strings.TrimSpace(string(req.NodeGroups[index].Key)) == "implementation" {
+				req.NodeGroups[index].DisplayName = displayName
+				return
+			}
+		}
+		t.Fatal("implementation node group missing")
+	})
+}
 
 func TestCompleteRunUsesRunStartSnapshotAfterGraphChanges(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
@@ -445,7 +722,7 @@ func TestPriorTransitionParameterApprovalFreezesOutputValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompleteRun audit: %v", err)
 	}
-	if !pending.RequiresApproval {
+	if !pending.Result.RequiresApproval {
 		t.Fatalf("completion result = %+v, want pending approval", pending)
 	}
 	mutatedOutputs, err := workflow.MarshalString(map[string]string{"summary": "mutated before approval"})
@@ -458,7 +735,7 @@ func TestPriorTransitionParameterApprovalFreezesOutputValue(t *testing.T) {
 		t.Fatalf("mutate source output: %v", err)
 	}
 
-	approved, err := store.ApproveTransition(ctx, pending.TransitionID)
+	approved, err := store.ApproveTransition(ctx, pending.Result.TransitionID)
 	if err != nil {
 		t.Fatalf("ApproveTransition: %v", err)
 	}

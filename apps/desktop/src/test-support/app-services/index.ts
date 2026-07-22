@@ -88,6 +88,10 @@ export function createTestServices(
     logger: createTestLogger(),
     nativeBridge,
     protocolVersion,
+    storageNamespace: {
+      kind: "browser-endpoint",
+      identity: "ws://127.0.0.1:53082/rpc",
+    },
     transport,
   };
 }
@@ -140,6 +144,15 @@ export const startupRoutes: readonly FakeRoute[] = [
     result: {
       comments: [],
       next_page_token: "",
+    },
+  },
+  {
+    method: "workflow.project.label.list",
+    result: {
+      catalog: {
+        project_id: "project-1",
+        labels: [],
+      },
     },
   },
 ];
