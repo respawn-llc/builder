@@ -48,3 +48,8 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# rustc loads host proc-macro dylibs while compiling release dependencies.
+# Stripping those intermediate dylibs can produce unloadable Mach-O artifacts.
+[profile.release.package."*"]
+strip = false
