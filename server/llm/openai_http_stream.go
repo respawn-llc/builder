@@ -16,8 +16,6 @@ type responseStreamAccumulator struct {
 	callbacks          StreamCallbacks
 	windowTokens       int
 	assistantText      strings.Builder
-	pendingWhitespace  strings.Builder
-	hasPendingSpace    bool
 	assistantOutput    int64
 	hasAssistantOutput bool
 	assistantStarted   bool
@@ -130,36 +128,20 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 func (a *responseStreamAccumulator) consumeAssistantDelta(outputIndex int64, text string) {
 	phase := a.assistantMessages.Phase(outputIndex)
 	if !a.hasAssistantOutput || a.assistantOutput != outputIndex {
-		a.pendingWhitespace.Reset()
-		a.hasPendingSpace = false
 		a.assistantOutput = outputIndex
 		a.hasAssistantOutput = true
 		a.assistantStarted = false
 	}
-	contentWithLeadingWhitespace := strings.TrimRightFunc(text, unicode.IsSpace)
-	trailingWhitespace := text[len(contentWithLeadingWhitespace):]
-	content := contentWithLeadingWhitespace
 	if !a.assistantStarted {
 		// Provider bug (omlx): assistant messages can start with provisional
 		// whitespace that output_text.done and response.completed omit.
-		content = strings.TrimLeftFunc(content, unicode.IsSpace)
+		text = strings.TrimLeftFunc(text, unicode.IsSpace)
 	}
-	if content != "" {
-		if a.assistantStarted && a.hasPendingSpace {
-			a.emitAssistantDelta(AssistantDelta{Text: a.pendingWhitespace.String(), Phase: phase})
-		}
-		a.pendingWhitespace.Reset()
-		a.hasPendingSpace = false
-		a.emitAssistantDelta(AssistantDelta{Text: content, Phase: phase})
-		a.assistantStarted = true
+	if text == "" {
+		return
 	}
-	if trailingWhitespace != "" {
-		// Provider bug (omlx): assistant responses can stream provisional trailing
-		// whitespace that response.completed omits, including whitespace attached
-		// to the end of an otherwise semantic delta.
-		a.hasPendingSpace = true
-		a.pendingWhitespace.WriteString(trailingWhitespace)
-	}
+	a.emitAssistantDelta(AssistantDelta{Text: text, Phase: phase})
+	a.assistantStarted = true
 }
 
 func (a *responseStreamAccumulator) emitAssistantDelta(delta AssistantDelta) {
@@ -258,7 +240,7 @@ func (a *responseStreamAccumulator) Response() (OpenAIResponse, error) {
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
-	if assistantResponseTextExtendsStream(streamedDeltaText, parsedText) {
+	if completedAssistantTextReconcilesStream(streamedDeltaText, parsedText) {
 		finalText = parsedText
 	}
 	if responseItemsContainAssistantMessage(parsedItems) && finalText != parsedText {
@@ -308,6 +290,11 @@ func assistantResponseTextExtendsStream(streamed string, candidate string) bool 
 		return true
 	}
 	return strings.HasPrefix(candidate, streamed)
+}
+
+func completedAssistantTextReconcilesStream(streamed string, completed string) bool {
+	return assistantResponseTextExtendsStream(streamed, completed) ||
+		strings.TrimRightFunc(streamed, unicode.IsSpace) == completed
 }
 
 func repairAssistantOutputItems(items []ResponseItem, text string, phase MessagePhase, outputIndex int64, hasResolvedStream bool) []ResponseItem {

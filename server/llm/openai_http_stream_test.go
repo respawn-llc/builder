@@ -445,7 +445,7 @@ func TestGenerateStream_IgnoresWhitespaceOnlyAssistantShimBeforeToolCall(t *test
 	}
 }
 
-func TestGenerateStream_IgnoresTrailingWhitespaceAssistantShimBeforeToolCall(t *testing.T) {
+func TestGenerateStream_DeliversTrailingWhitespaceBeforeToolCallWithoutBuffering(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","output_index":1,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"commentary","content":[]}}`,
 		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":1,"content_index":0,"delta":"I will run it.\n\n"}`,
@@ -467,11 +467,11 @@ func TestGenerateStream_IgnoresTrailingWhitespaceAssistantShimBeforeToolCall(t *
 	if err != nil {
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
-	if got := joinedAssistantDeltas(deltas); got != "I will run it." {
-		t.Fatalf("assistant deltas = %q, want finalized semantic content", got)
+	if got := joinedAssistantDeltas(deltas); got != "I will run it.\n\n" {
+		t.Fatalf("assistant deltas = %q, want exact streamed content", got)
 	}
 	if resp.AssistantText != "I will run it." {
-		t.Fatalf("assistant text = %q, want finalized semantic content", resp.AssistantText)
+		t.Fatalf("assistant text = %q, want completed content", resp.AssistantText)
 	}
 	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].ID != "call_1" || resp.ToolCalls[0].Name != "shell" {
 		t.Fatalf("tool calls = %+v, want shell call_1", resp.ToolCalls)
