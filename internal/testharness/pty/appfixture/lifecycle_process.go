@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"core/shared/lifecyclecontract"
 )
 
 const LifecycleProcessConfigEnvName = "KENT_LIFECYCLE_PTY_FIXTURE_CONFIG"
@@ -27,15 +29,20 @@ const (
 )
 
 type LifecycleProcessConfig struct {
-	WorkspaceRoot             string                `json:"workspace_root"`
-	PersistenceRoot           string                `json:"persistence_root"`
-	ServerMode                LifecycleServerMode   `json:"server_mode"`
-	LocalScriptPath           *string               `json:"local_script_path,omitempty"`
-	InitialPrompt             string                `json:"initial_prompt"`
-	TargetFinalAssistantCount uint64                `json:"target_final_assistant_count"`
-	HookRecordPath            string                `json:"hook_record_path"`
-	HookBehavior              LifecycleHookBehavior `json:"hook_behavior"`
-	HookStatePath             *string               `json:"hook_state_path,omitempty"`
+	WorkspaceRoot             string                           `json:"workspace_root"`
+	PersistenceRoot           string                           `json:"persistence_root"`
+	ServerMode                LifecycleServerMode              `json:"server_mode"`
+	LocalScriptPath           *string                          `json:"local_script_path,omitempty"`
+	InitialPrompt             string                           `json:"initial_prompt"`
+	TargetFinalAssistantCount uint64                           `json:"target_final_assistant_count"`
+	HookRecordPath            string                           `json:"hook_record_path"`
+	HookBehavior              LifecycleHookBehavior            `json:"hook_behavior"`
+	HookStatePath             *string                          `json:"hook_state_path,omitempty"`
+	HookObservationBarrier    *LifecycleHookObservationBarrier `json:"hook_observation_barrier,omitempty"`
+}
+
+type LifecycleHookObservationBarrier struct {
+	RequiredCategories []lifecyclecontract.Category `json:"required_categories"`
 }
 
 type LifecycleServerProcessConfig struct {
@@ -74,6 +81,11 @@ func (config LifecycleProcessConfig) Validate() error {
 	if strings.TrimSpace(config.HookRecordPath) == "" {
 		return errors.New("lifecycle PTY fixture hook_record_path is required")
 	}
+	if config.HookObservationBarrier != nil {
+		if err := config.HookObservationBarrier.Validate(); err != nil {
+			return err
+		}
+	}
 	switch config.HookBehavior {
 	case LifecycleHookBehaviorSuccess:
 		if config.HookStatePath != nil {
@@ -89,6 +101,29 @@ func (config LifecycleProcessConfig) Validate() error {
 		}
 	default:
 		return errors.New("lifecycle PTY fixture hook_behavior is invalid")
+	}
+	return nil
+}
+
+func (barrier LifecycleHookObservationBarrier) Validate() error {
+	if len(barrier.RequiredCategories) == 0 {
+		return errors.New("lifecycle hook observation barrier requires categories")
+	}
+	seen := make(map[lifecyclecontract.Category]struct{}, len(barrier.RequiredCategories))
+	for _, category := range barrier.RequiredCategories {
+		switch category {
+		case lifecyclecontract.CategorySessionStart,
+			lifecyclecontract.CategoryTaskComplete,
+			lifecyclecontract.CategoryTaskError,
+			lifecyclecontract.CategoryInputRequired,
+			lifecyclecontract.CategoryResourceLimit:
+		default:
+			return fmt.Errorf("lifecycle hook observation barrier category %q is invalid", category)
+		}
+		if _, exists := seen[category]; exists {
+			return fmt.Errorf("lifecycle hook observation barrier category %q is duplicated", category)
+		}
+		seen[category] = struct{}{}
 	}
 	return nil
 }

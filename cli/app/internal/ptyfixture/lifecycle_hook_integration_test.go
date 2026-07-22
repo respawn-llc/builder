@@ -54,6 +54,13 @@ func TestLifecycleHooksLocalConfiguredPTYRunsRepresentativeFlow(t *testing.T) {
 		TargetFinalAssistantCount: 1,
 		HookRecordPath:            recordPath,
 		HookBehavior:              appfixture.LifecycleHookBehaviorSuccess,
+		HookObservationBarrier: &appfixture.LifecycleHookObservationBarrier{
+			RequiredCategories: []lifecyclecontract.Category{
+				lifecyclecontract.CategorySessionStart,
+				lifecyclecontract.CategoryInputRequired,
+				lifecyclecontract.CategoryTaskComplete,
+			},
+		},
 	}
 
 	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
@@ -70,7 +77,7 @@ func TestLifecycleHooksLocalConfiguredPTYRunsRepresentativeFlow(t *testing.T) {
 		Dimensions: pty.MustDimensions(24, 80),
 		PhaseInputs: []pty.PhaseInputEvent{
 			{Phase: pty.PhasePromptReady, Bytes: []byte("\r")},
-			{Phase: pty.PhaseScenarioFinalApplied, After: 300 * time.Millisecond, Bytes: []byte{0x03, 0x03}},
+			{Phase: pty.PhaseLifecycleHooksObserved, Bytes: []byte{0x03, 0x03}},
 		},
 		Timeout: 25 * time.Second,
 	})
@@ -160,14 +167,19 @@ func TestLifecycleHooksRemotePTYRunsInControllingClient(t *testing.T) {
 		TargetFinalAssistantCount: 1,
 		HookRecordPath:            recordPath,
 		HookBehavior:              appfixture.LifecycleHookBehaviorSuccess,
+		HookObservationBarrier: &appfixture.LifecycleHookObservationBarrier{
+			RequiredCategories: []lifecyclecontract.Category{
+				lifecyclecontract.CategorySessionStart,
+				lifecyclecontract.CategoryTaskComplete,
+			},
+		},
 	}
 	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
 		Path:       bin,
 		Env:        []string{lifecyclePTYProcessEnv(t, root, processConfig)},
 		Dimensions: pty.MustDimensions(24, 80),
 		PhaseInputs: []pty.PhaseInputEvent{{
-			Phase: pty.PhaseScenarioFinalApplied,
-			After: 300 * time.Millisecond,
+			Phase: pty.PhaseLifecycleHooksObserved,
 			Bytes: []byte{0x03, 0x03},
 		}},
 		Timeout: 25 * time.Second,

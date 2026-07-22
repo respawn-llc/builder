@@ -102,9 +102,16 @@ func runLifecycleHookPTYFixtureProcess(
 		return err
 	}
 	wrapped := newPTYCheckpointModel(composition.model, terminal.writer, scenarioState)
-	finalModel, err := runUIProgram(composition, wrapped)
-	if err != nil {
-		return err
+	cancelHookBarrier, hookBarrierDone := startLifecycleHookObservationBarrier(
+		ctx,
+		terminal,
+		scenarioState,
+		processConfig,
+	)
+	finalModel, uiErr := runUIProgram(composition, wrapped)
+	hookBarrierErr := stopLifecycleHookObservationBarrier(cancelHookBarrier, hookBarrierDone)
+	if uiErr != nil || hookBarrierErr != nil {
+		return errors.Join(uiErr, hookBarrierErr)
 	}
 	finalWrapped, ok := finalModel.(*ptyCheckpointModel)
 	if !ok {
@@ -114,6 +121,45 @@ func runLifecycleHookPTYFixtureProcess(
 		return fmt.Errorf("lifecycle PTY fixture inner final model has unexpected type %T", finalWrapped.inner)
 	}
 	return nil
+}
+
+func startLifecycleHookObservationBarrier(
+	ctx context.Context,
+	terminal *ptyCheckpointTerminalFile,
+	scenario *ptyCheckpointScenarioState,
+	processConfig appfixture.LifecycleProcessConfig,
+) (context.CancelFunc, <-chan error) {
+	if processConfig.HookObservationBarrier == nil {
+		return func() {}, nil
+	}
+	barrierCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		err := appfixture.WaitForLifecycleHookCategories(
+			barrierCtx,
+			processConfig.HookRecordPath,
+			processConfig.HookObservationBarrier.RequiredCategories,
+		)
+		if err == nil {
+			err = scenario.waitFinalApplied(barrierCtx)
+		}
+		if err == nil {
+			err = terminal.writer.Emit(checkpoint.KindLifecycleHooksObserved, nil)
+		}
+		done <- err
+	}()
+	return cancel, done
+}
+
+func stopLifecycleHookObservationBarrier(
+	cancel context.CancelFunc,
+	done <-chan error,
+) error {
+	cancel()
+	if done == nil {
+		return nil
+	}
+	return <-done
 }
 
 func prepareLifecyclePTYFixtureRuntime(

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -27,6 +28,7 @@ type ptyCheckpointScenarioState struct {
 	scenarioComplete             bool
 	finalAppliedEmitted          bool
 	toolStartedEmitted           bool
+	finalApplied                 chan struct{}
 }
 
 func newPTYCheckpointScenarioState(
@@ -37,6 +39,7 @@ func newPTYCheckpointScenarioState(
 	}
 	return &ptyCheckpointScenarioState{
 		targetFinalAssistantOrdinal: targetFinalAssistantOrdinal,
+		finalApplied:                make(chan struct{}),
 	}
 }
 
@@ -104,7 +107,20 @@ func (state *ptyCheckpointScenarioState) claimScenarioFinalApplied(sequence uint
 		return false
 	}
 	state.finalAppliedEmitted = true
+	close(state.finalApplied)
 	return true
+}
+
+func (state *ptyCheckpointScenarioState) waitFinalApplied(ctx context.Context) error {
+	if state == nil {
+		panic("wait for PTY scenario final on nil state")
+	}
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-state.finalApplied:
+		return nil
+	}
 }
 
 func (state *ptyCheckpointScenarioState) claimToolStarted() bool {

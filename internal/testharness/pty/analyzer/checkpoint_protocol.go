@@ -28,6 +28,7 @@ const (
 	KindScenarioFinalApplied
 	KindToolStarted
 	KindPromptReady
+	KindLifecycleHooksObserved
 )
 
 func (kind Kind) Valid() bool {
@@ -51,6 +52,7 @@ var kindDescriptors = [...]kindDescriptor{
 	{kind: KindScenarioFinalApplied, protocolName: "ScenarioFinalApplied"},
 	{kind: KindToolStarted, protocolName: "ToolStarted"},
 	{kind: KindPromptReady, protocolName: "PromptReady"},
+	{kind: KindLifecycleHooksObserved, protocolName: "LifecycleHooksObserved"},
 }
 
 func descriptorForKind(kind Kind) (kindDescriptor, bool) {
