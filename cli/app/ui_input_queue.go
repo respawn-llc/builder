@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"strings"
 
 	"core/cli/app/commands"
@@ -108,16 +109,34 @@ func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *cl
 	})
 	client := m.runtimeClient()
 	return func() tea.Msg {
-		item, err := queueRuntimeUserMessage(client, trimmed, clientRequestID)
-		return injectedQueueCreateDoneMsg{token: token, localID: localID, item: item, approvalCommentaryAnswer: answer, err: err}
+		item, completed, err := submitRuntimeSteering(client, trimmed, clientRequestID)
+		return injectedQueueCreateDoneMsg{
+			token:                    token,
+			localID:                  localID,
+			item:                     item,
+			completed:                completed,
+			approvalCommentaryAnswer: answer,
+			err:                      err,
+		}
 	}
 }
 
-func queueRuntimeUserMessage(client clientui.RuntimeClient, text string, clientRequestID runtimeids.RuntimeClientRequestID) (clientui.QueuedUserMessage, error) {
-	return client.QueueRuntimeUserMessage(clientui.RuntimeQueueUserMessageRequest{
-		OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: clientRequestID},
-		Text:         text,
+func submitRuntimeSteering(client clientui.RuntimeClient, text string, clientRequestID runtimeids.RuntimeClientRequestID) (clientui.QueuedUserMessage, bool, error) {
+	submission, err := client.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
+		OperationRef: clientui.RuntimeOperationRef{
+			Kind:            clientui.RuntimeOperationKindSubmit,
+			ClientRequestID: clientRequestID,
+		},
+		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
+		Text:                            text,
 	})
+	if err != nil {
+		return clientui.QueuedUserMessage{}, false, err
+	}
+	if strings.TrimSpace(submission.Queued.ID) == "" {
+		return clientui.QueuedUserMessage{}, true, nil
+	}
+	return submission.Queued, false, nil
 }
 
 func (m *uiModel) queueInjectedInput(text string) tea.Cmd {
@@ -485,6 +504,18 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 			return m, appendCmd
 		}
 		m.removeInjectedQueueItemAt(index)
+		return m, nil
+	}
+	if msg.completed {
+		m.removePendingInjectedByID(item.LocalID)
+		m.removeInjectedQueueItemAt(index)
+		if item.State != injectedRuntimeQueuePendingCreate {
+			return m, nil
+		}
+		m.rememberPromptHistoryLocally(item.Text)
+		if approvalCommentaryAnswer != nil {
+			return m, m.answerQueuedApprovalCommentary(*approvalCommentaryAnswer)
+		}
 		return m, nil
 	}
 	serverID := strings.TrimSpace(msg.item.ID)

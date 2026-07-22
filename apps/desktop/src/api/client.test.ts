@@ -156,7 +156,7 @@ describe("ApiClient", () => {
     });
   });
 
-  it("normalizes empty task detail slices returned as null by Go JSON", async () => {
+  it("parses required empty current task execution arrays", async () => {
     const client = new ApiClient(
       new FakeRpcTransport([{ method: "workflow.task.get", result: emptyTaskDetailResponse }]),
     );
@@ -164,9 +164,8 @@ describe("ApiClient", () => {
     await expect(client.getTask("task-1")).resolves.toMatchObject({
       id: "task-1",
       labelIDs: ["f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf"],
-      runs: [],
-      transitions: [],
-      comments: [],
+      currentSessionIDs: [],
+      currentScripts: [],
       attentionCount: 0,
       sourceURL: "",
     });
@@ -906,9 +905,9 @@ const emptyTaskDetailResponse = {
     },
     label_ids: ["f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf"],
     attention_count: 0,
-    runs: null,
-    transitions: null,
-    comments: null,
+    worktree_path: null,
+    current_session_ids: [],
+    current_scripts: [],
   },
 };
 

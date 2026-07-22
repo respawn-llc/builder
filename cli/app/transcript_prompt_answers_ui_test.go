@@ -877,8 +877,11 @@ func TestAllowCommentaryAnswerDeadlineRestoresFreshQueueAndAnswerResubmission(t 
 	if requests[0].ClientRequestID == requests[1].ClientRequestID {
 		t.Fatalf("allow resubmission reused request ID %q", requests[0].ClientRequestID)
 	}
-	if runtimeClient.queueUserMessageCalls != 2 {
-		t.Fatalf("allow commentary queue calls = %d, want one per user submission", runtimeClient.queueUserMessageCalls)
+	if runtimeClient.submitCalls != 2 {
+		t.Fatalf("allow commentary submit calls = %d, want one per user submission", runtimeClient.submitCalls)
+	}
+	if runtimeClient.queueUserMessageCalls != 0 {
+		t.Fatalf("allow commentary separate queue calls = %d, want 0", runtimeClient.queueUserMessageCalls)
 	}
 	if !testPromptAnswerDeliveryActive(model) || model.ask.answerPending {
 		t.Fatal("successful allow resubmission did not remain active with the queue-stage lock released")

@@ -329,6 +329,6 @@ kent task approve <transition-id> --execution-target none|head|default-branch|re
 kent task move <task> <target-node-id> --execution-target none|head|default-branch|ref:<revision>
 ```
 
-These task actions never prompt. Their override applies only to an unlocked task and does not edit the workflow. If selection is required, rerun the same action with one concrete selector. `kent task show` reports the source workspace and, after lock, the target mode, execution root, requested revision, resolved commit, current named branch when available, and managed worktree.
+These task actions never prompt. Their override applies only to an unlocked task and does not edit the workflow. If selection is required, rerun the same action with one concrete selector. `kent task show` reports the source workspace and, after lock, the durable target mode, requested revision, resolved revision, resolved commit, and recorded managed-worktree path when present. It also reports every exact current session and script target. Task detail does not perform live Git branch discovery; inspect the worktree when branch identity is needed.
 
 More about worktrees on the [Worktree](../worktrees/) page.

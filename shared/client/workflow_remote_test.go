@@ -556,12 +556,10 @@ func TestRemoteWorkflowTaskDetailRejectsInvalidResponse(t *testing.T) {
 			handlerErr <- fmt.Errorf("workflow task get method = %q", req.Method)
 			return
 		}
-		blankRoot := " "
 		response := serverapi.WorkflowTaskGetResponse{Task: serverapi.WorkflowTaskDetail{
 			ExecutionTarget: &serverapi.WorkflowExecutionTarget{
-				Mode:          serverapi.WorkflowExecutionTargetModeNone,
-				EffectiveRoot: &blankRoot,
-				Provenance:    serverapi.WorkflowExecutionTargetProvenanceResolved,
+				Mode:       serverapi.WorkflowExecutionTargetModeNone,
+				Provenance: serverapi.WorkflowExecutionTargetProvenanceLegacyObserved,
 			},
 		}}
 		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, response)); err != nil {

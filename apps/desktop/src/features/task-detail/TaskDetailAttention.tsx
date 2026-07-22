@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 
-import type { AttentionItem, TaskTransition } from "@/api";
+import type { ApprovalSnapshot, AttentionItem } from "@/api";
 import { errorMessage } from "@/api";
 import { useAppServices } from "@/app-facade";
 import {
@@ -22,13 +22,11 @@ export function ApprovalBox({
   currentVersion,
   disabled,
   mutations,
-  transitions,
 }: Readonly<{
   attention: AttentionItem;
   currentVersion: number;
   disabled: boolean;
   mutations: ReturnType<typeof useTaskMutations>;
-  transitions: readonly TaskTransition[];
 }>) {
   const { t } = useTranslation();
   const { api } = useAppServices();
@@ -44,8 +42,8 @@ export function ApprovalBox({
       });
     },
   });
-  const transition = transitions.find((item) => item.id === attention.taskTransitionID);
-  const stale = transition !== undefined && transition.version !== currentVersion;
+  const snapshot = attention.approvalSnapshot;
+  const stale = snapshot !== null && snapshot.version !== currentVersion;
   function approve(): void {
     void executionTargetContinuation
       .run(approveExecutionTargetAction(attention.taskTransitionID))
@@ -67,7 +65,7 @@ export function ApprovalBox({
         radius="l"
         unpadded
       >
-        {transition !== undefined ? (
+        {snapshot !== null ? (
           <div className="grid gap-[var(--space-2)]">
             <div
               className="flex min-w-0 items-center gap-[var(--space-2)]"
@@ -78,8 +76,8 @@ export function ApprovalBox({
                 contextMode=""
                 layout="compact"
                 neutralArrow
-                sourceLabel={transition.sourceNodeName}
-                targetLabel={transitionTargetLabel(transition, t)}
+                sourceLabel={snapshot.sourceNodeName}
+                targetLabel={approvalTargetLabel(snapshot, t)}
               />
               <span className="min-w-0 flex-1" />
               <Button
@@ -95,12 +93,12 @@ export function ApprovalBox({
                 {t("task.approve")}
               </Button>
             </div>
-            {transition.commentary.length > 0 ? (
+            {snapshot.commentary.length > 0 ? (
               <p className="m-0 whitespace-pre-wrap text-sm text-[var(--color-muted)]">
-                {transition.commentary}
+                {snapshot.commentary}
               </p>
             ) : null}
-            <ApprovalOutputValues outputValues={transition.outputValues} />
+            <ApprovalOutputValues outputValues={snapshot.outputValues} />
             {stale ? (
               <p className="m-0 text-sm text-[var(--color-warning)]">
                 <strong>{t("task.staleApproval")}</strong> {t("task.staleApprovalBody")}
@@ -221,12 +219,12 @@ function ApprovalOutputValues({
   );
 }
 
-function transitionTargetLabel(
-  transition: TaskTransition,
+function approvalTargetLabel(
+  snapshot: ApprovalSnapshot,
   fallback: ReturnType<typeof useTranslation>["t"],
 ): string {
-  const labels = transition.edges
-    .map((edge) => edge.targetNodeName.trim())
+  const labels = snapshot.targets
+    .map((target) => target.displayName.trim())
     .filter((label) => label.length > 0);
   return labels.join(", ") || fallback("task.targetUnavailable");
 }

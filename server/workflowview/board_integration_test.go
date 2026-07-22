@@ -228,11 +228,10 @@ func TestBoardSelectorFallsBackToActiveSelection(t *testing.T) {
 	})
 }
 
-func TestTaskDetailPrefersActiveWorkflowLink(t *testing.T) {
+func TestTaskDetailProjectsWorkflowIdentityWithoutWorkflowValidity(t *testing.T) {
 	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	link, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true)
-	if err != nil {
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
 	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowIDPointerForTest(workflowID), Title: "Historical", Body: "Body"})
@@ -250,10 +249,9 @@ func TestTaskDetailPrefersActiveWorkflowLink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if detail.Workflow.WorkflowID != string(workflowID) || !detail.Workflow.IsProjectDefault || !detail.Workflow.ValidForTaskCreation {
-		t.Fatalf("workflow link = %+v, want active default link", detail.Workflow)
+	if detail.Workflow.WorkflowID != string(workflowID) || detail.Workflow.DisplayName == "" || detail.Workflow.Version <= 0 {
+		t.Fatalf("workflow summary = %+v, want current workflow identity", detail.Workflow)
 	}
-	_ = link
 }
 
 func TestBoardColumnTaskCountsUseFullSelectedWorkflow(t *testing.T) {
@@ -772,8 +770,8 @@ func TestTaskDetailProjectsCancellationAndInterruptedRun(t *testing.T) {
 	if detail.Summary.CanceledAt == nil || *detail.Summary.CanceledAt == 0 || detail.Summary.CancelReason == nil || *detail.Summary.CancelReason != "stop" {
 		t.Fatalf("summary does not project cancellation: %+v", detail.Summary)
 	}
-	if len(detail.Runs) != 1 || detail.Runs[0].InterruptedAtUnixMs == nil || detail.Runs[0].InterruptionReason == nil || *detail.Runs[0].InterruptionReason != "task_canceled" {
-		t.Fatalf("runs do not project interruption: %+v", detail.Runs)
+	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindCanceled {
+		t.Fatalf("status = %+v, want canceled", detail.Status)
 	}
 	if detail.Actions.CanResume {
 		t.Fatalf("canceled task should not expose resume actions: %+v", detail.Actions)

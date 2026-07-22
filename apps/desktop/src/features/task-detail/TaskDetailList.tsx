@@ -1,7 +1,12 @@
 import { useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { ActivityItem, AttentionItem, TaskComment, TaskDetail } from "@/api";
+import type {
+  ActivityItem,
+  AttentionItem,
+  TaskComment,
+  TaskDetail,
+} from "@/api";
 import { errorMessage } from "@/api";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import { taskDetailInitialFocusRequestKey } from "@/app-facade";
@@ -94,7 +99,14 @@ export function TaskDetailList({
     () => comments.data?.pages.flatMap((page) => page.comments) ?? [],
     [comments.data],
   );
-  const attentionItems = useMemo(() => attention.data?.items ?? [], [attention.data]);
+  const sourceAttentionItems = useMemo(() => attention.data?.items ?? [], [attention.data]);
+  const attentionItems = useMemo(
+    () =>
+      sourceAttentionItems.filter(
+        (item) => item.kind !== "question" || questionSelections.get(item.askID)?.submission !== "accepted",
+      ),
+    [questionSelections, sourceAttentionItems],
+  );
   const listItems = useMemo(
     () =>
       taskDetailListItems({
@@ -141,7 +153,9 @@ export function TaskDetailList({
       hasNextPage={paging.hasNextPage}
       initialScrollKey={initialFocus !== undefined ? "inbox" : undefined}
       initialScrollRequestKey={
-        initialFocus !== undefined ? taskDetailInitialFocusRequestKey(detail.id, initialFocus) : undefined
+        initialFocus !== undefined
+          ? taskDetailInitialFocusRequestKey(detail.id, initialFocus)
+          : undefined
       }
       isFetchingNextPage={paging.isFetchingNextPage}
       items={listItems}
@@ -157,7 +171,7 @@ export function TaskDetailList({
           activityCount={activityItems.length}
           attentionItems={attentionItems}
           attentionPending={attention.isPending}
-          commentCount={detail.comments.length}
+          commentCount={commentItems.length}
           detail={detail}
           disabled={disabled}
           draft={draft}

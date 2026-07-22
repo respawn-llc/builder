@@ -210,12 +210,16 @@ func (a *Authority) reserveScriptExecutionLocked(req ScriptExecutionRequest) (*e
 		req.Workflow,
 	)
 	runCtx, cancel := context.WithCancel(context.Background())
-	return &execution{
+	reserved := &execution{
 		authority: a,
 		scope:     scope,
 		ctx:       runCtx,
 		cancel:    cancel,
 		done:      make(chan struct{}),
 		prompts:   newExecutionPromptStore(scope, a.promptFeed),
-	}, nil
+	}
+	if req.Workflow != nil {
+		reserved.script = &TaskScriptExecutionTarget{Path: req.Command.Path}
+	}
+	return reserved, nil
 }

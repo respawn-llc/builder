@@ -653,20 +653,25 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 		}
 	}
 	err := s.withRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
+		for _, ref := range pendingRefs {
+			if ref.Kind != clientui.RuntimeOperationKindQueuedMessage || ref.QueueItemID == nil {
+				continue
+			}
+			if !engine.DiscardQueuedUserMessage(ref.QueueItemID.String()) {
+				continue
+			}
+			if err := s.operations.RecordQueuedMessageStatus(
+				sessionID,
+				ref,
+				clientui.RuntimeInputReconciliationCanceledNotCommitted,
+			); err != nil {
+				return err
+			}
+		}
 		if interruptActive {
 			if err := engine.Interrupt(); err != nil {
 				return err
 			}
-		}
-		if req.TargetOperationRef != nil &&
-			req.TargetOperationRef.Kind == clientui.RuntimeOperationKindQueuedMessage &&
-			req.TargetOperationRef.QueueItemID != nil &&
-			engine.DiscardQueuedUserMessage(req.TargetOperationRef.QueueItemID.String()) {
-			return s.operations.RecordQueuedMessageStatus(
-				sessionID,
-				*req.TargetOperationRef,
-				clientui.RuntimeInputReconciliationCanceledNotCommitted,
-			)
 		}
 		return nil
 	})

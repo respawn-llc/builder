@@ -3,7 +3,6 @@ package serverapi
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 
 	"core/shared/protocol"
@@ -37,22 +36,11 @@ const (
 )
 
 type WorkflowExecutionTarget struct {
-	Mode            WorkflowExecutionTargetMode       `json:"mode"`
-	EffectiveRoot   *string                           `json:"effective_root,omitempty"`
-	RequestedRef    *string                           `json:"requested_ref,omitempty"`
-	ResolvedRef     *string                           `json:"resolved_ref,omitempty"`
-	CommitOID       *string                           `json:"commit_oid,omitempty"`
-	Provenance      WorkflowExecutionTargetProvenance `json:"provenance"`
-	CurrentBranch   *string                           `json:"current_branch,omitempty"`
-	ManagedWorktree *WorkflowExecutionTargetWorktree  `json:"managed_worktree,omitempty"`
-}
-
-type WorkflowExecutionTargetWorktree struct {
-	WorktreeID    string                   `json:"worktree_id"`
-	DisplayName   string                   `json:"display_name"`
-	CanonicalRoot string                   `json:"canonical_root"`
-	Availability  WorktreePathAvailability `json:"availability"`
-	Managed       bool                     `json:"managed"`
+	Mode         WorkflowExecutionTargetMode       `json:"mode"`
+	RequestedRef *string                           `json:"requested_ref,omitempty"`
+	ResolvedRef  *string                           `json:"resolved_ref,omitempty"`
+	CommitOID    *string                           `json:"commit_oid,omitempty"`
+	Provenance   WorkflowExecutionTargetProvenance `json:"provenance"`
 }
 
 type WorkflowExecutionTargetConfiguredTarget struct {
@@ -235,20 +223,14 @@ func (s WorkflowExecutionTargetSelection) Validate() error {
 }
 
 func (t WorkflowExecutionTarget) Validate() error {
-	if t.EffectiveRoot != nil && strings.TrimSpace(*t.EffectiveRoot) == "" {
-		return errors.New("execution target effective_root must be non-blank when present")
-	}
 	if t.Provenance != WorkflowExecutionTargetProvenanceResolved && t.Provenance != WorkflowExecutionTargetProvenanceLegacyObserved {
 		return errors.New("execution target provenance is invalid")
 	}
 	if t.Mode == WorkflowExecutionTargetModeNone {
-		if t.EffectiveRoot == nil {
-			return errors.New("none execution target effective_root is required")
-		}
 		if t.Provenance != WorkflowExecutionTargetProvenanceResolved {
 			return errors.New("none execution target provenance must be resolved")
 		}
-		if t.RequestedRef != nil || t.ResolvedRef != nil || t.CommitOID != nil || t.CurrentBranch != nil || t.ManagedWorktree != nil {
+		if t.RequestedRef != nil || t.ResolvedRef != nil || t.CommitOID != nil {
 			return errors.New("none execution target cannot include managed target facts")
 		}
 		return nil
@@ -269,45 +251,6 @@ func (t WorkflowExecutionTarget) Validate() error {
 	}
 	if t.ResolvedRef != nil && strings.TrimSpace(*t.ResolvedRef) == "" {
 		return errors.New("execution target resolved_ref must be non-blank when present")
-	}
-	if t.CurrentBranch != nil && strings.TrimSpace(*t.CurrentBranch) == "" {
-		return errors.New("execution target current_branch must be non-blank when present")
-	}
-	if t.ManagedWorktree != nil {
-		if err := t.ManagedWorktree.Validate(); err != nil {
-			return fmt.Errorf("managed execution target managed_worktree: %w", err)
-		}
-		if !t.ManagedWorktree.Managed {
-			return errors.New("managed execution target managed_worktree must be managed")
-		}
-	}
-	if t.EffectiveRoot != nil {
-		if t.ManagedWorktree == nil {
-			return errors.New("managed execution target effective_root requires managed_worktree")
-		}
-		if t.ManagedWorktree.Availability != WorktreePathAvailabilityAvailable {
-			return errors.New("managed execution target effective_root requires an available managed_worktree")
-		}
-		if strings.TrimSpace(t.ManagedWorktree.CanonicalRoot) != strings.TrimSpace(*t.EffectiveRoot) {
-			return errors.New("managed execution target effective_root must match managed_worktree canonical_root")
-		}
-	}
-	if t.CurrentBranch != nil && t.EffectiveRoot == nil {
-		return errors.New("managed execution target current_branch requires effective_root")
-	}
-	return nil
-}
-
-func (t WorkflowExecutionTargetWorktree) Validate() error {
-	if strings.TrimSpace(t.WorktreeID) == "" ||
-		strings.TrimSpace(t.DisplayName) == "" ||
-		strings.TrimSpace(t.CanonicalRoot) == "" {
-		return errors.New("execution target worktree identity is required")
-	}
-	switch t.Availability {
-	case WorktreePathAvailabilityAvailable, WorktreePathAvailabilityMissing, WorktreePathAvailabilityInaccessible:
-	default:
-		return errors.New("execution target worktree availability is invalid")
 	}
 	return nil
 }

@@ -17,8 +17,6 @@ export type {
   WorkflowExecutionTargetSelectionMode,
   WorkflowExecutionTargetSelectionRequirement,
   WorkflowExecutionTargetUnavailableCause,
-  WorkflowExecutionTargetWorktree,
-  WorkflowExecutionTargetWorktreeAvailability,
   WorkflowManagedExecutionTarget,
   WorkflowNoManagedExecutionTarget,
 } from "./workflowExecutionTarget";
@@ -599,7 +597,16 @@ export type AttentionItem = Readonly<{
   suggestions: readonly string[];
   recommendedOptionIndex: number;
   question: AttentionQuestionPrompt | null;
+  approvalSnapshot: ApprovalSnapshot | null;
   occurredAt: number;
+}>;
+
+export type ApprovalSnapshot = Readonly<{
+  sourceNodeName: string;
+  targets: readonly Readonly<{ displayName: string }>[];
+  commentary: string;
+  outputValues: Readonly<Record<string, string>>;
+  version: number;
 }>;
 
 export type AttentionPage = Readonly<{
@@ -686,10 +693,10 @@ export type TaskDetail = Readonly<{
   actions: TaskActions;
   labelIDs: readonly string[];
   attentionCount: number;
-  comments: readonly TaskComment[];
-  runs: readonly TaskRun[];
-  transitions: readonly TaskTransition[];
   executionTarget: WorkflowExecutionTarget | null;
+  worktreePath: string | null;
+  currentSessionIDs: readonly string[];
+  currentScripts: readonly Readonly<{ runID: string; path: string }>[];
   createdAt: number;
   updatedAt: number;
   done: boolean;
