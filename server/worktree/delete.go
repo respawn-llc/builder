@@ -127,10 +127,9 @@ func (s *Service) executeDeleteLocked(
 	if err != nil {
 		return serverapi.WorktreeDeleteCompletedResult{}, err
 	}
-	if record != nil {
-		if err := s.ensureNoManagedTaskBlockers(ctx, record.ID); err != nil {
-			return serverapi.WorktreeDeleteCompletedResult{}, err
-		}
+	retainRecord, err := s.retainManagedTaskWorktreeRecord(ctx, record)
+	if err != nil {
+		return serverapi.WorktreeDeleteCompletedResult{}, err
 	}
 	mutationCtx, releaseRuns, blockers, err := s.freezeDeleteTargetSessions(ctx, workspaceCtx.sessionID, record)
 	if err != nil {
@@ -172,7 +171,7 @@ func (s *Service) executeDeleteLocked(
 			return serverapi.WorktreeDeleteCompletedResult{}, errors.Join(err, retargetCompensation.rollback(mutationCtx))
 		}
 	}
-	if record != nil {
+	if record != nil && !retainRecord {
 		if err := s.metadata.DeleteWorktreeRecordByID(ctx, record.ID); err != nil {
 			return serverapi.WorktreeDeleteCompletedResult{}, err
 		}
@@ -256,15 +255,18 @@ func topologyIsMain(entry serverapi.WorktreeTopologyEntry) bool {
 	}
 }
 
-func (s *Service) ensureNoManagedTaskBlockers(ctx context.Context, worktreeID string) error {
-	taskBlockers, err := s.metadata.Queries().CountNonTerminalTasksByManagedWorktree(ctx, sql.NullString{String: strings.TrimSpace(worktreeID), Valid: true})
+func (s *Service) retainManagedTaskWorktreeRecord(ctx context.Context, record *metadata.WorktreeRecord) (bool, error) {
+	if record == nil {
+		return false, nil
+	}
+	taskManagers, err := s.metadata.Queries().CountNonTerminalTasksByManagedWorktree(ctx, sql.NullString{
+		String: strings.TrimSpace(record.ID),
+		Valid:  strings.TrimSpace(record.ID) != "",
+	})
 	if err != nil {
-		return err
+		return false, err
 	}
-	if taskBlockers > 0 {
-		return errors.Join(serverapi.ErrWorktreeBlocked, fmt.Errorf("worktree is still managed by %d non-terminal workflow task(s)", taskBlockers))
-	}
-	return nil
+	return taskManagers > 0, nil
 }
 
 func (s *Service) freezeDeleteTargetSessions(
