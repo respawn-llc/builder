@@ -35,7 +35,7 @@ describe("Task Question answers", () => {
     vi.mocked(showStatusToast).mockClear();
   });
 
-  it("hides an answered Question and shows Running before the answer request finishes", async () => {
+  it("keeps server question and status visible while the answer request is pending", async () => {
     const answer = deferred<undefined>();
     const waitingQuestionTask = {
       task: {
@@ -70,9 +70,13 @@ describe("Task Question answers", () => {
 
     fireEvent.click(within(question).getByRole("button", { name: "Submit answer" }));
 
-    expect(screen.queryByRole("region", { name: "Question" })).not.toBeInTheDocument();
-    expect(within(screen.getByRole("region", { name: "Properties" })).getByText("Running"))
-      .toBeInTheDocument();
+    const submittingQuestion = screen.getByRole("region", { name: "Question" });
+    expect(within(submittingQuestion).getByRole("button")).toBeDisabled();
+    expect(within(submittingQuestion).getByRole("button")).toHaveAttribute("aria-busy", "true");
+    expect(within(submittingQuestion).getByRole("textbox", { name: "Commentary" })).toBeDisabled();
+    expect(
+      within(screen.getByRole("region", { name: "Properties" })).getByText("Waiting for question"),
+    ).toBeInTheDocument();
     await waitFor(() => {
       expect(services.transport.calls.some((call) => call.method === "workflow.task.question.answer")).toBe(
         true,
@@ -85,7 +89,7 @@ describe("Task Question answers", () => {
     });
   });
 
-  it("keeps the waiting status while another Question still needs an answer", async () => {
+  it("keeps every server Question visible while one answer is pending", async () => {
     const answer = deferred<undefined>();
     const waitingQuestionTask = {
       task: {
@@ -124,7 +128,13 @@ describe("Task Question answers", () => {
 
     fireEvent.click(within(firstQuestion).getByRole("button", { name: "Submit answer" }));
 
-    expect(screen.getAllByRole("region", { name: "Question" })).toHaveLength(1);
+    const pendingQuestions = screen.getAllByRole("region", { name: "Question" });
+    expect(pendingQuestions).toHaveLength(2);
+    const submittingQuestion = pendingQuestions[0];
+    if (submittingQuestion === undefined) {
+      throw new Error("Expected the submitting Question.");
+    }
+    expect(within(submittingQuestion).getByRole("button")).toHaveAttribute("aria-busy", "true");
     expect(screen.getByText("Second Question")).toBeInTheDocument();
     expect(
       within(screen.getByRole("region", { name: "Properties" })).getByText("Waiting for question"),

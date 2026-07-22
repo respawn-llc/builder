@@ -320,6 +320,7 @@ export const englishResources = {
       answer: "Answer",
       answerPlaceholder: "Type answer or commentary",
       submitAnswer: "Submit answer",
+      submittingAnswer: "Submitting…",
       optionNumber: "Option number",
       recommended: "Recommended",
       neitherOption: "Neither",
