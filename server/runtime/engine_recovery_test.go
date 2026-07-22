@@ -161,12 +161,71 @@ func TestNewPublishesRecoveredDanglingToolStartOnReopen(t *testing.T) {
 	t.Fatalf("reopen events contain no recovered tool start: %+v", events)
 }
 
+func TestExclusiveStepLifecycleClearsPendingRecoveryBeforeSchedulingBackground(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	scheduled := false
+	var recoveryAtSchedule *session.PendingModelRecovery
+	lifecycle := &defaultExclusiveStepLifecycle{
+		engine: engine,
+		background: &recoverySchedulingObserver{onSchedule: func() {
+			scheduled = true
+			if recovery := store.Meta().PendingModelRecovery; recovery != nil {
+				captured := cloneSessionPendingModelRecovery(recovery)
+				recoveryAtSchedule = &captured
+			}
+		}},
+	}
+
+	if err := lifecycle.Run(
+		context.Background(),
+		exclusiveStepOptions{ActiveKind: ActiveKindUserTurn},
+		func(_ context.Context, stepID string) error {
+			if err := engine.markProviderVisibleModelRecovery(stepID); err != nil {
+				return err
+			}
+			recovery := store.Meta().PendingModelRecovery
+			if recovery == nil || recovery.StepID != stepID {
+				t.Fatalf("pending recovery during exclusive step = %+v", recovery)
+			}
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("run exclusive step: %v", err)
+	}
+	if !scheduled {
+		t.Fatal("background work was not scheduled after the exclusive step")
+	}
+	if recoveryAtSchedule != nil {
+		t.Fatalf("background work observed pending recovery = %+v", recoveryAtSchedule)
+	}
+	if recovery := store.Meta().PendingModelRecovery; recovery != nil {
+		t.Fatalf("exclusive step retained pending recovery = %+v", recovery)
+	}
+}
+
 func TestReopenCarriesInterruptedAskQuestionToolAttemptIntoNextModelRequest(t *testing.T) {
 	testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t, llm.ToolCall{
 		ID:    "interrupted-question-call",
 		Name:  string(toolspec.ToolAskQuestion),
 		Input: json.RawMessage(`{"question":"continue?"}`),
 	})
+}
+
+type recoverySchedulingObserver struct {
+	onSchedule func()
+}
+
+func (s *recoverySchedulingObserver) HandleBackgroundShellUpdate(BackgroundShellEvent, bool) {}
+func (s *recoverySchedulingObserver) QueueDeveloperNotice(llm.Message)                       {}
+func (s *recoverySchedulingObserver) DrainPendingNotices() []steeringIntent                  { return nil }
+func (s *recoverySchedulingObserver) HasPendingNotices() bool                                { return false }
+func (s *recoverySchedulingObserver) ConsumePendingBackgroundNotice(string) bool             { return false }
+
+func (s *recoverySchedulingObserver) ScheduleIfIdle() {
+	if s != nil && s.onSchedule != nil {
+		s.onSchedule()
+	}
 }
 
 func TestReopenCarriesInterruptedShellToolAttemptIntoNextModelRequest(t *testing.T) {
