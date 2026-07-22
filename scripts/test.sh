@@ -28,7 +28,7 @@ Options:
 
 Environment:
   KENT_TEST_TIMEOUT_SECONDS
-            Server test wall-clock cap in seconds. Defaults to 120.
+            Server test wall-clock cap in seconds. Defaults to 180.
   KENT_TEST_GO_PACKAGE_PARALLELISM
             Maximum Go test packages to execute concurrently. Defaults to 4.
   KENT_TEST_TUI_TIMEOUT_SECONDS
@@ -134,12 +134,12 @@ server_go_test_args=(-p "$go_test_package_parallelism" "${server_test_args[@]}")
 if [ "$disable_wall_clock_cap" != "1" ]; then
     case "$timeout_seconds" in
     '' | *[!0-9]*)
-        printf 'KENT_TEST_TIMEOUT_SECONDS must be a positive integer <= 120\n' >&2
+        printf 'KENT_TEST_TIMEOUT_SECONDS must be a positive integer <= 180\n' >&2
         exit 2
         ;;
     esac
-    if [ "$timeout_seconds" -le 0 ] || [ "$timeout_seconds" -gt 120 ]; then
-        printf 'KENT_TEST_TIMEOUT_SECONDS must be a positive integer <= 120\n' >&2
+    if [ "$timeout_seconds" -le 0 ] || [ "$timeout_seconds" -gt 180 ]; then
+        printf 'KENT_TEST_TIMEOUT_SECONDS must be a positive integer <= 180\n' >&2
         exit 2
     fi
     case "$tui_timeout_seconds" in
