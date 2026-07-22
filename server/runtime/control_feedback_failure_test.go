@@ -45,14 +45,61 @@ func TestSetFastModeWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing
 		)
 	}
 
+	assertOneBoundedControlFeedback(t, store)
+}
+
+func TestSetQuestionsWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
+	blocker := mustBlockTestEventLogAppends(t, store)
+
+	changed, enabled, receipt, err := engine.SetQuestionsEnabledWithCommittedFeedback(false, func(bool, bool) string {
+		return "feedback"
+	})
+	if err == nil || receipt.Committed || changed || !enabled || !engine.QuestionsEnabled() {
+		t.Fatalf(
+			"uncommitted questions feedback mutated runtime state: receipt=%+v changed=%t enabled=%t current=%t error=%v",
+			receipt,
+			changed,
+			enabled,
+			engine.QuestionsEnabled(),
+			err,
+		)
+	}
+
+	if err := blocker.Restore(); err != nil {
+		t.Fatalf("restore event-log appends: %v", err)
+	}
+	changed, enabled, receipt, err = engine.SetQuestionsEnabledWithCommittedFeedback(false, func(bool, bool) string {
+		return "feedback"
+	})
+	if err != nil || !receipt.Committed || !changed || enabled || engine.QuestionsEnabled() {
+		t.Fatalf(
+			"retry did not apply questions setting after durable feedback: receipt=%+v changed=%t enabled=%t current=%t error=%v",
+			receipt,
+			changed,
+			enabled,
+			engine.QuestionsEnabled(),
+			err,
+		)
+	}
+
+	assertOneBoundedControlFeedback(t, store)
+}
+
+func assertOneBoundedControlFeedback(t *testing.T, store *session.Store) {
+	t.Helper()
 	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
 	if err != nil {
 		t.Fatalf("read bounded feedback records: %v", err)
 	}
+	entries := 0
 	for _, record := range window.Records {
 		if _, ok := mustSessionEventPayload(record).(session.LocalEntryRecord); ok {
-			return
+			entries++
 		}
 	}
-	t.Fatalf("bounded feedback records contain no committed local entry: %+v", window.Records)
+	if entries != 1 {
+		t.Fatalf("bounded control-feedback entries = %d, want one", entries)
+	}
 }
