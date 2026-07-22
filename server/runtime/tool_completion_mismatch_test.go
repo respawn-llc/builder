@@ -52,6 +52,25 @@ func TestToolCompletionDeletionMismatchPanicsBeforePersistenceInDebug(t *testing
 	_, _ = engine.steerWithCommitReceipt("step-delete", steerToolCompletionIntent(result))
 }
 
+func TestToolCompletionDeletionMismatchReleaseFallbackPersistsRecovery(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+	})
+	result := mismatchedDeletionCompletion(t, engine)
+
+	if err := engine.steer("step-delete", steerToolCompletionIntent(result)); err != nil {
+		t.Fatalf("persist release fallback: %v", err)
+	}
+	assertDeletionMismatchFallback(t, engine, store, result)
+
+	reopened := mustOpenTestSession(t, store.Dir())
+	restored := mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+	})
+	assertDeletionMismatchFallback(t, restored, reopened, result)
+}
+
 func mismatchedDeletionCompletion(t *testing.T, engine *Engine) tools.Result {
 	t.Helper()
 	call := llm.ToolCall{
@@ -91,5 +110,83 @@ func mismatchedDeletionCompletion(t *testing.T, engine *Engine) tools.Result {
 				Removed:       1,
 			}},
 		},
+	}
+}
+
+func assertDeletionMismatchFallback(t *testing.T, engine *Engine, store *session.Store, result tools.Result) {
+	t.Helper()
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	if err != nil {
+		t.Fatalf("read bounded mismatch records: %v", err)
+	}
+	var completion *storedToolCompletion
+	var feedback *storedLocalEntry
+	for _, record := range window.Records {
+		switch payload := mustSessionEventPayload(record).(type) {
+		case session.ToolCompletionRecord:
+			value, restoreErr := storedToolCompletionFromSessionRecord(payload)
+			if restoreErr != nil {
+				t.Fatalf("restore tool completion: %v", restoreErr)
+			}
+			if value.CallID == result.CallID {
+				completion = &value
+			}
+		case session.LocalEntryRecord:
+			value, restoreErr := storedLocalEntryFromSessionRecord(payload)
+			if restoreErr != nil {
+				t.Fatalf("restore local entry: %v", restoreErr)
+			}
+			if value.AfterToolCallID != nil && *value.AfterToolCallID == result.CallID {
+				feedback = &value
+			}
+		}
+	}
+	if completion == nil || completion.Presentation == nil || completion.Presentation.PatchRender == nil {
+		t.Fatalf("missing fallback completion presentation: %+v", completion)
+	}
+	if feedback == nil || feedback.Role != string(transcript.EntryRoleDeveloperErrorFeedback) {
+		t.Fatalf("missing typed mismatch feedback: %+v", feedback)
+	}
+	for _, file := range completion.Presentation.PatchRender.Files {
+		for _, deletion := range file.WholeFileDeletions {
+			if deletion.Disposition != nil {
+				t.Fatalf("fallback fabricated deletion disposition: %+v", completion.Presentation)
+			}
+		}
+	}
+
+	var snapshot TranscriptHydrationSnapshot
+	if err := engine.WithTranscriptHydrationSnapshot(func(value TranscriptHydrationSnapshot) error {
+		snapshot = value
+		return nil
+	}); err != nil {
+		t.Fatalf("read transcript hydration snapshot: %v", err)
+	}
+	var toolRow, noticeRow bool
+	for _, row := range snapshot.CommittedRows {
+		switch row.Kind {
+		case TranscriptCommittedRowFactTool:
+			toolRow = row.StepID == "step-delete"
+		case TranscriptCommittedRowFactNotice:
+			noticeRow = row.StepID == "step-delete" &&
+				row.Notice != nil &&
+				row.Notice.Reason == transcript.NoticeReasonRuntimeDiagnostic
+		}
+	}
+	if !toolRow || !noticeRow {
+		t.Fatalf("hydrated fallback rows missing tool or diagnostic: %+v", snapshot.CommittedRows)
+	}
+
+	outputCount := 0
+	for _, item := range engine.transcriptRuntimeState().SnapshotItems() {
+		if item.Role != nil && *item.Role == llm.RoleDeveloper {
+			t.Fatalf("operator feedback leaked into provider items: %+v", item)
+		}
+		if isToolOutputItem(item.Type) && item.CallID != nil && *item.CallID == result.CallID {
+			outputCount++
+		}
+	}
+	if outputCount != 1 {
+		t.Fatalf("provider tool outputs = %d, want one", outputCount)
 	}
 }
