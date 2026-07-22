@@ -9,6 +9,8 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/server/workflow"
+	"core/server/workflowruntime"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -92,6 +94,48 @@ func TestMissingToolOutputRepairLeavesUnrelated400Unrepaired(t *testing.T) {
 	}
 	if len(client.calls) != 1 {
 		t.Fatalf("model calls = %d, want no repair retry", len(client.calls))
+	}
+}
+
+func TestRequiredToolChoiceRepairsDanglingOutputAndRebuildsRequest(t *testing.T) {
+	store := mustCreateTestSession(t)
+	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
+		Role:      llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)}},
+	}); err != nil {
+		t.Fatalf("append dangling tool call: %v", err)
+	}
+	client := &fakeClient{
+		errors: []error{
+			&llm.APIStatusError{StatusCode: 400},
+			&llm.APIStatusError{StatusCode: 401},
+		},
+	}
+	eng := mustNewExecTestEngine(
+		t,
+		store,
+		client,
+		Config{WorkflowRun: &workflowruntime.Config{
+			CompletionMode: workflowruntime.CompletionModeTool,
+			Contract: workflowruntime.CompletionContract{
+				RunID: workflow.RunID("workflow-run"),
+			},
+		}},
+	)
+
+	if _, err := eng.SubmitUserMessage(context.Background(), "continue"); !llm.HasHTTPStatus(err, 401) {
+		t.Fatalf("submit error = %v, want unrepaired HTTP 401 after repaired retry", err)
+	}
+	if len(client.calls) != 2 {
+		t.Fatalf("model calls = %d, want initial 400 plus repaired retry", len(client.calls))
+	}
+	for index, call := range client.calls {
+		if call.ToolChoiceMode != llm.ToolChoiceModeRequired {
+			t.Fatalf("model call %d tool choice = %q, want required", index, call.ToolChoiceMode)
+		}
+	}
+	if !repairRequestHasToolOutput(client.calls[1].Items, "missing") {
+		t.Fatal("required-tool retry omitted the synthetic output")
 	}
 }
 
