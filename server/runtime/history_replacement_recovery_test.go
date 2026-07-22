@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -8,6 +9,8 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/server/workflow"
+	"core/server/workflowruntime"
 	"core/shared/textutil"
 )
 
@@ -122,4 +125,77 @@ func TestCommittedHistoryReplacementPreventsStaleUsageFromLaterMetadataPersisten
 	if usage == nil || usage.InputTokens != compactedUsage.InputTokens || usage.WindowTokens != compactedUsage.WindowTokens {
 		t.Fatalf("reopened usage after later metadata persistence: %+v", usage)
 	}
+}
+
+func TestWorkflowBudgetResetFailureKeepsCommittedReplacementLive(t *testing.T) {
+	resetErr := errors.New("workflow protocol budget reset failure")
+	runID := workflow.RunID("workflow-run")
+	controller := &workflowBudgetResetFailureController{err: resetErr}
+	store := mustCreateTestSession(t)
+	var events []Event
+	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{
+		Model: "gpt-5",
+		WorkflowRun: &workflowruntime.Config{
+			RunID:          runID,
+			Contract:       workflowruntime.CompletionContract{RunID: runID},
+			CompletionMode: workflowruntime.CompletionModeTool,
+			Controller:     controller,
+		},
+		OnEvent: func(event Event) {
+			events = append(events, event)
+		},
+	})
+	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+	)); err != nil {
+		t.Fatalf("persist seed message: %v", err)
+	}
+
+	receipt, err := newCompactionPersistence(engine).replaceHistory(
+		"compact",
+		"local",
+		compactionModeManual,
+		llm.ItemsFromMessages([]llm.Message{{
+			Role:        llm.RoleDeveloper,
+			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+			Content:     textutil.Value("summary"),
+		}}),
+	)
+	if !receipt.Committed || !errors.Is(err, resetErr) {
+		t.Fatalf("committed replacement reset-failure outcome: receipt=%+v error=%v", receipt, err)
+	}
+	if engine.compactionRuntimeState().Count() != 1 {
+		t.Fatalf("committed replacement generation = %d, want 1", engine.compactionRuntimeState().Count())
+	}
+
+	items := engine.transcriptRuntimeState().SnapshotItems()
+	if len(items) != 1 ||
+		items[0].Type != llm.ResponseItemTypeMessage ||
+		items[0].Role == nil ||
+		*items[0].Role != llm.RoleDeveloper ||
+		items[0].MessageType == nil ||
+		*items[0].MessageType != llm.MessageTypeCompactionSummary {
+		t.Fatalf("committed replacement active items = %+v", items)
+	}
+	for _, event := range events {
+		if event.Kind == EventConversationUpdated {
+			return
+		}
+	}
+	t.Fatalf("committed replacement did not publish typed conversation update: %+v", events)
+}
+
+type workflowBudgetResetFailureController struct {
+	externallyCompletedWorkflowController
+	err error
+}
+
+func (c *workflowBudgetResetFailureController) ResetWorkflowProtocolViolationBudget(
+	context.Context,
+	workflowruntime.ViolationResetRequest,
+) error {
+	return c.err
 }
