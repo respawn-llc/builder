@@ -286,6 +286,76 @@ func TestTranscriptHydrationRetainsAdjacentRowsAroundProviderEmptyAssistant(t *t
 	}
 }
 
+func TestReopenedCompactionPublishesVisibleTranscriptCoordinates(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	for _, role := range []string{
+		string(transcript.EntryRoleSystem),
+		string(transcript.EntryRoleSystem),
+	} {
+		if err := engine.AppendCommittedEntry(role, "notice"); err != nil {
+			t.Fatalf("append pre-compaction entry: %v", err)
+		}
+	}
+	if err := engine.steer(
+		"compaction",
+		steerHistoryReplacementIntent(
+			"local",
+			compactionModeAuto,
+			"",
+			1,
+			"",
+			"",
+			llm.ItemsFromMessages([]llm.Message{{
+				Role:        llm.RoleUser,
+				MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+				Content:     textutil.Value("summary"),
+			}}),
+		),
+	); err != nil {
+		t.Fatalf("persist history replacement: %v", err)
+	}
+	if got := engine.CommittedTranscriptEntryCount(); got != 3 {
+		t.Fatalf("pre-reopen committed entry count = %d", got)
+	}
+	if err := engine.Close(); err != nil {
+		t.Fatalf("close compacted engine: %v", err)
+	}
+
+	var events []Event
+	reopened := mustNewTestEngine(
+		t,
+		mustOpenTestSession(t, store.Dir()),
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{
+			Model:   "gpt-5",
+			OnEvent: func(event Event) { events = append(events, event) },
+		},
+	)
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("close reopened engine: %v", err)
+		}
+	})
+	if got := reopened.CommittedTranscriptEntryCount(); got != 3 {
+		t.Fatalf("reopened committed entry count = %d", got)
+	}
+	if err := reopened.AppendCommittedEntry(string(transcript.EntryRoleSystem), "notice"); err != nil {
+		t.Fatalf("append post-reopen entry: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("post-reopen events = %+v", events)
+	}
+	event := events[0]
+	if event.Kind != EventLocalEntryAdded ||
+		!event.CommittedEntryStartSet ||
+		event.CommittedEntryStart != 3 ||
+		event.CommittedEntryCount != 4 {
+		t.Fatalf("post-reopen committed range = %+v", event)
+	}
+}
+
 func durableTranscriptProjectionEvents(events []Event) []Event {
 	committed := make([]Event, 0, len(events))
 	for _, event := range events {
