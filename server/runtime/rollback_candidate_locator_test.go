@@ -2,6 +2,10 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"core/server/llm"
@@ -179,5 +183,50 @@ func TestQueuedUserSubmissionUpdatesLatestRollbackCandidateLocator(t *testing.T)
 	}
 	if !found {
 		t.Fatalf("queued locator target %q was not present in newest segment", wantTarget)
+	}
+}
+
+func TestRuntimeRestoreRejectsMalformedPersistedRollbackCandidateLocator(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eventLog := mustMaterializeTestEventLog(t, store)
+	appendMalformedRollbackCandidateHistoryReplacement(t, store)
+
+	engine, err := New(store, eventLog, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	if engine != nil || !errors.Is(err, rollbacktarget.ErrInvalidCandidateLocator) {
+		t.Fatalf("runtime restore result = engine:%+v error:%v", engine, err)
+	}
+}
+
+func appendMalformedRollbackCandidateHistoryReplacement(t *testing.T, store *session.Store) {
+	t.Helper()
+	line, err := json.Marshal(struct {
+		Seq     int64                            `json:"seq"`
+		Kind    session.EventKind                `json:"kind"`
+		Payload session.HistoryReplacementRecord `json:"payload"`
+	}{
+		Seq:  1,
+		Kind: session.EventKindHistoryReplace,
+		Payload: session.HistoryReplacementRecord{
+			Engine: "local",
+			Mode:   session.CompactionModeManual,
+			LatestRollbackCandidate: &rollbacktarget.CandidateLocator{
+				UserMessageSeq: 1,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal malformed rollback candidate history replacement: %v", err)
+	}
+	path := filepath.Join(store.Dir(), "events.jsonl")
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open persisted event log for malformed rollback candidate: %v", err)
+	}
+	if _, err := file.Write(append(line, '\n')); err != nil {
+		_ = file.Close()
+		t.Fatalf("append malformed rollback candidate history replacement: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close persisted event log after malformed rollback candidate: %v", err)
 	}
 }

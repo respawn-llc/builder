@@ -8,9 +8,15 @@ import (
 	"strings"
 )
 
-// ErrInvalidRollbackTargetID is returned when a rollback target id cannot be
-// decoded into a valid user-message sequence.
-var ErrInvalidRollbackTargetID = errors.New("invalid rollback target id")
+var (
+	// ErrInvalidRollbackTargetID is returned when a rollback target id cannot
+	// be decoded into a valid user-message sequence.
+	ErrInvalidRollbackTargetID = errors.New("invalid rollback target id")
+
+	// ErrInvalidCandidateLocator is returned when a persisted rollback
+	// candidate cannot identify a valid bounded transcript page.
+	ErrInvalidCandidateLocator = errors.New("invalid rollback candidate locator")
+)
 
 const tokenVersion = 2
 
@@ -21,10 +27,18 @@ type CandidateLocator struct {
 
 func (l CandidateLocator) Validate() error {
 	if l.UserMessageSeq <= 0 {
-		return fmt.Errorf("rollback candidate user message sequence must be positive, got %d", l.UserMessageSeq)
+		return fmt.Errorf(
+			"%w: user message sequence must be positive, got %d",
+			ErrInvalidCandidateLocator,
+			l.UserMessageSeq,
+		)
 	}
 	if l.CandidatePageEndByte <= 0 {
-		return fmt.Errorf("rollback candidate page end byte must be positive, got %d", l.CandidatePageEndByte)
+		return fmt.Errorf(
+			"%w: page end byte must be positive, got %d",
+			ErrInvalidCandidateLocator,
+			l.CandidatePageEndByte,
+		)
 	}
 	return nil
 }
