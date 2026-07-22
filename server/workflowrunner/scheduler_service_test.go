@@ -248,7 +248,7 @@ func TestSchedulerCloseStopsNewClaims(t *testing.T) {
 	}
 }
 
-func TestSchedulerRecoveryInterruptsOrphanedStartedRunsAndKeepsRunnable(t *testing.T) {
+func TestSchedulerRecoveryInterruptsOrphanedStartedAndUnstartedRuns(t *testing.T) {
 	ctx, store, binding, _ := newSchedulerTestContextStore(t)
 	createLinkedSchedulerValidWorkflow(t, ctx, store, binding.ProjectID)
 	orphan := createAndStartSchedulerTask(t, ctx, store, binding.ProjectID)
@@ -272,18 +272,15 @@ func TestSchedulerRecoveryInterruptsOrphanedStartedRunsAndKeepsRunnable(t *testi
 	if err != nil {
 		t.Fatalf("ListRuns runnable: %v", err)
 	}
-	if runnableRuns[0].InterruptedAt != nil || runnableRuns[0].StartedAt != nil {
-		t.Fatalf("runnable run changed during recovery: %+v", runnableRuns[0])
+	if runnableRuns[0].InterruptedAt == nil || runnableRuns[0].InterruptionReason == nil || *runnableRuns[0].InterruptionReason != ReasonSchedulerStartupUnstartedRun {
+		t.Fatalf("unstarted run = %+v, want interrupted", runnableRuns[0])
 	}
 }
 
-func TestSchedulerRecoveryInterruptsLostAutomaticIntent(t *testing.T) {
-	ctx, store, binding, metadataStore := newSchedulerTestContextStore(t)
+func TestSchedulerRecoveryInterruptsUnstartedRuns(t *testing.T) {
+	ctx, store, binding, _ := newSchedulerTestContextStore(t)
 	createLinkedSchedulerValidWorkflow(t, ctx, store, binding.ProjectID)
 	queued := createAndStartSchedulerTask(t, ctx, store, binding.ProjectID)
-	if _, err := metadataStore.DB().ExecContext(ctx, `UPDATE task_runs SET automation_requested_at_unix_ms = 1 WHERE id = ?`, queued.RunID); err != nil {
-		t.Fatalf("persist legacy automatic intent: %v", err)
-	}
 	finalizer := &recordingInterruptedRunFinalizer{}
 	scheduler := newSchedulerTestService(t, store, nil, SchedulerConfig{Concurrency: 1}, WithSchedulerAttentionFinalizer(finalizer))
 
@@ -294,8 +291,8 @@ func TestSchedulerRecoveryInterruptsLostAutomaticIntent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].InterruptedAt == nil || runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != ReasonSchedulerStartupLostIntent {
-		t.Fatalf("recovered legacy automatic run = %+v", runs)
+	if len(runs) != 1 || runs[0].InterruptedAt == nil || runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != ReasonSchedulerStartupUnstartedRun {
+		t.Fatalf("recovered unstarted run = %+v", runs)
 	}
 	if len(finalizer.interruptedRuns) != 1 || finalizer.interruptedRuns[0] != queued.RunID {
 		t.Fatalf("interrupted run finalizations = %+v, want %s", finalizer.interruptedRuns, queued.RunID)
@@ -388,10 +385,8 @@ func TestSchedulerRuntimeStartFailureInterruptsRun(t *testing.T) {
 func TestSchedulerStartContinuesAfterRuntimeStartFailure(t *testing.T) {
 	ctx, store, binding, _ := newSchedulerTestContextStore(t)
 	createLinkedSchedulerValidWorkflow(t, ctx, store, binding.ProjectID)
-	started := createAndStartSchedulerTask(t, ctx, store, binding.ProjectID)
 	starter := &recordingStarter{err: errors.New("role missing")}
 	scheduler := newSchedulerTestService(t, store, starter, SchedulerConfig{Concurrency: 1})
-	scheduler.RequestAutomaticStarts([]workflow.RunID{started.RunID})
 	t.Cleanup(func() { _ = scheduler.Close() })
 
 	if err := scheduler.Start(ctx); err != nil {
@@ -399,6 +394,11 @@ func TestSchedulerStartContinuesAfterRuntimeStartFailure(t *testing.T) {
 	}
 	if !scheduler.Started() {
 		t.Fatal("scheduler not marked started after isolated runtime start failure")
+	}
+	started := createAndStartSchedulerTask(t, ctx, store, binding.ProjectID)
+	scheduler.RequestAutomaticStarts([]workflow.RunID{started.RunID})
+	if err := scheduler.Process(ctx); !errors.Is(err, ErrSchedulerRuntimeStartFailed) {
+		t.Fatalf("Process: %v, want ErrSchedulerRuntimeStartFailed", err)
 	}
 	runs, err := store.ListRuns(ctx, started.TaskID)
 	if err != nil {

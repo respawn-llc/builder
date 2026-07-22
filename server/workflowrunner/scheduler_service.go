@@ -16,7 +16,7 @@ const (
 	ReasonSchedulerRuntimeStartFailed    = "workflow_runtime_start_failed"
 	ReasonSchedulerPendingAskUnavailable = "workflow_pending_ask_unavailable"
 	ReasonSchedulerStartupOrphanedRun    = "workflow_startup_orphaned_run"
-	ReasonSchedulerStartupLostIntent     = "workflow_startup_lost_automatic_intent"
+	ReasonSchedulerStartupUnstartedRun   = "workflow_startup_unstarted_run"
 )
 
 var (
@@ -30,7 +30,7 @@ type SchedulerStore interface {
 	InterruptRun(ctx context.Context, runID workflow.RunID, reason string, detailJSON string) error
 	InterruptRunGeneration(ctx context.Context, runID workflow.RunID, generation int64, reason string, detailJSON string) error
 	ReconcileStartedRuns(ctx context.Context, reason string) ([]workflowstore.RunRecord, error)
-	ReconcileUnstartedAutomaticRuns(ctx context.Context, reason string) ([]workflowstore.RunRecord, error)
+	ReconcileUnstartedRuns(ctx context.Context, reason string) ([]workflowstore.RunRecord, error)
 	ListWaitingAskRuns(ctx context.Context) ([]workflowstore.RunRecord, error)
 }
 
@@ -327,8 +327,8 @@ func (s *SchedulerService) Reconcile(ctx context.Context) error {
 	for _, run := range interrupted {
 		s.finalizeInterruptedRun(ctx, run.ID)
 	}
-	s.logf("workflow.scheduler.recovery action=interrupt_lost_automatic_intents reason=%s", ReasonSchedulerStartupLostIntent)
-	interrupted, err = s.store.ReconcileUnstartedAutomaticRuns(ctx, ReasonSchedulerStartupLostIntent)
+	s.logf("workflow.scheduler.recovery action=interrupt_unstarted_runs reason=%s", ReasonSchedulerStartupUnstartedRun)
+	interrupted, err = s.store.ReconcileUnstartedRuns(ctx, ReasonSchedulerStartupUnstartedRun)
 	if err != nil {
 		return err
 	}

@@ -2538,8 +2538,7 @@ SELECT
     run_start_snapshot_json,
     metadata_json
 FROM task_run_records
-WHERE automation_requested_at_unix_ms IS NOT NULL
-  AND started_at_unix_ms IS NULL
+WHERE started_at_unix_ms IS NULL
   AND completed_at_unix_ms IS NULL
   AND interrupted_at_unix_ms IS NULL
   AND waiting_ask_id IS NULL

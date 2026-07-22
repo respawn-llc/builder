@@ -186,7 +186,7 @@ func (s *Store) ReconcileStartedRuns(ctx context.Context, reason string) ([]RunR
 	return interrupted, nil
 }
 
-func (s *Store) ReconcileUnstartedAutomaticRuns(ctx context.Context, reason string) ([]RunRecord, error) {
+func (s *Store) ReconcileUnstartedRuns(ctx context.Context, reason string) ([]RunRecord, error) {
 	now := s.now().UnixMilli()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

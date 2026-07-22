@@ -903,12 +903,12 @@ func TestStarterRestoresReusedSessionMetadataWhenSetupFailsAfterPlanning(t *test
 
 func TestSchedulerRunsNextAgentWithBoundInputsAndTaskWorktreeContext(t *testing.T) {
 	fixture := newChainedStarterFixture(t)
-	task := fixture.createStartedChainedTask(t, workflow.ContextModeNewSession, "coder")
 	scheduler := fixture.scheduler(t)
 
 	if err := scheduler.Start(context.Background()); err != nil {
 		t.Fatalf("scheduler.Start: %v", err)
 	}
+	task := fixture.createStartedChainedTask(t, workflow.ContextModeNewSession, "coder")
 	fixture.waitForRunCount(t, task.ID, 2)
 	fixture.waitForAllRunsCompleted(t, task.ID, 2)
 
@@ -987,12 +987,12 @@ func TestBuildWorkflowTaskInstructionsRendersTransitionCommentaryParameter(t *te
 
 func TestWorkflowRuntimeContinueSessionReusesSourceRunSession(t *testing.T) {
 	fixture := newChainedStarterFixture(t)
-	task := fixture.createStartedChainedTask(t, workflow.ContextModeContinueSession, "coder")
 	scheduler := fixture.scheduler(t)
 
 	if err := scheduler.Start(context.Background()); err != nil {
 		t.Fatalf("scheduler.Start: %v", err)
 	}
+	task := fixture.createStartedChainedTask(t, workflow.ContextModeContinueSession, "coder")
 	fixture.waitForRunCount(t, task.ID, 2)
 	fixture.waitForAllRunsCompleted(t, task.ID, 2)
 	fixture.waitForActiveCountZero(t, scheduler)
