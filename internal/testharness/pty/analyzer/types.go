@@ -598,6 +598,7 @@ const (
 	PhaseDetailInitialPageApplied = KindDetailInitialPageApplied
 	PhaseScenarioFinalApplied     = KindScenarioFinalApplied
 	PhaseToolStarted              = KindToolStarted
+	PhasePromptReady              = KindPromptReady
 )
 
 type ReadinessBoundaryKind uint8

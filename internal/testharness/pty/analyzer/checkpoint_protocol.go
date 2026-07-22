@@ -27,6 +27,7 @@ const (
 	KindDetailInitialPageApplied
 	KindScenarioFinalApplied
 	KindToolStarted
+	KindPromptReady
 )
 
 func (kind Kind) Valid() bool {
@@ -49,6 +50,7 @@ var kindDescriptors = [...]kindDescriptor{
 	{kind: KindDetailInitialPageApplied, protocolName: "DetailInitialPageApplied"},
 	{kind: KindScenarioFinalApplied, protocolName: "ScenarioFinalApplied"},
 	{kind: KindToolStarted, protocolName: "ToolStarted"},
+	{kind: KindPromptReady, protocolName: "PromptReady"},
 }
 
 func descriptorForKind(kind Kind) (kindDescriptor, bool) {

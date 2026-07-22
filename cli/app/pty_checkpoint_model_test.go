@@ -142,6 +142,7 @@ func (model *ptyCheckpointModel) Init() tea.Cmd {
 }
 
 func (model *ptyCheckpointModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	promptReadyBefore := ptyCheckpointPromptReady(model.inner)
 	initialDetailLoad := initialDetailLoadCandidate(model.inner, msg)
 	toolStart := ongoingToolStartCandidate(model.inner, msg)
 	ongoingFinal := ongoingAssistantFinalCandidate(model.inner, msg)
@@ -157,6 +158,11 @@ func (model *ptyCheckpointModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if toolStart.acceptedBy(next) && model.scenario.claimToolStarted() {
 		if err := model.output.Emit(checkpoint.KindToolStarted, nil); err != nil {
 			panic(fmt.Sprintf("emit PTY tool-started checkpoint: error=%v", err))
+		}
+	}
+	if !promptReadyBefore && ptyCheckpointPromptReady(next) {
+		if err := model.output.Emit(checkpoint.KindPromptReady, nil); err != nil {
+			panic(fmt.Sprintf("emit PTY prompt-ready checkpoint: error=%v", err))
 		}
 	}
 	emitScenarioFinalApplied := false
@@ -177,6 +183,11 @@ func (model *ptyCheckpointModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return model, cmd
+}
+
+func ptyCheckpointPromptReady(model tea.Model) bool {
+	appModel, ok := model.(*uiModel)
+	return ok && appModel.askReadyForInteraction()
 }
 
 func (model *ptyCheckpointModel) emitScenarioFinalApplied() {

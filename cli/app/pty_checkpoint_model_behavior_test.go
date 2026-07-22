@@ -54,6 +54,34 @@ func TestPTYCheckpointModelEmitsInputAppliedAfterInnerUpdate(t *testing.T) {
 	}
 }
 
+func TestPTYCheckpointModelEmitsPromptReadyOnInteractiveTransition(t *testing.T) {
+	var out bytes.Buffer
+	writer := analyzer.NewWriter(&out)
+	model := sizedTestUIModel(newProjectedStaticUIModel(), 64, 20)
+	wrapped := newPTYCheckpointModel(
+		model,
+		writer,
+		newPTYCheckpointScenarioState(appfixture.ScriptFinalAssistantOrdinal(1)),
+	)
+
+	_, projection := wrapped.Update(askEventMsg{
+		event: testQuestionAskEvent("ask-ready", "Choose.", "continue"),
+	})
+	if projection == nil {
+		t.Fatal("pending prompt did not schedule its projection")
+	}
+	if events := analyzeCheckpointBytes(t, out.Bytes()).PhaseEvents; len(events) != 0 {
+		t.Fatalf("prompt emitted readiness before projection: %#v", events)
+	}
+
+	wrapped.Update(projection())
+
+	events := analyzeCheckpointBytes(t, out.Bytes()).PhaseEvents
+	if len(events) != 1 || events[0].Phase != analyzer.PhasePromptReady {
+		t.Fatalf("checkpoint events = %#v, want one prompt-ready event", events)
+	}
+}
+
 func TestPTYCheckpointModelQueuesInitialDetailApplicationBeforeRendererWrite(t *testing.T) {
 	var out bytes.Buffer
 	writer := analyzer.NewWriter(&out)

@@ -69,7 +69,7 @@ func TestLifecycleHooksLocalConfiguredPTYRunsRepresentativeFlow(t *testing.T) {
 		},
 		Dimensions: pty.MustDimensions(24, 80),
 		PhaseInputs: []pty.PhaseInputEvent{
-			{Phase: pty.PhaseScenarioStart, After: time.Second, Bytes: []byte("\r")},
+			{Phase: pty.PhasePromptReady, Bytes: []byte("\r")},
 			{Phase: pty.PhaseScenarioFinalApplied, After: 300 * time.Millisecond, Bytes: []byte{0x03, 0x03}},
 		},
 		Timeout: 25 * time.Second,
