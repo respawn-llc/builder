@@ -1174,8 +1174,7 @@ WHERE t.workflow_id = sqlc.arg(workflow_id)
           AND r.interrupted_at_unix_ms IS NOT NULL
       )
       OR (
-          r.automation_requested_at_unix_ms IS NOT NULL
-          AND r.started_at_unix_ms IS NULL
+          r.started_at_unix_ms IS NULL
           AND r.completed_at_unix_ms IS NULL
           AND r.interrupted_at_unix_ms IS NULL
           AND r.waiting_ask_id IS NULL
@@ -1242,7 +1241,6 @@ SELECT
         JOIN workflow_nodes n ON n.id = r.node_id
         WHERE t.workflow_id = sqlc.arg(workflow_id)
           AND t.canceled_at_unix_ms IS NULL
-          AND r.automation_requested_at_unix_ms IS NOT NULL
           AND r.started_at_unix_ms IS NULL
           AND r.completed_at_unix_ms IS NULL
           AND r.interrupted_at_unix_ms IS NULL
@@ -1277,8 +1275,7 @@ SELECT
         THEN r.id
     END) AS INTEGER) AS active_run_count,
     CAST(COUNT(DISTINCT CASE
-        WHEN r.automation_requested_at_unix_ms IS NOT NULL
-          AND r.started_at_unix_ms IS NULL
+        WHEN r.started_at_unix_ms IS NULL
           AND r.completed_at_unix_ms IS NULL
           AND r.interrupted_at_unix_ms IS NULL
           AND r.waiting_ask_id IS NULL
@@ -1296,8 +1293,7 @@ SELECT
             AND n.kind IN ('agent', 'script')
         )
         OR (
-            r.automation_requested_at_unix_ms IS NOT NULL
-            AND r.started_at_unix_ms IS NULL
+            r.started_at_unix_ms IS NULL
             AND r.completed_at_unix_ms IS NULL
             AND r.interrupted_at_unix_ms IS NULL
             AND r.waiting_ask_id IS NULL
@@ -2470,43 +2466,6 @@ FROM task_run_records
 WHERE id = sqlc.arg(id)
 LIMIT 1;
 
--- name: ListRunnableWorkflowRuns :many
-SELECT
-    r.id,
-    r.task_id,
-    r.placement_id,
-    r.node_id,
-    r.session_id,
-    r.run_generation,
-    r.workflow_revision_seen,
-    r.automation_requested_at_unix_ms,
-    r.created_at_unix_ms,
-    r.updated_at_unix_ms,
-    r.started_at_unix_ms,
-    r.completed_at_unix_ms,
-    r.interrupted_at_unix_ms,
-    r.interruption_reason,
-    r.interruption_detail_json,
-    r.waiting_ask_id,
-    r.effective_completion_mode,
-    r.invalid_completion_count,
-    r.run_start_snapshot_json,
-    r.metadata_json
-FROM task_run_records r
-JOIN task_records t ON t.id = r.task_id
-JOIN task_node_placements p ON p.id = r.placement_id
-JOIN workflow_nodes n ON n.id = r.node_id
-WHERE r.automation_requested_at_unix_ms IS NOT NULL
-  AND r.started_at_unix_ms IS NULL
-  AND r.completed_at_unix_ms IS NULL
-  AND r.interrupted_at_unix_ms IS NULL
-  AND r.waiting_ask_id IS NULL
-  AND t.canceled_at_unix_ms IS NULL
-  AND p.state = 'active'
-  AND n.kind IN ('agent', 'script')
-ORDER BY r.automation_requested_at_unix_ms ASC, r.id ASC
-LIMIT sqlc.arg(limit);
-
 -- name: ClaimWorkflowRun :one
 UPDATE task_runs
 SET
@@ -2516,7 +2475,6 @@ SET
     run_generation = run_generation + 1
 WHERE task_runs.id = sqlc.arg(id)
   AND run_generation = sqlc.arg(expected_generation)
-  AND automation_requested_at_unix_ms IS NOT NULL
   AND started_at_unix_ms IS NULL
   AND completed_at_unix_ms IS NULL
   AND interrupted_at_unix_ms IS NULL
@@ -2651,6 +2609,36 @@ SELECT
     metadata_json
 FROM task_run_records
 WHERE started_at_unix_ms IS NOT NULL
+  AND completed_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS NULL
+  AND waiting_ask_id IS NULL
+ORDER BY updated_at_unix_ms ASC, (
+    SELECT storage.rowid
+    FROM task_runs storage
+    WHERE storage.id = task_run_records.id
+) ASC;
+
+-- name: ListUnstartedWorkflowRunRecoveryCandidates :many
+SELECT
+    id,
+    task_id,
+    placement_id,
+    node_id,
+    session_id,
+    run_generation,
+    started_at_unix_ms,
+    completed_at_unix_ms,
+    interrupted_at_unix_ms,
+    interruption_reason,
+    interruption_detail_json,
+    waiting_ask_id,
+    effective_completion_mode,
+    invalid_completion_count,
+    run_start_snapshot_json,
+    metadata_json
+FROM task_run_records
+WHERE automation_requested_at_unix_ms IS NOT NULL
+  AND started_at_unix_ms IS NULL
   AND completed_at_unix_ms IS NULL
   AND interrupted_at_unix_ms IS NULL
   AND waiting_ask_id IS NULL
@@ -3668,7 +3656,6 @@ SELECT
         JOIN workflow_nodes n ON n.id = r.node_id
         WHERE t.project_id = sqlc.arg(delete_project_id)
           AND t.canceled_at_unix_ms IS NULL
-          AND r.automation_requested_at_unix_ms IS NOT NULL
           AND r.started_at_unix_ms IS NULL
           AND r.completed_at_unix_ms IS NULL
           AND r.interrupted_at_unix_ms IS NULL

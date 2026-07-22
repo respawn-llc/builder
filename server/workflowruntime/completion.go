@@ -163,6 +163,9 @@ type StoreController struct {
 	AttentionFinalizer interface {
 		FinalizeTransition(context.Context, workflowattention.TransitionResult)
 	}
+	AutomaticIntents interface {
+		RequestAutomaticStarts([]workflow.RunID)
+	}
 }
 
 type interruptedRunAttentionFinalizer interface {
@@ -205,6 +208,9 @@ func (c StoreController) CompleteWorkflowRun(ctx context.Context, req Completion
 				runCancel()
 			}
 		}
+	}
+	if c.AutomaticIntents != nil {
+		c.AutomaticIntents.RequestAutomaticStarts(result.RunIDs)
 	}
 	return CompletionResult{TransitionID: result.TransitionID, State: result.State}, nil
 }

@@ -1732,6 +1732,7 @@ type starterFixture struct {
 	workflowID           workflow.WorkflowID
 	projectID            string
 	attentionBroker      *attentionnotify.Broker
+	automaticIntents     *AutomaticIntents
 }
 
 type starterRuntimeRegistry interface {
@@ -1774,6 +1775,7 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	client := NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}, steps...)
 	clientFactory := func(SchedulerStartRunRequest) llm.Client { return client }
 	attentionBroker := attentionnotify.NewBroker()
+	automaticIntents := NewAutomaticIntents()
 	runtimes := registry.NewRuntimeRegistry().WithAttentionNotifications(attentionBroker)
 	schedulerTarget := new(*SchedulerService)
 	runtimeAuthority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
@@ -1800,6 +1802,7 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 		ClientFactory:    clientFactory,
 		Worktrees:        worktrees,
 		RuntimeAuthority: runtimeAuthority,
+		AutomaticIntents: automaticIntents,
 	})
 	if err != nil {
 		t.Fatalf("NewStarter: %v", err)
@@ -1809,7 +1812,7 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	if _, err := store.LinkWorkflow(context.Background(), binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
-	return starterFixture{cfg: cfg, metadata: metadataStore, store: store, view: view, worktrees: worktrees, client: client, clientFactory: clientFactory, runtimes: runtimes, runtimeAuthority: runtimeAuthority, schedulerTarget: schedulerTarget, starter: starter, workflowID: workflowID, projectID: binding.ProjectID, attentionBroker: attentionBroker}
+	return starterFixture{cfg: cfg, metadata: metadataStore, store: store, view: view, worktrees: worktrees, client: client, clientFactory: clientFactory, runtimes: runtimes, runtimeAuthority: runtimeAuthority, schedulerTarget: schedulerTarget, starter: starter, workflowID: workflowID, projectID: binding.ProjectID, attentionBroker: attentionBroker, automaticIntents: automaticIntents}
 }
 
 func (f starterFixture) submitPromptResponse(sessionID string, response askquestion.AskQuestionResponse) error {
@@ -1840,6 +1843,7 @@ func (f *starterFixture) rebuildStarter(t *testing.T) {
 		ClientFactory:    f.clientFactory,
 		Worktrees:        f.worktrees,
 		RuntimeAuthority: f.runtimeAuthority,
+		AutomaticIntents: f.automaticIntents,
 	})
 	if err != nil {
 		t.Fatalf("NewStarter: %v", err)
@@ -1855,6 +1859,7 @@ func (f starterFixture) scheduler(t *testing.T) *SchedulerService {
 
 func (f starterFixture) schedulerWithOptions(t *testing.T, opts ...SchedulerOption) *SchedulerService {
 	t.Helper()
+	opts = append(opts, WithAutomaticIntents(f.automaticIntents))
 	scheduler, err := NewSchedulerService(f.store, f.starter, SchedulerConfig{Concurrency: 1}, opts...)
 	if err != nil {
 		t.Fatalf("scheduler.New: %v", err)
@@ -1874,9 +1879,11 @@ func (f starterFixture) createStartedTask(t *testing.T) workflowstore.TaskRecord
 		t.Fatalf("materialize task worktree fixture: %v", err)
 	}
 	candidate := f.worktrees.executionTargetCandidate(task)
-	if _, err := f.store.StartTaskWithExecutionTarget(context.Background(), task.ID, &candidate); err != nil {
+	started, err := f.store.StartTaskWithExecutionTarget(context.Background(), task.ID, &candidate)
+	if err != nil {
 		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
 	}
+	f.automaticIntents.RequestAutomaticStarts([]workflow.RunID{started.RunID})
 	return task
 }
 
@@ -1908,9 +1915,11 @@ func (f starterFixture) createStartedTaskWithoutManagedWorktree(t *testing.T) wo
 		},
 		Root: *f.sourceExecutionRoot(),
 	}
-	if _, err := f.store.StartTaskWithExecutionTarget(context.Background(), task.ID, &candidate); err != nil {
+	started, err := f.store.StartTaskWithExecutionTarget(context.Background(), task.ID, &candidate)
+	if err != nil {
 		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
 	}
+	f.automaticIntents.RequestAutomaticStarts([]workflow.RunID{started.RunID})
 	return task
 }
 

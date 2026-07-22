@@ -158,12 +158,8 @@ func TestStartTaskSchedulesScriptFirstTargetRun(t *testing.T) {
 	if len(runs) != 1 || runs[0].NodeID != f.scriptID {
 		t.Fatalf("runs = %+v, want one script run", runs)
 	}
-	runnable, err := f.store.ListRunnableRuns(f.ctx, 10)
-	if err != nil {
-		t.Fatalf("ListRunnableRuns: %v", err)
-	}
-	if len(runnable) != 1 || runnable[0].ID != started.RunID || runnable[0].NodeID != f.scriptID {
-		t.Fatalf("runnable = %+v, want script run", runnable)
+	if runs[0].AutomationRequestedAt != nil {
+		t.Fatalf("script run persisted automatic intent: %+v", runs[0])
 	}
 }
 

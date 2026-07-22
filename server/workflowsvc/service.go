@@ -31,7 +31,7 @@ type Service struct {
 	executionTargets    executionTargetInfrastructure
 	taskWorktreeCleanup taskWorktreeDeleter
 	runtimeCancel       taskRuntimeCanceler
-	schedulerWake       schedulerNotifier
+	schedulerWake       workflowRunScheduler
 	events              *workflowProjectEventBroker
 	prompts             pendingPromptResponder
 	attentionFinalizer  workflowAttentionFinalizer
@@ -94,8 +94,9 @@ type taskRuntimeRunCancelRequester interface {
 	RequestCancelRun(runID workflow.RunID) bool
 }
 
-type schedulerNotifier interface {
-	Notify()
+type workflowRunScheduler interface {
+	RequestAutomaticStarts([]workflow.RunID)
+	StartExplicitRuns(context.Context, []workflow.RunID) error
 }
 
 type pendingPromptResponder interface {
@@ -143,7 +144,7 @@ func WithTaskRuntimeCanceler(canceler taskRuntimeCanceler) Option {
 	}
 }
 
-func WithSchedulerNotifier(notifier schedulerNotifier) Option {
+func WithSchedulerNotifier(notifier workflowRunScheduler) Option {
 	return func(s *Service) {
 		s.schedulerWake = notifier
 	}
@@ -725,8 +726,8 @@ func (s *Service) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 		return serverapi.WorkflowTaskStartResponse{}, errors.New("coordinated task start returned no applied result")
 	}
 	started := *coordinated.applied
-	if s.schedulerWake != nil {
-		s.schedulerWake.Notify()
+	if err := s.startExplicitRuns(ctx, []workflow.RunID{started.RunID}); err != nil {
+		return serverapi.WorkflowTaskStartResponse{}, err
 	}
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionStarted, req.TaskID, string(started.RunID))
@@ -983,6 +984,30 @@ func workflowTaskRunSummaries(runs []workflowstore.RunRecord) []serverapi.Workfl
 	return summaries
 }
 
+func runIDsFromRecords(runs []workflowstore.RunRecord) []workflow.RunID {
+	runIDs := make([]workflow.RunID, 0, len(runs))
+	for _, run := range runs {
+		if run.ID != "" {
+			runIDs = append(runIDs, run.ID)
+		}
+	}
+	return runIDs
+}
+
+func (s *Service) requestAutomaticStarts(runIDs []workflow.RunID) {
+	if s == nil || s.schedulerWake == nil || len(runIDs) == 0 {
+		return
+	}
+	s.schedulerWake.RequestAutomaticStarts(runIDs)
+}
+
+func (s *Service) startExplicitRuns(ctx context.Context, runIDs []workflow.RunID) error {
+	if s == nil || s.schedulerWake == nil || len(runIDs) == 0 {
+		return nil
+	}
+	return s.schedulerWake.StartExplicitRuns(ctx, runIDs)
+}
+
 func (s *Service) ResumeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
@@ -992,8 +1017,8 @@ func (s *Service) ResumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
 	s.finalizeTaskAttentionResolution(ctx, resumed.TaskAttentionResolution)
-	if s.schedulerWake != nil {
-		s.schedulerWake.Notify()
+	if err := s.startExplicitRuns(ctx, runIDsFromRecords(resumed.Runs)); err != nil {
+		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionResumed, req.TaskID)
@@ -1036,9 +1061,7 @@ func (s *Service) startTaskAutomation(ctx context.Context, req TaskAutomationSta
 		return workflowstore.StartTaskResult{}, errors.New("coordinated task automation start returned no applied result")
 	}
 	started := *coordinated.applied
-	if s.schedulerWake != nil {
-		s.schedulerWake.Notify()
-	}
+	s.requestAutomaticStarts([]workflow.RunID{started.RunID})
 	return started, nil
 }
 
@@ -1080,8 +1103,8 @@ func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.Workflo
 	}
 	approved := *coordinated.applied
 	s.finalizeWorkflowAttention(ctx, approved)
-	if s.schedulerWake != nil {
-		s.schedulerWake.Notify()
+	if err := s.startExplicitRuns(ctx, approved.RunIDs); err != nil {
+		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
 	s.publishProjectWorkflowEvent(ctx, projectID, workflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionApproved, taskID, transitionID)
 	return serverapi.WorkflowTaskApproveResponse{
@@ -1134,8 +1157,8 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	}
 	moved := *coordinated.applied
 	s.finalizeWorkflowAttention(ctx, moved)
-	if s.schedulerWake != nil {
-		s.schedulerWake.Notify()
+	if err := s.startExplicitRuns(ctx, moved.RunIDs); err != nil {
+		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionMoved, req.TaskID, string(moved.TransitionID))
@@ -1195,8 +1218,10 @@ func (s *Service) CompleteWorkflowTask(ctx context.Context, req serverapi.Workfl
 				slog.Warn("cancel completed workflow run failed", "run_id", string(target.Run.ID), "task_id", taskID, "error", err)
 			}
 		}
-		if notifyScheduler && s.schedulerWake != nil {
-			s.schedulerWake.Notify()
+		if notifyScheduler {
+			if err := s.startExplicitRuns(ctx, result.RunIDs); err != nil {
+				return serverapi.WorkflowTaskCompleteResponse{}, err
+			}
 		}
 	}
 	return serverapi.WorkflowTaskCompleteResponse{

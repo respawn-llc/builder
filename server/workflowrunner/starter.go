@@ -84,6 +84,7 @@ type Starter struct {
 	runtimeClientFactory runtimewire.RuntimeClientFactory
 	worktrees            LockedTaskWorktreeRestorer
 	attentionFinalizer   workflowAttentionFinalizer
+	automaticIntents     *AutomaticIntents
 
 	closed atomic.Bool
 }
@@ -94,6 +95,7 @@ type StarterOptions struct {
 	Worktrees            LockedTaskWorktreeRestorer
 	RuntimeAuthority     *sessionruntime.Authority
 	AttentionFinalizer   workflowAttentionFinalizer
+	AutomaticIntents     *AutomaticIntents
 }
 
 type workflowAttentionFinalizer interface {
@@ -132,6 +134,7 @@ func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStor
 		runtimeClientFactory: opts.RuntimeClientFactory,
 		worktrees:            opts.Worktrees,
 		attentionFinalizer:   opts.AttentionFinalizer,
+		automaticIntents:     opts.AutomaticIntents,
 	}, nil
 }
 
@@ -945,7 +948,7 @@ func (s *Starter) startAgentExecution(ctx context.Context, req SchedulerStartRun
 		input,
 		effectiveMode,
 		s.cfg.Settings.Workflow.MaxInvalidCompletionAttempts,
-		workflowruntime.StoreController{Store: s.store, AttentionFinalizer: s.attentionFinalizer},
+		workflowruntime.StoreController{Store: s.store, AttentionFinalizer: s.attentionFinalizer, AutomaticIntents: s.automaticIntents},
 		s.store,
 	)
 	if err != nil {

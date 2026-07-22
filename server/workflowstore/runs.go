@@ -12,21 +12,6 @@ import (
 	"core/shared/serverapi"
 )
 
-func (s *Store) ListRunnableRuns(ctx context.Context, limit int64) ([]RunnableRunRecord, error) {
-	if limit <= 0 {
-		limit = 100
-	}
-	rows, err := s.queries.ListRunnableWorkflowRuns(ctx, limit)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]RunnableRunRecord, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, RunnableRunRecord{RunRecord: runRecordFromTaskRun(row), WorkflowRevisionSeen: row.WorkflowRevisionSeen})
-	}
-	return out, nil
-}
-
 func (s *Store) ClaimRun(ctx context.Context, runID workflow.RunID, expectedGeneration int64) (RunnableRunRecord, error) {
 	now := s.now().UnixMilli()
 	row, err := s.queries.ClaimWorkflowRun(ctx, sqlitegen.ClaimWorkflowRunParams{ID: string(runID), ExpectedGeneration: expectedGeneration, UpdatedAtUnixMs: now, StartedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}})
@@ -183,6 +168,49 @@ func (s *Store) ReconcileStartedRuns(ctx context.Context, reason string) ([]RunR
 	interrupted := make([]RunRecord, 0, len(candidates))
 	for _, candidate := range candidates {
 		updated, err := q.InterruptWorkflowRun(ctx, sqlitegen.InterruptWorkflowRunParams{ID: string(candidate.ID), UpdatedAtUnixMs: now, InterruptedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}, InterruptionReason: sql.NullString{String: strings.TrimSpace(reason), Valid: true}, InterruptionDetailJson: "{}"})
+		if err != nil {
+			return nil, err
+		}
+		if updated != 1 {
+			return nil, sql.ErrNoRows
+		}
+		run, err := q.GetTaskRun(ctx, string(candidate.ID))
+		if err != nil {
+			return nil, err
+		}
+		interrupted = append(interrupted, runRecordFromTaskRun(run))
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return interrupted, nil
+}
+
+func (s *Store) ReconcileUnstartedAutomaticRuns(ctx context.Context, reason string) ([]RunRecord, error) {
+	now := s.now().UnixMilli()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	rows, err := q.ListUnstartedWorkflowRunRecoveryCandidates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	candidates := make([]RunRecord, 0, len(rows))
+	for _, row := range rows {
+		candidates = append(candidates, runRecordFromUnstartedRecoveryCandidate(row))
+	}
+	interrupted := make([]RunRecord, 0, len(candidates))
+	for _, candidate := range candidates {
+		updated, err := q.InterruptWorkflowRun(ctx, sqlitegen.InterruptWorkflowRunParams{
+			ID:                     string(candidate.ID),
+			UpdatedAtUnixMs:        now,
+			InterruptedAtUnixMs:    sql.NullInt64{Int64: now, Valid: true},
+			InterruptionReason:     sql.NullString{String: strings.TrimSpace(reason), Valid: true},
+			InterruptionDetailJson: "{}",
+		})
 		if err != nil {
 			return nil, err
 		}

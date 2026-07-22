@@ -16,6 +16,7 @@ const (
 	ReasonSchedulerRuntimeStartFailed    = "workflow_runtime_start_failed"
 	ReasonSchedulerPendingAskUnavailable = "workflow_pending_ask_unavailable"
 	ReasonSchedulerStartupOrphanedRun    = "workflow_startup_orphaned_run"
+	ReasonSchedulerStartupLostIntent     = "workflow_startup_lost_automatic_intent"
 )
 
 var (
@@ -24,11 +25,12 @@ var (
 )
 
 type SchedulerStore interface {
-	ListRunnableRuns(ctx context.Context, limit int64) ([]workflowstore.RunnableRunRecord, error)
+	GetRun(ctx context.Context, runID workflow.RunID) (workflowstore.RunRecord, error)
 	ClaimRun(ctx context.Context, runID workflow.RunID, expectedGeneration int64) (workflowstore.RunnableRunRecord, error)
 	InterruptRun(ctx context.Context, runID workflow.RunID, reason string, detailJSON string) error
 	InterruptRunGeneration(ctx context.Context, runID workflow.RunID, generation int64, reason string, detailJSON string) error
 	ReconcileStartedRuns(ctx context.Context, reason string) ([]workflowstore.RunRecord, error)
+	ReconcileUnstartedAutomaticRuns(ctx context.Context, reason string) ([]workflowstore.RunRecord, error)
 	ListWaitingAskRuns(ctx context.Context) ([]workflowstore.RunRecord, error)
 }
 
@@ -70,6 +72,7 @@ type SchedulerService struct {
 	processInterval    time.Duration
 	logger             SchedulerLogger
 	attentionFinalizer SchedulerInterruptedRunFinalizer
+	automaticIntents   *AutomaticIntents
 
 	mu         sync.Mutex
 	active     map[workflow.RunID]SchedulerStartRunRequest
@@ -95,7 +98,17 @@ func NewSchedulerService(store SchedulerStore, starter SchedulerRuntimeStarter, 
 	if concurrency <= 0 {
 		concurrency = 1
 	}
-	service := &SchedulerService{store: store, starter: starter, concurrency: concurrency, claimRetries: defaultClaimRetries, claimBackoff: defaultClaimBackoff, processInterval: defaultProcessInterval, active: map[workflow.RunID]SchedulerStartRunRequest{}, wake: make(chan struct{}, defaultWakeBuffer)}
+	service := &SchedulerService{
+		store:            store,
+		starter:          starter,
+		concurrency:      concurrency,
+		claimRetries:     defaultClaimRetries,
+		claimBackoff:     defaultClaimBackoff,
+		processInterval:  defaultProcessInterval,
+		automaticIntents: NewAutomaticIntents(),
+		active:           map[workflow.RunID]SchedulerStartRunRequest{},
+		wake:             make(chan struct{}, defaultWakeBuffer),
+	}
 	for _, opt := range opts {
 		opt(service)
 	}
@@ -113,6 +126,14 @@ func WithSchedulerPendingAskResolver(resolver SchedulerPendingAskResolver) Sched
 func WithSchedulerAttentionFinalizer(finalizer SchedulerInterruptedRunFinalizer) SchedulerOption {
 	return func(s *SchedulerService) {
 		s.attentionFinalizer = finalizer
+	}
+}
+
+func WithAutomaticIntents(intents *AutomaticIntents) SchedulerOption {
+	return func(s *SchedulerService) {
+		if intents != nil {
+			s.automaticIntents = intents
+		}
 	}
 }
 
@@ -225,6 +246,33 @@ func (s *SchedulerService) Notify() {
 	}
 }
 
+func (s *SchedulerService) RequestAutomaticStarts(runIDs []workflow.RunID) {
+	if s == nil {
+		return
+	}
+	s.automaticIntents.RequestAutomaticStarts(runIDs)
+	s.Notify()
+}
+
+func (s *SchedulerService) StartExplicitRuns(ctx context.Context, runIDs []workflow.RunID) error {
+	if s == nil {
+		return errors.New("workflow scheduler is required")
+	}
+	for _, runID := range runIDs {
+		if runID == "" {
+			continue
+		}
+		run, err := s.store.GetRun(ctx, runID)
+		if err != nil {
+			return err
+		}
+		if err := s.startRun(ctx, workflowstore.RunnableRunRecord{RunRecord: run}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *SchedulerService) runLoop(ctx context.Context) {
 	defer s.loopWG.Done()
 	ticker := time.NewTicker(s.processInterval)
@@ -279,6 +327,14 @@ func (s *SchedulerService) Reconcile(ctx context.Context) error {
 	for _, run := range interrupted {
 		s.finalizeInterruptedRun(ctx, run.ID)
 	}
+	s.logf("workflow.scheduler.recovery action=interrupt_lost_automatic_intents reason=%s", ReasonSchedulerStartupLostIntent)
+	interrupted, err = s.store.ReconcileUnstartedAutomaticRuns(ctx, ReasonSchedulerStartupLostIntent)
+	if err != nil {
+		return err
+	}
+	for _, run := range interrupted {
+		s.finalizeInterruptedRun(ctx, run.ID)
+	}
 	return nil
 }
 
@@ -300,50 +356,71 @@ func (s *SchedulerService) Process(ctx context.Context) error {
 	if capacity <= 0 {
 		return nil
 	}
-	candidates, err := s.store.ListRunnableRuns(ctx, int64(capacity))
-	if err != nil {
-		return err
-	}
-	for _, candidate := range candidates {
-		s.mu.Lock()
-		if s.stopped {
-			s.mu.Unlock()
-			return ErrSchedulerStopped
-		}
-		if len(s.active) >= s.concurrency {
-			s.mu.Unlock()
-			return nil
-		}
-		if _, ok := s.active[candidate.ID]; ok {
-			s.mu.Unlock()
-			continue
-		}
-		reserved := SchedulerStartRunRequest{RunID: candidate.ID, TaskID: candidate.TaskID, PlacementID: candidate.PlacementID, NodeID: candidate.NodeID, Generation: candidate.Generation}
-		s.active[candidate.ID] = reserved
-		s.mu.Unlock()
-
-		claimed, err := s.claimRunWithRetry(ctx, candidate)
+	runIDs := s.automaticIntents.Take(capacity)
+	for index, runID := range runIDs {
+		run, err := s.store.GetRun(ctx, runID)
 		if err != nil {
-			s.RuntimeFinished(candidate.ID, candidate.Generation)
 			if errors.Is(err, sql.ErrNoRows) {
 				continue
 			}
+			s.automaticIntents.ReturnFront(runIDs[index:])
 			return err
 		}
-		req := SchedulerStartRunRequest{RunID: claimed.ID, TaskID: claimed.TaskID, PlacementID: claimed.PlacementID, NodeID: claimed.NodeID, Generation: claimed.Generation}
-		s.logf("workflow.scheduler.selection run_id=%s task_id=%s generation=%d action=start", req.RunID, req.TaskID, req.Generation)
-		s.mu.Lock()
-		s.active[claimed.ID] = req
-		s.mu.Unlock()
-		if err := s.starter.StartWorkflowRun(ctx, req); err != nil {
-			s.RuntimeFinished(claimed.ID, claimed.Generation)
-			s.logf("workflow.scheduler.runtime_start run_id=%s action=interrupt reason=%s", claimed.ID, ReasonSchedulerRuntimeStartFailed)
-			if interruptErr := s.store.InterruptRunGeneration(context.WithoutCancel(ctx), claimed.ID, claimed.Generation, ReasonSchedulerRuntimeStartFailed, fmt.Sprintf(`{"error":%q}`, err.Error())); interruptErr != nil {
-				return errors.Join(fmt.Errorf("%w: %w", ErrSchedulerRuntimeStartFailed, err), interruptErr)
+		if err := s.startRun(ctx, workflowstore.RunnableRunRecord{RunRecord: run}); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
 			}
-			s.finalizeInterruptedRun(context.WithoutCancel(ctx), claimed.ID)
-			return fmt.Errorf("%w: %w", ErrSchedulerRuntimeStartFailed, err)
+			s.automaticIntents.ReturnFront(runIDs[index+1:])
+			return err
 		}
+	}
+	return nil
+}
+
+func (s *SchedulerService) startRun(ctx context.Context, candidate workflowstore.RunnableRunRecord) error {
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return ErrSchedulerStopped
+	}
+	if _, ok := s.active[candidate.ID]; ok {
+		s.mu.Unlock()
+		return nil
+	}
+	reserved := SchedulerStartRunRequest{
+		RunID:       candidate.ID,
+		TaskID:      candidate.TaskID,
+		PlacementID: candidate.PlacementID,
+		NodeID:      candidate.NodeID,
+		Generation:  candidate.Generation,
+	}
+	s.active[candidate.ID] = reserved
+	s.mu.Unlock()
+
+	claimed, err := s.claimRunWithRetry(ctx, candidate)
+	if err != nil {
+		s.RuntimeFinished(candidate.ID, candidate.Generation)
+		return err
+	}
+	req := SchedulerStartRunRequest{
+		RunID:       claimed.ID,
+		TaskID:      claimed.TaskID,
+		PlacementID: claimed.PlacementID,
+		NodeID:      claimed.NodeID,
+		Generation:  claimed.Generation,
+	}
+	s.logf("workflow.scheduler.selection run_id=%s task_id=%s generation=%d action=start", req.RunID, req.TaskID, req.Generation)
+	s.mu.Lock()
+	s.active[claimed.ID] = req
+	s.mu.Unlock()
+	if err := s.starter.StartWorkflowRun(ctx, req); err != nil {
+		s.RuntimeFinished(claimed.ID, claimed.Generation)
+		s.logf("workflow.scheduler.runtime_start run_id=%s action=interrupt reason=%s", claimed.ID, ReasonSchedulerRuntimeStartFailed)
+		if interruptErr := s.store.InterruptRunGeneration(context.WithoutCancel(ctx), claimed.ID, claimed.Generation, ReasonSchedulerRuntimeStartFailed, fmt.Sprintf(`{"error":%q}`, err.Error())); interruptErr != nil {
+			return errors.Join(fmt.Errorf("%w: %w", ErrSchedulerRuntimeStartFailed, err), interruptErr)
+		}
+		s.finalizeInterruptedRun(context.WithoutCancel(ctx), claimed.ID)
+		return fmt.Errorf("%w: %w", ErrSchedulerRuntimeStartFailed, err)
 	}
 	return nil
 }

@@ -1090,6 +1090,8 @@ func TestServiceStartTaskAutomationValidatesAndRecordsRunnableRun(t *testing.T) 
 	})
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	notifier := &recordingSchedulerNotifier{}
+	service.schedulerWake = notifier
 
 	started, err := service.StartTaskAutomation(ctx, task.Task.ID)
 	if err != nil {
@@ -1099,15 +1101,16 @@ func TestServiceStartTaskAutomationValidatesAndRecordsRunnableRun(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ListRuns after automation: %v", err)
 	}
-	if len(runs) != 1 || runs[0].ID != workflow.RunID(started.RunID) || runs[0].AutomationRequestedAt == nil {
+	if len(runs) != 1 || runs[0].ID != workflow.RunID(started.RunID) || runs[0].AutomationRequestedAt != nil {
 		t.Fatalf("runs after automation = %+v", runs)
 	}
-	notifier := &recordingSchedulerNotifier{}
-	service.schedulerWake = notifier
+	if len(notifier.automatic) != 1 || len(notifier.automatic[0]) != 1 || notifier.automatic[0][0] != workflow.RunID(started.RunID) {
+		t.Fatalf("automatic intents = %+v, want %s", notifier.automatic, started.RunID)
+	}
 	if _, err := service.StartTaskAutomation(ctx, task.Task.ID); err == nil {
 		t.Fatalf("expected second start to fail")
 	}
-	if notifier.count != 0 {
+	if notifier.count != 1 {
 		t.Fatalf("scheduler notified on failed start")
 	}
 	transitions, err := service.store.ListTransitions(ctx, workflow.TaskID(task.Task.ID))
@@ -1304,8 +1307,8 @@ func TestServiceCompleteWorkflowTaskForceWakesSchedulerWhenNoRuntimeOwnsRun(t *t
 	if len(canceler.runIDs) != 0 {
 		t.Fatalf("blocking cancel run IDs = %+v, want none", canceler.runIDs)
 	}
-	if notifier.count != 1 {
-		t.Fatalf("force completion scheduler notifications = %d, want 1", notifier.count)
+	if notifier.count != 0 {
+		t.Fatalf("force completion scheduler starts = %d, want none for a terminal target", notifier.count)
 	}
 }
 
@@ -1335,8 +1338,8 @@ func TestServiceCompleteWorkflowTaskForceKeepsCompletionWhenRuntimeCancelFails(t
 	if len(canceler.runIDs) != 1 || canceler.runIDs[0] != workflow.RunID(started.RunID) {
 		t.Fatalf("canceled run IDs = %+v, want %s", canceler.runIDs, started.RunID)
 	}
-	if notifier.count != 1 {
-		t.Fatalf("force completion scheduler notifications = %d, want 1", notifier.count)
+	if notifier.count != 0 {
+		t.Fatalf("force completion scheduler starts = %d, want none for a terminal target", notifier.count)
 	}
 }
 
@@ -2143,11 +2146,20 @@ func TestServiceResumeTaskResolvesCapturedInterruptionWithFreshFinalizer(t *test
 }
 
 type recordingSchedulerNotifier struct {
-	count int
+	count     int
+	automatic [][]workflow.RunID
+	explicit  [][]workflow.RunID
 }
 
-func (n *recordingSchedulerNotifier) Notify() {
+func (n *recordingSchedulerNotifier) RequestAutomaticStarts(runIDs []workflow.RunID) {
 	n.count++
+	n.automatic = append(n.automatic, append([]workflow.RunID(nil), runIDs...))
+}
+
+func (n *recordingSchedulerNotifier) StartExplicitRuns(_ context.Context, runIDs []workflow.RunID) error {
+	n.count++
+	n.explicit = append(n.explicit, append([]workflow.RunID(nil), runIDs...))
+	return nil
 }
 
 type recordingWorkflowAttentionFinalizer struct {
