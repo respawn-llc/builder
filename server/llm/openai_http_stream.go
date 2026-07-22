@@ -741,7 +741,7 @@ func (a *toolCallAccumulator) UpsertFromOutput(item responses.ResponseOutputItem
 func (a *toolCallAccumulator) AppendArguments(itemID, delta string) {
 	key := textutil.FirstNonEmpty(strings.TrimSpace(a.itemToKey[itemID]), strings.TrimSpace(itemID))
 	state := a.ensure(key)
-	if state == nil || strings.TrimSpace(delta) == "" {
+	if state == nil || delta == "" {
 		return
 	}
 	state.Args.WriteString(delta)
