@@ -10,6 +10,7 @@ import (
 	"core/server/runtime"
 	"core/shared/apicontract"
 	"core/shared/auth"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -111,6 +112,14 @@ func (c Collector) CollectBase(req Request) Snapshot {
 }
 
 func (c Collector) EnrichBase(ctx context.Context, req Request, snapshot Snapshot) Snapshot {
+	if sessionID := strings.TrimSpace(snapshot.SessionID); sessionID != "" && req.SessionViews != nil {
+		currentSession, err := c.resolveSessionView(ctx, req.SessionViews, sessionID)
+		if err != nil {
+			snapshot.CollectorWarning = JoinWarnings(snapshot.CollectorWarning, "current session: "+err.Error())
+		} else {
+			snapshot.AgentRole = textutil.Pointer(currentSession.AgentRole)
+		}
+	}
 	if snapshot.PreviousSessionID != nil {
 		previousSessionName, err := c.ResolveSessionName(ctx, req.SessionViews, snapshot.PreviousSessionID.String())
 		if strings.TrimSpace(previousSessionName) != "" {
@@ -144,9 +153,17 @@ func JoinWarnings(existing string, warning string) string {
 }
 
 func (c Collector) ResolveSessionName(ctx context.Context, sessionViews apicontract.SessionViewService, sessionID string) (string, error) {
+	sessionView, err := c.resolveSessionView(ctx, sessionViews, sessionID)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(sessionView.SessionName), nil
+}
+
+func (c Collector) resolveSessionView(ctx context.Context, sessionViews apicontract.SessionViewService, sessionID string) (clientui.RuntimeSessionView, error) {
 	id := strings.TrimSpace(sessionID)
 	if sessionViews == nil || id == "" {
-		return "", nil
+		return clientui.RuntimeSessionView{}, nil
 	}
 	readTimeout := c.SessionNameReadTimeout
 	if readTimeout <= 0 {
@@ -159,9 +176,9 @@ func (c Collector) ResolveSessionName(ctx context.Context, sessionViews apicontr
 	defer cancel()
 	resp, err := sessionViews.GetSessionMainView(readCtx, serverapi.SessionMainViewRequest{SessionID: id})
 	if err != nil {
-		return "", err
+		return clientui.RuntimeSessionView{}, err
 	}
-	return strings.TrimSpace(resp.MainView.Session.SessionName), nil
+	return resp.MainView.Session, nil
 }
 
 func (c Collector) CollectAuth(ctx context.Context, req Request, _ Snapshot) AuthStageResult {

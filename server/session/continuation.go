@@ -6,17 +6,17 @@ import (
 	"strings"
 
 	"core/shared/config"
+	"core/shared/textutil"
 )
 
 var ErrInvalidContinuationAgentRole = errors.New("invalid continuation agent role")
 
 // ContinuationAgentRole returns the persisted named role, if one was selected.
 func ContinuationAgentRole(meta Meta) *string {
-	if meta.Continuation == nil || meta.Continuation.AgentRole == nil {
+	if meta.Continuation == nil {
 		return nil
 	}
-	role := *meta.Continuation.AgentRole
-	return &role
+	return textutil.Pointer(meta.Continuation.AgentRole)
 }
 
 // NormalizeContinuationContext validates persisted continuation metadata at

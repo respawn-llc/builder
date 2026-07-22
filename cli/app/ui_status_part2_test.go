@@ -13,6 +13,7 @@ import (
 	"core/server/sessionview"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -113,6 +114,44 @@ func TestStatusRequestCarriesCachedRuntimeAgentRole(t *testing.T) {
 	if request.AgentRole == nil || *request.AgentRole != role {
 		t.Fatalf("status request agent role = %v, want %q", request.AgentRole, role)
 	}
+}
+
+func TestStatusRefreshUsesCurrentSessionAgentRoleWhenRuntimeCacheIsCold(t *testing.T) {
+	role := "qa_tester"
+	sessionViews := stubSessionViewClient{
+		getSessionMainView: func(_ context.Context, request serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
+			if request.SessionID != "session-1" {
+				t.Fatalf("current session view request = %+v, want session-1", request)
+			}
+			return serverapi.SessionMainViewResponse{
+				MainView: clientui.RuntimeMainView{
+					Session: clientui.RuntimeSessionView{SessionID: "session-1", AgentRole: &role},
+				},
+			}, nil
+		},
+	}
+	runtimeClient := &sessionRuntimeClient{
+		sessionID: "session-1",
+		mainView:  clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1"}},
+	}
+	model := newProjectedTestUIModel(
+		runtimeClient,
+		WithUISessionID("session-1"),
+		WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: t.TempDir(), SessionViews: sessionViews}),
+	)
+
+	messages := collectCmdMessages(t, model.statusRefreshCmd())
+	for _, message := range messages {
+		base, ok := message.(statusBaseRefreshDoneMsg)
+		if !ok {
+			continue
+		}
+		if base.snapshot.AgentRole == nil || *base.snapshot.AgentRole != role {
+			t.Fatalf("status agent role = %v, want %q", base.snapshot.AgentRole, role)
+		}
+		return
+	}
+	t.Fatal("status refresh did not emit a base snapshot")
 }
 
 func TestStatusSessionNameResolvesFromSessionViews(t *testing.T) {
