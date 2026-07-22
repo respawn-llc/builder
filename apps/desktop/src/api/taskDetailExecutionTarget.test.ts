@@ -64,9 +64,10 @@ describe("task detail execution target contract", () => {
   });
 
   it("accepts every current execution the server contract permits", () => {
-    const currentSessionIDs = Array.from({ length: 201 }, (_, index) => `session-${index}`);
-    const currentScripts = Array.from({ length: 201 }, (_, index) => ({
-      run_id: `run-${index}`,
+    const executionIDs = Array.from({ length: 201 }, (_, index) => index.toString());
+    const currentSessionIDs = executionIDs.map((executionID) => `session-${executionID}`);
+    const currentScripts = executionIDs.map((executionID) => ({
+      run_id: `run-${executionID}`,
       path: "script",
     }));
 
