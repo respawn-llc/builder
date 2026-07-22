@@ -3,6 +3,7 @@ package workflowview
 import (
 	"context"
 	"database/sql"
+	"os"
 	"os/exec"
 	"reflect"
 	"testing"
@@ -89,6 +90,41 @@ func TestTaskDetailSelectorsConvergeOnCompleteCoreDetail(t *testing.T) {
 	}
 	if byID.AttentionCount != 1 {
 		t.Fatalf("attention count = %d, want 1", byID.AttentionCount)
+	}
+}
+
+func TestTaskDetailReportsMissingLinkedSourceWorkspace(t *testing.T) {
+	ctx, metadataStore, workflowStore, binding := newWorkflowViewTestContextStore(t)
+	sourceWorkspace, err := metadataStore.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject: %v", err)
+	}
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID:         binding.ProjectID,
+		Title:             "Missing source workspace",
+		SourceWorkspaceID: sourceWorkspace.WorkspaceID,
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := os.Remove(sourceWorkspace.CanonicalRoot); err != nil {
+		t.Fatalf("remove source workspace: %v", err)
+	}
+
+	detail, err := NewTaskDetail(metadataStore, NewTaskProjector(), sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
+	if err != nil {
+		t.Fatalf("NewTaskDetail: %v", err)
+	}
+	got, err := detail.GetTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.SourceWorkspace.Availability != "missing" {
+		t.Fatalf("source workspace availability = %q, want missing", got.SourceWorkspace.Availability)
 	}
 }
 

@@ -14,7 +14,6 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
-	"core/shared/clientui"
 	"core/shared/serverapi"
 )
 
@@ -301,7 +300,7 @@ func (d *TaskDetail) sourceWorkspace(ctx context.Context, task sqlitegen.TaskRec
 			WorkspaceID:     row.ID,
 			DisplayName:     displayName,
 			RootPath:        row.CanonicalRootPath,
-			Availability:    string(clientui.ProjectAvailabilityAvailable),
+			Availability:    string(metadata.PathAvailability(row.CanonicalRootPath)),
 			IsPrimary:       row.ID == primaryWorkspaceID,
 			UpdatedAtUnixMs: row.UpdatedAtUnixMs,
 		}, nil

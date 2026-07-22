@@ -427,6 +427,7 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
   const { nativeBridge } = useAppServices();
   const [openError, setOpenError] = useState("");
   const executionRoot = taskExecutionRoot(detail);
+  const canOpenScript = nativeBridge.capabilities.files.open;
 
   async function openInCli(sessionID: string): Promise<void> {
     await writeClipboardText(`kent --session=${sessionID}`, nativeBridge);
@@ -458,21 +459,23 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
           {t("task.openInCli")} <span className="truncate font-mono">{sessionID}</span>
         </Button>
       ))}
-      {detail.currentScripts.map((script) => (
-        <Button
-          disabled={disabled}
-          key={script.runID}
-          onClick={() => {
-            setOpenError("");
-            void openScript(script.path).catch((cause: unknown) => {
-              setOpenError(errorMessage(cause));
-            });
-          }}
-          variant="secondary"
-        >
-          {t("task.openScript")} <span className="truncate font-mono">{script.path}</span>
-        </Button>
-      ))}
+      {canOpenScript
+        ? detail.currentScripts.map((script) => (
+            <Button
+              disabled={disabled}
+              key={script.runID}
+              onClick={() => {
+                setOpenError("");
+                void openScript(script.path).catch((cause: unknown) => {
+                  setOpenError(errorMessage(cause));
+                });
+              }}
+              variant="secondary"
+            >
+              {t("task.openScript")} <span className="truncate font-mono">{script.path}</span>
+            </Button>
+          ))
+        : null}
       {openError.length > 0 ? (
         <p className="m-0 text-sm text-[var(--color-error)]">{openError}</p>
       ) : null}
