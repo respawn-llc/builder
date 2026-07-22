@@ -356,6 +356,77 @@ func TestReopenedCompactionPublishesVisibleTranscriptCoordinates(t *testing.T) {
 	}
 }
 
+func TestHistoryReplacementPublishesManualCarryoverBeforeFollowingLocalEntry(t *testing.T) {
+	var events []Event
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{
+			Model:   "gpt-5",
+			OnEvent: func(event Event) { events = append(events, event) },
+		},
+	)
+	carryover, ok := manualCompactionCarryoverMessage("carryover")
+	if !ok {
+		t.Fatal("expected typed manual compaction carryover")
+	}
+	if err := engine.steer(
+		"compaction",
+		steerHistoryReplacementIntent(
+			"local",
+			compactionModeManual,
+			"",
+			1,
+			"",
+			"",
+			llm.ItemsFromMessages([]llm.Message{
+				{
+					Role:        llm.RoleUser,
+					MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+					Content:     textutil.Value("summary"),
+				},
+				carryover,
+			}),
+		),
+	); err != nil {
+		t.Fatalf("persist manual history replacement: %v", err)
+	}
+	if err := engine.steer(
+		"compaction",
+		steerLocalEntryIntent(storedLocalEntry{
+			Role: string(transcript.EntryRoleSystem),
+			Text: "notice",
+		}),
+	); err != nil {
+		t.Fatalf("append following local entry: %v", err)
+	}
+
+	committed := durableTranscriptProjectionEvents(events)
+	if len(committed) != 3 {
+		t.Fatalf("manual-compaction committed events = %+v", committed)
+	}
+	if !committed[0].LocalEntryProjected ||
+		!committed[1].LocalEntryProjected ||
+		committed[2].LocalEntryProjected {
+		t.Fatalf("manual-compaction projection provenance = %+v", committed)
+	}
+	wantTypes := []llm.MessageType{
+		llm.MessageTypeCompactionSummary,
+		llm.MessageTypeManualCompactionCarryover,
+	}
+	for index, wantType := range wantTypes {
+		facts := TranscriptCommittedRowFactsFromEvent(committed[index])
+		if len(facts) != 1 ||
+			facts[0].Notice == nil ||
+			facts[0].Notice.MessageType != wantType {
+			t.Fatalf("manual-compaction projected row[%d] = %+v", index, facts)
+		}
+	}
+	assertDurableTranscriptProjectionRangesContiguous(t, committed)
+}
+
 func durableTranscriptProjectionEvents(events []Event) []Event {
 	committed := make([]Event, 0, len(events))
 	for _, event := range events {
