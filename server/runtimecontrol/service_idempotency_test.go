@@ -3,8 +3,10 @@ package runtimecontrol
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 
+	"core/internal/testharness/filemode"
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
@@ -16,6 +18,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
+	"core/shared/toolspec"
 	"core/shared/transcript"
 )
 
@@ -50,6 +53,178 @@ func TestServiceSetThinkingLevelDedupesSuccessfulRetry(t *testing.T) {
 	}
 	if got := engine.ThinkingLevel(); got != "high" {
 		t.Fatalf("thinking level = %q, want high", got)
+	}
+}
+
+func TestServiceGoalMutationReplaysCommittedFailuresWithoutRepeatingWork(t *testing.T) {
+	t.Run("live metadata observer", func(t *testing.T) {
+		observerErr := errors.New("live goal metadata observer failed")
+		gate := sessiontest.NewPersistenceGate(runtimeControlTestSessionPersistence)
+		store, _, service := newRuntimeControlTestService(
+			t,
+			nil,
+			nil,
+			runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}},
+			session.WithPersistenceObserver(gate),
+		)
+		gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+			return snapshot.Meta.Goal != nil && snapshot.Meta.LastSequence == 0
+		}, observerErr)
+		assertGoalSetReplayFailure(t, service, store, "live-metadata-replay", observerErr, 0)
+	})
+
+	t.Run("live notice observer", func(t *testing.T) {
+		observerErr := errors.New("live goal notice observer failed")
+		gate := sessiontest.NewPersistenceGate(runtimeControlTestSessionPersistence)
+		store, _, service := newRuntimeControlTestService(
+			t,
+			nil,
+			nil,
+			runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}},
+			session.WithPersistenceObserver(gate),
+		)
+		gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+			return snapshot.Meta.Goal != nil && snapshot.Meta.LastSequence == 1
+		}, observerErr)
+		assertGoalSetReplayFailure(t, service, store, "live-notice-replay", observerErr, 1)
+	})
+
+	t.Run("dormant metadata observer", func(t *testing.T) {
+		observerErr := errors.New("dormant goal metadata observer failed")
+		gate := sessiontest.NewPersistenceGate(runtimeControlTestSessionPersistence)
+		store, service := newDormantGoalControlService(t, session.WithPersistenceObserver(gate))
+		gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+			return snapshot.Meta.Goal != nil && snapshot.Meta.LastSequence == 0
+		}, observerErr)
+		assertGoalSetReplayFailure(t, service, store, "dormant-metadata-replay", observerErr, 0)
+	})
+
+	t.Run("dormant notice observer", func(t *testing.T) {
+		observerErr := errors.New("dormant goal notice observer failed")
+		gate := sessiontest.NewPersistenceGate(runtimeControlTestSessionPersistence)
+		store, service := newDormantGoalControlService(t, session.WithPersistenceObserver(gate))
+		gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+			return snapshot.Meta.Goal != nil && snapshot.Meta.LastSequence == 1
+		}, observerErr)
+		assertGoalSetReplayFailure(t, service, store, "dormant-notice-replay", observerErr, 1)
+	})
+
+	t.Run("dormant notice before commit", func(t *testing.T) {
+		store, service := newDormantGoalControlService(t)
+		blocker := filemode.MustBlockEventLogAppends(t, filepath.Join(store.Dir(), "events.jsonl"))
+		req := serverapi.RuntimeGoalSetRequest{
+			ClientRequestID: "dormant-uncommitted-notice-replay",
+			SessionID:       store.Meta().SessionID,
+			Objective:       "persist before failed notice",
+			Actor:           string(session.GoalActorUser),
+		}
+		first, firstErr := service.SetGoal(context.Background(), req)
+		if firstErr == nil || first.Goal == nil {
+			t.Fatalf("first dormant notice failure response/error = %+v / %v, want committed goal and error", first, firstErr)
+		}
+		if err := blocker.Restore(); err != nil {
+			t.Fatalf("restore event-log appends: %v", err)
+		}
+		second, secondErr := service.SetGoal(context.Background(), req)
+		if !errors.Is(secondErr, firstErr) {
+			t.Fatalf("replayed dormant notice failure = %v, want original %v", secondErr, firstErr)
+		}
+		assertGoalResponsesEqual(t, first, second)
+		if count := len(runtimeControlGoalDeveloperMessages(t, store)); count != 0 {
+			t.Fatalf("dormant notices after uncommitted append failure = %d, want 0", count)
+		}
+	})
+}
+
+func TestServiceGoalMutationRetriesAfterUncommittedFailure(t *testing.T) {
+	store, service := newDormantGoalControlService(t)
+	pause := serverapi.RuntimeGoalStatusRequest{
+		ClientRequestID: "retryable-dormant-pause",
+		SessionID:       store.Meta().SessionID,
+		Actor:           string(session.GoalActorUser),
+	}
+	if _, err := service.PauseGoal(context.Background(), pause); err == nil {
+		t.Fatal("pause without a goal succeeded")
+	}
+	if _, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
+		ClientRequestID: "retryable-dormant-set",
+		SessionID:       store.Meta().SessionID,
+		Objective:       "retry after no-goal failure",
+		Actor:           string(session.GoalActorUser),
+	}); err != nil {
+		t.Fatalf("set goal after retryable failure: %v", err)
+	}
+	shown, showErr := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID})
+	if showErr != nil || shown.Goal == nil {
+		t.Fatalf("show goal after retryable failure = %+v / %v, want persisted goal", shown.Goal, showErr)
+	}
+	paused, err := service.PauseGoal(context.Background(), pause)
+	if err != nil {
+		t.Fatalf("replayed pause after goal creation: %v", err)
+	}
+	if paused.Goal == nil || paused.Goal.Status != string(session.GoalStatusPaused) {
+		t.Fatalf("replayed pause response = %+v, want paused goal", paused.Goal)
+	}
+	if count := len(runtimeControlGoalDeveloperMessages(t, store)); count != 2 {
+		t.Fatalf("notices after retryable pause = %d, want set and pause", count)
+	}
+}
+
+func newDormantGoalControlService(t *testing.T, options ...session.StoreOption) (*session.Store, *Service) {
+	t.Helper()
+	store, _ := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{}, options...)
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: t.TempDir(),
+		StoreOptions:    append(runtimeControlTestSessionPersistence.Options(), options...),
+	})
+	t.Cleanup(func() {
+		if closeErr := authority.Close(context.Background()); closeErr != nil {
+			t.Errorf("close dormant authority: %v", closeErr)
+		}
+	})
+	return store, NewService(authority).WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
+}
+
+func assertGoalSetReplayFailure(
+	t *testing.T,
+	service *Service,
+	store *session.Store,
+	requestID string,
+	wantErr error,
+	wantNotices int,
+) {
+	t.Helper()
+	req := serverapi.RuntimeGoalSetRequest{
+		ClientRequestID: requestID,
+		SessionID:       store.Meta().SessionID,
+		Objective:       "memoized goal mutation",
+		Actor:           string(session.GoalActorUser),
+	}
+	first, firstErr := service.SetGoal(context.Background(), req)
+	if !errors.Is(firstErr, wantErr) {
+		t.Fatalf("first goal error = %v, want %v", firstErr, wantErr)
+	}
+	second, secondErr := service.SetGoal(context.Background(), req)
+	if !errors.Is(secondErr, wantErr) {
+		t.Fatalf("replayed goal error = %v, want %v", secondErr, wantErr)
+	}
+	assertGoalResponsesEqual(t, first, second)
+	if count := len(runtimeControlGoalDeveloperMessages(t, store)); count != wantNotices {
+		t.Fatalf("goal notices after replay = %d, want %d", count, wantNotices)
+	}
+}
+
+func assertGoalResponsesEqual(t *testing.T, first, second serverapi.RuntimeGoalShowResponse) {
+	t.Helper()
+	if first.Goal == nil || second.Goal == nil {
+		t.Fatalf("goal responses = (%+v, %+v), want projected goals", first.Goal, second.Goal)
+	}
+	if first.Goal.ID != second.Goal.ID ||
+		first.Goal.Objective != second.Goal.Objective ||
+		first.Goal.Status != second.Goal.Status ||
+		!first.Goal.CreatedAt.Equal(second.Goal.CreatedAt) ||
+		!first.Goal.UpdatedAt.Equal(second.Goal.UpdatedAt) {
+		t.Fatalf("goal responses = (%+v, %+v), want stable identity and timestamps", first.Goal, second.Goal)
 	}
 }
 

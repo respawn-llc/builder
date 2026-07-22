@@ -12,6 +12,7 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
@@ -59,6 +60,127 @@ func TestGoalSetEmitsCommittedGoalFeedbackEvent(t *testing.T) {
 	if statusEvt.GoalStatus.Cleared || statusEvt.GoalStatus.State.Objective != "ship goal mode" || statusEvt.GoalStatus.State.Status != session.GoalStatusActive {
 		t.Fatalf("status payload = %+v, want active goal", statusEvt.GoalStatus)
 	}
+}
+
+func TestGoalCommandResultReportsAppliedAndNoopOutcomes(t *testing.T) {
+	t.Run("applied", func(t *testing.T) {
+		store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+			EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		})
+
+		result, err := engine.SetGoal("ship goal mode", session.GoalActorUser)
+		if err != nil {
+			t.Fatalf("SetGoal: %v", err)
+		}
+		if result.Disposition != GoalCommandApplied || !result.MetadataReceipt.Committed || !result.NoticeReceipt.Committed {
+			t.Fatalf("SetGoal result = %+v, want applied committed metadata and notice", result)
+		}
+	})
+
+	t.Run("noop", func(t *testing.T) {
+		store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+			EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		})
+		if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
+			t.Fatalf("SetGoal: %v", err)
+		}
+		if _, err := engine.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser); err != nil {
+			t.Fatalf("SetGoalStatus paused: %v", err)
+		}
+
+		result, err := engine.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser)
+		if err != nil {
+			t.Fatalf("SetGoalStatus paused: %v", err)
+		}
+		if result.Disposition != GoalCommandNoop || !result.Accepted() || result.MetadataReceipt.Committed || result.NoticeReceipt.Committed {
+			t.Fatalf("noop result = %+v, want accepted no-op without persistence", result)
+		}
+	})
+}
+
+func TestGoalCommandResultReportsCommitBoundaries(t *testing.T) {
+	t.Run("uncommitted goal-loop preflight", func(t *testing.T) {
+		store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
+		if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
+			t.Fatalf("SetGoal: %v", err)
+		}
+		if _, err := engine.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser); err != nil {
+			t.Fatalf("SetGoalStatus paused: %v", err)
+		}
+
+		result, err := engine.SetGoalStatus(session.GoalStatusActive, session.GoalActorUser)
+		if !errors.Is(err, ErrGoalRequiresAskQuestion) {
+			t.Fatalf("SetGoalStatus active error = %v, want goal loop preflight error", err)
+		}
+		if result.Accepted() {
+			t.Fatalf("preflight result = %+v, want unaccepted", result)
+		}
+		if goal := store.Meta().Goal; goal == nil || goal.Status != session.GoalStatusPaused {
+			t.Fatalf("goal after failed preflight = %+v, want paused", goal)
+		}
+	})
+
+	t.Run("metadata observer failure", func(t *testing.T) {
+		observerErr := errors.New("goal metadata observer failed")
+		gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+		store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x", session.WithPersistenceObserver(gate))
+		var events []Event
+		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+			EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+			OnEvent:      func(event Event) { events = append(events, event) },
+		})
+		gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+			return snapshot.Meta.Goal != nil && snapshot.Meta.LastSequence == 0
+		}, observerErr)
+
+		result, err := engine.SetGoal("ship goal mode", session.GoalActorUser)
+		if !errors.Is(err, observerErr) {
+			t.Fatalf("SetGoal error = %v, want metadata observer error", err)
+		}
+		if !result.MetadataReceipt.Committed || result.NoticeReceipt.Committed {
+			t.Fatalf("metadata observer result = %+v, want committed metadata only", result)
+		}
+		if goal := store.Meta().Goal; goal == nil || goal.ID != result.ID {
+			t.Fatalf("goal after committed metadata observer failure = %+v, want %+v", goal, result.GoalState)
+		}
+		if records, readErr := sessiontest.CollectRecords(store); readErr != nil || len(records) != 0 {
+			t.Fatalf("records after metadata observer failure = %+v err=%v, want none", records, readErr)
+		}
+		if len(events) != 0 {
+			t.Fatalf("events after metadata observer failure = %+v, want none", events)
+		}
+	})
+
+	t.Run("notice observer failure", func(t *testing.T) {
+		observerErr := errors.New("goal notice observer failed")
+		gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+		store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x", session.WithPersistenceObserver(gate))
+		var events []Event
+		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+			EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+			OnEvent:      func(event Event) { events = append(events, event) },
+		})
+		gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+			return snapshot.Meta.Goal != nil && snapshot.Meta.LastSequence == 1
+		}, observerErr)
+
+		result, err := engine.SetGoal("ship goal mode", session.GoalActorUser)
+		if !errors.Is(err, observerErr) {
+			t.Fatalf("SetGoal error = %v, want notice observer error", err)
+		}
+		if !result.MetadataReceipt.Committed || !result.NoticeReceipt.Committed {
+			t.Fatalf("notice observer result = %+v, want committed metadata and notice", result)
+		}
+		if len(events) != 2 || events[0].Kind != EventConversationUpdated || events[1].Kind != EventGoalStatusUpdated {
+			t.Fatalf("events after committed notice observer failure = %+v, want feedback then status", events)
+		}
+		if records, readErr := sessiontest.CollectRecords(store); readErr != nil || len(records) != 1 {
+			t.Fatalf("records after notice observer failure = %+v err=%v, want one notice", records, readErr)
+		}
+	})
 }
 
 func TestQueuedAgentShellGoalSetDrainsAfterToolCompletion(t *testing.T) {
@@ -177,7 +299,7 @@ func TestAgentShellGoalSetForEndedStepIsRejected(t *testing.T) {
 	})
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: "step-2", snapshot: &RunSnapshot{RunID: "run-2", StepID: "step-2"}}
 
-	if _, queued, err := engine.QueueAgentShellSetGoalForStep("step-1", "stale background goal", session.GoalActorAgent); queued || !errors.Is(err, errAgentGoalStepInactive) {
+	if _, queued, err := engine.QueueAgentShellSetGoalForStep("step-1", "stale background goal", session.GoalActorAgent); queued || !errors.Is(err, ErrAgentGoalStepInactive) {
 		t.Fatalf("QueueAgentShellSetGoalForStep queued=%t err=%v, want inactive originating step", queued, err)
 	}
 	if g := engine.Goal(); g != nil {
@@ -385,7 +507,7 @@ func assertGoalStatusEventObjective(t *testing.T, events []Event, start int, obj
 	}
 }
 
-func assertGoalFeedbackThenStatusEvent(t *testing.T, events []Event, start int, goal session.GoalState, cleared bool) {
+func assertGoalFeedbackThenStatusEvent(t *testing.T, events []Event, start int, goal GoalCommandResult, cleared bool) {
 	t.Helper()
 	if len(events) < start+2 {
 		t.Fatalf("events len = %d, want at least %d: %+v", len(events), start+2, events)
@@ -405,7 +527,7 @@ func assertGoalFeedbackThenStatusEvent(t *testing.T, events []Event, start int, 
 		return
 	}
 	if status.GoalStatus.State.ID != goal.ID || status.GoalStatus.State.Objective != goal.Objective || status.GoalStatus.State.Status != goal.Status {
-		t.Fatalf("goal status state = %+v, want %+v", status.GoalStatus.State, goal)
+		t.Fatalf("goal status state = %+v, want %+v", status.GoalStatus.State, goal.GoalState)
 	}
 }
 
@@ -1077,7 +1199,7 @@ func TestManualCompactionSubmittedDuringGoalTurnRunsBeforeNextGoalTurn(t *testin
 
 func TestNewDoesNotRestartPersistedActiveGoalLoop(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
-	if _, err := store.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
+	if _, _, err := store.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
 	reopenedStore := mustOpenTestSession(t, store.Dir())
@@ -1099,7 +1221,7 @@ func TestNewDoesNotRestartPersistedActiveGoalLoop(t *testing.T) {
 
 func TestNewOpensPersistedActiveGoalWhenAskQuestionDisabled(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
-	if _, err := store.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
+	if _, _, err := store.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
 	reopenedStore := mustOpenTestSession(t, store.Dir())

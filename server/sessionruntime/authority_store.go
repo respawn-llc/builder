@@ -195,3 +195,47 @@ func (a *Authority) WithSessionStore(ctx context.Context, descriptor session.Ses
 	}
 	return callback(ctx, store)
 }
+
+type DormantSessionStoreAdmission struct {
+	RuntimeAvailable bool
+}
+
+func (a *Authority) WithDormantSessionStore(
+	ctx context.Context,
+	descriptor session.SessionDescriptor,
+	callback func(context.Context, *session.Store) error,
+) (DormantSessionStoreAdmission, error) {
+	if a == nil {
+		return DormantSessionStoreAdmission{}, errors.New("session runtime authority is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := context.Cause(ctx); err != nil {
+		return DormantSessionStoreAdmission{}, err
+	}
+	sessionID := descriptor.SessionID()
+	if sessionID.IsZero() {
+		return DormantSessionStoreAdmission{}, errors.New("session id is required")
+	}
+	if callback == nil {
+		return DormantSessionStoreAdmission{}, errors.New("session store callback is required")
+	}
+	gate := a.gateFor(sessionID)
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	a.mu.Lock()
+	resource := a.resources[sessionID]
+	a.mu.Unlock()
+	if resource != nil {
+		return DormantSessionStoreAdmission{RuntimeAvailable: true}, nil
+	}
+	store, err := session.MaterializeSessionDescriptor(a.options.persistenceRoot, descriptor, a.options.storeOptions...)
+	if err != nil {
+		return DormantSessionStoreAdmission{}, err
+	}
+	if err := callback(ctx, store); err != nil {
+		return DormantSessionStoreAdmission{}, err
+	}
+	return DormantSessionStoreAdmission{}, nil
+}

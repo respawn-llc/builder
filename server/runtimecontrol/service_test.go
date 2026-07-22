@@ -840,11 +840,11 @@ func TestServiceGoalMutationsSetShowComplete(t *testing.T) {
 
 func TestServiceShowGoalReturnsPersistedGoalWithoutRuntime(t *testing.T) {
 	store, _ := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	goal, err := store.SetGoal("inspect dormant goals", session.GoalActorUser)
+	goal, _, err := store.SetGoal("inspect dormant goals", session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
-	goal, err = store.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser)
+	goal, _, _, err = store.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("SetGoalStatus: %v", err)
 	}
@@ -961,6 +961,17 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 	if accepted.Goal == nil || accepted.Goal.Objective != "accepted pending goal" || accepted.Goal.Status != string(session.GoalStatusActive) {
 		t.Fatalf("SetGoal accepted response = %+v, want active pending goal", accepted.Goal)
 	}
+	cleared, err := service.ClearGoal(context.Background(), serverapi.RuntimeGoalClearRequest{
+		ClientRequestID: "goal-clear-queued",
+		SessionID:       store.Meta().SessionID,
+		Actor:           string(session.GoalActorUser),
+	})
+	if err != nil {
+		t.Fatalf("ClearGoal queued mutation: %v", err)
+	}
+	if cleared.Goal != nil {
+		t.Fatalf("ClearGoal accepted response = %+v, want no goal", cleared.Goal)
+	}
 
 	beforeDrain, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
@@ -985,8 +996,8 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 	if err != nil {
 		t.Fatalf("ShowGoal after drain: %v", err)
 	}
-	if afterDrain.Goal == nil || afterDrain.Goal.Objective != accepted.Goal.Objective || afterDrain.Goal.Status != accepted.Goal.Status {
-		t.Fatalf("ShowGoal after drain = %+v, want committed accepted goal %+v", afterDrain.Goal, accepted.Goal)
+	if afterDrain.Goal != nil {
+		t.Fatalf("ShowGoal after drain = %+v, want queued clear to remove goal", afterDrain.Goal)
 	}
 }
 
@@ -1083,6 +1094,244 @@ func TestServiceWorkflowAgentStepGoalCompleteDoesNotBypassStepQueue(t *testing.T
 	}
 	if goal := engine.Goal(); goal == nil || goal.Status != session.GoalStatusActive {
 		t.Fatalf("agent step-scoped workflow goal complete bypassed queue; goal = %+v, want active", goal)
+	}
+}
+
+func TestServiceRetiredAgentStepGoalMutationsAreRejectedWithoutMutation(t *testing.T) {
+	client := newCancelObservingRuntimeControlClient()
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+	})
+	initial, err := engine.SetGoal("existing goal", session.GoalActorUser)
+	if err != nil {
+		t.Fatalf("set initial goal: %v", err)
+	}
+	noticeCount := len(runtimeControlGoalDeveloperMessages(t, store))
+	turnDone := make(chan error, 1)
+	go func() {
+		_, submitErr := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "retired-agent-step", "start a real step"))
+		turnDone <- submitErr
+	}()
+	select {
+	case <-client.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for live step")
+	}
+	active := engine.ActiveRun()
+	if active == nil || active.RunID == "" || active.StepID == "" {
+		t.Fatalf("active run = %+v, want real run and step identifiers", active)
+	}
+	close(client.release)
+	if submitErr := <-turnDone; submitErr != nil {
+		t.Fatalf("submit user turn: %v", submitErr)
+	}
+	if closeErr := service.authority.Close(context.Background()); closeErr != nil {
+		t.Fatalf("retire runtime: %v", closeErr)
+	}
+
+	_, setErr := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
+		ClientRequestID: "retired-agent-step-set",
+		SessionID:       store.Meta().SessionID,
+		Objective:       "stale replacement",
+		Actor:           string(session.GoalActorAgent),
+		RunID:           active.RunID,
+		StepID:          active.StepID,
+	})
+	if !errors.Is(setErr, runtime.ErrAgentGoalStepInactive) {
+		t.Fatalf("retired agent set error = %v, want inactive step", setErr)
+	}
+	_, completeErr := service.CompleteGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{
+		ClientRequestID: "retired-agent-step-complete",
+		SessionID:       store.Meta().SessionID,
+		Actor:           string(session.GoalActorAgent),
+		RunID:           active.RunID,
+		StepID:          active.StepID,
+	})
+	if !errors.Is(completeErr, runtime.ErrAgentGoalStepInactive) {
+		t.Fatalf("retired agent complete error = %v, want inactive step", completeErr)
+	}
+	if goal := store.Meta().Goal; goal == nil || goal.ID != initial.ID || goal.Status != initial.Status || goal.Objective != initial.Objective {
+		t.Fatalf("goal after retired agent commands = %+v, want %+v", goal, initial)
+	}
+	if count := len(runtimeControlGoalDeveloperMessages(t, store)); count != noticeCount {
+		t.Fatalf("goal notices after retired agent commands = %d, want %d", count, noticeCount)
+	}
+}
+
+func TestServiceAgentGoalWithoutStepSucceedsDormant(t *testing.T) {
+	store, _ := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{})
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: t.TempDir(),
+		StoreOptions:    runtimeControlTestSessionPersistence.Options(),
+	})
+	t.Cleanup(func() {
+		if closeErr := authority.Close(context.Background()); closeErr != nil {
+			t.Errorf("close dormant authority: %v", closeErr)
+		}
+	})
+	service := NewService(authority).WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
+
+	resp, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
+		ClientRequestID: "dormant-agent-goal",
+		SessionID:       store.Meta().SessionID,
+		Objective:       "agent dormant goal",
+		Actor:           string(session.GoalActorAgent),
+		RunID:           "run-without-step",
+	})
+	if err != nil {
+		t.Fatalf("set non-step-scoped dormant agent goal: %v", err)
+	}
+	if resp.Goal == nil || resp.Goal.Objective != "agent dormant goal" || resp.Goal.Status != string(session.GoalStatusActive) {
+		t.Fatalf("dormant agent response = %+v, want active goal", resp.Goal)
+	}
+	if count := len(runtimeControlGoalDeveloperMessages(t, store)); count != 1 {
+		t.Fatalf("dormant agent goal notices = %d, want 1", count)
+	}
+	sessionID, parseErr := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if parseErr != nil {
+		t.Fatalf("parse session id: %v", parseErr)
+	}
+	if runtimeErr := authority.WithCurrentRuntime(context.Background(), sessionID, func(context.Context, *runtime.Engine) error {
+		return nil
+	}); !errors.Is(runtimeErr, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("dormant agent runtime access error = %v, want unavailable", runtimeErr)
+	}
+}
+
+func TestServiceDormantGoalLifecycleAppendsOneNoticePerEffectiveMutation(t *testing.T) {
+	store, _ := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{})
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: t.TempDir(),
+		StoreOptions:    runtimeControlTestSessionPersistence.Options(),
+	})
+	t.Cleanup(func() {
+		if closeErr := authority.Close(context.Background()); closeErr != nil {
+			t.Errorf("close dormant authority: %v", closeErr)
+		}
+	})
+	service := NewService(authority).WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
+	sessionID := store.Meta().SessionID
+	noticeCount := func() int {
+		return len(runtimeControlGoalDeveloperMessages(t, store))
+	}
+	assertGoal := func(response serverapi.RuntimeGoalShowResponse, status session.GoalStatus, objective string) {
+		t.Helper()
+		if response.Goal == nil || response.Goal.Status != string(status) || response.Goal.Objective != objective {
+			t.Fatalf("goal response = %+v, want %q %q", response.Goal, status, objective)
+		}
+	}
+
+	set, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
+		ClientRequestID: "dormant-lifecycle-set",
+		SessionID:       sessionID,
+		Objective:       "finish dormant lifecycle",
+		Actor:           string(session.GoalActorUser),
+	})
+	if err != nil {
+		t.Fatalf("set dormant goal: %v", err)
+	}
+	assertGoal(set, session.GoalStatusActive, "finish dormant lifecycle")
+	if count := noticeCount(); count != 1 {
+		t.Fatalf("notices after set = %d, want 1", count)
+	}
+
+	pauseRequest := serverapi.RuntimeGoalStatusRequest{SessionID: sessionID, Actor: string(session.GoalActorUser)}
+	pauseRequest.ClientRequestID = "dormant-lifecycle-pause"
+	paused, err := service.PauseGoal(context.Background(), pauseRequest)
+	if err != nil {
+		t.Fatalf("pause dormant goal: %v", err)
+	}
+	assertGoal(paused, session.GoalStatusPaused, "finish dormant lifecycle")
+	if count := noticeCount(); count != 2 {
+		t.Fatalf("notices after pause = %d, want 2", count)
+	}
+	pauseRequest.ClientRequestID = "dormant-lifecycle-pause-noop"
+	if _, err := service.PauseGoal(context.Background(), pauseRequest); err != nil {
+		t.Fatalf("pause dormant goal no-op: %v", err)
+	}
+	if count := noticeCount(); count != 2 {
+		t.Fatalf("notices after paused no-op = %d, want 2", count)
+	}
+
+	resumeRequest := serverapi.RuntimeGoalStatusRequest{SessionID: sessionID, Actor: string(session.GoalActorUser)}
+	resumeRequest.ClientRequestID = "dormant-lifecycle-resume"
+	resumed, err := service.ResumeGoal(context.Background(), resumeRequest)
+	if err != nil {
+		t.Fatalf("resume dormant goal: %v", err)
+	}
+	assertGoal(resumed, session.GoalStatusActive, "finish dormant lifecycle")
+	if count := noticeCount(); count != 3 {
+		t.Fatalf("notices after resume = %d, want 3", count)
+	}
+	resumeRequest.ClientRequestID = "dormant-lifecycle-resume-noop"
+	if _, err := service.ResumeGoal(context.Background(), resumeRequest); err != nil {
+		t.Fatalf("resume dormant goal no-op: %v", err)
+	}
+	if count := noticeCount(); count != 3 {
+		t.Fatalf("notices after active no-op = %d, want 3", count)
+	}
+
+	completeRequest := serverapi.RuntimeGoalStatusRequest{SessionID: sessionID, Actor: string(session.GoalActorUser)}
+	completeRequest.ClientRequestID = "dormant-lifecycle-complete"
+	completed, err := service.CompleteGoal(context.Background(), completeRequest)
+	if err != nil {
+		t.Fatalf("complete dormant goal: %v", err)
+	}
+	assertGoal(completed, session.GoalStatusComplete, "finish dormant lifecycle")
+	if count := noticeCount(); count != 4 {
+		t.Fatalf("notices after complete = %d, want 4", count)
+	}
+	completeRequest.ClientRequestID = "dormant-lifecycle-complete-noop"
+	if _, err := service.CompleteGoal(context.Background(), completeRequest); err != nil {
+		t.Fatalf("complete dormant goal no-op: %v", err)
+	}
+	if count := noticeCount(); count != 4 {
+		t.Fatalf("notices after complete no-op = %d, want 4", count)
+	}
+
+	reopened, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
+		ClientRequestID: "dormant-lifecycle-reopen",
+		SessionID:       sessionID,
+		Objective:       "reopened dormant goal",
+		Actor:           string(session.GoalActorUser),
+	})
+	if err != nil {
+		t.Fatalf("reopen completed dormant goal: %v", err)
+	}
+	assertGoal(reopened, session.GoalStatusActive, "reopened dormant goal")
+	if count := noticeCount(); count != 5 {
+		t.Fatalf("notices after reopen = %d, want 5", count)
+	}
+
+	cleared, err := service.ClearGoal(context.Background(), serverapi.RuntimeGoalClearRequest{
+		ClientRequestID: "dormant-lifecycle-clear",
+		SessionID:       sessionID,
+		Actor:           string(session.GoalActorUser),
+	})
+	if err != nil {
+		t.Fatalf("clear dormant goal: %v", err)
+	}
+	if cleared.Goal != nil {
+		t.Fatalf("clear response goal = %+v, want nil", cleared.Goal)
+	}
+	if count := noticeCount(); count != 6 {
+		t.Fatalf("notices after clear = %d, want 6", count)
+	}
+	shown, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: sessionID})
+	if err != nil {
+		t.Fatalf("show cleared dormant goal: %v", err)
+	}
+	if shown.Goal != nil {
+		t.Fatalf("shown cleared goal = %+v, want nil", shown.Goal)
+	}
+	parsedSessionID, parseErr := runtimeids.ParseSessionID(sessionID)
+	if parseErr != nil {
+		t.Fatalf("parse session id: %v", parseErr)
+	}
+	if runtimeErr := authority.WithCurrentRuntime(context.Background(), parsedSessionID, func(context.Context, *runtime.Engine) error {
+		return nil
+	}); !errors.Is(runtimeErr, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("dormant lifecycle runtime access error = %v, want unavailable", runtimeErr)
 	}
 }
 

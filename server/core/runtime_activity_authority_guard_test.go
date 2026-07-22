@@ -239,7 +239,9 @@ func TestProductionRuntimeAuthorityAdaptersStayCentralized(t *testing.T) {
 			if !ok {
 				return true
 			}
-			if rawEngineBridges[selector.Sel.Name] && !approvedRawEngineAdapterDirs[filepath.ToSlash(filepath.Dir(relPath))] {
+			if rawEngineBridges[selector.Sel.Name] &&
+				!approvedRawEngineAdapterDirs[filepath.ToSlash(filepath.Dir(relPath))] &&
+				!approvedRawEngineAdapterFiles[filepath.ToSlash(relPath)] {
 				t.Errorf("%s:%d calls raw Engine bridge %s outside an approved Authority adapter", relPath, fileSet.Position(selector.Sel.Pos()).Line, selector.Sel.Name)
 			}
 			pkg, ok := selector.X.(*ast.Ident)
@@ -277,6 +279,7 @@ func TestProductionRuntimeAuthorityAdaptersStayCentralized(t *testing.T) {
 var rawEngineBridges = map[string]bool{"WithRuntime": true, "WithCurrentRuntime": true, "WithEngine": true}
 var forbiddenRawEngineGetters = map[string]bool{"ResolveRuntime": true, "GetRuntime": true, "CurrentRuntime": true, "Runtime": true, "ResolveEngine": true, "GetEngine": true, "Engine": true}
 var approvedRawEngineAdapterDirs = map[string]bool{"server/sessionruntime": true, "server/runtimecontrol": true, "server/runprompt": true, "server/workflowrunner": true, "server/sessionview": true}
+var approvedRawEngineAdapterFiles = map[string]bool{"server/runtimecommand/execution.go": true}
 
 func forbiddenRuntimeLivenessIdentifier(name string) (string, bool) {
 	switch name {

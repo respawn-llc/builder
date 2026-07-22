@@ -1265,7 +1265,7 @@ func TestInProcessRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if _, err := store.SetGoal("ship feature", session.GoalActorUser); err != nil {
+	if _, _, err := store.SetGoal("ship feature", session.GoalActorUser); err != nil {
 		t.Fatalf("set goal: %v", err)
 	}
 	if err := store.EnsureDurable(); err != nil {

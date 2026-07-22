@@ -71,11 +71,11 @@ func TestWorkflowTerminalCascadeRacesUserGoalMutationWithoutDeadlock(t *testing.
 func TestWorkflowToolModeCascadeSkipsGoalPausedDuringRace(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	active, err := store.SetGoal("stay paused through completion", session.GoalActorUser)
+	active, _, err := store.SetGoal("stay paused through completion", session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
-	if _, err := store.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser); err != nil {
+	if _, _, _, err := store.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser); err != nil {
 		t.Fatalf("pause: %v", err)
 	}
 	controller := &fakeWorkflowController{}

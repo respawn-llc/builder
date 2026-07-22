@@ -15,24 +15,10 @@ import (
 var _ servicecontract.RuntimeLiveControlService = (*Service)(nil)
 
 func (s *Service) withLiveExecutionRuntime(ctx context.Context, sessionID runtimeids.SessionID, callback func(context.Context, *runtime.Engine) error) error {
-	if s == nil || s.authority == nil {
+	if s == nil || s.execution == nil {
 		return errors.New("session runtime authority is required")
 	}
-	execution, ok := s.authority.SessionExecution(sessionID)
-	if !ok {
-		err := s.authority.WithCurrentRuntime(ctx, sessionID, func(context.Context, *runtime.Engine) error {
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-		return serverapi.ErrRuntimeNoActiveRun
-	}
-	resource, ok := execution.Scope().Resource()
-	if !ok {
-		return errors.New("agent execution scope has no runtime resource")
-	}
-	return s.authority.WithRuntime(ctx, resource, callback)
+	return s.execution.WithLiveExecutionRuntime(ctx, sessionID, callback)
 }
 
 func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerRequest) (serverapi.RuntimeLiveSteerResponse, error) {

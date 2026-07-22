@@ -934,7 +934,7 @@ func normalizeMetaWorktreeReminder(meta *Meta) error {
 	return nil
 }
 
-func (s *Store) SetGoal(objective string, actor GoalActor) (GoalState, error) {
+func (s *Store) SetGoal(objective string, actor GoalActor) (GoalState, CommitReceipt, error) {
 	s.mutationMu.Lock()
 	defer s.mutationMu.Unlock()
 	s.mu.Lock()
@@ -946,22 +946,22 @@ func (s *Store) SetGoal(objective string, actor GoalActor) (GoalState, error) {
 	)
 	if err != nil {
 		s.mu.Unlock()
-		return GoalState{}, err
+		return GoalState{}, CommitReceipt{}, err
 	}
-	previousMeta := cloneMeta(s.meta)
+	checkpoint := s.metadataMutationCheckpointLocked()
 	s.meta.Goal = cloneGoalState(&goal)
-	if err := s.persistGoalMetadataLocked(previousMeta); err != nil {
-		return GoalState{}, err
+	receipt, err := s.persistGoalMetadataLocked(checkpoint)
+	if !receipt.Committed {
+		return GoalState{}, receipt, err
 	}
-	return goal, nil
+	return goal, receipt, err
 }
 
-func (s *Store) SetGoalStatus(status GoalStatus, actor GoalActor) (GoalState, error) {
-	goal, _, err := s.transitionGoalStatus(status, actor, nil)
-	return goal, err
+func (s *Store) SetGoalStatus(status GoalStatus, actor GoalActor) (GoalState, bool, CommitReceipt, error) {
+	return s.transitionGoalStatus(status, actor, nil)
 }
 
-func (s *Store) CompleteGoalIfActive(expectedID string, actor GoalActor) (GoalState, bool, error) {
+func (s *Store) CompleteGoalIfActive(expectedID string, actor GoalActor) (GoalState, bool, CommitReceipt, error) {
 	return s.transitionGoalStatus(GoalStatusComplete, actor, func(current GoalState) bool {
 		return current.ID == expectedID && current.Status == GoalStatusActive
 	})
@@ -971,7 +971,7 @@ func (s *Store) transitionGoalStatus(
 	status GoalStatus,
 	actor GoalActor,
 	allow func(GoalState) bool,
-) (GoalState, bool, error) {
+) (GoalState, bool, CommitReceipt, error) {
 	s.mutationMu.Lock()
 	defer s.mutationMu.Unlock()
 	s.mu.Lock()
@@ -984,44 +984,42 @@ func (s *Store) transitionGoalStatus(
 	)
 	if err != nil {
 		s.mu.Unlock()
-		return GoalState{}, false, err
+		return GoalState{}, false, CommitReceipt{}, err
 	}
 	if !transitioned {
 		s.mu.Unlock()
-		return GoalState{}, false, nil
+		return goal, false, CommitReceipt{}, nil
 	}
-	previousMeta := cloneMeta(s.meta)
+	checkpoint := s.metadataMutationCheckpointLocked()
 	s.meta.Goal = cloneGoalState(&goal)
-	if err := s.persistGoalMetadataLocked(previousMeta); err != nil {
-		return GoalState{}, false, err
+	receipt, err := s.persistGoalMetadataLocked(checkpoint)
+	if !receipt.Committed {
+		return GoalState{}, false, receipt, err
 	}
-	return goal, true, nil
+	return goal, true, receipt, err
 }
 
-func (s *Store) ClearGoal(actor GoalActor) (GoalState, error) {
+func (s *Store) ClearGoal(actor GoalActor) (GoalState, CommitReceipt, error) {
 	s.mutationMu.Lock()
 	defer s.mutationMu.Unlock()
 	s.mu.Lock()
 	goal, err := prepareGoalClearState(s.meta.Goal, actor)
 	if err != nil {
 		s.mu.Unlock()
-		return GoalState{}, err
+		return GoalState{}, CommitReceipt{}, err
 	}
-	previousMeta := cloneMeta(s.meta)
+	checkpoint := s.metadataMutationCheckpointLocked()
 	s.meta.Goal = nil
-	if err := s.persistGoalMetadataLocked(previousMeta); err != nil {
-		return GoalState{}, err
+	receipt, err := s.persistGoalMetadataLocked(checkpoint)
+	if !receipt.Committed {
+		return GoalState{}, receipt, err
 	}
-	return goal, nil
+	return goal, receipt, err
 }
 
-func (s *Store) persistGoalMetadataLocked(previousMeta Meta) error {
+func (s *Store) persistGoalMetadataLocked(checkpoint metadataMutationCheckpoint) (CommitReceipt, error) {
 	s.meta.UpdatedAt = storeTimestamp(s.options)
-	observation, err := s.persistMetaLocked()
-	if err != nil {
-		s.meta = previousMeta
-	}
-	return s.unlockAndObservePersistence(observation, err)
+	return s.persistMetadataMutationWithCommitReceiptLocked(checkpoint)
 }
 
 func prepareActiveGoalState(

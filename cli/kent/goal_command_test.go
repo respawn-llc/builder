@@ -16,6 +16,7 @@ import (
 	"core/prompts"
 	"core/server/metadata"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -411,9 +412,6 @@ func TestGoalCommandSubprocessReadsDormantAndMutatesLiveSessionFromUnboundWorktr
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
-	if _, err := store.SetGoal("exercise live goal CLI", session.GoalActorUser); err != nil {
-		t.Fatalf("SetGoal: %v", err)
-	}
 	if err := store.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable: %v", err)
 	}
@@ -421,13 +419,18 @@ func TestGoalCommandSubprocessReadsDormantAndMutatesLiveSessionFromUnboundWorktr
 	if err != nil {
 		t.Fatalf("ResolvePersistedSession: %v", err)
 	}
-	if record.Meta == nil || record.Meta.Goal == nil {
-		t.Fatalf("persisted goal metadata missing: %+v", record.Meta)
+	if record.Meta == nil || record.Meta.Goal != nil {
+		t.Fatalf("initial persisted goal metadata = %+v, want no goal", record.Meta)
 	}
 
 	cleanup := startBindingCommandServer(t, unboundWorktree)
 	defer cleanup()
 	t.Setenv(sessionenv.SessionIDEnv, store.Meta().SessionID)
+	remote, err := client.DialConfiguredRemoteForProjectWorkspace(context.Background(), cfg, binding.ProjectID, cfg.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("DialConfiguredRemoteForProjectWorkspace: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
 
 	assertGoalCommandSubprocessShow := func(want *session.GoalState) {
 		t.Helper()
@@ -438,6 +441,12 @@ func TestGoalCommandSubprocessReadsDormantAndMutatesLiveSessionFromUnboundWorktr
 		var show serverapi.RuntimeGoalShowResponse
 		if err := json.Unmarshal([]byte(showOutput), &show); err != nil {
 			t.Fatalf("decode show json: %v output=%q", err, showOutput)
+		}
+		if want == nil {
+			if show.Goal != nil {
+				t.Fatalf("show goal = %+v, want no goal", show.Goal)
+			}
+			return
 		}
 		if show.Goal == nil ||
 			show.Goal.ID != want.ID ||
@@ -458,31 +467,101 @@ func TestGoalCommandSubprocessReadsDormantAndMutatesLiveSessionFromUnboundWorktr
 		}
 	}
 
+	assertDormantGoalState := func(operation string, want *session.GoalState, noticeCount int) {
+		t.Helper()
+		record, err = metadataStore.ResolvePersistedSession(context.Background(), store.Meta().SessionID)
+		if err != nil {
+			t.Fatalf("ResolvePersistedSession after %s: %v", operation, err)
+		}
+		if record.Meta == nil {
+			t.Fatalf("persisted metadata missing after %s", operation)
+		}
+		if want == nil {
+			if record.Meta.Goal != nil {
+				t.Fatalf("persisted goal after %s = %+v, want no goal", operation, record.Meta.Goal)
+			}
+		} else if goal := record.Meta.Goal; goal == nil ||
+			goal.ID != want.ID ||
+			goal.Objective != want.Objective ||
+			goal.Status != want.Status ||
+			!goal.CreatedAt.Equal(want.CreatedAt) ||
+			!goal.UpdatedAt.Equal(want.UpdatedAt) {
+			t.Fatalf("persisted goal after %s = %+v, want %+v", operation, goal, want)
+		}
+		if got := goalCommandGoalNoticeCount(t, store); got != noticeCount {
+			t.Fatalf("goal notice count after %s = %d, want %d", operation, got, noticeCount)
+		}
+		view, err := remote.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{
+			SessionID: store.Meta().SessionID,
+		})
+		if err != nil {
+			t.Fatalf("GetSessionMainView after %s: %v", operation, err)
+		}
+		if view.MainView.Activity.State != clientui.RuntimeActivityUnavailable {
+			t.Fatalf("runtime activity after %s = %+v, want unavailable", operation, view.MainView.Activity)
+		}
+		assertGoalCommandSubprocessShow(want)
+	}
+
+	runDormantGoalCommand := func(args ...string) {
+		t.Helper()
+		commandArgs := append([]string{args[0], "--session", store.Meta().SessionID}, args[1:]...)
+		stdout, stderr := runGoalCommandSubprocess(t, kentPath, unboundWorktree, "", commandArgs...)
+		if strings.TrimSpace(stdout) == "" {
+			t.Fatalf("goal %s stdout = %q, want command response", strings.Join(args, " "), stdout)
+		}
+		if stderr != "" {
+			t.Fatalf("goal %s stderr = %q", strings.Join(args, " "), stderr)
+		}
+	}
+
 	assertGoalCommandSubprocessShow(record.Meta.Goal)
 
-	dormantOutput, dormantErr, dormantRunErr := runGoalCommandSubprocessRaw(t, kentPath, unboundWorktree, store.Meta().SessionID, "set", "replacement dormant goal CLI")
-	if dormantRunErr == nil {
-		t.Fatal("dormant goal mutation unexpectedly succeeded")
+	runDormantGoalCommand("set", "replacement dormant goal CLI")
+	record, err = metadataStore.ResolvePersistedSession(context.Background(), store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolvePersistedSession after dormant set: %v", err)
 	}
-	if dormantOutput != "" {
-		t.Fatalf("dormant goal mutation stdout = %q, want empty", dormantOutput)
+	assertDormantGoalState("dormant set", record.Meta.Goal, 1)
+
+	runDormantGoalCommand("pause")
+	record, err = metadataStore.ResolvePersistedSession(context.Background(), store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolvePersistedSession after dormant pause: %v", err)
 	}
-	if got := nonEmptyLineCount(t, dormantErr); got != 1 {
-		t.Fatalf("dormant goal mutation stderr lines = %d, want 1", got)
+	assertDormantGoalState("dormant pause", record.Meta.Goal, 2)
+
+	runDormantGoalCommand("resume")
+	record, err = metadataStore.ResolvePersistedSession(context.Background(), store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolvePersistedSession after dormant resume: %v", err)
+	}
+	assertDormantGoalState("dormant resume", record.Meta.Goal, 3)
+
+	runDormantGoalCommand("complete", "--confirm")
+	record, err = metadataStore.ResolvePersistedSession(context.Background(), store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolvePersistedSession after dormant complete: %v", err)
+	}
+	assertDormantGoalState("dormant complete", record.Meta.Goal, 4)
+
+	runDormantGoalCommand("clear")
+	assertDormantGoalState("dormant clear", nil, 5)
+
+	liveStore, err := session.Open(store.Dir(), metadataStore.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("open session for live CLI setup: %v", err)
+	}
+	if _, _, err := liveStore.SetGoal("exercise live goal CLI", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal for live CLI setup: %v", err)
 	}
 	record, err = metadataStore.ResolvePersistedSession(context.Background(), store.Meta().SessionID)
 	if err != nil {
-		t.Fatalf("ResolvePersistedSession after dormant mutation: %v", err)
+		t.Fatalf("ResolvePersistedSession after live CLI setup: %v", err)
 	}
 	if goal := record.Meta.Goal; goal == nil || goal.Objective != "exercise live goal CLI" || goal.Status != session.GoalStatusActive {
-		t.Fatalf("persisted goal after dormant mutation = %+v", goal)
+		t.Fatalf("persisted goal for live CLI setup = %+v", goal)
 	}
-
-	remote, err := client.DialConfiguredRemoteForProjectWorkspace(context.Background(), cfg, binding.ProjectID, cfg.WorkspaceRoot)
-	if err != nil {
-		t.Fatalf("DialConfiguredRemoteForProjectWorkspace: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
 	settings := cfg.Settings
 	settings.Model = "gpt-5"
 	settings.ProviderOverride = "openai"
@@ -555,6 +634,26 @@ func nonEmptyLineCount(t *testing.T, text string) int {
 	}
 	if err := scanner.Err(); err != nil {
 		t.Fatalf("scan process output lines: %v", err)
+	}
+	return count
+}
+
+func goalCommandGoalNoticeCount(t *testing.T, store *session.Store) int {
+	t.Helper()
+	records, err := sessiontest.CollectRecords(store)
+	if err != nil {
+		t.Fatalf("collect session event records: %v", err)
+	}
+	count := 0
+	for _, record := range records {
+		payload, err := record.Payload()
+		if err != nil {
+			t.Fatalf("read session event payload: %v", err)
+		}
+		message, ok := payload.(session.MessageRecord)
+		if ok && message.MessageType != nil && *message.MessageType == session.MessageTypeGoal {
+			count++
+		}
 	}
 	return count
 }

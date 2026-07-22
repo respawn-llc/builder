@@ -5,6 +5,8 @@ This repository contains a coding agent focused on output quality, built for pro
   - Startup orchestration, auth gating, session selection, and top-level UI composition.
 - `server/runtime`
   - Agent step loop, retries, transcript assembly, tool orchestration, lock handling, interrupts.
+- `server/runtimecommand`
+  - Runtime Command ordering and dormant goal-command mutation authority.
 - `server/bootstrap`
   - Server-owned embedded bootstrap composition for config/container resolution, auth-manager creation, and runtime-support setup shared by CLI flows.
 - `server/startup`
