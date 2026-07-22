@@ -135,8 +135,8 @@ func (a *responseStreamAccumulator) consumeAssistantDelta(outputIndex int64, tex
 		a.assistantStarted = false
 	}
 	if !a.assistantStarted {
-		// Provider bug (omlx): assistant messages can start with provisional
-		// whitespace that output_text.done and response.completed omit.
+		// Some OpenAI-compatible streams emit provisional leading whitespace
+		// before the assistant's durable content is known.
 		text = strings.TrimLeftFunc(text, unicode.IsSpace)
 	}
 	if text == "" {
@@ -242,10 +242,11 @@ func (a *responseStreamAccumulator) Response() (OpenAIResponse, error) {
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
-	if completedAssistantTextReconcilesStream(streamedDeltaText, parsedText) {
-		finalText = parsedText
+	reconciled := completedAssistantTextReconcilesStream(streamedDeltaText, parsedText)
+	if reconciled {
+		finalText = reconciledCompletedAssistantText(streamedDeltaText, parsedText)
 	}
-	if responseItemsContainAssistantMessage(parsedItems) && finalText != parsedText {
+	if responseItemsContainAssistantMessage(parsedItems) && !reconciled && finalText != parsedText {
 		return OpenAIResponse{}, fmt.Errorf(
 			"completed assistant content conflicts with streamed assistant content: streamed bytes=%d completed bytes=%d",
 			len(finalText),
@@ -298,7 +299,15 @@ func completedAssistantTextReconcilesStream(streamed string, completed string) b
 	return assistantResponseTextExtendsStream(streamed, completed) ||
 		(streamed != "" &&
 			completed != "" &&
-			strings.TrimRightFunc(streamed, unicode.IsSpace) == completed)
+			(strings.TrimRightFunc(streamed, unicode.IsSpace) == completed ||
+				streamed == strings.TrimLeftFunc(completed, unicode.IsSpace)))
+}
+
+func reconciledCompletedAssistantText(streamed string, completed string) string {
+	if streamed != "" && streamed == strings.TrimLeftFunc(completed, unicode.IsSpace) {
+		return streamed
+	}
+	return completed
 }
 
 func repairAssistantOutputItems(items []ResponseItem, text string, phase MessagePhase, outputIndex int64, hasResolvedStream bool) []ResponseItem {

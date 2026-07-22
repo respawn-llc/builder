@@ -520,8 +520,9 @@ func TestGenerateStream_IgnoresLeadingWhitespaceAssistantShimBeforeContent(t *te
 		`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
 		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"\n\nHello"}`,
 		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":" world"}`,
-		`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello world"}]}}`,
-		`{"type":"response.completed","response":{"output":[{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello world"}]}]}}`,
+		`{"type":"response.output_text.done","item_id":"msg_1","output_index":0,"content_index":0,"text":"\n\nHello world"}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"\n\nHello world"}]}}`,
+		`{"type":"response.completed","response":{"output":[{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"\n\nHello world"}]}]}}`,
 		`[DONE]`,
 	)
 
