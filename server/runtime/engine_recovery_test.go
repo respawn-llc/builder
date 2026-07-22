@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -96,4 +97,68 @@ func TestNewPublishesRecoveredDanglingToolStartOnReopen(t *testing.T) {
 		}
 	}
 	t.Fatalf("reopen events contain no recovered tool start: %+v", events)
+}
+
+func TestReopenCarriesInterruptedAskQuestionToolAttemptIntoNextModelRequest(t *testing.T) {
+	const (
+		stepID = "interrupted-question-step"
+		callID = "interrupted-question-call"
+	)
+
+	store := mustCreateTestSession(t)
+	mustAppendTestEvent(t, store, stepID, llm.Message{
+		Role:    llm.RoleUser,
+		Content: textutil.Value("input"),
+	})
+	mustAppendTestEvent(t, store, stepID, llm.Message{
+		Role: llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{
+			ID:    callID,
+			Name:  string(toolspec.ToolAskQuestion),
+			Input: json.RawMessage(`{"question":"continue?"}`),
+		}},
+	})
+	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{
+		RecoveryID: "recovery-3",
+		StepID:     stepID,
+		Reason:     "provider_visible_output_persisted",
+		CreatedAt:  time.Unix(0, 0).UTC(),
+	}); err != nil {
+		t.Fatalf("set pending recovery: %v", err)
+	}
+
+	reopened := mustOpenTestSession(t, store.Dir())
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: textutil.Value("resumed"),
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+		},
+	}}}
+	engine := mustNewTestEngine(t, reopened, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	if _, err := engine.SubmitUserMessage(context.Background(), "continue"); err != nil {
+		t.Fatalf("submit after reopen: %v", err)
+	}
+	if len(client.calls) != 1 {
+		t.Fatalf("resumed model requests = %d, want one", len(client.calls))
+	}
+
+	foundCall := false
+	foundOutput := false
+	for _, item := range client.calls[0].Items {
+		if item.CallID == nil || *item.CallID != callID {
+			continue
+		}
+		if item.Type == llm.ResponseItemTypeFunctionCall &&
+			item.Name != nil &&
+			*item.Name == string(toolspec.ToolAskQuestion) {
+			foundCall = true
+		}
+		if item.Type == llm.ResponseItemTypeFunctionCallOutput {
+			foundOutput = true
+		}
+	}
+	if !foundCall || foundOutput {
+		t.Fatalf("resumed ask-question call preservation = call:%t output:%t", foundCall, foundOutput)
+	}
 }
