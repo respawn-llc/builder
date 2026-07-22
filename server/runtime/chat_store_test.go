@@ -2,11 +2,13 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"core/server/llm"
 	"core/server/tools"
 	"core/shared/textutil"
+	"core/shared/toolspec"
 )
 
 func TestBuildRequestUsesLatestHistoryReplacementAndActiveTail(t *testing.T) {
@@ -106,5 +108,70 @@ func assertHistoryReplacementTail(t *testing.T, items []llm.ResponseItem) {
 		items[2].Phase == nil ||
 		*items[2].Phase != llm.MessagePhaseFinal {
 		t.Fatalf("active-tail assistant item = %+v", items[2])
+	}
+}
+
+func TestBuildRequestPreservesMaterializedToolOutputOrder(t *testing.T) {
+	store := mustCreateTestSession(t)
+	calls := []llm.ToolCall{
+		{ID: "call-one", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
+		{ID: "call-two", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
+	}
+	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
+		Role:      llm.RoleAssistant,
+		ToolCalls: calls,
+	}); err != nil {
+		t.Fatalf("append tool calls: %v", err)
+	}
+	for _, call := range calls {
+		output := json.RawMessage(`{"ok":true}`)
+		if _, _, err := appendTestEvent(t, store, "step", storedToolCompletion{
+			CallID: call.ID,
+			Name:   call.Name,
+			Output: output,
+			ProviderItems: []llm.ResponseItem{{
+				Type:   llm.ResponseItemTypeFunctionCallOutput,
+				CallID: textutil.Value(call.ID),
+				Name:   textutil.Value(call.Name),
+				Output: output,
+			}},
+		}); err != nil {
+			t.Fatalf("append completion for %s: %v", call.ID, err)
+		}
+	}
+
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	request, err := engine.buildRequest(context.Background(), "step", true)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	type toolItem struct {
+		kind   llm.ResponseItemType
+		callID string
+	}
+	var actual []toolItem
+	for _, item := range request.Items {
+		if !isToolCallItem(item.Type) && !isToolOutputItem(item.Type) {
+			continue
+		}
+		callID, present := textutil.FirstOptionalTrimmed(item.CallID, item.ID)
+		if !present {
+			t.Fatalf("tool request item lacks call identity: %+v", item)
+		}
+		actual = append(actual, toolItem{kind: item.Type, callID: callID})
+	}
+	want := []toolItem{
+		{kind: llm.ResponseItemTypeFunctionCall, callID: "call-one"},
+		{kind: llm.ResponseItemTypeFunctionCall, callID: "call-two"},
+		{kind: llm.ResponseItemTypeFunctionCallOutput, callID: "call-one"},
+		{kind: llm.ResponseItemTypeFunctionCallOutput, callID: "call-two"},
+	}
+	if len(actual) != len(want) {
+		t.Fatalf("tool request item count = %d, want %d (%+v)", len(actual), len(want), actual)
+	}
+	for index, expected := range want {
+		if actual[index] != expected {
+			t.Fatalf("tool request item[%d] = %+v, want %+v", index, actual[index], expected)
+		}
 	}
 }
