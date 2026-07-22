@@ -445,6 +445,25 @@ func TestGenerateStream_IgnoresWhitespaceOnlyAssistantShimBeforeToolCall(t *test
 	}
 }
 
+func TestGenerateStream_UsesFinalizedOutputTextWhenProviderOmitsDeltas(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_text.done","item_id":"msg_1","output_index":0,"content_index":0,"text":"Compaction summary"}`,
+		`{"type":"response.completed","response":{"output":[]}}`,
+		`[DONE]`,
+	)
+
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if resp.AssistantText != "Compaction summary" {
+		t.Fatalf("assistant text = %q, want finalized output text", resp.AssistantText)
+	}
+	if len(resp.OutputItems) != 1 || resp.OutputItems[0].Content == nil || *resp.OutputItems[0].Content != "Compaction summary" {
+		t.Fatalf("output items = %+v, want synthesized finalized assistant output", resp.OutputItems)
+	}
+}
+
 func TestGenerateStream_DeliversTrailingWhitespaceBeforeToolCallWithoutBuffering(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","output_index":1,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"commentary","content":[]}}`,

@@ -58,6 +58,8 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 			return
 		}
 		a.consumeAssistantDelta(evt.OutputIndex, evt.Delta)
+	case "response.output_text.done":
+		a.assistantMessages.SetFinalizedText(evt.OutputIndex, evt.Text)
 	case "response.output_item.added", "response.output_item.done":
 		if err := a.assistantMessages.Upsert(evt.Item, evt.OutputIndex); err != nil {
 			a.responseError = &responseStreamError{
@@ -426,6 +428,7 @@ type assistantMessageAccumulator struct {
 type assistantAccumulatorItem struct {
 	message       ResponseItem
 	providerPhase *ProviderPhase
+	finalizedText *string
 }
 
 func newAssistantMessageAccumulator() *assistantMessageAccumulator {
@@ -452,11 +455,36 @@ func (a *assistantMessageAccumulator) Upsert(item responses.ResponseOutputItemUn
 		*assistant.Role != RoleAssistant {
 		return nil
 	}
-	if _, exists := a.byIndex[outputIndex]; !exists {
+	current, exists := a.byIndex[outputIndex]
+	if !exists {
 		a.order = append(a.order, outputIndex)
 	}
-	a.byIndex[outputIndex] = assistantAccumulatorItem{message: assistant, providerPhase: providerPhase}
+	a.byIndex[outputIndex] = assistantAccumulatorItem{
+		message:       assistant,
+		providerPhase: providerPhase,
+		finalizedText: current.finalizedText,
+	}
 	return nil
+}
+
+func (a *assistantMessageAccumulator) SetFinalizedText(outputIndex int64, text string) {
+	if a == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+	item, exists := a.byIndex[outputIndex]
+	if !exists {
+		a.order = append(a.order, outputIndex)
+		item = assistantAccumulatorItem{
+			message: ResponseItem{
+				Type:        ResponseItemTypeMessage,
+				OutputIndex: outputIndex,
+				Role:        textutil.Value(RoleAssistant),
+			},
+			providerPhase: AbsentProviderPhase(),
+		}
+	}
+	item.finalizedText = textutil.Value(text)
+	a.byIndex[outputIndex] = item
 }
 
 func (a *assistantMessageAccumulator) Resolve() (string, MessagePhase, *ProviderPhase, int64, bool) {
@@ -469,14 +497,23 @@ func (a *assistantMessageAccumulator) Resolve() (string, MessagePhase, *Provider
 		if !ok ||
 			item.message.Type != ResponseItemTypeMessage ||
 			item.message.Role == nil ||
-			*item.message.Role != RoleAssistant ||
-			item.message.Content == nil ||
-			item.message.Phase == nil {
+			*item.message.Role != RoleAssistant {
 			continue
 		}
+		text := item.message.Content
+		if (text == nil || strings.TrimSpace(*text) == "") && item.finalizedText != nil {
+			text = item.finalizedText
+		}
+		if text == nil {
+			continue
+		}
+		phase := MessagePhase("")
+		if item.message.Phase != nil {
+			phase = *item.message.Phase
+		}
 		segments = append(segments, assistantOutputSegment{
-			Text:          *item.message.Content,
-			Phase:         *item.message.Phase,
+			Text:          *text,
+			Phase:         phase,
 			ProviderPhase: item.providerPhase,
 			OutputIndex:   outputIndex,
 		})
