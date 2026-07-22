@@ -170,6 +170,10 @@ func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 	if err := store.SetName("Session Name"); err != nil {
 		t.Fatalf("set name: %v", err)
 	}
+	role := "worker"
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &role}); err != nil {
+		t.Fatalf("set continuation context: %v", err)
+	}
 	eventLog, err := store.MaterializeEventLog()
 	if err != nil {
 		t.Fatalf("materialize event log: %v", err)
@@ -204,6 +208,9 @@ func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 	if view.Session.SessionID != store.Meta().SessionID || view.Session.SessionName != "Session Name" {
 		t.Fatalf("unexpected session hydration: %+v", view.Session)
 	}
+	if view.Session.AgentRole == nil || *view.Session.AgentRole != role {
+		t.Fatalf("session agent role = %v, want %q", view.Session.AgentRole, role)
+	}
 	if view.Status.ParentAgentSessionID == nil || view.Status.ParentAgentSessionID.String() != parentSessionID ||
 		view.Status.NavigationTargetSessionID == nil || view.Status.NavigationTargetSessionID.String() != parentSessionID ||
 		view.Status.LastCommittedAssistantFinalAnswer != "final answer" {
@@ -217,6 +224,18 @@ func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 	}
 	if view.Activity.ActiveForControl() {
 		t.Fatalf("expected idle activity in idle main view, got %+v", view.Activity)
+	}
+}
+
+func TestSessionViewFromRuntimeOmitsDefaultAgentRole(t *testing.T) {
+	eng := newRuntimeViewEngine(t, newRuntimeViewStore(t), projectionFastClient{})
+
+	view, err := SessionViewFromRuntime(eng)
+	if err != nil {
+		t.Fatalf("project runtime session: %v", err)
+	}
+	if view.AgentRole != nil {
+		t.Fatalf("session agent role = %v, want nil for default agent", view.AgentRole)
 	}
 }
 

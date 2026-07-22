@@ -99,6 +99,22 @@ func TestTranscriptSessionIdentityUpdatesStatusExecutionTarget(t *testing.T) {
 	}
 }
 
+func TestStatusRequestCarriesCachedRuntimeAgentRole(t *testing.T) {
+	role := "worker"
+	runtimeClient := &runtimeControlFakeClient{
+		cachedMainView: clientui.RuntimeMainView{
+			Session: clientui.RuntimeSessionView{AgentRole: &role},
+		},
+		hasCachedMainView: true,
+	}
+	model := newProjectedTestUIModel(runtimeClient)
+
+	request := model.newStatusRequest(time.Now())
+	if request.AgentRole == nil || *request.AgentRole != role {
+		t.Fatalf("status request agent role = %v, want %q", request.AgentRole, role)
+	}
+}
+
 func TestStatusSessionNameResolvesFromSessionViews(t *testing.T) {
 	persistenceRoot := t.TempDir()
 	parentStore := createAuthoritativeAppSession(t, persistenceRoot, "/tmp/work-a")

@@ -166,6 +166,7 @@ func SessionExecutionTargetsEqual(a SessionExecutionTarget, b SessionExecutionTa
 type RuntimeSessionView struct {
 	SessionID             string
 	SessionName           string
+	AgentRole             *string
 	ConversationFreshness ConversationFreshness
 	ExecutionTarget       SessionExecutionTarget
 }

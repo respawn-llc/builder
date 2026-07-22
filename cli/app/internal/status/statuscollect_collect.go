@@ -13,6 +13,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 const DefaultUsageBaseURL = "https://chatgpt.com/backend-api"
@@ -91,6 +92,7 @@ func (c Collector) CollectBase(req Request) Snapshot {
 		Workdir:              filepath.ToSlash(strings.TrimSpace(workdir)),
 		SessionName:          strings.TrimSpace(req.SessionName),
 		SessionID:            strings.TrimSpace(req.SessionID),
+		AgentRole:            textutil.Pointer(req.AgentRole),
 		PreviousSessionID:    previousSessionID,
 		ParentAgentSessionID: parentAgentSessionID,
 		OwnsServer:           req.OwnsServer,

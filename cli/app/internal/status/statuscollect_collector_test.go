@@ -178,3 +178,27 @@ func TestCollectorPreservesStoredAuthStateWhenRefreshFails(t *testing.T) {
 		t.Fatalf("collector warning = %q", snapshot.CollectorWarning)
 	}
 }
+
+func TestCollectBasePreservesOptionalAgentRole(t *testing.T) {
+	role := "worker"
+	for name, agentRole := range map[string]*string{
+		"named agent":   &role,
+		"default agent": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			snapshot := (Collector{}).CollectBase(Request{AgentRole: agentRole})
+			if agentRole == nil {
+				if snapshot.AgentRole != nil {
+					t.Fatalf("snapshot agent role = %v, want nil", snapshot.AgentRole)
+				}
+				return
+			}
+			if snapshot.AgentRole == nil || *snapshot.AgentRole != *agentRole {
+				t.Fatalf("snapshot agent role = %v, want %q", snapshot.AgentRole, *agentRole)
+			}
+			if snapshot.AgentRole == agentRole {
+				t.Fatal("snapshot agent role aliases request")
+			}
+		})
+	}
+}

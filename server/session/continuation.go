@@ -10,6 +10,15 @@ import (
 
 var ErrInvalidContinuationAgentRole = errors.New("invalid continuation agent role")
 
+// ContinuationAgentRole returns the persisted named role, if one was selected.
+func ContinuationAgentRole(meta Meta) *string {
+	if meta.Continuation == nil || meta.Continuation.AgentRole == nil {
+		return nil
+	}
+	role := *meta.Continuation.AgentRole
+	return &role
+}
+
 // NormalizeContinuationContext validates persisted continuation metadata at
 // every persistence boundary. An omitted or JSON-null role is the sole
 // default-agent encoding.
