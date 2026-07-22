@@ -12,6 +12,7 @@ import (
 
 	"core/server/metadata"
 	"core/server/session"
+	"core/server/sessionruntime"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
@@ -131,18 +132,19 @@ func (s *Service) executeDeleteLocked(
 	if err != nil {
 		return serverapi.WorktreeDeleteCompletedResult{}, err
 	}
-	mutationCtx, releaseRuns, blockers, err := s.freezeDeleteTargetSessions(ctx, workspaceCtx.sessionID, record)
+	targetRoot := ""
+	if target != nil {
+		targetRoot = target.record.CanonicalRoot
+	} else if record != nil {
+		targetRoot = record.CanonicalRoot
+	}
+	activityLease, err := s.acquireDeleteTargetActivity(ctx, workspaceCtx.sessionID, record, targetRoot)
 	if err != nil {
 		return serverapi.WorktreeDeleteCompletedResult{}, err
 	}
-	defer releaseRuns()
-	if len(blockers) > 0 {
-		return serverapi.WorktreeDeleteCompletedResult{}, activeDeleteBlockerError(blockers)
-	}
+	defer activityLease.Close()
+	mutationCtx := activityLease.Context()
 	if target != nil {
-		if processBlockers := s.backgroundProcessBlockers(target.record.CanonicalRoot); len(processBlockers) > 0 {
-			return serverapi.WorktreeDeleteCompletedResult{}, errors.Join(serverapi.ErrWorktreeBlocked, fmt.Errorf("worktree has active background processes: %s", strings.Join(processBlockers, ", ")))
-		}
 		if err := s.ensureDeleteFolderRemovalAuthorized(ctx, target, req.ForceFolderRemoval); err != nil {
 			return serverapi.WorktreeDeleteCompletedResult{}, err
 		}
@@ -269,46 +271,62 @@ func (s *Service) retainManagedTaskWorktreeRecord(ctx context.Context, record *m
 	return taskManagers > 0, nil
 }
 
-func (s *Service) freezeDeleteTargetSessions(
+func (s *Service) acquireDeleteTargetActivity(
 	ctx context.Context,
 	currentSessionID string,
 	record *metadata.WorktreeRecord,
-) (context.Context, func(), []metadata.WorktreeSessionBlocker, error) {
-	if record == nil {
-		return ctx, func() {}, nil, nil
-	}
-	sessions, err := s.metadata.ListSessionsTargetingWorktree(ctx, record.ID)
-	if err != nil {
-		return ctx, func() {}, nil, err
-	}
-	sessionIDs := make([]string, 0, len(sessions))
-	for _, target := range sessions {
-		if id := strings.TrimSpace(target.SessionID); id != "" {
-			sessionIDs = append(sessionIDs, id)
-		}
-	}
-	startBlock, err := s.blockSessionStarts(ctx, sessionIDs)
-	if err != nil {
-		return ctx, func() {}, nil, err
-	}
-	release := func() { releaseSessionStarts(startBlock) }
-	mutationCtx := authorizeSessionMaintenance(ctx, startBlock)
-	activeBlockers := make([]metadata.WorktreeSessionBlocker, 0)
-	for _, target := range sessions {
-		sessionID := strings.TrimSpace(target.SessionID)
-		if sessionID == "" || sessionID == strings.TrimSpace(currentSessionID) {
-			continue
-		}
-		active, err := s.authority.HasBlockingRuntimeActivity(ctx, sessionID)
+	worktreeRoot string,
+) (deleteTargetActivityLease, error) {
+	lease := deleteTargetActivityLease{ctx: ctx, close: func() {}}
+	if record != nil {
+		sessions, err := s.metadata.ListSessionsTargetingWorktree(ctx, record.ID)
 		if err != nil {
-			release()
-			return ctx, func() {}, nil, err
+			return deleteTargetActivityLease{}, err
 		}
-		if active {
-			activeBlockers = append(activeBlockers, target)
+		trimmedCurrentSessionID := strings.TrimSpace(currentSessionID)
+		sessionIDs := make([]string, 0, len(sessions))
+		for _, target := range sessions {
+			sessionID := strings.TrimSpace(target.SessionID)
+			if sessionID != "" && sessionID != trimmedCurrentSessionID {
+				sessionIDs = append(sessionIDs, sessionID)
+			}
+		}
+		startBlock, err := s.tryBlockSessionStarts(ctx, sessionIDs)
+		if err != nil {
+			if errors.Is(err, sessionruntime.ErrSessionStartAdmissionBusy) {
+				return deleteTargetActivityLease{}, errors.Join(serverapi.ErrWorktreeBlocked, err)
+			}
+			return deleteTargetActivityLease{}, err
+		}
+		lease.close = func() { releaseSessionStarts(startBlock) }
+		lease.ctx = authorizeSessionMaintenance(ctx, startBlock)
+		activeBlockers := make([]metadata.WorktreeSessionBlocker, 0)
+		for _, target := range sessions {
+			sessionID := strings.TrimSpace(target.SessionID)
+			if sessionID == "" || sessionID == trimmedCurrentSessionID {
+				continue
+			}
+			active, err := s.authority.HasBlockingRuntimeActivity(ctx, sessionID)
+			if err != nil {
+				lease.Close()
+				return deleteTargetActivityLease{}, err
+			}
+			if active {
+				activeBlockers = append(activeBlockers, target)
+			}
+		}
+		if len(activeBlockers) > 0 {
+			lease.Close()
+			return deleteTargetActivityLease{}, activeDeleteBlockerError(activeBlockers)
 		}
 	}
-	return mutationCtx, release, activeBlockers, nil
+	if strings.TrimSpace(worktreeRoot) != "" {
+		if processBlockers := s.backgroundProcessBlockers(worktreeRoot); len(processBlockers) > 0 {
+			lease.Close()
+			return deleteTargetActivityLease{}, errors.Join(serverapi.ErrWorktreeBlocked, fmt.Errorf("worktree has active background processes: %s", strings.Join(processBlockers, ", ")))
+		}
+	}
+	return lease, nil
 }
 
 func activeDeleteBlockerError(blockers []metadata.WorktreeSessionBlocker) error {

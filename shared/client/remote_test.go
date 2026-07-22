@@ -39,6 +39,20 @@ func TestProtocolErrorReconstructsModelStreamStalled(t *testing.T) {
 	}
 }
 
+func TestProtocolErrorDecodesWorktreeBlocked(t *testing.T) {
+	diagnostic := "target has a live run"
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeWorktreeBlocked,
+		Message: diagnostic,
+	})
+	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
+		t.Fatalf("decoded error = %v, want ErrWorktreeBlocked", err)
+	}
+	if err.Error() != diagnostic {
+		t.Fatalf("decoded diagnostic = %q, want %q", err.Error(), diagnostic)
+	}
+}
+
 func TestDialRemoteWithTransportRejectsBlankSessionID(t *testing.T) {
 	if _, err := newRemoteSessionAttachmentIntent(" \t "); !errors.Is(err, errRemoteSessionIDRequired) {
 		t.Fatalf("intent error = %v, want required session ID error", err)
