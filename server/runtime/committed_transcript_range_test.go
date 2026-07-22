@@ -238,6 +238,54 @@ func TestStepLoopPublishesCommentaryToolEnvelopeBeforeReasoningAndToolResults(t 
 	assertDurableTranscriptProjectionRangesContiguous(t, committed)
 }
 
+func TestTranscriptHydrationRetainsAdjacentRowsAroundProviderEmptyAssistant(t *testing.T) {
+	const (
+		beforeStepID = "11111111-1111-4111-8111-111111111111"
+		emptyStepID  = "22222222-2222-4222-8222-222222222222"
+		afterStepID  = "33333333-3333-4333-8333-333333333333"
+	)
+	store := mustCreateTestSession(t)
+	for _, testCase := range []struct {
+		stepID  string
+		message llm.Message
+	}{
+		{
+			stepID:  beforeStepID,
+			message: llm.Message{Role: llm.RoleUser, Content: textutil.Value("before")},
+		},
+		{
+			stepID: emptyStepID,
+			message: llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal)},
+		},
+		{
+			stepID:  afterStepID,
+			message: llm.Message{Role: llm.RoleUser, Content: textutil.Value("after")},
+		},
+	} {
+		if _, _, err := appendTestEvent(t, store, testCase.stepID, testCase.message); err != nil {
+			t.Fatalf("append persisted message for step %q: %v", testCase.stepID, err)
+		}
+	}
+
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	var hydration TranscriptHydrationSnapshot
+	if err := engine.WithTranscriptHydrationSnapshot(func(snapshot TranscriptHydrationSnapshot) error {
+		hydration = snapshot
+		return nil
+	}); err != nil {
+		t.Fatalf("hydrate restored transcript: %v", err)
+	}
+	if len(hydration.CommittedRows) != 2 {
+		t.Fatalf("hydrated rows = %+v", hydration.CommittedRows)
+	}
+	for index, stepID := range []string{beforeStepID, afterStepID} {
+		row := hydration.CommittedRows[index]
+		if row.StepID != stepID || row.Kind != TranscriptCommittedRowFactUser || row.User == nil {
+			t.Fatalf("hydrated row[%d] = %+v", index, row)
+		}
+	}
+}
+
 func durableTranscriptProjectionEvents(events []Event) []Event {
 	committed := make([]Event, 0, len(events))
 	for _, event := range events {
