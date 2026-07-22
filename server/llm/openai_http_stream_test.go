@@ -346,6 +346,37 @@ func TestGenerateStream_EmitsAssistantDeltasAndToolCalls(t *testing.T) {
 }
 
 func TestGenerateStream_PreservesWhitespaceOnlyFunctionArgumentDelta(t *testing.T) {
+	const inputPrefix = `{"session_id":1000,"chars":"`
+	const inputSuffix = `","yield_time_ms":9223372036854775807}`
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_item.added","item":{"id":"fc_1","type":"function_call","name":"write_stdin","call_id":"call_1","arguments":""}}`,
+		fmt.Sprintf(`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":%q}`, inputPrefix),
+		fmt.Sprintf(`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":%q}`, " "),
+		fmt.Sprintf(`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":%q}`, inputSuffix),
+		`{"type":"response.completed","response":{"output":[]}}`,
+		`[DONE]`,
+	)
+
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("expected one tool call, got %+v", resp.ToolCalls)
+	}
+	var decodedInput struct {
+		Chars       string `json:"chars"`
+		YieldTimeMS int    `json:"yield_time_ms"`
+	}
+	if err := json.Unmarshal(resp.ToolCalls[0].Input, &decodedInput); err != nil {
+		t.Fatalf("decode streamed write_stdin input %q: %v", resp.ToolCalls[0].Input, err)
+	}
+	if decodedInput.Chars != " " || decodedInput.YieldTimeMS != math.MaxInt {
+		t.Fatalf("streamed write_stdin input = %+v", decodedInput)
+	}
+}
+
+func TestGenerateStream_PreservesNewlineInputAcrossCompletedSnapshots(t *testing.T) {
 	const input = `{"session_id":1000,"chars":"\n","yield_time_ms":9223372036854775807}`
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","item":{"id":"fc_1","type":"function_call","name":"write_stdin","call_id":"call_1","arguments":""}}`,
