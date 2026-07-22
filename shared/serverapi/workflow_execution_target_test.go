@@ -224,6 +224,12 @@ func TestWorkflowTaskDetailCarriesOnlyCurrentExecutionTargets(t *testing.T) {
 			t.Fatalf("task detail omitted required array %q: %s", requiredArray, data)
 		}
 	}
+	workflowType := reflect.TypeOf(WorkflowTaskDetail{}.Workflow)
+	for _, workflowLevelField := range []string{"ValidForTaskCreation", "ValidationErrors"} {
+		if _, exists := workflowType.FieldByName(workflowLevelField); exists {
+			t.Fatalf("WorkflowTaskDetail workflow still embeds workflow-level field %s", workflowLevelField)
+		}
+	}
 }
 
 func TestWorkflowTaskDetailKeepsRecordedWorktreePathOffBoardCards(t *testing.T) {

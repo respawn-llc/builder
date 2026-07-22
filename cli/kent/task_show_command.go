@@ -17,7 +17,7 @@ type taskShowOutput struct {
 	Body              string                                `json:"body"`
 	SourceURL         string                                `json:"source_url,omitempty"`
 	Project           serverapi.ProjectBoardProject         `json:"project"`
-	Workflow          serverapi.WorkflowPickerItem          `json:"workflow"`
+	Workflow          serverapi.WorkflowTaskWorkflowSummary `json:"workflow"`
 	SourceWorkspace   serverapi.ProjectWorkspaceSummary     `json:"source_workspace"`
 	ExecutionTarget   *serverapi.WorkflowExecutionTarget    `json:"execution_target,omitempty"`
 	WorktreePath      *string                               `json:"worktree_path"`

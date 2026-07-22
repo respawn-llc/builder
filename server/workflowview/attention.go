@@ -243,7 +243,10 @@ func (a *Attention) itemFromCandidate(ctx context.Context, row attentionCandidat
 		if err != nil {
 			return serverapi.WorkflowAttentionItem{}, false, err
 		}
-		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: "approval", ProjectID: row.projectID, WorkflowID: &workflowID, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, TaskTransitionID: transitionID, Message: workflowattention.ApprovalRequiredMessage, ApprovalSnapshot: &snapshot, OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
+		if snapshot == nil {
+			return serverapi.WorkflowAttentionItem{}, false, nil
+		}
+		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: "approval", ProjectID: row.projectID, WorkflowID: &workflowID, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, TaskTransitionID: transitionID, Message: workflowattention.ApprovalRequiredMessage, ApprovalSnapshot: snapshot, OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
 	case "question":
 		taskID, err := requiredAttentionCandidateValue(row, "task_id", row.taskID)
 		if err != nil {
@@ -305,25 +308,31 @@ func (a *Attention) itemFromCandidate(ctx context.Context, row attentionCandidat
 	}
 }
 
-func (a *Attention) approvalSnapshot(ctx context.Context, taskID string, transitionID string) (serverapi.WorkflowAttentionApprovalSnapshot, error) {
+func (a *Attention) approvalSnapshot(ctx context.Context, taskID string, transitionID string) (*serverapi.WorkflowAttentionApprovalSnapshot, error) {
 	transitions, err := a.queries.ListTaskTransitionsByIDs(ctx, []string{transitionID})
 	if err != nil {
-		return serverapi.WorkflowAttentionApprovalSnapshot{}, err
+		return nil, err
 	}
-	if len(transitions) != 1 {
-		return serverapi.WorkflowAttentionApprovalSnapshot{}, fmt.Errorf("approval attention transition %q returned %d records", transitionID, len(transitions))
+	if len(transitions) == 0 {
+		return nil, nil
+	}
+	if len(transitions) > 1 {
+		return nil, fmt.Errorf("approval attention transition %q returned %d records", transitionID, len(transitions))
 	}
 	transition := transitions[0]
-	if transition.ID != transitionID || transition.TaskID != taskID || transition.State != "pending_approval" {
-		return serverapi.WorkflowAttentionApprovalSnapshot{}, fmt.Errorf("approval attention transition %q does not match pending task %q", transitionID, taskID)
+	if transition.ID != transitionID || transition.TaskID != taskID {
+		return nil, fmt.Errorf("approval attention transition %q does not match task %q", transitionID, taskID)
+	}
+	if transition.State != "pending_approval" {
+		return nil, nil
 	}
 	edges, err := a.queries.ListTaskTransitionEdges(ctx, transitionID)
 	if err != nil {
-		return serverapi.WorkflowAttentionApprovalSnapshot{}, err
+		return nil, err
 	}
 	projected, err := a.projector.ProjectTransition(TransitionProjectionInput{Transition: transition, Edges: edges})
 	if err != nil {
-		return serverapi.WorkflowAttentionApprovalSnapshot{}, err
+		return nil, err
 	}
 	snapshot := serverapi.WorkflowAttentionApprovalSnapshot{
 		SourceNodeDisplayName: projected.SourceNodeDisplayName,
@@ -337,7 +346,7 @@ func (a *Attention) approvalSnapshot(ctx context.Context, taskID string, transit
 			DisplayName: edge.TargetNodeDisplayName,
 		})
 	}
-	return snapshot, nil
+	return &snapshot, nil
 }
 
 func requiredAttentionCandidateValue(row attentionCandidateRow, field string, value *string) (string, error) {

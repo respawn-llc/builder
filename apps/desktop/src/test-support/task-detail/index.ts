@@ -26,11 +26,7 @@ export const taskUpdateParamsSchema = jsonObjectSchema.and(
 const workflow = {
   workflow_id: "workflow-1",
   display_name: "Delivery",
-  description: "",
   version: 1,
-  is_project_default: true,
-  valid_for_task_creation: true,
-  validation_errors: [],
 };
 
 const workspace = {

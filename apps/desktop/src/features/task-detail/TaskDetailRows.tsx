@@ -438,10 +438,6 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
   }
 
   async function openScript(path: string): Promise<void> {
-    if (executionRoot === null) {
-      setOpenError(t("task.scriptPathUnavailable"));
-      return;
-    }
     await nativeBridge.files.openFile({ basePath: executionRoot, path });
   }
 
