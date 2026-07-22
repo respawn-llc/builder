@@ -115,6 +115,15 @@ func TestReopenCarriesInterruptedShellToolAttemptIntoNextModelRequest(t *testing
 	})
 }
 
+func TestReopenCarriesInterruptedApprovalBackedPatchToolAttemptIntoNextModelRequest(t *testing.T) {
+	testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t, llm.ToolCall{
+		ID:          "interrupted-patch-call",
+		Name:        string(toolspec.ToolPatch),
+		Custom:      true,
+		CustomInput: textutil.Value("*** Begin Patch\n*** Add File: ../outside.txt\n+content\n*** End Patch\n"),
+	})
+}
+
 func testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(
 	t *testing.T,
 	call llm.ToolCall,
