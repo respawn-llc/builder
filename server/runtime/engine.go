@@ -764,11 +764,12 @@ func (e *Engine) runStepLoopWithPendingUserInjectionObserver(ctx context.Context
 	reviewerFrequency := e.ReviewerFrequency()
 	reviewerClient := e.reviewerRuntimeState().Client()
 	result, err := e.runStepLoopWithQueuedUserFlushObserver(ctx, stepID, reviewerFrequency, reviewerClient, true, onQueuedUserFlushCommitted)
-	if result.NoopFinalAnswer {
+	if result.FinalAnswer == nil {
 		return llm.Message{}, err
 	}
-	e.recordLiveRunAssistantFinalAnswer(stepID, result.Message)
-	return result.Message, err
+	finalAnswer := *result.FinalAnswer
+	e.recordLiveRunAssistantFinalAnswer(stepID, finalAnswer)
+	return finalAnswer, err
 }
 
 // runStepLoopWithOptions executes a single assistant/tool loop.

@@ -131,12 +131,12 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				return stepLoopResult{}, err
 			}
 			if terminal {
-				return stepLoopResult{Message: prepared.assistant, ExecutedToolCall: executedToolCall}, nil
+				return stepLoopResult{ExecutedToolCall: executedToolCall}, nil
 			}
 			continue
 		case completedResponseNextFinalAnswerToolsTerminal:
 			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
-			return stepLoopResult{Message: prepared.assistant, ExecutedToolCall: true}, nil
+			return stepLoopResult{FinalAnswer: textutil.Value(prepared.assistant), ExecutedToolCall: true}, nil
 		case completedResponseNextAccepted:
 		default:
 			return stepLoopResult{}, errors.New("completed response preparation produced an invalid next action")
@@ -185,7 +185,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				return stepLoopResult{}, err
 			}
 			if terminal {
-				return stepLoopResult{Message: assistantMsg, ExecutedToolCall: executedToolCall}, nil
+				return stepLoopResult{FinalAnswer: textutil.Value(assistantMsg), ExecutedToolCall: executedToolCall}, nil
 			}
 			if handled {
 				continue
@@ -258,7 +258,10 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 						return stepLoopResult{}, err
 					}
 					if terminal {
-						return stepLoopResult{Message: assistantMsg, ExecutedToolCall: executedToolCall}, nil
+						if noopFinalAnswer {
+							return stepLoopResult{ExecutedToolCall: executedToolCall}, nil
+						}
+						return stepLoopResult{FinalAnswer: textutil.Value(assistantMsg), ExecutedToolCall: executedToolCall}, nil
 					}
 					if handled {
 						continue
@@ -292,7 +295,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 					}
 					continue
 				}
-				return stepLoopResult{Message: resolved, ExecutedToolCall: executedToolCall, NoopFinalAnswer: true, AssistantCommittedStart: resolvedCommittedStart, AssistantCommittedStartSet: resolvedCommittedStartSet}, nil
+				return stepLoopResult{ExecutedToolCall: executedToolCall, AssistantCommittedStart: resolvedCommittedStart, AssistantCommittedStartSet: resolvedCommittedStartSet}, nil
 			}
 
 			resolvedCommittedStart, resolvedCommittedStartSet := committedAssistantCoordinateFields(resolvedCommittedCoordinate)
@@ -335,7 +338,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				return stepLoopResult{}, err
 			}
 			resolvedCommittedStart, resolvedCommittedStartSet = committedAssistantCoordinateFields(resolvedCommittedCoordinate)
-			return stepLoopResult{Message: resolved, ExecutedToolCall: executedToolCall, AssistantCommittedStart: resolvedCommittedStart, AssistantCommittedStartSet: resolvedCommittedStartSet}, nil
+			return stepLoopResult{FinalAnswer: textutil.Value(resolved), ExecutedToolCall: executedToolCall, AssistantCommittedStart: resolvedCommittedStart, AssistantCommittedStartSet: resolvedCommittedStartSet}, nil
 		}
 
 		applied, terminal, err := s.executeLocalToolCallsAndAppendResults(ctx, stepID, localToolCalls)
@@ -345,7 +348,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		patchEditsApplied = patchEditsApplied || applied
 		if terminal {
 			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
-			return stepLoopResult{Message: assistantMsg, ExecutedToolCall: true}, nil
+			return stepLoopResult{ExecutedToolCall: true}, nil
 		}
 		if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
 			return stepLoopResult{}, err

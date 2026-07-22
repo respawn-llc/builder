@@ -1098,6 +1098,7 @@ func TestWorkflowShellToolDurableCompletionStopsAfterToolResult(t *testing.T) {
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	shellTool := &externalCompletionTool{controller: controller}
+	events := &liveRunEventCollector{}
 	client := &fakeClient{responses: []llm.Response{
 		commentaryResponse("run completion command",
 			llm.ToolCall{ID: "call_shell", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"kent task complete"}`)},
@@ -1106,6 +1107,7 @@ func TestWorkflowShellToolDurableCompletionStopsAfterToolResult(t *testing.T) {
 	}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shellTool}), Config{
 		WorkflowRun: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
+		OnEvent:     events.accept,
 	})
 
 	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
@@ -1119,18 +1121,24 @@ func TestWorkflowShellToolDurableCompletionStopsAfterToolResult(t *testing.T) {
 		t.Fatalf("runtime completions = %d, want external completion only", got)
 	}
 	assertToolMessageWithCallID(t, eng, "call_shell")
+	if got := events.count(); got != 0 {
+		t.Fatalf("shell-command workflow completion published final-answer terminal facts: %+v", events.snapshot())
+	}
 }
 
 func TestWorkflowDelayedDurableCompletionObservedBeforeNextModelTurn(t *testing.T) {
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{completeExternallyAfterObservations: 4}
+	events := &liveRunEventCollector{}
 	client := &fakeClient{responses: []llm.Response{
 		commentaryResponse("run background completion",
 			llm.ToolCall{ID: "call_shell", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"kent task complete &"}`)},
 		),
 		structuredFinalResponse("unexpected"),
 	}}
-	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand), Config{})
+	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand), Config{
+		OnEvent: events.accept,
+	})
 
 	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
 		t.Fatalf("submit: %v", err)
@@ -1139,6 +1147,9 @@ func TestWorkflowDelayedDurableCompletionObservedBeforeNextModelTurn(t *testing.
 	assertToolMessageWithCallID(t, eng, "call_shell")
 	if got := controller.completionObservations.Load(); got < 4 {
 		t.Fatalf("completion observations = %d, want post-tool and next-turn checks", got)
+	}
+	if got := events.count(); got != 0 {
+		t.Fatalf("external workflow completion published final-answer terminal facts: %+v", events.snapshot())
 	}
 }
 
