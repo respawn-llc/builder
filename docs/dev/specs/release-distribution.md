@@ -66,9 +66,10 @@
 - `desktop-checksums.txt` carries sha256s for the distributable bundles.
 - macOS bundles are Developer ID signed in CI (`APPLE_CERTIFICATE`); notarization is
   off for v1 (Apple-side blocked), so v1 ships signed + un-notarized. The macOS
-  build runner is pinned `macos-26` for the liquid-glass icon toolchain. Minimum
-  deployment target is macOS 15 (Sequoia); Liquid Glass UI falls back to
-  `NSVisualEffectView` on pre-26 macOS.
+  build uses GitHub's `macos-latest` Arm64 runner and its default Xcode; when Icon
+  Composer is unavailable, the bundle uses the PNG-derived icon. Minimum deployment
+  target is macOS 15 (Sequoia); Liquid Glass UI falls back to `NSVisualEffectView`
+  on pre-26 macOS.
 
 ## Desktop App Updates
 
