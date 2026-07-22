@@ -112,7 +112,6 @@ func (s *Service) trySubmitUserTurnAsActiveLiveSteer(ctx context.Context, attemp
 	steered := false
 	runCtx, stopRunCtx := mergeOperationContexts(ctx, attempt.Context())
 	defer stopRunCtx()
-	liveClientRequestID := runtimeids.NewRuntimeClientRequestID()
 	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
 	if err != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, false, err
@@ -122,7 +121,7 @@ func (s *Service) trySubmitUserTurnAsActiveLiveSteer(ctx context.Context, attemp
 	}
 	err = s.withLiveExecutionRuntime(runCtx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
 		committed, err := s.operations.TryCommitOperationMutation(memoReq.SessionID, req.OperationRef, func() error {
-			item, accepted, err := engine.QueueUserMessageForActiveRun(runCtx, memoReq.Text, liveClientRequestID, nil)
+			item, accepted, err := engine.QueueUserMessageForActiveRun(runCtx, memoReq.Text, req.OperationRef.ClientRequestID, nil)
 			if err != nil {
 				return err
 			}
