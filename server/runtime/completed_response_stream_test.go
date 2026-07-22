@@ -11,6 +11,7 @@ import (
 	"core/server/session"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -135,6 +136,81 @@ func TestWorkflowDurableCompletionBeforeModelTurnStopsWithoutRequest(t *testing.
 	}
 }
 
+func TestWorkflowDelayedDurableCompletionObservedBeforeNextModelTurn(t *testing.T) {
+	const callID = "workflow-delayed-completion-call"
+	controller := &externallyCompletedWorkflowController{completeAfterObservations: 4}
+	runID := workflow.RunID("workflow-run")
+	toolCall := llm.ToolCall{
+		ID:    callID,
+		Name:  string(toolspec.ToolExecCommand),
+		Input: mustJSON(map[string]any{"cmd": "pwd"}),
+	}
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{
+			Role:      llm.RoleAssistant,
+			Phase:     textutil.Value(llm.MessagePhaseCommentary),
+			Content:   textutil.Value("working"),
+			ToolCalls: []llm.ToolCall{toolCall},
+		},
+		ToolCalls: []llm.ToolCall{toolCall},
+		Usage:     llm.Usage{InputTokens: 100, WindowTokens: 2_000},
+	}}}
+	store := mustCreateTestSession(t)
+	engine := mustNewExecTestEngine(
+		t,
+		store,
+		client,
+		Config{
+			Model:        "gpt-5",
+			EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
+			WorkflowRun: &workflowruntime.Config{
+				RunID:          runID,
+				Contract:       workflowruntime.CompletionContract{RunID: runID},
+				CompletionMode: workflowruntime.CompletionModeShellCommand,
+				Controller:     controller,
+			},
+		},
+	)
+
+	if _, err := engine.SubmitWorkflowTurn(context.Background()); err != nil {
+		t.Fatalf("submit workflow turn: %v", err)
+	}
+	if calls := len(client.calls); calls != 1 {
+		t.Fatalf("delayed workflow completion dispatched %d model requests, want 1", calls)
+	}
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	if err != nil {
+		t.Fatalf("read bounded workflow records: %v", err)
+	}
+	foundCompletion := false
+	for _, record := range window.Records {
+		completion, ok := mustSessionEventPayload(record).(session.ToolCompletionRecord)
+		if !ok || completion.CallID != callID {
+			continue
+		}
+		if completion.IsError || completion.Name != string(toolspec.ToolExecCommand) {
+			t.Fatalf("workflow tool completion is an error: %+v", completion)
+		}
+		foundCompletion = true
+	}
+	if !foundCompletion {
+		t.Fatalf("bounded workflow records contain no tool completion for %q", callID)
+	}
+	terminal := engine.WorkflowTerminalState()
+	if !terminal.Completed ||
+		terminal.Source != WorkflowCompletionSourceObserved ||
+		terminal.RunID != string(runID) {
+		t.Fatalf("workflow terminal state after delayed completion = %+v", terminal)
+	}
+	if observations := controller.observations.Load(); observations < controller.completeAfterObservations {
+		t.Fatalf(
+			"completion observations = %d, want at least %d",
+			observations,
+			controller.completeAfterObservations,
+		)
+	}
+}
+
 func TestCompletedResponseFinalizationUsesActiveSegmentCoordinatesAfterCompaction(t *testing.T) {
 	first := scriptedllm.FinalAnswer("first")
 	first.StreamDeltas = []llm.AssistantDelta{{Text: "first", Phase: llm.MessagePhaseFinal}}
@@ -231,7 +307,9 @@ func TestCompletedResponseFinalizationUsesActiveSegmentCoordinatesAfterCompactio
 }
 
 type externallyCompletedWorkflowController struct {
-	completed atomic.Bool
+	completed                 atomic.Bool
+	observations              atomic.Int32
+	completeAfterObservations int32
 }
 
 func (c *externallyCompletedWorkflowController) CompleteWorkflowRun(
@@ -259,5 +337,8 @@ func (c *externallyCompletedWorkflowController) ObserveWorkflowRunCompletion(
 	context.Context,
 	workflowruntime.CompletionObservationRequest,
 ) (workflowruntime.CompletionObservationResult, error) {
+	if count := c.observations.Add(1); c.completeAfterObservations > 0 && count >= c.completeAfterObservations {
+		c.completed.Store(true)
+	}
 	return workflowruntime.CompletionObservationResult{Completed: c.completed.Load()}, nil
 }
