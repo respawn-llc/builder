@@ -5,11 +5,12 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+
+	"core/internal/testharness"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -18,36 +19,22 @@ func TestRuntimeActivityLivenessSourcesStayAllowlisted(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	seen := make(map[string]map[string]struct{})
 	violations := make([]string, 0)
-	for _, root := range []string{"server", "shared", "cli"} {
-		walkRoot := filepath.Join(repoRoot, root)
-		if err := filepath.WalkDir(walkRoot, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				if d.Name() == "sqlitegen" || d.Name() == "sqlitelifecyclegen" {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			fileSet := token.NewFileSet()
-			file, parseErr := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
-			if parseErr != nil {
-				return parseErr
-			}
-			relPath, relErr := filepath.Rel(repoRoot, path)
-			if relErr != nil {
-				relPath = path
+	pkgs := testharness.LoadTypedPackages(t, repoRoot, false, "./server/...", "./shared/...", "./cli/...")
+	for _, pkg := range pkgs {
+		if !isProductionRepositoryPackage(pkg) {
+			continue
+		}
+		for _, file := range pkg.Syntax {
+			relPath, found := testharness.RepositoryRelativePath(repoRoot, pkg.Fset.Position(file.Pos()).Filename)
+			if !found {
+				t.Fatalf("runtime liveness guard source is outside repository: %s", pkg.Fset.Position(file.Pos()).Filename)
 			}
 			ast.Inspect(file, func(node ast.Node) bool {
 				ident, ok := node.(*ast.Ident)
 				if !ok {
 					return true
 				}
-				source, forbidden := forbiddenRuntimeLivenessIdentifier(ident.Name)
+				source, forbidden := forbiddenRuntimeLivenessFunction(pkg.TypesInfo.Uses[ident])
 				if !forbidden {
 					return true
 				}
@@ -59,13 +46,10 @@ func TestRuntimeActivityLivenessSourcesStayAllowlisted(t *testing.T) {
 					seen[relPath][source] = struct{}{}
 					return true
 				}
-				position := fileSet.Position(ident.Pos())
+				position := testharness.SourcePosition(pkg, ident.Pos())
 				violations = append(violations, relPath+":"+position.String()+": runtime activity must not use transitional liveness source "+source)
 				return true
 			})
-			return nil
-		}); err != nil {
-			t.Fatalf("scan runtime liveness sources: %v", err)
 		}
 	}
 	for relPath, sources := range allowedRuntimeLivenessSources {
@@ -91,38 +75,15 @@ func TestRuntimeActivityLivenessSourcesStayAllowlisted(t *testing.T) {
 func TestRuntimeActivityActiveStepAuthorityStaysBehindResolverSeam(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	violations := make([]string, 0)
-	allowedPrefixes := []string{
-		filepath.Join("server", "runtime") + string(filepath.Separator),
-		filepath.Join("server", "runtimeactivity") + string(filepath.Separator),
-	}
-	for _, root := range []string{"server"} {
-		walkRoot := filepath.Join(repoRoot, root)
-		if err := filepath.WalkDir(walkRoot, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				if d.Name() == "sqlitegen" || d.Name() == "sqlitelifecyclegen" {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			relPath, relErr := filepath.Rel(repoRoot, path)
-			if relErr != nil {
-				relPath = path
-			}
-			for _, prefix := range allowedPrefixes {
-				if strings.HasPrefix(relPath, prefix) {
-					return nil
-				}
-			}
-			fileSet := token.NewFileSet()
-			file, parseErr := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
-			if parseErr != nil {
-				return parseErr
+	pkgs := testharness.LoadTypedPackages(t, repoRoot, false, "./server/...")
+	for _, pkg := range pkgs {
+		if !isProductionRepositoryPackage(pkg) || runtimeActivityAuthorityPackage[pkg.PkgPath] {
+			continue
+		}
+		for _, file := range pkg.Syntax {
+			relPath, found := testharness.RepositoryRelativePath(repoRoot, pkg.Fset.Position(file.Pos()).Filename)
+			if !found {
+				t.Fatalf("runtime active-step guard source is outside repository: %s", pkg.Fset.Position(file.Pos()).Filename)
 			}
 			ast.Inspect(file, func(node ast.Node) bool {
 				call, ok := node.(*ast.CallExpr)
@@ -133,16 +94,12 @@ func TestRuntimeActivityActiveStepAuthorityStaysBehindResolverSeam(t *testing.T)
 				if !ok {
 					return true
 				}
-				switch selector.Sel.Name {
-				case "ActiveRun", "ActiveStepSnapshot":
-					position := fileSet.Position(selector.Sel.Pos())
+				if isForbiddenRuntimeActiveStepMethod(pkg.TypesInfo.Selections[selector]) {
+					position := testharness.SourcePosition(pkg, selector.Sel.Pos())
 					violations = append(violations, relPath+":"+position.String()+": server liveness must read active step through server/runtimeactivity resolver seam")
 				}
 				return true
 			})
-			return nil
-		}); err != nil {
-			t.Fatalf("scan active-step authority seam: %v", err)
 		}
 	}
 	if len(violations) > 0 {
@@ -153,10 +110,11 @@ func TestRuntimeActivityActiveStepAuthorityStaysBehindResolverSeam(t *testing.T)
 
 func TestRuntimeReadModelClockConsumersDoNotUseGlobalCoordinator(t *testing.T) {
 	repoRoot := findRepoRoot(t)
-	pkg := structuredGuardPackageByPath(t, loadStructuredGuardPackages(t, repoRoot, false, "./server/runtimeops"), "core/server/runtimeops")
+	pkg := testharness.PackageByPath(t, testharness.LoadTypedPackages(t, repoRoot, false, "./server/runtimeops"), "core/server/runtimeops")
 	foundCoordinator := false
 	for index, file := range pkg.Syntax {
-		if structuredGuardRelativePath(repoRoot, pkg.CompiledGoFiles[index]) != "server/runtimeops/coordinator.go" {
+		relPath, ok := testharness.RepositoryRelativePath(repoRoot, pkg.CompiledGoFiles[index])
+		if !ok || relPath != "server/runtimeops/coordinator.go" {
 			continue
 		}
 		foundCoordinator = true
@@ -178,17 +136,18 @@ func TestRuntimeReadModelClockConsumersDoNotUseGlobalCoordinator(t *testing.T) {
 
 func TestRuntimeClientInputIdentityBoundaryStaysRequestShaped(t *testing.T) {
 	repoRoot := findRepoRoot(t)
-	pkgs := loadStructuredGuardPackages(t, repoRoot, false, "./shared/clientui", "./cli/app")
-	assertRuntimeClientDoesNotExposeLegacyInputSignatures(t, structuredGuardPackageByPath(t, pkgs, "core/shared/clientui"))
-	assertSessionRuntimeClientDoesNotSynthesizeInputIdentity(t, structuredGuardPackageByPath(t, pkgs, "core/cli/app"), repoRoot)
+	pkgs := testharness.LoadTypedPackages(t, repoRoot, false, "./shared/clientui", "./cli/app")
+	assertRuntimeClientDoesNotExposeLegacyInputSignatures(t, testharness.PackageByPath(t, pkgs, "core/shared/clientui"))
+	assertSessionRuntimeClientDoesNotSynthesizeInputIdentity(t, testharness.PackageByPath(t, pkgs, "core/cli/app"), repoRoot)
 }
 
 func TestRuntimeViewDoesNotExportGlobalLivenessMainViewHelper(t *testing.T) {
 	repoRoot := findRepoRoot(t)
-	pkg := structuredGuardPackageByPath(t, loadStructuredGuardPackages(t, repoRoot, false, "./server/runtimeview"), "core/server/runtimeview")
+	pkg := testharness.PackageByPath(t, testharness.LoadTypedPackages(t, repoRoot, false, "./server/runtimeview"), "core/server/runtimeview")
 	foundProjection := false
 	for index, file := range pkg.Syntax {
-		if structuredGuardRelativePath(repoRoot, pkg.CompiledGoFiles[index]) != "server/runtimeview/projection.go" {
+		relPath, ok := testharness.RepositoryRelativePath(repoRoot, pkg.CompiledGoFiles[index])
+		if !ok || relPath != "server/runtimeview/projection.go" {
 			continue
 		}
 		foundProjection = true
@@ -271,7 +230,8 @@ func assertSessionRuntimeClientDoesNotSynthesizeInputIdentity(t *testing.T, pkg 
 	t.Helper()
 	foundControlFile := false
 	for index, file := range pkg.Syntax {
-		if structuredGuardRelativePath(repoRoot, pkg.CompiledGoFiles[index]) != "cli/app/ui_runtime_client_control.go" {
+		relPath, ok := testharness.RepositoryRelativePath(repoRoot, pkg.CompiledGoFiles[index])
+		if !ok || relPath != "cli/app/ui_runtime_client_control.go" {
 			continue
 		}
 		foundControlFile = true
@@ -371,12 +331,42 @@ var rawEngineBridges = map[string]bool{"WithRuntime": true, "WithCurrentRuntime"
 var forbiddenRawEngineGetters = map[string]bool{"ResolveRuntime": true, "GetRuntime": true, "CurrentRuntime": true, "Runtime": true, "ResolveEngine": true, "GetEngine": true, "Engine": true}
 var approvedRawEngineAdapterDirs = map[string]bool{"server/sessionruntime": true, "server/runtimecontrol": true, "server/runprompt": true, "server/workflowrunner": true, "server/sessionview": true}
 
-func forbiddenRuntimeLivenessIdentifier(name string) (string, bool) {
-	switch name {
-	case "LatestRun", "AppendRunStarted", "AppendRunFinished", "MarkInFlight", "InFlightStep":
-		return name, true
+func forbiddenRuntimeLivenessFunction(object types.Object) (string, bool) {
+	function, ok := object.(*types.Func)
+	if !ok || function.Pkg() == nil {
+		return "", false
+	}
+	switch function.Pkg().Path() {
+	case "core/server/runtime", "core/server/runtimeactivity":
 	default:
 		return "", false
+	}
+	switch function.Name() {
+	case "LatestRun", "AppendRunStarted", "AppendRunFinished", "MarkInFlight", "InFlightStep":
+		return function.Name(), true
+	default:
+		return "", false
+	}
+}
+
+var runtimeActivityAuthorityPackage = map[string]bool{
+	"core/server/runtime":         true,
+	"core/server/runtimeactivity": true,
+}
+
+func isForbiddenRuntimeActiveStepMethod(selection *types.Selection) bool {
+	if selection == nil {
+		return false
+	}
+	function, ok := selection.Obj().(*types.Func)
+	if !ok || function.Pkg() == nil || function.Pkg().Path() != "core/server/runtime" {
+		return false
+	}
+	switch function.Name() {
+	case "ActiveRun", "ActiveStepSnapshot":
+		return true
+	default:
+		return false
 	}
 }
 

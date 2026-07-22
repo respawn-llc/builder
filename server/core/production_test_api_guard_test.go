@@ -4,14 +4,17 @@ import (
 	"go/ast"
 	"go/types"
 	"sort"
+	"strings"
 	"testing"
+
+	"core/internal/testharness"
 
 	"golang.org/x/tools/go/packages"
 )
 
 func TestProductionGoFilesDoNotExposeTestOnlyAPIs(t *testing.T) {
 	repoRoot := findRepoRoot(t)
-	pkgs := loadStructuredGuardPackages(t, repoRoot, true, "./server/...", "./cli/...", "./shared/...")
+	pkgs := testharness.LoadTypedPackages(t, repoRoot, true, "./server/...", "./cli/...", "./shared/...")
 	declarations := productionAPIDeclarations(pkgs)
 	productionReferences, testReferences := productionAPIReferences(pkgs)
 	violations := make([]string, 0)
@@ -23,7 +26,7 @@ func TestProductionGoFilesDoNotExposeTestOnlyAPIs(t *testing.T) {
 	}
 	sort.Strings(violations)
 	if len(violations) > 0 {
-		t.Fatalf("test-only production API violations:\n%s", joinStructuredGuardLines(violations))
+		t.Fatalf("test-only production API violations:\n%s", strings.Join(violations, "\n"))
 	}
 }
 
@@ -78,7 +81,7 @@ func recordProductionAPIDeclaration(declarations map[productionAPIObjectKey]prod
 	}
 	declarations[key] = productionAPIDeclaration{
 		object:   object,
-		position: structuredGuardPosition(pkg, object.Pos()),
+		position: testharness.SourcePosition(pkg, object.Pos()).String(),
 	}
 }
 
