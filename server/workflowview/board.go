@@ -177,7 +177,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
-	runsByTaskID, err := b.runsByTask(ctx, taskIDs)
+	runActionsByTaskID, err := b.runActionsByTask(ctx, taskIDs)
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
@@ -191,7 +191,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 			task,
 			statusesByTaskID[task.ID],
 			placementsByTaskID[task.ID],
-			runsByTaskID[task.ID],
+			runActionsByTaskID[task.ID],
 			labelIDsByTask[task.ID],
 			snapshot,
 			sourceWorkspaceForTask(task, workspaceContext.byID, workspaceContext.primary),
@@ -236,27 +236,31 @@ func (b *Board) placementsByTask(ctx context.Context, tasks []sqlitegen.TaskReco
 	return byTaskID, nil
 }
 
-func (b *Board) runsByTask(ctx context.Context, taskIDs []string) (map[string][]sqlitegen.TaskRunRecord, error) {
+func (b *Board) runActionsByTask(ctx context.Context, taskIDs []string) (map[string]taskRunActionFacts, error) {
 	if len(taskIDs) == 0 {
-		return map[string][]sqlitegen.TaskRunRecord{}, nil
+		return map[string]taskRunActionFacts{}, nil
 	}
-	runs, err := b.queries.ListTaskRunsByTasks(ctx, taskIDs)
+	rows, err := b.queries.ListWorkflowTaskRunActionFactsByTasks(ctx, taskIDs)
 	if err != nil {
 		return nil, err
 	}
-	byTaskID := make(map[string][]sqlitegen.TaskRunRecord, len(taskIDs))
-	for _, run := range runs {
-		byTaskID[run.TaskID] = append(byTaskID[run.TaskID], run)
+	byTaskID := make(map[string]taskRunActionFacts, len(taskIDs))
+	for _, row := range rows {
+		byTaskID[row.TaskID] = taskRunActionFacts{
+			HasRunning:         row.HasRunning != 0,
+			HasInterrupted:     row.HasInterrupted != 0,
+			HasWaitingQuestion: row.HasWaitingQuestion != 0,
+		}
 	}
 	return byTaskID, nil
 }
 
-func (b *Board) card(task sqlitegen.TaskRecord, status workflowTaskStatusFact, placements []sqlitegen.TaskNodePlacementRecord, runs []sqlitegen.TaskRunRecord, labelIDs []string, definition definitionSnapshot, sourceWorkspace serverapi.ProjectWorkspaceSummary) (serverapi.WorkflowBoardTaskCard, bool) {
+func (b *Board) card(task sqlitegen.TaskRecord, status workflowTaskStatusFact, placements []sqlitegen.TaskNodePlacementRecord, runActions taskRunActionFacts, labelIDs []string, definition definitionSnapshot, sourceWorkspace serverapi.ProjectWorkspaceSummary) (serverapi.WorkflowBoardTaskCard, bool) {
 	facts := b.projector.ProjectTaskFacts(TaskFactsInput{
 		Task:       task,
 		Status:     status,
 		Placements: placements,
-		Runs:       runs,
+		RunActions: runActions,
 		Definition: definition,
 	})
 	return serverapi.WorkflowBoardTaskCard{

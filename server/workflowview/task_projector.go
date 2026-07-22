@@ -27,8 +27,14 @@ type TaskFactsInput struct {
 	Task       sqlitegen.TaskRecord
 	Status     workflowTaskStatusFact
 	Placements []sqlitegen.TaskNodePlacementRecord
-	Runs       []sqlitegen.TaskRunRecord
+	RunActions taskRunActionFacts
 	Definition definitionSnapshot
+}
+
+type taskRunActionFacts struct {
+	HasRunning         bool
+	HasInterrupted     bool
+	HasWaitingQuestion bool
 }
 
 type TaskFacts struct {
@@ -94,7 +100,7 @@ func (*TaskProjector) ProjectTaskFacts(input TaskFactsInput) TaskFacts {
 	return TaskFacts{
 		Summary:             taskSummary(input.Task, input.Status.Status, done),
 		Status:              input.Status.Status,
-		Actions:             taskActions(input.Task, done, input.Placements, input.Runs, input.Definition.api, input.Definition.nodeKinds),
+		Actions:             taskActions(input.Task, done, input.Placements, input.RunActions, input.Definition.api, input.Definition.nodeKinds),
 		Done:                done,
 		EffectivePlacements: effectiveBoardPlacementsForTask(input.Task, input.Placements, input.Definition.api, input.Definition.nodeKinds),
 	}
@@ -305,12 +311,8 @@ func hasActiveTerminalPlacement(placements []sqlitegen.TaskNodePlacementRecord, 
 	return false
 }
 
-func taskActions(task sqlitegen.TaskRecord, done bool, placements []sqlitegen.TaskNodePlacementRecord, runs []sqlitegen.TaskRunRecord, def serverapi.WorkflowDefinition, nodeKinds map[string]workflow.NodeKind) serverapi.WorkflowTaskActions {
+func taskActions(task sqlitegen.TaskRecord, done bool, placements []sqlitegen.TaskNodePlacementRecord, runActions taskRunActionFacts, def serverapi.WorkflowDefinition, nodeKinds map[string]workflow.NodeKind) serverapi.WorkflowTaskActions {
 	actions := serverapi.WorkflowTaskActions{CanCancel: !task.CanceledAtUnixMs.Valid && !done}
-	currentPlacementIDs := currentTaskPlacementIDs(placements)
-	runningRunIDs := []string{}
-	interruptedRunIDs := []string{}
-	waitingAskRunIDs := []string{}
 	waitingApproval := false
 	backlog := false
 	for _, placement := range placements {
@@ -322,39 +324,14 @@ func taskActions(task sqlitegen.TaskRecord, done bool, placements []sqlitegen.Ta
 			backlog = true
 		}
 	}
-	for _, run := range runs {
-		if !currentPlacementIDs[run.PlacementID] || run.CompletedAtUnixMs.Valid {
-			continue
-		}
-		if run.WaitingAskID.Valid {
-			waitingAskRunIDs = append(waitingAskRunIDs, run.ID)
-		}
-		if run.InterruptedAtUnixMs.Valid {
-			interruptedRunIDs = append(interruptedRunIDs, run.ID)
-			continue
-		}
-		if run.StartedAtUnixMs.Valid {
-			runningRunIDs = append(runningRunIDs, run.ID)
-		}
-	}
-	actions.CanStart = !task.CanceledAtUnixMs.Valid && backlog && !waitingApproval && len(runningRunIDs) == 0 && len(waitingAskRunIDs) == 0
+	actions.CanStart = !task.CanceledAtUnixMs.Valid && backlog && !waitingApproval && !runActions.HasRunning && !runActions.HasWaitingQuestion
 	taskActive := !task.CanceledAtUnixMs.Valid
-	if taskActive && len(runningRunIDs) == 0 {
+	if taskActive && !runActions.HasRunning {
 		actions.ManualMoveTargetNodeIDs = manualMoveTargetNodeIDs(def, placements, nodeKinds)
 	}
-	actions.CanInterrupt = taskActive && len(runningRunIDs) >= 1
-	actions.CanResume = taskActive && len(interruptedRunIDs) >= 1
+	actions.CanInterrupt = taskActive && runActions.HasRunning
+	actions.CanResume = taskActive && runActions.HasInterrupted
 	return actions
-}
-
-func currentTaskPlacementIDs(placements []sqlitegen.TaskNodePlacementRecord) map[string]bool {
-	ids := make(map[string]bool, len(placements))
-	for _, placement := range placements {
-		if placement.State == "active" || placement.State == "waiting_approval" {
-			ids[placement.ID] = true
-		}
-	}
-	return ids
 }
 
 func manualMoveTargetNodeIDs(def serverapi.WorkflowDefinition, placements []sqlitegen.TaskNodePlacementRecord, nodeKinds map[string]workflow.NodeKind) []string {

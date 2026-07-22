@@ -1407,6 +1407,31 @@ WHERE r.task_id = sqlc.arg(task_id)
   AND p.state = 'active'
 ORDER BY r.id ASC;
 
+-- name: ListWorkflowTaskRunActionFactsByTasks :many
+SELECT
+    p.task_id,
+    CAST(MAX(CASE
+        WHEN r.started_at_unix_ms IS NOT NULL
+         AND r.interrupted_at_unix_ms IS NULL
+        THEN 1 ELSE 0
+    END) AS INTEGER) AS has_running,
+    CAST(MAX(CASE
+        WHEN r.interrupted_at_unix_ms IS NOT NULL
+        THEN 1 ELSE 0
+    END) AS INTEGER) AS has_interrupted,
+    CAST(MAX(CASE
+        WHEN r.waiting_ask_id IS NOT NULL
+        THEN 1 ELSE 0
+    END) AS INTEGER) AS has_waiting_question
+FROM task_node_placements p
+LEFT JOIN task_runs r
+    ON r.placement_id = p.id
+   AND r.completed_at_unix_ms IS NULL
+WHERE p.task_id IN (sqlc.slice('task_ids'))
+  AND p.state IN ('active', 'waiting_approval')
+GROUP BY p.task_id
+ORDER BY p.task_id ASC;
+
 -- name: ListWorkflowTaskStatusRecordsByTasks :many
 SELECT
     task_id,

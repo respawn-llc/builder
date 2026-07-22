@@ -8741,6 +8741,77 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 	return items, nil
 }
 
+const listWorkflowTaskRunActionFactsByTasks = `-- name: ListWorkflowTaskRunActionFactsByTasks :many
+SELECT
+    p.task_id,
+    CAST(MAX(CASE
+        WHEN r.started_at_unix_ms IS NOT NULL
+         AND r.interrupted_at_unix_ms IS NULL
+        THEN 1 ELSE 0
+    END) AS INTEGER) AS has_running,
+    CAST(MAX(CASE
+        WHEN r.interrupted_at_unix_ms IS NOT NULL
+        THEN 1 ELSE 0
+    END) AS INTEGER) AS has_interrupted,
+    CAST(MAX(CASE
+        WHEN r.waiting_ask_id IS NOT NULL
+        THEN 1 ELSE 0
+    END) AS INTEGER) AS has_waiting_question
+FROM task_node_placements p
+LEFT JOIN task_runs r
+    ON r.placement_id = p.id
+   AND r.completed_at_unix_ms IS NULL
+WHERE p.task_id IN (/*SLICE:task_ids*/?)
+  AND p.state IN ('active', 'waiting_approval')
+GROUP BY p.task_id
+ORDER BY p.task_id ASC
+`
+
+type ListWorkflowTaskRunActionFactsByTasksRow struct {
+	TaskID             string
+	HasRunning         int64
+	HasInterrupted     int64
+	HasWaitingQuestion int64
+}
+
+func (q *Queries) ListWorkflowTaskRunActionFactsByTasks(ctx context.Context, taskIds []string) ([]ListWorkflowTaskRunActionFactsByTasksRow, error) {
+	query := listWorkflowTaskRunActionFactsByTasks
+	var queryParams []interface{}
+	if len(taskIds) > 0 {
+		for _, v := range taskIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:task_ids*/?", strings.Repeat(",?", len(taskIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListWorkflowTaskRunActionFactsByTasksRow
+	for rows.Next() {
+		var i ListWorkflowTaskRunActionFactsByTasksRow
+		if err := rows.Scan(
+			&i.TaskID,
+			&i.HasRunning,
+			&i.HasInterrupted,
+			&i.HasWaitingQuestion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWorkflowTaskStatusRecordsByTasks = `-- name: ListWorkflowTaskStatusRecordsByTasks :many
 SELECT
     task_id,

@@ -45,16 +45,13 @@ func TestTaskProjectorPreservesFactsAcrossEndpointScenarios(t *testing.T) {
 			State:  state,
 		}
 	}
-	run := func(id string, placementID string) sqlitegen.TaskRunRecord {
-		return sqlitegen.TaskRunRecord{ID: id, TaskID: task.ID, PlacementID: placementID}
-	}
 	for _, test := range []struct {
 		name                string
 		status              serverapi.WorkflowTaskStatusKind
 		done                bool
 		mutateTask          func(*sqlitegen.TaskRecord)
 		placements          []sqlitegen.TaskNodePlacementRecord
-		runs                []sqlitegen.TaskRunRecord
+		runActions          taskRunActionFacts
 		wantCanStart        bool
 		wantCanInterrupt    bool
 		wantCanResume       bool
@@ -63,24 +60,10 @@ func TestTaskProjectorPreservesFactsAcrossEndpointScenarios(t *testing.T) {
 	}{
 		{name: "backlog", status: serverapi.WorkflowTaskStatusKindBacklog, placements: []sqlitegen.TaskNodePlacementRecord{activePlacement("placement-start", "node-start", "active")}, wantCanStart: true, wantCanCancel: true, wantEffectiveNodeID: "node-start"},
 		{name: "active", status: serverapi.WorkflowTaskStatusKindActive, placements: []sqlitegen.TaskNodePlacementRecord{activePlacement("placement-agent", "node-agent", "active")}, wantCanCancel: true, wantEffectiveNodeID: "node-agent"},
-		{name: "queued", status: serverapi.WorkflowTaskStatusKindQueued, placements: []sqlitegen.TaskNodePlacementRecord{activePlacement("placement-agent", "node-agent", "active")}, runs: []sqlitegen.TaskRunRecord{run("run-queued", "placement-agent")}, wantCanCancel: true, wantEffectiveNodeID: "node-agent"},
-		{name: "running", status: serverapi.WorkflowTaskStatusKindRunning, placements: []sqlitegen.TaskNodePlacementRecord{activePlacement("placement-agent", "node-agent", "active")}, runs: []sqlitegen.TaskRunRecord{func() sqlitegen.TaskRunRecord {
-			value := run("run-running", "placement-agent")
-			value.StartedAtUnixMs = sql.NullInt64{Int64: 3, Valid: true}
-			return value
-		}()}, wantCanInterrupt: true, wantCanCancel: true, wantEffectiveNodeID: "node-agent"},
-		{name: "interrupted", status: serverapi.WorkflowTaskStatusKindInterrupted, placements: []sqlitegen.TaskNodePlacementRecord{activePlacement("placement-agent", "node-agent", "active")}, runs: []sqlitegen.TaskRunRecord{func() sqlitegen.TaskRunRecord {
-			value := run("run-interrupted", "placement-agent")
-			value.StartedAtUnixMs = sql.NullInt64{Int64: 3, Valid: true}
-			value.InterruptedAtUnixMs = sql.NullInt64{Int64: 4, Valid: true}
-			return value
-		}()}, wantCanResume: true, wantCanCancel: true, wantEffectiveNodeID: "node-agent"},
-		{name: "waiting question", status: serverapi.WorkflowTaskStatusKindWaitingQuestion, placements: []sqlitegen.TaskNodePlacementRecord{activePlacement("placement-agent", "node-agent", "active")}, runs: []sqlitegen.TaskRunRecord{func() sqlitegen.TaskRunRecord {
-			value := run("run-question", "placement-agent")
-			value.StartedAtUnixMs = sql.NullInt64{Int64: 3, Valid: true}
-			value.WaitingAskID = sql.NullString{String: "ask-1", Valid: true}
-			return value
-		}()}, wantCanInterrupt: true, wantCanCancel: true, wantEffectiveNodeID: "node-agent"},
+		{name: "queued", status: serverapi.WorkflowTaskStatusKindQueued, placements: []sqlitegen.TaskNodePlacementRecord{activePlacement("placement-agent", "node-agent", "active")}, wantCanCancel: true, wantEffectiveNodeID: "node-agent"},
+		{name: "running", status: serverapi.WorkflowTaskStatusKindRunning, placements: []sqlitegen.TaskNodePlacementRecord{activePlacement("placement-agent", "node-agent", "active")}, runActions: taskRunActionFacts{HasRunning: true}, wantCanInterrupt: true, wantCanCancel: true, wantEffectiveNodeID: "node-agent"},
+		{name: "interrupted", status: serverapi.WorkflowTaskStatusKindInterrupted, placements: []sqlitegen.TaskNodePlacementRecord{activePlacement("placement-agent", "node-agent", "active")}, runActions: taskRunActionFacts{HasInterrupted: true}, wantCanResume: true, wantCanCancel: true, wantEffectiveNodeID: "node-agent"},
+		{name: "waiting question", status: serverapi.WorkflowTaskStatusKindWaitingQuestion, placements: []sqlitegen.TaskNodePlacementRecord{activePlacement("placement-agent", "node-agent", "active")}, runActions: taskRunActionFacts{HasRunning: true, HasWaitingQuestion: true}, wantCanInterrupt: true, wantCanCancel: true, wantEffectiveNodeID: "node-agent"},
 		{name: "waiting approval", status: serverapi.WorkflowTaskStatusKindWaitingApproval, placements: []sqlitegen.TaskNodePlacementRecord{activePlacement("placement-agent", "node-agent", "waiting_approval")}, wantCanCancel: true, wantEffectiveNodeID: "node-agent"},
 		{name: "done", status: serverapi.WorkflowTaskStatusKindDone, done: true, placements: []sqlitegen.TaskNodePlacementRecord{activePlacement("placement-done", "node-done", "active")}, wantEffectiveNodeID: "node-done"},
 		{name: "canceled", status: serverapi.WorkflowTaskStatusKindCanceled, done: true, mutateTask: func(task *sqlitegen.TaskRecord) {
@@ -103,7 +86,7 @@ func TestTaskProjectorPreservesFactsAcrossEndpointScenarios(t *testing.T) {
 			if err != nil {
 				t.Fatalf("DecodeStatus: %v", err)
 			}
-			input := TaskFactsInput{Task: inputTask, Status: status, Placements: test.placements, Runs: test.runs, Definition: definition}
+			input := TaskFactsInput{Task: inputTask, Status: status, Placements: test.placements, RunActions: test.runActions, Definition: definition}
 			var projected []TaskFacts
 			for _, scenario := range []string{"detail", "board", "task_list"} {
 				t.Run(scenario, func(t *testing.T) {

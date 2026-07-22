@@ -329,7 +329,7 @@ func TestDurableFanoutStatusAndExactLiveTaskDetailRemainDistinct(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
-	cardStatuses := make([]serverapi.WorkflowTaskStatus, 0, 3)
+	cards := make([]serverapi.WorkflowBoardTaskCard, 0, 3)
 	for _, key := range []string{"impl_a", "impl_b", "impl_c"} {
 		column := workflowViewColumnByKey(t, board, key)
 		page, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
@@ -344,19 +344,22 @@ func TestDurableFanoutStatusAndExactLiveTaskDetailRemainDistinct(t *testing.T) {
 		}
 		for _, card := range page.Cards {
 			if card.TaskID == string(fixture.task.ID) {
-				cardStatuses = append(cardStatuses, card.Status)
+				cards = append(cards, card)
 			}
 		}
 	}
-	if len(cardStatuses) != 3 {
-		t.Fatalf("fanout board status projections = %+v, want every branch card", cardStatuses)
+	if len(cards) != 3 {
+		t.Fatalf("fanout board projections = %+v, want every branch card", cards)
 	}
-	for _, status := range cardStatuses {
-		if status.Kind != fixture.status.Kind ||
-			status.NativeState != fixture.status.NativeState ||
-			!reflect.DeepEqual(status.RunIDs, fixture.status.RunIDs) ||
-			!reflect.DeepEqual(status.AttentionTypes, fixture.status.AttentionTypes) {
-			t.Fatalf("board status = %+v, want durable fanout status %+v", status, fixture.status)
+	for _, card := range cards {
+		if card.Status.Kind != fixture.status.Kind ||
+			card.Status.NativeState != fixture.status.NativeState ||
+			!reflect.DeepEqual(card.Status.RunIDs, fixture.status.RunIDs) ||
+			!reflect.DeepEqual(card.Status.AttentionTypes, fixture.status.AttentionTypes) {
+			t.Fatalf("board status = %+v, want durable fanout status %+v", card.Status, fixture.status)
+		}
+		if !card.Actions.CanInterrupt || !card.Actions.CanResume {
+			t.Fatalf("fanout board actions = %+v, want simultaneous interrupt and resume", card.Actions)
 		}
 	}
 	workflowIDString := string(fixture.workflowID)
