@@ -48,7 +48,10 @@ func TestBoardAndTaskDetailUseDurableWorkflowMetadataOnly(t *testing.T) {
 		t.Fatalf("CompleteRun: %v", err)
 	}
 
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		ProjectID:   binding.ProjectID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+	})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
@@ -68,7 +71,12 @@ func TestBoardAndTaskDetailUseDurableWorkflowMetadataOnly(t *testing.T) {
 		t.Fatalf("board columns do not contain task on terminal node: %+v", board.Columns)
 	}
 	doneColumn := workflowViewColumnByKind(t, board, workflow.NodeKindTerminal)
-	donePage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: doneColumn.Node.NodeID})
+	donePage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		ProjectID:   binding.ProjectID,
+		WorkflowID:  string(workflowID),
+		NodeID:      doneColumn.Node.NodeID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+	})
 	if err != nil {
 		t.Fatalf("ListBoardNodeCards done: %v", err)
 	}
@@ -106,7 +114,10 @@ func TestBoardMetadataCountsDoneCardsWhileColumnEndpointOwnsCardData(t *testing.
 		}
 	}
 
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		ProjectID:   binding.ProjectID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+	})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
@@ -115,10 +126,11 @@ func TestBoardMetadataCountsDoneCardsWhileColumnEndpointOwnsCardData(t *testing.
 		t.Fatalf("done metadata count = %d, want 2", doneColumn.TaskCount)
 	}
 	page, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-		ProjectID:  binding.ProjectID,
-		WorkflowID: string(workflowID),
-		NodeID:     doneColumn.Node.NodeID,
-		PageSize:   1,
+		ProjectID:   binding.ProjectID,
+		WorkflowID:  string(workflowID),
+		NodeID:      doneColumn.Node.NodeID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+		PageSize:    1,
 	})
 
 	if err != nil {
@@ -160,7 +172,10 @@ func TestWorkflowPickerAndAttentionIncludeScriptPathDiagnostics(t *testing.T) {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
 
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		ProjectID:   binding.ProjectID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+	})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
@@ -196,12 +211,20 @@ func TestBoardAndTaskDetailProjectTaskSourceWorkspaceAndBody(t *testing.T) {
 		t.Fatalf("CreateTask: %v", err)
 	}
 
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		ProjectID:   binding.ProjectID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+	})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
 	backlogColumn := workflowViewColumnByKind(t, board, workflow.NodeKindStart)
-	backlogPage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: backlogColumn.Node.NodeID})
+	backlogPage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		ProjectID:   binding.ProjectID,
+		WorkflowID:  string(workflowID),
+		NodeID:      backlogColumn.Node.NodeID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+	})
 	if err != nil {
 		t.Fatalf("ListBoardNodeCards backlog: %v", err)
 	}
@@ -260,15 +283,19 @@ func TestBoardNodeCardsProjectBoundedUnicodeMarkdownPreview(t *testing.T) {
 		}
 	}
 
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		ProjectID:   binding.ProjectID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+	})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
 	backlogColumn := workflowViewColumnByKind(t, board, workflow.NodeKindStart)
 	page, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-		ProjectID:  binding.ProjectID,
-		WorkflowID: string(workflowID),
-		NodeID:     backlogColumn.Node.NodeID,
+		ProjectID:   binding.ProjectID,
+		WorkflowID:  string(workflowID),
+		NodeID:      backlogColumn.Node.NodeID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
 	})
 
 	if err != nil {
@@ -330,15 +357,19 @@ func TestBoardNodeCardsDefaultPageSizeIs25(t *testing.T) {
 		}
 	}
 
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		ProjectID:   binding.ProjectID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+	})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
 	backlogColumn := workflowViewColumnByKind(t, board, workflow.NodeKindStart)
 	page, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-		ProjectID:  binding.ProjectID,
-		WorkflowID: string(workflowID),
-		NodeID:     backlogColumn.Node.NodeID,
+		ProjectID:   binding.ProjectID,
+		WorkflowID:  string(workflowID),
+		NodeID:      backlogColumn.Node.NodeID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
 	})
 
 	if err != nil {
@@ -656,7 +687,10 @@ func TestBoardProjectsCurrentWorkspaceFactsAndDetachedHistoricalSource(t *testin
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
 
-	oneWorkspaceBoard, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	oneWorkspaceBoard, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		ProjectID:   binding.ProjectID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+	})
 	if err != nil {
 		t.Fatalf("GetBoard with one workspace: %v", err)
 	}
@@ -693,7 +727,10 @@ func TestBoardProjectsCurrentWorkspaceFactsAndDetachedHistoricalSource(t *testin
 		t.Fatalf("unlink blockers = %+v, want none", blockers)
 	}
 
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		ProjectID:   binding.ProjectID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+	})
 	if err != nil {
 		t.Fatalf("GetBoard with detached source: %v", err)
 	}
@@ -702,9 +739,10 @@ func TestBoardProjectsCurrentWorkspaceFactsAndDetachedHistoricalSource(t *testin
 	}
 	doneColumn := workflowViewColumnByKind(t, board, workflow.NodeKindTerminal)
 	donePage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-		ProjectID:  binding.ProjectID,
-		WorkflowID: string(workflowID),
-		NodeID:     doneColumn.Node.NodeID,
+		ProjectID:   binding.ProjectID,
+		WorkflowID:  string(workflowID),
+		NodeID:      doneColumn.Node.NodeID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
 	})
 
 	if err != nil {
@@ -734,7 +772,10 @@ func TestBoardAndTaskDetailProjectParallelBranchPlacements(t *testing.T) {
 		t.Fatalf("CompleteRun split: %v", err)
 	}
 
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		ProjectID:   binding.ProjectID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+	})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
@@ -755,7 +796,12 @@ func TestBoardAndTaskDetailProjectParallelBranchPlacements(t *testing.T) {
 	if len(synthColumn.Node.TransitionOutputFields) != 1 || synthColumn.Node.TransitionOutputFields[0].Name != "summary" || synthColumn.Node.TransitionOutputFields[0].Description != "Implementation summary." {
 		t.Fatalf("synth transition output fields = %+v, want join aggregate parameters", synthColumn.Node.TransitionOutputFields)
 	}
-	branchPage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: branchColumn.Node.NodeID})
+	branchPage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		ProjectID:   binding.ProjectID,
+		WorkflowID:  string(workflowID),
+		NodeID:      branchColumn.Node.NodeID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+	})
 	if err != nil {
 		t.Fatalf("ListBoardNodeCards branch: %v", err)
 	}
