@@ -1,8 +1,8 @@
-import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useId, useRef, useState, type RefObject } from "react";
 import { ChevronDown, Save } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type { TaskDetail, TaskRun } from "@/api";
+import type { TaskDetail } from "@/api";
 import { errorMessage } from "@/api";
 import { useAppServices } from "@/app-facade";
 import { useOpenExternalLink } from "@/app-facade";
@@ -25,7 +25,6 @@ import { TaskExecutionTargetFacts } from "./TaskExecutionTargetFacts";
 import { TaskPropertyLine } from "./TaskPropertyLine";
 import { taskExecutionRoot } from "./taskExecutionTarget";
 import type { useTaskMutations } from "./useTaskDetailData";
-import { useScriptOpenAvailability } from "./useScriptOpenAvailability";
 
 export type TaskDraft = Readonly<{
   title: string;
@@ -351,7 +350,10 @@ export function PropertiesIsland({
         <TaskExecutionTargetFacts detail={detail} />
         <TaskPropertyLine label={t("task.workflow")} value={detail.workflowName} />
         <SourceLine label={t("task.source")} onOpen={openExternalLink} value={detail.sourceURL} />
-        <TaskPropertyLine label={t("task.sessions")} value={detail.runs.length.toString()} />
+        <TaskPropertyLine
+          label={t("task.sessions")}
+          value={detail.currentSessionIDs.length.toString()}
+        />
       </dl>
       <TaskActionPanel detail={detail} disabled={disabled} mutations={mutations} />
     </Island>
@@ -368,18 +370,6 @@ function TaskActionPanel({
   mutations: ReturnType<typeof useTaskMutations>;
 }>) {
   const { t } = useTranslation();
-  const activeRuns = useMemo(
-    () => detail.runs.filter((run) => run.completedAt === null && run.interruptedAt === null),
-    [detail.runs],
-  );
-  const interruptableRuns = useMemo(
-    () => activeRuns.filter((run) => run.sessionID.trim().length > 0),
-    [activeRuns],
-  );
-  const hasTaskWideInterrupt = useMemo(
-    () => activeRuns.some((run) => run.sessionID.trim().length === 0),
-    [activeRuns],
-  );
   return (
     <>
       <div className="grid gap-[var(--space-2)] pt-[var(--space-1)]">
@@ -395,7 +385,7 @@ function TaskActionPanel({
             {t("board.resume")}
           </Button>
         ) : null}
-        {detail.actions.canInterrupt && hasTaskWideInterrupt ? (
+        {detail.actions.canInterrupt ? (
           <Button
             disabled={disabled}
             onClick={() => {
@@ -406,20 +396,6 @@ function TaskActionPanel({
             {t("board.interrupt")}
           </Button>
         ) : null}
-        {detail.actions.canInterrupt
-          ? interruptableRuns.map((run) => (
-              <Button
-                disabled={disabled}
-                key={run.id}
-                onClick={() => {
-                  void mutations.interrupt.mutateAsync(run.sessionID);
-                }}
-                variant="secondary"
-              >
-                {t("board.interrupt")} <span>{run.sessionName.trim() || run.sessionID}</span>
-              </Button>
-            ))
-          : null}
         {detail.actions.canCancel ? (
           <Popover>
             <PopoverTrigger asChild>
@@ -449,26 +425,12 @@ function TaskActionPanel({
 function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; disabled: boolean }>) {
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
-  const [openCliError, setOpenCliError] = useState("");
-  const [openScriptError, setOpenScriptError] = useState("");
-  const cliSessionExists = useMemo(
-    () => detail.runs.some((run) => run.sessionID.trim().length > 0),
-    [detail.runs],
-  );
-  const scriptRun = useMemo(() => preferredScriptRun(detail.runs), [detail.runs]);
+  const [openError, setOpenError] = useState("");
   const executionRoot = taskExecutionRoot(detail);
-  const scriptOpenAvailable = useScriptOpenAvailability({
-    basePath: executionRoot,
-    scriptPath: scriptRun?.scriptPath ?? "",
-  });
-  const cliCommand = useMemo(() => sessionCommand(detail.runs), [detail.runs]);
+  const canOpenScript = nativeBridge.capabilities.files.open;
 
-  async function openInCli(): Promise<void> {
-    if (cliCommand.length === 0) {
-      setOpenCliError(t("task.cliCommandUnavailable"));
-      return;
-    }
-    await writeClipboardText(cliCommand, nativeBridge);
+  async function openInCli(sessionID: string): Promise<void> {
+    await writeClipboardText(`kent --session=${sessionID}`, nativeBridge);
     showStatusToast({
       id: "task-cli-command-copied",
       title: t("task.cliCommandCopied"),
@@ -476,49 +438,46 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
     });
   }
 
-  async function openScript(): Promise<void> {
-    if (scriptRun === null || scriptRun.scriptPath.trim().length === 0 || executionRoot === null) {
-      setOpenScriptError(t("task.scriptPathUnavailable"));
-      return;
-    }
-    await nativeBridge.files.openFile({ basePath: executionRoot, path: scriptRun.scriptPath });
+  async function openScript(path: string): Promise<void> {
+    await nativeBridge.files.openFile({ basePath: executionRoot, path });
   }
 
   return (
     <>
-      {cliSessionExists ? (
+      {detail.currentSessionIDs.map((sessionID) => (
         <Button
-          disabled={disabled || cliCommand.length === 0}
+          disabled={disabled}
+          key={sessionID}
           onClick={() => {
-            setOpenCliError("");
-            void openInCli().catch((cause: unknown) => {
-              setOpenCliError(errorMessage(cause));
+            setOpenError("");
+            void openInCli(sessionID).catch((cause: unknown) => {
+              setOpenError(errorMessage(cause));
             });
           }}
           variant="secondary"
         >
-          {t("task.openInCli")}
+          {t("task.openInCli")} <span className="truncate font-mono">{sessionID}</span>
         </Button>
-      ) : null}
-      {scriptOpenAvailable ? (
-        <Button
-          disabled={disabled || scriptRun === null}
-          onClick={() => {
-            setOpenScriptError("");
-            void openScript().catch((cause: unknown) => {
-              setOpenScriptError(errorMessage(cause));
-            });
-          }}
-          variant="secondary"
-        >
-          {t("task.openScript")}
-        </Button>
-      ) : null}
-      {openCliError.length > 0 ? (
-        <p className="m-0 text-sm text-[var(--color-error)]">{openCliError}</p>
-      ) : null}
-      {openScriptError.length > 0 ? (
-        <p className="m-0 text-sm text-[var(--color-error)]">{openScriptError}</p>
+      ))}
+      {canOpenScript
+        ? detail.currentScripts.map((script) => (
+            <Button
+              disabled={disabled}
+              key={script.runID}
+              onClick={() => {
+                setOpenError("");
+                void openScript(script.path).catch((cause: unknown) => {
+                  setOpenError(errorMessage(cause));
+                });
+              }}
+              variant="secondary"
+            >
+              {t("task.openScript")} <span className="truncate font-mono">{script.path}</span>
+            </Button>
+          ))
+        : null}
+      {openError.length > 0 ? (
+        <p className="m-0 text-sm text-[var(--color-error)]">{openError}</p>
       ) : null}
     </>
   );
@@ -580,28 +539,5 @@ function SourceLine({
         </a>
       }
     />
-  );
-}
-
-function sessionCommand(runs: readonly TaskRun[]): string {
-  const run = preferredSessionRun(runs);
-  return run === null ? "" : `kent --session=${run.sessionID}`;
-}
-
-function preferredSessionRun(runs: readonly TaskRun[]): TaskRun | null {
-  const sessionRuns = runs.filter((run) => run.sessionID.trim().length > 0);
-  return (
-    [...sessionRuns].reverse().find((run) => run.completedAt === null && run.interruptedAt === null) ??
-    sessionRuns.at(-1) ??
-    null
-  );
-}
-
-function preferredScriptRun(runs: readonly TaskRun[]): TaskRun | null {
-  const scriptRuns = runs.filter((run) => run.nodeKind === "script" && run.scriptPath.trim().length > 0);
-  return (
-    [...scriptRuns].reverse().find((run) => run.completedAt === null && run.interruptedAt === null) ??
-    scriptRuns.at(-1) ??
-    null
   );
 }

@@ -32,7 +32,6 @@ import (
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/server/workflowview"
-	"core/server/worktree"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -606,7 +605,7 @@ func TestWorkflowRuntimeInterruptReleasesBeforeInteractiveReactivation(t *testin
 	if err != nil {
 		t.Fatalf("parse workflow session id: %v", err)
 	}
-	workflowRef := sessionruntime.WorkflowExecutionRef{RunID: run.ID, Generation: run.Generation}
+	workflowRef := sessionruntime.WorkflowExecutionRef{TaskID: run.TaskID, RunID: run.ID, Generation: run.Generation}
 	if _, active := fixture.runtimeAuthority.ExecutionByWorkflow(workflowRef); !active {
 		t.Fatal("workflow execution is not active")
 	}
@@ -1771,20 +1770,6 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
 	}
-	definitions, err := workflowview.NewDefinitionProjection(store)
-	if err != nil {
-		t.Fatalf("workflowview.NewDefinitionProjection: %v", err)
-	}
-	taskDetail, err := workflowview.NewTaskDetail(
-		metadataStore,
-		definitions,
-		workflowview.NewTaskProjector(),
-		worktree.NewGitInspector(nil),
-	)
-	if err != nil {
-		t.Fatalf("workflowview.NewTaskDetail: %v", err)
-	}
-	view := taskDetail
 	worktrees := &metadataTaskWorktrees{t: t, metadata: metadataStore, workspaceID: binding.WorkspaceID, root: filepath.Join(home, "task-worktrees")}
 	client := NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}, steps...)
 	clientFactory := func(SchedulerStartRunRequest) llm.Client { return client }
@@ -1802,6 +1787,15 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 		PromptFeed:        runtimes,
 		ResourceLifecycle: runtimes,
 	})
+	taskDetail, err := workflowview.NewTaskDetail(
+		metadataStore,
+		workflowview.NewTaskProjector(),
+		runtimeAuthority,
+	)
+	if err != nil {
+		t.Fatalf("workflowview.NewTaskDetail: %v", err)
+	}
+	view := taskDetail
 	starter, err := NewStarter(cfg, metadataStore, store, nil, runtimes, StarterOptions{
 		ClientFactory:    clientFactory,
 		Worktrees:        worktrees,

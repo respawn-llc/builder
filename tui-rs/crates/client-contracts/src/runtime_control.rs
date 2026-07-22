@@ -37,19 +37,6 @@ pub struct RuntimeInterruptRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct RuntimeQueueUserMessageRequest {
-    pub client_request_id: String,
-    pub session_id: String,
-    pub text: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct RuntimeQueueUserMessageResponse {
-    pub queue_item_id: String,
-    pub text: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct RuntimeHasQueuedUserWorkRequest {
     pub session_id: String,
 }

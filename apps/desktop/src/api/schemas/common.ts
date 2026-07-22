@@ -26,6 +26,8 @@ import type {
 } from "../models";
 
 export const emptyString = z.string().optional().default("");
+export const nonBlankString = z.string().trim().min(1);
+export const workflowGraphNodeLimit = 200;
 export const numberValue = z.number().default(0);
 export const nullableString = z
   .string()
@@ -358,6 +360,17 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z
     suggestions: stringList,
     recommended_option_index: z.number().optional().default(0),
     question: questionPromptSchema.nullish(),
+    approval_snapshot: z
+      .object({
+        source_node_display_name: nonBlankString,
+        targets: z
+          .array(z.object({ display_name: nonBlankString }).strict()),
+        commentary: emptyString,
+        output_values: z.record(z.string(), z.string()),
+        workflow_revision_seen: z.number().int().nonnegative(),
+      })
+      .strict()
+      .nullish(),
     occurred_at_unix_ms: z.number(),
   })
   .transform((value) => ({
@@ -377,6 +390,18 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z
     suggestions: value.suggestions,
     recommendedOptionIndex: value.recommended_option_index,
     question: value.question ?? null,
+    approvalSnapshot:
+      value.approval_snapshot === null || value.approval_snapshot === undefined
+        ? null
+        : {
+            sourceNodeName: value.approval_snapshot.source_node_display_name,
+            targets: value.approval_snapshot.targets.map((target) => ({
+              displayName: target.display_name,
+            })),
+            commentary: value.approval_snapshot.commentary,
+            outputValues: value.approval_snapshot.output_values,
+            version: value.approval_snapshot.workflow_revision_seen,
+          },
     occurredAt: value.occurred_at_unix_ms,
   }));
 

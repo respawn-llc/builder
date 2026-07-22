@@ -475,6 +475,9 @@ const taskDetailResponse = {
     workflow,
     body: "Need operator input",
     source_workspace: workspace,
+    worktree_path: null,
+    current_session_ids: [],
+    current_scripts: [],
     status: {
       kind: "waiting_question",
       native_state: "running",
@@ -490,9 +493,6 @@ const taskDetailResponse = {
       manual_move_target_node_ids: [],
     },
     attention_count: 0,
-    runs: [],
-    transitions: [],
-    comments: [],
   },
 };
 

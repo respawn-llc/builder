@@ -148,19 +148,6 @@ type RuntimeInterruptResponse struct {
 	InputReconciliation clientui.RuntimeInputReconciliationSnapshot `json:"input_reconciliation"`
 }
 
-type RuntimeQueueUserMessageRequest struct {
-	ClientRequestID string                       `json:"client_request_id"`
-	SessionID       string                       `json:"session_id"`
-	OperationRef    clientui.RuntimeOperationRef `json:"operation_ref"`
-	Text            string                       `json:"text"`
-}
-
-type RuntimeQueueUserMessageResponse struct {
-	QueueItemID     string `json:"queue_item_id"`
-	Text            string `json:"text"`
-	ClientRequestID string `json:"client_request_id"`
-}
-
 type RuntimeLiveSteerRequest struct {
 	ClientRequestID string `json:"client_request_id"`
 	SessionID       string `json:"session_id"`
@@ -396,21 +383,6 @@ func (r RuntimeInterruptRequest) Validate() error {
 		if err := ref.Validate(); err != nil {
 			return err
 		}
-	}
-	return nil
-}
-func (r RuntimeQueueUserMessageRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
-		return err
-	}
-	if err := validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindQueuedMessage, r.ClientRequestID); err != nil {
-		return err
-	}
-	if r.OperationRef.QueueItemID != nil {
-		return errors.New("queued-message create operation_ref must not carry queue item id")
-	}
-	if strings.TrimSpace(r.Text) == "" {
-		return errors.New("text is required")
 	}
 	return nil
 }

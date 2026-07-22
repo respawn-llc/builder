@@ -291,25 +291,6 @@ func (c *sessionRuntimeClient) interruptRuntimeCandidate(
 	return candidate, nil
 }
 
-func (c *sessionRuntimeClient) QueueRuntimeUserMessage(req clientui.RuntimeQueueUserMessageRequest) (clientui.QueuedUserMessage, error) {
-	if err := req.Validate(); err != nil {
-		return clientui.QueuedUserMessage{}, err
-	}
-	requestID := req.OperationRef.ClientRequestID.String()
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, _ string) (serverapi.RuntimeQueueUserMessageResponse, error) {
-		return c.controls.QueueUserMessage(ctx, serverapi.RuntimeQueueUserMessageRequest{ClientRequestID: requestID, SessionID: c.sessionID, OperationRef: req.OperationRef, Text: req.Text})
-	})
-	if err != nil {
-		c.notifyConnectionState(err)
-		return clientui.QueuedUserMessage{}, err
-	}
-	responseClientRequestID := strings.TrimSpace(resp.ClientRequestID)
-	if responseClientRequestID == "" {
-		responseClientRequestID = requestID
-	}
-	return clientui.QueuedUserMessage{ID: resp.QueueItemID, Text: resp.Text, ClientRequestID: responseClientRequestID}, nil
-}
-
 func (c *sessionRuntimeClient) DiscardQueuedUserMessage(queueItemID string) bool {
 	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
 		return c.controls.DiscardQueuedUserMessage(ctx, serverapi.RuntimeDiscardQueuedUserMessageRequest{ClientRequestID: requestID, SessionID: c.sessionID, QueueItemID: queueItemID})

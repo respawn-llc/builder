@@ -99,6 +99,7 @@ type injectedQueueCreateDoneMsg struct {
 	token                    uint64
 	localID                  string
 	item                     clientui.QueuedUserMessage
+	completed                bool
 	approvalCommentaryAnswer *clientui.PromptAnswer
 	err                      error
 }

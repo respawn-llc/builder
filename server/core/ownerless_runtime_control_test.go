@@ -35,27 +35,6 @@ func TestSecondClientLiveControlsActiveRun(t *testing.T) {
 			}
 		})
 	})
-	t.Run("runtime control queue user message", func(t *testing.T) {
-		runSecondClientLiveControlsActiveRun(t, "first answer before steering", func(t *testing.T, appCore *Core, sessionID string) {
-			clientRequestID := uuid.NewString()
-			operationID, err := runtimeids.ParseRuntimeClientRequestID(clientRequestID)
-			if err != nil {
-				t.Fatalf("parse client request id: %v", err)
-			}
-			queueResp, err := appCore.RuntimeControlClient().QueueUserMessage(context.Background(), serverapi.RuntimeQueueUserMessageRequest{
-				ClientRequestID: clientRequestID,
-				SessionID:       sessionID,
-				OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: operationID},
-				Text:            "steer me",
-			})
-			if err != nil {
-				t.Fatalf("QueueUserMessage during active run: %v", err)
-			}
-			if queueResp.QueueItemID == "" {
-				t.Fatal("QueueUserMessage during active run returned no queue item id")
-			}
-		})
-	})
 	t.Run("runtime control submit user turn", func(t *testing.T) {
 		runSecondClientLiveControlsActiveRun(t, "steered final answer", func(t *testing.T, appCore *Core, sessionID string) {
 			clientRequestID := uuid.NewString()

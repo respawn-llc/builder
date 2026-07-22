@@ -33,35 +33,21 @@ export type WorkflowExecutionTargetSelectionRequirement =
     }>;
 
 export type WorkflowExecutionTargetProvenance = "resolved" | "legacy_observed";
-export type WorkflowExecutionTargetWorktreeAvailability = "available" | "missing" | "inaccessible";
-
-export type WorkflowExecutionTargetWorktree = Readonly<{
-  id: string;
-  displayName: string;
-  canonicalRoot: string;
-  availability: WorkflowExecutionTargetWorktreeAvailability;
-}>;
 
 export type WorkflowNoManagedExecutionTarget = Readonly<{
   mode: "none";
-  effectiveRoot: string;
   requestedRef: null;
   resolvedRef: null;
   commitOID: null;
   provenance: "resolved";
-  currentBranch: null;
-  managedWorktree: null;
 }>;
 
 export type WorkflowManagedExecutionTarget = Readonly<{
   mode: Exclude<WorkflowExecutionTargetSelectionMode, "none">;
-  effectiveRoot: string | null;
   requestedRef: string;
   resolvedRef: string | null;
   commitOID: string;
   provenance: WorkflowExecutionTargetProvenance;
-  currentBranch: string | null;
-  managedWorktree: WorkflowExecutionTargetWorktree | null;
 }>;
 
 export type WorkflowExecutionTarget = WorkflowNoManagedExecutionTarget | WorkflowManagedExecutionTarget;

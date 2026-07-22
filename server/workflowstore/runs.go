@@ -677,15 +677,15 @@ func runWaitingAskWorkflowEvent(
 	}, nil
 }
 
-func (s *Store) ResolveTaskWaitingAsk(ctx context.Context, taskID workflow.TaskID, runID workflow.RunID, askID string) (RunRecord, error) {
+func (s *Store) ResolveTaskWaitingAsk(ctx context.Context, taskID workflow.TaskID, runID workflow.RunID, askID string) (ResolvedWaitingAsk, error) {
 	trimmedTaskID := strings.TrimSpace(string(taskID))
 	trimmedRunID := strings.TrimSpace(string(runID))
 	trimmedAskID := strings.TrimSpace(askID)
 	if trimmedTaskID == "" {
-		return RunRecord{}, errors.New("task id is required")
+		return ResolvedWaitingAsk{}, errors.New("task id is required")
 	}
 	if trimmedAskID == "" {
-		return RunRecord{}, errors.New("ask id is required")
+		return ResolvedWaitingAsk{}, errors.New("ask id is required")
 	}
 	rows, err := s.queries.ResolveTaskWaitingAsk(ctx, sqlitegen.ResolveTaskWaitingAskParams{
 		TaskID: trimmedTaskID,
@@ -693,14 +693,21 @@ func (s *Store) ResolveTaskWaitingAsk(ctx context.Context, taskID workflow.TaskI
 		RunID:  trimmedRunID,
 	})
 	if err != nil {
-		return RunRecord{}, err
+		return ResolvedWaitingAsk{}, err
 	}
-	matches := runRecordsFromTaskRunRecords(rows)
+	matches := make([]ResolvedWaitingAsk, 0, len(rows))
+	for _, row := range rows {
+		matches = append(matches, ResolvedWaitingAsk{
+			Run:        runRecordFromTaskRun(row.TaskRunRecord),
+			ProjectID:  row.ProjectID,
+			WorkflowID: workflow.WorkflowID(row.WorkflowID),
+		})
+	}
 	if len(matches) == 0 {
-		return RunRecord{}, ErrTaskAskNotPending
+		return ResolvedWaitingAsk{}, ErrTaskAskNotPending
 	}
 	if trimmedRunID == "" && len(matches) != 1 {
-		return RunRecord{}, fmt.Errorf("task has multiple matching pending asks; %w", ErrRunIDRequired)
+		return ResolvedWaitingAsk{}, fmt.Errorf("task has multiple matching pending asks; %w", ErrRunIDRequired)
 	}
 	return matches[0], nil
 }

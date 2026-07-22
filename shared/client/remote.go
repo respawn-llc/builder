@@ -707,10 +707,6 @@ func (c *Remote) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptRe
 	return callDedicatedRPC[serverapi.RuntimeInterruptRequest, serverapi.RuntimeInterruptResponse](c, ctx, "runtime-interrupt", protocol.MethodRuntimeInterrupt, req)
 }
 
-func (c *Remote) QueueUserMessage(ctx context.Context, req serverapi.RuntimeQueueUserMessageRequest) (serverapi.RuntimeQueueUserMessageResponse, error) {
-	return callControlRPC[serverapi.RuntimeQueueUserMessageRequest, serverapi.RuntimeQueueUserMessageResponse](c, ctx, protocol.MethodRuntimeQueueUserMessage, req)
-}
-
 func (c *Remote) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerRequest) (serverapi.RuntimeLiveSteerResponse, error) {
 	return callControlRPC[serverapi.RuntimeLiveSteerRequest, serverapi.RuntimeLiveSteerResponse](c, ctx, protocol.MethodRuntimeLiveSteer, req)
 }

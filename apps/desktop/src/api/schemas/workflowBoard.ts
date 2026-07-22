@@ -24,6 +24,7 @@ import {
   boardGroupSchema,
   commentSchema,
   emptyString,
+  nonBlankString,
   nullableString,
   runSchema,
   stringList,
@@ -334,18 +335,28 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
       project: z.object({
         display_name: z.string(),
       }),
-      workflow: workflowPickerItemSchema,
+      workflow: z.object({
+        workflow_id: nonBlankString,
+        display_name: z.string(),
+        version: z.number(),
+      }),
       body: emptyString,
       source_url: emptyString,
       source_workspace: workspaceSummarySchema,
       execution_target: workflowExecutionTargetSchema.optional().transform((value) => value ?? null),
-      managed_worktree: z.never().optional(),
+      worktree_path: nonBlankString.nullable(),
+      current_session_ids: z.array(nonBlankString),
+      current_scripts: z.array(
+        z
+          .object({
+            run_id: nonBlankString,
+            path: nonBlankString,
+          })
+          .strict(),
+      ),
       status: taskStatusSchema,
       actions: taskActionsSchema,
       attention_count: z.number().int().nonnegative(),
-      runs: z.array(runSchema).nullish().transform(emptyArray),
-      transitions: z.array(transitionSchema).nullish().transform(emptyArray),
-      comments: z.array(commentSchema).nullish().transform(emptyArray),
     }),
   })
   .transform((value) => ({
@@ -354,7 +365,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
     projectID: value.task.summary.project_id,
     projectName: value.task.project.display_name,
     workflowID: value.task.summary.workflow_id,
-    workflowName: value.task.workflow.name,
+    workflowName: value.task.workflow.display_name,
     workflowVersion: value.task.workflow.version,
     title: value.task.summary.title,
     body: value.task.body,
@@ -363,10 +374,13 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
     status: value.task.status,
     actions: value.task.actions,
     attentionCount: value.task.attention_count,
-    comments: value.task.comments,
-    runs: value.task.runs,
-    transitions: value.task.transitions,
     executionTarget: value.task.execution_target,
+    worktreePath: value.task.worktree_path,
+    currentSessionIDs: value.task.current_session_ids,
+    currentScripts: value.task.current_scripts.map((script) => ({
+      runID: script.run_id,
+      path: script.path,
+    })),
     createdAt: value.task.summary.created_at_unix_ms,
     updatedAt: value.task.summary.updated_at_unix_ms,
     done: value.task.summary.done,

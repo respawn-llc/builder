@@ -17,6 +17,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/requestmemo"
 	"core/server/runtime"
+	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowattention"
@@ -331,9 +332,15 @@ func TestServiceCommentMutationsUpdateActivityAndPublishInvalidations(t *testing
 
 func TestServiceAnswersTaskQuestionWithoutControllerLease(t *testing.T) {
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
-	task, _, sessionID := createWorkflowServiceWaitingAsk(t, ctx, service, metadataStore, binding, "Question", "session-task-question", "ask-task-question")
+	task, runID, sessionID := createWorkflowServiceWaitingAsk(t, ctx, service, metadataStore, binding, "Question", "session-task-question", "ask-task-question")
 	responder := &recordingPromptResponder{}
 	service.prompts = responder
+	sub, err := service.SubscribeWorkflowProject(ctx, serverapi.WorkflowProjectSubscribeRequest{ProjectID: task.Task.ProjectID})
+	if err != nil {
+		t.Fatalf("SubscribeWorkflowProject: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+	service.readModels.TaskDetail = unavailableWorkflowTaskDetailReadModel{}
 
 	req := serverapi.WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-question", TaskID: task.Task.ID, AskID: "ask-task-question", FreeformAnswer: "ship it"}
 	if err := service.AnswerWorkflowTaskQuestion(ctx, req); err != nil {
@@ -344,6 +351,14 @@ func TestServiceAnswersTaskQuestionWithoutControllerLease(t *testing.T) {
 	}
 	if responder.response.SelectedOptionNumber != nil {
 		t.Fatalf("selected option = %v, want nil", *responder.response.SelectedOptionNumber)
+	}
+	event := nextWorkflowProjectEvent(t, sub)
+	if event.ProjectID != task.Task.ProjectID ||
+		event.WorkflowID != task.Task.WorkflowID ||
+		event.Resource != "task" ||
+		event.Action != "question_answered" ||
+		!sameStringSet(event.ChangedIDs, []string{task.Task.ID, runID, responder.response.RequestID}) {
+		t.Fatalf("question answered event = %+v", event)
 	}
 	if err := service.AnswerWorkflowTaskQuestion(ctx, req); err != nil {
 		t.Fatalf("AnswerWorkflowTaskQuestion replay: %v", err)
@@ -1985,6 +2000,20 @@ func (r *recordingPromptResponder) SubmitPromptResponse(sessionID string, resp a
 	return nil
 }
 
+type unavailableWorkflowTaskDetailReadModel struct{}
+
+func (unavailableWorkflowTaskDetailReadModel) GetTask(context.Context, string) (serverapi.WorkflowTaskDetail, error) {
+	return serverapi.WorkflowTaskDetail{}, errors.New("task detail unavailable")
+}
+
+func (unavailableWorkflowTaskDetailReadModel) GetTaskByProjectShortID(context.Context, string, string) (serverapi.WorkflowTaskDetail, error) {
+	return serverapi.WorkflowTaskDetail{}, errors.New("task detail unavailable")
+}
+
+func (unavailableWorkflowTaskDetailReadModel) GetTaskByShortID(context.Context, string) (serverapi.WorkflowTaskDetail, error) {
+	return serverapi.WorkflowTaskDetail{}, errors.New("task detail unavailable")
+}
+
 func TestServiceWorkflowListPaginatesAndCreateLinkIsAtomic(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	for _, name := range []string{"Gamma", "Alpha", "Beta"} {
@@ -2547,7 +2576,7 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskList: %v", err)
 	}
-	taskDetail, err := workflowview.NewTaskDetail(metadataStore, definitions, projector, worktree.NewGitInspector(nil))
+	taskDetail, err := workflowview.NewTaskDetail(metadataStore, projector, sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskDetail: %v", err)
 	}
@@ -2555,7 +2584,7 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewActivity: %v", err)
 	}
-	attention, err := workflowview.NewAttention(metadataStore, definitions, resolver, transcripts, prompts)
+	attention, err := workflowview.NewAttention(metadataStore, definitions, projector, resolver, transcripts, prompts)
 	if err != nil {
 		t.Fatalf("workflowview.NewAttention: %v", err)
 	}

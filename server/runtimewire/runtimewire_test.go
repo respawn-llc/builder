@@ -177,7 +177,7 @@ func TestBuildToolRegistryViewImageApprovedOutsidePathIsLogged(t *testing.T) {
 		logger,
 		toolspec.ToolViewImage,
 	)
-	broker.SetAskHandler(func(req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+	broker.SetAskHandler(func(_ context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
 		if !strings.Contains(req.Question, "Allow reading") {
 			t.Fatalf("expected read-focused approval question, got %q", req.Question)
 		}
@@ -350,7 +350,7 @@ func TestRuntimewireViewImageReadsGeneratedFileWithNormalApproval(t *testing.T) 
 		t.Fatalf("write generated pdf: %v", err)
 	}
 	registry, broker := newRuntimeWireToolRegistryWithConfig(t, workspace, configRoot, false, toolspec.ToolPatch, toolspec.ToolViewImage)
-	broker.SetAskHandler(func(req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+	broker.SetAskHandler(func(_ context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
 		if !strings.Contains(req.Question, "Allow reading") {
 			t.Fatalf("expected read-focused approval question, got %q", req.Question)
 		}

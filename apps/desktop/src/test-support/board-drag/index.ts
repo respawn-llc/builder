@@ -17,6 +17,10 @@ export class TestDataTransfer {
     return [...this.#values.keys()];
   }
 
+  clearData(): void {
+    this.#values.clear();
+  }
+
   setData(type: string, value: string): void {
     this.#values.set(type, value);
   }

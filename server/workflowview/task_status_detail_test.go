@@ -137,7 +137,7 @@ func TestTaskStatusIgnoresHistoricalRunUnderCompletedPlacement(t *testing.T) {
 	}
 }
 
-func TestTaskDetailAndBoardUseCanonicalPrimaryStatusPrecedence(t *testing.T) {
+func TestTaskDetailRequiresExactLiveAuthorityForLivenessStatuses(t *testing.T) {
 	ctx, store, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
@@ -168,8 +168,8 @@ func TestTaskDetailAndBoardUseCanonicalPrimaryStatusPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPlacements queued to running before claim: %v", err)
 	}
-	if queuedToRunningBefore.Status.Kind != serverapi.WorkflowTaskStatusKindQueued {
-		t.Fatalf("queued task status before claim = %+v", queuedToRunningBefore.Status)
+	if queuedToRunningBefore.Status.Kind != serverapi.WorkflowTaskStatusKindActive {
+		t.Fatalf("queued task detail status before claim = %+v, want active without live authority", queuedToRunningBefore.Status)
 	}
 	if _, err := workflowStore.ClaimRun(ctx, queuedToRunningStarted.RunID, 0); err != nil {
 		t.Fatalf("ClaimRun queued to running: %v", err)
@@ -179,8 +179,10 @@ func TestTaskDetailAndBoardUseCanonicalPrimaryStatusPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPlacements queued to running after claim: %v", err)
 	}
-	if queuedToRunningAfter.Status.Kind != serverapi.WorkflowTaskStatusKindRunning || !reflect.DeepEqual(queuedToRunningBefore.Status.NodeIDs, queuedToRunningAfter.Status.NodeIDs) || !reflect.DeepEqual(queuedToRunningPlacementsBefore, queuedToRunningPlacementsAfter) {
-		t.Fatalf("claim changed queued task placement or did not make it running: before=%+v/%+v after=%+v/%+v", queuedToRunningBefore.Status, queuedToRunningPlacementsBefore, queuedToRunningAfter.Status, queuedToRunningPlacementsAfter)
+	if queuedToRunningAfter.Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
+		!reflect.DeepEqual(queuedToRunningBefore.Status.NodeIDs, queuedToRunningAfter.Status.NodeIDs) ||
+		!reflect.DeepEqual(queuedToRunningPlacementsBefore, queuedToRunningPlacementsAfter) {
+		t.Fatalf("durable claim changed exact-live detail or placement facts: before=%+v/%+v after=%+v/%+v", queuedToRunningBefore.Status, queuedToRunningPlacementsBefore, queuedToRunningAfter.Status, queuedToRunningPlacementsAfter)
 	}
 	active := createTask("Active")
 	activeStarted, err := workflowStore.StartTask(ctx, active.ID)
@@ -266,7 +268,7 @@ func TestTaskDetailAndBoardUseCanonicalPrimaryStatusPrecedence(t *testing.T) {
 			boardStatus[card.TaskID] = card.Status
 		}
 	}
-	want := map[string]serverapi.WorkflowTaskStatusKind{
+	wantBoard := map[string]serverapi.WorkflowTaskStatusKind{
 		string(backlog.ID):     serverapi.WorkflowTaskStatusKindBacklog,
 		string(active.ID):      serverapi.WorkflowTaskStatusKindActive,
 		string(queued.ID):      serverapi.WorkflowTaskStatusKindQueued,
@@ -277,7 +279,14 @@ func TestTaskDetailAndBoardUseCanonicalPrimaryStatusPrecedence(t *testing.T) {
 		string(approval.ID):    serverapi.WorkflowTaskStatusKindWaitingApproval,
 		string(canceled.ID):    serverapi.WorkflowTaskStatusKindCanceled,
 	}
-	for taskID, wantKind := range want {
+	wantDetail := map[string]serverapi.WorkflowTaskStatusKind{}
+	for taskID, kind := range wantBoard {
+		wantDetail[taskID] = kind
+	}
+	wantDetail[string(queued.ID)] = serverapi.WorkflowTaskStatusKindActive
+	wantDetail[string(running.ID)] = serverapi.WorkflowTaskStatusKindActive
+	wantDetail[string(question.ID)] = serverapi.WorkflowTaskStatusKindActive
+	for taskID, wantKind := range wantDetail {
 		detail, err := view.detail(t).GetTask(ctx, taskID)
 		if err != nil {
 			t.Fatalf("GetTask %s: %v", taskID, err)
@@ -285,8 +294,9 @@ func TestTaskDetailAndBoardUseCanonicalPrimaryStatusPrecedence(t *testing.T) {
 		if detail.Status.Kind != wantKind {
 			t.Fatalf("detail status for %s = %+v, want %q", taskID, detail.Status, wantKind)
 		}
-		if cardStatus, ok := boardStatus[taskID]; !ok || !reflect.DeepEqual(cardStatus, detail.Status) {
-			t.Fatalf("board status for %s = %+v, want exact detail status %+v", taskID, cardStatus, detail.Status)
+		cardStatus, ok := boardStatus[taskID]
+		if !ok || cardStatus.Kind != wantBoard[taskID] {
+			t.Fatalf("board status for %s = %+v, want %q", taskID, cardStatus, wantBoard[taskID])
 		}
 	}
 	if !mustTaskDetail(t, view, ctx, string(canceled.ID)).Summary.Done {
@@ -297,14 +307,15 @@ func TestTaskDetailAndBoardUseCanonicalPrimaryStatusPrecedence(t *testing.T) {
 	}
 }
 
-func TestTaskDetailAndBoardPreserveFanoutStatusUnions(t *testing.T) {
+func TestDurableFanoutStatusAndExactLiveTaskDetailRemainDistinct(t *testing.T) {
 	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
 	fixture := createWorkflowViewFanoutStatusFixture(t, ctx, workflowStore, binding)
 
 	detail := mustTaskDetail(t, view, ctx, string(fixture.task.ID))
-	want := fixture.status
-	if detail.Status.Kind != want.Kind || detail.Status.NativeState != want.NativeState || !reflect.DeepEqual(detail.Status.RunIDs, want.RunIDs) || !reflect.DeepEqual(detail.Status.AttentionTypes, want.AttentionTypes) {
-		t.Fatalf("detail status = %+v, want kind/native/run/attention unions %+v", detail.Status, want)
+	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
+		len(detail.Status.RunIDs) != 0 ||
+		!reflect.DeepEqual(detail.Status.AttentionTypes, []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindInterrupted}) {
+		t.Fatalf("detail status = %+v, want durable attention without unproven liveness", detail.Status)
 	}
 
 	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
@@ -333,8 +344,11 @@ func TestTaskDetailAndBoardPreserveFanoutStatusUnions(t *testing.T) {
 		t.Fatalf("fanout board status projections = %+v, want every branch card", cardStatuses)
 	}
 	for _, status := range cardStatuses {
-		if !reflect.DeepEqual(status, detail.Status) {
-			t.Fatalf("board status = %+v, want detail status %+v", status, detail.Status)
+		if status.Kind != fixture.status.Kind ||
+			status.NativeState != fixture.status.NativeState ||
+			!reflect.DeepEqual(status.RunIDs, fixture.status.RunIDs) ||
+			!reflect.DeepEqual(status.AttentionTypes, fixture.status.AttentionTypes) {
+			t.Fatalf("board status = %+v, want durable fanout status %+v", status, fixture.status)
 		}
 	}
 	workflowIDString := string(fixture.workflowID)
@@ -344,8 +358,14 @@ func TestTaskDetailAndBoardPreserveFanoutStatusUnions(t *testing.T) {
 		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingQuestion},
 	})
 
-	if err != nil || len(tasks.Tasks) != 1 || tasks.Tasks[0].TaskID != string(fixture.task.ID) || !reflect.DeepEqual(tasks.Tasks[0].Status, detail.Status) {
-		t.Fatalf("fanout list status = %+v/%v, want exact detail status %+v", tasks.Tasks, err, detail.Status)
+	if err != nil ||
+		len(tasks.Tasks) != 1 ||
+		tasks.Tasks[0].TaskID != string(fixture.task.ID) ||
+		tasks.Tasks[0].Status.Kind != fixture.status.Kind ||
+		tasks.Tasks[0].Status.NativeState != fixture.status.NativeState ||
+		!reflect.DeepEqual(tasks.Tasks[0].Status.RunIDs, fixture.status.RunIDs) ||
+		!reflect.DeepEqual(tasks.Tasks[0].Status.AttentionTypes, fixture.status.AttentionTypes) {
+		t.Fatalf("fanout list status = %+v/%v, want durable fanout status %+v", tasks.Tasks, err, fixture.status)
 	}
 	if tasks.Tasks[0].ColumnKeys == nil || !reflect.DeepEqual(*tasks.Tasks[0].ColumnKeys, []string{"impl_a", "impl_b", "impl_c"}) {
 		t.Fatalf("fanout list column order = %+v", tasks.Tasks[0].ColumnKeys)
@@ -501,8 +521,8 @@ func TestTaskDetailProjectsWaitingAskRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if len(detail.Runs) != 1 || detail.Runs[0].WaitingAskID == nil || *detail.Runs[0].WaitingAskID != "ask-view-1" || detail.Runs[0].SessionID != sessionID {
-		t.Fatalf("runs do not project waiting ask: %+v", detail.Runs)
+	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindActive || len(detail.Status.RunIDs) != 0 {
+		t.Fatalf("status = %+v, want active without exact live pending-question evidence", detail.Status)
 	}
 	if detail.AttentionCount != 1 {
 		t.Fatalf("attention count = %d, want 1", detail.AttentionCount)
@@ -511,7 +531,7 @@ func TestTaskDetailProjectsWaitingAskRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTaskAttention: %v", err)
 	}
-	if len(attention.Items) != 1 || attention.Items[0].Kind != "question" || attention.Items[0].AskID != "ask-view-1" || strings.TrimSpace(attention.Items[0].Message) == "" || len(attention.Items[0].Suggestions) != 3 || attention.Items[0].RecommendedOptionIndex != 2 {
+	if len(attention.Items) != 1 || attention.Items[0].Kind != "question" || attention.Items[0].AskID != "ask-view-1" || attention.Items[0].SessionID != sessionID || strings.TrimSpace(attention.Items[0].Message) == "" || len(attention.Items[0].Suggestions) != 3 || attention.Items[0].RecommendedOptionIndex != 2 {
 		t.Fatalf("attention question options = %+v", attention.Items)
 	}
 	for _, suggestion := range attention.Items[0].Suggestions {

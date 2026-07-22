@@ -109,6 +109,50 @@ func TestAttentionListProjectsApprovalQuestionAndInterruptedRun(t *testing.T) {
 	}
 }
 
+func TestAttentionProjectionDropsApprovalResolvedAfterCandidateRead(t *testing.T) {
+	ctx, store, workflowStore, binding := newWorkflowViewTestContextStore(t)
+	view, err := newWorkflowViewTestFixture(store, workflowStore, nil, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	requireDoneTransitionApproval(t, ctx, store, workflowID)
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Approval race", Body: "Body"})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	started, err := workflowStore.StartTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	pending, err := workflowStore.CompleteRun(ctx, workflowstore.CompleteRunRequest{RunID: started.RunID, TransitionID: "done"})
+	if err != nil {
+		t.Fatalf("CompleteRun: %v", err)
+	}
+	rows, err := store.Queries().ListWorkflowTaskAttentionCandidates(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("ListWorkflowTaskAttentionCandidates: %v", err)
+	}
+	candidates := attentionCandidateRows(rows)
+	if len(candidates) != 1 || candidates[0].kind != "approval" {
+		t.Fatalf("attention candidates = %+v, want one approval", candidates)
+	}
+	if _, err := workflowStore.ApproveTransition(ctx, pending.Result.TransitionID); err != nil {
+		t.Fatalf("ApproveTransition: %v", err)
+	}
+
+	_, include, err := view.taskAttention(t).itemFromCandidate(ctx, candidates[0], newPendingQuestionResolver(nil, nil))
+	if err != nil {
+		t.Fatalf("itemFromCandidate: %v", err)
+	}
+	if include {
+		t.Fatal("resolved stale approval candidate was included")
+	}
+}
+
 func TestCompletedPlacementQuestionRunIsExcludedFromTaskAndAttentionProjections(t *testing.T) {
 	ctx, store, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)

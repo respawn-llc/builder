@@ -269,19 +269,17 @@ func TestComposedWorkflowTaskResumesDetachedManagedWorktreeWithoutMutation(t *te
 		if err != nil {
 			t.Fatalf("GetWorkflowTask initial: %v", err)
 		}
-		if len(detail.Task.Runs) != 1 || detail.Task.Runs[0].ID != started.Applied.RunID || detail.Task.Runs[0].SessionID == "" {
+		if len(detail.Task.CurrentSessionIDs) != 1 {
 			return false
 		}
-		if detail.Task.ExecutionTarget == nil || detail.Task.ExecutionTarget.ManagedWorktree == nil {
+		if detail.Task.ExecutionTarget == nil || detail.Task.WorktreePath == nil {
 			return false
 		}
 		initial = detail.Task
 		return true
 	}, "initial workflow run did not attach its session and managed worktree")
-	initialRun := initial.Runs[0]
-	initialTarget := initial.ExecutionTarget
-	worktreeRoot := initialTarget.ManagedWorktree.CanonicalRoot
-	worktreeID := initialTarget.ManagedWorktree.WorktreeID
+	initialSessionID := initial.CurrentSessionIDs[0]
+	worktreeRoot := *initial.WorktreePath
 	if setupCount, err := setup.InvocationCount(worktreeRoot); err != nil || setupCount != 1 {
 		t.Fatalf("initial managed-worktree setup count = %d, %v, want exactly one", setupCount, err)
 	}
@@ -296,9 +294,10 @@ func TestComposedWorkflowTaskResumesDetachedManagedWorktreeWithoutMutation(t *te
 	if err != nil {
 		t.Fatalf("InterruptWorkflowTask: %v", err)
 	}
-	if len(interrupted.Runs) != 1 || interrupted.Runs[0].Generation != initialRun.Generation || interrupted.Runs[0].SessionID != initialRun.SessionID {
-		t.Fatalf("InterruptWorkflowTask response = %+v, want original run/session", interrupted)
+	if len(interrupted.Runs) != 1 || interrupted.Runs[0].SessionID != initialSessionID {
+		t.Fatalf("InterruptWorkflowTask response = %+v, want current session", interrupted)
 	}
+	initialRun := interrupted.Runs[0]
 
 	resumed, err := fixture.appCore.WorkflowClient().ResumeWorkflowTask(fixture.ctx, serverapi.WorkflowTaskResumeRequest{TaskID: task.Task.ID})
 	if err != nil {
@@ -328,28 +327,19 @@ func TestComposedWorkflowTaskResumesDetachedManagedWorktreeWithoutMutation(t *te
 			t.Fatalf("%s session branch = %+v, want detached HEAD", label, environment.Environment.Branch)
 		}
 	}
-	assertDetachedSession(initialRun.SessionID, "resumed first agent")
+	assertDetachedSession(initialSessionID, "resumed first agent")
 
 	waitForCoreWorkflowTaskDone(t, fixture.appCore, task.Task.ID)
 	final, err := fixture.appCore.WorkflowClient().GetWorkflowTask(fixture.ctx, serverapi.WorkflowTaskGetRequest{TaskID: task.Task.ID})
 	if err != nil {
 		t.Fatalf("GetWorkflowTask final: %v", err)
 	}
-	if !final.Task.Summary.Done || final.Task.ExecutionTarget == nil || final.Task.ExecutionTarget.CurrentBranch != nil ||
-		final.Task.ExecutionTarget.ManagedWorktree == nil ||
-		final.Task.ExecutionTarget.ManagedWorktree.WorktreeID != worktreeID ||
-		final.Task.ExecutionTarget.ManagedWorktree.CanonicalRoot != worktreeRoot {
+	if !final.Task.Summary.Done || final.Task.ExecutionTarget == nil ||
+		final.Task.WorktreePath == nil ||
+		*final.Task.WorktreePath != worktreeRoot {
 		t.Fatalf("final task = %+v, want done in the same detached managed worktree", final.Task)
 	}
-	if len(final.Task.Runs) != 2 || final.Task.Runs[0].ID != initialRun.ID ||
-		final.Task.Runs[0].SessionID != initialRun.SessionID ||
-		final.Task.Runs[0].Generation <= initialRun.Generation ||
-		final.Task.Runs[1].NodeID == initialRun.NodeID ||
-		final.Task.Runs[1].SessionID == "" {
-		t.Fatalf("final runs = %+v, want resumed first run and second agent run", final.Task.Runs)
-	}
-	assertDetachedSession(final.Task.Runs[0].SessionID, "completed resumed first agent")
-	assertDetachedSession(final.Task.Runs[1].SessionID, "second agent")
+	assertDetachedSession(initialSessionID, "completed resumed first agent")
 	if testsetup.RunGit(t, worktreeRoot, "rev-parse", "HEAD") != detachedHead ||
 		testsetup.RunGit(t, worktreeRoot, "status", "--porcelain=v1") != gitStatusBeforeResume {
 		t.Fatal("detached managed worktree changed while resuming workflow execution")

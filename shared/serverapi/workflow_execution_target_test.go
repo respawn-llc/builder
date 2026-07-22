@@ -3,6 +3,7 @@ package serverapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -124,46 +125,21 @@ func TestWorkflowExecutionTargetActionResponsesExposeOnlyDiscriminatedPayloads(t
 }
 
 func TestWorkflowExecutionTargetDetailAndExplicitRefErrorEncoding(t *testing.T) {
-	effectiveRoot := "/worktree"
 	target := WorkflowExecutionTarget{
-		Mode:          WorkflowExecutionTargetModeCustomRef,
-		EffectiveRoot: &effectiveRoot,
-		RequestedRef:  stringPointer("release/v1"),
-		ResolvedRef:   stringPointer("refs/remotes/origin/release/v1"),
-		CommitOID:     stringPointer("0123456789abcdef"),
-		Provenance:    WorkflowExecutionTargetProvenanceResolved,
-		CurrentBranch: stringPointer("operator-renamed"),
-		ManagedWorktree: &WorkflowExecutionTargetWorktree{
-			WorktreeID:    "worktree-1",
-			CanonicalRoot: "/worktree",
-			DisplayName:   "worktree",
-			Availability:  WorktreePathAvailabilityAvailable,
-			Managed:       true,
-		},
+		Mode:         WorkflowExecutionTargetModeCustomRef,
+		RequestedRef: stringPointer("release/v1"),
+		ResolvedRef:  stringPointer("refs/remotes/origin/release/v1"),
+		CommitOID:    stringPointer("0123456789abcdef"),
+		Provenance:   WorkflowExecutionTargetProvenanceResolved,
 	}
 	if err := target.Validate(); err != nil {
 		t.Fatalf("target invalid: %v", err)
 	}
-	target.ManagedWorktree.Availability = WorktreePathAvailabilityMissing
-	if err := target.Validate(); err == nil {
-		t.Fatal("managed target accepted an unavailable worktree with an effective root")
-	}
-	target.ManagedWorktree.Availability = WorktreePathAvailabilityAvailable
 	legacy := target
 	legacy.Provenance = WorkflowExecutionTargetProvenanceLegacyObserved
 	if err := legacy.Validate(); err != nil {
 		t.Fatalf("legacy-observed target invalid: %v", err)
 	}
-	target.ManagedWorktree.Managed = false
-	if err := target.Validate(); err == nil {
-		t.Fatal("managed target accepted unmanaged worktree facts")
-	}
-	target.ManagedWorktree.Managed = true
-	target.ManagedWorktree.WorktreeID = ""
-	if err := target.Validate(); err == nil {
-		t.Fatal("managed target accepted invalid worktree facts")
-	}
-	target.ManagedWorktree.WorktreeID = "worktree-1"
 	data, err := json.Marshal(WorkflowTaskDetail{ExecutionTarget: &target})
 	if err != nil {
 		t.Fatalf("marshal detail: %v", err)
@@ -171,20 +147,13 @@ func TestWorkflowExecutionTargetDetailAndExplicitRefErrorEncoding(t *testing.T) 
 	if string(data) == "" || !jsonFieldPresent(t, data, "execution_target") {
 		t.Fatalf("detail JSON = %s", data)
 	}
-	var taskDetailWire struct {
-		ExecutionTarget struct {
-			ManagedWorktree map[string]json.RawMessage `json:"managed_worktree"`
-		} `json:"execution_target"`
-	}
-	if err := json.Unmarshal(data, &taskDetailWire); err != nil {
-		t.Fatalf("decode detail JSON: %v", err)
-	}
-	if _, ok := taskDetailWire.ExecutionTarget.ManagedWorktree["availability"]; !ok {
-		t.Fatalf("managed execution target omitted availability: %s", data)
+	for _, forbidden := range []string{"effective_root", "current_branch", "managed_worktree"} {
+		if jsonFieldPresent(t, mustJSONField(t, data, "execution_target"), forbidden) {
+			t.Fatalf("durable execution target unexpectedly includes %q: %s", forbidden, data)
+		}
 	}
 
-	sourceRoot := "/source"
-	none := WorkflowExecutionTarget{Mode: WorkflowExecutionTargetModeNone, EffectiveRoot: &sourceRoot, Provenance: WorkflowExecutionTargetProvenanceResolved}
+	none := WorkflowExecutionTarget{Mode: WorkflowExecutionTargetModeNone, Provenance: WorkflowExecutionTargetProvenanceResolved}
 	noneData, err := json.Marshal(none)
 	if err != nil {
 		t.Fatalf("marshal none target: %v", err)
@@ -218,7 +187,7 @@ func TestWorkflowExecutionTargetDetailAndExplicitRefErrorEncoding(t *testing.T) 
 	}
 }
 
-func TestWorkflowExecutionTargetManagedOperationalFactsMayBeUnavailable(t *testing.T) {
+func TestWorkflowExecutionTargetContainsOnlyDurableFacts(t *testing.T) {
 	target := WorkflowExecutionTarget{
 		Mode:         WorkflowExecutionTargetModeHead,
 		RequestedRef: stringPointer("HEAD"),
@@ -226,31 +195,45 @@ func TestWorkflowExecutionTargetManagedOperationalFactsMayBeUnavailable(t *testi
 		Provenance:   WorkflowExecutionTargetProvenanceResolved,
 	}
 	if err := target.Validate(); err != nil {
-		t.Fatalf("managed target without current operational facts invalid: %v", err)
+		t.Fatalf("durable managed target invalid: %v", err)
 	}
 	data, err := json.Marshal(target)
 	if err != nil {
 		t.Fatalf("marshal target: %v", err)
 	}
-	for _, unavailable := range []string{"effective_root", "current_branch", "managed_worktree"} {
-		if jsonFieldPresent(t, data, unavailable) {
-			t.Fatalf("unavailable operational fact %q encoded: %s", unavailable, data)
+	for _, removed := range []string{"effective_root", "current_branch", "managed_worktree"} {
+		if jsonFieldPresent(t, data, removed) {
+			t.Fatalf("removed operational fact %q encoded: %s", removed, data)
 		}
-	}
-
-	root := "/worktree"
-	target.EffectiveRoot = &root
-	if err := target.Validate(); err == nil {
-		t.Fatal("managed target accepted effective_root without managed_worktree")
-	}
-	target.EffectiveRoot = nil
-	target.CurrentBranch = stringPointer("main")
-	if err := target.Validate(); err == nil {
-		t.Fatal("managed target accepted current_branch without an effective root")
 	}
 }
 
-func TestWorkflowTaskDetailDoesNotDuplicateManagedWorktreeOrChangeBoardCards(t *testing.T) {
+func TestWorkflowTaskDetailCarriesOnlyCurrentExecutionTargets(t *testing.T) {
+	detailType := reflect.TypeOf(WorkflowTaskDetail{})
+	for _, removedField := range []string{"Placements", "Runs", "Transitions", "Comments"} {
+		if _, exists := detailType.FieldByName(removedField); exists {
+			t.Fatalf("WorkflowTaskDetail still embeds %s history", removedField)
+		}
+	}
+
+	data, err := json.Marshal(WorkflowTaskDetail{})
+	if err != nil {
+		t.Fatalf("marshal empty detail: %v", err)
+	}
+	for _, requiredArray := range []string{"current_session_ids", "current_scripts"} {
+		if !jsonFieldPresent(t, data, requiredArray) {
+			t.Fatalf("task detail omitted required array %q: %s", requiredArray, data)
+		}
+	}
+	workflowType := reflect.TypeOf(WorkflowTaskDetail{}.Workflow)
+	for _, workflowLevelField := range []string{"ValidForTaskCreation", "ValidationErrors"} {
+		if _, exists := workflowType.FieldByName(workflowLevelField); exists {
+			t.Fatalf("WorkflowTaskDetail workflow still embeds workflow-level field %s", workflowLevelField)
+		}
+	}
+}
+
+func TestWorkflowTaskDetailKeepsRecordedWorktreePathOffBoardCards(t *testing.T) {
 	detailType := reflect.TypeOf(WorkflowTaskDetail{})
 	if _, exists := detailType.FieldByName("Attention"); exists {
 		t.Fatal("WorkflowTaskDetail still embeds attention items")
@@ -259,13 +242,15 @@ func TestWorkflowTaskDetailDoesNotDuplicateManagedWorktreeOrChangeBoardCards(t *
 	if !exists || attentionCount.Type.Kind() != reflect.Int {
 		t.Fatalf("WorkflowTaskDetail attention count contract = %v, want int", attentionCount.Type)
 	}
-	if _, exists := detailType.FieldByName("ManagedWorktree"); exists {
-		t.Fatal("WorkflowTaskDetail still duplicates execution_target.managed_worktree")
+	worktreePath, exists := detailType.FieldByName("WorktreePath")
+	if !exists || worktreePath.Type != reflect.TypeOf((*string)(nil)) {
+		t.Fatalf("WorkflowTaskDetail worktree path contract = %v, want *string", worktreePath.Type)
 	}
 	targetType := reflect.TypeOf(WorkflowExecutionTarget{})
-	managedWorktree, exists := targetType.FieldByName("ManagedWorktree")
-	if !exists || managedWorktree.Type != reflect.TypeOf((*WorkflowExecutionTargetWorktree)(nil)) {
-		t.Fatalf("WorkflowExecutionTarget managed worktree contract = %v, want *WorkflowExecutionTargetWorktree", managedWorktree.Type)
+	for _, removedField := range []string{"EffectiveRoot", "CurrentBranch", "ManagedWorktree"} {
+		if _, exists := targetType.FieldByName(removedField); exists {
+			t.Fatalf("WorkflowExecutionTarget still exposes %s", removedField)
+		}
 	}
 	for _, boardType := range []reflect.Type{
 		reflect.TypeOf(WorkflowBoardTaskCard{}),
@@ -280,23 +265,22 @@ func TestWorkflowTaskDetailDoesNotDuplicateManagedWorktreeOrChangeBoardCards(t *
 }
 
 func TestWorkflowTaskGetResponseValidatesExecutionTarget(t *testing.T) {
-	sourceRoot := "/source"
 	valid := WorkflowTaskGetResponse{Task: WorkflowTaskDetail{
+		CurrentSessionIDs: []string{},
+		CurrentScripts:    []WorkflowTaskCurrentScript{},
 		ExecutionTarget: &WorkflowExecutionTarget{
-			Mode:          WorkflowExecutionTargetModeNone,
-			EffectiveRoot: &sourceRoot,
-			Provenance:    WorkflowExecutionTargetProvenanceResolved,
+			Mode:       WorkflowExecutionTargetModeNone,
+			Provenance: WorkflowExecutionTargetProvenanceResolved,
 		},
 	}}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid task detail response rejected: %v", err)
 	}
 	invalid := valid
-	blankRoot := " "
 	invalid.Task.ExecutionTarget = &WorkflowExecutionTarget{
-		Mode:          WorkflowExecutionTargetModeNone,
-		EffectiveRoot: &blankRoot,
-		Provenance:    WorkflowExecutionTargetProvenanceResolved,
+		Mode:         WorkflowExecutionTargetModeHead,
+		RequestedRef: stringPointer("HEAD"),
+		Provenance:   WorkflowExecutionTargetProvenanceResolved,
 	}
 	if err := invalid.Validate(); err == nil {
 		t.Fatal("task detail response accepted an invalid execution target")
@@ -306,6 +290,49 @@ func TestWorkflowTaskGetResponseValidatesExecutionTarget(t *testing.T) {
 	if err := invalid.Validate(); err == nil {
 		t.Fatal("task detail response accepted a negative attention count")
 	}
+
+	invalid = valid
+	invalid.Task.CurrentSessionIDs = nil
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("task detail response accepted a null current_session_ids collection")
+	}
+	invalid = valid
+	invalid.Task.CurrentScripts = []WorkflowTaskCurrentScript{{RunID: "run-b", Path: "script"}, {RunID: "run-a", Path: "script"}}
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("task detail response accepted non-deterministic current scripts")
+	}
+}
+
+func TestWorkflowTaskGetResponseAcceptsEveryCurrentExecutionTarget(t *testing.T) {
+	currentSessionIDs := make([]string, 0, 201)
+	currentScripts := make([]WorkflowTaskCurrentScript, 0, 201)
+	for index := range 201 {
+		currentSessionIDs = append(currentSessionIDs, fmt.Sprintf("session-%03d", index))
+		currentScripts = append(currentScripts, WorkflowTaskCurrentScript{
+			RunID: fmt.Sprintf("run-%03d", index),
+			Path:  "script",
+		})
+	}
+	response := WorkflowTaskGetResponse{Task: WorkflowTaskDetail{
+		CurrentSessionIDs: currentSessionIDs,
+		CurrentScripts:    currentScripts,
+	}}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("all current execution targets rejected: %v", err)
+	}
+}
+
+func mustJSONField(t *testing.T, data []byte, field string) []byte {
+	t.Helper()
+	var value map[string]json.RawMessage
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	fieldValue, ok := value[field]
+	if !ok {
+		t.Fatalf("JSON omitted %q: %s", field, data)
+	}
+	return fieldValue
 }
 
 func jsonFieldPresent(t *testing.T, data []byte, field string) bool {

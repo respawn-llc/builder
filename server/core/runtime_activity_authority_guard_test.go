@@ -175,6 +175,7 @@ func TestRuntimeClientInputIdentityBoundaryStaysRequestShaped(t *testing.T) {
 		"CompactContext(ctx context.Context, args string)",
 		"SubmitQueuedUserMessages(ctx context.Context)",
 		"QueueUserMessage(text string)",
+		"QueueRuntimeUserMessage(",
 	} {
 		if strings.Contains(string(content), forbidden) {
 			t.Fatalf("RuntimeClient must expose request-shaped input APIs with UI-owned operation refs, found %q", forbidden)
@@ -190,6 +191,7 @@ func TestRuntimeClientInputIdentityBoundaryStaysRequestShaped(t *testing.T) {
 		"func (c *sessionRuntimeClient) CompactContext(",
 		"func (c *sessionRuntimeClient) SubmitQueuedUserMessages(",
 		"func (c *sessionRuntimeClient) QueueUserMessage(",
+		"func (c *sessionRuntimeClient) QueueRuntimeUserMessage(",
 		"QueueUserMessageWithClientRequestID",
 	} {
 		if strings.Contains(string(sessionRuntimeClient), forbidden) {

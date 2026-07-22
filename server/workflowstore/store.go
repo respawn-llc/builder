@@ -282,6 +282,12 @@ type RunRecord struct {
 	InvalidCompletions      int64
 }
 
+type ResolvedWaitingAsk struct {
+	Run        RunRecord
+	ProjectID  string
+	WorkflowID workflow.WorkflowID
+}
+
 type ActiveRunCompletionTargetSelector struct {
 	RunID     workflow.RunID
 	SessionID string

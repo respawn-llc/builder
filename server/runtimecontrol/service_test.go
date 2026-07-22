@@ -257,10 +257,84 @@ func (c *restartableRuntimeControlClient) releaseSecond() {
 	c.release2Once.Do(func() { close(c.release2) })
 }
 
+type steeringDrainRuntimeControlClient struct {
+	firstStarted  chan struct{}
+	secondStarted chan struct{}
+	releaseFirst  chan struct{}
+	releaseSecond chan struct{}
+	mu            sync.Mutex
+	requests      []llm.Request
+}
+
+func newSteeringDrainRuntimeControlClient() *steeringDrainRuntimeControlClient {
+	return &steeringDrainRuntimeControlClient{
+		firstStarted:  make(chan struct{}),
+		secondStarted: make(chan struct{}),
+		releaseFirst:  make(chan struct{}),
+		releaseSecond: make(chan struct{}),
+	}
+}
+
+func (c *steeringDrainRuntimeControlClient) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
+	c.mu.Lock()
+	c.requests = append(c.requests, req)
+	call := len(c.requests)
+	c.mu.Unlock()
+	switch call {
+	case 1:
+		close(c.firstStarted)
+		select {
+		case <-c.releaseFirst:
+		case <-ctx.Done():
+			return llm.Response{}, ctx.Err()
+		}
+		return llm.Response{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("still working"),
+				Phase:   textutil.Value(llm.MessagePhaseCommentary),
+			},
+			ToolCalls: []llm.ToolCall{{
+				ID:    "call-boundary",
+				Name:  string(toolspec.ToolExecCommand),
+				Input: json.RawMessage(`{"command":"printf tool-boundary"}`),
+			}},
+			Usage: llm.Usage{WindowTokens: 200000},
+		}, nil
+	case 2:
+		close(c.secondStarted)
+		select {
+		case <-c.releaseSecond:
+		case <-ctx.Done():
+			return llm.Response{}, ctx.Err()
+		}
+		return llm.Response{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		}, nil
+	default:
+		return llm.Response{}, errors.New("unexpected model request after final response")
+	}
+}
+
+func (c *steeringDrainRuntimeControlClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.ProviderCapabilities{}, nil
+}
+
+func (c *steeringDrainRuntimeControlClient) request(index int) llm.Request {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.requests[index]
+}
+
 type fakeShellHandler struct{}
 
-func (fakeShellHandler) Call(context.Context, tools.Call) (tools.Result, error) {
-	return tools.Result{Output: json.RawMessage(`{"output":"ok","exit_code":0,"truncated":false}`)}, nil
+func (fakeShellHandler) Call(_ context.Context, call tools.Call) (tools.Result, error) {
+	return tools.Result{
+		CallID: call.ID,
+		Name:   call.Name,
+		Output: json.RawMessage(`{"output":"ok","exit_code":0,"truncated":false}`),
+	}, nil
 }
 
 var runtimeControlTestSessionPersistence = sessiontest.NewPersistence()
@@ -450,6 +524,105 @@ func TestServiceSubmitUserTurnStillCancelsOnExplicitInterrupt(t *testing.T) {
 	close(client.release)
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("SubmitUserMessage error = %v, want context canceled", err)
+	}
+}
+
+func TestServiceCanceledAskQuestionTurnReleasesExecutionForNextUserTurn(t *testing.T) {
+	toolStarted := make(chan struct{})
+	client := &runtimeControlFakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant},
+			ToolCalls: []llm.ToolCall{{
+				ID:    "ask-cancel",
+				Name:  string(toolspec.ToolAskQuestion),
+				Input: json.RawMessage(`{"question":"Continue?"}`),
+			},
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("next turn completed"),
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+	}}
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		OnEvent: func(event runtime.Event) {
+			if event.Kind != runtime.EventToolCallStarted || event.ToolCall == nil || event.ToolCall.ID != "ask-cancel" {
+				return
+			}
+			select {
+			case <-toolStarted:
+			default:
+				close(toolStarted)
+			}
+		},
+	})
+
+	firstRequest := runtimeControlUserTurnRequest(store, "ask-cancel", "ask then cancel")
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := service.SubmitUserTurn(context.Background(), firstRequest)
+		firstDone <- err
+	}()
+	select {
+	case <-toolStarted:
+	case err := <-firstDone:
+		t.Fatalf("ask_question turn ended before tool start: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for ask_question to start")
+	}
+	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID:    "interrupt-ask-cancel",
+		SessionID:          store.Meta().SessionID,
+		TargetOperationRef: &firstRequest.OperationRef,
+	}); err != nil {
+		t.Fatalf("interrupt canceled ask_question turn: %v", err)
+	}
+	select {
+	case err := <-firstDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled ask_question turn error = %v, want context canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("canceled ask_question turn retained its execution")
+	}
+	if _, err := service.LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
+		ClientRequestID: "b8349273-19d6-4a4b-94fb-895b48103d02",
+		SessionID:       store.Meta().SessionID,
+		Text:            "must not join the canceled execution",
+	}); !errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
+		t.Fatalf("live steer after canceled ask_question error = %v, want no active run", err)
+	}
+
+	next, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "after-ask-cancel", "next user message"))
+	if err != nil {
+		t.Fatalf("submit next user turn after canceled ask_question: %v", err)
+	}
+	if next.Message != "next turn completed" {
+		t.Fatalf("next user turn response = %+v, want completed response", next)
+	}
+	if engine.HasActiveLiveRunGroup() {
+		t.Fatal("canceled ask_question turn retained live-run ownership after next user turn")
+	}
+	nextUserMessageCommitted := false
+	if err := engine.WithTranscriptHydrationSnapshot(func(snapshot runtime.TranscriptHydrationSnapshot) error {
+		for _, row := range snapshot.CommittedRows {
+			if row.Kind == runtime.TranscriptCommittedRowFactUser && row.User != nil && row.User.Text == "next user message" {
+				nextUserMessageCommitted = true
+				return nil
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read transcript hydration snapshot: %v", err)
+	}
+	if !nextUserMessageCommitted {
+		t.Fatal("next user message was not committed to the transcript")
 	}
 }
 
@@ -1422,85 +1595,6 @@ func TestServiceSubmitUserTurnRecordsCommittedAtFlushBeforeAssistantCompletion(t
 	assertRuntimeControlReconciliation(t, service.operations, req.SessionID, ref, clientui.RuntimeInputReconciliationCommitted)
 }
 
-func TestServiceInterruptQueuedServerMessageDoesNotInterruptUnrelatedActiveRun(t *testing.T) {
-	client := newCancelObservingRuntimeControlClient()
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	activeRef := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
-	done := make(chan error, 1)
-	go func() {
-		_, err := service.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
-			ClientRequestID: activeRef.ClientRequestID.String(),
-			SessionID:       store.Meta().SessionID,
-			Text:            "keep running",
-			OperationRef:    activeRef,
-			PreSubmitCompactionOperationRef: runtimeControlOperationRef(
-				clientui.RuntimeOperationKindPreSubmitCompact,
-			),
-		})
-		done <- err
-	}()
-	select {
-	case <-client.started:
-	case <-time.After(time.Second):
-		t.Fatal("active submit did not reach model request")
-	}
-	queueRequest := runtimeControlQueueUserMessageRequest(store, "queued-discard-only", "discard queued only")
-	queued, err := service.QueueUserMessage(context.Background(), queueRequest)
-	if err != nil {
-		t.Fatalf("QueueUserMessage: %v", err)
-	}
-	queueItemID := mustRuntimeControlQueueItemID(t, queued.QueueItemID)
-	target := queueRequest.OperationRef
-	target.QueueItemID = &queueItemID
-	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
-		ClientRequestID:    "interrupt-queued-discard-only",
-		SessionID:          store.Meta().SessionID,
-		TargetOperationRef: &target,
-	}); err != nil {
-		t.Fatalf("Interrupt queued target: %v", err)
-	}
-	select {
-	case <-client.ctxCanceled:
-		t.Fatal("queued-message discard interrupted unrelated active run")
-	case <-time.After(100 * time.Millisecond):
-	}
-	close(client.release)
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("SubmitUserTurn: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for active submit completion")
-	}
-	assertRuntimeControlReconciliation(t, service.operations, store.Meta().SessionID, target, clientui.RuntimeInputReconciliationCanceledNotCommitted)
-}
-
-func TestServiceCanceledQueuedMessageCreateRejectsDuplicateRetries(t *testing.T) {
-	store, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
-	operations := runtimeops.NewCoordinator()
-	service.WithOperationCoordinator(operations)
-	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindQueuedMessage)
-	req := serverapi.RuntimeQueueUserMessageRequest{
-		ClientRequestID: ref.ClientRequestID.String(),
-		SessionID:       store.Meta().SessionID,
-		OperationRef:    ref,
-		Text:            "must not enqueue after cancel",
-	}
-	if err := operations.CancelOperation(req.SessionID, ref); err != nil {
-		t.Fatalf("CancelOperation: %v", err)
-	}
-	for attempt := 1; attempt <= 2; attempt++ {
-		if _, err := service.QueueUserMessage(context.Background(), req); !errors.Is(err, runtimeops.ErrOperationCanceled) {
-			t.Fatalf("QueueUserMessage attempt %d error = %v, want operation canceled", attempt, err)
-		}
-	}
-	if engine.HasQueuedUserWork() {
-		t.Fatal("canceled queued-message create retry enqueued runtime work")
-	}
-	assertRuntimeControlReconciliation(t, operations, req.SessionID, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
-}
-
 func TestServiceInterruptWithTargetRecordsCancellationTombstoneWithoutRuntime(t *testing.T) {
 	operations := runtimeops.NewCoordinator()
 	service := NewService(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})).WithOperationCoordinator(operations)
@@ -1670,67 +1764,173 @@ func TestServiceSubmitUserShellCommandRejectsClientRequestIDPayloadMismatch(t *t
 	}
 }
 
-func TestServiceQueueUserMessageDedupesSuccessfulRetry(t *testing.T) {
-	client := finalResponseRuntimeControlClient()
-	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	req := runtimeControlQueueUserMessageRequest(store, "req-1", "hello")
+func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
+	client := newSteeringDrainRuntimeControlClient()
+	queuedStatuses := make(chan runtime.QueuedUserMessageStatusEvent, 4)
+	registry := tools.NewRegistry(tools.HandlerRegistration{
+		ID:      toolspec.ToolExecCommand,
+		Handler: fakeShellHandler{},
+	})
+	store, _, service := newRuntimeControlTestService(t, client, registry, runtime.Config{
+		OnEvent: func(event runtime.Event) {
+			if event.QueuedUserMessageStatus != nil {
+				queuedStatuses <- *event.QueuedUserMessageStatus
+			}
+		},
+	})
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := service.SubmitUserTurn(
+			context.Background(),
+			runtimeControlUserTurnRequest(store, "active-turn", "start"),
+		)
+		submitDone <- err
+	}()
+	select {
+	case <-client.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("active turn did not reach the first model request")
+	}
+	queuedText := "use the existing lld installation"
+	steeringReq := runtimeControlUserTurnRequest(store, "queued-steering", queuedText)
+	steered, err := service.SubmitUserTurn(
+		context.Background(),
+		steeringReq,
+	)
+	if err != nil {
+		t.Fatalf("SubmitUserTurn while model was thinking: %v", err)
+	}
+	if !steered.Steered || steered.QueueItemID == "" {
+		t.Fatalf("SubmitUserTurn while model was thinking = %+v, want accepted steering", steered)
+	}
+	select {
+	case status := <-queuedStatuses:
+		if status.ClientRequestID != steeringReq.OperationRef.ClientRequestID.String() {
+			t.Fatalf(
+				"accepted steering client request id = %q, want %q",
+				status.ClientRequestID,
+				steeringReq.OperationRef.ClientRequestID,
+			)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("accepted steering emitted no queue status")
+	}
+	close(client.releaseFirst)
+	select {
+	case <-client.secondStarted:
+	case <-time.After(time.Second):
+		t.Fatal("active turn did not reach the next safe-boundary model request")
+	}
+	defer close(client.releaseSecond)
 
-	firstQueue, err := service.QueueUserMessage(context.Background(), req)
-	if err != nil {
-		t.Fatalf("QueueUserMessage first: %v", err)
+	for _, message := range llm.MessagesFromItems(client.request(1).Items) {
+		if message.Role == llm.RoleUser && message.Content != nil && *message.Content == queuedText {
+			return
+		}
 	}
-	secondQueue, err := service.QueueUserMessage(context.Background(), req)
-	if err != nil {
-		t.Fatalf("QueueUserMessage replay: %v", err)
-	}
-	if firstQueue.QueueItemID == "" || secondQueue.QueueItemID != firstQueue.QueueItemID {
-		t.Fatalf("queue ids = (%q, %q), want stable non-empty id", firstQueue.QueueItemID, secondQueue.QueueItemID)
-	}
-	queueCreateSnapshot := runtimeControlFeedSnapshot(t, service.operations, store.Meta().SessionID, []clientui.RuntimeOperationRef{req.OperationRef})
-	if len(queueCreateSnapshot.Operations) != 1 || queueCreateSnapshot.Operations[0].State != clientui.RuntimeInputReconciliationCommitted {
-		t.Fatalf("queue create reconciliation = %+v, want committed for UI-owned operation ref", queueCreateSnapshot.Operations)
-	}
-	if got := countPromptHistoryEvents(t, store, "hello"); got != 1 {
-		t.Fatalf("queued prompt history count = %d, want 1 immediately after queue acceptance", got)
-	}
-	if _, err := engine.SubmitQueuedUserMessages(context.Background()); err != nil {
-		t.Fatalf("SubmitQueuedUserMessages: %v", err)
-	}
-	if got := countUserMessagesWithContent(t, store, "hello"); got != 1 {
-		t.Fatalf("queued user message count = %d, want 1", got)
-	}
-	if got := countUserMessagesWithContent(t, store, "hello\n\nhello"); got != 0 {
-		t.Fatalf("duplicate queued flush count = %d, want 0", got)
-	}
+	t.Fatalf("next model request did not receive accepted steering: %+v", llm.MessagesFromItems(client.request(1).Items))
 }
 
-func TestServiceQueueUserMessageDoesNotEnqueueWhenPromptHistoryRecordFails(t *testing.T) {
-	ctx := context.Background()
-	sessionStore, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
-	history := service.promptStore.(*runtimeControlPromptHistoryStore)
-	boom := errors.New("prompt history record failed")
-	history.SetRecordError(boom)
-	req := runtimeControlQueueUserMessageRequest(sessionStore, "req-record-fail", "hello record failure")
+func TestServiceInterruptDiscardsPendingSteeringBeforeStoppingActiveRun(t *testing.T) {
+	client := newSteeringDrainRuntimeControlClient()
+	defer close(client.releaseFirst)
+	defer close(client.releaseSecond)
+	registry := tools.NewRegistry(tools.HandlerRegistration{
+		ID:      toolspec.ToolExecCommand,
+		Handler: fakeShellHandler{},
+	})
+	store, engine, service := newRuntimeControlTestService(t, client, registry, runtime.Config{})
+	activeReq := runtimeControlUserTurnRequest(store, "active-turn", "start")
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := service.SubmitUserTurn(context.Background(), activeReq)
+		submitDone <- err
+	}()
+	select {
+	case <-client.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("active turn did not reach model thinking")
+	}
 
-	if _, err := service.QueueUserMessage(ctx, req); !errors.Is(err, boom) {
-		t.Fatalf("QueueUserMessage error = %v, want %v", err, boom)
+	steeringReq := runtimeControlUserTurnRequest(store, "queued-steering", "do not continue after interrupt")
+	steered, err := service.SubmitUserTurn(context.Background(), steeringReq)
+	if err != nil {
+		t.Fatalf("SubmitUserTurn steering: %v", err)
+	}
+	queueItemID := mustRuntimeControlQueueItemID(t, steered.QueueItemID)
+	queuedRef := clientui.RuntimeOperationRef{
+		Kind:            clientui.RuntimeOperationKindQueuedMessage,
+		ClientRequestID: steeringReq.OperationRef.ClientRequestID,
+		QueueItemID:     &queueItemID,
+	}
+	runID := mustRuntimeControlRunID(t)
+	stepID := mustRuntimeControlStepID(t)
+	service.WithRuntimeActivityResolver(&sequenceRuntimeActivityResolver{
+		snapshots: []runtimeactivity.ResponseSnapshot{
+			{
+				Version: clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 1},
+				Activity: clientui.RuntimeActivity{
+					State: clientui.RuntimeActivityRunning,
+					ActiveStep: &clientui.RuntimeActiveStep{
+						RunID:      runID,
+						StepID:     stepID,
+						ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
+					},
+				},
+			},
+			{
+				Version:  clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 2},
+				Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle, QueueAccepting: true},
+			},
+		},
+	})
+
+	resp, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID:      "interrupt-active-with-steering",
+		SessionID:            store.Meta().SessionID,
+		TargetOperationRef:   &activeReq.OperationRef,
+		PendingOperationRefs: []clientui.RuntimeOperationRef{activeReq.OperationRef, queuedRef},
+	})
+	if err != nil {
+		t.Fatalf("Interrupt: %v", err)
 	}
 	if engine.HasQueuedUserWork() {
-		t.Fatal("did not expect runtime queue mutation after prompt history record failure")
+		t.Fatal("interrupt left accepted steering queued")
+	}
+	for _, record := range resp.InputReconciliation.Operations {
+		if record.Operation.Key() == queuedRef.Key() {
+			if record.State != clientui.RuntimeInputReconciliationCanceledNotCommitted {
+				t.Fatalf("queued steering reconciliation = %q, want canceled_not_committed", record.State)
+			}
+			goto reconciled
+		}
+	}
+	t.Fatalf("interrupt response omitted queued steering reconciliation: %+v", resp.InputReconciliation.Operations)
+
+reconciled:
+	select {
+	case <-client.secondStarted:
+		t.Fatal("queued steering started a model continuation after interrupt")
+	case <-time.After(100 * time.Millisecond):
+	}
+	select {
+	case err := <-submitDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("active submit error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("active submit did not stop after interrupt")
 	}
 }
 
 func TestServiceDiscardQueuedUserMessageIsRuntimeOnly(t *testing.T) {
 	ctx := context.Background()
 	sessionStore, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
-	queued, err := service.QueueUserMessage(ctx, runtimeControlQueueUserMessageRequest(sessionStore, "req-discard-runtime", "discard runtime only"))
-	if err != nil {
-		t.Fatalf("QueueUserMessage: %v", err)
-	}
+	queued := engine.QueueUserMessageWithClientRequestID("discard runtime only", runtimeids.NewRuntimeClientRequestID().String())
 	discardReq := serverapi.RuntimeDiscardQueuedUserMessageRequest{
 		ClientRequestID: "req-discard-runtime",
 		SessionID:       sessionStore.Meta().SessionID,
-		QueueItemID:     queued.QueueItemID,
+		QueueItemID:     queued.ID,
 	}
 	discarded, err := service.DiscardQueuedUserMessage(ctx, discardReq)
 	if err != nil {
@@ -1742,22 +1942,25 @@ func TestServiceDiscardQueuedUserMessageIsRuntimeOnly(t *testing.T) {
 	if engine.HasQueuedUserWork() {
 		t.Fatal("expected runtime queue item removed")
 	}
-	if got := countPromptHistoryEvents(t, sessionStore, "discard runtime only"); got != 1 {
-		t.Fatalf("prompt history count after discard = %d, want 1", got)
+	if got := countPromptHistoryEvents(t, sessionStore, "discard runtime only"); got != 0 {
+		t.Fatalf("prompt history count after runtime-only discard = %d, want 0", got)
 	}
 }
 
 func TestServiceInterruptTargetQueuedServerMessageDiscardsRuntimeWork(t *testing.T) {
 	ctx := context.Background()
 	sessionStore, engine, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
-	queueRequest := runtimeControlQueueUserMessageRequest(sessionStore, "req-interrupt-discard", "discard on interrupt")
-	queued, err := service.QueueUserMessage(ctx, queueRequest)
-	if err != nil {
-		t.Fatalf("QueueUserMessage: %v", err)
-	}
-	queueItemID := mustRuntimeControlQueueItemID(t, queued.QueueItemID)
-	target := queueRequest.OperationRef
+	target := runtimeControlOperationRef(clientui.RuntimeOperationKindQueuedMessage)
+	queued := engine.QueueUserMessageWithClientRequestID("discard on interrupt", target.ClientRequestID.String())
+	queueItemID := mustRuntimeControlQueueItemID(t, queued.ID)
 	target.QueueItemID = &queueItemID
+	if err := service.operations.RecordQueuedMessageStatus(
+		sessionStore.Meta().SessionID,
+		target,
+		clientui.RuntimeInputReconciliationAccepted,
+	); err != nil {
+		t.Fatalf("record accepted queued message: %v", err)
+	}
 
 	if _, err := service.Interrupt(ctx, serverapi.RuntimeInterruptRequest{
 		ClientRequestID:      "interrupt-queued-server",
@@ -1772,32 +1975,6 @@ func TestServiceInterruptTargetQueuedServerMessageDiscardsRuntimeWork(t *testing
 		t.Fatal("queued runtime work remained after interrupt targeted server queue item")
 	}
 	assertRuntimeControlReconciliation(t, service.operations, sessionStore.Meta().SessionID, target, clientui.RuntimeInputReconciliationCanceledNotCommitted)
-}
-
-func TestServiceQueueUserMessageRejectsClientRequestIDPayloadMismatch(t *testing.T) {
-	client := finalResponseRuntimeControlClient()
-	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	first := runtimeControlQueueUserMessageRequest(store, "req-1", "hello")
-	if _, err := service.QueueUserMessage(context.Background(), first); err != nil {
-		t.Fatalf("QueueUserMessage first: %v", err)
-	}
-	second := first
-	second.Text = "different"
-	if _, err := service.QueueUserMessage(context.Background(), second); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-		t.Fatalf("QueueUserMessage mismatch error = %v, want request id payload mismatch", err)
-	}
-	if _, err := engine.SubmitQueuedUserMessages(context.Background()); err != nil {
-		t.Fatalf("SubmitQueuedUserMessages: %v", err)
-	}
-	if got := countUserMessagesWithContent(t, store, "hello"); got != 1 {
-		t.Fatalf("queued user message count = %d, want 1", got)
-	}
-	if got := countUserMessagesWithContent(t, store, "different"); got != 0 {
-		t.Fatalf("mismatched queued user message count = %d, want 0", got)
-	}
-	if got := countUserMessagesWithContent(t, store, "hello\n\ndifferent"); got != 0 {
-		t.Fatalf("mixed queued flush count = %d, want 0", got)
-	}
 }
 
 func countDirectShellCommandMessages(t *testing.T, store *session.Store, command string) int {
@@ -1893,15 +2070,5 @@ func runtimeControlShellCommandRequest(store *session.Store, _ string, command s
 		SessionID:       store.Meta().SessionID,
 		Command:         command,
 		OperationRef:    ref,
-	}
-}
-
-func runtimeControlQueueUserMessageRequest(store *session.Store, _ string, text string) serverapi.RuntimeQueueUserMessageRequest {
-	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindQueuedMessage)
-	return serverapi.RuntimeQueueUserMessageRequest{
-		ClientRequestID: ref.ClientRequestID.String(),
-		SessionID:       store.Meta().SessionID,
-		OperationRef:    ref,
-		Text:            text,
 	}
 }

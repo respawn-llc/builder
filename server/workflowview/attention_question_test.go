@@ -27,7 +27,7 @@ func TestAttentionQuestionRecoveryUsesLivePrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDefinitionProjection: %v", err)
 	}
-	attention, err := NewAttention(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), nil, staticPendingPromptSource{sessionID: {{
+	attention, err := NewAttention(metadataStore, definitions, NewTaskProjector(), testsetup.QuestionsEnabled("coder"), nil, staticPendingPromptSource{sessionID: {{
 		Request: askquestion.AskQuestionRequest{
 			ID:                     askID,
 			Question:               "Choose a release channel",
@@ -114,7 +114,7 @@ func TestAttentionQuestionRecoveryUsesDormantNewestActiveSegment(t *testing.T) {
 		t.Fatalf("NewDefinitionProjection: %v", err)
 	}
 	sessionViews := sessionview.NewService(singleSessionStoreResolver{store: sessionStore}, nil, nil, nil)
-	attention, err := NewAttention(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), sessionViewActiveTranscriptProvider{views: sessionViews}, nil)
+	attention, err := NewAttention(metadataStore, definitions, NewTaskProjector(), testsetup.QuestionsEnabled("coder"), sessionViewActiveTranscriptProvider{views: sessionViews}, nil)
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestAttentionQuestionRecoveryFallsBackLocally(t *testing.T) {
 		t.Fatalf("NewDefinitionProjection: %v", err)
 	}
 	transcripts := &failingActiveTranscriptProvider{}
-	attention, err := NewAttention(metadataStore, definitions, testsetup.QuestionsEnabled("coder"), transcripts, nil)
+	attention, err := NewAttention(metadataStore, definitions, NewTaskProjector(), testsetup.QuestionsEnabled("coder"), transcripts, nil)
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)
 	}

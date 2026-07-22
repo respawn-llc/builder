@@ -334,7 +334,7 @@ func (s *Starter) CancelTaskRuns(ctx context.Context, taskID workflow.TaskID) er
 	}
 	var stopErrs []error
 	for _, run := range runs {
-		ref := sessionruntime.WorkflowExecutionRef{RunID: run.ID, Generation: run.Generation}
+		ref := sessionruntime.WorkflowExecutionRef{TaskID: run.TaskID, RunID: run.ID, Generation: run.Generation}
 		if execution, ok := s.runtimeAuthority.ExecutionByWorkflow(ref); ok {
 			if err := execution.Stop(ctx); err != nil {
 				stopErrs = append(stopErrs, err)
@@ -349,7 +349,7 @@ func (s *Starter) CancelRun(ctx context.Context, runID workflow.RunID) error {
 	if err != nil {
 		return err
 	}
-	ref := sessionruntime.WorkflowExecutionRef{RunID: run.ID, Generation: run.Generation}
+	ref := sessionruntime.WorkflowExecutionRef{TaskID: run.TaskID, RunID: run.ID, Generation: run.Generation}
 	if execution, ok := s.runtimeAuthority.ExecutionByWorkflow(ref); ok {
 		return execution.Stop(ctx)
 	}
@@ -361,7 +361,7 @@ func (s *Starter) RequestCancelRun(runID workflow.RunID) bool {
 	if err != nil {
 		return false
 	}
-	ref := sessionruntime.WorkflowExecutionRef{RunID: run.ID, Generation: run.Generation}
+	ref := sessionruntime.WorkflowExecutionRef{TaskID: run.TaskID, RunID: run.ID, Generation: run.Generation}
 	execution, ok := s.runtimeAuthority.ExecutionByWorkflow(ref)
 	return ok && execution.RequestStop()
 }
@@ -969,7 +969,7 @@ func (s *Starter) startAgentExecution(ctx context.Context, req SchedulerStartRun
 	if err != nil {
 		return err
 	}
-	workflowRef := sessionruntime.WorkflowExecutionRef{RunID: req.RunID, Generation: req.Generation}
+	workflowRef := sessionruntime.WorkflowExecutionRef{TaskID: req.TaskID, RunID: req.RunID, Generation: req.Generation}
 	_, err = s.runtimeAuthority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
 		Descriptor: plan.Descriptor,
 		Runtime:    &runtimePlan,

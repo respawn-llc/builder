@@ -429,8 +429,7 @@ func (r *agentResource) StepEnded(ctx context.Context, snapshot runtime.StepLife
 }
 
 func (r *agentResource) rejectsNewUseLocked() bool {
-	return r.state != AgentResourceReady ||
-		(len(r.owners) == 0 && r.ownerlessDisposition == agentResourceRetireWhenIdle)
+	return r.state != AgentResourceReady
 }
 
 func (r *agentResource) rejectsNewStepLocked() bool {
@@ -555,7 +554,8 @@ func (a *Authority) closeRetiringResource(ctx context.Context, resource *agentRe
 		return nil
 	}
 	resource.mu.Lock()
-	retiring := resource.ownerlessDisposition == agentResourceRetireWhenIdle
+	retiring := resource.state == AgentResourceReady &&
+		resource.ownerlessDisposition == agentResourceRetireWhenIdle
 	resource.mu.Unlock()
 	if !retiring {
 		return nil
@@ -701,8 +701,8 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 				return a.AwaitPromptResponse(ctx, scope.ID(), req)
 			}
 		}
-		resource.askBroker.SetAskHandler(func(req tools.AskQuestionRequest) (tools.AskQuestionResponse, error) {
-			return askHandler(execution.ctx, execution.scope, req)
+		resource.askBroker.SetAskHandler(func(ctx context.Context, req tools.AskQuestionRequest) (tools.AskQuestionResponse, error) {
+			return askHandler(ctx, execution.scope, req)
 		})
 		resource.askScope = &scopeID
 	}
@@ -864,13 +864,6 @@ func (a *Authority) openResource(ctx context.Context, descriptor session.Session
 		return nil, fmt.Errorf("session %s runtime is not ready", sessionID)
 	}
 	if ownerID != nil {
-		if len(resource.owners) == 0 && resource.ownerlessDisposition == agentResourceRetireWhenIdle {
-			resource.mu.Unlock()
-			return nil, errors.Join(
-				serverapi.ErrRuntimeUnavailable,
-				fmt.Errorf("session %s runtime is retiring", sessionID),
-			)
-		}
 		resource.owners[*ownerID] = struct{}{}
 		resource.ownerlessDisposition = agentResourceRemainAvailable
 	}
@@ -885,24 +878,70 @@ func (a *Authority) replaceResource(ctx context.Context, descriptor session.Sess
 	existing := a.resources[sessionID]
 	a.mu.Unlock()
 	if existing != nil {
-		existing.mu.Lock()
-		reject := existing.state != AgentResourceReady || existing.current != nil || existing.pins != 0 || existing.callbacks != 0 || (existing.engine != nil && existing.engine.HasQueuedUserWork())
-		if !reject {
-			existing.state = AgentResourceDraining
-			existing.signalLocked()
-		}
-		existing.mu.Unlock()
-		if reject {
-			return nil, fmt.Errorf("session %s runtime cannot be replaced while active", sessionID)
-		}
-		if err := existing.closeResource(ctx); err != nil {
+		if err := a.retireResourceForReplacement(ctx, existing); err != nil {
 			return nil, err
 		}
-		a.mu.Lock()
-		if a.resources[sessionID] == existing {
-			delete(a.resources, sessionID)
-		}
-		a.mu.Unlock()
 	}
 	return a.openResource(ctx, descriptor, plan, nil)
+}
+
+func (a *Authority) retireResourceForReplacement(ctx context.Context, resource *agentResource) error {
+	for {
+		resource.mu.Lock()
+		switch resource.state {
+		case AgentResourceClosed:
+			resource.mu.Unlock()
+			a.mu.Lock()
+			if a.resources[resource.ref.SessionID()] == resource {
+				delete(a.resources, resource.ref.SessionID())
+			}
+			a.mu.Unlock()
+			return nil
+		case AgentResourceDraining:
+			changed := resource.changed
+			resource.mu.Unlock()
+			select {
+			case <-changed:
+				continue
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		case AgentResourceReady:
+		default:
+			state := resource.state
+			resource.mu.Unlock()
+			return fmt.Errorf(
+				"session %s runtime generation %d cannot be replaced from state %d",
+				resource.ref.SessionID(),
+				resource.ref.Generation(),
+				state,
+			)
+		}
+
+		if resource.current != nil || resource.callbacks != 0 || resource.steps != 0 {
+			changed := resource.changed
+			resource.mu.Unlock()
+			select {
+			case <-changed:
+				continue
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		}
+		engine := resource.engine
+		if engine != nil && engine.HasQueuedUserWork() {
+			resource.mu.Unlock()
+			if err := engine.DrainQueuedUserMessagesBeforeClose(ctx); err != nil {
+				return fmt.Errorf(
+					"drain session %s runtime generation %d before replacement: %w",
+					resource.ref.SessionID(),
+					resource.ref.Generation(),
+					err,
+				)
+			}
+			continue
+		}
+		_, closeErr := a.closeAdmittedResourceLocked(ctx, resource)
+		return closeErr
+	}
 }
