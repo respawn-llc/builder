@@ -211,10 +211,24 @@ func (s *Store) prepareEventLogMaterializationWithStableLockHeld() (
 			return eventLogPreparationResult{}, committed, err
 		}
 	case eventLogSourceLegacy:
-		s.setEventLogMaterializationState(eventLogUnmaterialized, classification, foundVersion)
-		return eventLogPreparationResult{}, false, errors.New(
-			"legacy events.jsonl is unsupported; open it with a pre-v1 Kent build before upgrading",
-		)
+		if err := installLegacyCurrentEventLog(
+			eventsPath,
+			workspace,
+			func() {
+				s.setEventLogMaterializationState(
+					eventLogCurrentReconciliationPending,
+					classification,
+					foundVersion,
+				)
+				committed = true
+			},
+		); err != nil {
+			var materializationErr *EventLogMaterializationError
+			if errors.As(err, &materializationErr) {
+				committed = materializationErr.Committed
+			}
+			return eventLogPreparationResult{}, committed, err
+		}
 	case eventLogSourceCurrent:
 		s.setEventLogMaterializationState(
 			eventLogCurrentReconciliationPending,
@@ -451,6 +465,24 @@ func installHeaderOnlyCurrentEventLog(
 	eventsPath string,
 	workspace string,
 	onCommitted func(),
+) error {
+	header, err := encodeEventLogHeaderV1()
+	if err != nil {
+		return err
+	}
+	return installCurrentEventLog(eventsPath, workspace, onCommitted, func(stage *os.File) error {
+		if _, err := writeAll(stage, append(header, '\n')); err != nil {
+			return fmt.Errorf("write staged event log header: %w", err)
+		}
+		return nil
+	})
+}
+
+func installCurrentEventLog(
+	eventsPath string,
+	workspace string,
+	onCommitted func(),
+	writeStaged func(*os.File) error,
 ) (resultErr error) {
 	committed := false
 	defer func() {
@@ -466,14 +498,13 @@ func installHeaderOnlyCurrentEventLog(
 	if onCommitted == nil {
 		return errors.New("event-log commit transition is required")
 	}
+	if writeStaged == nil {
+		return errors.New("staged event-log writer is required")
+	}
 	if err := ensureOwnedEventLogMigrationWorkspace(workspace); err != nil {
 		return err
 	}
 	stagePath := filepath.Join(workspace, eventLogMigrationStagedLogFile)
-	header, err := encodeEventLogHeaderV1()
-	if err != nil {
-		return err
-	}
 	stage, err := os.OpenFile(stagePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("create staged event log %s: %w", stagePath, err)
@@ -485,16 +516,19 @@ func installHeaderOnlyCurrentEventLog(
 			}
 		}
 	}()
-	if _, err := writeAll(stage, append(header, '\n')); err != nil {
-		return fmt.Errorf("write staged event log header: %w", err)
+	if err := writeStaged(stage); err != nil {
+		return err
 	}
 	if err := stage.Sync(); err != nil {
-		return fmt.Errorf("sync staged event log header: %w", err)
+		return fmt.Errorf("sync staged event log: %w", err)
 	}
 	if err := stage.Close(); err != nil {
-		return fmt.Errorf("close staged event log header: %w", err)
+		return fmt.Errorf("close staged event log: %w", err)
 	}
 	stage = nil
+	if _, err := openCurrentEventLog(stagePath, currentEventLogReadOnly); err != nil {
+		return fmt.Errorf("validate staged event log: %w", err)
+	}
 	if err := atomicallyReplaceEventLog(stagePath, eventsPath); err != nil {
 		return err
 	}
