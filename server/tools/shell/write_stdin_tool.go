@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -65,7 +66,7 @@ func (t *WriteStdinTool) Call(ctx context.Context, c tools.Call) (tools.Result, 
 		if in.Chars == "" && *in.YieldTimeMS > maximumOutputPollWaitMS {
 			return tools.ErrorResultWith(c, longOutputPollError, marshalNoHTMLEscape), nil
 		}
-		yieldTime = time.Duration(*in.YieldTimeMS) * time.Millisecond
+		yieldTime = writeStdinYieldDuration(*in.YieldTimeMS)
 	}
 	maxChars := t.outputLimit
 	if in.MaxOutputTokens != nil && *in.MaxOutputTokens > 0 {
@@ -105,4 +106,15 @@ func (t *WriteStdinTool) Call(ctx context.Context, c tools.Call) (tools.Result, 
 		),
 	}
 	return toolResult, nil
+}
+
+func writeStdinYieldDuration(milliseconds int) time.Duration {
+	value := int64(milliseconds)
+	if value > math.MaxInt64/int64(time.Millisecond) {
+		return time.Duration(math.MaxInt64)
+	}
+	if value < math.MinInt64/int64(time.Millisecond) {
+		return time.Duration(math.MinInt64)
+	}
+	return time.Duration(value) * time.Millisecond
 }

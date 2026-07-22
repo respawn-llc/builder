@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -839,6 +840,59 @@ func TestWriteStdinPollHonorsRequestedDuration(t *testing.T) {
 		t.Fatalf("expected session to remain backgrounded, got %+v", payload)
 	}
 	waitForManagerCount(t, manager, 0, 2*time.Second)
+}
+
+func TestWriteStdinWhitespaceInputRemainsInputAtLongWaits(t *testing.T) {
+	tests := []struct {
+		name        string
+		yieldTimeMS int
+	}{
+		{name: "above output poll maximum", yieldTimeMS: 86_400_001},
+		{name: "maximum integer", yieldTimeMS: math.MaxInt},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			manager := newShellTestManager(t, 50*time.Millisecond)
+			execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+			stdinTool := NewWriteStdinTool(16_000, manager)
+
+			start := callExecCommand(t, execTool, "whitespace-input-start", map[string]any{
+				"cmd":           "read line; sleep 0.6",
+				"shell":         "/bin/sh",
+				"login":         false,
+				"tty":           true,
+				"yield_time_ms": 50,
+			})
+			if start.IsError {
+				t.Fatalf("unexpected exec_command error: %s", string(start.Output))
+			}
+
+			started := time.Now()
+			result := callWriteStdin(t, stdinTool, "whitespace-input", map[string]any{
+				"session_id":    1000,
+				"chars":         "\n",
+				"yield_time_ms": tt.yieldTimeMS,
+			})
+			elapsed := time.Since(started)
+			if result.IsError {
+				t.Fatalf("unexpected write_stdin error: %s", string(result.Output))
+			}
+			if elapsed < 500*time.Millisecond {
+				t.Fatalf("write_stdin returned before post-input delay: %s", elapsed)
+			}
+			if elapsed > 2*time.Second {
+				t.Fatalf("write_stdin took too long: %s", elapsed)
+			}
+			output := decodeWriteStdinToolOutput(t, result)
+			if output.BackgroundRunning || !output.Backgrounded ||
+				output.BackgroundExitCode == nil || *output.BackgroundExitCode != 0 {
+				t.Fatalf("completed whitespace input output = %+v", output)
+			}
+			waitForManagerCount(t, manager, 0, time.Second)
+		})
+	}
 }
 
 func TestExecCommandForegroundTruncationSetsPresentationMetadata(t *testing.T) {
