@@ -2506,20 +2506,50 @@ func (r WorkflowTaskCommentDeleteRequest) Validate() error {
 }
 
 func (r WorkflowBoardRequest) Validate() error {
-	if err := validateRequired("project_id", r.ProjectID); err != nil {
-		return err
-	}
-	if err := validateOptionalNonBlank("workflow_id", r.WorkflowID); err != nil {
+	if err := r.validateScope(); err != nil {
 		return err
 	}
 	return r.LabelFilter.Validate()
 }
 
 func (r WorkflowBoardRequest) ValidateRPC() error {
-	return workflowLabelFilterRequestValidationError(r.Validate())
+	if err := r.validateScope(); err != nil {
+		return err
+	}
+	return r.LabelFilter.ValidateRPC()
+}
+
+func (r WorkflowBoardRequest) validateScope() error {
+	if err := validateRequired("project_id", r.ProjectID); err != nil {
+		return err
+	}
+	if err := validateOptionalNonBlank("workflow_id", r.WorkflowID); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r WorkflowTaskListRequest) Validate() error {
+	if err := r.validateBeforeLabelFilter(); err != nil {
+		return err
+	}
+	if err := r.LabelFilter.Validate(); err != nil {
+		return err
+	}
+	return r.validateAfterLabelFilter()
+}
+
+func (r WorkflowTaskListRequest) ValidateRPC() error {
+	if err := r.validateBeforeLabelFilter(); err != nil {
+		return err
+	}
+	if err := r.LabelFilter.ValidateRPC(); err != nil {
+		return err
+	}
+	return r.validateAfterLabelFilter()
+}
+
+func (r WorkflowTaskListRequest) validateBeforeLabelFilter() error {
 	if r.ProjectID == nil && strings.TrimSpace(r.PageToken) == "" {
 		message := "project_id is required on the first page"
 		if r.WorkflowID != nil {
@@ -2547,9 +2577,10 @@ func (r WorkflowTaskListRequest) Validate() error {
 	if strings.TrimSpace(r.PageToken) != r.PageToken {
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not have leading or trailing whitespace")
 	}
-	if err := r.LabelFilter.Validate(); err != nil {
-		return err
-	}
+	return nil
+}
+
+func (r WorkflowTaskListRequest) validateAfterLabelFilter() error {
 	if len(r.Sort) > WorkflowTaskListMaxSortSelectors {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "sort", fmt.Sprintf("sort must include at most %d fields", WorkflowTaskListMaxSortSelectors))
 	}
@@ -2590,11 +2621,21 @@ func (r WorkflowTaskListRequest) Validate() error {
 	return nil
 }
 
-func (r WorkflowTaskListRequest) ValidateRPC() error {
-	return workflowLabelFilterRequestValidationError(r.Validate())
+func (r WorkflowBoardNodeCardsListRequest) Validate() error {
+	if err := r.validateScopeAndPage(); err != nil {
+		return err
+	}
+	return r.LabelFilter.Validate()
 }
 
-func (r WorkflowBoardNodeCardsListRequest) Validate() error {
+func (r WorkflowBoardNodeCardsListRequest) ValidateRPC() error {
+	if err := r.validateScopeAndPage(); err != nil {
+		return err
+	}
+	return r.LabelFilter.ValidateRPC()
+}
+
+func (r WorkflowBoardNodeCardsListRequest) validateScopeAndPage() error {
 	if err := validateRequiredFields(requiredField("project_id", r.ProjectID), requiredField("workflow_id", r.WorkflowID), requiredField("node_id", r.NodeID)); err != nil {
 		return err
 	}
@@ -2610,11 +2651,7 @@ func (r WorkflowBoardNodeCardsListRequest) Validate() error {
 	if r.PageToken != nil && strings.TrimSpace(*r.PageToken) != *r.PageToken {
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not have leading or trailing whitespace")
 	}
-	return r.LabelFilter.Validate()
-}
-
-func (r WorkflowBoardNodeCardsListRequest) ValidateRPC() error {
-	return workflowLabelFilterRequestValidationError(r.Validate())
+	return nil
 }
 
 func (r WorkflowProjectSubscribeRequest) Validate() error {

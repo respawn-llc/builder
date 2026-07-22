@@ -480,3 +480,78 @@ func TestWorkflowLabelRPCValidationUsesTypedMutationErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkflowFilterBearingRequestRPCValidationPreservesErrorProvenance(t *testing.T) {
+	projectID := "project-1"
+	tests := []struct {
+		name       string
+		request    interface{ ValidateRPC() error }
+		wantField  string
+		wantTyped  bool
+		wantReason WorkflowLabelErrorReason
+	}{
+		{
+			name:      "board non-label field remains generic",
+			request:   WorkflowBoardRequest{LabelFilter: WorkflowTaskLabelFilterNone()},
+			wantField: "project_id",
+		},
+		{
+			name:       "board malformed filter is typed",
+			request:    WorkflowBoardRequest{ProjectID: projectID},
+			wantField:  "label_filter.kind",
+			wantTyped:  true,
+			wantReason: WorkflowLabelErrorReasonInvalidFilter,
+		},
+		{
+			name:      "task list non-label field remains generic",
+			request:   WorkflowTaskListRequest{ProjectID: &projectID, LabelFilter: WorkflowTaskLabelFilterNone(), PageSize: -1},
+			wantField: "page_size",
+		},
+		{
+			name:       "task list malformed filter is typed",
+			request:    WorkflowTaskListRequest{ProjectID: &projectID},
+			wantField:  "label_filter.kind",
+			wantTyped:  true,
+			wantReason: WorkflowLabelErrorReasonInvalidFilter,
+		},
+		{
+			name:      "board cards non-label field remains generic",
+			request:   WorkflowBoardNodeCardsListRequest{LabelFilter: WorkflowTaskLabelFilterNone()},
+			wantField: "project_id",
+		},
+		{
+			name: "board cards malformed filter is typed",
+			request: WorkflowBoardNodeCardsListRequest{
+				ProjectID:  projectID,
+				WorkflowID: "workflow-1",
+				NodeID:     "node-1",
+			},
+			wantField:  "label_filter.kind",
+			wantTyped:  true,
+			wantReason: WorkflowLabelErrorReasonInvalidFilter,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.request.ValidateRPC()
+			var typed *WorkflowLabelError
+			if tt.wantTyped {
+				if !errors.As(err, &typed) ||
+					typed.Reason != tt.wantReason ||
+					typed.Field == nil ||
+					*typed.Field != tt.wantField {
+					t.Fatalf("ValidateRPC() error = %T %+v, want typed reason %q field %q", err, err, tt.wantReason, tt.wantField)
+				}
+				return
+			}
+			if errors.As(err, &typed) {
+				t.Fatalf("ValidateRPC() error = %+v, want generic validation error", typed)
+			}
+			var validationErr WorkflowRequestValidationError
+			if !errors.As(err, &validationErr) || validationErr.Field != tt.wantField {
+				t.Fatalf("ValidateRPC() error = %T %+v, want generic field %q", err, err, tt.wantField)
+			}
+		})
+	}
+}

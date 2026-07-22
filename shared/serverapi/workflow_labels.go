@@ -411,7 +411,7 @@ func (r WorkflowTaskLabelFilter) Validate() error {
 }
 
 func (r WorkflowTaskLabelFilter) ValidateRPC() error {
-	return workflowLabelFilterRequestValidationError(r.Validate())
+	return workflowLabelFilterRPCValidationError(r.Validate())
 }
 
 func validateUniqueLabelIDs(field string, ids []string) (map[string]bool, error) {
@@ -515,12 +515,12 @@ func workflowLabelRPCValidationError(err error, projectID string, taskID string,
 	}
 }
 
-func workflowLabelFilterRequestValidationError(err error) error {
+func workflowLabelFilterRPCValidationError(err error) error {
 	if err == nil {
 		return nil
 	}
 	var validationErr WorkflowRequestValidationError
-	if !errors.As(err, &validationErr) || !strings.HasPrefix(validationErr.Field, "label_filter") {
+	if !errors.As(err, &validationErr) {
 		return err
 	}
 	field := validationErr.Field

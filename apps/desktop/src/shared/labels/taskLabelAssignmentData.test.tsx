@@ -73,6 +73,65 @@ describe("task label assignment data", () => {
     });
   });
 
+  it("lets a newer reconciliation read supersede an unresolved initial read", async () => {
+    const initialRead = deferred<unknown>();
+    const reconciliationRead = deferred<unknown>();
+    const services = createTestServices([
+      {
+        method: "workflow.task.labels.get",
+        handler: async (_params, callIndex) =>
+          callIndex === 0 ? initialRead.promise : reconciliationRead.promise,
+      },
+    ]);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const { result } = renderHook(() => useTaskLabelAssignment(), {
+      wrapper: assignmentWrapper(services, queryClient, "task-1"),
+    });
+    await waitFor(() => {
+      expect(result.current.controller).not.toBeNull();
+      expect(
+        services.transport.calls.filter((call) => call.method === "workflow.task.labels.get"),
+      ).toHaveLength(1);
+    });
+
+    act(() => {
+      result.current.controller?.markDirty();
+    });
+    await waitFor(() => {
+      expect(
+        services.transport.calls.filter((call) => call.method === "workflow.task.labels.get"),
+      ).toHaveLength(2);
+    });
+
+    initialRead.resolve({
+      assignment: {
+        task_id: "task-1",
+        label_ids: [],
+      },
+    });
+    await waitFor(() => {
+      expect(result.current.assignment.isSuccess).toBe(true);
+    });
+
+    reconciliationRead.resolve({
+      assignment: {
+        task_id: "task-1",
+        label_ids: [betaID],
+      },
+    });
+    await waitFor(() => {
+      expect(result.current.snapshot?.reconciling).toBe(false);
+    });
+
+    expect(result.current.snapshot?.authoritativeLabelIDs).toEqual([betaID]);
+    expect(queryClient.getQueryData(queryKeys.taskLabels("task-1"))).toEqual({
+      taskID: "task-1",
+      labelIDs: [betaID],
+    });
+  });
+
   it("loads the lightweight assignment and patches existing projections without a detail reload", async () => {
     const updateResponse = deferred<unknown>();
     const services = createTestServices([

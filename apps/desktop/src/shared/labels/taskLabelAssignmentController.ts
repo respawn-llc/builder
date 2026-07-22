@@ -82,6 +82,7 @@ class TaskLabelAssignmentControllerImpl implements TaskLabelAssignmentController
   readonly #deletedLabelIDs = new Set<string>();
   #authoritative: Set<string>;
   #authoritativeGeneration = 0;
+  #readRequestSequence = 0;
   #inFlight: InFlightIntent | null = null;
   #dirty = false;
   #reconciling = false;
@@ -181,9 +182,15 @@ class TaskLabelAssignmentControllerImpl implements TaskLabelAssignmentController
   }
 
   async readAuthoritative(): Promise<TaskLabelAssignment> {
+    const requestSequence = this.#readRequestSequence + 1;
+    this.#readRequestSequence = requestSequence;
     const generation = this.#authoritativeGeneration;
     const assignment = await this.#refetch();
-    if (this.#closed || generation !== this.#authoritativeGeneration) {
+    if (
+      this.#closed ||
+      requestSequence !== this.#readRequestSequence ||
+      generation !== this.#authoritativeGeneration
+    ) {
       return this.#currentAssignment();
     }
     this.replaceAuthoritative(assignment);
