@@ -8,6 +8,7 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/textutil"
+	"core/shared/transcript"
 )
 
 func appendSegmentTestMessage(t *testing.T, store *session.Store, role llm.Role, content string) {
@@ -157,5 +158,62 @@ func TestEngineTranscriptSegmentPageSingleSegment(t *testing.T) {
 	texts := segmentEntryTexts(page)
 	if !containsText(texts, "only") || !containsText(texts, "answer") {
 		t.Fatalf("single segment must contain all turns, got %v", texts)
+	}
+}
+
+func TestEngineTranscriptNewestSegmentPageProjectsHistoryReplacementRows(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
+
+	appendSegmentTestMessage(t, store, llm.RoleUser, "before compaction")
+	if _, _, err := appendTestEvent(t, store, "step", historyReplacementPayload{
+		Engine: "compaction",
+		Items: llm.ItemsFromMessages([]llm.Message{
+			{
+				Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeEnvironment),
+				Content: textutil.Value("environment state"),
+			},
+			{
+				Role: llm.RoleUser, MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+				Content: textutil.Value("condensed summary"),
+			},
+			{
+				Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeManualCompactionCarryover),
+				Content: textutil.Value("carry this forward"),
+			},
+		}),
+	}); err != nil {
+		t.Fatalf("append history replacement: %v", err)
+	}
+	if _, _, err := appendTestEvent(t, store, "step", storedLocalEntry{
+		Role: "compaction_summary", Text: "persisted summary",
+	}); err != nil {
+		t.Fatalf("append persisted compaction summary: %v", err)
+	}
+
+	page := mustEngineNewestSegmentPage(t, eng)
+	var environment, summary, carryover, persistedSummary bool
+	for _, entry := range page.Snapshot.Entries {
+		if entry.Text == "before compaction" {
+			t.Fatalf("newest segment retained pre-compaction entry: %+v", entry)
+		}
+		switch {
+		case entry.Role == "developer_context" && entry.Text == "environment state" &&
+			entry.Visibility == transcript.EntryVisibilityDetail:
+			environment = true
+		case entry.Role == "compaction_summary" && entry.Text == "condensed summary":
+			summary = true
+		case entry.Role == "manual_compaction_carryover" && entry.Text == "carry this forward" &&
+			entry.Visibility == transcript.EntryVisibilityDetail:
+			carryover = true
+		case entry.Role == "compaction_summary" && entry.Text == "persisted summary":
+			persistedSummary = true
+		}
+	}
+	if !environment || !summary || !carryover || !persistedSummary {
+		t.Fatalf(
+			"newest segment rows: environment=%t summary=%t carryover=%t persisted_summary=%t entries=%+v",
+			environment, summary, carryover, persistedSummary, page.Snapshot.Entries,
+		)
 	}
 }
