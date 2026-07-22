@@ -158,6 +158,65 @@ func TestHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
 		t.Fatalf("persist post-compaction diagnostic: %v", err)
 	}
 
+	replacements, diagnostics := boundedDiagnosticRecordCounts(t, store, diagnosticKey)
+	if replacements != 1 || diagnostics != 2 {
+		t.Fatalf(
+			"bounded typed diagnostic records replacements=%d diagnostics=%d, want one and two",
+			replacements,
+			diagnostics,
+		)
+	}
+}
+
+func TestReopenedSessionHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	diagnosticKey := preciseTokenCountFailureDiagnostic
+	if err := engine.steerPersistedDiagnosticEntry(
+		"before-compaction",
+		diagnosticKey,
+		string(transcript.EntryRoleDeveloperErrorFeedback),
+		"before",
+	); err != nil {
+		t.Fatalf("persist pre-compaction diagnostic: %v", err)
+	}
+	receipt, err := newCompactionPersistence(engine).replaceHistory(
+		"compaction",
+		"local",
+		compactionModeManual,
+		llm.ItemsFromMessages([]llm.Message{{
+			Role:        llm.RoleDeveloper,
+			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+			Content:     textutil.Value("summary"),
+		}}),
+	)
+	if err != nil || !receipt.Committed {
+		t.Fatalf("persist compaction replacement: receipt=%+v error=%v", receipt, err)
+	}
+
+	reopened := mustOpenTestSession(t, store.Dir())
+	restored := mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	if err := restored.steerPersistedDiagnosticEntry(
+		"after-reopen",
+		diagnosticKey,
+		string(transcript.EntryRoleDeveloperErrorFeedback),
+		"after",
+	); err != nil {
+		t.Fatalf("persist reopened diagnostic: %v", err)
+	}
+
+	replacements, diagnostics := boundedDiagnosticRecordCounts(t, reopened, diagnosticKey)
+	if replacements != 1 || diagnostics != 2 {
+		t.Fatalf(
+			"reopened typed diagnostic records replacements=%d diagnostics=%d, want one and two",
+			replacements,
+			diagnostics,
+		)
+	}
+}
+
+func boundedDiagnosticRecordCounts(t *testing.T, store *session.Store, diagnosticKey string) (int, int) {
+	t.Helper()
 	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
 	if err != nil {
 		t.Fatalf("read bounded diagnostic records: %v", err)
@@ -174,13 +233,7 @@ func TestHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
 			}
 		}
 	}
-	if replacements != 1 || diagnostics != 2 {
-		t.Fatalf(
-			"bounded typed diagnostic records replacements=%d diagnostics=%d, want one and two",
-			replacements,
-			diagnostics,
-		)
-	}
+	return replacements, diagnostics
 }
 
 func writeMalformedLegacyHistoryReplacement(t *testing.T, store *session.Store, engine string) {
