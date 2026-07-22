@@ -804,34 +804,11 @@ func (l *testLogger) String() string {
 
 func outsideNonTempDir(t *testing.T) string {
 	t.Helper()
-	bases := make([]string, 0, 2)
-	if wd, err := os.Getwd(); err == nil {
-		bases = append(bases, wd)
-	}
-	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-		bases = append(bases, home)
-	}
-	for _, base := range bases {
-		dir, err := os.MkdirTemp(base, "kent-runtimewire-outside-*")
-		if err != nil {
-			continue
-		}
-		abs, err := filepath.Abs(dir)
-		if err != nil {
-			_ = os.RemoveAll(dir)
-			continue
-		}
-		if patchtool.IsPathInTemporaryDir(abs) {
-			_ = os.RemoveAll(dir)
-			continue
-		}
-		t.Cleanup(func() {
-			_ = os.RemoveAll(dir)
-		})
-		return abs
-	}
-	t.Skip("unable to create non-temporary outside directory for test")
-	return ""
+	return testsetup.NonTemporaryDirectory(
+		t,
+		"kent-runtimewire-outside-",
+		patchtool.IsPathInTemporaryDir,
+	)
 }
 
 func newRuntimeWireSession(t *testing.T, root string, name string) *session.Store {
