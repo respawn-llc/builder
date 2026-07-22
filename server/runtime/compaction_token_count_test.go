@@ -49,3 +49,29 @@ func TestShouldAutoCompactAccountsForMessagesAppendedAfterLastUsage(t *testing.T
 		t.Fatal("active-tail growth after the usage checkpoint did not trigger auto compaction")
 	}
 }
+
+func TestShouldAutoCompactUsesPreciseRequestInputTokenCountWhenAvailable(t *testing.T) {
+	client := &preciseCompactionClient{inputTokenCount: 960}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+		Model:                 "gpt-5",
+		ContextWindowTokens:   2_000,
+		AutoCompactTokenLimit: 900,
+	})
+	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+	)); err != nil {
+		t.Fatalf("persist input: %v", err)
+	}
+	if usage := engine.ContextUsage(); usage.UsedTokens >= 900 {
+		t.Fatalf("estimated context usage = %+v, want below compaction threshold", usage)
+	}
+	if !engine.shouldAutoCompactWithContext(context.Background()) {
+		t.Fatal("precise input token count did not trigger auto compaction")
+	}
+	if client.countCalls != 1 {
+		t.Fatalf("precise token count calls = %d, want one", client.countCalls)
+	}
+}
