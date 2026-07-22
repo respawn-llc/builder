@@ -6,6 +6,7 @@ import type { JsonValue } from "@/api";
 import { App } from "../startup/App";
 import { createTestServices, startupRoutes } from "@/test-support/app-services";
 import {
+  createBoardDragEvent,
   dispatchBoardDrag,
   FakeAnimationFrames,
   setScrollportGeometry,
@@ -271,12 +272,6 @@ describe("BoardRoute native drag lifecycle", () => {
         fireEvent.dragEnd(document, { dataTransfer });
       },
     ],
-    [
-      "window blur",
-      () => {
-        fireEvent(window, new Event("blur"));
-      },
-    ],
   ] as const)("clears active drag without a task action after %s", async (_reason, terminate) => {
     const view = await renderActiveBoard(frames);
     setScrollportGeometry(view.root, {
@@ -310,6 +305,42 @@ describe("BoardRoute native drag lifecycle", () => {
     view.removeSource();
     await waitFor(() => {
       expect(screen.queryByRole("article", { name: "Drag source" })).not.toBeInTheDocument();
+    });
+  });
+
+  it("keeps a native card drag active across transient window blur", async () => {
+    const services = boardTestServices(
+      () => true,
+      false,
+      {
+        ...sourceCard,
+        actions: {
+          ...sourceCard.actions,
+          can_start: true,
+          manual_move_target_node_ids: [],
+        },
+      },
+    );
+    render(<App services={services} />);
+    const source = await screen.findByRole("article", { name: "Drag source" });
+    const recon = screen.getByRole("listitem", { name: "Recon" });
+    const dataTransfer = new TestDataTransfer();
+
+    fireEvent.dragStart(source, { dataTransfer });
+    fireEvent(window, new Event("blur"));
+    dataTransfer.clearData();
+    const dragOver = createBoardDragEvent("dragover", { dataTransfer });
+    fireEvent(recon, dragOver);
+    expect(dragOver.defaultPrevented).toBe(true);
+    fireEvent(recon, createBoardDragEvent("drop", { dataTransfer }));
+
+    await waitFor(() => {
+      const calls = taskActionCalls(services.transport.calls);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        method: "workflow.task.start",
+        params: { task_id: "task-1" },
+      });
     });
   });
 });
