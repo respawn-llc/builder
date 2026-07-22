@@ -46,11 +46,7 @@ type runtimeControlFakeClient struct {
 	interruptCalls         int
 	interruptPendingRefs   []clientui.RuntimeOperationRef
 	interruptTargetRef     *clientui.RuntimeOperationRef
-	queuedText             string
-	queuedClientRequestID  string
-	queueUserMessageCalls  int
-	queueUserMessageErr    error
-	queueUserMessageID     string
+	submitQueuedID         string
 	discardQueuedID        string
 	discardQueuedCalls     int
 	discardQueuedResult    bool
@@ -177,9 +173,9 @@ func (f *runtimeControlFakeClient) SubmitRuntimeInput(ctx context.Context, req c
 	f.submitOperationRef = req.OperationRef
 	f.preSubmitOperationRef = req.PreSubmitCompactionOperationRef
 	submission, err := f.submitUserMessage(ctx, req.Text)
-	if err == nil && strings.TrimSpace(f.queueUserMessageID) != "" {
+	if err == nil && strings.TrimSpace(f.submitQueuedID) != "" {
 		submission.Queued = clientui.QueuedUserMessage{
-			ID:              strings.TrimSpace(f.queueUserMessageID),
+			ID:              strings.TrimSpace(f.submitQueuedID),
 			Text:            req.Text,
 			ClientRequestID: req.OperationRef.ClientRequestID.String(),
 		}
@@ -238,22 +234,6 @@ func (f *runtimeControlFakeClient) InterruptWithTarget(target clientui.RuntimeOp
 		return f.interruptErr
 	}
 	return f.err
-}
-func (f *runtimeControlFakeClient) QueueRuntimeUserMessage(req clientui.RuntimeQueueUserMessageRequest) (clientui.QueuedUserMessage, error) {
-	if err := req.Validate(); err != nil {
-		return clientui.QueuedUserMessage{}, err
-	}
-	f.queueUserMessageCalls++
-	f.queuedText = req.Text
-	f.queuedClientRequestID = req.OperationRef.ClientRequestID.String()
-	if f.queueUserMessageErr != nil {
-		return clientui.QueuedUserMessage{}, f.queueUserMessageErr
-	}
-	id := strings.TrimSpace(f.queueUserMessageID)
-	if id == "" {
-		id = "queue-1"
-	}
-	return clientui.QueuedUserMessage{ID: id, Text: req.Text, ClientRequestID: f.queuedClientRequestID}, nil
 }
 func (f *runtimeControlFakeClient) DiscardQueuedUserMessage(queueItemID string) bool {
 	f.discardQueuedCalls++
@@ -468,11 +448,7 @@ func TestRuntimeControlHelpersFallbackWithoutRuntimeClient(t *testing.T) {
 	if err := m.interruptRuntime(); err != nil {
 		t.Fatalf("interrupt runtime without client: %v", err)
 	}
-	queued, err := m.queueRuntimeUserMessage("queued text")
-	if err != nil || queued.ID == "" || queued.Text != "queued text" {
-		t.Fatalf("queue runtime user message without client = (%+v, %v), want generated item", queued, err)
-	}
-	if discarded := m.discardQueuedRuntimeUserMessage(queued.ID); discarded {
+	if discarded := m.discardQueuedRuntimeUserMessage("queue-1"); discarded {
 		t.Fatal("did not expect queued runtime user message discarded without client")
 	}
 	if err := m.recordRuntimePromptHistory("prompt history"); err != nil {

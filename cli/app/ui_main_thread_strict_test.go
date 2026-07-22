@@ -69,7 +69,7 @@ func TestTUIStrictIOViewDoesNotFetchProcessesForStatusOrOverlay(t *testing.T) {
 }
 
 func TestTUIStrictIOBusyEnterQueuesInjectedInputAsCommand(t *testing.T) {
-	client := &runtimeControlFakeClient{queueUserMessageID: "server-queue-1"}
+	client := &runtimeControlFakeClient{submitQueuedID: "server-queue-1"}
 	m := newProjectedTestUIModel(client, WithUIDebug(true))
 	m.startupCmds = nil
 	m.setRuntimeActivityBusyForTest(true)
@@ -80,18 +80,12 @@ func TestTUIStrictIOBusyEnterQueuesInjectedInputAsCommand(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected queue create command")
 	}
-	if client.queueUserMessageCalls != 0 {
-		t.Fatalf("QueueUserMessage called during Update: %d", client.queueUserMessageCalls)
-	}
 	if client.submitCalls != 0 {
 		t.Fatalf("SubmitRuntimeInput called during Update: %d", client.submitCalls)
 	}
 	updated = applyFirstInjectedQueueCreateDoneForTest(t, updated, cmd)
 	if client.submitCalls != 1 {
 		t.Fatalf("SubmitRuntimeInput calls after command = %d, want 1", client.submitCalls)
-	}
-	if client.queueUserMessageCalls != 0 {
-		t.Fatalf("separate queue calls after command = %d, want 0", client.queueUserMessageCalls)
 	}
 	if len(updated.pendingInjected) != 1 || updated.pendingInjected[0].ID != "server-queue-1" {
 		t.Fatalf("expected server queue item after command, got %+v", updated.pendingInjected)

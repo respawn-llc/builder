@@ -207,24 +207,6 @@ func (r RuntimeSubmitQueuedRequest) Validate() error {
 	return validateOperationRefKind(r.OperationRef, RuntimeOperationKindSubmitQueued)
 }
 
-type RuntimeQueueUserMessageRequest struct {
-	OperationRef RuntimeOperationRef
-	Text         string
-}
-
-func (r RuntimeQueueUserMessageRequest) Validate() error {
-	if err := validateOperationRefKind(r.OperationRef, RuntimeOperationKindQueuedMessage); err != nil {
-		return err
-	}
-	if r.OperationRef.QueueItemID != nil {
-		return fmt.Errorf("queued-message create request operation ref must use client request id before server queue item id exists")
-	}
-	if strings.TrimSpace(r.Text) == "" {
-		return fmt.Errorf("queued message text is required")
-	}
-	return nil
-}
-
 func validateOperationRefKind(ref RuntimeOperationRef, kind RuntimeOperationKind) error {
 	if err := ref.Validate(); err != nil {
 		return err

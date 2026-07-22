@@ -62,7 +62,7 @@ func applyQueuedRuntimeWorkCheckForTest(t *testing.T, m *uiModel, cmd tea.Cmd) (
 }
 
 func TestBusyEnterUsesAuthoritativeSubmitPath(t *testing.T) {
-	client := &runtimeControlFakeClient{queueUserMessageID: "busy-submit-queue"}
+	client := &runtimeControlFakeClient{submitQueuedID: "busy-submit-queue"}
 	model := newProjectedTestUIModel(client)
 	model.setRuntimeActivityBusyForTest(true)
 	testSetMainInput(model, "steer while thinking")
@@ -81,8 +81,5 @@ func TestBusyEnterUsesAuthoritativeSubmitPath(t *testing.T) {
 	}
 	if client.submitCalls != 1 {
 		t.Fatalf("authoritative submit calls = %d, want 1", client.submitCalls)
-	}
-	if client.queueUserMessageCalls != 0 {
-		t.Fatalf("separate queue submission calls = %d, want 0", client.queueUserMessageCalls)
 	}
 }

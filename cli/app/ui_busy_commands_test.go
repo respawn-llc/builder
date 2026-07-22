@@ -202,7 +202,7 @@ func TestBusyQueuedCompactStartsCompactionAfterTurnDrains(t *testing.T) {
 }
 
 func TestCompactionKeepsInputEditableAndQueuesSteering(t *testing.T) {
-	client := &runtimeControlFakeClient{queueUserMessageID: "server-queue-1"}
+	client := &runtimeControlFakeClient{submitQueuedID: "server-queue-1"}
 	model := newProjectedTestUIModel(client)
 	model.startupCmds = nil
 

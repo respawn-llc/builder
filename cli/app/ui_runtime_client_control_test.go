@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"core/shared/clientui"
@@ -15,7 +14,6 @@ type runtimeControlStatusPatchClient struct {
 	fastModeResp       serverapi.RuntimeSetFastModeEnabledResponse
 	reviewerResp       serverapi.RuntimeSetReviewerEnabledResponse
 	autoCompactionResp serverapi.RuntimeSetAutoCompactionEnabledResponse
-	queueErr           error
 }
 
 func (c *runtimeControlStatusPatchClient) SetFastModeEnabled(context.Context, serverapi.RuntimeSetFastModeEnabledRequest) (serverapi.RuntimeSetFastModeEnabledResponse, error) {
@@ -32,16 +30,6 @@ func (c *runtimeControlStatusPatchClient) SetAutoCompactionEnabled(context.Conte
 
 func (c *runtimeControlStatusPatchClient) SetQuestionsEnabled(context.Context, serverapi.RuntimeSetQuestionsEnabledRequest) (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
 	return serverapi.RuntimeSetQuestionsEnabledResponse{}, nil
-}
-
-func (c *runtimeControlStatusPatchClient) QueueUserMessage(context.Context, serverapi.RuntimeQueueUserMessageRequest) (serverapi.RuntimeQueueUserMessageResponse, error) {
-	if c.queueErr != nil {
-		return serverapi.RuntimeQueueUserMessageResponse{}, c.queueErr
-	}
-	return serverapi.RuntimeQueueUserMessageResponse{
-		QueueItemID: "11111111-1111-4111-8111-111111111111",
-		Text:        "queued input",
-	}, nil
 }
 
 func TestRuntimeClientControlMutationsPatchCachedSessionStatus(t *testing.T) {
@@ -80,25 +68,6 @@ func TestRuntimeClientControlMutationsPatchCachedSessionStatus(t *testing.T) {
 		view.Status.ReviewerFrequency != "edits" ||
 		!view.Status.AutoCompactionEnabled {
 		t.Fatalf("cached session status was not patched: %+v", view)
-	}
-}
-
-func TestRuntimeClientQueueUserMessageErrorNotifiesConnectionObserver(t *testing.T) {
-	boom := errors.New("queue failed")
-	controls := &runtimeControlStatusPatchClient{queueErr: boom}
-	runtimeClient := newUIRuntimeClientWithReads("session-1", &countingSessionViewClient{}, controls).(*sessionRuntimeClient)
-	var observed error
-	runtimeClient.SetConnectionStateObserver(func(err error) { observed = err })
-
-	_, err := runtimeClient.QueueRuntimeUserMessage(clientui.RuntimeQueueUserMessageRequest{
-		OperationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindQueuedMessage,
-			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-		},
-		Text: "queued input",
-	})
-	if !errors.Is(err, boom) || !errors.Is(observed, boom) {
-		t.Fatalf("queue error=%v observed=%v, want %v", err, observed, boom)
 	}
 }
 

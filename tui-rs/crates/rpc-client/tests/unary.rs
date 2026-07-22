@@ -28,8 +28,7 @@ use client_contracts::runtime_control::{
     RuntimeDiscardQueuedUserMessageResponse, RuntimeHasQueuedUserWorkRequest,
     RuntimeHasQueuedUserWorkResponse, RuntimeGoal, RuntimeGoalClearRequest,
     RuntimeGoalSetRequest, RuntimeGoalShowRequest, RuntimeGoalShowResponse,
-    RuntimeGoalStatusRequest, RuntimeInterruptRequest, RuntimeQueueUserMessageRequest,
-    RuntimeQueueUserMessageResponse, RuntimeSubmitQueuedUserMessagesRequest,
+    RuntimeGoalStatusRequest, RuntimeInterruptRequest, RuntimeSubmitQueuedUserMessagesRequest,
     RuntimeSubmitQueuedUserMessagesResponse,
     RuntimeRecordPromptHistoryRequest, RuntimeSetAutoCompactionEnabledRequest,
     RuntimeSetAutoCompactionEnabledResponse, RuntimeSetFastModeEnabledRequest,
@@ -1494,27 +1493,9 @@ fn runtime_compact_context_uses_dedicated_connection_and_fixed_request_id() {
 }
 
 #[test]
-fn runtime_control_queue_routes_use_control_connections_and_generated_ids() {
-    let queue_log = Rc::new(RefCell::new(Vec::new()));
+fn runtime_control_auxiliary_routes_use_control_connections_and_generated_ids() {
     let discard_log = Rc::new(RefCell::new(Vec::new()));
     let history_log = Rc::new(RefCell::new(Vec::new()));
-    let queue_connection = ScriptedConnection::with_sent_log(
-        vec![
-            success_response("handshake", handshake_response()),
-            success_response(
-                "attach-project",
-                project_attach_response(),
-            ),
-            success_response(
-                "rpc-1",
-                RuntimeQueueUserMessageResponse {
-                    queue_item_id: "queue-1".to_owned(),
-                    text: "queued".to_owned(),
-                },
-            ),
-        ],
-        queue_log.clone(),
-    );
     let discard_connection = ScriptedConnection::with_sent_log(
         vec![
             success_response("handshake", handshake_response()),
@@ -1541,21 +1522,10 @@ fn runtime_control_queue_routes_use_control_connections_and_generated_ids() {
         history_log.clone(),
     );
     let mut remote = RemoteClient::new(
-        ScriptedFactory::new(vec![
-            queue_connection,
-            discard_connection,
-            history_connection,
-        ]),
+        ScriptedFactory::new(vec![discard_connection, history_connection]),
         RemoteContext::project("project-1", None),
     );
 
-    let queued = remote
-        .queue_runtime_user_message(RuntimeQueueUserMessageRequest {
-            client_request_id: "request-3".to_owned(),
-            session_id: "session-1".to_owned(),
-            text: "queued".to_owned(),
-        })
-        .unwrap();
     let discarded = remote
         .discard_runtime_queued_user_message(RuntimeDiscardQueuedUserMessageRequest {
             client_request_id: "request-4".to_owned(),
@@ -1572,29 +1542,10 @@ fn runtime_control_queue_routes_use_control_connections_and_generated_ids() {
         .unwrap();
     let factory = remote.into_factory();
 
-    assert_eq!(
-        queued,
-        RuntimeQueueUserMessageResponse {
-            queue_item_id: "queue-1".to_owned(),
-            text: "queued".to_owned(),
-        }
-    );
     assert!(discarded.discarded);
     assert_eq!(
         factory.opened,
-        vec![
-            ConnectionKind::Control,
-            ConnectionKind::Control,
-            ConnectionKind::Control,
-        ]
-    );
-    assert_sent_methods(
-        &queue_log.borrow(),
-        &[
-            ("handshake", "protocol.handshake"),
-            ("attach-project", "project.attach"),
-            ("rpc-1", "runtime.queueUserMessage"),
-        ],
+        vec![ConnectionKind::Control, ConnectionKind::Control]
     );
     assert_sent_methods(
         &discard_log.borrow(),
