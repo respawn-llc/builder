@@ -130,6 +130,19 @@ type legacyTranscriptSubscription struct {
 	suppressed uint64
 }
 
+type legacyTranscriptSequenceError struct {
+	Sequence   uint64
+	Suppressed uint64
+}
+
+func (e *legacyTranscriptSequenceError) Error() string {
+	return fmt.Sprintf(
+		"legacy transcript sequence %d is below suppressed message count %d",
+		e.Sequence,
+		e.Suppressed,
+	)
+}
+
 func (s *legacyTranscriptSubscription) Next(ctx context.Context) (clientui.TranscriptMessage, error) {
 	for {
 		message, err := s.inner.Next(ctx)
@@ -139,6 +152,12 @@ func (s *legacyTranscriptSubscription) Next(ctx context.Context) (clientui.Trans
 		if message.Kind == clientui.TranscriptMessageLiveRunFinished {
 			s.suppressed++
 			continue
+		}
+		if message.Sequence < s.suppressed {
+			return clientui.TranscriptMessage{}, &legacyTranscriptSequenceError{
+				Sequence:   message.Sequence,
+				Suppressed: s.suppressed,
+			}
 		}
 		message.Sequence -= s.suppressed
 		return message, nil

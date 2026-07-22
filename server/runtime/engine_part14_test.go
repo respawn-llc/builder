@@ -78,9 +78,13 @@ func TestReopenedSessionAfterSuccessfulTriggerHandoffRequeuesPendingHandoff(t *t
 		t.Fatalf("expected recovered handoff compaction plus follow-up request, got %d", len(resumedClient.calls))
 	}
 	first := resumedClient.calls[0]
+	instructionsInput, err := newCompactionInstructionsInput("keep API details")
+	if err != nil {
+		t.Fatalf("build compaction instructions input: %v", err)
+	}
 	foundInstructions := false
 	for _, item := range first.Items {
-		if item.Type == llm.ResponseItemTypeMessage && item.Role == llm.RoleDeveloper && item.Content == compactionInstructions("keep API details") {
+		if item.Type == llm.ResponseItemTypeMessage && item.Role == llm.RoleDeveloper && item.Content == compactionInstructions(instructionsInput) {
 			foundInstructions = true
 			break
 		}

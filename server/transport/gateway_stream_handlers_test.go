@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 
@@ -38,6 +39,25 @@ func TestLegacyTranscriptSubscriptionSuppressesLiveRunTerminalAndRenumbers(t *te
 	}
 	if !inner.closed {
 		t.Fatal("legacy wrapper did not close the underlying subscription")
+	}
+}
+
+func TestLegacyTranscriptSubscriptionRejectsSequenceBelowSuppressedCount(t *testing.T) {
+	inner := &scriptedGatewayTranscriptSubscription{
+		messages: []clientui.TranscriptMessage{
+			{Sequence: 1, Kind: clientui.TranscriptMessageLiveRunFinished},
+			{Sequence: 0, Kind: clientui.TranscriptMessageOperationalDiagnostic},
+		},
+	}
+	subscription := &legacyTranscriptSubscription{inner: inner}
+
+	_, err := subscription.Next(context.Background())
+	var sequenceErr *legacyTranscriptSequenceError
+	if !errors.As(err, &sequenceErr) {
+		t.Fatalf("Next error = %T, want legacyTranscriptSequenceError", err)
+	}
+	if sequenceErr.Sequence != 0 || sequenceErr.Suppressed != 1 {
+		t.Fatalf("sequence error = %+v", sequenceErr)
 	}
 }
 

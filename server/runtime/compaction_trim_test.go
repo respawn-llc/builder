@@ -15,6 +15,12 @@ import (
 	"core/shared/transcript"
 )
 
+func TestCompactionInstructionsInputRejectsPresentBlankValue(t *testing.T) {
+	if _, err := newCompactionInstructionsInput(" \t "); err == nil {
+		t.Fatal("present blank compaction instructions succeeded")
+	}
+}
+
 func TestCompactionCacheObservationRequestAppendsPromptToConversationReplica(t *testing.T) {
 	seedContent := "seed \x1b[31mansi\x1b[0m"
 	store := mustCreateTestSession(t)
@@ -39,9 +45,13 @@ func TestCompactionCacheObservationRequestAppendsPromptToConversationReplica(t *
 	}
 
 	args := "keep API details"
+	instructionsInput, err := newCompactionInstructionsInput(args)
+	if err != nil {
+		t.Fatalf("build compaction instructions input: %v", err)
+	}
 	request, ok, err := eng.compactionCacheObservationRequest(context.Background(), llm.CompactionRequest{
 		Model:        "gpt-5",
-		Instructions: compactionInstructions(args),
+		Instructions: compactionInstructions(instructionsInput),
 		InputItems:   eng.transcriptRuntimeState().SnapshotItems(),
 	})
 	if err != nil {
@@ -53,7 +63,7 @@ func TestCompactionCacheObservationRequestAppendsPromptToConversationReplica(t *
 
 	wantItems := compactionConversationWithPromptItems(
 		eng.transcriptRuntimeState().SnapshotItems(),
-		compactionInstructions(args),
+		compactionInstructions(instructionsInput),
 	)
 	gotJSON, err := json.Marshal(request.Items)
 	if err != nil {
@@ -175,7 +185,7 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndWarnsOnCacheBreak(t
 	if string(firstJSON) != string(initialJSON) {
 		t.Fatalf("expected first compaction attempt to use an exact conversation replica\nwant=%s\n got=%s", initialJSON, firstJSON)
 	}
-	if got, want := client.compactionCalls[0].Instructions, compactionInstructions(""); got != want {
+	if got, want := client.compactionCalls[0].Instructions, compactionInstructions(compactionInstructionsInput{}); got != want {
 		t.Fatalf("first compaction instructions mismatch\nwant=%q\n got=%q", want, got)
 	}
 
