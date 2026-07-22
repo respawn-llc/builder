@@ -166,7 +166,7 @@ func TestWorkflowScriptExecutionCancellationKillsTermIgnoringProcess(t *testing.
 	dir := t.TempDir()
 	identityPath := filepath.Join(dir, "process-identity.json")
 	scriptPath := filepath.Join(dir, "ignore-term.sh")
-	script := "#!/bin/sh\nidentity_path=" + shellQuote(identityPath) + "\n(\n  trap '' TERM\n  while true; do sleep 1; done\n) &\ndescendant_pid=$!\nidentity_tmp=\"${identity_path}.$$\"\nprintf '{\"root_pid\":%s,\"descendant_pid\":%s}\\n' \"$$\" \"$descendant_pid\" > \"$identity_tmp\"\nmv \"$identity_tmp\" \"$identity_path\"\nwhile true; do sleep 1; done\n"
+	script := "#!/bin/sh\ntrap '' TERM\nidentity_path=" + shellQuote(identityPath) + "\nidentity_tmp=\"${identity_path}.$$\"\nprintf '{\"process_group_id\":%s}\\n' \"$$\" > \"$identity_tmp\"\nmv \"$identity_tmp\" \"$identity_path\"\nwhile true; do sleep 1; done\n"
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
@@ -207,13 +207,11 @@ func TestWorkflowScriptExecutionCancellationKillsTermIgnoringProcess(t *testing.
 	if execution.Script == nil || !execution.Script.Canceled {
 		t.Fatalf("script execution result = %#v, want canceled script result", execution.Script)
 	}
-	assertScriptProcessGone(t, identity.RootPID)
-	assertScriptProcessGone(t, identity.DescendantPID)
+	assertScriptProcessGroupGone(t, identity.ProcessGroupID)
 }
 
 type workflowScriptProcessIdentity struct {
-	RootPID       int `json:"root_pid"`
-	DescendantPID int `json:"descendant_pid"`
+	ProcessGroupID int `json:"process_group_id"`
 }
 
 func waitForWorkflowScriptProcessIdentity(t *testing.T, path string, timeout time.Duration) workflowScriptProcessIdentity {
@@ -225,8 +223,8 @@ func waitForWorkflowScriptProcessIdentity(t *testing.T, path string, timeout tim
 			if err := json.Unmarshal(body, &identity); err != nil {
 				t.Fatalf("decode process identity %s: %v", path, err)
 			}
-			if identity.RootPID <= 0 || identity.DescendantPID <= 0 {
-				t.Fatalf("process identity = %+v, want positive root and descendant process IDs", identity)
+			if identity.ProcessGroupID <= 0 {
+				t.Fatalf("process identity = %+v, want positive process group id", identity)
 			}
 			return true
 		}

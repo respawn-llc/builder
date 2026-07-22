@@ -5,13 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"time"
 
 	"core/shared/boundedio"
-	"core/shared/ownedprocess"
 )
 
 const (
@@ -55,8 +53,7 @@ func (r ScriptResult) clone() ScriptResult {
 }
 
 type scriptProcess struct {
-	launchRequest     ownedprocess.LaunchRequest
-	owner             *ownedprocess.Owner
+	cmd               *exec.Cmd
 	stdout            *boundedio.Writer
 	stderr            *boundedio.Writer
 	cancellationGrace time.Duration
@@ -77,7 +74,7 @@ func (a *Authority) StartScriptExecution(ctx context.Context, req ScriptExecutio
 	a.mu.Lock()
 	execution, err := a.reserveScriptExecutionLocked(req)
 	if err == nil {
-		err = process.start()
+		err = process.cmd.Start()
 	}
 	if err != nil {
 		a.mu.Unlock()
@@ -119,18 +116,20 @@ func prepareAuthorityScriptProcess(command ScriptCommand) (*scriptProcess, error
 		}
 		cancellationGrace = *command.CancellationGrace
 	}
-	var workdir *string
+	cmd := exec.Command(command.Path, command.Args...)
 	if command.Workdir != nil {
 		if *command.Workdir == "" {
 			return nil, fmt.Errorf("script workdir must not be empty when present")
 		}
-		value := *command.Workdir
-		workdir = &value
+		cmd.Dir = *command.Workdir
 	}
-	var stdin io.Reader
+	if command.Env != nil {
+		cmd.Env = append([]string(nil), command.Env...)
+	}
 	if command.Stdin != nil {
-		stdin = bytes.NewReader(command.Stdin)
+		cmd.Stdin = bytes.NewReader(command.Stdin)
 	}
+	prepareScriptCommand(cmd)
 	stdout, err := boundedio.NewWriter(outputLimit)
 	if err != nil {
 		return nil, fmt.Errorf("initialize script stdout capture: %w", err)
@@ -139,83 +138,56 @@ func prepareAuthorityScriptProcess(command ScriptCommand) (*scriptProcess, error
 	if err != nil {
 		return nil, fmt.Errorf("initialize script stderr capture: %w", err)
 	}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	return &scriptProcess{
-		launchRequest: ownedprocess.LaunchRequest{
-			Argv:   append([]string{command.Path}, command.Args...),
-			Cwd:    workdir,
-			Env:    append([]string(nil), command.Env...),
-			Stdin:  stdin,
-			Stdout: stdout,
-			Stderr: stderr,
-		},
+		cmd:               cmd,
 		stdout:            stdout,
 		stderr:            stderr,
 		cancellationGrace: cancellationGrace,
 	}, nil
 }
 
-func (p *scriptProcess) start() error {
-	owner, err := ownedprocess.Launch(p.launchRequest)
-	if err != nil {
-		return err
-	}
-	p.owner = owner
-	return nil
-}
-
 func (p *scriptProcess) wait(ctx context.Context) (ScriptResult, error, error) {
-	wait := make(chan error, 1)
+	waitCh := make(chan error, 1)
 	go func() {
-		wait <- p.owner.Wait()
+		waitCh <- p.cmd.Wait()
 	}()
-	if ctx.Err() != nil {
-		return p.cancel(wait)
-	}
-	select {
-	case <-ctx.Done():
-		return p.cancel(wait)
-	case waitErr := <-wait:
-		if ctx.Err() != nil {
-			return p.cancel(readyScriptWait(waitErr))
-		}
-		closeErr := normalizeStoppedProcessError(p.owner.Close())
-		return p.result(waitErr, false), waitErr, closeErr
-	}
-}
 
-func (p *scriptProcess) cancel(wait <-chan error) (ScriptResult, error, error) {
-	terminationErr := normalizeStoppedProcessError(p.owner.Terminate())
-	grace := time.NewTimer(p.cancellationGrace)
+	canceled := false
 	var (
-		waitErr  error
-		closeErr error
+		waitErr error
+		stopErr error
 	)
 	select {
-	case waitErr = <-wait:
-		<-grace.C
-		closeErr = normalizeStoppedProcessError(p.owner.Close())
-	case <-grace.C:
-		closeErr = normalizeStoppedProcessError(p.owner.Close())
-		waitErr = <-wait
+	case waitErr = <-waitCh:
+	case <-ctx.Done():
+		canceled = true
+		stopErr = normalizeStoppedProcessError(terminateScriptProcess(p.cmd.Process))
+		timer := time.NewTimer(p.cancellationGrace)
+		select {
+		case waitErr = <-waitCh:
+			if !timer.Stop() {
+				<-timer.C
+			}
+		case <-timer.C:
+			stopErr = errors.Join(stopErr, normalizeStoppedProcessError(killScriptProcess(p.cmd.Process)))
+			waitErr = <-waitCh
+		}
 	}
-	return p.result(waitErr, true), context.Canceled, errors.Join(terminationErr, closeErr)
-}
-
-func (p *scriptProcess) result(waitErr error, canceled bool) ScriptResult {
-	return ScriptResult{
+	exitCode := scriptProcessExitCode(waitErr)
+	result := ScriptResult{
 		Stdout:         p.stdout.Bytes(),
 		Stderr:         p.stderr.Bytes(),
 		StdoutOverflow: p.stdout.Overflow(),
 		StderrOverflow: p.stderr.Overflow(),
-		ExitCode:       scriptProcessExitCode(waitErr),
+		ExitCode:       exitCode,
 		Canceled:       canceled,
 	}
-}
-
-func readyScriptWait(waitErr error) <-chan error {
-	wait := make(chan error, 1)
-	wait <- waitErr
-	return wait
+	if canceled {
+		return result, context.Canceled, stopErr
+	}
+	return result, waitErr, stopErr
 }
 
 func normalizeStoppedProcessError(err error) error {
@@ -228,14 +200,6 @@ func normalizeStoppedProcessError(err error) error {
 func scriptProcessExitCode(err error) *int {
 	if err == nil {
 		exitCode := 0
-		return &exitCode
-	}
-	type exitCoder interface {
-		ExitCode() int
-	}
-	var coded exitCoder
-	if errors.As(err, &coded) {
-		exitCode := coded.ExitCode()
 		return &exitCode
 	}
 	var exitErr *exec.ExitError

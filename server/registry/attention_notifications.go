@@ -44,42 +44,47 @@ func (r *RuntimeRegistry) SubscribeSessionAttentionNotifications(_ context.Conte
 	if !req.IncludePendingPromptSnapshot {
 		return r.attentionBroker.SubscribeSession(req.SessionID)
 	}
-	return r.pendingPrompts.WithLockedAttentionSnapshotResult(req.SessionID, func(snapshot pendingAttentionSnapshot) (serverapi.AttentionNotificationSubscription, error) {
-		descriptors, err := r.attentionSnapshotDescriptors(req.SessionID, snapshot.items)
+	return r.pendingPrompts.WithLockedAttentionSnapshotResult(req.SessionID, func(items []PendingPromptSnapshot) (serverapi.AttentionNotificationSubscription, error) {
+		sub, err := r.attentionBroker.SubscribeSession(req.SessionID)
 		if err != nil {
 			return nil, err
 		}
-		return r.attentionBroker.SubscribeSessionSnapshot(req.SessionID, descriptors, snapshot.ordinaryOccurrenceWatermark)
-	})
-}
-
-func (r *RuntimeRegistry) attentionSnapshotDescriptors(sessionID string, items []PendingPromptSnapshot) ([]attentionnotify.SnapshotPendingDescriptor, error) {
-	taskBatches := taskQuestionBatchSnapshotGroups(items)
-	descriptors := make([]attentionnotify.SnapshotPendingDescriptor, 0, len(items))
-	processedTaskBatches := map[string]struct{}{}
-	for _, item := range items {
-		if item.Request.QuestionBatch != nil && item.Request.AttentionTarget != nil && item.Request.AttentionTarget.Kind == clientui.AttentionNotificationTargetWorkflowTask {
-			batchID := questionBatchUUID(*item.Request.QuestionBatch)
-			if _, ok := processedTaskBatches[batchID]; ok {
+		taskBatches := taskQuestionBatchSnapshotGroups(items)
+		processedTaskBatches := map[string]struct{}{}
+		for _, item := range items {
+			if item.Request.QuestionBatch != nil && item.Request.AttentionTarget != nil && item.Request.AttentionTarget.Kind == clientui.AttentionNotificationTargetWorkflowTask {
+				batchID := questionBatchUUID(*item.Request.QuestionBatch)
+				if _, ok := processedTaskBatches[batchID]; ok {
+					continue
+				}
+				processedTaskBatches[batchID] = struct{}{}
+				if err := r.enqueueTaskQuestionBatchSnapshot(sub, req.SessionID, taskBatches[batchID]); err != nil {
+					_ = sub.Close()
+					return nil, err
+				}
 				continue
 			}
-			processedTaskBatches[batchID] = struct{}{}
-			descriptor, err := r.taskQuestionBatchSnapshotDescriptor(sessionID, taskBatches[batchID])
-			if err != nil {
+			event := attentionPendingEventFromPrompt(req.SessionID, item, clientui.AttentionNotificationSourceSnapshot)
+			if event.Pending == nil {
+				continue
+			}
+			scope := attentionScopeForRequest(req.SessionID, item.Request)
+			if err := r.attentionBroker.EnqueueInitial(sub, scope, event); err != nil {
+				_ = sub.Close()
 				return nil, err
 			}
-			if descriptor.Notification.ID.UUID != "" {
-				descriptors = append(descriptors, descriptor)
-			}
-			continue
 		}
-		event := attentionPendingEventFromPrompt(sessionID, item, clientui.AttentionNotificationSourceSnapshot)
-		if event.Pending == nil {
-			continue
+		complete := clientui.AttentionNotificationEvent{
+			Source:    clientui.AttentionNotificationSourceSnapshot,
+			Type:      clientui.AttentionNotificationEventSnapshotComplete,
+			SessionID: req.SessionID,
 		}
-		descriptors = append(descriptors, attentionnotify.SnapshotPendingDescriptor{Notification: *event.Pending, Occurrence: item.occurrence})
-	}
-	return descriptors, nil
+		if err := r.attentionBroker.EnqueueInitial(sub, attentionnotify.RoutingScope{Kind: attentionnotify.RoutingSessionPrompt, SessionID: req.SessionID}, complete); err != nil {
+			_ = sub.Close()
+			return nil, err
+		}
+		return sub, nil
+	})
 }
 
 func taskQuestionBatchSnapshotGroups(items []PendingPromptSnapshot) map[string][]PendingPromptSnapshot {
@@ -95,26 +100,29 @@ func taskQuestionBatchSnapshotGroups(items []PendingPromptSnapshot) map[string][
 	return groups
 }
 
-func (r *RuntimeRegistry) taskQuestionBatchSnapshotDescriptor(sessionID string, items []PendingPromptSnapshot) (attentionnotify.SnapshotPendingDescriptor, error) {
+func (r *RuntimeRegistry) enqueueTaskQuestionBatchSnapshot(sub serverapi.AttentionNotificationSubscription, sessionID string, items []PendingPromptSnapshot) error {
 	if len(items) == 0 {
-		return attentionnotify.SnapshotPendingDescriptor{}, nil
+		return nil
 	}
 	if r.questionBatches == nil {
 		r.questionBatches = attentionnotify.NewQuestionBatchTracker(r.attentionBroker)
+	}
+	subscription, ok := sub.(*attentionnotify.Subscription)
+	if !ok {
+		return fmt.Errorf("attention notification snapshot subscription has unexpected type %T", sub)
 	}
 	req := items[0].Request
 	materializedAskIDs := make([]string, 0, len(items))
 	for _, item := range items {
 		materializedAskIDs = append(materializedAskIDs, item.Request.ID)
 	}
-	return r.questionBatches.Snapshot(attentionnotify.QuestionBatch{
+	return r.questionBatches.EnqueueSnapshot(subscription, attentionnotify.QuestionBatch{
 		ID:             questionBatchUUID(*req.QuestionBatch),
 		Route:          attentionScopeForRequest(sessionID, req),
 		Target:         *req.AttentionTarget,
 		Preview:        strings.TrimSpace(req.Question),
 		PreparedAskIDs: append([]string(nil), req.QuestionBatch.BatchPromptIDs...),
 		OccurredAt:     items[0].CreatedAt,
-		Occurrence:     items[0].occurrence,
 	}, materializedAskIDs)
 }
 
@@ -125,7 +133,7 @@ func (r *RuntimeRegistry) publishAttentionPending(sessionID string, snapshot Pen
 	req := snapshot.Request
 	if req.QuestionBatch != nil && req.AttentionTarget != nil && req.AttentionTarget.Kind == clientui.AttentionNotificationTargetWorkflowTask {
 		batchID := questionBatchUUID(*req.QuestionBatch)
-		if err := r.prepareTaskQuestionBatch(*req.QuestionBatch, sessionID, req.AttentionTarget, strings.TrimSpace(req.Question), snapshot.CreatedAt, snapshot.occurrence); err != nil {
+		if err := r.PrepareTaskQuestionBatch(*req.QuestionBatch, sessionID, req.AttentionTarget, strings.TrimSpace(req.Question), snapshot.CreatedAt); err != nil {
 			logAttentionNotificationOperationFailure("prepare task question batch", sessionID, req.ID, err)
 			return
 		}
@@ -136,7 +144,7 @@ func (r *RuntimeRegistry) publishAttentionPending(sessionID string, snapshot Pen
 	}
 	event := attentionPendingEventFromPrompt(sessionID, snapshot, clientui.AttentionNotificationSourceLive)
 	if event.Pending != nil {
-		if err := r.attentionBroker.PublishPendingWithOccurrence(attentionScopeForRequest(sessionID, req), *event.Pending, snapshot.occurrence); err != nil {
+		if err := r.attentionBroker.PublishPending(attentionScopeForRequest(sessionID, req), *event.Pending); err != nil {
 			logAttentionNotificationOperationFailure("publish pending prompt", sessionID, req.ID, err)
 		}
 	}
@@ -151,7 +159,6 @@ func (r *RuntimeRegistry) publishAttentionResolved(sessionID string, snapshot Pe
 		return
 	}
 	if req.IsTaskScopedApprovalQuestion() {
-		r.rememberTaskApprovalOccurrence(sessionID, req.ID, snapshot.occurrence)
 		return
 	}
 	kind := promptNotificationKind(req)
@@ -159,7 +166,7 @@ func (r *RuntimeRegistry) publishAttentionResolved(sessionID string, snapshot Pe
 		Kind: kind,
 		UUID: strings.TrimSpace(req.ID),
 	}
-	if err := r.attentionBroker.PublishResolvedWithOccurrence(attentionScopeForRequest(sessionID, req), id, kind, time.Now().UTC(), snapshot.occurrence); err != nil {
+	if err := r.attentionBroker.PublishResolved(attentionScopeForRequest(sessionID, req), id, kind, time.Now().UTC()); err != nil {
 		logAttentionNotificationOperationFailure("publish resolved prompt", sessionID, req.ID, err)
 	}
 }
@@ -168,84 +175,16 @@ func (r *RuntimeRegistry) MarkTaskApprovalQuestionCleared(target clientui.Attent
 	if r == nil || r.attentionBroker == nil {
 		return
 	}
-	occurrence, found := r.takeTaskApprovalOccurrence(target.SessionID, askID)
-	if !found {
-		if r.authorityEntryBySession(target.SessionID) == nil {
-			return
-		}
-		panic(fmt.Sprintf("task approval attention occurrence is missing: session_id=%q ask_id=%q", target.SessionID, askID))
-	}
 	id := clientui.AttentionNotificationID{
 		Kind: clientui.AttentionNotificationKindQuestion,
 		UUID: strings.TrimSpace(askID),
 	}
-	if err := r.attentionBroker.PublishResolvedWithOccurrence(attentionnotify.RoutingScope{Kind: attentionnotify.RoutingWorkflowTask, TaskID: target.TaskID, SessionID: target.SessionID}, id, clientui.AttentionNotificationKindQuestion, time.Now().UTC(), occurrence); err != nil {
+	if err := r.attentionBroker.PublishResolved(attentionnotify.RoutingScope{Kind: attentionnotify.RoutingWorkflowTask, TaskID: target.TaskID, SessionID: target.SessionID}, id, clientui.AttentionNotificationKindQuestion, time.Now().UTC()); err != nil {
 		logAttentionNotificationOperationFailure("publish task approval question resolved", target.SessionID, askID, err)
 	}
 }
 
-func (r *RuntimeRegistry) rememberTaskApprovalOccurrence(sessionID string, askID string, occurrence attentionnotify.OccurrenceMetadata) {
-	if r == nil {
-		return
-	}
-	key := taskApprovalOccurrenceKey{sessionID: strings.TrimSpace(sessionID), askID: strings.TrimSpace(askID)}
-	if key.sessionID == "" || key.askID == "" {
-		panic(fmt.Sprintf("task approval attention occurrence key is invalid: session_id=%q ask_id=%q", sessionID, askID))
-	}
-	if _, ok := occurrence.OrdinaryOrdinal(); !ok {
-		panic(fmt.Sprintf("task approval attention occurrence must be ordinary: session_id=%q ask_id=%q", key.sessionID, key.askID))
-	}
-	r.taskApprovalOccurrenceMu.Lock()
-	defer r.taskApprovalOccurrenceMu.Unlock()
-	if r.taskApprovalOccurrences == nil {
-		r.taskApprovalOccurrences = make(map[taskApprovalOccurrenceKey]attentionnotify.OccurrenceMetadata)
-	}
-	if _, exists := r.taskApprovalOccurrences[key]; exists {
-		panic(fmt.Sprintf("task approval attention occurrence already exists: session_id=%q ask_id=%q", key.sessionID, key.askID))
-	}
-	r.taskApprovalOccurrences[key] = occurrence
-}
-
-func (r *RuntimeRegistry) takeTaskApprovalOccurrence(sessionID string, askID string) (attentionnotify.OccurrenceMetadata, bool) {
-	if r == nil {
-		return attentionnotify.OccurrenceMetadata{}, false
-	}
-	key := taskApprovalOccurrenceKey{sessionID: strings.TrimSpace(sessionID), askID: strings.TrimSpace(askID)}
-	r.taskApprovalOccurrenceMu.Lock()
-	defer r.taskApprovalOccurrenceMu.Unlock()
-	occurrence, ok := r.taskApprovalOccurrences[key]
-	if ok {
-		delete(r.taskApprovalOccurrences, key)
-	}
-	return occurrence, ok
-}
-
-func (r *RuntimeRegistry) clearTaskApprovalOccurrences(sessionID string) {
-	if r == nil {
-		return
-	}
-	id := strings.TrimSpace(sessionID)
-	r.taskApprovalOccurrenceMu.Lock()
-	defer r.taskApprovalOccurrenceMu.Unlock()
-	for key := range r.taskApprovalOccurrences {
-		if key.sessionID == id {
-			delete(r.taskApprovalOccurrences, key)
-		}
-	}
-}
-
 func (r *RuntimeRegistry) PrepareTaskQuestionBatch(batch askquestion.AskQuestionBatchMetadata, sessionID string, target *clientui.AttentionNotificationTarget, preview string, occurredAt time.Time) error {
-	return r.prepareTaskQuestionBatch(
-		batch,
-		sessionID,
-		target,
-		preview,
-		occurredAt,
-		attentionnotify.OccurrenceMetadata{},
-	)
-}
-
-func (r *RuntimeRegistry) prepareTaskQuestionBatch(batch askquestion.AskQuestionBatchMetadata, sessionID string, target *clientui.AttentionNotificationTarget, preview string, occurredAt time.Time, occurrence attentionnotify.OccurrenceMetadata) error {
 	if r == nil || r.attentionBroker == nil {
 		return nil
 	}
@@ -265,7 +204,6 @@ func (r *RuntimeRegistry) prepareTaskQuestionBatch(batch askquestion.AskQuestion
 		Preview:        strings.TrimSpace(preview),
 		PreparedAskIDs: append([]string(nil), batch.BatchPromptIDs...),
 		OccurredAt:     occurredAt,
-		Occurrence:     occurrence,
 	})
 }
 

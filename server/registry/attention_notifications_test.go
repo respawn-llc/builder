@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -195,7 +196,7 @@ func TestRuntimeRegistrySessionAttentionSnapshotUsesPendingPromptStore(t *testin
 	}
 }
 
-func TestRuntimeRegistrySessionAttentionSnapshotCanExceedLiveBuffer(t *testing.T) {
+func TestRuntimeRegistrySessionAttentionSnapshotOverflowReturnsStreamGap(t *testing.T) {
 	broker := attentionnotify.NewBroker()
 	registry := NewRuntimeRegistry().WithAttentionNotifications(broker)
 	engine := &runtime.Engine{}
@@ -206,18 +207,11 @@ func TestRuntimeRegistrySessionAttentionSnapshotCanExceedLiveBuffer(t *testing.T
 	}
 
 	sub, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1", IncludePendingPromptSnapshot: true})
-	if err != nil {
-		t.Fatalf("SubscribeSessionAttentionNotifications: %v", err)
+	if !errors.Is(err, serverapi.ErrStreamGap) {
+		t.Fatalf("SubscribeSessionAttentionNotifications error = %v, want ErrStreamGap", err)
 	}
-	t.Cleanup(func() { _ = sub.Close() })
-	for i := 0; i < 65; i++ {
-		event := nextRegistryAttentionEvent(t, sub)
-		if event.Source != clientui.AttentionNotificationSourceSnapshot || event.Type != clientui.AttentionNotificationEventPending {
-			t.Fatalf("snapshot event %d = %+v", i, event)
-		}
-	}
-	if complete := nextRegistryAttentionEvent(t, sub); complete.Type != clientui.AttentionNotificationEventSnapshotComplete {
-		t.Fatalf("snapshot complete = %+v", complete)
+	if sub != nil {
+		t.Fatalf("SubscribeSessionAttentionNotifications returned subscription after snapshot overflow: %+v", sub)
 	}
 }
 

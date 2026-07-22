@@ -51,11 +51,10 @@ func TestSmallPackagesRemainExplicitlyClassified(t *testing.T) {
 }
 
 type goListSmallPackage struct {
-	ImportPath     string   `json:"ImportPath"`
-	GoFiles        []string `json:"GoFiles"`
-	IgnoredGoFiles []string `json:"IgnoredGoFiles"`
-	TestGoFiles    []string `json:"TestGoFiles"`
-	XTestGoFiles   []string `json:"XTestGoFiles"`
+	ImportPath   string   `json:"ImportPath"`
+	GoFiles      []string `json:"GoFiles"`
+	TestGoFiles  []string `json:"TestGoFiles"`
+	XTestGoFiles []string `json:"XTestGoFiles"`
 }
 
 type smallPackageInfo struct {
@@ -93,7 +92,7 @@ func listRepoPackages(t *testing.T, repoRoot string) []smallPackageInfo {
 		}
 		packages = append(packages, smallPackageInfo{
 			ImportPath:   pkg.ImportPath,
-			GoFiles:      len(pkg.GoFiles) + len(pkg.IgnoredGoFiles),
+			GoFiles:      len(pkg.GoFiles),
 			TestGoFiles:  len(pkg.TestGoFiles),
 			XTestGoFiles: len(pkg.XTestGoFiles),
 		})
@@ -116,6 +115,7 @@ var allowedSmallPackages = map[string]string{
 	"internal/testharness/recordstore":            "test-only synchronized record storage shared across package-local and external session fixtures without introducing a production API or Go import cycle",
 	"internal/testharness/runtimewirefixture":     "shared runtimewire event fixture package used by app/runtimewire tests without duplicating router-facing event construction",
 	"server/bootstrap":                            "composition support boundary shared by core and startup; merging into startup creates a cycle",
+	"server/attentionnotify":                      "transient attention notification broker and batch tracker owner kept separate from registry/workflow packages to avoid making them notification state owners",
 	"server/metadata/lifecyclegen":                "repo-owned generator command for the narrow SQLite lifecycle generated seam",
 	"server/metadata/sqlitelifecyclegen":          "generated SQLite lifecycle seam isolated from sqlc output because sqlc does not emit transaction-scoped PRAGMA statements",
 	"server/projectview":                          "cohesive project read-model service owner with substantial service tests",
@@ -124,10 +124,9 @@ var allowedSmallPackages = map[string]string{
 	"server/sessionlaunch":                        "session launch service seam kept separate from session runtime to avoid runprompt/runtime cycles",
 	"server/session/sessiontest":                  "test-only helper package exposing full event-history collectors kept out of the production session surface so production code cannot materialize whole histories",
 	"server/workflowruntime":                      "runtime/workflow contract boundary imported by server runtime; merging into runner would invert dependencies",
+	"server/workflowscript":                       "shared workflow script path validation and resolution contract used by store, service, and runner without creating dependency cycles",
 	"shared/apicontract":                          "shared API route/service contract owner after absorbing RPC and service contracts",
 	"shared/auth":                                 "low-level shared auth contract required below server/auth and shared/serverapi",
-	"shared/boundedio":                            "single bounded-output writer shared by lifecycle hooks and existing shell, workflow, and worktree consumers",
-	"shared/lifecyclecontract":                    "small public JSON contract shared by the interactive TUI and external lifecycle-hook receivers",
 	"shared/llmerrors":                            "shared provider-error contract surfaced by CLI and server",
 	"shared/modelcontract":                        "shared model identifier contract needed by server/llm and shared clients",
 	"shared/rollbacktarget":                       "shared session rollback target contract used by CLI and server session lifecycle",
