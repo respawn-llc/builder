@@ -364,8 +364,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z
       .object({
         source_node_display_name: nonBlankString,
         targets: z
-          .array(z.object({ display_name: nonBlankString }).strict())
-          .max(workflowGraphNodeLimit),
+          .array(z.object({ display_name: nonBlankString }).strict()),
         commentary: emptyString,
         output_values: z.record(z.string(), z.string()),
         workflow_revision_seen: z.number().int().nonnegative(),

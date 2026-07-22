@@ -543,6 +543,29 @@ func TestGenerateStream_IgnoresLeadingWhitespaceAssistantShimBeforeContent(t *te
 	}
 }
 
+func TestGenerateStream_PreservesResumedOutputWhitespaceAfterInterleavedOutput(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_text.delta","output_index":0,"delta":"\nfirst"}`,
+		`{"type":"response.output_text.delta","output_index":1,"delta":"\nsecond"}`,
+		`{"type":"response.output_text.delta","output_index":0,"delta":" continuation"}`,
+		`{"type":"response.completed","response":{"output":[]}}`,
+		`[DONE]`,
+	)
+
+	var deltas []AssistantDelta
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
+		OnAssistantDelta: func(delta AssistantDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if got := joinedAssistantDeltas(deltas); got != "firstsecond continuation" {
+		t.Fatalf("assistant deltas = %q, want resumed output whitespace preserved", got)
+	}
+}
+
 func TestGenerateStream_PreservesWhitespaceBetweenAssistantContent(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[]}}`,

@@ -13,18 +13,16 @@ import (
 )
 
 type responseStreamAccumulator struct {
-	callbacks          StreamCallbacks
-	windowTokens       int
-	assistantText      strings.Builder
-	assistantOutput    int64
-	hasAssistantOutput bool
-	assistantStarted   bool
-	assistantMessages  *assistantMessageAccumulator
-	toolCalls          *toolCallAccumulator
-	reasoning          *reasoningAccumulator
-	passthrough        *passthroughOutputAccumulator
-	completed          *responses.Response
-	responseError      *responseStreamError
+	callbacks                StreamCallbacks
+	windowTokens             int
+	assistantText            strings.Builder
+	assistantStartedByOutput map[int64]bool
+	assistantMessages        *assistantMessageAccumulator
+	toolCalls                *toolCallAccumulator
+	reasoning                *reasoningAccumulator
+	passthrough              *passthroughOutputAccumulator
+	completed                *responses.Response
+	responseError            *responseStreamError
 }
 
 type responseStreamError struct {
@@ -129,12 +127,10 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 
 func (a *responseStreamAccumulator) consumeAssistantDelta(outputIndex int64, text string) {
 	phase := a.assistantMessages.Phase(outputIndex)
-	if !a.hasAssistantOutput || a.assistantOutput != outputIndex {
-		a.assistantOutput = outputIndex
-		a.hasAssistantOutput = true
-		a.assistantStarted = false
+	if a.assistantStartedByOutput == nil {
+		a.assistantStartedByOutput = make(map[int64]bool)
 	}
-	if !a.assistantStarted {
+	if !a.assistantStartedByOutput[outputIndex] {
 		// Some OpenAI-compatible streams emit provisional leading whitespace
 		// before the assistant's durable content is known.
 		text = strings.TrimLeftFunc(text, unicode.IsSpace)
@@ -143,7 +139,7 @@ func (a *responseStreamAccumulator) consumeAssistantDelta(outputIndex int64, tex
 		return
 	}
 	a.emitAssistantDelta(AssistantDelta{Text: text, Phase: phase})
-	a.assistantStarted = true
+	a.assistantStartedByOutput[outputIndex] = true
 }
 
 func (a *responseStreamAccumulator) emitAssistantDelta(delta AssistantDelta) {
