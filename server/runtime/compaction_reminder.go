@@ -5,6 +5,7 @@ import (
 
 	"core/prompts"
 	"core/server/llm"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -51,8 +52,8 @@ func (c compactionReminderCoordinator) maybeAppend(ctx context.Context, stepID s
 	}
 	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 		Role:        llm.RoleDeveloper,
-		MessageType: llm.MessageTypeCompactionSoonReminder,
-		Content:     content,
+		MessageType: textutil.Value(llm.MessageTypeCompactionSoonReminder),
+		Content:     textutil.Value(content),
 	}})); err != nil {
 		return err
 	}

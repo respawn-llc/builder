@@ -58,11 +58,21 @@ type RuntimeWiringOptions struct {
 	GlobalConfigDir string
 }
 
-func NewRuntimeWiring(store *session.Store, active config.Settings, enabledTools []toolspec.ID, workspaceRoot string, mgr *auth.Manager, logger Logger, opts RuntimeWiringOptions) (*RuntimeWiring, error) {
-	return NewRuntimeWiringWithBackground(store, active, enabledTools, workspaceRoot, mgr, logger, nil, opts)
+func NewRuntimeWiring(store *session.Store, eventLog session.MaterializedEventLog, active config.Settings, enabledTools []toolspec.ID, workspaceRoot string, mgr *auth.Manager, logger Logger, opts RuntimeWiringOptions) (*RuntimeWiring, error) {
+	return NewRuntimeWiringWithBackground(store, eventLog, active, enabledTools, workspaceRoot, mgr, logger, nil, opts)
 }
 
-func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings, enabledTools []toolspec.ID, workspaceRoot string, mgr *auth.Manager, logger Logger, background *shelltool.Manager, opts RuntimeWiringOptions) (*RuntimeWiring, error) {
+func NewRuntimeWiringWithBackground(
+	store *session.Store,
+	eventLog session.MaterializedEventLog,
+	active config.Settings,
+	enabledTools []toolspec.ID,
+	workspaceRoot string,
+	mgr *auth.Manager,
+	logger Logger,
+	background *shelltool.Manager,
+	opts RuntimeWiringOptions,
+) (*RuntimeWiring, error) {
 	if opts.Client != nil && opts.ClientFactory != nil {
 		return nil, ErrRuntimeClientFactoryConflict
 	}
@@ -192,7 +202,7 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 	if opts.ProviderCapabilitiesOverride != nil {
 		providerCapabilitiesOverride = opts.ProviderCapabilitiesOverride
 	}
-	eng, err = runtime.New(store, client, toolRegistry, runtime.Config{
+	eng, err = runtime.New(store, eventLog, client, toolRegistry, runtime.Config{
 		Model:                         active.Model,
 		Debug:                         active.Debug,
 		Temperature:                   1,

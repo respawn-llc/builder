@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"core/server/llm"
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/shared/clientui"
@@ -22,33 +21,23 @@ func TestServiceDormantTranscriptPagesPreserveRollbackLocatorAcrossCandidateFree
 	)
 	dir := t.TempDir()
 	store, _ := newSessionViewParentAgentChild(t, dir, "ws", dir)
-	appended, err := store.AppendEventWithEndByteCursor(
-		userStepID,
-		"message",
-		llm.Message{Role: llm.RoleUser, Content: "candidate before dormant compactions"},
-	)
-	if err != nil {
-		t.Fatalf("append rollback candidate: %v", err)
-	}
+	appended := appendSessionViewRecordWithCursor(t, store, userStepID, session.MessageRecord{
+		Role:    session.MessageRoleUser,
+		Content: sessionViewStringPointer("candidate before dormant compactions"),
+	})
 	if appended.EndByteCursor == nil {
 		t.Fatal("rollback candidate append did not return a page cursor")
 	}
 	locator := rollbacktarget.CandidateLocator{
-		UserMessageSeq:       appended.Event.Seq,
+		UserMessageSeq:       appended.Record.Seq(),
 		CandidatePageEndByte: *appended.EndByteCursor,
 	}
 	for index := 0; index < 3; index++ {
-		if _, _, err := store.AppendEvent(compactStepID, "history_replaced", map[string]any{
-			"engine":                    "local",
-			"latest_rollback_candidate": locator,
-			"items": llm.ItemsFromMessages([]llm.Message{{
-				Role:        llm.RoleUser,
-				MessageType: llm.MessageTypeCompactionSummary,
-				Content:     "candidate-free summary",
-			}}),
-		}); err != nil {
-			t.Fatalf("append history replacement %d: %v", index, err)
-		}
+		appendSessionViewHistoryReplacement(t, store, compactStepID, session.HistoryReplacementRecord{
+			Engine:                  "local",
+			Mode:                    session.CompactionModeAuto,
+			LatestRollbackCandidate: &locator,
+		})
 	}
 	dormant := NewService(newTestSessionResolver(store), nil, nil, nil)
 

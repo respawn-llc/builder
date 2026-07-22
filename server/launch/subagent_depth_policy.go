@@ -65,7 +65,10 @@ func (p parentAgentDepthPolicy) enforce(ctx context.Context, immediate session.M
 		if resolvedID != ancestorID {
 			return fmt.Errorf("persisted parent-agent session id mismatch: requested %q, resolved %q", ancestorID, resolvedID)
 		}
-		current = *record.Meta
+		current = session.Meta{
+			SessionID:            record.Meta.SessionID,
+			ParentAgentSessionID: record.Meta.ParentAgentSessionID,
+		}
 	}
 	return nil
 }

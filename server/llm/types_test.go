@@ -6,7 +6,15 @@ import (
 	"testing"
 
 	"core/server/session"
+	"core/shared/textutil"
 )
+
+func messageContent(message Message) string {
+	if message.Content == nil {
+		panic("test expected message content to be present")
+	}
+	return *message.Content
+}
 
 func TestRequestValidateRejectsMissingToolChoiceMode(t *testing.T) {
 	err := (Request{Model: "gpt-5"}).Validate()
@@ -59,7 +67,7 @@ func TestRequestFromLockedContract_UsesBinaryPromptAndExplicitTools(t *testing.T
 	}
 	tool := Tool{Name: "shell", Schema: []byte(`{"type":"object"}`)}
 
-	req, err := RequestFromLockedContract(locked, "sys", []ResponseItem{{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "hi"}}, []Tool{tool}, ToolControls{ChoiceMode: ToolChoiceModeAutomatic})
+	req, err := RequestFromLockedContract(locked, "sys", []ResponseItem{{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hi")}}, []Tool{tool}, ToolControls{ChoiceMode: ToolChoiceModeAutomatic})
 	if err != nil {
 		t.Fatalf("request from contract: %v", err)
 	}
@@ -83,7 +91,7 @@ func TestRequestFromLockedContract_RespectsExplicitToolDisable(t *testing.T) {
 		Temperature:    1,
 		MaxOutputToken: 0,
 	}
-	req, err := RequestFromLockedContract(locked, "sys", []ResponseItem{{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "hi"}}, []Tool{}, ToolControls{ChoiceMode: ToolChoiceModeAutomatic})
+	req, err := RequestFromLockedContract(locked, "sys", []ResponseItem{{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hi")}}, []Tool{}, ToolControls{ChoiceMode: ToolChoiceModeAutomatic})
 	if err != nil {
 		t.Fatalf("request from contract: %v", err)
 	}
@@ -110,35 +118,35 @@ func TestMessagesFromItems_PreservesAssistantPhase(t *testing.T) {
 	items := []ResponseItem{
 		{
 			Type:    ResponseItemTypeMessage,
-			Role:    RoleAssistant,
-			Phase:   MessagePhaseCommentary,
-			Content: "progress",
+			Role:    textutil.Value(RoleAssistant),
+			Phase:   textutil.Value(MessagePhaseCommentary),
+			Content: textutil.Value("progress"),
 		},
 	}
 	msgs := MessagesFromItems(items)
 	if len(msgs) != 1 {
 		t.Fatalf("expected one message, got %d", len(msgs))
 	}
-	if msgs[0].Phase != MessagePhaseCommentary {
-		t.Fatalf("expected commentary phase, got %q", msgs[0].Phase)
+	if msgs[0].Phase == nil || *msgs[0].Phase != MessagePhaseCommentary {
+		t.Fatalf("expected commentary phase, got %v", msgs[0].Phase)
 	}
 }
 
 func TestCustomToolCallItemsRoundTripThroughMessages(t *testing.T) {
 	patchInput := "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch\n"
 	items := []ResponseItem{
-		{Type: ResponseItemTypeCustomToolCall, ID: "ct_1", CallID: "call_1", Name: "patch", CustomInput: patchInput},
-		{Type: ResponseItemTypeCustomToolOutput, CallID: "call_1", Name: "patch", Output: json.RawMessage(`{"ok":true}`)},
+		{Type: ResponseItemTypeCustomToolCall, ID: textutil.Value("ct_1"), CallID: textutil.Value("call_1"), Name: textutil.Value("patch"), CustomInput: textutil.Value(patchInput)},
+		{Type: ResponseItemTypeCustomToolOutput, CallID: textutil.Value("call_1"), Name: textutil.Value("patch"), Output: json.RawMessage(`{"ok":true}`)},
 	}
 
 	msgs := MessagesFromItems(items)
 	if len(msgs) != 2 {
 		t.Fatalf("expected assistant and tool messages, got %+v", msgs)
 	}
-	if len(msgs[0].ToolCalls) != 1 || !msgs[0].ToolCalls[0].Custom || msgs[0].ToolCalls[0].CustomInput != patchInput {
+	if len(msgs[0].ToolCalls) != 1 || !msgs[0].ToolCalls[0].Custom || msgs[0].ToolCalls[0].CustomInput == nil || *msgs[0].ToolCalls[0].CustomInput != patchInput {
 		t.Fatalf("unexpected custom tool call message: %+v", msgs[0])
 	}
-	if msgs[1].MessageType != MessageTypeCustomToolCallOutput || msgs[1].ToolCallID != "call_1" {
+	if msgs[1].MessageType == nil || *msgs[1].MessageType != MessageTypeCustomToolCallOutput || msgs[1].ToolCallID == nil || *msgs[1].ToolCallID != "call_1" {
 		t.Fatalf("unexpected custom tool output message: %+v", msgs[1])
 	}
 
@@ -146,7 +154,7 @@ func TestCustomToolCallItemsRoundTripThroughMessages(t *testing.T) {
 	if len(roundTrip) != 2 {
 		t.Fatalf("expected two round-trip items, got %+v", roundTrip)
 	}
-	if roundTrip[0].Type != ResponseItemTypeCustomToolCall || roundTrip[0].CustomInput != patchInput {
+	if roundTrip[0].Type != ResponseItemTypeCustomToolCall || roundTrip[0].CustomInput == nil || *roundTrip[0].CustomInput != patchInput {
 		t.Fatalf("unexpected round-trip custom call item: %+v", roundTrip[0])
 	}
 	if roundTrip[1].Type != ResponseItemTypeCustomToolOutput || string(roundTrip[1].Output) != `{"ok":true}` {
@@ -158,8 +166,8 @@ func TestBackgroundExitCodeRoundTripsThroughResponseItems(t *testing.T) {
 	exitCode := 5
 	items := ItemsFromMessages([]Message{{
 		Role:               RoleDeveloper,
-		MessageType:        MessageTypeBackgroundNotice,
-		Content:            "background failed",
+		MessageType:        textutil.Value(MessageTypeBackgroundNotice),
+		Content:            textutil.Value("background failed"),
 		BackgroundExitCode: &exitCode,
 	}})
 	if len(items) != 1 || items[0].BackgroundExitCode == nil || *items[0].BackgroundExitCode != exitCode {
@@ -174,9 +182,9 @@ func TestBackgroundExitCodeRoundTripsThroughResponseItems(t *testing.T) {
 
 func TestMessagesFromItemsStartsNewAssistantAfterFunctionToolOutput(t *testing.T) {
 	items := []ResponseItem{
-		{Type: ResponseItemTypeFunctionCall, ID: "fc_1", CallID: "call_1", Name: "shell", Arguments: json.RawMessage(`{"cmd":"pwd"}`)},
-		{Type: ResponseItemTypeFunctionCallOutput, CallID: "call_1", Name: "shell", Output: json.RawMessage(`{"output":"/tmp"}`)},
-		{Type: ResponseItemTypeReasoning, ID: "rs_1", EncryptedContent: "enc_1"},
+		{Type: ResponseItemTypeFunctionCall, ID: textutil.Value("fc_1"), CallID: textutil.Value("call_1"), Name: textutil.Value("shell"), Arguments: json.RawMessage(`{"cmd":"pwd"}`)},
+		{Type: ResponseItemTypeFunctionCallOutput, CallID: textutil.Value("call_1"), Name: textutil.Value("shell"), Output: json.RawMessage(`{"output":"/tmp"}`)},
+		{Type: ResponseItemTypeReasoning, ID: textutil.Value("rs_1"), EncryptedContent: textutil.Value("enc_1")},
 	}
 
 	msgs := MessagesFromItems(items)
@@ -186,7 +194,7 @@ func TestMessagesFromItemsStartsNewAssistantAfterFunctionToolOutput(t *testing.T
 	if len(msgs[0].ToolCalls) != 1 {
 		t.Fatalf("expected first assistant to contain tool call, got %+v", msgs[0])
 	}
-	if msgs[1].Role != RoleTool || msgs[1].ToolCallID != "call_1" {
+	if msgs[1].Role != RoleTool || msgs[1].ToolCallID == nil || *msgs[1].ToolCallID != "call_1" {
 		t.Fatalf("expected tool output message, got %+v", msgs[1])
 	}
 	if msgs[2].Role != RoleAssistant || len(msgs[2].ReasoningItems) != 1 {
@@ -198,24 +206,24 @@ func TestMessagesFromItems_PreservesMessageType(t *testing.T) {
 	items := []ResponseItem{
 		{
 			Type:        ResponseItemTypeMessage,
-			Role:        RoleDeveloper,
-			MessageType: MessageTypeEnvironment,
-			Content:     "env",
+			Role:        textutil.Value(RoleDeveloper),
+			MessageType: textutil.Value(MessageTypeEnvironment),
+			Content:     textutil.Value("env"),
 		},
 	}
 	msgs := MessagesFromItems(items)
 	if len(msgs) != 1 {
 		t.Fatalf("expected one message, got %d", len(msgs))
 	}
-	if msgs[0].MessageType != MessageTypeEnvironment {
-		t.Fatalf("expected message type to round-trip, got %q", msgs[0].MessageType)
+	if msgs[0].MessageType == nil || *msgs[0].MessageType != MessageTypeEnvironment {
+		t.Fatalf("expected message type to round-trip, got %v", msgs[0].MessageType)
 	}
 	roundTrip := ItemsFromMessages(msgs)
 	if len(roundTrip) != 1 {
 		t.Fatalf("expected one round-trip item, got %d", len(roundTrip))
 	}
-	if roundTrip[0].MessageType != MessageTypeEnvironment {
-		t.Fatalf("expected round-trip item message type, got %q", roundTrip[0].MessageType)
+	if roundTrip[0].MessageType == nil || *roundTrip[0].MessageType != MessageTypeEnvironment {
+		t.Fatalf("expected round-trip item message type, got %v", roundTrip[0].MessageType)
 	}
 }
 
@@ -223,40 +231,40 @@ func TestMessagesFromItems_PreservesSkillsMessageType(t *testing.T) {
 	items := []ResponseItem{
 		{
 			Type:        ResponseItemTypeMessage,
-			Role:        RoleDeveloper,
-			MessageType: MessageTypeSkills,
-			Content:     "## Skills\n### Available skills",
+			Role:        textutil.Value(RoleDeveloper),
+			MessageType: textutil.Value(MessageTypeSkills),
+			Content:     textutil.Value("## Skills\n### Available skills"),
 		},
 	}
 	msgs := MessagesFromItems(items)
 	if len(msgs) != 1 {
 		t.Fatalf("expected one message, got %d", len(msgs))
 	}
-	if msgs[0].MessageType != MessageTypeSkills {
-		t.Fatalf("expected message type to round-trip, got %q", msgs[0].MessageType)
+	if msgs[0].MessageType == nil || *msgs[0].MessageType != MessageTypeSkills {
+		t.Fatalf("expected message type to round-trip, got %v", msgs[0].MessageType)
 	}
 	roundTrip := ItemsFromMessages(msgs)
 	if len(roundTrip) != 1 {
 		t.Fatalf("expected one round-trip item, got %d", len(roundTrip))
 	}
-	if roundTrip[0].MessageType != MessageTypeSkills {
-		t.Fatalf("expected round-trip item message type, got %q", roundTrip[0].MessageType)
+	if roundTrip[0].MessageType == nil || *roundTrip[0].MessageType != MessageTypeSkills {
+		t.Fatalf("expected round-trip item message type, got %v", roundTrip[0].MessageType)
 	}
 }
 
 func TestMessagesFromItems_PreservesActiveGoalContinuationMessageType(t *testing.T) {
 	items := []ResponseItem{{
 		Type:        ResponseItemTypeMessage,
-		Role:        RoleDeveloper,
-		MessageType: MessageTypeActiveGoalContinuation,
-		Content:     "active-goal continuation",
+		Role:        textutil.Value(RoleDeveloper),
+		MessageType: textutil.Value(MessageTypeActiveGoalContinuation),
+		Content:     textutil.Value("active-goal continuation"),
 	}}
 	messages := MessagesFromItems(items)
-	if len(messages) != 1 || messages[0].MessageType != MessageTypeActiveGoalContinuation {
+	if len(messages) != 1 || messages[0].MessageType == nil || *messages[0].MessageType != MessageTypeActiveGoalContinuation {
 		t.Fatalf("messages = %+v, want active-goal continuation type", messages)
 	}
 	roundTrip := ItemsFromMessages(messages)
-	if len(roundTrip) != 1 || roundTrip[0].MessageType != MessageTypeActiveGoalContinuation {
+	if len(roundTrip) != 1 || roundTrip[0].MessageType == nil || *roundTrip[0].MessageType != MessageTypeActiveGoalContinuation {
 		t.Fatalf("round-trip items = %+v, want active-goal continuation type", roundTrip)
 	}
 }
@@ -265,24 +273,24 @@ func TestMessagesFromItems_PreservesHeadlessExitMessageType(t *testing.T) {
 	items := []ResponseItem{
 		{
 			Type:        ResponseItemTypeMessage,
-			Role:        RoleDeveloper,
-			MessageType: MessageTypeHeadlessModeExit,
-			Content:     "interactive mode instructions",
+			Role:        textutil.Value(RoleDeveloper),
+			MessageType: textutil.Value(MessageTypeHeadlessModeExit),
+			Content:     textutil.Value("interactive mode instructions"),
 		},
 	}
 	msgs := MessagesFromItems(items)
 	if len(msgs) != 1 {
 		t.Fatalf("expected one message, got %d", len(msgs))
 	}
-	if msgs[0].MessageType != MessageTypeHeadlessModeExit {
-		t.Fatalf("expected message type to round-trip, got %q", msgs[0].MessageType)
+	if msgs[0].MessageType == nil || *msgs[0].MessageType != MessageTypeHeadlessModeExit {
+		t.Fatalf("expected message type to round-trip, got %v", msgs[0].MessageType)
 	}
 	roundTrip := ItemsFromMessages(msgs)
 	if len(roundTrip) != 1 {
 		t.Fatalf("expected one round-trip item, got %d", len(roundTrip))
 	}
-	if roundTrip[0].MessageType != MessageTypeHeadlessModeExit {
-		t.Fatalf("expected round-trip item message type, got %q", roundTrip[0].MessageType)
+	if roundTrip[0].MessageType == nil || *roundTrip[0].MessageType != MessageTypeHeadlessModeExit {
+		t.Fatalf("expected round-trip item message type, got %v", roundTrip[0].MessageType)
 	}
 }
 
@@ -296,18 +304,18 @@ func TestMessagesFromItems_PreservesWorktreeExitMessageType(t *testing.T) {
 	items := []ResponseItem{
 		{
 			Type:            ResponseItemTypeMessage,
-			Role:            RoleDeveloper,
-			MessageType:     MessageTypeWorktreeModeExit,
+			Role:            textutil.Value(RoleDeveloper),
+			MessageType:     textutil.Value(MessageTypeWorktreeModeExit),
 			WorktreeContext: worktreeContext,
-			Content:         "returned to main workspace",
+			Content:         textutil.Value("returned to main workspace"),
 		},
 	}
 	msgs := MessagesFromItems(items)
 	if len(msgs) != 1 {
 		t.Fatalf("expected one message, got %d", len(msgs))
 	}
-	if msgs[0].MessageType != MessageTypeWorktreeModeExit {
-		t.Fatalf("expected message type to round-trip, got %q", msgs[0].MessageType)
+	if msgs[0].MessageType == nil || *msgs[0].MessageType != MessageTypeWorktreeModeExit {
+		t.Fatalf("expected message type to round-trip, got %v", msgs[0].MessageType)
 	}
 	if msgs[0].WorktreeContext == nil || !session.WorktreeContextEqual(*msgs[0].WorktreeContext, *worktreeContext) {
 		t.Fatalf("worktree context = %+v, want %+v", msgs[0].WorktreeContext, worktreeContext)
@@ -316,8 +324,8 @@ func TestMessagesFromItems_PreservesWorktreeExitMessageType(t *testing.T) {
 	if len(roundTrip) != 1 {
 		t.Fatalf("expected one round-trip item, got %d", len(roundTrip))
 	}
-	if roundTrip[0].MessageType != MessageTypeWorktreeModeExit {
-		t.Fatalf("expected round-trip item message type, got %q", roundTrip[0].MessageType)
+	if roundTrip[0].MessageType == nil || *roundTrip[0].MessageType != MessageTypeWorktreeModeExit {
+		t.Fatalf("expected round-trip item message type, got %v", roundTrip[0].MessageType)
 	}
 	if roundTrip[0].WorktreeContext == nil || !session.WorktreeContextEqual(*roundTrip[0].WorktreeContext, *worktreeContext) {
 		t.Fatalf("round-trip worktree context = %+v, want %+v", roundTrip[0].WorktreeContext, worktreeContext)
@@ -342,9 +350,9 @@ func TestPreparedOpenAIItemKeepsWorktreeContextOutOfProviderPayload(t *testing.T
 	}
 	items := ItemsFromMessages([]Message{{
 		Role:            RoleDeveloper,
-		MessageType:     MessageTypeWorktreeMode,
+		MessageType:     textutil.Value(MessageTypeWorktreeMode),
 		WorktreeContext: target,
-		Content:         "worktree context",
+		Content:         textutil.Value("worktree context"),
 	}})
 	if len(items) != 1 ||
 		items[0].WorktreeContext == nil ||
@@ -362,7 +370,7 @@ func TestPreparedOpenAIItemKeepsWorktreeContextOutOfProviderPayload(t *testing.T
 }
 
 func TestUsageCacheHitPercent(t *testing.T) {
-	usage := Usage{InputTokens: 200, CachedInputTokens: 50, HasCachedInputTokens: true}
+	usage := Usage{InputTokens: 200, CachedInputTokens: textutil.Value(50)}
 	pct, ok := usage.CacheHitPercent()
 	if !ok {
 		t.Fatal("expected cache hit percentage to be available")

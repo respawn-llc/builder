@@ -9,6 +9,7 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 
@@ -1197,7 +1198,7 @@ func TestCacheWarningNoticeRendersStructuredPayload(t *testing.T) {
 	warning := transcript.CacheWarning{
 		Scope:           transcript.CacheWarningScopeReviewer,
 		Reason:          transcript.CacheWarningReasonNonPostfix,
-		LostInputTokens: 1500,
+		LostInputTokens: textutil.Value(1500),
 	}
 	row := clientui.TranscriptCommittedRow{
 		Kind: clientui.TranscriptRowNotice,
@@ -1220,6 +1221,30 @@ func TestCacheWarningNoticeRendersStructuredPayload(t *testing.T) {
 	}
 	if got, want := text, transcript.CacheWarningText(warning); got != want {
 		t.Fatalf("cache warning notice text = %q, want shared formatter output %q", got, want)
+	}
+}
+
+func TestCacheWarningNoticePreservesAbsentTokenLoss(t *testing.T) {
+	row := clientui.TranscriptCommittedRow{
+		Kind: clientui.TranscriptRowNotice,
+		Notice: &clientui.TranscriptNoticeRow{
+			Reason:   clientui.TranscriptNoticeReason(transcript.NoticeReasonCacheWarning),
+			Severity: clientui.TranscriptNoticeWarning,
+			CacheWarning: &clientui.TranscriptCacheWarning{
+				Scope:      string(transcript.CacheWarningScopeConversation),
+				Reason:     string(transcript.CacheWarningReasonCompaction),
+				Visibility: transcript.EntryVisibilityOngoing,
+			},
+		},
+	}
+
+	_, got := noticeRoleAndText(row.Notice, row.Visibility, ModeOngoing)
+	want := transcript.CacheWarningText(transcript.CacheWarning{
+		Scope:  transcript.CacheWarningScopeConversation,
+		Reason: transcript.CacheWarningReasonCompaction,
+	})
+	if got != want {
+		t.Fatalf("cache warning notice text = %q, want %q", got, want)
 	}
 }
 

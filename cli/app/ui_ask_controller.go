@@ -190,7 +190,7 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			resp := clientui.PromptAnswer{Answer: commentary, FreeformAnswer: commentary}
 			if optionNumber, ok := selectedAskOptionNumber(req, m.ask.cursor); ok {
-				resp.SelectedOptionNumber = textutil.Int(optionNumber)
+				resp.SelectedOptionNumber = textutil.Value(optionNumber)
 			}
 			if transcriptPromptIsApproval(req) {
 				if m.ask.freeformMode == askFreeformModeApprovalCommentary {
@@ -250,7 +250,7 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.clearAskInput()
 			return m, nil
 		}
-		resp := clientui.PromptAnswer{SelectedOptionNumber: textutil.Int(m.ask.cursor + 1)}
+		resp := clientui.PromptAnswer{SelectedOptionNumber: textutil.Value(m.ask.cursor + 1)}
 		if commentary := strings.TrimSpace(m.ask.editor.Text()); askSupportsDraftRoundTrip(req) && commentary != "" {
 			resp.FreeformAnswer = commentary
 		}

@@ -439,16 +439,22 @@ func (r *RuntimeRegistry) publishRuntimeEvent(entry *authorityRuntimeEntry, evt 
 	r.recordQueuedMessageOperationStatus(evt)
 }
 
-func (r *RuntimeRegistry) PublishSessionIdentity(sessionID string, target *clientui.SessionExecutionTarget) {
+func (r *RuntimeRegistry) PublishSessionIdentity(
+	sessionID string,
+	target *clientui.SessionExecutionTarget,
+) error {
 	if r == nil {
-		return
+		return nil
 	}
 	id := strings.TrimSpace(sessionID)
 	entry := r.authorityEntryBySession(id)
 	if entry == nil {
-		return
+		return nil
 	}
-	identity := runtimeview.TranscriptSessionIdentityFromRuntime(entry.engine)
+	identity, err := runtimeview.TranscriptSessionIdentityFromRuntime(entry.engine)
+	if err != nil {
+		return err
+	}
 	if target != nil {
 		normalized := clientui.NormalizeSessionExecutionTarget(*target)
 		identity.ExecutionTarget = &normalized
@@ -459,6 +465,7 @@ func (r *RuntimeRegistry) PublishSessionIdentity(sessionID string, target *clien
 		Kind:    clientui.TranscriptMessageSessionIdentity,
 		Payload: clientui.TranscriptPayload{SessionIdentity: &identity},
 	}})
+	return nil
 }
 
 func (r *RuntimeRegistry) PublishSessionStatus(sessionID string) {
@@ -594,7 +601,11 @@ func (r *RuntimeRegistry) subscribeAuthorityTranscript(id string, entry *authori
 		var subscribeErr error
 		hydration := runtimeview.TranscriptHydrationFromSnapshot(snapshot)
 		hydration.SessionStatus = runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
-		hydration.SessionIdentity = runtimeview.TranscriptSessionIdentityFromRuntime(entry.engine)
+		hydration.SessionIdentity, subscribeErr =
+			runtimeview.TranscriptSessionIdentityFromRuntime(entry.engine)
+		if subscribeErr != nil {
+			return subscribeErr
+		}
 		if target, ok := r.resolveSessionExecutionTarget(context.Background(), id); ok {
 			hydration.SessionIdentity.ExecutionTarget = &target
 		}

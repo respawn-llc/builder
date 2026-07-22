@@ -9,9 +9,9 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -33,23 +33,26 @@ func (c *gatedMissingToolRepairClient) Generate(_ context.Context, request llm.R
 		return llm.Response{}, &llm.APIStatusError{StatusCode: 400, Body: "tool call without output"}
 	}
 	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "repaired"},
-		Usage:     llm.Usage{InputTokens: 10, OutputTokens: 2, WindowTokens: 100},
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+			Content: textutil.Value("repaired"),
+		},
+		Usage: llm.Usage{InputTokens: 10, OutputTokens: 2, WindowTokens: 100},
 	}, nil
 }
 
-func appendRepairEvent(t *testing.T, store *session.Store, kind string, payload any) session.Event {
+func appendRepairEvent(t *testing.T, store *session.Store, kind string, payload any) session.EventRecord {
 	t.Helper()
-	event, _, err := store.AppendEvent("step", kind, payload)
-	if err != nil {
-		t.Fatalf("append %q event: %v", kind, err)
+	if kind != "message" {
+		t.Fatalf("unsupported repair event kind %q", kind)
 	}
-	return event
+	return mustAppendTestEvent(t, store, "step", payload)
 }
 
-func readRepairEvents(t *testing.T, store *session.Store) []session.Event {
+func readRepairEvents(t *testing.T, store *session.Store) []testPersistedEvent {
 	t.Helper()
-	events, err := sessiontest.CollectEvents(store)
+	events, err := collectTestEventRecords(store)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -58,7 +61,7 @@ func readRepairEvents(t *testing.T, store *session.Store) []session.Event {
 
 func repairItemsContainCall(items []llm.ResponseItem, callID string) bool {
 	for _, item := range items {
-		if strings.TrimSpace(item.CallID) == callID && isToolCallItem(item.Type) {
+		if item.CallID != nil && strings.TrimSpace(*item.CallID) == callID && isToolCallItem(item.Type) {
 			return true
 		}
 	}
@@ -67,14 +70,14 @@ func repairItemsContainCall(items []llm.ResponseItem, callID string) bool {
 
 func repairItemsContainOutput(items []llm.ResponseItem, callID string) bool {
 	for _, item := range items {
-		if strings.TrimSpace(item.CallID) == callID && isToolOutputItem(item.Type) {
+		if item.CallID != nil && strings.TrimSpace(*item.CallID) == callID && isToolOutputItem(item.Type) {
 			return true
 		}
 	}
 	return false
 }
 
-func countPersistedLocalEntries(events []session.Event) int {
+func countPersistedLocalEntries(events []testPersistedEvent) int {
 	count := 0
 	for _, event := range events {
 		if event.Kind == "local_entry" {
@@ -96,7 +99,7 @@ func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 	client := &fakeClient{
 		errors: []error{&llm.APIStatusError{StatusCode: 400, Body: "tool call without output"}},
 		responses: []llm.Response{{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "repaired"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("repaired")},
 			Usage:     llm.Usage{InputTokens: 10, OutputTokens: 2, WindowTokens: 100},
 		}},
 	}
@@ -106,8 +109,8 @@ func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit user message: %v", err)
 	}
-	if msg.Content != "repaired" {
-		t.Fatalf("assistant content = %q, want repaired", msg.Content)
+	if messageContent(msg) != "repaired" {
+		t.Fatalf("assistant content = %q, want repaired", messageContent(msg))
 	}
 	if len(client.calls) != 2 {
 		t.Fatalf("model calls = %d, want 2 (initial 400 + repaired retry)", len(client.calls))
@@ -281,10 +284,7 @@ func TestRepairMissingToolOutputsMarksResultAsError(t *testing.T) {
 		if event.Kind != "tool_completed" {
 			continue
 		}
-		var stored storedToolCompletion
-		if err := json.Unmarshal(event.Payload, &stored); err != nil {
-			t.Fatalf("decode completion: %v", err)
-		}
+		stored := persistedToolCompletionForTest(t, event)
 		if stored.CallID == "missing" {
 			completion = &stored
 		}
@@ -312,7 +312,7 @@ func TestCompactionMissingToolOutputRepairAppendsAndRetries(t *testing.T) {
 	client := &fakeCompactionClient{
 		compactionErrors: []error{&llm.APIStatusError{StatusCode: 400, Body: "tool call without output"}},
 		compactionResponses: []llm.CompactionResponse{{
-			OutputItems: []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "summary"}},
+			OutputItems: []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("summary")}},
 			Usage:       llm.Usage{InputTokens: 10, OutputTokens: 2, WindowTokens: 100},
 		}},
 	}
@@ -373,12 +373,12 @@ func TestCompactionMissingOutputRepairDoesNotConsumeOverflowAttempt(t *testing.T
 			nil,
 		},
 		responses: []llm.Response{{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "local summary"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("local summary")},
 			Usage:     llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 		}},
 	}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
@@ -387,8 +387,8 @@ func TestCompactionMissingOutputRepairDoesNotConsumeOverflowAttempt(t *testing.T
 		t.Fatalf("append shell call: %v", err)
 	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
-		Role: llm.RoleTool, ToolCallID: "call-shell", Name: string(toolspec.ToolExecCommand),
-		Content: `{"output":"` + strings.Repeat("x", 120_000) + `"}`,
+		Role: llm.RoleTool, ToolCallID: textutil.Value("call-shell"), Name: textutil.Value(string(toolspec.ToolExecCommand)),
+		Content: textutil.Value(`{"output":"` + strings.Repeat("x", 120_000) + `"}`),
 	}})); err != nil {
 		t.Fatalf("append shell output: %v", err)
 	}
@@ -410,7 +410,7 @@ func TestCompactionMissingOutputRepairDoesNotConsumeOverflowAttempt(t *testing.T
 	}
 	collapsed := false
 	for _, item := range final {
-		if item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID == "call-shell" {
+		if item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID != nil && *item.CallID == "call-shell" {
 			collapsed = isCollapsedCompactionOverflowShellOutput(item.Output)
 		}
 	}
@@ -439,8 +439,8 @@ func TestCompactionMissingOutputAfterCollapsePanics(t *testing.T) {
 		t.Fatalf("append shell call: %v", err)
 	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
-		Role: llm.RoleTool, ToolCallID: "call-shell", Name: string(toolspec.ToolExecCommand),
-		Content: `{"output":"` + strings.Repeat("x", 120_000) + `"}`,
+		Role: llm.RoleTool, ToolCallID: textutil.Value("call-shell"), Name: textutil.Value(string(toolspec.ToolExecCommand)),
+		Content: textutil.Value(`{"output":"` + strings.Repeat("x", 120_000) + `"}`),
 	}})); err != nil {
 		t.Fatalf("append shell output: %v", err)
 	}
@@ -475,10 +475,7 @@ func TestRepairWarningUsesOperatorFacingRole(t *testing.T) {
 		if event.Kind != "local_entry" {
 			continue
 		}
-		var entry storedLocalEntry
-		if err := json.Unmarshal(event.Payload, &entry); err != nil {
-			t.Fatalf("decode local entry: %v", err)
-		}
+		entry := persistedLocalEntryForTest(t, event)
 		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) && strings.TrimSpace(entry.Text) != "" {
 			found = true
 		}

@@ -208,7 +208,12 @@ func validateExpectedToolResults(req llm.Request, expected []ExpectedToolResult)
 	for _, want := range expected {
 		found := false
 		for _, item := range req.Items {
-			if item.CallID == want.CallID && item.Name == want.Name && (item.Type == llm.ResponseItemTypeFunctionCallOutput || item.Type == llm.ResponseItemTypeCustomToolOutput) {
+			if item.CallID != nil &&
+				*item.CallID == want.CallID &&
+				item.Name != nil &&
+				*item.Name == want.Name &&
+				(item.Type == llm.ResponseItemTypeFunctionCallOutput ||
+					item.Type == llm.ResponseItemTypeCustomToolOutput) {
 				found = true
 				break
 			}

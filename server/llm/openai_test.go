@@ -68,12 +68,53 @@ func TestOpenAIClientGenerateStreamDoesNotReplayFinalTextAsDelta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate stream failed: %v", err)
 	}
-	if resp.Assistant.Content != "Hello" {
-		t.Fatalf("expected final assistant content, got %q", resp.Assistant.Content)
+	if messageContent(resp.Assistant) != "Hello" {
+		t.Fatalf("expected final assistant content, got %q", messageContent(resp.Assistant))
 	}
 	if len(deltas) != 2 || deltas[0] != "Hel" || deltas[1] != "lo" {
 		t.Fatalf("expected only incremental stream deltas, got %+v", deltas)
 	}
+}
+
+func TestOpenAIClientGenerateStreamPreservesFinalTextThatExtendsStreamWithWhitespace(t *testing.T) {
+	transport := trailingWhitespaceStreamingTransport{}
+	client := NewOpenAIClient(transport)
+
+	var deltas []string
+	resp, err := client.GenerateStream(
+		context.Background(),
+		Request{Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic},
+		func(text string) {
+			deltas = append(deltas, text)
+		},
+	)
+	if err != nil {
+		t.Fatalf("generate stream: %v", err)
+	}
+	if len(deltas) != 1 || deltas[0] != "done\n\n" {
+		t.Fatalf("stream deltas = %#v", deltas)
+	}
+	if resp.Assistant.Content == nil || *resp.Assistant.Content != "done\n\n" {
+		t.Fatalf("final assistant content = %#v, want exact streamed text", resp.Assistant.Content)
+	}
+}
+
+type trailingWhitespaceStreamingTransport struct {
+	streamingOnlyTransport
+}
+
+func (trailingWhitespaceStreamingTransport) GenerateStream(
+	_ context.Context,
+	_ OpenAIRequest,
+	onDelta func(text string),
+) (OpenAIResponse, error) {
+	if onDelta != nil {
+		onDelta("done\n\n")
+	}
+	return OpenAIResponse{
+		AssistantText: "done\n\n",
+		ProviderPhase: AbsentProviderPhase(),
+	}, nil
 }
 
 func TestOpenAIClientLegacyStreamTransportEmitsUnknownDeltaPhase(t *testing.T) {

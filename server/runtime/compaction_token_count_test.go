@@ -4,13 +4,14 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/shared/textutil"
 )
 
 func TestBuildTokenCountRequestForItemsUsesAutomaticToolChoice(t *testing.T) {
 	req, ok := buildTokenCountRequestForItems("gpt-5", "instructions", []llm.ResponseItem{{
 		Type:    llm.ResponseItemTypeMessage,
-		Role:    llm.RoleUser,
-		Content: "hello",
+		Role:    textutil.Value(llm.RoleUser),
+		Content: textutil.Value("hello"),
 	}})
 	if !ok {
 		t.Fatal("expected standalone token-count request")

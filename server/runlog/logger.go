@@ -145,7 +145,11 @@ func FormatRuntimeEvent(evt runtime.Event) string {
 	case runtime.EventAssistantDeltaReset:
 		return fmt.Sprintf("runtime.event kind=%s step_id=%s", evt.Kind, evt.StepID)
 	case runtime.EventAssistantMessage:
-		return fmt.Sprintf("runtime.event kind=%s step_id=%s message_chars=%d", evt.Kind, evt.StepID, len(evt.Message.Content))
+		messageChars := 0
+		if evt.Message.Content != nil {
+			messageChars = len(*evt.Message.Content)
+		}
+		return fmt.Sprintf("runtime.event kind=%s step_id=%s message_chars=%d", evt.Kind, evt.StepID, messageChars)
 	case runtime.EventModelResponse:
 		if evt.ModelResponse != nil {
 			return fmt.Sprintf(

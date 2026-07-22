@@ -83,11 +83,11 @@ func TestServiceAnswerAskPreservesAbsentSelectedOption(t *testing.T) {
 func TestServiceAnswerAskMemoizesSelectedOptionByValue(t *testing.T) {
 	service, responder := newPromptControlTestService()
 	request := askAnswerRequest("req-option")
-	request.SelectedOptionNumber = textutil.Int(1)
+	request.SelectedOptionNumber = textutil.Value(1)
 	if err := service.AnswerAsk(context.Background(), request); err != nil {
 		t.Fatalf("AnswerAsk first: %v", err)
 	}
-	request.SelectedOptionNumber = textutil.Int(1)
+	request.SelectedOptionNumber = textutil.Value(1)
 	if err := service.AnswerAsk(context.Background(), request); err != nil {
 		t.Fatalf("AnswerAsk equivalent replay: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestServiceAnswerAskDistinguishesAbsentAndPresentSelectedOption(t *testing.
 	if err := service.AnswerAsk(context.Background(), request); err != nil {
 		t.Fatalf("AnswerAsk absent selection: %v", err)
 	}
-	request.SelectedOptionNumber = textutil.Int(1)
+	request.SelectedOptionNumber = textutil.Value(1)
 	if err := service.AnswerAsk(context.Background(), request); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
 		t.Fatalf("AnswerAsk present selection replay error = %v, want payload mismatch", err)
 	}

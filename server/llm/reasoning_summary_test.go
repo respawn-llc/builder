@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"core/shared/textutil"
 	"strings"
 	"testing"
 )
@@ -99,7 +100,7 @@ func TestReasoningSummaryDeltaFromTextTrimsStatusWhitespace(t *testing.T) {
 }
 
 func TestNormalizeReasoningEntriesKeepsBoldOnlyReasoningEntries(t *testing.T) {
-	got := normalizeReasoningEntries([]ReasoningEntry{{Role: "reasoning", Text: "**Preparing patch**"}})
+	got := normalizeReasoningEntries([]ReasoningEntry{{Role: textutil.Value("reasoning"), Text: "**Preparing patch**"}})
 	if len(got) != 1 || got[0].Text != "**Preparing patch**" {
 		t.Fatalf("expected bold-only reasoning entry preserved, got %+v", got)
 	}

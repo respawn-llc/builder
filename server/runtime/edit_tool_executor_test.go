@@ -7,6 +7,7 @@ import (
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -62,7 +63,7 @@ func TestExecuteToolCallsAcceptsCustomEditJSONAndRejectsPlainText(t *testing.T) 
 		ID:          "call-json",
 		Name:        "edit",
 		Custom:      true,
-		CustomInput: `{"path":"a.go","old_string":"old","new_string":"new"}`,
+		CustomInput: textutil.Value(`{"path":"a.go","old_string":"old","new_string":"new"}`),
 	}})
 	if err != nil {
 		t.Fatalf("execute json custom tool call: %v", err)
@@ -75,7 +76,7 @@ func TestExecuteToolCallsAcceptsCustomEditJSONAndRejectsPlainText(t *testing.T) 
 		ID:          "call-text",
 		Name:        "edit",
 		Custom:      true,
-		CustomInput: "not json",
+		CustomInput: textutil.Value("not json"),
 	}})
 	if err != nil {
 		t.Fatalf("execute text custom tool call: %v", err)
@@ -95,7 +96,7 @@ func (t capturingTool) Call(_ context.Context, c tools.Call) (tools.Result, erro
 	if !validJSON {
 		out, _ := json.Marshal("Edit failed: expected JSON object input.")
 		// Tool-logic failures are returned in Result.IsError, not as a Go error.
-		return tools.Result{CallID: c.ID, Name: c.Name, Output: out, IsError: true, Summary: "Edit failed: expected JSON object input."}, nil
+		return tools.Result{CallID: c.ID, Name: c.Name, Output: out, IsError: true, Summary: textutil.Value("Edit failed: expected JSON object input.")}, nil
 	}
 	out, _ := json.Marshal("ok")
 	return tools.Result{CallID: c.ID, Name: c.Name, Output: out}, nil

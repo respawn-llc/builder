@@ -2,9 +2,9 @@ package runtime
 
 import (
 	"encoding/json"
-	"strings"
 
 	"core/server/llm"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -63,10 +63,13 @@ func collapseCompactionOverflowToolPayloadsAfterSavings(items []llm.ResponseItem
 			stats.EstimatedSavedTokens += saved
 			currentSavedTokens += saved
 		case llm.ResponseItemTypeCustomToolCall:
-			if compactionOverflowRepairToolID(item, callTools) != toolspec.ToolPatch || item.CustomInput == compactionOverflowCollapsedText {
+			if compactionOverflowRepairToolID(item, callTools) != toolspec.ToolPatch ||
+				(item.CustomInput != nil &&
+					*item.CustomInput == compactionOverflowCollapsedText) ||
+				item.CustomInput == nil {
 				continue
 			}
-			replacement, saved := collapsedCompactionOverflowPatchInput(item.CustomInput)
+			replacement, saved := collapsedCompactionOverflowPatchInput(*item.CustomInput)
 			if saved <= 0 {
 				continue
 			}
@@ -94,7 +97,7 @@ func applyCompactionOverflowPatchInputCollapse(item *llm.ResponseItem, replaceme
 	if item == nil {
 		return
 	}
-	item.CustomInput = replacement
+	item.CustomInput = textutil.Value(replacement)
 	item.Raw = nil
 }
 
@@ -115,7 +118,11 @@ func compactionOverflowRepairCallTools(items []llm.ResponseItem) map[string]tool
 			continue
 		}
 		id := compactionOverflowRepairCallID(item)
-		toolID, ok := toolspec.ParseID(item.Name)
+		name, present := textutil.OptionalTrimmed(item.Name)
+		if !present {
+			continue
+		}
+		toolID, ok := toolspec.ParseID(name)
 		if id == "" || !ok {
 			continue
 		}
@@ -125,15 +132,18 @@ func compactionOverflowRepairCallTools(items []llm.ResponseItem) map[string]tool
 }
 
 func compactionOverflowRepairCallID(item llm.ResponseItem) string {
-	if callID := strings.TrimSpace(item.CallID); callID != "" {
+	if callID, present := textutil.OptionalTrimmed(item.CallID); present {
 		return callID
 	}
-	return strings.TrimSpace(item.ID)
+	callID, _ := textutil.OptionalTrimmed(item.ID)
+	return callID
 }
 
 func compactionOverflowRepairToolID(item llm.ResponseItem, callTools map[string]toolspec.ID) toolspec.ID {
-	if toolID, ok := toolspec.ParseID(item.Name); ok {
-		return toolID
+	if name, present := textutil.OptionalTrimmed(item.Name); present {
+		if toolID, ok := toolspec.ParseID(name); ok {
+			return toolID
+		}
 	}
 	if callTools == nil {
 		return ""

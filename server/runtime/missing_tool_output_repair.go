@@ -3,10 +3,10 @@ package runtime
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -94,11 +94,8 @@ func itemsHaveDanglingToolCalls(items []llm.ResponseItem) bool {
 		if !isToolCallItem(item.Type) {
 			continue
 		}
-		callID := strings.TrimSpace(item.CallID)
-		if callID == "" {
-			callID = strings.TrimSpace(item.ID)
-		}
-		if callID == "" {
+		callID, present := textutil.FirstOptionalTrimmed(item.CallID, item.ID)
+		if !present {
 			continue
 		}
 		if _, ok := materialized[callID]; ok {

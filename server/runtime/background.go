@@ -43,11 +43,11 @@ func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt Backg
 	}
 	b.QueueDeveloperNotice(llm.Message{
 		Role:                 llm.RoleDeveloper,
-		MessageType:          llm.MessageTypeBackgroundNotice,
-		Name:                 strings.TrimSpace(evt.ID),
-		BackgroundActivityID: evt.ActivityID.String(),
-		Content:              formatBackgroundShellNotice(evt),
-		CompactContent:       formatBackgroundShellCompact(evt),
+		MessageType:          textutil.Value(llm.MessageTypeBackgroundNotice),
+		Name:                 textutil.OptionalTrimmedString(evt.ID),
+		BackgroundActivityID: textutil.Value(evt.ActivityID.String()),
+		Content:              textutil.Value(formatBackgroundShellNotice(evt)),
+		CompactContent:       textutil.Value(formatBackgroundShellCompact(evt)),
 		BackgroundExitCode:   textutil.Pointer(evt.ExitCode),
 	})
 }
@@ -82,12 +82,13 @@ func formatBackgroundShellCompact(evt BackgroundShellEvent) string {
 }
 
 func (b *defaultBackgroundNoticeScheduler) QueueDeveloperNotice(msg llm.Message) {
-	if strings.TrimSpace(msg.Content) == "" {
+	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
 		return
 	}
 	shouldSchedule := false
+	sessionID, _ := textutil.OptionalTrimmed(msg.Name)
 	notice := queuedBackgroundNotice{
-		sessionID: strings.TrimSpace(msg.Name),
+		sessionID: sessionID,
 		intent:    steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg}),
 	}
 	b.mu.Lock()

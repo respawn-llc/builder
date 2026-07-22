@@ -33,7 +33,9 @@ type serviceTestPublisher struct {
 	ready    chan struct{}
 }
 
-func (p *serviceTestPublisher) PublishSessionIdentity(string, *clientui.SessionExecutionTarget) {}
+func (p *serviceTestPublisher) PublishSessionIdentity(string, *clientui.SessionExecutionTarget) error {
+	return nil
+}
 
 func (p *serviceTestPublisher) PublishWorktreeTransitionOutcome(_ string, outcome clientui.WorktreeTransitionOutcome) {
 	p.mu.Lock()

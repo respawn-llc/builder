@@ -103,7 +103,13 @@ type capturedRequest struct {
 // captureSessionRequest reproduces the production request-prep path for a session
 // and returns the prepared provider-agnostic request plus semantically equivalent
 // OpenAI payload JSON. No model turn runs and no HTTP is performed.
-func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, providerOverride string, allowTools bool) (capturedRequest, error) {
+func captureSessionRequest(
+	ctx context.Context,
+	persistenceRoot,
+	sessionID,
+	providerOverride string,
+	allowTools bool,
+) (_ capturedRequest, resultErr error) {
 	md, err := metadata.Open(persistenceRoot)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("open metadata: %w", err)
@@ -114,7 +120,6 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 		persistenceRoot,
 		sessionID,
 		session.WithPersistedSessionResolver(md),
-		session.WithFilelessEventPersistence(),
 	)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("open read-only session: %w", err)
@@ -131,6 +136,10 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 	resolved, err := launch.ResolvePromptFacingSnapshotPlan(cfg, store, false)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("resolve session launch settings: %w", err)
+	}
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		return capturedRequest{}, fmt.Errorf("materialize session event log: %w", err)
 	}
 	activeSettings := resolved.ActiveSettings
 	activeToolIDs := resolved.EnabledTools
@@ -180,6 +189,7 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 	headless := meta.HeadlessActive || workflowConfig != nil
 	wiring, err := runtimewire.NewRuntimeWiring(
 		store,
+		eventLog,
 		activeSettings,
 		activeToolIDs,
 		workingDirectory,
@@ -200,10 +210,31 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 		return capturedRequest{}, fmt.Errorf("construct runtime wiring: %w", err)
 	}
 	defer func() {
-		_ = wiring.Close()
-		if wiring.Background != nil {
-			_ = wiring.Background.Close()
+		var closeErr error
+		if err := wiring.Close(); err != nil {
+			closeErr = errors.Join(
+				closeErr,
+				fmt.Errorf("close diagnostic runtime wiring: %w", err),
+			)
 		}
+		if wiring.Background != nil {
+			tempDir := wiring.Background.TempDir()
+			if err := wiring.Background.Close(); err != nil {
+				closeErr = errors.Join(
+					closeErr,
+					fmt.Errorf("close diagnostic background shell manager: %w", err),
+				)
+			} else if err := os.RemoveAll(tempDir); err != nil {
+				closeErr = errors.Join(
+					closeErr,
+					fmt.Errorf("remove diagnostic background shell artifacts: %w", err),
+				)
+			}
+		}
+		resultErr = errors.Join(
+			resultErr,
+			closeErr,
+		)
 	}()
 
 	req, err := runtime.PrepareInspectionRequest(ctx, wiring.Engine, allowTools)
@@ -214,7 +245,13 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 	openAIReq := llm.RequestAsOpenAI(req)
 	storeFlag := activeSettings.Store
 	modelVerbosity := string(activeSettings.ModelVerbosity)
-	wireBytes, err := llm.MarshalOpenAIWirePayload(openAIReq, storeFlag, modelVerbosity, mode, caps)
+	wireBytes, err := llm.MarshalOpenAIWirePayload(
+		openAIReq,
+		storeFlag,
+		modelVerbosity,
+		mode,
+		caps,
+	)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("marshal wire payload: %w", err)
 	}

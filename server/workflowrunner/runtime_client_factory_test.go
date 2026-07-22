@@ -18,6 +18,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -128,7 +129,7 @@ func TestWorkflowProviderClientPreservesLockedVerbosityAcrossConfigChanges(t *te
 			}
 			request := llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 				Model: "operator-alias",
-				Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: "hello"}}),
+				Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("hello")}}),
 			}
 			if _, err := client.Generate(context.Background(), request); err != nil {
 				t.Fatalf("generate: %v", err)

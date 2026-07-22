@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"core/server/llm"
-	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -139,7 +139,7 @@ func TestCurrentInputTokensPreciselyRechecksAfterTranscriptMutation(t *testing.T
 
 	client := &preciseCompactionClient{inputTokenCount: 240, contextWindow: 400000}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "hello"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("hello")}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 
@@ -157,7 +157,7 @@ func TestCurrentInputTokensPreciselyRechecksAfterTranscriptMutation(t *testing.T
 	}
 
 	client.inputTokenCount = 360
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Content: "world"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Content: textutil.Value("world")}})); err != nil {
 		t.Fatalf("append assistant message: %v", err)
 	}
 	if precise, ok := eng.currentInputTokensPrecisely(context.Background()); !ok || precise != 360 {
@@ -174,7 +174,7 @@ func TestContextUsagePrefersFreshPreciseCurrentTokens(t *testing.T) {
 	client := &preciseCompactionClient{inputTokenCount: 180, contextWindow: 400000}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
 	eng.setLastUsage(llm.Usage{InputTokens: 900, OutputTokens: 100, WindowTokens: 400_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "precise me"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("precise me")}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 
@@ -192,7 +192,7 @@ func TestCurrentInputTokensPreciselyRechecksAfterFastModeToggle(t *testing.T) {
 
 	client := &preciseCompactionClient{inputTokenCount: 180, contextWindow: 400000}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "hello"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("hello")}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 	if _, ok := eng.currentInputTokensPrecisely(context.Background()); !ok {
@@ -222,7 +222,7 @@ func TestCurrentInputTokensPreciselyIfDueSkipsBackendFarBelowCheckpoint(t *testi
 
 	client := &preciseCompactionClient{inputTokenCount: 999, contextWindow: 400000}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "short"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("short")}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 
@@ -239,7 +239,7 @@ func TestCurrentInputTokensPreciselyIfCriticalForcesRefreshAfterSignificantMutat
 
 	client := &preciseCompactionClient{inputTokenCount: 180, contextWindow: 400000}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "hello"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("hello")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 	if _, ok := eng.currentInputTokensPrecisely(context.Background()); !ok {
@@ -249,7 +249,7 @@ func TestCurrentInputTokensPreciselyIfCriticalForcesRefreshAfterSignificantMutat
 		t.Fatalf("count calls=%d, want 1", client.countCalls)
 	}
 	client.inputTokenCount = 220
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, Content: "background shell completed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("background shell completed")}})); err != nil {
 		t.Fatalf("append developer mutation: %v", err)
 	}
 	if precise, ok := eng.currentInputTokensPreciselyIfDueWithPriority(context.Background(), 1_000, false); ok || precise != 0 {
@@ -268,7 +268,7 @@ func TestCurrentInputTokensPreciselyPersistsTranscriptErrorOnceOnCountFailure(t 
 
 	client := &preciseCompactionClient{countErr: errors.New("chatgpt-codex status 404"), contextWindow: 400000}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "hello"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("hello")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 	if precise, ok := eng.currentInputTokensPrecisely(context.Background()); ok || precise != 0 {
@@ -285,7 +285,7 @@ func TestCurrentInputTokensPreciselyPersistsTranscriptErrorOnceOnCountFailure(t 
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	reopened, err := New(reopenedStore, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
+	reopened, err := New(reopenedStore, mustMaterializeTestEventLog(t, reopenedStore), client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
 	if err != nil {
 		t.Fatalf("reopen engine: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestCurrentInputTokensPreciselyPersistsTranscriptErrorOnceOnCountFailure(t 
 		t.Fatalf("expected reopened engine to reuse persisted failure marker without retrying backend, got %d count attempts", client.countCalls)
 	}
 
-	events, err := sessiontest.CollectEvents(reopenedStore)
+	events, err := collectTestEventRecords(reopenedStore)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -305,11 +305,8 @@ func TestCurrentInputTokensPreciselyPersistsTranscriptErrorOnceOnCountFailure(t 
 		if evt.Kind != "local_entry" {
 			continue
 		}
-		var entry storedLocalEntry
-		if err := json.Unmarshal(evt.Payload, &entry); err != nil {
-			t.Fatalf("decode local_entry: %v", err)
-		}
-		if entry.DiagnosticKey != preciseTokenCountFailureDiagnostic {
+		entry := persistedLocalEntryForTest(t, evt)
+		if entry.DiagnosticKey == nil || *entry.DiagnosticKey != preciseTokenCountFailureDiagnostic {
 			continue
 		}
 		diagnosticEntries++
@@ -360,7 +357,7 @@ func TestCurrentInputTokensPreciselyDoesNotPersistFailureForRepairable400(t *tes
 		t.Fatalf("count calls=%d, want 2 repeated backend attempts (no permanent failure marker)", client.countCalls)
 	}
 
-	events, err := sessiontest.CollectEvents(store)
+	events, err := collectTestEventRecords(store)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -368,11 +365,8 @@ func TestCurrentInputTokensPreciselyDoesNotPersistFailureForRepairable400(t *tes
 		if evt.Kind != "local_entry" {
 			continue
 		}
-		var entry storedLocalEntry
-		if err := json.Unmarshal(evt.Payload, &entry); err != nil {
-			t.Fatalf("decode local_entry: %v", err)
-		}
-		if entry.DiagnosticKey == preciseTokenCountFailureDiagnostic {
+		entry := persistedLocalEntryForTest(t, evt)
+		if entry.DiagnosticKey != nil && *entry.DiagnosticKey == preciseTokenCountFailureDiagnostic {
 			t.Fatalf("did not expect a persisted precise-token failure diagnostic for a repairable 400: %+v", entry)
 		}
 	}
@@ -384,7 +378,7 @@ func TestCurrentInputTokensPreciselySkipsUnsupportedCountClient(t *testing.T) {
 	supported := false
 	client := &preciseCompactionClient{inputTokenCount: 123, contextWindow: 400000, countSupported: &supported}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "hello"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("hello")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 
@@ -395,7 +389,7 @@ func TestCurrentInputTokensPreciselySkipsUnsupportedCountClient(t *testing.T) {
 		t.Fatalf("count calls=%d, want 0 for unsupported exact counting", client.countCalls)
 	}
 
-	events, err := sessiontest.CollectEvents(store)
+	events, err := collectTestEventRecords(store)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -403,11 +397,8 @@ func TestCurrentInputTokensPreciselySkipsUnsupportedCountClient(t *testing.T) {
 		if evt.Kind != "local_entry" {
 			continue
 		}
-		var entry storedLocalEntry
-		if err := json.Unmarshal(evt.Payload, &entry); err != nil {
-			t.Fatalf("decode local_entry: %v", err)
-		}
-		if entry.DiagnosticKey == preciseTokenCountFailureDiagnostic {
+		entry := persistedLocalEntryForTest(t, evt)
+		if entry.DiagnosticKey != nil && *entry.DiagnosticKey == preciseTokenCountFailureDiagnostic {
 			t.Fatalf("did not expect precise-token diagnostic for unsupported provider: %+v", entry)
 		}
 	}
@@ -418,7 +409,7 @@ func TestCurrentInputTokensPreciselyPersistsTranscriptErrorOnSupportProbeFailure
 
 	client := &preciseCompactionClient{inputTokenCount: 123, contextWindow: 400000, supportErr: errors.New("oauth metadata unavailable")}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "hello"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("hello")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 
@@ -429,7 +420,7 @@ func TestCurrentInputTokensPreciselyPersistsTranscriptErrorOnSupportProbeFailure
 		t.Fatalf("count calls=%d, want 0 when support probe fails closed", client.countCalls)
 	}
 
-	events, err := sessiontest.CollectEvents(store)
+	events, err := collectTestEventRecords(store)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -438,11 +429,8 @@ func TestCurrentInputTokensPreciselyPersistsTranscriptErrorOnSupportProbeFailure
 		if evt.Kind != "local_entry" {
 			continue
 		}
-		var entry storedLocalEntry
-		if err := json.Unmarshal(evt.Payload, &entry); err != nil {
-			t.Fatalf("decode local_entry: %v", err)
-		}
-		if entry.DiagnosticKey != preciseTokenCountSupportDiagnostic {
+		entry := persistedLocalEntryForTest(t, evt)
+		if entry.DiagnosticKey == nil || *entry.DiagnosticKey != preciseTokenCountSupportDiagnostic {
 			continue
 		}
 		entries++

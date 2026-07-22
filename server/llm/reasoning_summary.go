@@ -2,17 +2,19 @@ package llm
 
 import (
 	"strings"
+
+	"core/shared/textutil"
 )
 
 func normalizeReasoningEntries(entries []ReasoningEntry) []ReasoningEntry {
 	out := make([]ReasoningEntry, 0, len(entries))
 	for _, entry := range entries {
-		role := strings.TrimSpace(entry.Role)
+		role, present := textutil.OptionalTrimmed(entry.Role)
 		summary := normalizeReasoningSummaryLines(strings.Split(strings.ReplaceAll(entry.Text, "\r\n", "\n"), "\n"))
-		if role == "" || summary == "" {
+		if !present || summary == "" {
 			continue
 		}
-		out = append(out, ReasoningEntry{Role: role, Text: summary})
+		out = append(out, ReasoningEntry{Role: textutil.Value(role), Text: summary})
 	}
 	return out
 }

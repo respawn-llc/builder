@@ -10,6 +10,7 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -100,11 +101,11 @@ func TestWorkflowToolModeCascadeEmitsGoalCompletionAfterHostedToolResult(t *test
 	completion := json.RawMessage(`{"commentary":"complete","summary":"done"}`)
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal, ToolCalls: []llm.ToolCall{completeNodeCall("call_complete", completion)}},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal), ToolCalls: []llm.ToolCall{completeNodeCall("call_complete", completion)}},
 			ToolCalls: []llm.ToolCall{completeNodeCall("call_complete", completion)},
 			OutputItems: []llm.ResponseItem{
 				{Type: llm.ResponseItemTypeOther, Raw: json.RawMessage(`{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"kent cli"}}`)},
-				{Type: llm.ResponseItemTypeMessage, Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "done"},
+				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleAssistant), Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("done")},
 			},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
@@ -128,7 +129,9 @@ func TestWorkflowToolModeCascadeEmitsGoalCompletionAfterHostedToolResult(t *test
 		t.Fatalf("workflow prompt missing: messages=%+v", messages)
 	}
 	for _, msg := range messages {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeHeadlessMode {
+		if msg.Role == llm.RoleDeveloper &&
+			msg.MessageType != nil &&
+			*msg.MessageType == llm.MessageTypeHeadlessMode {
 			t.Fatalf("headless prompt should not be injected during workflow runs: %+v", messages)
 		}
 		if msg.Role == llm.RoleUser {
@@ -165,26 +168,35 @@ func TestWorkflowToolModeCascadeEmitsGoalCompletionAfterHostedToolResult(t *test
 		t.Fatalf("goal-completion (idx %d) precedes a tool result (hosted=%d complete=%d); interleaves tool outputs", goalCompleteIdx, hostedResultIdx, completeResultIdx)
 	}
 
-	events, err := sessiontest.CollectEvents(store)
+	records, err := sessiontest.CollectRecords(store)
 	if err != nil {
-		t.Fatalf("read events: %v", err)
+		t.Fatalf("read records: %v", err)
 	}
 	hostedCallPersisted := false
 	hostedResultPersisted := false
-	for _, evt := range events {
-		if evt.Kind != "message" {
+	for _, record := range records {
+		if kind, kindErr := record.Kind(); kindErr != nil {
+			t.Fatalf("read record kind: %v", kindErr)
+		} else if kind != session.EventKindMessage {
 			continue
 		}
-		var persisted llm.Message
-		if err := json.Unmarshal(evt.Payload, &persisted); err != nil {
-			t.Fatalf("decode message event: %v", err)
+		payload, payloadErr := record.Payload()
+		if payloadErr != nil {
+			t.Fatalf("read message record: %v", payloadErr)
 		}
-		if persisted.Role == llm.RoleAssistant {
+		persisted, ok := payload.(session.MessageRecord)
+		if !ok {
+			t.Fatalf("message payload type = %T, want session.MessageRecord", payload)
+		}
+		if persisted.Role == session.MessageRoleAssistant {
 			for _, call := range persisted.ToolCalls {
-				hostedCallPersisted = hostedCallPersisted || call.ID == "ws_1"
+				hostedCallPersisted = hostedCallPersisted || call.CallID == "ws_1"
 			}
 		}
-		hostedResultPersisted = hostedResultPersisted || persisted.Role == llm.RoleTool && persisted.ToolCallID == "ws_1"
+		hostedResultPersisted = hostedResultPersisted ||
+			persisted.Role == session.MessageRoleTool &&
+				persisted.ToolCallID != nil &&
+				*persisted.ToolCallID == "ws_1"
 	}
 	if !hostedCallPersisted || !hostedResultPersisted {
 		t.Fatalf("hosted call/result persisted = %v/%v, want both", hostedCallPersisted, hostedResultPersisted)

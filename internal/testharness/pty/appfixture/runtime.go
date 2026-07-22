@@ -135,8 +135,12 @@ func (r *Runtime) SeedSession(ctx context.Context, persistenceRoot string, works
 	if err != nil {
 		return "", fmt.Errorf("create seed session: %w", err)
 	}
+	eventLog, err := sessionStore.MaterializeEventLog()
+	if err != nil {
+		return "", fmt.Errorf("materialize seed session event log: %w", err)
+	}
 	for idx, entry := range r.ScriptFile.SeedTranscript {
-		if err := appendSeedTranscriptEntry(sessionStore, workspaceRoot, idx, entry); err != nil {
+		if err := appendSeedTranscriptEntry(eventLog, workspaceRoot, idx, entry); err != nil {
 			return "", err
 		}
 	}
@@ -210,7 +214,8 @@ func deriveTargetFinalAssistantOrdinal(steps []scriptedllm.Step) (ScriptFinalAss
 
 func isFinalAssistantStep(step scriptedllm.Step) bool {
 	return step.Response.Assistant.Role == llm.RoleAssistant &&
-		step.Response.Assistant.Phase == llm.MessagePhaseFinal
+		step.Response.Assistant.Phase != nil &&
+		*step.Response.Assistant.Phase == llm.MessagePhaseFinal
 }
 
 func scriptSteps(file ScriptFile) ([]scriptedllm.Step, error) {
@@ -284,24 +289,24 @@ func assistantDeltas(values []string) []llm.AssistantDelta {
 	return deltas
 }
 
-func appendSeedTranscriptEntry(store *session.Store, workspaceRoot string, idx int, entry SeedTranscriptEntryFile) error {
+func appendSeedTranscriptEntry(log session.MaterializedEventLog, workspaceRoot string, idx int, entry SeedTranscriptEntryFile) error {
 	stepID := uuid.NewString()
 	switch strings.TrimSpace(entry.Kind) {
 	case "", "message":
 		msg := seedMessage(entry)
-		if _, _, err := store.AppendEvent(stepID, "message", msg); err != nil {
+		if _, _, err := log.AppendRecord(&stepID, msg); err != nil {
 			return fmt.Errorf("append seed message %d: %w", idx, err)
 		}
 	case "local_entry":
-		if _, _, err := store.AppendEvent(stepID, "local_entry", seedLocalEntry(entry)); err != nil {
+		if _, _, err := log.AppendRecord(&stepID, seedLocalEntry(entry)); err != nil {
 			return fmt.Errorf("append seed local entry %d: %w", idx, err)
 		}
 	case "tool_result":
 		result, message := seedToolResult(workspaceRoot, entry)
-		if _, _, err := store.AppendEvent(stepID, "tool_completed", result); err != nil {
+		if _, _, err := log.AppendRecord(&stepID, result); err != nil {
 			return fmt.Errorf("append seed tool completion %d: %w", idx, err)
 		}
-		if _, _, err := store.AppendEvent(stepID, "message", message); err != nil {
+		if _, _, err := log.AppendRecord(&stepID, message); err != nil {
 			return fmt.Errorf("append seed tool message %d: %w", idx, err)
 		}
 	default:
@@ -310,39 +315,67 @@ func appendSeedTranscriptEntry(store *session.Store, workspaceRoot string, idx i
 	return nil
 }
 
-func seedMessage(entry SeedTranscriptEntryFile) llm.Message {
-	role := llm.Role(strings.TrimSpace(entry.Role))
+func seedMessage(entry SeedTranscriptEntryFile) session.MessageRecord {
+	role := session.MessageRole(strings.TrimSpace(entry.Role))
 	if role == "" {
-		role = llm.RoleDeveloper
+		role = session.MessageRoleDeveloper
 	}
-	return llm.Message{
+	return session.MessageRecord{
 		Role:           role,
-		MessageType:    llm.MessageType(strings.TrimSpace(entry.MessageType)),
-		SourcePath:     strings.TrimSpace(entry.SourcePath),
-		Content:        entry.Text,
-		CompactContent: strings.TrimSpace(entry.CondensedText),
+		MessageType:    optionalSessionMessageType(entry.MessageType),
+		SourcePath:     optionalTrimmedText(entry.SourcePath),
+		Content:        optionalText(entry.Text),
+		CompactContent: optionalTrimmedText(entry.CondensedText),
 	}
 }
 
-func seedLocalEntry(entry SeedTranscriptEntryFile) seedLocalEntryPayload {
-	return seedLocalEntryPayload{
-		Visibility:    transcript.NormalizeEntryVisibility(transcript.EntryVisibility(entry.Visibility)),
+func seedLocalEntry(entry SeedTranscriptEntryFile) session.LocalEntryRecord {
+	return session.LocalEntryRecord{
+		Visibility:    seedSessionEntryVisibility(entry.Visibility),
 		Role:          strings.TrimSpace(entry.Role),
 		Text:          entry.Text,
-		CondensedText: strings.TrimSpace(entry.CondensedText),
+		CondensedText: optionalTrimmedText(entry.CondensedText),
 	}
 }
 
-type seedLocalEntryPayload struct {
-	Visibility    transcript.EntryVisibility `json:"visibility,omitempty"`
-	Role          string                     `json:"role"`
-	Text          string                     `json:"text"`
-	CondensedText string                     `json:"condensed_text,omitempty"`
-	DiagnosticKey string                     `json:"diagnostic_key,omitempty"`
-	NoticeID      string                     `json:"notice_id,omitempty"`
+func seedSessionEntryVisibility(value string) session.EntryVisibility {
+	switch transcript.NormalizeEntryVisibility(transcript.EntryVisibility(value)) {
+	case transcript.EntryVisibilityAuto:
+		return session.EntryVisibilityAuto
+	case transcript.EntryVisibilityOngoing:
+		return session.EntryVisibilityOngoing
+	case transcript.EntryVisibilityOngoingCollapsed:
+		return session.EntryVisibilityOngoingCollapsed
+	case transcript.EntryVisibilityDetail:
+		return session.EntryVisibilityDetail
+	case transcript.EntryVisibilityHidden:
+		return session.EntryVisibilityHidden
+	default:
+		return session.EntryVisibility(value)
+	}
 }
 
-func seedToolResult(workspaceRoot string, entry SeedTranscriptEntryFile) (seedToolCompletionPayload, llm.Message) {
+func optionalText(value string) *string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return &value
+}
+
+func optionalTrimmedText(value string) *string {
+	return optionalText(strings.TrimSpace(value))
+}
+
+func optionalSessionMessageType(value string) *session.MessageType {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	messageType := session.MessageType(value)
+	return &messageType
+}
+
+func seedToolResult(workspaceRoot string, entry SeedTranscriptEntryFile) (session.ToolCompletionRecord, session.MessageRecord) {
 	toolName := strings.TrimSpace(entry.ToolName)
 	if toolName == "" {
 		toolName = strings.TrimSpace(entry.Role)
@@ -370,34 +403,34 @@ func seedToolResult(workspaceRoot string, entry SeedTranscriptEntryFile) (seedTo
 	if len(output) == 0 {
 		output = json.RawMessage(`{}`)
 	}
-	completion := seedToolCompletionPayload{
+	completion := session.ToolCompletionRecord{
 		CallID:        callID,
 		Name:          toolName,
+		OutputKind:    session.ToolOutputKindFunction,
 		IsError:       entry.ToolIsError,
 		Output:        output,
-		Summary:       strings.TrimSpace(entry.ToolSummary),
-		CondensedText: strings.TrimSpace(entry.ToolCondensed),
-		Presentation:  &meta,
+		Summary:       optionalTrimmedText(entry.ToolSummary),
+		CondensedText: optionalTrimmedText(entry.ToolCondensed),
+		Presentation:  transcript.EncodeToolCallMeta(meta),
 	}
-	return completion, llm.Message{
-		Role:           llm.RoleTool,
-		Name:           toolName,
-		ToolCallID:     callID,
-		Content:        string(output),
-		MessageType:    llm.ToolOutputMessageType(entry.ToolCustom),
-		CompactContent: strings.TrimSpace(entry.ToolCondensed),
+	if entry.ToolCustom {
+		completion.OutputKind = session.ToolOutputKindCustom
+	}
+	return completion, session.MessageRecord{
+		Role:           session.MessageRoleTool,
+		Name:           optionalText(toolName),
+		ToolCallID:     optionalText(callID),
+		Content:        optionalText(string(output)),
+		MessageType:    seedToolMessageType(entry.ToolCustom),
+		CompactContent: optionalTrimmedText(entry.ToolCondensed),
 	}
 }
 
-type seedToolCompletionPayload struct {
-	CallID        string                   `json:"call_id"`
-	Name          string                   `json:"name"`
-	IsError       bool                     `json:"is_error"`
-	Output        json.RawMessage          `json:"output"`
-	Summary       string                   `json:"summary,omitempty"`
-	CondensedText string                   `json:"condensed_text,omitempty"`
-	Presentation  *transcript.ToolCallMeta `json:"presentation,omitempty"`
-	ProviderItems []llm.ResponseItem       `json:"provider_items,omitempty"`
+func seedToolMessageType(custom bool) *session.MessageType {
+	if !custom {
+		return nil
+	}
+	return optionalSessionMessageType(string(session.MessageTypeCustomToolCallOutput))
 }
 
 type Observation struct {

@@ -8,6 +8,7 @@ import (
 	"core/server/llm"
 	"core/server/runtime"
 	"core/shared/clientui"
+	"core/shared/textutil"
 )
 
 func TestTranscriptProjectsLiveRunResultWithoutRuntimeIDs(t *testing.T) {
@@ -24,7 +25,7 @@ func TestTranscriptProjectsLiveRunResultWithoutRuntimeIDs(t *testing.T) {
 				Status:           runtime.RunStatusCompleted,
 				ResultKind:       runtime.LiveRunResultAssistantFinalAnswer,
 				WorkPerformed:    true,
-				AssistantMessage: llm.Message{Role: llm.RoleAssistant, Content: "done"},
+				AssistantMessage: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
 				StartedAt:        startedAt,
 				FinishedAt:       finishedAt,
 			},
@@ -54,7 +55,7 @@ func TestTranscriptProjectsLiveRunResultWithoutRuntimeIDs(t *testing.T) {
 			result: runtime.LiveRunResult{
 				Status:           runtime.RunStatusFailed,
 				ResultKind:       runtime.LiveRunResultAssistantFinalAnswer,
-				AssistantMessage: llm.Message{Role: llm.RoleAssistant, Content: "partial final"},
+				AssistantMessage: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("partial final")},
 				Error:            errors.New("follow-up failed"),
 				StartedAt:        startedAt,
 				FinishedAt:       finishedAt,

@@ -11,6 +11,7 @@ import (
 	"core/server/tools"
 	"core/server/workflowruntime"
 	compactionutil "core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -283,9 +284,11 @@ type hostedToolExecution struct {
 func hostedToolExecutionsFromOutputItems(items []llm.ResponseItem, defs []tools.Definition) []hostedToolExecution {
 	hostedOutputs := make([]tools.HostedToolOutput, 0, len(items))
 	for _, item := range items {
+		id, _ := textutil.OptionalTrimmed(item.ID)
+		callID, _ := textutil.OptionalTrimmed(item.CallID)
 		hostedOutputs = append(hostedOutputs, tools.HostedToolOutput{
-			ID:     strings.TrimSpace(item.ID),
-			CallID: strings.TrimSpace(item.CallID),
+			ID:     id,
+			CallID: callID,
 			Raw:    append(json.RawMessage(nil), item.Raw...),
 		})
 	}

@@ -8,6 +8,7 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -25,7 +26,7 @@ func TestPersistedMessageAppliesProjectionByCommitReceipt(t *testing.T) {
 			steeringPriorityNormal,
 			steeringMessageEventDefault,
 			true,
-			[]llm.Message{{Role: llm.RoleUser, Content: "uncommitted"}},
+			[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("uncommitted")}},
 		))
 		if err == nil {
 			t.Fatal("persisted message did not surface the event-log append failure")
@@ -53,7 +54,7 @@ func TestPersistedMessageAppliesProjectionByCommitReceipt(t *testing.T) {
 			steeringPriorityNormal,
 			steeringMessageEventDefault,
 			true,
-			[]llm.Message{{Role: llm.RoleUser, Content: "committed"}},
+			[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("committed")}},
 		))
 		if !errors.Is(err, observerErr) {
 			t.Fatalf("persisted message error = %v, want observer error", err)

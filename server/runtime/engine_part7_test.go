@@ -5,6 +5,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"encoding/json"
 	"strings"
@@ -27,7 +28,7 @@ func TestFastExecCommandCompletionDoesNotQueueBackgroundNotice(t *testing.T) {
 		{
 			Assistant: llm.Message{
 				Role:    llm.RoleAssistant,
-				Content: "running fast command",
+				Content: textutil.Value("running fast command"),
 			},
 			ToolCalls: []llm.ToolCall{{
 				ID:    "call_exec_1",
@@ -37,11 +38,11 @@ func TestFastExecCommandCompletionDoesNotQueueBackgroundNotice(t *testing.T) {
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "unexpected extra turn"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("unexpected extra turn")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -77,8 +78,8 @@ func TestFastExecCommandCompletionDoesNotQueueBackgroundNotice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit user message: %v", err)
 	}
-	if assistant.Content != "done" {
-		t.Fatalf("assistant content = %q, want done", assistant.Content)
+	if messageContent(assistant) != "done" {
+		t.Fatalf("assistant content = %q, want done", messageContent(assistant))
 	}
 	time.Sleep(50 * time.Millisecond)
 	client.mu.Lock()
@@ -88,10 +89,193 @@ func TestFastExecCommandCompletionDoesNotQueueBackgroundNotice(t *testing.T) {
 		t.Fatalf("model call count = %d, want 2", callCount)
 	}
 	for _, msg := range eng.transcriptRuntimeState().SnapshotMessages() {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeBackgroundNotice {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeBackgroundNotice {
 			t.Fatalf("did not expect background notice for foreground exec_command completion: %+v", msg)
 		}
 	}
+}
+
+func TestBackgroundShellNoticeFlushesOnFirstAvailableSlot(t *testing.T) {
+	dir := t.TempDir()
+	store := mustCreateTestSessionAt(t, dir)
+
+	client := &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
+			ToolCalls: []llm.ToolCall{{ID: "call_shell_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("foreground done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+	}}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var (
+		mu     sync.Mutex
+		events []Event
+	)
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
+		Model: "gpt-5",
+		OnEvent: func(evt Event) {
+			mu.Lock()
+			events = append(events, evt)
+			mu.Unlock()
+		},
+	})
+
+	submitDone := make(chan struct {
+		assistant llm.Message
+		err       error
+	}, 1)
+	go func() {
+		assistant, submitErr := eng.SubmitUserMessage(context.Background(), "run tools")
+		submitDone <- struct {
+			assistant llm.Message
+			err       error
+		}{assistant: assistant, err: submitErr}
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for tool call to start")
+	}
+
+	eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
+		Type:       BackgroundShellEventCompleted,
+		ID:         "1000",
+		State:      "completed",
+		NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone",
+	}, true)
+
+	client.mu.Lock()
+	callCountWhileBusy := len(client.calls)
+	client.mu.Unlock()
+	if callCountWhileBusy != 1 {
+		t.Fatalf("expected queued notice to avoid immediate model call while busy, got %d calls", callCountWhileBusy)
+	}
+
+	close(release)
+	result := <-submitDone
+	if result.err != nil {
+		t.Fatalf("submit: %v", result.err)
+	}
+	if messageContent(result.assistant) != "foreground done" {
+		t.Fatalf("assistant content = %q, want foreground done", messageContent(result.assistant))
+	}
+
+	client.mu.Lock()
+	requests := append([]llm.Request(nil), client.calls...)
+	client.mu.Unlock()
+	if len(requests) != 2 {
+		t.Fatalf("expected 2 model calls with background notice injected into the next request, got %d", len(requests))
+	}
+
+	containsNotice := func(req llm.Request) bool {
+		for _, msg := range requestMessages(req) {
+			if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeBackgroundNotice && strings.Contains(messageContent(msg), "Background shell 1000 completed.") {
+				return true
+			}
+		}
+		return false
+	}
+	if !containsNotice(requests[1]) {
+		t.Fatalf("expected background notice in first available in-turn follow-up, messages=%+v", requestMessages(requests[1]))
+	}
+	time.Sleep(50 * time.Millisecond)
+	client.mu.Lock()
+	callCountAfterReturn := len(client.calls)
+	client.mu.Unlock()
+	if callCountAfterReturn != 2 {
+		t.Fatalf("did not expect a later batched continuation after turn completion, got %d calls", callCountAfterReturn)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	hasImmediateBackgroundUpdate := false
+	for _, evt := range events {
+		if evt.Kind == EventBackgroundUpdated && evt.Background != nil && evt.Background.ID == "1000" {
+			hasImmediateBackgroundUpdate = true
+			if evt.CommittedEntryCount != 0 || evt.CommittedEntryStartSet {
+				t.Fatalf("background update should not claim committed transcript range, got %+v", evt)
+			}
+			break
+		}
+	}
+	if !hasImmediateBackgroundUpdate {
+		t.Fatalf("expected immediate background_updated event, got %+v", events)
+	}
+}
+
+func TestSteerAcceptedDuringReviewerAppearsInMainAgentFollowUp(t *testing.T) {
+	mainClient := &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("foreground done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("reviewed done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+	}}
+	reviewerResponse := llm.Response{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["apply the requested correction"]}`)},
+		Usage:     llm.Usage{WindowTokens: 200000},
+	}
+	reviewerClient, reviewerStarted, releaseReviewer := newGatedHookClient(reviewerResponse, reviewerResponse)
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), mainClient, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		Reviewer: ReviewerConfig{
+			Frequency:     "all",
+			Model:         "gpt-5",
+			ThinkingLevel: "low",
+			Client:        reviewerClient,
+		},
+	})
+	eng.pauseQueuedUserAutoDrain()
+	t.Cleanup(func() {
+		eng.FailQueuedUserMessages(QueuedUserMessageFailureClosing)
+		eng.resumeQueuedUserAutoDrain()
+		waitEngineLifecycleTasks(t, eng)
+	})
+
+	submitDone := make(chan struct {
+		message llm.Message
+		err     error
+	}, 1)
+	go func() {
+		message, err := eng.SubmitUserMessage(context.Background(), "run task")
+		submitDone <- struct {
+			message llm.Message
+			err     error
+		}{message: message, err: err}
+	}()
+	select {
+	case <-reviewerStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for reviewer request")
+	}
+	if _, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer reviewer follow-up", liveRunTestRequestID(t), nil); err != nil || !accepted {
+		t.Fatalf("QueueUserMessageForActiveRun accepted=%t err=%v", accepted, err)
+	}
+	releaseReviewer()
+	result := <-submitDone
+	if result.err != nil {
+		t.Fatalf("submit: %v", result.err)
+	}
+	if messageContent(result.message) != "reviewed done" {
+		t.Fatalf("assistant content = %q, want reviewed done", messageContent(result.message))
+	}
+	mainClient.mu.Lock()
+	requests := append([]llm.Request(nil), mainClient.calls...)
+	mainClient.mu.Unlock()
+	if len(requests) != 2 {
+		t.Fatalf("main-agent requests = %d, want initial and reviewer follow-up", len(requests))
+	}
+	assertRequestHasUserMessage(t, requests[1], "steer reviewer follow-up", true)
 }
 
 func TestEmitRawClearsCommittedRangeForBackgroundUpdated(t *testing.T) {
@@ -131,21 +315,21 @@ func TestDeferredFinalWithBackgroundNoticeStillRunsReviewerAndEmitsAssistantEven
 
 	mainClient := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working", Phase: llm.MessagePhaseCommentary},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: []llm.ToolCall{{ID: "call_shell_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "foreground done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("foreground done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: reviewerNoopToken, Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(reviewerNoopToken), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
 	reviewerClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":[]}`},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 
@@ -200,8 +384,8 @@ func TestDeferredFinalWithBackgroundNoticeStillRunsReviewerAndEmitsAssistantEven
 	if result.err != nil {
 		t.Fatalf("submit: %v", result.err)
 	}
-	if result.assistant.Content != "foreground done" {
-		t.Fatalf("assistant content = %q, want foreground done", result.assistant.Content)
+	if messageContent(result.assistant) != "foreground done" {
+		t.Fatalf("assistant content = %q, want foreground done", messageContent(result.assistant))
 	}
 	if len(reviewerClient.calls) != 1 {
 		t.Fatalf("expected reviewer to run once for deferred final, got %d", len(reviewerClient.calls))
@@ -214,79 +398,11 @@ func TestDeferredFinalWithBackgroundNoticeStillRunsReviewerAndEmitsAssistantEven
 		if evt.Kind != EventAssistantMessage {
 			continue
 		}
-		assistantContents = append(assistantContents, evt.Message.Content)
+		assistantContents = append(assistantContents, messageContent(evt.Message))
 	}
 	if len(assistantContents) != 2 || assistantContents[0] != "working" || assistantContents[1] != "foreground done" {
 		t.Fatalf("assistant message contents = %+v, want [working foreground done] events=%+v", assistantContents, events)
 	}
-}
-
-func TestSteerAcceptedDuringReviewerAppearsInMainAgentFollowUp(t *testing.T) {
-	mainClient := &fakeClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "foreground done", Phase: llm.MessagePhaseFinal},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "reviewed done", Phase: llm.MessagePhaseFinal},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-	}}
-	reviewerResponse := llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":["apply the requested correction"]}`},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}
-	reviewerClient, reviewerStarted, releaseReviewer := newGatedHookClient(reviewerResponse, reviewerResponse)
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), mainClient, tools.NewRegistry(), Config{
-		Model: "gpt-5",
-		Reviewer: ReviewerConfig{
-			Frequency:     "all",
-			Model:         "gpt-5",
-			ThinkingLevel: "low",
-			Client:        reviewerClient,
-		},
-	})
-	eng.pauseQueuedUserAutoDrain()
-	t.Cleanup(func() {
-		eng.FailQueuedUserMessages(QueuedUserMessageFailureClosing)
-		eng.resumeQueuedUserAutoDrain()
-		waitEngineLifecycleTasks(t, eng)
-	})
-
-	submitDone := make(chan struct {
-		message llm.Message
-		err     error
-	}, 1)
-	go func() {
-		message, err := eng.SubmitUserMessage(context.Background(), "run task")
-		submitDone <- struct {
-			message llm.Message
-			err     error
-		}{message: message, err: err}
-	}()
-	select {
-	case <-reviewerStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for reviewer request")
-	}
-	if _, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer reviewer follow-up", liveRunTestRequestID(t), nil); err != nil || !accepted {
-		t.Fatalf("QueueUserMessageForActiveRun accepted=%t err=%v", accepted, err)
-	}
-	releaseReviewer()
-	result := <-submitDone
-	if result.err != nil {
-		t.Fatalf("submit: %v", result.err)
-	}
-	if result.message.Content != "reviewed done" {
-		t.Fatalf("assistant content = %q, want reviewed done", result.message.Content)
-	}
-	mainClient.mu.Lock()
-	requests := append([]llm.Request(nil), mainClient.calls...)
-	mainClient.mu.Unlock()
-	if len(requests) != 2 {
-		t.Fatalf("main-agent requests = %d, want initial and reviewer follow-up", len(requests))
-	}
-	assertRequestHasUserMessage(t, requests[1], "steer reviewer follow-up", true)
 }
 
 func TestFinalAssistantBeforeSameTurnBackgroundNoticeKeepsCommittedFrontierContiguous(t *testing.T) {
@@ -303,7 +419,7 @@ func TestFinalAssistantBeforeSameTurnBackgroundNoticeKeepsCommittedFrontierConti
 	var client *hookClient
 	client = &hookClient{
 		response: llm.Response{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "foreground done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("foreground done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		beforeReturn: func() error {
@@ -316,7 +432,7 @@ func TestFinalAssistantBeforeSameTurnBackgroundNoticeKeepsCommittedFrontierConti
 				}, true)
 				client.mu.Lock()
 				client.response = llm.Response{
-					Assistant: llm.Message{Role: llm.RoleAssistant, Content: reviewerNoopToken, Phase: llm.MessagePhaseFinal},
+					Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(reviewerNoopToken), Phase: textutil.Value(llm.MessagePhaseFinal)},
 					Usage:     llm.Usage{WindowTokens: 200000},
 				}
 				client.mu.Unlock()
@@ -343,10 +459,10 @@ func TestFinalAssistantBeforeSameTurnBackgroundNoticeKeepsCommittedFrontierConti
 	assistantIdx := -1
 	backgroundIdx := -1
 	for idx, evt := range committedEvents {
-		if assistantIdx < 0 && evt.Kind == EventAssistantMessage && evt.Message.Content == "foreground done" {
+		if assistantIdx < 0 && evt.Kind == EventAssistantMessage && messageContent(evt.Message) == "foreground done" {
 			assistantIdx = idx
 		}
-		if evt.Kind == EventConversationUpdated && evt.Message.MessageType == llm.MessageTypeBackgroundNotice {
+		if evt.Kind == EventConversationUpdated && evt.Message.MessageType != nil && *evt.Message.MessageType == llm.MessageTypeBackgroundNotice {
 			backgroundIdx = idx
 		}
 	}
@@ -362,39 +478,68 @@ func TestFinalAssistantBeforeSameTurnBackgroundNoticeKeepsCommittedFrontierConti
 }
 
 func TestBackgroundShellNoticeSameTurnNoopAddsNoAssistantMessage(t *testing.T) {
+	dir := t.TempDir()
+	store := mustCreateTestSessionAt(t, dir)
+
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working", Phase: llm.MessagePhaseCommentary},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: []llm.ToolCall{{ID: "call_shell_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: reviewerNoopToken, Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(reviewerNoopToken), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
 
-	events := make([]Event, 0, 8)
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var (
+		mu     sync.Mutex
+		events []Event
+	)
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
+			mu.Lock()
 			events = append(events, evt)
+			mu.Unlock()
 		},
 	})
 
-	result, err := eng.SubmitUserMessageWithHooks(context.Background(), "run tools", func() {
-		eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-			Type:       BackgroundShellEventCompleted,
-			ID:         "1000",
-			State:      "completed",
-			NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone",
-		}, true)
-	}, nil)
-	if err != nil {
-		t.Fatalf("submit: %v", err)
+	submitDone := make(chan struct {
+		assistant llm.Message
+		err       error
+	}, 1)
+	go func() {
+		assistant, submitErr := eng.SubmitUserMessage(context.Background(), "run tools")
+		submitDone <- struct {
+			assistant llm.Message
+			err       error
+		}{assistant: assistant, err: submitErr}
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for tool call to start")
 	}
-	if strings.TrimSpace(result.Content) != "" {
-		t.Fatalf("assistant content = %q, want empty", result.Content)
+
+	eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
+		Type:       BackgroundShellEventCompleted,
+		ID:         "1000",
+		State:      "completed",
+		NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone",
+	}, true)
+
+	close(release)
+	result := <-submitDone
+	if result.err != nil {
+		t.Fatalf("submit: %v", result.err)
+	}
+	if result.assistant.Content != nil {
+		t.Fatalf("assistant content = %q, want absent", *result.assistant.Content)
 	}
 
 	client.mu.Lock()
@@ -407,14 +552,11 @@ func TestBackgroundShellNoticeSameTurnNoopAddsNoAssistantMessage(t *testing.T) {
 
 	containsNotice := func(req llm.Request) bool {
 		for _, msg := range requestMessages(req) {
-			if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeBackgroundNotice && strings.Contains(msg.Content, "Background shell 1000 completed.") {
+			if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeBackgroundNotice && strings.Contains(messageContent(msg), "Background shell 1000 completed.") {
 				return true
 			}
 		}
 		return false
-	}
-	if containsNotice(requests[0]) {
-		t.Fatalf("background notice reached the first main-agent request: %+v", requestMessages(requests[0]))
 	}
 	if !containsNotice(requests[1]) {
 		t.Fatalf("expected background notice in same-turn follow-up, messages=%+v", requestMessages(requests[1]))
@@ -431,10 +573,10 @@ func TestBackgroundShellNoticeSameTurnNoopAddsNoAssistantMessage(t *testing.T) {
 	foundBackgroundNotice := false
 	noopFinalCount := 0
 	for _, persisted := range eng.transcriptRuntimeState().SnapshotMessages() {
-		if persisted.Role == llm.RoleAssistant && persisted.Phase == llm.MessagePhaseFinal {
-			finalAssistantContents = append(finalAssistantContents, persisted.Content)
+		if persisted.Role == llm.RoleAssistant && persisted.Phase != nil && *persisted.Phase == llm.MessagePhaseFinal {
+			finalAssistantContents = append(finalAssistantContents, messageContent(persisted))
 		}
-		if persisted.Role == llm.RoleDeveloper && persisted.MessageType == llm.MessageTypeBackgroundNotice && strings.Contains(persisted.Content, "Background shell 1000 completed.") {
+		if persisted.Role == llm.RoleDeveloper && persisted.MessageType != nil && *persisted.MessageType == llm.MessageTypeBackgroundNotice && strings.Contains(messageContent(persisted), "Background shell 1000 completed.") {
 			foundBackgroundNotice = true
 		}
 		if isNoopFinalAnswer(persisted) {
@@ -451,10 +593,12 @@ func TestBackgroundShellNoticeSameTurnNoopAddsNoAssistantMessage(t *testing.T) {
 		t.Fatalf("expected hidden persisted noop final assistant message, got %q", finalAssistantContents)
 	}
 
+	mu.Lock()
+	defer mu.Unlock()
 	assistantContents := make([]string, 0, 1)
 	for _, evt := range events {
 		if evt.Kind == EventAssistantMessage {
-			assistantContents = append(assistantContents, evt.Message.Content)
+			assistantContents = append(assistantContents, messageContent(evt.Message))
 		}
 	}
 	if len(assistantContents) != 1 || assistantContents[0] != "working" {

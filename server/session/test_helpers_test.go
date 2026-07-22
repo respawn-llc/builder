@@ -83,6 +83,10 @@ func cloneTestMeta(meta *Meta) *Meta {
 	return &cloned
 }
 
+func storeTestMeta(store *Store) Meta {
+	return store.metaSnapshot().meta
+}
+
 func (p *testSessionMetadata) options() []StoreOption {
 	return []StoreOption{
 		WithPersistenceObserver(p),
@@ -132,4 +136,21 @@ func mustOpenSessionTestStore(t *testing.T, store *Store) *Store {
 		t.Fatalf("open store: %v", err)
 	}
 	return opened
+}
+
+func mustMaterializeSessionTestEventLog(t *testing.T, store *Store) MaterializedEventLog {
+	t.Helper()
+	log, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	return log
+}
+
+func sessionTestMessage(role MessageRole, content string) MessageRecord {
+	return MessageRecord{Role: role, Content: &content}
+}
+
+func sessionTestStringPointer(value string) *string {
+	return &value
 }

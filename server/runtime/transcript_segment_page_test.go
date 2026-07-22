@@ -7,11 +7,12 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/shared/textutil"
 )
 
 func appendSegmentTestMessage(t *testing.T, store *session.Store, role llm.Role, content string) {
 	t.Helper()
-	if _, _, err := store.AppendEvent("step", "message", llm.Message{Role: role, Content: content}); err != nil {
+	if _, _, err := appendTestEvent(t, store, "step", llm.Message{Role: role, Content: textutil.Value(content)}); err != nil {
 		t.Fatalf("append message %q: %v", content, err)
 	}
 }
@@ -68,9 +69,9 @@ func TestEngineTranscriptSegmentPagePaginatesAcrossCompaction(t *testing.T) {
 
 	appendSegmentTestMessage(t, store, llm.RoleUser, "u1")
 	appendSegmentTestMessage(t, store, llm.RoleAssistant, "a1")
-	if _, _, err := store.AppendEvent("step", "history_replaced", historyReplacementPayload{
+	if _, _, err := appendTestEvent(t, store, "step", historyReplacementPayload{
 		Engine: "compaction",
-		Items:  llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}}),
+		Items:  llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")}}),
 	}); err != nil {
 		t.Fatalf("append history_replaced: %v", err)
 	}
@@ -108,9 +109,9 @@ func TestEngineTranscriptSegmentPageForwardMatchesBackwardSegments(t *testing.T)
 
 	appendSegmentTestMessage(t, store, llm.RoleUser, "u1")
 	appendSegmentTestMessage(t, store, llm.RoleAssistant, "a1")
-	if _, _, err := store.AppendEvent("step", "history_replaced", historyReplacementPayload{
+	if _, _, err := appendTestEvent(t, store, "step", historyReplacementPayload{
 		Engine: "compaction",
-		Items:  llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}}),
+		Items:  llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")}}),
 	}); err != nil {
 		t.Fatalf("append history_replaced: %v", err)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"core/server/session/sessiontest"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func TestLifecycleHookExcludedFromServerHeadlessAndSubagentRuns(t *testing.T) {
@@ -173,7 +175,7 @@ func TestRunPromptCreatesSessionAndPersistsDurableTranscript(t *testing.T) {
 		t.Fatalf("unexpected continuation context: %+v", meta.Continuation)
 	}
 
-	events, err := sessiontest.CollectEvents(store)
+	events, err := sessiontest.CollectRecords(store)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -182,17 +184,22 @@ func TestRunPromptCreatesSessionAndPersistsDurableTranscript(t *testing.T) {
 		sawAssistant bool
 	)
 	for _, evt := range events {
-		if evt.Kind != "message" {
+		if string(mustSessionEventKind(evt)) != "message" {
 			continue
 		}
-		var msg llm.Message
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			t.Fatalf("unmarshal message payload: %v", err)
+		record, ok := mustSessionEventPayload(evt).(session.MessageRecord)
+		if !ok {
+			t.Fatalf("message payload = %T, want session.MessageRecord", mustSessionEventPayload(evt))
 		}
-		if msg.Role == llm.RoleUser && msg.Content == "hello from user" {
+		msg := appMessageFromRecord(record)
+		if msg.Role == llm.RoleUser && msg.Content != nil && *msg.Content == "hello from user" {
 			sawUser = true
 		}
-		if msg.Role == llm.RoleAssistant && msg.Content == "hello from fake" && msg.Phase == llm.MessagePhaseFinal {
+		if msg.Role == llm.RoleAssistant &&
+			msg.Content != nil &&
+			*msg.Content == "hello from fake" &&
+			msg.Phase != nil &&
+			*msg.Phase == llm.MessagePhaseFinal {
 			sawAssistant = true
 		}
 	}
@@ -540,20 +547,42 @@ func openAuthoritativeWorkspaceSessionStore(t *testing.T, workspaceRoot, openAIB
 	return openAuthoritativeAppSession(t, cfg.PersistenceRoot, sessionID)
 }
 
+func appMessageFromRecord(record session.MessageRecord) llm.Message {
+	message := llm.Message{
+		Role:    llm.Role(record.Role),
+		Content: textutil.Value(valueOrEmpty(record.Content)),
+	}
+	if record.MessageType != nil {
+		message.MessageType = textutil.Value(llm.MessageType(*record.MessageType))
+	}
+	if record.Phase != nil {
+		message.Phase = textutil.Value(llm.MessagePhase(*record.Phase))
+	}
+	return message
+}
+
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
 func readStoredMessages(store *session.Store) ([]llm.Message, error) {
-	events, err := sessiontest.CollectEvents(store)
+	events, err := sessiontest.CollectRecords(store)
 	if err != nil {
 		return nil, err
 	}
 	messages := make([]llm.Message, 0, len(events))
 	for _, evt := range events {
-		if evt.Kind != "message" {
+		if string(mustSessionEventKind(evt)) != "message" {
 			continue
 		}
-		var msg llm.Message
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			return nil, err
+		record, ok := mustSessionEventPayload(evt).(session.MessageRecord)
+		if !ok {
+			return nil, fmt.Errorf("message payload = %T, want session.MessageRecord", mustSessionEventPayload(evt))
 		}
+		msg := appMessageFromRecord(record)
 		messages = append(messages, msg)
 	}
 	return messages, nil
@@ -563,7 +592,11 @@ func assertEnvironmentCWD(t *testing.T, messages []llm.Message, cwd string) {
 	t.Helper()
 	want := "\nCWD: " + cwd + "\n"
 	for _, msg := range messages {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeEnvironment && strings.Contains(msg.Content, want) {
+		if msg.Role == llm.RoleDeveloper &&
+			msg.MessageType != nil &&
+			*msg.MessageType == llm.MessageTypeEnvironment &&
+			msg.Content != nil &&
+			strings.Contains(*msg.Content, want) {
 			return
 		}
 	}
@@ -574,11 +607,14 @@ func assertWorktreeReminderMessage(t *testing.T, messages []llm.Message, branch 
 	t.Helper()
 	sawWorktreeReminder := false
 	for _, msg := range messages {
-		if msg.Role != llm.RoleDeveloper || msg.MessageType != llm.MessageTypeWorktreeMode {
+		if msg.Role != llm.RoleDeveloper || msg.MessageType == nil || *msg.MessageType != llm.MessageTypeWorktreeMode {
 			continue
 		}
 		sawWorktreeReminder = true
-		if strings.Contains(msg.Content, branch) && strings.Contains(msg.Content, cwd) && strings.Contains(msg.Content, workspaceRoot) {
+		if msg.Content != nil &&
+			strings.Contains(*msg.Content, branch) &&
+			strings.Contains(*msg.Content, cwd) &&
+			strings.Contains(*msg.Content, workspaceRoot) {
 			return
 		}
 	}
@@ -591,7 +627,7 @@ func assertWorktreeReminderMessage(t *testing.T, messages []llm.Message, branch 
 func assertMessagePresent(t *testing.T, messages []llm.Message, role llm.Role, content string) {
 	t.Helper()
 	for _, msg := range messages {
-		if msg.Role == role && msg.Content == content {
+		if msg.Role == role && msg.Content != nil && *msg.Content == content {
 			return
 		}
 	}

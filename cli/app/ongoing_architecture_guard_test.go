@@ -406,10 +406,10 @@ func isForbiddenOngoingTranscriptReadSelector(name string) bool {
 	switch name {
 	case "TranscriptSegmentPage",
 		"TranscriptSegmentPageForward",
-		"TranscriptSegmentPageFromStore",
+		"TranscriptSegmentPageFromEventLog",
 		"GetSessionTranscriptPage",
 		"ReadSegmentBackward",
-		"ReadEventsBackwardUntil":
+		"ReadRecentRecords":
 		return true
 	default:
 		return false

@@ -46,6 +46,24 @@ func TestTranscriptProjectionOwnsNestedDeletionPresentation(t *testing.T) {
 	}
 }
 
+func TestTranscriptCacheWarningProjectionPreservesAbsentTokenLoss(t *testing.T) {
+	notice := transcriptNoticeFromFact("", &runtime.TranscriptNoticeRowFact{
+		Reason:   transcript.NoticeReasonCacheWarning,
+		Severity: transcript.NoticeSeverityWarning,
+		CacheWarning: &runtime.TranscriptCacheWarningFact{
+			Scope:      string(transcript.CacheWarningScopeConversation),
+			Reason:     string(transcript.CacheWarningReasonCompaction),
+			Visibility: transcript.EntryVisibilityOngoing,
+		},
+	})
+	if notice.CacheWarning == nil {
+		t.Fatal("cache-warning projection is absent")
+	}
+	if notice.CacheWarning.LostInputTokens != nil {
+		t.Fatalf("projected absent token loss = %v, want nil", *notice.CacheWarning.LostInputTokens)
+	}
+}
+
 func TestTranscriptHydrationPreservesDeletionDispositionPresence(t *testing.T) {
 	id := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
 	tests := []struct {
@@ -60,7 +78,7 @@ func TestTranscriptHydrationPreservesDeletionDispositionPresence(t *testing.T) {
 				PhysicalGroup: patchformat.WholeFileDeletionGroupID{FirstOperation: id},
 				Removed:       0,
 			},
-			wantRemoved: textutil.Int(0),
+			wantRemoved: textutil.Value(0),
 		},
 		{
 			name: "present positive",
@@ -68,7 +86,7 @@ func TestTranscriptHydrationPreservesDeletionDispositionPresence(t *testing.T) {
 				PhysicalGroup: patchformat.WholeFileDeletionGroupID{FirstOperation: id},
 				Removed:       4,
 			},
-			wantRemoved: textutil.Int(4),
+			wantRemoved: textutil.Value(4),
 		},
 	}
 
@@ -447,11 +465,11 @@ func TestTranscriptBackgroundNoticeCarriesTypedExitCode(t *testing.T) {
 		StepID: transcriptProjectionStepID,
 		Message: llm.Message{
 			Role:                 llm.RoleDeveloper,
-			Name:                 "process-1",
-			MessageType:          llm.MessageTypeBackgroundNotice,
-			Content:              "background failed",
-			CompactContent:       "background failed",
-			BackgroundActivityID: activityID.String(),
+			Name:                 textutil.Value("process-1"),
+			MessageType:          textutil.Value(llm.MessageTypeBackgroundNotice),
+			Content:              textutil.Value("background failed"),
+			CompactContent:       textutil.Value("background failed"),
+			BackgroundActivityID: textutil.Value(activityID.String()),
 			BackgroundExitCode:   &exitCode,
 		},
 	})
@@ -479,10 +497,10 @@ func TestTranscriptWorktreeNoticeCarriesTypedContextWithoutServerPresentation(t 
 		Kind: runtime.EventConversationUpdated,
 		Message: llm.Message{
 			Role:            llm.RoleDeveloper,
-			MessageType:     llm.MessageTypeWorktreeMode,
-			SourcePath:      target.EffectiveCwd,
+			MessageType:     textutil.Value(llm.MessageTypeWorktreeMode),
+			SourcePath:      textutil.Value(target.EffectiveCwd),
 			WorktreeContext: &target.WorktreeContext,
-			Content:         "model-visible worktree context",
+			Content:         textutil.Value("model-visible worktree context"),
 		},
 	})
 
@@ -517,9 +535,9 @@ func TestTranscriptWorktreeNoticeKeepsMissingBranchNullable(t *testing.T) {
 		Kind: runtime.EventConversationUpdated,
 		Message: llm.Message{
 			Role:            llm.RoleDeveloper,
-			MessageType:     llm.MessageTypeWorktreeMode,
+			MessageType:     textutil.Value(llm.MessageTypeWorktreeMode),
 			WorktreeContext: &context,
-			Content:         "model-visible detached worktree context",
+			Content:         textutil.Value("model-visible detached worktree context"),
 		},
 	})
 	if len(messages) != 1 ||
@@ -564,8 +582,8 @@ func TestAssistantTranscriptMessagesDoNotReemitLiveToolStarts(t *testing.T) {
 				StepID: transcriptProjectionStepID,
 				Message: llm.Message{
 					Role:    llm.RoleAssistant,
-					Content: "checking the repo",
-					Phase:   llm.MessagePhaseCommentary,
+					Content: textutil.Value("checking the repo"),
+					Phase:   textutil.Value(llm.MessagePhaseCommentary),
 					ToolCalls: []llm.ToolCall{{
 						ID:   "call-1",
 						Name: "shell",

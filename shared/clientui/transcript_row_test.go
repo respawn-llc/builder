@@ -3,6 +3,7 @@ package clientui
 import (
 	"testing"
 
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -77,12 +78,27 @@ func TestTranscriptNoticeRowCarriesTypedCacheWarningFacts(t *testing.T) {
 		CacheWarning: &TranscriptCacheWarning{
 			Scope:           "conversation",
 			Reason:          "cache_miss",
-			LostInputTokens: 100,
+			LostInputTokens: textutil.Value(100),
 			Visibility:      transcript.EntryVisibilityOngoing,
 		},
 	}
 	if err := notice.Validate(); err != nil {
 		t.Fatalf("validate typed cache-warning notice: %v", err)
+	}
+}
+
+func TestTranscriptCacheWarningAcceptsAbsentLossAndRejectsPresentZero(t *testing.T) {
+	warning := TranscriptCacheWarning{
+		Scope:      "conversation",
+		Reason:     "cache_miss",
+		Visibility: transcript.EntryVisibilityOngoing,
+	}
+	if err := warning.Validate(); err != nil {
+		t.Fatalf("validate absent token loss: %v", err)
+	}
+	warning.LostInputTokens = textutil.Value(0)
+	if err := warning.Validate(); err == nil {
+		t.Fatal("accepted present zero token loss")
 	}
 }
 

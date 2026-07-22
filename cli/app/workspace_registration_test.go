@@ -223,7 +223,11 @@ func newAppRuntimeEngineWithStore(t *testing.T, store *session.Store, client llm
 	if cfg.Model == "" {
 		cfg.Model = "gpt-5"
 	}
-	eng, err := runtime.New(store, client, tools.NewRegistry(handlers...), cfg)
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	eng, err := runtime.New(store, eventLog, client, tools.NewRegistry(handlers...), cfg)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}

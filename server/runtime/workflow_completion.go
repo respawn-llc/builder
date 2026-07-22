@@ -10,6 +10,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/server/workflowruntime"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -26,10 +27,10 @@ func (e *Engine) workflowCompletionRejectedResult(ctx context.Context, result to
 	record, err := e.recordWorkflowProtocolViolation(ctx, workflowruntime.ViolationKindInvalidCompletion, completionErr.Error())
 	result.IsError = true
 	result.Output = workflowruntime.ToolErrorPayload(completionErr)
-	result.Summary = "workflow completion rejected"
+	result.Summary = textutil.Value("workflow completion rejected")
 	if err != nil {
 		result.Output = mustJSON(map[string]any{"error": err.Error()})
-		result.Summary = err.Error()
+		result.Summary = textutil.Value(err.Error())
 	}
 	if record.Interrupted {
 		result.Terminal = true

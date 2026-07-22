@@ -10,6 +10,7 @@ import (
 
 	"core/prompts"
 	"core/shared/clientui"
+	"core/shared/textutil"
 
 	"github.com/google/uuid"
 )
@@ -490,7 +491,10 @@ func (t *AskQuestionTool) Call(ctx context.Context, c Call) (Result, error) {
 	if marshalErr != nil {
 		return Result{}, marshalErr
 	}
-	return Result{CallID: c.ID, Name: c.Name, Output: body, CondensedText: buildCondensedToolOutputText(req, resp)}, nil
+	return Result{
+		CallID: c.ID, Name: c.Name, Output: body,
+		CondensedText: textutil.OptionalExactString(buildCondensedToolOutputText(req, resp)),
+	}, nil
 }
 
 func notifyAskQuestionBatchSkipped(c Call) {

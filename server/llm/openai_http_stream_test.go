@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"core/shared/textutil"
 	"errors"
 	"fmt"
 	"io"
@@ -327,10 +328,10 @@ func TestGenerateStream_EmitsAssistantDeltasAndToolCalls(t *testing.T) {
 	if resp.Usage.InputTokens != 11 || resp.Usage.OutputTokens != 7 {
 		t.Fatalf("unexpected usage: %+v", resp.Usage)
 	}
-	if !resp.Usage.HasCachedInputTokens || resp.Usage.CachedInputTokens != 4 {
+	if resp.Usage.CachedInputTokens == nil || *resp.Usage.CachedInputTokens != 4 {
 		t.Fatalf("unexpected cached usage details: %+v", resp.Usage)
 	}
-	if len(resp.Reasoning) != 1 || resp.Reasoning[0].Role != "reasoning" || resp.Reasoning[0].Text != "Plan" {
+	if len(resp.Reasoning) != 1 || resp.Reasoning[0].Role == nil || *resp.Reasoning[0].Role != "reasoning" || resp.Reasoning[0].Text != "Plan" {
 		t.Fatalf("unexpected reasoning summary entries: %+v", resp.Reasoning)
 	}
 	if len(resp.ReasoningItems) != 1 || resp.ReasoningItems[0].ID != "rs_1" || resp.ReasoningItems[0].EncryptedContent != "enc_1" {
@@ -377,7 +378,7 @@ func TestGenerateStream_EmitsUnknownPhaseWhenDeltaPrecedesAssistantItem(t *testi
 	}
 }
 
-func TestGenerateStream_PreservesDisplayedDeltasWhenCompletedMessageIsShorter(t *testing.T) {
+func TestGenerateStream_RejectsCompletedMessageThatDoesNotExtendDisplayedDeltas(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
 		`{"type":"response.output_text.delta","output_index":0,"delta":"Hello"}`,
@@ -393,19 +394,20 @@ func TestGenerateStream_PreservesDisplayedDeltasWhenCompletedMessageIsShorter(t 
 			deltas = append(deltas, delta)
 		},
 	})
-	if err != nil {
-		t.Fatalf("GenerateStream failed: %v", err)
+	if err == nil {
+		t.Fatalf("GenerateStream response = %+v, want provider contract error", resp)
 	}
 
 	const streamed = "Hello\n\n"
 	if got := joinedAssistantDeltas(deltas); got != streamed {
 		t.Fatalf("streamed deltas = %q, want %q", got, streamed)
 	}
-	if resp.AssistantText != streamed {
-		t.Fatalf("assistant text = %q, want exact streamed text", resp.AssistantText)
+	var providerErr *ProviderAPIError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("error = %T %v, want ProviderAPIError", err, err)
 	}
-	if len(resp.OutputItems) != 1 || resp.OutputItems[0].Content != streamed {
-		t.Fatalf("output items = %+v, want assistant content repaired to streamed text", resp.OutputItems)
+	if providerErr.Code != UnifiedErrorCodeProviderContract {
+		t.Fatalf("provider code = %q, want %q", providerErr.Code, UnifiedErrorCodeProviderContract)
 	}
 }
 
@@ -423,7 +425,9 @@ func TestGenerateStream_DoesNotRepairMultiMessageAssistantOutputWithAggregateTex
 	if resp.AssistantText != "AB" {
 		t.Fatalf("assistant text = %q, want aggregate completed text", resp.AssistantText)
 	}
-	if len(resp.OutputItems) != 2 || resp.OutputItems[0].Content != "A" || resp.OutputItems[1].Content != "B" {
+	if len(resp.OutputItems) != 2 ||
+		resp.OutputItems[0].Content == nil || *resp.OutputItems[0].Content != "A" ||
+		resp.OutputItems[1].Content == nil || *resp.OutputItems[1].Content != "B" {
 		t.Fatalf("output items = %+v, want original assistant message segments", resp.OutputItems)
 	}
 }
@@ -515,24 +519,24 @@ func TestGenerateStream_ParsesCustomPatchToolCall(t *testing.T) {
 	if resp.ToolCalls[0].ID != "call_1" || resp.ToolCalls[0].Name != "patch" {
 		t.Fatalf("unexpected custom tool call: %+v", resp.ToolCalls[0])
 	}
-	if !resp.ToolCalls[0].Custom || resp.ToolCalls[0].CustomInput != patchInput {
+	if !resp.ToolCalls[0].Custom || resp.ToolCalls[0].CustomInput == nil || *resp.ToolCalls[0].CustomInput != patchInput {
 		t.Fatalf("unexpected custom patch tool call: %+v", resp.ToolCalls[0])
 	}
-	if len(resp.OutputItems) != 1 || resp.OutputItems[0].Type != ResponseItemTypeCustomToolCall || resp.OutputItems[0].CustomInput != patchInput {
+	if len(resp.OutputItems) != 1 || resp.OutputItems[0].Type != ResponseItemTypeCustomToolCall || resp.OutputItems[0].CustomInput == nil || *resp.OutputItems[0].CustomInput != patchInput {
 		t.Fatalf("unexpected custom output item: %+v", resp.OutputItems)
 	}
 }
 
 func TestToolCallAccumulatorMergesCompletedCustomInputWithoutJSONInput(t *testing.T) {
 	accumulator := newToolCallAccumulator()
-	accumulator.Merge([]ToolCall{{ID: "call-1", Name: "patch", Custom: true, CustomInput: "partial"}})
-	accumulator.Merge([]ToolCall{{ID: "call-1", Name: "patch", Custom: true, CustomInput: "complete"}})
+	accumulator.Merge([]ToolCall{{ID: "call-1", Name: "patch", Custom: true, CustomInput: textutil.Value("partial")}})
+	accumulator.Merge([]ToolCall{{ID: "call-1", Name: "patch", Custom: true, CustomInput: textutil.Value("complete")}})
 
 	calls := accumulator.ToToolCalls()
 	if len(calls) != 1 {
 		t.Fatalf("expected one call, got %+v", calls)
 	}
-	if !calls[0].Custom || calls[0].CustomInput != "complete" {
+	if !calls[0].Custom || calls[0].CustomInput == nil || *calls[0].CustomInput != "complete" {
 		t.Fatalf("expected completed custom input to replace partial input, got %+v", calls[0])
 	}
 }
@@ -661,7 +665,7 @@ func TestGenerateStream_EmptyReasoningSnapshotClearsCurrentStatus(t *testing.T) 
 	}
 }
 
-func TestGenerateStream_PreservesStreamedAssistantTextWhenCompletedMessageIsEmpty(t *testing.T) {
+func TestGenerateStream_RejectsEmptyCompletedMessageAfterAssistantDeltas(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"commentary","content":[]}}`,
 		`{"type":"response.output_text.delta","delta":"Hel"}`,
@@ -672,24 +676,25 @@ func TestGenerateStream_PreservesStreamedAssistantTextWhenCompletedMessageIsEmpt
 	)
 
 	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
-	if err != nil {
-		t.Fatalf("GenerateStream failed: %v", err)
+	if err == nil {
+		t.Fatalf("GenerateStream response = %+v, want provider contract error", resp)
 	}
+	var providerErr *ProviderAPIError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("error = %T %v, want ProviderAPIError", err, err)
+	}
+	if providerErr.Code != UnifiedErrorCodeProviderContract {
+		t.Fatalf("provider code = %q, want %q", providerErr.Code, UnifiedErrorCodeProviderContract)
+	}
+}
 
-	if resp.AssistantText != "Hello" {
-		t.Fatalf("assistant text = %q, want Hello", resp.AssistantText)
+func TestBuildOutputItemsFromStreamPreservesAbsentPhase(t *testing.T) {
+	items := buildOutputItemsFromStream("streamed text", "", nil, nil, nil)
+	if len(items) != 1 {
+		t.Fatalf("output items = %+v, want one assistant message", items)
 	}
-	if !resp.ProviderPhase.Is(MessagePhaseCommentary) {
-		t.Fatalf("provider phase = %#v, want %q", resp.ProviderPhase, MessagePhaseCommentary)
-	}
-	if len(resp.OutputItems) != 2 {
-		t.Fatalf("expected 2 output items, got %+v", resp.OutputItems)
-	}
-	if resp.OutputItems[0].Type != ResponseItemTypeMessage || resp.OutputItems[0].Content != "Hello" {
-		t.Fatalf("unexpected assistant output item: %+v", resp.OutputItems[0])
-	}
-	if resp.OutputItems[0].Phase != MessagePhaseCommentary {
-		t.Fatalf("assistant output phase = %q, want %q", resp.OutputItems[0].Phase, MessagePhaseCommentary)
+	if items[0].Phase != nil {
+		t.Fatalf("assistant output phase = %v, want absent", items[0].Phase)
 	}
 }
 
@@ -714,8 +719,8 @@ func TestGenerateStream_PreservesAssistantOutputItemPhaseWhenCompletedPhaseIsMis
 	if len(resp.OutputItems) != 1 {
 		t.Fatalf("expected 1 output item, got %+v", resp.OutputItems)
 	}
-	if resp.OutputItems[0].Phase != MessagePhaseFinal {
-		t.Fatalf("assistant output phase = %q, want %q", resp.OutputItems[0].Phase, MessagePhaseFinal)
+	if resp.OutputItems[0].Phase == nil || *resp.OutputItems[0].Phase != MessagePhaseFinal {
+		t.Fatalf("assistant output phase = %v, want %q", resp.OutputItems[0].Phase, MessagePhaseFinal)
 	}
 }
 
@@ -763,7 +768,7 @@ func TestGenerateStream_RepairsMissingAssistantOutputItemAtNonZeroOutputIndex(t 
 	if resp.OutputItems[1].Type != ResponseItemTypeFunctionCall || resp.OutputItems[1].OutputIndex != 1 {
 		t.Fatalf("expected tool call to stay second, got %+v", resp.OutputItems[1])
 	}
-	if resp.OutputItems[2].Type != ResponseItemTypeMessage || resp.OutputItems[2].OutputIndex != 2 || resp.OutputItems[2].Content != "Done" {
+	if resp.OutputItems[2].Type != ResponseItemTypeMessage || resp.OutputItems[2].OutputIndex != 2 || resp.OutputItems[2].Content == nil || *resp.OutputItems[2].Content != "Done" {
 		t.Fatalf("expected synthesized assistant item inserted at output_index=2, got %+v", resp.OutputItems[2])
 	}
 }
@@ -789,7 +794,7 @@ func TestGenerateStream_PreservesHostedWebSearchOutputItemFromStream(t *testing.
 	foundAssistant := false
 	foundHosted := false
 	for _, item := range resp.OutputItems {
-		if item.Type == ResponseItemTypeMessage && item.Content == "Done" {
+		if item.Type == ResponseItemTypeMessage && item.Content != nil && *item.Content == "Done" {
 			foundAssistant = true
 		}
 		if item.Type != ResponseItemTypeOther {

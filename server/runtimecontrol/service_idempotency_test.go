@@ -2,7 +2,6 @@ package runtimecontrol
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 
@@ -16,6 +15,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -276,13 +276,13 @@ func newRuntimeControlCompactionFixture(t *testing.T, options ...session.StoreOp
 	trimmed := 1
 	client := &runtimeControlFakeClient{
 		responses: []llm.Response{{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		}},
 		compactionResponses: []llm.CompactionResponse{{
 			OutputItems: []llm.ResponseItem{
-				{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"},
-				{Type: llm.ResponseItemTypeCompaction, EncryptedContent: "checkpoint"},
+				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")},
+				{Type: llm.ResponseItemTypeCompaction, EncryptedContent: textutil.Value("checkpoint")},
 			},
 			Usage:             llm.Usage{WindowTokens: 200000},
 			TrimmedItemsCount: &trimmed,
@@ -300,13 +300,17 @@ func newRuntimeControlCompactionFixture(t *testing.T, options ...session.StoreOp
 
 func countEventsByKind(t *testing.T, store *session.Store, kind string) int {
 	t.Helper()
-	events, err := sessiontest.CollectEvents(store)
+	events, err := sessiontest.CollectRecords(store)
 	if err != nil {
 		t.Fatalf("ReadEvents: %v", err)
 	}
 	count := 0
 	for _, evt := range events {
-		if evt.Kind == kind {
+		eventKind, kindErr := evt.Kind()
+		if kindErr != nil {
+			t.Fatalf("event kind: %v", kindErr)
+		}
+		if string(eventKind) == kind {
 			count++
 		}
 	}
@@ -315,20 +319,34 @@ func countEventsByKind(t *testing.T, store *session.Store, kind string) int {
 
 func localEntryEvents(t *testing.T, store *session.Store) []runtime.ChatEntry {
 	t.Helper()
-	events, err := sessiontest.CollectEvents(store)
+	events, err := sessiontest.CollectRecords(store)
 	if err != nil {
 		t.Fatalf("ReadEvents: %v", err)
 	}
 	entries := make([]runtime.ChatEntry, 0)
 	for _, evt := range events {
-		if evt.Kind != "local_entry" {
+		kind, kindErr := evt.Kind()
+		if kindErr != nil {
+			t.Fatalf("event kind: %v", kindErr)
+		}
+		if kind != session.EventKindLocalEntry {
 			continue
 		}
-		var entry runtime.ChatEntry
-		if err := json.Unmarshal(evt.Payload, &entry); err != nil {
-			t.Fatalf("decode local_entry: %v", err)
+		payload, payloadErr := evt.Payload()
+		if payloadErr != nil {
+			t.Fatalf("local_entry payload: %v", payloadErr)
 		}
-		entries = append(entries, entry)
+		entryRecord, ok := payload.(session.LocalEntryRecord)
+		if !ok {
+			t.Fatalf("local_entry payload = %T, want session.LocalEntryRecord", payload)
+		}
+		entries = append(entries, runtime.ChatEntry{
+			Role: entryRecord.Role,
+			Text: entryRecord.Text,
+			Visibility: transcript.NormalizeEntryVisibility(
+				transcript.EntryVisibility(entryRecord.Visibility),
+			),
+		})
 	}
 	return entries
 }
@@ -361,7 +379,7 @@ func TestServiceSubmitQueuedUserMessagesConsumesCommittedObserverError(t *testin
 	observerErr := errors.New("queued flush observer failed")
 	gate := sessiontest.NewPersistenceGate(runtimeControlTestSessionPersistence)
 	client := &runtimeControlFakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "seeded", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("seeded"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{}, session.WithPersistenceObserver(gate))

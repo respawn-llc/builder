@@ -14,6 +14,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func lifecycleSessionID(t *testing.T, fixture sessionRuntimeFixture) runtimeids.SessionID {
@@ -82,7 +83,7 @@ type lifecycleRequestCaptureClient chan llm.Request
 func (c *lifecycleRequestCaptureClient) Generate(_ context.Context, request llm.Request) (llm.Response, error) {
 	*c <- request
 	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}, nil
 }
@@ -128,8 +129,8 @@ func TestAuthoritySyncExecutionTargetPersistsReminderBeforeQueuedUserDrain(t *te
 	request := client.await(t)
 	for _, item := range request.Items {
 		if item.Type == llm.ResponseItemTypeMessage &&
-			item.Role == llm.RoleDeveloper &&
-			item.MessageType == llm.MessageTypeWorktreeMode &&
+			item.Role != nil && *item.Role == llm.RoleDeveloper &&
+			item.MessageType != nil && *item.MessageType == llm.MessageTypeWorktreeMode &&
 			item.WorktreeContext != nil &&
 			item.WorktreeContext.EffectiveCwd == worktreeRoot {
 			return

@@ -75,8 +75,16 @@ func TestServicePlanSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
-	if _, _, err := store.AppendEvent("", "prompt_history", map[string]any{"text": "json-history"}); err != nil {
-		t.Fatalf("append legacy prompt history event: %v", err)
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	if _, receipt, err := eventLog.AppendRecord(nil, session.LocalEntryRecord{
+		Visibility: session.EntryVisibilityHidden,
+		Role:       "system",
+		Text:       "event-log history must not become prompt history",
+	}); err != nil || !receipt.Committed {
+		t.Fatalf("append event-log entry: receipt=%+v error=%v", receipt, err)
 	}
 	if _, _, err := meta.RecordPromptHistoryEntry(ctx, metadata.PromptHistoryEntry{
 		SessionID: store.Meta().SessionID,

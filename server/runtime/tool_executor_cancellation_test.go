@@ -8,6 +8,7 @@ import (
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -28,7 +29,7 @@ func (t cancelAwareTool) Call(ctx context.Context, c tools.Call) (tools.Result, 
 	}
 	<-ctx.Done()
 	out, _ := json.Marshal(map[string]any{"error": ctx.Err().Error()})
-	return tools.Result{CallID: c.ID, Name: c.Name, IsError: true, Output: out, Summary: ctx.Err().Error()}, ctx.Err()
+	return tools.Result{CallID: c.ID, Name: c.Name, IsError: true, Output: out, Summary: textutil.Value(ctx.Err().Error())}, ctx.Err()
 }
 
 func (t *executionIdentityCapturingTool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {

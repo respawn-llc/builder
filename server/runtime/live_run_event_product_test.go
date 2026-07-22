@@ -26,7 +26,7 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 		result := events.single(t)
 		if result.Status != RunStatusCompleted ||
 			result.ResultKind != LiveRunResultAssistantFinalAnswer ||
-			result.AssistantMessage.Content != "done" {
+			messageContent(result.AssistantMessage) != "done" {
 			t.Fatalf("result = %+v", result)
 		}
 	})

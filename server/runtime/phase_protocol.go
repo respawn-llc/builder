@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"core/server/llm"
+	"core/shared/textutil"
 )
 
 type defaultPhaseProtocol struct {
@@ -42,25 +43,33 @@ func (p *defaultPhaseProtocol) Apply(ctx context.Context, resp llm.Response, ass
 	providerPhase := effectivePhase.Value()
 	if effectivePhase != nil {
 		if providerPhase != nil {
-			if assistant.Phase != *providerPhase {
+			if assistant.Phase == nil {
+				return phaseProtocolTurn{}, fmt.Errorf(
+					"assistant phase projection mismatch: provider phase %q, assistant phase absent",
+					*providerPhase,
+				)
+			}
+			if *assistant.Phase != *providerPhase {
 				return phaseProtocolTurn{}, fmt.Errorf(
 					"assistant phase projection mismatch: provider phase %q, assistant phase %q",
 					*providerPhase,
-					assistant.Phase,
+					*assistant.Phase,
 				)
 			}
-		} else if assistant.Phase != "" {
+		} else if assistant.Phase != nil {
 			return phaseProtocolTurn{}, fmt.Errorf(
 				"assistant phase projection mismatch: provider phase absent, assistant phase %q",
-				assistant.Phase,
+				*assistant.Phase,
 			)
 		}
 	} else {
-		switch assistant.Phase {
-		case llm.MessagePhaseCommentary:
-			effectivePhase = llm.CommentaryProviderPhase()
-		case llm.MessagePhaseFinal:
-			effectivePhase = llm.FinalProviderPhase()
+		if assistant.Phase != nil {
+			switch *assistant.Phase {
+			case llm.MessagePhaseCommentary:
+				effectivePhase = llm.CommentaryProviderPhase()
+			case llm.MessagePhaseFinal:
+				effectivePhase = llm.FinalProviderPhase()
+			}
 		}
 	}
 	effectivePhasePresent := effectivePhase.Value() != nil
@@ -68,7 +77,7 @@ func (p *defaultPhaseProtocol) Apply(ctx context.Context, resp llm.Response, ass
 	missingAssistantPhase := enforcePhaseProtocol && effectivePhase.IsAbsent()
 	if missingAssistantPhase {
 		effectivePhase = llm.CommentaryProviderPhase()
-		assistant.Phase = llm.MessagePhaseCommentary
+		assistant.Phase = textutil.Value(llm.MessagePhaseCommentary)
 	}
 	if len(localToolCalls) > 0 {
 		assistant.ToolCalls = append([]llm.ToolCall(nil), localToolCalls...)
@@ -93,7 +102,9 @@ func (p *defaultPhaseProtocol) Apply(ctx context.Context, resp llm.Response, ass
 
 func shouldTreatMissingAssistantPhaseAsCommentary(resp llm.Response) bool {
 	for _, item := range resp.OutputItems {
-		if item.Type == llm.ResponseItemTypeMessage && item.Role == llm.RoleAssistant {
+		if item.Type == llm.ResponseItemTypeMessage &&
+			item.Role != nil &&
+			*item.Role == llm.RoleAssistant {
 			return true
 		}
 	}

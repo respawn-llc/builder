@@ -132,7 +132,11 @@ func TestSessionLifecycleResultResumeReleasesThenUsesSamePickerWithoutPlan(t *te
 		}},
 	}
 	planner := newSessionLaunchPlanner(server)
-	planner.pickSession = func(sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error) {
+	planner.pickSession = func(
+		sessionPageLoader,
+		string,
+		sessionPickerHeaderInfo,
+	) (sessionPickerResult, error) {
 		if releaseCalls != 1 {
 			t.Fatalf("picker opened before runtime release: releases=%d", releaseCalls)
 		}
@@ -263,7 +267,11 @@ func requireSessionDirectiveWireEqual(t *testing.T, got serverapi.SessionDirecti
 func TestSessionSelectionPickerCreateSendsCreateNewWithoutParent(t *testing.T) {
 	originalPicker := runSessionPickerFlow
 	defer func() { runSessionPickerFlow = originalPicker }()
-	runSessionPickerFlow = func(sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error) {
+	runSessionPickerFlow = func(
+		sessionPageLoader,
+		string,
+		sessionPickerHeaderInfo,
+	) (sessionPickerResult, error) {
 		return newSessionPickerCreateResult(), nil
 	}
 

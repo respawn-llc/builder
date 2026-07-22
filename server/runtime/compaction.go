@@ -12,6 +12,7 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -241,11 +242,11 @@ func (c *defaultContextCompactor) ShouldCompactBeforeUserMessage(ctx context.Con
 		}
 		return true, nil
 	}
-	promptEstimate := estimateItemsTokens(llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: text}}))
+	promptEstimate := estimateItemsTokens(llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(text)}}))
 	if estimatedCurrentTotal+promptEstimate < limit {
 		return false, nil
 	}
-	extra := llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: text}})
+	extra := llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(text)}})
 	req, err := e.buildRequestWithExtraItems(ctx, "", extra, true)
 	if err != nil {
 		return false, err
@@ -747,13 +748,20 @@ func lastVisibleUserMessageSinceLatestCompaction(items []llm.ResponseItem) strin
 	}
 	for i := len(items) - 1; i >= start; i-- {
 		item := items[i]
-		if item.Type != llm.ResponseItemTypeMessage || item.Role != llm.RoleUser {
+		if item.Type != llm.ResponseItemTypeMessage ||
+			item.Role == nil ||
+			*item.Role != llm.RoleUser {
 			continue
 		}
-		if item.MessageType == llm.MessageTypeCompactionSummary || strings.TrimSpace(item.Content) == "" {
+		if item.MessageType != nil &&
+			*item.MessageType == llm.MessageTypeCompactionSummary {
 			continue
 		}
-		return item.Content
+		content, present := textutil.OptionalTrimmed(item.Content)
+		if !present {
+			continue
+		}
+		return content
 	}
 	return ""
 }
@@ -810,10 +818,11 @@ func withCompactionSummaryLabel(items []llm.ResponseItem, label string) []llm.Re
 	}
 	out := llm.CloneResponseItems(items)
 	for idx := range out {
-		if out[idx].MessageType != llm.MessageTypeCompactionSummary {
+		if out[idx].MessageType == nil ||
+			*out[idx].MessageType != llm.MessageTypeCompactionSummary {
 			continue
 		}
-		out[idx].CompactContent = label
+		out[idx].CompactContent = textutil.Value(label)
 		return out
 	}
 	return out
