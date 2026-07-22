@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -20,8 +21,9 @@ type writeStdinInput struct {
 }
 
 const (
-	minimumOutputPollWaitMS = 15_000
-	shortOutputPollError    = "Avoid polling repeatedly for short intervals, prefer 3-15min polls depending on task. Pick a better interval and retry"
+	minimumOutputPollWaitMS      = 15_000
+	maximumWriteStdinYieldTimeMS = math.MaxInt64 / int64(time.Millisecond)
+	shortOutputPollError         = "Avoid polling repeatedly for short intervals, prefer 3-15min polls depending on task. Pick a better interval and retry"
 )
 
 type WriteStdinTool struct {
@@ -55,12 +57,14 @@ func (t *WriteStdinTool) Call(ctx context.Context, c tools.Call) (tools.Result, 
 	if in.SessionID <= 0 {
 		return tools.ErrorResultWith(c, "session_id is required", marshalNoHTMLEscape), nil
 	}
-	if in.Chars == "" && in.YieldTimeMS != nil && *in.YieldTimeMS < minimumOutputPollWaitMS {
-		return tools.ErrorResultWith(c, shortOutputPollError, marshalNoHTMLEscape), nil
-	}
 	yieldTime := defaultWriteYieldTime
 	if in.YieldTimeMS != nil {
-		yieldTime = time.Duration(*in.YieldTimeMS) * time.Millisecond
+		yieldTimeMS := int64(*in.YieldTimeMS)
+		if yieldTimeMS > maximumWriteStdinYieldTimeMS ||
+			(in.Chars == "" && yieldTimeMS < minimumOutputPollWaitMS) {
+			return tools.ErrorResultWith(c, shortOutputPollError, marshalNoHTMLEscape), nil
+		}
+		yieldTime = time.Duration(yieldTimeMS) * time.Millisecond
 	}
 	maxChars := t.outputLimit
 	if in.MaxOutputTokens != nil && *in.MaxOutputTokens > 0 {

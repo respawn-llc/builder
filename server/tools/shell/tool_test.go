@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -518,13 +519,27 @@ func TestWriteStdinRejectsShortTimedOutputPolls(t *testing.T) {
 		t.Fatalf("unexpected exec_command error: %s", string(start.Output))
 	}
 
-	for _, yieldTimeMS := range []int{14_999, 0, -1} {
-		rejected := callWriteStdin(t, pollTool, "short-poll-rejected", map[string]any{
+	for _, test := range []struct {
+		name        string
+		yieldTimeMS int
+		chars       string
+	}{
+		{name: "below minimum", yieldTimeMS: 14_999},
+		{name: "zero", yieldTimeMS: 0},
+		{name: "negative", yieldTimeMS: -1},
+		{name: "unrepresentable output poll", yieldTimeMS: math.MaxInt},
+		{name: "unrepresentable input", yieldTimeMS: math.MaxInt, chars: "x"},
+	} {
+		input := map[string]any{
 			"session_id":    1000,
-			"yield_time_ms": yieldTimeMS,
-		})
+			"yield_time_ms": test.yieldTimeMS,
+		}
+		if test.chars != "" {
+			input["chars"] = test.chars
+		}
+		rejected := callWriteStdin(t, pollTool, "short-poll-rejected", input)
 		if !rejected.IsError {
-			t.Fatalf("expected %dms timed output poll to fail, got %+v", yieldTimeMS, rejected)
+			t.Fatalf("expected %s request to fail, got %+v", test.name, rejected)
 		}
 		var envelope struct {
 			Error string `json:"error"`
