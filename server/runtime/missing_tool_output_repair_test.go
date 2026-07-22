@@ -95,6 +95,29 @@ func TestMissingToolOutputRepairLeavesUnrelated400Unrepaired(t *testing.T) {
 	}
 }
 
+func TestRepairMissingToolOutputsByAppendingIsIdempotent(t *testing.T) {
+	store := mustCreateTestSession(t)
+	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
+		Role:      llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)}},
+	}); err != nil {
+		t.Fatalf("append dangling tool call: %v", err)
+	}
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+
+	first, err := eng.repairMissingToolOutputsByAppending("step")
+	if err != nil {
+		t.Fatalf("first repair: %v", err)
+	}
+	second, err := eng.repairMissingToolOutputsByAppending("step")
+	if err != nil {
+		t.Fatalf("second repair: %v", err)
+	}
+	if first != 1 || second != 0 {
+		t.Fatalf("repair counts = first:%d second:%d, want one append then no-op", first, second)
+	}
+}
+
 func repairRequestHasToolCall(items []llm.ResponseItem, callID string) bool {
 	for _, item := range items {
 		if !isToolCallItem(item.Type) {
