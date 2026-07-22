@@ -67,6 +67,59 @@ func TestReplaceHistoryDoesNotMutateRuntimeStateWhenEventAppendFails(t *testing.
 	}
 }
 
+func TestCommittedCompactionHistoryReplacementInvalidatesUsageAcrossImmediateReopen(t *testing.T) {
+	observerErr := errors.New("history replacement metadata observer failure")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
+	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+	)); err != nil {
+		t.Fatalf("persist seed message: %v", err)
+	}
+	previousUsage := llm.Usage{
+		InputTokens:       190_000,
+		WindowTokens:      200_000,
+		CachedInputTokens: textutil.Value(190_000),
+	}
+	if receipt, err := engine.recordLastUsage(previousUsage); err != nil || !receipt.Committed {
+		t.Fatalf("persist previous usage: receipt=%+v error=%v", receipt, err)
+	}
+	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		return snapshot.Meta.LastSequence >= 2 && snapshot.Meta.UsageState == nil
+	}, observerErr)
+
+	receipt, err := newCompactionPersistence(engine).replaceHistory(
+		"compact",
+		"local",
+		compactionModeManual,
+		llm.ItemsFromMessages([]llm.Message{{
+			Role:        llm.RoleDeveloper,
+			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+			Content:     textutil.Value("summary"),
+		}}),
+	)
+	if !receipt.Committed || !errors.Is(err, observerErr) {
+		t.Fatalf("committed replacement outcome: receipt=%+v error=%v", receipt, err)
+	}
+
+	reopenedStore := mustOpenTestSession(t, store.Dir())
+	if usage := reopenedStore.Meta().UsageState; usage != nil {
+		t.Fatalf("immediate reopen restored pre-compaction usage: %+v", usage)
+	}
+	reopened := mustNewExecTestEngine(t, reopenedStore, &fakeClient{}, Config{Model: "gpt-5"})
+	usage := reopened.ContextUsage()
+	if usage.UsedTokens <= 0 || usage.UsedTokens >= previousUsage.InputTokens {
+		t.Fatalf("immediately reopened context usage = %+v, want compacted active-history estimate", usage)
+	}
+	if usage.HasCacheHitPercentage {
+		t.Fatalf("immediate reopen restored stale cache counters: %+v", usage)
+	}
+}
+
 func TestCommittedHistoryReplacementPreventsStaleUsageFromLaterMetadataPersistence(t *testing.T) {
 	replacementErr := errors.New("history replacement observer failure")
 	usageErr := errors.New("compacted usage observer failure")
