@@ -98,6 +98,101 @@ func TestCompletedResponseExternalWorkflowCompletionDiscardsActiveStreamWithoutP
 	}
 }
 
+func TestCompletedResponseFinalizationUsesActiveSegmentCoordinatesAfterCompaction(t *testing.T) {
+	first := scriptedllm.FinalAnswer("first")
+	first.StreamDeltas = []llm.AssistantDelta{{Text: "first", Phase: llm.MessagePhaseFinal}}
+	second := scriptedllm.FinalAnswer("second")
+	second.StreamDeltas = []llm.AssistantDelta{{Text: "second", Phase: llm.MessagePhaseFinal}}
+
+	var events []Event
+	engine := mustNewExecTestEngine(
+		t,
+		mustCreateTestSession(t),
+		scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{first, second}}),
+		Config{
+			Model:   "gpt-5",
+			OnEvent: func(event Event) { events = append(events, event) },
+		},
+	)
+
+	if _, err := engine.SubmitUserMessage(context.Background(), "first input"); err != nil {
+		t.Fatalf("submit pre-compaction message: %v", err)
+	}
+	if err := engine.steer(
+		"compaction",
+		steerHistoryReplacementIntent("local", compactionModeAuto, "", 1, "", "", nil),
+	); err != nil {
+		t.Fatalf("persist history replacement: %v", err)
+	}
+	activeSegmentStart := engine.CommittedTranscriptEntryCount()
+	events = nil
+
+	if _, err := engine.SubmitUserMessage(context.Background(), "second input"); err != nil {
+		t.Fatalf("submit post-compaction message: %v", err)
+	}
+
+	var delta, finalized *Event
+	for index := range events {
+		event := &events[index]
+		switch event.Kind {
+		case EventAssistantDelta:
+			if delta != nil {
+				t.Fatalf("multiple post-compaction assistant deltas: %+v", events)
+			}
+			delta = event
+		case EventAssistantMessage:
+			if finalized != nil {
+				t.Fatalf("multiple post-compaction finalized assistant messages: %+v", events)
+			}
+			finalized = event
+		}
+	}
+	if delta == nil || finalized == nil ||
+		delta.AssistantTranscriptStreamID == nil ||
+		finalized.AssistantTranscriptStreamID == nil ||
+		delta.AssistantStreamMetadata == nil ||
+		!finalized.CommittedEntryStartSet {
+		t.Fatalf("post-compaction stream finalization events = %+v", events)
+	}
+	if delta.AssistantStreamMetadata.BaseCommittedEntryCount != finalized.CommittedEntryStart ||
+		finalized.CommittedEntryStart < activeSegmentStart ||
+		*delta.AssistantTranscriptStreamID != *finalized.AssistantTranscriptStreamID {
+		t.Fatalf(
+			"post-compaction stream coordinates = delta:%+v finalized:%+v active_segment_start=%d",
+			delta,
+			finalized,
+			activeSegmentStart,
+		)
+	}
+
+	var hydratedAssistant *TranscriptCommittedRowFact
+	if err := engine.WithTranscriptHydrationSnapshot(func(snapshot TranscriptHydrationSnapshot) error {
+		for index := range snapshot.CommittedRows {
+			row := &snapshot.CommittedRows[index]
+			if row.Kind != TranscriptCommittedRowFactAssistant {
+				continue
+			}
+			if hydratedAssistant != nil {
+				t.Fatalf("multiple hydrated assistant rows after compaction: %+v", snapshot.CommittedRows)
+			}
+			hydratedAssistant = row
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("hydrate active segment: %v", err)
+	}
+	if hydratedAssistant == nil ||
+		hydratedAssistant.Assistant == nil ||
+		hydratedAssistant.Assistant.StreamID == nil ||
+		*hydratedAssistant.Assistant.StreamID != *finalized.AssistantTranscriptStreamID {
+		t.Fatalf(
+			"hydrated post-compaction assistant = %+v, finalized stream=%+v",
+			hydratedAssistant,
+			finalized.AssistantTranscriptStreamID,
+		)
+	}
+}
+
 type externallyCompletedWorkflowController struct {
 	completed atomic.Bool
 }
