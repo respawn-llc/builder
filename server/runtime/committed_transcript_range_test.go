@@ -137,17 +137,7 @@ func TestFinalAnswerToolMaterializationPublishesToolCallBeforeLocalEntry(t *test
 		t.Fatalf("append local entry: %v", err)
 	}
 
-	committed := make([]Event, 0, 3)
-	for _, event := range events {
-		switch event.Kind {
-		case EventAssistantMessage, EventToolCallCompleted, EventLocalEntryAdded:
-		default:
-			continue
-		}
-		if event.CommittedTranscriptChanged && len(TranscriptEntriesFromEvent(event)) > 0 {
-			committed = append(committed, event)
-		}
-	}
+	committed := durableTranscriptProjectionEvents(events)
 	if len(committed) < 3 ||
 		committed[0].Kind != EventAssistantMessage ||
 		committed[len(committed)-1].Kind != EventLocalEntryAdded {
@@ -159,16 +149,122 @@ func TestFinalAnswerToolMaterializationPublishesToolCallBeforeLocalEntry(t *test
 		toolRows[0].ToolCallID != call.ID {
 		t.Fatalf("materialized tool-call rows = %+v", toolRows)
 	}
+	assertDurableTranscriptProjectionRangesContiguous(t, committed)
+}
+
+func TestStepLoopPublishesCommentaryToolEnvelopeBeforeReasoningAndToolResults(t *testing.T) {
+	toolCalls := []llm.ToolCall{
+		{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
+		{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
+		{ID: "call-3", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{}`)},
+	}
+	client := &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("commentary"),
+				Phase:   textutil.Value(llm.MessagePhaseCommentary),
+			},
+			ToolCalls: toolCalls,
+			Reasoning: []llm.ReasoningEntry{{
+				Role: textutil.Value(string(transcript.EntryRoleReasoning)),
+				Text: "reasoning",
+			}},
+			Usage: llm.Usage{WindowTokens: 200_000},
+		},
+		{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("final"),
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+			},
+			Usage: llm.Usage{WindowTokens: 200_000},
+		},
+	}}
+	var events []Event
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolExecCommand,
+			Handler: fakeTool{name: toolspec.ToolExecCommand},
+		}),
+		Config{
+			Model:   "gpt-5",
+			OnEvent: func(event Event) { events = append(events, event) },
+		},
+	)
+	if _, err := engine.runStepLoopWithOptions(context.Background(), "step", "off", nil, false); err != nil {
+		t.Fatalf("run step loop: %v", err)
+	}
+
+	committed := durableTranscriptProjectionEvents(events)
+	if len(committed) < len(toolCalls)+3 || committed[0].Kind != EventAssistantMessage {
+		t.Fatalf("committed step-loop events = %+v", committed)
+	}
+	envelope := TranscriptEntriesFromEvent(committed[0])
+	if len(envelope) != len(toolCalls)+1 || envelope[0].Role != "assistant" {
+		t.Fatalf("commentary tool envelope = %+v", envelope)
+	}
+	for index, call := range toolCalls {
+		entry := envelope[index+1]
+		if entry.Role != "tool_call" || entry.ToolCallID != call.ID {
+			t.Fatalf("commentary tool envelope entry[%d] = %+v", index+1, entry)
+		}
+	}
+
+	reasoningIndex, firstToolResultIndex := -1, -1
 	for index, event := range committed {
+		switch event.Kind {
+		case EventLocalEntryAdded:
+			if event.LocalEntry != nil && event.LocalEntry.Role == string(transcript.EntryRoleReasoning) {
+				reasoningIndex = index
+			}
+		case EventToolCallCompleted:
+			if firstToolResultIndex < 0 {
+				firstToolResultIndex = index
+			}
+		}
+	}
+	if reasoningIndex != 1 || firstToolResultIndex <= reasoningIndex {
+		t.Fatalf(
+			"commentary/tool/reasoning ordering = reasoning_index:%d first_tool_result_index:%d events:%+v",
+			reasoningIndex,
+			firstToolResultIndex,
+			committed,
+		)
+	}
+	assertDurableTranscriptProjectionRangesContiguous(t, committed)
+}
+
+func durableTranscriptProjectionEvents(events []Event) []Event {
+	committed := make([]Event, 0, len(events))
+	for _, event := range events {
+		switch event.Kind {
+		case EventAssistantMessage, EventToolCallCompleted, EventLocalEntryAdded:
+		default:
+			continue
+		}
+		if event.CommittedTranscriptChanged && len(TranscriptEntriesFromEvent(event)) > 0 {
+			committed = append(committed, event)
+		}
+	}
+	return committed
+}
+
+func assertDurableTranscriptProjectionRangesContiguous(t *testing.T, events []Event) {
+	t.Helper()
+	for index, event := range events {
 		if !event.CommittedEntryStartSet ||
 			event.CommittedEntryCount < event.CommittedEntryStart {
-			t.Fatalf("committed materialization event[%d] has invalid range: %+v", index, event)
+			t.Fatalf("durable transcript event[%d] has invalid range: %+v", index, event)
 		}
-		if index > 0 && event.CommittedEntryStart != committed[index-1].CommittedEntryCount {
+		if index > 0 && event.CommittedEntryStart != events[index-1].CommittedEntryCount {
 			t.Fatalf(
-				"committed materialization range discontinuity at %d: previous=%+v current=%+v",
+				"durable transcript range discontinuity at %d: previous=%+v current=%+v",
 				index,
-				committed[index-1],
+				events[index-1],
 				event,
 			)
 		}
