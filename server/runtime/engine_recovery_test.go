@@ -212,6 +212,75 @@ func TestReopenedSessionRestoresUsageCheckpointDeltaAccounting(t *testing.T) {
 	}
 }
 
+func TestReopenedSessionRestoresLastAssistantFinalAnswerAcrossCompaction(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	if err := engine.steer("initial", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{
+			{Role: llm.RoleUser, Content: textutil.Value("input")},
+			{
+				Role:    llm.RoleAssistant,
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+				Content: textutil.Value("final"),
+			},
+		},
+	)); err != nil {
+		t.Fatalf("persist typed final answer: %v", err)
+	}
+	if engine.LastCommittedAssistantFinalAnswer() == "" {
+		t.Fatal("typed final answer did not establish the live final-answer fact")
+	}
+
+	receipt, err := newCompactionPersistence(engine).replaceHistory(
+		"compaction",
+		"local",
+		compactionModeManual,
+		llm.ItemsFromMessages([]llm.Message{{
+			Role:        llm.RoleDeveloper,
+			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+			Content:     textutil.Value("summary"),
+		}}),
+	)
+	if err != nil || !receipt.Committed {
+		t.Fatalf("persist compaction replacement: receipt=%+v error=%v", receipt, err)
+	}
+
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(4)
+	if err != nil {
+		t.Fatalf("read bounded compaction records: %v", err)
+	}
+	replacements := 0
+	carriedFinalAnswer := false
+	for _, record := range window.Records {
+		replacement, ok := mustSessionEventPayload(record).(session.HistoryReplacementRecord)
+		if !ok {
+			continue
+		}
+		replacements++
+		carriedFinalAnswer = replacement.LastCommittedAssistantFinalAnswer != nil &&
+			*replacement.LastCommittedAssistantFinalAnswer != ""
+	}
+	if replacements != 1 || !carriedFinalAnswer {
+		t.Fatalf(
+			"typed compaction replacements=%d carried-final-answer=%t, want one and true",
+			replacements,
+			carriedFinalAnswer,
+		)
+	}
+	if engine.LastCommittedAssistantFinalAnswer() == "" {
+		t.Fatal("committed compaction cleared the live final-answer fact")
+	}
+
+	reopened := mustOpenTestSession(t, store.Dir())
+	restored := mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	if restored.LastCommittedAssistantFinalAnswer() == "" {
+		t.Fatal("reopened compaction lost the carried final-answer fact")
+	}
+}
+
 func TestExclusiveStepLifecycleClearsPendingRecoveryBeforeSchedulingBackground(t *testing.T) {
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
