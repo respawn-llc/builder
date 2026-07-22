@@ -239,6 +239,81 @@ func TestExclusiveStepLifecycleDoesNotClearSuccessorPendingRecovery(t *testing.T
 	}
 }
 
+func TestExclusiveStepLifecyclePublishesTerminalActivityBeforeFinishPersistenceFailures(t *testing.T) {
+	finishErr := errors.New("finish persistence failure")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(
+		t,
+		t.TempDir(),
+		session.WithPersistenceObserver(gate),
+	)
+	sink := &finishFailureLifecycleSink{gate: gate, failure: finishErr}
+	var events []Event
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model:         "gpt-5",
+		StepLifecycle: sink,
+		OnEvent: func(event Event) {
+			events = append(events, event)
+		},
+	})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
+
+	err := lifecycle.Run(
+		context.Background(),
+		exclusiveStepOptions{ActiveKind: ActiveKindUserTurn, EmitRunState: true},
+		func(_ context.Context, stepID string) error {
+			return engine.markProviderVisibleModelRecovery(stepID)
+		},
+	)
+	if !errors.Is(err, errPendingModelRecoveryClear) || !errors.Is(err, finishErr) {
+		t.Fatalf("exclusive step finish error = %v", err)
+	}
+	if sink.ended == nil ||
+		sink.ended.Transition != StepLifecycleTransitionEnded ||
+		sink.ended.Status != RunStatusCompleted ||
+		sink.ended.ActiveKind != ActiveKindUserTurn {
+		t.Fatalf("terminal lifecycle publication = %+v", sink.ended)
+	}
+
+	var running, finished *RunState
+	clearFailurePublished := false
+	for index := range events {
+		event := &events[index]
+		if event.Kind == EventInFlightClearFailed && event.StepID == sink.ended.StepID {
+			clearFailurePublished = true
+		}
+		if event.Kind != EventRunStateChanged || event.RunState == nil {
+			continue
+		}
+		switch event.RunState.Lifecycle.Phase {
+		case RunLifecycleRunning:
+			running = event.RunState
+		case RunLifecycleFinished:
+			finished = event.RunState
+		}
+	}
+	if !clearFailurePublished {
+		t.Fatalf("events omitted typed pending-recovery clear failure: %+v", events)
+	}
+	if running == nil ||
+		running.Status != RunStatusRunning ||
+		running.RunID != sink.ended.RunID ||
+		finished == nil ||
+		finished.Status != RunStatusCompleted ||
+		finished.RunID != sink.ended.RunID ||
+		finished.FinishedAt.IsZero() {
+		t.Fatalf("terminal run activity = running:%+v finished:%+v", running, finished)
+	}
+	if lifecycle.IsBusy() || lifecycle.Snapshot() != nil || engine.HasActiveLiveRunGroup() {
+		t.Fatalf(
+			"finish persistence failure retained live activity: lifecycle_busy=%t snapshot=%+v live_run=%t",
+			lifecycle.IsBusy(),
+			lifecycle.Snapshot(),
+			engine.HasActiveLiveRunGroup(),
+		)
+	}
+}
+
 func TestReopenCarriesInterruptedAskQuestionToolAttemptIntoNextModelRequest(t *testing.T) {
 	testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t, llm.ToolCall{
 		ID:    "interrupted-question-call",
@@ -261,6 +336,25 @@ func (s *recoverySchedulingObserver) ScheduleIfIdle() {
 	if s != nil && s.onSchedule != nil {
 		s.onSchedule()
 	}
+}
+
+type finishFailureLifecycleSink struct {
+	gate    *sessiontest.PersistenceGate
+	failure error
+	ended   *StepLifecycleSnapshot
+}
+
+func (s *finishFailureLifecycleSink) StepBegan(context.Context, StepLifecycleSnapshot) error {
+	return nil
+}
+
+func (s *finishFailureLifecycleSink) StepEnded(
+	_ context.Context,
+	snapshot StepLifecycleSnapshot,
+) error {
+	s.ended = &snapshot
+	s.gate.FailNext(s.failure)
+	return nil
 }
 
 func TestReopenCarriesInterruptedShellToolAttemptIntoNextModelRequest(t *testing.T) {
