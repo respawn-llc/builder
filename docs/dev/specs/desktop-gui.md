@@ -164,6 +164,7 @@
 - While a label filter is active, each board column count shows the number of tasks in that column that match the active label expression.
 - Deleting a selected label removes it from persisted filter state. Deleting the final named selection removes the label restriction; deleting an ordinary label does not change an active `No labels` filter.
 - One reusable label chooser/manager serves board filtering, task assignment, and task creation. There is no standalone Project label-management page in the initial release.
+- Label names accept Unicode letters and numbers plus spaces and `: & * % $ # @ ! ? . , / \ + | - _ ~ '`.
 - The popup has a pinned search/create field using case-insensitive substring matching. Existing results retain case-insensitive alphabetical order. When no exact case-insensitive match exists, it exposes an explicit `Create “…”` row; creation selects the new label immediately for the invoking context.
 - At the 100-label Project limit, search and selection remain available, creation is disabled with an explanation, and deleting a label restores creation immediately.
 - The popup sizes naturally for fewer labels. Its scrollable result area shows at most 10 rows or fewer when constrained by available window space; search and context controls remain pinned.
