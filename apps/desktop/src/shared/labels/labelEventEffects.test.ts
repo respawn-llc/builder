@@ -151,10 +151,14 @@ describe("Project label event effects", () => {
     });
     const assignmentKey = queryKeys.taskLabels("task-1");
     const boardKey = queryKeys.board("project-1", "workflow-1", { kind: "none" });
-    const taskListKey = [...queryKeys.allTaskLists, "project-1"];
+    const unrelatedBoardKey = queryKeys.board("project-2", "workflow-1", { kind: "none" });
+    const taskListKey = queryKeys.projectTaskListsRoot("project-1");
+    const unrelatedTaskListKey = queryKeys.projectTaskListsRoot("project-2");
     queryClient.setQueryData(assignmentKey, { taskID: "task-1", labelIDs: [alphaID] });
     queryClient.setQueryData(boardKey, { projectID: "project-1" });
+    queryClient.setQueryData(unrelatedBoardKey, { projectID: "project-2" });
     queryClient.setQueryData(taskListKey, { tasks: [] });
+    queryClient.setQueryData(unrelatedTaskListKey, { tasks: [] });
 
     await effects.consumeProjectEvent(taskEvent("labels_changed", "task-1"));
 
@@ -167,6 +171,12 @@ describe("Project label event effects", () => {
     expect(
       queryClient.getQueryCache().find({ queryKey: taskListKey, exact: true })?.state.isInvalidated,
     ).toBe(true);
+    expect(
+      queryClient.getQueryCache().find({ queryKey: unrelatedBoardKey, exact: true })?.state.isInvalidated,
+    ).toBe(false);
+    expect(
+      queryClient.getQueryCache().find({ queryKey: unrelatedTaskListKey, exact: true })?.state.isInvalidated,
+    ).toBe(false);
     expect(membershipEffects).toEqual([
       {
         kind: "task.labels_changed",

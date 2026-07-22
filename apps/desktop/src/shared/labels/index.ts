@@ -23,6 +23,7 @@ export {
   useProjectCatalogAuthority,
   useProjectLabelCatalog,
   useProjectLabelCatalogMutations,
+  useProjectLabelEffects,
   useProjectLabelFilter,
 } from "./projectLabelHooks";
 export {

@@ -247,17 +247,19 @@ func prepareTaskLabelUpdate(req TaskLabelUpdateRequest) ([]label.ID, []label.ID,
 		return nil, nil, errors.New("task id is required")
 	}
 	if len(req.AddLabelIDs) > label.MaxProjectLabels {
+		limit := label.MaxProjectLabels
 		return nil, nil, TaskLabelMutationError{
 			Reason: TaskLabelMutationTooManyAdd,
 			Field:  "add_label_ids",
-			Limit:  label.MaxProjectLabels,
+			Limit:  &limit,
 		}
 	}
 	if len(req.RemoveLabelIDs) > label.MaxProjectLabels {
+		limit := label.MaxProjectLabels
 		return nil, nil, TaskLabelMutationError{
 			Reason: TaskLabelMutationTooManyRemove,
 			Field:  "remove_label_ids",
-			Limit:  label.MaxProjectLabels,
+			Limit:  &limit,
 		}
 	}
 	addIDs, addSet, err := parseUniqueLabelIDs(
@@ -278,9 +280,10 @@ func prepareTaskLabelUpdate(req TaskLabelUpdateRequest) ([]label.ID, []label.ID,
 	}
 	for _, id := range removeIDs {
 		if addSet[id.String()] {
+			labelID := id.String()
 			return nil, nil, TaskLabelMutationError{
 				Reason:  TaskLabelMutationOverlap,
-				LabelID: id.String(),
+				LabelID: &labelID,
 			}
 		}
 	}
@@ -297,19 +300,21 @@ func parseUniqueLabelIDs(
 	for _, raw := range rawIDs {
 		id, err := label.ParseID(raw)
 		if err != nil {
+			labelID := raw
 			return nil, nil, TaskLabelMutationError{
 				Reason:  TaskLabelMutationInvalidID,
 				Field:   field,
-				LabelID: raw,
+				LabelID: &labelID,
 				Cause:   err,
 			}
 		}
 		canonical := id.String()
 		if seen[canonical] {
+			labelID := canonical
 			return nil, nil, TaskLabelMutationError{
 				Reason:  duplicateReason,
 				Field:   field,
-				LabelID: canonical,
+				LabelID: &labelID,
 			}
 		}
 		seen[canonical] = true

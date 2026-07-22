@@ -18,6 +18,61 @@ const priorityID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
 const betaID = "942495c2-5958-4959-8445-94046ad74fbd";
 
 describe("task label assignment data", () => {
+  it("ignores an initial assignment read that resolves after a successful mutation", async () => {
+    const initialRead = deferred<unknown>();
+    const services = createTestServices([
+      {
+        method: "workflow.task.labels.get",
+        handler: async () => initialRead.promise,
+      },
+      {
+        method: "workflow.task.labels.update",
+        result: {
+          assignment: {
+            task_id: "task-1",
+            label_ids: [priorityID],
+          },
+        },
+      },
+    ]);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const { result } = renderHook(() => useTaskLabelAssignment(), {
+      wrapper: assignmentWrapper(services, queryClient, "task-1"),
+    });
+    await waitFor(() => {
+      expect(result.current.controller).not.toBeNull();
+      expect(
+        services.transport.calls.filter((call) => call.method === "workflow.task.labels.get"),
+      ).toHaveLength(1);
+    });
+
+    act(() => {
+      result.current.controller?.setDesired(priorityID, true);
+    });
+    await waitFor(() => {
+      expect(result.current.snapshot?.authoritativeLabelIDs).toEqual([priorityID]);
+    });
+
+    initialRead.resolve({
+      assignment: {
+        task_id: "task-1",
+        label_ids: [],
+      },
+    });
+    await waitFor(() => {
+      expect(result.current.assignment.isSuccess).toBe(true);
+    });
+
+    expect(result.current.snapshot?.authoritativeLabelIDs).toEqual([priorityID]);
+    expect(result.current.snapshot?.visibleLabelIDs).toEqual([priorityID]);
+    expect(queryClient.getQueryData(queryKeys.taskLabels("task-1"))).toEqual({
+      taskID: "task-1",
+      labelIDs: [priorityID],
+    });
+  });
+
   it("loads the lightweight assignment and patches existing projections without a detail reload", async () => {
     const updateResponse = deferred<unknown>();
     const services = createTestServices([
@@ -56,8 +111,12 @@ describe("task label assignment data", () => {
       }),
       { pages: [], pageParams: [] },
     );
-    const taskListKey = [...queryKeys.allTaskLists, "project-1"];
+    const taskListKey = queryKeys.projectTaskListsRoot("project-1");
+    const unrelatedBoardKey = queryKeys.board("project-2", "workflow-1", { kind: "none" });
+    const unrelatedTaskListKey = queryKeys.projectTaskListsRoot("project-2");
     queryClient.setQueryData(taskListKey, { tasks: [] });
+    queryClient.setQueryData(unrelatedBoardKey, { projectID: "project-2" });
+    queryClient.setQueryData(unrelatedTaskListKey, { tasks: [] });
     const { result } = renderHook(() => useTaskLabelAssignment(), {
       wrapper: assignmentWrapper(services, queryClient, "task-1"),
     });
@@ -118,6 +177,18 @@ describe("task label assignment data", () => {
         exact: true,
       })?.state.isInvalidated,
     ).toBe(true);
+    expect(
+      queryClient.getQueryCache().find({
+        queryKey: unrelatedBoardKey,
+        exact: true,
+      })?.state.isInvalidated,
+    ).toBe(false);
+    expect(
+      queryClient.getQueryCache().find({
+        queryKey: unrelatedTaskListKey,
+        exact: true,
+      })?.state.isInvalidated,
+    ).toBe(false);
   });
 
   it("shares one task-local controller and mutation lane across consumers", async () => {
@@ -152,6 +223,7 @@ describe("task label assignment data", () => {
               catalog: projectLabelCatalog(),
               key: "first",
               taskID: "task-1",
+              workflowID: "workflow-1",
               children: createElement(AssignmentControllerCapture, {
                 onController: (controller) => {
                   controllers[0] = controller;
@@ -162,6 +234,7 @@ describe("task label assignment data", () => {
               catalog: projectLabelCatalog(),
               key: "second",
               taskID: "task-1",
+              workflowID: "workflow-1",
               children: createElement(AssignmentControllerCapture, {
                 onController: (controller) => {
                   controllers[1] = controller;
@@ -407,6 +480,7 @@ function assignmentWrapper(
         children: createElement(TaskLabelAssignmentProvider, {
           catalog: projectLabelCatalog(),
           taskID,
+          workflowID: "workflow-1",
           children,
         }),
       }),

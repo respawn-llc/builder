@@ -169,10 +169,11 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskReco
 		workflowID = &value
 	}
 	if len(req.LabelIDs) > label.MaxProjectLabels {
+		limit := label.MaxProjectLabels
 		return TaskRecord{}, TaskLabelMutationError{
 			Reason: TaskLabelMutationTooManyAdd,
 			Field:  "label_ids",
-			Limit:  label.MaxProjectLabels,
+			Limit:  &limit,
 		}
 	}
 	labelIDs, _, err := parseUniqueLabelIDs(

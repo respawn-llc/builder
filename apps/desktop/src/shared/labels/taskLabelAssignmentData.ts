@@ -17,9 +17,19 @@ export type TaskLabelAssignmentData = Readonly<{
 }>;
 
 export function useManagedTaskLabelAssignment(
-  taskID: string,
-  availableLabelIDs: readonly string[],
-  enabled = true,
+  {
+    availableLabelIDs,
+    enabled = true,
+    projectID,
+    taskID,
+    workflowID,
+  }: Readonly<{
+    availableLabelIDs: readonly string[];
+    enabled?: boolean | undefined;
+    projectID: string;
+    taskID: string;
+    workflowID: string;
+  }>,
 ): TaskLabelAssignmentData {
   const { api } = useAppServices();
   const queryClient = useQueryClient();
@@ -42,9 +52,7 @@ export function useManagedTaskLabelAssignment(
       if (controller === null) {
         throw new Error(`Task label assignment controller is unavailable for Task ${taskID}.`);
       }
-      const assignment = await controller.readAuthoritative();
-      controller.replaceAuthoritative(assignment);
-      return assignment;
+      return controller.readAuthoritative();
     },
     enabled: enabled && taskID.length > 0 && controller !== null && !controller.getSnapshot().closed,
     retry: false,
@@ -58,14 +66,16 @@ export function useManagedTaskLabelAssignment(
     const lease = registry.acquire({
       availableLabelIDs,
       initialAssignment: cachedAssignment ?? null,
+      projectID,
       refetch,
       taskID,
       update,
+      workflowID,
     });
     return () => {
       lease.release();
     };
-  }, [availableLabelIDs, enabled, queryClient, refetch, registry, taskID, update]);
+  }, [availableLabelIDs, enabled, projectID, queryClient, refetch, registry, taskID, update, workflowID]);
 
   useEffect(() => {
     if (enabled) {

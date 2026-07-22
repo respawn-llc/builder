@@ -41,7 +41,7 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	if l == nil {
 		return serverapi.WorkflowTaskListResponse{}, errors.New("task list is required")
 	}
-	if err := req.Validate(); err != nil {
+	if err := req.ValidateRPC(); err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
 	}
 	pageToken, hasPageToken, err := parseWorkflowTaskListPageToken(req.PageToken)

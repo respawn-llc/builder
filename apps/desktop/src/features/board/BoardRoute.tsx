@@ -65,6 +65,7 @@ export function BoardRoute({ projectId, workflowId, selectedTaskId }: BoardRoute
       onBackgroundError={reportBoardLoadError}
       onMembershipRefresh={async (effect) => membershipRefreshRef.current(effect)}
       projectID={projectId}
+      subscribeToProject={false}
     >
       <BoardRouteWithLabels
         membershipRefreshRef={membershipRefreshRef}
@@ -89,11 +90,6 @@ function BoardRouteWithLabels({
     onBackgroundError(error: unknown): void;
   }>) {
   const filter = useProjectLabelFilter();
-  useEffect(() => {
-    if (filter.persistence.status === "error") {
-      onBackgroundError(filter.persistence.error);
-    }
-  }, [filter.persistence, onBackgroundError]);
   return (
     <BoardFilterGenerationProvider
       desiredFilter={filter.state.filter}

@@ -15,6 +15,7 @@ import (
 	"golang.org/x/net/websocket"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -306,8 +307,90 @@ func TestGatewayWorkflowProjectLabelsRoundTrip(t *testing.T) {
 	decoded, ok := serverapi.DecodeWorkflowLabelError(duplicate.Data, duplicate.Message).(*serverapi.WorkflowLabelError)
 	if !ok ||
 		decoded.Reason != serverapi.WorkflowLabelErrorReasonNameConflict ||
-		decoded.ProjectID != appCore.ProjectID() {
+		decoded.ProjectID == nil ||
+		*decoded.ProjectID != appCore.ProjectID() {
 		t.Fatalf("decoded duplicate label error = %+v", decoded)
+	}
+
+	invalidRename := callGatewayExpectError(t, conn, "invalid-project-label-rename", protocol.MethodWorkflowProjectLabelRename, serverapi.WorkflowProjectLabelRenameRequest{
+		ProjectID: appCore.ProjectID(),
+		LabelID:   created.Label.ID,
+		Name:      " ",
+	})
+	assertWorkflowLabelGatewayError(t, invalidRename, serverapi.WorkflowLabelErrorReasonInvalidName, "name")
+
+	invalidDelete := callGatewayExpectError(t, conn, "invalid-project-label-delete", protocol.MethodWorkflowProjectLabelDelete, serverapi.WorkflowProjectLabelDeleteRequest{
+		ProjectID: appCore.ProjectID(),
+		LabelID:   "not-a-label-id",
+	})
+	assertWorkflowLabelGatewayError(t, invalidDelete, serverapi.WorkflowLabelErrorReasonInvalidMutation, "label_id")
+}
+
+func TestDecodeAndHandleMapsMalformedWorkflowLabelFilters(t *testing.T) {
+	projectID := "project-1"
+	requests := []struct {
+		name     string
+		response protocol.Response
+	}{
+		{
+			name: "board",
+			response: decodeAndHandle[serverapi.WorkflowBoardRequest, struct{}](
+				protocol.Request{ID: "invalid-board-filter", Params: mustJSON(t, serverapi.WorkflowBoardRequest{ProjectID: projectID})},
+				func(serverapi.WorkflowBoardRequest) (struct{}, error) {
+					t.Fatal("invalid board filter reached handler")
+					return struct{}{}, nil
+				},
+			),
+		},
+		{
+			name: "board cards",
+			response: decodeAndHandle[serverapi.WorkflowBoardNodeCardsListRequest, struct{}](
+				protocol.Request{ID: "invalid-board-card-filter", Params: mustJSON(t, serverapi.WorkflowBoardNodeCardsListRequest{
+					ProjectID:  projectID,
+					WorkflowID: "workflow-1",
+					NodeID:     "node-1",
+				})},
+				func(serverapi.WorkflowBoardNodeCardsListRequest) (struct{}, error) {
+					t.Fatal("invalid board-card filter reached handler")
+					return struct{}{}, nil
+				},
+			),
+		},
+		{
+			name: "task list",
+			response: decodeAndHandle[serverapi.WorkflowTaskListRequest, struct{}](
+				protocol.Request{ID: "invalid-task-list-filter", Params: mustJSON(t, serverapi.WorkflowTaskListRequest{
+					ProjectID: &projectID,
+					PageSize:  25,
+				})},
+				func(serverapi.WorkflowTaskListRequest) (struct{}, error) {
+					t.Fatal("invalid task-list filter reached handler")
+					return struct{}{}, nil
+				},
+			),
+		},
+	}
+	for _, tt := range requests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.response.Error == nil {
+				t.Fatal("malformed label filter returned success")
+			}
+			assertWorkflowLabelGatewayError(t, tt.response.Error, serverapi.WorkflowLabelErrorReasonInvalidFilter, "label_filter.kind")
+		})
+	}
+}
+
+func assertWorkflowLabelGatewayError(t *testing.T, response *protocol.ResponseError, reason serverapi.WorkflowLabelErrorReason, field string) {
+	t.Helper()
+	if response == nil {
+		t.Fatal("workflow label error response is missing")
+	}
+	if response.Code != protocol.ErrCodeWorkflowLabel {
+		t.Fatalf("workflow label error = %+v, want code %d", response, protocol.ErrCodeWorkflowLabel)
+	}
+	decoded, ok := serverapi.DecodeWorkflowLabelError(response.Data, response.Message).(*serverapi.WorkflowLabelError)
+	if !ok || decoded.Reason != reason || decoded.Field == nil || *decoded.Field != field {
+		t.Fatalf("decoded workflow label error = %+v, want reason %q field %q", decoded, reason, field)
 	}
 }
 
@@ -381,9 +464,10 @@ func TestDecodeAndHandlePreservesWorkflowTaskCreateConflictError(t *testing.T) {
 }
 
 func TestDecodeAndHandlePreservesWorkflowLabelError(t *testing.T) {
+	projectID := "project-1"
 	source := &serverapi.WorkflowLabelError{
 		Reason:    serverapi.WorkflowLabelErrorReasonNameConflict,
-		ProjectID: "project-1",
+		ProjectID: &projectID,
 	}
 	response := decodeAndHandle[serverapi.WorkflowProjectLabelCreateRequest, struct{}](
 		protocol.Request{ID: "label-conflict", Params: mustJSON(t, serverapi.WorkflowProjectLabelCreateRequest{
@@ -398,7 +482,7 @@ func TestDecodeAndHandlePreservesWorkflowLabelError(t *testing.T) {
 		t.Fatalf("response error = %+v, want workflow label code", response.Error)
 	}
 	decoded, ok := serverapi.DecodeWorkflowLabelError(response.Error.Data, response.Error.Message).(*serverapi.WorkflowLabelError)
-	if !ok || decoded.Reason != source.Reason || decoded.ProjectID != source.ProjectID {
+	if !ok || !reflect.DeepEqual(decoded, source) {
 		t.Fatalf("decoded label error = %+v, want %+v", decoded, source)
 	}
 }
@@ -424,7 +508,8 @@ func TestDecodeAndHandleMapsMalformedTaskLabelMutationToTypedError(t *testing.T)
 	decoded, ok := serverapi.DecodeWorkflowLabelError(response.Error.Data, response.Error.Message).(*serverapi.WorkflowLabelError)
 	if !ok ||
 		decoded.Reason != serverapi.WorkflowLabelErrorReasonInvalidMutation ||
-		decoded.Field != "add_label_ids" {
+		decoded.Field == nil ||
+		*decoded.Field != "add_label_ids" {
 		t.Fatalf("decoded mutation error = %+v", decoded)
 	}
 }

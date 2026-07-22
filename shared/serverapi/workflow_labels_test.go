@@ -3,6 +3,7 @@ package serverapi
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -355,22 +356,22 @@ func TestWorkflowLabelProjectionDTOsContainIDsWithoutNames(t *testing.T) {
 
 func TestWorkflowLabelErrorRoundTripsEveryTypedFailure(t *testing.T) {
 	for _, source := range []*WorkflowLabelError{
-		{Reason: WorkflowLabelErrorReasonInvalidName, ProjectID: "project-1", Field: "name"},
-		{Reason: WorkflowLabelErrorReasonNameConflict, ProjectID: "project-1"},
-		{Reason: WorkflowLabelErrorReasonCatalogLimit, ProjectID: "project-1", Limit: WorkflowLabelMaxIDs},
-		{Reason: WorkflowLabelErrorReasonProjectNotFound, ProjectID: "project-1"},
-		{Reason: WorkflowLabelErrorReasonLabelNotFound, LabelID: workflowLabelIDAlpha},
-		{Reason: WorkflowLabelErrorReasonTaskNotFound, TaskID: "task-1"},
-		{Reason: WorkflowLabelErrorReasonWrongProject, ProjectID: "project-1", LabelID: workflowLabelIDAlpha},
-		{Reason: WorkflowLabelErrorReasonInvalidFilter, Field: "label_filter.label_ids"},
-		{Reason: WorkflowLabelErrorReasonInvalidMutation, Field: "add_label_ids"},
+		{Reason: WorkflowLabelErrorReasonInvalidName, ProjectID: workflowLabelStringPointer("project-1"), Field: workflowLabelStringPointer("name")},
+		{Reason: WorkflowLabelErrorReasonNameConflict, ProjectID: workflowLabelStringPointer("project-1")},
+		{Reason: WorkflowLabelErrorReasonCatalogLimit, ProjectID: workflowLabelStringPointer("project-1"), Limit: workflowLabelIntPointer(WorkflowLabelMaxIDs)},
+		{Reason: WorkflowLabelErrorReasonProjectNotFound, ProjectID: workflowLabelStringPointer("project-1")},
+		{Reason: WorkflowLabelErrorReasonLabelNotFound, LabelID: workflowLabelStringPointer(workflowLabelIDAlpha)},
+		{Reason: WorkflowLabelErrorReasonTaskNotFound, TaskID: workflowLabelStringPointer("task-1")},
+		{Reason: WorkflowLabelErrorReasonWrongProject, ProjectID: workflowLabelStringPointer("project-1"), LabelID: workflowLabelStringPointer(workflowLabelIDAlpha)},
+		{Reason: WorkflowLabelErrorReasonInvalidFilter, Field: workflowLabelStringPointer("label_filter.label_ids")},
+		{Reason: WorkflowLabelErrorReasonInvalidMutation, Field: workflowLabelStringPointer("add_label_ids")},
 	} {
 		decoded := DecodeWorkflowLabelError(source.RPCErrorData(), source.Error())
 		var typed *WorkflowLabelError
 		if !errors.As(decoded, &typed) {
 			t.Fatalf("decoded error = %T %v, want WorkflowLabelError", decoded, decoded)
 		}
-		if *typed != *source {
+		if !reflect.DeepEqual(typed, source) {
 			t.Fatalf("decoded error = %+v, want %+v", typed, source)
 		}
 		if typed.RPCErrorCode() != protocol.ErrCodeWorkflowLabel {
@@ -385,6 +386,7 @@ func TestWorkflowLabelErrorRoundTripsEveryTypedFailure(t *testing.T) {
 		"wrong project missing": `{"type":"workflow_label_error","reason":"wrong_project","label_id":"` + workflowLabelIDAlpha + `"}`,
 		"invalid filter field":  `{"type":"workflow_label_error","reason":"invalid_filter","field":" "}`,
 		"catalog limit":         `{"type":"workflow_label_error","reason":"catalog_limit","project_id":"project-1","limit":0}`,
+		"unexpected context":    `{"type":"workflow_label_error","reason":"name_conflict","project_id":"project-1","task_id":"task-1"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			decoded := DecodeWorkflowLabelError(json.RawMessage(payload), "fallback")
@@ -394,6 +396,14 @@ func TestWorkflowLabelErrorRoundTripsEveryTypedFailure(t *testing.T) {
 			}
 		})
 	}
+}
+
+func workflowLabelStringPointer(value string) *string {
+	return &value
+}
+
+func workflowLabelIntPointer(value int) *int {
+	return &value
 }
 
 func TestWorkflowLabelRPCValidationUsesTypedMutationErrors(t *testing.T) {
@@ -414,6 +424,30 @@ func TestWorkflowLabelRPCValidationUsesTypedMutationErrors(t *testing.T) {
 			},
 			reason: WorkflowLabelErrorReasonInvalidName,
 			field:  "name",
+		},
+		{
+			name: "invalid rename name",
+			request: WorkflowProjectLabelRenameRequest{
+				ProjectID: "project-1",
+				LabelID:   "11111111-1111-4111-8111-111111111111",
+			},
+			reason: WorkflowLabelErrorReasonInvalidName,
+			field:  "name",
+		},
+		{
+			name: "invalid delete label id",
+			request: WorkflowProjectLabelDeleteRequest{
+				ProjectID: "project-1",
+				LabelID:   "not-a-label-id",
+			},
+			reason: WorkflowLabelErrorReasonInvalidMutation,
+			field:  "label_id",
+		},
+		{
+			name:    "invalid filter",
+			request: WorkflowTaskLabelFilter{},
+			reason:  WorkflowLabelErrorReasonInvalidFilter,
+			field:   "label_filter.kind",
 		},
 		{
 			name: "raw assignment bound",
@@ -440,7 +474,7 @@ func TestWorkflowLabelRPCValidationUsesTypedMutationErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.request.ValidateRPC()
 			var typed *WorkflowLabelError
-			if !errors.As(err, &typed) || typed.Reason != tt.reason || typed.Field != tt.field {
+			if !errors.As(err, &typed) || typed.Reason != tt.reason || typed.Field == nil || *typed.Field != tt.field {
 				t.Fatalf("ValidateRPC() error = %T %+v, want reason %q field %q", err, err, tt.reason, tt.field)
 			}
 		})

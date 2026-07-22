@@ -127,11 +127,11 @@ const (
 
 type WorkflowLabelError struct {
 	Reason    WorkflowLabelErrorReason
-	ProjectID string
-	TaskID    string
-	LabelID   string
-	Field     string
-	Limit     int
+	ProjectID *string
+	TaskID    *string
+	LabelID   *string
+	Field     *string
+	Limit     *int
 }
 
 func (e *WorkflowLabelError) Error() string {
@@ -152,11 +152,11 @@ func (e *WorkflowLabelError) RPCErrorData() json.RawMessage {
 	return marshalRPCErrorData(struct {
 		Type      string                   `json:"type"`
 		Reason    WorkflowLabelErrorReason `json:"reason"`
-		ProjectID string                   `json:"project_id,omitempty"`
-		TaskID    string                   `json:"task_id,omitempty"`
-		LabelID   string                   `json:"label_id,omitempty"`
-		Field     string                   `json:"field,omitempty"`
-		Limit     int                      `json:"limit,omitempty"`
+		ProjectID *string                  `json:"project_id,omitempty"`
+		TaskID    *string                  `json:"task_id,omitempty"`
+		LabelID   *string                  `json:"label_id,omitempty"`
+		Field     *string                  `json:"field,omitempty"`
+		Limit     *int                     `json:"limit,omitempty"`
 	}{
 		Type:      "workflow_label_error",
 		Reason:    e.Reason,
@@ -172,11 +172,11 @@ func DecodeWorkflowLabelError(data json.RawMessage, message string) error {
 	var envelope struct {
 		Type      string                   `json:"type"`
 		Reason    WorkflowLabelErrorReason `json:"reason"`
-		ProjectID string                   `json:"project_id,omitempty"`
-		TaskID    string                   `json:"task_id,omitempty"`
-		LabelID   string                   `json:"label_id,omitempty"`
-		Field     string                   `json:"field,omitempty"`
-		Limit     int                      `json:"limit,omitempty"`
+		ProjectID *string                  `json:"project_id,omitempty"`
+		TaskID    *string                  `json:"task_id,omitempty"`
+		LabelID   *string                  `json:"label_id,omitempty"`
+		Field     *string                  `json:"field,omitempty"`
+		Limit     *int                     `json:"limit,omitempty"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Type != "workflow_label_error" {
 		return errors.New(strings.TrimSpace(message))
@@ -196,30 +196,74 @@ func DecodeWorkflowLabelError(data json.RawMessage, message string) error {
 }
 
 func validWorkflowLabelError(errorEnvelope WorkflowLabelError) bool {
-	projectID := strings.TrimSpace(errorEnvelope.ProjectID)
-	taskID := strings.TrimSpace(errorEnvelope.TaskID)
-	field := strings.TrimSpace(errorEnvelope.Field)
-	labelIDValid := errorEnvelope.LabelID != "" && validateLabelID("label_id", errorEnvelope.LabelID) == nil
+	projectIDValid := validWorkflowLabelErrorString(errorEnvelope.ProjectID)
+	taskIDValid := validWorkflowLabelErrorString(errorEnvelope.TaskID)
+	fieldValid := validWorkflowLabelErrorString(errorEnvelope.Field)
+	labelIDValid := errorEnvelope.LabelID != nil && validateLabelID("label_id", *errorEnvelope.LabelID) == nil
 	switch errorEnvelope.Reason {
 	case WorkflowLabelErrorReasonInvalidName:
-		return projectID != "" && projectID == errorEnvelope.ProjectID && field == "name"
+		return projectIDValid &&
+			errorEnvelope.Field != nil &&
+			*errorEnvelope.Field == "name" &&
+			errorEnvelope.TaskID == nil &&
+			errorEnvelope.LabelID == nil &&
+			errorEnvelope.Limit == nil
 	case WorkflowLabelErrorReasonNameConflict:
-		return projectID != "" && projectID == errorEnvelope.ProjectID
+		return projectIDValid &&
+			errorEnvelope.TaskID == nil &&
+			errorEnvelope.LabelID == nil &&
+			errorEnvelope.Field == nil &&
+			errorEnvelope.Limit == nil
 	case WorkflowLabelErrorReasonCatalogLimit:
-		return projectID != "" && projectID == errorEnvelope.ProjectID && errorEnvelope.Limit == WorkflowLabelMaxIDs
+		return projectIDValid &&
+			errorEnvelope.Limit != nil &&
+			*errorEnvelope.Limit == WorkflowLabelMaxIDs &&
+			errorEnvelope.TaskID == nil &&
+			errorEnvelope.LabelID == nil &&
+			errorEnvelope.Field == nil
 	case WorkflowLabelErrorReasonProjectNotFound:
-		return projectID != "" && projectID == errorEnvelope.ProjectID
+		return projectIDValid &&
+			errorEnvelope.TaskID == nil &&
+			errorEnvelope.LabelID == nil &&
+			errorEnvelope.Field == nil &&
+			errorEnvelope.Limit == nil
 	case WorkflowLabelErrorReasonLabelNotFound:
-		return labelIDValid
+		return labelIDValid &&
+			(errorEnvelope.ProjectID == nil || projectIDValid) &&
+			errorEnvelope.TaskID == nil &&
+			errorEnvelope.Field == nil &&
+			errorEnvelope.Limit == nil
 	case WorkflowLabelErrorReasonTaskNotFound:
-		return taskID != "" && taskID == errorEnvelope.TaskID
+		return taskIDValid &&
+			errorEnvelope.ProjectID == nil &&
+			errorEnvelope.LabelID == nil &&
+			errorEnvelope.Field == nil &&
+			errorEnvelope.Limit == nil
 	case WorkflowLabelErrorReasonWrongProject:
-		return projectID != "" && projectID == errorEnvelope.ProjectID && labelIDValid
-	case WorkflowLabelErrorReasonInvalidFilter, WorkflowLabelErrorReasonInvalidMutation:
-		return field != "" && field == errorEnvelope.Field
+		return projectIDValid &&
+			labelIDValid &&
+			(errorEnvelope.TaskID == nil || taskIDValid) &&
+			errorEnvelope.Field == nil &&
+			errorEnvelope.Limit == nil
+	case WorkflowLabelErrorReasonInvalidFilter:
+		return fieldValid &&
+			errorEnvelope.ProjectID == nil &&
+			errorEnvelope.TaskID == nil &&
+			errorEnvelope.LabelID == nil &&
+			errorEnvelope.Limit == nil
+	case WorkflowLabelErrorReasonInvalidMutation:
+		return fieldValid &&
+			(errorEnvelope.ProjectID == nil || projectIDValid) &&
+			(errorEnvelope.TaskID == nil || taskIDValid) &&
+			(errorEnvelope.LabelID == nil || labelIDValid) &&
+			(errorEnvelope.Limit == nil || *errorEnvelope.Limit > 0)
 	default:
 		return false
 	}
+}
+
+func validWorkflowLabelErrorString(value *string) bool {
+	return value != nil && strings.TrimSpace(*value) != "" && strings.TrimSpace(*value) == *value
 }
 
 func (r WorkflowProjectLabelCatalogRequest) Validate() error {
@@ -265,11 +309,19 @@ func (r WorkflowProjectLabelRenameRequest) Validate() error {
 	return validateLabelID("label_id", r.LabelID)
 }
 
+func (r WorkflowProjectLabelRenameRequest) ValidateRPC() error {
+	return workflowLabelRPCValidationError(r.Validate(), r.ProjectID, "", true)
+}
+
 func (r WorkflowProjectLabelDeleteRequest) Validate() error {
 	if err := validateRequired("project_id", r.ProjectID); err != nil {
 		return err
 	}
 	return validateLabelID("label_id", r.LabelID)
+}
+
+func (r WorkflowProjectLabelDeleteRequest) ValidateRPC() error {
+	return workflowLabelRPCValidationError(r.Validate(), r.ProjectID, "", false)
 }
 
 func (r WorkflowProjectLabelCreateResponse) Validate() error {
@@ -358,6 +410,10 @@ func (r WorkflowTaskLabelFilter) Validate() error {
 	}
 }
 
+func (r WorkflowTaskLabelFilter) ValidateRPC() error {
+	return workflowLabelFilterRequestValidationError(r.Validate())
+}
+
 func validateUniqueLabelIDs(field string, ids []string) (map[string]bool, error) {
 	if len(ids) > WorkflowLabelMaxIDs {
 		return nil, workflowRequestError(
@@ -440,10 +496,36 @@ func workflowLabelRPCValidationError(err error, projectID string, taskID string,
 	if nameIsInvalid && validationErr.Field == "name" && strings.TrimSpace(projectID) != "" {
 		reason = WorkflowLabelErrorReasonInvalidName
 	}
+	var projectIDPointer *string
+	if strings.TrimSpace(projectID) != "" {
+		projectIDValue := projectID
+		projectIDPointer = &projectIDValue
+	}
+	var taskIDPointer *string
+	if strings.TrimSpace(taskID) != "" {
+		taskIDValue := taskID
+		taskIDPointer = &taskIDValue
+	}
+	field := validationErr.Field
 	return &WorkflowLabelError{
 		Reason:    reason,
-		ProjectID: projectID,
-		TaskID:    taskID,
-		Field:     validationErr.Field,
+		ProjectID: projectIDPointer,
+		TaskID:    taskIDPointer,
+		Field:     &field,
+	}
+}
+
+func workflowLabelFilterRequestValidationError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var validationErr WorkflowRequestValidationError
+	if !errors.As(err, &validationErr) || !strings.HasPrefix(validationErr.Field, "label_filter") {
+		return err
+	}
+	field := validationErr.Field
+	return &WorkflowLabelError{
+		Reason: WorkflowLabelErrorReasonInvalidFilter,
+		Field:  &field,
 	}
 }

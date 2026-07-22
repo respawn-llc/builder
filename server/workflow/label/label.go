@@ -52,7 +52,7 @@ const (
 
 type NameError struct {
 	Reason NameErrorReason
-	Rune   rune
+	Rune   *rune
 }
 
 func (err *NameError) Error() string {
@@ -62,7 +62,10 @@ func (err *NameError) Error() string {
 	case NameErrorTooLong:
 		return fmt.Sprintf("label name must be at most %d characters", MaxNameRunes)
 	case NameErrorInvalidCharacter:
-		return fmt.Sprintf("label name contains invalid character %q", err.Rune)
+		if err.Rune == nil {
+			return "label name contains an invalid character"
+		}
+		return fmt.Sprintf("label name contains invalid character %q", *err.Rune)
 	default:
 		return "label name is invalid"
 	}
@@ -80,9 +83,10 @@ func PrepareName(raw string) (Name, error) {
 		if validNameRune(character) {
 			continue
 		}
+		invalidCharacter := character
 		return "", &NameError{
 			Reason: NameErrorInvalidCharacter,
-			Rune:   character,
+			Rune:   &invalidCharacter,
 		}
 	}
 	return Name(prepared), nil

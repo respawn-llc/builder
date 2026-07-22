@@ -54,24 +54,34 @@ export function createProjectLabelEffects({
   const registry = taskLabelAssignmentRegistryFor(queryClient);
   const refreshMembership = async (effect: LabelMembershipRefreshEffect): Promise<void> => {
     await onMembershipRefresh?.(effect);
+    const workflowID =
+      effect.kind === "task.labels_changed" || effect.kind === "task.deleted"
+        ? effect.workflowID
+        : undefined;
     await Promise.all([
       queryClient.invalidateQueries({
-        queryKey: queryKeys.allBoards,
+        queryKey:
+          workflowID === undefined
+            ? queryKeys.projectBoardsRoot(projectID)
+            : queryKeys.boardWorkflowRoot(projectID, workflowID),
         refetchType: "active",
       }),
       queryClient.invalidateQueries({
-        queryKey: queryKeys.allBoardNodeCards,
+        queryKey:
+          workflowID === undefined
+            ? queryKeys.projectBoardNodeCardsRoot(projectID)
+            : queryKeys.boardNodeCardsWorkflowRoot(projectID, workflowID),
         refetchType: "active",
       }),
       queryClient.invalidateQueries({
-        queryKey: queryKeys.allTaskLists,
+        queryKey: queryKeys.projectTaskListsRoot(projectID),
         refetchType: "active",
       }),
     ]);
   };
   const deleteLabel = async (labelID: string): Promise<void> => {
     authority.applyDelete(labelID);
-    registry.deleteLabel(labelID);
+    registry.deleteLabel(projectID, labelID);
     pruneDeletedLabelFromExistingCaches(queryClient, labelID);
     onFilterAction?.({ type: "label.deleted", labelID });
     await refreshMembership({
@@ -136,11 +146,16 @@ export function createProjectLabelEffects({
     },
     async refreshAfterSubscriptionBoundary() {
       authority.requestRefresh();
-      registry.markAllDirty();
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.allTaskLabels,
-        refetchType: "none",
-      });
+      const dirtyTaskIDs = registry.markProjectDirty(projectID);
+      await Promise.all(
+        dirtyTaskIDs.map(async (taskID) => {
+          await queryClient.invalidateQueries({
+            queryKey: queryKeys.taskLabels(taskID),
+            exact: true,
+            refetchType: "none",
+          });
+        }),
+      );
       await refreshMembership({
         kind: "subscription.refresh",
         projectID,

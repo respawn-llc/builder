@@ -2,6 +2,7 @@ package workflowview
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -12,9 +13,9 @@ import (
 )
 
 type workflowTaskLabelFilterFacts struct {
-	Kind     serverapi.WorkflowTaskLabelFilterKind      `json:"kind"`
-	Mode     serverapi.WorkflowTaskNamedLabelFilterMode `json:"mode,omitempty"`
-	LabelIDs []string                                   `json:"label_ids"`
+	Kind     serverapi.WorkflowTaskLabelFilterKind       `json:"kind"`
+	Mode     *serverapi.WorkflowTaskNamedLabelFilterMode `json:"mode,omitempty"`
+	LabelIDs []string                                    `json:"label_ids"`
 }
 
 type workflowProjectLabelByIDReader interface {
@@ -23,7 +24,7 @@ type workflowProjectLabelByIDReader interface {
 
 type workflowTaskLabelFilterQueryArgs struct {
 	kind         string
-	mode         string
+	mode         sql.NullString
 	labelIDsJSON string
 }
 
@@ -34,7 +35,7 @@ func (f workflowTaskLabelFilterFacts) queryArgs() (workflowTaskLabelFilterQueryA
 	}
 	return workflowTaskLabelFilterQueryArgs{
 		kind:         string(f.Kind),
-		mode:         string(f.Mode),
+		mode:         nullableWorkflowTaskLabelFilterMode(f.Mode),
 		labelIDsJSON: string(labelIDsJSON),
 	}, nil
 }
@@ -45,15 +46,15 @@ func (f workflowTaskLabelFilterFacts) validCanonical() bool {
 	}
 	switch f.Kind {
 	case serverapi.WorkflowTaskLabelFilterKindNone, serverapi.WorkflowTaskLabelFilterKindUnlabeled:
-		return f.Mode == "" && len(f.LabelIDs) == 0
+		return f.Mode == nil && len(f.LabelIDs) == 0
 	case serverapi.WorkflowTaskLabelFilterKindNamed:
-		if !sort.StringsAreSorted(f.LabelIDs) {
+		if f.Mode == nil || !sort.StringsAreSorted(f.LabelIDs) {
 			return false
 		}
 		return (serverapi.WorkflowTaskLabelFilter{
 			Kind: f.Kind,
 			Named: &serverapi.WorkflowTaskNamedLabelFilter{
-				Mode:     f.Mode,
+				Mode:     *f.Mode,
 				LabelIDs: f.LabelIDs,
 			},
 		}).Validate() == nil
@@ -64,7 +65,7 @@ func (f workflowTaskLabelFilterFacts) validCanonical() bool {
 
 func (f workflowTaskLabelFilterFacts) equal(other workflowTaskLabelFilterFacts) bool {
 	return f.Kind == other.Kind &&
-		f.Mode == other.Mode &&
+		workflowTaskLabelFilterModesEqual(f.Mode, other.Mode) &&
 		slices.Equal(f.LabelIDs, other.LabelIDs)
 }
 
@@ -96,26 +97,48 @@ func resolveWorkflowTaskLabelFilter(
 		for _, labelID := range labelIDs {
 			labelProjectID, exists := projectByLabelID[labelID]
 			if !exists {
+				projectIDValue := projectID
+				labelIDValue := labelID
 				return workflowTaskLabelFilterFacts{}, &serverapi.WorkflowLabelError{
 					Reason:    serverapi.WorkflowLabelErrorReasonLabelNotFound,
-					ProjectID: projectID,
-					LabelID:   labelID,
+					ProjectID: &projectIDValue,
+					LabelID:   &labelIDValue,
 				}
 			}
 			if labelProjectID != projectID {
+				projectIDValue := projectID
+				labelIDValue := labelID
 				return workflowTaskLabelFilterFacts{}, &serverapi.WorkflowLabelError{
 					Reason:    serverapi.WorkflowLabelErrorReasonWrongProject,
-					ProjectID: projectID,
-					LabelID:   labelID,
+					ProjectID: &projectIDValue,
+					LabelID:   &labelIDValue,
 				}
 			}
 		}
+		mode := filter.Named.Mode
 		return workflowTaskLabelFilterFacts{
 			Kind:     filter.Kind,
-			Mode:     filter.Named.Mode,
+			Mode:     &mode,
 			LabelIDs: labelIDs,
 		}, nil
 	default:
 		return workflowTaskLabelFilterFacts{}, errors.New("task label filter kind is invalid")
 	}
+}
+
+func nullableWorkflowTaskLabelFilterMode(mode *serverapi.WorkflowTaskNamedLabelFilterMode) sql.NullString {
+	if mode == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: string(*mode), Valid: true}
+}
+
+func workflowTaskLabelFilterModesEqual(
+	left *serverapi.WorkflowTaskNamedLabelFilterMode,
+	right *serverapi.WorkflowTaskNamedLabelFilterMode,
+) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }

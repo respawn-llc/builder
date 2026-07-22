@@ -4290,7 +4290,7 @@ ORDER BY node_id ASC
 
 type ListBoardColumnTaskCountsParams struct {
 	LabelFilterKind        string
-	LabelFilterMode        string
+	LabelFilterMode        sql.NullString
 	LabelIdsJson           string
 	ProjectID              string
 	WorkflowID             string
@@ -8546,7 +8546,7 @@ type ListWorkflowTaskListRowsParams struct {
 	AttentionFilterSet      int64
 	AttentionKindsJson      string
 	LabelFilterKind         string
-	LabelFilterMode         string
+	LabelFilterMode         sql.NullString
 	LabelIdsJson            string
 	CursorSet               int64
 	CursorCreatedAtUnixMs   int64

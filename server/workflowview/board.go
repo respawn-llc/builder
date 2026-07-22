@@ -52,7 +52,7 @@ func (b *Board) Get(ctx context.Context, req serverapi.WorkflowBoardRequest) (se
 	if b == nil {
 		return serverapi.WorkflowBoard{}, errors.New("board is required")
 	}
-	if err := req.Validate(); err != nil {
+	if err := req.ValidateRPC(); err != nil {
 		return serverapi.WorkflowBoard{}, err
 	}
 	projectID := strings.TrimSpace(req.ProjectID)
@@ -103,7 +103,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	if b == nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, errors.New("board is required")
 	}
-	if err := req.Validate(); err != nil {
+	if err := req.ValidateRPC(); err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
 	projectID := strings.TrimSpace(req.ProjectID)

@@ -2515,6 +2515,10 @@ func (r WorkflowBoardRequest) Validate() error {
 	return r.LabelFilter.Validate()
 }
 
+func (r WorkflowBoardRequest) ValidateRPC() error {
+	return workflowLabelFilterRequestValidationError(r.Validate())
+}
+
 func (r WorkflowTaskListRequest) Validate() error {
 	if r.ProjectID == nil && strings.TrimSpace(r.PageToken) == "" {
 		message := "project_id is required on the first page"
@@ -2586,6 +2590,10 @@ func (r WorkflowTaskListRequest) Validate() error {
 	return nil
 }
 
+func (r WorkflowTaskListRequest) ValidateRPC() error {
+	return workflowLabelFilterRequestValidationError(r.Validate())
+}
+
 func (r WorkflowBoardNodeCardsListRequest) Validate() error {
 	if err := validateRequiredFields(requiredField("project_id", r.ProjectID), requiredField("workflow_id", r.WorkflowID), requiredField("node_id", r.NodeID)); err != nil {
 		return err
@@ -2603,6 +2611,10 @@ func (r WorkflowBoardNodeCardsListRequest) Validate() error {
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not have leading or trailing whitespace")
 	}
 	return r.LabelFilter.Validate()
+}
+
+func (r WorkflowBoardNodeCardsListRequest) ValidateRPC() error {
+	return workflowLabelFilterRequestValidationError(r.Validate())
 }
 
 func (r WorkflowProjectSubscribeRequest) Validate() error {

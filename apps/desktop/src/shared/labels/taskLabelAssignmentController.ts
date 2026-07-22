@@ -81,6 +81,7 @@ class TaskLabelAssignmentControllerImpl implements TaskLabelAssignmentController
   readonly #failures = new Map<string, TaskLabelAssignmentFailure>();
   readonly #deletedLabelIDs = new Set<string>();
   #authoritative: Set<string>;
+  #authoritativeGeneration = 0;
   #inFlight: InFlightIntent | null = null;
   #dirty = false;
   #reconciling = false;
@@ -166,6 +167,7 @@ class TaskLabelAssignmentControllerImpl implements TaskLabelAssignmentController
     if (this.#closed) {
       return;
     }
+    this.#authoritativeGeneration += 1;
     const previous = this.#authoritative;
     this.#applyAuthoritative(assignment);
     const hadReconciliationFailure = this.#reconciliationFailure !== null;
@@ -179,7 +181,13 @@ class TaskLabelAssignmentControllerImpl implements TaskLabelAssignmentController
   }
 
   async readAuthoritative(): Promise<TaskLabelAssignment> {
-    return this.#refetch();
+    const generation = this.#authoritativeGeneration;
+    const assignment = await this.#refetch();
+    if (this.#closed || generation !== this.#authoritativeGeneration) {
+      return this.#currentAssignment();
+    }
+    this.replaceAuthoritative(assignment);
+    return this.#currentAssignment();
   }
 
   replaceAvailableLabelIDs(labelIDs: readonly string[]): void {
@@ -309,6 +317,7 @@ class TaskLabelAssignmentControllerImpl implements TaskLabelAssignmentController
         removeLabelIDs: intent.desiredSelected ? [] : [intent.labelID],
       });
       if (!this.#closed) {
+        this.#authoritativeGeneration += 1;
         this.#applyAuthoritative(assignment);
         if (this.#pending.get(intent.labelID) === intent.desiredSelected) {
           this.#pending.delete(intent.labelID);
@@ -335,9 +344,8 @@ class TaskLabelAssignmentControllerImpl implements TaskLabelAssignmentController
 
   async #runRefetch(): Promise<void> {
     try {
-      const assignment = await this.readAuthoritative();
+      await this.readAuthoritative();
       if (!this.#closed) {
-        this.#applyAuthoritative(assignment);
         this.#reconciliationFailure = null;
       }
     } catch (error: unknown) {
@@ -369,6 +377,13 @@ class TaskLabelAssignmentControllerImpl implements TaskLabelAssignmentController
       next.delete(labelID);
     }
     this.#authoritative = next;
+  }
+
+  #currentAssignment(): TaskLabelAssignment {
+    return {
+      taskID: this.#taskID,
+      labelIDs: [...this.#authoritative],
+    };
   }
 
   #pruneUnavailableDeletedLabelIDs(): void {

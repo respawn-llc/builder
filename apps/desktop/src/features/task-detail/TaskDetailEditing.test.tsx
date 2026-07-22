@@ -6,6 +6,8 @@ import type { TaskDetail } from "@/api";
 import type { JsonValue } from "@/api";
 import { createTestServices, startupRoutes, TestAppProviders } from "@/test-support/app-services";
 import { appI18n } from "@/test-support/i18n";
+import { installTestStorage } from "@/test-support/storage";
+import * as uiModule from "@/ui";
 import { ProjectLabelsProvider, TaskLabelAssignmentProvider, useProjectLabelCatalog } from "@/shared/labels";
 import {
   activityResponse,
@@ -29,9 +31,29 @@ const betaLabelID = "942495c2-5958-4959-8445-94046ad74fbd";
 
 describe("TaskDetailSurface editing", () => {
   afterEach(() => {
+    installTestStorage("localStorage");
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("surfaces a persisted label-filter read failure", async () => {
+    const showStatusToast = vi.spyOn(uiModule, "showStatusToast");
+    const storage = installTestStorage("localStorage");
+    vi.spyOn(storage, "getItem").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+
+    mountTaskDetail(taskGetRoute());
+
+    await waitFor(() => {
+      expect(showStatusToast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "task-label-load-error",
+          tone: "danger",
+        }),
+      );
+    });
   });
 
   it("edits active task title and description", async () => {
@@ -876,7 +898,11 @@ function TaskDetailContentAssignmentHarness({
 }: Readonly<{ children: ReactNode; detail: TaskDetail }>) {
   const catalog = useProjectLabelCatalog();
   return (
-    <TaskLabelAssignmentProvider catalog={catalog.data ?? null} taskID={detail.id}>
+    <TaskLabelAssignmentProvider
+      catalog={catalog.data ?? null}
+      taskID={detail.id}
+      workflowID={detail.workflowID}
+    >
       {children}
     </TaskLabelAssignmentProvider>
   );

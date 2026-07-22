@@ -180,7 +180,8 @@ func TestTaskListNamedLabelFilterRejectsMissingLabel(t *testing.T) {
 	var labelErr *serverapi.WorkflowLabelError
 	if !errors.As(err, &labelErr) ||
 		labelErr.Reason != serverapi.WorkflowLabelErrorReasonLabelNotFound ||
-		labelErr.LabelID != missing.String() {
+		labelErr.LabelID == nil ||
+		*labelErr.LabelID != missing.String() {
 		t.Fatalf("missing label error = %+v", err)
 	}
 }
@@ -203,8 +204,10 @@ func TestTaskListNamedLabelFilterRejectsLabelFromAnotherProject(t *testing.T) {
 	var labelErr *serverapi.WorkflowLabelError
 	if !errors.As(err, &labelErr) ||
 		labelErr.Reason != serverapi.WorkflowLabelErrorReasonWrongProject ||
-		labelErr.ProjectID != fixture.projectID ||
-		labelErr.LabelID != foreign.ID.String() {
+		labelErr.ProjectID == nil ||
+		*labelErr.ProjectID != fixture.projectID ||
+		labelErr.LabelID == nil ||
+		*labelErr.LabelID != foreign.ID.String() {
 		t.Fatalf("wrong-project label error = %+v", err)
 	}
 }

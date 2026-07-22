@@ -64,7 +64,7 @@ export function BoardColumnDataOwner({
   const filterGeneration = useBoardFilterGeneration();
   const cardsQuery = useBoardNodeCards(board.projectID, board.selectedWorkflow.id, column.id, true);
   const generationRef = useRef(0);
-  const hasHydratedRef = useRef(false);
+  const hydratedFilterGenerationRef = useRef<number | null>(null);
   const paginationInFlightRef = useRef(false);
   const queryCards = useMemo(
     () => cardsQuery.data?.pages.flatMap((page) => page.cards) ?? [],
@@ -208,7 +208,8 @@ export function BoardColumnDataOwner({
   }, [isFetchNextPageError, isFetchPreviousPageError, isFetchingNextPage, isFetchingPreviousPage]);
 
   useEffect(() => {
-    const cause: BoardColumnUpdateCause = !hasHydratedRef.current
+    const activeFilterGeneration = filterGeneration.snapshot.active.generation;
+    const cause: BoardColumnUpdateCause = hydratedFilterGenerationRef.current !== activeFilterGeneration
       ? "hydration"
       : paginationInFlightRef.current
         ? "pagination"
@@ -225,8 +226,8 @@ export function BoardColumnDataOwner({
         taskCount: column.taskCount,
       },
     });
-    if (cardsQuery.data !== undefined) {
-      hasHydratedRef.current = true;
+    if (cardsQuery.data !== undefined && !isPlaceholderData) {
+      hydratedFilterGenerationRef.current = activeFilterGeneration;
     }
     if (!isFetchingPreviousPage && !isFetchingNextPage) {
       paginationInFlightRef.current = false;
@@ -236,10 +237,12 @@ export function BoardColumnDataOwner({
     cardsQuery.data,
     column.id,
     column.taskCount,
+    filterGeneration.snapshot.active.generation,
     isFetching,
     isFetchingNextPage,
     isFetchingPreviousPage,
     isPending,
+    isPlaceholderData,
     onReportColumnSnapshot,
   ]);
 

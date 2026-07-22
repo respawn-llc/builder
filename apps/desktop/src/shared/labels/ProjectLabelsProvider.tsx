@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 
 import { errorMessage } from "@/api";
 import { queryKeys, useAppServices, useConnectionSnapshot } from "@/app-facade";
@@ -13,11 +13,13 @@ export function ProjectLabelsProvider({
   children,
   onBackgroundError,
   onMembershipRefresh,
+  subscribeToProject = true,
   projectID,
 }: Readonly<{
   children: ReactNode;
   onBackgroundError?: ((error: unknown) => void) | undefined;
   onMembershipRefresh?: ((effect: LabelMembershipRefreshEffect) => Promise<void> | void) | undefined;
+  subscribeToProject?: boolean | undefined;
   projectID: string;
 }>) {
   const { api, logger } = useAppServices();
@@ -52,6 +54,18 @@ export function ProjectLabelsProvider({
       projectID,
     });
   });
+  const reportedPersistenceError = useRef<unknown>(null);
+  useEffect(() => {
+    if (filter.persistence.status !== "error") {
+      reportedPersistenceError.current = null;
+      return;
+    }
+    if (reportedPersistenceError.current === filter.persistence.error) {
+      return;
+    }
+    reportedPersistenceError.current = filter.persistence.error;
+    reportBackgroundError(filter.persistence.error);
+  }, [filter.persistence, reportBackgroundError]);
   const effects = useMemo(
     () =>
       createProjectLabelEffects({
@@ -64,7 +78,7 @@ export function ProjectLabelsProvider({
     [authority, authorityLease.dispatchFilterAction, notifyMembershipRefresh, projectID, queryClient],
   );
   useEffect(() => {
-    if (projectID.length === 0 || connection.phase !== "connected") {
+    if (!subscribeToProject || projectID.length === 0 || connection.phase !== "connected") {
       return;
     }
     const run = (operation: Promise<void>): void => {
@@ -88,7 +102,15 @@ export function ProjectLabelsProvider({
     return () => {
       subscription.close();
     };
-  }, [api, connection.generation, connection.phase, effects, projectID, reportBackgroundError]);
+  }, [
+    api,
+    connection.generation,
+    connection.phase,
+    effects,
+    projectID,
+    reportBackgroundError,
+    subscribeToProject,
+  ]);
   const value = useMemo(
     () => ({
       authority,

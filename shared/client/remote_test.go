@@ -1253,10 +1253,12 @@ func TestProtocolErrorDecodesWorkflowTaskCreateConflictError(t *testing.T) {
 }
 
 func TestProtocolErrorDecodesWorkflowLabelError(t *testing.T) {
+	projectID := "project-1"
+	labelID := "11111111-1111-4111-8111-111111111111"
 	source := &serverapi.WorkflowLabelError{
 		Reason:    serverapi.WorkflowLabelErrorReasonWrongProject,
-		ProjectID: "project-1",
-		LabelID:   "11111111-1111-4111-8111-111111111111",
+		ProjectID: &projectID,
+		LabelID:   &labelID,
 	}
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeWorkflowLabel,
@@ -1267,7 +1269,7 @@ func TestProtocolErrorDecodesWorkflowLabelError(t *testing.T) {
 	if !errors.As(err, &decoded) {
 		t.Fatalf("decoded error = %T %v, want WorkflowLabelError", err, err)
 	}
-	if *decoded != *source {
+	if !reflect.DeepEqual(decoded, source) {
 		t.Fatalf("decoded error = %+v, want %+v", decoded, source)
 	}
 }

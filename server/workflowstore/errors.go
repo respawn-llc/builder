@@ -245,21 +245,21 @@ const (
 type TaskLabelMutationError struct {
 	Reason  TaskLabelMutationErrorReason
 	Field   string
-	LabelID string
-	Limit   int
+	LabelID *string
+	Limit   *int
 	Cause   error
 }
 
 func (e TaskLabelMutationError) Error() string {
 	switch e.Reason {
 	case TaskLabelMutationTooManyAdd, TaskLabelMutationTooManyRemove:
-		return fmt.Sprintf("%s must contain at most %d label IDs", e.Field, e.Limit)
+		return fmt.Sprintf("%s must contain at most %d label IDs", e.Field, *e.Limit)
 	case TaskLabelMutationDuplicateAdd, TaskLabelMutationDuplicateRemove:
-		return fmt.Sprintf("%s contains duplicate label ID %q", e.Field, e.LabelID)
+		return fmt.Sprintf("%s contains duplicate label ID %q", e.Field, *e.LabelID)
 	case TaskLabelMutationOverlap:
-		return fmt.Sprintf("label ID %q cannot be both added and removed", e.LabelID)
+		return fmt.Sprintf("label ID %q cannot be both added and removed", *e.LabelID)
 	case TaskLabelMutationInvalidID:
-		return fmt.Sprintf("%s contains invalid label ID %q", e.Field, e.LabelID)
+		return fmt.Sprintf("%s contains invalid label ID %q", e.Field, *e.LabelID)
 	default:
 		return "task label mutation is invalid"
 	}

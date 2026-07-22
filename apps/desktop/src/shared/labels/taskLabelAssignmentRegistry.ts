@@ -17,16 +17,20 @@ export type TaskLabelAssignmentControllerLease = Readonly<{
 type ControllerInput = Readonly<{
   availableLabelIDs: readonly string[];
   initialAssignment: TaskLabelAssignment | null;
+  projectID: string;
   refetch: () => Promise<TaskLabelAssignment>;
   taskID: string;
   update: (input: TaskLabelUpdateInput) => Promise<TaskLabelAssignment>;
+  workflowID: string;
 }>;
 
 interface RegistryEntry {
   controller: TaskLabelAssignmentController;
+  projectID: string;
   references: number;
   stopCacheSync: () => void;
   stopCleanupWatch: (() => void) | null;
+  workflowID: string;
 }
 
 const registries = new WeakMap<QueryClient, TaskLabelAssignmentRegistry>();
@@ -54,9 +58,11 @@ class TaskLabelAssignmentRegistry {
     return this.#entries.get(taskID)?.controller ?? null;
   }
 
-  deleteLabel(labelID: string): void {
+  deleteLabel(projectID: string, labelID: string): void {
     for (const entry of this.#entries.values()) {
-      entry.controller.deleteLabel(labelID);
+      if (entry.projectID === projectID) {
+        entry.controller.deleteLabel(labelID);
+      }
     }
   }
 
@@ -69,10 +75,15 @@ class TaskLabelAssignmentRegistry {
     return true;
   }
 
-  markAllDirty(): void {
-    for (const entry of this.#entries.values()) {
-      entry.controller.markDirty();
+  markProjectDirty(projectID: string): readonly string[] {
+    const taskIDs: string[] = [];
+    for (const [taskID, entry] of this.#entries) {
+      if (entry.projectID === projectID) {
+        entry.controller.markDirty();
+        taskIDs.push(taskID);
+      }
     }
+    return taskIDs;
   }
 
   deleteTask(taskID: string): void {
@@ -106,6 +117,9 @@ class TaskLabelAssignmentRegistry {
   acquire(input: ControllerInput): TaskLabelAssignmentControllerLease {
     const existing = this.#entries.get(input.taskID);
     if (existing !== undefined) {
+      if (existing.projectID !== input.projectID || existing.workflowID !== input.workflowID) {
+        throw new Error(`Task ${input.taskID} label assignment scope changed while its controller is active.`);
+      }
       existing.stopCleanupWatch?.();
       existing.stopCleanupWatch = null;
       existing.references += 1;
@@ -121,9 +135,11 @@ class TaskLabelAssignmentRegistry {
     });
     const entry: RegistryEntry = {
       controller,
+      projectID: input.projectID,
       references: 1,
-      stopCacheSync: this.#installCacheSync(input.taskID, controller),
+      stopCacheSync: this.#installCacheSync(input, controller),
       stopCleanupWatch: null,
+      workflowID: input.workflowID,
     };
     this.#entries.set(input.taskID, entry);
     this.#emit(input.taskID);
@@ -175,7 +191,8 @@ class TaskLabelAssignmentRegistry {
     }
   }
 
-  #installCacheSync(taskID: string, controller: TaskLabelAssignmentController): () => void {
+  #installCacheSync(input: ControllerInput, controller: TaskLabelAssignmentController): () => void {
+    const { projectID, taskID, workflowID } = input;
     let previousAuthoritativeLabelIDs = controller.getSnapshot().authoritativeLabelIDs;
     const sync = (): void => {
       const snapshot = controller.getSnapshot();
@@ -198,13 +215,13 @@ class TaskLabelAssignmentRegistry {
       patchExistingTaskLabelProjections(this.#queryClient, taskID, snapshot.visibleLabelIDs);
       if (authoritativeChanged) {
         void this.#queryClient.invalidateQueries({
-          queryKey: queryKeys.allBoards,
+          queryKey: queryKeys.boardWorkflowRoot(projectID, workflowID),
         });
         void this.#queryClient.invalidateQueries({
-          queryKey: queryKeys.allBoardNodeCards,
+          queryKey: queryKeys.boardNodeCardsWorkflowRoot(projectID, workflowID),
         });
         void this.#queryClient.invalidateQueries({
-          queryKey: queryKeys.allTaskLists,
+          queryKey: queryKeys.projectTaskListsRoot(projectID),
         });
       }
     };

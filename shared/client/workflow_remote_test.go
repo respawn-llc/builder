@@ -249,9 +249,10 @@ func TestRemoteWorkflowProjectLabelAndTaskAssignmentMutationRoutes(t *testing.T)
 
 func TestRemoteWorkflowProjectLabelRoutePreservesTypedError(t *testing.T) {
 	handlerErr := make(chan error, 1)
+	projectID := "project-1"
 	source := &serverapi.WorkflowLabelError{
 		Reason:    serverapi.WorkflowLabelErrorReasonNameConflict,
-		ProjectID: "project-1",
+		ProjectID: &projectID,
 	}
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()
@@ -291,7 +292,7 @@ func TestRemoteWorkflowProjectLabelRoutePreservesTypedError(t *testing.T) {
 		Name:      "Priority",
 	})
 	var decoded *serverapi.WorkflowLabelError
-	if !errors.As(err, &decoded) || decoded.Reason != source.Reason || decoded.ProjectID != source.ProjectID {
+	if !errors.As(err, &decoded) || !reflect.DeepEqual(decoded, source) {
 		t.Fatalf("error = %T %v, want %+v", err, err, source)
 	}
 	if err := <-handlerErr; err != nil {

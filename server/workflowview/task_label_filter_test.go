@@ -57,8 +57,26 @@ func TestResolveWorkflowTaskLabelFilterValidatesOneCanonicalProjectSet(t *testin
 		t.Fatalf("validated label IDs = %v, want canonical %v", reader.labelIDs, wantIDs)
 	}
 	if facts.Kind != serverapi.WorkflowTaskLabelFilterKindNamed ||
-		facts.Mode != serverapi.WorkflowTaskNamedLabelFilterModeAny ||
+		facts.Mode == nil ||
+		*facts.Mode != serverapi.WorkflowTaskNamedLabelFilterModeAny ||
 		!reflect.DeepEqual(facts.LabelIDs, wantIDs) {
 		t.Fatalf("resolved facts = %+v, want named any %v", facts, wantIDs)
+	}
+	namedArgs, err := facts.queryArgs()
+	if err != nil {
+		t.Fatalf("named query args: %v", err)
+	}
+	if !namedArgs.mode.Valid || namedArgs.mode.String != string(serverapi.WorkflowTaskNamedLabelFilterModeAny) {
+		t.Fatalf("named mode query arg = %+v", namedArgs.mode)
+	}
+	noneArgs, err := (workflowTaskLabelFilterFacts{
+		Kind:     serverapi.WorkflowTaskLabelFilterKindNone,
+		LabelIDs: []string{},
+	}).queryArgs()
+	if err != nil {
+		t.Fatalf("none query args: %v", err)
+	}
+	if noneArgs.mode.Valid {
+		t.Fatalf("none mode query arg = %+v, want SQL null", noneArgs.mode)
 	}
 }

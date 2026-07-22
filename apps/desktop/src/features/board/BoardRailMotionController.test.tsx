@@ -47,11 +47,11 @@ const fetchNextByNode = new Map<string, ReturnType<typeof vi.fn>>();
 const fetchPreviousByNode = new Map<string, ReturnType<typeof vi.fn>>();
 const refetchByNode = new Map<string, ReturnType<typeof vi.fn>>();
 type FilterGenerationSnapshot = Readonly<{
-  active: Readonly<{ retiring: boolean }>;
+  active: Readonly<{ generation: number; retiring: boolean }>;
   desiredFilter: Readonly<{ kind: "unlabeled" }> | null;
 }>;
 const openFilterGenerationSnapshot: FilterGenerationSnapshot = {
-  active: { retiring: false },
+  active: { generation: 1, retiring: false },
   desiredFilter: null,
 };
 let filterGenerationSnapshot = openFilterGenerationSnapshot;
@@ -414,6 +414,41 @@ describe("BoardRailMotionController manual-drag animation", () => {
   });
 });
 
+describe("BoardRailMotionController filter replacement", () => {
+  it("replaces an accepted empty filter generation without leaving departing card clones", async () => {
+    const neverFinishes = new Promise<never>(() => undefined);
+    animateElementMock.mockReturnValue({ finished: neverFinishes });
+    setNode("backlog", [backlogCard]);
+    renderHarness();
+    await flush();
+    animateElementMock.mockClear();
+
+    await act(async () => {
+      setNode("backlog", [backlogCard], {
+        isFetching: true,
+        isPlaceholderData: true,
+      });
+      filterGenerationSnapshot = {
+        active: { generation: 2, retiring: false },
+        desiredFilter: null,
+      };
+      for (const listener of filterGenerationListeners) {
+        listener();
+      }
+      await Promise.resolve();
+    });
+    await act(async () => {
+      updateHarness({ board: board(0, 0) });
+      setNode("backlog");
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(animateElementMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("article", { name: "Task" })).not.toBeInTheDocument();
+  });
+});
+
 describe("BoardRailMotionController bounded column lifecycle", () => {
   beforeEach(() => {
     ControlledIntersectionObserver.reset();
@@ -593,7 +628,7 @@ describe("BoardRailMotionController bounded column lifecycle", () => {
 
     await act(async () => {
       filterGenerationSnapshot = {
-        active: { retiring: true },
+        active: { generation: 1, retiring: true },
         desiredFilter: { kind: "unlabeled" },
       };
       for (const listener of filterGenerationListeners) {

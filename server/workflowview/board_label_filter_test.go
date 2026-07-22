@@ -450,10 +450,11 @@ func TestBoardLabelFilterRejectsMoreThanOneHundredIDs(t *testing.T) {
 		LabelFilter: filter,
 	}
 	_, boardErr := fixture.view.board(t).Get(fixture.ctx, boardRequest)
-	var boardValidationErr serverapi.WorkflowRequestValidationError
+	var boardValidationErr *serverapi.WorkflowLabelError
 	if !errors.As(boardErr, &boardValidationErr) ||
-		boardValidationErr.Code != serverapi.WorkflowRequestErrorTooLong ||
-		boardValidationErr.Field != "label_filter.label_ids" {
+		boardValidationErr.Reason != serverapi.WorkflowLabelErrorReasonInvalidFilter ||
+		boardValidationErr.Field == nil ||
+		*boardValidationErr.Field != "label_filter.label_ids" {
 		t.Fatalf("board 101-ID error = %+v", boardErr)
 	}
 
@@ -466,10 +467,11 @@ func TestBoardLabelFilterRejectsMoreThanOneHundredIDs(t *testing.T) {
 			LabelFilter: filter,
 		},
 	)
-	var cardsValidationErr serverapi.WorkflowRequestValidationError
+	var cardsValidationErr *serverapi.WorkflowLabelError
 	if !errors.As(cardsErr, &cardsValidationErr) ||
-		cardsValidationErr.Code != serverapi.WorkflowRequestErrorTooLong ||
-		cardsValidationErr.Field != "label_filter.label_ids" {
+		cardsValidationErr.Reason != serverapi.WorkflowLabelErrorReasonInvalidFilter ||
+		cardsValidationErr.Field == nil ||
+		*cardsValidationErr.Field != "label_filter.label_ids" {
 		t.Fatalf("board cards 101-ID error = %+v", cardsErr)
 	}
 }

@@ -36,6 +36,12 @@ export const queryKeys = {
   allActivity: ["activity"],
   allComments: ["comments"],
   allPendingAsks: ["pending-asks"],
+  boardWorkflowRoot: (projectID: string, workflowID: string | undefined) => [
+    "board",
+    projectID,
+    workflowID,
+  ],
+  projectBoardsRoot: (projectID: string) => ["board", projectID],
   board: (projectID: string, workflowID: string | undefined, labelFilter: TaskLabelFilter) => [
     "board",
     projectID,
@@ -73,6 +79,12 @@ export const queryKeys = {
   projectWorkflowLinks: (projectID: string) => ["project-workflow-links", projectID],
   projectLabels: (projectID: string) => ["project-labels", projectID],
   taskLabels: (taskID: string) => ["task-labels", taskID],
+  projectBoardNodeCardsRoot: (projectID: string) => ["board-node-cards", projectID],
+  boardNodeCardsWorkflowRoot: (projectID: string, workflowID: string) => [
+    "board-node-cards",
+    projectID,
+    workflowID,
+  ],
   boardNodeCardsRoot: (projectID: string, workflowID: string, labelFilter: TaskLabelFilter) => [
     "board-node-cards",
     projectID,
@@ -86,6 +98,7 @@ export const queryKeys = {
     ...labelFilterKey(labelFilter),
     nodeID,
   ],
+  projectTaskListsRoot: (projectID: string) => ["task-list", projectID],
   task: (taskID: string) => ["task", taskID],
   taskAttention: (taskID: string) => ["task-attention", taskID],
   activity: (taskID: string) => ["activity", taskID],

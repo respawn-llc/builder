@@ -58,10 +58,11 @@ describe("BoardRoute live refresh", () => {
 
     await waitFor(() => {
       expect(boardCalls(services).length).toBe(1);
-      expect(services.transport.subscriptions).toContainEqual({
-        method: "workflow.subscribeProject",
-        params: { project_id: "project-1" },
-      });
+      expect(
+        services.transport.subscriptions.filter(
+          (subscription) => subscription.method === "workflow.subscribeProject",
+        ),
+      ).toHaveLength(1);
     });
     expect(
       await screen.findByRole("button", { name: appI18n.t("workflowLibrary.linkWorkflow") }),
@@ -335,6 +336,96 @@ describe("BoardRoute live refresh", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("kanban-column-task-count-backlog")).toHaveTextContent("2");
+    });
+  });
+
+  it("removes previously visible cards when a named filter returns an empty column", async () => {
+    window.history.pushState(null, "", "/projects/project-1?workflowId=workflow-1");
+    const alphaID = "38bf0da7-a3f7-4c15-bc5f-c8fca538e667";
+    const otherID = "4ca14410-ac9e-4dbb-b0ef-20bbb32cc53e";
+    const services = createTestServices([
+      ...startupRoutes,
+      {
+        method: "workflow.project.label.list",
+        result: {
+          catalog: {
+            project_id: "project-1",
+            labels: [{ id: alphaID, name: "Alpha" }],
+          },
+        },
+      },
+      {
+        method: "workflow.board.get",
+        handler: (_params, callIndex) =>
+          callIndex === 0 ? boardWithBacklogCount(1) : boardWithBacklogCount(0),
+      },
+      {
+        method: "workflow.board.nodeCards.list",
+        handler: (_params, callIndex) =>
+          callIndex === 0 ? labeledBacklogCards(otherID) : emptyBacklogCards,
+      },
+    ]);
+
+    render(<App services={services} />);
+
+    expect(await screen.findByText("Labeled task")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("labels.filter") }));
+    fireEvent.click(await screen.findByRole("button", { name: "Alpha" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("kanban-column-task-count-backlog")).toHaveTextContent("0");
+      expect(screen.queryByText("Labeled task")).not.toBeInTheDocument();
+    });
+  });
+
+  it("removes previously visible cards when create-and-select produces an empty named result", async () => {
+    window.history.pushState(null, "", "/projects/project-1?workflowId=workflow-1");
+    const alphaID = "38bf0da7-a3f7-4c15-bc5f-c8fca538e667";
+    const services = createTestServices([
+      ...startupRoutes,
+      {
+        method: "workflow.project.label.list",
+        handler: (_params, callIndex) => ({
+          catalog: {
+            project_id: "project-1",
+            labels: callIndex === 0 ? [] : [{ id: alphaID, name: "Alpha" }],
+          },
+        }),
+      },
+      {
+        method: "workflow.project.label.create",
+        result: {
+          label: { id: alphaID, name: "Alpha" },
+        },
+      },
+      {
+        method: "workflow.board.get",
+        handler: (_params, callIndex) =>
+          callIndex === 0 ? boardWithBacklogCount(1) : boardWithBacklogCount(0),
+      },
+      {
+        method: "workflow.board.nodeCards.list",
+        handler: (_params, callIndex) =>
+          callIndex === 0 ? labeledBacklogCards(alphaID) : emptyBacklogCards,
+      },
+    ]);
+
+    render(<App services={services} />);
+
+    expect(await screen.findByText("Labeled task")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("labels.filter") }));
+    fireEvent.change(await screen.findByRole("textbox", { name: appI18n.t("labels.search") }), {
+      target: { value: "Alpha" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: appI18n.t("labels.create", { name: "Alpha" }),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("kanban-column-task-count-backlog")).toHaveTextContent("0");
+      expect(screen.queryByText("Labeled task")).not.toBeInTheDocument();
     });
   });
 

@@ -46,7 +46,7 @@ export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: 
   }
   const content = (
     <ProjectLabelsProvider onBackgroundError={reportLabelError} projectID={detail.data.projectID}>
-      <TaskDetailAssignmentScope taskID={detail.data.id}>
+      <TaskDetailAssignmentScope taskID={detail.data.id} workflowID={detail.data.workflowID}>
         <TaskDetailContent
           activity={activity}
           attention={attention}
@@ -79,10 +79,14 @@ export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: 
   );
 }
 
-function TaskDetailAssignmentScope({ children, taskID }: Readonly<{ children: ReactNode; taskID: string }>) {
+function TaskDetailAssignmentScope({
+  children,
+  taskID,
+  workflowID,
+}: Readonly<{ children: ReactNode; taskID: string; workflowID: string }>) {
   const catalog = useProjectLabelCatalog();
   return (
-    <TaskLabelAssignmentProvider catalog={catalog.data ?? null} taskID={taskID}>
+    <TaskLabelAssignmentProvider catalog={catalog.data ?? null} taskID={taskID} workflowID={workflowID}>
       {children}
     </TaskLabelAssignmentProvider>
   );

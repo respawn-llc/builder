@@ -4,6 +4,7 @@ import { useAppServices } from "@/app-facade";
 import { useProjectLabelData } from "./projectLabelContext";
 import type { ProjectCatalogAuthority } from "./projectCatalogAuthority";
 import type { ProjectLabelFilterController } from "./projectLabelFilter";
+import type { ProjectLabelEffects } from "./labelEventEffects";
 
 export function useProjectLabelCatalog() {
   return useProjectLabelData().catalog;
@@ -35,4 +36,8 @@ export function useProjectCatalogAuthority(): ProjectCatalogAuthority {
 
 export function useProjectLabelFilter(): ProjectLabelFilterController {
   return useProjectLabelData().filter;
+}
+
+export function useProjectLabelEffects(): ProjectLabelEffects {
+  return useProjectLabelData().effects;
 }

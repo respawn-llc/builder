@@ -7,6 +7,12 @@ describe("label query keys", () => {
   it("keys catalogs, assignments, and board reads by canonical label filter identity", () => {
     expect(queryKeys.projectLabels("project-1")).toEqual(["project-labels", "project-1"]);
     expect(queryKeys.taskLabels("task-1")).toEqual(["task-labels", "task-1"]);
+    expect(queryKeys.projectBoardsRoot("project-1")).toEqual(["board", "project-1"]);
+    expect(queryKeys.projectBoardNodeCardsRoot("project-1")).toEqual([
+      "board-node-cards",
+      "project-1",
+    ]);
+    expect(queryKeys.projectTaskListsRoot("project-1")).toEqual(["task-list", "project-1"]);
     expect(
       queryKeys.board("project-1", "workflow-1", {
         kind: "named",

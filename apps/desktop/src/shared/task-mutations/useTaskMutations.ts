@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { noTaskLabelFilter, type TaskEditInput, type TaskMutationInput } from "@/api";
+import type { TaskEditInput, TaskMutationInput } from "@/api";
 import { queryKeys, useAppServices } from "@/app-facade";
 
 export function useWorkspaces(projectID: string) {
@@ -22,14 +22,23 @@ export function useCreateTask(
   return useMutation({
     mutationFn: async (input: TaskMutationInput) => api.createTask(input),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.board(projectID, boardQueryWorkflowID, noTaskLabelFilter),
-      });
-      if (selectedWorkflowID !== boardQueryWorkflowID) {
-        await queryClient.invalidateQueries({
-          queryKey: queryKeys.board(projectID, selectedWorkflowID, noTaskLabelFilter),
-        });
+      const workflowIDs = new Set<string | undefined>([boardQueryWorkflowID, selectedWorkflowID]);
+      const invalidations: Promise<void>[] = [];
+      for (const workflowID of workflowIDs) {
+        invalidations.push(
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.boardWorkflowRoot(projectID, workflowID),
+          }),
+        );
+        if (workflowID !== undefined) {
+          invalidations.push(
+            queryClient.invalidateQueries({
+              queryKey: queryKeys.boardNodeCardsWorkflowRoot(projectID, workflowID),
+            }),
+          );
+        }
       }
+      await Promise.all(invalidations);
     },
   });
 }

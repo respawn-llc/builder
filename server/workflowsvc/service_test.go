@@ -1058,7 +1058,8 @@ func TestServiceMapsWorkflowTaskLabelScopeFailures(t *testing.T) {
 	var mutationErr *serverapi.WorkflowLabelError
 	if !errors.As(err, &mutationErr) ||
 		mutationErr.Reason != serverapi.WorkflowLabelErrorReasonInvalidMutation ||
-		mutationErr.Field != "add_label_ids" {
+		mutationErr.Field == nil ||
+		*mutationErr.Field != "add_label_ids" {
 		t.Fatalf("invalid mutation error = %T %+v", err, err)
 	}
 }

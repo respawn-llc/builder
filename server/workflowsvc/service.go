@@ -678,7 +678,7 @@ func workflowTaskCreateError(err error, projectID string) error {
 			Reason: serverapi.WorkflowTaskCreateConflictReasonSerialization,
 		}
 	}
-	return workflowLabelError(err, projectID, "")
+	return workflowLabelError(err, workflowLabelErrorScope{projectID: &projectID})
 }
 
 func (s *Service) UpdateWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskUpdateRequest) (serverapi.WorkflowTaskUpdateResponse, error) {

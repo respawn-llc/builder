@@ -1515,7 +1515,7 @@ WITH
 label_filter_args AS (
     SELECT
         CAST(sqlc.arg(label_filter_kind) AS TEXT) AS label_filter_kind,
-        CAST(sqlc.arg(label_filter_mode) AS TEXT) AS label_filter_mode,
+        CAST(sqlc.narg(label_filter_mode) AS TEXT) AS label_filter_mode,
         CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json
 ),
 effective_board_placements AS (
@@ -1624,7 +1624,7 @@ args AS (
         CAST(sqlc.arg(attention_filter_set) AS INTEGER) AS attention_filter_set,
         CAST(sqlc.arg(attention_kinds_json) AS TEXT) AS attention_kinds_json,
         CAST(sqlc.arg(label_filter_kind) AS TEXT) AS label_filter_kind,
-        CAST(sqlc.arg(label_filter_mode) AS TEXT) AS label_filter_mode,
+        CAST(sqlc.narg(label_filter_mode) AS TEXT) AS label_filter_mode,
         CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json,
         CAST(sqlc.arg(cursor_set) AS INTEGER) AS cursor_set,
         CAST(sqlc.arg(cursor_created_at_unix_ms) AS INTEGER) AS cursor_created_at_unix_ms,
@@ -2014,7 +2014,7 @@ WITH board_node_tasks AS (
           sqlc.arg(label_filter_kind) = 'none'
           OR (
               sqlc.arg(label_filter_kind) = 'named'
-              AND sqlc.arg(label_filter_mode) = 'any'
+              AND sqlc.narg(label_filter_mode) = 'any'
               AND EXISTS (
                   SELECT 1
                   FROM json_each(sqlc.arg(label_ids_json)) selected_label
@@ -2025,7 +2025,7 @@ WITH board_node_tasks AS (
           )
           OR (
               sqlc.arg(label_filter_kind) = 'named'
-              AND sqlc.arg(label_filter_mode) = 'all'
+              AND sqlc.narg(label_filter_mode) = 'all'
               AND NOT EXISTS (
                   SELECT 1
                   FROM json_each(sqlc.arg(label_ids_json)) selected_label

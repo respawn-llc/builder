@@ -134,8 +134,8 @@ func (c *Remote) SubscribeWorkflow(ctx context.Context, req serverapi.WorkflowSu
 
 func workflowProjectEventFromProtocol(event protocol.WorkflowProjectEvent) (serverapi.WorkflowProjectEvent, error) {
 	decoded := serverapi.WorkflowProjectEvent{
-		ProjectID:        cloneWorkflowProjectEventID(event.ProjectID),
-		WorkflowID:       cloneWorkflowProjectEventID(event.WorkflowID),
+		ProjectID:        event.ProjectID,
+		WorkflowID:       event.WorkflowID,
 		Resource:         serverapi.WorkflowProjectEventResource(event.Resource),
 		Action:           serverapi.WorkflowProjectEventAction(event.Action),
 		PrimaryEntityID:  event.PrimaryEntityID,
@@ -146,14 +146,6 @@ func workflowProjectEventFromProtocol(event protocol.WorkflowProjectEvent) (serv
 		return serverapi.WorkflowProjectEvent{}, err
 	}
 	return decoded, nil
-}
-
-func cloneWorkflowProjectEventID(id *string) *string {
-	if id == nil {
-		return nil
-	}
-	value := *id
-	return &value
 }
 
 func (c *Remote) SubscribeWorktreeSetup(ctx context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {

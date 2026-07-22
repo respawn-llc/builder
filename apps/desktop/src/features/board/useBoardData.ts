@@ -13,6 +13,7 @@ import { queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 import { workflowProjectQuestionTaskID } from "@/app-facade";
+import { useProjectLabelEffects } from "@/shared/labels";
 import { useBoardFilterGeneration } from "./BoardFilterGenerationRuntime";
 import { useRetainedQueryData } from "./useRetainedQueryData";
 
@@ -133,6 +134,7 @@ export function useProjectBoardSubscription(
   const queryClient = useQueryClient();
   const boardGeneration = useBoardFilterGeneration();
   const connection = useConnectionSnapshot();
+  const labelEffects = useProjectLabelEffects();
   const { onBackgroundError, onSelectedTaskDeleted, selectedTaskID, selectedWorkflowID } = input;
   const consumeBackgroundError = useCallback(
     (error: unknown): void => {
@@ -163,9 +165,11 @@ export function useProjectBoardSubscription(
     }
     const subscription = api.subscribeProject(projectID, {
       onOpen() {
+        void labelEffects.refreshAfterSubscriptionBoundary().catch(consumeBackgroundError);
         void refresh().catch(consumeBackgroundError);
       },
       onEvent(event) {
+        void labelEffects.consumeProjectEvent(event).catch(consumeBackgroundError);
         if (isDeletedTaskEvent(event, selectedTaskID)) {
           onSelectedTaskDeleted?.();
         }
@@ -175,9 +179,12 @@ export function useProjectBoardSubscription(
         }
       },
       onComplete() {
+        void labelEffects.refreshAfterSubscriptionBoundary().catch(consumeBackgroundError);
         void refresh().catch(consumeBackgroundError);
       },
-      onError() {
+      onError(error) {
+        consumeBackgroundError(error);
+        void labelEffects.refreshAfterSubscriptionBoundary().catch(consumeBackgroundError);
         void refresh().catch(consumeBackgroundError);
       },
     });
@@ -192,6 +199,7 @@ export function useProjectBoardSubscription(
     connection.generation,
     connection.phase,
     consumeBackgroundError,
+    labelEffects,
     onBackgroundError,
     onSelectedTaskDeleted,
     projectID,

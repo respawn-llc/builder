@@ -6,11 +6,42 @@ import { afterEach, vi } from "vitest";
 import { RpcError } from "@/api";
 import { createTestServices, TestAppProviders } from "@/test-support/app-services";
 import { appI18n } from "@/test-support/i18n";
+import { installTestStorage } from "@/test-support/storage";
+import * as uiModule from "@/ui";
 import { NewTaskFallbackDialog, NewTaskForm } from "./NewTaskDialog";
 
 describe("NewTaskForm labels", () => {
   afterEach(() => {
+    installTestStorage("localStorage");
     vi.restoreAllMocks();
+  });
+
+  it("surfaces a persisted label-filter write failure", async () => {
+    const showStatusToast = vi.spyOn(uiModule, "showStatusToast");
+    const storage = installTestStorage("localStorage");
+    storage.setItem(
+      'desktop.projectLabelFilter.v1:["browser-endpoint","ws://127.0.0.1:53082/rpc","project-1"]',
+      JSON.stringify({
+        version: 1,
+        kind: "named",
+        mode: "any",
+        labelIDs: [priorityID],
+      }),
+    );
+    vi.spyOn(storage, "setItem").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+
+    renderNewTask();
+
+    await waitFor(() => {
+      expect(showStatusToast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "new-task-label-load-error",
+          tone: "danger",
+        }),
+      );
+    });
   });
 
   it("places Labels after Details and before Source workspace", async () => {

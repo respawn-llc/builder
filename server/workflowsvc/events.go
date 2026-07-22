@@ -67,8 +67,8 @@ func (b *workflowProjectEventBroker) PublishWorkflowEvent(_ context.Context, eve
 		occurredAt = time.Now().UTC().UnixMilli()
 	}
 	b.publish(serverapi.WorkflowProjectEvent{
-		ProjectID:        cloneWorkflowProjectEventID(event.ProjectID),
-		WorkflowID:       cloneWorkflowProjectEventID(event.WorkflowID),
+		ProjectID:        event.ProjectID,
+		WorkflowID:       event.WorkflowID,
 		Resource:         event.Resource,
 		Action:           event.Action,
 		PrimaryEntityID:  event.PrimaryEntityID,
@@ -96,14 +96,6 @@ func (b *workflowProjectEventBroker) publish(event serverapi.WorkflowProjectEven
 			sub.closeWithError(serverapi.ErrStreamGap)
 		}
 	}
-}
-
-func cloneWorkflowProjectEventID(id *string) *string {
-	if id == nil {
-		return nil
-	}
-	value := *id
-	return &value
 }
 
 func workflowProjectEventMatches(subscribedProjectID string, eventProjectID *string) bool {

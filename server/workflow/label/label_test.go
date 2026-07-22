@@ -2,6 +2,7 @@ package label_test
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"core/server/workflow/label"
@@ -66,14 +67,15 @@ func TestPrepareNameNormalizesAndValidatesTheLabelAlphabet(t *testing.T) {
 	}
 
 	for _, test := range []struct {
-		raw    string
-		reason label.NameErrorReason
+		raw       string
+		reason    label.NameErrorReason
+		character *rune
 	}{
 		{raw: "   ", reason: label.NameErrorRequired},
 		{raw: sixtyFourRunes + "a", reason: label.NameErrorTooLong},
-		{raw: "customer.acme", reason: label.NameErrorInvalidCharacter},
-		{raw: "priority\turgent", reason: label.NameErrorInvalidCharacter},
-		{raw: "ship🚀", reason: label.NameErrorInvalidCharacter},
+		{raw: "customer.acme", reason: label.NameErrorInvalidCharacter, character: runePointer('.')},
+		{raw: "priority\turgent", reason: label.NameErrorInvalidCharacter, character: runePointer('\t')},
+		{raw: "ship🚀", reason: label.NameErrorInvalidCharacter, character: runePointer('🚀')},
 	} {
 		_, err := label.PrepareName(test.raw)
 		var nameErr *label.NameError
@@ -83,7 +85,14 @@ func TestPrepareNameNormalizesAndValidatesTheLabelAlphabet(t *testing.T) {
 		if nameErr.Reason != test.reason {
 			t.Fatalf("PrepareName(%q) reason = %q, want %q", test.raw, nameErr.Reason, test.reason)
 		}
+		if !reflect.DeepEqual(nameErr.Rune, test.character) {
+			t.Fatalf("PrepareName(%q) character = %v, want %v", test.raw, nameErr.Rune, test.character)
+		}
 	}
+}
+
+func runePointer(value rune) *rune {
+	return &value
 }
 
 func TestComparisonUsesUnicodeCaseFolding(t *testing.T) {
