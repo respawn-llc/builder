@@ -378,11 +378,11 @@ func TestGenerateStream_EmitsUnknownPhaseWhenDeltaPrecedesAssistantItem(t *testi
 	}
 }
 
-func TestGenerateStream_RejectsCompletedMessageThatDoesNotExtendDisplayedDeltas(t *testing.T) {
+func TestGenerateStream_RejectsCompletedMessageThatConflictsWithDisplayedDeltas(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
 		`{"type":"response.output_text.delta","output_index":0,"delta":"Hello"}`,
-		`{"type":"response.output_text.delta","output_index":0,"delta":"\n\n"}`,
+		`{"type":"response.output_text.delta","output_index":0,"delta":"!"}`,
 		`{"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello"}]}}`,
 		`{"type":"response.completed","response":{"output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello"}]}]}}`,
 		`[DONE]`,
@@ -398,7 +398,7 @@ func TestGenerateStream_RejectsCompletedMessageThatDoesNotExtendDisplayedDeltas(
 		t.Fatalf("GenerateStream response = %+v, want provider contract error", resp)
 	}
 
-	const streamed = "Hello\n\n"
+	const streamed = "Hello!"
 	if got := joinedAssistantDeltas(deltas); got != streamed {
 		t.Fatalf("streamed deltas = %q, want %q", got, streamed)
 	}
@@ -408,6 +408,145 @@ func TestGenerateStream_RejectsCompletedMessageThatDoesNotExtendDisplayedDeltas(
 	}
 	if providerErr.Code != UnifiedErrorCodeProviderContract {
 		t.Fatalf("provider code = %q, want %q", providerErr.Code, UnifiedErrorCodeProviderContract)
+	}
+}
+
+func TestGenerateStream_IgnoresWhitespaceOnlyAssistantShimBeforeToolCall(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_item.added","output_index":1,"item":{"id":"msg_1","type":"message","role":"assistant","content":[]}}`,
+		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":1,"content_index":0,"delta":"\n\n"}`,
+		`{"type":"response.output_text.done","item_id":"msg_1","output_index":1,"content_index":0,"text":""}`,
+		`{"type":"response.output_item.done","output_index":1,"item":{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`,
+		`{"type":"response.output_item.added","output_index":2,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"shell","arguments":""}}`,
+		`{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":2,"delta":"{\"command\":\"pwd\"}"}`,
+		`{"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":2,"arguments":"{\"command\":\"pwd\"}"}`,
+		`{"type":"response.output_item.done","output_index":2,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"shell","arguments":"{\"command\":\"pwd\"}"}}`,
+		`{"type":"response.completed","response":{"output":[{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]},{"id":"fc_1","type":"function_call","call_id":"call_1","name":"shell","arguments":"{\"command\":\"pwd\"}"}]}}`,
+		`[DONE]`,
+	)
+
+	var deltas []AssistantDelta
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
+		OnAssistantDelta: func(delta AssistantDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if len(deltas) != 0 {
+		t.Fatalf("assistant deltas = %+v, want no semantic assistant output", deltas)
+	}
+	if resp.AssistantText != "" {
+		t.Fatalf("assistant text = %q, want empty", resp.AssistantText)
+	}
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].ID != "call_1" || resp.ToolCalls[0].Name != "shell" {
+		t.Fatalf("tool calls = %+v, want shell call_1", resp.ToolCalls)
+	}
+}
+
+func TestGenerateStream_IgnoresTrailingWhitespaceAssistantShimBeforeToolCall(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_item.added","output_index":1,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"commentary","content":[]}}`,
+		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":1,"content_index":0,"delta":"I will run it.\n\n"}`,
+		`{"type":"response.output_item.done","output_index":1,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"I will run it.\n\n"}]}}`,
+		`{"type":"response.output_item.added","output_index":2,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"shell","arguments":""}}`,
+		`{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":2,"delta":"{\"command\":\"pwd\"}"}`,
+		`{"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":2,"arguments":"{\"command\":\"pwd\"}"}`,
+		`{"type":"response.output_item.done","output_index":2,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"shell","arguments":"{\"command\":\"pwd\"}"}}`,
+		`{"type":"response.completed","response":{"output":[{"id":"msg_1","type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"I will run it."}]},{"id":"fc_1","type":"function_call","call_id":"call_1","name":"shell","arguments":"{\"command\":\"pwd\"}"}]}}`,
+		`[DONE]`,
+	)
+
+	var deltas []AssistantDelta
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
+		OnAssistantDelta: func(delta AssistantDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if got := joinedAssistantDeltas(deltas); got != "I will run it." {
+		t.Fatalf("assistant deltas = %q, want finalized semantic content", got)
+	}
+	if resp.AssistantText != "I will run it." {
+		t.Fatalf("assistant text = %q, want finalized semantic content", resp.AssistantText)
+	}
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].ID != "call_1" || resp.ToolCalls[0].Name != "shell" {
+		t.Fatalf("tool calls = %+v, want shell call_1", resp.ToolCalls)
+	}
+}
+
+func TestGenerateStream_IgnoresStructuredTrailingWhitespaceShimWithoutDeltaConsumer(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
+		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"Hello\n\n"}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello\n\n"}]}}`,
+		`{"type":"response.completed","response":{"output":[{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello"}]}]}}`,
+		`[DONE]`,
+	)
+
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if resp.AssistantText != "Hello" {
+		t.Fatalf("assistant text = %q, want finalized content", resp.AssistantText)
+	}
+}
+
+func TestGenerateStream_IgnoresLeadingWhitespaceAssistantShimBeforeContent(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
+		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"\n\nHello"}`,
+		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":" world"}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello world"}]}}`,
+		`{"type":"response.completed","response":{"output":[{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello world"}]}]}}`,
+		`[DONE]`,
+	)
+
+	var deltas []AssistantDelta
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
+		OnAssistantDelta: func(delta AssistantDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if got := joinedAssistantDeltas(deltas); got != "Hello world" {
+		t.Fatalf("assistant deltas = %q, want finalized content", got)
+	}
+	if resp.AssistantText != "Hello world" {
+		t.Fatalf("assistant text = %q, want finalized content", resp.AssistantText)
+	}
+}
+
+func TestGenerateStream_PreservesWhitespaceBetweenAssistantContent(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
+		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"Hello "}`,
+		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"world"}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello world"}]}}`,
+		`{"type":"response.completed","response":{"output":[{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello world"}]}]}}`,
+		`[DONE]`,
+	)
+
+	var deltas []AssistantDelta
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
+		OnAssistantDelta: func(delta AssistantDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if got := joinedAssistantDeltas(deltas); got != "Hello world" {
+		t.Fatalf("assistant deltas = %q, want preserved interstitial whitespace", got)
+	}
+	if resp.AssistantText != "Hello world" {
+		t.Fatalf("assistant text = %q, want preserved interstitial whitespace", resp.AssistantText)
 	}
 }
 

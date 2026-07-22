@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"core/shared/llmerrors"
 	"core/shared/textutil"
@@ -12,15 +13,20 @@ import (
 )
 
 type responseStreamAccumulator struct {
-	callbacks         StreamCallbacks
-	windowTokens      int
-	assistantText     strings.Builder
-	assistantMessages *assistantMessageAccumulator
-	toolCalls         *toolCallAccumulator
-	reasoning         *reasoningAccumulator
-	passthrough       *passthroughOutputAccumulator
-	completed         *responses.Response
-	responseError     *responseStreamError
+	callbacks          StreamCallbacks
+	windowTokens       int
+	assistantText      strings.Builder
+	pendingWhitespace  strings.Builder
+	hasPendingSpace    bool
+	assistantOutput    int64
+	hasAssistantOutput bool
+	assistantStarted   bool
+	assistantMessages  *assistantMessageAccumulator
+	toolCalls          *toolCallAccumulator
+	reasoning          *reasoningAccumulator
+	passthrough        *passthroughOutputAccumulator
+	completed          *responses.Response
+	responseError      *responseStreamError
 }
 
 type responseStreamError struct {
@@ -53,10 +59,7 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 		if evt.Delta == "" {
 			return
 		}
-		a.assistantText.WriteString(evt.Delta)
-		if a.callbacks.OnAssistantDelta != nil {
-			a.callbacks.OnAssistantDelta(AssistantDelta{Text: evt.Delta, Phase: a.assistantMessages.Phase(evt.OutputIndex)})
-		}
+		a.consumeAssistantDelta(evt.OutputIndex, evt.Delta)
 	case "response.output_item.added", "response.output_item.done":
 		if err := a.assistantMessages.Upsert(evt.Item, evt.OutputIndex); err != nil {
 			a.responseError = &responseStreamError{
@@ -121,6 +124,48 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 		a.responseError = &responseStreamError{Raw: raw}
 	case "error":
 		a.responseError = &responseStreamError{Raw: evt.RawJSON()}
+	}
+}
+
+func (a *responseStreamAccumulator) consumeAssistantDelta(outputIndex int64, text string) {
+	phase := a.assistantMessages.Phase(outputIndex)
+	if !a.hasAssistantOutput || a.assistantOutput != outputIndex {
+		a.pendingWhitespace.Reset()
+		a.hasPendingSpace = false
+		a.assistantOutput = outputIndex
+		a.hasAssistantOutput = true
+		a.assistantStarted = false
+	}
+	contentWithLeadingWhitespace := strings.TrimRightFunc(text, unicode.IsSpace)
+	trailingWhitespace := text[len(contentWithLeadingWhitespace):]
+	content := contentWithLeadingWhitespace
+	if !a.assistantStarted {
+		// Provider bug (omlx): assistant messages can start with provisional
+		// whitespace that output_text.done and response.completed omit.
+		content = strings.TrimLeftFunc(content, unicode.IsSpace)
+	}
+	if content != "" {
+		if a.assistantStarted && a.hasPendingSpace {
+			a.emitAssistantDelta(AssistantDelta{Text: a.pendingWhitespace.String(), Phase: phase})
+		}
+		a.pendingWhitespace.Reset()
+		a.hasPendingSpace = false
+		a.emitAssistantDelta(AssistantDelta{Text: content, Phase: phase})
+		a.assistantStarted = true
+	}
+	if trailingWhitespace != "" {
+		// Provider bug (omlx): assistant responses can stream provisional trailing
+		// whitespace that response.completed omits, including whitespace attached
+		// to the end of an otherwise semantic delta.
+		a.hasPendingSpace = true
+		a.pendingWhitespace.WriteString(trailingWhitespace)
+	}
+}
+
+func (a *responseStreamAccumulator) emitAssistantDelta(delta AssistantDelta) {
+	a.assistantText.WriteString(delta.Text)
+	if a.callbacks.OnAssistantDelta != nil {
+		a.callbacks.OnAssistantDelta(delta)
 	}
 }
 
