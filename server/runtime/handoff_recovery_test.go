@@ -22,36 +22,7 @@ func TestReopenedSessionAfterSuccessfulTriggerHandoffRequeuesPendingHandoff(t *t
 		t.Fatalf("persist seed message: %v", err)
 	}
 
-	handoffCall := llm.ToolCall{
-		ID:   "handoff-call",
-		Name: string(toolspec.ToolTriggerHandoff),
-		Input: mustJSON(map[string]any{
-			"summarizer_prompt":    "summarize",
-			"future_agent_message": "continue",
-		}),
-	}
-	if err := engine.steer("handoff", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{
-			Role:      llm.RoleAssistant,
-			Phase:     textutil.Value(llm.MessagePhaseCommentary),
-			Content:   textutil.Value("handoff"),
-			ToolCalls: []llm.ToolCall{handoffCall},
-		}},
-	)); err != nil {
-		t.Fatalf("persist trigger-handoff call: %v", err)
-	}
-	if err := engine.steer("handoff", steerToolCompletionIntent(tools.Result{
-		CallID: handoffCall.ID,
-		Name:   toolspec.ToolTriggerHandoff,
-		Output: mustJSON(tools.TriggerHandoffResultPayload{
-			FutureAgentMessageAdded: true,
-		}),
-	})); err != nil {
-		t.Fatalf("persist trigger-handoff completion: %v", err)
-	}
+	persistSuccessfulTriggerHandoff(t, engine, "handoff-call")
 
 	resumedClient := &fakeClient{responses: []llm.Response{
 		{
@@ -93,4 +64,86 @@ func TestReopenedSessionAfterSuccessfulTriggerHandoffRequeuesPendingHandoff(t *t
 	if futureMessages != 1 {
 		t.Fatalf("restored handoff future-message items = %d, want 1", futureMessages)
 	}
+}
+
+func TestReopenedSessionAfterTriggerHandoffDoesNotRequeueWhenAnyCompactionAlreadyHappened(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
+	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+	)); err != nil {
+		t.Fatalf("persist seed message: %v", err)
+	}
+	handoffCall := persistSuccessfulTriggerHandoff(t, engine, "satisfied-handoff-call")
+	receipt, err := newCompactionPersistence(engine).replaceHistory(
+		"compact",
+		"local",
+		compactionModeManual,
+		llm.ItemsFromMessages([]llm.Message{{
+			Role:        llm.RoleDeveloper,
+			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+			Content:     textutil.Value("summary"),
+		}}),
+	)
+	if err != nil || !receipt.Committed {
+		t.Fatalf("persist compaction after trigger-handoff: receipt=%+v error=%v", receipt, err)
+	}
+
+	restored := mustNewHandoffTestEngine(t, mustOpenTestSession(t, store.Dir()), &fakeClient{}, Config{})
+	if pending := restored.handoffRuntimeState().RequestSnapshot(); pending != nil {
+		t.Fatalf("reopened session requeued satisfied handoff: %+v", pending)
+	}
+	if generation := restored.compactionRuntimeState().Count(); generation != 1 {
+		t.Fatalf("reopened compaction generation = %d, want 1", generation)
+	}
+	for _, item := range restored.transcriptRuntimeState().SnapshotItems() {
+		if item.CallID == nil || *item.CallID != handoffCall.ID {
+			continue
+		}
+		switch item.Type {
+		case llm.ResponseItemTypeFunctionCall,
+			llm.ResponseItemTypeFunctionCallOutput,
+			llm.ResponseItemTypeCustomToolCall,
+			llm.ResponseItemTypeCustomToolOutput:
+			t.Fatalf("reopened active items retained trigger-handoff protocol item: %+v", item)
+		}
+	}
+}
+
+func persistSuccessfulTriggerHandoff(t *testing.T, engine *Engine, callID string) llm.ToolCall {
+	t.Helper()
+	handoffCall := llm.ToolCall{
+		ID:   callID,
+		Name: string(toolspec.ToolTriggerHandoff),
+		Input: mustJSON(map[string]any{
+			"summarizer_prompt":    "summarize",
+			"future_agent_message": "continue",
+		}),
+	}
+	if err := engine.steer("handoff", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{
+			Role:      llm.RoleAssistant,
+			Phase:     textutil.Value(llm.MessagePhaseCommentary),
+			Content:   textutil.Value("handoff"),
+			ToolCalls: []llm.ToolCall{handoffCall},
+		}},
+	)); err != nil {
+		t.Fatalf("persist trigger-handoff call: %v", err)
+	}
+	if err := engine.steer("handoff", steerToolCompletionIntent(tools.Result{
+		CallID: handoffCall.ID,
+		Name:   toolspec.ToolTriggerHandoff,
+		Output: mustJSON(tools.TriggerHandoffResultPayload{
+			FutureAgentMessageAdded: true,
+		}),
+	})); err != nil {
+		t.Fatalf("persist trigger-handoff completion: %v", err)
+	}
+	return handoffCall
 }
