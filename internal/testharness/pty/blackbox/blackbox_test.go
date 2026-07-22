@@ -13,6 +13,7 @@ import (
 	"core/internal/testharness/pty/analyzer"
 	"core/internal/testharness/pty/blackbox"
 	"core/server/llm"
+	"core/shared/textutil"
 
 	"github.com/google/uuid"
 )
@@ -846,7 +847,7 @@ func TestResponsesStubStreamsRequiredOperationToHTTPTransport(t *testing.T) {
 	response, err := transport.GenerateStream(context.Background(), llm.OpenAIRequest{
 		Model:          "gpt-5",
 		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
-		Items:          llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: probe}}),
+		Items:          llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(probe)}}),
 	}, func(delta string) {
 		deltas = append(deltas, delta)
 	})
@@ -877,7 +878,7 @@ func TestResponsesStubServesCompactInputTokenAndModelMetadataTransportRoutes(t *
 	compactTransport := newStubTransport(compact)
 	if _, err := compactTransport.Compact(context.Background(), llm.OpenAICompactionRequest{
 		Model:      "gpt-5",
-		InputItems: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: "input"}}),
+		InputItems: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}}),
 	}); err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
@@ -895,7 +896,7 @@ func TestResponsesStubServesCompactInputTokenAndModelMetadataTransportRoutes(t *
 	count, err := newStubTransport(inputTokens).CountRequestInputTokens(context.Background(), llm.OpenAIRequest{
 		Model:          "gpt-5",
 		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
-		Items:          llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: "input"}}),
+		Items:          llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}}),
 	})
 	if err != nil {
 		t.Fatalf("CountRequestInputTokens: %v", err)

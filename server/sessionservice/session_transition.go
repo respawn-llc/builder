@@ -129,7 +129,11 @@ func resolveForkRollback(req sessionTransitionResolveRequest) (serverapi.Session
 	if baseName == "" {
 		baseName = parentMeta.SessionID
 	}
-	forkedStore, forkOrdinal, err := session.ForkAtUserMessage(req.Store, req.Transition.ForkUserMessageSeq, baseName, sessioncontract.SessionCategoryMain)
+	eventLog, err := req.Store.MaterializeEventLog()
+	if err != nil {
+		return serverapi.SessionDirective{}, err
+	}
+	forkedStore, forkOrdinal, err := session.ForkAtUserMessage(eventLog, req.Transition.ForkUserMessageSeq, baseName, sessioncontract.SessionCategoryMain)
 	if err != nil {
 		return serverapi.SessionDirective{}, err
 	}

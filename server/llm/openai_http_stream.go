@@ -216,6 +216,13 @@ func (a *responseStreamAccumulator) Response() (OpenAIResponse, error) {
 	if assistantResponseTextExtendsStream(streamedDeltaText, parsedText) {
 		finalText = parsedText
 	}
+	if responseItemsContainAssistantMessage(parsedItems) && finalText != parsedText {
+		return OpenAIResponse{}, fmt.Errorf(
+			"completed assistant content conflicts with streamed assistant content: streamed bytes=%d completed bytes=%d",
+			len(finalText),
+			len(parsedText),
+		)
+	}
 	if parsedPhase != "" {
 		finalPhase = parsedPhase
 		finalProviderPhase = parsedProviderPhase
@@ -239,6 +246,15 @@ func (a *responseStreamAccumulator) Response() (OpenAIResponse, error) {
 	}, nil
 }
 
+func responseItemsContainAssistantMessage(items []ResponseItem) bool {
+	for _, item := range items {
+		if item.Type == ResponseItemTypeMessage && item.Role != nil && *item.Role == RoleAssistant {
+			return true
+		}
+	}
+	return false
+}
+
 func assistantResponseTextExtendsStream(streamed string, candidate string) bool {
 	if candidate == "" {
 		return false
@@ -256,7 +272,9 @@ func repairAssistantOutputItems(items []ResponseItem, text string, phase Message
 	repaired := CloneResponseItems(items)
 	assistantIndexes := make([]int, 0, len(repaired))
 	for idx := len(repaired) - 1; idx >= 0; idx-- {
-		if repaired[idx].Type == ResponseItemTypeMessage && repaired[idx].Role == RoleAssistant {
+		if repaired[idx].Type == ResponseItemTypeMessage &&
+			repaired[idx].Role != nil &&
+			*repaired[idx].Role == RoleAssistant {
 			assistantIndexes = append(assistantIndexes, idx)
 		}
 	}
@@ -267,9 +285,9 @@ func repairAssistantOutputItems(items []ResponseItem, text string, phase Message
 		assistant := ResponseItem{
 			Type:        ResponseItemTypeMessage,
 			OutputIndex: outputIndex,
-			Role:        RoleAssistant,
-			Phase:       phase,
-			Content:     text,
+			Role:        textutil.Value(RoleAssistant),
+			Phase:       optionalMessagePhase(phase),
+			Content:     textutil.Value(text),
 		}
 		if !hasResolvedStream {
 			return append([]ResponseItem{assistant}, repaired...)
@@ -295,11 +313,13 @@ func repairAssistantOutputItems(items []ResponseItem, text string, phase Message
 			}
 		}
 	}
-	if len(assistantIndexes) == 1 && text != "" && repaired[targetAssistantIdx].Content != text {
-		repaired[targetAssistantIdx].Content = text
+	if len(assistantIndexes) == 1 && text != "" &&
+		(repaired[targetAssistantIdx].Content == nil ||
+			*repaired[targetAssistantIdx].Content != text) {
+		repaired[targetAssistantIdx].Content = textutil.Value(text)
 	}
-	if repaired[targetAssistantIdx].Phase == "" && phase != "" {
-		repaired[targetAssistantIdx].Phase = phase
+	if repaired[targetAssistantIdx].Phase == nil && phase != "" {
+		repaired[targetAssistantIdx].Phase = textutil.Value(phase)
 	}
 	return repaired
 }
@@ -309,9 +329,9 @@ func mergeReasoningEntries(primary, secondary []ReasoningEntry) []ReasoningEntry
 	seen := make(map[string]struct{}, len(primary)+len(secondary))
 	appendEntries := func(entries []ReasoningEntry) {
 		for _, entry := range entries {
-			role := strings.TrimSpace(entry.Role)
+			role, present := textutil.OptionalTrimmed(entry.Role)
 			text := strings.TrimSpace(entry.Text)
-			if role == "" || text == "" {
+			if !present || text == "" {
 				continue
 			}
 			key := role + "\x00" + text
@@ -319,7 +339,7 @@ func mergeReasoningEntries(primary, secondary []ReasoningEntry) []ReasoningEntry
 				continue
 			}
 			seen[key] = struct{}{}
-			out = append(out, ReasoningEntry{Role: role, Text: text})
+			out = append(out, ReasoningEntry{Role: textutil.Value(role), Text: text})
 		}
 	}
 	appendEntries(primary)
@@ -393,7 +413,9 @@ func (a *assistantMessageAccumulator) Upsert(item responses.ResponseOutputItemUn
 		return nil
 	}
 	assistant := parsedItems[0]
-	if assistant.Type != ResponseItemTypeMessage || assistant.Role != RoleAssistant {
+	if assistant.Type != ResponseItemTypeMessage ||
+		assistant.Role == nil ||
+		*assistant.Role != RoleAssistant {
 		return nil
 	}
 	if _, exists := a.byIndex[outputIndex]; !exists {
@@ -410,12 +432,17 @@ func (a *assistantMessageAccumulator) Resolve() (string, MessagePhase, *Provider
 	segments := make([]assistantOutputSegment, 0, len(a.order))
 	for _, outputIndex := range a.order {
 		item, ok := a.byIndex[outputIndex]
-		if !ok || item.message.Type != ResponseItemTypeMessage || item.message.Role != RoleAssistant {
+		if !ok ||
+			item.message.Type != ResponseItemTypeMessage ||
+			item.message.Role == nil ||
+			*item.message.Role != RoleAssistant ||
+			item.message.Content == nil ||
+			item.message.Phase == nil {
 			continue
 		}
 		segments = append(segments, assistantOutputSegment{
-			Text:          item.message.Content,
-			Phase:         item.message.Phase,
+			Text:          *item.message.Content,
+			Phase:         *item.message.Phase,
 			ProviderPhase: item.providerPhase,
 			OutputIndex:   outputIndex,
 		})
@@ -428,7 +455,10 @@ func (a *assistantMessageAccumulator) Phase(outputIndex int64) MessagePhase {
 		return ""
 	}
 	item, ok := a.byIndex[outputIndex]
-	if !ok || item.message.Type != ResponseItemTypeMessage || item.message.Role != RoleAssistant {
+	if !ok ||
+		item.message.Type != ResponseItemTypeMessage ||
+		item.message.Role == nil ||
+		*item.message.Role != RoleAssistant {
 		return ""
 	}
 	return providerPhaseProjection(item.providerPhase)
@@ -453,7 +483,7 @@ func (a *reasoningAccumulator) ensure(role, key string) *ReasoningEntry {
 	if item, ok := a.items[composite]; ok {
 		return item
 	}
-	entry := &ReasoningEntry{Role: role}
+	entry := &ReasoningEntry{Role: textutil.Value(role)}
 	a.items[composite] = entry
 	a.order = append(a.order, composite)
 	return entry
@@ -687,9 +717,9 @@ func (a *toolCallAccumulator) Merge(calls []ToolCall) {
 		}
 		if call.Custom {
 			state.IsCustom = true
-			if call.CustomInput != "" {
+			if call.CustomInput != nil {
 				state.Custom.Reset()
-				state.Custom.WriteString(call.CustomInput)
+				state.Custom.WriteString(*call.CustomInput)
 			}
 		} else if len(call.Input) > 0 {
 			state.Args.Reset()
@@ -713,7 +743,10 @@ func (a *toolCallAccumulator) ToToolCalls() []ToolCall {
 		if state.IsCustom {
 			input = normalizeToolInput(state.Custom.String())
 		}
-		out = append(out, ToolCall{ID: callID, Name: state.Name, Input: input, Custom: state.IsCustom, CustomInput: state.Custom.String()})
+		out = append(out, ToolCall{
+			ID: callID, Name: state.Name, Input: input, Custom: state.IsCustom,
+			CustomInput: textutil.OptionalExactString(state.Custom.String()),
+		})
 	}
 	return out
 }
@@ -721,7 +754,10 @@ func (a *toolCallAccumulator) ToToolCalls() []ToolCall {
 func buildOutputItemsFromStream(text string, phase MessagePhase, toolCalls []ToolCall, reasoning []ReasoningEntry, reasoningItems []ReasoningItem) []ResponseItem {
 	items := make([]ResponseItem, 0, 1+len(toolCalls)+len(reasoningItems))
 	if strings.TrimSpace(text) != "" {
-		items = append(items, ResponseItem{Type: ResponseItemTypeMessage, Role: RoleAssistant, Phase: phase, Content: text})
+		items = append(items, ResponseItem{
+			Type: ResponseItemTypeMessage, Role: textutil.Value(RoleAssistant),
+			Phase: optionalMessagePhase(phase), Content: textutil.Value(text),
+		})
 	}
 	for _, call := range toolCalls {
 		callID := textutil.FirstNonEmpty(strings.TrimSpace(call.ID), strings.TrimSpace(call.Name))
@@ -729,9 +765,17 @@ func buildOutputItemsFromStream(text string, phase MessagePhase, toolCalls []Too
 			continue
 		}
 		if call.Custom {
-			items = append(items, ResponseItem{Type: ResponseItemTypeCustomToolCall, ID: callID, CallID: callID, Name: call.Name, CustomInput: call.CustomInput})
+			items = append(items, ResponseItem{
+				Type: ResponseItemTypeCustomToolCall, ID: textutil.Value(callID),
+				CallID: textutil.Value(callID), Name: textutil.Value(call.Name),
+				CustomInput: textutil.Pointer(call.CustomInput),
+			})
 		} else {
-			items = append(items, ResponseItem{Type: ResponseItemTypeFunctionCall, ID: callID, CallID: callID, Name: call.Name, Arguments: normalizeToolInput(string(call.Input))})
+			items = append(items, ResponseItem{
+				Type: ResponseItemTypeFunctionCall, ID: textutil.Value(callID),
+				CallID: textutil.Value(callID), Name: textutil.Value(call.Name),
+				Arguments: normalizeToolInput(string(call.Input)),
+			})
 		}
 	}
 	summaries := make([]ReasoningEntry, 0, len(reasoning))
@@ -750,12 +794,19 @@ func buildOutputItemsFromStream(text string, phase MessagePhase, toolCalls []Too
 		}
 		items = append(items, ResponseItem{
 			Type:             ResponseItemTypeReasoning,
-			ID:               id,
-			EncryptedContent: encrypted,
+			ID:               textutil.Value(id),
+			EncryptedContent: textutil.Value(encrypted),
 			ReasoningSummary: append([]ReasoningEntry(nil), summaries...),
 		})
 	}
 	return items
+}
+
+func optionalMessagePhase(phase MessagePhase) *MessagePhase {
+	if strings.TrimSpace(string(phase)) == "" {
+		return nil
+	}
+	return textutil.Value(phase)
 }
 
 type passthroughOutputAccumulator struct {

@@ -372,7 +372,7 @@ func TestRemoteRunPromptPreservesTypedSubagentDepthPolicyWithoutProgress(t *test
 			request.ID,
 			source.RPCErrorCode(),
 			source.Error(),
-			source.RPCErrorData(),
+			mustRPCErrorData(t, source),
 		)); err != nil {
 			t.Fatalf("send typed policy error: %v", err)
 		}
@@ -1093,7 +1093,7 @@ func TestProtocolErrorDecodesWorkflowTaskListScopeError(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeWorkflowTaskListScope,
 		Message: "scope resolution failed",
-		Data:    source.RPCErrorData(),
+		Data:    mustRPCErrorData(t, source),
 	})
 	var decoded *serverapi.WorkflowTaskListScopeError
 	if !errors.As(err, &decoded) {
@@ -1114,7 +1114,7 @@ func TestProtocolErrorDecodesWorkflowTaskCreateSelectionError(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeWorkflowTaskCreateSelection,
 		Message: "selection failed",
-		Data:    source.RPCErrorData(),
+		Data:    mustRPCErrorData(t, source),
 	})
 	var decoded *serverapi.WorkflowTaskCreateSelectionError
 	if !errors.As(err, &decoded) {
@@ -1143,7 +1143,7 @@ func TestProtocolErrorDecodesWorkflowTaskCreateConflictError(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeWorkflowTaskCreateConflict,
 		Message: "task create conflicted",
-		Data:    source.RPCErrorData(),
+		Data:    mustRPCErrorData(t, source),
 	})
 	var decoded *serverapi.WorkflowTaskCreateConflictError
 	if !errors.As(err, &decoded) || decoded.Reason != source.Reason {
@@ -1165,7 +1165,7 @@ func TestProtocolErrorDecodesSessionRetargetError(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeSessionRetarget,
 		Message: source.Error(),
-		Data:    source.RPCErrorData(),
+		Data:    mustRPCErrorData(t, source),
 	})
 	assertRemoteSessionRetargetError(t, err, source)
 }
@@ -1186,7 +1186,7 @@ func TestRemoteSessionRetargetErrorRoundTrip(t *testing.T) {
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			t.Fatalf("receive session retarget request: %v", err)
 		}
-		if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(req.ID, source.RPCErrorCode(), source.Error(), source.RPCErrorData())); err != nil {
+		if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(req.ID, source.RPCErrorCode(), source.Error(), mustRPCErrorData(t, source))); err != nil {
 			t.Fatalf("send session retarget error: %v", err)
 		}
 	})
@@ -1230,7 +1230,7 @@ func TestRemoteWorktreeStructuredErrorsRoundTrip(t *testing.T) {
 				if err := websocket.JSON.Receive(ws, &req); err != nil {
 					t.Fatalf("receive worktree request: %v", err)
 				}
-				if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(req.ID, source.RPCErrorCode(), source.Error(), source.RPCErrorData())); err != nil {
+				if err := websocket.JSON.Send(ws, protocol.NewErrorResponseWithData(req.ID, source.RPCErrorCode(), source.Error(), mustRPCErrorData(t, source))); err != nil {
 					t.Fatalf("send structured worktree error: %v", err)
 				}
 			})
@@ -1335,7 +1335,7 @@ func TestProtocolErrorDecodesWorkflowExecutionTargetResolutionError(t *testing.T
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeWorkflowExecutionTargetResolution,
 		Message: "execution target resolution failed",
-		Data:    source.RPCErrorData(),
+		Data:    mustRPCErrorData(t, source),
 	})
 	var decoded *serverapi.WorkflowExecutionTargetResolutionError
 	if !errors.As(err, &decoded) {
@@ -1353,7 +1353,7 @@ func TestProtocolErrorDecodesWorkflowLockedExecutionTargetError(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{
 		Code:    protocol.ErrCodeWorkflowLockedExecutionTarget,
 		Message: "locked execution target is unavailable",
-		Data:    source.RPCErrorData(),
+		Data:    mustRPCErrorData(t, source),
 	})
 	var decoded *serverapi.WorkflowLockedExecutionTargetError
 	if !errors.As(err, &decoded) {

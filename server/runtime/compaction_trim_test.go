@@ -11,6 +11,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -28,13 +29,13 @@ func TestCompactionCacheObservationRequestAppendsPromptToConversationReplica(t *
 		t.Fatalf("inject agents: %v", err)
 	}
 
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: seedContent}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(seedContent)}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}}}})); err != nil {
 		t.Fatalf("append assistant tool call: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, ToolCallID: "call-1", Name: string(toolspec.ToolExecCommand), Content: `{"output":"/tmp"}`}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, ToolCallID: textutil.Value("call-1"), Name: textutil.Value(string(toolspec.ToolExecCommand)), Content: textutil.Value(`{"output":"/tmp"}`)}})); err != nil {
 		t.Fatalf("append tool output message: %v", err)
 	}
 
@@ -68,7 +69,7 @@ func TestCompactionCacheObservationRequestAppendsPromptToConversationReplica(t *
 	}
 	foundSeed := false
 	for _, msg := range requestMessages(request) {
-		if msg.Role == llm.RoleUser && msg.Content == seedContent {
+		if msg.Role == llm.RoleUser && messageContent(msg) == seedContent {
 			foundSeed = true
 		}
 	}
@@ -109,8 +110,8 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndWarnsOnCacheBreak(t
 		},
 		compactionResponses: []llm.CompactionResponse{{
 			OutputItems: []llm.ResponseItem{
-				{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "seed"},
-				{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("seed")},
+				{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 			},
 			Usage: llm.Usage{InputTokens: 1000, OutputTokens: 10, WindowTokens: 2500},
 		}},
@@ -124,7 +125,7 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndWarnsOnCacheBreak(t
 		t.Fatalf("inject agents: %v", err)
 	}
 
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 	reasoningPayload := strings.Repeat("encrypted-reasoning", 4_000)
@@ -137,7 +138,7 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndWarnsOnCacheBreak(t
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}}}})); err != nil {
 		t.Fatalf("append assistant tool call: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, ToolCallID: "call-1", Name: string(toolspec.ToolExecCommand), Content: `{"output":"` + strings.Repeat("x", 120_000) + `"}`}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, ToolCallID: textutil.Value("call-1"), Name: textutil.Value(string(toolspec.ToolExecCommand)), Content: textutil.Value(`{"output":"` + strings.Repeat("x", 120_000) + `"}`)}})); err != nil {
 		t.Fatalf("append tool output message: %v", err)
 	}
 
@@ -151,10 +152,10 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndWarnsOnCacheBreak(t
 		t.Fatalf("build seed request: %v", err)
 	}
 	seedClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "seeded"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("seeded")},
 		Usage: llm.Usage{
-			HasCachedInputTokens: true,
-			CachedInputTokens:    512,
+
+			CachedInputTokens: textutil.Value(512),
 		},
 	}}}
 	if _, err := eng.generateWithRetryClient(context.Background(), "seed-cache", seedClient, seedRequest, nil, nil, nil); err != nil {
@@ -187,20 +188,20 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndWarnsOnCacheBreak(t
 	for _, item := range secondInput {
 		switch item.Type {
 		case llm.ResponseItemTypeFunctionCall:
-			if item.CallID == "call-1" || item.ID == "call-1" {
+			if (item.CallID != nil && *item.CallID == "call-1") || (item.ID != nil && *item.ID == "call-1") {
 				hasCall = true
 				if string(item.Arguments) != `{"command":"pwd"}` {
 					t.Fatalf("expected shell input to be preserved, got %s", item.Arguments)
 				}
 			}
 		case llm.ResponseItemTypeFunctionCallOutput:
-			if item.CallID == "call-1" {
+			if item.CallID != nil && *item.CallID == "call-1" {
 				hasOutput = true
 				outputCollapsed = isCollapsedCompactionOverflowShellOutput(item.Output)
 			}
 		case llm.ResponseItemTypeReasoning:
-			if item.ID == "rs-preserve" {
-				reasoningPreserved = item.EncryptedContent == reasoningPayload
+			if item.ID != nil && *item.ID == "rs-preserve" {
+				reasoningPreserved = item.EncryptedContent != nil && *item.EncryptedContent == reasoningPayload
 			}
 		}
 	}
@@ -221,8 +222,8 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndWarnsOnCacheBreak(t
 	if got, want := warnings[0].Reason, transcript.CacheWarningReasonNonPostfix; got != want {
 		t.Fatalf("warning reason = %q, want %q", got, want)
 	}
-	if got, want := warnings[0].CacheKey, conversationPromptCacheKey(store.Meta().SessionID, 0); got != want {
-		t.Fatalf("warning cache key = %q, want %q", got, want)
+	if got, want := warnings[0].CacheKey, conversationPromptCacheKey(store.Meta().SessionID, 0); got == nil || *got != want {
+		t.Fatalf("warning cache key = %v, want %q", got, want)
 	}
 }
 
@@ -260,7 +261,7 @@ func TestRemoteCompactionDoesNotRepairUnsupportedViewImagePayload(t *testing.T) 
 		t.Fatalf("inject agents: %v", err)
 	}
 
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
@@ -272,9 +273,9 @@ func TestRemoteCompactionDoesNotRepairUnsupportedViewImagePayload(t *testing.T) 
 	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
 		Role:       llm.RoleTool,
-		ToolCallID: "call-view-image-1",
-		Name:       string(toolspec.ToolViewImage),
-		Content:    `[{"type":"input_file","file_data":"data:application/pdf;base64,Zm9v","filename":"doc.pdf"}]`,
+		ToolCallID: textutil.Value("call-view-image-1"),
+		Name:       textutil.Value(string(toolspec.ToolViewImage)),
+		Content:    textutil.Value(`[{"type":"input_file","file_data":"data:application/pdf;base64,Zm9v","filename":"doc.pdf"}]`),
 	}})); err != nil {
 		t.Fatalf("append tool output message: %v", err)
 	}
@@ -315,8 +316,8 @@ func TestRemoteCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *tes
 		},
 		compactionResponses: []llm.CompactionResponse{{
 			OutputItems: []llm.ResponseItem{
-				{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "unexpected retry"},
-				{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("unexpected retry")},
+				{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 			},
 		}},
 	}
@@ -328,7 +329,7 @@ func TestRemoteCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *tes
 	if err := eng.steerBaseMetaContextIfNeeded("seed-step"); err != nil {
 		t.Fatalf("inject agents: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: strings.Repeat("chat-heavy-history", 12_000)}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("chat-heavy-history", 12_000))}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
@@ -355,15 +356,15 @@ func viewImageProviderUnitPresence(items []llm.ResponseItem, callID string) (boo
 	for _, item := range items {
 		switch item.Type {
 		case llm.ResponseItemTypeFunctionCall:
-			if item.CallID == callID || item.ID == callID {
+			if (item.CallID != nil && *item.CallID == callID) || (item.ID != nil && *item.ID == callID) {
 				hasCall = true
 			}
 		case llm.ResponseItemTypeFunctionCallOutput:
-			if item.CallID == callID {
+			if item.CallID != nil && *item.CallID == callID {
 				hasOutput = true
 			}
 		case llm.ResponseItemTypeOther:
-			if item.CallID == callID && item.Name == string(toolspec.ToolViewImage) {
+			if item.CallID != nil && *item.CallID == callID && item.Name != nil && *item.Name == string(toolspec.ToolViewImage) {
 				hasPromoted = true
 			}
 		}
@@ -380,10 +381,10 @@ func TestCompactionTransientRetryObservesCacheLineageOnce(t *testing.T) {
 		compactionErrors: []error{errors.New("temporary upstream failure"), nil},
 		compactionResponses: []llm.CompactionResponse{{
 			OutputItems: []llm.ResponseItem{
-				{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "seed"},
-				{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("seed")},
+				{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 			},
-			Usage: llm.Usage{HasCachedInputTokens: true, CachedInputTokens: 123, InputTokens: 1000, WindowTokens: 200000},
+			Usage: llm.Usage{CachedInputTokens: textutil.Value(123), InputTokens: 1000, WindowTokens: 200000},
 		}},
 	}
 
@@ -391,7 +392,7 @@ func TestCompactionTransientRetryObservesCacheLineageOnce(t *testing.T) {
 	if err := eng.steerBaseMetaContextIfNeeded("seed-step"); err != nil {
 		t.Fatalf("inject agents: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
 
@@ -404,8 +405,8 @@ func TestCompactionTransientRetryObservesCacheLineageOnce(t *testing.T) {
 
 	requestObserved := 0
 	responseObserved := 0
-	if err := store.WalkEvents(func(evt session.Event) error {
-		switch evt.Kind {
+	if err := mustMaterializeTestEventLog(t, store).WalkRecords(func(evt session.EventRecord) error {
+		switch mustSessionEventKind(evt) {
 		case sessionEventCacheRequestObserved:
 			requestObserved++
 		case sessionEventCacheResponseObserved:

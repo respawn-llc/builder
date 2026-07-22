@@ -2,12 +2,12 @@ package runtime
 
 import "core/server/session"
 
-func (e *Engine) scanPersistedTranscript(req PersistedTranscriptScanRequest) *PersistedTranscriptScan {
+func (e *Engine) DangerouslyWalkEntireHugeEventLog(req PersistedTranscriptScanRequest) *PersistedTranscriptScan {
 	scan := NewPersistedTranscriptScan(req)
 	if e == nil || e.store == nil {
 		return scan
 	}
-	if err := e.store.WalkEvents(func(evt session.Event) error {
+	if err := e.eventLog.WalkRecords(func(evt session.EventRecord) error {
 		return scan.ApplyPersistedEvent(evt)
 	}); err != nil {
 		return NewPersistedTranscriptScan(req)
@@ -19,7 +19,7 @@ func (e *Engine) ChatSnapshot() ChatSnapshot {
 	if e == nil {
 		return ChatSnapshot{}
 	}
-	snapshot := e.scanPersistedTranscript(PersistedTranscriptScanRequest{CacheWarningMode: e.cfg.CacheWarningMode}).CollectedPageSnapshot()
+	snapshot := e.DangerouslyWalkEntireHugeEventLog(PersistedTranscriptScanRequest{CacheWarningMode: e.cfg.CacheWarningMode}).CollectedPageSnapshot()
 	e.overlayLiveStreaming(&snapshot)
 	return snapshot
 }

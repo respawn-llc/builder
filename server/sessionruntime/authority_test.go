@@ -23,6 +23,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 
 	"github.com/google/uuid"
@@ -65,7 +66,7 @@ func (c *ownerlessRetirementLLMClient) Generate(ctx context.Context, _ llm.Reque
 		}
 	}
 	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}, nil
 }
@@ -936,7 +937,7 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 
 	toolResponse := func(callID string) llm.Response {
 		return llm.Response{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "scoped", Phase: llm.MessagePhaseCommentary},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("scoped"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: []llm.ToolCall{{
 				ID:    callID,
 				Name:  string(toolspec.ToolExecCommand),
@@ -946,7 +947,7 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 		}
 	}
 	done := llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}
 	client := &sessionRuntimeTestLLMClient{responses: []llm.Response{

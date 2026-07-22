@@ -62,6 +62,7 @@ type SessionRequest struct {
 
 type SessionPlan struct {
 	Descriptor                          session.SessionDescriptor
+	EventLog                            session.MaterializedEventLog
 	ActiveSettings                      config.Settings
 	BaseSettings                        config.Settings
 	EnabledTools                        []toolspec.ID
@@ -252,6 +253,10 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 	if err != nil {
 		return SessionPlan{}, err
 	}
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		return SessionPlan{}, err
+	}
 	if req.Mode == ModeHeadless {
 		if err := EnsureSubagentSessionName(store); err != nil {
 			return SessionPlan{}, err
@@ -312,6 +317,7 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 		configuredModelName = active.Model
 	}
 	return p.sessionPlanWithSnapshot(SessionPlan{
+		EventLog:                            eventLog,
 		ActiveSettings:                      active,
 		BaseSettings:                        baseActive,
 		EnabledTools:                        enabledTools,

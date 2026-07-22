@@ -63,7 +63,7 @@ func compactionConversationWithPromptItems(items []llm.ResponseItem, instruction
 	if prompt == "" {
 		return conversation
 	}
-	return append(conversation, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, Content: prompt}})...)
+	return append(conversation, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value(prompt)}})...)
 }
 
 func (e *Engine) compactWithContextRepairRetry(
@@ -220,7 +220,7 @@ func (e *Engine) compactLocal(ctx context.Context, input []llm.ResponseItem, pro
 		return compactionResult{}, err
 	}
 	replacement := llm.ItemsFromMessages([]llm.Message{{
-		Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: strings.TrimSpace(summary),
+		Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value(strings.TrimSpace(summary)),
 	}})
 
 	usageInputTokens := estimateItemsTokens(replacement)
@@ -311,7 +311,7 @@ func (e *Engine) localCompactionSummaryWithRepair(ctx context.Context, input []l
 }
 
 func (e *Engine) localCompactionSummaryFromWindow(ctx context.Context, locked session.LockedContract, systemPrompt string, window []llm.ResponseItem, instructions string, requestTools []llm.Tool, mode compactionMode) (string, error) {
-	items := append(llm.CloneResponseItems(window), llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, Content: instructions}})...)
+	items := append(llm.CloneResponseItems(window), llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value(instructions)}})...)
 	for attempt := 0; ; attempt++ {
 		req, err := llm.RequestFromLockedContract(locked, systemPrompt, items, requestTools, llm.ToolControls{ChoiceMode: llm.ToolChoiceModeAutomatic})
 		if err != nil {
@@ -342,7 +342,10 @@ func (e *Engine) localCompactionSummaryFromWindow(ctx context.Context, locked se
 			items = append(items, retryItems...)
 			continue
 		}
-		summary := strings.TrimSpace(resp.Assistant.Content)
+		if resp.Assistant.Content == nil {
+			return "", errors.New("local compaction summary was empty")
+		}
+		summary := strings.TrimSpace(*resp.Assistant.Content)
 		if summary == "" {
 			return "", errors.New("local compaction summary was empty")
 		}
@@ -363,14 +366,14 @@ func handoffCompactionToolCallRetryItems(resp llm.Response) ([]llm.ResponseItem,
 	}
 	items := llm.ItemsFromMessages([]llm.Message{{
 		Role:      llm.RoleAssistant,
-		Content:   resp.Assistant.Content,
+		Content:   textutil.Pointer(resp.Assistant.Content),
 		ToolCalls: calls,
 	}})
 	for _, call := range calls {
 		items = append(items, llm.ResponseItem{
 			Type:   llm.ToolOutputItemType(call.Custom),
-			CallID: strings.TrimSpace(call.ID),
-			Name:   call.Name,
+			CallID: textutil.OptionalTrimmedString(call.ID),
+			Name:   textutil.OptionalExactString(call.Name),
 			Output: mustJSON(map[string]any{"error": handoffCompactionToolsDisabledMessage}),
 		})
 	}
@@ -397,7 +400,8 @@ func isCompactionBoundaryItem(item llm.ResponseItem) bool {
 		return true
 	}
 	if item.Type == llm.ResponseItemTypeMessage {
-		return item.MessageType == llm.MessageTypeCompactionSummary
+		return item.MessageType != nil &&
+			*item.MessageType == llm.MessageTypeCompactionSummary
 	}
 	return false
 }

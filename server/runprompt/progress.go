@@ -23,10 +23,13 @@ func RunPromptProgressFromRuntimeEvent(evt runtime.Event) (serverapi.RunPromptPr
 	switch evt.Kind {
 	case runtime.EventAssistantMessage:
 		content := evt.Message.Content
-		if evt.Message.Role != llm.RoleAssistant || strings.TrimSpace(content) == "" {
+		if evt.Message.Role != llm.RoleAssistant ||
+			content == nil ||
+			evt.Message.Phase == nil ||
+			strings.TrimSpace(*content) == "" {
 			return serverapi.RunPromptProgress{}, false
 		}
-		switch evt.Message.Phase {
+		switch *evt.Message.Phase {
 		case llm.MessagePhaseCommentary, llm.MessagePhaseFinal:
 		default:
 			return serverapi.RunPromptProgress{}, false
@@ -34,8 +37,8 @@ func RunPromptProgressFromRuntimeEvent(evt runtime.Event) (serverapi.RunPromptPr
 		return serverapi.RunPromptProgress{
 			Kind: serverapi.RunPromptProgressKindAssistantMessage,
 			AssistantMessage: &serverapi.RunPromptVisibleResponse{
-				Phase:   evt.Message.Phase,
-				Content: content,
+				Phase:   *evt.Message.Phase,
+				Content: *content,
 			},
 		}, true
 	case runtime.EventCompactionStarted:

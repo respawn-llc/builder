@@ -215,15 +215,21 @@ func transcriptBackgroundActivity(evt runtime.BackgroundShellEvent) clientui.Tra
 	return background
 }
 
-func TranscriptSessionIdentityFromRuntime(engine *runtime.Engine) clientui.TranscriptSessionIdentity {
+func TranscriptSessionIdentityFromRuntime(
+	engine *runtime.Engine,
+) (clientui.TranscriptSessionIdentity, error) {
 	if engine == nil {
-		return clientui.TranscriptSessionIdentity{}
+		return clientui.TranscriptSessionIdentity{}, nil
+	}
+	freshness, err := engine.ConversationFreshness()
+	if err != nil {
+		return clientui.TranscriptSessionIdentity{}, err
 	}
 	return clientui.TranscriptSessionIdentity{
 		SessionID:             mustTranscriptSessionID(engine.SessionID(), "runtime session identity"),
 		SessionName:           textutil.OptionalTrimmedString(engine.SessionName()),
-		ConversationFreshness: ConversationFreshnessFromSession(engine.ConversationFreshness()),
-	}
+		ConversationFreshness: ConversationFreshnessFromSession(freshness),
+	}, nil
 }
 
 func transcriptCommittedRowMessages(evt runtime.Event) []clientui.TranscriptMessage {
@@ -510,7 +516,7 @@ func transcriptNoticeFromFact(stepID string, fact *runtime.TranscriptNoticeRowFa
 		notice.CacheWarning = &clientui.TranscriptCacheWarning{
 			Scope:           strings.TrimSpace(fact.CacheWarning.Scope),
 			Reason:          strings.TrimSpace(fact.CacheWarning.Reason),
-			LostInputTokens: fact.CacheWarning.LostInputTokens,
+			LostInputTokens: textutil.Pointer(fact.CacheWarning.LostInputTokens),
 			Visibility:      fact.CacheWarning.Visibility,
 		}
 	}

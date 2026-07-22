@@ -17,6 +17,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 type registryRuntimeFakeClient struct{}
@@ -114,13 +115,17 @@ func newRegistryTestRuntime(t *testing.T, onEvent func(runtime.Event)) *runtime.
 func newRegistryRuntime(t *testing.T, client llm.Client, toolRegistry *askquestion.Registry, cfg runtime.Config, onEvent func(*runtime.Engine, runtime.Event)) *runtime.Engine {
 	t.Helper()
 	store := newRegistryTestSession(t, t.TempDir(), "workspace", t.TempDir())
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
 	var engine *runtime.Engine
 	cfg.OnEvent = func(evt runtime.Event) {
 		if onEvent != nil {
 			onEvent(engine, evt)
 		}
 	}
-	engine, err := runtime.New(store, client, toolRegistry, cfg)
+	engine, err = runtime.New(store, eventLog, client, toolRegistry, cfg)
 	if err != nil {
 		t.Fatalf("new runtime: %v", err)
 	}
@@ -235,7 +240,7 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 	registry.PublishAuthorityRuntimeEvent(staleRef, runtime.Event{
 		Kind:                       runtime.EventAssistantMessage,
 		StepID:                     registryTestStepID,
-		Message:                    llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "stale authority event"},
+		Message:                    llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("stale authority event")},
 		CommittedTranscriptChanged: true,
 	})
 	if message, nextErr := nextTranscriptMessageTimeout(sub, 20*time.Millisecond); nextErr == nil {
@@ -244,7 +249,7 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 	registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
 		Kind:                       runtime.EventAssistantMessage,
 		StepID:                     registryTestStepID,
-		Message:                    llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "authority event"},
+		Message:                    llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("authority event")},
 		CommittedTranscriptChanged: true,
 	})
 	message := nextTranscriptMessage(t, sub)

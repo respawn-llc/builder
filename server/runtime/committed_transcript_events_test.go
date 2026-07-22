@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 
@@ -104,13 +105,15 @@ func TestCacheWarningObservationSerializesPersistProjectEmitOrder(t *testing.T) 
 				DigestVersion: requestCacheDigestVersion,
 				CacheKey:      "session-1/cache-key",
 				Scope:         transcript.CacheWarningScopeConversation,
+				ChunkCount:    1,
+				TerminalHash:  "0000000000000000000000000000000000000000000000000000000000000000",
 			},
 			exactWarning: &transcript.CacheWarning{
 				Scope:  transcript.CacheWarningScopeConversation,
 				Reason: transcript.CacheWarningReasonNonPostfix,
 			},
 			previousCachedInputTokens: 10,
-		}, llm.Usage{HasCachedInputTokens: true, CachedInputTokens: 0})
+		}, llm.Usage{CachedInputTokens: textutil.Value(0)})
 	}()
 	select {
 	case <-cachePersistEntered:
@@ -140,7 +143,7 @@ func TestCacheWarningObservationSerializesPersistProjectEmitOrder(t *testing.T) 
 	if len(snapshot.Entries) != 2 || snapshot.Entries[0].Role != cacheWarningTranscriptRole || snapshot.Entries[1].Text != "feedback" {
 		t.Fatalf("committed chat order = %+v, want cache warning then feedback", snapshot.Entries)
 	}
-	persisted, err := sessiontest.CollectEvents(store)
+	persisted, err := collectTestEventRecords(store)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -173,20 +176,22 @@ func TestAssistantMessageAfterCacheWarningDoesNotOwnCacheWarningRange(t *testing
 			DigestVersion: requestCacheDigestVersion,
 			CacheKey:      "session-1/cache-key",
 			Scope:         transcript.CacheWarningScopeConversation,
+			ChunkCount:    1,
+			TerminalHash:  "0000000000000000000000000000000000000000000000000000000000000000",
 		},
 		exactWarning: &transcript.CacheWarning{
 			Scope:  transcript.CacheWarningScopeConversation,
 			Reason: transcript.CacheWarningReasonNonPostfix,
 		},
 		previousCachedInputTokens: 10,
-	}, llm.Usage{HasCachedInputTokens: true, CachedInputTokens: 0}); err != nil {
+	}, llm.Usage{CachedInputTokens: textutil.Value(0)}); err != nil {
 		t.Fatalf("observe cache warning: %v", err)
 	}
 
 	assistant := llm.Message{
 		Role:    llm.RoleAssistant,
-		Content: "checking service",
-		Phase:   llm.MessagePhaseCommentary,
+		Content: textutil.Value("checking service"),
+		Phase:   textutil.Value(llm.MessagePhaseCommentary),
 		ToolCalls: []llm.ToolCall{
 			{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"status"}`)},
 			{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"ps"}`)},
@@ -253,8 +258,8 @@ func TestHistoryReplacementSerializesAgainstCommittedLocalEntryAppend(t *testing
 	go func() {
 		_, err := newCompactionPersistence(eng).replaceHistory("compact-step", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{
 			Role:        llm.RoleDeveloper,
-			MessageType: llm.MessageTypeCompactionSummary,
-			Content:     "summary",
+			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+			Content:     textutil.Value("summary"),
 		}}))
 		replaceDone <- err
 	}()
@@ -305,7 +310,7 @@ func TestToolResultMirrorMessageDoesNotEmitGenericCommittedAdvance(t *testing.T)
 	}
 
 	start := len(events)
-	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, ToolCallID: call.ID, Name: string(result.Name), Content: string(result.Output)}})); err != nil {
+	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, ToolCallID: textutil.Value(call.ID), Name: textutil.Value(string(result.Name)), Content: textutil.Value(string(result.Output))}})); err != nil {
 		t.Fatalf("append tool mirror message: %v", err)
 	}
 	if got := events[start:]; len(got) != 0 {
@@ -323,9 +328,9 @@ func TestVisibleToolMessageMutationPublishesCommittedEventBeforeLocalEntry(t *te
 
 	toolMessage := llm.Message{
 		Role:       llm.RoleTool,
-		ToolCallID: "orphan-call",
-		Name:       string(toolspec.ToolExecCommand),
-		Content:    string(mustJSON(map[string]any{"output": "done", "exit_code": 0, "truncated": false})),
+		ToolCallID: textutil.Value("orphan-call"),
+		Name:       textutil.Value(string(toolspec.ToolExecCommand)),
+		Content:    textutil.Value(string(mustJSON(map[string]any{"output": "done", "exit_code": 0, "truncated": false}))),
 	}
 	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{toolMessage})); err != nil {
 		t.Fatalf("append visible tool message: %v", err)
@@ -400,15 +405,15 @@ func TestStepLoopPublishesCommentaryAssistantWithToolCallsBeforeReasoningAndTool
 	}
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "commentary before tools", Phase: llm.MessagePhaseCommentary},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("commentary before tools"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: toolCalls,
 			Reasoning: []llm.ReasoningEntry{
-				{Role: "reasoning", Text: "local note"},
+				{Role: textutil.Value("reasoning"), Text: "local note"},
 			},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -457,11 +462,11 @@ func TestStepLoopPersistsReasoningProgressAsDetailOnly(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{
 			Role:    llm.RoleAssistant,
-			Phase:   llm.MessagePhaseFinal,
-			Content: "done",
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+			Content: textutil.Value("done"),
 		},
 		Reasoning: []llm.ReasoningEntry{{
-			Role: "reasoning",
+			Role: textutil.Value("reasoning"),
 			Text: "**Reviewing test flow for mode transitions**",
 		}},
 		Usage: llm.Usage{WindowTokens: 200000},
@@ -517,21 +522,21 @@ func TestTranscriptHydrationSurvivesCommittedMessageWithoutProviderItems(t *test
 		afterStepID  = "33333333-3333-4333-8333-333333333333"
 	)
 	store := mustCreateTestSession(t)
-	if _, _, err := store.AppendEvent(beforeStepID, "message", llm.Message{
+	if _, _, err := appendTestEvent(t, store, beforeStepID, llm.Message{
 		Role:    llm.RoleUser,
-		Content: "before",
+		Content: textutil.Value("before"),
 	}); err != nil {
 		t.Fatalf("append message before provider-empty assistant: %v", err)
 	}
-	if _, _, err := store.AppendEvent(emptyStepID, "message", llm.Message{
+	if _, _, err := appendTestEvent(t, store, emptyStepID, llm.Message{
 		Role:  llm.RoleAssistant,
-		Phase: llm.MessagePhaseFinal,
+		Phase: textutil.Value(llm.MessagePhaseFinal),
 	}); err != nil {
 		t.Fatalf("append provider-empty assistant message: %v", err)
 	}
-	if _, _, err := store.AppendEvent(afterStepID, "message", llm.Message{
+	if _, _, err := appendTestEvent(t, store, afterStepID, llm.Message{
 		Role:    llm.RoleUser,
-		Content: "after",
+		Content: textutil.Value("after"),
 	}); err != nil {
 		t.Fatalf("append message after provider-empty assistant: %v", err)
 	}
@@ -570,8 +575,8 @@ func TestRestoredCompactedRuntimePublishesCommittedRangesInVisibleTranscriptCoor
 	}
 	if err := eng.steer("compact", steerHistoryReplacementIntent("local", compactionModeAuto, "", 1, "", "", llm.ItemsFromMessages([]llm.Message{{
 		Role:        llm.RoleUser,
-		MessageType: llm.MessageTypeCompactionSummary,
-		Content:     "summary",
+		MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+		Content:     textutil.Value("summary"),
 	}}))); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
@@ -610,8 +615,8 @@ func TestRestoredCompactedRuntimeNextCommittedEventFollowsHistoryReplacementSeed
 	}
 	if err := eng.steer("compact", steerHistoryReplacementIntent("local", compactionModeAuto, "", 1, "", "", llm.ItemsFromMessages([]llm.Message{{
 		Role:        llm.RoleUser,
-		MessageType: llm.MessageTypeCompactionSummary,
-		Content:     "summary",
+		MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+		Content:     textutil.Value("summary"),
 	}}))); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
@@ -657,7 +662,7 @@ func TestHistoryReplacementPublishesManualCompactionCarryoverBeforeLocalEntry(t 
 		"local",
 		compactionModeManual,
 		llm.ItemsFromMessages([]llm.Message{
-			{Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"},
+			{Role: llm.RoleUser, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")},
 			carryover,
 		}),
 	)

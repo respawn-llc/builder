@@ -208,7 +208,15 @@ func newProjectedAuthorityRuntime(
 		t.Fatalf("projected runtime snapshot: %v", err)
 	}
 	err = authority.WithCurrentRuntime(t.Context(), sessionID, func(_ context.Context, engine *runtime.Engine) error {
-		runtimeClient.storeMainView(runtimeview.MainViewFromRuntimeActivity(engine, snapshot.Version, snapshot.Activity))
+		view, err := runtimeview.MainViewFromRuntimeActivity(
+			engine,
+			snapshot.Version,
+			snapshot.Activity,
+		)
+		if err != nil {
+			return err
+		}
+		runtimeClient.storeMainView(view)
 		return nil
 	})
 	if err != nil {

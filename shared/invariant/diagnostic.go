@@ -11,6 +11,7 @@ const (
 	ScopeTUIProjection        Scope = "tui_projection"
 	ScopeReadModelPublication Scope = "read_model_publication"
 	ScopeBackgroundEvent      Scope = "background_event"
+	ScopeSessionPersistence   Scope = "session_persistence"
 )
 
 type Field string
@@ -52,6 +53,20 @@ type Diagnostic struct {
 	Scope  Scope
 	Fields map[Field]string
 	Stack  string
+}
+
+func FailureDiagnostic(scope Scope, operation string, cause error) Diagnostic {
+	causeText := ""
+	if cause != nil {
+		causeText = cause.Error()
+	}
+	return Diagnostic{
+		Scope: scope,
+		Fields: fields(map[Field]string{
+			FieldOperation:      operation,
+			FieldInvariantError: causeText,
+		}),
+	}
 }
 
 type TUIProjectionDiagnosticInput struct {

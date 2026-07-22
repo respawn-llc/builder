@@ -12,6 +12,7 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -27,9 +28,9 @@ func TestBuildReviewerTranscriptMessagesSummarizesViewImagePayloads(t *testing.T
 		},
 		{
 			Role:       llm.RoleTool,
-			ToolCallID: "call-view-image-1",
-			Name:       string(toolspec.ToolViewImage),
-			Content:    `[{"type":"input_file","filename":"page.pdf","file_data":"data:application/pdf;base64,JVBERi0xLjQKJUVPRg=="}]`,
+			ToolCallID: textutil.Value("call-view-image-1"),
+			Name:       textutil.Value(string(toolspec.ToolViewImage)),
+			Content:    textutil.Value(`[{"type":"input_file","filename":"page.pdf","file_data":"data:application/pdf;base64,JVBERi0xLjQKJUVPRg=="}]`),
 		},
 	}
 
@@ -37,14 +38,14 @@ func TestBuildReviewerTranscriptMessagesSummarizesViewImagePayloads(t *testing.T
 	if len(got) != 2 {
 		t.Fatalf("reviewer transcript messages = %d, want 2 (%+v)", len(got), got)
 	}
-	if !strings.Contains(got[0].Content, "Tool call:") || !strings.Contains(got[0].Content, "docs/page.pdf") {
-		t.Fatalf("expected tool call entry with source path, got %q", got[0].Content)
+	if !strings.Contains(messageContent(got[0]), "Tool call:") || !strings.Contains(messageContent(got[0]), "docs/page.pdf") {
+		t.Fatalf("expected tool call entry with source path, got %q", messageContent(got[0]))
 	}
-	if !strings.Contains(got[1].Content, "Tool result:") || !strings.Contains(got[1].Content, "attached PDF: page.pdf") {
-		t.Fatalf("expected summarized view_image tool result, got %q", got[1].Content)
+	if !strings.Contains(messageContent(got[1]), "Tool result:") || !strings.Contains(messageContent(got[1]), "attached PDF: page.pdf") {
+		t.Fatalf("expected summarized view_image tool result, got %q", messageContent(got[1]))
 	}
-	if strings.Contains(got[1].Content, "base64") || strings.Contains(got[1].Content, "data:application/pdf") {
-		t.Fatalf("expected reviewer transcript to omit binary payloads, got %q", got[1].Content)
+	if strings.Contains(messageContent(got[1]), "base64") || strings.Contains(messageContent(got[1]), "data:application/pdf") {
+		t.Fatalf("expected reviewer transcript to omit binary payloads, got %q", messageContent(got[1]))
 	}
 }
 
@@ -54,8 +55,8 @@ func TestReviewerSuggestions_ReusesStableMetaForPromptCachePrefix(t *testing.T) 
 	reviewerClient := &fakeClient{
 		caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true},
 		responses: []llm.Response{
-			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":[]}`}, Usage: llm.Usage{InputTokens: 10}},
-			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":[]}`}, Usage: llm.Usage{InputTokens: 10}},
+			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)}, Usage: llm.Usage{InputTokens: 10}},
+			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)}, Usage: llm.Usage{InputTokens: 10}},
 		},
 	}
 	eng := mustNewTestEngine(t, store, engineClient, tools.NewRegistry(), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
@@ -108,7 +109,7 @@ func TestBuildReviewerRequestPreservesTranscriptBytes(t *testing.T) {
 		Model:    "gpt-5",
 		Reviewer: ReviewerConfig{Model: "gpt-5"},
 	})
-	if err := eng.steer("seed-step", steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: seedContent}})); err != nil {
+	if err := eng.steer("seed-step", steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(seedContent)}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 
@@ -118,7 +119,7 @@ func TestBuildReviewerRequestPreservesTranscriptBytes(t *testing.T) {
 	}
 	found := false
 	for _, msg := range requestMessages(req) {
-		if strings.Contains(msg.Content, seedContent) {
+		if strings.Contains(messageContent(msg), seedContent) {
 			found = true
 		}
 	}
@@ -134,12 +135,12 @@ func TestReviewerRebuildRetainsGenerationSkillsWithoutMutatingMainTranscript(t *
 
 	persistedSkills := llm.Message{
 		Role:        llm.RoleDeveloper,
-		MessageType: llm.MessageTypeSkills,
-		Content:     "persisted skills context",
+		MessageType: textutil.Value(llm.MessageTypeSkills),
+		Content:     textutil.Value("persisted skills context"),
 	}
 	messages := []llm.Message{
 		persistedSkills,
-		{Role: llm.RoleUser, Content: "request"},
+		{Role: llm.RoleUser, Content: textutil.Value("request")},
 	}
 	original := append([]llm.Message(nil), messages...)
 	disabledPolicy := config.ResolveSkillPolicy(config.Settings{SkillToggles: map[string]bool{"review-skill": false}})
@@ -152,7 +153,7 @@ func TestReviewerRebuildRetainsGenerationSkillsWithoutMutatingMainTranscript(t *
 		t.Fatalf("build reviewer request messages: %v", err)
 	}
 	content, found := skillMessageContent(rebuilt)
-	if !found || content != persistedSkills.Content {
+	if !found || content != messageContent(persistedSkills) {
 		t.Fatalf("reviewer rebuild changed generation skills context: %+v", rebuilt)
 	}
 	if !reflect.DeepEqual(messages, original) {
@@ -166,13 +167,13 @@ func TestReviewerSuggestions_ReopenKeepsPromptCachePrefixStable(t *testing.T) {
 	reviewerClient := &fakeClient{
 		caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true},
 		responses: []llm.Response{
-			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":[]}`}, Usage: llm.Usage{InputTokens: 10}},
-			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":[]}`}, Usage: llm.Usage{InputTokens: 10}},
+			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)}, Usage: llm.Usage{InputTokens: 10}},
+			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)}, Usage: llm.Usage{InputTokens: 10}},
 		},
 	}
 	eng := mustNewTestEngine(t, store, engineClient, tools.NewRegistry(), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
 	t.Cleanup(func() { _ = eng.Close() })
-	if err := eng.steer("prep-1", steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "first request"}})); err != nil {
+	if err := eng.steer("prep-1", steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("first request")}})); err != nil {
 		t.Fatalf("append first message: %v", err)
 	}
 	if _, err := eng.runReviewerSuggestions(context.Background(), "step-1", reviewerClient); err != nil {
@@ -188,7 +189,7 @@ func TestReviewerSuggestions_ReopenKeepsPromptCachePrefixStable(t *testing.T) {
 	}
 	reopenedEng := mustNewTestEngine(t, reopened, engineClient, tools.NewRegistry(), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
 	t.Cleanup(func() { _ = reopenedEng.Close() })
-	if err := reopenedEng.steer("prep-2", steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "second request"}})); err != nil {
+	if err := reopenedEng.steer("prep-2", steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("second request")}})); err != nil {
 		t.Fatalf("append second message: %v", err)
 	}
 	if _, err := reopenedEng.runReviewerSuggestions(context.Background(), "step-2", reviewerClient); err != nil {

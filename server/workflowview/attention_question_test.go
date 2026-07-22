@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"core/internal/testharness/testsetup"
-	"core/server/llm"
 	"core/server/runtime"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -65,20 +64,27 @@ func TestAttentionQuestionRecoveryUsesDormantNewestActiveSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session.Create: %v", err)
 	}
+	eventLog, err := sessionStore.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("MaterializeEventLog: %v", err)
+	}
 	askID := "ask-dormant"
-	if _, _, err := sessionStore.AppendEvent("step-old", "message", llm.Message{
-		Role: llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{
-			ID:    askID,
-			Name:  string(toolspec.ToolAskQuestion),
-			Input: json.RawMessage(`{"question":"stale question"}`),
+	oldStepID := "step-old"
+	if _, _, err := eventLog.AppendRecord(&oldStepID, session.MessageRecord{
+		Role: session.MessageRoleAssistant,
+		ToolCalls: []session.MessageToolCallRecord{{
+			CallID: askID,
+			Name:   string(toolspec.ToolAskQuestion),
+			Kind:   session.ToolCallKindFunction,
+			Input:  json.RawMessage(`{"question":"stale question"}`),
 		}},
 	}); err != nil {
-		t.Fatalf("AppendEvent stale question: %v", err)
+		t.Fatalf("AppendRecord stale question: %v", err)
 	}
-	if _, _, err := sessionStore.AppendCompactionHistoryReplacement("step-compaction", map[string]any{
-		"engine": "compaction",
-		"items":  []any{},
+	compactionStepID := "step-compaction"
+	if _, _, err := eventLog.AppendCompactionHistoryReplacement(&compactionStepID, session.HistoryReplacementRecord{
+		Engine: "local",
+		Mode:   session.CompactionModeAuto,
 	}); err != nil {
 		t.Fatalf("AppendCompactionHistoryReplacement: %v", err)
 	}
@@ -90,15 +96,17 @@ func TestAttentionQuestionRecoveryUsesDormantNewestActiveSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal ask request: %v", err)
 	}
-	if _, _, err := sessionStore.AppendEvent("step-dormant", "message", llm.Message{
-		Role: llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{
-			ID:    askID,
-			Name:  string(toolspec.ToolAskQuestion),
-			Input: input,
+	dormantStepID := "step-dormant"
+	if _, _, err := eventLog.AppendRecord(&dormantStepID, session.MessageRecord{
+		Role: session.MessageRoleAssistant,
+		ToolCalls: []session.MessageToolCallRecord{{
+			CallID: askID,
+			Name:   string(toolspec.ToolAskQuestion),
+			Kind:   session.ToolCallKindFunction,
+			Input:  input,
 		}},
 	}); err != nil {
-		t.Fatalf("AppendEvent: %v", err)
+		t.Fatalf("AppendRecord: %v", err)
 	}
 	task, _ := createWorkflowViewWaitingAskTask(t, ctx, metadataStore, workflowStore, binding, sessionStore.Meta().SessionID, askID)
 	definitions, err := NewDefinitionProjection(workflowStore)

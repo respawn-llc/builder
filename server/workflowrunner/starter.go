@@ -867,7 +867,11 @@ func (s *Starter) cloneSourceSessionForFanout(containerDir, sourceSessionID stri
 	}
 	var cloneID string
 	err = s.withSessionStore(context.Background(), descriptor, func(_ context.Context, sourceStore *session.Store) error {
-		cloned, cloneErr := session.CloneSession(sourceStore, "", sessioncontract.SessionCategorySubagent)
+		eventLog, materializationErr := sourceStore.MaterializeEventLog()
+		if materializationErr != nil {
+			return fmt.Errorf("materialize source session event log: %w", materializationErr)
+		}
+		cloned, cloneErr := session.CloneSession(eventLog, "", sessioncontract.SessionCategorySubagent)
 		if cloneErr != nil {
 			return fmt.Errorf("clone source session: %w", cloneErr)
 		}

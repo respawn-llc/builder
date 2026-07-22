@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"encoding/json"
 	"errors"
@@ -233,7 +234,7 @@ func TestBuildResponsesInput_AssistantReasoningItemsUseEncryptedContentOnly(t *t
 	items := mustBuildResponsesInput(t, ItemsFromMessages([]Message{
 		{
 			Role:    RoleAssistant,
-			Content: "a1",
+			Content: textutil.Value("a1"),
 			ReasoningItems: []ReasoningItem{
 				{ID: "rs_1", EncryptedContent: "enc_1"},
 			},
@@ -309,8 +310,8 @@ func TestBuildPayload_AddsAdditionalPropertiesFalseToToolSchemas(t *testing.T) {
 
 func TestBuildResponsesInput_CanonicalCompactionItemRoundTrip(t *testing.T) {
 	items := mustBuildResponsesInput(t, PrepareOpenAIInputItems([]ResponseItem{
-		{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "u1"},
-		{Type: ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+		{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("u1")},
+		{Type: ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 	}))
 	if len(items) != 2 {
 		t.Fatalf("expected 2 items, got %d", len(items))
@@ -364,7 +365,7 @@ func TestParseOutputItems_PreservesCompactionItem(t *testing.T) {
 	if len(items) != 2 {
 		t.Fatalf("expected 2 canonical items, got %d", len(items))
 	}
-	if items[1].Type != ResponseItemTypeCompaction || items[1].EncryptedContent != "enc_1" {
+	if items[1].Type != ResponseItemTypeCompaction || items[1].EncryptedContent == nil || *items[1].EncryptedContent != "enc_1" {
 		t.Fatalf("unexpected compaction item: %+v", items[1])
 	}
 }
@@ -450,7 +451,7 @@ func TestCompactRequestTargetsResponsesCompactPath(t *testing.T) {
 	resp, err := transport.Compact(context.Background(), OpenAICompactionRequest{
 		Model: "gpt-5",
 		InputItems: PrepareOpenAIInputItems([]ResponseItem{
-			{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "u1"},
+			{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("u1")},
 		}),
 	})
 	if err != nil {
@@ -477,7 +478,7 @@ func TestCompactRequestAcceptsJSONBodyWithNonJSONContentType(t *testing.T) {
 	resp, err := transport.Compact(context.Background(), OpenAICompactionRequest{
 		Model: "gpt-5",
 		InputItems: PrepareOpenAIInputItems([]ResponseItem{
-			{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "u1"},
+			{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("u1")},
 		}),
 	})
 	if err != nil {
@@ -512,16 +513,16 @@ func newCompactResponseServer(t *testing.T, contentType string) *httptest.Server
 func TestInputTokenCountPayloadMatchesCompactPayloadInputShape(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	canonicalItems := PrepareOpenAIInputItems([]ResponseItem{
-		{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "hello"},
-		{Type: ResponseItemTypeFunctionCall, ID: "call_1", CallID: "call_1", Name: "shell", Arguments: json.RawMessage(`{"command":"pwd"}`)},
+		{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hello")},
+		{Type: ResponseItemTypeFunctionCall, ID: textutil.Value("call_1"), CallID: textutil.Value("call_1"), Name: textutil.Value("shell"), Arguments: json.RawMessage(`{"command":"pwd"}`)},
 		{
 			Type:   ResponseItemTypeFunctionCallOutput,
-			CallID: "call_1",
-			Name:   string(toolspec.ToolViewImage),
+			CallID: textutil.Value("call_1"),
+			Name:   textutil.Value(string(toolspec.ToolViewImage)),
 			Output: json.RawMessage(`[{"type":"input_file","file_data":"data:application/pdf;base64,Zm9v","filename":"doc.pdf"}]`),
 		},
-		{Type: ResponseItemTypeReasoning, ID: "rs_1", EncryptedContent: "enc_reasoning"},
-		{Type: ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_compaction"},
+		{Type: ResponseItemTypeReasoning, ID: textutil.Value("rs_1"), EncryptedContent: textutil.Value("enc_reasoning")},
+		{Type: ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_compaction")},
 	})
 
 	compactPayload, err := newOpenAIRequestPayloadBuilder(transport.Store, transport.ModelVerbosity, ProviderCapabilities{}).BuildCompact(OpenAICompactionRequest{
@@ -618,8 +619,8 @@ func TestOpenAIRequestBuildersRejectUnpreparedViewImageInputFileOutput(t *testin
 func unmaterializedViewImageInputFileOutput() ResponseItem {
 	return ResponseItem{
 		Type:   ResponseItemTypeFunctionCallOutput,
-		CallID: "call_1",
-		Name:   string(toolspec.ToolViewImage),
+		CallID: textutil.Value("call_1"),
+		Name:   textutil.Value(string(toolspec.ToolViewImage)),
 		Output: json.RawMessage(`[{"type":"input_file","file_data":"data:application/pdf;base64,Zm9v","filename":"doc.pdf"}]`),
 	}
 }
@@ -665,7 +666,7 @@ func TestCountRequestInputTokensTargetsResponsesInputTokensPath(t *testing.T) {
 		Model:        "gpt-5",
 		SystemPrompt: "sys",
 		Items: PrepareOpenAIInputItems([]ResponseItem{
-			{Type: ResponseItemTypeMessage, Role: RoleUser, Content: "hello"},
+			{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hello")},
 		}),
 	})
 	if err != nil {

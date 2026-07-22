@@ -12,7 +12,7 @@ func TestHandoffFutureAgentMessageWrapsContentForModelAndTranscript(t *testing.T
 		t.Fatal("expected non-empty handoff future message")
 	}
 
-	if got, want := msg.Content, prompts.FormatHandoffFutureAgentMessage("resume with tests"); got != want {
+	if got, want := messageContent(msg), prompts.FormatHandoffFutureAgentMessage("resume with tests"); got != want {
 		t.Fatalf("future-agent message content = %q, want %q", got, want)
 	}
 }

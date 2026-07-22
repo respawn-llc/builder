@@ -9,6 +9,7 @@ import (
 	servicecontract "core/shared/apicontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 var _ servicecontract.RuntimeLiveControlService = (*Service)(nil)
@@ -141,11 +142,10 @@ func (s *Service) LiveWait(ctx context.Context, req serverapi.RuntimeLiveWaitReq
 	if sessionName == "" {
 		sessionName = sessionID.String()
 	}
-	content := result.AssistantMessage.Content
 	resp = serverapi.RuntimeLiveWaitResponse{
 		SessionID:      sessionID.String(),
 		SessionName:    sessionName,
-		Result:         &content,
+		Result:         textutil.Pointer(result.AssistantMessage.Content),
 		DurationMillis: result.FinishedAt.Sub(result.StartedAt).Milliseconds(),
 		LiveRunGroupID: result.GroupID.String(),
 		TerminalRunID:  result.RunID.String(),

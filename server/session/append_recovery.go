@@ -215,19 +215,23 @@ func inspectAppendRecoverySuffix(path string, events appendRecoveryEvents, phase
 	firstSequence := int64(0)
 	lastSequence := int64(0)
 	for {
-		var event Event
-		err := decoder.Decode(&event)
+		var encoded json.RawMessage
+		err := decoder.Decode(&encoded)
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
 			return false, fmt.Errorf("parse committed event suffix: %w", err)
 		}
+		event, err := decodeEventRecordV1(encoded)
+		if err != nil {
+			return false, fmt.Errorf("parse committed typed event suffix: %w", err)
+		}
 		count++
 		if count == 1 {
-			firstSequence = event.Seq
+			firstSequence = event.Seq()
 		}
-		lastSequence = event.Seq
+		lastSequence = event.Seq()
 	}
 	if count != events.EventCount || firstSequence != events.FirstSequence || lastSequence != events.LastSequence ||
 		fmt.Sprintf("%x", hash.Sum(nil)) != events.SHA256 {

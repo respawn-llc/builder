@@ -12,6 +12,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/clientui"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -54,7 +55,7 @@ func (c *projectionBlockingClient) Generate(ctx context.Context, _ llm.Request) 
 	case <-ctx.Done():
 		return llm.Response{}, ctx.Err()
 	case <-c.release:
-		return llm.Response{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal}}, nil
+		return llm.Response{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)}}, nil
 	}
 }
 
@@ -68,7 +69,7 @@ type projectionPreciseClient struct {
 
 func (c projectionPreciseClient) Generate(context.Context, llm.Request) (llm.Response, error) {
 	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{InputTokens: 900, OutputTokens: 100, WindowTokens: 400_000},
 	}, nil
 }
@@ -94,7 +95,11 @@ func newRuntimeViewEngine(t *testing.T, store *session.Store, client llm.Client,
 	if len(cfg) > 0 {
 		engineConfig = cfg[0]
 	}
-	engine, err := runtime.New(store, client, tools.NewRegistry(), engineConfig)
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	engine, err := runtime.New(store, eventLog, client, tools.NewRegistry(), engineConfig)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
@@ -150,7 +155,10 @@ func TestStatusFromRuntimeIncludesSuspendedGoal(t *testing.T) {
 	}
 	close(client.release)
 
-	status := StatusFromRuntime(engine)
+	status, err := StatusFromRuntime(engine)
+	if err != nil {
+		t.Fatalf("project runtime status: %v", err)
+	}
 	if status.Goal == nil || !status.Goal.Suspended {
 		t.Fatalf("goal status = %+v, want suspended goal", status.Goal)
 	}
@@ -162,7 +170,21 @@ func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 	if err := store.SetName("Session Name"); err != nil {
 		t.Fatalf("set name: %v", err)
 	}
-	if _, _, err := store.AppendEvent(projectionStepID, "message", llm.Message{Role: llm.RoleAssistant, Content: "final answer", Phase: llm.MessagePhaseFinal}); err != nil {
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	finalAnswer := "final answer"
+	finalPhase := session.MessagePhaseFinal
+	stepID := projectionStepID
+	if _, _, err := eventLog.AppendRecord(
+		&stepID,
+		session.MessageRecord{
+			Role:    session.MessageRoleAssistant,
+			Content: &finalAnswer,
+			Phase:   &finalPhase,
+		},
+	); err != nil {
 		t.Fatalf("append assistant message: %v", err)
 	}
 	eng := newRuntimeViewEngine(t, store, projectionFastClient{}, runtime.Config{Model: "gpt-5", ContextWindowTokens: 400_000})
@@ -202,7 +224,11 @@ func mainViewFromRuntimeForTest(t *testing.T, eng *runtime.Engine) clientui.Runt
 	t.Helper()
 	version := clientui.ReadModelVersion{Epoch: "runtimeview-test", Generation: 1, Sequence: 1}
 	activity := clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle, QueueAccepting: true}
-	return MainViewFromRuntimeActivity(eng, version, activity)
+	view, err := MainViewFromRuntimeActivity(eng, version, activity)
+	if err != nil {
+		t.Fatalf("project runtime main view: %v", err)
+	}
+	return view
 }
 
 func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
@@ -257,7 +283,10 @@ func TestStatusFromRuntimeUsesFreshPreciseCurrentTokens(t *testing.T) {
 	if _, err := eng.ShouldCompactBeforeUserMessage(context.Background(), "follow-up"); err != nil {
 		t.Fatalf("warm exact count: %v", err)
 	}
-	view := StatusFromRuntime(eng)
+	view, err := StatusFromRuntime(eng)
+	if err != nil {
+		t.Fatalf("project runtime status: %v", err)
+	}
 	if view.ContextUsage.UsedTokens != 180 {
 		t.Fatalf("projected used tokens=%d, want exact 180", view.ContextUsage.UsedTokens)
 	}

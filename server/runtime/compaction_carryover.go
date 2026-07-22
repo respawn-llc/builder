@@ -5,6 +5,7 @@ import (
 
 	"core/prompts"
 	"core/server/llm"
+	"core/shared/textutil"
 )
 
 type compactionCarryoverCoordinator struct {
@@ -23,8 +24,8 @@ func manualCompactionCarryoverMessage(text string) (llm.Message, bool) {
 	content := trimCompactionCarryoverText(trimmed, manualCompactionCarryoverMaxChars)
 	return llm.Message{
 		Role:        llm.RoleDeveloper,
-		MessageType: llm.MessageTypeManualCompactionCarryover,
-		Content:     manualCompactionCarryoverHeader + "\n\n" + content,
+		MessageType: textutil.Value(llm.MessageTypeManualCompactionCarryover),
+		Content:     textutil.Value(manualCompactionCarryoverHeader + "\n\n" + content),
 	}, true
 }
 
@@ -35,8 +36,8 @@ func handoffFutureAgentMessage(text string) (llm.Message, bool) {
 	}
 	return llm.Message{
 		Role:        llm.RoleDeveloper,
-		MessageType: llm.MessageTypeHandoffFutureMessage,
-		Content:     prompts.FormatHandoffFutureAgentMessage(trimmed),
+		MessageType: textutil.Value(llm.MessageTypeHandoffFutureMessage),
+		Content:     textutil.Value(prompts.FormatHandoffFutureAgentMessage(trimmed)),
 	}, true
 }
 

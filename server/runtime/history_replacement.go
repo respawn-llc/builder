@@ -1,32 +1,11 @@
 package runtime
 
 import (
-	"bytes"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"strings"
 
 	"core/server/llm"
 	"core/server/session"
-	"core/shared/rollbacktarget"
-	"core/shared/textutil"
 )
-
-// errDecodeHistoryReplacedEvent wraps failures to decode a persisted history_replaced event payload.
-var errDecodeHistoryReplacedEvent = errors.New("decode history_replaced event")
-
-type historyReplacementEnvelope struct {
-	Engine                            string                           `json:"engine"`
-	Mode                              string                           `json:"mode"`
-	WorkflowRunID                     string                           `json:"workflow_run_id"`
-	CompactionNumber                  int                              `json:"compaction_number"`
-	CommittedEntryStart               *int                             `json:"committed_entry_start"`
-	PendingHandoffFutureMessage       string                           `json:"pending_handoff_future_message"`
-	LastCommittedAssistantFinalAnswer string                           `json:"last_committed_assistant_final_answer"`
-	LatestRollbackCandidate           *rollbacktarget.CandidateLocator `json:"latest_rollback_candidate"`
-	Items                             json.RawMessage                  `json:"items"`
-}
 
 func normalizeHistoryReplacementEngine(engine string) string {
 	engine = strings.TrimSpace(engine)
@@ -36,42 +15,24 @@ func normalizeHistoryReplacementEngine(engine string) string {
 	return engine
 }
 
-func isPersistedHistoryReplacementBoundary(payload []byte) bool {
-	return session.IsCompactionHistoryReplacementPayload(payload)
+func isCompactionEventRecordBoundary(record session.EventRecord) (bool, error) {
+	payload, err := record.Payload()
+	if err != nil {
+		return false, err
+	}
+	_, ok := payload.(session.HistoryReplacementRecord)
+	return ok, nil
 }
 
-func decodePersistedHistoryReplacementPayload(payload []byte) (historyReplacementPayload, bool, error) {
-	var envelope historyReplacementEnvelope
-	if err := json.Unmarshal(payload, &envelope); err != nil {
-		return historyReplacementPayload{}, false, err
-	}
-	engine := strings.TrimSpace(envelope.Engine)
-	if session.IsLegacyReviewerRollbackHistoryReplacementEngine(engine) {
-		return historyReplacementPayload{Engine: engine, Mode: strings.TrimSpace(envelope.Mode)}, true, nil
-	}
-	decoded := historyReplacementPayload{
-		Engine:                            engine,
-		Mode:                              strings.TrimSpace(envelope.Mode),
-		WorkflowRunID:                     strings.TrimSpace(envelope.WorkflowRunID),
-		CompactionNumber:                  envelope.CompactionNumber,
-		CommittedEntryStart:               textutil.Pointer(envelope.CommittedEntryStart),
-		PendingHandoffFutureMessage:       strings.TrimSpace(envelope.PendingHandoffFutureMessage),
-		LastCommittedAssistantFinalAnswer: envelope.LastCommittedAssistantFinalAnswer,
-		LatestRollbackCandidate:           textutil.Pointer(envelope.LatestRollbackCandidate),
-	}
-	if decoded.LatestRollbackCandidate != nil {
-		if err := decoded.LatestRollbackCandidate.Validate(); err != nil {
-			return historyReplacementPayload{}, false, fmt.Errorf("latest rollback candidate: %w", err)
+func compactionBoundaryMatcher(matchErr *error) func(session.EventRecord) bool {
+	return func(record session.EventRecord) bool {
+		matches, err := isCompactionEventRecordBoundary(record)
+		if err != nil {
+			*matchErr = err
+			return true
 		}
+		return matches
 	}
-	trimmedItems := bytes.TrimSpace(envelope.Items)
-	if len(trimmedItems) == 0 || bytes.Equal(trimmedItems, []byte("null")) {
-		return decoded, false, nil
-	}
-	if err := json.Unmarshal(trimmedItems, &decoded.Items); err != nil {
-		return historyReplacementPayload{}, false, err
-	}
-	return decoded, false, nil
 }
 
 func transcriptEntriesFromHistoryReplacement(items []llm.ResponseItem) []ChatEntry {

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"core/server/llm"
+	"core/shared/textutil"
 	"strings"
 	"sync"
 
@@ -36,7 +37,7 @@ func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage) QueuedUserMes
 		item.ID = uuid.NewString()
 	}
 	item.ClientRequestID = strings.TrimSpace(item.ClientRequestID)
-	intent := steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: item.Text}})
+	intent := steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(item.Text)}})
 	s.mu.Lock()
 	s.pending = append(s.pending, queuedUserSteeringIntent{message: item, intent: intent})
 	s.mu.Unlock()

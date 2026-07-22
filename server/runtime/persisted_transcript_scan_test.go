@@ -9,21 +9,22 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
 
 func TestPersistedTranscriptScanCollectsRequestedPageOnly(t *testing.T) {
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{Offset: 1, Limit: 2})
-	events := []session.Event{
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: "u1"}),
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleAssistant, Content: "a1", Phase: llm.MessagePhaseFinal}),
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: "u2"}),
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleAssistant, Content: "a2", Phase: llm.MessagePhaseFinal}),
+	events := []session.EventRecord{
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: textutil.Value("u1")}),
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("a1"), Phase: textutil.Value(llm.MessagePhaseFinal)}),
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: textutil.Value("u2")}),
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("a2"), Phase: textutil.Value(llm.MessagePhaseFinal)}),
 	}
 	for _, evt := range events {
 		if err := scan.ApplyPersistedEvent(evt); err != nil {
-			t.Fatalf("ApplyPersistedEvent(%q): %v", evt.Kind, err)
+			t.Fatalf("ApplyPersistedEvent(%q): %v", mustSessionEventKind(evt), err)
 		}
 	}
 
@@ -42,15 +43,15 @@ func TestPersistedTranscriptScanCollectsRequestedPageOnly(t *testing.T) {
 func TestPersistedTranscriptScanTracksDormantRecentTailWindow(t *testing.T) {
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{TrackRecentTail: true, TailLimit: 3})
 	for i := 0; i < 5; i++ {
-		if err := scan.ApplyPersistedEvent(mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: "before-" + strconv.Itoa(i)})); err != nil {
+		if err := scan.ApplyPersistedEvent(mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: textutil.Value("before-" + strconv.Itoa(i))})); err != nil {
 			t.Fatalf("ApplyPersistedEvent before %d: %v", i, err)
 		}
 	}
-	if err := scan.ApplyPersistedEvent(mustPersistedScanEvent(t, "history_replaced", historyReplacementPayload{Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: "summary"}})})); err != nil {
+	if err := scan.ApplyPersistedEvent(mustPersistedScanEvent(t, "history_replaced", historyReplacementPayload{Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("summary")}})})); err != nil {
 		t.Fatalf("ApplyPersistedEvent(history_replaced): %v", err)
 	}
 	for i := 0; i < 2; i++ {
-		if err := scan.ApplyPersistedEvent(mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleAssistant, Content: "after-" + strconv.Itoa(i), Phase: llm.MessagePhaseFinal})); err != nil {
+		if err := scan.ApplyPersistedEvent(mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("after-" + strconv.Itoa(i)), Phase: textutil.Value(llm.MessagePhaseFinal)})); err != nil {
 			t.Fatalf("ApplyPersistedEvent after %d: %v", i, err)
 		}
 	}
@@ -72,16 +73,16 @@ func TestPersistedTranscriptScanTracksDormantRecentTailWindow(t *testing.T) {
 
 func TestPersistedTranscriptScanKeepsLatestCompactionSegmentInDormantRecentTail(t *testing.T) {
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{TrackRecentTail: true, TailLimit: 2})
-	events := []session.Event{
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: "before"}),
-		mustPersistedScanEvent(t, "history_replaced", historyReplacementPayload{Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}})}),
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleAssistant, Content: "after-0", Phase: llm.MessagePhaseFinal}),
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleAssistant, Content: "after-1", Phase: llm.MessagePhaseFinal}),
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleAssistant, Content: "after-2", Phase: llm.MessagePhaseFinal}),
+	events := []session.EventRecord{
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: textutil.Value("before")}),
+		mustPersistedScanEvent(t, "history_replaced", historyReplacementPayload{Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")}})}),
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("after-0"), Phase: textutil.Value(llm.MessagePhaseFinal)}),
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("after-1"), Phase: textutil.Value(llm.MessagePhaseFinal)}),
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("after-2"), Phase: textutil.Value(llm.MessagePhaseFinal)}),
 	}
 	for _, evt := range events {
 		if err := scan.ApplyPersistedEvent(evt); err != nil {
-			t.Fatalf("ApplyPersistedEvent(%q): %v", evt.Kind, err)
+			t.Fatalf("ApplyPersistedEvent(%q): %v", mustSessionEventKind(evt), err)
 		}
 	}
 
@@ -97,41 +98,16 @@ func TestPersistedTranscriptScanKeepsLatestCompactionSegmentInDormantRecentTail(
 	}
 }
 
-func TestPersistedTranscriptScanIgnoresLegacyReviewerRollbackHistoryReplacement(t *testing.T) {
-	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
-	events := []session.Event{
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: "before"}),
-		mustPersistedScanEvent(t, "history_replaced", historyReplacementPayload{Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}})}),
-		mustPersistedScanEvent(t, "history_replaced", historyReplacementPayload{Engine: "reviewer_rollback", Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: "rolled back"}})}),
-	}
-	for _, evt := range events {
-		if err := scan.ApplyPersistedEvent(evt); err != nil {
-			t.Fatalf("ApplyPersistedEvent(%q): %v", evt.Kind, err)
-		}
-	}
-
-	page := scan.CollectedPageSnapshot()
-	if got := len(page.Entries); got != 2 {
-		t.Fatalf("len(page.Entries) = %d, want 2 (%+v)", got, page.Entries)
-	}
-	if got := page.Entries[0].Text; got != "before" {
-		t.Fatalf("entry[0] = %q, want before", got)
-	}
-	if got := page.Entries[1].Text; got != "summary" {
-		t.Fatalf("entry[1] = %q, want summary", got)
-	}
-}
-
 func TestPersistedTranscriptScanWithoutLimitCollectsEntireDormantTranscript(t *testing.T) {
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
-	events := []session.Event{
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: "u1"}),
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleAssistant, Content: "a1", Phase: llm.MessagePhaseFinal}),
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: "u2"}),
+	events := []session.EventRecord{
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: textutil.Value("u1")}),
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("a1"), Phase: textutil.Value(llm.MessagePhaseFinal)}),
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: textutil.Value("u2")}),
 	}
 	for _, evt := range events {
 		if err := scan.ApplyPersistedEvent(evt); err != nil {
-			t.Fatalf("ApplyPersistedEvent(%q): %v", evt.Kind, err)
+			t.Fatalf("ApplyPersistedEvent(%q): %v", mustSessionEventKind(evt), err)
 		}
 	}
 
@@ -153,14 +129,14 @@ func TestPersistedTranscriptScanEnrichesToolResultFromCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal tool output: %v", err)
 	}
-	events := []session.Event{
-		mustPersistedScanEvent(t, "tool_completed", map[string]any{"call_id": "call-1", "name": string(toolspec.ToolExecCommand), "is_error": false, "output": json.RawMessage(toolOutput)}),
+	events := []session.EventRecord{
+		mustPersistedScanEvent(t, "tool_completed", storedToolCompletion{CallID: "call-1", Name: string(toolspec.ToolExecCommand), Output: json.RawMessage(toolOutput)}),
 		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}}}),
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleTool, ToolCallID: "call-1", Name: string(toolspec.ToolExecCommand)}),
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleTool, ToolCallID: textutil.Value("call-1"), Name: textutil.Value(string(toolspec.ToolExecCommand))}),
 	}
 	for _, evt := range events {
 		if err := scan.ApplyPersistedEvent(evt); err != nil {
-			t.Fatalf("ApplyPersistedEvent(%q): %v", evt.Kind, err)
+			t.Fatalf("ApplyPersistedEvent(%q): %v", mustSessionEventKind(evt), err)
 		}
 	}
 
@@ -176,16 +152,16 @@ func TestPersistedTranscriptScanEnrichesToolResultFromCompletion(t *testing.T) {
 	}
 }
 
-func TestPersistedTranscriptScanProjectsUnknownDeveloperAndToolSummaryMetadata(t *testing.T) {
+func TestPersistedTranscriptScanProjectsDeveloperAndToolSummaryMetadata(t *testing.T) {
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{Offset: 0, Limit: 10})
-	events := []session.Event{
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageType("custom_internal"), Content: "Internal developer note"}),
-		mustPersistedScanEvent(t, "tool_completed", map[string]any{"call_id": "call-1", "name": string(toolspec.ToolExecCommand), "is_error": true, "summary": "permission denied", "condensed_text": "permission denied compact", "output": json.RawMessage(`{"error":"permission denied"}`)}),
+	events := []session.EventRecord{
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeEnvironment), Content: textutil.Value("Internal developer note")}),
+		mustPersistedScanEvent(t, "tool_completed", storedToolCompletion{CallID: "call-1", Name: string(toolspec.ToolExecCommand), IsError: true, Summary: textutil.Value("permission denied"), CondensedText: textutil.Value("permission denied compact"), Output: json.RawMessage(`{"error":"permission denied"}`)}),
 		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"cat secret"}`)}}}),
 	}
 	for _, evt := range events {
 		if err := scan.ApplyPersistedEvent(evt); err != nil {
-			t.Fatalf("ApplyPersistedEvent(%q): %v", evt.Kind, err)
+			t.Fatalf("ApplyPersistedEvent(%q): %v", mustSessionEventKind(evt), err)
 		}
 	}
 
@@ -194,8 +170,8 @@ func TestPersistedTranscriptScanProjectsUnknownDeveloperAndToolSummaryMetadata(t
 		t.Fatalf("len(page.Entries) = %d, want 3 (%+v)", got, page.Entries)
 	}
 	developer := page.Entries[0]
-	if developer.Role != string(transcript.EntryRoleDeveloperContext) || developer.Visibility != transcript.EntryVisibilityOngoing || developer.MessageType != llm.MessageType("custom_internal") || developer.CompactLabel != "Developer context: custom_internal" {
-		t.Fatalf("unexpected unknown developer projection: %+v", developer)
+	if developer.Role != string(transcript.EntryRoleDeveloperContext) || developer.Visibility != transcript.EntryVisibilityDetail || developer.MessageType != llm.MessageTypeEnvironment || developer.CompactLabel != "Environment info" {
+		t.Fatalf("unexpected developer projection: %+v", developer)
 	}
 	result := page.Entries[2]
 	if result.Role != "tool_result_error" || result.ToolResultSummary != "permission denied" || result.CondensedText != "permission denied compact" {
@@ -205,13 +181,13 @@ func TestPersistedTranscriptScanProjectsUnknownDeveloperAndToolSummaryMetadata(t
 
 func TestPersistedTranscriptScanSynthesizesCompletedToolResultWithoutToolMessage(t *testing.T) {
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{Offset: 0, Limit: 10})
-	events := []session.Event{
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleAssistant, Content: "working", ToolCalls: []llm.ToolCall{{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}}}),
-		mustPersistedScanEvent(t, "tool_completed", map[string]any{"call_id": "call-1", "name": string(toolspec.ToolExecCommand), "is_error": false, "output": json.RawMessage(`{"output":"/tmp","exit_code":0,"truncated":false}`)}),
+	events := []session.EventRecord{
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working"), ToolCalls: []llm.ToolCall{{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}}}),
+		mustPersistedScanEvent(t, "tool_completed", storedToolCompletion{CallID: "call-1", Name: string(toolspec.ToolExecCommand), Output: json.RawMessage(`{"output":"/tmp","exit_code":0,"truncated":false}`)}),
 	}
 	for _, evt := range events {
 		if err := scan.ApplyPersistedEvent(evt); err != nil {
-			t.Fatalf("ApplyPersistedEvent(%q): %v", evt.Kind, err)
+			t.Fatalf("ApplyPersistedEvent(%q): %v", mustSessionEventKind(evt), err)
 		}
 	}
 
@@ -252,30 +228,30 @@ func TestPersistedTranscriptScanRendersPatchToolCallsWithoutEditedLabel(t *testi
 	multiPatch := "*** Begin Patch\n*** Update File: a.go\n+new\n*** Update File: b.go\n-old\n*** End Patch\n"
 	rawPatch := "not a structured patch payload"
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{Offset: 0, Limit: 10})
-	events := []session.Event{
+	events := []session.EventRecord{
 		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
 			ID:          "call-patch-single",
 			Name:        string(toolspec.ToolPatch),
 			Custom:      true,
-			CustomInput: singlePatch,
+			CustomInput: textutil.Value(singlePatch),
 		}, {
 			ID:          "call-patch-multi",
 			Name:        string(toolspec.ToolPatch),
 			Custom:      true,
-			CustomInput: multiPatch,
+			CustomInput: textutil.Value(multiPatch),
 		}, {
 			ID:          "call-patch-raw",
 			Name:        string(toolspec.ToolPatch),
 			Custom:      true,
-			CustomInput: rawPatch,
+			CustomInput: textutil.Value(rawPatch),
 		}}}),
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleTool, ToolCallID: "call-patch-single", Name: string(toolspec.ToolPatch), MessageType: llm.MessageTypeCustomToolCallOutput, Content: `{}`}),
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleTool, ToolCallID: "call-patch-multi", Name: string(toolspec.ToolPatch), MessageType: llm.MessageTypeCustomToolCallOutput, Content: `{}`}),
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleTool, ToolCallID: "call-patch-raw", Name: string(toolspec.ToolPatch), MessageType: llm.MessageTypeCustomToolCallOutput, Content: `{}`}),
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleTool, ToolCallID: textutil.Value("call-patch-single"), Name: textutil.Value(string(toolspec.ToolPatch)), MessageType: textutil.Value(llm.MessageTypeCustomToolCallOutput), Content: textutil.Value(`{}`)}),
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleTool, ToolCallID: textutil.Value("call-patch-multi"), Name: textutil.Value(string(toolspec.ToolPatch)), MessageType: textutil.Value(llm.MessageTypeCustomToolCallOutput), Content: textutil.Value(`{}`)}),
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleTool, ToolCallID: textutil.Value("call-patch-raw"), Name: textutil.Value(string(toolspec.ToolPatch)), MessageType: textutil.Value(llm.MessageTypeCustomToolCallOutput), Content: textutil.Value(`{}`)}),
 	}
 	for _, evt := range events {
 		if err := scan.ApplyPersistedEvent(evt); err != nil {
-			t.Fatalf("ApplyPersistedEvent(%q): %v", evt.Kind, err)
+			t.Fatalf("ApplyPersistedEvent(%q): %v", mustSessionEventKind(evt), err)
 		}
 	}
 
@@ -317,15 +293,15 @@ func TestPersistedTranscriptScanRendersPatchToolCallsWithoutEditedLabel(t *testi
 
 func TestPersistedTranscriptScanProjectsCarryoverFromPersistedMessage(t *testing.T) {
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
-	events := []session.Event{
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: "before compaction"}),
-		mustPersistedScanEvent(t, "history_replaced", historyReplacementPayload{Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: "condensed provider summary", MessageType: llm.MessageTypeCompactionSummary}})}),
+	events := []session.EventRecord{
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: textutil.Value("before compaction")}),
+		mustPersistedScanEvent(t, "history_replaced", historyReplacementPayload{Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("condensed provider summary"), MessageType: textutil.Value(llm.MessageTypeCompactionSummary)}})}),
 		mustPersistedScanEvent(t, "local_entry", storedLocalEntry{Role: "compaction_summary", Text: "condensed summary"}),
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeManualCompactionCarryover, Content: "Last user message before handoff\n\ncarry this forward"}),
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeManualCompactionCarryover), Content: textutil.Value("Last user message before handoff\n\ncarry this forward")}),
 	}
 	for _, evt := range events {
 		if err := scan.ApplyPersistedEvent(evt); err != nil {
-			t.Fatalf("ApplyPersistedEvent(%q): %v", evt.Kind, err)
+			t.Fatalf("ApplyPersistedEvent(%q): %v", mustSessionEventKind(evt), err)
 		}
 	}
 
@@ -352,16 +328,16 @@ func TestPersistedTranscriptScanProjectsCarryoverFromPersistedMessage(t *testing
 
 func TestPersistedTranscriptScanProjectsCarryoverFromHistoryReplacement(t *testing.T) {
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
-	events := []session.Event{
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: "before compaction"}),
+	events := []session.EventRecord{
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: textutil.Value("before compaction")}),
 		mustPersistedScanEvent(t, "history_replaced", historyReplacementPayload{Items: llm.ItemsFromMessages([]llm.Message{
-			{Role: llm.RoleUser, Content: "condensed provider summary", MessageType: llm.MessageTypeCompactionSummary},
-			{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeManualCompactionCarryover, Content: "Last user message before handoff\n\ncarry this forward"},
+			{Role: llm.RoleUser, Content: textutil.Value("condensed provider summary"), MessageType: textutil.Value(llm.MessageTypeCompactionSummary)},
+			{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeManualCompactionCarryover), Content: textutil.Value("Last user message before handoff\n\ncarry this forward")},
 		})}),
 	}
 	for _, evt := range events {
 		if err := scan.ApplyPersistedEvent(evt); err != nil {
-			t.Fatalf("ApplyPersistedEvent(%q): %v", evt.Kind, err)
+			t.Fatalf("ApplyPersistedEvent(%q): %v", mustSessionEventKind(evt), err)
 		}
 	}
 
@@ -379,18 +355,18 @@ func TestPersistedTranscriptScanProjectsCarryoverFromHistoryReplacement(t *testi
 
 func TestPersistedTranscriptScanMaterializesCompactedDeveloperContextInDetailPage(t *testing.T) {
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
-	events := []session.Event{
-		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: "before compaction"}),
+	events := []session.EventRecord{
+		mustPersistedScanEvent(t, "message", llm.Message{Role: llm.RoleUser, Content: textutil.Value("before compaction")}),
 		mustPersistedScanEvent(t, "local_entry", storedLocalEntry{Role: "error", Text: "before replace"}),
 		mustPersistedScanEvent(t, "history_replaced", historyReplacementPayload{Items: llm.ItemsFromMessages([]llm.Message{
-			{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeEnvironment, Content: "environment info"},
-			{Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "condensed summary"},
+			{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeEnvironment), Content: textutil.Value("environment info")},
+			{Role: llm.RoleUser, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("condensed summary")},
 		})}),
 		mustPersistedScanEvent(t, "local_entry", storedLocalEntry{Role: "compaction_notice", Text: "after replace notice"}),
 	}
 	for _, evt := range events {
 		if err := scan.ApplyPersistedEvent(evt); err != nil {
-			t.Fatalf("ApplyPersistedEvent(%q): %v", evt.Kind, err)
+			t.Fatalf("ApplyPersistedEvent(%q): %v", mustSessionEventKind(evt), err)
 		}
 	}
 
@@ -460,11 +436,7 @@ func TestPersistedTranscriptScanUsesCacheWarningModeVisibility(t *testing.T) {
 	}
 }
 
-func mustPersistedScanEvent(t *testing.T, kind string, payload any) session.Event {
+func mustPersistedScanEvent(t *testing.T, kind string, payload any) session.EventRecord {
 	t.Helper()
-	body, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("marshal %q payload: %v", kind, err)
-	}
-	return session.Event{Kind: kind, Payload: body}
+	return streamScanTestEvent(t, kind, payload)
 }

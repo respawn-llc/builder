@@ -11,6 +11,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/server/workflowruntime"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 
 	"github.com/google/uuid"
@@ -70,7 +71,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 				defer serialGate.done(serialOrdinal)
 			}
 			if !knownTool {
-				results[idx] = tools.Result{CallID: tc.ID, Name: toolspec.ID(tc.Name), IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: "unknown tool"}
+				results[idx] = tools.Result{CallID: tc.ID, Name: toolspec.ID(tc.Name), IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: textutil.Value("unknown tool")}
 				if err := e.steer(stepID, steerToolCompletionIntent(results[idx])); err != nil {
 					callErrs[idx] = fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, results[idx].Name, err)
 				}
@@ -94,7 +95,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 				}
 			}
 			if !ok {
-				results[idx] = tools.Result{CallID: tc.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: "unknown tool"}
+				results[idx] = tools.Result{CallID: tc.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: textutil.Value("unknown tool")}
 				if err := e.steer(stepID, steerToolCompletionIntent(results[idx])); err != nil {
 					callErrs[idx] = fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, results[idx].Name, err)
 				}
@@ -106,7 +107,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 			)
 			if err != nil {
 				callErr = err
-				res = tools.Result{CallID: tc.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": err.Error()}), Summary: err.Error()}
+				res = tools.Result{CallID: tc.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": err.Error()}), Summary: textutil.Value(err.Error())}
 			}
 			res.CallID = tc.ID
 			res.Name = toolID
@@ -154,7 +155,8 @@ func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workf
 			executableCall.Name = string(toolID)
 		}
 		if call.Custom && knownTool {
-			executableCall.Input = executorInputForCustomTool(toolID, call.CustomInput)
+			customInput, _ := textutil.OptionalExact(call.CustomInput)
+			executableCall.Input = executorInputForCustomTool(toolID, customInput)
 		}
 		prepared = append(prepared, executorToolCall{call: executableCall, toolID: toolID, knownTool: knownTool})
 		if !knownTool || toolID != toolspec.ToolAskQuestion || !workflowActive || !askQuestionMaterializable(engine) {
@@ -245,7 +247,7 @@ func (t *defaultToolExecutor) executeCompleteNodeTool(ctx context.Context, stepI
 	if !e.workflowRunActive() || e.cfg.WorkflowRun.Controller == nil {
 		result.IsError = true
 		result.Output = mustJSON(map[string]any{"error": "complete_node is only available during a workflow run"})
-		result.Summary = "not in workflow run"
+		result.Summary = textutil.Value("not in workflow run")
 		return result
 	}
 	parsed, err := workflowruntime.DecodeCompletion(call.Input, e.cfg.WorkflowRun.Contract)
@@ -265,7 +267,7 @@ func (t *defaultToolExecutor) executeCompleteNodeTool(ctx context.Context, stepI
 	}
 	e.recordWorkflowTerminalState(WorkflowCompletionSourceTool)
 	result.Output = workflowruntime.ToolSuccessPayload(completed)
-	result.Summary = "workflow node completed"
+	result.Summary = textutil.Value("workflow node completed")
 	result.Terminal = true
 	return result
 }

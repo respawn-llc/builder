@@ -11,6 +11,7 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -633,11 +634,11 @@ func TestExclusiveStepLifecycleInterruptPreservesPendingRecoveryUntilTerminalCle
 		t.Fatal("expected interruption message")
 	}
 	last := messages[len(messages)-1]
-	if last.MessageType != llm.MessageTypeInterruption {
+	if last.MessageType == nil || *last.MessageType != llm.MessageTypeInterruption {
 		t.Fatalf("expected interruption message type, got %+v", last)
 	}
-	if last.Content != interruptMessage {
-		t.Fatalf("unexpected interruption content %q", last.Content)
+	if messageContent(last) != interruptMessage {
+		t.Fatalf("unexpected interruption content %q", messageContent(last))
 	}
 	if len(messages) != 1 {
 		t.Fatalf("interrupt replay appended duplicate messages: %+v", messages)
@@ -844,7 +845,7 @@ func TestExclusiveStepLifecycleDoesNotClearSuccessorPendingRecovery(t *testing.T
 func TestBackgroundNoticeSchedulerSchedulesAfterBusyStepEnds(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "background done", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("background done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
@@ -855,9 +856,9 @@ func TestBackgroundNoticeSchedulerSchedulesAfterBusyStepEnds(t *testing.T) {
 
 	scheduler.QueueDeveloperNotice(llm.Message{
 		Role:        llm.RoleDeveloper,
-		MessageType: llm.MessageTypeBackgroundNotice,
-		Name:        "1000",
-		Content:     "Background shell 1000 completed.",
+		MessageType: textutil.Value(llm.MessageTypeBackgroundNotice),
+		Name:        textutil.Value("1000"),
+		Content:     textutil.Value("Background shell 1000 completed."),
 	})
 
 	if steps.calls() != 0 {
@@ -897,7 +898,9 @@ func TestBackgroundNoticeSchedulerSchedulesAfterBusyStepEnds(t *testing.T) {
 	client.mu.Unlock()
 	foundNotice := false
 	for _, msg := range requestMessages(request) {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeBackgroundNotice && msg.Name == "1000" {
+		if msg.Role == llm.RoleDeveloper &&
+			msg.MessageType != nil && *msg.MessageType == llm.MessageTypeBackgroundNotice &&
+			msg.Name != nil && *msg.Name == "1000" {
 			foundNotice = true
 			break
 		}
@@ -916,11 +919,11 @@ func TestBackgroundNoticeSchedulerSchedulesAfterBusyStepEnds(t *testing.T) {
 func TestContextCompactorUsesExclusiveStepLifecycle(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "summary"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 

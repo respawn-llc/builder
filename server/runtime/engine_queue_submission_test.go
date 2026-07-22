@@ -11,13 +11,14 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/shared/textutil"
 )
 
 func TestSubmitQueuedUserMessagesStartsTurnFromQueuedInjection(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "after queued steer"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("after queued steer")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 
@@ -31,14 +32,14 @@ func TestSubmitQueuedUserMessagesStartsTurnFromQueuedInjection(t *testing.T) {
 		},
 	})
 
-	queued := eng.QueueUserMessage("steer now")
+	queued := mustQueueUserMessage(t, eng, "steer now")
 
 	msg, err := eng.SubmitQueuedUserMessages(context.Background())
 	if err != nil {
 		t.Fatalf("submit queued user messages: %v", err)
 	}
-	if msg.Content != "after queued steer" {
-		t.Fatalf("assistant content = %q, want after queued steer", msg.Content)
+	if messageContent(msg) != "after queued steer" {
+		t.Fatalf("assistant content = %q, want after queued steer", messageContent(msg))
 	}
 	if len(client.calls) != 1 {
 		t.Fatalf("expected one model call for queued submission, got %d", len(client.calls))
@@ -52,7 +53,7 @@ func TestSubmitQueuedUserMessagesStartsTurnFromQueuedInjection(t *testing.T) {
 
 	hasQueuedUser := false
 	for _, message := range requestMessages(client.calls[0]) {
-		if message.Role == llm.RoleUser && message.Content == "steer now" {
+		if message.Role == llm.RoleUser && messageContent(message) == "steer now" {
 			hasQueuedUser = true
 			break
 		}
@@ -71,7 +72,7 @@ func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnRunError(t *tes
 	}
 	client := &fakeClient{errors: []error{providerErr}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
-	eng.QueueUserMessage("steer now")
+	mustQueueUserMessage(t, eng, "steer now")
 
 	_, receipt, err := eng.SubmitQueuedUserMessagesWithActiveHook(context.Background(), nil)
 	if !receipt.Committed || !errors.Is(err, providerErr) {
@@ -94,7 +95,7 @@ func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnRunError(t *tes
 func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnStepFinalizationError(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
@@ -105,7 +106,7 @@ func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnStepFinalizatio
 		}
 		return finalizationErr
 	}}
-	eng.QueueUserMessage("steer now")
+	mustQueueUserMessage(t, eng, "steer now")
 
 	_, receipt, err := eng.SubmitQueuedUserMessagesWithActiveHook(context.Background(), nil)
 	if !receipt.Committed || !errors.Is(err, finalizationErr) {
@@ -119,7 +120,7 @@ func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnStepFinalizatio
 func TestQueuedUserMessageStatusEventsCoverAcceptedSubmittedAndFailed(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "after queued steer"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("after queued steer")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	var statuses []QueuedUserMessageStatusEvent
@@ -132,11 +133,11 @@ func TestQueuedUserMessageStatusEventsCoverAcceptedSubmittedAndFailed(t *testing
 		},
 	})
 
-	first := eng.QueueUserMessageWithClientRequestID("steer now", "req-1")
+	first := mustQueueUserMessageWithClientRequestID(t, eng, "steer now", "req-1")
 	if _, err := eng.SubmitQueuedUserMessages(context.Background()); err != nil {
 		t.Fatalf("SubmitQueuedUserMessages: %v", err)
 	}
-	second := eng.QueueUserMessageWithClientRequestID("restore me", "req-2")
+	second := mustQueueUserMessageWithClientRequestID(t, eng, "restore me", "req-2")
 	failed := eng.FailQueuedUserMessages(QueuedUserMessageFailureClosing)
 
 	if len(failed) != 1 || failed[0].ID != second.ID {
@@ -194,11 +195,11 @@ func TestDrainQueuedUserMessagesBeforeCloseProcessesQueuedSteeringAfterFinalAnsw
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ack queued steer", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ack queued steer"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -214,7 +215,7 @@ func TestDrainQueuedUserMessagesBeforeCloseProcessesQueuedSteeringAfterFinalAnsw
 	if _, err := eng.SubmitUserMessage(context.Background(), "initial"); err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
-	queued := eng.QueueUserMessageWithClientRequestID("queued steer", "req-queued")
+	queued := mustQueueUserMessageWithClientRequestID(t, eng, "queued steer", "req-queued")
 	if err := eng.DrainQueuedUserMessagesBeforeClose(context.Background()); err != nil {
 		t.Fatalf("DrainQueuedUserMessagesBeforeClose: %v", err)
 	}
@@ -223,7 +224,7 @@ func TestDrainQueuedUserMessagesBeforeCloseProcessesQueuedSteeringAfterFinalAnsw
 	}
 	hasQueuedUser := false
 	for _, message := range requestMessages(client.calls[1]) {
-		if message.Role == llm.RoleUser && message.Content == "queued steer" {
+		if message.Role == llm.RoleUser && messageContent(message) == "queued steer" {
 			hasQueuedUser = true
 			break
 		}
@@ -239,7 +240,7 @@ func TestDrainQueuedUserMessagesBeforeCloseProcessesQueuedSteeringAfterFinalAnsw
 func TestDrainQueuedUserMessagesBeforeCloseFailsRestoredQueueWhenFlushPersistenceFails(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "unused"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("unused")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	var statuses []QueuedUserMessageStatusEvent
@@ -254,7 +255,7 @@ func TestDrainQueuedUserMessagesBeforeCloseFailsRestoredQueueWhenFlushPersistenc
 	if err := eng.ensureMetaContextForRequest(context.Background(), "prep"); err != nil {
 		t.Fatalf("prepare request context: %v", err)
 	}
-	queued := eng.QueueUserMessageWithClientRequestID("queued steer", "req-queued")
+	queued := mustQueueUserMessageWithClientRequestID(t, eng, "queued steer", "req-queued")
 	mustBlockTestEventLogAppends(t, store)
 
 	err := eng.DrainQueuedUserMessagesBeforeClose(context.Background())
@@ -288,7 +289,7 @@ func TestDrainQueuedUserMessagesBeforeCloseConsumesCommittedFlushObserverFailure
 	if err := eng.ensureMetaContextForRequest(context.Background(), "prep"); err != nil {
 		t.Fatalf("prepare request context: %v", err)
 	}
-	queued := eng.QueueUserMessageWithClientRequestID("queued steer", "req-queued")
+	queued := mustQueueUserMessageWithClientRequestID(t, eng, "queued steer", "req-queued")
 	gate.FailNext(observerErr)
 
 	err := eng.DrainQueuedUserMessagesBeforeClose(context.Background())
@@ -319,17 +320,17 @@ func TestIdleQueueUserMessageDoesNotAutoSubmit(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "first done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "queued done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("queued done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
 
-	eng.QueueUserMessage("queued while idle")
+	mustQueueUserMessage(t, eng, "queued while idle")
 	time.Sleep(50 * time.Millisecond)
 	if got := fakeClientCallCount(client); got != 0 {
 		t.Fatalf("idle QueueUserMessage auto-submitted; model calls = %d, want 0", got)
@@ -340,11 +341,11 @@ func TestQueueUserMessageDuringTerminalPublicationAutoDrainsAfterIdlePublication
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "first done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "queued done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("queued done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -362,7 +363,7 @@ func TestQueueUserMessageDuringTerminalPublicationAutoDrainsAfterIdlePublication
 		t.Fatal("timed out waiting for terminal publication")
 	}
 
-	eng.QueueUserMessage("queued during terminal publication")
+	mustQueueUserMessage(t, eng, "queued during terminal publication")
 	close(sink.releaseEnded)
 	if err := <-firstDone; err != nil {
 		t.Fatalf("first submit: %v", err)
@@ -375,7 +376,7 @@ func TestQueueUserMessageDuringTerminalPublicationAutoDrainsAfterIdlePublication
 }
 
 func TestCanceledManualReservationReleaseRedrivesQueuedUserWork(t *testing.T) {
-	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal}}}}
+	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)}}}}
 	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{Model: "gpt-5"})
 	reservation := &exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction}
 	if err := eng.stepLifecycle.AcquireReservation(reservation); err != nil {
@@ -392,6 +393,7 @@ type blockingThenQueuedClient struct {
 	releaseC       chan struct{}
 	secondStarted  chan struct{}
 	releaseSecondC chan struct{}
+	firstResponse  *llm.Response
 	mu             sync.Mutex
 	calls          []llm.Request
 }
@@ -404,11 +406,20 @@ func newBlockingThenQueuedClient() *blockingThenQueuedClient {
 }
 
 func newBlockingThenBlockedQueuedClient() *blockingThenQueuedClient {
+	firstResponse := llm.Response{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: textutil.Value("initial work handled"),
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+		},
+		Usage: llm.Usage{WindowTokens: 200000},
+	}
 	return &blockingThenQueuedClient{
 		started:        make(chan struct{}),
 		releaseC:       make(chan struct{}),
 		secondStarted:  make(chan struct{}),
 		releaseSecondC: make(chan struct{}),
+		firstResponse:  &firstResponse,
 	}
 }
 
@@ -422,6 +433,9 @@ func (c *blockingThenQueuedClient) Generate(ctx context.Context, req llm.Request
 	c.mu.Unlock()
 	if call == 1 {
 		<-c.releaseC
+		if c.firstResponse != nil {
+			return *c.firstResponse, nil
+		}
 		return llm.Response{}, ctx.Err()
 	}
 	if call == 2 && c.secondStarted != nil {
@@ -433,7 +447,7 @@ func (c *blockingThenQueuedClient) Generate(ctx context.Context, req llm.Request
 		}
 	}
 	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "queued work handled", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("queued work handled"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}, nil
 }

@@ -48,11 +48,11 @@ func NewPersistedTranscriptScan(req PersistedTranscriptScanRequest) *PersistedTr
 	}
 }
 
-func (s *PersistedTranscriptScan) ApplyPersistedEvent(evt session.Event) error {
+func (s *PersistedTranscriptScan) ApplyPersistedEvent(record session.EventRecord) error {
 	if s == nil {
 		return nil
 	}
-	return s.scan.ApplyPersistedEvent(evt)
+	return s.scan.ApplyPersistedEvent(record)
 }
 
 func (s *PersistedTranscriptScan) TotalEntries() int {
@@ -151,8 +151,9 @@ func persistedTranscriptToolCallMeta(call llm.ToolCall) *transcript.ToolCallMeta
 		return meta
 	}
 	input := call.Input
-	if call.Custom && strings.TrimSpace(call.CustomInput) != "" {
-		input = normalizeRuntimeToolInput(call.CustomInput)
+	if call.Custom && call.CustomInput != nil &&
+		strings.TrimSpace(*call.CustomInput) != "" {
+		input = normalizeRuntimeToolInput(*call.CustomInput)
 	}
 	built := tools.BuildCallTranscriptMeta(call.Name, tools.ToolCallContext{
 		DefaultShellPath: currentTranscriptDefaultShellPath(),

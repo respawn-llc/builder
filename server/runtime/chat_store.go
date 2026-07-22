@@ -62,8 +62,8 @@ type storedToolCompletion struct {
 	Name          string                   `json:"name"`
 	IsError       bool                     `json:"is_error"`
 	Output        json.RawMessage          `json:"output"`
-	Summary       string                   `json:"summary,omitempty"`
-	CondensedText string                   `json:"condensed_text,omitempty"`
+	Summary       *string                  `json:"summary,omitempty"`
+	CondensedText *string                  `json:"condensed_text,omitempty"`
 	Presentation  *transcript.ToolCallMeta `json:"presentation,omitempty"`
 	ProviderItems []llm.ResponseItem       `json:"provider_items,omitempty"`
 }
@@ -203,11 +203,7 @@ func (s *chatStore) pruneToolCompletionsToWorkingSetLocked() {
 		if !isToolCallItem(item.Type) {
 			continue
 		}
-		callID := strings.TrimSpace(item.CallID)
-		if callID == "" {
-			callID = strings.TrimSpace(item.ID)
-		}
-		if callID != "" {
+		if callID, present := textutil.FirstOptionalTrimmed(item.CallID, item.ID); present {
 			referenced[callID] = struct{}{}
 		}
 	}
@@ -263,22 +259,25 @@ func toolCallSnapshotFromItems(items []llm.ResponseItem, callID string) (llm.Too
 		if !isToolCallItem(item.Type) {
 			continue
 		}
-		itemCallID := strings.TrimSpace(item.CallID)
-		if itemCallID == "" {
-			itemCallID = strings.TrimSpace(item.ID)
+		itemCallID, present := textutil.FirstOptionalTrimmed(item.CallID, item.ID)
+		if !present {
+			continue
 		}
 		if itemCallID != callID {
 			continue
 		}
+		name, _ := textutil.OptionalTrimmed(item.Name)
 		call := llm.ToolCall{
 			ID:           itemCallID,
-			Name:         strings.TrimSpace(item.Name),
+			Name:         name,
 			Presentation: append(json.RawMessage(nil), item.ToolPresentation...),
 		}
 		if item.Type == llm.ResponseItemTypeCustomToolCall {
 			call.Custom = true
-			call.CustomInput = item.CustomInput
-			call.Input = normalizeRuntimeToolInput(item.CustomInput)
+			call.CustomInput = textutil.Pointer(item.CustomInput)
+			if item.CustomInput != nil {
+				call.Input = normalizeRuntimeToolInput(*item.CustomInput)
+			}
 		} else {
 			call.Input = append(json.RawMessage(nil), item.Arguments...)
 		}
@@ -287,10 +286,10 @@ func toolCallSnapshotFromItems(items []llm.ResponseItem, callID string) (llm.Too
 	return llm.ToolCall{}, false
 }
 
-func (s *chatStore) restoreToolCompletionPayload(payload []byte) error {
-	var completion storedToolCompletion
-	if err := json.Unmarshal(payload, &completion); err != nil {
-		return fmt.Errorf("decode tool_completed event: %w", err)
+func (s *chatStore) restoreToolCompletionRecord(record session.ToolCompletionRecord) error {
+	completion, err := storedToolCompletionFromSessionRecord(record)
+	if err != nil {
+		return fmt.Errorf("restore session tool completion record: %w", err)
 	}
 	s.recordToolCompletionWithProviderItems(tools.Result{
 		CallID:        completion.CallID,
@@ -480,8 +479,8 @@ func (s *chatStore) placeAttachedLocalEntriesAfterMaterializedToolLocked(msg llm
 	if msg.Role != llm.RoleTool {
 		return
 	}
-	callID := strings.TrimSpace(msg.ToolCallID)
-	if callID == "" {
+	callID, present := textutil.OptionalTrimmed(msg.ToolCallID)
+	if !present {
 		return
 	}
 	changed := false
@@ -573,11 +572,8 @@ func (s *chatStore) snapshotProviderItemsLocked() []llm.ResponseItem {
 			}
 			continue
 		}
-		callID := strings.TrimSpace(item.CallID)
-		if callID == "" {
-			callID = strings.TrimSpace(item.ID)
-		}
-		if callID == "" {
+		callID, present := textutil.FirstOptionalTrimmed(item.CallID, item.ID)
+		if !present {
 			continue
 		}
 		if _, ok := materializedToolResults[callID]; ok {
@@ -592,10 +588,15 @@ func (s *chatStore) snapshotProviderItemsLocked() []llm.ResponseItem {
 			pendingOutputs = append(pendingOutputs, llm.CloneResponseItems(providerItems)...)
 			continue
 		}
+		itemName, _ := textutil.OptionalTrimmed(item.Name)
+		completionName := strings.TrimSpace(string(completion.Name))
+		if completionName == "" {
+			completionName = itemName
+		}
 		pendingOutputs = append(pendingOutputs, llm.PrepareOpenAIInputItems([]llm.ResponseItem{{
 			Type:   llm.ToolOutputItemType(item.Type == llm.ResponseItemTypeCustomToolCall),
-			CallID: callID,
-			Name:   firstNonEmpty(strings.TrimSpace(string(completion.Name)), strings.TrimSpace(item.Name)),
+			CallID: textutil.Value(callID),
+			Name:   textutil.OptionalExactString(completionName),
 			Output: append(json.RawMessage(nil), completion.Output...),
 		}})...)
 	}
@@ -618,11 +619,8 @@ func (s *chatStore) danglingToolCalls() []danglingToolCall {
 		if !isToolCallItem(item.Type) {
 			continue
 		}
-		callID := strings.TrimSpace(item.CallID)
-		if callID == "" {
-			callID = strings.TrimSpace(item.ID)
-		}
-		if callID == "" {
+		callID, present := textutil.FirstOptionalTrimmed(item.CallID, item.ID)
+		if !present {
 			continue
 		}
 		if _, ok := seen[callID]; ok {
@@ -634,8 +632,9 @@ func (s *chatStore) danglingToolCalls() []danglingToolCall {
 		if _, ok := s.toolCompletions[callID]; ok {
 			continue
 		}
+		name, _ := textutil.OptionalTrimmed(item.Name)
 		seen[callID] = struct{}{}
-		out = append(out, danglingToolCall{callID: callID, name: strings.TrimSpace(item.Name)})
+		out = append(out, danglingToolCall{callID: callID, name: name})
 	}
 	return out
 }
@@ -674,13 +673,22 @@ func (s *chatStore) activeProviderItemsLocked() []llm.ResponseItem {
 
 func cloneChatStoreMessage(msg llm.Message) llm.Message {
 	cloned := msg
+	cloned.MessageType = textutil.Pointer(msg.MessageType)
+	cloned.SourcePath = textutil.Pointer(msg.SourcePath)
 	cloned.WorktreeContext = session.CloneWorktreeContext(msg.WorktreeContext)
+	cloned.Content = textutil.Pointer(msg.Content)
+	cloned.CompactContent = textutil.Pointer(msg.CompactContent)
+	cloned.Name = textutil.Pointer(msg.Name)
+	cloned.ToolCallID = textutil.Pointer(msg.ToolCallID)
+	cloned.Phase = textutil.Pointer(msg.Phase)
+	cloned.BackgroundActivityID = textutil.Pointer(msg.BackgroundActivityID)
 	cloned.BackgroundExitCode = textutil.Pointer(msg.BackgroundExitCode)
 	if len(msg.ToolCalls) > 0 {
 		cloned.ToolCalls = append([]llm.ToolCall(nil), msg.ToolCalls...)
 		for index := range cloned.ToolCalls {
 			cloned.ToolCalls[index].Presentation = append(json.RawMessage(nil), msg.ToolCalls[index].Presentation...)
 			cloned.ToolCalls[index].Input = append(json.RawMessage(nil), msg.ToolCalls[index].Input...)
+			cloned.ToolCalls[index].CustomInput = textutil.Pointer(msg.ToolCalls[index].CustomInput)
 		}
 	}
 	if len(msg.ReasoningItems) > 0 {
@@ -721,8 +729,7 @@ func (s *chatStore) applyMessageStatsLocked(msg llm.Message) {
 			}
 		}
 	case llm.RoleTool:
-		callID := strings.TrimSpace(msg.ToolCallID)
-		if callID != "" {
+		if callID, present := textutil.OptionalTrimmed(msg.ToolCallID); present {
 			s.materializedToolResults[callID] = struct{}{}
 			if _, synthesized := s.synthesizedToolResults[callID]; synthesized {
 				delete(s.synthesizedToolResults, callID)
@@ -747,8 +754,12 @@ func applyLastCommittedAssistantFinalAnswer(current string, msg llm.Message) str
 	if isNoopFinalAnswer(msg) {
 		return current
 	}
-	if msg.Role == llm.RoleAssistant && msg.Phase == llm.MessagePhaseFinal && strings.TrimSpace(msg.Content) != "" {
-		return msg.Content
+	if msg.Role == llm.RoleAssistant &&
+		msg.Phase != nil &&
+		*msg.Phase == llm.MessagePhaseFinal &&
+		msg.Content != nil &&
+		strings.TrimSpace(*msg.Content) != "" {
+		return *msg.Content
 	}
 	return ""
 }

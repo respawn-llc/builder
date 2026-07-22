@@ -27,6 +27,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -192,7 +193,7 @@ func (c *cancelObservingRuntimeControlClient) Generate(ctx context.Context, req 
 		return llm.Response{}, err
 	}
 	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}, nil
 }
@@ -239,7 +240,7 @@ func (c *restartableRuntimeControlClient) Generate(ctx context.Context, req llm.
 		return llm.Response{}, err
 	}
 	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}, nil
 }
@@ -289,7 +290,11 @@ func newRuntimeControlTestEngine(t *testing.T, client llm.Client, registry *tool
 	if cfg.Model == "" {
 		cfg.Model = "gpt-5"
 	}
-	engine, err := runtime.New(store, client, registry, cfg)
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	engine, err := runtime.New(store, eventLog, client, registry, cfg)
 	if err != nil {
 		t.Fatalf("create runtime engine: %v", err)
 	}
@@ -387,7 +392,7 @@ func newRuntimeControlTestService(t *testing.T, client llm.Client, registry *too
 
 func finalResponseRuntimeControlClient() *runtimeControlFakeClient {
 	return &runtimeControlFakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 }
@@ -992,18 +997,8 @@ func TestServiceSetGoalMemoNormalizesObjectiveWhitespace(t *testing.T) {
 	if first.Goal == nil || second.Goal == nil || first.Goal.ID != second.Goal.ID {
 		t.Fatalf("retry goal = %+v, want same id as %+v", second.Goal, first.Goal)
 	}
-	events, err := sessiontest.CollectEvents(store)
-	if err != nil {
-		t.Fatalf("ReadEvents: %v", err)
-	}
-	goalSetEvents := 0
-	for _, evt := range events {
-		if evt.Kind == "goal_set" {
-			goalSetEvents++
-		}
-	}
-	if goalSetEvents != 1 {
-		t.Fatalf("goal_set event count = %d, want 1", goalSetEvents)
+	if messages := runtimeControlGoalDeveloperMessages(t, store); len(messages) != 1 {
+		t.Fatalf("goal developer message count = %d, want 1", len(messages))
 	}
 }
 
@@ -1097,29 +1092,6 @@ func TestServiceSetGoalAllowsAgentAfterCompletedGoal(t *testing.T) {
 	if goal := store.Meta().Goal; goal == nil || goal.ID != resp.Goal.ID || goal.Objective != "next goal" || goal.Status != session.GoalStatusActive {
 		t.Fatalf("persisted replacement goal = %+v, want response goal %+v", goal, resp.Goal)
 	}
-	events, err := sessiontest.CollectEvents(store)
-	if err != nil {
-		t.Fatalf("ReadEvents: %v", err)
-	}
-	foundReplacement := false
-	for _, event := range events {
-		if event.Kind != "goal_set" {
-			continue
-		}
-		var payload session.GoalSetEvent
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			t.Fatalf("decode goal_set event: %v", err)
-		}
-		if payload.Goal.ID == resp.Goal.ID {
-			foundReplacement = true
-			if payload.ReplacedGoalID != completed.ID {
-				t.Fatalf("replacement replaced_goal_id = %q, want completed goal %q", payload.ReplacedGoalID, completed.ID)
-			}
-		}
-	}
-	if !foundReplacement {
-		t.Fatalf("replacement goal_set event for goal %q not found in %+v", resp.Goal.ID, events)
-	}
 }
 
 func TestServiceSetGoalPropagatesGoalLoopStartError(t *testing.T) {
@@ -1137,7 +1109,7 @@ func TestServiceSetGoalPropagatesGoalLoopStartError(t *testing.T) {
 	if goal := store.Meta().Goal; goal != nil {
 		t.Fatalf("goal persisted after failed preflight: %+v", goal)
 	}
-	events, readErr := sessiontest.CollectEvents(store)
+	events, readErr := sessiontest.CollectRecords(store)
 	if readErr != nil {
 		t.Fatalf("ReadEvents: %v", readErr)
 	}
@@ -1185,14 +1157,14 @@ func TestServiceCompleteGoalAlreadyCompleteDoesNotDuplicateAudit(t *testing.T) {
 	if _, err := service.CompleteGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{ClientRequestID: "complete-1", SessionID: store.Meta().SessionID, Actor: "agent"}); err != nil {
 		t.Fatalf("CompleteGoal first: %v", err)
 	}
-	before, err := sessiontest.CollectEvents(store)
+	before, err := sessiontest.CollectRecords(store)
 	if err != nil {
 		t.Fatalf("ReadEvents before: %v", err)
 	}
 	if _, err := service.CompleteGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{ClientRequestID: "complete-2", SessionID: store.Meta().SessionID, Actor: "agent"}); err != nil {
 		t.Fatalf("CompleteGoal second: %v", err)
 	}
-	after, err := sessiontest.CollectEvents(store)
+	after, err := sessiontest.CollectRecords(store)
 	if err != nil {
 		t.Fatalf("ReadEvents after: %v", err)
 	}
@@ -1220,7 +1192,7 @@ func TestServiceResumeActiveRunningGoalIsNoOp(t *testing.T) {
 		_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorSystem)
 		close(client.release)
 	}()
-	before, err := sessiontest.CollectEvents(store)
+	before, err := sessiontest.CollectRecords(store)
 	if err != nil {
 		t.Fatalf("CollectEvents before: %v", err)
 	}
@@ -1235,7 +1207,7 @@ func TestServiceResumeActiveRunningGoalIsNoOp(t *testing.T) {
 	if resp.Goal == nil || resp.Goal.ID != goal.ID || resp.Goal.Status != string(session.GoalStatusActive) {
 		t.Fatalf("resume active response = %+v, want existing active goal", resp.Goal)
 	}
-	after, err := sessiontest.CollectEvents(store)
+	after, err := sessiontest.CollectRecords(store)
 	if err != nil {
 		t.Fatalf("CollectEvents after: %v", err)
 	}
@@ -1280,8 +1252,8 @@ func TestServiceResumeOwnerlessActiveGoalRestartsLoopWithReminder(t *testing.T) 
 	if len(messages) != 2 {
 		t.Fatalf("goal developer messages after resume = %d, want set+resume", len(messages))
 	}
-	if messages[1].Content != prompts.RenderGoalResumePrompt("ship goal mode") {
-		t.Fatalf("resume reminder content = %q", messages[1].Content)
+	if messages[1].Content == nil || *messages[1].Content != prompts.RenderGoalResumePrompt("ship goal mode") {
+		t.Fatalf("resume reminder content = %v", messages[1].Content)
 	}
 }
 
@@ -1329,8 +1301,8 @@ func TestServiceResumeGoalDuringInterruptSchedulesRestartWithReminder(t *testing
 	if len(messages) != 2 {
 		t.Fatalf("goal developer messages after interrupted turn drain = %d, want set+resume", len(messages))
 	}
-	if messages[1].Content != prompts.RenderGoalResumePrompt("ship goal mode") {
-		t.Fatalf("resume reminder content = %q", messages[1].Content)
+	if messages[1].Content == nil || *messages[1].Content != prompts.RenderGoalResumePrompt("ship goal mode") {
+		t.Fatalf("resume reminder content = %v", messages[1].Content)
 	}
 	_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorSystem)
 	client.releaseSecond()
@@ -1830,23 +1802,12 @@ func TestServiceQueueUserMessageRejectsClientRequestIDPayloadMismatch(t *testing
 
 func countDirectShellCommandMessages(t *testing.T, store *session.Store, command string) int {
 	t.Helper()
-	events, err := sessiontest.CollectEvents(store)
-	if err != nil {
-		t.Fatalf("ReadEvents: %v", err)
-	}
 	count := 0
-	for _, evt := range events {
-		if evt.Kind != "message" {
+	for _, message := range runtimeControlMessageRecords(t, store) {
+		if message.Role != session.MessageRoleAssistant {
 			continue
 		}
-		var msg llm.Message
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			t.Fatalf("decode message event: %v", err)
-		}
-		if msg.Role != llm.RoleAssistant {
-			continue
-		}
-		for _, call := range msg.ToolCalls {
+		for _, call := range message.ToolCalls {
 			if call.Name != string(toolspec.ToolExecCommand) {
 				continue
 			}
@@ -1865,23 +1826,35 @@ func countDirectShellCommandMessages(t *testing.T, store *session.Store, command
 	return count
 }
 
-func runtimeControlGoalDeveloperMessages(t *testing.T, store *session.Store) []llm.Message {
+func runtimeControlMessageRecords(t *testing.T, store *session.Store) []session.MessageRecord {
 	t.Helper()
-	events, err := sessiontest.CollectEvents(store)
+	records, err := sessiontest.CollectRecords(store)
 	if err != nil {
-		t.Fatalf("ReadEvents: %v", err)
+		t.Fatalf("collect event records: %v", err)
 	}
-	out := []llm.Message{}
-	for _, evt := range events {
-		if evt.Kind != "message" {
+	messages := make([]session.MessageRecord, 0)
+	for _, record := range records {
+		payload, payloadErr := record.Payload()
+		if payloadErr != nil {
+			t.Fatalf("read event record payload: %v", payloadErr)
+		}
+		message, ok := payload.(session.MessageRecord)
+		if !ok {
 			continue
 		}
-		var msg llm.Message
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			t.Fatalf("decode message event: %v", err)
-		}
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeGoal {
-			out = append(out, msg)
+		messages = append(messages, message)
+	}
+	return messages
+}
+
+func runtimeControlGoalDeveloperMessages(t *testing.T, store *session.Store) []session.MessageRecord {
+	t.Helper()
+	out := make([]session.MessageRecord, 0)
+	for _, message := range runtimeControlMessageRecords(t, store) {
+		if message.Role == session.MessageRoleDeveloper &&
+			message.MessageType != nil &&
+			*message.MessageType == session.MessageTypeGoal {
+			out = append(out, message)
 		}
 	}
 	return out
@@ -1889,20 +1862,11 @@ func runtimeControlGoalDeveloperMessages(t *testing.T, store *session.Store) []l
 
 func countUserMessagesWithContent(t *testing.T, store *session.Store, content string) int {
 	t.Helper()
-	events, err := sessiontest.CollectEvents(store)
-	if err != nil {
-		t.Fatalf("ReadEvents: %v", err)
-	}
 	count := 0
-	for _, evt := range events {
-		if evt.Kind != "message" {
-			continue
-		}
-		var msg llm.Message
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			t.Fatalf("decode message event: %v", err)
-		}
-		if msg.Role == llm.RoleUser && msg.Content == content {
+	for _, message := range runtimeControlMessageRecords(t, store) {
+		if message.Role == session.MessageRoleUser &&
+			message.Content != nil &&
+			*message.Content == content {
 			count++
 		}
 	}

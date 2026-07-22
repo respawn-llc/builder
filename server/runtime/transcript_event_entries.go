@@ -23,12 +23,13 @@ func visibleChatEntriesFromMessage(msg llm.Message, completions map[string]tools
 			entries = append(entries, entry)
 		}
 	case llm.RoleAssistant:
-		if strings.TrimSpace(msg.Content) != "" && !isNoopFinalAnswer(msg) {
+		if msg.Content != nil && strings.TrimSpace(*msg.Content) != "" && !isNoopFinalAnswer(msg) {
+			phase, _ := textutil.OptionalValue(msg.Phase)
 			entries = append(entries, ChatEntry{
-				Visibility: assistantTranscriptVisibility(msg.Phase),
+				Visibility: assistantTranscriptVisibility(phase),
 				Role:       "assistant",
-				Text:       msg.Content,
-				Phase:      msg.Phase,
+				Text:       *msg.Content,
+				Phase:      phase,
 			})
 		}
 		for _, call := range msg.ToolCalls {
@@ -160,17 +161,22 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 }
 
 func resolvedToolResultForMessage(msg llm.Message, completions map[string]tools.Result) tools.Result {
-	callID := strings.TrimSpace(msg.ToolCallID)
+	callID, _ := textutil.OptionalTrimmed(msg.ToolCallID)
+	var output []byte
+	if msg.Content != nil {
+		output = []byte(*msg.Content)
+	}
+	name, _ := textutil.OptionalTrimmed(msg.Name)
 	result := tools.Result{
 		CallID: callID,
-		Name:   toolspec.ID(strings.TrimSpace(msg.Name)),
-		Output: []byte(msg.Content),
+		Name:   toolspec.ID(name),
+		Output: output,
 	}
 	if completion, ok := completions[callID]; ok {
 		if result.Name == "" {
 			result.Name = completion.Name
 		}
-		if strings.TrimSpace(msg.Content) == "" && len(completion.Output) > 0 {
+		if msg.Content == nil && len(completion.Output) > 0 {
 			result.Output = completion.Output
 		}
 		result.IsError = completion.IsError
@@ -194,13 +200,15 @@ func toolResultChatEntry(result tools.Result) ChatEntry {
 		normalized := transcript.NormalizeToolCallMeta(*presentation)
 		presentation = &normalized
 	}
+	condensedText, _ := textutil.OptionalTrimmed(result.CondensedText)
+	summary, _ := textutil.OptionalTrimmed(result.Summary)
 	return ChatEntry{
 		Visibility:        transcript.EntryVisibilityOngoingCollapsed,
 		Role:              role,
 		Text:              tools.FormatToolResultByName(string(result.Name), result.Output, result.IsError),
-		CondensedText:     strings.TrimSpace(result.CondensedText),
+		CondensedText:     condensedText,
 		ToolCallID:        strings.TrimSpace(result.CallID),
-		ToolResultSummary: strings.TrimSpace(result.Summary),
+		ToolResultSummary: summary,
 		ToolCall:          presentation,
 	}
 }

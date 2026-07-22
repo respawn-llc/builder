@@ -186,14 +186,14 @@ func (s *Service) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, re
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, err
 	}
-	if s == nil || s.sessions == nil {
+	if s == nil {
 		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, errSessionStoreResolverRequired
 	}
-	store, err := s.sessions.ResolveSessionStore(ctx, req.SessionID)
+	_, eventLog, err := resolveSessionStoreAndEventLog(ctx, s.sessions, req.SessionID)
 	if err != nil {
 		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, err
 	}
-	answer, err := runtime.LatestCommittedAssistantFinalAnswerFromStore(store)
+	answer, err := runtime.LatestCommittedAssistantFinalAnswerFromEventLog(eventLog)
 	if err != nil {
 		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, err
 	}

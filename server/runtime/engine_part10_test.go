@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 
+	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
 	brand "core/shared/config"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	"os"
@@ -42,11 +44,11 @@ func TestInjectsGlobalAndWorkspaceAgentsBeforeFirstUserMessage(t *testing.T) {
 
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok-1"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok-1")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok-2"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok-2")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -68,24 +70,27 @@ func TestInjectsGlobalAndWorkspaceAgentsBeforeFirstUserMessage(t *testing.T) {
 		t.Fatalf("expected environment, AGENTS, and user messages, got %+v", firstMessages)
 	}
 	for index, want := range []llm.Message{
-		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeEnvironment},
-		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeAgentsMD, SourcePath: globalPath},
-		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeAgentsMD, SourcePath: workspacePath},
-		{Role: llm.RoleUser, Content: "first"},
+		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeEnvironment)},
+		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeAgentsMD), SourcePath: textutil.Value(globalPath)},
+		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeAgentsMD), SourcePath: textutil.Value(workspacePath)},
+		{Role: llm.RoleUser, Content: textutil.Value("first")},
 	} {
 		got := firstMessages[index]
-		if got.Role != want.Role || got.MessageType != want.MessageType || got.SourcePath != want.SourcePath || (want.Content != "" && got.Content != want.Content) {
-			t.Fatalf("message %d = %+v, want role=%q type=%q source=%q content=%q", index, got, want.Role, want.MessageType, want.SourcePath, want.Content)
+		if got.Role != want.Role ||
+			!textutil.EqualOptional(got.MessageType, want.MessageType) ||
+			!textutil.EqualOptional(got.SourcePath, want.SourcePath) ||
+			(want.Content != nil && messageContent(got) != *want.Content) {
+			t.Fatalf("message %d = %+v, want role=%q type=%v source=%v content=%v", index, got, want.Role, want.MessageType, want.SourcePath, want.Content)
 		}
 	}
 
 	injectedCount := 0
 	envInjectedCount := 0
 	for _, msg := range requestMessages(client.calls[1]) {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeAgentsMD {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeAgentsMD {
 			injectedCount++
 		}
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeEnvironment {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeEnvironment {
 			envInjectedCount++
 		}
 	}
@@ -129,9 +134,12 @@ func TestFreshChildSessionReinjectsDeveloperContextEvenWhenParentAlreadyInjected
 	}); err != nil {
 		t.Fatalf("initialize child: %v", err)
 	}
+	if err := child.EnsureDurable(); err != nil {
+		t.Fatalf("persist child: %v", err)
+	}
 
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, child, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
@@ -146,19 +154,19 @@ func TestFreshChildSessionReinjectsDeveloperContextEvenWhenParentAlreadyInjected
 	if len(messages) < 5 {
 		t.Fatalf("expected environment, AGENTS, and user messages, got %+v", messages)
 	}
-	if messages[0].MessageType != llm.MessageTypeEnvironment {
+	if messages[0].MessageType == nil || *messages[0].MessageType != llm.MessageTypeEnvironment {
 		t.Fatalf("expected environment reinjected first, got %+v", messages[0])
 	}
-	if messages[1].MessageType != llm.MessageTypeSkills || !strings.Contains(messages[1].Content, "workspace-skill") {
+	if messages[1].MessageType == nil || *messages[1].MessageType != llm.MessageTypeSkills || !strings.Contains(messageContent(messages[1]), "workspace-skill") {
 		t.Fatalf("expected skills reinjected after environment, got %+v", messages[1])
 	}
-	if messages[2].MessageType != llm.MessageTypeAgentsMD || messages[2].SourcePath != globalPath {
+	if messages[2].MessageType == nil || *messages[2].MessageType != llm.MessageTypeAgentsMD || messages[2].SourcePath == nil || *messages[2].SourcePath != globalPath {
 		t.Fatalf("expected global AGENTS reinjected, got %+v", messages[2])
 	}
-	if messages[3].MessageType != llm.MessageTypeAgentsMD || messages[3].SourcePath != workspacePath {
+	if messages[3].MessageType == nil || *messages[3].MessageType != llm.MessageTypeAgentsMD || messages[3].SourcePath == nil || *messages[3].SourcePath != workspacePath {
 		t.Fatalf("expected workspace AGENTS reinjected, got %+v", messages[3])
 	}
-	if messages[4].Role != llm.RoleUser || messages[4].Content != "first child turn" {
+	if messages[4].Role != llm.RoleUser || messageContent(messages[4]) != "first child turn" {
 		t.Fatalf("expected user message after reinjected context, got %+v", messages[4])
 	}
 }
@@ -175,8 +183,8 @@ func TestInjectsSkillsContextAfterEnvironmentAndPersists(t *testing.T) {
 	store := mustCreateNamedTestSessionAt(t, storeRoot, "ws", workspace)
 
 	client := &fakeClient{responses: []llm.Response{
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok-1"}, Usage: llm.Usage{WindowTokens: 200000}},
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok-2"}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok-1")}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok-2")}, Usage: llm.Usage{WindowTokens: 200000}},
 	}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 
@@ -196,13 +204,13 @@ func TestInjectsSkillsContextAfterEnvironmentAndPersists(t *testing.T) {
 	envIdx := -1
 	userIdx := -1
 	for i, msg := range firstMessages {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeSkills {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeSkills {
 			skillsIdx = i
 		}
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeEnvironment {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeEnvironment {
 			envIdx = i
 		}
-		if msg.Role == llm.RoleUser && msg.Content == "first" {
+		if msg.Role == llm.RoleUser && messageContent(msg) == "first" {
 			userIdx = i
 		}
 	}
@@ -221,7 +229,7 @@ func TestInjectsSkillsContextAfterEnvironmentAndPersists(t *testing.T) {
 
 	skillsInjectedCount := 0
 	for _, msg := range requestMessages(client.calls[1]) {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeSkills {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeSkills {
 			skillsInjectedCount++
 		}
 	}
@@ -241,7 +249,7 @@ func TestDisabledSkillsAreNotInjectedIntoNewSessions(t *testing.T) {
 	storeRoot := t.TempDir()
 	store := mustCreateNamedTestSessionAt(t, storeRoot, "ws", workspace)
 
-	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"}, Usage: llm.Usage{WindowTokens: 200000}}}}
+	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")}, Usage: llm.Usage{WindowTokens: 200000}}}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:       "gpt-5",
 		SkillPolicy: skillPolicyWithDisabled("workspace skill"),
@@ -255,14 +263,14 @@ func TestDisabledSkillsAreNotInjectedIntoNewSessions(t *testing.T) {
 	}
 
 	for _, msg := range requestMessages(client.calls[0]) {
-		if msg.Role != llm.RoleDeveloper || msg.MessageType != llm.MessageTypeSkills {
+		if msg.Role != llm.RoleDeveloper || msg.MessageType == nil || *msg.MessageType != llm.MessageTypeSkills {
 			continue
 		}
-		if strings.Contains(msg.Content, "Workspace Skill") {
-			t.Fatalf("did not expect disabled workspace skill in injected skills context, got %q", msg.Content)
+		if strings.Contains(messageContent(msg), "Workspace Skill") {
+			t.Fatalf("did not expect disabled workspace skill in injected skills context, got %q", messageContent(msg))
 		}
-		if !strings.Contains(msg.Content, "- home-skill: "+filepath.ToSlash(homeSkillPath)+" . from home") {
-			t.Fatalf("expected enabled home skill to remain, got %q", msg.Content)
+		if !strings.Contains(messageContent(msg), "- home-skill: "+filepath.ToSlash(homeSkillPath)+" . from home") {
+			t.Fatalf("expected enabled home skill to remain, got %q", messageContent(msg))
 		}
 		return
 	}
@@ -291,7 +299,7 @@ func TestBrokenSymlinkedSkillsAreSkippedAndWarnedInTranscript(t *testing.T) {
 	}
 	assertModelCallCount(t, client, 1)
 	for _, msg := range requestMessages(client.calls[0]) {
-		if msg.MessageType == llm.MessageTypeSkills {
+		if msg.MessageType != nil && *msg.MessageType == llm.MessageTypeSkills {
 			t.Fatalf("broken skill produced model-visible skills context: %+v", requestMessages(client.calls[0]))
 		}
 	}
@@ -337,7 +345,7 @@ func TestNewRejectsEmptyModel(t *testing.T) {
 	workspace := t.TempDir()
 	store := mustCreateNamedTestSessionAt(t, storeRoot, "ws", workspace)
 
-	_, err := New(store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{})
+	_, err := New(store, mustMaterializeTestEventLog(t, store), &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{})
 	if !errors.Is(err, ErrModelRequired) {
 		t.Fatalf("expected ErrModelRequired, got %v", err)
 	}
@@ -367,17 +375,17 @@ func TestSubmitInjectsEnvironmentLineWithLabeledModelIdentifier(t *testing.T) {
 		t.Fatalf("expected environment and user messages, got %d", len(messages))
 	}
 	envMsg := messages[0]
-	if envMsg.Role != llm.RoleDeveloper || envMsg.MessageType != llm.MessageTypeEnvironment {
+	if envMsg.Role != llm.RoleDeveloper || envMsg.MessageType == nil || *envMsg.MessageType != llm.MessageTypeEnvironment {
 		t.Fatalf("expected first request message to be environment context, got %+v", envMsg)
 	}
-	if !strings.Contains(envMsg.Content, "\nYour model: gpt-5.3-codex\n") {
-		t.Fatalf("expected environment context to contain labeled model identifier, got %q", envMsg.Content)
+	if !strings.Contains(messageContent(envMsg), "\nYour model: gpt-5.3-codex\n") {
+		t.Fatalf("expected environment context to contain labeled model identifier, got %q", messageContent(envMsg))
 	}
-	if !strings.Contains(envMsg.Content, "\nCWD: "+workspace+"\n") {
-		t.Fatalf("expected environment context cwd to use session workspace root %q, got %q", workspace, envMsg.Content)
+	if !strings.Contains(messageContent(envMsg), "\nCWD: "+workspace+"\n") {
+		t.Fatalf("expected environment context cwd to use session workspace root %q, got %q", workspace, messageContent(envMsg))
 	}
-	if strings.Contains(envMsg.Content, "Your model: gpt-5.3-codex high") {
-		t.Fatalf("expected environment context to exclude thinking level from model identifier, got %q", envMsg.Content)
+	if strings.Contains(messageContent(envMsg), "Your model: gpt-5.3-codex high") {
+		t.Fatalf("expected environment context to exclude thinking level from model identifier, got %q", messageContent(envMsg))
 	}
 }
 
@@ -392,8 +400,8 @@ func TestManualCompactionReinjectsOnlyActiveHeadlessState(t *testing.T) {
 		{
 			name: "exited",
 			persistedMessages: []llm.Message{
-				{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeHeadlessMode, Content: "headless mode instructions"},
-				{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeHeadlessModeExit, Content: "interactive mode instructions"},
+				{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHeadlessMode), Content: textutil.Value("headless mode instructions")},
+				{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHeadlessModeExit), Content: textutil.Value("interactive mode instructions")},
 			},
 		},
 	}
@@ -401,7 +409,7 @@ func TestManualCompactionReinjectsOnlyActiveHeadlessState(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			store := mustCreateTestSession(t)
 			client := &fakeClient{responses: []llm.Response{{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "condensed summary"},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("condensed summary")},
 				Usage:     llm.Usage{InputTokens: 200, WindowTokens: 2_000},
 			}}}
 			eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
@@ -410,7 +418,7 @@ func TestManualCompactionReinjectsOnlyActiveHeadlessState(t *testing.T) {
 					t.Fatalf("mark headless active: %v", err)
 				}
 			}
-			for _, message := range append(test.persistedMessages, llm.Message{Role: llm.RoleUser, Content: "continue"}) {
+			for _, message := range append(test.persistedMessages, llm.Message{Role: llm.RoleUser, Content: textutil.Value("continue")}) {
 				if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
 					t.Fatalf("append message: %v", err)
 				}
@@ -423,7 +431,10 @@ func TestManualCompactionReinjectsOnlyActiveHeadlessState(t *testing.T) {
 			exitCount := 0
 			messages := eng.transcriptRuntimeState().SnapshotMessages()
 			for _, message := range messages {
-				switch message.MessageType {
+				if message.MessageType == nil {
+					continue
+				}
+				switch *message.MessageType {
 				case llm.MessageTypeHeadlessMode:
 					headlessCount++
 				case llm.MessageTypeHeadlessModeExit:
@@ -438,26 +449,33 @@ func TestManualCompactionReinjectsOnlyActiveHeadlessState(t *testing.T) {
 }
 
 func TestSubmitUserMessagePersistsHeadlessModeTransitions(t *testing.T) {
-	t.Parallel()
+	prevHeadlessPrompt := prompts.HeadlessModePrompt
+	prevExitPrompt := prompts.HeadlessModeExitPrompt
+	prompts.HeadlessModePrompt = "headless mode instructions"
+	prompts.HeadlessModeExitPrompt = "interactive mode instructions"
+	defer func() {
+		prompts.HeadlessModePrompt = prevHeadlessPrompt
+		prompts.HeadlessModeExitPrompt = prevExitPrompt
+	}()
 
 	tests := []struct {
-		name                  string
-		seedHeadless          bool
-		targetHeadless        bool
-		messageTypes          []llm.MessageType
-		verifySeedInteractive bool
+		name           string
+		seedHeadless   bool
+		targetHeadless bool
+		messageTypes   []llm.MessageType
 	}{
 		{
-			name:                  "enter headless",
-			targetHeadless:        true,
-			messageTypes:          []llm.MessageType{llm.MessageTypeHeadlessMode},
-			verifySeedInteractive: true,
+			name:           "enter headless",
+			targetHeadless: true,
+			messageTypes:   []llm.MessageType{llm.MessageTypeHeadlessMode},
 		},
 		{
-			name:           "exit headless",
-			seedHeadless:   true,
-			messageTypes:   []llm.MessageType{llm.MessageTypeHeadlessMode, llm.MessageTypeHeadlessModeExit},
-			targetHeadless: false,
+			name:         "exit headless",
+			seedHeadless: true,
+			messageTypes: []llm.MessageType{llm.MessageTypeHeadlessMode, llm.MessageTypeHeadlessModeExit},
+		},
+		{
+			name: "remain interactive",
 		},
 	}
 	for _, test := range tests {
@@ -468,30 +486,42 @@ func TestSubmitUserMessagePersistsHeadlessModeTransitions(t *testing.T) {
 			if _, err := seedEngine.SubmitUserMessage(context.Background(), "seed"); err != nil {
 				t.Fatalf("seed submit: %v", err)
 			}
-			if test.verifySeedInteractive {
-				for _, message := range requestMessages(seedClient.calls[0]) {
-					if message.MessageType == llm.MessageTypeHeadlessMode || message.MessageType == llm.MessageTypeHeadlessModeExit {
-						t.Fatalf("unchanged interactive session gained headless transition: %+v", requestMessages(seedClient.calls[0]))
-					}
-				}
-			}
 
-			client := &fakeClient{responses: []llm.Response{finalOutputItemResponse("transitioned")}}
+			client := &fakeClient{responses: []llm.Response{
+				finalOutputItemResponse("transitioned"),
+				finalOutputItemResponse("continued"),
+			}}
 			eng := mustNewExecTestEngine(t, store, client, Config{Model: "gpt-5", HeadlessMode: test.targetHeadless})
 			if _, err := eng.SubmitUserMessage(context.Background(), "transition"); err != nil {
 				t.Fatalf("transition submit: %v", err)
 			}
-			assertModelCallCount(t, client, 1)
+			if _, err := eng.SubmitUserMessage(context.Background(), "again"); err != nil {
+				t.Fatalf("second submit: %v", err)
+			}
+			assertModelCallCount(t, client, 2)
 
 			firstMessages := requestMessages(client.calls[0])
+			secondMessages := requestMessages(client.calls[1])
+			if len(test.messageTypes) == 0 {
+				for _, messages := range [][]llm.Message{firstMessages, secondMessages} {
+					for _, message := range messages {
+						if message.MessageType != nil && (*message.MessageType == llm.MessageTypeHeadlessMode || *message.MessageType == llm.MessageTypeHeadlessModeExit) {
+							t.Fatalf("unchanged interactive session gained headless transition: %+v", messages)
+						}
+					}
+				}
+				return
+			}
+
 			assertMessageTypesInOrder(t, firstMessages, test.messageTypes...)
+			assertMessageTypesInOrder(t, secondMessages, test.messageTypes...)
 			transitionIndex := -1
 			userIndex := -1
 			for index, message := range firstMessages {
-				if message.Role == llm.RoleDeveloper && message.MessageType == test.messageTypes[len(test.messageTypes)-1] {
+				if message.Role == llm.RoleDeveloper && message.MessageType != nil && *message.MessageType == test.messageTypes[len(test.messageTypes)-1] {
 					transitionIndex = index
 				}
-				if message.Role == llm.RoleUser && message.Content == "transition" {
+				if message.Role == llm.RoleUser && messageContent(message) == "transition" {
 					userIndex = index
 				}
 			}

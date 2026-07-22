@@ -9,6 +9,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -31,74 +32,90 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 	meta := e.store.Meta()
 	recoveredHandoff := newPersistedHandoffRecovery()
 	reminderIssued := meta.CompactionSoonReminderIssued
-	activeWindow, err := e.store.ReadNewestSegmentBackward(isCompactionSegmentBoundary)
+	var matchErr error
+	activeWindow, err := e.eventLog.ReadNewestSegmentBackward(compactionBoundaryMatcher(&matchErr))
 	if err != nil {
 		return err
 	}
-	activeListEvents := activeWindow.Events
+	if matchErr != nil {
+		return matchErr
+	}
 	var rollbackLocator rollbackCandidateLocatorTracker
-	for _, evt := range activeListEvents {
-		switch evt.Kind {
-		case "message":
-			var msg llm.Message
-			if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-				return fmt.Errorf("decode message event: %w", err)
+	for _, record := range activeWindow.Records {
+		stepID, _ := textutil.OptionalExact(record.StepID())
+		payload, err := record.Payload()
+		if err != nil {
+			return err
+		}
+		switch payload := payload.(type) {
+		case session.MessageRecord:
+			msg, err := llmMessageFromSessionRecord(payload)
+			if err != nil {
+				return fmt.Errorf("restore session message record: %w", err)
 			}
-			if err := rollbackLocator.ObserveMessage(evt.Seq, msg); err != nil {
+			if err := rollbackLocator.ObserveMessage(record.Seq(), msg); err != nil {
 				return err
 			}
-			e.transcriptRuntimeState().AppendMessage(evt.StepID, msg)
+			e.transcriptRuntimeState().AppendMessage(stepID, msg)
 			recoveredHandoff.ApplyMessage(msg)
 			if isCompactionSoonReminderMessage(msg) {
 				reminderIssued = true
 			}
-		case "tool_completed":
-			if err := e.transcriptRuntimeState().RestoreToolCompletionPayload(evt.Payload); err != nil {
+		case session.ToolCompletionRecord:
+			if err := e.transcriptRuntimeState().RestoreToolCompletionRecord(payload); err != nil {
 				return err
 			}
-			if err := recoveredHandoff.ApplyToolCompletion(evt.Payload); err != nil {
-				return err
-			}
-		case "local_entry":
-			var entry storedLocalEntry
-			if err := json.Unmarshal(evt.Payload, &entry); err != nil {
-				return fmt.Errorf("decode local_entry event: %w", err)
-			}
-			e.diagnosticDedupeStore().RestoreLocal(entry.DiagnosticKey)
-			restored := *localEntryChatEntryForStep(entry, evt.StepID)
-			e.transcriptRuntimeState().AppendLocalEntryRecord(restored, entry.AfterToolCallID)
-		case sessionEventCacheWarning:
-			if err := applyPersistedCacheWarningToTranscript(e.transcriptRuntimeState(), evt.Payload, e.cfg.CacheWarningMode); err != nil {
-				return err
-			}
-		case sessionEventCacheRequestObserved:
-			if err := e.restorePromptCacheRequest(evt.Payload); err != nil {
-				return err
-			}
-		case sessionEventCacheResponseObserved:
-			if err := e.restorePromptCacheResponse(evt.Payload); err != nil {
-				return err
-			}
-		case "history_replaced":
-			payload, ignoredLegacy, err := decodePersistedHistoryReplacementPayload(evt.Payload)
+			completion, err := storedToolCompletionFromSessionRecord(payload)
 			if err != nil {
-				return fmt.Errorf("%w: %w", errDecodeHistoryReplacedEvent, err)
+				return fmt.Errorf("restore session tool completion record: %w", err)
 			}
-			if ignoredLegacy {
-				continue
+			if err := recoveredHandoff.ApplyToolCompletion(completion); err != nil {
+				return err
+			}
+		case session.LocalEntryRecord:
+			entry, err := storedLocalEntryFromSessionRecord(payload)
+			if err != nil {
+				return fmt.Errorf("restore session local entry record: %w", err)
+			}
+			if entry.DiagnosticKey != nil {
+				e.diagnosticDedupeStore().RestoreLocal(*entry.DiagnosticKey)
+			}
+			restored := *localEntryChatEntryForStep(entry, stepID)
+			e.transcriptRuntimeState().AppendLocalEntryRecord(restored, entry.AfterToolCallID)
+		case session.CacheWarningRecord:
+			applyPersistedCacheWarningToTranscript(e.transcriptRuntimeState(), payload, e.cfg.CacheWarningMode)
+		case session.CacheRequestObservationRecord:
+			// Cache requests are observational. The following response record
+			// reconstructs the cache tracker state.
+		case session.CacheResponseObservationRecord:
+			if cache := e.modelRequests().RequestCache(); cache != nil {
+				cache.RecordResponse(persistedCacheResponseObservedFromSessionRecord(payload))
+			}
+		case session.HistoryReplacementRecord:
+			replacement, err := historyReplacementPayloadFromSessionRecord(payload)
+			if err != nil {
+				return fmt.Errorf("restore session history replacement record: %w", err)
 			}
 			e.resetLocalDiagnostics()
-			e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(evt.StepID, payload.Items, payload.CommittedEntryStart)
-			e.transcriptRuntimeState().SeedLastCommittedAssistantFinalAnswerIfEmpty(payload.LastCommittedAssistantFinalAnswer)
-			if payload.CompactionNumber > 0 {
-				e.compactionRuntimeState().SetCount(payload.CompactionNumber)
+			e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(stepID, replacement.Items, replacement.CommittedEntryStart)
+			if replacement.LastCommittedAssistantFinalAnswer != nil {
+				e.transcriptRuntimeState().SeedLastCommittedAssistantFinalAnswerIfEmpty(
+					*replacement.LastCommittedAssistantFinalAnswer,
+				)
+			}
+			if replacement.CompactionNumber != nil && *replacement.CompactionNumber > 0 {
+				e.compactionRuntimeState().SetCount(*replacement.CompactionNumber)
 			} else {
 				e.compactionRuntimeState().IncrementCount()
 			}
-			e.compactionRuntimeState().SetLastWorkflowRunID(payload.WorkflowRunID)
-			rollbackLocator.ObserveHistoryReplacement(payload)
+			if replacement.WorkflowRunID != nil {
+				e.compactionRuntimeState().SetLastWorkflowRunID(*replacement.WorkflowRunID)
+			}
+			rollbackLocator.ObserveHistoryReplacement(replacement)
 			recoveredHandoff.ClearSatisfiedByCompaction()
-			recoveredHandoff.SeedFutureMessage(payload.PendingHandoffFutureMessage)
+			if replacement.PendingHandoffFutureMessage != nil {
+				recoveredHandoff.SeedFutureMessage(*replacement.PendingHandoffFutureMessage)
+			}
 			reminderIssued = false
 		}
 	}
@@ -129,7 +146,11 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 }
 
 func isCompactionSoonReminderMessage(msg llm.Message) bool {
-	return msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeCompactionSoonReminder && strings.TrimSpace(msg.Content) != ""
+	return msg.Role == llm.RoleDeveloper &&
+		msg.MessageType != nil &&
+		*msg.MessageType == llm.MessageTypeCompactionSoonReminder &&
+		msg.Content != nil &&
+		strings.TrimSpace(*msg.Content) != ""
 }
 
 type persistedHandoffRecovery struct {
@@ -146,7 +167,10 @@ func (r *persistedHandoffRecovery) ApplyMessage(msg llm.Message) {
 	if r == nil {
 		return
 	}
-	if msg.MessageType == llm.MessageTypeHandoffFutureMessage && strings.TrimSpace(msg.Content) != "" {
+	if msg.MessageType != nil &&
+		*msg.MessageType == llm.MessageTypeHandoffFutureMessage &&
+		msg.Content != nil &&
+		strings.TrimSpace(*msg.Content) != "" {
 		r.pendingFutureMessage = ""
 	}
 	if msg.Role != llm.RoleAssistant {
@@ -168,13 +192,9 @@ func (r *persistedHandoffRecovery) ApplyMessage(msg llm.Message) {
 	}
 }
 
-func (r *persistedHandoffRecovery) ApplyToolCompletion(payload []byte) error {
+func (r *persistedHandoffRecovery) ApplyToolCompletion(completion storedToolCompletion) error {
 	if r == nil {
 		return nil
-	}
-	var completion storedToolCompletion
-	if err := json.Unmarshal(payload, &completion); err != nil {
-		return fmt.Errorf("decode tool_completed event: %w", err)
 	}
 	if toolspec.ID(strings.TrimSpace(completion.Name)) != toolspec.ToolTriggerHandoff || completion.IsError {
 		delete(r.toolCalls, strings.TrimSpace(completion.CallID))
@@ -271,7 +291,10 @@ func queuedUserSteeringIntentText(intent steeringIntent) string {
 		if item.message == nil || item.message.message.Role != llm.RoleUser {
 			continue
 		}
-		content := strings.TrimSpace(item.message.message.Content)
+		if item.message.message.Content == nil {
+			continue
+		}
+		content := strings.TrimSpace(*item.message.message.Content)
 		if content == "" {
 			continue
 		}

@@ -1,12 +1,12 @@
 package runtime
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/server/tools"
 	"core/shared/config"
 	"core/shared/rollbacktarget"
@@ -241,8 +241,8 @@ func (s *transcriptRuntimeState) RecordStoredToolCompletion(completion storedToo
 	}, completion.ProviderItems)
 }
 
-func (s *transcriptRuntimeState) RestoreToolCompletionPayload(payload []byte) error {
-	return s.chatProjection().restoreToolCompletionPayload(payload)
+func (s *transcriptRuntimeState) RestoreToolCompletionRecord(record session.ToolCompletionRecord) error {
+	return s.chatProjection().restoreToolCompletionRecord(record)
 }
 
 func (s *transcriptRuntimeState) ReplaceHistoryAtCommittedEntryStart(stepID string, items []llm.ResponseItem, committedEntryStart *int) {
@@ -264,11 +264,7 @@ func (s *transcriptRuntimeState) ClearStreamingError() {
 	s.chatProjection().clearStreamingError()
 }
 
-func applyPersistedCacheWarningToTranscript(state *transcriptRuntimeState, payload []byte, mode config.CacheWarningMode) error {
-	var warning transcript.CacheWarning
-	if err := json.Unmarshal(payload, &warning); err != nil {
-		return fmt.Errorf("decode %s event: %w", sessionEventCacheWarning, err)
-	}
+func applyPersistedCacheWarningToTranscript(state *transcriptRuntimeState, record session.CacheWarningRecord, mode config.CacheWarningMode) {
+	warning := cacheWarningFromSessionRecord(record)
 	state.AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), cacheWarningEntryVisibility(mode))
-	return nil
 }

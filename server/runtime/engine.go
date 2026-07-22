@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"core/shared/config"
 	"core/shared/rpcwire"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 
@@ -165,6 +165,7 @@ type Engine struct {
 	closed          atomic.Bool
 
 	store    *session.Store
+	eventLog session.MaterializedEventLog
 	llm      llm.Client
 	registry *tools.Registry
 	cfg      Config
@@ -221,9 +222,18 @@ type handoffRequest struct {
 	futureAgentMessage string
 }
 
-func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg Config) (*Engine, error) {
+func New(
+	store *session.Store,
+	eventLog session.MaterializedEventLog,
+	client llm.Client,
+	registry *tools.Registry,
+	cfg Config,
+) (*Engine, error) {
 	if store == nil || client == nil || registry == nil {
 		return nil, errors.New("store, llm client, and tool registry are required")
+	}
+	if err := eventLog.ValidateOwner(store); err != nil {
+		return nil, fmt.Errorf("runtime event log: %w", err)
 	}
 	if strings.TrimSpace(cfg.Model) == "" {
 		return nil, ErrModelRequired
@@ -268,6 +278,7 @@ func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg 
 	}
 	eng := &Engine{
 		store:              store,
+		eventLog:           eventLog,
 		llm:                client,
 		registry:           registry,
 		cfg:                cfg,
@@ -323,6 +334,10 @@ func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg 
 	if err := eng.restoreMessages(); err != nil {
 		return nil, err
 	}
+	// Restoring messages is the runtime's first event-use boundary. Existing
+	// stores reconcile event-derived metadata there, so subsequent metadata
+	// reads must use the refreshed authoritative snapshot.
+	meta = store.Meta()
 	recoveryStepID := ""
 	if meta.PendingModelRecovery != nil {
 		recoveryStepID = meta.PendingModelRecovery.StepID
@@ -344,7 +359,7 @@ func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg 
 			return nil, err
 		}
 		if needsMarker {
-			if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeInterruption, Content: interruptMessage}})); err != nil {
+			if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeInterruption), Content: textutil.Value(interruptMessage)}})); err != nil {
 				return nil, err
 			}
 		}
@@ -435,23 +450,7 @@ func (e *Engine) seedTranscriptLiveToolsFromDanglingToolCalls(stepID string) err
 }
 
 func (e *Engine) pendingRecoveryStepHasTerminalAssistant(stepID string) (bool, error) {
-	events, err := e.store.ReadEventsBackwardUntil(isCompactionSegmentBoundary)
-	if err != nil {
-		return false, err
-	}
-	for _, evt := range events {
-		if strings.TrimSpace(evt.StepID) != stepID || evt.Kind != "message" {
-			continue
-		}
-		var msg llm.Message
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			continue
-		}
-		if msg.Role == llm.RoleAssistant && msg.Phase == llm.MessagePhaseFinal && len(msg.ToolCalls) == 0 {
-			return true, nil
-		}
-	}
-	return false, nil
+	return e.eventLog.PendingRecoveryStepHasTerminalAssistant(stepID)
 }
 
 func (e *Engine) Close() error {
@@ -653,7 +652,7 @@ func (e *Engine) submitUserMessage(ctx context.Context, text string, onActive fu
 		if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 			return err
 		}
-		userMessage := llm.Message{Role: llm.RoleUser, Content: text}
+		userMessage := llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)}
 		intents := []steeringIntent{steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventNone, true, []llm.Message{userMessage})}
 		if flushed := flushedUserMessageEvent(userMessage, stepID); flushed != nil {
 			intents = append(intents, steerEventIntent(*flushed))
@@ -730,11 +729,15 @@ func (e *Engine) submitUserShellCommand(ctx context.Context, command string, onA
 		if _, ok := e.registry.Get(toolspec.ToolExecCommand); !ok {
 			transcriptCall := normalizeToolCallForTranscript(call, e.transcriptWorkingDir())
 			_ = e.steer(stepID, steerEventIntent(Event{Kind: EventToolCallStarted, StepID: stepID, ToolCall: &transcriptCall, CommittedTranscriptChanged: true}))
-			result = tools.Result{CallID: call.ID, Name: toolspec.ToolExecCommand, IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: "unknown tool"}
+			result = tools.Result{
+				CallID: call.ID, Name: toolspec.ToolExecCommand, IsError: true,
+				Output:  mustJSON(map[string]any{"error": "unknown tool"}),
+				Summary: textutil.Value("unknown tool"),
+			}
 			if err := e.steer(stepID, steerToolCompletionIntent(result)); err != nil {
 				return fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, call.ID, result.Name, err)
 			}
-			if appendErr := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, Content: string(result.Output), ToolCallID: result.CallID, Name: string(result.Name)}})); appendErr != nil {
+			if appendErr := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, Content: textutil.Value(string(result.Output)), ToolCallID: textutil.Value(result.CallID), Name: textutil.Value(string(result.Name))}})); appendErr != nil {
 				return appendErr
 			}
 			return errUnknownTool
@@ -745,7 +748,7 @@ func (e *Engine) submitUserShellCommand(ctx context.Context, command string, onA
 			return errors.New("shell tool execution returned no result")
 		}
 		result = results[0]
-		if appendErr := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, Content: string(result.Output), ToolCallID: result.CallID, Name: string(result.Name)}})); appendErr != nil {
+		if appendErr := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, Content: textutil.Value(string(result.Output)), ToolCallID: textutil.Value(result.CallID), Name: textutil.Value(string(result.Name))}})); appendErr != nil {
 			return errors.Join(execErr, appendErr)
 		}
 		return execErr
@@ -948,8 +951,12 @@ func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, cli
 			resp, attemptErr = streamingClient.GenerateStream(ctx, req, onTextDelta)
 		} else {
 			resp, attemptErr = client.Generate(ctx, req)
-			if attemptErr == nil && attemptOnDelta != nil && resp.Assistant.Content != "" {
-				attemptOnDelta(llm.AssistantDelta{Text: resp.Assistant.Content, Phase: resp.Assistant.Phase})
+			if attemptErr == nil && attemptOnDelta != nil && resp.Assistant.Content != nil {
+				delta := llm.AssistantDelta{Text: *resp.Assistant.Content}
+				if resp.Assistant.Phase != nil {
+					delta.Phase = *resp.Assistant.Phase
+				}
+				attemptOnDelta(delta)
 			}
 		}
 		attemptDone.Store(true)

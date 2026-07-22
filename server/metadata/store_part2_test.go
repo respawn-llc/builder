@@ -107,7 +107,10 @@ func TestImportSessionSnapshotRejectsInvalidContinuationRole(t *testing.T) {
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	sess := createMetadataTestSession(t, store, cfg, binding)
-	snapshot := session.PersistedStoreSnapshot{SessionDir: sess.Dir(), Meta: sess.Meta()}
+	snapshot := session.PersistedStoreSnapshot{
+		SessionDir: sess.Dir(),
+		Meta:       persistedMetaFromMetadata(sess.Meta()),
+	}
 	snapshot.Meta.Continuation = &session.ContinuationContext{AgentRole: sessiontest.AgentRole(" ")}
 
 	err := store.ImportSessionSnapshot(ctx, snapshot)
@@ -390,9 +393,13 @@ func TestSessionLaunchVisibilityTransitions(t *testing.T) {
 			wantVisible: true,
 			mutate: func(t *testing.T, _ *Store, _ config.App, _ Binding, sess *session.Store) {
 				t.Helper()
-				if _, _, err := sess.AppendEvent("step-1", "message", map[string]any{"role": "user", "content": "Investigate broken startup flow\nmore detail"}); err != nil {
-					t.Fatalf("AppendEvent: %v", err)
-				}
+				appendMetadataMessage(
+					t,
+					sess,
+					"step-1",
+					session.MessageRoleUser,
+					"Investigate broken startup flow\nmore detail",
+				)
 			},
 		},
 		{
@@ -400,9 +407,7 @@ func TestSessionLaunchVisibilityTransitions(t *testing.T) {
 			wantVisible: false,
 			mutate: func(t *testing.T, _ *Store, _ config.App, _ Binding, sess *session.Store) {
 				t.Helper()
-				if _, _, err := sess.AppendEvent("step-1", "message", map[string]any{"role": "assistant", "content": "warming up"}); err != nil {
-					t.Fatalf("AppendEvent: %v", err)
-				}
+				appendMetadataMessage(t, sess, "step-1", session.MessageRoleAssistant, "warming up")
 			},
 		},
 	}
