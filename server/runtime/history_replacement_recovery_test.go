@@ -2,9 +2,12 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"core/server/llm"
 	"core/server/session"
@@ -67,6 +70,86 @@ func TestReplaceHistoryDoesNotMutateRuntimeStateWhenEventAppendFails(t *testing.
 	if storedUsage == nil || storedUsage.InputTokens != usage.InputTokens {
 		t.Fatalf("uncommitted replacement changed persisted usage: %+v", storedUsage)
 	}
+}
+
+func TestRestoreMessagesFailsOnMalformedHistoryReplacementPayload(t *testing.T) {
+	t.Run("non-legacy payload fails materialization", func(t *testing.T) {
+		store := mustCreateTestSession(t)
+		writeMalformedLegacyHistoryReplacement(t, store, "local")
+
+		_, err := store.MaterializeEventLog()
+		var materializationErr *session.EventLogMaterializationError
+		if !errors.As(err, &materializationErr) ||
+			materializationErr.Stage != session.EventLogMaterializationStagePreparation ||
+			materializationErr.Committed ||
+			materializationErr.PendingRepair {
+			t.Fatalf("malformed history replacement materialization = %+v", err)
+		}
+	})
+
+	t.Run("legacy reviewer rollback is ignored", func(t *testing.T) {
+		store := mustCreateTestSession(t)
+		writeMalformedLegacyHistoryReplacement(
+			t,
+			store,
+			session.LegacyReviewerRollbackHistoryReplacementEngine,
+		)
+
+		eventLog, err := store.MaterializeEventLog()
+		if err != nil {
+			t.Fatalf("materialize legacy reviewer rollback: %v", err)
+		}
+		window, err := eventLog.ReadRecentRecords(16)
+		if err != nil {
+			t.Fatalf("read bounded migrated records: %v", err)
+		}
+		if len(window.Records) != 0 {
+			t.Fatalf("ignored legacy reviewer rollback records = %+v", window.Records)
+		}
+		engine, err := New(store, eventLog, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+		if err != nil {
+			t.Fatalf("restore legacy reviewer rollback: %v", err)
+		}
+		t.Cleanup(func() {
+			if err := engine.Close(); err != nil {
+				t.Errorf("close restored engine: %v", err)
+			}
+		})
+		if engine.CommittedTranscriptEntryCount() != 0 {
+			t.Fatalf("ignored legacy reviewer rollback committed entry count = %d", engine.CommittedTranscriptEntryCount())
+		}
+	})
+}
+
+func writeMalformedLegacyHistoryReplacement(t *testing.T, store *session.Store, engine string) {
+	t.Helper()
+	payload, err := json.Marshal(struct {
+		Engine string `json:"engine"`
+		Items  string `json:"items"`
+	}{
+		Engine: engine,
+		Items:  "malformed",
+	})
+	if err != nil {
+		t.Fatalf("marshal malformed legacy history replacement payload: %v", err)
+	}
+	record, err := json.Marshal(struct {
+		Seq       int64           `json:"seq"`
+		Timestamp time.Time       `json:"timestamp"`
+		Kind      string          `json:"kind"`
+		StepID    string          `json:"step_id"`
+		Payload   json.RawMessage `json:"payload"`
+	}{
+		Seq:       1,
+		Timestamp: time.Unix(0, 0).UTC(),
+		Kind:      string(session.EventKindHistoryReplace),
+		StepID:    "legacy-step",
+		Payload:   payload,
+	})
+	if err != nil {
+		t.Fatalf("marshal malformed legacy history replacement event: %v", err)
+	}
+	writeTestFile(t, filepath.Join(store.Dir(), "events.jsonl"), string(append(record, '\n')))
 }
 
 func TestCommittedCompactionHistoryReplacementInvalidatesUsageAcrossImmediateReopen(t *testing.T) {
