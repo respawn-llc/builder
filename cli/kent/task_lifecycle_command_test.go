@@ -600,7 +600,7 @@ func TestTaskStartSessionPollingTimeoutReportsStartedTask(t *testing.T) {
 func TestTaskStartSessionPollingDoesNotWaitForScriptRunSession(t *testing.T) {
 	remote := &taskSessionPollingRemote{task: serverapi.WorkflowTaskDetail{
 		Summary:        serverapi.WorkflowTaskSummary{ID: "task-1", ShortID: "BLD-1", Title: "Task"},
-		Workflow:       serverapi.WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Workflow"},
+		Workflow:       serverapi.WorkflowTaskWorkflowSummary{WorkflowID: "workflow-1", DisplayName: "Workflow"},
 		CurrentScripts: []serverapi.WorkflowTaskCurrentScript{{RunID: "run-1", Path: "script"}},
 	}}
 	detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, "task-1", "run-1", time.Second, time.Millisecond)
@@ -837,7 +837,7 @@ func (r *taskStartPollingRemote) taskDetail(sessionID string) serverapi.Workflow
 	}
 	return serverapi.WorkflowTaskDetail{
 		Summary:           serverapi.WorkflowTaskSummary{ID: r.taskID, ShortID: r.shortID, WorkflowID: r.workflowID, ProjectID: r.projectID, Title: "Task"},
-		Workflow:          serverapi.WorkflowPickerItem{WorkflowID: r.workflowID, DisplayName: r.workflow},
+		Workflow:          serverapi.WorkflowTaskWorkflowSummary{WorkflowID: r.workflowID, DisplayName: r.workflow},
 		CurrentSessionIDs: currentSessionIDs,
 		CurrentScripts:    []serverapi.WorkflowTaskCurrentScript{},
 	}
@@ -991,7 +991,7 @@ func (r *setupProgressLifecycleRemote) taskDetail(sessionID string) serverapi.Wo
 	}
 	return serverapi.WorkflowTaskDetail{
 		Summary:           serverapi.WorkflowTaskSummary{ID: r.taskID, ShortID: r.shortID, WorkflowID: r.workflowID, ProjectID: r.projectID, Title: "Task"},
-		Workflow:          serverapi.WorkflowPickerItem{WorkflowID: r.workflowID, DisplayName: r.workflow},
+		Workflow:          serverapi.WorkflowTaskWorkflowSummary{WorkflowID: r.workflowID, DisplayName: r.workflow},
 		CurrentSessionIDs: currentSessionIDs,
 		CurrentScripts:    []serverapi.WorkflowTaskCurrentScript{},
 	}

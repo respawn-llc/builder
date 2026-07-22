@@ -336,7 +336,11 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
       project: z.object({
         display_name: z.string(),
       }),
-      workflow: workflowPickerItemSchema,
+      workflow: z.object({
+        workflow_id: nonBlankString,
+        display_name: z.string(),
+        version: z.number(),
+      }),
       body: emptyString,
       source_url: emptyString,
       source_workspace: workspaceSummarySchema,
@@ -362,7 +366,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
     projectID: value.task.summary.project_id,
     projectName: value.task.project.display_name,
     workflowID: value.task.summary.workflow_id,
-    workflowName: value.task.workflow.name,
+    workflowName: value.task.workflow.display_name,
     workflowVersion: value.task.workflow.version,
     title: value.task.summary.title,
     body: value.task.body,

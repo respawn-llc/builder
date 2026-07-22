@@ -1476,7 +1476,7 @@ type WorkflowTaskSummary struct {
 type WorkflowTaskDetail struct {
 	Summary           WorkflowTaskSummary         `json:"summary"`
 	Project           ProjectBoardProject         `json:"project"`
-	Workflow          WorkflowPickerItem          `json:"workflow"`
+	Workflow          WorkflowTaskWorkflowSummary `json:"workflow"`
 	Body              string                      `json:"body"`
 	SourceURL         string                      `json:"source_url,omitempty"`
 	SourceWorkspace   ProjectWorkspaceSummary     `json:"source_workspace"`
@@ -1487,6 +1487,12 @@ type WorkflowTaskDetail struct {
 	Status            WorkflowTaskStatus          `json:"status"`
 	Actions           WorkflowTaskActions         `json:"actions"`
 	AttentionCount    int                         `json:"attention_count"`
+}
+
+type WorkflowTaskWorkflowSummary struct {
+	WorkflowID  string `json:"workflow_id"`
+	DisplayName string `json:"display_name"`
+	Version     int64  `json:"version"`
 }
 
 type WorkflowTaskCurrentScript struct {

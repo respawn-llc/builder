@@ -245,7 +245,7 @@ func (r *crossProjectTaskShowRemote) GetWorkflowTask(_ context.Context, req serv
 		return serverapi.WorkflowTaskGetResponse{Task: serverapi.WorkflowTaskDetail{
 			Summary:  serverapi.WorkflowTaskSummary{ID: "task-other", ProjectID: "project-other", WorkflowID: "workflow-" + workflowSelectorTestUUID, ShortID: "OTH-1", Title: "Other Task"},
 			Project:  serverapi.ProjectBoardProject{ProjectKey: "OTH", DisplayName: "Other"},
-			Workflow: serverapi.WorkflowPickerItem{WorkflowID: "workflow-" + workflowSelectorTestUUID, DisplayName: "Workflow"},
+			Workflow: serverapi.WorkflowTaskWorkflowSummary{WorkflowID: "workflow-" + workflowSelectorTestUUID, DisplayName: "Workflow"},
 			Status:   serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindBacklog},
 		}}, nil
 	}
@@ -267,7 +267,7 @@ func TestWriteTaskDetailIncludesCurrentExecutionTargets(t *testing.T) {
 			CreatedAtUnixMs: 1735689600000,
 		},
 		Project:         serverapi.ProjectBoardProject{DisplayName: "Project"},
-		Workflow:        serverapi.WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Workflow"},
+		Workflow:        serverapi.WorkflowTaskWorkflowSummary{WorkflowID: "workflow-1", DisplayName: "Workflow"},
 		Body:            "Do the work.",
 		SourceWorkspace: serverapi.ProjectWorkspaceSummary{RootPath: "/workspace"},
 		ExecutionTarget: &serverapi.WorkflowExecutionTarget{
@@ -315,7 +315,7 @@ func TestTaskDetailExecutionTargetHumanAndJSONFacts(t *testing.T) {
 	task := serverapi.WorkflowTaskDetail{
 		Summary:  serverapi.WorkflowTaskSummary{ID: "task-1", ProjectID: "project-1", ShortID: "WOR-1", Title: "Task", CreatedAtUnixMs: 1735689600000},
 		Project:  serverapi.ProjectBoardProject{DisplayName: "Project"},
-		Workflow: serverapi.WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Workflow"},
+		Workflow: serverapi.WorkflowTaskWorkflowSummary{WorkflowID: "workflow-1", DisplayName: "Workflow"},
 		SourceWorkspace: serverapi.ProjectWorkspaceSummary{
 			RootPath: "/workspace",
 		},

@@ -224,11 +224,10 @@ func TestBoardSelectorFallsBackToActiveSelection(t *testing.T) {
 	})
 }
 
-func TestTaskDetailPrefersActiveWorkflowLink(t *testing.T) {
+func TestTaskDetailProjectsWorkflowIdentityWithoutWorkflowValidity(t *testing.T) {
 	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	link, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true)
-	if err != nil {
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
 	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowIDPointerForTest(workflowID), Title: "Historical", Body: "Body"})
@@ -246,10 +245,9 @@ func TestTaskDetailPrefersActiveWorkflowLink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if detail.Workflow.WorkflowID != string(workflowID) || !detail.Workflow.IsProjectDefault || !detail.Workflow.ValidForTaskCreation {
-		t.Fatalf("workflow link = %+v, want active default link", detail.Workflow)
+	if detail.Workflow.WorkflowID != string(workflowID) || detail.Workflow.DisplayName == "" || detail.Workflow.Version <= 0 {
+		t.Fatalf("workflow summary = %+v, want current workflow identity", detail.Workflow)
 	}
-	_ = link
 }
 
 func TestBoardColumnTaskCountsUseFullSelectedWorkflow(t *testing.T) {

@@ -124,13 +124,6 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	link, err := d.queries.GetActiveProjectWorkflowLinkByWorkflow(ctx, sqlitegen.GetActiveProjectWorkflowLinkByWorkflowParams{
-		ProjectID:  task.ProjectID,
-		WorkflowID: task.WorkflowID,
-	})
-	if err != nil {
-		return serverapi.WorkflowTaskDetail{}, err
-	}
 	executionTarget, worktreePath, err := d.executionTargetForTask(ctx, task, sourceWorkspace.WorkspaceID)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
@@ -157,13 +150,10 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 			DefaultWorkspaceID:     primaryWorkspaceID,
 			AttachedWorkspaceCount: int(workspaceCount),
 		},
-		Workflow: serverapi.WorkflowPickerItem{
-			WorkflowID:           workflowRecord.ID,
-			DisplayName:          workflowRecord.Name,
-			Description:          workflowRecord.Description,
-			Version:              workflowRecord.Version,
-			IsProjectDefault:     link.IsDefault != 0,
-			ValidForTaskCreation: true,
+		Workflow: serverapi.WorkflowTaskWorkflowSummary{
+			WorkflowID:  workflowRecord.ID,
+			DisplayName: workflowRecord.Name,
+			Version:     workflowRecord.Version,
 		},
 		Body:              task.Body,
 		SourceURL:         task.SourceUrl,

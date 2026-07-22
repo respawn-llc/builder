@@ -310,7 +310,6 @@ export const englishResources = {
       transitions: "Transitions",
       openInCli: "Open in CLI",
       openScript: "Open script",
-      scriptPathUnavailable: "No script path is available.",
       cliCommandCopied: "Copied command to clipboard",
       cliCommandUnavailable: "No task session is available yet.",
       question: "Question",
