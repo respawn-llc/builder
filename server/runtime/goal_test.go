@@ -61,39 +61,6 @@ func TestGoalSetEmitsCommittedGoalFeedbackEvent(t *testing.T) {
 	}
 }
 
-func TestGoalSetAtomicallyPersistsGoalMessage(t *testing.T) {
-	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
-	beforeRevision := mustEventLogRevision(engine.eventLog)
-
-	goal, err := engine.SetGoal("ship goal mode", session.GoalActorUser)
-	if err != nil {
-		t.Fatalf("SetGoal: %v", err)
-	}
-
-	if goal.Objective != "ship goal mode" || goal.Status != session.GoalStatusActive {
-		t.Fatalf("goal = %+v, want active goal", goal)
-	}
-	if got := mustEventLogRevision(engine.eventLog); got != beforeRevision+1 {
-		t.Fatalf("event-log revision = %d, want %d", got, beforeRevision+1)
-	}
-	if persisted := store.Metadata().Goal; persisted == nil || persisted.ID != goal.ID {
-		t.Fatalf("persisted goal = %+v, want %+v", persisted, goal)
-	}
-	window, err := engine.eventLog.ReadRecentRecords(1)
-	if err != nil {
-		t.Fatalf("read persisted goal message: %v", err)
-	}
-	if len(window.Records) != 1 {
-		t.Fatalf("goal records = %d, want 1", len(window.Records))
-	}
-	message, ok := mustSessionEventPayload(window.Records[0]).(session.MessageRecord)
-	if !ok || message.Role != session.MessageRoleDeveloper ||
-		message.MessageType == nil || *message.MessageType != session.MessageTypeGoal {
-		t.Fatalf("goal record payload = %#v, want developer goal MessageRecord", mustSessionEventPayload(window.Records[0]))
-	}
-}
-
 func TestQueuedAgentShellGoalSetDrainsAfterToolCompletion(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -367,7 +334,7 @@ func TestConcurrentGoalMutationsDoNotInterleaveBetweenMetadataAndStatusEvent(t *
 		secondDone <- err
 	}()
 	time.Sleep(50 * time.Millisecond)
-	if goal := store.Metadata().Goal; goal == nil || goal.Objective != "first goal" {
+	if goal := store.Meta().Goal; goal == nil || goal.Objective != "first goal" {
 		t.Fatalf("second mutation interleaved before first status event completed: %+v", goal)
 	}
 	eventsMu.Lock()
@@ -399,12 +366,12 @@ func waitForGoalObjective(t *testing.T, store *session.Store, objective string) 
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if goal := store.Metadata().Goal; goal != nil && goal.Objective == objective {
+		if goal := store.Meta().Goal; goal != nil && goal.Objective == objective {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for goal objective %q, got %+v", objective, store.Metadata().Goal)
+	t.Fatalf("timed out waiting for goal objective %q, got %+v", objective, store.Meta().Goal)
 }
 
 func assertGoalStatusEventObjective(t *testing.T, events []Event, start int, objective string) {

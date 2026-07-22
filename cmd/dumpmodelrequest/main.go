@@ -120,12 +120,11 @@ func captureSessionRequest(
 		persistenceRoot,
 		sessionID,
 		session.WithPersistedSessionResolver(md),
-		session.WithFilelessEventPersistence(),
 	)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("open read-only session: %w", err)
 	}
-	meta := store.Metadata()
+	meta := store.Meta()
 	bootstrap, err := launch.ResolveBootstrapPlan(persistenceRoot, launch.BootstrapRequest{SessionID: sessionID})
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("resolve launch bootstrap: %w", err)
@@ -138,27 +137,16 @@ func captureSessionRequest(
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("resolve session launch settings: %w", err)
 	}
-	eventLog, lease, err := store.MaterializeFilelessEventLog(ctx)
+	eventLog, err := store.MaterializeEventLog()
 	if err != nil {
-		return capturedRequest{}, fmt.Errorf("materialize read-only session event log: %w", err)
+		return capturedRequest{}, fmt.Errorf("materialize session event log: %w", err)
 	}
-	defer func() {
-		resultErr = errors.Join(
-			resultErr,
-			func() error {
-				if err := lease.Close(); err != nil {
-					return fmt.Errorf("close diagnostic event-log artifact lease: %w", err)
-				}
-				return nil
-			}(),
-		)
-	}()
 	activeSettings := resolved.ActiveSettings
 	activeToolIDs := resolved.EnabledTools
 	activeSources := resolved.Source.Sources
 	workingDirectory := ""
 	var workflowConfig *workflowruntime.Config
-	if store.Metadata().WorkflowSession != nil {
+	if store.Meta().WorkflowSession != nil {
 		workflowInspection, workflowErr := resolvePersistedWorkflowInspection(ctx, cfg, md, store)
 		if workflowErr != nil {
 			return capturedRequest{}, fmt.Errorf("resolve workflow session launch settings: %w", workflowErr)

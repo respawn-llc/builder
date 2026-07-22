@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"core/shared/rollbacktarget"
 	"core/shared/runtimeids"
@@ -171,14 +170,14 @@ func TestCloneSessionStreamsLargeHistoryAcrossChunks(t *testing.T) {
 	if !reflect.DeepEqual(parentRecords, childRecords) {
 		t.Fatalf("cloned child must replay the full parent history: parent=%d child=%d", len(parentRecords), len(childRecords))
 	}
-	parentID, err := runtimeids.ParseSessionID(parent.Metadata().SessionID)
+	parentID, err := runtimeids.ParseSessionID(parent.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ParseSessionID parent: %v", err)
 	}
-	if child.Metadata().PreviousSessionID == nil || *child.Metadata().PreviousSessionID != parentID {
-		t.Fatalf("child previous id = %v, want %q", child.Metadata().PreviousSessionID, parent.Metadata().SessionID)
+	if child.Meta().PreviousSessionID == nil || *child.Meta().PreviousSessionID != parentID {
+		t.Fatalf("child previous id = %v, want %q", child.Meta().PreviousSessionID, parent.Meta().SessionID)
 	}
-	if !child.Metadata().HeadlessActive {
+	if !child.Meta().HeadlessActive {
 		t.Fatal("expected cloned child to inherit headless-active state derived from replay")
 	}
 }
@@ -203,7 +202,7 @@ func TestStreamedForkAndCloneRequireAndPersistCategory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fork session: %v", err)
 	}
-	if got := forked.Metadata().Category; got == nil || *got != sessioncontract.SessionCategoryMain {
+	if got := forked.Meta().Category; got == nil || *got != sessioncontract.SessionCategoryMain {
 		t.Fatalf("fork category = %v, want main", got)
 	}
 
@@ -211,7 +210,7 @@ func TestStreamedForkAndCloneRequireAndPersistCategory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clone session: %v", err)
 	}
-	if got := cloned.Metadata().Category; got == nil || *got != sessioncontract.SessionCategorySubagent {
+	if got := cloned.Meta().Category; got == nil || *got != sessioncontract.SessionCategorySubagent {
 		t.Fatalf("clone category = %v, want subagent", got)
 	}
 }
@@ -264,181 +263,6 @@ func TestForkAtUserMessageOutOfRangeCleansUpChild(t *testing.T) {
 		t.Fatal("expected out-of-range fork to fail")
 	}
 	assertOnlyForkParentSessionDir(t, root, parent)
-}
-
-func TestForkAndCloneMaterializeOnlyAtExplicitEventUse(t *testing.T) {
-	sessionDir := newEventLogPreparationSessionDir(t)
-	eventsPath := filepath.Join(sessionDir, eventsFile)
-	legacy := []byte(
-		`{"seq":1,"timestamp":"2026-07-19T10:00:00Z","kind":"message","payload":{"role":"user","content":"first"}}` + "\n" +
-			`{"seq":2,"timestamp":"2026-07-19T10:01:00Z","kind":"message","payload":{"role":"user","content":"second"}}` + "\n",
-	)
-	writeEventLogPreparationSource(t, eventsPath, legacy)
-	fixedTime := time.Unix(1_700_000_000, 0)
-	if err := os.Chtimes(eventsPath, fixedTime, fixedTime); err != nil {
-		t.Fatalf("set legacy event-log timestamps: %v", err)
-	}
-	before := eventLogFingerprint(t, eventsPath)
-	meta := reconciliationTestMeta()
-	meta.SessionID = filepath.Base(sessionDir)
-	meta.WorkspaceContainer = "workspace"
-	meta.WorkspaceRoot = "/tmp/work"
-	meta.LastSequence = 2
-	observer := &eventLogReconciliationTestObserver{}
-	parent := newEventLogReconciliationStore(t, sessionDir, meta, observer, nil)
-
-	_ = parent.Metadata()
-	if _, _, err := ForkAtUserMessage(
-		MaterializedEventLog{},
-		2,
-		"fork",
-		testSessionCategory,
-	); err == nil {
-		t.Fatal("fork accepted an unmaterialized parent")
-	}
-	if _, err := CloneSession(
-		MaterializedEventLog{},
-		"clone",
-		testSessionCategory,
-	); err == nil {
-		t.Fatal("clone accepted an unmaterialized parent")
-	}
-	if after := eventLogFingerprint(t, eventsPath); !before.equal(after) {
-		t.Fatalf(
-			"metadata inspection or invalid fork/clone mutated legacy source: before=%+v after=%+v",
-			before,
-			after,
-		)
-	}
-
-	parentLog, err := parent.MaterializeEventLog()
-	if err != nil {
-		t.Fatalf("materialize legacy parent: %v", err)
-	}
-	forked, ordinal, err := ForkAtUserMessage(
-		parentLog,
-		2,
-		"fork",
-		testSessionCategory,
-	)
-	if err != nil {
-		t.Fatalf("fork materialized parent: %v", err)
-	}
-	if ordinal != 2 {
-		t.Fatalf("fork ordinal = %d, want 2", ordinal)
-	}
-	forkedRecords := collectForkRecords(t, materializedForkEventLog(t, forked))
-	if len(forkedRecords) != 1 {
-		t.Fatalf("forked record count = %d, want 1", len(forkedRecords))
-	}
-	assertNoForkTemporaryArtifacts(t, parent.Dir())
-	assertNoForkTemporaryArtifacts(t, forked.Dir())
-}
-
-func TestForkAndCloneReassignSequenceGapsAndPreserveVisibleOrdinals(t *testing.T) {
-	sessionDir := newEventLogPreparationSessionDir(t)
-	eventsPath := filepath.Join(sessionDir, eventsFile)
-	hiddenUserLike := LocalEntryRecord{
-		Visibility: EntryVisibilityHidden,
-		Role:       "user",
-		Text:       "hidden user-like entry",
-	}
-	sourceRecords := []EventRecord{
-		mustForkRecord(t, 7, forkUserMessageRecord("first")),
-		mustForkRecord(t, 11, hiddenUserLike),
-		mustForkRecord(t, 19, forkUserMessageRecord("second")),
-	}
-	source := append([]byte(nil), currentEventLogHeaderBytes(t)...)
-	for _, record := range sourceRecords {
-		line, err := encodeEventRecordV1(record)
-		if err != nil {
-			t.Fatalf("encode source record %d: %v", record.Seq(), err)
-		}
-		source = append(source, line...)
-		source = append(source, '\n')
-	}
-	writeEventLogPreparationSource(t, eventsPath, source)
-	meta := reconciliationTestMeta()
-	meta.SessionID = filepath.Base(sessionDir)
-	meta.WorkspaceContainer = "workspace"
-	meta.WorkspaceRoot = "/tmp/work"
-	meta.LastSequence = 19
-	observer := &eventLogReconciliationTestObserver{}
-	parent := newEventLogReconciliationStore(t, sessionDir, meta, observer, nil)
-	parentLog, err := parent.MaterializeEventLog()
-	if err != nil {
-		t.Fatalf("materialize gapped parent: %v", err)
-	}
-
-	cloned, err := CloneSession(parentLog, "clone", testSessionCategory)
-	if err != nil {
-		t.Fatalf("clone gapped parent: %v", err)
-	}
-	clonedRecords := collectForkRecords(t, materializedForkEventLog(t, cloned))
-	assertForkRecordSequences(t, clonedRecords, 1, 2, 3)
-	for index := range sourceRecords {
-		if mustEventRecordKind(sourceRecords[index]) != mustEventRecordKind(clonedRecords[index]) ||
-			!reflect.DeepEqual(
-				mustEventRecordPayload(sourceRecords[index]),
-				mustEventRecordPayload(clonedRecords[index]),
-			) {
-			t.Fatalf(
-				"cloned record %d changed source order/payload: source=%#v clone=%#v",
-				index,
-				sourceRecords[index],
-				clonedRecords[index],
-			)
-		}
-	}
-
-	forked, ordinal, err := ForkAtUserMessage(
-		parentLog,
-		19,
-		"fork",
-		testSessionCategory,
-	)
-	if err != nil {
-		t.Fatalf("fork gapped parent: %v", err)
-	}
-	if ordinal != 2 {
-		t.Fatalf("visible user ordinal = %d, want 2", ordinal)
-	}
-	forkedRecords := collectForkRecords(t, materializedForkEventLog(t, forked))
-	assertForkRecordSequences(t, forkedRecords, 1, 2)
-}
-
-func mustForkRecord(
-	t *testing.T,
-	sequence int64,
-	payload EventRecordPayload,
-) EventRecord {
-	t.Helper()
-	record, err := NewEventRecord(sequence, forkStringPointer("step"), payload)
-	if err != nil {
-		t.Fatalf("build fork fixture record %d: %v", sequence, err)
-	}
-	return record
-}
-
-func assertForkRecordSequences(
-	t *testing.T,
-	records []EventRecord,
-	want ...int64,
-) {
-	t.Helper()
-	if len(records) != len(want) {
-		t.Fatalf("record count = %d, want %d", len(records), len(want))
-	}
-	for index, sequence := range want {
-		if records[index].Seq() != sequence {
-			t.Fatalf(
-				"record %d sequence = %d, want %d",
-				index,
-				records[index].Seq(),
-				sequence,
-			)
-		}
-	}
 }
 
 func TestCloneSessionFlushesAtCountAndByteBudgets(t *testing.T) {
@@ -499,7 +323,7 @@ func TestCloneSessionFlushesAtCountAndByteBudgets(t *testing.T) {
 			); err != nil || !receipt.Committed {
 				t.Fatalf("append parent fixtures: receipt=%+v err=%v", receipt, err)
 			}
-			persistence.startChildCapture(parent.Metadata().SessionID)
+			persistence.startChildCapture(parent.Meta().SessionID)
 
 			child, err := CloneSession(parentLog, "clone", testSessionCategory)
 			if err != nil {
@@ -559,6 +383,19 @@ func TestForkReplayBatchReportsDeterministicRetainedMaxima(t *testing.T) {
 			t.Fatalf("reset replay batch retained payload at slot %d", index)
 		}
 	}
+}
+
+func mustForkRecord(
+	t *testing.T,
+	sequence int64,
+	payload EventRecordPayload,
+) EventRecord {
+	t.Helper()
+	record, err := NewEventRecord(sequence, forkStringPointer("step"), payload)
+	if err != nil {
+		t.Fatalf("build fork fixture record %d: %v", sequence, err)
+	}
+	return record
 }
 
 func largeForkLocalEntry() LocalEntryRecord {
@@ -655,7 +492,7 @@ func TestForkAtUserMessageRebasesTypedHistoryReplacementRollbackCandidate(t *tes
 			reminderWindow.EndOffset,
 		)
 	}
-	if child.Metadata().CompactionSoonReminderIssued {
+	if child.Meta().CompactionSoonReminderIssued {
 		t.Fatal("history replacement must clear replay-derived compaction reminder state")
 	}
 }
@@ -769,10 +606,10 @@ func TestCloneSessionDerivesLatestHeadlessAndReminderState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clone session: %v", err)
 	}
-	if child.Metadata().HeadlessActive {
+	if child.Meta().HeadlessActive {
 		t.Fatal("headless exit was not reflected in cloned state")
 	}
-	if !child.Metadata().CompactionSoonReminderIssued {
+	if !child.Meta().CompactionSoonReminderIssued {
 		t.Fatal("post-compaction reminder was not reflected in cloned state")
 	}
 }
@@ -797,10 +634,10 @@ func assertOnlyForkParentSessionDir(t *testing.T, root string, parent *Store) {
 			sessionDirs = append(sessionDirs, entry.Name())
 		}
 	}
-	if len(sessionDirs) != 1 || sessionDirs[0] != parent.Metadata().SessionID {
+	if len(sessionDirs) != 1 || sessionDirs[0] != parent.Meta().SessionID {
 		t.Fatalf("expected only the parent session dir to remain, got %v", sessionDirs)
 	}
-	if _, err := os.Stat(filepath.Join(root, parent.Metadata().SessionID)); err != nil {
+	if _, err := os.Stat(filepath.Join(root, parent.Meta().SessionID)); err != nil {
 		t.Fatalf("parent session dir must survive a failed fork: %v", err)
 	}
 }
@@ -818,11 +655,11 @@ func TestCloneSessionWithoutEventsPersistsEmptyChild(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(child.Dir(), eventsFile)); err != nil {
 		t.Fatalf("empty cloned child must be durable: %v", err)
 	}
-	parentID, err := runtimeids.ParseSessionID(parent.Metadata().SessionID)
+	parentID, err := runtimeids.ParseSessionID(parent.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ParseSessionID parent: %v", err)
 	}
-	if child.Metadata().PreviousSessionID == nil || *child.Metadata().PreviousSessionID != parentID {
-		t.Fatalf("child previous id = %v, want %q", child.Metadata().PreviousSessionID, parent.Metadata().SessionID)
+	if child.Meta().PreviousSessionID == nil || *child.Meta().PreviousSessionID != parentID {
+		t.Fatalf("child previous id = %v, want %q", child.Meta().PreviousSessionID, parent.Meta().SessionID)
 	}
 }

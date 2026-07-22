@@ -51,7 +51,7 @@ func appendRecoveredWarning(store *session.Store, provider func() (string, bool,
 	if !ok || warning == "" || store == nil {
 		return nil
 	}
-	if store.Metadata().GeneratedRecoveredWarningIssued {
+	if store.Meta().GeneratedRecoveredWarningIssued {
 		return nil
 	}
 	eventLog, err := store.MaterializeEventLog()

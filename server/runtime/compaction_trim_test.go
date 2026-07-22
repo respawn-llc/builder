@@ -222,7 +222,7 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndWarnsOnCacheBreak(t
 	if got, want := warnings[0].Reason, transcript.CacheWarningReasonNonPostfix; got != want {
 		t.Fatalf("warning reason = %q, want %q", got, want)
 	}
-	if got, want := warnings[0].CacheKey, conversationPromptCacheKey(store.Metadata().SessionID, 0); got == nil || *got != want {
+	if got, want := warnings[0].CacheKey, conversationPromptCacheKey(store.Meta().SessionID, 0); got == nil || *got != want {
 		t.Fatalf("warning cache key = %v, want %q", got, want)
 	}
 }

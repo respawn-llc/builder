@@ -239,14 +239,14 @@ func TestLegacyLockedSessionBackfillsSystemPromptSnapshotOnce(t *testing.T) {
 		EnabledTools:         []toolspec.ID{toolspec.ToolExecCommand},
 		TranscriptWorkingDir: workspace,
 	})
-	if snapshot := store.Metadata().Locked.SystemPrompt; snapshot != "" {
+	if snapshot := store.Meta().Locked.SystemPrompt; snapshot != "" {
 		t.Fatalf("system prompt snapshot before first dispatch = %q, want empty", snapshot)
 	}
 	writeTestFile(t, systemPath, "legacy {{.EstimatedToolCallsForContext}}")
 	if _, err := eng.SubmitUserMessage(context.Background(), "hello"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	snapshot := store.Metadata().Locked.SystemPrompt
+	snapshot := store.Meta().Locked.SystemPrompt
 	if snapshot != "legacy 185" {
 		t.Fatalf("system prompt snapshot = %q, want legacy 185", snapshot)
 	}
@@ -260,7 +260,7 @@ func TestLegacyLockedSessionBackfillsSystemPromptSnapshotOnce(t *testing.T) {
 	if got := client.calls[1].SystemPrompt; got != snapshot {
 		t.Fatalf("second request used changed system prompt\ngot: %q\nwant: %q", got, snapshot)
 	}
-	if got := store.Metadata().Locked.SystemPrompt; got != snapshot {
+	if got := store.Meta().Locked.SystemPrompt; got != snapshot {
 		t.Fatalf("stored system prompt changed\ngot: %q\nwant: %q", got, snapshot)
 	}
 }
@@ -321,7 +321,7 @@ func TestChildSessionSnapshotsRoleSystemPromptOnFirstRequest(t *testing.T) {
 	if got := client.calls[0].Model; got != "role-model" {
 		t.Fatalf("request model = %q, want role model", got)
 	}
-	if locked := child.Metadata().Locked; locked == nil || locked.Model != "role-model" || !locked.HasSystemPrompt || locked.SystemPrompt != "code review system prompt" {
+	if locked := child.Meta().Locked; locked == nil || locked.Model != "role-model" || !locked.HasSystemPrompt || locked.SystemPrompt != "code review system prompt" {
 		t.Fatalf("child locked contract = %+v, want role model and prompt", locked)
 	} else if locked.HasReviewerPrompt || locked.ReviewerPrompt != "" {
 		t.Fatalf("child reviewer prompt lock = %+v, want no parent reviewer prompt inherited", locked)
@@ -362,7 +362,7 @@ func TestEmptySystemPromptFileIsSkippedAndFallbackSnapshotIsReused(t *testing.T)
 	if strings.TrimSpace(firstPrompt) == "" || firstPrompt == "changed" {
 		t.Fatalf("first system prompt = %q, want built-in fallback", firstPrompt)
 	}
-	if locked := store.Metadata().Locked; locked == nil || !locked.HasSystemPrompt || locked.SystemPrompt != firstPrompt {
+	if locked := store.Meta().Locked; locked == nil || !locked.HasSystemPrompt || locked.SystemPrompt != firstPrompt {
 		t.Fatalf("locked system prompt snapshot = %+v, want built-in fallback snapshot", locked)
 	}
 	if err := eng.Close(); err != nil {
@@ -373,7 +373,7 @@ func TestEmptySystemPromptFileIsSkippedAndFallbackSnapshotIsReused(t *testing.T)
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	if locked := reopened.Metadata().Locked; locked == nil || !locked.HasSystemPrompt || locked.SystemPrompt != firstPrompt {
+	if locked := reopened.Meta().Locked; locked == nil || !locked.HasSystemPrompt || locked.SystemPrompt != firstPrompt {
 		t.Fatalf("reopened locked system prompt snapshot = %+v, want built-in fallback snapshot", locked)
 	}
 	reopenedClient := &fakeClient{responses: []llm.Response{{
@@ -391,7 +391,7 @@ func TestEmptySystemPromptFileIsSkippedAndFallbackSnapshotIsReused(t *testing.T)
 	if got := reopenedClient.calls[0].SystemPrompt; got != firstPrompt {
 		t.Fatalf("second system prompt = %q, want locked fallback snapshot %q", got, firstPrompt)
 	}
-	if locked := reopened.Metadata().Locked; locked == nil || !locked.HasSystemPrompt || locked.SystemPrompt != firstPrompt {
+	if locked := reopened.Meta().Locked; locked == nil || !locked.HasSystemPrompt || locked.SystemPrompt != firstPrompt {
 		t.Fatalf("stored system prompt snapshot changed: %+v", locked)
 	}
 }
@@ -411,7 +411,7 @@ func TestLegacyLockedSessionBackfillsContextBudgetOnce(t *testing.T) {
 		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
 		ContextWindowTokens: 272_000,
 	})
-	locked := store.Metadata().Locked
+	locked := store.Meta().Locked
 	if locked == nil || locked.ContextWindow != 272_000 || locked.ContextPercent != 95 {
 		t.Fatalf("expected legacy lock backfilled from first resume config, got %+v", locked)
 	}
@@ -424,7 +424,7 @@ func TestLegacyLockedSessionBackfillsContextBudgetOnce(t *testing.T) {
 		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
 		ContextWindowTokens: 400_000,
 	})
-	locked = store.Metadata().Locked
+	locked = store.Meta().Locked
 	if locked == nil || locked.ContextWindow != 272_000 || locked.ContextPercent != 95 {
 		t.Fatalf("expected legacy lock backfill to stay pinned, got %+v", locked)
 	}

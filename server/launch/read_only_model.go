@@ -59,7 +59,7 @@ func (e *ReadOnlySessionModelInvalidError) Unwrap() error {
 // ResolveReadOnlySessionModel derives only the model identity needed by
 // descriptive read models. It deliberately does not open, repair, or update a
 // session store.
-func ResolveReadOnlySessionModel(app config.App, meta session.Metadata) (ReadOnlySessionModel, error) {
+func ResolveReadOnlySessionModel(app config.App, meta session.Meta) (ReadOnlySessionModel, error) {
 	if meta.Locked != nil {
 		name := strings.TrimSpace(meta.Locked.Model)
 		if name == "" {

@@ -432,7 +432,7 @@ func TestComposedWorkflowTaskDetailResolvesPendingQuestionFromSessionTranscript(
 	}); err != nil || !receipt.Committed {
 		t.Fatalf("append typed ask message: receipt=%+v error=%v", receipt, err)
 	}
-	if err := workflowStore.AttachRunSession(ctx, started.RunID, claimed.Generation, sessionStore.Metadata().SessionID); err != nil {
+	if err := workflowStore.AttachRunSession(ctx, started.RunID, claimed.Generation, sessionStore.Meta().SessionID); err != nil {
 		t.Fatalf("AttachRunSession: %v", err)
 	}
 	if err := workflowStore.SetRunWaitingAsk(ctx, started.RunID, claimed.Generation, "ask-core"); err != nil {

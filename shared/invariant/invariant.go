@@ -1,7 +1,6 @@
 package invariant
 
 import (
-	"log"
 	"os"
 )
 
@@ -38,14 +37,7 @@ type policyConfig struct {
 
 func NewPolicy(options ...Option) Policy {
 	config := policyConfig{
-		sink: SinkFunc(func(diagnostic Diagnostic) {
-			log.Printf(
-				"invariant violation: scope=%s fields=%v\n%s",
-				diagnostic.Scope,
-				diagnostic.Fields,
-				diagnostic.Stack,
-			)
-		}),
+		sink:   SinkFunc(func(Diagnostic) {}),
 		getenv: os.Getenv,
 	}
 	for _, option := range options {

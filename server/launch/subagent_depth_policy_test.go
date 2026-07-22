@@ -28,8 +28,8 @@ func TestPlannerEnforcesParentAgentDepthAcrossRoles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plan permitted depth-2 child: %v", err)
 	}
-	if parent := testStoreForPlannerPlan(t, planner, permitted).Metadata().ParentAgentSessionID; parent == nil || parent.String() != child.Metadata().SessionID {
-		t.Fatalf("permitted child parent-agent session = %v, want %q", parent, child.Metadata().SessionID)
+	if parent := testStoreForPlannerPlan(t, planner, permitted).Meta().ParentAgentSessionID; parent == nil || parent.String() != child.Meta().SessionID {
+		t.Fatalf("permitted child parent-agent session = %v, want %q", parent, child.Meta().SessionID)
 	}
 
 	before := requireSessionDirectoryNames(t, containerDir)
@@ -59,8 +59,8 @@ func TestPlannerMaximumZeroRejectsFirstParentAgentChildButNotIndependentCreation
 	if err != nil {
 		t.Fatalf("plan independent scheduler/root session: %v", err)
 	}
-	if testStoreForPlannerPlan(t, planner, independent).Metadata().ParentAgentSessionID != nil {
-		t.Fatalf("independent session parent-agent provenance = %v, want absent", testStoreForPlannerPlan(t, planner, independent).Metadata().ParentAgentSessionID)
+	if testStoreForPlannerPlan(t, planner, independent).Meta().ParentAgentSessionID != nil {
+		t.Fatalf("independent session parent-agent provenance = %v, want absent", testStoreForPlannerPlan(t, planner, independent).Meta().ParentAgentSessionID)
 	}
 }
 
@@ -75,8 +75,8 @@ func TestPlannerTreatsWorkflowAgentSessionAsDepthZeroRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workflow-agent child at depth 1: %v", err)
 	}
-	if parent := testStoreForPlannerPlan(t, planner, plan).Metadata().ParentAgentSessionID; parent == nil || parent.String() != workflowRoot.Metadata().SessionID {
-		t.Fatalf("workflow child parent-agent session = %v, want %q", parent, workflowRoot.Metadata().SessionID)
+	if parent := testStoreForPlannerPlan(t, planner, plan).Meta().ParentAgentSessionID; parent == nil || parent.String() != workflowRoot.Meta().SessionID {
+		t.Fatalf("workflow child parent-agent session = %v, want %q", parent, workflowRoot.Meta().SessionID)
 	}
 }
 
@@ -99,7 +99,7 @@ func TestPlannerParentAgentAncestryFailureMatrix(t *testing.T) {
 			planner, containerDir, persistence := newSubagentDepthPlanner(t, 2)
 			root := createSubagentDepthSession(t, containerDir, persistence, nil, "")
 			caller := createSubagentDepthSession(t, containerDir, persistence, root, "")
-			rootID := mustSubagentDepthSessionID(t, root.Metadata().SessionID)
+			rootID := mustSubagentDepthSessionID(t, root.Meta().SessionID)
 			resolver := &subagentDepthResolver{
 				base: persistence,
 				errs: map[string]error{rootID.String(): test.ancestorError},
@@ -169,13 +169,13 @@ func TestPlannerStopsBeforeResolvingAncestorOnceLimitIsExceeded(t *testing.T) {
 	caller := createSubagentDepthSession(t, containerDir, persistence, root, "")
 	resolver := &subagentDepthResolver{
 		base: persistence,
-		errs: map[string]error{root.Metadata().SessionID: errors.New("must not resolve root after depth is known")},
+		errs: map[string]error{root.Meta().SessionID: errors.New("must not resolve root after depth is known")},
 	}
 	planner.PersistedSessions = resolver
 
 	_, err := planner.PlanSession(context.Background(), parentAgentLaunchRequest(t, caller))
 	assertMaxDepthPolicyError(t, err, 2, 1)
-	if want := []string{caller.Metadata().SessionID}; !reflect.DeepEqual(resolver.calls, want) {
+	if want := []string{caller.Meta().SessionID}; !reflect.DeepEqual(resolver.calls, want) {
 		t.Fatalf("resolver calls = %v, want only immediate caller %v", resolver.calls, want)
 	}
 }
@@ -184,7 +184,7 @@ func TestPlannerReadsOlderAncestryAsMetadataWithoutOpeningTranscript(t *testing.
 	planner, containerDir, persistence := newSubagentDepthPlanner(t, 2)
 	caller := createSubagentDepthSession(t, containerDir, persistence, nil, "")
 	syntheticAncestorID := mustSubagentDepthSessionID(t, "metadata-only-ancestor")
-	callerRecord, err := persistence.ResolvePersistedSession(context.Background(), caller.Metadata().SessionID)
+	callerRecord, err := persistence.ResolvePersistedSession(context.Background(), caller.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ResolvePersistedSession caller: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestPlannerReadsOlderAncestryAsMetadataWithoutOpeningTranscript(t *testing.
 	resolver := &subagentDepthResolver{
 		base: persistence,
 		records: map[string]session.PersistedSessionRecord{
-			caller.Metadata().SessionID: callerRecord,
+			caller.Meta().SessionID: callerRecord,
 			syntheticAncestorID.String(): {
 				SessionDir: filepath.Join(t.TempDir(), "must-not-open"),
 				Meta: &session.Meta{
@@ -212,7 +212,7 @@ func TestPlannerReadsOlderAncestryAsMetadataWithoutOpeningTranscript(t *testing.
 	if plan.Descriptor.SessionID().IsZero() {
 		t.Fatal("metadata-only ancestry did not create a child")
 	}
-	if want := []string{caller.Metadata().SessionID, syntheticAncestorID.String()}; !reflect.DeepEqual(resolver.calls, want) {
+	if want := []string{caller.Meta().SessionID, syntheticAncestorID.String()}; !reflect.DeepEqual(resolver.calls, want) {
 		t.Fatalf("resolver calls = %v, want %v", resolver.calls, want)
 	}
 }
@@ -221,8 +221,8 @@ func TestPlannerRejectsCorruptParentAgentLineage(t *testing.T) {
 	t.Run("self cycle returns typed error in production", func(t *testing.T) {
 		planner, containerDir, persistence := newSubagentDepthPlanner(t, 2)
 		caller := createSubagentDepthSession(t, containerDir, persistence, nil, "")
-		callerID := mustSubagentDepthSessionID(t, caller.Metadata().SessionID)
-		callerRecord, err := persistence.ResolvePersistedSession(context.Background(), caller.Metadata().SessionID)
+		callerID := mustSubagentDepthSessionID(t, caller.Meta().SessionID)
+		callerRecord, err := persistence.ResolvePersistedSession(context.Background(), caller.Meta().SessionID)
 		if err != nil {
 			t.Fatalf("ResolvePersistedSession caller: %v", err)
 		}
@@ -230,7 +230,7 @@ func TestPlannerRejectsCorruptParentAgentLineage(t *testing.T) {
 		callerRecord.Meta.ParentAgentSessionID = &callerID
 		planner.PersistedSessions = &subagentDepthResolver{
 			base:    persistence,
-			records: map[string]session.PersistedSessionRecord{caller.Metadata().SessionID: callerRecord},
+			records: map[string]session.PersistedSessionRecord{caller.Meta().SessionID: callerRecord},
 		}
 
 		_, err = planner.PlanSession(context.Background(), parentAgentLaunchRequest(t, caller))
@@ -240,9 +240,9 @@ func TestPlannerRejectsCorruptParentAgentLineage(t *testing.T) {
 	t.Run("multi-node cycle returns typed error in production", func(t *testing.T) {
 		planner, containerDir, persistence := newSubagentDepthPlanner(t, 3)
 		caller := createSubagentDepthSession(t, containerDir, persistence, nil, "")
-		callerID := mustSubagentDepthSessionID(t, caller.Metadata().SessionID)
+		callerID := mustSubagentDepthSessionID(t, caller.Meta().SessionID)
 		ancestorID := mustSubagentDepthSessionID(t, "cycle-ancestor")
-		callerRecord, err := persistence.ResolvePersistedSession(context.Background(), caller.Metadata().SessionID)
+		callerRecord, err := persistence.ResolvePersistedSession(context.Background(), caller.Meta().SessionID)
 		if err != nil {
 			t.Fatalf("ResolvePersistedSession caller: %v", err)
 		}
@@ -251,7 +251,7 @@ func TestPlannerRejectsCorruptParentAgentLineage(t *testing.T) {
 		resolver := &subagentDepthResolver{
 			base: persistence,
 			records: map[string]session.PersistedSessionRecord{
-				caller.Metadata().SessionID: callerRecord,
+				caller.Meta().SessionID: callerRecord,
 				ancestorID.String(): {
 					SessionDir: filepath.Join(t.TempDir(), "must-not-open"),
 					Meta: &session.Meta{
@@ -272,8 +272,8 @@ func TestPlannerRejectsCorruptParentAgentLineage(t *testing.T) {
 		planner, containerDir, persistence := newSubagentDepthPlanner(t, 2)
 		planner.Config.Settings.Debug = true
 		caller := createSubagentDepthSession(t, containerDir, persistence, nil, "")
-		callerID := mustSubagentDepthSessionID(t, caller.Metadata().SessionID)
-		callerRecord, err := persistence.ResolvePersistedSession(context.Background(), caller.Metadata().SessionID)
+		callerID := mustSubagentDepthSessionID(t, caller.Meta().SessionID)
+		callerRecord, err := persistence.ResolvePersistedSession(context.Background(), caller.Meta().SessionID)
 		if err != nil {
 			t.Fatalf("ResolvePersistedSession caller: %v", err)
 		}
@@ -281,7 +281,7 @@ func TestPlannerRejectsCorruptParentAgentLineage(t *testing.T) {
 		callerRecord.Meta.ParentAgentSessionID = &callerID
 		planner.PersistedSessions = &subagentDepthResolver{
 			base:    persistence,
-			records: map[string]session.PersistedSessionRecord{caller.Metadata().SessionID: callerRecord},
+			records: map[string]session.PersistedSessionRecord{caller.Meta().SessionID: callerRecord},
 		}
 
 		var recovered any
@@ -301,7 +301,7 @@ func TestPlannerOpenExistingIsUnaffectedByMaximumDepth(t *testing.T) {
 	planner, containerDir, persistence := newSubagentDepthPlanner(t, 0)
 	root := createSubagentDepthSession(t, containerDir, persistence, nil, "")
 	child := createSubagentDepthSession(t, containerDir, persistence, root, "")
-	childID := mustSubagentDepthSessionID(t, child.Metadata().SessionID)
+	childID := mustSubagentDepthSessionID(t, child.Meta().SessionID)
 
 	plan, err := planner.PlanSession(context.Background(), SessionRequest{
 		Mode:   ModeHeadless,
@@ -310,8 +310,8 @@ func TestPlannerOpenExistingIsUnaffectedByMaximumDepth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open existing nested session: %v", err)
 	}
-	if plan.Descriptor.SessionID().String() != child.Metadata().SessionID {
-		t.Fatalf("opened session = %q, want %q", plan.Descriptor.SessionID(), child.Metadata().SessionID)
+	if plan.Descriptor.SessionID().String() != child.Meta().SessionID {
+		t.Fatalf("opened session = %q, want %q", plan.Descriptor.SessionID(), child.Meta().SessionID)
 	}
 }
 
@@ -366,7 +366,7 @@ func createSubagentDepthSession(t *testing.T, containerDir string, persistence *
 
 func parentAgentLaunchRequest(t *testing.T, caller *session.Store) SessionRequest {
 	t.Helper()
-	callerID := mustSubagentDepthSessionID(t, caller.Metadata().SessionID)
+	callerID := mustSubagentDepthSessionID(t, caller.Meta().SessionID)
 	return SessionRequest{
 		Mode:   ModeHeadless,
 		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(callerID)),

@@ -34,7 +34,7 @@ func (e *Engine) ensureMetaContextForCompaction(ctx context.Context, stepID stri
 }
 
 func (e *Engine) activeMetaContextBuilder(model string, skillPolicy config.SkillPolicy) metaContextBuilder {
-	return newActiveMetaContextBuilder(e.store.Metadata(), model, e.ThinkingLevel(), e.cfg.GlobalConfigDir, skillPolicy, time.Now()).
+	return newActiveMetaContextBuilder(e.store.Meta(), model, e.ThinkingLevel(), e.cfg.GlobalConfigDir, skillPolicy, time.Now()).
 		withSubagents(e.cfg.SubagentCatalogSettings, e.cfg.EnabledTools)
 }
 
@@ -165,7 +165,7 @@ func (e *Engine) steerHeadlessModeTransitionIfNeeded(stepID string) error {
 	if e.workflowRunActive() {
 		return nil
 	}
-	if e.cfg.HeadlessMode == e.store.Metadata().HeadlessActive {
+	if e.cfg.HeadlessMode == e.store.Meta().HeadlessActive {
 		return nil
 	}
 	builder := e.activeMetaContextBuilder(e.cfg.Model, e.cfg.SkillPolicy)
@@ -229,7 +229,7 @@ func roleOrUser(role *llm.Role) llm.Role {
 }
 
 func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Message, error) {
-	meta := e.store.Metadata()
+	meta := e.store.Meta()
 	skillPolicy, err := e.reconstructionSkillPolicy(ctx)
 	if err != nil {
 		return nil, err

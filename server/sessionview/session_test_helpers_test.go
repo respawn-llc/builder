@@ -35,7 +35,7 @@ func (r testSessionResolver) ResolveSessionStore(_ context.Context, sessionID st
 	if r.store == nil {
 		return nil, errors.New("session store is required")
 	}
-	if strings.TrimSpace(sessionID) != strings.TrimSpace(r.store.Metadata().SessionID) {
+	if strings.TrimSpace(sessionID) != strings.TrimSpace(r.store.Meta().SessionID) {
 		return nil, fmt.Errorf("session %q not available", strings.TrimSpace(sessionID))
 	}
 	return r.store, nil
@@ -52,7 +52,7 @@ func newSessionViewRuntimeFixture(t *testing.T, store *session.Store, client llm
 	if store == nil {
 		t.Fatal("session store is required")
 	}
-	sessionID, err := runtimeids.ParseSessionID(store.Metadata().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
@@ -62,7 +62,7 @@ func newSessionViewRuntimeFixture(t *testing.T, store *session.Store, client llm
 	settings.Reviewer.Frequency = "off"
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: settings,
-		Workdir:  store.Metadata().WorkspaceRoot,
+		Workdir:  store.Meta().WorkspaceRoot,
 		Client:   client,
 	})
 	if err != nil {
@@ -221,5 +221,5 @@ func newSessionViewParentAgentChild(t *testing.T, containerDir, containerName, w
 	if err := session.InitializeCreationContext(child, parent, session.SessionCreationSourceParentAgent, session.ChildContextOptions{}); err != nil {
 		t.Fatalf("initialize child provenance: %v", err)
 	}
-	return child, parent.Metadata().SessionID
+	return child, parent.Meta().SessionID
 }

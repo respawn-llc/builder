@@ -52,11 +52,11 @@ func optionalRunCompletionMode(mode *string) string {
 // supplied session store controls persistence, so callers can use a fileless
 // store for read-only inspection.
 func BuildPersistedWorkflowInspection(ctx context.Context, app config.App, sessionStore *session.Store, store *workflowstore.Store) (PersistedWorkflowInspection, error) {
-	if sessionStore == nil || sessionStore.Metadata().WorkflowSession == nil {
+	if sessionStore == nil || sessionStore.Meta().WorkflowSession == nil {
 		return PersistedWorkflowInspection{}, errors.New("workflow session state is required")
 	}
-	state := *sessionStore.Metadata().WorkflowSession
-	input, err := loadPersistedWorkflowRunInput(ctx, store, state, sessionStore.Metadata().SessionID)
+	state := *sessionStore.Meta().WorkflowSession
+	input, err := loadPersistedWorkflowRunInput(ctx, store, state, sessionStore.Meta().SessionID)
 	if err != nil {
 		return PersistedWorkflowInspection{}, err
 	}

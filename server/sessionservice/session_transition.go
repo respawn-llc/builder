@@ -31,7 +31,7 @@ func initialSessionInput(store *session.Store, transitionInput string) string {
 	if store == nil {
 		return transitionInput
 	}
-	if draft := store.Metadata().InputDraft; draft != "" {
+	if draft := store.Meta().InputDraft; draft != "" {
 		return draft
 	}
 	return transitionInput
@@ -124,7 +124,7 @@ func resolveForkRollback(req sessionTransitionResolveRequest) (serverapi.Session
 	if req.Transition.ForkUserMessageSeq <= 0 {
 		return serverapi.SessionDirective{}, errors.New("rollback fork user message seq must be > 0")
 	}
-	parentMeta := req.Store.Metadata()
+	parentMeta := req.Store.Meta()
 	baseName := strings.TrimSpace(parentMeta.Name)
 	if baseName == "" {
 		baseName = parentMeta.SessionID
@@ -140,7 +140,7 @@ func resolveForkRollback(req sessionTransitionResolveRequest) (serverapi.Session
 	if err := forkedStore.SetName(strings.TrimSpace(baseName + " \u2192 edit u" + strconv.Itoa(forkOrdinal))); err != nil {
 		return serverapi.SessionDirective{}, errors.Join(err, forkedStore.RemoveDurable())
 	}
-	forkID, err := runtimeids.ParseSessionID(forkedStore.Metadata().SessionID)
+	forkID, err := runtimeids.ParseSessionID(forkedStore.Meta().SessionID)
 	if err != nil {
 		return serverapi.SessionDirective{}, errors.Join(err, forkedStore.RemoveDurable())
 	}

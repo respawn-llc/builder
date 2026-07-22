@@ -47,7 +47,7 @@ func TestContinuationRolePersistence(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reopen session: %v", err)
 			}
-			got := reopened.Metadata().Continuation
+			got := reopened.Meta().Continuation
 			if tt.wantRole == nil {
 				if got != nil && got.AgentRole != nil {
 					t.Fatalf("continuation = %+v, want absent role", got)

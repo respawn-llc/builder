@@ -29,5 +29,5 @@ func newRuntimeViewParentAgentChild(t *testing.T, containerDir, containerName, w
 	if err := session.InitializeCreationContext(child, parent, session.SessionCreationSourceParentAgent, session.ChildContextOptions{}); err != nil {
 		t.Fatalf("initialize child provenance: %v", err)
 	}
-	return child, parent.Metadata().SessionID
+	return child, parent.Meta().SessionID
 }

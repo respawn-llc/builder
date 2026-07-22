@@ -508,7 +508,7 @@ func (e *Engine) reviewerMetaTimestamp() time.Time {
 	if e == nil || e.store == nil {
 		return time.Now().UTC()
 	}
-	if createdAt := e.store.Metadata().CreatedAt; !createdAt.IsZero() {
+	if createdAt := e.store.Meta().CreatedAt; !createdAt.IsZero() {
 		return createdAt.UTC()
 	}
 	return time.Now().UTC()
@@ -561,11 +561,11 @@ func (e *Engine) reviewerRequestConfigSnapshot() reviewerRequestConfig {
 }
 
 func (e *Engine) SessionName() string {
-	return strings.TrimSpace(e.store.Metadata().Name)
+	return strings.TrimSpace(e.store.Meta().Name)
 }
 
 func (e *Engine) SessionID() string {
-	return strings.TrimSpace(e.store.Metadata().SessionID)
+	return strings.TrimSpace(e.store.Meta().SessionID)
 }
 
 func conversationPromptCacheKey(sessionID string, compactionCount int) string {
@@ -594,7 +594,7 @@ func (e *Engine) conversationPromptCacheKey(sessionID string) string {
 	if e == nil || e.store == nil {
 		return ""
 	}
-	meta := e.store.Metadata()
+	meta := e.store.Meta()
 	return conversationPromptCacheKeyForLineage(sessionID, meta.PromptCacheLineageGeneration, e.compactionRuntimeState().Count())
 }
 
@@ -602,7 +602,7 @@ func (e *Engine) PreviousSessionID() *runtimeids.SessionID {
 	if e == nil || e.store == nil {
 		return nil
 	}
-	meta := e.store.Metadata()
+	meta := e.store.Meta()
 	return textutil.Pointer(meta.PreviousSessionID)
 }
 
@@ -610,7 +610,7 @@ func (e *Engine) ParentAgentSessionID() *runtimeids.SessionID {
 	if e == nil || e.store == nil {
 		return nil
 	}
-	meta := e.store.Metadata()
+	meta := e.store.Meta()
 	return textutil.Pointer(meta.ParentAgentSessionID)
 }
 
@@ -618,7 +618,7 @@ func (e *Engine) NavigationTargetSessionID() *runtimeids.SessionID {
 	if e == nil || e.store == nil {
 		return nil
 	}
-	return session.NavigationTargetSessionID(e.store.Metadata())
+	return session.NavigationTargetSessionID(e.store.Meta())
 }
 
 func (e *Engine) SetTranscriptWorkingDir(workdir string) {
@@ -636,7 +636,7 @@ func (e *Engine) WorktreeReminderState() *session.WorktreeReminderState {
 	if e == nil {
 		return nil
 	}
-	state := e.store.Metadata().WorktreeReminder
+	state := e.store.Meta().WorktreeReminder
 	if state == nil {
 		return nil
 	}
@@ -803,7 +803,7 @@ func (e *Engine) transcriptRuntimeState() *transcriptRuntimeState {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.transcriptState == nil {
-		e.transcriptState = newTranscriptRuntimeState(transcriptWorkingDir(e.cfg.TranscriptWorkingDir, e.store.Metadata().WorkspaceRoot))
+		e.transcriptState = newTranscriptRuntimeState(transcriptWorkingDir(e.cfg.TranscriptWorkingDir, e.store.Meta().WorkspaceRoot))
 	}
 	return e.transcriptState
 }

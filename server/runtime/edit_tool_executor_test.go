@@ -42,7 +42,7 @@ func TestExecuteToolCallsCanonicalizesEditAliases(t *testing.T) {
 	if started == nil {
 		t.Fatalf("events = %+v, want started event", events)
 	}
-	meta := transcriptToolCallMeta(*started, store.Metadata().WorkspaceRoot)
+	meta := transcriptToolCallMeta(*started, store.Meta().WorkspaceRoot)
 	if got := meta.ToolName; got != string(toolspec.ToolEdit) {
 		t.Fatalf("started tool name = %q, want edit", got)
 	}

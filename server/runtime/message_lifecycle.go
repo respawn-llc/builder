@@ -29,7 +29,7 @@ func newDefaultMessageLifecycle(engine *Engine, background backgroundNoticeSched
 
 func (m *defaultMessageLifecycle) RestoreMessages() error {
 	e := m.engine
-	meta := e.store.Metadata()
+	meta := e.store.Meta()
 	recoveredHandoff := newPersistedHandoffRecovery()
 	reminderIssued := meta.CompactionSoonReminderIssued
 	var matchErr error
@@ -432,7 +432,7 @@ func (m *defaultMessageLifecycle) HasPendingUserInjections() bool {
 	return m != nil && m.queue != nil && m.queue.HasPending()
 }
 
-func newActiveMetaContextBuilder(meta session.Metadata, model, thinkingLevel, globalConfigDir string, skillPolicy config.SkillPolicy, now time.Time) metaContextBuilder {
+func newActiveMetaContextBuilder(meta session.Meta, model, thinkingLevel, globalConfigDir string, skillPolicy config.SkillPolicy, now time.Time) metaContextBuilder {
 	roots := activeMetaContextRootsForMeta(meta)
 	builder := newMetaContextBuilder(roots.discoveryRoot, model, thinkingLevel, skillPolicy, now).
 		withEnvironmentCWD(roots.environmentCWD).
@@ -445,7 +445,7 @@ type activeMetaContextRoots struct {
 	environmentCWD string
 }
 
-func activeMetaContextRootsForMeta(meta session.Metadata) activeMetaContextRoots {
+func activeMetaContextRootsForMeta(meta session.Meta) activeMetaContextRoots {
 	workspaceRoot := strings.TrimSpace(meta.WorkspaceRoot)
 	roots := activeMetaContextRoots{discoveryRoot: workspaceRoot, environmentCWD: workspaceRoot}
 	state := session.CloneWorktreeReminderState(meta.WorktreeReminder)

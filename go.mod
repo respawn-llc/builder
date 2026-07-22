@@ -10,7 +10,6 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/creack/pty v1.1.24
 	github.com/gdamore/tcell/v3 v3.4.0
-	github.com/go-json-experiment/json v0.0.0-20260623181947-01eb4420fa68
 	github.com/gofrs/flock v0.13.0
 	github.com/google/uuid v1.6.0
 	github.com/lxzan/gws v1.10.0

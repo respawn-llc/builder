@@ -297,7 +297,7 @@ func New(
 		handoffState:       newHandoffRuntimeState(),
 		phaseState:         newPhaseProtocolState(),
 		reviewerState:      newReviewerRuntimeState(cfg.Reviewer.Client),
-		transcriptState:    newTranscriptRuntimeState(transcriptWorkingDir(cfg.TranscriptWorkingDir, store.Metadata().WorkspaceRoot)),
+		transcriptState:    newTranscriptRuntimeState(transcriptWorkingDir(cfg.TranscriptWorkingDir, store.Meta().WorkspaceRoot)),
 		lockedState:        newLockedContractState(),
 		modelRequestsState: newModelRequestRuntimeState(),
 		compactionPlanner:  newCompactionPlanner(),
@@ -317,21 +317,21 @@ func New(
 		}
 	}
 
-	meta := store.Metadata()
+	meta := store.Meta()
 	if meta.Locked != nil {
 		if meta.Locked.ContextWindow <= 0 || meta.Locked.ContextPercent <= 0 {
 			budget := eng.promptContextBudgetFromConfig()
 			if err := store.BackfillLockedContextBudget(budget.window, budget.percent); err != nil {
 				return nil, err
 			}
-			meta = store.Metadata()
+			meta = store.Meta()
 		}
 		if strings.TrimSpace(meta.Locked.ProviderContract.ProviderID) == "" {
 			if caps, err := eng.currentProviderCapabilities(context.Background()); err == nil {
 				if err := store.BackfillLockedProviderContract(llm.LockedProviderCapabilitiesFromContract(caps)); err != nil {
 					return nil, err
 				}
-				meta = store.Metadata()
+				meta = store.Meta()
 			}
 		}
 		copyLocked := *meta.Locked
@@ -344,7 +344,7 @@ func New(
 	// Restoring messages is the runtime's first event-use boundary. Existing
 	// stores reconcile event-derived metadata there, so subsequent metadata
 	// reads must use the refreshed authoritative snapshot.
-	meta = store.Metadata()
+	meta = store.Meta()
 	recoveryStepID := ""
 	if meta.PendingModelRecovery != nil {
 		recoveryStepID = meta.PendingModelRecovery.StepID

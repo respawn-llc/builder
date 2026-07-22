@@ -8,8 +8,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 type stubPersistedSessionResolver struct {
@@ -130,7 +128,7 @@ func TestOpenByIDUsesAuthoritativeResolver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenByID: %v", err)
 	}
-	if got := store.Metadata().WorkspaceRoot; got != "/tmp/workspace-a" {
+	if got := store.Meta().WorkspaceRoot; got != "/tmp/workspace-a" {
 		t.Fatalf("workspace root = %q", got)
 	}
 }
@@ -157,8 +155,8 @@ func TestOpenUsesAuthoritativeResolverMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if opened.Metadata().WorkspaceRoot != authoritative.WorkspaceRoot {
-		t.Fatalf("workspace root = %q, want authoritative %q", opened.Metadata().WorkspaceRoot, authoritative.WorkspaceRoot)
+	if opened.Meta().WorkspaceRoot != authoritative.WorkspaceRoot {
+		t.Fatalf("workspace root = %q, want authoritative %q", opened.Meta().WorkspaceRoot, authoritative.WorkspaceRoot)
 	}
 }
 
@@ -262,48 +260,6 @@ func TestMetadataPersistencePublishesObserver(t *testing.T) {
 	}
 }
 
-func TestFilelessEventPersistenceDoesNotAppendToEventLog(t *testing.T) {
-	persisted := newSessionTestStore(t)
-	persistedLog := mustMaterializeSessionTestEventLog(t, persisted)
-	if _, _, err := persistedLog.AppendRecord(stringPointer(uuid.NewString()), sessionTestMessage(MessageRoleUser, "before inspection")); err != nil {
-		t.Fatalf("seed event: %v", err)
-	}
-	eventsPath := filepath.Join(persisted.Dir(), eventsFile)
-	before, err := os.ReadFile(eventsPath)
-	if err != nil {
-		t.Fatalf("read event log before inspection: %v", err)
-	}
-
-	inspection, err := Open(
-		persisted.Dir(),
-		WithPersistedSessionResolver(sessionTestPersistence),
-		WithFilelessEventPersistence(),
-	)
-	if err != nil {
-		t.Fatalf("open inspection store: %v", err)
-	}
-	inspectionLog, lease, err := inspection.MaterializeFilelessEventLog(context.Background())
-	if err != nil {
-		t.Fatalf("materialize inspection event log: %v", err)
-	}
-	t.Cleanup(func() { _ = lease.Close() })
-	event, committed, err := inspectionLog.AppendRecord(stringPointer(uuid.NewString()), sessionTestMessage(MessageRoleDeveloper, "ephemeral context"))
-	if err != nil {
-		t.Fatalf("append inspection event: %v", err)
-	}
-	if !committed.Committed || event.Seq() != 2 || mustMaterializedRevision(inspectionLog) != 2 {
-		t.Fatalf("inspection event = %+v, receipt = %+v, revision = %d", event, committed, mustMaterializedRevision(inspectionLog))
-	}
-
-	after, err := os.ReadFile(eventsPath)
-	if err != nil {
-		t.Fatalf("read event log after inspection: %v", err)
-	}
-	if string(after) != string(before) {
-		t.Fatal("inspection appended to the durable event log")
-	}
-}
-
 func TestForkAtUserMessagePreservesPersistenceObserver(t *testing.T) {
 	observer := &recordingPersistenceObserver{}
 	parent, err := Create(t.TempDir(), "workspace-x", "/tmp/work", testSessionCategory, WithPersistenceObserver(observer))
@@ -321,7 +277,7 @@ func TestForkAtUserMessagePreservesPersistenceObserver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fork at user message: %v", err)
 	}
-	if !observer.called || observer.snapshot.Meta.SessionID != forked.Metadata().SessionID {
+	if !observer.called || observer.snapshot.Meta.SessionID != forked.Meta().SessionID {
 		t.Fatalf("observer snapshot = %+v, called = %t", observer.snapshot.Meta, observer.called)
 	}
 }
@@ -397,8 +353,8 @@ func TestMetadataMutationRequiresPersistenceObserverWithoutChangingState(t *test
 	if err := store.SetName("must not persist"); !errors.Is(err, errPersistenceObserverRequired) {
 		t.Fatalf("SetName error = %v, want persistence observer required", err)
 	}
-	if store.Metadata().Name != "" {
-		t.Fatalf("name changed without persistence observer: %q", store.Metadata().Name)
+	if store.Meta().Name != "" {
+		t.Fatalf("name changed without persistence observer: %q", store.Meta().Name)
 	}
 	if _, err := os.Stat(store.Dir()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("session artifact created without persistence observer: %v", err)
@@ -466,7 +422,7 @@ func TestSetUsageStateReportsCommittedObserverFailureAndRetries(t *testing.T) {
 	if err == nil || !receipt.Committed {
 		t.Fatalf("first SetUsageState receipt=%+v error=%v, want committed observer failure", receipt, err)
 	}
-	if stored := store.Metadata().UsageState; stored == nil || stored.InputTokens != usage.InputTokens {
+	if stored := store.Meta().UsageState; stored == nil || stored.InputTokens != usage.InputTokens {
 		t.Fatalf("committed usage state = %+v, want %+v", stored, usage)
 	}
 
@@ -474,7 +430,7 @@ func TestSetUsageStateReportsCommittedObserverFailureAndRetries(t *testing.T) {
 	if err != nil || !receipt.Committed {
 		t.Fatalf("retried SetUsageState receipt=%+v error=%v, want committed success", receipt, err)
 	}
-	if stored := store.Metadata().UsageState; stored == nil || stored.InputTokens != usage.InputTokens {
+	if stored := store.Meta().UsageState; stored == nil || stored.InputTokens != usage.InputTokens {
 		t.Fatalf("committed usage state = %+v, want %+v", stored, usage)
 	}
 }
@@ -533,7 +489,7 @@ func TestPersistenceSnapshotsAreImmutable(t *testing.T) {
 	observer.snapshot.Meta.Locked.SystemPrompt = "observer mutation"
 	*observer.snapshot.Meta.Locked.ProviderContract.SupportsProviderVerbosity = false
 
-	locked := store.Metadata().Locked
+	locked := store.Meta().Locked
 	if locked == nil || locked.SystemPrompt != "original prompt" {
 		t.Fatalf("store locked contract = %+v, want original prompt", locked)
 	}
@@ -589,21 +545,21 @@ func TestCommittedObservationFailurePrecedesLaterMutation(t *testing.T) {
 	if err := <-secondDone; err != nil {
 		t.Fatalf("SetName: %v", err)
 	}
-	if store.Metadata().Name != "later mutation" {
-		t.Fatalf("session name = %q, want later mutation", store.Metadata().Name)
+	if store.Meta().Name != "later mutation" {
+		t.Fatalf("session name = %q, want later mutation", store.Meta().Name)
 	}
-	if continuation := store.Metadata().Continuation; continuation == nil || continuation.AgentRole == nil || *continuation.AgentRole != "reviewer" {
+	if continuation := store.Meta().Continuation; continuation == nil || continuation.AgentRole == nil || *continuation.AgentRole != "reviewer" {
 		t.Fatalf("committed continuation mutation = %+v, want reviewer", continuation)
 	}
 
-	reopened, err := OpenByID(root, store.Metadata().SessionID, sessionTestPersistence.options()...)
+	reopened, err := OpenByID(root, store.Meta().SessionID, sessionTestPersistence.options()...)
 	if err != nil {
 		t.Fatalf("OpenByID: %v", err)
 	}
-	if reopened.Metadata().Name != "later mutation" {
-		t.Fatalf("reopened name = %q, want later mutation", reopened.Metadata().Name)
+	if reopened.Meta().Name != "later mutation" {
+		t.Fatalf("reopened name = %q, want later mutation", reopened.Meta().Name)
 	}
-	if continuation := reopened.Metadata().Continuation; continuation == nil || continuation.AgentRole == nil || *continuation.AgentRole != "reviewer" {
+	if continuation := reopened.Meta().Continuation; continuation == nil || continuation.AgentRole == nil || *continuation.AgentRole != "reviewer" {
 		t.Fatalf("reopened continuation = %+v, want reviewer", continuation)
 	}
 }

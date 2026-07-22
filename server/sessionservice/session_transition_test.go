@@ -59,7 +59,7 @@ func TestResolveForkRollbackCreatesForkedSession(t *testing.T) {
 	}
 	intent, preparation := requireSessionLifecycleLaunch(t, resolved)
 	forkID, ok := intent.SessionID()
-	if !ok || forkID.String() == store.Metadata().SessionID {
+	if !ok || forkID.String() == store.Meta().SessionID {
 		t.Fatalf("expected new fork session id, got %q/%v", forkID.String(), ok)
 	}
 	prompt, ok := preparation.InitialPrompt()
@@ -70,7 +70,7 @@ func TestResolveForkRollbackCreatesForkedSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open forked session: %v", err)
 	}
-	if got := child.Metadata().Name; got != "parent \u2192 edit u2" {
+	if got := child.Meta().Name; got != "parent \u2192 edit u2" {
 		t.Fatalf("forked session name = %q", got)
 	}
 }

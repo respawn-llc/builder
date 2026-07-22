@@ -61,7 +61,6 @@ type Store struct {
 	persistedMetaVersion    uint64
 	options                 storeOptions
 	materializedEventLog    *currentEventLog
-	filelessEventLogLease   *EventLogArtifactLease
 	eventLogMaterialization *eventLogMaterializationSnapshot
 	recoveryErr             error
 }
@@ -219,10 +218,6 @@ func Create(workspaceContainerDir, workspaceContainerName, workspaceRoot string,
 		return nil, err
 	}
 	s.mu.Lock()
-	if s.options.filelessEvents {
-		s.mu.Unlock()
-		return nil, errEphemeralStoreCannotBeDurable
-	}
 	observation, err := s.persistMetaLocked()
 	s.mu.Unlock()
 	if err != nil {
@@ -513,7 +508,6 @@ func (s *Store) RemoveDurable() error {
 	s.persisted = false
 	s.persistedMetaVersion = 0
 	s.materializedEventLog = nil
-	s.filelessEventLogLease = nil
 	s.eventLogMaterialization = nil
 	return nil
 }
@@ -521,6 +515,12 @@ func (s *Store) RemoveDurable() error {
 type metaSnapshot struct {
 	meta                  Meta
 	conversationFreshness ConversationFreshness
+}
+
+func (s *Store) Meta() Meta {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneMeta(s.meta)
 }
 
 func (s *Store) metaSnapshot() metaSnapshot {
@@ -586,19 +586,17 @@ func (s *Store) persistMetadataMutationWithCommitReceiptLocked(checkpoint metada
 		s.mu.Unlock()
 		return CommitReceipt{}, err
 	}
-	if !s.options.filelessEvents {
-		record, recordErr := s.newAppendRecoveryRecord(checkpoint.meta, s.meta, appendRecoveryCommitted, nil)
-		if recordErr == nil {
-			recordErr = s.writeAppendRecoveryRecord(record)
+	record, recordErr := s.newAppendRecoveryRecord(checkpoint.meta, s.meta, appendRecoveryCommitted, nil)
+	if recordErr == nil {
+		recordErr = s.writeAppendRecoveryRecord(record)
+	}
+	if recordErr != nil {
+		s.restoreMetadataMutationLocked(checkpoint)
+		if cleanupErr := s.clearAppendRecoveryRecord(); cleanupErr != nil {
+			recordErr = s.closeMutationAuthorityLocked("rollback metadata recovery", errors.Join(recordErr, cleanupErr))
 		}
-		if recordErr != nil {
-			s.restoreMetadataMutationLocked(checkpoint)
-			if cleanupErr := s.clearAppendRecoveryRecord(); cleanupErr != nil {
-				recordErr = s.closeMutationAuthorityLocked("rollback metadata recovery", errors.Join(recordErr, cleanupErr))
-			}
-			s.mu.Unlock()
-			return CommitReceipt{}, recordErr
-		}
+		s.mu.Unlock()
+		return CommitReceipt{}, recordErr
 	}
 	s.mu.Unlock()
 	return CommitReceipt{Committed: true}, s.observePersistence(observation)
@@ -662,12 +660,6 @@ func (s *Store) EnsureDurable() error {
 	if s == nil {
 		return errors.New("session store is required")
 	}
-	s.mu.Lock()
-	ephemeral := s.options.filelessEvents
-	s.mu.Unlock()
-	if ephemeral {
-		return errEphemeralStoreCannotBeDurable
-	}
 	return s.mutateAndPersist(func() error { return nil })
 }
 
@@ -681,7 +673,7 @@ func (s *Store) SetPendingModelRecovery(recovery PendingModelRecovery) error {
 }
 
 func (s *Store) ClearPendingModelRecovery() error {
-	current := s.Metadata().PendingModelRecovery
+	current := s.Meta().PendingModelRecovery
 	if current == nil {
 		return nil
 	}
@@ -693,7 +685,7 @@ func (s *Store) ClearPendingModelRecovery() error {
 }
 
 func (s *Store) ClearPendingModelRecoveryForStep(stepID string) error {
-	current := s.Metadata().PendingModelRecovery
+	current := s.Meta().PendingModelRecovery
 	if current == nil || strings.TrimSpace(current.StepID) != strings.TrimSpace(stepID) {
 		return nil
 	}
@@ -705,7 +697,7 @@ func (s *Store) ClearPendingModelRecoveryForStep(stepID string) error {
 }
 
 func (s *Store) DiscardPendingModelRecoveryCandidate() error {
-	current := s.Metadata().PendingModelRecovery
+	current := s.Meta().PendingModelRecovery
 	if current == nil {
 		return nil
 	}
@@ -1021,136 +1013,6 @@ func (s *Store) ClearGoal(actor GoalActor) (GoalState, error) {
 		return GoalState{}, err
 	}
 	return goal, nil
-}
-
-func (s *Store) SetGoalWithMessage(
-	eventLog MaterializedEventLog,
-	stepID *string,
-	objective string,
-	actor GoalActor,
-	message MessageRecord,
-) (GoalState, CommitReceipt, error) {
-	goal, _, receipt, err := s.applyGoalMessageMutation(eventLog, stepID, message, func(meta *Meta) (GoalState, bool, error) {
-		goal, err := prepareActiveGoalState(
-			GoalState{Objective: objective},
-			actor,
-			meta.Goal,
-			storeTimestamp(s.options),
-		)
-		if err != nil {
-			return GoalState{}, false, err
-		}
-		meta.Goal = cloneGoalState(&goal)
-		return goal, true, nil
-	})
-	return goal, receipt, err
-}
-
-func (s *Store) SetGoalStatusWithMessage(
-	eventLog MaterializedEventLog,
-	stepID *string,
-	status GoalStatus,
-	actor GoalActor,
-	message MessageRecord,
-) (GoalState, CommitReceipt, error) {
-	goal, _, receipt, err := s.applyGoalMessageMutation(
-		eventLog,
-		stepID,
-		message,
-		func(meta *Meta) (GoalState, bool, error) {
-			goal, transitioned, err := prepareGoalStatusState(
-				meta.Goal,
-				status,
-				actor,
-				nil,
-				storeTimestamp(s.options),
-			)
-			if err != nil || !transitioned {
-				return goal, transitioned, err
-			}
-			meta.Goal = cloneGoalState(&goal)
-			return goal, true, nil
-		},
-	)
-	return goal, receipt, err
-}
-
-func (s *Store) ClearGoalWithMessage(
-	eventLog MaterializedEventLog,
-	stepID *string,
-	actor GoalActor,
-	message MessageRecord,
-) (GoalState, CommitReceipt, error) {
-	goal, _, receipt, err := s.applyGoalMessageMutation(eventLog, stepID, message, func(meta *Meta) (GoalState, bool, error) {
-		goal, err := prepareGoalClearState(meta.Goal, actor)
-		if err != nil {
-			return GoalState{}, false, err
-		}
-		meta.Goal = nil
-		return goal, true, nil
-	})
-	return goal, receipt, err
-}
-
-func (s *Store) CompleteGoalIfActiveWithMessage(
-	eventLog MaterializedEventLog,
-	stepID *string,
-	expectedID string,
-	actor GoalActor,
-	message MessageRecord,
-) (GoalState, bool, CommitReceipt, error) {
-	return s.applyGoalMessageMutation(eventLog, stepID, message, func(meta *Meta) (GoalState, bool, error) {
-		goal, transitioned, err := prepareGoalStatusState(
-			meta.Goal,
-			GoalStatusComplete,
-			actor,
-			func(current GoalState) bool {
-				return current.ID == expectedID && current.Status == GoalStatusActive
-			},
-			storeTimestamp(s.options),
-		)
-		if err != nil || !transitioned {
-			return goal, transitioned, err
-		}
-		meta.Goal = cloneGoalState(&goal)
-		return goal, true, nil
-	})
-}
-
-type goalMessageMutation func(*Meta) (GoalState, bool, error)
-
-func (s *Store) applyGoalMessageMutation(
-	eventLog MaterializedEventLog,
-	stepID *string,
-	message MessageRecord,
-	mutate goalMessageMutation,
-) (GoalState, bool, CommitReceipt, error) {
-	if err := eventLog.ValidateOwner(s); err != nil {
-		return GoalState{}, false, CommitReceipt{}, err
-	}
-	var (
-		goal         GoalState
-		transitioned bool
-	)
-	outcome, err := eventLog.appendRecordInputsAtomic(
-		[]recordAppendInput{{stepID: stepID, payload: message}},
-		func(meta *Meta) (bool, error) {
-			next, applied, mutationErr := mutate(meta)
-			if mutationErr != nil {
-				return false, mutationErr
-			}
-			goal = next
-			transitioned = applied
-			return applied, nil
-		},
-	)
-	if err != nil {
-		return goal, transitioned, CommitReceipt{Committed: outcome.committed}, err
-	}
-	if !transitioned {
-		return GoalState{}, false, CommitReceipt{}, nil
-	}
-	return goal, true, CommitReceipt{Committed: outcome.committed}, nil
 }
 
 func (s *Store) persistGoalMetadataLocked(previousMeta Meta) error {
@@ -1481,10 +1343,6 @@ func (s *Store) persistMetaLocked() (*persistenceObservation, error) {
 	if err := s.requireMetadataPersistenceLocked(); err != nil {
 		return nil, err
 	}
-	if s.options.filelessEvents {
-		s.metadataVersion++
-		return nil, nil
-	}
 	if err := s.ensurePersistedLocked(); err != nil {
 		return nil, err
 	}
@@ -1494,7 +1352,7 @@ func (s *Store) persistMetaLocked() (*persistenceObservation, error) {
 }
 
 func (s *Store) hasDurableMetadataLocked() bool {
-	if s == nil || !s.persisted || s.options.filelessEvents {
+	if s == nil || !s.persisted {
 		return false
 	}
 	return s.metadataVersion != 0 && s.persistedMetaVersion == s.metadataVersion
@@ -1515,7 +1373,7 @@ func (s *Store) ensurePersistedLocked() error {
 }
 
 func (s *Store) persistenceSnapshotLocked() *PersistedStoreSnapshot {
-	if s == nil || !s.persisted || s.options.observer == nil || s.options.filelessEvents {
+	if s == nil || !s.persisted || s.options.observer == nil {
 		return nil
 	}
 	snapshot := PersistedStoreSnapshot{
@@ -1528,9 +1386,6 @@ func (s *Store) persistenceSnapshotLocked() *PersistedStoreSnapshot {
 func (s *Store) requireMetadataPersistenceLocked() error {
 	if s.recoveryErr != nil {
 		return s.recoveryErr
-	}
-	if s.options.filelessEvents {
-		return nil
 	}
 	if s.options.observer == nil {
 		return errPersistenceObserverRequired

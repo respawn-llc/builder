@@ -50,7 +50,7 @@ func TestProjectTopologyReturnsRegisteredExternalAndMissingInRequiredOrder(t *te
 func TestResolveWorktreeSelectorUsesReadOnlyTopology(t *testing.T) {
 	env := newServiceTestEnv(t)
 	response, err := env.service.ResolveWorktreeSelector(env.ctx, serverapi.WorktreeSelectorPreviewRequest{
-		SessionID: env.session.Metadata().SessionID,
+		SessionID: env.session.Meta().SessionID,
 		Selector:  env.workspaceRoot,
 	})
 	if err != nil {
@@ -76,7 +76,7 @@ func TestListWorktreesProjectsSelectorsAndCurrentStateWithoutReconcilingMissingM
 	}
 
 	response, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{
-		SessionID: env.session.Metadata().SessionID,
+		SessionID: env.session.Meta().SessionID,
 	})
 	if err != nil {
 		t.Fatalf("ListWorktrees: %v", err)
@@ -168,7 +168,7 @@ func TestCreateRegistersOnlyTheCreatedWorktreeWithoutReconcilingOtherTopology(t 
 	response, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		ClientRequestID:  "create-without-reconcile",
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		SessionID:        env.session.Metadata().SessionID,
+		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,
 		BranchName:       "feature/explicit-register",
@@ -183,7 +183,7 @@ func TestCreateRegistersOnlyTheCreatedWorktreeWithoutReconcilingOtherTopology(t 
 	if len(records) != 1 || records[0].ID != worktreeIDFromListEntry(response.Worktree) {
 		t.Fatalf("records = %+v, want only created worktree", records)
 	}
-	list, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Metadata().SessionID})
+	list, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("ListWorktrees: %v", err)
 	}

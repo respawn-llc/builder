@@ -850,7 +850,7 @@ func (s *Service) workflowTaskSession(ctx context.Context, sessionID string, eng
 		if err != nil {
 			return false, err
 		}
-		if store != nil && store.Metadata().WorkflowSession != nil {
+		if store != nil && store.Meta().WorkflowSession != nil {
 			return true, nil
 		}
 	}

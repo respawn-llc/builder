@@ -214,7 +214,7 @@ func (s *Service) GetSessionExecutionEnvironment(ctx context.Context, req server
 	if err != nil {
 		return serverapi.SessionExecutionEnvironmentResponse{}, err
 	}
-	meta := store.Metadata()
+	meta := store.Meta()
 	if strings.TrimSpace(meta.SessionID) != req.SessionID.String() {
 		return serverapi.SessionExecutionEnvironmentResponse{}, fmt.Errorf("session execution environment identity mismatch: requested %q, resolved %q", req.SessionID.String(), meta.SessionID)
 	}

@@ -168,7 +168,7 @@ func TestRunSessionLifecycleRejectsDifferentAgentRoleForLockedContinuation(t *te
 		sessionLaunch:     service,
 	}
 
-	sessionID := sessionLifecycleSessionID(t, store.Metadata().SessionID)
+	sessionID := sessionLifecycleSessionID(t, store.Meta().SessionID)
 	openIntent := serverapi.OpenExistingSessionLaunchIntent(sessionID)
 	err = runSessionLifecycleWithOptions(ctx, server, nil, sessionLifecycleOptions{
 		Intent:    &openIntent,
@@ -277,7 +277,7 @@ func TestRunSessionLifecyclePickerWorkspaceChangeYesRetargetsSessionAndReplans(t
 	cfg := loadAppTestConfig(t, currentWorkspace, config.LoadOptions{})
 	binding := mustRegisterAppBinding(t, cfg.PersistenceRoot, cfg.WorkspaceRoot)
 	store := createAttachedAuthoritativeAppSession(t, cfg.PersistenceRoot, binding.ProjectID, previousWorkspace)
-	projectViews := sessionLifecycleProjectViewClient(binding, cfg.WorkspaceRoot, []clientui.SessionSummary{sessionLifecycleSessionSummary(t, store.Metadata().SessionID, time.Now().UTC())})
+	projectViews := sessionLifecycleProjectViewClient(binding, cfg.WorkspaceRoot, []clientui.SessionSummary{sessionLifecycleSessionSummary(t, store.Meta().SessionID, time.Now().UTC())})
 
 	originalPicker := runSessionPickerFlow
 	originalPrompt := runWorkspaceChangePromptFlow
@@ -290,7 +290,7 @@ func TestRunSessionLifecyclePickerWorkspaceChangeYesRetargetsSessionAndReplans(t
 	pickerCalls := 0
 	runSessionPickerFlow = func(sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error) {
 		pickerCalls++
-		return newSessionPickerOpenResult(sessionLifecycleSessionID(t, store.Metadata().SessionID)), nil
+		return newSessionPickerOpenResult(sessionLifecycleSessionID(t, store.Meta().SessionID)), nil
 	}
 	promptCalls := 0
 	runWorkspaceChangePromptFlow = func(selectedRoot string, currentRoot string, theme string) (workspaceChangePromptResult, error) {
@@ -315,7 +315,7 @@ func TestRunSessionLifecyclePickerWorkspaceChangeYesRetargetsSessionAndReplans(t
 		projectID:         binding.ProjectID,
 		projectViewClient: projectViews,
 		sessionViewClient: stubSessionViewClient{getSessionMainView: func(_ context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
-			if req.SessionID != store.Metadata().SessionID {
+			if req.SessionID != store.Meta().SessionID {
 				return serverapi.SessionMainViewResponse{}, errors.New("unexpected session id")
 			}
 			targetRoot := previousWorkspace
@@ -330,23 +330,23 @@ func TestRunSessionLifecyclePickerWorkspaceChangeYesRetargetsSessionAndReplans(t
 		}},
 		sessionLaunch: stubSessionLaunchClient{planSession: func(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
 			launchCalls++
-			reopened := openAuthoritativeAppSession(t, cfg.PersistenceRoot, store.Metadata().SessionID)
-			if comparableWorkspaceChangeRoot(reopened.Metadata().WorkspaceRoot) != mustCanonicalPath(t, cfg.WorkspaceRoot) {
-				t.Fatalf("session plan ran before workspace retarget: workspace=%q want=%q", reopened.Metadata().WorkspaceRoot, mustCanonicalPath(t, cfg.WorkspaceRoot))
+			reopened := openAuthoritativeAppSession(t, cfg.PersistenceRoot, store.Meta().SessionID)
+			if comparableWorkspaceChangeRoot(reopened.Meta().WorkspaceRoot) != mustCanonicalPath(t, cfg.WorkspaceRoot) {
+				t.Fatalf("session plan ran before workspace retarget: workspace=%q want=%q", reopened.Meta().WorkspaceRoot, mustCanonicalPath(t, cfg.WorkspaceRoot))
 			}
 			selectedID, present := req.Intent.SessionID()
-			if !present || selectedID.String() != store.Metadata().SessionID {
-				t.Fatalf("selected session id = %q/%v, want %q/true", selectedID.String(), present, store.Metadata().SessionID)
+			if !present || selectedID.String() != store.Meta().SessionID {
+				t.Fatalf("selected session id = %q/%v, want %q/true", selectedID.String(), present, store.Meta().SessionID)
 			}
 			return serverapi.SessionPlanResponse{Plan: serverapi.SessionPlan{
-				SessionID:      store.Metadata().SessionID,
+				SessionID:      store.Meta().SessionID,
 				ActiveSettings: config.Settings{Theme: "dark"},
 			}}, nil
 		}},
 		prepareRuntime: func(_ context.Context, plan sessionLaunchPlan, _ io.Writer, _ string) (*runtimeLaunchPlan, error) {
 			prepareCalls++
-			if plan.SessionID != store.Metadata().SessionID {
-				t.Fatalf("prepared session = %q, want %q", plan.SessionID, store.Metadata().SessionID)
+			if plan.SessionID != store.Meta().SessionID {
+				t.Fatalf("prepared session = %q, want %q", plan.SessionID, store.Meta().SessionID)
 			}
 			if plan.ExecutionTarget.EffectiveWorkdir != cfg.WorkspaceRoot {
 				t.Fatalf("prepared workspace = %q, want %q", plan.ExecutionTarget.EffectiveWorkdir, cfg.WorkspaceRoot)
@@ -371,9 +371,9 @@ func TestRunSessionLifecyclePickerWorkspaceChangeYesRetargetsSessionAndReplans(t
 	if prepareCalls != 1 {
 		t.Fatalf("prepare calls = %d, want 1", prepareCalls)
 	}
-	reopened := openAuthoritativeAppSession(t, cfg.PersistenceRoot, store.Metadata().SessionID)
-	if comparableWorkspaceChangeRoot(reopened.Metadata().WorkspaceRoot) != mustCanonicalPath(t, cfg.WorkspaceRoot) {
-		t.Fatalf("session workspace = %q, want %q", reopened.Metadata().WorkspaceRoot, mustCanonicalPath(t, cfg.WorkspaceRoot))
+	reopened := openAuthoritativeAppSession(t, cfg.PersistenceRoot, store.Meta().SessionID)
+	if comparableWorkspaceChangeRoot(reopened.Meta().WorkspaceRoot) != mustCanonicalPath(t, cfg.WorkspaceRoot) {
+		t.Fatalf("session workspace = %q, want %q", reopened.Meta().WorkspaceRoot, mustCanonicalPath(t, cfg.WorkspaceRoot))
 	}
 }
 
@@ -386,8 +386,8 @@ func TestRunSessionLifecyclePickerWorkspaceChangeNoReturnsToPicker(t *testing.T)
 	cfg := loadAppTestConfig(t, currentWorkspace, config.LoadOptions{})
 	binding := mustRegisterAppBinding(t, cfg.PersistenceRoot, cfg.WorkspaceRoot)
 	store := createArtifactBackedAttachedAppSession(t, cfg.PersistenceRoot, binding.ProjectID, previousWorkspace)
-	metaBefore := store.Metadata()
-	projectViews := sessionLifecycleProjectViewClient(binding, cfg.WorkspaceRoot, []clientui.SessionSummary{sessionLifecycleSessionSummary(t, store.Metadata().SessionID, time.Now().UTC())})
+	metaBefore := store.Meta()
+	projectViews := sessionLifecycleProjectViewClient(binding, cfg.WorkspaceRoot, []clientui.SessionSummary{sessionLifecycleSessionSummary(t, store.Meta().SessionID, time.Now().UTC())})
 
 	originalPicker := runSessionPickerFlow
 	originalPrompt := runWorkspaceChangePromptFlow
@@ -401,7 +401,7 @@ func TestRunSessionLifecyclePickerWorkspaceChangeNoReturnsToPicker(t *testing.T)
 	runSessionPickerFlow = func(sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error) {
 		pickerCalls++
 		if pickerCalls == 1 {
-			return newSessionPickerOpenResult(sessionLifecycleSessionID(t, store.Metadata().SessionID)), nil
+			return newSessionPickerOpenResult(sessionLifecycleSessionID(t, store.Meta().SessionID)), nil
 		}
 		return newSessionPickerCancelResult(), nil
 	}
@@ -419,7 +419,7 @@ func TestRunSessionLifecyclePickerWorkspaceChangeNoReturnsToPicker(t *testing.T)
 		projectID:         binding.ProjectID,
 		projectViewClient: projectViews,
 		sessionViewClient: stubSessionViewClient{getSessionMainView: func(_ context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
-			if req.SessionID != store.Metadata().SessionID {
+			if req.SessionID != store.Meta().SessionID {
 				return serverapi.SessionMainViewResponse{}, errors.New("unexpected session id")
 			}
 			return serverapi.SessionMainViewResponse{MainView: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{ExecutionTarget: clientui.SessionExecutionTarget{
@@ -431,11 +431,11 @@ func TestRunSessionLifecyclePickerWorkspaceChangeNoReturnsToPicker(t *testing.T)
 		sessionLaunch: stubSessionLaunchClient{planSession: func(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
 			launchCalls++
 			selectedID, present := req.Intent.SessionID()
-			if !present || selectedID.String() != store.Metadata().SessionID {
-				t.Fatalf("selected session id = %q/%v, want %q/true", selectedID.String(), present, store.Metadata().SessionID)
+			if !present || selectedID.String() != store.Meta().SessionID {
+				t.Fatalf("selected session id = %q/%v, want %q/true", selectedID.String(), present, store.Meta().SessionID)
 			}
 			return serverapi.SessionPlanResponse{Plan: serverapi.SessionPlan{
-				SessionID:      store.Metadata().SessionID,
+				SessionID:      store.Meta().SessionID,
 				ActiveSettings: config.Settings{Theme: "dark"},
 			}}, nil
 		}},
@@ -454,8 +454,8 @@ func TestRunSessionLifecyclePickerWorkspaceChangeNoReturnsToPicker(t *testing.T)
 	if launchCalls != 0 {
 		t.Fatalf("launch calls = %d, want 0", launchCalls)
 	}
-	reopened := openAuthoritativeAppSession(t, cfg.PersistenceRoot, store.Metadata().SessionID)
-	metaAfter := reopened.Metadata()
+	reopened := openAuthoritativeAppSession(t, cfg.PersistenceRoot, store.Meta().SessionID)
+	metaAfter := reopened.Meta()
 	if metaAfter.UpdatedAt.UnixMilli() != metaBefore.UpdatedAt.UnixMilli() || !sameOptionalSessionCategory(metaAfter.Category, metaBefore.Category) {
 		t.Fatalf("declining workspace change mutated recency/category: before=%+v after=%+v", metaBefore, metaAfter)
 	}
@@ -470,11 +470,11 @@ func TestRunSessionLifecycleWorkspaceChangeLookupFailureReturnsToPickerAndOpensA
 	binding := mustRegisterAppBinding(t, cfg.PersistenceRoot, cfg.WorkspaceRoot)
 	staleStore := createArtifactBackedAttachedAppSession(t, cfg.PersistenceRoot, binding.ProjectID, cfg.WorkspaceRoot)
 	validStore := createAuthoritativeAppSession(t, cfg.PersistenceRoot, cfg.WorkspaceRoot)
-	staleSessionID := staleStore.Metadata().SessionID
-	metaBefore := staleStore.Metadata()
+	staleSessionID := staleStore.Meta().SessionID
+	metaBefore := staleStore.Meta()
 	projectViews := sessionLifecycleProjectViewClient(binding, cfg.WorkspaceRoot, []clientui.SessionSummary{
 		sessionLifecycleSessionSummary(t, staleSessionID, time.Now().UTC()),
-		sessionLifecycleSessionSummary(t, validStore.Metadata().SessionID, time.Now().UTC().Add(-time.Minute)),
+		sessionLifecycleSessionSummary(t, validStore.Meta().SessionID, time.Now().UTC().Add(-time.Minute)),
 	})
 
 	originalPicker := runSessionPickerFlow
@@ -504,7 +504,7 @@ func TestRunSessionLifecycleWorkspaceChangeLookupFailureReturnsToPickerAndOpensA
 				!errors.Is(header.Notice.Diagnostic, session.ErrSessionNotFound) {
 				t.Fatalf("workspace lookup notice = %+v, want generic surfaced failure", header.Notice)
 			}
-			return newSessionPickerOpenResult(sessionLifecycleSessionID(t, validStore.Metadata().SessionID)), nil
+			return newSessionPickerOpenResult(sessionLifecycleSessionID(t, validStore.Meta().SessionID)), nil
 		}
 		t.Fatalf("unexpected picker call %d", pickerCalls)
 		return nil, nil
@@ -529,7 +529,7 @@ func TestRunSessionLifecycleWorkspaceChangeLookupFailureReturnsToPickerAndOpensA
 			switch req.SessionID {
 			case staleSessionID:
 				return serverapi.SessionMainViewResponse{}, session.ErrSessionNotFound
-			case validStore.Metadata().SessionID:
+			case validStore.Meta().SessionID:
 				return serverapi.SessionMainViewResponse{MainView: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{ExecutionTarget: clientui.SessionExecutionTarget{
 					WorkspaceRoot:         cfg.WorkspaceRoot,
 					WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
@@ -549,8 +549,8 @@ func TestRunSessionLifecycleWorkspaceChangeLookupFailureReturnsToPickerAndOpensA
 		}},
 		prepareRuntime: func(_ context.Context, plan sessionLaunchPlan, _ io.Writer, _ string) (*runtimeLaunchPlan, error) {
 			prepareCalls++
-			if plan.SessionID != validStore.Metadata().SessionID {
-				t.Fatalf("prepared session = %q, want %q", plan.SessionID, validStore.Metadata().SessionID)
+			if plan.SessionID != validStore.Meta().SessionID {
+				t.Fatalf("prepared session = %q, want %q", plan.SessionID, validStore.Meta().SessionID)
 			}
 			return nil, stopErr
 		},
@@ -573,7 +573,7 @@ func TestRunSessionLifecycleWorkspaceChangeLookupFailureReturnsToPickerAndOpensA
 		t.Fatalf("prepare calls = %d, want 1", prepareCalls)
 	}
 	reopened := openAuthoritativeAppSession(t, cfg.PersistenceRoot, staleSessionID)
-	metaAfter := reopened.Metadata()
+	metaAfter := reopened.Meta()
 	if metaAfter.UpdatedAt.UnixMilli() != metaBefore.UpdatedAt.UnixMilli() || !sameOptionalSessionCategory(metaAfter.Category, metaBefore.Category) {
 		t.Fatalf("workspace lookup failure mutated recency/category: before=%+v after=%+v", metaBefore, metaAfter)
 	}
@@ -611,11 +611,11 @@ func TestRunSessionLifecycleExplicitSessionIDBypassesWorkspaceChangePrompt(t *te
 		sessionLaunch: stubSessionLaunchClient{planSession: func(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
 			launchCalls++
 			selectedID, present := req.Intent.SessionID()
-			if !present || selectedID.String() != store.Metadata().SessionID {
-				t.Fatalf("selected session id = %q/%v, want %q/true", selectedID.String(), present, store.Metadata().SessionID)
+			if !present || selectedID.String() != store.Meta().SessionID {
+				t.Fatalf("selected session id = %q/%v, want %q/true", selectedID.String(), present, store.Meta().SessionID)
 			}
 			return serverapi.SessionPlanResponse{Plan: serverapi.SessionPlan{
-				SessionID:      store.Metadata().SessionID,
+				SessionID:      store.Meta().SessionID,
 				ActiveSettings: config.Settings{Theme: "dark"},
 			}}, nil
 		}},
@@ -627,7 +627,7 @@ func TestRunSessionLifecycleExplicitSessionIDBypassesWorkspaceChangePrompt(t *te
 		},
 	}
 
-	err := runSessionLifecycle(context.Background(), server, nil, store.Metadata().SessionID)
+	err := runSessionLifecycle(context.Background(), server, nil, store.Meta().SessionID)
 	if !errors.Is(err, stopErr) {
 		t.Fatalf("runSessionLifecycle error = %v, want %v", err, stopErr)
 	}
@@ -872,7 +872,7 @@ func TestNewSessionTransitionKeepsBackgroundProcessesAlive(t *testing.T) {
 	if err := source.EnsureDurable(); err != nil {
 		t.Fatalf("persist source session: %v", err)
 	}
-	sourceSessionID := source.Metadata().SessionID
+	sourceSessionID := source.Meta().SessionID
 	previousSessionID, err := runtimeids.ParseSessionID(sourceSessionID)
 	if err != nil {
 		t.Fatalf("parse source session id: %v", err)
@@ -977,12 +977,12 @@ func TestReviewTeleportLifecyclePreservesParentWorktreeContext(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	if err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{SessionID: parent.Metadata().SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "worktree-review-lifecycle"}, CwdRelpath: "pkg"}); err != nil {
+	if err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{SessionID: parent.Meta().SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "worktree-review-lifecycle"}, CwdRelpath: "pkg"}); err != nil {
 		t.Fatalf("UpdateSessionExecutionTarget parent: %v", err)
 	}
 
 	model := newProjectedStaticUIModel(
-		WithUISessionID(parent.Metadata().SessionID),
+		WithUISessionID(parent.Meta().SessionID),
 		WithUIConversationFreshness(clientui.ConversationFreshnessEstablished),
 	)
 	testSetMainInput(model, "/review pkg")
@@ -996,7 +996,7 @@ func TestReviewTeleportLifecyclePreservesParentWorktreeContext(t *testing.T) {
 	}
 
 	server := &testEmbeddedServer{cfg: cfg}
-	resolved, err := resolveSessionAction(ctx, server, nil, parent.Metadata().SessionID, updated.Transition())
+	resolved, err := resolveSessionAction(ctx, server, nil, parent.Meta().SessionID, updated.Transition())
 	if err != nil {
 		t.Fatalf("resolve session action: %v", err)
 	}
@@ -1011,9 +1011,9 @@ func TestReviewTeleportLifecyclePreservesParentWorktreeContext(t *testing.T) {
 		t.Fatalf("PlanSession child: %v", err)
 	}
 	child := openAuthoritativeAppSession(t, cfg.PersistenceRoot, plan.SessionID)
-	childMeta := child.Metadata()
-	if childMeta.PreviousSessionID == nil || childMeta.PreviousSessionID.String() != parent.Metadata().SessionID {
-		t.Fatalf("child previous session id = %v, want %q", childMeta.PreviousSessionID, parent.Metadata().SessionID)
+	childMeta := child.Meta()
+	if childMeta.PreviousSessionID == nil || childMeta.PreviousSessionID.String() != parent.Meta().SessionID {
+		t.Fatalf("child previous session id = %v, want %q", childMeta.PreviousSessionID, parent.Meta().SessionID)
 	}
 	if childMeta.Continuation == nil || childMeta.Continuation.OpenAIBaseURL != "http://review-parent.local/v1" {
 		t.Fatalf("child continuation = %+v, want parent continuation", childMeta.Continuation)

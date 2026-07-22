@@ -704,7 +704,7 @@ func TestCreateWorktreeSetupReplacesStaleParentReservedEnvironment(t *testing.T)
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 		ClientRequestID:  "req-session-contract",
-		SessionID:        env.session.Metadata().SessionID,
+		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,
 		BranchName:       "feature/session-contract",
@@ -720,8 +720,8 @@ func TestCreateWorktreeSetupReplacesStaleParentReservedEnvironment(t *testing.T)
 	if err != nil {
 		t.Fatalf("setup payload: %v", err)
 	}
-	if payload.SessionID == nil || *payload.SessionID != env.session.Metadata().SessionID {
-		t.Fatalf("session setup session_id = %v, want %q", payload.SessionID, env.session.Metadata().SessionID)
+	if payload.SessionID == nil || *payload.SessionID != env.session.Meta().SessionID {
+		t.Fatalf("session setup session_id = %v, want %q", payload.SessionID, env.session.Meta().SessionID)
 	}
 	created := worktreeViewFromListEntryForTest(resp.Worktree)
 	if err := invocation.Verify(testsetup.Payload{
@@ -930,7 +930,7 @@ func TestDeleteWorktreeBlocksNonTerminalTaskManagedWorktree(t *testing.T) {
 
 	_, err = env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
 		OperationID:         serverapi.NewWorktreeOperationID(),
-		SessionID:           env.session.Metadata().SessionID,
+		SessionID:           env.session.Meta().SessionID,
 		Selector:            taskWorktreeID(created.Worktree),
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	})
@@ -959,7 +959,7 @@ func TestDeleteWorktreeAllowsTerminalTaskManagedWorktree(t *testing.T) {
 
 	_, err = env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
 		OperationID:         serverapi.NewWorktreeOperationID(),
-		SessionID:           env.session.Metadata().SessionID,
+		SessionID:           env.session.Meta().SessionID,
 		Selector:            taskWorktreeID(created.Worktree),
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	})
@@ -1016,7 +1016,7 @@ func TestDeleteTaskWorktreeRollsBackSessionTargetWhenRemovalFails(t *testing.T) 
 	}
 	worktreeID := taskWorktreeID(created.Worktree)
 	worktreeRoot := taskWorktreeRoot(created.Worktree)
-	updateServiceTestSessionTarget(t, env, env.session.Metadata().SessionID, env.binding.WorkspaceID, worktreeID, ".")
+	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, worktreeID, ".")
 	targetBefore := mustResolveServiceTestTarget(t, env)
 	runGit(t, env.workspaceRoot, "worktree", "lock", worktreeRoot)
 	t.Cleanup(func() {

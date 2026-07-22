@@ -33,7 +33,7 @@ func (e *Engine) compactRemote(ctx context.Context, stepID string, input []llm.R
 	baseRequest := llm.CompactionRequest{
 		Model:        locked.Model,
 		Instructions: instructions,
-		SessionID:    e.store.Metadata().SessionID,
+		SessionID:    e.store.Meta().SessionID,
 		InputItems:   requestItems,
 	}
 

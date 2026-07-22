@@ -207,7 +207,7 @@ func (e *Engine) systemPrompt(locked session.LockedContract) (string, error) {
 	if err := e.store.BackfillLockedSystemPrompt(prompt); err != nil {
 		return "", err
 	}
-	if meta := e.store.Metadata(); meta.Locked != nil && meta.Locked.HasSystemPrompt {
+	if meta := e.store.Meta(); meta.Locked != nil && meta.Locked.HasSystemPrompt {
 		persisted := strings.TrimSpace(meta.Locked.SystemPrompt)
 		prompt = persisted
 	}
@@ -314,7 +314,7 @@ func (e *Engine) requestTools(ctx context.Context, workflowMode workflowruntime.
 		return nil, err
 	}
 	exposure := tools.RequestExposureContext{
-		SupportsVision:     llm.LockedContractSupportsVisionInputs(e.store.Metadata().Locked, e.cfg.Model),
+		SupportsVision:     llm.LockedContractSupportsVisionInputs(e.store.Meta().Locked, e.cfg.Model),
 		WorkflowCompletion: workflowToolMode,
 	}
 	defs := tools.RequestExposedDefinitionsForSession(shape.EnabledTools, e.registry.Definitions(), exposure)

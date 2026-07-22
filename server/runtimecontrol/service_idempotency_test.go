@@ -40,7 +40,7 @@ func (r *sessionStatusCountingResolver) PublishSessionStatus(string) {
 
 func TestServiceSetThinkingLevelDedupesSuccessfulRetry(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	req := serverapi.RuntimeSetThinkingLevelRequest{ClientRequestID: "req-1", SessionID: store.Metadata().SessionID, Level: "high"}
+	req := serverapi.RuntimeSetThinkingLevelRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Level: "high"}
 
 	if err := service.SetThinkingLevel(context.Background(), req); err != nil {
 		t.Fatalf("SetThinkingLevel first: %v", err)
@@ -190,11 +190,11 @@ func TestServiceCommittedControlObserverErrorIsMemoized(t *testing.T) {
 			service.WithRuntimeActivityResolver(resolver)
 			gate.FailNext(observerErr)
 
-			first, err := testCase.run(service, engine, store.Metadata().SessionID, "req-committed-control")
+			first, err := testCase.run(service, engine, store.Meta().SessionID, "req-committed-control")
 			if !errors.Is(err, observerErr) {
 				t.Fatalf("first control error = %v, want observer error", err)
 			}
-			second, err := testCase.run(service, engine, store.Metadata().SessionID, "req-committed-control")
+			second, err := testCase.run(service, engine, store.Meta().SessionID, "req-committed-control")
 			if !errors.Is(err, observerErr) {
 				t.Fatalf("replayed control error = %v, want cached observer error", err)
 			}
@@ -251,10 +251,10 @@ func TestServiceCompactionConsumesCommittedObserverError(t *testing.T) {
 			ref := runtimeControlOperationRef(testCase.kind)
 			gate.FailNext(observerErr)
 
-			if err := testCase.run(service, store.Metadata().SessionID, ref); !errors.Is(err, observerErr) {
+			if err := testCase.run(service, store.Meta().SessionID, ref); !errors.Is(err, observerErr) {
 				t.Fatalf("first compaction error = %v, want observer error", err)
 			}
-			if err := testCase.run(service, store.Metadata().SessionID, ref); !errors.Is(err, observerErr) {
+			if err := testCase.run(service, store.Meta().SessionID, ref); !errors.Is(err, observerErr) {
 				t.Fatalf("replayed compaction error = %v, want cached observer error", err)
 			}
 			if client.compactionCalls != 1 {
@@ -263,7 +263,7 @@ func TestServiceCompactionConsumesCommittedObserverError(t *testing.T) {
 			if got := countEventsByKind(t, store, "history_replaced"); got != 1 {
 				t.Fatalf("history_replaced event count = %d, want 1", got)
 			}
-			snapshot := runtimeControlFeedSnapshot(t, operations, store.Metadata().SessionID, []clientui.RuntimeOperationRef{ref})
+			snapshot := runtimeControlFeedSnapshot(t, operations, store.Meta().SessionID, []clientui.RuntimeOperationRef{ref})
 			if len(snapshot.Operations) != 1 || snapshot.Operations[0].State != clientui.RuntimeInputReconciliationCommitted {
 				t.Fatalf("compaction reconciliation = %+v, want committed", snapshot)
 			}
@@ -353,7 +353,7 @@ func localEntryEvents(t *testing.T, store *session.Store) []runtime.ChatEntry {
 
 func TestServiceAppendCommittedEntryReplaysVisibility(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	req := serverapi.RuntimeAppendCommittedEntryRequest{ClientRequestID: "req-1", SessionID: store.Metadata().SessionID, Role: "warning", Text: "visible warning", Visibility: string(transcript.EntryVisibilityOngoing)}
+	req := serverapi.RuntimeAppendCommittedEntryRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Role: "warning", Text: "visible warning", Visibility: string(transcript.EntryVisibilityOngoing)}
 
 	if err := service.AppendCommittedEntry(context.Background(), req); err != nil {
 		t.Fatalf("AppendCommittedEntry first: %v", err)
@@ -394,7 +394,7 @@ func TestServiceSubmitQueuedUserMessagesConsumesCommittedObserverError(t *testin
 	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmitQueued)
 	req := serverapi.RuntimeSubmitQueuedUserMessagesRequest{
 		ClientRequestID: ref.ClientRequestID.String(),
-		SessionID:       store.Metadata().SessionID,
+		SessionID:       store.Meta().SessionID,
 		OperationRef:    ref,
 	}
 	gate.FailNext(observerErr)
@@ -422,7 +422,7 @@ func TestServiceSubmitQueuedUserMessagesConsumesCommittedObserverError(t *testin
 	if got := engine.CommittedTranscriptEntryCount(); got != entriesBeforeSubmit+1 {
 		t.Fatalf("projected transcript entries = %d, want %d", got, entriesBeforeSubmit+1)
 	}
-	snapshot := runtimeControlFeedSnapshot(t, operations, store.Metadata().SessionID, []clientui.RuntimeOperationRef{ref})
+	snapshot := runtimeControlFeedSnapshot(t, operations, store.Meta().SessionID, []clientui.RuntimeOperationRef{ref})
 	if len(snapshot.Operations) != 1 || snapshot.Operations[0].State != clientui.RuntimeInputReconciliationSubmitted {
 		t.Fatalf("queued submission reconciliation = %+v, want submitted", snapshot)
 	}
@@ -433,7 +433,7 @@ func TestServiceDiscardQueuedUserMessageDedupesSuccessfulRetry(t *testing.T) {
 	firstQueued := engine.QueueUserMessage("same")
 	otherQueued := engine.QueueUserMessage("other")
 	duplicateQueued := engine.QueueUserMessage("same")
-	req := serverapi.RuntimeDiscardQueuedUserMessageRequest{ClientRequestID: "req-1", SessionID: store.Metadata().SessionID, QueueItemID: duplicateQueued.ID}
+	req := serverapi.RuntimeDiscardQueuedUserMessageRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, QueueItemID: duplicateQueued.ID}
 
 	first, err := service.DiscardQueuedUserMessage(context.Background(), req)
 	if err != nil {
@@ -459,9 +459,9 @@ func TestServiceDiscardQueuedUserMessageDedupesSuccessfulRetry(t *testing.T) {
 
 func TestServiceRecordPromptHistoryDedupesSuccessfulRetry(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	history := newRuntimeControlPromptHistoryStore(store.Metadata().SessionID)
+	history := newRuntimeControlPromptHistoryStore(store.Meta().SessionID)
 	service.WithPromptHistoryStore(history)
-	req := serverapi.RuntimeRecordPromptHistoryRequest{ClientRequestID: "req-1", SessionID: store.Metadata().SessionID, Text: "/resume"}
+	req := serverapi.RuntimeRecordPromptHistoryRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Text: "/resume"}
 
 	if err := service.RecordPromptHistory(context.Background(), req); err != nil {
 		t.Fatalf("RecordPromptHistory first: %v", err)

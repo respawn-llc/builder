@@ -257,7 +257,7 @@ func TestCompactionMissingToolOutputRepairAppendsAndRetries(t *testing.T) {
 		}},
 	}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
-	baseRequest := llm.CompactionRequest{Model: "gpt-5", SessionID: store.Metadata().SessionID, InputItems: eng.transcriptRuntimeState().SnapshotItems()}
+	baseRequest := llm.CompactionRequest{Model: "gpt-5", SessionID: store.Meta().SessionID, InputItems: eng.transcriptRuntimeState().SnapshotItems()}
 
 	if _, _, _, err := eng.compactWithContextRepairRetry(context.Background(), "compact", client, baseRequest); err != nil {
 		t.Fatalf("compact with repair retry: %v", err)
@@ -289,7 +289,7 @@ func TestCompactionMissingToolOutputRepairRunsSinglePass(t *testing.T) {
 		},
 	}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
-	baseRequest := llm.CompactionRequest{Model: "gpt-5", SessionID: store.Metadata().SessionID, InputItems: eng.transcriptRuntimeState().SnapshotItems()}
+	baseRequest := llm.CompactionRequest{Model: "gpt-5", SessionID: store.Meta().SessionID, InputItems: eng.transcriptRuntimeState().SnapshotItems()}
 
 	_, _, _, err := eng.compactWithContextRepairRetry(context.Background(), "compact", client, baseRequest)
 	if !llm.HasHTTPStatus(err, 400) {
@@ -389,7 +389,7 @@ func TestCompactionMissingOutputAfterCollapsePanics(t *testing.T) {
 	}}}})); err != nil {
 		t.Fatalf("append dangling call: %v", err)
 	}
-	baseRequest := llm.CompactionRequest{Model: "gpt-5", SessionID: store.Metadata().SessionID, InputItems: eng.transcriptRuntimeState().SnapshotItems()}
+	baseRequest := llm.CompactionRequest{Model: "gpt-5", SessionID: store.Meta().SessionID, InputItems: eng.transcriptRuntimeState().SnapshotItems()}
 
 	defer func() {
 		if recover() == nil {

@@ -42,7 +42,7 @@ func (e *Engine) WorkflowSessionState() WorkflowSessionState {
 	if e.store == nil {
 		return WorkflowSessionState{}
 	}
-	meta := e.store.Metadata()
+	meta := e.store.Meta()
 	workflowSession := meta.WorkflowSession
 	if workflowSession == nil {
 		return WorkflowSessionState{}

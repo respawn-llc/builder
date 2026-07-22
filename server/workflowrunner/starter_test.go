@@ -1214,13 +1214,13 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open source session: %v", err)
 	}
-	if got := sourceStore.Metadata().Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("reviewer")) {
+	if got := sourceStore.Meta().Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("reviewer")) {
 		t.Fatalf("continuation role = %+v, want reviewer", got)
 	}
-	if got := sourceStore.Metadata().PromptCacheLineageGeneration; got != 1 {
+	if got := sourceStore.Meta().PromptCacheLineageGeneration; got != 1 {
 		t.Fatalf("prompt cache lineage generation = %d, want fresh target generation 1", got)
 	}
-	if locked := sourceStore.Metadata().Locked; locked == nil || !locked.HasSystemPrompt || !locked.HasEnabledTools {
+	if locked := sourceStore.Meta().Locked; locked == nil || !locked.HasSystemPrompt || !locked.HasEnabledTools {
 		t.Fatalf("locked prompt-facing contract = %+v, want refreshed prompt and request shape", locked)
 	} else if !lockedContractHasTool(locked, toolspec.ToolEdit) || lockedContractHasTool(locked, toolspec.ToolExecCommand) {
 		t.Fatalf("locked enabled tools = %+v, want refreshed reviewer role tools", locked.EnabledTools)
@@ -1342,7 +1342,7 @@ func TestWorkflowRuntimeDefaultRoleClearsInvalidPersistedRoleBeforeValidation(t 
 
 	plan, _, err := fixture.starter.planSession(context.Background(), workflowstore.RunStartContext{
 		ContextMode:     workflow.ContextModeContinueSession,
-		SourceSessionID: source.Metadata().SessionID,
+		SourceSessionID: source.Meta().SessionID,
 		Task: workflowstore.TaskRecord{
 			ID:        "task-1",
 			ProjectID: fixture.projectID,
@@ -1364,7 +1364,7 @@ func TestWorkflowRuntimeDefaultRoleClearsInvalidPersistedRoleBeforeValidation(t 
 	if err != nil {
 		t.Fatalf("open source session: %v", err)
 	}
-	if got := reopened.Metadata().Continuation; got != nil && got.AgentRole != nil {
+	if got := reopened.Meta().Continuation; got != nil && got.AgentRole != nil {
 		t.Fatalf("continuation = %+v, want cleared role", got)
 	}
 }
@@ -1382,7 +1382,7 @@ func TestWorkflowRuntimeLockedBaseSessionAcceptsTargetRole(t *testing.T) {
 
 	plan, _, err := fixture.starter.planSession(context.Background(), workflowstore.RunStartContext{
 		ContextMode:     workflow.ContextModeContinueSession,
-		SourceSessionID: source.Metadata().SessionID,
+		SourceSessionID: source.Meta().SessionID,
 		Task: workflowstore.TaskRecord{
 			ID:        "task-1",
 			ProjectID: fixture.projectID,
@@ -1404,7 +1404,7 @@ func TestWorkflowRuntimeLockedBaseSessionAcceptsTargetRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open source session: %v", err)
 	}
-	if got := reopened.Metadata().Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("coder")) {
+	if got := reopened.Meta().Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("coder")) {
 		t.Fatalf("continuation = %+v, want coder role persisted", got)
 	}
 }
@@ -2456,7 +2456,7 @@ func (f starterFixture) sessionEventsText(t *testing.T, sessionID string) string
 	return string(data)
 }
 
-func (f starterFixture) sessionMeta(t *testing.T, sessionID string) session.Metadata {
+func (f starterFixture) sessionMeta(t *testing.T, sessionID string) session.Meta {
 	t.Helper()
 	record, err := f.metadata.ResolvePersistedSession(context.Background(), sessionID)
 	if err != nil {
@@ -2466,7 +2466,7 @@ func (f starterFixture) sessionMeta(t *testing.T, sessionID string) session.Meta
 	if err != nil {
 		t.Fatalf("Open session: %v", err)
 	}
-	return store.Metadata()
+	return store.Meta()
 }
 
 func renderedPromptForRun(t *testing.T, store *workflowstore.Store, runID workflow.RunID) string {

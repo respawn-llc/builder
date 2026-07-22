@@ -148,7 +148,7 @@ func TestPromptFacingSnapshotReloaderUsesActiveWorkspaceRoot(t *testing.T) {
 		configRoot:    configRoot,
 	}
 
-	reloaded, err := reloader.ReloadPromptFacingSnapshotConfig(context.Background(), store.Metadata().SessionID)
+	reloaded, err := reloader.ReloadPromptFacingSnapshotConfig(context.Background(), store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("reload prompt-facing config: %v", err)
 	}

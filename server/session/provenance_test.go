@@ -26,14 +26,14 @@ func TestInitializeCreationContextSetsTypedProvenanceAtomically(t *testing.T) {
 			name:            "previous session preserves delegation ancestry",
 			source:          source,
 			kind:            SessionCreationSourcePreviousSession,
-			wantPrevious:    mustProvenanceSessionID(t, source.Metadata().SessionID),
-			wantParentAgent: mustProvenanceSessionID(t, parentAgent.Metadata().SessionID),
+			wantPrevious:    mustProvenanceSessionID(t, source.Meta().SessionID),
+			wantParentAgent: mustProvenanceSessionID(t, parentAgent.Meta().SessionID),
 		},
 		{
 			name:            "parent agent records immediate caller",
 			source:          source,
 			kind:            SessionCreationSourceParentAgent,
-			wantParentAgent: mustProvenanceSessionID(t, source.Metadata().SessionID),
+			wantParentAgent: mustProvenanceSessionID(t, source.Meta().SessionID),
 		},
 	}
 	for _, test := range tests {
@@ -42,17 +42,17 @@ func TestInitializeCreationContextSetsTypedProvenanceAtomically(t *testing.T) {
 			if err := InitializeCreationContext(child, test.source, test.kind, ChildContextOptions{}); err != nil {
 				t.Fatalf("InitializeCreationContext: %v", err)
 			}
-			meta := child.Metadata()
+			meta := child.Meta()
 			assertOptionalProvenanceID(t, "previous", meta.PreviousSessionID, test.wantPrevious)
 			assertOptionalProvenanceID(t, "parent agent", meta.ParentAgentSessionID, test.wantParentAgent)
 			if test.source != nil &&
-				(meta.WorkspaceRoot != test.source.Metadata().WorkspaceRoot ||
-					meta.WorkspaceContainer != test.source.Metadata().WorkspaceContainer) {
+				(meta.WorkspaceRoot != test.source.Meta().WorkspaceRoot ||
+					meta.WorkspaceContainer != test.source.Meta().WorkspaceContainer) {
 				t.Fatalf("workspace context = %q/%q, want source %q/%q",
 					meta.WorkspaceRoot,
 					meta.WorkspaceContainer,
-					test.source.Metadata().WorkspaceRoot,
-					test.source.Metadata().WorkspaceContainer,
+					test.source.Meta().WorkspaceRoot,
+					test.source.Meta().WorkspaceContainer,
 				)
 			}
 		})
@@ -84,9 +84,9 @@ func TestForkAndCloneRecordPreviousSessionAndPreserveParentAgentAncestry(t *test
 		t.Fatalf("CloneSession: %v", err)
 	}
 	for name, derived := range map[string]*Store{"forked": forked, "cloned": cloned} {
-		meta := derived.Metadata()
-		assertOptionalProvenanceID(t, name+" previous", meta.PreviousSessionID, mustProvenanceSessionID(t, source.Metadata().SessionID))
-		assertOptionalProvenanceID(t, name+" parent agent", meta.ParentAgentSessionID, mustProvenanceSessionID(t, parentAgent.Metadata().SessionID))
+		meta := derived.Meta()
+		assertOptionalProvenanceID(t, name+" previous", meta.PreviousSessionID, mustProvenanceSessionID(t, source.Meta().SessionID))
+		assertOptionalProvenanceID(t, name+" parent agent", meta.ParentAgentSessionID, mustProvenanceSessionID(t, parentAgent.Meta().SessionID))
 	}
 }
 
@@ -115,7 +115,7 @@ func assertOptionalProvenanceID(t *testing.T, label string, got *runtimeids.Sess
 func TestNavigationTargetSessionIDPrefersPreviousAndReturnsCopy(t *testing.T) {
 	previous := mustProvenanceSessionID(t, "previous-session")
 	parentAgent := mustProvenanceSessionID(t, "parent-agent-session")
-	meta := Metadata{PreviousSessionID: previous, ParentAgentSessionID: parentAgent}
+	meta := Meta{PreviousSessionID: previous, ParentAgentSessionID: parentAgent}
 
 	target := NavigationTargetSessionID(meta)
 	assertOptionalProvenanceID(t, "navigation target", target, previous)
@@ -126,6 +126,6 @@ func TestNavigationTargetSessionIDPrefersPreviousAndReturnsCopy(t *testing.T) {
 
 func TestNavigationTargetSessionIDFallsBackToParentAgent(t *testing.T) {
 	parentAgent := mustProvenanceSessionID(t, "parent-agent-session")
-	target := NavigationTargetSessionID(Metadata{ParentAgentSessionID: parentAgent})
+	target := NavigationTargetSessionID(Meta{ParentAgentSessionID: parentAgent})
 	assertOptionalProvenanceID(t, "navigation target", target, parentAgent)
 }

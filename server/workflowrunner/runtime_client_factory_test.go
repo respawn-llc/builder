@@ -181,7 +181,7 @@ func createWorkflowFactorySession(t *testing.T) *session.Store {
 
 func workflowFactorySessionSnapshotForStore(t *testing.T, store *session.Store) workflowFactorySessionSnapshot {
 	t.Helper()
-	meta := store.Metadata()
+	meta := store.Meta()
 	sessionID, err := runtimeids.ParseSessionID(meta.SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)

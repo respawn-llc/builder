@@ -106,7 +106,7 @@ func TestStatusSessionNameResolvesFromSessionViews(t *testing.T) {
 		t.Fatalf("set parent name: %v", err)
 	}
 	sessionViews := sessionview.NewService(testSessionViewSessionResolver{store: parentStore}, nil, nil, nil)
-	got, err := status.Collector{SessionNameReadTimeout: uiRuntimeReadTimeout}.ResolveSessionName(context.Background(), sessionViews, parentStore.Metadata().SessionID)
+	got, err := status.Collector{SessionNameReadTimeout: uiRuntimeReadTimeout}.ResolveSessionName(context.Background(), sessionViews, parentStore.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionName: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestStatusRefreshCmdSchedulesBaseEnrichmentForProgressiveCollector(t *testi
 		t.Fatalf("set parent name: %v", err)
 	}
 	sessionViews := sessionview.NewService(testSessionViewSessionResolver{store: parentStore}, nil, nil, nil)
-	previousSessionID, err := runtimeids.ParseSessionID(parentStore.Metadata().SessionID)
+	previousSessionID, err := runtimeids.ParseSessionID(parentStore.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("parse previous session id: %v", err)
 	}

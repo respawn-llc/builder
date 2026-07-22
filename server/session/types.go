@@ -118,7 +118,7 @@ type ContinuationContext struct {
 
 // NavigationTargetSessionID returns the authoritative human-navigation target
 // for a session, preferring its immediate previous session over agent ancestry.
-func NavigationTargetSessionID(meta Metadata) *runtimeids.SessionID {
+func NavigationTargetSessionID(meta Meta) *runtimeids.SessionID {
 	source := meta.PreviousSessionID
 	if source == nil {
 		source = meta.ParentAgentSessionID

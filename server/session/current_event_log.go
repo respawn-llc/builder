@@ -23,8 +23,6 @@ type currentEventLog struct {
 	firstEventOffset int64
 	lastSequence     int64
 	mode             currentEventLogMode
-	options          eventLogOptions
-	pendingFsync     int
 }
 
 type currentEventLogAppendTransaction struct {
@@ -41,8 +39,7 @@ type EventRecordWindow struct {
 	ReachedEnd   bool
 }
 
-func createCurrentEventLog(path string, options eventLogOptions) (_ *currentEventLog, resultErr error) {
-	options = normalizeEventLogOptions(options)
+func createCurrentEventLog(path string) (_ *currentEventLog, resultErr error) {
 	header, err := encodeEventLogHeaderV1()
 	if err != nil {
 		return nil, err
@@ -77,14 +74,12 @@ func createCurrentEventLog(path string, options eventLogOptions) (_ *currentEven
 		path:             path,
 		firstEventOffset: int64(len(encoded)),
 		mode:             currentEventLogAuthoritative,
-		options:          options,
 	}, nil
 }
 
 func openCurrentEventLog(
 	path string,
 	mode currentEventLogMode,
-	options eventLogOptions,
 ) (_ *currentEventLog, resultErr error) {
 	switch mode {
 	case currentEventLogAuthoritative, currentEventLogReadOnly:
@@ -132,7 +127,6 @@ func openCurrentEventLog(
 		firstEventOffset: firstEventOffset,
 		lastSequence:     lastSequence,
 		mode:             mode,
-		options:          normalizeEventLogOptions(options),
 	}, nil
 }
 
@@ -247,8 +241,8 @@ func (l *currentEventLog) appendRecordsWithTransaction(
 				return endOffset, err
 			}
 		}
-	} else if err := syncEventLogFile(fp, l.options, &l.pendingFsync); err != nil {
-		return endOffset, err
+	} else if err := fp.Sync(); err != nil {
+		return endOffset, fmt.Errorf("fsync current event log: %w", err)
 	}
 	l.lastSequence = records[len(records)-1].Seq()
 	return endOffset, nil

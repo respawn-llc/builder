@@ -13,7 +13,7 @@ func (e *Engine) markProviderVisibleModelRecovery(stepID string) error {
 	if e == nil || e.store == nil || strings.TrimSpace(stepID) == "" {
 		return nil
 	}
-	if current := e.store.Metadata().PendingModelRecovery; current != nil && strings.TrimSpace(current.StepID) == strings.TrimSpace(stepID) {
+	if current := e.store.Meta().PendingModelRecovery; current != nil && strings.TrimSpace(current.StepID) == strings.TrimSpace(stepID) {
 		return nil
 	}
 	return e.store.SetPendingModelRecovery(session.PendingModelRecovery{

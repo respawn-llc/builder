@@ -154,14 +154,14 @@ func TestBackReopensPreviousSessionAcrossProjects(t *testing.T) {
 
 	childView, err := server.SessionViewClient().GetSessionMainView(
 		context.Background(),
-		serverapi.SessionMainViewRequest{SessionID: child.Metadata().SessionID},
+		serverapi.SessionMainViewRequest{SessionID: child.Meta().SessionID},
 	)
 	if err != nil {
 		t.Fatalf("load child main view: %v", err)
 	}
 	childModel := newProjectedClosedUIModel(&runtimeControlFakeClient{
 		mainView: clientui.RuntimeMainView{Status: childView.MainView.Status, Session: childView.MainView.Session},
-	}, WithUISessionID(child.Metadata().SessionID))
+	}, WithUISessionID(child.Meta().SessionID))
 	childModel.statusConfig.SessionViews = server.SessionViewClient()
 
 	next, lookupCmd := childModel.inputController().handleBackCommand()
@@ -183,11 +183,11 @@ func TestBackReopensPreviousSessionAcrossProjects(t *testing.T) {
 		t.Fatal("/back did not request child UI exit")
 	}
 	transition := childModel.Transition()
-	if transition.TargetSessionID != parent.Metadata().SessionID {
-		t.Fatalf("/back target = %q, want cross-project parent %q", transition.TargetSessionID, parent.Metadata().SessionID)
+	if transition.TargetSessionID != parent.Meta().SessionID {
+		t.Fatalf("/back target = %q, want cross-project parent %q", transition.TargetSessionID, parent.Meta().SessionID)
 	}
 
-	handoff, err := resolveSessionAction(context.Background(), server, nil, child.Metadata().SessionID, transition)
+	handoff, err := resolveSessionAction(context.Background(), server, nil, child.Meta().SessionID, transition)
 	if err != nil {
 		t.Fatalf("resolve /back transition: %v", err)
 	}
@@ -224,8 +224,8 @@ func TestBackReopensPreviousSessionAcrossProjects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("canonicalize parent workspace: %v", err)
 	}
-	if plan.SessionID != parent.Metadata().SessionID || plan.ExecutionTarget.WorkspaceRoot != wantWorkspaceRoot {
-		t.Fatalf("cross-project plan = session %q workspace %q, want %q %q", plan.SessionID, plan.ExecutionTarget.WorkspaceRoot, parent.Metadata().SessionID, wantWorkspaceRoot)
+	if plan.SessionID != parent.Meta().SessionID || plan.ExecutionTarget.WorkspaceRoot != wantWorkspaceRoot {
+		t.Fatalf("cross-project plan = session %q workspace %q, want %q %q", plan.SessionID, plan.ExecutionTarget.WorkspaceRoot, parent.Meta().SessionID, wantWorkspaceRoot)
 	}
 	if plan.ActiveSettings.Model != "embedded-target-model" || plan.Source.Sources["model"] != "file" {
 		t.Fatalf("embedded target plan model/source = %q/%q, want embedded-target-model/file", plan.ActiveSettings.Model, plan.Source.Sources["model"])
@@ -325,7 +325,7 @@ func TestRemoteBackRebindsToParentProjectBeforeRuntimePreparation(t *testing.T) 
 		context.Background(),
 		serverapi.SessionRetargetWorkspaceRequest{
 			ClientRequestID: uuid.NewString(),
-			SessionID:       parent.Metadata().SessionID,
+			SessionID:       parent.Meta().SessionID,
 			WorkspaceRoot:   workspaceB,
 			ProjectID:       &targetProjectID,
 		},
@@ -335,14 +335,14 @@ func TestRemoteBackRebindsToParentProjectBeforeRuntimePreparation(t *testing.T) 
 
 	childView, err := sourceServer.SessionViewClient().GetSessionMainView(
 		context.Background(),
-		serverapi.SessionMainViewRequest{SessionID: child.Metadata().SessionID},
+		serverapi.SessionMainViewRequest{SessionID: child.Meta().SessionID},
 	)
 	if err != nil {
 		t.Fatalf("load child main view: %v", err)
 	}
 	childModel := newProjectedClosedUIModel(&runtimeControlFakeClient{
 		mainView: clientui.RuntimeMainView{Status: childView.MainView.Status, Session: childView.MainView.Session},
-	}, WithUISessionID(child.Metadata().SessionID))
+	}, WithUISessionID(child.Meta().SessionID))
 	childModel.statusConfig.SessionViews = sourceServer.SessionViewClient()
 	next, lookupCmd := childModel.inputController().handleBackCommand()
 	childModel = next.(*uiModel)
@@ -350,7 +350,7 @@ func TestRemoteBackRebindsToParentProjectBeforeRuntimePreparation(t *testing.T) 
 	lookupDone := batch[0]().(latestFinalAnswerDoneMsg)
 	next, _ = childModel.Update(lookupDone)
 	transition := next.(*uiModel).Transition()
-	handoff, err := resolveSessionAction(context.Background(), sourceServer, nil, child.Metadata().SessionID, transition)
+	handoff, err := resolveSessionAction(context.Background(), sourceServer, nil, child.Meta().SessionID, transition)
 	if err != nil {
 		t.Fatalf("resolve /back transition: %v", err)
 	}
@@ -387,7 +387,7 @@ func TestRemoteBackRebindsToParentProjectBeforeRuntimePreparation(t *testing.T) 
 	workspaceChangeAction, err := maybeHandlePickedSessionWorkspaceChange(
 		context.Background(),
 		targetServer,
-		parent.Metadata().SessionID,
+		parent.Meta().SessionID,
 		clientui.SessionExecutionTarget{
 			WorkspaceRoot:         workspaceB,
 			WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
@@ -487,7 +487,7 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 				context.Background(),
 				serverapi.SessionPersistInputDraftRequest{
 					ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-					SessionID:       parent.Metadata().SessionID,
+					SessionID:       parent.Meta().SessionID,
 					Input:           "conflicting parent draft",
 					RecoveryBuffers: []serverapi.SessionDraftRecoveryBuffer{
 						{
@@ -507,7 +507,7 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 
 			childView, err := server.SessionViewClient().GetSessionMainView(
 				context.Background(),
-				serverapi.SessionMainViewRequest{SessionID: child.Metadata().SessionID},
+				serverapi.SessionMainViewRequest{SessionID: child.Meta().SessionID},
 			)
 			if err != nil {
 				t.Fatalf("load child main view: %v", err)
@@ -518,7 +518,7 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 					Session: childView.MainView.Session,
 				},
 			}
-			childModel := newProjectedClosedUIModel(childRuntime, WithUISessionID(child.Metadata().SessionID))
+			childModel := newProjectedClosedUIModel(childRuntime, WithUISessionID(child.Meta().SessionID))
 			childModel.statusConfig.SessionViews = server.SessionViewClient()
 
 			next, lookupCmd := childModel.inputController().handleBackCommand()
@@ -542,7 +542,7 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 				t.Fatal("successful /back lookup did not request child UI exit")
 			}
 			transition := childModel.Transition()
-			if transition.Action != UIActionOpenSession || transition.TargetSessionID != parent.Metadata().SessionID {
+			if transition.Action != UIActionOpenSession || transition.TargetSessionID != parent.Meta().SessionID {
 				t.Fatalf("/back transition = %+v, want open parent", transition)
 			}
 			wantInput := ""
@@ -558,7 +558,7 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 				context.Background(),
 				server,
 				nil,
-				child.Metadata().SessionID,
+				child.Meta().SessionID,
 				transition,
 				&runtimeLaunchPlan{close: func() error {
 					originReleased = true
@@ -573,14 +573,14 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 				t.Fatal("child runtime was not released before parent launch")
 			}
 			resolvedParentSessionID := requireSessionOpenDestination(t, handoff)
-			if resolvedParentSessionID != parent.Metadata().SessionID {
+			if resolvedParentSessionID != parent.Meta().SessionID {
 				t.Fatalf("resolved handoff = %+v, want parent", handoff)
 			}
 
 			planner := newSessionLaunchPlanner(server)
 			parentPlan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{
 				Mode:   launchModeInteractive,
-				Intent: serverapi.OpenExistingSessionLaunchIntent(sessionLifecycleSessionIDForTest(t, parent.Metadata().SessionID)),
+				Intent: serverapi.OpenExistingSessionLaunchIntent(sessionLifecycleSessionIDForTest(t, parent.Meta().SessionID)),
 			})
 			if err != nil {
 				t.Fatalf("plan parent session: %v", err)

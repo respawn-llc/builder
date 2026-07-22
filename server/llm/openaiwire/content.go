@@ -2,6 +2,7 @@ package openaiwire
 
 import (
 	"encoding/json"
+	"strings"
 )
 
 type InputContent struct {
@@ -19,62 +20,37 @@ func InputContentItems(raw json.RawMessage) ([]InputContent, bool) {
 	if len(raw) == 0 {
 		return nil, false
 	}
-	items := make([]InputContent, 0)
-	err := scanInputContentSource(
-		bytesJSONSource{value: raw},
-		heapScratchAllocator{},
-		func(reader JSONSourceReader, item canonicalInputContentItem) error {
-			if item.kind == "" {
-				return &ValidationError{Kind: ValidationInvalidOutput}
-			}
-			materialized, err := materializeInputContentItem(reader, item)
-			if err != nil {
-				return err
-			}
-			items = append(items, materialized)
-			return nil
-		},
-	)
-	if err != nil || len(items) == 0 {
+	var items []InputContent
+	if err := json.Unmarshal(raw, &items); err != nil || len(items) == 0 {
 		return nil, false
 	}
-	return items, true
-}
-
-func materializeInputContentItem(
-	reader JSONSourceReader,
-	item canonicalInputContentItem,
-) (InputContent, error) {
-	value := func(slot int) (string, error) {
-		if item.materialized {
-			return item.materializedValues[slot], nil
+	for index := range items {
+		item := &items[index]
+		item.Type = strings.ToLower(strings.TrimSpace(item.Type))
+		switch item.Type {
+		case "input_text":
+		case "input_image":
+			item.ImageURL = strings.TrimSpace(item.ImageURL)
+			if item.ImageURL == "" {
+				return nil, false
+			}
+			item.Detail = strings.ToLower(strings.TrimSpace(item.Detail))
+			switch item.Detail {
+			case "low", "high", "auto":
+			default:
+				item.Detail = ""
+			}
+		case "input_file":
+			item.FileID = strings.TrimSpace(item.FileID)
+			item.FileData = strings.TrimSpace(item.FileData)
+			item.FileURL = strings.TrimSpace(item.FileURL)
+			item.Filename = strings.TrimSpace(item.Filename)
+			if item.FileID == "" && item.FileData == "" && item.FileURL == "" {
+				return nil, false
+			}
+		default:
+			return nil, false
 		}
-		return materializeJSONStringWindow(
-			reader,
-			item.values[slot],
-			item.windows[slot],
-			0,
-		)
 	}
-	result := InputContent{Type: item.kind, Detail: item.detail}
-	var err error
-	if result.Text, err = value(inputContentTextSlot); err != nil {
-		return InputContent{}, err
-	}
-	if result.ImageURL, err = value(inputContentImageURLSlot); err != nil {
-		return InputContent{}, err
-	}
-	if result.FileID, err = value(inputContentFileIDSlot); err != nil {
-		return InputContent{}, err
-	}
-	if result.FileData, err = value(inputContentFileDataSlot); err != nil {
-		return InputContent{}, err
-	}
-	if result.FileURL, err = value(inputContentFileURLSlot); err != nil {
-		return InputContent{}, err
-	}
-	if result.Filename, err = value(inputContentFilenameSlot); err != nil {
-		return InputContent{}, err
-	}
-	return result, nil
+	return items, true
 }

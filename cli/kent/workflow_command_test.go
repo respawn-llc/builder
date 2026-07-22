@@ -1027,7 +1027,7 @@ func createWorkflowCommandTestSession(t *testing.T, cfg config.App, binding meta
 	if err := store.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable: %v", err)
 	}
-	return store.Metadata().SessionID
+	return store.Meta().SessionID
 }
 
 func replaceWorkflowCommandRemoteOpener(t *testing.T, cfg config.App, remote workflowCommandRemote) func() {

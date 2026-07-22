@@ -99,7 +99,7 @@ func TestSessionTransitionRollbackLaunchesCreatedFork(t *testing.T) {
 	service := newTestSessionLifecycleService(containerDir, nil)
 	result, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: "rollback-result",
-		SessionID:       store.Metadata().SessionID,
+		SessionID:       store.Meta().SessionID,
 		Transition: serverapi.SessionTransition{
 			Action:                       serverapi.SessionTransitionActionForkRollback,
 			InitialPrompt:                "edited prompt",
@@ -118,7 +118,7 @@ func TestSessionTransitionRollbackLaunchesCreatedFork(t *testing.T) {
 	if !ok {
 		t.Fatal("rollback launch omitted fork session ID")
 	}
-	if forkID.String() == store.Metadata().SessionID {
+	if forkID.String() == store.Meta().SessionID {
 		t.Fatal("rollback launch targeted the parent")
 	}
 	if _, err := session.Open(filepath.Join(containerDir, forkID.String()), sessionServiceTestPersistence.Options()...); err != nil {

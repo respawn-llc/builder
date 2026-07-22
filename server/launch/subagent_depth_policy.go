@@ -15,7 +15,7 @@ type parentAgentDepthPolicy struct {
 	sessions session.PersistedSessionResolver
 }
 
-func (p parentAgentDepthPolicy) enforce(ctx context.Context, immediate session.Metadata, maxDepth int, debug bool) error {
+func (p parentAgentDepthPolicy) enforce(ctx context.Context, immediate session.Meta, maxDepth int, debug bool) error {
 	if p.sessions == nil {
 		return errors.New("persisted session resolver is required")
 	}
@@ -65,7 +65,7 @@ func (p parentAgentDepthPolicy) enforce(ctx context.Context, immediate session.M
 		if resolvedID != ancestorID {
 			return fmt.Errorf("persisted parent-agent session id mismatch: requested %q, resolved %q", ancestorID, resolvedID)
 		}
-		current = session.Metadata{
+		current = session.Meta{
 			SessionID:            record.Meta.SessionID,
 			ParentAgentSessionID: record.Meta.ParentAgentSessionID,
 		}

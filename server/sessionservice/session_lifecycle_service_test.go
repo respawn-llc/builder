@@ -170,7 +170,7 @@ func TestServiceGetInitialInputPrefersStoredDraft(t *testing.T) {
 
 	service := newTestSessionLifecycleService(containerDir, nil)
 	resp, err := service.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{
-		SessionID:       store.Metadata().SessionID,
+		SessionID:       store.Meta().SessionID,
 		TransitionInput: "transition input",
 	})
 	if err != nil {
@@ -205,7 +205,7 @@ func TestServiceGetInitialInputOverrideReturnsOnlyExactTransitionInput(t *testin
 			service := newTestSessionLifecycleService(containerDir, nil)
 			_, err := service.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
 				ClientRequestID: "persist-parent-draft",
-				SessionID:       store.Metadata().SessionID,
+				SessionID:       store.Meta().SessionID,
 				Input:           "conflicting parent draft",
 				RecoveryBuffers: []serverapi.SessionDraftRecoveryBuffer{
 					{
@@ -223,7 +223,7 @@ func TestServiceGetInitialInputOverrideReturnsOnlyExactTransitionInput(t *testin
 			}
 
 			resp, err := service.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{
-				SessionID:           store.Metadata().SessionID,
+				SessionID:           store.Meta().SessionID,
 				TransitionInput:     tt.transitionInput,
 				OverrideStoredDraft: true,
 			})
@@ -272,7 +272,7 @@ func TestServicePersistInputDraftWritesBySessionID(t *testing.T) {
 	service := newTestSessionLifecycleService(containerDir, nil)
 	if _, err := service.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
 		ClientRequestID: "req-1",
-		SessionID:       store.Metadata().SessionID,
+		SessionID:       store.Meta().SessionID,
 		Input:           "saved by service",
 	}); err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
@@ -282,8 +282,8 @@ func TestServicePersistInputDraftWritesBySessionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen session store: %v", err)
 	}
-	if reopened.Metadata().InputDraft != "saved by service" {
-		t.Fatalf("input draft = %q, want %q", reopened.Metadata().InputDraft, "saved by service")
+	if reopened.Meta().InputDraft != "saved by service" {
+		t.Fatalf("input draft = %q, want %q", reopened.Meta().InputDraft, "saved by service")
 	}
 }
 
@@ -299,14 +299,14 @@ func TestServicePersistInputDraftRoundTripsStructuredRecoveryBuffers(t *testing.
 	}}
 	if _, err := service.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
 		ClientRequestID: "draft-recovery-1",
-		SessionID:       store.Metadata().SessionID,
+		SessionID:       store.Meta().SessionID,
 		Input:           "visible draft",
 		RecoveryBuffers: recovery,
 	}); err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
 	}
 
-	resp, err := service.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{SessionID: store.Metadata().SessionID})
+	resp, err := service.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("GetInitialInput: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestServiceRestoresLegacyDraftRecoveryAndOrdinaryWriteDropsIdentity(t *test
 		"UPDATE sessions SET input_draft = ?, metadata_json = ? WHERE id = ?",
 		"visible draft",
 		string(legacyMetadata),
-		sess.Metadata().SessionID,
+		sess.Meta().SessionID,
 	); err != nil {
 		t.Fatalf("seed legacy metadata: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestServiceRestoresLegacyDraftRecoveryAndOrdinaryWriteDropsIdentity(t *test
 		metadataStore.AuthoritativeSessionStoreOptions(),
 	)
 	resp, err := service.GetInitialInput(t.Context(), serverapi.SessionInitialInputRequest{
-		SessionID: sess.Metadata().SessionID,
+		SessionID: sess.Meta().SessionID,
 	})
 	if err != nil {
 		t.Fatalf("GetInitialInput: %v", err)
@@ -382,7 +382,7 @@ func TestServiceRestoresLegacyDraftRecoveryAndOrdinaryWriteDropsIdentity(t *test
 
 	reopened, err := session.OpenByID(
 		cfg.PersistenceRoot,
-		sess.Metadata().SessionID,
+		sess.Meta().SessionID,
 		metadataStore.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
@@ -395,7 +395,7 @@ func TestServiceRestoresLegacyDraftRecoveryAndOrdinaryWriteDropsIdentity(t *test
 	if err := metadataStore.DB().QueryRowContext(
 		t.Context(),
 		"SELECT metadata_json FROM sessions WHERE id = ?",
-		sess.Metadata().SessionID,
+		sess.Meta().SessionID,
 	).Scan(&rewrittenMetadata); err != nil {
 		t.Fatalf("read rewritten metadata: %v", err)
 	}
@@ -420,7 +420,7 @@ func TestServiceGetInitialInputLegacyDraftHasNoRecoveryBuffers(t *testing.T) {
 		t.Fatalf("set input draft: %v", err)
 	}
 	service := newTestSessionLifecycleService(containerDir, nil)
-	resp, err := service.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{SessionID: store.Metadata().SessionID})
+	resp, err := service.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("GetInitialInput: %v", err)
 	}
@@ -484,7 +484,7 @@ func TestServicePersistInputDraftPersistsAndDedupes(t *testing.T) {
 	service := newTestSessionLifecycleService(containerDir, nil)
 	req := serverapi.SessionPersistInputDraftRequest{
 		ClientRequestID: "req-1",
-		SessionID:       store.Metadata().SessionID,
+		SessionID:       store.Meta().SessionID,
 		Input:           "saved by service",
 	}
 
@@ -498,8 +498,8 @@ func TestServicePersistInputDraftPersistsAndDedupes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen session store: %v", err)
 	}
-	if reopened.Metadata().InputDraft != "saved by service" {
-		t.Fatalf("input draft = %q, want %q", reopened.Metadata().InputDraft, "saved by service")
+	if reopened.Meta().InputDraft != "saved by service" {
+		t.Fatalf("input draft = %q, want %q", reopened.Meta().InputDraft, "saved by service")
 	}
 }
 
@@ -511,7 +511,7 @@ func TestServicePersistInputDraftRejectsClientRequestIDPayloadMismatch(t *testin
 	service := newTestSessionLifecycleService(containerDir, nil)
 	first := serverapi.SessionPersistInputDraftRequest{
 		ClientRequestID: "req-1",
-		SessionID:       store.Metadata().SessionID,
+		SessionID:       store.Meta().SessionID,
 		Input:           "saved by service",
 	}
 
@@ -527,8 +527,8 @@ func TestServicePersistInputDraftRejectsClientRequestIDPayloadMismatch(t *testin
 	if err != nil {
 		t.Fatalf("reopen session store: %v", err)
 	}
-	if reopened.Metadata().InputDraft != "saved by service" {
-		t.Fatalf("input draft = %q, want %q", reopened.Metadata().InputDraft, "saved by service")
+	if reopened.Meta().InputDraft != "saved by service" {
+		t.Fatalf("input draft = %q, want %q", reopened.Meta().InputDraft, "saved by service")
 	}
 }
 
@@ -597,10 +597,10 @@ func TestServiceResolveTransitionOpenSessionAuthorizesProvenanceTargetAndReturns
 
 	response, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: "authorized-navigation",
-		SessionID:       child.Metadata().SessionID,
+		SessionID:       child.Meta().SessionID,
 		Transition: serverapi.SessionTransition{
 			Action:          serverapi.SessionTransitionActionOpenSession,
-			TargetSessionID: parent.Metadata().SessionID,
+			TargetSessionID: parent.Meta().SessionID,
 			InitialInput:    "draft reply",
 		},
 	})
@@ -609,14 +609,14 @@ func TestServiceResolveTransitionOpenSessionAuthorizesProvenanceTargetAndReturns
 	}
 	intent, preparation := requireSessionLifecycleLaunch(t, response)
 	targetID, present := intent.SessionID()
-	if !present || targetID.String() != parent.Metadata().SessionID {
-		t.Fatalf("navigation target = %q/%t, want %q", targetID.String(), present, parent.Metadata().SessionID)
+	if !present || targetID.String() != parent.Meta().SessionID {
+		t.Fatalf("navigation target = %q/%t, want %q", targetID.String(), present, parent.Meta().SessionID)
 	}
 	binding, present := preparation.NavigationBinding()
 	if !present || binding.ProjectID != "project-target" || binding.WorkspaceID != "workspace-target" {
 		t.Fatalf("navigation binding = %+v/%t", binding, present)
 	}
-	if len(resolver.calls) != 1 || resolver.calls[0] != parent.Metadata().SessionID {
+	if len(resolver.calls) != 1 || resolver.calls[0] != parent.Meta().SessionID {
 		t.Fatalf("target resolver calls = %#v, want parent once", resolver.calls)
 	}
 }
@@ -644,7 +644,7 @@ func TestServiceResolveTransitionOpenSessionRejectsNonProvenanceTargetBeforeReso
 
 	_, err = service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: "unauthorized-navigation",
-		SessionID:       child.Metadata().SessionID,
+		SessionID:       child.Meta().SessionID,
 		Transition: serverapi.SessionTransition{
 			Action:          serverapi.SessionTransitionActionOpenSession,
 			TargetSessionID: "arbitrary-session",
@@ -668,7 +668,7 @@ func TestServiceResolveTransitionForkRollbackCreatesFork(t *testing.T) {
 	service := newTestSessionLifecycleService(containerDir, nil)
 	resp, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: "req-1",
-		SessionID:       store.Metadata().SessionID,
+		SessionID:       store.Meta().SessionID,
 		Transition: serverapi.SessionTransition{
 			Action:               "fork_rollback",
 			InitialPrompt:        "edited prompt",
@@ -680,7 +680,7 @@ func TestServiceResolveTransitionForkRollbackCreatesFork(t *testing.T) {
 	}
 	intent, preparation := requireSessionLifecycleLaunch(t, resp)
 	forkID, ok := intent.SessionID()
-	if !ok || forkID.String() == store.Metadata().SessionID {
+	if !ok || forkID.String() == store.Meta().SessionID {
 		t.Fatalf("unexpected fork session id %q/%v", forkID.String(), ok)
 	}
 	prompt, ok := preparation.InitialPrompt()
@@ -702,7 +702,7 @@ func TestServiceResolveTransitionForkRollbackUsesTargetToken(t *testing.T) {
 	service := newTestSessionLifecycleService(containerDir, nil)
 	resp, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: "req-1",
-		SessionID:       store.Metadata().SessionID,
+		SessionID:       store.Meta().SessionID,
 		Transition: serverapi.SessionTransition{
 			Action:               "fork_rollback",
 			InitialPrompt:        "edited prompt",
@@ -748,14 +748,14 @@ func TestServiceResolveTransitionForkRollbackPreservesExecutionTarget(t *testing
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	if err := metadataStore.UpdateSessionExecutionTarget(context.Background(), metadata.SessionExecutionTargetUpdate{SessionID: sess.Metadata().SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "wt-1"}, CwdRelpath: "pkg"}); err != nil {
+	if err := metadataStore.UpdateSessionExecutionTarget(context.Background(), metadata.SessionExecutionTargetUpdate{SessionID: sess.Meta().SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "wt-1"}, CwdRelpath: "pkg"}); err != nil {
 		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
 	}
 
 	service := newGlobalSessionLifecycleServiceWithOptions(cfg.PersistenceRoot, nil, metadataStore.AuthoritativeSessionStoreOptions())
 	resp, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: "req-1",
-		SessionID:       sess.Metadata().SessionID,
+		SessionID:       sess.Meta().SessionID,
 		Transition: serverapi.SessionTransition{
 			Action:               "fork_rollback",
 			InitialPrompt:        "edited prompt",
@@ -815,14 +815,14 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	if err := metadataStore.UpdateSessionExecutionTarget(context.Background(), metadata.SessionExecutionTargetUpdate{SessionID: sess.Metadata().SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "wt-1"}, CwdRelpath: "pkg"}); err != nil {
+	if err := metadataStore.UpdateSessionExecutionTarget(context.Background(), metadata.SessionExecutionTargetUpdate{SessionID: sess.Meta().SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "wt-1"}, CwdRelpath: "pkg"}); err != nil {
 		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
 	}
 
 	lifecycle := newGlobalSessionLifecycleServiceWithOptions(cfg.PersistenceRoot, nil, metadataStore.AuthoritativeSessionStoreOptions())
 	resolved, err := lifecycle.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: "req-1",
-		SessionID:       sess.Metadata().SessionID,
+		SessionID:       sess.Meta().SessionID,
 		Transition: serverapi.SessionTransition{
 			Action:               "fork_rollback",
 			InitialPrompt:        "edited prompt",
@@ -899,7 +899,7 @@ func TestServiceResolveTransitionForkRollbackRejectsInvalidTargetToken(t *testin
 	service := newTestSessionLifecycleService(containerDir, nil)
 	_, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
 		ClientRequestID: "req-1",
-		SessionID:       store.Metadata().SessionID,
+		SessionID:       store.Meta().SessionID,
 		Transition: serverapi.SessionTransition{
 			Action:               "fork_rollback",
 			ForkRollbackTargetID: "not-valid",
@@ -932,7 +932,7 @@ func TestServiceGetInitialInputRejectsSessionOutsideContainer(t *testing.T) {
 	}
 
 	service := newTestSessionLifecycleService(containerA, nil)
-	_, err = service.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{SessionID: store.Metadata().SessionID})
+	_, err = service.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{SessionID: store.Meta().SessionID})
 	if err == nil {
 		t.Fatal("expected foreign session lookup rejection")
 	}
@@ -965,7 +965,7 @@ func TestServicePersistInputDraftRejectsSessionOutsideContainer(t *testing.T) {
 	service := newTestSessionLifecycleService(containerA, nil)
 	_, err = service.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
 		ClientRequestID: "req-1",
-		SessionID:       store.Metadata().SessionID,
+		SessionID:       store.Meta().SessionID,
 		Input:           "should fail",
 	})
 	if err == nil {

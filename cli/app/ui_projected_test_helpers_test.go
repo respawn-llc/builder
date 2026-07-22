@@ -156,7 +156,7 @@ func newProjectedAuthorityRuntime(
 	if store == nil || persistence == nil {
 		t.Fatal("projected Authority runtime requires a durable session fixture")
 	}
-	sessionID, err := runtimeids.ParseSessionID(store.Metadata().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
@@ -173,7 +173,7 @@ func newProjectedAuthorityRuntime(
 	}
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: settings,
-		Workdir:  store.Metadata().WorkspaceRoot,
+		Workdir:  store.Meta().WorkspaceRoot,
 		Client:   client,
 	})
 	if err != nil {

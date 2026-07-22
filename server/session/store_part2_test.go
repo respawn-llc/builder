@@ -1,7 +1,6 @@
 package session
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -34,7 +33,7 @@ func TestOpenAcceptsLegacySessionWithoutCategory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open legacy session: %v", err)
 	}
-	if got := store.Metadata().Category; got != nil {
+	if got := store.Meta().Category; got != nil {
 		t.Fatalf("legacy category = %v, want absent", got)
 	}
 }
@@ -82,16 +81,16 @@ func TestOpenByIDUsesPersistedSessionResolver(t *testing.T) {
 		t.Fatalf("set continuation context: %v", err)
 	}
 
-	opened, err := OpenByID(root, target.Metadata().SessionID, WithPersistedSessionResolver(stubPersistedSessionResolver{record: PersistedSessionRecord{
+	opened, err := OpenByID(root, target.Meta().SessionID, WithPersistedSessionResolver(stubPersistedSessionResolver{record: PersistedSessionRecord{
 		SessionDir: target.Dir(),
 		Meta:       ptrMeta(target.metaSnapshot().meta),
 	}}))
 	if err != nil {
 		t.Fatalf("open by id: %v", err)
 	}
-	meta := opened.Metadata()
-	if meta.SessionID != target.Metadata().SessionID {
-		t.Fatalf("expected session id %q, got %q", target.Metadata().SessionID, meta.SessionID)
+	meta := opened.Meta()
+	if meta.SessionID != target.Meta().SessionID {
+		t.Fatalf("expected session id %q, got %q", target.Meta().SessionID, meta.SessionID)
 	}
 	if meta.WorkspaceRoot != "/tmp/work-b" {
 		t.Fatalf("expected workspace root from target session, got %q", meta.WorkspaceRoot)
@@ -121,10 +120,10 @@ func TestSetWorkspaceRootPreservesWorkspaceContainer(t *testing.T) {
 	if err := store.SetWorkspaceRoot("/tmp/work-b"); err != nil {
 		t.Fatalf("SetWorkspaceRoot: %v", err)
 	}
-	if got := store.Metadata().WorkspaceContainer; got != "workspace-container" {
+	if got := store.Meta().WorkspaceContainer; got != "workspace-container" {
 		t.Fatalf("workspace container = %q, want workspace-container", got)
 	}
-	if got := store.Metadata().WorkspaceRoot; got != "/tmp/work-b" {
+	if got := store.Meta().WorkspaceRoot; got != "/tmp/work-b" {
 		t.Fatalf("workspace root = %q, want /tmp/work-b", got)
 	}
 
@@ -132,10 +131,10 @@ func TestSetWorkspaceRootPreservesWorkspaceContainer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	if got := reopened.Metadata().WorkspaceContainer; got != "workspace-container" {
+	if got := reopened.Meta().WorkspaceContainer; got != "workspace-container" {
 		t.Fatalf("persisted workspace container = %q, want workspace-container", got)
 	}
-	if got := reopened.Metadata().WorkspaceRoot; got != "/tmp/work-b" {
+	if got := reopened.Meta().WorkspaceRoot; got != "/tmp/work-b" {
 		t.Fatalf("persisted workspace root = %q, want /tmp/work-b", got)
 	}
 }
@@ -152,7 +151,7 @@ func TestRunArtifactRelocationUpdatesPathsAndWorkspaceAfterCallback(t *testing.T
 	log := mustMaterializeSessionTestEventLog(t, store)
 	oldDir := store.Dir()
 	targetContainer := t.TempDir()
-	targetDir := filepath.Join(targetContainer, store.Metadata().SessionID)
+	targetDir := filepath.Join(targetContainer, store.Meta().SessionID)
 
 	err = store.RunArtifactRelocation(ArtifactRelocationTarget{
 		SessionDir:         targetDir,
@@ -191,7 +190,7 @@ func TestRunArtifactRelocationRejectsZeroCommitTimeBeforeCallback(t *testing.T) 
 		t.Fatalf("Create: %v", err)
 	}
 	oldDir := store.Dir()
-	targetDir := filepath.Join(t.TempDir(), store.Metadata().SessionID)
+	targetDir := filepath.Join(t.TempDir(), store.Meta().SessionID)
 	callbackCalled := false
 	err = store.RunArtifactRelocation(ArtifactRelocationTarget{
 		SessionDir:         targetDir,
@@ -207,8 +206,8 @@ func TestRunArtifactRelocationRejectsZeroCommitTimeBeforeCallback(t *testing.T) 
 	if callbackCalled {
 		t.Fatal("RunArtifactRelocation called relocation before validating update time")
 	}
-	if store.Dir() != oldDir || store.Metadata().WorkspaceRoot != "/workspace/source" {
-		t.Fatalf("failed relocation mutated store: dir=%q meta=%+v", store.Dir(), store.Metadata())
+	if store.Dir() != oldDir || store.Meta().WorkspaceRoot != "/workspace/source" {
+		t.Fatalf("failed relocation mutated store: dir=%q meta=%+v", store.Dir(), store.Meta())
 	}
 }
 
@@ -220,7 +219,7 @@ func TestRunArtifactRelocationDoesNotMutateStoreWhenCallbackFails(t *testing.T) 
 	oldDir := store.Dir()
 	callbackErr := errors.New("relocation failed")
 	err = store.RunArtifactRelocation(ArtifactRelocationTarget{
-		SessionDir:         filepath.Join(t.TempDir(), store.Metadata().SessionID),
+		SessionDir:         filepath.Join(t.TempDir(), store.Meta().SessionID),
 		WorkspaceRoot:      "/workspace/target",
 		WorkspaceContainer: "target",
 		UpdatedAt:          time.Now().UTC(),
@@ -230,8 +229,8 @@ func TestRunArtifactRelocationDoesNotMutateStoreWhenCallbackFails(t *testing.T) 
 	if !errors.Is(err, callbackErr) {
 		t.Fatalf("RunArtifactRelocation error = %v, want %v", err, callbackErr)
 	}
-	if store.Dir() != oldDir || store.Metadata().WorkspaceRoot != "/workspace/source" {
-		t.Fatalf("failed relocation mutated store: dir=%q meta=%+v", store.Dir(), store.Metadata())
+	if store.Dir() != oldDir || store.Meta().WorkspaceRoot != "/workspace/source" {
+		t.Fatalf("failed relocation mutated store: dir=%q meta=%+v", store.Dir(), store.Meta())
 	}
 }
 
@@ -360,42 +359,8 @@ func TestMaterializeMissingEventsFileWithoutObserverLeavesCurrentPendingRepair(t
 	if _, openErr := openCurrentEventLog(
 		filepath.Join(sessionDir, eventsFile),
 		currentEventLogReadOnly,
-		eventLogOptions{},
 	); openErr != nil {
 		t.Fatalf("committed current event log unavailable: %v", openErr)
-	}
-}
-
-func TestFilelessEventUseMissingEventsFileFailsWithoutCreatingArtifact(t *testing.T) {
-	root := t.TempDir()
-	sessionDir := filepath.Join(root, "session-without-events")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatalf("mkdir session dir: %v", err)
-	}
-	meta := Meta{
-		SessionID:          "session-without-events",
-		WorkspaceRoot:      "/tmp/work",
-		WorkspaceContainer: "workspace-x",
-		CreatedAt:          time.Now().UTC(),
-		UpdatedAt:          time.Now().UTC(),
-	}
-
-	opened, err := Open(
-		sessionDir,
-		WithPersistedSessionResolver(stubPersistedSessionResolver{record: PersistedSessionRecord{
-			SessionDir: sessionDir,
-			Meta:       &meta,
-		}}),
-		WithFilelessEventPersistence(),
-	)
-	if err != nil {
-		t.Fatalf("metadata-only fileless open: %v", err)
-	}
-	if _, _, err := opened.MaterializeFilelessEventLog(context.Background()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("fileless event use error = %v, want missing events artifact", err)
-	}
-	if _, statErr := os.Stat(filepath.Join(sessionDir, eventsFile)); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("events artifact exists after fileless open: %v", statErr)
 	}
 }
 

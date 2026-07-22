@@ -622,7 +622,7 @@ func TestLocksAtFirstDispatch(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 
-	meta := store.Metadata()
+	meta := store.Meta()
 	if meta.Locked == nil {
 		t.Fatalf("expected locked contract after first dispatch")
 	}
@@ -669,7 +669,7 @@ func TestHeadlessSessionLocksToolPreamblesOff(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 
-	meta := store.Metadata()
+	meta := store.Meta()
 	if meta.Locked == nil {
 		t.Fatalf("expected locked contract after first dispatch")
 	}
@@ -693,8 +693,8 @@ func TestLockedToolPreamblesPersistAcrossResume(t *testing.T) {
 	if _, err := firstEngine.SubmitUserMessage(context.Background(), "first"); err != nil {
 		t.Fatalf("submit first: %v", err)
 	}
-	if store.Metadata().Locked == nil || store.Metadata().Locked.ToolPreambles == nil || *store.Metadata().Locked.ToolPreambles {
-		t.Fatalf("expected first session to lock tool_preambles=false, got %+v", store.Metadata().Locked)
+	if store.Meta().Locked == nil || store.Meta().Locked.ToolPreambles == nil || *store.Meta().Locked.ToolPreambles {
+		t.Fatalf("expected first session to lock tool_preambles=false, got %+v", store.Meta().Locked)
 	}
 
 	resumedClient := &fakeClient{responses: []llm.Response{{
@@ -709,8 +709,8 @@ func TestLockedToolPreamblesPersistAcrossResume(t *testing.T) {
 	if _, err := resumedEngine.SubmitUserMessage(context.Background(), "second"); err != nil {
 		t.Fatalf("submit second: %v", err)
 	}
-	if store.Metadata().Locked == nil || store.Metadata().Locked.ToolPreambles == nil || *store.Metadata().Locked.ToolPreambles {
-		t.Fatalf("expected resumed session to preserve locked tool_preambles=false, got %+v", store.Metadata().Locked)
+	if store.Meta().Locked == nil || store.Meta().Locked.ToolPreambles == nil || *store.Meta().Locked.ToolPreambles {
+		t.Fatalf("expected resumed session to preserve locked tool_preambles=false, got %+v", store.Meta().Locked)
 	}
 }
 
@@ -729,7 +729,7 @@ func TestLockedContextWindowKeepsSystemPromptToolCallEstimateStableAcrossResume(
 	if _, err := firstEngine.SubmitUserMessage(context.Background(), "first"); err != nil {
 		t.Fatalf("submit first: %v", err)
 	}
-	locked := store.Metadata().Locked
+	locked := store.Meta().Locked
 	if locked == nil || locked.ContextWindow != 272_000 || locked.ContextPercent != 95 {
 		t.Fatalf("expected locked context budget, got %+v", locked)
 	}
@@ -763,11 +763,11 @@ func TestLockedContextWindowKeepsSystemPromptToolCallEstimateStableAcrossResume(
 	if resumedClient.calls[0].PromptCacheKey != firstPromptCacheKey {
 		t.Fatalf("expected resumed prompt cache key = %q, got %q", firstPromptCacheKey, resumedClient.calls[0].PromptCacheKey)
 	}
-	if got := resumedEngine.estimatedToolCallsForLockedContext(*store.Metadata().Locked); got != 185 {
+	if got := resumedEngine.estimatedToolCallsForLockedContext(*store.Meta().Locked); got != 185 {
 		t.Fatalf("resumed estimated tool calls = %d, want 185", got)
 	}
 
-	alteredLocked := *store.Metadata().Locked
+	alteredLocked := *store.Meta().Locked
 	alteredLocked.ContextWindow = 400_000
 	if got := resumedEngine.estimatedToolCallsForLockedContext(alteredLocked); got != 271 {
 		t.Fatalf("altered estimated tool calls = %d, want 271", got)
@@ -844,7 +844,7 @@ func TestSystemPromptSnapshotUsesLocalFileAndSurvivesMidSessionFileChanges(t *te
 	if got := reopenedClient.calls[0].PromptCacheKey; got != firstCacheKey {
 		t.Fatalf("prompt cache key changed after SYSTEM.md edit: got %q want %q", got, firstCacheKey)
 	}
-	if got := reopened.Metadata().Locked.SystemPrompt; got != firstPrompt {
+	if got := reopened.Meta().Locked.SystemPrompt; got != firstPrompt {
 		t.Fatalf("locked system prompt mismatch\ngot: %q\nwant: %q", got, firstPrompt)
 	}
 }
@@ -904,7 +904,7 @@ func TestSystemPromptSnapshotRefreshesAfterCompaction(t *testing.T) {
 	if got := client.calls[3].PromptCacheKey; got == "" || got == firstCacheKey {
 		t.Fatalf("post-compaction cache key = %q, want rotated from %q", got, firstCacheKey)
 	}
-	if locked := store.Metadata().Locked; locked == nil || !locked.HasSystemPrompt || locked.SystemPrompt != "prompt B" {
+	if locked := store.Meta().Locked; locked == nil || !locked.HasSystemPrompt || locked.SystemPrompt != "prompt B" {
 		t.Fatalf("locked prompt after refresh = %+v, want prompt B", locked)
 	}
 }
@@ -938,7 +938,7 @@ func TestSystemPromptRefreshFailureKeepsStaleLockAndRetries(t *testing.T) {
 	if _, err := eng.SubmitUserMessage(context.Background(), "fails"); err == nil {
 		t.Fatal("expected invalid prompt refresh to fail")
 	}
-	if locked := store.Metadata().Locked; locked == nil || locked.HasSystemPrompt || strings.TrimSpace(locked.SystemPrompt) != "" {
+	if locked := store.Meta().Locked; locked == nil || locked.HasSystemPrompt || strings.TrimSpace(locked.SystemPrompt) != "" {
 		t.Fatalf("locked prompt after failed refresh = %+v, want stale cleared lock", locked)
 	}
 	writeTestFile(t, systemPath, "prompt B")
@@ -979,7 +979,7 @@ func TestPendingSystemPromptRefreshRunsAfterReopen(t *testing.T) {
 	if err := eng.CompactContext(context.Background(), ""); err != nil {
 		t.Fatalf("compact: %v", err)
 	}
-	if locked := store.Metadata().Locked; locked == nil || locked.HasSystemPrompt || locked.SystemPrompt != "" {
+	if locked := store.Meta().Locked; locked == nil || locked.HasSystemPrompt || locked.SystemPrompt != "" {
 		t.Fatalf("locked prompt after compaction = %+v, want stale", locked)
 	}
 	if err := eng.Close(); err != nil {

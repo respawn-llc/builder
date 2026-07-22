@@ -76,7 +76,7 @@ func TestLoadRemoteAttachConfigUsesSessionWorkspaceWhenWorkspaceImplicit(t *test
 
 	got, err := loadRemoteAttachConfig(Options{
 		WorkspaceRoot: worktree,
-		SessionID:     store.Metadata().SessionID,
+		SessionID:     store.Meta().SessionID,
 	})
 	if err != nil {
 		t.Fatalf("loadRemoteAttachConfig: %v", err)
@@ -114,7 +114,7 @@ func TestRunPromptFromWorktreeUsesKentSessionWorkspaceContext(t *testing.T) {
 
 	result, err := RunPrompt(context.Background(), Options{
 		WorkspaceRoot:             worktree,
-		WorkspaceContextSessionID: parent.Metadata().SessionID,
+		WorkspaceContextSessionID: parent.Meta().SessionID,
 		Model:                     "gpt-5",
 		OpenAIBaseURL:             fakeResponses.URL,
 		OpenAIBaseURLExplicit:     true,
@@ -125,7 +125,7 @@ func TestRunPromptFromWorktreeUsesKentSessionWorkspaceContext(t *testing.T) {
 	if result.Result != "worktree reply" {
 		t.Fatalf("result = %q, want worktree reply", result.Result)
 	}
-	if result.SessionID == parent.Metadata().SessionID {
+	if result.SessionID == parent.Meta().SessionID {
 		t.Fatal("expected worktree run to create a child run instead of continuing parent session")
 	}
 	if hits.Load() != 1 {

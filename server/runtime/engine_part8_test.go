@@ -186,7 +186,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 		},
 	}}
 	registry := tools.NewRegistry(
-		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(store.Metadata().WorkspaceRoot, 16_000, manager, store.Metadata().SessionID)},
+		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(store.Meta().WorkspaceRoot, 16_000, manager, store.Meta().SessionID)},
 		tools.HandlerRegistration{ID: toolspec.ToolWriteStdin, Handler: shelltool.NewWriteStdinTool(16_000, manager)},
 	)
 	eng := mustNewTestEngine(t, store, client, registry, Config{Model: "gpt-5"})
@@ -214,7 +214,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 				return &out
 			}(),
 			NoticeSuppressed: evt.NoticeSuppressed,
-		}, strings.TrimSpace(evt.Snapshot.OwnerSessionID) == store.Metadata().SessionID && !evt.NoticeSuppressed)
+		}, strings.TrimSpace(evt.Snapshot.OwnerSessionID) == store.Meta().SessionID && !evt.NoticeSuppressed)
 	})
 
 	assistant, err := eng.SubmitUserMessage(context.Background(), "run and wait")
@@ -301,8 +301,8 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 	if openErr != nil {
 		t.Fatalf("re-open session store: %v", openErr)
 	}
-	if reopened.Metadata().PendingModelRecovery != nil {
-		t.Fatalf("committed pending model recovery clear retained retry ownership: %+v", reopened.Metadata().PendingModelRecovery)
+	if reopened.Meta().PendingModelRecovery != nil {
+		t.Fatalf("committed pending model recovery clear retained retry ownership: %+v", reopened.Meta().PendingModelRecovery)
 	}
 }
 
@@ -320,7 +320,7 @@ func TestNewConsumesPendingModelRecoveryOnReopen(t *testing.T) {
 		t.Fatalf("re-open store: %v", err)
 	}
 	restored := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if reopenedStore.Metadata().PendingModelRecovery != nil {
+	if reopenedStore.Meta().PendingModelRecovery != nil {
 		t.Fatal("expected reopen path to clear pending model recovery")
 	}
 	messages := restored.transcriptRuntimeState().SnapshotMessages()
@@ -417,7 +417,7 @@ func TestNewConsumesPendingModelRecoveryWithoutMarkerWhenStepCompleted(t *testin
 		t.Fatalf("re-open store: %v", err)
 	}
 	restored := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	if reopenedStore.Metadata().PendingModelRecovery != nil {
+	if reopenedStore.Meta().PendingModelRecovery != nil {
 		t.Fatal("expected reopen path to clear pending model recovery")
 	}
 	for _, msg := range restored.transcriptRuntimeState().SnapshotMessages() {
@@ -438,7 +438,7 @@ func TestNewDiscardsPendingModelRecoveryWithoutConcreteStep(t *testing.T) {
 		t.Fatalf("re-open store: %v", err)
 	}
 	restored := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	if reopenedStore.Metadata().PendingModelRecovery != nil {
+	if reopenedStore.Meta().PendingModelRecovery != nil {
 		t.Fatal("expected reopen path to clear pending model recovery")
 	}
 	for _, msg := range restored.transcriptRuntimeState().SnapshotMessages() {
@@ -520,7 +520,7 @@ func testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t *testing.T, c
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	restored := mustNewTestEngine(t, reopenedStore, client, tools.NewRegistry(), Config{Model: "gpt-5"})
-	if reopenedStore.Metadata().PendingModelRecovery != nil {
+	if reopenedStore.Meta().PendingModelRecovery != nil {
 		t.Fatal("expected reopen path to clear pending model recovery")
 	}
 

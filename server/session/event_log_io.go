@@ -16,31 +16,6 @@ type eventLogReconciliationObservation struct {
 	version        uint64
 }
 
-func syncEventLogFile(fp *os.File, options eventLogOptions, pendingFsyncWrites *int) error {
-	switch options.fsyncPolicy {
-	case EventLogFSyncNever:
-		return nil
-	case EventLogFSyncAlways:
-		if err := fp.Sync(); err != nil {
-			return fmt.Errorf("fsync events file: %w", err)
-		}
-		*pendingFsyncWrites = 0
-		return nil
-	case EventLogFSyncPeriodic:
-		*pendingFsyncWrites++
-		if *pendingFsyncWrites < options.fsyncIntervalWrites {
-			return nil
-		}
-		if err := fp.Sync(); err != nil {
-			return fmt.Errorf("fsync events file: %w", err)
-		}
-		*pendingFsyncWrites = 0
-		return nil
-	default:
-		return nil
-	}
-}
-
 func writeAll(fp *os.File, payload []byte) (int, error) {
 	offset := 0
 	for offset < len(payload) {

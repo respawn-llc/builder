@@ -78,12 +78,12 @@ func createEmbeddedProjectSession(t *testing.T, server *EmbeddedServer, workspac
 	if err := metadataStore.ImportSessionSnapshot(context.Background(), session.PersistedStoreSnapshot{
 		SessionDir: store.Dir(),
 		Meta: session.Meta{
-			SessionID:          store.Metadata().SessionID,
-			Category:           store.Metadata().Category,
-			WorkspaceRoot:      store.Metadata().WorkspaceRoot,
-			WorkspaceContainer: store.Metadata().WorkspaceContainer,
-			CreatedAt:          store.Metadata().CreatedAt,
-			UpdatedAt:          store.Metadata().UpdatedAt,
+			SessionID:          store.Meta().SessionID,
+			Category:           store.Meta().Category,
+			WorkspaceRoot:      store.Meta().WorkspaceRoot,
+			WorkspaceContainer: store.Meta().WorkspaceContainer,
+			CreatedAt:          store.Meta().CreatedAt,
+			UpdatedAt:          store.Meta().UpdatedAt,
 		},
 	}); err != nil {
 		t.Fatalf("import project session snapshot: %v", err)
@@ -202,8 +202,8 @@ func TestRunPromptClientRunsLoopbackThroughEmbeddedServer(t *testing.T) {
 	}
 
 	store := openEmbeddedSessionByID(t, server, response.SessionID)
-	if store.Metadata().Continuation == nil || store.Metadata().Continuation.OpenAIBaseURL != responseServer.URL {
-		t.Fatalf("unexpected continuation context: %+v", store.Metadata().Continuation)
+	if store.Meta().Continuation == nil || store.Meta().Continuation.OpenAIBaseURL != responseServer.URL {
+		t.Fatalf("unexpected continuation context: %+v", store.Meta().Continuation)
 	}
 	eventLog, err := store.MaterializeEventLog()
 	if err != nil {
@@ -297,7 +297,7 @@ func TestSessionViewClientReadsDormantSessionByIDWithoutMutatingFiles(t *testing
 		t.Fatalf("read events file before: %v", err)
 	}
 
-	resp, err := server.SessionViewClient().GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Metadata().SessionID})
+	resp, err := server.SessionViewClient().GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("get session main view: %v", err)
 	}

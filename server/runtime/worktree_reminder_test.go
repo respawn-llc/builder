@@ -142,7 +142,7 @@ func TestSubmitUserMessageInjectsPendingWorktreeEnterReminder(t *testing.T) {
 	if reminderIdx < 0 {
 		t.Fatalf("expected worktree enter reminder, messages=%+v", messages)
 	}
-	state := store.Metadata().WorktreeReminder
+	state := store.Meta().WorktreeReminder
 	if state == nil || !session.WorktreeReminderStateEqual(*state, target) {
 		t.Fatalf("unexpected persisted reminder state after submit: %+v", state)
 	}
@@ -206,7 +206,7 @@ func TestRunStepLoopMaterializesPendingWorktreeReminder(t *testing.T) {
 	if reminderCount != 1 {
 		t.Fatalf("expected one worktree reminder, got %d messages=%+v", reminderCount, messages)
 	}
-	state := store.Metadata().WorktreeReminder
+	state := store.Meta().WorktreeReminder
 	if state == nil || !session.WorktreeReminderStateEqual(*state, target) {
 		t.Fatalf("unexpected reminder target state: %+v", state)
 	}
@@ -271,7 +271,7 @@ func TestRunStepLoopCountsPendingWorktreeReminderBeforeAutoCompaction(t *testing
 	if !requestHasWorktreeReminder(client.calls[0]) {
 		t.Fatalf("expected post-compaction model request to include worktree reminder, messages=%+v", requestMessages(client.calls[0]))
 	}
-	state := store.Metadata().WorktreeReminder
+	state := store.Meta().WorktreeReminder
 	if state == nil || !session.WorktreeReminderStateEqual(*state, target) {
 		t.Fatalf("unexpected reminder target after compaction: %+v", state)
 	}
@@ -498,7 +498,7 @@ func TestConfirmedSameCWDTargetChangeBypassesLegacyFallback(t *testing.T) {
 	if err := eng.SetWorktreeReminderState(&changedTarget); err != nil {
 		t.Fatalf("set confirmed target change: %v", err)
 	}
-	persistedChangedTarget := store.Metadata().WorktreeReminder
+	persistedChangedTarget := store.Meta().WorktreeReminder
 	if persistedChangedTarget == nil || persistedChangedTarget.ContextID == nil {
 		t.Fatalf("confirmed target change has no context id: %+v", persistedChangedTarget)
 	}

@@ -619,13 +619,13 @@ func TestExclusiveStepLifecycleInterruptPreservesPendingRecoveryUntilTerminalCle
 	if err := lifecycle.Interrupt(); err != nil {
 		t.Fatalf("interrupt: %v", err)
 	}
-	if store.Metadata().PendingModelRecovery != nil {
+	if store.Meta().PendingModelRecovery != nil {
 		t.Fatal("interrupt request created model recovery before provider-visible output")
 	}
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled run, got %v", err)
 	}
-	if store.Metadata().PendingModelRecovery != nil {
+	if store.Meta().PendingModelRecovery != nil {
 		t.Fatal("expected pending recovery to remain cleared after interrupted run exits")
 	}
 
@@ -779,7 +779,7 @@ func TestExclusiveStepLifecycleInterruptSkipsStaleRunCleanup(t *testing.T) {
 	if err := lifecycle.Interrupt(); err != nil {
 		t.Fatalf("interrupt: %v", err)
 	}
-	if store.Metadata().PendingModelRecovery == nil {
+	if store.Meta().PendingModelRecovery == nil {
 		t.Fatal("expected stale interrupt to leave pending recovery intact")
 	}
 	if len(eng.transcriptRuntimeState().SnapshotMessages()) != 0 {
@@ -796,7 +796,7 @@ func TestExclusiveStepLifecycleClearsPendingRecoveryBeforeSchedulingBackground(t
 		engine: eng,
 		background: &stubBackgroundNoticeScheduler{scheduleIfIdle: func() {
 			scheduled = true
-			if store.Metadata().PendingModelRecovery != nil {
+			if store.Meta().PendingModelRecovery != nil {
 				t.Fatal("expected pending recovery to be cleared before scheduling background work")
 			}
 		}},
@@ -806,7 +806,7 @@ func TestExclusiveStepLifecycleClearsPendingRecoveryBeforeSchedulingBackground(t
 		if err := eng.markProviderVisibleModelRecovery(stepID); err != nil {
 			return err
 		}
-		if store.Metadata().PendingModelRecovery == nil {
+		if store.Meta().PendingModelRecovery == nil {
 			t.Fatal("expected pending recovery during exclusive run")
 		}
 		return nil
@@ -834,10 +834,10 @@ func TestExclusiveStepLifecycleDoesNotClearSuccessorPendingRecovery(t *testing.T
 	}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if store.Metadata().PendingModelRecovery == nil {
+	if store.Meta().PendingModelRecovery == nil {
 		t.Fatal("successor pending recovery was cleared by previous step")
 	}
-	if got := store.Metadata().PendingModelRecovery.StepID; got != "successor-step" {
+	if got := store.Meta().PendingModelRecovery.StepID; got != "successor-step" {
 		t.Fatalf("pending recovery step = %q, want successor-step", got)
 	}
 }

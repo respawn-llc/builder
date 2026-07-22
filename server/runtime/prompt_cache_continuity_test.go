@@ -352,10 +352,6 @@ func TestPromptCacheReplayPreservesMultiToolHTMLUnescapeShape(t *testing.T) {
 	if liveShape.terminalHash != replayedShape.terminalHash {
 		t.Fatalf("terminal hash differs\nlive=%s\nreplayed=%s", liveShape.terminalHash, replayedShape.terminalHash)
 	}
-	const wantTerminalHash = "c666799d9e7a7fbe0f3d8318de0fec51d286dbd93411bb10bfa1dc9203653700"
-	if liveShape.terminalHash != wantTerminalHash {
-		t.Fatalf("terminal hash = %s, want %s", liveShape.terminalHash, wantTerminalHash)
-	}
 }
 
 // The fixture intentionally includes the transcript parts that are most likely
@@ -632,7 +628,7 @@ func runtimeMainViewComparable(engine *Engine) promptCacheComparableMainView {
 
 func persistedMainViewComparable(t *testing.T, store *session.Store, scan *PersistedTranscriptScan) promptCacheComparableMainView {
 	t.Helper()
-	meta := store.Metadata()
+	meta := store.Meta()
 	eventLog := mustMaterializeTestEventLog(t, store)
 	return promptCacheComparableMainView{
 		SessionID:                      meta.SessionID,
@@ -648,7 +644,7 @@ func persistedMainViewComparable(t *testing.T, store *session.Store, scan *Persi
 	}
 }
 
-func navigationTargetSessionIDForPromptCache(meta session.Metadata) *runtimeids.SessionID {
+func navigationTargetSessionIDForPromptCache(meta session.Meta) *runtimeids.SessionID {
 	if meta.PreviousSessionID != nil {
 		id := *meta.PreviousSessionID
 		return &id

@@ -652,7 +652,7 @@ func TestSubmitUserMessageViewImageToolFollowsModelCapabilities(t *testing.T) {
 				t.Fatalf("view_image present = %t, want %t; tools=%+v", found, test.wantTool, client.calls[0].Tools)
 			}
 			if test.checkLocked {
-				locked := store.Metadata().Locked
+				locked := store.Meta().Locked
 				if locked == nil || locked.ModelCapabilities.SupportsVisionInputs != test.wantLockedVision {
 					t.Fatalf("locked capabilities = %+v, want vision=%t", locked, test.wantLockedVision)
 				}
@@ -677,7 +677,7 @@ func TestEnsureLocked_DoesNotPersistFallbackProviderContractOnTransientFailure(t
 	if _, err := eng.SubmitUserMessage(context.Background(), "hello"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	locked := store.Metadata().Locked
+	locked := store.Meta().Locked
 	if locked == nil {
 		t.Fatal("expected session to lock")
 	}
@@ -744,7 +744,7 @@ func TestEnsureLocked_PersistsProviderCapabilityOverrideOverTransportMetadata(t 
 	if _, err := eng.SubmitUserMessage(context.Background(), "hello"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	locked := store.Metadata().Locked
+	locked := store.Meta().Locked
 	if locked == nil {
 		t.Fatal("expected session to lock")
 	}

@@ -123,7 +123,7 @@ func TestResolveRunPromptConfigClassifiesValidatedProvenance(t *testing.T) {
 	kentSession, err := ResolveRunPromptConfig(Request{
 		WorkspaceRoot:             workspace,
 		WorkspaceRootExplicit:     true,
-		WorkspaceContextSessionID: store.Metadata().SessionID,
+		WorkspaceContextSessionID: store.Meta().SessionID,
 		LoadOptions:               config.LoadOptions{ConfigRoot: root},
 	})
 	if err != nil {

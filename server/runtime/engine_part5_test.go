@@ -92,7 +92,7 @@ func TestReviewerSystemPromptFileIsLazyLockedAndReused(t *testing.T) {
 	if got := runReviewerPrompt(t, eng).SystemPrompt; got != "custom reviewer prompt" {
 		t.Fatalf("reviewer system prompt = %q, want custom reviewer prompt", got)
 	}
-	if locked := store.Metadata().Locked; locked == nil || !locked.HasReviewerPrompt || locked.ReviewerPrompt != "custom reviewer prompt" {
+	if locked := store.Meta().Locked; locked == nil || !locked.HasReviewerPrompt || locked.ReviewerPrompt != "custom reviewer prompt" {
 		t.Fatalf("locked reviewer prompt = %+v, want custom reviewer prompt snapshot", locked)
 	}
 
@@ -138,7 +138,7 @@ func TestReviewerSystemPromptRefreshesIndependentlyAfterCompaction(t *testing.T)
 	if err := eng.CompactContext(context.Background(), ""); err != nil {
 		t.Fatalf("compact: %v", err)
 	}
-	mainLocked := store.Metadata().Locked
+	mainLocked := store.Meta().Locked
 	if mainLocked == nil || mainLocked.HasSystemPrompt || mainLocked.HasReviewerPrompt {
 		t.Fatalf("locked prompts after compaction = %+v, want both stale", mainLocked)
 	}
@@ -149,7 +149,7 @@ func TestReviewerSystemPromptRefreshesIndependentlyAfterCompaction(t *testing.T)
 	if reviewerReq.SystemPrompt != "reviewer B" {
 		t.Fatalf("reviewer after compaction = %q, want reviewer B", reviewerReq.SystemPrompt)
 	}
-	if locked := store.Metadata().Locked; locked == nil || locked.SystemPrompt != "" || !locked.HasReviewerPrompt || locked.ReviewerPrompt != "reviewer B" {
+	if locked := store.Meta().Locked; locked == nil || locked.SystemPrompt != "" || !locked.HasReviewerPrompt || locked.ReviewerPrompt != "reviewer B" {
 		t.Fatalf("locked prompts after reviewer refresh = %+v", locked)
 	}
 }
@@ -180,7 +180,7 @@ func TestReviewerSystemPromptFileMissingFailsWithoutSnapshot(t *testing.T) {
 	if !errors.Is(err, errReadReviewerSystemPromptFile) {
 		t.Fatalf("expected errReadReviewerSystemPromptFile, got %v", err)
 	}
-	if locked := store.Metadata().Locked; locked == nil || locked.HasReviewerPrompt || locked.ReviewerPrompt != "" {
+	if locked := store.Meta().Locked; locked == nil || locked.HasReviewerPrompt || locked.ReviewerPrompt != "" {
 		t.Fatalf("locked reviewer prompt = %+v, want no reviewer prompt snapshot", locked)
 	}
 }
@@ -198,7 +198,7 @@ func TestReviewerFrequencyOffDoesNotReadSystemPromptFile(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 	assertModelCallCount(t, reviewerClient, 0)
-	if locked := store.Metadata().Locked; locked == nil || locked.HasReviewerPrompt || locked.ReviewerPrompt != "" {
+	if locked := store.Meta().Locked; locked == nil || locked.HasReviewerPrompt || locked.ReviewerPrompt != "" {
 		t.Fatalf("locked reviewer prompt = %+v, want no reviewer prompt snapshot", locked)
 	}
 }

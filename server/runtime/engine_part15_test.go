@@ -338,7 +338,7 @@ func TestReplaceHistoryDoesNotMutateRuntimeStateWhenEventAppendFails(t *testing.
 	if !eng.compactionRuntimeState().SoonReminderIssued() {
 		t.Fatal("reminder state mutated despite persistence failure")
 	}
-	if usage := store.Metadata().UsageState; usage == nil || usage.InputTokens != oldUsage.InputTokens {
+	if usage := store.Meta().UsageState; usage == nil || usage.InputTokens != oldUsage.InputTokens {
 		t.Fatalf("uncommitted history replacement invalidated usage state: %+v", usage)
 	}
 }
@@ -381,7 +381,7 @@ func TestCommittedCompactionHistoryReplacementInvalidatesUsageAcrossImmediateReo
 	if err != nil {
 		t.Fatalf("reopen immediately after committed replacement: %v", err)
 	}
-	if usage := reopenedStore.Metadata().UsageState; usage != nil {
+	if usage := reopenedStore.Meta().UsageState; usage != nil {
 		t.Fatalf("immediate reopen restored pre-compaction usage: %+v", usage)
 	}
 	reopened := mustNewExecTestEngine(t, reopenedStore, &fakeClient{}, Config{Model: "gpt-5"})
@@ -436,7 +436,7 @@ func TestCommittedHistoryReplacementPreventsStaleUsageFromLaterMetadataPersisten
 	if err := store.SetName("post-compaction metadata write"); err != nil {
 		t.Fatalf("persist unrelated metadata: %v", err)
 	}
-	if usage := store.Metadata().UsageState; usage == nil || usage.InputTokens != compactedUsage.InputTokens {
+	if usage := store.Meta().UsageState; usage == nil || usage.InputTokens != compactedUsage.InputTokens {
 		t.Fatalf("later metadata write lost compacted usage: %+v", usage)
 	}
 
@@ -444,7 +444,7 @@ func TestCommittedHistoryReplacementPreventsStaleUsageFromLaterMetadataPersisten
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	if usage := reopenedStore.Metadata().UsageState; usage == nil || usage.InputTokens != compactedUsage.InputTokens {
+	if usage := reopenedStore.Meta().UsageState; usage == nil || usage.InputTokens != compactedUsage.InputTokens {
 		t.Fatalf("reopened metadata lost compacted usage: %+v", usage)
 	}
 	reopened := mustNewExecTestEngine(t, reopenedStore, &fakeClient{}, Config{Model: "gpt-5"})
@@ -877,13 +877,13 @@ func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testin
 	if got := fixture.engine.compactionRuntimeState().Count(); got != 1 {
 		t.Fatalf("live compaction count = %d, want 1", got)
 	}
-	if fixture.engine.compactionRuntimeState().SoonReminderIssued() || fixture.store.Metadata().CompactionSoonReminderIssued {
+	if fixture.engine.compactionRuntimeState().SoonReminderIssued() || fixture.store.Meta().CompactionSoonReminderIssued {
 		t.Fatal("committed compaction retained the soon reminder")
 	}
-	if locked := fixture.store.Metadata().Locked; locked == nil || locked.HasSystemPrompt || locked.SystemPrompt != "" || locked.HasReviewerPrompt || locked.ReviewerPrompt != "" {
+	if locked := fixture.store.Meta().Locked; locked == nil || locked.HasSystemPrompt || locked.SystemPrompt != "" || locked.HasReviewerPrompt || locked.ReviewerPrompt != "" {
 		t.Fatalf("prompt snapshots were not cleared after committed compaction: %+v", locked)
 	}
-	if usage := fixture.store.Metadata().UsageState; usage == nil || usage.WindowTokens <= 0 {
+	if usage := fixture.store.Meta().UsageState; usage == nil || usage.WindowTokens <= 0 {
 		t.Fatalf("usage state was not finalized after committed compaction: %+v", usage)
 	}
 	persisted, readErr := collectTestEventRecords(fixture.store)
@@ -961,7 +961,7 @@ func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) 
 	if liveUsage.UsedTokens != fixture.client.inputTokenCount {
 		t.Fatalf("live context usage = %+v, want exact compacted input %d", liveUsage, fixture.client.inputTokenCount)
 	}
-	if usage := fixture.store.Metadata().UsageState; usage == nil || usage.InputTokens != fixture.client.inputTokenCount {
+	if usage := fixture.store.Meta().UsageState; usage == nil || usage.InputTokens != fixture.client.inputTokenCount {
 		t.Fatalf("committed compacted usage = %+v, want input %d", usage, fixture.client.inputTokenCount)
 	}
 
@@ -998,7 +998,7 @@ func TestCompactNowInvalidatesPromptSnapshotsWhenStaleMetadataObserverFails(t *t
 	if !ok || locked.HasSystemPrompt || locked.SystemPrompt != "" || locked.HasReviewerPrompt || locked.ReviewerPrompt != "" {
 		t.Fatalf("live prompt snapshots after committed replacement = %+v, want stale", locked)
 	}
-	if stored := fixture.store.Metadata().Locked; stored == nil || stored.HasSystemPrompt || stored.HasReviewerPrompt {
+	if stored := fixture.store.Meta().Locked; stored == nil || stored.HasSystemPrompt || stored.HasReviewerPrompt {
 		t.Fatalf("committed stale prompt metadata = %+v", stored)
 	}
 	request, requestErr := fixture.engine.buildRequest(context.Background(), "step-next", false)

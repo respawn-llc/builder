@@ -17,8 +17,6 @@ const (
 	eventLogMigrationWorkspaceDir            = "events.jsonl.migration"
 	eventLogMigrationWorkspaceMarkerFile     = "kent-session-events-migration-v1"
 	eventLogMigrationStagedLogFile           = "staged-events.jsonl"
-	eventLogMigrationSpoolDir                = "spool"
-	eventLogMigrationRunDir                  = "runs"
 	eventLogMigrationWorkspaceMarkerContents = "kent.session.events.migration.workspace.v1\n"
 )
 
@@ -26,7 +24,6 @@ type eventLogMaterializationState uint8
 
 const (
 	eventLogUnmaterialized eventLogMaterializationState = iota
-	eventLogMigrationStaged
 	eventLogCurrentReconciliationPending
 	eventLogCurrent
 )
@@ -47,8 +44,6 @@ type eventLogPreparationResult struct {
 	Source           eventLogSourceClassification
 	FoundVersion     *int
 	SupportedVersion int
-	WorkspacePath    string
-	StagedLogPath    string
 }
 
 type eventLogMaterializationSnapshot struct {
@@ -137,12 +132,6 @@ func (s *Store) prepareEventLogMaterializationWithMutationHeld() (
 			"event-log materialization preparation requires durable session metadata",
 		)
 	}
-	if s.options.filelessEvents {
-		s.mu.Unlock()
-		return eventLogPreparationResult{}, errors.New(
-			"event-log materialization preparation is unavailable for fileless persistence",
-		)
-	}
 	sessionDir := s.sessionDir
 	s.mu.Unlock()
 
@@ -222,10 +211,9 @@ func (s *Store) prepareEventLogMaterializationWithStableLockHeld() (
 			return eventLogPreparationResult{}, committed, err
 		}
 	case eventLogSourceLegacy:
-		s.setEventLogMaterializationState(
-			eventLogMigrationStaged,
-			classification,
-			foundVersion,
+		s.setEventLogMaterializationState(eventLogUnmaterialized, classification, foundVersion)
+		return eventLogPreparationResult{}, false, errors.New(
+			"legacy events.jsonl is unsupported; open it with a pre-v1 Kent build before upgrading",
 		)
 	case eventLogSourceCurrent:
 		s.setEventLogMaterializationState(
@@ -296,11 +284,6 @@ func (s *Store) eventLogPreparationResultLocked() eventLogPreparationResult {
 		State:            snapshot.state,
 		Source:           snapshot.source,
 		SupportedVersion: EventLogVersionV1,
-		WorkspacePath:    eventLogMigrationWorkspacePath(s.sessionDir),
-		StagedLogPath: filepath.Join(
-			eventLogMigrationWorkspacePath(s.sessionDir),
-			eventLogMigrationStagedLogFile,
-		),
 	}
 	if snapshot.foundVersion != nil {
 		version := *snapshot.foundVersion
@@ -328,10 +311,6 @@ func cleanupEventLogMigrationWorkspace(workspace string) error {
 		case eventLogMigrationStagedLogFile:
 			if err := os.Remove(filepath.Join(workspace, entry.Name())); err != nil {
 				return fmt.Errorf("remove staged event log: %w", err)
-			}
-		case eventLogMigrationSpoolDir, eventLogMigrationRunDir:
-			if err := os.RemoveAll(filepath.Join(workspace, entry.Name())); err != nil {
-				return fmt.Errorf("remove owned event-log migration directory %q: %w", entry.Name(), err)
 			}
 		}
 	}
@@ -372,7 +351,7 @@ func ensureOwnedEventLogMigrationWorkspace(workspace string) (resultErr error) {
 		return fmt.Errorf("close event-log migration workspace marker: %w", err)
 	}
 	marker = nil
-	if err := syncEventLogDirectory(workspace); err != nil {
+	if err := syncSessionDirectory(workspace); err != nil {
 		return err
 	}
 	return nil
@@ -460,10 +439,6 @@ func validateOwnedEventLogMigrationWorkspaceEntry(entry os.DirEntry) error {
 		if entry.Type().IsRegular() {
 			return nil
 		}
-	case eventLogMigrationSpoolDir, eventLogMigrationRunDir:
-		if entry.IsDir() {
-			return nil
-		}
 	default:
 		return unknownEventLogMigrationWorkspaceContentError{Name: entry.Name()}
 	}
@@ -525,10 +500,10 @@ func installHeaderOnlyCurrentEventLog(
 	}
 	onCommitted()
 	committed = true
-	if err := removeOwnedEventLogMigrationWorkspace(workspace); err != nil {
+	if err := syncSessionDirectory(filepath.Dir(eventsPath)); err != nil {
 		return err
 	}
-	if err := syncEventLogDirectory(filepath.Dir(eventsPath)); err != nil {
+	if err := removeOwnedEventLogMigrationWorkspace(workspace); err != nil {
 		return err
 	}
 	return nil

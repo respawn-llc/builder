@@ -145,7 +145,7 @@ func streamChildFromParent(parentLog MaterializedEventLog, forkName string, cate
 	if err != nil {
 		return nil, 0, err
 	}
-	parentMeta := parent.Metadata()
+	parentMeta := parent.Meta()
 	containerDir := filepath.Dir(parent.Dir())
 	child, err := newLazyWithStoreOptions(containerDir, parentMeta.WorkspaceContainer, parentMeta.WorkspaceRoot, category, parent.options)
 	if err != nil {
@@ -413,9 +413,9 @@ func InitializeCreationContext(child *Store, source *Store, kind SessionCreation
 	default:
 		return fmt.Errorf("session creation source kind is invalid")
 	}
-	var sourceMeta Metadata
+	var sourceMeta Meta
 	if source != nil {
-		sourceMeta = source.Metadata()
+		sourceMeta = source.Meta()
 	}
 	child.mutationMu.Lock()
 	defer child.mutationMu.Unlock()

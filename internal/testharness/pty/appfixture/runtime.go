@@ -149,7 +149,7 @@ func (r *Runtime) SeedSession(ctx context.Context, persistenceRoot string, works
 			return "", fmt.Errorf("persist empty seed session: %w", err)
 		}
 	}
-	return sessionStore.Metadata().SessionID, nil
+	return sessionStore.Meta().SessionID, nil
 }
 
 func (r *Runtime) Observation(runErr error) Observation {

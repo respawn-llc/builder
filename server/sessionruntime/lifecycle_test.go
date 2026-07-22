@@ -19,7 +19,7 @@ import (
 
 func lifecycleSessionID(t *testing.T, fixture sessionRuntimeFixture) runtimeids.SessionID {
 	t.Helper()
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Metadata().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
@@ -332,7 +332,7 @@ func TestAuthorityBlocksSessionStartsDuringMaintenance(t *testing.T) {
 func TestNilAuthorityHasNoBlockingRuntimeActivity(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	var authority *Authority
-	active, err := authority.HasBlockingRuntimeActivity(context.Background(), fixture.store.Metadata().SessionID)
+	active, err := authority.HasBlockingRuntimeActivity(context.Background(), fixture.store.Meta().SessionID)
 	if err != nil || active {
 		t.Fatalf("nil authority blocking activity = (%t, %v), want (false, nil)", active, err)
 	}

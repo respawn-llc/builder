@@ -105,7 +105,7 @@ func (s *SessionLifecycleService) GetInitialInput(ctx context.Context, req serve
 			resp.Input = req.TransitionInput
 			return nil
 		}
-		meta := store.Metadata()
+		meta := store.Meta()
 		resp = serverapi.SessionInitialInputResponse{
 			Input:           initialSessionInput(store, req.TransitionInput),
 			RecoveryBuffers: sessionRecoveryBuffersToAPI(meta.InputDraftRecoveryBuffers),
@@ -294,7 +294,7 @@ func (s *SessionLifecycleService) authorizeNavigationTransition(ctx context.Cont
 	if !present {
 		return serverapi.SessionDirective{}, errors.New("session navigation launch intent omitted target session id")
 	}
-	authorizedTarget := session.NavigationTargetSessionID(current.Metadata())
+	authorizedTarget := session.NavigationTargetSessionID(current.Meta())
 	if authorizedTarget == nil || *authorizedTarget != requestedTarget {
 		return serverapi.SessionDirective{}, errors.New("session navigation target does not match current session provenance")
 	}

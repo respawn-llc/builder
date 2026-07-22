@@ -875,7 +875,7 @@ func (s *Starter) cloneSourceSessionForFanout(containerDir, sourceSessionID stri
 		if cloneErr != nil {
 			return fmt.Errorf("clone source session: %w", cloneErr)
 		}
-		cloneID = cloned.Metadata().SessionID
+		cloneID = cloned.Meta().SessionID
 		return nil
 	})
 	if err != nil {

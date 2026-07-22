@@ -91,7 +91,7 @@ func TestServiceGetSessionMainViewUsesLiveRuntimeWhenAttached(t *testing.T) {
 		t.Fatal("timed out waiting for active run")
 	}
 
-	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Metadata().SessionID})
+	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("get session main view: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestServiceGetSessionMainViewDoesNotRequireStoreResolutionForLiveRuntime(t 
 	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
 	fixture := newSessionViewRuntimeFixture(t, store, &serviceFakeLLM{})
 	response, err := NewService(failingSessionStoreResolver{err: errors.New("store unavailable")}, fixture.activity, fixture.authority, nil).
-		GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{SessionID: store.Metadata().SessionID})
+		GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("get live main view: %v", err)
 	}
@@ -129,11 +129,11 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	appendSessionViewMessage(t, store, "step-1", session.MessageRoleUser, "hello", nil, nil)
 	appendSessionViewMessage(t, store, "step-1", session.MessageRoleAssistant, "final answer", sessionViewMessagePhasePointer(session.MessagePhaseFinal), nil)
 	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
-	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Metadata().SessionID})
+	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("get session main view: %v", err)
 	}
-	if resp.MainView.Session.SessionID != store.Metadata().SessionID || resp.MainView.Session.SessionName != "incident triage" {
+	if resp.MainView.Session.SessionID != store.Meta().SessionID || resp.MainView.Session.SessionName != "incident triage" {
 		t.Fatalf("unexpected dormant session view: %+v", resp.MainView.Session)
 	}
 	if resp.MainView.Status.ParentAgentSessionID == nil || resp.MainView.Status.ParentAgentSessionID.String() != parentSessionID ||
@@ -156,7 +156,7 @@ func TestServiceGetSessionMainViewFallsBackToDurableWorkflowSessionState(t *test
 		t.Fatalf("SetWorkflowSessionState: %v", err)
 	}
 	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
-	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Metadata().SessionID})
+	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("GetSessionMainView: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestServiceGetSessionMainViewMergesDurableWorkflowSessionStateIntoLiveRunti
 	}
 	fixture := newSessionViewRuntimeFixture(t, store, &serviceFakeLLM{})
 	svc := NewService(newTestSessionResolver(store), fixture.activity, fixture.authority, nil)
-	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Metadata().SessionID})
+	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("GetSessionMainView: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestServiceGetSessionMainViewIncludesExecutionTarget(t *testing.T) {
 	}
 	svc := NewService(newTestSessionResolver(store), nil, nil, staticExecutionTargetResolver{target: target})
 
-	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Metadata().SessionID})
+	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("get session main view: %v", err)
 	}
@@ -221,11 +221,11 @@ func TestServiceGetSessionMainViewReconcilesPendingOperationRefs(t *testing.T) {
 		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
 	}
 	operations := runtimeops.NewCoordinator()
-	operations.RecordCommitted(store.Metadata().SessionID, ref)
+	operations.RecordCommitted(store.Meta().SessionID, ref)
 	response, err := NewService(newTestSessionResolver(store), nil, nil, nil).
 		WithOperationCoordinator(operations).
 		GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{
-			SessionID:            store.Metadata().SessionID,
+			SessionID:            store.Meta().SessionID,
 			PendingOperationRefs: []clientui.RuntimeOperationRef{ref},
 		})
 	if err != nil {
@@ -257,7 +257,7 @@ func TestServiceWithCacheWarningModeChangesSubsequentDormantReads(t *testing.T) 
 	})
 	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
 
-	first, err := svc.SessionTranscriptTailEntries(context.Background(), store.Metadata().SessionID)
+	first, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("get dormant transcript tail entries default: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestServiceWithCacheWarningModeChangesSubsequentDormantReads(t *testing.T) 
 	}
 
 	svc.WithCacheWarningMode(config.CacheWarningModeVerbose)
-	second, err := svc.SessionTranscriptTailEntries(context.Background(), store.Metadata().SessionID)
+	second, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("get dormant transcript tail entries verbose: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestServiceSessionTranscriptTailEntriesObservesRevisionAdvance(t *testing.T
 	appendSessionViewMessage(t, store, "11111111-1111-4111-8111-111111111111", session.MessageRoleAssistant, "line 0", sessionViewMessagePhasePointer(session.MessagePhaseFinal), nil)
 	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
 
-	first, err := svc.SessionTranscriptTailEntries(context.Background(), store.Metadata().SessionID)
+	first, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("get first transcript tail entries: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestServiceSessionTranscriptTailEntriesObservesRevisionAdvance(t *testing.T
 	}
 
 	appendSessionViewMessage(t, store, "22222222-2222-4222-8222-222222222222", session.MessageRoleAssistant, "line 1", sessionViewMessagePhasePointer(session.MessagePhaseFinal), nil)
-	second, err := svc.SessionTranscriptTailEntries(context.Background(), store.Metadata().SessionID)
+	second, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("get second transcript tail entries: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestServiceDormantHistoryReplacementStartsNewTranscriptSegment(t *testing.T
 
 	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
 
-	entries, err := svc.SessionTranscriptTailEntries(context.Background(), store.Metadata().SessionID)
+	entries, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("get session transcript tail entries: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestServiceDormantHistoryReplacementStartsNewTranscriptSegment(t *testing.T
 		t.Fatalf("entry count = %d, want empty active segment", len(entries))
 	}
 
-	mainViewResp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Metadata().SessionID})
+	mainViewResp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("get session main view: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestServiceSessionTranscriptTailEntriesKeepsDormantPersistedCompactionSumma
 	appendSessionViewMessage(t, store, "step-1", session.MessageRoleDeveloper, "Last user message before handoff\n\ncarry this forward", nil, sessionViewMessageTypePointer(session.MessageTypeManualCompactionCarryover))
 	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
 
-	entries, err := svc.SessionTranscriptTailEntries(context.Background(), store.Metadata().SessionID)
+	entries, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("get session transcript tail entries: %v", err)
 	}
@@ -384,17 +384,17 @@ func TestServiceDormantReadsDoNotMutatePersistedEvents(t *testing.T) {
 	}
 
 	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
-	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Metadata().SessionID})
+	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("get session main view: %v", err)
 	}
 	if resp.MainView.Activity.State != clientui.RuntimeActivityUnavailable {
 		t.Fatalf("dormant activity = %+v, want unavailable", resp.MainView.Activity)
 	}
-	if _, err := svc.GetSessionTranscriptPage(t.Context(), serverapi.SessionTranscriptPageRequest{SessionID: store.Metadata().SessionID}); err != nil {
+	if _, err := svc.GetSessionTranscriptPage(t.Context(), serverapi.SessionTranscriptPageRequest{SessionID: store.Meta().SessionID}); err != nil {
 		t.Fatalf("get session transcript page: %v", err)
 	}
-	if _, err := svc.SessionTranscriptTailEntries(t.Context(), store.Metadata().SessionID); err != nil {
+	if _, err := svc.SessionTranscriptTailEntries(t.Context(), store.Meta().SessionID); err != nil {
 		t.Fatalf("get session transcript tail entries: %v", err)
 	}
 

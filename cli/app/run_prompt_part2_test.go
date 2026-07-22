@@ -79,7 +79,7 @@ func TestRunPromptCreatesSessionAndPersistsDurableTranscript(t *testing.T) {
 
 	cfg := loadAppTestConfig(t, workspace, config.LoadOptions{OpenAIBaseURL: server.URL})
 	store := openAuthoritativeAppSession(t, cfg.PersistenceRoot, result.SessionID)
-	meta := store.Metadata()
+	meta := store.Meta()
 	wantWorkspaceRoot, err := config.CanonicalWorkspaceRoot(cfg.WorkspaceRoot)
 	if err != nil {
 		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
@@ -165,7 +165,7 @@ func TestRunPromptWorkspaceContextCreatesChildWithParentWorktreeContext(t *testi
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	if err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{SessionID: parent.Metadata().SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "worktree-feature"}, CwdRelpath: "pkg"}); err != nil {
+	if err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{SessionID: parent.Meta().SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "worktree-feature"}, CwdRelpath: "pkg"}); err != nil {
 		t.Fatalf("UpdateSessionExecutionTarget parent: %v", err)
 	}
 	if err := parent.SetWorktreeReminderState(&session.WorktreeReminderState{
@@ -187,7 +187,7 @@ func TestRunPromptWorkspaceContextCreatesChildWithParentWorktreeContext(t *testi
 
 	result, err := RunPrompt(ctx, Options{
 		WorkspaceRoot:             worktreeSubdir,
-		WorkspaceContextSessionID: parent.Metadata().SessionID,
+		WorkspaceContextSessionID: parent.Meta().SessionID,
 		Model:                     "gpt-5",
 		OpenAIBaseURL:             fakeResponses.URL,
 		OpenAIBaseURLExplicit:     true,
@@ -196,9 +196,9 @@ func TestRunPromptWorkspaceContextCreatesChildWithParentWorktreeContext(t *testi
 		t.Fatalf("RunPrompt: %v", err)
 	}
 	child := openAuthoritativeAppSession(t, cfg.PersistenceRoot, result.SessionID)
-	childMeta := child.Metadata()
-	if childMeta.ParentAgentSessionID == nil || childMeta.ParentAgentSessionID.String() != parent.Metadata().SessionID {
-		t.Fatalf("child parent-agent session id = %v, want %q", childMeta.ParentAgentSessionID, parent.Metadata().SessionID)
+	childMeta := child.Meta()
+	if childMeta.ParentAgentSessionID == nil || childMeta.ParentAgentSessionID.String() != parent.Meta().SessionID {
+		t.Fatalf("child parent-agent session id = %v, want %q", childMeta.ParentAgentSessionID, parent.Meta().SessionID)
 	}
 	if childMeta.WorktreeReminder == nil {
 		t.Fatal("expected child worktree reminder")
@@ -276,8 +276,8 @@ func TestRunPromptFastRoleUsesRoleLevelProviderSettingsForHeuristics(t *testing.
 		t.Fatalf("model payload = %#v, want gpt-5.6-terra", got)
 	}
 	store := openAuthoritativeWorkspaceSessionStore(t, workspace, server.URL, result.SessionID)
-	if store.Metadata().Continuation == nil || store.Metadata().Continuation.OpenAIBaseURL != server.URL {
-		t.Fatalf("unexpected continuation context: %+v", store.Metadata().Continuation)
+	if store.Meta().Continuation == nil || store.Meta().Continuation.OpenAIBaseURL != server.URL {
+		t.Fatalf("unexpected continuation context: %+v", store.Meta().Continuation)
 	}
 }
 
@@ -359,7 +359,7 @@ func TestHeadlessRunPromptClientResumesExistingSessionByID(t *testing.T) {
 	assertMessagePresent(t, messages, llm.RoleAssistant, "first response")
 	assertMessagePresent(t, messages, llm.RoleUser, "second prompt")
 	assertMessagePresent(t, messages, llm.RoleAssistant, "second response")
-	if got := store.Metadata().FirstPromptPreview; got != "first prompt" {
+	if got := store.Meta().FirstPromptPreview; got != "first prompt" {
 		t.Fatalf("first prompt preview = %q, want %q", got, "first prompt")
 	}
 }
@@ -407,8 +407,8 @@ func TestHeadlessRunPromptClientRestoresContinuationContextFromSelectedSession(t
 	}
 
 	store := openAuthoritativeWorkspaceSessionStore(t, workspace, server.URL, created.SessionID)
-	if store.Metadata().Continuation == nil || store.Metadata().Continuation.OpenAIBaseURL != server.URL {
-		t.Fatalf("unexpected continuation context: %+v", store.Metadata().Continuation)
+	if store.Meta().Continuation == nil || store.Meta().Continuation.OpenAIBaseURL != server.URL {
+		t.Fatalf("unexpected continuation context: %+v", store.Meta().Continuation)
 	}
 }
 

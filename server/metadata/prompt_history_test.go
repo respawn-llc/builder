@@ -14,7 +14,7 @@ import (
 func TestPromptHistoryRecordsAndListsByInsertionSequence(t *testing.T) {
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
-	sessionID := createMetadataTestSession(t, store, cfg, binding).Metadata().SessionID
+	sessionID := createMetadataTestSession(t, store, cfg, binding).Meta().SessionID
 	now := time.UnixMilli(123).UTC()
 
 	first, inserted, err := store.RecordPromptHistoryEntry(ctx, PromptHistoryEntry{
@@ -57,7 +57,7 @@ func TestPromptHistoryRecordsAndListsByInsertionSequence(t *testing.T) {
 func TestPromptHistoryReadsNewestRecordedTailWithoutPruningPersistence(t *testing.T) {
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
-	sessionID := createMetadataTestSession(t, store, cfg, binding).Metadata().SessionID
+	sessionID := createMetadataTestSession(t, store, cfg, binding).Meta().SessionID
 	entryCount := serverapi.SessionPromptHistoryMaxEntries + 2
 	entries := make([]PromptHistoryEntry, 0, entryCount)
 
@@ -105,7 +105,7 @@ func TestPromptHistoryReadsNewestRecordedTailWithoutPruningPersistence(t *testin
 func TestPromptHistoryConflictRequiresEquivalentPayload(t *testing.T) {
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
-	sessionID := createMetadataTestSession(t, store, cfg, binding).Metadata().SessionID
+	sessionID := createMetadataTestSession(t, store, cfg, binding).Meta().SessionID
 	entry := PromptHistoryEntry{
 		SessionID: sessionID,
 		SourceID:  "req-1",
@@ -133,7 +133,7 @@ func TestPromptHistoryConflictRequiresEquivalentPayload(t *testing.T) {
 func TestQueuedPromptHistoryRecordsPlainPromptRow(t *testing.T) {
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
-	sessionID := createMetadataTestSession(t, store, cfg, binding).Metadata().SessionID
+	sessionID := createMetadataTestSession(t, store, cfg, binding).Meta().SessionID
 
 	record, inserted, err := store.RecordPromptHistoryEntry(ctx, PromptHistoryEntry{
 		SessionID: sessionID,

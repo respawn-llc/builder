@@ -26,9 +26,3 @@ func atomicallyReplaceEventLog(stagedPath, eventsPath string) error {
 	}
 	return nil
 }
-
-// MoveFileEx with MOVEFILE_WRITE_THROUGH commits the rename before returning.
-// Windows does not expose a portable directory fsync through os.File.
-func syncEventLogDirectory(string) error {
-	return nil
-}

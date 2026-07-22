@@ -73,14 +73,14 @@ func TestAppendRecoveredWarningIfNeededPersistsOnce(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("warning count = %d, want 1", count)
 	}
-	if !fixture.store.Metadata().GeneratedRecoveredWarningIssued {
+	if !fixture.store.Meta().GeneratedRecoveredWarningIssued {
 		t.Fatal("expected generated recovered warning marker to be persisted")
 	}
-	reopened, err := session.OpenByID(fixture.config.PersistenceRoot, fixture.store.Metadata().SessionID, fixture.metadata.AuthoritativeSessionStoreOptions()...)
+	reopened, err := session.OpenByID(fixture.config.PersistenceRoot, fixture.store.Meta().SessionID, fixture.metadata.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	if !reopened.Metadata().GeneratedRecoveredWarningIssued {
+	if !reopened.Meta().GeneratedRecoveredWarningIssued {
 		t.Fatal("expected generated recovered warning marker to survive reopen")
 	}
 	if err := appendRecoveredWarning(reopened, fixture.api.recoveredWarningProvider); err != nil {
@@ -120,19 +120,19 @@ func TestAppendRecoveredWarningCommitsMarkerWithEventBeforeObserverFailure(t *te
 	); !errors.Is(err, observerErr) {
 		t.Fatalf("append warning error = %v, want %v", err, observerErr)
 	}
-	if !store.Metadata().GeneratedRecoveredWarningIssued {
+	if !store.Meta().GeneratedRecoveredWarningIssued {
 		t.Fatal("committed warning append did not retain its metadata marker")
 	}
 
 	reopened, err := session.OpenByID(
 		projectSessionsDir,
-		store.Metadata().SessionID,
+		store.Meta().SessionID,
 		persistence.Options()...,
 	)
 	if err != nil {
 		t.Fatalf("reopen committed warning: %v", err)
 	}
-	if !reopened.Metadata().GeneratedRecoveredWarningIssued {
+	if !reopened.Meta().GeneratedRecoveredWarningIssued {
 		t.Fatal("reopened warning lost its atomic metadata marker")
 	}
 	if err := appendRecoveredWarning(
@@ -196,7 +196,7 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 
 	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "activate-factory",
-		SessionID:       fixture.store.Metadata().SessionID,
+		SessionID:       fixture.store.Meta().SessionID,
 		OwnerID:         "owner",
 		ActiveSettings: config.Settings{
 			Model:              "gpt-5",
@@ -269,7 +269,7 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 			return client, nil
 		}),
 	})
-	sessionID := fixture.store.Metadata().SessionID
+	sessionID := fixture.store.Meta().SessionID
 	var attachment serverapi.SessionRuntimeAttachment
 	t.Cleanup(func() {
 		if attachment.Validate() != nil {

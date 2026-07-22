@@ -201,7 +201,7 @@ func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 	}
 
 	view := mainViewFromRuntimeForTest(t, eng)
-	if view.Session.SessionID != store.Metadata().SessionID || view.Session.SessionName != "Session Name" {
+	if view.Session.SessionID != store.Meta().SessionID || view.Session.SessionName != "Session Name" {
 		t.Fatalf("unexpected session hydration: %+v", view.Session)
 	}
 	if view.Status.ParentAgentSessionID == nil || view.Status.ParentAgentSessionID.String() != parentSessionID ||

@@ -29,7 +29,7 @@ func reviewerSuggestionsStructuredOutput() *llm.StructuredOutput {
 
 func (e *Engine) buildReviewerRequest(ctx context.Context, reviewerClient llm.Client) (llm.Request, error) {
 	reviewerCfg := e.reviewerRequestConfigSnapshot()
-	reviewerItems, err := buildReviewerRequestItemsWithBuilder(e.transcriptRuntimeState().SnapshotItems(), newActiveMetaContextBuilder(e.store.Metadata(), e.cfg.Model, e.ThinkingLevel(), e.cfg.GlobalConfigDir, e.cfg.SkillPolicy, e.reviewerMetaTimestamp()), e.cfg.HeadlessMode)
+	reviewerItems, err := buildReviewerRequestItemsWithBuilder(e.transcriptRuntimeState().SnapshotItems(), newActiveMetaContextBuilder(e.store.Meta(), e.cfg.Model, e.ThinkingLevel(), e.cfg.GlobalConfigDir, e.cfg.SkillPolicy, e.reviewerMetaTimestamp()), e.cfg.HeadlessMode)
 	if err != nil {
 		return llm.Request{}, err
 	}
@@ -45,14 +45,14 @@ func (e *Engine) buildReviewerRequest(ctx context.Context, reviewerClient llm.Cl
 		ReasoningEffort:         reviewerCfg.ThinkingLevel,
 		SupportsReasoningEffort: reviewerCfg.ModelCapabilities.SupportsReasoningEffort,
 		SystemPrompt:            systemPrompt,
-		SessionID:               reviewerSessionID(e.store.Metadata().SessionID),
+		SessionID:               reviewerSessionID(e.store.Meta().SessionID),
 		Items:                   reviewerItems,
 		Tools:                   []llm.Tool{},
 		ToolChoiceMode:          llm.ToolChoiceModeAutomatic,
 		StructuredOutput:        reviewerSuggestionsStructuredOutput(),
 	}
 	if supportsPromptCacheKeyForClient(ctx, reviewerClient) {
-		if cacheKey := e.conversationPromptCacheKey(reviewerSessionID(e.store.Metadata().SessionID)); cacheKey != "" {
+		if cacheKey := e.conversationPromptCacheKey(reviewerSessionID(e.store.Meta().SessionID)); cacheKey != "" {
 			req.PromptCacheKey = cacheKey
 			req.PromptCacheScope = transcript.CacheWarningScopeReviewer
 		}

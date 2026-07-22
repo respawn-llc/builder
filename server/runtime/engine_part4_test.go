@@ -732,7 +732,7 @@ func TestSubmitUserMessageFinalAnswerWithMixedToolCallsMaterializesAllToolsBefor
 	if got := eng.toolCallStarts.Len(); got != 0 {
 		t.Fatalf("expected pending tool call starts drained after final mixed tool calls, got %d", got)
 	}
-	if recovery := store.Metadata().PendingModelRecovery; recovery != nil {
+	if recovery := store.Meta().PendingModelRecovery; recovery != nil {
 		t.Fatalf("final mixed tool-call step retained pending recovery metadata: %+v", recovery)
 	}
 

@@ -97,7 +97,7 @@ func (p *authorityLifecycleProbe) ResourceDraining(context.Context, AgentResourc
 
 func TestOpenRuntimeReturnsRunLoggerCreationError(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Metadata().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
@@ -242,8 +242,8 @@ func TestNewLazyWithIDUsesExactCanonicalSessionIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lazy with id: %v", err)
 	}
-	if store.Metadata().SessionID != sessionID.String() {
-		t.Fatalf("session id = %q, want %q", store.Metadata().SessionID, sessionID)
+	if store.Meta().SessionID != sessionID.String() {
+		t.Fatalf("session id = %q, want %q", store.Meta().SessionID, sessionID)
 	}
 	wantDir := filepath.Join(containerDir, sessionID.String())
 	if store.Dir() != wantDir {
@@ -732,7 +732,7 @@ func TestNewLazyStillAllocatesCanonicalSessionIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new lazy session: %v", err)
 	}
-	sessionID, err := runtimeids.ParseSessionID(store.Metadata().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("parse allocated session id: %v", err)
 	}
@@ -747,7 +747,7 @@ func TestNewLazyStillAllocatesCanonicalSessionIdentity(t *testing.T) {
 
 func TestExactWorkflowExecutionCannotBeLiveAsAgentAndScript(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Metadata().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
@@ -802,7 +802,7 @@ func TestExactWorkflowExecutionCannotBeLiveAsAgentAndScript(t *testing.T) {
 
 func TestStaleRuntimeAttachmentReleaseCannotAffectReplacement(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Metadata().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
@@ -866,7 +866,7 @@ func TestStaleRuntimeAttachmentReleaseCannotAffectReplacement(t *testing.T) {
 
 func TestResourceRetentionBlocksReplacementUntilReleased(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Metadata().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
@@ -925,7 +925,7 @@ func TestResourceRetentionBlocksReplacementUntilReleased(t *testing.T) {
 
 func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Metadata().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
@@ -1102,7 +1102,7 @@ func TestBackgroundEventRoutesOnlyToExactCurrentResourceGeneration(t *testing.T)
 
 func TestDormantSessionStoreCallbacksAreSerialized(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Metadata().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}
@@ -1175,8 +1175,8 @@ func TestAuthorityMaterializesCreateSessionDescriptor(t *testing.T) {
 	})
 
 	err = authority.WithSessionStore(context.Background(), descriptor, func(_ context.Context, store *session.Store) error {
-		if store.Metadata().SessionID != sessionID.String() {
-			t.Fatalf("materialized session id = %q, want %q", store.Metadata().SessionID, sessionID)
+		if store.Meta().SessionID != sessionID.String() {
+			t.Fatalf("materialized session id = %q, want %q", store.Meta().SessionID, sessionID)
 		}
 		wantDir := filepath.Join(containerDir, sessionID.String())
 		if store.Dir() != wantDir {
@@ -1195,14 +1195,14 @@ func TestAuthorityMaterializesCreateSessionDescriptor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen materialized session: %v", err)
 	}
-	if reopened.Metadata().SessionID != sessionID.String() {
-		t.Fatalf("reopened session id = %q, want %q", reopened.Metadata().SessionID, sessionID)
+	if reopened.Meta().SessionID != sessionID.String() {
+		t.Fatalf("reopened session id = %q, want %q", reopened.Meta().SessionID, sessionID)
 	}
 }
 
 func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Metadata().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
 	}

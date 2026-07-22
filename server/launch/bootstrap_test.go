@@ -27,7 +27,7 @@ func TestResolveBootstrapPlanUsesSessionWorkspaceAndPersistedBaseURL(t *testing.
 
 	plan, err := ResolveBootstrapPlan(persistenceRoot, BootstrapRequest{
 		WorkspaceRoot: "/tmp/current-dir",
-		SessionID:     store.Metadata().SessionID,
+		SessionID:     store.Meta().SessionID,
 	})
 	if err != nil {
 		t.Fatalf("resolve bootstrap plan: %v", err)
@@ -61,7 +61,7 @@ func TestResolveBootstrapPlanRespectsExplicitOverrides(t *testing.T) {
 	plan, err := ResolveBootstrapPlan(persistenceRoot, BootstrapRequest{
 		WorkspaceRoot:         "/tmp/override-workspace",
 		WorkspaceRootExplicit: true,
-		SessionID:             store.Metadata().SessionID,
+		SessionID:             store.Meta().SessionID,
 		OpenAIBaseURL:         "http://override.local/v1",
 		OpenAIBaseURLExplicit: true,
 	})
@@ -94,7 +94,7 @@ func TestResolveBootstrapPlanUsesMetadataSessionLookupByID(t *testing.T) {
 		session.ContinuationContext{OpenAIBaseURL: "http://workspace-b.local/v1"},
 	)
 
-	plan, err := ResolveBootstrapPlan(persistenceRoot, BootstrapRequest{SessionID: store.Metadata().SessionID})
+	plan, err := ResolveBootstrapPlan(persistenceRoot, BootstrapRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("resolve bootstrap plan: %v", err)
 	}
@@ -131,14 +131,14 @@ func TestResolveSessionCallerReturnsWorkflowOrigin(t *testing.T) {
 		t.Fatalf("SetWorkflowSessionState: %v", err)
 	}
 
-	ordinaryCaller, err := ResolveSessionCaller(persistenceRoot, ordinary.Metadata().SessionID)
+	ordinaryCaller, err := ResolveSessionCaller(persistenceRoot, ordinary.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionCaller ordinary: %v", err)
 	}
 	if ordinaryCaller.Workflow {
 		t.Fatal("ordinary session resolved as workflow")
 	}
-	workflowCaller, err := ResolveSessionCaller(persistenceRoot, workflow.Metadata().SessionID)
+	workflowCaller, err := ResolveSessionCaller(persistenceRoot, workflow.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionCaller workflow: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestResolveBootstrapPlanUsesReboundWorkspaceRootFromMetadataAuthority(t *te
 		t.Fatalf("RebindWorkspace: %v", err)
 	}
 
-	plan, err := ResolveBootstrapPlan(cfg.PersistenceRoot, BootstrapRequest{SessionID: store.Metadata().SessionID})
+	plan, err := ResolveBootstrapPlan(cfg.PersistenceRoot, BootstrapRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("ResolveBootstrapPlan: %v", err)
 	}

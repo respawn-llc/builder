@@ -36,7 +36,7 @@ func TestBeginMutationSerializesMutationsByWorkspace(t *testing.T) {
 	env := newServiceTestEnv(t)
 	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
 
-	firstRelease, _, err := env.service.beginWorkspaceMutation(env.ctx, env.session.Metadata().SessionID)
+	firstRelease, _, err := env.service.beginWorkspaceMutation(env.ctx, env.session.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("beginMutation first: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestBeginMutationSerializesMutationsByWorkspace(t *testing.T) {
 	}
 	resultCh := make(chan mutationResult, 1)
 	go func() {
-		release, _, err := env.service.beginWorkspaceMutation(env.ctx, otherSession.Metadata().SessionID)
+		release, _, err := env.service.beginWorkspaceMutation(env.ctx, otherSession.Meta().SessionID)
 		resultCh <- mutationResult{release: release, err: err}
 	}()
 
@@ -115,11 +115,11 @@ func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *test
 	}
 	firstCh := make(chan mutationResult, 1)
 	go func() {
-		release, workspaceCtx, err := env.service.beginWorkspaceMutation(env.ctx, env.session.Metadata().SessionID)
+		release, workspaceCtx, err := env.service.beginWorkspaceMutation(env.ctx, env.session.Meta().SessionID)
 		firstCh <- mutationResult{release: release, workspaceCtx: workspaceCtx, err: err}
 	}()
 
-	updateServiceTestSessionTarget(t, env, env.session.Metadata().SessionID, secondBinding.WorkspaceID, "", ".")
+	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, secondBinding.WorkspaceID, "", ".")
 	firstWorkspaceLock()
 	firstLockReleased = true
 
@@ -142,7 +142,7 @@ func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *test
 
 	secondCh := make(chan mutationResult, 1)
 	go func() {
-		release, workspaceCtx, err := env.service.beginWorkspaceMutation(env.ctx, secondSession.Metadata().SessionID)
+		release, workspaceCtx, err := env.service.beginWorkspaceMutation(env.ctx, secondSession.Meta().SessionID)
 		secondCh <- mutationResult{release: release, workspaceCtx: workspaceCtx, err: err}
 	}()
 	select {
@@ -347,7 +347,7 @@ func nextSetupTerminalEvent(t *testing.T, sub serverapi.WorktreeSetupSubscriptio
 
 func assertServiceTestSessionTarget(t *testing.T, env *serviceTestEnv, worktreeID string, workdir string) {
 	t.Helper()
-	target, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Metadata().SessionID)
+	target, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
@@ -358,7 +358,7 @@ func assertServiceTestSessionTarget(t *testing.T, env *serviceTestEnv, worktreeI
 
 func mustResolveServiceTestTarget(t *testing.T, env *serviceTestEnv) clientui.SessionExecutionTarget {
 	t.Helper()
-	target, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Metadata().SessionID)
+	target, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
@@ -384,7 +384,7 @@ func mustCreateWorktree(t *testing.T, env *serviceTestEnv, branchName string) se
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 		ClientRequestID:  "req-create-" + strings.ReplaceAll(branchName, "/", "-"),
-		SessionID:        env.session.Metadata().SessionID,
+		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,
 		BranchName:       branchName,
@@ -398,7 +398,7 @@ func mustCreateWorktree(t *testing.T, env *serviceTestEnv, branchName string) se
 func worktreeDeleteRequest(env *serviceTestEnv, worktreeID string) serverapi.WorktreeDeleteRequest {
 	return serverapi.WorktreeDeleteRequest{
 		OperationID:         serverapi.NewWorktreeOperationID(),
-		SessionID:           env.session.Metadata().SessionID,
+		SessionID:           env.session.Meta().SessionID,
 		Selector:            worktreeID,
 		BranchCleanupPolicy: serverapi.WorktreeBranchCleanupModeRetain,
 	}
@@ -417,7 +417,7 @@ func updateServiceTestSessionTarget(t *testing.T, env *serviceTestEnv, sessionID
 
 func mustListWorktrees(t *testing.T, env *serviceTestEnv) serverapi.WorktreeListResponse {
 	t.Helper()
-	resp, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Metadata().SessionID})
+	resp, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("ListWorktrees: %v", err)
 	}

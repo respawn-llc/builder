@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"core/server/llm/openaiwire"
-	"core/shared/boundedjson"
 )
 
 func TestFunctionCallOutputRawPreservesStructuredOutputAndLiteralHTML(t *testing.T) {
@@ -231,7 +230,7 @@ func TestFunctionCallOutputStreamingEncoderPreservesCanonicalSemanticsAboveLibra
 }
 
 func TestInputContentItemsUsesCanonicalStructuredContentNormalization(t *testing.T) {
-	text := strings.Repeat("x", 2*boundedjson.MaxKnownFieldNameBytes)
+	text := strings.Repeat("x", 512)
 	encodedText, err := json.Marshal(text)
 	if err != nil {
 		t.Fatalf("encode structured input text: %v", err)

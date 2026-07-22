@@ -301,7 +301,7 @@ func TestReopenedSessionRestoresCompactionSoonReminderIssuedState(t *testing.T) 
 	if !restored.compactionRuntimeState().SoonReminderIssued() {
 		t.Fatal("expected reopened session to restore reminder-issued state")
 	}
-	if !reopenedStore.Metadata().CompactionSoonReminderIssued {
+	if !reopenedStore.Meta().CompactionSoonReminderIssued {
 		t.Fatal("expected reopened session meta to persist reminder-issued state")
 	}
 	if err := newCompactionReminderCoordinator(restored).maybeAppend(context.Background(), "step-restore"); err != nil {
@@ -332,7 +332,7 @@ func TestForkedSessionBeforeReminderDoesNotCopyReminderIssuedState(t *testing.T)
 	if err != nil {
 		t.Fatalf("fork session: %v", err)
 	}
-	if forkedStore.Metadata().CompactionSoonReminderIssued {
+	if forkedStore.Meta().CompactionSoonReminderIssued {
 		t.Fatal("expected fork before reminder to clear reminder-issued state")
 	}
 	forked := mustNewTestEngine(t, forkedStore, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
@@ -366,7 +366,7 @@ func TestForkedSessionDoesNotCopyPersistedUsageState(t *testing.T) {
 	if _, err := eng.recordLastUsage(llm.Usage{InputTokens: 900, WindowTokens: 410_000}); err != nil {
 		t.Fatalf("record last usage: %v", err)
 	}
-	if store.Metadata().UsageState == nil {
+	if store.Meta().UsageState == nil {
 		t.Fatal("expected parent session to persist usage state")
 	}
 
@@ -374,8 +374,8 @@ func TestForkedSessionDoesNotCopyPersistedUsageState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fork session: %v", err)
 	}
-	if forkedStore.Metadata().UsageState != nil {
-		t.Fatalf("expected forked session usage state cleared, got %+v", forkedStore.Metadata().UsageState)
+	if forkedStore.Meta().UsageState != nil {
+		t.Fatalf("expected forked session usage state cleared, got %+v", forkedStore.Meta().UsageState)
 	}
 }
 
@@ -405,7 +405,7 @@ func TestForkedSessionAfterReminderPreservesCompactionSoonReminderIssuedState(t 
 	if err != nil {
 		t.Fatalf("fork session: %v", err)
 	}
-	if !forkedStore.Metadata().CompactionSoonReminderIssued {
+	if !forkedStore.Meta().CompactionSoonReminderIssued {
 		t.Fatal("expected fork after reminder to preserve reminder-issued state")
 	}
 }
@@ -430,14 +430,14 @@ func TestRealCompactionClearsPersistedCompactionSoonReminderStateAcrossReopenAnd
 	if err := newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-warning"); err != nil {
 		t.Fatalf("append reminder: %v", err)
 	}
-	if !store.Metadata().CompactionSoonReminderIssued {
+	if !store.Meta().CompactionSoonReminderIssued {
 		t.Fatal("expected reminder-issued state persisted before compaction")
 	}
 
 	if err := eng.CompactContext(context.Background(), "compact now"); err != nil {
 		t.Fatalf("compact context: %v", err)
 	}
-	if store.Metadata().CompactionSoonReminderIssued {
+	if store.Meta().CompactionSoonReminderIssued {
 		t.Fatal("expected real compaction to clear reminder-issued state in session meta")
 	}
 
@@ -454,7 +454,7 @@ func TestRealCompactionClearsPersistedCompactionSoonReminderStateAcrossReopenAnd
 	if restored.compactionRuntimeState().SoonReminderIssued() {
 		t.Fatal("expected reopened compacted session to start with cleared reminder-issued state")
 	}
-	if reopenedStore.Metadata().CompactionSoonReminderIssued {
+	if reopenedStore.Meta().CompactionSoonReminderIssued {
 		t.Fatal("expected reopened compacted session metadata to remain cleared")
 	}
 
@@ -462,7 +462,7 @@ func TestRealCompactionClearsPersistedCompactionSoonReminderStateAcrossReopenAnd
 	if err != nil {
 		t.Fatalf("fork compacted session: %v", err)
 	}
-	if forkedStore.Metadata().CompactionSoonReminderIssued {
+	if forkedStore.Meta().CompactionSoonReminderIssued {
 		t.Fatal("expected fork of compacted session to inherit cleared reminder-issued state")
 	}
 	forked := mustNewTestEngine(t, forkedStore, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{

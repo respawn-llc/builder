@@ -12,7 +12,6 @@ const (
 	ScopeReadModelPublication Scope = "read_model_publication"
 	ScopeBackgroundEvent      Scope = "background_event"
 	ScopeSessionPersistence   Scope = "session_persistence"
-	ScopeProtocolEncoding     Scope = "protocol_encoding"
 )
 
 type Field string

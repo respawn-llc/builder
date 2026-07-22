@@ -144,7 +144,7 @@ func newRealSessionRetargetFixture(t *testing.T, useBlockingObserver bool) realS
 	if err := child.EnsureDurable(); err != nil {
 		t.Fatalf("child EnsureDurable: %v", err)
 	}
-	childID, err := runtimeids.ParseSessionID(child.Metadata().SessionID)
+	childID, err := runtimeids.ParseSessionID(child.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ParseSessionID child: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestSessionWorkspaceRetargeterMovesRealArtifactAndMetadataAcrossProjects(t 
 	fixture.openRuntime(t)
 	targetProjectID := fixture.targetProject.ProjectID
 	req := metadata.SessionWorkspaceRetargetRequest{
-		SessionID:     fixture.child.Metadata().SessionID,
+		SessionID:     fixture.child.Meta().SessionID,
 		WorkspaceRoot: fixture.targetWorkspaceRoot,
 		ProjectID:     &targetProjectID,
 	}
@@ -272,7 +272,7 @@ func TestSessionWorkspaceRetargeterMovesRealArtifactAndMetadataAcrossProjects(t 
 	if info, err := os.Stat(plan.TargetSessionDir); err != nil || !info.IsDir() {
 		t.Fatalf("target artifact = %v, %v", info, err)
 	}
-	record, err := fixture.metadata.ResolvePersistedSession(context.Background(), fixture.child.Metadata().SessionID)
+	record, err := fixture.metadata.ResolvePersistedSession(context.Background(), fixture.child.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ResolvePersistedSession: %v", err)
 	}
@@ -281,27 +281,27 @@ func TestSessionWorkspaceRetargeterMovesRealArtifactAndMetadataAcrossProjects(t 
 	}
 	reopened, err := session.OpenByID(
 		fixture.metadata.PersistenceRoot(),
-		fixture.child.Metadata().SessionID,
+		fixture.child.Meta().SessionID,
 		fixture.metadata.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
 		t.Fatalf("session.OpenByID: %v", err)
 	}
-	if reopened.Metadata().WorkspaceRoot != result.Binding.CanonicalRoot {
-		t.Fatalf("reopened workspace root = %q, want %q", reopened.Metadata().WorkspaceRoot, result.Binding.CanonicalRoot)
+	if reopened.Meta().WorkspaceRoot != result.Binding.CanonicalRoot {
+		t.Fatalf("reopened workspace root = %q, want %q", reopened.Meta().WorkspaceRoot, result.Binding.CanonicalRoot)
 	}
-	parentID, err := runtimeids.ParseSessionID(fixture.parent.Metadata().SessionID)
+	parentID, err := runtimeids.ParseSessionID(fixture.parent.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ParseSessionID parent: %v", err)
 	}
-	if reopened.Metadata().PreviousSessionID == nil || *reopened.Metadata().PreviousSessionID != parentID {
-		t.Fatalf("reopened previous session = %v, want %q", reopened.Metadata().PreviousSessionID, fixture.parent.Metadata().SessionID)
+	if reopened.Meta().PreviousSessionID == nil || *reopened.Meta().PreviousSessionID != parentID {
+		t.Fatalf("reopened previous session = %v, want %q", reopened.Meta().PreviousSessionID, fixture.parent.Meta().SessionID)
 	}
-	parentInSource, err := fixture.metadata.SessionBelongsToProject(context.Background(), fixture.parent.Metadata().SessionID, fixture.sourceBinding.ProjectID)
+	parentInSource, err := fixture.metadata.SessionBelongsToProject(context.Background(), fixture.parent.Meta().SessionID, fixture.sourceBinding.ProjectID)
 	if err != nil {
 		t.Fatalf("SessionBelongsToProject parent: %v", err)
 	}
-	childInTarget, err := fixture.metadata.SessionBelongsToProject(context.Background(), fixture.child.Metadata().SessionID, targetProjectID)
+	childInTarget, err := fixture.metadata.SessionBelongsToProject(context.Background(), fixture.child.Meta().SessionID, targetProjectID)
 	if err != nil {
 		t.Fatalf("SessionBelongsToProject child: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestSessionWorkspaceRetargeterMovesRealArtifactAndMetadataAcrossProjects(t 
 	if !projectContainsWorkspaceRoot(t, fixture.metadata, targetProjectID, result.Binding.CanonicalRoot) {
 		t.Fatalf("target project does not contain auto-attached workspace %q", result.Binding.CanonicalRoot)
 	}
-	published, ok := fixture.publisher[fixture.child.Metadata().SessionID]
+	published, ok := fixture.publisher[fixture.child.Meta().SessionID]
 	if !ok || published.EffectiveWorkdir != result.Binding.CanonicalRoot {
 		t.Fatalf("published identity = %+v, present=%t", published, ok)
 	}
@@ -324,7 +324,7 @@ func TestSessionWorkspaceRetargeterRejectsBackgroundProcessWithoutMovingArtifact
 	fixture := newRealSessionRetargetFixture(t, false)
 	targetProjectID := fixture.targetProject.ProjectID
 	req := metadata.SessionWorkspaceRetargetRequest{
-		SessionID:     fixture.child.Metadata().SessionID,
+		SessionID:     fixture.child.Meta().SessionID,
 		WorkspaceRoot: fixture.targetWorkspaceRoot,
 		ProjectID:     &targetProjectID,
 	}
@@ -371,7 +371,7 @@ func TestSessionWorkspaceRetargeterSharedRootRemainsPersistable(t *testing.T) {
 			}
 
 			req := metadata.SessionWorkspaceRetargetRequest{
-				SessionID:     fixture.child.Metadata().SessionID,
+				SessionID:     fixture.child.Meta().SessionID,
 				WorkspaceRoot: sharedRoot,
 			}
 			wantProjectID := fixture.sourceBinding.ProjectID
@@ -404,7 +404,7 @@ func TestSessionWorkspaceRetargeterSharedRootRemainsPersistable(t *testing.T) {
 
 			reopened, err := session.OpenByID(
 				fixture.metadata.PersistenceRoot(),
-				fixture.child.Metadata().SessionID,
+				fixture.child.Meta().SessionID,
 				fixture.metadata.AuthoritativeSessionStoreOptions()...,
 			)
 			if err != nil {
@@ -418,10 +418,10 @@ func TestSessionWorkspaceRetargeterSharedRootRemainsPersistable(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read reopened event-log revision: %v", err)
 			}
-			if reopened.Metadata().Name != "persisted after shared-root rebind" || revision != 1 {
-				t.Fatalf("reopened metadata=%+v event-log revision=%d", reopened.Metadata(), revision)
+			if reopened.Meta().Name != "persisted after shared-root rebind" || revision != 1 {
+				t.Fatalf("reopened metadata=%+v event-log revision=%d", reopened.Meta(), revision)
 			}
-			belongs, err := fixture.metadata.SessionBelongsToProject(context.Background(), fixture.child.Metadata().SessionID, wantProjectID)
+			belongs, err := fixture.metadata.SessionBelongsToProject(context.Background(), fixture.child.Meta().SessionID, wantProjectID)
 			if err != nil {
 				t.Fatalf("SessionBelongsToProject: %v", err)
 			}
@@ -464,7 +464,7 @@ func TestSessionWorkspaceRetargeterStaleObserverCannotRestorePreviousTarget(t *t
 	}
 
 	req := metadata.SessionWorkspaceRetargetRequest{
-		SessionID:     store.Metadata().SessionID,
+		SessionID:     store.Meta().SessionID,
 		WorkspaceRoot: fixture.targetWorkspaceRoot,
 	}
 	type retargetOutcome struct {
@@ -487,22 +487,22 @@ func TestSessionWorkspaceRetargeterStaleObserverCannotRestorePreviousTarget(t *t
 
 	reopened, err := session.OpenByID(
 		fixture.metadata.PersistenceRoot(),
-		store.Metadata().SessionID,
+		store.Meta().SessionID,
 		fixture.metadata.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
 		t.Fatalf("OpenByID: %v", err)
 	}
-	if reopened.Metadata().WorkspaceRoot != retargeted.result.Binding.CanonicalRoot {
-		t.Fatalf("workspace root = %q, want rebound root %q", reopened.Metadata().WorkspaceRoot, retargeted.result.Binding.CanonicalRoot)
+	if reopened.Meta().WorkspaceRoot != retargeted.result.Binding.CanonicalRoot {
+		t.Fatalf("workspace root = %q, want rebound root %q", reopened.Meta().WorkspaceRoot, retargeted.result.Binding.CanonicalRoot)
 	}
-	if reopened.Metadata().WorkspaceContainer != retargeted.result.Binding.WorkspaceName {
-		t.Fatalf("workspace container = %q, want %q", reopened.Metadata().WorkspaceContainer, retargeted.result.Binding.WorkspaceName)
+	if reopened.Meta().WorkspaceContainer != retargeted.result.Binding.WorkspaceName {
+		t.Fatalf("workspace container = %q, want %q", reopened.Meta().WorkspaceContainer, retargeted.result.Binding.WorkspaceName)
 	}
-	if reopened.Metadata().Name != "captured before rebind" {
-		t.Fatalf("session name = %q, want pre-rebind metadata mutation", reopened.Metadata().Name)
+	if reopened.Meta().Name != "captured before rebind" {
+		t.Fatalf("session name = %q, want pre-rebind metadata mutation", reopened.Meta().Name)
 	}
-	target, err := fixture.metadata.ResolveSessionExecutionTarget(context.Background(), store.Metadata().SessionID)
+	target, err := fixture.metadata.ResolveSessionExecutionTarget(context.Background(), store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
@@ -524,7 +524,7 @@ func TestSessionWorkspaceRetargeterRestoresArtifactOwnershipAndRuntimeWorkdirAft
 	fixture := newRealSessionRetargetFixture(t, false)
 	targetProjectID := fixture.targetProject.ProjectID
 	req := metadata.SessionWorkspaceRetargetRequest{
-		SessionID:     fixture.child.Metadata().SessionID,
+		SessionID:     fixture.child.Meta().SessionID,
 		WorkspaceRoot: fixture.targetWorkspaceRoot,
 		ProjectID:     &targetProjectID,
 	}
@@ -550,11 +550,11 @@ func TestSessionWorkspaceRetargeterRestoresArtifactOwnershipAndRuntimeWorkdirAft
 	if afterWorkdir := fixture.runtimeWorkdir(t); afterWorkdir != beforeWorkdir {
 		t.Fatalf("runtime workdir = %q, want rollback to %q", afterWorkdir, beforeWorkdir)
 	}
-	childInSource, err := fixture.metadata.SessionBelongsToProject(context.Background(), fixture.child.Metadata().SessionID, fixture.sourceBinding.ProjectID)
+	childInSource, err := fixture.metadata.SessionBelongsToProject(context.Background(), fixture.child.Meta().SessionID, fixture.sourceBinding.ProjectID)
 	if err != nil {
 		t.Fatalf("SessionBelongsToProject source: %v", err)
 	}
-	childInTarget, err := fixture.metadata.SessionBelongsToProject(context.Background(), fixture.child.Metadata().SessionID, targetProjectID)
+	childInTarget, err := fixture.metadata.SessionBelongsToProject(context.Background(), fixture.child.Meta().SessionID, targetProjectID)
 	if err != nil {
 		t.Fatalf("SessionBelongsToProject target: %v", err)
 	}

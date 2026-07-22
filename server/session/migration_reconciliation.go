@@ -78,9 +78,8 @@ func (s *Store) readCurrentEventLogReconciliationObservationWithMutationHeld() (
 	}
 	s.mu.Lock()
 	path := s.eventsFP
-	options := s.options.eventLog
 	s.mu.Unlock()
-	log, err := openCurrentEventLog(path, currentEventLogReadOnly, options)
+	log, err := openCurrentEventLog(path, currentEventLogReadOnly)
 	if err != nil {
 		return currentEventLogReconciliationObservation{}, s.wrapCurrentEventLogReconciliationError(err)
 	}

@@ -33,7 +33,7 @@ func TestWorktreeStatusUsesShellSessionFromNestedWorkspaceDirectory(t *testing.T
 		t.Fatalf("Mkdir nested cwd: %v", err)
 	}
 	t.Chdir(nested)
-	t.Setenv("KENT_SESSION_ID", sess.Metadata().SessionID)
+	t.Setenv("KENT_SESSION_ID", sess.Meta().SessionID)
 
 	stdout, _ := runRootCommandOK(t, "worktree", "status", "--json")
 	status := decodeWorktreeCommandJSON[serverapi.WorktreeStatusResponse](t, stdout)

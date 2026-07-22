@@ -67,21 +67,21 @@ func TestPlannerInteractiveReopensSelectedSessionWithinActiveContainer(t *testin
 	if err := selected.SetName("selected"); err != nil {
 		t.Fatalf("persist selected session meta: %v", err)
 	}
-	writeSessionEventArtifact(t, filepath.Join(containerB, selected.Metadata().SessionID))
+	writeSessionEventArtifact(t, filepath.Join(containerB, selected.Meta().SessionID))
 	planner := newPersistenceBackedTestPlanner(
 		config.App{WorkspaceRoot: "/tmp/workspace-a", PersistenceRoot: root, Settings: config.Settings{}},
 		containerA,
 		persistence,
 	)
 
-	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, selected.Metadata().SessionID))})
+	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, selected.Meta().SessionID))})
 	if err != nil {
 		t.Fatalf("plan session: %v", err)
 	}
 	opened := testStoreForPlannerPlan(t, planner, plan)
 	requireSameSessionDir(t, opened.Dir(), selected.Dir())
-	if opened.Metadata().WorkspaceRoot != "/tmp/workspace-a" {
-		t.Fatalf("opened workspace root = %q, want /tmp/workspace-a", opened.Metadata().WorkspaceRoot)
+	if opened.Meta().WorkspaceRoot != "/tmp/workspace-a" {
+		t.Fatalf("opened workspace root = %q, want /tmp/workspace-a", opened.Meta().WorkspaceRoot)
 	}
 }
 
@@ -93,7 +93,7 @@ func TestPlannerSelectedSessionUsesAuthoritativeMetadata(t *testing.T) {
 	if err := selected.SetName("selected"); err != nil {
 		t.Fatalf("persist selected session meta: %v", err)
 	}
-	authoritative := selected.Metadata()
+	authoritative := selected.Meta()
 	authoritative.WorkspaceRoot = "/tmp/workspace-new"
 	authoritative.WorkspaceContainer = "workspace-new"
 	authoritative.UpdatedAt = authoritative.UpdatedAt.Add(time.Second)
@@ -117,13 +117,13 @@ func TestPlannerSelectedSessionUsesAuthoritativeMetadata(t *testing.T) {
 		persistence,
 	)
 
-	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, selected.Metadata().SessionID))})
+	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, selected.Meta().SessionID))})
 	if err != nil {
 		t.Fatalf("plan session: %v", err)
 	}
 	opened := testStoreForPlannerPlan(t, planner, plan)
-	if opened.Metadata().WorkspaceRoot != authoritative.WorkspaceRoot {
-		t.Fatalf("opened workspace root = %q, want authoritative %q", opened.Metadata().WorkspaceRoot, authoritative.WorkspaceRoot)
+	if opened.Meta().WorkspaceRoot != authoritative.WorkspaceRoot {
+		t.Fatalf("opened workspace root = %q, want authoritative %q", opened.Meta().WorkspaceRoot, authoritative.WorkspaceRoot)
 	}
 }
 
@@ -136,14 +136,14 @@ func TestPlannerSelectedSessionIDUsesAuthoritativePersistedIdentity(t *testing.T
 	if err := selected.SetName("selected"); err != nil {
 		t.Fatalf("persist selected session meta: %v", err)
 	}
-	writeSessionEventArtifact(t, filepath.Join(containerB, selected.Metadata().SessionID))
+	writeSessionEventArtifact(t, filepath.Join(containerB, selected.Meta().SessionID))
 	planner := newPersistenceBackedTestPlanner(
 		config.App{WorkspaceRoot: "/tmp/workspace-a", PersistenceRoot: root, Settings: config.Settings{}},
 		containerA,
 		persistence,
 	)
 
-	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, selected.Metadata().SessionID))})
+	plan, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, selected.Meta().SessionID))})
 	if err != nil {
 		t.Fatalf("plan session: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestPlannerSelectedSessionIDDoesNotOpenAcrossProjectContainers(t *testing.T
 		persistence,
 	)
 
-	_, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, otherProjectSession.Metadata().SessionID))})
+	_, err := planner.PlanSession(context.Background(), SessionRequest{Mode: ModeInteractive, Intent: serverapi.OpenExistingSessionLaunchIntent(mustTypedIntentSessionID(t, otherProjectSession.Meta().SessionID))})
 	if err == nil || !errors.Is(err, session.ErrSessionNotFound) {
 		t.Fatalf("plan session error = %v, want project-scoped ErrSessionNotFound", err)
 	}

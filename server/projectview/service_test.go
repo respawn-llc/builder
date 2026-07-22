@@ -750,7 +750,7 @@ func newProjectViewRuntimeAuthority(
 	sessionStore *session.Store,
 ) (*sessionruntime.Authority, runtimeids.SessionID, sessionruntime.AgentRuntimePlan) {
 	t.Helper()
-	sessionID, err := runtimeids.ParseSessionID(sessionStore.Metadata().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(sessionStore.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("parse session ID: %v", err)
 	}
@@ -770,7 +770,7 @@ func newProjectViewRuntimeAuthority(
 	settings.Reviewer.Frequency = "off"
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: settings,
-		Workdir:  sessionStore.Metadata().WorkspaceRoot,
+		Workdir:  sessionStore.Meta().WorkspaceRoot,
 		Client:   projectViewTestLLMClient{},
 	})
 	if err != nil {

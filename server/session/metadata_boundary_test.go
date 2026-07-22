@@ -2,7 +2,6 @@ package session
 
 import (
 	"bytes"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -36,8 +35,8 @@ func TestOpenResolvedDoesNotReadOrMutateEventLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open metadata-bound store: %v", err)
 	}
-	if store.Metadata().SessionID != "session-1" {
-		t.Fatalf("opened session identity = %q", store.Metadata().SessionID)
+	if store.Meta().SessionID != "session-1" {
+		t.Fatalf("opened session identity = %q", store.Meta().SessionID)
 	}
 	after := eventLogFingerprint(t, eventsPath)
 	if !before.equal(after) {
@@ -96,45 +95,13 @@ func TestMetadataMutationsLeaveOpaqueEventLogUnchanged(t *testing.T) {
 	}
 }
 
-func TestMetadataProjectionOmitsEventRevisionAndFreshness(t *testing.T) {
-	store := newSessionTestStore(t)
-	log := mustMaterializeSessionTestEventLog(t, store)
-	content := "establish conversation"
-	if _, _, err := log.AppendRecord(stringPointer("step-1"), MessageRecord{
-		Role: MessageRoleUser, Content: &content,
-	}); err != nil {
-		t.Fatalf("append event: %v", err)
-	}
-
-	metadata := store.Metadata()
-	if metadata.SessionID != store.Metadata().SessionID {
-		t.Fatalf("metadata session identity = %q, want %q", metadata.SessionID, store.Metadata().SessionID)
-	}
-	encoded, err := json.Marshal(metadata)
-	if err != nil {
-		t.Fatalf("encode metadata projection: %v", err)
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(encoded, &fields); err != nil {
-		t.Fatalf("decode metadata projection: %v", err)
-	}
-	if _, ok := fields["last_sequence"]; ok {
-		t.Fatalf("metadata projection exposed event revision: %s", encoded)
-	}
-	if _, ok := fields["conversation_established"]; ok {
-		t.Fatalf("metadata projection exposed conversation freshness: %s", encoded)
-	}
-}
-
 func TestCurrentMetadataOperationsLeaveEventLogUnchanged(t *testing.T) {
 	sessionDir := filepath.Join(t.TempDir(), "session-1")
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		t.Fatalf("create session directory: %v", err)
 	}
 	eventsPath := filepath.Join(sessionDir, eventsFile)
-	log, err := createCurrentEventLog(eventsPath, eventLogOptions{
-		fsyncPolicy: EventLogFSyncAlways,
-	})
+	log, err := createCurrentEventLog(eventsPath)
 	if err != nil {
 		t.Fatalf("create current event log: %v", err)
 	}
@@ -167,7 +134,7 @@ func TestCurrentMetadataOperationsLeaveEventLogUnchanged(t *testing.T) {
 		t.Fatal("metadata-bound store materialized its event log during open")
 	}
 
-	_ = store.Metadata()
+	_ = store.Meta()
 	if err := store.SetInputDraft("draft"); err != nil {
 		t.Fatalf("set input draft: %v", err)
 	}

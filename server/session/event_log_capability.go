@@ -1,13 +1,8 @@
 package session
 
 import (
-	"context"
 	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
-	"sync"
 
 	"core/shared/invariant"
 )
@@ -17,15 +12,6 @@ import (
 type MaterializedEventLog struct {
 	store *Store
 	log   *currentEventLog
-}
-
-type EventLogArtifactLease struct {
-	mu           sync.Mutex
-	closed       bool
-	store        *Store
-	log          *currentEventLog
-	artifactRoot string
-	remove       func(string) error
 }
 
 func (c MaterializedEventLog) ValidateOwner(store *Store) error {
@@ -59,12 +45,6 @@ func (s *Store) MaterializeEventLog() (MaterializedEventLog, error) {
 
 func (s *Store) materializeDurableEventLogWithMutationHeld() (MaterializedEventLog, error) {
 	s.mu.Lock()
-	if s.options.filelessEvents {
-		s.mu.Unlock()
-		return MaterializedEventLog{}, errors.New(
-			"fileless session requires scoped event log materialization",
-		)
-	}
 	if s.materializedEventLog != nil {
 		log := s.materializedEventLog
 		s.mu.Unlock()
@@ -77,201 +57,6 @@ func (s *Store) materializeDurableEventLogWithMutationHeld() (MaterializedEventL
 	s.mu.Unlock()
 
 	return s.materializePreparedDurableEventLogWithMutationHeld()
-}
-
-func (s *Store) MaterializeFilelessEventLog(ctx context.Context) (
-	MaterializedEventLog,
-	*EventLogArtifactLease,
-	error,
-) {
-	if s == nil {
-		return MaterializedEventLog{}, nil, errors.New("session store is required")
-	}
-	if ctx == nil {
-		return MaterializedEventLog{}, nil, errors.New(
-			"fileless event-log materialization context is required",
-		)
-	}
-	s.mutationMu.Lock()
-	defer s.mutationMu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return MaterializedEventLog{}, nil, err
-	}
-	s.mu.Lock()
-	if !s.options.filelessEvents {
-		s.mu.Unlock()
-		return MaterializedEventLog{}, nil, errors.New(
-			"scoped event log materialization requires fileless persistence",
-		)
-	}
-	if s.materializedEventLog != nil {
-		log := s.materializedEventLog
-		lease := s.filelessEventLogLease
-		s.mu.Unlock()
-		if lease != nil {
-			return MaterializedEventLog{store: s, log: log}, lease, nil
-		}
-		return MaterializedEventLog{store: s, log: log}, &EventLogArtifactLease{}, nil
-	}
-	if !s.persisted {
-		s.mu.Unlock()
-		return MaterializedEventLog{}, nil, errors.New(
-			"fileless current event log requires persisted session metadata",
-		)
-	}
-	path := s.eventsFP
-	options := s.options.eventLog
-	expectedRevision := s.meta.LastSequence
-	s.mu.Unlock()
-
-	classification, err := classifyEventLogSource(path)
-	if err != nil {
-		return MaterializedEventLog{}, nil, err
-	}
-	switch classification.source {
-	case eventLogSourceMissing:
-		return MaterializedEventLog{}, nil, os.ErrNotExist
-	case eventLogSourceCurrent:
-		log, err := openCurrentEventLog(path, currentEventLogReadOnly, options)
-		if err != nil {
-			return MaterializedEventLog{}, nil, err
-		}
-		if log.lastSequence != expectedRevision {
-			return MaterializedEventLog{}, nil, fmt.Errorf(
-				"current event log revision %d does not match metadata revision %d",
-				log.lastSequence,
-				expectedRevision,
-			)
-		}
-		s.mu.Lock()
-		s.materializedEventLog = log
-		s.mu.Unlock()
-		return MaterializedEventLog{store: s, log: log}, &EventLogArtifactLease{}, nil
-	case eventLogSourceLegacy, eventLogSourceEmpty:
-		return s.materializeLegacyFilelessEventLogWithMutationHeld(
-			ctx,
-			path,
-			options,
-			expectedRevision,
-		)
-	default:
-		return MaterializedEventLog{}, nil, fmt.Errorf(
-			"unsupported fileless event-log source classification %d",
-			classification.source,
-		)
-	}
-}
-
-func (s *Store) materializeLegacyFilelessEventLogWithMutationHeld(
-	ctx context.Context,
-	sourcePath string,
-	options eventLogOptions,
-	_ int64,
-) (
-	capability MaterializedEventLog,
-	lease *EventLogArtifactLease,
-	resultErr error,
-) {
-	artifactRoot, err := os.MkdirTemp("", "kent-session-events-v1-")
-	if err != nil {
-		return MaterializedEventLog{}, nil, fmt.Errorf(
-			"create fileless event-log artifact directory: %w",
-			err,
-		)
-	}
-	keepArtifact := false
-	defer func() {
-		if !keepArtifact {
-			resultErr = errors.Join(
-				resultErr,
-				removeFilelessEventLogArtifact(artifactRoot),
-			)
-		}
-	}()
-	spoolDir := filepath.Join(artifactRoot, eventLogMigrationSpoolDir)
-	if err := os.Mkdir(spoolDir, 0o700); err != nil {
-		return MaterializedEventLog{}, nil, fmt.Errorf(
-			"create fileless event-log spool directory: %w",
-			err,
-		)
-	}
-	artifactPath := filepath.Join(artifactRoot, eventsFile)
-	if _, err := transformLegacyEventLogToCurrentFile(
-		ctx,
-		sourcePath,
-		artifactPath,
-		spoolDir,
-		osMigrationSpoolStorage{},
-	); err != nil {
-		return MaterializedEventLog{}, nil, err
-	}
-	log, err := openCurrentEventLog(
-		artifactPath,
-		currentEventLogReadOnly,
-		options,
-	)
-	if err != nil {
-		return MaterializedEventLog{}, nil, err
-	}
-	lease = &EventLogArtifactLease{
-		store:        s,
-		log:          log,
-		artifactRoot: artifactRoot,
-		remove:       os.RemoveAll,
-	}
-	s.mu.Lock()
-	s.materializedEventLog = log
-	s.filelessEventLogLease = lease
-	s.mu.Unlock()
-	keepArtifact = true
-	return MaterializedEventLog{store: s, log: log}, lease, nil
-}
-
-func (l *EventLogArtifactLease) Close() error {
-	if l == nil {
-		return nil
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.closed {
-		return nil
-	}
-	if l.store != nil {
-		l.store.mutationMu.Lock()
-		defer l.store.mutationMu.Unlock()
-	}
-	if l.artifactRoot != "" {
-		if l.remove == nil {
-			return errors.New(
-				"fileless event-log artifact lease has no cleanup operation",
-			)
-		}
-		if err := l.remove(l.artifactRoot); err != nil {
-			return fmt.Errorf("remove fileless event-log artifact: %w", err)
-		}
-		if l.store != nil {
-			l.store.mu.Lock()
-			if l.store.materializedEventLog == l.log {
-				l.store.materializedEventLog = nil
-			}
-			if l.store.filelessEventLogLease == l {
-				l.store.filelessEventLogLease = nil
-			}
-			l.store.mu.Unlock()
-		}
-	}
-	l.closed = true
-	return nil
-}
-
-func removeFilelessEventLogArtifact(root string) error {
-	if root == "" {
-		return nil
-	}
-	if err := os.RemoveAll(root); err != nil {
-		return fmt.Errorf("remove fileless event-log artifact: %w", err)
-	}
-	return nil
 }
 
 func (c MaterializedEventLog) Revision() (int64, error) {
@@ -402,12 +187,29 @@ func (c MaterializedEventLog) WalkRecords(visit func(EventRecord) error) error {
 	}
 	path := s.materializedEventLog.path
 	s.mu.Unlock()
-	_, err := walkCurrentEventLogComplete(
-		path,
-		newMigrationResourceLedger(),
-		visit,
-	)
-	return err
+	log, err := openCurrentEventLog(path, currentEventLogReadOnly)
+	if err != nil {
+		return err
+	}
+	offset := log.firstEventOffset
+	for {
+		window, err := log.readSegmentForward(offset, activeTailReverseChunkBytes, nil)
+		if err != nil {
+			return err
+		}
+		for _, record := range window.Records {
+			if err := visit(record); err != nil {
+				return err
+			}
+		}
+		if window.ReachedEnd {
+			return nil
+		}
+		if window.EndOffset <= offset {
+			return errors.New("event walk did not advance")
+		}
+		offset = window.EndOffset
+	}
 }
 
 func (c MaterializedEventLog) currentLogForUse() (*currentEventLog, func(), error) {

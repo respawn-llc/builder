@@ -108,7 +108,7 @@ func TestAttentionQuestionRecoveryUsesDormantNewestActiveSegment(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("AppendRecord: %v", err)
 	}
-	task, _ := createWorkflowViewWaitingAskTask(t, ctx, metadataStore, workflowStore, binding, sessionStore.Metadata().SessionID, askID)
+	task, _ := createWorkflowViewWaitingAskTask(t, ctx, metadataStore, workflowStore, binding, sessionStore.Meta().SessionID, askID)
 	definitions, err := NewDefinitionProjection(workflowStore)
 	if err != nil {
 		t.Fatalf("NewDefinitionProjection: %v", err)
@@ -162,7 +162,7 @@ type singleSessionStoreResolver struct {
 }
 
 func (r singleSessionStoreResolver) ResolveSessionStore(_ context.Context, sessionID string) (*session.Store, error) {
-	if r.store == nil || strings.TrimSpace(sessionID) != r.store.Metadata().SessionID {
+	if r.store == nil || strings.TrimSpace(sessionID) != r.store.Meta().SessionID {
 		return nil, errors.New("session is unavailable")
 	}
 	return r.store, nil

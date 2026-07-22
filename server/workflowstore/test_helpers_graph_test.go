@@ -156,10 +156,10 @@ func createTestSession(t *testing.T, ctx context.Context, store *Store, binding 
 	if err := sessionStore.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable: %v", err)
 	}
-	if _, err := store.metadata.ResolvePersistedSession(ctx, sessionStore.Metadata().SessionID); err != nil {
+	if _, err := store.metadata.ResolvePersistedSession(ctx, sessionStore.Meta().SessionID); err != nil {
 		t.Fatalf("ResolvePersistedSession: %v", err)
 	}
-	return sessionStore.Metadata().SessionID
+	return sessionStore.Meta().SessionID
 }
 
 func linkWorkflow(t *testing.T, ctx context.Context, store *Store, projectID string, workflowID workflow.WorkflowID, isDefault bool) ProjectWorkflowLinkRecord {

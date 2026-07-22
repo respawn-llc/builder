@@ -32,7 +32,7 @@ func (e *Engine) SteerWorktreeTransitionFailure(outcome clientui.WorktreeTransit
 }
 
 func (e *Engine) materializePendingWorktreeReminder(stepID string) error {
-	state := session.CloneWorktreeReminderState(e.store.Metadata().WorktreeReminder)
+	state := session.CloneWorktreeReminderState(e.store.Meta().WorktreeReminder)
 	if state == nil {
 		return nil
 	}

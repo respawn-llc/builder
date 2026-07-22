@@ -345,7 +345,7 @@ func TestGatewayConnectionCloseReleasesOwnedIdleRuntime(t *testing.T) {
 	conn := dialGateway(t, server)
 	handshakeGateway(t, conn)
 	var activation serverapi.SessionRuntimeActivateResponse
-	request := gatewayRuntimeActivateRequest(appCore, store.Metadata().SessionID, "activate-runtime")
+	request := gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime")
 	request.OwnerID = "client-spoof"
 	callGateway(t, conn, "activate-runtime", protocol.MethodSessionRuntimeActivate, request, &activation)
 	var activationRequest serverapi.SessionRuntimeActivateRequest
@@ -358,7 +358,7 @@ func TestGatewayConnectionCloseReleasesOwnedIdleRuntime(t *testing.T) {
 		t.Fatal("timed out waiting for activation request")
 	}
 	var successor serverapi.SessionRuntimeActivateResponse
-	callGateway(t, conn, "activate-runtime-2", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Metadata().SessionID, "activate-runtime-2"), &successor)
+	callGateway(t, conn, "activate-runtime-2", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime-2"), &successor)
 	callGateway(t, conn, "release-runtime-1", protocol.MethodSessionRuntimeRelease, serverapi.SessionRuntimeReleaseRequest{
 		ClientRequestID: "release-runtime-1",
 		Attachment:      activation.Attachment,
@@ -415,7 +415,7 @@ func TestGatewayDetachOnlyReleaseInjectsOwnerAndSkipsDisconnectRelease(t *testin
 	conn := dialGateway(t, server)
 	handshakeGateway(t, conn)
 	var activation serverapi.SessionRuntimeActivateResponse
-	callGateway(t, conn, "activate-runtime", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Metadata().SessionID, "activate-runtime"), &activation)
+	callGateway(t, conn, "activate-runtime", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime"), &activation)
 	var release serverapi.SessionRuntimeReleaseResponse
 	callGateway(t, conn, "release-runtime", protocol.MethodSessionRuntimeRelease, serverapi.SessionRuntimeReleaseRequest{
 		ClientRequestID: "release-runtime",
@@ -467,7 +467,7 @@ func TestGatewayCloseIfIdleReleasePropagatesPolicy(t *testing.T) {
 	conn := dialGateway(t, server)
 	handshakeGateway(t, conn)
 	var activation serverapi.SessionRuntimeActivateResponse
-	callGateway(t, conn, "activate-runtime", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Metadata().SessionID, "activate-runtime"), &activation)
+	callGateway(t, conn, "activate-runtime", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime"), &activation)
 	var release serverapi.SessionRuntimeReleaseResponse
 	callGateway(t, conn, "release-runtime", protocol.MethodSessionRuntimeRelease, serverapi.SessionRuntimeReleaseRequest{
 		ClientRequestID: "release-runtime",
@@ -508,7 +508,7 @@ func TestGatewayMissingActivationAttachmentDoesNotRecordRuntimeOwnership(t *test
 
 	conn := dialGateway(t, server)
 	handshakeGateway(t, conn)
-	_ = callGatewayExpectError(t, conn, "activate-runtime", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Metadata().SessionID, "activate-runtime"))
+	_ = callGatewayExpectError(t, conn, "activate-runtime", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime"))
 	if err := conn.Close(); err != nil {
 		t.Fatalf("close gateway connection: %v", err)
 	}
@@ -784,8 +784,8 @@ func TestGatewayPersistedNoAuthDoesNotAuthorizeFreshConnectionsWithoutAck(t *tes
 	defer func() { _ = subscription.Close() }()
 	handshakeGateway(t, subscription)
 	callGateway(t, subscription, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
-	callGateway(t, subscription, "attach-session", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: store.Metadata().SessionID}, nil)
-	if respErr := callGatewayExpectError(t, subscription, "subscribe-fresh-no-ack", protocol.MethodSessionSubscribeTranscript, serverapi.TranscriptSubscribeRequest{SessionID: store.Metadata().SessionID}); respErr.Code != protocol.ErrCodeAuthRequired {
+	callGateway(t, subscription, "attach-session", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: store.Meta().SessionID}, nil)
+	if respErr := callGatewayExpectError(t, subscription, "subscribe-fresh-no-ack", protocol.MethodSessionSubscribeTranscript, serverapi.TranscriptSubscribeRequest{SessionID: store.Meta().SessionID}); respErr.Code != protocol.ErrCodeAuthRequired {
 		t.Fatalf("fresh session transcript subscribe = %+v, want auth required", respErr)
 	}
 }
@@ -809,7 +809,7 @@ func TestGatewaySessionTranscriptSubscriptionReturnsHydrationOnDedicatedRoute(t 
 	appCore, server := newGatewayTestServer(t)
 	defer func() { _ = appCore.Close() }()
 	store := createGatewayAuthoritativeSession(t, appCore)
-	attachment := activateGatewayController(t, appCore, store.Metadata().SessionID)
+	attachment := activateGatewayController(t, appCore, store.Meta().SessionID)
 	defer releaseGatewayController(t, appCore, attachment)
 	defer server.Close()
 
@@ -817,8 +817,8 @@ func TestGatewaySessionTranscriptSubscriptionReturnsHydrationOnDedicatedRoute(t 
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
 	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
-	callGateway(t, conn, "attach-session", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: store.Metadata().SessionID}, nil)
-	callGateway(t, conn, "subscribe-transcript", protocol.MethodSessionSubscribeTranscript, serverapi.TranscriptSubscribeRequest{SessionID: store.Metadata().SessionID}, nil)
+	callGateway(t, conn, "attach-session", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: store.Meta().SessionID}, nil)
+	callGateway(t, conn, "subscribe-transcript", protocol.MethodSessionSubscribeTranscript, serverapi.TranscriptSubscribeRequest{SessionID: store.Meta().SessionID}, nil)
 
 	var notification protocol.Request
 	if err := websocket.JSON.Receive(conn, &notification); err != nil {
@@ -904,10 +904,10 @@ func TestGatewayRejectsSessionAccessOutsideAttachedProject(t *testing.T) {
 	if err := foreignSession.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable foreign: %v", err)
 	}
-	if _, err := metadataStore.ResolveSessionExecutionTarget(context.Background(), foreignSession.Metadata().SessionID); err != nil {
+	if _, err := metadataStore.ResolveSessionExecutionTarget(context.Background(), foreignSession.Meta().SessionID); err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget precondition: %v", err)
 	}
-	record, err := metadataStore.ResolvePersistedSession(context.Background(), foreignSession.Metadata().SessionID)
+	record, err := metadataStore.ResolvePersistedSession(context.Background(), foreignSession.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ResolvePersistedSession precondition: %v", err)
 	}
@@ -925,23 +925,23 @@ func TestGatewayRejectsSessionAccessOutsideAttachedProject(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	if _, err := remote.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: foreignSession.Metadata().SessionID}); err == nil {
+	if _, err := remote.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: foreignSession.Meta().SessionID}); err == nil {
 		t.Fatal("expected foreign-project session view access to be rejected")
 	}
-	if _, err := remote.GetLatestCommittedAssistantFinalAnswer(context.Background(), serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{SessionID: foreignSession.Metadata().SessionID}); err == nil {
+	if _, err := remote.GetLatestCommittedAssistantFinalAnswer(context.Background(), serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{SessionID: foreignSession.Meta().SessionID}); err == nil {
 		t.Fatal("expected foreign-project final answer access to be rejected")
 	}
-	if _, err := remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: "persist-foreign", SessionID: foreignSession.Metadata().SessionID, Input: "should fail"}); err == nil {
+	if _, err := remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: "persist-foreign", SessionID: foreignSession.Meta().SessionID, Input: "should fail"}); err == nil {
 		t.Fatal("expected foreign-project session mutation to be rejected")
 	}
-	if _, err := remote.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{ClientRequestID: "retarget-foreign", SessionID: foreignSession.Metadata().SessionID, WorkspaceRoot: resolvedA.Config.WorkspaceRoot}); err == nil {
+	if _, err := remote.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{ClientRequestID: "retarget-foreign", SessionID: foreignSession.Meta().SessionID, WorkspaceRoot: resolvedA.Config.WorkspaceRoot}); err == nil {
 		t.Fatal("expected foreign-project session retarget to be rejected")
 	}
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
 	callGateway(t, conn, "attach-project-for-foreign-goal-checks", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: bindingA.ProjectID}, nil)
-	assertForeignGoalAccessRejected(t, conn, foreignSession.Metadata().SessionID)
+	assertForeignGoalAccessRejected(t, conn, foreignSession.Meta().SessionID)
 	if bindingA.ProjectID == bindingB.ProjectID {
 		t.Fatalf("expected distinct project ids, both=%q", bindingA.ProjectID)
 	}
@@ -1012,10 +1012,10 @@ func TestGatewayAllowsUnscopedSessionRetargetOutsideServerDefaultProject(t *test
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
-	if err := gateway.requireSessionInAttachedProject(context.Background(), &connectionState{}, foreignSession.Metadata().SessionID); err != nil {
+	if err := gateway.requireSessionInAttachedProject(context.Background(), &connectionState{}, foreignSession.Meta().SessionID); err != nil {
 		t.Fatalf("requireSessionInAttachedProject unscoped: %v", err)
 	}
-	if err := gateway.requireSessionInAttachedProject(context.Background(), &connectionState{attachedProject: bindingA.ProjectID}, foreignSession.Metadata().SessionID); err == nil {
+	if err := gateway.requireSessionInAttachedProject(context.Background(), &connectionState{attachedProject: bindingA.ProjectID}, foreignSession.Meta().SessionID); err == nil {
 		t.Fatal("expected attached project scope to reject foreign session retarget")
 	}
 }
@@ -1091,14 +1091,14 @@ func TestGatewayDraftRecoveryRoundTripKeepsServerAvailable(t *testing.T) {
 	}
 	if _, err := remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
 		ClientRequestID: "gateway-draft-recovery",
-		SessionID:       store.Metadata().SessionID,
+		SessionID:       store.Meta().SessionID,
 		Input:           "visible draft",
 		RecoveryBuffers: wantRecovery,
 	}); err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
 	}
 	initialInput, err := remote.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{
-		SessionID: store.Metadata().SessionID,
+		SessionID: store.Meta().SessionID,
 	})
 	if err != nil {
 		t.Fatalf("GetInitialInput: %v", err)
@@ -1137,10 +1137,10 @@ func TestGatewayProjectReattachClearsStaleSessionAttachment(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
 	callGateway(t, conn, "attach-project-a", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: bindingA.ProjectID}, nil)
-	callGateway(t, conn, "attach-session-a", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: storeA.Metadata().SessionID}, nil)
+	callGateway(t, conn, "attach-session-a", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: storeA.Meta().SessionID}, nil)
 	callGateway(t, conn, "attach-project-b", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: bindingB.ProjectID}, nil)
 
-	if respErr := callGatewayExpectError(t, conn, "subscribe", protocol.MethodSessionSubscribeTranscript, serverapi.TranscriptSubscribeRequest{SessionID: storeA.Metadata().SessionID}); respErr.Code != protocol.ErrCodeInvalidRequest {
+	if respErr := callGatewayExpectError(t, conn, "subscribe", protocol.MethodSessionSubscribeTranscript, serverapi.TranscriptSubscribeRequest{SessionID: storeA.Meta().SessionID}); respErr.Code != protocol.ErrCodeInvalidRequest {
 		t.Fatalf("expected session-attach-required error after project reattach, got %+v", respErr)
 	}
 }

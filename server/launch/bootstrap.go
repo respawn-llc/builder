@@ -28,7 +28,7 @@ func ResolveSessionCaller(persistenceRoot string, sessionID string) (subagentpol
 	if err != nil {
 		return subagentpolicy.Caller{}, err
 	}
-	return subagentpolicy.Caller{Workflow: store.Metadata().WorkflowSession != nil}, nil
+	return subagentpolicy.Caller{Workflow: store.Meta().WorkflowSession != nil}, nil
 }
 
 // ValidateSessionExists verifies a session reference without exposing its
@@ -54,7 +54,7 @@ func ResolveBootstrapPlan(persistenceRoot string, req BootstrapRequest) (Bootstr
 	if err != nil {
 		return BootstrapPlan{}, err
 	}
-	meta := store.Metadata()
+	meta := store.Meta()
 	if !req.WorkspaceRootExplicit && strings.TrimSpace(meta.WorkspaceRoot) != "" {
 		plan.WorkspaceRoot = strings.TrimSpace(meta.WorkspaceRoot)
 	}

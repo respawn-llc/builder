@@ -16,9 +16,7 @@ import (
 
 func TestCurrentEventLogCreatesHeaderOnlyLog(t *testing.T) {
 	path := filepath.Join(t.TempDir(), eventsFile)
-	log, err := createCurrentEventLog(path, eventLogOptions{
-		fsyncPolicy: EventLogFSyncAlways,
-	})
+	log, err := createCurrentEventLog(path)
 	if err != nil {
 		t.Fatalf("create current event log: %v", err)
 	}
@@ -62,8 +60,7 @@ func TestCurrentEventLogCreatesHeaderOnlyLog(t *testing.T) {
 
 func TestCurrentEventLogAppendAndReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), eventsFile)
-	options := eventLogOptions{fsyncPolicy: EventLogFSyncAlways}
-	log, err := createCurrentEventLog(path, options)
+	log, err := createCurrentEventLog(path)
 	if err != nil {
 		t.Fatalf("create current event log: %v", err)
 	}
@@ -92,7 +89,7 @@ func TestCurrentEventLogAppendAndReopen(t *testing.T) {
 		t.Fatalf("append end offset = %d, want after header offset %d", endOffset, log.firstEventOffset)
 	}
 
-	reopened, err := openCurrentEventLog(path, currentEventLogAuthoritative, options)
+	reopened, err := openCurrentEventLog(path, currentEventLogAuthoritative)
 	if err != nil {
 		t.Fatalf("reopen current event log: %v", err)
 	}
@@ -122,8 +119,7 @@ func TestCurrentEventLogAppendAndReopen(t *testing.T) {
 
 func TestCurrentEventLogToolCompletionProviderPathsSurviveReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), eventsFile)
-	options := eventLogOptions{fsyncPolicy: EventLogFSyncAlways}
-	log, err := createCurrentEventLog(path, options)
+	log, err := createCurrentEventLog(path)
 	if err != nil {
 		t.Fatalf("create current event log: %v", err)
 	}
@@ -189,7 +185,7 @@ func TestCurrentEventLogToolCompletionProviderPathsSurviveReopen(t *testing.T) {
 		t.Fatalf("append tool completion records: %v", err)
 	}
 
-	reopened, err := openCurrentEventLog(path, currentEventLogAuthoritative, options)
+	reopened, err := openCurrentEventLog(path, currentEventLogAuthoritative)
 	if err != nil {
 		t.Fatalf("reopen current event log: %v", err)
 	}
@@ -213,8 +209,7 @@ func TestCurrentEventLogToolCompletionProviderPathsSurviveReopen(t *testing.T) {
 
 func TestCurrentEventLogHistoryReplacementProviderRawSurvivesReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), eventsFile)
-	options := eventLogOptions{fsyncPolicy: EventLogFSyncAlways}
-	log, err := createCurrentEventLog(path, options)
+	log, err := createCurrentEventLog(path)
 	if err != nil {
 		t.Fatalf("create current event log: %v", err)
 	}
@@ -243,7 +238,7 @@ func TestCurrentEventLogHistoryReplacementProviderRawSurvivesReopen(t *testing.T
 		t.Fatalf("append history replacement: %v", err)
 	}
 
-	reopened, err := openCurrentEventLog(path, currentEventLogAuthoritative, options)
+	reopened, err := openCurrentEventLog(path, currentEventLogAuthoritative)
 	if err != nil {
 		t.Fatalf("reopen current event log: %v", err)
 	}
@@ -268,9 +263,7 @@ func TestCurrentEventLogHistoryReplacementProviderRawSurvivesReopen(t *testing.T
 
 func TestCurrentEventLogAppendRejectsSequenceGapWithoutMutation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), eventsFile)
-	log, err := createCurrentEventLog(path, eventLogOptions{
-		fsyncPolicy: EventLogFSyncAlways,
-	})
+	log, err := createCurrentEventLog(path)
 	if err != nil {
 		t.Fatalf("create current event log: %v", err)
 	}
@@ -306,8 +299,7 @@ func TestCurrentEventLogAppendRejectsSequenceGapWithoutMutation(t *testing.T) {
 
 func TestCurrentEventLogTornTailIsReadOnlyUntilAuthoritativeOpen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), eventsFile)
-	options := eventLogOptions{fsyncPolicy: EventLogFSyncAlways}
-	log, err := createCurrentEventLog(path, options)
+	log, err := createCurrentEventLog(path)
 	if err != nil {
 		t.Fatalf("create current event log: %v", err)
 	}
@@ -342,7 +334,7 @@ func TestCurrentEventLogTornTailIsReadOnlyUntilAuthoritativeOpen(t *testing.T) {
 		t.Fatalf("read torn current event log: %v", err)
 	}
 
-	readOnly, err := openCurrentEventLog(path, currentEventLogReadOnly, options)
+	readOnly, err := openCurrentEventLog(path, currentEventLogReadOnly)
 	if err != nil {
 		t.Fatalf("open torn current event log read-only: %v", err)
 	}
@@ -357,7 +349,7 @@ func TestCurrentEventLogTornTailIsReadOnlyUntilAuthoritativeOpen(t *testing.T) {
 		t.Fatal("read-only open mutated torn current event log")
 	}
 
-	authoritative, err := openCurrentEventLog(path, currentEventLogAuthoritative, options)
+	authoritative, err := openCurrentEventLog(path, currentEventLogAuthoritative)
 	if err != nil {
 		t.Fatalf("open torn current event log authoritatively: %v", err)
 	}
@@ -375,8 +367,7 @@ func TestCurrentEventLogTornTailIsReadOnlyUntilAuthoritativeOpen(t *testing.T) {
 
 func TestCurrentEventLogRejectsCompleteInvalidFinalRecordWithoutMutation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), eventsFile)
-	options := eventLogOptions{fsyncPolicy: EventLogFSyncAlways}
-	if _, err := createCurrentEventLog(path, options); err != nil {
+	if _, err := createCurrentEventLog(path); err != nil {
 		t.Fatalf("create current event log: %v", err)
 	}
 	appendCurrentTestBytes(t, path, []byte(`{"seq":1,"kind":"unsupported","payload":{}}`))
@@ -385,7 +376,7 @@ func TestCurrentEventLogRejectsCompleteInvalidFinalRecordWithoutMutation(t *test
 		t.Fatalf("read invalid current event log: %v", err)
 	}
 
-	if _, err := openCurrentEventLog(path, currentEventLogReadOnly, options); err == nil {
+	if _, err := openCurrentEventLog(path, currentEventLogReadOnly); err == nil {
 		t.Fatal("expected read-only strict contract error")
 	}
 	afterReadOnly, err := os.ReadFile(path)
@@ -396,7 +387,7 @@ func TestCurrentEventLogRejectsCompleteInvalidFinalRecordWithoutMutation(t *test
 		t.Fatal("read-only strict contract rejection mutated current event log")
 	}
 
-	if _, err := openCurrentEventLog(path, currentEventLogAuthoritative, options); err == nil {
+	if _, err := openCurrentEventLog(path, currentEventLogAuthoritative); err == nil {
 		t.Fatal("expected authoritative strict contract error")
 	}
 	afterAuthoritative, err := os.ReadFile(path)
@@ -410,8 +401,7 @@ func TestCurrentEventLogRejectsCompleteInvalidFinalRecordWithoutMutation(t *test
 
 func TestCurrentEventLogPreservesValidFinalRecordWithoutNewline(t *testing.T) {
 	path := filepath.Join(t.TempDir(), eventsFile)
-	options := eventLogOptions{fsyncPolicy: EventLogFSyncAlways}
-	_, err := createCurrentEventLog(path, options)
+	_, err := createCurrentEventLog(path)
 	if err != nil {
 		t.Fatalf("create current event log: %v", err)
 	}
@@ -443,7 +433,7 @@ func TestCurrentEventLogPreservesValidFinalRecordWithoutNewline(t *testing.T) {
 		t.Fatalf("read unterminated current event log: %v", err)
 	}
 
-	opened, err := openCurrentEventLog(path, currentEventLogAuthoritative, options)
+	opened, err := openCurrentEventLog(path, currentEventLogAuthoritative)
 	if err != nil {
 		t.Fatalf("open valid unterminated current event log: %v", err)
 	}
@@ -477,9 +467,7 @@ func TestCurrentEventLogPreservesValidFinalRecordWithoutNewline(t *testing.T) {
 
 func TestCurrentEventLogPaginatesWithPhysicalHeaderInvisibleCursors(t *testing.T) {
 	path := filepath.Join(t.TempDir(), eventsFile)
-	log, err := createCurrentEventLog(path, eventLogOptions{
-		fsyncPolicy: EventLogFSyncAlways,
-	})
+	log, err := createCurrentEventLog(path)
 	if err != nil {
 		t.Fatalf("create current event log: %v", err)
 	}
@@ -540,9 +528,7 @@ func TestCurrentEventLogPaginatesWithPhysicalHeaderInvisibleCursors(t *testing.T
 
 func TestCurrentEventLogForwardReadsOnlyOneRecordPastPage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), eventsFile)
-	log, err := createCurrentEventLog(path, eventLogOptions{
-		fsyncPolicy: EventLogFSyncAlways,
-	})
+	log, err := createCurrentEventLog(path)
 	if err != nil {
 		t.Fatalf("create current event log: %v", err)
 	}
@@ -565,9 +551,7 @@ func TestCurrentEventLogForwardReadsOnlyOneRecordPastPage(t *testing.T) {
 
 func TestCurrentEventLogBackwardValidatesImmediateNewerRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), eventsFile)
-	log, err := createCurrentEventLog(path, eventLogOptions{
-		fsyncPolicy: EventLogFSyncAlways,
-	})
+	log, err := createCurrentEventLog(path)
 	if err != nil {
 		t.Fatalf("create current event log: %v", err)
 	}
@@ -584,9 +568,7 @@ func TestCurrentEventLogBackwardValidatesImmediateNewerRecord(t *testing.T) {
 
 func TestCurrentEventLogBackwardReadsOnlyImmediateNewerRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), eventsFile)
-	log, err := createCurrentEventLog(path, eventLogOptions{
-		fsyncPolicy: EventLogFSyncAlways,
-	})
+	log, err := createCurrentEventLog(path)
 	if err != nil {
 		t.Fatalf("create current event log: %v", err)
 	}
@@ -606,9 +588,7 @@ func TestCurrentEventLogBackwardReadsOnlyImmediateNewerRecord(t *testing.T) {
 
 func TestCurrentEventLogRejectsLocalSequenceRegression(t *testing.T) {
 	path := filepath.Join(t.TempDir(), eventsFile)
-	log, err := createCurrentEventLog(path, eventLogOptions{
-		fsyncPolicy: EventLogFSyncAlways,
-	})
+	log, err := createCurrentEventLog(path)
 	if err != nil {
 		t.Fatalf("create current event log: %v", err)
 	}
@@ -626,9 +606,7 @@ func TestCurrentEventLogRejectsLocalSequenceRegression(t *testing.T) {
 
 func TestCurrentEventLogForwardValidatesImmediateBoundaryRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), eventsFile)
-	log, err := createCurrentEventLog(path, eventLogOptions{
-		fsyncPolicy: EventLogFSyncAlways,
-	})
+	log, err := createCurrentEventLog(path)
 	if err != nil {
 		t.Fatalf("create current event log: %v", err)
 	}
@@ -645,9 +623,7 @@ func TestCurrentEventLogForwardValidatesImmediateBoundaryRecord(t *testing.T) {
 
 func TestCurrentEventLogReadsRecentRecordsWithoutExposingHeader(t *testing.T) {
 	path := filepath.Join(t.TempDir(), eventsFile)
-	log, err := createCurrentEventLog(path, eventLogOptions{
-		fsyncPolicy: EventLogFSyncAlways,
-	})
+	log, err := createCurrentEventLog(path)
 	if err != nil {
 		t.Fatalf("create current event log: %v", err)
 	}
@@ -682,9 +658,7 @@ func TestCurrentEventLogReadsRecentRecordsWithoutExposingHeader(t *testing.T) {
 
 func TestCurrentEventLogRecentReadInspectsOnlyOneOlderRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), eventsFile)
-	log, err := createCurrentEventLog(path, eventLogOptions{
-		fsyncPolicy: EventLogFSyncAlways,
-	})
+	log, err := createCurrentEventLog(path)
 	if err != nil {
 		t.Fatalf("create current event log: %v", err)
 	}

@@ -74,20 +74,10 @@ func (c MaterializedEventLog) appendReplayRecords(
 	records []EventRecord,
 	requireEndByteCursor bool,
 ) (recordAppendOutcome, error) {
-	if requireEndByteCursor {
-		if c.store == nil {
-			return recordAppendOutcome{}, errors.New(
-				"materialized event log owning Store is required",
-			)
-		}
-		c.store.mu.Lock()
-		fileless := c.store.options.filelessEvents
-		c.store.mu.Unlock()
-		if fileless {
-			return recordAppendOutcome{}, errors.New(
-				"event-log byte cursor is unavailable with fileless event persistence",
-			)
-		}
+	if requireEndByteCursor && c.store == nil {
+		return recordAppendOutcome{}, errors.New(
+			"materialized event log owning Store is required",
+		)
 	}
 	inputs := make([]recordAppendInput, len(records))
 	for index, record := range records {
@@ -172,14 +162,6 @@ func (c MaterializedEventLog) AppendRecordWithEndByteCursor(
 	if c.store == nil {
 		return EventRecordAppendResult{}, errors.New(
 			"materialized event log owning Store is required",
-		)
-	}
-	c.store.mu.Lock()
-	fileless := c.store.options.filelessEvents
-	c.store.mu.Unlock()
-	if fileless {
-		return EventRecordAppendResult{}, errors.New(
-			"event-log byte cursor is unavailable with fileless event persistence",
 		)
 	}
 	outcome, err := c.appendRecordInputsAtomic([]recordAppendInput{{
@@ -285,39 +267,24 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 		return recordAppendOutcome{records: records}, err
 	}
 
-	var endByteCursor *int64
-	if s.options.filelessEvents {
-		log.lastSequence = records[len(records)-1].Seq()
-	} else {
-		postMeta := cloneMeta(s.meta)
-		postMeta.LastSequence = records[len(records)-1].Seq()
-		postMeta.UpdatedAt = s.options.now()
-		endOffset, err := s.appendCurrentRecordsLocked(log, records, previousMeta, postMeta)
-		if err != nil {
-			s.meta = previousMeta
-			s.conversationFreshness = previousFreshness
-			s.mu.Unlock()
-			return recordAppendOutcome{records: records}, err
-		}
-		endByteCursor = &endOffset
-		s.meta = postMeta
+	postMeta := cloneMeta(s.meta)
+	postMeta.LastSequence = records[len(records)-1].Seq()
+	postMeta.UpdatedAt = s.options.now()
+	endOffset, err := s.appendCurrentRecordsLocked(log, records, previousMeta, postMeta)
+	if err != nil {
+		s.meta = previousMeta
+		s.conversationFreshness = previousFreshness
+		s.mu.Unlock()
+		return recordAppendOutcome{records: records}, err
 	}
-	if s.options.filelessEvents {
-		s.meta.LastSequence = records[len(records)-1].Seq()
-		s.meta.UpdatedAt = s.options.now()
-	}
+	endByteCursor := &endOffset
+	s.meta = postMeta
 	observation, err := s.persistMetaLocked()
 	if err != nil {
-		committed := !s.options.filelessEvents
-		if !committed {
-			log.lastSequence = previousMeta.LastSequence
-			s.meta = previousMeta
-			s.conversationFreshness = previousFreshness
-		}
 		s.mu.Unlock()
 		return recordAppendOutcome{
 			records:       records,
-			committed:     committed,
+			committed:     true,
 			endByteCursor: endByteCursor,
 		}, err
 	}

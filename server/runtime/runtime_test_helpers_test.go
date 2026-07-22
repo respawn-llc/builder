@@ -398,7 +398,7 @@ func mustSetWorktreeReminderState(t *testing.T, store *session.Store, state sess
 	if err := store.SetWorktreeReminderState(&state); err != nil {
 		t.Fatalf("SetWorktreeReminderState: %v", err)
 	}
-	persisted := store.Metadata().WorktreeReminder
+	persisted := store.Meta().WorktreeReminder
 	if persisted == nil {
 		t.Fatal("worktree reminder state was not persisted")
 	}
