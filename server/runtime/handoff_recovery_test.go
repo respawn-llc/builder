@@ -100,18 +100,12 @@ func TestReopenedSessionAfterTriggerHandoffDoesNotRequeueWhenAnyCompactionAlread
 	if generation := restored.compactionRuntimeState().Count(); generation != 1 {
 		t.Fatalf("reopened compaction generation = %d, want 1", generation)
 	}
-	for _, item := range restored.transcriptRuntimeState().SnapshotItems() {
-		if item.CallID == nil || *item.CallID != handoffCall.ID {
-			continue
-		}
-		switch item.Type {
-		case llm.ResponseItemTypeFunctionCall,
-			llm.ResponseItemTypeFunctionCallOutput,
-			llm.ResponseItemTypeCustomToolCall,
-			llm.ResponseItemTypeCustomToolOutput:
-			t.Fatalf("reopened active items retained trigger-handoff protocol item: %+v", item)
-		}
-	}
+	assertNoTriggerHandoffProtocolItems(
+		t,
+		"reopened active items",
+		restored.transcriptRuntimeState().SnapshotItems(),
+		handoffCall,
+	)
 }
 
 func TestReopenedSessionAfterFailedTriggerHandoffDoesNotRequeuePendingHandoff(t *testing.T) {
@@ -234,16 +228,150 @@ func TestManualCompactionClearsQueuedTriggerHandoff(t *testing.T) {
 	if len(client.calls) == 0 {
 		t.Fatal("next turn did not produce a model request")
 	}
-	for _, item := range client.calls[len(client.calls)-1].Items {
-		if item.Type != llm.ResponseItemTypeFunctionCall &&
-			item.Type != llm.ResponseItemTypeFunctionCallOutput &&
-			item.Type != llm.ResponseItemTypeCustomToolCall &&
-			item.Type != llm.ResponseItemTypeCustomToolOutput {
+	assertNoTriggerHandoffProtocolItems(
+		t,
+		"next request",
+		client.calls[len(client.calls)-1].Items,
+		handoffCall,
+	)
+}
+
+func TestReopenedSessionAfterTriggerHandoffFutureMessageAppendFailureRetriesWithoutRecompaction(t *testing.T) {
+	store := mustCreateTestSession(t)
+	var (
+		blockFutureAppend bool
+		blocker           *testEventLogAppendBlocker
+		blockErr          error
+		blockerRestored   bool
+	)
+	t.Cleanup(func() {
+		if blocker != nil && !blockerRestored {
+			if err := blocker.Restore(); err != nil {
+				t.Errorf("restore blocked event log: %v", err)
+			}
+		}
+	})
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
+		Usage:     llm.Usage{InputTokens: 200, WindowTokens: 2_000},
+	}}}
+	engine := mustNewHandoffTestEngine(t, store, client, Config{
+		OnEvent: func(event Event) {
+			if !blockFutureAppend ||
+				event.Kind != EventConversationUpdated ||
+				event.CommittedTranscriptChanged {
+				return
+			}
+			blockFutureAppend = false
+			blocker, blockErr = blockTestEventLogAppends(store)
+		},
+	})
+	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+	)); err != nil {
+		t.Fatalf("persist seed message: %v", err)
+	}
+	handoffCall := persistSuccessfulTriggerHandoff(t, engine, "future-message-retry-handoff-call")
+	engine.handoffRuntimeState().QueueRequest("summarize", "continue")
+
+	blockFutureAppend = true
+	if _, err := engine.applyPendingHandoffIfNeeded(context.Background(), "step"); err == nil {
+		t.Fatal("handoff future-message append unexpectedly succeeded")
+	}
+	if blockErr != nil || blocker == nil {
+		t.Fatalf("block future-message append: blocker=%v error=%v", blocker, blockErr)
+	}
+	if generation := engine.CompactionCount(); generation != 1 {
+		t.Fatalf("committed handoff compaction generation = %d, want 1", generation)
+	}
+	if pending := engine.handoffRuntimeState().RequestSnapshot(); pending != nil {
+		t.Fatalf("committed handoff compaction retained pending request: %+v", pending)
+	}
+	if pendingFuture := engine.handoffRuntimeState().FutureMessageSnapshot(); pendingFuture == "" {
+		t.Fatal("failed future-message append lost retry ownership")
+	}
+	if err := blocker.Restore(); err != nil {
+		t.Fatalf("restore event log: %v", err)
+	}
+	blockerRestored = true
+
+	resumedClient := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+			Content: textutil.Value("complete"),
+		},
+		Usage: llm.Usage{InputTokens: 300, WindowTokens: 2_000},
+	}}}
+	restored := mustNewHandoffTestEngine(t, mustOpenTestSession(t, store.Dir()), resumedClient, Config{})
+	if pending := restored.handoffRuntimeState().RequestSnapshot(); pending != nil {
+		t.Fatalf("reopened session requeued completed handoff: %+v", pending)
+	}
+	if pendingFuture := restored.handoffRuntimeState().FutureMessageSnapshot(); pendingFuture == "" {
+		t.Fatal("reopened session lost future-message retry ownership")
+	}
+
+	if _, err := restored.SubmitUserMessage(context.Background(), "continue"); err != nil {
+		t.Fatalf("submit after reopen: %v", err)
+	}
+	if generation := restored.CompactionCount(); generation != 1 {
+		t.Fatalf("future-message retry re-ran handoff compaction: generation = %d, want 1", generation)
+	}
+	if len(resumedClient.calls) == 0 {
+		t.Fatal("future-message retry did not produce a model request")
+	}
+	request := resumedClient.calls[len(resumedClient.calls)-1]
+	expectedCacheKey := conversationPromptCacheKeyForLineage(
+		restored.SessionID(),
+		store.Meta().PromptCacheLineageGeneration,
+		restored.CompactionCount(),
+	)
+	if request.SessionID != restored.SessionID() || request.PromptCacheKey != expectedCacheKey {
+		t.Fatalf(
+			"reopened request identity = session:%q cache-key:%q",
+			request.SessionID,
+			request.PromptCacheKey,
+		)
+	}
+
+	futureMessages := 0
+	for _, item := range request.Items {
+		if item.Type == llm.ResponseItemTypeMessage &&
+			item.Role != nil &&
+			*item.Role == llm.RoleDeveloper &&
+			item.MessageType != nil &&
+			*item.MessageType == llm.MessageTypeHandoffFutureMessage {
+			futureMessages++
+		}
+	}
+	if futureMessages != 1 {
+		t.Fatalf("reopened request future-message items = %d, want 1", futureMessages)
+	}
+	assertNoTriggerHandoffProtocolItems(t, "reopened request", request.Items, handoffCall)
+}
+
+func assertNoTriggerHandoffProtocolItems(
+	t *testing.T,
+	scope string,
+	items []llm.ResponseItem,
+	handoffCall llm.ToolCall,
+) {
+	t.Helper()
+	for _, item := range items {
+		switch item.Type {
+		case llm.ResponseItemTypeFunctionCall,
+			llm.ResponseItemTypeFunctionCallOutput,
+			llm.ResponseItemTypeCustomToolCall,
+			llm.ResponseItemTypeCustomToolOutput:
+		default:
 			continue
 		}
 		if (item.CallID != nil && *item.CallID == handoffCall.ID) ||
 			(item.Name != nil && *item.Name == handoffCall.Name) {
-			t.Fatalf("next request retained trigger-handoff protocol item: %+v", item)
+			t.Fatalf("%s retained trigger-handoff protocol item: %+v", scope, item)
 		}
 	}
 }
