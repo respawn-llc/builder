@@ -64,6 +64,11 @@ func display() string {
 			"SELECT id FROM sessions":           true,
 			"DELETE FROM sessions WHERE id = ?": true,
 			"WHERE id = ?":                      true,
+			"EXPLAIN SELECT 1":                  true,
+			"ANALYZE":                           true,
+			"ATTACH DATABASE ? AS aux":          true,
+			"SAVEPOINT graph":                   true,
+			"RELEASE graph":                     true,
 			"SELECT a task in the UI":           false,
 			"Select Workspace":                  false,
 			"AGENT=kent":                        false,
@@ -201,6 +206,9 @@ func isSQLiteStatementOrFragment(source string) bool {
 	if hasNonProseRelationTarget(tokens) && parsesSQLiteStatement(source) {
 		return true
 	}
+	if hasStandaloneSQLiteStatementStart(tokens[0]) && parsesSQLiteStatement(source) {
+		return true
+	}
 	switch tokens[0].GetTokenType() {
 	case sqliteparser.SQLiteParserFROM_:
 		return hasNonProseRelationTarget(tokens) && parsesSQLiteStatement("SELECT 1 "+source)
@@ -220,6 +228,19 @@ func isSQLiteStatementOrFragment(source string) bool {
 	return hasComparisonOperator(tokens) &&
 		hasSQLBoundOrQuotedValue(tokens) &&
 		parsesSQLiteStatement("SELECT 1 WHERE "+source)
+}
+
+func hasStandaloneSQLiteStatementStart(token antlr.Token) bool {
+	switch token.GetTokenType() {
+	case sqliteparser.SQLiteParserANALYZE_,
+		sqliteparser.SQLiteParserATTACH_,
+		sqliteparser.SQLiteParserEXPLAIN_,
+		sqliteparser.SQLiteParserRELEASE_,
+		sqliteparser.SQLiteParserSAVEPOINT_:
+		return true
+	default:
+		return false
+	}
 }
 
 func sqliteTokens(source string) ([]antlr.Token, bool) {
