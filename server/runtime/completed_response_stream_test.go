@@ -319,6 +319,65 @@ func TestWorkflowCompletionControllerFailureUsesInvalidCompletionCapWithoutTermi
 	}
 }
 
+func TestWorkflowObservedDurableCompletionFailsQueuedSteeringDuringCloseDrain(t *testing.T) {
+	runID := workflow.RunID("workflow-run")
+	controller := &externallyCompletedWorkflowController{}
+	controller.completed.Store(true)
+	var statuses []QueuedUserMessageStatusEvent
+	client := &fakeClient{}
+	engine := mustNewExecTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		Config{
+			Model: "gpt-5",
+			WorkflowRun: &workflowruntime.Config{
+				RunID:          runID,
+				Contract:       workflowruntime.CompletionContract{RunID: runID},
+				CompletionMode: workflowruntime.CompletionModeShellCommand,
+				Controller:     controller,
+			},
+			OnEvent: func(event Event) {
+				if event.QueuedUserMessageStatus != nil {
+					statuses = append(statuses, *event.QueuedUserMessageStatus)
+				}
+			},
+		},
+	)
+
+	queued := engine.QueueUserMessageWithClientRequestID("queued user input", "request-id")
+	completed, err := engine.observeWorkflowDurableCompletion(context.Background())
+	if err != nil {
+		t.Fatalf("observe durable workflow completion: %v", err)
+	}
+	if !completed {
+		t.Fatal("durable workflow completion was not observed")
+	}
+	if err := engine.DrainQueuedUserMessagesBeforeClose(context.Background()); err != nil {
+		t.Fatalf("drain queued user messages before close: %v", err)
+	}
+	if calls := len(client.calls); calls != 0 {
+		t.Fatalf("terminal workflow completion dispatched %d model requests", calls)
+	}
+	if engine.HasQueuedUserWork() {
+		t.Fatal("terminal workflow completion retained queued user work")
+	}
+	if len(statuses) != 2 {
+		t.Fatalf("queued user statuses = %+v", statuses)
+	}
+	if accepted := statuses[0]; accepted.Status != QueuedUserMessageAccepted ||
+		accepted.QueueItemID != queued.ID ||
+		accepted.ClientRequestID != queued.ClientRequestID {
+		t.Fatalf("accepted queue status = %+v", accepted)
+	}
+	if failed := statuses[1]; failed.Status != QueuedUserMessageFailed ||
+		failed.QueueItemID != queued.ID ||
+		failed.ClientRequestID != queued.ClientRequestID ||
+		failed.FailureReason != QueuedUserMessageFailureTerminalWorkflowCompletion {
+		t.Fatalf("terminal workflow queue failure = %+v", failed)
+	}
+}
+
 func TestCompletedResponseFinalizationUsesActiveSegmentCoordinatesAfterCompaction(t *testing.T) {
 	first := scriptedllm.FinalAnswer("first")
 	first.StreamDeltas = []llm.AssistantDelta{{Text: "first", Phase: llm.MessagePhaseFinal}}
