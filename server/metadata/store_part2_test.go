@@ -2,15 +2,443 @@ package metadata
 
 import (
 	"context"
+	"core/server/metadata/sqlitegen"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
+
+func TestResolvePersistedSessionRejectsEscapingArtifactRelpath(t *testing.T) {
+	ctx := context.Background()
+	store, _, binding := newMetadataTestStore(t)
+	now := time.Now().UTC().UnixMilli()
+	if err := store.queries.UpsertSession(ctx, sqlitegen.UpsertSessionParams{
+		ID:                   "session-escape",
+		ProjectID:            binding.ProjectID,
+		WorkspaceID:          sql.NullString{String: binding.WorkspaceID, Valid: true},
+		WorktreeID:           sql.NullString{},
+		ArtifactRelpath:      "../escape",
+		Name:                 "",
+		FirstPromptPreview:   "",
+		InputDraft:           "",
+		PreviousSessionID:    sql.NullString{},
+		ParentAgentSessionID: sql.NullString{},
+		CreatedAtUnixMs:      now,
+		UpdatedAtUnixMs:      now,
+		LastSequence:         0,
+		ModelRequestCount:    0,
+		LaunchVisible:        0,
+		CwdRelpath:           ".",
+		ContinuationJson:     "{}",
+		LockedJson:           "{}",
+		UsageStateJson:       "{}",
+		MetadataJson:         "{}",
+	}); err != nil {
+		t.Fatalf("UpsertSession: %v", err)
+	}
+	_, err := store.ResolvePersistedSession(ctx, "session-escape")
+	if !errors.Is(err, ErrPathEscapesPersistenceRoot) {
+		t.Fatalf("expected escaping artifact relpath error, got %v", err)
+	}
+}
+
+func TestResolvePersistedSessionValidatesContinuationRoleJSON(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	sess := createMetadataTestSession(t, store, cfg, binding)
+	if err := sess.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1", TaskID: "task-1", WorkflowID: "workflow-1"}); err != nil {
+		t.Fatalf("SetWorkflowSessionState: %v", err)
+	}
+	tests := []struct {
+		name     string
+		payload  string
+		wantRole *string
+		wantErr  bool
+	}{
+		{name: "omitted role", payload: `{}`},
+		{name: "null role", payload: `{"agent_role":null}`},
+		{name: "custom role", payload: `{"agent_role":"worker"}`, wantRole: sessiontest.AgentRole("worker")},
+		{name: "fast role", payload: `{"agent_role":"fast"}`, wantRole: sessiontest.AgentRole("fast")},
+		{name: "empty role", payload: `{"agent_role":""}`, wantErr: true},
+		{name: "whitespace role", payload: `{"agent_role":" \t "}`, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := store.db.ExecContext(ctx, "UPDATE sessions SET continuation_json = ? WHERE id = ?", tt.payload, sess.Meta().SessionID); err != nil {
+				t.Fatalf("persist continuation JSON: %v", err)
+			}
+			record, err := store.ResolvePersistedSession(ctx, sess.Meta().SessionID)
+			if tt.wantErr {
+				if !errors.Is(err, session.ErrInvalidContinuationAgentRole) {
+					t.Fatalf("ResolvePersistedSession error = %v, want invalid role", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ResolvePersistedSession: %v", err)
+			}
+			if record.Meta.WorkflowSession == nil || record.Meta.WorkflowSession.RunID != "run-1" {
+				t.Fatalf("workflow session = %+v, want persisted workflow association", record.Meta.WorkflowSession)
+			}
+			got := record.Meta.Continuation
+			if tt.wantRole == nil {
+				if got != nil && got.AgentRole != nil {
+					t.Fatalf("continuation = %+v, want absent role", got)
+				}
+				return
+			}
+			if got == nil || got.AgentRole == nil || *got.AgentRole != *tt.wantRole {
+				t.Fatalf("continuation = %+v, want role %q", got, *tt.wantRole)
+			}
+		})
+	}
+}
+
+func TestImportSessionSnapshotRejectsInvalidContinuationRole(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	sess := createMetadataTestSession(t, store, cfg, binding)
+	snapshot := session.PersistedStoreSnapshot{
+		SessionDir: sess.Dir(),
+		Meta:       persistedMetaFromMetadata(sess.Meta()),
+	}
+	snapshot.Meta.Continuation = &session.ContinuationContext{AgentRole: sessiontest.AgentRole(" ")}
+
+	err := store.ImportSessionSnapshot(ctx, snapshot)
+	if !errors.Is(err, session.ErrInvalidContinuationAgentRole) {
+		t.Fatalf("ImportSessionSnapshot error = %v, want invalid continuation role", err)
+	}
+	record, err := store.ResolvePersistedSession(ctx, sess.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolvePersistedSession after rejected write: %v", err)
+	}
+	if record.Meta.Continuation != nil {
+		t.Fatalf("continuation = %+v, want unchanged absent continuation", record.Meta.Continuation)
+	}
+}
+
+func TestImportSessionSnapshotRejectsInvalidSessionCategory(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	sessionID := "session-invalid-category"
+	invalid := sessioncontract.SessionCategory("worker")
+	err := store.ImportSessionSnapshot(ctx, session.PersistedStoreSnapshot{
+		SessionDir: config.ProjectSessionDir(cfg, binding.ProjectID, sessionID),
+		Meta: session.Meta{
+			SessionID:          sessionID,
+			Category:           &invalid,
+			WorkspaceRoot:      binding.CanonicalRoot,
+			WorkspaceContainer: filepath.Base(binding.CanonicalRoot),
+			CreatedAt:          time.Now().UTC(),
+			UpdatedAt:          time.Now().UTC(),
+		},
+	})
+	if err == nil {
+		t.Fatal("ImportSessionSnapshot accepted invalid category")
+	}
+}
+
+func TestSessionCategoryResolverRejectsInvalidStoredCategory(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	sess := createMetadataTestSession(t, store, cfg, binding)
+	if _, err := store.db.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+		t.Fatalf("disable check constraints: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE sessions SET category = 'worker' WHERE id = ?`, sess.Meta().SessionID); err != nil {
+		t.Fatalf("seed invalid stored category: %v", err)
+	}
+	if _, err := store.ResolvePersistedSession(ctx, sess.Meta().SessionID); err == nil {
+		t.Fatal("ResolvePersistedSession accepted invalid stored category")
+	}
+}
+
+func TestSessionExecutionTargetClampsEscapingCwdRelpath(t *testing.T) {
+	target := sessionExecutionTargetFromRow(sqlitegen.GetSessionExecutionTargetByIDRow{
+		WorkspaceID:   "workspace-1",
+		WorkspaceRoot: "/tmp/workspace",
+		CwdRelpath:    "../../other-project",
+	})
+	if target.CwdRelpath != "." {
+		t.Fatalf("cwd relpath = %q, want .", target.CwdRelpath)
+	}
+	if target.EffectiveWorkdir != "/tmp/workspace" {
+		t.Fatalf("effective workdir = %q, want /tmp/workspace", target.EffectiveWorkdir)
+	}
+
+	target = sessionExecutionTargetFromRow(sqlitegen.GetSessionExecutionTargetByIDRow{
+		WorkspaceID:   "workspace-1",
+		WorkspaceRoot: "/tmp/workspace",
+		WorktreeID:    sql.NullString{String: "worktree-a", Valid: true},
+		WorktreeRoot:  sql.NullString{String: "/tmp/workspace/worktree-a", Valid: true},
+		CwdRelpath:    "/tmp/absolute",
+	})
+	if target.CwdRelpath != "." {
+		t.Fatalf("absolute cwd relpath = %q, want .", target.CwdRelpath)
+	}
+	if target.EffectiveWorkdir != "/tmp/workspace/worktree-a" {
+		t.Fatalf("absolute effective workdir = %q, want /tmp/workspace/worktree-a", target.EffectiveWorkdir)
+	}
+}
+
+func TestResolveSessionExecutionTargetUsesMetadataAuthority(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	sess := createMetadataTestSession(t, store, cfg, binding)
+
+	target, err := store.ResolveSessionExecutionTarget(ctx, sess.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
+	}
+	canonicalRoot, err := config.CanonicalWorkspaceRoot(cfg.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
+	}
+	if target.WorkspaceID != binding.WorkspaceID {
+		t.Fatalf("workspace id = %q, want %q", target.WorkspaceID, binding.WorkspaceID)
+	}
+	if target.WorkspaceRoot != canonicalRoot {
+		t.Fatalf("workspace root = %q, want %q", target.WorkspaceRoot, canonicalRoot)
+	}
+	if target.CwdRelpath != "." {
+		t.Fatalf("cwd relpath = %q, want .", target.CwdRelpath)
+	}
+	if target.EffectiveWorkdir != canonicalRoot {
+		t.Fatalf("effective workdir = %q, want %q", target.EffectiveWorkdir, canonicalRoot)
+	}
+	navigationBinding, err := store.ResolveSessionNavigationBinding(ctx, sess.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionNavigationBinding: %v", err)
+	}
+	if navigationBinding.ProjectID != binding.ProjectID || navigationBinding.WorkspaceID != binding.WorkspaceID {
+		t.Fatalf("navigation binding = %+v, want project=%q workspace=%q", navigationBinding, binding.ProjectID, binding.WorkspaceID)
+	}
+}
+
+func TestObservedSessionMetadataPersistencePreservesExecutionTarget(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	worktreeRoot := filepath.Join(cfg.WorkspaceRoot, "wt-a")
+	worktreeSubdir := filepath.Join(worktreeRoot, "pkg")
+	canonicalWorktreeRoot := createMetadataTestWorktree(t, ctx, store, binding.WorkspaceID, "worktree-a", worktreeRoot)
+	if err := os.MkdirAll(worktreeSubdir, 0o755); err != nil {
+		t.Fatalf("MkdirAll worktreeSubdir: %v", err)
+	}
+	sess := createMetadataTestSession(t, store, cfg, binding)
+	pinned := time.Unix(123, 0).UTC()
+	if _, err := store.db.ExecContext(ctx, "UPDATE sessions SET updated_at_unix_ms = ? WHERE id = ?", pinned.UnixMilli(), sess.Meta().SessionID); err != nil {
+		t.Fatalf("pin session updated at: %v", err)
+	}
+	if err := store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{SessionID: sess.Meta().SessionID, Workspace: &SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &SessionExecutionTargetUpdateWorktree{ID: "worktree-a"}, CwdRelpath: "pkg"}); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
+	}
+	resolved, err := store.ResolvePersistedSession(ctx, sess.Meta().SessionID)
+	if err != nil || !resolved.Meta.UpdatedAt.Equal(pinned) {
+		t.Fatalf("resolved updated at = %v, error = %v, want %v", resolved.Meta.UpdatedAt, err, pinned)
+	}
+	reopened, err := session.OpenByID(cfg.PersistenceRoot, sess.Meta().SessionID, store.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("session.OpenByID: %v", err)
+	}
+	if err := reopened.SetName("hello"); err != nil {
+		t.Fatalf("SetName: %v", err)
+	}
+	target, err := store.ResolveSessionExecutionTarget(ctx, sess.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
+	}
+	if target.Worktree == nil || target.Worktree.ID != "worktree-a" {
+		t.Fatalf("worktree = %+v, want worktree-a", target.Worktree)
+	}
+	if target.Worktree == nil || target.Worktree.Root != canonicalWorktreeRoot {
+		t.Fatalf("worktree root = %+v, want %q", target.Worktree, canonicalWorktreeRoot)
+	}
+	if target.CwdRelpath != "pkg" {
+		t.Fatalf("cwd relpath = %q, want pkg", target.CwdRelpath)
+	}
+	canonicalWorktreeSubdir, err := config.CanonicalWorkspaceRoot(worktreeSubdir)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot worktreeSubdir: %v", err)
+	}
+	if target.EffectiveWorkdir != canonicalWorktreeSubdir {
+		t.Fatalf("effective workdir = %q, want %q", target.EffectiveWorkdir, canonicalWorktreeSubdir)
+	}
+}
+
+func TestUpdateSessionExecutionTargetRejectsCrossWorkspaceWorktree(t *testing.T) {
+	ctx := context.Background()
+	store, cfgA, bindingA := newMetadataTestStore(t)
+	workspaceB := t.TempDir()
+	cfgB, err := config.Load(workspaceB, config.LoadOptions{})
+	if err != nil {
+		t.Fatalf("config.Load workspaceB: %v", err)
+	}
+	bindingB, err := store.RegisterWorkspaceBinding(ctx, cfgB.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding workspaceB: %v", err)
+	}
+	projectSessionsDir := filepath.Join(filepath.Join(cfgA.PersistenceRoot, "projects"), bindingA.ProjectID, "sessions")
+	sess, err := session.Create(projectSessionsDir, filepath.Base(projectSessionsDir), cfgA.WorkspaceRoot, sessioncontract.SessionCategoryMain, store.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+	worktreeRoot := filepath.Join(cfgB.WorkspaceRoot, "wt-b")
+	createMetadataTestWorktree(t, ctx, store, bindingB.WorkspaceID, "worktree-b", worktreeRoot)
+
+	err = store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{SessionID: sess.Meta().SessionID, Workspace: &SessionExecutionTargetUpdateWorkspace{ID: bindingA.WorkspaceID}, Worktree: &SessionExecutionTargetUpdateWorktree{ID: "worktree-b"}, CwdRelpath: "."})
+	var mismatch *WorktreeWorkspaceMismatchError
+	if !errors.As(err, &mismatch) || mismatch.WorktreeID != "worktree-b" || mismatch.WorkspaceID != bindingA.WorkspaceID {
+		t.Fatalf("UpdateSessionExecutionTarget error = %v", err)
+	}
+}
+
+func TestUpdateSessionExecutionTargetAllowsNullableWorkspaceTargetFromReadModel(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	sess := createMetadataTestSession(t, store, cfg, binding)
+	if _, err := store.db.ExecContext(ctx, "UPDATE sessions SET workspace_id = NULL, worktree_id = NULL, cwd_relpath = 'pkg' WHERE id = ?", sess.Meta().SessionID); err != nil {
+		t.Fatalf("clear session workspace target: %v", err)
+	}
+	target, err := store.ResolveSessionExecutionTarget(ctx, sess.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
+	}
+	if target.WorkspaceID != "" || target.Worktree != nil {
+		t.Fatalf("target = %+v, want nullable workspace root snapshot target", target)
+	}
+
+	if err := store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdateFromReadModel(sess.Meta().SessionID, target)); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget nullable workspace: %v", err)
+	}
+	var storedWorkspaceID sql.NullString
+	if err := store.db.QueryRowContext(ctx, "SELECT workspace_id FROM sessions WHERE id = ?", sess.Meta().SessionID).Scan(&storedWorkspaceID); err != nil {
+		t.Fatalf("scan workspace_id: %v", err)
+	}
+	if storedWorkspaceID.Valid {
+		t.Fatalf("stored workspace_id = %+v, want SQL NULL", storedWorkspaceID)
+	}
+}
+
+func TestUpsertWorktreeRecordRejectsMissingRequiredFields(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	baseRecord := WorktreeRecord{
+		ID:              "worktree-a",
+		WorkspaceID:     binding.WorkspaceID,
+		CanonicalRoot:   filepath.Join(cfg.WorkspaceRoot, "wt-a"),
+		DisplayName:     "wt-a",
+		Availability:    "available",
+		GitMetadataJSON: `{}`,
+	}
+	tests := []struct {
+		name   string
+		mutate func(*WorktreeRecord)
+		want   error
+	}{
+		{name: "id", mutate: func(record *WorktreeRecord) { record.ID = "  " }, want: ErrWorktreeIDRequired},
+		{name: "workspace id", mutate: func(record *WorktreeRecord) { record.WorkspaceID = "  " }, want: ErrWorktreeWorkspaceIDRequired},
+		{name: "canonical root", mutate: func(record *WorktreeRecord) { record.CanonicalRoot = "  " }, want: ErrWorktreeCanonicalRootRequired},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record := baseRecord
+			tt.mutate(&record)
+			err := store.UpsertWorktreeRecord(ctx, record)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("UpsertWorktreeRecord error = %v, want %v", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestSessionLaunchVisibilityTransitions(t *testing.T) {
+	tests := []struct {
+		name        string
+		mutate      func(*testing.T, *Store, config.App, Binding, *session.Store)
+		wantVisible bool
+		wantName    string
+	}{
+		{
+			name:        "name makes session launch-visible",
+			wantVisible: true,
+			wantName:    "incident triage",
+			mutate: func(t *testing.T, _ *Store, _ config.App, _ Binding, sess *session.Store) {
+				t.Helper()
+				if err := sess.SetName("incident triage"); err != nil {
+					t.Fatalf("SetName: %v", err)
+				}
+			},
+		},
+		{
+			name:        "input draft makes session launch-visible",
+			wantVisible: true,
+			mutate: func(t *testing.T, _ *Store, _ config.App, _ Binding, sess *session.Store) {
+				t.Helper()
+				if err := sess.SetInputDraft("draft prompt"); err != nil {
+					t.Fatalf("SetInputDraft: %v", err)
+				}
+			},
+		},
+		{
+			name:        "first user prompt makes session launch-visible",
+			wantVisible: true,
+			mutate: func(t *testing.T, _ *Store, _ config.App, _ Binding, sess *session.Store) {
+				t.Helper()
+				appendMetadataMessage(
+					t,
+					sess,
+					"step-1",
+					session.MessageRoleUser,
+					"Investigate broken startup flow\nmore detail",
+				)
+			},
+		},
+		{
+			name:        "non-user events keep prepared session hidden",
+			wantVisible: false,
+			mutate: func(t *testing.T, _ *Store, _ config.App, _ Binding, sess *session.Store) {
+				t.Helper()
+				appendMetadataMessage(t, sess, "step-1", session.MessageRoleAssistant, "warming up")
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store, cfg, binding := newMetadataTestStore(t)
+			sess := createMetadataTestSession(t, store, cfg, binding)
+
+			assertProjectSessionListingCount(t, ctx, store, binding.ProjectID, 0)
+
+			tc.mutate(t, store, cfg, binding, sess)
+
+			wantCount := 0
+			if tc.wantVisible {
+				wantCount = 1
+			}
+			listed := assertProjectSessionListingCount(t, ctx, store, binding.ProjectID, wantCount)
+			if !tc.wantVisible {
+				return
+			}
+			if listed[0].SessionID.String() != sess.Meta().SessionID {
+				t.Fatalf("listed session id = %q, want %q", listed[0].SessionID, sess.Meta().SessionID)
+			}
+			if tc.wantName != "" && listed[0].Name != tc.wantName {
+				t.Fatalf("listed session name = %q, want %q", listed[0].Name, tc.wantName)
+			}
+		})
+	}
+}
 
 func assertProjectSessionListingCount(t *testing.T, ctx context.Context, store *Store, projectID string, want int) []clientui.SessionSummary {
 	t.Helper()
