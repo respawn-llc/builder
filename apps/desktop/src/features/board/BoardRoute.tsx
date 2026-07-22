@@ -274,11 +274,9 @@ function BoardContent({
     };
     document.addEventListener("drop", handleDocumentDrop, true);
     document.addEventListener("dragend", handleCancellation, true);
-    window.addEventListener("blur", handleCancellation);
     return () => {
       document.removeEventListener("drop", handleDocumentDrop, true);
       document.removeEventListener("dragend", handleCancellation, true);
-      window.removeEventListener("blur", handleCancellation);
     };
   }, [cancelActiveDrag, stopDragAutoScroll]);
 
