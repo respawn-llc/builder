@@ -185,7 +185,7 @@
 - Multiple queued user steering messages flushed at one boundary coalesce into one user message separated by blank lines.
 - Pending queues are unbounded and in-memory only.
 - Injected mid-run messages persist only on delivery boundary.
-- Ctrl+C interrupt is turn-local: stop current model step and active tool process, keep app/session alive.
+- Ctrl+C interrupts only an active Agent Turn: stop the current model step and active tool process and keep the app/session alive. It does not cancel a submission before its Agent Turn starts; a submission already sent to the server may start or continue after the client detaches.
 - Interrupt injects detail-only developer-role control message `User interrupted you`.
 - Post-interrupt state returns idle with input ready.
 - Resume after interrupt requires explicit user text.

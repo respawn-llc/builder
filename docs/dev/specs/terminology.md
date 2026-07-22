@@ -312,15 +312,7 @@ The Session Store result `{committed, error}` for a mutation. `committed=false` 
 
 ### ReadModelVersion
 
-The single per-session epoch/generation/sequence for server-produced runtime UI facts. Runtime activity, input reconciliation, main-view snapshots, interrupt responses, versioned runtime activity/reconciliation events carried on `SessionActivity`, and migrated prompt read-model stream events all use this version so clients can ignore stale payloads with one ordering rule. It is not the raw `SessionActivity` replay cursor, and response-only versions are ordering points rather than replayable session-stream positions.
-
-### RuntimeOperationRef
-
-A client-created typed identity for an input-bearing runtime operation before dispatch. It names the operation kind and the matching request, queue item, shell, or compact identifier so runtime-control, interrupt, and reconciliation paths never infer input ownership from transcript text.
-
-### RuntimeInputReconciliation
-
-The server-owned read model that tells a client whether a `RuntimeOperationRef` was accepted, committed/submitted, canceled/not committed, failed with restore, or is unknown/evicted. It is delivered under `ReadModelVersion`; input recovery can change while runtime activity does not, but both facts share one runtime UI ordering clock.
+The single per-session epoch/generation/sequence for server-produced runtime UI facts. Runtime activity, main-view snapshots, interrupt responses, versioned runtime activity events carried on `SessionActivity`, and migrated prompt read-model stream events all use this version so clients can ignore stale payloads with one ordering rule. It is not the raw `SessionActivity` replay cursor, and response-only versions are ordering points rather than replayable session-stream positions.
 
 ### PendingModelRecovery
 
@@ -328,11 +320,11 @@ A non-liveness session recovery marker used to repair model context after an int
 
 ### DraftRecoveryBuffer
 
-An ordered persisted collection of inert local input entries recoverable after an early TUI exit. Each entry carries only its recovery category and original text; the collection carries no runtime operation, request, or queue identity. Opening a session restores eligible entry text to the editable composer and never resumes or automatically replays prior work.
+An ordered persisted collection of inert local input entries recoverable after an early TUI exit. Each entry carries only its recovery category and original text; the collection carries no delivery state. Opening a session restores eligible entry text to the editable composer and never resumes or automatically replays prior work.
 
 ### DraftInputBuffer
 
-A typed inert category-and-text entry inside `DraftRecoveryBuffer`, such as active submitted text, queued message, pending injected input, locked injected input, or reviewer buffer. Its category explains why the text was retained but carries no operation identity or delivery state. The visible prompt text remains separate from these entries.
+A typed inert category-and-text entry inside `DraftRecoveryBuffer`, such as active submitted text, queued message, pending injected input, locked injected input, or reviewer buffer. Its category explains why the text was retained but carries no delivery state. The visible prompt text remains separate from these entries.
 
 ### Forced Local Detach
 
