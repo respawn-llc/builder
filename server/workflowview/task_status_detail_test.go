@@ -37,8 +37,8 @@ func TestPendingApprovalTaskRemainsVisibleOnSourceBoardColumn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompleteRun: %v", err)
 	}
-	if pending.State != "pending_approval" {
-		t.Fatalf("completion state = %q, want pending_approval", pending.State)
+	if pending.Result.State != "pending_approval" {
+		t.Fatalf("completion state = %q, want pending_approval", pending.Result.State)
 	}
 
 	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{

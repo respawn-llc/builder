@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/server/tools"
+	"core/shared/textutil"
 )
 
 type failure struct {
@@ -36,7 +37,10 @@ func editErrorResult(c tools.Call, err error) tools.Result {
 		message = "Edit failed: " + strings.TrimSpace(message)
 	}
 	body, _ := json.Marshal(message)
-	return tools.Result{CallID: c.ID, Name: c.Name, Output: body, IsError: true, Summary: message}
+	return tools.Result{
+		CallID: c.ID, Name: c.Name, Output: body, IsError: true,
+		Summary: textutil.Value(message),
+	}
 }
 
 func editSuccessResult(c tools.Call, message string) tools.Result {
@@ -45,5 +49,7 @@ func editSuccessResult(c tools.Call, message string) tools.Result {
 		trimmed = "ok"
 	}
 	body, _ := json.Marshal(trimmed)
-	return tools.Result{CallID: c.ID, Name: c.Name, Output: body, Summary: trimmed}
+	return tools.Result{
+		CallID: c.ID, Name: c.Name, Output: body, Summary: textutil.Value(trimmed),
+	}
 }

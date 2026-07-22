@@ -357,8 +357,6 @@ func routeSessionID(params any) (string, bool) {
 		return p.SessionID, true
 	case serverapi.RuntimeInterruptRequest:
 		return p.SessionID, true
-	case serverapi.RuntimeQueueUserMessageRequest:
-		return p.SessionID, true
 	case serverapi.RuntimeLiveSteerRequest:
 		return p.SessionID, true
 	case serverapi.RuntimeLiveStopRequest:

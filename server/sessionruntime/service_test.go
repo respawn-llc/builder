@@ -15,12 +15,14 @@ import (
 	runtimepkg "core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	shelltool "core/server/tools/shell"
 	"core/server/tools/shell/postprocess"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -47,7 +49,7 @@ func (c *blockingLLMClient) Generate(_ context.Context, _ llm.Request) (llm.Resp
 	c.enteredOnce.Do(func() { close(c.entered) })
 	<-c.release
 	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}, nil
 }
@@ -67,22 +69,7 @@ func TestAppendRecoveredWarningIfNeededPersistsOnce(t *testing.T) {
 	if err := appendRecoveredWarning(fixture.store, fixture.api.recoveredWarningProvider); err != nil {
 		t.Fatalf("append duplicate warning: %v", err)
 	}
-	count := 0
-	if err := fixture.store.WalkEvents(func(evt session.Event) error {
-		if evt.Kind != "local_entry" {
-			return nil
-		}
-		var entry recoveredWarningEntry
-		if err := json.Unmarshal(evt.Payload, &entry); err != nil {
-			return err
-		}
-		if entry.Role == "warning" && entry.Text == warning {
-			count++
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("walk events: %v", err)
-	}
+	count := recoveredWarningEntryCount(t, fixture.store, warning)
 	if count != 1 {
 		t.Fatalf("warning count = %d, want 1", count)
 	}
@@ -99,24 +86,63 @@ func TestAppendRecoveredWarningIfNeededPersistsOnce(t *testing.T) {
 	if err := appendRecoveredWarning(reopened, fixture.api.recoveredWarningProvider); err != nil {
 		t.Fatalf("append warning after reopen: %v", err)
 	}
-	reopenedCount := 0
-	if err := reopened.WalkEvents(func(evt session.Event) error {
-		if evt.Kind != "local_entry" {
-			return nil
-		}
-		var entry recoveredWarningEntry
-		if err := json.Unmarshal(evt.Payload, &entry); err != nil {
-			return err
-		}
-		if entry.Role == "warning" && entry.Text == warning {
-			reopenedCount++
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("walk reopened events: %v", err)
-	}
+	reopenedCount := recoveredWarningEntryCount(t, reopened, warning)
 	if reopenedCount != 1 {
 		t.Fatalf("reopened warning count = %d, want 1", reopenedCount)
+	}
+}
+
+func TestAppendRecoveredWarningCommitsMarkerWithEventBeforeObserverFailure(t *testing.T) {
+	persistence := sessiontest.NewPersistence()
+	gate := sessiontest.NewPersistenceGate(persistence)
+	projectSessionsDir := t.TempDir()
+	workspaceRoot := t.TempDir()
+	store, err := session.Create(
+		projectSessionsDir,
+		filepath.Base(projectSessionsDir),
+		workspaceRoot,
+		sessioncontract.SessionCategoryMain,
+		session.WithPersistenceObserver(gate),
+		session.WithPersistedSessionResolver(persistence),
+	)
+	if err != nil {
+		t.Fatalf("create gated session: %v", err)
+	}
+	warning := "generated warning"
+	observerErr := errors.New("warning metadata observer failed")
+	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		return snapshot.Meta.GeneratedRecoveredWarningIssued
+	}, observerErr)
+
+	if err := appendRecoveredWarning(
+		store,
+		func() (string, bool, error) { return warning, true, nil },
+	); !errors.Is(err, observerErr) {
+		t.Fatalf("append warning error = %v, want %v", err, observerErr)
+	}
+	if !store.Meta().GeneratedRecoveredWarningIssued {
+		t.Fatal("committed warning append did not retain its metadata marker")
+	}
+
+	reopened, err := session.OpenByID(
+		projectSessionsDir,
+		store.Meta().SessionID,
+		persistence.Options()...,
+	)
+	if err != nil {
+		t.Fatalf("reopen committed warning: %v", err)
+	}
+	if !reopened.Meta().GeneratedRecoveredWarningIssued {
+		t.Fatal("reopened warning lost its atomic metadata marker")
+	}
+	if err := appendRecoveredWarning(
+		reopened,
+		func() (string, bool, error) { return warning, true, nil },
+	); err != nil {
+		t.Fatalf("retry warning after reopen: %v", err)
+	}
+	if count := recoveredWarningEntryCount(t, reopened, warning); count != 1 {
+		t.Fatalf("warning count after committed retry = %d, want 1", count)
 	}
 }
 
@@ -164,7 +190,7 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 		if req.Purpose != runtimewire.RuntimeClientPurposeMain {
 			t.Fatalf("factory purpose = %v, want main", req.Purpose)
 		}
-		return &sessionRuntimeTestLLMClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200000}}}}, nil
+		return &sessionRuntimeTestLLMClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}}}}, nil
 	})
 	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{RuntimeClientFactory: factory})
 
@@ -225,7 +251,7 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 	})
 	client := &sessionRuntimeTestLLMClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "running", Phase: llm.MessagePhaseCommentary},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("running"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: []llm.ToolCall{{
 				ID:    "call-active-shell",
 				Name:  string(toolspec.ToolExecCommand),
@@ -234,7 +260,7 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -291,23 +317,30 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 		t.Fatalf("SubmitUserMessage through activated runtime: %v", err)
 	}
 
-	window, err := fixture.store.ReadRecentEvents(128)
+	eventLog, err := fixture.store.MaterializeEventLog()
 	if err != nil {
-		t.Fatalf("ReadRecentEvents: %v", err)
+		t.Fatalf("MaterializeEventLog: %v", err)
+	}
+	window, err := eventLog.ReadRecentRecords(128)
+	if err != nil {
+		t.Fatalf("ReadRecentRecords: %v", err)
 	}
 	var toolResult string
-	for _, event := range window.Events {
-		if event.Kind != "message" {
+	for _, record := range window.Records {
+		payload, payloadErr := record.Payload()
+		if payloadErr != nil {
+			t.Fatalf("read event payload: %v", payloadErr)
+		}
+		message, ok := payload.(session.MessageRecord)
+		if !ok {
 			continue
 		}
-		var message llm.Message
-		if err := json.Unmarshal(event.Payload, &message); err != nil {
-			t.Fatalf("decode message event: %v", err)
-		}
-		if message.Role != llm.RoleTool || message.ToolCallID != "call-active-shell" {
+		if message.Role != session.MessageRoleTool ||
+			message.ToolCallID == nil || *message.ToolCallID != "call-active-shell" ||
+			message.Content == nil {
 			continue
 		}
-		if err := json.Unmarshal([]byte(message.Content), &toolResult); err != nil {
+		if err := json.Unmarshal([]byte(*message.Content), &toolResult); err != nil {
 			t.Fatalf("decode exec_command result: %v", err)
 		}
 		break

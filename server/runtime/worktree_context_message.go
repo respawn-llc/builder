@@ -3,29 +3,33 @@ package runtime
 import (
 	"errors"
 	"fmt"
-	"strings"
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/textutil"
 )
 
 func normalizePersistedMessageWorktreeContext(message llm.Message) (llm.Message, error) {
-	isWorktreeMessage := message.MessageType == llm.MessageTypeWorktreeMode ||
-		message.MessageType == llm.MessageTypeWorktreeModeExit
+	isWorktreeMessage := message.MessageType != nil &&
+		(*message.MessageType == llm.MessageTypeWorktreeMode ||
+			*message.MessageType == llm.MessageTypeWorktreeModeExit)
 	if message.WorktreeContext == nil {
 		if isWorktreeMessage {
 			return llm.Message{}, errors.New("persist worktree context message: typed worktree context is required")
 		}
 		return message, nil
 	}
-	if !isWorktreeMessage {
-		return llm.Message{}, fmt.Errorf("persist worktree context message: message type %q cannot carry worktree context", message.MessageType)
+	if message.MessageType == nil {
+		return llm.Message{}, errors.New("persist worktree context message: absent message type cannot carry worktree context")
 	}
-	if strings.TrimSpace(message.SourcePath) != "" {
+	if !isWorktreeMessage {
+		return llm.Message{}, fmt.Errorf("persist worktree context message: message type %q cannot carry worktree context", *message.MessageType)
+	}
+	if _, present := textutil.OptionalTrimmed(message.SourcePath); present {
 		return llm.Message{}, errors.New("persist worktree context message: source_path duplicates typed effective cwd")
 	}
 	mode := session.WorktreeReminderModeEnter
-	if message.MessageType == llm.MessageTypeWorktreeModeExit {
+	if *message.MessageType == llm.MessageTypeWorktreeModeExit {
 		mode = session.WorktreeReminderModeExit
 	}
 	state, err := session.NormalizeWorktreeReminderState(session.WorktreeReminderState{

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -17,19 +16,11 @@ import (
 	"core/server/tools"
 	"core/server/workflowruntime"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
-func seedCompactionMessages(t *testing.T, store *session.Store, message llm.Message) {
-	t.Helper()
-	events := slices.Repeat([]session.ReplayEvent{{Kind: "message", Payload: mustJSON(message)}}, 128)
-	if _, receipt, err := store.AppendReplayEvents(events); err != nil || !receipt.Committed {
-		t.Fatalf("seed compaction messages receipt=%+v error=%v", receipt, err)
-	}
-}
-
 func TestRemoteCompactionUsesSublinearPreciseTokenCountCalls(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	maxItemsSeen := 0
@@ -43,16 +34,20 @@ func TestRemoteCompactionUsesSublinearPreciseTokenCountCalls(t *testing.T) {
 		compactionResponses: []llm.CompactionResponse{
 			{
 				OutputItems: []llm.ResponseItem{
-					{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "seed"},
-					{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+					{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("seed")},
+					{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 				},
 				Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 400000},
 			},
 		},
 	}
 
-	seedCompactionMessages(t, store, llm.Message{Role: llm.RoleAssistant, Content: "a"})
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
+	for i := 0; i < 600; i++ {
+		if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Content: textutil.Value("a")}})); err != nil {
+			t.Fatalf("append assistant message %d: %v", i, err)
+		}
+	}
 
 	if err := eng.CompactContext(context.Background(), ""); err != nil {
 		t.Fatalf("compact: %v", err)
@@ -67,7 +62,6 @@ func TestRemoteCompactionUsesSublinearPreciseTokenCountCalls(t *testing.T) {
 }
 
 func TestLocalCompactionCarryoverUsesSublinearPreciseTokenCountCalls(t *testing.T) {
-	t.Parallel()
 	store := mustCreateTestSession(t)
 
 	maxItemsSeen := 0
@@ -79,16 +73,20 @@ func TestLocalCompactionCarryoverUsesSublinearPreciseTokenCountCalls(t *testing.
 			return len(req.Items) * 1000
 		},
 		responses: []llm.Response{
-			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "summary"}, Usage: llm.Usage{WindowTokens: 400000}},
+			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")}, Usage: llm.Usage{WindowTokens: 400000}},
 		},
 	}
 
-	seedCompactionMessages(t, store, llm.Message{Role: llm.RoleUser, Content: "u"})
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:               "gpt-5",
 		ContextWindowTokens: 400_000,
 		CompactionMode:      "local",
 	})
+	for i := 0; i < 512; i++ {
+		if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("u")}})); err != nil {
+			t.Fatalf("append user message %d: %v", i, err)
+		}
+	}
 
 	if err := eng.CompactContext(context.Background(), ""); err != nil {
 		t.Fatalf("compact: %v", err)
@@ -120,26 +118,26 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 
 	client := &fakeClient{
 		responses: []llm.Response{
-			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "summary"}},
+			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")}},
 		},
 	}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, Content: "canonical context"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("canonical context")}})); err != nil {
 		t.Fatalf("append canonical context: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "old user request"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("old user request")}})); err != nil {
 		t.Fatalf("append old user message: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Content: "old assistant response"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Content: textutil.Value("old assistant response")}})); err != nil {
 		t.Fatalf("append old assistant message: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "old compacted summary"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("old compacted summary")}})); err != nil {
 		t.Fatalf("append compaction checkpoint: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "new user request"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("new user request")}})); err != nil {
 		t.Fatalf("append new user message: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Content: "new assistant response"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Content: textutil.Value("new assistant response")}})); err != nil {
 		t.Fatalf("append new assistant message: %v", err)
 	}
 
@@ -161,16 +159,16 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 		if item.Type != llm.ResponseItemTypeMessage {
 			continue
 		}
-		if item.Role == llm.RoleDeveloper && item.Content == "canonical context" {
+		if item.Role != nil && *item.Role == llm.RoleDeveloper && item.Content != nil && *item.Content == "canonical context" {
 			foundCanonical = true
 		}
-		if item.Role == llm.RoleDeveloper && item.MessageType == llm.MessageTypeCompactionSummary {
+		if item.Role != nil && *item.Role == llm.RoleDeveloper && item.MessageType != nil && *item.MessageType == llm.MessageTypeCompactionSummary {
 			foundCheckpoint = true
 		}
-		if item.Role == llm.RoleUser && item.Content == "new user request" {
+		if item.Role != nil && *item.Role == llm.RoleUser && item.Content != nil && *item.Content == "new user request" {
 			foundNewUser = true
 		}
-		if item.Role == llm.RoleUser && item.Content == "old user request" {
+		if item.Role != nil && *item.Role == llm.RoleUser && item.Content != nil && *item.Content == "old user request" {
 			foundOldUser = true
 		}
 	}
@@ -195,13 +193,13 @@ func TestManualCompactionLocalFailsWhenModelAttemptsToolCalls(t *testing.T) {
 	client := &fakeClient{
 		responses: []llm.Response{
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: ""},
+				Assistant: llm.Message{Role: llm.RoleAssistant},
 				ToolCalls: []llm.ToolCall{{ID: "call_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
 			},
 		},
 	}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 
@@ -216,7 +214,7 @@ func TestManualCompactionLocalFailsWhenModelAttemptsToolCalls(t *testing.T) {
 		t.Fatalf("manual compaction tool choice mode = %q, want automatic", client.calls[0].ToolChoiceMode)
 	}
 	for _, item := range client.calls[0].Items {
-		if item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID == "call_1" {
+		if item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID != nil && *item.CallID == "call_1" {
 			t.Fatalf("did not expect manual compaction request to inject synthetic failed tool output, got %+v", client.calls[0].Items)
 		}
 	}
@@ -227,7 +225,7 @@ func TestManualCompactionDisabledWhenModeNone(t *testing.T) {
 
 	client := &fakeCompactionClient{}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "none"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append message: %v", err)
 	}
 
@@ -250,8 +248,8 @@ func TestAutoCompactionRecomputesUsageFromReplacementHistory(t *testing.T) {
 		compactionResponses: []llm.CompactionResponse{
 			{
 				OutputItems: []llm.ResponseItem{
-					{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"},
-					{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+					{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")},
+					{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 				},
 				Usage: llm.Usage{InputTokens: 190000, OutputTokens: 1000, WindowTokens: 200000},
 			},
@@ -262,7 +260,7 @@ func TestAutoCompactionRecomputesUsageFromReplacementHistory(t *testing.T) {
 	if _, err := eng.SetGoal("survive automatic compaction", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 190000, OutputTokens: 0, WindowTokens: 200000})
@@ -306,7 +304,7 @@ func TestEmitCompactionStatusStillPublishesFailureEventWhenErrorPersistenceFails
 func TestReplaceHistoryDoesNotMutateRuntimeStateWhenEventAppendFails(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "pre-compaction"}})); err != nil {
+	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("pre-compaction")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	oldUsage := &session.UsageState{InputTokens: 42, WindowTokens: 100}
@@ -328,13 +326,13 @@ func TestReplaceHistoryDoesNotMutateRuntimeStateWhenEventAppendFails(t *testing.
 		t.Fatal("expected non-empty manual compaction carryover")
 	}
 	_, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{
-		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"},
+		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")},
 		carryover,
 	}))
 	if err == nil {
 		t.Fatal("expected replaceHistory persistence failure")
 	}
-	if messages := eng.transcriptRuntimeState().SnapshotMessages(); len(messages) != 1 || messages[0].Content != "pre-compaction" {
+	if messages := eng.transcriptRuntimeState().SnapshotMessages(); len(messages) != 1 || messageContent(messages[0]) != "pre-compaction" {
 		t.Fatalf("runtime transcript mutated despite persistence failure: %+v", messages)
 	}
 	if !eng.compactionRuntimeState().SoonReminderIssued() {
@@ -350,14 +348,13 @@ func TestCommittedCompactionHistoryReplacementInvalidatesUsageAcrossImmediateReo
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 	eng := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
-	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "pre-compaction"}})); err != nil {
+	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("pre-compaction")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	oldUsage := llm.Usage{
-		InputTokens:          190_000,
-		WindowTokens:         200_000,
-		CachedInputTokens:    190_000,
-		HasCachedInputTokens: true,
+		InputTokens:       190_000,
+		WindowTokens:      200_000,
+		CachedInputTokens: textutil.Value(190_000),
 	}
 	if _, err := eng.recordLastUsage(oldUsage); err != nil {
 		t.Fatalf("persist seed usage state: %v", err)
@@ -366,14 +363,14 @@ func TestCommittedCompactionHistoryReplacementInvalidatesUsageAcrossImmediateReo
 		return snapshot.Meta.LastSequence >= 2 && snapshot.Meta.UsageState == nil
 	}, observerErr)
 
-	_, receipt, err := store.AppendCompactionHistoryReplacement("step-compact", historyReplacementPayload{
+	_, receipt, err := appendTestCompactionHistoryReplacement(t, store, "step-compact", historyReplacementPayload{
 		Engine:           "local",
 		Mode:             string(compactionModeManual),
-		CompactionNumber: 1,
+		CompactionNumber: textutil.Value(1),
 		Items: llm.ItemsFromMessages([]llm.Message{{
 			Role:        llm.RoleDeveloper,
-			MessageType: llm.MessageTypeCompactionSummary,
-			Content:     "summary",
+			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+			Content:     textutil.Value("summary"),
 		}}),
 	})
 	if !receipt.Committed || !errors.Is(err, observerErr) {
@@ -403,14 +400,13 @@ func TestCommittedHistoryReplacementPreventsStaleUsageFromLaterMetadataPersisten
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "pre-compaction"}})); err != nil {
+	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("pre-compaction")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	oldUsage := llm.Usage{
-		InputTokens:          190_000,
-		WindowTokens:         200_000,
-		CachedInputTokens:    190_000,
-		HasCachedInputTokens: true,
+		InputTokens:       190_000,
+		WindowTokens:      200_000,
+		CachedInputTokens: textutil.Value(190_000),
 	}
 	if _, err := eng.recordLastUsage(oldUsage); err != nil {
 		t.Fatalf("persist seed usage state: %v", err)
@@ -419,12 +415,12 @@ func TestCommittedHistoryReplacementPreventsStaleUsageFromLaterMetadataPersisten
 		return snapshot.Meta.LastSequence >= 2 && snapshot.Meta.UsageState == nil
 	}, replacementErr)
 
-	receipt, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"}}))
+	receipt, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")}}))
 	if !receipt.Committed || !errors.Is(err, replacementErr) {
 		t.Fatalf("replaceHistory receipt=%+v error=%v, want committed observer failure", receipt, err)
 	}
 	messages := eng.transcriptRuntimeState().SnapshotMessages()
-	if len(messages) != 1 || messages[0].Content != "summary" {
+	if len(messages) != 1 || messageContent(messages[0]) != "summary" {
 		t.Fatalf("runtime transcript not updated after durable history replacement: %+v", messages)
 	}
 
@@ -467,22 +463,22 @@ func TestAutoCompactionRemoteReplacesHistoryAndCarriesCompactionItem(t *testing.
 	client := &fakeCompactionClient{
 		responses: []llm.Response{
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working"},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working")},
 				ToolCalls: []llm.ToolCall{
 					{ID: "call_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
 				},
 				Usage: llm.Usage{InputTokens: 190000, OutputTokens: 2000, WindowTokens: 200000},
 			},
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
 				Usage:     llm.Usage{InputTokens: 2000, OutputTokens: 1000, WindowTokens: 200000},
 			},
 		},
 		compactionResponses: []llm.CompactionResponse{
 			{
 				OutputItems: []llm.ResponseItem{
-					{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "run tools"},
-					{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+					{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("run tools")},
+					{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 				},
 				Usage: llm.Usage{InputTokens: 12000, OutputTokens: 1000, WindowTokens: 200000},
 			},
@@ -495,8 +491,8 @@ func TestAutoCompactionRemoteReplacesHistoryAndCarriesCompactionItem(t *testing.
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if msg.Content != "done" {
-		t.Fatalf("assistant content = %q, want done", msg.Content)
+	if messageContent(msg) != "done" {
+		t.Fatalf("assistant content = %q, want done", messageContent(msg))
 	}
 	if len(client.compactionCalls) != 1 {
 		t.Fatalf("expected one remote compaction call, got %d", len(client.compactionCalls))
@@ -507,7 +503,7 @@ func TestAutoCompactionRemoteReplacesHistoryAndCarriesCompactionItem(t *testing.
 
 	foundCompactionItem := false
 	for _, item := range client.calls[1].Items {
-		if item.Type == llm.ResponseItemTypeCompaction && item.EncryptedContent == "enc_1" {
+		if item.Type == llm.ResponseItemTypeCompaction && item.EncryptedContent != nil && *item.EncryptedContent == "enc_1" {
 			foundCompactionItem = true
 			break
 		}
@@ -516,7 +512,7 @@ func TestAutoCompactionRemoteReplacesHistoryAndCarriesCompactionItem(t *testing.
 		t.Fatalf("expected compaction item in post-compaction request, got %+v", client.calls[1].Items)
 	}
 
-	events, err := sessiontest.CollectEvents(store)
+	events, err := collectTestEventRecords(store)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -536,8 +532,8 @@ func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{{
 		OutputItems: []llm.ResponseItem{
-			{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "remote summary"},
-			{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+			{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("remote summary")},
+			{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 		},
 		Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 	}}}
@@ -545,10 +541,10 @@ func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
 	workflowCfg := testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool)
 	workflowCfg.TaskCommentCounter = counter
 	eng := mustNewWorkflowTestEngine(t, store, client, workflowCfg, Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeWorkflowMode, SourcePath: "run-1", Content: "old workflow prompt with 1 comment"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), SourcePath: textutil.Value("run-1"), Content: textutil.Value("old workflow prompt with 1 comment")}})); err != nil {
 		t.Fatalf("append stale workflow prompt: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 
@@ -563,8 +559,8 @@ func TestRemoteCompactionRefreshesWorkflowTaskCommentCount(t *testing.T) {
 	if len(workflowMessages) != 1 {
 		t.Fatalf("workflow prompt count after compaction = %d, want 1; items=%+v", len(workflowMessages), eng.transcriptRuntimeState().SnapshotItems())
 	}
-	if workflowMessages[0].SourcePath != "run-1" {
-		t.Fatalf("workflow prompt source path = %q, want run-1", workflowMessages[0].SourcePath)
+	if workflowMessages[0].SourcePath == nil || *workflowMessages[0].SourcePath != "run-1" {
+		t.Fatalf("workflow prompt source path = %v, want run-1", workflowMessages[0].SourcePath)
 	}
 }
 
@@ -572,8 +568,8 @@ func TestRemoteCompactionTaskCommentCountErrorDoesNotReplaceHistory(t *testing.T
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{{
 		OutputItems: []llm.ResponseItem{
-			{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "remote summary"},
-			{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+			{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("remote summary")},
+			{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 		},
 		Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 	}}}
@@ -581,7 +577,7 @@ func TestRemoteCompactionTaskCommentCountErrorDoesNotReplaceHistory(t *testing.T
 	workflowCfg := testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool)
 	workflowCfg.TaskCommentCounter = &fakeTaskCommentCounter{err: countErr}
 	eng := mustNewWorkflowTestEngine(t, store, client, workflowCfg, Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 
@@ -590,10 +586,10 @@ func TestRemoteCompactionTaskCommentCountErrorDoesNotReplaceHistory(t *testing.T
 		t.Fatalf("compactNow error = %v, want %v", err, countErr)
 	}
 	messages := eng.transcriptRuntimeState().SnapshotMessages()
-	if len(messages) != 1 || messages[0].Role != llm.RoleUser || messages[0].Content != "seed" {
+	if len(messages) != 1 || messages[0].Role != llm.RoleUser || messageContent(messages[0]) != "seed" {
 		t.Fatalf("active list mutated after comment count error: %+v", messages)
 	}
-	events, err := sessiontest.CollectEvents(store)
+	events, err := collectTestEventRecords(store)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -641,7 +637,7 @@ func TestCompactionOmitsActiveGoalContinuationWhenGoalIsNotActive(t *testing.T) 
 					t.Fatal(err)
 				}
 			}
-			if err := engine.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+			if err := engine.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 				t.Fatalf("append seed: %v", err)
 			}
 			if _, _, err := engine.compactNow(context.Background(), "step-1", compactionModeManual, "", false); err != nil {
@@ -658,8 +654,8 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndManualCarryoverA
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{{
 		OutputItems: []llm.ResponseItem{
-			{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "remote summary"},
-			{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+			{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("remote summary")},
+			{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 		},
 		Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 	}}}
@@ -674,7 +670,7 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndManualCarryoverA
 		t.TempDir(),
 		t.TempDir(),
 	))
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 
@@ -682,7 +678,7 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndManualCarryoverA
 		t.Fatalf("compactNow: %v", err)
 	}
 
-	events, err := sessiontest.CollectEvents(store)
+	events, err := collectTestEventRecords(store)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -693,9 +689,7 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndManualCarryoverA
 			continue
 		}
 		historyIndex = idx
-		if err := json.Unmarshal(evt.Payload, &replacement); err != nil {
-			t.Fatalf("decode history replacement: %v", err)
-		}
+		replacement = persistedHistoryReplacementForTest(t, evt)
 		break
 	}
 	if historyIndex < 0 {
@@ -704,7 +698,10 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndManualCarryoverA
 	summaryIndex, environmentIndex, goalIndex, worktreeIndex, carryoverIndex := -1, -1, -1, -1, -1
 	goalCount := 0
 	for idx, item := range replacement.Items {
-		switch item.MessageType {
+		if item.MessageType == nil {
+			continue
+		}
+		switch *item.MessageType {
 		case llm.MessageTypeCompactionSummary:
 			summaryIndex = idx
 		case llm.MessageTypeEnvironment:
@@ -712,14 +709,14 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndManualCarryoverA
 		case llm.MessageTypeActiveGoalContinuation:
 			goalIndex = idx
 			goalCount++
-			if item.Content != prompts.RenderActiveGoalContinuationPrompt("preserve atomic goal context") {
-				t.Fatalf("active-goal continuation content = %q", item.Content)
+			if item.Content == nil || *item.Content != prompts.RenderActiveGoalContinuationPrompt("preserve atomic goal context") {
+				t.Fatalf("active-goal continuation content = %v", item.Content)
 			}
 		case llm.MessageTypeWorktreeMode:
 			worktreeIndex = idx
 		case llm.MessageTypeManualCompactionCarryover:
 			carryoverIndex = idx
-			if !strings.Contains(item.Content, "seed") {
+			if item.Content == nil || !strings.Contains(*item.Content, "seed") {
 				t.Fatalf("manual carryover lost the last visible user message: %+v", item)
 			}
 		}
@@ -734,11 +731,11 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndManualCarryoverA
 		if evt.Kind != "message" {
 			continue
 		}
-		var msg llm.Message
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			t.Fatalf("decode message event: %v", err)
-		}
-		if msg.Role == llm.RoleDeveloper && (msg.MessageType == llm.MessageTypeEnvironment || msg.MessageType == llm.MessageTypeActiveGoalContinuation || msg.MessageType == llm.MessageTypeManualCompactionCarryover) {
+		msg := persistedMessageForTest(t, evt)
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil &&
+			(*msg.MessageType == llm.MessageTypeEnvironment ||
+				*msg.MessageType == llm.MessageTypeActiveGoalContinuation ||
+				*msg.MessageType == llm.MessageTypeManualCompactionCarryover) {
 			t.Fatalf("base meta, active-goal continuation, and manual carryover must be embedded in the replacement payload, not steered separately afterward: events=%+v", events)
 		}
 	}
@@ -760,19 +757,19 @@ func TestHistoryReplacementAppendObserverFailureUpdatesLiveActiveListForNextTurn
 	workspace := t.TempDir()
 	storeRoot := t.TempDir()
 	observer := &failOnHistoryReplacementAgentResetObservation{}
-	store := mustCreateNamedTestSessionAt(t, storeRoot, "ws", workspace, session.WithPersistenceObserver(observer))
-	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"}, Usage: llm.Usage{WindowTokens: 200000}}}}
+	store := mustCreateNamedTestSessionAt(t, storeRoot, "ws", workspace, withRuntimeTestPersistenceObserver(observer))
+	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")}, Usage: llm.Usage{WindowTokens: 200000}}}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "before replacement"}})); err != nil {
+	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("before replacement")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	_, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary seed"}}))
+	_, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary seed")}}))
 	if err == nil {
 		t.Fatal("expected replacement observer failure")
 	}
 	messages := eng.transcriptRuntimeState().SnapshotMessages()
-	if len(messages) != 1 || messages[0].MessageType != llm.MessageTypeCompactionSummary || messages[0].Content != "summary seed" {
+	if len(messages) != 1 || messages[0].MessageType == nil || *messages[0].MessageType != llm.MessageTypeCompactionSummary || messageContent(messages[0]) != "summary seed" {
 		t.Fatalf("live active list after committed replacement error = %+v, want compacted seed", messages)
 	}
 
@@ -785,10 +782,10 @@ func TestHistoryReplacementAppendObserverFailureUpdatesLiveActiveListForNextTurn
 	requestMessages := requestMessages(client.calls[0])
 	summarySeen := false
 	for _, msg := range requestMessages {
-		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeCompactionSummary && msg.Content == "summary seed" {
+		if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeCompactionSummary && messageContent(msg) == "summary seed" {
 			summarySeen = true
 		}
-		if msg.Role == llm.RoleUser && msg.Content == "before replacement" {
+		if msg.Role == llm.RoleUser && messageContent(msg) == "before replacement" {
 			t.Fatalf("request kept pre-replacement user message after committed replacement error: %+v", requestMessages)
 		}
 	}
@@ -827,8 +824,8 @@ func newCommittedCompactionFixture(t *testing.T, observer session.PersistenceObs
 		},
 		compactionResponses: []llm.CompactionResponse{{
 			OutputItems: []llm.ResponseItem{
-				{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"},
-				{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")},
+				{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 			},
 			Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 		}},
@@ -838,7 +835,7 @@ func newCommittedCompactionFixture(t *testing.T, observer session.PersistenceObs
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { fixture.events = append(fixture.events, event) },
 	})
-	if err := fixture.engine.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := fixture.engine.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	fixture.engine.compactionRuntimeState().SetSoonReminderIssued(true)
@@ -889,7 +886,7 @@ func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testin
 	if usage := fixture.store.Meta().UsageState; usage == nil || usage.WindowTokens <= 0 {
 		t.Fatalf("usage state was not finalized after committed compaction: %+v", usage)
 	}
-	persisted, readErr := sessiontest.CollectEvents(fixture.store)
+	persisted, readErr := collectTestEventRecords(fixture.store)
 	if readErr != nil {
 		t.Fatalf("read committed compaction events: %v", readErr)
 	}
@@ -908,8 +905,8 @@ func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testin
 func activeGoalCompactionTestClient() *fakeCompactionClient {
 	return &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{{
 		OutputItems: []llm.ResponseItem{
-			{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "summary"},
-			{Type: llm.ResponseItemTypeCompaction, ID: "cmp_goal", EncryptedContent: "enc_goal"},
+			{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")},
+			{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_goal"), EncryptedContent: textutil.Value("enc_goal")},
 		},
 		Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 	}}}
@@ -919,7 +916,7 @@ func activeGoalContinuationMessages(items []llm.ResponseItem) []llm.Message {
 	messages := llm.MessagesFromItems(items)
 	out := make([]llm.Message, 0, 1)
 	for _, message := range messages {
-		if message.Role == llm.RoleDeveloper && message.MessageType == llm.MessageTypeActiveGoalContinuation {
+		if message.Role == llm.RoleDeveloper && message.MessageType != nil && *message.MessageType == llm.MessageTypeActiveGoalContinuation {
 			out = append(out, message)
 		}
 	}
@@ -931,8 +928,8 @@ func assertSingleActiveGoalContinuation(t *testing.T, items []llm.ResponseItem, 
 	if len(messages) != 1 {
 		t.Fatalf("active-goal continuation count = %d, want 1; messages=%+v", len(messages), messages)
 	}
-	if messages[0].Content != prompts.RenderActiveGoalContinuationPrompt(objective) {
-		t.Fatalf("active-goal continuation content = %q", messages[0].Content)
+	if messageContent(messages[0]) != prompts.RenderActiveGoalContinuationPrompt(objective) {
+		t.Fatalf("active-goal continuation content = %q", messageContent(messages[0]))
 	}
 }
 
@@ -941,10 +938,9 @@ func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) 
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	fixture := newCommittedCompactionFixture(t, gate)
 	oldUsage := llm.Usage{
-		InputTokens:          190_000,
-		WindowTokens:         200_000,
-		CachedInputTokens:    190_000,
-		HasCachedInputTokens: true,
+		InputTokens:       190_000,
+		WindowTokens:      200_000,
+		CachedInputTokens: textutil.Value(190_000),
 	}
 	if _, err := fixture.engine.recordLastUsage(oldUsage); err != nil {
 		t.Fatalf("persist old usage: %v", err)
@@ -1040,16 +1036,16 @@ func TestWorkflowBudgetResetFailureKeepsCommittedReplacementLive(t *testing.T) {
 	controller := &fakeWorkflowController{protocolBudgetResetErr: resetErr}
 	workflowCfg := testWorkflowConfig(controller, config.WorkflowCompletionModeTool)
 	eng := mustNewWorkflowTestEngine(t, store, &fakeClient{}, workflowCfg, Config{Model: "gpt-5"})
-	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "before replacement"}})); err != nil {
+	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("before replacement")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	_, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary seed"}}))
+	_, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary seed")}}))
 	if !errors.Is(err, resetErr) {
 		t.Fatalf("replaceHistory error = %v, want %v", err, resetErr)
 	}
 	messages := eng.transcriptRuntimeState().SnapshotMessages()
-	if len(messages) != 1 || messages[0].MessageType != llm.MessageTypeCompactionSummary || messages[0].Content != "summary seed" {
+	if len(messages) != 1 || messages[0].MessageType == nil || *messages[0].MessageType != llm.MessageTypeCompactionSummary || messageContent(messages[0]) != "summary seed" {
 		t.Fatalf("live active list after committed reset error = %+v, want compacted seed", messages)
 	}
 }
@@ -1060,15 +1056,15 @@ func TestWorkflowRequestAfterCompactionDoesNotDuplicateReinjectedWorkflowPrompt(
 	client := &fakeCompactionClient{
 		compactionResponses: []llm.CompactionResponse{{
 			OutputItems: []llm.ResponseItem{
-				{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "remote summary"},
-				{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("remote summary")},
+				{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 			},
 			Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 		}},
 	}
 	workflowCfg := testWorkflowConfig(controller, config.WorkflowCompletionModeTool)
 	eng := mustNewWorkflowTestEngine(t, store, client, workflowCfg, Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 	if _, _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, "", false); err != nil {
@@ -1089,8 +1085,8 @@ func TestWorkflowRequestAfterCompactionDoesNotDuplicateReinjectedWorkflowPrompt(
 	if len(workflowMessages) != 1 {
 		t.Fatalf("workflow prompt count in post-compaction request = %d, want 1; messages=%+v", len(workflowMessages), requestMessages(client.calls[0]))
 	}
-	if workflowMessages[0].SourcePath != "run-1" {
-		t.Fatalf("workflow prompt source path = %q, want run-1", workflowMessages[0].SourcePath)
+	if workflowMessages[0].SourcePath == nil || *workflowMessages[0].SourcePath != "run-1" {
+		t.Fatalf("workflow prompt source path = %v, want run-1", workflowMessages[0].SourcePath)
 	}
 }
 
@@ -1100,8 +1096,8 @@ func TestWorkflowCompactionResetsProtocolViolationBudget(t *testing.T) {
 	client := &fakeCompactionClient{
 		compactionResponses: []llm.CompactionResponse{{
 			OutputItems: []llm.ResponseItem{
-				{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "remote summary"},
-				{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("remote summary")},
+				{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 			},
 			Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 		}},
@@ -1133,7 +1129,7 @@ func workflowModeMessagesFromItems(items []llm.ResponseItem) []llm.Message {
 	messages := llm.MessagesFromItems(items)
 	out := make([]llm.Message, 0, 1)
 	for _, message := range messages {
-		if message.Role == llm.RoleDeveloper && message.MessageType == llm.MessageTypeWorkflowMode {
+		if message.Role == llm.RoleDeveloper && message.MessageType != nil && *message.MessageType == llm.MessageTypeWorkflowMode {
 			out = append(out, message)
 		}
 	}
@@ -1162,8 +1158,8 @@ func TestManualRemoteCompactionRebuildsCanonicalPrefixOrder(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "ws", workspace)
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{{
 		OutputItems: []llm.ResponseItem{
-			{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "remote summary"},
-			{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+			{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("remote summary")},
+			{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 		},
 		Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
 	}}}
@@ -1171,7 +1167,7 @@ func TestManualRemoteCompactionRebuildsCanonicalPrefixOrder(t *testing.T) {
 	if err := store.SetHeadlessActive(true); err != nil {
 		t.Fatalf("mark headless active: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "seed"}})); err != nil {
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 
@@ -1183,33 +1179,33 @@ func TestManualRemoteCompactionRebuildsCanonicalPrefixOrder(t *testing.T) {
 	if len(items) < 7 {
 		t.Fatalf("expected canonical remote compaction prefix, got %+v", items)
 	}
-	if items[0].MessageType != llm.MessageTypeCompactionSummary || items[0].Content != "remote summary" {
+	if items[0].MessageType == nil || *items[0].MessageType != llm.MessageTypeCompactionSummary || items[0].Content == nil || *items[0].Content != "remote summary" {
 		t.Fatalf("expected provider summary first, got %+v", items[0])
 	}
-	if items[1].Type != llm.ResponseItemTypeCompaction || items[1].EncryptedContent != "enc_1" {
+	if items[1].Type != llm.ResponseItemTypeCompaction || items[1].EncryptedContent == nil || *items[1].EncryptedContent != "enc_1" {
 		t.Fatalf("expected provider checkpoint second, got %+v", items[1])
 	}
-	if items[2].MessageType != llm.MessageTypeEnvironment {
+	if items[2].MessageType == nil || *items[2].MessageType != llm.MessageTypeEnvironment {
 		t.Fatalf("expected environment after provider output, got %+v", items[2])
 	}
-	if items[3].MessageType != llm.MessageTypeSkills {
+	if items[3].MessageType == nil || *items[3].MessageType != llm.MessageTypeSkills {
 		t.Fatalf("expected skills after environment, got %+v", items[3])
 	}
-	if items[4].MessageType != llm.MessageTypeAgentsMD || !strings.Contains(items[4].Content, "source: "+globalPath) {
+	if items[4].MessageType == nil || *items[4].MessageType != llm.MessageTypeAgentsMD || items[4].Content == nil || !strings.Contains(*items[4].Content, "source: "+globalPath) {
 		t.Fatalf("expected global AGENTS after skills, got %+v", items[4])
 	}
-	if items[5].MessageType != llm.MessageTypeAgentsMD || !strings.Contains(items[5].Content, "source: "+workspacePath) {
+	if items[5].MessageType == nil || *items[5].MessageType != llm.MessageTypeAgentsMD || items[5].Content == nil || !strings.Contains(*items[5].Content, "source: "+workspacePath) {
 		t.Fatalf("expected workspace AGENTS after global AGENTS, got %+v", items[5])
 	}
-	if items[6].MessageType != llm.MessageTypeHeadlessMode {
+	if items[6].MessageType == nil || *items[6].MessageType != llm.MessageTypeHeadlessMode {
 		t.Fatalf("expected headless reinjection after canonical base context, got %+v", items[6])
 	}
 }
 
 func TestSanitizeRemoteCompactionOutputAcceptsEncryptedReasoningCheckpoint(t *testing.T) {
 	output := []llm.ResponseItem{
-		{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "u1"},
-		{Type: llm.ResponseItemTypeReasoning, ID: "rs_1", EncryptedContent: "enc_reason"},
+		{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("u1")},
+		{Type: llm.ResponseItemTypeReasoning, ID: textutil.Value("rs_1"), EncryptedContent: textutil.Value("enc_reason")},
 	}
 
 	replacement, err := sanitizeRemoteCompactionOutput(output)
@@ -1219,7 +1215,7 @@ func TestSanitizeRemoteCompactionOutputAcceptsEncryptedReasoningCheckpoint(t *te
 
 	foundReasoning := false
 	for _, item := range replacement {
-		if item.Type == llm.ResponseItemTypeReasoning && item.EncryptedContent == "enc_reason" {
+		if item.Type == llm.ResponseItemTypeReasoning && item.EncryptedContent != nil && *item.EncryptedContent == "enc_reason" {
 			foundReasoning = true
 			break
 		}
@@ -1235,25 +1231,25 @@ func TestRemoteCompactionMissingCheckpointFallsBackToLocal(t *testing.T) {
 	client := &fakeCompactionClient{
 		responses: []llm.Response{
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working"},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working")},
 				ToolCalls: []llm.ToolCall{
 					{ID: "call_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
 				},
 				Usage: llm.Usage{InputTokens: 190000, OutputTokens: 2000, WindowTokens: 200000},
 			},
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "local summary"},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("local summary")},
 				Usage:     llm.Usage{InputTokens: 8000, OutputTokens: 1000, WindowTokens: 200000},
 			},
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
 				Usage:     llm.Usage{InputTokens: 2000, OutputTokens: 500, WindowTokens: 200000},
 			},
 		},
 		compactionResponses: []llm.CompactionResponse{
 			{
 				OutputItems: []llm.ResponseItem{
-					{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "run tools"},
+					{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("run tools")},
 				},
 				Usage: llm.Usage{InputTokens: 12000, OutputTokens: 1000, WindowTokens: 200000},
 			},
@@ -1266,8 +1262,8 @@ func TestRemoteCompactionMissingCheckpointFallsBackToLocal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if msg.Content != "done" {
-		t.Fatalf("assistant content = %q, want done", msg.Content)
+	if messageContent(msg) != "done" {
+		t.Fatalf("assistant content = %q, want done", messageContent(msg))
 	}
 	if len(client.compactionCalls) != 1 {
 		t.Fatalf("expected one remote compaction call, got %d", len(client.compactionCalls))
@@ -1279,7 +1275,9 @@ func TestRemoteCompactionMissingCheckpointFallsBackToLocal(t *testing.T) {
 	foundLocalSummaryCarryover := false
 	for _, req := range client.calls {
 		for _, item := range req.Items {
-			if item.Type == llm.ResponseItemTypeMessage && item.Role == llm.RoleDeveloper && item.MessageType == llm.MessageTypeCompactionSummary {
+			if item.Type == llm.ResponseItemTypeMessage &&
+				item.Role != nil && *item.Role == llm.RoleDeveloper &&
+				item.MessageType != nil && *item.MessageType == llm.MessageTypeCompactionSummary {
 				foundLocalSummaryCarryover = true
 				break
 			}
@@ -1299,14 +1297,14 @@ func TestAutoCompactionRetries400ByCollapsingShellOutput(t *testing.T) {
 	client := &fakeCompactionClient{
 		responses: []llm.Response{
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working"},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working")},
 				ToolCalls: []llm.ToolCall{
 					{ID: "call_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
 				},
 				Usage: llm.Usage{InputTokens: 390000, OutputTokens: 1000, WindowTokens: 400000},
 			},
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
 				Usage:     llm.Usage{InputTokens: 2000, OutputTokens: 500, WindowTokens: 400000},
 			},
 		},
@@ -1317,8 +1315,8 @@ func TestAutoCompactionRetries400ByCollapsingShellOutput(t *testing.T) {
 		compactionResponses: []llm.CompactionResponse{
 			{
 				OutputItems: []llm.ResponseItem{
-					{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "run tools"},
-					{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+					{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("run tools")},
+					{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 				},
 				Usage: llm.Usage{InputTokens: 8000, OutputTokens: 500, WindowTokens: 400000},
 			},
@@ -1332,8 +1330,8 @@ func TestAutoCompactionRetries400ByCollapsingShellOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if msg.Content != "done" {
-		t.Fatalf("assistant content = %q, want done", msg.Content)
+	if messageContent(msg) != "done" {
+		t.Fatalf("assistant content = %q, want done", messageContent(msg))
 	}
 	if len(client.compactionCalls) != 2 {
 		t.Fatalf("expected two compact calls (retry after 400), got %d", len(client.compactionCalls))
@@ -1343,7 +1341,7 @@ func TestAutoCompactionRetries400ByCollapsingShellOutput(t *testing.T) {
 	}
 	foundCollapsed := false
 	for _, item := range client.compactionCalls[1].InputItems {
-		if item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID == "call_1" {
+		if item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID != nil && *item.CallID == "call_1" {
 			foundCollapsed = isCollapsedCompactionOverflowShellOutput(item.Output)
 		}
 	}

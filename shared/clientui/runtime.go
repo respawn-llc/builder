@@ -166,6 +166,7 @@ func SessionExecutionTargetsEqual(a SessionExecutionTarget, b SessionExecutionTa
 type RuntimeSessionView struct {
 	SessionID             string
 	SessionName           string
+	AgentRole             *string
 	ConversationFreshness ConversationFreshness
 	ExecutionTarget       SessionExecutionTarget
 }
@@ -195,7 +196,6 @@ type RuntimeClient interface {
 	HasQueuedUserWork() (bool, error)
 	SubmitRuntimeQueued(ctx context.Context, req RuntimeSubmitQueuedRequest) (string, error)
 	Interrupt() error
-	QueueRuntimeUserMessage(req RuntimeQueueUserMessageRequest) (QueuedUserMessage, error)
 	DiscardQueuedUserMessage(queueItemID string) bool
 	RecordPromptHistory(text string) error
 }

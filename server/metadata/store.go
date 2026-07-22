@@ -2189,6 +2189,10 @@ func availabilityForPath(path string) string {
 	return "available"
 }
 
+func PathAvailability(path string) clientui.ProjectAvailability {
+	return clientui.ProjectAvailability(availabilityForPath(path))
+}
+
 func availabilityForOptionalPath(path string) string {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {

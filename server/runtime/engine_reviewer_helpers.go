@@ -9,6 +9,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -81,7 +82,7 @@ func buildReviewerRequestMessagesWithBuilder(messages []llm.Message, builder met
 	metaMessages = metaResult.OrderedMetaMessages()
 	out := make([]llm.Message, 0, len(metaMessages)+2+len(transcriptSource))
 	out = append(out, metaMessages...)
-	out = append(out, llm.Message{Role: llm.RoleDeveloper, Content: reviewerMetaBoundaryMessage})
+	out = append(out, llm.Message{Role: llm.RoleDeveloper, Content: textutil.Value(reviewerMetaBoundaryMessage)})
 	out = append(out, buildReviewerTranscriptMessages(transcriptSource)...)
 	return out, nil
 }
@@ -100,7 +101,7 @@ func buildReviewerRequestItemsWithBuilder(items []llm.ResponseItem, builder meta
 		return nil, err
 	}
 	out := reviewerItemsFromMessages(metaResult.OrderedMetaMessages())
-	out = append(out, reviewerItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, Content: reviewerMetaBoundaryMessage}})...)
+	out = append(out, reviewerItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value(reviewerMetaBoundaryMessage)}})...)
 	out = append(out, buildReviewerTranscriptItems(transcriptSource)...)
 	return out, nil
 }
@@ -124,8 +125,10 @@ func messageFromResponseItem(item llm.ResponseItem) (llm.Message, bool) {
 	if item.Type != llm.ResponseItemTypeMessage {
 		return llm.Message{}, false
 	}
-	role := item.Role
-	if role == "" {
+	role := llm.RoleUser
+	if item.Role != nil {
+		role = *item.Role
+	} else {
 		role = llm.RoleUser
 	}
 	return llm.Message{
@@ -133,7 +136,7 @@ func messageFromResponseItem(item llm.ResponseItem) (llm.Message, bool) {
 		MessageType:    item.MessageType,
 		SourcePath:     item.SourcePath,
 		Phase:          item.Phase,
-		Content:        item.Content,
+		Content:        textutil.Pointer(item.Content),
 		CompactContent: item.CompactContent,
 		Name:           item.Name,
 	}, true
@@ -145,7 +148,7 @@ func buildReviewerTranscriptMessages(messages []llm.Message) []llm.Message {
 		out = append(out, reviewerTranscriptMessagesFromMessage(message)...)
 	}
 	if len(out) == 0 {
-		out = append(out, llm.Message{Role: llm.RoleUser, Content: "No reviewable transcript entries were available for this turn."})
+		out = append(out, llm.Message{Role: llm.RoleUser, Content: textutil.Value("No reviewable transcript entries were available for this turn.")})
 	}
 	return out
 }
@@ -164,26 +167,33 @@ func buildReviewerTranscriptItems(items []llm.ResponseItem) []llm.ResponseItem {
 
 func reviewerTranscriptMessagesFromMessage(message llm.Message) []llm.Message {
 	if message.Role == llm.RoleDeveloper {
-		content := strings.TrimSpace(message.Content)
+		if message.Content == nil {
+			return nil
+		}
+		content := strings.TrimSpace(*message.Content)
 		if content == "" {
 			return nil
 		}
 		if _, ok := classifyMetaContextMessage(message); ok {
 			return nil
 		}
-		if message.MessageType == llm.MessageTypeErrorFeedback || message.MessageType == llm.MessageTypeInterruption {
+		if message.MessageType != nil &&
+			(*message.MessageType == llm.MessageTypeErrorFeedback ||
+				*message.MessageType == llm.MessageTypeInterruption) {
 			return nil
 		}
 		visibleEntries := VisibleChatEntriesFromMessage(message)
 		if len(visibleEntries) == 0 {
-			return []llm.Message{{Role: llm.RoleUser, Content: formatReviewerHiddenDeveloperMessage(message)}}
+			return []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(formatReviewerHiddenDeveloperMessage(message))}}
 		}
 		return reviewerMessagesFromChatEntries(visibleEntries)
 	}
-	if message.Role == llm.RoleTool && strings.TrimSpace(message.ToolCallID) == "" {
-		return nil
+	if message.Role == llm.RoleTool {
+		if _, present := textutil.OptionalTrimmed(message.ToolCallID); !present {
+			return nil
+		}
 	}
-	if strings.TrimSpace(message.Content) == "" && len(message.ToolCalls) == 0 {
+	if message.Content == nil && len(message.ToolCalls) == 0 {
 		return nil
 	}
 	return reviewerMessagesFromChatEntries(VisibleChatEntriesFromMessage(message))
@@ -195,16 +205,16 @@ func reviewerItemsFromMessages(messages []llm.Message) []llm.ResponseItem {
 	}
 	items := make([]llm.ResponseItem, 0, len(messages))
 	for _, msg := range messages {
-		if strings.TrimSpace(msg.Content) == "" {
+		if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
 			continue
 		}
 		items = append(items, llm.PrepareOpenAIInputItems([]llm.ResponseItem{{
 			Type:           llm.ResponseItemTypeMessage,
-			Role:           msg.Role,
+			Role:           textutil.Value(msg.Role),
 			MessageType:    msg.MessageType,
 			SourcePath:     msg.SourcePath,
 			Phase:          msg.Phase,
-			Content:        msg.Content,
+			Content:        textutil.Pointer(msg.Content),
 			CompactContent: msg.CompactContent,
 			Name:           msg.Name,
 		}})...)
@@ -219,13 +229,16 @@ func reviewerMessagesFromChatEntries(entries []ChatEntry) []llm.Message {
 		if strings.TrimSpace(formatted) == "" {
 			continue
 		}
-		out = append(out, llm.Message{Role: llm.RoleUser, Content: formatted})
+		out = append(out, llm.Message{Role: llm.RoleUser, Content: textutil.Value(formatted)})
 	}
 	return out
 }
 
 func formatReviewerHiddenDeveloperMessage(message llm.Message) string {
-	content := strings.TrimSpace(message.Content)
+	if message.Content == nil {
+		return ""
+	}
+	content := strings.TrimSpace(*message.Content)
 	if content == "" {
 		return ""
 	}
@@ -416,7 +429,9 @@ func filterReviewerMetaMessages(messages []llm.Message) []llm.Message {
 	}
 	out := make([]llm.Message, 0, len(messages))
 	for _, message := range messages {
-		if message.Role == llm.RoleDeveloper && message.MessageType == llm.MessageTypeSubagents {
+		if message.Role == llm.RoleDeveloper &&
+			message.MessageType != nil &&
+			*message.MessageType == llm.MessageTypeSubagents {
 			continue
 		}
 		out = append(out, message)

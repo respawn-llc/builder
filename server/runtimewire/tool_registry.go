@@ -15,6 +15,7 @@ import (
 	"core/server/tools/shell/postprocess"
 	"core/shared/config"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"errors"
 	"fmt"
@@ -129,7 +130,7 @@ func (completeNodeUnavailableTool) Call(_ context.Context, c tools.Call) (tools.
 	if err != nil {
 		output = json.RawMessage(`{"error":"complete_node is only available during a workflow run"}`)
 	}
-	return tools.Result{CallID: c.ID, Name: toolspec.ToolCompleteNode, IsError: true, Output: output, Summary: "not in workflow run"}, nil
+	return tools.Result{CallID: c.ID, Name: toolspec.ToolCompleteNode, IsError: true, Output: output, Summary: textutil.Value("not in workflow run")}, nil
 }
 
 func (b *LocalToolRegistryBinding) Registry() *tools.Registry {

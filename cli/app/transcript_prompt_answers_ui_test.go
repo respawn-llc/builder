@@ -734,7 +734,7 @@ func TestAllowCommentaryQueueUnlocksBeforeCancelableApprovalDelivery(t *testing.
 	control := newDeadlineThenSuccessApprovalControl()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	runtimeClient := &runtimeControlFakeClient{queueUserMessageID: "allow-commentary-queue"}
+	runtimeClient := &runtimeControlFakeClient{submitQueuedID: "allow-commentary-queue"}
 	model := newProjectedTestUIModel(runtimeClient)
 	model.promptAnswers = newTranscriptPromptAnswerer(ctx, control)
 	model.setRuntimeActivityBusyForTest(true)
@@ -827,7 +827,7 @@ func TestAllowCommentaryAnswerDeadlineRestoresFreshQueueAndAnswerResubmission(t 
 	control := newDeadlineThenSuccessApprovalControl()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	runtimeClient := &runtimeControlFakeClient{queueUserMessageID: "allow-commentary-queue"}
+	runtimeClient := &runtimeControlFakeClient{submitQueuedID: "allow-commentary-queue"}
 	model := newProjectedTestUIModel(runtimeClient)
 	model.promptAnswers = newTranscriptPromptAnswerer(ctx, control)
 	model.setRuntimeActivityBusyForTest(true)
@@ -879,9 +879,6 @@ func TestAllowCommentaryAnswerDeadlineRestoresFreshQueueAndAnswerResubmission(t 
 	}
 	if runtimeClient.submitCalls != 2 {
 		t.Fatalf("allow commentary submit calls = %d, want one per user submission", runtimeClient.submitCalls)
-	}
-	if runtimeClient.queueUserMessageCalls != 0 {
-		t.Fatalf("allow commentary separate queue calls = %d, want 0", runtimeClient.queueUserMessageCalls)
 	}
 	if !testPromptAnswerDeliveryActive(model) || model.ask.answerPending {
 		t.Fatal("successful allow resubmission did not remain active with the queue-stage lock released")

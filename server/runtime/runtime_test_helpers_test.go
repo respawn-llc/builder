@@ -1,8 +1,10 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -14,8 +16,15 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/server/workflowruntime"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 )
+
+type testPersistedEvent struct {
+	Kind   string
+	Record session.EventRecord
+}
 
 func backgroundShellEventTypeForTest(eventType shelltool.EventType) BackgroundShellEventType {
 	switch eventType {
@@ -32,29 +41,22 @@ func backgroundShellEventTypeForTest(eventType shelltool.EventType) BackgroundSh
 
 func userMessageSeqAt(t *testing.T, store *session.Store, n int) int64 {
 	t.Helper()
-	window, err := store.ReadRecentEvents(10_000)
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(10_000)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
 	visible := 0
-	for _, evt := range window.Events {
-		if evt.Kind != "message" {
+	for _, evt := range window.Records {
+		message, ok := mustSessionEventPayload(evt).(session.MessageRecord)
+		if !ok || message.Role != session.MessageRoleUser {
 			continue
 		}
-		var msg struct {
-			Role string `json:"role"`
-		}
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			continue
-		}
-		if msg.Role == "user" {
-			visible++
-			if visible == n {
-				return evt.Seq
-			}
+		visible++
+		if visible == n {
+			return evt.Seq()
 		}
 	}
-	t.Fatalf("user message %d not found among %d events", n, len(window.Events))
+	t.Fatalf("user message %d not found among %d events", n, len(window.Records))
 	return 0
 }
 
@@ -69,6 +71,37 @@ func mustCreateTestSession(t *testing.T, workspaceRoot ...string) *session.Store
 }
 
 var runtimeTestSessionPersistence = sessiontest.NewPersistence()
+
+type testPersistenceObserver struct {
+	observer   session.PersistenceObserver
+	reconciler *sessiontest.Persistence
+}
+
+func (o testPersistenceObserver) ObservePersistedStore(
+	ctx context.Context,
+	snapshot session.PersistedStoreSnapshot,
+) error {
+	return errors.Join(
+		o.reconciler.ObservePersistedStore(ctx, snapshot),
+		o.observer.ObservePersistedStore(ctx, snapshot),
+	)
+}
+
+func (o testPersistenceObserver) ObserveEventLogReconciliation(
+	ctx context.Context,
+	reconciliation session.PersistedEventLogReconciliation,
+) error {
+	return o.reconciler.ObserveEventLogReconciliation(ctx, reconciliation)
+}
+
+func withRuntimeTestPersistenceObserver(
+	observer session.PersistenceObserver,
+) session.StoreOption {
+	return session.WithPersistenceObserver(testPersistenceObserver{
+		observer:   observer,
+		reconciler: runtimeTestSessionPersistence,
+	})
+}
 
 type testEventLogAppendBlocker = filemode.EventLogAppendBlocker
 
@@ -123,11 +156,212 @@ func mustNewTestEngine(t *testing.T, store *session.Store, client llm.Client, re
 	if cfg.Model == "" {
 		cfg.Model = "gpt-5"
 	}
-	engine, err := New(store, client, registry, cfg)
+	eventLog := mustMaterializeTestEventLog(t, store)
+	engine, err := New(store, eventLog, client, registry, cfg)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
 	return engine
+}
+
+func mustMaterializeTestEventLog(
+	t *testing.T,
+	store *session.Store,
+) session.MaterializedEventLog {
+	t.Helper()
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	return eventLog
+}
+
+func collectTestEventRecords(store *session.Store) ([]testPersistedEvent, error) {
+	if store == nil {
+		return nil, errors.New("session store is required")
+	}
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		return nil, err
+	}
+	records := make([]testPersistedEvent, 0)
+	err = eventLog.WalkRecords(func(record session.EventRecord) error {
+		records = append(records, testPersistedEvent{
+			Kind: string(mustSessionEventKind(record)), Record: record,
+		})
+		return nil
+	})
+	return records, err
+}
+
+func persistedMessageForTest(t *testing.T, event testPersistedEvent) llm.Message {
+	t.Helper()
+	record, ok := mustSessionEventPayload(event.Record).(session.MessageRecord)
+	if !ok {
+		t.Fatalf("event %q payload type = %T, want session.MessageRecord", event.Kind, mustSessionEventPayload(event.Record))
+	}
+	message, err := llmMessageFromSessionRecord(record)
+	if err != nil {
+		t.Fatalf("restore message record: %v", err)
+	}
+	return message
+}
+
+func persistedLocalEntryForTest(t *testing.T, event testPersistedEvent) storedLocalEntry {
+	t.Helper()
+	record, ok := mustSessionEventPayload(event.Record).(session.LocalEntryRecord)
+	if !ok {
+		t.Fatalf("event %q payload type = %T, want session.LocalEntryRecord", event.Kind, mustSessionEventPayload(event.Record))
+	}
+	entry, err := storedLocalEntryFromSessionRecord(record)
+	if err != nil {
+		t.Fatalf("restore local entry record: %v", err)
+	}
+	return entry
+}
+
+func persistedToolCompletionForTest(t *testing.T, event testPersistedEvent) storedToolCompletion {
+	t.Helper()
+	record, ok := mustSessionEventPayload(event.Record).(session.ToolCompletionRecord)
+	if !ok {
+		t.Fatalf("event %q payload type = %T, want session.ToolCompletionRecord", event.Kind, mustSessionEventPayload(event.Record))
+	}
+	completion, err := storedToolCompletionFromSessionRecord(record)
+	if err != nil {
+		t.Fatalf("restore tool completion record: %v", err)
+	}
+	return completion
+}
+
+func persistedHistoryReplacementForTest(t *testing.T, event testPersistedEvent) historyReplacementPayload {
+	t.Helper()
+	record, ok := mustSessionEventPayload(event.Record).(session.HistoryReplacementRecord)
+	if !ok {
+		t.Fatalf("event %q payload type = %T, want session.HistoryReplacementRecord", event.Kind, mustSessionEventPayload(event.Record))
+	}
+	replacement, err := historyReplacementPayloadFromSessionRecord(record)
+	if err != nil {
+		t.Fatalf("restore history replacement record: %v", err)
+	}
+	return replacement
+}
+
+func mustAppendTestEvent(t *testing.T, store *session.Store, stepID string, payload any) session.EventRecord {
+	t.Helper()
+	event, _, err := appendTestEvent(t, store, stepID, payload)
+	if err != nil {
+		t.Fatalf("append typed test event: %v", err)
+	}
+	return event
+}
+
+func appendTestEvent(
+	t *testing.T,
+	store *session.Store,
+	stepID string,
+	payload any,
+) (session.EventRecord, session.CommitReceipt, error) {
+	t.Helper()
+	var record session.EventRecordPayload
+	switch value := payload.(type) {
+	case llm.Message:
+		adapted, err := sessionMessageRecordFromLLM(value)
+		if err != nil {
+			return session.EventRecord{}, session.CommitReceipt{}, err
+		}
+		record = adapted
+	case historyReplacementPayload:
+		if value.Engine == "compaction" {
+			value.Engine = "local"
+		}
+		if value.Mode == "" {
+			value.Mode = string(compactionModeAuto)
+		}
+		adapted, err := sessionHistoryReplacementRecordFromRuntime(value)
+		if err != nil {
+			return session.EventRecord{}, session.CommitReceipt{}, err
+		}
+		record = adapted
+	case storedLocalEntry:
+		adapted, err := sessionLocalEntryRecordFromRuntime(value)
+		if err != nil {
+			return session.EventRecord{}, session.CommitReceipt{}, err
+		}
+		record = adapted
+	case persistedCacheRequestObserved:
+		adapted, err := sessionCacheRequestRecordFromRuntime(value)
+		if err != nil {
+			return session.EventRecord{}, session.CommitReceipt{}, err
+		}
+		record = adapted
+	case persistedCacheResponseObserved:
+		adapted, err := sessionCacheResponseRecordFromRuntime(value)
+		if err != nil {
+			return session.EventRecord{}, session.CommitReceipt{}, err
+		}
+		record = adapted
+	case transcript.CacheWarning:
+		adapted, err := sessionCacheWarningRecordFromRuntime(value)
+		if err != nil {
+			return session.EventRecord{}, session.CommitReceipt{}, err
+		}
+		record = adapted
+	case storedToolCompletion:
+		result := tools.Result{
+			CallID:        value.CallID,
+			Name:          toolspec.ID(value.Name),
+			Output:        value.Output,
+			IsError:       value.IsError,
+			Summary:       textutil.Pointer(value.Summary),
+			CondensedText: textutil.Pointer(value.CondensedText),
+			Presentation:  value.Presentation,
+		}
+		adapted, err := sessionToolCompletionRecordFromRuntime(result, value.ProviderItems)
+		if err != nil {
+			return session.EventRecord{}, session.CommitReceipt{}, err
+		}
+		record = adapted
+	case map[string]any:
+		body, err := json.Marshal(value)
+		if err != nil {
+			return session.EventRecord{}, session.CommitReceipt{}, err
+		}
+		var completion storedToolCompletion
+		if err := json.Unmarshal(body, &completion); err != nil {
+			return session.EventRecord{}, session.CommitReceipt{}, err
+		}
+		if len(completion.ProviderItems) == 0 {
+			completion.ProviderItems = []llm.ResponseItem{{
+				Type:   llm.ResponseItemTypeFunctionCallOutput,
+				CallID: textutil.Value(completion.CallID),
+				Name:   textutil.Value(completion.Name),
+				Output: completion.Output,
+			}}
+		}
+		return appendTestEvent(t, store, stepID, completion)
+	default:
+		return session.EventRecord{}, session.CommitReceipt{},
+			fmt.Errorf("unsupported typed test event payload %T", payload)
+	}
+	event, receipt, err := mustMaterializeTestEventLog(t, store).AppendRecord(&stepID, record)
+	return event, receipt, err
+}
+
+func appendTestCompactionHistoryReplacement(
+	t *testing.T,
+	store *session.Store,
+	stepID string,
+	payload historyReplacementPayload,
+) (session.EventRecord, session.CommitReceipt, error) {
+	t.Helper()
+	record, err := sessionHistoryReplacementRecordFromRuntime(payload)
+	if err != nil {
+		return session.EventRecord{}, session.CommitReceipt{}, err
+	}
+	return mustMaterializeTestEventLog(t, store).AppendCompactionHistoryReplacement(
+		&stepID,
+		record,
+	)
 }
 
 func mustNewFakeToolEngine(t *testing.T, store *session.Store, client llm.Client, cfg Config, toolIDs ...toolspec.ID) *Engine {
@@ -185,19 +419,19 @@ func testWorktreeReminderState(mode session.WorktreeReminderMode, branch, worktr
 
 func finalTextResponse(content string) llm.Response {
 	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: content},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value(content)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}
 }
 
 func finalOutputItemResponse(content string) llm.Response {
 	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: content},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value(content)},
 		OutputItems: []llm.ResponseItem{{
 			Type:    llm.ResponseItemTypeMessage,
-			Role:    llm.RoleAssistant,
-			Phase:   llm.MessagePhaseFinal,
-			Content: content,
+			Role:    textutil.Value(llm.RoleAssistant),
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+			Content: textutil.Value(content),
 		}},
 		Usage: llm.Usage{WindowTokens: 200000},
 	}
@@ -205,7 +439,7 @@ func finalOutputItemResponse(content string) llm.Response {
 
 func commentaryResponse(content string, toolCalls ...llm.ToolCall) llm.Response {
 	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: content, Phase: llm.MessagePhaseCommentary, ToolCalls: toolCalls},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.OptionalTrimmedString(content), Phase: textutil.Value(llm.MessagePhaseCommentary), ToolCalls: toolCalls},
 		ToolCalls: toolCalls,
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}
@@ -216,4 +450,11 @@ func assertModelCallCount(t *testing.T, client *fakeClient, want int) {
 	if len(client.calls) != want {
 		t.Fatalf("model calls = %d, want %d", len(client.calls), want)
 	}
+}
+
+func messageContent(message llm.Message) string {
+	if message.Content == nil {
+		panic("test expected message content to be present")
+	}
+	return *message.Content
 }

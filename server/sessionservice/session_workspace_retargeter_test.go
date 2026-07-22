@@ -30,12 +30,13 @@ func (s retargetProcessSource) List() []shelltool.Snapshot {
 
 type retargetIdentityPublisher map[string]clientui.SessionExecutionTarget
 
-func (p retargetIdentityPublisher) PublishSessionIdentity(sessionID string, target *clientui.SessionExecutionTarget) {
+func (p retargetIdentityPublisher) PublishSessionIdentity(sessionID string, target *clientui.SessionExecutionTarget) error {
 	if target == nil {
 		delete(p, sessionID)
-		return
+		return nil
 	}
 	p[sessionID] = *target
+	return nil
 }
 
 type blockingSessionMetadataObserver struct {
@@ -395,8 +396,8 @@ func TestSessionWorkspaceRetargeterSharedRootRemainsPersistable(t *testing.T) {
 				if err := store.SetName("persisted after shared-root rebind"); err != nil {
 					return err
 				}
-				_, _, err := store.AppendEvent("step-after-rebind", "message", map[string]string{"role": "user", "content": "after rebind"})
-				return err
+				appendSessionMessage(t, store, "step-after-rebind", session.MessageRoleUser, "after rebind")
+				return nil
 			}); err != nil {
 				t.Fatalf("persist after rebind: %v", err)
 			}
@@ -409,8 +410,16 @@ func TestSessionWorkspaceRetargeterSharedRootRemainsPersistable(t *testing.T) {
 			if err != nil {
 				t.Fatalf("OpenByID after rebind: %v", err)
 			}
-			if reopened.Meta().Name != "persisted after shared-root rebind" || reopened.Meta().LastSequence != 1 {
-				t.Fatalf("reopened metadata = %+v", reopened.Meta())
+			eventLog, err := reopened.MaterializeEventLog()
+			if err != nil {
+				t.Fatalf("materialize reopened event log: %v", err)
+			}
+			revision, err := eventLog.Revision()
+			if err != nil {
+				t.Fatalf("read reopened event-log revision: %v", err)
+			}
+			if reopened.Meta().Name != "persisted after shared-root rebind" || revision != 1 {
+				t.Fatalf("reopened metadata=%+v event-log revision=%d", reopened.Meta(), revision)
 			}
 			belongs, err := fixture.metadata.SessionBelongsToProject(context.Background(), fixture.child.Meta().SessionID, wantProjectID)
 			if err != nil {

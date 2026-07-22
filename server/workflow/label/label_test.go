@@ -74,6 +74,8 @@ func TestPrepareNameNormalizesAndValidatesTheLabelAlphabet(t *testing.T) {
 		{raw: "   ", reason: label.NameErrorRequired},
 		{raw: sixtyFourRunes + "a", reason: label.NameErrorTooLong},
 		{raw: "customer.acme", reason: label.NameErrorInvalidCharacter, character: runePointer('.')},
+		{raw: "release:urgent", reason: label.NameErrorInvalidCharacter, character: runePointer(':')},
+		{raw: "ops&support", reason: label.NameErrorInvalidCharacter, character: runePointer('&')},
 		{raw: "priority\turgent", reason: label.NameErrorInvalidCharacter, character: runePointer('\t')},
 		{raw: "ship🚀", reason: label.NameErrorInvalidCharacter, character: runePointer('🚀')},
 	} {

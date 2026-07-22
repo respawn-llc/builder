@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"core/server/llm"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	"testing"
@@ -13,7 +14,7 @@ func TestNormalizeToolCallForTranscriptUsesCustomPatchInput(t *testing.T) {
 		ID:          "call_patch",
 		Name:        string(toolspec.ToolPatch),
 		Custom:      true,
-		CustomInput: patchText,
+		CustomInput: textutil.Value(patchText),
 	}
 
 	normalized := normalizeToolCallForTranscript(call, "/workspace")

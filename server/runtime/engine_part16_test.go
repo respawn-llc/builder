@@ -4,6 +4,7 @@ import (
 	"context"
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"encoding/json"
 	"strings"
@@ -16,7 +17,7 @@ func TestAutoCompactionDoesNotRetryNonOverflow400(t *testing.T) {
 	client := &fakeCompactionClient{
 		responses: []llm.Response{
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working"},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working")},
 				ToolCalls: []llm.ToolCall{
 					{ID: "call_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
 				},
@@ -30,8 +31,8 @@ func TestAutoCompactionDoesNotRetryNonOverflow400(t *testing.T) {
 		compactionResponses: []llm.CompactionResponse{
 			{
 				OutputItems: []llm.ResponseItem{
-					{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "run tools"},
-					{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+					{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("run tools")},
+					{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 				},
 				Usage: llm.Usage{InputTokens: 8000, OutputTokens: 500, WindowTokens: 400000},
 			},
@@ -54,14 +55,14 @@ func TestAutoCompactionRetries413ByCollapsingShellOutput(t *testing.T) {
 	client := &fakeCompactionClient{
 		responses: []llm.Response{
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working"},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working")},
 				ToolCalls: []llm.ToolCall{
 					{ID: "call_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
 				},
 				Usage: llm.Usage{InputTokens: 390000, OutputTokens: 1000, WindowTokens: 400000},
 			},
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
 				Usage:     llm.Usage{InputTokens: 2000, OutputTokens: 500, WindowTokens: 400000},
 			},
 		},
@@ -72,8 +73,8 @@ func TestAutoCompactionRetries413ByCollapsingShellOutput(t *testing.T) {
 		compactionResponses: []llm.CompactionResponse{
 			{
 				OutputItems: []llm.ResponseItem{
-					{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "run tools"},
-					{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+					{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("run tools")},
+					{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 				},
 				Usage: llm.Usage{InputTokens: 8000, OutputTokens: 500, WindowTokens: 400000},
 			},
@@ -87,8 +88,8 @@ func TestAutoCompactionRetries413ByCollapsingShellOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if msg.Content != "done" {
-		t.Fatalf("assistant content = %q, want done", msg.Content)
+	if messageContent(msg) != "done" {
+		t.Fatalf("assistant content = %q, want done", messageContent(msg))
 	}
 	if len(client.compactionCalls) != 2 {
 		t.Fatalf("expected two compact calls (retry after 413), got %d", len(client.compactionCalls))
@@ -98,7 +99,7 @@ func TestAutoCompactionRetries413ByCollapsingShellOutput(t *testing.T) {
 	}
 	foundCollapsed := false
 	for _, item := range client.compactionCalls[1].InputItems {
-		if item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID == "call_1" {
+		if item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID != nil && *item.CallID == "call_1" {
 			foundCollapsed = isCollapsedCompactionOverflowShellOutput(item.Output)
 		}
 	}
@@ -113,18 +114,18 @@ func TestOpenAIModelCompact404DoesNotFallbackToLocalCompaction(t *testing.T) {
 	client := &fakeCompactionClient{
 		responses: []llm.Response{
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working"},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working")},
 				ToolCalls: []llm.ToolCall{
 					{ID: "call_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
 				},
 				Usage: llm.Usage{InputTokens: 190000, OutputTokens: 2000, WindowTokens: 200000},
 			},
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "summary"},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
 				Usage:     llm.Usage{InputTokens: 8000, OutputTokens: 1000, WindowTokens: 200000},
 			},
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
 				Usage:     llm.Usage{InputTokens: 4000, OutputTokens: 1000, WindowTokens: 200000},
 			},
 		},
@@ -150,7 +151,7 @@ func TestOpenAIModelCompact404DoesNotFallbackToLocalCompaction(t *testing.T) {
 	}
 	for _, req := range client.calls {
 		for _, item := range req.Items {
-			if item.Type == llm.ResponseItemTypeMessage && item.MessageType == llm.MessageTypeCompactionSummary {
+			if item.Type == llm.ResponseItemTypeMessage && item.MessageType != nil && *item.MessageType == llm.MessageTypeCompactionSummary {
 				t.Fatalf("did not expect local compaction summary fallback, request=%+v", req.Items)
 			}
 		}

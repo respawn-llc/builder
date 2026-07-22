@@ -10,6 +10,7 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
@@ -37,7 +38,7 @@ func TestToolCompletionDeletionMismatchPanicsBeforePersistenceInDebug(t *testing
 			!slices.Equal(failure.Mismatch.ReceivedOperationIDs, mismatch.ReceivedOperationIDs) {
 			t.Fatalf("typed panic context = %+v, want call/tool/mismatch %+v", failure, mismatch)
 		}
-		events, err := sessiontest.CollectEvents(store)
+		events, err := collectTestEventRecords(store)
 		if err != nil {
 			t.Fatalf("collect events after debug panic: %v", err)
 		}
@@ -73,9 +74,9 @@ func TestToolCompletionDeletionMismatchReleaseFallbackUsesCommitReceiptAuthority
 				[]llm.Message{{
 					Role:        llm.RoleTool,
 					MessageType: llm.ToolOutputMessageType(true),
-					ToolCallID:  result.CallID,
-					Name:        string(result.Name),
-					Content:     string(result.Output),
+					ToolCallID:  textutil.Value(result.CallID),
+					Name:        textutil.Value(string(result.Name)),
+					Content:     textutil.Value(string(result.Output)),
 				}},
 			),
 		); err != nil {
@@ -83,7 +84,7 @@ func TestToolCompletionDeletionMismatchReleaseFallbackUsesCommitReceiptAuthority
 		}
 
 		assertDeletionFallbackHydration(t, engine, 2)
-		durable, err := sessiontest.CollectEvents(store)
+		durable, err := collectTestEventRecords(store)
 		if err != nil {
 			t.Fatalf("collect durable events: %v", err)
 		}
@@ -94,10 +95,7 @@ func TestToolCompletionDeletionMismatchReleaseFallbackUsesCommitReceiptAuthority
 			durable[3].Kind != "message" {
 			t.Fatalf("durable fallback sequence = %+v", durable)
 		}
-		var feedback storedLocalEntry
-		if err := json.Unmarshal(durable[2].Payload, &feedback); err != nil {
-			t.Fatalf("decode fallback feedback: %v", err)
-		}
+		feedback := persistedLocalEntryForTest(t, durable[2])
 		if feedback.AfterToolCallID == nil || *feedback.AfterToolCallID != result.CallID {
 			t.Fatalf("fallback feedback attachment = %+v, want call %q", feedback.AfterToolCallID, result.CallID)
 		}
@@ -131,7 +129,7 @@ func TestToolCompletionDeletionMismatchReleaseFallbackUsesCommitReceiptAuthority
 		if restoreErr := blocker.Restore(); restoreErr != nil {
 			t.Fatalf("restore event-log blocker: %v", restoreErr)
 		}
-		events, collectErr := sessiontest.CollectEvents(store)
+		events, collectErr := collectTestEventRecords(store)
 		if collectErr != nil {
 			t.Fatalf("collect durable events: %v", collectErr)
 		}
@@ -176,7 +174,7 @@ func TestToolCompletionDeletionMismatchReleaseFallbackUsesCommitReceiptAuthority
 		if !receipt.Committed || !errors.Is(err, observerErr) {
 			t.Fatalf("committed fallback outcome: receipt=%+v err=%v", receipt, err)
 		}
-		durable, collectErr := sessiontest.CollectEvents(store)
+		durable, collectErr := collectTestEventRecords(store)
 		if collectErr != nil {
 			t.Fatalf("collect durable events: %v", collectErr)
 		}
@@ -224,7 +222,7 @@ func seedMismatchedDeletionCompletion(
 		ID:          "f3d2777d-4541-4bea-9270-d43efad59692",
 		Name:        string(toolspec.ToolPatch),
 		Custom:      true,
-		CustomInput: "*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n",
+		CustomInput: textutil.Value("*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n"),
 	}
 	normalized := normalizeToolCallForTranscript(call, engine.transcriptWorkingDir())
 	if err := engine.steer(
@@ -259,7 +257,7 @@ func seedMismatchedDeletionCompletion(
 		Name:    toolspec.ToolPatch,
 		IsError: false,
 		Output:  json.RawMessage(`{"ok":true}`),
-		Summary: "applied",
+		Summary: textutil.Value("applied"),
 		PresentationDelta: &transcript.ToolResultPresentationDelta{
 			WholeFileDeletionFacts: []patchformat.WholeFileDeletionFact{{
 				PhysicalGroup: group,
@@ -316,10 +314,10 @@ func assertProviderHistoryExcludesOperatorFallback(
 	items := engine.transcriptRuntimeState().SnapshotItems()
 	outputCount := 0
 	for _, item := range items {
-		if item.CallID == result.CallID && slices.Equal(item.Output, result.Output) {
+		if item.CallID != nil && *item.CallID == result.CallID && slices.Equal(item.Output, result.Output) {
 			outputCount++
 		}
-		if item.Role == llm.RoleDeveloper {
+		if item.Role != nil && *item.Role == llm.RoleDeveloper {
 			t.Fatalf("operator-only fallback leaked into provider items: %+v", item)
 		}
 	}

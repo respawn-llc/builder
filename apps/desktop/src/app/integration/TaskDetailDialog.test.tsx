@@ -512,6 +512,15 @@ describe("TaskDetailSurface", () => {
     });
   });
 
+  it("hides script actions when native file opening is unavailable", async () => {
+    taskDetailFixture(taskDetailResponseWithScriptRun, {
+      comments: commentListResponse,
+    });
+
+    expect(await screen.findByRole("textbox", { name: "Description" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open script scripts/run" })).not.toBeInTheDocument();
+  });
+
   it("validates script access only when the open action runs", async () => {
     const checked: NativeFileTarget[] = [];
     taskDetailFixture(taskDetailResponseWithScriptRun, {

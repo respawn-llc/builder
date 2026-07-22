@@ -15,7 +15,6 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
-	"core/shared/transcript"
 )
 
 type API struct {
@@ -41,12 +40,6 @@ func NewAPI(metadataStore *metadata.Store, fastModeState *runtime.FastModeState,
 	}
 }
 
-type recoveredWarningEntry struct {
-	Visibility transcript.EntryVisibility `json:"visibility,omitempty"`
-	Role       string                     `json:"role"`
-	Text       string                     `json:"text"`
-}
-
 func appendRecoveredWarning(store *session.Store, provider func() (string, bool, error)) error {
 	if provider == nil {
 		return nil
@@ -58,8 +51,15 @@ func appendRecoveredWarning(store *session.Store, provider func() (string, bool,
 	if !ok || warning == "" || store == nil {
 		return nil
 	}
-	_, err = store.AppendGeneratedRecoveredWarning("local_entry", recoveredWarningEntry{
-		Visibility: transcript.EntryVisibilityOngoing,
+	if store.Meta().GeneratedRecoveredWarningIssued {
+		return nil
+	}
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		return err
+	}
+	_, err = eventLog.AppendGeneratedRecoveredWarning(session.LocalEntryRecord{
+		Visibility: session.EntryVisibilityOngoing,
 		Role:       "warning",
 		Text:       warning,
 	})

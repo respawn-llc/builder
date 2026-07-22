@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"core/server/llm"
 	"core/server/metadata"
 	"core/server/session"
 	serverstartup "core/server/startup"
@@ -26,6 +25,10 @@ type backParentPrefillScenarioServer interface {
 	interactiveSessionServer
 	ProjectID() string
 	SessionViewClient() apicontract.SessionViewService
+}
+
+func appStringPointer(value string) *string {
+	return &value
 }
 
 func TestBackParentPrefillTransportParity(t *testing.T) {
@@ -137,7 +140,15 @@ func TestBackReopensPreviousSessionAcrossProjects(t *testing.T) {
 	if err := child.EnsureDurable(); err != nil {
 		t.Fatalf("persist child: %v", err)
 	}
-	if _, _, err := child.AppendEvent("child-step", "message", llm.Message{Role: llm.RoleUser, Content: "child task"}); err != nil {
+	childLog, err := child.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize child event log: %v", err)
+	}
+	childText := "child task"
+	if _, _, err := childLog.AppendRecord(
+		appStringPointer("child-step"),
+		session.MessageRecord{Role: session.MessageRoleUser, Content: &childText},
+	); err != nil {
 		t.Fatalf("append child event: %v", err)
 	}
 
@@ -290,11 +301,23 @@ func TestRemoteBackRebindsToParentProjectBeforeRuntimePreparation(t *testing.T) 
 	if err := parent.SetInputDraft("target project draft"); err != nil {
 		t.Fatalf("set target parent draft: %v", err)
 	}
-	child, err := session.CloneSession(parent, "", sessioncontract.SessionCategoryMain)
+	parentLog, err := parent.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize parent event log: %v", err)
+	}
+	child, err := session.CloneSession(parentLog, "", sessioncontract.SessionCategoryMain)
 	if err != nil {
 		t.Fatalf("clone source child: %v", err)
 	}
-	if _, _, err := child.AppendEvent("child-step", "message", llm.Message{Role: llm.RoleUser, Content: "child task"}); err != nil {
+	childLog, err := child.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize child event log: %v", err)
+	}
+	childText := "child task"
+	if _, _, err := childLog.AppendRecord(
+		appStringPointer("child-step"),
+		session.MessageRecord{Role: session.MessageRoleUser, Content: &childText},
+	); err != nil {
 		t.Fatalf("append child event: %v", err)
 	}
 	targetProjectID := bindingB.ProjectID
@@ -426,22 +449,36 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			parent := createAttachedAuthoritativeAppSession(t, server.Config().PersistenceRoot, server.ProjectID(), server.Config().WorkspaceRoot)
-			child, err := session.CloneSession(parent, "", sessioncontract.SessionCategoryMain)
+			parentLog, err := parent.MaterializeEventLog()
+			if err != nil {
+				t.Fatalf("materialize parent event log: %v", err)
+			}
+			child, err := session.CloneSession(parentLog, "", sessioncontract.SessionCategoryMain)
 			if err != nil {
 				t.Fatalf("clone child from parent: %v", err)
 			}
-			if _, _, err := child.AppendEvent("child-step", "message", llm.Message{
-				Role:    llm.RoleUser,
-				Content: "child task",
-			}); err != nil {
+			childLog, err := child.MaterializeEventLog()
+			if err != nil {
+				t.Fatalf("materialize child event log: %v", err)
+			}
+			childText := "child task"
+			if _, _, err := childLog.AppendRecord(
+				appStringPointer("child-step"),
+				session.MessageRecord{Role: session.MessageRoleUser, Content: &childText},
+			); err != nil {
 				t.Fatalf("append child user message: %v", err)
 			}
 			if tt.finalAnswer != nil {
-				if _, _, err := child.AppendEvent("child-step", "message", llm.Message{
-					Role:    llm.RoleAssistant,
-					Phase:   llm.MessagePhaseFinal,
-					Content: *tt.finalAnswer,
-				}); err != nil {
+				finalText := *tt.finalAnswer
+				finalPhase := session.MessagePhaseFinal
+				if _, _, err := childLog.AppendRecord(
+					appStringPointer("child-step"),
+					session.MessageRecord{
+						Role:    session.MessageRoleAssistant,
+						Phase:   &finalPhase,
+						Content: &finalText,
+					},
+				); err != nil {
 					t.Fatalf("append child final answer: %v", err)
 				}
 			}

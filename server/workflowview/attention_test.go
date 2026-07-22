@@ -109,7 +109,7 @@ func TestAttentionReadsGlobalAndTaskCandidatesThroughFocusedInterface(t *testing
 		byKindAndProject[item.Kind+":"+item.ProjectID] = item
 	}
 	approval := byKindAndProject["approval:"+firstProject.ProjectID]
-	if approval.TaskID != string(approvalTask.ID) || approval.TaskTransitionID != string(pendingApproval.TransitionID) {
+	if approval.TaskID != string(approvalTask.ID) || approval.TaskTransitionID != string(pendingApproval.Result.TransitionID) {
 		t.Fatalf("approval projection = %+v", approval)
 	}
 	if approval.ApprovalSnapshot == nil ||

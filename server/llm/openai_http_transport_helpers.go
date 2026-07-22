@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"core/shared/llmerrors"
+	"core/shared/textutil"
 
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
@@ -183,8 +184,7 @@ func parsePositiveInt(value any) int {
 func usageFromSDK(usage responses.ResponseUsage, window int) Usage {
 	out := Usage{InputTokens: int(usage.InputTokens), OutputTokens: int(usage.OutputTokens), WindowTokens: window}
 	if usage.JSON.InputTokensDetails.Valid() && usage.InputTokensDetails.JSON.CachedTokens.Valid() {
-		out.CachedInputTokens = int(usage.InputTokensDetails.CachedTokens)
-		out.HasCachedInputTokens = true
+		out.CachedInputTokens = textutil.Value(int(usage.InputTokensDetails.CachedTokens))
 	}
 	return out
 }

@@ -9,6 +9,7 @@ import (
 	"core/server/session"
 	"core/server/workflow"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -68,7 +69,7 @@ func latestActiveMetaContextMatches(items []llm.ResponseItem, desired llm.Messag
 			continue
 		}
 		classification, classified := classifyMetaContextMessage(llm.Message{
-			Role:            item.Role,
+			Role:            roleOrUser(item.Role),
 			MessageType:     item.MessageType,
 			SourcePath:      item.SourcePath,
 			WorktreeContext: item.WorktreeContext,
@@ -195,8 +196,8 @@ func (e *Engine) steerWorkflowModeIfNeeded(ctx context.Context, stepID string) e
 	runID := strings.TrimSpace(string(e.cfg.WorkflowRun.Contract.RunID))
 	if latestActiveMetaContextMatches(e.transcriptRuntimeState().SnapshotItems(), llm.Message{
 		Role:        llm.RoleDeveloper,
-		MessageType: llm.MessageTypeWorkflowMode,
-		SourcePath:  runID,
+		MessageType: textutil.Value(llm.MessageTypeWorkflowMode),
+		SourcePath:  textutil.Value(runID),
 	}) {
 		return nil
 	}
@@ -218,6 +219,13 @@ func (e *Engine) steerWorkflowModeIfNeeded(ctx context.Context, stepID string) e
 		return err
 	}
 	return e.steerMetaContextIfChanged(stepID, steeringPriorityRuntimeContext, metaResult.Workflow)
+}
+
+func roleOrUser(role *llm.Role) llm.Role {
+	if role == nil {
+		return llm.RoleUser
+	}
+	return *role
 }
 
 func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Message, error) {

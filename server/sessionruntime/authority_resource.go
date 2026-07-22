@@ -701,8 +701,8 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 				return a.AwaitPromptResponse(ctx, scope.ID(), req)
 			}
 		}
-		resource.askBroker.SetAskHandler(func(req tools.AskQuestionRequest) (tools.AskQuestionResponse, error) {
-			return askHandler(execution.ctx, execution.scope, req)
+		resource.askBroker.SetAskHandler(func(ctx context.Context, req tools.AskQuestionRequest) (tools.AskQuestionResponse, error) {
+			return askHandler(ctx, execution.scope, req)
 		})
 		resource.askScope = &scopeID
 	}

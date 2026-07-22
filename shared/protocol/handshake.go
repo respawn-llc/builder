@@ -134,7 +134,6 @@ const (
 	MethodRuntimeHasQueuedUserWork                      = "runtime.hasQueuedUserWork"
 	MethodRuntimeSubmitQueuedUserMessages               = "runtime.submitQueuedUserMessages"
 	MethodRuntimeInterrupt                              = "runtime.interrupt"
-	MethodRuntimeQueueUserMessage                       = "runtime.queueUserMessage"
 	MethodRuntimeLiveSteer                              = "runtime.liveSteer"
 	MethodRuntimeLiveStop                               = "runtime.liveStop"
 	MethodRuntimeLiveWait                               = "runtime.liveWait"

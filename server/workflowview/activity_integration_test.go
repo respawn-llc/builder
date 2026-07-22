@@ -117,7 +117,7 @@ func TestTaskActivityProjectsApprovalSnapshots(t *testing.T) {
 		if item.Type == "run_completed" && item.Run != nil && item.Run.ID == string(started.RunID) {
 			hasRunCompleted = true
 		}
-		if item.Type == "transition" && item.Transition != nil && item.Transition.ID == string(pending.TransitionID) {
+		if item.Type == "transition" && item.Transition != nil && item.Transition.ID == string(pending.Result.TransitionID) {
 			transition = *item.Transition
 		}
 	}

@@ -34,7 +34,7 @@ func TestAttentionListProjectsApprovalQuestionAndInterruptedRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompleteRun approval: %v", err)
 	}
-	if pendingApproval.State != "pending_approval" {
+	if pendingApproval.Result.State != "pending_approval" {
 		t.Fatalf("approval completion = %+v, want pending_approval", pendingApproval)
 	}
 	questionTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Question", Body: "Body"})
@@ -83,7 +83,7 @@ func TestAttentionListProjectsApprovalQuestionAndInterruptedRun(t *testing.T) {
 	for _, item := range resp.Items {
 		kinds[item.Kind] = item
 	}
-	if kinds["approval"].TaskTransitionID != string(pendingApproval.TransitionID) || kinds["question"].AskID != "ask-attention" || kinds["interrupted_run"].TaskID != string(interruptedTask.ID) || kinds["interrupted_run"].RunID != string(interruptedStarted.RunID) || kinds["interrupted_run"].Message != "Run interrupted: manual: role missing" {
+	if kinds["approval"].TaskTransitionID != string(pendingApproval.Result.TransitionID) || kinds["question"].AskID != "ask-attention" || kinds["interrupted_run"].TaskID != string(interruptedTask.ID) || kinds["interrupted_run"].RunID != string(interruptedStarted.RunID) || kinds["interrupted_run"].Message != "Run interrupted: manual: role missing" {
 		t.Fatalf("attention items = %+v", resp.Items)
 	}
 	firstPage, err := view.taskAttention(t).List(ctx, serverapi.WorkflowAttentionListRequest{PageSize: 1})
@@ -140,7 +140,7 @@ func TestAttentionProjectionDropsApprovalResolvedAfterCandidateRead(t *testing.T
 	if len(candidates) != 1 || candidates[0].kind != "approval" {
 		t.Fatalf("attention candidates = %+v, want one approval", candidates)
 	}
-	if _, err := workflowStore.ApproveTransition(ctx, pending.TransitionID); err != nil {
+	if _, err := workflowStore.ApproveTransition(ctx, pending.Result.TransitionID); err != nil {
 		t.Fatalf("ApproveTransition: %v", err)
 	}
 

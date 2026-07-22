@@ -549,7 +549,7 @@ func TestWriteStdinCancellationReportsActiveProcess(t *testing.T) {
 		if !pollResult.IsError {
 			t.Fatalf("expected write_stdin error result, got %+v", pollResult)
 		}
-		if pollResult.Summary == "" {
+		if pollResult.Summary == nil || *pollResult.Summary == "" {
 			t.Fatal("expected cancellation summary")
 		}
 	case <-time.After(time.Second):

@@ -1,16 +1,17 @@
 package session
 
-// collectEvents accumulates the full event history via the streaming reader for
-// in-package tests that assert against persisted events. Production code must
-// not materialize the full event log; see sessiontest.CollectEvents for the
-// cross-package equivalent.
-func collectEvents(s *Store) ([]Event, error) {
-	events := make([]Event, 0)
-	if err := s.WalkEvents(func(evt Event) error {
-		events = append(events, evt)
+// collectRecords accumulates the full typed event history for in-package tests.
+func collectEvents(s *Store) ([]EventRecord, error) {
+	log, err := s.MaterializeEventLog()
+	if err != nil {
+		return nil, err
+	}
+	records := make([]EventRecord, 0)
+	if err := log.WalkRecords(func(record EventRecord) error {
+		records = append(records, record)
 		return nil
 	}); err != nil {
 		return nil, err
 	}
-	return events, nil
+	return records, nil
 }

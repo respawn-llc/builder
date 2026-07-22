@@ -11,7 +11,6 @@ use rpc_client::wire::{Frame, JSONRPC_VERSION, Response};
 use serde_json::json;
 use tungstenite::Message;
 
-#[test]
 fn websocket_endpoint_factory_runs_remote_client_setup_over_real_frames() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();

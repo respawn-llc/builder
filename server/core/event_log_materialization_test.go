@@ -13,8 +13,8 @@ import (
 // forbiddenFullHistoryMaterializers are session APIs that load an entire
 // events.jsonl history into memory. Session histories can reach gigabytes, so
 // production code must project them through bounded reverse-read windows
-// (ReadSegmentBackward/ReadRecentEvents/ReadEventsBackwardUntil) instead, with
-// the front-to-back WalkEvents reserved for fork. The full materializers survive
+// (ReadSegmentBackward/ReadRecentRecords) instead, with the front-to-back
+// WalkRecords reserved for fork/clone. The full materializers survive
 // only as test helpers in core/server/session/sessiontest.
 var forbiddenFullHistoryMaterializers = map[string]struct{}{
 	"ReadEvents":      {},

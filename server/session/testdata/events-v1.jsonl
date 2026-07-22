@@ -1,0 +1,8 @@
+{"contract":"kent.session.events","version":1}
+{"seq":1,"kind":"message","step_id":"step-1","payload":{"role":"user","content":"ship the typed event format"}}
+{"seq":2,"kind":"tool_completed","step_id":"step-1","payload":{"call_id":"call-1","name":"shell","output_kind":"function","is_error":false,"output":{"exit_code":0}}}
+{"seq":3,"kind":"local_entry","payload":{"visibility":"detail","role":"error","text":"compaction failed"}}
+{"seq":4,"kind":"history_replaced","payload":{"engine":"local","mode":"auto"}}
+{"seq":5,"kind":"cache_request_observed","payload":{"digest_version":1,"cache_key":"session-cache-key","scope":"conversation","chunk_count":4,"terminal_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+{"seq":6,"kind":"cache_response_observed","payload":{"digest_version":1,"cache_key":"session-cache-key","scope":"conversation","chunk_count":4,"terminal_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","cached_input_tokens":1024}}
+{"seq":7,"kind":"cache_warning","payload":{"scope":"conversation","reason":"reuse_dropped","cache_key":"session-cache-key","lost_input_tokens":2048}}

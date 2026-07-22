@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"core/server/llm"
+	"core/shared/textutil"
 
 	"github.com/google/uuid"
 )
@@ -207,7 +208,7 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrent(beforeCancel func(*RunS
 		return nil, nil
 	}
 	s.mu.Unlock()
-	if err := s.engine.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeInterruption, Content: interruptMessage}})); err != nil {
+	if err := s.engine.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeInterruption), Content: textutil.Value(interruptMessage)}})); err != nil {
 		s.mu.Lock()
 		if s.active != nil && s.active.sequence == active.sequence {
 			s.active.interrupted = false

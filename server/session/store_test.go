@@ -1,7 +1,6 @@
 package session
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,13 +12,22 @@ import (
 	"core/shared/sessioncontract"
 )
 
-func appendSessionTestEvent(t *testing.T, store *Store, stepID, kind string, payload any) Event {
+func appendSessionTestRecord(
+	t *testing.T,
+	store *Store,
+	stepID string,
+	payload EventRecordPayload,
+) EventRecord {
 	t.Helper()
-	event, _, err := store.AppendEvent(stepID, kind, payload)
-	if err != nil {
-		t.Fatalf("append %s event: %v", kind, err)
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("persist store before materializing event log: %v", err)
 	}
-	return event
+	log := mustMaterializeSessionTestEventLog(t, store)
+	record, _, err := log.AppendRecord(&stepID, payload)
+	if err != nil {
+		t.Fatalf("append typed event record: %v", err)
+	}
+	return record
 }
 
 func sessionTestLockedContract() LockedContract {
@@ -50,7 +58,7 @@ func TestNewLazyDoesNotPersistUntilFirstWrite(t *testing.T) {
 		t.Fatalf("expected no session dir before first write, stat err=%v", err)
 	}
 
-	appendSessionTestEvent(t, store, "step1", "message", map[string]any{"a": 1})
+	appendSessionTestRecord(t, store, "step1", sessionTestMessage(MessageRoleUser, "first write"))
 	if _, err := os.Stat(filepath.Join(store.Dir(), eventsFile)); err != nil {
 		t.Fatalf("expected events file after first write: %v", err)
 	}
@@ -142,14 +150,18 @@ func TestSessionCategoryPromotionIsOneWayAndAdvancesRecencyOnce(t *testing.T) {
 	}
 }
 
-func TestNewLazyReadEventsBeforePersistReturnsEmpty(t *testing.T) {
+func TestNewLazyMaterializedEventLogReturnsEmpty(t *testing.T) {
 	store := newSessionTestLazyStore(t)
-	events, err := collectEvents(store)
-	if err != nil {
-		t.Fatalf("read events: %v", err)
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("persist store before materializing event log: %v", err)
 	}
-	if len(events) != 0 {
-		t.Fatalf("events len = %d, want 0", len(events))
+	log := mustMaterializeSessionTestEventLog(t, store)
+	events, err := log.ReadRecentRecords(1)
+	if err != nil {
+		t.Fatalf("read event records: %v", err)
+	}
+	if len(events.Records) != 0 {
+		t.Fatalf("event record count = %d, want 0", len(events.Records))
 	}
 }
 
@@ -179,14 +191,14 @@ func TestSetWorkflowSessionStateNormalizesEmptyStateToNil(t *testing.T) {
 	}
 }
 
-func TestAppendEventMonotonicSequence(t *testing.T) {
+func TestAppendTypedRecordMonotonicSequence(t *testing.T) {
 	store := newSessionTestStore(t)
 
-	e1 := appendSessionTestEvent(t, store, "step1", "message", map[string]any{"a": 1})
-	e2 := appendSessionTestEvent(t, store, "step1", "message", map[string]any{"b": 2})
+	e1 := appendSessionTestRecord(t, store, "step1", sessionTestMessage(MessageRoleUser, "one"))
+	e2 := appendSessionTestRecord(t, store, "step1", sessionTestMessage(MessageRoleAssistant, "two"))
 
-	if e1.Seq != 1 || e2.Seq != 2 {
-		t.Fatalf("unexpected sequence values: %d, %d", e1.Seq, e2.Seq)
+	if e1.Seq() != 1 || e2.Seq() != 2 {
+		t.Fatalf("unexpected sequence values: %d, %d", e1.Seq(), e2.Seq())
 	}
 
 	events, err := collectEvents(store)
@@ -196,7 +208,7 @@ func TestAppendEventMonotonicSequence(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("events len = %d, want 2", len(events))
 	}
-	if events[0].Seq != 1 || events[1].Seq != 2 {
+	if events[0].Seq() != 1 || events[1].Seq() != 2 {
 		t.Fatalf("persisted sequence mismatch: %+v", events)
 	}
 }
@@ -424,12 +436,12 @@ func TestLockedContractMutationObserverCommitSemantics(t *testing.T) {
 	}
 }
 
-func TestReadEventsHandlesLargeJSONLines(t *testing.T) {
+func TestReadRecordsHandlesLargeMessageContent(t *testing.T) {
 	store := newSessionTestStore(t)
 
 	const payloadSize = 128 * 1024
 	large := strings.Repeat("x", payloadSize)
-	appendSessionTestEvent(t, store, "step1", "message", map[string]any{"blob": large})
+	appendSessionTestRecord(t, store, "step1", sessionTestMessage(MessageRoleAssistant, large))
 
 	events, err := collectEvents(store)
 	if err != nil {
@@ -439,23 +451,37 @@ func TestReadEventsHandlesLargeJSONLines(t *testing.T) {
 		t.Fatalf("events len = %d, want 1", len(events))
 	}
 
-	var payload map[string]string
-	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
-		t.Fatalf("decode payload: %v", err)
+	message, ok := mustEventRecordPayload(events[0]).(MessageRecord)
+	if !ok {
+		t.Fatalf("event payload = %T, want MessageRecord", mustEventRecordPayload(events[0]))
 	}
-	if got := len(payload["blob"]); got != payloadSize {
-		t.Fatalf("payload blob size = %d, want %d", got, payloadSize)
+	if message.Content == nil {
+		t.Fatal("message content is absent")
+	}
+	if got := len(*message.Content); got != payloadSize {
+		t.Fatalf("message content size = %d, want %d", got, payloadSize)
 	}
 }
 
-func TestAppendEventPersistsFirstPromptPreview(t *testing.T) {
+func TestAppendTypedRecordPersistsFirstPromptPreview(t *testing.T) {
 	store := newSessionTestStore(t)
-	appendSessionTestEvent(t, store, "s1", "message", map[string]any{"role": "assistant", "content": "hello"})
-	appendSessionTestEvent(t, store, "s1", "message", map[string]any{"role": "developer", "message_type": "compaction_summary", "content": "summary"})
+	compactionSummary := MessageTypeCompactionSummary
+	summary := "summary"
+	appendSessionTestRecord(t, store, "s1", sessionTestMessage(MessageRoleAssistant, "hello"))
+	appendSessionTestRecord(t, store, "s1", MessageRecord{
+		Role:        MessageRoleDeveloper,
+		MessageType: &compactionSummary,
+		Content:     &summary,
+	})
 	if got := store.Meta().FirstPromptPreview; got != "" {
 		t.Fatalf("non-user messages set preview %q", got)
 	}
-	appendSessionTestEvent(t, store, "s2", "message", map[string]any{"role": "user", "content": "\n  Investigate config load failures\nsecond line"})
+	appendSessionTestRecord(
+		t,
+		store,
+		"s2",
+		sessionTestMessage(MessageRoleUser, "\n  Investigate config load failures\nsecond line"),
+	)
 	if got := store.Meta().FirstPromptPreview; got != "Investigate config load failures" {
 		t.Fatalf("preview = %q, want normalized first user line", got)
 	}
@@ -476,7 +502,7 @@ func TestSetListingMetadataPersistsNameAndFirstPromptPreview(t *testing.T) {
 	if err := store.SetListingMetadata("  Workflow Session  ", "\n  Rendered workflow prompt\nsecond line"); err != nil {
 		t.Fatalf("SetListingMetadata: %v", err)
 	}
-	meta := store.Meta()
+	meta := storeTestMeta(store)
 	if meta.Name != "Workflow Session" || meta.FirstPromptPreview != "Rendered workflow prompt" {
 		t.Fatalf("metadata = name %q preview %q, want trimmed name and normalized preview", meta.Name, meta.FirstPromptPreview)
 	}
@@ -484,7 +510,7 @@ func TestSetListingMetadataPersistsNameAndFirstPromptPreview(t *testing.T) {
 		t.Fatalf("observer snapshot = %+v, called %v", observer.snapshot.Meta, observer.called)
 	}
 
-	appendSessionTestEvent(t, store, "s1", "message", map[string]any{"role": "user", "content": "event prompt"})
+	appendSessionTestRecord(t, store, "s1", sessionTestMessage(MessageRoleUser, "event prompt"))
 	if got := store.Meta().FirstPromptPreview; got != "Rendered workflow prompt" {
 		t.Fatalf("event capture overwrote explicit preview: %q", got)
 	}
@@ -543,32 +569,40 @@ func TestMetaSnapshotDeepCopiesSessionProvenance(t *testing.T) {
 
 func TestConversationFreshnessAdvancesOnlyForVisibleUserMessages(t *testing.T) {
 	store := newSessionTestStore(t)
-	if got := store.ConversationFreshness(); got != ConversationFreshnessFresh {
+	log := mustMaterializeSessionTestEventLog(t, store)
+	if got := mustConversationFreshness(log); got != ConversationFreshnessFresh {
 		t.Fatalf("freshness = %v, want fresh", got)
 	}
-	appendSessionTestEvent(t, store, "s1", "message", map[string]any{"role": "assistant", "content": "hello"})
-	if got := store.ConversationFreshness(); got != ConversationFreshnessFresh {
+	appendSessionTestRecord(t, store, "s1", sessionTestMessage(MessageRoleAssistant, "hello"))
+	if got := mustConversationFreshness(log); got != ConversationFreshnessFresh {
 		t.Fatalf("freshness after assistant = %v, want fresh", got)
 	}
-	appendSessionTestEvent(t, store, "s2", "message", map[string]any{"role": "developer", "message_type": "compaction_summary", "content": "summary"})
-	if got := store.ConversationFreshness(); got != ConversationFreshnessFresh {
+	compactionSummary := MessageTypeCompactionSummary
+	summary := "summary"
+	appendSessionTestRecord(t, store, "s2", MessageRecord{
+		Role:        MessageRoleDeveloper,
+		MessageType: &compactionSummary,
+		Content:     &summary,
+	})
+	if got := mustConversationFreshness(log); got != ConversationFreshnessFresh {
 		t.Fatalf("freshness after compaction summary = %v, want fresh", got)
 	}
-	appendSessionTestEvent(t, store, "s3", "message", map[string]any{"role": "user", "content": "Investigate config load failures"})
-	if got := store.ConversationFreshness(); got != ConversationFreshnessEstablished {
+	appendSessionTestRecord(t, store, "s3", sessionTestMessage(MessageRoleUser, "Investigate config load failures"))
+	if got := mustConversationFreshness(log); got != ConversationFreshnessEstablished {
 		t.Fatalf("freshness after visible user message = %v, want established", got)
 	}
 	opened := mustOpenSessionTestStore(t, store)
-	if got := opened.ConversationFreshness(); got != ConversationFreshnessEstablished {
+	openedLog := mustMaterializeSessionTestEventLog(t, opened)
+	if got := mustConversationFreshness(openedLog); got != ConversationFreshnessEstablished {
 		t.Fatalf("reopened freshness = %v, want established", got)
 	}
 }
 
-func TestOpenBackfillsConversationFreshnessFromTail(t *testing.T) {
+func TestMaterializeEventLogBackfillsConversationFreshnessFromTail(t *testing.T) {
 	store := newSessionTestStore(t)
-	appendSessionTestEvent(t, store, "s1", "message", map[string]any{"role": "user", "content": "established session"})
+	appendSessionTestRecord(t, store, "s1", sessionTestMessage(MessageRoleUser, "established session"))
 
-	meta := store.Meta()
+	meta := storeTestMeta(store)
 	meta.ConversationEstablished = false
 
 	opened, err := Open(
@@ -582,22 +616,23 @@ func TestOpenBackfillsConversationFreshnessFromTail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	if got := opened.ConversationFreshness(); got != ConversationFreshnessEstablished {
+	log := mustMaterializeSessionTestEventLog(t, opened)
+	if got := mustConversationFreshness(log); got != ConversationFreshnessEstablished {
 		t.Fatalf("backfilled freshness = %v, want established", got)
 	}
-	if !opened.Meta().ConversationEstablished {
+	if mustConversationFreshness(log) != ConversationFreshnessEstablished {
 		t.Fatalf("expected backfill to persist conversation_established flag")
 	}
 }
 
-func TestOpenRecoversLastSequenceFromTailWhenMetaStale(t *testing.T) {
+func TestMaterializeEventLogRecoversLastSequenceFromTailWhenMetaStale(t *testing.T) {
 	store := newSessionTestStore(t)
 	for i := 0; i < 3; i++ {
-		appendSessionTestEvent(t, store, "s1", "message", map[string]any{"role": "assistant", "content": "reply"})
+		appendSessionTestRecord(t, store, "s1", sessionTestMessage(MessageRoleAssistant, "reply"))
 	}
-	trueLastSeq := store.Meta().LastSequence
+	trueLastSeq := mustMaterializedRevision(mustMaterializeSessionTestEventLog(t, store))
 
-	meta := store.Meta()
+	meta := storeTestMeta(store)
 	meta.LastSequence = 0
 	persistence := &testSessionMetadata{records: map[string]PersistedSessionRecord{
 		meta.SessionID: {
@@ -614,46 +649,56 @@ func TestOpenRecoversLastSequenceFromTailWhenMetaStale(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	if got := opened.Meta().LastSequence; got != trueLastSeq {
+	if got := storeTestMeta(opened).LastSequence; got != 0 {
+		t.Fatalf("metadata-only last sequence = %d, want stale authoritative value 0", got)
+	}
+	mustMaterializeSessionTestEventLog(t, opened)
+	if got := mustMaterializedRevision(mustMaterializeSessionTestEventLog(t, opened)); got != trueLastSeq {
 		t.Fatalf("recovered last sequence = %d, want %d", got, trueLastSeq)
 	}
 }
 
-func TestAppendTurnAtomicPersistsFirstPromptPreview(t *testing.T) {
+func TestAppendTypedBatchPersistsFirstPromptPreview(t *testing.T) {
 	store := newSessionTestStore(t)
-	if _, receipt, err := store.AppendTurnAtomic("s1", []EventInput{{Kind: "message", Payload: map[string]any{"role": "assistant", "content": "hello"}}, {Kind: "message", Payload: map[string]any{"role": "user", "content": "Atomic preview source\nmore"}}}); err != nil {
-		t.Fatalf("append turn: %v", err)
+	log := mustMaterializeSessionTestEventLog(t, store)
+	stepID := "s1"
+	if _, receipt, err := log.AppendRecordsAtomic(&stepID, []EventRecordPayload{
+		sessionTestMessage(MessageRoleAssistant, "hello"),
+		sessionTestMessage(MessageRoleUser, "Atomic preview source\nmore"),
+	}); err != nil {
+		t.Fatalf("append typed batch: %v", err)
 	} else if !receipt.Committed {
-		t.Fatal("append turn returned an uncommitted receipt")
+		t.Fatal("append typed batch returned an uncommitted receipt")
 	}
 	if got := store.Meta().FirstPromptPreview; got != "Atomic preview source" {
 		t.Fatalf("preview = %q, want %q", got, "Atomic preview source")
 	}
 }
 
-func TestAppendTurnAtomicReportsUncommittedEventLogFailure(t *testing.T) {
+func TestAppendTypedBatchReportsUncommittedEventLogFailure(t *testing.T) {
 	store := newSessionTestStore(t)
+	log := mustMaterializeSessionTestEventLog(t, store)
 	filemode.MustBlockEventLogAppends(t, store.eventsFP)
 
-	events, receipt, err := store.AppendTurnAtomic("s1", []EventInput{{
-		Kind:    "message",
-		Payload: map[string]any{"role": "user", "content": "must not commit"},
-	}})
+	stepID := "s1"
+	events, receipt, err := log.AppendRecordsAtomic(&stepID, []EventRecordPayload{
+		sessionTestMessage(MessageRoleUser, "must not commit"),
+	})
 	if err == nil {
-		t.Fatal("append turn did not surface the event-log failure")
+		t.Fatal("append typed batch did not surface the event-log failure")
 	}
 	if receipt.Committed {
-		t.Fatalf("append turn receipt = %+v, want uncommitted", receipt)
+		t.Fatalf("append typed batch receipt = %+v, want uncommitted", receipt)
 	}
 	if len(events) != 1 {
 		t.Fatalf("built events = %+v, want the attempted event", events)
 	}
-	if meta := store.Meta(); meta.LastSequence != 0 || meta.FirstPromptPreview != "" {
+	if meta := storeTestMeta(store); meta.LastSequence != 0 || meta.FirstPromptPreview != "" {
 		t.Fatalf("metadata mutated after uncommitted append: %+v", meta)
 	}
 }
 
-func TestAppendTurnAtomicReportsCommittedObserverFailure(t *testing.T) {
+func TestAppendTypedBatchReportsCommittedObserverFailure(t *testing.T) {
 	observer := &recordingPersistenceObserver{}
 	store, err := Create(
 		t.TempDir(),
@@ -668,22 +713,23 @@ func TestAppendTurnAtomicReportsCommittedObserverFailure(t *testing.T) {
 	if err := store.EnsureDurable(); err != nil {
 		t.Fatalf("persist observed store: %v", err)
 	}
-	observer.err = os.ErrPermission
 
-	events, receipt, err := store.AppendTurnAtomic("s1", []EventInput{{
-		Kind:    "message",
-		Payload: map[string]any{"role": "user", "content": "committed despite observer failure"},
-	}})
+	log := mustMaterializeSessionTestEventLog(t, store)
+	observer.err = os.ErrPermission
+	stepID := "s1"
+	events, receipt, err := log.AppendRecordsAtomic(&stepID, []EventRecordPayload{
+		sessionTestMessage(MessageRoleUser, "committed despite observer failure"),
+	})
 	if err == nil {
-		t.Fatal("append turn did not surface the observer failure")
+		t.Fatal("append typed batch did not surface the observer failure")
 	}
 	if !receipt.Committed {
-		t.Fatalf("append turn receipt = %+v, want committed", receipt)
+		t.Fatalf("append typed batch receipt = %+v, want committed", receipt)
 	}
-	if len(events) != 1 || events[0].Seq != 1 {
+	if len(events) != 1 || events[0].Seq() != 1 {
 		t.Fatalf("committed events = %+v, want one sequence-1 event", events)
 	}
-	if meta := store.Meta(); meta.LastSequence != 1 || meta.FirstPromptPreview != "committed despite observer failure" {
+	if meta := storeTestMeta(store); meta.LastSequence != 1 || meta.FirstPromptPreview != "committed despite observer failure" {
 		t.Fatalf("metadata after committed observer failure = %+v", meta)
 	}
 }
@@ -696,10 +742,14 @@ func userMessageSeqAt(t *testing.T, store *Store, n int) int64 {
 	}
 	visible := 0
 	for _, evt := range events {
-		if hasVisibleUserMessageEvent(evt.Kind, evt.Payload) {
+		isVisible, err := hasVisibleUserMessageRecord(evt)
+		if err != nil {
+			t.Fatalf("inspect visible user message: %v", err)
+		}
+		if isVisible {
 			visible++
 			if visible == n {
-				return evt.Seq
+				return evt.Seq()
 			}
 		}
 	}
@@ -715,12 +765,13 @@ func TestForkAtUserMessageCopiesPrefixBeforeSelectedMessage(t *testing.T) {
 	contract.SystemPrompt = "parent prompt snapshot"
 	contract.ReviewerPrompt = "parent reviewer prompt snapshot"
 	markSessionTestLocked(t, parent, contract)
-	appendSessionTestEvent(t, parent, "s1", "message", map[string]any{"role": "user", "content": "u1"})
-	appendSessionTestEvent(t, parent, "s1", "message", map[string]any{"role": "assistant", "content": "a1"})
-	appendSessionTestEvent(t, parent, "s2", "message", map[string]any{"role": "user", "content": "u2"})
-	appendSessionTestEvent(t, parent, "s2", "message", map[string]any{"role": "assistant", "content": "a2"})
+	appendSessionTestRecord(t, parent, "s1", sessionTestMessage(MessageRoleUser, "u1"))
+	appendSessionTestRecord(t, parent, "s1", sessionTestMessage(MessageRoleAssistant, "a1"))
+	appendSessionTestRecord(t, parent, "s2", sessionTestMessage(MessageRoleUser, "u2"))
+	appendSessionTestRecord(t, parent, "s2", sessionTestMessage(MessageRoleAssistant, "a2"))
 
-	forked, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 2), "Parent → edit u2", testSessionCategory)
+	parentLog := mustMaterializeSessionTestEventLog(t, parent)
+	forked, _, err := ForkAtUserMessage(parentLog, userMessageSeqAt(t, parent, 2), "Parent → edit u2", testSessionCategory)
 	if err != nil {
 		t.Fatalf("fork at user message: %v", err)
 	}
@@ -731,14 +782,11 @@ func TestForkAtUserMessageCopiesPrefixBeforeSelectedMessage(t *testing.T) {
 	if len(forkEvents) != 2 {
 		t.Fatalf("expected two replayed events, got %d", len(forkEvents))
 	}
-	var first struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
+	first, ok := mustEventRecordPayload(forkEvents[0]).(MessageRecord)
+	if !ok {
+		t.Fatalf("first fork payload = %T, want MessageRecord", mustEventRecordPayload(forkEvents[0]))
 	}
-	if err := json.Unmarshal(forkEvents[0].Payload, &first); err != nil {
-		t.Fatalf("decode first message: %v", err)
-	}
-	if first.Role != "user" || first.Content != "u1" {
+	if first.Role != MessageRoleUser || first.Content == nil || *first.Content != "u1" {
 		t.Fatalf("unexpected first message in fork: %+v", first)
 	}
 	meta := forked.Meta()
@@ -764,52 +812,54 @@ func TestForkAtUserMessageCopiesPrefixBeforeSelectedMessage(t *testing.T) {
 }
 
 func TestForkAtUserMessageDerivesReminderIssuedFromReplayedHistory(t *testing.T) {
-	user := func(content string) EventInput {
-		return EventInput{Kind: "message", Payload: map[string]any{"role": "user", "content": content}}
+	user := func(content string) EventRecordPayload {
+		return sessionTestMessage(MessageRoleUser, content)
 	}
-	reminder := EventInput{Kind: "message", Payload: map[string]any{
-		"role": "developer", "message_type": "compaction_soon_reminder", "content": "compact soon",
-	}}
-	replacement := func(engine string, items []map[string]any) EventInput {
-		return EventInput{Kind: "history_replaced", Payload: map[string]any{"engine": engine, "items": items}}
+	compactionSoonReminder := MessageTypeCompactionSoonReminder
+	compactSoon := "compact soon"
+	reminder := MessageRecord{
+		Role:        MessageRoleDeveloper,
+		MessageType: &compactionSoonReminder,
+		Content:     &compactSoon,
+	}
+	replacement := func(engine string, mode CompactionMode) EventRecordPayload {
+		return HistoryReplacementRecord{Engine: engine, Mode: mode}
 	}
 	cases := []struct {
 		name              string
-		events            []EventInput
+		events            []EventRecordPayload
 		forkAtUser        int
 		persistedReminder bool
 		wantReminder      bool
 	}{
-		{"before reminder", []EventInput{user("u1"), reminder, user("u2")}, 1, true, false},
-		{"after reminder", []EventInput{user("u1"), reminder, user("u2")}, 2, true, true},
-		{"legacy reviewer rollback injected reminder ignored", []EventInput{
+		{"before reminder", []EventRecordPayload{user("u1"), reminder, user("u2")}, 1, true, false},
+		{"after reminder", []EventRecordPayload{user("u1"), reminder, user("u2")}, 2, true, true},
+		{"typed history replacement clears reminder", []EventRecordPayload{
 			user("u1"),
-			replacement("reviewer_rollback", []map[string]any{{
-				"type": "message", "role": "developer", "message_type": "compaction_soon_reminder", "content": "compact soon",
-			}}),
+			reminder,
+			replacement("local", CompactionModeAuto),
 			user("u2"),
 		}, 2, false, false},
-		{"compaction clears reminder", []EventInput{
-			user("u1"), reminder, replacement("compaction", []map[string]any{}), user("u2"),
+		{"typed handoff replacement clears reminder", []EventRecordPayload{
+			user("u1"), reminder, replacement("remote", CompactionModeHandoff), user("u2"),
 		}, 2, false, false},
-		{"legacy reviewer rollback preserves earlier reminder", []EventInput{
-			user("u1"), reminder, replacement("reviewer_rollback", []map[string]any{}), user("u2"),
-		}, 2, false, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			parent := newSessionTestStore(t)
-			if _, receipt, err := parent.AppendTurnAtomic("replay", tc.events); err != nil {
-				t.Fatalf("append replay fixture: %v", err)
+			parentLog := mustMaterializeSessionTestEventLog(t, parent)
+			stepID := "replay"
+			if _, receipt, err := parentLog.AppendRecordsAtomic(&stepID, tc.events); err != nil {
+				t.Fatalf("append typed replay fixture: %v", err)
 			} else if !receipt.Committed {
-				t.Fatal("replay fixture was not committed")
+				t.Fatal("typed replay fixture was not committed")
 			}
 			if tc.persistedReminder {
 				if err := parent.SetCompactionSoonReminderIssued(true); err != nil {
 					t.Fatalf("persist reminder state: %v", err)
 				}
 			}
-			forked, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, tc.forkAtUser), tc.name, testSessionCategory)
+			forked, _, err := ForkAtUserMessage(parentLog, userMessageSeqAt(t, parent, tc.forkAtUser), tc.name, testSessionCategory)
 			if err != nil {
 				t.Fatalf("fork: %v", err)
 			}
@@ -822,7 +872,7 @@ func TestForkAtUserMessageDerivesReminderIssuedFromReplayedHistory(t *testing.T)
 
 func TestForkAtUserMessageCopiesWorktreeReminderTarget(t *testing.T) {
 	parent := newSessionTestStore(t)
-	appendSessionTestEvent(t, parent, "s1", "message", map[string]any{"role": "user", "content": "u1"})
+	appendSessionTestRecord(t, parent, "s1", sessionTestMessage(MessageRoleUser, "u1"))
 	if err := parent.SetWorktreeReminderState(&WorktreeReminderState{
 		Mode: WorktreeReminderModeEnter,
 		WorktreeContext: WorktreeContext{
@@ -834,9 +884,10 @@ func TestForkAtUserMessageCopiesWorktreeReminderTarget(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("persist worktree reminder state: %v", err)
 	}
-	appendSessionTestEvent(t, parent, "s2", "message", map[string]any{"role": "user", "content": "u2"})
+	appendSessionTestRecord(t, parent, "s2", sessionTestMessage(MessageRoleUser, "u2"))
 
-	forked, _, err := ForkAtUserMessage(parent, userMessageSeqAt(t, parent, 2), "forked", testSessionCategory)
+	parentLog := mustMaterializeSessionTestEventLog(t, parent)
+	forked, _, err := ForkAtUserMessage(parentLog, userMessageSeqAt(t, parent, 2), "forked", testSessionCategory)
 	if err != nil {
 		t.Fatalf("fork: %v", err)
 	}
@@ -1013,14 +1064,14 @@ func TestSetContinuationContextStaysLazyUntilFirstWrite(t *testing.T) {
 	if _, err := os.Stat(store.Dir()); !os.IsNotExist(err) {
 		t.Fatalf("expected lazy session to remain unpersisted, stat err=%v", err)
 	}
-	appendSessionTestEvent(t, store, "step1", "message", map[string]any{"a": 1})
+	appendSessionTestRecord(t, store, "step1", sessionTestMessage(MessageRoleUser, "persist continuation"))
 	opened := mustOpenSessionTestStore(t, store)
 	if opened.Meta().Continuation == nil || opened.Meta().Continuation.OpenAIBaseURL != "http://example.local/v1" {
 		t.Fatalf("expected persisted continuation context, got %+v", opened.Meta().Continuation)
 	}
 }
 
-func TestPendingModelRecoveryPersistsMetadataAndEvents(t *testing.T) {
+func TestPendingModelRecoveryPersistsOnlyMetadata(t *testing.T) {
 	store := newSessionTestStore(t)
 	recovery := PendingModelRecovery{
 		RecoveryID:             "recovery-1",
@@ -1044,33 +1095,47 @@ func TestPendingModelRecoveryPersistsMetadataAndEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("collect events: %v", err)
 	}
-	if len(events) != 2 || events[0].Kind != eventModelRecoveryPending || events[1].Kind != eventModelRecoveryConsumed {
-		t.Fatalf("recovery event sequence = %+v", events)
-	}
-	if events[0].StepID != recovery.StepID || events[1].StepID != recovery.StepID {
-		t.Fatalf("recovery events should carry step ID, got %+v", events)
+	if len(events) != 0 {
+		t.Fatalf("recovery metadata mutation emitted events: %+v", events)
 	}
 }
 
-func TestHeadlessActiveFromReplayEvents(t *testing.T) {
-	msg := func(messageType string) ReplayEvent {
-		return ReplayEvent{Kind: "message", Payload: []byte(`{"role":"developer","message_type":"` + messageType + `","content":"x"}`)}
+func TestHeadlessActiveFromTypedReplayRecords(t *testing.T) {
+	message := func(role MessageRole, messageType MessageType) EventRecordPayload {
+		content := "x"
+		return MessageRecord{
+			Role:        role,
+			MessageType: &messageType,
+			Content:     &content,
+		}
 	}
 	cases := []struct {
 		name   string
-		events []ReplayEvent
+		events []EventRecordPayload
 		want   bool
 	}{
 		{"empty", nil, false},
-		{"enter", []ReplayEvent{msg("headless_mode")}, true},
-		{"enter then exit", []ReplayEvent{msg("headless_mode"), msg("headless_mode_exit")}, false},
-		{"exit then enter", []ReplayEvent{msg("headless_mode_exit"), msg("headless_mode")}, true},
-		{"non-developer ignored", []ReplayEvent{{Kind: "message", Payload: []byte(`{"role":"user","message_type":"headless_mode","content":"x"}`)}}, false},
+		{"enter", []EventRecordPayload{message(MessageRoleDeveloper, MessageTypeHeadlessMode)}, true},
+		{"enter then exit", []EventRecordPayload{
+			message(MessageRoleDeveloper, MessageTypeHeadlessMode),
+			message(MessageRoleDeveloper, MessageTypeHeadlessModeExit),
+		}, false},
+		{"exit then enter", []EventRecordPayload{
+			message(MessageRoleDeveloper, MessageTypeHeadlessModeExit),
+			message(MessageRoleDeveloper, MessageTypeHeadlessMode),
+		}, true},
+		{"non-developer ignored", []EventRecordPayload{
+			message(MessageRoleUser, MessageTypeHeadlessMode),
+		}, false},
 	}
 	for _, tc := range cases {
 		derived := replayDerivedState{}
-		for _, evt := range tc.events {
-			derived.apply(evt)
+		for index, payload := range tc.events {
+			record, err := NewEventRecord(int64(index+1), nil, payload)
+			if err != nil {
+				t.Fatalf("%s: build typed replay record: %v", tc.name, err)
+			}
+			derived.apply(record)
 		}
 		if derived.headlessActive != tc.want {
 			t.Fatalf("%s: derived.headlessActive = %v, want %v", tc.name, derived.headlessActive, tc.want)

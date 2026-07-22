@@ -37,34 +37,29 @@ type TranscriptSegmentPage struct {
 	LastCommittedAssistantFinalAnswer string
 }
 
-func isCompactionSegmentBoundary(evt session.Event) bool {
-	if evt.Kind != sessionEventHistoryReplaced {
-		return false
-	}
-	return isPersistedHistoryReplacementBoundary(evt.Payload)
-}
-
-func TranscriptSegmentPageFromStore(store *session.Store, cursor int64, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
-	if store == nil {
-		return TranscriptSegmentPage{}, nil
-	}
+func TranscriptSegmentPageFromEventLog(eventLog session.MaterializedEventLog, cursor int64, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
 	if cursor <= 0 {
 		return TranscriptSegmentPage{}, fmt.Errorf("transcript segment cursor must be positive, got %d", cursor)
 	}
-	window, err := store.ReadSegmentBackward(cursor, isCompactionSegmentBoundary)
+	var matchErr error
+	window, err := eventLog.ReadSegmentBackward(cursor, compactionBoundaryMatcher(&matchErr))
 	if err != nil {
 		return TranscriptSegmentPage{}, err
+	}
+	if matchErr != nil {
+		return TranscriptSegmentPage{}, matchErr
 	}
 	return segmentPageFromWindow(window, cacheWarningMode)
 }
 
-func TranscriptNewestSegmentPageFromStore(store *session.Store, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
-	if store == nil {
-		return TranscriptSegmentPage{}, nil
-	}
-	window, err := store.ReadNewestSegmentBackward(isCompactionSegmentBoundary)
+func TranscriptNewestSegmentPageFromEventLog(eventLog session.MaterializedEventLog, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
+	var matchErr error
+	window, err := eventLog.ReadNewestSegmentBackward(compactionBoundaryMatcher(&matchErr))
 	if err != nil {
 		return TranscriptSegmentPage{}, err
+	}
+	if matchErr != nil {
+		return TranscriptSegmentPage{}, matchErr
 	}
 	page, err := segmentPageFromWindow(window, cacheWarningMode)
 	if err != nil {
@@ -77,21 +72,25 @@ func TranscriptNewestSegmentPageFromStore(store *session.Store, cacheWarningMode
 	return page, nil
 }
 
-func TranscriptSegmentPageForwardFromStore(store *session.Store, startOffset int64, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
-	if store == nil {
-		return TranscriptSegmentPage{}, nil
-	}
-	window, err := store.ReadSegmentForward(startOffset, isCompactionSegmentBoundary)
+func TranscriptSegmentPageForwardFromEventLog(eventLog session.MaterializedEventLog, startOffset int64, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
+	var matchErr error
+	window, err := eventLog.ReadSegmentForward(
+		startOffset,
+		compactionBoundaryMatcher(&matchErr),
+	)
 	if err != nil {
 		return TranscriptSegmentPage{}, err
+	}
+	if matchErr != nil {
+		return TranscriptSegmentPage{}, matchErr
 	}
 	return segmentPageFromWindow(window, cacheWarningMode)
 }
 
-func segmentPageFromWindow(window session.SegmentWindow, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
+func segmentPageFromWindow(window session.EventRecordWindow, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{CacheWarningMode: cacheWarningMode})
-	for _, evt := range window.Events {
-		if err := scan.ApplyPersistedEvent(evt); err != nil {
+	for _, record := range window.Records {
+		if err := scan.ApplyPersistedEvent(record); err != nil {
 			return TranscriptSegmentPage{}, err
 		}
 	}
@@ -109,7 +108,7 @@ func (e *Engine) TranscriptSegmentPage(cursor int64) (TranscriptSegmentPage, err
 	if e == nil || e.store == nil {
 		return TranscriptSegmentPage{}, nil
 	}
-	page, err := TranscriptSegmentPageFromStore(e.store, cursor, e.cfg.CacheWarningMode)
+	page, err := TranscriptSegmentPageFromEventLog(e.eventLog, cursor, e.cfg.CacheWarningMode)
 	if err != nil {
 		return TranscriptSegmentPage{}, err
 	}
@@ -121,7 +120,7 @@ func (e *Engine) TranscriptNewestSegmentPage() (TranscriptSegmentPage, error) {
 	if e == nil || e.store == nil {
 		return TranscriptSegmentPage{}, nil
 	}
-	page, err := TranscriptNewestSegmentPageFromStore(e.store, e.cfg.CacheWarningMode)
+	page, err := TranscriptNewestSegmentPageFromEventLog(e.eventLog, e.cfg.CacheWarningMode)
 	if err != nil {
 		return TranscriptSegmentPage{}, err
 	}
@@ -134,7 +133,7 @@ func (e *Engine) TranscriptSegmentPageForward(startOffset int64) (TranscriptSegm
 	if e == nil || e.store == nil {
 		return TranscriptSegmentPage{}, nil
 	}
-	page, err := TranscriptSegmentPageForwardFromStore(e.store, startOffset, e.cfg.CacheWarningMode)
+	page, err := TranscriptSegmentPageForwardFromEventLog(e.eventLog, startOffset, e.cfg.CacheWarningMode)
 	if err != nil {
 		return TranscriptSegmentPage{}, err
 	}
@@ -145,11 +144,11 @@ func (e *Engine) TranscriptSegmentPageForward(startOffset int64) (TranscriptSegm
 	return page, nil
 }
 
-func (e *Engine) TranscriptRevision() int64 {
+func (e *Engine) TranscriptRevision() (int64, error) {
 	if e == nil || e.store == nil {
-		return 0
+		return 0, errors.New("runtime engine is required")
 	}
-	return e.store.Meta().LastSequence
+	return e.eventLog.Revision()
 }
 
 func (e *Engine) CommittedTranscriptEntryCount() int {
@@ -190,7 +189,10 @@ func messagePreservesLastCommittedAssistantFinalAnswer(message llm.Message) bool
 	if message.Role != llm.RoleDeveloper {
 		return false
 	}
-	switch message.MessageType {
+	if message.MessageType == nil {
+		return false
+	}
+	switch *message.MessageType {
 	case llm.MessageTypeCompactionSoonReminder, llm.MessageTypeErrorFeedback, llm.MessageTypeGoal, llm.MessageTypeHandoffFutureMessage, llm.MessageTypeReviewerFeedback:
 		return true
 	default:
@@ -233,7 +235,7 @@ func (e *Engine) AppendCommittedEntryWithNoticeID(role, text, noticeID string) e
 		Visibility: transcript.EntryVisibilityAuto,
 		Role:       strings.TrimSpace(role),
 		Text:       strings.TrimSpace(text),
-		NoticeID:   strings.TrimSpace(noticeID),
+		NoticeID:   textutil.OptionalTrimmedString(noticeID),
 	})
 }
 
@@ -242,7 +244,7 @@ func (e *Engine) AppendCommittedEntryWithCondensedText(role, text, condensedText
 		Visibility:    transcript.EntryVisibilityAuto,
 		Role:          strings.TrimSpace(role),
 		Text:          strings.TrimSpace(text),
-		CondensedText: strings.TrimSpace(condensedText),
+		CondensedText: textutil.OptionalTrimmedString(condensedText),
 	})
 }
 
@@ -566,6 +568,13 @@ func (e *Engine) SessionID() string {
 	return strings.TrimSpace(e.store.Meta().SessionID)
 }
 
+func (e *Engine) ContinuationAgentRole() *string {
+	if e == nil || e.store == nil {
+		return nil
+	}
+	return session.ContinuationAgentRole(e.store.Meta())
+}
+
 func conversationPromptCacheKey(sessionID string, compactionCount int) string {
 	trimmed := strings.TrimSpace(sessionID)
 	if trimmed == "" {
@@ -666,8 +675,11 @@ func transcriptWorkingDir(primary string, fallback string) string {
 	return strings.TrimSpace(fallback)
 }
 
-func (e *Engine) ConversationFreshness() session.ConversationFreshness {
-	return e.store.ConversationFreshness()
+func (e *Engine) ConversationFreshness() (session.ConversationFreshness, error) {
+	if e == nil || e.store == nil {
+		return session.ConversationFreshnessFresh, errors.New("runtime engine is required")
+	}
+	return e.eventLog.ConversationFreshness()
 }
 
 func mustJSON(v any) json.RawMessage {
@@ -679,9 +691,9 @@ type storedLocalEntry struct {
 	Visibility    transcript.EntryVisibility `json:"visibility,omitempty"`
 	Role          string                     `json:"role"`
 	Text          string                     `json:"text"`
-	CondensedText string                     `json:"condensed_text,omitempty"`
-	DiagnosticKey string                     `json:"diagnostic_key,omitempty"`
-	NoticeID      string                     `json:"notice_id,omitempty"`
+	CondensedText *string                    `json:"condensed_text,omitempty"`
+	DiagnosticKey *string                    `json:"diagnostic_key,omitempty"`
+	NoticeID      *string                    `json:"notice_id,omitempty"`
 	// AfterToolCallID keeps atomically persisted operator feedback visually
 	// attached after the tool result that caused it.
 	AfterToolCallID *string `json:"after_tool_call_id,omitempty"`
@@ -694,11 +706,11 @@ type historyReplacementPayload struct {
 	// replacement, when the engine runs under a workflow run. It is the durable,
 	// single-write provenance of a compaction: resume reconstructs it from this
 	// event so a workflow run never recompacts a continuation it already committed.
-	WorkflowRunID                     string                           `json:"workflow_run_id,omitempty"`
-	CompactionNumber                  int                              `json:"compaction_number,omitempty"`
+	WorkflowRunID                     *string                          `json:"workflow_run_id,omitempty"`
+	CompactionNumber                  *int                             `json:"compaction_number,omitempty"`
 	CommittedEntryStart               *int                             `json:"committed_entry_start,omitempty"`
-	PendingHandoffFutureMessage       string                           `json:"pending_handoff_future_message,omitempty"`
-	LastCommittedAssistantFinalAnswer string                           `json:"last_committed_assistant_final_answer,omitempty"`
+	PendingHandoffFutureMessage       *string                          `json:"pending_handoff_future_message,omitempty"`
+	LastCommittedAssistantFinalAnswer *string                          `json:"last_committed_assistant_final_answer,omitempty"`
 	LatestRollbackCandidate           *rollbacktarget.CandidateLocator `json:"latest_rollback_candidate,omitempty"`
 	Items                             []llm.ResponseItem               `json:"items"`
 }
@@ -721,12 +733,13 @@ func (e *Engine) recordLastUsage(usage llm.Usage) (session.CommitReceipt, error)
 	receipt := session.CommitReceipt{Committed: true}
 	var persistenceErr error
 	if e != nil && e.store != nil {
+		cachedInputTokens, hasCachedInputTokens := textutil.OptionalValue(normalizedUsage.CachedInputTokens)
 		receipt, persistenceErr = e.store.SetUsageState(&session.UsageState{
 			InputTokens:             normalizedUsage.InputTokens,
 			OutputTokens:            normalizedUsage.OutputTokens,
 			WindowTokens:            normalizedUsage.WindowTokens,
-			CachedInputTokens:       normalizedUsage.CachedInputTokens,
-			HasCachedInputTokens:    normalizedUsage.HasCachedInputTokens,
+			CachedInputTokens:       cachedInputTokens,
+			HasCachedInputTokens:    hasCachedInputTokens,
 			EstimatedProviderTokens: baselineEstimate,
 			TotalInputTokens:        totalInputTokens,
 			TotalCachedInputTokens:  totalCachedInputTokens,
@@ -744,13 +757,16 @@ func (e *Engine) restorePersistedUsageState(state *session.UsageState) {
 		return
 	}
 	normalized := normalizePersistedUsageTrackingState(*state)
+	var cachedInputTokens *int
+	if normalized.HasCachedInputTokens {
+		cachedInputTokens = textutil.Value(normalized.CachedInputTokens)
+	}
 	e.applyUsageTrackingState(
 		llm.Usage{
-			InputTokens:          normalized.InputTokens,
-			OutputTokens:         normalized.OutputTokens,
-			WindowTokens:         normalized.WindowTokens,
-			CachedInputTokens:    normalized.CachedInputTokens,
-			HasCachedInputTokens: normalized.HasCachedInputTokens,
+			InputTokens:       normalized.InputTokens,
+			OutputTokens:      normalized.OutputTokens,
+			WindowTokens:      normalized.WindowTokens,
+			CachedInputTokens: cachedInputTokens,
 		},
 		normalized.EstimatedProviderTokens,
 		normalized.TotalInputTokens,
@@ -817,8 +833,12 @@ func (e *Engine) modelRequests() *modelRequestRuntimeState {
 	return e.modelRequestsState
 }
 
-func (e *Engine) emitRaw(evt Event) {
-	evt.TranscriptRevision = e.TranscriptRevision()
+func (e *Engine) emitRaw(evt Event) error {
+	revision, err := e.TranscriptRevision()
+	if err != nil {
+		return err
+	}
+	evt.TranscriptRevision = revision
 	carriesCommittedRange := eventShouldCarryCommittedEntryCount(evt)
 	if !carriesCommittedRange {
 		evt.CommittedEntryCount = 0
@@ -846,6 +866,7 @@ func (e *Engine) emitRaw(evt Event) {
 	if e.cfg.OnEvent != nil {
 		e.cfg.OnEvent(evt)
 	}
+	return nil
 }
 
 func eventShouldCarryContextUsage(evt Event) bool {

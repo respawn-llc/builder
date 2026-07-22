@@ -133,10 +133,12 @@ printf '{"processed":true,"replaced_output":"ROLE_ACTIVE:%s"}' "$KENT_SESSION_ID
 	}
 	var toolOutput string
 	for _, msg := range llm.MessagesFromItems(requests[1].Items) {
-		if msg.Role != llm.RoleTool || msg.Name != string(toolspec.ToolExecCommand) {
+		if msg.Role != llm.RoleTool || msg.Name == nil || *msg.Name != string(toolspec.ToolExecCommand) {
 			continue
 		}
-		toolOutput = msg.Content
+		if msg.Content != nil {
+			toolOutput = *msg.Content
+		}
 	}
 	if want := "ROLE_ACTIVE:" + runs[0].SessionID; toolOutput != want {
 		t.Fatalf("exec_command tool output = %q, want role postprocess output with owner session %q", toolOutput, want)
@@ -370,8 +372,14 @@ func TestWorkflowRuntimeQuestionBatchResumesSameSessionAndPublishesOneAttention(
 	}
 	seenAskResults := map[string]bool{}
 	for _, msg := range askResults {
-		seenAskResults[msg.ToolCallID] = true
-		trimmed := strings.TrimSpace(msg.Content)
+		if msg.ToolCallID == nil {
+			t.Fatalf("ask_question tool result has no call id: %+v", msg)
+		}
+		seenAskResults[*msg.ToolCallID] = true
+		if msg.Content == nil {
+			continue
+		}
+		trimmed := strings.TrimSpace(*msg.Content)
 		var payload map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(trimmed), &payload); err == nil {
 			if _, ok := payload["error"]; ok {
@@ -635,7 +643,9 @@ func TestWorkflowRuntimeInterruptReleasesBeforeInteractiveReactivation(t *testin
 		Runner: func(ctx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
 			return bridge.WithEngine(ctx, func(ctx context.Context, engine *runtime.Engine) error {
 				message, submitErr := engine.SubmitUserMessage(ctx, "continue interactively")
-				response = message.Content
+				if message.Content != nil {
+					response = *message.Content
+				}
 				return submitErr
 			})
 		},
@@ -2113,11 +2123,14 @@ func (r *workflowAskHandlerRuntime) MarkTaskApprovalQuestionCleared(_ clientui.A
 }
 
 type recordingRuntimeStore struct {
-	waitingAskID    string
-	clearedAskID    string
-	setErr          error
-	clearErr        error
-	runStartContext workflowstore.RunStartContext
+	waitingAskID         string
+	clearedAskID         string
+	setErr               error
+	clearErr             error
+	runStartContext      workflowstore.RunStartContext
+	runCompletionContext workflowstore.RunCompletionContext
+	completionOutcome    workflowstore.CompleteRunOutcome
+	completionRequest    workflowstore.CompleteRunRequest
 }
 
 func (s *recordingRuntimeStore) GetRun(context.Context, workflow.RunID) (workflowstore.RunRecord, error) {
@@ -2133,7 +2146,7 @@ func (s *recordingRuntimeStore) GetRunStartContext(context.Context, workflow.Run
 }
 
 func (s *recordingRuntimeStore) GetRunCompletionContext(context.Context, workflow.RunID) (workflowstore.RunCompletionContext, error) {
-	panic("GetRunCompletionContext not expected")
+	return s.runCompletionContext, nil
 }
 
 func (s *recordingRuntimeStore) AttachRunSession(context.Context, workflow.RunID, int64, string) error {
@@ -2154,8 +2167,9 @@ func (s *recordingRuntimeStore) ClearRunWaitingAsk(_ context.Context, _ workflow
 	return s.clearErr
 }
 
-func (s *recordingRuntimeStore) CompleteRun(context.Context, workflowstore.CompleteRunRequest) (workflowstore.CompleteRunResult, error) {
-	panic("CompleteRun not expected")
+func (s *recordingRuntimeStore) CompleteRun(_ context.Context, request workflowstore.CompleteRunRequest) (workflowstore.CompleteRunOutcome, error) {
+	s.completionRequest = request
+	return s.completionOutcome, nil
 }
 
 func (s *recordingRuntimeStore) RecordProtocolViolation(context.Context, workflowstore.RecordProtocolViolationRequest) (workflowstore.RecordProtocolViolationResult, error) {
@@ -2189,6 +2203,52 @@ func (f *recordingInterruptedRunFinalizer) FinalizeTransition(_ context.Context,
 
 func (f *recordingInterruptedRunFinalizer) PublishPendingInterruptedRun(_ context.Context, runID workflow.RunID) {
 	f.interruptedRuns = append(f.interruptedRuns, runID)
+}
+
+func TestFinalizeWorkflowScriptUsesBaseCompletionResultForAttention(t *testing.T) {
+	finalizer := &recordingInterruptedRunFinalizer{}
+	store := &recordingRuntimeStore{
+		runCompletionContext: workflowstore.RunCompletionContext{
+			TransitionIDs: []string{"done"},
+		},
+		completionOutcome: workflowstore.CompleteRunOutcome{
+			Result: workflowstore.CompleteRunResult{
+				TransitionID: "transition-base",
+				State:        "applied",
+				ResolvedApprovalTransitionProjections: []workflowstore.ApprovalTransitionProjection{{
+					TransitionID: "transition-resolved",
+					ProjectID:    "project-1",
+					WorkflowID:   "workflow-1",
+					TaskID:       "task-1",
+				}},
+			},
+			Handoff: workflowstore.CompletionHandoff{
+				SourceNodeDisplayName:  "Source",
+				DestinationDisplayName: "Destination",
+			},
+		},
+	}
+	starter := &Starter{store: store, attentionFinalizer: finalizer}
+	request := SchedulerStartRunRequest{RunID: "run-script", Generation: 4}
+	input := workflowstore.RunStartContext{
+		Run:           workflowstore.RunRecord{ID: request.RunID, Generation: request.Generation},
+		TransitionIDs: []string{"done"},
+	}
+
+	err := starter.finalizeWorkflowScript(request, input, workflowScriptResult{Stdout: []byte(`{"transition":"done"}`)}, nil)
+	if err != nil {
+		t.Fatalf("finalizeWorkflowScript: %v", err)
+	}
+	if store.completionRequest.RunID != request.RunID || store.completionRequest.Actor != "script" {
+		t.Fatalf("script completion request = %+v", store.completionRequest)
+	}
+	if len(finalizer.transitions) != 1 ||
+		finalizer.transitions[0].TransitionID != "transition-base" ||
+		finalizer.transitions[0].State != "applied" ||
+		len(finalizer.transitions[0].ResolvedApprovalProjections) != 1 ||
+		finalizer.transitions[0].ResolvedApprovalProjections[0].TransitionID != "transition-resolved" {
+		t.Fatalf("script attention finalization = %+v, want base transition result", finalizer.transitions)
+	}
 }
 
 func TestScriptCompletionAttentionForwardsCapturedResolutions(t *testing.T) {
@@ -2488,10 +2548,13 @@ func workflowRequestAskQuestionToolMessages(reqs []llm.Request) []llm.Message {
 	messages := []llm.Message{}
 	for _, req := range reqs {
 		for _, msg := range llm.MessagesFromItems(req.Items) {
-			if msg.Role != llm.RoleTool || msg.Name != string(toolspec.ToolAskQuestion) {
+			if msg.Role != llm.RoleTool || msg.Name == nil || *msg.Name != string(toolspec.ToolAskQuestion) {
 				continue
 			}
-			switch msg.ToolCallID {
+			if msg.ToolCallID == nil {
+				continue
+			}
+			switch *msg.ToolCallID {
 			case "call-ask-1", "call-ask-2":
 				messages = append(messages, msg)
 			}
@@ -2804,7 +2867,9 @@ func assertPromptContains(t *testing.T, req llm.Request, needles []string) {
 func requestPromptText(req llm.Request) string {
 	var haystack strings.Builder
 	for _, item := range req.Items {
-		haystack.WriteString(item.Content)
+		if item.Content != nil {
+			haystack.WriteString(*item.Content)
+		}
 		haystack.WriteString("\n")
 	}
 	return haystack.String()
@@ -2814,15 +2879,17 @@ func assertRequestHasSkillEntry(t *testing.T, req llm.Request, name string, skil
 	t.Helper()
 	wantLine := "- " + name + ": " + filepath.ToSlash(skillPath) + " . " + description
 	for _, item := range req.Items {
-		if item.Role != llm.RoleDeveloper || item.MessageType != llm.MessageTypeSkills {
+		if item.Role == nil || *item.Role != llm.RoleDeveloper ||
+			item.MessageType == nil || *item.MessageType != llm.MessageTypeSkills ||
+			item.Content == nil {
 			continue
 		}
-		for _, line := range strings.Split(item.Content, "\n") {
+		for _, line := range strings.Split(*item.Content, "\n") {
 			if line == wantLine {
 				return
 			}
 		}
-		t.Fatalf("skills message missing setup-created skill entry %q: %q", wantLine, item.Content)
+		t.Fatalf("skills message missing setup-created skill entry %q: %q", wantLine, *item.Content)
 	}
 	t.Fatalf("request missing structured skills message: %+v", req.Items)
 }
@@ -2831,8 +2898,8 @@ func assertNoUserPrompt(t *testing.T, req llm.Request) {
 	t.Helper()
 	userPrompts := []string{}
 	for _, item := range req.Items {
-		if item.Role == llm.RoleUser {
-			userPrompts = append(userPrompts, item.Content)
+		if item.Role != nil && *item.Role == llm.RoleUser && item.Content != nil {
+			userPrompts = append(userPrompts, *item.Content)
 		}
 	}
 	if len(userPrompts) == 0 {

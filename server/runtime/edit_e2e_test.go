@@ -10,6 +10,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	edittool "core/server/tools/edit"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -31,7 +32,7 @@ func TestEditAliasCompletionDiffAndReviewerEditsFlow(t *testing.T) {
 	})
 	mainClient := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working", Phase: llm.MessagePhaseCommentary},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: []llm.ToolCall{{
 				ID:    "call-edit-1",
 				Name:  "replace",
@@ -40,12 +41,12 @@ func TestEditAliasCompletionDiffAndReviewerEditsFlow(t *testing.T) {
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "final", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
 	reviewerClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: `{"suggestions":[]}`},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 
@@ -63,8 +64,8 @@ func TestEditAliasCompletionDiffAndReviewerEditsFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if msg.Content != "final" {
-		t.Fatalf("assistant content = %q, want final", msg.Content)
+	if messageContent(msg) != "final" {
+		t.Fatalf("assistant content = %q, want final", messageContent(msg))
 	}
 	data, err := os.ReadFile(target)
 	if err != nil {

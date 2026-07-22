@@ -122,7 +122,7 @@ type TranscriptWorktreeContext struct {
 type TranscriptCacheWarning struct {
 	Scope           string
 	Reason          string
-	LostInputTokens int
+	LostInputTokens *int
 	Visibility      transcript.EntryVisibility
 }
 
@@ -375,8 +375,8 @@ func (c TranscriptCacheWarning) Validate() error {
 	if strings.TrimSpace(c.Reason) == "" {
 		return fmt.Errorf("transcript cache-warning reason is required")
 	}
-	if c.LostInputTokens < 0 {
-		return fmt.Errorf("transcript cache-warning lost input tokens cannot be negative")
+	if c.LostInputTokens != nil && *c.LostInputTokens <= 0 {
+		return fmt.Errorf("transcript cache-warning lost input tokens must be positive when present")
 	}
 	switch c.Visibility {
 	case transcript.EntryVisibilityOngoing,

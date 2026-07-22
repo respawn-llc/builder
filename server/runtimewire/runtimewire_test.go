@@ -27,6 +27,7 @@ import (
 	"core/server/tools/shell/postprocess"
 	"core/shared/config"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
@@ -75,7 +76,7 @@ func TestRuntimeWiringSnapshotsActiveDebugSettingForToolCompletionMismatch(t *te
 		ID:          "c5928052-8654-41eb-819e-b9d7e3f5200e",
 		Name:        string(toolspec.ToolPatch),
 		Custom:      true,
-		CustomInput: "*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n",
+		CustomInput: textutil.Value("*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n"),
 	}
 	client := scriptedllm.NewClient(scriptedllm.Script{
 		Steps: []scriptedllm.Step{scriptedllm.ToolBatch("", call)},
@@ -84,6 +85,7 @@ func TestRuntimeWiringSnapshotsActiveDebugSettingForToolCompletionMismatch(t *te
 	active.Debug = true
 	wiring, err := NewRuntimeWiringWithBackground(
 		store,
+		materializedRuntimeWireEventLog(t, store),
 		active,
 		[]toolspec.ID{toolspec.ToolPatch},
 		root,
@@ -175,7 +177,7 @@ func TestBuildToolRegistryViewImageApprovedOutsidePathIsLogged(t *testing.T) {
 		logger,
 		toolspec.ToolViewImage,
 	)
-	broker.SetAskHandler(func(req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+	broker.SetAskHandler(func(_ context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
 		if !strings.Contains(req.Question, "Allow reading") {
 			t.Fatalf("expected read-focused approval question, got %q", req.Question)
 		}
@@ -348,7 +350,7 @@ func TestRuntimewireViewImageReadsGeneratedFileWithNormalApproval(t *testing.T) 
 		t.Fatalf("write generated pdf: %v", err)
 	}
 	registry, broker := newRuntimeWireToolRegistryWithConfig(t, workspace, configRoot, false, toolspec.ToolPatch, toolspec.ToolViewImage)
-	broker.SetAskHandler(func(req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+	broker.SetAskHandler(func(_ context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
 		if !strings.Contains(req.Question, "Allow reading") {
 			t.Fatalf("expected read-focused approval question, got %q", req.Question)
 		}
@@ -551,6 +553,7 @@ func TestRuntimeWiringExecCommandUsesEffectiveBuiltinInsteadOfBootstrapNone(t *t
 
 	wiring, err := NewRuntimeWiringWithBackground(
 		store,
+		materializedRuntimeWireEventLog(t, store),
 		active,
 		[]toolspec.ID{toolspec.ToolExecCommand},
 		root,
@@ -588,6 +591,7 @@ func TestRuntimeWiringExecCommandUsesEffectiveHookAcrossWorkspaceRebind(t *testi
 
 	wiring, err := NewRuntimeWiringWithBackground(
 		store,
+		materializedRuntimeWireEventLog(t, store),
 		active,
 		[]toolspec.ID{toolspec.ToolExecCommand},
 		rootA,
@@ -729,6 +733,7 @@ func TestNewRuntimeWiringRejectsEmptyModelAfterBypassingConfigDefaults(t *testin
 
 	_, err = NewRuntimeWiringWithBackground(
 		store,
+		materializedRuntimeWireEventLog(t, store),
 		config.Settings{
 			Model:              "",
 			ProviderOverride:   "openai",
@@ -838,6 +843,15 @@ func newRuntimeWireSession(t *testing.T, root string, name string) *session.Stor
 	return store
 }
 
+func materializedRuntimeWireEventLog(t *testing.T, store *session.Store) session.MaterializedEventLog {
+	t.Helper()
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize runtimewire event log: %v", err)
+	}
+	return eventLog
+}
+
 func newRuntimeWireToolRegistry(t *testing.T, workspace string, enabled ...toolspec.ID) (*tools.Registry, *askquestion.AskQuestionBroker) {
 	t.Helper()
 	return newRuntimeWireLoggedToolRegistry(t, workspace, nil, enabled...)
@@ -897,7 +911,13 @@ func newRuntimeWireEngine(t *testing.T, store *session.Store, client llm.Client,
 	if len(cfg) > 0 {
 		engineConfig = cfg[0]
 	}
-	eng, err := runtime.New(store, client, tools.NewRegistry(), engineConfig)
+	eng, err := runtime.New(
+		store,
+		materializedRuntimeWireEventLog(t, store),
+		client,
+		tools.NewRegistry(),
+		engineConfig,
+	)
 	if err != nil {
 		t.Fatalf("new runtime: %v", err)
 	}

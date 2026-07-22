@@ -25,7 +25,7 @@ type sessionRetargetMetadata interface {
 }
 
 type sessionIdentityPublisher interface {
-	PublishSessionIdentity(sessionID string, target *clientui.SessionExecutionTarget)
+	PublishSessionIdentity(sessionID string, target *clientui.SessionExecutionTarget) error
 }
 
 type sessionProcessSource interface {
@@ -123,10 +123,18 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req 
 					return err
 				}
 			}
+			runtimeRebound := activeRuntime != nil
+			rollbackRuntime := func() error {
+				if !runtimeRebound {
+					return nil
+				}
+				runtimeRebound = false
+				return activeRuntime.Rebind(activeRuntime.PreviousWorkdir)
+			}
 			moved := false
 			if currentPlan.CrossProject() {
 				if err := os.Rename(currentPlan.SourceSessionDir, currentPlan.TargetSessionDir); err != nil {
-					return fmt.Errorf("move session artifact: %w", err)
+					return errors.Join(fmt.Errorf("move session artifact: %w", err), rollbackRuntime())
 				}
 				moved = true
 			}
@@ -138,15 +146,17 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req 
 						rollbackErr = fmt.Errorf("restore session artifact: %w", moveErr)
 					}
 				}
-				return errors.Join(err, rollbackErr)
+				return errors.Join(err, rollbackErr, rollbackRuntime())
 			}
+			runtimeRebound = false
 			return nil
 		})
 		return err
 	})
 	closeErr := releaseStarts.Close(context.Background())
+	var publicationErr error
 	if err == nil {
-		s.publisher.PublishSessionIdentity(plan.SessionID, &clientui.SessionExecutionTarget{
+		publicationErr = s.publisher.PublishSessionIdentity(plan.SessionID, &clientui.SessionExecutionTarget{
 			WorkspaceID:      result.Binding.WorkspaceID,
 			WorkspaceName:    result.Binding.WorkspaceName,
 			WorkspaceRoot:    result.Binding.CanonicalRoot,
@@ -154,7 +164,7 @@ func (s *SessionWorkspaceRetargeter) RetargetWorkspace(ctx context.Context, req 
 			EffectiveWorkdir: result.Binding.CanonicalRoot,
 		})
 	}
-	return result, errors.Join(err, closeErr)
+	return result, errors.Join(err, publicationErr, closeErr)
 }
 
 func (s *SessionWorkspaceRetargeter) ownedBackgroundProcessActive(sessionID string) (bool, error) {

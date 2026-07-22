@@ -62,6 +62,31 @@ describe("task detail execution target contract", () => {
       }),
     ).toThrow();
   });
+
+  it("accepts every current execution the server contract permits", () => {
+    const executionIDs = Array.from({ length: 201 }, (_, index) => index.toString());
+    const currentSessionIDs = executionIDs.map((executionID) => `session-${executionID}`);
+    const currentScripts = executionIDs.map((executionID) => ({
+      run_id: `run-${executionID}`,
+      path: "script",
+    }));
+
+    const detail = taskDetailSchema.parse({
+      task: {
+        ...taskDetailResponse.task,
+        current_session_ids: currentSessionIDs,
+        current_scripts: currentScripts,
+      },
+    });
+
+    expect(detail.currentSessionIDs).toEqual(currentSessionIDs);
+    expect(detail.currentScripts).toEqual(
+      currentScripts.map((script) => ({
+        runID: script.run_id,
+        path: script.path,
+      })),
+    );
+  });
 });
 
 function withExecutionTarget(executionTarget: unknown) {

@@ -84,7 +84,7 @@ func TestBrokerFIFOQueue(t *testing.T) {
 func TestAskQuestionToolSkipsPreparedBatchWhenBrokerReturnsBeforeHandler(t *testing.T) {
 	b := NewAskQuestionBroker()
 	handlerCalled := false
-	b.SetAskHandler(func(AskQuestionRequest) (AskQuestionResponse, error) {
+	b.SetAskHandler(func(context.Context, AskQuestionRequest) (AskQuestionResponse, error) {
 		handlerCalled = true
 		return AskQuestionResponse{}, nil
 	})
@@ -233,7 +233,7 @@ func TestApprovalAskRequiresApprovalOptions(t *testing.T) {
 
 func TestApprovalAskIgnoresRecommendedOptionIndex(t *testing.T) {
 	b := NewAskQuestionBroker()
-	b.SetAskHandler(func(req AskQuestionRequest) (AskQuestionResponse, error) {
+	b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
 		if req.RecommendedOptionIndex != 0 {
 			t.Fatalf("expected recommended option index ignored for approval ask, got %+v", req)
 		}
@@ -266,7 +266,7 @@ func TestApprovalAskRejectsSuggestions(t *testing.T) {
 
 func TestFreeformAskRejectsEmptyResponse(t *testing.T) {
 	b := NewAskQuestionBroker()
-	b.SetAskHandler(func(req AskQuestionRequest) (AskQuestionResponse, error) {
+	b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
 		return AskQuestionResponse{RequestID: req.ID}, nil
 	})
 
@@ -328,7 +328,7 @@ func TestSubmitRejectsPlainStringResponseForApprovalAsk(t *testing.T) {
 
 func TestAskHandlerRejectsPlainStringResponseForApprovalAsk(t *testing.T) {
 	b := NewAskQuestionBroker()
-	b.SetAskHandler(func(AskQuestionRequest) (AskQuestionResponse, error) {
+	b.SetAskHandler(func(context.Context, AskQuestionRequest) (AskQuestionResponse, error) {
 		return AskQuestionResponse{Answer: "allow once"}, nil
 	})
 
@@ -343,7 +343,7 @@ func TestAskHandlerRejectsPlainStringResponseForApprovalAsk(t *testing.T) {
 
 func TestAskHandlerModeDoesNotQueuePendingRequest(t *testing.T) {
 	b := NewAskQuestionBroker()
-	b.SetAskHandler(func(req AskQuestionRequest) (AskQuestionResponse, error) {
+	b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
 		return AskQuestionResponse{RequestID: req.ID, Answer: "handled"}, nil
 	})
 
@@ -403,10 +403,10 @@ func TestToolCallBlocksUntilQueuedAnswerSubmitted(t *testing.T) {
 	default:
 	}
 
-	if err := b.Submit("call-queued", AskQuestionResponse{SelectedOptionNumber: textutil.Int(2), FreeformAnswer: "need extra context"}); err != nil {
+	if err := b.Submit("call-queued", AskQuestionResponse{SelectedOptionNumber: textutil.Value(2), FreeformAnswer: "need extra context"}); err != nil {
 		t.Fatalf("submit answer: %v", err)
 	}
-	if err := b.Submit("call-queued", AskQuestionResponse{SelectedOptionNumber: textutil.Int(1)}); err == nil {
+	if err := b.Submit("call-queued", AskQuestionResponse{SelectedOptionNumber: textutil.Value(1)}); err == nil {
 		t.Fatal("expected duplicate submission to fail after queued tool answer")
 	}
 
@@ -437,7 +437,7 @@ func TestToolCallBlocksUntilQueuedAnswerSubmitted(t *testing.T) {
 func TestToolCallPassesPreparedBatchMetadataToAskBroker(t *testing.T) {
 	b := NewAskQuestionBroker()
 	var got AskQuestionRequest
-	b.SetAskHandler(func(req AskQuestionRequest) (AskQuestionResponse, error) {
+	b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
 		got = req
 		return AskQuestionResponse{RequestID: req.ID, Answer: "answer"}, nil
 	})
@@ -509,7 +509,7 @@ func TestToolCallReportsPreparedBatchSkippedWhenQuestionsBecomeDisabled(t *testi
 func TestAskHandlerModePrefersContextCancellationAfterHandlerReturns(t *testing.T) {
 	b := NewAskQuestionBroker()
 	release := make(chan struct{})
-	b.SetAskHandler(func(req AskQuestionRequest) (AskQuestionResponse, error) {
+	b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
 		<-release
 		return AskQuestionResponse{RequestID: req.ID, Answer: "handled"}, nil
 	})
@@ -618,7 +618,7 @@ func TestToolCallSerializesResponsesAsPlainText(t *testing.T) {
 			"beta\nUser also said:\nneed extra context",
 			AskQuestionResponse{
 				RequestID:            "call-structured",
-				SelectedOptionNumber: textutil.Int(2),
+				SelectedOptionNumber: textutil.Value(2),
 				FreeformAnswer:       "need extra context",
 			},
 		},
@@ -628,7 +628,7 @@ func TestToolCallSerializesResponsesAsPlainText(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.id, func(t *testing.T) {
 			b := NewAskQuestionBroker()
-			b.SetAskHandler(func(req AskQuestionRequest) (AskQuestionResponse, error) {
+			b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
 				if req.ID != tt.response.RequestID {
 					t.Fatalf("request id = %q, want %q", req.ID, tt.response.RequestID)
 				}
@@ -645,8 +645,8 @@ func TestToolCallSerializesResponsesAsPlainText(t *testing.T) {
 			if payload == "" {
 				t.Fatal("expected non-empty plain-text summary")
 			}
-			if result.CondensedText != tt.condensedText {
-				t.Fatalf("condensed text = %q, want %q", result.CondensedText, tt.condensedText)
+			if result.CondensedText == nil || *result.CondensedText != tt.condensedText {
+				t.Fatalf("condensed text = %v, want %q", result.CondensedText, tt.condensedText)
 			}
 		})
 	}
@@ -665,7 +665,7 @@ func TestToolCallNormalizesRecommendedOptionIndex(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.id, func(t *testing.T) {
 			b := NewAskQuestionBroker()
-			b.SetAskHandler(func(req AskQuestionRequest) (AskQuestionResponse, error) {
+			b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
 				if req.ID != tt.id {
 					t.Fatalf("request id = %q, want %q", req.ID, tt.id)
 				}
@@ -686,7 +686,7 @@ func TestToolCallNormalizesRecommendedOptionIndex(t *testing.T) {
 
 func TestToolCallRejectsApprovalPayloadReturnedByHandler(t *testing.T) {
 	b := NewAskQuestionBroker()
-	b.SetAskHandler(func(req AskQuestionRequest) (AskQuestionResponse, error) {
+	b.SetAskHandler(func(_ context.Context, req AskQuestionRequest) (AskQuestionResponse, error) {
 		return AskQuestionResponse{RequestID: req.ID, Approval: &AskQuestionApprovalPayload{Decision: AskQuestionApprovalDecisionDeny}}, nil
 	})
 	result := callAskQuestionTool(t, b, "call-approval-payload", `{"question":"What should I do?"}`)

@@ -30,7 +30,7 @@ func TestTaskCompleteAgentSessionBuildsCompletionRequest(t *testing.T) {
 	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
 	defer restore()
 
-	stdout, stderr, code := runRootCommand(
+	_, stderr, code := runRootCommand(
 		"task", "complete",
 		"--transition", "done",
 		"--summary", "draft",
@@ -43,9 +43,6 @@ func TestTaskCompleteAgentSessionBuildsCompletionRequest(t *testing.T) {
 	}
 	if stderr != "" {
 		t.Fatalf("task complete stderr = %q, want empty", stderr)
-	}
-	if !strings.Contains(stdout, "Completed task task-1") || !strings.Contains(stdout, "transition-1") {
-		t.Fatalf("task complete stdout = %q, want readable completion summary", stdout)
 	}
 	req := remote.requireSingleRequest(t)
 	if req.ActorKind != serverapi.WorkflowTaskCompleteActorAgent || req.AgentSessionID != "session-agent" {
@@ -276,6 +273,12 @@ func TestTaskCompleteJSONInputModes(t *testing.T) {
 				RunID:        "run-1",
 				TransitionID: "transition-1",
 				State:        "applied",
+				PlacementIDs: []string{"placement-1"},
+				RunIDs:       []string{"run-2"},
+				Handoff: serverapi.WorkflowTaskCompletionHandoff{
+					SourceNodeDisplayName:  "Source",
+					DestinationDisplayName: "Destination",
+				},
 			},
 		}
 		restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
@@ -293,12 +296,13 @@ func TestTaskCompleteJSONInputModes(t *testing.T) {
 		if stderr != "" {
 			t.Fatalf("stderr = %q, want empty", stderr)
 		}
-		var decoded serverapi.WorkflowTaskCompleteResponse
+		var decoded map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(stdout), &decoded); err != nil {
 			t.Fatalf("stdout = %q, want JSON response: %v", stdout, err)
 		}
-		if decoded.RunID != "run-1" || decoded.TransitionID != "transition-1" {
-			t.Fatalf("json response = %+v, want complete response", decoded)
+		assertTaskCompleteJSONKeys(t, decoded)
+		if string(decoded["run_id"]) != `"run-1"` || string(decoded["transition_id"]) != `"transition-1"` {
+			t.Fatalf("json response = %+v, want existing completion fields", decoded)
 		}
 		req := remote.requireSingleRequest(t)
 		if req.TransitionID != "done" || req.Commentary != "finished" || req.OutputValues["summary"] != "123" || req.OutputValues["risk"] != "false" || req.OutputValues["details"] != `{"ok":true}` || req.OutputValues["empty"] != "null" {
@@ -313,14 +317,31 @@ func TestTaskCompleteJSONInputModes(t *testing.T) {
 			t.Fatalf("write json file: %v", err)
 		}
 		remote := &taskCompleteCaptureRemote{
-			response: serverapi.WorkflowTaskCompleteResponse{TaskID: "task-1", RunID: "run-1", TransitionID: "transition-1", State: "applied"},
+			response: serverapi.WorkflowTaskCompleteResponse{
+				TaskID:       "task-1",
+				RunID:        "run-1",
+				TransitionID: "transition-1",
+				State:        "applied",
+				PlacementIDs: []string{"placement-1"},
+				RunIDs:       []string{"run-2"},
+				Handoff: serverapi.WorkflowTaskCompletionHandoff{
+					SourceNodeDisplayName:  "Source",
+					DestinationDisplayName: "Destination",
+				},
+			},
 		}
 		restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
 		defer restore()
 
-		if _, stderr, code := runRootCommand("task", "complete", "--force", "--run", "run-1", "--json-file", path); code != 0 {
+		stdout, stderr, code := runRootCommand("task", "complete", "--force", "--run", "run-1", "--json-file", path)
+		if code != 0 {
 			t.Fatalf("task complete --json-file exit=%d stderr=%q", code, stderr)
 		}
+		var decoded map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(stdout), &decoded); err != nil {
+			t.Fatalf("stdout = %q, want JSON response: %v", stdout, err)
+		}
+		assertTaskCompleteJSONKeys(t, decoded)
 		req := remote.requireSingleRequest(t)
 		if req.TransitionID != "done" || req.OutputValues["summary"] != "from file" {
 			t.Fatalf("request from json file = %+v", req)
@@ -343,6 +364,26 @@ func TestTaskCompleteJSONInputModes(t *testing.T) {
 			t.Fatalf("stderr = %q, want json exclusivity error", stderr)
 		}
 	})
+}
+
+func assertTaskCompleteJSONKeys(t *testing.T, decoded map[string]json.RawMessage) {
+	t.Helper()
+	expected := map[string]bool{
+		"transition_id": true,
+		"task_id":       true,
+		"run_id":        true,
+		"state":         true,
+		"placement_ids": true,
+		"run_ids":       true,
+	}
+	if len(decoded) != len(expected) {
+		t.Fatalf("completion JSON keys = %+v, want exactly %+v", decoded, expected)
+	}
+	for key := range expected {
+		if _, ok := decoded[key]; !ok {
+			t.Fatalf("completion JSON keys = %+v, missing %q", decoded, key)
+		}
+	}
 }
 
 func TestTaskCompleteHelpSmoke(t *testing.T) {

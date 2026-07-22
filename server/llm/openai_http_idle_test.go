@@ -78,8 +78,8 @@ func TestGenerateStream_HealthyLongStreamSurvivesTotalWallClockBeyondIdle(t *tes
 	if err != nil {
 		t.Fatalf("healthy long stream failed: %v", err)
 	}
-	if resp.Assistant.Content != "Done" {
-		t.Fatalf("assistant text = %q, want Done", resp.Assistant.Content)
+	if messageContent(resp.Assistant) != "Done" {
+		t.Fatalf("assistant text = %q, want Done", messageContent(resp.Assistant))
 	}
 }
 
@@ -143,8 +143,8 @@ func TestGenerateStream_StallAfterCompletedSalvagesResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a fully-received response must not be discarded as a stall: %v", err)
 	}
-	if resp.Assistant.Content != "Done" {
-		t.Fatalf("assistant text = %q, want Done", resp.Assistant.Content)
+	if messageContent(resp.Assistant) != "Done" {
+		t.Fatalf("assistant text = %q, want Done", messageContent(resp.Assistant))
 	}
 }
 

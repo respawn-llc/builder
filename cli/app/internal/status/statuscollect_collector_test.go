@@ -3,13 +3,27 @@ package status
 import (
 	"context"
 	"core/server/auth"
+	"core/shared/apicontract"
+	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/serverapi"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+type statusSessionViewStub struct {
+	apicontract.SessionViewService
+	mainViewCalls int
+	view          clientui.RuntimeMainView
+}
+
+func (s *statusSessionViewStub) GetSessionMainView(_ context.Context, _ serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
+	s.mainViewCalls++
+	return serverapi.SessionMainViewResponse{MainView: s.view}, nil
+}
 
 func TestCollectEnvironmentDisabledSkillRemainsVisibleAndStillCollectsAgents(t *testing.T) {
 	workspace := t.TempDir()
@@ -176,5 +190,69 @@ func TestCollectorPreservesStoredAuthStateWhenRefreshFails(t *testing.T) {
 	}
 	if !strings.Contains(snapshot.CollectorWarning, auth.ErrOAuthRefreshFailed.Error()) {
 		t.Fatalf("collector warning = %q", snapshot.CollectorWarning)
+	}
+}
+
+func TestCollectBasePreservesOptionalAgentRole(t *testing.T) {
+	role := "worker"
+	for name, agentRole := range map[string]*string{
+		"named agent":   &role,
+		"default agent": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			snapshot := (Collector{}).CollectBase(Request{AgentRole: agentRole})
+			if agentRole == nil {
+				if snapshot.AgentRole != nil {
+					t.Fatalf("snapshot agent role = %v, want nil", snapshot.AgentRole)
+				}
+				return
+			}
+			if snapshot.AgentRole == nil || *snapshot.AgentRole != *agentRole {
+				t.Fatalf("snapshot agent role = %v, want %q", snapshot.AgentRole, *agentRole)
+			}
+			if snapshot.AgentRole == agentRole {
+				t.Fatal("snapshot agent role aliases request")
+			}
+		})
+	}
+}
+
+func TestEnrichBaseUsesCurrentSessionRoleAsAuthoritative(t *testing.T) {
+	cachedRole := "stale"
+	storedRole := "qa_tester"
+	for name, role := range map[string]*string{
+		"named agent":   &storedRole,
+		"default agent": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			sessionViews := &statusSessionViewStub{
+				view: clientui.RuntimeMainView{
+					Session: clientui.RuntimeSessionView{SessionID: "session-1", AgentRole: role},
+				},
+			}
+			snapshot := (Collector{}).EnrichBase(context.Background(), Request{
+				SessionID:    "session-1",
+				SessionViews: sessionViews,
+			}, Snapshot{
+				SessionID: "session-1",
+				AgentRole: &cachedRole,
+			})
+
+			if sessionViews.mainViewCalls != 1 {
+				t.Fatalf("current session view calls = %d, want 1", sessionViews.mainViewCalls)
+			}
+			if role == nil {
+				if snapshot.AgentRole != nil {
+					t.Fatalf("snapshot agent role = %v, want nil", snapshot.AgentRole)
+				}
+				return
+			}
+			if snapshot.AgentRole == nil || *snapshot.AgentRole != *role {
+				t.Fatalf("snapshot agent role = %v, want %q", snapshot.AgentRole, *role)
+			}
+			if snapshot.AgentRole == role {
+				t.Fatal("snapshot agent role aliases current session view")
+			}
+		})
 	}
 }

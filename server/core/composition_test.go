@@ -35,6 +35,10 @@ import (
 	"core/shared/toolspec"
 )
 
+func coreStringPointer(value string) *string {
+	return &value
+}
+
 func TestComposedWorkflowTaskSetupPrecedesFirstModelRequest(t *testing.T) {
 	t.Setenv("KENT_WORKTREE_SESSION_ID", "stale-parent-session")
 	observation := make(chan error, 1)
@@ -403,8 +407,20 @@ func TestComposedWorkflowTaskDetailResolvesPendingQuestionFromSessionTranscript(
 		t.Fatalf("session.Create: %v", err)
 	}
 	askInput := json.RawMessage(`{"question":"Question from composed session transcript?"}`)
-	if _, _, err := sessionStore.AppendEvent("step-ask", "message", llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "ask-core", Name: string(toolspec.ToolAskQuestion), Input: askInput}}}); err != nil {
-		t.Fatalf("AppendEvent: %v", err)
+	eventLog, err := sessionStore.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	if _, receipt, err := eventLog.AppendRecord(coreStringPointer("step-ask"), session.MessageRecord{
+		Role: session.MessageRoleAssistant,
+		ToolCalls: []session.MessageToolCallRecord{{
+			CallID: "ask-core",
+			Name:   string(toolspec.ToolAskQuestion),
+			Kind:   session.ToolCallKindFunction,
+			Input:  askInput,
+		}},
+	}); err != nil || !receipt.Committed {
+		t.Fatalf("append typed ask message: receipt=%+v error=%v", receipt, err)
 	}
 	if err := workflowStore.AttachRunSession(ctx, started.RunID, claimed.Generation, sessionStore.Meta().SessionID); err != nil {
 		t.Fatalf("AttachRunSession: %v", err)
@@ -772,7 +788,7 @@ func (c *firstGenerateObserverClient) ProviderCapabilities(ctx context.Context) 
 func (c *firstGenerateObserverClient) observe(request llm.Request) error {
 	worktreeRoot := ""
 	for _, item := range request.Items {
-		if item.MessageType != llm.MessageTypeWorktreeMode {
+		if item.MessageType == nil || *item.MessageType != llm.MessageTypeWorktreeMode {
 			continue
 		}
 		if item.WorktreeContext != nil {
@@ -811,7 +827,8 @@ func (c *firstGenerateObserverClient) observe(request llm.Request) error {
 		return fmt.Errorf("setup-created skill is not discoverable at %q", skillPath)
 	}
 	for _, item := range request.Items {
-		if item.Role != llm.RoleDeveloper || item.MessageType != llm.MessageTypeSkills {
+		if item.Role == nil || *item.Role != llm.RoleDeveloper ||
+			item.MessageType == nil || *item.MessageType != llm.MessageTypeSkills {
 			continue
 		}
 		return nil

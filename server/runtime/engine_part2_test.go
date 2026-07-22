@@ -8,6 +8,7 @@ import (
 	"core/server/tools"
 	"core/shared/config"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"encoding/json"
 	"os"
@@ -33,7 +34,7 @@ func TestSystemPromptSnapshotUsesStoredWorkspaceRootWhenTranscriptWorkdirIsNeste
 
 	store := mustCreateTestSession(t, workspace)
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewExecTestEngine(t, store, client, Config{
@@ -182,7 +183,7 @@ func TestSystemPromptSnapshotUsesTranscriptWorkingDirForRetargetedSession(t *tes
 
 	store := mustCreateTestSession(t, canonical)
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewExecTestEngine(t, store, client, Config{
@@ -226,7 +227,11 @@ func TestLegacyLockedSessionBackfillsSystemPromptSnapshotOnce(t *testing.T) {
 	}
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok again")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -287,8 +292,11 @@ func TestChildSessionSnapshotsRoleSystemPromptOnFirstRequest(t *testing.T) {
 	if err := session.InitializeCreationContext(child, parent, session.SessionCreationSourceParentAgent, session.ChildContextOptions{}); err != nil {
 		t.Fatalf("InitializeCreationContext: %v", err)
 	}
+	if err := child.EnsureDurable(); err != nil {
+		t.Fatalf("persist child: %v", err)
+	}
 	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewExecTestEngine(t, child, client, Config{
@@ -334,11 +342,11 @@ func TestEmptySystemPromptFileIsSkippedAndFallbackSnapshotIsReused(t *testing.T)
 	store := mustCreateTestSession(t, workspace)
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "still ok"},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("still ok")},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -369,7 +377,7 @@ func TestEmptySystemPromptFileIsSkippedAndFallbackSnapshotIsReused(t *testing.T)
 		t.Fatalf("reopened locked system prompt snapshot = %+v, want built-in fallback snapshot", locked)
 	}
 	reopenedClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "still ok"},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("still ok")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	reopenedEngine := mustNewExecTestEngine(t, reopened, reopenedClient, Config{
@@ -430,8 +438,8 @@ func TestThinkingLevelCanChangeAfterLock(t *testing.T) {
 	store := mustCreateTestSessionAt(t, dir)
 
 	client := &fakeClient{responses: []llm.Response{
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "one"}, Usage: llm.Usage{WindowTokens: 200000}},
-		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "two"}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("one")}, Usage: llm.Usage{WindowTokens: 200000}},
+		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("two")}, Usage: llm.Usage{WindowTokens: 200000}},
 	}}
 
 	eng := mustNewExecTestEngine(t, store, client, Config{
@@ -491,7 +499,7 @@ func TestPoisonedLockedSessionFallsBackToModelReasoningSupport(t *testing.T) {
 		t.Fatalf("mark locked: %v", err)
 	}
 
-	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"}}}}
+	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok")}}}}
 	eng := mustNewExecTestEngine(t, store, client, Config{
 		Model:         "gpt-5.4",
 		ThinkingLevel: "high",
@@ -516,8 +524,8 @@ func TestFastModeCanChangeAfterLock(t *testing.T) {
 
 	client := &fakeClient{
 		responses: []llm.Response{
-			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "one"}, Usage: llm.Usage{WindowTokens: 200000}},
-			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "two"}, Usage: llm.Usage{WindowTokens: 200000}},
+			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("one")}, Usage: llm.Usage{WindowTokens: 200000}},
+			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("two")}, Usage: llm.Usage{WindowTokens: 200000}},
 		},
 		caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true},
 	}
@@ -794,20 +802,20 @@ func TestSetAutoCompactionDisabledConcurrentWithBusyStepSkipsCompactionForCurren
 	client := &fakeCompactionClient{
 		responses: []llm.Response{
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working", Phase: llm.MessagePhaseCommentary},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 				ToolCalls: []llm.ToolCall{{ID: "call_shell_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
 				Usage:     llm.Usage{InputTokens: 390000, OutputTokens: 1000, WindowTokens: 400000},
 			},
 			{
-				Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 				Usage:     llm.Usage{WindowTokens: 400000},
 			},
 		},
 		compactionResponses: []llm.CompactionResponse{
 			{
 				OutputItems: []llm.ResponseItem{
-					{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "run tools"},
-					{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+					{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("run tools")},
+					{Type: llm.ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_1")},
 				},
 				Usage: llm.Usage{InputTokens: 8000, OutputTokens: 500, WindowTokens: 400000},
 			},
@@ -934,7 +942,7 @@ func TestSetReviewerWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing
 func TestSetReviewerEnabledFailsWhenReviewerClientMissing(t *testing.T) {
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
-	eng, err := New(store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng, err := New(store, mustMaterializeTestEventLog(t, store), &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
 		Reviewer: ReviewerConfig{
 			Frequency:     "off",

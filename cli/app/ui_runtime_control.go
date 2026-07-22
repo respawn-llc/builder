@@ -372,14 +372,6 @@ func runtimeOperationRefsContain(refs []clientui.RuntimeOperationRef, ref client
 	return false
 }
 
-func (m *uiModel) queueRuntimeUserMessage(text string) (clientui.QueuedUserMessage, error) {
-	m.checkTUIBlockingOperation("runtime queue mutation", "queue user message")
-	if client := m.runtimeClient(); client != nil {
-		return client.QueueRuntimeUserMessage(clientui.RuntimeQueueUserMessageRequest{OperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindQueuedMessage), Text: text})
-	}
-	return clientui.QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: text}, nil
-}
-
 func (m *uiModel) discardQueuedRuntimeUserMessage(queueItemID string) bool {
 	m.checkTUIBlockingOperation("runtime queue mutation", "discard queued user message")
 	if client := m.runtimeClient(); client != nil {

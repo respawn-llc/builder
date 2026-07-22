@@ -402,7 +402,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
       source_workspace: workspaceSummarySchema,
       execution_target: workflowExecutionTargetSchema.optional().transform((value) => value ?? null),
       worktree_path: nonBlankString.nullable(),
-      current_session_ids: z.array(nonBlankString).max(workflowGraphNodeLimit),
+      current_session_ids: z.array(nonBlankString),
       current_scripts: z.array(
         z
           .object({
@@ -410,7 +410,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
             path: nonBlankString,
           })
           .strict(),
-      ).max(workflowGraphNodeLimit),
+      ),
       status: taskStatusSchema,
       actions: taskActionsSchema,
       label_ids: labelIDListSchema,

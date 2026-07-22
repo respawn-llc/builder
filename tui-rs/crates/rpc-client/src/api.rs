@@ -21,8 +21,7 @@ use client_contracts::runtime_control::{
     RuntimeDiscardQueuedUserMessageRequest, RuntimeDiscardQueuedUserMessageResponse,
     RuntimeEmptyResponse, RuntimeGoalClearRequest, RuntimeGoalSetRequest, RuntimeGoalShowRequest,
     RuntimeGoalShowResponse, RuntimeGoalStatusRequest, RuntimeHasQueuedUserWorkRequest,
-    RuntimeHasQueuedUserWorkResponse, RuntimeInterruptRequest, RuntimeQueueUserMessageRequest,
-    RuntimeQueueUserMessageResponse, RuntimeRecordPromptHistoryRequest,
+    RuntimeHasQueuedUserWorkResponse, RuntimeInterruptRequest, RuntimeRecordPromptHistoryRequest,
     RuntimeSetAutoCompactionEnabledRequest, RuntimeSetAutoCompactionEnabledResponse,
     RuntimeSetFastModeEnabledRequest, RuntimeSetFastModeEnabledResponse,
     RuntimeSetQuestionsEnabledRequest, RuntimeSetQuestionsEnabledResponse,
@@ -89,7 +88,6 @@ const METHOD_RUNTIME_SUBMIT_USER_TURN: &str = "runtime.submitUserTurn";
 const METHOD_RUNTIME_SUBMIT_USER_SHELL_COMMAND: &str = "runtime.submitUserShellCommand";
 const METHOD_RUNTIME_COMPACT_CONTEXT: &str = "runtime.compactContext";
 const METHOD_RUNTIME_INTERRUPT: &str = "runtime.interrupt";
-const METHOD_RUNTIME_QUEUE_USER_MESSAGE: &str = "runtime.queueUserMessage";
 const METHOD_RUNTIME_HAS_QUEUED_USER_WORK: &str = "runtime.hasQueuedUserWork";
 const METHOD_RUNTIME_SUBMIT_QUEUED_USER_MESSAGES: &str = "runtime.submitQueuedUserMessages";
 const METHOD_RUNTIME_DISCARD_QUEUED_USER_MESSAGE: &str = "runtime.discardQueuedUserMessage";
@@ -584,13 +582,6 @@ impl<F: ConnectionFactory> RemoteClient<F> {
             request,
         )
         .map(|_| ())
-    }
-
-    pub fn queue_runtime_user_message(
-        &mut self,
-        request: RuntimeQueueUserMessageRequest,
-    ) -> Result<RuntimeQueueUserMessageResponse, RpcError> {
-        self.call_control_typed(METHOD_RUNTIME_QUEUE_USER_MESSAGE, request)
     }
 
     pub fn has_runtime_queued_user_work(

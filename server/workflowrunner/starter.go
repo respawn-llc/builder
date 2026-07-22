@@ -50,7 +50,7 @@ type RuntimeStore interface {
 	SetRunEffectiveCompletionMode(context.Context, workflow.RunID, int64, string) error
 	SetRunWaitingAsk(context.Context, workflow.RunID, int64, string) error
 	ClearRunWaitingAsk(context.Context, workflow.RunID, int64, string) error
-	CompleteRun(context.Context, workflowstore.CompleteRunRequest) (workflowstore.CompleteRunResult, error)
+	CompleteRun(context.Context, workflowstore.CompleteRunRequest) (workflowstore.CompleteRunOutcome, error)
 	RecordProtocolViolation(context.Context, workflowstore.RecordProtocolViolationRequest) (workflowstore.RecordProtocolViolationResult, error)
 	ResetProtocolViolationBudget(context.Context, workflowstore.ResetProtocolViolationBudgetRequest) error
 	CountTaskComments(context.Context, workflow.TaskID) (int64, error)
@@ -867,7 +867,11 @@ func (s *Starter) cloneSourceSessionForFanout(containerDir, sourceSessionID stri
 	}
 	var cloneID string
 	err = s.withSessionStore(context.Background(), descriptor, func(_ context.Context, sourceStore *session.Store) error {
-		cloned, cloneErr := session.CloneSession(sourceStore, "", sessioncontract.SessionCategorySubagent)
+		eventLog, materializationErr := sourceStore.MaterializeEventLog()
+		if materializationErr != nil {
+			return fmt.Errorf("materialize source session event log: %w", materializationErr)
+		}
+		cloned, cloneErr := session.CloneSession(eventLog, "", sessioncontract.SessionCategorySubagent)
 		if cloneErr != nil {
 			return fmt.Errorf("clone source session: %w", cloneErr)
 		}

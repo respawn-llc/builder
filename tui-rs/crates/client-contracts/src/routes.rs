@@ -301,18 +301,6 @@ pub const ROUTES: &[RouteMetadata] = &[
         dedicated_request_id: Some("runtime-interrupt"),
     },
     RouteMetadata {
-        method: "runtime.queueUserMessage",
-        route_scope: "interactive_tui",
-        kind: "unary",
-        auth: "server_auth",
-        rpc_scope: "session_active_project",
-        connection: "control",
-        dependency: "runtime_control",
-        event_method: None,
-        complete_method: None,
-        dedicated_request_id: None,
-    },
-    RouteMetadata {
         method: "runtime.recordPromptHistory",
         route_scope: "interactive_tui",
         kind: "unary",

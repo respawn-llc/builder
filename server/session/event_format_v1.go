@@ -1,0 +1,547 @@
+package session
+
+import (
+	"bytes"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+
+	"core/shared/invariant"
+)
+
+const (
+	EventLogContract  = "kent.session.events"
+	EventLogVersionV1 = 1
+	CacheDigestV1     = 1
+)
+
+type EventLogHeader struct {
+	Contract string `json:"contract"`
+	Version  int    `json:"version"`
+}
+
+func encodeEventLogHeaderV1() ([]byte, error) {
+	line, err := json.Marshal(EventLogHeader{
+		Contract: EventLogContract,
+		Version:  EventLogVersionV1,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal event log header: %w", err)
+	}
+	return line, nil
+}
+
+func decodeEventLogHeader(line []byte) (EventLogHeader, error) {
+	if len(bytes.TrimSpace(line)) == 0 {
+		return EventLogHeader{}, fmt.Errorf("event log header is required")
+	}
+	var header EventLogHeader
+	if err := json.Unmarshal(line, &header); err != nil {
+		return EventLogHeader{}, fmt.Errorf("decode event log header: %w", err)
+	}
+	if header.Contract != EventLogContract {
+		return EventLogHeader{}, fmt.Errorf("unsupported event log contract %q", header.Contract)
+	}
+	if header.Version != EventLogVersionV1 {
+		return EventLogHeader{}, fmt.Errorf("unsupported event log version %d", header.Version)
+	}
+	return header, nil
+}
+
+type EventKind string
+
+const (
+	EventKindMessage        EventKind = "message"
+	EventKindToolCompletion EventKind = "tool_completed"
+	EventKindLocalEntry     EventKind = "local_entry"
+	EventKindHistoryReplace EventKind = "history_replaced"
+	EventKindCacheRequest   EventKind = "cache_request_observed"
+	EventKindCacheResponse  EventKind = "cache_response_observed"
+	EventKindCacheWarning   EventKind = "cache_warning"
+)
+
+type MessageRole string
+
+const (
+	MessageRoleSystem    MessageRole = "system"
+	MessageRoleUser      MessageRole = "user"
+	MessageRoleAssistant MessageRole = "assistant"
+	MessageRoleTool      MessageRole = "tool"
+	MessageRoleDeveloper MessageRole = "developer"
+)
+
+type EventRecordPayload interface {
+	eventKind() EventKind
+	validate() error
+}
+
+type EventRecord struct {
+	seq     int64
+	stepID  *string
+	payload EventRecordPayload
+}
+
+func NewEventRecord(seq int64, stepID *string, payload EventRecordPayload) (EventRecord, error) {
+	if seq <= 0 {
+		return EventRecord{}, fmt.Errorf("event sequence must be positive: %d", seq)
+	}
+	normalizedStepID, err := normalizeOptionalEventIdentity("step identity", stepID)
+	if err != nil {
+		return EventRecord{}, err
+	}
+	if payload == nil {
+		return EventRecord{}, fmt.Errorf("event payload is required")
+	}
+	if err := payload.validate(); err != nil {
+		return EventRecord{}, fmt.Errorf("%s payload: %w", payload.eventKind(), err)
+	}
+	switch typed := payload.(type) {
+	case MessageRecord:
+		normalized, normalizeErr := normalizeMessageRecord(typed)
+		if normalizeErr != nil {
+			return EventRecord{}, fmt.Errorf("%s payload: %w", payload.eventKind(), normalizeErr)
+		}
+		payload = normalized
+	case ToolCompletionRecord:
+		normalized, normalizeErr := normalizeToolCompletionRecord(typed)
+		if normalizeErr != nil {
+			return EventRecord{}, fmt.Errorf("%s payload: %w", payload.eventKind(), normalizeErr)
+		}
+		payload = normalized
+	case LocalEntryRecord:
+		typed.Role = strings.TrimSpace(typed.Role)
+		typed.Text = strings.TrimSpace(typed.Text)
+		var normalizeErr error
+		if typed.CondensedText, normalizeErr = normalizeOptionalEventText("condensed text", typed.CondensedText); normalizeErr != nil {
+			return EventRecord{}, fmt.Errorf("%s payload: %w", payload.eventKind(), normalizeErr)
+		}
+		if typed.DiagnosticKey, normalizeErr = normalizeOptionalEventIdentity("diagnostic key", typed.DiagnosticKey); normalizeErr != nil {
+			return EventRecord{}, fmt.Errorf("%s payload: %w", payload.eventKind(), normalizeErr)
+		}
+		if typed.NoticeID, normalizeErr = normalizeOptionalEventIdentity("notice identity", typed.NoticeID); normalizeErr != nil {
+			return EventRecord{}, fmt.Errorf("%s payload: %w", payload.eventKind(), normalizeErr)
+		}
+		if typed.AfterToolCallID, normalizeErr = normalizeOptionalEventIdentity("after-tool call identity", typed.AfterToolCallID); normalizeErr != nil {
+			return EventRecord{}, fmt.Errorf("%s payload: %w", payload.eventKind(), normalizeErr)
+		}
+		payload = typed
+	case HistoryReplacementRecord:
+		normalized, normalizeErr := normalizeHistoryReplacementRecord(typed)
+		if normalizeErr != nil {
+			return EventRecord{}, fmt.Errorf("%s payload: %w", payload.eventKind(), normalizeErr)
+		}
+		payload = normalized
+	case CacheRequestObservationRecord:
+		typed.CacheKey = strings.TrimSpace(typed.CacheKey)
+		typed.TerminalHash = strings.TrimSpace(typed.TerminalHash)
+		payload = typed
+	case CacheResponseObservationRecord:
+		typed.CacheKey = strings.TrimSpace(typed.CacheKey)
+		typed.TerminalHash = strings.TrimSpace(typed.TerminalHash)
+		if typed.CachedInputTokens != nil {
+			cachedInputTokens := *typed.CachedInputTokens
+			typed.CachedInputTokens = &cachedInputTokens
+		}
+		payload = typed
+	case CacheWarningRecord:
+		cacheKey, cacheKeyErr := normalizeOptionalEventIdentity("cache key", typed.CacheKey)
+		if cacheKeyErr != nil {
+			return EventRecord{}, fmt.Errorf("%s payload: %w", payload.eventKind(), cacheKeyErr)
+		}
+		typed.CacheKey = cacheKey
+		if typed.LostInputTokens != nil {
+			lostInputTokens := *typed.LostInputTokens
+			typed.LostInputTokens = &lostInputTokens
+		}
+		payload = typed
+	}
+	return EventRecord{
+		seq:     seq,
+		stepID:  normalizedStepID,
+		payload: payload,
+	}, nil
+}
+
+func (r EventRecord) Seq() int64 {
+	return r.seq
+}
+
+func (r EventRecord) StepID() *string {
+	if r.stepID == nil {
+		return nil
+	}
+	stepID := *r.stepID
+	return &stepID
+}
+
+func (r EventRecord) Kind() (EventKind, error) {
+	if r.payload == nil {
+		err := errors.New("session event record invariant violated: payload is missing")
+		invariant.NewPolicy().Check(false, invariant.FailureDiagnostic(
+			invariant.ScopeSessionPersistence,
+			"read_event_record_kind",
+			err,
+		))
+		return "", err
+	}
+	return r.payload.eventKind(), nil
+}
+
+func (r EventRecord) Payload() (EventRecordPayload, error) {
+	if r.payload == nil {
+		err := errors.New("session event record invariant violated: payload is missing")
+		invariant.NewPolicy().Check(false, invariant.FailureDiagnostic(
+			invariant.ScopeSessionPersistence,
+			"read_event_record_payload",
+			err,
+		))
+		return nil, err
+	}
+	return r.payload, nil
+}
+
+type EntryVisibility string
+
+const (
+	EntryVisibilityAuto             EntryVisibility = "auto"
+	EntryVisibilityOngoing          EntryVisibility = "ongoing"
+	EntryVisibilityOngoingCollapsed EntryVisibility = "ongoing_collapsed"
+	EntryVisibilityDetail           EntryVisibility = "detail"
+	EntryVisibilityHidden           EntryVisibility = "hidden"
+)
+
+type LocalEntryRecord struct {
+	Visibility      EntryVisibility `json:"visibility"`
+	Role            string          `json:"role"`
+	Text            string          `json:"text"`
+	CondensedText   *string         `json:"condensed_text,omitempty"`
+	DiagnosticKey   *string         `json:"diagnostic_key,omitempty"`
+	NoticeID        *string         `json:"notice_id,omitempty"`
+	AfterToolCallID *string         `json:"after_tool_call_id,omitempty"`
+}
+
+type CompactionMode string
+
+const (
+	CompactionModeAuto    CompactionMode = "auto"
+	CompactionModeHandoff CompactionMode = "handoff"
+	CompactionModeManual  CompactionMode = "manual"
+)
+
+type CacheScope string
+
+const (
+	CacheScopeConversation CacheScope = "conversation"
+	CacheScopeReviewer     CacheScope = "reviewer"
+)
+
+type CacheRequestObservationRecord struct {
+	DigestVersion int        `json:"digest_version"`
+	CacheKey      string     `json:"cache_key"`
+	Scope         CacheScope `json:"scope"`
+	ChunkCount    int        `json:"chunk_count"`
+	TerminalHash  string     `json:"terminal_hash"`
+}
+
+type CacheResponseObservationRecord struct {
+	DigestVersion     int        `json:"digest_version"`
+	CacheKey          string     `json:"cache_key"`
+	Scope             CacheScope `json:"scope"`
+	ChunkCount        int        `json:"chunk_count"`
+	TerminalHash      string     `json:"terminal_hash"`
+	CachedInputTokens *int       `json:"cached_input_tokens,omitempty"`
+}
+
+type CacheWarningReason string
+
+const (
+	CacheWarningReasonCompaction   CacheWarningReason = "compaction"
+	CacheWarningReasonNonPostfix   CacheWarningReason = "non_postfix"
+	CacheWarningReasonReuseDropped CacheWarningReason = "reuse_dropped"
+)
+
+type CacheWarningRecord struct {
+	Scope           CacheScope         `json:"scope"`
+	Reason          CacheWarningReason `json:"reason"`
+	CacheKey        *string            `json:"cache_key,omitempty"`
+	LostInputTokens *int               `json:"lost_input_tokens,omitempty"`
+}
+
+func (CacheWarningRecord) eventKind() EventKind {
+	return EventKindCacheWarning
+}
+
+func (r CacheWarningRecord) validate() error {
+	if err := validateCacheScope(r.Scope); err != nil {
+		return err
+	}
+	switch r.Reason {
+	case CacheWarningReasonCompaction, CacheWarningReasonNonPostfix, CacheWarningReasonReuseDropped:
+	default:
+		return fmt.Errorf("unsupported cache warning reason %q", r.Reason)
+	}
+	if _, err := normalizeOptionalEventIdentity("cache key", r.CacheKey); err != nil {
+		return err
+	}
+	if r.LostInputTokens != nil && *r.LostInputTokens <= 0 {
+		return fmt.Errorf("lost input tokens must be positive when present: %d", *r.LostInputTokens)
+	}
+	return nil
+}
+
+func (CacheResponseObservationRecord) eventKind() EventKind {
+	return EventKindCacheResponse
+}
+
+func (r CacheResponseObservationRecord) validate() error {
+	request := CacheRequestObservationRecord{
+		DigestVersion: r.DigestVersion,
+		CacheKey:      r.CacheKey,
+		Scope:         r.Scope,
+		ChunkCount:    r.ChunkCount,
+		TerminalHash:  r.TerminalHash,
+	}
+	if err := request.validate(); err != nil {
+		return err
+	}
+	if r.CachedInputTokens != nil && *r.CachedInputTokens < 0 {
+		return fmt.Errorf("cached input tokens must not be negative: %d", *r.CachedInputTokens)
+	}
+	return nil
+}
+
+func (CacheRequestObservationRecord) eventKind() EventKind {
+	return EventKindCacheRequest
+}
+
+func (r CacheRequestObservationRecord) validate() error {
+	if r.DigestVersion != CacheDigestV1 {
+		return fmt.Errorf("unsupported cache digest version %d", r.DigestVersion)
+	}
+	if strings.TrimSpace(r.CacheKey) == "" {
+		return fmt.Errorf("cache key is required")
+	}
+	if err := validateCacheScope(r.Scope); err != nil {
+		return err
+	}
+	if r.ChunkCount <= 0 {
+		return fmt.Errorf("chunk count must be positive: %d", r.ChunkCount)
+	}
+	if strings.TrimSpace(r.TerminalHash) == "" {
+		return fmt.Errorf("terminal hash is required")
+	}
+	decodedHash, err := hex.DecodeString(strings.TrimSpace(r.TerminalHash))
+	if err != nil || len(decodedHash) != 32 {
+		return fmt.Errorf("terminal hash must be a SHA-256 hexadecimal digest")
+	}
+	return nil
+}
+
+func (HistoryReplacementRecord) eventKind() EventKind {
+	return EventKindHistoryReplace
+}
+
+func (r HistoryReplacementRecord) validate() error {
+	_, err := normalizeHistoryReplacementRecord(r)
+	return err
+}
+
+func (LocalEntryRecord) eventKind() EventKind {
+	return EventKindLocalEntry
+}
+
+func (r LocalEntryRecord) validate() error {
+	switch r.Visibility {
+	case EntryVisibilityAuto, EntryVisibilityOngoing, EntryVisibilityOngoingCollapsed,
+		EntryVisibilityDetail, EntryVisibilityHidden:
+	default:
+		return fmt.Errorf("unsupported visibility %q", r.Visibility)
+	}
+	if strings.TrimSpace(r.Role) == "" {
+		return fmt.Errorf("role is required")
+	}
+	if strings.TrimSpace(r.Text) == "" {
+		return fmt.Errorf("text is required")
+	}
+	return nil
+}
+
+type eventRecordV1Envelope struct {
+	Seq     int64           `json:"seq"`
+	Kind    EventKind       `json:"kind"`
+	StepID  *string         `json:"step_id,omitempty"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+func encodeEventRecordV1(record EventRecord) ([]byte, error) {
+	normalized, err := NewEventRecord(record.seq, record.stepID, record.payload)
+	if err != nil {
+		return nil, err
+	}
+	var payload []byte
+	switch typed := normalized.payload.(type) {
+	case ToolCompletionRecord:
+		payload, err = encodeToolCompletionRecordV1(typed)
+	case HistoryReplacementRecord:
+		payload, err = encodeHistoryReplacementRecordV1(typed)
+	default:
+		payload, err = json.Marshal(normalized.payload)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("marshal %s payload: %w", normalized.payload.eventKind(), err)
+	}
+	var buffer bytes.Buffer
+	buffer.WriteByte('{')
+	if err := writeMarshaledJSONField(&buffer, "seq", normalized.seq, false); err != nil {
+		return nil, err
+	}
+	if err := writeMarshaledJSONField(
+		&buffer,
+		"kind",
+		normalized.payload.eventKind(),
+		true,
+	); err != nil {
+		return nil, err
+	}
+	if normalized.stepID != nil {
+		if err := writeMarshaledJSONField(&buffer, "step_id", normalized.stepID, true); err != nil {
+			return nil, err
+		}
+	}
+	if err := writeJSONField(&buffer, "payload", payload, true); err != nil {
+		return nil, err
+	}
+	buffer.WriteByte('}')
+	return buffer.Bytes(), nil
+}
+
+func decodeEventRecordV1(line []byte) (EventRecord, error) {
+	var envelope eventRecordV1Envelope
+	if err := json.Unmarshal(line, &envelope); err != nil {
+		return EventRecord{}, fmt.Errorf("decode event record: %w", err)
+	}
+	payload, err := decodeEventRecordPayloadV1(
+		envelope.Kind,
+		func(target any) error {
+			return json.Unmarshal(envelope.Payload, target)
+		},
+	)
+	if err != nil {
+		return EventRecord{}, err
+	}
+	return NewEventRecord(envelope.Seq, envelope.StepID, payload)
+}
+
+func decodeEventRecordPayloadV1(
+	kind EventKind,
+	decode func(any) error,
+) (EventRecordPayload, error) {
+	if decode == nil {
+		return nil, fmt.Errorf("event record payload decoder is required")
+	}
+	var payload EventRecordPayload
+	switch kind {
+	case EventKindMessage:
+		var message MessageRecord
+		if err := decode(&message); err != nil {
+			return nil, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		payload = message
+	case EventKindToolCompletion:
+		var wire toolCompletionRecordV1Wire
+		if err := decode(&wire); err != nil {
+			return nil, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if wire.IsError == nil {
+			return nil, fmt.Errorf("decode %s payload: is_error is required", kind)
+		}
+		completion := ToolCompletionRecord{
+			CallID:        wire.CallID,
+			Name:          wire.Name,
+			OutputKind:    wire.OutputKind,
+			IsError:       *wire.IsError,
+			Output:        wire.Output,
+			Summary:       wire.Summary,
+			CondensedText: wire.CondensedText,
+			Presentation:  wire.Presentation,
+			ProviderItems: wire.ProviderItems,
+		}
+		payload = completion
+	case EventKindLocalEntry:
+		var entry LocalEntryRecord
+		if err := decode(&entry); err != nil {
+			return nil, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		payload = entry
+	case EventKindHistoryReplace:
+		var replacement HistoryReplacementRecord
+		if err := decode(&replacement); err != nil {
+			return nil, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		payload = replacement
+	case EventKindCacheRequest:
+		var observation CacheRequestObservationRecord
+		if err := decode(&observation); err != nil {
+			return nil, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		payload = observation
+	case EventKindCacheResponse:
+		var observation CacheResponseObservationRecord
+		if err := decode(&observation); err != nil {
+			return nil, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		payload = observation
+	case EventKindCacheWarning:
+		var warning CacheWarningRecord
+		if err := decode(&warning); err != nil {
+			return nil, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		payload = warning
+	default:
+		return nil, fmt.Errorf("unsupported event kind %q", kind)
+	}
+	return payload, nil
+}
+
+func normalizeOptionalEventIdentity(name string, value *string) (*string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil, fmt.Errorf("%s must be non-empty when present", name)
+	}
+	return &trimmed, nil
+}
+
+func normalizeOptionalEventText(name string, value *string) (*string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	if strings.TrimSpace(*value) == "" {
+		return nil, fmt.Errorf("%s must be non-empty when present", name)
+	}
+	copied := *value
+	return &copied, nil
+}
+
+func validateJSONValue(name string, value json.RawMessage) error {
+	if len(bytes.TrimSpace(value)) == 0 {
+		return fmt.Errorf("%s JSON value is required", name)
+	}
+	if !json.Valid(value) {
+		return fmt.Errorf("%s must be valid JSON", name)
+	}
+	return nil
+}
+
+func validateCacheScope(scope CacheScope) error {
+	switch scope {
+	case CacheScopeConversation, CacheScopeReviewer:
+		return nil
+	default:
+		return fmt.Errorf("unsupported cache scope %q", scope)
+	}
+}

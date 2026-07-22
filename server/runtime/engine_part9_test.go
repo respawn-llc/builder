@@ -5,6 +5,7 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"encoding/json"
 	"errors"
@@ -50,8 +51,8 @@ func TestMultiRowCompactionEmitsPerRowCommittedCounts(t *testing.T) {
 		},
 	})
 	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{
-		{Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "summary one"},
-		{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "summary two"},
+		{Role: llm.RoleUser, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary one")},
+		{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("summary two")},
 	})); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
@@ -154,7 +155,7 @@ func TestCriticalExactRecountsAfterToolCompletionBeforeToolMessageAppend(t *test
 
 	client := &fakeCompactionClient{inputTokenCountFn: func(req llm.Request) int {
 		for _, item := range req.Items {
-			if item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID == "call-1" {
+			if item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID != nil && *item.CallID == "call-1" {
 				return 200
 			}
 		}
@@ -184,7 +185,7 @@ func TestCriticalExactRecountsAfterToolCompletionBeforeToolMessageAppend(t *test
 	}
 	foundOutput := false
 	for _, item := range req.Items {
-		if item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID == call.ID {
+		if item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID != nil && *item.CallID == call.ID {
 			foundOutput = true
 			break
 		}
@@ -206,18 +207,18 @@ func TestCustomToolResultPersistsAsCustomToolCallOutput(t *testing.T) {
 	patchInput := "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch\n"
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "patching", Phase: llm.MessagePhaseCommentary},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("patching"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: []llm.ToolCall{{
 				ID:          "call_patch",
 				Name:        string(toolspec.ToolPatch),
 				Custom:      true,
-				CustomInput: patchInput,
+				CustomInput: textutil.Value(patchInput),
 				Input:       json.RawMessage(`{}`),
 			}},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -227,7 +228,7 @@ func TestCustomToolResultPersistsAsCustomToolCallOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if msg.Content != "done" {
+	if messageContent(msg) != "done" {
 		t.Fatalf("unexpected final message: %+v", msg)
 	}
 	if len(client.calls) < 2 {
@@ -239,11 +240,11 @@ func TestCustomToolResultPersistsAsCustomToolCallOutput(t *testing.T) {
 	foundFunctionOutput := false
 	for _, item := range client.calls[1].Items {
 		switch {
-		case item.Type == llm.ResponseItemTypeCustomToolCall && item.CallID == "call_patch":
+		case item.Type == llm.ResponseItemTypeCustomToolCall && item.CallID != nil && *item.CallID == "call_patch":
 			foundCustomCall = true
-		case item.Type == llm.ResponseItemTypeCustomToolOutput && item.CallID == "call_patch":
+		case item.Type == llm.ResponseItemTypeCustomToolOutput && item.CallID != nil && *item.CallID == "call_patch":
 			foundCustomOutput = true
-		case item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID == "call_patch":
+		case item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID != nil && *item.CallID == "call_patch":
 			foundFunctionOutput = true
 		}
 	}
@@ -337,18 +338,18 @@ func TestFailedCustomToolResultPersistsAsCustomToolCallOutput(t *testing.T) {
 
 	client := &fakeClient{responses: []llm.Response{
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "patching", Phase: llm.MessagePhaseCommentary},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("patching"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 			ToolCalls: []llm.ToolCall{{
 				ID:          "call_patch",
 				Name:        string(toolspec.ToolPatch),
 				Custom:      true,
-				CustomInput: "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch\n",
+				CustomInput: textutil.Value("*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch\n"),
 				Input:       json.RawMessage(`{}`),
 			}},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
@@ -365,9 +366,9 @@ func TestFailedCustomToolResultPersistsAsCustomToolCallOutput(t *testing.T) {
 	foundFunctionOutput := false
 	for _, item := range client.calls[1].Items {
 		switch {
-		case item.Type == llm.ResponseItemTypeCustomToolOutput && item.CallID == "call_patch":
+		case item.Type == llm.ResponseItemTypeCustomToolOutput && item.CallID != nil && *item.CallID == "call_patch":
 			foundCustomOutput = true
-		case item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID == "call_patch":
+		case item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID != nil && *item.CallID == "call_patch":
 			foundFunctionOutput = true
 		}
 	}
@@ -380,13 +381,13 @@ func TestRestoreMessagesPreservesRecoveredMultiToolProviderOrder(t *testing.T) {
 	store := mustCreateTestSession(t)
 	call1 := llm.ToolCall{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}
 	call2 := llm.ToolCall{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"ls"}`)}
-	if _, _, err := store.AppendEvent("step", "message", llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call1, call2}}); err != nil {
+	if _, _, err := appendTestEvent(t, store, "step", llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call1, call2}}); err != nil {
 		t.Fatalf("append assistant tool calls: %v", err)
 	}
-	if _, _, err := store.AppendEvent("step", "tool_completed", map[string]any{"call_id": call1.ID, "name": string(toolspec.ToolExecCommand), "is_error": false, "output": json.RawMessage(`{"output":"/tmp"}`)}); err != nil {
+	if _, _, err := appendTestEvent(t, store, "step", map[string]any{"call_id": call1.ID, "name": string(toolspec.ToolExecCommand), "is_error": false, "output": json.RawMessage(`{"output":"/tmp"}`)}); err != nil {
 		t.Fatalf("append first tool completion: %v", err)
 	}
-	if _, _, err := store.AppendEvent("step", "tool_completed", map[string]any{"call_id": call2.ID, "name": string(toolspec.ToolExecCommand), "is_error": false, "output": json.RawMessage(`{"output":"a.txt"}`)}); err != nil {
+	if _, _, err := appendTestEvent(t, store, "step", map[string]any{"call_id": call2.ID, "name": string(toolspec.ToolExecCommand), "is_error": false, "output": json.RawMessage(`{"output":"a.txt"}`)}); err != nil {
 		t.Fatalf("append second tool completion: %v", err)
 	}
 	restored := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
@@ -394,16 +395,16 @@ func TestRestoreMessagesPreservesRecoveredMultiToolProviderOrder(t *testing.T) {
 	if len(items) != 4 {
 		t.Fatalf("expected 4 restored items, got %d (%+v)", len(items), items)
 	}
-	if items[0].Type != llm.ResponseItemTypeFunctionCall || items[0].CallID != call1.ID {
+	if items[0].Type != llm.ResponseItemTypeFunctionCall || items[0].CallID == nil || *items[0].CallID != call1.ID {
 		t.Fatalf("unexpected restored item[0]: %+v", items[0])
 	}
-	if items[1].Type != llm.ResponseItemTypeFunctionCall || items[1].CallID != call2.ID {
+	if items[1].Type != llm.ResponseItemTypeFunctionCall || items[1].CallID == nil || *items[1].CallID != call2.ID {
 		t.Fatalf("unexpected restored item[1]: %+v", items[1])
 	}
-	if items[2].Type != llm.ResponseItemTypeFunctionCallOutput || items[2].CallID != call1.ID {
+	if items[2].Type != llm.ResponseItemTypeFunctionCallOutput || items[2].CallID == nil || *items[2].CallID != call1.ID {
 		t.Fatalf("unexpected restored item[2]: %+v", items[2])
 	}
-	if items[3].Type != llm.ResponseItemTypeFunctionCallOutput || items[3].CallID != call2.ID {
+	if items[3].Type != llm.ResponseItemTypeFunctionCallOutput || items[3].CallID == nil || *items[3].CallID != call2.ID {
 		t.Fatalf("unexpected restored item[3]: %+v", items[3])
 	}
 }
@@ -444,13 +445,13 @@ func TestRestoreMessagesPreservesRecoveredMultiToolExactTokenParity(t *testing.T
 	if !ok {
 		t.Fatal("expected live precise token count")
 	}
-	if _, _, err := restoredStore.AppendEvent("step", "message", llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call1, call2}}); err != nil {
+	if _, _, err := appendTestEvent(t, restoredStore, "step", llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call1, call2}}); err != nil {
 		t.Fatalf("append restored assistant tool calls: %v", err)
 	}
-	if _, _, err := restoredStore.AppendEvent("step", "tool_completed", map[string]any{"call_id": call1.ID, "name": string(toolspec.ToolExecCommand), "is_error": false, "output": json.RawMessage(`{"tool":"exec_command"}`)}); err != nil {
+	if _, _, err := appendTestEvent(t, restoredStore, "step", map[string]any{"call_id": call1.ID, "name": string(toolspec.ToolExecCommand), "is_error": false, "output": json.RawMessage(`{"tool":"exec_command"}`)}); err != nil {
 		t.Fatalf("append restored tool completion 1: %v", err)
 	}
-	if _, _, err := restoredStore.AppendEvent("step", "tool_completed", map[string]any{"call_id": call2.ID, "name": string(toolspec.ToolExecCommand), "is_error": false, "output": json.RawMessage(`{"tool":"exec_command"}`)}); err != nil {
+	if _, _, err := appendTestEvent(t, restoredStore, "step", map[string]any{"call_id": call2.ID, "name": string(toolspec.ToolExecCommand), "is_error": false, "output": json.RawMessage(`{"tool":"exec_command"}`)}); err != nil {
 		t.Fatalf("append restored tool completion 2: %v", err)
 	}
 	restored := mustNewTestEngine(t, restoredStore, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
@@ -502,8 +503,8 @@ func TestStreamingRetryResetsAttemptDeltas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if msg.Content != "final" {
-		t.Fatalf("assistant content = %q, want final", msg.Content)
+	if messageContent(msg) != "final" {
+		t.Fatalf("assistant content = %q, want final", messageContent(msg))
 	}
 
 	mu.Lock()
@@ -666,8 +667,8 @@ func TestStreamingIgnoresAsyncLateDeltasAfterGenerateReturns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if msg.Content != "final" {
-		t.Fatalf("assistant content = %q, want final", msg.Content)
+	if messageContent(msg) != "final" {
+		t.Fatalf("assistant content = %q, want final", messageContent(msg))
 	}
 	time.Sleep(40 * time.Millisecond)
 
@@ -703,8 +704,8 @@ func TestStreamingNoopFinalClearsLiveAssistantDelta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if msg.Content != "" {
-		t.Fatalf("assistant content = %q, want empty", msg.Content)
+	if msg.Content != nil {
+		t.Fatalf("assistant content = %q, want absent", *msg.Content)
 	}
 	if ongoing := strings.TrimSpace(eng.ChatSnapshot().Streaming); ongoing != "" {
 		t.Fatalf("expected ongoing cleared after noop final, got %q", ongoing)

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/server/llm"
+	"core/shared/textutil"
 )
 
 type defaultReviewerPipeline struct {
@@ -47,11 +48,14 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 	}
 	if e.cfg.Reviewer.VerboseOutput {
 		suggestionsText := reviewerSuggestionsText(suggestions)
-		_ = e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{Role: "reviewer_suggestions", Text: suggestionsText, CondensedText: suggestionsText}))
+		_ = e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
+			Role: "reviewer_suggestions", Text: suggestionsText,
+			CondensedText: textutil.Value(suggestionsText),
+		}))
 	}
 
 	instruction := formatReviewerDeveloperInstruction(suggestions)
-	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeReviewerFeedback, Content: instruction}})); err != nil {
+	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeReviewerFeedback), Content: textutil.Value(instruction)}})); err != nil {
 		status := ReviewerStatus{
 			Outcome:               "followup_failed",
 			SuggestionsCount:      len(suggestions),
@@ -123,8 +127,14 @@ func (r *defaultReviewerPipeline) RunSuggestions(ctx context.Context, stepID str
 		return reviewerSuggestionsResult{}, err
 	}
 	cachePct, hasCachePct := resp.Usage.CacheHitPercent()
+	if resp.Assistant.Content == nil {
+		return reviewerSuggestionsResult{
+			CacheHitPercent:       cachePct,
+			HasCacheHitPercentage: hasCachePct,
+		}, nil
+	}
 	return reviewerSuggestionsResult{
-		Suggestions:           parseReviewerSuggestionsObject(resp.Assistant.Content),
+		Suggestions:           parseReviewerSuggestionsObject(*resp.Assistant.Content),
 		CacheHitPercent:       cachePct,
 		HasCacheHitPercentage: hasCachePct,
 	}, nil

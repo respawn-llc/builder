@@ -24,10 +24,14 @@ func TranscriptPageFromRuntime(engine *runtime.Engine, req clientui.TranscriptPa
 	if err != nil {
 		return clientui.TranscriptPage{}, err
 	}
+	freshness, err := engine.ConversationFreshness()
+	if err != nil {
+		return clientui.TranscriptPage{}, err
+	}
 	return TranscriptPageFromSegment(
 		engine.SessionID(),
 		engine.SessionName(),
-		ConversationFreshnessFromSession(engine.ConversationFreshness()),
+		ConversationFreshnessFromSession(freshness),
 		segment,
 	), nil
 }

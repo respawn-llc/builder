@@ -69,16 +69,17 @@ func TestForkAndCloneRecordPreviousSessionAndPreserveParentAgentAncestry(t *test
 	if err := source.EnsureDurable(); err != nil {
 		t.Fatalf("persist source ancestry: %v", err)
 	}
-	target, _, err := source.AppendEvent("step", "message", userMessagePayload(t, "fork target"))
+	sourceLog := mustMaterializeSessionTestEventLog(t, source)
+	target, _, err := sourceLog.AppendRecord(stringPointer("step"), userMessagePayload(t, "fork target"))
 	if err != nil {
 		t.Fatalf("append fork target: %v", err)
 	}
 
-	forked, _, err := ForkAtUserMessage(source, target.Seq, "forked", testSessionCategory)
+	forked, _, err := ForkAtUserMessage(sourceLog, target.Seq(), "forked", testSessionCategory)
 	if err != nil {
 		t.Fatalf("ForkAtUserMessage: %v", err)
 	}
-	cloned, err := CloneSession(source, "cloned", testSessionCategory)
+	cloned, err := CloneSession(sourceLog, "cloned", testSessionCategory)
 	if err != nil {
 		t.Fatalf("CloneSession: %v", err)
 	}

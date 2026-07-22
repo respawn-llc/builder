@@ -10,6 +10,7 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -81,18 +82,23 @@ func (e *Engine) SetGoal(objective string, actor session.GoalActor) (session.Goa
 }
 
 func (e *Engine) setGoalForStep(stepID string, objective string, actor session.GoalActor) (session.GoalState, error) {
-	goalState := session.GoalState{Objective: objective}
 	if e == nil || e.store == nil {
 		return session.GoalState{}, fmt.Errorf("runtime engine is required")
 	}
-	msg := normalizeMessageForTranscript(llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeGoal, Content: prompts.RenderGoalSetPrompt(strings.TrimSpace(goalState.Objective)), CompactContent: goalSetCompactText(goalState.Objective)}, e.transcriptWorkingDir())
+	objective = strings.TrimSpace(objective)
+	msg := normalizeMessageForTranscript(llm.Message{
+		Role:           llm.RoleDeveloper,
+		MessageType:    textutil.Value(llm.MessageTypeGoal),
+		Content:        textutil.Value(prompts.RenderGoalSetPrompt(objective)),
+		CompactContent: textutil.Value(goalSetCompactText(objective)),
+	}, e.transcriptWorkingDir())
 	e.controlMutationMu.Lock()
 	defer e.controlMutationMu.Unlock()
-	goal, err := e.store.SetActiveGoalWithEvents(goalState, actor, []session.EventInput{{Kind: "message", Payload: msg}})
+	goal, err := e.store.SetGoal(objective, actor)
 	if err != nil {
 		return session.GoalState{}, err
 	}
-	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, false, []llm.Message{msg}), steerGoalStatusUpdateIntent(goalStatusUpdateFromState(goal))); err != nil {
+	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg}), steerGoalStatusUpdateIntent(goalStatusUpdateFromState(goal))); err != nil {
 		return session.GoalState{}, err
 	}
 	return goal, nil
@@ -119,23 +125,19 @@ func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status
 			return session.GoalState{}, err
 		}
 	}
-	transcriptWorkingDir := e.transcriptWorkingDir()
-	var msg llm.Message
 	e.controlMutationMu.Lock()
 	defer e.controlMutationMu.Unlock()
-	goal, err := e.store.SetGoalStatusWithEventBuilder(status, actor, func(goal session.GoalState) ([]session.EventInput, error) {
-		msg = normalizeMessageForTranscript(llm.Message{
-			Role:           llm.RoleDeveloper,
-			MessageType:    llm.MessageTypeGoal,
-			Content:        goalStatusPrompt(goal),
-			CompactContent: goalStatusCompactText(goal),
-		}, transcriptWorkingDir)
-		return []session.EventInput{{Kind: "message", Payload: msg}}, nil
-	})
+	goal, err := e.store.SetGoalStatus(status, actor)
 	if err != nil {
 		return session.GoalState{}, err
 	}
-	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, false, []llm.Message{msg}), steerGoalStatusUpdateIntent(goalStatusUpdateFromState(goal))); err != nil {
+	msg := normalizeMessageForTranscript(llm.Message{
+		Role:           llm.RoleDeveloper,
+		MessageType:    textutil.Value(llm.MessageTypeGoal),
+		Content:        textutil.Value(goalStatusPrompt(goal)),
+		CompactContent: textutil.Value(goalStatusCompactText(goal)),
+	}, e.transcriptWorkingDir())
+	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg}), steerGoalStatusUpdateIntent(goalStatusUpdateFromState(goal))); err != nil {
 		return session.GoalState{}, err
 	}
 	return goal, nil
@@ -394,14 +396,19 @@ func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (sessi
 	if e == nil || e.store == nil {
 		return session.GoalState{}, fmt.Errorf("runtime engine is required")
 	}
-	msg := normalizeMessageForTranscript(llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeGoal, Content: prompts.GoalClearPrompt, CompactContent: "Goal cleared"}, e.transcriptWorkingDir())
+	msg := normalizeMessageForTranscript(llm.Message{
+		Role:           llm.RoleDeveloper,
+		MessageType:    textutil.Value(llm.MessageTypeGoal),
+		Content:        textutil.Value(prompts.GoalClearPrompt),
+		CompactContent: textutil.Value("Goal cleared"),
+	}, e.transcriptWorkingDir())
 	e.controlMutationMu.Lock()
 	defer e.controlMutationMu.Unlock()
-	goal, err := e.store.ClearGoalWithEvents(actor, []session.EventInput{{Kind: "message", Payload: msg}})
+	goal, err := e.store.ClearGoal(actor)
 	if err != nil {
 		return session.GoalState{}, err
 	}
-	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, false, []llm.Message{msg}), steerGoalStatusUpdateIntent(goalStatusClearUpdate())); err != nil {
+	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg}), steerGoalStatusUpdateIntent(goalStatusClearUpdate())); err != nil {
 		return session.GoalState{}, err
 	}
 	return goal, nil
@@ -425,19 +432,9 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 			Text:       "Failed to auto-complete active goal on workflow completion: " + err.Error(),
 		}))
 	}
-	transcriptWorkingDir := e.transcriptWorkingDir()
-	var msg llm.Message
 	e.controlMutationMu.Lock()
 	defer e.controlMutationMu.Unlock()
-	completed, transitioned, err := e.store.CompleteGoalIfActive(goal.ID, session.GoalActorSystem, func(g session.GoalState) ([]session.EventInput, error) {
-		msg = normalizeMessageForTranscript(llm.Message{
-			Role:           llm.RoleDeveloper,
-			MessageType:    llm.MessageTypeGoal,
-			Content:        goalStatusPrompt(g),
-			CompactContent: goalStatusCompactText(g),
-		}, transcriptWorkingDir)
-		return []session.EventInput{{Kind: "message", Payload: msg}}, nil
-	})
+	completed, transitioned, err := e.store.CompleteGoalIfActive(goal.ID, session.GoalActorSystem)
 	if err != nil {
 		reportErr(err)
 		return
@@ -445,7 +442,13 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 	if !transitioned {
 		return
 	}
-	if err := e.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, false, []llm.Message{msg}), steerGoalStatusUpdateIntent(goalStatusUpdateFromState(completed))); err != nil {
+	msg := normalizeMessageForTranscript(llm.Message{
+		Role:           llm.RoleDeveloper,
+		MessageType:    textutil.Value(llm.MessageTypeGoal),
+		Content:        textutil.Value(goalStatusPrompt(completed)),
+		CompactContent: textutil.Value(goalStatusCompactText(completed)),
+	}, e.transcriptWorkingDir())
+	if err := e.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg}), steerGoalStatusUpdateIntent(goalStatusUpdateFromState(completed))); err != nil {
 		reportErr(err)
 	}
 }

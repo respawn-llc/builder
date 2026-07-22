@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"core/server/auth"
-	"core/server/llm"
 	"core/server/metadata"
 	"core/server/requestmemo"
 	"core/server/runlog"
@@ -25,31 +24,52 @@ import (
 	"core/shared/sessioncontract"
 )
 
+func appendSessionMessage(t *testing.T, store *session.Store, stepID string, role session.MessageRole, content string) session.EventRecord {
+	t.Helper()
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	step := stepID
+	message := content
+	record, receipt, err := eventLog.AppendRecord(&step, session.MessageRecord{
+		Role:    role,
+		Content: &message,
+	})
+	if err != nil || !receipt.Committed {
+		t.Fatalf("append typed message: receipt=%+v error=%v", receipt, err)
+	}
+	return record
+}
+
 func userMessageSeqAt(t *testing.T, store *session.Store, n int) int64 {
 	t.Helper()
-	window, err := store.ReadRecentEvents(10_000)
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	window, err := eventLog.ReadRecentRecords(10_000)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
 	visible := 0
-	for _, evt := range window.Events {
-		if evt.Kind != "message" {
+	for _, record := range window.Records {
+		payload, err := record.Payload()
+		if err != nil {
+			t.Fatalf("read persisted event payload: %v", err)
+		}
+		message, ok := payload.(session.MessageRecord)
+		if !ok {
 			continue
 		}
-		var msg struct {
-			Role string `json:"role"`
-		}
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			continue
-		}
-		if msg.Role == "user" {
+		if message.Role == session.MessageRoleUser {
 			visible++
 			if visible == n {
-				return evt.Seq
+				return record.Seq()
 			}
 		}
 	}
-	t.Fatalf("user message %d not found among %d events", n, len(window.Events))
+	t.Fatalf("user message %d not found among %d events", n, len(window.Records))
 	return 0
 }
 
@@ -640,18 +660,10 @@ func TestServiceResolveTransitionOpenSessionRejectsNonProvenanceTargetBeforeReso
 
 func TestServiceResolveTransitionForkRollbackCreatesFork(t *testing.T) {
 	_, containerDir, store := createPersistedSession(t)
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleAssistant, Content: "a1"}); err != nil {
-		t.Fatalf("append assistant message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-2", "message", llm.Message{Role: llm.RoleUser, Content: "u2"}); err != nil {
-		t.Fatalf("append second user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-2", "message", llm.Message{Role: llm.RoleAssistant, Content: "a2"}); err != nil {
-		t.Fatalf("append second assistant message: %v", err)
-	}
+	appendSessionMessage(t, store, "step-1", session.MessageRoleUser, "u1")
+	appendSessionMessage(t, store, "step-1", session.MessageRoleAssistant, "a1")
+	appendSessionMessage(t, store, "step-2", session.MessageRoleUser, "u2")
+	appendSessionMessage(t, store, "step-2", session.MessageRoleAssistant, "a2")
 
 	service := newTestSessionLifecycleService(containerDir, nil)
 	resp, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
@@ -682,18 +694,10 @@ func TestServiceResolveTransitionForkRollbackCreatesFork(t *testing.T) {
 
 func TestServiceResolveTransitionForkRollbackUsesTargetToken(t *testing.T) {
 	_, containerDir, store := createPersistedSession(t)
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleAssistant, Content: "a1"}); err != nil {
-		t.Fatalf("append assistant message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-2", "message", llm.Message{Role: llm.RoleUser, Content: "u2"}); err != nil {
-		t.Fatalf("append second user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-2", "message", llm.Message{Role: llm.RoleAssistant, Content: "a2"}); err != nil {
-		t.Fatalf("append second assistant message: %v", err)
-	}
+	appendSessionMessage(t, store, "step-1", session.MessageRoleUser, "u1")
+	appendSessionMessage(t, store, "step-1", session.MessageRoleAssistant, "a1")
+	appendSessionMessage(t, store, "step-2", session.MessageRoleUser, "u2")
+	appendSessionMessage(t, store, "step-2", session.MessageRoleAssistant, "a2")
 
 	service := newTestSessionLifecycleService(containerDir, nil)
 	resp, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
@@ -725,18 +729,10 @@ func TestServiceResolveTransitionForkRollbackUsesTargetToken(t *testing.T) {
 func TestServiceResolveTransitionForkRollbackPreservesExecutionTarget(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg, metadataStore, binding, sess := createAuthoritativeSessionLifecycleSession(t, workspaceRoot)
-	if _, _, err := sess.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := sess.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleAssistant, Content: "a1"}); err != nil {
-		t.Fatalf("append assistant message: %v", err)
-	}
-	if _, _, err := sess.AppendEvent("step-2", "message", llm.Message{Role: llm.RoleUser, Content: "u2"}); err != nil {
-		t.Fatalf("append second user message: %v", err)
-	}
-	if _, _, err := sess.AppendEvent("step-2", "message", llm.Message{Role: llm.RoleAssistant, Content: "a2"}); err != nil {
-		t.Fatalf("append second assistant message: %v", err)
-	}
+	appendSessionMessage(t, sess, "step-1", session.MessageRoleUser, "u1")
+	appendSessionMessage(t, sess, "step-1", session.MessageRoleAssistant, "a1")
+	appendSessionMessage(t, sess, "step-2", session.MessageRoleUser, "u2")
+	appendSessionMessage(t, sess, "step-2", session.MessageRoleAssistant, "a2")
 
 	worktreeRoot := filepath.Join(t.TempDir(), "feature-a")
 	if err := os.MkdirAll(filepath.Join(worktreeRoot, "pkg"), 0o755); err != nil {
@@ -800,18 +796,10 @@ func TestServiceResolveTransitionForkRollbackPreservesExecutionTarget(t *testing
 func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	cfg, metadataStore, binding, sess := createAuthoritativeSessionLifecycleSession(t, workspaceRoot)
-	if _, _, err := sess.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := sess.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleAssistant, Content: "a1"}); err != nil {
-		t.Fatalf("append assistant message: %v", err)
-	}
-	if _, _, err := sess.AppendEvent("step-2", "message", llm.Message{Role: llm.RoleUser, Content: "u2"}); err != nil {
-		t.Fatalf("append second user message: %v", err)
-	}
-	if _, _, err := sess.AppendEvent("step-2", "message", llm.Message{Role: llm.RoleAssistant, Content: "a2"}); err != nil {
-		t.Fatalf("append second assistant message: %v", err)
-	}
+	appendSessionMessage(t, sess, "step-1", session.MessageRoleUser, "u1")
+	appendSessionMessage(t, sess, "step-1", session.MessageRoleAssistant, "a1")
+	appendSessionMessage(t, sess, "step-2", session.MessageRoleUser, "u2")
+	appendSessionMessage(t, sess, "step-2", session.MessageRoleAssistant, "a2")
 
 	worktreeRoot := filepath.Join(t.TempDir(), "feature-a")
 	if err := os.MkdirAll(filepath.Join(worktreeRoot, "pkg"), 0o755); err != nil {
@@ -905,12 +893,8 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 
 func TestServiceResolveTransitionForkRollbackRejectsInvalidTargetToken(t *testing.T) {
 	_, containerDir, store := createPersistedSession(t)
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleAssistant, Content: "a1"}); err != nil {
-		t.Fatalf("append assistant message: %v", err)
-	}
+	appendSessionMessage(t, store, "step-1", session.MessageRoleUser, "u1")
+	appendSessionMessage(t, store, "step-1", session.MessageRoleAssistant, "a1")
 
 	service := newTestSessionLifecycleService(containerDir, nil)
 	_, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{

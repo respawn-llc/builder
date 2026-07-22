@@ -17,6 +17,28 @@ import (
 	"time"
 )
 
+func appendMetadataMessage(t *testing.T, store *session.Store, stepID string, role session.MessageRole, content string) session.EventRecord {
+	t.Helper()
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	step := stepID
+	text := content
+	record, receipt, err := eventLog.AppendRecord(&step, session.MessageRecord{
+		Role:    role,
+		Content: &text,
+	})
+	if err != nil || !receipt.Committed {
+		t.Fatalf("append typed message: receipt=%+v error=%v", receipt, err)
+	}
+	return record
+}
+
+func metadataStringPointer(value string) *string {
+	return &value
+}
+
 func TestEnsureWorkspaceBindingDoesNotRegisterUnknownWorkspace(t *testing.T) {
 	store, cfg := newMetadataTestStoreWithoutBinding(t)
 
@@ -766,13 +788,7 @@ func TestResolvePersistedSessionRoundTripsRequiredStructuredMetadata(t *testing.
 	if err := sess.SetPendingModelRecovery(recovery); err != nil {
 		t.Fatalf("SetPendingModelRecovery: %v", err)
 	}
-	if _, _, err := sess.AppendEvent(
-		"step-2",
-		"message",
-		map[string]string{"role": "user", "content": "establish conversation"},
-	); err != nil {
-		t.Fatalf("AppendEvent: %v", err)
-	}
+	appendMetadataMessage(t, sess, "step-2", session.MessageRoleUser, "establish conversation")
 
 	record, err := store.ResolvePersistedSession(t.Context(), sess.Meta().SessionID)
 	if err != nil {
@@ -812,16 +828,10 @@ func TestResolvePersistedSessionRoundTripsRequiredStructuredMetadata(t *testing.
 	}
 }
 
-func TestMissingEventLogRepairPersistsFreshConversationState(t *testing.T) {
+func TestMissingEventLogRepairOccursAtEventUse(t *testing.T) {
 	store, cfg, binding := newMetadataTestStore(t)
 	sess := createMetadataTestSession(t, store, cfg, binding)
-	if _, _, err := sess.AppendEvent(
-		"step-1",
-		"message",
-		map[string]string{"role": "user", "content": "establish conversation"},
-	); err != nil {
-		t.Fatalf("AppendEvent: %v", err)
-	}
+	appendMetadataMessage(t, sess, "step-1", session.MessageRoleUser, "establish conversation")
 	eventsPath := filepath.Join(sess.Dir(), "events.jsonl")
 	if err := os.Remove(eventsPath); err != nil {
 		t.Fatalf("remove events artifact: %v", err)
@@ -835,11 +845,18 @@ func TestMissingEventLogRepairPersistsFreshConversationState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session.OpenByID repair: %v", err)
 	}
-	if repaired.Meta().LastSequence != 0 || repaired.Meta().ConversationEstablished {
-		t.Fatalf("repaired metadata = %+v, want fresh empty conversation", repaired.Meta())
+	if _, err := os.Stat(eventsPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("metadata-only open repaired missing event log: %v", err)
 	}
-	if repaired.ConversationFreshness() != session.ConversationFreshnessFresh {
-		t.Fatalf("repaired freshness = %q, want fresh", repaired.ConversationFreshness())
+	repairedEventLog, err := repaired.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize missing event log: %v", err)
+	}
+	if mustEventLogRevision(repairedEventLog) != 0 {
+		t.Fatalf("repaired event-log revision = %d, want fresh empty conversation", mustEventLogRevision(repairedEventLog))
+	}
+	if mustEventLogFreshness(repairedEventLog) != session.ConversationFreshnessFresh {
+		t.Fatalf("repaired freshness = %q, want fresh", mustEventLogFreshness(repairedEventLog))
 	}
 
 	reopened, err := session.OpenByID(
@@ -850,11 +867,15 @@ func TestMissingEventLogRepairPersistsFreshConversationState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session.OpenByID reopen: %v", err)
 	}
-	if reopened.Meta().LastSequence != 0 || reopened.Meta().ConversationEstablished {
-		t.Fatalf("reopened metadata = %+v, want fresh empty conversation", reopened.Meta())
+	reopenedEventLog, err := reopened.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize reopened event log: %v", err)
 	}
-	if reopened.ConversationFreshness() != session.ConversationFreshnessFresh {
-		t.Fatalf("reopened freshness = %q, want fresh", reopened.ConversationFreshness())
+	if mustEventLogRevision(reopenedEventLog) != 0 {
+		t.Fatalf("reopened event-log revision = %d, want fresh empty conversation", mustEventLogRevision(reopenedEventLog))
+	}
+	if mustEventLogFreshness(reopenedEventLog) != session.ConversationFreshnessFresh {
+		t.Fatalf("reopened freshness = %q, want fresh", mustEventLogFreshness(reopenedEventLog))
 	}
 }
 

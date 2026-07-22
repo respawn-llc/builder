@@ -63,15 +63,15 @@ const (
 
 type Message struct {
 	Role                 Role                     `json:"role"`
-	MessageType          MessageType              `json:"message_type,omitempty"`
-	SourcePath           string                   `json:"source_path,omitempty"`
+	MessageType          *MessageType             `json:"message_type,omitempty"`
+	SourcePath           *string                  `json:"source_path,omitempty"`
 	WorktreeContext      *session.WorktreeContext `json:"worktree_context,omitempty"`
-	Content              string                   `json:"content,omitempty"`
-	CompactContent       string                   `json:"compact_content,omitempty"`
-	Name                 string                   `json:"name,omitempty"`
-	ToolCallID           string                   `json:"tool_call_id,omitempty"`
-	Phase                MessagePhase             `json:"phase,omitempty"`
-	BackgroundActivityID string                   `json:"background_activity_id,omitempty"`
+	Content              *string                  `json:"content,omitempty"`
+	CompactContent       *string                  `json:"compact_content,omitempty"`
+	Name                 *string                  `json:"name,omitempty"`
+	ToolCallID           *string                  `json:"tool_call_id,omitempty"`
+	Phase                *MessagePhase            `json:"phase,omitempty"`
+	BackgroundActivityID *string                  `json:"background_activity_id,omitempty"`
 	BackgroundExitCode   *int                     `json:"background_exit_code,omitempty"`
 	ToolCalls            []ToolCall               `json:"tool_calls,omitempty"`
 	ReasoningItems       []ReasoningItem          `json:"reasoning_items,omitempty"`
@@ -106,37 +106,37 @@ func ToolOutputItemType(custom bool) ResponseItemType {
 	return ResponseItemTypeFunctionCallOutput
 }
 
-func ToolOutputMessageType(custom bool) MessageType {
+func ToolOutputMessageType(custom bool) *MessageType {
 	if custom {
-		return MessageTypeCustomToolCallOutput
+		return textutil.Value(MessageTypeCustomToolCallOutput)
 	}
-	return ""
+	return nil
 }
 
 type ResponseItem struct {
 	Type                 ResponseItemType         `json:"type"`
 	OutputIndex          int64                    `json:"output_index,omitempty"`
-	Role                 Role                     `json:"role,omitempty"`
-	MessageType          MessageType              `json:"message_type,omitempty"`
-	SourcePath           string                   `json:"source_path,omitempty"`
+	Role                 *Role                    `json:"role,omitempty"`
+	MessageType          *MessageType             `json:"message_type,omitempty"`
+	SourcePath           *string                  `json:"source_path,omitempty"`
 	WorktreeContext      *session.WorktreeContext `json:"worktree_context,omitempty"`
-	Phase                MessagePhase             `json:"phase,omitempty"`
-	ID                   string                   `json:"id,omitempty"`
-	Name                 string                   `json:"name,omitempty"`
-	CallID               string                   `json:"call_id,omitempty"`
-	Content              string                   `json:"content,omitempty"`
-	CompactContent       string                   `json:"compact_content,omitempty"`
-	BackgroundActivityID string                   `json:"background_activity_id,omitempty"`
+	Phase                *MessagePhase            `json:"phase,omitempty"`
+	ID                   *string                  `json:"id,omitempty"`
+	Name                 *string                  `json:"name,omitempty"`
+	CallID               *string                  `json:"call_id,omitempty"`
+	Content              *string                  `json:"content,omitempty"`
+	CompactContent       *string                  `json:"compact_content,omitempty"`
+	BackgroundActivityID *string                  `json:"background_activity_id,omitempty"`
 	BackgroundExitCode   *int                     `json:"background_exit_code,omitempty"`
 	ToolPresentation     json.RawMessage          `json:"tool_presentation,omitempty"`
 	Arguments            json.RawMessage          `json:"arguments,omitempty"`
-	CustomInput          string                   `json:"custom_input,omitempty"`
+	CustomInput          *string                  `json:"custom_input,omitempty"`
 	Output               json.RawMessage          `json:"output,omitempty"`
 	ReasoningSummary     []ReasoningEntry         `json:"reasoning_summary,omitempty"`
-	EncryptedContent     string                   `json:"encrypted_content,omitempty"`
+	EncryptedContent     *string                  `json:"encrypted_content,omitempty"`
 	Raw                  json.RawMessage          `json:"raw,omitempty"`
-	LinkedCallID         string                   `json:"linked_call_id,omitempty"`
-	LinkKind             ResponseItemLinkKind     `json:"link_kind,omitempty"`
+	LinkedCallID         *string                  `json:"linked_call_id,omitempty"`
+	LinkKind             *ResponseItemLinkKind    `json:"link_kind,omitempty"`
 }
 
 func CloneResponseItems(items []ResponseItem) []ResponseItem {
@@ -146,8 +146,22 @@ func CloneResponseItems(items []ResponseItem) []ResponseItem {
 	out := make([]ResponseItem, 0, len(items))
 	for _, item := range items {
 		copyItem := item
+		copyItem.Role = textutil.Pointer(item.Role)
+		copyItem.MessageType = textutil.Pointer(item.MessageType)
+		copyItem.SourcePath = textutil.Pointer(item.SourcePath)
+		copyItem.Phase = textutil.Pointer(item.Phase)
+		copyItem.ID = textutil.Pointer(item.ID)
+		copyItem.Name = textutil.Pointer(item.Name)
+		copyItem.CallID = textutil.Pointer(item.CallID)
+		copyItem.Content = textutil.Pointer(item.Content)
+		copyItem.CompactContent = textutil.Pointer(item.CompactContent)
+		copyItem.BackgroundActivityID = textutil.Pointer(item.BackgroundActivityID)
 		copyItem.BackgroundExitCode = textutil.Pointer(item.BackgroundExitCode)
 		copyItem.WorktreeContext = session.CloneWorktreeContext(item.WorktreeContext)
+		copyItem.CustomInput = textutil.Pointer(item.CustomInput)
+		copyItem.EncryptedContent = textutil.Pointer(item.EncryptedContent)
+		copyItem.LinkedCallID = textutil.Pointer(item.LinkedCallID)
+		copyItem.LinkKind = textutil.Pointer(item.LinkKind)
 		if len(item.Arguments) > 0 {
 			copyItem.Arguments = append(json.RawMessage(nil), item.Arguments...)
 		}
@@ -173,15 +187,15 @@ func ItemsFromMessages(messages []Message) []ResponseItem {
 	for _, msg := range messages {
 		switch msg.Role {
 		case RoleAssistant:
-			if strings.TrimSpace(msg.Content) != "" {
+			if msg.Content != nil {
 				out = append(out, ResponseItem{
 					Type:                 ResponseItemTypeMessage,
-					Role:                 RoleAssistant,
+					Role:                 textutil.Value(RoleAssistant),
 					MessageType:          msg.MessageType,
 					SourcePath:           msg.SourcePath,
 					WorktreeContext:      session.CloneWorktreeContext(msg.WorktreeContext),
 					Phase:                msg.Phase,
-					Content:              msg.Content,
+					Content:              textutil.Pointer(msg.Content),
 					CompactContent:       msg.CompactContent,
 					BackgroundActivityID: msg.BackgroundActivityID,
 					BackgroundExitCode:   textutil.Pointer(msg.BackgroundExitCode),
@@ -193,15 +207,15 @@ func ItemsFromMessages(messages []Message) []ResponseItem {
 					continue
 				}
 				if tc.Custom {
-					customInput := tc.CustomInput
-					if strings.TrimSpace(customInput) == "" {
-						customInput = stringFromJSONRaw(tc.Input)
+					customInput := textutil.Pointer(tc.CustomInput)
+					if customInput == nil || strings.TrimSpace(*customInput) == "" {
+						customInput = textutil.OptionalExactString(stringFromJSONRaw(tc.Input))
 					}
 					out = append(out, ResponseItem{
 						Type:             ResponseItemTypeCustomToolCall,
-						ID:               callID,
-						CallID:           callID,
-						Name:             tc.Name,
+						ID:               textutil.Value(callID),
+						CallID:           textutil.Value(callID),
+						Name:             textutil.Value(tc.Name),
 						ToolPresentation: append(json.RawMessage(nil), tc.Presentation...),
 						CustomInput:      customInput,
 					})
@@ -209,9 +223,9 @@ func ItemsFromMessages(messages []Message) []ResponseItem {
 				}
 				out = append(out, ResponseItem{
 					Type:             ResponseItemTypeFunctionCall,
-					ID:               callID,
-					CallID:           callID,
-					Name:             tc.Name,
+					ID:               textutil.Value(callID),
+					CallID:           textutil.Value(callID),
+					Name:             textutil.Value(tc.Name),
 					ToolPresentation: append(json.RawMessage(nil), tc.Presentation...),
 					Arguments:        normalizeToolInput(string(tc.Input)),
 				})
@@ -224,28 +238,37 @@ func ItemsFromMessages(messages []Message) []ResponseItem {
 				}
 				out = append(out, ResponseItem{
 					Type:             ResponseItemTypeReasoning,
-					ID:               id,
-					EncryptedContent: encrypted,
+					ID:               textutil.Value(id),
+					EncryptedContent: textutil.Value(encrypted),
 				})
 			}
 		case RoleTool:
-			callID := strings.TrimSpace(msg.ToolCallID)
-			if callID == "" {
+			callID, present := textutil.OptionalTrimmed(msg.ToolCallID)
+			if !present {
 				continue
 			}
-			itemType := ToolOutputItemType(msg.MessageType == MessageTypeCustomToolCallOutput)
-			out = append(out, ResponseItem{Type: itemType, CallID: callID, Name: msg.Name, Output: normalizeToolInput(msg.Content)})
+			itemType := ToolOutputItemType(
+				msg.MessageType != nil &&
+					*msg.MessageType == MessageTypeCustomToolCallOutput,
+			)
+			if msg.Content == nil {
+				continue
+			}
+			out = append(out, ResponseItem{
+				Type: itemType, CallID: textutil.Value(callID),
+				Name: textutil.Pointer(msg.Name), Output: normalizeToolInput(*msg.Content),
+			})
 		default:
-			if strings.TrimSpace(msg.Content) == "" {
+			if msg.Content == nil {
 				continue
 			}
 			out = append(out, ResponseItem{
 				Type:                 ResponseItemTypeMessage,
-				Role:                 msg.Role,
+				Role:                 textutil.Value(msg.Role),
 				MessageType:          msg.MessageType,
 				SourcePath:           msg.SourcePath,
 				WorktreeContext:      session.CloneWorktreeContext(msg.WorktreeContext),
-				Content:              msg.Content,
+				Content:              textutil.Pointer(msg.Content),
 				CompactContent:       msg.CompactContent,
 				BackgroundActivityID: msg.BackgroundActivityID,
 				BackgroundExitCode:   textutil.Pointer(msg.BackgroundExitCode),
@@ -267,8 +290,10 @@ func MessagesFromItems(items []ResponseItem) []Message {
 	for _, item := range items {
 		switch item.Type {
 		case ResponseItemTypeMessage:
-			role := item.Role
-			if role == "" {
+			role := RoleUser
+			if item.Role != nil {
+				role = *item.Role
+			} else {
 				role = RoleUser
 			}
 			msg := Message{
@@ -277,7 +302,7 @@ func MessagesFromItems(items []ResponseItem) []Message {
 				SourcePath:           item.SourcePath,
 				WorktreeContext:      session.CloneWorktreeContext(item.WorktreeContext),
 				Phase:                item.Phase,
-				Content:              item.Content,
+				Content:              textutil.Pointer(item.Content),
 				CompactContent:       item.CompactContent,
 				BackgroundActivityID: item.BackgroundActivityID,
 				BackgroundExitCode:   textutil.Pointer(item.BackgroundExitCode),
@@ -291,13 +316,14 @@ func MessagesFromItems(items []ResponseItem) []Message {
 			if lastAssistantIdx < 0 || lastAssistantIdx >= len(out) || out[lastAssistantIdx].Role != RoleAssistant {
 				lastAssistantIdx = appendAssistant()
 			}
-			callID := strings.TrimSpace(item.CallID)
-			if callID == "" {
-				callID = strings.TrimSpace(item.ID)
+			callID, present := textutil.FirstOptionalTrimmed(item.CallID, item.ID)
+			if !present {
+				continue
 			}
+			name, _ := textutil.OptionalExact(item.Name)
 			out[lastAssistantIdx].ToolCalls = append(out[lastAssistantIdx].ToolCalls, ToolCall{
 				ID:           callID,
-				Name:         item.Name,
+				Name:         name,
 				Presentation: append(json.RawMessage(nil), item.ToolPresentation...),
 				Input:        normalizeToolInput(string(item.Arguments)),
 			})
@@ -305,54 +331,62 @@ func MessagesFromItems(items []ResponseItem) []Message {
 			if lastAssistantIdx < 0 || lastAssistantIdx >= len(out) || out[lastAssistantIdx].Role != RoleAssistant {
 				lastAssistantIdx = appendAssistant()
 			}
-			callID := strings.TrimSpace(item.CallID)
-			if callID == "" {
-				callID = strings.TrimSpace(item.ID)
+			callID, present := textutil.FirstOptionalTrimmed(item.CallID, item.ID)
+			if !present {
+				continue
 			}
+			name, _ := textutil.OptionalExact(item.Name)
+			customInput, _ := textutil.OptionalExact(item.CustomInput)
 			out[lastAssistantIdx].ToolCalls = append(out[lastAssistantIdx].ToolCalls, ToolCall{
 				ID:           callID,
-				Name:         item.Name,
+				Name:         name,
 				Presentation: append(json.RawMessage(nil), item.ToolPresentation...),
-				Input:        normalizeToolInput(item.CustomInput),
+				Input:        normalizeToolInput(customInput),
 				Custom:       true,
-				CustomInput:  item.CustomInput,
+				CustomInput:  textutil.Pointer(item.CustomInput),
 			})
 		case ResponseItemTypeFunctionCallOutput:
-			callID := strings.TrimSpace(item.CallID)
-			if callID == "" {
+			callID, present := textutil.OptionalTrimmed(item.CallID)
+			if !present {
 				continue
 			}
 			out = append(out, Message{
 				Role:       RoleTool,
-				ToolCallID: callID,
-				Name:       item.Name,
-				Content:    stringFromJSONRaw(item.Output),
+				ToolCallID: textutil.Value(callID),
+				Name:       textutil.Pointer(item.Name),
+				Content:    textutil.OptionalTrimmedString(stringFromJSONRaw(item.Output)),
 			})
 			lastAssistantIdx = -1
 		case ResponseItemTypeCustomToolOutput:
-			callID := strings.TrimSpace(item.CallID)
-			if callID == "" {
+			callID, present := textutil.OptionalTrimmed(item.CallID)
+			if !present {
 				continue
 			}
-			out = append(out, Message{Role: RoleTool, MessageType: MessageTypeCustomToolCallOutput, ToolCallID: callID, Name: item.Name, Content: stringFromJSONRaw(item.Output)})
+			out = append(out, Message{
+				Role: RoleTool, MessageType: textutil.Value(MessageTypeCustomToolCallOutput),
+				ToolCallID: textutil.Value(callID), Name: textutil.Pointer(item.Name),
+				Content: textutil.OptionalTrimmedString(stringFromJSONRaw(item.Output)),
+			})
 			lastAssistantIdx = -1
 		case ResponseItemTypeReasoning:
-			if strings.TrimSpace(item.ID) == "" || strings.TrimSpace(item.EncryptedContent) == "" {
+			id, hasID := textutil.OptionalTrimmed(item.ID)
+			encrypted, hasEncrypted := textutil.OptionalTrimmed(item.EncryptedContent)
+			if !hasID || !hasEncrypted {
 				continue
 			}
 			if lastAssistantIdx < 0 || lastAssistantIdx >= len(out) || out[lastAssistantIdx].Role != RoleAssistant {
 				lastAssistantIdx = appendAssistant()
 			}
 			out[lastAssistantIdx].ReasoningItems = append(out[lastAssistantIdx].ReasoningItems, ReasoningItem{
-				ID:               item.ID,
-				EncryptedContent: item.EncryptedContent,
+				ID:               id,
+				EncryptedContent: encrypted,
 			})
 		}
 	}
 
 	filtered := out[:0]
 	for _, msg := range out {
-		if strings.TrimSpace(msg.Content) == "" && len(msg.ToolCalls) == 0 && len(msg.ReasoningItems) == 0 {
+		if msg.Content == nil && len(msg.ToolCalls) == 0 && len(msg.ReasoningItems) == 0 {
 			continue
 		}
 		filtered = append(filtered, msg)
@@ -412,7 +446,7 @@ type ToolCall struct {
 	Presentation json.RawMessage `json:"presentation,omitempty"`
 	Input        json.RawMessage `json:"input"`
 	Custom       bool            `json:"custom,omitempty"`
-	CustomInput  string          `json:"custom_input,omitempty"`
+	CustomInput  *string         `json:"custom_input,omitempty"`
 }
 
 type ToolResult struct {
@@ -566,16 +600,15 @@ func RequestFromLockedContract(locked session.LockedContract, systemPrompt strin
 }
 
 type Usage struct {
-	InputTokens          int  `json:"input_tokens"`
-	OutputTokens         int  `json:"output_tokens"`
-	WindowTokens         int  `json:"window_tokens"`
-	CachedInputTokens    int  `json:"cached_input_tokens,omitempty"`
-	HasCachedInputTokens bool `json:"has_cached_input_tokens,omitempty"`
+	InputTokens       int  `json:"input_tokens"`
+	OutputTokens      int  `json:"output_tokens"`
+	WindowTokens      int  `json:"window_tokens"`
+	CachedInputTokens *int `json:"cached_input_tokens,omitempty"`
 }
 
 type ReasoningEntry struct {
-	Role string `json:"role"`
-	Text string `json:"text"`
+	Role *string `json:"role,omitempty"`
+	Text string  `json:"text"`
 }
 
 type ReasoningItem struct {
@@ -602,10 +635,10 @@ func (u Usage) Percent() int {
 }
 
 func (u Usage) CacheHitPercent() (int, bool) {
-	if !u.HasCachedInputTokens || u.InputTokens <= 0 {
+	if u.CachedInputTokens == nil || u.InputTokens <= 0 {
 		return 0, false
 	}
-	cached := u.CachedInputTokens
+	cached := *u.CachedInputTokens
 	if cached < 0 {
 		cached = 0
 	}

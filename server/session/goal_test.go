@@ -1,16 +1,12 @@
 package session
 
 import (
-	"encoding/json"
 	"errors"
-	"reflect"
 	"sync"
 	"testing"
-
-	"core/internal/testharness/filemode"
 )
 
-func TestSetGoalPersistsMetadataAndEvent(t *testing.T) {
+func TestSetGoalPersistsOnlyMetadata(t *testing.T) {
 	store := newSessionTestStore(t)
 
 	goal, err := store.SetGoal("  ship goal mode\nwith docs  ", GoalActorUser)
@@ -43,120 +39,12 @@ func TestSetGoalPersistsMetadataAndEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadEvents: %v", err)
 	}
-	if len(events) != 1 {
-		t.Fatalf("events len = %d, want 1", len(events))
-	}
-	if events[0].Kind != "goal_set" {
-		t.Fatalf("event kind = %q, want goal_set", events[0].Kind)
-	}
-	var payload GoalSetEvent
-	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
-		t.Fatalf("decode payload: %v", err)
-	}
-	if payload.Actor != GoalActorUser {
-		t.Fatalf("actor = %q, want user", payload.Actor)
-	}
-	if payload.Goal != goal {
-		t.Fatalf("payload goal = %+v, want %+v", payload.Goal, goal)
-	}
-	if payload.ReplacedGoalID != "" {
-		t.Fatalf("replaced goal id = %q, want empty", payload.ReplacedGoalID)
-	}
-}
-
-func TestCommittedGoalObserverFailureRecoversOnReopen(t *testing.T) {
-	root := t.TempDir()
-	observer := newBlockingFailingPersistenceObserver(sessionTestPersistence)
-	store, err := Create(
-		root,
-		"workspace-x",
-		"/tmp/work",
-		testSessionCategory,
-		WithPersistenceObserver(observer),
-		WithPersistedSessionResolver(sessionTestPersistence),
-	)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	observer.Arm()
-	close(observer.release)
-
-	_, err = store.SetGoal("recover committed goal", GoalActorUser)
-	if err == nil {
-		t.Fatal("SetGoal did not surface the observer failure")
-	}
-	goal := store.Meta().Goal
-	if goal == nil {
-		t.Fatal("committed observer failure rolled back the in-memory goal")
-	}
-
-	reopened, err := OpenByID(root, store.Meta().SessionID, sessionTestPersistence.options()...)
-	if err != nil {
-		t.Fatalf("OpenByID: %v", err)
-	}
-	if stored := reopened.Meta().Goal; stored == nil || stored.ID != goal.ID {
-		t.Fatalf("recovered goal = %+v, want %+v", stored, goal)
-	}
-	events, err := collectEvents(reopened)
-	if err != nil {
-		t.Fatalf("collect events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != "goal_set" {
-		t.Fatalf("recovered events = %+v, want one goal_set", events)
-	}
-}
-
-func TestGoalWithEventsRollsBackMetadataWhenEventAppendFails(t *testing.T) {
-	store := newSessionTestStore(t)
-
-	blocker := filemode.MustBlockEventLogAppends(t, store.eventsFP)
-	_, err := store.SetGoalWithEvents("ship goal mode", GoalActorUser, []EventInput{{Kind: "message", Payload: "goal feedback"}})
-	if err == nil {
-		t.Fatal("expected SetGoalWithEvents to fail when event append fails")
-	}
-	if goal := store.Meta().Goal; goal != nil {
-		t.Fatalf("goal after failed atomic set = %+v, want nil", goal)
-	}
-	if err := blocker.Restore(); err != nil {
-		t.Fatalf("restore event log after failed goal set: %v", err)
-	}
-	events, err := collectEvents(store)
-	if err != nil {
-		t.Fatalf("ReadEvents: %v", err)
-	}
 	if len(events) != 0 {
-		t.Fatalf("events after failed atomic set = %+v, want none", events)
-	}
-
-	goal, err := store.SetGoal("ship goal mode", GoalActorUser)
-	if err != nil {
-		t.Fatalf("SetGoal: %v", err)
-	}
-	previous := *store.Meta().Goal
-	blocker = filemode.MustBlockEventLogAppends(t, store.eventsFP)
-	if _, err := store.SetGoalStatusWithEventBuilder(GoalStatusPaused, GoalActorUser, func(GoalState) ([]EventInput, error) {
-		return []EventInput{{Kind: "message", Payload: "goal feedback"}}, nil
-	}); err == nil {
-		t.Fatal("expected SetGoalStatusWithEventBuilder to fail when event append fails")
-	}
-	if got := store.Meta().Goal; got == nil || !reflect.DeepEqual(*got, previous) {
-		t.Fatalf("goal after failed status update = %+v, want %+v", got, previous)
-	}
-
-	if err := blocker.Restore(); err != nil {
-		t.Fatalf("restore event log after failed goal status: %v", err)
-	}
-	previous = goal
-	filemode.MustBlockEventLogAppends(t, store.eventsFP)
-	if _, err := store.ClearGoalWithEvents(GoalActorUser, []EventInput{{Kind: "message", Payload: "goal feedback"}}); err == nil {
-		t.Fatal("expected ClearGoalWithEvents to fail when event append fails")
-	}
-	if got := store.Meta().Goal; got == nil || !reflect.DeepEqual(*got, previous) {
-		t.Fatalf("goal after failed clear = %+v, want %+v", got, previous)
+		t.Fatalf("goal metadata mutation emitted events: %+v", events)
 	}
 }
 
-func TestGoalStatusAndClearPersistMetadataAndEvents(t *testing.T) {
+func TestGoalStatusAndClearPersistOnlyMetadata(t *testing.T) {
 	store := newSessionTestStore(t)
 	first, err := store.SetGoal("first goal", GoalActorUser)
 	if err != nil {
@@ -192,29 +80,8 @@ func TestGoalStatusAndClearPersistMetadataAndEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadEvents: %v", err)
 	}
-	if len(events) != 4 {
-		t.Fatalf("events len = %d, want 4", len(events))
-	}
-	var replacement GoalSetEvent
-	if err := json.Unmarshal(events[1].Payload, &replacement); err != nil {
-		t.Fatalf("decode replacement: %v", err)
-	}
-	if replacement.ReplacedGoalID != first.ID {
-		t.Fatalf("replaced id = %q, want %q", replacement.ReplacedGoalID, first.ID)
-	}
-	var status GoalStatusUpdatedEvent
-	if err := json.Unmarshal(events[2].Payload, &status); err != nil {
-		t.Fatalf("decode status: %v", err)
-	}
-	if events[2].Kind != "goal_status_updated" || status.Actor != GoalActorAgent || status.PreviousStatus != GoalStatusActive || status.Goal.Status != GoalStatusPaused {
-		t.Fatalf("status event kind/payload = %s %+v", events[2].Kind, status)
-	}
-	var clear GoalClearedEvent
-	if err := json.Unmarshal(events[3].Payload, &clear); err != nil {
-		t.Fatalf("decode clear: %v", err)
-	}
-	if events[3].Kind != "goal_cleared" || clear.Actor != GoalActorUser || clear.Goal.ID != second.ID {
-		t.Fatalf("clear event kind/payload = %s %+v", events[3].Kind, clear)
+	if len(events) != 0 {
+		t.Fatalf("goal metadata mutations emitted events: %+v", events)
 	}
 }
 
