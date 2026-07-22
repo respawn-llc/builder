@@ -282,6 +282,11 @@ build_config="$(jq -cn \
 	--argjson icon "$icon_config" \
 	--argjson createUpdaterArtifacts "$create_updater_artifacts" \
 	'{version: $v, bundle: {icon: $icon, createUpdaterArtifacts: $createUpdaterArtifacts}}')"
+cargo_target_dir="$(cargo metadata \
+	--manifest-path apps/desktop/src-tauri/Cargo.toml \
+	--no-deps \
+	--format-version 1 |
+	jq -er '.target_directory | select(type == "string" and length > 0)')"
 
 pnpm --dir apps/desktop exec tauri build \
 	--config "$build_config" \
@@ -294,7 +299,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
 			build_profile="debug"
 		fi
 	done
-	app_bundle="apps/desktop/src-tauri/target/${build_profile}/bundle/macos/Kent.app"
+	app_bundle="${cargo_target_dir}/${build_profile}/bundle/macos/Kent.app"
 
 	if [ -z "${APPLE_SIGNING_IDENTITY:-}" ] && [ -d "$app_bundle" ]; then
 		codesign --force --sign - --entitlements apps/desktop/src-tauri/entitlements.plist "$app_bundle"
