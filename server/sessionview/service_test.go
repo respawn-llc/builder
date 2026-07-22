@@ -123,6 +123,10 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	if err := store.SetName("incident triage"); err != nil {
 		t.Fatalf("set name: %v", err)
 	}
+	role := "worker"
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &role}); err != nil {
+		t.Fatalf("set continuation context: %v", err)
+	}
 	if _, err := store.SetGoal("ship dormant goal", session.GoalActorUser); err != nil {
 		t.Fatalf("set goal: %v", err)
 	}
@@ -135,6 +139,9 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	}
 	if resp.MainView.Session.SessionID != store.Meta().SessionID || resp.MainView.Session.SessionName != "incident triage" {
 		t.Fatalf("unexpected dormant session view: %+v", resp.MainView.Session)
+	}
+	if resp.MainView.Session.AgentRole == nil || *resp.MainView.Session.AgentRole != role {
+		t.Fatalf("dormant session agent role = %v, want %q", resp.MainView.Session.AgentRole, role)
 	}
 	if resp.MainView.Status.ParentAgentSessionID == nil || resp.MainView.Status.ParentAgentSessionID.String() != parentSessionID ||
 		resp.MainView.Status.NavigationTargetSessionID == nil || resp.MainView.Status.NavigationTargetSessionID.String() != parentSessionID ||

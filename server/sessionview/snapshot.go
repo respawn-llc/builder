@@ -238,6 +238,7 @@ func (s dormantSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeM
 		clientui.RuntimeSessionView{
 			SessionID:             meta.SessionID,
 			SessionName:           meta.Name,
+			AgentRole:             session.ContinuationAgentRole(meta),
 			ConversationFreshness: freshness,
 		},
 	)

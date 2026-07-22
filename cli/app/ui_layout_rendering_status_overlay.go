@@ -115,6 +115,11 @@ func (l uiViewLayout) statusOverlayContentLines(width int) []string {
 	appendSectionTitle("Session")
 	appendWrapped("CWD: "+statusValueOrFallback(snapshot.Workdir, "<unknown>"), boldStyle)
 	appendANSI(l.renderStatusModelLine(width, snapshot.Model.Summary))
+	if snapshot.AgentRole != nil {
+		for _, line := range wrapANSIText("Agent role: "+boldStyle.Render(*snapshot.AgentRole), width) {
+			appendANSI(line)
+		}
+	}
 	for _, line := range statusOverlaySessionLines(snapshot) {
 		switch line.Style {
 		case statusOverlayLineStyleBold:
