@@ -1,4 +1,4 @@
-import { boardNodeCardsPageSchema, workflowBoardSchema } from "./workflowBoard";
+import { activityPageSchema, boardNodeCardsPageSchema, workflowBoardSchema } from "./workflowBoard";
 
 const workspace = {
   workspace_id: "workspace-default",
@@ -233,5 +233,96 @@ describe("workflow board schemas", () => {
         generated_at_unix_ms: 1,
       }),
     ).toThrow();
+  });
+});
+
+describe("task activity attention schema", () => {
+  const interruptedAttention = {
+    id: "interrupted_run:run-1",
+    kind: "interrupted_run",
+    project_id: "project-1",
+    workflow_id: "workflow-1",
+    task_id: "task-1",
+    task_short_id: "KNT-1",
+    task_title: "Task",
+    run_id: "run-1",
+    message: "Run interrupted",
+    occurred_at_unix_ms: 1,
+  };
+
+  const interruptedActivity = {
+    activity_id: "run_interrupted:run-1",
+    type: "run_interrupted",
+    task_id: "task-1",
+    occurred_at_unix_ms: 1,
+    updated_at_unix_ms: 1,
+    actor: "",
+    summary: "Run interrupted",
+    attention: interruptedAttention,
+  };
+
+  it("accepts coherent interrupted-run attention only on interrupted-run activity", () => {
+    expect(
+      activityPageSchema.parse({
+        items: [interruptedActivity],
+        next_page_token: "",
+        generated_at_unix_ms: 1,
+      }),
+    ).toMatchObject({
+      items: [{ type: "run_interrupted", taskID: "task-1", attention: { kind: "interrupted_run" } }],
+    });
+  });
+
+  it("rejects incoherent nested attention", () => {
+    const rejected = [
+      {
+        ...interruptedActivity,
+        attention: { ...interruptedAttention, task_id: "task-2" },
+      },
+      {
+        ...interruptedActivity,
+        type: "comment",
+      },
+      {
+        ...interruptedActivity,
+        attention: {
+          ...interruptedAttention,
+          kind: "question",
+          ask_id: "ask-1",
+        },
+      },
+      {
+        ...interruptedActivity,
+        attention: {
+          id: "approval:transition-1",
+          kind: "approval",
+          project_id: "project-1",
+          workflow_id: "workflow-1",
+          task_id: "task-1",
+          task_short_id: "KNT-1",
+          task_title: "Task",
+          task_transition_id: "transition-1",
+          message: "Approval required",
+          approval_snapshot: {
+            source_node_display_name: "Review",
+            targets: [],
+            commentary: "",
+            output_values: {},
+            workflow_revision_seen: 1,
+          },
+          occurred_at_unix_ms: 1,
+        },
+      },
+    ];
+
+    for (const item of rejected) {
+      expect(() =>
+        activityPageSchema.parse({
+          items: [item],
+          next_page_token: "",
+          generated_at_unix_ms: 1,
+        }),
+      ).toThrow();
+    }
   });
 });

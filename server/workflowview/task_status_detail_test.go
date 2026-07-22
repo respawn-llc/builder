@@ -535,7 +535,7 @@ func TestTaskDetailProjectsWaitingAskRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTaskAttention: %v", err)
 	}
-	if len(attention.Items) != 1 || attention.Items[0].Kind != "question" || attention.Items[0].AskID != "ask-view-1" || attention.Items[0].SessionID != sessionID || strings.TrimSpace(attention.Items[0].Message) == "" || len(attention.Items[0].Suggestions) != 3 || attention.Items[0].RecommendedOptionIndex != 2 {
+	if len(attention.Items) != 1 || attention.Items[0].Kind != "question" || !attentionStringEquals(attention.Items[0].AskID, "ask-view-1") || !attentionStringEquals(attention.Items[0].SessionID, sessionID) || strings.TrimSpace(attention.Items[0].Message) == "" || len(attention.Items[0].Suggestions) != 3 || !attentionIntEquals(attention.Items[0].RecommendedOptionIndex, 2) {
 		t.Fatalf("attention question options = %+v", attention.Items)
 	}
 	for _, suggestion := range attention.Items[0].Suggestions {
@@ -601,7 +601,7 @@ func TestTaskDetailPendingQuestionFallsBackWhenTranscriptLookupFails(t *testing.
 	if err != nil {
 		t.Fatalf("ListTaskAttention: %v", err)
 	}
-	if len(attention.Items) != 1 || attention.Items[0].Kind != "question" || attention.Items[0].AskID != "ask-missing-transcript" || attention.Items[0].Message != pendingQuestionFallbackMessage {
+	if len(attention.Items) != 1 || attention.Items[0].Kind != "question" || !attentionStringEquals(attention.Items[0].AskID, "ask-missing-transcript") || attention.Items[0].Message != pendingQuestionFallbackMessage {
 		t.Fatalf("attention = %+v", attention.Items)
 	}
 }
@@ -610,19 +610,19 @@ func assertRuntimeApprovalQuestionAttention(t *testing.T, items []serverapi.Work
 	t.Helper()
 	var item serverapi.WorkflowAttentionItem
 	for _, candidate := range items {
-		if candidate.Kind == "question" && candidate.AskID == askID {
+		if candidate.Kind == "question" && attentionStringEquals(candidate.AskID, askID) {
 			item = candidate
 			break
 		}
 	}
-	if item.AskID == "" {
+	if !attentionStringEquals(item.AskID, askID) {
 		t.Fatalf("runtime approval question not found in attention: %+v", items)
 	}
-	if item.TaskID != taskID || item.RunID != runID || item.SessionID != sessionID || item.Message != "Approve protected path?" {
+	if item.TaskID != taskID || !attentionStringEquals(item.RunID, runID) || !attentionStringEquals(item.SessionID, sessionID) || item.Message != "Approve protected path?" {
 		t.Fatalf("runtime approval attention identity = %+v", item)
 	}
-	if len(item.Suggestions) != 0 || item.RecommendedOptionIndex != 0 {
-		t.Fatalf("runtime approval attention ordinary fields = suggestions:%+v recommended:%d", item.Suggestions, item.RecommendedOptionIndex)
+	if item.Suggestions != nil || item.RecommendedOptionIndex != nil {
+		t.Fatalf("runtime approval attention ordinary fields = suggestions:%+v recommended:%+v", item.Suggestions, item.RecommendedOptionIndex)
 	}
 	if item.Question == nil || item.Question.Kind != serverapi.WorkflowAttentionQuestionKindApproval {
 		t.Fatalf("runtime approval question prompt = %+v", item.Question)

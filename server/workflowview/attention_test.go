@@ -3,7 +3,6 @@ package workflowview
 import (
 	"testing"
 
-	"core/internal/testharness/testsetup"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
 )
@@ -57,20 +56,8 @@ func TestAttentionReadsGlobalAndTaskCandidatesThroughFocusedInterface(t *testing
 		t.Fatalf("InterruptRunGeneration: %v", err)
 	}
 
-	cleanWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
-	if _, err := workflowStore.LinkWorkflow(ctx, secondProject.ProjectID, cleanWorkflowID, false); err != nil {
-		t.Fatalf("LinkWorkflow clean: %v", err)
-	}
-	if _, err := metadataStore.DB().ExecContext(ctx, `UPDATE workflows SET updated_at_unix_ms = ? WHERE id = ?`, int64(2_000_000_000_000), string(cleanWorkflowID)); err != nil {
-		t.Fatalf("force clean workflow timestamp: %v", err)
-	}
-
 	fanout := createWorkflowViewFanoutStatusFixture(t, ctx, workflowStore, firstProject)
-	definitions, err := NewDefinitionProjection(workflowStore)
-	if err != nil {
-		t.Fatalf("NewDefinitionProjection: %v", err)
-	}
-	attention, err := NewAttention(metadataStore, definitions, NewTaskProjector(), testsetup.QuestionsEnabled("coder"), nil, nil)
+	attention, err := NewAttention(metadataStore.Queries(), NewTaskProjector(), nil, nil)
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)
 	}
@@ -96,9 +83,6 @@ func TestAttentionReadsGlobalAndTaskCandidatesThroughFocusedInterface(t *testing
 	}
 	byKindAndProject := map[string]serverapi.WorkflowAttentionItem{}
 	for index, item := range globalItems {
-		if item.Kind == "validation_blocker" {
-			t.Fatalf("clean validation candidate was not dropped: %+v", item)
-		}
 		if index > 0 {
 			previous := globalItems[index-1]
 			if previous.OccurredAtUnixMs < item.OccurredAtUnixMs ||
@@ -109,7 +93,7 @@ func TestAttentionReadsGlobalAndTaskCandidatesThroughFocusedInterface(t *testing
 		byKindAndProject[item.Kind+":"+item.ProjectID] = item
 	}
 	approval := byKindAndProject["approval:"+firstProject.ProjectID]
-	if approval.TaskID != string(approvalTask.ID) || approval.TaskTransitionID != string(pendingApproval.Result.TransitionID) {
+	if approval.TaskID != string(approvalTask.ID) || !attentionStringEquals(approval.TaskTransitionID, string(pendingApproval.Result.TransitionID)) {
 		t.Fatalf("approval projection = %+v", approval)
 	}
 	if approval.ApprovalSnapshot == nil ||
@@ -123,7 +107,7 @@ func TestAttentionReadsGlobalAndTaskCandidatesThroughFocusedInterface(t *testing
 		t.Fatalf("approval snapshot = %+v", approval.ApprovalSnapshot)
 	}
 	interrupted := byKindAndProject["interrupted_run:"+secondProject.ProjectID]
-	if interrupted.TaskID != string(interruptedTask.ID) || interrupted.RunID != string(interruptedStarted.RunID) {
+	if interrupted.TaskID != string(interruptedTask.ID) || !attentionStringEquals(interrupted.RunID, string(interruptedStarted.RunID)) {
 		t.Fatalf("interrupted projection = %+v", interrupted)
 	}
 

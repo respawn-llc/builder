@@ -198,7 +198,6 @@ type AttentionListProps = Readonly<{
 
 function AttentionList({ items, query }: AttentionListProps) {
   const { t } = useTranslation();
-  const navigation = useAppNavigation();
   const { openSidebar } = useSidebar();
   if (query.isPending) {
     return <LoadingState appearanceDelayMs={0} fullPage={false} reveal={false} title={t("states.loading")} />;
@@ -229,18 +228,16 @@ function AttentionList({ items, query }: AttentionListProps) {
       onLoadMore={() => void query.fetchNextPage()}
       paddingEnd={16}
       paddingStart={16}
-      renderItem={(item) => <AttentionRow item={item} navigation={navigation} openSidebar={openSidebar} />}
+      renderItem={(item) => <AttentionRow item={item} openSidebar={openSidebar} />}
     />
   );
 }
 
 const AttentionRow = memo(function AttentionRow({
   item,
-  navigation,
   openSidebar,
 }: Readonly<{
   item: AttentionItem;
-  navigation: ReturnType<typeof useAppNavigation>;
   openSidebar: ReturnType<typeof useSidebar>["openSidebar"];
 }>) {
   return (
@@ -251,23 +248,14 @@ const AttentionRow = memo(function AttentionRow({
       )}
       data-testid="attention-row"
       onClick={() => {
-        if (item.taskID.length > 0) {
-          void openSidebar({
-            kind: "taskDetail",
-            initialFocus: taskDetailInitialFocusFromAttentionItem(item),
-            inboxNav: true,
-            mode: "overlay",
-            onMutated: undefined,
-            taskID: item.taskID,
-          });
-          return;
-        }
-        if (item.workflowID.length > 0) {
-          void navigation.openWorkflowEditor({
-            projectID: item.projectID.length > 0 ? item.projectID : undefined,
-            workflowID: item.workflowID,
-          });
-        }
+        void openSidebar({
+          kind: "taskDetail",
+          initialFocus: taskDetailInitialFocusFromAttentionItem(item),
+          inboxNav: true,
+          mode: "overlay",
+          onMutated: undefined,
+          taskID: item.taskID,
+        });
       }}
       type="button"
     >
@@ -291,31 +279,21 @@ const AttentionRow = memo(function AttentionRow({
 function attentionRowPropsEqual(
   previous: Readonly<{
     item: AttentionItem;
-    navigation: ReturnType<typeof useAppNavigation>;
     openSidebar: ReturnType<typeof useSidebar>["openSidebar"];
   }>,
   next: Readonly<{
     item: AttentionItem;
-    navigation: ReturnType<typeof useAppNavigation>;
     openSidebar: ReturnType<typeof useSidebar>["openSidebar"];
   }>,
 ): boolean {
-  return (
-    previous.openSidebar === next.openSidebar &&
-    previous.navigation === next.navigation &&
-    attentionItemsEqual(previous.item, next.item)
-  );
+  return previous.openSidebar === next.openSidebar && attentionItemsEqual(previous.item, next.item);
 }
 
 function attentionItemsEqual(previous: AttentionItem, next: AttentionItem): boolean {
   return (
     previous.id === next.id &&
     previous.kind === next.kind &&
-    previous.projectID === next.projectID &&
-    previous.workflowID === next.workflowID &&
     previous.taskID === next.taskID &&
-    previous.askID === next.askID &&
-    previous.taskTransitionID === next.taskTransitionID &&
     previous.taskShortID === next.taskShortID &&
     previous.taskTitle === next.taskTitle &&
     previous.message === next.message &&

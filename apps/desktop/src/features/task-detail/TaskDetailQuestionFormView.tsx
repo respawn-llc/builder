@@ -1,7 +1,7 @@
 import { type ReactNode, useId } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage, type ApprovalDecision, type AttentionItem } from "@/api";
+import { errorMessage, type ApprovalDecision, type QuestionAttentionItem } from "@/api";
 import type { QuestionAnswerInput } from "@/api";
 import { Button, MarkdownText, RadioGroup, RadioGroupItem, showStatusToast } from "@/ui";
 import { cx, fieldInputClassName } from "@/ui";
@@ -27,7 +27,7 @@ export function QuestionFormView({
   taskId,
 }: Readonly<{
   answerQuestion: QuestionAnswerMutation;
-  attention: AttentionItem;
+  attention: QuestionAttentionItem;
   disabled: boolean;
   onOpenLink: (url: string) => void;
   onSelectionStateChange: (selection: QuestionSelectionState) => void;
@@ -81,7 +81,7 @@ function OrdinaryQuestionForm({
   taskId,
 }: Readonly<{
   answerQuestion: QuestionAnswerMutation;
-  attention: AttentionItem;
+  attention: QuestionAttentionItem;
   disabled: boolean;
   onOpenLink: (url: string) => void;
   onSelectionStateChange: (selection: QuestionSelectionState) => void;
@@ -202,7 +202,7 @@ function ApprovalQuestionForm({
 }: Readonly<{
   answerQuestion: QuestionAnswerMutation;
   approvalDecisions: readonly ApprovalDecision[];
-  attention: AttentionItem;
+  attention: QuestionAttentionItem;
   disabled: boolean;
   onOpenLink: (url: string) => void;
   onSelectionStateChange: (selection: QuestionSelectionState) => void;
@@ -404,7 +404,7 @@ async function submitQuestionAnswer({
   selection,
 }: Readonly<{
   answerQuestion: QuestionAnswerMutation;
-  attention: AttentionItem;
+  attention: QuestionAttentionItem;
   failureTitle: string;
   input: (clientRequestID: string) => QuestionAnswerInput;
   onSelectionStateChange: (selection: QuestionSelectionState) => void;

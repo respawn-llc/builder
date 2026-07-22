@@ -3,7 +3,6 @@ import { z } from "zod";
 import type {
   ApprovalDecision,
   ApprovalQuestionPrompt,
-  AttentionItem,
   AttentionQuestionPrompt,
   BoardCard,
   BoardColumn,
@@ -24,6 +23,7 @@ import type {
   WorkspaceAvailability,
   OrdinaryQuestionPrompt,
 } from "../models";
+import type { AttentionItem } from "../attention";
 import { labelIDListSchema } from "./workflowLabels";
 
 export const emptyString = z.string().optional().default("");
@@ -43,6 +43,12 @@ const nullableNumber = z
   .number()
   .nullish()
   .transform((value) => value ?? null);
+const nullablePositiveInteger = z
+  .number()
+  .int()
+  .positive()
+  .nullish()
+  .transform((value) => value ?? null);
 export const stringList = z
   .array(z.string())
   .nullish()
@@ -54,16 +60,20 @@ export const approvalDecisionSchema: z.ZodType<ApprovalDecision> = z.enum([
   "deny",
 ]);
 
-const ordinaryQuestionPromptSchema = z.object({
-  kind: z.literal("ordinary"),
-  suggestions: stringList,
-  recommended_option_index: z.number().optional().default(0),
-});
+const ordinaryQuestionPromptSchema = z
+  .object({
+    kind: z.literal("ordinary"),
+    suggestions: stringList,
+    recommended_option_index: nullablePositiveInteger,
+  })
+  .strict();
 
-const approvalQuestionPromptSchema = z.object({
-  kind: z.literal("approval"),
-  approval_decisions: z.array(approvalDecisionSchema).min(1),
-});
+const approvalQuestionPromptSchema = z
+  .object({
+    kind: z.literal("approval"),
+    approval_decisions: z.array(approvalDecisionSchema).min(1),
+  })
+  .strict();
 
 export const questionPromptSchema: z.ZodType<AttentionQuestionPrompt> = z
   .discriminatedUnion("kind", [ordinaryQuestionPromptSchema, approvalQuestionPromptSchema])
@@ -344,67 +354,109 @@ export const boardCardSchema: z.ZodType<BoardCard> = z
     updatedAt: value.updated_at_unix_ms,
   }));
 
-export const attentionItemSchema: z.ZodType<AttentionItem> = z
+const attentionItemBaseSchema = {
+  id: z.string(),
+  project_id: emptyString,
+  workflow_id: nonBlankString,
+  task_id: nonBlankString,
+  task_short_id: emptyString,
+  task_title: emptyString,
+  message: z.string(),
+  occurred_at_unix_ms: z.number(),
+};
+
+const approvalSnapshotSchema = z
   .object({
-    id: z.string(),
-    kind: z.string(),
-    project_id: emptyString,
-    workflow_id: emptyString,
-    task_id: emptyString,
-    task_short_id: emptyString,
-    task_title: emptyString,
-    run_id: emptyString,
-    session_id: emptyString,
-    ask_id: emptyString,
-    task_transition_id: emptyString,
-    message: z.string(),
-    detail_json: emptyString,
-    suggestions: stringList,
-    recommended_option_index: z.number().optional().default(0),
-    question: questionPromptSchema.nullish(),
-    approval_snapshot: z
-      .object({
-        source_node_display_name: nonBlankString,
-        targets: z.array(z.object({ display_name: nonBlankString }).strict()),
-        commentary: emptyString,
-        output_values: z.record(z.string(), z.string()),
-        workflow_revision_seen: z.number().int().nonnegative(),
-      })
-      .strict()
-      .nullish(),
-    occurred_at_unix_ms: z.number(),
+    source_node_display_name: nonBlankString,
+    targets: z.array(z.object({ display_name: nonBlankString }).strict()),
+    commentary: emptyString,
+    output_values: z.record(z.string(), z.string()),
+    workflow_revision_seen: z.number().int().nonnegative(),
   })
+  .strict()
   .transform((value) => ({
-    id: value.id,
-    kind: value.kind,
-    projectID: value.project_id,
-    workflowID: value.workflow_id,
-    taskID: value.task_id,
-    taskShortID: value.task_short_id,
-    taskTitle: value.task_title,
-    runID: value.run_id,
-    sessionID: value.session_id,
-    askID: value.ask_id,
-    taskTransitionID: value.task_transition_id,
-    message: value.message,
-    detailJSON: value.detail_json,
-    suggestions: value.suggestions,
-    recommendedOptionIndex: value.recommended_option_index,
-    question: value.question ?? null,
-    approvalSnapshot:
-      value.approval_snapshot === null || value.approval_snapshot === undefined
-        ? null
-        : {
-            sourceNodeName: value.approval_snapshot.source_node_display_name,
-            targets: value.approval_snapshot.targets.map((target) => ({
-              displayName: target.display_name,
-            })),
-            commentary: value.approval_snapshot.commentary,
-            outputValues: value.approval_snapshot.output_values,
-            version: value.approval_snapshot.workflow_revision_seen,
-          },
-    occurredAt: value.occurred_at_unix_ms,
+    sourceNodeName: value.source_node_display_name,
+    targets: value.targets.map((target) => ({ displayName: target.display_name })),
+    commentary: value.commentary,
+    outputValues: value.output_values,
+    version: value.workflow_revision_seen,
   }));
+
+export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnion("kind", [
+  z
+    .object({
+      ...attentionItemBaseSchema,
+      kind: z.literal("question"),
+      run_id: nonBlankString,
+      session_id: nullableNonBlankString,
+      ask_id: nonBlankString,
+      suggestions: stringList,
+      recommended_option_index: nullablePositiveInteger,
+      question: questionPromptSchema.nullish(),
+    })
+    .strict()
+    .transform((value) => ({
+      id: value.id,
+      kind: value.kind,
+      projectID: value.project_id,
+      workflowID: value.workflow_id,
+      taskID: value.task_id,
+      taskShortID: value.task_short_id,
+      taskTitle: value.task_title,
+      message: value.message,
+      occurredAt: value.occurred_at_unix_ms,
+      runID: value.run_id,
+      sessionID: value.session_id,
+      askID: value.ask_id,
+      suggestions: value.suggestions,
+      recommendedOptionIndex: value.recommended_option_index,
+      question: value.question ?? null,
+    })),
+  z
+    .object({
+      ...attentionItemBaseSchema,
+      kind: z.literal("approval"),
+      task_transition_id: nonBlankString,
+      approval_snapshot: approvalSnapshotSchema,
+    })
+    .strict()
+    .transform((value) => ({
+      id: value.id,
+      kind: value.kind,
+      projectID: value.project_id,
+      workflowID: value.workflow_id,
+      taskID: value.task_id,
+      taskShortID: value.task_short_id,
+      taskTitle: value.task_title,
+      message: value.message,
+      occurredAt: value.occurred_at_unix_ms,
+      taskTransitionID: value.task_transition_id,
+      approvalSnapshot: value.approval_snapshot,
+    })),
+  z
+    .object({
+      ...attentionItemBaseSchema,
+      kind: z.literal("interrupted_run"),
+      run_id: nonBlankString,
+      session_id: nullableNonBlankString,
+      detail_json: nullableNonBlankString,
+    })
+    .strict()
+    .transform((value) => ({
+      id: value.id,
+      kind: value.kind,
+      projectID: value.project_id,
+      workflowID: value.workflow_id,
+      taskID: value.task_id,
+      taskShortID: value.task_short_id,
+      taskTitle: value.task_title,
+      message: value.message,
+      occurredAt: value.occurred_at_unix_ms,
+      runID: value.run_id,
+      sessionID: value.session_id,
+      detailJSON: value.detail_json,
+    })),
+]);
 
 export const commentSchema: z.ZodType<TaskComment> = z
   .object({

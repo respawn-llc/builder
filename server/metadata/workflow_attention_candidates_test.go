@@ -77,18 +77,15 @@ func TestWorkflowAttentionCandidateRelationIsAuthoritative(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWorkflowAttentionCandidates: %v", err)
 	}
-	if len(global) != 4 {
-		t.Fatalf("global candidates = %+v, want four kinds", global)
+	if len(global) != 3 {
+		t.Fatalf("global candidates = %+v, want three task-scoped kinds", global)
 	}
-	wantKinds := []string{"interrupted_run", "question", "approval", "validation_blocker"}
+	wantKinds := []string{"interrupted_run", "question", "approval"}
 	for index, wantKind := range wantKinds {
 		if global[index].Kind != wantKind {
 			t.Fatalf("global candidate %d = %+v, want kind %q", index, global[index], wantKind)
 		}
 	}
-	requireNullAttentionCandidateIdentity(t, global[3].TaskID, "validation task")
-	requireNullAttentionCandidateIdentity(t, global[3].RunID, "validation run")
-	requireNullAttentionCandidateIdentity(t, global[3].TaskTransitionID, "validation transition")
 	requireNullAttentionCandidateIdentity(t, global[2].AskID, "approval ask")
 	requireNullAttentionCandidateIdentity(t, global[1].TaskTransitionID, "question transition")
 	requireNullAttentionCandidateIdentity(t, global[0].TaskTransitionID, "interruption transition")
@@ -159,6 +156,36 @@ func TestWorkflowAttentionCandidateRelationIsAuthoritative(t *testing.T) {
 	}
 	requireAttentionCandidateIdentity(t, interruptionCandidate.TaskID, string(interruptedTask.ID), "interruption task")
 	requireAttentionCandidateIdentity(t, interruptionCandidate.RunID, string(interruptedStarted.RunID), "interruption lookup run")
+}
+
+func TestWorkflowAttentionCandidateRelationExcludesLinkedWorkflowsWithoutTaskAttention(t *testing.T) {
+	ctx := context.Background()
+	metadataStore, workflowStore, binding, _ := newWorkflowAttentionCandidateStores(t)
+
+	validWorkflowID := createWorkflowAttentionCandidateWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, validWorkflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow valid: %v", err)
+	}
+	invalidWorkflow, err := workflowStore.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Invalid attention workflow"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow invalid: %v", err)
+	}
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, invalidWorkflow.ID, false); err != nil {
+		t.Fatalf("LinkWorkflow invalid: %v", err)
+	}
+
+	global, err := metadataStore.Queries().ListWorkflowAttentionCandidates(ctx, sqlitegen.ListWorkflowAttentionCandidatesParams{
+		CursorActive:           0,
+		CursorOccurredAtUnixMs: 0,
+		CursorItemID:           "",
+		PageLimit:              10,
+	})
+	if err != nil {
+		t.Fatalf("ListWorkflowAttentionCandidates: %v", err)
+	}
+	if len(global) != 0 {
+		t.Fatalf("linked workflows created attention candidates: %+v", global)
+	}
 }
 
 func newWorkflowAttentionCandidateStores(t *testing.T) (*metadata.Store, *workflowstore.Store, metadata.Binding, *time.Time) {

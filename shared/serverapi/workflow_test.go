@@ -481,11 +481,11 @@ func TestWorkflowAttentionQuestionPromptJSON(t *testing.T) {
 		Kind:                   "question",
 		Message:                "Choose",
 		Suggestions:            []string{"A", "B"},
-		RecommendedOptionIndex: 1,
+		RecommendedOptionIndex: textutil.Value(1),
 		Question: &WorkflowAttentionQuestionPrompt{
 			Kind:                   WorkflowAttentionQuestionKindOrdinary,
 			Suggestions:            []string{"A", "B"},
-			RecommendedOptionIndex: 1,
+			RecommendedOptionIndex: textutil.Value(1),
 		},
 		OccurredAtUnixMs: 1,
 	}

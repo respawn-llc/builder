@@ -189,8 +189,8 @@ func TestWorkflowPickerAndAttentionIncludeScriptPathDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAttention: %v", err)
 	}
-	if len(attention.Items) != 1 || attention.Items[0].Kind != "validation_blocker" || attention.Items[0].WorkflowID == nil || *attention.Items[0].WorkflowID != string(created.ID) {
-		t.Fatalf("attention items = %+v, want workflow validation blocker", attention.Items)
+	if len(attention.Items) != 0 {
+		t.Fatalf("attention items = %+v, want invalid workflow excluded from Inbox", attention.Items)
 	}
 }
 

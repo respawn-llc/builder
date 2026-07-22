@@ -1,7 +1,7 @@
 import type { AttentionNotificationEventHandler } from "./attentionNotifications";
 import { attentionNotificationRpcHandler } from "./attentionNotificationSubscription";
 import type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
-import { parseRpcResponse as parse } from "./clientParse";
+import { parseRpcResponse as parse, requireTaskBoundItems } from "./clientParse";
 import * as taskLifecycle from "./clientTaskLifecycle";
 import {
   workflowGraphDraftPayload,
@@ -496,11 +496,13 @@ export class ApiClient implements ApiService {
   }
 
   async listTaskAttention(taskID: string): Promise<TaskAttention> {
-    return parse(
+    const response = parse(
       "workflow.task.attention.list",
       taskAttentionSchema,
       await this.#transport.call("workflow.task.attention.list", { task_id: taskID }),
     );
+    requireTaskBoundItems(taskID, response.items);
+    return response;
   }
 
   async createTask(input: TaskMutationInput): Promise<string> {
@@ -581,7 +583,7 @@ export class ApiClient implements ApiService {
   }
 
   async listTaskActivity(taskID: string, pageToken: string): Promise<ActivityPage> {
-    return parse(
+    const response = parse(
       "workflow.task.activity.list",
       activityPageSchema,
       await this.#transport.call("workflow.task.activity.list", {
@@ -590,6 +592,8 @@ export class ApiClient implements ApiService {
         page_token: pageToken,
       }),
     );
+    requireTaskBoundItems(taskID, response.items);
+    return response;
   }
 
   async listTaskComments(taskID: string, pageToken: string): Promise<CommentPage> {

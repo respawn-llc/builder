@@ -10,6 +10,7 @@ import (
 	askquestion "core/server/tools"
 	"core/shared/clientui"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -29,9 +30,9 @@ type PendingPromptSource interface {
 // segment has no pending question matching the requested ask ID.
 var ErrPendingQuestionNotFound = errors.New("pending question was not found")
 
-func workflowQuestionAttentionItem(id string, projectID string, workflowID string, taskID string, shortID string, title string, runID string, sessionID string, askID string, question pendingQuestion, occurredAtUnixMs int64) serverapi.WorkflowAttentionItem {
+func workflowQuestionAttentionItem(id string, projectID string, workflowID string, taskID string, shortID string, title string, runID string, sessionID *string, askID string, question pendingQuestion, occurredAtUnixMs int64) serverapi.WorkflowAttentionItem {
 	workflowIDValue := workflowID
-	return serverapi.WorkflowAttentionItem{ID: id, Kind: "question", ProjectID: projectID, WorkflowID: &workflowIDValue, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, RunID: runID, SessionID: sessionID, AskID: askID, Message: question.message, Suggestions: question.suggestions, RecommendedOptionIndex: question.recommendedOptionIndex, Question: question.prompt, OccurredAtUnixMs: occurredAtUnixMs}
+	return serverapi.WorkflowAttentionItem{ID: id, Kind: "question", ProjectID: projectID, WorkflowID: &workflowIDValue, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, RunID: textutil.Pointer(&runID), SessionID: textutil.Pointer(sessionID), AskID: textutil.Pointer(&askID), Message: question.message, Suggestions: question.suggestions, RecommendedOptionIndex: textutil.Pointer(question.recommendedOptionIndex), Question: question.prompt, OccurredAtUnixMs: occurredAtUnixMs}
 }
 
 const pendingQuestionFallbackMessage = "Question pending; open the task to answer."
@@ -44,7 +45,7 @@ type pendingQuestionResolver struct {
 type pendingQuestion struct {
 	message                string
 	suggestions            []string
-	recommendedOptionIndex int
+	recommendedOptionIndex *int
 	prompt                 *serverapi.WorkflowAttentionQuestionPrompt
 }
 
@@ -113,14 +114,18 @@ func pendingQuestionFromRequest(req askquestion.AskQuestionRequest) (pendingQues
 		}, true, nil
 	}
 	suggestions := normalizedPendingQuestionSuggestions(req.Suggestions)
+	recommended, err := attentionRecommendedOptionIndex(req.RecommendedOptionIndex, len(suggestions))
+	if err != nil {
+		return pendingQuestion{}, true, fmt.Errorf("pending question %q: %w", req.ID, err)
+	}
 	return pendingQuestion{
 		message:                strings.TrimSpace(req.Question),
 		suggestions:            suggestions,
-		recommendedOptionIndex: req.RecommendedOptionIndex,
+		recommendedOptionIndex: recommended,
 		prompt: &serverapi.WorkflowAttentionQuestionPrompt{
 			Kind:                   serverapi.WorkflowAttentionQuestionKindOrdinary,
 			Suggestions:            suggestions,
-			RecommendedOptionIndex: req.RecommendedOptionIndex,
+			RecommendedOptionIndex: textutil.Pointer(recommended),
 		},
 	}, true, nil
 }
@@ -142,17 +147,31 @@ func askQuestionFromActiveTranscriptEntries(entries []runtime.ChatEntry, askID s
 			continue
 		}
 		if question := strings.TrimSpace(entry.ToolCall.Question); question != "" {
+			recommended, err := attentionRecommendedOptionIndex(entry.ToolCall.RecommendedOptionIndex, len(entry.ToolCall.Suggestions))
+			if err != nil {
+				return pendingQuestion{}
+			}
 			return pendingQuestion{
 				message:                question,
 				suggestions:            append([]string(nil), entry.ToolCall.Suggestions...),
-				recommendedOptionIndex: entry.ToolCall.RecommendedOptionIndex,
+				recommendedOptionIndex: recommended,
 				prompt: &serverapi.WorkflowAttentionQuestionPrompt{
 					Kind:                   serverapi.WorkflowAttentionQuestionKindOrdinary,
 					Suggestions:            append([]string(nil), entry.ToolCall.Suggestions...),
-					RecommendedOptionIndex: entry.ToolCall.RecommendedOptionIndex,
+					RecommendedOptionIndex: textutil.Pointer(recommended),
 				},
 			}
 		}
 	}
 	return pendingQuestion{}
+}
+
+func attentionRecommendedOptionIndex(index int, suggestionCount int) (*int, error) {
+	if index == 0 {
+		return nil, nil
+	}
+	if index < 1 || index > suggestionCount {
+		return nil, fmt.Errorf("recommended_option_index %d is invalid for %d suggestions", index, suggestionCount)
+	}
+	return &index, nil
 }

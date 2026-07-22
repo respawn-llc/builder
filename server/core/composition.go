@@ -246,10 +246,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: activity: %w", err)
 	}
 	workflowAttention, err := workflowview.NewAttention(
-		metadataStore,
-		workflowDefinitions,
+		metadataStore.Queries(),
 		workflowTaskProjector,
-		workflowRoleResolver,
 		workflowViewActiveTranscriptSource{views: sessionViewService},
 		workflowViewPendingPromptSource{prompts: runtimeRegistry},
 	)

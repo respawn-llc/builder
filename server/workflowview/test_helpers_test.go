@@ -330,6 +330,14 @@ func transcriptEntriesWithAsk(askID string, question string) []runtime.ChatEntry
 	return []runtime.ChatEntry{askTranscriptEntry(askID, question, nil, 0)}
 }
 
+func attentionStringEquals(value *string, want string) bool {
+	return value != nil && *value == want
+}
+
+func attentionIntEquals(value *int, want int) bool {
+	return value != nil && *value == want
+}
+
 func transcriptEntriesWithAskOptions(askID string, question string, suggestions []string, recommended int) []runtime.ChatEntry {
 	return []runtime.ChatEntry{askTranscriptEntry(askID, question, suggestions, recommended)}
 }
