@@ -118,6 +118,16 @@ type CompleteRunResult struct {
 	ResolvedInterruptedRunProjections     []InterruptedRunAttentionProjection
 }
 
+type CompletionHandoff struct {
+	SourceNodeDisplayName  string
+	DestinationDisplayName string
+}
+
+type CompleteRunOutcome struct {
+	Result  CompleteRunResult
+	Handoff CompletionHandoff
+}
+
 type TaskAttentionResolution struct {
 	ResolvedApprovalTransitionProjections []ApprovalTransitionProjection
 	ResolvedInterruptedRunProjections     []InterruptedRunAttentionProjection
@@ -599,12 +609,40 @@ func (s *Store) preflightInitialExecution(def workflow.Definition) error {
 	return WorkflowValidationError{Diagnostics: validation.BlockingErrors()}
 }
 
-func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (CompleteRunResult, error) {
+type preparedRunCompletion struct {
+	run           sqlitegen.TaskRunRecord
+	task          sqlitegen.TaskRecord
+	executionRoot *ExecutionRoot
+	snapshot      runStartSnapshot
+	group         transitionContractSnapshot
+}
+
+func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (CompleteRunOutcome, error) {
+	preparedRequest, err := prepareCompleteRunRequest(req)
+	if err != nil {
+		return CompleteRunOutcome{}, err
+	}
+	prepared, err := s.prepareRunCompletion(ctx, preparedRequest)
+	if err != nil {
+		return CompleteRunOutcome{}, err
+	}
+	handoff, err := completionHandoff(prepared.snapshot, prepared.group)
+	if err != nil {
+		return CompleteRunOutcome{}, err
+	}
+	result, err := s.completePreparedRun(ctx, preparedRequest, prepared)
+	if err != nil {
+		return CompleteRunOutcome{}, err
+	}
+	return CompleteRunOutcome{Result: result, Handoff: handoff}, nil
+}
+
+func prepareCompleteRunRequest(req CompleteRunRequest) (CompleteRunRequest, error) {
 	if strings.TrimSpace(string(req.RunID)) == "" {
-		return CompleteRunResult{}, errors.New("run id is required")
+		return CompleteRunRequest{}, errors.New("run id is required")
 	}
 	if len(req.Commentary) > workflow.MaxCommentaryBytes {
-		return CompleteRunResult{}, CompletionValidationError{Issues: []CompletionValidationIssue{{Code: CompletionCodeCommentaryTooLarge, Field: "commentary", Message: "commentary is too large"}}}
+		return CompleteRunRequest{}, CompletionValidationError{Issues: []CompletionValidationIssue{{Code: CompletionCodeCommentaryTooLarge, Field: "commentary", Message: "commentary is too large"}}}
 	}
 	issues := []CompletionValidationIssue{}
 	for _, name := range sortedStringKeys(req.OutputValues) {
@@ -617,47 +655,52 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (Comple
 		}
 	}
 	if len(issues) > 0 {
-		return CompleteRunResult{}, CompletionValidationError{Issues: issues}
+		return CompleteRunRequest{}, CompletionValidationError{Issues: issues}
 	}
 	actor := strings.TrimSpace(req.Actor)
 	if actor == "" {
 		actor = "agent"
 	}
 	if actor != "agent" && actor != "script" && actor != "user" && actor != "system" {
-		return CompleteRunResult{}, fmt.Errorf("unsupported transition actor %q", actor)
+		return CompleteRunRequest{}, fmt.Errorf("unsupported transition actor %q", actor)
 	}
 	if req.OutputValues == nil {
 		req.OutputValues = map[string]string{}
 	}
+	req.Actor = actor
+	return req, nil
+}
+
+func (s *Store) prepareRunCompletion(ctx context.Context, req CompleteRunRequest) (preparedRunCompletion, error) {
 	run, err := s.queries.GetTaskRun(ctx, string(req.RunID))
 	if err != nil {
-		return CompleteRunResult{}, err
+		return preparedRunCompletion{}, err
 	}
 	task, err := s.queries.GetTask(ctx, run.TaskID)
 	if err != nil {
-		return CompleteRunResult{}, err
+		return preparedRunCompletion{}, err
 	}
 	executionRoot, err := executionRootForLockedTaskIfPresent(ctx, s.queries, task)
 	if err != nil {
-		return CompleteRunResult{}, err
+		return preparedRunCompletion{}, err
 	}
 	if run.CompletedAtUnixMs.Valid {
-		return CompleteRunResult{}, ErrRunAlreadyCompleted
+		return preparedRunCompletion{}, ErrRunAlreadyCompleted
 	}
 	if run.InterruptedAtUnixMs.Valid {
-		return CompleteRunResult{}, errors.New("run already interrupted")
+		return preparedRunCompletion{}, errors.New("run already interrupted")
 	}
 	if req.RequireGeneration && run.RunGeneration != req.ExpectedGeneration {
-		return CompleteRunResult{}, fmt.Errorf("%w: got %d want %d", ErrStaleRunGeneration, req.ExpectedGeneration, run.RunGeneration)
+		return preparedRunCompletion{}, fmt.Errorf("%w: got %d want %d", ErrStaleRunGeneration, req.ExpectedGeneration, run.RunGeneration)
 	}
 	snapshot := runStartSnapshot{}
 	if err := workflow.UnmarshalString(run.RunStartSnapshotJson, &snapshot); err != nil {
-		return CompleteRunResult{}, err
+		return preparedRunCompletion{}, err
 	}
 	if snapshot.Node.Kind == workflow.NodeKindScript {
 		refreshed, err := s.liveScriptRunStartSnapshot(ctx, task, snapshot.Node.ID)
 		if err != nil {
-			return CompleteRunResult{}, err
+			return preparedRunCompletion{}, err
 		}
 		snapshot = refreshed
 	}
@@ -665,29 +708,70 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (Comple
 	availableGroups := snapshot.transitionGroupsForNode(snapshot.Node.ID)
 	if selectedTransitionID == "" {
 		if len(availableGroups) == 0 {
-			return CompleteRunResult{}, CompletionValidationError{Issues: []CompletionValidationIssue{{Code: CompletionCodeNoOutgoingTransition, Field: "transition_id", Message: "no outgoing transition is available in run-start snapshot"}}}
+			return preparedRunCompletion{}, CompletionValidationError{Issues: []CompletionValidationIssue{{Code: CompletionCodeNoOutgoingTransition, Field: "transition_id", Message: "no outgoing transition is available in run-start snapshot"}}}
 		}
 		if len(availableGroups) != 1 {
-			return CompleteRunResult{}, CompletionValidationError{Issues: []CompletionValidationIssue{{Code: CompletionCodeTransitionIDRequired, Field: "transition_id", Message: "transition id is required when multiple transitions are available"}}}
+			return preparedRunCompletion{}, CompletionValidationError{Issues: []CompletionValidationIssue{{Code: CompletionCodeTransitionIDRequired, Field: "transition_id", Message: "transition id is required when multiple transitions are available"}}}
 		}
 		selectedTransitionID = availableGroups[0].TransitionID
 	}
 	group, ok := snapshot.transitionByID(selectedTransitionID)
 	if !ok {
-		return CompleteRunResult{}, CompletionValidationError{Issues: []CompletionValidationIssue{{Code: CompletionCodeInvalidTransitionID, Field: "transition_id", Message: fmt.Sprintf("transition %q is not available in run-start snapshot", selectedTransitionID)}}}
+		return preparedRunCompletion{}, CompletionValidationError{Issues: []CompletionValidationIssue{{Code: CompletionCodeInvalidTransitionID, Field: "transition_id", Message: fmt.Sprintf("transition %q is not available in run-start snapshot", selectedTransitionID)}}}
 	}
+	issues := []CompletionValidationIssue{}
 	issues = append(issues, knownOutputIssues(group, req.OutputValues)...)
 	issues = append(issues, requiredOutputIssues(group, req.OutputValues)...)
 	if len(issues) > 0 {
-		return CompleteRunResult{}, CompletionValidationError{Issues: issues}
+		return preparedRunCompletion{}, CompletionValidationError{Issues: issues}
 	}
 	if supportIssues := group.unsupportedRuntimeIssues(); len(supportIssues) > 0 {
 		issues := make([]CompletionValidationIssue, 0, len(supportIssues))
 		for _, issue := range supportIssues {
 			issues = append(issues, CompletionValidationIssue{Code: string(issue.Code), Field: "transition_id", Message: issue.Message})
 		}
-		return CompleteRunResult{}, CompletionValidationError{Issues: issues}
+		return preparedRunCompletion{}, CompletionValidationError{Issues: issues}
 	}
+	return preparedRunCompletion{
+		run:           run,
+		task:          task,
+		executionRoot: executionRoot,
+		snapshot:      snapshot,
+		group:         group,
+	}, nil
+}
+
+func completionHandoff(snapshot runStartSnapshot, group transitionContractSnapshot) (CompletionHandoff, error) {
+	source := strings.TrimSpace(snapshot.Node.DisplayName)
+	if source == "" {
+		return CompletionHandoff{}, fmt.Errorf("derive completion handoff: source node %q has a blank display name", snapshot.Node.ID)
+	}
+	switch len(group.Edges) {
+	case 0:
+		return CompletionHandoff{}, fmt.Errorf("derive completion handoff: transition %q has no target edges", group.TransitionID)
+	case 1:
+		destination := strings.TrimSpace(group.Edges[0].TargetNode.DisplayName)
+		if destination == "" {
+			return CompletionHandoff{}, fmt.Errorf("derive completion handoff: ordinary transition %q target node %q has a blank display name", group.TransitionID, group.Edges[0].TargetNode.ID)
+		}
+		return CompletionHandoff{SourceNodeDisplayName: source, DestinationDisplayName: destination}, nil
+	default:
+		destination := strings.TrimSpace(group.DisplayName)
+		if group.SharedTargetNodeGroupDisplayName != nil {
+			destination = strings.TrimSpace(*group.SharedTargetNodeGroupDisplayName)
+		}
+		if destination == "" {
+			return CompletionHandoff{}, fmt.Errorf("derive completion handoff: fanout transition %q has a blank destination display name", group.TransitionID)
+		}
+		return CompletionHandoff{SourceNodeDisplayName: source, DestinationDisplayName: destination}, nil
+	}
+}
+
+func (s *Store) completePreparedRun(ctx context.Context, req CompleteRunRequest, prepared preparedRunCompletion) (CompleteRunResult, error) {
+	run := prepared.run
+	executionRoot := prepared.executionRoot
+	snapshot := prepared.snapshot
+	group := prepared.group
 	outputValuesJSON, err := workflow.MarshalString(req.OutputValues)
 	if err != nil {
 		return CompleteRunResult{}, err
@@ -727,7 +811,7 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (Comple
 	if err := touchTaskUpdatedAt(ctx, q, run.TaskID, now); err != nil {
 		return CompleteRunResult{}, err
 	}
-	if err := q.InsertTaskTransition(ctx, sqlitegen.InsertTaskTransitionParams{ID: transitionID, TaskID: run.TaskID, SourceRunID: sql.NullString{String: run.ID, Valid: true}, SourcePlacementID: sql.NullString{String: run.PlacementID, Valid: true}, SourceNodeKey: string(snapshot.Node.Key), SourceNodeDisplayName: snapshot.Node.DisplayName, TransitionID: group.TransitionID, TransitionDisplayName: group.DisplayName, WorkflowRevisionSeen: snapshot.WorkflowRevisionSeen, Actor: actor, State: transitionState, Commentary: strings.TrimSpace(req.Commentary), OutputValuesJson: outputValuesJSON, CreatedAtUnixMs: now, AppliedAtUnixMs: appliedAt}); err != nil {
+	if err := q.InsertTaskTransition(ctx, sqlitegen.InsertTaskTransitionParams{ID: transitionID, TaskID: run.TaskID, SourceRunID: sql.NullString{String: run.ID, Valid: true}, SourcePlacementID: sql.NullString{String: run.PlacementID, Valid: true}, SourceNodeKey: string(snapshot.Node.Key), SourceNodeDisplayName: snapshot.Node.DisplayName, TransitionID: group.TransitionID, TransitionDisplayName: group.DisplayName, WorkflowRevisionSeen: snapshot.WorkflowRevisionSeen, Actor: req.Actor, State: transitionState, Commentary: strings.TrimSpace(req.Commentary), OutputValuesJson: outputValuesJSON, CreatedAtUnixMs: now, AppliedAtUnixMs: appliedAt}); err != nil {
 		return CompleteRunResult{}, fmt.Errorf("insert completion transition: %w", err)
 	}
 	result := CompleteRunResult{TransitionID: workflow.TransitionID(transitionID), State: transitionState, RequiresApproval: requiresApproval}

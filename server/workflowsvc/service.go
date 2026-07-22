@@ -1155,7 +1155,7 @@ func (s *Service) CompleteWorkflowTask(ctx context.Context, req serverapi.Workfl
 	if err != nil {
 		return serverapi.WorkflowTaskCompleteResponse{}, err
 	}
-	s.finalizeWorkflowAttention(ctx, completed)
+	s.finalizeWorkflowAttention(ctx, completed.Result)
 	if req.ActorKind == serverapi.WorkflowTaskCompleteActorUser {
 		notifyScheduler := true
 		if requester, ok := s.runtimeCancel.(taskRuntimeRunCancelRequester); ok {
@@ -1170,12 +1170,16 @@ func (s *Service) CompleteWorkflowTask(ctx context.Context, req serverapi.Workfl
 		}
 	}
 	return serverapi.WorkflowTaskCompleteResponse{
-		TransitionID: string(completed.TransitionID),
+		TransitionID: string(completed.Result.TransitionID),
 		TaskID:       taskID,
 		RunID:        string(target.Run.ID),
-		State:        completed.State,
-		PlacementIDs: placementIDs(completed.PlacementIDs),
-		RunIDs:       runIDs(completed.RunIDs),
+		State:        completed.Result.State,
+		PlacementIDs: placementIDs(completed.Result.PlacementIDs),
+		RunIDs:       runIDs(completed.Result.RunIDs),
+		Handoff: serverapi.WorkflowTaskCompletionHandoff{
+			SourceNodeDisplayName:  completed.Handoff.SourceNodeDisplayName,
+			DestinationDisplayName: completed.Handoff.DestinationDisplayName,
+		},
 	}, nil
 }
 

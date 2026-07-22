@@ -931,12 +931,18 @@ type WorkflowTaskCompleteRequest struct {
 }
 
 type WorkflowTaskCompleteResponse struct {
-	TransitionID string   `json:"transition_id"`
-	TaskID       string   `json:"task_id"`
-	RunID        string   `json:"run_id"`
-	State        string   `json:"state"`
-	PlacementIDs []string `json:"placement_ids,omitempty"`
-	RunIDs       []string `json:"run_ids,omitempty"`
+	TransitionID string                        `json:"transition_id"`
+	TaskID       string                        `json:"task_id"`
+	RunID        string                        `json:"run_id"`
+	State        string                        `json:"state"`
+	PlacementIDs []string                      `json:"placement_ids,omitempty"`
+	RunIDs       []string                      `json:"run_ids,omitempty"`
+	Handoff      WorkflowTaskCompletionHandoff `json:"handoff"`
+}
+
+type WorkflowTaskCompletionHandoff struct {
+	SourceNodeDisplayName  string `json:"source_node_display_name"`
+	DestinationDisplayName string `json:"destination_display_name"`
 }
 
 type WorkflowTaskCancelRequest struct {

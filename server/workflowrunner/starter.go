@@ -50,7 +50,7 @@ type RuntimeStore interface {
 	SetRunEffectiveCompletionMode(context.Context, workflow.RunID, int64, string) error
 	SetRunWaitingAsk(context.Context, workflow.RunID, int64, string) error
 	ClearRunWaitingAsk(context.Context, workflow.RunID, int64, string) error
-	CompleteRun(context.Context, workflowstore.CompleteRunRequest) (workflowstore.CompleteRunResult, error)
+	CompleteRun(context.Context, workflowstore.CompleteRunRequest) (workflowstore.CompleteRunOutcome, error)
 	RecordProtocolViolation(context.Context, workflowstore.RecordProtocolViolationRequest) (workflowstore.RecordProtocolViolationResult, error)
 	ResetProtocolViolationBudget(context.Context, workflowstore.ResetProtocolViolationBudgetRequest) error
 	CountTaskComments(context.Context, workflow.TaskID) (int64, error)

@@ -13,7 +13,7 @@ use tungstenite::Message;
 
 #[test]
 fn rust_protocol_version_matches_attachment_contract() {
-    assert_eq!(PROTOCOL_VERSION, "66");
+    assert_eq!(PROTOCOL_VERSION, "67");
 }
 
 #[test]
