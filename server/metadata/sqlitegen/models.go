@@ -20,6 +20,14 @@ type Project struct {
 	PrimaryWorkspaceID           string
 }
 
+type ProjectLabel struct {
+	ID              string
+	ProjectID       string
+	Name            string
+	CreatedAtUnixMs int64
+	UpdatedAtUnixMs int64
+}
+
 type ProjectWorkflowLink struct {
 	ID              string
 	ProjectID       string
@@ -106,6 +114,11 @@ type TaskComment struct {
 	AuthorID        string
 	CreatedAtUnixMs int64
 	UpdatedAtUnixMs int64
+}
+
+type TaskLabelAssignment struct {
+	TaskID  string
+	LabelID string
 }
 
 type TaskNodePlacement struct {

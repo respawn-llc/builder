@@ -367,8 +367,8 @@ async function renderActiveBoard(frames: FakeAnimationFrames) {
       services.transport.emit("workflow.project", {
         event: {
           action: "updated",
-          changed_ids: ["task-1"],
           occurred_at_unix_ms: 1,
+          primary_entity_id: "task-1",
           project_id: "project-1",
           resource: "task",
           workflow_id: "workflow-1",
@@ -556,6 +556,7 @@ const sourceCard = {
     can_cancel: true,
     manual_move_target_node_ids: ["recon"],
   },
+  label_ids: [],
   updated_at_unix_ms: 1,
 };
 

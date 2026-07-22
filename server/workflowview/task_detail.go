@@ -14,6 +14,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/shared/clientui"
 	"core/shared/serverapi"
 )
 
@@ -103,6 +104,10 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
+	labelIDsByTask, err := loadTaskLabelIDsByTask(ctx, d.queries, []string{task.ID})
+	if err != nil {
+		return serverapi.WorkflowTaskDetail{}, err
+	}
 	currentRunFacts, err := d.queries.ListWorkflowTaskCurrentRunFacts(ctx, task.ID)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
@@ -163,6 +168,7 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 		CurrentScripts:    make([]serverapi.WorkflowTaskCurrentScript, 0, len(currentExecutions)),
 		Status:            statusFact.Status,
 		Actions:           taskDetailActions(task, statusFact, len(currentExecutions) != 0),
+		LabelIDs:          labelIDsByTask[task.ID],
 		AttentionCount:    int(attentionCount),
 	}
 	for _, execution := range currentExecutions {
@@ -300,7 +306,7 @@ func (d *TaskDetail) sourceWorkspace(ctx context.Context, task sqlitegen.TaskRec
 			WorkspaceID:     row.ID,
 			DisplayName:     displayName,
 			RootPath:        row.CanonicalRootPath,
-			Availability:    string(metadata.PathAvailability(row.CanonicalRootPath)),
+			Availability:    string(clientui.ProjectAvailabilityAvailable),
 			IsPrimary:       row.ID == primaryWorkspaceID,
 			UpdatedAtUnixMs: row.UpdatedAtUnixMs,
 		}, nil

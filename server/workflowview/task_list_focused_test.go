@@ -90,8 +90,12 @@ func TestTaskListQueriesFilterAndSortProjectedRowsThroughFocusedModule(t *testin
 			narrowed:       narrowedFacts,
 			statusKinds:    statusKinds,
 			attentionKinds: attentionKinds,
-			sortSelectors:  sortSelectors,
-			limit:          100,
+			labelFilter: workflowTaskLabelFilterFacts{
+				Kind:     serverapi.WorkflowTaskLabelFilterKindNone,
+				LabelIDs: []string{},
+			},
+			sortSelectors: sortSelectors,
+			limit:         100,
 		})
 		if err != nil {
 			t.Fatalf("queryRows: %v", err)
@@ -210,9 +214,10 @@ func TestTaskListScopesAndContinuationsThroughFocusedInterface(t *testing.T) {
 	}}
 
 	projectWide, err := taskList.List(ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID: &projectID,
-		PageSize:  1,
-		Sort:      sortByTitle,
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		ProjectID:   &projectID,
+		PageSize:    1,
+		Sort:        sortByTitle,
 	})
 	if err != nil {
 		t.Fatalf("List project-wide: %v", err)
@@ -227,9 +232,10 @@ func TestTaskListScopesAndContinuationsThroughFocusedInterface(t *testing.T) {
 		t.Fatalf("project-wide first page = %+v", projectWide)
 	}
 	continued, err := taskList.List(ctx, serverapi.WorkflowTaskListRequest{
-		PageToken: *projectWide.NextPageToken,
-		PageSize:  10,
-		Sort:      sortByTitle,
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		PageToken:   *projectWide.NextPageToken,
+		PageSize:    10,
+		Sort:        sortByTitle,
 	})
 	if err != nil {
 		t.Fatalf("List inferred continuation scope: %v", err)
@@ -243,6 +249,7 @@ func TestTaskListScopesAndContinuationsThroughFocusedInterface(t *testing.T) {
 		t.Fatalf("project-wide continuation = %+v", continued)
 	}
 	if _, err := taskList.List(ctx, serverapi.WorkflowTaskListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
 		PageToken:   *projectWide.NextPageToken,
 		PageSize:    10,
 		Sort:        sortByTitle,
@@ -253,11 +260,12 @@ func TestTaskListScopesAndContinuationsThroughFocusedInterface(t *testing.T) {
 
 	firstWorkflowIDString := string(firstWorkflowID)
 	narrowed, err := taskList.List(ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID:  &projectID,
-		WorkflowID: &firstWorkflowIDString,
-		ColumnKeys: []string{"backlog"},
-		PageSize:   1,
-		Sort:       sortByTitle,
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		ProjectID:   &projectID,
+		WorkflowID:  &firstWorkflowIDString,
+		ColumnKeys:  []string{"backlog"},
+		PageSize:    1,
+		Sort:        sortByTitle,
 	})
 	if err != nil {
 		t.Fatalf("List narrowed: %v", err)
@@ -281,9 +289,10 @@ func TestTaskListScopesAndContinuationsThroughFocusedInterface(t *testing.T) {
 		t.Fatalf("AddNode stale token mutation: %v", err)
 	}
 	if _, err := taskList.List(ctx, serverapi.WorkflowTaskListRequest{
-		PageToken: *narrowed.NextPageToken,
-		PageSize:  10,
-		Sort:      sortByTitle,
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		PageToken:   *narrowed.NextPageToken,
+		PageSize:    10,
+		Sort:        sortByTitle,
 	}); !errors.Is(err, ErrInvalidPageToken) {
 		t.Fatalf("stale narrowed continuation error = %v, want ErrInvalidPageToken", err)
 	}
@@ -291,17 +300,19 @@ func TestTaskListScopesAndContinuationsThroughFocusedInterface(t *testing.T) {
 	unlinkedWorkflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
 	unlinkedWorkflowIDString := string(unlinkedWorkflowID)
 	_, err = taskList.List(ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID:  &projectID,
-		WorkflowID: &unlinkedWorkflowIDString,
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		ProjectID:   &projectID,
+		WorkflowID:  &unlinkedWorkflowIDString,
 	})
 	var scopeErr *serverapi.WorkflowTaskListScopeError
 	if !errors.As(err, &scopeErr) || scopeErr.Reason != serverapi.WorkflowTaskListScopeReasonWorkflowNotLinked {
 		t.Fatalf("unlinked workflow error = %+v", err)
 	}
 	_, err = taskList.List(ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID:  &projectID,
-		WorkflowID: &firstWorkflowIDString,
-		ColumnKeys: []string{"missing"},
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		ProjectID:   &projectID,
+		WorkflowID:  &firstWorkflowIDString,
+		ColumnKeys:  []string{"missing"},
 	})
 	var validationErr serverapi.WorkflowRequestValidationError
 	if !errors.As(err, &validationErr) || validationErr.Field != "column_keys[0]" {

@@ -266,6 +266,7 @@ func TestWorkflowTaskDetailKeepsRecordedWorktreePathOffBoardCards(t *testing.T) 
 
 func TestWorkflowTaskGetResponseValidatesExecutionTarget(t *testing.T) {
 	valid := WorkflowTaskGetResponse{Task: WorkflowTaskDetail{
+		Summary:           WorkflowTaskSummary{ID: "task-1"},
 		CurrentSessionIDs: []string{},
 		CurrentScripts:    []WorkflowTaskCurrentScript{},
 		ExecutionTarget: &WorkflowExecutionTarget{
@@ -314,6 +315,7 @@ func TestWorkflowTaskGetResponseAcceptsEveryCurrentExecutionTarget(t *testing.T)
 		})
 	}
 	response := WorkflowTaskGetResponse{Task: WorkflowTaskDetail{
+		Summary:           WorkflowTaskSummary{ID: "task-1"},
 		CurrentSessionIDs: currentSessionIDs,
 		CurrentScripts:    currentScripts,
 	}}

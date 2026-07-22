@@ -83,6 +83,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		request := serverapi.WorkflowTaskListRequest{
 			ProjectID:      &projectID,
 			WorkflowID:     selectedWorkflowID,
+			LabelFilter:    serverapi.WorkflowTaskLabelFilterNone(),
 			ColumnKeys:     columnKeys,
 			StatusKinds:    statusKinds,
 			AttentionKinds: attentionKinds,

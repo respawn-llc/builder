@@ -17,6 +17,7 @@ import type {
   WorkflowBoard,
   ProjectWorkflowLink,
 } from "../models";
+import type { TaskListPage } from "../workflowLabels";
 import {
   attentionItemSchema,
   boardCardSchema,
@@ -31,11 +32,13 @@ import {
   taskActionsSchema,
   taskStatusSchema,
   transitionSchema,
+  workflowGraphNodeLimit,
   workflowPickerItemSchema,
   workspaceSummarySchema,
 } from "./common";
 import { emptyArray } from "./workflowHelpers";
 import { workflowExecutionTargetSchema } from "./workflowExecutionTarget";
+import { labelIDListSchema } from "./workflowLabels";
 
 const boardGroupsSchema = z
   .array(boardGroupSchema)
@@ -53,6 +56,60 @@ const workflowPickerSchema = z
   .array(workflowPickerItemSchema)
   .nullish()
   .transform((value) => value ?? []);
+
+export const taskListPageSchema: z.ZodType<TaskListPage> = z
+  .object({
+    scope: z
+      .object({
+        project_id: z.string().min(1),
+        workflow_id: z.string().min(1).optional(),
+      })
+      .strict(),
+    matching_workflow_cardinality: z.enum(["none", "one", "multiple"]),
+    next_page_token: z.string().min(1).nullable().optional(),
+    generated_at_unix_ms: z.number(),
+    tasks: z.array(
+      z
+        .object({
+          task_id: z.string().min(1),
+          short_id: z.string().min(1),
+          workflow_id: z.string().min(1),
+          workflow_name: z.string().min(1).optional(),
+          title: z.string(),
+          created_at_unix_ms: z.number(),
+          updated_at_unix_ms: z.number(),
+          column_keys: z.array(z.string()).optional(),
+          status: taskStatusSchema,
+          run_count: z.number().int().nonnegative(),
+          label_ids: labelIDListSchema,
+        })
+        .strict()
+        .transform((value) => ({
+          id: value.task_id,
+          shortID: value.short_id,
+          workflowID: value.workflow_id,
+          workflowName: value.workflow_name ?? null,
+          title: value.title,
+          createdAt: value.created_at_unix_ms,
+          updatedAt: value.updated_at_unix_ms,
+          columnKeys: value.column_keys ?? null,
+          status: value.status,
+          runCount: value.run_count,
+          labelIDs: value.label_ids,
+        })),
+    ),
+  })
+  .strict()
+  .transform((value) => ({
+    scope: {
+      projectID: value.scope.project_id,
+      workflowID: value.scope.workflow_id ?? null,
+    },
+    matchingWorkflowCardinality: value.matching_workflow_cardinality,
+    nextPageToken: value.next_page_token ?? null,
+    generatedAt: value.generated_at_unix_ms,
+    tasks: value.tasks,
+  }));
 
 const unavailableCauseSchema = z.enum([
   "invalid_revision",
@@ -356,6 +413,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
       ),
       status: taskStatusSchema,
       actions: taskActionsSchema,
+      label_ids: labelIDListSchema,
       attention_count: z.number().int().nonnegative(),
     }),
   })
@@ -373,6 +431,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
     sourceWorkspace: value.task.source_workspace,
     status: value.task.status,
     actions: value.task.actions,
+    labelIDs: value.task.label_ids,
     attentionCount: value.task.attention_count,
     executionTarget: value.task.execution_target,
     worktreePath: value.task.worktree_path,

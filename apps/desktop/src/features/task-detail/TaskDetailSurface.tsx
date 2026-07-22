@@ -1,8 +1,11 @@
+import { useCallback, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage } from "@/api";
 import { useOpenExternalLink } from "@/app-facade";
 import type { TaskDetailInitialFocus } from "@/app-facade";
+import { useStatusController } from "@/app-facade";
+import { ProjectLabelsProvider, TaskLabelAssignmentProvider, useProjectLabelCatalog } from "@/shared/labels";
 import { ErrorState, LoadingState } from "@/ui";
 import { TaskDetailContent } from "./TaskDetailContent";
 import { useTaskActivity, useTaskAttention, useTaskComments, useTaskDetail } from "./useTaskDetailData";
@@ -16,6 +19,19 @@ export type TaskDetailSurfaceProps = Readonly<{
 
 export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: TaskDetailSurfaceProps) {
   const { t } = useTranslation();
+  const { push } = useStatusController();
+  const reportLabelError = useCallback(
+    (error: unknown) => {
+      push({
+        body: errorMessage(error),
+        durationMs: Infinity,
+        id: "task-label-load-error",
+        title: t("labels.loadFailed"),
+        tone: "danger",
+      });
+    },
+    [push, t],
+  );
   const detail = useTaskDetail(taskId, enabled);
   const attention = useTaskAttention(taskId, enabled);
   const activity = useTaskActivity(taskId, enabled);
@@ -29,15 +45,23 @@ export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: 
     return <ErrorState body={errorMessage(detail.error)} reveal={false} title={t("states.error")} />;
   }
   const content = (
-    <TaskDetailContent
-      activity={activity}
-      attention={attention}
-      comments={comments}
-      detail={detail.data}
-      initialFocus={initialFocus}
-      onMutated={onMutated}
-      openLink={openLink}
-    />
+    <ProjectLabelsProvider onBackgroundError={reportLabelError} projectID={detail.data.projectID}>
+      <TaskDetailAssignmentScope
+        initialLabelIDs={detail.data.labelIDs}
+        taskID={detail.data.id}
+        workflowID={detail.data.workflowID}
+      >
+        <TaskDetailContent
+          activity={activity}
+          attention={attention}
+          comments={comments}
+          detail={detail.data}
+          initialFocus={initialFocus}
+          onMutated={onMutated}
+          openLink={openLink}
+        />
+      </TaskDetailAssignmentScope>
+    </ProjectLabelsProvider>
   );
   if (!attention.isError) {
     return content;
@@ -56,5 +80,29 @@ export function TaskDetailSurface({ taskId, enabled, initialFocus, onMutated }: 
       />
       <div className="min-h-0">{content}</div>
     </div>
+  );
+}
+
+function TaskDetailAssignmentScope({
+  children,
+  initialLabelIDs,
+  taskID,
+  workflowID,
+}: Readonly<{
+  children: ReactNode;
+  initialLabelIDs: readonly string[];
+  taskID: string;
+  workflowID: string;
+}>) {
+  const catalog = useProjectLabelCatalog();
+  return (
+    <TaskLabelAssignmentProvider
+      catalog={catalog.data ?? null}
+      initialLabelIDs={initialLabelIDs}
+      taskID={taskID}
+      workflowID={workflowID}
+    >
+      {children}
+    </TaskLabelAssignmentProvider>
   );
 }

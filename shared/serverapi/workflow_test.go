@@ -357,22 +357,26 @@ func TestWorkflowBoardCardJSONContainsNestedMarkdownPreviewAndNullableCursors(t 
 	}
 
 	_, requestShape := marshalWorkflowJSON[map[string]any](t, WorkflowBoardNodeCardsListRequest{
-		ProjectID:  "project-1",
-		WorkflowID: "workflow-1",
-		NodeID:     "node-1",
+		ProjectID:   "project-1",
+		WorkflowID:  "workflow-1",
+		NodeID:      "node-1",
+		LabelFilter: WorkflowTaskLabelFilterNone(),
 	})
 	if value, ok := requestShape["page_token"]; !ok || value != nil {
 		t.Fatalf("request page_token JSON = %#v, want explicit null", value)
 	}
+	if _, ok := requestShape["label_filter"].(map[string]any); !ok {
+		t.Fatalf("request label_filter JSON = %#v, want tagged filter", requestShape["label_filter"])
+	}
 }
 
 func TestWorkflowBoardNodeCardsRequestCapsPageSizeAt25(t *testing.T) {
-	testValidWorkflowRequests(t, []workflowValidRequestCase{{name: "25 cards", request: WorkflowBoardNodeCardsListRequest{ProjectID: "project-1", WorkflowID: "workflow-1", NodeID: "node-1", PageSize: 25}}})
-	testWorkflowFieldErrors(t, []workflowFieldErrorCase{{name: "26 cards", request: WorkflowBoardNodeCardsListRequest{ProjectID: "project-1", WorkflowID: "workflow-1", NodeID: "node-1", PageSize: 26}, field: "page_size", code: WorkflowRequestErrorInvalidMode}})
+	testValidWorkflowRequests(t, []workflowValidRequestCase{{name: "25 cards", request: WorkflowBoardNodeCardsListRequest{ProjectID: "project-1", WorkflowID: "workflow-1", NodeID: "node-1", LabelFilter: WorkflowTaskLabelFilterNone(), PageSize: 25}}})
+	testWorkflowFieldErrors(t, []workflowFieldErrorCase{{name: "26 cards", request: WorkflowBoardNodeCardsListRequest{ProjectID: "project-1", WorkflowID: "workflow-1", NodeID: "node-1", LabelFilter: WorkflowTaskLabelFilterNone(), PageSize: 26}, field: "page_size", code: WorkflowRequestErrorInvalidMode}})
 }
 
 func TestWorkflowBoardRequestOptionalWorkflowSelectionJSONAndValidation(t *testing.T) {
-	omitted := WorkflowBoardRequest{ProjectID: "project-1"}
+	omitted := WorkflowBoardRequest{ProjectID: "project-1", LabelFilter: WorkflowTaskLabelFilterNone()}
 	raw, omittedShape := marshalWorkflowJSON[map[string]any](t, omitted)
 	if _, ok := omittedShape["workflow_id"]; ok {
 		t.Fatalf("omitted workflow_id present in request JSON: %s", raw)
@@ -392,7 +396,7 @@ func TestWorkflowBoardRequestOptionalWorkflowSelectionJSONAndValidation(t *testi
 		{name: "trailing whitespace", value: "workflow-1 ", code: WorkflowRequestErrorInvalidValue},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			request := WorkflowBoardRequest{ProjectID: "project-1", WorkflowID: &tt.value}
+			request := WorkflowBoardRequest{ProjectID: "project-1", WorkflowID: &tt.value, LabelFilter: WorkflowTaskLabelFilterNone()}
 			if err := request.Validate(); !isWorkflowFieldError(err, "workflow_id", tt.code) {
 				t.Fatalf("validation error = %#v, want %s on workflow_id", err, tt.code)
 			}
@@ -400,7 +404,7 @@ func TestWorkflowBoardRequestOptionalWorkflowSelectionJSONAndValidation(t *testi
 	}
 
 	workflowID := "workflow-1"
-	selected := WorkflowBoardRequest{ProjectID: "project-1", WorkflowID: &workflowID}
+	selected := WorkflowBoardRequest{ProjectID: "project-1", WorkflowID: &workflowID, LabelFilter: WorkflowTaskLabelFilterNone()}
 	raw, selectedShape := marshalWorkflowJSON[map[string]any](t, selected)
 	if selectedShape["workflow_id"] != workflowID {
 		t.Fatalf("workflow_id = %#v, want %q", selectedShape["workflow_id"], workflowID)
@@ -543,9 +547,11 @@ func TestWorkflowAttentionQuestionPromptJSON(t *testing.T) {
 func TestWorkflowTaskListRequestValidation(t *testing.T) {
 	projectID := "project-1"
 	workflowID := "workflow-1"
+	noneFilter := WorkflowTaskLabelFilterNone()
 	valid := WorkflowTaskListRequest{
 		ProjectID:   &projectID,
 		WorkflowID:  &workflowID,
+		LabelFilter: WorkflowTaskLabelFilterNone(),
 		PageSize:    WorkflowTaskListMaxPageSize,
 		PageToken:   "token",
 		ColumnKeys:  []string{"backlog", "plan"},
@@ -570,29 +576,32 @@ func TestWorkflowTaskListRequestValidation(t *testing.T) {
 			t.Fatalf("task list request JSON missing %s: %s", key, validJSON)
 		}
 	}
+	if labelFilter, ok := validShape["label_filter"].(map[string]any); !ok || labelFilter["kind"] != string(WorkflowTaskLabelFilterKindNone) {
+		t.Fatalf("task list label_filter = %#v, want tagged none", validShape["label_filter"])
+	}
 	for _, key := range []string{"status_keys", "run_statuses"} {
 		if _, ok := validShape[key]; ok {
 			t.Fatalf("task list request JSON unexpectedly contains %s: %s", key, validJSON)
 		}
 	}
-	if err := (WorkflowTaskListRequest{ProjectID: &projectID}).Validate(); err != nil {
+	if err := (WorkflowTaskListRequest{ProjectID: &projectID, LabelFilter: WorkflowTaskLabelFilterNone()}).Validate(); err != nil {
 		t.Fatalf("request with default sort rejected: %v", err)
 	}
 
 	testWorkflowFieldErrors(t, []workflowFieldErrorCase{
-		{name: "project scope required without continuation token", request: WorkflowTaskListRequest{}, field: "project_id", code: WorkflowRequestErrorRequired},
-		{name: "workflow requires project on first page", request: WorkflowTaskListRequest{WorkflowID: &workflowID}, field: "project_id", code: WorkflowRequestErrorRequired},
-		{name: "negative page size", request: WorkflowTaskListRequest{ProjectID: &projectID, PageSize: -1}, field: "page_size", code: WorkflowRequestErrorInvalidMode},
-		{name: "oversized page size", request: WorkflowTaskListRequest{ProjectID: &projectID, PageSize: WorkflowTaskListMaxPageSize + 1}, field: "page_size", code: WorkflowRequestErrorInvalidMode},
-		{name: "page token whitespace", request: WorkflowTaskListRequest{ProjectID: &projectID, PageToken: " token"}, field: "page_token", code: WorkflowRequestErrorInvalidMode},
-		{name: "invalid sort field", request: WorkflowTaskListRequest{ProjectID: &projectID, Sort: []WorkflowTaskListSort{{Field: "priority", Direction: WorkflowTaskListSortDirectionAsc}}}, field: "sort[0].field", code: WorkflowRequestErrorInvalidValue},
-		{name: "invalid sort direction", request: WorkflowTaskListRequest{ProjectID: &projectID, Sort: []WorkflowTaskListSort{{Field: WorkflowTaskListSortFieldCreated, Direction: "up"}}}, field: "sort[0].direction", code: WorkflowRequestErrorInvalidValue},
-		{name: "duplicate sort field", request: WorkflowTaskListRequest{ProjectID: &projectID, Sort: []WorkflowTaskListSort{{Field: WorkflowTaskListSortFieldTitle, Direction: WorkflowTaskListSortDirectionAsc}, {Field: WorkflowTaskListSortFieldTitle, Direction: WorkflowTaskListSortDirectionDesc}}}, field: "sort[1].field", code: WorkflowRequestErrorInvalidValue},
-		{name: "too many sort fields", request: WorkflowTaskListRequest{ProjectID: &projectID, Sort: []WorkflowTaskListSort{{Field: WorkflowTaskListSortFieldCreated, Direction: WorkflowTaskListSortDirectionAsc}, {Field: WorkflowTaskListSortFieldUpdated, Direction: WorkflowTaskListSortDirectionAsc}, {Field: WorkflowTaskListSortFieldStatus, Direction: WorkflowTaskListSortDirectionAsc}, {Field: WorkflowTaskListSortFieldColumn, Direction: WorkflowTaskListSortDirectionAsc}, {Field: WorkflowTaskListSortFieldRunCount, Direction: WorkflowTaskListSortDirectionAsc}, {Field: WorkflowTaskListSortFieldTitle, Direction: WorkflowTaskListSortDirectionAsc}}}, field: "sort", code: WorkflowRequestErrorInvalidValue},
-		{name: "invalid task status", request: WorkflowTaskListRequest{ProjectID: &projectID, StatusKinds: []WorkflowTaskStatusKind{"waiting"}}, field: "status_kinds[0]", code: WorkflowRequestErrorInvalidValue},
-		{name: "invalid attention kind", request: WorkflowTaskListRequest{ProjectID: &projectID, AttentionKinds: []WorkflowTaskAttentionKind{"waiting"}}, field: "attention_kinds[0]", code: WorkflowRequestErrorInvalidValue},
-		{name: "blank column key", request: WorkflowTaskListRequest{ProjectID: &projectID, ColumnKeys: []string{" "}}, field: "column_keys[0]", code: WorkflowRequestErrorInvalidKey},
-		{name: "invalid column key syntax", request: WorkflowTaskListRequest{ProjectID: &projectID, ColumnKeys: []string{"Plan"}}, field: "column_keys[0]", code: WorkflowRequestErrorInvalidKey},
+		{name: "project scope required without continuation token", request: WorkflowTaskListRequest{LabelFilter: noneFilter}, field: "project_id", code: WorkflowRequestErrorRequired},
+		{name: "workflow requires project on first page", request: WorkflowTaskListRequest{WorkflowID: &workflowID, LabelFilter: noneFilter}, field: "project_id", code: WorkflowRequestErrorRequired},
+		{name: "negative page size", request: WorkflowTaskListRequest{ProjectID: &projectID, LabelFilter: noneFilter, PageSize: -1}, field: "page_size", code: WorkflowRequestErrorInvalidMode},
+		{name: "oversized page size", request: WorkflowTaskListRequest{ProjectID: &projectID, LabelFilter: noneFilter, PageSize: WorkflowTaskListMaxPageSize + 1}, field: "page_size", code: WorkflowRequestErrorInvalidMode},
+		{name: "page token whitespace", request: WorkflowTaskListRequest{ProjectID: &projectID, LabelFilter: noneFilter, PageToken: " token"}, field: "page_token", code: WorkflowRequestErrorInvalidMode},
+		{name: "invalid sort field", request: WorkflowTaskListRequest{ProjectID: &projectID, LabelFilter: noneFilter, Sort: []WorkflowTaskListSort{{Field: "priority", Direction: WorkflowTaskListSortDirectionAsc}}}, field: "sort[0].field", code: WorkflowRequestErrorInvalidValue},
+		{name: "invalid sort direction", request: WorkflowTaskListRequest{ProjectID: &projectID, LabelFilter: noneFilter, Sort: []WorkflowTaskListSort{{Field: WorkflowTaskListSortFieldCreated, Direction: "up"}}}, field: "sort[0].direction", code: WorkflowRequestErrorInvalidValue},
+		{name: "duplicate sort field", request: WorkflowTaskListRequest{ProjectID: &projectID, LabelFilter: noneFilter, Sort: []WorkflowTaskListSort{{Field: WorkflowTaskListSortFieldTitle, Direction: WorkflowTaskListSortDirectionAsc}, {Field: WorkflowTaskListSortFieldTitle, Direction: WorkflowTaskListSortDirectionDesc}}}, field: "sort[1].field", code: WorkflowRequestErrorInvalidValue},
+		{name: "too many sort fields", request: WorkflowTaskListRequest{ProjectID: &projectID, LabelFilter: noneFilter, Sort: []WorkflowTaskListSort{{Field: WorkflowTaskListSortFieldCreated, Direction: WorkflowTaskListSortDirectionAsc}, {Field: WorkflowTaskListSortFieldUpdated, Direction: WorkflowTaskListSortDirectionAsc}, {Field: WorkflowTaskListSortFieldStatus, Direction: WorkflowTaskListSortDirectionAsc}, {Field: WorkflowTaskListSortFieldColumn, Direction: WorkflowTaskListSortDirectionAsc}, {Field: WorkflowTaskListSortFieldRunCount, Direction: WorkflowTaskListSortDirectionAsc}, {Field: WorkflowTaskListSortFieldTitle, Direction: WorkflowTaskListSortDirectionAsc}}}, field: "sort", code: WorkflowRequestErrorInvalidValue},
+		{name: "invalid task status", request: WorkflowTaskListRequest{ProjectID: &projectID, LabelFilter: noneFilter, StatusKinds: []WorkflowTaskStatusKind{"waiting"}}, field: "status_kinds[0]", code: WorkflowRequestErrorInvalidValue},
+		{name: "invalid attention kind", request: WorkflowTaskListRequest{ProjectID: &projectID, LabelFilter: noneFilter, AttentionKinds: []WorkflowTaskAttentionKind{"waiting"}}, field: "attention_kinds[0]", code: WorkflowRequestErrorInvalidValue},
+		{name: "blank column key", request: WorkflowTaskListRequest{ProjectID: &projectID, LabelFilter: noneFilter, ColumnKeys: []string{" "}}, field: "column_keys[0]", code: WorkflowRequestErrorInvalidKey},
+		{name: "invalid column key syntax", request: WorkflowTaskListRequest{ProjectID: &projectID, LabelFilter: noneFilter, ColumnKeys: []string{"Plan"}}, field: "column_keys[0]", code: WorkflowRequestErrorInvalidKey},
 	})
 }
 

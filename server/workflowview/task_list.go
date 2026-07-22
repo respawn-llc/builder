@@ -41,7 +41,7 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	if l == nil {
 		return serverapi.WorkflowTaskListResponse{}, errors.New("task list is required")
 	}
-	if err := req.Validate(); err != nil {
+	if err := req.ValidateRPC(); err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
 	}
 	pageToken, hasPageToken, err := parseWorkflowTaskListPageToken(req.PageToken)
@@ -61,6 +61,10 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 		pageSize = 100
 	}
 	if _, err := l.metadata.GetProjectOverview(ctx, projectID); err != nil {
+		return serverapi.WorkflowTaskListResponse{}, err
+	}
+	labelFilter, err := resolveWorkflowTaskLabelFilter(ctx, l.queries, projectID, req.LabelFilter)
+	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
 	}
 	var definition serverapi.WorkflowDefinition
@@ -99,7 +103,7 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 			Narrowed: &workflowTaskListNarrowedFingerprintInvariants{ColumnStructureHash: value},
 		}
 	}
-	fingerprint, err := workflowTaskListRequestFingerprint(req, sortSelectors, fingerprintScope)
+	fingerprint, err := workflowTaskListRequestFingerprint(req, labelFilter, sortSelectors, fingerprintScope)
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
 	}
@@ -142,6 +146,7 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 		narrowed:       narrowedQuery,
 		statusKinds:    req.StatusKinds,
 		attentionKinds: req.AttentionKinds,
+		labelFilter:    labelFilter,
 		sortSelectors:  sortSelectors,
 		cursor:         cursor,
 		cursorSet:      hasPageToken,
@@ -161,9 +166,18 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	if hasNext {
 		pageItems = pageItems[:pageSize]
 	}
+	pageTaskIDs := make([]string, 0, len(pageItems))
+	for _, row := range pageItems {
+		pageTaskIDs = append(pageTaskIDs, row.item.TaskID)
+	}
+	labelIDsByTask, err := loadTaskLabelIDsByTask(ctx, l.queries, pageTaskIDs)
+	if err != nil {
+		return serverapi.WorkflowTaskListResponse{}, err
+	}
 	responseItems := make([]serverapi.WorkflowTaskListItem, 0, len(pageItems))
 	for _, row := range pageItems {
 		item := row.item
+		item.LabelIDs = labelIDsByTask[item.TaskID]
 		if matchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple {
 			item.WorkflowName = nil
 		}

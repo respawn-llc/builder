@@ -10,6 +10,8 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/server/workflow/label"
+	"core/shared/serverapi"
 )
 
 type CreateTaskRequest struct {
@@ -19,6 +21,7 @@ type CreateTaskRequest struct {
 	Body              string
 	SourceURL         string
 	SourceWorkspaceID string
+	LabelIDs          []string
 }
 
 type preparedTaskCreate struct {
@@ -30,6 +33,7 @@ type preparedTaskCreate struct {
 	sourceWorkspaceID string
 	taskID            string
 	placementID       string
+	labelIDs          []label.ID
 	nowUnixMs         int64
 }
 
@@ -174,6 +178,22 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskReco
 		value := *req.WorkflowID
 		workflowID = &value
 	}
+	if len(req.LabelIDs) > label.MaxProjectLabels {
+		limit := label.MaxProjectLabels
+		return TaskRecord{}, TaskLabelMutationError{
+			Reason: TaskLabelMutationTooManyAdd,
+			Field:  "label_ids",
+			Limit:  &limit,
+		}
+	}
+	labelIDs, _, err := parseUniqueLabelIDs(
+		req.LabelIDs,
+		"label_ids",
+		TaskLabelMutationDuplicateAdd,
+	)
+	if err != nil {
+		return TaskRecord{}, err
+	}
 	prepared := preparedTaskCreate{
 		projectID:         projectID,
 		workflowID:        workflowID,
@@ -183,6 +203,7 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskReco
 		sourceWorkspaceID: strings.TrimSpace(req.SourceWorkspaceID),
 		taskID:            prefixedID("task"),
 		placementID:       prefixedID("placement"),
+		labelIDs:          labelIDs,
 		nowUnixMs:         s.now().UnixMilli(),
 	}
 	if prepared.title == "" {
@@ -221,6 +242,15 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 	if err != nil {
 		return TaskRecord{}, err
 	}
+	if err := validateTaskLabelReferences(
+		ctx,
+		q,
+		workflow.TaskID(prepared.taskID),
+		prepared.projectID,
+		prepared.labelIDs,
+	); err != nil {
+		return TaskRecord{}, err
+	}
 	allocated, err := q.AllocateProjectTaskSequence(ctx, sqlitegen.AllocateProjectTaskSequenceParams{ProjectID: prepared.projectID, UpdatedAtUnixMs: prepared.nowUnixMs})
 	if err != nil {
 		return TaskRecord{}, fmt.Errorf("allocate task sequence: %w", err)
@@ -236,6 +266,14 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 	}
 	if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: prepared.placementID, TaskID: prepared.taskID, NodeID: nullableString(string(workflow.NodeIDOf(startNode))), State: "active", CreatedAtUnixMs: prepared.nowUnixMs, UpdatedAtUnixMs: prepared.nowUnixMs}); err != nil {
 		return TaskRecord{}, fmt.Errorf("insert start placement: %w", err)
+	}
+	for _, id := range prepared.labelIDs {
+		if err := q.InsertTaskLabelAssignment(ctx, sqlitegen.InsertTaskLabelAssignmentParams{
+			TaskID:  prepared.taskID,
+			LabelID: id.String(),
+		}); err != nil {
+			return TaskRecord{}, fmt.Errorf("insert initial task label assignment: %w", err)
+		}
 	}
 	return TaskRecord{ID: workflow.TaskID(prepared.taskID), ProjectID: prepared.projectID, WorkflowID: workflow.WorkflowID(link.WorkflowID), LinkID: link.ID, ShortID: shortID, Title: prepared.title, Body: prepared.body, SourceURL: prepared.sourceURL, SourceWorkspaceID: sourceWorkspaceID, Version: wf.Version}, nil
 }
@@ -371,8 +409,12 @@ func deleteTaskScopedChildren(ctx context.Context, q *sqlitegen.Queries, taskID 
 	// NULL updates after the task row is already gone, so the triggers abort with
 	// "references must stay within one task workflow". Deleting the children while
 	// the task still exists keeps every trigger's task lookup satisfied; the
-	// SET-NULL'd columns simply become NULL. Order matters: transitions first
-	// (cascades transition_edges), then placements (cascades runs), then comments.
+	// SET-NULL'd columns simply become NULL. Order matters: label assignments
+	// first, transitions next (cascades transition_edges), then placements
+	// (cascades runs), then comments.
+	if _, err := q.DeleteTaskLabelAssignmentsByTask(ctx, taskID); err != nil {
+		return err
+	}
 	if _, err := q.DeleteTaskTransitionsByTask(ctx, taskID); err != nil {
 		return err
 	}
@@ -920,12 +962,15 @@ func runCompletedWorkflowEvent(ctx context.Context, q *sqlitegen.Queries, taskID
 	if err != nil {
 		return WorkflowEventRecord{}, fmt.Errorf("load completion event task identity: %w", err)
 	}
+	projectID := row.ProjectID
+	workflowID := row.WorkflowID
 	return WorkflowEventRecord{
-		ProjectID:        row.ProjectID,
-		WorkflowID:       row.WorkflowID,
-		Resource:         "task",
-		Action:           "completed",
-		ChangedIDs:       []string{taskID, transitionID, runID},
+		ProjectID:        &projectID,
+		WorkflowID:       &workflowID,
+		Resource:         serverapi.WorkflowProjectEventResourceTask,
+		Action:           serverapi.WorkflowProjectEventActionCompleted,
+		PrimaryEntityID:  taskID,
+		RelatedIDs:       []string{transitionID, runID},
 		OccurredAtUnixMs: now,
 	}, nil
 }

@@ -16,6 +16,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 	"core/shared/textutil"
 	"github.com/google/uuid"
 )
@@ -168,14 +169,7 @@ type NodeGroupRecord struct {
 	SortOrder   int64
 }
 
-type WorkflowEventRecord struct {
-	ProjectID        string
-	WorkflowID       string
-	Resource         string
-	Action           string
-	ChangedIDs       []string
-	OccurredAtUnixMs int64
-}
+type WorkflowEventRecord = serverapi.WorkflowProjectEvent
 
 type WorkflowEventPublisher interface {
 	PublishWorkflowEvent(context.Context, WorkflowEventRecord) error
@@ -839,28 +833,34 @@ func (s *Store) SetWorkflowEventPublisher(publisher WorkflowEventPublisher) {
 }
 
 func (s *Store) PublishWorkflowEvent(ctx context.Context, event WorkflowEventRecord) error {
-	if strings.TrimSpace(event.Resource) == "" {
-		return ErrEventResourceRequired
-	}
-	if strings.TrimSpace(event.Action) == "" {
-		return ErrEventActionRequired
-	}
 	occurredAt := event.OccurredAtUnixMs
 	if occurredAt == 0 {
 		occurredAt = s.now().UnixMilli()
 	}
 	normalized := WorkflowEventRecord{
-		ProjectID:        strings.TrimSpace(event.ProjectID),
-		WorkflowID:       strings.TrimSpace(event.WorkflowID),
-		Resource:         strings.TrimSpace(event.Resource),
-		Action:           strings.TrimSpace(event.Action),
-		ChangedIDs:       append([]string(nil), event.ChangedIDs...),
+		ProjectID:        cloneWorkflowEventID(event.ProjectID),
+		WorkflowID:       cloneWorkflowEventID(event.WorkflowID),
+		Resource:         event.Resource,
+		Action:           event.Action,
+		PrimaryEntityID:  event.PrimaryEntityID,
+		RelatedIDs:       append([]string(nil), event.RelatedIDs...),
 		OccurredAtUnixMs: occurredAt,
+	}
+	if err := normalized.Validate(); err != nil {
+		return err
 	}
 	s.eventMu.RLock()
 	sink := s.eventSink
 	s.eventMu.RUnlock()
 	return sink.PublishWorkflowEvent(ctx, normalized)
+}
+
+func cloneWorkflowEventID(id *string) *string {
+	if id == nil {
+		return nil
+	}
+	value := *id
+	return &value
 }
 
 func (s *Store) AddTransitionGroup(ctx context.Context, group TransitionGroupRecord) (int64, error) {

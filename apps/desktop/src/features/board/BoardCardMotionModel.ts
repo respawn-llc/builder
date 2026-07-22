@@ -159,9 +159,20 @@ function cardContentEqual(left: KanbanCardVM, right: KanbanCardVM): boolean {
     left.updatedAt === right.updatedAt &&
     left.statusKind === right.statusKind &&
     arrayEqual(left.statusRunIDs, right.statusRunIDs) &&
+    labelsEqual(left.labels, right.labels) &&
     left.workspaceChipLabel === right.workspaceChipLabel &&
     left.borderTone === right.borderTone &&
     arrayEqual(left.activeNodeIDs, right.activeNodeIDs)
+  );
+}
+
+function labelsEqual(left: KanbanCardVM["labels"], right: KanbanCardVM["labels"]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((label, index) => {
+      const rightLabel = right[index];
+      return label.id === rightLabel?.id && label.name === rightLabel.name;
+    })
   );
 }
 

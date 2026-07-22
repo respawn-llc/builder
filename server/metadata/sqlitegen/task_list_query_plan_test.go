@@ -98,7 +98,14 @@ CREATE TABLE task_transition_records (
 );
 CREATE TABLE task_run_records (
 	task_id TEXT NOT NULL
-);`); err != nil {
+);
+CREATE TABLE task_label_assignments (
+	task_id TEXT NOT NULL,
+	label_id TEXT NOT NULL,
+	PRIMARY KEY (task_id, label_id)
+);
+CREATE INDEX task_label_assignments_label_task_idx
+	ON task_label_assignments(label_id, task_id);`); err != nil {
 		t.Fatalf("create query-plan fixture: %v", err)
 	}
 
@@ -112,6 +119,9 @@ CREATE TABLE task_run_records (
 		nil,
 		"[]",
 		int64(0),
+		"[]",
+		"none",
+		"",
 		"[]",
 		int64(0),
 		int64(0),
@@ -135,6 +145,8 @@ CREATE TABLE task_run_records (
 	}
 	requireQueryUsesAnyTableIndex(t, db, listWorkflowTaskListRows, "project_workflow_links", args...)
 	requireQueryUsesIndex(t, db, listWorkflowTaskListRows, "tasks_project_workflow_link_idx", args...)
+	requireQueryUsesIndex(t, db, listWorkflowTaskListRows, "sqlite_autoindex_task_label_assignments_1", args...)
+	requireQueryUsesIndex(t, db, listWorkflowTaskListRows, "task_label_assignments_label_task_idx", args...)
 	requireQueryPlanDoesNotGroupIntoTemporaryTree(t, db, listWorkflowTaskListRows, args...)
 }
 

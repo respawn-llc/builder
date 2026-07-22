@@ -155,7 +155,11 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     this.#resolveResponse(response.data.id, response.data.result, response.data.error);
   }
 
-  #resolveResponse(id: string, result: unknown, error: { code: number; message: string } | undefined): void {
+  #resolveResponse(
+    id: string,
+    result: unknown,
+    error: { code: number; message: string; data?: JsonValue | undefined } | undefined,
+  ): void {
     const pending = this.#pending.get(id);
     if (pending === undefined) {
       return;

@@ -54,6 +54,7 @@ const (
 	ErrCodeSubagentLaunchPolicy              = -32044
 	ErrCodeWorkflowTaskCreateSelection       = -32045
 	ErrCodeWorkflowTaskCreateConflict        = -32046
+	ErrCodeWorkflowLabel                     = -32047
 )
 
 type Request struct {

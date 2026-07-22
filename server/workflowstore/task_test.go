@@ -1174,6 +1174,31 @@ func TestDeleteTaskHardDeletesAssociatedRecords(t *testing.T) {
 	if _, err := store.AddComment(ctx, task.ID, "note", "user", "nek"); err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
+	projectLabel, err := store.CreateProjectLabel(ctx, binding.ProjectID, "delete cleanup")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel: %v", err)
+	}
+	if _, err := store.UpdateTaskLabels(ctx, TaskLabelUpdateRequest{
+		TaskID:      task.ID,
+		AddLabelIDs: []string{projectLabel.ID.String()},
+	}); err != nil {
+		t.Fatalf("UpdateTaskLabels: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+CREATE TRIGGER task_delete_requires_explicit_label_cleanup
+BEFORE DELETE ON tasks
+FOR EACH ROW
+WHEN EXISTS (
+    SELECT 1
+    FROM task_label_assignments
+    WHERE task_id = OLD.id
+)
+BEGIN
+    SELECT RAISE(ABORT, 'task label assignments must be deleted first');
+END;
+`); err != nil {
+		t.Fatalf("create explicit label cleanup guard: %v", err)
+	}
 
 	deleted, err := store.DeleteTask(ctx, task.ID)
 	if err != nil {
@@ -1191,6 +1216,7 @@ func TestDeleteTaskHardDeletesAssociatedRecords(t *testing.T) {
 	assertZeroTaskRows(t, store, "task_node_placements", string(task.ID))
 	assertZeroTaskRows(t, store, "task_transitions", string(task.ID))
 	assertZeroTaskRows(t, store, "task_comments", string(task.ID))
+	assertZeroTaskRows(t, store, "task_label_assignments", string(task.ID))
 	if _, err := store.queries.GetTaskRun(ctx, string(started.RunID)); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("GetTaskRun after DeleteTask = %v, want sql.ErrNoRows", err)
 	}

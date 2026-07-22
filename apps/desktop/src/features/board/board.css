@@ -165,6 +165,54 @@
   list-style: none;
 }
 
+.board-label-filter-summary {
+  transition: width var(--motion-morph);
+}
+
+.board-label-filter-trigger {
+  transition:
+    background-color var(--motion-fast),
+    border-color var(--motion-fast),
+    color var(--motion-fast),
+    opacity var(--motion-fast),
+    padding-inline-end var(--motion-fast);
+}
+
+.board-label-filter-clear {
+  transition:
+    width var(--motion-fast),
+    opacity var(--motion-fast),
+    transform var(--motion-fast);
+}
+
+@keyframes board-label-filter-summary-crossfade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes board-label-filter-summary-crossfade-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+.board-label-filter-summary-incoming {
+  animation: board-label-filter-summary-crossfade-in var(--motion-morph) both;
+}
+
+.board-label-filter-summary-outgoing {
+  animation: board-label-filter-summary-crossfade-out var(--motion-morph) both;
+}
+
 @keyframes board-card-enter-reveal {
   from {
     opacity: 0;

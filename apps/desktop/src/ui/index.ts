@@ -4,6 +4,19 @@ export { AdaptiveLineClamp } from "./AdaptiveLineClamp";
 export type { AdaptiveLineClampProps } from "./AdaptiveLineClamp";
 export { Button } from "./Button";
 export type { ButtonSize, ButtonVariant } from "./Button";
+export { Chip, InteractiveChip } from "./InteractiveChip";
+export type {
+  ChipProps,
+  InteractiveChipProps,
+  InteractiveChipSize,
+  InteractiveChipTone,
+} from "./InteractiveChip";
+export { ActionableListRow } from "./ActionableListRow";
+export type { ActionableListRowProps } from "./ActionableListRow";
+export { OneLineOverflowRow } from "./OneLineOverflowRow";
+export type { OneLineOverflowItem, OneLineOverflowRowProps } from "./OneLineOverflowRow";
+export { SegmentedControl } from "./SegmentedControl";
+export type { SegmentedControlOption, SegmentedControlProps } from "./SegmentedControl";
 export { CopyableValueButton } from "./CopyableValueButton";
 export { IconTooltipButton } from "./IconTooltipButton";
 export { HelpHint } from "./HelpHint";
@@ -11,7 +24,7 @@ export type { HelpHintProps } from "./HelpHint";
 export { DisabledInteractionGuard } from "./DisabledInteractionGuard";
 export type { DisabledInteractionGuardProps } from "./DisabledInteractionGuard";
 export { Dialog } from "./Dialog";
-export { TextArea, TextInput } from "./Field";
+export { FieldShell, TextArea, TextInput } from "./Field";
 export { fieldInputClassName, fieldIslandInputClassName } from "./fieldInputStyles";
 export { fieldLabelClassName } from "./fieldStyles";
 export { identifierInputAttributes } from "./inputAttributes";

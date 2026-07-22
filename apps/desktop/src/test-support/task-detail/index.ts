@@ -89,6 +89,7 @@ export const taskDetailResponse = {
       attention_types: ["question", "approval"],
     },
     actions: taskActions,
+    label_ids: [],
     attention_count: 2,
   },
 };
@@ -203,9 +204,10 @@ export const taskQuestionWaitingEvent = {
   event: {
     resource: "task",
     action: "question_waiting",
-    changed_ids: ["task-1", "run-1", "ask-1"],
     occurred_at_unix_ms: 1,
+    primary_entity_id: "task-1",
     project_id: "project-1",
+    related_ids: ["run-1", "ask-1"],
     workflow_id: "workflow-1",
   },
 };
@@ -214,8 +216,8 @@ export const taskUpdatedEvent = {
   event: {
     resource: "task",
     action: "updated",
-    changed_ids: ["task-1"],
     occurred_at_unix_ms: 1,
+    primary_entity_id: "task-1",
     project_id: "project-1",
     workflow_id: "workflow-1",
   },
@@ -337,6 +339,24 @@ export function createTaskDetailTestServices(
   return createTestServices(
     [
       ...startupRoutes,
+      {
+        method: "workflow.project.label.list",
+        result: {
+          catalog: {
+            project_id: "project-1",
+            labels: [],
+          },
+        },
+      },
+      {
+        method: "workflow.task.labels.get",
+        result: {
+          assignment: {
+            task_id: "task-1",
+            label_ids: [],
+          },
+        },
+      },
       { method: "workflow.task.get", result: task },
       { method: "workflow.task.attention.list", result: attention },
       ...(comments === undefined ? [] : [{ method: "workflow.task.comment.list", result: comments }]),

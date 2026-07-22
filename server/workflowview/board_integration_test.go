@@ -139,7 +139,8 @@ func TestBoardSelectsWorkflowAndReturnsPickerAndGroups(t *testing.T) {
 	}
 
 	selectedWorkflowID := string(selected.ID)
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID, WorkflowID: &selectedWorkflowID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID, WorkflowID: &selectedWorkflowID})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
@@ -150,7 +151,8 @@ func TestBoardSelectsWorkflowAndReturnsPickerAndGroups(t *testing.T) {
 		t.Fatalf("picker = %+v, want default first and two workflows", board.WorkflowPicker)
 	}
 	selectedBacklog := workflowViewColumnByKind(t, board, workflow.NodeKindStart)
-	selectedPage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: binding.ProjectID, WorkflowID: string(selected.ID), NodeID: selectedBacklog.Node.NodeID})
+	selectedPage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID, WorkflowID: string(selected.ID), NodeID: selectedBacklog.Node.NodeID})
 	if err != nil {
 		t.Fatalf("ListBoardNodeCards selected: %v", err)
 	}
@@ -168,7 +170,8 @@ func TestBoardSelectsWorkflowAndReturnsPickerAndGroups(t *testing.T) {
 func TestBoardWithoutActiveLinksReturnsNoSelectionOrContent(t *testing.T) {
 	ctx, _, _, binding, view := newWorkflowViewTestContextFixture(t)
 
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
@@ -193,8 +196,8 @@ func TestBoardSelectorFallsBackToActiveSelection(t *testing.T) {
 		}
 		unknownWorkflowID := "workflow-unknown"
 		for _, request := range []serverapi.WorkflowBoardRequest{
-			{ProjectID: binding.ProjectID},
-			{ProjectID: binding.ProjectID, WorkflowID: &unknownWorkflowID},
+			{ProjectID: binding.ProjectID, LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}},
+			{ProjectID: binding.ProjectID, WorkflowID: &unknownWorkflowID, LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}},
 		} {
 			board, err := view.board(t).Get(ctx, request)
 			if err != nil {
@@ -214,7 +217,8 @@ func TestBoardSelectorFallsBackToActiveSelection(t *testing.T) {
 		}
 		unknownWorkflowID := "workflow-unknown"
 
-		board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID, WorkflowID: &unknownWorkflowID})
+		board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID, WorkflowID: &unknownWorkflowID})
 		if err != nil {
 			t.Fatalf("GetBoard: %v", err)
 		}
@@ -270,7 +274,8 @@ func TestBoardColumnTaskCountsUseFullSelectedWorkflow(t *testing.T) {
 		}
 	}
 
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
@@ -285,14 +290,16 @@ func TestBoardColumnTaskCountsUseFullSelectedWorkflow(t *testing.T) {
 		t.Fatalf("backlog count = %d, want full selected workflow count 2", backlogCount)
 	}
 	backlogColumn := workflowViewColumnByKind(t, board, workflow.NodeKindStart)
-	firstPage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: backlogColumn.Node.NodeID, PageSize: 1})
+	firstPage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: backlogColumn.Node.NodeID, PageSize: 1})
 	if err != nil {
 		t.Fatalf("ListBoardNodeCards first: %v", err)
 	}
 	if len(firstPage.Cards) != 1 || firstPage.NextPageToken == nil {
 		t.Fatalf("first node page = %+v, want one card with next page", firstPage)
 	}
-	secondPage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: backlogColumn.Node.NodeID, PageSize: 1, PageToken: firstPage.NextPageToken})
+	secondPage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: backlogColumn.Node.NodeID, PageSize: 1, PageToken: firstPage.NextPageToken})
 	if err != nil {
 		t.Fatalf("ListBoardNodeCards second: %v", err)
 	}
@@ -300,7 +307,8 @@ func TestBoardColumnTaskCountsUseFullSelectedWorkflow(t *testing.T) {
 		t.Fatalf("second node page = %+v first=%+v, want distinct next card", secondPage, firstPage)
 	}
 	doneColumn := workflowViewColumnByKind(t, board, workflow.NodeKindTerminal)
-	if _, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: doneColumn.Node.NodeID, PageSize: 1, PageToken: firstPage.NextPageToken}); !errors.Is(err, ErrInvalidPageToken) {
+	if _, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: doneColumn.Node.NodeID, PageSize: 1, PageToken: firstPage.NextPageToken}); !errors.Is(err, ErrInvalidPageToken) {
 		t.Fatalf("ListBoardNodeCards with token from other node error = %v", err)
 	}
 }
@@ -339,7 +347,8 @@ func TestBoardNodeCardsBidirectionalPaginationRoundTripsWithoutGaps(t *testing.T
 		return expected[i].taskID > expected[j].taskID
 	})
 
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
@@ -347,11 +356,12 @@ func TestBoardNodeCardsBidirectionalPaginationRoundTripsWithoutGaps(t *testing.T
 	listPage := func(pageToken *string) serverapi.WorkflowBoardNodeCardsListResponse {
 		t.Helper()
 		page, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-			ProjectID:  binding.ProjectID,
-			WorkflowID: string(workflowID),
-			NodeID:     backlog.Node.NodeID,
-			PageSize:   25,
-			PageToken:  pageToken,
+			LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+			ProjectID:   binding.ProjectID,
+			WorkflowID:  string(workflowID),
+			NodeID:      backlog.Node.NodeID,
+			PageSize:    25,
+			PageToken:   pageToken,
 		})
 
 		if err != nil {
@@ -426,11 +436,12 @@ func TestBoardNodeCardsBidirectionalPaginationRoundTripsWithoutGaps(t *testing.T
 		t.Run("rejects "+testCase.name, func(t *testing.T) {
 			token := mutateBoardNodeCardsToken(t, pages[0].NextPageToken, testCase.mutate)
 			if _, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-				ProjectID:  binding.ProjectID,
-				WorkflowID: string(workflowID),
-				NodeID:     backlog.Node.NodeID,
-				PageSize:   25,
-				PageToken:  &token,
+				LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+				ProjectID:   binding.ProjectID,
+				WorkflowID:  string(workflowID),
+				NodeID:      backlog.Node.NodeID,
+				PageSize:    25,
+				PageToken:   &token,
 			}); !errors.Is(err, ErrInvalidPageToken) {
 				t.Fatalf("%s error = %v, want ErrInvalidPageToken", testCase.name, err)
 			}
@@ -452,7 +463,8 @@ func TestBoardNodeCardsArchiveCanceledTaskInDoneNode(t *testing.T) {
 		t.Fatalf("CancelTask: %v", err)
 	}
 	forceCanceledBacklogPlacementWithoutTerminal(t, ctx, store, task.ID, workflowID)
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
@@ -460,7 +472,8 @@ func TestBoardNodeCardsArchiveCanceledTaskInDoneNode(t *testing.T) {
 	if backlogColumn.TaskCount != 0 {
 		t.Fatalf("backlog count = %d, want canceled task archived out of backlog", backlogColumn.TaskCount)
 	}
-	backlogPage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: backlogColumn.Node.NodeID})
+	backlogPage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: backlogColumn.Node.NodeID})
 	if err != nil {
 		t.Fatalf("ListBoardNodeCards backlog: %v", err)
 	}
@@ -471,7 +484,8 @@ func TestBoardNodeCardsArchiveCanceledTaskInDoneNode(t *testing.T) {
 	if doneColumn.TaskCount != 1 {
 		t.Fatalf("done count = %d, want canceled task counted in Done", doneColumn.TaskCount)
 	}
-	page, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: doneColumn.Node.NodeID})
+	page, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: doneColumn.Node.NodeID})
 	if err != nil {
 		t.Fatalf("ListBoardNodeCards done: %v", err)
 	}
@@ -505,12 +519,14 @@ func TestBoardNodeCardsAllowRestartAfterDoneTaskResetToBacklog(t *testing.T) {
 	if _, err := workflowStore.ManualMoveTask(ctx, workflowstore.ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(start)}); err != nil {
 		t.Fatalf("ManualMoveTask reset: %v", err)
 	}
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
 	backlogColumn := workflowViewColumnByKind(t, board, workflow.NodeKindStart)
-	page, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: backlogColumn.Node.NodeID})
+	page, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: backlogColumn.Node.NodeID})
 	if err != nil {
 		t.Fatalf("ListBoardNodeCards backlog: %v", err)
 	}
@@ -552,7 +568,8 @@ func TestBoardNodeCardsIgnoreInterruptedRunsFromCompletedPlacementsAfterResetToB
 		t.Fatalf("ManualMoveTask reset: %v", err)
 	}
 
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
@@ -560,7 +577,8 @@ func TestBoardNodeCardsIgnoreInterruptedRunsFromCompletedPlacementsAfterResetToB
 	if backlogColumn.TaskCount != 1 {
 		t.Fatalf("backlog count = %d, want reset task", backlogColumn.TaskCount)
 	}
-	page, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: backlogColumn.Node.NodeID})
+	page, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: backlogColumn.Node.NodeID})
 	if err != nil {
 		t.Fatalf("ListBoardNodeCards backlog: %v", err)
 	}
@@ -599,7 +617,8 @@ func TestBoardNodeCardsDoNotArchiveCanceledTaskInAlternateTerminalNode(t *testin
 		t.Fatalf("CancelTask: %v", err)
 	}
 	forceCanceledBacklogPlacementWithoutTerminal(t, ctx, store, task.ID, workflowID)
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
@@ -607,7 +626,8 @@ func TestBoardNodeCardsDoNotArchiveCanceledTaskInAlternateTerminalNode(t *testin
 	if archiveColumn.TaskCount != 0 {
 		t.Fatalf("archive count = %d, want no fallback canceled tasks", archiveColumn.TaskCount)
 	}
-	page, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: string(archiveNodeID)})
+	page, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: string(archiveNodeID)})
 	if err != nil {
 		t.Fatalf("ListBoardNodeCards archive: %v", err)
 	}
@@ -615,14 +635,16 @@ func TestBoardNodeCardsDoNotArchiveCanceledTaskInAlternateTerminalNode(t *testin
 		t.Fatalf("archive node cards = %+v, want no fallback canceled tasks", page.Cards)
 	}
 	workflowIDString := string(workflowID)
-	done, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &binding.ProjectID, WorkflowID: &workflowIDString, ColumnKeys: []string{"done"}})
+	done, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: &binding.ProjectID, WorkflowID: &workflowIDString, ColumnKeys: []string{"done"}})
 	if err != nil {
 		t.Fatalf("ListTasks done: %v", err)
 	}
 	if len(done.Tasks) != 1 || done.Tasks[0].TaskID != string(task.ID) || done.Tasks[0].ColumnKeys == nil || !reflect.DeepEqual(*done.Tasks[0].ColumnKeys, []string{"done"}) {
 		t.Fatalf("done tasks = %+v, want canceled task only in done", done.Tasks)
 	}
-	archive, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &binding.ProjectID, WorkflowID: &workflowIDString, ColumnKeys: []string{"archive"}})
+	archive, err := view.tasks(t).List(ctx, serverapi.WorkflowTaskListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: &binding.ProjectID, WorkflowID: &workflowIDString, ColumnKeys: []string{"archive"}})
 	if err != nil || len(archive.Tasks) != 0 {
 		t.Fatalf("archive tasks = %+v/%v, want no canceled task", archive.Tasks, err)
 	}
@@ -666,12 +688,14 @@ func TestBoardProjectsManualMoveTargetsFromServerPermissions(t *testing.T) {
 		t.Fatalf("StartTask: %v", err)
 	}
 
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
 	activeColumn := workflowViewColumnByKey(t, board, "agent")
-	activePage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: activeColumn.Node.NodeID})
+	activePage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: activeColumn.Node.NodeID})
 	if err != nil {
 		t.Fatalf("ListBoardNodeCards active: %v", err)
 	}
@@ -701,12 +725,14 @@ func TestBoardHidesManualMoveTargetsForStartedRun(t *testing.T) {
 		t.Fatalf("ClaimRun: %v", err)
 	}
 
-	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
 	}
 	activeColumn := workflowViewColumnByKey(t, board, "agent")
-	activePage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: activeColumn.Node.NodeID})
+	activePage, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: activeColumn.Node.NodeID})
 	if err != nil {
 		t.Fatalf("ListBoardNodeCards active: %v", err)
 	}

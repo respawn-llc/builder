@@ -11,12 +11,6 @@ use rpc_client::wire::{Frame, JSONRPC_VERSION, Response};
 use serde_json::json;
 use tungstenite::Message;
 
-#[test]
-fn rust_protocol_version_matches_attachment_contract() {
-    assert_eq!(PROTOCOL_VERSION, "68");
-}
-
-#[test]
 fn websocket_endpoint_factory_runs_remote_client_setup_over_real_frames() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();

@@ -270,6 +270,14 @@ Choose the source workspace before starting automation. Agents run in the enviro
 
 ![Kent Desktop task board and task detail view showing task actions, comments, and a pending question.](/desktop/desktop-workflow-tasks.webp)
 
+### Project Labels
+
+A project owns a shared catalog of up to 100 reusable labels across its linked workflows. You can create and rename labels from the label chooser; deleting a label removes it from every task in the project.
+
+Assign labels atomically when creating a task or update them immediately from task detail. Board cards show assigned labels as neutral chips and summarize labels that do not fit.
+
+Board label filters run on the server. OR, the default, matches any selected label; AND requires every selected label; No labels matches tasks without assignments. The selected filter persists locally for each project and desktop installation across workflows, navigation, and relaunches.
+
 ### CLI Workflow And Task Scope
 
 CLI workflow selectors are bare canonical UUIDv4 values. Copy them from `kent workflow list` or `kent workflow inspect --summary`; workflow names and persisted `workflow-...` IDs are not selectors.

@@ -1351,6 +1351,9 @@ func openDatabaseAtPathWithoutMigrationsForTest(root string, dbPath string) (*sq
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return nil, err
 	}
+	if err := registerMetadataSQLiteCollations(); err != nil {
+		return nil, err
+	}
 	db, err := sql.Open("sqlite", metadataSQLiteDSN(dbPath))
 	if err != nil {
 		return nil, err

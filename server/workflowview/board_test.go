@@ -25,7 +25,8 @@ func TestBoardProjectsSelectionPickerValidationColumnsGroupsAndCountsThroughFocu
 		t.Fatalf("NewBoard: %v", err)
 	}
 
-	empty, err := boardView.Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	empty, err := boardView.Get(ctx, serverapi.WorkflowBoardRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("Get empty board: %v", err)
 	}
@@ -83,7 +84,8 @@ func TestBoardProjectsSelectionPickerValidationColumnsGroupsAndCountsThroughFocu
 		t.Fatalf("CreateTask selected: %v", err)
 	}
 
-	defaultBoard, err := boardView.Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	defaultBoard, err := boardView.Get(ctx, serverapi.WorkflowBoardRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("Get default board: %v", err)
 	}
@@ -93,8 +95,9 @@ func TestBoardProjectsSelectionPickerValidationColumnsGroupsAndCountsThroughFocu
 
 	selectedID := string(selectedWorkflowID)
 	selectedBoard, err := boardView.Get(ctx, serverapi.WorkflowBoardRequest{
-		ProjectID:  binding.ProjectID,
-		WorkflowID: &selectedID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		ProjectID:   binding.ProjectID,
+		WorkflowID:  &selectedID,
 	})
 	if err != nil {
 		t.Fatalf("Get explicitly selected board: %v", err)
@@ -194,16 +197,18 @@ func TestBoardCardsPageBidirectionallyAndMatchTaskFactsThroughFocusedInterface(t
 		return expectedBacklog[i].id > expectedBacklog[j].id
 	})
 
-	board, err := boardView.Get(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID})
+	board, err := boardView.Get(ctx, serverapi.WorkflowBoardRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("Get board: %v", err)
 	}
 	backlog := workflowViewColumnByKind(t, board, workflow.NodeKindStart)
 	firstPage, err := boardView.ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-		ProjectID:  binding.ProjectID,
-		WorkflowID: string(workflowID),
-		NodeID:     backlog.Node.NodeID,
-		PageSize:   2,
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		ProjectID:   binding.ProjectID,
+		WorkflowID:  string(workflowID),
+		NodeID:      backlog.Node.NodeID,
+		PageSize:    2,
 	})
 	if err != nil {
 		t.Fatalf("ListNodeCards first: %v", err)
@@ -212,11 +217,12 @@ func TestBoardCardsPageBidirectionallyAndMatchTaskFactsThroughFocusedInterface(t
 		t.Fatalf("first page cursors = previous:%v next:%v", firstPage.PreviousPageToken, firstPage.NextPageToken)
 	}
 	secondPage, err := boardView.ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-		ProjectID:  binding.ProjectID,
-		WorkflowID: string(workflowID),
-		NodeID:     backlog.Node.NodeID,
-		PageSize:   2,
-		PageToken:  firstPage.NextPageToken,
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		ProjectID:   binding.ProjectID,
+		WorkflowID:  string(workflowID),
+		NodeID:      backlog.Node.NodeID,
+		PageSize:    2,
+		PageToken:   firstPage.NextPageToken,
 	})
 	if err != nil {
 		t.Fatalf("ListNodeCards second: %v", err)
@@ -233,11 +239,12 @@ func TestBoardCardsPageBidirectionallyAndMatchTaskFactsThroughFocusedInterface(t
 		t.Fatalf("second page ids = %v, want %v", got, wantSecondIDs)
 	}
 	newerPage, err := boardView.ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-		ProjectID:  binding.ProjectID,
-		WorkflowID: string(workflowID),
-		NodeID:     backlog.Node.NodeID,
-		PageSize:   2,
-		PageToken:  secondPage.PreviousPageToken,
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		ProjectID:   binding.ProjectID,
+		WorkflowID:  string(workflowID),
+		NodeID:      backlog.Node.NodeID,
+		PageSize:    2,
+		PageToken:   secondPage.PreviousPageToken,
 	})
 	if err != nil {
 		t.Fatalf("ListNodeCards newer: %v", err)
@@ -278,10 +285,11 @@ func TestBoardCardsPageBidirectionallyAndMatchTaskFactsThroughFocusedInterface(t
 	}
 	agentColumn := workflowViewColumnByKey(t, board, "agent")
 	activePage, err := boardView.ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-		ProjectID:  binding.ProjectID,
-		WorkflowID: string(workflowID),
-		NodeID:     agentColumn.Node.NodeID,
-		PageSize:   10,
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		ProjectID:   binding.ProjectID,
+		WorkflowID:  string(workflowID),
+		NodeID:      agentColumn.Node.NodeID,
+		PageSize:    10,
 	})
 	if err != nil {
 		t.Fatalf("ListNodeCards active: %v", err)
@@ -321,10 +329,11 @@ func TestBoardCardsPageBidirectionallyAndMatchTaskFactsThroughFocusedInterface(t
 	forceCanceledBacklogPlacementWithoutTerminal(t, ctx, metadataStore, canceledTask.ID, workflowID)
 	doneColumn := workflowViewColumnByKind(t, board, workflow.NodeKindTerminal)
 	donePage, err := boardView.ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-		ProjectID:  binding.ProjectID,
-		WorkflowID: string(workflowID),
-		NodeID:     doneColumn.Node.NodeID,
-		PageSize:   10,
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		ProjectID:   binding.ProjectID,
+		WorkflowID:  string(workflowID),
+		NodeID:      doneColumn.Node.NodeID,
+		PageSize:    10,
 	})
 	if err != nil {
 		t.Fatalf("ListNodeCards done: %v", err)

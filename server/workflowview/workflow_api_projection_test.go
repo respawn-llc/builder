@@ -52,10 +52,12 @@ func TestFocusedReadModelsRejectInvalidRequests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newWorkflowViewTestFixture: %v", err)
 	}
-	if _, err := fixture.board(t).Get(context.Background(), serverapi.WorkflowBoardRequest{ProjectID: " "}); !isWorkflowRequestValidationField(err, "project_id") {
+	if _, err := fixture.board(t).Get(context.Background(), serverapi.WorkflowBoardRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: " "}); !isWorkflowRequestValidationField(err, "project_id") {
 		t.Fatalf("Get board missing id error = %v", err)
 	}
-	if _, err := fixture.board(t).ListNodeCards(context.Background(), serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: "project-1", WorkflowID: "workflow-1", NodeID: "node-1", PageSize: -1}); !isWorkflowRequestValidationField(err, "page_size") {
+	if _, err := fixture.board(t).ListNodeCards(context.Background(), serverapi.WorkflowBoardNodeCardsListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone}, ProjectID: "project-1", WorkflowID: "workflow-1", NodeID: "node-1", PageSize: -1}); !isWorkflowRequestValidationField(err, "page_size") {
 		t.Fatalf("List board node cards negative page size error = %v", err)
 	}
 	if _, err := fixture.detail(t).GetTask(context.Background(), " "); !errors.Is(err, ErrTaskIDRequired) {

@@ -9,6 +9,7 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/serverapi"
 )
 
 func (s *Store) ListRunnableRuns(ctx context.Context, limit int64) ([]RunnableRunRecord, error) {
@@ -623,7 +624,7 @@ func (s *Store) SetRunWaitingAsk(ctx context.Context, runID workflow.RunID, expe
 	if updated != 1 {
 		return sql.ErrNoRows
 	}
-	event, err := runWaitingAskWorkflowEvent(ctx, s.queries, string(runID), "question_waiting", trimmedAskID, now)
+	event, err := runWaitingAskWorkflowEvent(ctx, s.queries, string(runID), serverapi.WorkflowProjectEventActionQuestionWaiting, trimmedAskID, now)
 	if err != nil {
 		return err
 	}
@@ -648,7 +649,7 @@ func (s *Store) ClearRunWaitingAsk(ctx context.Context, runID workflow.RunID, ex
 	if updated != 1 {
 		return sql.ErrNoRows
 	}
-	event, err := runWaitingAskWorkflowEvent(ctx, s.queries, string(runID), "question_cleared", trimmedAskID, now)
+	event, err := runWaitingAskWorkflowEvent(ctx, s.queries, string(runID), serverapi.WorkflowProjectEventActionQuestionCleared, trimmedAskID, now)
 	if err != nil {
 		return err
 	}
@@ -659,7 +660,7 @@ func runWaitingAskWorkflowEvent(
 	ctx context.Context,
 	q *sqlitegen.Queries,
 	runID string,
-	action string,
+	action serverapi.WorkflowProjectEventAction,
 	askID string,
 	occurredAtUnixMs int64,
 ) (WorkflowEventRecord, error) {
@@ -667,12 +668,15 @@ func runWaitingAskWorkflowEvent(
 	if err != nil {
 		return WorkflowEventRecord{}, fmt.Errorf("load waiting ask event run identity: %w", err)
 	}
+	projectID := row.ProjectID
+	workflowID := row.WorkflowID
 	return WorkflowEventRecord{
-		ProjectID:        row.ProjectID,
-		WorkflowID:       row.WorkflowID,
-		Resource:         "task",
+		ProjectID:        &projectID,
+		WorkflowID:       &workflowID,
+		Resource:         serverapi.WorkflowProjectEventResourceTask,
 		Action:           action,
-		ChangedIDs:       []string{row.TaskID, strings.TrimSpace(runID), strings.TrimSpace(askID)},
+		PrimaryEntityID:  row.TaskID,
+		RelatedIDs:       []string{strings.TrimSpace(runID), strings.TrimSpace(askID)},
 		OccurredAtUnixMs: occurredAtUnixMs,
 	}, nil
 }

@@ -153,9 +153,36 @@
 - Interrupt and Resume follow server action flags for existing runs from earlier valid states.
 - Non-startable Backlog tasks must not disappear.
 
+## Project Labels
+
+- The board has one transparent, single-line chrome row directly above the board content. It is drawn over the blurred window background and is not a separate island.
+- The desktop initial release adds only a label filter control to this row; status, attention, column, and sort controls are out of scope.
+- The label trigger reads `Labels` with no active filter, `Labels · N` for N selected named labels, and `No labels` for the unlabeled-only filter. A 14–16 px X action appears beside the trigger only while a filter is active and clears the filter.
+- One label filter selection and OR/AND mode are shared across every workflow board in the same Project. They persist locally per desktop installation, Kent persistence root, and Project across navigation and relaunch; they are not synchronized between clients.
+- OR is the default. The popup uses a compact `OR`/`AND` segmented control. `No labels` toggles the unlabeled-only filter: selecting it clears named selections and disables that control, while selecting it again removes the filter without resetting the remembered named mode. Selecting a named label clears `No labels` and restores the previously chosen mode. Clear removes the active filter and restores OR.
+- Filter changes apply reactively through server-side board filtering while the popup remains open. There is no Apply button, no loading indicator, and current cards remain visible until replacement results arrive.
+- While a label filter is active, each board column count shows the number of tasks in that column that match the active label expression.
+- Deleting a selected label removes it from persisted filter state. Deleting the final named selection removes the label restriction; deleting an ordinary label does not change an active `No labels` filter.
+- One reusable label chooser/manager serves board filtering, task assignment, and task creation. There is no standalone Project label-management page in the initial release.
+- Label names accept Unicode letters and numbers plus spaces and `: & * % $ # @ ! ? . , / \ + | - _ ~ '`.
+- The popup has a pinned search/create field using case-insensitive substring matching. Existing results retain case-insensitive alphabetical order. When no exact case-insensitive match exists, it exposes an explicit `Create “…”` row; creation selects the new label immediately for the invoking context.
+- At the 100-label Project limit, search and selection remain available, creation is disabled with an explanation, and deleting a label restores creation immediately.
+- The popup sizes naturally for fewer labels. Its scrollable result area shows at most 10 rows or fewer when constrained by available window space; search and context controls remain pinned.
+- The popup remains open for selection, creation, rename, and delete flows. Clicking away or pressing Escape closes it. Clicking away while a rename is uncommitted discards that rename.
+- Label rows are compact. The whole row toggles selection and selected rows use a subtle highlight plus a small success-colored checkmark. The pencil action is always visible. The trash action appears on hover or keyboard focus for pointer layouts and remains visible for touch-oriented layouts.
+- Rename edits the row inline. Enter or the row's checkmark commits; Escape cancels; validation failures remain inline. Delete opens confirmation and removes the label from all tasks when confirmed.
+- Assignment contexts omit the OR/AND and `No labels` controls while preserving the same search, create, rename, delete, and selection surface.
+- Task labels appear as neutral subtle chips without custom colors.
+- Board-card labels are informational and render in the existing one-line footer beside the workspace chip. The footer shows complete chips that fit and replaces the last fitting label position with `+N` when labels overflow.
+- Task-detail Properties places Labels immediately after ID. Chips wrap, and the whole value area—including empty space—opens the shared popup; an empty value shows an add-label affordance.
+- Label assignment is available for tasks in every lifecycle state. Attach/detach updates chips optimistically, reconciles from the authoritative resulting label set without reloading full task detail, and rolls back with a persistent Retry error when the operation fails.
+- Labels display in case-insensitive alphabetical order in the popup, task detail, and board cards. Renaming may reposition them. Manual drag ordering and label-based task sorting are not part of the initial release.
+
 ## Task Creation
 
-- Task creation form has required title, optional body/details, hidden source URL/import metadata, and source workspace selector.
+- Task creation form has required title, optional body/details, Project labels, hidden source URL/import metadata, and source workspace selector.
+- Labels appear after Body and before Source workspace. The field reuses the shared label chooser/manager, and selected existing labels are assigned atomically with task creation.
+- Creating a Project label from New Task is immediate and selects it for the pending task. The new catalog label remains if the task dialog is later canceled.
 - Workspace default is current/opened workspace context when present, otherwise project default/main workspace.
 - If project has exactly one workspace, show compact disabled workspace selector/chip.
 - Task creation creates a Backlog task. There is no Start button; users drag cards to start them.

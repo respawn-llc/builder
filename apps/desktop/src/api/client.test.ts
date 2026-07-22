@@ -91,21 +91,40 @@ describe("ApiClient", () => {
     ]);
     const client = new ApiClient(transport);
 
-    await expect(client.getBoard("project-1", undefined)).resolves.toMatchObject({
+    await expect(client.getBoard("project-1", undefined, { kind: "none" })).resolves.toMatchObject({
       projectID: "project-1",
       selectedWorkflow: null,
       workflows: [],
       groups: [],
       columns: [],
     });
-    await expect(client.getBoard("project-1", " ")).resolves.toMatchObject({
+    await expect(client.getBoard("project-1", " ", { kind: "unlabeled" })).resolves.toMatchObject({
       selectedWorkflow: null,
     });
     expect(transport.calls.slice(0, 2)).toEqual([
-      { method: "workflow.board.get", params: { project_id: "project-1" } },
-      { method: "workflow.board.get", params: { project_id: "project-1", workflow_id: " " } },
+      {
+        method: "workflow.board.get",
+        params: { project_id: "project-1", label_filter: { kind: "none" } },
+      },
+      {
+        method: "workflow.board.get",
+        params: {
+          project_id: "project-1",
+          workflow_id: " ",
+          label_filter: { kind: "unlabeled" },
+        },
+      },
     ]);
-    await expect(client.listBoardNodeCards("project-1", "workflow-1", "node-1")).resolves.toMatchObject({
+    const labelID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
+    await expect(
+      client.listBoardNodeCards({
+        projectID: "project-1",
+        workflowID: "workflow-1",
+        nodeID: "node-1",
+        labelFilter: { kind: "named", mode: "all", labelIDs: [labelID] },
+        pageToken: null,
+      }),
+    ).resolves.toMatchObject({
       projectID: "project-1",
       workflowID: "workflow-1",
       nodeID: "node-1",
@@ -119,6 +138,7 @@ describe("ApiClient", () => {
         project_id: "project-1",
         workflow_id: "workflow-1",
         node_id: "node-1",
+        label_filter: { kind: "named", named: { mode: "all", label_ids: [labelID] } },
         page_size: 25,
         page_token: null,
       },
@@ -130,7 +150,7 @@ describe("ApiClient", () => {
       new FakeRpcTransport([{ method: "workflow.board.get", result: boardWithJoinResponse }]),
     );
 
-    await expect(client.getBoard("project-1", "workflow-1")).resolves.toMatchObject({
+    await expect(client.getBoard("project-1", "workflow-1", { kind: "none" })).resolves.toMatchObject({
       groups: [{ id: "group-1", nodeIDs: ["node-agent"] }],
       columns: [{ id: "node-agent", kind: "agent" }],
     });
@@ -143,6 +163,7 @@ describe("ApiClient", () => {
 
     await expect(client.getTask("task-1")).resolves.toMatchObject({
       id: "task-1",
+      labelIDs: ["f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf"],
       currentSessionIDs: [],
       currentScripts: [],
       attentionCount: 0,
@@ -882,6 +903,7 @@ const emptyTaskDetailResponse = {
       can_cancel: true,
       manual_move_target_node_ids: [],
     },
+    label_ids: ["f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf"],
     attention_count: 0,
     worktree_path: null,
     current_session_ids: [],

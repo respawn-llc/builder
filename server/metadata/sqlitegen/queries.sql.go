@@ -25,6 +25,24 @@ func (q *Queries) AcquireProjectDeleteWriteLock(ctx context.Context, projectID s
 	return result.RowsAffected()
 }
 
+const acquireTaskLabelWriteLock = `-- name: AcquireTaskLabelWriteLock :one
+UPDATE projects
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE id = (
+    SELECT task_records.project_id
+    FROM task_records
+    WHERE task_records.id = ?1
+)
+RETURNING id
+`
+
+func (q *Queries) AcquireTaskLabelWriteLock(ctx context.Context, taskID string) (string, error) {
+	row := q.db.QueryRowContext(ctx, acquireTaskLabelWriteLock, taskID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const acquireWorkspaceRegistrationLock = `-- name: AcquireWorkspaceRegistrationLock :execrows
 UPDATE projects
 SET updated_at_unix_ms = updated_at_unix_ms
@@ -884,6 +902,31 @@ func (q *Queries) DeleteProject(ctx context.Context, projectID string) (int64, e
 	return result.RowsAffected()
 }
 
+const deleteProjectLabel = `-- name: DeleteProjectLabel :one
+DELETE FROM project_labels
+WHERE id = ?1
+  AND project_id = ?2
+RETURNING id, project_id, name
+`
+
+type DeleteProjectLabelParams struct {
+	ID        string
+	ProjectID string
+}
+
+type DeleteProjectLabelRow struct {
+	ID        string
+	ProjectID string
+	Name      string
+}
+
+func (q *Queries) DeleteProjectLabel(ctx context.Context, arg DeleteProjectLabelParams) (DeleteProjectLabelRow, error) {
+	row := q.db.QueryRowContext(ctx, deleteProjectLabel, arg.ID, arg.ProjectID)
+	var i DeleteProjectLabelRow
+	err := row.Scan(&i.ID, &i.ProjectID, &i.Name)
+	return i, err
+}
+
 const deleteProjectTasks = `-- name: DeleteProjectTasks :exec
 DELETE FROM tasks
 WHERE id IN (
@@ -994,6 +1037,38 @@ WHERE task_id = ?1
 
 func (q *Queries) DeleteTaskCommentsByTask(ctx context.Context, taskID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteTaskCommentsByTask, taskID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteTaskLabelAssignment = `-- name: DeleteTaskLabelAssignment :execrows
+DELETE FROM task_label_assignments
+WHERE task_id = ?1
+  AND label_id = ?2
+`
+
+type DeleteTaskLabelAssignmentParams struct {
+	TaskID  string
+	LabelID string
+}
+
+func (q *Queries) DeleteTaskLabelAssignment(ctx context.Context, arg DeleteTaskLabelAssignmentParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTaskLabelAssignment, arg.TaskID, arg.LabelID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteTaskLabelAssignmentsByTask = `-- name: DeleteTaskLabelAssignmentsByTask :execrows
+DELETE FROM task_label_assignments
+WHERE task_id = ?1
+`
+
+func (q *Queries) DeleteTaskLabelAssignmentsByTask(ctx context.Context, taskID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTaskLabelAssignmentsByTask, taskID)
 	if err != nil {
 		return 0, err
 	}
@@ -3032,6 +3107,58 @@ func (q *Queries) IncrementWorkflowVersion(ctx context.Context, arg IncrementWor
 	return version, err
 }
 
+const insertProjectLabel = `-- name: InsertProjectLabel :one
+INSERT INTO project_labels (
+    id,
+    project_id,
+    name,
+    created_at_unix_ms,
+    updated_at_unix_ms
+) SELECT
+    ?1,
+    ?2,
+    ?3,
+    ?4,
+    ?5
+FROM projects
+WHERE projects.id = ?2
+  AND (
+      SELECT COUNT(*)
+      FROM project_labels
+      WHERE project_labels.project_id = ?2
+  ) < CAST(?6 AS INTEGER)
+RETURNING id, project_id, name
+`
+
+type InsertProjectLabelParams struct {
+	ID              string
+	ProjectID       string
+	Name            string
+	CreatedAtUnixMs int64
+	UpdatedAtUnixMs int64
+	CatalogLimit    int64
+}
+
+type InsertProjectLabelRow struct {
+	ID        string
+	ProjectID string
+	Name      string
+}
+
+func (q *Queries) InsertProjectLabel(ctx context.Context, arg InsertProjectLabelParams) (InsertProjectLabelRow, error) {
+	row := q.db.QueryRowContext(ctx, insertProjectLabel,
+		arg.ID,
+		arg.ProjectID,
+		arg.Name,
+		arg.CreatedAtUnixMs,
+		arg.UpdatedAtUnixMs,
+		arg.CatalogLimit,
+	)
+	var i InsertProjectLabelRow
+	err := row.Scan(&i.ID, &i.ProjectID, &i.Name)
+	return i, err
+}
+
 const insertProjectWorkflowLink = `-- name: InsertProjectWorkflowLink :exec
 INSERT INTO project_workflow_links (
     id,
@@ -3213,6 +3340,22 @@ func (q *Queries) InsertTaskComment(ctx context.Context, arg InsertTaskCommentPa
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 	)
+	return err
+}
+
+const insertTaskLabelAssignment = `-- name: InsertTaskLabelAssignment :exec
+INSERT INTO task_label_assignments (task_id, label_id)
+VALUES (?1, ?2)
+ON CONFLICT(task_id, label_id) DO NOTHING
+`
+
+type InsertTaskLabelAssignmentParams struct {
+	TaskID  string
+	LabelID string
+}
+
+func (q *Queries) InsertTaskLabelAssignment(ctx context.Context, arg InsertTaskLabelAssignmentParams) error {
+	_, err := q.db.ExecContext(ctx, insertTaskLabelAssignment, arg.TaskID, arg.LabelID)
 	return err
 }
 
@@ -4046,7 +4189,14 @@ func (q *Queries) ListActiveManualMoveSources(ctx context.Context, taskID string
 }
 
 const listBoardColumnTaskCounts = `-- name: ListBoardColumnTaskCounts :many
-WITH effective_board_placements AS (
+WITH
+label_filter_args AS (
+    SELECT
+        CAST(?1 AS TEXT) AS label_filter_kind,
+        CAST(?2 AS TEXT) AS label_filter_mode,
+        CAST(?3 AS TEXT) AS label_ids_json
+),
+effective_board_placements AS (
     SELECT
         t.id AS task_id,
         p.node_id AS node_id
@@ -4056,22 +4206,22 @@ WITH effective_board_placements AS (
     WHERE (
           p.state IN ('active', 'waiting_approval')
       )
-      AND t.project_id = ?1
-      AND t.workflow_id = ?2
+      AND t.project_id = ?4
+      AND t.workflow_id = ?5
       AND (
           t.canceled_at_unix_ms IS NULL
           OR n.kind = 'terminal'
-          OR ?3 IS NULL
+          OR ?6 IS NULL
       )
     UNION
     SELECT
         t.id AS task_id,
-        ?3 AS node_id
+        ?6 AS node_id
     FROM task_records t
-    WHERE t.project_id = ?1
-      AND t.workflow_id = ?2
+    WHERE t.project_id = ?4
+      AND t.workflow_id = ?5
       AND t.canceled_at_unix_ms IS NOT NULL
-      AND ?3 IS NOT NULL
+      AND ?6 IS NOT NULL
       AND NOT EXISTS (
           SELECT 1
           FROM task_node_placements p
@@ -4087,11 +4237,11 @@ WITH effective_board_placements AS (
     FROM task_transition_records tt
     JOIN task_records t ON t.id = tt.task_id
     WHERE tt.state = 'pending_approval'
-      AND t.project_id = ?1
-      AND t.workflow_id = ?2
+      AND t.project_id = ?4
+      AND t.workflow_id = ?5
       AND (
           t.canceled_at_unix_ms IS NULL
-          OR ?3 IS NULL
+          OR ?6 IS NULL
       )
       AND trim(tt.source_node_id) != ''
 )
@@ -4099,11 +4249,51 @@ SELECT
     node_id,
     CAST(COUNT(DISTINCT task_id) AS INTEGER) AS task_count
 FROM effective_board_placements
+JOIN label_filter_args
+WHERE (
+    label_filter_args.label_filter_kind = 'none'
+    OR (
+        label_filter_args.label_filter_kind = 'named'
+        AND label_filter_args.label_filter_mode = 'any'
+        AND EXISTS (
+            SELECT 1
+            FROM json_each(label_filter_args.label_ids_json) selected_label
+            JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+              ON assignment.label_id = selected_label.value
+            WHERE assignment.task_id = effective_board_placements.task_id
+        )
+    )
+    OR (
+        label_filter_args.label_filter_kind = 'named'
+        AND label_filter_args.label_filter_mode = 'all'
+        AND NOT EXISTS (
+            SELECT 1
+            FROM json_each(label_filter_args.label_ids_json) selected_label
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                WHERE assignment.label_id = selected_label.value
+                  AND assignment.task_id = effective_board_placements.task_id
+            )
+        )
+    )
+    OR (
+        label_filter_args.label_filter_kind = 'unlabeled'
+        AND NOT EXISTS (
+            SELECT 1
+            FROM task_label_assignments assignment
+            WHERE assignment.task_id = effective_board_placements.task_id
+        )
+    )
+)
 GROUP BY node_id
 ORDER BY node_id ASC
 `
 
 type ListBoardColumnTaskCountsParams struct {
+	LabelFilterKind        string
+	LabelFilterMode        sql.NullString
+	LabelIdsJson           string
 	ProjectID              string
 	WorkflowID             string
 	CanceledTerminalNodeID interface{}
@@ -4115,7 +4305,14 @@ type ListBoardColumnTaskCountsRow struct {
 }
 
 func (q *Queries) ListBoardColumnTaskCounts(ctx context.Context, arg ListBoardColumnTaskCountsParams) ([]ListBoardColumnTaskCountsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listBoardColumnTaskCounts, arg.ProjectID, arg.WorkflowID, arg.CanceledTerminalNodeID)
+	rows, err := q.db.QueryContext(ctx, listBoardColumnTaskCounts,
+		arg.LabelFilterKind,
+		arg.LabelFilterMode,
+		arg.LabelIdsJson,
+		arg.ProjectID,
+		arg.WorkflowID,
+		arg.CanceledTerminalNodeID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -4144,12 +4341,48 @@ WITH board_node_tasks AS (
     WHERE t.project_id = ?1
       AND t.workflow_id = ?2
       AND (
+          ?3 = 'none'
+          OR (
+              ?3 = 'named'
+              AND ?4 = 'any'
+              AND EXISTS (
+                  SELECT 1
+                  FROM json_each(?5) selected_label
+                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                    ON assignment.label_id = selected_label.value
+                  WHERE assignment.task_id = t.id
+              )
+          )
+          OR (
+              ?3 = 'named'
+              AND ?4 = 'all'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(?5) selected_label
+                  WHERE NOT EXISTS (
+                      SELECT 1
+                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                      WHERE assignment.label_id = selected_label.value
+                        AND assignment.task_id = t.id
+                  )
+              )
+          )
+          OR (
+              ?3 = 'unlabeled'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM task_label_assignments assignment
+                  WHERE assignment.task_id = t.id
+              )
+          )
+      )
+      AND (
           EXISTS (
               SELECT 1
               FROM task_node_placements p
               JOIN workflow_nodes n ON n.id = p.node_id
               WHERE p.task_id = t.id
-                AND p.node_id = ?3
+                AND p.node_id = ?6
                 AND p.state IN ('active', 'waiting_approval')
                 AND (
                     t.canceled_at_unix_ms IS NULL
@@ -4160,17 +4393,17 @@ WITH board_node_tasks AS (
               SELECT 1
               FROM task_transition_records tt
               WHERE tt.task_id = t.id
-                AND tt.source_node_id = ?3
+                AND tt.source_node_id = ?6
                 AND tt.state = 'pending_approval'
                 AND t.canceled_at_unix_ms IS NULL
           )
           OR (
               t.canceled_at_unix_ms IS NOT NULL
-              AND ?3 = ?4
+              AND ?6 = ?7
               AND EXISTS (
                   SELECT 1
                   FROM workflow_nodes n
-                  WHERE n.id = ?3
+                  WHERE n.id = ?6
                     AND n.kind = 'terminal'
               )
               AND NOT EXISTS (
@@ -4187,32 +4420,32 @@ WITH board_node_tasks AS (
 older_page AS (
     SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_seen, task_seq, short_id, title, body, source_url, source_workspace_id, managed_worktree_id, execution_target_mode, execution_target_requested_ref, execution_target_resolved_ref, execution_target_commit_oid, execution_target_provenance, canceled_at_unix_ms, cancellation_reason, created_at_unix_ms, updated_at_unix_ms, metadata_json
     FROM board_node_tasks t
-    WHERE ?5 = 'older'
+    WHERE ?8 = 'older'
       AND (
-          ?6 IS NULL
-          OR t.updated_at_unix_ms < ?6
+          ?9 IS NULL
+          OR t.updated_at_unix_ms < ?9
           OR (
-              t.updated_at_unix_ms = ?6
-              AND t.id < ?7
+              t.updated_at_unix_ms = ?9
+              AND t.id < ?10
           )
       )
     ORDER BY t.updated_at_unix_ms DESC, t.id DESC
-    LIMIT ?8
+    LIMIT ?11
 ),
 newer_page AS (
     SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_seen, task_seq, short_id, title, body, source_url, source_workspace_id, managed_worktree_id, execution_target_mode, execution_target_requested_ref, execution_target_resolved_ref, execution_target_commit_oid, execution_target_provenance, canceled_at_unix_ms, cancellation_reason, created_at_unix_ms, updated_at_unix_ms, metadata_json
     FROM board_node_tasks t
-    WHERE ?5 = 'newer'
-      AND ?6 IS NOT NULL
+    WHERE ?8 = 'newer'
+      AND ?9 IS NOT NULL
       AND (
-          t.updated_at_unix_ms > ?6
+          t.updated_at_unix_ms > ?9
           OR (
-              t.updated_at_unix_ms = ?6
-              AND t.id > ?7
+              t.updated_at_unix_ms = ?9
+              AND t.id > ?10
           )
       )
     ORDER BY t.updated_at_unix_ms ASC, t.id ASC
-    LIMIT ?8
+    LIMIT ?11
 )
 SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_seen, task_seq, short_id, title, body, source_url, source_workspace_id, managed_worktree_id, execution_target_mode, execution_target_requested_ref, execution_target_resolved_ref, execution_target_commit_oid, execution_target_provenance, canceled_at_unix_ms, cancellation_reason, created_at_unix_ms, updated_at_unix_ms, metadata_json FROM older_page
 UNION ALL
@@ -4222,6 +4455,9 @@ SELECT id, project_id, project_workflow_link_id, workflow_id, workflow_revision_
 type ListBoardNodeTasksParams struct {
 	ProjectID              string
 	WorkflowID             string
+	LabelFilterKind        interface{}
+	LabelFilterMode        interface{}
+	LabelIdsJson           interface{}
 	NodeID                 sql.NullString
 	CanceledTerminalNodeID interface{}
 	CursorDirection        interface{}
@@ -4259,6 +4495,9 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 	rows, err := q.db.QueryContext(ctx, listBoardNodeTasks,
 		arg.ProjectID,
 		arg.WorkflowID,
+		arg.LabelFilterKind,
+		arg.LabelFilterMode,
+		arg.LabelIdsJson,
 		arg.NodeID,
 		arg.CanceledTerminalNodeID,
 		arg.CursorDirection,
@@ -5078,6 +5317,89 @@ func (q *Queries) ListProjectKeyRows(ctx context.Context) ([]ListProjectKeyRowsR
 	return items, nil
 }
 
+const listProjectLabels = `-- name: ListProjectLabels :many
+SELECT id, project_id, name
+FROM project_labels
+WHERE project_id = ?1
+ORDER BY name COLLATE kent_label_casefold_v1 ASC, id ASC
+LIMIT 101
+`
+
+type ListProjectLabelsRow struct {
+	ID        string
+	ProjectID string
+	Name      string
+}
+
+func (q *Queries) ListProjectLabels(ctx context.Context, projectID string) ([]ListProjectLabelsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectLabels, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListProjectLabelsRow
+	for rows.Next() {
+		var i ListProjectLabelsRow
+		if err := rows.Scan(&i.ID, &i.ProjectID, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectLabelsByIDs = `-- name: ListProjectLabelsByIDs :many
+SELECT id, project_id, name
+FROM project_labels
+WHERE id IN (/*SLICE:label_ids*/?)
+ORDER BY id ASC
+`
+
+type ListProjectLabelsByIDsRow struct {
+	ID        string
+	ProjectID string
+	Name      string
+}
+
+func (q *Queries) ListProjectLabelsByIDs(ctx context.Context, labelIds []string) ([]ListProjectLabelsByIDsRow, error) {
+	query := listProjectLabelsByIDs
+	var queryParams []interface{}
+	if len(labelIds) > 0 {
+		for _, v := range labelIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:label_ids*/?", strings.Repeat(",?", len(labelIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:label_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListProjectLabelsByIDsRow
+	for rows.Next() {
+		var i ListProjectLabelsByIDsRow
+		if err := rows.Scan(&i.ID, &i.ProjectID, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjectSessionArtifacts = `-- name: ListProjectSessionArtifacts :many
 SELECT
     id,
@@ -5843,6 +6165,52 @@ func (q *Queries) ListStartedWorkflowRunRecoveryCandidates(ctx context.Context) 
 			&i.RunStartSnapshotJson,
 			&i.MetadataJson,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTaskAssignedLabelIDsByTasks = `-- name: ListTaskAssignedLabelIDsByTasks :many
+SELECT tla.task_id, pl.id AS label_id
+FROM task_label_assignments tla
+JOIN project_labels pl ON pl.id = tla.label_id
+WHERE tla.task_id IN (/*SLICE:task_ids*/?)
+ORDER BY tla.task_id ASC, pl.name COLLATE kent_label_casefold_v1 ASC, pl.id ASC
+`
+
+type ListTaskAssignedLabelIDsByTasksRow struct {
+	TaskID  string
+	LabelID string
+}
+
+func (q *Queries) ListTaskAssignedLabelIDsByTasks(ctx context.Context, taskIds []string) ([]ListTaskAssignedLabelIDsByTasksRow, error) {
+	query := listTaskAssignedLabelIDsByTasks
+	var queryParams []interface{}
+	if len(taskIds) > 0 {
+		for _, v := range taskIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:task_ids*/?", strings.Repeat(",?", len(taskIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTaskAssignedLabelIDsByTasksRow
+	for rows.Next() {
+		var i ListTaskAssignedLabelIDsByTasksRow
+		if err := rows.Scan(&i.TaskID, &i.LabelID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -7830,25 +8198,28 @@ args AS (
         CAST(?8 AS TEXT) AS status_kinds_json,
         CAST(?9 AS INTEGER) AS attention_filter_set,
         CAST(?10 AS TEXT) AS attention_kinds_json,
-        CAST(?11 AS INTEGER) AS cursor_set,
-        CAST(?12 AS INTEGER) AS cursor_created_at_unix_ms,
-        CAST(?13 AS INTEGER) AS cursor_updated_at_unix_ms,
-        CAST(?14 AS INTEGER) AS cursor_primary_status_rank,
-        CAST(?15 AS INTEGER) AS cursor_column_rank,
-        CAST(?16 AS INTEGER) AS cursor_run_count,
-        CAST(?17 AS TEXT) AS cursor_title_sort,
-        CAST(?18 AS TEXT) AS cursor_task_id,
-        CAST(?19 AS TEXT) AS sort_1_field,
-        CAST(?20 AS INTEGER) AS sort_1_desc,
-        CAST(?21 AS TEXT) AS sort_2_field,
-        CAST(?22 AS INTEGER) AS sort_2_desc,
-        CAST(?23 AS TEXT) AS sort_3_field,
-        CAST(?24 AS INTEGER) AS sort_3_desc,
-        CAST(?25 AS TEXT) AS sort_4_field,
-        CAST(?26 AS INTEGER) AS sort_4_desc,
-        CAST(?27 AS TEXT) AS sort_5_field,
-        CAST(?28 AS INTEGER) AS sort_5_desc,
-        CAST(?29 AS INTEGER) AS limit_rows
+        CAST(?11 AS TEXT) AS label_filter_kind,
+        CAST(?12 AS TEXT) AS label_filter_mode,
+        CAST(?13 AS TEXT) AS label_ids_json,
+        CAST(?14 AS INTEGER) AS cursor_set,
+        CAST(?15 AS INTEGER) AS cursor_created_at_unix_ms,
+        CAST(?16 AS INTEGER) AS cursor_updated_at_unix_ms,
+        CAST(?17 AS INTEGER) AS cursor_primary_status_rank,
+        CAST(?18 AS INTEGER) AS cursor_column_rank,
+        CAST(?19 AS INTEGER) AS cursor_run_count,
+        CAST(?20 AS TEXT) AS cursor_title_sort,
+        CAST(?21 AS TEXT) AS cursor_task_id,
+        CAST(?22 AS TEXT) AS sort_1_field,
+        CAST(?23 AS INTEGER) AS sort_1_desc,
+        CAST(?24 AS TEXT) AS sort_2_field,
+        CAST(?25 AS INTEGER) AS sort_2_desc,
+        CAST(?26 AS TEXT) AS sort_3_field,
+        CAST(?27 AS INTEGER) AS sort_3_desc,
+        CAST(?28 AS TEXT) AS sort_4_field,
+        CAST(?29 AS INTEGER) AS sort_4_desc,
+        CAST(?30 AS TEXT) AS sort_5_field,
+        CAST(?31 AS INTEGER) AS sort_5_desc,
+        CAST(?32 AS INTEGER) AS limit_rows
 ),
 visible_columns AS (
     SELECT
@@ -8048,6 +8419,42 @@ selected_rows AS (
               JOIN json_each(status.attention_types_json) task_attention ON task_attention.value = filter_attention.value
           )
       )
+      AND (
+          args.label_filter_kind = 'none'
+          OR (
+              args.label_filter_kind = 'named'
+              AND args.label_filter_mode = 'any'
+              AND EXISTS (
+                  SELECT 1
+                  FROM json_each(args.label_ids_json) selected_label
+                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                    ON assignment.label_id = selected_label.value
+                  WHERE assignment.task_id = t.id
+              )
+          )
+          OR (
+              args.label_filter_kind = 'named'
+              AND args.label_filter_mode = 'all'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(args.label_ids_json) selected_label
+                  WHERE NOT EXISTS (
+                      SELECT 1
+                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
+                      WHERE assignment.label_id = selected_label.value
+                        AND assignment.task_id = t.id
+                  )
+              )
+          )
+          OR (
+              args.label_filter_kind = 'unlabeled'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM task_label_assignments assignment
+                  WHERE assignment.task_id = t.id
+              )
+          )
+      )
 ),
 matching_workflows AS (
     SELECT task_link.workflow_id
@@ -8184,6 +8591,9 @@ type ListWorkflowTaskListRowsParams struct {
 	StatusKindsJson         string
 	AttentionFilterSet      int64
 	AttentionKindsJson      string
+	LabelFilterKind         string
+	LabelFilterMode         sql.NullString
+	LabelIdsJson            string
 	CursorSet               int64
 	CursorCreatedAtUnixMs   int64
 	CursorUpdatedAtUnixMs   int64
@@ -8253,6 +8663,9 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 		arg.StatusKindsJson,
 		arg.AttentionFilterSet,
 		arg.AttentionKindsJson,
+		arg.LabelFilterKind,
+		arg.LabelFilterMode,
+		arg.LabelIdsJson,
 		arg.CursorSet,
 		arg.CursorCreatedAtUnixMs,
 		arg.CursorUpdatedAtUnixMs,
@@ -8825,6 +9238,41 @@ func (q *Queries) RejectPendingApprovalTransition(ctx context.Context, transitio
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const renameProjectLabel = `-- name: RenameProjectLabel :one
+UPDATE project_labels
+SET
+    name = ?1,
+    updated_at_unix_ms = ?2
+WHERE id = ?3
+  AND project_id = ?4
+RETURNING id, project_id, name
+`
+
+type RenameProjectLabelParams struct {
+	Name            string
+	UpdatedAtUnixMs int64
+	ID              string
+	ProjectID       string
+}
+
+type RenameProjectLabelRow struct {
+	ID        string
+	ProjectID string
+	Name      string
+}
+
+func (q *Queries) RenameProjectLabel(ctx context.Context, arg RenameProjectLabelParams) (RenameProjectLabelRow, error) {
+	row := q.db.QueryRowContext(ctx, renameProjectLabel,
+		arg.Name,
+		arg.UpdatedAtUnixMs,
+		arg.ID,
+		arg.ProjectID,
+	)
+	var i RenameProjectLabelRow
+	err := row.Scan(&i.ID, &i.ProjectID, &i.Name)
+	return i, err
 }
 
 const resetInvalidCompletionProtocolViolationBudget = `-- name: ResetInvalidCompletionProtocolViolationBudget :execrows

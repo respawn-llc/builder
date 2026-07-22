@@ -523,6 +523,7 @@ export type BoardCard = Readonly<{
   sourceWorkspace: WorkspaceSummary;
   status: TaskStatus;
   actions: TaskActions;
+  labelIDs: readonly string[];
   updatedAt: number;
 }>;
 
@@ -690,6 +691,7 @@ export type TaskDetail = Readonly<{
   sourceWorkspace: WorkspaceSummary;
   status: TaskStatus;
   actions: TaskActions;
+  labelIDs: readonly string[];
   attentionCount: number;
   executionTarget: WorkflowExecutionTarget | null;
   worktreePath: string | null;
