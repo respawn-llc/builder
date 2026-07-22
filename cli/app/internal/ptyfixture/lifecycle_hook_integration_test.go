@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,11 +18,6 @@ import (
 
 type lifecycleServerProcessReady struct {
 	PID int `json:"pid"`
-}
-
-type lifecycleHookRecord struct {
-	ParentPID int             `json:"parent_pid"`
-	Payload   json.RawMessage `json:"payload"`
 }
 
 func TestLifecycleHooksLocalConfiguredPTYRunsRepresentativeFlow(t *testing.T) {
@@ -83,7 +77,7 @@ func TestLifecycleHooksLocalConfiguredPTYRunsRepresentativeFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run local lifecycle PTY fixture: %v raw=%q", err, string(capture.Raw))
 	}
-	records := waitForLifecycleHookRecords(t, recordPath, 3)
+	records := appfixture.WaitForLifecycleHookRecords(t, recordPath, 3)
 	events := lifecycleEventsByCategory(t, records)
 	for _, category := range []lifecyclecontract.Category{
 		lifecyclecontract.CategorySessionStart,
@@ -181,7 +175,7 @@ func TestLifecycleHooksRemotePTYRunsInControllingClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run remote lifecycle PTY fixture: %v raw=%q server=%q", err, string(capture.Raw), serverOutput.String())
 	}
-	records := waitForLifecycleHookRecords(t, recordPath, 2)
+	records := appfixture.WaitForLifecycleHookRecords(t, recordPath, 2)
 	events := lifecycleEventsByCategory(t, records)
 	for _, category := range []lifecyclecontract.Category{
 		lifecyclecontract.CategorySessionStart,
@@ -238,7 +232,7 @@ func TestLifecycleHookFailureIsVisibleAndDoesNotBlockPTYRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run failing-hook lifecycle PTY fixture: %v raw=%q", err, string(capture.Raw))
 	}
-	events := lifecycleEventsByCategory(t, waitForLifecycleHookRecords(t, recordPath, 2))
+	events := lifecycleEventsByCategory(t, appfixture.WaitForLifecycleHookRecords(t, recordPath, 2))
 	if _, ok := events[lifecyclecontract.CategoryTaskComplete]; !ok {
 		t.Fatalf("runtime did not complete after hook failure: %+v", events)
 	}
@@ -268,53 +262,13 @@ func lifecyclePTYProcessEnv(t *testing.T, root string, config appfixture.Lifecyc
 	return appfixture.LifecycleProcessConfigEnvName + "=" + path
 }
 
-func waitForLifecycleHookRecords(t *testing.T, path string, count int) []lifecycleHookRecord {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		file, err := os.Open(path)
-		if err == nil {
-			var records []lifecycleHookRecord
-			decoder := json.NewDecoder(file)
-			for {
-				var record lifecycleHookRecord
-				if err := decoder.Decode(&record); err != nil {
-					if err != io.EOF {
-						_ = file.Close()
-						t.Fatalf("decode lifecycle hook records: %v", err)
-					}
-					break
-				}
-				records = append(records, record)
-			}
-			_ = file.Close()
-			if len(records) >= count {
-				return records
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %d lifecycle hook records", count)
-	return nil
-}
-
-type lifecycleEventEnvelope struct {
-	Category lifecyclecontract.Category `json:"category"`
-	Context  lifecyclecontract.Context  `json:"context"`
-	Details  json.RawMessage            `json:"details"`
-}
-
 func lifecycleEventsByCategory(
 	t *testing.T,
-	records []lifecycleHookRecord,
-) map[lifecyclecontract.Category]lifecycleEventEnvelope {
+	records []appfixture.LifecycleHookRecord,
+) map[lifecyclecontract.Category]appfixture.LifecycleHookEvent {
 	t.Helper()
-	events := make(map[lifecyclecontract.Category]lifecycleEventEnvelope, len(records))
-	for index, record := range records {
-		var event lifecycleEventEnvelope
-		if err := json.Unmarshal(record.Payload, &event); err != nil {
-			t.Fatalf("decode lifecycle hook record %d: %v", index, err)
-		}
+	events := make(map[lifecyclecontract.Category]appfixture.LifecycleHookEvent, len(records))
+	for _, event := range appfixture.DecodeLifecycleHookEvents(t, records) {
 		events[event.Category] = event
 	}
 	return events

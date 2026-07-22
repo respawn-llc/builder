@@ -139,15 +139,11 @@ func prepareSharedRuntimeWiring(
 		}
 		return strings.TrimSpace(*plan.SessionTitle)
 	}, terminalFocus.FocusedForAttention)
-	var promptAttention promptAttentionSink = turnQueueHook
-	if lifecycleProxy != nil {
-		promptAttention = newAcceptedAttentionFanout(turnQueueHook, lifecycleProxy.AcceptAttention)
-	}
 	wiring := &runtimeWiring{
 		eventDispatcher:       eventDispatcher,
 		requestTranscriptOpen: requestTranscriptOpen,
 		promptAnswers:         newTranscriptPromptAnswerer(ctx, clients.PromptControl),
-		promptAttention:       promptAttention,
+		promptAttention:       turnQueueHook,
 		turnQueueHook:         turnQueueHook,
 		terminalFocus:         terminalFocus,
 		runtimeClient:         runtimeClient,

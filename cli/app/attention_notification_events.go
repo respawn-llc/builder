@@ -6,38 +6,6 @@ type promptAttentionSink interface {
 	onAttentionNotification(clientui.AttentionNotificationEvent, *string)
 }
 
-type acceptedAttentionFanout struct {
-	native    promptAttentionSink
-	observers []func(clientui.AttentionNotificationEvent)
-}
-
-func newAcceptedAttentionFanout(
-	native promptAttentionSink,
-	observers ...func(clientui.AttentionNotificationEvent),
-) *acceptedAttentionFanout {
-	return &acceptedAttentionFanout{
-		native:    native,
-		observers: append([]func(clientui.AttentionNotificationEvent){}, observers...),
-	}
-}
-
-func (f *acceptedAttentionFanout) onAttentionNotification(
-	event clientui.AttentionNotificationEvent,
-	projectedPreview *string,
-) {
-	if f == nil || !tuiAcceptsAttentionNotification(event) {
-		return
-	}
-	if f.native != nil {
-		f.native.onAttentionNotification(event, projectedPreview)
-	}
-	for _, observe := range f.observers {
-		if observe != nil {
-			observe(event)
-		}
-	}
-}
-
 func tuiAcceptsAttentionNotification(event clientui.AttentionNotificationEvent) bool {
 	return event.Type == clientui.AttentionNotificationEventPending &&
 		event.Pending != nil &&

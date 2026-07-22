@@ -16,6 +16,9 @@ func (p *clientLifecycleProxy) AcceptTranscript(message clientui.TranscriptMessa
 		if hydration := message.Payload.Hydration; hydration != nil {
 			p.acceptSessionIdentity(hydration.SessionIdentity)
 			p.acceptSessionStatus(hydration.SessionStatus)
+			for _, prompt := range hydration.PendingPrompts {
+				p.acceptPendingPrompt(prompt)
+			}
 		}
 	case clientui.TranscriptMessageSessionIdentity:
 		if identity := message.Payload.SessionIdentity; identity != nil {
@@ -39,5 +42,28 @@ func (p *clientLifecycleProxy) AcceptTranscript(message clientui.TranscriptMessa
 				status.Mode,
 			))
 		}
+	case clientui.TranscriptMessagePromptPending:
+		if prompt := message.Payload.PromptPending; prompt != nil {
+			p.acceptPendingPrompt(*prompt)
+		}
 	}
+}
+
+func (p *clientLifecycleProxy) acceptPendingPrompt(prompt clientui.TranscriptPrompt) {
+	var kind lifecyclecontract.InputKind
+	switch prompt.Kind {
+	case clientui.TranscriptPromptKindQuestion:
+		kind = lifecyclecontract.InputKindQuestion
+	case clientui.TranscriptPromptKindApproval:
+		kind = lifecyclecontract.InputKindApproval
+	default:
+		return
+	}
+	p.enqueue(lifecyclecontract.NewInputRequired(
+		prompt.CreatedAt,
+		p.isFocused(),
+		p.context(),
+		kind,
+		prompt.Question,
+	))
 }

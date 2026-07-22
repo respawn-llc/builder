@@ -3,11 +3,14 @@ package app
 import (
 	"context"
 	"io"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"core/internal/testharness/pty/appfixture"
 	"core/shared/apicontract"
 	"core/shared/config"
+	"core/shared/lifecyclecontract"
 	"core/shared/serverapi"
 )
 
@@ -94,6 +97,37 @@ func TestRuntimeAttachmentUsesTranscriptBellHook(t *testing.T) {
 	}
 	if got := sessionViews.mainViewCount.Load(); got != 0 {
 		t.Fatalf("startup main-view reads = %d, want 0 before feed hydration", got)
+	}
+}
+
+func TestRuntimeAttachmentKeepsPromptActivationIndependentFromLifecycleHooks(t *testing.T) {
+	recordPath := filepath.Join(t.TempDir(), "lifecycle.jsonl")
+	command, err := lifecycleHookProductRecorderCommand(
+		recordPath,
+		appfixture.LifecycleHookBehaviorSuccess,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("lifecycle recorder command: %v", err)
+	}
+	server := runtimeAttachmentTestServer{
+		sessionTranscript: &recordingTranscriptSubscriber{subs: []*scriptedTranscriptSubscription{{}}},
+		sessionViews:      &countingSessionViewClient{},
+		runtimeControl:    &reconnectRetryRuntimeControlClient{},
+	}
+	sessionID := ongoingTestSessionID().String()
+	wiring, stop, err := prepareSharedRuntimeWiring(t.Context(), server.RuntimeAttachmentClients(), sessionLaunchPlan{
+		SessionID:                  sessionID,
+		ClientLifecycleCommand:     command,
+		ClientLifecycleOpeningKind: lifecyclecontract.OpeningKindResumed,
+	}, nil)
+	if err != nil {
+		t.Fatalf("prepareSharedRuntimeWiring: %v", err)
+	}
+	t.Cleanup(stop)
+
+	if wiring.promptAttention == nil || wiring.promptAttention != wiring.turnQueueHook {
+		t.Fatal("lifecycle hooks changed native prompt-activation ownership")
 	}
 }
 

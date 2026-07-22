@@ -61,36 +61,6 @@ func (p *clientLifecycleProxy) AcceptSessionStart(kind lifecyclecontract.Opening
 	p.enqueue(lifecyclecontract.NewSessionStart(time.Now().UTC(), p.isFocused(), p.context(), kind))
 }
 
-func (p *clientLifecycleProxy) AcceptAttention(event clientui.AttentionNotificationEvent) {
-	if p == nil || event.Type != clientui.AttentionNotificationEventPending || event.Pending == nil {
-		return
-	}
-	notification := event.Pending
-	context := p.context()
-	switch notification.Kind {
-	case clientui.AttentionNotificationKindQuestion:
-		if notification.Question != nil {
-			p.enqueue(lifecyclecontract.NewInputRequired(
-				notification.OccurredAt,
-				p.isFocused(),
-				context,
-				lifecyclecontract.InputKindQuestion,
-				notification.Question.Preview,
-			))
-		}
-	case clientui.AttentionNotificationKindApproval:
-		if notification.Approval != nil {
-			p.enqueue(lifecyclecontract.NewInputRequired(
-				notification.OccurredAt,
-				p.isFocused(),
-				context,
-				lifecyclecontract.InputKindApproval,
-				notification.Approval.Message,
-			))
-		}
-	}
-}
-
 func (p *clientLifecycleProxy) acceptLiveRunFinished(result clientui.TranscriptLiveRunResult) {
 	switch {
 	case result.Status == clientui.LiveRunStatusFailed && result.Failure != nil:
