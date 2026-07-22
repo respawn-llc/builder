@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"core/server/llm"
@@ -217,16 +215,5 @@ func appendMalformedRollbackCandidateHistoryReplacement(t *testing.T, store *ses
 	if err != nil {
 		t.Fatalf("marshal malformed rollback candidate history replacement: %v", err)
 	}
-	path := filepath.Join(store.Dir(), "events.jsonl")
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatalf("open persisted event log for malformed rollback candidate: %v", err)
-	}
-	if _, err := file.Write(append(line, '\n')); err != nil {
-		_ = file.Close()
-		t.Fatalf("append malformed rollback candidate history replacement: %v", err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("close persisted event log after malformed rollback candidate: %v", err)
-	}
+	appendRawCurrentEventLine(t, store, line)
 }

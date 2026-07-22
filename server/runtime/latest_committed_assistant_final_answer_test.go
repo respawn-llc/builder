@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"encoding/json"
+	"errors"
 	"testing"
 
 	"core/server/llm"
@@ -142,5 +144,44 @@ func TestLatestCommittedAssistantFinalAnswerReturnsAbsenceWithoutFinal(t *testin
 	}
 	if answer != nil {
 		t.Fatalf("answer = %q, want absence", *answer)
+	}
+}
+
+func TestLatestCommittedAssistantFinalAnswerFailsOnMalformedRelevantEvents(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eventLog := mustMaterializeTestEventLog(t, store)
+	appendFinalAnswerTestRecord(t, eventLog, finalAnswerMessageRecord(t, llm.Message{
+		Role:    llm.RoleAssistant,
+		Phase:   textutil.Value(llm.MessagePhaseFinal),
+		Content: textutil.Value("final answer before malformed record"),
+	}))
+	line, err := json.Marshal(struct {
+		Seq     int64                            `json:"seq"`
+		Kind    session.EventKind                `json:"kind"`
+		Payload session.HistoryReplacementRecord `json:"payload"`
+	}{
+		Seq:  2,
+		Kind: session.EventKindHistoryReplace,
+		Payload: session.HistoryReplacementRecord{
+			Engine: "local",
+			Mode:   session.CompactionModeManual,
+			Items: []session.ProviderHistoryItem{{
+				Type: session.ProviderHistoryItemTypeOther,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal malformed relevant event: %v", err)
+	}
+	appendRawCurrentEventLine(t, store, line)
+
+	answer, err := LatestCommittedAssistantFinalAnswerFromEventLog(eventLog)
+	var itemErr session.ProviderHistoryItemError
+	if answer != nil ||
+		!errors.Is(err, session.ErrProviderHistoryItem) ||
+		!errors.As(err, &itemErr) ||
+		itemErr.Type != session.ProviderHistoryItemTypeOther ||
+		itemErr.Reason != session.ProviderHistoryItemMissingRaw {
+		t.Fatalf("latest final answer malformed-event result = answer:%+v error:%v item:%+v", answer, err, itemErr)
 	}
 }

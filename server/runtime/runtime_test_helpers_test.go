@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -118,6 +119,22 @@ func mustBlockTestEventLogAppends(t *testing.T, store *session.Store) *testEvent
 		t.Fatal("event-log append blocker requires a session store")
 	}
 	return filemode.MustBlockEventLogAppends(t, filepath.Join(store.Dir(), "events.jsonl"))
+}
+
+func appendRawCurrentEventLine(t *testing.T, store *session.Store, line []byte) {
+	t.Helper()
+	path := filepath.Join(store.Dir(), "events.jsonl")
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open persisted event log for raw append: %v", err)
+	}
+	if _, err := file.Write(append(append([]byte(nil), line...), '\n')); err != nil {
+		_ = file.Close()
+		t.Fatalf("append raw persisted event: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close persisted event log after raw append: %v", err)
+	}
 }
 
 func mustCreateTestSessionAt(t *testing.T, root string, options ...session.StoreOption) *session.Store {
