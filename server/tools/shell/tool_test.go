@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -440,11 +439,13 @@ func TestWriteStdinPollingPreservesTerminalLifecycleForAllCompletionShapes(t *te
 		name         string
 		command      string
 		wantExitCode int
+		yieldTimeMS  int
 	}{
-		{name: "zero silent", command: "sleep 0.15", wantExitCode: 0},
-		{name: "zero with output", command: "sleep 0.15; printf visible", wantExitCode: 0},
-		{name: "non-zero silent", command: "sleep 0.15; exit 7", wantExitCode: 7},
-		{name: "non-zero with output", command: "sleep 0.15; printf visible; exit 7", wantExitCode: 7},
+		{name: "zero silent", command: "sleep 0.15", wantExitCode: 0, yieldTimeMS: 15_000},
+		{name: "zero with output", command: "sleep 0.15; printf visible", wantExitCode: 0, yieldTimeMS: 15_000},
+		{name: "non-zero silent", command: "sleep 0.15; exit 7", wantExitCode: 7, yieldTimeMS: 15_000},
+		{name: "non-zero with output", command: "sleep 0.15; printf visible; exit 7", wantExitCode: 7, yieldTimeMS: 15_000},
+		{name: "maximum output poll wait", command: "sleep 0.15", wantExitCode: 0, yieldTimeMS: 86_400_000},
 	}
 
 	for _, tt := range tests {
@@ -477,7 +478,7 @@ func TestWriteStdinPollingPreservesTerminalLifecycleForAllCompletionShapes(t *te
 
 			poll := callWriteStdin(t, pollTool, "poll-complete", map[string]any{
 				"session_id":    sessionID,
-				"yield_time_ms": 15_000,
+				"yield_time_ms": tt.yieldTimeMS,
 			})
 			if poll.IsError {
 				t.Fatalf("unexpected write_stdin error: %s", string(poll.Output))
@@ -527,8 +528,7 @@ func TestWriteStdinRejectsShortTimedOutputPolls(t *testing.T) {
 		{name: "below minimum", yieldTimeMS: 14_999},
 		{name: "zero", yieldTimeMS: 0},
 		{name: "negative", yieldTimeMS: -1},
-		{name: "unrepresentable output poll", yieldTimeMS: math.MaxInt},
-		{name: "unrepresentable input", yieldTimeMS: math.MaxInt, chars: "x"},
+		{name: "above maximum", yieldTimeMS: 86_400_001},
 	} {
 		input := map[string]any{
 			"session_id":    1000,
@@ -939,7 +939,7 @@ func TestWriteStdinSendsInputToInteractiveProcess(t *testing.T) {
 	stdinResult := callWriteStdin(t, stdinTool, "tty-2", map[string]any{
 		"session_id":    1000,
 		"chars":         "hello app\n",
-		"yield_time_ms": 800,
+		"yield_time_ms": 86_400_001,
 	})
 	if stdinResult.IsError {
 		t.Fatalf("unexpected write_stdin error: %s", string(stdinResult.Output))

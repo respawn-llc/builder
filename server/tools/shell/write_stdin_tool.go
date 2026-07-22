@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -21,9 +20,10 @@ type writeStdinInput struct {
 }
 
 const (
-	minimumOutputPollWaitMS      = 15_000
-	maximumWriteStdinYieldTimeMS = math.MaxInt64 / int64(time.Millisecond)
-	shortOutputPollError         = "Avoid polling repeatedly for short intervals, prefer 3-15min polls depending on task. Pick a better interval and retry"
+	minimumOutputPollWaitMS = 15_000
+	maximumOutputPollWaitMS = 24 * 60 * 60 * 1_000
+	shortOutputPollError    = "Avoid polling repeatedly for short intervals, prefer 3-15min polls depending on task. Pick a better interval and retry"
+	longOutputPollError     = "This poll is too long. Consider using system cron jobs and `kent run` headless runs for tasks that require such long wait periods"
 )
 
 type WriteStdinTool struct {
@@ -59,12 +59,13 @@ func (t *WriteStdinTool) Call(ctx context.Context, c tools.Call) (tools.Result, 
 	}
 	yieldTime := defaultWriteYieldTime
 	if in.YieldTimeMS != nil {
-		yieldTimeMS := int64(*in.YieldTimeMS)
-		if yieldTimeMS > maximumWriteStdinYieldTimeMS ||
-			(in.Chars == "" && yieldTimeMS < minimumOutputPollWaitMS) {
+		if in.Chars == "" && *in.YieldTimeMS < minimumOutputPollWaitMS {
 			return tools.ErrorResultWith(c, shortOutputPollError, marshalNoHTMLEscape), nil
 		}
-		yieldTime = time.Duration(yieldTimeMS) * time.Millisecond
+		if in.Chars == "" && *in.YieldTimeMS > maximumOutputPollWaitMS {
+			return tools.ErrorResultWith(c, longOutputPollError, marshalNoHTMLEscape), nil
+		}
+		yieldTime = time.Duration(*in.YieldTimeMS) * time.Millisecond
 	}
 	maxChars := t.outputLimit
 	if in.MaxOutputTokens != nil && *in.MaxOutputTokens > 0 {
