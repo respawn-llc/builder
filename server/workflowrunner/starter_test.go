@@ -29,6 +29,7 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
 	"core/server/workflowattention"
+	"core/server/workflowexecution"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/server/workflowview"
@@ -1319,6 +1320,92 @@ func TestWorkflowRuntimeFanoutCompactAndContinueClonesUseBranchTransitionMetadat
 	}
 }
 
+func TestWorkflowRuntimeFanoutAutomaticallyStartsEverySuccessorAfterSourceRetires(t *testing.T) {
+	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput,
+		ScriptedFinalAnswer(`{"commentary":"planned","summary":"plan summary"}`),
+		ScriptedFinalAnswer("branch compacted"),
+		ScriptedFinalAnswer(`{"commentary":"branch done","joined":"branch joined"}`),
+		ScriptedFinalAnswer("branch compacted"),
+		ScriptedFinalAnswer(`{"commentary":"branch done"}`),
+		ScriptedFinalAnswer(`{"commentary":"synthesized"}`),
+	)
+	workflowID := createFanoutCompactStarterWorkflow(t, fixture.store)
+	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow fanout: %v", err)
+	}
+	scheduler := fixture.schedulerWithOptions(t, WithSchedulerProcessInterval(time.Hour))
+	if err := scheduler.Start(context.Background()); err != nil {
+		t.Fatalf("scheduler.Start: %v", err)
+	}
+
+	task := fixture.createStartedTask(t)
+	fixture.waitForAllRunsCompleted(t, task.ID, 4)
+	fixture.waitForActiveCountZero(t, scheduler)
+
+	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 4 {
+		t.Fatalf("runs = %+v, want source, two fan-out successors, and synthesis", runs)
+	}
+	for _, run := range runs {
+		if run.StartedAt == nil || run.CompletedAt == nil || run.InterruptedAt != nil {
+			t.Fatalf("run = %+v, want started and completed without interruption", run)
+		}
+	}
+}
+
+func TestWorkflowRuntimeCompletionWakesSchedulerForSuccessor(t *testing.T) {
+	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput,
+		ScriptedFinalAnswer(`{"commentary":"implemented"}`),
+	)
+	fixture.linkChainedWorkflow(t, workflow.ContextModeNewSession, "coder")
+	scheduler := fixture.schedulerWithOptions(t, WithSchedulerProcessInterval(time.Hour))
+	if err := scheduler.Start(context.Background()); err != nil {
+		t.Fatalf("scheduler.Start: %v", err)
+	}
+	task, err := fixture.store.CreateTask(context.Background(), workflowstore.CreateTaskRequest{
+		ProjectID: fixture.projectID,
+		Title:     "Run workflow",
+		Body:      "Body for workflow",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := fixture.worktrees.RestoreLockedTaskWorktree(context.Background(), LockedTaskWorktreeRestoreRequest{TaskID: task.ID}); err != nil {
+		t.Fatalf("RestoreLockedTaskWorktree: %v", err)
+	}
+	candidate := fixture.worktrees.executionTargetCandidate(task)
+	if _, err := fixture.store.StartTaskWithExecutionTarget(context.Background(), task.ID, &candidate); err != nil {
+		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
+	}
+	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns source: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("runs before manual completion = %+v, want source only", runs)
+	}
+	source, err := fixture.store.ClaimRun(context.Background(), runs[0].ID, runs[0].Generation)
+	if err != nil {
+		t.Fatalf("ClaimRun source: %v", err)
+	}
+	controller := workflowruntime.StoreController{Store: fixture.store, AutomaticIntents: fixture.automaticIntents}
+	if _, err := controller.CompleteWorkflowRun(context.Background(), workflowruntime.CompletionRequest{
+		RunID:              source.ID,
+		ExpectedGeneration: source.Generation,
+		RequireGeneration:  true,
+		TransitionID:       "next",
+		OutputValues:       map[string]string{"prior_summary": "source summary"},
+	}); err != nil {
+		t.Fatalf("CompleteWorkflowRun: %v", err)
+	}
+
+	fixture.waitForAllRunsCompleted(t, task.ID, 2)
+	fixture.waitForActiveCountZero(t, scheduler)
+}
+
 func TestWorkflowRuntimeDefaultRoleClearsInvalidPersistedRoleBeforeValidation(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer("{}"))
 	roleSettings := fixture.cfg.Settings
@@ -1732,7 +1819,7 @@ type starterFixture struct {
 	workflowID           workflow.WorkflowID
 	projectID            string
 	attentionBroker      *attentionnotify.Broker
-	automaticIntents     *AutomaticIntents
+	automaticIntents     *workflowexecution.AutomaticIntents
 }
 
 type starterRuntimeRegistry interface {
@@ -1775,7 +1862,7 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	client := NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}, steps...)
 	clientFactory := func(SchedulerStartRunRequest) llm.Client { return client }
 	attentionBroker := attentionnotify.NewBroker()
-	automaticIntents := NewAutomaticIntents()
+	automaticIntents := workflowexecution.NewAutomaticIntents()
 	runtimes := registry.NewRuntimeRegistry().WithAttentionNotifications(attentionBroker)
 	schedulerTarget := new(*SchedulerService)
 	runtimeAuthority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{

@@ -1,4 +1,4 @@
-package workflowrunner
+package workflowexecution
 
 import (
 	"context"
@@ -19,49 +19,6 @@ const (
 	ReasonSchedulerStartupUnstartedRun   = "workflow_startup_unstarted_run"
 )
 
-var (
-	ErrSchedulerStopped            = errors.New("workflow scheduler stopped")
-	ErrSchedulerRuntimeStartFailed = errors.New("workflow runtime start failed")
-)
-
-type SchedulerStore interface {
-	GetRun(ctx context.Context, runID workflow.RunID) (workflowstore.RunRecord, error)
-	ClaimRun(ctx context.Context, runID workflow.RunID, expectedGeneration int64) (workflowstore.RunnableRunRecord, error)
-	InterruptRun(ctx context.Context, runID workflow.RunID, reason string, detailJSON string) error
-	InterruptRunGeneration(ctx context.Context, runID workflow.RunID, generation int64, reason string, detailJSON string) error
-	ReconcileStartedRuns(ctx context.Context, reason string) ([]workflowstore.RunRecord, error)
-	ReconcileUnstartedRuns(ctx context.Context, reason string) ([]workflowstore.RunRecord, error)
-	ListWaitingAskRuns(ctx context.Context) ([]workflowstore.RunRecord, error)
-}
-
-type SchedulerRuntimeStarter interface {
-	StartWorkflowRun(ctx context.Context, req SchedulerStartRunRequest) error
-}
-
-type SchedulerPendingAskResolver interface {
-	CanRehydrate(ctx context.Context, sessionID string, runID workflow.RunID, askID string) (bool, error)
-}
-
-type SchedulerLogger interface {
-	Logf(format string, args ...any)
-}
-
-type SchedulerInterruptedRunFinalizer interface {
-	PublishPendingInterruptedRun(context.Context, workflow.RunID)
-}
-
-type SchedulerStartRunRequest struct {
-	RunID       workflow.RunID
-	TaskID      workflow.TaskID
-	PlacementID workflow.PlacementID
-	NodeID      workflow.NodeID
-	Generation  int64
-}
-
-type SchedulerConfig struct {
-	Concurrency int
-}
-
 type SchedulerService struct {
 	store              SchedulerStore
 	starter            SchedulerRuntimeStarter
@@ -74,13 +31,16 @@ type SchedulerService struct {
 	attentionFinalizer SchedulerInterruptedRunFinalizer
 	automaticIntents   *AutomaticIntents
 
-	mu         sync.Mutex
-	active     map[workflow.RunID]SchedulerStartRunRequest
-	stopped    bool
-	started    bool
-	loopCancel context.CancelFunc
-	loopWG     sync.WaitGroup
-	wake       chan struct{}
+	processGate chan struct{}
+	stoppedCh   chan struct{}
+	mu          sync.Mutex
+	active      map[workflow.RunID]SchedulerStartRunRequest
+	stopped     bool
+	started     bool
+	loopCancel  context.CancelFunc
+	loopWG      sync.WaitGroup
+	processWG   sync.WaitGroup
+	wake        chan struct{}
 }
 
 const (
@@ -108,7 +68,10 @@ func NewSchedulerService(store SchedulerStore, starter SchedulerRuntimeStarter, 
 		automaticIntents: NewAutomaticIntents(),
 		active:           map[workflow.RunID]SchedulerStartRunRequest{},
 		wake:             make(chan struct{}, defaultWakeBuffer),
+		processGate:      make(chan struct{}, 1),
+		stoppedCh:        make(chan struct{}),
 	}
+	service.processGate <- struct{}{}
 	for _, opt := range opts {
 		opt(service)
 	}
@@ -192,13 +155,19 @@ func (s *SchedulerService) Close() error {
 		return nil
 	}
 	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return nil
+	}
 	s.stopped = true
+	close(s.stoppedCh)
 	cancel := s.loopCancel
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
 	s.loopWG.Wait()
+	s.processWG.Wait()
 	return nil
 }
 
@@ -251,7 +220,6 @@ func (s *SchedulerService) RequestAutomaticStarts(runIDs []workflow.RunID) {
 		return
 	}
 	s.automaticIntents.RequestAutomaticStarts(runIDs)
-	s.Notify()
 }
 
 func (s *SchedulerService) StartExplicitRuns(ctx context.Context, runIDs []workflow.RunID) error {
@@ -282,6 +250,7 @@ func (s *SchedulerService) runLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-s.wake:
+		case <-s.automaticIntents.Notifications():
 		case <-ticker.C:
 		}
 		if err := s.Process(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, ErrSchedulerStopped) {
@@ -347,34 +316,60 @@ func (s *SchedulerService) Process(ctx context.Context) error {
 		s.mu.Unlock()
 		return ErrSchedulerStopped
 	}
-	if s.starter == nil {
-		s.mu.Unlock()
-		return nil
-	}
-	capacity := s.concurrency - len(s.active)
+	s.processWG.Add(1)
 	s.mu.Unlock()
-	if capacity <= 0 {
-		return nil
+	defer s.processWG.Done()
+	select {
+	case <-s.stoppedCh:
+		return ErrSchedulerStopped
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-s.processGate:
 	}
-	runIDs := s.automaticIntents.Take(capacity)
-	for index, runID := range runIDs {
-		run, err := s.store.GetRun(ctx, runID)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				continue
-			}
-			s.automaticIntents.ReturnFront(runIDs[index:])
-			return err
+	defer func() { s.processGate <- struct{}{} }()
+	for {
+		s.mu.Lock()
+		if s.stopped {
+			s.mu.Unlock()
+			return ErrSchedulerStopped
 		}
-		if err := s.startRun(ctx, workflowstore.RunnableRunRecord{RunRecord: run}); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				continue
+		if s.starter == nil {
+			s.mu.Unlock()
+			return nil
+		}
+		capacity := s.concurrency - len(s.active)
+		s.mu.Unlock()
+		if capacity <= 0 {
+			return nil
+		}
+		runIDs := s.automaticIntents.Take(capacity)
+		if len(runIDs) == 0 {
+			return nil
+		}
+		for index, runID := range runIDs {
+			run, err := s.store.GetRun(ctx, runID)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					continue
+				}
+				s.automaticIntents.ReturnFront(runIDs[index:])
+				return err
 			}
-			s.automaticIntents.ReturnFront(runIDs[index+1:])
-			return err
+			if err := s.startRun(ctx, workflowstore.RunnableRunRecord{RunRecord: run}); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					continue
+				}
+				retry := runIDs[index+1:]
+				if errors.Is(err, ErrSchedulerClaimFailed) {
+					retry = runIDs[index:]
+				}
+				if !errors.Is(err, ErrSchedulerStopped) {
+					s.automaticIntents.ReturnFront(retry)
+				}
+				return err
+			}
 		}
 	}
-	return nil
 }
 
 func (s *SchedulerService) startRun(ctx context.Context, candidate workflowstore.RunnableRunRecord) error {
@@ -400,6 +395,9 @@ func (s *SchedulerService) startRun(ctx context.Context, candidate workflowstore
 	claimed, err := s.claimRunWithRetry(ctx, candidate)
 	if err != nil {
 		s.RuntimeFinished(candidate.ID, candidate.Generation)
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: %w", ErrSchedulerClaimFailed, err)
+		}
 		return err
 	}
 	req := SchedulerStartRunRequest{

@@ -32,6 +32,7 @@ import (
 
 	"core/server/workflow"
 	"core/server/workflowattention"
+	"core/server/workflowexecution"
 	"core/server/workflowrunner"
 	"core/server/workflowstore"
 	"core/server/workflowsvc"
@@ -99,7 +100,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	attentionBroker := attentionnotify.NewBroker()
 	runtimeRegistry := registry.NewRuntimeRegistry().WithAttentionNotifications(attentionBroker)
 	runtimeRegistry.WithTranscriptContractViolationPanic(cfg.Settings.Debug)
-	var workflowScheduler *workflowrunner.SchedulerService
+	var workflowScheduler *workflowexecution.SchedulerService
 	runtimeAuthority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: cfg.PersistenceRoot,
 		AuthManager:     authSupport.AuthManager,
@@ -253,13 +254,13 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: attention: %w", err)
 	}
 	workflowAttentionFinalizer := workflowattention.NewFinalizer(workflowApprovalProjection{store: workflowStore}, attentionBroker)
-	automaticIntents := workflowrunner.NewAutomaticIntents()
+	automaticIntents := workflowexecution.NewAutomaticIntents()
 	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, Worktrees: runtimeTaskWorktreeRestorer{service: worktreeService}, RuntimeAuthority: runtimeAuthority, AttentionFinalizer: workflowAttentionFinalizer, AutomaticIntents: automaticIntents})
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: runtime starter: %w", err)
 	}
-	workflowScheduler, err = workflowrunner.NewSchedulerService(workflowStore, workflowRuntimeStarter, workflowrunner.SchedulerConfig{Concurrency: cfg.Settings.Workflow.Concurrency}, workflowrunner.WithSchedulerPendingAskResolver(runtimePendingAskResolver{prompts: runtimeRegistry}), workflowrunner.WithSchedulerAttentionFinalizer(workflowAttentionFinalizer), workflowrunner.WithAutomaticIntents(automaticIntents))
+	workflowScheduler, err = workflowexecution.NewSchedulerService(workflowStore, workflowRuntimeStarter, workflowexecution.SchedulerConfig{Concurrency: cfg.Settings.Workflow.Concurrency}, workflowexecution.WithSchedulerPendingAskResolver(runtimePendingAskResolver{prompts: runtimeRegistry}), workflowexecution.WithSchedulerAttentionFinalizer(workflowAttentionFinalizer), workflowexecution.WithAutomaticIntents(automaticIntents))
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: scheduler: %w", err)

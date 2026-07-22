@@ -1,4 +1,4 @@
-package workflowrunner
+package workflowexecution
 
 import (
 	"sync"
@@ -6,18 +6,20 @@ import (
 	"core/server/workflow"
 )
 
-// AutomaticIntents is the volatile admission queue for automatic workflow
-// starts. It deliberately has no durable representation: a server restart
-// loses every pending request and recovery turns any already-started run into
-// an interruption instead.
+// AutomaticIntents is Workflow Execution's volatile admission queue for
+// automatic workflow starts. It deliberately has no durable representation.
 type AutomaticIntents struct {
 	mu      sync.Mutex
 	queue   []workflow.RunID
 	pending map[workflow.RunID]struct{}
+	wake    chan struct{}
 }
 
 func NewAutomaticIntents() *AutomaticIntents {
-	return &AutomaticIntents{pending: make(map[workflow.RunID]struct{})}
+	return &AutomaticIntents{
+		pending: make(map[workflow.RunID]struct{}),
+		wake:    make(chan struct{}, 1),
+	}
 }
 
 func (i *AutomaticIntents) RequestAutomaticStarts(runIDs []workflow.RunID) {
@@ -25,7 +27,7 @@ func (i *AutomaticIntents) RequestAutomaticStarts(runIDs []workflow.RunID) {
 		return
 	}
 	i.mu.Lock()
-	defer i.mu.Unlock()
+	requested := false
 	for _, runID := range runIDs {
 		if runID == "" {
 			continue
@@ -35,7 +37,22 @@ func (i *AutomaticIntents) RequestAutomaticStarts(runIDs []workflow.RunID) {
 		}
 		i.pending[runID] = struct{}{}
 		i.queue = append(i.queue, runID)
+		requested = true
 	}
+	i.mu.Unlock()
+	if requested {
+		select {
+		case i.wake <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (i *AutomaticIntents) Notifications() <-chan struct{} {
+	if i == nil {
+		return nil
+	}
+	return i.wake
 }
 
 func (i *AutomaticIntents) Take(limit int) []workflow.RunID {

@@ -22,6 +22,7 @@ import (
 	"core/server/sleepguard"
 	shelltool "core/server/tools/shell"
 
+	"core/server/workflowexecution"
 	"core/server/workflowrunner"
 	"core/server/workflowsvc"
 	"core/server/worktree"
@@ -108,7 +109,7 @@ type WorktreeBundle struct {
 
 type WorkflowBundle struct {
 	workflows apicontract.WorkflowService
-	scheduler *workflowrunner.SchedulerService
+	scheduler *workflowexecution.SchedulerService
 }
 
 func (s *Core) safeBundles() *Bundles {
@@ -192,7 +193,7 @@ type bundleCompositionInput struct {
 	sessionLifecycleService *sessionservice.SessionLifecycleService
 	updateStatusService     *serverstatus.UpdateStatusService
 	workflowService         *workflowsvc.Service
-	workflowScheduler       *workflowrunner.SchedulerService
+	workflowScheduler       *workflowexecution.SchedulerService
 	workflowRuntimeStarter  *workflowrunner.Starter
 	worktreeService         *worktree.Service
 	sleepManager            *sleepguard.Manager
@@ -310,7 +311,7 @@ func newRuntimeBundle(runtimeSupport serverbootstrap.RuntimeSupport, runtimeRegi
 	}
 }
 
-func newWorkflowBundle(workflowService *workflowsvc.Service, scheduler *workflowrunner.SchedulerService) *WorkflowBundle {
+func newWorkflowBundle(workflowService *workflowsvc.Service, scheduler *workflowexecution.SchedulerService) *WorkflowBundle {
 	return &WorkflowBundle{workflows: workflowService, scheduler: scheduler}
 }
 

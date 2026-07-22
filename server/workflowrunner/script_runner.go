@@ -12,6 +12,7 @@ import (
 	"core/server/sessionruntime"
 	tools "core/server/tools"
 	"core/server/workflowattention"
+	"core/server/workflowexecution"
 	"core/server/workflowruntime"
 	"core/server/workflowscript"
 	"core/server/workflowstore"
@@ -24,7 +25,7 @@ const (
 	scriptAttentionFinalizeLimit = 5 * time.Second
 )
 
-func (s *Starter) startScriptWorkflowRun(req SchedulerStartRunRequest, input workflowstore.RunStartContext) error {
+func (s *Starter) startScriptWorkflowRun(req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext) error {
 	scriptReq, resolvedPath, err := workflowScriptExecutionRequest(req, input)
 	if err != nil {
 		return err
@@ -36,7 +37,7 @@ func (s *Starter) startScriptWorkflowRun(req SchedulerStartRunRequest, input wor
 	return err
 }
 
-func (s *Starter) finalizeWorkflowScript(req SchedulerStartRunRequest, input workflowstore.RunStartContext, result workflowScriptResult, runErr error) error {
+func (s *Starter) finalizeWorkflowScript(req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext, result workflowScriptResult, runErr error) error {
 	err := workflowScriptRunError(result, runErr)
 	if err != nil {
 		s.interrupt(context.Background(), req.RunID, req.Generation, scriptFailureReason(err), scriptInterruptionError{err: err, detail: scriptFailureDetailJSON(err, result)})
@@ -69,7 +70,7 @@ func (s *Starter) finalizeWorkflowScript(req SchedulerStartRunRequest, input wor
 	return nil
 }
 
-func (s *Starter) scriptCompletionContract(ctx context.Context, req SchedulerStartRunRequest, input workflowstore.RunStartContext) (workflowruntime.CompletionContract, error) {
+func (s *Starter) scriptCompletionContract(ctx context.Context, req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext) (workflowruntime.CompletionContract, error) {
 	contract := workflowCompletionContractForRun(input.Run, input)
 	live, err := s.store.GetRunCompletionContext(ctx, req.RunID)
 	if err != nil {
@@ -167,7 +168,7 @@ func workflowScriptRunError(result workflowScriptResult, err error) error {
 	}
 }
 
-func workflowScriptExecutionRequest(req SchedulerStartRunRequest, input workflowstore.RunStartContext) (sessionruntime.ScriptExecutionRequest, string, error) {
+func workflowScriptExecutionRequest(req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext) (sessionruntime.ScriptExecutionRequest, string, error) {
 	executionRoot, err := requireRunExecutionRoot(input)
 	if err != nil {
 		return sessionruntime.ScriptExecutionRequest{}, "", workflowScriptError{Reason: ReasonScriptValidationFailed, Err: err}
@@ -228,7 +229,7 @@ func resolveWorkflowScriptPath(input workflowstore.RunStartContext) (string, err
 	})
 }
 
-func workflowScriptStdin(req SchedulerStartRunRequest, input workflowstore.RunStartContext) ([]byte, error) {
+func workflowScriptStdin(req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext) ([]byte, error) {
 	payload := make(map[string]any, len(input.InputValues)+1)
 	for key, value := range input.InputValues {
 		payload[key] = value
@@ -240,7 +241,7 @@ func workflowScriptStdin(req SchedulerStartRunRequest, input workflowstore.RunSt
 	return json.Marshal(payload)
 }
 
-func workflowScriptEnv(req SchedulerStartRunRequest, input workflowstore.RunStartContext) ([]string, error) {
+func workflowScriptEnv(req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext) ([]string, error) {
 	env := tools.EnrichShellEnv(os.Environ())
 	executionRoot, err := requireRunExecutionRoot(input)
 	if err != nil {

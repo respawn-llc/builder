@@ -163,9 +163,11 @@ type StoreController struct {
 	AttentionFinalizer interface {
 		FinalizeTransition(context.Context, workflowattention.TransitionResult)
 	}
-	AutomaticIntents interface {
-		RequestAutomaticStarts([]workflow.RunID)
-	}
+	AutomaticIntents AutomaticStartRequester
+}
+
+type AutomaticStartRequester interface {
+	RequestAutomaticStarts([]workflow.RunID)
 }
 
 type interruptedRunAttentionFinalizer interface {

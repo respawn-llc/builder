@@ -25,6 +25,7 @@ import (
 	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowattention"
+	"core/server/workflowexecution"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/shared/config"
@@ -80,22 +81,22 @@ type Starter struct {
 	attention            WorkflowAttentionRegistry
 	runtimeAuthority     *sessionruntime.Authority
 	storeOptions         []session.StoreOption
-	clientFactory        func(SchedulerStartRunRequest) llm.Client
+	clientFactory        func(workflowexecution.SchedulerStartRunRequest) llm.Client
 	runtimeClientFactory runtimewire.RuntimeClientFactory
 	worktrees            LockedTaskWorktreeRestorer
 	attentionFinalizer   workflowAttentionFinalizer
-	automaticIntents     *AutomaticIntents
+	automaticIntents     workflowruntime.AutomaticStartRequester
 
 	closed atomic.Bool
 }
 
 type StarterOptions struct {
-	ClientFactory        func(SchedulerStartRunRequest) llm.Client
+	ClientFactory        func(workflowexecution.SchedulerStartRunRequest) llm.Client
 	RuntimeClientFactory runtimewire.RuntimeClientFactory
 	Worktrees            LockedTaskWorktreeRestorer
 	RuntimeAuthority     *sessionruntime.Authority
 	AttentionFinalizer   workflowAttentionFinalizer
-	AutomaticIntents     *AutomaticIntents
+	AutomaticIntents     workflowruntime.AutomaticStartRequester
 }
 
 type workflowAttentionFinalizer interface {
@@ -138,7 +139,7 @@ func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStor
 	}, nil
 }
 
-func (s *Starter) StartWorkflowRun(ctx context.Context, req SchedulerStartRunRequest) error {
+func (s *Starter) StartWorkflowRun(ctx context.Context, req workflowexecution.SchedulerStartRunRequest) error {
 	if strings.TrimSpace(string(req.RunID)) == "" {
 		return errors.New("workflow run id is required")
 	}
@@ -704,7 +705,7 @@ func workflowSessionName(input workflowstore.RunStartContext) (string, error) {
 	return fmt.Sprintf("%s: %s -> %s", taskDisplayID, sourceDisplayName, targetDisplayName), nil
 }
 
-func (s *Starter) resolveAndPersistWorkflowCompletionMode(ctx context.Context, req SchedulerStartRunRequest, input workflowstore.RunStartContext, plan launch.SessionPlan, client llm.Client) (workflowruntime.CompletionMode, llm.Client, error) {
+func (s *Starter) resolveAndPersistWorkflowCompletionMode(ctx context.Context, req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext, plan launch.SessionPlan, client llm.Client) (workflowruntime.CompletionMode, llm.Client, error) {
 	shellAvailable := toolIDEnabled(plan.EnabledTools, toolspec.ToolExecCommand)
 	if stored := optionalRunCompletionMode(input.Run.EffectiveCompletionMode); stored != "" {
 		mode, err := workflowruntime.ParseCompletionMode(stored)
@@ -926,7 +927,7 @@ func (s *Starter) validateRole(role string) error {
 	return fmt.Errorf("workflow validation failed: [%s]", workflow.CodeAgentRoleMissing)
 }
 
-func (s *Starter) startAgentExecution(ctx context.Context, req SchedulerStartRunRequest, input workflowstore.RunStartContext, plan launch.SessionPlan, warnings []string, client llm.Client, effectiveMode workflowruntime.CompletionMode) error {
+func (s *Starter) startAgentExecution(ctx context.Context, req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext, plan launch.SessionPlan, warnings []string, client llm.Client, effectiveMode workflowruntime.CompletionMode) error {
 	executionRoot, err := requireRunExecutionRoot(input)
 	if err != nil {
 		return err
@@ -1018,7 +1019,7 @@ func (a executionPromptAwaiter) AwaitPromptResponse(ctx context.Context, _ strin
 	return a.authority.AwaitPromptResponse(ctx, a.scope.ID(), req)
 }
 
-func (s *Starter) handleWorkflowAsk(ctx context.Context, awaiter workflowattention.QuestionAwaiter, sessionID string, req SchedulerStartRunRequest, input workflowstore.RunStartContext, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+func (s *Starter) handleWorkflowAsk(ctx context.Context, awaiter workflowattention.QuestionAwaiter, sessionID string, req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
 	if askReq.Approval {
 		return workflowattention.HandleTaskApprovalQuestion(ctx, s.store, awaiter, s.attention, workflowattention.TaskQuestionRequest{
 			SessionID:  sessionID,
@@ -1243,4 +1244,4 @@ func promptParameterData(current map[string]string, prior map[string]map[string]
 	return out
 }
 
-var _ SchedulerRuntimeStarter = (*Starter)(nil)
+var _ workflowexecution.SchedulerRuntimeStarter = (*Starter)(nil)
