@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"core/internal/testharness"
+	testharness "core/internal/testharness/testsetup"
 
 	"golang.org/x/tools/go/packages"
 )

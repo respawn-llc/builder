@@ -1,4 +1,4 @@
-package testharness
+package testsetup
 
 import (
 	"go/token"
@@ -19,6 +19,7 @@ func LoadTypedPackages(t testing.TB, dir string, tests bool, patterns ...string)
 			packages.NeedFiles |
 			packages.NeedCompiledGoFiles |
 			packages.NeedImports |
+			packages.NeedModule |
 			packages.NeedTypes |
 			packages.NeedSyntax |
 			packages.NeedTypesInfo |

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"core/internal/testharness"
+	testharness "core/internal/testharness/testsetup"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -15,6 +15,7 @@ import (
 func TestProductionGoFilesDoNotExposeTestOnlyAPIs(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	pkgs := testharness.LoadTypedPackages(t, repoRoot, true, "./server/...", "./cli/...", "./shared/...")
+	assertCoreRepositoryModule(t, pkgs)
 	declarations := productionAPIDeclarations(pkgs)
 	productionReferences, testReferences := productionAPIReferences(pkgs)
 	violations := make([]string, 0)
@@ -132,4 +133,12 @@ func isProductionRepositoryPackage(pkg *packages.Package) bool {
 
 func isRepositoryPackage(pkg *packages.Package) bool {
 	return pkg.Module != nil && pkg.Module.Path == "core"
+}
+
+func assertCoreRepositoryModule(t testing.TB, pkgs []*packages.Package) {
+	t.Helper()
+	pkg := testharness.PackageByPath(t, pkgs, "core/server/core")
+	if pkg.Module == nil || pkg.Module.Path != "core" {
+		t.Fatalf("typed core package module = %#v, want module path core", pkg.Module)
+	}
 }

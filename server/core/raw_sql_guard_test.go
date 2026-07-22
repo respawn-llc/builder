@@ -2,6 +2,7 @@ package core_test
 
 import (
 	"go/ast"
+	"go/constant"
 	"go/token"
 	"go/types"
 	"path/filepath"
@@ -9,8 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"core/internal/testharness"
+	testharness "core/internal/testharness/testsetup"
 
+	"github.com/antlr4-go/antlr/v4"
+	"github.com/tursodatabase/libsql-client-go/sqliteparser"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -56,8 +59,45 @@ func display() string {
 		}
 	})
 
+	t.Run("accepts database syntax and rejects ambiguous prose", func(t *testing.T) {
+		cases := map[string]bool{
+			"SELECT id FROM sessions":           true,
+			"DELETE FROM sessions WHERE id = ?": true,
+			"WHERE id = ?":                      true,
+			"SELECT a task in the UI":           false,
+			"Select Workspace":                  false,
+			"AGENT=kent":                        false,
+			"end":                               false,
+			"SELECT id FROM":                    false,
+		}
+		for source, want := range cases {
+			if got := isSQLiteStatementOrFragment(source); got != want {
+				t.Errorf("isSQLiteStatementOrFragment(%q) = %t, want %t", source, got, want)
+			}
+		}
+	})
+
+	t.Run("rejects standalone and externally forwarded raw SQL constants", func(t *testing.T) {
+		pkg, root := generatedQueryGuardFixture(t, `package fixture
+
+const standalone = "SELECT id FROM sessions"
+
+var packageQuery = "DELETE FROM sessions WHERE id = ?"
+
+func external(statement string) {}
+
+func forward() {
+	external(packageQuery)
+}
+`)
+		if violations := generatedQueryBoundaryViolations(pkg, root); len(violations) < 2 {
+			t.Fatalf("standalone and external-helper raw SQL constants must violate, violations = %v", violations)
+		}
+	})
+
 	repoRoot := findRepoRoot(t)
 	pkgs := testharness.LoadTypedPackages(t, repoRoot, false, "./server/...", "./cli/...", "./shared/...")
+	assertCoreRepositoryModule(t, pkgs)
 	violations := make([]string, 0)
 	for _, pkg := range pkgs {
 		if !isProductionRepositoryPackage(pkg) {
@@ -90,6 +130,7 @@ func generatedQueryBoundaryViolations(pkg *packages.Package, repoRoot string) []
 		return nil
 	}
 	violations := embeddedSQLViolations(pkg)
+	violations = append(violations, rawSQLConstantViolations(pkg, repoRoot)...)
 	violations = append(violations, databaseQueryFlowViolations(pkg, repoRoot)...)
 	return violations
 }
@@ -103,12 +144,202 @@ func embeddedSQLViolations(pkg *packages.Package) []string {
 		if filepath.Ext(pattern) != ".sql" {
 			continue
 		}
-		if pkg.PkgPath == "core/server/metadata" && pattern == "migrations/*.up.sql" {
+		if isMetadataMigrationEmbed(pkg, pattern) {
 			continue
 		}
 		violations = append(violations, pkg.PkgPath+": production SQL embeds must be metadata migrations declared through the generated-query boundary")
 	}
 	return violations
+}
+
+func isMetadataMigrationEmbed(pkg *packages.Package, pattern string) bool {
+	if pkg.PkgPath != "core/server/metadata" || len(pkg.CompiledGoFiles) == 0 {
+		return false
+	}
+	want := filepath.Join(filepath.Dir(pkg.CompiledGoFiles[0]), "migrations", "*.up.sql")
+	return filepath.Clean(pattern) == filepath.Clean(want)
+}
+
+func rawSQLConstantViolations(pkg *packages.Package, repoRoot string) []string {
+	violations := make([]string, 0)
+	seen := make(map[token.Pos]struct{})
+	for _, file := range pkg.Syntax {
+		ast.Inspect(file, func(node ast.Node) bool {
+			expression, ok := node.(ast.Expr)
+			if !ok {
+				return true
+			}
+			if binary, ok := expression.(*ast.BinaryExpr); ok && isConstantStringExpression(pkg, binary) {
+				if isSQLiteStatementOrFragment(constantStringValue(pkg, binary)) {
+					violations = appendRawSQLConstantViolation(violations, seen, pkg, repoRoot, binary.Pos())
+				}
+				return false
+			}
+			literal, ok := expression.(*ast.BasicLit)
+			if !ok || literal.Kind != token.STRING || !isConstantStringExpression(pkg, literal) {
+				return true
+			}
+			if isSQLiteStatementOrFragment(constantStringValue(pkg, literal)) {
+				violations = appendRawSQLConstantViolation(violations, seen, pkg, repoRoot, literal.Pos())
+			}
+			return true
+		})
+	}
+	return violations
+}
+
+func constantStringValue(pkg *packages.Package, expression ast.Expr) string {
+	value := pkg.TypesInfo.Types[expression].Value
+	return constant.StringVal(value)
+}
+
+func isSQLiteStatementOrFragment(source string) bool {
+	tokens, valid := sqliteTokens(source)
+	if !valid || len(tokens) == 0 {
+		return false
+	}
+	if hasNonProseRelationTarget(tokens) && parsesSQLiteStatement(source) {
+		return true
+	}
+	switch tokens[0].GetTokenType() {
+	case sqliteparser.SQLiteParserFROM_:
+		return hasNonProseRelationTarget(tokens) && parsesSQLiteStatement("SELECT 1 "+source)
+	case sqliteparser.SQLiteParserWHERE_, sqliteparser.SQLiteParserHAVING_, sqliteparser.SQLiteParserON_:
+		return hasSQLBoundOrQuotedValue(tokens) && parsesSQLiteStatement("SELECT 1 "+source)
+	case sqliteparser.SQLiteParserORDER_, sqliteparser.SQLiteParserGROUP_:
+		return parsesSQLiteStatement("SELECT 1 " + source)
+	case sqliteparser.SQLiteParserLIMIT_, sqliteparser.SQLiteParserOFFSET_:
+		return hasSQLValueSyntax(tokens) && parsesSQLiteStatement("SELECT 1 "+source)
+	case sqliteparser.SQLiteParserJOIN_, sqliteparser.SQLiteParserLEFT_, sqliteparser.SQLiteParserRIGHT_, sqliteparser.SQLiteParserINNER_, sqliteparser.SQLiteParserCROSS_:
+		return hasNonProseRelationTarget(tokens) && parsesSQLiteStatement("SELECT 1 FROM raw_sql_guard "+source)
+	case sqliteparser.SQLiteParserSET_:
+		return hasSQLBoundOrQuotedValue(tokens) && parsesSQLiteStatement("UPDATE raw_sql_guard "+source)
+	case sqliteparser.SQLiteParserVALUES_:
+		return hasSQLValueSyntax(tokens) && parsesSQLiteStatement("INSERT INTO raw_sql_guard(value) "+source)
+	}
+	return hasComparisonOperator(tokens) &&
+		hasSQLBoundOrQuotedValue(tokens) &&
+		parsesSQLiteStatement("SELECT 1 WHERE "+source)
+}
+
+func sqliteTokens(source string) ([]antlr.Token, bool) {
+	errors := &sqliteSyntaxErrors{}
+	lexer := sqliteparser.NewSQLiteLexer(antlr.NewInputStream(source))
+	lexer.RemoveErrorListeners()
+	lexer.AddErrorListener(errors)
+	rawTokens := lexer.GetAllTokens()
+	tokens := make([]antlr.Token, 0, len(rawTokens))
+	for _, token := range rawTokens {
+		if token.GetChannel() == antlr.TokenDefaultChannel {
+			tokens = append(tokens, token)
+		}
+	}
+	return tokens, errors.count == 0
+}
+
+func parsesSQLiteStatement(source string) bool {
+	errors := &sqliteSyntaxErrors{}
+	lexer := sqliteparser.NewSQLiteLexer(antlr.NewInputStream(source))
+	lexer.RemoveErrorListeners()
+	lexer.AddErrorListener(errors)
+	parser := sqliteparser.NewSQLiteParser(antlr.NewCommonTokenStream(lexer, antlr.TokenDefaultChannel))
+	parser.RemoveErrorListeners()
+	parser.AddErrorListener(errors)
+	document := parser.Parse()
+	if errors.count != 0 {
+		return false
+	}
+	for _, statements := range document.AllSql_stmt_list() {
+		if len(statements.AllSql_stmt()) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+type sqliteSyntaxErrors struct {
+	antlr.DefaultErrorListener
+	count int
+}
+
+func (e *sqliteSyntaxErrors) SyntaxError(antlr.Recognizer, interface{}, int, int, string, antlr.RecognitionException) {
+	e.count++
+}
+
+func hasComparisonOperator(tokens []antlr.Token) bool {
+	for _, token := range tokens {
+		switch token.GetTokenType() {
+		case sqliteparser.SQLiteParserASSIGN,
+			sqliteparser.SQLiteParserEQ,
+			sqliteparser.SQLiteParserNOT_EQ1,
+			sqliteparser.SQLiteParserNOT_EQ2,
+			sqliteparser.SQLiteParserLT,
+			sqliteparser.SQLiteParserLT_EQ,
+			sqliteparser.SQLiteParserGT,
+			sqliteparser.SQLiteParserGT_EQ,
+			sqliteparser.SQLiteParserLIKE_,
+			sqliteparser.SQLiteParserGLOB_,
+			sqliteparser.SQLiteParserMATCH_,
+			sqliteparser.SQLiteParserREGEXP_:
+			return true
+		}
+	}
+	return false
+}
+
+func hasSQLValueSyntax(tokens []antlr.Token) bool {
+	for _, token := range tokens {
+		switch token.GetTokenType() {
+		case sqliteparser.SQLiteParserBIND_PARAMETER,
+			sqliteparser.SQLiteParserNUMERIC_LITERAL,
+			sqliteparser.SQLiteParserSTRING_LITERAL,
+			sqliteparser.SQLiteParserNULL_:
+			return true
+		}
+	}
+	return false
+}
+
+func hasSQLBoundOrQuotedValue(tokens []antlr.Token) bool {
+	for _, token := range tokens {
+		switch token.GetTokenType() {
+		case sqliteparser.SQLiteParserBIND_PARAMETER, sqliteparser.SQLiteParserSTRING_LITERAL:
+			return true
+		}
+	}
+	return false
+}
+
+func hasNonProseRelationTarget(tokens []antlr.Token) bool {
+	for index, token := range tokens {
+		switch token.GetTokenType() {
+		case sqliteparser.SQLiteParserFROM_,
+			sqliteparser.SQLiteParserJOIN_,
+			sqliteparser.SQLiteParserINTO_,
+			sqliteparser.SQLiteParserUPDATE_,
+			sqliteparser.SQLiteParserTABLE_,
+			sqliteparser.SQLiteParserVIEW_:
+			if index+1 >= len(tokens) {
+				return false
+			}
+			if isNonProseRelationIdentifier(tokens[index+1]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isNonProseRelationIdentifier(token antlr.Token) bool {
+	if token.GetTokenType() != sqliteparser.SQLiteParserIDENTIFIER {
+		return false
+	}
+	switch strings.ToLower(token.GetText()) {
+	case "a", "an", "the", "this", "that", "these", "those", "node", "task", "run", "user", "ui":
+		return false
+	default:
+		return true
+	}
 }
 
 type databaseQueryFlow struct {
@@ -375,6 +606,19 @@ func appendDatabaseQueryViolation(violations []string, seen map[token.Pos]struct
 		relPath = sourcePosition.Filename
 	}
 	return append(violations, relPath+":"+sourcePosition.String()+": constant query text bypasses generated query seams")
+}
+
+func appendRawSQLConstantViolation(violations []string, seen map[token.Pos]struct{}, pkg *packages.Package, repoRoot string, position token.Pos) []string {
+	if _, duplicate := seen[position]; duplicate {
+		return violations
+	}
+	seen[position] = struct{}{}
+	sourcePosition := testharness.SourcePosition(pkg, position)
+	relPath, found := testharness.RepositoryRelativePath(repoRoot, sourcePosition.Filename)
+	if !found {
+		relPath = sourcePosition.Filename
+	}
+	return append(violations, relPath+":"+sourcePosition.String()+": raw SQL constant must be declared in a generated query seam")
 }
 
 func appendDatabaseQuerySinkViolation(violations []string, seen map[token.Pos]struct{}, pkg *packages.Package, repoRoot string, position token.Pos) []string {

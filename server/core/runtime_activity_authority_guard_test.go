@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"core/internal/testharness"
+	testharness "core/internal/testharness/testsetup"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -20,6 +20,7 @@ func TestRuntimeActivityLivenessSourcesStayAllowlisted(t *testing.T) {
 	seen := make(map[string]map[string]struct{})
 	violations := make([]string, 0)
 	pkgs := testharness.LoadTypedPackages(t, repoRoot, false, "./server/...", "./shared/...", "./cli/...")
+	assertCoreRepositoryModule(t, pkgs)
 	for _, pkg := range pkgs {
 		if !isProductionRepositoryPackage(pkg) {
 			continue
@@ -76,6 +77,7 @@ func TestRuntimeActivityActiveStepAuthorityStaysBehindResolverSeam(t *testing.T)
 	repoRoot := findRepoRoot(t)
 	violations := make([]string, 0)
 	pkgs := testharness.LoadTypedPackages(t, repoRoot, false, "./server/...")
+	assertCoreRepositoryModule(t, pkgs)
 	for _, pkg := range pkgs {
 		if !isProductionRepositoryPackage(pkg) || runtimeActivityAuthorityPackage[pkg.PkgPath] {
 			continue
