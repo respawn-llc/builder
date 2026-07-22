@@ -216,6 +216,13 @@ func (a *responseStreamAccumulator) Response() (OpenAIResponse, error) {
 	if assistantResponseTextExtendsStream(streamedDeltaText, parsedText) {
 		finalText = parsedText
 	}
+	if responseItemsContainAssistantMessage(parsedItems) && finalText != parsedText {
+		return OpenAIResponse{}, fmt.Errorf(
+			"completed assistant content conflicts with streamed assistant content: streamed bytes=%d completed bytes=%d",
+			len(finalText),
+			len(parsedText),
+		)
+	}
 	if parsedPhase != "" {
 		finalPhase = parsedPhase
 		finalProviderPhase = parsedProviderPhase
@@ -237,6 +244,15 @@ func (a *responseStreamAccumulator) Response() (OpenAIResponse, error) {
 		OutputItems:    finalOutputItems,
 		Usage:          usage,
 	}, nil
+}
+
+func responseItemsContainAssistantMessage(items []ResponseItem) bool {
+	for _, item := range items {
+		if item.Type == ResponseItemTypeMessage && item.Role != nil && *item.Role == RoleAssistant {
+			return true
+		}
+	}
+	return false
 }
 
 func assistantResponseTextExtendsStream(streamed string, candidate string) bool {

@@ -378,7 +378,7 @@ func TestGenerateStream_EmitsUnknownPhaseWhenDeltaPrecedesAssistantItem(t *testi
 	}
 }
 
-func TestGenerateStream_PreservesDisplayedDeltasWhenCompletedMessageIsShorter(t *testing.T) {
+func TestGenerateStream_RejectsCompletedMessageThatDoesNotExtendDisplayedDeltas(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
 		`{"type":"response.output_text.delta","output_index":0,"delta":"Hello"}`,
@@ -394,19 +394,20 @@ func TestGenerateStream_PreservesDisplayedDeltasWhenCompletedMessageIsShorter(t 
 			deltas = append(deltas, delta)
 		},
 	})
-	if err != nil {
-		t.Fatalf("GenerateStream failed: %v", err)
+	if err == nil {
+		t.Fatalf("GenerateStream response = %+v, want provider contract error", resp)
 	}
 
 	const streamed = "Hello\n\n"
 	if got := joinedAssistantDeltas(deltas); got != streamed {
 		t.Fatalf("streamed deltas = %q, want %q", got, streamed)
 	}
-	if resp.AssistantText != streamed {
-		t.Fatalf("assistant text = %q, want exact streamed text", resp.AssistantText)
+	var providerErr *ProviderAPIError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("error = %T %v, want ProviderAPIError", err, err)
 	}
-	if len(resp.OutputItems) != 1 || resp.OutputItems[0].Content == nil || *resp.OutputItems[0].Content != streamed {
-		t.Fatalf("output items = %+v, want assistant content repaired to streamed text", resp.OutputItems)
+	if providerErr.Code != UnifiedErrorCodeProviderContract {
+		t.Fatalf("provider code = %q, want %q", providerErr.Code, UnifiedErrorCodeProviderContract)
 	}
 }
 
@@ -664,7 +665,7 @@ func TestGenerateStream_EmptyReasoningSnapshotClearsCurrentStatus(t *testing.T) 
 	}
 }
 
-func TestGenerateStream_PreservesStreamedAssistantTextWhenCompletedMessageIsEmpty(t *testing.T) {
+func TestGenerateStream_RejectsEmptyCompletedMessageAfterAssistantDeltas(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"commentary","content":[]}}`,
 		`{"type":"response.output_text.delta","delta":"Hel"}`,
@@ -675,24 +676,15 @@ func TestGenerateStream_PreservesStreamedAssistantTextWhenCompletedMessageIsEmpt
 	)
 
 	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
-	if err != nil {
-		t.Fatalf("GenerateStream failed: %v", err)
+	if err == nil {
+		t.Fatalf("GenerateStream response = %+v, want provider contract error", resp)
 	}
-
-	if resp.AssistantText != "Hello" {
-		t.Fatalf("assistant text = %q, want Hello", resp.AssistantText)
+	var providerErr *ProviderAPIError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("error = %T %v, want ProviderAPIError", err, err)
 	}
-	if !resp.ProviderPhase.Is(MessagePhaseCommentary) {
-		t.Fatalf("provider phase = %#v, want %q", resp.ProviderPhase, MessagePhaseCommentary)
-	}
-	if len(resp.OutputItems) != 2 {
-		t.Fatalf("expected 2 output items, got %+v", resp.OutputItems)
-	}
-	if resp.OutputItems[0].Type != ResponseItemTypeMessage || resp.OutputItems[0].Content == nil || *resp.OutputItems[0].Content != "Hello" {
-		t.Fatalf("unexpected assistant output item: %+v", resp.OutputItems[0])
-	}
-	if resp.OutputItems[0].Phase == nil || *resp.OutputItems[0].Phase != MessagePhaseCommentary {
-		t.Fatalf("assistant output phase = %v, want %q", resp.OutputItems[0].Phase, MessagePhaseCommentary)
+	if providerErr.Code != UnifiedErrorCodeProviderContract {
+		t.Fatalf("provider code = %q, want %q", providerErr.Code, UnifiedErrorCodeProviderContract)
 	}
 }
 
