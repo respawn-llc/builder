@@ -5,6 +5,8 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/tools"
+	"core/shared/toolspec"
 )
 
 func TestSetFastModeWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing.T) {
@@ -80,6 +82,56 @@ func TestSetQuestionsWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testin
 			changed,
 			enabled,
 			engine.QuestionsEnabled(),
+			err,
+		)
+	}
+
+	assertOneBoundedControlFeedback(t, store)
+}
+
+func TestSetReviewerWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{
+		ID:      toolspec.ToolExecCommand,
+		Handler: fakeTool{name: toolspec.ToolExecCommand},
+	}), Config{
+		Model: "gpt-5",
+		Reviewer: ReviewerConfig{
+			Frequency:     "off",
+			Model:         "gpt-5",
+			ThinkingLevel: "low",
+			Client:        &fakeClient{},
+		},
+	})
+	blocker := mustBlockTestEventLogAppends(t, store)
+
+	changed, mode, receipt, err := engine.SetReviewerEnabledWithCommittedFeedback(true, func(bool, string, bool) string {
+		return "feedback"
+	})
+	if err == nil || receipt.Committed || changed || mode != "edits" || engine.ReviewerFrequency() != "off" {
+		t.Fatalf(
+			"uncommitted reviewer feedback mutated runtime state: receipt=%+v changed=%t mode=%q frequency=%q error=%v",
+			receipt,
+			changed,
+			mode,
+			engine.ReviewerFrequency(),
+			err,
+		)
+	}
+
+	if err := blocker.Restore(); err != nil {
+		t.Fatalf("restore event-log appends: %v", err)
+	}
+	changed, mode, receipt, err = engine.SetReviewerEnabledWithCommittedFeedback(true, func(bool, string, bool) string {
+		return "feedback"
+	})
+	if err != nil || !receipt.Committed || !changed || mode != "edits" || engine.ReviewerFrequency() != "edits" {
+		t.Fatalf(
+			"retry did not apply reviewer mode after durable feedback: receipt=%+v changed=%t mode=%q frequency=%q error=%v",
+			receipt,
+			changed,
+			mode,
+			engine.ReviewerFrequency(),
 			err,
 		)
 	}
