@@ -2,7 +2,7 @@ import { Plus } from "lucide-react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage } from "@/api";
+import { errorMessage, type ProjectLabel } from "@/api";
 import { LabelChooser, useProjectLabelCatalog, useTaskLabelAssignment } from "@/shared/labels";
 import { Badge, Button, Spinner } from "@/ui";
 import { TaskPropertyLine } from "./TaskPropertyLine";
@@ -23,6 +23,14 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
   });
   const pendingLabelIDs = new Set(assignment.snapshot?.pendingLabelIDs ?? []);
   const triggerDisabled = disabled || assignment.snapshot?.closed === true;
+  const trigger = (
+    <TaskDetailLabelTrigger
+      disabled={triggerDisabled}
+      loading={assignment.assignment.isPending}
+      pendingLabelIDs={pendingLabelIDs}
+      visibleLabels={visibleLabels}
+    />
+  );
   return (
     <TaskPropertyLine
       label={t("labels.filter")}
@@ -36,36 +44,51 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
                 assignment.controller?.setDesired(labelID, selected);
               },
             }}
-            trigger={
-              <Button
-                aria-label={t("labels.editAssignments")}
-                className="min-h-7 h-auto w-full min-w-0 justify-start text-left"
-                disabled={triggerDisabled}
-                style={{ padding: "var(--space-0)" }}
-                variant="ghost"
-              >
-                <span className="flex min-w-0 flex-wrap items-center gap-[var(--space-1)]">
-                  {assignment.assignment.isPending ? <Spinner size="sm" /> : null}
-                  {visibleLabels.length === 0 && !assignment.assignment.isPending ? (
-                    <span className="inline-flex items-center gap-[var(--space-1)] text-[var(--color-muted)]">
-                      {t("labels.add")}
-                      <Plus aria-hidden="true" size={14} />
-                    </span>
-                  ) : null}
-                  {visibleLabels.map((label) => (
-                    <span className={pendingLabelIDs.has(label.id) ? "opacity-60" : undefined} key={label.id}>
-                      <Badge tone="neutral">{label.name}</Badge>
-                    </span>
-                  ))}
-                </span>
-              </Button>
-            }
+            trigger={trigger}
           />
           <AssignmentFailures />
         </div>
       }
       valueClassName="flex-1"
     />
+  );
+}
+
+function TaskDetailLabelTrigger({
+  disabled,
+  loading,
+  pendingLabelIDs,
+  visibleLabels,
+}: Readonly<{
+  disabled: boolean;
+  loading: boolean;
+  pendingLabelIDs: ReadonlySet<string>;
+  visibleLabels: readonly ProjectLabel[];
+}>) {
+  const { t } = useTranslation();
+  return (
+    <Button
+      aria-label={t("labels.editAssignments")}
+      className="min-h-7 h-auto w-full min-w-0 justify-start text-left"
+      disabled={disabled}
+      style={{ padding: "var(--space-0)" }}
+      variant="ghost"
+    >
+      <span className="flex min-w-0 flex-wrap items-center gap-[var(--space-1)]">
+        {loading ? <Spinner size="sm" /> : null}
+        {visibleLabels.length === 0 && !loading ? (
+          <span className="inline-flex items-center gap-[var(--space-1)] text-[var(--color-muted)]">
+            {t("labels.add")}
+            <Plus aria-hidden="true" size={14} />
+          </span>
+        ) : null}
+        {visibleLabels.map((label) => (
+          <span className={pendingLabelIDs.has(label.id) ? "opacity-60" : undefined} key={label.id}>
+            <Badge tone="neutral">{label.name}</Badge>
+          </span>
+        ))}
+      </span>
+    </Button>
   );
 }
 
