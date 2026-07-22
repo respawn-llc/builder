@@ -75,7 +75,14 @@ func taskCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 			return 1
 		}
 		if parsed.JSONPayloadSet || parsed.JSONFileSet {
-			return writeCommandJSON(stdout, stderr, resp)
+			return writeCommandJSON(stdout, stderr, taskCompleteJSONResponse{
+				TransitionID: resp.TransitionID,
+				TaskID:       resp.TaskID,
+				RunID:        resp.RunID,
+				State:        resp.State,
+				PlacementIDs: resp.PlacementIDs,
+				RunIDs:       resp.RunIDs,
+			})
 		}
 		writeTaskCompleteResult(stdout, resp)
 		return 0
@@ -476,8 +483,14 @@ func writeTaskCompleteUsage(stderr io.Writer) {
 }
 
 func writeTaskCompleteResult(stdout io.Writer, resp serverapi.WorkflowTaskCompleteResponse) {
-	fmt.Fprintf(stdout, "Completed task %s from run %s via transition %s.\n", strings.TrimSpace(resp.TaskID), strings.TrimSpace(resp.RunID), strings.TrimSpace(resp.TransitionID))
-	if state := strings.TrimSpace(resp.State); state != "" && state != "applied" {
-		fmt.Fprintf(stdout, "State: %s\n", state)
-	}
+	fmt.Fprintf(stdout, "Completion scheduled. The transition %s → %s will execute now. Your next agent turn will begin with the next workflow instructions.\n", resp.Handoff.SourceNodeDisplayName, resp.Handoff.DestinationDisplayName)
+}
+
+type taskCompleteJSONResponse struct {
+	TransitionID string   `json:"transition_id"`
+	TaskID       string   `json:"task_id"`
+	RunID        string   `json:"run_id"`
+	State        string   `json:"state"`
+	PlacementIDs []string `json:"placement_ids,omitempty"`
+	RunIDs       []string `json:"run_ids,omitempty"`
 }

@@ -65,7 +65,7 @@ func (s *Starter) finalizeWorkflowScript(req SchedulerStartRunRequest, input wor
 		s.interrupt(context.Background(), req.RunID, req.Generation, ReasonScriptCompletionFailed, scriptInterruptionError{err: err, detail: scriptFailureDetailJSON(err, result)})
 		return err
 	}
-	s.finalizeScriptCompletionAttention(context.Background(), completed)
+	s.finalizeScriptCompletionAttention(context.Background(), completed.Result)
 	return nil
 }
 

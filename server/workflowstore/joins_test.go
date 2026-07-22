@@ -122,7 +122,7 @@ func TestJoinWaitsForAllBranchesAndRoutesSelectedProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompleteRun branch b: %v", err)
 	}
-	if len(first.PlacementIDs) != 0 || len(first.RunIDs) != 0 {
+	if len(first.Result.PlacementIDs) != 0 || len(first.Result.RunIDs) != 0 {
 		t.Fatalf("first branch result = %+v, want join waiting for missing branch", first)
 	}
 	selectedProviderValue := "  branch a\n"
@@ -130,7 +130,7 @@ func TestJoinWaitsForAllBranchesAndRoutesSelectedProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompleteRun branch a: %v", err)
 	}
-	if len(second.PlacementIDs) != 1 || len(second.RunIDs) != 1 {
+	if len(second.Result.PlacementIDs) != 1 || len(second.Result.RunIDs) != 1 {
 		t.Fatalf("second branch result = %+v, want joined provider-routed agent run", second)
 	}
 	transitions, err := f.store.ListTransitions(f.ctx, task.ID)
@@ -141,7 +141,7 @@ func TestJoinWaitsForAllBranchesAndRoutesSelectedProvider(t *testing.T) {
 	if joinTransition.TransitionID != "done" || joinTransition.OutputValues["joined"] != selectedProviderValue {
 		t.Fatalf("join transition = %+v, want selected provider output", joinTransition)
 	}
-	input, err := f.store.GetRunStartContext(f.ctx, second.RunIDs[0])
+	input, err := f.store.GetRunStartContext(f.ctx, second.Result.RunIDs[0])
 	if err != nil {
 		t.Fatalf("GetRunStartContext joined run: %v", err)
 	}
@@ -183,10 +183,10 @@ func TestJoinArrivalsKeepMultipleJoinEdgesForOneBranchPlacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompleteRun branch a: %v", err)
 	}
-	if len(first.PlacementIDs) != 0 || len(first.RunIDs) != 0 {
+	if len(first.Result.PlacementIDs) != 0 || len(first.Result.RunIDs) != 0 {
 		t.Fatalf("first branch result = %+v, want join waiting for missing branch", first)
 	}
-	if err := insertTransitionEdgeSnapshotWithMetadata(ctx, store.queries, string(first.TransitionID), edgeContractSnapshot{
+	if err := insertTransitionEdgeSnapshotWithMetadata(ctx, store.queries, string(first.Result.TransitionID), edgeContractSnapshot{
 		ID:         alternateProviderEdgeID,
 		Key:        "join_a_alt",
 		TargetNode: nodeSnapshot(join),

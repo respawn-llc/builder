@@ -797,7 +797,7 @@ func TestBoardAndTaskDetailProjectParallelBranchPlacements(t *testing.T) {
 	}
 	detailBranchPlacements := 0
 	for _, placement := range detail.Placements {
-		if placement.ParallelBatchTransitionID == string(split.TransitionID) && placement.ParallelBranchEdgeID != "" {
+		if placement.ParallelBatchTransitionID == string(split.Result.TransitionID) && placement.ParallelBranchEdgeID != "" {
 			detailBranchPlacements++
 		}
 	}

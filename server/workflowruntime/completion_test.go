@@ -58,24 +58,30 @@ func TestSelectCompletionMode(t *testing.T) {
 }
 
 func TestStoreControllerFinalizesWorkflowAttentionAfterCompleteRun(t *testing.T) {
-	store := &recordingCompletionStore{result: workflowstore.CompleteRunResult{
-		TransitionID: "transition-1",
-		State:        "applied",
-		ResolvedApprovalTransitionProjections: []workflowstore.ApprovalTransitionProjection{{
-			TransitionID: "transition-resolved",
-			ProjectID:    "project-1",
-			WorkflowID:   "workflow-1",
-			TaskID:       "task-1",
-		}},
-		ResolvedInterruptedRunProjections: []workflowstore.InterruptedRunAttentionProjection{{
-			ProjectID:          "project-1",
-			WorkflowID:         "workflow-1",
-			TaskID:             "task-1",
-			RunID:              "run-resolved",
-			InterruptionReason: "runtime_failed",
-			OccurredAtUnixMs:   42,
-		}},
-		InterruptedRunIDs: []workflow.RunID{"run-script"},
+	store := &recordingCompletionStore{result: workflowstore.CompleteRunOutcome{
+		Result: workflowstore.CompleteRunResult{
+			TransitionID: "transition-1",
+			State:        "applied",
+			ResolvedApprovalTransitionProjections: []workflowstore.ApprovalTransitionProjection{{
+				TransitionID: "transition-resolved",
+				ProjectID:    "project-1",
+				WorkflowID:   "workflow-1",
+				TaskID:       "task-1",
+			}},
+			ResolvedInterruptedRunProjections: []workflowstore.InterruptedRunAttentionProjection{{
+				ProjectID:          "project-1",
+				WorkflowID:         "workflow-1",
+				TaskID:             "task-1",
+				RunID:              "run-resolved",
+				InterruptionReason: "runtime_failed",
+				OccurredAtUnixMs:   42,
+			}},
+			InterruptedRunIDs: []workflow.RunID{"run-script"},
+		},
+		Handoff: workflowstore.CompletionHandoff{
+			SourceNodeDisplayName:  "Source",
+			DestinationDisplayName: "Destination",
+		},
 	}}
 	finalizer := &recordingCompletionAttentionFinalizer{}
 	controller := StoreController{Store: store, AttentionFinalizer: finalizer}
@@ -428,14 +434,14 @@ func TestDecodeCompletionAcceptsNullForUnselectedTransitionParameter(t *testing.
 }
 
 type recordingCompletionStore struct {
-	result         workflowstore.CompleteRunResult
+	result         workflowstore.CompleteRunOutcome
 	req            workflowstore.CompleteRunRequest
 	protocolResult workflowstore.RecordProtocolViolationResult
 	protocolReq    workflowstore.RecordProtocolViolationRequest
 	resetReq       workflowstore.ResetProtocolViolationBudgetRequest
 }
 
-func (s *recordingCompletionStore) CompleteRun(_ context.Context, req workflowstore.CompleteRunRequest) (workflowstore.CompleteRunResult, error) {
+func (s *recordingCompletionStore) CompleteRun(_ context.Context, req workflowstore.CompleteRunRequest) (workflowstore.CompleteRunOutcome, error) {
 	s.req = req
 	return s.result, nil
 }

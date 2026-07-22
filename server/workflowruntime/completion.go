@@ -155,7 +155,7 @@ type ViolationResetRequest struct {
 
 type StoreController struct {
 	Store interface {
-		CompleteRun(context.Context, workflowstore.CompleteRunRequest) (workflowstore.CompleteRunResult, error)
+		CompleteRun(context.Context, workflowstore.CompleteRunRequest) (workflowstore.CompleteRunOutcome, error)
 		RecordProtocolViolation(context.Context, workflowstore.RecordProtocolViolationRequest) (workflowstore.RecordProtocolViolationResult, error)
 		ResetProtocolViolationBudget(context.Context, workflowstore.ResetProtocolViolationBudgetRequest) error
 		GetRun(context.Context, workflow.RunID) (workflowstore.RunRecord, error)
@@ -173,7 +173,7 @@ func (c StoreController) CompleteWorkflowRun(ctx context.Context, req Completion
 	if c.Store == nil {
 		return CompletionResult{}, errors.New("workflow completion store is required")
 	}
-	result, err := c.Store.CompleteRun(ctx, workflowstore.CompleteRunRequest{
+	completed, err := c.Store.CompleteRun(ctx, workflowstore.CompleteRunRequest{
 		RunID:              req.RunID,
 		TransitionID:       req.TransitionID,
 		OutputValues:       req.OutputValues,
@@ -185,6 +185,7 @@ func (c StoreController) CompleteWorkflowRun(ctx context.Context, req Completion
 	if err != nil {
 		return CompletionResult{}, normalizeStoreCompletionError(err)
 	}
+	result := completed.Result
 	if c.AttentionFinalizer != nil {
 		finalizeCtx, cancel := context.WithTimeout(context.Background(), attentionFinalizationTimeout)
 		defer cancel()

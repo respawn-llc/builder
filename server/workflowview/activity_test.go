@@ -184,9 +184,9 @@ func TestActivityProjectsEveryDurableTaskEventThroughFocusedInterface(t *testing
 	if commentItem.Comment == nil || commentItem.Comment.ID != comment.ID || commentItem.Run != nil || commentItem.Transition != nil || commentItem.Attention != nil {
 		t.Fatalf("comment activity = %+v", commentItem)
 	}
-	transitionItem := requireActivityItem(t, completedPage.Items, "transition:"+string(completed.TransitionID))
+	transitionItem := requireActivityItem(t, completedPage.Items, "transition:"+string(completed.Result.TransitionID))
 	if transitionItem.Transition == nil ||
-		transitionItem.Transition.ID != string(completed.TransitionID) ||
+		transitionItem.Transition.ID != string(completed.Result.TransitionID) ||
 		transitionItem.Transition.Actor != "agent" ||
 		transitionItem.Transition.Commentary != "finished" ||
 		len(transitionItem.Transition.Edges) != 1 ||
