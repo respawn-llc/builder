@@ -162,6 +162,29 @@ func TestRepairMissingToolOutputsByAppendingIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestRepairMissingToolOutputsDefersToPendingToolCallStarts(t *testing.T) {
+	store := mustCreateTestSession(t)
+	if _, _, err := appendTestEvent(t, store, "step", llm.Message{
+		Role:      llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)}},
+	}); err != nil {
+		t.Fatalf("append dangling tool call: %v", err)
+	}
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng.rememberPendingToolCallStarts(map[string]int{"missing": 1})
+
+	repaired, err := eng.repairMissingToolOutputsByAppending("step")
+	if err != nil {
+		t.Fatalf("repair: %v", err)
+	}
+	if repaired != 0 {
+		t.Fatalf("repair count = %d, want no synthetic output while a real start is pending", repaired)
+	}
+	if repairRequestHasToolOutput(eng.transcriptRuntimeState().SnapshotItems(), "missing") {
+		t.Fatal("pending real tool start was pre-empted by a synthetic output")
+	}
+}
+
 func repairRequestHasToolCall(items []llm.ResponseItem, callID string) bool {
 	for _, item := range items {
 		if !isToolCallItem(item.Type) {
