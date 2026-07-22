@@ -66,6 +66,55 @@ func TestActiveGoalContinuationUsesOneCanonicalMetaContextSlot(t *testing.T) {
 	}
 }
 
+func TestReviewerReconstructionPlacesActiveGoalBeforeTranscriptBoundary(t *testing.T) {
+	continuation := llm.Message{
+		Role:        llm.RoleDeveloper,
+		MessageType: textutil.Value(llm.MessageTypeActiveGoalContinuation),
+		Content:     textutil.Value("continuation"),
+	}
+	rebuilt, err := buildReviewerRequestMessagesWithBuilder(
+		[]llm.Message{
+			continuation,
+			{Role: llm.RoleUser, Content: textutil.Value("request")},
+		},
+		newMetaContextBuilder(t.TempDir(), "model", "", config.SkillPolicy{}, time.Unix(0, 0)),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("build reviewer request: %v", err)
+	}
+
+	continuationIndex, boundaryIndex, transcriptIndex := -1, -1, -1
+	continuationCount := 0
+	for index, message := range rebuilt {
+		if message.MessageType != nil && *message.MessageType == llm.MessageTypeActiveGoalContinuation {
+			continuationIndex = index
+			continuationCount++
+		}
+		if message.Role == llm.RoleDeveloper && message.MessageType == nil {
+			if boundaryIndex >= 0 {
+				t.Fatalf("reviewer request contains multiple untyped developer boundaries: %+v", rebuilt)
+			}
+			boundaryIndex = index
+		}
+		if message.Role == llm.RoleUser && transcriptIndex < 0 {
+			transcriptIndex = index
+		}
+	}
+	if continuationCount != 1 ||
+		continuationIndex < 0 ||
+		boundaryIndex <= continuationIndex ||
+		transcriptIndex <= boundaryIndex {
+		t.Fatalf(
+			"reviewer active-goal ordering = continuation:%d boundary:%d transcript:%d count:%d",
+			continuationIndex,
+			boundaryIndex,
+			transcriptIndex,
+			continuationCount,
+		)
+	}
+}
+
 func metaContextMessageTypes(messages []llm.Message) []llm.MessageType {
 	types := make([]llm.MessageType, 0, len(messages))
 	for _, message := range messages {
