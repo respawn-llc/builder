@@ -100,10 +100,27 @@ func TestNewPublishesRecoveredDanglingToolStartOnReopen(t *testing.T) {
 }
 
 func TestReopenCarriesInterruptedAskQuestionToolAttemptIntoNextModelRequest(t *testing.T) {
-	const (
-		stepID = "interrupted-question-step"
-		callID = "interrupted-question-call"
-	)
+	testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t, llm.ToolCall{
+		ID:    "interrupted-question-call",
+		Name:  string(toolspec.ToolAskQuestion),
+		Input: json.RawMessage(`{"question":"continue?"}`),
+	})
+}
+
+func TestReopenCarriesInterruptedShellToolAttemptIntoNextModelRequest(t *testing.T) {
+	testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t, llm.ToolCall{
+		ID:    "interrupted-shell-call",
+		Name:  string(toolspec.ToolExecCommand),
+		Input: json.RawMessage(`{"command":"pwd"}`),
+	})
+}
+
+func testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(
+	t *testing.T,
+	call llm.ToolCall,
+) {
+	t.Helper()
+	const stepID = "interrupted-tool-attempt-step"
 
 	store := mustCreateTestSession(t)
 	mustAppendTestEvent(t, store, stepID, llm.Message{
@@ -111,12 +128,8 @@ func TestReopenCarriesInterruptedAskQuestionToolAttemptIntoNextModelRequest(t *t
 		Content: textutil.Value("input"),
 	})
 	mustAppendTestEvent(t, store, stepID, llm.Message{
-		Role: llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{
-			ID:    callID,
-			Name:  string(toolspec.ToolAskQuestion),
-			Input: json.RawMessage(`{"question":"continue?"}`),
-		}},
+		Role:      llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{call},
 	})
 	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{
 		RecoveryID: "recovery-3",
@@ -143,22 +156,26 @@ func TestReopenCarriesInterruptedAskQuestionToolAttemptIntoNextModelRequest(t *t
 		t.Fatalf("resumed model requests = %d, want one", len(client.calls))
 	}
 
+	callItemType := llm.ResponseItemTypeFunctionCall
+	if call.Custom {
+		callItemType = llm.ResponseItemTypeCustomToolCall
+	}
 	foundCall := false
 	foundOutput := false
 	for _, item := range client.calls[0].Items {
-		if item.CallID == nil || *item.CallID != callID {
+		if item.CallID == nil || *item.CallID != call.ID {
 			continue
 		}
-		if item.Type == llm.ResponseItemTypeFunctionCall &&
+		if item.Type == callItemType &&
 			item.Name != nil &&
-			*item.Name == string(toolspec.ToolAskQuestion) {
+			*item.Name == call.Name {
 			foundCall = true
 		}
-		if item.Type == llm.ResponseItemTypeFunctionCallOutput {
+		if item.Type == llm.ToolOutputItemType(call.Custom) {
 			foundOutput = true
 		}
 	}
 	if !foundCall || foundOutput {
-		t.Fatalf("resumed ask-question call preservation = call:%t output:%t", foundCall, foundOutput)
+		t.Fatalf("resumed tool attempt preservation = call:%t output:%t", foundCall, foundOutput)
 	}
 }
