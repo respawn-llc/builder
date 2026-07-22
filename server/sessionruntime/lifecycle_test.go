@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/session"
@@ -152,53 +153,15 @@ func (o *lifecyclePersistenceObserver) ObservePersistedStore(context.Context, se
 }
 
 type authorityStartBarrierLifecycle struct {
-	entered     chan struct{}
-	release     chan struct{}
-	enteredOnce sync.Once
-	releaseOnce sync.Once
+	*testsetup.StartBarrier
 }
 
 func (l *authorityStartBarrierLifecycle) ResourceReady(ctx context.Context, _ AgentResourceDescriptor, _ *runtime.Engine, _ AgentResourceRetainer) error {
-	l.enteredOnce.Do(func() { close(l.entered) })
-	select {
-	case <-l.release:
-		return nil
-	case <-ctx.Done():
-		return context.Cause(ctx)
-	}
+	return l.ArriveAndWait(ctx)
 }
 
 func (l *authorityStartBarrierLifecycle) ResourceDraining(context.Context, AgentResourceDescriptor) error {
 	return nil
-}
-
-func (l *authorityStartBarrierLifecycle) unblock() {
-	l.releaseOnce.Do(func() { close(l.release) })
-}
-
-type agentExecutionStartResult struct {
-	handle ExecutionHandle
-	err    error
-}
-
-func startAgentExecutionWithOpenResource(
-	t *testing.T,
-	authority *Authority,
-	sessionID runtimeids.SessionID,
-	plan *AgentRuntimePlan,
-) <-chan agentExecutionStartResult {
-	t.Helper()
-	started := make(chan agentExecutionStartResult, 1)
-	go func() {
-		handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-			Descriptor: mustOpenSessionDescriptor(t, sessionID),
-			Runtime:    plan,
-			Resource:   OpenAgentResource{},
-			Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
-		})
-		started <- agentExecutionStartResult{handle: handle, err: err}
-	}()
-	return started
 }
 
 func newLifecycleAuthority(t *testing.T, fixture sessionRuntimeFixture, observer session.PersistenceObserver, lifecycle AgentResourceLifecycle) *Authority {
@@ -221,17 +184,23 @@ func TestAuthorityTryBlockSessionStartsRejectsInFlightStart(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	lifecycle := &authorityStartBarrierLifecycle{
-		entered: make(chan struct{}),
-		release: make(chan struct{}),
+		StartBarrier: testsetup.NewStartBarrier(),
 	}
 	authority := newLifecycleAuthority(t, fixture, &lifecyclePersistenceObserver{}, lifecycle)
-	t.Cleanup(lifecycle.unblock)
+	t.Cleanup(lifecycle.Unblock)
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	started := startAgentExecutionWithOpenResource(t, authority, sessionID, &plan)
+	started := testsetup.Start(func() (ExecutionHandle, error) {
+		return authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+			Descriptor: mustOpenSessionDescriptor(t, sessionID),
+			Runtime:    &plan,
+			Resource:   OpenAgentResource{},
+			Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
+		})
+	})
 	select {
-	case <-lifecycle.entered:
+	case <-lifecycle.Entered():
 	case result := <-started:
-		t.Fatalf("agent start completed before entering resource lifecycle: handle=%v error=%v", result.handle, result.err)
+		t.Fatalf("agent start completed before entering resource lifecycle: handle=%v error=%v", result.Value, result.Err)
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for agent start to enter resource lifecycle")
 	}
@@ -245,14 +214,14 @@ func TestAuthorityTryBlockSessionStartsRejectsInFlightStart(t *testing.T) {
 		t.Fatalf("try block session starts while admission is in flight = %v, want ErrSessionStartAdmissionBusy", err)
 	}
 
-	lifecycle.unblock()
+	lifecycle.Unblock()
 	result := <-started
-	if result.err != nil {
-		t.Fatalf("start agent execution: %v", result.err)
+	if result.Err != nil {
+		t.Fatalf("start agent execution: %v", result.Err)
 	}
 	waitCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if _, err := result.handle.Wait(waitCtx); err != nil {
+	if _, err := result.Value.Wait(waitCtx); err != nil {
 		t.Fatalf("wait for agent execution: %v", err)
 	}
 }
@@ -262,17 +231,23 @@ func TestAuthorityTryBlockSessionStartsLeavesUncontendedBatchMemberUnblocked(t *
 	busySessionID := lifecycleSessionID(t, fixture)
 	uncontendedSessionID := runtimeids.NewSessionID()
 	lifecycle := &authorityStartBarrierLifecycle{
-		entered: make(chan struct{}),
-		release: make(chan struct{}),
+		StartBarrier: testsetup.NewStartBarrier(),
 	}
 	authority := newLifecycleAuthority(t, fixture, &lifecyclePersistenceObserver{}, lifecycle)
-	t.Cleanup(lifecycle.unblock)
+	t.Cleanup(lifecycle.Unblock)
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	started := startAgentExecutionWithOpenResource(t, authority, busySessionID, &plan)
+	started := testsetup.Start(func() (ExecutionHandle, error) {
+		return authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+			Descriptor: mustOpenSessionDescriptor(t, busySessionID),
+			Runtime:    &plan,
+			Resource:   OpenAgentResource{},
+			Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
+		})
+	})
 	select {
-	case <-lifecycle.entered:
+	case <-lifecycle.Entered():
 	case result := <-started:
-		t.Fatalf("agent start completed before entering resource lifecycle: handle=%v error=%v", result.handle, result.err)
+		t.Fatalf("agent start completed before entering resource lifecycle: handle=%v error=%v", result.Value, result.Err)
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for agent start to enter resource lifecycle")
 	}
@@ -297,14 +272,14 @@ func TestAuthorityTryBlockSessionStartsLeavesUncontendedBatchMemberUnblocked(t *
 		t.Fatalf("release uncontended session-start block: %v", err)
 	}
 
-	lifecycle.unblock()
+	lifecycle.Unblock()
 	result := <-started
-	if result.err != nil {
-		t.Fatalf("start agent execution: %v", result.err)
+	if result.Err != nil {
+		t.Fatalf("start agent execution: %v", result.Err)
 	}
 	waitCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if _, err := result.handle.Wait(waitCtx); err != nil {
+	if _, err := result.Value.Wait(waitCtx); err != nil {
 		t.Fatalf("wait for agent execution: %v", err)
 	}
 }

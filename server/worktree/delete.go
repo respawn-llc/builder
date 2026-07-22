@@ -14,6 +14,7 @@ import (
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -132,13 +133,17 @@ func (s *Service) executeDeleteLocked(
 	if err != nil {
 		return serverapi.WorktreeDeleteCompletedResult{}, err
 	}
-	targetRoot := ""
+	var targetRoot *string
 	if target != nil {
-		targetRoot = target.record.CanonicalRoot
+		targetRoot = &target.record.CanonicalRoot
 	} else if record != nil {
-		targetRoot = record.CanonicalRoot
+		targetRoot = &record.CanonicalRoot
 	}
-	activityLease, err := s.acquireDeleteTargetActivity(ctx, workspaceCtx.sessionID, record, targetRoot)
+	currentSessionID, err := deleteActivityCurrentSessionID(workspaceCtx.sessionID)
+	if err != nil {
+		return serverapi.WorktreeDeleteCompletedResult{}, err
+	}
+	activityLease, err := s.acquireDeleteTargetActivity(ctx, currentSessionID, record, targetRoot)
 	if err != nil {
 		return serverapi.WorktreeDeleteCompletedResult{}, err
 	}
@@ -271,48 +276,71 @@ func (s *Service) retainManagedTaskWorktreeRecord(ctx context.Context, record *m
 	return taskManagers > 0, nil
 }
 
+func deleteActivityCurrentSessionID(raw string) (*runtimeids.SessionID, error) {
+	sessionID, err := runtimeids.ParseSessionID(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse current delete session id: %w", err)
+	}
+	return &sessionID, nil
+}
+
 func (s *Service) acquireDeleteTargetActivity(
 	ctx context.Context,
-	currentSessionID string,
+	currentSessionID *runtimeids.SessionID,
 	record *metadata.WorktreeRecord,
-	worktreeRoot string,
+	worktreeRoot *string,
 ) (deleteTargetActivityLease, error) {
 	lease := deleteTargetActivityLease{ctx: ctx, close: func() {}}
+	if currentSessionID != nil && currentSessionID.IsZero() {
+		return deleteTargetActivityLease{}, errors.New("current delete session id must not be blank when present")
+	}
+	if worktreeRoot != nil && strings.TrimSpace(*worktreeRoot) == "" {
+		return deleteTargetActivityLease{}, errors.New("delete target root must not be blank when present")
+	}
 	if record != nil {
 		sessions, err := s.metadata.ListSessionsTargetingWorktree(ctx, record.ID)
 		if err != nil {
 			return deleteTargetActivityLease{}, err
 		}
-		trimmedCurrentSessionID := strings.TrimSpace(currentSessionID)
-		sessionIDs := make([]string, 0, len(sessions))
-		for _, target := range sessions {
-			sessionID := strings.TrimSpace(target.SessionID)
-			if sessionID != "" && sessionID != trimmedCurrentSessionID {
-				sessionIDs = append(sessionIDs, sessionID)
-			}
+		type targetSession struct {
+			id      runtimeids.SessionID
+			blocker metadata.WorktreeSessionBlocker
 		}
-		startBlock, err := s.tryBlockSessionStarts(ctx, sessionIDs)
-		if err != nil {
-			if errors.Is(err, sessionruntime.ErrSessionStartAdmissionBusy) {
-				return deleteTargetActivityLease{}, errors.Join(serverapi.ErrWorktreeBlocked, err)
-			}
-			return deleteTargetActivityLease{}, err
-		}
-		lease.close = func() { releaseSessionStarts(startBlock) }
-		lease.ctx = authorizeSessionMaintenance(ctx, startBlock)
-		activeBlockers := make([]metadata.WorktreeSessionBlocker, 0)
+		targets := make([]targetSession, 0, len(sessions))
 		for _, target := range sessions {
-			sessionID := strings.TrimSpace(target.SessionID)
-			if sessionID == "" || sessionID == trimmedCurrentSessionID {
+			sessionID, err := runtimeids.ParseSessionID(target.SessionID)
+			if err != nil {
+				return deleteTargetActivityLease{}, fmt.Errorf("parse worktree-targeting session id %q: %w", target.SessionID, err)
+			}
+			if currentSessionID != nil && sessionID == *currentSessionID {
 				continue
 			}
-			active, err := s.authority.HasBlockingRuntimeActivity(ctx, sessionID)
+			targets = append(targets, targetSession{id: sessionID, blocker: target})
+		}
+		if len(targets) > 0 {
+			sessionIDs := make([]runtimeids.SessionID, 0, len(targets))
+			for _, target := range targets {
+				sessionIDs = append(sessionIDs, target.id)
+			}
+			startBlock, err := s.acquireSessionStartAdmission(ctx, sessionIDs, sessionStartAdmissionTry)
+			if err != nil {
+				if errors.Is(err, sessionruntime.ErrSessionStartAdmissionBusy) {
+					return deleteTargetActivityLease{}, errors.Join(serverapi.ErrWorktreeBlocked, err)
+				}
+				return deleteTargetActivityLease{}, err
+			}
+			lease.close = func() { releaseSessionStarts(startBlock) }
+			lease.ctx = authorizeSessionMaintenance(ctx, startBlock)
+		}
+		activeBlockers := make([]metadata.WorktreeSessionBlocker, 0, len(targets))
+		for _, target := range targets {
+			active, err := s.authority.HasBlockingRuntimeActivity(ctx, target.id.String())
 			if err != nil {
 				lease.Close()
 				return deleteTargetActivityLease{}, err
 			}
 			if active {
-				activeBlockers = append(activeBlockers, target)
+				activeBlockers = append(activeBlockers, target.blocker)
 			}
 		}
 		if len(activeBlockers) > 0 {
@@ -320,8 +348,8 @@ func (s *Service) acquireDeleteTargetActivity(
 			return deleteTargetActivityLease{}, activeDeleteBlockerError(activeBlockers)
 		}
 	}
-	if strings.TrimSpace(worktreeRoot) != "" {
-		if processBlockers := s.backgroundProcessBlockers(worktreeRoot); len(processBlockers) > 0 {
+	if worktreeRoot != nil {
+		if processBlockers := s.backgroundProcessBlockers(*worktreeRoot); len(processBlockers) > 0 {
 			lease.Close()
 			return deleteTargetActivityLease{}, errors.Join(serverapi.ErrWorktreeBlocked, fmt.Errorf("worktree has active background processes: %s", strings.Join(processBlockers, ", ")))
 		}

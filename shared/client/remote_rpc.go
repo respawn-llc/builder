@@ -37,14 +37,14 @@ type requestCanceledError struct {
 }
 
 type worktreeBlockedError struct {
-	diagnostic string
+	diagnostic *string
 }
 
 func (e worktreeBlockedError) Error() string {
-	if e.diagnostic == "" {
+	if e.diagnostic == nil {
 		return serverapi.ErrWorktreeBlocked.Error()
 	}
-	return e.diagnostic
+	return *e.diagnostic
 }
 
 func (e worktreeBlockedError) Unwrap() error {
@@ -546,7 +546,8 @@ func protocolError(resp *protocol.ResponseError) error {
 		return protocol.DecodeSubagentLaunchPolicyError(resp.Data, message)
 	}
 	if resp.Code == protocol.ErrCodeWorktreeBlocked {
-		return worktreeBlockedError{diagnostic: message}
+		diagnostic := resp.Message
+		return worktreeBlockedError{diagnostic: &diagnostic}
 	}
 	switch resp.Code {
 	case protocol.ErrCodeWorktreeSelector,

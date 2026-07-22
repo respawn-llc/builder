@@ -21,6 +21,7 @@ import (
 	"core/shared/boundedio"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"github.com/google/uuid"
 )
@@ -229,26 +230,43 @@ func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, autho
 	}
 }
 
-func (s *Service) blockSessionStarts(ctx context.Context, raw []string) (sessionruntime.SessionStartBlockRelease, error) {
-	if s == nil || s.authority == nil {
-		return nil, errors.New("worktree runtime authority is required")
-	}
+type sessionStartAdmissionMode uint8
+
+const (
+	sessionStartAdmissionWait sessionStartAdmissionMode = iota + 1
+	sessionStartAdmissionTry
+)
+
+func parseSessionStartAdmissionIDs(raw []string) ([]runtimeids.SessionID, error) {
 	ids, err := sessionruntime.ParseSessionIDs(raw)
-	if err != nil || len(ids) == 0 {
+	if err != nil {
 		return nil, err
 	}
-	return s.authority.BlockSessionStarts(ctx, ids, sessionruntime.SessionStartBlockMaintenance)
+	if len(ids) == 0 {
+		return nil, errors.New("session ids are required")
+	}
+	return ids, nil
 }
 
-func (s *Service) tryBlockSessionStarts(ctx context.Context, raw []string) (sessionruntime.SessionStartBlockRelease, error) {
+func (s *Service) acquireSessionStartAdmission(
+	ctx context.Context,
+	sessionIDs []runtimeids.SessionID,
+	mode sessionStartAdmissionMode,
+) (sessionruntime.SessionStartBlockRelease, error) {
 	if s == nil || s.authority == nil {
 		return nil, errors.New("worktree runtime authority is required")
 	}
-	ids, err := sessionruntime.ParseSessionIDs(raw)
-	if err != nil || len(ids) == 0 {
-		return nil, err
+	if len(sessionIDs) == 0 {
+		return nil, errors.New("session ids are required")
 	}
-	return s.authority.TryBlockSessionStarts(ctx, ids, sessionruntime.SessionStartBlockMaintenance)
+	switch mode {
+	case sessionStartAdmissionWait:
+		return s.authority.BlockSessionStarts(ctx, sessionIDs, sessionruntime.SessionStartBlockMaintenance)
+	case sessionStartAdmissionTry:
+		return s.authority.TryBlockSessionStarts(ctx, sessionIDs, sessionruntime.SessionStartBlockMaintenance)
+	default:
+		return nil, fmt.Errorf("session start admission mode %d is invalid", mode)
+	}
 }
 
 func releaseSessionStarts(release sessionruntime.SessionStartBlockRelease) {
@@ -818,7 +836,7 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	if err := s.ensureNoOtherNonTerminalTasksManageWorktree(ctx, taskID, record); err != nil {
 		return DeleteTaskWorktreeResponse{}, err
 	}
-	activityLease, err := s.acquireDeleteTargetActivity(ctx, "", &record, record.CanonicalRoot)
+	activityLease, err := s.acquireDeleteTargetActivity(ctx, nil, &record, &record.CanonicalRoot)
 	if err != nil {
 		return DeleteTaskWorktreeResponse{}, err
 	}

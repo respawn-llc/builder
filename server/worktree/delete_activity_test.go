@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/runtime"
@@ -21,28 +22,15 @@ import (
 )
 
 type deleteInFlightStartLifecycle struct {
-	entered     chan struct{}
-	release     chan struct{}
-	enteredOnce sync.Once
-	releaseOnce sync.Once
+	*testsetup.StartBarrier
 }
 
 func (l *deleteInFlightStartLifecycle) ResourceReady(ctx context.Context, _ sessionruntime.AgentResourceDescriptor, _ *runtime.Engine, _ sessionruntime.AgentResourceRetainer) error {
-	l.enteredOnce.Do(func() { close(l.entered) })
-	select {
-	case <-l.release:
-		return nil
-	case <-ctx.Done():
-		return context.Cause(ctx)
-	}
+	return l.ArriveAndWait(ctx)
 }
 
 func (l *deleteInFlightStartLifecycle) ResourceDraining(context.Context, sessionruntime.AgentResourceDescriptor) error {
 	return nil
-}
-
-func (l *deleteInFlightStartLifecycle) unblock() {
-	l.releaseOnce.Do(func() { close(l.release) })
 }
 
 type deleteActivityTestLLMClient struct{}
@@ -66,11 +54,6 @@ func deleteActivityTestRuntimePlan(t *testing.T, env *serviceTestEnv, workdir st
 		t.Fatalf("NewAgentRuntimePlan: %v", err)
 	}
 	return plan
-}
-
-type deleteActivityStartResult struct {
-	handle sessionruntime.ExecutionHandle
-	err    error
 }
 
 type deleteTargetState struct {
@@ -166,24 +149,16 @@ func deleteServiceTestWorktree(env *serviceTestEnv, worktreeID string) <-chan de
 	return deleted
 }
 
-func startDeleteActivityWithOpenResource(
-	authority *sessionruntime.Authority,
-	descriptor session.SessionDescriptor,
-	plan *sessionruntime.AgentRuntimePlan,
-) <-chan deleteActivityStartResult {
-	started := make(chan deleteActivityStartResult, 1)
-	go func() {
-		handle, err := authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
-			Descriptor: descriptor,
-			Runtime:    plan,
-			Resource:   sessionruntime.OpenAgentResource{},
-			Runner: func(context.Context, sessionruntime.ExecutionScope, sessionruntime.AgentRuntimeBridge) error {
-				return nil
-			},
-		})
-		started <- deleteActivityStartResult{handle: handle, err: err}
-	}()
-	return started
+func TestAcquireDeleteTargetActivityRejectsBlankPresentOptions(t *testing.T) {
+	env := newServiceTestEnv(t)
+	blankSessionID := runtimeids.SessionID{}
+	if _, err := env.service.acquireDeleteTargetActivity(env.ctx, &blankSessionID, nil, nil); err == nil {
+		t.Fatal("acquireDeleteTargetActivity accepted a blank present current session id")
+	}
+	blankRoot := " \t "
+	if _, err := env.service.acquireDeleteTargetActivity(env.ctx, nil, nil, &blankRoot); err == nil {
+		t.Fatal("acquireDeleteTargetActivity accepted a blank present target root")
+	}
 }
 
 func waitForDeleteActivityTransitionOutcome(t *testing.T, publisher *serviceTestPublisher) clientui.WorktreeTransitionOutcome {
@@ -217,11 +192,10 @@ func waitForDeleteActivityTransitionOutcome(t *testing.T, publisher *serviceTest
 
 func TestDeleteWorktreeRejectsInFlightStartAndCompletesUnrelatedWorktree(t *testing.T) {
 	lifecycle := &deleteInFlightStartLifecycle{
-		entered: make(chan struct{}),
-		release: make(chan struct{}),
+		StartBarrier: testsetup.NewStartBarrier(),
 	}
 	env := newServiceTestEnvWithResourceLifecycle(t, lifecycle)
-	defer lifecycle.unblock()
+	defer lifecycle.Unblock()
 
 	busy := mustCreateWorktree(t, env, "feature/delete-in-flight-start-busy")
 	unrelated := mustCreateWorktree(t, env, "feature/delete-in-flight-start-unrelated")
@@ -231,11 +205,20 @@ func TestDeleteWorktreeRejectsInFlightStartAndCompletesUnrelatedWorktree(t *test
 	state := captureDeleteTargetState(t, env, busySession.Meta().SessionID, busy)
 	descriptor := openDeleteActivitySessionDescriptor(t, busySession.Meta().SessionID)
 	plan := deleteActivityTestRuntimePlan(t, env, busy.CanonicalRoot)
-	started := startDeleteActivityWithOpenResource(env.authority, descriptor, &plan)
+	started := testsetup.Start(func() (sessionruntime.ExecutionHandle, error) {
+		return env.authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
+			Descriptor: descriptor,
+			Runtime:    &plan,
+			Resource:   sessionruntime.OpenAgentResource{},
+			Runner: func(context.Context, sessionruntime.ExecutionScope, sessionruntime.AgentRuntimeBridge) error {
+				return nil
+			},
+		})
+	})
 	select {
-	case <-lifecycle.entered:
+	case <-lifecycle.Entered():
 	case result := <-started:
-		t.Fatalf("agent start completed before entering resource lifecycle: handle=%v error=%v", result.handle, result.err)
+		t.Fatalf("agent start completed before entering resource lifecycle: handle=%v error=%v", result.Value, result.Err)
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for agent start to enter resource lifecycle")
 	}
@@ -262,14 +245,14 @@ func TestDeleteWorktreeRejectsInFlightStartAndCompletesUnrelatedWorktree(t *test
 		t.Fatal("unrelated delete did not complete while busy start remained held")
 	}
 
-	lifecycle.unblock()
+	lifecycle.Unblock()
 	start := <-started
-	if start.err != nil {
-		t.Fatalf("StartAgentExecution: %v", start.err)
+	if start.Err != nil {
+		t.Fatalf("StartAgentExecution: %v", start.Err)
 	}
 	waitCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if _, err := start.handle.Wait(waitCtx); err != nil {
+	if _, err := start.Value.Wait(waitCtx); err != nil {
 		t.Fatalf("wait for started execution: %v", err)
 	}
 }
@@ -350,11 +333,10 @@ func TestDeleteWorktreeRejectsLiveRunAndCompletesUnrelatedWorktree(t *testing.T)
 
 func TestDeleteTaskWorktreeRejectsInFlightStartUnchanged(t *testing.T) {
 	lifecycle := &deleteInFlightStartLifecycle{
-		entered: make(chan struct{}),
-		release: make(chan struct{}),
+		StartBarrier: testsetup.NewStartBarrier(),
 	}
 	env := newServiceTestEnvWithResourceLifecycle(t, lifecycle)
-	defer lifecycle.unblock()
+	defer lifecycle.Unblock()
 	task, _ := createTaskWorktreeTestTask(t, env)
 	materialized, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
 		TaskID:         task.ID,
@@ -372,11 +354,20 @@ func TestDeleteTaskWorktreeRejectsInFlightStartUnchanged(t *testing.T) {
 	state := captureDeleteTargetState(t, env, busySession.Meta().SessionID, busy)
 	descriptor := openDeleteActivitySessionDescriptor(t, busySession.Meta().SessionID)
 	plan := deleteActivityTestRuntimePlan(t, env, busy.CanonicalRoot)
-	started := startDeleteActivityWithOpenResource(env.authority, descriptor, &plan)
+	started := testsetup.Start(func() (sessionruntime.ExecutionHandle, error) {
+		return env.authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
+			Descriptor: descriptor,
+			Runtime:    &plan,
+			Resource:   sessionruntime.OpenAgentResource{},
+			Runner: func(context.Context, sessionruntime.ExecutionScope, sessionruntime.AgentRuntimeBridge) error {
+				return nil
+			},
+		})
+	})
 	select {
-	case <-lifecycle.entered:
+	case <-lifecycle.Entered():
 	case result := <-started:
-		t.Fatalf("agent start completed before entering resource lifecycle: handle=%v error=%v", result.handle, result.err)
+		t.Fatalf("agent start completed before entering resource lifecycle: handle=%v error=%v", result.Value, result.Err)
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for agent start to enter resource lifecycle")
 	}
@@ -396,14 +387,14 @@ func TestDeleteTaskWorktreeRejectsInFlightStartUnchanged(t *testing.T) {
 	}
 	state.assertUnchanged(t, env, busySession.Meta().SessionID, busy.WorktreeID)
 
-	lifecycle.unblock()
+	lifecycle.Unblock()
 	start := <-started
-	if start.err != nil {
-		t.Fatalf("StartAgentExecution: %v", start.err)
+	if start.Err != nil {
+		t.Fatalf("StartAgentExecution: %v", start.Err)
 	}
 	waitCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if _, err := start.handle.Wait(waitCtx); err != nil {
+	if _, err := start.Value.Wait(waitCtx); err != nil {
 		t.Fatalf("wait for started execution: %v", err)
 	}
 }

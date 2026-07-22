@@ -198,7 +198,11 @@ func (s *Service) switchSessionTargetWithSync(
 		return clientui.SessionExecutionTarget{}, errors.New("execution target synchronizer is required")
 	}
 	if stepAuthority == nil {
-		release, err := s.blockSessionStarts(ctx, []string{workspaceCtx.sessionID})
+		sessionIDs, err := parseSessionStartAdmissionIDs([]string{workspaceCtx.sessionID})
+		if err != nil {
+			return clientui.SessionExecutionTarget{}, err
+		}
+		release, err := s.acquireSessionStartAdmission(ctx, sessionIDs, sessionStartAdmissionWait)
 		if err != nil {
 			return clientui.SessionExecutionTarget{}, err
 		}
