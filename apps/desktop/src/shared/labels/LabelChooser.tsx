@@ -105,9 +105,7 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
   const createLabel = async () => {
     try {
       const label = await mutations.create.mutateAsync(preparedSearch);
-      if (invocation.kind === "assignment") {
-        selectLabel(invocation, label.id, true);
-      }
+      selectLabel(invocation, label.id, true);
       setSearch("");
       setKeyboardHighlightedIndex(null);
       mutations.create.reset();

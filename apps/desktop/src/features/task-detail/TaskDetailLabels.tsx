@@ -23,14 +23,13 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
   });
   const pendingLabelIDs = new Set(assignment.snapshot?.pendingLabelIDs ?? []);
   const triggerDisabled = disabled || assignment.snapshot?.closed === true;
-  const trigger = (
-    <TaskDetailLabelTrigger
-      disabled={triggerDisabled}
-      loading={assignment.assignment.isPending}
-      pendingLabelIDs={pendingLabelIDs}
-      visibleLabels={visibleLabels}
-    />
-  );
+  const trigger = renderTaskDetailLabelTrigger({
+    disabled: triggerDisabled,
+    loading: assignment.assignment.isPending,
+    pendingLabelIDs,
+    t,
+    visibleLabels,
+  });
   return (
     <TaskPropertyLine
       label={t("labels.filter")}
@@ -54,18 +53,19 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
   );
 }
 
-function TaskDetailLabelTrigger({
+function renderTaskDetailLabelTrigger({
   disabled,
   loading,
   pendingLabelIDs,
+  t,
   visibleLabels,
 }: Readonly<{
   disabled: boolean;
   loading: boolean;
   pendingLabelIDs: ReadonlySet<string>;
+  t: ReturnType<typeof useTranslation>["t"];
   visibleLabels: readonly ProjectLabel[];
 }>) {
-  const { t } = useTranslation();
   return (
     <Button
       aria-label={t("labels.editAssignments")}
