@@ -12,9 +12,20 @@ import (
 )
 
 func LoadTypedPackages(t testing.TB, dir string, tests bool, patterns ...string) []*packages.Package {
+	return loadTypedPackages(t, dir, tests, nil, patterns...)
+}
+
+func LoadTypedPackagesForPlatform(t testing.TB, dir string, tests bool, goos string, goarch string, patterns ...string) []*packages.Package {
+	env := append([]string(nil), os.Environ()...)
+	env = append(env, "GOOS="+goos, "GOARCH="+goarch)
+	return loadTypedPackages(t, dir, tests, env, patterns...)
+}
+
+func loadTypedPackages(t testing.TB, dir string, tests bool, env []string, patterns ...string) []*packages.Package {
 	t.Helper()
 	pkgs, err := packages.Load(&packages.Config{
 		Dir: dir,
+		Env: env,
 		Mode: packages.NeedName |
 			packages.NeedFiles |
 			packages.NeedCompiledGoFiles |

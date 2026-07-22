@@ -63,6 +63,7 @@ func display() string {
 		cases := map[string]bool{
 			"SELECT id FROM sessions":           true,
 			"SELECT 1":                          true,
+			"select 1":                          true,
 			"DELETE FROM sessions WHERE id = ?": true,
 			"WHERE id = ?":                      true,
 			"EXPLAIN SELECT 1":                  true,
@@ -92,7 +93,7 @@ func display() string {
 	t.Run("rejects standalone and externally forwarded raw SQL constants", func(t *testing.T) {
 		pkg, root := generatedQueryGuardFixture(t, `package fixture
 
-const standalone = "SELECT 1"
+const standalone = "select 1"
 
 var packageQuery = "DELETE FROM sessions WHERE id = ?"
 
@@ -107,15 +108,24 @@ func forward() {
 		}
 	})
 
-	repoRoot := findRepoRoot(t)
-	pkgs := testharness.LoadTypedPackages(t, repoRoot, false, "./server/...", "./cli/...", "./shared/...")
-	assertCoreRepositoryModule(t, pkgs)
 	violations := make([]string, 0)
-	for _, pkg := range pkgs {
-		if !isProductionRepositoryPackage(pkg) {
-			continue
+	repoRoot := findRepoRoot(t)
+	for _, platform := range []struct {
+		goos   string
+		goarch string
+	}{
+		{goos: "darwin", goarch: "arm64"},
+		{goos: "linux", goarch: "amd64"},
+		{goos: "windows", goarch: "amd64"},
+	} {
+		pkgs := testharness.LoadTypedPackagesForPlatform(t, repoRoot, false, platform.goos, platform.goarch, "./server/...", "./cli/...", "./shared/...")
+		assertCoreRepositoryModule(t, pkgs)
+		for _, pkg := range pkgs {
+			if !isProductionRepositoryPackage(pkg) {
+				continue
+			}
+			violations = append(violations, generatedQueryBoundaryViolations(pkg, repoRoot)...)
 		}
-		violations = append(violations, generatedQueryBoundaryViolations(pkg, repoRoot)...)
 	}
 	sort.Strings(violations)
 	if len(violations) > 0 {
@@ -250,9 +260,10 @@ func hasStandaloneSQLiteStatementStart(tokens []antlr.Token) bool {
 		sqliteparser.SQLiteParserRELEASE_,
 		sqliteparser.SQLiteParserROLLBACK_,
 		sqliteparser.SQLiteParserSAVEPOINT_,
-		sqliteparser.SQLiteParserSELECT_,
 		sqliteparser.SQLiteParserVACUUM_:
 		return isUppercaseSQLiteKeyword(first)
+	case sqliteparser.SQLiteParserSELECT_:
+		return isUppercaseSQLiteKeyword(first) || hasSQLValueSyntax(tokens)
 	case sqliteparser.SQLiteParserPRAGMA_:
 		return len(tokens) > 1
 	case sqliteparser.SQLiteParserCREATE_,
