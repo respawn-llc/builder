@@ -294,7 +294,9 @@ func assistantResponseTextExtendsStream(streamed string, candidate string) bool 
 
 func completedAssistantTextReconcilesStream(streamed string, completed string) bool {
 	return assistantResponseTextExtendsStream(streamed, completed) ||
-		strings.TrimRightFunc(streamed, unicode.IsSpace) == completed
+		(streamed != "" &&
+			completed != "" &&
+			strings.TrimRightFunc(streamed, unicode.IsSpace) == completed)
 }
 
 func repairAssistantOutputItems(items []ResponseItem, text string, phase MessagePhase, outputIndex int64, hasResolvedStream bool) []ResponseItem {
