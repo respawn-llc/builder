@@ -190,6 +190,45 @@ func TestCompleteRunRejectsBlankHandoffLabelsBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestSharedTargetNodeGroupDisplayNameUsesStructuralMembership(t *testing.T) {
+	definition := workflow.Definition{
+		NodeGroups: []workflow.NodeGroup{{
+			ID:            "group-code-review",
+			DisplayName:   "Code review parallel",
+			MemberNodeIDs: []workflow.NodeID{"node-review-a", "node-review-b", "node-review-join"},
+		}},
+	}
+	edges := []workflow.Edge{
+		{TargetNodeID: "node-review-a"},
+		{TargetNodeID: "node-review-b"},
+	}
+
+	displayName, err := sharedTargetNodeGroupDisplayName(definition, edges)
+	if err != nil {
+		t.Fatalf("sharedTargetNodeGroupDisplayName: %v", err)
+	}
+	if displayName == nil || *displayName != "Code review parallel" {
+		t.Fatalf("shared target node group display name = %v, want Code review parallel", displayName)
+	}
+}
+
+func TestSharedTargetNodeGroupDisplayNameRejectsBlankGroupID(t *testing.T) {
+	definition := workflow.Definition{
+		NodeGroups: []workflow.NodeGroup{{
+			DisplayName:   "Code review parallel",
+			MemberNodeIDs: []workflow.NodeID{"node-review-a", "node-review-b"},
+		}},
+	}
+	edges := []workflow.Edge{
+		{TargetNodeID: "node-review-a"},
+		{TargetNodeID: "node-review-b"},
+	}
+
+	if _, err := sharedTargetNodeGroupDisplayName(definition, edges); err == nil {
+		t.Fatal("sharedTargetNodeGroupDisplayName accepted a blank node-group ID")
+	}
+}
+
 func loadRunStartSnapshot(t *testing.T, ctx context.Context, store *Store, runID workflow.RunID) runStartSnapshot {
 	t.Helper()
 	run, err := store.queries.GetTaskRun(ctx, string(runID))
