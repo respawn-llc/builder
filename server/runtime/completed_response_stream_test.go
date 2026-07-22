@@ -211,6 +211,48 @@ func TestWorkflowDelayedDurableCompletionObservedBeforeNextModelTurn(t *testing.
 	}
 }
 
+func TestWorkflowInvalidCompletionFailClosedWhenConfiguredCapInvalid(t *testing.T) {
+	runID := workflow.RunID("workflow-run")
+	controller := &interruptingWorkflowProtocolViolationController{}
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+			Content: textutil.Value("invalid workflow completion"),
+		},
+	}}}
+	engine := mustNewExecTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		Config{
+			Model: "gpt-5",
+			WorkflowRun: &workflowruntime.Config{
+				RunID:                        runID,
+				Contract:                     workflowruntime.CompletionContract{RunID: runID},
+				CompletionMode:               workflowruntime.CompletionModeTool,
+				MaxInvalidCompletionAttempts: 0,
+				Controller:                   controller,
+			},
+		},
+	)
+
+	if _, err := engine.SubmitWorkflowTurn(context.Background()); err != nil {
+		t.Fatalf("submit workflow turn: %v", err)
+	}
+	if len(controller.violations) != 1 {
+		t.Fatalf("workflow protocol violations = %+v", controller.violations)
+	}
+	violation := controller.violations[0]
+	if violation.Kind != workflowruntime.ViolationKindInvalidCompletion ||
+		violation.MaxCount != 1 {
+		t.Fatalf("workflow protocol violation = %+v", violation)
+	}
+	if controller.result.Count != 1 || !controller.result.Interrupted {
+		t.Fatalf("workflow protocol violation result = %+v", controller.result)
+	}
+}
+
 func TestCompletedResponseFinalizationUsesActiveSegmentCoordinatesAfterCompaction(t *testing.T) {
 	first := scriptedllm.FinalAnswer("first")
 	first.StreamDeltas = []llm.AssistantDelta{{Text: "first", Phase: llm.MessagePhaseFinal}}
@@ -310,6 +352,21 @@ type externallyCompletedWorkflowController struct {
 	completed                 atomic.Bool
 	observations              atomic.Int32
 	completeAfterObservations int32
+}
+
+type interruptingWorkflowProtocolViolationController struct {
+	externallyCompletedWorkflowController
+	violations []workflowruntime.ViolationRequest
+	result     workflowruntime.ViolationResult
+}
+
+func (c *interruptingWorkflowProtocolViolationController) RecordWorkflowProtocolViolation(
+	_ context.Context,
+	request workflowruntime.ViolationRequest,
+) (workflowruntime.ViolationResult, error) {
+	c.violations = append(c.violations, request)
+	c.result = workflowruntime.ViolationResult{Count: 1, Interrupted: true}
+	return c.result, nil
 }
 
 func (c *externallyCompletedWorkflowController) CompleteWorkflowRun(
