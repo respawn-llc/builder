@@ -449,3 +449,50 @@ func typeName(typ types.Type) string {
 	}
 	return named.Obj().Pkg().Path() + "." + named.Obj().Name()
 }
+
+func mainSurfaceGuardPackageErrors(pkgs []*packages.Package) []string {
+	var errors []string
+	for _, pkg := range pkgs {
+		for _, err := range pkg.Errors {
+			errors = append(errors, err.Error())
+		}
+	}
+	sort.Strings(errors)
+	return errors
+}
+
+func mainSurfaceGuardRelativePath(repoRoot, path string) (string, bool) {
+	if strings.TrimSpace(path) == "" {
+		return "", false
+	}
+	relPath, err := filepath.Rel(repoRoot, path)
+	if err != nil {
+		return "", false
+	}
+	if strings.HasPrefix(relPath, "..") {
+		return "", false
+	}
+	return filepath.ToSlash(relPath), true
+}
+
+func mainSurfaceGuardRepositoryRoot(t *testing.T) string {
+	t.Helper()
+
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	for {
+		goModPath := filepath.Join(dir, "go.mod")
+		if _, err := os.Stat(goModPath); err == nil {
+			return dir
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("stat %s: %v", goModPath, err)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("could not find repository root from %s", dir)
+		}
+		dir = parent
+	}
+}
