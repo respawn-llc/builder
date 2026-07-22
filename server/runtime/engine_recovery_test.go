@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,6 +160,56 @@ func TestNewPublishesRecoveredDanglingToolStartOnReopen(t *testing.T) {
 		}
 	}
 	t.Fatalf("reopen events contain no recovered tool start: %+v", events)
+}
+
+func TestReopenedSessionRestoresUsageCheckpointDeltaAccounting(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model:               "gpt-5",
+		ContextWindowTokens: 2_000,
+	})
+	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("seed ", 64))}},
+	)); err != nil {
+		t.Fatalf("persist checkpoint input: %v", err)
+	}
+	receipt, err := engine.recordLastUsage(llm.Usage{
+		InputTokens:       900,
+		OutputTokens:      120,
+		WindowTokens:      2_000,
+		CachedInputTokens: textutil.Value(45),
+	})
+	if err != nil || !receipt.Committed {
+		t.Fatalf("persist usage checkpoint: receipt=%+v error=%v", receipt, err)
+	}
+	if err := engine.steer("delta", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("delta ", 32))}},
+	)); err != nil {
+		t.Fatalf("persist post-checkpoint input: %v", err)
+	}
+
+	want := engine.ContextUsage()
+	if want.UsedTokens <= 900 ||
+		want.WindowTokens != 2_000 ||
+		!want.HasCacheHitPercentage ||
+		want.CacheHitPercent != 5 {
+		t.Fatalf("live checkpoint usage = %+v", want)
+	}
+
+	reopened := mustOpenTestSession(t, store.Dir())
+	restored := mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{
+		Model:               "gpt-5",
+		ContextWindowTokens: 2_000,
+	})
+	if got := restored.ContextUsage(); got != want {
+		t.Fatalf("reopened checkpoint usage = %+v, want %+v", got, want)
+	}
 }
 
 func TestExclusiveStepLifecycleClearsPendingRecoveryBeforeSchedulingBackground(t *testing.T) {
