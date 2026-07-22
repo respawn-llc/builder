@@ -276,6 +276,23 @@ func TestTranscriptFactsNormalizeLegacyProjectedLocalEntryVisibility(t *testing.
 	}
 }
 
+func TestTranscriptCacheWarningFactsPreserveAbsentTokenLoss(t *testing.T) {
+	facts := TranscriptCommittedRowFactsFromEvent(Event{
+		Kind: EventCacheWarning,
+		CacheWarning: &transcript.CacheWarning{
+			Scope:  transcript.CacheWarningScopeConversation,
+			Reason: transcript.CacheWarningReasonCompaction,
+		},
+		CacheWarningVisibility: transcript.EntryVisibilityOngoing,
+	})
+	if len(facts) != 1 || facts[0].Notice == nil || facts[0].Notice.CacheWarning == nil {
+		t.Fatalf("cache-warning facts = %+v, want one typed notice", facts)
+	}
+	if facts[0].Notice.CacheWarning.LostInputTokens != nil {
+		t.Fatalf("cache-warning absent token loss = %v, want nil", *facts[0].Notice.CacheWarning.LostInputTokens)
+	}
+}
+
 func TestChatStoreDeliveryMatchesLiveProjectedCompactionRows(t *testing.T) {
 	s := newChatStore()
 	activeSegmentStart := 7

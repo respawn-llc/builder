@@ -282,7 +282,7 @@ pub struct TranscriptCacheWarning {
     #[serde(rename = "Reason")]
     pub reason: String,
     #[serde(rename = "LostInputTokens")]
-    pub lost_input_tokens: i32,
+    pub lost_input_tokens: Option<i32>,
     #[serde(rename = "Visibility")]
     pub visibility: EntryVisibility,
 }

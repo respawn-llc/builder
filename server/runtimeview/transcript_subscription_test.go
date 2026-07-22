@@ -46,6 +46,24 @@ func TestTranscriptProjectionOwnsNestedDeletionPresentation(t *testing.T) {
 	}
 }
 
+func TestTranscriptCacheWarningProjectionPreservesAbsentTokenLoss(t *testing.T) {
+	notice := transcriptNoticeFromFact("", &runtime.TranscriptNoticeRowFact{
+		Reason:   transcript.NoticeReasonCacheWarning,
+		Severity: transcript.NoticeSeverityWarning,
+		CacheWarning: &runtime.TranscriptCacheWarningFact{
+			Scope:      string(transcript.CacheWarningScopeConversation),
+			Reason:     string(transcript.CacheWarningReasonCompaction),
+			Visibility: transcript.EntryVisibilityOngoing,
+		},
+	})
+	if notice.CacheWarning == nil {
+		t.Fatal("cache-warning projection is absent")
+	}
+	if notice.CacheWarning.LostInputTokens != nil {
+		t.Fatalf("projected absent token loss = %v, want nil", *notice.CacheWarning.LostInputTokens)
+	}
+}
+
 func TestTranscriptHydrationPreservesDeletionDispositionPresence(t *testing.T) {
 	id := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
 	tests := []struct {

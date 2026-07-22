@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"core/shared/clientui"
-	"core/shared/textutil"
 	"core/shared/transcript"
 
 	"github.com/charmbracelet/lipgloss"
@@ -639,7 +638,7 @@ func cacheWarningNoticeText(data *clientui.TranscriptCacheWarning) string {
 	return transcript.CacheWarningText(transcript.CacheWarning{
 		Scope:           transcript.CacheWarningScope(strings.TrimSpace(data.Scope)),
 		Reason:          transcript.CacheWarningReason(strings.TrimSpace(data.Reason)),
-		LostInputTokens: textutil.Value(data.LostInputTokens),
+		LostInputTokens: data.LostInputTokens,
 	})
 }
 

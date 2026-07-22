@@ -76,7 +76,7 @@ type TranscriptNoticeRowFact struct {
 type TranscriptCacheWarningFact struct {
 	Scope           string
 	Reason          string
-	LostInputTokens int
+	LostInputTokens *int
 	Visibility      transcript.EntryVisibility
 }
 
@@ -482,14 +482,13 @@ func transcriptToolRowFactFromResult(result tools.Result) TranscriptCommittedRow
 
 func transcriptCacheWarningFact(warning transcript.CacheWarning, visibility transcript.EntryVisibility) TranscriptCommittedRowFact {
 	normalized := resolveTranscriptVisibility(visibility, transcript.EntryVisibilityOngoing)
-	lostInputTokens, _ := textutil.OptionalValue(warning.LostInputTokens)
 	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Visibility: normalized, Notice: &TranscriptNoticeRowFact{
 		Reason:   transcript.NoticeReasonCacheWarning,
 		Severity: transcript.NoticeSeverityWarning,
 		CacheWarning: &TranscriptCacheWarningFact{
 			Scope:           string(warning.Scope),
 			Reason:          string(warning.Reason),
-			LostInputTokens: lostInputTokens,
+			LostInputTokens: textutil.Pointer(warning.LostInputTokens),
 			Visibility:      normalized,
 		},
 	}}

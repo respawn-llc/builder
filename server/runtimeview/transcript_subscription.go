@@ -516,7 +516,7 @@ func transcriptNoticeFromFact(stepID string, fact *runtime.TranscriptNoticeRowFa
 		notice.CacheWarning = &clientui.TranscriptCacheWarning{
 			Scope:           strings.TrimSpace(fact.CacheWarning.Scope),
 			Reason:          strings.TrimSpace(fact.CacheWarning.Reason),
-			LostInputTokens: fact.CacheWarning.LostInputTokens,
+			LostInputTokens: textutil.Pointer(fact.CacheWarning.LostInputTokens),
 			Visibility:      fact.CacheWarning.Visibility,
 		}
 	}
