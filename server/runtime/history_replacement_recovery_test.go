@@ -122,6 +122,67 @@ func TestRestoreMessagesFailsOnMalformedHistoryReplacementPayload(t *testing.T) 
 	})
 }
 
+func TestHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	diagnosticKey := preciseTokenCountFailureDiagnostic
+	if err := engine.steerPersistedDiagnosticEntry(
+		"before-compaction",
+		diagnosticKey,
+		string(transcript.EntryRoleDeveloperErrorFeedback),
+		"before",
+	); err != nil {
+		t.Fatalf("persist pre-compaction diagnostic: %v", err)
+	}
+
+	receipt, err := newCompactionPersistence(engine).replaceHistory(
+		"compaction",
+		"local",
+		compactionModeManual,
+		llm.ItemsFromMessages([]llm.Message{{
+			Role:        llm.RoleDeveloper,
+			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+			Content:     textutil.Value("summary"),
+		}}),
+	)
+	if err != nil || !receipt.Committed {
+		t.Fatalf("persist compaction replacement: receipt=%+v error=%v", receipt, err)
+	}
+
+	if err := engine.steerPersistedDiagnosticEntry(
+		"after-compaction",
+		diagnosticKey,
+		string(transcript.EntryRoleDeveloperErrorFeedback),
+		"after",
+	); err != nil {
+		t.Fatalf("persist post-compaction diagnostic: %v", err)
+	}
+
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	if err != nil {
+		t.Fatalf("read bounded diagnostic records: %v", err)
+	}
+	replacements := 0
+	diagnostics := 0
+	for _, record := range window.Records {
+		switch payload := mustSessionEventPayload(record).(type) {
+		case session.HistoryReplacementRecord:
+			replacements++
+		case session.LocalEntryRecord:
+			if payload.DiagnosticKey != nil && *payload.DiagnosticKey == diagnosticKey {
+				diagnostics++
+			}
+		}
+	}
+	if replacements != 1 || diagnostics != 2 {
+		t.Fatalf(
+			"bounded typed diagnostic records replacements=%d diagnostics=%d, want one and two",
+			replacements,
+			diagnostics,
+		)
+	}
+}
+
 func writeMalformedLegacyHistoryReplacement(t *testing.T, store *session.Store, engine string) {
 	t.Helper()
 	payload, err := json.Marshal(struct {
