@@ -132,7 +132,7 @@ function OrdinaryQuestionForm({
   // A real option can submit on its own; otherwise any typed freeform answer is
   // submittable, including freeform-only asks where no option is selected.
   const canSubmit = (selectedOption !== null && selectedOption > 0) || answer.trim().length > 0;
-  const interactionDisabled = disabled || answerQuestion.isPending || selection.submitted;
+  const interactionDisabled = disabled || answerQuestion.isPending || selection.submission !== "idle";
   const selectedNeither = selection.userSelected && selectedOption === null;
   const radioValue = selectedNeither
     ? neitherRadioValue
@@ -172,7 +172,7 @@ function OrdinaryQuestionForm({
           askID: attention.askID,
           clientRequestID: null,
           selectedOption,
-          submitted: false,
+          submission: "idle",
           userSelected: selection.userSelected,
         });
       }}
@@ -183,7 +183,7 @@ function OrdinaryQuestionForm({
           askID: attention.askID,
           clientRequestID: null,
           selectedOption: selectedOptionFromRadioValue(value, suggestions),
-          submitted: false,
+          submission: "idle",
           userSelected: true,
         });
       }}
@@ -213,6 +213,7 @@ function OrdinaryQuestionForm({
       }
       question={question}
       radioValue={radioValue}
+      submitting={selection.submission === "submitting"}
     />
   );
 }
@@ -260,7 +261,7 @@ function ApprovalQuestionForm({
   const answer = selection.answer;
   const answerID = useId();
   const canSubmit = selectedDecision !== null && (selectedDecision !== "deny" || answer.trim().length > 0);
-  const interactionDisabled = disabled || answerQuestion.isPending || selection.submitted;
+  const interactionDisabled = disabled || answerQuestion.isPending || selection.submission !== "idle";
 
   async function submit(): Promise<void> {
     if (selectedDecision === null) {
@@ -297,7 +298,7 @@ function ApprovalQuestionForm({
           askID: attention.askID,
           clientRequestID: null,
           selectedOption: null,
-          submitted: false,
+          submission: "idle",
           userSelected: selection.userSelected,
         });
       }}
@@ -308,7 +309,7 @@ function ApprovalQuestionForm({
           askID: attention.askID,
           clientRequestID: null,
           selectedOption: null,
-          submitted: false,
+          submission: "idle",
           userSelected: true,
         });
       }}
@@ -325,6 +326,7 @@ function ApprovalQuestionForm({
       ))}
       question={question}
       radioValue={selectedDecision ?? ""}
+      submitting={selection.submission === "submitting"}
     />
   );
 }
@@ -340,6 +342,7 @@ function QuestionFormFrame({
   optionGroup,
   question,
   radioValue,
+  submitting,
 }: Readonly<{
   answer: string;
   answerID: string;
@@ -351,6 +354,7 @@ function QuestionFormFrame({
   optionGroup?: ReactNode;
   question: string | undefined;
   radioValue: string;
+  submitting: boolean;
 }>) {
   const { t } = useTranslation();
   const openLink = useOpenExternalLink();
@@ -395,8 +399,8 @@ function QuestionFormFrame({
         rows={3}
         value={answer}
       />
-      <Button disabled={submitDisabled} type="submit" variant="primary">
-        {t("task.submitAnswer")}
+      <Button aria-busy={submitting} disabled={submitDisabled} type="submit" variant="primary">
+        {submitting ? t("task.submittingAnswer") : t("task.submitAnswer")}
       </Button>
     </form>
   );
@@ -496,12 +500,13 @@ async function submitQuestionAnswer({
   selection: QuestionSelectionState;
 }>): Promise<void> {
   const clientRequestID = selection.clientRequestID ?? questionClientRequestID(attention.askID);
-  const submittedSelection = { ...selection, clientRequestID, submitted: true };
-  onSelectionStateChange(submittedSelection);
+  const submittingSelection = { ...selection, clientRequestID, submission: "submitting" as const };
+  onSelectionStateChange(submittingSelection);
   try {
     await answerQuestion.mutateAsync(input(clientRequestID));
+    onSelectionStateChange({ ...submittingSelection, submission: "accepted" });
   } catch (error: unknown) {
-    onSelectionStateChange({ ...submittedSelection, submitted: false });
+    onSelectionStateChange({ ...submittingSelection, submission: "idle" });
     showStatusToast({
       body: errorMessage(error),
       id: `task-question-answer-failed:${attention.askID}`,

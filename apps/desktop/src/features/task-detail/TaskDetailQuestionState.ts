@@ -6,7 +6,7 @@ export type QuestionSelectionState = Readonly<{
   approvalDecision: ApprovalDecision | null;
   clientRequestID: string | null;
   selectedOption: number | null;
-  submitted: boolean;
+  submission: "idle" | "submitting" | "accepted";
   userSelected: boolean;
 }>;
 
@@ -17,7 +17,7 @@ export function emptyQuestionSelection(askID: string): QuestionSelectionState {
     askID,
     clientRequestID: null,
     selectedOption: null,
-    submitted: false,
+    submission: "idle",
     userSelected: false,
   };
 }
