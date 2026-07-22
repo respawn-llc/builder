@@ -288,6 +288,91 @@ func TestCompactionMissingToolOutputRepairRunsSinglePass(t *testing.T) {
 	}
 }
 
+func TestCompactionMissingOutputRepairDoesNotConsumeOverflowAttempt(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeCompactionClient{
+		errors: []error{
+			&llm.APIStatusError{StatusCode: 400},
+			&llm.ProviderAPIError{
+				ProviderID:   "openai",
+				StatusCode:   400,
+				Code:         llm.UnifiedErrorCodeContextLengthOverflow,
+				ProviderCode: "context_length_exceeded",
+			},
+			nil,
+		},
+		responses: []llm.Response{{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
+			Usage:     llm.Usage{WindowTokens: 200_000},
+		}},
+	}
+	eng := mustNewExecTestEngine(t, store, client, Config{Model: "gpt-5", CompactionMode: "local"})
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}},
+	)); err != nil {
+		t.Fatalf("append user message: %v", err)
+	}
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+			ID:    "call-shell",
+			Name:  "exec_command",
+			Input: json.RawMessage(`{}`),
+		}}}},
+	)); err != nil {
+		t.Fatalf("append shell tool call: %v", err)
+	}
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{
+			Role:       llm.RoleTool,
+			ToolCallID: textutil.Value("call-shell"),
+			Name:       textutil.Value("exec_command"),
+			Content:    textutil.Value(`{"output":"` + strings.Repeat("x", 120_000) + `"}`),
+		}},
+	)); err != nil {
+		t.Fatalf("append shell tool output: %v", err)
+	}
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+			ID:    "call-missing",
+			Name:  "exec_command",
+			Input: json.RawMessage(`{}`),
+		}}}},
+	)); err != nil {
+		t.Fatalf("append dangling tool call: %v", err)
+	}
+
+	if err := eng.CompactContext(context.Background(), ""); err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	if len(client.calls) != 3 {
+		t.Fatalf("local compaction calls = %d, want repair, overflow, and collapsed retry", len(client.calls))
+	}
+	final := client.calls[2].Items
+	if !repairRequestHasToolOutput(final, "call-missing") {
+		t.Fatal("final local compaction request omitted synthetic output")
+	}
+	for _, item := range final {
+		if isToolOutputItem(item.Type) && item.CallID != nil && *item.CallID == "call-shell" {
+			if isCollapsedCompactionOverflowShellOutput(item.Output) {
+				return
+			}
+		}
+	}
+	t.Fatal("final local compaction request omitted collapsed shell output")
+}
+
 func repairRequestHasToolCall(items []llm.ResponseItem, callID string) bool {
 	for _, item := range items {
 		if !isToolCallItem(item.Type) {
