@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -111,6 +112,63 @@ func TestReopenedSessionAfterTriggerHandoffDoesNotRequeueWhenAnyCompactionAlread
 			t.Fatalf("reopened active items retained trigger-handoff protocol item: %+v", item)
 		}
 	}
+}
+
+func TestReopenedSessionAfterFailedTriggerHandoffDoesNotRequeuePendingHandoff(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
+	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+	)); err != nil {
+		t.Fatalf("persist seed message: %v", err)
+	}
+	handoffCall := llm.ToolCall{
+		ID:   "failed-handoff-call",
+		Name: string(toolspec.ToolTriggerHandoff),
+		Input: mustJSON(map[string]any{
+			"future_agent_message": "continue",
+		}),
+	}
+	if err := engine.steer("handoff", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{
+			Role:      llm.RoleAssistant,
+			Phase:     textutil.Value(llm.MessagePhaseCommentary),
+			Content:   textutil.Value("handoff"),
+			ToolCalls: []llm.ToolCall{handoffCall},
+		}},
+	)); err != nil {
+		t.Fatalf("persist trigger-handoff call: %v", err)
+	}
+	if err := engine.steer("handoff", steerToolCompletionIntent(tools.Result{
+		CallID:  handoffCall.ID,
+		Name:    toolspec.ToolTriggerHandoff,
+		IsError: true,
+		Output:  mustJSON(map[string]any{"failure": true}),
+	})); err != nil {
+		t.Fatalf("persist failed trigger-handoff completion: %v", err)
+	}
+
+	restored := mustNewHandoffTestEngine(t, mustOpenTestSession(t, store.Dir()), &fakeClient{}, Config{})
+	if pending := restored.handoffRuntimeState().RequestSnapshot(); pending != nil {
+		t.Fatalf("reopened session requeued failed handoff: %+v", pending)
+	}
+	window, readErr := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	if readErr != nil {
+		t.Fatalf("read bounded handoff records: %v", readErr)
+	}
+	for _, record := range window.Records {
+		completion, ok := mustSessionEventPayload(record).(session.ToolCompletionRecord)
+		if ok && completion.CallID == handoffCall.ID && completion.IsError {
+			return
+		}
+	}
+	t.Fatalf("bounded handoff records contain no failed typed completion: %+v", window.Records)
 }
 
 func persistSuccessfulTriggerHandoff(t *testing.T, engine *Engine, callID string) llm.ToolCall {
