@@ -71,6 +71,45 @@ func TestToolCompletionDeletionMismatchReleaseFallbackPersistsRecovery(t *testin
 	assertDeletionMismatchFallback(t, restored, reopened, result)
 }
 
+func TestToolCompletionDeletionMismatchDoesNotApplyUncommittedFallback(t *testing.T) {
+	store := mustCreateTestSession(t)
+	var emitted []Event
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model:   "gpt-5",
+		OnEvent: func(event Event) { emitted = append(emitted, event) },
+	})
+	result := mismatchedDeletionCompletion(t, engine)
+	emitted = nil
+	blocker := mustBlockTestEventLogAppends(t, store)
+
+	receipt, err := engine.steerWithCommitReceipt("step-delete", steerToolCompletionIntent(result))
+	if err == nil || receipt.Committed {
+		t.Fatalf("uncommitted fallback outcome: receipt=%+v err=%v", receipt, err)
+	}
+	if restoreErr := blocker.Restore(); restoreErr != nil {
+		t.Fatalf("restore event-log blocker: %v", restoreErr)
+	}
+	window, readErr := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	if readErr != nil {
+		t.Fatalf("read bounded mismatch records: %v", readErr)
+	}
+	for _, record := range window.Records {
+		switch mustSessionEventPayload(record).(type) {
+		case session.ToolCompletionRecord, session.LocalEntryRecord:
+			t.Fatalf("uncommitted fallback persisted recovery data: %+v", record)
+		}
+	}
+	if rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows; len(rows) != 0 {
+		t.Fatalf("uncommitted fallback projected rows: %+v", rows)
+	}
+	if _, ok := engine.transcriptRuntimeState().liveToolLedger().Lookup(result.CallID); !ok {
+		t.Fatal("uncommitted fallback removed the live tool")
+	}
+	if len(emitted) != 0 {
+		t.Fatalf("uncommitted fallback emitted client events: %+v", emitted)
+	}
+}
+
 func mismatchedDeletionCompletion(t *testing.T, engine *Engine) tools.Result {
 	t.Helper()
 	call := llm.ToolCall{
