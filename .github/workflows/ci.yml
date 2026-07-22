@@ -311,7 +311,7 @@ jobs:
         run: pnpm build
 
   gui-native:
-    runs-on: macos-15
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.0
@@ -341,10 +341,10 @@ jobs:
       - name: Install GUI dependencies
         run: pnpm --dir apps install --frozen-lockfile
 
-      - name: Build macOS 15 desktop bundle
+      - name: Build macOS desktop bundle
         run: bash scripts/build-desktop.sh --skip-install -- --bundles dmg
 
-      - name: Smoke test macOS 15 desktop bundle
+      - name: Smoke test macOS desktop bundle
         run: |
           shopt -s nullglob
           dmgs=(apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg)
@@ -381,10 +381,10 @@ jobs:
           kill -TERM "$app_pid"
           wait "$app_pid" || true
 
-      - name: Upload macOS 15 desktop bundle
+      - name: Upload macOS desktop bundle
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: desktop-bundle-macos-15-arm64
+          name: desktop-bundle-macos-arm64
           path: apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
 

@@ -27,7 +27,7 @@
 
 ## Task Labels And Filtering
 
-- Each label has an immutable UUID v4 identity. Its mutable name is trimmed, 1–64 characters, preserves display capitalization, and permits Unicode letters and numbers, spaces, hyphens, underscores, and slashes.
+- Each label has an immutable UUID v4 identity. Its mutable name is trimmed, 1–64 characters, preserves display capitalization, and permits Unicode letters and numbers, spaces, and `: & * % $ # @ ! ? . , / \ + | - _ ~ '`.
 - Label names are case-insensitively unique within a Project. Capitalization-only rename is allowed without changing identity or task assignments.
 - A Project may own at most 100 labels. The server enforces the bound, and clients load the complete bounded catalog without pagination.
 - A task may use any subset of its Project's catalog; there is no separate per-task label limit.
