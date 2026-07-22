@@ -8,6 +8,7 @@ import (
 	"core/server/session"
 	"core/shared/config"
 	"core/shared/textutil"
+	"core/shared/transcript"
 )
 
 func TestActiveGoalContinuationUsesOneCanonicalMetaContextSlot(t *testing.T) {
@@ -112,6 +113,20 @@ func TestReviewerReconstructionPlacesActiveGoalBeforeTranscriptBoundary(t *testi
 			transcriptIndex,
 			continuationCount,
 		)
+	}
+}
+
+func TestActiveGoalContinuationProjectsAsDetailDeveloperContext(t *testing.T) {
+	entries := VisibleChatEntriesFromMessage(llm.Message{
+		Role:        llm.RoleDeveloper,
+		MessageType: textutil.Value(llm.MessageTypeActiveGoalContinuation),
+		Content:     textutil.Value("continuation"),
+	})
+	if len(entries) != 1 ||
+		entries[0].Visibility != transcript.EntryVisibilityDetail ||
+		entries[0].Role != string(transcript.EntryRoleDeveloperContext) ||
+		entries[0].MessageType != llm.MessageTypeActiveGoalContinuation {
+		t.Fatalf("active-goal continuation entry = %+v", entries)
 	}
 }
 
