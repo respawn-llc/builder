@@ -34,25 +34,7 @@ func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnRunError(t *tes
 	if engine.HasQueuedUserWork() {
 		t.Fatal("committed queued input retained retry ownership")
 	}
-	window, readErr := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
-	if readErr != nil {
-		t.Fatalf("read bounded queued-input records: %v", readErr)
-	}
-	userMessages := 0
-	for _, record := range window.Records {
-		payload, ok := mustSessionEventPayload(record).(session.MessageRecord)
-		if !ok {
-			continue
-		}
-		message, restoreErr := llmMessageFromSessionRecord(payload)
-		if restoreErr != nil {
-			t.Fatalf("restore queued-input message: %v", restoreErr)
-		}
-		if message.Role == llm.RoleUser {
-			userMessages++
-		}
-	}
-	if userMessages != 1 {
+	if userMessages := boundedPersistedUserMessageCount(t, store); userMessages != 1 {
 		t.Fatalf("persisted queued user messages = %d, want one committed input", userMessages)
 	}
 }
@@ -93,9 +75,61 @@ func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnStepFinalizatio
 	if engine.HasQueuedUserWork() {
 		t.Fatal("committed queued input retained retry ownership")
 	}
-	window, readErr := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
-	if readErr != nil {
-		t.Fatalf("read bounded queued-input records: %v", readErr)
+	if userMessages := boundedPersistedUserMessageCount(t, store); userMessages != 1 {
+		t.Fatalf("persisted queued user messages = %d, want one committed input", userMessages)
+	}
+}
+
+func TestDrainQueuedUserMessagesBeforeCloseFailsRestoredQueueWhenFlushPersistenceFails(t *testing.T) {
+	store := mustCreateTestSession(t)
+	var statuses []QueuedUserMessageStatusEvent
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			if event.QueuedUserMessageStatus != nil {
+				statuses = append(statuses, *event.QueuedUserMessageStatus)
+			}
+		},
+	})
+	if err := engine.ensureMetaContextForRequest(context.Background(), "queue-flush"); err != nil {
+		t.Fatalf("prepare queued flush context: %v", err)
+	}
+	queued := engine.QueueUserMessageWithClientRequestID("queued input", "request-id")
+	blocker := mustBlockTestEventLogAppends(t, store)
+
+	if err := engine.DrainQueuedUserMessagesBeforeClose(context.Background()); err == nil {
+		t.Fatal("close drain did not surface an uncommitted queued flush")
+	}
+	if err := blocker.Restore(); err != nil {
+		t.Fatalf("restore event-log appends: %v", err)
+	}
+	if engine.HasQueuedUserWork() {
+		t.Fatal("close drain retained uncommitted queued user work")
+	}
+	if len(statuses) != 2 {
+		t.Fatalf("queued user statuses = %+v", statuses)
+	}
+	if accepted := statuses[0]; accepted.Status != QueuedUserMessageAccepted ||
+		accepted.QueueItemID != queued.ID ||
+		accepted.ClientRequestID != queued.ClientRequestID {
+		t.Fatalf("accepted queue status = %+v", accepted)
+	}
+	if failed := statuses[1]; failed.Status != QueuedUserMessageFailed ||
+		failed.QueueItemID != queued.ID ||
+		failed.ClientRequestID != queued.ClientRequestID ||
+		failed.FailureReason != QueuedUserMessageFailureClosing {
+		t.Fatalf("close-drain queue failure = %+v", failed)
+	}
+	if userMessages := boundedPersistedUserMessageCount(t, store); userMessages != 0 {
+		t.Fatalf("uncommitted queued flush persisted %d user messages", userMessages)
+	}
+}
+
+func boundedPersistedUserMessageCount(t *testing.T, store *session.Store) int {
+	t.Helper()
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	if err != nil {
+		t.Fatalf("read bounded queued-input records: %v", err)
 	}
 	userMessages := 0
 	for _, record := range window.Records {
@@ -111,7 +145,5 @@ func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnStepFinalizatio
 			userMessages++
 		}
 	}
-	if userMessages != 1 {
-		t.Fatalf("persisted queued user messages = %d, want one committed input", userMessages)
-	}
+	return userMessages
 }
