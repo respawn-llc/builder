@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"core/server/llm"
@@ -431,6 +432,79 @@ func TestCompactNowInvalidatesPromptSnapshotsWhenStaleMetadataObserverFails(t *t
 			request.PromptCacheScope,
 		)
 	}
+}
+
+func TestRemoteCompactionTaskCommentCountErrorDoesNotReplaceHistory(t *testing.T) {
+	store := mustCreateTestSession(t)
+	countErr := errors.New("workflow task comment count failure")
+	runID := workflow.RunID("workflow-run")
+	client := &fakeCompactionClient{
+		compactionResponses: []llm.CompactionResponse{{
+			OutputItems: []llm.ResponseItem{
+				{
+					Type:        llm.ResponseItemTypeMessage,
+					Role:        textutil.Value(llm.RoleUser),
+					MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+					Content:     textutil.Value("summary"),
+				},
+				{
+					Type:             llm.ResponseItemTypeCompaction,
+					ID:               textutil.Value("cmp-1"),
+					EncryptedContent: textutil.Value("encrypted"),
+				},
+			},
+			Usage: llm.Usage{InputTokens: 1_000, OutputTokens: 100, WindowTokens: 200_000},
+		}},
+	}
+	engine := mustNewWorkflowTestEngine(t, store, client, &workflowruntime.Config{
+		RunID:              runID,
+		Contract:           workflowruntime.CompletionContract{RunID: runID},
+		CompletionMode:     workflowruntime.CompletionModeTool,
+		Controller:         &externallyCompletedWorkflowController{},
+		TaskCommentCounter: failingWorkflowTaskCommentCounter{err: countErr},
+		Instructions:       workflowruntime.TaskInstructions{TaskID: "task-1"},
+	}, Config{Model: "gpt-5"})
+	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+	)); err != nil {
+		t.Fatalf("persist seed message: %v", err)
+	}
+	before := engine.transcriptRuntimeState().SnapshotItems()
+
+	_, receipt, err := engine.compactNow(
+		context.Background(),
+		"compact",
+		compactionModeManual,
+		"",
+		false,
+	)
+	if receipt.Committed || !errors.Is(err, countErr) {
+		t.Fatalf("comment-count failure compaction outcome: receipt=%+v error=%v", receipt, err)
+	}
+	if after := engine.transcriptRuntimeState().SnapshotItems(); !reflect.DeepEqual(after, before) {
+		t.Fatalf("comment-count failure changed active typed items: before=%+v after=%+v", before, after)
+	}
+
+	window, readErr := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	if readErr != nil {
+		t.Fatalf("read bounded recent records: %v", readErr)
+	}
+	for _, record := range window.Records {
+		if _, ok := mustSessionEventPayload(record).(session.HistoryReplacementRecord); ok {
+			t.Fatalf("comment-count failure persisted history replacement: %+v", window.Records)
+		}
+	}
+}
+
+type failingWorkflowTaskCommentCounter struct {
+	err error
+}
+
+func (c failingWorkflowTaskCommentCounter) CountTaskComments(context.Context, workflow.TaskID) (int64, error) {
+	return 0, c.err
 }
 
 func TestCommittedHistoryReplacementPreventsStaleUsageFromLaterMetadataPersistence(t *testing.T) {
