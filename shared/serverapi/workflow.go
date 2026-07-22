@@ -1494,8 +1494,6 @@ type WorkflowTaskCurrentScript struct {
 	Path  string `json:"path"`
 }
 
-const WorkflowTaskCurrentExecutionTargetsMax = WorkflowGraphDraftMaxNodes
-
 type WorkflowPlacement struct {
 	ID                        string `json:"id"`
 	TaskID                    string `json:"task_id"`
@@ -2068,9 +2066,6 @@ func (r WorkflowTaskGetResponse) Validate() error {
 	if r.Task.CurrentSessionIDs == nil {
 		return workflowRequestError(WorkflowRequestErrorRequired, "task.current_session_ids", "current_session_ids is required")
 	}
-	if len(r.Task.CurrentSessionIDs) > WorkflowTaskCurrentExecutionTargetsMax {
-		return workflowRequestError(WorkflowRequestErrorTooLong, "task.current_session_ids", "current_session_ids is too long")
-	}
 	for index, sessionID := range r.Task.CurrentSessionIDs {
 		if strings.TrimSpace(sessionID) == "" || (index > 0 && r.Task.CurrentSessionIDs[index-1] >= sessionID) {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, "task.current_session_ids", "current_session_ids must contain sorted unique non-blank IDs")
@@ -2078,9 +2073,6 @@ func (r WorkflowTaskGetResponse) Validate() error {
 	}
 	if r.Task.CurrentScripts == nil {
 		return workflowRequestError(WorkflowRequestErrorRequired, "task.current_scripts", "current_scripts is required")
-	}
-	if len(r.Task.CurrentScripts) > WorkflowTaskCurrentExecutionTargetsMax {
-		return workflowRequestError(WorkflowRequestErrorTooLong, "task.current_scripts", "current_scripts is too long")
 	}
 	for index, script := range r.Task.CurrentScripts {
 		if strings.TrimSpace(script.RunID) == "" ||

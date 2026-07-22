@@ -7,10 +7,7 @@ import (
 
 	"core/server/workflow"
 	"core/shared/runtimeids"
-	"core/shared/serverapi"
 )
-
-const MaxTaskExecutionTargets = serverapi.WorkflowTaskCurrentExecutionTargetsMax
 
 type TaskScriptExecutionTarget struct {
 	Path string
@@ -44,9 +41,6 @@ func (a *Authority) CurrentTaskExecutionSnapshot(taskID workflow.TaskID) (TaskEx
 	for ref, execution := range a.byWorkflow {
 		if ref.TaskID != taskID {
 			continue
-		}
-		if len(snapshot.Executions) >= MaxTaskExecutionTargets {
-			return TaskExecutionSnapshot{}, errors.New("workflow task has too many live executions")
 		}
 		target := TaskExecution{
 			Ref:             ref,
