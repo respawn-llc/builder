@@ -172,7 +172,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 			ToolCalls: []llm.ToolCall{{
 				ID:    "call_poll_1",
 				Name:  string(toolspec.ToolWriteStdin),
-				Input: json.RawMessage(`{"session_id":1000,"yield_time_ms":800}`),
+				Input: json.RawMessage(`{"session_id":1000,"yield_time_ms":15000}`),
 			}},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},

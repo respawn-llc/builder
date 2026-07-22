@@ -67,6 +67,10 @@
 - Execution inherits parent environment and adds non-interactive hints and other technical environment variables.
 - stdout/stderr merge into one stream without origin tags.
 - Command lifetime is unlimited. `yield_time_ms` controls when Kent returns control and backgrounds the process.
+- Model-originated output checks may return currently available output immediately when no wait is requested.
+- A model-originated output check that requests a wait shorter than 15 seconds fails with `Avoid polling repeatedly for short intervals, prefer 3-15min polls depending on task. Pick a better interval and retry`.
+- A model-originated output check that requests a wait longer than 24 hours fails with ``This poll is too long. Consider using system cron jobs and `kent run` headless runs for tasks that require such long wait periods``.
+- Sending input is not subject to output-check wait limits.
 - Non-zero exit is recoverable and does not auto-abort the turn.
 - Shell process-launch failures are not automatically retried.
 - Interrupt escalation is `SIGINT` then `SIGKILL` after 10 seconds.

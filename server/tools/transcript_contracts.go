@@ -733,7 +733,7 @@ func formatToolInput(toolID toolspec.ID, raw json.RawMessage) (string, string) {
 	if toolID == toolspec.ToolWriteStdin {
 		sessionID, _ := asInt(obj["session_id"])
 		chars, _ := asString(obj["chars"])
-		if strings.TrimSpace(chars) == "" {
+		if chars == "" {
 			if yieldTimeMS, ok := asInt(obj["yield_time_ms"]); ok && yieldTimeMS > 0 {
 				pollDuration := time.Duration(yieldTimeMS) * time.Millisecond
 				pollDurationText := "0s"

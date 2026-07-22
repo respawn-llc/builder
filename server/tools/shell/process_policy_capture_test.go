@@ -166,7 +166,7 @@ func TestBackgroundProcessKeepsCapturedHookAcrossLaterStartsPollingAndCompletion
 
 	pollA := callWriteStdin(t, pollTool, "a-poll", map[string]any{
 		"session_id":    processA,
-		"yield_time_ms": 1_000,
+		"yield_time_ms": 15_000,
 	})
 	if pollA.IsError {
 		t.Fatalf("runtime A polling error: %s", string(pollA.Output))
@@ -253,7 +253,7 @@ func TestRawBypassesCapturedPolicyInForegroundBackgroundAndPolling(t *testing.T)
 	}
 	poll := callWriteStdin(t, pollTool, "raw-poll", map[string]any{
 		"session_id":    processID,
-		"yield_time_ms": 1_000,
+		"yield_time_ms": 15_000,
 	})
 	if poll.IsError {
 		t.Fatalf("raw polling error: %s", string(poll.Output))
@@ -313,8 +313,7 @@ func TestSharedManagerKeepsGlobalLifecycleAcrossCapturedPolicies(t *testing.T) {
 	}
 
 	pollA := callWriteStdin(t, pollTool, "cross-runtime-poll", map[string]any{
-		"session_id":    idByOwner["owner-a"],
-		"yield_time_ms": 250,
+		"session_id": idByOwner["owner-a"],
 	})
 	if pollA.IsError {
 		t.Fatalf("cross-runtime polling error: %s", string(pollA.Output))
