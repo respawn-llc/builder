@@ -125,6 +125,53 @@ func TestDrainQueuedUserMessagesBeforeCloseFailsRestoredQueueWhenFlushPersistenc
 	}
 }
 
+func TestDrainQueuedUserMessagesBeforeCloseConsumesCommittedFlushObserverFailure(t *testing.T) {
+	observerErr := errors.New("queued flush observer failure")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(
+		t,
+		t.TempDir(),
+		session.WithPersistenceObserver(gate),
+	)
+	var statuses []QueuedUserMessageStatusEvent
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			if event.QueuedUserMessageStatus != nil {
+				statuses = append(statuses, *event.QueuedUserMessageStatus)
+			}
+		},
+	})
+	if err := engine.ensureMetaContextForRequest(context.Background(), "queue-flush"); err != nil {
+		t.Fatalf("prepare queued flush context: %v", err)
+	}
+	queued := engine.QueueUserMessageWithClientRequestID("queued input", "request-id")
+	gate.FailNext(observerErr)
+
+	if err := engine.DrainQueuedUserMessagesBeforeClose(context.Background()); !errors.Is(err, observerErr) {
+		t.Fatalf("close drain error = %v", err)
+	}
+	if engine.HasQueuedUserWork() {
+		t.Fatal("committed close-drain flush retained queued user work")
+	}
+	if len(statuses) != 2 {
+		t.Fatalf("queued user statuses = %+v", statuses)
+	}
+	if accepted := statuses[0]; accepted.Status != QueuedUserMessageAccepted ||
+		accepted.QueueItemID != queued.ID ||
+		accepted.ClientRequestID != queued.ClientRequestID {
+		t.Fatalf("accepted queue status = %+v", accepted)
+	}
+	if submitted := statuses[1]; submitted.Status != QueuedUserMessageSubmitted ||
+		submitted.QueueItemID != queued.ID ||
+		submitted.ClientRequestID != queued.ClientRequestID {
+		t.Fatalf("submitted queue status = %+v", submitted)
+	}
+	if userMessages := boundedPersistedUserMessageCount(t, store); userMessages != 1 {
+		t.Fatalf("committed close-drain flush persisted %d user messages", userMessages)
+	}
+}
+
 func boundedPersistedUserMessageCount(t *testing.T, store *session.Store) int {
 	t.Helper()
 	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
