@@ -373,6 +373,71 @@ func TestCompactionMissingOutputRepairDoesNotConsumeOverflowAttempt(t *testing.T
 	t.Fatal("final local compaction request omitted collapsed shell output")
 }
 
+func TestCompactionMissingOutputAfterCollapsePanics(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeCompactionClient{
+		compactionErrors: []error{
+			&llm.ProviderAPIError{
+				ProviderID:   "openai",
+				StatusCode:   400,
+				Code:         llm.UnifiedErrorCodeContextLengthOverflow,
+				ProviderCode: "context_length_exceeded",
+			},
+			&llm.APIStatusError{StatusCode: 400},
+		},
+	}
+	eng := mustNewExecTestEngine(t, store, client, Config{Model: "gpt-5"})
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+			ID:    "call-shell",
+			Name:  "exec_command",
+			Input: json.RawMessage(`{}`),
+		}}}},
+	)); err != nil {
+		t.Fatalf("append shell tool call: %v", err)
+	}
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{
+			Role:       llm.RoleTool,
+			ToolCallID: textutil.Value("call-shell"),
+			Name:       textutil.Value("exec_command"),
+			Content:    textutil.Value(`{"output":"` + strings.Repeat("x", 120_000) + `"}`),
+		}},
+	)); err != nil {
+		t.Fatalf("append shell tool output: %v", err)
+	}
+	if err := eng.steer("", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+			ID:    "call-missing",
+			Name:  "exec_command",
+			Input: json.RawMessage(`{}`),
+		}}}},
+	)); err != nil {
+		t.Fatalf("append dangling tool call: %v", err)
+	}
+	request := llm.CompactionRequest{
+		Model:      "gpt-5",
+		SessionID:  store.Meta().SessionID,
+		InputItems: eng.transcriptRuntimeState().SnapshotItems(),
+	}
+
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("expected a missing-output provider error after collapse to violate the invariant")
+		}
+	}()
+	_, _, _, _ = eng.compactWithContextRepairRetry(context.Background(), "step", client, request)
+}
+
 func repairRequestHasToolCall(items []llm.ResponseItem, callID string) bool {
 	for _, item := range items {
 		if !isToolCallItem(item.Type) {
