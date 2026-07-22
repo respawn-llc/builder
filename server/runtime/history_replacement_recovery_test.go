@@ -120,6 +120,84 @@ func TestCommittedCompactionHistoryReplacementInvalidatesUsageAcrossImmediateReo
 	}
 }
 
+func TestHistoryReplacementAppendObserverFailureUpdatesLiveActiveListForNextTurn(t *testing.T) {
+	observerErr := errors.New("history replacement observer failure")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
+		Usage:     llm.Usage{WindowTokens: 200_000},
+	}}}
+	engine := mustNewExecTestEngine(t, store, client, Config{Model: "gpt-5"})
+	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+	)); err != nil {
+		t.Fatalf("persist seed message: %v", err)
+	}
+	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		return snapshot.Meta.LastSequence >= 2 && snapshot.Meta.UsageState == nil
+	}, observerErr)
+
+	receipt, err := newCompactionPersistence(engine).replaceHistory(
+		"compact",
+		"local",
+		compactionModeManual,
+		llm.ItemsFromMessages([]llm.Message{{
+			Role:        llm.RoleDeveloper,
+			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+			Content:     textutil.Value("summary"),
+		}}),
+	)
+	if !receipt.Committed || !errors.Is(err, observerErr) {
+		t.Fatalf("committed replacement outcome: receipt=%+v error=%v", receipt, err)
+	}
+
+	active := engine.transcriptRuntimeState().SnapshotItems()
+	if len(active) != 1 ||
+		active[0].Type != llm.ResponseItemTypeMessage ||
+		active[0].Role == nil ||
+		*active[0].Role != llm.RoleDeveloper ||
+		active[0].MessageType == nil ||
+		*active[0].MessageType != llm.MessageTypeCompactionSummary {
+		t.Fatalf("live active items after committed replacement observer failure = %+v", active)
+	}
+
+	if _, err := engine.SubmitUserMessage(context.Background(), "continue"); err != nil {
+		t.Fatalf("submit after committed replacement observer failure: %v", err)
+	}
+	if len(client.calls) != 1 {
+		t.Fatalf("model call count = %d, want 1", len(client.calls))
+	}
+
+	summaryItems := 0
+	ordinaryUserItems := 0
+	for _, item := range client.calls[0].Items {
+		if item.Type != llm.ResponseItemTypeMessage || item.Role == nil {
+			continue
+		}
+		switch *item.Role {
+		case llm.RoleDeveloper:
+			if item.MessageType != nil && *item.MessageType == llm.MessageTypeCompactionSummary {
+				summaryItems++
+			}
+		case llm.RoleUser:
+			if item.MessageType == nil {
+				ordinaryUserItems++
+			}
+		}
+	}
+	if summaryItems != 1 || ordinaryUserItems != 1 {
+		t.Fatalf(
+			"next request response-item types = summary:%d ordinary-user:%d, want summary:1 ordinary-user:1",
+			summaryItems,
+			ordinaryUserItems,
+		)
+	}
+}
+
 func TestCommittedHistoryReplacementPreventsStaleUsageFromLaterMetadataPersistence(t *testing.T) {
 	replacementErr := errors.New("history replacement observer failure")
 	usageErr := errors.New("compacted usage observer failure")
