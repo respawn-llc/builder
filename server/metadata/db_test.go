@@ -26,6 +26,42 @@ func metadataDBTestSQL(t *testing.T, name string) string {
 	return string(contents)
 }
 
+type sqlitePragmaQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func requireMetadataSQLitePragmas(t testing.TB, queryer sqlitePragmaQueryer) {
+	t.Helper()
+	var foreignKeys int64
+	if err := queryer.QueryRowContext(t.Context(), "PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
+		t.Fatalf("PRAGMA foreign_keys: %v", err)
+	}
+	if foreignKeys != 1 {
+		t.Fatalf("foreign_keys = %d, want 1", foreignKeys)
+	}
+	var journalMode string
+	if err := queryer.QueryRowContext(t.Context(), "PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		t.Fatalf("PRAGMA journal_mode: %v", err)
+	}
+	if journalMode != "wal" {
+		t.Fatalf("journal_mode = %q, want wal", journalMode)
+	}
+	var synchronous int64
+	if err := queryer.QueryRowContext(t.Context(), "PRAGMA synchronous").Scan(&synchronous); err != nil {
+		t.Fatalf("PRAGMA synchronous: %v", err)
+	}
+	if synchronous != 1 {
+		t.Fatalf("synchronous = %d, want NORMAL(1)", synchronous)
+	}
+	var busyTimeout int64
+	if err := queryer.QueryRowContext(t.Context(), "PRAGMA busy_timeout").Scan(&busyTimeout); err != nil {
+		t.Fatalf("PRAGMA busy_timeout: %v", err)
+	}
+	if busyTimeout != 5000 {
+		t.Fatalf("busy_timeout = %d, want 5000", busyTimeout)
+	}
+}
+
 func TestOpenMigratesLifecycleAbsenceSentinelsToNull(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db", "main.sqlite3")
@@ -163,6 +199,9 @@ func openDatabaseAtVersionForTest(t *testing.T, root string, dbPath string, vers
 
 func openDatabaseAtPathWithoutMigrationsForTest(root string, dbPath string) (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		return nil, err
+	}
+	if err := registerMetadataSQLiteCollations(); err != nil {
 		return nil, err
 	}
 	db, err := sql.Open("sqlite", metadataSQLiteDSN(dbPath))

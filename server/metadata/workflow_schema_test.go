@@ -4,11 +4,11 @@ import (
 	"database/sql"
 	_ "embed"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
-	sqlite "modernc.org/sqlite"
-	sqlite3 "modernc.org/sqlite/lib"
+	_ "modernc.org/sqlite"
 )
 
 //go:embed testdata/workflow_project_key_backfill.sql
@@ -48,6 +48,8 @@ func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
 		"task_transitions",
 		"task_transition_edges",
 		"task_comments",
+		"project_labels",
+		"task_label_assignments",
 	} {
 		if !tableExists(t, store.db, table) {
 			t.Fatalf("expected table %s to exist", table)
@@ -130,6 +132,14 @@ func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
 	}
 	if !columnExists(t, store.db, "tasks", "source_url") {
 		t.Fatal("tasks.source_url should stay as a structured task field")
+	}
+	for _, column := range []string{"normalized_name", "revision", "color", "sort_order"} {
+		if columnExists(t, store.db, "project_labels", column) {
+			t.Fatalf("project_labels.%s should not exist", column)
+		}
+	}
+	if !indexExists(t, store.db, "task_label_assignments_label_task_idx") {
+		t.Fatal("task_label_assignments_label_task_idx should support reverse label membership")
 	}
 	if columnExists(t, store.db, "task_runs", "task_id") {
 		t.Fatal("task_runs.task_id should not exist; run task is derived from placement_id")
@@ -313,8 +323,7 @@ func assertSQLiteConstraint(t *testing.T, db *sql.DB, statement string, args ...
 	if err == nil {
 		t.Fatalf("expected SQLite constraint failure for %s", statement)
 	}
-	var sqliteErr *sqlite.Error
-	if !errors.As(err, &sqliteErr) || sqliteErr.Code()&0xff != sqlite3.SQLITE_CONSTRAINT {
+	if !strings.Contains(strings.ToLower(err.Error()), "constraint") {
 		t.Fatalf("expected constraint failure, got %v", err)
 	}
 }

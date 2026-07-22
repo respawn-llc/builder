@@ -98,6 +98,14 @@ func TestWorkflowCreateUpdateReadAndGraphPersistence(t *testing.T) {
 // workflow_list CTE while the cursor applies to the outer query, so paging
 // through a filtered result set must stay valid and ordered.
 
+func workflowEventID(value string) *string {
+	return &value
+}
+
+func workflowEventIDEquals(id *string, expected string) bool {
+	return id != nil && *id == expected
+}
+
 type recordingWorkflowEventPublisher struct {
 	records []WorkflowEventRecord
 }

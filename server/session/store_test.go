@@ -8,13 +8,22 @@ import (
 	"core/internal/testharness/filemode"
 )
 
-func appendSessionTestEvent(t *testing.T, store *Store, stepID, kind string, payload any) Event {
+func appendSessionTestRecord(
+	t *testing.T,
+	store *Store,
+	stepID string,
+	payload EventRecordPayload,
+) EventRecord {
 	t.Helper()
-	event, _, err := store.AppendEvent(stepID, kind, payload)
-	if err != nil {
-		t.Fatalf("append %s event: %v", kind, err)
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("persist store before materializing event log: %v", err)
 	}
-	return event
+	log := mustMaterializeSessionTestEventLog(t, store)
+	record, _, err := log.AppendRecord(&stepID, payload)
+	if err != nil {
+		t.Fatalf("append typed event record: %v", err)
+	}
+	return record
 }
 
 func sessionTestLockedContract() LockedContract {
@@ -45,30 +54,31 @@ func TestNewLazyDoesNotPersistUntilFirstWrite(t *testing.T) {
 		t.Fatalf("expected no session dir before first write, stat err=%v", err)
 	}
 
-	appendSessionTestEvent(t, store, "step1", "message", map[string]any{"a": 1})
+	appendSessionTestRecord(t, store, "step1", sessionTestMessage(MessageRoleUser, "first write"))
 	if _, err := os.Stat(filepath.Join(store.Dir(), eventsFile)); err != nil {
 		t.Fatalf("expected events file after first write: %v", err)
 	}
 }
 
-func TestAppendTurnAtomicReportsUncommittedEventLogFailure(t *testing.T) {
+func TestAppendTypedBatchReportsUncommittedEventLogFailure(t *testing.T) {
 	store := newSessionTestStore(t)
+	log := mustMaterializeSessionTestEventLog(t, store)
 	filemode.MustBlockEventLogAppends(t, store.eventsFP)
 
-	events, receipt, err := store.AppendTurnAtomic("s1", []EventInput{{
-		Kind:    "message",
-		Payload: map[string]any{"role": "user", "content": "must not commit"},
-	}})
+	stepID := "s1"
+	events, receipt, err := log.AppendRecordsAtomic(&stepID, []EventRecordPayload{
+		sessionTestMessage(MessageRoleUser, "must not commit"),
+	})
 	if err == nil {
-		t.Fatal("append turn did not surface the event-log failure")
+		t.Fatal("append typed batch did not surface the event-log failure")
 	}
 	if receipt.Committed {
-		t.Fatalf("append turn receipt = %+v, want uncommitted", receipt)
+		t.Fatalf("append typed batch receipt = %+v, want uncommitted", receipt)
 	}
 	if len(events) != 1 {
 		t.Fatalf("built events = %+v, want the attempted event", events)
 	}
-	if meta := store.Meta(); meta.LastSequence != 0 || meta.FirstPromptPreview != "" {
+	if meta := storeTestMeta(store); meta.LastSequence != 0 || meta.FirstPromptPreview != "" {
 		t.Fatalf("metadata mutated after uncommitted append: %+v", meta)
 	}
 }
@@ -81,10 +91,14 @@ func userMessageSeqAt(t *testing.T, store *Store, n int) int64 {
 	}
 	visible := 0
 	for _, evt := range events {
-		if hasVisibleUserMessageEvent(evt.Kind, evt.Payload) {
+		isVisible, err := hasVisibleUserMessageRecord(evt)
+		if err != nil {
+			t.Fatalf("inspect visible user message: %v", err)
+		}
+		if isVisible {
 			visible++
 			if visible == n {
-				return evt.Seq
+				return evt.Seq()
 			}
 		}
 	}
