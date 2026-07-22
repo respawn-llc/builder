@@ -122,11 +122,7 @@ func (c *workflowSteeringClient) Generate(_ context.Context, request llm.Request
 	if call == 1 {
 		close(c.started)
 		<-c.release
-		return commentaryResponse("working", llm.ToolCall{
-			ID:    "call-shell",
-			Name:  string(toolspec.ToolExecCommand),
-			Input: json.RawMessage(`{}`),
-		}), nil
+		return encryptedReasoningOnlyResponse("rs_workflow"), nil
 	}
 	return commentaryResponse("complete", completeNodeCall("call-complete", json.RawMessage(`{"commentary":"done","summary":"done"}`))), nil
 }

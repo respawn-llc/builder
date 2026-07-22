@@ -210,6 +210,74 @@ func TestBackgroundShellNoticeFlushesOnFirstAvailableSlot(t *testing.T) {
 	}
 }
 
+func TestSteerAcceptedDuringReviewerAppearsInMainAgentFollowUp(t *testing.T) {
+	mainClient := &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("foreground done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("reviewed done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+	}}
+	reviewerResponse := llm.Response{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["apply the requested correction"]}`)},
+		Usage:     llm.Usage{WindowTokens: 200000},
+	}
+	reviewerClient, reviewerStarted, releaseReviewer := newGatedHookClient(reviewerResponse, reviewerResponse)
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), mainClient, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		Reviewer: ReviewerConfig{
+			Frequency:     "all",
+			Model:         "gpt-5",
+			ThinkingLevel: "low",
+			Client:        reviewerClient,
+		},
+	})
+	eng.pauseQueuedUserAutoDrain()
+	t.Cleanup(func() {
+		eng.FailQueuedUserMessages(QueuedUserMessageFailureClosing)
+		eng.resumeQueuedUserAutoDrain()
+		waitEngineLifecycleTasks(t, eng)
+	})
+
+	submitDone := make(chan struct {
+		message llm.Message
+		err     error
+	}, 1)
+	go func() {
+		message, err := eng.SubmitUserMessage(context.Background(), "run task")
+		submitDone <- struct {
+			message llm.Message
+			err     error
+		}{message: message, err: err}
+	}()
+	select {
+	case <-reviewerStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for reviewer request")
+	}
+	if _, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer reviewer follow-up", liveRunTestRequestID(t), nil); err != nil || !accepted {
+		t.Fatalf("QueueUserMessageForActiveRun accepted=%t err=%v", accepted, err)
+	}
+	releaseReviewer()
+	result := <-submitDone
+	if result.err != nil {
+		t.Fatalf("submit: %v", result.err)
+	}
+	if messageContent(result.message) != "reviewed done" {
+		t.Fatalf("assistant content = %q, want reviewed done", messageContent(result.message))
+	}
+	mainClient.mu.Lock()
+	requests := append([]llm.Request(nil), mainClient.calls...)
+	mainClient.mu.Unlock()
+	if len(requests) != 2 {
+		t.Fatalf("main-agent requests = %d, want initial and reviewer follow-up", len(requests))
+	}
+	assertRequestHasUserMessage(t, requests[1], "steer reviewer follow-up", true)
+}
+
 func TestEmitRawClearsCommittedRangeForBackgroundUpdated(t *testing.T) {
 	store := mustCreateTestSession(t)
 	var events []Event
@@ -334,180 +402,6 @@ func TestDeferredFinalWithBackgroundNoticeStillRunsReviewerAndEmitsAssistantEven
 	}
 	if len(assistantContents) != 2 || assistantContents[0] != "working" || assistantContents[1] != "foreground done" {
 		t.Fatalf("assistant message contents = %+v, want [working foreground done] events=%+v", assistantContents, events)
-	}
-}
-
-func TestDeferredFinalWithQueuedUserInjectionStillRunsReviewerAndEmitsAssistantEvent(t *testing.T) {
-	dir := t.TempDir()
-	store := mustCreateTestSessionAt(t, dir)
-
-	mainClient := &fakeClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("foreground done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(reviewerNoopToken), Phase: textutil.Value(llm.MessagePhaseFinal)},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-	}}
-	reviewerClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-
-	var (
-		mu     sync.Mutex
-		events []Event
-	)
-	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model: "gpt-5",
-		Reviewer: ReviewerConfig{
-			Frequency:     "all",
-			Model:         "gpt-5",
-			ThinkingLevel: "low",
-			Client:        reviewerClient,
-		},
-		OnEvent: func(evt Event) {
-			mu.Lock()
-			events = append(events, evt)
-			mu.Unlock()
-		},
-	})
-
-	mustQueueUserMessage(t, eng, "steer now")
-	result, err := eng.SubmitUserMessage(context.Background(), "run task")
-	if err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if messageContent(result) != "foreground done" {
-		t.Fatalf("assistant content = %q, want foreground done", messageContent(result))
-	}
-	if len(reviewerClient.calls) != 1 {
-		t.Fatalf("expected reviewer to run once for deferred final, got %d", len(reviewerClient.calls))
-	}
-	if len(mainClient.calls) != 2 {
-		t.Fatalf("expected two main model calls for deferred final path, got %d", len(mainClient.calls))
-	}
-	snapshot := eng.ChatSnapshot()
-
-	mu.Lock()
-	defer mu.Unlock()
-	assistantMessages := 0
-	flushedQueuedUser := false
-	assistantCommittedStart := -1
-	assistantCommittedStartSet := false
-	for i, evt := range events {
-		_ = i
-		if evt.Kind == EventAssistantMessage {
-			assistantMessages++
-			if messageContent(evt.Message) != "foreground done" {
-				t.Fatalf("assistant message content = %q, want foreground done", messageContent(evt.Message))
-			}
-			assistantCommittedStart = evt.CommittedEntryStart
-			assistantCommittedStartSet = evt.CommittedEntryStartSet
-		}
-		if evt.Kind == EventUserMessageFlushed && evt.UserMessage == "steer now" {
-			flushedQueuedUser = true
-		}
-	}
-	if assistantMessages != 1 {
-		t.Fatalf("expected one assistant_message event for deferred final, got %d events=%+v", assistantMessages, events)
-	}
-	if !flushedQueuedUser {
-		t.Fatalf("expected queued user injection flush event, got %+v", events)
-	}
-	if !assistantCommittedStartSet {
-		t.Fatalf("expected deferred final assistant event committed start metadata, got %+v", events)
-	}
-	if assistantCommittedStart < 0 || assistantCommittedStart >= len(snapshot.Entries) {
-		t.Fatalf("deferred final assistant committed start = %d, snapshot=%+v", assistantCommittedStart, snapshot.Entries)
-	}
-	assistantEntry := snapshot.Entries[assistantCommittedStart]
-	if assistantEntry.Role != "assistant" || assistantEntry.Text != "foreground done" {
-		t.Fatalf("expected deferred final assistant event to point at committed assistant row, got %+v", assistantEntry)
-	}
-}
-
-func TestDeferredFinalWithQueuedUserInjectionAndTrailingNoopStillUsesDeferredFinal(t *testing.T) {
-	dir := t.TempDir()
-	store := mustCreateTestSessionAt(t, dir)
-
-	mainClient := &fakeClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("foreground done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(reviewerNoopToken), Phase: textutil.Value(llm.MessagePhaseFinal)},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-	}}
-	reviewerClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-
-	var (
-		mu     sync.Mutex
-		events []Event
-	)
-	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model: "gpt-5",
-		Reviewer: ReviewerConfig{
-			Frequency:     "all",
-			Model:         "gpt-5",
-			ThinkingLevel: "low",
-			Client:        reviewerClient,
-		},
-		OnEvent: func(evt Event) {
-			mu.Lock()
-			events = append(events, evt)
-			mu.Unlock()
-		},
-	})
-
-	mustQueueUserMessage(t, eng, "steer now")
-	result, err := eng.SubmitUserMessage(context.Background(), "run task")
-	if err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if messageContent(result) != "foreground done" {
-		t.Fatalf("assistant content = %q, want foreground done", messageContent(result))
-	}
-	if len(reviewerClient.calls) != 1 {
-		t.Fatalf("expected reviewer to run once for deferred final, got %d", len(reviewerClient.calls))
-	}
-	snapshot := eng.ChatSnapshot()
-
-	mu.Lock()
-	defer mu.Unlock()
-	assistantMessages := 0
-	assistantCommittedStart := -1
-	assistantCommittedStartSet := false
-	for _, evt := range events {
-		if evt.Kind != EventAssistantMessage {
-			continue
-		}
-		assistantMessages++
-		if messageContent(evt.Message) != "foreground done" {
-			t.Fatalf("assistant message content = %q, want foreground done", messageContent(evt.Message))
-		}
-		assistantCommittedStart = evt.CommittedEntryStart
-		assistantCommittedStartSet = evt.CommittedEntryStartSet
-	}
-	if assistantMessages != 1 {
-		t.Fatalf("expected one assistant_message event for deferred final, got %d events=%+v", assistantMessages, events)
-	}
-	if !assistantCommittedStartSet {
-		t.Fatalf("expected deferred final assistant event committed start metadata, got %+v", events)
-	}
-	if assistantCommittedStart < 0 || assistantCommittedStart >= len(snapshot.Entries) {
-		t.Fatalf("deferred final assistant committed start = %d, snapshot=%+v", assistantCommittedStart, snapshot.Entries)
-	}
-	assistantEntry := snapshot.Entries[assistantCommittedStart]
-	if assistantEntry.Role != "assistant" || assistantEntry.Text != "foreground done" {
-		t.Fatalf("expected deferred final assistant event to point at committed assistant row, got %+v", assistantEntry)
 	}
 }
 

@@ -52,18 +52,19 @@ func (e *Engine) SubmitQueuedUserMessages(ctx context.Context) (assistant llm.Me
 }
 
 func (e *Engine) SubmitQueuedUserMessagesWithActiveHook(ctx context.Context, onActive func()) (assistant llm.Message, receipt session.CommitReceipt, err error) {
-	return e.submitQueuedUserMessages(ctx, nil, onActive)
+	assistant, receipt, _, err = e.submitQueuedUserMessages(ctx, nil, onActive)
+	return
 }
 
-func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[string]struct{}, onActive func()) (assistant llm.Message, receipt session.CommitReceipt, err error) {
+func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[string]struct{}, onActive func()) (assistant llm.Message, receipt session.CommitReceipt, consumedQueueItemIDs map[string]struct{}, err error) {
 	e.ensureOrchestrationCollaborators()
 	for {
 		if e.failQueuedUserWorkIfTerminal() {
-			return llm.Message{}, receipt, nil
+			return llm.Message{}, receipt, consumedQueueItemIDs, nil
 		}
 		if len(queueItemIDs) > 0 {
 			if err := e.waitQueuedUserAutoDrainAllowed(ctx); err != nil {
-				return llm.Message{}, receipt, err
+				return llm.Message{}, receipt, consumedQueueItemIDs, err
 			}
 		}
 		err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(stepCtx context.Context, stepID string) error {
@@ -76,29 +77,30 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 			if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 				return err
 			}
-			flushed, flushReceipt, err := e.flushPendingUserInjections(stepID, queueItemIDs)
-			if flushReceipt.Committed {
-				receipt = flushReceipt
+			flushResult, err := e.flushPendingUserInjections(stepID, allPendingUserInjectionSelection{})
+			if flushResult.receipt.Committed {
+				receipt = flushResult.receipt
 			}
 			if err != nil {
 				return err
 			}
-			if flushed == 0 {
+			consumedQueueItemIDs = flushResult.queueItemIDs
+			if flushResult.flushed == 0 {
 				return nil
 			}
-			msg, runErr := e.runStepLoopWithPendingUserInjectionObserver(stepCtx, stepID, queueItemIDs, func(flushReceipt session.CommitReceipt) {
+			msg, runErr := e.runStepLoopWithPendingUserInjectionObserver(stepCtx, stepID, func(flushReceipt session.CommitReceipt) {
 				receipt = flushReceipt
 			})
 			assistant = msg
 			return runErr
 		})
 		if receipt.Committed || !errors.Is(err, ErrAgentBusy) {
-			return assistant, receipt, err
+			return assistant, receipt, consumedQueueItemIDs, err
 		}
 
 		select {
 		case <-ctx.Done():
-			return llm.Message{}, receipt, ctx.Err()
+			return llm.Message{}, receipt, consumedQueueItemIDs, ctx.Err()
 		case <-time.After(queuedUserSubmissionBusyRetryDelay):
 		}
 	}
@@ -220,10 +222,6 @@ func (e *Engine) scheduleQueuedUserInjectionsIfIdle() bool {
 		e.queuedUserWorkMu.Unlock()
 		return true
 	}
-	if len(e.queuedUserWorkAutoDrainIDs) == 0 {
-		e.queuedUserWorkMu.Unlock()
-		return false
-	}
 	e.queuedUserWorkScheduled = true
 	e.queuedUserWorkMu.Unlock()
 	if !e.launchLifecycleTask(e.processQueuedUserWork) {
@@ -241,22 +239,21 @@ func (e *Engine) processQueuedUserWork(ctx context.Context) {
 			return
 		}
 		e.ensureOrchestrationCollaborators()
-		if e.messageFlow.HasPendingUserInjections() && e.hasQueuedUserAutoDrainIDs() {
+		if e.messageFlow.HasPendingUserInjections() {
 			e.scheduleQueuedUserInjectionsIfIdle()
 		}
 	}()
-	if !e.hasQueuedUserAutoDrainIDs() {
-		if e.backgroundFlow != nil {
-			e.backgroundFlow.ScheduleIfIdle()
-		}
-		return
-	}
-	ids := e.queuedUserAutoDrainIDSnapshot()
-	if _, _, err := e.submitQueuedUserMessages(ctx, ids, nil); err != nil {
+	if err := e.waitQueuedUserAutoDrainAllowed(ctx); err != nil {
 		e.surfaceRunError(err)
 		return
 	}
-	e.completeLiveRunQueueItems(ids)
+	ids := e.queuedUserAutoDrainIDSnapshot()
+	_, _, consumedQueueItemIDs, err := e.submitQueuedUserMessages(ctx, ids, nil)
+	if err != nil {
+		e.surfaceRunError(err)
+		return
+	}
+	e.completeLiveRunQueueItems(consumedQueueItemIDs)
 	completed = true
 }
 
@@ -284,39 +281,7 @@ func (e *Engine) hasQueuedUserAutoDrainIDs() bool {
 func (e *Engine) queuedUserAutoDrainIDSnapshot() map[string]struct{} {
 	e.queuedUserWorkMu.Lock()
 	defer e.queuedUserWorkMu.Unlock()
-	if len(e.queuedUserWorkAutoDrainIDs) == 0 {
-		return nil
-	}
-	out := make(map[string]struct{}, len(e.queuedUserWorkAutoDrainIDs))
-	for id := range e.queuedUserWorkAutoDrainIDs {
-		out[id] = struct{}{}
-	}
-	return out
-}
-
-// pushActiveUserInjectionScope records the queued user-injection IDs the in-flight
-// step (and its nested reviewer follow-up) should flush, returning a restore func
-// that reinstates the prior scope. The step executor reads this scope so reviewer
-// follow-ups inherit it without the supervisor carrying injection IDs.
-func (e *Engine) pushActiveUserInjectionScope(ids map[string]struct{}) func() {
-	e.userInjectionScopeMu.Lock()
-	previous := e.activeUserInjectionScope
-	e.activeUserInjectionScope = cloneMapIfNonEmpty(ids)
-	e.userInjectionScopeMu.Unlock()
-	return func() {
-		e.userInjectionScopeMu.Lock()
-		e.activeUserInjectionScope = previous
-		e.userInjectionScopeMu.Unlock()
-	}
-}
-
-func (e *Engine) activeUserInjectionScopeSnapshot() map[string]struct{} {
-	if e == nil {
-		return nil
-	}
-	e.userInjectionScopeMu.Lock()
-	defer e.userInjectionScopeMu.Unlock()
-	return cloneMapIfNonEmpty(e.activeUserInjectionScope)
+	return cloneMapIfNonEmpty(e.queuedUserWorkAutoDrainIDs)
 }
 
 func cloneMapIfNonEmpty[M ~map[K]V, K comparable, V any](in M) M {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"core/server/llm"
 	"core/server/tools"
@@ -12,65 +13,66 @@ import (
 	"core/shared/toolspec"
 )
 
-func TestQueuedUserMessageFlushesWhenAssistantReturnsWithoutTools(t *testing.T) {
-	client := &fakeClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first")},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("after flush")},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-	}}
+func encryptedReasoningOnlyResponse(id string) llm.Response {
+	reasoning := llm.ReasoningItem{ID: id, EncryptedContent: "encrypted-reasoning"}
+	return llm.Response{
+		Assistant:      llm.Message{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{reasoning}},
+		ReasoningItems: []llm.ReasoningItem{reasoning},
+		OutputItems: []llm.ResponseItem{{
+			Type:             llm.ResponseItemTypeReasoning,
+			ID:               textutil.Value(reasoning.ID),
+			EncryptedContent: textutil.Value(reasoning.EncryptedContent),
+		}},
+		Usage: llm.Usage{WindowTokens: 200000},
+	}
+}
 
-	var seenFlushed bool
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		OnEvent: func(evt Event) {
-			if evt.Kind == EventUserMessageFlushed && evt.UserMessage == "steer now" {
-				seenFlushed = true
-			}
-		},
-	})
+func newGatedHookClient(initial, next llm.Response) (*hookClient, <-chan struct{}, func()) {
+	started := make(chan struct{})
+	release := make(chan struct{}, 1)
+	client := &hookClient{response: initial}
+	client.beforeReturn = func() error {
+		close(started)
+		<-release
+		client.mu.Lock()
+		client.response = next
+		client.beforeReturn = nil
+		client.mu.Unlock()
+		return nil
+	}
+	return client, started, func() {
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+	}
+}
 
-	mustQueueUserMessage(t, eng, "steer now")
-	msg, err := eng.SubmitUserMessage(context.Background(), "start")
-	if err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if messageContent(msg) != "after flush" {
-		t.Fatalf("assistant content = %q, want after flush", messageContent(msg))
-	}
-	if !seenFlushed {
-		t.Fatal("expected user_message_flushed event")
-	}
-	if len(client.calls) < 2 {
-		t.Fatalf("expected at least 2 model calls, got %d", len(client.calls))
-	}
-	second := client.calls[1]
-	hasInjected := false
-	for _, m := range requestMessages(second) {
-		if m.Role == llm.RoleUser && messageContent(m) == "steer now" {
-			hasInjected = true
+func assertRequestHasUserMessage(t *testing.T, request llm.Request, content string, want bool) {
+	t.Helper()
+	found := false
+	for _, message := range requestMessages(request) {
+		if message.Role == llm.RoleUser && messageContent(message) == content {
+			found = true
 			break
 		}
 	}
-	if !hasInjected {
-		t.Fatalf("expected flushed user message in second request, messages=%+v", requestMessages(second))
+	if found != want {
+		t.Fatalf("request user message %q present=%t, want %t; messages=%+v", content, found, want, requestMessages(request))
 	}
 }
 
 func TestQueuedUserMessageFlushAfterFinalAssistantPublishesCommittedAssistantFirst(t *testing.T) {
-	client := &fakeClient{responses: []llm.Response{
-		{
+	client, started, release := newGatedHookClient(
+		llm.Response{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
-		{
+		llm.Response{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("after flush"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
-	}}
+	)
 
 	events := make([]Event, 0, 12)
 	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
@@ -79,13 +81,32 @@ func TestQueuedUserMessageFlushAfterFinalAssistantPublishesCommittedAssistantFir
 		},
 	})
 
-	mustQueueUserMessage(t, eng, "steer now")
-	msg, err := eng.SubmitUserMessage(context.Background(), "start")
-	if err != nil {
-		t.Fatalf("submit: %v", err)
+	submitDone := make(chan struct {
+		message llm.Message
+		err     error
+	}, 1)
+	go func() {
+		message, err := eng.SubmitUserMessage(context.Background(), "start")
+		submitDone <- struct {
+			message llm.Message
+			err     error
+		}{message: message, err: err}
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for first final request")
 	}
-	if messageContent(msg) != "after flush" {
-		t.Fatalf("assistant content = %q, want after flush", messageContent(msg))
+	if _, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer now", liveRunTestRequestID(t), nil); err != nil || !accepted {
+		t.Fatalf("QueueUserMessageForActiveRun accepted=%t err=%v", accepted, err)
+	}
+	release()
+	result := <-submitDone
+	if result.err != nil {
+		t.Fatalf("submit: %v", result.err)
+	}
+	if messageContent(result.message) != "after flush" {
+		t.Fatalf("assistant content = %q, want after flush", messageContent(result.message))
 	}
 
 	assistantIndex := -1
@@ -168,58 +189,6 @@ func TestQueuedUserMessageFlushAfterFinalAssistantWithReasoningPublishesAssistan
 	assertRuntimeEventsAdvanceCommittedFrontierContiguously(t, committedEvents)
 }
 
-func TestDirectUserMessageWithQueuedInjectionPublishesUserBeforeToolEvents(t *testing.T) {
-	client := &fakeClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
-			ToolCalls: []llm.ToolCall{{
-				ID:    "call_shell_1",
-				Name:  string(toolspec.ToolExecCommand),
-				Input: json.RawMessage(`{"command":"pwd"}`),
-			}},
-			Usage: llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-	}}
-
-	events := make([]Event, 0, 16)
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		OnEvent: func(evt Event) {
-			events = append(events, evt)
-		},
-	})
-
-	mustQueueUserMessage(t, eng, "queued steer")
-	if _, err := eng.SubmitUserMessage(context.Background(), "start"); err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-
-	committedEvents := committedTranscriptEventsWithEntries(events)
-	assertRuntimeEventsAdvanceCommittedFrontierContiguously(t, committedEvents)
-	startIdx := -1
-	toolCompleteIdx := -1
-	for idx, evt := range committedEvents {
-		if evt.Kind == EventUserMessageFlushed && evt.UserMessage == "start" {
-			startIdx = idx
-		}
-		if evt.Kind == EventToolCallCompleted {
-			toolCompleteIdx = idx
-		}
-	}
-	if startIdx < 0 {
-		t.Fatalf("expected direct user message committed event, got %+v", committedEvents)
-	}
-	if toolCompleteIdx < 0 {
-		t.Fatalf("expected tool completion committed event, got %+v", committedEvents)
-	}
-	if startIdx > toolCompleteIdx {
-		t.Fatalf("direct user message must publish before tool completion, user_idx=%d tool_complete_idx=%d events=%+v", startIdx, toolCompleteIdx, committedEvents)
-	}
-}
-
 func committedTranscriptEventsWithEntries(events []Event) []Event {
 	out := make([]Event, 0, len(events))
 	for _, evt := range events {
@@ -289,45 +258,6 @@ func TestModelResponseEventCarriesContextUsage(t *testing.T) {
 	}
 }
 
-func TestQueuedUserMessageFlushDoesNotEmitConversationUpdatedForInjectedMessage(t *testing.T) {
-	client := &fakeClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first")},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("after flush")},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-	}}
-
-	var (
-		events     []Event
-		eventIndex int
-		flushIndex = -1
-	)
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		OnEvent: func(evt Event) {
-			events = append(events, evt)
-			eventIndex++
-			if evt.Kind == EventUserMessageFlushed && evt.UserMessage == "steer now" && flushIndex < 0 {
-				flushIndex = eventIndex
-			}
-		},
-	})
-
-	mustQueueUserMessage(t, eng, "steer now")
-	if _, err := eng.SubmitUserMessage(context.Background(), "start"); err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if flushIndex < 0 {
-		t.Fatal("expected user_message_flushed event")
-	}
-	if got := committedConversationUpdatedCountAfterLastUserFlush(events); got != 0 {
-		t.Fatalf("committed conversation_updated count after injected user flush = %d, want 0; events=%+v", got, events)
-	}
-}
-
 func TestDirectUserMessageFlushDoesNotEmitConversationUpdated(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
@@ -357,68 +287,6 @@ func TestDirectUserMessageFlushDoesNotEmitConversationUpdated(t *testing.T) {
 	}
 	if got := committedConversationUpdatedCountAfterLastUserFlush(events); got != 0 {
 		t.Fatalf("committed conversation_updated count after direct user flush = %d, want 0; events=%+v", got, events)
-	}
-}
-
-func TestQueuedUserMessagesCoalesceIntoSingleFlush(t *testing.T) {
-	client := &fakeClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first")},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("after flush")},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-	}}
-
-	var (
-		queuedFlushCount int
-		flushed          Event
-	)
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		OnEvent: func(evt Event) {
-			if evt.Kind == EventUserMessageFlushed && len(evt.UserMessageBatch) == 2 {
-				queuedFlushCount++
-				flushed = evt
-			}
-		},
-	})
-
-	mustQueueUserMessage(t, eng, "steer now")
-	mustQueueUserMessage(t, eng, "and keep tests focused")
-	msg, err := eng.SubmitUserMessage(context.Background(), "start")
-	if err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if messageContent(msg) != "after flush" {
-		t.Fatalf("assistant content = %q, want after flush", messageContent(msg))
-	}
-	if flushed.UserMessage != "steer now\n\nand keep tests focused" {
-		t.Fatalf("unexpected flushed user message %q", flushed.UserMessage)
-	}
-	if len(flushed.UserMessageBatch) != 2 {
-		t.Fatalf("expected two flushed user messages in batch, got %+v", flushed.UserMessageBatch)
-	}
-	if queuedFlushCount != 1 {
-		t.Fatalf("expected one coalesced queued flush event, got %d", queuedFlushCount)
-	}
-	if len(client.calls) < 2 {
-		t.Fatalf("expected at least 2 model calls, got %d", len(client.calls))
-	}
-	second := client.calls[1]
-	userMessages := make([]llm.Message, 0, len(requestMessages(second)))
-	for _, m := range requestMessages(second) {
-		if m.Role == llm.RoleUser {
-			userMessages = append(userMessages, m)
-		}
-	}
-	if len(userMessages) < 2 {
-		t.Fatalf("expected initial and flushed user messages, got %+v", requestMessages(second))
-	}
-	last := userMessages[len(userMessages)-1]
-	if messageContent(last) != "steer now\n\nand keep tests focused" {
-		t.Fatalf("expected coalesced flushed user message, got %+v", userMessages)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"core/server/llm"
 	"core/server/session"
@@ -14,6 +15,32 @@ import (
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
+
+type gatedMissingToolRepairClient struct {
+	fakeClient
+	rejected chan struct{}
+	release  chan struct{}
+}
+
+func (c *gatedMissingToolRepairClient) Generate(_ context.Context, request llm.Request) (llm.Response, error) {
+	c.mu.Lock()
+	c.calls = append(c.calls, request)
+	call := len(c.calls)
+	c.mu.Unlock()
+	if call == 1 {
+		close(c.rejected)
+		<-c.release
+		return llm.Response{}, &llm.APIStatusError{StatusCode: 400, Body: "tool call without output"}
+	}
+	return llm.Response{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+			Content: textutil.Value("repaired"),
+		},
+		Usage: llm.Usage{InputTokens: 10, OutputTokens: 2, WindowTokens: 100},
+	}, nil
+}
 
 func appendRepairEvent(t *testing.T, store *session.Store, kind string, payload any) session.EventRecord {
 	t.Helper()
@@ -106,6 +133,39 @@ func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 	if got := countPersistedLocalEntries(readRepairEvents(t, store)); got != 1 {
 		t.Fatalf("persisted operator warnings = %d, want 1", got)
 	}
+}
+
+func TestMissingToolOutputRepairRebuildIncludesSteerAcceptedAfterRejectedRequest(t *testing.T) {
+	store := mustCreateTestSession(t)
+	appendRepairEvent(t, store, "message", llm.Message{
+		Role:      llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{ID: "missing", Name: "exec", Input: json.RawMessage(`{}`)}},
+	})
+	client := &gatedMissingToolRepairClient{
+		rejected: make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := eng.SubmitUserMessage(context.Background(), "continue")
+		submitDone <- err
+	}()
+	select {
+	case <-client.rejected:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for rejected request")
+	}
+	if _, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer repaired request", liveRunTestRequestID(t), nil); err != nil || !accepted {
+		t.Fatalf("QueueUserMessageForActiveRun accepted=%t err=%v", accepted, err)
+	}
+	close(client.release)
+	if err := <-submitDone; err != nil {
+		t.Fatalf("submit user message: %v", err)
+	}
+
+	assertRequestHasUserMessage(t, client.calls[1], "steer repaired request", true)
 }
 
 // A 400 that is not caused by a missing tool output (nothing dangling) must

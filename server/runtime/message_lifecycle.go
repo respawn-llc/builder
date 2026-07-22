@@ -317,70 +317,78 @@ func queuedUserMessagesForFlush(messages []queuedUserSteeringIntent) []QueuedUse
 	return items
 }
 
-// FlushPendingUserInjections flushes queued user injections for the step. An empty
-// queueItemIDs flushes every pending injection; a non-empty set flushes only those
-// IDs.
-func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, queueItemIDs map[string]struct{}) (int, session.CommitReceipt, error) {
-	var pending []queuedUserSteeringIntent
-	if len(queueItemIDs) == 0 {
-		pending = m.queue.Drain()
-	} else {
-		pending = m.queue.DrainByID(queueItemIDs)
-	}
-	pending = m.engine.dropStoppedLiveRunQueueItems(pending)
-	return m.flushPendingUserInjections(stepID, pending)
-}
-
-func (m *defaultMessageLifecycle) flushPendingUserInjections(stepID string, pending []queuedUserSteeringIntent) (int, session.CommitReceipt, error) {
-	e := m.engine
-	flushed := 0
-	var flushReceipt session.CommitReceipt
-
-	queuedMessages := normalizeQueuedUserMessages(pending)
-	if len(queuedMessages) > 0 {
-		pending = e.dropStoppedLiveRunQueueItems(pending)
-		queuedMessages = normalizeQueuedUserMessages(pending)
-		if len(queuedMessages) == 0 {
-			return flushed, flushReceipt, nil
-		}
-		joined := strings.Join(queuedMessages, "\n\n")
-		publishAllowed, err := e.commitLiveRunQueueItemsUnlessStopped(pending, func() error {
-			receipt, persistErr := e.steerWithCommitReceipt(
-				stepID,
-				steerQueuedUserMessageFlushIntent(joined, queuedMessages, queuedUserMessagesForFlush(pending)),
-			)
-			flushReceipt = receipt
-			return persistErr
-		})
-		if err != nil {
-			if !flushReceipt.Committed {
-				m.queue.RestoreFront(pending)
-			}
-			return flushed, flushReceipt, err
-		}
-		if !publishAllowed {
-			for _, item := range pending {
-				e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
-				e.emitQueuedUserMessageStatus(item.message, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
-			}
-			return flushed, flushReceipt, nil
-		}
-		flushed++
-	}
-	for _, item := range pending {
-		e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
+func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
+	result, err := m.CommitPendingUserInjections(stepID, selection)
+	if err != nil || !result.continueCombinedFlush {
+		return result, err
 	}
 	pendingNotices := []steeringIntent(nil)
 	if m.background != nil {
 		pendingNotices = m.background.DrainPendingNotices()
 	}
 	for _, notice := range pendingNotices {
-		if err := e.steer(stepID, notice); err != nil {
-			return flushed, flushReceipt, err
+		if err := m.engine.steer(stepID, notice); err != nil {
+			return result, err
 		}
-		flushed++
+		result.flushed++
 	}
-	return flushed, flushReceipt, nil
+	return result, nil
+}
+
+func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
+	var pending []queuedUserSteeringIntent
+	switch selected := selection.(type) {
+	case allPendingUserInjectionSelection:
+		pending = m.queue.Drain()
+	case steerUserInjectionSelection:
+		if len(selected.queueItemIDs) > 0 {
+			pending = m.queue.DrainByID(selected.queueItemIDs)
+		}
+	default:
+		return userInjectionCommitResult{}, fmt.Errorf("unsupported user injection selection %T", selection)
+	}
+	return m.commitPendingUserInjections(stepID, pending)
+}
+
+func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pending []queuedUserSteeringIntent) (userInjectionCommitResult, error) {
+	e := m.engine
+	result := userInjectionCommitResult{continueCombinedFlush: true}
+
+	// Recheck immediately before commit because a live-run stop can race the drain.
+	pending = e.dropStoppedLiveRunQueueItems(pending)
+	queuedMessages := normalizeQueuedUserMessages(pending)
+	if len(queuedMessages) > 0 {
+		queueItems := queuedUserMessagesForFlush(pending)
+		result.queueItemIDs = queuedUserMessageIDSet(queueItems)
+		joined := strings.Join(queuedMessages, "\n\n")
+		publishAllowed, err := e.commitLiveRunQueueItemsUnlessStopped(pending, func() error {
+			receipt, persistErr := e.steerWithCommitReceipt(
+				stepID,
+				steerQueuedUserMessageFlushIntent(joined, queuedMessages, queueItems),
+			)
+			result.receipt = receipt
+			return persistErr
+		})
+		if err != nil {
+			if !result.receipt.Committed {
+				m.queue.RestoreFront(pending)
+			}
+			return result, err
+		}
+		if !publishAllowed {
+			for _, item := range pending {
+				e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
+				e.emitQueuedUserMessageStatus(item.message, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
+			}
+			result.continueCombinedFlush = false
+			return result, nil
+		}
+		result.flushed++
+	}
+	for _, item := range pending {
+		e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
+	}
+	return result, nil
 }
 
 func (m *defaultMessageLifecycle) QueueUserMessage(text string, clientRequestID string) QueuedUserMessage {
