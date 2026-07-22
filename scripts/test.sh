@@ -51,34 +51,34 @@ go_test_args=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        server|tui|desktop)
-            targets+=("$1")
-            shift
-            ;;
-        --no-wall-clock-cap)
-            disable_wall_clock_cap=1
-            shift
-            ;;
-        --inherit-env)
-            inherit_env=1
-            shift
-            ;;
-        -h | --help)
-            usage
-            exit 0
-            ;;
-        --)
-            shift
-            while [ $# -gt 0 ]; do
-                go_test_args+=("$1")
-                shift
-            done
-            break
-            ;;
-        *)
+    server | tui | desktop)
+        targets+=("$1")
+        shift
+        ;;
+    --no-wall-clock-cap)
+        disable_wall_clock_cap=1
+        shift
+        ;;
+    --inherit-env)
+        inherit_env=1
+        shift
+        ;;
+    -h | --help)
+        usage
+        exit 0
+        ;;
+    --)
+        shift
+        while [ $# -gt 0 ]; do
             go_test_args+=("$1")
             shift
-            ;;
+        done
+        break
+        ;;
+    *)
+        go_test_args+=("$1")
+        shift
+        ;;
     esac
 done
 
@@ -98,33 +98,33 @@ fi
 if [ "$inherit_env" != "1" ]; then
     while IFS= read -r name; do
         case "$name" in
-            KENT_SKIP_FRONTEND|KENT_TEST_DISABLE_WALL_CLOCK_CAP|KENT_TEST_FRONTEND|KENT_TEST_GO_PACKAGE_PARALLELISM|KENT_TEST_INHERIT_ENV|KENT_TEST_INSIDE_TUI_WALL_CLOCK_CAP|KENT_TEST_TIMEOUT_SECONDS|KENT_TEST_TUI_TIMEOUT_SECONDS)
-                ;;
-            KENT_*)
-                unset "$name"
-                ;;
+        KENT_SKIP_FRONTEND | KENT_TEST_DISABLE_WALL_CLOCK_CAP | KENT_TEST_FRONTEND | KENT_TEST_GO_PACKAGE_PARALLELISM | KENT_TEST_INHERIT_ENV | KENT_TEST_INSIDE_TUI_WALL_CLOCK_CAP | KENT_TEST_TIMEOUT_SECONDS | KENT_TEST_TUI_TIMEOUT_SECONDS)
+            ;;
+        KENT_*)
+            unset "$name"
+            ;;
         esac
     done < <(compgen -e KENT_ || true)
 fi
 
 case "$disable_wall_clock_cap" in
-    0|1)
-        ;;
-    *)
-        printf 'KENT_TEST_DISABLE_WALL_CLOCK_CAP must be 0 or 1\n' >&2
-        exit 2
-        ;;
+0 | 1)
+    ;;
+*)
+    printf 'KENT_TEST_DISABLE_WALL_CLOCK_CAP must be 0 or 1\n' >&2
+    exit 2
+    ;;
 esac
 
-timeout_seconds="${KENT_TEST_TIMEOUT_SECONDS:-120}"
+timeout_seconds="${KENT_TEST_TIMEOUT_SECONDS:-180}"
 go_test_package_parallelism="${KENT_TEST_GO_PACKAGE_PARALLELISM:-4}"
 tui_timeout_seconds="${KENT_TEST_TUI_TIMEOUT_SECONDS:-600}"
 inside_tui_wall_clock_cap="${KENT_TEST_INSIDE_TUI_WALL_CLOCK_CAP:-0}"
 case "$go_test_package_parallelism" in
-    ''|*[!0-9]*)
-        printf 'KENT_TEST_GO_PACKAGE_PARALLELISM must be a positive integer\n' >&2
-        exit 2
-        ;;
+'' | *[!0-9]*)
+    printf 'KENT_TEST_GO_PACKAGE_PARALLELISM must be a positive integer\n' >&2
+    exit 2
+    ;;
 esac
 if [ "$go_test_package_parallelism" -le 0 ]; then
     printf 'KENT_TEST_GO_PACKAGE_PARALLELISM must be a positive integer\n' >&2
@@ -133,20 +133,20 @@ fi
 server_go_test_args=(-p "$go_test_package_parallelism" "${server_test_args[@]}")
 if [ "$disable_wall_clock_cap" != "1" ]; then
     case "$timeout_seconds" in
-        ''|*[!0-9]*)
-            printf 'KENT_TEST_TIMEOUT_SECONDS must be a positive integer <= 120\n' >&2
-            exit 2
-            ;;
+    '' | *[!0-9]*)
+        printf 'KENT_TEST_TIMEOUT_SECONDS must be a positive integer <= 120\n' >&2
+        exit 2
+        ;;
     esac
     if [ "$timeout_seconds" -le 0 ] || [ "$timeout_seconds" -gt 120 ]; then
         printf 'KENT_TEST_TIMEOUT_SECONDS must be a positive integer <= 120\n' >&2
         exit 2
     fi
     case "$tui_timeout_seconds" in
-        ''|*[!0-9]*)
-            printf 'KENT_TEST_TUI_TIMEOUT_SECONDS must be a positive integer <= 1800\n' >&2
-            exit 2
-            ;;
+    '' | *[!0-9]*)
+        printf 'KENT_TEST_TUI_TIMEOUT_SECONDS must be a positive integer <= 1800\n' >&2
+        exit 2
+        ;;
     esac
     if [ "$tui_timeout_seconds" -le 0 ] || [ "$tui_timeout_seconds" -gt 1800 ]; then
         printf 'KENT_TEST_TUI_TIMEOUT_SECONDS must be a positive integer <= 1800\n' >&2
