@@ -12,6 +12,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 type authStateReader interface {
@@ -233,19 +234,11 @@ func sessionPlanResponseFromResult(result PlanResult) serverapi.SessionPlanRespo
 		ActiveSettings:      result.Plan.ActiveSettings,
 		EnabledToolIDs:      enabledToolIDs,
 		ConfiguredModelName: result.Plan.ConfiguredModelName,
-		SessionName:         cloneOptionalString(result.Plan.SessionName),
+		SessionName:         textutil.Pointer(result.Plan.SessionName),
 		PromptHistory:       append([]string(nil), result.Plan.PromptHistory...),
 		ModelContractLocked: result.Plan.ModelContractLocked,
 		Source:              result.Plan.Source,
 	}, Warnings: result.Warnings}
-}
-
-func cloneOptionalString(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
 }
 
 func sameSessionPlanMemoRequest(a sessionPlanMemoRequest, b sessionPlanMemoRequest) bool {

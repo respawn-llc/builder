@@ -9,6 +9,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/lifecyclecontract"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 )
 
 type EventContext struct {
@@ -23,7 +24,7 @@ func InitialContext(sessionID string, sessionTitle *string) (lifecyclecontract.C
 	}
 	context := lifecyclecontract.Context{
 		SessionID:    &parsed,
-		SessionTitle: cloneOptionalString(sessionTitle),
+		SessionTitle: textutil.Pointer(sessionTitle),
 	}
 	if sessionTitle != nil && *sessionTitle == "" {
 		return lifecyclecontract.Context{}, errors.New("lifecycle session title cannot be empty")
@@ -45,7 +46,7 @@ func (c *EventContext) AcceptSessionIdentity(identity clientui.TranscriptSession
 	c.mu.Lock()
 	sessionID := identity.SessionID
 	c.context.SessionID = &sessionID
-	c.context.SessionTitle = cloneOptionalString(identity.SessionName)
+	c.context.SessionTitle = textutil.Pointer(identity.SessionName)
 	c.mu.Unlock()
 	return nil
 }
@@ -76,22 +77,8 @@ func (c *EventContext) Snapshot() lifecyclecontract.Context {
 
 func cloneContext(context lifecyclecontract.Context) lifecyclecontract.Context {
 	cloned := context
-	cloned.SessionTitle = cloneOptionalString(context.SessionTitle)
-	if context.SessionID != nil {
-		sessionID := *context.SessionID
-		cloned.SessionID = &sessionID
-	}
-	if context.WorkflowTaskID != nil {
-		taskID := *context.WorkflowTaskID
-		cloned.WorkflowTaskID = &taskID
-	}
+	cloned.SessionID = textutil.Pointer(context.SessionID)
+	cloned.SessionTitle = textutil.Pointer(context.SessionTitle)
+	cloned.WorkflowTaskID = textutil.Pointer(context.WorkflowTaskID)
 	return cloned
-}
-
-func cloneOptionalString(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
 }

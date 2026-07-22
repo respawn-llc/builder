@@ -12,6 +12,7 @@ import (
 	"core/shared/lifecyclecontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 
 	"github.com/google/uuid"
 )
@@ -289,19 +290,11 @@ func prepareSessionUIRun(
 		initialPromptHistoryRecorded: initialPromptHistoryRecorded,
 		initialInput:                 initialState.Input,
 		recoveryBuffers:              initialState.RecoveryBuffers,
-		sessionTitle:                 cloneOptionalSessionTitle(plan.SessionTitle),
+		sessionTitle:                 textutil.Pointer(plan.SessionTitle),
 		modelContractLocked:          plan.ModelContractLocked,
 		configuredModelName:          plan.ConfiguredModelName,
 		statusConfig:                 plan.StatusConfig,
 	}, nil
-}
-
-func cloneOptionalSessionTitle(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
 }
 
 func closeRuntimePlanAfterPreparationFailure(runtimePlan *runtimeLaunchPlan, preparationErr error) error {
