@@ -251,7 +251,7 @@ func truncateAppendRecoverySuffix(path string, offset int64) error {
 	return syncAndClose(fp, fp.Truncate(offset))
 }
 
-func (s *Store) recoverAppendTransaction() error {
+func (s *Store) recoverAppendTransactionWithEventLogLockHeld() error {
 	record, err := s.readAppendRecoveryRecord()
 	if err != nil {
 		return s.recoveryError("read recovery record", err)
@@ -277,5 +277,7 @@ func (s *Store) recoverAppendTransaction() error {
 		}
 	}
 	s.meta = cloneMeta(selected)
-	return s.observePersistence(&persistenceObservation{snapshot: s.persistenceSnapshotLocked()})
+	return s.observePersistenceAndClearAppendRecovery(
+		&persistenceObservation{snapshot: s.persistenceSnapshotLocked()},
+	)
 }

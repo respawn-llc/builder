@@ -13,16 +13,16 @@ func (s *Store) materializePreparedDurableEventLogWithMutationHeld() (
 	sessionDir := s.sessionDir
 	s.mu.Unlock()
 
-	lock, lockPath, err := acquireEventLogMigrationLock(sessionDir)
+	lock, lockPath, err := acquireEventLogPersistenceLock(sessionDir)
 	if err != nil {
 		return MaterializedEventLog{}, wrapEventLogPreparationError(false, err)
 	}
 	committed := false
 	defer func() {
-		if closeErr := lock.Close(); closeErr != nil {
+		if closeErr := releaseEventLogPersistenceLock(lock, lockPath); closeErr != nil {
 			resultErr = errors.Join(
 				resultErr,
-				fmt.Errorf("release event-log migration lock %s: %w", lockPath, closeErr),
+				closeErr,
 			)
 			if resultErr != nil {
 				resultErr = wrapEventLogMaterializationError(

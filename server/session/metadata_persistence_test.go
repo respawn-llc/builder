@@ -377,7 +377,7 @@ func TestEventLogMaterializationRequiresPersistenceObserverWithoutCreatingArtifa
 	}
 }
 
-func TestPersistedSessionDirectoryContainsOnlyAppendOnlyArtifacts(t *testing.T) {
+func TestPersistedSessionDirectoryContainsOnlyStableArtifacts(t *testing.T) {
 	observer := &recordingPersistenceObserver{}
 	store, err := Create(t.TempDir(), "workspace-x", "/tmp/work", testSessionCategory, WithPersistenceObserver(observer))
 	if err != nil {
@@ -387,8 +387,15 @@ func TestPersistedSessionDirectoryContainsOnlyAppendOnlyArtifacts(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
 	}
-	if len(entries) != 1 || entries[0].Name() != eventsFile || entries[0].IsDir() {
-		t.Fatalf("session artifacts = %+v, want only %s", entries, eventsFile)
+	if len(entries) != 2 ||
+		entries[0].Name() != eventsFile || entries[0].IsDir() ||
+		entries[1].Name() != eventLogPersistenceLockFile || entries[1].IsDir() {
+		t.Fatalf(
+			"session artifacts = %+v, want regular %s and %s files",
+			entries,
+			eventsFile,
+			eventLogPersistenceLockFile,
+		)
 	}
 }
 
