@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -158,6 +159,36 @@ func TestEngineTranscriptSegmentPageSingleSegment(t *testing.T) {
 	texts := segmentEntryTexts(page)
 	if !containsText(texts, "only") || !containsText(texts, "answer") {
 		t.Fatalf("single segment must contain all turns, got %v", texts)
+	}
+}
+
+func TestEngineTranscriptNewestSegmentPageIncludesCompleteActiveSegment(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
+
+	appendSegmentTestMessage(t, store, llm.RoleUser, "before compaction")
+	if _, _, err := appendTestEvent(t, store, "step", historyReplacementPayload{
+		Engine: "compaction",
+	}); err != nil {
+		t.Fatalf("append history replacement: %v", err)
+	}
+
+	const activeEntryCount = 650
+	for index := 0; index < activeEntryCount; index++ {
+		appendSegmentTestMessage(t, store, llm.RoleUser, fmt.Sprintf("active-%03d", index))
+	}
+
+	page := mustEngineNewestSegmentPage(t, eng)
+	if !page.HasMoreAbove {
+		t.Fatal("active segment after compaction must report retained history above")
+	}
+	if got := len(page.Snapshot.Entries); got != activeEntryCount {
+		t.Fatalf("active segment entry count = %d, want %d", got, activeEntryCount)
+	}
+	for index, entry := range page.Snapshot.Entries {
+		if entry.Role != "user" || entry.Text != fmt.Sprintf("active-%03d", index) {
+			t.Fatalf("active segment entry[%d] = %+v", index, entry)
+		}
 	}
 }
 
