@@ -171,6 +171,83 @@ func TestReopenedSessionAfterFailedTriggerHandoffDoesNotRequeuePendingHandoff(t 
 	t.Fatalf("bounded handoff records contain no failed typed completion: %+v", window.Records)
 }
 
+func TestManualCompactionClearsQueuedTriggerHandoff(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
+			Usage:     llm.Usage{InputTokens: 200, WindowTokens: 2_000},
+		},
+		{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+				Content: textutil.Value("complete"),
+			},
+			Usage: llm.Usage{InputTokens: 300, WindowTokens: 2_000},
+		},
+	}}
+	engine := mustNewHandoffTestEngine(t, store, client, Config{})
+	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+	)); err != nil {
+		t.Fatalf("persist seed message: %v", err)
+	}
+	engine.compactionRuntimeState().SetSoonReminderIssued(true)
+
+	handoffCall := llm.ToolCall{
+		ID:   "manual-compaction-handoff-call",
+		Name: string(toolspec.ToolTriggerHandoff),
+	}
+	if _, _, err := engine.TriggerHandoff(
+		context.Background(),
+		"step",
+		handoffCall,
+		"summarize",
+		"continue",
+	); err != nil {
+		t.Fatalf("queue trigger-handoff: %v", err)
+	}
+	if pending := engine.handoffRuntimeState().RequestSnapshot(); pending == nil {
+		t.Fatal("queued trigger-handoff request is absent before manual compaction")
+	}
+
+	if err := engine.CompactContext(context.Background(), ""); err != nil {
+		t.Fatalf("manual compact: %v", err)
+	}
+	if generation := engine.CompactionCount(); generation != 1 {
+		t.Fatalf("manual compaction generation = %d, want 1", generation)
+	}
+	if pending := engine.handoffRuntimeState().RequestSnapshot(); pending != nil {
+		t.Fatalf("manual compaction retained queued trigger-handoff request: %+v", pending)
+	}
+
+	if _, err := engine.SubmitUserMessage(context.Background(), "continue"); err != nil {
+		t.Fatalf("submit after manual compaction: %v", err)
+	}
+	if generation := engine.CompactionCount(); generation != 1 {
+		t.Fatalf("next turn ran queued trigger-handoff compaction: generation = %d, want 1", generation)
+	}
+	if len(client.calls) == 0 {
+		t.Fatal("next turn did not produce a model request")
+	}
+	for _, item := range client.calls[len(client.calls)-1].Items {
+		if item.Type != llm.ResponseItemTypeFunctionCall &&
+			item.Type != llm.ResponseItemTypeFunctionCallOutput &&
+			item.Type != llm.ResponseItemTypeCustomToolCall &&
+			item.Type != llm.ResponseItemTypeCustomToolOutput {
+			continue
+		}
+		if (item.CallID != nil && *item.CallID == handoffCall.ID) ||
+			(item.Name != nil && *item.Name == handoffCall.Name) {
+			t.Fatalf("next request retained trigger-handoff protocol item: %+v", item)
+		}
+	}
+}
+
 func persistSuccessfulTriggerHandoff(t *testing.T, engine *Engine, callID string) llm.ToolCall {
 	t.Helper()
 	handoffCall := llm.ToolCall{
