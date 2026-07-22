@@ -15,6 +15,7 @@ import (
 	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/sessioncontract"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -514,6 +515,153 @@ func TestCompactNowInvalidatesPromptSnapshotsWhenStaleMetadataObserverFails(t *t
 			request.PromptCacheKey,
 			request.PromptCacheScope,
 		)
+	}
+}
+
+func TestRealCompactionClearsPersistedCompactionSoonReminderStateAcrossReopenAndFork(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: textutil.Value("summary"),
+		},
+		Usage: llm.Usage{InputTokens: 200, WindowTokens: 2_000},
+	}}}, tools.NewRegistry(), Config{
+		Model:                 "gpt-5",
+		ContextWindowTokens:   2_000,
+		AutoCompactTokenLimit: 1_000,
+		CompactionMode:        "local",
+	})
+	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+	)); err != nil {
+		t.Fatalf("persist seed message: %v", err)
+	}
+	engine.setLastUsage(llm.Usage{InputTokens: 890, WindowTokens: 2_000})
+	if err := newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), "reminder"); err != nil {
+		t.Fatalf("append compaction reminder: %v", err)
+	}
+
+	beforeCompaction, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(4)
+	if err != nil {
+		t.Fatalf("read bounded pre-compaction records: %v", err)
+	}
+	reminders := 0
+	for _, record := range beforeCompaction.Records {
+		message, ok := mustSessionEventPayload(record).(session.MessageRecord)
+		if ok &&
+			message.Role == session.MessageRoleDeveloper &&
+			message.MessageType != nil &&
+			*message.MessageType == session.MessageTypeCompactionSoonReminder {
+			reminders++
+		}
+	}
+	if reminders != 1 || !store.Meta().CompactionSoonReminderIssued {
+		t.Fatalf(
+			"pre-compaction reminder records=%d persisted=%v, want one and true",
+			reminders,
+			store.Meta().CompactionSoonReminderIssued,
+		)
+	}
+
+	if err := engine.CompactContext(context.Background(), ""); err != nil {
+		t.Fatalf("compact context: %v", err)
+	}
+	if engine.compactionRuntimeState().SoonReminderIssued() || store.Meta().CompactionSoonReminderIssued {
+		t.Fatalf(
+			"committed compaction reminder state runtime=%v persisted=%v, want both false",
+			engine.compactionRuntimeState().SoonReminderIssued(),
+			store.Meta().CompactionSoonReminderIssued,
+		)
+	}
+	if err := engine.steer("after-compaction", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("continue")}},
+	)); err != nil {
+		t.Fatalf("persist post-compaction fork target: %v", err)
+	}
+
+	reopenedStore := mustOpenTestSession(t, store.Dir())
+	reopened := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{
+		Model:                 "gpt-5",
+		ContextWindowTokens:   2_000,
+		AutoCompactTokenLimit: 1_000,
+		CompactionMode:        "local",
+	})
+	if reopened.compactionRuntimeState().SoonReminderIssued() || reopenedStore.Meta().CompactionSoonReminderIssued {
+		t.Fatalf(
+			"reopened compaction reminder state runtime=%v persisted=%v, want both false",
+			reopened.compactionRuntimeState().SoonReminderIssued(),
+			reopenedStore.Meta().CompactionSoonReminderIssued,
+		)
+	}
+
+	reopenedLog := mustMaterializeTestEventLog(t, reopenedStore)
+	recent, err := reopenedLog.ReadRecentRecords(4)
+	if err != nil {
+		t.Fatalf("read bounded reopened records: %v", err)
+	}
+	var forkTargetSeq int64
+	replacements := 0
+	for _, record := range recent.Records {
+		switch payload := mustSessionEventPayload(record).(type) {
+		case session.HistoryReplacementRecord:
+			replacements++
+		case session.MessageRecord:
+			if payload.Role == session.MessageRoleUser {
+				forkTargetSeq = record.Seq()
+			}
+		}
+	}
+	if replacements != 1 || forkTargetSeq <= 0 {
+		t.Fatalf(
+			"reopened bounded records replacements=%d fork-target-seq=%d, want one replacement and target",
+			replacements,
+			forkTargetSeq,
+		)
+	}
+
+	forkedStore, _, err := session.ForkAtUserMessage(
+		reopenedLog,
+		forkTargetSeq,
+		"fork",
+		sessioncontract.SessionCategoryMain,
+	)
+	if err != nil {
+		t.Fatalf("fork compacted session: %v", err)
+	}
+	forkedLog := mustMaterializeTestEventLog(t, forkedStore)
+	forkedRecent, err := forkedLog.ReadRecentRecords(4)
+	if err != nil {
+		t.Fatalf("read bounded forked records: %v", err)
+	}
+	forkedReplacements := 0
+	for _, record := range forkedRecent.Records {
+		switch mustSessionEventPayload(record).(type) {
+		case session.HistoryReplacementRecord:
+			forkedReplacements++
+		}
+	}
+	if forkedReplacements != 1 || forkedStore.Meta().CompactionSoonReminderIssued {
+		t.Fatalf(
+			"forked typed history replacements=%d persisted=%v, want one and false",
+			forkedReplacements,
+			forkedStore.Meta().CompactionSoonReminderIssued,
+		)
+	}
+	forked := mustNewTestEngine(t, forkedStore, &fakeClient{}, tools.NewRegistry(), Config{
+		Model:                 "gpt-5",
+		ContextWindowTokens:   2_000,
+		AutoCompactTokenLimit: 1_000,
+		CompactionMode:        "local",
+	})
+	if forked.compactionRuntimeState().SoonReminderIssued() {
+		t.Fatal("forked compacted session restored reminder-issued state")
 	}
 }
 
