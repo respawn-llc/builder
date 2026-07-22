@@ -573,7 +573,7 @@ func classifyEventLogSource(
 		return nil, err
 	}
 	if len(bytes.TrimSpace(firstLine)) == 0 {
-		return &eventLogSourceClassificationResult{source: eventLogSourceEmpty}, nil
+		return &eventLogSourceClassificationResult{source: eventLogSourceLegacy}, nil
 	}
 	classification, err = classifyEventLogHeader(firstLine)
 	if !complete {

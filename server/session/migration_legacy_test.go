@@ -79,6 +79,42 @@ func TestMaterializeEventLogMigratesLegacySessionOnce(t *testing.T) {
 	}
 }
 
+func TestMaterializeEventLogMigratesLegacySessionAfterLeadingBlankLine(t *testing.T) {
+	store := newSessionTestStore(t)
+	writeSessionFixtureEvents(t, store.Dir(), []legacyTestEvent{{
+		Seq:       1,
+		Timestamp: time.Now().UTC(),
+		Kind:      string(EventKindMessage),
+		StepID:    "step-1",
+		Payload: mustFixtureJSON(t, map[string]any{
+			"role":    string(MessageRoleUser),
+			"content": "preserved after leading blank line",
+		}),
+	}})
+
+	eventsPath := filepath.Join(store.Dir(), eventsFile)
+	legacy, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatalf("read legacy event log: %v", err)
+	}
+	if err := os.WriteFile(eventsPath, append([]byte("\n"), legacy...), 0o600); err != nil {
+		t.Fatalf("prepend blank line to legacy event log: %v", err)
+	}
+
+	eventLog := mustMaterializeSessionTestEventLog(t, store)
+	window, err := eventLog.ReadSegmentForward(0, nil)
+	if err != nil {
+		t.Fatalf("read migrated event log: %v", err)
+	}
+	if len(window.Records) != 1 {
+		t.Fatalf("migrated records = %d, want 1", len(window.Records))
+	}
+	message, ok := mustEventRecordPayload(window.Records[0]).(MessageRecord)
+	if !ok || message.Content == nil || *message.Content != "preserved after leading blank line" {
+		t.Fatalf("migrated message = %#v", mustEventRecordPayload(window.Records[0]))
+	}
+}
+
 func TestMaterializeEventLogMigratesLegacyToolCompletionWithoutSnapshot(t *testing.T) {
 	store := newSessionTestStore(t)
 	now := time.Now().UTC()
