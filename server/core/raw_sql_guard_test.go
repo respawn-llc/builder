@@ -69,10 +69,16 @@ func display() string {
 			"ATTACH DATABASE ? AS aux":          true,
 			"SAVEPOINT graph":                   true,
 			"RELEASE graph":                     true,
+			"VACUUM":                            true,
+			"BEGIN":                             true,
+			"COMMIT":                            true,
+			"ROLLBACK":                          true,
+			"DROP INDEX stale_sessions":         true,
 			"SELECT a task in the UI":           false,
 			"Select Workspace":                  false,
 			"AGENT=kent":                        false,
 			"end":                               false,
+			"rollback":                          false,
 			"SELECT id FROM":                    false,
 		}
 		for source, want := range cases {
@@ -206,7 +212,7 @@ func isSQLiteStatementOrFragment(source string) bool {
 	if hasNonProseRelationTarget(tokens) && parsesSQLiteStatement(source) {
 		return true
 	}
-	if hasStandaloneSQLiteStatementStart(tokens[0]) && parsesSQLiteStatement(source) {
+	if hasStandaloneSQLiteStatementStart(tokens) && parsesSQLiteStatement(source) {
 		return true
 	}
 	switch tokens[0].GetTokenType() {
@@ -230,17 +236,52 @@ func isSQLiteStatementOrFragment(source string) bool {
 		parsesSQLiteStatement("SELECT 1 WHERE "+source)
 }
 
-func hasStandaloneSQLiteStatementStart(token antlr.Token) bool {
-	switch token.GetTokenType() {
+func hasStandaloneSQLiteStatementStart(tokens []antlr.Token) bool {
+	first := tokens[0]
+	switch first.GetTokenType() {
 	case sqliteparser.SQLiteParserANALYZE_,
 		sqliteparser.SQLiteParserATTACH_,
+		sqliteparser.SQLiteParserBEGIN_,
+		sqliteparser.SQLiteParserCOMMIT_,
+		sqliteparser.SQLiteParserDETACH_,
 		sqliteparser.SQLiteParserEXPLAIN_,
+		sqliteparser.SQLiteParserREINDEX_,
 		sqliteparser.SQLiteParserRELEASE_,
-		sqliteparser.SQLiteParserSAVEPOINT_:
-		return true
+		sqliteparser.SQLiteParserROLLBACK_,
+		sqliteparser.SQLiteParserSAVEPOINT_,
+		sqliteparser.SQLiteParserVACUUM_:
+		return isUppercaseSQLiteKeyword(first)
+	case sqliteparser.SQLiteParserPRAGMA_:
+		return len(tokens) > 1
+	case sqliteparser.SQLiteParserCREATE_,
+		sqliteparser.SQLiteParserALTER_,
+		sqliteparser.SQLiteParserDROP_:
+		return hasSQLiteStatementQualifier(
+			tokens,
+			sqliteparser.SQLiteParserTABLE_,
+			sqliteparser.SQLiteParserINDEX_,
+			sqliteparser.SQLiteParserVIEW_,
+			sqliteparser.SQLiteParserTRIGGER_,
+		)
 	default:
 		return false
 	}
+}
+
+func isUppercaseSQLiteKeyword(token antlr.Token) bool {
+	return token.GetText() == strings.ToUpper(token.GetText())
+}
+
+func hasSQLiteStatementQualifier(tokens []antlr.Token, qualifiers ...int) bool {
+	if len(tokens) < 2 {
+		return false
+	}
+	for _, qualifier := range qualifiers {
+		if tokens[1].GetTokenType() == qualifier {
+			return true
+		}
+	}
+	return false
 }
 
 func sqliteTokens(source string) ([]antlr.Token, bool) {
