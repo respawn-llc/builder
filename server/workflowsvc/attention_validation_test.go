@@ -40,10 +40,13 @@ func TestServiceRejectsMalformedAttentionAndActivityReadModelOutput(t *testing.T
 					Type:   "comment",
 					TaskID: "task-requested",
 					Attention: &serverapi.WorkflowAttentionItem{
-						Kind:       "interrupted_run",
-						TaskID:     "task-requested",
-						WorkflowID: workflowIDPointerForServiceTest(),
-						RunID:      workflowAttentionStringForServiceTest("run-1"),
+						ProjectID:   "project-1",
+						Kind:        "interrupted_run",
+						TaskID:      "task-requested",
+						TaskShortID: "KENT-1",
+						TaskTitle:   "Task",
+						WorkflowID:  workflowIDPointerForServiceTest(),
+						RunID:       workflowAttentionStringForServiceTest("run-1"),
 					},
 				}},
 			},
@@ -77,10 +80,13 @@ func (m malformedWorkflowActivityReadModel) List(context.Context, serverapi.Work
 
 func workflowAttentionItemForServiceTest(taskID string) serverapi.WorkflowAttentionItem {
 	return serverapi.WorkflowAttentionItem{
-		Kind:       "interrupted_run",
-		TaskID:     taskID,
-		WorkflowID: workflowIDPointerForServiceTest(),
-		RunID:      workflowAttentionStringForServiceTest("run-1"),
+		ProjectID:   "project-1",
+		Kind:        "interrupted_run",
+		TaskID:      taskID,
+		TaskShortID: "KENT-1",
+		TaskTitle:   "Task",
+		WorkflowID:  workflowIDPointerForServiceTest(),
+		RunID:       workflowAttentionStringForServiceTest("run-1"),
 	}
 }
 

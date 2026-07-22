@@ -7,7 +7,7 @@ import (
 
 const ApprovalRequiredMessage = "Approval required"
 
-func InterruptedRunMessage(reason *string, detailJSON string) string {
+func InterruptedRunMessage(reason *string, detailJSON *string) string {
 	message := "Run interrupted"
 	if reason != nil && strings.TrimSpace(*reason) != "" {
 		message += ": " + strings.TrimSpace(*reason)
@@ -18,14 +18,14 @@ func InterruptedRunMessage(reason *string, detailJSON string) string {
 	return message
 }
 
-func interruptionErrorDetail(detailJSON string) string {
-	if strings.TrimSpace(detailJSON) == "" {
+func interruptionErrorDetail(detailJSON *string) string {
+	if detailJSON == nil || strings.TrimSpace(*detailJSON) == "" {
 		return ""
 	}
 	var detail struct {
 		Error string `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(detailJSON), &detail); err != nil {
+	if err := json.Unmarshal([]byte(*detailJSON), &detail); err != nil {
 		return ""
 	}
 	return strings.TrimSpace(detail.Error)

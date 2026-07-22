@@ -4,14 +4,13 @@ import (
 	"context"
 	"testing"
 
-	"core/server/runtime"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
 )
 
 func TestAttentionListProjectsApprovalQuestionAndInterruptedRun(t *testing.T) {
 	ctx, store, workflowStore, binding := newWorkflowViewTestContextStore(t)
-	view, err := newWorkflowViewTestFixture(store, workflowStore, staticTranscriptProvider{entries: map[string][]runtime.ChatEntry{
+	view, err := newWorkflowViewTestFixture(store, workflowStore, staticTranscriptProvider{entries: map[string][]PendingQuestionTranscriptEntry{
 		"session-attention-question": transcriptEntriesWithAsk("ask-attention", "Attention ask?"),
 	}}, nil)
 	if err != nil {
@@ -83,7 +82,7 @@ func TestAttentionListProjectsApprovalQuestionAndInterruptedRun(t *testing.T) {
 	for _, item := range resp.Items {
 		kinds[item.Kind] = item
 	}
-	if !attentionStringEquals(kinds["approval"].TaskTransitionID, string(pendingApproval.Result.TransitionID)) || !attentionStringEquals(kinds["question"].AskID, "ask-attention") || kinds["interrupted_run"].TaskID != string(interruptedTask.ID) || !attentionStringEquals(kinds["interrupted_run"].RunID, string(interruptedStarted.RunID)) || kinds["interrupted_run"].Message != "Run interrupted: manual: role missing" {
+	if !attentionPointerEquals(kinds["approval"].TaskTransitionID, string(pendingApproval.Result.TransitionID)) || !attentionPointerEquals(kinds["question"].AskID, "ask-attention") || kinds["interrupted_run"].TaskID != string(interruptedTask.ID) || !attentionPointerEquals(kinds["interrupted_run"].RunID, string(interruptedStarted.RunID)) || kinds["interrupted_run"].Message != "Run interrupted: manual: role missing" {
 		t.Fatalf("attention items = %+v", resp.Items)
 	}
 	firstPage, err := view.taskAttention(t).List(ctx, serverapi.WorkflowAttentionListRequest{PageSize: 1})

@@ -19,7 +19,6 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/requestmemo"
-	"core/server/runtime"
 	"core/server/session"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
@@ -137,7 +136,7 @@ type recordingWorkflowTaskTranscriptProvider struct {
 	calls int
 }
 
-func (p *recordingWorkflowTaskTranscriptProvider) SessionNewestActiveSegmentEntries(context.Context, string) ([]runtime.ChatEntry, error) {
+func (p *recordingWorkflowTaskTranscriptProvider) SessionNewestActiveSegmentQuestions(context.Context, string) ([]workflowview.PendingQuestionTranscriptEntry, error) {
 	p.calls++
 	return nil, errors.New("task get must not read transcripts")
 }

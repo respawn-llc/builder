@@ -268,7 +268,7 @@ func (a *Activity) itemsFromPage(page activityPage) ([]serverapi.WorkflowTaskAct
 			case "run_completed":
 				item.Summary = "Run completed"
 			case "run_interrupted":
-				item.Summary = workflowattention.InterruptedRunMessage(metadata.OptionalString(run.InterruptionReason), run.InterruptionDetailJson)
+				item.Summary = workflowattention.InterruptedRunMessage(metadata.OptionalString(run.InterruptionReason), textutil.OptionalExactString(run.InterruptionDetailJson))
 				workflowID := page.task.WorkflowID
 				attention := serverapi.WorkflowAttentionItem{
 					ID:               attentionKindInterruptedRun + ":" + run.ID,

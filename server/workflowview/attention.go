@@ -243,8 +243,7 @@ func (a *Attention) itemFromCandidate(ctx context.Context, row attentionCandidat
 		if err != nil {
 			return serverapi.WorkflowAttentionItem{}, false, err
 		}
-		sessionID := optionalAttentionCandidateValue(row.sessionID)
-		question, err := questions.Question(ctx, sessionID, askID)
+		question, err := questions.Question(ctx, row.sessionID, askID)
 		if err != nil {
 			question = pendingQuestion{message: pendingQuestionFallbackMessage}
 		}
@@ -266,8 +265,7 @@ func (a *Attention) itemFromCandidate(ctx context.Context, row attentionCandidat
 		if err != nil {
 			return serverapi.WorkflowAttentionItem{}, false, err
 		}
-		detailJSON := optionalAttentionCandidateValue(row.interruptionDetailJSON)
-		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: attentionKindInterruptedRun, ProjectID: row.projectID, WorkflowID: &workflowID, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, RunID: textutil.Pointer(&runID), SessionID: textutil.Pointer(row.sessionID), Message: workflowattention.InterruptedRunMessage(row.interruptionReason, detailJSON), DetailJSON: textutil.Pointer(row.interruptionDetailJSON), OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
+		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: attentionKindInterruptedRun, ProjectID: row.projectID, WorkflowID: &workflowID, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, RunID: textutil.Pointer(&runID), SessionID: textutil.Pointer(row.sessionID), Message: workflowattention.InterruptedRunMessage(row.interruptionReason, row.interruptionDetailJSON), DetailJSON: textutil.Pointer(row.interruptionDetailJSON), OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
 	default:
 		return serverapi.WorkflowAttentionItem{}, false, attentionCandidateValidationError(row, serverapi.WorkflowRequestErrorInvalidMode, "kind", "kind must be approval, question, or interrupted_run")
 	}
@@ -299,11 +297,15 @@ func (a *Attention) approvalSnapshot(ctx context.Context, taskID string, transit
 	if err != nil {
 		return nil, err
 	}
+	outputValues := projected.OutputValues
+	if outputValues == nil {
+		outputValues = map[string]string{}
+	}
 	snapshot := serverapi.WorkflowAttentionApprovalSnapshot{
 		SourceNodeDisplayName: projected.SourceNodeDisplayName,
 		Targets:               make([]serverapi.WorkflowAttentionApprovalTarget, 0, len(projected.Edges)),
 		Commentary:            projected.Commentary,
-		OutputValues:          projected.OutputValues,
+		OutputValues:          outputValues,
 		WorkflowRevisionSeen:  projected.WorkflowRevisionSeen,
 	}
 	for _, edge := range projected.Edges {
@@ -327,13 +329,6 @@ func attentionCandidateValidationError(row attentionCandidateRow, code string, f
 		Field:   field,
 		Message: fmt.Sprintf("workflow attention candidate kind=%q id=%q: %s", row.kind, row.id, message),
 	}
-}
-
-func optionalAttentionCandidateValue(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
 }
 
 func parseAttentionPageToken(token string) (attentionPageCursor, error) {

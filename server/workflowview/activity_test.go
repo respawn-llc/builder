@@ -235,7 +235,7 @@ func TestActivityProjectsEveryDurableTaskEventThroughFocusedInterface(t *testing
 		interruptedItem.Attention.WorkflowID == nil ||
 		*interruptedItem.Attention.WorkflowID != string(workflowID) ||
 		interruptedItem.Attention.TaskID != string(interruptedTask.ID) ||
-		!attentionStringEquals(interruptedItem.Attention.RunID, string(interruptedStarted.RunID)) ||
+		!attentionPointerEquals(interruptedItem.Attention.RunID, string(interruptedStarted.RunID)) ||
 		interruptedItem.Attention.Message != interruptedItem.Summary ||
 		interruptedItem.Attention.OccurredAtUnixMs != interruptedItem.OccurredAtUnixMs {
 		t.Fatalf("run-interrupted activity = %+v", interruptedItem)

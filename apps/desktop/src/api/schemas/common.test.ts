@@ -78,7 +78,11 @@ describe("attentionItemSchema", () => {
     const rejected = [
       { ...baseAttentionItem, kind: "validation_blocker" },
       { ...baseAttentionItem, kind: "future_attention" },
+      { ...baseAttentionItem, id: "" },
+      { ...baseAttentionItem, project_id: "" },
       { ...baseAttentionItem, task_id: "" },
+      { ...baseAttentionItem, task_short_id: "" },
+      { ...baseAttentionItem, task_title: "" },
       { ...baseAttentionItem, workflow_id: "" },
       { ...baseAttentionItem, run_id: "" },
       { ...baseAttentionItem, ask_id: "" },
@@ -107,6 +111,21 @@ describe("attentionItemSchema", () => {
       { ...interruptedRunAttentionItem, approval_snapshot: approvalSnapshot },
       { ...baseAttentionItem, session_id: "" },
       { ...interruptedRunAttentionItem, detail_json: "" },
+      (() => {
+        const item = { ...baseAttentionItem };
+        Reflect.deleteProperty(item, "project_id");
+        return item;
+      })(),
+      (() => {
+        const item = { ...baseAttentionItem };
+        Reflect.deleteProperty(item, "task_short_id");
+        return item;
+      })(),
+      (() => {
+        const item = { ...baseAttentionItem };
+        Reflect.deleteProperty(item, "task_title");
+        return item;
+      })(),
     ];
 
     for (const item of rejected) {

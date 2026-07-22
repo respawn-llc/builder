@@ -93,7 +93,7 @@ func TestAttentionReadsGlobalAndTaskCandidatesThroughFocusedInterface(t *testing
 		byKindAndProject[item.Kind+":"+item.ProjectID] = item
 	}
 	approval := byKindAndProject["approval:"+firstProject.ProjectID]
-	if approval.TaskID != string(approvalTask.ID) || !attentionStringEquals(approval.TaskTransitionID, string(pendingApproval.Result.TransitionID)) {
+	if approval.TaskID != string(approvalTask.ID) || !attentionPointerEquals(approval.TaskTransitionID, string(pendingApproval.Result.TransitionID)) {
 		t.Fatalf("approval projection = %+v", approval)
 	}
 	if approval.ApprovalSnapshot == nil ||
@@ -107,7 +107,7 @@ func TestAttentionReadsGlobalAndTaskCandidatesThroughFocusedInterface(t *testing
 		t.Fatalf("approval snapshot = %+v", approval.ApprovalSnapshot)
 	}
 	interrupted := byKindAndProject["interrupted_run:"+secondProject.ProjectID]
-	if interrupted.TaskID != string(interruptedTask.ID) || !attentionStringEquals(interrupted.RunID, string(interruptedStarted.RunID)) {
+	if interrupted.TaskID != string(interruptedTask.ID) || !attentionPointerEquals(interrupted.RunID, string(interruptedStarted.RunID)) {
 		t.Fatalf("interrupted projection = %+v", interrupted)
 	}
 

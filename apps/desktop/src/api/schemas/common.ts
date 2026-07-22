@@ -355,12 +355,12 @@ export const boardCardSchema: z.ZodType<BoardCard> = z
   }));
 
 const attentionItemBaseSchema = {
-  id: z.string(),
-  project_id: emptyString,
+  id: nonBlankString,
+  project_id: nonBlankString,
   workflow_id: nonBlankString,
   task_id: nonBlankString,
-  task_short_id: emptyString,
-  task_title: emptyString,
+  task_short_id: nonBlankString,
+  task_title: nonBlankString,
   message: z.string(),
   occurred_at_unix_ms: z.number(),
 };

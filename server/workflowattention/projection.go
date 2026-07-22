@@ -38,7 +38,7 @@ func InterruptedRunProjectionFromStore(projection workflowstore.InterruptedRunAt
 		TaskTitle:        projection.TaskTitle,
 		RunID:            projection.RunID,
 		SessionID:        projection.SessionID,
-		Message:          InterruptedRunMessage(&projection.InterruptionReason, detailJSON),
+		Message:          InterruptedRunMessage(&projection.InterruptionReason, projection.InterruptionDetailJSON),
 		Reason:           projection.InterruptionReason,
 		DetailJSON:       detailJSON,
 		OccurredAtUnixMs: projection.OccurredAtUnixMs,

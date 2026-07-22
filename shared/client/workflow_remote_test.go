@@ -510,21 +510,25 @@ func TestRemoteWorkflowAttentionAndActivityRejectMalformedResponses(t *testing.T
 	})
 
 	t.Run("global attention cross variant field", func(t *testing.T) {
-		workflowID := "workflow-1"
-		transitionID := "transition-1"
 		runID := "run-1"
+		item := workflowRemoteApprovalAttention()
+		item.RunID = &runID
 		remote := newWorkflowResponseRemote(t, protocol.MethodWorkflowAttentionList, serverapi.WorkflowAttentionListResponse{
-			Items: []serverapi.WorkflowAttentionItem{{
-				Kind:             "approval",
-				TaskID:           "task-requested",
-				WorkflowID:       &workflowID,
-				TaskTransitionID: &transitionID,
-				RunID:            &runID,
-				ApprovalSnapshot: &serverapi.WorkflowAttentionApprovalSnapshot{},
-			}},
+			Items: []serverapi.WorkflowAttentionItem{item},
 		})
 		if _, err := remote.ListWorkflowAttention(context.Background(), serverapi.WorkflowAttentionListRequest{}); err == nil {
 			t.Fatal("ListWorkflowAttention accepted an approval carrying run_id")
+		}
+	})
+
+	t.Run("global attention malformed approval snapshot", func(t *testing.T) {
+		item := workflowRemoteApprovalAttention()
+		item.ApprovalSnapshot = &serverapi.WorkflowAttentionApprovalSnapshot{}
+		remote := newWorkflowResponseRemote(t, protocol.MethodWorkflowAttentionList, serverapi.WorkflowAttentionListResponse{
+			Items: []serverapi.WorkflowAttentionItem{item},
+		})
+		if _, err := remote.ListWorkflowAttention(context.Background(), serverapi.WorkflowAttentionListRequest{}); err == nil {
+			t.Fatal("ListWorkflowAttention accepted an approval with a malformed snapshot")
 		}
 	})
 
@@ -588,10 +592,31 @@ func newWorkflowResponseRemote(t *testing.T, wantMethod string, response any) *R
 func workflowRemoteInterruptedAttention(taskID string) *serverapi.WorkflowAttentionItem {
 	workflowID := "workflow-1"
 	return &serverapi.WorkflowAttentionItem{
-		Kind:       "interrupted_run",
-		TaskID:     taskID,
-		WorkflowID: &workflowID,
-		RunID:      workflowRemoteString("run-1"),
+		ProjectID:   "project-1",
+		Kind:        "interrupted_run",
+		TaskID:      taskID,
+		TaskShortID: "KENT-1",
+		TaskTitle:   "Task",
+		WorkflowID:  &workflowID,
+		RunID:       workflowRemoteString("run-1"),
+	}
+}
+
+func workflowRemoteApprovalAttention() serverapi.WorkflowAttentionItem {
+	workflowID := "workflow-1"
+	return serverapi.WorkflowAttentionItem{
+		ProjectID:        "project-1",
+		Kind:             "approval",
+		TaskID:           "task-requested",
+		TaskShortID:      "KENT-1",
+		TaskTitle:        "Task",
+		WorkflowID:       &workflowID,
+		TaskTransitionID: workflowRemoteString("transition-1"),
+		ApprovalSnapshot: &serverapi.WorkflowAttentionApprovalSnapshot{
+			SourceNodeDisplayName: "Review",
+			Targets:               []serverapi.WorkflowAttentionApprovalTarget{{DisplayName: "Done"}},
+			OutputValues:          map[string]string{},
+		},
 	}
 }
 

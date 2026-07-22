@@ -6,20 +6,29 @@ import (
 	"fmt"
 	"strings"
 
-	"core/server/runtime"
-	askquestion "core/server/tools"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/textutil"
-	"core/shared/toolspec"
 )
 
 type SessionActiveTranscriptProvider interface {
-	SessionNewestActiveSegmentEntries(ctx context.Context, sessionID string) ([]runtime.ChatEntry, error)
+	SessionNewestActiveSegmentQuestions(ctx context.Context, sessionID string) ([]PendingQuestionTranscriptEntry, error)
 }
 
 type PendingPromptSnapshot struct {
-	Request askquestion.AskQuestionRequest
+	ID                     string
+	Question               string
+	Suggestions            []string
+	RecommendedOptionIndex *int
+	Approval               bool
+	ApprovalDecisions      []clientui.ApprovalDecision
+}
+
+type PendingQuestionTranscriptEntry struct {
+	AskID                  string
+	Question               string
+	Suggestions            []string
+	RecommendedOptionIndex *int
 }
 
 type PendingPromptSource interface {
@@ -53,73 +62,76 @@ func newPendingQuestionResolver(transcripts SessionActiveTranscriptProvider, pro
 	return &pendingQuestionResolver{transcripts: transcripts, prompts: prompts}
 }
 
-func (r *pendingQuestionResolver) Question(ctx context.Context, sessionID string, askID string) (pendingQuestion, error) {
-	sessionID = strings.TrimSpace(sessionID)
+func (r *pendingQuestionResolver) Question(ctx context.Context, sessionID *string, askID string) (pendingQuestion, error) {
 	askID = strings.TrimSpace(askID)
-	if question, ok, err := r.questionFromPendingPrompt(sessionID, askID); ok || err != nil {
+	if askID == "" {
+		return pendingQuestion{}, errors.New("ask_id is required to resolve pending question")
+	}
+	if sessionID == nil {
+		return pendingQuestion{}, ErrPendingQuestionNotFound
+	}
+	resolvedSessionID := strings.TrimSpace(*sessionID)
+	if resolvedSessionID == "" {
+		return pendingQuestion{}, errors.New("session_id must be non-blank when present")
+	}
+	if question, ok, err := r.questionFromPendingPrompt(resolvedSessionID, askID); ok || err != nil {
 		return question, err
 	}
 	if r == nil || r.transcripts == nil {
 		return pendingQuestion{}, errors.New("session active transcript provider is required to resolve pending question")
 	}
-	if sessionID == "" || askID == "" {
-		return pendingQuestion{}, errors.New("session_id and ask_id are required to resolve pending question")
-	}
-	entries, err := r.transcripts.SessionNewestActiveSegmentEntries(ctx, sessionID)
+	entries, err := r.transcripts.SessionNewestActiveSegmentQuestions(ctx, resolvedSessionID)
 	if err != nil {
-		return pendingQuestion{}, fmt.Errorf("load session %q newest active transcript segment for pending question %q: %w", sessionID, askID, err)
+		return pendingQuestion{}, fmt.Errorf("load session %q newest active transcript segment for pending question %q: %w", resolvedSessionID, askID, err)
 	}
-	question := askQuestionFromActiveTranscriptEntries(entries, askID)
+	question := pendingQuestionFromTranscriptEntries(entries, askID)
 	if strings.TrimSpace(question.message) == "" {
-		return pendingQuestion{}, fmt.Errorf("pending question %q in session %q newest active transcript segment: %w", askID, sessionID, ErrPendingQuestionNotFound)
+		return pendingQuestion{}, fmt.Errorf("pending question %q in session %q newest active transcript segment: %w", askID, resolvedSessionID, ErrPendingQuestionNotFound)
 	}
 	return question, nil
 }
 
 func (r *pendingQuestionResolver) questionFromPendingPrompt(sessionID string, askID string) (pendingQuestion, bool, error) {
-	if r == nil || r.prompts == nil || sessionID == "" || askID == "" {
+	if r == nil || r.prompts == nil {
 		return pendingQuestion{}, false, nil
 	}
 	for _, snapshot := range r.prompts.ListPendingPrompts(sessionID) {
-		req := snapshot.Request
-		if strings.TrimSpace(req.ID) != askID {
+		if strings.TrimSpace(snapshot.ID) != askID {
 			continue
 		}
-		return pendingQuestionFromRequest(req)
+		return pendingQuestionFromPrompt(snapshot)
 	}
 	return pendingQuestion{}, false, nil
 }
 
-func pendingQuestionFromRequest(req askquestion.AskQuestionRequest) (pendingQuestion, bool, error) {
-	if req.Approval {
-		decisions := make([]clientui.ApprovalDecision, 0, len(req.ApprovalOptions))
-		for _, option := range req.ApprovalOptions {
-			decision := clientui.ApprovalDecision(option.Decision)
+func pendingQuestionFromPrompt(snapshot PendingPromptSnapshot) (pendingQuestion, bool, error) {
+	if snapshot.Approval {
+		decisions := append([]clientui.ApprovalDecision(nil), snapshot.ApprovalDecisions...)
+		for _, decision := range decisions {
 			switch decision {
 			case clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionAllowSession, clientui.ApprovalDecisionDeny:
-				decisions = append(decisions, decision)
 			default:
-				return pendingQuestion{}, true, fmt.Errorf("pending approval question %q has invalid decision %q", req.ID, option.Decision)
+				return pendingQuestion{}, true, fmt.Errorf("pending approval question %q has invalid decision %q", snapshot.ID, decision)
 			}
 		}
 		if len(decisions) == 0 {
-			return pendingQuestion{}, true, fmt.Errorf("pending approval question %q has no approval decisions", req.ID)
+			return pendingQuestion{}, true, fmt.Errorf("pending approval question %q has no approval decisions", snapshot.ID)
 		}
 		return pendingQuestion{
-			message: strings.TrimSpace(req.Question),
+			message: strings.TrimSpace(snapshot.Question),
 			prompt: &serverapi.WorkflowAttentionQuestionPrompt{
 				Kind:              serverapi.WorkflowAttentionQuestionKindApproval,
 				ApprovalDecisions: decisions,
 			},
 		}, true, nil
 	}
-	suggestions := normalizedPendingQuestionSuggestions(req.Suggestions)
-	recommended, err := attentionRecommendedOptionIndex(req.RecommendedOptionIndex, len(suggestions))
+	suggestions := normalizedPendingQuestionSuggestions(snapshot.Suggestions)
+	recommended, err := validatePendingQuestionRecommendation(snapshot.RecommendedOptionIndex, len(suggestions))
 	if err != nil {
-		return pendingQuestion{}, true, fmt.Errorf("pending question %q: %w", req.ID, err)
+		return pendingQuestion{}, true, fmt.Errorf("pending question %q: %w", snapshot.ID, err)
 	}
 	return pendingQuestion{
-		message:                strings.TrimSpace(req.Question),
+		message:                strings.TrimSpace(snapshot.Question),
 		suggestions:            suggestions,
 		recommendedOptionIndex: recommended,
 		prompt: &serverapi.WorkflowAttentionQuestionPrompt{
@@ -137,27 +149,23 @@ func normalizedPendingQuestionSuggestions(in []string) []string {
 	return append([]string(nil), in...)
 }
 
-func askQuestionFromActiveTranscriptEntries(entries []runtime.ChatEntry, askID string) pendingQuestion {
+func pendingQuestionFromTranscriptEntries(entries []PendingQuestionTranscriptEntry, askID string) pendingQuestion {
 	for _, entry := range entries {
-		entryAskID := strings.TrimSpace(entry.ToolCallID)
-		if strings.TrimSpace(entry.Role) != "tool_call" || entryAskID != askID || entry.ToolCall == nil {
+		if strings.TrimSpace(entry.AskID) != askID {
 			continue
 		}
-		if strings.TrimSpace(entry.ToolCall.ToolName) != string(toolspec.ToolAskQuestion) {
-			continue
-		}
-		if question := strings.TrimSpace(entry.ToolCall.Question); question != "" {
-			recommended, err := attentionRecommendedOptionIndex(entry.ToolCall.RecommendedOptionIndex, len(entry.ToolCall.Suggestions))
+		if question := strings.TrimSpace(entry.Question); question != "" {
+			recommended, err := validatePendingQuestionRecommendation(entry.RecommendedOptionIndex, len(entry.Suggestions))
 			if err != nil {
 				return pendingQuestion{}
 			}
 			return pendingQuestion{
 				message:                question,
-				suggestions:            append([]string(nil), entry.ToolCall.Suggestions...),
+				suggestions:            append([]string(nil), entry.Suggestions...),
 				recommendedOptionIndex: recommended,
 				prompt: &serverapi.WorkflowAttentionQuestionPrompt{
 					Kind:                   serverapi.WorkflowAttentionQuestionKindOrdinary,
-					Suggestions:            append([]string(nil), entry.ToolCall.Suggestions...),
+					Suggestions:            append([]string(nil), entry.Suggestions...),
 					RecommendedOptionIndex: textutil.Pointer(recommended),
 				},
 			}
@@ -166,12 +174,12 @@ func askQuestionFromActiveTranscriptEntries(entries []runtime.ChatEntry, askID s
 	return pendingQuestion{}
 }
 
-func attentionRecommendedOptionIndex(index int, suggestionCount int) (*int, error) {
-	if index == 0 {
+func validatePendingQuestionRecommendation(index *int, suggestionCount int) (*int, error) {
+	if index == nil {
 		return nil, nil
 	}
-	if index < 1 || index > suggestionCount {
-		return nil, fmt.Errorf("recommended_option_index %d is invalid for %d suggestions", index, suggestionCount)
+	if *index < 1 || *index > suggestionCount {
+		return nil, fmt.Errorf("recommended_option_index %d is invalid for %d suggestions", *index, suggestionCount)
 	}
-	return &index, nil
+	return textutil.Pointer(index), nil
 }

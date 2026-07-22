@@ -10,8 +10,6 @@ import (
 	"testing"
 
 	"core/server/metadata"
-	"core/server/runtime"
-	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/clientui"
@@ -512,7 +510,7 @@ func createWorkflowViewWaitingAskTask(
 
 func TestTaskDetailProjectsWaitingAskRun(t *testing.T) {
 	ctx, store, workflowStore, binding := newWorkflowViewTestContextStore(t)
-	view, err := newWorkflowViewTestFixture(store, workflowStore, staticTranscriptProvider{entries: map[string][]runtime.ChatEntry{
+	view, err := newWorkflowViewTestFixture(store, workflowStore, staticTranscriptProvider{entries: map[string][]PendingQuestionTranscriptEntry{
 		"session-view-waiting-ask": transcriptEntriesWithAskOptions("ask-view-1", "Waiting ask?", []string{"Trail mix", "Dark chocolate", "Pistachios"}, 2),
 	}}, nil)
 	if err != nil {
@@ -535,7 +533,7 @@ func TestTaskDetailProjectsWaitingAskRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTaskAttention: %v", err)
 	}
-	if len(attention.Items) != 1 || attention.Items[0].Kind != "question" || !attentionStringEquals(attention.Items[0].AskID, "ask-view-1") || !attentionStringEquals(attention.Items[0].SessionID, sessionID) || strings.TrimSpace(attention.Items[0].Message) == "" || len(attention.Items[0].Suggestions) != 3 || !attentionIntEquals(attention.Items[0].RecommendedOptionIndex, 2) {
+	if len(attention.Items) != 1 || attention.Items[0].Kind != "question" || !attentionPointerEquals(attention.Items[0].AskID, "ask-view-1") || !attentionPointerEquals(attention.Items[0].SessionID, sessionID) || strings.TrimSpace(attention.Items[0].Message) == "" || len(attention.Items[0].Suggestions) != 3 || !attentionPointerEquals(attention.Items[0].RecommendedOptionIndex, 2) {
 		t.Fatalf("attention question options = %+v", attention.Items)
 	}
 	for _, suggestion := range attention.Items[0].Suggestions {
@@ -550,16 +548,10 @@ func TestTaskDetailProjectsRuntimeApprovalWaitingAskPrompt(t *testing.T) {
 	sessionID := "session-runtime-approval"
 	askID := "ask-runtime-approval"
 	view, err := newWorkflowViewTestFixture(store, workflowStore, nil, staticPendingPromptSource{sessionID: {{
-		Request: askquestion.AskQuestionRequest{
-			ID:       askID,
-			Question: "Approve protected path?",
-			Approval: true,
-			ApprovalOptions: []askquestion.AskQuestionApprovalOption{
-				{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
-				{Decision: askquestion.AskQuestionApprovalDecisionAllowSession, Label: "Allow for this session"},
-				{Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"},
-			},
-		},
+		ID:                askID,
+		Question:          "Approve protected path?",
+		Approval:          true,
+		ApprovalDecisions: []clientui.ApprovalDecision{clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionAllowSession, clientui.ApprovalDecisionDeny},
 	}}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -601,7 +593,7 @@ func TestTaskDetailPendingQuestionFallsBackWhenTranscriptLookupFails(t *testing.
 	if err != nil {
 		t.Fatalf("ListTaskAttention: %v", err)
 	}
-	if len(attention.Items) != 1 || attention.Items[0].Kind != "question" || !attentionStringEquals(attention.Items[0].AskID, "ask-missing-transcript") || attention.Items[0].Message != pendingQuestionFallbackMessage {
+	if len(attention.Items) != 1 || attention.Items[0].Kind != "question" || !attentionPointerEquals(attention.Items[0].AskID, "ask-missing-transcript") || attention.Items[0].Message != pendingQuestionFallbackMessage {
 		t.Fatalf("attention = %+v", attention.Items)
 	}
 }
@@ -610,15 +602,15 @@ func assertRuntimeApprovalQuestionAttention(t *testing.T, items []serverapi.Work
 	t.Helper()
 	var item serverapi.WorkflowAttentionItem
 	for _, candidate := range items {
-		if candidate.Kind == "question" && attentionStringEquals(candidate.AskID, askID) {
+		if candidate.Kind == "question" && attentionPointerEquals(candidate.AskID, askID) {
 			item = candidate
 			break
 		}
 	}
-	if !attentionStringEquals(item.AskID, askID) {
+	if !attentionPointerEquals(item.AskID, askID) {
 		t.Fatalf("runtime approval question not found in attention: %+v", items)
 	}
-	if item.TaskID != taskID || !attentionStringEquals(item.RunID, runID) || !attentionStringEquals(item.SessionID, sessionID) || item.Message != "Approve protected path?" {
+	if item.TaskID != taskID || !attentionPointerEquals(item.RunID, runID) || !attentionPointerEquals(item.SessionID, sessionID) || item.Message != "Approve protected path?" {
 		t.Fatalf("runtime approval attention identity = %+v", item)
 	}
 	if item.Suggestions != nil || item.RecommendedOptionIndex != nil {

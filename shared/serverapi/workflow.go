@@ -2323,7 +2323,16 @@ func (r WorkflowBoardNodeCardsListResponse) Validate() error {
 }
 
 func (r WorkflowAttentionItem) Validate() error {
+	if err := validateRequired("project_id", r.ProjectID); err != nil {
+		return err
+	}
 	if err := validateRequired("task_id", r.TaskID); err != nil {
+		return err
+	}
+	if err := validateRequired("task_short_id", r.TaskShortID); err != nil {
+		return err
+	}
+	if err := validateRequired("task_title", r.TaskTitle); err != nil {
 		return err
 	}
 	if r.WorkflowID == nil {
@@ -2363,6 +2372,9 @@ func (r WorkflowAttentionItem) Validate() error {
 		if r.ApprovalSnapshot == nil {
 			return workflowRequestError(WorkflowRequestErrorRequired, "approval_snapshot", "approval_snapshot is required")
 		}
+		if err := r.ApprovalSnapshot.Validate(); err != nil {
+			return err
+		}
 		return validateWorkflowAttentionFieldsAbsent(r.Kind,
 			workflowAttentionFieldPresence{name: "run_id", present: r.RunID != nil},
 			workflowAttentionFieldPresence{name: "session_id", present: r.SessionID != nil},
@@ -2393,6 +2405,31 @@ func (r WorkflowAttentionItem) Validate() error {
 	default:
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "kind", "kind must be question, approval, or interrupted_run")
 	}
+}
+
+func (s WorkflowAttentionApprovalSnapshot) Validate() error {
+	if err := validateRequired("approval_snapshot.source_node_display_name", s.SourceNodeDisplayName); err != nil {
+		return err
+	}
+	if s.Targets == nil {
+		return workflowRequestError(WorkflowRequestErrorRequired, "approval_snapshot.targets", "targets is required")
+	}
+	for index, target := range s.Targets {
+		if err := target.Validate(); err != nil {
+			return prefixWorkflowProjectionValidationField("approval_snapshot.targets", index, err)
+		}
+	}
+	if s.OutputValues == nil {
+		return workflowRequestError(WorkflowRequestErrorRequired, "approval_snapshot.output_values", "output_values is required")
+	}
+	if s.WorkflowRevisionSeen < 0 {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "approval_snapshot.workflow_revision_seen", "workflow_revision_seen must be non-negative")
+	}
+	return nil
+}
+
+func (t WorkflowAttentionApprovalTarget) Validate() error {
+	return validateRequired("display_name", t.DisplayName)
 }
 
 func (p WorkflowAttentionQuestionPrompt) Validate() error {
@@ -2485,18 +2522,9 @@ func validateWorkflowAttentionItems(items []WorkflowAttentionItem) error {
 }
 
 func (r WorkflowTaskAttentionListResponse) ValidateForTask(taskID string) error {
-	if err := validateRequired("task_id", taskID); err != nil {
-		return err
-	}
-	if err := r.Validate(); err != nil {
-		return err
-	}
-	for index, item := range r.Items {
-		if item.TaskID != taskID {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("items[%d].task_id", index), "task_id must match request task_id")
-		}
-	}
-	return nil
+	return validateWorkflowTaskBoundResponse(taskID, r.Validate, r.Items, func(item WorkflowAttentionItem) string {
+		return item.TaskID
+	})
 }
 
 func (r WorkflowTaskActivityListResponse) Validate() error {
@@ -2521,14 +2549,20 @@ func (r WorkflowTaskActivityListResponse) Validate() error {
 }
 
 func (r WorkflowTaskActivityListResponse) ValidateForTask(taskID string) error {
+	return validateWorkflowTaskBoundResponse(taskID, r.Validate, r.Items, func(item WorkflowTaskActivityItem) string {
+		return item.TaskID
+	})
+}
+
+func validateWorkflowTaskBoundResponse[T any](taskID string, validate func() error, items []T, itemTaskID func(T) string) error {
 	if err := validateRequired("task_id", taskID); err != nil {
 		return err
 	}
-	if err := r.Validate(); err != nil {
+	if err := validate(); err != nil {
 		return err
 	}
-	for index, item := range r.Items {
-		if item.TaskID != taskID {
+	for index, item := range items {
+		if itemTaskID(item) != taskID {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("items[%d].task_id", index), "task_id must match request task_id")
 		}
 	}
