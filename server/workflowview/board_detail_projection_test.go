@@ -779,6 +779,6 @@ func TestBoardAndTaskDetailProjectParallelBranchPlacements(t *testing.T) {
 	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
 		len(detail.Status.NodeIDs) != 3 ||
 		len(detail.Status.RunIDs) != 0 {
-		t.Fatalf("detail status = %+v, want three active branch nodes without live execution evidence after %s", detail.Status, split.TransitionID)
+		t.Fatalf("detail status = %+v, want three active branch nodes without live execution evidence after %s", detail.Status, split.Result.TransitionID)
 	}
 }

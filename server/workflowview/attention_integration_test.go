@@ -140,7 +140,7 @@ func TestAttentionProjectionDropsApprovalResolvedAfterCandidateRead(t *testing.T
 	if len(candidates) != 1 || candidates[0].kind != "approval" {
 		t.Fatalf("attention candidates = %+v, want one approval", candidates)
 	}
-	if _, err := workflowStore.ApproveTransition(ctx, pending.TransitionID); err != nil {
+	if _, err := workflowStore.ApproveTransition(ctx, pending.Result.TransitionID); err != nil {
 		t.Fatalf("ApproveTransition: %v", err)
 	}
 
