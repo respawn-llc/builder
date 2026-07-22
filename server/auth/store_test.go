@@ -22,6 +22,110 @@ func TestFileStoreSaveWritesWithSecurePermissions(t *testing.T) {
 	assertAuthStateFileMode(t, statePath, authStateFileMode)
 }
 
+func TestFileStoreLoadCorrectsExistingFilePermissions(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "auth-state.json")
+
+	writeAuthStateFile(t, statePath, testAuthStateAt(testOAuthState(), 10), 0o644)
+
+	store := NewFileStore(statePath)
+	loaded := requireAuthState(t, store.Load)
+	if loaded.Method.Type != MethodOAuth {
+		t.Fatalf("expected oauth method, got %q", loaded.Method.Type)
+	}
+
+	assertAuthStateFileMode(t, statePath, authStateFileMode)
+}
+
+func TestFileStoreLoadDoesNotBroadenStrictPermissions(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "auth-state.json")
+
+	writeAuthStateFile(t, statePath, testAuthStateAt(testOAuthState(), 10), 0o400)
+
+	store := NewFileStore(statePath)
+	requireAuthState(t, store.Load)
+
+	assertAuthStateFileMode(t, statePath, 0o400)
+}
+
+func TestFileStoreSaveCorrectsExistingInsecurePermissions(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "auth-state.json")
+
+	writeAuthStateFile(t, statePath, testAuthStateAt(testAPIKeyState("seed-key"), 9), 0o644)
+
+	store := NewFileStore(statePath)
+	next := testAuthStateAt(testAPIKeyState("next-key"), 10)
+	if err := store.Save(context.Background(), next); err != nil {
+		t.Fatalf("save auth state: %v", err)
+	}
+
+	assertAuthStateFileMode(t, statePath, authStateFileMode)
+}
+
+func TestEnvAPIKeyOverrideStoreLoadAlwaysPrefersEnvironmentWithoutPersistedState(t *testing.T) {
+	store := NewEnvAPIKeyOverrideStore(NewMemoryStore(testOAuthState()), testEnvAPIKey("  sk-env  "))
+
+	state := requireAuthState(t, store.Load)
+	if state.Method.Type != MethodAPIKey {
+		t.Fatalf("expected api key override, got %q", state.Method.Type)
+	}
+	if state.Method.APIKey == nil || state.Method.APIKey.Key != "sk-env" {
+		t.Fatalf("expected trimmed env api key, got %+v", state.Method.APIKey)
+	}
+}
+
+func TestEnvAPIKeyOverrideStoreRespectsSavedPreference(t *testing.T) {
+	persisted := testOAuthState()
+	persisted.EnvAPIKeyPreference = EnvAPIKeyPreferencePreferEnv
+	store := NewEnvAPIKeyOverrideStore(NewMemoryStore(persisted), testEnvAPIKey("sk-env"))
+
+	state := requireAuthState(t, store.Load)
+	if state.Method.Type != MethodAPIKey {
+		t.Fatalf("expected api key override, got %q", state.Method.Type)
+	}
+	if state.Method.APIKey == nil || state.Method.APIKey.Key != "sk-env" {
+		t.Fatalf("expected env api key override, got %+v", state.Method.APIKey)
+	}
+}
+
+func TestEnvAPIKeyOverrideStoreKeepsSavedOAuthWhenPreferencePrefersSaved(t *testing.T) {
+	persisted := testOAuthState()
+	persisted.EnvAPIKeyPreference = EnvAPIKeyPreferencePreferSaved
+	store := NewEnvAPIKeyOverrideStore(NewMemoryStore(persisted), testEnvAPIKey("sk-env"))
+
+	state := requireAuthState(t, store.Load)
+	if state.Method.Type != MethodOAuth {
+		t.Fatalf("expected saved oauth method, got %q", state.Method.Type)
+	}
+}
+
+func TestEnvAPIKeyOverrideStoreSaveDelegatesToBaseStore(t *testing.T) {
+	base := NewMemoryStore(EmptyState())
+	store := NewEnvAPIKeyOverrideStore(base, func(string) (string, bool) { return "", false })
+
+	want := testAuthStateAt(testAPIKeyState("sk-saved"), 12)
+	if err := store.Save(context.Background(), want); err != nil {
+		t.Fatalf("save auth state: %v", err)
+	}
+
+	loaded := requireAuthState(t, base.Load)
+	if loaded.Method.Type != MethodAPIKey {
+		t.Fatalf("expected delegated api key save, got %q", loaded.Method.Type)
+	}
+	if loaded.Method.APIKey == nil || loaded.Method.APIKey.Key != "sk-saved" {
+		t.Fatalf("expected delegated saved key, got %+v", loaded.Method.APIKey)
+	}
+}
+
+func TestEnvAPIKeyOverrideStoreLoadPersistedReturnsBaseState(t *testing.T) {
+	base := NewMemoryStore(testOAuthState())
+	store := NewEnvAPIKeyOverrideStore(base, testEnvAPIKey("sk-env"))
+
+	loaded := requireAuthState(t, store.LoadPersisted)
+	if loaded.Method.Type != MethodOAuth {
+		t.Fatalf("expected base oauth state, got %q", loaded.Method.Type)
+	}
+}
+
 type persistedDecoratorStore struct {
 	loadState      State
 	persistedState State
@@ -37,6 +141,25 @@ func (s *persistedDecoratorStore) LoadPersisted(context.Context) (State, error) 
 
 func (s *persistedDecoratorStore) Save(context.Context, State) error {
 	return nil
+}
+
+func TestEnvAPIKeyOverrideStoreLoadPersistedDelegatesToBasePersistedLoader(t *testing.T) {
+	base := &persistedDecoratorStore{
+		loadState: State{
+			Scope:  ScopeGlobal,
+			Method: Method{Type: MethodAPIKey, APIKey: &APIKeyMethod{Key: "runtime-key"}},
+		},
+		persistedState: State{
+			Scope:  ScopeGlobal,
+			Method: Method{Type: MethodOAuth, OAuth: &OAuthMethod{AccessToken: "persisted-access", RefreshToken: "persisted-refresh", TokenType: "Bearer"}},
+		},
+	}
+	store := NewEnvAPIKeyOverrideStore(base, func(string) (string, bool) { return "sk-env", true })
+
+	loaded := requireAuthState(t, store.LoadPersisted)
+	if loaded.Method.Type != MethodOAuth {
+		t.Fatalf("expected persisted oauth state, got %q", loaded.Method.Type)
+	}
 }
 
 func testAPIKeyState(key string) State {
