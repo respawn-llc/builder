@@ -2,7 +2,9 @@ package startupconfig
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"core/server/metadata"
@@ -68,7 +70,7 @@ func TestResolveSessionConfigAppliesLoadOptions(t *testing.T) {
 	workspace := t.TempDir()
 	t.Setenv("HOME", home)
 
-	cfg, err := ResolveSessionConfig(Request{
+	resolved, err := ResolveSessionConfig(Request{
 		WorkspaceRoot: workspace,
 		LoadOptions: config.LoadOptions{
 			Model:         "gpt-5",
@@ -78,6 +80,7 @@ func TestResolveSessionConfigAppliesLoadOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveSessionConfig: %v", err)
 	}
+	cfg := resolved.Config
 	if cfg.Settings.Model != "gpt-5" {
 		t.Fatalf("model = %q, want gpt-5", cfg.Settings.Model)
 	}
@@ -150,14 +153,34 @@ func TestResolveSessionConfigThreadsPersistenceRoot(t *testing.T) {
 	root := t.TempDir()
 	workspace := t.TempDir()
 
-	cfg, err := ResolveSessionConfig(Request{
+	resolved, err := ResolveSessionConfig(Request{
 		WorkspaceRoot: workspace,
 		LoadOptions:   config.LoadOptions{ConfigRoot: root},
 	})
 	if err != nil {
 		t.Fatalf("ResolveSessionConfig: %v", err)
 	}
-	if cfg.PersistenceRoot != root {
-		t.Fatalf("persistence root = %q, want %q", cfg.PersistenceRoot, root)
+	if resolved.Config.PersistenceRoot != root {
+		t.Fatalf("persistence root = %q, want %q", resolved.Config.PersistenceRoot, root)
+	}
+}
+
+func TestResolveSessionConfigCarriesClientSettingsFromResolvedSnapshot(t *testing.T) {
+	root := t.TempDir()
+	workspace := t.TempDir()
+	configPath := filepath.Join(root, "config.toml")
+	if err := os.WriteFile(configPath, []byte("[hooks.client]\nlifecycle = [\"notify\", \"fixed\"]\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	resolved, err := ResolveSessionConfig(Request{
+		WorkspaceRoot: workspace,
+		LoadOptions:   config.LoadOptions{ConfigRoot: root},
+	})
+	if err != nil {
+		t.Fatalf("ResolveSessionConfig: %v", err)
+	}
+	if got := resolved.Client.Hooks.LifecycleCommand(); !reflect.DeepEqual(got, []string{"notify", "fixed"}) {
+		t.Fatalf("lifecycle command = %#v", got)
 	}
 }

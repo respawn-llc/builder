@@ -59,6 +59,9 @@ trigger_handoff = true # proactive compaction by the model
 postprocessing_mode = "all" # shell output token optimizations by Kent: none | builtin | user | all
 # postprocess_hook = "~/.kent/shell_postprocess_hook" # custom processor, see docs
 
+[hooks.client]
+# lifecycle = ["python3", "/absolute/path/lifecycle_hook.py"]
+
 [workflow]
 completion_mode = "auto"
 concurrency = 5
@@ -121,6 +124,7 @@ verbose_output = false # show supervisor suggestions in ongoing transcript
 | `system_prompt_file` | string | `""` |  |  | Main system prompt file. Relative paths resolve from the containing `config.toml` directory. Empty files are skipped. |
 | `theme` | string | `auto` | `KENT_THEME` | `kent run --theme` | TUI theme. Allowed: `auto`, `light`, `dark`. `light` and `dark` force Kent's fixed palettes. `auto` or an omitted value falls back to terminal background detection. |
 | `notification_method` | string | `auto` | `KENT_NOTIFICATION_METHOD` |  | Terminal notification backend. Allowed: `auto`, `osc9`, `bel`. `auto` chooses `osc9` on supported terminals and falls back to `bel`. |
+| `hooks.client.lifecycle` | string array | unset |  |  | Global-only command and fixed arguments for [interactive TUI lifecycle hooks](../lifecycle-hooks/). Empty arrays and blank arguments are invalid. |
 | `tool_preambles` | bool | `true` | `KENT_TOOL_PREAMBLES` |  | Includes tool-usage preambles in the main system prompt for interactive runs. Headless `kent run` still suppresses them. |
 | `priority_request_mode` | bool | `false` |  |  | Enables fast-mode requests where the provider supports them. |
 | `debug` | bool | `false` | `KENT_DEBUG` |  | Enables global developer-oriented strictness and logging. Only use for development/debugging |

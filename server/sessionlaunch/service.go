@@ -12,6 +12,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 type authStateReader interface {
@@ -66,7 +67,11 @@ func (s *Service) PlanSession(ctx context.Context, req serverapi.SessionPlanRequ
 	if err != nil {
 		return serverapi.SessionPlanResponse{}, err
 	}
-	return sessionPlanResponseFromResult(result), nil
+	response := sessionPlanResponseFromResult(result)
+	if err := response.Plan.Validate(); err != nil {
+		return serverapi.SessionPlanResponse{}, err
+	}
+	return response, nil
 }
 
 func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPlanRequest) (PlanResult, error) {
@@ -229,7 +234,7 @@ func sessionPlanResponseFromResult(result PlanResult) serverapi.SessionPlanRespo
 		ActiveSettings:      result.Plan.ActiveSettings,
 		EnabledToolIDs:      enabledToolIDs,
 		ConfiguredModelName: result.Plan.ConfiguredModelName,
-		SessionName:         result.Plan.SessionName,
+		SessionName:         textutil.Pointer(result.Plan.SessionName),
 		PromptHistory:       append([]string(nil), result.Plan.PromptHistory...),
 		ModelContractLocked: result.Plan.ModelContractLocked,
 		Source:              result.Plan.Source,

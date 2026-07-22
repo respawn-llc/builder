@@ -15,15 +15,16 @@ import (
 )
 
 type remoteAppServer struct {
-	remote       *client.Remote
-	identity     protocol.ServerIdentity
-	cfg          config.App
-	closeFn      func() error
-	owns         bool
-	presentation startupPresentation
-	promptRoots  commands.ClientPromptRoots
-	promptErr    error
-	retarget     *sessionWorkspaceRetargetContext
+	remote         *client.Remote
+	identity       protocol.ServerIdentity
+	cfg            config.App
+	closeFn        func() error
+	owns           bool
+	presentation   startupPresentation
+	promptRoots    commands.ClientPromptRoots
+	promptErr      error
+	retarget       *sessionWorkspaceRetargetContext
+	clientSettings config.ClientSettings
 }
 
 type startupPresentation struct {
@@ -98,6 +99,13 @@ func (s *remoteAppServer) Config() config.App {
 	return s.cfg
 }
 
+func (s *remoteAppServer) ClientSettings() config.ClientSettings {
+	if s == nil {
+		return config.ClientSettings{}
+	}
+	return s.clientSettings
+}
+
 func (s *remoteAppServer) workspaceRetargetContext() *sessionWorkspaceRetargetContext {
 	if s == nil || s.retarget == nil {
 		return nil
@@ -141,6 +149,7 @@ func (s *remoteAppServer) BindProjectWorkspace(ctx context.Context, projectID st
 	next.promptRoots = s.promptRoots
 	next.promptErr = s.promptErr
 	next.retarget = retargetContext
+	next.clientSettings = s.clientSettings
 	s.remote = nil
 	s.closeFn = nil
 	return next, nil

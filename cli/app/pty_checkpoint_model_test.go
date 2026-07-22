@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -27,6 +28,7 @@ type ptyCheckpointScenarioState struct {
 	scenarioComplete             bool
 	finalAppliedEmitted          bool
 	toolStartedEmitted           bool
+	finalApplied                 chan struct{}
 }
 
 func newPTYCheckpointScenarioState(
@@ -37,6 +39,7 @@ func newPTYCheckpointScenarioState(
 	}
 	return &ptyCheckpointScenarioState{
 		targetFinalAssistantOrdinal: targetFinalAssistantOrdinal,
+		finalApplied:                make(chan struct{}),
 	}
 }
 
@@ -104,7 +107,20 @@ func (state *ptyCheckpointScenarioState) claimScenarioFinalApplied(sequence uint
 		return false
 	}
 	state.finalAppliedEmitted = true
+	close(state.finalApplied)
 	return true
+}
+
+func (state *ptyCheckpointScenarioState) waitFinalApplied(ctx context.Context) error {
+	if state == nil {
+		panic("wait for PTY scenario final on nil state")
+	}
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-state.finalApplied:
+		return nil
+	}
 }
 
 func (state *ptyCheckpointScenarioState) claimToolStarted() bool {
@@ -142,6 +158,7 @@ func (model *ptyCheckpointModel) Init() tea.Cmd {
 }
 
 func (model *ptyCheckpointModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	promptReadyBefore := ptyCheckpointPromptReady(model.inner)
 	initialDetailLoad := initialDetailLoadCandidate(model.inner, msg)
 	toolStart := ongoingToolStartCandidate(model.inner, msg)
 	ongoingFinal := ongoingAssistantFinalCandidate(model.inner, msg)
@@ -157,6 +174,11 @@ func (model *ptyCheckpointModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if toolStart.acceptedBy(next) && model.scenario.claimToolStarted() {
 		if err := model.output.Emit(checkpoint.KindToolStarted, nil); err != nil {
 			panic(fmt.Sprintf("emit PTY tool-started checkpoint: error=%v", err))
+		}
+	}
+	if !promptReadyBefore && ptyCheckpointPromptReady(next) {
+		if err := model.output.Emit(checkpoint.KindPromptReady, nil); err != nil {
+			panic(fmt.Sprintf("emit PTY prompt-ready checkpoint: error=%v", err))
 		}
 	}
 	emitScenarioFinalApplied := false
@@ -177,6 +199,11 @@ func (model *ptyCheckpointModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return model, cmd
+}
+
+func ptyCheckpointPromptReady(model tea.Model) bool {
+	appModel, ok := model.(*uiModel)
+	return ok && appModel.askReadyForInteraction()
 }
 
 func (model *ptyCheckpointModel) emitScenarioFinalApplied() {

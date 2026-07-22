@@ -5,13 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
 
 	"core/server/tools"
+	"core/shared/boundedio"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -78,8 +78,14 @@ func (p userHookProcessor) Process(ctx context.Context, envelope Envelope) (Deci
 	cmd := exec.CommandContext(timeoutCtx, hookPath)
 	cmd.Env = tools.EnrichShellEnvForSession(os.Environ(), req.OwnerSessionID)
 	cmd.Stdin = bytes.NewReader(payload)
-	stdout := newLimitedBuffer(maxHookOutputBytes)
-	stderr := newLimitedBuffer(maxHookOutputBytes)
+	stdout, err := boundedio.NewWriter(maxHookOutputBytes)
+	if err != nil {
+		return Decision{}, ProcessorError{Severity: FailureRecoverable, Message: "initialize command postprocess hook stdout capture", Err: err}
+	}
+	stderr, err := boundedio.NewWriter(maxHookOutputBytes)
+	if err != nil {
+		return Decision{}, ProcessorError{Severity: FailureRecoverable, Message: "initialize command postprocess hook stderr capture", Err: err}
+	}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
@@ -87,11 +93,11 @@ func (p userHookProcessor) Process(ctx context.Context, envelope Envelope) (Deci
 		if ctx.Err() != nil {
 			return Decision{}, ctx.Err()
 		}
-		return Decision{}, ProcessorError{Severity: FailureRecoverable, Message: hookFailureWarning(err, stderr.String()), Err: err}
+		return Decision{}, ProcessorError{Severity: FailureRecoverable, Message: hookFailureWarning(err, hookOutputText(stderr)), Err: err}
 	}
 
 	var response hookResponse
-	if err := json.Unmarshal(stdout.buffer.Bytes(), &response); err != nil {
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
 		return Decision{}, ProcessorError{Severity: FailureRecoverable, Message: "command postprocess hook returned invalid JSON", Err: err}
 	}
 	if !response.Processed {
@@ -100,44 +106,13 @@ func (p userHookProcessor) Process(ctx context.Context, envelope Envelope) (Deci
 	return Continue(envelope.WithCurrent(response.ReplacedOutput), p.ID()), nil
 }
 
-type limitedBuffer struct {
-	buffer    bytes.Buffer
-	remaining int64
-	truncated bool
-}
-
-func newLimitedBuffer(limit int64) *limitedBuffer {
-	if limit <= 0 {
-		limit = maxHookOutputBytes
-	}
-	return &limitedBuffer{remaining: limit}
-}
-
-func (b *limitedBuffer) Write(p []byte) (int, error) {
-	written := len(p)
-	if b.remaining <= 0 {
-		b.truncated = true
-		return written, nil
-	}
-	chunk := p
-	if int64(len(chunk)) > b.remaining {
-		chunk = chunk[:int(b.remaining)]
-		b.truncated = true
-	}
-	_, _ = b.buffer.Write(chunk)
-	b.remaining -= int64(len(chunk))
-	return written, nil
-}
-
-func (b *limitedBuffer) String() string {
-	text := b.buffer.String()
-	if b.truncated {
+func hookOutputText(output *boundedio.Writer) string {
+	text := output.String()
+	if output.Overflow() {
 		return text + "\n[hook output truncated]"
 	}
 	return text
 }
-
-var _ io.Writer = (*limitedBuffer)(nil)
 
 func hookFailureWarning(err error, stderr string) string {
 	trimmed := strings.TrimSpace(stderr)

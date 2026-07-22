@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"time"
 
-	shelltool "core/server/tools/shell"
+	"core/shared/boundedio"
 )
 
 const (
@@ -54,8 +54,8 @@ func (r ScriptResult) clone() ScriptResult {
 
 type scriptProcess struct {
 	cmd               *exec.Cmd
-	stdout            *shelltool.BoundedOutput
-	stderr            *shelltool.BoundedOutput
+	stdout            *boundedio.Writer
+	stderr            *boundedio.Writer
 	cancellationGrace time.Duration
 }
 
@@ -131,8 +131,14 @@ func prepareAuthorityScriptProcess(command ScriptCommand) (*scriptProcess, error
 		cmd.Stdin = bytes.NewReader(command.Stdin)
 	}
 	prepareScriptCommand(cmd)
-	stdout := shelltool.NewBoundedOutput(outputLimit)
-	stderr := shelltool.NewBoundedOutput(outputLimit)
+	stdout, err := boundedio.NewWriter(outputLimit)
+	if err != nil {
+		return nil, fmt.Errorf("initialize script stdout capture: %w", err)
+	}
+	stderr, err := boundedio.NewWriter(outputLimit)
+	if err != nil {
+		return nil, fmt.Errorf("initialize script stderr capture: %w", err)
+	}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	return &scriptProcess{

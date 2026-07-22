@@ -110,3 +110,51 @@ func TestResolveConfigDoesNotCreateLegacyWorkspaceContainer(t *testing.T) {
 		t.Fatalf("resolved config model = %q, want %q", plan.Config.Settings.Model, loaded.Settings.Model)
 	}
 }
+
+func TestResolveConfigReusesMatchingInitialSnapshotWithoutReloading(t *testing.T) {
+	root := t.TempDir()
+	workspace := t.TempDir()
+	loadOptions := config.LoadOptions{ConfigRoot: root}
+	initial, err := config.Load(workspace, loadOptions)
+	if err != nil {
+		t.Fatalf("load initial config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte("invalid = ["), 0o600); err != nil {
+		t.Fatalf("invalidate config after snapshot: %v", err)
+	}
+
+	plan, err := ResolveConfig(Request{
+		WorkspaceRoot: workspace,
+		LoadOptions:   loadOptions,
+		InitialConfig: &InitialConfigSnapshot{
+			Config:        initial,
+			WorkspaceRoot: workspace,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ResolveConfig reloaded matching initial snapshot: %v", err)
+	}
+	if plan.Config.PersistenceRoot != initial.PersistenceRoot ||
+		plan.Config.WorkspaceRoot != initial.WorkspaceRoot {
+		t.Fatalf("resolved config = %+v, want supplied snapshot target", plan.Config)
+	}
+}
+
+func TestResolveConfigRejectsInitialSnapshotForDifferentTarget(t *testing.T) {
+	workspace := t.TempDir()
+	initial, err := config.Load(workspace, config.LoadOptions{ConfigRoot: t.TempDir()})
+	if err != nil {
+		t.Fatalf("load initial config: %v", err)
+	}
+
+	_, err = ResolveConfig(Request{
+		WorkspaceRoot: workspace,
+		InitialConfig: &InitialConfigSnapshot{
+			Config:        initial,
+			WorkspaceRoot: t.TempDir(),
+		},
+	})
+	if err == nil {
+		t.Fatal("ResolveConfig accepted an initial snapshot for a different target")
+	}
+}

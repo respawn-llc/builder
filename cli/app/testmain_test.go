@@ -12,9 +12,40 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if isLifecycleHookProductRecorderInvocation(os.Args) {
+		os.Exit(m.Run())
+	}
 	_ = os.Unsetenv(config.PersistenceRootEnvName)
 	if configPath, helperProcess := os.LookupEnv(onboardingRemoteLifecycleConfigEnv); helperProcess {
 		if err := runOnboardingRemoteLifecycleHelper(configPath); err != nil {
+			log.Print(err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	if configPath, fixtureProcess := os.LookupEnv(appfixture.LifecycleServerProcessConfigEnvName); fixtureProcess {
+		processConfig, err := appfixture.ReadLifecycleServerProcessConfig(configPath)
+		if err == nil {
+			err = os.Setenv(config.PersistenceRootEnvName, processConfig.PersistenceRoot)
+		}
+		if err == nil {
+			err = runLifecycleHookServerFixtureProcess(context.Background(), processConfig)
+		}
+		if err != nil {
+			log.Print(err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	if configPath, fixtureProcess := os.LookupEnv(appfixture.LifecycleProcessConfigEnvName); fixtureProcess {
+		processConfig, err := appfixture.ReadLifecycleProcessConfig(configPath)
+		if err == nil {
+			err = os.Setenv(config.PersistenceRootEnvName, processConfig.PersistenceRoot)
+		}
+		if err == nil {
+			err = runLifecycleHookPTYFixtureProcess(context.Background(), processConfig)
+		}
+		if err != nil {
 			log.Print(err)
 			os.Exit(1)
 		}

@@ -18,6 +18,10 @@ import (
 
 type compactionMode string
 
+type compactionInstructionsInput struct {
+	additional *string
+}
+
 const (
 	compactionModeAuto    compactionMode = "auto"
 	compactionModeHandoff compactionMode = "handoff"
@@ -81,6 +85,12 @@ func (e *Engine) CompactContextForPreSubmit(ctx context.Context) error {
 	return err
 }
 
+func (e *Engine) CompactContextForWorkflowContinuation(ctx context.Context) error {
+	e.ensureOrchestrationCollaborators()
+	_, err := e.compactionFlow.CompactContextForWorkflowContinuation(ctx)
+	return err
+}
+
 func (e *Engine) CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) (session.CommitReceipt, error) {
 	e.ensureOrchestrationCollaborators()
 	return e.compactionFlow.CompactContextForPreSubmitWithActiveHook(ctx, onActive)
@@ -92,16 +102,28 @@ func (e *Engine) TriggerHandoff(ctx context.Context, stepID string, activeCall l
 }
 
 func (c *defaultContextCompactor) CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) (session.CommitReceipt, error) {
+	instructions, err := newCompactionInstructionsInput(args)
+	if err != nil {
+		return session.CommitReceipt{}, err
+	}
+	return c.compactManualContext(ctx, instructions, onActive)
+}
+
+func (c *defaultContextCompactor) CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error) {
+	return c.compactManualContext(ctx, compactionInstructionsInput{}, nil)
+}
+
+func (c *defaultContextCompactor) compactManualContext(ctx context.Context, instructions compactionInstructionsInput, onActive func()) (session.CommitReceipt, error) {
 	reservation := &exclusiveStepReservation{Kind: exclusiveStepReservationManualCompaction}
 	if err := c.steps.AcquireReservation(reservation); err != nil {
 		return session.CommitReceipt{}, err
 	}
 	defer c.steps.ReleaseReservation(reservation)
-	return c.compactContext(ctx, compactionModeManual, args, true, reservation, onActive)
+	return c.compactContext(ctx, compactionModeManual, instructions, true, reservation, onActive)
 }
 
 func (c *defaultContextCompactor) CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) (session.CommitReceipt, error) {
-	return c.compactContext(ctx, compactionModeManual, "", false, nil, onActive)
+	return c.compactContext(ctx, compactionModeManual, compactionInstructionsInput{}, false, nil, onActive)
 }
 
 func (c *defaultContextCompactor) TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error) {
@@ -127,7 +149,7 @@ func (c *defaultContextCompactor) TriggerHandoff(ctx context.Context, stepID str
 	return summary, appended, nil
 }
 
-func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compactionMode, args string, includeManualCarryover bool, reservation *exclusiveStepReservation, onActive func()) (session.CommitReceipt, error) {
+func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compactionMode, instructions compactionInstructionsInput, includeManualCarryover bool, reservation *exclusiveStepReservation, onActive func()) (session.CommitReceipt, error) {
 	e := c.engine
 	activeKind := ActiveKindPreSubmitCompaction
 	if includeManualCarryover {
@@ -143,7 +165,7 @@ func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compa
 		if err := e.ensureMetaContextForCompaction(stepCtx, stepID); err != nil {
 			return err
 		}
-		_, compactReceipt, err := e.compactNow(stepCtx, stepID, mode, args, includeManualCarryover)
+		_, compactReceipt, err := e.compactNow(stepCtx, stepID, mode, instructions, includeManualCarryover)
 		receipt = compactReceipt
 		if err == nil || receipt.Committed {
 			e.handoffRuntimeState().ClearRequest()
@@ -163,7 +185,7 @@ func (c *defaultContextCompactor) AutoCompactIfNeeded(ctx context.Context, stepI
 	if mode == compactionModeAuto && !e.shouldAutoCompactWithContext(ctx) {
 		return nil
 	}
-	_, receipt, err := e.compactNow(ctx, stepID, mode, "", false)
+	_, receipt, err := e.compactNow(ctx, stepID, mode, compactionInstructionsInput{}, false)
 	if err == nil || receipt.Committed {
 		e.handoffRuntimeState().ClearRequest()
 	}
@@ -574,7 +596,7 @@ func (e *Engine) currentTokenUsage() int {
 	return e.estimatedCurrentTokenUsage()
 }
 
-func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionMode, args string, includeManualCarryover bool) (compactionResult, session.CommitReceipt, error) {
+func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionMode, instructionsInput compactionInstructionsInput, includeManualCarryover bool) (compactionResult, session.CommitReceipt, error) {
 	planningSnapshot := e.compactionPlanningSnapshot()
 	planner := e.compactionPlannerState()
 	if planner.mode(planningSnapshot.compactionMode) == "none" {
@@ -604,7 +626,7 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 		return compactionResult{}, session.CommitReceipt{}, err
 	}
 
-	instructions := compactionInstructions(args)
+	instructions := compactionInstructions(instructionsInput)
 	manualCarryover := ""
 	if mode == compactionModeManual && includeManualCarryover {
 		manualCarryover = lastVisibleUserMessageSinceLatestCompaction(input)
@@ -772,7 +794,11 @@ func (e *Engine) applyPendingHandoffIfNeeded(ctx context.Context, stepID string)
 	if req == nil {
 		return false, nil
 	}
-	if _, receipt, err := e.compactNow(ctx, stepID, compactionModeHandoff, req.summarizerPrompt, false); err != nil {
+	instructions, err := newCompactionInstructionsInput(req.summarizerPrompt)
+	if err != nil {
+		return false, err
+	}
+	if _, receipt, err := e.compactNow(ctx, stepID, compactionModeHandoff, instructions, false); err != nil {
 		if receipt.Committed {
 			e.handoffRuntimeState().ClearRequest()
 		}
@@ -834,11 +860,22 @@ func (e *Engine) compactionPlanningSnapshot() compactionPlanningSnapshot {
 	return snapshot
 }
 
-func compactionInstructions(args string) string {
+func newCompactionInstructionsInput(args string) (compactionInstructionsInput, error) {
+	if args == "" {
+		return compactionInstructionsInput{}, nil
+	}
+	trimmed := strings.TrimSpace(args)
+	if trimmed == "" {
+		return compactionInstructionsInput{}, errors.New("additional compaction instructions cannot be blank")
+	}
+	return compactionInstructionsInput{additional: &trimmed}, nil
+}
+
+func compactionInstructions(input compactionInstructionsInput) string {
 	instructions := prompts.CompactionPrompt
-	if strings.TrimSpace(args) == "" {
+	if input.additional == nil {
 		return instructions
 	}
 	instructions = strings.TrimRight(instructions, "\n")
-	return instructions + "\n\n" + additionalCompactionInstructionsHeader + "\n " + strings.TrimSpace(args)
+	return instructions + "\n\n" + additionalCompactionInstructionsHeader + "\n " + *input.additional
 }

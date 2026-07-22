@@ -2,6 +2,16 @@ package app
 
 import "core/shared/clientui"
 
+type promptAttentionSink interface {
+	onAttentionNotification(clientui.AttentionNotificationEvent, *string)
+}
+
+func tuiAcceptsAttentionNotification(event clientui.AttentionNotificationEvent) bool {
+	return event.Type == clientui.AttentionNotificationEventPending &&
+		event.Pending != nil &&
+		tuiSupportsAttentionNotification(*event.Pending)
+}
+
 func tuiSupportsAttentionNotification(notification clientui.AttentionNotification) bool {
 	switch notification.Kind {
 	case clientui.AttentionNotificationKindQuestion, clientui.AttentionNotificationKindApproval:
@@ -11,7 +21,7 @@ func tuiSupportsAttentionNotification(notification clientui.AttentionNotificatio
 	}
 }
 
-func notifyTranscriptPromptActivation(hook *bellHooks, prompt clientui.TranscriptPrompt, projectedPreview string) {
+func notifyTranscriptPromptActivation(hook promptAttentionSink, prompt clientui.TranscriptPrompt, projectedPreview string) {
 	if hook == nil || prompt.State != clientui.TranscriptPromptStatePending {
 		return
 	}

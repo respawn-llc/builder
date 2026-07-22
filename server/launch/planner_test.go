@@ -70,8 +70,8 @@ func TestPlannerHeadlessCreatesNewSessionAndAppliesContinuationContext(t *testin
 	if meta.Continuation == nil || meta.Continuation.OpenAIBaseURL != "http://headless.local/v1" {
 		t.Fatalf("expected continuation base url applied, got %+v", meta.Continuation)
 	}
-	if plan.SessionName != meta.Name {
-		t.Fatalf("expected plan session name %q, got %q", meta.Name, plan.SessionName)
+	if plan.SessionName == nil || *plan.SessionName != meta.Name {
+		t.Fatalf("expected plan session name %q, got %v", meta.Name, plan.SessionName)
 	}
 	if plan.WorkspaceRoot != "/tmp/workspace-a" {
 		t.Fatalf("expected workspace root passthrough, got %q", plan.WorkspaceRoot)
