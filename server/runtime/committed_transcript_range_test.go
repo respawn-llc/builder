@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -91,5 +92,85 @@ func TestAssistantMessageAfterCacheWarningOwnsOnlyAssistantRange(t *testing.T) {
 			cacheWarning,
 			assistantEvent,
 		)
+	}
+}
+
+func TestFinalAnswerToolMaterializationPublishesToolCallBeforeLocalEntry(t *testing.T) {
+	var events []Event
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolExecCommand,
+			Handler: fakeTool{name: toolspec.ToolExecCommand},
+		}),
+		Config{
+			Model:   "gpt-5",
+			OnEvent: func(event Event) { events = append(events, event) },
+		},
+	)
+	executor := defaultStepExecutor{
+		engine: engine,
+		tools:  &defaultToolExecutor{engine: engine},
+	}
+	call := llm.ToolCall{
+		ID:    "call-1",
+		Name:  string(toolspec.ToolExecCommand),
+		Input: json.RawMessage(`{}`),
+	}
+	if _, _, err := executor.materializeFinalAnswerToolCalls(
+		context.Background(),
+		"step",
+		[]llm.ToolCall{call},
+		nil,
+	); err != nil {
+		t.Fatalf("materialize final-answer tool call: %v", err)
+	}
+	if err := engine.steer(
+		"step",
+		steerLocalEntryIntent(storedLocalEntry{
+			Role: string(transcript.EntryRoleReasoning),
+			Text: "reasoning",
+		}),
+	); err != nil {
+		t.Fatalf("append local entry: %v", err)
+	}
+
+	committed := make([]Event, 0, 3)
+	for _, event := range events {
+		switch event.Kind {
+		case EventAssistantMessage, EventToolCallCompleted, EventLocalEntryAdded:
+		default:
+			continue
+		}
+		if event.CommittedTranscriptChanged && len(TranscriptEntriesFromEvent(event)) > 0 {
+			committed = append(committed, event)
+		}
+	}
+	if len(committed) < 3 ||
+		committed[0].Kind != EventAssistantMessage ||
+		committed[len(committed)-1].Kind != EventLocalEntryAdded {
+		t.Fatalf("committed materialization sequence = %+v", committed)
+	}
+	toolRows := TranscriptEntriesFromEvent(committed[0])
+	if len(toolRows) != 1 ||
+		toolRows[0].Role != "tool_call" ||
+		toolRows[0].ToolCallID != call.ID {
+		t.Fatalf("materialized tool-call rows = %+v", toolRows)
+	}
+	for index, event := range committed {
+		if !event.CommittedEntryStartSet ||
+			event.CommittedEntryCount < event.CommittedEntryStart {
+			t.Fatalf("committed materialization event[%d] has invalid range: %+v", index, event)
+		}
+		if index > 0 && event.CommittedEntryStart != committed[index-1].CommittedEntryCount {
+			t.Fatalf(
+				"committed materialization range discontinuity at %d: previous=%+v current=%+v",
+				index,
+				committed[index-1],
+				event,
+			)
+		}
 	}
 }
