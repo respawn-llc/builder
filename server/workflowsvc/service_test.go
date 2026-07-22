@@ -1173,6 +1173,9 @@ func TestServiceCompleteWorkflowTaskFromAgentSessionCompletesWithoutSchedulerWak
 	if completed.TaskID != task.Task.ID || completed.RunID != started.RunID || completed.State != "applied" {
 		t.Fatalf("complete response = %+v", completed)
 	}
+	if completed.Handoff.SourceNodeDisplayName != "Agent" || completed.Handoff.DestinationDisplayName != "Done" {
+		t.Fatalf("completion handoff = %+v, want Agent -> Done", completed.Handoff)
+	}
 	if notifier.count != 0 {
 		t.Fatalf("agent completion scheduler notifications = %d, want 0", notifier.count)
 	}
@@ -1952,11 +1955,10 @@ func TestServiceDeleteWorkflowResolvesInterruptedRunAttentionAcrossProjects(t *t
 		if err != nil {
 			t.Fatalf("CompleteRun: %v", err)
 		}
-		result := completed.Result
-		if result.State != "pending_approval" {
+		if completed.Result.State != "pending_approval" {
 			t.Fatalf("completion = %+v, want pending approval", completed)
 		}
-		return result.TransitionID, task.Task.ID
+		return completed.Result.TransitionID, task.Task.ID
 	}
 
 	firstRunID, firstInterruptedTaskID := interrupt(firstProject.ProjectID)
@@ -2723,11 +2725,10 @@ func newWorkflowServicePendingCompletionApproval(t *testing.T) (context.Context,
 	if err != nil {
 		t.Fatalf("CompleteRun: %v", err)
 	}
-	result := completed.Result
-	if result.State != "pending_approval" {
+	if completed.Result.State != "pending_approval" {
 		t.Fatalf("completion = %+v, want pending approval", completed)
 	}
-	return ctx, service, projectID, workflowID, taskID, string(result.TransitionID)
+	return ctx, service, projectID, workflowID, taskID, string(completed.Result.TransitionID)
 }
 
 func requireWorkflowServiceEdgeApproval(t *testing.T, ctx context.Context, service *Service, workflowID, edgeKey string) {

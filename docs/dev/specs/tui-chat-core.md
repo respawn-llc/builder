@@ -42,9 +42,9 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 
 ## Interrupts And Exit
 
-- `Ctrl+C` while busy: turn-local interrupt — stop current step and active tool, keep session alive, detail-only `User interrupted you` control message, idle with input ready, resume needs explicit user text. (owner: tui-transcript :: Input And Queueing)
+- `Ctrl+C` interrupts only an active `Agent Turn`: stop the current step and active tool, keep the session alive, add the detail-only `User interrupted you` control message, return idle with input ready, and require explicit user text to resume. It does not cancel a submission before its `Agent Turn` starts. (owner: tui-transcript :: Input And Queueing)
 - The interrupt also drains pending messages: queued and steering queue contents populate the main input, so nothing typed is lost and the user can edit or resend.
-- `Ctrl+C` while idle exits the TUI.
+- `Ctrl+C` without an active `Agent Turn` exits the TUI. A submission already sent to the server may start or continue after the client detaches.
 - Draft recovery does not depend on a graceful shutdown callback. Closing the terminal window or otherwise losing the TUI process preserves the current main-input draft; opening the session later seeds the input from that draft verbatim.
 - Structured draft-recovery entries preserve only their recovery category and text. They carry no runtime operation, request, or queue identity.
 - Recovered entries return as editable composer text and are never reconstructed into operational queues, resumed, or replayed automatically; sending them again requires an explicit user action.

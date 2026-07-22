@@ -40,6 +40,8 @@
 ## Visual System
 
 - No hardcoded colors/fonts in feature components.
+- Cards are reserved for Kanban task cards. Navigation, browsing, and selection collections use purpose-built list rows.
+- Migrating existing non-Kanban card collections to list rows is a separate desktop collection-design task. It must not be bundled into a Sessions, Chat, Home-shell, or workflow-binding implementation ticket.
 - Tailwind is accepted for the desktop GUI despite older notes rejecting it.
 - Shared UI/theme source of truth starts app-local.
 - Use i18next/react-i18next static English locale files.
@@ -73,8 +75,23 @@
 
 ## Navigation
 
-- Home is the project-first landing destination.
+- Home is the Inbox-first landing destination.
 - Relaunch restores last valid project/workflow route when possible; fallback is Home.
+- Home uses one compact left navigation island and one remaining-space content area.
+- Home preserves the existing constraint-driven auto-fit behavior: navigation and content render side by side while both meet their minimum usable width, then navigation stacks above content when they cannot. Home does not add a user-resizable splitter or temporary navigation drawer.
+- In the side-by-side layout, the navigation island has a semantic maximum width and the content area receives the remaining width.
+- The left navigation contains a typed, pinned global Inbox destination above the cursor-paginated Projects list. Inbox is not represented as a project record.
+- The base Inbox navigation row does not require an attention badge.
+- An exact nonzero unresolved-attention badge is a separate optional feature with its own server and desktop task. It must not be bundled into the Home redesign, ordinary-session attention, or another implementation ticket.
+- Selecting Inbox shows the aggregate Inbox in the content area. Selecting a project shows that project's workspace.
+- A project workspace has `Workflows` and `Sessions` tabs. One window-local last-used project-workspace tab selection applies when moving between projects.
+- The project-workspace tab posture is not restored after relaunch; it falls back to `Workflows`.
+- The project workspace uses a compact sticky header containing project name/key, the `Workflows`/`Sessions` control, and the contextual `Link workflow` or `New Session` action.
+- The `Workflows` tab uses a cursor-paginated virtualized list of compact project-workflow link rows.
+- Project-workflow link rows show the reusable workflow identity, project-default state, and server validation state. Selecting a linked workflow enters its full-screen workflow board.
+- The `Sessions` tab is owned by the Desktop Sessions And Chat spec. Selecting a session enters its full-screen chat destination.
+- Workflows are not a primary Home navigation destination.
+- The reusable Workflow Library/editor remains available as a secondary `Manage workflows` destination from the Link workflow flow, including for reusable workflows not linked to the selected project.
 - Project workflow board routes are project-scoped.
 - Workflow library/editor routes may be global workflow-definition routes, while project-originated task/board routes remain project-scoped.
 - Board workflow picker and primary board actions live in a hover/focus non-modal popup/menu.
@@ -85,6 +102,19 @@
 
 ## Home And Projects
 
+- Inbox is selected when Home has no restored destination.
+- An empty Inbox shows a focused `All caught up` state. It does not add recent-project content or navigate to a project automatically.
+- Project navigation uses compact list rows with the existing project editing action.
+- Project title and default-workspace path each render at most two lines.
+- Unselected project rows use island level 1. The selected project row uses island level 2, elevating its semantic surface color and shadow without adding an accent rail, selection border, checkmark, or one-off color.
+- The selected project button exposes `aria-current` so selection is not communicated only by visual elevation.
+- Project rows expose project identity and project editing without duplicating board or session content.
+- The project workspace `Workflows` tab exposes `Link workflow` for linking an existing reusable workflow or creating and linking a workflow.
+- `Link workflow` opens the existing link-workflow overlay.
+- The Link workflow overlay keeps its server-paginated reusable-workflow list and exposes `Create workflow` and secondary `Manage workflows` actions in its header.
+- Creating from Link workflow atomically creates and links the reusable workflow in the selected project. Manage workflows opens the global Workflow Library/editor.
+- Home navigation and actions use `Workflows` and `Link workflow` terminology.
+- Selecting an Inbox item keeps the Inbox list in place and opens Task Detail through the existing overlay sidebar. It does not replace the Home content area or navigate to standalone Task Detail.
 - Project creation uses an OS-native directory picker.
 - If selected workspace already belongs to a project, the app opens that project/workspace.
 - If selected workspace is unbound, the app opens project creation with editable project name and project key.
@@ -106,10 +136,10 @@
 - Same path is deduplicated inside one project; selecting an already-linked path focuses the row or shows equivalent info.
 - Attaching/unlinking a workspace never deletes files.
 - Unlink hard-deletes the project workspace binding row after validation.
-- Unlink blocks default workspace, only workspace, active/non-terminal dependent tasks, active sessions/runs, Kent-managed owned worktree dependencies, and missing durable history snapshots.
+- Unlink blocks default workspace, only workspace, non-terminal dependent Tasks, live Session execution, Kent-managed owned worktree dependencies, and missing durable Session location snapshots.
 - Unlink must not cascade-delete session/task/worktree history.
-- Unlink is allowed when only terminal historical tasks reference the workspace and their history remains readable through durable snapshots.
-- Unlink confirmation is simple modal, no type-to-confirm, with copy explaining app-state effects, files stay on disk, completed history remains readable, and active work blocks unlink.
+- Unlink is allowed when only terminal Tasks and retained Sessions reference the workspace and their Session location remains readable through durable snapshots.
+- Unlink confirmation is simple modal, no type-to-confirm, with copy explaining app-state effects, files stay on disk, retained Sessions remain readable, and active work blocks unlink.
 
 ## Workflow Board
 
@@ -130,8 +160,8 @@
 - A workspace chip is useful only when the project currently has multiple attached workspaces and the task source workspace differs from the current default workspace. Detached historical workspace context remains available in task detail rather than creating a board exception.
 - Card click opens task detail.
 - Resume appears only when resumable.
-- Interrupt appears in the same action slot when exactly one active run is interruptible and acts immediately.
-- Tasks with multiple active runs open detail for per-run controls.
+- Interrupt appears in the same action slot when exactly one live agent Session is interruptible and acts immediately.
+- Tasks with several live agent Sessions open detail for per-Session controls. Script execution is interrupted through the Task-wide action.
 - Board visual states include Backlog/idle, queued, running, interrupted, approval-gated, question-gated, and done/completed.
 - Dragging Backlog task to first active node starts automation immediately with no confirmation.
 - When task start or an executable manual move requires an execution target, one reusable centered dialog continues the initiating action. It is not anchored to the card/control and does not use the global sidebar.
@@ -143,14 +173,14 @@
 - The first executable-node drop hint reads `Drag here to start automation`.
 - While dragging a card, approaching a horizontal board edge or vertical hovered-column edge scrolls that surface, accelerating continuously toward the edge. Horizontal and vertical scrolling may run together; horizontal board scrolling takes priority if reliable simultaneous nested scrolling would require materially greater complexity.
 - Dragging to Done is a user archive/manual move, not normal edge completion.
-- Manual move and Done drag targets follow server action flags derived from exact live scope and runtime-gate evidence. Desktop never infers movement blockers from durable run rows or task status.
+- Manual move and Done drag targets follow server action flags derived from Exact Execution Scope and runtime-gate evidence. Desktop never infers movement blockers from durable current-Node state or Task status.
 - Agent and script drag targets are available only when the server exposes a concrete workflow edge to that executable target.
 - Done permissions, pagination, and status handling are server-authoritative.
 - Invalid/default-node-only workflows remain visible and their tasks remain visible.
 - New Task stays available for invalid workflows and creates Backlog tasks.
 - Backlog edits and comments remain available while backend permits.
-- Drag/start/run/manual move/Done are disabled for invalid workflows.
-- Interrupt and Resume follow server action flags for existing runs from earlier valid states.
+- Drag/Start/Resume/manual move/Done are disabled for invalid Workflows.
+- Interrupt and Resume follow server action flags for current executable Nodes created under an earlier valid Workflow definition.
 - Non-startable Backlog tasks must not disappear.
 
 ## Project Labels
@@ -204,26 +234,23 @@
 - Expanding a description is one-way until the current task-detail surface closes, keeps the description top anchored in the viewport, and grows content downward. Entering edit mode expands automatically. Reopening task detail starts from the normal collapsed state.
 - `Inbox` area sits above tabs and shows current blockers plus answer/approval/resume controls.
 - Contextual resume modal is superseded by task detail Inbox; resume/next-blocker actions focus/reveal relevant Inbox item.
-- Tabs are `Comments` and `Activity`; default tab is `Comments`.
-- Comments tab has composer, list, edit/delete, and count badge.
-- Activity tab is compact timeline with no mutation controls and no count badge.
+- Task detail has a Comments section with composer, list, edit/delete, and count badge. It has no workflow movement or execution-history tab.
 - Task-detail errors surface through the shared error state without requiring an inline Retry action. Reopening or refreshing the destination is the recovery path.
-- Required identity/status fields: task ID, title, body rendered as Markdown, project, workflow, one source-workspace row with its display name stacked above its monospaced root path, current node/status, completion/done state, and server action flags including `can_delete`.
-- Conditional fields: locked execution target mode; one managed-worktree path row when the managed worktree is available; requested Git revision, resolved commit, current named branch when the managed root is available; agent role/run status, session ID/name, source URL, and assignee/column ownership when server provides them.
+- Required identity/status fields: Task ID, title, body rendered as Markdown, project, Workflow, one source-workspace row with its display name stacked above its monospaced root path, all Current Nodes/statuses, completion/done state, and server action flags including `can_delete`.
+- Conditional fields: locked execution target mode; one managed-worktree path row when the managed worktree is available; requested Git revision, resolved commit, current named branch when the managed root is available; agent role/current execution status, Session ID/name, source URL, and assignee/column ownership when server provides them.
 - Task detail does not render standalone Source root or Execution root rows. A no-managed-worktree target communicates source-workspace execution through the Execution target value; an available managed target shows its path only in the Managed worktree row directly below Execution target, before revision and commit facts. An unavailable managed worktree has no Managed worktree row.
 - Visibly rendered copyable values in task detail use the Transition Output text-copy interaction: the text itself highlights for pointer and keyboard interaction, no copy icon is shown, and clipboard success or failure appears in the status-toast surface. Success identifies the copied value type; failure includes the clipboard error detail. Actions that copy deliberately hidden payloads, including the generated CLI command and structured interruption details, remain explicit buttons.
 - Irrelevant execution-target fields are omitted. Resolved and observed commits render as short monospaced hashes whose text-copy action copies the full hash.
 - Missing-field policy: hide expected-not-yet-created fields, show continuity fields empty/unassigned where useful, and render unexpected meaningful missing fields as unavailable/error states. Unavailable managed worktrees are omitted from execution-target facts.
 - Task detail allows title/body edit only while still in Backlog. Source URL is shown read-only in Properties and is never editable: valid `http(s)`/`mailto` values render as a compact link labeled with the bare host (e.g. `github.com`) opening in the system browser, and other values fall back to plain `Source: <text>`.
-- Task detail loads core task detail, task attention, activity, and comments as independent parallel read models. Core detail renders without waiting for task attention; attention controls appear progressively when their bounded task-attention read completes.
+- Task detail loads core Task detail, Task attention, and comments as independent parallel read models. Core detail renders without waiting for Task attention; attention controls appear progressively when their bounded task-attention read completes.
 - The attention area has its own loading and retryable error states without disabling core task detail. When task detail opens for a specific Inbox item, it applies that requested focus after the matching task-attention item arrives.
-- Task detail self-refreshes live while open: it subscribes to its project's workflow events and refetches its own read models (detail, task attention, activity, comments, pending asks) whenever a server event mutates the task — status, runs, transitions/approvals, comments, questions, or title/body — independent of the hosting surface (board sidebar, Home inbox, or standalone window). Refreshes reuse cached data so the update is flicker-free and never collapses the surface to a loading state.
+- Task detail self-refreshes live while open: it subscribes to its project's Workflow events and refetches its own read models (detail, Task attention, comments, pending asks) whenever a server event mutates Current Nodes, status, pending Approvals, comments, Questions, Sessions, or title/body—independent of the hosting surface (board sidebar, Home inbox, or standalone window). Refreshes reuse cached data so the update is flicker-free and never collapses the surface to a loading state.
 - Live refresh never overwrites unsaved edits: a clean surface follows server updates, but in-progress title/body edits take priority and are preserved until the user saves or reverts them.
 
-## Comments, Activity, Inbox
+## Comments And Inbox
 
-- Activity feed uses server read model as source of truth and never loads full transcripts or `events.jsonl`.
-- Activity feed is newest-to-oldest and paginated for older entries.
+- Kent does not retain or display completed Workflow movement, Run, or Node Placement history.
 - Deleted comments are hidden unless backend later adds explicit delete audit rows.
 - Home Inbox uses the global paginated attention feed and lists/deep-links attention items. Answer/approval actions happen in task detail Inbox.
 - Task detail uses a separate bounded, non-paginated task-attention read. Core task detail does not embed attention items, and there is no project-scoped attention feed.
@@ -241,16 +268,16 @@
 
 ## Desktop Attention Notifications
 
-- The server owns one attention-notification publisher and emits live attention events for workflow questions, workflow approvals, and workflow runs interrupted because of errors. User-interrupted runs are not notification-worthy desktop attention.
+- The server owns one attention-notification publisher and emits live attention events for workflow Questions, workflow Approvals, and current executable Nodes interrupted because of errors. User-interrupted work is not notification-worthy desktop attention.
 - The notification stream is live-only. Home Inbox and task detail remain backed by durable attention read models and are not rebuilt from notification events.
 - Desktop clients filter out unsupported notification kinds and targets. The server still enforces route authorization and subscription scope so clients cannot receive unauthorized task or session data.
 - Generic runtime/session prompts without a desktop answer surface remain non-desktop attention.
-- Notification batching is backend-owned. Questions emitted by one assistant turn/tool-call batch in the same task run produce one desktop surface; clients must not infer notification batches with debounce or time-window grouping.
+- Notification batching is backend-owned. Questions emitted by one assistant turn/tool-call batch in the same Session produce one desktop surface; clients must not infer notification batches with debounce or time-window grouping.
 - A focused desktop window shows a persistent in-app Sonner above all app content, including the sidebar. Clicking the Sonner opens the task detail sidebar focused on the relevant attention item.
 - Every desktop in-app Sonner/status toast exposes the shared UI-kit close button. Toast lifetime and persistence are controlled separately from closeability; persistent Sonners remain manually closeable.
 - An unfocused desktop window attempts a native or browser system notification when the local notification backend can deliver one and activation can focus Kent task detail. macOS, Windows, Linux, and browser backends may advertise support; unknown Tauri platforms do not.
 - Native notification activation carries Kent's structured task-detail target. Clicking the delivered notification focuses the main Kent window and opens the matching task detail focus target in the overlay sidebar, not a native child task-detail window.
-- Question notifications focus the first unresolved question in the batch. Approval notifications focus the matching approval item. Error-interrupted-run notifications focus the matching interrupted-run attention item in task detail.
+- Question notifications focus the first unresolved Question in the batch. Approval notifications focus the matching Approval item. Error-interruption notifications focus the matching current Node or Session attention item in Task detail.
 - Attention payload messages are optional structured context. Clients own and localize fallback display copy when a message is absent; the server does not synthesize user-facing notification copy.
 - Resolved or cleared notification events dismiss matching persistent in-app Sonners.
 - Notification delivery is best-effort and must not affect workflow state. Desktop debug builds fail fast with diagnostic information on notification delivery failures; release builds ignore delivery failures and log when logging is wired.
@@ -293,5 +320,5 @@
 - Q: How does desktop find server endpoint? A: Kent config/default host and port only. Desktop does not persist a separate endpoint. When the configured host is an unspecified IP listener, Desktop projects `0.0.0.0` to `127.0.0.1` and `::` to `::1` for its connection endpoint while preserving the configured port; concrete hosts remain unchanged. This Desktop-only projection does not edit Kent config.
 - Q: How should workflow groups render? A: Implementation-led first pass, initial preference group islands.
 - Q: What happens to drafts during disconnect? A: Keep local drafts, disable submit, refresh on reconnect, user manually saves and overwrites.
-- Q: What should the task detail CLI action do? A: Copy `kent --session=<session-id>` to clipboard and show a success toast. Do not launch terminals from the GUI.
+- Q: What should the task detail session action do? A: `Open Chat` replaces `Open in CLI` and opens the referenced session through the desktop chat destination.
 - Q: How does project creation map directory picker result to Kent project/workspace binding? A: Bound workspace opens existing project; unbound workspace opens project creation with editable project name and key.

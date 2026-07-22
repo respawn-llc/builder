@@ -659,6 +659,37 @@ describe("TaskDetailSurface", () => {
     expect(screen.queryByRole("region", { name: "Comments" })).not.toBeInTheDocument();
   });
 
+  it("renders persisted identities for user- and agent-authored comments", async () => {
+    taskDetailFixture(taskDetailNoInboxResponse, {
+      comments: {
+        comments: [
+          {
+            id: "comment-user",
+            task_id: "task-1",
+            body: "Imported GitHub comment",
+            author: "user",
+            author_id: "Nek-12",
+            created_at_unix_ms: 7,
+            updated_at_unix_ms: 7,
+          },
+          {
+            id: "comment-agent",
+            task_id: "task-1",
+            body: "Workflow review",
+            author: "agent",
+            author_id: "code_review",
+            created_at_unix_ms: 8,
+            updated_at_unix_ms: 8,
+          },
+        ],
+        next_page_token: "",
+      },
+    });
+
+    expect(await screen.findByText("Nek-12")).toBeInTheDocument();
+    expect(await screen.findByText("code_review")).toBeInTheDocument();
+  });
+
   it("requires commentary when answering a task question with Neither", async () => {
     const services = taskDetailFixture(taskDetailResponse, {
       asks: pendingAskResponse,

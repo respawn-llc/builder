@@ -71,8 +71,8 @@
 - Join inspectors show the read-only aggregated parameter set and same-key collision errors. Join outgoing transitions do not declare parameters. Join-to-agent prompts can reference aggregate parameters through `.Params.<parameter_key>`. A same-key parameter shared by branches of one fan-out transition de-duplicates at the join because it has one producing transition result; same-key parameters from different producing transitions collide.
 - Inspector validation sections keep their section header and render errors as plain bullet lists without card containers or code chips.
 - Context mode and context source are visible only for transitions into agent nodes. The context-source selector remains openable for agent targets. Unavailable context-source options stay visible, are disabled, and show `N/A for current configuration`.
-- `Previous run of this target` is enabled for continuation modes only when the target is an agent node that dominates the transition source, meaning every path from Start to the source passes through the target. Runtime resolves the latest completed run of that target before the transition event, scoped to the same parallel batch when applicable, and fails without fallback when no matching run exists.
-- `Previous run of this target, or new session` is enabled for continuation modes into agent targets. Runtime resolves the latest completed run of the target before the transition event when one exists; otherwise it starts the target with an effective `new_session`.
+- `Previous session from this target` is enabled for continuation modes only when the target is an agent Node that dominates the Transition source, meaning every path from Start to the source passes through the target. Runtime selects the latest retained Session associated with that target Node, scoped to the source current Node's Transition Branch Key while parallel work is active, and fails without fallback when no matching Session exists.
+- `Previous session from this target, or new session` is enabled for continuation modes into agent targets. Runtime selects the same branch-scoped retained Session when one exists; otherwise it starts a new Session.
 - Selected-node context-source options list all agent nodes for agent-target transitions. A selected-node option is enabled only for continuation modes when the selected node is not the target and is guaranteed before the transition source. Invalid preserved selected-node values remain visible as disabled options.
 - Script, join, and terminal targets do not start agent sessions.
 - Transition targets are assigned through canvas connections instead of inspector dropdowns.
@@ -145,8 +145,8 @@
 
 - GUI remains a remote-control surface. Server remains authoritative for definitions, validation, persistence, project links, events, task-impact analysis, workflow version, and destructive cleanup.
 - Editing a linked workflow is allowed while tasks exist on the board.
-- Save validation blocks graph edits that would detach a task from the graph entity that anchors its current visible workflow state.
-- Active means any task whose active/waiting placement is not start/backlog or terminal/done and is not solely interrupted, any pending approval, any non-completed/non-interrupted run needing runtime ownership, or any other non-terminal automation state.
+- Save validation blocks graph edits that would remove a Node or Transition Branch required by a Task's Current Nodes, live execution, unresolved parallel work, or pending Approval.
+- Active means any Task with a non-terminal current Node, pending Approval, unresolved parallel branch, Exact Execution Scope, or runtime gate.
 - Backlog/start deletion is out of scope. Blocked graph deletes surface as toast feedback. Hide `start` from add/kind-change controls. Existing Backlog can be renamed where safe, but kind stays fixed.
 - Start node outgoing transitions may be edited in drafts, but execution validation requires exactly one start transition with exactly one branch targeting an executable node.
 - Start/Backlog cannot be the fan-out source for a node group. Use a split agent after Start/Backlog, fan out from that agent into the grouped branches, then join the branches.
@@ -156,14 +156,13 @@
 - Node group drag/drop is validated as a membership operation. If the editor cannot safely infer the source node or fan-out transition needed for fan-out wiring, the membership is preserved and validation explains the incomplete wiring before save.
 - Destructive delete impact is evaluated on Save, not at draft edit time.
 - Save runs server-side impact check for pending graph diff.
-- If a graph diff would remove a node, transition, or edge currently anchoring an active task, pending approval, or unresolved parallel branch, Save is blocked.
-- If a graph diff would change the kind of a node referenced by any task history, Save is blocked. Delete-and-confirm detaches historical node references; kind changes keep the node id and would reinterpret existing placements.
-- Transition invocation metadata may be edited while tasks, pending approvals, or runs exist when the change only affects future work. This includes transition group display name/description and edge approval, context mode/source, and valid prompt template settings.
-- Transition contract changes are blocked while unresolved work references the affected transition branch or can still emit it from the source node. This includes transition source/key changes and edge branch key, target node, parameters, input bindings, and output requirements.
-- Moving an existing edge to a different transition group is blocked when any task history references that edge, because group membership is part of historical branch interpretation.
-- If only backlog/done tasks would lose graph references due to removed nodes or transitions, show confirmation with affected reference counts before applying.
-- Manual task moves are blocked for selected prior-node, `Previous run of this target`, and `Previous run of this target, or new session` continuation context sources.
-- Requested destructive wording pattern: `XXX task references will be detached from the removed graph entity. Proceed?`
+- If a graph diff would remove a Node, Transition, or Edge required by a Task's Current Nodes, pending Approval, live Exact Execution Scope, or unresolved parallel branch, Save is blocked.
+- Changing the kind of a current Node is blocked. Nodes with no current Task references have no completed workflow history to preserve.
+- Transition display metadata may be edited while Tasks exist. Completion-contract changes apply to the next Start or Resume; an already-live Exact Execution Scope keeps the contract advertised for that scope until it stops.
+- Destructive Transition contract changes are blocked only while a live scope, pending Approval, or unresolved parallel branch depends on the affected branch. Interrupted current Nodes resolve the latest valid contract on Resume.
+- Moving an existing Edge to a different Transition group is blocked only while current Task state depends on that Edge.
+- Backlog/done Tasks carry no completed graph-reference history, so removing otherwise-unreferenced Nodes or Transitions needs no task-history confirmation.
+- Manual task moves are blocked for selected prior-node continuation context sources. Previous-target continuation sources use the transition edge's server-resolved context.
 - Workflow graph saves never delete or move tasks; whole-workflow deletion is the task-deleting path.
 
 ## Q/A Decisions Preserved

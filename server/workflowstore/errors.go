@@ -136,7 +136,6 @@ var (
 	// Manual-move guards. Each names a distinct unsupported/invalid manual-move
 	// condition.
 	ErrManualMoveSelectedContextSource      = errors.New("manual move with selected context source is not supported")
-	ErrManualMovePreviousTargetContext      = errors.New("manual move with previous target context source is not supported")
 	ErrManualMoveContinueSessionNeedsSource = errors.New("continue_session requires source session for manual move")
 	ErrManualMoveApprovalNeedsSourceRun     = errors.New("manual move requiring approval needs a source run")
 	ErrManualMoveDuringParallelBatch        = errors.New("manual move during active parallel batch is not supported")

@@ -1206,6 +1206,10 @@ func (s *Service) CompleteWorkflowTask(ctx context.Context, req serverapi.Workfl
 		State:        result.State,
 		PlacementIDs: placementIDs(result.PlacementIDs),
 		RunIDs:       runIDs(result.RunIDs),
+		Handoff: serverapi.WorkflowTaskCompletionHandoff{
+			SourceNodeDisplayName:  completed.Handoff.SourceNodeDisplayName,
+			DestinationDisplayName: completed.Handoff.DestinationDisplayName,
+		},
 	}, nil
 }
 

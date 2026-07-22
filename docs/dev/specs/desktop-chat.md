@@ -1,0 +1,375 @@
+# Desktop Sessions And Chat
+
+## Scope And Authority
+
+- Desktop sessions and chat are thin remote-control surfaces over Kent server APIs and read models.
+- The server remains authoritative for session identity, project/workspace scope, runtime activity, transcript history, drafts, pending work, prompts, goals, processes, worktrees, and persistence.
+- This spec defines the complete implementation. There is no MVP, v1 subset, or deferred parity phase.
+- Desktop sessions and chat provide 100% product-capability parity with the TUI session picker and chat experience.
+- The scope includes browsing resumable sessions, creating ordinary interactive sessions, opening session chat, and controlling an attached session.
+- Every TUI chat/session capability remains in scope unless an explicit product decision removes it. Splitting work into ordered tasks is implementation sequencing, not product deferral.
+- Desktop does not expose one unbounded all-project session list. Session discovery is scoped through a selected project.
+- The desktop consumes the server-owned TUI transcript contract and opaque cursor pagination. Any required contract addition or semantic change requires an explicit product decision.
+
+## Entry And Hosting Surfaces
+
+- Task Detail replaces `Open in CLI` with `Open Chat`.
+- Task Detail's `Open Chat` action navigates to the standalone full-page chat route.
+- Chat supports a standalone full-page route, a native pop-out window, an adaptive master-detail presentation, and a sidebar/overlay presentation.
+- The standalone route and native pop-out window are the foundation for the other hosting presentations.
+- Every hosting presentation controls the same server-owned session and uses the same chat destination model; hosting surfaces do not fork client state or runtime ownership.
+- The placement of the native pop-out action is not specified.
+
+## Session Browser
+
+- A selected project's session browser uses one virtualized list with category filter chips for `Sessions` and `Subagents`.
+- Changing the category filter changes the server-backed cursor query. The client does not load both complete categories and merge them in memory.
+- The browser uses dense full-width session list rows, not cards or a card grid.
+- A row shows the session title, first-prompt preview, and recency from the server session summary.
+- The list is recency ordered and adds no search or additional status filters.
+- Selecting a row opens the standalone full-page chat route.
+- Secondary session actions live in the row context menu.
+
+## New Session
+
+- The project workspace header exposes a primary `New Session` action and a secondary `New in workspace` action.
+- `New Session` opens an empty new-chat destination using the project's default workspace.
+- `New in workspace` opens a sidebar destination backed by the server cursor-paginated project workspace list. The list is virtualized and never materializes every workspace in memory.
+- Workspace selection covers attached project workspaces only. Worktree selection is not part of new-session creation; worktrees remain a post-open session control.
+- New Session has no setup form and no fields for name, model, provider, agent role, worktree, or initial prompt.
+- Server configuration supplies the ordinary main-agent contract. The composer starts empty, and rename/settings controls remain available after chat opens.
+- Ordinary interactive creation follows the TUI's lazy contract. Opening or abandoning an untouched new-chat destination creates no durable session or session-list row.
+- The first nonblank user message or another trigger that enters the agentic loop materializes the durable session and replaces the new-chat destination with the session chat destination.
+
+## Transcript Model
+
+- Desktop uses one virtualized transcript with a live streaming tail and typed row-local presentation. It does not reproduce the TUI's ongoing/detail mode split.
+- Desktop transcript visibility follows the TUI detail-mode principle, not ongoing-mode filtering: every committed transcript item is present unless the user explicitly classifies that exact item type as transcript bloat.
+- Existing TUI ongoing, ongoing-collapsed, and detail-only classifications inform each desktop row type's default collapsed/expanded presentation; `detail-only` does not by itself authorize hiding the row.
+- Every visible non-conversational item type receives an explicit collapsed representation and expanded representation through the per-type audit.
+- Provider-supplied reasoning summaries are excluded from transcript rows. They appear only in the separately designed Thinking loader island/chip.
+- Loaded `AGENTS.md` context is a visible flat transcript row. It starts collapsed with its source path or compact label and expands to the full Markdown.
+- Loaded skill guidance is a visible flat transcript row. It starts collapsed and expands to the full Markdown.
+- Environment facts are a visible flat transcript row. It starts collapsed and expands to the full structured facts/text.
+- Assistant commentary uses the ordinary left-aligned assistant island, stays fully expanded, and has no phase label. Its Copy action and authoritative timestamp appear with the durable row.
+- Subagent context is a visible flat transcript row. It starts collapsed and expands to the full Markdown.
+- Future-agent handoff context is a visible flat transcript row. It starts collapsed and expands to the full Markdown.
+- Headless-mode instructions are a visible flat transcript row. It starts collapsed and expands to the full instructions.
+- Interactive-mode restoration is a visible flat transcript row. It starts collapsed and expands to the full transition details.
+- Workflow execution instructions are a visible flat transcript row. It starts collapsed and expands to the full instructions.
+- Active-goal continuation context is a visible flat transcript row. It starts collapsed and expands to the full context.
+- Manual-compaction carryover remains visible for now as a flat transcript row. It starts collapsed and expands to the preserved user message.
+- Context compaction summaries are visible flat transcript rows. They start collapsed and expand to the full summary Markdown.
+- Compaction-soon reminders are visible flat Context pressure rows. They start collapsed and expand to the full instruction.
+- Prompt-cache continuity warnings are visible flat warning rows expanded by default with the full structured warning/diagnostic; a compact collapsed form remains available.
+- User interruption feedback creates no transcript row. The user's interruption action already communicates the event.
+- Runtime/developer error feedback is a visible flat error row expanded by default with the full diagnostic; a compact collapsed form remains available.
+- Goal feedback is a visible flat transcript row. It starts collapsed and expands to the full feedback.
+- Entering a managed worktree is a visible flat Worktree row. It starts collapsed with a branch/path summary and expands to full workspace and effective-directory details.
+- Returning to the main workspace is a visible flat Main workspace row. It starts collapsed with a destination summary and expands to full workspace and effective-directory details.
+- Background-process lifecycle/result notices are visible flat Background process rows using the tool-family presentation. They remain in authoritative transcript order, start collapsed, and expand to full notice/process facts.
+- Generic system notices are visible flat System rows expanded by default with full text; a compact collapsed form remains available.
+- Generic warning notices are visible flat warning rows expanded by default with full text; a compact collapsed form remains available.
+- Legacy untyped notices are visible flat Legacy notice rows expanded by default with their full historical text; a compact collapsed form remains available.
+- Runtime diagnostic notices are visible flat Diagnostic rows. They start collapsed and expand to full structured diagnostic detail.
+- Reviewer running/completed lifecycle appears only in the separately designed Thinking/status island or chip and creates no transcript row.
+- Desktop has exactly one substantive Reviewer feedback product type. It is a visible flat row that starts collapsed and expands to full Markdown.
+- Existing backend `reviewer_feedback` and reviewer-suggestions paths must normalize to that one typed server/client contract; Desktop does not preserve duplicate labels or implementations as separate row types.
+- Whenever the reviewer returns one or more suggestions, the server persists and projects exactly one structured Reviewer feedback row. Legacy `Reviewer.VerboseOutput` is not authority for whether that Desktop transcript fact exists.
+- The model-facing instruction generated from reviewer suggestions remains internal runtime/provider context and never becomes a second client transcript row.
+- Reviewer failures are visible flat Reviewer error rows expanded by default with the full diagnostic; a compact collapsed form remains available.
+- Pending question controls appear only in the dedicated prompt surface attached to the composer/status island and create no pending transcript row.
+- An answered question produces exactly one completed Ask Question transcript row, expanded by default.
+- Pending approval controls appear only in the dedicated prompt surface attached to the composer/status island and create no pending transcript row.
+- Approval creates no separate decision-history row. The associated tool call owns the approval request and outcome.
+- A tool-associated prompt has one prompt control surface and one associated tool transcript item; Desktop does not duplicate the prompt as another transcript row.
+- Desktop uses the same existing tool-call lifecycle as the TUI: typed start and end facts keyed by `ToolCallID` directly produce one tool row. This ordinary lifecycle merge is not a separate client reconciliation subsystem.
+- The Desktop initiative does not refactor the server tool lifecycle or add Desktop-specific tool state. Provider/storage encodings, materialized-versus-synthesized provenance, repair paths, and deduplication bookkeeping are not Desktop product row types.
+- A started tool appears immediately as one flat row, collapsed by default with tool-specific compact input and an activity indicator. Hydration reconstructs that same pending-row presentation.
+- On successful completion, the same row stops its activity indicator and remains collapsed with a tool-specific input/result summary; expansion reveals full input/output.
+- On a completed failure, including a shell command with a nonzero exit, the same row remains collapsed with an error summary; the user expands it to inspect full failure output/diagnostics.
+- A canceled tool removes its pending row and creates no committed tool row.
+- A tool that aborts because execution itself failed follows the TUI behavior: remove the pending row and create no tool transcript row for the abort. Sonner and any authoritative durable error-feedback row own the wider failure.
+- Generic and unknown tools start collapsed with the tool name plus a compact input/result summary and expand to full structured input/output.
+- Shell tool rows start collapsed with the command plus running, exit, or background status and expand to the syntax-highlighted command and full selectable output.
+- `write_stdin` is a separate chronological Shell input row. It starts collapsed with its target/input summary and expands to the full sent input and result.
+- Patch/Edit rows follow the TUI presentation: start collapsed with the operation, affected files, and addition/removal counts and expand to the structured diff and result.
+- A typed source-result mode expands inline to syntax-highlighted selectable source using its path/language facts; its owning tool summary remains the collapsed form.
+- A plain-result mode expands inline to full selectable plain text; its owning tool summary remains the collapsed form.
+- Web Search uses a distinct typed presentation. Its row starts collapsed with a query/result summary and expands to full sources/results. Desktop does not classify Web Search through a tool-name string check.
+- Background execution copies the TUI model: the original tool row completes as Backgrounded, then a separate collapsed Background process row appears later at the authoritative chronological completion/kill position and links through typed process identity. The later event never mutates the committed original tool row.
+- Accepted queued or steered user work appears only in the later-designed Pending Work surface inside the composer/status island and creates no transcript row.
+- When queued work submits, its pending item disappears and the authoritative user-message row owns history; Desktop adds no Submitted marker.
+- Discarded queued work disappears from Pending Work and creates no transcript row.
+- Queue failure, including closing, terminal-workflow completion, runtime-unavailable, and stopped reasons, creates no transcript row. Pending Work/composer owns the typed failure and recovery behavior.
+- Normal runtime lifecycle states—idle, starting, running, awaiting a prompt, draining, and closing—appear only in the later-designed runtime/Thinking/status surface and create no transcript rows.
+- Runtime unavailable appears only in the runtime/connection error surface and creates no transcript row.
+- Active-work kind—user turn, workflow turn, goal loop, compaction, pre-submit compaction, user shell, background work, or runtime maintenance—only drives the later-designed Thinking/status label, icon, and controls; transitions create no transcript rows.
+- Agent Step and workflow-controlled execution lifecycle remains in runtime/status and creates no transcript markers. Actual user, assistant, tool, and error-feedback rows own history.
+- Compaction started/completed/failed lifecycle appears only in Thinking/status/Context and creates no lifecycle transcript rows. Failure uses Sonner and any authoritative durable error-feedback row; the committed compaction summary owns history.
+- Goal active/suspended/paused/complete lifecycle appears only in the Goal/status control surface and creates no lifecycle transcript rows. Committed Goal feedback owns history.
+- Live background activity and process controls appear only in a new dedicated contextual-sidebar destination and create no duplicate live transcript rows. Chronological committed Background process rows remain in the transcript.
+- Processes is one typed list-only sidebar destination. It has no process-detail destination, list/detail navigation, or nested sidebar state.
+- Desktop copies the existing `/ps` capability's server-owned scope, ordering, lifecycle, and retention semantics after their existing owning ticket resolves them. This initiative does not redesign the `/ps` contract.
+- Each Processes row natively copies the TUI information hierarchy: leading state icon/color, process ID, age, workdir basename, one-line command, and last nonempty recent-output line, preserving server order.
+- Process rows are dense and non-expandable. They own only their direct action buttons and keyboard focus.
+- Desktop has no `/ps inline` or Insert output equivalent.
+- Desktop has no `/ps logs` or Open log equivalent.
+- Kill copies the TUI behavior: no confirmation, immediately send terminate, disable repeated activation and show a stopping state while pending, and use Sonner for request feedback.
+- A killable process row exposes an always-visible trailing icon-only Lucide tooltip button with an accessible name. Terminal and otherwise non-killable rows omit it.
+- Processes refreshes automatically and exposes no manual Refresh action. Refresh failure uses Sonner while preserving stale rows.
+- Initial Processes loading, error with Retry, and empty states literally reuse the Desktop UI kit's existing non-full-page `LoadingState`, `ErrorState`, and `EmptyState` patterns used by other sidebar lists. No process-specific state-view variant is introduced.
+- Live context usage appears only in the selected AI Elements Context control/counter below the input field and creates no transcript status rows. Exact control design remains open.
+- Session name remains in chrome and creates no transcript status row.
+- Previous-session lineage creates no transcript row. When present, the session-facts area begins with a compact action row using a left-arrow icon and the exact label `To parent chat`; activating it opens the previous session at latest.
+- Parent-agent-session lineage is omitted from ordinary Chat settings and transcript. It belongs only to Subagent UX.
+- Every session setting requires its own later design decision.
+- Raw workflow execution and Workflow IDs are not Chat status facts. A workflow-linked Chat exposes one typed Task navigation row showing the Task short ID and title and opening Task Detail.
+- Transient notices and errors that the TUI emits through its status line map to Sonner on Desktop. Chat does not invent per-feature status/error surfaces for them.
+- Persistent live controls exist only where explicitly designed, including Thinking, Context, Goal, and Pending Work.
+- Worktree-transition outcomes create no duplicate transcript row; the initiating control updates, and transient outcome feedback uses Sonner.
+- Sleep-guard failure and prompt-history persistence failure are Sonner-only operational diagnostics with no transcript rows.
+- Input-operation reconciliation states—committed, accepted, submitted, canceled-not-committed, failed-with-restore, unknown, and evicted—are internal control facts and appear nowhere as status, toast, or transcript content.
+- Recoverable/unrecoverable malformed user, assistant, tool, or notice rows are not Desktop product variants. They are impossible contract violations. Desktop adds no fallback-content, role-placeholder, or malformed-row UX; debug fails fast and release uses the separately designed transcript contract-failure recovery path.
+- A known developer-context item with empty content creates no Desktop row.
+- An unknown developer item with empty content creates one expanded flat Diagnostic row containing its unknown type/source metadata and integrity explanation.
+- Legacy explicit Hidden (`X`) entries honor their persisted hidden intent and remain omitted.
+- Expandable flat rows use one full-width disclosure header with a leading semantic Lucide icon, localized type label, compact summary, trailing status/actions, and `ChevronRight`/`ChevronDown`.
+- Clicking unused header space reversibly expands or collapses the body below; row-specific actions remain independent controls.
+- Flat-row expansion is row-local component state. Virtualizer unmount resets the row to its audited type default; Chat adds no stable-row expansion map or persistence.
+- Committed flat-row timestamps appear only while the row is expanded and follow the shared relative/absolute timestamp policy. Pending live rows never fabricate a timestamp.
+- Flat-row expansion uses shared vertical disclosure motion; reduced motion switches instantly.
+- Flat rows are transparent at rest with no enclosing border/card and no hairline separators. A subtle full-row hover/focus wash provides interaction feedback.
+- Flat-row action buttons appear only while the row is expanded.
+- Warning, error, and success semantics change only the leading icon color, exactly following the TUI logic. Labels, content, borders, and row backgrounds remain neutral.
+- Expanded flat-row bodies use the full available 1200px transcript-row width and add no nested island. Each content renderer owns only its necessary internal padding.
+- Expanded context, notice, Reviewer feedback, and Diagnostic rows expose one Copy action that writes the original full Markdown/source/text payload rather than the compact summary or rendered DOM.
+- Expanded generic tool rows expose one Copy all action combining their full input and output.
+- Expanded Shell command rows expose one Copy all action combining the command and output/result.
+- Expanded `write_stdin` rows expose one Copy action for returned terminal output only. Sent `chars`, process/session identity, timing arguments, and other call metadata are never copied.
+- Expanded Patch/Edit rows expose one Copy action for the patch/diff only; the tool result is never copied.
+- Expanded completed Ask Question rows expose one Copy action containing the question, selected answer text rather than its index when present, and user commentary when present.
+- Expanded Web Search rows expose no Copy action; users retain ordinary selection and safe source links.
+- Expanded-row buttons use shared icon-only Lucide tooltip buttons with accessible names.
+- Successful Copy actions acknowledge through Sonner rather than changing the Copy glyph.
+- A backgrounded Shell row expands to the exact full model-visible tool result. Its later Background process completion/kill row expands to the exact full model-visible notice/result at that authoritative chronological position.
+- The TUI's current background-row bug where expansion reveals nothing is not copied into Desktop.
+- Copying the TUI interaction means neither background row exposes a row-local Open process action. Users reach the separate process sidebar destination through its own entry point.
+- Combined Copy payloads for generic tools, Shell commands, and completed Ask Question rows concatenate the audited raw sections in display order with blank-line separators. They add no headings and never copy rendered DOM text.
+- Transcript history uses server cursor pagination and infinite scroll. The client never loads or retains the full transcript.
+- User, committed assistant, and provisional assistant Markdown are owned by one shared UI-kit renderer. Chat does not introduce a second feature-local Markdown parser or rendering system.
+- Live Markdown uses a hard-gated Streamdown integration. The provisional assistant row uses its streaming mode and the committed row uses the same renderer's static mode.
+- The Streamdown integration reuses Kent's sanitization, safe external-link policy, components, typography, and selectable-text behavior. Built-in Streamdown controls, Mermaid, math, and raw HTML are disabled.
+- While the provisional assistant row is actively streaming, Streamdown owns its static built-in block/line caret and character-separated `blurIn` text animation using the library's default timing and easing. Kent does not add caret keyframes or a blink override. Streamdown's ordinary code/preformatted-content exclusions remain intact. The committed row uses static mode with neither effect.
+- Kent adds no tokenizer, animation engine, caret component, or parallel animation state for those effects.
+- Under `prefers-reduced-motion`, provisional characters appear immediately and the inline caret is absent. Presentation styling owns this adaptation; chat adds no JavaScript motion-preference or transcript state.
+- The provisional assistant island materializes only when the first nonempty assistant content delta arrives. Before then, the separately designed runtime-status area communicates activity; chat does not synthesize an empty caret-only or blank conversational row.
+- Incomplete Markdown handling and block memoization are library-owned. Chat adds no parser, regex repair, synthetic delimiter logic, or text mutation.
+- Syntax highlighting is library-owned and deferred while a fenced code block is incomplete.
+- Every received assistant delta immediately updates the single authoritative provisional-row value. Chat adds no animation-frame scheduler, fixed-cadence throttle, presentation buffer, or second rendered-text state; React and the shared renderer own their ordinary batching behavior.
+- When Chat attaches to an already-running session, Streamdown may animate all eligible accumulated provisional text once on initial mount and then animate only newly appended characters. Mid-stream hydration is part of the user's manual gate; Chat adds no static-prefix state, split renderer, or custom Markdown pipeline.
+- Live Markdown is accepted only if the integration remains below 1,000 net production lines and passes the user's manual product review using representative actual-cadence fixtures covering 50,000-character output, malformed/incomplete Markdown, GFM lists and tables, malicious links and HTML, and a 500-line unfinished code fence without security regression, scroll instability, long main-thread stalls, or runaway CPU.
+- The user makes the final Streamdown performance verdict manually. No prescribed benchmark hardware, numeric main-thread timing budget, or mandatory visible-render cadence can accept or reject the integration in place of that review.
+- If the Streamdown gate fails, the locked fallback is selectable plain text while streaming followed by the shared static Markdown renderer when the authoritative committed row resolves. The fallback performs one final row remeasurement and does not maintain a second Markdown implementation.
+- While transcript persistence is JSONL-backed, the server page unit remains one compaction-bounded segment using the existing opaque older/newer byte cursors.
+- Desktop does not add fixed-row JSONL cursors, side indexes, projector checkpoints, cumulative row offsets, or persisted page markers. A roughly 100-row server page belongs to an authoritative SQLite-backed transcript read model rather than the JSONL implementation.
+- Desktop virtualizes the rows inside each returned segment. This bounds rendered DOM work but does not reduce the segment's transfer or Query-cache payload.
+- TanStack Query retains exactly two transcript segments through `maxPages: 2`: the current segment and one adjacent segment. Directional fetching evicts the far segment through Query's native page-retention behavior; chat code does not trim pages itself.
+- Adjacent-segment loading and failure reuse the existing UI-kit infinite-list boundary row at the exact transcript edge.
+- Loading uses the boundary row's compact progress presentation. Failure replaces that edge row with its actionable error presentation and Retry for the same opaque cursor.
+- Existing transcript content and viewport remain available during boundary loading or failure. Paging errors do not become full-screen blockers, floating islands, or toast-only failures.
+- At the absolute oldest transcript edge, the boundary row disappears. Chat shows no Start of session marker or dated start divider.
+- A deep transcript-list module composes TanStack Query's bidirectional infinite-query contract with TanStack Virtual's official chat contract. Server opaque cursors remain pagination authority; TanStack Query owns cursor-page state, directional fetching, and bounded page retention; TanStack Virtual owns virtualization and every scroll behavior.
+- TanStack Virtual is configured with end anchoring and native append following. It owns prepend anchoring, dynamic row-size correction, streaming growth, end detection, and scroll-to-end behavior.
+- Chat code does not capture visible row IDs or intra-row offsets for scroll management, calculate prepend compensation, write `scrollTop`, maintain scroll-position registries, or implement custom item-index/range rules.
+- TanStack Virtual receives stable server-projected transcript-row keys as ordinary item identity. Those keys are not a client-owned scroll or presentation-state registry.
+- Each committed row has a typed server-owned locator composed of the durable session-event sequence and that event's projected-row ordinal. The locator is scoped by session and is carried unchanged through bounded pages, subscription hydration, and live committed-row projection.
+- The row locator is derived from existing persisted events and adds no JSONL marker or client identity registry. Desktop uses it as stable row identity and the TanStack item key; it never infers identity from `StepID`, transport sequence, row text, role, or array index.
+- Every entry point opens Chat at the latest transcript row and composer. Chat has no message-specific deep link, open-at-message destination instruction, target-page resolver, target highlight, or transcript-target route/search state.
+- Attention and task entry points follow the same latest-first rule; they do not jump to a question, approval, run turn, tool row, or other particular transcript item.
+- Each chat navigation-destination instance owns its transcript position while that destination remains alive.
+- A newly created session-chat destination loads the newest bounded page and anchors at the latest row and composer.
+- Disposing or replacing the navigation destination discards its transcript position. Reopening the session in a new destination uses the default latest anchor.
+- Chat has no global singleton, window-wide session-position registry, cross-destination restoration map, or persisted scroll marker.
+- Destination-local transcript position does not define durable read/unread state.
+- Scrolling away from the transcript tail preserves the viewport when new committed rows or assistant deltas arrive.
+- Jump to latest copies Respawn's presentation and behavior: a 40px circular glass control with a 24px Lucide `ArrowDown`, positioned at the bottom end of the transcript/composer overlay with semantic 12px end and bottom spacing above the composer.
+- The control has no text label or unseen-row count. It is exposed to assistive technology as Jump to latest.
+- Jump to latest visibility is exactly the inverse of TanStack Virtual's native `isAtEnd()` result. The virtualizer uses one semantic 80px `scrollEndThreshold`, so a viewport within 80px of the tail remains at end.
+- Global transcript-tail state is one derived fact: the loaded Query window has no newer server page and TanStack Virtual reports `isAtEnd()`. Chat does not store a second tail boolean.
+- If the bounded Query window has evicted the newest segment, the historical window's local end is not the transcript tail and Jump to latest remains visible.
+- The control uses scale enter/exit motion and disappears when the viewport returns within the 80px tail threshold.
+- If the newest segment is loaded, activating Jump to latest calls TanStack Virtual `scrollToEnd()`.
+- If newer server pages exist, activating Jump to latest uses TanStack Query's native reset-to-initial-page flow. The cursorless initial request fetches the newest segment in one request, then TanStack Virtual scrolls to its end. Chat never walks every intermediate newer segment.
+- Reduced-motion mode moves to the loaded newest-segment end without animation.
+- The same native `isAtEnd()` result owns both behaviors; chat does not synchronize separate Jump-control and tail-pinning booleans.
+- While Jump to latest is hidden, tail-follow is active: assistant deltas, appended committed/tool/status rows, and composer-height changes keep the viewport at the tail.
+- While Jump to latest is shown, tail-follow is inactive and incoming transcript growth preserves the viewport. Clicking Jump to latest or manually returning to the tail hides the control and resumes tail-follow.
+- User and assistant Markdown, tool activity, notices, prompts, reviewer entries, compaction, interruptions, errors, and background activity are rendered from typed server projection metadata.
+- Terminal-only mechanics do not transfer to desktop: native terminal scrollback, alternate-screen modes, ANSI rendering, terminal mouse modes, BEL/OSC notifications, terminal cursor ownership, and ongoing/detail toggle keybindings.
+
+## Chat Layout
+
+- The standalone chat destination is edge-to-edge over the native window material.
+- Chat has no enclosing level-0 island or page-level content island.
+- Before an existing session's authoritative hydration transaction arrives, app chrome remains visible and the transcript layout renders the existing UI-kit Loading experience as one compact intrinsic/wrap-content island.
+- The compact hydration-loading island is centered in the available transcript viewport between app chrome and the composer region.
+- Hydration loading is not a full-surface or full-height state, does not introduce a level-0 island, and does not render transcript skeletons.
+- The existing-session transcript and composer appear atomically after hydration. The composer is absent while hydration is pending so it cannot accept input against unhydrated draft/runtime state.
+- If initial hydration fails before transcript content is available, the loading island is replaced by the matching compact UI-kit Error experience in the same centered position.
+- The hydration error exposes a primary Retry action for the authoritative hydration transaction. Chrome Back remains available, the composer stays absent, and the error is neither full-surface nor toast-only.
+- Empty new-chat destinations are not subject to existing-session hydration loading.
+- The chat content area has a maximum width of 1200px, owned by a semantic layout token rather than a feature-local literal.
+- User and assistant conversational islands have a maximum width of 1000px, owned by a semantic layout token.
+- Conversational messages use the ordinary shared island primitive. Chat does not introduce a bespoke bubble component or special bubble visual system.
+- User conversational islands are right-aligned and content-sized up to the 1000px maximum.
+- Assistant conversational islands are left-aligned and content-sized up to the 1000px maximum.
+- User and assistant conversational islands use the same ordinary island level and semantic surface tokens.
+- Conversational island width uses intrinsic/fit-content layout constrained by the 1000px parent maximum. Markdown wraps normally after the maximum is reached.
+- Island sizing does not parse text, line breaks, or Markdown and does not use JavaScript text measurement. The apparent first-line expansion is an emergent result of intrinsic layout.
+- Conversational islands have no avatar, role label, or dedicated role marker. Alignment carries user/assistant identity.
+- User messages exceeding 10 rendered lines start collapsed to 10 lines.
+- The collapsed user message copies Task Detail's overflow treatment: an in-island bottom gradient and centered icon-only Lucide `ChevronDown` button with the accessible name Expand.
+- Expanding reveals the complete message and removes the gradient and Expand control. Expansion is one-way; user messages have no Collapse action.
+- Expansion is row-local presentation state. When virtualization unmounts the message, the state is discarded; remounting a long user message applies the default 10-line collapsed presentation again.
+- Chat does not maintain a separate expansion registry keyed by transcript row identity and does not persist expansion markers.
+- Assistant messages remain fully expanded and have no Collapse action.
+- Each conversational island has an external footer directly below the island.
+- The footer matches the measured conversational-island width and role edge: user footers are right-aligned with the user island, and assistant footers are left-aligned with the assistant island.
+- User-message footers contain Copy and one Edit action.
+- Edit is the single edit-and-fork entry point: submitting the edited message creates a new session branch, and the original session remains immutable. User-message footers do not expose a separate Fork action.
+- Assistant-message footers contain Copy only.
+- Copy writes the original Markdown source to the clipboard.
+- Footer actions use always-visible icon-only Lucide buttons with accessible names and tooltips on hover or keyboard focus. They do not display persistent text labels.
+- Each conversational island and its footer share one intrinsic group width equal to the wider of the message content and footer controls, capped at 1000px. A short message expands only to the footer's minimum width, preserving an exact island/footer width match.
+- The timestamp and every footer action are always visible. Conversational footer controls do not appear only on hover or focus.
+- A provisional streaming assistant island has no footer: no timestamp, Copy action, disabled control, or reserved footer placeholder.
+- When the authoritative committed assistant row resolves the same stream identity, its timestamp and Copy footer appear together.
+- The timestamp authority is the server-assigned durable transcript-event timestamp that materialized the committed message row. The same instant is carried through live and hydrated transcript projections; client send, receive, and render clocks are never timestamp authority.
+- A committed message timestamp displays relative age until the message reaches 24 hours old, then displays a compact localized date and time. The year is included only when it differs from the current calendar year. Hover or keyboard focus exposes the full absolute timestamp and time zone.
+- Consecutive same-role conversational islands use smaller vertical spacing; role changes use larger vertical spacing, following Respawn's grouping logic.
+- Conversational islands copy Respawn's full role-grouping geometry.
+- User islands use the shared radius except for a compact bottom-right corner; the top-right corner also becomes compact when the immediately preceding conversational island is from the user.
+- Assistant islands use the shared radius except for a compact bottom-left corner; the top-left corner also becomes compact when the immediately preceding conversational island is from the assistant.
+- Other corners retain the ordinary shared island radius. Grouping never merges messages into one island.
+- Tool rows and diagnostic rows use flat transcript presentation rather than chat bubbles or cards.
+- Chat uses the existing global sidebar host for contextual destinations: `shift` on wide windows and `overlay` on compact windows.
+- Chat adds no embedded host, Chat-specific sidebar runtime, or permanent `custom` destination. Every Chat sidebar surface is a typed shared destination.
+- Transcript content does not open duplicate sidebar views for generic tool results, Patch/Edit diffs, source/file snapshots, completed Ask Question history, injected context, Reviewer feedback, compaction summaries, or other text summaries. Their audited full content lives in inline transcript expansion.
+- The sidebar contains only concrete capabilities explicitly designed as destinations, starting with Processes. Every additional capability destination requires its own explicit decision.
+- The chat sidebar is not the owning surface for ordinary transcript content.
+- Session settings/details do not use the sidebar. They use one anchored non-modal cascading popover opened from a rounded trigger pill under the composer.
+- The settings popover copies the approved visual reference's anchored, upward-opening material and dropdown treatment rather than its settings taxonomy.
+- The closed trigger pill displays the selected Agent role and Thinking value. It appends `Fast` only while Fast mode is enabled.
+- When Thinking is unsupported and omitted, the closed trigger pill displays only the Agent role plus `Fast` when enabled.
+- The controls appear from top to bottom as Agent, Supervisor, Thinking, Fast mode when supported, Questions, and Auto-compaction.
+- Agent and Supervisor are the first two dropdown controls. Each uses a label/current-value/trailing-chevron row with an inset rounded hover/focus wash and opens a described option dropdown with a trailing checkmark for the selected option.
+- Every control belongs to one settings group. There is no divider, heading, inset subsection, or additional spacing that separates the dropdowns, Thinking, and toggles into different groups.
+- Agent selects the session's role. After the first model request, its row is disabled with the tooltip `Locked by caching policy`.
+- A workflow session's Agent is disabled from the outset with the same `Locked by caching policy` tooltip.
+- Before a new lazy session's first prompt, all six controls—Agent, Supervisor, Thinking, Fast mode when available, Questions, and Auto-compaction—belong to the unsent session draft and create no standalone setting requests.
+- The first prompt submits the complete draft settings and user message through one atomic launch operation. Partial setting application cannot create a session or send the prompt. After launch, non-Agent changes use ordinary runtime controls; the server locks Agent at first model dispatch.
+- Agent options show the role name with effective model and Thinking effort as subtext. Configured role descriptions are not shown.
+- A compact muted line outside and directly below the Agent button shows `effective model • Thinking effort`, followed after the first model request by an icon-only lock indicator with tooltip `Locked by caching policy`. Provider is omitted.
+- Changing Agent preserves every explicit per-session setting choice supported by the newly selected role and resets only incompatible choices to the new authoritative baseline.
+- Incompatible choices reset by an Agent change update their controls without confirmation, Sonner, or an inline warning.
+- Supervisor is one dropdown with the atomic choices Off, After edits, and Always.
+- Supervisor options use a title and one-line description: Off — `No automatic review`; After edits — `Review turns that changed files`; Always — `Review every completed turn`.
+- One typed server Supervisor-mode operation owns Off, After edits, and Always for both TUI and Desktop. Clients do not compose separate enablement and frequency mutations.
+- Thinking is driven by the ordered modes exposed by the server. When the server exposes enumerated modes, Desktop uses a Radix stepped slider with one point per mode in server order, no labels beneath the slider, and a compact label to the right showing the exact selected value.
+- Desktop renders only server-exposed Thinking modes and does not synthesize a Disabled/None point.
+- When the server reports that Thinking is unsupported, Desktop omits the Thinking control. The fallback input is only for supported Thinking without enumerated modes.
+- For the known named Thinking modes, Low uses gray, Medium and High use the primary tone, and Xhigh, Max, and Ultra use the secondary tone. The slider animates its active color when the value moves between tone groups.
+- When the server does not expose enumerated Thinking modes, Desktop uses a small single-line input with a trailing Apply button.
+- If the server rejects a fallback Thinking input value, Desktop preserves the entered text and reports the rejection through Sonner; it adds no inline validation message.
+- Dragging or keyboard interaction previews the Thinking slider's thumb, exact-value label, and active color locally. Desktop sends one setting change on pointer release or completion of the keyboard step, not on every intermediate slider event.
+- Fast mode, Questions, and Auto-compaction are toggle rows.
+- Fast mode is omitted when the server reports that it is unsupported.
+- When the selected Agent does not expose Questions capability, Questions remains visible, off, and disabled with the tooltip `Unavailable for this Agent`.
+- Workflow-required Auto-compaction remains visible, on, and disabled with a reason tooltip.
+- Under Manual-only compaction mode, Auto-compaction remains visible and displays the server's current stored on/off value, but is disabled. Its tooltip explains that Manual-only prevents automatic compaction regardless of the stored toggle.
+- Workspace, worktree, branch, compaction mode, and compaction count are omitted from this popover. The Worktree and Context/manual-compaction capabilities own those facts.
+- One subtle divider after Auto-compaction separates the six settings controls from compact session facts and actions.
+- Session facts/actions appear in this order when present: `To parent chat`, typed Task navigation, then Session ID.
+- Session ID appears as a compact monospace copyable value. It shows a shortened prefix, copies the complete ID, and exposes the complete ID on hover or keyboard focus.
+- Global subscription/auth state is omitted. A separate small subscription/auth icon owns that capability and remains an open design item.
+- Chat-setting changes use the server's existing runtime-control semantics and persistence scope. Desktop minimizes runtime-control contract changes and does not introduce independent client-owned setting persistence.
+- Agent, Supervisor, Thinking, Fast mode, Questions, and Auto-compaction changes create no transcript rows. The settings control is the successful-state feedback; failures use Sonner.
+- A requested setting value appears immediately and that control rejects repeat input while the server operation is pending. Success keeps the requested value. Failure restores the latest authoritative server value and uses Sonner.
+- Pending setting controls use disabled styling only; they add no spinner, `Saving…` replacement, or progress toast.
+- Every non-Agent setting remains mutable while the agent is working. A successful change affects only the next applicable model request, tool behavior, review action, or compaction decision and never mutates work already in flight.
+- Send remains enabled while a local setting change is pending. Desktop does not block or queue submission behind the setting operation; server operation order determines whether that submission observes the prior or requested setting value.
+- The unsent message and complete six-setting lazy-session draft persist and restore as one unit across navigation, detach, app relaunch, and server restart.
+- Draft storage is server-owned, matching the TUI. Desktop creates no local-storage or per-window draft authority.
+- One draft aggregate exists for the session or lazy Chat. Kent adds no live cross-client composer synchronization or collaborative editing mode.
+- Kent has no Advanced disclosure or advanced/non-advanced settings grouping. The reference's Advanced content is not copied.
+- Before first Send, every control updates the lazy draft immediately. After launch, Supervisor applies its server operation immediately. Agent is locked. Agent and Supervisor selection keep the settings popover and option dropdown open.
+- The copied composition uses Kent material, spacing, typography, colors, icons, focus behavior, and motion tokens rather than importing external visual tokens.
+- Clicking outside or pressing Escape closes the non-modal popover and returns focus through the ordinary shared Popover behavior.
+- Sidebar destination contents, entry actions, placement, sizing, and adaptive behavior require explicit decisions.
+- The input field and status elements compose inside one input-field island.
+- Each input-field/status element requires an explicit design decision; no aggregate status composition is assumed.
+- The app/window chrome displays the session title and owns Back navigation.
+- Chat does not add an in-content title header or a second Back control.
+
+## Composer And Pending Work
+
+- While the runtime is idle, the normal Send action starts a user turn.
+- While the agent is working, the normal Send action and its keyboard shortcut steer the active turn. The message takes effect at the next safe step boundary rather than waiting for the turn to finish.
+- Queue remains a separate explicit action. A queued message waits for the active turn to finish and then starts a later turn.
+- Steer and Queue remain distinct typed intents; Desktop does not collapse them into one server-chosen pending-work action.
+- `Enter` invokes the normal Send action: start a turn while idle or steer while the agent is working.
+- `Ctrl+Enter` invokes Queue.
+- `Shift+Enter` inserts a newline.
+- `Tab` retains ordinary desktop focus navigation and is not a Queue shortcut.
+- The sole Tab interception is an active workspace `@` picker: while its visible selection exists, Tab accepts that path like an IDE. Otherwise Tab navigates focus normally.
+- Queue has no visible button. While the agent is working and the empty composer can accept queued work, its exact placeholder is `Ctrl+Enter to queue`.
+- `Ctrl+Enter` while idle still uses Queue semantics; because no active turn is ahead of it, the queued work starts immediately.
+- While the agent is working, a separate icon-only Stop button remains visible alongside the normal Send/Steer action.
+- Stop has no keyboard shortcut; the visible button is the sole Stop action.
+- The multiline input grows adaptively up to one-third of the available Chat height and then scrolls internally.
+- `Up`/`Down` recall prompt history only at whole-buffer boundaries; otherwise they move within wrapped or multiline text. Navigating below the newest history entry restores the pre-navigation draft, and editing a recalled entry detaches it from history.
+- Workspace `@` autocomplete is derived from the cursor-local query and opens above the composer without a button, modal-open state, or sidebar destination.
+- Its search semantics match the TUI: query the session's effective working directory; include files and derived directories, include hidden paths, exclude `.git`, and preserve server fuzzy order.
+- The server returns typed bounded suggestions; Desktop never scans the client filesystem or receives the complete repository corpus.
+- At most seven suggestion rows are visible. Rows use a file/folder icon and exact repo-relative path and scroll when the bounded result contains more.
+- `Up`/`Down` move the active suggestion. Enter or Tab inserts it, mouse activation inserts it, and Escape dismisses the picker until the query changes.
+- Acceptance replaces the active query with the exact `@`-prefixed repo-relative path and appends `/` for a directory, matching the TUI. It does not submit the composer.
+- Pending Work is an inline peeking sheet behind the composer's top edge, copying the approved reference's stacked-island relationship rather than using a popover, modal, or sidebar.
+- The sheet appears only while at least one Steer or Queue item is pending. One semantic max-height token sized for approximately five two-line rows caps it; overflow scrolls.
+- The Pending Work sheet has no header, title, or count badge; its item rows are the complete visible surface.
+- Pending items form one unlabeled list ordered like the TUI: Queue items first in FIFO order, then Steer items in FIFO order. The kinds use distinct leading semantic icons.
+- Each row shows at most two wrapped lines and then ellipsizes. The complete pending text is not exposed in a tooltip, focus description, expansion, or secondary detail surface.
+- Each item has a trailing compact `×` action with accessible name and tooltip `Discard`. After authoritative removal succeeds, the item's original content returns only to the initiating client's main input. An empty input receives it verbatim; a nonempty input appends it after one newline. Other clients see the shared item disappear without draft mutation.
+- Pending Work supports no edit, reorder, submit-now, or clear-all action. The server has no edit contract, and Desktop does not create a client-only substitute.
+- A failed removal leaves the item in Pending Work, does not modify the input, and uses Sonner.
+- The sheet preserves scroll while the user inspects older items and follows additions only while already at its newest visible edge.
+- Stop clears all pending Queue and Steer items, matching the TUI, and restores their original text only to the initiating client's input in displayed order with one newline between existing/input items. Other clients see the shared pending items disappear without draft mutation.
+
+## Desktop Capability Model
+
+- Slash commands are not the primary desktop interaction model.
+- Session capabilities are exposed through visible desktop controls, menus, settings, dialogs, or routes.
+- A TUI capability may be removed only by an explicit product decision recorded in this spec.
+- Reusing a server capability does not require reproducing its terminal command syntax or terminal placement.
+- A terminal-only interaction mechanism may be replaced with desktop-native UX, but the capability it exposes is not omitted.
+- TUI clipboard-image paste is the explicit exception: Desktop Chat has no client file/image upload, drag-and-drop attachment, clipboard-image attachment, attachment chip, or transcript-attachment capability in this initiative.
+- Workspace `@` path references remain a separate composer capability and do not become attachments.
+- Client-upload attachments are a separate initiative and must create no task in the Desktop Sessions/Chat implementation graph.
+
+## AI Elements Reuse
+
+- AI Elements is a selective source baseline, not a wholesale component or runtime adoption.
+- The Sessions/Chat shortlist is Chain of Thought, Context, Model Selector adapted as Kent's Agent Role Selector, and Reasoning.
+- Every other AI Elements component is out of scope or not a fit unless the user explicitly reopens it.
+- Speech Input is reserved for a future Voice Mode. It creates no Sessions/Chat behavior, implementation scope, or task in this initiative.
+- Selected component source stays close to pinned upstream registry output and is deliberately re-synced over time.
+- Kent remains authoritative for component state, server data, transcript/runtime behavior, agent roles, token/context facts, accessibility, localization, visual tokens, and feature architecture. Upstream AI SDK-shaped state and data contracts do not become product authority.
+- The selected source exists once in Kent's shared desktop UI-kit ownership; feature code consumes typed Kent adapters rather than creating divergent component copies.
+- Chain of Thought, Context, Agent Role Selector, and Reasoning each require their own product audit before adoption.
+
+## Feature Gate
+
+- The complete Sessions and Chat initiative is protected by one compile-time feature gate.
+- Production builds exclude the gated navigation, entry points, routes, and surfaces until the full parity acceptance gate passes.
+- Task completion behind the gate does not authorize a partial production Sessions or Chat experience.

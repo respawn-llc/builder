@@ -330,6 +330,8 @@ export const englishResources = {
       commentSaveFailed: "Comment save failed",
       commentDeleteFailed: "Comment delete failed",
       commentBody: "Comment",
+      commentAuthorAgent: "Agent",
+      commentAuthorUser: "User",
       activity: "Activity",
       activityCount: "{{count}} activity items",
       noActivityTitle: "No activity yet",

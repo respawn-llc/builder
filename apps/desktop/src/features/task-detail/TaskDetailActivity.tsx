@@ -113,7 +113,9 @@ export function CommentRow({
   const pending =
     mutations.addComment.isPending || mutations.replaceComment.isPending || mutations.deleteComment.isPending;
   const interactionDisabled = disabled || pending;
-  const authorLabel = comment.author.trim().length === 0 ? comment.author : comment.author.trim();
+  const authorLabel =
+    comment.authorID ??
+    t(comment.authorKind === "agent" ? "task.commentAuthorAgent" : "task.commentAuthorUser");
 
   async function deleteComment(commentID: string): Promise<void> {
     if (interactionDisabled) {
@@ -138,9 +140,9 @@ export function CommentRow({
       level={1}
     >
       <header className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-[var(--space-2)]">
-        <CommentAuthorIcon author={comment.author} />
+        <CommentAuthorIcon authorKind={comment.authorKind} />
         {editing ? (
-          <AuthorText author={comment.author} />
+          <AuthorText author={authorLabel} />
         ) : (
           <button
             aria-label={t("task.editCommentBy", {
@@ -154,7 +156,7 @@ export function CommentRow({
             }}
             type="button"
           >
-            <AuthorText author={comment.author} />
+            <AuthorText author={authorLabel} />
           </button>
         )}
         <time className="whitespace-nowrap text-sm text-[var(--color-muted)]">
@@ -177,24 +179,17 @@ export function CommentRow({
   );
 }
 
-function CommentAuthorIcon({ author }: Readonly<{ author: string }>) {
-  return commentAuthorKind(author) === "user" ? (
+function CommentAuthorIcon({ authorKind }: Readonly<{ authorKind: TaskComment["authorKind"] }>) {
+  return authorKind === "user" ? (
     <UserRound aria-hidden="true" size={16} strokeWidth={1.8} />
   ) : (
     <Bot aria-hidden="true" size={16} strokeWidth={1.8} />
   );
 }
 
-function commentAuthorKind(author: string): "agent" | "user" {
-  return author.trim().toLowerCase() === "user" ? "user" : "agent";
-}
-
 function AuthorText({ author }: Readonly<{ author: string }>) {
   return (
-    <EllipsisText
-      className="font-bold capitalize text-[var(--color-on-island)]"
-      text={author.trim().length === 0 ? author : author.trim()}
-    />
+    <EllipsisText className="font-bold text-[var(--color-on-island)]" text={author} />
   );
 }
 
