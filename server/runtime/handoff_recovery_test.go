@@ -2,10 +2,12 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -353,6 +355,34 @@ func TestReopenedSessionAfterTriggerHandoffFutureMessageAppendFailureRetriesWith
 	assertNoTriggerHandoffProtocolItems(t, "reopened request", request.Items, handoffCall)
 }
 
+func TestPendingHandoffFutureMessageConsumesCommittedObserverFailure(t *testing.T) {
+	observerErr := errors.New("handoff future-message observer failure")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	engine := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
+	engine.handoffRuntimeState().QueueFutureMessage("continue")
+	gate.FailNext(observerErr)
+
+	applied, err := engine.applyPendingHandoffIfNeeded(context.Background(), "step")
+	if applied || !errors.Is(err, observerErr) {
+		t.Fatalf("future-message append outcome = applied:%v error:%v", applied, err)
+	}
+	if pending := engine.handoffRuntimeState().FutureMessageSnapshot(); pending != "" {
+		t.Fatalf("committed future-message append retained retry ownership: %q", pending)
+	}
+	if futureMessages := countHandoffFutureMessageRecords(t, store); futureMessages != 1 {
+		t.Fatalf("committed handoff future-message records = %d, want 1", futureMessages)
+	}
+
+	applied, err = engine.applyPendingHandoffIfNeeded(context.Background(), "step")
+	if applied || err != nil {
+		t.Fatalf("second future-message append outcome = applied:%v error:%v", applied, err)
+	}
+	if futureMessages := countHandoffFutureMessageRecords(t, store); futureMessages != 1 {
+		t.Fatalf("second future-message append changed durable record count to %d", futureMessages)
+	}
+}
+
 func assertNoTriggerHandoffProtocolItems(
 	t *testing.T,
 	scope string,
@@ -374,6 +404,26 @@ func assertNoTriggerHandoffProtocolItems(
 			t.Fatalf("%s retained trigger-handoff protocol item: %+v", scope, item)
 		}
 	}
+}
+
+func countHandoffFutureMessageRecords(t *testing.T, store *session.Store) int {
+	t.Helper()
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	if err != nil {
+		t.Fatalf("read bounded handoff records: %v", err)
+	}
+	count := 0
+	for _, record := range window.Records {
+		message, ok := mustSessionEventPayload(record).(session.MessageRecord)
+		if !ok ||
+			message.Role != session.MessageRoleDeveloper ||
+			message.MessageType == nil ||
+			*message.MessageType != session.MessageTypeHandoffFutureMessage {
+			continue
+		}
+		count++
+	}
+	return count
 }
 
 func persistSuccessfulTriggerHandoff(t *testing.T, engine *Engine, callID string) llm.ToolCall {
