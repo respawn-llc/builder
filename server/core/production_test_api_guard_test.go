@@ -1,76 +1,132 @@
-package core
+package core_test
 
 import (
 	"go/ast"
-	"go/parser"
-	"go/token"
-	"io/fs"
-	"path/filepath"
-	"strings"
+	"go/types"
+	"sort"
 	"testing"
+
+	"golang.org/x/tools/go/packages"
 )
 
-func TestProductionGoFilesDoNotExposeTestNamedAPIs(t *testing.T) {
-	repoRoot := filepath.Clean(filepath.Join("..", ".."))
-	searchRoots := []string{"server", "cli", "shared", "prompts"}
-	for _, root := range searchRoots {
-		rootPath := filepath.Join(repoRoot, root)
-		err := filepath.WalkDir(rootPath, func(path string, entry fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if entry.IsDir() {
-				if entry.Name() == "node_modules" || entry.Name() == ".git" {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
-			if err != nil {
-				return err
-			}
-			for _, decl := range file.Decls {
-				checkDeclForTestNamedAPI(t, path, decl)
-			}
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("walk %s: %v", rootPath, err)
+func TestProductionGoFilesDoNotExposeTestOnlyAPIs(t *testing.T) {
+	repoRoot := findRepoRoot(t)
+	pkgs := loadStructuredGuardPackages(t, repoRoot, true, "./server/...", "./cli/...", "./shared/...")
+	declarations := productionAPIDeclarations(pkgs)
+	productionReferences, testReferences := productionAPIReferences(pkgs)
+	violations := make([]string, 0)
+	for key, declaration := range declarations {
+		if !testReferences[key] || productionReferences[key] {
+			continue
 		}
+		violations = append(violations, declaration.position+": production API "+declaration.object.Name()+" is referenced only by tests")
+	}
+	sort.Strings(violations)
+	if len(violations) > 0 {
+		t.Fatalf("test-only production API violations:\n%s", joinStructuredGuardLines(violations))
 	}
 }
 
-func checkDeclForTestNamedAPI(t *testing.T, path string, decl ast.Decl) {
-	t.Helper()
-	switch typed := decl.(type) {
-	case *ast.FuncDecl:
-		if productionAPITestName(typed.Name.Name) {
-			t.Fatalf("%s declares test-named production function %s", path, typed.Name.Name)
+type productionAPIObjectKey struct {
+	packagePath string
+	filename    string
+	line        int
+	column      int
+}
+
+type productionAPIDeclaration struct {
+	object   types.Object
+	position string
+}
+
+func productionAPIDeclarations(pkgs []*packages.Package) map[productionAPIObjectKey]productionAPIDeclaration {
+	declarations := make(map[productionAPIObjectKey]productionAPIDeclaration)
+	for _, pkg := range pkgs {
+		if !isProductionRepositoryPackage(pkg) {
+			continue
 		}
-	case *ast.GenDecl:
-		for _, spec := range typed.Specs {
-			switch typedSpec := spec.(type) {
-			case *ast.TypeSpec:
-				if productionAPITestName(typedSpec.Name.Name) {
-					t.Fatalf("%s declares test-named production type %s", path, typedSpec.Name.Name)
-				}
-			case *ast.ValueSpec:
-				for _, name := range typedSpec.Names {
-					if productionAPITestName(name.Name) {
-						t.Fatalf("%s declares test-named production value %s", path, name.Name)
+		for _, file := range pkg.Syntax {
+			ast.Inspect(file, func(node ast.Node) bool {
+				switch declaration := node.(type) {
+				case *ast.FuncDecl:
+					recordProductionAPIDeclaration(declarations, pkg, pkg.TypesInfo.Defs[declaration.Name])
+					return false
+				case *ast.TypeSpec:
+					recordProductionAPIDeclaration(declarations, pkg, pkg.TypesInfo.Defs[declaration.Name])
+					return false
+				case *ast.ValueSpec:
+					for _, name := range declaration.Names {
+						recordProductionAPIDeclaration(declarations, pkg, pkg.TypesInfo.Defs[name])
 					}
+					return false
+				default:
+					return true
 				}
-			}
+			})
 		}
+	}
+	return declarations
+}
+
+func recordProductionAPIDeclaration(declarations map[productionAPIObjectKey]productionAPIDeclaration, pkg *packages.Package, object types.Object) {
+	if object == nil || !object.Exported() {
+		return
+	}
+	key, ok := productionAPIKey(pkg, object)
+	if !ok {
+		return
+	}
+	declarations[key] = productionAPIDeclaration{
+		object:   object,
+		position: structuredGuardPosition(pkg, object.Pos()),
 	}
 }
 
-func productionAPITestName(name string) bool {
-	return strings.Contains(name, "ForTest") ||
-		strings.HasPrefix(name, "ReserveTest") ||
-		strings.HasPrefix(name, "ReleaseTest") ||
-		(strings.HasPrefix(name, "Set") && strings.HasSuffix(name, "ForTest"))
+func productionAPIReferences(pkgs []*packages.Package) (map[productionAPIObjectKey]bool, map[productionAPIObjectKey]bool) {
+	productionReferences := make(map[productionAPIObjectKey]bool)
+	testReferences := make(map[productionAPIObjectKey]bool)
+	for _, pkg := range pkgs {
+		if pkg.TypesInfo == nil || !isRepositoryPackage(pkg) {
+			continue
+		}
+		for _, object := range pkg.TypesInfo.Uses {
+			if object == nil || !object.Exported() {
+				continue
+			}
+			key, ok := productionAPIKey(pkg, object)
+			if !ok {
+				continue
+			}
+			if pkg.ForTest == "" {
+				productionReferences[key] = true
+			} else {
+				testReferences[key] = true
+			}
+		}
+	}
+	return productionReferences, testReferences
+}
+
+func productionAPIKey(pkg *packages.Package, object types.Object) (productionAPIObjectKey, bool) {
+	if object.Pkg() == nil || object.Pos().IsValid() == false {
+		return productionAPIObjectKey{}, false
+	}
+	position := pkg.Fset.Position(object.Pos())
+	if position.Filename == "" {
+		return productionAPIObjectKey{}, false
+	}
+	return productionAPIObjectKey{
+		packagePath: object.Pkg().Path(),
+		filename:    position.Filename,
+		line:        position.Line,
+		column:      position.Column,
+	}, true
+}
+
+func isProductionRepositoryPackage(pkg *packages.Package) bool {
+	return pkg.ForTest == "" && isRepositoryPackage(pkg)
+}
+
+func isRepositoryPackage(pkg *packages.Package) bool {
+	return pkg.Module != nil && pkg.Module.Path == "core"
 }
