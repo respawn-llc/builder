@@ -12,6 +12,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/textutil"
+	"core/shared/transcript"
 )
 
 func TestReplaceHistoryDoesNotMutateRuntimeStateWhenEventAppendFails(t *testing.T) {
@@ -209,6 +210,7 @@ type committedRemoteCompactionFixture struct {
 func newCommittedRemoteCompactionFixture(
 	t *testing.T,
 	observer session.PersistenceObserver,
+	locked *session.LockedContract,
 ) *committedRemoteCompactionFixture {
 	t.Helper()
 	fixture := &committedRemoteCompactionFixture{
@@ -238,6 +240,11 @@ func newCommittedRemoteCompactionFixture(
 			CachedInputTokens: textutil.Value(190_000),
 		},
 	}
+	if locked != nil {
+		if err := fixture.store.MarkModelDispatchLocked(*locked); err != nil {
+			t.Fatalf("lock prompt-facing snapshots: %v", err)
+		}
+	}
 	fixture.engine = mustNewTestEngine(t, fixture.store, fixture.client, tools.NewRegistry(), Config{
 		Model: "gpt-5",
 		OnEvent: func(event Event) {
@@ -261,7 +268,7 @@ func newCommittedRemoteCompactionFixture(
 func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testing.T) {
 	observerErr := errors.New("history replacement observer failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	fixture := newCommittedRemoteCompactionFixture(t, gate)
+	fixture := newCommittedRemoteCompactionFixture(t, gate, nil)
 	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
 		return snapshot.Meta.LastSequence >= 2 && snapshot.Meta.UsageState == nil
 	}, observerErr)
@@ -316,7 +323,7 @@ func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testin
 func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) {
 	observerErr := errors.New("compaction usage observer failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	fixture := newCommittedRemoteCompactionFixture(t, gate)
+	fixture := newCommittedRemoteCompactionFixture(t, gate, nil)
 	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
 		usage := snapshot.Meta.UsageState
 		return usage != nil &&
@@ -358,6 +365,71 @@ func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) 
 	}
 	if !reopenedUsage.HasCacheHitPercentage || reopenedUsage.CacheHitPercent != 100 {
 		t.Fatalf("reopened compacted cache counters = %+v", reopenedUsage)
+	}
+}
+
+func TestCompactNowInvalidatesPromptSnapshotsWhenStaleMetadataObserverFails(t *testing.T) {
+	observerErr := errors.New("prompt snapshot stale observer failure")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	fixture := newCommittedRemoteCompactionFixture(t, gate, &session.LockedContract{
+		Model:             "gpt-5",
+		SystemPrompt:      "persisted snapshot",
+		HasSystemPrompt:   true,
+		ReviewerPrompt:    "persisted reviewer snapshot",
+		HasReviewerPrompt: true,
+	})
+	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		locked := snapshot.Meta.Locked
+		return locked != nil && !locked.HasSystemPrompt && !locked.HasReviewerPrompt
+	}, observerErr)
+
+	_, receipt, err := fixture.engine.compactNow(
+		context.Background(),
+		"compact",
+		compactionModeManual,
+		"",
+		false,
+	)
+	if !receipt.Committed || !errors.Is(err, observerErr) {
+		t.Fatalf("compactNow outcome: receipt=%+v error=%v", receipt, err)
+	}
+
+	locked, ok := fixture.engine.lockedContractState().Snapshot()
+	if !ok || locked.HasSystemPrompt || locked.HasReviewerPrompt {
+		t.Fatalf("live locked snapshot presence after committed stale mutation = %+v", locked)
+	}
+	if persisted := fixture.store.Meta().Locked; persisted == nil ||
+		persisted.HasSystemPrompt || persisted.HasReviewerPrompt {
+		t.Fatalf("persisted locked snapshot presence after committed stale mutation = %+v", persisted)
+	}
+
+	request, requestErr := fixture.engine.buildRequest(context.Background(), "next", false)
+	if requestErr != nil {
+		t.Fatalf("build request after committed stale mutation: %v", requestErr)
+	}
+	if generation := fixture.engine.compactionRuntimeState().Count(); generation != 1 {
+		t.Fatalf("cache-key compaction generation = %d, want 1", generation)
+	}
+	expectedCacheKey := conversationPromptCacheKeyForLineage(
+		fixture.store.Meta().SessionID,
+		fixture.store.Meta().PromptCacheLineageGeneration,
+		1,
+	)
+	preCompactionCacheKey := conversationPromptCacheKeyForLineage(
+		fixture.store.Meta().SessionID,
+		fixture.store.Meta().PromptCacheLineageGeneration,
+		0,
+	)
+	if request.SessionID != fixture.store.Meta().SessionID ||
+		request.PromptCacheKey != expectedCacheKey ||
+		request.PromptCacheKey == preCompactionCacheKey ||
+		request.PromptCacheScope != transcript.CacheWarningScopeConversation {
+		t.Fatalf(
+			"post-compaction request identity = session:%q cache-key:%q scope:%q",
+			request.SessionID,
+			request.PromptCacheKey,
+			request.PromptCacheScope,
+		)
 	}
 }
 
