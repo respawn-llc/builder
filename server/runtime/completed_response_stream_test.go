@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync/atomic"
 	"testing"
 
@@ -253,6 +254,71 @@ func TestWorkflowInvalidCompletionFailClosedWhenConfiguredCapInvalid(t *testing.
 	}
 }
 
+func TestWorkflowCompletionControllerFailureUsesInvalidCompletionCapWithoutTerminalState(t *testing.T) {
+	runID := workflow.RunID("workflow-run")
+	controller := &failingWorkflowCompletionController{}
+	completionResponse := llm.Response{Assistant: llm.Message{
+		Role:    llm.RoleAssistant,
+		Phase:   textutil.Value(llm.MessagePhaseFinal),
+		Content: textutil.Value(`{"commentary":"complete","summary":"done"}`),
+	}}
+	engine := mustNewExecTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{responses: []llm.Response{
+			completionResponse,
+			completionResponse,
+			completionResponse,
+		}},
+		Config{
+			Model: "gpt-5",
+			WorkflowRun: &workflowruntime.Config{
+				RunID: runID,
+				Contract: workflowruntime.CompletionContract{
+					RunID: runID,
+					Transitions: []workflowruntime.CompletionTransition{{
+						ID:         "done",
+						Parameters: []workflow.Parameter{{Key: "summary"}},
+					}},
+				},
+				CompletionMode:               workflowruntime.CompletionModeUnstructuredOutput,
+				MaxInvalidCompletionAttempts: 2,
+				Controller:                   controller,
+			},
+		},
+	)
+
+	if _, err := engine.SubmitWorkflowTurn(context.Background()); err != nil {
+		t.Fatalf("submit workflow turn: %v", err)
+	}
+	if len(controller.violationRequests) != 2 || len(controller.violationResults) != 2 {
+		t.Fatalf(
+			"workflow protocol violations = requests:%+v results:%+v",
+			controller.violationRequests,
+			controller.violationResults,
+		)
+	}
+	for _, request := range controller.violationRequests {
+		if request.Kind != workflowruntime.ViolationKindInvalidCompletion ||
+			request.MaxCount != 2 {
+			t.Fatalf("workflow protocol violation request = %+v", request)
+		}
+	}
+	if first := controller.violationResults[0]; first.Count != 1 || first.Interrupted {
+		t.Fatalf("first workflow violation result = %+v", first)
+	}
+	if second := controller.violationResults[1]; second.Count != 2 || !second.Interrupted {
+		t.Fatalf("second workflow violation result = %+v", second)
+	}
+	if terminal := engine.WorkflowTerminalState(); terminal.Completed ||
+		terminal.Source != "" ||
+		terminal.RunID != "" ||
+		terminal.Generation != 0 ||
+		!terminal.CompletedAt.IsZero() {
+		t.Fatalf("workflow terminal state after controller failures = %+v", terminal)
+	}
+}
+
 func TestCompletedResponseFinalizationUsesActiveSegmentCoordinatesAfterCompaction(t *testing.T) {
 	first := scriptedllm.FinalAnswer("first")
 	first.StreamDeltas = []llm.AssistantDelta{{Text: "first", Phase: llm.MessagePhaseFinal}}
@@ -367,6 +433,32 @@ func (c *interruptingWorkflowProtocolViolationController) RecordWorkflowProtocol
 	c.violations = append(c.violations, request)
 	c.result = workflowruntime.ViolationResult{Count: 1, Interrupted: true}
 	return c.result, nil
+}
+
+type failingWorkflowCompletionController struct {
+	externallyCompletedWorkflowController
+	violationRequests []workflowruntime.ViolationRequest
+	violationResults  []workflowruntime.ViolationResult
+}
+
+func (c *failingWorkflowCompletionController) CompleteWorkflowRun(
+	context.Context,
+	workflowruntime.CompletionRequest,
+) (workflowruntime.CompletionResult, error) {
+	return workflowruntime.CompletionResult{}, errors.New("workflow completion unavailable")
+}
+
+func (c *failingWorkflowCompletionController) RecordWorkflowProtocolViolation(
+	_ context.Context,
+	request workflowruntime.ViolationRequest,
+) (workflowruntime.ViolationResult, error) {
+	c.violationRequests = append(c.violationRequests, request)
+	result := workflowruntime.ViolationResult{
+		Count:       int64(len(c.violationResults) + 1),
+		Interrupted: len(c.violationResults)+1 >= request.MaxCount,
+	}
+	c.violationResults = append(c.violationResults, result)
+	return result, nil
 }
 
 func (c *externallyCompletedWorkflowController) CompleteWorkflowRun(
