@@ -551,11 +551,11 @@ func TestWriteStdinRejectsShortTimedOutputPolls(t *testing.T) {
 		if envelope.Error == "" {
 			t.Fatal("expected rejected write_stdin error value")
 		}
-		if rejected.Summary == "" {
+		if rejected.Summary == nil || *rejected.Summary == "" {
 			t.Fatal("expected rejected write_stdin summary")
 		}
-		if rejected.Summary != envelope.Error {
-			t.Fatalf("rejected summary = %q, want error value %q", rejected.Summary, envelope.Error)
+		if *rejected.Summary != envelope.Error {
+			t.Fatalf("rejected summary = %q, want error value %q", *rejected.Summary, envelope.Error)
 		}
 	}
 

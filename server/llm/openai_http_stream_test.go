@@ -346,14 +346,13 @@ func TestGenerateStream_EmitsAssistantDeltasAndToolCalls(t *testing.T) {
 }
 
 func TestGenerateStream_PreservesWhitespaceOnlyFunctionArgumentDelta(t *testing.T) {
-	const inputPrefix = `{"session_id":1000,"chars":"`
-	const inputSuffix = `","yield_time_ms":9223372036854775807}`
+	const input = `{"session_id":1000,"chars":"\n","yield_time_ms":9223372036854775807}`
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","item":{"id":"fc_1","type":"function_call","name":"write_stdin","call_id":"call_1","arguments":""}}`,
-		fmt.Sprintf(`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":%q}`, inputPrefix),
-		fmt.Sprintf(`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":%q}`, " "),
-		fmt.Sprintf(`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":%q}`, inputSuffix),
-		`{"type":"response.completed","response":{"output":[]}}`,
+		fmt.Sprintf(`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":%q}`, input),
+		fmt.Sprintf(`{"type":"response.function_call_arguments.done","item_id":"fc_1","arguments":%q}`, input),
+		fmt.Sprintf(`{"type":"response.output_item.done","item":{"id":"fc_1","type":"function_call","name":"write_stdin","call_id":"call_1","arguments":%q}}`, input),
+		fmt.Sprintf(`{"type":"response.completed","response":{"output":[{"id":"fc_1","type":"function_call","name":"write_stdin","call_id":"call_1","arguments":%q}]}}`, input),
 		`[DONE]`,
 	)
 
@@ -364,15 +363,15 @@ func TestGenerateStream_PreservesWhitespaceOnlyFunctionArgumentDelta(t *testing.
 	if len(resp.ToolCalls) != 1 {
 		t.Fatalf("expected one tool call, got %+v", resp.ToolCalls)
 	}
-	var input struct {
+	var decodedInput struct {
 		Chars       string `json:"chars"`
 		YieldTimeMS int    `json:"yield_time_ms"`
 	}
-	if err := json.Unmarshal(resp.ToolCalls[0].Input, &input); err != nil {
+	if err := json.Unmarshal(resp.ToolCalls[0].Input, &decodedInput); err != nil {
 		t.Fatalf("decode streamed write_stdin input %q: %v", resp.ToolCalls[0].Input, err)
 	}
-	if input.Chars != " " || input.YieldTimeMS != math.MaxInt {
-		t.Fatalf("streamed write_stdin input = %+v", input)
+	if decodedInput.Chars != "\n" || decodedInput.YieldTimeMS != math.MaxInt {
+		t.Fatalf("streamed write_stdin input = %+v", decodedInput)
 	}
 }
 
