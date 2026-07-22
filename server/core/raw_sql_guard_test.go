@@ -62,6 +62,7 @@ func display() string {
 	t.Run("accepts database syntax and rejects ambiguous prose", func(t *testing.T) {
 		cases := map[string]bool{
 			"SELECT id FROM sessions":           true,
+			"SELECT 1":                          true,
 			"DELETE FROM sessions WHERE id = ?": true,
 			"WHERE id = ?":                      true,
 			"EXPLAIN SELECT 1":                  true,
@@ -91,7 +92,7 @@ func display() string {
 	t.Run("rejects standalone and externally forwarded raw SQL constants", func(t *testing.T) {
 		pkg, root := generatedQueryGuardFixture(t, `package fixture
 
-const standalone = "SELECT id FROM sessions"
+const standalone = "SELECT 1"
 
 var packageQuery = "DELETE FROM sessions WHERE id = ?"
 
@@ -249,6 +250,7 @@ func hasStandaloneSQLiteStatementStart(tokens []antlr.Token) bool {
 		sqliteparser.SQLiteParserRELEASE_,
 		sqliteparser.SQLiteParserROLLBACK_,
 		sqliteparser.SQLiteParserSAVEPOINT_,
+		sqliteparser.SQLiteParserSELECT_,
 		sqliteparser.SQLiteParserVACUUM_:
 		return isUppercaseSQLiteKeyword(first)
 	case sqliteparser.SQLiteParserPRAGMA_:
