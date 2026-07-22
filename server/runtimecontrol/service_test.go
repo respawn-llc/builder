@@ -256,10 +256,84 @@ func (c *restartableRuntimeControlClient) releaseSecond() {
 	c.release2Once.Do(func() { close(c.release2) })
 }
 
+type steeringDrainRuntimeControlClient struct {
+	firstStarted  chan struct{}
+	secondStarted chan struct{}
+	releaseFirst  chan struct{}
+	releaseSecond chan struct{}
+	mu            sync.Mutex
+	requests      []llm.Request
+}
+
+func newSteeringDrainRuntimeControlClient() *steeringDrainRuntimeControlClient {
+	return &steeringDrainRuntimeControlClient{
+		firstStarted:  make(chan struct{}),
+		secondStarted: make(chan struct{}),
+		releaseFirst:  make(chan struct{}),
+		releaseSecond: make(chan struct{}),
+	}
+}
+
+func (c *steeringDrainRuntimeControlClient) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
+	c.mu.Lock()
+	c.requests = append(c.requests, req)
+	call := len(c.requests)
+	c.mu.Unlock()
+	switch call {
+	case 1:
+		close(c.firstStarted)
+		select {
+		case <-c.releaseFirst:
+		case <-ctx.Done():
+			return llm.Response{}, ctx.Err()
+		}
+		return llm.Response{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: "still working",
+				Phase:   llm.MessagePhaseCommentary,
+			},
+			ToolCalls: []llm.ToolCall{{
+				ID:    "call-boundary",
+				Name:  string(toolspec.ToolExecCommand),
+				Input: json.RawMessage(`{"command":"printf tool-boundary"}`),
+			}},
+			Usage: llm.Usage{WindowTokens: 200000},
+		}, nil
+	case 2:
+		close(c.secondStarted)
+		select {
+		case <-c.releaseSecond:
+		case <-ctx.Done():
+			return llm.Response{}, ctx.Err()
+		}
+		return llm.Response{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		}, nil
+	default:
+		return llm.Response{}, errors.New("unexpected model request after final response")
+	}
+}
+
+func (c *steeringDrainRuntimeControlClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.ProviderCapabilities{}, nil
+}
+
+func (c *steeringDrainRuntimeControlClient) request(index int) llm.Request {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.requests[index]
+}
+
 type fakeShellHandler struct{}
 
-func (fakeShellHandler) Call(context.Context, tools.Call) (tools.Result, error) {
-	return tools.Result{Output: json.RawMessage(`{"output":"ok","exit_code":0,"truncated":false}`)}, nil
+func (fakeShellHandler) Call(_ context.Context, call tools.Call) (tools.Result, error) {
+	return tools.Result{
+		CallID: call.ID,
+		Name:   call.Name,
+		Output: json.RawMessage(`{"output":"ok","exit_code":0,"truncated":false}`),
+	}, nil
 }
 
 var runtimeControlTestSessionPersistence = sessiontest.NewPersistence()
@@ -1729,6 +1803,165 @@ func TestServiceQueueUserMessageDedupesSuccessfulRetry(t *testing.T) {
 	}
 	if got := countUserMessagesWithContent(t, store, "hello\n\nhello"); got != 0 {
 		t.Fatalf("duplicate queued flush count = %d, want 0", got)
+	}
+}
+
+func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
+	client := newSteeringDrainRuntimeControlClient()
+	queuedStatuses := make(chan runtime.QueuedUserMessageStatusEvent, 4)
+	registry := tools.NewRegistry(tools.HandlerRegistration{
+		ID:      toolspec.ToolExecCommand,
+		Handler: fakeShellHandler{},
+	})
+	store, _, service := newRuntimeControlTestService(t, client, registry, runtime.Config{
+		OnEvent: func(event runtime.Event) {
+			if event.QueuedUserMessageStatus != nil {
+				queuedStatuses <- *event.QueuedUserMessageStatus
+			}
+		},
+	})
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := service.SubmitUserTurn(
+			context.Background(),
+			runtimeControlUserTurnRequest(store, "active-turn", "start"),
+		)
+		submitDone <- err
+	}()
+	select {
+	case <-client.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("active turn did not reach the first model request")
+	}
+	queuedText := "use the existing lld installation"
+	steeringReq := runtimeControlUserTurnRequest(store, "queued-steering", queuedText)
+	steered, err := service.SubmitUserTurn(
+		context.Background(),
+		steeringReq,
+	)
+	if err != nil {
+		t.Fatalf("SubmitUserTurn while model was thinking: %v", err)
+	}
+	if !steered.Steered || steered.QueueItemID == "" {
+		t.Fatalf("SubmitUserTurn while model was thinking = %+v, want accepted steering", steered)
+	}
+	select {
+	case status := <-queuedStatuses:
+		if status.ClientRequestID != steeringReq.OperationRef.ClientRequestID.String() {
+			t.Fatalf(
+				"accepted steering client request id = %q, want %q",
+				status.ClientRequestID,
+				steeringReq.OperationRef.ClientRequestID,
+			)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("accepted steering emitted no queue status")
+	}
+	close(client.releaseFirst)
+	select {
+	case <-client.secondStarted:
+	case <-time.After(time.Second):
+		t.Fatal("active turn did not reach the next safe-boundary model request")
+	}
+	defer close(client.releaseSecond)
+
+	for _, message := range llm.MessagesFromItems(client.request(1).Items) {
+		if message.Role == llm.RoleUser && message.Content == queuedText {
+			return
+		}
+	}
+	t.Fatalf("next model request did not receive accepted steering: %+v", llm.MessagesFromItems(client.request(1).Items))
+}
+
+func TestServiceInterruptDiscardsPendingSteeringBeforeStoppingActiveRun(t *testing.T) {
+	client := newSteeringDrainRuntimeControlClient()
+	defer close(client.releaseFirst)
+	defer close(client.releaseSecond)
+	registry := tools.NewRegistry(tools.HandlerRegistration{
+		ID:      toolspec.ToolExecCommand,
+		Handler: fakeShellHandler{},
+	})
+	store, engine, service := newRuntimeControlTestService(t, client, registry, runtime.Config{})
+	activeReq := runtimeControlUserTurnRequest(store, "active-turn", "start")
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := service.SubmitUserTurn(context.Background(), activeReq)
+		submitDone <- err
+	}()
+	select {
+	case <-client.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("active turn did not reach model thinking")
+	}
+
+	steeringReq := runtimeControlUserTurnRequest(store, "queued-steering", "do not continue after interrupt")
+	steered, err := service.SubmitUserTurn(context.Background(), steeringReq)
+	if err != nil {
+		t.Fatalf("SubmitUserTurn steering: %v", err)
+	}
+	queueItemID := mustRuntimeControlQueueItemID(t, steered.QueueItemID)
+	queuedRef := clientui.RuntimeOperationRef{
+		Kind:            clientui.RuntimeOperationKindQueuedMessage,
+		ClientRequestID: steeringReq.OperationRef.ClientRequestID,
+		QueueItemID:     &queueItemID,
+	}
+	runID := mustRuntimeControlRunID(t)
+	stepID := mustRuntimeControlStepID(t)
+	service.WithRuntimeActivityResolver(&sequenceRuntimeActivityResolver{
+		snapshots: []runtimeactivity.ResponseSnapshot{
+			{
+				Version: clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 1},
+				Activity: clientui.RuntimeActivity{
+					State: clientui.RuntimeActivityRunning,
+					ActiveStep: &clientui.RuntimeActiveStep{
+						RunID:      runID,
+						StepID:     stepID,
+						ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
+					},
+				},
+			},
+			{
+				Version:  clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 2},
+				Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle, QueueAccepting: true},
+			},
+		},
+	})
+
+	resp, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID:      "interrupt-active-with-steering",
+		SessionID:            store.Meta().SessionID,
+		TargetOperationRef:   &activeReq.OperationRef,
+		PendingOperationRefs: []clientui.RuntimeOperationRef{activeReq.OperationRef, queuedRef},
+	})
+	if err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	if engine.HasQueuedUserWork() {
+		t.Fatal("interrupt left accepted steering queued")
+	}
+	for _, record := range resp.InputReconciliation.Operations {
+		if record.Operation.Key() == queuedRef.Key() {
+			if record.State != clientui.RuntimeInputReconciliationCanceledNotCommitted {
+				t.Fatalf("queued steering reconciliation = %q, want canceled_not_committed", record.State)
+			}
+			goto reconciled
+		}
+	}
+	t.Fatalf("interrupt response omitted queued steering reconciliation: %+v", resp.InputReconciliation.Operations)
+
+reconciled:
+	select {
+	case <-client.secondStarted:
+		t.Fatal("queued steering started a model continuation after interrupt")
+	case <-time.After(100 * time.Millisecond):
+	}
+	select {
+	case err := <-submitDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("active submit error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("active submit did not stop after interrupt")
 	}
 }
 

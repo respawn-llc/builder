@@ -83,9 +83,15 @@ func TestTUIStrictIOBusyEnterQueuesInjectedInputAsCommand(t *testing.T) {
 	if client.queueUserMessageCalls != 0 {
 		t.Fatalf("QueueUserMessage called during Update: %d", client.queueUserMessageCalls)
 	}
+	if client.submitCalls != 0 {
+		t.Fatalf("SubmitRuntimeInput called during Update: %d", client.submitCalls)
+	}
 	updated = applyFirstInjectedQueueCreateDoneForTest(t, updated, cmd)
-	if client.queueUserMessageCalls != 1 {
-		t.Fatalf("QueueUserMessage calls after command = %d, want 1", client.queueUserMessageCalls)
+	if client.submitCalls != 1 {
+		t.Fatalf("SubmitRuntimeInput calls after command = %d, want 1", client.submitCalls)
+	}
+	if client.queueUserMessageCalls != 0 {
+		t.Fatalf("separate queue calls after command = %d, want 0", client.queueUserMessageCalls)
 	}
 	if len(updated.pendingInjected) != 1 || updated.pendingInjected[0].ID != "server-queue-1" {
 		t.Fatalf("expected server queue item after command, got %+v", updated.pendingInjected)

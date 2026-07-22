@@ -60,3 +60,29 @@ func applyQueuedRuntimeWorkCheckForTest(t *testing.T, m *uiModel, cmd tea.Cmd) (
 	}
 	return m, cmd
 }
+
+func TestBusyEnterUsesAuthoritativeSubmitPath(t *testing.T) {
+	client := &runtimeControlFakeClient{queueUserMessageID: "busy-submit-queue"}
+	model := newProjectedTestUIModel(client)
+	model.setRuntimeActivityBusyForTest(true)
+	testSetMainInput(model, "steer while thinking")
+
+	next, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(*uiModel)
+	if command == nil {
+		t.Fatal("busy Enter produced no runtime command")
+	}
+	for _, message := range collectCmdMessages(t, command) {
+		model = updateUIModel(t, model, message)
+	}
+
+	if client.submitText != "steer while thinking" {
+		t.Fatalf("submitted text = %q, want authoritative submit", client.submitText)
+	}
+	if client.submitCalls != 1 {
+		t.Fatalf("authoritative submit calls = %d, want 1", client.submitCalls)
+	}
+	if client.queueUserMessageCalls != 0 {
+		t.Fatalf("separate queue submission calls = %d, want 0", client.queueUserMessageCalls)
+	}
+}

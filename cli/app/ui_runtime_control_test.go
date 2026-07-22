@@ -34,6 +34,7 @@ type runtimeControlFakeClient struct {
 	appendedRole           string
 	appendedText           string
 	submitText             string
+	submitCalls            int
 	submitOperationRef     clientui.RuntimeOperationRef
 	preSubmitOperationRef  clientui.RuntimeOperationRef
 	submitResult           string
@@ -172,9 +173,18 @@ func (f *runtimeControlFakeClient) submitUserMessage(_ context.Context, text str
 	return result, f.err
 }
 func (f *runtimeControlFakeClient) SubmitRuntimeInput(ctx context.Context, req clientui.RuntimeSubmitRequest) (clientui.UserTurnSubmission, error) {
+	f.submitCalls++
 	f.submitOperationRef = req.OperationRef
 	f.preSubmitOperationRef = req.PreSubmitCompactionOperationRef
-	return f.submitUserMessage(ctx, req.Text)
+	submission, err := f.submitUserMessage(ctx, req.Text)
+	if err == nil && strings.TrimSpace(f.queueUserMessageID) != "" {
+		submission.Queued = clientui.QueuedUserMessage{
+			ID:              strings.TrimSpace(f.queueUserMessageID),
+			Text:            req.Text,
+			ClientRequestID: req.OperationRef.ClientRequestID.String(),
+		}
+	}
+	return submission, err
 }
 func (f *runtimeControlFakeClient) submitUserShellCommand(_ context.Context, command string) error {
 	return f.err
