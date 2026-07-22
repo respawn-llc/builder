@@ -1,48 +1,48 @@
 ---
 title: Lifecycle Hooks
-description: Send terminal-client lifecycle events to a local command.
+description: Run a local command when an interactive terminal session changes state.
 ---
 
-Lifecycle hooks invoke a local command when an interactive Kent terminal session starts, finishes work, fails, waits for input, or starts compaction. The hook receives one JSON event on stdin.
+Lifecycle hooks run a local command for events observed by an interactive Kent terminal client. Each invocation receives one JSON event on stdin.
 
 ## Configuration
 
-Set the command and any fixed arguments in the global `config.toml`:
+Add the command and any fixed arguments to the global `config.toml`:
 
 ```toml
 [hooks.client]
-lifecycle = ["python3", "/absolute/path/lifecycle_hook.py", "/absolute/path/lifecycle-events.jsonl"]
+lifecycle = ["python3", "/absolute/path/lifecycle_hook.py"]
 ```
 
-The global file is `~/.kent/config.toml` unless Kent uses another persistence root. `hooks.client.lifecycle` cannot be set in workspace config, through an environment variable or CLI flag, in a subagent role, or on the server. The array must contain a non-blank executable and non-blank arguments.
+The global config is `~/.kent/config.toml` unless Kent uses another persistence root. `hooks.client.lifecycle` has no workspace, environment-variable, CLI, or subagent-role override. The executable must be non-blank, as must any arguments.
 
-Restart the terminal client after changing the command.
+The terminal client reads this setting at startup. The command inherits the client's environment and current directory.
 
-The terminal client runs the hook in its own environment and current directory. For remote attachments, the command runs on the client machine rather than the server. Desktop clients, unattended `kent run`, subagents, and server-only processes do not run lifecycle hooks.
+For remote attachments, the command runs on the terminal client's machine, not the server. Desktop clients, headless runs, subagents, and server processes do not run lifecycle hooks.
 
-Lifecycle hooks do not transform shell output. Use [command post-processing](../command-postprocessing/) for synchronous `exec_command` output processing.
+Use [command post-processing](../command-postprocessing/) instead to transform `exec_command` output.
 
 ## Events
 
-The configured command receives every lifecycle category:
+Kent sends these categories to the configured command:
 
-| Category | `hook_event_name` | Details |
+| `category` | `hook_event_name` | `details` |
 | --- | --- | --- |
 | `session.start` | `SessionStart` | `kind` is `new` or `resumed`. |
-| `task.complete` | `Stop` | `final_answer` contains the final response; `work_performed` reports whether the run performed tool work. |
+| `task.complete` | `Stop` | `final_answer` and `work_performed` describe the completed run. |
 | `task.error` | `PostToolUseFailure` | `diagnostic` describes the runtime failure. |
 | `input.required` | `PermissionRequest` | `kind` is `question` or `approval`; `summary` contains the prompt. |
-| `resource.limit` | `PreCompact` | `compaction_mode` identifies the compaction mode. |
+| `resource.limit` | `PreCompact` | `compaction_mode` identifies the compaction mode that started. |
 
-`category` is authoritative. `hook_event_name` is an OpenPeon-compatible alias.
+`category` is the canonical event name. `hook_event_name` is an OpenPeon-compatible alias.
 
-`task.complete` requires an assistant final answer, and `task.error` requires a failed runtime result. Interruptions, shell activity, and successful runs without an assistant final answer emit neither category.
+`task.complete` requires an assistant final answer. `task.error` requires a failed runtime result. Interruptions and successful runs without an assistant final answer emit neither event.
 
 `resource.limit` emits for every compaction start, including manual compaction.
 
-## JSON contract
+## Payload
 
-Each invocation receives one JSON object with `schema_version` set to `1`:
+This `task.complete` payload shows the schema:
 
 ```json
 {
@@ -55,8 +55,8 @@ Each invocation receives one JSON object with `schema_version` set to `1`:
   "focused": false,
   "context": {
     "session_id": "4f44b818-e9d5-4ff4-a4ab-b9bc03bb776f",
-    "session_title": "Lifecycle receiver",
-    "workflow_task_id": "BUI-51"
+    "session_title": "Review API changes",
+    "workflow_task_id": "ENG-42"
   },
   "details": {
     "final_answer": "The requested changes are complete.",
@@ -65,33 +65,16 @@ Each invocation receives one JSON object with `schema_version` set to `1`:
 }
 ```
 
-`context` contains the session ID, session title, and workflow task ID when available. Absent values are omitted. `focused` reports whether the terminal client was focused when it observed the event, and `occurred_at` is a UTC timestamp.
+`schema_version` identifies the Kent payload schema. `cesp_version` and `hook_event_name` provide OpenPeon compatibility.
 
-Payloads exclude filesystem paths, transcript history, tool input, command output, hidden reasoning, credentials, and internal runtime identifiers.
+`occurred_at` is a UTC timestamp. `focused` reports whether the terminal client had focus when it observed the event. `context` includes the session ID, session title, and workflow task ID when available; absent values are omitted.
 
-## Delivery and failures
+Payloads do not include filesystem paths, transcript history, tool input, command output, hidden reasoning, credentials, or internal runtime identifiers.
 
-Hook delivery is asynchronous and best-effort. Events are not persisted or retried, saturated clients may drop events, and invocations may overlap or complete out of order.
+## Delivery
 
-Each invocation has a 30-second timeout. Kent ignores stdout and retains up to 4 KiB of stderr for diagnostics. Launch failures, non-zero exits, and timeouts produce a transient terminal error; repeated failures may be coalesced into one notice containing the total count and latest diagnostic. A failed invocation does not disable subsequent invocations.
+Delivery is asynchronous and best-effort. Events are not persisted or retried, bursts may drop events, and invocations may overlap or complete out of order.
 
-Closing the session cancels running hook commands without waiting for them. Descendant processes may continue. Hook output and failures do not change agent or server behavior.
+Each invocation has a 30-second timeout. Kent ignores stdout. Launch failures, non-zero exits, and timeouts produce a terminal notice using up to 4 KiB of stderr. Repeated failures may be combined into one notice with the total count and latest diagnostic. A failure does not disable the hook.
 
-## Minimal receiver
-
-This receiver appends each JSON object to the fixed path passed in the command arguments:
-
-```python
-#!/usr/bin/env python3
-import json
-import os
-import sys
-
-event = json.load(sys.stdin)
-line = json.dumps(event, separators=(",", ":")).encode() + b"\n"
-fd = os.open(sys.argv[1], os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
-with os.fdopen(fd, "ab") as output:
-    output.write(line)
-```
-
-Use fixed command arguments for receiver configuration; event data arrives through stdin.
+Closing the session cancels running hook commands without waiting for them; descendant processes may continue. Hook output and failures do not change agent or server behavior.
