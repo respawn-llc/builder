@@ -1587,40 +1587,7 @@ SELECT
 FROM effective_board_placements
 JOIN label_filter_args
 WHERE (
-    label_filter_args.label_filter_kind = 'none'
-    OR (
-        label_filter_args.label_filter_kind = 'named'
-        AND label_filter_args.label_filter_mode = 'any'
-        AND EXISTS (
-            SELECT 1
-            FROM json_each(label_filter_args.label_ids_json) selected_label
-            JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-              ON assignment.label_id = selected_label.value
-            WHERE assignment.task_id = effective_board_placements.task_id
-        )
-    )
-    OR (
-        label_filter_args.label_filter_kind = 'named'
-        AND label_filter_args.label_filter_mode = 'all'
-        AND NOT EXISTS (
-            SELECT 1
-            FROM json_each(label_filter_args.label_ids_json) selected_label
-            WHERE NOT EXISTS (
-                SELECT 1
-                FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                WHERE assignment.label_id = selected_label.value
-                  AND assignment.task_id = effective_board_placements.task_id
-            )
-        )
-    )
-    OR (
-        label_filter_args.label_filter_kind = 'unlabeled'
-        AND NOT EXISTS (
-            SELECT 1
-            FROM task_label_assignments assignment
-            WHERE assignment.task_id = effective_board_placements.task_id
-        )
-    )
+{{taskLabelFilter "    " "effective_board_placements.task_id" "label_filter_args.label_filter_kind" "label_filter_args.label_filter_mode" "label_filter_args.label_ids_json"}}
 )
 GROUP BY node_id
 ORDER BY node_id ASC;
@@ -1861,40 +1828,7 @@ selected_rows AS (
           )
       )
       AND (
-          args.label_filter_kind = 'none'
-          OR (
-              args.label_filter_kind = 'named'
-              AND args.label_filter_mode = 'any'
-              AND EXISTS (
-                  SELECT 1
-                  FROM json_each(args.label_ids_json) selected_label
-                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                    ON assignment.label_id = selected_label.value
-                  WHERE assignment.task_id = t.id
-              )
-          )
-          OR (
-              args.label_filter_kind = 'named'
-              AND args.label_filter_mode = 'all'
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM json_each(args.label_ids_json) selected_label
-                  WHERE NOT EXISTS (
-                      SELECT 1
-                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                      WHERE assignment.label_id = selected_label.value
-                        AND assignment.task_id = t.id
-                  )
-              )
-          )
-          OR (
-              args.label_filter_kind = 'unlabeled'
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM task_label_assignments assignment
-                  WHERE assignment.task_id = t.id
-              )
-          )
+{{taskLabelFilter "          " "t.id" "args.label_filter_kind" "args.label_filter_mode" "args.label_ids_json"}}
       )
 ),
 matching_workflows AS (
@@ -2027,40 +1961,7 @@ WITH board_node_tasks AS (
     WHERE t.project_id = sqlc.arg(project_id)
       AND t.workflow_id = sqlc.arg(workflow_id)
       AND (
-          sqlc.arg(label_filter_kind) = 'none'
-          OR (
-              sqlc.arg(label_filter_kind) = 'named'
-              AND sqlc.narg(label_filter_mode) = 'any'
-              AND EXISTS (
-                  SELECT 1
-                  FROM json_each(sqlc.arg(label_ids_json)) selected_label
-                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                    ON assignment.label_id = selected_label.value
-                  WHERE assignment.task_id = t.id
-              )
-          )
-          OR (
-              sqlc.arg(label_filter_kind) = 'named'
-              AND sqlc.narg(label_filter_mode) = 'all'
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM json_each(sqlc.arg(label_ids_json)) selected_label
-                  WHERE NOT EXISTS (
-                      SELECT 1
-                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                      WHERE assignment.label_id = selected_label.value
-                        AND assignment.task_id = t.id
-                  )
-              )
-          )
-          OR (
-              sqlc.arg(label_filter_kind) = 'unlabeled'
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM task_label_assignments assignment
-                  WHERE assignment.task_id = t.id
-              )
-          )
+{{taskLabelFilter "          " "t.id" "sqlc.arg(label_filter_kind)" "sqlc.narg(label_filter_mode)" "sqlc.arg(label_ids_json)"}}
       )
       AND (
           EXISTS (
