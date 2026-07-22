@@ -103,28 +103,48 @@ func TestDispatcherFailurePresentationDoesNotHoldActiveProcessSlots(t *testing.T
 	t.Setenv("KENT_TEST_LIFECYCLE_START_DIR", startDir)
 	dispatcher := lifecyclehook.New(t.Context(), dispatcherProcessCommand())
 	t.Cleanup(dispatcher.Close)
+	fillDispatcherIssueBuffer(t, dispatcher)
 
 	for range 64 {
 		dispatcher.Submit(testLifecycleEvent())
 	}
 	waitForDispatcherProcessCount(t, startDir, 64)
-	for range 64 {
-		dispatcher.Submit(testLifecycleEvent())
+	waitForDispatcherProcessLaunchAfterSaturation(t, dispatcher, startDir, 65)
+}
+
+func TestDispatcherCoalescesPendingFailureCountAndLatestDiagnostic(t *testing.T) {
+	dispatcher := lifecyclehook.New(t.Context(), dispatcherProcessCommand())
+	t.Cleanup(dispatcher.Close)
+	fillDispatcherIssueBuffer(t, dispatcher)
+
+	const pendingCount = 128
+	for index := range pendingCount {
+		dispatcher.Report(lifecyclehook.NewProcessIssue(
+			lifecyclecontract.CategoryTaskError,
+			fmt.Errorf("failure %d", index),
+			fmt.Sprintf("diagnostic %d", index),
+		))
 	}
-	waitForDispatcherProcessCount(t, startDir, 128)
-	waitForDispatcherProcessLaunchAfterSaturation(t, dispatcher, startDir, 129)
+	for range 64 {
+		waitForDispatcherIssue(t, dispatcher.Issues(), 3*time.Second)
+	}
 
 	totalFailures := 0
+	var latest lifecyclehook.ProcessIssue
 	deadline := time.Now().Add(5 * time.Second)
-	for totalFailures < 129 && time.Now().Before(deadline) {
+	for totalFailures < pendingCount && time.Now().Before(deadline) {
 		issue := waitForDispatcherIssue(t, dispatcher.Issues(), 3*time.Second)
-		if requireProcessIssue(t, issue).Cause == nil {
+		latest = requireProcessIssue(t, issue)
+		if latest.Cause == nil {
 			t.Fatalf("issue omitted failure: %+v", issue)
 		}
 		totalFailures += issue.Count
 	}
-	if totalFailures != 129 {
-		t.Fatalf("reported failure count = %d, want 129", totalFailures)
+	if totalFailures != pendingCount {
+		t.Fatalf("reported failure count = %d, want %d", totalFailures, pendingCount)
+	}
+	if latest.Stderr != "diagnostic 127" {
+		t.Fatalf("latest failure diagnostic = %q, want final diagnostic", latest.Stderr)
 	}
 }
 
@@ -284,6 +304,25 @@ func waitForDispatcherProcessCount(t *testing.T, dir string, want int) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %d hook processes; got %d", want, dispatcherProcessCount(t, dir))
+}
+
+func fillDispatcherIssueBuffer(t *testing.T, dispatcher *lifecyclehook.Dispatcher) {
+	t.Helper()
+	issues := dispatcher.Issues()
+	for want := 1; want <= cap(issues); want++ {
+		dispatcher.Report(lifecyclehook.NewProcessIssue(
+			lifecyclecontract.CategoryTaskError,
+			errors.New("seed failure"),
+			"seed diagnostic",
+		))
+		deadline := time.Now().Add(3 * time.Second)
+		for len(issues) < want && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if got := len(issues); got != want {
+			t.Fatalf("issue buffer length = %d, want %d", got, want)
+		}
+	}
 }
 
 func dispatcherProcessCount(t *testing.T, dir string) int {
