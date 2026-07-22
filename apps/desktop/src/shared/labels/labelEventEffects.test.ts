@@ -131,7 +131,7 @@ describe("Project label event effects", () => {
     ]);
   });
 
-  it("invalidates lightweight assignment and membership reads for task label changes only", async () => {
+  it("refreshes membership reads without invalidating the removed assignment read", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -164,7 +164,7 @@ describe("Project label event effects", () => {
 
     expect(
       queryClient.getQueryCache().find({ queryKey: assignmentKey, exact: true })?.state.isInvalidated,
-    ).toBe(true);
+    ).toBe(false);
     expect(queryClient.getQueryCache().find({ queryKey: boardKey, exact: true })?.state.isInvalidated).toBe(
       true,
     );

@@ -123,7 +123,7 @@ describe("TaskDetailSurface editing", () => {
   });
 
   it("places the empty Labels property immediately after ID with an add affordance", async () => {
-    mountTaskDetail(taskGetRoute());
+    const services = mountTaskDetail(taskGetRoute());
 
     const properties = await screen.findByRole("region", {
       name: appI18n.t("task.properties"),
@@ -138,11 +138,12 @@ describe("TaskDetailSurface editing", () => {
       name: appI18n.t("labels.editAssignments"),
     });
     expect(await within(trigger).findByText(appI18n.t("labels.add"))).toBeVisible();
+    expect(getCallCount(services.transport.calls, "workflow.task.labels.get")).toBe(0);
   });
 
   it("renders assigned catalog labels in the whole-value chooser trigger", async () => {
     mountTaskDetail(
-      taskGetRoute(),
+      taskGetRoute({ label_ids: [betaLabelID, priorityLabelID] }),
       {
         method: "workflow.project.label.list",
         result: {
@@ -152,15 +153,6 @@ describe("TaskDetailSurface editing", () => {
               { id: betaLabelID, name: "Beta" },
               { id: priorityLabelID, name: "Priority" },
             ],
-          },
-        },
-      },
-      {
-        method: "workflow.task.labels.get",
-        result: {
-          assignment: {
-            task_id: "task-1",
-            label_ids: [betaLabelID, priorityLabelID],
           },
         },
       },
@@ -202,7 +194,7 @@ describe("TaskDetailSurface editing", () => {
   it("rolls back only a failed optimistic label intent and exposes a successful Retry", async () => {
     const failedUpdate = deferred<unknown>();
     const services = mountTaskDetail(
-      taskGetRoute(),
+      taskGetRoute({ label_ids: [betaLabelID] }),
       {
         method: "workflow.project.label.list",
         result: {
@@ -212,15 +204,6 @@ describe("TaskDetailSurface editing", () => {
               { id: betaLabelID, name: "Beta" },
               { id: priorityLabelID, name: "Priority" },
             ],
-          },
-        },
-      },
-      {
-        method: "workflow.task.labels.get",
-        result: {
-          assignment: {
-            task_id: "task-1",
-            label_ids: [betaLabelID],
           },
         },
       },
@@ -259,97 +242,6 @@ describe("TaskDetailSurface editing", () => {
     await waitFor(() => {
       expect(getCallCount(services.transport.calls, "workflow.task.labels.update")).toBe(2);
     });
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  });
-
-  it("keeps an initial assignment read failure actionable", async () => {
-    const services = mountTaskDetail(taskGetRoute(), {
-      method: "workflow.task.labels.get",
-      handler: (_params, callIndex) => {
-        if (callIndex === 0) {
-          throw new Error("assignment unavailable");
-        }
-        return {
-          assignment: {
-            task_id: "task-1",
-            label_ids: [],
-          },
-        };
-      },
-    });
-
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(appI18n.t("labels.assignmentRefreshFailed"));
-    fireEvent.click(within(alert).getByRole("button", { name: appI18n.t("app.retry") }));
-
-    expect(
-      await screen.findByRole("button", { name: appI18n.t("labels.editAssignments") }),
-    ).toHaveTextContent(appI18n.t("labels.add"));
-    expect(getCallCount(services.transport.calls, "workflow.task.labels.get")).toBe(2);
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  });
-
-  it("keeps a failed event reconciliation actionable", async () => {
-    const services = mountTaskDetail(
-      taskGetRoute(),
-      {
-        method: "workflow.project.label.list",
-        result: {
-          catalog: {
-            project_id: "project-1",
-            labels: [{ id: priorityLabelID, name: "Priority" }],
-          },
-        },
-      },
-      {
-        method: "workflow.task.labels.get",
-        handler: (_params, callIndex) => {
-          if (callIndex === 1) {
-            throw new Error("reconciliation unavailable");
-          }
-          return {
-            assignment: {
-              task_id: "task-1",
-              label_ids: callIndex === 0 ? [] : [priorityLabelID],
-            },
-          };
-        },
-      },
-    );
-    await screen.findByRole("button", { name: appI18n.t("labels.editAssignments") });
-    await waitFor(() => {
-      expect(getCallCount(services.transport.calls, "workflow.task.labels.get")).toBe(1);
-      expect(
-        services.transport.subscriptions.filter(
-          (subscription) => subscription.method === "workflow.subscribeProject",
-        ),
-      ).toHaveLength(2);
-    });
-
-    act(() => {
-      services.transport.emit("workflow.project", {
-        event: {
-          action: "labels_changed",
-          occurred_at_unix_ms: 3,
-          primary_entity_id: "task-1",
-          project_id: "project-1",
-          related_ids: [],
-          resource: "task",
-          workflow_id: "workflow-1",
-        },
-      });
-    });
-
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(appI18n.t("labels.assignmentRefreshFailed"));
-    fireEvent.click(within(alert).getByRole("button", { name: appI18n.t("app.retry") }));
-
-    const trigger = screen.getByRole("button", {
-      name: appI18n.t("labels.editAssignments"),
-    });
-    expect(await within(trigger).findByText("Priority")).toBeVisible();
-    expect(getCallCount(services.transport.calls, "workflow.task.labels.get")).toBe(3);
-    expect(getCallCount(services.transport.calls, "workflow.task.get")).toBe(1);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -476,7 +368,6 @@ describe("TaskDetailSurface editing", () => {
     });
     expect(within(trigger).queryByText("Priority")).not.toBeInTheDocument();
     expect(trigger).toBeDisabled();
-    expect(getCallCount(services.transport.calls, "workflow.task.labels.get")).toBe(1);
   });
 
   it("keeps catalog loading and failure actionable inside the shared chooser", async () => {
@@ -505,7 +396,6 @@ describe("TaskDetailSurface editing", () => {
     expect(await screen.findByRole("button", { name: "Priority" })).toBeVisible();
     await waitFor(() => {
       expect(getCallCount(services.transport.calls, "workflow.project.label.list")).toBe(2);
-      expect(getCallCount(services.transport.calls, "workflow.task.labels.get")).toBe(1);
     });
   });
 
@@ -682,7 +572,7 @@ describe("TaskDetailSurface editing", () => {
     expect(screen.getByRole("button", { name: "Save changes" })).toBeInTheDocument();
   });
 
-  it("preserves unsaved edits through optimistic assignment and event reconciliation without a detail read", async () => {
+  it("preserves unsaved edits through optimistic assignment and a detail refresh", async () => {
     const assignmentUpdate = deferred<unknown>();
     const services = mountTaskDetail(
       taskGetRoute(),
@@ -694,15 +584,6 @@ describe("TaskDetailSurface editing", () => {
             labels: [{ id: priorityLabelID, name: "Priority" }],
           },
         },
-      },
-      {
-        method: "workflow.task.labels.get",
-        handler: (_params, callIndex) => ({
-          assignment: {
-            task_id: "task-1",
-            label_ids: callIndex === 0 ? [] : [priorityLabelID],
-          },
-        }),
       },
       {
         method: "workflow.task.labels.update",
@@ -748,11 +629,10 @@ describe("TaskDetailSurface editing", () => {
     });
 
     await waitFor(() => {
-      expect(getCallCount(services.transport.calls, "workflow.task.labels.get")).toBe(2);
+      expect(getCallCount(services.transport.calls, "workflow.task.get")).toBeGreaterThan(1);
     });
     expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("Half-written title");
     expect(screen.getByRole("textbox", { name: "Description" })).toHaveTextContent("Half-written notes");
-    expect(getCallCount(services.transport.calls, "workflow.task.get")).toBe(1);
   });
 
   it("follows server title updates on a clean surface without unsaved edits", async () => {
@@ -802,15 +682,6 @@ function mountTaskDetail(...routes: readonly TestRoute[]) {
         },
       },
     },
-    {
-      method: "workflow.task.labels.get",
-      result: {
-        assignment: {
-          task_id: "task-1",
-          label_ids: [],
-        },
-      },
-    },
     { method: "workflow.task.attention.list", result: { items: [], generated_at_unix_ms: 1 } },
     { method: "workflow.task.activity.list", result: activityResponse },
     ...routes,
@@ -823,7 +694,11 @@ function mountTaskDetail(...routes: readonly TestRoute[]) {
   return services;
 }
 
-function taskGetRoute(overrides: Partial<typeof taskDetailNoInboxResponse.task> = {}) {
+function taskGetRoute(
+  overrides: Partial<Omit<typeof taskDetailNoInboxResponse.task, "label_ids">> & {
+    label_ids?: readonly string[];
+  } = {},
+) {
   return {
     method: "workflow.task.get",
     result: { task: { ...taskDetailNoInboxResponse.task, ...overrides } },
@@ -849,15 +724,6 @@ function renderWithAppProviders(content: ReactNode) {
         catalog: {
           project_id: "project-1",
           labels: [],
-        },
-      },
-    },
-    {
-      method: "workflow.task.labels.get",
-      result: {
-        assignment: {
-          task_id: "task-1",
-          label_ids: [],
         },
       },
     },
@@ -900,6 +766,7 @@ function TaskDetailContentAssignmentHarness({
   return (
     <TaskLabelAssignmentProvider
       catalog={catalog.data ?? null}
+      initialAssignment={{ taskID: detail.id, labelIDs: detail.labelIDs }}
       taskID={detail.id}
       workflowID={detail.workflowID}
     >

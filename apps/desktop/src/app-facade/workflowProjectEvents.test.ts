@@ -52,7 +52,7 @@ describe("workflow project event helpers", () => {
     }
   });
 
-  it("leaves task label assignment events to the lightweight label controller", () => {
+  it("matches task label assignment events", () => {
     expect(
       workflowProjectEventAffectsTask(
         workflowEvent({
@@ -62,7 +62,7 @@ describe("workflow project event helpers", () => {
         }),
         "task-1",
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("ignores events for other tasks, other resources, or a blank task id", () => {

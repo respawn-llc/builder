@@ -16,7 +16,7 @@ export type TaskLabelAssignmentControllerLease = Readonly<{
 
 type ControllerInput = Readonly<{
   availableLabelIDs: readonly string[];
-  initialAssignment: TaskLabelAssignment | null;
+  initialAssignment: TaskLabelAssignment;
   projectID: string;
   refetch: () => Promise<TaskLabelAssignment>;
   taskID: string;
@@ -124,11 +124,12 @@ class TaskLabelAssignmentRegistry {
       existing.stopCleanupWatch = null;
       existing.references += 1;
       existing.controller.replaceAvailableLabelIDs(input.availableLabelIDs);
+      existing.controller.replaceAuthoritative(input.initialAssignment);
       return this.#lease(input.taskID, existing);
     }
     const controller = createTaskLabelAssignmentController({
       availableLabelIDs: input.availableLabelIDs,
-      initialLabelIDs: input.initialAssignment?.labelIDs ?? [],
+      initialLabelIDs: input.initialAssignment.labelIDs,
       refetch: input.refetch,
       taskID: input.taskID,
       update: input.update,
@@ -212,7 +213,7 @@ class TaskLabelAssignmentRegistry {
         taskID,
         labelIDs: snapshot.authoritativeLabelIDs,
       });
-      patchExistingTaskLabelProjections(this.#queryClient, taskID, snapshot.visibleLabelIDs);
+      patchExistingTaskLabelProjections(this.#queryClient, taskID, snapshot.authoritativeLabelIDs);
       if (authoritativeChanged) {
         void this.#queryClient.invalidateQueries({
           queryKey: queryKeys.boardWorkflowRoot(projectID, workflowID),

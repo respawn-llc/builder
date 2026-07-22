@@ -15,8 +15,7 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
     () => new Map(catalog.data?.labels.map((label) => [label.id, label.name]) ?? []),
     [catalog.data?.labels],
   );
-  const selectedLabelIDs =
-    assignment.snapshot?.visibleLabelIDs ?? assignment.assignment.data?.labelIDs ?? [];
+  const selectedLabelIDs = assignment.snapshot?.visibleLabelIDs ?? [];
   const visibleLabels = selectedLabelIDs.flatMap((labelID) => {
     const name = labelNamesByID.get(labelID);
     return name === undefined ? [] : [{ id: labelID, name }];
@@ -25,7 +24,7 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
   const triggerDisabled = disabled || assignment.snapshot?.closed === true;
   const trigger = renderTaskDetailLabelTrigger({
     disabled: triggerDisabled,
-    loading: assignment.assignment.isPending,
+    loading: catalog.isPending || assignment.snapshot === null,
     pendingLabelIDs,
     t,
     visibleLabels,
@@ -96,9 +95,7 @@ function AssignmentFailures() {
   const { t } = useTranslation();
   const assignment = useTaskLabelAssignment();
   const failures = assignment.snapshot?.failures ?? [];
-  const reconciliationFailure = assignment.snapshot?.reconciliationFailure ?? null;
-  const initialError = assignment.assignment.isError ? assignment.assignment.error : null;
-  if (failures.length === 0 && reconciliationFailure === null && initialError === null) {
+  if (failures.length === 0) {
     return null;
   }
   return (
@@ -113,24 +110,6 @@ function AssignmentFailures() {
           title={t("labels.assignmentFailed")}
         />
       ))}
-      {reconciliationFailure === null ? null : (
-        <FailureRow
-          error={reconciliationFailure.error}
-          onRetry={() => {
-            assignment.controller?.retryReconciliation();
-          }}
-          title={t("labels.assignmentRefreshFailed")}
-        />
-      )}
-      {initialError === null ? null : (
-        <FailureRow
-          error={initialError}
-          onRetry={() => {
-            void assignment.assignment.refetch();
-          }}
-          title={t("labels.assignmentRefreshFailed")}
-        />
-      )}
     </div>
   );
 }
