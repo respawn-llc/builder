@@ -993,7 +993,7 @@ func TestServiceMapsWorkflowLabelFailures(t *testing.T) {
 	if _, err := service.RenameWorkflowProjectLabel(ctx, serverapi.WorkflowProjectLabelRenameRequest{
 		ProjectID: binding.ProjectID,
 		LabelID:   created.Label.ID,
-		Name:      "invalid!",
+		Name:      "invalid🚀",
 	}); !workflowLabelErrorHasReason(err, serverapi.WorkflowLabelErrorReasonInvalidName) {
 		t.Fatalf("invalid rename error = %T %v", err, err)
 	}

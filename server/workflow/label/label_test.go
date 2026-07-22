@@ -55,7 +55,8 @@ func TestPrepareNameNormalizesAndValidatesTheLabelAlphabet(t *testing.T) {
 	}{
 		{raw: "  Cafe\u0301  ", want: "Café"},
 		{raw: "Priority HIGH_2/βeta-３", want: "Priority HIGH_2/βeta-３"},
-		{raw: "release-urgent/customer_acme", want: "release-urgent/customer_acme"},
+		{raw: "release:urgent & customer.acme", want: "release:urgent & customer.acme"},
+		{raw: "punctuation: &*%$#@!?.,/\\+|-_~'", want: "punctuation: &*%$#@!?.,/\\+|-_~'"},
 		{raw: sixtyFourRunes, want: sixtyFourRunes},
 	} {
 		got, err := label.PrepareName(test.raw)
@@ -75,8 +76,6 @@ func TestPrepareNameNormalizesAndValidatesTheLabelAlphabet(t *testing.T) {
 		{raw: "   ", reason: label.NameErrorRequired},
 		{raw: sixtyFourRunes + "a", reason: label.NameErrorTooLong},
 		{raw: "priority\turgent", reason: label.NameErrorInvalidCharacter, character: runePointer('\t')},
-		{raw: "priority!urgent", reason: label.NameErrorInvalidCharacter, character: runePointer('!')},
-		{raw: "priority:urgent", reason: label.NameErrorInvalidCharacter, character: runePointer(':')},
 		{raw: "ship🚀", reason: label.NameErrorInvalidCharacter, character: runePointer('🚀')},
 	} {
 		_, err := label.PrepareName(test.raw)
