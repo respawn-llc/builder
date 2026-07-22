@@ -224,7 +224,14 @@ func (a *Authority) WithDormantSessionStore(
 	gate := a.gateFor(sessionID)
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
+	if len(gate.blocks) != 0 {
+		return DormantSessionStoreAdmission{}, sessionStartsBlockedError(sessionID)
+	}
 	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return DormantSessionStoreAdmission{}, ErrAuthorityClosed
+	}
 	resource := a.resources[sessionID]
 	a.mu.Unlock()
 	if resource != nil {

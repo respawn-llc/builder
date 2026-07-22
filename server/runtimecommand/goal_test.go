@@ -103,6 +103,71 @@ func TestGoalAuthorityDormantSetPersistsMetadataBeforeOneNoticeWithoutRuntime(t 
 	}
 }
 
+func TestGoalAuthorityDormantSetRespectsAdmissionFence(t *testing.T) {
+	tests := []struct {
+		name      string
+		prepare   func(*testing.T, *sessionruntime.Authority, runtimeids.SessionID)
+		wantError error
+	}{
+		{
+			name: "blocked",
+			prepare: func(t *testing.T, authority *sessionruntime.Authority, sessionID runtimeids.SessionID) {
+				t.Helper()
+				release, err := authority.BlockSessionStarts(
+					context.Background(),
+					[]runtimeids.SessionID{sessionID},
+					sessionruntime.SessionStartBlockMaintenance,
+				)
+				if err != nil {
+					t.Fatalf("block session starts: %v", err)
+				}
+				t.Cleanup(func() {
+					if closeErr := release.Close(context.Background()); closeErr != nil {
+						t.Errorf("release session-start block: %v", closeErr)
+					}
+				})
+			},
+			wantError: sessionruntime.ErrSessionStartsBlocked,
+		},
+		{
+			name: "closed",
+			prepare: func(t *testing.T, authority *sessionruntime.Authority, _ runtimeids.SessionID) {
+				t.Helper()
+				if err := authority.Close(context.Background()); err != nil {
+					t.Fatalf("close authority: %v", err)
+				}
+			},
+			wantError: sessionruntime.ErrAuthorityClosed,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, authority, goalAuthority, observer := newGoalAuthorityFixture(t, nil)
+			sessionID := mustGoalAuthoritySessionID(t, store)
+			test.prepare(t, authority, sessionID)
+
+			_, err := goalAuthority.Set(context.Background(), GoalSetCommand{
+				SessionID: sessionID,
+				Objective: "blocked dormant goal",
+				Actor:     session.GoalActorUser,
+			})
+			if !errors.Is(err, test.wantError) {
+				t.Fatalf("dormant set error = %v, want %v", err, test.wantError)
+			}
+			if goal := store.Meta().Goal; goal != nil {
+				t.Fatalf("goal after rejected dormant set = %+v, want nil", goal)
+			}
+			reopened := reopenGoalAuthorityStore(t, store, observer)
+			if goal := reopened.Meta().Goal; goal != nil {
+				t.Fatalf("persisted goal after rejected dormant set = %+v, want nil", goal)
+			}
+			if count := goalAuthorityNoticeCount(t, reopened); count != 0 {
+				t.Fatalf("goal notices after rejected dormant set = %d, want 0", count)
+			}
+		})
+	}
+}
+
 func TestGoalAuthorityLiveSetUsesRuntimeCommand(t *testing.T) {
 	var liveEvents int
 	store, authority, goalAuthority, observer := newGoalAuthorityFixture(t, func(sessionruntime.AgentResourceDescriptor, runtime.Event) {

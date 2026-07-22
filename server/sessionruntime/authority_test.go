@@ -1490,6 +1490,82 @@ func TestAuthorityWithDormantSessionStoreAdmitsExactlyOnePath(t *testing.T) {
 	}
 }
 
+func TestAuthorityWithDormantSessionStoreRejectsBlockedAndClosedAdmission(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
+	if err != nil {
+		t.Fatalf("new open session descriptor: %v", err)
+	}
+
+	t.Run("blocked", func(t *testing.T) {
+		authority := NewAuthority(AuthorityOptions{
+			PersistenceRoot: fixture.config.PersistenceRoot,
+			StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+		})
+		t.Cleanup(func() {
+			if closeErr := authority.Close(context.Background()); closeErr != nil {
+				t.Errorf("close authority: %v", closeErr)
+			}
+		})
+		release, blockErr := authority.BlockSessionStarts(
+			context.Background(),
+			[]runtimeids.SessionID{sessionID},
+			SessionStartBlockMaintenance,
+		)
+		if blockErr != nil {
+			t.Fatalf("block session starts: %v", blockErr)
+		}
+		t.Cleanup(func() {
+			if releaseErr := release.Close(context.Background()); releaseErr != nil {
+				t.Errorf("release session-start block: %v", releaseErr)
+			}
+		})
+
+		callbackCalled := false
+		_, admissionErr := authority.WithDormantSessionStore(
+			context.Background(),
+			descriptor,
+			func(context.Context, *session.Store) error {
+				callbackCalled = true
+				return nil
+			},
+		)
+		if !errors.Is(admissionErr, ErrSessionStartsBlocked) {
+			t.Fatalf("blocked dormant admission error = %v, want ErrSessionStartsBlocked", admissionErr)
+		}
+		if callbackCalled {
+			t.Fatal("blocked dormant admission invoked the Store callback")
+		}
+	})
+
+	t.Run("closed", func(t *testing.T) {
+		authority := NewAuthority(AuthorityOptions{
+			PersistenceRoot: fixture.config.PersistenceRoot,
+			StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+		})
+		if closeErr := authority.Close(context.Background()); closeErr != nil {
+			t.Fatalf("close authority: %v", closeErr)
+		}
+
+		callbackCalled := false
+		_, admissionErr := authority.WithDormantSessionStore(
+			context.Background(),
+			descriptor,
+			func(context.Context, *session.Store) error {
+				callbackCalled = true
+				return nil
+			},
+		)
+		if !errors.Is(admissionErr, ErrAuthorityClosed) {
+			t.Fatalf("closed dormant admission error = %v, want ErrAuthorityClosed", admissionErr)
+		}
+		if callbackCalled {
+			t.Fatal("closed dormant admission invoked the Store callback")
+		}
+	})
+}
+
 func TestAuthorityWithDormantSessionStoreSelectsLiveForEveryRegisteredResourceState(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)

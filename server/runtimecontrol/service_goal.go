@@ -55,8 +55,7 @@ func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetReque
 			SessionID: sessionID,
 			Objective: memoReq.Objective,
 			Actor:     session.GoalActor(memoReq.Actor),
-			RunID:     memoReq.RunID,
-			StepID:    memoReq.StepID,
+			Execution: goalExecutionIdentity(memoReq.RunID, memoReq.StepID),
 		})
 	})
 }
@@ -93,10 +92,24 @@ func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalSt
 			SessionID: sessionID,
 			Status:    status,
 			Actor:     session.GoalActor(memoReq.Actor),
-			RunID:     memoReq.RunID,
-			StepID:    memoReq.StepID,
+			Execution: goalExecutionIdentity(memoReq.RunID, memoReq.StepID),
 		})
 	})
+}
+
+func goalExecutionIdentity(runID string, stepID string) runtimecommand.GoalExecutionIdentity {
+	return runtimecommand.GoalExecutionIdentity{
+		RunID:  optionalGoalExecutionID(runID),
+		StepID: optionalGoalExecutionID(stepID),
+	}
+}
+
+func optionalGoalExecutionID(raw string) *string {
+	normalized := strings.TrimSpace(raw)
+	if normalized == "" {
+		return nil
+	}
+	return &normalized
 }
 
 func (s *Service) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalShowResponse, error) {

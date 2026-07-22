@@ -94,8 +94,8 @@ func TestGoalCommandResultReportsAppliedAndNoopOutcomes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SetGoalStatus paused: %v", err)
 		}
-		if result.Disposition != GoalCommandNoop || !result.Accepted() || result.MetadataReceipt.Committed || result.NoticeReceipt.Committed {
-			t.Fatalf("noop result = %+v, want accepted no-op without persistence", result)
+		if result.Disposition != GoalCommandNoop || result.MetadataReceipt.Committed || result.NoticeReceipt.Committed {
+			t.Fatalf("noop result = %+v, want no-op without persistence", result)
 		}
 	})
 }
@@ -115,8 +115,8 @@ func TestGoalCommandResultReportsCommitBoundaries(t *testing.T) {
 		if !errors.Is(err, ErrGoalRequiresAskQuestion) {
 			t.Fatalf("SetGoalStatus active error = %v, want goal loop preflight error", err)
 		}
-		if result.Accepted() {
-			t.Fatalf("preflight result = %+v, want unaccepted", result)
+		if result.Disposition != 0 || result.MetadataReceipt.Committed || result.NoticeReceipt.Committed {
+			t.Fatalf("preflight result = %+v, want no accepted mutation", result)
 		}
 		if goal := store.Meta().Goal; goal == nil || goal.Status != session.GoalStatusPaused {
 			t.Fatalf("goal after failed preflight = %+v, want paused", goal)

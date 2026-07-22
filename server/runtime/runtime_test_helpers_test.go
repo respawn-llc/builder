@@ -161,6 +161,11 @@ func mustNewTestEngine(t *testing.T, store *session.Store, client llm.Client, re
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
+	t.Cleanup(func() {
+		if closeErr := engine.Close(); closeErr != nil && !errors.Is(closeErr, ErrEngineClosed) {
+			t.Errorf("close engine: %v", closeErr)
+		}
+	})
 	return engine
 }
 

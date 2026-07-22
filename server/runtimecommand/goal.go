@@ -17,12 +17,16 @@ type GoalCommand interface {
 	goalCommand()
 }
 
+type GoalExecutionIdentity struct {
+	RunID  *string
+	StepID *string
+}
+
 type GoalSetCommand struct {
 	SessionID runtimeids.SessionID
 	Objective string
 	Actor     session.GoalActor
-	RunID     string
-	StepID    string
+	Execution GoalExecutionIdentity
 }
 
 func (GoalSetCommand) goalCommand() {}
@@ -31,8 +35,7 @@ type GoalStatusCommand struct {
 	SessionID runtimeids.SessionID
 	Status    session.GoalStatus
 	Actor     session.GoalActor
-	RunID     string
-	StepID    string
+	Execution GoalExecutionIdentity
 }
 
 func (GoalStatusCommand) goalCommand() {}
@@ -73,15 +76,15 @@ func NewGoalAuthority(authority *sessionruntime.Authority, execution *ExecutionA
 }
 
 func (a *GoalAuthority) Set(ctx context.Context, command GoalSetCommand) (GoalCommandResult, error) {
-	if err := validateGoalCommand(command.SessionID, command.Actor); err != nil {
+	if err := validateGoalCommand(command.SessionID, command.Actor, command.Execution); err != nil {
 		return GoalCommandResult{}, err
 	}
 	command.Objective = strings.TrimSpace(command.Objective)
 	if command.Objective == "" {
 		return GoalCommandResult{}, errors.New("goal objective is required")
 	}
-	if isStepScoped(command.Actor, command.StepID) {
-		return a.withExactLive(ctx, command.SessionID, command.RunID, command.StepID, func(engine *runtime.Engine) (GoalCommandResult, error) {
+	if isStepScoped(command.Actor, command.Execution) {
+		return a.withExactLive(ctx, command.SessionID, command.Execution, func(engine *runtime.Engine) (GoalCommandResult, error) {
 			goal, queued, err := queueSet(engine, command)
 			if err != nil {
 				return GoalCommandResult{Err: err}, err
@@ -100,11 +103,11 @@ func (a *GoalAuthority) Set(ctx context.Context, command GoalSetCommand) (GoalCo
 }
 
 func (a *GoalAuthority) Status(ctx context.Context, command GoalStatusCommand) (GoalCommandResult, error) {
-	if err := validateGoalCommand(command.SessionID, command.Actor); err != nil {
+	if err := validateGoalCommand(command.SessionID, command.Actor, command.Execution); err != nil {
 		return GoalCommandResult{}, err
 	}
-	if isStepScoped(command.Actor, command.StepID) {
-		return a.withExactLive(ctx, command.SessionID, command.RunID, command.StepID, func(engine *runtime.Engine) (GoalCommandResult, error) {
+	if isStepScoped(command.Actor, command.Execution) {
+		return a.withExactLive(ctx, command.SessionID, command.Execution, func(engine *runtime.Engine) (GoalCommandResult, error) {
 			goal, queued, err := queueStatus(engine, command)
 			if err != nil {
 				return GoalCommandResult{Err: err}, err
@@ -123,7 +126,7 @@ func (a *GoalAuthority) Status(ctx context.Context, command GoalStatusCommand) (
 }
 
 func (a *GoalAuthority) Clear(ctx context.Context, command GoalClearCommand) (GoalCommandResult, error) {
-	if err := validateGoalCommand(command.SessionID, command.Actor); err != nil {
+	if err := validateGoalCommand(command.SessionID, command.Actor, GoalExecutionIdentity{}); err != nil {
 		return GoalCommandResult{}, err
 	}
 	return a.withDormantAdmission(ctx, command.SessionID, func(store *session.Store) (GoalCommandResult, error) {
@@ -133,7 +136,7 @@ func (a *GoalAuthority) Clear(ctx context.Context, command GoalClearCommand) (Go
 	})
 }
 
-func validateGoalCommand(sessionID runtimeids.SessionID, actor session.GoalActor) error {
+func validateGoalCommand(sessionID runtimeids.SessionID, actor session.GoalActor, execution GoalExecutionIdentity) error {
 	if sessionID.IsZero() {
 		return errors.New("session id is required")
 	}
@@ -142,11 +145,17 @@ func validateGoalCommand(sessionID runtimeids.SessionID, actor session.GoalActor
 	default:
 		return errors.New("goal actor must be user, agent, or system")
 	}
+	if execution.RunID != nil && *execution.RunID == "" {
+		return errors.New("goal run id cannot be empty")
+	}
+	if execution.StepID != nil && *execution.StepID == "" {
+		return errors.New("goal step id cannot be empty")
+	}
 	return nil
 }
 
-func isStepScoped(actor session.GoalActor, stepID string) bool {
-	return actor == session.GoalActorAgent && strings.TrimSpace(stepID) != ""
+func isStepScoped(actor session.GoalActor, execution GoalExecutionIdentity) bool {
+	return actor == session.GoalActorAgent && execution.StepID != nil
 }
 
 func (a *GoalAuthority) withDormantAdmission(
@@ -223,8 +232,7 @@ func (a *GoalAuthority) withLive(
 func (a *GoalAuthority) withExactLive(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
-	runID string,
-	stepID string,
+	execution GoalExecutionIdentity,
 	mutate func(*runtime.Engine) (GoalCommandResult, error),
 ) (GoalCommandResult, error) {
 	if a == nil || a.execution == nil {
@@ -233,8 +241,8 @@ func (a *GoalAuthority) withExactLive(
 	var result GoalCommandResult
 	err := a.execution.WithLiveExecutionRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
 		if active := runtimeactivity.ActiveStepFromProvider(engine); active == nil ||
-			active.StepID != strings.TrimSpace(stepID) ||
-			(strings.TrimSpace(runID) != "" && active.RunID != strings.TrimSpace(runID)) {
+			active.StepID != *execution.StepID ||
+			(execution.RunID != nil && active.RunID != *execution.RunID) {
 			return runtime.ErrAgentGoalStepInactive
 		}
 		applied, applyErr := mutate(engine)
@@ -345,15 +353,15 @@ func liveClear(engine *runtime.Engine, command GoalClearCommand) (GoalCommandRes
 }
 
 func queueSet(engine *runtime.Engine, command GoalSetCommand) (session.GoalState, bool, error) {
-	if isStepScoped(command.Actor, command.StepID) {
-		return engine.QueueAgentShellSetGoalForStep(command.StepID, command.Objective, command.Actor)
+	if isStepScoped(command.Actor, command.Execution) {
+		return engine.QueueAgentShellSetGoalForStep(*command.Execution.StepID, command.Objective, command.Actor)
 	}
 	return engine.QueueGoalSetForActiveStep(command.Objective, command.Actor)
 }
 
 func queueStatus(engine *runtime.Engine, command GoalStatusCommand) (session.GoalState, bool, error) {
-	if isStepScoped(command.Actor, command.StepID) {
-		return engine.QueueGoalStatusForStep(command.StepID, command.Status, command.Actor)
+	if isStepScoped(command.Actor, command.Execution) {
+		return engine.QueueGoalStatusForStep(*command.Execution.StepID, command.Status, command.Actor)
 	}
 	return engine.QueueGoalStatusForActiveStep(command.Status, command.Actor)
 }

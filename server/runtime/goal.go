@@ -54,13 +54,6 @@ type GoalCommandResult struct {
 	NoticeReceipt   session.CommitReceipt
 }
 
-func (r GoalCommandResult) Accepted() bool {
-	return r.Disposition == GoalCommandQueued ||
-		r.Disposition == GoalCommandNoop ||
-		r.MetadataReceipt.Committed ||
-		r.NoticeReceipt.Committed
-}
-
 func goalCommandResult(
 	disposition GoalCommandDisposition,
 	goal session.GoalState,
