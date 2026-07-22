@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { XIcon } from "lucide-react";
+import { FilterIcon, XIcon } from "lucide-react";
 
 import {
   LabelChooser,
@@ -77,7 +77,9 @@ export function BoardLabelFilterChrome() {
                 paddingInlineEnd: active ? "var(--space-6)" : "var(--space-3)",
                 paddingInlineStart: "var(--space-3)",
               }}
+              tone={active ? "primary" : "neutral"}
             >
+              <FilterIcon aria-hidden="true" className="shrink-0" size={14} strokeWidth={1.8} />
               <AnimatedFilterSummary text={summary} />
             </InteractiveChip>
           }
@@ -97,6 +99,7 @@ export function BoardLabelFilterChrome() {
               dispatch({ type: "clear" });
             }}
             size="icon-sm"
+            style={{ color: "var(--color-primary)" }}
             variant="ghost"
           >
             <XIcon aria-hidden="true" size={15} strokeWidth={1.75} />

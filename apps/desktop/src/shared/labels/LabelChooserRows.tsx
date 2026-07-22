@@ -198,8 +198,8 @@ function LabelSelectionRow({
         <Check
           aria-hidden="true"
           className="pointer-events-none absolute top-1/2 right-[var(--space-2)] -translate-y-1/2 text-[var(--color-success)]"
-          size={14}
-          strokeWidth={2}
+          size={16}
+          strokeWidth={1.8}
         />
       ) : null}
     </ActionableListRow>
