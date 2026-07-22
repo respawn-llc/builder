@@ -98,6 +98,43 @@ func TestCompletedResponseExternalWorkflowCompletionDiscardsActiveStreamWithoutP
 	}
 }
 
+func TestWorkflowDurableCompletionBeforeModelTurnStopsWithoutRequest(t *testing.T) {
+	controller := &externallyCompletedWorkflowController{}
+	controller.completed.Store(true)
+	runID := workflow.RunID("workflow-run")
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{Role: llm.RoleAssistant},
+	}}}
+	engine := mustNewExecTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		Config{
+			Model: "gpt-5",
+			WorkflowRun: &workflowruntime.Config{
+				RunID:          runID,
+				Contract:       workflowruntime.CompletionContract{RunID: runID},
+				CompletionMode: workflowruntime.CompletionModeShellCommand,
+				Controller:     controller,
+			},
+		},
+	)
+
+	if _, err := engine.SubmitWorkflowTurn(context.Background()); err != nil {
+		t.Fatalf("submit workflow turn: %v", err)
+	}
+	if calls := len(client.calls); calls != 0 {
+		t.Fatalf("durably completed workflow dispatched %d model requests", calls)
+	}
+	terminal := engine.WorkflowTerminalState()
+	if !terminal.Completed ||
+		terminal.Source != WorkflowCompletionSourceObserved ||
+		terminal.RunID != string(runID) ||
+		terminal.CompletedAt.IsZero() {
+		t.Fatalf("workflow terminal state after durable completion = %+v", terminal)
+	}
+}
+
 func TestCompletedResponseFinalizationUsesActiveSegmentCoordinatesAfterCompaction(t *testing.T) {
 	first := scriptedllm.FinalAnswer("first")
 	first.StreamDeltas = []llm.AssistantDelta{{Text: "first", Phase: llm.MessagePhaseFinal}}
