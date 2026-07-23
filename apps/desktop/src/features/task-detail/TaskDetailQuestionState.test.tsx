@@ -2,10 +2,11 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { type ComponentProps, useState } from "react";
 import { I18nextProvider } from "react-i18next";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { AttentionItem, PendingAsk, QuestionAnswerInput } from "@/api";
 import { appI18n, initializeI18n } from "@/i18n";
+import { QuestionBox } from "./TaskDetailQuestionForm";
 import {
   anchorQuestionSelection,
   emptyQuestionSelection,
@@ -14,8 +15,29 @@ import {
   withOrdinaryQuestionOption,
 } from "./TaskDetailQuestionState";
 import { QuestionFormView } from "./TaskDetailQuestionFormView";
+import { useTaskMutations } from "./useTaskDetailData";
 
 type QuestionAnswerMutation = ComponentProps<typeof QuestionFormView>["answerQuestion"];
+
+let pendingAskLookup: Readonly<{
+  data: readonly PendingAsk[] | undefined;
+  isFetching: boolean;
+  isSuccess: boolean;
+}>;
+let questionAnswerMutation: QuestionAnswerMutation;
+
+vi.mock("@/app-facade", () => ({
+  useOpenExternalLink: () => {
+    return () => {
+      return;
+    };
+  },
+}));
+
+vi.mock("./useTaskDetailData", () => ({
+  usePendingAsks: () => pendingAskLookup,
+  useTaskMutations: () => ({ answerQuestion: questionAnswerMutation }),
+}));
 
 beforeAll(async () => {
   await initializeI18n();
@@ -71,6 +93,59 @@ describe("questionPresentation", () => {
     ).toMatchObject({
       provenance: "anchored-default",
       selectedOption: 2,
+    });
+  });
+
+  it("waits for a stale no-match pending-ask lookup to refresh before anchoring", async () => {
+    const attention = ordinaryAttention([], 0);
+    const hydratedAsk: PendingAsk = {
+      askID: attention.askID,
+      createdAt: "2026-07-23T00:00:00Z",
+      question: attention.message,
+      recommendedOptionIndex: 2,
+      sessionID: attention.sessionID,
+      suggestions: ["one", "two"],
+    };
+    const inputs: QuestionAnswerInput[] = [];
+    const selections: ReturnType<typeof emptyQuestionSelection>[] = [];
+    questionAnswerMutation = recordingQuestionAnswerMutation(inputs);
+    pendingAskLookup = { data: [], isFetching: true, isSuccess: true };
+    const user = userEvent.setup();
+
+    const view = render(
+      questionBoxTree(attention, (selection) => {
+        selections.push(selection);
+      }),
+    );
+
+    expect(selections).toHaveLength(0);
+    expect(screen.queryByRole("radio")).toBeNull();
+
+    pendingAskLookup = { data: [hydratedAsk], isFetching: false, isSuccess: true };
+    view.rerender(
+      questionBoxTree(attention, (selection) => {
+        selections.push(selection);
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("radio")[1]).toBeChecked();
+      expect(selections).toContainEqual(
+        expect.objectContaining({
+          provenance: "anchored-default",
+          selectedOption: 2,
+        }),
+      );
+    });
+
+    await user.click(screen.getByRole("button"));
+    await waitFor(() => {
+      expect(inputs).toEqual([
+        expect.objectContaining({
+          kind: "ordinary",
+          selectedOptionNumber: 2,
+        }),
+      ]);
     });
   });
 
@@ -489,5 +564,40 @@ function questionFormTree(
         presentation={presentation}
       />
     </I18nextProvider>
+  );
+}
+
+function questionBoxTree(
+  attention: AttentionItem,
+  onSelectionChange: (selection: ReturnType<typeof emptyQuestionSelection>) => void,
+) {
+  return (
+    <I18nextProvider i18n={appI18n}>
+      <QuestionBoxHarness attention={attention} onSelectionChange={onSelectionChange} />
+    </I18nextProvider>
+  );
+}
+
+function QuestionBoxHarness({
+  attention,
+  onSelectionChange,
+}: Readonly<{
+  attention: AttentionItem;
+  onSelectionChange: (selection: ReturnType<typeof emptyQuestionSelection>) => void;
+}>) {
+  const [selection, setSelection] = useState(emptyQuestionSelection(attention.askID));
+  const mutations = useTaskMutations(attention.taskID);
+  return (
+    <QuestionBox
+      attention={attention}
+      disabled={false}
+      mutations={mutations}
+      onSelectionStateChange={(nextSelection) => {
+        setSelection(nextSelection);
+        onSelectionChange(nextSelection);
+      }}
+      selectionState={selection}
+      taskId={attention.taskID}
+    />
   );
 }

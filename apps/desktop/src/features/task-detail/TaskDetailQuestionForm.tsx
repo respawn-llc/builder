@@ -31,7 +31,8 @@ export function QuestionBox({
   const { t } = useTranslation();
   const asks = usePendingAsks(attention.question?.kind === "approval" ? null : attention.sessionID);
   const pendingAsk = asks.data?.find((ask) => ask.askID === attention.askID);
-  const presentation = questionPresentation(attention, pendingAsk, asks.isSuccess);
+  const pendingAskLookupSettled = asks.isSuccess && !asks.isFetching;
+  const presentation = questionPresentation(attention, pendingAsk, pendingAskLookupSettled);
   const selection = selectionForAsk(selectionState, attention.askID);
   const effectiveSelection = anchorQuestionSelection(selection, presentation.defaultSelection);
   const openLink = useOpenExternalLink();

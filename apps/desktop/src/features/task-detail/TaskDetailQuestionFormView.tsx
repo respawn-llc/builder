@@ -6,7 +6,6 @@ import type { QuestionAnswerInput } from "@/api";
 import { Button, MarkdownText, RadioGroup, RadioGroupItem, showStatusToast } from "@/ui";
 import { cx, fieldInputClassName } from "@/ui";
 import {
-  emptyQuestionSelection,
   withApprovalQuestionDecision,
   withOrdinaryQuestionOption,
   withQuestionCommentary,
@@ -97,7 +96,7 @@ function OrdinaryQuestionForm({
   taskId: string;
 }>) {
   const { t } = useTranslation();
-  const selection = selectionForAsk(selectionState, attention.askID);
+  const selection = selectionState;
   const selectedOption = selection.selectedOption;
   const answer = selection.answer;
   const answerID = useId();
@@ -216,7 +215,7 @@ function ApprovalQuestionForm({
   taskId: string;
 }>) {
   const { t } = useTranslation();
-  const selection = selectionForAsk(selectionState, attention.askID);
+  const selection = selectionState;
   const selectedDecision = selectedApprovalDecisionFor(approvalDecisions, selection);
   const answer = selection.answer;
   const answerID = useId();
@@ -430,10 +429,6 @@ async function submitQuestionAnswer({
       tone: "danger",
     });
   }
-}
-
-function selectionForAsk(selection: QuestionSelectionState, askID: string): QuestionSelectionState {
-  return selection.askID === askID ? selection : emptyQuestionSelection(askID);
 }
 
 function selectedApprovalDecisionFor(
