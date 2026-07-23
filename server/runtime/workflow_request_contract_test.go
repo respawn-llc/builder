@@ -2,9 +2,11 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"core/server/llm"
+	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/toolspec"
@@ -104,5 +106,32 @@ func TestShellWorkflowUsesNativeWebSearchAsRequiredToolChoice(t *testing.T) {
 		!request.EnableNativeWebSearch ||
 		len(request.Tools) != 0 {
 		t.Fatalf("shell workflow tool policy = %+v, want required native-only web search", request)
+	}
+}
+
+func TestShellWorkflowRejectsRequiredChoiceWithoutEffectiveTools(t *testing.T) {
+	runID := workflow.RunID("workflow-run")
+	client := &fakeClient{}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		tools.NewRegistry(),
+		Config{
+			Model: "gpt-5",
+			WorkflowRun: &workflowruntime.Config{
+				RunID:          runID,
+				Contract:       workflowruntime.CompletionContract{RunID: runID},
+				CompletionMode: workflowruntime.CompletionModeShellCommand,
+				Controller:     &externallyCompletedWorkflowController{},
+			},
+		},
+	)
+
+	if _, err := engine.buildRequest(context.Background(), "step", true); !errors.Is(err, llm.ErrInvalidRequest) {
+		t.Fatalf("build shell workflow request error = %v, want invalid request", err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("shell workflow invalid request dispatched provider calls = %d", len(client.calls))
 	}
 }
