@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -14,47 +15,18 @@ import (
 )
 
 func TestRemoteCompactionFailsNonOverflowProvider400WithoutReplacementOrFallback(t *testing.T) {
-	store := mustCreateTestSession(t)
-	client := &fakeCompactionClient{
-		compactionErrors: []error{&llm.ProviderAPIError{
-			ProviderID: "openai",
-			StatusCode: 400,
-			Code:       llm.UnifiedErrorCodeUnknown,
-		}},
-	}
-	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
-		Model:          "gpt-5",
-		CompactionMode: "native",
+	store, client, engine := mustNewRemoteCompactionFailureTestEngine(t, &llm.ProviderAPIError{
+		ProviderID: "openai",
+		StatusCode: 400,
+		Code:       llm.UnifiedErrorCodeUnknown,
 	})
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
-		t.Fatalf("persist compaction input: %v", err)
-	}
 
-	if err := engine.CompactContext(context.Background(), ""); err == nil {
-		t.Fatal("compact context succeeded after non-overflow provider failure")
-	}
-	if len(client.compactionCalls) != 1 || len(client.calls) != 0 {
-		t.Fatalf(
-			"remote/local compaction calls = %d/%d, want one/zero",
-			len(client.compactionCalls),
-			len(client.calls),
-		)
-	}
-
-	recent, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(4)
-	if err != nil {
-		t.Fatalf("read bounded compaction records: %v", err)
-	}
-	for _, record := range recent.Records {
-		if _, ok := mustSessionEventPayload(record).(session.HistoryReplacementRecord); ok {
-			t.Fatalf("non-overflow provider failure committed history replacement: %+v", record)
-		}
-	}
+	assertRemoteCompactionFailureWithoutReplacementOrFallback(
+		t,
+		store,
+		client,
+		engine.CompactContext(context.Background(), ""),
+	)
 }
 
 func TestRemoteCompactionRetries413OverflowByCollapsingToolOutput(t *testing.T) {
@@ -130,4 +102,72 @@ func TestRemoteCompactionRetries413OverflowByCollapsingToolOutput(t *testing.T) 
 		}
 	}
 	t.Fatal("overflow retry omitted collapsed typed tool output")
+}
+
+func TestRemoteCompactionFails404WithoutReplacementOrFallback(t *testing.T) {
+	store, client, engine := mustNewRemoteCompactionFailureTestEngine(t, &llm.ProviderAPIError{
+		ProviderID: "openai",
+		StatusCode: 404,
+		Code:       llm.UnifiedErrorCodeUnknown,
+	})
+
+	err := engine.CompactContext(context.Background(), "")
+	var providerErr *llm.ProviderAPIError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("compaction error type = %T, want ProviderAPIError", err)
+	}
+	if providerErr.StatusCode != 404 {
+		t.Fatalf("provider error status = %d, want 404", providerErr.StatusCode)
+	}
+	assertRemoteCompactionFailureWithoutReplacementOrFallback(t, store, client, err)
+}
+
+func mustNewRemoteCompactionFailureTestEngine(
+	t *testing.T,
+	compactionErr error,
+) (*session.Store, *fakeCompactionClient, *Engine) {
+	t.Helper()
+	store := mustCreateTestSession(t)
+	client := &fakeCompactionClient{compactionErrors: []error{compactionErr}}
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
+		Model:          "gpt-5",
+		CompactionMode: "native",
+	})
+	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+	)); err != nil {
+		t.Fatalf("persist compaction input: %v", err)
+	}
+	return store, client, engine
+}
+
+func assertRemoteCompactionFailureWithoutReplacementOrFallback(
+	t *testing.T,
+	store *session.Store,
+	client *fakeCompactionClient,
+	err error,
+) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("compact context succeeded after provider failure")
+	}
+	if len(client.compactionCalls) != 1 || len(client.calls) != 0 {
+		t.Fatalf(
+			"remote/local compaction calls = %d/%d, want one/zero",
+			len(client.compactionCalls),
+			len(client.calls),
+		)
+	}
+	recent, readErr := mustMaterializeTestEventLog(t, store).ReadRecentRecords(4)
+	if readErr != nil {
+		t.Fatalf("read bounded compaction records: %v", readErr)
+	}
+	for _, record := range recent.Records {
+		if _, ok := mustSessionEventPayload(record).(session.HistoryReplacementRecord); ok {
+			t.Fatalf("provider failure committed history replacement: %+v", record)
+		}
+	}
 }
