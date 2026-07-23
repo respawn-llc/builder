@@ -247,17 +247,15 @@ func worktreeEnterSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	origin, err := worktreeCommandRuntimeOrigin()
+	header, err := newWorktreeCommandTransitionHeader(sessionID)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
 	return runScheduledWorktreeCommand(stdout, stderr, sessionID, *jsonOut, "enter", func(ctx context.Context, remote worktreeCommandRemote) (serverapi.WorktreeScheduledAcknowledgement, error) {
 		return remote.EnterWorktree(ctx, serverapi.WorktreeEnterRequest{
-			OperationID: serverapi.NewWorktreeOperationID(),
-			SessionID:   sessionID,
-			Selector:    strings.TrimSpace(fs.Args()[0]),
-			Origin:      origin,
+			WorktreeTransitionHeader: header,
+			Selector:                 strings.TrimSpace(fs.Args()[0]),
 		})
 	})
 }
@@ -278,10 +276,14 @@ func worktreeLeaveSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	header, err := newWorktreeCommandTransitionHeader(sessionID)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	return runScheduledWorktreeCommand(stdout, stderr, sessionID, *jsonOut, "leave", func(ctx context.Context, remote worktreeCommandRemote) (serverapi.WorktreeScheduledAcknowledgement, error) {
 		return remote.LeaveWorktree(ctx, serverapi.WorktreeLeaveRequest{
-			OperationID: serverapi.NewWorktreeOperationID(),
-			SessionID:   sessionID,
+			WorktreeTransitionHeader: header,
 		})
 	})
 }
@@ -304,6 +306,11 @@ func worktreeDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	header, err := newWorktreeCommandTransitionHeader(sessionID)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	if _, inAgentShell := sessionenv.LookupSessionID(os.LookupEnv); inAgentShell && *deleteBranch {
 		fmt.Fprintln(stderr, "agent worktree deletion always retains branches; --delete-branch is not allowed inside Kent shell commands")
 		return 2
@@ -316,11 +323,10 @@ func worktreeDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		ctx, cancel := context.WithTimeout(context.Background(), worktreeMutationTimeout)
 		defer cancel()
 		result, err := remote.DeleteWorktree(ctx, serverapi.WorktreeDeleteRequest{
-			OperationID:         serverapi.NewWorktreeOperationID(),
-			SessionID:           sessionID,
-			Selector:            strings.TrimSpace(fs.Args()[0]),
-			ForceFolderRemoval:  *force,
-			BranchCleanupPolicy: policy,
+			WorktreeTransitionHeader: header,
+			Selector:                 strings.TrimSpace(fs.Args()[0]),
+			ForceFolderRemoval:       *force,
+			BranchCleanupPolicy:      policy,
 		})
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -409,6 +415,18 @@ func worktreeCommandRuntimeOrigin() (*serverapi.RuntimeStepOrigin, error) {
 	}
 	origin := &serverapi.RuntimeStepOrigin{RunID: strings.TrimSpace(runID), StepID: strings.TrimSpace(stepID)}
 	return origin, origin.Validate()
+}
+
+func newWorktreeCommandTransitionHeader(sessionID string) (serverapi.WorktreeTransitionHeader, error) {
+	origin, err := worktreeCommandRuntimeOrigin()
+	if err != nil {
+		return serverapi.WorktreeTransitionHeader{}, err
+	}
+	return serverapi.WorktreeTransitionHeader{
+		OperationID: serverapi.NewWorktreeOperationID(),
+		SessionID:   sessionID,
+		Origin:      origin,
+	}, nil
 }
 
 func openWorktreeCommandRemote(ctx context.Context, sessionID string) (worktreeCommandRemote, error) {
