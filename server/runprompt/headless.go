@@ -132,10 +132,11 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 	}
 	var managedWorktreePathContext *askquestion.ManagedWorktreePathContext
 	if strings.TrimSpace(plan.ActiveSettings.Worktrees.BaseDir) != "" {
-		managedWorktreePathContext, err = askquestion.NewManagedWorktreePathContext(plan.ActiveSettings.Worktrees.BaseDir, currentWorktreeRoot)
-		if err != nil {
-			return nil, err
+		context, contextErr := askquestion.NewManagedWorktreePathContext(plan.ActiveSettings.Worktrees.BaseDir, currentWorktreeRoot)
+		if contextErr != nil {
+			return nil, contextErr
 		}
+		managedWorktreePathContext = context
 	}
 	startLogLines := []string{
 		fmt.Sprintf("app.run_prompt.start session_id=%s workspace=%s workdir=%s model=%s", sessionID, plan.WorkspaceRoot, workdir, plan.ActiveSettings.Model),
