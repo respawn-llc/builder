@@ -1,4 +1,4 @@
-import type { ApprovalDecision, AttentionItem, PendingAsk } from "@/api";
+import type { ApprovalDecision, PendingAsk, QuestionAttentionItem } from "@/api";
 
 export type QuestionSelectionProvenance = "uninitialized" | "anchored-default" | "explicit";
 
@@ -45,7 +45,7 @@ export function emptyQuestionSelection(askID: string): QuestionSelectionState {
 }
 
 export function questionPresentation(
-  attention: AttentionItem,
+  attention: QuestionAttentionItem,
   pendingAsk: PendingAsk | undefined,
   pendingAskSettled: boolean,
 ): QuestionPresentation {
@@ -70,7 +70,7 @@ function approvalQuestionPresentation(
 }
 
 function ordinaryQuestionPresentation(
-  attention: AttentionItem,
+  attention: QuestionAttentionItem,
   pendingAsk: PendingAsk | undefined,
   pendingAskSettled: boolean,
   question: string | undefined,

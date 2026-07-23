@@ -993,14 +993,14 @@ type WorkflowAttentionItem struct {
 	TaskID                 string                             `json:"task_id,omitempty"`
 	TaskShortID            string                             `json:"task_short_id,omitempty"`
 	TaskTitle              string                             `json:"task_title,omitempty"`
-	RunID                  string                             `json:"run_id,omitempty"`
-	SessionID              string                             `json:"session_id,omitempty"`
-	AskID                  string                             `json:"ask_id,omitempty"`
-	TaskTransitionID       string                             `json:"task_transition_id,omitempty"`
+	RunID                  *string                            `json:"run_id,omitempty"`
+	SessionID              *string                            `json:"session_id,omitempty"`
+	AskID                  *string                            `json:"ask_id,omitempty"`
+	TaskTransitionID       *string                            `json:"task_transition_id,omitempty"`
 	Message                string                             `json:"message"`
-	DetailJSON             string                             `json:"detail_json,omitempty"`
+	DetailJSON             *string                            `json:"detail_json,omitempty"`
 	Suggestions            []string                           `json:"suggestions,omitempty"`
-	RecommendedOptionIndex int                                `json:"recommended_option_index,omitempty"`
+	RecommendedOptionIndex *int                               `json:"recommended_option_index,omitempty"`
 	Question               *WorkflowAttentionQuestionPrompt   `json:"question,omitempty"`
 	ApprovalSnapshot       *WorkflowAttentionApprovalSnapshot `json:"approval_snapshot,omitempty"`
 	OccurredAtUnixMs       int64                              `json:"occurred_at_unix_ms"`
@@ -1028,7 +1028,7 @@ const (
 type WorkflowAttentionQuestionPrompt struct {
 	Kind                   WorkflowAttentionQuestionKind `json:"kind"`
 	Suggestions            []string                      `json:"suggestions,omitempty"`
-	RecommendedOptionIndex int                           `json:"recommended_option_index,omitempty"`
+	RecommendedOptionIndex *int                          `json:"recommended_option_index,omitempty"`
 	ApprovalDecisions      []clientui.ApprovalDecision   `json:"approval_decisions,omitempty"`
 }
 
@@ -2300,7 +2300,7 @@ func (r WorkflowTaskCreateRequest) ValidateRPC() error {
 func (r WorkflowTaskListResponse) Validate() error {
 	for index, task := range r.Tasks {
 		if err := task.Validate(); err != nil {
-			return prefixWorkflowTaskProjectionValidationField("tasks", index, err)
+			return prefixWorkflowProjectionValidationField("tasks", index, err)
 		}
 	}
 	return nil
@@ -2316,13 +2316,260 @@ func (r WorkflowBoardTaskCard) Validate() error {
 func (r WorkflowBoardNodeCardsListResponse) Validate() error {
 	for index, card := range r.Cards {
 		if err := card.Validate(); err != nil {
-			return prefixWorkflowTaskProjectionValidationField("cards", index, err)
+			return prefixWorkflowProjectionValidationField("cards", index, err)
 		}
 	}
 	return nil
 }
 
-func prefixWorkflowTaskProjectionValidationField(field string, index int, err error) error {
+func (r WorkflowAttentionItem) Validate() error {
+	if err := validateRequired("project_id", r.ProjectID); err != nil {
+		return err
+	}
+	if err := validateRequired("task_id", r.TaskID); err != nil {
+		return err
+	}
+	if err := validateRequired("task_short_id", r.TaskShortID); err != nil {
+		return err
+	}
+	if err := validateRequired("task_title", r.TaskTitle); err != nil {
+		return err
+	}
+	if r.WorkflowID == nil {
+		return workflowRequestError(WorkflowRequestErrorRequired, "workflow_id", "workflow_id is required")
+	}
+	if err := validateRequired("workflow_id", *r.WorkflowID); err != nil {
+		return err
+	}
+	switch r.Kind {
+	case "question":
+		if err := validateRequiredAttentionString("run_id", r.RunID); err != nil {
+			return err
+		}
+		if err := validateRequiredAttentionString("ask_id", r.AskID); err != nil {
+			return err
+		}
+		if err := validateOptionalAttentionString("session_id", r.SessionID); err != nil {
+			return err
+		}
+		if err := validateWorkflowAttentionRecommendation(r.Suggestions, r.RecommendedOptionIndex); err != nil {
+			return err
+		}
+		if r.Question != nil {
+			if err := r.Question.Validate(); err != nil {
+				return err
+			}
+		}
+		return validateWorkflowAttentionFieldsAbsent(r.Kind,
+			workflowAttentionFieldPresence{name: "task_transition_id", present: r.TaskTransitionID != nil},
+			workflowAttentionFieldPresence{name: "approval_snapshot", present: r.ApprovalSnapshot != nil},
+			workflowAttentionFieldPresence{name: "detail_json", present: r.DetailJSON != nil},
+		)
+	case "approval":
+		if err := validateRequiredAttentionString("task_transition_id", r.TaskTransitionID); err != nil {
+			return err
+		}
+		if r.ApprovalSnapshot == nil {
+			return workflowRequestError(WorkflowRequestErrorRequired, "approval_snapshot", "approval_snapshot is required")
+		}
+		if err := r.ApprovalSnapshot.Validate(); err != nil {
+			return err
+		}
+		return validateWorkflowAttentionFieldsAbsent(r.Kind,
+			workflowAttentionFieldPresence{name: "run_id", present: r.RunID != nil},
+			workflowAttentionFieldPresence{name: "session_id", present: r.SessionID != nil},
+			workflowAttentionFieldPresence{name: "ask_id", present: r.AskID != nil},
+			workflowAttentionFieldPresence{name: "question", present: r.Question != nil},
+			workflowAttentionFieldPresence{name: "detail_json", present: r.DetailJSON != nil},
+			workflowAttentionFieldPresence{name: "suggestions", present: r.Suggestions != nil},
+			workflowAttentionFieldPresence{name: "recommended_option_index", present: r.RecommendedOptionIndex != nil},
+		)
+	case "interrupted_run":
+		if err := validateRequiredAttentionString("run_id", r.RunID); err != nil {
+			return err
+		}
+		if err := validateOptionalAttentionString("session_id", r.SessionID); err != nil {
+			return err
+		}
+		if err := validateOptionalAttentionString("detail_json", r.DetailJSON); err != nil {
+			return err
+		}
+		return validateWorkflowAttentionFieldsAbsent(r.Kind,
+			workflowAttentionFieldPresence{name: "ask_id", present: r.AskID != nil},
+			workflowAttentionFieldPresence{name: "question", present: r.Question != nil},
+			workflowAttentionFieldPresence{name: "task_transition_id", present: r.TaskTransitionID != nil},
+			workflowAttentionFieldPresence{name: "approval_snapshot", present: r.ApprovalSnapshot != nil},
+			workflowAttentionFieldPresence{name: "suggestions", present: r.Suggestions != nil},
+			workflowAttentionFieldPresence{name: "recommended_option_index", present: r.RecommendedOptionIndex != nil},
+		)
+	default:
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "kind", "kind must be question, approval, or interrupted_run")
+	}
+}
+
+func (s WorkflowAttentionApprovalSnapshot) Validate() error {
+	if err := validateRequired("approval_snapshot.source_node_display_name", s.SourceNodeDisplayName); err != nil {
+		return err
+	}
+	if s.Targets == nil {
+		return workflowRequestError(WorkflowRequestErrorRequired, "approval_snapshot.targets", "targets is required")
+	}
+	for index, target := range s.Targets {
+		if err := target.Validate(); err != nil {
+			return prefixWorkflowProjectionValidationField("approval_snapshot.targets", index, err)
+		}
+	}
+	if s.OutputValues == nil {
+		return workflowRequestError(WorkflowRequestErrorRequired, "approval_snapshot.output_values", "output_values is required")
+	}
+	if s.WorkflowRevisionSeen < 0 {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "approval_snapshot.workflow_revision_seen", "workflow_revision_seen must be non-negative")
+	}
+	return nil
+}
+
+func (t WorkflowAttentionApprovalTarget) Validate() error {
+	return validateRequired("display_name", t.DisplayName)
+}
+
+func (p WorkflowAttentionQuestionPrompt) Validate() error {
+	switch p.Kind {
+	case WorkflowAttentionQuestionKindOrdinary:
+		if p.ApprovalDecisions != nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "question.approval_decisions", "approval_decisions is not allowed for an ordinary question")
+		}
+		return validateWorkflowAttentionRecommendation(p.Suggestions, p.RecommendedOptionIndex)
+	case WorkflowAttentionQuestionKindApproval:
+		if p.Suggestions != nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "question.suggestions", "suggestions is not allowed for an approval question")
+		}
+		if p.RecommendedOptionIndex != nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "question.recommended_option_index", "recommended_option_index is not allowed for an approval question")
+		}
+		if len(p.ApprovalDecisions) == 0 {
+			return workflowRequestError(WorkflowRequestErrorRequired, "question.approval_decisions", "approval_decisions is required for an approval question")
+		}
+		for _, decision := range p.ApprovalDecisions {
+			if err := validateWorkflowApprovalDecision(decision); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "question.kind", "question kind must be ordinary or approval")
+	}
+}
+
+func validateRequiredAttentionString(field string, value *string) error {
+	if value == nil {
+		return workflowRequestError(WorkflowRequestErrorRequired, field, field+" is required")
+	}
+	return validateRequired(field, *value)
+}
+
+func validateOptionalAttentionString(field string, value *string) error {
+	if value == nil {
+		return nil
+	}
+	if strings.TrimSpace(*value) == "" {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" must be non-blank when present")
+	}
+	return nil
+}
+
+func validateWorkflowAttentionRecommendation(suggestions []string, index *int) error {
+	if index == nil {
+		return nil
+	}
+	if *index < 1 {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "recommended_option_index", "recommended_option_index must be positive when present")
+	}
+	if len(suggestions) == 0 || *index > len(suggestions) {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "recommended_option_index", "recommended_option_index must refer to a suggestion")
+	}
+	return nil
+}
+
+type workflowAttentionFieldPresence struct {
+	name    string
+	present bool
+}
+
+func validateWorkflowAttentionFieldsAbsent(kind string, fields ...workflowAttentionFieldPresence) error {
+	for _, field := range fields {
+		if field.present {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, field.name, field.name+" is not allowed for kind "+kind)
+		}
+	}
+	return nil
+}
+
+func (r WorkflowAttentionListResponse) Validate() error {
+	return validateWorkflowAttentionItems(r.Items)
+}
+
+func (r WorkflowTaskAttentionListResponse) Validate() error {
+	return validateWorkflowAttentionItems(r.Items)
+}
+
+func validateWorkflowAttentionItems(items []WorkflowAttentionItem) error {
+	for index, item := range items {
+		if err := item.Validate(); err != nil {
+			return prefixWorkflowProjectionValidationField("items", index, err)
+		}
+	}
+	return nil
+}
+
+func (r WorkflowTaskAttentionListResponse) ValidateForTask(taskID string) error {
+	return validateWorkflowTaskBoundResponse(taskID, r.Validate, r.Items, func(item WorkflowAttentionItem) string {
+		return item.TaskID
+	})
+}
+
+func (r WorkflowTaskActivityListResponse) Validate() error {
+	for index, item := range r.Items {
+		if item.Attention == nil {
+			continue
+		}
+		if item.Type != "run_interrupted" {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("items[%d].type", index), "attention is only allowed on run_interrupted activity")
+		}
+		if err := item.Attention.Validate(); err != nil {
+			return prefixWorkflowProjectionValidationField("items", index, err)
+		}
+		if item.Attention.Kind != "interrupted_run" {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("items[%d].attention.kind", index), "attention must be interrupted_run")
+		}
+		if item.Attention.TaskID != item.TaskID {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("items[%d].attention.task_id", index), "attention task_id must match activity task_id")
+		}
+	}
+	return nil
+}
+
+func (r WorkflowTaskActivityListResponse) ValidateForTask(taskID string) error {
+	return validateWorkflowTaskBoundResponse(taskID, r.Validate, r.Items, func(item WorkflowTaskActivityItem) string {
+		return item.TaskID
+	})
+}
+
+func validateWorkflowTaskBoundResponse[T any](taskID string, validate func() error, items []T, itemTaskID func(T) string) error {
+	if err := validateRequired("task_id", taskID); err != nil {
+		return err
+	}
+	if err := validate(); err != nil {
+		return err
+	}
+	for index, item := range items {
+		if itemTaskID(item) != taskID {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("items[%d].task_id", index), "task_id must match request task_id")
+		}
+	}
+	return nil
+}
+
+func prefixWorkflowProjectionValidationField(field string, index int, err error) error {
 	var validationErr WorkflowRequestValidationError
 	if !errors.As(err, &validationErr) {
 		return err

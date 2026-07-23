@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 
-import type { ApprovalSnapshot, AttentionItem } from "@/api";
+import type { ApprovalAttentionItem, ApprovalSnapshot, InterruptedRunAttentionItem } from "@/api";
 import { errorMessage } from "@/api";
 import { useAppServices } from "@/app-facade";
 import {
@@ -23,7 +23,7 @@ export function ApprovalBox({
   disabled,
   mutations,
 }: Readonly<{
-  attention: AttentionItem;
+  attention: ApprovalAttentionItem;
   currentVersion: number;
   disabled: boolean;
   mutations: ReturnType<typeof useTaskMutations>;
@@ -43,7 +43,7 @@ export function ApprovalBox({
     },
   });
   const snapshot = attention.approvalSnapshot;
-  const stale = snapshot !== null && snapshot.version !== currentVersion;
+  const stale = snapshot.version !== currentVersion;
   function approve(): void {
     void executionTargetContinuation
       .run(approveExecutionTargetAction(attention.taskTransitionID))
@@ -65,50 +65,22 @@ export function ApprovalBox({
         radius="l"
         unpadded
       >
-        {snapshot !== null ? (
-          <div className="grid gap-[var(--space-2)]">
-            <div
-              className="flex min-w-0 items-center gap-[var(--space-2)]"
-              data-testid="task-approval-route-action-row"
-            >
-              <WorkflowEdgeRouteGraphic
-                className="-ml-[var(--space-2)]"
-                contextMode=""
-                layout="compact"
-                neutralArrow
-                sourceLabel={snapshot.sourceNodeName}
-                targetLabel={approvalTargetLabel(snapshot, t)}
-              />
-              <span className="min-w-0 flex-1" />
-              <Button
-                className="shrink-0"
-                disabled={
-                  disabled ||
-                  executionTargetContinuation.running ||
-                  executionTargetContinuation.pending !== null
-                }
-                onClick={approve}
-                variant="primary"
-              >
-                {t("task.approve")}
-              </Button>
-            </div>
-            {snapshot.commentary.length > 0 ? (
-              <p className="m-0 whitespace-pre-wrap text-sm text-[var(--color-muted)]">
-                {snapshot.commentary}
-              </p>
-            ) : null}
-            <ApprovalOutputValues outputValues={snapshot.outputValues} />
-            {stale ? (
-              <p className="m-0 text-sm text-[var(--color-warning)]">
-                <strong>{t("task.staleApproval")}</strong> {t("task.staleApprovalBody")}
-              </p>
-            ) : null}
-          </div>
-        ) : (
-          <>
-            <p>{t("task.unavailableSnapshot")}</p>
+        <div className="grid gap-[var(--space-2)]">
+          <div
+            className="flex min-w-0 items-center gap-[var(--space-2)]"
+            data-testid="task-approval-route-action-row"
+          >
+            <WorkflowEdgeRouteGraphic
+              className="-ml-[var(--space-2)]"
+              contextMode=""
+              layout="compact"
+              neutralArrow
+              sourceLabel={snapshot.sourceNodeName}
+              targetLabel={approvalTargetLabel(snapshot, t)}
+            />
+            <span className="min-w-0 flex-1" />
             <Button
+              className="shrink-0"
               disabled={
                 disabled ||
                 executionTargetContinuation.running ||
@@ -119,8 +91,17 @@ export function ApprovalBox({
             >
               {t("task.approve")}
             </Button>
-          </>
-        )}
+          </div>
+          {snapshot.commentary.length > 0 ? (
+            <p className="m-0 whitespace-pre-wrap text-sm text-[var(--color-muted)]">{snapshot.commentary}</p>
+          ) : null}
+          <ApprovalOutputValues outputValues={snapshot.outputValues} />
+          {stale ? (
+            <p className="m-0 text-sm text-[var(--color-warning)]">
+              <strong>{t("task.staleApproval")}</strong> {t("task.staleApprovalBody")}
+            </p>
+          ) : null}
+        </div>
       </Island>
       <ExecutionTargetContinuationDialog continuation={executionTargetContinuation} />
     </>
@@ -132,12 +113,13 @@ export function InterruptedRunBox({
   disabled,
   mutations,
 }: Readonly<{
-  attention: AttentionItem;
+  attention: InterruptedRunAttentionItem;
   disabled: boolean;
   mutations: ReturnType<typeof useTaskMutations>;
 }>) {
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
+  const detailJSON = attention.detailJSON;
   return (
     <Island
       aria-label={t("task.interrupted")}
@@ -150,11 +132,11 @@ export function InterruptedRunBox({
       {attention.message.length > 0 ? (
         <p className="m-0 text-sm text-[var(--color-muted)]">{attention.message}</p>
       ) : null}
-      {attention.detailJSON.trim().length > 0 ? (
+      {detailJSON !== null ? (
         <Button
           disabled={disabled}
           onClick={() => {
-            void writeClipboardText(attention.detailJSON, nativeBridge)
+            void writeClipboardText(detailJSON, nativeBridge)
               .then(() => {
                 showStatusToast({
                   id: "task-interruption-detail-copied",

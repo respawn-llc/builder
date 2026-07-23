@@ -29,7 +29,10 @@ export function SidebarInboxNav({ destination }: Readonly<{ destination: TaskDet
     () => attention.data?.pages.flatMap((page) => page.items) ?? [],
     [attention.data],
   );
-  const taskIDs = useMemo(() => orderedInboxTaskIDs(attentionItems), [attentionItems]);
+  const taskIDs = useMemo(
+    () => orderedInboxTaskIDs(attentionItems.map((item) => item.taskID)),
+    [attentionItems],
+  );
 
   // Adjust the remembered anchor while rendering (the sanctioned alternative to a
   // ref read or an effect): whenever the open task is present, its current index

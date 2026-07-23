@@ -1532,14 +1532,28 @@ func (s *Service) ListWorkflowAttention(ctx context.Context, req serverapi.Workf
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowAttentionListResponse{}, err
 	}
-	return s.readModels.Attention.List(ctx, req)
+	response, err := s.readModels.Attention.List(ctx, req)
+	if err != nil {
+		return serverapi.WorkflowAttentionListResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.WorkflowAttentionListResponse{}, err
+	}
+	return response, nil
 }
 
 func (s *Service) ListWorkflowTaskAttention(ctx context.Context, req serverapi.WorkflowTaskAttentionListRequest) (serverapi.WorkflowTaskAttentionListResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskAttentionListResponse{}, err
 	}
-	return s.readModels.Attention.ListTask(ctx, req)
+	response, err := s.readModels.Attention.ListTask(ctx, req)
+	if err != nil {
+		return serverapi.WorkflowTaskAttentionListResponse{}, err
+	}
+	if err := response.ValidateForTask(strings.TrimSpace(req.TaskID)); err != nil {
+		return serverapi.WorkflowTaskAttentionListResponse{}, err
+	}
+	return response, nil
 }
 
 func (s *Service) AnswerWorkflowTaskQuestion(ctx context.Context, req serverapi.WorkflowTaskQuestionAnswerRequest) error {
@@ -1705,7 +1719,14 @@ func (s *Service) ListWorkflowTaskActivity(ctx context.Context, req serverapi.Wo
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskActivityListResponse{}, err
 	}
-	return s.readModels.Activity.List(ctx, req)
+	response, err := s.readModels.Activity.List(ctx, req)
+	if err != nil {
+		return serverapi.WorkflowTaskActivityListResponse{}, err
+	}
+	if err := response.ValidateForTask(strings.TrimSpace(req.TaskID)); err != nil {
+		return serverapi.WorkflowTaskActivityListResponse{}, err
+	}
+	return response, nil
 }
 
 func (s *Service) ListWorkflowTasks(ctx context.Context, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {

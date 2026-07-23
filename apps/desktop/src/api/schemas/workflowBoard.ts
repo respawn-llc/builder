@@ -446,37 +446,64 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
     cancelReason: value.task.summary.cancel_reason,
   }));
 
+const activityItemSchema = z
+  .object({
+    activity_id: z.string(),
+    type: z.string(),
+    task_id: z.string(),
+    occurred_at_unix_ms: z.number(),
+    updated_at_unix_ms: z.number(),
+    actor: emptyString,
+    summary: z.string(),
+    comment: commentSchema.nullish(),
+    transition: transitionSchema.nullish(),
+    run: runSchema.nullish(),
+    attention: attentionItemSchema.nullish(),
+  })
+  .superRefine((value, context) => {
+    const attention = value.attention;
+    if (attention === null || attention === undefined) {
+      return;
+    }
+    if (value.type !== "run_interrupted") {
+      context.addIssue({
+        code: "custom",
+        path: ["type"],
+        message: "attention is only allowed on run_interrupted activity",
+      });
+    }
+    if (attention.kind !== "interrupted_run") {
+      context.addIssue({
+        code: "custom",
+        path: ["attention", "kind"],
+        message: "activity attention must be interrupted_run",
+      });
+    }
+    if (attention.taskID !== value.task_id) {
+      context.addIssue({
+        code: "custom",
+        path: ["attention", "task_id"],
+        message: "activity attention task_id must match activity task_id",
+      });
+    }
+  })
+  .transform((value) => ({
+    id: value.activity_id,
+    type: value.type,
+    taskID: value.task_id,
+    occurredAt: value.occurred_at_unix_ms,
+    updatedAt: value.updated_at_unix_ms,
+    actor: value.actor,
+    summary: value.summary,
+    comment: value.comment ?? null,
+    transition: value.transition ?? null,
+    run: value.run ?? null,
+    attention: value.attention ?? null,
+  }));
+
 export const activityPageSchema: z.ZodType<ActivityPage> = z
   .object({
-    items: z.array(
-      z
-        .object({
-          activity_id: z.string(),
-          type: z.string(),
-          task_id: z.string(),
-          occurred_at_unix_ms: z.number(),
-          updated_at_unix_ms: z.number(),
-          actor: emptyString,
-          summary: z.string(),
-          comment: commentSchema.nullish(),
-          transition: transitionSchema.nullish(),
-          run: runSchema.nullish(),
-          attention: attentionItemSchema.nullish(),
-        })
-        .transform((value) => ({
-          id: value.activity_id,
-          type: value.type,
-          taskID: value.task_id,
-          occurredAt: value.occurred_at_unix_ms,
-          updatedAt: value.updated_at_unix_ms,
-          actor: value.actor,
-          summary: value.summary,
-          comment: value.comment ?? null,
-          transition: value.transition ?? null,
-          run: value.run ?? null,
-          attention: value.attention ?? null,
-        })),
-    ),
+    items: z.array(activityItemSchema),
     next_page_token: z.string().optional().default(""),
     generated_at_unix_ms: z.number(),
   })

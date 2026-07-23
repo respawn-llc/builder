@@ -305,7 +305,11 @@ func signalProcessGroup(pid int, signal syscall.Signal) error {
 	if pid <= 0 {
 		return errors.New("PTY child process id is unavailable")
 	}
-	if err := syscall.Kill(-pid, signal); err != nil && !errors.Is(err, syscall.ESRCH) {
+	err := syscall.Kill(-pid, signal)
+	if errors.Is(err, syscall.ESRCH) {
+		err = syscall.Kill(pid, signal)
+	}
+	if err != nil && !errors.Is(err, syscall.ESRCH) {
 		return err
 	}
 	return nil

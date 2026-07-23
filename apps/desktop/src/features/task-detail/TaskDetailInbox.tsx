@@ -1,11 +1,8 @@
 import { useEffect, useRef } from "react";
-import { useTranslation } from "react-i18next";
-
 import type { AttentionItem, TaskDetail } from "@/api";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import { sameTaskDetailInitialFocus } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
-import { Island } from "@/ui";
 import { ApprovalBox, InterruptedRunBox, QuestionBox } from "./TaskDetailAttention";
 import { emptyQuestionSelection, type QuestionSelectionState } from "./TaskDetailQuestionState";
 import type { useTaskMutations } from "./useTaskDetailData";
@@ -58,7 +55,7 @@ export function TaskInbox({
           key={item.id}
           mutations={mutations}
           onQuestionSelectionChange={onQuestionSelectionChange}
-          questionSelection={questionSelections.get(item.askID) ?? emptyQuestionSelection(item.askID)}
+          questionSelections={questionSelections}
           taskId={detail.id}
         />
       ))}
@@ -110,7 +107,7 @@ function InboxItem({
   focusOnMount,
   mutations,
   onQuestionSelectionChange,
-  questionSelection,
+  questionSelections,
   taskId,
 }: Readonly<{
   attention: AttentionItem;
@@ -119,10 +116,9 @@ function InboxItem({
   focusOnMount: boolean;
   mutations: ReturnType<typeof useTaskMutations>;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
-  questionSelection: QuestionSelectionState;
+  questionSelections: ReadonlyMap<string, QuestionSelectionState>;
   taskId: string;
 }>) {
-  const { t } = useTranslation();
   const focusTargetRef = useRef<HTMLDivElement | null>(null);
   const scrolledRef = useRef(false);
 
@@ -144,6 +140,8 @@ function InboxItem({
   }, [focusOnMount]);
 
   if (attention.kind === "question") {
+    const questionSelection =
+      questionSelections.get(attention.askID) ?? emptyQuestionSelection(attention.askID);
     return (
       <div ref={focusTargetRef}>
         <QuestionBox
@@ -171,24 +169,9 @@ function InboxItem({
       </div>
     );
   }
-  if (attention.kind === "interrupted_run") {
-    return (
-      <div ref={focusTargetRef}>
-        <InterruptedRunBox attention={attention} disabled={disabled} mutations={mutations} />
-      </div>
-    );
-  }
   return (
     <div ref={focusTargetRef}>
-      <Island
-        aria-label={attention.kind || t("task.inbox")}
-        className="grid gap-[var(--space-2)]"
-        level={1}
-        radius="l"
-      >
-        <h3 className="m-0">{attention.kind || t("task.inbox")}</h3>
-        <p className="m-0">{attention.message}</p>
-      </Island>
+      <InterruptedRunBox attention={attention} disabled={disabled} mutations={mutations} />
     </div>
   );
 }

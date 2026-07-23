@@ -40,9 +40,11 @@ import (
 	"core/server/workflowview"
 	"core/server/worktree"
 	rpccontract "core/shared/apicontract"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/toolspec"
 )
 
 func New(cfg config.App, authSupport serverbootstrap.AuthSupport, runtimeSupport serverbootstrap.RuntimeSupport) (*Core, error) {
@@ -246,10 +248,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: activity: %w", err)
 	}
 	workflowAttention, err := workflowview.NewAttention(
-		metadataStore,
-		workflowDefinitions,
+		metadataStore.Queries(),
 		workflowTaskProjector,
-		workflowRoleResolver,
 		workflowViewActiveTranscriptSource{views: sessionViewService},
 		workflowViewPendingPromptSource{prompts: runtimeRegistry},
 	)
@@ -544,23 +544,74 @@ type workflowViewActiveTranscriptSource struct {
 	views *sessionview.Service
 }
 
-func (s workflowViewActiveTranscriptSource) SessionNewestActiveSegmentEntries(ctx context.Context, sessionID string) ([]runtime.ChatEntry, error) {
+func (s workflowViewActiveTranscriptSource) SessionNewestActiveSegmentQuestions(ctx context.Context, sessionID string) ([]workflowview.PendingQuestionTranscriptEntry, error) {
 	if s.views == nil {
 		return nil, errors.New("session view service is required")
 	}
-	return s.views.SessionTranscriptTailEntries(ctx, sessionID)
+	entries, err := s.views.SessionTranscriptTailEntries(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	questions := make([]workflowview.PendingQuestionTranscriptEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Role != "tool_call" ||
+			entry.ToolCall == nil ||
+			entry.ToolCall.ToolName != string(toolspec.ToolAskQuestion) {
+			continue
+		}
+		recommendedOptionIndex, err := legacyOptionalRecommendedOptionIndex(entry.ToolCall.RecommendedOptionIndex)
+		if err != nil {
+			return nil, fmt.Errorf("session %q pending ask %q: %w", sessionID, entry.ToolCallID, err)
+		}
+		questions = append(questions, workflowview.PendingQuestionTranscriptEntry{
+			AskID:                  entry.ToolCallID,
+			Question:               entry.ToolCall.Question,
+			Suggestions:            append([]string(nil), entry.ToolCall.Suggestions...),
+			RecommendedOptionIndex: recommendedOptionIndex,
+		})
+	}
+	return questions, nil
 }
 
-func (s workflowViewPendingPromptSource) ListPendingPrompts(sessionID string) []workflowview.PendingPromptSnapshot {
+func (s workflowViewPendingPromptSource) ListPendingPrompts(sessionID string) ([]workflowview.PendingPromptSnapshot, error) {
 	if s.prompts == nil {
-		return nil
+		return nil, nil
 	}
 	items := s.prompts.ListPendingPrompts(sessionID)
 	out := make([]workflowview.PendingPromptSnapshot, 0, len(items))
 	for _, item := range items {
-		out = append(out, workflowview.PendingPromptSnapshot{Request: item.Request})
+		recommendedOptionIndex, err := legacyOptionalRecommendedOptionIndex(item.Request.RecommendedOptionIndex)
+		if err != nil {
+			return nil, fmt.Errorf("session %q pending prompt %q: %w", sessionID, item.Request.ID, err)
+		}
+		decisions := make([]clientui.ApprovalDecision, 0, len(item.Request.ApprovalOptions))
+		for _, option := range item.Request.ApprovalOptions {
+			decisions = append(decisions, clientui.ApprovalDecision(option.Decision))
+		}
+		out = append(out, workflowview.PendingPromptSnapshot{
+			ID:                     item.Request.ID,
+			Question:               item.Request.Question,
+			Suggestions:            append([]string(nil), item.Request.Suggestions...),
+			RecommendedOptionIndex: recommendedOptionIndex,
+			Approval:               item.Request.Approval,
+			ApprovalDecisions:      decisions,
+		})
 	}
-	return out
+	return out, nil
+}
+
+func legacyOptionalRecommendedOptionIndex(index int) (*int, error) {
+	if index == 0 {
+		return nil, nil
+	}
+	if index < 0 {
+		return nil, serverapi.WorkflowRequestValidationError{
+			Code:    serverapi.WorkflowRequestErrorInvalidValue,
+			Field:   "recommended_option_index",
+			Message: fmt.Sprintf("legacy recommended option index %d must be positive when present", index),
+		}
+	}
+	return &index, nil
 }
 
 func (r runtimePendingAskResolver) CanRehydrate(_ context.Context, sessionID string, _ workflow.RunID, askID string) (bool, error) {

@@ -101,7 +101,7 @@ func (f *workflowViewTestFixture) taskAttention(t *testing.T) *Attention {
 	t.Helper()
 	if f.attention == nil {
 		var err error
-		f.attention, err = NewAttention(f.metadata, f.definitions, f.projector, f.roleResolver, f.transcripts, f.prompts)
+		f.attention, err = NewAttention(f.metadata.Queries(), f.projector, f.transcripts, f.prompts)
 		if err != nil {
 			t.Fatalf("NewAttention: %v", err)
 		}

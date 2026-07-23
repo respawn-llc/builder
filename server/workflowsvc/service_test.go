@@ -19,7 +19,6 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/requestmemo"
-	"core/server/runtime"
 	"core/server/session"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
@@ -137,7 +136,7 @@ type recordingWorkflowTaskTranscriptProvider struct {
 	calls int
 }
 
-func (p *recordingWorkflowTaskTranscriptProvider) SessionNewestActiveSegmentEntries(context.Context, string) ([]runtime.ChatEntry, error) {
+func (p *recordingWorkflowTaskTranscriptProvider) SessionNewestActiveSegmentQuestions(context.Context, string) ([]workflowview.PendingQuestionTranscriptEntry, error) {
 	p.calls++
 	return nil, errors.New("task get must not read transcripts")
 }
@@ -146,9 +145,9 @@ type recordingWorkflowTaskPromptSource struct {
 	calls int
 }
 
-func (p *recordingWorkflowTaskPromptSource) ListPendingPrompts(string) []workflowview.PendingPromptSnapshot {
+func (p *recordingWorkflowTaskPromptSource) ListPendingPrompts(string) ([]workflowview.PendingPromptSnapshot, error) {
 	p.calls++
-	return nil
+	return nil, nil
 }
 
 func TestServiceCreatesValidatesLinksAndStartsDefaultWorkflowTask(t *testing.T) {
@@ -3394,7 +3393,7 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewActivity: %v", err)
 	}
-	attention, err := workflowview.NewAttention(metadataStore, definitions, projector, resolver, transcripts, prompts)
+	attention, err := workflowview.NewAttention(metadataStore.Queries(), projector, transcripts, prompts)
 	if err != nil {
 		t.Fatalf("workflowview.NewAttention: %v", err)
 	}

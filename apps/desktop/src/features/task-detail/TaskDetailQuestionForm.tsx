@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { AttentionItem } from "@/api";
+import type { QuestionAttentionItem } from "@/api";
 import { useOpenExternalLink } from "@/app-facade";
 import { Island } from "@/ui";
 import {
@@ -22,7 +22,7 @@ export function QuestionBox({
   onSelectionStateChange,
   taskId,
 }: Readonly<{
-  attention: AttentionItem;
+  attention: QuestionAttentionItem;
   answerQuestion: QuestionAnswerMutation;
   disabled: boolean;
   selectionState: QuestionSelectionState;

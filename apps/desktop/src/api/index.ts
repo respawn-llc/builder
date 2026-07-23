@@ -53,10 +53,15 @@ export type { WorkflowProjectEvent, WorkflowProjectEventHandler } from "./workfl
 export { workflowLabelMaxIDs } from "./workflowLabelContract";
 export type { ConnectionPhase, ConnectionSnapshot } from "./connectionStore";
 export type {
+  ApprovalAttentionItem,
+  AttentionItem,
+  InterruptedRunAttentionItem,
+  QuestionAttentionItem,
+} from "./attention";
+export type {
   ActivityItem,
   ActivityPage,
   ApprovalDecision,
-  AttentionItem,
   AttentionPage,
   BoardCard,
   BoardColumn,

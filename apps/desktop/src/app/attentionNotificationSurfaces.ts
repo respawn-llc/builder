@@ -305,8 +305,9 @@ function attentionTargetIsActive(
     return attention.some(
       (item) =>
         item.kind === "question" &&
-        item.runID === (target.runID ?? "") &&
-        item.sessionID === (target.sessionID ?? "") &&
+        target.runID !== undefined &&
+        item.runID === target.runID &&
+        item.sessionID === (target.sessionID ?? null) &&
         askIDs.has(item.askID),
     );
   }

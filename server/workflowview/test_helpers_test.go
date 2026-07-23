@@ -13,13 +13,10 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
-	"core/server/runtime"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/config"
 	"core/shared/serverapi"
-	"core/shared/toolspec"
-	"core/shared/transcript"
 )
 
 func newWorkflowViewTestStore(t testing.TB) (*metadata.Store, *workflowstore.Store, metadata.Binding) {
@@ -313,31 +310,36 @@ func mutateBoardNodeCardsToken(t *testing.T, token *string, mutate func(*boardNo
 }
 
 type staticTranscriptProvider struct {
-	entries map[string][]runtime.ChatEntry
+	entries map[string][]PendingQuestionTranscriptEntry
 }
 
 type staticPendingPromptSource map[string][]PendingPromptSnapshot
 
-func (s staticPendingPromptSource) ListPendingPrompts(sessionID string) []PendingPromptSnapshot {
-	return append([]PendingPromptSnapshot(nil), s[strings.TrimSpace(sessionID)]...)
+func (s staticPendingPromptSource) ListPendingPrompts(sessionID string) ([]PendingPromptSnapshot, error) {
+	return append([]PendingPromptSnapshot(nil), s[strings.TrimSpace(sessionID)]...), nil
 }
 
-func (p staticTranscriptProvider) SessionNewestActiveSegmentEntries(_ context.Context, sessionID string) ([]runtime.ChatEntry, error) {
-	return append([]runtime.ChatEntry(nil), p.entries[strings.TrimSpace(sessionID)]...), nil
+func (p staticTranscriptProvider) SessionNewestActiveSegmentQuestions(_ context.Context, sessionID string) ([]PendingQuestionTranscriptEntry, error) {
+	return append([]PendingQuestionTranscriptEntry(nil), p.entries[strings.TrimSpace(sessionID)]...), nil
 }
 
-func transcriptEntriesWithAsk(askID string, question string) []runtime.ChatEntry {
-	return []runtime.ChatEntry{askTranscriptEntry(askID, question, nil, 0)}
+func transcriptEntriesWithAsk(askID string, question string) []PendingQuestionTranscriptEntry {
+	return []PendingQuestionTranscriptEntry{askTranscriptEntry(askID, question, nil, nil)}
 }
 
-func transcriptEntriesWithAskOptions(askID string, question string, suggestions []string, recommended int) []runtime.ChatEntry {
-	return []runtime.ChatEntry{askTranscriptEntry(askID, question, suggestions, recommended)}
+func attentionPointerEquals[T comparable](value *T, want T) bool {
+	return value != nil && *value == want
 }
 
-func askTranscriptEntry(askID string, question string, suggestions []string, recommended int) runtime.ChatEntry {
-	return runtime.ChatEntry{
-		Role:       "tool_call",
-		ToolCallID: askID,
-		ToolCall:   &transcript.ToolCallMeta{ToolName: string(toolspec.ToolAskQuestion), Question: question, Suggestions: suggestions, RecommendedOptionIndex: recommended},
+func transcriptEntriesWithAskOptions(askID string, question string, suggestions []string, recommended int) []PendingQuestionTranscriptEntry {
+	return []PendingQuestionTranscriptEntry{askTranscriptEntry(askID, question, suggestions, &recommended)}
+}
+
+func askTranscriptEntry(askID string, question string, suggestions []string, recommended *int) PendingQuestionTranscriptEntry {
+	return PendingQuestionTranscriptEntry{
+		AskID:                  askID,
+		Question:               question,
+		Suggestions:            suggestions,
+		RecommendedOptionIndex: recommended,
 	}
 }

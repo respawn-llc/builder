@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"core/internal/testharness/testsetup"
-	"core/server/runtime"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionview"
@@ -23,17 +21,11 @@ func TestAttentionQuestionRecoveryUsesLivePrompt(t *testing.T) {
 	sessionID := "session-live-prompt"
 	askID := "ask-live-prompt"
 	task, started := createWorkflowViewWaitingAskTask(t, ctx, metadataStore, workflowStore, binding, sessionID, askID)
-	definitions, err := NewDefinitionProjection(workflowStore)
-	if err != nil {
-		t.Fatalf("NewDefinitionProjection: %v", err)
-	}
-	attention, err := NewAttention(metadataStore, definitions, NewTaskProjector(), testsetup.QuestionsEnabled("coder"), nil, staticPendingPromptSource{sessionID: {{
-		Request: askquestion.AskQuestionRequest{
-			ID:                     askID,
-			Question:               "Choose a release channel",
-			Suggestions:            []string{"stable", "preview"},
-			RecommendedOptionIndex: 1,
-		},
+	attention, err := NewAttention(metadataStore.Queries(), NewTaskProjector(), nil, staticPendingPromptSource{sessionID: {{
+		ID:                     askID,
+		Question:               "Choose a release channel",
+		Suggestions:            []string{"stable", "preview"},
+		RecommendedOptionIndex: attentionQuestionInt(1),
 	}}})
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)
@@ -47,12 +39,12 @@ func TestAttentionQuestionRecoveryUsesLivePrompt(t *testing.T) {
 		t.Fatalf("attention items = %+v", response.Items)
 	}
 	item := response.Items[0]
-	if item.RunID != string(started.RunID) ||
-		item.AskID != askID ||
+	if !attentionPointerEquals(item.RunID, string(started.RunID)) ||
+		!attentionPointerEquals(item.AskID, askID) ||
 		item.Question == nil ||
 		item.Question.Kind != serverapi.WorkflowAttentionQuestionKindOrdinary ||
 		len(item.Suggestions) != 2 ||
-		item.RecommendedOptionIndex != 1 {
+		!attentionPointerEquals(item.RecommendedOptionIndex, 1) {
 		t.Fatalf("live prompt attention = %+v", item)
 	}
 }
@@ -109,12 +101,8 @@ func TestAttentionQuestionRecoveryUsesDormantNewestActiveSegment(t *testing.T) {
 		t.Fatalf("AppendRecord: %v", err)
 	}
 	task, _ := createWorkflowViewWaitingAskTask(t, ctx, metadataStore, workflowStore, binding, sessionStore.Meta().SessionID, askID)
-	definitions, err := NewDefinitionProjection(workflowStore)
-	if err != nil {
-		t.Fatalf("NewDefinitionProjection: %v", err)
-	}
 	sessionViews := sessionview.NewService(singleSessionStoreResolver{store: sessionStore}, nil, nil, nil)
-	attention, err := NewAttention(metadataStore, definitions, NewTaskProjector(), testsetup.QuestionsEnabled("coder"), sessionViewActiveTranscriptProvider{views: sessionViews}, nil)
+	attention, err := NewAttention(metadataStore.Queries(), NewTaskProjector(), sessionViewActiveTranscriptProvider{views: sessionViews}, nil)
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)
 	}
@@ -124,36 +112,30 @@ func TestAttentionQuestionRecoveryUsesDormantNewestActiveSegment(t *testing.T) {
 		t.Fatalf("ListTask: %v", err)
 	}
 	if len(response.Items) != 1 ||
-		response.Items[0].AskID != askID ||
+		!attentionPointerEquals(response.Items[0].AskID, askID) ||
 		response.Items[0].Question == nil ||
 		len(response.Items[0].Suggestions) != 2 ||
-		response.Items[0].RecommendedOptionIndex != 2 {
+		!attentionPointerEquals(response.Items[0].RecommendedOptionIndex, 2) {
 		t.Fatalf("dormant transcript attention = %+v", response.Items)
 	}
 }
 
-func TestAttentionQuestionRecoveryFallsBackLocally(t *testing.T) {
+func TestAttentionQuestionRecoveryPropagatesTranscriptFailure(t *testing.T) {
 	ctx, metadataStore, workflowStore, binding := newWorkflowViewTestContextStore(t)
 	task, _ := createWorkflowViewWaitingAskTask(t, ctx, metadataStore, workflowStore, binding, "session-fallback", "ask-fallback")
-	definitions, err := NewDefinitionProjection(workflowStore)
-	if err != nil {
-		t.Fatalf("NewDefinitionProjection: %v", err)
-	}
-	transcripts := &failingActiveTranscriptProvider{}
-	attention, err := NewAttention(metadataStore, definitions, NewTaskProjector(), testsetup.QuestionsEnabled("coder"), transcripts, nil)
+	sourceErr := errors.New("transcript unavailable")
+	transcripts := &failingActiveTranscriptProvider{err: sourceErr}
+	attention, err := NewAttention(metadataStore.Queries(), NewTaskProjector(), transcripts, nil)
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)
 	}
 
-	response, err := attention.ListTask(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(task.ID)})
-	if err != nil {
-		t.Fatalf("ListTask: %v", err)
+	_, err = attention.ListTask(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(task.ID)})
+	if !errors.Is(err, sourceErr) {
+		t.Fatalf("ListTask error = %v, want transcript error %v", err, sourceErr)
 	}
-	if transcripts.calls != 1 ||
-		len(response.Items) != 1 ||
-		response.Items[0].AskID != "ask-fallback" ||
-		response.Items[0].Message != pendingQuestionFallbackMessage {
-		t.Fatalf("fallback attention = %+v, transcript calls=%d", response.Items, transcripts.calls)
+	if transcripts.calls != 1 {
+		t.Fatalf("transcript calls = %d, want 1", transcripts.calls)
 	}
 }
 
@@ -172,15 +154,45 @@ type sessionViewActiveTranscriptProvider struct {
 	views *sessionview.Service
 }
 
-func (p sessionViewActiveTranscriptProvider) SessionNewestActiveSegmentEntries(ctx context.Context, sessionID string) ([]runtime.ChatEntry, error) {
-	return p.views.SessionTranscriptTailEntries(ctx, sessionID)
+func (p sessionViewActiveTranscriptProvider) SessionNewestActiveSegmentQuestions(ctx context.Context, sessionID string) ([]PendingQuestionTranscriptEntry, error) {
+	entries, err := p.views.SessionTranscriptTailEntries(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	questions := make([]PendingQuestionTranscriptEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Role != "tool_call" ||
+			entry.ToolCall == nil ||
+			entry.ToolCall.ToolName != string(toolspec.ToolAskQuestion) {
+			continue
+		}
+		questions = append(questions, PendingQuestionTranscriptEntry{
+			AskID:                  entry.ToolCallID,
+			Question:               entry.ToolCall.Question,
+			Suggestions:            append([]string(nil), entry.ToolCall.Suggestions...),
+			RecommendedOptionIndex: legacyRecommendedOptionIndex(entry.ToolCall.RecommendedOptionIndex),
+		})
+	}
+	return questions, nil
 }
 
 type failingActiveTranscriptProvider struct {
 	calls int
+	err   error
 }
 
-func (p *failingActiveTranscriptProvider) SessionNewestActiveSegmentEntries(context.Context, string) ([]runtime.ChatEntry, error) {
+func (p *failingActiveTranscriptProvider) SessionNewestActiveSegmentQuestions(context.Context, string) ([]PendingQuestionTranscriptEntry, error) {
 	p.calls++
-	return nil, errors.New("transcript unavailable")
+	return nil, p.err
+}
+
+func attentionQuestionInt(value int) *int {
+	return &value
+}
+
+func legacyRecommendedOptionIndex(index int) *int {
+	if index < 1 {
+		return nil
+	}
+	return &index
 }

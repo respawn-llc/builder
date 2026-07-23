@@ -21,7 +21,118 @@ const baseAttentionItem = {
   occurred_at_unix_ms: 1,
 };
 
+const approvalSnapshot = {
+  source_node_display_name: "Review",
+  targets: [{ display_name: "Done" }],
+  commentary: "",
+  output_values: {},
+  workflow_revision_seen: 1,
+};
+
+const approvalAttentionItem = {
+  id: "approval:transition-1",
+  kind: "approval",
+  project_id: "project-1",
+  workflow_id: "workflow-1",
+  task_id: "task-1",
+  task_short_id: "KT-1",
+  task_title: "Task",
+  task_transition_id: "transition-1",
+  message: "Approval required",
+  approval_snapshot: approvalSnapshot,
+  occurred_at_unix_ms: 1,
+};
+
+const interruptedRunAttentionItem = {
+  id: "interrupted_run:run-1",
+  kind: "interrupted_run",
+  project_id: "project-1",
+  workflow_id: "workflow-1",
+  task_id: "task-1",
+  task_short_id: "KT-1",
+  task_title: "Task",
+  run_id: "run-1",
+  message: "Run interrupted",
+  occurred_at_unix_ms: 1,
+};
+
 describe("attentionItemSchema", () => {
+  it("decodes only the task-scoped discriminated attention variants", () => {
+    const question = attentionItemSchema.parse(baseAttentionItem);
+    const approval = attentionItemSchema.parse(approvalAttentionItem);
+    const interrupted = attentionItemSchema.parse(interruptedRunAttentionItem);
+    if (
+      question.kind !== "question" ||
+      approval.kind !== "approval" ||
+      interrupted.kind !== "interrupted_run"
+    ) {
+      throw new Error("attention variants did not decode to their discriminants");
+    }
+    expect(question.question).toBeNull();
+    expect(question.recommendedOptionIndex).toBeNull();
+    expect(approval.approvalSnapshot).not.toBeNull();
+    expect(interrupted.runID).toBe("run-1");
+    expect(interrupted.sessionID).toBeNull();
+    expect(interrupted.detailJSON).toBeNull();
+
+    const rejected = [
+      { ...baseAttentionItem, kind: "validation_blocker" },
+      { ...baseAttentionItem, kind: "future_attention" },
+      { ...baseAttentionItem, id: "" },
+      { ...baseAttentionItem, project_id: "" },
+      { ...baseAttentionItem, task_id: "" },
+      { ...baseAttentionItem, task_short_id: "" },
+      { ...baseAttentionItem, task_title: "" },
+      { ...baseAttentionItem, workflow_id: "" },
+      { ...baseAttentionItem, run_id: "" },
+      { ...baseAttentionItem, ask_id: "" },
+      { ...baseAttentionItem, task_transition_id: "transition-1" },
+      { ...baseAttentionItem, approval_snapshot: approvalSnapshot },
+      { ...baseAttentionItem, detail_json: "{}" },
+      { ...approvalAttentionItem, task_transition_id: "" },
+      (() => {
+        const item = { ...approvalAttentionItem };
+        Reflect.deleteProperty(item, "approval_snapshot");
+        return item;
+      })(),
+      { ...approvalAttentionItem, ask_id: "ask-1" },
+      { ...approvalAttentionItem, run_id: "run-1" },
+      { ...approvalAttentionItem, session_id: "session-1" },
+      { ...approvalAttentionItem, suggestions: [] },
+      { ...approvalAttentionItem, recommended_option_index: 1 },
+      { ...approvalAttentionItem, question: { kind: "ordinary" } },
+      { ...approvalAttentionItem, detail_json: "{}" },
+      { ...interruptedRunAttentionItem, run_id: "" },
+      { ...interruptedRunAttentionItem, ask_id: "ask-1" },
+      { ...interruptedRunAttentionItem, suggestions: [] },
+      { ...interruptedRunAttentionItem, recommended_option_index: 1 },
+      { ...interruptedRunAttentionItem, question: { kind: "ordinary" } },
+      { ...interruptedRunAttentionItem, task_transition_id: "transition-1" },
+      { ...interruptedRunAttentionItem, approval_snapshot: approvalSnapshot },
+      { ...baseAttentionItem, session_id: "" },
+      { ...interruptedRunAttentionItem, detail_json: "" },
+      (() => {
+        const item = { ...baseAttentionItem };
+        Reflect.deleteProperty(item, "project_id");
+        return item;
+      })(),
+      (() => {
+        const item = { ...baseAttentionItem };
+        Reflect.deleteProperty(item, "task_short_id");
+        return item;
+      })(),
+      (() => {
+        const item = { ...baseAttentionItem };
+        Reflect.deleteProperty(item, "task_title");
+        return item;
+      })(),
+    ];
+
+    for (const item of rejected) {
+      expect(() => attentionItemSchema.parse(item)).toThrow();
+    }
+  });
+
   it("parses runtime approval question prompt metadata", () => {
     const item = attentionItemSchema.parse({
       ...baseAttentionItem,
@@ -30,6 +141,9 @@ describe("attentionItemSchema", () => {
         approval_decisions: ["allow_once", "allow_session", "deny"],
       },
     });
+    if (item.kind !== "question") {
+      throw new Error("runtime approval prompt did not decode as a question");
+    }
 
     expect(item.question).toEqual({
       kind: "approval",
@@ -58,17 +172,17 @@ describe("attentionItemSchema", () => {
       display_name: `Target ${String(index)}`,
     }));
     const item = attentionItemSchema.parse({
-      ...baseAttentionItem,
+      ...approvalAttentionItem,
       approval_snapshot: {
-        source_node_display_name: "Review",
+        ...approvalSnapshot,
         targets,
-        commentary: "",
-        output_values: {},
-        workflow_revision_seen: 1,
       },
     });
+    if (item.kind !== "approval") {
+      throw new Error("approval target item did not decode as an approval");
+    }
 
-    expect(item.approvalSnapshot?.targets).toHaveLength(201);
+    expect(item.approvalSnapshot.targets).toHaveLength(201);
   });
 });
 

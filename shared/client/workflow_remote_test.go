@@ -490,6 +490,140 @@ func TestRemoteWorkflowAttentionListRoundTripsGlobalRequest(t *testing.T) {
 	}
 }
 
+func TestRemoteWorkflowAttentionAndActivityRejectMalformedResponses(t *testing.T) {
+	t.Run("removed global attention kind", func(t *testing.T) {
+		remote := newWorkflowResponseRemote(t, protocol.MethodWorkflowAttentionList, serverapi.WorkflowAttentionListResponse{
+			Items: []serverapi.WorkflowAttentionItem{{Kind: "validation_blocker"}},
+		})
+		if _, err := remote.ListWorkflowAttention(context.Background(), serverapi.WorkflowAttentionListRequest{}); err == nil {
+			t.Fatal("ListWorkflowAttention accepted a removed attention kind")
+		}
+	})
+
+	t.Run("task attention task mismatch", func(t *testing.T) {
+		remote := newWorkflowResponseRemote(t, protocol.MethodWorkflowTaskAttentionList, serverapi.WorkflowTaskAttentionListResponse{
+			Items: []serverapi.WorkflowAttentionItem{*workflowRemoteInterruptedAttention("task-other")},
+		})
+		if _, err := remote.ListWorkflowTaskAttention(context.Background(), serverapi.WorkflowTaskAttentionListRequest{TaskID: "task-requested"}); err == nil {
+			t.Fatal("ListWorkflowTaskAttention accepted an item for another task")
+		}
+	})
+
+	t.Run("global attention cross variant field", func(t *testing.T) {
+		runID := "run-1"
+		item := workflowRemoteApprovalAttention()
+		item.RunID = &runID
+		remote := newWorkflowResponseRemote(t, protocol.MethodWorkflowAttentionList, serverapi.WorkflowAttentionListResponse{
+			Items: []serverapi.WorkflowAttentionItem{item},
+		})
+		if _, err := remote.ListWorkflowAttention(context.Background(), serverapi.WorkflowAttentionListRequest{}); err == nil {
+			t.Fatal("ListWorkflowAttention accepted an approval carrying run_id")
+		}
+	})
+
+	t.Run("global attention malformed approval snapshot", func(t *testing.T) {
+		item := workflowRemoteApprovalAttention()
+		item.ApprovalSnapshot = &serverapi.WorkflowAttentionApprovalSnapshot{}
+		remote := newWorkflowResponseRemote(t, protocol.MethodWorkflowAttentionList, serverapi.WorkflowAttentionListResponse{
+			Items: []serverapi.WorkflowAttentionItem{item},
+		})
+		if _, err := remote.ListWorkflowAttention(context.Background(), serverapi.WorkflowAttentionListRequest{}); err == nil {
+			t.Fatal("ListWorkflowAttention accepted an approval with a malformed snapshot")
+		}
+	})
+
+	t.Run("activity nested attention mismatch", func(t *testing.T) {
+		remote := newWorkflowResponseRemote(t, protocol.MethodWorkflowTaskActivityList, serverapi.WorkflowTaskActivityListResponse{
+			Items: []serverapi.WorkflowTaskActivityItem{{
+				Type:      "run_interrupted",
+				TaskID:    "task-requested",
+				Attention: workflowRemoteInterruptedAttention("task-other"),
+			}},
+		})
+		if _, err := remote.ListWorkflowTaskActivity(context.Background(), serverapi.WorkflowTaskActivityListRequest{TaskID: "task-requested"}); err == nil {
+			t.Fatal("ListWorkflowTaskActivity accepted incoherent nested attention")
+		}
+	})
+}
+
+func newWorkflowResponseRemote(t *testing.T, wantMethod string, response any) *Remote {
+	t.Helper()
+	handlerErr := make(chan error, 1)
+	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		defer func() { _ = ws.Close() }()
+		var req protocol.Request
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			handlerErr <- fmt.Errorf("receive handshake: %w", err)
+			return
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}})); err != nil {
+			handlerErr <- fmt.Errorf("send handshake response: %w", err)
+			return
+		}
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			handlerErr <- fmt.Errorf("receive workflow response request: %w", err)
+			return
+		}
+		if req.Method != wantMethod {
+			handlerErr <- fmt.Errorf("workflow response request method = %q, want %q", req.Method, wantMethod)
+			return
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, response)); err != nil {
+			handlerErr <- fmt.Errorf("send workflow response: %w", err)
+			return
+		}
+		handlerErr <- nil
+	}))
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		server.Close()
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = remote.Close()
+		server.Close()
+		if err := <-handlerErr; err != nil {
+			t.Error(err)
+		}
+	})
+	return remote
+}
+
+func workflowRemoteInterruptedAttention(taskID string) *serverapi.WorkflowAttentionItem {
+	workflowID := "workflow-1"
+	return &serverapi.WorkflowAttentionItem{
+		ProjectID:   "project-1",
+		Kind:        "interrupted_run",
+		TaskID:      taskID,
+		TaskShortID: "KENT-1",
+		TaskTitle:   "Task",
+		WorkflowID:  &workflowID,
+		RunID:       workflowRemoteString("run-1"),
+	}
+}
+
+func workflowRemoteApprovalAttention() serverapi.WorkflowAttentionItem {
+	workflowID := "workflow-1"
+	return serverapi.WorkflowAttentionItem{
+		ProjectID:        "project-1",
+		Kind:             "approval",
+		TaskID:           "task-requested",
+		TaskShortID:      "KENT-1",
+		TaskTitle:        "Task",
+		WorkflowID:       &workflowID,
+		TaskTransitionID: workflowRemoteString("transition-1"),
+		ApprovalSnapshot: &serverapi.WorkflowAttentionApprovalSnapshot{
+			SourceNodeDisplayName: "Review",
+			Targets:               []serverapi.WorkflowAttentionApprovalTarget{{DisplayName: "Done"}},
+			OutputValues:          map[string]string{},
+		},
+	}
+}
+
+func workflowRemoteString(value string) *string {
+	return &value
+}
+
 func TestRemoteWorkflowStartRejectsInvalidResponse(t *testing.T) {
 	handlerErr := make(chan error, 1)
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {

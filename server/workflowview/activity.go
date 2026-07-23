@@ -13,6 +13,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/workflowattention"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 type Activity struct {
@@ -267,7 +268,7 @@ func (a *Activity) itemsFromPage(page activityPage) ([]serverapi.WorkflowTaskAct
 			case "run_completed":
 				item.Summary = "Run completed"
 			case "run_interrupted":
-				item.Summary = workflowattention.InterruptedRunMessage(metadata.OptionalString(run.InterruptionReason), run.InterruptionDetailJson)
+				item.Summary = workflowattention.InterruptedRunMessage(metadata.OptionalString(run.InterruptionReason), textutil.OptionalExactString(run.InterruptionDetailJson))
 				workflowID := page.task.WorkflowID
 				attention := serverapi.WorkflowAttentionItem{
 					ID:               attentionKindInterruptedRun + ":" + run.ID,
@@ -277,10 +278,10 @@ func (a *Activity) itemsFromPage(page activityPage) ([]serverapi.WorkflowTaskAct
 					TaskID:           page.task.ID,
 					TaskShortID:      page.task.ShortID,
 					TaskTitle:        page.task.Title,
-					RunID:            run.ID,
-					SessionID:        run.SessionID.String,
+					RunID:            textutil.Pointer(&run.ID),
+					SessionID:        textutil.Pointer(metadata.OptionalString(run.SessionID)),
 					Message:          item.Summary,
-					DetailJSON:       run.InterruptionDetailJson,
+					DetailJSON:       textutil.OptionalExactString(run.InterruptionDetailJson),
 					OccurredAtUnixMs: run.InterruptedAtUnixMs.Int64,
 				}
 				item.Attention = &attention

@@ -1,3 +1,5 @@
+import type { AttentionItem } from "./attention";
+
 import type { WorkflowExecutionTarget, WorkflowExecutionTargetPolicy } from "./workflowExecutionTarget";
 
 export { defaultWorkflowExecutionTargetPolicy } from "./workflowExecutionTarget";
@@ -153,7 +155,7 @@ export type ApprovalDecision = "allow_once" | "allow_session" | "deny";
 export type OrdinaryQuestionPrompt = Readonly<{
   kind: "ordinary";
   suggestions: readonly string[];
-  recommendedOptionIndex: number;
+  recommendedOptionIndex: number | null;
 }>;
 
 export type ApprovalQuestionPrompt = Readonly<{
@@ -578,27 +580,6 @@ export type BoardNodeCardsPage = Readonly<{
   previousPageToken: string | null;
   nextPageToken: string | null;
   generatedAt: number;
-}>;
-
-export type AttentionItem = Readonly<{
-  id: string;
-  kind: string;
-  projectID: string;
-  workflowID: string;
-  taskID: string;
-  taskShortID: string;
-  taskTitle: string;
-  runID: string;
-  sessionID: string;
-  askID: string;
-  taskTransitionID: string;
-  message: string;
-  detailJSON: string;
-  suggestions: readonly string[];
-  recommendedOptionIndex: number;
-  question: AttentionQuestionPrompt | null;
-  approvalSnapshot: ApprovalSnapshot | null;
-  occurredAt: number;
 }>;
 
 export type ApprovalSnapshot = Readonly<{
