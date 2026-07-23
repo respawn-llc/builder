@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"sync"
 
 	"core/server/metadata"
 	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
+	"core/server/runtimecommand"
 	"core/server/runtimeops"
 	"core/server/session"
 	"core/server/sessionruntime"
@@ -47,6 +47,8 @@ var errWorkflowTaskSessionAutoCompactionDisable = errors.New("auto-compaction ca
 
 type Service struct {
 	authority      *sessionruntime.Authority
+	execution      *runtimecommand.ExecutionAdapter
+	goalAuthority  *runtimecommand.GoalAuthority
 	activity       RuntimeActivityResolver
 	promptStore    PromptHistoryStore
 	workflowStates WorkflowSessionResolver
@@ -64,13 +66,18 @@ type Service struct {
 	liveSteers     *requestmemo.Memo[liveSteerMemoRequest, serverapi.RuntimeLiveSteerResponse]
 	liveStops      *requestmemo.Memo[liveStopMemoRequest, serverapi.RuntimeLiveStopResponse]
 	promptHistory  *requestmemo.Memo[sessionTextMemoRequest, struct{}]
-	goals          *requestmemo.Memo[goalSetMemoRequest, serverapi.RuntimeGoalShowResponse]
-	goalStatuses   *requestmemo.Memo[goalStatusMemoRequest, serverapi.RuntimeGoalShowResponse]
-	goalClears     *requestmemo.Memo[goalClearMemoRequest, serverapi.RuntimeGoalShowResponse]
+	goals          *requestmemo.Memo[goalSetMemoRequest, committedGoalMutationResult]
+	goalStatuses   *requestmemo.Memo[goalStatusMemoRequest, committedGoalMutationResult]
+	goalClears     *requestmemo.Memo[goalClearMemoRequest, committedGoalMutationResult]
 }
 
 type committedRuntimeMutationResult[Resp any] struct {
 	Response Resp
+	Err      error
+}
+
+type committedGoalMutationResult struct {
+	Response serverapi.RuntimeGoalShowResponse
 	Err      error
 }
 
@@ -148,8 +155,29 @@ type goalClearMemoRequest struct {
 }
 
 func NewService(authority *sessionruntime.Authority) *Service {
+	execution := runtimecommand.NewExecutionAdapter(authority)
+	return NewServiceWithGoalCommands(
+		authority,
+		execution,
+		runtimecommand.NewGoalAuthority(authority, execution),
+	)
+}
+
+func NewServiceWithGoalCommands(
+	authority *sessionruntime.Authority,
+	execution *runtimecommand.ExecutionAdapter,
+	goalAuthority *runtimecommand.GoalAuthority,
+) *Service {
+	if execution == nil {
+		execution = runtimecommand.NewExecutionAdapter(authority)
+	}
+	if goalAuthority == nil {
+		goalAuthority = runtimecommand.NewGoalAuthority(authority, execution)
+	}
 	return &Service{
 		authority:      authority,
+		execution:      execution,
+		goalAuthority:  goalAuthority,
 		operations:     runtimeops.NewCoordinator(),
 		sessionNames:   requestmemo.New[sessionStringMemoRequest, struct{}](),
 		thinkingLevels: requestmemo.New[sessionStringMemoRequest, struct{}](),
@@ -163,9 +191,9 @@ func NewService(authority *sessionruntime.Authority) *Service {
 		liveSteers:     requestmemo.New[liveSteerMemoRequest, serverapi.RuntimeLiveSteerResponse](),
 		liveStops:      requestmemo.New[liveStopMemoRequest, serverapi.RuntimeLiveStopResponse](),
 		promptHistory:  requestmemo.New[sessionTextMemoRequest, struct{}](),
-		goals:          requestmemo.New[goalSetMemoRequest, serverapi.RuntimeGoalShowResponse](),
-		goalStatuses:   requestmemo.New[goalStatusMemoRequest, serverapi.RuntimeGoalShowResponse](),
-		goalClears:     requestmemo.New[goalClearMemoRequest, serverapi.RuntimeGoalShowResponse](),
+		goals:          requestmemo.New[goalSetMemoRequest, committedGoalMutationResult](),
+		goalStatuses:   requestmemo.New[goalStatusMemoRequest, committedGoalMutationResult](),
+		goalClears:     requestmemo.New[goalClearMemoRequest, committedGoalMutationResult](),
 	}
 }
 
@@ -174,55 +202,10 @@ func (s *Service) runAgentExecution(
 	sessionID string,
 	run func(context.Context, *runtime.Engine) error,
 ) error {
-	if s == nil || s.authority == nil {
+	if s == nil || s.execution == nil {
 		return errors.New("session runtime authority is required")
 	}
-	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
-	if err != nil {
-		return err
-	}
-	descriptor, err := session.NewOpenSessionDescriptor(id)
-	if err != nil {
-		return err
-	}
-	operationContinues := make(chan bool, 1)
-	handle, err := s.authority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
-		Descriptor: descriptor,
-		Resource:   sessionruntime.CurrentAgentResource{},
-		Runner: func(executionCtx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
-			callbackRan := false
-			runErr := bridge.WithEngine(executionCtx, func(_ context.Context, engine *runtime.Engine) error {
-				callbackRan = true
-				runCtx, stop := mergeOperationContexts(executionCtx, ctx)
-				err := run(runCtx, engine)
-				stop()
-				goalLoopActive := err == nil && engine.GoalLoopRunning()
-				operationContinues <- goalLoopActive
-				if err != nil || !goalLoopActive {
-					return err
-				}
-				return engine.WaitForGoalLoop(executionCtx)
-			})
-			if !callbackRan {
-				operationContinues <- false
-			}
-			return runErr
-		},
-	})
-	if err != nil {
-		if errors.Is(err, sessionruntime.ErrSessionStartsBlocked) {
-			return errors.Join(serverapi.ErrSessionWorktreeDeleting, err)
-		}
-		if errors.Is(err, sessionruntime.ErrSessionRunActive) {
-			return errors.Join(serverapi.ErrSessionRunStarting, err)
-		}
-		return err
-	}
-	if <-operationContinues {
-		return nil
-	}
-	_, err = handle.Wait(context.Background())
-	return err
+	return s.execution.RunAgentExecution(ctx, sessionID, run)
 }
 
 func (s *Service) WithRuntimeActivityResolver(resolver RuntimeActivityResolver) *Service {
@@ -280,30 +263,7 @@ func (s *Service) withRuntime(ctx context.Context, sessionID string, fn func(con
 }
 
 func mergeOperationContexts(contexts ...context.Context) (context.Context, func()) {
-	ctx, cancel := context.WithCancel(context.Background())
-	var once sync.Once
-	stop := func() { once.Do(cancel) }
-	for _, source := range contexts {
-		if source == nil {
-			continue
-		}
-		if err := source.Err(); err != nil {
-			stop()
-			continue
-		}
-		done := source.Done()
-		if done == nil {
-			continue
-		}
-		go func() {
-			select {
-			case <-done:
-				stop()
-			case <-ctx.Done():
-			}
-		}()
-	}
-	return ctx, stop
+	return sessionruntime.MergeContexts(contexts...)
 }
 
 func (s *Service) operationAttemptCanceled(err error, attempt runtimeops.Attempt) bool {

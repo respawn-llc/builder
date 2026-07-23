@@ -767,7 +767,7 @@ func TestResolvePersistedSessionRoundTripsRequiredStructuredMetadata(t *testing.
 		t.Fatalf("SetWorktreeReminderState: %v", err)
 	}
 	reminder = session.CloneWorktreeReminderState(sess.Meta().WorktreeReminder)
-	goal, err := sess.SetGoal("ship durable goal metadata", session.GoalActorUser)
+	goal, _, err := sess.SetGoal("ship durable goal metadata", session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}

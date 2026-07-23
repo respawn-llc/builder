@@ -127,7 +127,7 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &role}); err != nil {
 		t.Fatalf("set continuation context: %v", err)
 	}
-	if _, err := store.SetGoal("ship dormant goal", session.GoalActorUser); err != nil {
+	if _, _, err := store.SetGoal("ship dormant goal", session.GoalActorUser); err != nil {
 		t.Fatalf("set goal: %v", err)
 	}
 	appendSessionViewMessage(t, store, "step-1", session.MessageRoleUser, "hello", nil, nil)

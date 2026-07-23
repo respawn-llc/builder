@@ -294,7 +294,8 @@ func TestProductionRuntimeAuthorityAdaptersStayCentralized(t *testing.T) {
 			if !ok {
 				return true
 			}
-			if rawEngineBridges[selector.Sel.Name] && !approvedRawEngineAdapterDirs[filepath.ToSlash(filepath.Dir(relPath))] {
+			if rawEngineBridges[selector.Sel.Name] &&
+				!approvedRawEngineAdapterDirs[filepath.ToSlash(filepath.Dir(relPath))] {
 				t.Errorf("%s:%d calls raw Engine bridge %s outside an approved Authority adapter", relPath, fileSet.Position(selector.Sel.Pos()).Line, selector.Sel.Name)
 			}
 			pkg, ok := selector.X.(*ast.Ident)

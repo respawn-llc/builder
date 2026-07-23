@@ -30,7 +30,8 @@ Environment:
   KENT_TEST_TIMEOUT_SECONDS
             Server test-runtime cap in seconds. Defaults to 180.
   KENT_TEST_GO_PACKAGE_PARALLELISM
-            Maximum Go test packages to execute concurrently. Defaults to 4.
+            Maximum Go test packages to execute concurrently. Defaults to the detected CPU count,
+            capped at 18, and falls back to 4 when CPU detection is unavailable.
   KENT_TEST_TUI_TIMEOUT_SECONDS
             TUI test wall-clock cap in seconds. Defaults to 600.
   -h, --help
@@ -117,7 +118,21 @@ case "$disable_wall_clock_cap" in
 esac
 
 timeout_seconds="${KENT_TEST_TIMEOUT_SECONDS:-180}"
-go_test_package_parallelism="${KENT_TEST_GO_PACKAGE_PARALLELISM:-4}"
+default_go_test_package_parallelism=4
+if command -v nproc >/dev/null 2>&1; then
+    default_go_test_package_parallelism="$(nproc)"
+elif command -v sysctl >/dev/null 2>&1; then
+    default_go_test_package_parallelism="$(sysctl -n hw.ncpu 2>/dev/null || true)"
+fi
+case "$default_go_test_package_parallelism" in
+'' | *[!0-9]*)
+    default_go_test_package_parallelism=4
+    ;;
+esac
+if [ "$default_go_test_package_parallelism" -gt 18 ]; then
+    default_go_test_package_parallelism=18
+fi
+go_test_package_parallelism="${KENT_TEST_GO_PACKAGE_PARALLELISM:-$default_go_test_package_parallelism}"
 tui_timeout_seconds="${KENT_TEST_TUI_TIMEOUT_SECONDS:-600}"
 inside_tui_wall_clock_cap="${KENT_TEST_INSIDE_TUI_WALL_CLOCK_CAP:-0}"
 case "$go_test_package_parallelism" in
