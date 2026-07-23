@@ -1018,6 +1018,14 @@ WHERE task_id IN (
     WHERE workflow_id = sqlc.arg(workflow_id)
 );
 
+-- name: DeleteWorkflowTaskPendingApprovalsByWorkflowID :execrows
+DELETE FROM task_pending_approvals
+WHERE source_task_id IN (
+    SELECT task_records.id
+    FROM task_records
+    WHERE workflow_id = sqlc.arg(workflow_id)
+);
+
 -- name: DeleteWorkflowTaskNodePlacementsByWorkflowID :execrows
 DELETE FROM task_node_placements
 WHERE task_id IN (
@@ -3701,6 +3709,14 @@ WHERE id IN (
     SELECT id FROM task_records WHERE project_id = sqlc.arg(project_id)
 );
 
+-- name: DeleteProjectTaskPendingApprovals :execrows
+DELETE FROM task_pending_approvals
+WHERE source_task_id IN (
+    SELECT id
+    FROM task_records
+    WHERE project_id = sqlc.arg(project_id)
+);
+
 -- name: DeleteProject :execrows
 DELETE FROM projects
 WHERE id = sqlc.arg(project_id);
@@ -4794,6 +4810,62 @@ WHERE task_id = sqlc.arg(task_id)
   AND node_id = sqlc.arg(node_id)
   AND transition_branch_key IS NULL;
 
+-- name: InsertTaskPendingApproval :exec
+INSERT INTO task_pending_approvals (
+    id,
+    source_task_id,
+    source_node_id,
+    source_transition_branch_key,
+    source_session_id,
+    workflow_version,
+    transition_snapshot_json,
+    materialized_values_json,
+    created_at_unix_ms
+) VALUES (
+    sqlc.arg(id),
+    sqlc.arg(source_task_id),
+    sqlc.arg(source_node_id),
+    sqlc.arg(source_transition_branch_key),
+    sqlc.arg(source_session_id),
+    sqlc.arg(workflow_version),
+    sqlc.arg(transition_snapshot_json),
+    sqlc.arg(materialized_values_json),
+    sqlc.arg(created_at_unix_ms)
+);
+
+-- name: InsertTaskPendingApprovalBranch :exec
+INSERT INTO task_pending_approval_branches (
+    approval_id,
+    transition_branch_key,
+    target_snapshot_json,
+    effective_edge_configuration_json,
+    context_source_resolution_json
+) VALUES (
+    sqlc.arg(approval_id),
+    sqlc.arg(transition_branch_key),
+    sqlc.arg(target_snapshot_json),
+    sqlc.arg(effective_edge_configuration_json),
+    sqlc.arg(context_source_resolution_json)
+);
+
+-- name: DeleteTaskPendingApproval :execrows
+DELETE FROM task_pending_approvals
+WHERE id = sqlc.arg(id);
+
+-- name: DeleteTaskPendingApprovalsByTask :execrows
+DELETE FROM task_pending_approvals
+WHERE source_task_id = sqlc.arg(task_id);
+
+-- name: GetTaskPendingApprovalIDForCurrentNode :one
+SELECT id
+FROM task_pending_approvals
+WHERE source_task_id = sqlc.arg(task_id)
+  AND source_node_id = sqlc.arg(node_id)
+  AND (
+      (source_transition_branch_key IS NULL AND sqlc.narg(transition_branch_key) IS NULL)
+      OR source_transition_branch_key = sqlc.narg(transition_branch_key)
+  );
+
 -- name: GetTaskActiveFanout :one
 SELECT task_id
 FROM task_active_fanouts
@@ -4823,6 +4895,20 @@ SELECT
 FROM task_pending_approvals
 WHERE source_task_id = sqlc.arg(task_id)
 ORDER BY created_at_unix_ms, id;
+
+-- name: GetTaskPendingApproval :one
+SELECT
+    id,
+    source_task_id,
+    source_node_id,
+    source_transition_branch_key,
+    source_session_id,
+    workflow_version,
+    transition_snapshot_json,
+    materialized_values_json,
+    created_at_unix_ms
+FROM task_pending_approvals
+WHERE id = sqlc.arg(id);
 
 -- name: ListTaskPendingApprovalBranches :many
 SELECT

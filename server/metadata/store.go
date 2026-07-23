@@ -573,6 +573,9 @@ func (s *Store) DeleteProjectWithRuntimeBlockers(ctx context.Context, projectID 
 			return nil, err
 		}
 	}
+	if _, err := q.DeleteProjectTaskPendingApprovals(ctx, trimmedProjectID); err != nil {
+		return nil, fmt.Errorf("delete project task pending approvals: %w", err)
+	}
 	if err := q.DeleteProjectTasks(ctx, trimmedProjectID); err != nil {
 		return nil, fmt.Errorf("delete project tasks: %w", err)
 	}

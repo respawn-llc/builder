@@ -89,6 +89,9 @@ func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (
 	if err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("project workflow attention resolution: %w", err)
 	}
+	if _, err := q.DeleteWorkflowTaskPendingApprovalsByWorkflowID(ctx, string(req.WorkflowID)); err != nil {
+		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow task pending approvals: %w", err)
+	}
 	if _, err := q.DeleteWorkflowTaskTransitionsByWorkflowID(ctx, string(req.WorkflowID)); err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow task transitions: %w", err)
 	}

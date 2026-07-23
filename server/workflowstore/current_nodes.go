@@ -20,12 +20,8 @@ func (s *Store) ListCurrentNodes(ctx context.Context, taskID workflow.TaskID) ([
 	return listTaskCurrentNodes(ctx, s.queries, taskID)
 }
 
-func currentNodeForReference(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID, nodeID workflow.NodeID) (workflow.CurrentNode, error) {
-	currentNodes, err := listTaskCurrentNodes(ctx, q, taskID)
-	if err != nil {
-		return workflow.CurrentNode{}, err
-	}
-	reference, err := workflow.NewCurrentNodeReference(taskID, nodeID, nil)
+func currentNodeForReference(ctx context.Context, q *sqlitegen.Queries, reference workflow.CurrentNodeReference) (workflow.CurrentNode, error) {
+	currentNodes, err := listTaskCurrentNodes(ctx, q, reference.TaskID)
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}

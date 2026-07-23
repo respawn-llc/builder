@@ -23,6 +23,7 @@ type CurrentNodeCompletionResult struct {
 	Mutation         workflow.CurrentNodeMutationResult
 	Handoff          CompletionHandoff
 	AutomaticIntents []workflow.CurrentNodeReference
+	PendingApproval  *workflow.PendingApproval
 }
 
 func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompletionRequest) (CurrentNodeCompletionResult, error) {
@@ -40,7 +41,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	if task.CanceledAtUnixMs.Valid {
 		return CurrentNodeCompletionResult{}, ErrTaskCanceled
 	}
-	definition, _, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
+	definition, workflowRecord, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
@@ -61,20 +62,22 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	if issues := currentNodeCompletionOutputIssues(definition, group, prepared.OutputValues); len(issues) > 0 {
 		return CurrentNodeCompletionResult{}, CompletionValidationError{Issues: issues}
 	}
-	handoff, err := currentNodeCompletionHandoff(source, target)
-	if err != nil {
-		return CurrentNodeCompletionResult{}, err
-	}
-	now := s.now().UnixMilli()
+	nowTime := s.now().UTC()
+	now := nowTime.UnixMilli()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
-	currentSource, err := currentNodeForReference(ctx, q, prepared.Source.TaskID, prepared.Source.NodeID)
+	currentSource, err := currentNodeForReference(ctx, q, prepared.Source)
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
+	}
+	if _, pending, err := currentNodePendingApprovalID(ctx, q, currentSource.Reference); err != nil {
+		return CurrentNodeCompletionResult{}, err
+	} else if pending {
+		return CurrentNodeCompletionResult{}, ErrCurrentNodePendingApproval
 	}
 	targetCurrentNode, err := materializeCompletionTargetCurrentNode(
 		ctx,
@@ -86,6 +89,36 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		currentSource,
 		prepared.OutputValues,
 	)
+	if err != nil {
+		return CurrentNodeCompletionResult{}, err
+	}
+	if edge.RequiresApproval {
+		approval, err := newPendingApproval(
+			currentSource,
+			workflowRecord.Version,
+			group,
+			workflow.NodeDisplayName(source),
+			edge,
+			target,
+			targetCurrentNode,
+			prepared.OutputValues,
+			nowTime,
+		)
+		if err != nil {
+			return CurrentNodeCompletionResult{}, err
+		}
+		if err := insertPendingApproval(ctx, q, approval); err != nil {
+			return CurrentNodeCompletionResult{}, err
+		}
+		if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
+			return CurrentNodeCompletionResult{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return CurrentNodeCompletionResult{}, err
+		}
+		return CurrentNodeCompletionResult{PendingApproval: &approval}, nil
+	}
+	handoff, err := currentNodeCompletionHandoff(source, target)
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}

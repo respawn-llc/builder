@@ -430,11 +430,15 @@ func deleteTaskScopedChildren(ctx context.Context, q *sqlitegen.Queries, taskID 
 	// validation triggers re-check that each remaining row still resolves to its
 	// task's workflow. Letting `DELETE FROM tasks` cascade would fire those SET
 	// NULL updates after the task row is already gone, so the triggers abort with
-	// "references must stay within one task workflow". Deleting the children while
-	// the task still exists keeps every trigger's task lookup satisfied; the
-	// SET-NULL'd columns simply become NULL. Order matters: label assignments
-	// first, transitions next (cascades transition_edges), then placements
-	// (cascades runs), then comments.
+	// "references must stay within one task workflow". Pending Approvals must
+	// leave first because their source-retention trigger protects Current Nodes.
+	// Deleting the children while the task still exists keeps every trigger's
+	// task lookup satisfied; the SET-NULL'd columns simply become NULL. Order
+	// matters: Approvals and label assignments first, transitions next (cascades
+	// transition_edges), then placements (cascades runs), then comments.
+	if _, err := q.DeleteTaskPendingApprovalsByTask(ctx, taskID); err != nil {
+		return err
+	}
 	if _, err := q.DeleteTaskLabelAssignmentsByTask(ctx, taskID); err != nil {
 		return err
 	}
@@ -622,7 +626,11 @@ func (s *Store) prepareTaskStart(ctx context.Context, taskID workflow.TaskID) (p
 	if err != nil {
 		return preparedTaskStart{}, err
 	}
-	startCurrentNode, err := currentNodeForReference(ctx, s.queries, workflow.TaskID(task.ID), workflow.NodeIDOf(start))
+	startReference, err := workflow.NewCurrentNodeReference(workflow.TaskID(task.ID), workflow.NodeIDOf(start), nil)
+	if err != nil {
+		return preparedTaskStart{}, err
+	}
+	startCurrentNode, err := currentNodeForReference(ctx, s.queries, startReference)
 	if err != nil {
 		return preparedTaskStart{}, err
 	}

@@ -254,6 +254,38 @@ func (id ApprovalID) Validate() error {
 	return err
 }
 
+type PendingApproval struct {
+	ID              ApprovalID
+	Source          CurrentNodeReference
+	SourceSessionID *runtimeids.SessionID
+	WorkflowVersion int64
+	Transition      PendingApprovalTransition
+	OutputValues    map[string]string
+	Branches        []PendingApprovalBranch
+	CreatedAt       time.Time
+}
+
+type PendingApprovalTransition struct {
+	Group             TransitionGroup
+	SourceDisplayName string
+}
+
+type PendingApprovalBranch struct {
+	TransitionBranchKey     TransitionBranchKey
+	Target                  PendingApprovalTarget
+	EffectiveEdge           Edge
+	ContextSourceResolution PendingApprovalContextSourceResolution
+}
+
+type PendingApprovalTarget struct {
+	CurrentNode CurrentNode
+	DisplayName string
+}
+
+type PendingApprovalContextSourceResolution struct {
+	SessionID *runtimeids.SessionID
+}
+
 type CurrentNodeMutationResult struct {
 	Removed []CurrentNodeReference
 	Created []CurrentNode

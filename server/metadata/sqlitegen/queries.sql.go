@@ -978,6 +978,23 @@ func (q *Queries) DeleteProjectLabel(ctx context.Context, arg DeleteProjectLabel
 	return i, err
 }
 
+const deleteProjectTaskPendingApprovals = `-- name: DeleteProjectTaskPendingApprovals :execrows
+DELETE FROM task_pending_approvals
+WHERE source_task_id IN (
+    SELECT id
+    FROM task_records
+    WHERE project_id = ?1
+)
+`
+
+func (q *Queries) DeleteProjectTaskPendingApprovals(ctx context.Context, projectID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteProjectTaskPendingApprovals, projectID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteProjectTasks = `-- name: DeleteProjectTasks :exec
 DELETE FROM tasks
 WHERE id IN (
@@ -1159,6 +1176,32 @@ func (q *Queries) DeleteTaskNodePlacementsByTask(ctx context.Context, taskID str
 	return result.RowsAffected()
 }
 
+const deleteTaskPendingApproval = `-- name: DeleteTaskPendingApproval :execrows
+DELETE FROM task_pending_approvals
+WHERE id = ?1
+`
+
+func (q *Queries) DeleteTaskPendingApproval(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTaskPendingApproval, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteTaskPendingApprovalsByTask = `-- name: DeleteTaskPendingApprovalsByTask :execrows
+DELETE FROM task_pending_approvals
+WHERE source_task_id = ?1
+`
+
+func (q *Queries) DeleteTaskPendingApprovalsByTask(ctx context.Context, taskID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTaskPendingApprovalsByTask, taskID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteTaskTransitionsByTask = `-- name: DeleteTaskTransitionsByTask :execrows
 DELETE FROM task_transitions
 WHERE task_id = ?1
@@ -1258,6 +1301,23 @@ WHERE task_id IN (
 
 func (q *Queries) DeleteWorkflowTaskNodePlacementsByWorkflowID(ctx context.Context, workflowID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteWorkflowTaskNodePlacementsByWorkflowID, workflowID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteWorkflowTaskPendingApprovalsByWorkflowID = `-- name: DeleteWorkflowTaskPendingApprovalsByWorkflowID :execrows
+DELETE FROM task_pending_approvals
+WHERE source_task_id IN (
+    SELECT task_records.id
+    FROM task_records
+    WHERE workflow_id = ?1
+)
+`
+
+func (q *Queries) DeleteWorkflowTaskPendingApprovalsByWorkflowID(ctx context.Context, workflowID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteWorkflowTaskPendingApprovalsByWorkflowID, workflowID)
 	if err != nil {
 		return 0, err
 	}
@@ -2397,6 +2457,62 @@ func (q *Queries) GetTaskIdentityForTransition(ctx context.Context, transitionID
 	var i GetTaskIdentityForTransitionRow
 	err := row.Scan(&i.ID, &i.ProjectID, &i.WorkflowID)
 	return i, err
+}
+
+const getTaskPendingApproval = `-- name: GetTaskPendingApproval :one
+SELECT
+    id,
+    source_task_id,
+    source_node_id,
+    source_transition_branch_key,
+    source_session_id,
+    workflow_version,
+    transition_snapshot_json,
+    materialized_values_json,
+    created_at_unix_ms
+FROM task_pending_approvals
+WHERE id = ?1
+`
+
+func (q *Queries) GetTaskPendingApproval(ctx context.Context, id string) (TaskPendingApproval, error) {
+	row := q.db.QueryRowContext(ctx, getTaskPendingApproval, id)
+	var i TaskPendingApproval
+	err := row.Scan(
+		&i.ID,
+		&i.SourceTaskID,
+		&i.SourceNodeID,
+		&i.SourceTransitionBranchKey,
+		&i.SourceSessionID,
+		&i.WorkflowVersion,
+		&i.TransitionSnapshotJson,
+		&i.MaterializedValuesJson,
+		&i.CreatedAtUnixMs,
+	)
+	return i, err
+}
+
+const getTaskPendingApprovalIDForCurrentNode = `-- name: GetTaskPendingApprovalIDForCurrentNode :one
+SELECT id
+FROM task_pending_approvals
+WHERE source_task_id = ?1
+  AND source_node_id = ?2
+  AND (
+      (source_transition_branch_key IS NULL AND ?3 IS NULL)
+      OR source_transition_branch_key = ?3
+  )
+`
+
+type GetTaskPendingApprovalIDForCurrentNodeParams struct {
+	TaskID              string
+	NodeID              string
+	TransitionBranchKey interface{}
+}
+
+func (q *Queries) GetTaskPendingApprovalIDForCurrentNode(ctx context.Context, arg GetTaskPendingApprovalIDForCurrentNodeParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getTaskPendingApprovalIDForCurrentNode, arg.TaskID, arg.NodeID, arg.TransitionBranchKey)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getTaskProjectWorkflowIDs = `-- name: GetTaskProjectWorkflowIDs :one
@@ -3602,6 +3718,92 @@ func (q *Queries) InsertTaskNodePlacement(ctx context.Context, arg InsertTaskNod
 		arg.ParallelBranchEdgeID,
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
+	)
+	return err
+}
+
+const insertTaskPendingApproval = `-- name: InsertTaskPendingApproval :exec
+INSERT INTO task_pending_approvals (
+    id,
+    source_task_id,
+    source_node_id,
+    source_transition_branch_key,
+    source_session_id,
+    workflow_version,
+    transition_snapshot_json,
+    materialized_values_json,
+    created_at_unix_ms
+) VALUES (
+    ?1,
+    ?2,
+    ?3,
+    ?4,
+    ?5,
+    ?6,
+    ?7,
+    ?8,
+    ?9
+)
+`
+
+type InsertTaskPendingApprovalParams struct {
+	ID                        string
+	SourceTaskID              string
+	SourceNodeID              string
+	SourceTransitionBranchKey sql.NullString
+	SourceSessionID           sql.NullString
+	WorkflowVersion           int64
+	TransitionSnapshotJson    string
+	MaterializedValuesJson    string
+	CreatedAtUnixMs           int64
+}
+
+func (q *Queries) InsertTaskPendingApproval(ctx context.Context, arg InsertTaskPendingApprovalParams) error {
+	_, err := q.db.ExecContext(ctx, insertTaskPendingApproval,
+		arg.ID,
+		arg.SourceTaskID,
+		arg.SourceNodeID,
+		arg.SourceTransitionBranchKey,
+		arg.SourceSessionID,
+		arg.WorkflowVersion,
+		arg.TransitionSnapshotJson,
+		arg.MaterializedValuesJson,
+		arg.CreatedAtUnixMs,
+	)
+	return err
+}
+
+const insertTaskPendingApprovalBranch = `-- name: InsertTaskPendingApprovalBranch :exec
+INSERT INTO task_pending_approval_branches (
+    approval_id,
+    transition_branch_key,
+    target_snapshot_json,
+    effective_edge_configuration_json,
+    context_source_resolution_json
+) VALUES (
+    ?1,
+    ?2,
+    ?3,
+    ?4,
+    ?5
+)
+`
+
+type InsertTaskPendingApprovalBranchParams struct {
+	ApprovalID                     string
+	TransitionBranchKey            string
+	TargetSnapshotJson             string
+	EffectiveEdgeConfigurationJson string
+	ContextSourceResolutionJson    string
+}
+
+func (q *Queries) InsertTaskPendingApprovalBranch(ctx context.Context, arg InsertTaskPendingApprovalBranchParams) error {
+	_, err := q.db.ExecContext(ctx, insertTaskPendingApprovalBranch,
+		arg.ApprovalID,
+		arg.TransitionBranchKey,
+		arg.TargetSnapshotJson,
+		arg.EffectiveEdgeConfigurationJson,
+		arg.ContextSourceResolutionJson,
 	)
 	return err
 }

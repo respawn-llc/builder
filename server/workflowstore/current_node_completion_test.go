@@ -84,6 +84,274 @@ func TestCompleteCurrentNodeAtomicallyReplacesAgentAndReturnsSuccessorIntent(t *
 	}
 }
 
+func TestCompleteCurrentNodeCreatesFrozenPendingApprovalAndRetainsSource(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition before approval edit: %v", err)
+	}
+	reviewEdgeID := edgeByKey(t, definition, "review").ID
+	reviewNode := nodeByKey(t, definition, "review")
+	auditNode := nodeByKey(t, definition, "audit")
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, reviewEdgeID)
+		edge.RequiresApproval = true
+		edge.ContextMode = workflow.ContextModeContinueSession
+		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource}
+	})
+	_, workflowRecord, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition after approval edit: %v", err)
+	}
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	sourceSessionID := associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, source.Reference)
+
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "frozen plan"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	if len(completed.Mutation.Removed) != 0 || len(completed.Mutation.Created) != 0 || len(completed.AutomaticIntents) != 0 {
+		t.Fatalf("pending approval completion mutation = %+v, want source retained without successor intent", completed)
+	}
+	if completed.PendingApproval == nil {
+		t.Fatal("pending approval completion omitted approval projection")
+	}
+	approval := *completed.PendingApproval
+	if err := approval.ID.Validate(); err != nil {
+		t.Fatalf("approval id = %q, want UUID v4: %v", approval.ID, err)
+	}
+	if !approval.Source.Equal(source.Reference) || approval.SourceSessionID == nil || *approval.SourceSessionID != sourceSessionID {
+		t.Fatalf("approval source = %+v, want current source with session %q", approval, sourceSessionID)
+	}
+	if approval.WorkflowVersion != workflowRecord.Version || approval.Transition.Group.TransitionID != "review" {
+		t.Fatalf("approval transition snapshot = %+v, want workflow version %d and review transition", approval, workflowRecord.Version)
+	}
+	if approval.OutputValues["summary"] != "frozen plan" || len(approval.Branches) != 1 {
+		t.Fatalf("approval materialized values/branches = %+v, want one frozen target", approval)
+	}
+	branch := approval.Branches[0]
+	if branch.Target.CurrentNode.CurrentInputValues["summary"] != "frozen plan" ||
+		branch.Target.CurrentNode.SessionID == nil ||
+		*branch.Target.CurrentNode.SessionID != sourceSessionID ||
+		branch.ContextSourceResolution.SessionID == nil ||
+		*branch.ContextSourceResolution.SessionID != sourceSessionID {
+		t.Fatalf("approval branch snapshot = %+v, want frozen immediate-source target session and values", branch)
+	}
+
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes while pending: %v", err)
+	}
+	if len(currentNodes) != 1 ||
+		!currentNodes[0].Reference.Equal(source.Reference) ||
+		currentNodes[0].Scheduling == nil ||
+		currentNodes[0].Scheduling.State != workflow.CurrentNodeSchedulingReady {
+		t.Fatalf("current nodes while pending = %+v, want retained ready source with no waiting scheduling state", currentNodes)
+	}
+	eligible, err := store.IsCurrentNodeExecutionEligible(ctx, source.Reference)
+	if err != nil {
+		t.Fatalf("IsCurrentNodeExecutionEligible: %v", err)
+	}
+	if eligible {
+		t.Fatal("pending approval source was eligible for execution")
+	}
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "must stay pending"},
+	}); !errors.Is(err, ErrCurrentNodePendingApproval) {
+		t.Fatalf("CompleteCurrentNode while pending = %v, want ErrCurrentNodePendingApproval", err)
+	}
+	afterRestart, err := store.ListPendingApprovals(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListPendingApprovals after restart: %v", err)
+	}
+	if len(afterRestart) != 1 ||
+		afterRestart[0].ID != approval.ID ||
+		!afterRestart[0].Source.Equal(source.Reference) ||
+		afterRestart[0].Branches[0].Target.CurrentNode.CurrentInputValues["summary"] != "frozen plan" {
+		t.Fatalf("pending approvals after restart = %+v, want frozen approval", afterRestart)
+	}
+
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, reviewEdgeID)
+		edge.ContextMode = workflow.ContextModeNewSession
+		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource}
+		edge.TargetNodeID = workflow.NodeIDOf(auditNode)
+		edge.PromptTemplate = "Changed after approval."
+	})
+	frozenAfterEdit, err := store.ListPendingApprovals(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListPendingApprovals after graph edit: %v", err)
+	}
+	if len(frozenAfterEdit) != 1 ||
+		frozenAfterEdit[0].Branches[0].EffectiveEdge.ContextMode != workflow.ContextModeContinueSession ||
+		frozenAfterEdit[0].Branches[0].EffectiveEdge.TargetNodeID != workflow.NodeIDOf(reviewNode) {
+		t.Fatalf("approval after graph edit = %+v, want frozen edge configuration", frozenAfterEdit)
+	}
+	applied, err := store.ApplyPendingApproval(ctx, approval.ID)
+	if err != nil {
+		t.Fatalf("ApplyPendingApproval: %v", err)
+	}
+	if applied.ResolvedApproval.ID != approval.ID ||
+		len(applied.Mutation.Removed) != 1 ||
+		!applied.Mutation.Removed[0].Equal(source.Reference) ||
+		len(applied.Mutation.Created) != 1 {
+		t.Fatalf("applied pending approval = %+v, want source replacement", applied)
+	}
+	target := applied.Mutation.Created[0]
+	if target.Reference.NodeID != workflow.NodeIDOf(reviewNode) ||
+		target.SessionID == nil ||
+		*target.SessionID != sourceSessionID ||
+		target.CurrentInputValues["summary"] != "frozen plan" {
+		t.Fatalf("applied target = %+v, want frozen context and materialized values", target)
+	}
+	remaining, err := store.ListPendingApprovals(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListPendingApprovals after apply: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("pending approvals after apply = %+v, want none", remaining)
+	}
+}
+
+func TestDeleteTaskRemovesPendingApprovalBeforeCurrentNodeCascade(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	reviewEdgeID := edgeByKey(t, definition, "review").ID
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		workflowGraphSaveEdgeRecord(t, req.Edges, reviewEdgeID).RequiresApproval = true
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "delete me"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	if completed.PendingApproval == nil {
+		t.Fatal("completion did not create pending approval")
+	}
+
+	deleted, err := store.DeleteTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("DeleteTask: %v", err)
+	}
+	if deleted.ID != task.ID {
+		t.Fatalf("deleted task = %+v, want %q", deleted, task.ID)
+	}
+	remaining, err := store.ListPendingApprovals(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListPendingApprovals after deletion: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("pending approvals after task deletion = %+v, want none", remaining)
+	}
+}
+
+func TestDeleteWorkflowRemovesPendingApprovalsBeforeCurrentNodeCascade(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	reviewEdgeID := edgeByKey(t, definition, "review").ID
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		workflowGraphSaveEdgeRecord(t, req.Edges, reviewEdgeID).RequiresApproval = true
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "delete workflow"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	if completed.PendingApproval == nil {
+		t.Fatal("completion did not create pending approval")
+	}
+	impact, err := store.PreviewWorkflowDelete(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("PreviewWorkflowDelete: %v", err)
+	}
+	deleted, err := store.DeleteWorkflow(ctx, confirmedWorkflowDeleteRequest(impact, false))
+	if err != nil {
+		t.Fatalf("DeleteWorkflow: %v", err)
+	}
+	if !deleted.Deleted {
+		t.Fatalf("workflow deletion = %+v, want deleted", deleted)
+	}
+	remaining, err := store.ListPendingApprovals(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListPendingApprovals after workflow deletion: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("pending approvals after workflow deletion = %+v, want none", remaining)
+	}
+}
+
+func TestDeleteProjectRemovesPendingApprovalsBeforeCurrentNodeCascade(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	reviewEdgeID := edgeByKey(t, definition, "review").ID
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		workflowGraphSaveEdgeRecord(t, req.Edges, reviewEdgeID).RequiresApproval = true
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "delete project"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	if completed.PendingApproval == nil {
+		t.Fatal("completion did not create pending approval")
+	}
+	blockers, err := store.metadata.DeleteProject(ctx, binding.ProjectID, func(metadata.ProjectSessionArtifact, bool) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+	if len(blockers) != 0 {
+		t.Fatalf("project deletion blockers = %+v, want none", blockers)
+	}
+	remaining, err := store.ListPendingApprovals(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListPendingApprovals after project deletion: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("pending approvals after project deletion = %+v, want none", remaining)
+	}
+}
+
 func TestCompleteCurrentNodeNewSessionTargetDoesNotRetainSourceSession(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
