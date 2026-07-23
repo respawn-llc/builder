@@ -4,47 +4,38 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
+	"go/types"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+
+	testharness "core/internal/testharness/testsetup"
+
+	"golang.org/x/tools/go/packages"
 )
 
 func TestRuntimeActivityLivenessSourcesStayAllowlisted(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	seen := make(map[string]map[string]struct{})
 	violations := make([]string, 0)
-	for _, root := range []string{"server", "shared", "cli"} {
-		walkRoot := filepath.Join(repoRoot, root)
-		if err := filepath.WalkDir(walkRoot, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				if d.Name() == "sqlitegen" || d.Name() == "sqlitelifecyclegen" {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			fileSet := token.NewFileSet()
-			file, parseErr := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
-			if parseErr != nil {
-				return parseErr
-			}
-			relPath, relErr := filepath.Rel(repoRoot, path)
-			if relErr != nil {
-				relPath = path
+	pkgs := testharness.LoadTypedPackages(t, repoRoot, false, "./server/...", "./shared/...", "./cli/...")
+	assertCoreRepositoryModule(t, pkgs)
+	for _, pkg := range pkgs {
+		if !isProductionRepositoryPackage(pkg) {
+			continue
+		}
+		for _, file := range pkg.Syntax {
+			relPath, found := testharness.RepositoryRelativePath(repoRoot, pkg.Fset.Position(file.Pos()).Filename)
+			if !found {
+				t.Fatalf("runtime liveness guard source is outside repository: %s", pkg.Fset.Position(file.Pos()).Filename)
 			}
 			ast.Inspect(file, func(node ast.Node) bool {
 				ident, ok := node.(*ast.Ident)
 				if !ok {
 					return true
 				}
-				source, forbidden := forbiddenRuntimeLivenessIdentifier(ident.Name)
+				source, forbidden := forbiddenRuntimeLivenessFunction(pkg.TypesInfo.Uses[ident])
 				if !forbidden {
 					return true
 				}
@@ -56,13 +47,10 @@ func TestRuntimeActivityLivenessSourcesStayAllowlisted(t *testing.T) {
 					seen[relPath][source] = struct{}{}
 					return true
 				}
-				position := fileSet.Position(ident.Pos())
+				position := testharness.SourcePosition(pkg, ident.Pos())
 				violations = append(violations, relPath+":"+position.String()+": runtime activity must not use transitional liveness source "+source)
 				return true
 			})
-			return nil
-		}); err != nil {
-			t.Fatalf("scan runtime liveness sources: %v", err)
 		}
 	}
 	for relPath, sources := range allowedRuntimeLivenessSources {
@@ -88,38 +76,16 @@ func TestRuntimeActivityLivenessSourcesStayAllowlisted(t *testing.T) {
 func TestRuntimeActivityActiveStepAuthorityStaysBehindResolverSeam(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	violations := make([]string, 0)
-	allowedPrefixes := []string{
-		filepath.Join("server", "runtime") + string(filepath.Separator),
-		filepath.Join("server", "runtimeactivity") + string(filepath.Separator),
-	}
-	for _, root := range []string{"server"} {
-		walkRoot := filepath.Join(repoRoot, root)
-		if err := filepath.WalkDir(walkRoot, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				if d.Name() == "sqlitegen" || d.Name() == "sqlitelifecyclegen" {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			relPath, relErr := filepath.Rel(repoRoot, path)
-			if relErr != nil {
-				relPath = path
-			}
-			for _, prefix := range allowedPrefixes {
-				if strings.HasPrefix(relPath, prefix) {
-					return nil
-				}
-			}
-			fileSet := token.NewFileSet()
-			file, parseErr := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
-			if parseErr != nil {
-				return parseErr
+	pkgs := testharness.LoadTypedPackages(t, repoRoot, false, "./server/...")
+	assertCoreRepositoryModule(t, pkgs)
+	for _, pkg := range pkgs {
+		if !isProductionRepositoryPackage(pkg) || runtimeActivityAuthorityPackage[pkg.PkgPath] {
+			continue
+		}
+		for _, file := range pkg.Syntax {
+			relPath, found := testharness.RepositoryRelativePath(repoRoot, pkg.Fset.Position(file.Pos()).Filename)
+			if !found {
+				t.Fatalf("runtime active-step guard source is outside repository: %s", pkg.Fset.Position(file.Pos()).Filename)
 			}
 			ast.Inspect(file, func(node ast.Node) bool {
 				call, ok := node.(*ast.CallExpr)
@@ -130,16 +96,12 @@ func TestRuntimeActivityActiveStepAuthorityStaysBehindResolverSeam(t *testing.T)
 				if !ok {
 					return true
 				}
-				switch selector.Sel.Name {
-				case "ActiveRun", "ActiveStepSnapshot":
-					position := fileSet.Position(selector.Sel.Pos())
+				if isForbiddenRuntimeActiveStepMethod(pkg.TypesInfo.Selections[selector]) {
+					position := testharness.SourcePosition(pkg, selector.Sel.Pos())
 					violations = append(violations, relPath+":"+position.String()+": server liveness must read active step through server/runtimeactivity resolver seam")
 				}
 				return true
 			})
-			return nil
-		}); err != nil {
-			t.Fatalf("scan active-step authority seam: %v", err)
 		}
 	}
 	if len(violations) > 0 {
@@ -150,65 +112,158 @@ func TestRuntimeActivityActiveStepAuthorityStaysBehindResolverSeam(t *testing.T)
 
 func TestRuntimeReadModelClockConsumersDoNotUseGlobalCoordinator(t *testing.T) {
 	repoRoot := findRepoRoot(t)
-	for _, relPath := range []string{
-		filepath.Join("server", "runtimeops", "coordinator.go"),
-	} {
-		content, err := os.ReadFile(filepath.Join(repoRoot, relPath))
-		if err != nil {
-			t.Fatalf("read %s: %v", relPath, err)
+	pkg := testharness.PackageByPath(t, testharness.LoadTypedPackages(t, repoRoot, false, "./server/runtimeops"), "core/server/runtimeops")
+	foundCoordinator := false
+	for index, file := range pkg.Syntax {
+		relPath, ok := testharness.RepositoryRelativePath(repoRoot, pkg.CompiledGoFiles[index])
+		if !ok || relPath != "server/runtimeops/coordinator.go" {
+			continue
 		}
-		if strings.Contains(string(content), "NextReadModelVersion") {
-			t.Fatalf("%s must use the registry-owned read-model clock, not runtimeactivity.NextReadModelVersion", relPath)
-		}
+		foundCoordinator = true
+		ast.Inspect(file, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if isRuntimeActivityFunction(pkg.TypesInfo.Uses[selector.Sel], "NextReadModelVersion") {
+				t.Fatalf("server/runtimeops/coordinator.go must use the registry-owned read-model clock, not runtimeactivity.NextReadModelVersion")
+			}
+			return true
+		})
+	}
+	if !foundCoordinator {
+		t.Fatal("server/runtimeops/coordinator.go must remain in the runtime read-model clock guard")
 	}
 }
 
 func TestRuntimeClientInputIdentityBoundaryStaysRequestShaped(t *testing.T) {
 	repoRoot := findRepoRoot(t)
-	content, err := os.ReadFile(filepath.Join(repoRoot, "shared", "clientui", "runtime.go"))
-	if err != nil {
-		t.Fatalf("read RuntimeClient contract: %v", err)
-	}
-	for _, forbidden := range []string{
-		"SubmitUserMessage(ctx context.Context, text string)",
-		"SubmitUserShellCommand(ctx context.Context, command string)",
-		"CompactContext(ctx context.Context, args string)",
-		"SubmitQueuedUserMessages(ctx context.Context)",
-		"QueueUserMessage(text string)",
-		"QueueRuntimeUserMessage(",
-	} {
-		if strings.Contains(string(content), forbidden) {
-			t.Fatalf("RuntimeClient must expose request-shaped input APIs with UI-owned operation refs, found %q", forbidden)
-		}
-	}
-	sessionRuntimeClient, err := os.ReadFile(filepath.Join(repoRoot, "cli", "app", "ui_runtime_client_control.go"))
-	if err != nil {
-		t.Fatalf("read session runtime client controls: %v", err)
-	}
-	for _, forbidden := range []string{
-		"func (c *sessionRuntimeClient) SubmitUserMessage(",
-		"func (c *sessionRuntimeClient) SubmitUserShellCommand(",
-		"func (c *sessionRuntimeClient) CompactContext(",
-		"func (c *sessionRuntimeClient) SubmitQueuedUserMessages(",
-		"func (c *sessionRuntimeClient) QueueUserMessage(",
-		"func (c *sessionRuntimeClient) QueueRuntimeUserMessage(",
-		"QueueUserMessageWithClientRequestID",
-	} {
-		if strings.Contains(string(sessionRuntimeClient), forbidden) {
-			t.Fatalf("sessionRuntimeClient must not synthesize hidden input operation refs, found %q", forbidden)
-		}
-	}
+	pkgs := testharness.LoadTypedPackages(t, repoRoot, false, "./shared/clientui", "./cli/app")
+	assertRuntimeClientDoesNotExposeLegacyInputSignatures(t, testharness.PackageByPath(t, pkgs, "core/shared/clientui"))
+	assertSessionRuntimeClientDoesNotSynthesizeInputIdentity(t, testharness.PackageByPath(t, pkgs, "core/cli/app"), repoRoot)
 }
 
 func TestRuntimeViewDoesNotExportGlobalLivenessMainViewHelper(t *testing.T) {
 	repoRoot := findRepoRoot(t)
-	content, err := os.ReadFile(filepath.Join(repoRoot, "server", "runtimeview", "projection.go"))
-	if err != nil {
-		t.Fatalf("read runtimeview projection: %v", err)
+	pkg := testharness.PackageByPath(t, testharness.LoadTypedPackages(t, repoRoot, false, "./server/runtimeview"), "core/server/runtimeview")
+	foundProjection := false
+	for index, file := range pkg.Syntax {
+		relPath, ok := testharness.RepositoryRelativePath(repoRoot, pkg.CompiledGoFiles[index])
+		if !ok || relPath != "server/runtimeview/projection.go" {
+			continue
+		}
+		foundProjection = true
+		for _, declaration := range file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if ok && function.Recv == nil && function.Name.Name == "MainViewFromRuntime" {
+				t.Fatal("runtimeview must not expose MainViewFromRuntime; live activity/version must come from the registry read-model snapshot seam")
+			}
+		}
 	}
-	if strings.Contains(string(content), "func MainViewFromRuntime(") {
-		t.Fatal("runtimeview must not expose MainViewFromRuntime; live activity/version must come from the registry read-model snapshot seam")
+	if !foundProjection {
+		t.Fatal("server/runtimeview/projection.go must remain in the global-liveness helper guard")
 	}
+}
+
+func isRuntimeActivityFunction(object types.Object, name string) bool {
+	function, ok := object.(*types.Func)
+	return ok && function.Pkg() != nil && function.Pkg().Path() == "core/server/runtimeactivity" && function.Name() == name
+}
+
+func assertRuntimeClientDoesNotExposeLegacyInputSignatures(t *testing.T, pkg *packages.Package) {
+	t.Helper()
+	runtimeClientObject := pkg.Types.Scope().Lookup("RuntimeClient")
+	if runtimeClientObject == nil {
+		t.Fatal("shared/clientui.RuntimeClient is missing")
+	}
+	runtimeClient, ok := runtimeClientObject.Type().Underlying().(*types.Interface)
+	if !ok {
+		t.Fatal("shared/clientui.RuntimeClient must remain an interface")
+	}
+	for index := 0; index < runtimeClient.NumMethods(); index++ {
+		method := runtimeClient.Method(index)
+		if legacyRuntimeClientInputSignature(method) {
+			t.Fatalf("RuntimeClient must expose request-shaped input APIs with UI-owned operation refs, found legacy %s signature", method.Name())
+		}
+	}
+}
+
+func legacyRuntimeClientInputSignature(method *types.Func) bool {
+	signature, ok := method.Type().(*types.Signature)
+	if !ok {
+		return false
+	}
+	switch method.Name() {
+	case "SubmitUserMessage", "SubmitUserShellCommand", "CompactContext":
+		return signatureHasContextAndSingleString(signature)
+	case "SubmitQueuedUserMessages":
+		return signatureHasContextOnly(signature)
+	case "QueueUserMessage":
+		return signatureHasSingleString(signature)
+	default:
+		return false
+	}
+}
+
+func signatureHasContextAndSingleString(signature *types.Signature) bool {
+	return signature.Params().Len() == 2 &&
+		isContextType(signature.Params().At(0).Type()) &&
+		isStringType(signature.Params().At(1).Type())
+}
+
+func signatureHasContextOnly(signature *types.Signature) bool {
+	return signature.Params().Len() == 1 && isContextType(signature.Params().At(0).Type())
+}
+
+func signatureHasSingleString(signature *types.Signature) bool {
+	return signature.Params().Len() == 1 && isStringType(signature.Params().At(0).Type())
+}
+
+func isContextType(typ types.Type) bool {
+	named, ok := types.Unalias(typ).(*types.Named)
+	return ok && named.Obj().Pkg() != nil && named.Obj().Pkg().Path() == "context" && named.Obj().Name() == "Context"
+}
+
+func isStringType(typ types.Type) bool {
+	return types.Identical(types.Unalias(typ), types.Typ[types.String])
+}
+
+func assertSessionRuntimeClientDoesNotSynthesizeInputIdentity(t *testing.T, pkg *packages.Package, repoRoot string) {
+	t.Helper()
+	foundControlFile := false
+	for index, file := range pkg.Syntax {
+		relPath, ok := testharness.RepositoryRelativePath(repoRoot, pkg.CompiledGoFiles[index])
+		if !ok || relPath != "cli/app/ui_runtime_client_control.go" {
+			continue
+		}
+		foundControlFile = true
+		for _, declaration := range file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok || !isSessionRuntimeClientMethod(pkg, function) {
+				continue
+			}
+			switch function.Name.Name {
+			case "SubmitUserMessage", "SubmitUserShellCommand", "CompactContext", "SubmitQueuedUserMessages", "QueueUserMessage", "QueueUserMessageWithClientRequestID":
+				t.Fatalf("sessionRuntimeClient must not synthesize hidden input operation refs, found %s", function.Name.Name)
+			}
+		}
+	}
+	if !foundControlFile {
+		t.Fatal("cli/app/ui_runtime_client_control.go must remain in the runtime input identity guard")
+	}
+}
+
+func isSessionRuntimeClientMethod(pkg *packages.Package, function *ast.FuncDecl) bool {
+	if function.Recv == nil || len(function.Recv.List) != 1 {
+		return false
+	}
+	receiverType := pkg.TypesInfo.TypeOf(function.Recv.List[0].Type)
+	pointer, ok := types.Unalias(receiverType).(*types.Pointer)
+	if ok {
+		receiverType = pointer.Elem()
+	}
+	named, ok := types.Unalias(receiverType).(*types.Named)
+	return ok && named.Obj().Pkg() != nil && named.Obj().Pkg().Path() == "core/cli/app" && named.Obj().Name() == "sessionRuntimeClient"
 }
 
 func TestProductionRuntimeAuthorityAdaptersStayCentralized(t *testing.T) {
@@ -278,12 +333,42 @@ var rawEngineBridges = map[string]bool{"WithRuntime": true, "WithCurrentRuntime"
 var forbiddenRawEngineGetters = map[string]bool{"ResolveRuntime": true, "GetRuntime": true, "CurrentRuntime": true, "Runtime": true, "ResolveEngine": true, "GetEngine": true, "Engine": true}
 var approvedRawEngineAdapterDirs = map[string]bool{"server/sessionruntime": true, "server/runtimecontrol": true, "server/runprompt": true, "server/workflowrunner": true, "server/sessionview": true}
 
-func forbiddenRuntimeLivenessIdentifier(name string) (string, bool) {
-	switch name {
-	case "LatestRun", "AppendRunStarted", "AppendRunFinished", "MarkInFlight", "InFlightStep":
-		return name, true
+func forbiddenRuntimeLivenessFunction(object types.Object) (string, bool) {
+	function, ok := object.(*types.Func)
+	if !ok || function.Pkg() == nil {
+		return "", false
+	}
+	switch function.Pkg().Path() {
+	case "core/server/runtime", "core/server/runtimeactivity":
 	default:
 		return "", false
+	}
+	switch function.Name() {
+	case "LatestRun", "AppendRunStarted", "AppendRunFinished", "MarkInFlight", "InFlightStep":
+		return function.Name(), true
+	default:
+		return "", false
+	}
+}
+
+var runtimeActivityAuthorityPackage = map[string]bool{
+	"core/server/runtime":         true,
+	"core/server/runtimeactivity": true,
+}
+
+func isForbiddenRuntimeActiveStepMethod(selection *types.Selection) bool {
+	if selection == nil {
+		return false
+	}
+	function, ok := selection.Obj().(*types.Func)
+	if !ok || function.Pkg() == nil || function.Pkg().Path() != "core/server/runtime" {
+		return false
+	}
+	switch function.Name() {
+	case "ActiveRun", "ActiveStepSnapshot":
+		return true
+	default:
+		return false
 	}
 }
 

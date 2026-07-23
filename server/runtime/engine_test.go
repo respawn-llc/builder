@@ -31,6 +31,7 @@ type fakeClient struct {
 type hookClient struct {
 	mu           sync.Mutex
 	response     llm.Response
+	errors       []error
 	calls        []llm.Request
 	caps         llm.ProviderCapabilities
 	beforeReturn func() error
@@ -86,11 +87,19 @@ func (c *hookClient) Generate(_ context.Context, req llm.Request) (llm.Response,
 	c.calls = append(c.calls, req)
 	beforeReturn := c.beforeReturn
 	response := c.response
+	var responseErr error
+	if len(c.errors) > 0 {
+		responseErr = c.errors[0]
+		c.errors = c.errors[1:]
+	}
 	c.mu.Unlock()
 	if beforeReturn != nil {
 		if err := beforeReturn(); err != nil {
 			return llm.Response{}, err
 		}
+	}
+	if responseErr != nil {
+		return llm.Response{}, responseErr
 	}
 	return response, nil
 }

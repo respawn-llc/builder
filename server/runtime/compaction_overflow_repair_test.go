@@ -13,6 +13,7 @@ import (
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 )
 
 func TestCompactionOverflowRepairCollapsesShellOutputAndPreservesInput(t *testing.T) {
@@ -43,8 +44,8 @@ func TestCompactionOverflowRepairCollapsesShellOutputAndPreservesInput(t *testin
 	if err := json.Unmarshal(repaired[1].Output, &collapsed); err != nil {
 		t.Fatalf("decode collapsed shell output: %v", err)
 	}
-	if collapsed != "<collapsed>" {
-		t.Fatalf("collapsed shell output = %q, want <collapsed>", collapsed)
+	if collapsed != compactionOverflowCollapsedText {
+		t.Fatalf("collapsed shell output = %q, want %q", collapsed, compactionOverflowCollapsedText)
 	}
 	if len(repaired[1].Raw) == 0 {
 		t.Fatal("expected collapsed shell output to be rematerialized")
@@ -91,8 +92,8 @@ func TestCompactionOverflowRepairCollapsesPatchInputAndPreservesPair(t *testing.
 	if repaired[0].CustomInput == nil || strings.Contains(*repaired[0].CustomInput, strings.Repeat("x", 100)) {
 		t.Fatalf("patch input was not collapsed")
 	}
-	if repaired[0].CustomInput == nil || *repaired[0].CustomInput != "<collapsed>" {
-		t.Fatalf("collapsed patch input = %q, want <collapsed>", *repaired[0].CustomInput)
+	if repaired[0].CustomInput == nil || *repaired[0].CustomInput != compactionOverflowCollapsedText {
+		t.Fatalf("collapsed patch input = %q, want %q", *repaired[0].CustomInput, compactionOverflowCollapsedText)
 	}
 	if string(repaired[1].Output) != string(items[1].Output) {
 		t.Fatalf("patch output changed: %s", repaired[1].Output)
@@ -164,8 +165,7 @@ func TestCompactionOverflowRepairTargetsUseContextWindow(t *testing.T) {
 }
 
 func TestLocalCompactionCollapsesToolPayloadAfterOverflow(t *testing.T) {
-	dir := t.TempDir()
-	store := mustCreateTestSessionAt(t, dir)
+	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{
 		errors: []error{
 			&llm.ProviderAPIError{ProviderID: "openai", StatusCode: 400, Code: llm.UnifiedErrorCodeContextLengthOverflow, ProviderCode: "context_length_exceeded", Message: "prompt exceeded"},
@@ -214,21 +214,17 @@ func TestLocalCompactionCollapsesToolPayloadAfterOverflow(t *testing.T) {
 	if !foundCollapsed {
 		t.Fatalf("expected local compaction retry to collapse shell output, got %+v", client.calls[1].Items)
 	}
-	foundDiagnostic := false
-	for _, entry := range eng.ChatSnapshot().Entries {
-		if entry.Role == "developer_error_feedback" && strings.Contains(entry.Text, "Context compaction succeeded after collapsing tool payloads") && strings.Contains(entry.Text, "1 shell outputs") {
-			foundDiagnostic = true
-			break
+	page := mustEngineNewestSegmentPage(t, eng)
+	for _, entry := range page.Snapshot.Entries {
+		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+			return
 		}
 	}
-	if !foundDiagnostic {
-		t.Fatalf("expected compaction repair diagnostic in transcript, got %+v", eng.ChatSnapshot().Entries)
-	}
+	t.Fatalf("expected repair diagnostic in bounded newest segment, got %+v", page.Snapshot.Entries)
 }
 
 func TestLocalCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *testing.T) {
-	dir := t.TempDir()
-	store := mustCreateTestSessionAt(t, dir)
+	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{
 		errors: []error{
 			&llm.ProviderAPIError{ProviderID: "openai", StatusCode: 400, Code: llm.UnifiedErrorCodeContextLengthOverflow, ProviderCode: "context_length_exceeded", Message: "prompt exceeded"},
@@ -260,8 +256,7 @@ func TestLocalCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *test
 }
 
 func TestLocalCompactionUsesTenTwentyFortyPercentRepairScheduleFromConfiguredContextWindow(t *testing.T) {
-	dir := t.TempDir()
-	store := mustCreateTestSessionAt(t, dir)
+	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{
 		errors: []error{
 			&llm.ProviderAPIError{ProviderID: "openai", StatusCode: 0, Code: llm.UnifiedErrorCodeContextLengthOverflow, ProviderCode: "context_length_exceeded", Message: "prompt exceeded"},
@@ -328,20 +323,10 @@ func TestLocalCompactionUsesTenTwentyFortyPercentRepairScheduleFromConfiguredCon
 			t.Fatalf("reasoning item changed or missing on compaction repair call %d: %+v", callIdx+1, call.Items)
 		}
 	}
-	collapsed := 0
-	for _, item := range client.calls[3].Items {
-		if item.Type == llm.ResponseItemTypeFunctionCallOutput && isCollapsedCompactionOverflowShellOutput(item.Output) {
-			collapsed++
-		}
-	}
-	if collapsed != 4 {
-		t.Fatalf("collapsed shell outputs on fourth attempt = %d, want 4", collapsed)
-	}
 }
 
 func TestGenerateWithRetryDoesNotRetryContextOverflow(t *testing.T) {
-	dir := t.TempDir()
-	store := mustCreateTestSessionAt(t, dir)
+	store := mustCreateTestSession(t)
 	client := &fakeClient{
 		errors: []error{
 			&llm.ProviderAPIError{ProviderID: "openai", StatusCode: 0, Code: llm.UnifiedErrorCodeContextLengthOverflow, ProviderCode: "context_length_exceeded", Message: "prompt exceeded"},

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	testharness "core/internal/testharness/testsetup"
+
 	"golang.org/x/tools/go/packages"
 )
 
@@ -125,18 +127,7 @@ func assertOngoingArchitectureViolation(t *testing.T, violations []ongoingArchit
 
 func loadOngoingArchitectureGuardPackages(t *testing.T, repoRoot string) []*packages.Package {
 	t.Helper()
-	pkgs, err := packages.Load(&packages.Config{
-		Dir:   repoRoot,
-		Mode:  packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo,
-		Tests: false,
-	}, "./cli/app", "./cli/tui/...")
-	if err != nil {
-		t.Fatalf("load ongoing architecture packages: %v", err)
-	}
-	if errors := mainSurfaceGuardPackageErrors(pkgs); len(errors) > 0 {
-		t.Fatalf("ongoing architecture packages must type-check before scanning:\n%s", strings.Join(errors, "\n"))
-	}
-	return pkgs
+	return testharness.LoadTypedPackages(t, repoRoot, false, "./cli/app", "./cli/tui/...")
 }
 
 func collectOngoingArchitectureViolations(pkgs []*packages.Package, repoRoot string) []ongoingArchitectureViolation {
@@ -286,34 +277,13 @@ func isSanctionedDetailCommittedRowState(packagePath, ownerType, fieldName strin
 func parseOngoingArchitectureFixture(t *testing.T, relPath, source string) ([]*packages.Package, string) {
 	t.Helper()
 	dir := t.TempDir()
-	writeTestFile(t, filepath.Join(dir, "go.mod"), "module core\n\ngo 1.26.4\n")
-	writeTestFile(t, filepath.Join(dir, filepath.FromSlash(relPath)), source)
-	writeTestFile(t, filepath.Join(dir, "shared/clientui/transcript_contract.go"), `package clientui
+	testharness.WriteFile(t, filepath.Join(dir, "go.mod"), "module core\n\ngo 1.26.4\n")
+	testharness.WriteFile(t, filepath.Join(dir, filepath.FromSlash(relPath)), source)
+	testharness.WriteFile(t, filepath.Join(dir, "shared/clientui/transcript_contract.go"), `package clientui
 
 type TranscriptCommittedRow struct{}
 `)
-	pkgs, err := packages.Load(&packages.Config{
-		Dir:   dir,
-		Mode:  packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo,
-		Tests: false,
-	}, "./cli/app")
-	if err != nil {
-		t.Fatalf("load fixture package: %v", err)
-	}
-	if errors := mainSurfaceGuardPackageErrors(pkgs); len(errors) > 0 {
-		t.Fatalf("fixture package must type-check:\n%s", strings.Join(errors, "\n"))
-	}
-	return pkgs, dir
-}
-
-func writeTestFile(t *testing.T, path, contents string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("create fixture dir: %v", err)
-	}
-	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
-		t.Fatalf("write fixture file: %v", err)
-	}
+	return testharness.LoadTypedPackages(t, dir, false, "./cli/app"), dir
 }
 
 type ongoingArchitectureViolationReason string
@@ -368,7 +338,7 @@ func ongoingArchitectureRelativePath(repoRoot, path string) string {
 	if repoRoot == "" {
 		return filepath.ToSlash(path)
 	}
-	relPath, ok := mainSurfaceGuardRelativePath(repoRoot, path)
+	relPath, ok := testharness.RepositoryRelativePath(repoRoot, path)
 	if !ok {
 		return ""
 	}
@@ -448,4 +418,26 @@ func typeName(typ types.Type) string {
 		return ""
 	}
 	return named.Obj().Pkg().Path() + "." + named.Obj().Name()
+}
+
+func mainSurfaceGuardRepositoryRoot(t *testing.T) string {
+	t.Helper()
+
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	for {
+		goModPath := filepath.Join(dir, "go.mod")
+		if _, err := os.Stat(goModPath); err == nil {
+			return dir
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("stat %s: %v", goModPath, err)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("could not find repository root from %s", dir)
+		}
+		dir = parent
+	}
 }

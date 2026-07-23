@@ -31,9 +31,10 @@ func TestExecCommandCarriesExecutionCorrelationThroughSnapshotAndTerminalEvent(t
 	})
 
 	result := callExecCommand(t, tool, "correlated-background", map[string]any{
-		"cmd":           "sleep 0.2",
+		"cmd":           "read line; printf '%s' \"$line\"",
 		"shell":         "/bin/sh",
 		"login":         false,
+		"tty":           true,
 		"yield_time_ms": 50,
 	})
 	if result.IsError {
@@ -61,19 +62,31 @@ func TestExecCommandCarriesExecutionCorrelationThroughSnapshotAndTerminalEvent(t
 		t.Fatal("background event reused snapshot execution correlation pointer")
 	}
 
-	select {
-	case terminal := <-events:
-		if terminal.Type != EventCompleted {
-			t.Fatalf("terminal event type = %q, want %q", terminal.Type, EventCompleted)
-		}
-		assertExecutionCorrelation(t, terminal.Snapshot.ExecutionCorrelation, correlation, "terminal event")
-		if terminal.Snapshot.ExecutionCorrelation == backgrounded.Snapshot.ExecutionCorrelation {
-			t.Fatal("terminal event reused background event execution correlation pointer")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for correlated terminal event")
+	processID, err := strconv.Atoi(snapshots[0].ID)
+	if err != nil {
+		t.Fatalf("background process ID: %v", err)
 	}
-	waitForManagerCount(t, manager, 0, time.Second)
+	stdinTool := NewWriteStdinTool(16_000, manager)
+	completed := callWriteStdin(t, stdinTool, "correlated-release", map[string]any{
+		"session_id":    processID,
+		"chars":         "release\n",
+		"yield_time_ms": 1_000,
+	})
+	if completed.IsError {
+		t.Fatalf("complete correlated background process: %s", string(completed.Output))
+	}
+
+	terminal := <-events
+	if terminal.Type != EventCompleted {
+		t.Fatalf("terminal event type = %q, want %q", terminal.Type, EventCompleted)
+	}
+	assertExecutionCorrelation(t, terminal.Snapshot.ExecutionCorrelation, correlation, "terminal event")
+	if terminal.Snapshot.ExecutionCorrelation == backgrounded.Snapshot.ExecutionCorrelation {
+		t.Fatal("terminal event reused background event execution correlation pointer")
+	}
+	if manager.Count() != 0 {
+		t.Fatalf("background process count after completion = %d, want 0", manager.Count())
+	}
 }
 
 func assertExecutionCorrelation(t *testing.T, got *runtimeids.ExecutionCorrelation, want runtimeids.ExecutionCorrelation, location string) {
