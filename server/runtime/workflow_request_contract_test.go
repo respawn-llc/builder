@@ -135,3 +135,33 @@ func TestShellWorkflowRejectsRequiredChoiceWithoutEffectiveTools(t *testing.T) {
 		t.Fatalf("shell workflow invalid request dispatched provider calls = %d", len(client.calls))
 	}
 }
+
+func TestShellWorkflowRejectsProviderWithoutRequiredToolChoice(t *testing.T) {
+	runID := workflow.RunID("workflow-run")
+	client := &fakeClient{caps: llm.ProviderCapabilities{
+		ProviderID:           "provider-without-required-choice",
+		SupportsResponsesAPI: false,
+	}}
+	engine := mustNewWorkflowTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		&workflowruntime.Config{
+			RunID:          runID,
+			Contract:       workflowruntime.CompletionContract{RunID: runID},
+			CompletionMode: workflowruntime.CompletionModeShellCommand,
+			Controller:     &externallyCompletedWorkflowController{},
+		},
+		Config{
+			Model:        "gpt-5",
+			EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
+		},
+	)
+
+	if _, err := engine.buildRequest(context.Background(), "step", true); !errors.Is(err, llm.ErrUnsupportedToolChoicePolicy) {
+		t.Fatalf("build shell workflow request error = %v, want unsupported tool choice", err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("unsupported shell workflow request dispatched provider calls = %d", len(client.calls))
+	}
+}
