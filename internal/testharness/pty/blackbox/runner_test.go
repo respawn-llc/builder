@@ -15,6 +15,8 @@ import (
 	"core/internal/testharness/pty"
 	"core/internal/testharness/pty/analyzer"
 	"core/internal/testharness/pty/driver"
+
+	"github.com/google/uuid"
 )
 
 const cleanupTeardownTestMargin = time.Second
@@ -49,24 +51,11 @@ func TestRunnerExecutesDeclaredGoModelBoundaryScenario(t *testing.T) {
 }
 
 func TestCleanupForceKillsTERMAndHUPIgnoringClientAtGraceDeadline(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "ansi-writer")
-	if err := driver.BuildPackage(context.Background(), "core/internal/testharness/pty/testdata/cmd/ansi-writer", binary); err != nil {
-		t.Fatalf("build PTY helper: %v", err)
-	}
-	session, err := driver.StartSession(driver.SessionSpec{
-		Path:       binary,
-		Args:       []string{"ignore-term"},
-		Env:        []string{"TERM=xterm-256color", "LANG=C.UTF-8", "LC_ALL=C.UTF-8"},
-		Dimensions: pty.MustDimensions(2, 8),
-	})
-	if err != nil {
-		t.Fatalf("StartSession: %v", err)
-	}
+	session := startTermIgnoringSession(t)
 	t.Cleanup(func() {
 		_ = session.Close()
 		_ = session.ForceKill()
 	})
-	waitForVisibleCursor(t, session)
 
 	started := time.Now()
 	sessionOwner := session
@@ -87,6 +76,37 @@ func TestCleanupForceKillsTERMAndHUPIgnoringClientAtGraceDeadline(t *testing.T) 
 	default:
 		t.Fatal("TERM-ignoring client remains live after cleanup")
 	}
+}
+
+func TestTerminateProcessActionForceKillsTermIgnoringClient(t *testing.T) {
+	session := startTermIgnoringSession(t)
+	t.Cleanup(func() { _ = session.ForceKill() })
+	if err := session.Enqueue(driver.SessionCommand{ID: uuid.New(), Kind: driver.SessionCommandTerminateProcess}); err != nil {
+		t.Fatalf("enqueue terminate: %v", err)
+	}
+	select {
+	case <-session.Done():
+	case <-time.After(time.Second):
+		t.Fatal("terminate_process did not end TERM-ignoring client")
+	}
+}
+
+func startTermIgnoringSession(t *testing.T) *driver.Session {
+	t.Helper()
+	binary := filepath.Join(t.TempDir(), "ansi-writer")
+	if err := driver.BuildPackage(context.Background(), "core/internal/testharness/pty/testdata/cmd/ansi-writer", binary); err != nil {
+		t.Fatalf("build PTY helper: %v", err)
+	}
+	session, err := driver.StartSession(driver.SessionSpec{
+		Path: binary, Args: []string{"ignore-term"},
+		Env:        []string{"TERM=xterm-256color", "LANG=C.UTF-8", "LC_ALL=C.UTF-8"},
+		Dimensions: pty.MustDimensions(2, 8),
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	waitForVisibleCursor(t, session)
+	return session
 }
 
 func TestFailureArtifactEvidenceTracksCaptureAvailabilityExplicitly(t *testing.T) {
