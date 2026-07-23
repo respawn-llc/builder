@@ -10,6 +10,7 @@ import (
 
 func TestReasoningTraceRemainsPlaintextFaintAndIsNotExpandable(t *testing.T) {
 	const source = "**Preparing to investigate issue**"
+	const expected = "Preparing to investigate issue"
 	row := clientui.TranscriptCommittedRow{
 		Visibility: transcript.EntryVisibilityDetail,
 		Integrity:  transcript.RowIntegrityValid,
@@ -26,8 +27,8 @@ func TestReasoningTraceRemainsPlaintextFaintAndIsNotExpandable(t *testing.T) {
 	if noticeUsesMarkdown(row.Notice) {
 		t.Fatal("reasoning trace unexpectedly uses Markdown rendering")
 	}
-	if _, got := noticeRoleAndText(row.Notice, row.Visibility, ModeDetailExpanded); strings.Contains(got, "**") {
-		t.Fatalf("reasoning text retained provider bold delimiters: %q", got)
+	if _, got := noticeRoleAndText(row.Notice, row.Visibility, ModeDetailExpanded); got != expected {
+		t.Fatalf("reasoning text = %q, want %q", got, expected)
 	}
 
 	presentation := RenderDetailPresentation(row, 80, "dark")
@@ -44,4 +45,11 @@ func TestReasoningTraceRemainsPlaintextFaintAndIsNotExpandable(t *testing.T) {
 		return
 	}
 	t.Fatalf("reasoning trace has no content span: %+v", presentation.Collapsed[0])
+}
+
+func TestReasoningTracePreservesInteriorAsterisks(t *testing.T) {
+	const source = "2 ** 3"
+	if got := stripReasoningBoldDelimiters(source); got != source {
+		t.Fatalf("reasoning text = %q, want interior asterisks preserved as %q", got, source)
+	}
 }

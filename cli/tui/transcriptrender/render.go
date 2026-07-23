@@ -805,17 +805,8 @@ func noticeUsesMarkdown(row *clientui.TranscriptNoticeRow) bool {
 }
 
 func stripReasoningBoldDelimiters(text string) string {
-	var out strings.Builder
-	out.Grow(len(text))
-	for index := 0; index < len(text); {
-		if index+1 < len(text) && text[index] == '*' && text[index+1] == '*' {
-			index += 2
-			continue
-		}
-		out.WriteByte(text[index])
-		index++
-	}
-	return out.String()
+	text = strings.TrimPrefix(text, "**")
+	return strings.TrimSuffix(text, "**")
 }
 
 func noticeLegacyText(row *clientui.TranscriptNoticeRow) string {
