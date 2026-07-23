@@ -838,7 +838,7 @@ WHERE task_id = 'task-completed-session-migration'
 	}
 }
 
-func TestOpenProjectsMigratesLegacySerialPendingApproval(t *testing.T) {
+func TestOpenProjectsMigratesLegacySerialPendingApprovalAfterGraphDeletion(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db", "main.sqlite3")
 	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
@@ -923,6 +923,9 @@ INSERT INTO task_transition_edges (
     '[]',
     '{"context_mode":"new_session","context_source":{"kind":"immediate_source"},"context_resolution_frozen":true}'
 )`)
+	execSeed(t, db, "delete mutable approval graph", `
+DELETE FROM workflow_transition_groups
+WHERE id = 'group-done'`)
 	if err := db.Close(); err != nil {
 		t.Fatalf("close version 58 db: %v", err)
 	}
@@ -1036,7 +1039,7 @@ WHERE approval.source_task_id = 'task-pending-approval-migration'`).Scan(
 		materializedValues != `{"summary":"done"}` ||
 		createdAt != now+3 ||
 		transitionWorkflowID != "workflow-1" ||
-		transitionGroupID != "group-done" ||
+		transitionGroupID != "transition-pending-approval-migration" ||
 		transitionSourceNodeID != "node-agent" ||
 		transitionID != "done" ||
 		sourceDisplayName != "Agent" ||
@@ -1047,7 +1050,7 @@ WHERE approval.source_task_id = 'task-pending-approval-migration'`).Scan(
 		targetPriorValues != "{}" ||
 		targetSessionID != "" ||
 		targetSchedulingState != "" ||
-		edgeID != "edge-done-1" ||
+		edgeID != "transition-edge-pending-approval-migration" ||
 		edgeKey != "done" ||
 		edgeTargetNodeID != "node-done" ||
 		edgeContextMode != "new_session" ||
@@ -2657,22 +2660,25 @@ WHERE task_id = 'task-active-script-migration'`).Scan(
 		)
 	}
 
-	var taskID, associationNodeID string
-	var associatedAt int64
+	var taskID sql.NullString
 	if err := store.db.QueryRowContext(t.Context(), `
-SELECT session.task_id, association.node_id, association.associated_at_unix_ms
-FROM sessions session
-JOIN session_workflow_node_associations association ON association.session_id = session.id
-WHERE session.id = '550e8400-e29b-41d4-a716-446655440006'`).Scan(&taskID, &associationNodeID, &associatedAt); err != nil {
-		t.Fatalf("query projected active script Session association: %v", err)
+SELECT task_id
+FROM sessions
+WHERE id = '550e8400-e29b-41d4-a716-446655440006'`).Scan(&taskID); err != nil {
+		t.Fatalf("query projected active script Session owner: %v", err)
 	}
-	if taskID != "task-active-script-migration" || associationNodeID != "node-agent" || associatedAt != runUpdatedAt {
-		t.Fatalf(
-			"projected active script Session association = task=%q node=%q associated_at=%d",
-			taskID,
-			associationNodeID,
-			associatedAt,
-		)
+	if taskID.Valid {
+		t.Fatalf("projected active script Session owner = %q, want workflow-neutral", taskID.String)
+	}
+	var associationCount int
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT COUNT(*)
+FROM session_workflow_node_associations
+WHERE session_id = '550e8400-e29b-41d4-a716-446655440006'`).Scan(&associationCount); err != nil {
+		t.Fatalf("count projected active script Session associations: %v", err)
+	}
+	if associationCount != 0 {
+		t.Fatalf("projected active script Session association count = %d, want 0", associationCount)
 	}
 }
 

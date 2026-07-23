@@ -8,6 +8,40 @@ import (
 	"database/sql"
 )
 
+type MigrationInvalidCanceledTask struct {
+	TaskID string
+}
+
+type MigrationPendingApprovalID struct {
+	TransitionID string
+	ApprovalID   string
+}
+
+type MigrationPendingApprovalProjectionError struct {
+	TaskID              string
+	TransitionID        string
+	ExpectedBranchCount int64
+	ActualHeaderCount   int64
+	ActualBranchCount   int64
+}
+
+type MigrationPendingApprovalSourceError struct {
+	TaskID       string
+	TransitionID string
+}
+
+type MigrationSessionTaskError struct {
+	SessionID string
+	TaskCount int64
+}
+
+type MigrationUnfinishedCurrentNodeError struct {
+	TaskID              string
+	NodeID              string
+	TransitionBranchKey sql.NullString
+	UnfinishedRunCount  int64
+}
+
 type Project struct {
 	ID                           string
 	DisplayName                  string

@@ -546,12 +546,15 @@ SELECT
     transition.workflow_revision_seen,
     json_object(
         'workflow_id', task.workflow_id,
-        'id', transition_group.id,
+        -- Legacy transition rows no longer retain a transition-group key.
+        -- This frozen transition ID is snapshot metadata only; approval
+        -- application never resolves it against the mutable Workflow graph.
+        'id', transition.id,
         'source_node_id', placement.node_id,
         'transition_id', transition.transition_id,
-        'display_name', transition_group.display_name,
-        'description', transition_group.description,
-        'source_display_name', COALESCE(NULLIF(transition.source_node_display_name, ''), source_node.display_name)
+        'display_name', COALESCE(NULLIF(transition.transition_display_name, ''), transition.transition_id),
+        'description', '',
+        'source_display_name', COALESCE(NULLIF(transition.source_node_display_name, ''), transition.source_node_key)
     ),
     transition.output_values_json,
     transition.created_at_unix_ms
@@ -559,11 +562,7 @@ FROM migration_pending_approval_ids migration
 JOIN task_transitions transition ON transition.id = migration.transition_id
 JOIN task_node_placements placement ON placement.id = transition.source_placement_id
 JOIN task_records task ON task.id = transition.task_id
-JOIN workflow_nodes source_node ON source_node.id = placement.node_id
 LEFT JOIN workflow_edges source_branch ON source_branch.id = placement.parallel_branch_edge_id
-JOIN workflow_transition_groups transition_group
-    ON transition_group.source_node_id = placement.node_id
-   AND transition_group.transition_id = transition.transition_id
 JOIN task_current_nodes current_node
     ON current_node.task_id = transition.task_id
    AND current_node.node_id = placement.node_id
@@ -584,21 +583,24 @@ SELECT
     edge.edge_key,
     json_object(
         'node_id', edge.target_node_id,
-        'transition_branch_key', source_branch.edge_key,
+        'transition_branch_key', CASE
+            WHEN source_branch.edge_key IS NOT NULL THEN source_branch.edge_key
+            ELSE edge.edge_key
+        END,
         'display_name', edge.target_node_display_name,
         'current_input_values', json('{}'),
         'prior_node_values', json('{}'),
         'session_id', json_extract(edge.metadata_json, '$.source_session_id'),
         'scheduling_state', CASE
-            WHEN target_node.kind IN ('agent', 'script') THEN 'ready'
+            WHEN edge.target_node_kind IN ('agent', 'script') THEN 'ready'
             ELSE NULL
         END
     ),
     json_object(
         'workflow_id', task.workflow_id,
-        'id', edge.workflow_edge_id,
+        'id', COALESCE(NULLIF(edge.workflow_edge_id, ''), edge.id),
         'key', edge.edge_key,
-        'transition_group_id', transition_group.id,
+        'transition_group_id', transition.id,
         'target_node_id', edge.target_node_id,
         'context_mode', edge.context_mode,
         'context_source', json(COALESCE(
@@ -625,12 +627,82 @@ JOIN task_transitions transition ON transition.id = migration.transition_id
 JOIN task_node_placements placement ON placement.id = transition.source_placement_id
 JOIN task_records task ON task.id = transition.task_id
 LEFT JOIN workflow_edges source_branch ON source_branch.id = placement.parallel_branch_edge_id
-JOIN workflow_transition_groups transition_group
-    ON transition_group.source_node_id = placement.node_id
-   AND transition_group.transition_id = transition.transition_id
 JOIN task_transition_edges edge ON edge.task_transition_id = transition.id
-JOIN workflow_nodes target_node ON target_node.id = edge.target_node_id
 WHERE edge.state = 'pending';
+
+CREATE TEMP TABLE migration_pending_approval_projection_errors (
+    task_id TEXT NOT NULL,
+    transition_id TEXT NOT NULL,
+    expected_branch_count INTEGER NOT NULL,
+    actual_header_count INTEGER NOT NULL,
+    actual_branch_count INTEGER NOT NULL
+);
+
+-- +goose StatementBegin
+CREATE TEMP TRIGGER migration_pending_approval_projection_errors_abort
+BEFORE INSERT ON migration_pending_approval_projection_errors
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(
+        ABORT,
+        'pending approval migration failure: task_id=' || NEW.task_id ||
+        ', transition_id=' || NEW.transition_id ||
+        ', expected_branch_count=' || NEW.expected_branch_count ||
+        ', actual_header_count=' || NEW.actual_header_count ||
+        ', actual_branch_count=' || NEW.actual_branch_count
+    );
+END;
+-- +goose StatementEnd
+
+INSERT INTO migration_pending_approval_projection_errors (
+    task_id,
+    transition_id,
+    expected_branch_count,
+    actual_header_count,
+    actual_branch_count
+)
+SELECT
+    transition.task_id,
+    transition.id,
+    (
+        SELECT COUNT(*)
+        FROM task_transition_edges expected_branch
+        WHERE expected_branch.task_transition_id = transition.id
+          AND expected_branch.state = 'pending'
+    ),
+    (
+        SELECT COUNT(*)
+        FROM task_pending_approvals approval
+        WHERE approval.id = migration.approval_id
+    ),
+    (
+        SELECT COUNT(*)
+        FROM task_pending_approval_branches branch
+        WHERE branch.approval_id = migration.approval_id
+    )
+FROM migration_pending_approval_ids migration
+JOIN task_transitions transition ON transition.id = migration.transition_id
+WHERE (
+    SELECT COUNT(*)
+    FROM task_pending_approvals approval
+    WHERE approval.id = migration.approval_id
+) != 1
+OR (
+    SELECT COUNT(*)
+    FROM task_transition_edges expected_branch
+    WHERE expected_branch.task_transition_id = transition.id
+      AND expected_branch.state = 'pending'
+) = 0
+OR (
+    SELECT COUNT(*)
+    FROM task_transition_edges expected_branch
+    WHERE expected_branch.task_transition_id = transition.id
+      AND expected_branch.state = 'pending'
+) != (
+    SELECT COUNT(*)
+    FROM task_pending_approval_branches branch
+    WHERE branch.approval_id = migration.approval_id
+);
 
 CREATE TEMP TABLE migration_invalid_canceled_tasks (
     task_id TEXT PRIMARY KEY
@@ -702,7 +774,9 @@ SELECT
     COUNT(DISTINCT placement.task_id)
 FROM task_runs run
 JOIN task_node_placements placement ON placement.id = run.placement_id
+JOIN workflow_nodes node ON node.id = placement.node_id
 WHERE run.session_id IS NOT NULL
+  AND node.kind = 'agent'
 GROUP BY run.session_id
 HAVING COUNT(DISTINCT placement.task_id) > 1;
 
@@ -711,14 +785,19 @@ SET task_id = (
     SELECT placement.task_id
     FROM task_runs run
     JOIN task_node_placements placement ON placement.id = run.placement_id
+    JOIN workflow_nodes node ON node.id = placement.node_id
     WHERE run.session_id = sessions.id
+      AND node.kind = 'agent'
     ORDER BY run.updated_at_unix_ms DESC, run.id DESC
     LIMIT 1
 )
 WHERE EXISTS (
     SELECT 1
     FROM task_runs run
+    JOIN task_node_placements placement ON placement.id = run.placement_id
+    JOIN workflow_nodes node ON node.id = placement.node_id
     WHERE run.session_id = sessions.id
+      AND node.kind = 'agent'
 );
 
 INSERT INTO session_workflow_node_associations (
@@ -734,8 +813,10 @@ SELECT
     run.updated_at_unix_ms
 FROM task_runs run
 JOIN task_node_placements placement ON placement.id = run.placement_id
+JOIN workflow_nodes node ON node.id = placement.node_id
 LEFT JOIN workflow_edges branch_edge ON branch_edge.id = placement.parallel_branch_edge_id
 WHERE run.session_id IS NOT NULL
+  AND node.kind = 'agent'
 ON CONFLICT DO UPDATE SET
     associated_at_unix_ms = CASE
         WHEN excluded.associated_at_unix_ms > session_workflow_node_associations.associated_at_unix_ms

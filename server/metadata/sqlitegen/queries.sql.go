@@ -225,6 +225,7 @@ type BindSessionToTaskParams struct {
 
 func (q *Queries) BindSessionToTask(ctx context.Context, arg BindSessionToTaskParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, bindSessionToTask, arg.TaskID, arg.SessionID)
+	err = recordQueryError(ctx, err, bindSessionToTask, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -873,7 +874,8 @@ WHERE task_id = ?1
 func (q *Queries) CountTaskSessions(ctx context.Context, taskID sql.NullString) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countTaskSessions, taskID)
 	var session_count int64
-	err := row.Scan(&session_count)
+	err := recordQueryError(ctx, row.Scan(&session_count), countTaskSessions, 1)
+
 	return session_count, err
 }
 
@@ -1032,6 +1034,7 @@ WHERE source_task_id IN (
 
 func (q *Queries) DeleteProjectTaskPendingApprovals(ctx context.Context, projectID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteProjectTaskPendingApprovals, projectID)
+	err = recordQueryError(ctx, err, deleteProjectTaskPendingApprovals, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1120,6 +1123,7 @@ type DeleteSerialTaskCurrentNodeParams struct {
 
 func (q *Queries) DeleteSerialTaskCurrentNode(ctx context.Context, arg DeleteSerialTaskCurrentNodeParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteSerialTaskCurrentNode, arg.TaskID, arg.NodeID)
+	err = recordQueryError(ctx, err, deleteSerialTaskCurrentNode, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -1161,6 +1165,7 @@ WHERE task_id = ?1
 
 func (q *Queries) DeleteTaskActiveFanout(ctx context.Context, taskID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteTaskActiveFanout, taskID)
+	err = recordQueryError(ctx, err, deleteTaskActiveFanout, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1213,6 +1218,7 @@ type DeleteTaskCurrentNodeParams struct {
 
 func (q *Queries) DeleteTaskCurrentNode(ctx context.Context, arg DeleteTaskCurrentNodeParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteTaskCurrentNode, arg.TaskID, arg.NodeID, arg.TransitionBranchKey)
+	err = recordQueryError(ctx, err, deleteTaskCurrentNode, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -1226,6 +1232,7 @@ WHERE task_id = ?1
 
 func (q *Queries) DeleteTaskCurrentNodes(ctx context.Context, taskID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteTaskCurrentNodes, taskID)
+	err = recordQueryError(ctx, err, deleteTaskCurrentNodes, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1287,6 +1294,7 @@ WHERE id = ?1
 
 func (q *Queries) DeleteTaskPendingApproval(ctx context.Context, id string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteTaskPendingApproval, id)
+	err = recordQueryError(ctx, err, deleteTaskPendingApproval, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1300,6 +1308,7 @@ WHERE source_task_id = ?1
 
 func (q *Queries) DeleteTaskPendingApprovalsByTask(ctx context.Context, taskID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteTaskPendingApprovalsByTask, taskID)
+	err = recordQueryError(ctx, err, deleteTaskPendingApprovalsByTask, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1429,6 +1438,7 @@ WHERE source_task_id IN (
 
 func (q *Queries) DeleteWorkflowTaskPendingApprovalsByWorkflowID(ctx context.Context, workflowID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteWorkflowTaskPendingApprovalsByWorkflowID, workflowID)
+	err = recordQueryError(ctx, err, deleteWorkflowTaskPendingApprovalsByWorkflowID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1681,12 +1691,13 @@ type GetLatestBranchTaskSessionAssociationForNodeParams struct {
 func (q *Queries) GetLatestBranchTaskSessionAssociationForNode(ctx context.Context, arg GetLatestBranchTaskSessionAssociationForNodeParams) (SessionWorkflowNodeAssociation, error) {
 	row := q.db.QueryRowContext(ctx, getLatestBranchTaskSessionAssociationForNode, arg.TaskID, arg.NodeID, arg.TransitionBranchKey)
 	var i SessionWorkflowNodeAssociation
-	err := row.Scan(
+	err := recordQueryError(ctx, row.Scan(
 		&i.SessionID,
 		&i.NodeID,
 		&i.TransitionBranchKey,
 		&i.AssociatedAtUnixMs,
-	)
+	), getLatestBranchTaskSessionAssociationForNode, 3)
+
 	return i, err
 }
 
@@ -1798,7 +1809,8 @@ type GetLatestSerialTaskSessionAssociationForNodeRow struct {
 func (q *Queries) GetLatestSerialTaskSessionAssociationForNode(ctx context.Context, arg GetLatestSerialTaskSessionAssociationForNodeParams) (GetLatestSerialTaskSessionAssociationForNodeRow, error) {
 	row := q.db.QueryRowContext(ctx, getLatestSerialTaskSessionAssociationForNode, arg.TaskID, arg.NodeID)
 	var i GetLatestSerialTaskSessionAssociationForNodeRow
-	err := row.Scan(&i.SessionID, &i.NodeID, &i.AssociatedAtUnixMs)
+	err := recordQueryError(ctx, row.Scan(&i.SessionID, &i.NodeID, &i.AssociatedAtUnixMs), getLatestSerialTaskSessionAssociationForNode, 2)
+
 	return i, err
 }
 
@@ -2490,7 +2502,8 @@ WHERE task_id = ?1
 func (q *Queries) GetTaskActiveFanout(ctx context.Context, taskID string) (string, error) {
 	row := q.db.QueryRowContext(ctx, getTaskActiveFanout, taskID)
 	var task_id string
-	err := row.Scan(&task_id)
+	err := recordQueryError(ctx, row.Scan(&task_id), getTaskActiveFanout, 1)
+
 	return task_id, err
 }
 
@@ -2622,7 +2635,7 @@ WHERE id = ?1
 func (q *Queries) GetTaskPendingApproval(ctx context.Context, id string) (TaskPendingApproval, error) {
 	row := q.db.QueryRowContext(ctx, getTaskPendingApproval, id)
 	var i TaskPendingApproval
-	err := row.Scan(
+	err := recordQueryError(ctx, row.Scan(
 		&i.ID,
 		&i.SourceTaskID,
 		&i.SourceNodeID,
@@ -2632,7 +2645,8 @@ func (q *Queries) GetTaskPendingApproval(ctx context.Context, id string) (TaskPe
 		&i.TransitionSnapshotJson,
 		&i.MaterializedValuesJson,
 		&i.CreatedAtUnixMs,
-	)
+	), getTaskPendingApproval, 1)
+
 	return i, err
 }
 
@@ -2656,7 +2670,8 @@ type GetTaskPendingApprovalIDForCurrentNodeParams struct {
 func (q *Queries) GetTaskPendingApprovalIDForCurrentNode(ctx context.Context, arg GetTaskPendingApprovalIDForCurrentNodeParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, getTaskPendingApprovalIDForCurrentNode, arg.TaskID, arg.NodeID, arg.TransitionBranchKey)
 	var id string
-	err := row.Scan(&id)
+	err := recordQueryError(ctx, row.Scan(&id), getTaskPendingApprovalIDForCurrentNode, 3)
+
 	return id, err
 }
 
@@ -3741,6 +3756,7 @@ VALUES (?1)
 
 func (q *Queries) InsertTaskActiveFanout(ctx context.Context, taskID string) error {
 	_, err := q.db.ExecContext(ctx, insertTaskActiveFanout, taskID)
+	err = recordQueryError(ctx, err, insertTaskActiveFanout, 1)
 	return err
 }
 
@@ -3765,6 +3781,7 @@ type InsertTaskActiveFanoutBranchParams struct {
 
 func (q *Queries) InsertTaskActiveFanoutBranch(ctx context.Context, arg InsertTaskActiveFanoutBranchParams) error {
 	_, err := q.db.ExecContext(ctx, insertTaskActiveFanoutBranch, arg.TaskID, arg.TransitionBranchKey)
+	err = recordQueryError(ctx, err, insertTaskActiveFanoutBranch, 2)
 	return err
 }
 
@@ -3865,6 +3882,8 @@ func (q *Queries) InsertTaskCurrentNode(ctx context.Context, arg InsertTaskCurre
 		arg.InterruptionDetailJson,
 		arg.InterruptedAtUnixMs,
 	)
+	err = recordQueryError(ctx, err, insertTaskCurrentNode, 10)
+
 	return err
 }
 
@@ -3982,6 +4001,8 @@ func (q *Queries) InsertTaskPendingApproval(ctx context.Context, arg InsertTaskP
 		arg.MaterializedValuesJson,
 		arg.CreatedAtUnixMs,
 	)
+	err = recordQueryError(ctx, err, insertTaskPendingApproval, 9)
+
 	return err
 }
 
@@ -4017,6 +4038,8 @@ func (q *Queries) InsertTaskPendingApprovalBranch(ctx context.Context, arg Inser
 		arg.EffectiveEdgeConfigurationJson,
 		arg.ContextSourceResolutionJson,
 	)
+	err = recordQueryError(ctx, err, insertTaskPendingApprovalBranch, 5)
+
 	return err
 }
 
@@ -6817,6 +6840,7 @@ ORDER BY transition_branch_key
 
 func (q *Queries) ListTaskActiveFanoutBranches(ctx context.Context, taskID string) ([]TaskActiveFanoutBranch, error) {
 	rows, err := q.db.QueryContext(ctx, listTaskActiveFanoutBranches, taskID)
+	err = recordQueryError(ctx, err, listTaskActiveFanoutBranches, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -7090,6 +7114,7 @@ ORDER BY
 
 func (q *Queries) ListTaskCurrentNodes(ctx context.Context, taskID string) ([]TaskCurrentNode, error) {
 	rows, err := q.db.QueryContext(ctx, listTaskCurrentNodes, taskID)
+	err = recordQueryError(ctx, err, listTaskCurrentNodes, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -7254,6 +7279,7 @@ ORDER BY transition_branch_key
 
 func (q *Queries) ListTaskPendingApprovalBranches(ctx context.Context, approvalID string) ([]TaskPendingApprovalBranch, error) {
 	rows, err := q.db.QueryContext(ctx, listTaskPendingApprovalBranches, approvalID)
+	err = recordQueryError(ctx, err, listTaskPendingApprovalBranches, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -7299,6 +7325,7 @@ ORDER BY created_at_unix_ms, id
 
 func (q *Queries) ListTaskPendingApprovals(ctx context.Context, taskID string) ([]TaskPendingApproval, error) {
 	rows, err := q.db.QueryContext(ctx, listTaskPendingApprovals, taskID)
+	err = recordQueryError(ctx, err, listTaskPendingApprovals, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -11280,6 +11307,7 @@ type UpdateTaskActiveFanoutBranchArrivalParams struct {
 
 func (q *Queries) UpdateTaskActiveFanoutBranchArrival(ctx context.Context, arg UpdateTaskActiveFanoutBranchArrivalParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, updateTaskActiveFanoutBranchArrival, arg.ArrivalValuesJson, arg.TaskID, arg.TransitionBranchKey)
+	err = recordQueryError(ctx, err, updateTaskActiveFanoutBranchArrival, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -11862,6 +11890,8 @@ func (q *Queries) UpsertBranchSessionWorkflowNodeAssociation(ctx context.Context
 		arg.TransitionBranchKey,
 		arg.AssociatedAtUnixMs,
 	)
+	err = recordQueryError(ctx, err, upsertBranchSessionWorkflowNodeAssociation, 4)
+
 	return err
 }
 
@@ -11930,6 +11960,7 @@ type UpsertSerialSessionWorkflowNodeAssociationParams struct {
 
 func (q *Queries) UpsertSerialSessionWorkflowNodeAssociation(ctx context.Context, arg UpsertSerialSessionWorkflowNodeAssociationParams) error {
 	_, err := q.db.ExecContext(ctx, upsertSerialSessionWorkflowNodeAssociation, arg.SessionID, arg.NodeID, arg.AssociatedAtUnixMs)
+	err = recordQueryError(ctx, err, upsertSerialSessionWorkflowNodeAssociation, 3)
 	return err
 }
 
