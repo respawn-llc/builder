@@ -589,7 +589,7 @@ func (s *Store) recoveryError(operation string, err error) error {
 }
 
 func (s *Store) persistMetadataMutationWithCommitReceiptLocked(checkpoint metadataMutationCheckpoint) (CommitReceipt, error) {
-	observation, err := s.persistMetaAfterRecoveryVerifiedLocked()
+	observation, err := s.persistMetaLocked()
 	if err != nil {
 		s.restoreMetadataMutationLocked(checkpoint)
 		s.mu.Unlock()
