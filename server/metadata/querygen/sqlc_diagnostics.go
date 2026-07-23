@@ -8,6 +8,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"strconv"
 )
 
 func annotateFile(path string) error {
@@ -218,9 +219,15 @@ func databaseMethodCall(expression ast.Expr, method string) (queryCall, bool) {
 }
 
 func diagnosticCall(cause ast.Expr, call queryCall) ast.Expr {
-	arguments := make([]ast.Expr, 0, len(call.args)+3)
-	arguments = append(arguments, ast.NewIdent("ctx"), cause, call.query)
-	arguments = append(arguments, call.args...)
+	arguments := []ast.Expr{
+		ast.NewIdent("ctx"),
+		cause,
+		call.query,
+		&ast.BasicLit{
+			Kind:  token.INT,
+			Value: strconv.Itoa(len(call.args)),
+		},
+	}
 	return &ast.CallExpr{Fun: ast.NewIdent("recordQueryError"), Args: arguments}
 }
 

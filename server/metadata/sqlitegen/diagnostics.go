@@ -15,7 +15,7 @@ func WithQueryFailureDiagnostics(ctx context.Context) context.Context {
 // recordQueryError emits enough context to diagnose database failures while
 // returning the original error unchanged. Some existing callers compare
 // sql.ErrNoRows by identity, so wrapping it would alter control flow.
-func recordQueryError(ctx context.Context, cause error, query string, arguments ...any) error {
+func recordQueryError(ctx context.Context, cause error, query string, argumentCount int) error {
 	if cause == nil {
 		return nil
 	}
@@ -26,7 +26,7 @@ func recordQueryError(ctx context.Context, cause error, query string, arguments 
 		"sqlite query failed",
 		"error", cause,
 		"sql", query,
-		"arguments", arguments,
+		"argument_count", argumentCount,
 		"stack", string(debug.Stack()),
 	)
 	return cause

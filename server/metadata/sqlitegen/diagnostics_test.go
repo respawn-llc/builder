@@ -1,10 +1,45 @@
 package sqlitegen
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
+	"log/slog"
 	"testing"
 )
+
+func TestQueryFailureDiagnosticsRecordArgumentCountWithoutValues(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	var output bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	_, err = New(db).GetTaskRun(
+		WithQueryFailureDiagnostics(context.Background()),
+		"repository-secret",
+	)
+	if err == nil {
+		t.Fatal("GetTaskRun unexpectedly succeeded without its table")
+	}
+
+	var entry map[string]any
+	if err := json.NewDecoder(&output).Decode(&entry); err != nil {
+		t.Fatalf("decode diagnostic log: %v", err)
+	}
+	if _, present := entry["arguments"]; present {
+		t.Fatalf("diagnostic log exposed raw arguments: %+v", entry)
+	}
+	if got, ok := entry["argument_count"].(float64); !ok || got != 1 {
+		t.Fatalf("diagnostic argument count = %#v, want 1", entry["argument_count"])
+	}
+}
 
 func TestGetTaskRunNoRowsPreservesSentinelIdentity(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")

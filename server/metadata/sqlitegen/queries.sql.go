@@ -19,7 +19,7 @@ WHERE id = ?1
 
 func (q *Queries) AcquireProjectDeleteWriteLock(ctx context.Context, projectID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, acquireProjectDeleteWriteLock, projectID)
-	err = recordQueryError(ctx, err, acquireProjectDeleteWriteLock, projectID)
+	err = recordQueryError(ctx, err, acquireProjectDeleteWriteLock, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -40,7 +40,7 @@ RETURNING id
 func (q *Queries) AcquireTaskLabelWriteLock(ctx context.Context, taskID string) (string, error) {
 	row := q.db.QueryRowContext(ctx, acquireTaskLabelWriteLock, taskID)
 	var id string
-	err := recordQueryError(ctx, row.Scan(&id), acquireTaskLabelWriteLock, taskID)
+	err := recordQueryError(ctx, row.Scan(&id), acquireTaskLabelWriteLock, 1)
 
 	return id, err
 }
@@ -53,7 +53,7 @@ WHERE id = ''
 
 func (q *Queries) AcquireWorkspaceRegistrationLock(ctx context.Context) (int64, error) {
 	result, err := q.db.ExecContext(ctx, acquireWorkspaceRegistrationLock)
-	err = recordQueryError(ctx, err, acquireWorkspaceRegistrationLock)
+	err = recordQueryError(ctx, err, acquireWorkspaceRegistrationLock, 0)
 	if err != nil {
 		return 0, err
 	}
@@ -74,7 +74,7 @@ type AcquireWorkspaceUnlinkWriteLockParams struct {
 
 func (q *Queries) AcquireWorkspaceUnlinkWriteLock(ctx context.Context, arg AcquireWorkspaceUnlinkWriteLockParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, acquireWorkspaceUnlinkWriteLock, arg.ProjectID, arg.WorkspaceID)
-	err = recordQueryError(ctx, err, acquireWorkspaceUnlinkWriteLock, arg.ProjectID, arg.WorkspaceID)
+	err = recordQueryError(ctx, err, acquireWorkspaceUnlinkWriteLock, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -103,7 +103,7 @@ type AllocateProjectTaskSequenceRow struct {
 func (q *Queries) AllocateProjectTaskSequence(ctx context.Context, arg AllocateProjectTaskSequenceParams) (AllocateProjectTaskSequenceRow, error) {
 	row := q.db.QueryRowContext(ctx, allocateProjectTaskSequence, arg.UpdatedAtUnixMs, arg.ProjectID)
 	var i AllocateProjectTaskSequenceRow
-	err := recordQueryError(ctx, row.Scan(&i.ProjectKey, &i.NextTaskSeq), allocateProjectTaskSequence, arg.UpdatedAtUnixMs, arg.ProjectID)
+	err := recordQueryError(ctx, row.Scan(&i.ProjectKey, &i.NextTaskSeq), allocateProjectTaskSequence, 2)
 
 	return i, err
 }
@@ -117,7 +117,7 @@ WHERE id = ?1
 
 func (q *Queries) ApplyPendingTransitionEdgeToJoin(ctx context.Context, edgeID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, applyPendingTransitionEdgeToJoin, edgeID)
-	err = recordQueryError(ctx, err, applyPendingTransitionEdgeToJoin, edgeID)
+	err = recordQueryError(ctx, err, applyPendingTransitionEdgeToJoin, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -139,7 +139,7 @@ type ApplyPendingTransitionEdgeToPlacementParams struct {
 
 func (q *Queries) ApplyPendingTransitionEdgeToPlacement(ctx context.Context, arg ApplyPendingTransitionEdgeToPlacementParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, applyPendingTransitionEdgeToPlacement, arg.TargetPlacementID, arg.EdgeID)
-	err = recordQueryError(ctx, err, applyPendingTransitionEdgeToPlacement, arg.TargetPlacementID, arg.EdgeID)
+	err = recordQueryError(ctx, err, applyPendingTransitionEdgeToPlacement, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -160,7 +160,7 @@ type ApprovePendingTransitionParams struct {
 
 func (q *Queries) ApprovePendingTransition(ctx context.Context, arg ApprovePendingTransitionParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, approvePendingTransition, arg.AppliedAtUnixMs, arg.TransitionID)
-	err = recordQueryError(ctx, err, approvePendingTransition, arg.AppliedAtUnixMs, arg.TransitionID)
+	err = recordQueryError(ctx, err, approvePendingTransition, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -194,11 +194,7 @@ func (q *Queries) AttachRunSession(ctx context.Context, arg AttachRunSessionPara
 		arg.RunID,
 		arg.RunGeneration,
 	)
-	err = recordQueryError(ctx, err, attachRunSession,
-		arg.UpdatedAtUnixMs,
-		arg.SessionID,
-		arg.RunID,
-		arg.RunGeneration)
+	err = recordQueryError(ctx, err, attachRunSession, 4)
 
 	if err != nil {
 		return 0, err
@@ -229,11 +225,7 @@ func (q *Queries) CancelTask(ctx context.Context, arg CancelTaskParams) (int64, 
 		arg.UpdatedAtUnixMs,
 		arg.ID,
 	)
-	err = recordQueryError(ctx, err, cancelTask,
-		arg.CanceledAtUnixMs,
-		arg.CancellationReason,
-		arg.UpdatedAtUnixMs,
-		arg.ID)
+	err = recordQueryError(ctx, err, cancelTask, 4)
 
 	if err != nil {
 		return 0, err
@@ -354,11 +346,7 @@ func (q *Queries) ClaimWorkflowRun(ctx context.Context, arg ClaimWorkflowRunPara
 		&i.InvalidCompletionCount,
 		&i.RunStartSnapshotJson,
 		&i.MetadataJson,
-	), claimWorkflowRun,
-		arg.UpdatedAtUnixMs,
-		arg.StartedAtUnixMs,
-		arg.ID,
-		arg.ExpectedGeneration)
+	), claimWorkflowRun, 4)
 
 	return i, err
 }
@@ -382,7 +370,7 @@ type ClearDeletedWorkflowDefaultProjectLinksParams struct {
 
 func (q *Queries) ClearDeletedWorkflowDefaultProjectLinks(ctx context.Context, arg ClearDeletedWorkflowDefaultProjectLinksParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, clearDeletedWorkflowDefaultProjectLinks, arg.UpdatedAtUnixMs, arg.WorkflowID)
-	err = recordQueryError(ctx, err, clearDeletedWorkflowDefaultProjectLinks, arg.UpdatedAtUnixMs, arg.WorkflowID)
+	err = recordQueryError(ctx, err, clearDeletedWorkflowDefaultProjectLinks, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -404,7 +392,7 @@ type ClearProjectDefaultWorkflowLinksParams struct {
 
 func (q *Queries) ClearProjectDefaultWorkflowLinks(ctx context.Context, arg ClearProjectDefaultWorkflowLinksParams) error {
 	_, err := q.db.ExecContext(ctx, clearProjectDefaultWorkflowLinks, arg.UpdatedAtUnixMs, arg.ProjectID)
-	err = recordQueryError(ctx, err, clearProjectDefaultWorkflowLinks, arg.UpdatedAtUnixMs, arg.ProjectID)
+	err = recordQueryError(ctx, err, clearProjectDefaultWorkflowLinks, 2)
 	return err
 }
 
@@ -434,11 +422,7 @@ func (q *Queries) ClearRunWaitingAsk(ctx context.Context, arg ClearRunWaitingAsk
 		arg.RunGeneration,
 		arg.AskID,
 	)
-	err = recordQueryError(ctx, err, clearRunWaitingAsk,
-		arg.UpdatedAtUnixMs,
-		arg.RunID,
-		arg.RunGeneration,
-		arg.AskID)
+	err = recordQueryError(ctx, err, clearRunWaitingAsk, 4)
 
 	if err != nil {
 		return 0, err
@@ -461,7 +445,7 @@ type CompleteActiveManualMoveSourcePlacementParams struct {
 
 func (q *Queries) CompleteActiveManualMoveSourcePlacement(ctx context.Context, arg CompleteActiveManualMoveSourcePlacementParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, completeActiveManualMoveSourcePlacement, arg.UpdatedAtUnixMs, arg.PlacementID)
-	err = recordQueryError(ctx, err, completeActiveManualMoveSourcePlacement, arg.UpdatedAtUnixMs, arg.PlacementID)
+	err = recordQueryError(ctx, err, completeActiveManualMoveSourcePlacement, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -505,13 +489,7 @@ func (q *Queries) CompleteRunUpdateRun(ctx context.Context, arg CompleteRunUpdat
 		arg.ExpectedInterruptedAtUnixMs,
 		arg.ExpectedSessionID,
 	)
-	err = recordQueryError(ctx, err, completeRunUpdateRun,
-		arg.UpdatedAtUnixMs,
-		arg.CompletedAtUnixMs,
-		arg.RunID,
-		arg.RunGeneration,
-		arg.ExpectedInterruptedAtUnixMs,
-		arg.ExpectedSessionID)
+	err = recordQueryError(ctx, err, completeRunUpdateRun, 6)
 
 	if err != nil {
 		return 0, err
@@ -528,7 +506,7 @@ WHERE project_id = ?1
 func (q *Queries) CountActiveProjectWorkflowLinks(ctx context.Context, projectID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countActiveProjectWorkflowLinks, projectID)
 	var active_link_count int64
-	err := recordQueryError(ctx, row.Scan(&active_link_count), countActiveProjectWorkflowLinks, projectID)
+	err := recordQueryError(ctx, row.Scan(&active_link_count), countActiveProjectWorkflowLinks, 1)
 
 	return active_link_count, err
 }
@@ -549,7 +527,7 @@ WHERE r.completed_at_unix_ms IS NULL
 func (q *Queries) CountActiveTaskRunsByWorkspace(ctx context.Context, workspaceID sql.NullString) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countActiveTaskRunsByWorkspace, workspaceID)
 	var run_count int64
-	err := recordQueryError(ctx, row.Scan(&run_count), countActiveTaskRunsByWorkspace, workspaceID)
+	err := recordQueryError(ctx, row.Scan(&run_count), countActiveTaskRunsByWorkspace, 1)
 
 	return run_count, err
 }
@@ -570,7 +548,7 @@ FROM (
 func (q *Queries) CountAllTaskEdgeReferences(ctx context.Context, edgeID sql.NullString) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countAllTaskEdgeReferences, edgeID)
 	var ref_count int64
-	err := recordQueryError(ctx, row.Scan(&ref_count), countAllTaskEdgeReferences, edgeID)
+	err := recordQueryError(ctx, row.Scan(&ref_count), countAllTaskEdgeReferences, 1)
 
 	return ref_count, err
 }
@@ -609,7 +587,7 @@ FROM (
 func (q *Queries) CountCurrentTaskNodeAnchorReferences(ctx context.Context, nodeID sql.NullString) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countCurrentTaskNodeAnchorReferences, nodeID)
 	var ref_count int64
-	err := recordQueryError(ctx, row.Scan(&ref_count), countCurrentTaskNodeAnchorReferences, nodeID)
+	err := recordQueryError(ctx, row.Scan(&ref_count), countCurrentTaskNodeAnchorReferences, 1)
 
 	return ref_count, err
 }
@@ -625,7 +603,7 @@ WHERE workspace_id = ?1
 func (q *Queries) CountManagedOwnedWorktreesByWorkspace(ctx context.Context, workspaceID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countManagedOwnedWorktreesByWorkspace, workspaceID)
 	var worktree_count int64
-	err := recordQueryError(ctx, row.Scan(&worktree_count), countManagedOwnedWorktreesByWorkspace, workspaceID)
+	err := recordQueryError(ctx, row.Scan(&worktree_count), countManagedOwnedWorktreesByWorkspace, 1)
 
 	return worktree_count, err
 }
@@ -645,7 +623,7 @@ WHERE t.managed_worktree_id = ?1
 func (q *Queries) CountNonTerminalTasksByManagedWorktree(ctx context.Context, managedWorktreeID sql.NullString) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countNonTerminalTasksByManagedWorktree, managedWorktreeID)
 	var ref_count int64
-	err := recordQueryError(ctx, row.Scan(&ref_count), countNonTerminalTasksByManagedWorktree, managedWorktreeID)
+	err := recordQueryError(ctx, row.Scan(&ref_count), countNonTerminalTasksByManagedWorktree, 1)
 
 	return ref_count, err
 }
@@ -663,7 +641,7 @@ WHERE t.project_workflow_link_id = ?1
 func (q *Queries) CountNonTerminalTasksByProjectWorkflowLink(ctx context.Context, projectWorkflowLinkID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countNonTerminalTasksByProjectWorkflowLink, projectWorkflowLinkID)
 	var task_count int64
-	err := recordQueryError(ctx, row.Scan(&task_count), countNonTerminalTasksByProjectWorkflowLink, projectWorkflowLinkID)
+	err := recordQueryError(ctx, row.Scan(&task_count), countNonTerminalTasksByProjectWorkflowLink, 1)
 
 	return task_count, err
 }
@@ -694,7 +672,7 @@ WHERE t.source_workspace_id = ?1
 func (q *Queries) CountNonTerminalTasksBySourceWorkspace(ctx context.Context, workspaceID sql.NullString) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countNonTerminalTasksBySourceWorkspace, workspaceID)
 	var task_count int64
-	err := recordQueryError(ctx, row.Scan(&task_count), countNonTerminalTasksBySourceWorkspace, workspaceID)
+	err := recordQueryError(ctx, row.Scan(&task_count), countNonTerminalTasksBySourceWorkspace, 1)
 
 	return task_count, err
 }
@@ -712,7 +690,7 @@ WHERE t.workflow_id = ?1
 func (q *Queries) CountNonTerminalTasksByWorkflow(ctx context.Context, workflowID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countNonTerminalTasksByWorkflow, workflowID)
 	var task_count int64
-	err := recordQueryError(ctx, row.Scan(&task_count), countNonTerminalTasksByWorkflow, workflowID)
+	err := recordQueryError(ctx, row.Scan(&task_count), countNonTerminalTasksByWorkflow, 1)
 
 	return task_count, err
 }
@@ -738,7 +716,7 @@ type CountOtherNonTerminalTasksByManagedWorktreeParams struct {
 func (q *Queries) CountOtherNonTerminalTasksByManagedWorktree(ctx context.Context, arg CountOtherNonTerminalTasksByManagedWorktreeParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countOtherNonTerminalTasksByManagedWorktree, arg.ManagedWorktreeID, arg.TaskID)
 	var ref_count int64
-	err := recordQueryError(ctx, row.Scan(&ref_count), countOtherNonTerminalTasksByManagedWorktree, arg.ManagedWorktreeID, arg.TaskID)
+	err := recordQueryError(ctx, row.Scan(&ref_count), countOtherNonTerminalTasksByManagedWorktree, 2)
 
 	return ref_count, err
 }
@@ -758,7 +736,7 @@ type CountProjectWorkflowLinksByIDAndProjectParams struct {
 func (q *Queries) CountProjectWorkflowLinksByIDAndProject(ctx context.Context, arg CountProjectWorkflowLinksByIDAndProjectParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countProjectWorkflowLinksByIDAndProject, arg.ProjectWorkflowLinkID, arg.ProjectID)
 	var link_count int64
-	err := recordQueryError(ctx, row.Scan(&link_count), countProjectWorkflowLinksByIDAndProject, arg.ProjectWorkflowLinkID, arg.ProjectID)
+	err := recordQueryError(ctx, row.Scan(&link_count), countProjectWorkflowLinksByIDAndProject, 2)
 
 	return link_count, err
 }
@@ -772,7 +750,7 @@ WHERE project_id = ?1
 func (q *Queries) CountProjectWorkspaces(ctx context.Context, projectID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countProjectWorkspaces, projectID)
 	var workspace_count int64
-	err := recordQueryError(ctx, row.Scan(&workspace_count), countProjectWorkspaces, projectID)
+	err := recordQueryError(ctx, row.Scan(&workspace_count), countProjectWorkspaces, 1)
 
 	return workspace_count, err
 }
@@ -786,7 +764,7 @@ WHERE task_id = ?1
 func (q *Queries) CountTaskComments(ctx context.Context, taskID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countTaskComments, taskID)
 	var column_1 int64
-	err := recordQueryError(ctx, row.Scan(&column_1), countTaskComments, taskID)
+	err := recordQueryError(ctx, row.Scan(&column_1), countTaskComments, 1)
 
 	return column_1, err
 }
@@ -819,7 +797,7 @@ FROM (
 func (q *Queries) CountTaskEdgeReferences(ctx context.Context, edgeID sql.NullString) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countTaskEdgeReferences, edgeID)
 	var ref_count int64
-	err := recordQueryError(ctx, row.Scan(&ref_count), countTaskEdgeReferences, edgeID)
+	err := recordQueryError(ctx, row.Scan(&ref_count), countTaskEdgeReferences, 1)
 
 	return ref_count, err
 }
@@ -838,7 +816,7 @@ FROM (
 func (q *Queries) CountTaskNodeReferences(ctx context.Context, nodeID sql.NullString) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countTaskNodeReferences, nodeID)
 	var ref_count int64
-	err := recordQueryError(ctx, row.Scan(&ref_count), countTaskNodeReferences, nodeID)
+	err := recordQueryError(ctx, row.Scan(&ref_count), countTaskNodeReferences, 1)
 
 	return ref_count, err
 }
@@ -852,7 +830,7 @@ WHERE task_id = ?1
 func (q *Queries) CountTaskRunsByTask(ctx context.Context, taskID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countTaskRunsByTask, taskID)
 	var run_count int64
-	err := recordQueryError(ctx, row.Scan(&run_count), countTaskRunsByTask, taskID)
+	err := recordQueryError(ctx, row.Scan(&run_count), countTaskRunsByTask, 1)
 
 	return run_count, err
 }
@@ -866,7 +844,7 @@ WHERE project_workflow_link_id = ?1
 func (q *Queries) CountTasksByProjectWorkflowLink(ctx context.Context, projectWorkflowLinkID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countTasksByProjectWorkflowLink, projectWorkflowLinkID)
 	var task_count int64
-	err := recordQueryError(ctx, row.Scan(&task_count), countTasksByProjectWorkflowLink, projectWorkflowLinkID)
+	err := recordQueryError(ctx, row.Scan(&task_count), countTasksByProjectWorkflowLink, 1)
 
 	return task_count, err
 }
@@ -885,7 +863,7 @@ WHERE source_workspace_id = ?1
 func (q *Queries) CountTasksMissingSourceWorkspaceSnapshot(ctx context.Context, workspaceID sql.NullString) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countTasksMissingSourceWorkspaceSnapshot, workspaceID)
 	var task_count int64
-	err := recordQueryError(ctx, row.Scan(&task_count), countTasksMissingSourceWorkspaceSnapshot, workspaceID)
+	err := recordQueryError(ctx, row.Scan(&task_count), countTasksMissingSourceWorkspaceSnapshot, 1)
 
 	return task_count, err
 }
@@ -928,7 +906,7 @@ type CountUnresolvedTaskRunsAtWorkflowNodeParams struct {
 func (q *Queries) CountUnresolvedTaskRunsAtWorkflowNode(ctx context.Context, arg CountUnresolvedTaskRunsAtWorkflowNodeParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countUnresolvedTaskRunsAtWorkflowNode, arg.WorkflowID, arg.NodeID)
 	var run_count int64
-	err := recordQueryError(ctx, row.Scan(&run_count), countUnresolvedTaskRunsAtWorkflowNode, arg.WorkflowID, arg.NodeID)
+	err := recordQueryError(ctx, row.Scan(&run_count), countUnresolvedTaskRunsAtWorkflowNode, 2)
 
 	return run_count, err
 }
@@ -942,7 +920,7 @@ WHERE group_id = ?1
 func (q *Queries) CountWorkflowNodesByGroup(ctx context.Context, groupID sql.NullString) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countWorkflowNodesByGroup, groupID)
 	var node_count int64
-	err := recordQueryError(ctx, row.Scan(&node_count), countWorkflowNodesByGroup, groupID)
+	err := recordQueryError(ctx, row.Scan(&node_count), countWorkflowNodesByGroup, 1)
 
 	return node_count, err
 }
@@ -956,7 +934,7 @@ WHERE task_id = CAST(?1 AS TEXT)
 func (q *Queries) CountWorkflowTaskAttentionCandidates(ctx context.Context, taskID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countWorkflowTaskAttentionCandidates, taskID)
 	var column_1 int64
-	err := recordQueryError(ctx, row.Scan(&column_1), countWorkflowTaskAttentionCandidates, taskID)
+	err := recordQueryError(ctx, row.Scan(&column_1), countWorkflowTaskAttentionCandidates, 1)
 
 	return column_1, err
 }
@@ -968,7 +946,7 @@ WHERE id = ?1
 
 func (q *Queries) DeleteProject(ctx context.Context, projectID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteProject, projectID)
-	err = recordQueryError(ctx, err, deleteProject, projectID)
+	err = recordQueryError(ctx, err, deleteProject, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -996,7 +974,7 @@ type DeleteProjectLabelRow struct {
 func (q *Queries) DeleteProjectLabel(ctx context.Context, arg DeleteProjectLabelParams) (DeleteProjectLabelRow, error) {
 	row := q.db.QueryRowContext(ctx, deleteProjectLabel, arg.ID, arg.ProjectID)
 	var i DeleteProjectLabelRow
-	err := recordQueryError(ctx, row.Scan(&i.ID, &i.ProjectID, &i.Name), deleteProjectLabel, arg.ID, arg.ProjectID)
+	err := recordQueryError(ctx, row.Scan(&i.ID, &i.ProjectID, &i.Name), deleteProjectLabel, 2)
 
 	return i, err
 }
@@ -1010,7 +988,7 @@ WHERE id IN (
 
 func (q *Queries) DeleteProjectTasks(ctx context.Context, projectID string) error {
 	_, err := q.db.ExecContext(ctx, deleteProjectTasks, projectID)
-	err = recordQueryError(ctx, err, deleteProjectTasks, projectID)
+	err = recordQueryError(ctx, err, deleteProjectTasks, 1)
 	return err
 }
 
@@ -1021,7 +999,7 @@ WHERE id = ?1
 
 func (q *Queries) DeleteProjectWorkflowLink(ctx context.Context, id string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteProjectWorkflowLink, id)
-	err = recordQueryError(ctx, err, deleteProjectWorkflowLink, id)
+	err = recordQueryError(ctx, err, deleteProjectWorkflowLink, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1048,7 +1026,7 @@ WHERE project_workflow_links.id = ?1
 
 func (q *Queries) DeleteProjectWorkflowLinkUnlessDefaultNeedsReplacement(ctx context.Context, id string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteProjectWorkflowLinkUnlessDefaultNeedsReplacement, id)
-	err = recordQueryError(ctx, err, deleteProjectWorkflowLinkUnlessDefaultNeedsReplacement, id)
+	err = recordQueryError(ctx, err, deleteProjectWorkflowLinkUnlessDefaultNeedsReplacement, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1062,7 +1040,7 @@ WHERE workflow_id = ?1
 
 func (q *Queries) DeleteProjectWorkflowLinksByWorkflowID(ctx context.Context, workflowID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteProjectWorkflowLinksByWorkflowID, workflowID)
-	err = recordQueryError(ctx, err, deleteProjectWorkflowLinksByWorkflowID, workflowID)
+	err = recordQueryError(ctx, err, deleteProjectWorkflowLinksByWorkflowID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1076,7 +1054,7 @@ WHERE id = ?1
 
 func (q *Queries) DeleteSessionRecordByID(ctx context.Context, sessionID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteSessionRecordByID, sessionID)
-	err = recordQueryError(ctx, err, deleteSessionRecordByID, sessionID)
+	err = recordQueryError(ctx, err, deleteSessionRecordByID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1090,7 +1068,7 @@ WHERE id = ?1
 
 func (q *Queries) DeleteTask(ctx context.Context, id string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteTask, id)
-	err = recordQueryError(ctx, err, deleteTask, id)
+	err = recordQueryError(ctx, err, deleteTask, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1104,7 +1082,7 @@ WHERE id = ?1
 
 func (q *Queries) DeleteTaskComment(ctx context.Context, id string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteTaskComment, id)
-	err = recordQueryError(ctx, err, deleteTaskComment, id)
+	err = recordQueryError(ctx, err, deleteTaskComment, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1118,7 +1096,7 @@ WHERE task_id = ?1
 
 func (q *Queries) DeleteTaskCommentsByTask(ctx context.Context, taskID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteTaskCommentsByTask, taskID)
-	err = recordQueryError(ctx, err, deleteTaskCommentsByTask, taskID)
+	err = recordQueryError(ctx, err, deleteTaskCommentsByTask, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1138,7 +1116,7 @@ type DeleteTaskLabelAssignmentParams struct {
 
 func (q *Queries) DeleteTaskLabelAssignment(ctx context.Context, arg DeleteTaskLabelAssignmentParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteTaskLabelAssignment, arg.TaskID, arg.LabelID)
-	err = recordQueryError(ctx, err, deleteTaskLabelAssignment, arg.TaskID, arg.LabelID)
+	err = recordQueryError(ctx, err, deleteTaskLabelAssignment, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -1152,7 +1130,7 @@ WHERE task_id = ?1
 
 func (q *Queries) DeleteTaskLabelAssignmentsByTask(ctx context.Context, taskID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteTaskLabelAssignmentsByTask, taskID)
-	err = recordQueryError(ctx, err, deleteTaskLabelAssignmentsByTask, taskID)
+	err = recordQueryError(ctx, err, deleteTaskLabelAssignmentsByTask, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1166,7 +1144,7 @@ WHERE task_id = ?1
 
 func (q *Queries) DeleteTaskNodePlacementsByTask(ctx context.Context, taskID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteTaskNodePlacementsByTask, taskID)
-	err = recordQueryError(ctx, err, deleteTaskNodePlacementsByTask, taskID)
+	err = recordQueryError(ctx, err, deleteTaskNodePlacementsByTask, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1180,7 +1158,7 @@ WHERE task_id = ?1
 
 func (q *Queries) DeleteTaskTransitionsByTask(ctx context.Context, taskID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteTaskTransitionsByTask, taskID)
-	err = recordQueryError(ctx, err, deleteTaskTransitionsByTask, taskID)
+	err = recordQueryError(ctx, err, deleteTaskTransitionsByTask, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1194,7 +1172,7 @@ WHERE id = ?1
 
 func (q *Queries) DeleteWorkflowByID(ctx context.Context, id string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteWorkflowByID, id)
-	err = recordQueryError(ctx, err, deleteWorkflowByID, id)
+	err = recordQueryError(ctx, err, deleteWorkflowByID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1208,7 +1186,7 @@ WHERE id = ?1
 
 func (q *Queries) DeleteWorkflowEdge(ctx context.Context, id string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteWorkflowEdge, id)
-	err = recordQueryError(ctx, err, deleteWorkflowEdge, id)
+	err = recordQueryError(ctx, err, deleteWorkflowEdge, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1222,7 +1200,7 @@ WHERE id = ?1
 
 func (q *Queries) DeleteWorkflowNode(ctx context.Context, id string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteWorkflowNode, id)
-	err = recordQueryError(ctx, err, deleteWorkflowNode, id)
+	err = recordQueryError(ctx, err, deleteWorkflowNode, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1242,7 +1220,7 @@ type DeleteWorkflowNodeGroupParams struct {
 
 func (q *Queries) DeleteWorkflowNodeGroup(ctx context.Context, arg DeleteWorkflowNodeGroupParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteWorkflowNodeGroup, arg.ID, arg.WorkflowID)
-	err = recordQueryError(ctx, err, deleteWorkflowNodeGroup, arg.ID, arg.WorkflowID)
+	err = recordQueryError(ctx, err, deleteWorkflowNodeGroup, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -1260,7 +1238,7 @@ WHERE task_id IN (
 
 func (q *Queries) DeleteWorkflowTaskCommentsByWorkflowID(ctx context.Context, workflowID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteWorkflowTaskCommentsByWorkflowID, workflowID)
-	err = recordQueryError(ctx, err, deleteWorkflowTaskCommentsByWorkflowID, workflowID)
+	err = recordQueryError(ctx, err, deleteWorkflowTaskCommentsByWorkflowID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1278,7 +1256,7 @@ WHERE task_id IN (
 
 func (q *Queries) DeleteWorkflowTaskNodePlacementsByWorkflowID(ctx context.Context, workflowID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteWorkflowTaskNodePlacementsByWorkflowID, workflowID)
-	err = recordQueryError(ctx, err, deleteWorkflowTaskNodePlacementsByWorkflowID, workflowID)
+	err = recordQueryError(ctx, err, deleteWorkflowTaskNodePlacementsByWorkflowID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1296,7 +1274,7 @@ WHERE task_id IN (
 
 func (q *Queries) DeleteWorkflowTaskTransitionsByWorkflowID(ctx context.Context, workflowID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteWorkflowTaskTransitionsByWorkflowID, workflowID)
-	err = recordQueryError(ctx, err, deleteWorkflowTaskTransitionsByWorkflowID, workflowID)
+	err = recordQueryError(ctx, err, deleteWorkflowTaskTransitionsByWorkflowID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1314,7 +1292,7 @@ WHERE id IN (
 
 func (q *Queries) DeleteWorkflowTasksByWorkflowID(ctx context.Context, workflowID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteWorkflowTasksByWorkflowID, workflowID)
-	err = recordQueryError(ctx, err, deleteWorkflowTasksByWorkflowID, workflowID)
+	err = recordQueryError(ctx, err, deleteWorkflowTasksByWorkflowID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1328,7 +1306,7 @@ WHERE id = ?1
 
 func (q *Queries) DeleteWorkflowTransitionGroupByID(ctx context.Context, id string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteWorkflowTransitionGroupByID, id)
-	err = recordQueryError(ctx, err, deleteWorkflowTransitionGroupByID, id)
+	err = recordQueryError(ctx, err, deleteWorkflowTransitionGroupByID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1348,7 +1326,7 @@ type DeleteWorkspaceBindingByIDParams struct {
 
 func (q *Queries) DeleteWorkspaceBindingByID(ctx context.Context, arg DeleteWorkspaceBindingByIDParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteWorkspaceBindingByID, arg.ProjectID, arg.WorkspaceID)
-	err = recordQueryError(ctx, err, deleteWorkspaceBindingByID, arg.ProjectID, arg.WorkspaceID)
+	err = recordQueryError(ctx, err, deleteWorkspaceBindingByID, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -1362,7 +1340,7 @@ WHERE id = ?1
 
 func (q *Queries) DeleteWorktreeByID(ctx context.Context, id string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteWorktreeByID, id)
-	err = recordQueryError(ctx, err, deleteWorktreeByID, id)
+	err = recordQueryError(ctx, err, deleteWorktreeByID, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -1398,7 +1376,7 @@ func (q *Queries) GetActiveProjectWorkflowLinkByWorkflow(ctx context.Context, ar
 		&i.IsDefault,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
-	), getActiveProjectWorkflowLinkByWorkflow, arg.ProjectID, arg.WorkflowID)
+	), getActiveProjectWorkflowLinkByWorkflow, 2)
 
 	return i, err
 }
@@ -1435,7 +1413,7 @@ func (q *Queries) GetActiveStartPlacementForTask(ctx context.Context, taskID str
 		&i.ParallelBranchEdgeID,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
-	), getActiveStartPlacementForTask, taskID)
+	), getActiveStartPlacementForTask, 1)
 
 	return i, err
 }
@@ -1450,7 +1428,7 @@ LIMIT 1
 func (q *Queries) GetContextSourceBatchScope(ctx context.Context, placementID string) (sql.NullString, error) {
 	row := q.db.QueryRowContext(ctx, getContextSourceBatchScope, placementID)
 	var parallel_batch_transition_id sql.NullString
-	err := recordQueryError(ctx, row.Scan(&parallel_batch_transition_id), getContextSourceBatchScope, placementID)
+	err := recordQueryError(ctx, row.Scan(&parallel_batch_transition_id), getContextSourceBatchScope, 1)
 
 	return parallel_batch_transition_id, err
 }
@@ -1479,7 +1457,7 @@ func (q *Queries) GetDefaultProjectWorkflowLink(ctx context.Context, projectID s
 		&i.IsDefault,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
-	), getDefaultProjectWorkflowLink, projectID)
+	), getDefaultProjectWorkflowLink, 1)
 
 	return i, err
 }
@@ -1502,7 +1480,7 @@ type GetExistingJoinPlacementParams struct {
 func (q *Queries) GetExistingJoinPlacement(ctx context.Context, arg GetExistingJoinPlacementParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, getExistingJoinPlacement, arg.TaskID, arg.NodeID, arg.BatchID)
 	var id string
-	err := recordQueryError(ctx, row.Scan(&id), getExistingJoinPlacement, arg.TaskID, arg.NodeID, arg.BatchID)
+	err := recordQueryError(ctx, row.Scan(&id), getExistingJoinPlacement, 3)
 
 	return id, err
 }
@@ -1528,7 +1506,7 @@ type GetLatestCompletedContextSourceRunParams struct {
 func (q *Queries) GetLatestCompletedContextSourceRun(ctx context.Context, arg GetLatestCompletedContextSourceRunParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, getLatestCompletedContextSourceRun, arg.TaskID, arg.NodeID, arg.BeforeUnixMs)
 	var id string
-	err := recordQueryError(ctx, row.Scan(&id), getLatestCompletedContextSourceRun, arg.TaskID, arg.NodeID, arg.BeforeUnixMs)
+	err := recordQueryError(ctx, row.Scan(&id), getLatestCompletedContextSourceRun, 3)
 
 	return id, err
 }
@@ -1561,11 +1539,7 @@ func (q *Queries) GetLatestCompletedContextSourceRunInBatch(ctx context.Context,
 		arg.BeforeUnixMs,
 	)
 	var id string
-	err := recordQueryError(ctx, row.Scan(&id), getLatestCompletedContextSourceRunInBatch,
-		arg.TaskID,
-		arg.NodeID,
-		arg.BatchID,
-		arg.BeforeUnixMs)
+	err := recordQueryError(ctx, row.Scan(&id), getLatestCompletedContextSourceRunInBatch, 4)
 
 	return id, err
 }
@@ -1586,7 +1560,7 @@ type GetLatestRunForPlacementRow struct {
 func (q *Queries) GetLatestRunForPlacement(ctx context.Context, placementID string) (GetLatestRunForPlacementRow, error) {
 	row := q.db.QueryRowContext(ctx, getLatestRunForPlacement, placementID)
 	var i GetLatestRunForPlacementRow
-	err := recordQueryError(ctx, row.Scan(&i.ID, &i.SessionID), getLatestRunForPlacement, placementID)
+	err := recordQueryError(ctx, row.Scan(&i.ID, &i.SessionID), getLatestRunForPlacement, 1)
 
 	return i, err
 }
@@ -1612,7 +1586,7 @@ type GetLatestTransitionOutputValuesParams struct {
 func (q *Queries) GetLatestTransitionOutputValues(ctx context.Context, arg GetLatestTransitionOutputValuesParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, getLatestTransitionOutputValues, arg.TaskID, arg.TransitionID, arg.BeforeUnixMs)
 	var output_values_json string
-	err := recordQueryError(ctx, row.Scan(&output_values_json), getLatestTransitionOutputValues, arg.TaskID, arg.TransitionID, arg.BeforeUnixMs)
+	err := recordQueryError(ctx, row.Scan(&output_values_json), getLatestTransitionOutputValues, 3)
 
 	return output_values_json, err
 }
@@ -1646,11 +1620,7 @@ func (q *Queries) GetLatestTransitionOutputValuesInBatch(ctx context.Context, ar
 		arg.BeforeUnixMs,
 	)
 	var output_values_json string
-	err := recordQueryError(ctx, row.Scan(&output_values_json), getLatestTransitionOutputValuesInBatch,
-		arg.TaskID,
-		arg.TransitionID,
-		arg.BatchID,
-		arg.BeforeUnixMs)
+	err := recordQueryError(ctx, row.Scan(&output_values_json), getLatestTransitionOutputValuesInBatch, 4)
 
 	return output_values_json, err
 }
@@ -1715,7 +1685,7 @@ func (q *Queries) GetManualMovePreviousTransition(ctx context.Context, arg GetMa
 		&i.InputBindingsJson,
 		&i.OutputRequirementsJson,
 		&i.MetadataJson,
-	), getManualMovePreviousTransition, arg.SourcePlacementID, arg.TargetNodeID)
+	), getManualMovePreviousTransition, 2)
 
 	return i, err
 }
@@ -1781,7 +1751,7 @@ type GetProjectDeleteBlockerCountsRow struct {
 func (q *Queries) GetProjectDeleteBlockerCounts(ctx context.Context, deleteProjectID string) (GetProjectDeleteBlockerCountsRow, error) {
 	row := q.db.QueryRowContext(ctx, getProjectDeleteBlockerCounts, deleteProjectID)
 	var i GetProjectDeleteBlockerCountsRow
-	err := recordQueryError(ctx, row.Scan(&i.NonTerminalTasks, &i.ActiveRuns, &i.RunnableRuns), getProjectDeleteBlockerCounts, deleteProjectID)
+	err := recordQueryError(ctx, row.Scan(&i.NonTerminalTasks, &i.ActiveRuns, &i.RunnableRuns), getProjectDeleteBlockerCounts, 1)
 
 	return i, err
 }
@@ -1796,7 +1766,7 @@ LIMIT 1
 func (q *Queries) GetProjectDisplayName(ctx context.Context, projectID string) (string, error) {
 	row := q.db.QueryRowContext(ctx, getProjectDisplayName, projectID)
 	var display_name string
-	err := recordQueryError(ctx, row.Scan(&display_name), getProjectDisplayName, projectID)
+	err := recordQueryError(ctx, row.Scan(&display_name), getProjectDisplayName, 1)
 
 	return display_name, err
 }
@@ -1832,7 +1802,7 @@ func (q *Queries) GetProjectKeyState(ctx context.Context, projectID string) (Get
 		&i.ProjectKey,
 		&i.NextTaskSeq,
 		&i.TaskCount,
-	), getProjectKeyState, projectID)
+	), getProjectKeyState, 1)
 
 	return i, err
 }
@@ -1847,7 +1817,7 @@ LIMIT 1
 func (q *Queries) GetProjectPrimaryWorkspaceID(ctx context.Context, projectID string) (string, error) {
 	row := q.db.QueryRowContext(ctx, getProjectPrimaryWorkspaceID, projectID)
 	var primary_workspace_id string
-	err := recordQueryError(ctx, row.Scan(&primary_workspace_id), getProjectPrimaryWorkspaceID, projectID)
+	err := recordQueryError(ctx, row.Scan(&primary_workspace_id), getProjectPrimaryWorkspaceID, 1)
 
 	return primary_workspace_id, err
 }
@@ -1887,7 +1857,7 @@ func (q *Queries) GetProjectSummary(ctx context.Context, projectID string) (GetP
 		&i.RootPath,
 		&i.SessionCount,
 		&i.LatestActivityUnixMs,
-	), getProjectSummary, projectID)
+	), getProjectSummary, 1)
 
 	return i, err
 }
@@ -1915,7 +1885,7 @@ func (q *Queries) GetProjectWorkflowLink(ctx context.Context, id string) (Projec
 		&i.IsDefault,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
-	), getProjectWorkflowLink, id)
+	), getProjectWorkflowLink, 1)
 
 	return i, err
 }
@@ -1936,7 +1906,7 @@ type GetProjectWorkflowUnlinkStateRow struct {
 func (q *Queries) GetProjectWorkflowUnlinkState(ctx context.Context, projectID string) (GetProjectWorkflowUnlinkStateRow, error) {
 	row := q.db.QueryRowContext(ctx, getProjectWorkflowUnlinkState, projectID)
 	var i GetProjectWorkflowUnlinkStateRow
-	err := recordQueryError(ctx, row.Scan(&i.DefaultProjectWorkflowLinkID, &i.ActiveLinkCount), getProjectWorkflowUnlinkState, projectID)
+	err := recordQueryError(ctx, row.Scan(&i.DefaultProjectWorkflowLinkID, &i.ActiveLinkCount), getProjectWorkflowUnlinkState, 1)
 
 	return i, err
 }
@@ -1963,7 +1933,7 @@ type GetRunInputValuesRow struct {
 func (q *Queries) GetRunInputValues(ctx context.Context, placementID string) (GetRunInputValuesRow, error) {
 	row := q.db.QueryRowContext(ctx, getRunInputValues, placementID)
 	var i GetRunInputValuesRow
-	err := recordQueryError(ctx, row.Scan(&i.Commentary, &i.OutputValuesJson, &i.InputBindingsJson), getRunInputValues, placementID)
+	err := recordQueryError(ctx, row.Scan(&i.Commentary, &i.OutputValuesJson, &i.InputBindingsJson), getRunInputValues, 1)
 
 	return i, err
 }
@@ -1997,7 +1967,7 @@ func (q *Queries) GetRunTransitionContext(ctx context.Context, placementID strin
 		&i.SourceRunID,
 		&i.SourceNodeDisplayName,
 		&i.TargetNodeDisplayName,
-	), getRunTransitionContext, placementID)
+	), getRunTransitionContext, 1)
 
 	return i, err
 }
@@ -2019,7 +1989,7 @@ type GetRunWaitingAskEventIdentityRow struct {
 func (q *Queries) GetRunWaitingAskEventIdentity(ctx context.Context, runID string) (GetRunWaitingAskEventIdentityRow, error) {
 	row := q.db.QueryRowContext(ctx, getRunWaitingAskEventIdentity, runID)
 	var i GetRunWaitingAskEventIdentityRow
-	err := recordQueryError(ctx, row.Scan(&i.ProjectID, &i.WorkflowID, &i.TaskID), getRunWaitingAskEventIdentity, runID)
+	err := recordQueryError(ctx, row.Scan(&i.ProjectID, &i.WorkflowID, &i.TaskID), getRunWaitingAskEventIdentity, 1)
 
 	return i, err
 }
@@ -2064,7 +2034,7 @@ func (q *Queries) GetSessionExecutionTargetByID(ctx context.Context, sessionID s
 		&i.WorktreeID,
 		&i.WorktreeRoot,
 		&i.CwdRelpath,
-	), getSessionExecutionTargetByID, sessionID)
+	), getSessionExecutionTargetByID, 1)
 
 	return i, err
 }
@@ -2096,7 +2066,7 @@ func (q *Queries) GetSessionPromptHistoryEntryBySourceID(ctx context.Context, ar
 		&i.SourceID,
 		&i.Text,
 		&i.CreatedAtUnixMs,
-	), getSessionPromptHistoryEntryBySourceID, arg.SessionID, arg.SourceID)
+	), getSessionPromptHistoryEntryBySourceID, 2)
 
 	return i, err
 }
@@ -2167,7 +2137,7 @@ func (q *Queries) GetSessionRecordByID(ctx context.Context, sessionID string) (G
 		&i.UsageStateJson,
 		&i.MetadataJson,
 		&i.WorkspaceRoot,
-	), getSessionRecordByID, sessionID)
+	), getSessionRecordByID, 1)
 
 	return i, err
 }
@@ -2209,7 +2179,7 @@ func (q *Queries) GetSessionWorkspaceRetargetStateByID(ctx context.Context, sess
 		&i.ProjectKey,
 		&i.ArtifactRelpath,
 		&i.HasWorkflowSession,
-	), getSessionWorkspaceRetargetStateByID, sessionID)
+	), getSessionWorkspaceRetargetStateByID, 1)
 
 	return i, err
 }
@@ -2269,7 +2239,7 @@ func (q *Queries) GetTask(ctx context.Context, id string) (TaskRecord, error) {
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
 		&i.MetadataJson,
-	), getTask, id)
+	), getTask, 1)
 
 	return i, err
 }
@@ -2335,7 +2305,7 @@ func (q *Queries) GetTaskByProjectShortID(ctx context.Context, arg GetTaskByProj
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
 		&i.MetadataJson,
-	), getTaskByProjectShortID, arg.ProjectID, arg.ShortID)
+	), getTaskByProjectShortID, 2)
 
 	return i, err
 }
@@ -2357,7 +2327,7 @@ type GetTaskIdentityForCommentRow struct {
 func (q *Queries) GetTaskIdentityForComment(ctx context.Context, commentID string) (GetTaskIdentityForCommentRow, error) {
 	row := q.db.QueryRowContext(ctx, getTaskIdentityForComment, commentID)
 	var i GetTaskIdentityForCommentRow
-	err := recordQueryError(ctx, row.Scan(&i.TaskID, &i.ProjectID, &i.WorkflowID), getTaskIdentityForComment, commentID)
+	err := recordQueryError(ctx, row.Scan(&i.TaskID, &i.ProjectID, &i.WorkflowID), getTaskIdentityForComment, 1)
 
 	return i, err
 }
@@ -2379,7 +2349,7 @@ type GetTaskIdentityForTransitionRow struct {
 func (q *Queries) GetTaskIdentityForTransition(ctx context.Context, transitionID string) (GetTaskIdentityForTransitionRow, error) {
 	row := q.db.QueryRowContext(ctx, getTaskIdentityForTransition, transitionID)
 	var i GetTaskIdentityForTransitionRow
-	err := recordQueryError(ctx, row.Scan(&i.ID, &i.ProjectID, &i.WorkflowID), getTaskIdentityForTransition, transitionID)
+	err := recordQueryError(ctx, row.Scan(&i.ID, &i.ProjectID, &i.WorkflowID), getTaskIdentityForTransition, 1)
 
 	return i, err
 }
@@ -2399,7 +2369,7 @@ type GetTaskProjectWorkflowIDsRow struct {
 func (q *Queries) GetTaskProjectWorkflowIDs(ctx context.Context, taskID string) (GetTaskProjectWorkflowIDsRow, error) {
 	row := q.db.QueryRowContext(ctx, getTaskProjectWorkflowIDs, taskID)
 	var i GetTaskProjectWorkflowIDsRow
-	err := recordQueryError(ctx, row.Scan(&i.ProjectID, &i.WorkflowID), getTaskProjectWorkflowIDs, taskID)
+	err := recordQueryError(ctx, row.Scan(&i.ProjectID, &i.WorkflowID), getTaskProjectWorkflowIDs, 1)
 
 	return i, err
 }
@@ -2455,7 +2425,7 @@ func (q *Queries) GetTaskRun(ctx context.Context, id string) (TaskRunRecord, err
 		&i.InvalidCompletionCount,
 		&i.RunStartSnapshotJson,
 		&i.MetadataJson,
-	), getTaskRun, id)
+	), getTaskRun, 1)
 
 	return i, err
 }
@@ -2470,7 +2440,7 @@ LIMIT 1
 func (q *Queries) GetTaskTransitionState(ctx context.Context, transitionID string) (string, error) {
 	row := q.db.QueryRowContext(ctx, getTaskTransitionState, transitionID)
 	var state string
-	err := recordQueryError(ctx, row.Scan(&state), getTaskTransitionState, transitionID)
+	err := recordQueryError(ctx, row.Scan(&state), getTaskTransitionState, 1)
 
 	return state, err
 }
@@ -2499,7 +2469,7 @@ func (q *Queries) GetTransitionApprovalState(ctx context.Context, transitionID s
 		&i.State,
 		&i.WorkflowRevisionSeen,
 		&i.CreatedAtUnixMs,
-	), getTransitionApprovalState, transitionID)
+	), getTransitionApprovalState, 1)
 
 	return i, err
 }
@@ -2531,7 +2501,7 @@ func (q *Queries) GetWorkflow(ctx context.Context, id string) (Workflow, error) 
 		&i.ExecutionTargetCustomRef,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
-	), getWorkflow, id)
+	), getWorkflow, 1)
 
 	return i, err
 }
@@ -2576,7 +2546,7 @@ func (q *Queries) GetWorkflowApprovalAttentionCandidateByTransitionID(ctx contex
 		&i.InterruptionReason,
 		&i.InterruptionDetailJson,
 		&i.OccurredAtUnixMs,
-	), getWorkflowApprovalAttentionCandidateByTransitionID, taskTransitionID)
+	), getWorkflowApprovalAttentionCandidateByTransitionID, 1)
 
 	return i, err
 }
@@ -2671,7 +2641,7 @@ func (q *Queries) GetWorkflowDeleteImpact(ctx context.Context, workflowID string
 		&i.ActiveRunCount,
 		&i.RunnableRunCount,
 		&i.BlockedTaskCount,
-	), getWorkflowDeleteImpact, workflowID)
+	), getWorkflowDeleteImpact, 1)
 
 	return i, err
 }
@@ -2734,7 +2704,7 @@ func (q *Queries) GetWorkflowEdge(ctx context.Context, id string) (GetWorkflowEd
 		&i.InputBindingsJson,
 		&i.OutputRequirementsJson,
 		&i.SortOrder,
-	), getWorkflowEdge, id)
+	), getWorkflowEdge, 1)
 
 	return i, err
 }
@@ -2811,7 +2781,7 @@ func (q *Queries) GetWorkflowGraphActiveWorkPolicyImpact(ctx context.Context, wo
 		&i.PendingApprovalCount,
 		&i.ActiveRunCount,
 		&i.RunnableRunCount,
-	), getWorkflowGraphActiveWorkPolicyImpact, workflowID)
+	), getWorkflowGraphActiveWorkPolicyImpact, 1)
 
 	return i, err
 }
@@ -2856,7 +2826,7 @@ func (q *Queries) GetWorkflowInterruptedRunAttentionCandidateByRunID(ctx context
 		&i.InterruptionReason,
 		&i.InterruptionDetailJson,
 		&i.OccurredAtUnixMs,
-	), getWorkflowInterruptedRunAttentionCandidateByRunID, runID)
+	), getWorkflowInterruptedRunAttentionCandidateByRunID, 1)
 
 	return i, err
 }
@@ -2917,7 +2887,7 @@ func (q *Queries) GetWorkflowNode(ctx context.Context, id string) (GetWorkflowNo
 		&i.OutputFieldsJson,
 		&i.GroupID,
 		&i.SortOrder,
-	), getWorkflowNode, id)
+	), getWorkflowNode, 1)
 
 	return i, err
 }
@@ -2943,7 +2913,7 @@ func (q *Queries) GetWorkflowNodeGroupByID(ctx context.Context, id string) (Work
 		&i.GroupKey,
 		&i.DisplayName,
 		&i.SortOrder,
-	), getWorkflowNodeGroupByID, id)
+	), getWorkflowNodeGroupByID, 1)
 
 	return i, err
 }
@@ -2975,7 +2945,7 @@ func (q *Queries) GetWorkflowNodeGroupByKey(ctx context.Context, arg GetWorkflow
 		&i.GroupKey,
 		&i.DisplayName,
 		&i.SortOrder,
-	), getWorkflowNodeGroupByKey, arg.WorkflowID, arg.GroupKey)
+	), getWorkflowNodeGroupByKey, 2)
 
 	return i, err
 }
@@ -3005,7 +2975,7 @@ func (q *Queries) GetWorkflowTaskStatusRecord(ctx context.Context, taskID string
 		&i.NodeIdsJson,
 		&i.RunIdsJson,
 		&i.AttentionTypesJson,
-	), getWorkflowTaskStatusRecord, taskID)
+	), getWorkflowTaskStatusRecord, 1)
 
 	return i, err
 }
@@ -3021,7 +2991,7 @@ LIMIT 1
 func (q *Queries) GetWorkflowTransitionGroupWorkflowID(ctx context.Context, id string) (string, error) {
 	row := q.db.QueryRowContext(ctx, getWorkflowTransitionGroupWorkflowID, id)
 	var workflow_id string
-	err := recordQueryError(ctx, row.Scan(&workflow_id), getWorkflowTransitionGroupWorkflowID, id)
+	err := recordQueryError(ctx, row.Scan(&workflow_id), getWorkflowTransitionGroupWorkflowID, 1)
 
 	return workflow_id, err
 }
@@ -3056,7 +3026,7 @@ func (q *Queries) GetWorkspaceBindingByID(ctx context.Context, workspaceID strin
 		&i.ProjectKey,
 		&i.WorkspaceID,
 		&i.WorkspaceRoot,
-	), getWorkspaceBindingByID, workspaceID)
+	), getWorkspaceBindingByID, 1)
 
 	return i, err
 }
@@ -3097,7 +3067,7 @@ func (q *Queries) GetWorkspaceBindingByProjectAndCanonicalRoot(ctx context.Conte
 		&i.ProjectKey,
 		&i.WorkspaceID,
 		&i.WorkspaceRoot,
-	), getWorkspaceBindingByProjectAndCanonicalRoot, arg.ProjectID, arg.CanonicalRootPath)
+	), getWorkspaceBindingByProjectAndCanonicalRoot, 2)
 
 	return i, err
 }
@@ -3125,7 +3095,7 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 		&i.GitMetadataJson,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
-	), getWorkspaceByID, id)
+	), getWorkspaceByID, 1)
 
 	return i, err
 }
@@ -3178,7 +3148,7 @@ func (q *Queries) GetWorktreeByCanonicalRoot(ctx context.Context, canonicalRootP
 		&i.CreationBaseCommitOid,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
-	), getWorktreeByCanonicalRoot, canonicalRootPath)
+	), getWorktreeByCanonicalRoot, 1)
 
 	return i, err
 }
@@ -3231,7 +3201,7 @@ func (q *Queries) GetWorktreeByID(ctx context.Context, id string) (GetWorktreeBy
 		&i.CreationBaseCommitOid,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
-	), getWorktreeByID, id)
+	), getWorktreeByID, 1)
 
 	return i, err
 }
@@ -3253,7 +3223,7 @@ type IncrementWorkflowVersionParams struct {
 func (q *Queries) IncrementWorkflowVersion(ctx context.Context, arg IncrementWorkflowVersionParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, incrementWorkflowVersion, arg.UpdatedAtUnixMs, arg.ID)
 	var version int64
-	err := recordQueryError(ctx, row.Scan(&version), incrementWorkflowVersion, arg.UpdatedAtUnixMs, arg.ID)
+	err := recordQueryError(ctx, row.Scan(&version), incrementWorkflowVersion, 2)
 
 	return version, err
 }
@@ -3306,13 +3276,7 @@ func (q *Queries) InsertProjectLabel(ctx context.Context, arg InsertProjectLabel
 		arg.CatalogLimit,
 	)
 	var i InsertProjectLabelRow
-	err := recordQueryError(ctx, row.Scan(&i.ID, &i.ProjectID, &i.Name), insertProjectLabel,
-		arg.ID,
-		arg.ProjectID,
-		arg.Name,
-		arg.CreatedAtUnixMs,
-		arg.UpdatedAtUnixMs,
-		arg.CatalogLimit)
+	err := recordQueryError(ctx, row.Scan(&i.ID, &i.ProjectID, &i.Name), insertProjectLabel, 6)
 
 	return i, err
 }
@@ -3349,12 +3313,7 @@ func (q *Queries) InsertProjectWorkflowLink(ctx context.Context, arg InsertProje
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, insertProjectWorkflowLink,
-		arg.ID,
-		arg.ProjectID,
-		arg.WorkflowID,
-		arg.CreatedAtUnixMs,
-		arg.UpdatedAtUnixMs)
+	err = recordQueryError(ctx, err, insertProjectWorkflowLink, 5)
 
 	return err
 }
@@ -3388,11 +3347,7 @@ func (q *Queries) InsertSessionPromptHistoryEntry(ctx context.Context, arg Inser
 		arg.Text,
 		arg.CreatedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, insertSessionPromptHistoryEntry,
-		arg.SessionID,
-		arg.SourceID,
-		arg.Text,
-		arg.CreatedAtUnixMs)
+	err = recordQueryError(ctx, err, insertSessionPromptHistoryEntry, 4)
 
 	if err != nil {
 		return 0, err
@@ -3468,20 +3423,7 @@ func (q *Queries) InsertTask(ctx context.Context, arg InsertTaskParams) error {
 		arg.UpdatedAtUnixMs,
 		arg.MetadataJson,
 	)
-	err = recordQueryError(ctx, err, insertTask,
-		arg.ID,
-		arg.ProjectWorkflowLinkID,
-		arg.WorkflowRevisionSeen,
-		arg.TaskSeq,
-		arg.ShortID,
-		arg.Title,
-		arg.Body,
-		arg.SourceUrl,
-		arg.SourceWorkspaceID,
-		arg.ManagedWorktreeID,
-		arg.CreatedAtUnixMs,
-		arg.UpdatedAtUnixMs,
-		arg.MetadataJson)
+	err = recordQueryError(ctx, err, insertTask, 13)
 
 	return err
 }
@@ -3526,14 +3468,7 @@ func (q *Queries) InsertTaskComment(ctx context.Context, arg InsertTaskCommentPa
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, insertTaskComment,
-		arg.ID,
-		arg.TaskID,
-		arg.Body,
-		arg.AuthorKind,
-		arg.AuthorID,
-		arg.CreatedAtUnixMs,
-		arg.UpdatedAtUnixMs)
+	err = recordQueryError(ctx, err, insertTaskComment, 7)
 
 	return err
 }
@@ -3551,7 +3486,7 @@ type InsertTaskLabelAssignmentParams struct {
 
 func (q *Queries) InsertTaskLabelAssignment(ctx context.Context, arg InsertTaskLabelAssignmentParams) error {
 	_, err := q.db.ExecContext(ctx, insertTaskLabelAssignment, arg.TaskID, arg.LabelID)
-	err = recordQueryError(ctx, err, insertTaskLabelAssignment, arg.TaskID, arg.LabelID)
+	err = recordQueryError(ctx, err, insertTaskLabelAssignment, 2)
 	return err
 }
 
@@ -3599,15 +3534,7 @@ func (q *Queries) InsertTaskNodePlacement(ctx context.Context, arg InsertTaskNod
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, insertTaskNodePlacement,
-		arg.ID,
-		arg.TaskID,
-		arg.NodeID,
-		arg.State,
-		arg.ParallelBatchTransitionID,
-		arg.ParallelBranchEdgeID,
-		arg.CreatedAtUnixMs,
-		arg.UpdatedAtUnixMs)
+	err = recordQueryError(ctx, err, insertTaskNodePlacement, 8)
 
 	return err
 }
@@ -3692,24 +3619,7 @@ func (q *Queries) InsertTaskRun(ctx context.Context, arg InsertTaskRunParams) er
 		arg.RunStartSnapshotJson,
 		arg.MetadataJson,
 	)
-	err = recordQueryError(ctx, err, insertTaskRun,
-		arg.ID,
-		arg.PlacementID,
-		arg.SessionID,
-		arg.RunGeneration,
-		arg.WorkflowRevisionSeen,
-		arg.AutomationRequestedAtUnixMs,
-		arg.CreatedAtUnixMs,
-		arg.UpdatedAtUnixMs,
-		arg.StartedAtUnixMs,
-		arg.CompletedAtUnixMs,
-		arg.InterruptedAtUnixMs,
-		arg.InterruptionReason,
-		arg.InterruptionDetailJson,
-		arg.WaitingAskID,
-		arg.InvalidCompletionCount,
-		arg.RunStartSnapshotJson,
-		arg.MetadataJson)
+	err = recordQueryError(ctx, err, insertTaskRun, 17)
 
 	return err
 }
@@ -3786,22 +3696,7 @@ func (q *Queries) InsertTaskTransition(ctx context.Context, arg InsertTaskTransi
 		arg.CreatedAtUnixMs,
 		arg.AppliedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, insertTaskTransition,
-		arg.ID,
-		arg.TaskID,
-		arg.SourceRunID,
-		arg.SourcePlacementID,
-		arg.SourceNodeKey,
-		arg.SourceNodeDisplayName,
-		arg.TransitionID,
-		arg.TransitionDisplayName,
-		arg.WorkflowRevisionSeen,
-		arg.Actor,
-		arg.State,
-		arg.Commentary,
-		arg.OutputValuesJson,
-		arg.CreatedAtUnixMs,
-		arg.AppliedAtUnixMs)
+	err = recordQueryError(ctx, err, insertTaskTransition, 15)
 
 	return err
 }
@@ -3878,22 +3773,7 @@ func (q *Queries) InsertTaskTransitionEdge(ctx context.Context, arg InsertTaskTr
 		arg.OutputRequirementsJson,
 		arg.MetadataJson,
 	)
-	err = recordQueryError(ctx, err, insertTaskTransitionEdge,
-		arg.ID,
-		arg.TaskTransitionID,
-		arg.WorkflowEdgeID,
-		arg.EdgeKey,
-		arg.TargetNodeID,
-		arg.TargetNodeKey,
-		arg.TargetNodeDisplayName,
-		arg.TargetNodeKind,
-		arg.TargetPlacementID,
-		arg.State,
-		arg.ContextMode,
-		arg.RequiresApproval,
-		arg.InputBindingsJson,
-		arg.OutputRequirementsJson,
-		arg.MetadataJson)
+	err = recordQueryError(ctx, err, insertTaskTransitionEdge, 15)
 
 	return err
 }
@@ -3942,15 +3822,7 @@ func (q *Queries) InsertWorkflow(ctx context.Context, arg InsertWorkflowParams) 
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, insertWorkflow,
-		arg.ID,
-		arg.Name,
-		arg.Description,
-		arg.Version,
-		arg.ExecutionTargetPolicy,
-		arg.ExecutionTargetCustomRef,
-		arg.CreatedAtUnixMs,
-		arg.UpdatedAtUnixMs)
+	err = recordQueryError(ctx, err, insertWorkflow, 8)
 
 	return err
 }
@@ -4019,20 +3891,7 @@ func (q *Queries) InsertWorkflowEdge(ctx context.Context, arg InsertWorkflowEdge
 		arg.OutputRequirementsJson,
 		arg.SortOrder,
 	)
-	err = recordQueryError(ctx, err, insertWorkflowEdge,
-		arg.ID,
-		arg.TransitionGroupID,
-		arg.EdgeKey,
-		arg.TargetNodeID,
-		arg.RequiresApproval,
-		arg.ContextMode,
-		arg.ContextSourceKind,
-		arg.ContextSourceNodeKey,
-		arg.PromptTemplate,
-		arg.ParametersJson,
-		arg.InputBindingsJson,
-		arg.OutputRequirementsJson,
-		arg.SortOrder)
+	err = recordQueryError(ctx, err, insertWorkflowEdge, 13)
 
 	return err
 }
@@ -4105,21 +3964,7 @@ func (q *Queries) InsertWorkflowNode(ctx context.Context, arg InsertWorkflowNode
 		arg.GroupID,
 		arg.SortOrder,
 	)
-	err = recordQueryError(ctx, err, insertWorkflowNode,
-		arg.ID,
-		arg.WorkflowID,
-		arg.NodeKey,
-		arg.Kind,
-		arg.DisplayName,
-		arg.SubagentRole,
-		arg.PromptTemplate,
-		arg.CompletionMode,
-		arg.ScriptPath,
-		arg.InputFieldsJson,
-		arg.JoinInputProvidersJson,
-		arg.OutputFieldsJson,
-		arg.GroupID,
-		arg.SortOrder)
+	err = recordQueryError(ctx, err, insertWorkflowNode, 14)
 
 	return err
 }
@@ -4156,12 +4001,7 @@ func (q *Queries) InsertWorkflowNodeGroup(ctx context.Context, arg InsertWorkflo
 		arg.DisplayName,
 		arg.SortOrder,
 	)
-	err = recordQueryError(ctx, err, insertWorkflowNodeGroup,
-		arg.ID,
-		arg.WorkflowID,
-		arg.GroupKey,
-		arg.DisplayName,
-		arg.SortOrder)
+	err = recordQueryError(ctx, err, insertWorkflowNodeGroup, 5)
 
 	return err
 }
@@ -4202,13 +4042,7 @@ func (q *Queries) InsertWorkflowTransitionGroup(ctx context.Context, arg InsertW
 		arg.Description,
 		arg.SortOrder,
 	)
-	err = recordQueryError(ctx, err, insertWorkflowTransitionGroup,
-		arg.ID,
-		arg.SourceNodeID,
-		arg.TransitionID,
-		arg.DisplayName,
-		arg.Description,
-		arg.SortOrder)
+	err = recordQueryError(ctx, err, insertWorkflowTransitionGroup, 6)
 
 	return err
 }
@@ -4250,13 +4084,7 @@ func (q *Queries) InsertWorkspaceBinding(ctx context.Context, arg InsertWorkspac
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, insertWorkspaceBinding,
-		arg.ID,
-		arg.ProjectID,
-		arg.CanonicalRootPath,
-		arg.GitMetadataJson,
-		arg.CreatedAtUnixMs,
-		arg.UpdatedAtUnixMs)
+	err = recordQueryError(ctx, err, insertWorkspaceBinding, 6)
 
 	if err != nil {
 		return 0, err
@@ -4298,12 +4126,7 @@ func (q *Queries) InterruptActiveTaskRuns(ctx context.Context, arg InterruptActi
 		arg.InterruptionDetailJson,
 		arg.TaskID,
 	)
-	err = recordQueryError(ctx, err, interruptActiveTaskRuns,
-		arg.UpdatedAtUnixMs,
-		arg.InterruptedAtUnixMs,
-		arg.InterruptionReason,
-		arg.InterruptionDetailJson,
-		arg.TaskID)
+	err = recordQueryError(ctx, err, interruptActiveTaskRuns, 5)
 
 	if err != nil {
 		return 0, err
@@ -4332,7 +4155,7 @@ type InterruptManualMoveSourceRunParams struct {
 
 func (q *Queries) InterruptManualMoveSourceRun(ctx context.Context, arg InterruptManualMoveSourceRunParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, interruptManualMoveSourceRun, arg.UpdatedAtUnixMs, arg.InterruptedAtUnixMs, arg.RunID)
-	err = recordQueryError(ctx, err, interruptManualMoveSourceRun, arg.UpdatedAtUnixMs, arg.InterruptedAtUnixMs, arg.RunID)
+	err = recordQueryError(ctx, err, interruptManualMoveSourceRun, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -4371,13 +4194,7 @@ func (q *Queries) InterruptRunGeneration(ctx context.Context, arg InterruptRunGe
 		arg.RunID,
 		arg.RunGeneration,
 	)
-	err = recordQueryError(ctx, err, interruptRunGeneration,
-		arg.UpdatedAtUnixMs,
-		arg.InterruptedAtUnixMs,
-		arg.InterruptionReason,
-		arg.InterruptionDetailJson,
-		arg.RunID,
-		arg.RunGeneration)
+	err = recordQueryError(ctx, err, interruptRunGeneration, 6)
 
 	if err != nil {
 		return 0, err
@@ -4412,11 +4229,7 @@ func (q *Queries) InterruptStartedWorkflowRunsForRecovery(ctx context.Context, a
 		arg.InterruptionReason,
 		arg.InterruptionDetailJson,
 	)
-	err = recordQueryError(ctx, err, interruptStartedWorkflowRunsForRecovery,
-		arg.UpdatedAtUnixMs,
-		arg.InterruptedAtUnixMs,
-		arg.InterruptionReason,
-		arg.InterruptionDetailJson)
+	err = recordQueryError(ctx, err, interruptStartedWorkflowRunsForRecovery, 4)
 
 	if err != nil {
 		return 0, err
@@ -4453,12 +4266,7 @@ func (q *Queries) InterruptWorkflowRun(ctx context.Context, arg InterruptWorkflo
 		arg.InterruptionDetailJson,
 		arg.ID,
 	)
-	err = recordQueryError(ctx, err, interruptWorkflowRun,
-		arg.UpdatedAtUnixMs,
-		arg.InterruptedAtUnixMs,
-		arg.InterruptionReason,
-		arg.InterruptionDetailJson,
-		arg.ID)
+	err = recordQueryError(ctx, err, interruptWorkflowRun, 5)
 
 	if err != nil {
 		return 0, err
@@ -4477,7 +4285,7 @@ ORDER BY candidate.occurred_at_unix_ms ASC, run.id ASC
 
 func (q *Queries) ListActionableInterruptedRunIDsByTask(ctx context.Context, taskID string) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listActionableInterruptedRunIDsByTask, taskID)
-	err = recordQueryError(ctx, err, listActionableInterruptedRunIDsByTask, taskID)
+	err = recordQueryError(ctx, err, listActionableInterruptedRunIDsByTask, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -4510,7 +4318,7 @@ ORDER BY candidate.occurred_at_unix_ms ASC, run.id ASC
 
 func (q *Queries) ListActionableInterruptedRunIDsByWorkflow(ctx context.Context, workflowID string) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listActionableInterruptedRunIDsByWorkflow, workflowID)
-	err = recordQueryError(ctx, err, listActionableInterruptedRunIDsByWorkflow, workflowID)
+	err = recordQueryError(ctx, err, listActionableInterruptedRunIDsByWorkflow, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -4548,7 +4356,7 @@ type ListActiveManualMoveSourcesRow struct {
 
 func (q *Queries) ListActiveManualMoveSources(ctx context.Context, taskID string) ([]ListActiveManualMoveSourcesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listActiveManualMoveSources, taskID)
-	err = recordQueryError(ctx, err, listActiveManualMoveSources, taskID)
+	err = recordQueryError(ctx, err, listActiveManualMoveSources, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -4695,13 +4503,7 @@ func (q *Queries) ListBoardColumnTaskCounts(ctx context.Context, arg ListBoardCo
 		arg.WorkflowID,
 		arg.CanceledTerminalNodeID,
 	)
-	err = recordQueryError(ctx, err, listBoardColumnTaskCounts,
-		arg.LabelFilterKind,
-		arg.LabelFilterMode,
-		arg.LabelIdsJson,
-		arg.ProjectID,
-		arg.WorkflowID,
-		arg.CanceledTerminalNodeID)
+	err = recordQueryError(ctx, err, listBoardColumnTaskCounts, 6)
 
 	if err != nil {
 		return nil, err
@@ -4895,18 +4697,7 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 		arg.CursorTaskID,
 		arg.LimitRows,
 	)
-	err = recordQueryError(ctx, err, listBoardNodeTasks,
-		arg.ProjectID,
-		arg.WorkflowID,
-		arg.LabelFilterKind,
-		arg.LabelFilterMode,
-		arg.LabelIdsJson,
-		arg.NodeID,
-		arg.CanceledTerminalNodeID,
-		arg.CursorDirection,
-		arg.CursorUpdatedAtUnixMs,
-		arg.CursorTaskID,
-		arg.LimitRows)
+	err = recordQueryError(ctx, err, listBoardNodeTasks, 11)
 
 	if err != nil {
 		return nil, err
@@ -4999,7 +4790,7 @@ type ListInterruptTaskRunCandidatesParams struct {
 
 func (q *Queries) ListInterruptTaskRunCandidates(ctx context.Context, arg ListInterruptTaskRunCandidatesParams) ([]TaskRunRecord, error) {
 	rows, err := q.db.QueryContext(ctx, listInterruptTaskRunCandidates, arg.TaskID, arg.SessionID)
-	err = recordQueryError(ctx, err, listInterruptTaskRunCandidates, arg.TaskID, arg.SessionID)
+	err = recordQueryError(ctx, err, listInterruptTaskRunCandidates, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -5074,7 +4865,7 @@ type ListJoinArrivalsRow struct {
 
 func (q *Queries) ListJoinArrivals(ctx context.Context, arg ListJoinArrivalsParams) ([]ListJoinArrivalsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listJoinArrivals, arg.BatchID, arg.JoinNodeID)
-	err = recordQueryError(ctx, err, listJoinArrivals, arg.BatchID, arg.JoinNodeID)
+	err = recordQueryError(ctx, err, listJoinArrivals, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -5112,7 +4903,7 @@ ORDER BY rowid ASC
 
 func (q *Queries) ListJoinExpectedBranches(ctx context.Context, batchID string) ([]sql.NullString, error) {
 	rows, err := q.db.QueryContext(ctx, listJoinExpectedBranches, batchID)
-	err = recordQueryError(ctx, err, listJoinExpectedBranches, batchID)
+	err = recordQueryError(ctx, err, listJoinExpectedBranches, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -5160,7 +4951,7 @@ type ListMetadataSchemaDefinitionsRow struct {
 
 func (q *Queries) ListMetadataSchemaDefinitions(ctx context.Context) ([]ListMetadataSchemaDefinitionsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listMetadataSchemaDefinitions)
-	err = recordQueryError(ctx, err, listMetadataSchemaDefinitions)
+	err = recordQueryError(ctx, err, listMetadataSchemaDefinitions, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -5228,12 +5019,7 @@ func (q *Queries) ListNewerSessionPage(ctx context.Context, arg ListNewerSession
 		arg.BoundarySessionID,
 		arg.PageLimit,
 	)
-	err = recordQueryError(ctx, err, listNewerSessionPage,
-		arg.ProjectID,
-		arg.Category,
-		arg.BoundaryUpdatedAtUnixMs,
-		arg.BoundarySessionID,
-		arg.PageLimit)
+	err = recordQueryError(ctx, err, listNewerSessionPage, 5)
 
 	if err != nil {
 		return nil, err
@@ -5293,7 +5079,7 @@ type ListNewestSessionPageRow struct {
 
 func (q *Queries) ListNewestSessionPage(ctx context.Context, arg ListNewestSessionPageParams) ([]ListNewestSessionPageRow, error) {
 	rows, err := q.db.QueryContext(ctx, listNewestSessionPage, arg.ProjectID, arg.Category, arg.PageLimit)
-	err = recordQueryError(ctx, err, listNewestSessionPage, arg.ProjectID, arg.Category, arg.PageLimit)
+	err = recordQueryError(ctx, err, listNewestSessionPage, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -5367,12 +5153,7 @@ func (q *Queries) ListOlderSessionPage(ctx context.Context, arg ListOlderSession
 		arg.BoundarySessionID,
 		arg.PageLimit,
 	)
-	err = recordQueryError(ctx, err, listOlderSessionPage,
-		arg.ProjectID,
-		arg.Category,
-		arg.BoundaryUpdatedAtUnixMs,
-		arg.BoundarySessionID,
-		arg.PageLimit)
+	err = recordQueryError(ctx, err, listOlderSessionPage, 5)
 
 	if err != nil {
 		return nil, err
@@ -5418,7 +5199,7 @@ type ListPendingApprovalManualMoveSourcesRow struct {
 
 func (q *Queries) ListPendingApprovalManualMoveSources(ctx context.Context, taskID string) ([]ListPendingApprovalManualMoveSourcesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listPendingApprovalManualMoveSources, taskID)
-	err = recordQueryError(ctx, err, listPendingApprovalManualMoveSources, taskID)
+	err = recordQueryError(ctx, err, listPendingApprovalManualMoveSources, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -5482,7 +5263,7 @@ func (q *Queries) ListPendingApprovalSourcePlacementsByTasks(ctx context.Context
 		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
 	}
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, queryParams)
+	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -5525,7 +5306,7 @@ ORDER BY candidate.occurred_at_unix_ms ASC, transition.id ASC
 
 func (q *Queries) ListPendingApprovalTransitionIDsByTask(ctx context.Context, taskID string) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listPendingApprovalTransitionIDsByTask, taskID)
-	err = recordQueryError(ctx, err, listPendingApprovalTransitionIDsByTask, taskID)
+	err = recordQueryError(ctx, err, listPendingApprovalTransitionIDsByTask, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -5558,7 +5339,7 @@ ORDER BY candidate.occurred_at_unix_ms ASC, transition.id ASC
 
 func (q *Queries) ListPendingApprovalTransitionIDsByWorkflow(ctx context.Context, workflowID string) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listPendingApprovalTransitionIDsByWorkflow, workflowID)
-	err = recordQueryError(ctx, err, listPendingApprovalTransitionIDsByWorkflow, workflowID)
+	err = recordQueryError(ctx, err, listPendingApprovalTransitionIDsByWorkflow, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -5671,7 +5452,7 @@ type ListProjectHomeSummariesRow struct {
 
 func (q *Queries) ListProjectHomeSummaries(ctx context.Context, arg ListProjectHomeSummariesParams) ([]ListProjectHomeSummariesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listProjectHomeSummaries, arg.ProjectID, arg.OffsetRows, arg.LimitRows)
-	err = recordQueryError(ctx, err, listProjectHomeSummaries, arg.ProjectID, arg.OffsetRows, arg.LimitRows)
+	err = recordQueryError(ctx, err, listProjectHomeSummaries, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -5724,7 +5505,7 @@ type ListProjectKeyRowsRow struct {
 
 func (q *Queries) ListProjectKeyRows(ctx context.Context) ([]ListProjectKeyRowsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listProjectKeyRows)
-	err = recordQueryError(ctx, err, listProjectKeyRows)
+	err = recordQueryError(ctx, err, listProjectKeyRows, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -5762,7 +5543,7 @@ type ListProjectLabelsRow struct {
 
 func (q *Queries) ListProjectLabels(ctx context.Context, projectID string) ([]ListProjectLabelsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listProjectLabels, projectID)
-	err = recordQueryError(ctx, err, listProjectLabels, projectID)
+	err = recordQueryError(ctx, err, listProjectLabels, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -5809,7 +5590,7 @@ func (q *Queries) ListProjectLabelsByIDs(ctx context.Context, labelIds []string)
 		query = strings.Replace(query, "/*SLICE:label_ids*/?", "NULL", 1)
 	}
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, queryParams)
+	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -5848,7 +5629,7 @@ type ListProjectSessionArtifactsRow struct {
 
 func (q *Queries) ListProjectSessionArtifacts(ctx context.Context, projectID string) ([]ListProjectSessionArtifactsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listProjectSessionArtifacts, projectID)
-	err = recordQueryError(ctx, err, listProjectSessionArtifacts, projectID)
+	err = recordQueryError(ctx, err, listProjectSessionArtifacts, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -5879,7 +5660,7 @@ ORDER BY rowid ASC
 
 func (q *Queries) ListProjectSessionIDs(ctx context.Context, projectID string) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listProjectSessionIDs, projectID)
-	err = recordQueryError(ctx, err, listProjectSessionIDs, projectID)
+	err = recordQueryError(ctx, err, listProjectSessionIDs, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -5925,7 +5706,7 @@ type ListProjectWorkflowLinkTaskReferencesRow struct {
 
 func (q *Queries) ListProjectWorkflowLinkTaskReferences(ctx context.Context, arg ListProjectWorkflowLinkTaskReferencesParams) ([]ListProjectWorkflowLinkTaskReferencesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listProjectWorkflowLinkTaskReferences, arg.ProjectWorkflowLinkID, arg.Limit)
-	err = recordQueryError(ctx, err, listProjectWorkflowLinkTaskReferences, arg.ProjectWorkflowLinkID, arg.Limit)
+	err = recordQueryError(ctx, err, listProjectWorkflowLinkTaskReferences, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -5962,7 +5743,7 @@ ORDER BY is_default DESC, created_at_unix_ms ASC, id ASC
 
 func (q *Queries) ListProjectWorkflowLinks(ctx context.Context, projectID string) ([]ProjectWorkflowLinkRecord, error) {
 	rows, err := q.db.QueryContext(ctx, listProjectWorkflowLinks, projectID)
-	err = recordQueryError(ctx, err, listProjectWorkflowLinks, projectID)
+	err = recordQueryError(ctx, err, listProjectWorkflowLinks, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6007,7 +5788,7 @@ LIMIT 2
 
 func (q *Queries) ListProjectWorkflowLinksForTaskSelection(ctx context.Context, projectID string) ([]ProjectWorkflowLinkRecord, error) {
 	rows, err := q.db.QueryContext(ctx, listProjectWorkflowLinksForTaskSelection, projectID)
-	err = recordQueryError(ctx, err, listProjectWorkflowLinksForTaskSelection, projectID)
+	err = recordQueryError(ctx, err, listProjectWorkflowLinksForTaskSelection, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6053,7 +5834,7 @@ type ListProjectWorkflowTaskActivityRow struct {
 
 func (q *Queries) ListProjectWorkflowTaskActivity(ctx context.Context, projectID string) ([]ListProjectWorkflowTaskActivityRow, error) {
 	rows, err := q.db.QueryContext(ctx, listProjectWorkflowTaskActivity, projectID)
-	err = recordQueryError(ctx, err, listProjectWorkflowTaskActivity, projectID)
+	err = recordQueryError(ctx, err, listProjectWorkflowTaskActivity, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6100,7 +5881,7 @@ type ListProjectWorkspacesRow struct {
 
 func (q *Queries) ListProjectWorkspaces(ctx context.Context, projectID string) ([]ListProjectWorkspacesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listProjectWorkspaces, projectID)
-	err = recordQueryError(ctx, err, listProjectWorkspaces, projectID)
+	err = recordQueryError(ctx, err, listProjectWorkspaces, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6161,7 +5942,7 @@ type ListProjectWorkspacesPageRow struct {
 
 func (q *Queries) ListProjectWorkspacesPage(ctx context.Context, arg ListProjectWorkspacesPageParams) ([]ListProjectWorkspacesPageRow, error) {
 	rows, err := q.db.QueryContext(ctx, listProjectWorkspacesPage, arg.ProjectID, arg.OffsetRows, arg.LimitRows)
-	err = recordQueryError(ctx, err, listProjectWorkspacesPage, arg.ProjectID, arg.OffsetRows, arg.LimitRows)
+	err = recordQueryError(ctx, err, listProjectWorkspacesPage, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -6215,7 +5996,7 @@ type ListProjectsRow struct {
 
 func (q *Queries) ListProjects(ctx context.Context) ([]ListProjectsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listProjects)
-	err = recordQueryError(ctx, err, listProjects)
+	err = recordQueryError(ctx, err, listProjects, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -6270,7 +6051,7 @@ type ListResumeTaskRunCandidatesRow struct {
 
 func (q *Queries) ListResumeTaskRunCandidates(ctx context.Context, taskID string) ([]ListResumeTaskRunCandidatesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listResumeTaskRunCandidates, taskID)
-	err = recordQueryError(ctx, err, listResumeTaskRunCandidates, taskID)
+	err = recordQueryError(ctx, err, listResumeTaskRunCandidates, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6315,7 +6096,7 @@ func (q *Queries) ListSessionNamesByIDs(ctx context.Context, ids []string) ([]Li
 		query = strings.Replace(query, "/*SLICE:ids*/?", "NULL", 1)
 	}
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, queryParams)
+	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6358,7 +6139,7 @@ type ListSessionPromptHistoryTextParams struct {
 
 func (q *Queries) ListSessionPromptHistoryText(ctx context.Context, arg ListSessionPromptHistoryTextParams) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listSessionPromptHistoryText, arg.SessionID, arg.MaxEntries)
-	err = recordQueryError(ctx, err, listSessionPromptHistoryText, arg.SessionID, arg.MaxEntries)
+	err = recordQueryError(ctx, err, listSessionPromptHistoryText, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -6390,7 +6171,7 @@ ORDER BY task.id ASC
 
 func (q *Queries) ListSessionWorkflowTaskIDs(ctx context.Context, sessionID sql.NullString) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listSessionWorkflowTaskIDs, sessionID)
-	err = recordQueryError(ctx, err, listSessionWorkflowTaskIDs, sessionID)
+	err = recordQueryError(ctx, err, listSessionWorkflowTaskIDs, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6430,7 +6211,7 @@ type ListSessionsTargetingWorktreeRow struct {
 
 func (q *Queries) ListSessionsTargetingWorktree(ctx context.Context, worktreeID sql.NullString) ([]ListSessionsTargetingWorktreeRow, error) {
 	rows, err := q.db.QueryContext(ctx, listSessionsTargetingWorktree, worktreeID)
-	err = recordQueryError(ctx, err, listSessionsTargetingWorktree, worktreeID)
+	err = recordQueryError(ctx, err, listSessionsTargetingWorktree, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6503,7 +6284,7 @@ type ListStartedWorkflowRunRecoveryCandidatesRow struct {
 
 func (q *Queries) ListStartedWorkflowRunRecoveryCandidates(ctx context.Context) ([]ListStartedWorkflowRunRecoveryCandidatesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listStartedWorkflowRunRecoveryCandidates)
-	err = recordQueryError(ctx, err, listStartedWorkflowRunRecoveryCandidates)
+	err = recordQueryError(ctx, err, listStartedWorkflowRunRecoveryCandidates, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -6567,7 +6348,7 @@ func (q *Queries) ListTaskAssignedLabelIDsByTasks(ctx context.Context, taskIds [
 		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
 	}
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, queryParams)
+	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6613,7 +6394,7 @@ type ListTaskCommentsParams struct {
 
 func (q *Queries) ListTaskComments(ctx context.Context, arg ListTaskCommentsParams) ([]TaskComment, error) {
 	rows, err := q.db.QueryContext(ctx, listTaskComments, arg.TaskID, arg.OffsetRows, arg.LimitRows)
-	err = recordQueryError(ctx, err, listTaskComments, arg.TaskID, arg.OffsetRows, arg.LimitRows)
+	err = recordQueryError(ctx, err, listTaskComments, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -6668,7 +6449,7 @@ func (q *Queries) ListTaskCommentsByIDs(ctx context.Context, ids []string) ([]Ta
 		query = strings.Replace(query, "/*SLICE:ids*/?", "NULL", 1)
 	}
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, queryParams)
+	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6737,12 +6518,7 @@ func (q *Queries) ListTaskCommentsPage(ctx context.Context, arg ListTaskComments
 		arg.CursorID,
 		arg.LimitRows,
 	)
-	err = recordQueryError(ctx, err, listTaskCommentsPage,
-		arg.TaskID,
-		arg.HasCursor,
-		arg.CursorCreatedAtUnixMs,
-		arg.CursorID,
-		arg.LimitRows)
+	err = recordQueryError(ctx, err, listTaskCommentsPage, 5)
 
 	if err != nil {
 		return nil, err
@@ -6795,7 +6571,7 @@ ORDER BY created_at_unix_ms ASC, (
 
 func (q *Queries) ListTaskNodePlacements(ctx context.Context, taskID string) ([]TaskNodePlacementRecord, error) {
 	rows, err := q.db.QueryContext(ctx, listTaskNodePlacements, taskID)
-	err = recordQueryError(ctx, err, listTaskNodePlacements, taskID)
+	err = recordQueryError(ctx, err, listTaskNodePlacements, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6859,7 +6635,7 @@ func (q *Queries) ListTaskNodePlacementsByTasks(ctx context.Context, taskIds []s
 		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
 	}
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, queryParams)
+	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6900,7 +6676,7 @@ ORDER BY created_at_unix_ms ASC, rowid ASC
 
 func (q *Queries) ListTaskRunIDsByPlacementForTransitionResult(ctx context.Context, placementID string) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listTaskRunIDsByPlacementForTransitionResult, placementID)
-	err = recordQueryError(ctx, err, listTaskRunIDsByPlacementForTransitionResult, placementID)
+	err = recordQueryError(ctx, err, listTaskRunIDsByPlacementForTransitionResult, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -6955,7 +6731,7 @@ ORDER BY created_at_unix_ms ASC, (
 
 func (q *Queries) ListTaskRuns(ctx context.Context, taskID string) ([]TaskRunRecord, error) {
 	rows, err := q.db.QueryContext(ctx, listTaskRuns, taskID)
-	err = recordQueryError(ctx, err, listTaskRuns, taskID)
+	err = recordQueryError(ctx, err, listTaskRuns, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -7036,7 +6812,7 @@ func (q *Queries) ListTaskRunsByIDs(ctx context.Context, ids []string) ([]TaskRu
 		query = strings.Replace(query, "/*SLICE:ids*/?", "NULL", 1)
 	}
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, queryParams)
+	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -7122,7 +6898,7 @@ func (q *Queries) ListTaskRunsByTasks(ctx context.Context, taskIds []string) ([]
 		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
 	}
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, queryParams)
+	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -7194,7 +6970,7 @@ ORDER BY (
 
 func (q *Queries) ListTaskTransitionEdges(ctx context.Context, taskTransitionID string) ([]TaskTransitionEdgeRecord, error) {
 	rows, err := q.db.QueryContext(ctx, listTaskTransitionEdges, taskTransitionID)
-	err = recordQueryError(ctx, err, listTaskTransitionEdges, taskTransitionID)
+	err = recordQueryError(ctx, err, listTaskTransitionEdges, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -7272,7 +7048,7 @@ func (q *Queries) ListTaskTransitionEdgesByTransitionIDs(ctx context.Context, tr
 		query = strings.Replace(query, "/*SLICE:transition_ids*/?", "NULL", 1)
 	}
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, queryParams)
+	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -7341,7 +7117,7 @@ ORDER BY created_at_unix_ms ASC, (
 
 func (q *Queries) ListTaskTransitions(ctx context.Context, taskID string) ([]TaskTransitionRecord, error) {
 	rows, err := q.db.QueryContext(ctx, listTaskTransitions, taskID)
-	err = recordQueryError(ctx, err, listTaskTransitions, taskID)
+	err = recordQueryError(ctx, err, listTaskTransitions, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -7416,7 +7192,7 @@ func (q *Queries) ListTaskTransitionsByIDs(ctx context.Context, ids []string) ([
 		query = strings.Replace(query, "/*SLICE:ids*/?", "NULL", 1)
 	}
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, queryParams)
+	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -7495,7 +7271,7 @@ ORDER BY updated_at_unix_ms DESC, (
 
 func (q *Queries) ListTasksByProject(ctx context.Context, projectID string) ([]TaskRecord, error) {
 	rows, err := q.db.QueryContext(ctx, listTasksByProject, projectID)
-	err = recordQueryError(ctx, err, listTasksByProject, projectID)
+	err = recordQueryError(ctx, err, listTasksByProject, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -7586,7 +7362,7 @@ type ListTasksByShortIDRow struct {
 
 func (q *Queries) ListTasksByShortID(ctx context.Context, shortID string) ([]ListTasksByShortIDRow, error) {
 	rows, err := q.db.QueryContext(ctx, listTasksByShortID, shortID)
-	err = recordQueryError(ctx, err, listTasksByShortID, shortID)
+	err = recordQueryError(ctx, err, listTasksByShortID, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -7677,7 +7453,7 @@ type ListUnstartedWorkflowRunRecoveryCandidatesRow struct {
 
 func (q *Queries) ListUnstartedWorkflowRunRecoveryCandidates(ctx context.Context) ([]ListUnstartedWorkflowRunRecoveryCandidatesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listUnstartedWorkflowRunRecoveryCandidates)
-	err = recordQueryError(ctx, err, listUnstartedWorkflowRunRecoveryCandidates)
+	err = recordQueryError(ctx, err, listUnstartedWorkflowRunRecoveryCandidates, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -7751,7 +7527,7 @@ ORDER BY updated_at_unix_ms ASC, (
 
 func (q *Queries) ListWaitingAskWorkflowRuns(ctx context.Context) ([]TaskRunRecord, error) {
 	rows, err := q.db.QueryContext(ctx, listWaitingAskWorkflowRuns)
-	err = recordQueryError(ctx, err, listWaitingAskWorkflowRuns)
+	err = recordQueryError(ctx, err, listWaitingAskWorkflowRuns, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -7834,11 +7610,7 @@ func (q *Queries) ListWorkflowAttentionCandidates(ctx context.Context, arg ListW
 		arg.CursorItemID,
 		arg.PageLimit,
 	)
-	err = recordQueryError(ctx, err, listWorkflowAttentionCandidates,
-		arg.CursorActive,
-		arg.CursorOccurredAtUnixMs,
-		arg.CursorItemID,
-		arg.PageLimit)
+	err = recordQueryError(ctx, err, listWorkflowAttentionCandidates, 4)
 
 	if err != nil {
 		return nil, err
@@ -7918,7 +7690,7 @@ type ListWorkflowEdgesRow struct {
 
 func (q *Queries) ListWorkflowEdges(ctx context.Context, workflowID string) ([]ListWorkflowEdgesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listWorkflowEdges, workflowID)
-	err = recordQueryError(ctx, err, listWorkflowEdges, workflowID)
+	err = recordQueryError(ctx, err, listWorkflowEdges, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -7969,7 +7741,7 @@ ORDER BY sort_order ASC, rowid ASC
 
 func (q *Queries) ListWorkflowNodeGroups(ctx context.Context, workflowID string) ([]WorkflowNodeGroup, error) {
 	rows, err := q.db.QueryContext(ctx, listWorkflowNodeGroups, workflowID)
-	err = recordQueryError(ctx, err, listWorkflowNodeGroups, workflowID)
+	err = recordQueryError(ctx, err, listWorkflowNodeGroups, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -8037,7 +7809,7 @@ type ListWorkflowNodesRow struct {
 
 func (q *Queries) ListWorkflowNodes(ctx context.Context, workflowID string) ([]ListWorkflowNodesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listWorkflowNodes, workflowID)
-	err = recordQueryError(ctx, err, listWorkflowNodes, workflowID)
+	err = recordQueryError(ctx, err, listWorkflowNodes, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -8089,7 +7861,7 @@ ORDER BY project_id ASC, is_default DESC, created_at_unix_ms ASC
 
 func (q *Queries) ListWorkflowProjectLinks(ctx context.Context, workflowID string) ([]ProjectWorkflowLinkRecord, error) {
 	rows, err := q.db.QueryContext(ctx, listWorkflowProjectLinks, workflowID)
-	err = recordQueryError(ctx, err, listWorkflowProjectLinks, workflowID)
+	err = recordQueryError(ctx, err, listWorkflowProjectLinks, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -8273,16 +8045,7 @@ func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowR
 		arg.CursorProjectName,
 		arg.PageLimit,
 	)
-	err = recordQueryError(ctx, err, listWorkflowRecordsPage,
-		arg.ProjectID,
-		arg.WorkflowID,
-		arg.SearchQuery,
-		arg.CursorActive,
-		arg.CursorActivityAtUnixMs,
-		arg.CursorWorkflowID,
-		arg.CursorProjectDefault,
-		arg.CursorProjectName,
-		arg.PageLimit)
+	err = recordQueryError(ctx, err, listWorkflowRecordsPage, 9)
 
 	if err != nil {
 		return nil, err
@@ -8342,7 +8105,7 @@ ORDER BY occurred_at_unix_ms ASC, id ASC
 
 func (q *Queries) ListWorkflowResolutionAttentionCandidates(ctx context.Context, workflowID string) ([]WorkflowAttentionCandidate, error) {
 	rows, err := q.db.QueryContext(ctx, listWorkflowResolutionAttentionCandidates, workflowID)
-	err = recordQueryError(ctx, err, listWorkflowResolutionAttentionCandidates, workflowID)
+	err = recordQueryError(ctx, err, listWorkflowResolutionAttentionCandidates, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -8523,12 +8286,7 @@ func (q *Queries) ListWorkflowTaskActivityRows(ctx context.Context, arg ListWork
 		arg.CursorOccurredAtUnixMs,
 		arg.CursorActivityID,
 	)
-	err = recordQueryError(ctx, err, listWorkflowTaskActivityRows,
-		arg.PageLimit,
-		arg.TaskID,
-		arg.CursorActive,
-		arg.CursorOccurredAtUnixMs,
-		arg.CursorActivityID)
+	err = recordQueryError(ctx, err, listWorkflowTaskActivityRows, 5)
 
 	if err != nil {
 		return nil, err
@@ -8581,7 +8339,7 @@ ORDER BY occurred_at_unix_ms DESC, id DESC
 
 func (q *Queries) ListWorkflowTaskAttentionCandidates(ctx context.Context, taskID string) ([]WorkflowAttentionCandidate, error) {
 	rows, err := q.db.QueryContext(ctx, listWorkflowTaskAttentionCandidates, taskID)
-	err = recordQueryError(ctx, err, listWorkflowTaskAttentionCandidates, taskID)
+	err = recordQueryError(ctx, err, listWorkflowTaskAttentionCandidates, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -8641,7 +8399,7 @@ type ListWorkflowTaskCurrentRunFactsRow struct {
 
 func (q *Queries) ListWorkflowTaskCurrentRunFacts(ctx context.Context, taskID string) ([]ListWorkflowTaskCurrentRunFactsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listWorkflowTaskCurrentRunFacts, taskID)
-	err = recordQueryError(ctx, err, listWorkflowTaskCurrentRunFacts, taskID)
+	err = recordQueryError(ctx, err, listWorkflowTaskCurrentRunFacts, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -8698,7 +8456,7 @@ func (q *Queries) ListWorkflowTaskCurrentRunFactsByTasks(ctx context.Context, ta
 		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
 	}
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, queryParams)
+	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -8733,7 +8491,7 @@ WHERE workflow_id = ?1
 
 func (q *Queries) ListWorkflowTaskIDs(ctx context.Context, workflowID string) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listWorkflowTaskIDs, workflowID)
-	err = recordQueryError(ctx, err, listWorkflowTaskIDs, workflowID)
+	err = recordQueryError(ctx, err, listWorkflowTaskIDs, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -9257,39 +9015,7 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 		arg.Sort5Desc,
 		arg.LimitRows,
 	)
-	err = recordQueryError(ctx, err, listWorkflowTaskListRows,
-		arg.ProjectID,
-		arg.WorkflowID,
-		arg.CanceledTerminalNodeID,
-		arg.VisibleColumnsJson,
-		arg.ColumnFilterSet,
-		arg.ColumnKeysJson,
-		arg.StatusFilterSet,
-		arg.StatusKindsJson,
-		arg.AttentionFilterSet,
-		arg.AttentionKindsJson,
-		arg.LabelFilterKind,
-		arg.LabelFilterMode,
-		arg.LabelIdsJson,
-		arg.CursorSet,
-		arg.CursorCreatedAtUnixMs,
-		arg.CursorUpdatedAtUnixMs,
-		arg.CursorPrimaryStatusRank,
-		arg.CursorColumnRank,
-		arg.CursorRunCount,
-		arg.CursorTitleSort,
-		arg.CursorTaskID,
-		arg.Sort1Field,
-		arg.Sort1Desc,
-		arg.Sort2Field,
-		arg.Sort2Desc,
-		arg.Sort3Field,
-		arg.Sort3Desc,
-		arg.Sort4Field,
-		arg.Sort4Desc,
-		arg.Sort5Field,
-		arg.Sort5Desc,
-		arg.LimitRows)
+	err = recordQueryError(ctx, err, listWorkflowTaskListRows, 32)
 
 	if err != nil {
 		return nil, err
@@ -9391,7 +9117,7 @@ func (q *Queries) ListWorkflowTaskRunActionFactsByTasks(ctx context.Context, tas
 		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
 	}
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, queryParams)
+	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -9444,7 +9170,7 @@ func (q *Queries) ListWorkflowTaskStatusRecordsByTasks(ctx context.Context, task
 		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
 	}
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)
-	err = recordQueryError(ctx, err, query, queryParams)
+	err = recordQueryError(ctx, err, query, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -9501,7 +9227,7 @@ type ListWorkflowTransitionGroupsRow struct {
 
 func (q *Queries) ListWorkflowTransitionGroups(ctx context.Context, workflowID string) ([]ListWorkflowTransitionGroupsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listWorkflowTransitionGroups, workflowID)
-	err = recordQueryError(ctx, err, listWorkflowTransitionGroups, workflowID)
+	err = recordQueryError(ctx, err, listWorkflowTransitionGroups, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -9547,7 +9273,7 @@ ORDER BY updated_at_unix_ms DESC, rowid DESC
 
 func (q *Queries) ListWorkflows(ctx context.Context) ([]Workflow, error) {
 	rows, err := q.db.QueryContext(ctx, listWorkflows)
-	err = recordQueryError(ctx, err, listWorkflows)
+	err = recordQueryError(ctx, err, listWorkflows, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -9601,7 +9327,7 @@ type ListWorkspaceBindingsByCanonicalRootRow struct {
 
 func (q *Queries) ListWorkspaceBindingsByCanonicalRoot(ctx context.Context, canonicalRootPath string) ([]ListWorkspaceBindingsByCanonicalRootRow, error) {
 	rows, err := q.db.QueryContext(ctx, listWorkspaceBindingsByCanonicalRoot, canonicalRootPath)
-	err = recordQueryError(ctx, err, listWorkspaceBindingsByCanonicalRoot, canonicalRootPath)
+	err = recordQueryError(ctx, err, listWorkspaceBindingsByCanonicalRoot, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -9638,7 +9364,7 @@ ORDER BY rowid ASC
 
 func (q *Queries) ListWorkspaceSessionIDs(ctx context.Context, workspaceID sql.NullString) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listWorkspaceSessionIDs, workspaceID)
-	err = recordQueryError(ctx, err, listWorkspaceSessionIDs, workspaceID)
+	err = recordQueryError(ctx, err, listWorkspaceSessionIDs, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -9675,7 +9401,7 @@ ORDER BY created_at_unix_ms ASC, rowid ASC
 
 func (q *Queries) ListWorkspacesByCanonicalRoot(ctx context.Context, canonicalRootPath string) ([]Workspace, error) {
 	rows, err := q.db.QueryContext(ctx, listWorkspacesByCanonicalRoot, canonicalRootPath)
-	err = recordQueryError(ctx, err, listWorkspacesByCanonicalRoot, canonicalRootPath)
+	err = recordQueryError(ctx, err, listWorkspacesByCanonicalRoot, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -9739,7 +9465,7 @@ type ListWorktreesByWorkspaceIDRow struct {
 
 func (q *Queries) ListWorktreesByWorkspaceID(ctx context.Context, workspaceID string) ([]ListWorktreesByWorkspaceIDRow, error) {
 	rows, err := q.db.QueryContext(ctx, listWorktreesByWorkspaceID, workspaceID)
-	err = recordQueryError(ctx, err, listWorktreesByWorkspaceID, workspaceID)
+	err = recordQueryError(ctx, err, listWorktreesByWorkspaceID, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -9816,16 +9542,7 @@ func (q *Queries) LockTaskExecutionTarget(ctx context.Context, arg LockTaskExecu
 		arg.TaskID,
 		arg.ExpectedManagedWorktreeID,
 	)
-	err = recordQueryError(ctx, err, lockTaskExecutionTarget,
-		arg.ManagedWorktreeID,
-		arg.ExecutionTargetMode,
-		arg.ExecutionTargetRequestedRef,
-		arg.ExecutionTargetResolvedRef,
-		arg.ExecutionTargetCommitOid,
-		arg.ExecutionTargetProvenance,
-		arg.UpdatedAtUnixMs,
-		arg.TaskID,
-		arg.ExpectedManagedWorktreeID)
+	err = recordQueryError(ctx, err, lockTaskExecutionTarget, 9)
 
 	if err != nil {
 		return 0, err
@@ -9869,13 +9586,7 @@ func (q *Queries) ReconcileSessionEventLog(ctx context.Context, arg ReconcileSes
 		arg.SessionID,
 		arg.ObservedLastSequence,
 	)
-	err = recordQueryError(ctx, err, reconcileSessionEventLog,
-		arg.LastSequence,
-		arg.UpdatedAtUnixMs,
-		arg.InvalidateUsageState,
-		arg.ConversationEstablished,
-		arg.SessionID,
-		arg.ObservedLastSequence)
+	err = recordQueryError(ctx, err, reconcileSessionEventLog, 6)
 
 	if err != nil {
 		return 0, err
@@ -9924,14 +9635,7 @@ func (q *Queries) RecordInvalidCompletionProtocolViolation(ctx context.Context, 
 		arg.ExpectedGeneration,
 	)
 	var i RecordInvalidCompletionProtocolViolationRow
-	err := recordQueryError(ctx, row.Scan(&i.InvalidCompletionCount, &i.InterruptedAtUnixMs), recordInvalidCompletionProtocolViolation,
-		arg.UpdatedAtUnixMs,
-		arg.MaxCount,
-		arg.InterruptedAtUnixMs,
-		arg.InterruptionDetailJson,
-		arg.RunID,
-		arg.RequireGeneration,
-		arg.ExpectedGeneration)
+	err := recordQueryError(ctx, row.Scan(&i.InvalidCompletionCount, &i.InterruptedAtUnixMs), recordInvalidCompletionProtocolViolation, 7)
 
 	return i, err
 }
@@ -9945,7 +9649,7 @@ WHERE id = ?1
 
 func (q *Queries) RejectPendingApprovalTransition(ctx context.Context, transitionID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, rejectPendingApprovalTransition, transitionID)
-	err = recordQueryError(ctx, err, rejectPendingApprovalTransition, transitionID)
+	err = recordQueryError(ctx, err, rejectPendingApprovalTransition, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -9983,11 +9687,7 @@ func (q *Queries) RenameProjectLabel(ctx context.Context, arg RenameProjectLabel
 		arg.ProjectID,
 	)
 	var i RenameProjectLabelRow
-	err := recordQueryError(ctx, row.Scan(&i.ID, &i.ProjectID, &i.Name), renameProjectLabel,
-		arg.Name,
-		arg.UpdatedAtUnixMs,
-		arg.ID,
-		arg.ProjectID)
+	err := recordQueryError(ctx, row.Scan(&i.ID, &i.ProjectID, &i.Name), renameProjectLabel, 4)
 
 	return i, err
 }
@@ -10017,11 +9717,7 @@ func (q *Queries) ResetInvalidCompletionProtocolViolationBudget(ctx context.Cont
 		arg.RequireGeneration,
 		arg.ExpectedGeneration,
 	)
-	err = recordQueryError(ctx, err, resetInvalidCompletionProtocolViolationBudget,
-		arg.UpdatedAtUnixMs,
-		arg.RunID,
-		arg.RequireGeneration,
-		arg.ExpectedGeneration)
+	err = recordQueryError(ctx, err, resetInvalidCompletionProtocolViolationBudget, 4)
 
 	if err != nil {
 		return 0, err
@@ -10078,7 +9774,7 @@ type ResolveActiveRunCompletionTargetByProjectShortIDParams struct {
 
 func (q *Queries) ResolveActiveRunCompletionTargetByProjectShortID(ctx context.Context, arg ResolveActiveRunCompletionTargetByProjectShortIDParams) ([]TaskRunRecord, error) {
 	rows, err := q.db.QueryContext(ctx, resolveActiveRunCompletionTargetByProjectShortID, arg.ShortID, arg.ProjectID)
-	err = recordQueryError(ctx, err, resolveActiveRunCompletionTargetByProjectShortID, arg.ShortID, arg.ProjectID)
+	err = recordQueryError(ctx, err, resolveActiveRunCompletionTargetByProjectShortID, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -10164,7 +9860,7 @@ ORDER BY r.started_at_unix_ms DESC, (
 
 func (q *Queries) ResolveActiveRunCompletionTargetByRunID(ctx context.Context, runID string) ([]TaskRunRecord, error) {
 	rows, err := q.db.QueryContext(ctx, resolveActiveRunCompletionTargetByRunID, runID)
-	err = recordQueryError(ctx, err, resolveActiveRunCompletionTargetByRunID, runID)
+	err = recordQueryError(ctx, err, resolveActiveRunCompletionTargetByRunID, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -10250,7 +9946,7 @@ ORDER BY r.started_at_unix_ms DESC, (
 
 func (q *Queries) ResolveActiveRunCompletionTargetByShortID(ctx context.Context, shortID string) ([]TaskRunRecord, error) {
 	rows, err := q.db.QueryContext(ctx, resolveActiveRunCompletionTargetByShortID, shortID)
-	err = recordQueryError(ctx, err, resolveActiveRunCompletionTargetByShortID, shortID)
+	err = recordQueryError(ctx, err, resolveActiveRunCompletionTargetByShortID, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -10336,7 +10032,7 @@ ORDER BY r.started_at_unix_ms DESC, (
 
 func (q *Queries) ResolveActiveRunCompletionTargetByTaskID(ctx context.Context, taskID string) ([]TaskRunRecord, error) {
 	rows, err := q.db.QueryContext(ctx, resolveActiveRunCompletionTargetByTaskID, taskID)
-	err = recordQueryError(ctx, err, resolveActiveRunCompletionTargetByTaskID, taskID)
+	err = recordQueryError(ctx, err, resolveActiveRunCompletionTargetByTaskID, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -10421,7 +10117,7 @@ ORDER BY r.started_at_unix_ms DESC, (
 
 func (q *Queries) ResolveSessionRunCompletionTargets(ctx context.Context, sessionID sql.NullString) ([]TaskRunRecord, error) {
 	rows, err := q.db.QueryContext(ctx, resolveSessionRunCompletionTargets, sessionID)
-	err = recordQueryError(ctx, err, resolveSessionRunCompletionTargets, sessionID)
+	err = recordQueryError(ctx, err, resolveSessionRunCompletionTargets, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -10498,7 +10194,7 @@ type ResolveTaskWaitingAskRow struct {
 
 func (q *Queries) ResolveTaskWaitingAsk(ctx context.Context, arg ResolveTaskWaitingAskParams) ([]ResolveTaskWaitingAskRow, error) {
 	rows, err := q.db.QueryContext(ctx, resolveTaskWaitingAsk, arg.TaskID, arg.AskID, arg.RunID)
-	err = recordQueryError(ctx, err, resolveTaskWaitingAsk, arg.TaskID, arg.AskID, arg.RunID)
+	err = recordQueryError(ctx, err, resolveTaskWaitingAsk, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -10566,7 +10262,7 @@ type ResumeTaskRunParams struct {
 
 func (q *Queries) ResumeTaskRun(ctx context.Context, arg ResumeTaskRunParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, resumeTaskRun, arg.UpdatedAtUnixMs, arg.RunID)
-	err = recordQueryError(ctx, err, resumeTaskRun, arg.UpdatedAtUnixMs, arg.RunID)
+	err = recordQueryError(ctx, err, resumeTaskRun, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -10617,16 +10313,7 @@ func (q *Queries) RetargetSessionWorkspaceProject(ctx context.Context, arg Retar
 		arg.SourceProjectID,
 		arg.SourceArtifactRelpath,
 	)
-	err = recordQueryError(ctx, err, retargetSessionWorkspaceProject,
-		arg.TargetProjectID,
-		arg.TargetWorkspaceID,
-		arg.TargetArtifactRelpath,
-		arg.UpdatedAtUnixMs,
-		arg.TargetWorkspaceRoot,
-		arg.TargetWorkspaceContainer,
-		arg.SessionID,
-		arg.SourceProjectID,
-		arg.SourceArtifactRelpath)
+	err = recordQueryError(ctx, err, retargetSessionWorkspaceProject, 9)
 
 	if err != nil {
 		return 0, err
@@ -10650,7 +10337,7 @@ type SetProjectDefaultWorkflowLinkParams struct {
 
 func (q *Queries) SetProjectDefaultWorkflowLink(ctx context.Context, arg SetProjectDefaultWorkflowLinkParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setProjectDefaultWorkflowLink, arg.ProjectWorkflowLinkID, arg.UpdatedAtUnixMs, arg.ProjectID)
-	err = recordQueryError(ctx, err, setProjectDefaultWorkflowLink, arg.ProjectWorkflowLinkID, arg.UpdatedAtUnixMs, arg.ProjectID)
+	err = recordQueryError(ctx, err, setProjectDefaultWorkflowLink, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -10673,7 +10360,7 @@ type SetProjectDisplayNameParams struct {
 
 func (q *Queries) SetProjectDisplayName(ctx context.Context, arg SetProjectDisplayNameParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setProjectDisplayName, arg.DisplayName, arg.UpdatedAtUnixMs, arg.ProjectID)
-	err = recordQueryError(ctx, err, setProjectDisplayName, arg.DisplayName, arg.UpdatedAtUnixMs, arg.ProjectID)
+	err = recordQueryError(ctx, err, setProjectDisplayName, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -10696,7 +10383,7 @@ type SetProjectKeyParams struct {
 
 func (q *Queries) SetProjectKey(ctx context.Context, arg SetProjectKeyParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setProjectKey, arg.ProjectKey, arg.UpdatedAtUnixMs, arg.ProjectID)
-	err = recordQueryError(ctx, err, setProjectKey, arg.ProjectKey, arg.UpdatedAtUnixMs, arg.ProjectID)
+	err = recordQueryError(ctx, err, setProjectKey, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -10719,7 +10406,7 @@ type SetProjectPrimaryWorkspaceParams struct {
 
 func (q *Queries) SetProjectPrimaryWorkspace(ctx context.Context, arg SetProjectPrimaryWorkspaceParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setProjectPrimaryWorkspace, arg.WorkspaceID, arg.UpdatedAtUnixMs, arg.ProjectID)
-	err = recordQueryError(ctx, err, setProjectPrimaryWorkspace, arg.WorkspaceID, arg.UpdatedAtUnixMs, arg.ProjectID)
+	err = recordQueryError(ctx, err, setProjectPrimaryWorkspace, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -10753,11 +10440,7 @@ func (q *Queries) SetRunWaitingAsk(ctx context.Context, arg SetRunWaitingAskPara
 		arg.RunID,
 		arg.RunGeneration,
 	)
-	err = recordQueryError(ctx, err, setRunWaitingAsk,
-		arg.UpdatedAtUnixMs,
-		arg.AskID,
-		arg.RunID,
-		arg.RunGeneration)
+	err = recordQueryError(ctx, err, setRunWaitingAsk, 4)
 
 	if err != nil {
 		return 0, err
@@ -10794,11 +10477,7 @@ func (q *Queries) SetTaskRunEffectiveCompletionMode(ctx context.Context, arg Set
 		arg.ID,
 		arg.ExpectedGeneration,
 	)
-	err = recordQueryError(ctx, err, setTaskRunEffectiveCompletionMode,
-		arg.UpdatedAtUnixMs,
-		arg.EffectiveCompletionMode,
-		arg.ID,
-		arg.ExpectedGeneration)
+	err = recordQueryError(ctx, err, setTaskRunEffectiveCompletionMode, 4)
 
 	if err != nil {
 		return 0, err
@@ -10833,11 +10512,7 @@ func (q *Queries) StartTaskCompleteStartPlacement(ctx context.Context, arg Start
 		arg.PlacementID,
 		arg.TaskID,
 	)
-	err = recordQueryError(ctx, err, startTaskCompleteStartPlacement,
-		arg.State,
-		arg.UpdatedAtUnixMs,
-		arg.PlacementID,
-		arg.TaskID)
+	err = recordQueryError(ctx, err, startTaskCompleteStartPlacement, 4)
 
 	if err != nil {
 		return 0, err
@@ -10866,7 +10541,7 @@ type SupersedeActiveTerminalManualMoveSourcePlacementParams struct {
 
 func (q *Queries) SupersedeActiveTerminalManualMoveSourcePlacement(ctx context.Context, arg SupersedeActiveTerminalManualMoveSourcePlacementParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, supersedeActiveTerminalManualMoveSourcePlacement, arg.UpdatedAtUnixMs, arg.PlacementID)
-	err = recordQueryError(ctx, err, supersedeActiveTerminalManualMoveSourcePlacement, arg.UpdatedAtUnixMs, arg.PlacementID)
+	err = recordQueryError(ctx, err, supersedeActiveTerminalManualMoveSourcePlacement, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -10886,7 +10561,7 @@ type TouchTaskUpdatedAtParams struct {
 
 func (q *Queries) TouchTaskUpdatedAt(ctx context.Context, arg TouchTaskUpdatedAtParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, touchTaskUpdatedAt, arg.UpdatedAtUnixMs, arg.TaskID)
-	err = recordQueryError(ctx, err, touchTaskUpdatedAt, arg.UpdatedAtUnixMs, arg.TaskID)
+	err = recordQueryError(ctx, err, touchTaskUpdatedAt, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -10916,11 +10591,7 @@ func (q *Queries) UpdateSessionExecutionTargetByID(ctx context.Context, arg Upda
 		arg.CwdRelpath,
 		arg.SessionID,
 	)
-	err = recordQueryError(ctx, err, updateSessionExecutionTargetByID,
-		arg.WorkspaceID,
-		arg.WorktreeID,
-		arg.CwdRelpath,
-		arg.SessionID)
+	err = recordQueryError(ctx, err, updateSessionExecutionTargetByID, 4)
 
 	if err != nil {
 		return 0, err
@@ -10944,7 +10615,7 @@ type UpdateTaskCommentBodyParams struct {
 
 func (q *Queries) UpdateTaskCommentBody(ctx context.Context, arg UpdateTaskCommentBodyParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, updateTaskCommentBody, arg.Body, arg.UpdatedAtUnixMs, arg.ID)
-	err = recordQueryError(ctx, err, updateTaskCommentBody, arg.Body, arg.UpdatedAtUnixMs, arg.ID)
+	err = recordQueryError(ctx, err, updateTaskCommentBody, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -10980,13 +10651,7 @@ func (q *Queries) UpdateTaskEditableFields(ctx context.Context, arg UpdateTaskEd
 		arg.UpdatedAtUnixMs,
 		arg.ID,
 	)
-	err = recordQueryError(ctx, err, updateTaskEditableFields,
-		arg.Title,
-		arg.Body,
-		arg.SourceWorkspaceID,
-		arg.MetadataJson,
-		arg.UpdatedAtUnixMs,
-		arg.ID)
+	err = recordQueryError(ctx, err, updateTaskEditableFields, 6)
 
 	if err != nil {
 		return 0, err
@@ -11010,7 +10675,7 @@ type UpdateTaskManagedWorktreeParams struct {
 
 func (q *Queries) UpdateTaskManagedWorktree(ctx context.Context, arg UpdateTaskManagedWorktreeParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, updateTaskManagedWorktree, arg.ManagedWorktreeID, arg.UpdatedAtUnixMs, arg.ID)
-	err = recordQueryError(ctx, err, updateTaskManagedWorktree, arg.ManagedWorktreeID, arg.UpdatedAtUnixMs, arg.ID)
+	err = recordQueryError(ctx, err, updateTaskManagedWorktree, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -11033,7 +10698,7 @@ type UpdateTaskNodePlacementStateParams struct {
 
 func (q *Queries) UpdateTaskNodePlacementState(ctx context.Context, arg UpdateTaskNodePlacementStateParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, updateTaskNodePlacementState, arg.State, arg.UpdatedAtUnixMs, arg.ID)
-	err = recordQueryError(ctx, err, updateTaskNodePlacementState, arg.State, arg.UpdatedAtUnixMs, arg.ID)
+	err = recordQueryError(ctx, err, updateTaskNodePlacementState, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -11075,15 +10740,7 @@ func (q *Queries) UpdateTaskRunOutcome(ctx context.Context, arg UpdateTaskRunOut
 		arg.InvalidCompletionCount,
 		arg.ID,
 	)
-	err = recordQueryError(ctx, err, updateTaskRunOutcome,
-		arg.UpdatedAtUnixMs,
-		arg.CompletedAtUnixMs,
-		arg.InterruptedAtUnixMs,
-		arg.InterruptionReason,
-		arg.InterruptionDetailJson,
-		arg.WaitingAskID,
-		arg.InvalidCompletionCount,
-		arg.ID)
+	err = recordQueryError(ctx, err, updateTaskRunOutcome, 8)
 
 	if err != nil {
 		return 0, err
@@ -11156,20 +10813,7 @@ func (q *Queries) UpdateWorkflowEdge(ctx context.Context, arg UpdateWorkflowEdge
 		arg.EdgeID,
 		arg.WorkflowID,
 	)
-	err = recordQueryError(ctx, err, updateWorkflowEdge,
-		arg.TransitionGroupID,
-		arg.EdgeKey,
-		arg.TargetNodeID,
-		arg.RequiresApproval,
-		arg.ContextMode,
-		arg.ContextSourceKind,
-		arg.ContextSourceNodeKey,
-		arg.PromptTemplate,
-		arg.ParametersJson,
-		arg.InputBindingsJson,
-		arg.OutputRequirementsJson,
-		arg.EdgeID,
-		arg.WorkflowID)
+	err = recordQueryError(ctx, err, updateWorkflowEdge, 13)
 
 	if err != nil {
 		return 0, err
@@ -11201,11 +10845,7 @@ func (q *Queries) UpdateWorkflowInfo(ctx context.Context, arg UpdateWorkflowInfo
 		arg.UpdatedAtUnixMs,
 		arg.ID,
 	)
-	err = recordQueryError(ctx, err, updateWorkflowInfo,
-		arg.Name,
-		arg.Description,
-		arg.UpdatedAtUnixMs,
-		arg.ID)
+	err = recordQueryError(ctx, err, updateWorkflowInfo, 4)
 
 	if err != nil {
 		return 0, err
@@ -11236,11 +10876,7 @@ func (q *Queries) UpdateWorkflowInfoWithoutVersion(ctx context.Context, arg Upda
 		arg.UpdatedAtUnixMs,
 		arg.ID,
 	)
-	err = recordQueryError(ctx, err, updateWorkflowInfoWithoutVersion,
-		arg.Name,
-		arg.Description,
-		arg.UpdatedAtUnixMs,
-		arg.ID)
+	err = recordQueryError(ctx, err, updateWorkflowInfoWithoutVersion, 4)
 
 	if err != nil {
 		return 0, err
@@ -11278,13 +10914,7 @@ func (q *Queries) UpdateWorkflowMetadata(ctx context.Context, arg UpdateWorkflow
 		arg.UpdatedAtUnixMs,
 		arg.ID,
 	)
-	err = recordQueryError(ctx, err, updateWorkflowMetadata,
-		arg.Name,
-		arg.Description,
-		arg.ExecutionTargetPolicy,
-		arg.ExecutionTargetCustomRef,
-		arg.UpdatedAtUnixMs,
-		arg.ID)
+	err = recordQueryError(ctx, err, updateWorkflowMetadata, 6)
 
 	if err != nil {
 		return 0, err
@@ -11321,13 +10951,7 @@ func (q *Queries) UpdateWorkflowMetadataWithoutVersion(ctx context.Context, arg 
 		arg.UpdatedAtUnixMs,
 		arg.ID,
 	)
-	err = recordQueryError(ctx, err, updateWorkflowMetadataWithoutVersion,
-		arg.Name,
-		arg.Description,
-		arg.ExecutionTargetPolicy,
-		arg.ExecutionTargetCustomRef,
-		arg.UpdatedAtUnixMs,
-		arg.ID)
+	err = recordQueryError(ctx, err, updateWorkflowMetadataWithoutVersion, 6)
 
 	if err != nil {
 		return 0, err
@@ -11385,20 +11009,7 @@ func (q *Queries) UpdateWorkflowNode(ctx context.Context, arg UpdateWorkflowNode
 		arg.ID,
 		arg.WorkflowID,
 	)
-	err = recordQueryError(ctx, err, updateWorkflowNode,
-		arg.NodeKey,
-		arg.Kind,
-		arg.DisplayName,
-		arg.SubagentRole,
-		arg.PromptTemplate,
-		arg.CompletionMode,
-		arg.ScriptPath,
-		arg.InputFieldsJson,
-		arg.JoinInputProvidersJson,
-		arg.OutputFieldsJson,
-		arg.GroupID,
-		arg.ID,
-		arg.WorkflowID)
+	err = recordQueryError(ctx, err, updateWorkflowNode, 13)
 
 	if err != nil {
 		return 0, err
@@ -11432,12 +11043,7 @@ func (q *Queries) UpdateWorkflowNodeGroup(ctx context.Context, arg UpdateWorkflo
 		arg.ID,
 		arg.WorkflowID,
 	)
-	err = recordQueryError(ctx, err, updateWorkflowNodeGroup,
-		arg.GroupKey,
-		arg.DisplayName,
-		arg.SortOrder,
-		arg.ID,
-		arg.WorkflowID)
+	err = recordQueryError(ctx, err, updateWorkflowNodeGroup, 5)
 
 	if err != nil {
 		return 0, err
@@ -11485,13 +11091,7 @@ func (q *Queries) UpdateWorkflowTransitionGroup(ctx context.Context, arg UpdateW
 		arg.TransitionGroupID,
 		arg.WorkflowID,
 	)
-	err = recordQueryError(ctx, err, updateWorkflowTransitionGroup,
-		arg.SourceNodeID,
-		arg.TransitionID,
-		arg.DisplayName,
-		arg.Description,
-		arg.TransitionGroupID,
-		arg.WorkflowID)
+	err = recordQueryError(ctx, err, updateWorkflowTransitionGroup, 6)
 
 	if err != nil {
 		return 0, err
@@ -11515,7 +11115,7 @@ type UpdateWorkspaceBindingCanonicalRootParams struct {
 
 func (q *Queries) UpdateWorkspaceBindingCanonicalRoot(ctx context.Context, arg UpdateWorkspaceBindingCanonicalRootParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, updateWorkspaceBindingCanonicalRoot, arg.CanonicalRootPath, arg.UpdatedAtUnixMs, arg.ID)
-	err = recordQueryError(ctx, err, updateWorkspaceBindingCanonicalRoot, arg.CanonicalRootPath, arg.UpdatedAtUnixMs, arg.ID)
+	err = recordQueryError(ctx, err, updateWorkspaceBindingCanonicalRoot, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -11538,7 +11138,7 @@ type UpdateWorktreeCanonicalRootParams struct {
 
 func (q *Queries) UpdateWorktreeCanonicalRoot(ctx context.Context, arg UpdateWorktreeCanonicalRootParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, updateWorktreeCanonicalRoot, arg.CanonicalRootPath, arg.UpdatedAtUnixMs, arg.ID)
-	err = recordQueryError(ctx, err, updateWorktreeCanonicalRoot, arg.CanonicalRootPath, arg.UpdatedAtUnixMs, arg.ID)
+	err = recordQueryError(ctx, err, updateWorktreeCanonicalRoot, 3)
 	if err != nil {
 		return 0, err
 	}
@@ -11581,12 +11181,7 @@ func (q *Queries) UpsertProject(ctx context.Context, arg UpsertProjectParams) er
 		arg.UpdatedAtUnixMs,
 		arg.MetadataJson,
 	)
-	err = recordQueryError(ctx, err, upsertProject,
-		arg.ID,
-		arg.DisplayName,
-		arg.CreatedAtUnixMs,
-		arg.UpdatedAtUnixMs,
-		arg.MetadataJson)
+	err = recordQueryError(ctx, err, upsertProject, 5)
 
 	return err
 }
@@ -11705,28 +11300,7 @@ func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) er
 		arg.UsageStateJson,
 		arg.MetadataJson,
 	)
-	err = recordQueryError(ctx, err, upsertSession,
-		arg.ID,
-		arg.ProjectID,
-		arg.WorkspaceID,
-		arg.WorktreeID,
-		arg.ArtifactRelpath,
-		arg.Name,
-		arg.FirstPromptPreview,
-		arg.InputDraft,
-		arg.PreviousSessionID,
-		arg.ParentAgentSessionID,
-		arg.Category,
-		arg.CreatedAtUnixMs,
-		arg.UpdatedAtUnixMs,
-		arg.LastSequence,
-		arg.ModelRequestCount,
-		arg.LaunchVisible,
-		arg.CwdRelpath,
-		arg.ContinuationJson,
-		arg.LockedJson,
-		arg.UsageStateJson,
-		arg.MetadataJson)
+	err = recordQueryError(ctx, err, upsertSession, 21)
 
 	return err
 }
@@ -11817,21 +11391,7 @@ func (q *Queries) UpsertWorkflowEdge(ctx context.Context, arg UpsertWorkflowEdge
 		arg.SortOrder,
 		arg.WorkflowID,
 	)
-	err = recordQueryError(ctx, err, upsertWorkflowEdge,
-		arg.ID,
-		arg.TransitionGroupID,
-		arg.EdgeKey,
-		arg.TargetNodeID,
-		arg.RequiresApproval,
-		arg.ContextMode,
-		arg.ContextSourceKind,
-		arg.ContextSourceNodeKey,
-		arg.PromptTemplate,
-		arg.ParametersJson,
-		arg.InputBindingsJson,
-		arg.OutputRequirementsJson,
-		arg.SortOrder,
-		arg.WorkflowID)
+	err = recordQueryError(ctx, err, upsertWorkflowEdge, 14)
 
 	if err != nil {
 		return 0, err
@@ -11907,21 +11467,7 @@ func (q *Queries) UpsertWorkflowNode(ctx context.Context, arg UpsertWorkflowNode
 		arg.GroupID,
 		arg.SortOrder,
 	)
-	err = recordQueryError(ctx, err, upsertWorkflowNode,
-		arg.ID,
-		arg.WorkflowID,
-		arg.NodeKey,
-		arg.Kind,
-		arg.DisplayName,
-		arg.SubagentRole,
-		arg.PromptTemplate,
-		arg.CompletionMode,
-		arg.ScriptPath,
-		arg.InputFieldsJson,
-		arg.JoinInputProvidersJson,
-		arg.OutputFieldsJson,
-		arg.GroupID,
-		arg.SortOrder)
+	err = recordQueryError(ctx, err, upsertWorkflowNode, 14)
 
 	if err != nil {
 		return 0, err
@@ -11961,12 +11507,7 @@ func (q *Queries) UpsertWorkflowNodeGroup(ctx context.Context, arg UpsertWorkflo
 		arg.DisplayName,
 		arg.SortOrder,
 	)
-	err = recordQueryError(ctx, err, upsertWorkflowNodeGroup,
-		arg.ID,
-		arg.WorkflowID,
-		arg.GroupKey,
-		arg.DisplayName,
-		arg.SortOrder)
+	err = recordQueryError(ctx, err, upsertWorkflowNodeGroup, 5)
 
 	if err != nil {
 		return 0, err
@@ -12027,14 +11568,7 @@ func (q *Queries) UpsertWorkflowTransitionGroup(ctx context.Context, arg UpsertW
 		arg.SortOrder,
 		arg.WorkflowID,
 	)
-	err = recordQueryError(ctx, err, upsertWorkflowTransitionGroup,
-		arg.ID,
-		arg.SourceNodeID,
-		arg.TransitionID,
-		arg.DisplayName,
-		arg.Description,
-		arg.SortOrder,
-		arg.WorkflowID)
+	err = recordQueryError(ctx, err, upsertWorkflowTransitionGroup, 7)
 
 	if err != nil {
 		return 0, err
@@ -12083,13 +11617,7 @@ func (q *Queries) UpsertWorkspace(ctx context.Context, arg UpsertWorkspaceParams
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, upsertWorkspace,
-		arg.ID,
-		arg.ProjectID,
-		arg.CanonicalRootPath,
-		arg.GitMetadataJson,
-		arg.CreatedAtUnixMs,
-		arg.UpdatedAtUnixMs)
+	err = recordQueryError(ctx, err, upsertWorkspace, 6)
 
 	return err
 }
@@ -12153,17 +11681,7 @@ func (q *Queries) UpsertWorktree(ctx context.Context, arg UpsertWorktreeParams) 
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 	)
-	err = recordQueryError(ctx, err, upsertWorktree,
-		arg.ID,
-		arg.WorkspaceID,
-		arg.CanonicalRootPath,
-		arg.Managed,
-		arg.CreatedBranch,
-		arg.OriginSessionID,
-		arg.GitMetadataJson,
-		arg.CreationBaseCommitOid,
-		arg.CreatedAtUnixMs,
-		arg.UpdatedAtUnixMs)
+	err = recordQueryError(ctx, err, upsertWorktree, 10)
 
 	return err
 }
@@ -12182,7 +11700,7 @@ SELECT CAST(EXISTS (
 func (q *Queries) WorkflowHasContinueSessionEdge(ctx context.Context, workflowID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, workflowHasContinueSessionEdge, workflowID)
 	var has_continue_session_edge int64
-	err := recordQueryError(ctx, row.Scan(&has_continue_session_edge), workflowHasContinueSessionEdge, workflowID)
+	err := recordQueryError(ctx, row.Scan(&has_continue_session_edge), workflowHasContinueSessionEdge, 1)
 
 	return has_continue_session_edge, err
 }
