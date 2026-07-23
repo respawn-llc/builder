@@ -54,6 +54,10 @@ func listTaskCurrentNodes(ctx context.Context, q *sqlitegen.Queries, taskID work
 }
 
 func newBacklogCurrentNode(taskID workflow.TaskID, nodeID workflow.NodeID) (workflow.CurrentNode, error) {
+	return newNonExecutableCurrentNode(taskID, nodeID)
+}
+
+func newNonExecutableCurrentNode(taskID workflow.TaskID, nodeID workflow.NodeID) (workflow.CurrentNode, error) {
 	reference, err := workflow.NewCurrentNodeReference(taskID, nodeID, nil)
 	if err != nil {
 		return workflow.CurrentNode{}, err
