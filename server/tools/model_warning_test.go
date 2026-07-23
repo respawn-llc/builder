@@ -2,6 +2,7 @@ package tools
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"core/shared/toolspec"
@@ -16,14 +17,17 @@ func TestMaterializeModelWarningsAppendsWarningToSuccessfulResult(t *testing.T) 
 			ForeignManagedWorktreeEditWarning(),
 		},
 	})
-	var output map[string]json.RawMessage
+	var output struct {
+		OK      bool   `json:"ok"`
+		Warning string `json:"warning"`
+	}
 	if err := json.Unmarshal(result.Output, &output); err != nil {
 		t.Fatalf("decode materialized result: %v", err)
 	}
-	if _, ok := output["ok"]; !ok {
+	if !output.OK {
 		t.Fatalf("original successful result was not preserved: %s", result.Output)
 	}
-	if _, ok := output["warning"]; !ok {
+	if strings.TrimSpace(output.Warning) == "" {
 		t.Fatalf("model warning was not materialized: %s", result.Output)
 	}
 	if len(result.ModelWarnings) != 0 {
