@@ -32,7 +32,6 @@ type preparedTaskCreate struct {
 	sourceURL         string
 	sourceWorkspaceID string
 	taskID            string
-	placementID       string
 	labelIDs          []label.ID
 	nowUnixMs         int64
 }
@@ -45,6 +44,7 @@ type UpdateTaskRequest struct {
 }
 
 type StartTaskResult struct {
+	Mutation     workflow.CurrentNodeMutationResult
 	TransitionID string
 	PlacementID  workflow.PlacementID
 	RunID        workflow.RunID
@@ -222,7 +222,6 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskReco
 		sourceURL:         strings.TrimSpace(req.SourceURL),
 		sourceWorkspaceID: strings.TrimSpace(req.SourceWorkspaceID),
 		taskID:            prefixedID("task"),
-		placementID:       prefixedID("placement"),
 		labelIDs:          labelIDs,
 		nowUnixMs:         s.now().UnixMilli(),
 	}
@@ -284,8 +283,12 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 	if err := q.InsertTask(ctx, sqlitegen.InsertTaskParams{ID: prepared.taskID, ProjectWorkflowLinkID: link.ID, WorkflowRevisionSeen: wf.Version, TaskSeq: seq, ShortID: shortID, Title: prepared.title, Body: prepared.body, SourceUrl: prepared.sourceURL, SourceWorkspaceID: sql.NullString{String: sourceWorkspaceID, Valid: sourceWorkspaceID != ""}, ManagedWorktreeID: sql.NullString{}, CreatedAtUnixMs: prepared.nowUnixMs, UpdatedAtUnixMs: prepared.nowUnixMs, MetadataJson: metadataJSON}); err != nil {
 		return TaskRecord{}, fmt.Errorf("insert task: %w", err)
 	}
-	if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: prepared.placementID, TaskID: prepared.taskID, NodeID: nullableString(string(workflow.NodeIDOf(startNode))), State: "active", CreatedAtUnixMs: prepared.nowUnixMs, UpdatedAtUnixMs: prepared.nowUnixMs}); err != nil {
-		return TaskRecord{}, fmt.Errorf("insert start placement: %w", err)
+	startCurrentNode, err := newBacklogCurrentNode(workflow.TaskID(prepared.taskID), workflow.NodeIDOf(startNode))
+	if err != nil {
+		return TaskRecord{}, err
+	}
+	if err := insertTaskCurrentNode(ctx, q, startCurrentNode); err != nil {
+		return TaskRecord{}, fmt.Errorf("insert start current node: %w", err)
 	}
 	for _, id := range prepared.labelIDs {
 		if err := q.InsertTaskLabelAssignment(ctx, sqlitegen.InsertTaskLabelAssignmentParams{
@@ -549,9 +552,10 @@ func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate
 		}
 	}
 	now := s.now().UnixMilli()
-	transitionID := prefixedID("transition")
-	targetPlacementID := prefixedID("placement")
-	runID := prefixedID("run")
+	targetCurrentNode, err := newReadyCurrentNode(taskID, workflow.NodeIDOf(prepared.target))
+	if err != nil {
+		return StartTaskResult{}, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return StartTaskResult{}, err
@@ -563,55 +567,31 @@ func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate
 			return StartTaskResult{}, err
 		}
 	}
-	updatedStart, err := q.StartTaskCompleteStartPlacement(ctx, sqlitegen.StartTaskCompleteStartPlacementParams{
-		State:           "completed",
-		UpdatedAtUnixMs: now,
-		PlacementID:     prepared.startPlacement.ID,
-		TaskID:          string(taskID),
+	removed, err := q.DeleteSerialTaskCurrentNode(ctx, sqlitegen.DeleteSerialTaskCurrentNodeParams{
+		TaskID: string(taskID),
+		NodeID: string(workflow.NodeIDOf(prepared.start)),
 	})
 	if err != nil {
 		return StartTaskResult{}, err
 	}
-	if updatedStart != 1 {
+	if removed != 1 {
 		return StartTaskResult{}, sql.ErrNoRows
 	}
+	if err := insertTaskCurrentNode(ctx, q, targetCurrentNode); err != nil {
+		return StartTaskResult{}, err
+	}
 	if err := touchTaskUpdatedAt(ctx, q, string(taskID), now); err != nil {
-		return StartTaskResult{}, err
-	}
-	if err := q.InsertTaskTransition(ctx, sqlitegen.InsertTaskTransitionParams{ID: transitionID, TaskID: string(taskID), SourcePlacementID: sql.NullString{String: prepared.startPlacement.ID, Valid: true}, SourceNodeKey: string(workflow.NodeKey(prepared.start)), SourceNodeDisplayName: workflow.NodeDisplayName(prepared.start), TransitionID: string(prepared.group.TransitionID), TransitionDisplayName: prepared.group.DisplayName, WorkflowRevisionSeen: prepared.workflow.Version, Actor: "system", State: "applied", OutputValuesJson: "{}", CreatedAtUnixMs: now, AppliedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}}); err != nil {
-		return StartTaskResult{}, err
-	}
-	if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: targetPlacementID, TaskID: string(taskID), NodeID: nullableString(string(workflow.NodeIDOf(prepared.target))), State: "active", CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
-		return StartTaskResult{}, err
-	}
-	runSnapshot, err := newRunStartSnapshot(prepared.definition, prepared.workflow, workflow.NodeIDOf(prepared.target))
-	if err != nil {
-		return StartTaskResult{}, err
-	}
-	startEdgeSnapshot := edgeSnapshotWithDerivedWiring(prepared.edge, prepared.start, prepared.target, workflow.DeriveWiring(prepared.definition))
-	if err := insertTransitionEdgeSnapshotWithMetadata(ctx, q, transitionID, startEdgeSnapshot, targetPlacementID, "applied", workflowRunMetadata{}); err != nil {
-		return StartTaskResult{}, err
-	}
-	runSnapshotJSON, err := workflow.MarshalString(runSnapshot)
-	if err != nil {
-		return StartTaskResult{}, err
-	}
-	runMetadataJSON, err := workflow.MarshalString(workflowRunMetadata{
-		ContextMode:    string(startEdgeSnapshot.ContextMode),
-		ContextSource:  workflow.CanonicalContextSource(startEdgeSnapshot.ContextSource),
-		PromptTemplate: strings.TrimSpace(startEdgeSnapshot.PromptTemplate),
-		Parameters:     append([]workflow.Parameter(nil), startEdgeSnapshot.Parameters...),
-	})
-	if err != nil {
-		return StartTaskResult{}, err
-	}
-	if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: runID, PlacementID: targetPlacementID, WorkflowRevisionSeen: prepared.workflow.Version, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptionDetailJson: "{}", RunStartSnapshotJson: runSnapshotJSON, MetadataJson: runMetadataJSON}); err != nil {
 		return StartTaskResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return StartTaskResult{}, err
 	}
-	return StartTaskResult{TransitionID: transitionID, PlacementID: workflow.PlacementID(targetPlacementID), RunID: workflow.RunID(runID)}, nil
+	return StartTaskResult{
+		Mutation: workflow.CurrentNodeMutationResult{
+			Removed: []workflow.CurrentNodeReference{prepared.startCurrentNode.Reference},
+			Created: []workflow.CurrentNode{targetCurrentNode},
+		},
+	}, nil
 }
 
 func (s *Store) ValidateTaskStart(ctx context.Context, taskID workflow.TaskID) error {
@@ -620,14 +600,10 @@ func (s *Store) ValidateTaskStart(ctx context.Context, taskID workflow.TaskID) e
 }
 
 type preparedTaskStart struct {
-	task           sqlitegen.TaskRecord
-	definition     workflow.Definition
-	workflow       WorkflowRecord
-	start          workflow.Node
-	group          workflow.TransitionGroup
-	edge           workflow.Edge
-	target         workflow.Node
-	startPlacement sqlitegen.TaskNodePlacementRecord
+	task             sqlitegen.TaskRecord
+	start            workflow.Node
+	target           workflow.Node
+	startCurrentNode workflow.CurrentNode
 }
 
 func (s *Store) prepareTaskStart(ctx context.Context, taskID workflow.TaskID) (preparedTaskStart, error) {
@@ -638,26 +614,29 @@ func (s *Store) prepareTaskStart(ctx context.Context, taskID workflow.TaskID) (p
 	if task.CanceledAtUnixMs.Valid {
 		return preparedTaskStart{}, ErrTaskCanceled
 	}
-	def, wf, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
+	def, _, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
 	if err != nil {
-		return preparedTaskStart{}, err
-	}
-	startPlacement, err := s.queries.GetActiveStartPlacementForTask(ctx, string(taskID))
-	if err != nil {
-		return preparedTaskStart{}, err
-	}
-	if err := s.preflightInitialExecution(def); err != nil {
 		return preparedTaskStart{}, err
 	}
 	start, err := startNode(def)
 	if err != nil {
 		return preparedTaskStart{}, err
 	}
-	group, edge, target, err := startTransition(def, workflow.NodeIDOf(start))
+	startCurrentNode, err := currentNodeForReference(ctx, s.queries, workflow.TaskID(task.ID), workflow.NodeIDOf(start))
 	if err != nil {
 		return preparedTaskStart{}, err
 	}
-	return preparedTaskStart{task: task, definition: def, workflow: wf, start: start, group: group, edge: edge, target: target, startPlacement: startPlacement}, nil
+	if startCurrentNode.SessionID != nil || startCurrentNode.Scheduling != nil {
+		return preparedTaskStart{}, sql.ErrNoRows
+	}
+	if err := s.preflightInitialExecution(def); err != nil {
+		return preparedTaskStart{}, err
+	}
+	_, _, target, err := startTransition(def, workflow.NodeIDOf(start))
+	if err != nil {
+		return preparedTaskStart{}, err
+	}
+	return preparedTaskStart{task: task, start: start, target: target, startCurrentNode: startCurrentNode}, nil
 }
 
 func (s *Store) preflightInitialExecution(def workflow.Definition) error {

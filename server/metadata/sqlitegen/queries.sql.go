@@ -1000,6 +1000,26 @@ func (q *Queries) DeleteProjectWorkflowLinksByWorkflowID(ctx context.Context, wo
 	return result.RowsAffected()
 }
 
+const deleteSerialTaskCurrentNode = `-- name: DeleteSerialTaskCurrentNode :execrows
+DELETE FROM task_current_nodes
+WHERE task_id = ?1
+  AND node_id = ?2
+  AND transition_branch_key IS NULL
+`
+
+type DeleteSerialTaskCurrentNodeParams struct {
+	TaskID string
+	NodeID string
+}
+
+func (q *Queries) DeleteSerialTaskCurrentNode(ctx context.Context, arg DeleteSerialTaskCurrentNodeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteSerialTaskCurrentNode, arg.TaskID, arg.NodeID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteSessionRecordByID = `-- name: DeleteSessionRecordByID :execrows
 DELETE FROM sessions
 WHERE id = ?1
@@ -3357,6 +3377,61 @@ func (q *Queries) InsertTaskComment(ctx context.Context, arg InsertTaskCommentPa
 		arg.AuthorID,
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
+	)
+	return err
+}
+
+const insertTaskCurrentNode = `-- name: InsertTaskCurrentNode :exec
+INSERT INTO task_current_nodes (
+    task_id,
+    node_id,
+    transition_branch_key,
+    current_input_values_json,
+    prior_node_values_json,
+    session_id,
+    scheduling_state,
+    interruption_reason,
+    interruption_detail_json,
+    interrupted_at_unix_ms
+) VALUES (
+    ?1,
+    ?2,
+    ?3,
+    ?4,
+    ?5,
+    ?6,
+    ?7,
+    ?8,
+    ?9,
+    ?10
+)
+`
+
+type InsertTaskCurrentNodeParams struct {
+	TaskID                 string
+	NodeID                 string
+	TransitionBranchKey    sql.NullString
+	CurrentInputValuesJson string
+	PriorNodeValuesJson    string
+	SessionID              sql.NullString
+	SchedulingState        sql.NullString
+	InterruptionReason     sql.NullString
+	InterruptionDetailJson sql.NullString
+	InterruptedAtUnixMs    sql.NullInt64
+}
+
+func (q *Queries) InsertTaskCurrentNode(ctx context.Context, arg InsertTaskCurrentNodeParams) error {
+	_, err := q.db.ExecContext(ctx, insertTaskCurrentNode,
+		arg.TaskID,
+		arg.NodeID,
+		arg.TransitionBranchKey,
+		arg.CurrentInputValuesJson,
+		arg.PriorNodeValuesJson,
+		arg.SessionID,
+		arg.SchedulingState,
+		arg.InterruptionReason,
+		arg.InterruptionDetailJson,
+		arg.InterruptedAtUnixMs,
 	)
 	return err
 }

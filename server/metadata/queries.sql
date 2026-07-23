@@ -4686,6 +4686,37 @@ ORDER BY
     CASE WHEN transition_branch_key IS NULL THEN 0 ELSE 1 END,
     transition_branch_key;
 
+-- name: InsertTaskCurrentNode :exec
+INSERT INTO task_current_nodes (
+    task_id,
+    node_id,
+    transition_branch_key,
+    current_input_values_json,
+    prior_node_values_json,
+    session_id,
+    scheduling_state,
+    interruption_reason,
+    interruption_detail_json,
+    interrupted_at_unix_ms
+) VALUES (
+    sqlc.arg(task_id),
+    sqlc.arg(node_id),
+    sqlc.arg(transition_branch_key),
+    sqlc.arg(current_input_values_json),
+    sqlc.arg(prior_node_values_json),
+    sqlc.arg(session_id),
+    sqlc.arg(scheduling_state),
+    sqlc.arg(interruption_reason),
+    sqlc.arg(interruption_detail_json),
+    sqlc.arg(interrupted_at_unix_ms)
+);
+
+-- name: DeleteSerialTaskCurrentNode :execrows
+DELETE FROM task_current_nodes
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND transition_branch_key IS NULL;
+
 -- name: GetTaskActiveFanout :one
 SELECT task_id
 FROM task_active_fanouts
