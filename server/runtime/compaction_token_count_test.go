@@ -127,3 +127,40 @@ func TestShouldCompactBeforeUserMessageUsesPromptGrowthBelowPreSubmitBand(t *tes
 		)
 	}
 }
+
+func TestShouldCompactBeforeUserMessageFallsBackWhenExactCountUnsupported(t *testing.T) {
+	supported := false
+	client := &preciseCompactionClient{
+		inputTokenCount: 960,
+		countSupported:  &supported,
+	}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+		Model:                         "gpt-5",
+		ContextWindowTokens:           1_000,
+		AutoCompactTokenLimit:         950,
+		PreSubmitCompactionLeadTokens: 50,
+	})
+	if err := engine.steer("existing", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("existing ", 300))}},
+	)); err != nil {
+		t.Fatalf("persist existing input: %v", err)
+	}
+
+	shouldCompact, err := engine.ShouldCompactBeforeUserMessage(
+		context.Background(),
+		strings.Repeat("next ", 1_000),
+	)
+	if err != nil {
+		t.Fatalf("evaluate fallback pre-submit compaction: %v", err)
+	}
+	if !shouldCompact || client.countCalls != 0 {
+		t.Fatalf(
+			"fallback pre-submit decision=%t exact-count-calls=%d, want true and zero",
+			shouldCompact,
+			client.countCalls,
+		)
+	}
+}
