@@ -256,3 +256,28 @@ func TestShouldAutoCompactAccountsForReservedOutputBudget(t *testing.T) {
 		)
 	}
 }
+
+func TestShouldAutoCompactSkipsPreciseCountWhenFarBelowThreshold(t *testing.T) {
+	client := &preciseCompactionClient{inputTokenCount: 999_999}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+		Model:                 "gpt-5",
+		ContextWindowTokens:   400_000,
+		AutoCompactTokenLimit: 100_000,
+	})
+	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+	)); err != nil {
+		t.Fatalf("persist input: %v", err)
+	}
+	shouldCompact := engine.shouldAutoCompactWithContext(context.Background())
+	if shouldCompact || client.countCalls != 0 {
+		t.Fatalf(
+			"far-below auto-compaction decision/count-calls = %t/%d, want false/zero",
+			shouldCompact,
+			client.countCalls,
+		)
+	}
+}
