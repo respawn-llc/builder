@@ -4720,6 +4720,10 @@ WHERE task_id = sqlc.arg(task_id)
       OR transition_branch_key = sqlc.narg(transition_branch_key)
   );
 
+-- name: DeleteTaskCurrentNodes :execrows
+DELETE FROM task_current_nodes
+WHERE task_id = sqlc.arg(task_id);
+
 -- name: InsertTaskActiveFanout :exec
 INSERT INTO task_active_fanouts (task_id)
 VALUES (sqlc.arg(task_id));

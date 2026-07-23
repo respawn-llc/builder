@@ -183,7 +183,10 @@ type ManualMoveRequest struct {
 	ExecutionTarget  *ExecutionTargetCandidate
 }
 
-type ManualMoveResult = CompleteRunResult
+type ManualMoveResult struct {
+	workflow.CurrentNodeMutationResult
+	CompleteRunResult
+}
 
 func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskRecord, error) {
 	projectID := strings.TrimSpace(req.ProjectID)

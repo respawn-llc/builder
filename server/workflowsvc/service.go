@@ -1229,9 +1229,6 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		setupOperationID:        req.SetupOperationID,
 		explicitTarget:          req.ExecutionTarget,
 		requiresExecutionTarget: preparation.RequiresExecutionTarget(),
-		afterTargetResolution: func() error {
-			return s.stopWaitingQuestionForMove(ctx, workflow.TaskID(req.TaskID))
-		},
 	}, func(candidate *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error) {
 		return workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (workflowstore.ManualMoveResult, error) {
 			return s.store.ApplyManualMove(ctx, preparation, candidate)
@@ -1250,7 +1247,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		return serverapi.WorkflowTaskMoveResponse{}, errors.New("coordinated task move returned no applied result")
 	}
 	moved := *coordinated.applied
-	s.finalizeWorkflowAttention(ctx, moved)
+	s.finalizeWorkflowAttention(ctx, moved.CompleteRunResult)
 	if err := s.startExplicitRuns(ctx, moved.RunIDs); err != nil {
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
@@ -1266,30 +1263,6 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 			RunIDs:       runIDs(moved.RunIDs),
 		},
 	}, nil
-}
-
-func (s *Service) stopWaitingQuestionForMove(ctx context.Context, taskID workflow.TaskID) error {
-	if s.moveAuthority == nil {
-		return nil
-	}
-	var prepared workflowexecution.PreparedMoveStop
-	if err := s.mutationPermit.Run(ctx, func(context.Context) error {
-		var err error
-		prepared, err = s.moveAuthority.PrepareWorkflowMove(taskID)
-		if err != nil {
-			return err
-		}
-		if prepared != nil {
-			prepared.RequestStop()
-		}
-		return nil
-	}); err != nil {
-		return err
-	}
-	if prepared == nil {
-		return nil
-	}
-	return prepared.Wait(ctx)
 }
 
 func (s *Service) CompleteWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskCompleteRequest) (serverapi.WorkflowTaskCompleteResponse, error) {

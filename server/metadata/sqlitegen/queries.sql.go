@@ -1168,6 +1168,19 @@ func (q *Queries) DeleteTaskCurrentNode(ctx context.Context, arg DeleteTaskCurre
 	return result.RowsAffected()
 }
 
+const deleteTaskCurrentNodes = `-- name: DeleteTaskCurrentNodes :execrows
+DELETE FROM task_current_nodes
+WHERE task_id = ?1
+`
+
+func (q *Queries) DeleteTaskCurrentNodes(ctx context.Context, taskID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTaskCurrentNodes, taskID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteTaskLabelAssignment = `-- name: DeleteTaskLabelAssignment :execrows
 DELETE FROM task_label_assignments
 WHERE task_id = ?1
