@@ -290,6 +290,25 @@ func TestSchedulerRunsNewSessionWorkflowNodeWithCompleteNodeTool(t *testing.T) {
 	}
 }
 
+func TestSchedulerCanUseAutomaticToolChoiceForWorkflowCompletion(t *testing.T) {
+	input := json.RawMessage(`{"commentary":"finished tool"}`)
+	fixture := newStarterFixture(t, config.WorkflowCompletionModeTool, ScriptedToolBatch("complete", llm.ToolCall{ID: "call-complete", Name: "complete_node", Input: input}))
+	fixture.cfg.Settings.Workflow.UseRequiredToolCalls = false
+	fixture.rebuildStarter(t)
+
+	task := fixture.createStartedTask(t)
+	scheduler := fixture.scheduler(t)
+	if err := scheduler.Process(context.Background()); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	fixture.waitForCompletedRun(t, task.ID)
+
+	requests := fixture.client.Requests()
+	if len(requests) == 0 || requests[0].ToolChoiceMode != llm.ToolChoiceModeAutomatic {
+		t.Fatalf("workflow requests = %+v, want automatic tool choice", requests)
+	}
+}
+
 func TestSchedulerWorkflowPromptIncludesStoreBackedTaskCommentCount(t *testing.T) {
 	input := json.RawMessage(`{"commentary":"finished tool"}`)
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeTool, ScriptedToolBatch("complete", llm.ToolCall{ID: "call-complete", Name: "complete_node", Input: input}))
@@ -1726,6 +1745,7 @@ func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 	}
 	originalSessionID := runs[0].SessionID
 	fixture.cfg.Settings.EnabledTools[toolspec.ToolAskQuestion] = false
+	fixture.cfg.Settings.Workflow.UseRequiredToolCalls = false
 	fixture.rebuildStarter(t)
 	resumedRuns, err := fixture.store.ResumeTaskRuns(context.Background(), task.ID)
 	if err != nil {
@@ -1749,8 +1769,8 @@ func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 		t.Fatalf("resumed run = %+v, want same session %s for run %s", runs, originalSessionID, resumed.ID)
 	}
 	requests := fixture.client.Requests()
-	if len(requests) != 1 || requests[0].ToolChoiceMode != llm.ToolChoiceModeRequired {
-		t.Fatalf("resumed model requests = %+v, want one required-tool request", requests)
+	if len(requests) != 1 || requests[0].ToolChoiceMode != llm.ToolChoiceModeAutomatic {
+		t.Fatalf("resumed model requests = %+v, want one automatic-tool request", requests)
 	}
 	if requestHasTool(requests[0], string(toolspec.ToolAskQuestion)) || !requestHasTool(requests[0], string(toolspec.ToolExecCommand)) {
 		t.Fatalf("resumed request did not preserve unsafe legacy locked tools: %+v", requests[0].Tools)

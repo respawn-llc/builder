@@ -84,7 +84,7 @@ func (e *Engine) buildRequestPlanWithExtraItems(ctx context.Context, stepID stri
 	}
 	toolChoiceMode := llm.ToolChoiceModeAutomatic
 	if allowTools {
-		toolChoiceMode = toolChoiceModeForWorkflowCompletion(workflowMode)
+		toolChoiceMode = toolChoiceModeForWorkflowCompletion(workflowMode, e.workflowUseRequiredToolCalls())
 	}
 	req, err := llm.RequestFromLockedContract(locked, systemPrompt, items, requestTools, llm.ToolControls{
 		ChoiceMode:            toolChoiceMode,
@@ -120,13 +120,20 @@ func (e *Engine) buildRequestPlanWithExtraItems(ctx context.Context, stepID stri
 	return requestBuildPlan{Request: req}, nil
 }
 
-func toolChoiceModeForWorkflowCompletion(mode workflowruntime.CompletionMode) llm.ToolChoiceMode {
+func toolChoiceModeForWorkflowCompletion(mode workflowruntime.CompletionMode, useRequiredToolCalls bool) llm.ToolChoiceMode {
+	if !useRequiredToolCalls {
+		return llm.ToolChoiceModeAutomatic
+	}
 	switch mode {
 	case workflowruntime.CompletionModeShellCommand, workflowruntime.CompletionModeTool:
 		return llm.ToolChoiceModeRequired
 	default:
 		return llm.ToolChoiceModeAutomatic
 	}
+}
+
+func (e *Engine) workflowUseRequiredToolCalls() bool {
+	return e.workflowRunActive() && !e.cfg.WorkflowRun.UseAutomaticToolChoice
 }
 
 func (e *Engine) validateToolChoiceSupport(ctx context.Context, mode llm.ToolChoiceMode) error {

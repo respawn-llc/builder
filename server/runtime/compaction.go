@@ -367,7 +367,7 @@ func (e *Engine) buildRequestWithoutPromptRefresh(ctx context.Context) (llm.Requ
 	if nativeErr != nil {
 		return llm.Request{}, nativeErr
 	}
-	toolChoiceMode := toolChoiceModeForWorkflowCompletion(workflowMode)
+	toolChoiceMode := toolChoiceModeForWorkflowCompletion(workflowMode, e.workflowUseRequiredToolCalls())
 	req, err := llm.RequestFromLockedContract(locked, systemPrompt, e.transcriptRuntimeState().SnapshotItems(), requestTools, llm.ToolControls{
 		ChoiceMode:            toolChoiceMode,
 		EnableNativeWebSearch: nativeWebSearch,

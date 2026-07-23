@@ -36,6 +36,7 @@ type WorkflowSettings struct {
 	CompletionMode               WorkflowCompletionMode
 	Concurrency                  int
 	MaxInvalidCompletionAttempts int
+	UseRequiredToolCalls         bool
 	Subagents                    bool
 }
 

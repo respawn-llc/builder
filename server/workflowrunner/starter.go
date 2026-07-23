@@ -1116,6 +1116,7 @@ func (s *Starter) startAgentExecution(ctx context.Context, req workflowexecution
 		input,
 		effectiveMode,
 		s.cfg.Settings.Workflow.MaxInvalidCompletionAttempts,
+		plan.ActiveSettings.Workflow.UseRequiredToolCalls,
 		workflowruntime.StoreController{Store: s.store, AttentionFinalizer: s.attentionFinalizer, AutomaticStarts: s.automaticStarts, MutationPermit: s.mutationPermit},
 		s.store,
 	)
