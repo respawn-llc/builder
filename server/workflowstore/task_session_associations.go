@@ -81,13 +81,17 @@ func (s *Store) CountTaskSessions(ctx context.Context, taskID workflow.TaskID) (
 }
 
 func (s *Store) LatestTaskSessionForNode(ctx context.Context, currentNode workflow.CurrentNodeReference) (TaskSessionAssociation, error) {
+	return latestTaskSessionForNode(ctx, s.queries, currentNode)
+}
+
+func latestTaskSessionForNode(ctx context.Context, q *sqlitegen.Queries, currentNode workflow.CurrentNodeReference) (TaskSessionAssociation, error) {
 	if err := currentNode.Validate(); err != nil {
 		return TaskSessionAssociation{}, err
 	}
 	var sessionIDRaw string
 	var associatedAtUnixMs int64
 	if branchKey, branchScoped := currentNode.TransitionBranchKey(); branchScoped {
-		row, err := s.queries.GetLatestBranchTaskSessionAssociationForNode(ctx, sqlitegen.GetLatestBranchTaskSessionAssociationForNodeParams{
+		row, err := q.GetLatestBranchTaskSessionAssociationForNode(ctx, sqlitegen.GetLatestBranchTaskSessionAssociationForNodeParams{
 			TaskID:              sql.NullString{String: string(currentNode.TaskID), Valid: true},
 			NodeID:              string(currentNode.NodeID),
 			TransitionBranchKey: sql.NullString{String: string(branchKey), Valid: true},
@@ -98,7 +102,7 @@ func (s *Store) LatestTaskSessionForNode(ctx context.Context, currentNode workfl
 		sessionIDRaw = row.SessionID
 		associatedAtUnixMs = row.AssociatedAtUnixMs
 	} else {
-		row, err := s.queries.GetLatestSerialTaskSessionAssociationForNode(ctx, sqlitegen.GetLatestSerialTaskSessionAssociationForNodeParams{
+		row, err := q.GetLatestSerialTaskSessionAssociationForNode(ctx, sqlitegen.GetLatestSerialTaskSessionAssociationForNodeParams{
 			TaskID: sql.NullString{String: string(currentNode.TaskID), Valid: true},
 			NodeID: string(currentNode.NodeID),
 		})

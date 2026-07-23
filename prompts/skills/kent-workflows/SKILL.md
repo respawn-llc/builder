@@ -105,9 +105,9 @@ Note that to prevent high costs due to cache invalidation, only compact and new_
 Continuation modes also have a context source. Use `--context-source <source>` on `workflow edge add` or `workflow edge update`.
 
 - `immediate_source`: continue or compact the session from the node that selected the transition. This is the default.
-- `node:<node-key>`: continue or compact the latest completed run of a specific guaranteed-prior agent node. Use this when the target needs context from an earlier node rather than the immediate source.
-- `previous_target`: continue or compact the latest completed run of this edge's target node. Use this only in guaranteed loops where the target always ran before the source. If no completed prior target run exists, the transition fails.
-- `previous_target_or_new`: continue or compact the latest completed run of this edge's target node when one exists; otherwise start the target as an effective `new_session`. Use this for optional re-review loops where the first pass should start fresh and later passes should continue the prior review session. This is good for looping re-checks, re-reviews, or re-verification.
+- `node:<node-key>`: continue or compact the latest retained Session associated with a specific guaranteed-prior agent node. Use this when the target needs context from an earlier node rather than the immediate source.
+- `previous_target`: continue or compact the latest retained Session associated with this edge's target node. Use this only in guaranteed loops where the target always ran before the source. If no retained target Session exists, the transition fails.
+- `previous_target_or_new`: continue or compact the latest retained Session associated with this edge's target node when one exists; otherwise start the target as an effective `new_session`. Use this for optional re-review loops where the first pass should start fresh and later passes should continue the prior review Session. This is good for looping re-checks, re-reviews, or re-verification.
 
 Examples:
 
@@ -129,7 +129,7 @@ Context source constraints:
 - `node:<node-key>` requires an agent node that is guaranteed to run before the transition source and is not the edge target.
 - Manual task moves support `previous_target` and `previous_target_or_new` through concrete edges. `node:<node-key>` remains blocked.
 
-Use `--requires-approval` when a transition must stop for human review before the target node starts. Pending approvals freeze the selected target branches and their context-source resolution, so later workflow edits or later completed runs do not change what approval starts. This can happen asynchronously thus causing cache invalidation, so approvals across `continue_session` are suboptimal. Usually, the User will tell you at which point they want to manually approve continuation.
+Use `--requires-approval` when a transition must stop for human review before the target node starts. Pending approvals freeze the selected target branches and their context-source resolution, so later workflow edits or later retained Session associations do not change what approval starts. This can happen asynchronously thus causing cache invalidation, so approvals across `continue_session` are suboptimal. Usually, the User will tell you at which point they want to manually approve continuation.
 
 ## Completion modes
 The completion mode controls the technicality of how an agent node signals task completion.

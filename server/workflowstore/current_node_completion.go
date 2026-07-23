@@ -9,6 +9,7 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 type CurrentNodeCompletionRequest struct {
@@ -76,6 +77,8 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		return CurrentNodeCompletionResult{}, err
 	}
 	targetCurrentNode, err := materializeCompletionTargetCurrentNode(
+		ctx,
+		q,
 		definition,
 		edge,
 		source,
@@ -237,6 +240,8 @@ func currentNodeCompletionOutputIssues(definition workflow.Definition, group wor
 }
 
 func materializeCompletionTargetCurrentNode(
+	ctx context.Context,
+	q *sqlitegen.Queries,
 	definition workflow.Definition,
 	edge workflow.Edge,
 	source workflow.Node,
@@ -277,12 +282,78 @@ func materializeCompletionTargetCurrentNode(
 		}
 		priorNodeValues[nodeKey][requirement.OutputName] = value
 	}
+	sessionID, err := completionTargetSession(ctx, q, definition, edge, currentSource)
+	if err != nil {
+		return workflow.CurrentNode{}, err
+	}
 	return completionTargetCurrentNode(
 		currentSource.Reference.TaskID,
 		target,
 		currentInputValues,
 		priorNodeValues,
+		sessionID,
 	)
+}
+
+func completionTargetSession(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	definition workflow.Definition,
+	edge workflow.Edge,
+	source workflow.CurrentNode,
+) (*runtimeids.SessionID, error) {
+	if edge.ContextMode == workflow.ContextModeNewSession {
+		return nil, nil
+	}
+	contextSource := workflow.CanonicalContextSource(edge.ContextSource)
+	switch contextSource.Kind {
+	case workflow.ContextSourceImmediateSource:
+		if source.SessionID == nil {
+			return nil, errors.New("immediate source continuation requires a source current node session")
+		}
+		sessionID := *source.SessionID
+		return &sessionID, nil
+	case workflow.ContextSourceSelectedNode:
+		selected, err := currentNodeDefinitionNodeByKey(definition, contextSource.NodeKey)
+		if err != nil {
+			return nil, err
+		}
+		selectedReference, err := workflow.NewCurrentNodeReference(source.Reference.TaskID, workflow.NodeIDOf(selected), nil)
+		if err != nil {
+			return nil, err
+		}
+		association, err := latestTaskSessionForNode(ctx, q, selectedReference)
+		if err != nil {
+			return nil, err
+		}
+		sessionID := association.SessionID
+		return &sessionID, nil
+	case workflow.ContextSourcePreviousTarget, workflow.ContextSourcePreviousTargetOrNew:
+		targetReference, err := workflow.NewCurrentNodeReference(source.Reference.TaskID, edge.TargetNodeID, nil)
+		if err != nil {
+			return nil, err
+		}
+		association, err := latestTaskSessionForNode(ctx, q, targetReference)
+		if err != nil {
+			if contextSource.Kind == workflow.ContextSourcePreviousTargetOrNew && errors.Is(err, sql.ErrNoRows) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		sessionID := association.SessionID
+		return &sessionID, nil
+	default:
+		return nil, fmt.Errorf("current node completion does not yet support context source %q", contextSource.Kind)
+	}
+}
+
+func currentNodeDefinitionNodeByKey(definition workflow.Definition, key workflow.ModelKey) (workflow.Node, error) {
+	for _, node := range definition.Nodes {
+		if workflow.NodeKey(node) == key {
+			return node, nil
+		}
+	}
+	return nil, fmt.Errorf("context source node %q is absent from workflow %q", key, definition.ID)
 }
 
 func completionTargetCurrentNode(
@@ -290,6 +361,7 @@ func completionTargetCurrentNode(
 	target workflow.Node,
 	currentInputValues map[string]string,
 	priorNodeValues map[string]map[string]string,
+	sessionID *runtimeids.SessionID,
 ) (workflow.CurrentNode, error) {
 	var scheduling *workflow.CurrentNodeScheduling
 	switch target.Kind() {
@@ -304,7 +376,7 @@ func completionTargetCurrentNode(
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
-	return workflow.NewCurrentNodeWithMaterializedValues(reference, currentInputValues, priorNodeValues, nil, scheduling)
+	return workflow.NewCurrentNodeWithMaterializedValues(reference, currentInputValues, priorNodeValues, sessionID, scheduling)
 }
 
 func currentNodeCompletionHandoff(source workflow.Node, target workflow.Node) (CompletionHandoff, error) {
