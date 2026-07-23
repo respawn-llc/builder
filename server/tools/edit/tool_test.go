@@ -45,7 +45,11 @@ func TestSuccessfulAbsoluteForeignManagedWorktreeEditWarns(t *testing.T) {
 	}
 	foreignFile := filepath.Join(foreignRoot, "foreign.txt")
 	writeEditTestFile(t, foreignFile, "before\n", 0o644)
-	tool := newTestTool(t, filepath.Join(currentRoot, "nested"), WithManagedWorktreePathContext(base, currentRoot))
+	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot)
+	if err != nil {
+		t.Fatalf("managed worktree path context: %v", err)
+	}
+	tool := newTestTool(t, filepath.Join(currentRoot, "nested"), WithManagedWorktreePathContext(context))
 
 	result := callEdit(t, tool, map[string]any{
 		"path":       foreignFile,
@@ -79,7 +83,11 @@ func TestEditManagedWorktreeWarningSkipsNonForeignOrFailedTargets(t *testing.T) 
 	writeEditTestFile(t, currentFile, "before\n", 0o644)
 	writeEditTestFile(t, foreignFile, "before\n", 0o644)
 	writeEditTestFile(t, outsideFile, "before\n", 0o644)
-	tool := newTestTool(t, filepath.Join(currentRoot, "nested"), WithManagedWorktreePathContext(base, currentRoot), WithAllowOutsideWorkspace(true))
+	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot)
+	if err != nil {
+		t.Fatalf("managed worktree path context: %v", err)
+	}
+	tool := newTestTool(t, filepath.Join(currentRoot, "nested"), WithManagedWorktreePathContext(context), WithAllowOutsideWorkspace(true))
 
 	tests := []struct {
 		name    string

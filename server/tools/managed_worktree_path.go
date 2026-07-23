@@ -10,26 +10,26 @@ import (
 
 type ManagedWorktreePathContext struct {
 	baseRoot    string
-	currentRoot string
+	currentRoot *string
 }
 
-func NewManagedWorktreePathContext(baseDir string, currentWorktreeRoot string) (ManagedWorktreePathContext, error) {
+func NewManagedWorktreePathContext(baseDir string, currentWorktreeRoot *string) (*ManagedWorktreePathContext, error) {
 	base, err := config.ResolveExistingPathRealPath(strings.TrimSpace(baseDir))
 	if err != nil {
-		return ManagedWorktreePathContext{}, fmt.Errorf("resolve managed worktree base: %w", err)
+		return nil, fmt.Errorf("resolve managed worktree base: %w", err)
 	}
-	context := ManagedWorktreePathContext{baseRoot: base}
-	if strings.TrimSpace(currentWorktreeRoot) == "" {
+	context := &ManagedWorktreePathContext{baseRoot: base}
+	if currentWorktreeRoot == nil {
 		return context, nil
 	}
-	current, err := config.ResolveExistingPathRealPath(currentWorktreeRoot)
+	current, err := config.ResolveExistingPathRealPath(*currentWorktreeRoot)
 	if err != nil {
-		return ManagedWorktreePathContext{}, fmt.Errorf("resolve current managed worktree root: %w", err)
+		return nil, fmt.Errorf("resolve current managed worktree root: %w", err)
 	}
 	if !pathWithin(base, current) {
-		return ManagedWorktreePathContext{}, fmt.Errorf("current managed worktree root %q is outside managed worktree base %q", current, base)
+		return nil, fmt.Errorf("current managed worktree root %q is outside managed worktree base %q", current, base)
 	}
-	context.currentRoot = current
+	context.currentRoot = &current
 	return context, nil
 }
 
@@ -37,7 +37,7 @@ func (c ManagedWorktreePathContext) WarnsFor(requestedPath string, resolvedPath 
 	if !filepath.IsAbs(requestedPath) || !pathWithin(c.baseRoot, resolvedPath) {
 		return false
 	}
-	return c.currentRoot == "" || !pathWithin(c.currentRoot, resolvedPath)
+	return c.currentRoot == nil || !pathWithin(*c.currentRoot, resolvedPath)
 }
 
 func pathWithin(root string, path string) bool {

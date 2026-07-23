@@ -11,6 +11,7 @@ import (
 	"core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
+	"core/server/tools"
 	servicecontract "core/shared/apicontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -134,22 +135,25 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 	for _, line := range runlog.FormatConfigSourceLines(req.Source.Sources) {
 		startLogLines = append(startLogLines, "config.source "+line)
 	}
+	var currentWorktreeRoot *string
+	if target.Worktree != nil {
+		root := target.Worktree.Root
+		currentWorktreeRoot = &root
+	}
+	managedWorktreePathContext, err := tools.NewManagedWorktreePathContext(req.ActiveSettings.Worktrees.BaseDir, currentWorktreeRoot)
+	if err != nil {
+		return AgentRuntimePlan{}, err
+	}
 	return NewAgentRuntimePlan(AgentRuntimePlanOptions{
-		Settings:               req.ActiveSettings,
-		EnabledTools:           enabledTools,
-		Workdir:                target.EffectiveWorkdir,
-		ManagedWorktreeBaseDir: req.ActiveSettings.Worktrees.BaseDir,
-		CurrentWorktreeRoot: func() string {
-			if target.Worktree == nil {
-				return ""
-			}
-			return target.Worktree.Root
-		}(),
-		Sources:                  req.Source.Sources,
-		FastMode:                 s.fastModeState,
-		ClientFactory:            s.runtimeClientFactory,
-		StartLogLines:            startLogLines,
-		RecoveredWarningProvider: s.recoveredWarningProvider,
+		Settings:                   req.ActiveSettings,
+		EnabledTools:               enabledTools,
+		Workdir:                    target.EffectiveWorkdir,
+		ManagedWorktreePathContext: managedWorktreePathContext,
+		Sources:                    req.Source.Sources,
+		FastMode:                   s.fastModeState,
+		ClientFactory:              s.runtimeClientFactory,
+		StartLogLines:              startLogLines,
+		RecoveredWarningProvider:   s.recoveredWarningProvider,
 	})
 }
 

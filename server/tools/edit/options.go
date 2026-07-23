@@ -1,10 +1,6 @@
 package edit
 
-import (
-	"strings"
-
-	"core/server/tools"
-)
+import "core/server/tools"
 
 type Option func(*Tool)
 
@@ -26,15 +22,8 @@ func WithPathDenyPolicy(policy tools.PathDenyPolicy) Option {
 	}
 }
 
-func WithManagedWorktreePathContext(baseDir string, currentWorktreeRoot string) Option {
+func WithManagedWorktreePathContext(context *tools.ManagedWorktreePathContext) Option {
 	return func(t *Tool) {
-		if strings.TrimSpace(baseDir) == "" {
-			return
-		}
-		context, err := tools.NewManagedWorktreePathContext(baseDir, currentWorktreeRoot)
-		if err != nil {
-			panic(err)
-		}
-		t.managedWorktreePathContext = &context
+		t.managedWorktreePathContext = context
 	}
 }

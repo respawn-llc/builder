@@ -48,7 +48,11 @@ func TestSuccessfulAbsoluteForeignManagedWorktreePatchWarnsForMoveDestination(t 
 	if err := os.WriteFile(source, []byte("before\n"), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	tool := newPatchTestTool(t, filepath.Join(currentRoot, "nested"), WithManagedWorktreePathContext(base, currentRoot))
+	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot)
+	if err != nil {
+		t.Fatalf("managed worktree path context: %v", err)
+	}
+	tool := newPatchTestTool(t, filepath.Join(currentRoot, "nested"), WithManagedWorktreePathContext(context))
 
 	result := callPatch(t, tool, "foreign-move", "*** Begin Patch\n*** Update File: "+source+"\n*** Move to: "+destination+"\n-before\n+after\n*** End Patch\n")
 
@@ -88,7 +92,11 @@ func TestPatchManagedWorktreeWarningSkipsRelativeCurrentOutsideAndFailures(t *te
 			t.Fatalf("write %s: %v", path, err)
 		}
 	}
-	tool := newPatchTestTool(t, filepath.Join(currentRoot, "nested"), WithManagedWorktreePathContext(base, currentRoot), WithAllowOutsideWorkspace(true))
+	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot)
+	if err != nil {
+		t.Fatalf("managed worktree path context: %v", err)
+	}
+	tool := newPatchTestTool(t, filepath.Join(currentRoot, "nested"), WithManagedWorktreePathContext(context), WithAllowOutsideWorkspace(true))
 
 	tests := []struct {
 		name    string

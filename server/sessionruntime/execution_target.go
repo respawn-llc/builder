@@ -444,11 +444,7 @@ func rebindResourceExecutionTarget(resource *agentResource, engine *runtime.Engi
 		return errors.New("active runtime resource is required")
 	}
 	if resource.localTools != nil {
-		currentWorktreeRoot := ""
-		if target.Worktree != nil {
-			currentWorktreeRoot = target.Worktree.Root
-		}
-		if err := resource.localTools.RebindExecutionTarget(target.EffectiveWorkdir, currentWorktreeRoot); err != nil {
+		if err := resource.localTools.Rebind(target.EffectiveWorkdir); err != nil {
 			return err
 		}
 	}
