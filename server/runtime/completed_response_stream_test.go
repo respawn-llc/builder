@@ -16,6 +16,482 @@ import (
 	"core/shared/toolspec"
 )
 
+func TestCompletedResponseActiveStreamFinalizesOnce(t *testing.T) {
+	step := scriptedllm.FinalAnswer("completed")
+	step.StreamDeltas = []llm.AssistantDelta{{
+		Text:  "draft",
+		Phase: llm.MessagePhaseFinal,
+	}}
+	var events []Event
+	engine := mustNewExecTestEngine(
+		t,
+		mustCreateTestSession(t),
+		scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{step}}),
+		Config{
+			Model:   "gpt-5",
+			OnEvent: func(event Event) { events = append(events, event) },
+		},
+	)
+
+	if _, err := engine.SubmitUserMessage(context.Background(), "turn"); err != nil {
+		t.Fatalf("submit user turn: %v", err)
+	}
+
+	var delta, assistant, reset *Event
+	deltaIndex, assistantIndex, resetIndex := -1, -1, -1
+	for index := range events {
+		event := &events[index]
+		switch event.Kind {
+		case EventAssistantDelta:
+			if delta != nil {
+				t.Fatalf("multiple assistant deltas: %+v", events)
+			}
+			delta = event
+			deltaIndex = index
+		case EventAssistantMessage:
+			if assistant != nil {
+				t.Fatalf("multiple assistant messages: %+v", events)
+			}
+			assistant = event
+			assistantIndex = index
+		case EventAssistantDeltaReset:
+			if reset != nil {
+				t.Fatalf("multiple assistant stream terminals: %+v", events)
+			}
+			reset = event
+			resetIndex = index
+		}
+	}
+
+	if delta == nil || assistant == nil || reset == nil ||
+		delta.AssistantTranscriptStreamID == nil ||
+		assistant.AssistantTranscriptStreamID == nil ||
+		reset.AssistantTranscriptStreamID == nil ||
+		assistant.Message.Role != llm.RoleAssistant ||
+		assistant.Message.Phase == nil ||
+		*assistant.Message.Phase != llm.MessagePhaseFinal ||
+		!assistant.CommittedEntryStartSet {
+		t.Fatalf(
+			"stream finalization facts = delta:%+v assistant:%+v reset:%+v",
+			delta,
+			assistant,
+			reset,
+		)
+	}
+	if deltaIndex >= assistantIndex || assistantIndex >= resetIndex {
+		t.Fatalf(
+			"stream finalization order = delta:%d assistant:%d reset:%d events:%+v",
+			deltaIndex,
+			assistantIndex,
+			resetIndex,
+			events,
+		)
+	}
+	if *delta.AssistantTranscriptStreamID != *assistant.AssistantTranscriptStreamID ||
+		*delta.AssistantTranscriptStreamID != *reset.AssistantTranscriptStreamID {
+		t.Fatalf(
+			"stream finalization UUIDs differ: delta:%s assistant:%s reset:%s",
+			*delta.AssistantTranscriptStreamID,
+			*assistant.AssistantTranscriptStreamID,
+			*reset.AssistantTranscriptStreamID,
+		)
+	}
+}
+
+func TestCompletedResponseWithoutActiveStreamPublishesNoStreamTerminal(t *testing.T) {
+	var events []Event
+	engine := mustNewExecTestEngine(
+		t,
+		mustCreateTestSession(t),
+		scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{
+			scriptedllm.FinalAnswer("completed"),
+		}}),
+		Config{
+			Model:   "gpt-5",
+			OnEvent: func(event Event) { events = append(events, event) },
+		},
+	)
+
+	if _, err := engine.SubmitUserMessage(context.Background(), "turn"); err != nil {
+		t.Fatalf("submit user turn: %v", err)
+	}
+
+	var assistant *Event
+	resetCount := 0
+	for index := range events {
+		event := &events[index]
+		switch event.Kind {
+		case EventAssistantMessage:
+			if assistant != nil {
+				t.Fatalf("multiple assistant messages: %+v", events)
+			}
+			assistant = event
+		case EventAssistantDeltaReset:
+			resetCount++
+		}
+	}
+	if assistant == nil ||
+		resetCount != 0 ||
+		assistant.AssistantStreamMetadata != nil ||
+		assistant.AssistantTranscriptStreamID != nil ||
+		assistant.Message.Role != llm.RoleAssistant ||
+		assistant.Message.Phase == nil ||
+		*assistant.Message.Phase != llm.MessagePhaseFinal ||
+		!assistant.CommittedEntryStartSet {
+		t.Fatalf("non-streamed final assistant event = %+v", assistant)
+	}
+}
+
+func TestCompletedResponseWorkflowPreflightAbortsBeforeContinuation(t *testing.T) {
+	runID := workflow.RunID("workflow-run")
+	controller := &workflowCompletionAccountingController{}
+	rejected := scriptedllm.ToolBatch(
+		"working",
+		workflowCompleteNodeCall("duplicate-completion-a", `{"transition":"done","summary":"done"}`),
+		workflowCompleteNodeCall("duplicate-completion-b", `{"transition":"done","summary":"done"}`),
+	)
+	rejected.StreamDeltas = []llm.AssistantDelta{{
+		Text:  "draft",
+		Phase: llm.MessagePhaseCommentary,
+	}}
+	accepted := scriptedllm.FinalAnswer(`{"transition":"done","summary":"done"}`)
+	accepted.StreamDeltas = []llm.AssistantDelta{{
+		Text:  "completed",
+		Phase: llm.MessagePhaseFinal,
+	}}
+	var events []Event
+	engine := mustNewWorkflowTestEngine(
+		t,
+		mustCreateTestSession(t),
+		scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{rejected, accepted}}),
+		&workflowruntime.Config{
+			RunID: runID,
+			Contract: workflowruntime.CompletionContract{
+				RunID: runID,
+				Transitions: []workflowruntime.CompletionTransition{{
+					ID:         "done",
+					Parameters: []workflow.Parameter{{Key: "summary"}},
+				}},
+			},
+			CompletionMode:               workflowruntime.CompletionModeUnstructuredOutput,
+			MaxInvalidCompletionAttempts: 2,
+			Controller:                   controller,
+		},
+		Config{
+			Model:   "gpt-5",
+			OnEvent: func(event Event) { events = append(events, event) },
+		},
+	)
+
+	if _, err := engine.SubmitWorkflowTurn(context.Background()); err != nil {
+		t.Fatalf("submit workflow turn: %v", err)
+	}
+
+	assertSupersededStreamPrecedesFinalContinuation(t, events, "workflow preflight")
+	if got := controller.violations.Load(); got != 1 {
+		t.Fatalf("workflow protocol violations = %d, want one", got)
+	}
+	if got := controller.completions.Load(); got != 1 {
+		t.Fatalf("workflow completions = %d, want one", got)
+	}
+}
+
+func TestCompletedResponseReasoningOnlyAbortsBeforeContinuation(t *testing.T) {
+	reasoning := scriptedllm.Step{
+		Response: llm.Response{
+			Assistant: llm.Message{
+				Role: llm.RoleAssistant,
+				ReasoningItems: []llm.ReasoningItem{{
+					ID:               "reasoning-checkpoint",
+					EncryptedContent: "encrypted",
+				}},
+			},
+			ReasoningItems: []llm.ReasoningItem{{
+				ID:               "reasoning-checkpoint",
+				EncryptedContent: "encrypted",
+			}},
+			OutputItems: []llm.ResponseItem{{
+				Type:             llm.ResponseItemTypeReasoning,
+				ID:               textutil.Value("reasoning-checkpoint"),
+				EncryptedContent: textutil.Value("encrypted"),
+			}},
+			Usage: llm.Usage{WindowTokens: 200_000},
+		},
+		StreamDeltas: []llm.AssistantDelta{{
+			Text:  "draft",
+			Phase: llm.MessagePhaseCommentary,
+		}},
+	}
+	final := scriptedllm.FinalAnswer("completed")
+	final.StreamDeltas = []llm.AssistantDelta{{
+		Text:  "resolved",
+		Phase: llm.MessagePhaseFinal,
+	}}
+	var events []Event
+	engine := mustNewExecTestEngine(
+		t,
+		mustCreateTestSession(t),
+		scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{reasoning, final}}),
+		Config{
+			Model:   "gpt-5",
+			OnEvent: func(event Event) { events = append(events, event) },
+		},
+	)
+
+	if _, err := engine.SubmitUserMessage(context.Background(), "turn"); err != nil {
+		t.Fatalf("submit user turn: %v", err)
+	}
+
+	assertSupersededStreamPrecedesFinalContinuation(t, events, "reasoning-only")
+}
+
+func assertSupersededStreamPrecedesFinalContinuation(t *testing.T, events []Event, label string) {
+	t.Helper()
+	var firstDelta, firstReset, secondDelta, finalAssistant *Event
+	firstDeltaIndex, firstResetIndex, secondDeltaIndex, finalAssistantIndex := -1, -1, -1, -1
+	for index := range events {
+		event := &events[index]
+		switch event.Kind {
+		case EventAssistantDelta:
+			if firstDelta == nil {
+				firstDelta = event
+				firstDeltaIndex = index
+				continue
+			}
+			if secondDelta != nil {
+				t.Fatalf("%s emitted unexpected assistant deltas: %+v", label, events)
+			}
+			secondDelta = event
+			secondDeltaIndex = index
+		case EventAssistantDeltaReset:
+			if firstDelta != nil &&
+				firstDelta.AssistantTranscriptStreamID != nil &&
+				event.AssistantTranscriptStreamID != nil &&
+				*event.AssistantTranscriptStreamID == *firstDelta.AssistantTranscriptStreamID {
+				if firstReset != nil {
+					t.Fatalf("%s emitted multiple terminals for the superseded stream: %+v", label, events)
+				}
+				firstReset = event
+				firstResetIndex = index
+			}
+		case EventAssistantMessage:
+			if finalAssistant != nil {
+				t.Fatalf("%s published multiple assistant messages: %+v", label, events)
+			}
+			finalAssistant = event
+			finalAssistantIndex = index
+		}
+	}
+
+	if firstDelta == nil || firstReset == nil || secondDelta == nil || finalAssistant == nil ||
+		firstDelta.AssistantTranscriptStreamID == nil ||
+		firstReset.AssistantTranscriptStreamID == nil ||
+		secondDelta.AssistantTranscriptStreamID == nil ||
+		finalAssistant.AssistantTranscriptStreamID == nil ||
+		finalAssistant.Message.Role != llm.RoleAssistant ||
+		finalAssistant.Message.Phase == nil ||
+		*finalAssistant.Message.Phase != llm.MessagePhaseFinal ||
+		!finalAssistant.CommittedEntryStartSet {
+		t.Fatalf(
+			"%s stream facts = first_delta:%+v first_reset:%+v second_delta:%+v final:%+v",
+			label,
+			firstDelta,
+			firstReset,
+			secondDelta,
+			finalAssistant,
+		)
+	}
+	if *firstDelta.AssistantTranscriptStreamID != *firstReset.AssistantTranscriptStreamID ||
+		*firstDelta.AssistantTranscriptStreamID == *secondDelta.AssistantTranscriptStreamID ||
+		*secondDelta.AssistantTranscriptStreamID != *finalAssistant.AssistantTranscriptStreamID {
+		t.Fatalf(
+			"%s stream UUIDs = first:%s reset:%s second:%s final:%s",
+			label,
+			*firstDelta.AssistantTranscriptStreamID,
+			*firstReset.AssistantTranscriptStreamID,
+			*secondDelta.AssistantTranscriptStreamID,
+			*finalAssistant.AssistantTranscriptStreamID,
+		)
+	}
+	if firstDeltaIndex >= firstResetIndex ||
+		firstResetIndex >= secondDeltaIndex ||
+		secondDeltaIndex >= finalAssistantIndex {
+		t.Fatalf(
+			"%s stream order = first_delta:%d first_reset:%d second_delta:%d final:%d events:%+v",
+			label,
+			firstDeltaIndex,
+			firstResetIndex,
+			secondDeltaIndex,
+			finalAssistantIndex,
+			events,
+		)
+	}
+}
+
+func TestCompletedResponseFinalAnswerWithToolsFinalizesAfterToolPersistence(t *testing.T) {
+	const callID = "final-tool"
+	step := scriptedllm.ToolBatch("completed", llm.ToolCall{
+		ID:    callID,
+		Name:  string(toolspec.ToolExecCommand),
+		Input: json.RawMessage(`{"cmd":"true"}`),
+	})
+	step.Response.Assistant.Phase = textutil.Value(llm.MessagePhaseFinal)
+	step.StreamDeltas = []llm.AssistantDelta{{
+		Text:  "draft",
+		Phase: llm.MessagePhaseFinal,
+	}}
+	var events []Event
+	store := mustCreateTestSession(t)
+	engine := mustNewExecTestEngine(
+		t,
+		store,
+		scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{step}}),
+		Config{
+			Model:   "gpt-5",
+			OnEvent: func(event Event) { events = append(events, event) },
+		},
+	)
+
+	if _, err := engine.SubmitUserMessage(context.Background(), "turn"); err != nil {
+		t.Fatalf("submit user turn: %v", err)
+	}
+
+	var delta, toolStart, toolCompletion, finalAssistant, terminal *Event
+	deltaIndex, toolStartIndex, toolCompletionIndex, finalAssistantIndex, terminalIndex := -1, -1, -1, -1, -1
+	for index := range events {
+		event := &events[index]
+		switch event.Kind {
+		case EventAssistantDelta:
+			if delta != nil {
+				t.Fatalf("multiple assistant deltas: %+v", events)
+			}
+			delta = event
+			deltaIndex = index
+		case EventToolCallStarted:
+			if event.ToolCall == nil || event.ToolCall.ID != callID {
+				continue
+			}
+			if toolStart != nil {
+				t.Fatalf("multiple starts for final-attached tool: %+v", events)
+			}
+			toolStart = event
+			toolStartIndex = index
+		case EventToolCallCompleted:
+			if event.ToolResult == nil || event.ToolResult.CallID != callID {
+				continue
+			}
+			if toolCompletion != nil {
+				t.Fatalf("multiple completions for final-attached tool: %+v", events)
+			}
+			toolCompletion = event
+			toolCompletionIndex = index
+		case EventAssistantMessage:
+			if event.Message.Role != llm.RoleAssistant ||
+				event.Message.Phase == nil ||
+				*event.Message.Phase != llm.MessagePhaseFinal {
+				continue
+			}
+			if finalAssistant != nil {
+				t.Fatalf("multiple final assistant events: %+v", events)
+			}
+			finalAssistant = event
+			finalAssistantIndex = index
+		case EventAssistantDeltaReset:
+			if terminal != nil {
+				t.Fatalf("multiple assistant stream terminals: %+v", events)
+			}
+			terminal = event
+			terminalIndex = index
+		}
+	}
+
+	if delta == nil || toolStart == nil || toolCompletion == nil || finalAssistant == nil || terminal == nil ||
+		delta.AssistantTranscriptStreamID == nil ||
+		finalAssistant.AssistantTranscriptStreamID == nil ||
+		terminal.AssistantTranscriptStreamID == nil ||
+		finalAssistant.Message.Role != llm.RoleAssistant ||
+		finalAssistant.Message.Phase == nil ||
+		*finalAssistant.Message.Phase != llm.MessagePhaseFinal ||
+		!finalAssistant.CommittedEntryStartSet {
+		t.Fatalf(
+			"final-attached tool stream facts = delta:%+v start:%+v completion:%+v final:%+v terminal:%+v",
+			delta,
+			toolStart,
+			toolCompletion,
+			finalAssistant,
+			terminal,
+		)
+	}
+	if deltaIndex >= toolStartIndex ||
+		toolStartIndex >= toolCompletionIndex ||
+		toolCompletionIndex >= finalAssistantIndex ||
+		finalAssistantIndex >= terminalIndex {
+		t.Fatalf(
+			"final-attached tool event order = delta:%d start:%d completion:%d final:%d terminal:%d events:%+v",
+			deltaIndex,
+			toolStartIndex,
+			toolCompletionIndex,
+			finalAssistantIndex,
+			terminalIndex,
+			events,
+		)
+	}
+	if *delta.AssistantTranscriptStreamID != *finalAssistant.AssistantTranscriptStreamID ||
+		*delta.AssistantTranscriptStreamID != *terminal.AssistantTranscriptStreamID {
+		t.Fatalf(
+			"final-attached tool stream UUIDs = delta:%s final:%s terminal:%s",
+			*delta.AssistantTranscriptStreamID,
+			*finalAssistant.AssistantTranscriptStreamID,
+			*terminal.AssistantTranscriptStreamID,
+		)
+	}
+
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	if err != nil {
+		t.Fatalf("read bounded final-attached tool records: %v", err)
+	}
+	toolCompletionRecordIndex, finalAssistantRecordIndex := -1, -1
+	for index, record := range window.Records {
+		switch payload := mustSessionEventPayload(record).(type) {
+		case session.ToolCompletionRecord:
+			if payload.CallID != callID {
+				continue
+			}
+			if toolCompletionRecordIndex >= 0 {
+				t.Fatalf("multiple persisted completions for final-attached tool: %+v", window.Records)
+			}
+			if payload.Name != string(toolspec.ToolExecCommand) || payload.IsError {
+				t.Fatalf("persisted final-attached tool completion = %+v", payload)
+			}
+			toolCompletionRecordIndex = index
+		case session.MessageRecord:
+			message, restoreErr := llmMessageFromSessionRecord(payload)
+			if restoreErr != nil {
+				t.Fatalf("restore persisted message: %v", restoreErr)
+			}
+			if message.Role != llm.RoleAssistant ||
+				message.Phase == nil ||
+				*message.Phase != llm.MessagePhaseFinal {
+				continue
+			}
+			if finalAssistantRecordIndex >= 0 {
+				t.Fatalf("multiple persisted final assistants: %+v", window.Records)
+			}
+			finalAssistantRecordIndex = index
+		}
+	}
+	if toolCompletionRecordIndex < 0 ||
+		finalAssistantRecordIndex < 0 ||
+		toolCompletionRecordIndex >= finalAssistantRecordIndex {
+		t.Fatalf(
+			"final-attached tool persisted order = completion:%d final:%d records:%+v",
+			toolCompletionRecordIndex,
+			finalAssistantRecordIndex,
+			window.Records,
+		)
+	}
+}
+
 func TestCompletedResponseExternalWorkflowCompletionDiscardsActiveStreamWithoutPersistence(t *testing.T) {
 	controller := &externallyCompletedWorkflowController{}
 	step := scriptedllm.ToolBatch("", llm.ToolCall{
