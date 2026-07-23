@@ -308,7 +308,11 @@ func OpenResolved(record PersistedSessionRecord, options ...StoreOption) (*Store
 	return openPersistedSession(record.SessionDir, record.Meta, normalizeStoreOptions(options...))
 }
 
-func openPersistedSession(sessionDir string, resolvedMeta *Meta, storeOpts storeOptions) (*Store, error) {
+func openPersistedSession(
+	sessionDir string,
+	resolvedMeta *Meta,
+	storeOpts storeOptions,
+) (_ *Store, resultErr error) {
 	s := &Store{
 		sessionDir: sessionDir,
 		eventsFP:   filepath.Join(sessionDir, eventsFile),
@@ -328,7 +332,12 @@ func openPersistedSession(sessionDir string, resolvedMeta *Meta, storeOpts store
 	if err := validateMetaCategory(&s.meta); err != nil {
 		return nil, err
 	}
-	if err := s.recoverAppendTransaction(); err != nil {
+	lock, lockPath, err := acquireEventLogPersistenceLock(sessionDir)
+	if err != nil {
+		return nil, err
+	}
+	defer joinEventLogPersistenceLockRelease(&resultErr, lock, lockPath)
+	if err := s.recoverAppendTransactionWithEventLogLockHeld(); err != nil {
 		return nil, err
 	}
 	s.metadataVersion = 1
@@ -599,7 +608,8 @@ func (s *Store) persistMetadataMutationWithCommitReceiptLocked(checkpoint metada
 		return CommitReceipt{}, recordErr
 	}
 	s.mu.Unlock()
-	return CommitReceipt{Committed: true}, s.observePersistence(observation)
+	return CommitReceipt{Committed: true},
+		s.observePersistenceAndClearAppendRecovery(observation)
 }
 
 func (s *Store) mutateLockedContractWithCommitStatus(mutator func(*LockedContract)) (LockedContractMutationResult, error) {
@@ -1366,6 +1376,9 @@ func (s *Store) ensurePersistedLocked() error {
 	if err := os.WriteFile(s.eventsFP, nil, 0o644); err != nil {
 		return fmt.Errorf("initialize events file: %w", err)
 	}
+	if err := initializeEventLogPersistenceLock(s.sessionDir); err != nil {
+		return err
+	}
 	s.persisted = true
 	return nil
 }
@@ -1401,7 +1414,7 @@ func (s *Store) requireMetadataPersistenceLocked() error {
 	}
 	observation := &persistenceObservation{snapshot: s.persistenceSnapshotLocked(), version: s.metadataVersion}
 	s.mu.Unlock()
-	err = s.observePersistence(observation)
+	err = s.observePersistenceAndClearAppendRecovery(observation)
 	s.mu.Lock()
 	return err
 }
@@ -1423,6 +1436,18 @@ func (s *Store) observePersistence(observation *persistenceObservation) error {
 		s.persistedMetaVersion = observation.version
 	}
 	s.mu.Unlock()
+	return nil
+}
+
+func (s *Store) observePersistenceAndClearAppendRecovery(
+	observation *persistenceObservation,
+) error {
+	if err := s.observePersistence(observation); err != nil {
+		return err
+	}
+	if observation == nil || observation.snapshot == nil {
+		return nil
+	}
 	if err := s.clearAppendRecoveryRecord(); err != nil {
 		return storeRecoveryError(observation.snapshot.Meta.SessionID, "clear committed mutation", err)
 	}

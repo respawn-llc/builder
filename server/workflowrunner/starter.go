@@ -2,6 +2,7 @@ package workflowrunner
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowattention"
+	"core/server/workflowexecution"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/shared/config"
@@ -80,20 +82,24 @@ type Starter struct {
 	attention            WorkflowAttentionRegistry
 	runtimeAuthority     *sessionruntime.Authority
 	storeOptions         []session.StoreOption
-	clientFactory        func(SchedulerStartRunRequest) llm.Client
+	clientFactory        func(workflowexecution.SchedulerStartRunRequest) llm.Client
 	runtimeClientFactory runtimewire.RuntimeClientFactory
 	worktrees            LockedTaskWorktreeRestorer
 	attentionFinalizer   workflowAttentionFinalizer
+	automaticStarts      *workflowexecution.AutomaticStartRegistration
+	mutationPermit       *workflowexecution.MutationPermit
 
 	closed atomic.Bool
 }
 
 type StarterOptions struct {
-	ClientFactory        func(SchedulerStartRunRequest) llm.Client
+	ClientFactory        func(workflowexecution.SchedulerStartRunRequest) llm.Client
 	RuntimeClientFactory runtimewire.RuntimeClientFactory
 	Worktrees            LockedTaskWorktreeRestorer
 	RuntimeAuthority     *sessionruntime.Authority
 	AttentionFinalizer   workflowAttentionFinalizer
+	AutomaticStarts      *workflowexecution.AutomaticStartRegistration
+	MutationPermit       *workflowexecution.MutationPermit
 }
 
 type workflowAttentionFinalizer interface {
@@ -117,6 +123,12 @@ func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStor
 	if opts.RuntimeAuthority == nil {
 		return nil, errors.New("workflow runtime authority is required")
 	}
+	if opts.MutationPermit == nil {
+		return nil, errors.New("workflow mutation permit is required")
+	}
+	if opts.AutomaticStarts == nil {
+		return nil, errors.New("automatic workflow start registration is required")
+	}
 	if opts.ClientFactory != nil && opts.RuntimeClientFactory != nil {
 		return nil, runtimewire.ErrRuntimeClientFactoryConflict
 	}
@@ -132,10 +144,12 @@ func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStor
 		runtimeClientFactory: opts.RuntimeClientFactory,
 		worktrees:            opts.Worktrees,
 		attentionFinalizer:   opts.AttentionFinalizer,
+		automaticStarts:      opts.AutomaticStarts,
+		mutationPermit:       opts.MutationPermit,
 	}, nil
 }
 
-func (s *Starter) StartWorkflowRun(ctx context.Context, req SchedulerStartRunRequest) error {
+func (s *Starter) StartWorkflowRun(ctx context.Context, req workflowexecution.SchedulerStartRunRequest) error {
 	if strings.TrimSpace(string(req.RunID)) == "" {
 		return errors.New("workflow run id is required")
 	}
@@ -171,7 +185,12 @@ func (s *Starter) StartWorkflowRun(ctx context.Context, req SchedulerStartRunReq
 		return fmt.Errorf("stale workflow run generation: got %d want %d", req.Generation, input.Run.Generation)
 	}
 	if input.Node.Kind == workflow.NodeKindScript {
-		return s.startScriptWorkflowRun(req, input)
+		return s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+			if err := s.ensureRunStartable(ctx, req); err != nil {
+				return err
+			}
+			return s.startScriptWorkflowRun(req, input)
+		})
 	}
 	if input.Node.Kind != workflow.NodeKindAgent {
 		return fmt.Errorf("workflow node %q is %q, want executable agent or script", input.Node.ID, input.Node.Kind)
@@ -249,7 +268,9 @@ func (s *Starter) StartWorkflowRun(ctx context.Context, req SchedulerStartRunReq
 	if executionRoot.Managed != nil {
 		targetUpdate.Worktree = &metadata.SessionExecutionTargetUpdateWorktree{ID: executionRoot.Managed.WorktreeID}
 	}
-	if err := s.metadata.UpdateSessionExecutionTarget(ctx, targetUpdate); err != nil {
+	if err := s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+		return s.metadata.UpdateSessionExecutionTarget(ctx, targetUpdate)
+	}); err != nil {
 		return errors.Join(err, cleanupSession())
 	}
 	var previousWorkflowSession *session.WorkflowSessionState
@@ -273,10 +294,35 @@ func (s *Starter) StartWorkflowRun(ctx context.Context, req SchedulerStartRunReq
 		return errors.Join(err, cleanupSession())
 	}
 	plan.WorkflowSession = workflowSession
-	if err := s.store.AttachRunSession(ctx, req.RunID, req.Generation, plan.Descriptor.SessionID().String()); err != nil {
+	if err := s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+		if err := s.ensureRunStartable(ctx, req); err != nil {
+			return err
+		}
+		if err := s.store.AttachRunSession(ctx, req.RunID, req.Generation, plan.Descriptor.SessionID().String()); err != nil {
+			return err
+		}
+		return s.startAgentExecution(ctx, req, input, plan, warnings, client, effectiveMode)
+	}); err != nil {
 		return errors.Join(err, restoreWorkflowSession(), cleanupSession())
 	}
-	return s.startAgentExecution(ctx, req, input, plan, warnings, client, effectiveMode)
+	return nil
+}
+
+func (s *Starter) ensureRunStartable(ctx context.Context, req workflowexecution.SchedulerStartRunRequest) error {
+	run, err := s.store.GetRun(ctx, req.RunID)
+	if err != nil {
+		return err
+	}
+	if run.TaskID != req.TaskID ||
+		run.PlacementID != req.PlacementID ||
+		run.NodeID != req.NodeID ||
+		run.Generation != req.Generation ||
+		run.StartedAt == nil ||
+		run.CompletedAt != nil ||
+		run.InterruptedAt != nil {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func recoverableManagedExecutionRootError(err error) bool {
@@ -342,6 +388,129 @@ func (s *Starter) CancelTaskRuns(ctx context.Context, taskID workflow.TaskID) er
 		}
 	}
 	return errors.Join(stopErrs...)
+}
+
+type preparedWorkflowInterrupt struct {
+	authority  *sessionruntime.Authority
+	executions []workflowexecution.ExactExecutionScope
+	stop       preparedExecutionStop
+}
+
+type preparedExecutionStop struct {
+	handles []sessionruntime.ExecutionHandle
+}
+
+func (p preparedExecutionStop) RequestStop() {
+	for _, handle := range p.handles {
+		handle.RequestStop()
+	}
+}
+
+func (p preparedExecutionStop) Wait(ctx context.Context) error {
+	errs := make([]error, 0, len(p.handles))
+	for _, handle := range p.handles {
+		if err := handle.Stop(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (p preparedWorkflowInterrupt) Commit(operation func([]workflowexecution.ExactExecutionScope) error) error {
+	if p.authority == nil {
+		return errors.New("workflow interrupt authority is required")
+	}
+	err := p.authority.WithExactExecutions(p.stop.handles, func() error {
+		if err := operation(append([]workflowexecution.ExactExecutionScope(nil), p.executions...)); err != nil {
+			return err
+		}
+		p.stop.RequestStop()
+		return nil
+	})
+	if errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
+		return workflowexecution.ErrNoInterruptibleExecution
+	}
+	return err
+}
+
+func (p preparedWorkflowInterrupt) Wait(ctx context.Context) error {
+	return p.stop.Wait(ctx)
+}
+
+func (s *Starter) PrepareWorkflowInterrupt(selector workflowexecution.InterruptSelector) (workflowexecution.PreparedInterrupt, error) {
+	if err := selector.Validate(); err != nil {
+		return nil, err
+	}
+	snapshot, err := s.runtimeAuthority.CurrentTaskExecutionSnapshot(selector.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	prepared := preparedWorkflowInterrupt{
+		authority:  s.runtimeAuthority,
+		executions: make([]workflowexecution.ExactExecutionScope, 0, len(snapshot.Executions)),
+		stop: preparedExecutionStop{
+			handles: make([]sessionruntime.ExecutionHandle, 0, len(snapshot.Executions)),
+		},
+	}
+	for _, execution := range snapshot.Executions {
+		if execution.WaitingQuestion {
+			continue
+		}
+		if selector.SessionID != nil {
+			if execution.Agent == nil || execution.Agent.SessionID != *selector.SessionID {
+				continue
+			}
+		}
+		handle, ok := s.runtimeAuthority.ExecutionByWorkflow(execution.Ref)
+		if !ok {
+			continue
+		}
+		scope := handle.Scope()
+		ref, ok := scope.Workflow()
+		if !ok || ref != execution.Ref {
+			return nil, errors.New("interruptible workflow scope lost its exact workflow identity")
+		}
+		exact := workflowexecution.ExactExecutionScope{
+			ScopeID:    scope.ID(),
+			TaskID:     ref.TaskID,
+			RunID:      ref.RunID,
+			Generation: ref.Generation,
+		}
+		if err := exact.Validate(); err != nil {
+			return nil, err
+		}
+		prepared.executions = append(prepared.executions, exact)
+		prepared.stop.handles = append(prepared.stop.handles, handle)
+	}
+	if len(prepared.executions) == 0 {
+		return nil, workflowexecution.ErrNoInterruptibleExecution
+	}
+	return prepared, nil
+}
+
+func (s *Starter) PrepareWorkflowMove(taskID workflow.TaskID) (workflowexecution.PreparedMoveStop, error) {
+	if taskID == "" {
+		return nil, errors.New("workflow move task id is required")
+	}
+	snapshot, err := s.runtimeAuthority.CurrentTaskExecutionSnapshot(taskID)
+	if err != nil {
+		return nil, err
+	}
+	handles := make([]sessionruntime.ExecutionHandle, 0, len(snapshot.Executions))
+	for _, execution := range snapshot.Executions {
+		if !execution.WaitingQuestion {
+			return nil, workflowexecution.ErrTaskExecutionNotQuiescent
+		}
+		handle, ok := s.runtimeAuthority.ExecutionByWorkflow(execution.Ref)
+		if !ok {
+			continue
+		}
+		handles = append(handles, handle)
+	}
+	if len(handles) == 0 {
+		return nil, nil
+	}
+	return preparedExecutionStop{handles: handles}, nil
 }
 
 func (s *Starter) CancelRun(ctx context.Context, runID workflow.RunID) error {
@@ -701,7 +870,7 @@ func workflowSessionName(input workflowstore.RunStartContext) (string, error) {
 	return fmt.Sprintf("%s: %s -> %s", taskDisplayID, sourceDisplayName, targetDisplayName), nil
 }
 
-func (s *Starter) resolveAndPersistWorkflowCompletionMode(ctx context.Context, req SchedulerStartRunRequest, input workflowstore.RunStartContext, plan launch.SessionPlan, client llm.Client) (workflowruntime.CompletionMode, llm.Client, error) {
+func (s *Starter) resolveAndPersistWorkflowCompletionMode(ctx context.Context, req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext, plan launch.SessionPlan, client llm.Client) (workflowruntime.CompletionMode, llm.Client, error) {
 	shellAvailable := toolIDEnabled(plan.EnabledTools, toolspec.ToolExecCommand)
 	if stored := optionalRunCompletionMode(input.Run.EffectiveCompletionMode); stored != "" {
 		mode, err := workflowruntime.ParseCompletionMode(stored)
@@ -738,7 +907,9 @@ func (s *Starter) resolveAndPersistWorkflowCompletionMode(ctx context.Context, r
 	if err != nil {
 		return "", resolvedClient, err
 	}
-	if err := s.store.SetRunEffectiveCompletionMode(ctx, req.RunID, req.Generation, string(mode)); err != nil {
+	if err := s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+		return s.store.SetRunEffectiveCompletionMode(ctx, req.RunID, req.Generation, string(mode))
+	}); err != nil {
 		return "", resolvedClient, err
 	}
 	return mode, resolvedClient, nil
@@ -923,7 +1094,7 @@ func (s *Starter) validateRole(role string) error {
 	return fmt.Errorf("workflow validation failed: [%s]", workflow.CodeAgentRoleMissing)
 }
 
-func (s *Starter) startAgentExecution(ctx context.Context, req SchedulerStartRunRequest, input workflowstore.RunStartContext, plan launch.SessionPlan, warnings []string, client llm.Client, effectiveMode workflowruntime.CompletionMode) error {
+func (s *Starter) startAgentExecution(ctx context.Context, req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext, plan launch.SessionPlan, warnings []string, client llm.Client, effectiveMode workflowruntime.CompletionMode) error {
 	executionRoot, err := requireRunExecutionRoot(input)
 	if err != nil {
 		return err
@@ -945,7 +1116,7 @@ func (s *Starter) startAgentExecution(ctx context.Context, req SchedulerStartRun
 		input,
 		effectiveMode,
 		s.cfg.Settings.Workflow.MaxInvalidCompletionAttempts,
-		workflowruntime.StoreController{Store: s.store, AttentionFinalizer: s.attentionFinalizer},
+		workflowruntime.StoreController{Store: s.store, AttentionFinalizer: s.attentionFinalizer, AutomaticStarts: s.automaticStarts, MutationPermit: s.mutationPermit},
 		s.store,
 	)
 	if err != nil {
@@ -998,7 +1169,7 @@ func (s *Starter) startAgentExecution(ctx context.Context, req SchedulerStartRun
 				if errors.Is(turnErr, context.Canceled) || context.Cause(runCtx) != nil {
 					reason = ReasonRuntimeCanceled
 				}
-				s.interrupt(context.Background(), req.RunID, req.Generation, reason, turnErr)
+				turnErr = errors.Join(turnErr, s.interrupt(context.Background(), req.RunID, req.Generation, reason, turnErr))
 			}
 			return turnErr
 		},
@@ -1015,9 +1186,31 @@ func (a executionPromptAwaiter) AwaitPromptResponse(ctx context.Context, _ strin
 	return a.authority.AwaitPromptResponse(ctx, a.scope.ID(), req)
 }
 
-func (s *Starter) handleWorkflowAsk(ctx context.Context, awaiter workflowattention.QuestionAwaiter, sessionID string, req SchedulerStartRunRequest, input workflowstore.RunStartContext, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+type permittedWorkflowQuestionStore struct {
+	store  workflowattention.QuestionStore
+	permit *workflowexecution.MutationPermit
+}
+
+func (s permittedWorkflowQuestionStore) GetRun(ctx context.Context, runID workflow.RunID) (workflowstore.RunRecord, error) {
+	return s.store.GetRun(ctx, runID)
+}
+
+func (s permittedWorkflowQuestionStore) SetRunWaitingAsk(ctx context.Context, runID workflow.RunID, generation int64, askID string) error {
+	return s.permit.Run(ctx, func(ctx context.Context) error {
+		return s.store.SetRunWaitingAsk(ctx, runID, generation, askID)
+	})
+}
+
+func (s permittedWorkflowQuestionStore) ClearRunWaitingAsk(ctx context.Context, runID workflow.RunID, generation int64, askID string) error {
+	return s.permit.Run(ctx, func(ctx context.Context) error {
+		return s.store.ClearRunWaitingAsk(ctx, runID, generation, askID)
+	})
+}
+
+func (s *Starter) handleWorkflowAsk(ctx context.Context, awaiter workflowattention.QuestionAwaiter, sessionID string, req workflowexecution.SchedulerStartRunRequest, input workflowstore.RunStartContext, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+	store := permittedWorkflowQuestionStore{store: s.store, permit: s.mutationPermit}
 	if askReq.Approval {
-		return workflowattention.HandleTaskApprovalQuestion(ctx, s.store, awaiter, s.attention, workflowattention.TaskQuestionRequest{
+		return workflowattention.HandleTaskApprovalQuestion(ctx, store, awaiter, s.attention, workflowattention.TaskQuestionRequest{
 			SessionID:  sessionID,
 			RunID:      req.RunID,
 			Generation: req.Generation,
@@ -1025,7 +1218,7 @@ func (s *Starter) handleWorkflowAsk(ctx context.Context, awaiter workflowattenti
 			Question:   askReq,
 		})
 	}
-	return workflowattention.HandleTaskQuestion(ctx, s.store, awaiter, s.attention, workflowattention.TaskQuestionRequest{
+	return workflowattention.HandleTaskQuestion(ctx, store, awaiter, s.attention, workflowattention.TaskQuestionRequest{
 		SessionID:  sessionID,
 		RunID:      req.RunID,
 		Generation: req.Generation,
@@ -1042,7 +1235,13 @@ func workflowRuntimeEnabledTools(enabled []toolspec.ID) []toolspec.ID {
 	return out
 }
 
-func (s *Starter) interrupt(ctx context.Context, runID workflow.RunID, generation int64, reason string, cause error) {
+func (s *Starter) interrupt(ctx context.Context, runID workflow.RunID, generation int64, reason string, cause error) error {
+	return s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+		return s.interruptWithPermit(ctx, runID, generation, reason, cause)
+	})
+}
+
+func (s *Starter) interruptWithPermit(ctx context.Context, runID workflow.RunID, generation int64, reason string, cause error) error {
 	detail := "{}"
 	if cause != nil {
 		if detailed, ok := cause.(interface{ InterruptionDetailJSON() string }); ok && strings.TrimSpace(detailed.InterruptionDetailJSON()) != "" {
@@ -1052,14 +1251,15 @@ func (s *Starter) interrupt(ctx context.Context, runID workflow.RunID, generatio
 		}
 	}
 	if err := s.store.InterruptRunGeneration(ctx, runID, generation, reason, detail); err != nil {
-		return
+		return err
 	}
 	if !workflowattention.ShouldNotifyInterruptedRun(reason) {
-		return
+		return nil
 	}
 	if finalizer, ok := s.attentionFinalizer.(workflowInterruptedRunFinalizer); ok {
 		finalizer.PublishPendingInterruptedRun(ctx, runID)
 	}
+	return nil
 }
 
 func BuildWorkflowTaskInstructions(input workflowstore.RunStartContext) (workflowruntime.TaskInstructions, error) {
@@ -1240,4 +1440,6 @@ func promptParameterData(current map[string]string, prior map[string]map[string]
 	return out
 }
 
-var _ SchedulerRuntimeStarter = (*Starter)(nil)
+var _ workflowexecution.SchedulerRuntimeStarter = (*Starter)(nil)
+var _ workflowexecution.InterruptAuthority = (*Starter)(nil)
+var _ workflowexecution.MoveAuthority = (*Starter)(nil)

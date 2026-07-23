@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 
-import type { TaskDetail } from "@/api";
+import { errorMessage, type TaskDetail } from "@/api";
 import type { TaskDetailInitialFocus } from "@/app-facade";
-import { useConnectionSnapshot } from "@/app-facade";
+import { useConnectionSnapshot, useStatusController } from "@/app-facade";
 import { useUpdateTask } from "@/shared/task-mutations";
 import {
   initialDescriptionPresentationState,
@@ -42,6 +43,8 @@ export function TaskDetailContent({
   onMutated?: (() => void) | undefined;
   openLink: (url: string) => void;
 }>) {
+  const { t } = useTranslation();
+  const { push } = useStatusController();
   const serverDraft = taskDraft(detail);
   const [draftState, setDraftState] = useState<TaskDraftState>(() => ({
     taskID: detail.id,
@@ -71,7 +74,25 @@ export function TaskDetailContent({
     setQuestionSelections(new Map());
   }
   const update = useUpdateTask(detail.id);
-  const mutations = useTaskMutations(detail.id, onMutated);
+  const reportActionError = useCallback(
+    (action: "interrupt" | "resume", error: unknown) => {
+      const notice =
+        action === "interrupt"
+          ? { id: "task-interrupt-error", title: t("board.interruptFailed") }
+          : { id: "task-resume-error", title: t("board.resumeFailed") };
+      push({
+        ...notice,
+        body: errorMessage(error),
+        durationMs: Infinity,
+        tone: "danger",
+      });
+    },
+    [push, t],
+  );
+  const mutations = useTaskMutations(detail.id, {
+    onActionError: reportActionError,
+    onChanged: onMutated,
+  });
   const connection = useConnectionSnapshot();
   useTaskDetailLiveRefresh(detail.id, detail.projectID, true);
 

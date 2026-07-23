@@ -2,6 +2,8 @@ package config
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -86,12 +88,72 @@ func TestLoadInteractiveClientLifecycleHookFromGlobalFilePreservesAndCopiesArgv(
 	}
 }
 
+func TestLoadInteractiveSharedSettingsFileIsGlobalOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		link func(string, string) error
+	}{
+		{"direct home path", nil},
+		{"workspace symlink", os.Symlink},
+		{"workspace hard link", os.Link},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, workspace, homeSettingsPath := newConfigTestFile(t)
+			writeConfigTestFile(t, homeSettingsPath, "system_prompt_file = \"system.md\"\n\n[hooks.client]\nlifecycle = [\"notify\"]\n")
+			workspaceRoot := workspace
+			workspaceSettingsPath := filepath.Join(workspaceRoot, ConfigDirName, "config.toml")
+			if tc.link == nil {
+				workspaceRoot, workspaceSettingsPath = home, homeSettingsPath
+			} else {
+				ensureConfigTestDir(t, workspaceSettingsPath)
+				if err := tc.link(homeSettingsPath, workspaceSettingsPath); err != nil {
+					if errors.Is(err, errors.ErrUnsupported) {
+						t.Skipf("settings link unsupported: %v", err)
+					}
+					t.Fatalf("link workspace settings: %v", err)
+				}
+			}
+
+			app, client, err := LoadInteractive(workspaceRoot, LoadOptions{})
+			if err != nil {
+				t.Fatalf("load interactive config: %v", err)
+			}
+			if got := client.Hooks.LifecycleCommand(); !reflect.DeepEqual(got, []string{"notify"}) {
+				t.Fatalf("lifecycle command = %#v, want global command", got)
+			}
+			if got := app.Source.Sources["hooks.client.lifecycle"]; got != "file" {
+				t.Fatalf("lifecycle source = %q, want global file", got)
+			}
+			if got := app.Settings.SystemPromptFiles; !reflect.DeepEqual(got, []SystemPromptFile{{Path: filepath.Join(home, ConfigDirName, "system.md"), Scope: SystemPromptFileScopeHomeConfig}}) {
+				t.Fatalf("system prompt files = %#v, want one global prompt", got)
+			}
+			if app.Source.HomeSettingsPath != homeSettingsPath || app.Source.WorkspaceSettingsPath != workspaceSettingsPath ||
+				!app.Source.HomeSettingsFileExists || !app.Source.WorkspaceSettingsFileExists || app.Source.WorkspaceSettingsLayerEnabled ||
+				app.Source.SettingsPath != homeSettingsPath {
+				t.Fatalf("source report = %+v, want retained paths with global effective settings", app.Source)
+			}
+		})
+	}
+}
+
 func TestLoadInteractiveRejectsClientLifecycleHookInWorkspaceConfig(t *testing.T) {
-	_, workspace := newConfigTestEnv(t)
+	_, workspace, homeSettingsPath := newConfigTestFile(t)
+	writeConfigTestFile(t, homeSettingsPath, "model = \"global-model\"\n")
 	workspacePath := workspace + "/" + ConfigDirName + "/config.toml"
 	writeConfigTestFile(t, workspacePath, "[hooks.client]\nlifecycle = [\"notify\"]\n")
+	homeInfo, err := os.Stat(homeSettingsPath)
+	if err != nil {
+		t.Fatalf("stat global settings: %v", err)
+	}
+	workspaceInfo, err := os.Stat(workspacePath)
+	if err != nil {
+		t.Fatalf("stat workspace settings: %v", err)
+	}
+	if os.SameFile(homeInfo, workspaceInfo) {
+		t.Fatal("global and workspace settings files unexpectedly share one physical file")
+	}
 
-	_, _, err := LoadInteractive(workspace, LoadOptions{})
+	_, _, err = LoadInteractive(workspace, LoadOptions{})
 	if err == nil {
 		t.Fatal("workspace lifecycle hook succeeded")
 	}

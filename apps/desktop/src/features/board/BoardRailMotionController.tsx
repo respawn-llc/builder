@@ -71,6 +71,8 @@ export type BoardRailMotionControllerProps = Readonly<{
   onInterruptTask: (taskID: string) => void;
   onRegisterColumnScrollport: (columnID: string, element: HTMLElement | null) => void;
   onResumeTask: (taskID: string) => void;
+  pendingInterruptTaskIDs?: ReadonlySet<string> | undefined;
+  pendingResumeTaskIDs?: ReadonlySet<string> | undefined;
   pendingCardMove: PendingBoardCardMove | null;
   scrollportRef: RefObject<HTMLDivElement | null>;
 }>;
@@ -97,6 +99,8 @@ export function BoardRailMotionController({
   onInterruptTask,
   onRegisterColumnScrollport,
   onResumeTask,
+  pendingInterruptTaskIDs,
+  pendingResumeTaskIDs,
   pendingCardMove,
   scrollportRef,
 }: BoardRailMotionControllerProps) {
@@ -461,6 +465,8 @@ export function BoardRailMotionController({
                     onRegisterColumn={registerColumn}
                     onRegisterColumnScrollport={onRegisterColumnScrollport}
                     onResumeTask={onResumeTask}
+                    pendingInterruptTaskIDs={pendingInterruptTaskIDs}
+                    pendingResumeTaskIDs={pendingResumeTaskIDs}
                     scrollportRef={scrollportRef}
                   />
                 ))}
@@ -490,6 +496,8 @@ export function BoardRailMotionController({
                 onRegisterColumn={registerColumn}
                 onRegisterColumnScrollport={onRegisterColumnScrollport}
                 onResumeTask={onResumeTask}
+                pendingInterruptTaskIDs={pendingInterruptTaskIDs}
+                pendingResumeTaskIDs={pendingResumeTaskIDs}
                 scrollportRef={scrollportRef}
               />
             ),

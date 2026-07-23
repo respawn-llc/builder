@@ -288,7 +288,7 @@ func TestRunSessionLifecyclePickerWorkspaceChangeYesRetargetsSessionAndReplans(t
 
 	launchCalls := 0
 	pickerCalls := 0
-	runSessionPickerFlow = func(sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error) {
+	runSessionPickerFlow = func(context.Context, sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error) {
 		pickerCalls++
 		return newSessionPickerOpenResult(sessionLifecycleSessionID(t, store.Meta().SessionID)), nil
 	}
@@ -398,7 +398,7 @@ func TestRunSessionLifecyclePickerWorkspaceChangeNoReturnsToPicker(t *testing.T)
 
 	launchCalls := 0
 	pickerCalls := 0
-	runSessionPickerFlow = func(sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error) {
+	runSessionPickerFlow = func(context.Context, sessionPageLoader, string, sessionPickerHeaderInfo) (sessionPickerResult, error) {
 		pickerCalls++
 		if pickerCalls == 1 {
 			return newSessionPickerOpenResult(sessionLifecycleSessionID(t, store.Meta().SessionID)), nil
@@ -486,7 +486,7 @@ func TestRunSessionLifecycleWorkspaceChangeLookupFailureReturnsToPickerAndOpensA
 
 	launchCalls := 0
 	pickerCalls := 0
-	runSessionPickerFlow = func(_ sessionPageLoader, _ string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
+	runSessionPickerFlow = func(_ context.Context, _ sessionPageLoader, _ string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
 		pickerCalls++
 		switch pickerCalls {
 		case 1:

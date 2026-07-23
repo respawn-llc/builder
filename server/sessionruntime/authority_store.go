@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
 	"core/server/session"
@@ -11,6 +12,8 @@ import (
 )
 
 type SessionStartBlockReason uint8
+
+var ErrSessionStartAdmissionBusy = errors.New("session start admission is busy")
 
 const (
 	SessionStartBlockMaintenance SessionStartBlockReason = iota + 1
@@ -64,25 +67,15 @@ func (a *Authority) BlockSessionStarts(ctx context.Context, sessionIDs []runtime
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
-	if len(sessionIDs) == 0 {
-		return nil, errors.New("session ids are required")
+	normalizedSessionIDs, err := normalizeSessionStartBlockSessionIDs(sessionIDs)
+	if err != nil {
+		return nil, err
 	}
-	if reason == 0 {
-		return nil, errors.New("session start block reason is required")
+	release, err := a.newSessionStartBlockRelease(reason)
+	if err != nil {
+		return nil, err
 	}
-	release := &sessionStartBlockRelease{
-		authority: a,
-		block:     &sessionAdmissionBlock{reason: reason},
-	}
-	seen := make(map[runtimeids.SessionID]struct{}, len(sessionIDs))
-	for _, sessionID := range sessionIDs {
-		if sessionID.IsZero() {
-			return nil, errors.Join(errors.New("session id is required"), release.Close(context.Background()))
-		}
-		if _, exists := seen[sessionID]; exists {
-			continue
-		}
-		seen[sessionID] = struct{}{}
+	for _, sessionID := range normalizedSessionIDs {
 		gate := a.gateFor(sessionID)
 		gate.mu.Lock()
 		if err := context.Cause(ctx); err != nil {
@@ -97,6 +90,94 @@ func (a *Authority) BlockSessionStarts(ctx context.Context, sessionIDs []runtime
 		gate.mu.Unlock()
 	}
 	return release, nil
+}
+
+func (a *Authority) TryBlockSessionStarts(ctx context.Context, sessionIDs []runtimeids.SessionID, reason SessionStartBlockReason) (SessionStartBlockRelease, error) {
+	if a == nil {
+		return nil, errors.New("session runtime authority is required")
+	}
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+	normalizedSessionIDs, err := normalizeSessionStartBlockSessionIDs(sessionIDs)
+	if err != nil {
+		return nil, err
+	}
+	release, err := a.newSessionStartBlockRelease(reason)
+	if err != nil {
+		return nil, err
+	}
+	type lockedGate struct {
+		sessionID runtimeids.SessionID
+		gate      *sessionAdmissionGate
+	}
+	locked := make([]lockedGate, 0, len(normalizedSessionIDs))
+	unlock := func() {
+		for index := len(locked) - 1; index >= 0; index-- {
+			locked[index].gate.mu.Unlock()
+		}
+	}
+	for _, sessionID := range normalizedSessionIDs {
+		gate := a.gateFor(sessionID)
+		if !gate.mu.TryLock() {
+			unlock()
+			return nil, sessionStartAdmissionBusyError(sessionID)
+		}
+		locked = append(locked, lockedGate{sessionID: sessionID, gate: gate})
+	}
+	defer unlock()
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+	for _, entry := range locked {
+		if len(entry.gate.blocks) != 0 {
+			return nil, sessionStartAdmissionBusyError(entry.sessionID)
+		}
+	}
+	for _, entry := range locked {
+		if entry.gate.blocks == nil {
+			entry.gate.blocks = make(map[*sessionAdmissionBlock]struct{})
+		}
+		entry.gate.blocks[release.block] = struct{}{}
+		release.sessionIDs = append(release.sessionIDs, entry.sessionID)
+	}
+	return release, nil
+}
+
+func (a *Authority) newSessionStartBlockRelease(reason SessionStartBlockReason) (*sessionStartBlockRelease, error) {
+	if reason == 0 {
+		return nil, errors.New("session start block reason is required")
+	}
+	return &sessionStartBlockRelease{
+		authority: a,
+		block:     &sessionAdmissionBlock{reason: reason},
+	}, nil
+}
+
+func normalizeSessionStartBlockSessionIDs(sessionIDs []runtimeids.SessionID) ([]runtimeids.SessionID, error) {
+	if len(sessionIDs) == 0 {
+		return nil, errors.New("session ids are required")
+	}
+	seen := make(map[runtimeids.SessionID]struct{}, len(sessionIDs))
+	normalized := make([]runtimeids.SessionID, 0, len(sessionIDs))
+	for _, sessionID := range sessionIDs {
+		if sessionID.IsZero() {
+			return nil, errors.New("session id is required")
+		}
+		if _, exists := seen[sessionID]; exists {
+			continue
+		}
+		seen[sessionID] = struct{}{}
+		normalized = append(normalized, sessionID)
+	}
+	sort.Slice(normalized, func(i int, j int) bool {
+		return normalized[i].String() < normalized[j].String()
+	})
+	return normalized, nil
+}
+
+func sessionStartAdmissionBusyError(sessionID runtimeids.SessionID) error {
+	return errors.Join(ErrSessionStartAdmissionBusy, fmt.Errorf("session %s admission is busy", sessionID))
 }
 
 func (r *sessionStartBlockRelease) AuthorizeMaintenance(ctx context.Context) context.Context {

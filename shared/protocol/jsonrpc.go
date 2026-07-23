@@ -55,6 +55,7 @@ const (
 	ErrCodeWorkflowTaskCreateSelection       = -32045
 	ErrCodeWorkflowTaskCreateConflict        = -32046
 	ErrCodeWorkflowLabel                     = -32047
+	ErrCodeWorktreeBlocked                   = -32048
 )
 
 type Request struct {

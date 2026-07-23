@@ -378,9 +378,9 @@ function TaskActionPanel({
         <TaskOpenButtons detail={detail} disabled={disabled} />
         {detail.actions.canResume ? (
           <Button
-            disabled={disabled}
+            disabled={disabled || mutations.resume.isPending}
             onClick={() => {
-              void mutations.resume.mutateAsync();
+              mutations.resume.mutate();
             }}
             variant="primary"
           >
@@ -389,9 +389,9 @@ function TaskActionPanel({
         ) : null}
         {detail.actions.canInterrupt ? (
           <Button
-            disabled={disabled}
+            disabled={disabled || mutations.interrupt.isPending}
             onClick={() => {
-              void mutations.interrupt.mutateAsync(undefined);
+              mutations.interrupt.mutate(undefined);
             }}
             variant="secondary"
           >

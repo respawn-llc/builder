@@ -13,6 +13,7 @@ import (
 )
 
 var ErrAuthorityClosed = errors.New("session runtime authority is closed")
+var ErrExecutionNoLongerLive = errors.New("exact execution scope is no longer live")
 
 type ExecutionFinalized interface {
 	ExecutionFinalized(WorkflowExecutionRef)
@@ -109,6 +110,37 @@ func (a *Authority) ExecutionByScope(id runtimeids.ExecutionScopeID) (ExecutionH
 		return nil, false
 	}
 	return executionHandle{execution: execution}, true
+}
+
+// WithExactExecutions linearizes an operation against retirement of the exact
+// execution handles. The operation runs while the authority lock keeps those
+// scopes registered as live.
+func (a *Authority) WithExactExecutions(handles []ExecutionHandle, operation func() error) error {
+	if a == nil {
+		return errors.New("session runtime authority is required")
+	}
+	if len(handles) == 0 {
+		return ErrExecutionNoLongerLive
+	}
+	if operation == nil {
+		return errors.New("exact execution operation is required")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, handle := range handles {
+		exact, ok := handle.(executionHandle)
+		if !ok || exact.execution == nil {
+			return errors.New("execution handle does not belong to this authority")
+		}
+		execution := exact.execution
+		if execution.authority != a || a.byScope[execution.scope.ID()] != execution {
+			return ErrExecutionNoLongerLive
+		}
+		if workflowRef, ok := execution.scope.Workflow(); ok && a.byWorkflow[workflowRef] != execution {
+			return ErrExecutionNoLongerLive
+		}
+	}
+	return operation()
 }
 
 func (a *Authority) SessionExecution(sessionID runtimeids.SessionID) (ExecutionHandle, bool) {

@@ -47,17 +47,16 @@ func (s *Store) insertExecutableRun(ctx context.Context, q *sqlitegen.Queries, r
 	}
 	runID := prefixedID("run")
 	if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{
-		ID:                          runID,
-		PlacementID:                 req.PlacementID,
-		WorkflowRevisionSeen:        req.Snapshot.WorkflowRevisionSeen,
-		AutomationRequestedAtUnixMs: sql.NullInt64{Int64: req.Now, Valid: true},
-		CreatedAtUnixMs:             req.Now,
-		UpdatedAtUnixMs:             req.Now,
-		InterruptedAtUnixMs:         interruptedAt,
-		InterruptionReason:          nullableString(interruptionReason),
-		InterruptionDetailJson:      interruptionDetail,
-		RunStartSnapshotJson:        snapshotJSON,
-		MetadataJson:                metadataJSON,
+		ID:                     runID,
+		PlacementID:            req.PlacementID,
+		WorkflowRevisionSeen:   req.Snapshot.WorkflowRevisionSeen,
+		CreatedAtUnixMs:        req.Now,
+		UpdatedAtUnixMs:        req.Now,
+		InterruptedAtUnixMs:    interruptedAt,
+		InterruptionReason:     nullableString(interruptionReason),
+		InterruptionDetailJson: interruptionDetail,
+		RunStartSnapshotJson:   snapshotJSON,
+		MetadataJson:           metadataJSON,
 	}); err != nil {
 		return executableRunResult{}, fmt.Errorf("insert executable task run: %w", err)
 	}

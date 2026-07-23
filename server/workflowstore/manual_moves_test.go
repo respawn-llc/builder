@@ -52,7 +52,7 @@ func TestManualMoveToTerminalArchivesWithoutOutputValues(t *testing.T) {
 	}
 }
 
-func TestManualMoveRejectsActiveRunWithoutMutationAndRestartsAfterInterrupt(t *testing.T) {
+func TestManualMoveSupersedesDurableStartedRunAtomically(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
@@ -79,39 +79,9 @@ func TestManualMoveRejectsActiveRunWithoutMutationAndRestartsAfterInterrupt(t *t
 		t.Fatalf("ListTransitions before restart: %v", err)
 	}
 
-	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(start)})
-	if !errors.Is(err, ErrManualMoveDuringActiveRun) {
-		t.Fatalf("ManualMoveTask restart error = %v, want active-run rejection", err)
-	}
-
-	placementsAfterRejectedMove, err := store.ListPlacements(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListPlacements after rejected restart: %v", err)
-	}
-	runsAfterRejectedMove, err := store.ListRuns(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListRuns after rejected restart: %v", err)
-	}
-	transitionsAfterRejectedMove, err := store.ListTransitions(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListTransitions after rejected restart: %v", err)
-	}
-	if !reflect.DeepEqual(placementsAfterRejectedMove, placementsBefore) {
-		t.Fatalf("placements after rejected restart = %+v, want unchanged %+v", placementsAfterRejectedMove, placementsBefore)
-	}
-	if !reflect.DeepEqual(runsAfterRejectedMove, runsBefore) {
-		t.Fatalf("runs after rejected restart = %+v, want unchanged %+v", runsAfterRejectedMove, runsBefore)
-	}
-	if !reflect.DeepEqual(transitionsAfterRejectedMove, transitionsBefore) {
-		t.Fatalf("transitions after rejected restart = %+v, want unchanged %+v", transitionsAfterRejectedMove, transitionsBefore)
-	}
-
-	if err := store.InterruptRun(ctx, started.RunID, "manual", "{}"); err != nil {
-		t.Fatalf("InterruptRun: %v", err)
-	}
 	preparation, err := store.PrepareManualMove(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(start)})
 	if err != nil {
-		t.Fatalf("PrepareManualMove restart after interrupt: %v", err)
+		t.Fatalf("PrepareManualMove: %v", err)
 	}
 	if _, err := store.db.ExecContext(ctx, `
 CREATE TRIGGER fail_interrupted_manual_move_transition
@@ -133,26 +103,39 @@ END`); err != nil {
 	if _, err := store.db.ExecContext(ctx, `DROP TRIGGER fail_interrupted_manual_move_transition`); err != nil {
 		t.Fatalf("drop forced manual move failure: %v", err)
 	}
-	if projection, ok, err := store.PendingInterruptedRunAttentionProjection(ctx, started.RunID); err != nil || !ok || projection.RunID != started.RunID {
-		t.Fatalf("pending interruption after rollback = %+v, %v, %v", projection, ok, err)
+	placementsAfterFailure, err := store.ListPlacements(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListPlacements after failed move: %v", err)
+	}
+	runsAfterFailure, err := store.ListRuns(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns after failed move: %v", err)
+	}
+	transitionsAfterFailure, err := store.ListTransitions(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListTransitions after failed move: %v", err)
+	}
+	if !reflect.DeepEqual(placementsAfterFailure, placementsBefore) ||
+		!reflect.DeepEqual(runsAfterFailure, runsBefore) ||
+		!reflect.DeepEqual(transitionsAfterFailure, transitionsBefore) {
+		t.Fatalf("failed manual move changed durable state")
 	}
 	moved, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(start)})
 	if err != nil {
-		t.Fatalf("ManualMoveTask restart after interrupt: %v", err)
+		t.Fatalf("ManualMoveTask: %v", err)
 	}
 	if moved.State != "applied" || len(moved.PlacementIDs) != 1 || len(moved.RunIDs) != 0 {
 		t.Fatalf("restart result = %+v, want applied start placement without a run", moved)
 	}
-	if len(moved.ResolvedInterruptedRunProjections) != 1 {
-		t.Fatalf("resolved interrupted-run projections = %+v, want one", moved.ResolvedInterruptedRunProjections)
+	if len(moved.ResolvedInterruptedRunProjections) != 0 {
+		t.Fatalf("resolved interrupted-run projections = %+v, want none for user supersession", moved.ResolvedInterruptedRunProjections)
 	}
-	resolved := moved.ResolvedInterruptedRunProjections[0]
-	if resolved.RunID != started.RunID ||
-		resolved.TaskID != task.ID ||
-		resolved.InterruptionReason != "manual" ||
-		resolved.InterruptionDetailJSON == nil ||
-		*resolved.InterruptionDetailJSON != "{}" {
-		t.Fatalf("resolved interrupted-run projection = %+v", resolved)
+	runs, err := store.ListRuns(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns after move: %v", err)
+	}
+	if len(runs) != 1 || runs[0].ID != started.RunID || runs[0].InterruptedAt == nil || runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != "user_interrupt" {
+		t.Fatalf("source run after manual move = %+v, want atomically user-interrupted", runs)
 	}
 }
 

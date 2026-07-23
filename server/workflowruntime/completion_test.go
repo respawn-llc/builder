@@ -10,6 +10,7 @@ import (
 	"core/server/llm"
 	"core/server/workflow"
 	"core/server/workflowattention"
+	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/config"
 )
@@ -84,7 +85,7 @@ func TestStoreControllerFinalizesWorkflowAttentionAfterCompleteRun(t *testing.T)
 		},
 	}}
 	finalizer := &recordingCompletionAttentionFinalizer{}
-	controller := StoreController{Store: store, AttentionFinalizer: finalizer}
+	controller := StoreController{Store: store, AttentionFinalizer: finalizer, AutomaticStarts: newCompletionAutomaticStarts(t, workflowexecution.NewAutomaticIntents()), MutationPermit: workflowexecution.NewMutationPermit()}
 
 	result, err := controller.CompleteWorkflowRun(context.Background(), CompletionRequest{RunID: "run-1", TransitionID: "done"})
 	if err != nil {
@@ -107,10 +108,43 @@ func TestStoreControllerFinalizesWorkflowAttentionAfterCompleteRun(t *testing.T)
 	}
 }
 
+func TestStoreControllerSignalsFatalFailureWhenCommittedSuccessorsCannotBeRegistered(t *testing.T) {
+	registrationErr := errors.New("automatic successor registration failed")
+	fatalSignal := workflowexecution.NewFatalSignal()
+	automaticStarts, err := workflowexecution.NewAutomaticStartRegistration(failingAutomaticStartRegistrar{err: registrationErr}, fatalSignal)
+	if err != nil {
+		t.Fatalf("NewAutomaticStartRegistration: %v", err)
+	}
+	store := &recordingCompletionStore{result: workflowstore.CompleteRunOutcome{
+		Result: workflowstore.CompleteRunResult{
+			TransitionID: "transition-1",
+			State:        "applied",
+			RunIDs:       []workflow.RunID{"run-successor"},
+		},
+	}}
+	controller := StoreController{
+		Store:           store,
+		AutomaticStarts: automaticStarts,
+		MutationPermit:  workflowexecution.NewMutationPermit(),
+	}
+
+	_, err = controller.CompleteWorkflowRun(context.Background(), CompletionRequest{
+		RunID:        "run-source",
+		TransitionID: "done",
+	})
+	var fatalErr workflowexecution.WorkflowExecutionFatalError
+	if !errors.As(err, &fatalErr) {
+		t.Fatalf("CompleteWorkflowRun error = %T %v, want workflow execution fatal error", err, err)
+	}
+	if signaled := <-fatalSignal.Failures(); !errors.As(signaled, &fatalErr) {
+		t.Fatalf("signaled failure = %T %v, want workflow execution fatal error", signaled, signaled)
+	}
+}
+
 func TestStoreControllerFinalizesInterruptedRunAfterProtocolViolationInterruptsRun(t *testing.T) {
 	store := &recordingCompletionStore{protocolResult: workflowstore.RecordProtocolViolationResult{Count: 2, Interrupted: true}}
 	finalizer := &recordingCompletionAttentionFinalizer{}
-	controller := StoreController{Store: store, AttentionFinalizer: finalizer}
+	controller := StoreController{Store: store, AttentionFinalizer: finalizer, MutationPermit: workflowexecution.NewMutationPermit()}
 
 	result, err := controller.RecordWorkflowProtocolViolation(context.Background(), ViolationRequest{RunID: "run-1", Kind: ViolationKindInvalidCompletion, MaxCount: 2})
 	if err != nil {
@@ -129,7 +163,7 @@ func TestStoreControllerFinalizesInterruptedRunAfterProtocolViolationInterruptsR
 
 func TestStoreControllerResetsProtocolViolationBudget(t *testing.T) {
 	store := &recordingCompletionStore{}
-	controller := StoreController{Store: store}
+	controller := StoreController{Store: store, MutationPermit: workflowexecution.NewMutationPermit()}
 
 	err := controller.ResetWorkflowProtocolViolationBudget(context.Background(), ViolationResetRequest{
 		RunID:              "run-1",
@@ -463,6 +497,23 @@ func (s *recordingCompletionStore) GetRun(context.Context, workflow.RunID) (work
 type recordingCompletionAttentionFinalizer struct {
 	results         []workflowattention.TransitionResult
 	interruptedRuns []workflow.RunID
+}
+
+type failingAutomaticStartRegistrar struct {
+	err error
+}
+
+func (f failingAutomaticStartRegistrar) RegisterAutomaticStarts([]workflow.RunID) error {
+	return f.err
+}
+
+func newCompletionAutomaticStarts(t *testing.T, registrar workflowexecution.AutomaticStartRegistrar) *workflowexecution.AutomaticStartRegistration {
+	t.Helper()
+	registration, err := workflowexecution.NewAutomaticStartRegistration(registrar, workflowexecution.NewFatalSignal())
+	if err != nil {
+		t.Fatalf("NewAutomaticStartRegistration: %v", err)
+	}
+	return registration
 }
 
 func (f *recordingCompletionAttentionFinalizer) FinalizeTransition(_ context.Context, result workflowattention.TransitionResult) {

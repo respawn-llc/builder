@@ -74,23 +74,6 @@ func (s *Service) retargetSessionsFromWorktree(
 	if targetSync == nil {
 		targetSync = s.syncExecutionTarget
 	}
-	targetSessionIDs := make([]string, 0, len(blockers))
-	for _, blocker := range blockers {
-		sessionID := strings.TrimSpace(blocker.SessionID)
-		if sessionID == "" {
-			continue
-		}
-		if options.filter != nil && !options.filter(blocker) {
-			continue
-		}
-		targetSessionIDs = append(targetSessionIDs, sessionID)
-	}
-	releaseStarts, err := s.blockSessionStarts(ctx, targetSessionIDs)
-	if err != nil {
-		return worktreeSessionRetargetCompensation{}, err
-	}
-	defer releaseSessionStarts(releaseStarts)
-	ctx = authorizeSessionMaintenance(ctx, releaseStarts)
 	pending := make([]pendingWorktreeSessionRetarget, 0, len(blockers))
 	collected := make([]error, 0)
 	appendErr := func(sessionID string, err error) {
@@ -215,7 +198,11 @@ func (s *Service) switchSessionTargetWithSync(
 		return clientui.SessionExecutionTarget{}, errors.New("execution target synchronizer is required")
 	}
 	if stepAuthority == nil {
-		release, err := s.blockSessionStarts(ctx, []string{workspaceCtx.sessionID})
+		sessionIDs, err := parseSessionStartAdmissionIDs([]string{workspaceCtx.sessionID})
+		if err != nil {
+			return clientui.SessionExecutionTarget{}, err
+		}
+		release, err := s.acquireSessionStartAdmission(ctx, sessionIDs, sessionStartAdmissionWait)
 		if err != nil {
 			return clientui.SessionExecutionTarget{}, err
 		}

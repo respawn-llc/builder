@@ -63,6 +63,8 @@ export type KanbanColumnProps = Readonly<{
   onLoadMoreCards: () => void;
   onLoadPreviousCards?: (() => void) | undefined;
   onResumeTask: (taskID: string) => void;
+  pendingInterruptTaskIDs?: ReadonlySet<string> | undefined;
+  pendingResumeTaskIDs?: ReadonlySet<string> | undefined;
   pinnedItemKeys?: ReadonlySet<string> | undefined;
 }>;
 
@@ -123,6 +125,8 @@ export function KanbanColumn({
   onLoadMoreCards,
   onLoadPreviousCards,
   onResumeTask,
+  pendingInterruptTaskIDs = emptyPendingTaskIDs,
+  pendingResumeTaskIDs = emptyPendingTaskIDs,
   pinnedItemKeys,
 }: KanbanColumnProps) {
   const { t } = useTranslation();
@@ -234,6 +238,8 @@ export function KanbanColumn({
                   onDeleteTask={onDeleteTask}
                   onInterruptTask={onInterruptTask}
                   onResumeTask={onResumeTask}
+                  pendingInterrupt={pendingInterruptTaskIDs.has(card.id)}
+                  pendingResume={pendingResumeTaskIDs.has(card.id)}
                 />
               );
             }}
@@ -245,6 +251,8 @@ export function KanbanColumn({
     </section>
   );
 }
+
+const emptyPendingTaskIDs: ReadonlySet<string> = new Set();
 
 function CollapsedColumnHeader({
   column,
@@ -317,6 +325,8 @@ const TaskCard = memo(function TaskCard({
   onDeleteTask,
   onInterruptTask,
   onResumeTask,
+  pendingInterrupt,
+  pendingResume,
 }: Readonly<{
   card: KanbanCardVM;
   cardIndex: number;
@@ -328,6 +338,8 @@ const TaskCard = memo(function TaskCard({
   onDeleteTask: (taskID: string) => void;
   onInterruptTask: (taskID: string) => void;
   onResumeTask: (taskID: string) => void;
+  pendingInterrupt: boolean;
+  pendingResume: boolean;
 }>) {
   const { t } = useTranslation();
   const { cardClassName, cardStyle, registerCard: registerMotionCard } = useBoardCardMotion();
@@ -458,6 +470,8 @@ const TaskCard = memo(function TaskCard({
                 cardID={card.id}
                 onInterrupt={onInterruptTask}
                 onResume={onResumeTask}
+                pendingInterrupt={pendingInterrupt}
+                pendingResume={pendingResume}
               />
             </div>
           ) : null}
@@ -549,12 +563,16 @@ function TaskCardActions({
   cardID,
   onInterrupt,
   onResume,
+  pendingInterrupt,
+  pendingResume,
 }: Readonly<{
   actionsDisabled: boolean;
   availableActions: TaskCardActionAvailability;
   cardID: string;
   onInterrupt: (taskID: string) => void;
   onResume: (taskID: string) => void;
+  pendingInterrupt: boolean;
+  pendingResume: boolean;
 }>) {
   const { t } = useTranslation();
   if (!availableActions.canInterrupt && !availableActions.canResume) {
@@ -569,7 +587,7 @@ function TaskCardActions({
             event.stopPropagation();
             onResume(cardID);
           }}
-          disabled={actionsDisabled}
+          disabled={actionsDisabled || pendingResume}
           size="icon-sm"
           variant="primary-outline"
         >
@@ -583,7 +601,7 @@ function TaskCardActions({
             event.stopPropagation();
             onInterrupt(cardID);
           }}
-          disabled={actionsDisabled}
+          disabled={actionsDisabled || pendingInterrupt}
           size="icon-sm"
           variant="danger"
         >
@@ -607,7 +625,7 @@ type TaskCardActionAvailability = Readonly<{
 
 function taskCardActionAvailability(card: KanbanCardVM): TaskCardActionAvailability {
   return {
-    canInterrupt: card.actions.canInterrupt && !isWaitingForAnswer(card.statusKind),
+    canInterrupt: card.actions.canInterrupt,
     canResume: card.actions.canResume,
   };
 }

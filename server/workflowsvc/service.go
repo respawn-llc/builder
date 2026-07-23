@@ -15,11 +15,13 @@ import (
 	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowattention"
+	"core/server/workflowexecution"
 	"core/server/workflowscript"
 	"core/server/workflowstore"
 	"core/server/workflowview"
 	"core/server/worktree"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 )
@@ -31,11 +33,15 @@ type Service struct {
 	executionTargets    executionTargetInfrastructure
 	taskWorktreeCleanup taskWorktreeDeleter
 	runtimeCancel       taskRuntimeCanceler
-	schedulerWake       schedulerNotifier
+	interruptAuthority  workflowexecution.InterruptAuthority
+	moveAuthority       workflowexecution.MoveAuthority
+	schedulerWake       workflowRunScheduler
 	events              *workflowProjectEventBroker
 	prompts             pendingPromptResponder
 	attentionFinalizer  workflowAttentionFinalizer
 	questionMemo        *requestmemo.Memo[taskQuestionAnswerMemoRequest, struct{}]
+	mutationPermit      *workflowexecution.MutationPermit
+	automaticStarts     *workflowexecution.AutomaticStartRegistration
 }
 
 type initiatingActionTargetDecision struct {
@@ -48,6 +54,7 @@ type initiatingActionRequest struct {
 	setupOperationID        serverapi.WorktreeSetupOperationID
 	explicitTarget          *serverapi.WorkflowExecutionTargetSelection
 	requiresExecutionTarget bool
+	afterTargetResolution   func() error
 }
 
 type initiatingActionResult[T any] struct {
@@ -94,8 +101,9 @@ type taskRuntimeRunCancelRequester interface {
 	RequestCancelRun(runID workflow.RunID) bool
 }
 
-type schedulerNotifier interface {
-	Notify()
+type workflowRunScheduler interface {
+	StartExplicitRuns(context.Context, []workflow.RunID) error
+	EnsureTaskQuiescent(context.Context, workflow.TaskID) error
 }
 
 type pendingPromptResponder interface {
@@ -143,7 +151,16 @@ func WithTaskRuntimeCanceler(canceler taskRuntimeCanceler) Option {
 	}
 }
 
-func WithSchedulerNotifier(notifier schedulerNotifier) Option {
+func WithWorkflowInterruptAuthority(authority workflowexecution.InterruptAuthority) Option {
+	return func(s *Service) {
+		s.interruptAuthority = authority
+		if moveAuthority, ok := authority.(workflowexecution.MoveAuthority); ok {
+			s.moveAuthority = moveAuthority
+		}
+	}
+}
+
+func WithSchedulerNotifier(notifier workflowRunScheduler) Option {
 	return func(s *Service) {
 		s.schedulerWake = notifier
 	}
@@ -161,16 +178,22 @@ func WithWorkflowAttentionFinalizer(finalizer workflowAttentionFinalizer) Option
 	}
 }
 
-func New(store *workflowstore.Store, readModels ReadModels, roleResolver workflow.RoleResolver, opts ...Option) (*Service, error) {
+func New(store *workflowstore.Store, readModels ReadModels, roleResolver workflow.RoleResolver, mutationPermit *workflowexecution.MutationPermit, automaticStarts *workflowexecution.AutomaticStartRegistration, opts ...Option) (*Service, error) {
 	if store == nil {
 		return nil, errors.New("workflow store is required")
+	}
+	if mutationPermit == nil {
+		return nil, errors.New("workflow mutation permit is required")
+	}
+	if automaticStarts == nil {
+		return nil, errors.New("automatic workflow start registration is required")
 	}
 	if err := readModels.validate(); err != nil {
 		return nil, err
 	}
 	events := newWorkflowProjectEventBroker()
 	store.SetWorkflowEventPublisher(events)
-	service := &Service{store: store, readModels: readModels, roleResolver: roleResolver, events: events, questionMemo: requestmemo.New[taskQuestionAnswerMemoRequest, struct{}]()}
+	service := &Service{store: store, readModels: readModels, roleResolver: roleResolver, events: events, questionMemo: requestmemo.New[taskQuestionAnswerMemoRequest, struct{}](), mutationPermit: mutationPermit, automaticStarts: automaticStarts}
 	for _, opt := range opts {
 		opt(service)
 	}
@@ -471,6 +494,12 @@ func (s *Service) PreviewWorkflowDelete(ctx context.Context, req serverapi.Workf
 }
 
 func (s *Service) DeleteWorkflow(ctx context.Context, req serverapi.WorkflowDeleteRequest) (serverapi.WorkflowDeleteResponse, error) {
+	return workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (serverapi.WorkflowDeleteResponse, error) {
+		return s.deleteWorkflow(ctx, req)
+	})
+}
+
+func (s *Service) deleteWorkflow(ctx context.Context, req serverapi.WorkflowDeleteRequest) (serverapi.WorkflowDeleteResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowDeleteResponse{}, err
 	}
@@ -698,6 +727,10 @@ func (s *Service) UpdateWorkflowTask(ctx context.Context, req serverapi.Workflow
 }
 
 func (s *Service) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
+	return s.startWorkflowTask(ctx, req)
+}
+
+func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
 	}
@@ -710,7 +743,9 @@ func (s *Service) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 		explicitTarget:          req.ExecutionTarget,
 		requiresExecutionTarget: true,
 	}, func(candidate *workflowstore.ExecutionTargetCandidate) (workflowstore.StartTaskResult, error) {
-		return s.store.StartTaskWithExecutionTarget(ctx, workflow.TaskID(req.TaskID), candidate)
+		return workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (workflowstore.StartTaskResult, error) {
+			return s.store.StartTaskWithExecutionTarget(ctx, workflow.TaskID(req.TaskID), candidate)
+		})
 	})
 	if err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
@@ -725,8 +760,8 @@ func (s *Service) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 		return serverapi.WorkflowTaskStartResponse{}, errors.New("coordinated task start returned no applied result")
 	}
 	started := *coordinated.applied
-	if s.schedulerWake != nil {
-		s.schedulerWake.Notify()
+	if err := s.startExplicitRuns(ctx, []workflow.RunID{started.RunID}); err != nil {
+		return serverapi.WorkflowTaskStartResponse{}, err
 	}
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionStarted, req.TaskID, string(started.RunID))
@@ -752,6 +787,11 @@ func coordinateInitiatingAction[T any](ctx context.Context, service *Service, re
 			return initiatingActionResult[T]{selectionRequired: targetDecision.selectionRequired}, nil
 		}
 		candidate = targetDecision.candidate
+	}
+	if req.afterTargetResolution != nil {
+		if err := req.afterTargetResolution(); err != nil {
+			return initiatingActionResult[T]{}, err
+		}
 	}
 	applied, err := apply(candidate)
 	if err != nil {
@@ -939,40 +979,58 @@ func (s *Service) InterruptWorkflowTask(ctx context.Context, req serverapi.Workf
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskInterruptResponse{}, err
 	}
-	// workflow.task.interrupt is always operator-initiated; persist the canonical
-	// non-attention reason even when the caller supplied custom display text.
-	interrupted, err := s.store.InterruptTaskRuns(ctx, workflow.TaskID(req.TaskID), req.SessionID, workflowattention.InterruptionReasonUserInterrupt)
-	if err != nil {
+	selector := workflowexecution.InterruptSelector{TaskID: workflow.TaskID(req.TaskID)}
+	if rawSessionID := strings.TrimSpace(req.SessionID); rawSessionID != "" {
+		sessionID, err := runtimeids.ParseSessionID(rawSessionID)
+		if err != nil {
+			return serverapi.WorkflowTaskInterruptResponse{}, err
+		}
+		selector.SessionID = &sessionID
+	}
+	if s.interruptAuthority == nil {
+		return serverapi.WorkflowTaskInterruptResponse{}, workflowexecution.ErrNoInterruptibleExecution
+	}
+	var prepared workflowexecution.PreparedInterrupt
+	var interrupted []workflowstore.RunRecord
+	if err := s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+		var err error
+		prepared, err = s.interruptAuthority.PrepareWorkflowInterrupt(selector)
+		if err != nil {
+			return err
+		}
+		return prepared.Commit(func(executions []workflowexecution.ExactExecutionScope) error {
+			if len(executions) == 0 {
+				return workflowexecution.ErrNoInterruptibleExecution
+			}
+			refs := make([]workflowstore.ExactRunRef, 0, len(executions))
+			for _, execution := range executions {
+				if err := execution.Validate(); err != nil {
+					return err
+				}
+				if execution.TaskID != selector.TaskID {
+					return errors.New("interruptible workflow execution belongs to another task")
+				}
+				refs = append(refs, workflowstore.ExactRunRef{
+					TaskID:     execution.TaskID,
+					RunID:      execution.RunID,
+					Generation: execution.Generation,
+				})
+			}
+			// workflow.task.interrupt is always operator-initiated; persist the canonical
+			// non-attention reason even when the caller supplied custom display text.
+			interrupted, err = s.store.InterruptExactRuns(ctx, refs, workflowattention.InterruptionReasonUserInterrupt, "{}")
+			return err
+		})
+	}); err != nil {
 		return serverapi.WorkflowTaskInterruptResponse{}, err
 	}
-	cancelErr := s.cancelInterruptedRuntimes(ctx, workflow.TaskID(req.TaskID), req.SessionID, interrupted)
+	if err := prepared.Wait(ctx); err != nil {
+		return serverapi.WorkflowTaskInterruptResponse{}, err
+	}
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionInterrupted, req.TaskID)
 	}
-	if cancelErr != nil {
-		return serverapi.WorkflowTaskInterruptResponse{}, cancelErr
-	}
 	return serverapi.WorkflowTaskInterruptResponse{Runs: workflowTaskRunSummaries(interrupted)}, nil
-}
-
-func (s *Service) cancelInterruptedRuntimes(ctx context.Context, taskID workflow.TaskID, sessionID string, interrupted []workflowstore.RunRecord) error {
-	if s.runtimeCancel == nil {
-		return nil
-	}
-	if strings.TrimSpace(sessionID) == "" {
-		return s.runtimeCancel.CancelTaskRuns(ctx, taskID)
-	}
-	canceler, ok := s.runtimeCancel.(taskRuntimeRunCanceler)
-	if !ok {
-		return nil
-	}
-	errs := make([]error, 0, len(interrupted))
-	for _, run := range interrupted {
-		if err := canceler.CancelRun(ctx, run.ID); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
 }
 
 func workflowTaskRunSummaries(runs []workflowstore.RunRecord) []serverapi.WorkflowTaskRunSummary {
@@ -983,17 +1041,47 @@ func workflowTaskRunSummaries(runs []workflowstore.RunRecord) []serverapi.Workfl
 	return summaries
 }
 
+func runIDsFromRecords(runs []workflowstore.RunRecord) []workflow.RunID {
+	runIDs := make([]workflow.RunID, 0, len(runs))
+	for _, run := range runs {
+		if run.ID != "" {
+			runIDs = append(runIDs, run.ID)
+		}
+	}
+	return runIDs
+}
+
+func (s *Service) registerAutomaticStarts(req workflowexecution.AutomaticStartRegistrationRequest) error {
+	if s == nil {
+		return errors.New("workflow service is required")
+	}
+	return s.automaticStarts.Register(req)
+}
+
+func (s *Service) startExplicitRuns(ctx context.Context, runIDs []workflow.RunID) error {
+	if s == nil || s.schedulerWake == nil || len(runIDs) == 0 {
+		return nil
+	}
+	return s.schedulerWake.StartExplicitRuns(ctx, runIDs)
+}
+
 func (s *Service) ResumeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
+	return s.resumeWorkflowTask(ctx, req)
+}
+
+func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
-	resumed, err := s.store.ResumeTaskRuns(ctx, workflow.TaskID(req.TaskID))
+	resumed, err := workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (workflowstore.ResumeTaskRunsResult, error) {
+		return s.store.ResumeTaskRuns(ctx, workflow.TaskID(req.TaskID))
+	})
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
 	s.finalizeTaskAttentionResolution(ctx, resumed.TaskAttentionResolution)
-	if s.schedulerWake != nil {
-		s.schedulerWake.Notify()
+	if err := s.startExplicitRuns(ctx, runIDsFromRecords(resumed.Runs)); err != nil {
+		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionResumed, req.TaskID)
@@ -1015,6 +1103,10 @@ func (s *Service) StartTaskAutomationWithSetup(ctx context.Context, req TaskAuto
 }
 
 func (s *Service) startTaskAutomation(ctx context.Context, req TaskAutomationStartRequest) (workflowstore.StartTaskResult, error) {
+	return s.startTaskAutomationWithPermit(ctx, req)
+}
+
+func (s *Service) startTaskAutomationWithPermit(ctx context.Context, req TaskAutomationStartRequest) (workflowstore.StartTaskResult, error) {
 	taskID := strings.TrimSpace(req.TaskID)
 	if err := s.store.ValidateTaskStart(ctx, workflow.TaskID(taskID)); err != nil {
 		return workflowstore.StartTaskResult{}, err
@@ -1024,7 +1116,21 @@ func (s *Service) startTaskAutomation(ctx context.Context, req TaskAutomationSta
 		setupOperationID:        req.SetupOperationID,
 		requiresExecutionTarget: true,
 	}, func(candidate *workflowstore.ExecutionTargetCandidate) (workflowstore.StartTaskResult, error) {
-		return s.store.StartTaskWithExecutionTarget(ctx, workflow.TaskID(taskID), candidate)
+		return workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (workflowstore.StartTaskResult, error) {
+			started, err := s.store.StartTaskWithExecutionTarget(ctx, workflow.TaskID(taskID), candidate)
+			if err != nil {
+				return workflowstore.StartTaskResult{}, err
+			}
+			transitionID := workflow.TransitionID(started.TransitionID)
+			if err := s.registerAutomaticStarts(workflowexecution.AutomaticStartRegistrationRequest{
+				Producer:     workflowexecution.AutomaticStartProducerTaskStart,
+				TransitionID: &transitionID,
+				RunIDs:       []workflow.RunID{started.RunID},
+			}); err != nil {
+				return workflowstore.StartTaskResult{}, err
+			}
+			return started, nil
+		})
 	})
 	if err != nil {
 		return workflowstore.StartTaskResult{}, err
@@ -1035,14 +1141,14 @@ func (s *Service) startTaskAutomation(ctx context.Context, req TaskAutomationSta
 	if coordinated.applied == nil {
 		return workflowstore.StartTaskResult{}, errors.New("coordinated task automation start returned no applied result")
 	}
-	started := *coordinated.applied
-	if s.schedulerWake != nil {
-		s.schedulerWake.Notify()
-	}
-	return started, nil
+	return *coordinated.applied, nil
 }
 
 func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskApproveRequest) (serverapi.WorkflowTaskApproveResponse, error) {
+	return s.approveWorkflowTask(ctx, req)
+}
+
+func (s *Service) approveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskApproveRequest) (serverapi.WorkflowTaskApproveResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
@@ -1064,7 +1170,9 @@ func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.Workflo
 		explicitTarget:          req.ExecutionTarget,
 		requiresExecutionTarget: requiresExecutionTarget,
 	}, func(candidate *workflowstore.ExecutionTargetCandidate) (workflowstore.CompleteRunResult, error) {
-		return s.store.ApproveTransitionWithExecutionTarget(ctx, workflow.TransitionID(transitionID), candidate)
+		return workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (workflowstore.CompleteRunResult, error) {
+			return s.store.ApproveTransitionWithExecutionTarget(ctx, workflow.TransitionID(transitionID), candidate)
+		})
 	})
 	if err != nil {
 		return serverapi.WorkflowTaskApproveResponse{}, err
@@ -1080,8 +1188,8 @@ func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.Workflo
 	}
 	approved := *coordinated.applied
 	s.finalizeWorkflowAttention(ctx, approved)
-	if s.schedulerWake != nil {
-		s.schedulerWake.Notify()
+	if err := s.startExplicitRuns(ctx, approved.RunIDs); err != nil {
+		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
 	s.publishProjectWorkflowEvent(ctx, projectID, workflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionApproved, taskID, transitionID)
 	return serverapi.WorkflowTaskApproveResponse{
@@ -1097,6 +1205,10 @@ func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.Workflo
 }
 
 func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
+	return s.moveWorkflowTask(ctx, req)
+}
+
+func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
@@ -1117,8 +1229,13 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		setupOperationID:        req.SetupOperationID,
 		explicitTarget:          req.ExecutionTarget,
 		requiresExecutionTarget: preparation.RequiresExecutionTarget(),
+		afterTargetResolution: func() error {
+			return s.stopWaitingQuestionForMove(ctx, workflow.TaskID(req.TaskID))
+		},
 	}, func(candidate *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error) {
-		return s.store.ApplyManualMove(ctx, preparation, candidate)
+		return workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (workflowstore.ManualMoveResult, error) {
+			return s.store.ApplyManualMove(ctx, preparation, candidate)
+		})
 	})
 	if err != nil {
 		return serverapi.WorkflowTaskMoveResponse{}, err
@@ -1134,8 +1251,8 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	}
 	moved := *coordinated.applied
 	s.finalizeWorkflowAttention(ctx, moved)
-	if s.schedulerWake != nil {
-		s.schedulerWake.Notify()
+	if err := s.startExplicitRuns(ctx, moved.RunIDs); err != nil {
+		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
 	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionMoved, req.TaskID, string(moved.TransitionID))
@@ -1151,7 +1268,37 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	}, nil
 }
 
+func (s *Service) stopWaitingQuestionForMove(ctx context.Context, taskID workflow.TaskID) error {
+	if s.moveAuthority == nil {
+		return nil
+	}
+	var prepared workflowexecution.PreparedMoveStop
+	if err := s.mutationPermit.Run(ctx, func(context.Context) error {
+		var err error
+		prepared, err = s.moveAuthority.PrepareWorkflowMove(taskID)
+		if err != nil {
+			return err
+		}
+		if prepared != nil {
+			prepared.RequestStop()
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if prepared == nil {
+		return nil
+	}
+	return prepared.Wait(ctx)
+}
+
 func (s *Service) CompleteWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskCompleteRequest) (serverapi.WorkflowTaskCompleteResponse, error) {
+	return workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (serverapi.WorkflowTaskCompleteResponse, error) {
+		return s.completeWorkflowTask(ctx, req)
+	})
+}
+
+func (s *Service) completeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskCompleteRequest) (serverapi.WorkflowTaskCompleteResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskCompleteResponse{}, err
 	}
@@ -1186,17 +1333,23 @@ func (s *Service) CompleteWorkflowTask(ctx context.Context, req serverapi.Workfl
 	}
 	result := completed.Result
 	s.finalizeWorkflowAttention(ctx, result)
+	sourceRunID := target.Run.ID
+	transitionID := result.TransitionID
+	if err := s.registerAutomaticStarts(workflowexecution.AutomaticStartRegistrationRequest{
+		Producer:     workflowexecution.AutomaticStartProducerTaskCompletion,
+		SourceRunID:  &sourceRunID,
+		TransitionID: &transitionID,
+		RunIDs:       result.RunIDs,
+	}); err != nil {
+		return serverapi.WorkflowTaskCompleteResponse{}, err
+	}
 	if req.ActorKind == serverapi.WorkflowTaskCompleteActorUser {
-		notifyScheduler := true
 		if requester, ok := s.runtimeCancel.(taskRuntimeRunCancelRequester); ok {
-			notifyScheduler = !requester.RequestCancelRun(target.Run.ID)
+			requester.RequestCancelRun(target.Run.ID)
 		} else if canceler, ok := s.runtimeCancel.(taskRuntimeRunCanceler); ok {
 			if err := canceler.CancelRun(ctx, target.Run.ID); err != nil {
 				slog.Warn("cancel completed workflow run failed", "run_id", string(target.Run.ID), "task_id", taskID, "error", err)
 			}
-		}
-		if notifyScheduler && s.schedulerWake != nil {
-			s.schedulerWake.Notify()
 		}
 	}
 	return serverapi.WorkflowTaskCompleteResponse{
@@ -1266,13 +1419,18 @@ func (s *Service) CancelWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if reason == "" {
 		reason = "user_canceled"
 	}
-	result, err := s.store.CancelTask(ctx, workflow.TaskID(req.TaskID), reason)
-	if err != nil {
+	if err := s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+		result, err := s.store.CancelTask(ctx, workflow.TaskID(req.TaskID), reason)
+		if err != nil {
+			return err
+		}
+		s.finalizeTaskAttentionResolution(ctx, result.TaskAttentionResolution)
+		if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
+			s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionCanceled, req.TaskID)
+		}
+		return nil
+	}); err != nil {
 		return err
-	}
-	s.finalizeTaskAttentionResolution(ctx, result.TaskAttentionResolution)
-	if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
-		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionCanceled, req.TaskID)
 	}
 	if s.runtimeCancel != nil {
 		return s.runtimeCancel.CancelTaskRuns(ctx, workflow.TaskID(req.TaskID))
@@ -1298,18 +1456,25 @@ func (s *Service) DeleteWorkflowTask(ctx context.Context, req serverapi.Workflow
 			return err
 		}
 	}
-	if s.taskWorktreeCleanup != nil {
-		if err := s.taskWorktreeCleanup.DeleteTaskWorktree(ctx, req.TaskID); err != nil {
+	return s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+		if s.schedulerWake != nil {
+			if err := s.schedulerWake.EnsureTaskQuiescent(ctx, workflow.TaskID(req.TaskID)); err != nil {
+				return err
+			}
+		}
+		if s.taskWorktreeCleanup != nil {
+			if err := s.taskWorktreeCleanup.DeleteTaskWorktree(ctx, req.TaskID); err != nil {
+				return err
+			}
+		}
+		result, err := s.store.DeleteTask(ctx, workflow.TaskID(req.TaskID))
+		if err != nil {
 			return err
 		}
-	}
-	result, err := s.store.DeleteTask(ctx, workflow.TaskID(req.TaskID))
-	if err != nil {
-		return err
-	}
-	s.finalizeTaskAttentionResolution(ctx, result.TaskAttentionResolution)
-	s.publishProjectWorkflowEvent(ctx, result.ProjectID, string(result.WorkflowID), serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionDeleted, req.TaskID)
-	return nil
+		s.finalizeTaskAttentionResolution(ctx, result.TaskAttentionResolution)
+		s.publishProjectWorkflowEvent(ctx, result.ProjectID, string(result.WorkflowID), serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionDeleted, req.TaskID)
+		return nil
+	})
 }
 
 func (s *Service) finalizeWorkflowApprovalProjections(ctx context.Context, projections []workflowstore.ApprovalTransitionProjection) {
@@ -1380,34 +1545,41 @@ func (s *Service) AnswerWorkflowTaskQuestion(ctx context.Context, req serverapi.
 		memoReq.ApprovalCommentary = req.Approval.Commentary
 	}
 	_, err := s.questionMemo.Do(ctx, req.ClientRequestID, memoReq, sameTaskQuestionAnswerMemoRequest, func(ctx context.Context) (struct{}, error) {
-		resolved, err := s.store.ResolveTaskWaitingAsk(ctx, workflow.TaskID(req.TaskID), workflow.RunID(req.RunID), req.AskID)
-		if err != nil {
-			return struct{}{}, err
-		}
-		run := resolved.Run
-		if strings.TrimSpace(req.ErrorMessage) != "" {
-			if err := s.prompts.SubmitPromptResponse(run.SessionID, askquestion.AskQuestionResponse{RequestID: req.AskID}, errors.New(req.ErrorMessage)); err != nil {
-				return struct{}{}, err
-			}
-		} else {
-			response := askquestion.AskQuestionResponse{RequestID: req.AskID, Answer: req.Answer, SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber), FreeformAnswer: req.FreeformAnswer}
-			if req.Approval != nil {
-				response = askquestion.AskQuestionResponse{
-					RequestID: req.AskID,
-					Approval: &askquestion.AskQuestionApprovalPayload{
-						Decision:   askquestion.AskQuestionApprovalDecision(req.Approval.Decision),
-						Commentary: req.Approval.Commentary,
-					},
-				}
-			}
-			if err := s.prompts.SubmitPromptResponse(run.SessionID, response, nil); err != nil {
-				return struct{}{}, err
-			}
-		}
-		s.publishProjectWorkflowEvent(ctx, resolved.ProjectID, string(resolved.WorkflowID), serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionQuestionAnswered, req.TaskID, string(run.ID), req.AskID)
-		return struct{}{}, nil
+		err := s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+			return s.answerWorkflowTaskQuestion(ctx, req)
+		})
+		return struct{}{}, err
 	})
 	return err
+}
+
+func (s *Service) answerWorkflowTaskQuestion(ctx context.Context, req serverapi.WorkflowTaskQuestionAnswerRequest) error {
+	resolved, err := s.store.ResolveTaskWaitingAsk(ctx, workflow.TaskID(req.TaskID), workflow.RunID(req.RunID), req.AskID)
+	if err != nil {
+		return err
+	}
+	run := resolved.Run
+	if strings.TrimSpace(req.ErrorMessage) != "" {
+		if err := s.prompts.SubmitPromptResponse(run.SessionID, askquestion.AskQuestionResponse{RequestID: req.AskID}, errors.New(req.ErrorMessage)); err != nil {
+			return err
+		}
+	} else {
+		response := askquestion.AskQuestionResponse{RequestID: req.AskID, Answer: req.Answer, SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber), FreeformAnswer: req.FreeformAnswer}
+		if req.Approval != nil {
+			response = askquestion.AskQuestionResponse{
+				RequestID: req.AskID,
+				Approval: &askquestion.AskQuestionApprovalPayload{
+					Decision:   askquestion.AskQuestionApprovalDecision(req.Approval.Decision),
+					Commentary: req.Approval.Commentary,
+				},
+			}
+		}
+		if err := s.prompts.SubmitPromptResponse(run.SessionID, response, nil); err != nil {
+			return err
+		}
+	}
+	s.publishProjectWorkflowEvent(ctx, resolved.ProjectID, string(resolved.WorkflowID), serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionQuestionAnswered, req.TaskID, string(run.ID), req.AskID)
+	return nil
 }
 
 func sameTaskQuestionAnswerMemoRequest(a taskQuestionAnswerMemoRequest, b taskQuestionAnswerMemoRequest) bool {

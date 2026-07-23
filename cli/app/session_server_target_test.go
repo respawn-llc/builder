@@ -8,6 +8,7 @@ import (
 	"core/server/llm"
 	"core/server/metadata"
 	serverstartup "core/server/startup"
+	patchtool "core/server/tools/patch"
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -121,16 +122,10 @@ func appTestOutsidePatchCall(id, path string) appTestModelToolCall {
 
 func appTestOutsidePatchPath(t *testing.T) string {
 	t.Helper()
-	workingDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("resolve test working dir: %v", err)
-	}
-	dir, err := os.MkdirTemp(workingDir, "kent-prompt-outside-*")
-	if err != nil {
-		t.Fatalf("create outside-workspace test dir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	return filepath.Join(dir, "approved.txt")
+	return filepath.Join(
+		testsetup.NonTemporaryDirectory(t, "kent-app-outside-", patchtool.IsPathInTemporaryDir),
+		"approved.txt",
+	)
 }
 
 func startAppTestRuntimeSubmission(t *testing.T, client clientui.RuntimeClient, text string) (<-chan appTestRuntimeSubmissionResult, <-chan error) {

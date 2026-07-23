@@ -23,12 +23,26 @@ import (
 
 func TestDeleteWorktreeBlocksWhenBackgroundProcessUsesDescendantPath(t *testing.T) {
 	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/delete-blocked-process")
-	env.processes.snapshots = []shelltool.Snapshot{{ID: "proc-1", Command: "sleep 30", Workdir: filepath.Join(created.CanonicalRoot, "tmp"), Running: true}}
+	busy := mustCreateWorktree(t, env, "feature/delete-blocked-process")
+	unrelated := mustCreateWorktree(t, env, "feature/delete-unrelated-process")
+	busySession := createServiceTestSession(t, env.store, env.cfg, env.binding)
+	updateServiceTestSessionTarget(t, env, busySession.Meta().SessionID, env.binding.WorkspaceID, busy.WorktreeID, ".")
+	state := captureDeleteTargetState(t, env, busySession.Meta().SessionID, busy)
+	env.processes.snapshots = []shelltool.Snapshot{{ID: "proc-1", Command: "sleep 30", Workdir: filepath.Join(busy.CanonicalRoot, "tmp"), Running: true}}
 
-	_, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, created.WorktreeID))
+	_, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, busy.WorktreeID))
 	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
 		t.Fatalf("DeleteWorktree error = %v, want ErrWorktreeBlocked", err)
+	}
+	snapshots := env.processes.List()
+	if len(snapshots) != 1 || !snapshots[0].Running {
+		t.Fatalf("background process snapshot changed after blocked delete: %+v", snapshots)
+	}
+	state.assertUnchanged(t, env, busySession.Meta().SessionID, busy.WorktreeID)
+
+	result, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, unrelated.WorktreeID))
+	if err != nil || result.Kind != serverapi.WorktreeDeleteResultKindCompleted {
+		t.Fatalf("DeleteWorktree unrelated = %+v, %v; want completed", result, err)
 	}
 }
 
@@ -193,6 +207,10 @@ func TestNextAvailableWorktreeRootFailsAfterCollisionCap(t *testing.T) {
 }
 
 func newServiceTestEnv(t *testing.T) *serviceTestEnv {
+	return newServiceTestEnvWithResourceLifecycle(t, nil)
+}
+
+func newServiceTestEnvWithResourceLifecycle(t *testing.T, lifecycle sessionruntime.AgentResourceLifecycle) *serviceTestEnv {
 	t.Helper()
 	ctx := context.Background()
 	home := t.TempDir()
@@ -215,8 +233,9 @@ func newServiceTestEnv(t *testing.T) *serviceTestEnv {
 	}
 	sess := createServiceTestSession(t, store, cfg, binding)
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		PersistenceRoot: cfg.PersistenceRoot,
-		StoreOptions:    store.AuthoritativeSessionStoreOptions(),
+		PersistenceRoot:   cfg.PersistenceRoot,
+		StoreOptions:      store.AuthoritativeSessionStoreOptions(),
+		ResourceLifecycle: lifecycle,
 	})
 	t.Cleanup(func() {
 		if err := authority.Close(context.Background()); err != nil {

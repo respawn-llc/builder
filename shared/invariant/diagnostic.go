@@ -12,6 +12,7 @@ const (
 	ScopeReadModelPublication Scope = "read_model_publication"
 	ScopeBackgroundEvent      Scope = "background_event"
 	ScopeSessionPersistence   Scope = "session_persistence"
+	ScopeWorkflowExecution    Scope = "workflow_execution"
 )
 
 type Field string
@@ -152,6 +153,10 @@ func (d Diagnostic) withStack() Diagnostic {
 		d.Stack = string(debug.Stack())
 	}
 	return d
+}
+
+func (d Diagnostic) WithStack() Diagnostic {
+	return d.withStack()
 }
 
 func fields(values map[Field]string) map[Field]string {

@@ -8,12 +8,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-
-	"github.com/gofrs/flock"
 )
 
 const (
-	eventLogMigrationLockFile                = "events.jsonl.lock"
 	eventLogMigrationWorkspaceDir            = "events.jsonl.migration"
 	eventLogMigrationWorkspaceMarkerFile     = "kent-session-events-migration-v1"
 	eventLogMigrationStagedLogFile           = "staged-events.jsonl"
@@ -135,16 +132,16 @@ func (s *Store) prepareEventLogMaterializationWithMutationHeld() (
 	sessionDir := s.sessionDir
 	s.mu.Unlock()
 
-	lock, lockPath, err := acquireEventLogMigrationLock(sessionDir)
+	lock, lockPath, err := acquireEventLogPersistenceLock(sessionDir)
 	if err != nil {
 		return eventLogPreparationResult{}, wrapEventLogPreparationError(false, err)
 	}
 	committed := false
 	defer func() {
-		if closeErr := lock.Close(); closeErr != nil {
+		if closeErr := releaseEventLogPersistenceLock(lock, lockPath); closeErr != nil {
 			resultErr = errors.Join(
 				resultErr,
-				fmt.Errorf("release event-log migration lock %s: %w", lockPath, closeErr),
+				closeErr,
 			)
 		}
 		resultErr = wrapEventLogPreparationError(committed, resultErr)
@@ -246,19 +243,6 @@ func (s *Store) prepareEventLogMaterializationWithStableLockHeld() (
 	result = s.eventLogPreparationResultLocked()
 	s.mu.Unlock()
 	return result, committed, nil
-}
-
-func acquireEventLogMigrationLock(sessionDir string) (*flock.Flock, string, error) {
-	lockPath := filepath.Join(sessionDir, eventLogMigrationLockFile)
-	lock := flock.New(lockPath)
-	if err := lock.Lock(); err != nil {
-		return nil, lockPath, fmt.Errorf(
-			"acquire event-log migration lock %s: %w",
-			lockPath,
-			err,
-		)
-	}
-	return lock, lockPath, nil
 }
 
 func (s *Store) setEventLogMaterializationState(

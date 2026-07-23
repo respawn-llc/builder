@@ -172,8 +172,10 @@ func TestTaskDetailRequiresExactLiveAuthorityForLivenessStatuses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPlacements queued to running before claim: %v", err)
 	}
-	if queuedToRunningBefore.Status.Kind != serverapi.WorkflowTaskStatusKindActive {
-		t.Fatalf("queued task detail status before claim = %+v, want active without live authority", queuedToRunningBefore.Status)
+	if queuedToRunningBefore.Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
+		len(queuedToRunningBefore.Status.RunIDs) != 0 ||
+		queuedToRunningBefore.Actions.CanInterrupt {
+		t.Fatalf("queued task detail before claim = %+v, want non-interruptible active state without live authority", queuedToRunningBefore)
 	}
 	if _, err := workflowStore.ClaimRun(ctx, queuedToRunningStarted.RunID, 0); err != nil {
 		t.Fatalf("ClaimRun queued to running: %v", err)
@@ -277,22 +279,15 @@ func TestTaskDetailRequiresExactLiveAuthorityForLivenessStatuses(t *testing.T) {
 	wantBoard := map[string]serverapi.WorkflowTaskStatusKind{
 		string(backlog.ID):     serverapi.WorkflowTaskStatusKindBacklog,
 		string(active.ID):      serverapi.WorkflowTaskStatusKindActive,
-		string(queued.ID):      serverapi.WorkflowTaskStatusKindQueued,
-		string(running.ID):     serverapi.WorkflowTaskStatusKindRunning,
+		string(queued.ID):      serverapi.WorkflowTaskStatusKindActive,
+		string(running.ID):     serverapi.WorkflowTaskStatusKindActive,
 		string(interrupted.ID): serverapi.WorkflowTaskStatusKindInterrupted,
-		string(question.ID):    serverapi.WorkflowTaskStatusKindWaitingQuestion,
+		string(question.ID):    serverapi.WorkflowTaskStatusKindActive,
 		string(done.ID):        serverapi.WorkflowTaskStatusKindDone,
 		string(approval.ID):    serverapi.WorkflowTaskStatusKindWaitingApproval,
 		string(canceled.ID):    serverapi.WorkflowTaskStatusKindCanceled,
 	}
-	wantDetail := map[string]serverapi.WorkflowTaskStatusKind{}
-	for taskID, kind := range wantBoard {
-		wantDetail[taskID] = kind
-	}
-	wantDetail[string(queued.ID)] = serverapi.WorkflowTaskStatusKindActive
-	wantDetail[string(running.ID)] = serverapi.WorkflowTaskStatusKindActive
-	wantDetail[string(question.ID)] = serverapi.WorkflowTaskStatusKindActive
-	for taskID, wantKind := range wantDetail {
+	for taskID, wantKind := range wantBoard {
 		detail, err := view.detail(t).GetTask(ctx, taskID)
 		if err != nil {
 			t.Fatalf("GetTask %s: %v", taskID, err)
@@ -313,7 +308,7 @@ func TestTaskDetailRequiresExactLiveAuthorityForLivenessStatuses(t *testing.T) {
 	}
 }
 
-func TestDurableFanoutStatusAndExactLiveTaskDetailRemainDistinct(t *testing.T) {
+func TestDurableFanoutBoardUsesExactLiveStatusAndRetainsResume(t *testing.T) {
 	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
 	fixture := createWorkflowViewFanoutStatusFixture(t, ctx, workflowStore, binding)
 
@@ -352,14 +347,11 @@ func TestDurableFanoutStatusAndExactLiveTaskDetailRemainDistinct(t *testing.T) {
 		t.Fatalf("fanout board projections = %+v, want every branch card", cards)
 	}
 	for _, card := range cards {
-		if card.Status.Kind != fixture.status.Kind ||
-			card.Status.NativeState != fixture.status.NativeState ||
-			!reflect.DeepEqual(card.Status.RunIDs, fixture.status.RunIDs) ||
-			!reflect.DeepEqual(card.Status.AttentionTypes, fixture.status.AttentionTypes) {
-			t.Fatalf("board status = %+v, want durable fanout status %+v", card.Status, fixture.status)
+		if !reflect.DeepEqual(card.Status, detail.Status) {
+			t.Fatalf("board status = %+v, want exact-live status %+v", card.Status, detail.Status)
 		}
-		if !card.Actions.CanInterrupt || !card.Actions.CanResume {
-			t.Fatalf("fanout board actions = %+v, want simultaneous interrupt and resume", card.Actions)
+		if card.Actions.CanInterrupt || !card.Actions.CanResume {
+			t.Fatalf("fanout board actions = %+v, want resume without interrupt for durable-only state", card.Actions)
 		}
 	}
 	workflowIDString := string(fixture.workflowID)

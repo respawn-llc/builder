@@ -190,7 +190,7 @@ func (c MaterializedEventLog) AppendRecordWithEndByteCursor(
 func (c MaterializedEventLog) appendRecordInputsAtomic(
 	inputs []recordAppendInput,
 	transition recordMetadataTransition,
-) (recordAppendOutcome, error) {
+) (outcome recordAppendOutcome, resultErr error) {
 	if c.store == nil {
 		return recordAppendOutcome{}, errors.New(
 			"materialized event log owning Store is required",
@@ -202,6 +202,11 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 	s := c.store
 	s.mutationMu.Lock()
 	defer s.mutationMu.Unlock()
+	lock, lockPath, err := acquireEventLogPersistenceLock(s.sessionDir)
+	if err != nil {
+		return recordAppendOutcome{}, err
+	}
+	defer joinEventLogPersistenceLockRelease(&resultErr, lock, lockPath)
 	s.mu.Lock()
 	log := s.materializedEventLog
 	if c.log == nil || log != c.log {
@@ -290,12 +295,12 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 	}
 	s.mu.Unlock()
 
-	outcome := recordAppendOutcome{
+	outcome = recordAppendOutcome{
 		records:       records,
 		committed:     true,
 		endByteCursor: endByteCursor,
 	}
-	return outcome, s.observePersistence(observation)
+	return outcome, s.observePersistenceAndClearAppendRecovery(observation)
 }
 
 func (s *Store) appendCurrentRecordsLocked(log *currentEventLog, records []EventRecord, preMeta Meta, postMeta Meta) (int64, error) {

@@ -89,7 +89,7 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 		}
 		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
 	}
-	if followUp.NoopFinalAnswer || isNoopFinalAnswer(followUp.Message) {
+	if followUp.FinalAnswer == nil || isNoopFinalAnswer(*followUp.FinalAnswer) {
 		status := ReviewerStatus{
 			Outcome:               "noop",
 			SuggestionsCount:      len(suggestions),
@@ -104,12 +104,13 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 		CacheHitPercent:       reviewerResult.CacheHitPercent,
 		HasCacheHitPercentage: reviewerResult.HasCacheHitPercentage,
 	}
+	finalAnswer := *followUp.FinalAnswer
 	return reviewerFollowUpResult{
-		Message:                    followUp.Message,
+		Message:                    finalAnswer,
 		Completion:                 &status,
 		AssistantCommittedStart:    followUp.AssistantCommittedStart,
 		AssistantCommittedStartSet: followUp.AssistantCommittedStartSet,
-		AssistantEventEmitted:      !followUp.NoopFinalAnswer && !isNoopFinalAnswer(followUp.Message),
+		AssistantEventEmitted:      true,
 	}, nil
 }
 

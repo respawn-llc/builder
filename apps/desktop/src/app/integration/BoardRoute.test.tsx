@@ -156,6 +156,63 @@ describe("BoardRoute live refresh", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("keeps every task interrupt control disabled while concurrent interrupts are pending", async () => {
+    window.history.pushState(null, "", "/projects/project-1?workflowId=workflow-1");
+    const resolveInterrupts: (() => void)[] = [];
+    const services = createTestServices([
+      ...startupRoutes,
+      {
+        method: "workflow.board.get",
+        result: boardWithActiveColumnCount(2),
+      },
+      {
+        method: "workflow.board.nodeCards.list",
+        result: interruptibleActiveCards,
+      },
+      {
+        method: "workflow.task.interrupt",
+        handler: async () =>
+          new Promise<void>((resolve) => {
+            resolveInterrupts.push(resolve);
+          }),
+      },
+    ]);
+
+    render(<App services={services} />);
+
+    const taskAInterrupt = within(await screen.findByRole("article", { name: "Task A" })).getByRole(
+      "button",
+      { name: appI18n.t("board.interrupt") },
+    );
+    const taskBInterrupt = within(screen.getByRole("article", { name: "Task B" })).getByRole("button", {
+      name: appI18n.t("board.interrupt"),
+    });
+
+    fireEvent.click(taskAInterrupt);
+    await waitFor(() => {
+      expect(interruptCalls(services)).toHaveLength(1);
+    });
+    expect(taskAInterrupt).toBeDisabled();
+    expect(taskBInterrupt).toBeEnabled();
+
+    fireEvent.click(taskBInterrupt);
+    await waitFor(() => {
+      expect(interruptCalls(services)).toHaveLength(2);
+    });
+    expect(taskAInterrupt).toBeDisabled();
+    expect(taskBInterrupt).toBeDisabled();
+
+    act(() => {
+      for (const resolve of resolveInterrupts) {
+        resolve();
+      }
+    });
+    await waitFor(() => {
+      expect(taskAInterrupt).toBeEnabled();
+      expect(taskBInterrupt).toBeEnabled();
+    });
+  });
+
   it("reactively requests the persisted unlabeled expression from the board filter", async () => {
     window.history.pushState(null, "", "/projects/project-1?workflowId=workflow-1");
     const services = createTestServices([
@@ -361,8 +418,7 @@ describe("BoardRoute live refresh", () => {
       },
       {
         method: "workflow.board.nodeCards.list",
-        handler: (_params, callIndex) =>
-          callIndex === 0 ? labeledBacklogCards(otherID) : emptyBacklogCards,
+        handler: (_params, callIndex) => (callIndex === 0 ? labeledBacklogCards(otherID) : emptyBacklogCards),
       },
     ]);
 
@@ -405,8 +461,7 @@ describe("BoardRoute live refresh", () => {
       },
       {
         method: "workflow.board.nodeCards.list",
-        handler: (_params, callIndex) =>
-          callIndex === 0 ? labeledBacklogCards(alphaID) : emptyBacklogCards,
+        handler: (_params, callIndex) => (callIndex === 0 ? labeledBacklogCards(alphaID) : emptyBacklogCards),
       },
     ]);
 
@@ -543,6 +598,10 @@ function nodeCardCalls(services: ReturnType<typeof createTestServices>) {
   return services.transport.calls.filter((call) => call.method === "workflow.board.nodeCards.list");
 }
 
+function interruptCalls(services: ReturnType<typeof createTestServices>) {
+  return services.transport.calls.filter((call) => call.method === "workflow.task.interrupt");
+}
+
 const boardWithoutWorkflowResponse = {
   board: {
     project_id: "project-1",
@@ -578,32 +637,64 @@ const boardWithWorkflowResponse = {
 };
 
 function boardWithBacklogCount(taskCount: number) {
+  return boardWithColumnCount({
+    id: "backlog",
+    isBacklog: true,
+    kind: "backlog",
+    name: "Backlog",
+    taskCount,
+  });
+}
+
+function boardWithActiveColumnCount(taskCount: number) {
+  return boardWithColumnCount({
+    id: "active",
+    isBacklog: false,
+    kind: "active",
+    name: "Active",
+    taskCount,
+  });
+}
+
+function boardWithColumnCount({
+  id,
+  isBacklog,
+  kind,
+  name,
+  taskCount,
+}: Readonly<{
+  id: string;
+  isBacklog: boolean;
+  kind: string;
+  name: string;
+  taskCount: number;
+}>) {
   return {
     board: {
       ...boardWithWorkflowResponse.board,
       groups: [
         {
-          group_id: "group-backlog",
-          key: "backlog",
-          display_name: "Backlog",
+          group_id: `group-${id}`,
+          key: id,
+          display_name: name,
           sort_order: 0,
-          node_ids: ["backlog"],
+          node_ids: [id],
         },
       ],
       columns: [
         {
           node: {
-            node_id: "backlog",
-            key: "backlog",
-            kind: "backlog",
-            display_name: "Backlog",
+            node_id: id,
+            key: id,
+            kind,
+            display_name: name,
             assignee_role: "",
             output_fields: [],
             transition_output_fields: [],
           },
-          group_id: "group-backlog",
+          group_id: `group-${id}`,
           sort_order: 0,
-          is_backlog: true,
+          is_backlog: isBacklog,
           is_done: false,
           task_count: taskCount,
         },
@@ -620,6 +711,76 @@ const emptyBacklogCards = {
   previous_page_token: null,
   next_page_token: null,
   generated_at_unix_ms: 1,
+};
+
+const interruptibleActiveCards = {
+  ...emptyBacklogCards,
+  cards: [
+    {
+      task_id: "task-a",
+      short_id: "PRO-1",
+      title: "Task A",
+      preview: { markdown: "Body", truncated: false },
+      workflow_id: "workflow-1",
+      active_node_ids: ["active"],
+      source_workspace: {
+        workspace_id: "workspace-1",
+        display_name: "Workspace",
+        root_path: "/workspace",
+        availability: "available",
+        is_primary: true,
+        updated_at_unix_ms: 1,
+      },
+      status: {
+        kind: "running",
+        native_state: "running",
+        node_ids: ["active"],
+        run_ids: ["run-a"],
+        attention_types: [],
+      },
+      actions: {
+        can_start: false,
+        can_interrupt: true,
+        can_resume: false,
+        can_cancel: true,
+        manual_move_target_node_ids: [],
+      },
+      label_ids: [],
+      updated_at_unix_ms: 1,
+    },
+    {
+      task_id: "task-b",
+      short_id: "PRO-2",
+      title: "Task B",
+      preview: { markdown: "Body", truncated: false },
+      workflow_id: "workflow-1",
+      active_node_ids: ["active"],
+      source_workspace: {
+        workspace_id: "workspace-1",
+        display_name: "Workspace",
+        root_path: "/workspace",
+        availability: "available",
+        is_primary: true,
+        updated_at_unix_ms: 1,
+      },
+      status: {
+        kind: "running",
+        native_state: "running",
+        node_ids: ["active"],
+        run_ids: ["run-b"],
+        attention_types: [],
+      },
+      actions: {
+        can_start: false,
+        can_interrupt: true,
+        can_resume: false,
+        can_cancel: true,
+        manual_move_target_node_ids: [],
+      },
+      label_ids: [],
+      updated_at_unix_ms: 1,
+    },
+  ],
 };
 
 function labeledBacklogCards(labelID: string) {

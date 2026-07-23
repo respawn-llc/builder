@@ -348,15 +348,6 @@ export function createTaskDetailTestServices(
           },
         },
       },
-      {
-        method: "workflow.task.labels.get",
-        result: {
-          assignment: {
-            task_id: "task-1",
-            label_ids: [],
-          },
-        },
-      },
       { method: "workflow.task.get", result: task },
       { method: "workflow.task.attention.list", result: attention },
       ...(comments === undefined ? [] : [{ method: "workflow.task.comment.list", result: comments }]),

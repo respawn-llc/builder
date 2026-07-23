@@ -1,13 +1,17 @@
 package workflowview
 
 import (
+	"context"
 	"errors"
+	"os/exec"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
@@ -707,7 +711,7 @@ func TestBoardProjectsManualMoveTargetsFromServerPermissions(t *testing.T) {
 	}
 }
 
-func TestBoardHidesManualMoveTargetsForStartedRun(t *testing.T) {
+func TestBoardDoesNotOfferInterruptForDurableStartedRunWithoutExactExecution(t *testing.T) {
 	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
@@ -739,12 +743,89 @@ func TestBoardHidesManualMoveTargetsForStartedRun(t *testing.T) {
 	if len(activePage.Cards) != 1 {
 		t.Fatalf("node cards = %+v, want one active card", activePage.Cards)
 	}
-	if activePage.Cards[0].Status.Kind != "running" || !activePage.Cards[0].Actions.CanInterrupt {
-		t.Fatalf("running card status/actions = %+v/%+v", activePage.Cards[0].Status, activePage.Cards[0].Actions)
+	if activePage.Cards[0].Status.Kind == "running" || activePage.Cards[0].Actions.CanInterrupt {
+		t.Fatalf("durable-only card status/actions = %+v/%+v, want no running or interrupt authority", activePage.Cards[0].Status, activePage.Cards[0].Actions)
 	}
-	if got := activePage.Cards[0].Actions.ManualMoveTargetNodeIDs; len(got) != 0 {
-		t.Fatalf("manual move targets = %+v, want none while run is started", got)
+	if got := activePage.Cards[0].Actions.ManualMoveTargetNodeIDs; len(got) != 1 {
+		t.Fatalf("manual move targets = %+v, want idle task targets", got)
 	}
+}
+
+func TestBoardOffersInterruptOnlyWhileExactScriptExecutionIsActive(t *testing.T) {
+	sleepPath, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skipf("sleep executable unavailable: %v", err)
+	}
+	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Task", Body: "Body"})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	started, err := workflowStore.StartTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	claimed, err := workflowStore.ClaimRun(ctx, started.RunID, 0)
+	if err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	cancellationGrace := 50 * time.Millisecond
+	handle, err := view.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
+		Workflow: &sessionruntime.WorkflowExecutionRef{TaskID: task.ID, RunID: started.RunID, Generation: claimed.Generation},
+		Command: sessionruntime.ScriptCommand{
+			Path:              sleepPath,
+			Args:              []string{"30"},
+			CancellationGrace: &cancellationGrace,
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartScriptExecution: %v", err)
+	}
+	t.Cleanup(func() {
+		if handle != nil {
+			_ = handle.Stop(context.Background())
+		}
+	})
+
+	card := workflowViewBoardCardForTask(t, ctx, view, binding.ProjectID, workflowID, "agent", string(task.ID))
+	if card.Status.Kind != serverapi.WorkflowTaskStatusKindRunning || !card.Actions.CanInterrupt {
+		t.Fatalf("live script card = %+v, want running with Interrupt", card)
+	}
+
+	if err := handle.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop script: %v", err)
+	}
+	handle = nil
+	card = workflowViewBoardCardForTask(t, ctx, view, binding.ProjectID, workflowID, "agent", string(task.ID))
+	if card.Status.Kind == serverapi.WorkflowTaskStatusKindRunning || card.Actions.CanInterrupt {
+		t.Fatalf("stopped script card = %+v, want no running or Interrupt", card)
+	}
+}
+
+func workflowViewBoardCardForTask(t *testing.T, ctx context.Context, view *workflowViewTestFixture, projectID string, workflowID workflow.WorkflowID, nodeKey string, taskID string) serverapi.WorkflowBoardTaskCard {
+	t.Helper()
+	board, err := view.board(t).Get(ctx, serverapi.WorkflowBoardRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+		ProjectID:   projectID,
+	})
+	if err != nil {
+		t.Fatalf("GetBoard: %v", err)
+	}
+	column := workflowViewColumnByKey(t, board, nodeKey)
+	page, err := view.board(t).ListNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+		ProjectID:   projectID,
+		WorkflowID:  string(workflowID),
+		NodeID:      column.Node.NodeID,
+	})
+	if err != nil {
+		t.Fatalf("ListNodeCards: %v", err)
+	}
+	return requireBoardCard(t, page.Cards, taskID)
 }
 
 func TestTaskDetailProjectsCancellationAndInterruptedRun(t *testing.T) {

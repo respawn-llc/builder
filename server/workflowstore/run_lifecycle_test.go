@@ -468,12 +468,8 @@ func TestResumeTaskRunRequeuesInterruptedRunWithSameSession(t *testing.T) {
 	if resumed.ID != f.started.RunID || resumed.SessionID != sessionID || resumed.StartedAt != nil || resumed.InterruptedAt != nil || resumed.Generation <= claimed.Generation {
 		t.Fatalf("resumed run = %+v, want same run/session requeued with newer generation", resumed)
 	}
-	runnable, err := f.store.ListRunnableRuns(f.ctx, 10)
-	if err != nil {
-		t.Fatalf("ListRunnableRuns: %v", err)
-	}
-	if len(runnable) != 1 || runnable[0].ID != f.started.RunID || runnable[0].SessionID != sessionID {
-		t.Fatalf("runnable after resume = %+v, want same run/session", runnable)
+	if resumed.AutomationRequestedAt != nil {
+		t.Fatalf("resumed run persisted automatic intent: %+v", resumed)
 	}
 	reclaimed := claimRunFixture(t, f.ctx, f.store, f.started.RunID, resumed.Generation)
 	if err := f.store.AttachRunSession(f.ctx, f.started.RunID, reclaimed.Generation, sessionID); err != nil {

@@ -154,11 +154,22 @@ describe("KanbanColumn", () => {
     expect(onCardClick).not.toHaveBeenCalled();
   });
 
-  it("treats question-waiting cards as answer-blocked instead of interruptible", () => {
+  it("disables only the matching pending lifecycle action", () => {
+    renderColumn({
+      cards: [testCard({ actions: { canInterrupt: true, canResume: true } })],
+      pendingInterruptTaskIDs: new Set(["task-1"]),
+    });
+
+    const footer = screen.getByTestId("task-card-footer");
+    expect(within(footer).getByRole("button", { name: "Interrupt" })).toBeDisabled();
+    expect(within(footer).getByRole("button", { name: "Resume" })).toBeEnabled();
+  });
+
+  it("does not offer interrupt for question-waiting cards", () => {
     renderColumn({
       cards: [
         testCard({
-          actions: { canInterrupt: true },
+          actions: { canInterrupt: false },
           statusKind: "waiting_question",
           title: "Question task",
         }),
@@ -168,8 +179,10 @@ describe("KanbanColumn", () => {
     const questionCard = screen.getByRole("article", { name: "Question task" });
 
     expect(questionCard).toHaveAttribute("data-task-card-state", "waiting-answer");
-    expect(within(questionCard).queryByRole("button", { name: "Interrupt" })).not.toBeInTheDocument();
     expect(within(questionCard).queryByTestId("task-card-active-run-spinner")).not.toBeInTheDocument();
+    expect(
+      within(questionCard).queryByRole("button", { name: appI18n.t("board.interrupt") }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders bounded card previews, workspace chips only when present, and distinct question/approval border tones", () => {
