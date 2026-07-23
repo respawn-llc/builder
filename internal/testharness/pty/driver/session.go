@@ -295,10 +295,7 @@ func (s *Session) execute(command SessionCommand, assembler *analyzer.CaptureAss
 		}
 		return nil
 	case SessionCommandTerminateProcess:
-		if s.cmd.Process == nil {
-			return errors.New("PTY child process is unavailable")
-		}
-		return signalProcessGroup(s.cmd.Process.Pid, syscall.SIGTERM)
+		return s.ForceKill()
 	default:
 		return fmt.Errorf("unsupported session command kind %d", command.Kind)
 	}
