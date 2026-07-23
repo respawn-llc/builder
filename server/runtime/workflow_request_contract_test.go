@@ -289,6 +289,50 @@ func TestWorkflowRejectsDuplicateCompletionBeforeExecutingMixedToolCalls(t *test
 	}
 }
 
+func TestStructuredWorkflowCompletionStopsAfterSingleProviderDispatch(t *testing.T) {
+	runID := workflow.RunID("workflow-run")
+	controller := &workflowCompletionAccountingController{}
+	client := &fakeClient{responses: []llm.Response{
+		finalTextResponse(`{"commentary":"complete","summary":"done"}`),
+		finalTextResponse(`{"commentary":"unexpected","summary":"done"}`),
+	}}
+	engine := mustNewWorkflowTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		&workflowruntime.Config{
+			RunID: runID,
+			Contract: workflowruntime.CompletionContract{
+				RunID: runID,
+				Transitions: []workflowruntime.CompletionTransition{{
+					ID:         "done",
+					Parameters: []workflow.Parameter{{Key: "summary"}},
+				}},
+			},
+			CompletionMode: workflowruntime.CompletionModeStructuredOutput,
+			Controller:     controller,
+		},
+		Config{Model: "gpt-5"},
+	)
+
+	if _, err := engine.SubmitUserMessage(context.Background(), "run"); err != nil {
+		t.Fatalf("submit structured workflow turn: %v", err)
+	}
+	if len(client.calls) != 1 {
+		t.Fatalf("structured workflow provider calls = %d, want one", len(client.calls))
+	}
+	if request := client.calls[0]; request.StructuredOutput == nil || !request.StructuredOutput.Strict {
+		t.Fatalf("structured workflow request output = %+v, want strict structured output", request.StructuredOutput)
+	}
+	if got := controller.completions.Load(); got != 1 {
+		t.Fatalf("structured workflow completions = %d, want one", got)
+	}
+	if terminal := engine.WorkflowTerminalState(); !terminal.Completed ||
+		terminal.Source != WorkflowCompletionSourceStructuredOutput {
+		t.Fatalf("structured workflow terminal state = %+v", terminal)
+	}
+}
+
 func workflowCompleteNodeCall(id, input string) llm.ToolCall {
 	return llm.ToolCall{
 		ID:    id,
