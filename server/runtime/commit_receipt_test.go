@@ -31,8 +31,8 @@ func TestPersistedMessageAppliesProjectionByCommitReceipt(t *testing.T) {
 		if err == nil {
 			t.Fatal("persisted message did not surface the event-log append failure")
 		}
-		if entries := eng.ChatSnapshot().Entries; len(entries) != 0 {
-			t.Fatalf("uncommitted message projected entries: %+v", entries)
+		if rows := mustTranscriptHydrationSnapshot(t, eng).CommittedRows; len(rows) != 0 {
+			t.Fatalf("uncommitted message projected rows: %+v", rows)
 		}
 		if len(events) != 0 {
 			t.Fatalf("uncommitted message published events: %+v", events)
@@ -59,8 +59,8 @@ func TestPersistedMessageAppliesProjectionByCommitReceipt(t *testing.T) {
 		if !errors.Is(err, observerErr) {
 			t.Fatalf("persisted message error = %v, want observer error", err)
 		}
-		if entries := eng.ChatSnapshot().Entries; len(entries) != 1 {
-			t.Fatalf("committed message projected entries: %+v", entries)
+		if rows := mustTranscriptHydrationSnapshot(t, eng).CommittedRows; len(rows) != 1 {
+			t.Fatalf("committed message projected rows: %+v", rows)
 		}
 		if len(events) != 1 || events[0].Kind != EventConversationUpdated {
 			t.Fatalf("committed message events: %+v", events)
@@ -146,9 +146,21 @@ func TestCommittedControlFeedbackAppliesStateByCommitReceipt(t *testing.T) {
 			if !receipt.Committed || !changed || !testCase.isApplied(engine) {
 				t.Fatalf("committed control feedback did not apply state: receipt=%+v changed=%v", receipt, changed)
 			}
-			if entries := engine.ChatSnapshot().Entries; len(entries) != 1 {
-				t.Fatalf("committed control feedback projected entries: %+v", entries)
+			if rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows; len(rows) != 1 {
+				t.Fatalf("committed control feedback projected rows: %+v", rows)
 			}
 		})
 	}
+}
+
+func mustTranscriptHydrationSnapshot(t *testing.T, engine *Engine) TranscriptHydrationSnapshot {
+	t.Helper()
+	var snapshot TranscriptHydrationSnapshot
+	if err := engine.WithTranscriptHydrationSnapshot(func(value TranscriptHydrationSnapshot) error {
+		snapshot = value
+		return nil
+	}); err != nil {
+		t.Fatalf("read transcript hydration snapshot: %v", err)
+	}
+	return snapshot
 }

@@ -581,7 +581,7 @@ func captureRuntimeProjection(t *testing.T, engine *Engine) promptCacheProjectio
 // production boundary that matters for restart cache continuity.
 func capturePersistedProjectionFromStore(t *testing.T, store *session.Store) promptCacheProjection {
 	t.Helper()
-	scan := mustScanPersistedTranscript(t, store)
+	scan := mustScanPersistedActiveSegment(t, store)
 	return promptCacheProjection{
 		MainViewJSON:   mustMarshalCanonicalJSON(t, persistedMainViewComparable(t, store, scan)),
 		TranscriptJSON: mustMarshalCanonicalJSON(t, scan.RecentTailSnapshot().Snapshot),
@@ -656,13 +656,22 @@ func navigationTargetSessionIDForPromptCache(meta session.Meta) *runtimeids.Sess
 	return nil
 }
 
-func mustScanPersistedTranscript(t *testing.T, store *session.Store) *PersistedTranscriptScan {
+func mustScanPersistedActiveSegment(t *testing.T, store *session.Store) *PersistedTranscriptScan {
 	t.Helper()
+	eventLog := mustMaterializeTestEventLog(t, store)
+	var matchErr error
+	window, err := eventLog.ReadNewestSegmentBackward(compactionBoundaryMatcher(&matchErr))
+	if err != nil {
+		t.Fatalf("read newest persisted transcript segment: %v", err)
+	}
+	if matchErr != nil {
+		t.Fatalf("match newest persisted transcript segment: %v", matchErr)
+	}
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{TrackRecentTail: true, TailLimit: 500})
-	if err := mustMaterializeTestEventLog(t, store).WalkRecords(func(evt session.EventRecord) error {
-		return scan.ApplyPersistedEvent(evt)
-	}); err != nil {
-		t.Fatalf("scan persisted transcript: %v", err)
+	for _, record := range window.Records {
+		if err := scan.ApplyPersistedEvent(record); err != nil {
+			t.Fatalf("project newest persisted transcript segment: %v", err)
+		}
 	}
 	return scan
 }
@@ -712,6 +721,15 @@ func writeTestFile(t *testing.T, path, contents string) {
 
 func skillFixtureMarkdown(name, description string) string {
 	return "---\nname: " + name + "\ndescription: " + description + "\n---\n\n# " + name + "\n"
+}
+
+func skillMessageContent(messages []llm.Message) (string, bool) {
+	for _, message := range messages {
+		if message.MessageType != nil && *message.MessageType == llm.MessageTypeSkills {
+			return messageContent(message), true
+		}
+	}
+	return "", false
 }
 
 func seq21To28ShapeRequest(thirdCallInput json.RawMessage) llm.Request {

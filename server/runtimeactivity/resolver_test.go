@@ -1,9 +1,10 @@
 package runtimeactivity
 
 import (
+	"testing"
+
 	"core/shared/clientui"
 	"core/shared/runtimeids"
-	"testing"
 )
 
 const (
@@ -19,11 +20,7 @@ func TestResolveRuntimeActivityUsesOnlyLiveResolverInputs(t *testing.T) {
 		wantKind clientui.RuntimeActivityActiveKind
 		active   bool
 	}{
-		{
-			name:     "no runtime entry unavailable",
-			snapshot: ResolverSnapshot{},
-			want:     clientui.RuntimeActivityUnavailable,
-		},
+		{name: "no runtime entry unavailable", want: clientui.RuntimeActivityUnavailable},
 		{
 			name:     "registered idle",
 			snapshot: ResolverSnapshot{Registry: RegistrySnapshot{Registered: true, QueueAccepting: true}},
@@ -53,20 +50,20 @@ func TestResolveRuntimeActivityUsesOnlyLiveResolverInputs(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			activity, err := ResolveRuntimeActivity(tt.snapshot)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			activity, err := ResolveRuntimeActivity(test.snapshot)
 			if err != nil {
 				t.Fatalf("ResolveRuntimeActivity: %v", err)
 			}
-			if activity.State != tt.want {
-				t.Fatalf("state = %q, want %q", activity.State, tt.want)
+			if activity.State != test.want {
+				t.Fatalf("state = %q, want %q", activity.State, test.want)
 			}
-			if runtimeActivityKind(activity) != tt.wantKind {
-				t.Fatalf("active kind = %q, want %q", runtimeActivityKind(activity), tt.wantKind)
+			if got := runtimeActivityKind(activity); got != test.wantKind {
+				t.Fatalf("active kind = %q, want %q", got, test.wantKind)
 			}
-			if activity.ActiveForControl() != tt.active {
-				t.Fatalf("active = %t, want %t", activity.ActiveForControl(), tt.active)
+			if got := activity.ActiveForControl(); got != test.active {
+				t.Fatalf("active = %t, want %t", got, test.active)
 			}
 		})
 	}
@@ -200,29 +197,21 @@ func TestCoordinatorBuildsCanonicalFeedSnapshot(t *testing.T) {
 	if err := update.Validate(); err != nil {
 		t.Fatalf("validate canonical feed snapshot: %v", err)
 	}
-	if got := update.InputReconciliation.Operations[0].Operation.ClientRequestID.String(); got != "33333333-3333-4333-8333-333333333333" {
-		t.Fatalf("canonical client request id = %q", got)
+	if got := update.InputReconciliation.Operations[0].Operation.ClientRequestID; got != clientRequestID {
+		t.Fatalf("canonical client request id = %q, want %q", got, clientRequestID)
 	}
-
-}
-
-func runtimeActivityKind(activity clientui.RuntimeActivity) clientui.RuntimeActivityActiveKind {
-	if activity.ActiveStep == nil {
-		return ""
-	}
-	return activity.ActiveStep.ActiveKind
 }
 
 func TestCoordinatorCacheEvictsDormantSessionsWithGenerationRollover(t *testing.T) {
 	cache := NewCoordinatorCache(1)
 	first := cache.Next("session-1")
-	other := cache.Next("session-2")
+	_ = cache.Next("session-2")
 	second := cache.Next("session-1")
 	if first.Epoch != second.Epoch {
 		t.Fatalf("same cache epoch changed: first=%+v second=%+v", first, second)
 	}
 	if second.Generation == first.Generation {
-		t.Fatalf("recreated coordinator must receive a new generation, first=%+v second=%+v other=%+v", first, second, other)
+		t.Fatalf("recreated coordinator must receive a new generation, first=%+v second=%+v", first, second)
 	}
 	if cache.IsCurrent("session-1", first) {
 		t.Fatalf("old generation event must be rejected after eviction/recreate")
@@ -230,4 +219,11 @@ func TestCoordinatorCacheEvictsDormantSessionsWithGenerationRollover(t *testing.
 	if !cache.IsCurrent("session-1", second) {
 		t.Fatalf("current generation event was rejected: %+v", second)
 	}
+}
+
+func runtimeActivityKind(activity clientui.RuntimeActivity) clientui.RuntimeActivityActiveKind {
+	if activity.ActiveStep == nil {
+		return ""
+	}
+	return activity.ActiveStep.ActiveKind
 }

@@ -50,14 +50,20 @@ func TestEngineStateAccessorsAreNotCalledWhileEngineMutexHeld(t *testing.T) {
 	}
 }
 
-func scanEngineMutexHeldAccessors(fset *token.FileSet, stmts []ast.Stmt, locked map[string]bool, forbidden map[string]struct{}, failures *[]string) {
+func scanEngineMutexHeldAccessors(
+	fset *token.FileSet,
+	stmts []ast.Stmt,
+	locked map[string]bool,
+	forbidden map[string]struct{},
+	failures *[]string,
+) {
 	for _, stmt := range stmts {
-		if recv, ok := engineMutexCall(stmt, "Lock"); ok {
-			locked[recv] = true
+		if receiver, ok := engineMutexCall(stmt, "Lock"); ok {
+			locked[receiver] = true
 			continue
 		}
-		if recv, ok := engineMutexCall(stmt, "Unlock"); ok {
-			locked[recv] = false
+		if receiver, ok := engineMutexCall(stmt, "Unlock"); ok {
+			locked[receiver] = false
 			continue
 		}
 
@@ -73,44 +79,49 @@ func scanEngineMutexHeldAccessors(fset *token.FileSet, stmts []ast.Stmt, locked 
 			if _, blocked := forbidden[selector.Sel.Name]; !blocked {
 				return true
 			}
-			ident, ok := selector.X.(*ast.Ident)
-			if !ok || !locked[ident.Name] {
+			receiver, ok := selector.X.(*ast.Ident)
+			if !ok || !locked[receiver.Name] {
 				return true
 			}
-			*failures = append(*failures, fmt.Sprintf("%s: %s.%s()", fset.Position(call.Pos()), ident.Name, selector.Sel.Name))
+			*failures = append(*failures, fmt.Sprintf(
+				"%s: %s.%s()",
+				fset.Position(call.Pos()),
+				receiver.Name,
+				selector.Sel.Name,
+			))
 			return true
 		})
 
-		switch s := stmt.(type) {
+		switch statement := stmt.(type) {
 		case *ast.BlockStmt:
-			scanEngineMutexHeldAccessors(fset, s.List, cloneLockState(locked), forbidden, failures)
+			scanEngineMutexHeldAccessors(fset, statement.List, cloneLockState(locked), forbidden, failures)
 		case *ast.IfStmt:
-			if s.Init != nil {
-				scanEngineMutexHeldAccessors(fset, []ast.Stmt{s.Init}, locked, forbidden, failures)
+			if statement.Init != nil {
+				scanEngineMutexHeldAccessors(fset, []ast.Stmt{statement.Init}, locked, forbidden, failures)
 			}
-			scanEngineMutexHeldAccessors(fset, s.Body.List, cloneLockState(locked), forbidden, failures)
-			if s.Else != nil {
-				scanEngineMutexHeldAccessors(fset, []ast.Stmt{s.Else}, cloneLockState(locked), forbidden, failures)
+			scanEngineMutexHeldAccessors(fset, statement.Body.List, cloneLockState(locked), forbidden, failures)
+			if statement.Else != nil {
+				scanEngineMutexHeldAccessors(fset, []ast.Stmt{statement.Else}, cloneLockState(locked), forbidden, failures)
 			}
 		case *ast.ForStmt:
-			scanEngineMutexHeldAccessors(fset, s.Body.List, cloneLockState(locked), forbidden, failures)
+			scanEngineMutexHeldAccessors(fset, statement.Body.List, cloneLockState(locked), forbidden, failures)
 		case *ast.RangeStmt:
-			scanEngineMutexHeldAccessors(fset, s.Body.List, cloneLockState(locked), forbidden, failures)
+			scanEngineMutexHeldAccessors(fset, statement.Body.List, cloneLockState(locked), forbidden, failures)
 		case *ast.SwitchStmt:
-			for _, stmt := range s.Body.List {
-				if clause, ok := stmt.(*ast.CaseClause); ok {
+			for _, clauseStatement := range statement.Body.List {
+				if clause, ok := clauseStatement.(*ast.CaseClause); ok {
 					scanEngineMutexHeldAccessors(fset, clause.Body, cloneLockState(locked), forbidden, failures)
 				}
 			}
 		case *ast.TypeSwitchStmt:
-			for _, stmt := range s.Body.List {
-				if clause, ok := stmt.(*ast.CaseClause); ok {
+			for _, clauseStatement := range statement.Body.List {
+				if clause, ok := clauseStatement.(*ast.CaseClause); ok {
 					scanEngineMutexHeldAccessors(fset, clause.Body, cloneLockState(locked), forbidden, failures)
 				}
 			}
 		case *ast.SelectStmt:
-			for _, stmt := range s.Body.List {
-				if clause, ok := stmt.(*ast.CommClause); ok {
+			for _, clauseStatement := range statement.Body.List {
+				if clause, ok := clauseStatement.(*ast.CommClause); ok {
 					scanEngineMutexHeldAccessors(fset, clause.Body, cloneLockState(locked), forbidden, failures)
 				}
 			}
@@ -119,11 +130,11 @@ func scanEngineMutexHeldAccessors(fset *token.FileSet, stmts []ast.Stmt, locked 
 }
 
 func engineMutexCall(stmt ast.Stmt, method string) (string, bool) {
-	expr, ok := stmt.(*ast.ExprStmt)
+	expression, ok := stmt.(*ast.ExprStmt)
 	if !ok {
 		return "", false
 	}
-	call, ok := expr.X.(*ast.CallExpr)
+	call, ok := expression.X.(*ast.CallExpr)
 	if !ok {
 		return "", false
 	}
@@ -131,21 +142,21 @@ func engineMutexCall(stmt ast.Stmt, method string) (string, bool) {
 	if !ok || selector.Sel.Name != method {
 		return "", false
 	}
-	mu, ok := selector.X.(*ast.SelectorExpr)
-	if !ok || mu.Sel.Name != "mu" {
+	mutex, ok := selector.X.(*ast.SelectorExpr)
+	if !ok || mutex.Sel.Name != "mu" {
 		return "", false
 	}
-	recv, ok := mu.X.(*ast.Ident)
+	receiver, ok := mutex.X.(*ast.Ident)
 	if !ok {
 		return "", false
 	}
-	return recv.Name, true
+	return receiver.Name, true
 }
 
-func cloneLockState(in map[string]bool) map[string]bool {
-	out := make(map[string]bool, len(in))
-	for key, value := range in {
-		out[key] = value
+func cloneLockState(input map[string]bool) map[string]bool {
+	output := make(map[string]bool, len(input))
+	for key, value := range input {
+		output[key] = value
 	}
-	return out
+	return output
 }

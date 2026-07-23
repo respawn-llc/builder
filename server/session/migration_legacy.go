@@ -375,15 +375,25 @@ func normalizeLegacyCacheFacts(version *int, scope *CacheScope) {
 func decodeLegacyHistoryReplacementV0(
 	payload json.RawMessage,
 ) (HistoryReplacementRecord, bool, error) {
+	var discriminator struct {
+		Engine string `json:"engine"`
+	}
+	if err := json.Unmarshal(payload, &discriminator); err != nil {
+		return HistoryReplacementRecord{}, false, fmt.Errorf(
+			"decode legacy history replacement discriminator: %w",
+			err,
+		)
+	}
+	if IsLegacyReviewerRollbackHistoryReplacementEngine(discriminator.Engine) {
+		return HistoryReplacementRecord{}, true, nil
+	}
+
 	var legacy legacyHistoryReplacementV0
 	if err := json.Unmarshal(payload, &legacy); err != nil {
 		return HistoryReplacementRecord{}, false, fmt.Errorf(
 			"decode legacy history replacement: %w",
 			err,
 		)
-	}
-	if IsLegacyReviewerRollbackHistoryReplacementEngine(legacy.Engine) {
-		return HistoryReplacementRecord{}, true, nil
 	}
 	if legacy.Items == nil {
 		return HistoryReplacementRecord{}, false, errors.New(

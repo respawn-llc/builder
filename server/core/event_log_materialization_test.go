@@ -10,16 +10,7 @@ import (
 	"testing"
 )
 
-// forbiddenFullHistoryMaterializers are session APIs that load an entire
-// events.jsonl history into memory. Session histories can reach gigabytes, so
-// production code must project them through bounded reverse-read windows
-// (ReadSegmentBackward/ReadRecentRecords) instead, with the front-to-back
-// WalkRecords reserved for fork/clone. The full materializers survive
-// only as test helpers in core/server/session/sessiontest.
-var forbiddenFullHistoryMaterializers = map[string]struct{}{
-	"ReadEvents":      {},
-	"SnapshotFromDir": {},
-}
+var forbiddenFullHistoryMaterializers = map[string]struct{}{"ReadEvents": {}, "SnapshotFromDir": {}}
 
 const sessionTestSupportImport = "core/server/session/sessiontest"
 
@@ -71,7 +62,6 @@ func TestProductionCodeDoesNotMaterializeFullSessionEventLog(t *testing.T) {
 		t.Fatalf("full session-history materialization violations:\n%s", strings.Join(violations, "\n"))
 	}
 }
-
 func skipMaterializationScanDir(name string) bool {
 	switch name {
 	case ".git", "node_modules", "bin", "dist", "target", "vendor":
