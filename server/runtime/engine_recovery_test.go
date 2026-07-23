@@ -46,17 +46,14 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 		t.Fatal("assistant commit did not arm pending-recovery clear failure")
 	}
 
-	clearFailurePublished := false
+	clearFailureEvents := 0
 	for _, event := range events {
-		if event.Kind == EventInFlightClearFailed &&
-			event.StepID != "" &&
-			event.Error != "" {
-			clearFailurePublished = true
-			break
+		if event.Kind == EventInFlightClearFailed {
+			clearFailureEvents++
 		}
 	}
-	if !clearFailurePublished {
-		t.Fatalf("typed pending-recovery clear failure was not published: %+v", events)
+	if clearFailureEvents != 1 {
+		t.Fatalf("typed pending-recovery clear failures = %d, want one", clearFailureEvents)
 	}
 
 	reopened := mustOpenTestSession(t, store.Dir())

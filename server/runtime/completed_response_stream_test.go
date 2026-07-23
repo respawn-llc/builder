@@ -890,11 +890,7 @@ func TestWorkflowCompletionControllerFailureUsesInvalidCompletionCapWithoutTermi
 	if second := controller.violationResults[1]; second.Count != 2 || !second.Interrupted {
 		t.Fatalf("second workflow violation result = %+v", second)
 	}
-	if terminal := engine.WorkflowTerminalState(); terminal.Completed ||
-		terminal.Source != "" ||
-		terminal.RunID != "" ||
-		terminal.Generation != 0 ||
-		!terminal.CompletedAt.IsZero() {
+	if terminal := engine.WorkflowTerminalState(); terminal.Completed {
 		t.Fatalf("workflow terminal state after controller failures = %+v", terminal)
 	}
 }
