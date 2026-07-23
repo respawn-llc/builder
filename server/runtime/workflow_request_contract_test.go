@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
@@ -378,6 +379,70 @@ func TestUnstructuredWorkflowCompletionRecordsParsedRequest(t *testing.T) {
 	if terminal := engine.WorkflowTerminalState(); !terminal.Completed ||
 		terminal.Source != WorkflowCompletionSourceUnstructured {
 		t.Fatalf("unstructured workflow terminal state = %+v", terminal)
+	}
+}
+
+func TestRequestToolsRespectLockedVisionCapability(t *testing.T) {
+	tests := []struct {
+		name         string
+		model        string
+		capabilities session.LockedModelCapabilities
+		wantVision   bool
+	}{
+		{
+			name:       "text-only catalog model",
+			model:      "gpt-3.5-turbo",
+			wantVision: false,
+		},
+		{
+			name:         "explicit vision override",
+			model:        "gpt-4.1-2026-01-15",
+			capabilities: session.LockedModelCapabilities{SupportsVisionInputs: true},
+			wantVision:   true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			engine := mustNewTestEngine(
+				t,
+				store,
+				&fakeClient{},
+				tools.NewRegistry(),
+				Config{
+					Model:             test.model,
+					ModelCapabilities: test.capabilities,
+					EnabledTools:      []toolspec.ID{toolspec.ToolViewImage},
+				},
+			)
+
+			request, err := engine.buildRequest(context.Background(), "step", true)
+			if err != nil {
+				t.Fatalf("build request: %v", err)
+			}
+			locked := store.Meta().Locked
+			if locked == nil {
+				t.Fatal("request build did not lock model capabilities")
+			}
+			if got := locked.ModelCapabilities.SupportsVisionInputs; got != test.wantVision {
+				t.Fatalf("locked vision capability = %t, want %t", got, test.wantVision)
+			}
+
+			advertised := false
+			for _, tool := range request.Tools {
+				id, ok := toolspec.ParseID(tool.Name)
+				if !ok {
+					t.Fatalf("request advertised unknown tool: %+v", tool)
+				}
+				if id == toolspec.ToolViewImage {
+					advertised = true
+				}
+			}
+			if advertised != test.wantVision {
+				t.Fatalf("view_image advertised = %t, want %t; tools=%+v", advertised, test.wantVision, request.Tools)
+			}
+		})
 	}
 }
 
