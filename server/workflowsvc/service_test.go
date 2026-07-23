@@ -403,6 +403,53 @@ func TestServiceAnswersTaskQuestionWithoutControllerLease(t *testing.T) {
 	}
 }
 
+func TestServiceAnswersTaskQuestionWhileWorkflowMutationIsBusy(t *testing.T) {
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	task, _, _ := createWorkflowServiceWaitingAsk(t, ctx, service, metadataStore, binding, "Question", "session-task-question", "ask-task-question")
+	responder := &recordingPromptResponder{}
+	service.prompts = responder
+
+	permitHeld := make(chan struct{})
+	releasePermit := make(chan struct{})
+	permitDone := make(chan error, 1)
+	go func() {
+		permitDone <- service.mutationPermit.Run(context.Background(), func(context.Context) error {
+			close(permitHeld)
+			<-releasePermit
+			return nil
+		})
+	}()
+	<-permitHeld
+
+	answerDone := make(chan error, 1)
+	go func() {
+		answerDone <- service.AnswerWorkflowTaskQuestion(ctx, serverapi.WorkflowTaskQuestionAnswerRequest{
+			ClientRequestID: "req-question-while-mutation-busy",
+			TaskID:          task.Task.ID,
+			AskID:           "ask-task-question",
+			FreeformAnswer:  "ship it",
+		})
+	}()
+
+	select {
+	case err := <-answerDone:
+		if err != nil {
+			t.Fatalf("AnswerWorkflowTaskQuestion: %v", err)
+		}
+	case <-time.After(time.Second):
+		close(releasePermit)
+		<-permitDone
+		t.Fatal("AnswerWorkflowTaskQuestion blocked behind an unrelated workflow mutation")
+	}
+	close(releasePermit)
+	if err := <-permitDone; err != nil {
+		t.Fatalf("mutation permit holder: %v", err)
+	}
+	if responder.response.FreeformAnswer != "ship it" {
+		t.Fatalf("prompt response = %+v", responder.response)
+	}
+}
+
 func TestServiceAnswersTaskApprovalQuestionWithoutControllerLease(t *testing.T) {
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	sessionID := "session-task-question"

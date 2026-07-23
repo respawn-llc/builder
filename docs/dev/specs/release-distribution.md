@@ -1,36 +1,30 @@
 # Release And Distribution Spec
 
-## Release Source Of Truth
+## Release Identity
 
-- Root `VERSION` is the source of truth for release version and tag normalization.
-- Release/build scripts sync Tauri and package metadata from `VERSION`.
-- Official release binaries are built through `scripts/build.sh`.
-- The release profile is `CGO_ENABLED=0`, `-trimpath`, `-buildvcs=false`, and `-ldflags "-s -w -X core/shared/config.Version=..."`.
-- Release archive packaging and verification live in `scripts/release-artifacts.sh`; workflow YAML should stay orchestration-focused.
+- Every artifact in one release uses the same Kent version.
+- Release tags use the normalized form `v<version>`.
 
 ## Targets
 
 - Supported release targets are `darwin/arm64`, `linux/amd64`, `linux/arm64`, `windows/amd64`, and `windows/arm64`.
-- macOS Intel is unsupported and must not be reintroduced.
-- Linux release binaries stay statically linked; do not enable PIE or other dynamic-linking release modes.
-- Workflow runner labels use `*-latest` aliases where GitHub provides them. ARM smoke-test jobs stay on `ubuntu-24.04-arm` and `windows-11-arm` while GitHub does not publish `-latest` aliases for those hosted runners.
+- Kent does not publish a macOS Intel release.
+- Linux CLI binaries are statically linked.
 
 ## GitHub Releases
 
 - GitHub releases publish `checksums.txt`.
-- `scripts/install.sh` verifies archive checksums when the manifest is present.
-- The release workflow verifies the checksum manifest and smoke-tests packaged binaries on Linux, macOS, and Windows before publishing.
-- The release workflow smoke-tests `scripts/install.ps1` against staged Windows release assets before publishing.
-- GitHub artifact attestations are intentionally not part of the release pipeline.
+- The installer verifies an archive against `checksums.txt` when the file is available.
+- Kent does not publish GitHub artifact attestations.
 
 ## TUI Update Discovery
 
-- The Kent server is authoritative for TUI update status. Update metadata is independent of session runtime state and does not participate in transcript or runtime ordering.
-- Release lookup is owned behind one server-side release-metadata source contract. Production composition uses the GitHub HTTP implementation.
-- Release checks are lazy: the server checks GitHub only when a client requests update status and the previous completed attempt is at least one hour old. Concurrent requests share one bounded check, and every outcome is cached for the one-hour freshness window.
-- A newer valid release is returned as typed update metadata for client-owned presentation. HTTP 4xx/5xx responses, invalid release metadata, malformed non-development release versions, and unexpected internal states surface as update-check failures with their cause.
-- Network failures and timeouts complete as checked with no available update and no user-facing error.
-- Intentional development builds compare as version `0.0.0`, allowing the shipping update-discovery path to be exercised during manual QA.
+- The Kent server determines TUI update status. Update status is independent of Session activity and transcript ordering.
+- Kent checks GitHub Releases when a client requests update status.
+- Kent refreshes a completed update result at most once per hour. Concurrent requests share one bounded check, and Kent caches every completed outcome for the one-hour freshness period.
+- A newer valid release produces structured update information for the client to present.
+- HTTP errors, invalid release information, malformed release versions, and unexpected update state appear as update-check failures with their cause.
+- Network failures and timeouts report no available update and show no user-facing error.
 - Kent releases advance the client/server protocol. The TUI does not reconcile application-version skew within one protocol version: its picker title remains the local client version while update discovery evaluates the attached server version.
 
 ## Installers
@@ -42,41 +36,28 @@
 
 ## Homebrew
 
-- Homebrew tap automation is part of a release, not an optional follow-up.
-- The release workflow updates `respawn-llc/homebrew-tap` through `scripts/update-brew-tap.sh` for formula `kent`.
-- The tap PR must run `brew test-bot`; on success, `brew pr-pull` publishes bottle metadata to tap `master`.
-- If app release publication succeeds but tap update fails, fix release plumbing first if needed, then create a tap-only change for the same published version. Do not cut a second app release.
+- A Kent release includes the Homebrew `kent` formula.
+- A macOS desktop release also includes the `kent-desktop` cask.
+- Homebrew upgrades the server and desktop together for Homebrew installations.
+- A delayed Homebrew publication uses the same Kent version. It does not require a second application release.
 
 ## Desktop Bundle Artifacts
 
-- The desktop app ships arm64 macOS, x86_64 Linux, and x86_64 Windows bundles.
-  Per-release assets, built by `scripts/desktop-release.sh build` and published
-  by the `release.yml` `build_desktop` → `publish_desktop` jobs:
+- The desktop app ships arm64 macOS, x86_64 Linux, and x86_64 Windows bundles:
   - `Kent_<ver>_aarch64.dmg` (macOS installer),
-  - `Kent_<ver>_aarch64.app.tar.gz` (+`.sig`) — macOS updater artifact (Tauri emits
-    it as `Kent.app.tar.gz`; the build step renames it to this versioned asset),
+  - `Kent_<ver>_aarch64.app.tar.gz` and `.sig` — macOS updater,
   - `Kent_<ver>_amd64.AppImage` (+`.sig`) — Linux updater artifact,
   - `Kent_<ver>_amd64.deb` (Linux, apt/manual updates),
-  - `Kent_<ver>_x64-setup.exe` (+`.sig`) — Windows NSIS installer and updater
-    artifact.
-- `latest.json` is the Tauri updater manifest (`scripts/desktop-release.sh assemble`
-  builds it from the `.sig` files), with `darwin-aarch64`, `linux-x86_64`, and
-  `windows-x86_64` entries pointing at the `.app.tar.gz`, `.AppImage`, and NSIS
-  updater artifacts. It is the `plugins.updater` endpoint target.
-- `desktop-checksums.txt` carries sha256s for the distributable bundles.
-- macOS bundles are Developer ID signed in CI (`APPLE_CERTIFICATE`); notarization is
-  off for v1 (Apple-side blocked), so v1 ships signed + un-notarized. The macOS
-  build uses GitHub's `macos-latest` Arm64 runner and its default Xcode; when Icon
-  Composer is unavailable, the bundle uses the PNG-derived icon. Minimum deployment
-  target is macOS 15 (Sequoia); Liquid Glass UI falls back to `NSVisualEffectView`
-  on pre-26 macOS.
+  - `Kent_<ver>_x64-setup.exe` and `.sig` — Windows installer and updater.
+- `latest.json` lists the updater artifacts for `darwin-aarch64`, `linux-x86_64`, and `windows-x86_64`.
+- `desktop-checksums.txt` contains SHA-256 checksums for distributable desktop bundles.
+- macOS bundles are Developer ID signed and are not notarized.
+- The minimum macOS version is macOS 15 Sequoia.
+- Liquid Glass falls back to the standard translucent material on macOS versions before 26.
 
 ## Desktop App Updates
 
-The desktop GUI is a thin remote-control client over a separately-installed Kent
-server (loopback RPC); the server stays authoritative and is **not** bundled into
-the app. This shapes how the desktop updates, because the server cannot
-self-update and must never drift out of version-lockstep with the client.
+The desktop app controls a separately installed Kent server. The server is not bundled with the app and does not update itself. The client and server must remain version-compatible.
 
 ### Install-source-aware update channel
 
@@ -84,53 +65,24 @@ The update channel is a property of how the app was installed, not a user settin
 Each install has exactly **one** update channel; the channels are mutually
 exclusive so brew and the in-app updater never fight over the same bundle.
 
-- **Direct download** (`.dmg` / AppImage / Windows NSIS installer from the GH
-  release): the Tauri self-updater is the channel. The app checks on startup and
-  surfaces the update chip in the chrome. Windows desktop is distributed only
-  through this channel, not Homebrew.
-- **Linux `.deb` / plain binary**: the system package manager (apt/manual) is the
-  channel. The Tauri Linux updater only services AppImage bundles, so the in-app
-  self-updater is gated **off** for these installs. The desktop detects this at
-  runtime via the `APPIMAGE` env var (`self_update_supported` Tauri command): on
-  Linux, self-update is enabled only when running from an AppImage.
-- **Homebrew (macOS only)** (`kent-desktop` cask alongside the `kent` formula):
-  **brew** is the channel. `brew upgrade` moves the `kent` server formula and the
-  `kent-desktop` cask together, keeping client and server in lockstep. The in-app
-  self-updater is **disabled** on brew installs.
+- **Direct download** (`.dmg`, AppImage, or Windows installer): the in-app updater is the channel. The app checks on startup and shows an update indicator. Windows desktop is available only through this channel.
+- **Linux `.deb` or plain binary**: the system package manager or manual installation is the channel. The in-app updater is available only for AppImage installations.
+- **Homebrew on macOS**: Homebrew is the channel. `brew upgrade` updates the `kent` formula and `kent-desktop` cask together. The in-app updater is disabled.
 
-### Gate mechanism
+### Update-channel lock
 
-- A desktop-local settings store (`settings.json`, plugin-store-backed, in the
-  Tauri app data dir — macOS `~/Library/Application Support/sh.kent/`, Linux
-  `~/.local/share/sh.kent/`) holds a typed `selfUpdate: "enabled" | "disabled"`.
-- Scope is device/install-local client preferences only (update behavior, future
-  native-UI prefs). It never holds server-authoritative state and never syncs.
-- The `kent-desktop` cask `postflight` writes `selfUpdate: "disabled"` into that
-  file (outside the `.app` bundle, so no code-signature break). The desktop reads
-  it at startup; `disabled` drives the existing `capabilities.updater` gate false,
-  which stands the self-update check and chip down. One `.dmg` artifact serves both
-  channels — no second build, no compiled-in flag.
+- Each desktop installation has one device-local `selfUpdate` setting whose value is `enabled` or `disabled`.
+- This setting controls only client update behavior. It does not contain server state and does not sync.
+- Homebrew installation writes `selfUpdate: "disabled"`, and the desktop reads that value at startup to disable in-app updates.
+- Direct-download installation enables in-app updates when the package format supports them.
+- The same macOS application bundle can serve direct-download and Homebrew channels.
 
-### Cask must NOT set `auto_updates true`
+### Homebrew authority
 
-The `kent-desktop` cask must **not** declare `auto_updates true`. That stanza tells
-`brew upgrade` to skip the cask and let the app self-update — which would desync the
-desktop from the brew-managed `kent` server and reintroduce client/server skew. brew
-is the authoritative channel for brew installs and must upgrade desktop + server
-together. (This reverses an earlier draft that called for `auto_updates true`.)
-
-`scripts/update-brew-tap.sh` generates the cask when passed `--desktop-url <dmg>`
-(it downloads the published `.dmg` to compute the `sha256`); without that flag it
-updates only the `kent` formula. The generated cask declares
-`depends_on formula: "kent"` (server present + lockstepped), `depends_on arch: :arm64`,
-`depends_on macos: :sequoia` (macOS 15 minimum — the liquid-glass UI degrades to
-`NSVisualEffectView` on pre-26 macOS; mirrored by `minimumSystemVersion` in
-`tauri.conf.json`), `app "Kent.app"`, and the `postflight` gate. It carries **no**
-`auto_updates`, and is validated by `brew style`.
+- The `kent-desktop` cask must not tell Homebrew to skip desktop upgrades in favor of app-managed updates.
+- The cask requires the `kent` formula, Apple silicon, and macOS 15 or later.
+- The cask installs `Kent.app` and disables the in-app updater.
 
 ### Server-version handshake
 
-The desktop verifies server/client version compatibility on the loopback
-connection and degrades gracefully on mismatch (a clear "update your Kent server"
-state), never a hang or cryptic error page. This is a no-regrets boundary check for
-a remote-control client regardless of update strategy.
+The desktop verifies client/server compatibility when it connects. A mismatch shows a clear `update your Kent server` state. It never hangs or shows a cryptic error page.

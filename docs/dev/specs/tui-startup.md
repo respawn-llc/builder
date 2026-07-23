@@ -1,53 +1,54 @@
 # TUI Startup And Attach
 
-Covers interactive TUI launch end-to-end: process start → server attach → auth gate → first-time-setup check → workspace resolution → project binding → session selection → workspace-change prompt → lazy session open/attach → handoff to the main UI.
+## Startup Surfaces
 
-Excludes: onboarding wizard content (own spec), headless startup (core-runtime-tools :: Headless Mode), main-UI/ongoing behavior (ongoing-scrollback-buffer.md, tui-transcript.md).
-
-Bullets marked (owner: …) restate decisions owned by another spec for one-place readability; the owner spec is authoritative for them.
-
-## Surface Architecture
-
-- The future Rust TUI composes all startup surfaces through the shared Ratatui render layer: typed layout, styled spans, chrome, focus/selection affordances. No hand-assembled string frames, no raw terminal-control/SGR escape strings.
-- The shipping Go TUI keeps its existing startup rendering and lifecycle architecture. BUI-41 changes only the Go session picker and does not modify the Rust stub or migrate unrelated Go startup surfaces.
-- Startup surfaces run in terminal alt-screen (`?1049`) and exit alt-screen before the main UI begins ongoing replay, so all ongoing history lands in the normal buffer and remains in native scrollback. This is consistent with tui-transcript's "Main UI startup stays in the normal buffer", which governs the main chat surface, not startup selection.
-- Alt-screen startup surfaces enable alternate scroll (`?1007`) while active and disable it on every exit path; they never enable mouse capture. (owner: tui-terminal-environment :: Terminal Control Modes)
-- Text entry on startup surfaces uses the native/hardware terminal cursor positioned by the render adapter; never a drawn cursor glyph.
-- Startup surfaces do not enable terminal mouse capture.
-- Every asynchronous gate renders its surface immediately with a loading affordance; startup never leaves the terminal blank or frozen while waiting on the server.
-- The auth picker and session picker share one status-line treatment for operation errors and notices, including a session picker reopened by `/resume`; this requirement does not apply to other startup surfaces.
-- The future Rust TUI startup surfaces form an explicit navigation stack with owned UI lifecycles (Compose/Decompose-style component model): surfaces are pushed/popped, `Esc` pops except where a surface owns a different explicit key contract, and navigation state is owned by the pure model layer, never by render widgets.
+- Startup surfaces use the Alternate Screen and leave it before Ongoing Mode begins. Ongoing transcript history therefore enters the Normal Buffer and terminal Scrollback.
+- Startup surfaces enable Alternate Scroll while active and disable it on every exit path.
+- Startup surfaces never enable Mouse Capture.
+- Text fields use the native terminal cursor.
+- Every asynchronous gate appears immediately with a loading state. Startup never leaves the terminal blank or frozen while it waits.
+- The authentication picker and Session picker use the same status-line treatment for operation errors and notices. This also applies when `/resume` reopens the Session picker.
+- Startup remembers the previous visible surface. `Esc` returns to it unless the active surface defines another key behavior.
 
 ## Startup Sequence
 
 Ordered gates; each gate is skipped when its condition does not apply, never bypassed by flags:
 
-1. **Server attach.** The TUI is a pure client and embeds no server, like `kent run`. It attaches to the configured server endpoint; explicit `server_host`/`server_port` overrides stay authoritative. When the preflight connection fails, the TUI exits with an actionable error (endpoint + reason) — no embedded-server fallback, no retry UI.
-2. **Auth gate.** Blocks only when the resolved provider path requires Kent-managed auth. (owner: core-runtime-tools :: Auth)
-3. **First-time setup.** After first successful auth, missing `config.toml` triggers first-time setup before session selection. (owner: core-runtime-tools :: Configuration)
-4. **Workspace resolution.** Workspace-first. Unregistered cwd enters the explicit post-auth binding flow; no auto-registration. (owner: core-runtime-tools :: Sessions And Persistence; tui-transcript :: Startup And Session Selection)
-5. **Session selection** (or directly new-session setup when no sessions exist). (owner: tui-transcript :: Startup And Session Selection)
-6. **Workspace-change prompt** when the picked session's stored root differs from the current root. (owner: tui-transcript :: Startup And Session Selection)
-7. **Lazy open and handoff.** Session creation/initialization is lazy — first user message or loop trigger. (owner: core-runtime-tools :: Sessions And Persistence)
+1. **Server attach.** The TUI is a client and contains no server. It attaches to the configured endpoint. Explicit `server_host` and `server_port` values are authoritative. A connection failure exits with the endpoint and reason. Kent provides no embedded-server fallback or retry screen.
+2. **Authentication.** This gate blocks only when the selected provider requires Kent-managed authentication.
+3. **First-time setup.** After the first successful authentication, a missing `config.toml` opens setup before Session selection.
+4. **Workspace resolution.** Startup begins from the current workspace. An unregistered current directory opens Project binding and is not registered automatically.
+5. **Session selection.** If no Sessions exist, startup opens new-Session setup directly.
+6. **Workspace-change prompt.** This prompt appears when the selected Session's available workspace root differs from the current root.
+7. **Lazy open and handoff.** Kent creates and initializes the Session only when the first user message or another Agent Turn trigger requires it.
 
 - `Esc` on a startup surface navigates back one gate where a previous gate exists; on the first visible surface it exits the TUI cleanly. The session picker is an explicit exception: its `Esc` key is a no-op.
 
 ## Auth Gate
 
-- Picker exposes browser OAuth, device-code OAuth, `No auth`, and env-key adoption when available. (owner: core-runtime-tools :: Auth)
-- `No auth` semantics, hybrid OAuth callback (local callback or pasted URL/code), env key as chooser-backed source, no OAuth→API-key auto-fallback, `/login`/`/logout` reopening selection without clearing credentials: all as locked. (owner: core-runtime-tools :: Auth)
+- The picker offers browser OAuth, device-code OAuth, `No auth`, and environment-key adoption when available.
+- Browser OAuth accepts a local callback or pasted callback URL or code.
+- Environment keys are used only after the user selects them.
+- OAuth failure does not fall back to an API key.
+- `/login` and `/logout` reopen authentication selection without clearing credentials first.
 - There is no env-vs-saved conflict prompt at startup: the last saved auth choice wins, including an explicit `No auth` choice. Env keys enter only through the chooser-backed adoption path.
 - Successful auth shows a brief confirmation state on the auth surface before advancing to the next gate.
-- Auth failures and 401s surface as actionable UX on the auth surface itself (retry/choose another method), never as a silent exit. (owner: core-runtime-tools :: Auth)
+- Authentication failures and 401 responses appear on the authentication surface with retry or method-selection actions. They never cause a silent exit.
 
 ## Session Picker
 
-- Shows recent sessions, pick-or-new; scrollable with no cap; empty state goes directly to new-session setup. (owner: tui-transcript :: Startup And Session Selection)
+- The picker shows recent Sessions and a new-Session action. Infinite Scroll provides older Sessions. An empty state opens new-Session setup.
 - The picker has `Sessions` and `Subagents` tabs and opens on `Sessions`. Ordinary interactive sessions and interactive forks start in `Sessions`; sessions created for headless or workflow-agent execution start in `Subagents`. Every interactive open of a Subagent session, including opening by explicit session ID, permanently promotes it to `Sessions`. Picker selection alone does not promote: workspace lookup failure returns to the picker with a generic retry error in the shared status line, and declining a workspace change returns to the picker; neither changes the session artifact, recency, or category. An accepted retarget completes before open and promotion. Automated headless/workflow resumes and renames never change category. Legacy sessions without a recorded category appear in `Sessions`; category is never guessed from a session's name, parent, or current activity.
 - The tabs appear directly below the status header using the existing horizontal bracketed button-row treatment. The selected tab uses the primary bold treatment, the other tab is muted, and incremental lists do not show total counts.
 - When both full labels do not fit horizontally, the same buttons stack on adjacent lines rather than clipping or changing labels.
 - The picker opens immediately on `Sessions` and loads both tabs' first windows concurrently. A tab shows its own loading spinner until its first window arrives. If both first windows are empty, startup advances to new-session setup.
-- The picker requests server-owned update status asynchronously and reactively updates its header table when the result arrives. Checking and up-to-date states add no row. An available update adds a persistent Success-colored `Update available: v<latest>` row directly below the current Kent version; a surfaced check failure adds a persistent Error-colored `Update check failed: <cause>` row in the same position. The row remains for the lifetime of that picker and reappears on later picker opens while the server result remains cached. Update information is picker-only: interactive launches that bypass the picker and Sessions driven by headless or Workflow execution do not present it. The `Kent v...` title remains the local client binary version while update discovery evaluates the attached server binary; same-protocol application-version skew is not separately reconciled or presented.
+- The picker requests update status without delaying Session loading.
+- Checking and up-to-date states add no row.
+- An available update adds a persistent Success-colored `Update available: v<latest>` row below the current Kent version.
+- A failed check adds a persistent Error-colored `Update check failed: <cause>` row in the same location.
+- The row remains while the picker stays open and reappears while the update result remains fresh.
+- Only the Session picker shows update status.
+- The `Kent v...` title shows the local client version. Update discovery evaluates the attached server version.
 - A tab data-load failure replaces that tab's list, including any stale rows, with an error notice because failed loading leaves no valid list to present. `Enter` retries the selected failed tab, and switching into a failed tab also retries. The shared startup status line separately surfaces the operation error: the active tab's outstanding failure wins, otherwise the newest outstanding tab failure is shown. Retry keeps the previous failure visible until that tab succeeds; recovery clears only that tab, reveals another outstanding failure when present, and clears the status after both recover.
 - Retry performs a fresh load from that tab's newest window and resets its old pagination position, selection, and scroll.
 - Each tab retains its selected row and scroll position while the picker remains open. Reopening the picker starts each tab at its newest session.
@@ -62,25 +63,29 @@ Ordered gates; each gate is skipped when its condition does not apply, never byp
 
 ## Project Binding Flow
 
-- Unregistered cwd offers create-new-project first, existing-project picker below. May create a project and attach the current workspace as first workspace/main worktree, or attach the current workspace to an existing project. (owner: core-runtime-tools :: Sessions And Persistence)
-- Server-browsing mode opens existing server projects/workspaces only; no binding or creation offered there. (owner: core-runtime-tools :: Sessions And Persistence)
-- The project-name prompt's pre-fill is supplied by the server (derived from the workspace it owns); the client never reaches into the filesystem to derive names. Empty names are rejected with an inline error.
+- An unregistered current directory offers new-Project creation first and an existing-Project picker below.
+- Creating a Project attaches the current workspace as its first workspace and main worktree.
+- Selecting an existing Project attaches the workspace to it.
+- Server-browsing mode can open existing Projects and workspaces but cannot create or attach them.
+- Kent supplies the Project-name suggestion from the workspace. The TUI does not inspect the filesystem to derive it.
+- An empty Project name shows an inline error.
 
 ## Workspace-Change Prompt
 
-- Picking a session whose attached `SessionExecutionTarget` has an available canonical workspace root different from the current root shows a `Workspace changed` confirmation: `Yes` retargets the session, `No` returns to the picker. A detached historical workspace-root snapshot never triggers or supplies this retarget. Rebinding is always explicit user action. (owner: tui-transcript :: Startup And Session Selection; core-runtime-tools :: Sessions And Persistence)
+- If a selected Session has an available attached workspace root different from the current root, startup shows `Workspace changed`.
+- `Yes` retargets the Session. `No` returns to the picker.
+- A detached historical workspace path cannot trigger or supply the retarget.
+- Retargeting always requires explicit user action.
 
 ## Multi-Client Attach
 
-- Picking a session that another client is attached to attaches with equal full control; there is no read-only or lesser-control startup mode. (owner: terminology :: Equal Full-Control Attach)
+- Opening a Session that another client uses gives this client Equal Full-Control Attach. Startup has no read-only or reduced-control mode.
 
 ## Errors
 
 - Preflight server-connection failure at TUI startup exits the TUI with an actionable error message (endpoint + reason). No retry affordance, no per-surface handling.
-- After startup, server-connection loss is handled by exactly one global centralized connection handler that surfaces `server connection lost` through the persisted status line. Individual surfaces never implement their own connection-error handling, widgets, or designs; if centralized handling is impossible in some path, the TUI crashes cleanly rather than growing ad-hoc handlers.
+- After startup, connection loss shows one persistent `server connection lost` status-line notice across all surfaces.
+- A successful request after reconnection clears the notice.
+- If the TUI cannot preserve a coherent connection-loss state, it exits with a clear error.
 - Any startup exit path (success, cancel, failure) restores the terminal best-effort: alt-screen exited, cursor restored, no residual control state. Ongoing-mode output already written to the normal buffer is permanent by design and is not restored.
-- Debug builds fail fast on startup invariant violations; release builds surface the error and recover or exit with a clear message. (owner: core-runtime-tools :: Configuration)
-
-## Known Drift (Go TUI, frozen)
-
-The shipping Go TUI predates these decisions and diverges: it has an embedded-server fallback, an env-vs-saved auth conflict picker, and client-side project-name derivation. These are drift, not spec.
+- Debug mode fails fast with diagnostics on startup invariant violations. Normal operation surfaces the error and recovers or exits clearly.
