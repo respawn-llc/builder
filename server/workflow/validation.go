@@ -767,6 +767,48 @@ func (s *validationState) validatePromptPlaceholders() {
 		for _, priorParam := range refs.PriorParams {
 			s.validatePriorParameterReference(edge, priorParam, ref, derived)
 		}
+		target, targetExists := s.nodesByID[edge.TargetNodeID]
+		for _, input := range refs.Inputs {
+			s.validateInputReference(target, targetExists, input, ref)
+		}
+		for _, priorNode := range refs.PriorNodes {
+			s.validatePriorNodeReference(target, targetExists, priorNode, ref)
+		}
+	}
+}
+
+func (s *validationState) validateInputReference(target Node, targetExists bool, input PromptInputReference, baseRef ValidationError) {
+	name := strings.TrimSpace(input.Name)
+	ref := baseRef
+	ref.InputName = name
+	ref.Placeholder = input.Placeholder
+	if !targetExists || name == "" || !workflowkey.Valid(name) || !inputFieldNameSet(NodeInputFields(target))[name] {
+		s.addHard(CodeInvalidTemplatePlaceholder, "prompt template references an unknown node input", ref)
+	}
+}
+
+func (s *validationState) validatePriorNodeReference(target Node, targetExists bool, priorNode PromptPriorNodeReference, baseRef ValidationError) {
+	nodeKey := strings.TrimSpace(string(priorNode.NodeKey))
+	outputName := strings.TrimSpace(priorNode.OutputName)
+	ref := baseRef
+	ref.FieldName = outputName
+	ref.Placeholder = priorNode.Placeholder
+	if nodeKey == "" || !workflowkey.Valid(nodeKey) || outputName == "" || !workflowkey.Valid(outputName) {
+		s.addHard(CodeInvalidTemplatePlaceholder, "prompt template has an invalid prior-node reference", ref)
+		return
+	}
+	sourceID, sourceExists := s.nodeKeys[ModelKey(nodeKey)]
+	if !sourceExists {
+		s.addHard(CodeInvalidTemplatePlaceholder, "prompt template references an unknown prior node", ref)
+		return
+	}
+	if !targetExists || sourceID == NodeIDOf(target) || !s.nodeDominates(sourceID, NodeIDOf(target)) {
+		s.addHard(CodeInvalidTemplatePlaceholder, "prompt template references a node that is not guaranteed before its consumer", ref)
+		return
+	}
+	source, sourceExists := s.nodesByID[sourceID]
+	if !sourceExists || !outputFieldNameSet(NodeOutputFields(source))[outputName] {
+		s.addHard(CodeInvalidTemplatePlaceholder, "prompt template references an unknown prior-node output", ref)
 	}
 }
 
@@ -776,6 +818,17 @@ func edgeParameterNameSet(edge Edge) map[string]bool {
 		key := strings.TrimSpace(parameter.Key)
 		if key != "" {
 			out[key] = true
+		}
+	}
+	return out
+}
+
+func inputFieldNameSet(fields []InputField) map[string]bool {
+	out := map[string]bool{}
+	for _, field := range fields {
+		name := strings.TrimSpace(field.Name)
+		if name != "" {
+			out[name] = true
 		}
 	}
 	return out

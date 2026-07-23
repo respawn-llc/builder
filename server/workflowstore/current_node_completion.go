@@ -53,16 +53,12 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	if !executableNodeKind(source.Kind()) {
 		return CurrentNodeCompletionResult{}, errors.New("current node is not executable")
 	}
-	group, target, err := currentNodeCompletionTransition(definition, source, prepared.TransitionID)
+	group, edge, target, err := currentNodeCompletionTransition(definition, source, prepared.TransitionID)
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
 	if issues := currentNodeCompletionOutputIssues(definition, group, prepared.OutputValues); len(issues) > 0 {
 		return CurrentNodeCompletionResult{}, CompletionValidationError{Issues: issues}
-	}
-	targetCurrentNode, err := completionTargetCurrentNode(prepared.Source.TaskID, target)
-	if err != nil {
-		return CurrentNodeCompletionResult{}, err
 	}
 	handoff, err := currentNodeCompletionHandoff(source, target)
 	if err != nil {
@@ -75,6 +71,21 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	currentSource, err := currentNodeForReference(ctx, q, prepared.Source.TaskID, prepared.Source.NodeID)
+	if err != nil {
+		return CurrentNodeCompletionResult{}, err
+	}
+	targetCurrentNode, err := materializeCompletionTargetCurrentNode(
+		definition,
+		edge,
+		source,
+		target,
+		currentSource,
+		prepared.OutputValues,
+	)
+	if err != nil {
+		return CurrentNodeCompletionResult{}, err
+	}
 	removed, err := q.DeleteSerialTaskCurrentNode(ctx, sqlitegen.DeleteSerialTaskCurrentNodeParams{
 		TaskID: string(prepared.Source.TaskID),
 		NodeID: string(prepared.Source.NodeID),
@@ -164,7 +175,7 @@ func currentNodeDefinitionNode(definition workflow.Definition, nodeID workflow.N
 	return nil, fmt.Errorf("current node %q is absent from workflow %q", nodeID, definition.ID)
 }
 
-func currentNodeCompletionTransition(definition workflow.Definition, source workflow.Node, transitionID string) (workflow.TransitionGroup, workflow.Node, error) {
+func currentNodeCompletionTransition(definition workflow.Definition, source workflow.Node, transitionID string) (workflow.TransitionGroup, workflow.Edge, workflow.Node, error) {
 	var selected *workflow.TransitionGroup
 	for _, group := range definition.TransitionGroups {
 		if group.SourceNodeID != workflow.NodeIDOf(source) || string(group.TransitionID) != transitionID {
@@ -175,7 +186,7 @@ func currentNodeCompletionTransition(definition workflow.Definition, source work
 		break
 	}
 	if selected == nil {
-		return workflow.TransitionGroup{}, nil, CompletionValidationError{Issues: []CompletionValidationIssue{{
+		return workflow.TransitionGroup{}, workflow.Edge{}, nil, CompletionValidationError{Issues: []CompletionValidationIssue{{
 			Code:    CompletionCodeInvalidTransitionID,
 			Field:   "transition_id",
 			Message: fmt.Sprintf("transition %q is not available for current node", transitionID),
@@ -188,17 +199,17 @@ func currentNodeCompletionTransition(definition workflow.Definition, source work
 		}
 	}
 	if len(edges) != 1 {
-		return workflow.TransitionGroup{}, nil, errors.New("sequential current node completion requires exactly one target edge")
+		return workflow.TransitionGroup{}, workflow.Edge{}, nil, errors.New("sequential current node completion requires exactly one target edge")
 	}
 	target, err := currentNodeDefinitionNode(definition, edges[0].TargetNodeID)
 	if err != nil {
-		return workflow.TransitionGroup{}, nil, err
+		return workflow.TransitionGroup{}, workflow.Edge{}, nil, err
 	}
-	return *selected, target, nil
+	return *selected, edges[0], target, nil
 }
 
 func currentNodeCompletionOutputIssues(definition workflow.Definition, group workflow.TransitionGroup, values map[string]string) []CompletionValidationIssue {
-	required := workflow.DeriveWiring(definition).RequiredProvisionFieldsForTransitionGroup(group.ID)
+	required := workflow.DeriveWiring(definition).CurrentNodeOutputFieldsForTransitionGroup(group.ID)
 	known := make(map[string]struct{}, len(required))
 	for _, field := range required {
 		name := strings.TrimSpace(field.Name)
@@ -225,15 +236,75 @@ func currentNodeCompletionOutputIssues(definition workflow.Definition, group wor
 	return issues
 }
 
-func completionTargetCurrentNode(taskID workflow.TaskID, target workflow.Node) (workflow.CurrentNode, error) {
+func materializeCompletionTargetCurrentNode(
+	definition workflow.Definition,
+	edge workflow.Edge,
+	source workflow.Node,
+	target workflow.Node,
+	currentSource workflow.CurrentNode,
+	outputValues map[string]string,
+) (workflow.CurrentNode, error) {
+	wiring := workflow.DeriveWiring(definition)
+	currentInputValues := make(map[string]string)
+	for _, binding := range wiring.CurrentNodeInputBindingsForEdge(edge.ID) {
+		value, exists := outputValues[binding.Field]
+		if !exists {
+			return workflow.CurrentNode{}, fmt.Errorf("completion output %q required to materialize current input %q", binding.Field, binding.Name)
+		}
+		currentInputValues[binding.Name] = value
+	}
+	priorNodeValues := make(map[string]map[string]string)
+	sourceKey := string(workflow.NodeKey(source))
+	for _, requirement := range wiring.PriorNodeValueRequirementsForNode(workflow.NodeIDOf(target)) {
+		nodeKey := string(requirement.NodeKey)
+		var value string
+		var exists bool
+		if nodeKey == sourceKey {
+			value, exists = outputValues[requirement.OutputName]
+		} else {
+			value, exists = currentSource.PriorNodeValues[nodeKey][requirement.OutputName]
+		}
+		if !exists {
+			return workflow.CurrentNode{}, fmt.Errorf(
+				"completion cannot materialize prior value %q from node %q for target %q",
+				requirement.OutputName,
+				nodeKey,
+				workflow.NodeIDOf(target),
+			)
+		}
+		if priorNodeValues[nodeKey] == nil {
+			priorNodeValues[nodeKey] = make(map[string]string)
+		}
+		priorNodeValues[nodeKey][requirement.OutputName] = value
+	}
+	return completionTargetCurrentNode(
+		currentSource.Reference.TaskID,
+		target,
+		currentInputValues,
+		priorNodeValues,
+	)
+}
+
+func completionTargetCurrentNode(
+	taskID workflow.TaskID,
+	target workflow.Node,
+	currentInputValues map[string]string,
+	priorNodeValues map[string]map[string]string,
+) (workflow.CurrentNode, error) {
+	var scheduling *workflow.CurrentNodeScheduling
 	switch target.Kind() {
 	case workflow.NodeKindAgent, workflow.NodeKindScript:
-		return newReadyCurrentNode(taskID, workflow.NodeIDOf(target))
+		scheduling = &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady}
 	case workflow.NodeKindTerminal:
-		return newNonExecutableCurrentNode(taskID, workflow.NodeIDOf(target))
+		scheduling = nil
 	default:
 		return workflow.CurrentNode{}, fmt.Errorf("sequential current node completion cannot target %s node", target.Kind())
 	}
+	reference, err := workflow.NewCurrentNodeReference(taskID, workflow.NodeIDOf(target), nil)
+	if err != nil {
+		return workflow.CurrentNode{}, err
+	}
+	return workflow.NewCurrentNodeWithMaterializedValues(reference, currentInputValues, priorNodeValues, nil, scheduling)
 }
 
 func currentNodeCompletionHandoff(source workflow.Node, target workflow.Node) (CompletionHandoff, error) {

@@ -97,11 +97,41 @@ func currentNodeFromRow(row sqlitegen.TaskCurrentNode) (workflow.CurrentNode, er
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
-	currentNode, err := workflow.NewCurrentNode(reference, sessionID, scheduling)
+	currentInputValues, err := currentNodeInputValuesFromJSON(row.CurrentInputValuesJson)
+	if err != nil {
+		return workflow.CurrentNode{}, err
+	}
+	priorNodeValues, err := priorNodeValuesFromJSON(row.PriorNodeValuesJson)
+	if err != nil {
+		return workflow.CurrentNode{}, err
+	}
+	currentNode, err := workflow.NewCurrentNodeWithMaterializedValues(reference, currentInputValues, priorNodeValues, sessionID, scheduling)
 	if err != nil {
 		return workflow.CurrentNode{}, fmt.Errorf("decode current node: %w", err)
 	}
 	return currentNode, nil
+}
+
+func currentNodeInputValuesFromJSON(raw string) (map[string]string, error) {
+	values := map[string]string{}
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil, fmt.Errorf("decode current node input values: %w", err)
+	}
+	if values == nil {
+		return nil, fmt.Errorf("decode current node input values: expected object")
+	}
+	return values, nil
+}
+
+func priorNodeValuesFromJSON(raw string) (map[string]map[string]string, error) {
+	values := map[string]map[string]string{}
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil, fmt.Errorf("decode current node prior node values: %w", err)
+	}
+	if values == nil {
+		return nil, fmt.Errorf("decode current node prior node values: expected object")
+	}
+	return values, nil
 }
 
 func currentNodeSchedulingFromRow(row sqlitegen.TaskCurrentNode) (*workflow.CurrentNodeScheduling, error) {
@@ -135,12 +165,20 @@ func insertTaskCurrentNode(ctx context.Context, q *sqlitegen.Queries, currentNod
 }
 
 func taskCurrentNodeInsertParams(currentNode workflow.CurrentNode) (sqlitegen.InsertTaskCurrentNodeParams, error) {
+	currentInputValuesJSON, err := json.Marshal(currentNode.CurrentInputValues)
+	if err != nil {
+		return sqlitegen.InsertTaskCurrentNodeParams{}, fmt.Errorf("encode current node input values: %w", err)
+	}
+	priorNodeValuesJSON, err := json.Marshal(currentNode.PriorNodeValues)
+	if err != nil {
+		return sqlitegen.InsertTaskCurrentNodeParams{}, fmt.Errorf("encode current node prior node values: %w", err)
+	}
 	params := sqlitegen.InsertTaskCurrentNodeParams{
 		TaskID:                 string(currentNode.Reference.TaskID),
 		NodeID:                 string(currentNode.Reference.NodeID),
 		TransitionBranchKey:    sql.NullString{},
-		CurrentInputValuesJson: "{}",
-		PriorNodeValuesJson:    "{}",
+		CurrentInputValuesJson: string(currentInputValuesJSON),
+		PriorNodeValuesJson:    string(priorNodeValuesJSON),
 		SessionID:              sql.NullString{},
 		SchedulingState:        sql.NullString{},
 		InterruptionReason:     sql.NullString{},

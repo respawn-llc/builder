@@ -94,13 +94,28 @@ type CurrentNodeScheduling struct {
 }
 
 type CurrentNode struct {
-	Reference  CurrentNodeReference
-	SessionID  *runtimeids.SessionID
-	Scheduling *CurrentNodeScheduling
+	Reference          CurrentNodeReference
+	CurrentInputValues map[string]string
+	PriorNodeValues    map[string]map[string]string
+	SessionID          *runtimeids.SessionID
+	Scheduling         *CurrentNodeScheduling
 }
 
 func NewCurrentNode(reference CurrentNodeReference, sessionID *runtimeids.SessionID, scheduling *CurrentNodeScheduling) (CurrentNode, error) {
+	return NewCurrentNodeWithMaterializedValues(reference, nil, nil, sessionID, scheduling)
+}
+
+func NewCurrentNodeWithMaterializedValues(
+	reference CurrentNodeReference,
+	currentInputValues map[string]string,
+	priorNodeValues map[string]map[string]string,
+	sessionID *runtimeids.SessionID,
+	scheduling *CurrentNodeScheduling,
+) (CurrentNode, error) {
 	if err := reference.Validate(); err != nil {
+		return CurrentNode{}, err
+	}
+	if err := validateCurrentNodeValueEnvironment(currentInputValues, priorNodeValues); err != nil {
 		return CurrentNode{}, err
 	}
 	if sessionID != nil && sessionID.IsZero() {
@@ -110,11 +125,35 @@ func NewCurrentNode(reference CurrentNodeReference, sessionID *runtimeids.Sessio
 		return CurrentNode{}, err
 	}
 	node := CurrentNode{
-		Reference:  reference,
-		SessionID:  cloneCurrentNodeSessionID(sessionID),
-		Scheduling: cloneCurrentNodeScheduling(scheduling),
+		Reference:          reference,
+		CurrentInputValues: cloneMaterializedInputValues(currentInputValues),
+		PriorNodeValues:    cloneMaterializedPriorNodeValues(priorNodeValues),
+		SessionID:          cloneCurrentNodeSessionID(sessionID),
+		Scheduling:         cloneCurrentNodeScheduling(scheduling),
 	}
 	return node, nil
+}
+
+func validateCurrentNodeValueEnvironment(currentInputValues map[string]string, priorNodeValues map[string]map[string]string) error {
+	for name := range currentInputValues {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("current node input name is required")
+		}
+	}
+	for nodeKey, values := range priorNodeValues {
+		if strings.TrimSpace(nodeKey) == "" {
+			return fmt.Errorf("current node prior node key is required")
+		}
+		if len(values) == 0 {
+			return fmt.Errorf("current node prior node values are required")
+		}
+		for outputName := range values {
+			if strings.TrimSpace(outputName) == "" {
+				return fmt.Errorf("current node prior output name is required")
+			}
+		}
+	}
+	return nil
 }
 
 func validateCurrentNodeScheduling(scheduling *CurrentNodeScheduling) error {
@@ -172,6 +211,22 @@ func cloneStringMap(values map[string]string) map[string]string {
 	cloned := make(map[string]string, len(values))
 	for key, value := range values {
 		cloned[key] = value
+	}
+	return cloned
+}
+
+func cloneMaterializedInputValues(values map[string]string) map[string]string {
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func cloneMaterializedPriorNodeValues(values map[string]map[string]string) map[string]map[string]string {
+	cloned := make(map[string]map[string]string, len(values))
+	for nodeKey, outputValues := range values {
+		cloned[nodeKey] = cloneMaterializedInputValues(outputValues)
 	}
 	return cloned
 }
