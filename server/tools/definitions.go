@@ -73,7 +73,7 @@ var catalogEntries = []CatalogEntry{
 			transcript.ToolPresentationDefault,
 			transcript.ToolCallRenderBehaviorDefault,
 			false,
-			defaultToolCallMeta(toolspec.ToolViewImage),
+			viewImageToolCallMeta(toolspec.ToolViewImage),
 			formatViewImageToolResult,
 		),
 		Schema: mustToolSchema("view_image.json"),

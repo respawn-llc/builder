@@ -26,3 +26,15 @@ func TestLegacyNoticeNormalizationForRole(t *testing.T) {
 		})
 	}
 }
+
+func TestLegacyNoticeSeverityForRolePreservesErrorRoles(t *testing.T) {
+	for _, role := range []EntryRole{
+		EntryRoleDeveloperErrorFeedback,
+		EntryRoleInterruption,
+		EntryRoleReviewerError,
+	} {
+		if got := LegacyNoticeSeverityForRole(string(role)); got != NoticeSeverityError {
+			t.Fatalf("notice severity for %q = %q, want %q", role, got, NoticeSeverityError)
+		}
+	}
+}

@@ -2,10 +2,12 @@ package transcriptrender
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"core/shared/clientui"
+	"core/shared/toolspec"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 
@@ -28,7 +30,10 @@ func renderToolRowWithLinkPresentation(
 		return lines
 	}
 	display := toolDisplayText(row, meta, mode)
-	if role == StyleRoleToolShell && meta.MovedToBackground && !meta.IsError {
+	if role == StyleRoleToolShell &&
+		meta.MovedToBackground &&
+		!meta.IsError &&
+		mode != ModeDetailExpanded {
 		return []Line{renderBackgroundedShell(firstNonEmpty(meta.Command, display.Text), width, mode)}
 	}
 	if isPatchTool(meta) {
@@ -167,6 +172,10 @@ const (
 	toolDisplaySourceResult
 )
 
+const viewImageDisplayPrefix = "Viewed image at "
+
+const webSearchDisplayPrefix = "Searched the web for "
+
 type toolDisplay struct {
 	Text       string
 	InlineMeta string
@@ -176,14 +185,17 @@ type toolDisplay struct {
 func toolDisplayText(row clientui.TranscriptToolRow, meta toolMeta, mode Mode) toolDisplay {
 	if mode == ModeOngoing || mode == ModeOngoingCollapsed || mode == ModeDetailCollapsed {
 		text := compactToolText(meta, firstNonEmpty(optionalString(row.CondensedText), row.Text))
-		resultSummary := optionalString(row.ResultSummary)
-		if meta.IsError && (mode == ModeOngoing || mode == ModeOngoingCollapsed) {
-			resultSummary = ""
-		}
-		status := firstNonEmpty(shellExitStatus(meta), resultSummary, meta.InlineMeta)
-		if meta.IsShell && modeShowsShellContinuationMetadata(mode) {
-			if continuation, ok := shellCommandContinuationMetadata(meta.Command); ok {
-				status = joinToolInlineMetadata(continuation, status)
+		status := ""
+		if !isWebSearchTool(meta.ToolName) {
+			resultSummary := optionalString(row.ResultSummary)
+			if meta.IsError && (mode == ModeOngoing || mode == ModeOngoingCollapsed) {
+				resultSummary = ""
+			}
+			status = firstNonEmpty(shellExitStatus(meta), resultSummary, meta.InlineMeta)
+			if meta.IsShell && modeShowsShellContinuationMetadata(mode) {
+				if continuation, ok := shellCommandContinuationMetadata(meta.Command); ok {
+					status = joinToolInlineMetadata(continuation, status)
+				}
 			}
 		}
 		return toolDisplay{Text: text, InlineMeta: status}
@@ -252,11 +264,46 @@ func joinToolInlineMetadata(items ...string) string {
 }
 
 func compactToolText(meta toolMeta, fallback string) string {
+	if text, ok := viewImageDisplayText(meta); ok {
+		return text
+	}
+	if text, ok := webSearchDisplayText(meta); ok {
+		return text
+	}
 	return transcript.CompactToolCallText(&meta.ToolCallMeta, fallback)
 }
 
 func detailedToolText(meta toolMeta, fallback string) string {
+	if text, ok := viewImageDisplayText(meta); ok {
+		return text
+	}
 	return transcript.DetailedToolCallText(&meta.ToolCallMeta, fallback)
+}
+
+func viewImageDisplayText(meta toolMeta) (string, bool) {
+	toolID, ok := toolspec.ParseID(meta.ToolName)
+	if !ok || toolID != toolspec.ToolViewImage ||
+		meta.RenderHint == nil ||
+		meta.RenderHint.Kind != transcript.ToolRenderKindPlain {
+		return "", false
+	}
+	imagePath := strings.TrimSpace(meta.RenderHint.Path)
+	if imagePath == "" {
+		return "", false
+	}
+	return viewImageDisplayPrefix + imagePath, true
+}
+
+func webSearchDisplayText(meta toolMeta) (string, bool) {
+	toolID, ok := toolspec.ParseID(meta.ToolName)
+	if !ok || toolID != toolspec.ToolWebSearch {
+		return "", false
+	}
+	query := strings.TrimSpace(meta.Command)
+	if query == "" {
+		return "", false
+	}
+	return webSearchDisplayPrefix + strconv.Quote(query), true
 }
 
 func detailedToolResultText(row clientui.TranscriptToolRow) string {
@@ -539,5 +586,6 @@ func isPatchTool(meta toolMeta) bool {
 }
 
 func isWebSearchTool(toolName string) bool {
-	return strings.TrimSpace(toolName) == "web_search"
+	toolID, ok := toolspec.ParseID(toolName)
+	return ok && toolID == toolspec.ToolWebSearch
 }

@@ -472,9 +472,13 @@ func (s *Surface) renderCommittedRowWithMode(row clientui.TranscriptCommittedRow
 // ongoingRenderMode selects the renderer mode for a committed row in the
 // ongoing surface. O rows render their full ongoing preview; OC rows render
 // the collapsed/short ongoing form per tui-transcript.md visibility rules.
-// Answered questions are the typed multi-line exception. D and X rows never
-// reach this path.
+// Verbose supervisor suggestions are an O-row exception: their complete
+// typed suggestion list belongs in native scrollback. Answered questions are
+// the other typed multi-line exception. D and X rows never reach this path.
 func ongoingRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mode {
+	if isVerboseReviewerSuggestionsRow(row) {
+		return transcriptrender.ModeOngoingFull
+	}
 	switch row.Visibility {
 	case clientui.EntryVisibilityOngoingCollapsed:
 		return transcriptrender.ModeOngoingCollapsed
@@ -483,6 +487,13 @@ func ongoingRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mod
 	default:
 		panic(fmt.Sprintf("ongoing render received non-ongoing visibility %q", row.Visibility))
 	}
+}
+
+func isVerboseReviewerSuggestionsRow(row clientui.TranscriptCommittedRow) bool {
+	if row.Kind != clientui.TranscriptRowNotice || row.Notice == nil || row.Notice.Diagnostic == nil {
+		return false
+	}
+	return transcript.EntryRole(row.Notice.Diagnostic.Code) == transcript.EntryRoleReviewerSuggestions
 }
 
 func committedRowRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mode {
