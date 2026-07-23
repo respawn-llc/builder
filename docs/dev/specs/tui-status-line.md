@@ -1,15 +1,9 @@
 # TUI Status Line
 
-The persistent one-line status bar of the main chat surface, in both ongoing and detail modes: composition, activity indicator, segment semantics, the notice system, and degradation under narrow widths.
-
-Excludes: the `/status` overlay (a different surface that shares data sources), goal semantics (core-runtime-tools :: Goals), what triggers individual notices (owned by each feature's spec).
-
-Bullets marked (owner: …) restate decisions owned by another spec for one-place readability; the owner spec is authoritative for them.
-
 ## Placement And Composition
 
-- The status line is the bottom row of the main-surface frame, part of the ongoing mutable band; exactly one line, present in both ongoing and detail modes. (mutable-band membership owner: ongoing-scrollback-buffer :: Definitions)
-- Compact and fixed: activity indicator, optional git branch, model label, process metadata, and a right-aligned help slot, reasoning-or-notice slot, and context meter. (owner: tui-transcript :: Rendering)
+- The status line is the bottom row of the main surface and part of the Mutable Band. It uses exactly one line in Ongoing Mode and Detail Mode.
+- It contains an activity indicator, optional Git branch, model label, process information, help slot, reasoning-or-notice slot, and context meter.
 - Space contract: every status-line item has a fixed priority; as width shrinks, lower-priority items yield their space in full before any higher-priority item degrades. Priority descending, each with its own degradation behavior:
   1. Activity spinner/dot — always shown, never truncates.
   2. Spinner word (indicator label: `compacting`/`review`/`goal`/`editing`/`error`) — disappears whole.
@@ -26,28 +20,24 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 
 - Leftmost element: a steady dot when quiescent, an animated spinner while working. Spinning = runtime busy (except while a question prompt is waiting on the user), or compaction running, or reviewer running.
 - The indicator carries a color role and an optional one-word label, first match wins: compacting → secondary + `compacting`; reviewer running → success + `review`; rollback selection active → `editing`; goal present → primary + `goal`; runtime error state → error + `error`; otherwise primary with no label.
-- The goal indicator spins only while a goal run is executing; an active-but-idle goal shows the idle dot. (owner: core-runtime-tools :: Goals)
+- The Goal indicator spins only while Goal work executes. An active but idle Goal shows the idle dot.
 
 ## Segments
 
 - Model label: model display name + thinking level; marked `fast` when fast mode is available and enabled; marked model-locked when the session's model contract is locked and differs from the configured model. The model label is the durable visible location for `/thinking` level changes; successful `/thinking` feedback is status-only and is not rendered as a transcript row in ongoing or detail. Exact copy is presentation, not contract.
-- Git branch, only when known and healthy: hidden while git facts are unavailable, errored, or the branch is unknown. Git facts come from the server-side status source, refreshed in the background — never blocking render.
+- The Git branch appears only when Kent knows it and Git status is healthy. Loading or failed Git status never blocks rendering.
 - Running background-process count (running/starting only); hidden at zero.
-- There is NO server-ownership segment: the TUI never owns a server under the server-only client model. (owner: tui-startup :: Startup Sequence)
-- Context meter, rightmost: used-context percentage plus a small proportional bar joined by one space as a single element, colored by zone: below 50% success, 50–79% warning, 80%+ error. Hidden when the context window size is unknown. Usage comes from server runtime status pushed with runtime events.
+- The status line has no server-ownership segment because the TUI is always a client.
+- The context meter is the rightmost item. It shows used-context percentage and a proportional bar. Below 50% uses Success, 50–79% uses Warning, and 80% or more uses Error. It is hidden when the context-window size is unknown.
 - Live reasoning status header while the model is reasoning (ladder rung 7), in a right-aligned slot immediately before the context meter; visibility is governed purely by the space ladder.
-- Post-interrupt feedback (`interrupted`) is an ordinary status notice delivered through the notice system (ladder rung 6) — there is no separate marker concept, dedicated state, or bespoke render path.
-- Help slot (ladder rung 10, one shown at a time): in detail mode, the selected entry's expansion action as `Enter to expand`/`Enter to collapse` (owner: tui-transcript :: Detail Mode); otherwise the idle help hint, hidden while busy/compacting/reviewing or while the help overlay is open.
+- Post-interrupt feedback appears as the ordinary status notice `interrupted`.
+- The help slot shows one item at a time. In Detail Mode it shows `Enter to expand` or `Enter to collapse`. Otherwise it shows the idle help hint. The hint is hidden while busy, compacting, reviewing, or while help is open.
 
 ## Notices
 
-- One notice shows at a time (ladder rung 6), in the right-aligned reasoning slot immediately before the context meter. A notice replaces the live reasoning status header while visible; reasoning returns when the notice clears if the model is still reasoning. The only persisted notice is server-disconnect. Transient notices overtake it for their duration: a transient shows immediately even while the disconnect notice is up, and the disconnect notice resumes when the transient clears. Whether other status-line items render alongside is governed solely by the space ladder.
-- Persisted disconnect notice: set when any runtime request fails with a connection error, cleared automatically when a later request confirms reachability. This is the single global connection handler — individual surfaces never grow their own connection handling. (owner: tui-startup :: Errors)
-- There is NO native-terminal-write-failure notice. Terminal write-failure handling is owned by ongoing-scrollback-buffer :: Errors (immediate synchronous surfacing, debug-mode panics) and follows that spec to the letter.
-- Transient notices carry exactly one of four kinds — `error`, `warning`, `info`, `success` — mapped to theme color roles, and auto-clear after a default duration (~8s; a default, not a contract). Notice sources are assigned to these four kinds by meaning/best fit; no bespoke per-notice kinds may be added.
+- One notice shows at a time (ladder rung 6), in the right-aligned reasoning slot immediately before the context meter. A notice replaces the live reasoning status header while visible; reasoning returns when the notice clears if reasoning continues. The only persisted notice is server-disconnect. Transient notices overtake it for their duration: a transient shows immediately during disconnect, and the disconnect notice resumes when the transient clears. Whether other status-line items render alongside is governed solely by the space ladder.
+- Any connection failure sets the persistent disconnect notice. A later successful request clears it.
+- Terminal write failures surface immediately and do not create a status-line notice.
+- Transient notices have one of four kinds: `error`, `warning`, `info`, or `success`. They use the matching theme role and clear automatically after about eight seconds.
 - Delivery modes: replace (default — new notice supersedes the current one) and queue (FIFO behind the current notice, consecutive duplicates dropped). Callers pick per notice.
-- Notices are client-presentation state only: never persisted to the session, never re-shown after restart.
-
-## Known Drift (Go TUI, frozen)
-
-The shipping Go TUI diverges from the above: its `renderStatusLine` degradation order differs from the ratified priority ladder; a showing notice suppresses the help/activity segment and persisted notices outrank transient ones; `interrupted` is a standalone activity-segment marker; `editing` is a separate segment rather than a spinner-word label; it renders a `server owned` segment for the embedded server; and it has a `nativeLiveAreaError` status-line notice — a temporary debug hack scheduled for removal. All drift, not spec.
+- Notices are presentation state. Kent does not save or restore them after restart.

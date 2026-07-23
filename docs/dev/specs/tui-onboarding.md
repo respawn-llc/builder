@@ -1,14 +1,12 @@
 # TUI Onboarding (First-Time Setup Wizard)
 
-The first-time setup wizard: trigger, step graph, screen kinds, keys, validation, finalize/cancel semantics. Excludes: auth (tui-startup :: Auth Gate), config schema and option semantics (core-runtime-tools :: Configuration), what each setting does (owner specs).
-
-Bullets marked (owner: …) restate decisions owned by another spec for one-place readability; the owner spec is authoritative for them.
-
 ## Trigger And Surface
 
-- After first successful auth, missing `config.toml` triggers first-time setup before session selection. (owner: core-runtime-tools :: Configuration; gate 3 in tui-startup :: Startup Sequence)
-- The wizard is a bounded alt-screen startup surface under the startup surface architecture: shared render layer, native cursor for text entry, loading affordances, navigation-stack membership. (owner: tui-startup :: Surface Architecture)
-- The wizard's rendering composes entirely through the typed render layer — layout, choice groups, previews, and input fields are typed components. Go's onboarding renderer (hand-assembled raw character/string frames) must not be replicated in any form. (RATIFIED 2026-07-03)
+- After the first successful authentication, a missing `config.toml` opens first-time setup before Session selection.
+- The wizard is a bounded Alternate Screen surface.
+- Text fields use the native terminal cursor.
+- Every asynchronous operation shows a loading state.
+- Back navigation follows the startup navigation history.
 
 ## Flow Model
 
@@ -23,48 +21,53 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
   7. **Follow-up questions** — enable/disable the ask-question tool.
   8. **Supervisor** — off / after edits / always; when enabled, sub-steps for supervisor model (pre-filled with the primary model) and supervisor thinking (mirrors primary until explicitly diverged; custom entry as above).
   9. **Compaction mode** — Local always offered; Native only when the provider supports it; Manual-only.
-  10. **Skills import** — only when importable items are detected from other providers; skills enablement is a multi-select. Remote onboarding does not offer slash-command import while prompt-command consumption remains client-local. (RATIFIED 2026-07-12)
+  10. **Skills import** — only when importable items are detected from other providers; skills enablement is a multi-select. Remote onboarding does not offer slash-command import.
   11. **Review** — finish, or start over (returns to the first step with all selections preserved).
 - Validation errors render inline on the current screen and block advancing; they never abort the wizard.
 
 ## Keys
 
 - `Up`/`Down` (+`j`/`k`) move the cursor on choice/multi screens and scroll long content; `Enter`/`→` submit the screen; number keys `1-9` jump to an option (choice: select + submit; multi: toggle); `Space`/`Backspace` toggle on multi screens; `a` toggles all when a toggle-all exists.
-- `←` and `Esc` step back one step; `Esc` on the first step exits the wizard (cancel), per the navigation-stack rule (owner: tui-startup :: Surface Architecture).
-- Once finalization is submitted, the spinner remains active and input cannot cancel or dismiss the request; the wizard waits up to 30 seconds for the server's terminal result. (RATIFIED 2026-07-12)
+- `←` and `Esc` step back one step. `Esc` on the first step cancels the wizard.
+- After finalization starts, the spinner remains active and input cannot cancel or dismiss the operation. The wizard waits up to 30 seconds for a final result.
 
 ## Finalize And Cancel
 
-- Finalizing shows a progress state (spinner + label). Custom path: imports execute first with rollback-on-failure, then the config is written; a failure returns to the wizard with the error displayed — never a silent exit, never partial state. Defaults path writes the default config.
+- Finalizing shows a progress state. For custom setup, imports finish before Kent writes the configuration. A failed import rolls back the imported changes and returns to the wizard with an error. Kent never leaves partial setup state.
+- The defaults path writes the default configuration.
 - Config is written exactly once, at finalize. No step writes settings incrementally.
-- Cancel before finalization is submitted aborts startup with a clear "setup canceled" error and writes nothing; the next launch re-enters first-time setup. Finalization is non-cancelable after submission because the remote transport has no acknowledged server-operation cancellation contract; a submitted request's success or error within the 30-second terminal deadline remains authoritative. Deadline expiry or transport loss reports an indeterminate finalization outcome and never retries automatically or claims cancellation. (RATIFIED 2026-07-12)
+- Canceling before finalization aborts startup with a clear `setup canceled` error and writes nothing. The next launch opens first-time setup again.
+- Finalization cannot be canceled after submission.
+- Success or failure received within 30 seconds is authoritative.
+- A deadline or connection loss reports an indeterminate outcome. Kent does not retry automatically or claim that it canceled the operation.
 
-## Server-Side Finalize (Thin Client)
+## Setup Data And Completion
 
-- The wizard collects choices and submits them to the server, which executes imports and writes `config.toml`; the client never touches the filesystem. (RATIFIED 2026-07-03 — server-owns-storage rule applied to onboarding; requires server API surface for finalize.)
-- Model metadata (context windows, thinking/verbosity capability) and provider capabilities (native compaction, importable skills/commands) are server-supplied facts, not client-side lookups.
-- The server supplies onboarding facts as one wizard-run snapshot. Model facts include Kent's full built-in known model list with each model's metadata and capabilities.
-- The model facts snapshot also includes one fallback fact for non-empty unknown model names, so thin clients do not duplicate runtime fallback rules.
+- The wizard submits choices to Kent. Kent executes imports and writes `config.toml`; the TUI does not write files.
+- Kent supplies model facts such as context windows, thinking, and verbosity support.
+- Kent also supplies provider facts such as native compaction and importable skills or commands.
+- One setup attempt uses one consistent set of these facts.
+- Model facts include the complete built-in known-model list and each model's capabilities.
+- Model facts include one fallback for non-empty unknown model names, so every client applies the same behavior.
 - Provider capability facts cover both the current effective provider and explicit provider choices.
-- Unknown explicit provider choices fail the facts request with an unsupported-provider RPC error; the server never falls back to the current provider for an explicit unsupported provider.
-- Importable skill and slash-command facts include server-host source paths when needed for identity and API round-tripping. The TUI consumes skill facts during onboarding; slash-command facts remain available to API clients but are not offered by the remote TUI while prompt-command consumption is client-local. Generated Kent skill candidates are reported together with external provider candidates for the enablement multi-select. (RATIFIED 2026-07-12)
+- An unknown explicit provider fails with an unsupported-provider error. Kent does not replace it with the current provider.
+- Importable skills and slash commands include source paths when identity requires them.
+- The TUI offers importable skills but does not offer slash-command import.
+- Generated Kent skills appear with external provider skills in the enablement list.
 - Onboarding facts are available before auth completion and before project or session attachment.
-- The model list is Kent's built-in known model list; the onboarding facts flow does not perform live provider model discovery.
-- A wizard-run facts snapshot includes import scanning. Import scanning failures are reported as facts that let setup continue without importing, not as silent skips or a hard failure of the whole facts request.
+- The model list comes from Kent's built-in catalog. Setup does not perform live provider model discovery.
+- Setup facts include import scanning. An import-scan failure lets setup continue without importing and appears as an explicit issue.
 - A model's larger context window is represented as an optional large-window fact. If it is absent, the context-window choice is hidden.
-- Clients may provide a workspace root for import discovery; the server validates it before using it. The workspace root is optional, and the server does not fall back to its process working directory or startup directory when the client omits it.
-- If a provided workspace root cannot be validated, the facts response includes a structured workspace-scope import error, still reports global/server-user import facts, and omits workspace-local duplicate and skip checks.
+- A client can provide a workspace root for import discovery. Kent validates it before use. If it is absent, Kent does not substitute another working directory.
+- If a provided workspace root cannot be validated, the facts response includes a structured workspace-scope import error, reports global import facts, and omits workspace-local duplicate and skip checks.
 - Import facts include both provider source roots and item source paths when available.
-- Provider facts use stable provider identifiers; clients own provider display names.
-- Server-supplied recommendations are structured facts such as identifiers, modes, counts, and paths; clients own display wording.
-- When no workspace root is provided, import facts still include global/server-user external provider imports and generated Kent skill candidates, but omit workspace-local duplicate and skip checks.
-- Capability facts are recomputed for each request; there is no server-side memoization or cache contract.
-- This facts surface does not execute imports, finalize setup choices, or write configuration.
-- Provider and model facts expose domain capability fields from the server's runtime source of truth, including provider runtime capability booleans and registered model capabilities such as thinking, verbosity, vision input, reasoning summary, and context-window support.
-- Model-catalog verbosity support overrides provider behavior for known models. For unknown non-empty models, a resolved explicit provider verbosity capability override decides support; when no override applies, first-party OpenAI built-ins default to enabled and other built-ins default to disabled. The server never derives verbosity from model-name prefix matching.
-
-## Known Drift (Go TUI, frozen)
-
-- Go's onboarding renderer is hand-assembled raw character/string output — the banned string-block approach; the spec wizard is typed-render-layer only.
-- Go's `Esc` anywhere in the wizard cancels the whole flow and aborts startup; spec is back-one-step with cancel only on the first step.
-- Go writes `config.toml` and executes skill/command imports client-side and looks up model/provider capabilities locally; spec is server-side finalize with server-supplied facts.
+- Provider facts use stable identifiers. Each client supplies display names.
+- Recommendations are structured facts such as identifiers, modes, counts, and paths. Each client supplies the wording.
+- When no workspace root is provided, import facts include global external-provider imports and generated Kent skill candidates, but omit workspace-local duplicate and skip checks.
+- Each setup attempt reads current capabilities.
+- Reading setup facts does not execute imports, finalize choices, or write configuration.
+- Kent supplies provider capabilities and known-model capabilities such as thinking, verbosity, vision input, reasoning summary, and context-window support.
+- For a known model, the built-in model catalog decides verbosity support.
+- For an unknown non-empty model, an explicit provider capability override decides support when present.
+- Without an override, first-party OpenAI providers enable verbosity and other built-in providers disable it.
+- Kent never infers verbosity support from a model-name prefix.
