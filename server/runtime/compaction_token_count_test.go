@@ -230,3 +230,29 @@ func TestShouldAutoCompactPrefersConfiguredThresholdOverResolvedContextWindow(t 
 		)
 	}
 }
+
+func TestShouldAutoCompactAccountsForReservedOutputBudget(t *testing.T) {
+	client := &preciseCompactionClient{inputTokenCount: 850}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+		Model:                 "gpt-5",
+		ContextWindowTokens:   2_000,
+		AutoCompactTokenLimit: 900,
+		MaxTokens:             100,
+	})
+	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+	)); err != nil {
+		t.Fatalf("persist input: %v", err)
+	}
+	shouldCompact := engine.shouldAutoCompactWithContext(context.Background())
+	if !shouldCompact || client.countCalls != 1 {
+		t.Fatalf(
+			"reserved-output auto-compaction decision/count-calls = %t/%d, want true/one",
+			shouldCompact,
+			client.countCalls,
+		)
+	}
+}
