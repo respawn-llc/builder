@@ -9,9 +9,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"core/server/workflow"
 
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
@@ -368,6 +371,2460 @@ func TestOpenMigratesCommentsToMinimalStorage(t *testing.T) {
 	}
 	if err := comments.Err(); err != nil {
 		t.Fatalf("iterate migrated comments: %v", err)
+	}
+}
+
+func TestOpenProjectsLegacyBacklogPlacementToCurrentNode(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-current-node-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-current-node-migration", now)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-current-node-migration", "link-1", 1, "CUR-1", now, now)
+	execSeed(t, db, "backlog placement", workflowSeedPlacementSQL, "placement-current-node-migration", "task-current-node-migration", "node-start", now, now)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var nodeID string
+	var branchKey, schedulingState, sessionID sql.NullString
+	var currentInputs, priorNodeValues string
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT
+    node_id,
+    transition_branch_key,
+    scheduling_state,
+    session_id,
+    current_input_values_json,
+    prior_node_values_json
+FROM task_current_nodes
+WHERE task_id = 'task-current-node-migration'`).Scan(
+		&nodeID,
+		&branchKey,
+		&schedulingState,
+		&sessionID,
+		&currentInputs,
+		&priorNodeValues,
+	); err != nil {
+		t.Fatalf("query projected backlog current node: %v", err)
+	}
+	if nodeID != "node-start" ||
+		branchKey.Valid ||
+		schedulingState.Valid ||
+		sessionID.Valid ||
+		currentInputs != "{}" ||
+		priorNodeValues != "{}" {
+		t.Fatalf(
+			"projected backlog current node = node=%q branch=%+v scheduling=%+v session=%+v inputs=%q prior=%q, want serial unbound backlog state",
+			nodeID,
+			branchKey,
+			schedulingState,
+			sessionID,
+			currentInputs,
+			priorNodeValues,
+		)
+	}
+}
+
+func TestOpenProjectsLegacyTerminalPlacementToCurrentNode(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-terminal-current-node-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-terminal-current-node-migration", now)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-terminal-current-node-migration", "link-1", 1, "TER-1", now, now)
+	execSeed(t, db, "terminal placement", workflowSeedPlacementSQL, "placement-terminal-current-node-migration", "task-terminal-current-node-migration", "node-done", now, now)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var nodeID string
+	var schedulingState, sessionID sql.NullString
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT node_id, scheduling_state, session_id
+FROM task_current_nodes
+WHERE task_id = 'task-terminal-current-node-migration'`).Scan(&nodeID, &schedulingState, &sessionID); err != nil {
+		t.Fatalf("query projected terminal current node: %v", err)
+	}
+	if nodeID != "node-done" || schedulingState.Valid || sessionID.Valid {
+		t.Fatalf("projected terminal current node = node=%q scheduling=%+v session=%+v, want terminal without executable state", nodeID, schedulingState, sessionID)
+	}
+}
+
+func TestOpenProjectsLegacyActiveAgentRunToInterruptedCurrentNode(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	runUpdatedAt := now + 7
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-active-agent-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedLegacyWorkflowSession(
+		t,
+		db,
+		"project-active-agent-migration",
+		"workspace-active-agent-migration",
+		"550e8400-e29b-41d4-a716-446655440000",
+		now,
+	)
+	seedWorkflowGraph(t, db, "project-active-agent-migration", now)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-active-agent-migration", "link-1", 1, "AGT-1", now, now)
+	execSeed(t, db, "agent placement", workflowSeedPlacementSQL, "placement-active-agent-migration", "task-active-agent-migration", "node-agent", now, now)
+	execSeed(t, db, "active agent run", `
+INSERT INTO task_runs (
+    id,
+    placement_id,
+    session_id,
+    workflow_revision_seen,
+    created_at_unix_ms,
+    updated_at_unix_ms,
+    started_at_unix_ms
+) VALUES (
+    'run-active-agent-migration',
+    'placement-active-agent-migration',
+    '550e8400-e29b-41d4-a716-446655440000',
+    1,
+    ?,
+    ?,
+    ?
+)`, now, runUpdatedAt, now+1)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var (
+		nodeID, currentInputs, priorNodeValues, schedulingState, interruptionReason, interruptionDetail, sessionID string
+		interruptedAt                                                                                              int64
+	)
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT
+    node_id,
+    current_input_values_json,
+    prior_node_values_json,
+    scheduling_state,
+    interruption_reason,
+    interruption_detail_json,
+    interrupted_at_unix_ms,
+    session_id
+FROM task_current_nodes
+WHERE task_id = 'task-active-agent-migration'`).Scan(
+		&nodeID,
+		&currentInputs,
+		&priorNodeValues,
+		&schedulingState,
+		&interruptionReason,
+		&interruptionDetail,
+		&interruptedAt,
+		&sessionID,
+	); err != nil {
+		t.Fatalf("query projected active agent current node: %v", err)
+	}
+	if nodeID != "node-agent" ||
+		currentInputs != "{}" ||
+		priorNodeValues != "{}" ||
+		schedulingState != "interrupted" ||
+		interruptionReason != "server_restart" ||
+		interruptionDetail != `{"code":"workflow.execution.restarted","fields":{"operation":"recovery"}}` ||
+		interruptedAt != runUpdatedAt ||
+		sessionID != "550e8400-e29b-41d4-a716-446655440000" {
+		t.Fatalf(
+			"projected active agent current node = node=%q inputs=%q prior=%q scheduling=%q reason=%q detail=%q interrupted_at=%d session=%q",
+			nodeID,
+			currentInputs,
+			priorNodeValues,
+			schedulingState,
+			interruptionReason,
+			interruptionDetail,
+			interruptedAt,
+			sessionID,
+		)
+	}
+
+	var taskID, associationNodeID string
+	var associatedAt int64
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT session.task_id, association.node_id, association.associated_at_unix_ms
+FROM sessions session
+JOIN session_workflow_node_associations association ON association.session_id = session.id
+WHERE session.id = '550e8400-e29b-41d4-a716-446655440000'`).Scan(&taskID, &associationNodeID, &associatedAt); err != nil {
+		t.Fatalf("query projected active agent session ownership: %v", err)
+	}
+	if taskID != "task-active-agent-migration" || associationNodeID != "node-agent" || associatedAt != runUpdatedAt {
+		t.Fatalf("projected active agent session = task=%q node=%q associated_at=%d", taskID, associationNodeID, associatedAt)
+	}
+}
+
+func TestOpenProjectsLegacyRunnableAgentPlacementToInterruptedCurrentNode(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	placementUpdatedAt := now + 7
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-runnable-agent-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-runnable-agent-migration", now)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-runnable-agent-migration", "link-1", 1, "RUN-1", now, now)
+	execSeed(
+		t,
+		db,
+		"runnable agent placement",
+		workflowSeedPlacementSQL,
+		"placement-runnable-agent-migration",
+		"task-runnable-agent-migration",
+		"node-agent",
+		now,
+		placementUpdatedAt,
+	)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var nodeID, schedulingState, interruptionReason, interruptionDetail string
+	var interruptedAt int64
+	var sessionID sql.NullString
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT
+    node_id,
+    scheduling_state,
+    interruption_reason,
+    interruption_detail_json,
+    interrupted_at_unix_ms,
+    session_id
+FROM task_current_nodes
+WHERE task_id = 'task-runnable-agent-migration'`).Scan(
+		&nodeID,
+		&schedulingState,
+		&interruptionReason,
+		&interruptionDetail,
+		&interruptedAt,
+		&sessionID,
+	); err != nil {
+		t.Fatalf("query projected runnable agent current node: %v", err)
+	}
+	if nodeID != "node-agent" ||
+		schedulingState != "interrupted" ||
+		interruptionReason != "server_restart" ||
+		interruptionDetail != `{"code":"workflow.execution.restarted","fields":{"operation":"recovery"}}` ||
+		interruptedAt != placementUpdatedAt ||
+		sessionID.Valid {
+		t.Fatalf(
+			"projected runnable agent current node = node=%q scheduling=%q reason=%q detail=%q interrupted_at=%d session=%+v",
+			nodeID,
+			schedulingState,
+			interruptionReason,
+			interruptionDetail,
+			interruptedAt,
+			sessionID,
+		)
+	}
+}
+
+func TestOpenProjectsLegacyWaitingQuestionInterruptsCurrentNodeWithoutClearingAsk(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-waiting-question-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedLegacyWorkflowSession(
+		t,
+		db,
+		"project-waiting-question-migration",
+		"workspace-waiting-question-migration",
+		"550e8400-e29b-41d4-a716-446655440003",
+		now,
+	)
+	seedWorkflowGraph(t, db, "project-waiting-question-migration", now)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-waiting-question-migration", "link-1", 1, "ASK-1", now, now)
+	execSeed(t, db, "agent placement", workflowSeedPlacementSQL, "placement-waiting-question-migration", "task-waiting-question-migration", "node-agent", now, now)
+	execSeed(t, db, "waiting question run", `
+INSERT INTO task_runs (
+    id, placement_id, session_id, workflow_revision_seen,
+    created_at_unix_ms, updated_at_unix_ms, started_at_unix_ms, waiting_ask_id
+) VALUES (
+    'run-waiting-question-migration',
+    'placement-waiting-question-migration',
+    '550e8400-e29b-41d4-a716-446655440003',
+    1,
+    ?, ?, ?, 'ask-precutover'
+)`, now, now+3, now+1)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var schedulingState, interruptionReason string
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT scheduling_state, interruption_reason
+FROM task_current_nodes
+WHERE task_id = 'task-waiting-question-migration'`).Scan(&schedulingState, &interruptionReason); err != nil {
+		t.Fatalf("query migrated waiting-question current node: %v", err)
+	}
+	if schedulingState != "interrupted" || interruptionReason != "server_restart" {
+		t.Fatalf("migrated waiting-question current node = scheduling=%q reason=%q", schedulingState, interruptionReason)
+	}
+
+	var askID string
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT waiting_ask_id
+FROM task_runs
+WHERE id = 'run-waiting-question-migration'`).Scan(&askID); err != nil {
+		t.Fatalf("query retained legacy ask reference: %v", err)
+	}
+	if askID != "ask-precutover" {
+		t.Fatalf("retained legacy ask reference = %q, want ask-precutover", askID)
+	}
+}
+
+func seedLegacyWorkflowSession(t *testing.T, db *sql.DB, projectID, workspaceID, sessionID string, now int64) {
+	t.Helper()
+	execSeed(t, db, "workspace", `
+INSERT INTO workspaces (
+    id, project_id, canonical_root_path, git_metadata_json, created_at_unix_ms, updated_at_unix_ms
+) VALUES (?, ?, ?, '{}', ?, ?)`, workspaceID, projectID, "/"+workspaceID, now, now)
+	execSeed(t, db, "session", `
+INSERT INTO sessions (
+    id, project_id, workspace_id, artifact_relpath, created_at_unix_ms, updated_at_unix_ms
+) VALUES (?, ?, ?, ?, ?, ?)`,
+		sessionID,
+		projectID,
+		workspaceID,
+		"sessions/"+sessionID,
+		now,
+		now,
+	)
+}
+
+func TestOpenProjectsRetainsCompletedAgentSessionAssociation(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	runUpdatedAt := now + 8
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-completed-session-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedLegacyWorkflowSession(
+		t,
+		db,
+		"project-completed-session-migration",
+		"workspace-completed-session-migration",
+		"550e8400-e29b-41d4-a716-446655440001",
+		now,
+	)
+	seedWorkflowGraph(t, db, "project-completed-session-migration", now)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-completed-session-migration", "link-1", 1, "SES-1", now, now)
+	execSeed(t, db, "terminal placement", workflowSeedPlacementSQL, "placement-completed-session-terminal", "task-completed-session-migration", "node-done", now, now)
+	execSeed(t, db, "completed agent placement", `
+INSERT INTO task_node_placements (
+    id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms
+) VALUES (
+    'placement-completed-session-agent',
+    'task-completed-session-migration',
+    'node-agent',
+    'completed',
+    ?,
+    ?
+)`, now, now+1)
+	execSeed(t, db, "completed agent run", `
+INSERT INTO task_runs (
+    id,
+    placement_id,
+    session_id,
+    workflow_revision_seen,
+    created_at_unix_ms,
+    updated_at_unix_ms,
+    started_at_unix_ms,
+    completed_at_unix_ms
+) VALUES (
+    'run-completed-session-migration',
+    'placement-completed-session-agent',
+    '550e8400-e29b-41d4-a716-446655440001',
+    1,
+    ?,
+    ?,
+    ?,
+    ?
+)`, now, runUpdatedAt, now+1, now+2)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var taskID, nodeID string
+	var associatedAt int64
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT session.task_id, association.node_id, association.associated_at_unix_ms
+FROM sessions session
+JOIN session_workflow_node_associations association ON association.session_id = session.id
+WHERE session.id = '550e8400-e29b-41d4-a716-446655440001'`).Scan(&taskID, &nodeID, &associatedAt); err != nil {
+		t.Fatalf("query retained completed agent session association: %v", err)
+	}
+	if taskID != "task-completed-session-migration" || nodeID != "node-agent" || associatedAt != runUpdatedAt {
+		t.Fatalf("retained completed agent session association = task=%q node=%q associated_at=%d", taskID, nodeID, associatedAt)
+	}
+
+	var historicalCurrentNodeCount int
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT COUNT(*)
+FROM task_current_nodes
+WHERE task_id = 'task-completed-session-migration'
+  AND node_id = 'node-agent'`).Scan(&historicalCurrentNodeCount); err != nil {
+		t.Fatalf("count projected completed agent current nodes: %v", err)
+	}
+	if historicalCurrentNodeCount != 0 {
+		t.Fatalf("completed agent current node count = %d, want 0", historicalCurrentNodeCount)
+	}
+}
+
+func TestOpenProjectsMigratesLegacySerialPendingApproval(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-pending-approval-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedLegacyWorkflowSession(
+		t,
+		db,
+		"project-pending-approval-migration",
+		"workspace-pending-approval-migration",
+		"550e8400-e29b-41d4-a716-446655440002",
+		now,
+	)
+	seedWorkflowGraph(t, db, "project-pending-approval-migration", now)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-pending-approval-migration", "link-1", 1, "APR-1", now, now)
+	execSeed(t, db, "waiting approval placement", `
+INSERT INTO task_node_placements (
+    id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms
+) VALUES (
+    'placement-pending-approval-migration',
+    'task-pending-approval-migration',
+    'node-agent',
+    'waiting_approval',
+    ?,
+    ?
+)`, now, now+1)
+	execSeed(t, db, "completed approval source run", `
+INSERT INTO task_runs (
+    id, placement_id, session_id, workflow_revision_seen,
+    created_at_unix_ms, updated_at_unix_ms, started_at_unix_ms, completed_at_unix_ms
+) VALUES (
+    'run-pending-approval-migration',
+    'placement-pending-approval-migration',
+    '550e8400-e29b-41d4-a716-446655440002',
+    1,
+    ?, ?, ?, ?
+)`, now, now+2, now+1, now+2)
+	execSeed(t, db, "pending approval transition", `
+INSERT INTO task_transitions (
+    id, task_id, source_run_id, source_placement_id,
+    source_node_key, source_node_display_name, transition_id, transition_display_name, workflow_revision_seen,
+    actor, state, commentary, output_values_json, created_at_unix_ms
+) VALUES (
+    'transition-pending-approval-migration',
+    'task-pending-approval-migration',
+    'run-pending-approval-migration',
+    'placement-pending-approval-migration',
+    'agent',
+    'Agent',
+    'done',
+    'Done',
+    1,
+    'agent',
+    'pending_approval',
+    '',
+    '{"summary":"done"}',
+    ?
+)`, now+3)
+	execSeed(t, db, "pending approval edge", `
+INSERT INTO task_transition_edges (
+    id, task_transition_id, workflow_edge_id, edge_key,
+    target_node_id, target_node_key, target_node_display_name, target_node_kind,
+    state, context_mode, requires_approval, input_bindings_json, output_requirements_json, metadata_json
+) VALUES (
+    'transition-edge-pending-approval-migration',
+    'transition-pending-approval-migration',
+    'edge-done-1',
+    'done',
+    'node-done',
+    'done',
+    'Done',
+    'terminal',
+    'pending',
+    'new_session',
+    1,
+    '[]',
+    '[]',
+    '{"context_mode":"new_session","context_source":{"kind":"immediate_source"},"context_resolution_frozen":true}'
+)`)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var sourceNodeID, sourceSessionID string
+	var sourceSchedulingState sql.NullString
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT node_id, session_id, scheduling_state
+FROM task_current_nodes
+WHERE task_id = 'task-pending-approval-migration'`).Scan(
+		&sourceNodeID,
+		&sourceSessionID,
+		&sourceSchedulingState,
+	); err != nil {
+		t.Fatalf("query pending approval source current node: %v", err)
+	}
+	if sourceNodeID != "node-agent" ||
+		sourceSessionID != "550e8400-e29b-41d4-a716-446655440002" ||
+		sourceSchedulingState.Valid {
+		t.Fatalf(
+			"pending approval source current node = node=%q session=%q scheduling=%+v",
+			sourceNodeID,
+			sourceSessionID,
+			sourceSchedulingState,
+		)
+	}
+
+	var (
+		approvalID, approvalSourceTaskID, approvalSourceNodeID, approvalSourceSessionID, materializedValues string
+		workflowVersion, createdAt                                                                          int64
+		transitionWorkflowID, transitionGroupID, transitionSourceNodeID, transitionID, sourceDisplayName    string
+		branchKey, targetNodeID, targetDisplayName, targetInputs, targetPriorValues                         string
+		targetSessionID, targetSchedulingState                                                              string
+		edgeID, edgeKey, edgeTargetNodeID, edgeContextMode, edgeContextSourceKind                           string
+		edgeRequiresApproval                                                                                int
+		resolutionSessionID                                                                                 string
+	)
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT
+    approval.id,
+    approval.source_task_id,
+    approval.source_node_id,
+    approval.source_session_id,
+    approval.workflow_version,
+    approval.materialized_values_json,
+    approval.created_at_unix_ms,
+    json_extract(approval.transition_snapshot_json, '$.workflow_id'),
+    json_extract(approval.transition_snapshot_json, '$.id'),
+    json_extract(approval.transition_snapshot_json, '$.source_node_id'),
+    json_extract(approval.transition_snapshot_json, '$.transition_id'),
+    json_extract(approval.transition_snapshot_json, '$.source_display_name'),
+    branch.transition_branch_key,
+    json_extract(branch.target_snapshot_json, '$.node_id'),
+    json_extract(branch.target_snapshot_json, '$.display_name'),
+    json_extract(branch.target_snapshot_json, '$.current_input_values'),
+    json_extract(branch.target_snapshot_json, '$.prior_node_values'),
+    COALESCE(json_extract(branch.target_snapshot_json, '$.session_id'), ''),
+    COALESCE(json_extract(branch.target_snapshot_json, '$.scheduling_state'), ''),
+    json_extract(branch.effective_edge_configuration_json, '$.id'),
+    json_extract(branch.effective_edge_configuration_json, '$.key'),
+    json_extract(branch.effective_edge_configuration_json, '$.target_node_id'),
+    json_extract(branch.effective_edge_configuration_json, '$.context_mode'),
+    json_extract(branch.effective_edge_configuration_json, '$.context_source.kind'),
+    json_extract(branch.effective_edge_configuration_json, '$.requires_approval'),
+    COALESCE(json_extract(branch.context_source_resolution_json, '$.session_id'), '')
+FROM task_pending_approvals approval
+JOIN task_pending_approval_branches branch ON branch.approval_id = approval.id
+WHERE approval.source_task_id = 'task-pending-approval-migration'`).Scan(
+		&approvalID,
+		&approvalSourceTaskID,
+		&approvalSourceNodeID,
+		&approvalSourceSessionID,
+		&workflowVersion,
+		&materializedValues,
+		&createdAt,
+		&transitionWorkflowID,
+		&transitionGroupID,
+		&transitionSourceNodeID,
+		&transitionID,
+		&sourceDisplayName,
+		&branchKey,
+		&targetNodeID,
+		&targetDisplayName,
+		&targetInputs,
+		&targetPriorValues,
+		&targetSessionID,
+		&targetSchedulingState,
+		&edgeID,
+		&edgeKey,
+		&edgeTargetNodeID,
+		&edgeContextMode,
+		&edgeContextSourceKind,
+		&edgeRequiresApproval,
+		&resolutionSessionID,
+	); err != nil {
+		t.Fatalf("query migrated pending approval snapshot: %v", err)
+	}
+	if _, err := workflow.ParseApprovalID(approvalID); err != nil {
+		t.Fatalf("migrated approval id %q: %v", approvalID, err)
+	}
+	if approvalSourceTaskID != "task-pending-approval-migration" ||
+		approvalSourceNodeID != "node-agent" ||
+		approvalSourceSessionID != "550e8400-e29b-41d4-a716-446655440002" ||
+		workflowVersion != 1 ||
+		materializedValues != `{"summary":"done"}` ||
+		createdAt != now+3 ||
+		transitionWorkflowID != "workflow-1" ||
+		transitionGroupID != "group-done" ||
+		transitionSourceNodeID != "node-agent" ||
+		transitionID != "done" ||
+		sourceDisplayName != "Agent" ||
+		branchKey != "done" ||
+		targetNodeID != "node-done" ||
+		targetDisplayName != "Done" ||
+		targetInputs != "{}" ||
+		targetPriorValues != "{}" ||
+		targetSessionID != "" ||
+		targetSchedulingState != "" ||
+		edgeID != "edge-done-1" ||
+		edgeKey != "done" ||
+		edgeTargetNodeID != "node-done" ||
+		edgeContextMode != "new_session" ||
+		edgeContextSourceKind != "immediate_source" ||
+		edgeRequiresApproval != 1 ||
+		resolutionSessionID != "" {
+		t.Fatalf(
+			"migrated pending approval = id=%q source=%q/%q/%q version=%d values=%q created=%d transition=%q/%q/%q/%q/%q branch=%q target=%q/%q/%q/%q/%q/%q edge=%q/%q/%q/%q/%q/%d resolution=%q",
+			approvalID,
+			approvalSourceTaskID,
+			approvalSourceNodeID,
+			approvalSourceSessionID,
+			workflowVersion,
+			materializedValues,
+			createdAt,
+			transitionWorkflowID,
+			transitionGroupID,
+			transitionSourceNodeID,
+			transitionID,
+			sourceDisplayName,
+			branchKey,
+			targetNodeID,
+			targetDisplayName,
+			targetInputs,
+			targetPriorValues,
+			targetSessionID,
+			targetSchedulingState,
+			edgeID,
+			edgeKey,
+			edgeTargetNodeID,
+			edgeContextMode,
+			edgeContextSourceKind,
+			edgeRequiresApproval,
+			resolutionSessionID,
+		)
+	}
+}
+
+func TestOpenRejectsPendingApprovalWithoutCurrentSource(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-orphan-approval-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-orphan-approval-migration", now)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-orphan-approval-migration", "link-1", 1, "APR-2", now, now)
+	execSeed(t, db, "pending approval transition", `
+INSERT INTO task_transitions (
+    id, task_id, source_node_key, source_node_display_name,
+    transition_id, transition_display_name, workflow_revision_seen, actor, state,
+    commentary, output_values_json, created_at_unix_ms
+) VALUES (
+    'transition-orphan-approval-migration',
+    'task-orphan-approval-migration',
+    'agent',
+    'Agent',
+    'done',
+    'Done',
+    1,
+    'agent',
+    'pending_approval',
+    '',
+    '{}',
+    ?
+)`, now)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	_, err = Open(root)
+	if err == nil {
+		t.Fatal("Open unexpectedly accepted a pending Approval without a Current Node source")
+	}
+	if !strings.Contains(err.Error(), "task-orphan-approval-migration") ||
+		!strings.Contains(err.Error(), "transition-orphan-approval-migration") {
+		t.Fatalf("Open error = %v, want Task and transition diagnostic", err)
+	}
+}
+
+func TestOpenProjectsNormalizesCanceledTaskToCanonicalDone(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-canceled-done-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedLegacyWorkflowSession(
+		t,
+		db,
+		"project-canceled-done-migration",
+		"workspace-canceled-done-migration",
+		"550e8400-e29b-41d4-a716-446655440008",
+		now,
+	)
+	seedWorkflowGraph(t, db, "project-canceled-done-migration", now)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-canceled-done-migration", "link-1", 1, "CAN-1", now, now)
+	execSeed(t, db, "canceled task", `
+UPDATE tasks
+SET canceled_at_unix_ms = ?
+WHERE id = 'task-canceled-done-migration'`, now+1)
+	execSeed(t, db, "active agent placement", workflowSeedPlacementSQL, "placement-canceled-done-migration", "task-canceled-done-migration", "node-agent", now, now)
+	execSeed(t, db, "active agent run", `
+INSERT INTO task_runs (
+    id, placement_id, session_id, workflow_revision_seen, created_at_unix_ms, updated_at_unix_ms
+) VALUES (
+    'run-canceled-done-migration',
+    'placement-canceled-done-migration',
+    '550e8400-e29b-41d4-a716-446655440008',
+    1,
+    ?,
+    ?
+)`, now, now+2)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var nodeID string
+	var schedulingState sql.NullString
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT node_id, scheduling_state
+FROM task_current_nodes
+WHERE task_id = 'task-canceled-done-migration'`).Scan(&nodeID, &schedulingState); err != nil {
+		t.Fatalf("query normalized canceled current node: %v", err)
+	}
+	if nodeID != "node-done" || schedulingState.Valid {
+		t.Fatalf("normalized canceled current node = node=%q scheduling=%+v", nodeID, schedulingState)
+	}
+
+	var currentNodeCount, approvalCount, fanoutCount int
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT
+    (SELECT COUNT(*) FROM task_current_nodes WHERE task_id = 'task-canceled-done-migration'),
+    (SELECT COUNT(*) FROM task_pending_approvals WHERE source_task_id = 'task-canceled-done-migration'),
+    (SELECT COUNT(*) FROM task_active_fanouts WHERE task_id = 'task-canceled-done-migration')`).Scan(
+		&currentNodeCount,
+		&approvalCount,
+		&fanoutCount,
+	); err != nil {
+		t.Fatalf("query normalized canceled aggregate: %v", err)
+	}
+	if currentNodeCount != 1 || approvalCount != 0 || fanoutCount != 0 {
+		t.Fatalf(
+			"normalized canceled aggregate = current_nodes=%d approvals=%d fanouts=%d",
+			currentNodeCount,
+			approvalCount,
+			fanoutCount,
+		)
+	}
+
+	var taskID, associationNodeID string
+	var associatedAt int64
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT session.task_id, association.node_id, association.associated_at_unix_ms
+FROM sessions session
+JOIN session_workflow_node_associations association ON association.session_id = session.id
+WHERE session.id = '550e8400-e29b-41d4-a716-446655440008'`).Scan(&taskID, &associationNodeID, &associatedAt); err != nil {
+		t.Fatalf("query normalized canceled Session association: %v", err)
+	}
+	if taskID != "task-canceled-done-migration" ||
+		associationNodeID != "node-agent" ||
+		associatedAt != now+2 {
+		t.Fatalf(
+			"normalized canceled Session association = task=%q node=%q associated_at=%d",
+			taskID,
+			associationNodeID,
+			associatedAt,
+		)
+	}
+}
+
+func TestOpenProjectsDiscardsCanceledSerialPendingApproval(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-canceled-approval-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-canceled-approval-migration", now)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-canceled-approval-migration", "link-1", 1, "CAN-8", now, now)
+	execSeed(t, db, "canceled task", `
+UPDATE tasks
+SET canceled_at_unix_ms = ?
+WHERE id = 'task-canceled-approval-migration'`, now+1)
+	execSeed(t, db, "waiting approval placement", `
+INSERT INTO task_node_placements (
+    id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms
+) VALUES (
+    'placement-canceled-approval-migration',
+    'task-canceled-approval-migration',
+    'node-agent',
+    'waiting_approval',
+    ?,
+    ?
+)`, now, now+1)
+	execSeed(t, db, "completed source run", `
+INSERT INTO task_runs (
+    id, placement_id, workflow_revision_seen, created_at_unix_ms, updated_at_unix_ms, completed_at_unix_ms
+) VALUES (
+    'run-canceled-approval-migration',
+    'placement-canceled-approval-migration',
+    1,
+    ?, ?, ?
+)`, now, now+2, now+2)
+	execSeed(t, db, "pending approval transition", `
+INSERT INTO task_transitions (
+    id, task_id, source_run_id, source_placement_id, source_node_key, source_node_display_name,
+    transition_id, transition_display_name, workflow_revision_seen, actor, state,
+    commentary, output_values_json, created_at_unix_ms
+) VALUES (
+    'transition-canceled-approval-migration',
+    'task-canceled-approval-migration',
+    'run-canceled-approval-migration',
+    'placement-canceled-approval-migration',
+    'agent',
+    'Agent',
+    'done',
+    'Done',
+    1,
+    'agent',
+    'pending_approval',
+    '',
+    '{}',
+    ?
+);
+INSERT INTO task_transition_edges (
+    id, task_transition_id, workflow_edge_id, edge_key,
+    target_node_id, target_node_key, target_node_display_name, target_node_kind,
+    state, context_mode, requires_approval, input_bindings_json, output_requirements_json, metadata_json
+) VALUES (
+    'transition-edge-canceled-approval-migration',
+    'transition-canceled-approval-migration',
+    'edge-done-1',
+    'done',
+    'node-done',
+    'done',
+    'Done',
+    'terminal',
+    'pending',
+    'new_session',
+    1,
+    '[]',
+    '[]',
+    '{}'
+)`, now+3)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var nodeID string
+	var approvalCount, fanoutCount int
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT
+    (SELECT node_id FROM task_current_nodes WHERE task_id = 'task-canceled-approval-migration'),
+    (SELECT COUNT(*) FROM task_pending_approvals WHERE source_task_id = 'task-canceled-approval-migration'),
+    (SELECT COUNT(*) FROM task_active_fanouts WHERE task_id = 'task-canceled-approval-migration')`).Scan(
+		&nodeID,
+		&approvalCount,
+		&fanoutCount,
+	); err != nil {
+		t.Fatalf("query normalized canceled approval aggregate: %v", err)
+	}
+	if nodeID != "node-done" || approvalCount != 0 || fanoutCount != 0 {
+		t.Fatalf("normalized canceled approval aggregate = node=%q approvals=%d fanouts=%d", nodeID, approvalCount, fanoutCount)
+	}
+}
+
+func TestOpenProjectsCanceledTaskWithoutCanonicalDonePreservesUniqueActiveTerminal(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-canceled-terminal-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-canceled-terminal-migration", now)
+	execSeed(t, db, "rename canonical terminal", `
+UPDATE workflow_nodes
+SET node_key = 'finished'
+WHERE id = 'node-done'`)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-canceled-terminal-migration", "link-1", 1, "CAN-2", now, now)
+	execSeed(t, db, "canceled task", `
+UPDATE tasks
+SET canceled_at_unix_ms = ?
+WHERE id = 'task-canceled-terminal-migration'`, now+1)
+	execSeed(t, db, "selected terminal placement", workflowSeedPlacementSQL, "placement-canceled-terminal-migration", "task-canceled-terminal-migration", "node-done", now, now)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var nodeID string
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT node_id
+FROM task_current_nodes
+WHERE task_id = 'task-canceled-terminal-migration'`).Scan(&nodeID); err != nil {
+		t.Fatalf("query normalized selected terminal current node: %v", err)
+	}
+	if nodeID != "node-done" {
+		t.Fatalf("normalized selected terminal current node = %q, want node-done", nodeID)
+	}
+}
+
+func TestOpenProjectsCanceledTaskWithoutCanonicalDoneWithNonterminalLegacyCandidate(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-canceled-invalid-terminal-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-canceled-invalid-terminal-migration", now)
+	execSeed(t, db, "rename canonical terminal", `
+UPDATE workflow_nodes
+SET node_key = 'finished'
+WHERE id = 'node-done'`)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-canceled-invalid-terminal-migration", "link-1", 1, "CAN-3", now, now)
+	execSeed(t, db, "canceled task", `
+UPDATE tasks
+SET canceled_at_unix_ms = ?
+WHERE id = 'task-canceled-invalid-terminal-migration'`, now+1)
+	execSeed(t, db, "non-terminal active candidate", workflowSeedPlacementSQL, "placement-canceled-invalid-terminal-migration", "task-canceled-invalid-terminal-migration", "node-agent", now, now)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	assertMigratedCurrentNodeID(t, store, "task-canceled-invalid-terminal-migration", "node-done")
+}
+
+func TestOpenProjectsCanceledTaskWithoutCanonicalDoneWithoutLegacyCandidate(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-canceled-missing-terminal-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-canceled-missing-terminal-migration", now)
+	execSeed(t, db, "rename canonical terminal", `
+UPDATE workflow_nodes
+SET node_key = 'finished'
+WHERE id = 'node-done'`)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-canceled-missing-terminal-migration", "link-1", 1, "CAN-5", now, now)
+	execSeed(t, db, "canceled task", `
+UPDATE tasks
+SET canceled_at_unix_ms = ?
+WHERE id = 'task-canceled-missing-terminal-migration'`, now+1)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	assertMigratedCurrentNodeID(t, store, "task-canceled-missing-terminal-migration", "node-done")
+}
+
+func TestOpenProjectsCanceledTaskWithoutCanonicalDoneWithAmbiguousLegacyCandidates(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-canceled-ambiguous-terminal-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-canceled-ambiguous-terminal-migration", now)
+	execSeed(t, db, "rename canonical terminal", `
+UPDATE workflow_nodes
+SET node_key = 'finished'
+WHERE id = 'node-done';
+INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json)
+VALUES ('node-terminal-alternate', 'workflow-1', 'alternate', 'terminal', 'Alternate', '[]')`)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-canceled-ambiguous-terminal-migration", "link-1", 1, "CAN-6", now, now)
+	execSeed(t, db, "canceled task", `
+UPDATE tasks
+SET canceled_at_unix_ms = ?
+WHERE id = 'task-canceled-ambiguous-terminal-migration'`, now+1)
+	execSeed(t, db, "terminal placements", `
+INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms)
+VALUES
+    ('placement-canceled-ambiguous-one', 'task-canceled-ambiguous-terminal-migration', 'node-done', 'active', ?, ?),
+    ('placement-canceled-ambiguous-two', 'task-canceled-ambiguous-terminal-migration', 'node-terminal-alternate', 'active', ?, ?)`,
+		now,
+		now,
+		now,
+		now,
+	)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	assertMigratedCurrentNodeID(t, store, "task-canceled-ambiguous-terminal-migration", "node-done")
+}
+
+func TestOpenProjectsCanceledTaskWithoutCanonicalDoneWithForeignLegacyCandidate(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-canceled-foreign-terminal-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-canceled-foreign-terminal-migration", now)
+	seedWorkflowGraphForProject(t, db, "project-canceled-foreign-terminal-migration", now, "2")
+	execSeed(t, db, "rename canonical terminal", `
+UPDATE workflow_nodes
+SET node_key = 'finished'
+WHERE id = 'node-done'`)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-canceled-foreign-terminal-migration", "link-1", 1, "CAN-7", now, now)
+	execSeed(t, db, "canceled task", `
+UPDATE tasks
+SET canceled_at_unix_ms = ?
+WHERE id = 'task-canceled-foreign-terminal-migration'`, now+1)
+	execSeed(t, db, "relax legacy placement trigger", `
+DROP TRIGGER task_node_placements_runtime_insert;
+DROP TRIGGER task_node_placements_runtime_update`)
+	execSeed(t, db, "foreign terminal placement", `
+INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms)
+VALUES (
+    'placement-canceled-foreign-terminal',
+    'task-canceled-foreign-terminal-migration',
+    'node-done-2',
+    'active',
+    ?,
+    ?
+)`, now, now)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	assertMigratedCurrentNodeID(t, store, "task-canceled-foreign-terminal-migration", "node-done")
+}
+
+func assertMigratedCurrentNodeID(t *testing.T, store *Store, taskID, wantNodeID string) {
+	t.Helper()
+
+	var gotNodeID string
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT node_id
+FROM task_current_nodes
+WHERE task_id = ?`, taskID).Scan(&gotNodeID); err != nil {
+		t.Fatalf("query migrated current node for task %q: %v", taskID, err)
+	}
+	if gotNodeID != wantNodeID {
+		t.Fatalf("migrated current node for task %q = %q, want %q", taskID, gotNodeID, wantNodeID)
+	}
+}
+
+func TestOpenOmitsInvalidCanceledTaskWithoutCanonicalDoneAndRetainsNeutralSession(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-invalid-canceled-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedLegacyWorkflowSession(
+		t,
+		db,
+		"project-invalid-canceled-migration",
+		"workspace-invalid-canceled-migration",
+		"550e8400-e29b-41d4-a716-446655440004",
+		now,
+	)
+	seedWorkflowGraph(t, db, "project-invalid-canceled-migration", now)
+	execSeed(t, db, "remove terminal graph facts", `
+DELETE FROM workflow_edges
+WHERE id = 'edge-done-1';
+DELETE FROM workflow_transition_groups
+WHERE id = 'group-done';
+DELETE FROM workflow_nodes
+WHERE id = 'node-done'`)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-invalid-canceled-migration", "link-1", 1, "CAN-4", now, now)
+	execSeed(t, db, "canceled task", `
+UPDATE tasks
+SET canceled_at_unix_ms = ?
+WHERE id = 'task-invalid-canceled-migration'`, now+1)
+	execSeed(t, db, "agent placement", workflowSeedPlacementSQL, "placement-invalid-canceled-migration", "task-invalid-canceled-migration", "node-agent", now, now)
+	execSeed(t, db, "agent run", `
+INSERT INTO task_runs (
+    id, placement_id, session_id, workflow_revision_seen, created_at_unix_ms, updated_at_unix_ms
+) VALUES (
+    'run-invalid-canceled-migration',
+    'placement-invalid-canceled-migration',
+    '550e8400-e29b-41d4-a716-446655440004',
+    1,
+    ?,
+    ?
+)`, now, now+2)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var taskCount int
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT COUNT(*)
+FROM tasks
+WHERE id = 'task-invalid-canceled-migration'`).Scan(&taskCount); err != nil {
+		t.Fatalf("count omitted invalid canceled task: %v", err)
+	}
+	if taskCount != 0 {
+		t.Fatalf("invalid canceled task count = %d, want 0", taskCount)
+	}
+
+	var taskID sql.NullString
+	var associationCount int
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT
+    session.task_id,
+    (SELECT COUNT(*) FROM session_workflow_node_associations WHERE session_id = session.id)
+FROM sessions session
+WHERE session.id = '550e8400-e29b-41d4-a716-446655440004'`).Scan(&taskID, &associationCount); err != nil {
+		t.Fatalf("query neutral retained session: %v", err)
+	}
+	if taskID.Valid || associationCount != 0 {
+		t.Fatalf("neutral retained session = task_id=%+v associations=%d", taskID, associationCount)
+	}
+}
+
+func TestOpenRejectsSessionAssociatedWithSeveralRetainedTasks(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	const sessionID = "550e8400-e29b-41d4-a716-446655440005"
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-shared-session-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedLegacyWorkflowSession(
+		t,
+		db,
+		"project-shared-session-migration",
+		"workspace-shared-session-migration",
+		sessionID,
+		now,
+	)
+	seedWorkflowGraph(t, db, "project-shared-session-migration", now)
+	for _, task := range []struct {
+		id          string
+		seq         int
+		shortID     string
+		placementID string
+		runID       string
+	}{
+		{"task-shared-session-one", 1, "SES-2", "placement-shared-session-one", "run-shared-session-one"},
+		{"task-shared-session-two", 2, "SES-3", "placement-shared-session-two", "run-shared-session-two"},
+	} {
+		execSeed(t, db, "task", workflowSeedTaskSQL, task.id, "link-1", task.seq, task.shortID, now, now)
+		execSeed(t, db, "agent placement", workflowSeedPlacementSQL, task.placementID, task.id, "node-agent", now, now)
+		execSeed(t, db, "agent run", `
+INSERT INTO task_runs (
+    id, placement_id, session_id, workflow_revision_seen, created_at_unix_ms, updated_at_unix_ms
+) VALUES (?, ?, ?, 1, ?, ?)`, task.runID, task.placementID, sessionID, now, now+int64(task.seq))
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	_, err = Open(root)
+	if err == nil {
+		t.Fatal("Open unexpectedly accepted a Session linked to several retained Tasks")
+	}
+	if !strings.Contains(err.Error(), sessionID) || !strings.Contains(err.Error(), "retained_task_count") {
+		t.Fatalf("Open error = %v, want Session ownership diagnostic", err)
+	}
+}
+
+func TestOpenRejectsSeveralUnfinishedRunsForOneCurrentNode(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-duplicate-run-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-duplicate-run-migration", now)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-duplicate-run-migration", "link-1", 1, "RUN-1", now, now)
+	execSeed(t, db, "agent placement", workflowSeedPlacementSQL, "placement-duplicate-run-migration", "task-duplicate-run-migration", "node-agent", now, now)
+	execSeed(t, db, "unfinished runs", `
+INSERT INTO task_runs (id, placement_id, workflow_revision_seen, created_at_unix_ms, updated_at_unix_ms)
+VALUES
+    ('run-duplicate-one', 'placement-duplicate-run-migration', 1, ?, ?),
+    ('run-duplicate-two', 'placement-duplicate-run-migration', 1, ?, ?)`,
+		now,
+		now,
+		now,
+		now+1,
+	)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	_, err = Open(root)
+	if err == nil {
+		t.Fatal("Open unexpectedly accepted several unfinished runs for one current node")
+	}
+	if !strings.Contains(err.Error(), "task-duplicate-run-migration") ||
+		!strings.Contains(err.Error(), "unfinished_run_count=2") {
+		t.Fatalf("Open error = %v, want current-node execution diagnostic", err)
+	}
+}
+
+func TestOpenProjectsMigratesActiveParallelFanout(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	seedLegacyParallelMigrationFixture(t, db, "project-parallel-migration", "task-parallel-migration", now)
+	execSeed(t, db, "runnable parallel branch", `
+DELETE FROM task_runs
+WHERE id = 'run-parallel-b'`)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var fanoutCount int
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT COUNT(*)
+FROM task_active_fanouts
+WHERE task_id = 'task-parallel-migration'`).Scan(&fanoutCount); err != nil {
+		t.Fatalf("count migrated active fanout: %v", err)
+	}
+	if fanoutCount != 1 {
+		t.Fatalf("migrated active fanout count = %d, want 1", fanoutCount)
+	}
+
+	rows, err := store.db.QueryContext(t.Context(), `
+SELECT
+    branch.transition_branch_key,
+    branch.arrival_state,
+    current_node.node_id,
+    current_node.scheduling_state
+FROM task_active_fanout_branches branch
+JOIN task_current_nodes current_node
+    ON current_node.task_id = branch.task_id
+   AND current_node.transition_branch_key = branch.transition_branch_key
+WHERE branch.task_id = 'task-parallel-migration'
+ORDER BY branch.transition_branch_key`)
+	if err != nil {
+		t.Fatalf("query migrated parallel branches: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	type branchState struct {
+		arrivalState    string
+		currentNodeID   string
+		schedulingState string
+	}
+	branches := map[string]branchState{}
+	for rows.Next() {
+		var key string
+		var state branchState
+		if err := rows.Scan(&key, &state.arrivalState, &state.currentNodeID, &state.schedulingState); err != nil {
+			t.Fatalf("scan migrated parallel branch: %v", err)
+		}
+		branches[key] = state
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate migrated parallel branches: %v", err)
+	}
+	want := map[string]branchState{
+		"split_a": {arrivalState: "pending", currentNodeID: "node-branch-a", schedulingState: "interrupted"},
+		"split_b": {arrivalState: "pending", currentNodeID: "node-branch-b", schedulingState: "interrupted"},
+	}
+	if !reflect.DeepEqual(branches, want) {
+		t.Fatalf("migrated parallel branches = %+v, want %+v", branches, want)
+	}
+}
+
+func TestOpenProjectsRetainsParallelSessionBranchAssociation(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	const sessionID = "550e8400-e29b-41d4-a716-446655440007"
+	seedLegacyParallelMigrationFixture(
+		t,
+		db,
+		"project-parallel-session-association-migration",
+		"task-parallel-session-association-migration",
+		now,
+	)
+	seedLegacyWorkflowSession(
+		t,
+		db,
+		"project-parallel-session-association-migration",
+		"workspace-parallel-session-association-migration",
+		sessionID,
+		now,
+	)
+	execSeed(t, db, "parallel branch session", `
+UPDATE task_runs
+SET session_id = ?
+WHERE id = 'run-parallel-a'`, sessionID)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var taskID, nodeID, branchKey string
+	var associatedAt int64
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT
+    session.task_id,
+    association.node_id,
+    association.transition_branch_key,
+    association.associated_at_unix_ms
+FROM sessions session
+JOIN session_workflow_node_associations association ON association.session_id = session.id
+WHERE session.id = ?`, sessionID).Scan(&taskID, &nodeID, &branchKey, &associatedAt); err != nil {
+		t.Fatalf("query migrated parallel Session association: %v", err)
+	}
+	if taskID != "task-parallel-session-association-migration" ||
+		nodeID != "node-branch-a" ||
+		branchKey != "split_a" ||
+		associatedAt != now+4 {
+		t.Fatalf(
+			"migrated parallel Session association = task=%q node=%q branch=%q associated_at=%d",
+			taskID,
+			nodeID,
+			branchKey,
+			associatedAt,
+		)
+	}
+}
+
+func TestOpenProjectsDiscardsCompletedParallelHistory(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	seedLegacyParallelMigrationFixture(t, db, "project-completed-parallel-history", "task-completed-parallel-history", now)
+	execSeed(t, db, "complete parallel history", `
+UPDATE task_node_placements
+SET state = 'completed', updated_at_unix_ms = ?
+WHERE id IN ('placement-parallel-a', 'placement-parallel-b');
+UPDATE task_runs
+SET completed_at_unix_ms = ?, updated_at_unix_ms = ?
+WHERE id IN ('run-parallel-a', 'run-parallel-b');
+INSERT INTO task_node_placements (
+    id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms
+) VALUES (
+    'placement-completed-parallel-terminal',
+    'task-completed-parallel-history',
+    'node-done',
+    'active',
+    ?,
+    ?
+)`, now+5, now+5, now+5, now+5)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var nodeID string
+	var fanoutCount int
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT
+    (SELECT node_id FROM task_current_nodes WHERE task_id = 'task-completed-parallel-history'),
+    (SELECT COUNT(*) FROM task_active_fanouts WHERE task_id = 'task-completed-parallel-history')`).Scan(&nodeID, &fanoutCount); err != nil {
+		t.Fatalf("query discarded completed parallel history: %v", err)
+	}
+	if nodeID != "node-done" || fanoutCount != 0 {
+		t.Fatalf("discarded completed parallel history = node=%q fanouts=%d", nodeID, fanoutCount)
+	}
+}
+
+func TestOpenProjectsDiscardsCanceledParallelFanout(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	seedLegacyParallelMigrationFixture(t, db, "project-canceled-parallel-migration", "task-canceled-parallel-migration", now)
+	execSeed(t, db, "canceled task", `
+UPDATE tasks
+SET canceled_at_unix_ms = ?
+WHERE id = 'task-canceled-parallel-migration'`, now+5)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var nodeID string
+	var fanoutCount, approvalCount int
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT
+    (SELECT node_id FROM task_current_nodes WHERE task_id = 'task-canceled-parallel-migration'),
+    (SELECT COUNT(*) FROM task_active_fanouts WHERE task_id = 'task-canceled-parallel-migration'),
+    (SELECT COUNT(*) FROM task_pending_approvals WHERE source_task_id = 'task-canceled-parallel-migration')`).Scan(
+		&nodeID,
+		&fanoutCount,
+		&approvalCount,
+	); err != nil {
+		t.Fatalf("query normalized canceled parallel aggregate: %v", err)
+	}
+	if nodeID != "node-done" || fanoutCount != 0 || approvalCount != 0 {
+		t.Fatalf("normalized canceled parallel aggregate = node=%q fanouts=%d approvals=%d", nodeID, fanoutCount, approvalCount)
+	}
+}
+
+func TestOpenProjectsDiscardsCanceledParallelPendingApproval(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	seedLegacyParallelMigrationFixture(t, db, "project-canceled-parallel-approval-migration", "task-canceled-parallel-approval-migration", now)
+	execSeed(t, db, "approval edge", `
+INSERT INTO workflow_transition_groups (id, source_node_id, transition_id, display_name)
+VALUES ('group-canceled-branch-a-done', 'node-branch-a', 'done', 'Done');
+INSERT INTO workflow_edges (
+    id, transition_group_id, edge_key, target_node_id, requires_approval,
+    context_mode, input_bindings_json, output_requirements_json
+) VALUES (
+    'edge-canceled-branch-a-done',
+    'group-canceled-branch-a-done',
+    'done',
+    'node-done',
+    1,
+    'new_session',
+    '[]',
+    '[]'
+)`)
+	execSeed(t, db, "waiting branch approval", `
+UPDATE task_node_placements
+SET state = 'waiting_approval', updated_at_unix_ms = ?
+WHERE id = 'placement-parallel-a';
+UPDATE task_runs
+SET completed_at_unix_ms = ?, updated_at_unix_ms = ?
+WHERE id = 'run-parallel-a';
+INSERT INTO task_transitions (
+    id, task_id, source_run_id, source_placement_id, source_node_key, source_node_display_name,
+    transition_id, transition_display_name, workflow_revision_seen, actor, state,
+    commentary, output_values_json, created_at_unix_ms
+) VALUES (
+    'transition-canceled-parallel-approval-a',
+    'task-canceled-parallel-approval-migration',
+    'run-parallel-a',
+    'placement-parallel-a',
+    'branch_a',
+    'Branch A',
+    'done',
+    'Done',
+    1,
+    'agent',
+    'pending_approval',
+    '',
+    '{}',
+    ?
+);
+INSERT INTO task_transition_edges (
+    id, task_transition_id, workflow_edge_id, edge_key,
+    target_node_id, target_node_key, target_node_display_name, target_node_kind,
+    state, context_mode, requires_approval, input_bindings_json, output_requirements_json, metadata_json
+) VALUES (
+    'transition-edge-canceled-parallel-approval-a',
+    'transition-canceled-parallel-approval-a',
+    'edge-canceled-branch-a-done',
+    'done',
+    'node-done',
+    'done',
+    'Done',
+    'terminal',
+    'pending',
+    'new_session',
+    1,
+    '[]',
+    '[]',
+    '{}'
+);
+UPDATE tasks
+SET canceled_at_unix_ms = ?
+WHERE id = 'task-canceled-parallel-approval-migration'`, now+5, now+5, now+5, now+6)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var nodeID string
+	var currentNodeCount, approvalCount, fanoutCount, attentionCount int
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT
+    (SELECT node_id FROM task_current_nodes WHERE task_id = 'task-canceled-parallel-approval-migration'),
+    (SELECT COUNT(*) FROM task_current_nodes WHERE task_id = 'task-canceled-parallel-approval-migration'),
+    (SELECT COUNT(*) FROM task_pending_approvals WHERE source_task_id = 'task-canceled-parallel-approval-migration'),
+    (SELECT COUNT(*) FROM task_active_fanouts WHERE task_id = 'task-canceled-parallel-approval-migration'),
+    (SELECT COUNT(*) FROM workflow_attention_candidates WHERE task_id = 'task-canceled-parallel-approval-migration')`).Scan(
+		&nodeID,
+		&currentNodeCount,
+		&approvalCount,
+		&fanoutCount,
+		&attentionCount,
+	); err != nil {
+		t.Fatalf("query normalized canceled parallel approval aggregate: %v", err)
+	}
+	if nodeID != "node-done" ||
+		currentNodeCount != 1 ||
+		approvalCount != 0 ||
+		fanoutCount != 0 ||
+		attentionCount != 0 {
+		t.Fatalf(
+			"normalized canceled parallel approval aggregate = node=%q current_nodes=%d approvals=%d fanouts=%d attention=%d",
+			nodeID,
+			currentNodeCount,
+			approvalCount,
+			fanoutCount,
+			attentionCount,
+		)
+	}
+}
+
+func TestOpenProjectsMigratesPartialParallelJoinArrival(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	seedLegacyParallelMigrationFixture(t, db, "project-parallel-arrival-migration", "task-parallel-arrival-migration", now)
+	execSeed(t, db, "join node", `
+INSERT INTO workflow_nodes (
+    id, workflow_id, node_key, kind, display_name, join_input_providers_json, output_fields_json
+) VALUES (
+    'node-join',
+    'workflow-1',
+    'join',
+    'join',
+    'Join',
+    '[]',
+    '[]'
+)`)
+	execSeed(t, db, "join edges", `
+INSERT INTO workflow_transition_groups (id, source_node_id, transition_id, display_name)
+VALUES
+    ('group-branch-a-join', 'node-branch-a', 'join', 'Join'),
+    ('group-branch-b-join', 'node-branch-b', 'join', 'Join');
+INSERT INTO workflow_edges (
+    id, transition_group_id, edge_key, target_node_id, context_mode, input_bindings_json, output_requirements_json
+) VALUES
+    ('edge-branch-a-join', 'group-branch-a-join', 'join_a', 'node-join', 'new_session', '[]', '[]'),
+    ('edge-branch-b-join', 'group-branch-b-join', 'join_b', 'node-join', 'new_session', '[]', '[]')`)
+	execSeed(t, db, "completed branch", `
+UPDATE task_node_placements
+SET state = 'completed', updated_at_unix_ms = ?
+WHERE id = 'placement-parallel-a';
+UPDATE task_runs
+SET completed_at_unix_ms = ?, updated_at_unix_ms = ?
+WHERE id = 'run-parallel-a'`, now+5, now+5, now+5)
+	execSeed(t, db, "join arrival transition", `
+INSERT INTO task_transitions (
+    id, task_id, source_run_id, source_placement_id, source_node_key, source_node_display_name,
+    transition_id, transition_display_name, workflow_revision_seen, actor, state,
+    commentary, output_values_json, created_at_unix_ms, applied_at_unix_ms
+) VALUES (
+    'transition-parallel-arrival-a',
+    'task-parallel-arrival-migration',
+    'run-parallel-a',
+    'placement-parallel-a',
+    'branch_a',
+    'Branch A',
+    'join',
+    'Join',
+    1,
+    'agent',
+    'applied',
+    '',
+    '{"joined":"a"}',
+    ?,
+    ?
+);
+INSERT INTO task_transition_edges (
+    id, task_transition_id, workflow_edge_id, edge_key,
+    target_node_id, target_node_key, target_node_display_name, target_node_kind,
+    state, context_mode, requires_approval, input_bindings_json, output_requirements_json, metadata_json
+) VALUES (
+    'transition-edge-parallel-arrival-a',
+    'transition-parallel-arrival-a',
+    'edge-branch-a-join',
+    'join_a',
+    'node-join',
+    'join',
+    'Join',
+    'join',
+    'applied',
+    'new_session',
+    0,
+    '[]',
+    '[]',
+    '{}'
+)`, now+5, now+5)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	rows, err := store.db.QueryContext(t.Context(), `
+SELECT transition_branch_key, arrival_state, arrival_values_json
+FROM task_active_fanout_branches
+WHERE task_id = 'task-parallel-arrival-migration'
+ORDER BY transition_branch_key`)
+	if err != nil {
+		t.Fatalf("query migrated parallel join arrivals: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	type arrival struct {
+		state  string
+		values sql.NullString
+	}
+	arrivals := map[string]arrival{}
+	for rows.Next() {
+		var key string
+		var item arrival
+		if err := rows.Scan(&key, &item.state, &item.values); err != nil {
+			t.Fatalf("scan migrated parallel join arrival: %v", err)
+		}
+		arrivals[key] = item
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate migrated parallel join arrivals: %v", err)
+	}
+	want := map[string]arrival{
+		"split_a": {state: "arrived", values: sql.NullString{String: `{"joined":"a"}`, Valid: true}},
+		"split_b": {state: "pending"},
+	}
+	if !reflect.DeepEqual(arrivals, want) {
+		t.Fatalf("migrated parallel join arrivals = %+v, want %+v", arrivals, want)
+	}
+
+	var currentNodeID, currentBranchKey string
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT node_id, transition_branch_key
+FROM task_current_nodes
+WHERE task_id = 'task-parallel-arrival-migration'`).Scan(&currentNodeID, &currentBranchKey); err != nil {
+		t.Fatalf("query remaining current branch: %v", err)
+	}
+	if currentNodeID != "node-branch-b" || currentBranchKey != "split_b" {
+		t.Fatalf("remaining current branch = node=%q branch=%q", currentNodeID, currentBranchKey)
+	}
+}
+
+func TestOpenProjectsMigratesPendingApprovalOnParallelBranch(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	seedLegacyParallelMigrationFixture(t, db, "project-parallel-approval-migration", "task-parallel-approval-migration", now)
+	execSeed(t, db, "approval edge", `
+INSERT INTO workflow_transition_groups (id, source_node_id, transition_id, display_name)
+VALUES ('group-branch-a-done', 'node-branch-a', 'done', 'Done');
+INSERT INTO workflow_edges (
+    id, transition_group_id, edge_key, target_node_id, requires_approval,
+    context_mode, input_bindings_json, output_requirements_json
+) VALUES (
+    'edge-branch-a-done',
+    'group-branch-a-done',
+    'done',
+    'node-done',
+    1,
+    'new_session',
+    '[]',
+    '[]'
+)`)
+	execSeed(t, db, "waiting branch approval", `
+UPDATE task_node_placements
+SET state = 'waiting_approval', updated_at_unix_ms = ?
+WHERE id = 'placement-parallel-a';
+UPDATE task_runs
+SET completed_at_unix_ms = ?, updated_at_unix_ms = ?
+WHERE id = 'run-parallel-a';
+INSERT INTO task_transitions (
+    id, task_id, source_run_id, source_placement_id, source_node_key, source_node_display_name,
+    transition_id, transition_display_name, workflow_revision_seen, actor, state,
+    commentary, output_values_json, created_at_unix_ms
+) VALUES (
+    'transition-parallel-approval-a',
+    'task-parallel-approval-migration',
+    'run-parallel-a',
+    'placement-parallel-a',
+    'branch_a',
+    'Branch A',
+    'done',
+    'Done',
+    1,
+    'agent',
+    'pending_approval',
+    '',
+    '{}',
+    ?
+);
+INSERT INTO task_transition_edges (
+    id, task_transition_id, workflow_edge_id, edge_key,
+    target_node_id, target_node_key, target_node_display_name, target_node_kind,
+    state, context_mode, requires_approval, input_bindings_json, output_requirements_json, metadata_json
+) VALUES (
+    'transition-edge-parallel-approval-a',
+    'transition-parallel-approval-a',
+    'edge-branch-a-done',
+    'done',
+    'node-done',
+    'done',
+    'Done',
+    'terminal',
+    'pending',
+    'new_session',
+    1,
+    '[]',
+    '[]',
+    '{}'
+)`, now+5, now+5, now+5)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var sourceNodeID, sourceBranchKey string
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT source_node_id, source_transition_branch_key
+FROM task_pending_approvals
+WHERE source_task_id = 'task-parallel-approval-migration'`).Scan(&sourceNodeID, &sourceBranchKey); err != nil {
+		t.Fatalf("query migrated parallel pending approval: %v", err)
+	}
+	if sourceNodeID != "node-branch-a" || sourceBranchKey != "split_a" {
+		t.Fatalf("migrated parallel pending approval source = node=%q branch=%q", sourceNodeID, sourceBranchKey)
+	}
+
+	var targetBranchKey string
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT json_extract(branch.target_snapshot_json, '$.transition_branch_key')
+FROM task_pending_approval_branches branch
+JOIN task_pending_approvals approval ON approval.id = branch.approval_id
+WHERE approval.source_task_id = 'task-parallel-approval-migration'`).Scan(&targetBranchKey); err != nil {
+		t.Fatalf("query migrated parallel approval target: %v", err)
+	}
+	if targetBranchKey != "split_a" {
+		t.Fatalf("migrated parallel approval target branch = %q, want split_a", targetBranchKey)
+	}
+
+	rows, err := store.db.QueryContext(t.Context(), `
+SELECT node_id, transition_branch_key, scheduling_state
+FROM task_current_nodes
+WHERE task_id = 'task-parallel-approval-migration'
+ORDER BY transition_branch_key`)
+	if err != nil {
+		t.Fatalf("query migrated parallel approval current nodes: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	type currentNodeState struct {
+		nodeID     string
+		scheduling sql.NullString
+	}
+	currentNodes := map[string]currentNodeState{}
+	for rows.Next() {
+		var branch string
+		var state currentNodeState
+		if err := rows.Scan(&state.nodeID, &branch, &state.scheduling); err != nil {
+			t.Fatalf("scan migrated parallel approval current node: %v", err)
+		}
+		currentNodes[branch] = state
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate migrated parallel approval current nodes: %v", err)
+	}
+	if branch := currentNodes["split_a"]; branch.nodeID != "node-branch-a" || branch.scheduling.Valid {
+		t.Fatalf("pending approval branch current node = %+v", branch)
+	}
+	if branch := currentNodes["split_b"]; branch.nodeID != "node-branch-b" || !branch.scheduling.Valid || branch.scheduling.String != "interrupted" {
+		t.Fatalf("sibling branch current node = %+v", branch)
+	}
+}
+
+func TestOpenProjectsMigratesSeveralPendingApprovalsOnParallelBranches(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	seedLegacyParallelMigrationFixture(t, db, "project-parallel-approvals-migration", "task-parallel-approvals-migration", now)
+	for _, branch := range []struct {
+		key       string
+		nodeID    string
+		placement string
+		runID     string
+	}{
+		{"a", "node-branch-a", "placement-parallel-a", "run-parallel-a"},
+		{"b", "node-branch-b", "placement-parallel-b", "run-parallel-b"},
+	} {
+		execSeed(t, db, "approval transition group", `
+INSERT INTO workflow_transition_groups (id, source_node_id, transition_id, display_name)
+VALUES (?, ?, 'done', 'Done')`,
+			"group-parallel-"+branch.key+"-done",
+			branch.nodeID,
+		)
+		execSeed(t, db, "approval edge", `
+INSERT INTO workflow_edges (
+    id, transition_group_id, edge_key, target_node_id, requires_approval,
+    context_mode, input_bindings_json, output_requirements_json
+) VALUES (?, ?, 'done', ?, 1, 'new_session', '[]', '[]')`,
+			"edge-parallel-"+branch.key+"-done",
+			"group-parallel-"+branch.key+"-done",
+			branch.nodeID,
+		)
+		execSeed(t, db, "waiting branch placement", `
+UPDATE task_node_placements SET state = 'waiting_approval' WHERE id = ?`, branch.placement)
+		execSeed(t, db, "completed branch run", `
+UPDATE task_runs SET completed_at_unix_ms = ?, updated_at_unix_ms = ? WHERE id = ?`,
+			now+5,
+			now+5,
+			branch.runID,
+		)
+		execSeed(t, db, "pending branch transition", `
+INSERT INTO task_transitions (
+    id, task_id, source_run_id, source_placement_id, source_node_key, source_node_display_name,
+    transition_id, transition_display_name, workflow_revision_seen, actor, state,
+    commentary, output_values_json, created_at_unix_ms
+) VALUES (?, 'task-parallel-approvals-migration', ?, ?, ?, ?, 'done', 'Done', 1, 'agent', 'pending_approval', '', '{}', ?)`,
+			"transition-parallel-"+branch.key+"-approval",
+			branch.runID,
+			branch.placement,
+			"branch_"+branch.key,
+			"Branch "+strings.ToUpper(branch.key),
+			now+5,
+		)
+		execSeed(t, db, "pending branch transition edge", `
+INSERT INTO task_transition_edges (
+    id, task_transition_id, workflow_edge_id, edge_key,
+    target_node_id, target_node_key, target_node_display_name, target_node_kind,
+    state, context_mode, requires_approval, input_bindings_json, output_requirements_json, metadata_json
+) VALUES (?, ?, ?, 'done', 'node-done', 'done', 'Done', 'terminal', 'pending', 'new_session', 1, '[]', '[]', '{}')`,
+			"transition-edge-parallel-"+branch.key+"-approval",
+			"transition-parallel-"+branch.key+"-approval",
+			"edge-parallel-"+branch.key+"-done",
+		)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var approvalCount int
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT COUNT(*)
+FROM task_pending_approvals
+WHERE source_task_id = 'task-parallel-approvals-migration'`).Scan(&approvalCount); err != nil {
+		t.Fatalf("count migrated parallel approvals: %v", err)
+	}
+	if approvalCount != 2 {
+		t.Fatalf("migrated parallel approval count = %d, want 2", approvalCount)
+	}
+}
+
+func seedLegacyParallelMigrationFixture(t *testing.T, db *sql.DB, projectID, taskID string, now int64) {
+	t.Helper()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES (?, 'Project', ?, ?, '{}')`, projectID, now, now)
+	seedWorkflowGraph(t, db, projectID, now)
+	execSeed(t, db, "branch nodes", `
+INSERT INTO workflow_nodes (
+    id, workflow_id, node_key, kind, display_name, subagent_role, prompt_template, output_fields_json
+) VALUES (
+    'node-branch-a',
+    'workflow-1',
+    'branch_a',
+    'agent',
+    'Branch A',
+    'coder',
+    'A.',
+    '[]'
+), (
+    'node-branch-b',
+    'workflow-1',
+    'branch_b',
+    'agent',
+    'Branch B',
+    'coder',
+    'B.',
+    '[]'
+)`)
+	execSeed(t, db, "fanout edges", `
+DELETE FROM workflow_edges
+WHERE id = 'edge-done-1';
+INSERT INTO workflow_edges (
+    id, transition_group_id, edge_key, target_node_id, context_mode, input_bindings_json, output_requirements_json
+) VALUES (
+    'edge-split-a',
+    'group-done',
+    'split_a',
+    'node-branch-a',
+    'new_session',
+    '[]',
+    '[]'
+), (
+    'edge-split-b',
+    'group-done',
+    'split_b',
+    'node-branch-b',
+    'new_session',
+    '[]',
+    '[]'
+)`)
+	execSeed(t, db, "task", workflowSeedTaskSQL, taskID, "link-1", 1, "PAR-1", now, now)
+	execSeed(t, db, "fanout source placement", `
+INSERT INTO task_node_placements (
+    id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms
+) VALUES (
+    'placement-parallel-source',
+    ?,
+    'node-agent',
+    'completed',
+    ?,
+    ?
+)`, taskID, now, now+1)
+	execSeed(t, db, "fanout transition", `
+INSERT INTO task_transitions (
+    id, task_id, source_placement_id, source_node_key, source_node_display_name,
+    transition_id, transition_display_name, workflow_revision_seen, actor, state,
+    commentary, output_values_json, created_at_unix_ms, applied_at_unix_ms
+) VALUES (
+    'transition-parallel-split',
+    ?,
+    'placement-parallel-source',
+    'agent',
+    'Agent',
+    'done',
+    'Done',
+    1,
+    'agent',
+    'applied',
+    '',
+    '{}',
+    ?,
+    ?
+)`, taskID, now+2, now+2)
+	for _, branch := range []struct {
+		placementID string
+		nodeID      string
+		edgeID      string
+		edgeKey     string
+		runID       string
+	}{
+		{"placement-parallel-a", "node-branch-a", "edge-split-a", "split_a", "run-parallel-a"},
+		{"placement-parallel-b", "node-branch-b", "edge-split-b", "split_b", "run-parallel-b"},
+	} {
+		execSeed(t, db, "parallel placement", `
+INSERT INTO task_node_placements (
+    id, task_id, node_id, state, parallel_batch_transition_id, parallel_branch_edge_id,
+    created_at_unix_ms, updated_at_unix_ms
+) VALUES (?, ?, ?, 'active', 'transition-parallel-split', ?, ?, ?)`,
+			branch.placementID,
+			taskID,
+			branch.nodeID,
+			branch.edgeID,
+			now+3,
+			now+3,
+		)
+		execSeed(t, db, "parallel run", `
+INSERT INTO task_runs (
+    id, placement_id, workflow_revision_seen, created_at_unix_ms, updated_at_unix_ms
+) VALUES (?, ?, 1, ?, ?)`, branch.runID, branch.placementID, now+3, now+4)
+		execSeed(t, db, "fanout transition edge", `
+INSERT INTO task_transition_edges (
+    id, task_transition_id, workflow_edge_id, edge_key,
+    target_node_id, target_node_key, target_node_display_name, target_node_kind,
+    target_placement_id, state, context_mode, requires_approval,
+    input_bindings_json, output_requirements_json, metadata_json
+) VALUES (?, 'transition-parallel-split', ?, ?, ?, ?, ?, 'agent', ?, 'applied', 'new_session', 0, '[]', '[]', '{}')`,
+			"transition-edge-"+branch.edgeKey,
+			branch.edgeID,
+			branch.edgeKey,
+			branch.nodeID,
+			branch.edgeKey,
+			"Branch "+string(branch.edgeKey[len(branch.edgeKey)-1]),
+			branch.placementID,
+		)
+	}
+}
+
+func TestOpenProjectsLegacyActiveScriptRunToInterruptedCurrentNode(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	runUpdatedAt := now + 9
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-active-script-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedLegacyWorkflowSession(
+		t,
+		db,
+		"project-active-script-migration",
+		"workspace-active-script-migration",
+		"550e8400-e29b-41d4-a716-446655440006",
+		now,
+	)
+	seedWorkflowGraph(t, db, "project-active-script-migration", now)
+	execSeed(t, db, "script node", `
+UPDATE workflow_nodes
+SET kind = 'script', script_path = 'scripts/migrate'
+WHERE id = 'node-agent'`)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-active-script-migration", "link-1", 1, "SCR-1", now, now)
+	execSeed(t, db, "script placement", workflowSeedPlacementSQL, "placement-active-script-migration", "task-active-script-migration", "node-agent", now, now)
+	execSeed(t, db, "active script run", `
+INSERT INTO task_runs (
+    id,
+    placement_id,
+    session_id,
+    workflow_revision_seen,
+    created_at_unix_ms,
+    updated_at_unix_ms
+) VALUES (
+    'run-active-script-migration',
+    'placement-active-script-migration',
+    '550e8400-e29b-41d4-a716-446655440006',
+    1,
+    ?,
+    ?
+)`, now, runUpdatedAt)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var nodeID, schedulingState, interruptionReason, interruptionDetail string
+	var interruptedAt int64
+	var sessionID sql.NullString
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT
+    node_id,
+    scheduling_state,
+    interruption_reason,
+    interruption_detail_json,
+    interrupted_at_unix_ms,
+    session_id
+FROM task_current_nodes
+WHERE task_id = 'task-active-script-migration'`).Scan(
+		&nodeID,
+		&schedulingState,
+		&interruptionReason,
+		&interruptionDetail,
+		&interruptedAt,
+		&sessionID,
+	); err != nil {
+		t.Fatalf("query projected active script current node: %v", err)
+	}
+	if nodeID != "node-agent" ||
+		schedulingState != "interrupted" ||
+		interruptionReason != "server_restart" ||
+		interruptionDetail != `{"code":"workflow.execution.restarted","fields":{"operation":"recovery"}}` ||
+		interruptedAt != runUpdatedAt ||
+		sessionID.Valid {
+		t.Fatalf(
+			"projected active script current node = node=%q scheduling=%q reason=%q detail=%q interrupted_at=%d session=%+v",
+			nodeID,
+			schedulingState,
+			interruptionReason,
+			interruptionDetail,
+			interruptedAt,
+			sessionID,
+		)
+	}
+
+	var taskID, associationNodeID string
+	var associatedAt int64
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT session.task_id, association.node_id, association.associated_at_unix_ms
+FROM sessions session
+JOIN session_workflow_node_associations association ON association.session_id = session.id
+WHERE session.id = '550e8400-e29b-41d4-a716-446655440006'`).Scan(&taskID, &associationNodeID, &associatedAt); err != nil {
+		t.Fatalf("query projected active script Session association: %v", err)
+	}
+	if taskID != "task-active-script-migration" || associationNodeID != "node-agent" || associatedAt != runUpdatedAt {
+		t.Fatalf(
+			"projected active script Session association = task=%q node=%q associated_at=%d",
+			taskID,
+			associationNodeID,
+			associatedAt,
+		)
+	}
+}
+
+func TestOpenProjectsPreservesLegacyInterruptedAgentRun(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	interruptedAt := now + 5
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-interrupted-agent-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-interrupted-agent-migration", now)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-interrupted-agent-migration", "link-1", 1, "INT-1", now, now)
+	execSeed(t, db, "agent placement", workflowSeedPlacementSQL, "placement-interrupted-agent-migration", "task-interrupted-agent-migration", "node-agent", now, now)
+	execSeed(t, db, "interrupted agent run", `
+INSERT INTO task_runs (
+    id,
+    placement_id,
+    workflow_revision_seen,
+    created_at_unix_ms,
+    updated_at_unix_ms,
+    started_at_unix_ms,
+    interrupted_at_unix_ms,
+    interruption_reason,
+    interruption_detail_json
+) VALUES (
+    'run-interrupted-agent-migration',
+    'placement-interrupted-agent-migration',
+    1,
+    ?,
+    ?,
+    ?,
+    ?,
+    'user_interrupt',
+    '{"code":"workflow.execution.interrupted","fields":{"operation":"interrupt"}}'
+)`, now, now+9, now+1, interruptedAt)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var schedulingState, interruptionReason, interruptionDetail string
+	var projectedInterruptedAt int64
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT scheduling_state, interruption_reason, interruption_detail_json, interrupted_at_unix_ms
+FROM task_current_nodes
+WHERE task_id = 'task-interrupted-agent-migration'`).Scan(
+		&schedulingState,
+		&interruptionReason,
+		&interruptionDetail,
+		&projectedInterruptedAt,
+	); err != nil {
+		t.Fatalf("query projected interrupted agent current node: %v", err)
+	}
+	if schedulingState != "interrupted" ||
+		interruptionReason != "user_interrupt" ||
+		interruptionDetail != `{"code":"workflow.execution.interrupted","fields":{"operation":"interrupt"}}` ||
+		projectedInterruptedAt != interruptedAt {
+		t.Fatalf(
+			"projected interrupted agent current node = scheduling=%q reason=%q detail=%q interrupted_at=%d",
+			schedulingState,
+			interruptionReason,
+			interruptionDetail,
+			projectedInterruptedAt,
+		)
+	}
+}
+
+func TestOpenProjectsPreservesLegacyInterruptedScriptRun(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 58)
+	if err != nil {
+		t.Fatalf("open version 58 db: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	interruptedAt := now + 6
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-interrupted-script-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-interrupted-script-migration", now)
+	execSeed(t, db, "script node", `
+UPDATE workflow_nodes
+SET kind = 'script', script_path = 'scripts/migrate'
+WHERE id = 'node-agent'`)
+	execSeed(t, db, "task", workflowSeedTaskSQL, "task-interrupted-script-migration", "link-1", 1, "INT-2", now, now)
+	execSeed(t, db, "script placement", workflowSeedPlacementSQL, "placement-interrupted-script-migration", "task-interrupted-script-migration", "node-agent", now, now)
+	execSeed(t, db, "interrupted script run", `
+INSERT INTO task_runs (
+    id,
+    placement_id,
+    workflow_revision_seen,
+    created_at_unix_ms,
+    updated_at_unix_ms,
+    started_at_unix_ms,
+    interrupted_at_unix_ms,
+    interruption_reason,
+    interruption_detail_json
+) VALUES (
+    'run-interrupted-script-migration',
+    'placement-interrupted-script-migration',
+    1,
+    ?,
+    ?,
+    ?,
+    ?,
+    'script_failure',
+    '{"code":"workflow.execution.script_failure","fields":{"operation":"script"}}'
+)`, now, now+10, now+1, interruptedAt)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 58 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var schedulingState, interruptionReason, interruptionDetail string
+	var projectedInterruptedAt int64
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT scheduling_state, interruption_reason, interruption_detail_json, interrupted_at_unix_ms
+FROM task_current_nodes
+WHERE task_id = 'task-interrupted-script-migration'`).Scan(
+		&schedulingState,
+		&interruptionReason,
+		&interruptionDetail,
+		&projectedInterruptedAt,
+	); err != nil {
+		t.Fatalf("query projected interrupted script current node: %v", err)
+	}
+	if schedulingState != "interrupted" ||
+		interruptionReason != "script_failure" ||
+		interruptionDetail != `{"code":"workflow.execution.script_failure","fields":{"operation":"script"}}` ||
+		projectedInterruptedAt != interruptedAt {
+		t.Fatalf(
+			"projected interrupted script current node = scheduling=%q reason=%q detail=%q interrupted_at=%d",
+			schedulingState,
+			interruptionReason,
+			interruptionDetail,
+			projectedInterruptedAt,
+		)
 	}
 }
 
