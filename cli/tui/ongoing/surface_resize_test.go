@@ -119,7 +119,7 @@ func TestSurfaceVerticalExpansionMarksOnlyTheLiveBandAsRedrawable(t *testing.T) 
 	}
 }
 
-func TestLegacyResizeDoesNotMarkMutableBandAsRedrawable(t *testing.T) {
+func TestTmuxResizeDoesNotMarkMutableBandAsRedrawable(t *testing.T) {
 	var output bytes.Buffer
 	surface := NewSurfaceWithOptions(&output, SurfaceOptions{
 		TerminalResize: TerminalResizeTmuxWidthRehydration,
@@ -163,6 +163,65 @@ func TestLegacyResizeDoesNotMarkMutableBandAsRedrawable(t *testing.T) {
 			resizeOutput,
 			wantScroll,
 		)
+	}
+}
+
+func TestDirectTerminalExpansionErasesPreviousMutableBand(t *testing.T) {
+	var output bytes.Buffer
+	surface := NewSurfaceWithOptions(&output, SurfaceOptions{
+		TerminalResize: TerminalResizeWidthRehydration,
+		MarkdownLinks:  transcriptrender.MarkdownLinkLabelOnly,
+	})
+	initial := FrameInput{
+		Size: Size{Width: 80, Height: 18},
+		Sections: []FrameSection{{
+			Kind:  FrameSectionStatus,
+			Lines: []string{"OLD_LIVE_TOP", "OLD_LIVE_BOTTOM"},
+		}},
+	}
+	stream, err := analyzer.NewStream(pty.MustDimensions(18, 80))
+	if err != nil {
+		t.Fatalf("new terminal stream: %v", err)
+	}
+	feedFrame := func(operation string) {
+		t.Helper()
+		if err := stream.Feed(output.Bytes()); err != nil {
+			t.Fatalf("%s terminal bytes: %v", operation, err)
+		}
+		output.Reset()
+	}
+
+	if _, err := surface.ApplyTerminalMessage(committedAssistantMessage("IMMUTABLE"), initial); err != nil {
+		t.Fatalf("render direct-terminal transcript and live band: %v", err)
+	}
+	feedFrame("render direct-terminal transcript and live band")
+	if err := stream.Resize(pty.MustDimensions(28, 80)); err != nil {
+		t.Fatalf("expand terminal: %v", err)
+	}
+	expanded := FrameInput{
+		Size: Size{Width: 80, Height: 28},
+		Sections: []FrameSection{{
+			Kind:  FrameSectionStatus,
+			Lines: []string{"NEW_LIVE_TOP", "NEW_LIVE_BOTTOM"},
+		}},
+	}
+	if _, err := surface.Resize(expanded.Size, expanded); err != nil {
+		t.Fatalf("resize direct-terminal live band: %v", err)
+	}
+	feedFrame("resize direct-terminal live band")
+	snapshot, err := stream.ScreenSnapshot()
+	if err != nil {
+		t.Fatalf("snapshot after expansion: %v", err)
+	}
+
+	if screenContains(snapshot, "OLD_LIVE_TOP") || screenContains(snapshot, "OLD_LIVE_BOTTOM") {
+		t.Fatalf("direct-terminal expansion retained stale mutable rows: %q", snapshot.RenderText())
+	}
+	if got := screenRow(snapshot, 26); got != "NEW_LIVE_TOP" {
+		t.Fatalf("expanded live band first row = %q, want NEW_LIVE_TOP", got)
+	}
+	if got := screenRow(snapshot, 27); got != "NEW_LIVE_BOTTOM" {
+		t.Fatalf("expanded live band bottom row = %q, want NEW_LIVE_BOTTOM", got)
 	}
 }
 

@@ -90,15 +90,23 @@ func (s *Surface) writeFrameTransaction(frame FrameInput, immutableRows []string
 	var transaction strings.Builder
 	transaction.WriteString(resetScrollRegionAndOriginMode())
 	transaction.WriteString(semanticOutputSequence())
-	if s.terminalHeightExpanded(frame.Size) &&
-		s.terminalResize.bottomAnchorsVerticalExpansion() &&
-		s.immutableScrollbackProduced() {
-		writeImmutableRegionScrollForTerminalExpansion(
-			&transaction,
-			s.lastPaintedSize.Height,
-			frame.Size.Height,
-			previousHeight,
-		)
+	if s.terminalHeightExpanded(frame.Size) {
+		switch s.terminalResize {
+		case TerminalResizeWidthRehydration:
+			previous := s.visiblePreviousMutableBand(frame.Size)
+			if previous != nil {
+				writeMutableRowsErase(&transaction, previous.start, previous.end)
+			}
+		case TerminalResizeTmuxWidthRehydration:
+			if s.immutableScrollbackProduced() {
+				writeImmutableRegionScrollForTerminalExpansion(
+					&transaction,
+					s.lastPaintedSize.Height,
+					frame.Size.Height,
+					previousHeight,
+				)
+			}
+		}
 	}
 	if nextHeight > previousHeight && s.immutableScrollbackProduced() {
 		writeImmutableRegionScrollForLiveBandGrowth(&transaction, frame.Size.Height, previousHeight, nextHeight)
