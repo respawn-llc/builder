@@ -5,6 +5,7 @@ import { errorMessage, type ApprovalDecision, type AttentionItem } from "@/api";
 import type { QuestionAnswerInput } from "@/api";
 import { Button, MarkdownText, RadioGroup, RadioGroupItem, showStatusToast } from "@/ui";
 import { cx, fieldInputClassName } from "@/ui";
+import type { QuestionAnswerMutation } from "./TaskDetailQuestionAnswer";
 import {
   withApprovalQuestionDecision,
   withOrdinaryQuestionOption,
@@ -14,11 +15,6 @@ import {
 } from "./TaskDetailQuestionState";
 
 const neitherRadioValue = "neither";
-
-type QuestionAnswerMutation = Readonly<{
-  isPending: boolean;
-  mutateAsync(input: QuestionAnswerInput): Promise<unknown>;
-}>;
 
 export function QuestionFormView({
   answerQuestion,

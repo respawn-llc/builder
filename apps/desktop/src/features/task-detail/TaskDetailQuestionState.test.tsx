@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { type ComponentProps, useState } from "react";
@@ -5,6 +6,7 @@ import { I18nextProvider } from "react-i18next";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { AttentionItem, PendingAsk, QuestionAnswerInput } from "@/api";
+import { queryKeys } from "@/app-facade";
 import { appI18n, initializeI18n } from "@/i18n";
 import { QuestionBox } from "./TaskDetailQuestionForm";
 import {
@@ -15,28 +17,24 @@ import {
   withOrdinaryQuestionOption,
 } from "./TaskDetailQuestionState";
 import { QuestionFormView } from "./TaskDetailQuestionFormView";
-import { useTaskMutations } from "./useTaskDetailData";
 
 type QuestionAnswerMutation = ComponentProps<typeof QuestionFormView>["answerQuestion"];
 
-let pendingAskLookup: Readonly<{
-  data: readonly PendingAsk[] | undefined;
-  isFetching: boolean;
-  isSuccess: boolean;
-}>;
 let questionAnswerMutation: QuestionAnswerMutation;
+let listPendingAsks: (sessionID: string) => Promise<readonly PendingAsk[]>;
 
 vi.mock("@/app-facade", () => ({
+  queryKeys: {
+    pendingAsks: (sessionID: string | null) => ["pending-asks", sessionID],
+  },
+  useAppServices: () => ({
+    api: { listPendingAsks },
+  }),
   useOpenExternalLink: () => {
     return () => {
       return;
     };
   },
-}));
-
-vi.mock("./useTaskDetailData", () => ({
-  usePendingAsks: () => pendingAskLookup,
-  useTaskMutations: () => ({ answerQuestion: questionAnswerMutation }),
 }));
 
 beforeAll(async () => {
@@ -96,57 +94,8 @@ describe("questionPresentation", () => {
     });
   });
 
-  it("waits for a stale no-match pending-ask lookup to refresh before anchoring", async () => {
-    const attention = ordinaryAttention([], 0);
-    const hydratedAsk: PendingAsk = {
-      askID: attention.askID,
-      createdAt: "2026-07-23T00:00:00Z",
-      question: attention.message,
-      recommendedOptionIndex: 2,
-      sessionID: attention.sessionID,
-      suggestions: ["one", "two"],
-    };
-    const inputs: QuestionAnswerInput[] = [];
-    const selections: ReturnType<typeof emptyQuestionSelection>[] = [];
-    questionAnswerMutation = recordingQuestionAnswerMutation(inputs);
-    pendingAskLookup = { data: [], isFetching: true, isSuccess: true };
-    const user = userEvent.setup();
-
-    const view = render(
-      questionBoxTree(attention, (selection) => {
-        selections.push(selection);
-      }),
-    );
-
-    expect(selections).toHaveLength(0);
-    expect(screen.queryByRole("radio")).toBeNull();
-
-    pendingAskLookup = { data: [hydratedAsk], isFetching: false, isSuccess: true };
-    view.rerender(
-      questionBoxTree(attention, (selection) => {
-        selections.push(selection);
-      }),
-    );
-
-    await waitFor(() => {
-      expect(screen.getAllByRole("radio")[1]).toBeChecked();
-      expect(selections).toContainEqual(
-        expect.objectContaining({
-          provenance: "anchored-default",
-          selectedOption: 2,
-        }),
-      );
-    });
-
-    await user.click(screen.getByRole("button"));
-    await waitFor(() => {
-      expect(inputs).toEqual([
-        expect.objectContaining({
-          kind: "ordinary",
-          selectedOptionNumber: 2,
-        }),
-      ]);
-    });
+  it("refetches a fresh cached no-match before anchoring", async () => {
+    await expectPendingAskHydrationFromFreshCache();
   });
 
   it("anchors a settled freeform-only question without an option", () => {
@@ -441,6 +390,93 @@ describe("questionPresentation", () => {
   });
 });
 
+async function expectPendingAskHydrationFromFreshCache(): Promise<void> {
+  const attention = ordinaryAttention([], 0);
+  const hydratedAsk: PendingAsk = {
+    askID: attention.askID,
+    createdAt: "2026-07-23T00:00:00Z",
+    question: attention.message,
+    recommendedOptionIndex: 2,
+    sessionID: attention.sessionID,
+    suggestions: ["one", "two"],
+  };
+  const inputs: QuestionAnswerInput[] = [];
+  const selections: ReturnType<typeof emptyQuestionSelection>[] = [];
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+        staleTime: 4_000,
+      },
+    },
+  });
+  queryClient.setQueryData(queryKeys.pendingAsks(attention.sessionID), []);
+  const lookup = deferred<readonly PendingAsk[]>();
+  const requestedSessionIDs: string[] = [];
+  listPendingAsks = async (sessionID) => {
+    requestedSessionIDs.push(sessionID);
+    return lookup.promise;
+  };
+  questionAnswerMutation = recordingQuestionAnswerMutation(inputs);
+  const user = userEvent.setup();
+
+  const view = render(
+    questionBoxTree(attention, queryClient, (selection) => {
+      selections.push(selection);
+    }),
+  );
+
+  await waitFor(() => {
+    expect(requestedSessionIDs).toEqual([attention.sessionID]);
+  });
+  expect(selections).toHaveLength(0);
+  expect(screen.queryByRole("radio")).toBeNull();
+
+  lookup.resolve([hydratedAsk]);
+  view.rerender(
+    questionBoxTree(attention, queryClient, (selection) => {
+      selections.push(selection);
+    }),
+  );
+
+  await waitFor(() => {
+    expect(screen.getAllByRole("radio")[1]).toBeChecked();
+    expect(selections).toContainEqual(
+      expect.objectContaining({
+        provenance: "anchored-default",
+        selectedOption: 2,
+      }),
+    );
+  });
+
+  await user.click(screen.getByRole("button"));
+  await waitFor(() => {
+    expect(inputs).toEqual([
+      expect.objectContaining({
+        kind: "ordinary",
+        selectedOptionNumber: 2,
+      }),
+    ]);
+  });
+  queryClient.clear();
+}
+
+function deferred<T>(): Readonly<{
+  promise: Promise<T>;
+  resolve(value: T): void;
+}> {
+  let resolve: ((value: T) => void) | null = null;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return {
+    promise,
+    resolve(value): void {
+      resolve?.(value);
+    },
+  };
+}
+
 function ordinaryAttention(
   suggestions: readonly string[],
   recommendedOptionIndex: number,
@@ -569,11 +605,14 @@ function questionFormTree(
 
 function questionBoxTree(
   attention: AttentionItem,
+  queryClient: QueryClient,
   onSelectionChange: (selection: ReturnType<typeof emptyQuestionSelection>) => void,
 ) {
   return (
     <I18nextProvider i18n={appI18n}>
-      <QuestionBoxHarness attention={attention} onSelectionChange={onSelectionChange} />
+      <QueryClientProvider client={queryClient}>
+        <QuestionBoxHarness attention={attention} onSelectionChange={onSelectionChange} />
+      </QueryClientProvider>
     </I18nextProvider>
   );
 }
@@ -586,12 +625,11 @@ function QuestionBoxHarness({
   onSelectionChange: (selection: ReturnType<typeof emptyQuestionSelection>) => void;
 }>) {
   const [selection, setSelection] = useState(emptyQuestionSelection(attention.askID));
-  const mutations = useTaskMutations(attention.taskID);
   return (
     <QuestionBox
       attention={attention}
+      answerQuestion={questionAnswerMutation}
       disabled={false}
-      mutations={mutations}
       onSelectionStateChange={(nextSelection) => {
         setSelection(nextSelection);
         onSelectionChange(nextSelection);

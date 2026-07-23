@@ -11,19 +11,20 @@ import {
   type QuestionSelectionState,
 } from "./TaskDetailQuestionState";
 import { QuestionFormView } from "./TaskDetailQuestionFormView";
-import { usePendingAsks, type useTaskMutations } from "./useTaskDetailData";
+import type { QuestionAnswerMutation } from "./TaskDetailQuestionAnswer";
+import { usePendingAsks } from "./useTaskDetailData";
 
 export function QuestionBox({
   attention,
+  answerQuestion,
   disabled,
-  mutations,
   selectionState,
   onSelectionStateChange,
   taskId,
 }: Readonly<{
   attention: AttentionItem;
+  answerQuestion: QuestionAnswerMutation;
   disabled: boolean;
-  mutations: ReturnType<typeof useTaskMutations>;
   selectionState: QuestionSelectionState;
   onSelectionStateChange: (selection: QuestionSelectionState) => void;
   taskId: string;
@@ -31,7 +32,8 @@ export function QuestionBox({
   const { t } = useTranslation();
   const asks = usePendingAsks(attention.question?.kind === "approval" ? null : attention.sessionID);
   const pendingAsk = asks.data?.find((ask) => ask.askID === attention.askID);
-  const pendingAskLookupSettled = asks.isSuccess && !asks.isFetching;
+  const pendingAskLookupSettled =
+    asks.isSuccess && asks.isFetchedAfterMount && !asks.isFetching;
   const presentation = questionPresentation(attention, pendingAsk, pendingAskLookupSettled);
   const selection = selectionForAsk(selectionState, attention.askID);
   const effectiveSelection = anchorQuestionSelection(selection, presentation.defaultSelection);
@@ -46,7 +48,7 @@ export function QuestionBox({
   return (
     <Island aria-label={t("task.question")} className="p-[var(--space-4)]" level={1} radius="l" unpadded>
       <QuestionFormView
-        answerQuestion={mutations.answerQuestion}
+        answerQuestion={answerQuestion}
         attention={attention}
         disabled={disabled}
         onOpenLink={openLink}

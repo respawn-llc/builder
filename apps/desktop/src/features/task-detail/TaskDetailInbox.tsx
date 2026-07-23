@@ -148,8 +148,8 @@ function InboxItem({
       <div ref={focusTargetRef}>
         <QuestionBox
           attention={attention}
+          answerQuestion={mutations.answerQuestion}
           disabled={disabled}
-          mutations={mutations}
           onSelectionStateChange={(selection) => {
             onQuestionSelectionChange(attention.askID, selection);
           }}
