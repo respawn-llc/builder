@@ -31,6 +31,93 @@ func TestCreateMissingFileReturnsJSONString(t *testing.T) {
 	}
 }
 
+func TestSuccessfulAbsoluteForeignManagedWorktreeEditWarns(t *testing.T) {
+	base := t.TempDir()
+	currentRoot := filepath.Join(base, "current")
+	foreignRoot := filepath.Join(base, "foreign")
+	for _, dir := range []string{currentRoot, foreignRoot} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(currentRoot, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir nested workdir: %v", err)
+	}
+	foreignFile := filepath.Join(foreignRoot, "foreign.txt")
+	writeEditTestFile(t, foreignFile, "before\n", 0o644)
+	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot)
+	if err != nil {
+		t.Fatalf("managed worktree path context: %v", err)
+	}
+	tool := newTestTool(t, filepath.Join(currentRoot, "nested"), WithManagedWorktreePathContext(context))
+
+	result := callEdit(t, tool, map[string]any{
+		"path":       foreignFile,
+		"old_string": "before",
+		"new_string": "after",
+	})
+
+	requireEditSuccess(t, result)
+	if len(result.ModelWarnings) != 1 || result.ModelWarnings[0].Kind != tools.ModelWarningForeignManagedWorktreeEdit {
+		t.Fatalf("managed worktree warning = %+v", result.ModelWarnings)
+	}
+	assertEditTestFileContent(t, foreignFile, "after\n")
+}
+
+func TestEditManagedWorktreeWarningSkipsNonForeignOrFailedTargets(t *testing.T) {
+	base := t.TempDir()
+	currentRoot := filepath.Join(base, "current")
+	foreignRoot := filepath.Join(base, "foreign")
+	outsideRoot := t.TempDir()
+	for _, dir := range []string{currentRoot, foreignRoot} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(currentRoot, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir nested workdir: %v", err)
+	}
+	currentFile := filepath.Join(currentRoot, "current.txt")
+	foreignFile := filepath.Join(foreignRoot, "foreign.txt")
+	outsideFile := filepath.Join(outsideRoot, "outside.txt")
+	writeEditTestFile(t, currentFile, "before\n", 0o644)
+	writeEditTestFile(t, foreignFile, "before\n", 0o644)
+	writeEditTestFile(t, outsideFile, "before\n", 0o644)
+	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot)
+	if err != nil {
+		t.Fatalf("managed worktree path context: %v", err)
+	}
+	tool := newTestTool(t, filepath.Join(currentRoot, "nested"), WithManagedWorktreePathContext(context), WithAllowOutsideWorkspace(true))
+
+	tests := []struct {
+		name    string
+		path    string
+		old     string
+		new     string
+		isError bool
+	}{
+		{name: "relative current", path: filepath.Join("..", "current.txt"), old: "before", new: "after"},
+		{name: "absolute current", path: currentFile, old: "after", new: "again"},
+		{name: "absolute outside managed base", path: outsideFile, old: "before", new: "after"},
+		{name: "failed foreign", path: foreignFile, old: "missing", new: "after", isError: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := callEdit(t, tool, map[string]any{
+				"path":       tc.path,
+				"old_string": tc.old,
+				"new_string": tc.new,
+			})
+			if result.IsError != tc.isError {
+				t.Fatalf("error = %t, want %t; result=%q", result.IsError, tc.isError, toolResultText(t, result))
+			}
+			if len(result.ModelWarnings) != 0 {
+				t.Fatalf("unexpected managed worktree warning: %+v", result.ModelWarnings)
+			}
+		})
+	}
+}
+
 func TestExactReplaceAndReplaceAll(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "a.txt")

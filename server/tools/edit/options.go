@@ -21,3 +21,9 @@ func WithPathDenyPolicy(policy tools.PathDenyPolicy) Option {
 		t.pathDenyPolicy = policy
 	}
 }
+
+func WithManagedWorktreePathContext(context *tools.ManagedWorktreePathContext) Option {
+	return func(t *Tool) {
+		t.managedWorktreePathContext = context
+	}
+}

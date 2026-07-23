@@ -12,6 +12,7 @@ import (
 	"core/server/requestmemo"
 	"core/server/runlog"
 	"core/server/runtime"
+	"core/server/session"
 	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
@@ -125,6 +126,21 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 	}
 	sessionID := plan.Descriptor.SessionID()
 	workdir := headlessRuntimeWorkdir(plan)
+	var currentWorktreeRoot *string
+	if plan.WorktreeReminder != nil &&
+		plan.WorktreeReminder.Mode == session.WorktreeReminderModeEnter &&
+		strings.TrimSpace(plan.WorktreeReminder.WorktreePath) != "" {
+		root := plan.WorktreeReminder.WorktreePath
+		currentWorktreeRoot = &root
+	}
+	var managedWorktreePathContext *askquestion.ManagedWorktreePathContext
+	if strings.TrimSpace(plan.ActiveSettings.Worktrees.BaseDir) != "" {
+		context, contextErr := askquestion.NewManagedWorktreePathContext(plan.ActiveSettings.Worktrees.BaseDir, currentWorktreeRoot)
+		if contextErr != nil {
+			return nil, contextErr
+		}
+		managedWorktreePathContext = context
+	}
 	startLogLines := []string{
 		fmt.Sprintf("app.run_prompt.start session_id=%s workspace=%s workdir=%s model=%s", sessionID, plan.WorkspaceRoot, workdir, plan.ActiveSettings.Model),
 		fmt.Sprintf("config.settings path=%s created=%t", plan.Source.SettingsPath, plan.Source.CreatedDefaultConfig),
@@ -133,13 +149,14 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 		startLogLines = append(startLogLines, "config.source "+line)
 	}
 	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:      plan.ActiveSettings,
-		EnabledTools:  plan.EnabledTools,
-		Workdir:       workdir,
-		Sources:       plan.Source.Sources,
-		Headless:      true,
-		FastMode:      l.boot.FastModeState,
-		StartLogLines: startLogLines,
+		Settings:                   plan.ActiveSettings,
+		EnabledTools:               plan.EnabledTools,
+		Workdir:                    workdir,
+		ManagedWorktreePathContext: managedWorktreePathContext,
+		Sources:                    plan.Source.Sources,
+		Headless:                   true,
+		FastMode:                   l.boot.FastModeState,
+		StartLogLines:              startLogLines,
 		OnLoggingFailure: func(message string) {
 			if progress != nil {
 				progress.PublishRunPromptProgress(serverapi.RunPromptProgress{

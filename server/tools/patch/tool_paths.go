@@ -42,6 +42,12 @@ func WithPathDenyPolicy(policy tools.PathDenyPolicy) Option {
 	}
 }
 
+func WithManagedWorktreePathContext(context *tools.ManagedWorktreePathContext) Option {
+	return func(t *Tool) {
+		t.managedWorktreePathContext = context
+	}
+}
+
 const outsideWorkspaceRejectionInstruction = "If it's essential to the task, ask the user to make the edit manually at the end of the task."
 
 func (t *Tool) resolvePath(ctx context.Context, path string, mustExist bool, approvedOutside map[string]bool) (string, error) {

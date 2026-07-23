@@ -34,6 +34,7 @@ var errWorkspaceRootRequired = errors.New("workspace root is required")
 
 type LocalToolRuntimeContext struct {
 	WorkspaceRoot                   string
+	ManagedWorktreePathContext      *tools.ManagedWorktreePathContext
 	OwnerSessionID                  string
 	ExecutionCorrelation            *runtimeids.ExecutionCorrelation
 	ShellOutputMaxChars             int
@@ -82,6 +83,7 @@ func BuildLocalRuntimeHandler(def tools.Definition, ctx LocalToolRuntimeContext)
 			patchtool.WithAllowOutsideWorkspace(ctx.AllowNonCwdEdits),
 			patchtool.WithOutsideWorkspaceApprover(ctx.OutsideWorkspaceEditApprover),
 			patchtool.WithPathDenyPolicy(ctx.EditPathDenyPolicy),
+			patchtool.WithManagedWorktreePathContext(ctx.ManagedWorktreePathContext),
 		)
 	case tools.LocalRuntimeBuilderEdit:
 		if ctx.OutsideWorkspaceEditApprover == nil {
@@ -93,6 +95,7 @@ func BuildLocalRuntimeHandler(def tools.Definition, ctx LocalToolRuntimeContext)
 			edittool.WithAllowOutsideWorkspace(ctx.AllowNonCwdEdits),
 			edittool.WithOutsideWorkspaceApprover(ctx.OutsideWorkspaceEditApprover),
 			edittool.WithPathDenyPolicy(ctx.EditPathDenyPolicy),
+			edittool.WithManagedWorktreePathContext(ctx.ManagedWorktreePathContext),
 		)
 	case tools.LocalRuntimeBuilderAskQuestion:
 		if ctx.AskQuestionBroker == nil {
@@ -141,6 +144,38 @@ func (b *LocalToolRegistryBinding) Registry() *tools.Registry {
 }
 
 func (b *LocalToolRegistryBinding) Rebind(workspaceRoot string) error {
+	return b.RebindExecutionTarget(workspaceRoot, nil)
+}
+
+func (b *LocalToolRegistryBinding) RebindExecutionTarget(workspaceRoot string, currentWorktreeRoot *string) error {
+	if b == nil {
+		return fmt.Errorf("local tool registry binding is required")
+	}
+	trimmedRoot := strings.TrimSpace(workspaceRoot)
+	if trimmedRoot == "" {
+		return errWorkspaceRootRequired
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	managedWorktreePathContext, err := b.ctx.ManagedWorktreePathContext.WithCurrentWorktreeRoot(currentWorktreeRoot)
+	if err != nil {
+		return err
+	}
+	b.ctx.WorkspaceRoot = trimmedRoot
+	b.ctx.ManagedWorktreePathContext = managedWorktreePathContext
+	return b.rebuildLocked()
+}
+
+func (b *LocalToolRegistryBinding) ManagedWorktreePathContext() *tools.ManagedWorktreePathContext {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.ctx.ManagedWorktreePathContext
+}
+
+func (b *LocalToolRegistryBinding) RebindWithManagedWorktreePathContext(workspaceRoot string, managedWorktreePathContext *tools.ManagedWorktreePathContext) error {
 	if b == nil {
 		return fmt.Errorf("local tool registry binding is required")
 	}
@@ -151,6 +186,7 @@ func (b *LocalToolRegistryBinding) Rebind(workspaceRoot string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.ctx.WorkspaceRoot = trimmedRoot
+	b.ctx.ManagedWorktreePathContext = managedWorktreePathContext
 	return b.rebuildLocked()
 }
 
@@ -216,20 +252,21 @@ func (b *LocalToolRegistryBinding) rebuildLocked() error {
 }
 
 type LocalToolRegistryOptions struct {
-	WorkspaceRoot            string
-	OwnerSessionID           string
-	ExecutionCorrelation     *runtimeids.ExecutionCorrelation
-	Enabled                  []toolspec.ID
-	MinimumExecToBgTime      time.Duration
-	ShellOutputMaxChars      int
-	AllowNonCwdEdits         bool
-	SupportsVision           bool
-	Logger                   Logger
-	Background               *shelltool.Manager
-	ShellPostprocessor       *postprocess.Runner
-	TriggerHandoffController func() triggerhandofftool.TriggerHandoffController
-	QuestionsEnabledGetter   func() bool
-	GlobalConfigDir          string
+	WorkspaceRoot              string
+	ManagedWorktreePathContext *tools.ManagedWorktreePathContext
+	OwnerSessionID             string
+	ExecutionCorrelation       *runtimeids.ExecutionCorrelation
+	Enabled                    []toolspec.ID
+	MinimumExecToBgTime        time.Duration
+	ShellOutputMaxChars        int
+	AllowNonCwdEdits           bool
+	SupportsVision             bool
+	Logger                     Logger
+	Background                 *shelltool.Manager
+	ShellPostprocessor         *postprocess.Runner
+	TriggerHandoffController   func() triggerhandofftool.TriggerHandoffController
+	QuestionsEnabledGetter     func() bool
+	GlobalConfigDir            string
 }
 
 func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegistryBinding, *askquestion.AskQuestionBroker, *shelltool.Manager, error) {
@@ -265,6 +302,7 @@ func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegis
 	registry := tools.NewRegistry()
 	ctx := LocalToolRuntimeContext{
 		WorkspaceRoot:                trimmedRoot,
+		ManagedWorktreePathContext:   opts.ManagedWorktreePathContext,
 		OwnerSessionID:               opts.OwnerSessionID,
 		ExecutionCorrelation:         opts.ExecutionCorrelation,
 		ShellOutputMaxChars:          opts.ShellOutputMaxChars,

@@ -28,6 +28,7 @@ type Tool struct {
 	outsideWorkspaceSessionMu    sync.RWMutex
 	outsideWorkspaceSessionAllow bool
 	pathDenyPolicy               tools.PathDenyPolicy
+	managedWorktreePathContext   *tools.ManagedWorktreePathContext
 }
 
 func New(workspaceRoot string, workspaceOnly bool, opts ...Option) (*Tool, error) {
@@ -74,6 +75,10 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 			return json.Marshal(errorPayload(patchErr))
 		}), nil
 	}
+	warns, err := t.warnsForForeignManagedWorktree(doc)
+	if err != nil {
+		return tools.ErrorResult(c, err.Error()), nil
+	}
 	deletionFacts, err := t.apply(ctx, doc)
 	if err != nil {
 		return tools.ErrorResultWith(c, err.Error(), func(any) (json.RawMessage, error) {
@@ -86,12 +91,45 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 		"operations": len(doc.Hunks),
 	})
 	result := tools.Result{CallID: c.ID, Name: c.Name, Output: body}
+	if warns {
+		result.ModelWarnings = []tools.ModelWarning{tools.ForeignManagedWorktreeEditWarning()}
+	}
 	if len(deletionFacts) > 0 {
 		result.PresentationDelta = &transcript.ToolResultPresentationDelta{
 			WholeFileDeletionFacts: deletionFacts,
 		}
 	}
 	return result, nil
+}
+
+func (t *Tool) warnsForForeignManagedWorktree(doc patchformat.Document) (bool, error) {
+	if t.managedWorktreePathContext == nil {
+		return false, nil
+	}
+	for _, hunk := range doc.Hunks {
+		paths := make([]string, 0, 2)
+		switch op := hunk.(type) {
+		case patchformat.AddFile:
+			paths = append(paths, op.Path)
+		case patchformat.DeleteFile:
+			paths = append(paths, op.Path)
+		case patchformat.UpdateFile:
+			paths = append(paths, op.Path)
+			if strings.TrimSpace(op.MoveTo) != "" {
+				paths = append(paths, op.MoveTo)
+			}
+		}
+		for _, path := range paths {
+			resolved, err := t.resolvePathTarget(path, false)
+			if err != nil {
+				return false, err
+			}
+			if t.managedWorktreePathContext.WarnsFor(path, resolved) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func (t *Tool) apply(

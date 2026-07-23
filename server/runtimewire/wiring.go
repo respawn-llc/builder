@@ -11,6 +11,7 @@ import (
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/session"
+	"core/server/tools"
 	askquestion "core/server/tools"
 	triggerhandofftool "core/server/tools"
 	shelltool "core/server/tools/shell"
@@ -37,6 +38,7 @@ func (w *RuntimeWiring) Close() error {
 }
 
 type RuntimeWiringOptions struct {
+	ManagedWorktreePathContext          *tools.ManagedWorktreePathContext
 	Context                             context.Context
 	OnEvent                             func(evt runtime.Event)
 	Headless                            bool
@@ -85,18 +87,19 @@ func NewRuntimeWiringWithBackground(
 	}
 	var eng *runtime.Engine
 	localTools, askBroker, background, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
-		WorkspaceRoot:            workspaceRoot,
-		OwnerSessionID:           store.Meta().SessionID,
-		Enabled:                  enabledTools,
-		MinimumExecToBgTime:      time.Duration(active.MinimumExecToBgSeconds) * time.Second,
-		ShellOutputMaxChars:      active.ShellOutputMaxChars,
-		AllowNonCwdEdits:         active.AllowNonCwdEdits,
-		SupportsVision:           llm.LockedContractSupportsVisionInputs(store.Meta().Locked, active.Model),
-		Logger:                   logger,
-		Background:               background,
-		ShellPostprocessor:       shellPostprocessor,
-		GlobalConfigDir:          opts.GlobalConfigDir,
-		TriggerHandoffController: func() triggerhandofftool.TriggerHandoffController { return eng },
+		WorkspaceRoot:              workspaceRoot,
+		ManagedWorktreePathContext: opts.ManagedWorktreePathContext,
+		OwnerSessionID:             store.Meta().SessionID,
+		Enabled:                    enabledTools,
+		MinimumExecToBgTime:        time.Duration(active.MinimumExecToBgSeconds) * time.Second,
+		ShellOutputMaxChars:        active.ShellOutputMaxChars,
+		AllowNonCwdEdits:           active.AllowNonCwdEdits,
+		SupportsVision:             llm.LockedContractSupportsVisionInputs(store.Meta().Locked, active.Model),
+		Logger:                     logger,
+		Background:                 background,
+		ShellPostprocessor:         shellPostprocessor,
+		GlobalConfigDir:            opts.GlobalConfigDir,
+		TriggerHandoffController:   func() triggerhandofftool.TriggerHandoffController { return eng },
 		QuestionsEnabledGetter: func() bool {
 			if eng == nil {
 				return true

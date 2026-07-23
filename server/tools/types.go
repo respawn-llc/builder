@@ -44,6 +44,7 @@ type Result struct {
 	Terminal      bool                     `json:"terminal,omitempty"`
 	Summary       *string                  `json:"summary,omitempty"`
 	CondensedText *string                  `json:"condensed_text,omitempty"`
+	ModelWarnings []ModelWarning           `json:"-"`
 	Presentation  *transcript.ToolCallMeta `json:"presentation,omitempty"`
 	// PresentationDelta is transient handler output. Runtime consumes it before
 	// persistence and materializes Presentation from authoritative call input.
