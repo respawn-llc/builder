@@ -335,7 +335,7 @@ func waitForFileText(t *testing.T, path string) string {
 			t.Fatalf("ReadFile %s: %v", path, err)
 		}
 		text = strings.TrimSpace(string(body))
-		return true
+		return text != ""
 	}, "timed out waiting for text file at %s", path)
 	return text
 }

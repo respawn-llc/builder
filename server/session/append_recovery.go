@@ -18,7 +18,12 @@ const (
 	maxAppendRecoveryRecordSize = int64(16 << 20)
 	maxAppendRecoverySuffixSize = int64(16 << 20)
 	appendRecoveryPrepared      = appendRecoveryPhase("prepared")
-	appendRecoveryCommitted     = appendRecoveryPhase("committed")
+	// appendRecoveryEventIntent marks a transaction whose durable commit
+	// boundary is the fully fsynced event-log suffix. The recovery record is
+	// written before the append, so restart can deterministically roll back a
+	// partial suffix or publish the recorded post-metadata after a full one.
+	appendRecoveryEventIntent = appendRecoveryPhase("event_intent")
+	appendRecoveryCommitted   = appendRecoveryPhase("committed")
 )
 
 type appendRecoveryPhase string
@@ -101,6 +106,24 @@ func (s *Store) writeAppendRecoveryRecord(record appendRecoveryRecord) error {
 	if int64(len(encoded)) > maxAppendRecoveryRecordSize {
 		return errors.New("append recovery record exceeds size limit")
 	}
+	info, statErr := os.Stat(path)
+	switch {
+	case statErr == nil:
+		if info.Size() != 0 {
+			return errors.New("append recovery record must be acknowledged before replacement")
+		}
+		fp, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+		if err != nil {
+			return err
+		}
+		written, err := fp.Write(encoded)
+		if err == nil && written != len(encoded) {
+			err = io.ErrShortWrite
+		}
+		return syncAndClose(fp, err)
+	case !errors.Is(statErr, os.ErrNotExist):
+		return statErr
+	}
 	tmp, err := os.CreateTemp(s.sessionDir, "."+appendRecoveryFile+".tmp-*")
 	if err != nil {
 		return err
@@ -128,14 +151,14 @@ func (s *Store) clearAppendRecoveryRecord() error {
 	if err := validateRecoveryTarget(path); err != nil {
 		return err
 	}
-	err := os.Remove(path)
+	fp, err := os.OpenFile(path, os.O_WRONLY, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	return syncRecoveryDirectory(path)
+	return syncAndClose(fp, fp.Truncate(0))
 }
 
 func (s *Store) readAppendRecoveryRecord() (*appendRecoveryRecord, error) {
@@ -149,6 +172,9 @@ func (s *Store) readAppendRecoveryRecord() (*appendRecoveryRecord, error) {
 	encoded, readErr := io.ReadAll(io.LimitReader(fp, maxAppendRecoveryRecordSize+1))
 	if err := errors.Join(readErr, fp.Close()); err != nil {
 		return nil, err
+	}
+	if len(encoded) == 0 {
+		return nil, nil
 	}
 	if int64(len(encoded)) > maxAppendRecoveryRecordSize {
 		return nil, errors.New("append recovery record exceeds size limit")
@@ -173,7 +199,9 @@ func (record appendRecoveryRecord) validate(sessionID string) error {
 		return fmt.Errorf("append recovery version %d is unsupported", record.Version)
 	case record.Pre.Meta.SessionID != sessionID || record.Post.Meta.SessionID != sessionID:
 		return fmt.Errorf("append recovery metadata does not match session %q", sessionID)
-	case record.Phase != appendRecoveryPrepared && record.Phase != appendRecoveryCommitted:
+	case record.Phase != appendRecoveryPrepared &&
+		record.Phase != appendRecoveryEventIntent &&
+		record.Phase != appendRecoveryCommitted:
 		return fmt.Errorf("append recovery phase %q is invalid", record.Phase)
 	case preErr != nil || postErr != nil || preDigest != record.Pre.SHA256 || postDigest != record.Post.SHA256:
 		return errors.Join(preErr, postErr, errors.New("append recovery metadata digest is invalid"))

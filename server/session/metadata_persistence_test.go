@@ -26,12 +26,14 @@ type recordingPersistenceObserver struct {
 	snapshot       PersistedStoreSnapshot
 	reconciliation PersistedEventLogReconciliation
 	called         bool
+	callCount      int
 	reconciled     bool
 	err            error
 }
 
 func (r *recordingPersistenceObserver) ObservePersistedStore(_ context.Context, snapshot PersistedStoreSnapshot) error {
 	r.called = true
+	r.callCount++
 	r.snapshot = snapshot
 	return r.err
 }

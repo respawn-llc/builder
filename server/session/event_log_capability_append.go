@@ -284,7 +284,7 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 	}
 	endByteCursor := &endOffset
 	s.meta = postMeta
-	observation, err := s.persistMetaLocked()
+	observation, err := s.persistMetaAfterRecoveryVerifiedLocked()
 	if err != nil {
 		s.mu.Unlock()
 		return recordAppendOutcome{
@@ -304,10 +304,9 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 }
 
 func (s *Store) appendCurrentRecordsLocked(log *currentEventLog, records []EventRecord, preMeta Meta, postMeta Meta) (int64, error) {
-	var recovery appendRecoveryRecord
 	return log.appendRecordsWithTransaction(records, &currentEventLogAppendTransaction{
 		prepare: func(startOffset int64, payload []byte) error {
-			record, err := s.newAppendRecoveryRecord(preMeta, postMeta, appendRecoveryPrepared, &appendRecoveryEvents{
+			record, err := s.newAppendRecoveryRecord(preMeta, postMeta, appendRecoveryEventIntent, &appendRecoveryEvents{
 				StartOffset: startOffset, EndOffset: startOffset + int64(len(payload)),
 				EventCount: len(records), FirstSequence: records[0].Seq(),
 				LastSequence: records[len(records)-1].Seq(), SHA256: digestBytes(payload),
@@ -315,12 +314,7 @@ func (s *Store) appendCurrentRecordsLocked(log *currentEventLog, records []Event
 			if err != nil {
 				return err
 			}
-			recovery = record
-			return s.writeAppendRecoveryRecord(recovery)
-		},
-		commit: func() error {
-			recovery.Phase = appendRecoveryCommitted
-			return s.writeAppendRecoveryRecord(recovery)
+			return s.writeAppendRecoveryRecord(record)
 		},
 		rollback: s.rollbackPreparedCurrentEventAppend,
 	})

@@ -110,6 +110,8 @@ func TestDispatcherFailurePresentationDoesNotHoldActiveProcessSlots(t *testing.T
 	}
 	waitForDispatcherProcessCount(t, startDir, 64)
 	waitForDispatcherProcessLaunchAfterSaturation(t, dispatcher, startDir, 65)
+	drainDispatcherIssueCount(t, dispatcher.Issues(), 64)
+	drainDispatcherIssueCount(t, dispatcher.Issues(), 65)
 }
 
 func TestDispatcherCoalescesPendingFailureCountAndLatestDiagnostic(t *testing.T) {
@@ -353,6 +355,20 @@ func waitForDispatcherProcessLaunchAfterSaturation(
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("later hook did not launch after issue presentation saturated; process count = %d", dispatcherProcessCount(t, dir))
+}
+
+func drainDispatcherIssueCount(t *testing.T, issues <-chan lifecyclehook.Issue, want int) {
+	t.Helper()
+	count := 0
+	deadline := time.Now().Add(5 * time.Second)
+	for count < want {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			t.Fatalf("received lifecycle issue count = %d, want at least %d", count, want)
+		}
+		issue := waitForDispatcherIssue(t, issues, remaining)
+		count += issue.Count
+	}
 }
 
 func mustDispatcherProcessWorkdir() string {
