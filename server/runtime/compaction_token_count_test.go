@@ -281,3 +281,24 @@ func TestShouldAutoCompactSkipsPreciseCountWhenFarBelowThreshold(t *testing.T) {
 		)
 	}
 }
+
+func TestShouldAutoCompactMemoizesPreciseCountForUnchangedRequest(t *testing.T) {
+	client := &preciseCompactionClient{inputTokenCount: 96_000}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+		Model:                 "gpt-5",
+		ContextWindowTokens:   400_000,
+		AutoCompactTokenLimit: 100_000,
+	})
+	engine.setLastUsage(llm.Usage{InputTokens: 95_000, WindowTokens: 400_000})
+
+	first := engine.shouldAutoCompactWithContext(context.Background())
+	second := engine.shouldAutoCompactWithContext(context.Background())
+	if first || second || client.countCalls != 1 {
+		t.Fatalf(
+			"unchanged auto-compaction decisions/count-calls = %t/%t/%d, want false/false/one",
+			first,
+			second,
+			client.countCalls,
+		)
+	}
+}
