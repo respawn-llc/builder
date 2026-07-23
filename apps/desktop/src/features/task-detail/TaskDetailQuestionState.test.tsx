@@ -5,7 +5,7 @@ import { type ComponentProps, useState } from "react";
 import { I18nextProvider } from "react-i18next";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import type { AttentionItem, PendingAsk, QuestionAnswerInput } from "@/api";
+import type { PendingAsk, QuestionAnswerInput, QuestionAttentionItem } from "@/api";
 import { queryKeys } from "@/app-facade";
 import { appI18n, initializeI18n } from "@/i18n";
 import { QuestionBox } from "./TaskDetailQuestionForm";
@@ -19,6 +19,7 @@ import {
 import { QuestionFormView } from "./TaskDetailQuestionFormView";
 
 type QuestionAnswerMutation = ComponentProps<typeof QuestionFormView>["answerQuestion"];
+type FixtureQuestionAttention = QuestionAttentionItem & Readonly<{ sessionID: string }>;
 
 let questionAnswerMutation: QuestionAnswerMutation;
 let listPendingAsks: (sessionID: string) => Promise<readonly PendingAsk[]>;
@@ -522,11 +523,9 @@ function deferred<T>(): Readonly<{
 function ordinaryAttention(
   suggestions: readonly string[],
   recommendedOptionIndex: number,
-): AttentionItem {
+): FixtureQuestionAttention {
   return {
-    approvalSnapshot: null,
     askID: "ask-1",
-    detailJSON: "",
     id: "attention-1",
     kind: "question",
     message: "Choose an option",
@@ -544,12 +543,13 @@ function ordinaryAttention(
     taskID: "task-1",
     taskShortID: "TASK-1",
     taskTitle: "Task",
-    taskTransitionID: "",
     workflowID: "workflow-1",
   };
 }
 
-function approvalAttention(decisions: readonly ("allow_once" | "allow_session" | "deny")[]): AttentionItem {
+function approvalAttention(
+  decisions: readonly ("allow_once" | "allow_session" | "deny")[],
+): FixtureQuestionAttention {
   return {
     ...ordinaryAttention([], 0),
     question: {
@@ -566,7 +566,7 @@ function QuestionFormHarness({
   presentation,
 }: Readonly<{
   answerQuestion: QuestionAnswerMutation;
-  attention: AttentionItem;
+  attention: QuestionAttentionItem;
   initialSelection: ReturnType<typeof emptyQuestionSelection>;
   presentation: ReturnType<typeof questionPresentation>;
 }>) {
@@ -619,7 +619,7 @@ function expectSameQuestionRequestID(inputs: readonly QuestionAnswerInput[]): vo
 }
 
 function renderQuestionForm(
-  attention: AttentionItem,
+  attention: QuestionAttentionItem,
   presentation: ReturnType<typeof questionPresentation>,
   selection: ReturnType<typeof emptyQuestionSelection>,
   answerQuestion: QuestionAnswerMutation,
@@ -628,7 +628,7 @@ function renderQuestionForm(
 }
 
 function questionFormTree(
-  attention: AttentionItem,
+  attention: QuestionAttentionItem,
   presentation: ReturnType<typeof questionPresentation>,
   selection: ReturnType<typeof emptyQuestionSelection>,
   answerQuestion: QuestionAnswerMutation,
@@ -646,7 +646,7 @@ function questionFormTree(
 }
 
 function questionBoxTree(
-  attention: AttentionItem,
+  attention: QuestionAttentionItem,
   queryClient: QueryClient,
   onSelectionChange: (selection: ReturnType<typeof emptyQuestionSelection>) => void,
 ) {
@@ -663,7 +663,7 @@ function QuestionBoxHarness({
   attention,
   onSelectionChange,
 }: Readonly<{
-  attention: AttentionItem;
+  attention: QuestionAttentionItem;
   onSelectionChange: (selection: ReturnType<typeof emptyQuestionSelection>) => void;
 }>) {
   const [selection, setSelection] = useState(emptyQuestionSelection(attention.askID));

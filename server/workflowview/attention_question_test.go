@@ -120,24 +120,22 @@ func TestAttentionQuestionRecoveryUsesDormantNewestActiveSegment(t *testing.T) {
 	}
 }
 
-func TestAttentionQuestionRecoveryFallsBackLocally(t *testing.T) {
+func TestAttentionQuestionRecoveryPropagatesTranscriptFailure(t *testing.T) {
 	ctx, metadataStore, workflowStore, binding := newWorkflowViewTestContextStore(t)
 	task, _ := createWorkflowViewWaitingAskTask(t, ctx, metadataStore, workflowStore, binding, "session-fallback", "ask-fallback")
-	transcripts := &failingActiveTranscriptProvider{}
+	sourceErr := errors.New("transcript unavailable")
+	transcripts := &failingActiveTranscriptProvider{err: sourceErr}
 	attention, err := NewAttention(metadataStore.Queries(), NewTaskProjector(), transcripts, nil)
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)
 	}
 
-	response, err := attention.ListTask(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(task.ID)})
-	if err != nil {
-		t.Fatalf("ListTask: %v", err)
+	_, err = attention.ListTask(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(task.ID)})
+	if !errors.Is(err, sourceErr) {
+		t.Fatalf("ListTask error = %v, want transcript error %v", err, sourceErr)
 	}
-	if transcripts.calls != 1 ||
-		len(response.Items) != 1 ||
-		!attentionPointerEquals(response.Items[0].AskID, "ask-fallback") ||
-		response.Items[0].Message != pendingQuestionFallbackMessage {
-		t.Fatalf("fallback attention = %+v, transcript calls=%d", response.Items, transcripts.calls)
+	if transcripts.calls != 1 {
+		t.Fatalf("transcript calls = %d, want 1", transcripts.calls)
 	}
 }
 
@@ -180,11 +178,12 @@ func (p sessionViewActiveTranscriptProvider) SessionNewestActiveSegmentQuestions
 
 type failingActiveTranscriptProvider struct {
 	calls int
+	err   error
 }
 
 func (p *failingActiveTranscriptProvider) SessionNewestActiveSegmentQuestions(context.Context, string) ([]PendingQuestionTranscriptEntry, error) {
 	p.calls++
-	return nil, errors.New("transcript unavailable")
+	return nil, p.err
 }
 
 func attentionQuestionInt(value int) *int {

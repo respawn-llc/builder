@@ -577,7 +577,7 @@ func TestTaskDetailProjectsRuntimeApprovalWaitingAskPrompt(t *testing.T) {
 	assertRuntimeApprovalQuestionAttention(t, list.Items, string(task.ID), string(started.RunID), sessionID, askID)
 }
 
-func TestTaskDetailPendingQuestionFallsBackWhenTranscriptLookupFails(t *testing.T) {
+func TestTaskDetailPendingQuestionAttentionSurfacesTranscriptLookupFailure(t *testing.T) {
 	ctx, store, workflowStore, binding, view := newWorkflowViewTestContextFixture(t)
 	sessionID := "session-missing-question-transcript"
 	task, _ := createWorkflowViewWaitingAskTask(t, ctx, store, workflowStore, binding, sessionID, "ask-missing-transcript")
@@ -589,12 +589,8 @@ func TestTaskDetailPendingQuestionFallsBackWhenTranscriptLookupFails(t *testing.
 	if detail.AttentionCount != 1 {
 		t.Fatalf("attention count = %d, want 1", detail.AttentionCount)
 	}
-	attention, err := view.taskAttention(t).ListTask(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(task.ID)})
-	if err != nil {
-		t.Fatalf("ListTaskAttention: %v", err)
-	}
-	if len(attention.Items) != 1 || attention.Items[0].Kind != "question" || !attentionPointerEquals(attention.Items[0].AskID, "ask-missing-transcript") || attention.Items[0].Message != pendingQuestionFallbackMessage {
-		t.Fatalf("attention = %+v", attention.Items)
+	if _, err := view.taskAttention(t).ListTask(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(task.ID)}); err == nil {
+		t.Fatal("ListTaskAttention accepted an unavailable transcript source")
 	}
 }
 

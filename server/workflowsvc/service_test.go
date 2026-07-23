@@ -145,9 +145,9 @@ type recordingWorkflowTaskPromptSource struct {
 	calls int
 }
 
-func (p *recordingWorkflowTaskPromptSource) ListPendingPrompts(string) []workflowview.PendingPromptSnapshot {
+func (p *recordingWorkflowTaskPromptSource) ListPendingPrompts(string) ([]workflowview.PendingPromptSnapshot, error) {
 	p.calls++
-	return nil
+	return nil, nil
 }
 
 func TestServiceCreatesValidatesLinksAndStartsDefaultWorkflowTask(t *testing.T) {
