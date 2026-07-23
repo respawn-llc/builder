@@ -94,6 +94,8 @@ func workflowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	switch args[0] {
 	case "create":
 		return workflowCreateSubcommand(args[1:], stdout, stderr)
+	case "delete":
+		return workflowDeleteSubcommand(args[1:], stdout, stderr)
 	case "update":
 		return workflowUpdateSubcommand(args[1:], stdout, stderr)
 	case "list":
@@ -1444,15 +1446,19 @@ func writeWorkflowUnlinkBlockers(stderr io.Writer, blockers []serverapi.Workflow
 	}
 	fmt.Fprintln(stderr, "Cannot unlink; resolve these blockers first:")
 	for _, blocker := range blockers {
-		if blocker.Count > 0 {
-			fmt.Fprintf(stderr, "- [%s] %s (%d)\n", blocker.Code, blocker.Message, blocker.Count)
-		} else {
-			fmt.Fprintf(stderr, "- [%s] %s\n", blocker.Code, blocker.Message)
-		}
+		writeWorkflowBlockerLine(stderr, blocker.Code, blocker.Message, int64(blocker.Count))
 		for _, task := range blocker.Tasks {
 			fmt.Fprintf(stderr, "    %s: %s\n", task.ShortID, task.Title)
 		}
 	}
+}
+
+func writeWorkflowBlockerLine(w io.Writer, code string, message string, count int64) {
+	if count > 0 {
+		fmt.Fprintf(w, "- [%s] %s (%d)\n", code, message, count)
+		return
+	}
+	fmt.Fprintf(w, "- [%s] %s\n", code, message)
 }
 
 func workflowDisplayNameFromKey(key string) string {

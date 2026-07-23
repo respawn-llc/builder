@@ -406,6 +406,7 @@
 - Agents can build and edit complete Workflow definitions with high-level commands. Import and export are separate sharing features.
 - CLI command grouping is not a compatibility contract. The documented behavior, accepted data, and machine-readable output are compatibility contracts.
 - CLI output includes stable identifiers needed by later commands.
+- `kent workflow delete <workflow>` reports the deletion impact and makes no changes unless `--confirm` is present. A confirmed deletion submits the previewed Workflow Version and affected Project, Project Workflow Link, and Task counts; if the impact changes or deletion has blockers, Kent deletes nothing and reports the blockers.
 - The plain-text `kent task complete` acknowledgement omits identifiers. JSON completion output remains machine-readable.
 - Project label catalog and task-assignment commands live under `kent task label`; there is no top-level label command. Catalog commands create, list, rename, and delete labels in the selected Project. Human catalog output includes readable names and stable UUIDs.
 - Label selectors use repeatable `--label <name-or-uuid>`. Canonical UUID v4 text selects by identity; every other value is trimmed and matched against the complete Project label name with the label catalog's case-insensitive Unicode comparison. Label selector values are literal and are never comma-split.

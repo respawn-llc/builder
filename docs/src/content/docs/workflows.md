@@ -290,6 +290,13 @@ workflow_uuid="<uuid-from-workflow-list>"
 kent workflow inspect "$workflow_uuid" --summary
 ```
 
+Workflow deletion cascades through the workflow definition, Project links, and Tasks. Run the command without `--confirm` to inspect the impact, then repeat it with `--confirm`; Kent deletes nothing if the impact changes or blockers remain.
+
+```bash
+kent workflow delete "$workflow_uuid"
+kent workflow delete "$workflow_uuid" --confirm
+```
+
 Project-filtered workflow listing returns the default first, followed by project activity and name. Task creation uses an explicit linked `--workflow` when supplied, otherwise the project default, or the lone linked workflow when no default exists. Several links without a default require an explicit selector.
 
 ```bash

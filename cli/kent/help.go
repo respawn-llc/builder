@@ -161,6 +161,7 @@ var (
 	worktreeDeleteUsage     = leafCommandUsage(config.Command+" worktree delete [--session <id>] [--force] [--delete-branch] [--json] <selector>", "Delete a worktree; agent shell commands always retain branches.")
 	workflowUsage           = commandUsage{helpFile: "workflow.txt"}
 	workflowCreateUsage     = leafCommandUsage(config.Command+" workflow create [--description <text>] [--json] <name>", "Create a workflow with `backlog` start and `done` terminal nodes.")
+	workflowDeleteUsage     = leafCommandUsage(config.Command+" workflow delete <workflow> [--confirm] [--json]", "Preview or permanently delete a workflow.", "", "Without `--confirm`, the command reports the deletion impact and makes no changes.")
 	workflowListUsage       = leafCommandUsage(config.Command+" workflow list [--project <path-or-id>] [--page-size <n>] [--page-token <token>] [--json]", "List workflow definitions.")
 	workflowNodeUsage       = leafCommandUsage(config.Command+" workflow node <add|update> ...", "Add or change workflow nodes.")
 	workflowNodeAddUsage    = leafCommandUsage(config.Command+" workflow node add <workflow> --key <key> --kind <kind> [flags]", "Add a node to a workflow.")
