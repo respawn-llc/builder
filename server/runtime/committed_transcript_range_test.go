@@ -303,6 +303,88 @@ func TestStepLoopPersistsReasoningAsDetailLocalEntry(t *testing.T) {
 	}
 }
 
+func TestDeveloperContextTranscriptRowsRespectVisibilityMatrix(t *testing.T) {
+	tests := []struct {
+		messageType llm.MessageType
+		visibility  transcript.EntryVisibility
+	}{
+		{llm.MessageTypeSubagents, transcript.EntryVisibilityDetail},
+		{llm.MessageTypeWorkflowMode, transcript.EntryVisibilityOngoingCollapsed},
+		{llm.MessageTypeWorktreeMode, transcript.EntryVisibilityOngoing},
+		{llm.MessageTypeWorktreeModeExit, transcript.EntryVisibilityOngoing},
+		{llm.MessageTypeGoal, transcript.EntryVisibilityOngoing},
+		{llm.MessageTypeActiveGoalContinuation, transcript.EntryVisibilityDetail},
+		{llm.MessageTypeBackgroundNotice, transcript.EntryVisibilityOngoingCollapsed},
+	}
+
+	for _, test := range tests {
+		facts := TranscriptCommittedRowFactsFromEvent(Event{
+			Kind: EventConversationUpdated,
+			Message: llm.Message{
+				Role:        llm.RoleDeveloper,
+				MessageType: textutil.Value(test.messageType),
+				Content:     textutil.Value("context"),
+			},
+		})
+		if len(facts) != 1 ||
+			facts[0].Kind != TranscriptCommittedRowFactNotice ||
+			facts[0].Notice == nil ||
+			facts[0].Notice.MessageType != test.messageType ||
+			facts[0].Visibility != test.visibility {
+			t.Fatalf("developer-context transcript rows = %+v", facts)
+		}
+	}
+}
+
+func TestAssistantTranscriptRowsRespectPhaseVisibility(t *testing.T) {
+	tests := []struct {
+		phase      llm.MessagePhase
+		visibility transcript.EntryVisibility
+	}{
+		{llm.MessagePhaseCommentary, transcript.EntryVisibilityDetail},
+		{llm.MessagePhaseFinal, transcript.EntryVisibilityOngoing},
+	}
+
+	for _, test := range tests {
+		facts := TranscriptCommittedRowFactsFromEvent(Event{
+			Kind: EventAssistantMessage,
+			Message: llm.Message{
+				Role:    llm.RoleAssistant,
+				Phase:   textutil.Value(test.phase),
+				Content: textutil.Value("response"),
+			},
+		})
+		if len(facts) != 1 ||
+			facts[0].Kind != TranscriptCommittedRowFactAssistant ||
+			facts[0].Assistant == nil ||
+			facts[0].Assistant.Phase != test.phase ||
+			facts[0].Visibility != test.visibility {
+			t.Fatalf("assistant transcript rows = %+v", facts)
+		}
+	}
+}
+
+func TestBackgroundNoticeTranscriptRowPreservesExitCode(t *testing.T) {
+	exitCode := 2
+	facts := TranscriptCommittedRowFactsFromEvent(Event{
+		Kind: EventConversationUpdated,
+		Message: llm.Message{
+			Role:               llm.RoleDeveloper,
+			MessageType:        textutil.Value(llm.MessageTypeBackgroundNotice),
+			Content:            textutil.Value("background"),
+			BackgroundExitCode: &exitCode,
+		},
+	})
+	if len(facts) != 1 ||
+		facts[0].Kind != TranscriptCommittedRowFactNotice ||
+		facts[0].Notice == nil ||
+		facts[0].Notice.MessageType != llm.MessageTypeBackgroundNotice ||
+		facts[0].Notice.BackgroundExitCode == nil ||
+		*facts[0].Notice.BackgroundExitCode != exitCode {
+		t.Fatalf("background-notice transcript rows = %+v", facts)
+	}
+}
+
 func TestTranscriptHydrationRetainsAdjacentRowsAroundProviderEmptyAssistant(t *testing.T) {
 	const (
 		beforeStepID = "11111111-1111-4111-8111-111111111111"
