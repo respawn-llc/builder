@@ -1415,21 +1415,8 @@ func (s *Store) requireMetadataPersistenceLocked() error {
 	if err != nil {
 		return err
 	}
-	if digest != record.Post.SHA256 {
+	if record.Phase != appendRecoveryCommitted || digest != record.Post.SHA256 {
 		return s.closeMutationAuthorityLocked("supersede unresolved recovery", errors.New("pending recovery does not describe current metadata"))
-	}
-	switch record.Phase {
-	case appendRecoveryCommitted:
-	case appendRecoveryEventIntent:
-		if record.Events == nil {
-			return s.closeMutationAuthorityLocked("supersede unresolved recovery", errors.New("event intent recovery has no event suffix"))
-		}
-		exact, inspectErr := inspectAppendRecoverySuffix(s.eventsFP, *record.Events, record.Phase)
-		if inspectErr != nil || !exact {
-			return s.closeMutationAuthorityLocked("supersede unresolved recovery", errors.Join(inspectErr, errors.New("event intent recovery suffix is not durable")))
-		}
-	default:
-		return s.closeMutationAuthorityLocked("supersede unresolved recovery", errors.New("pending recovery is not committed"))
 	}
 	observation := &persistenceObservation{snapshot: s.persistenceSnapshotLocked(), version: s.metadataVersion}
 	s.mu.Unlock()

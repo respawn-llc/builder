@@ -304,9 +304,10 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 }
 
 func (s *Store) appendCurrentRecordsLocked(log *currentEventLog, records []EventRecord, preMeta Meta, postMeta Meta) (int64, error) {
+	var recovery appendRecoveryRecord
 	return log.appendRecordsWithTransaction(records, &currentEventLogAppendTransaction{
 		prepare: func(startOffset int64, payload []byte) error {
-			record, err := s.newAppendRecoveryRecord(preMeta, postMeta, appendRecoveryEventIntent, &appendRecoveryEvents{
+			record, err := s.newAppendRecoveryRecord(preMeta, postMeta, appendRecoveryPrepared, &appendRecoveryEvents{
 				StartOffset: startOffset, EndOffset: startOffset + int64(len(payload)),
 				EventCount: len(records), FirstSequence: records[0].Seq(),
 				LastSequence: records[len(records)-1].Seq(), SHA256: digestBytes(payload),
@@ -314,7 +315,12 @@ func (s *Store) appendCurrentRecordsLocked(log *currentEventLog, records []Event
 			if err != nil {
 				return err
 			}
-			return s.writeAppendRecoveryRecord(record)
+			recovery = record
+			return s.writeAppendRecoveryRecord(recovery)
+		},
+		commit: func() error {
+			recovery.Phase = appendRecoveryCommitted
+			return s.writeAppendRecoveryRecord(recovery)
 		},
 		rollback: s.rollbackPreparedCurrentEventAppend,
 	})
