@@ -219,9 +219,16 @@ func validateSessionWorkspaceRetargetWorkflowOwnership(
 	if !crossProject {
 		return nil
 	}
-	taskIDs, err := q.ListSessionWorkflowTaskIDs(ctx, sql.NullString{String: sessionID, Valid: true})
+	taskIDRows, err := q.ListSessionWorkflowTaskIDs(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("list workflow task sessions: %w", err)
+	}
+	taskIDs := make([]string, 0, len(taskIDRows))
+	for _, taskID := range taskIDRows {
+		if !taskID.Valid {
+			return errors.New("workflow task session has no owning task")
+		}
+		taskIDs = append(taskIDs, taskID.String)
 	}
 	if !hasWorkflowSession && len(taskIDs) == 0 {
 		return nil

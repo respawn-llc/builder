@@ -192,6 +192,35 @@ func (q *Queries) AttachRunSession(ctx context.Context, arg AttachRunSessionPara
 	return result.RowsAffected()
 }
 
+const bindSessionToTask = `-- name: BindSessionToTask :execrows
+UPDATE sessions
+SET task_id = ?1
+WHERE sessions.id = ?2
+  AND EXISTS (
+      SELECT 1
+      FROM task_records task
+      WHERE task.id = ?1
+        AND task.project_id = sessions.project_id
+  )
+  AND (
+      task_id IS NULL
+      OR task_id = ?1
+  )
+`
+
+type BindSessionToTaskParams struct {
+	TaskID    sql.NullString
+	SessionID string
+}
+
+func (q *Queries) BindSessionToTask(ctx context.Context, arg BindSessionToTaskParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindSessionToTask, arg.TaskID, arg.SessionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const cancelTask = `-- name: CancelTask :execrows
 UPDATE tasks
 SET
@@ -797,6 +826,19 @@ func (q *Queries) CountTaskRunsByTask(ctx context.Context, taskID string) (int64
 	var run_count int64
 	err := row.Scan(&run_count)
 	return run_count, err
+}
+
+const countTaskSessions = `-- name: CountTaskSessions :one
+SELECT CAST(COUNT(*) AS INTEGER) AS session_count
+FROM sessions
+WHERE task_id = ?1
+`
+
+func (q *Queries) CountTaskSessions(ctx context.Context, taskID sql.NullString) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countTaskSessions, taskID)
+	var session_count int64
+	err := row.Scan(&session_count)
+	return session_count, err
 }
 
 const countTasksByProjectWorkflowLink = `-- name: CountTasksByProjectWorkflowLink :one
@@ -1434,6 +1476,39 @@ func (q *Queries) GetExistingJoinPlacement(ctx context.Context, arg GetExistingJ
 	return id, err
 }
 
+const getLatestBranchTaskSessionAssociationForNode = `-- name: GetLatestBranchTaskSessionAssociationForNode :one
+SELECT
+    association.session_id,
+    association.node_id,
+    association.transition_branch_key,
+    association.associated_at_unix_ms
+FROM session_workflow_node_associations association
+JOIN sessions session ON session.id = association.session_id
+WHERE session.task_id = ?1
+  AND association.node_id = ?2
+  AND association.transition_branch_key = ?3
+ORDER BY association.associated_at_unix_ms DESC, association.session_id DESC
+LIMIT 1
+`
+
+type GetLatestBranchTaskSessionAssociationForNodeParams struct {
+	TaskID              sql.NullString
+	NodeID              string
+	TransitionBranchKey sql.NullString
+}
+
+func (q *Queries) GetLatestBranchTaskSessionAssociationForNode(ctx context.Context, arg GetLatestBranchTaskSessionAssociationForNodeParams) (SessionWorkflowNodeAssociation, error) {
+	row := q.db.QueryRowContext(ctx, getLatestBranchTaskSessionAssociationForNode, arg.TaskID, arg.NodeID, arg.TransitionBranchKey)
+	var i SessionWorkflowNodeAssociation
+	err := row.Scan(
+		&i.SessionID,
+		&i.NodeID,
+		&i.TransitionBranchKey,
+		&i.AssociatedAtUnixMs,
+	)
+	return i, err
+}
+
 const getLatestCompletedContextSourceRun = `-- name: GetLatestCompletedContextSourceRun :one
 SELECT r.id
 FROM task_runs r
@@ -1508,6 +1583,38 @@ func (q *Queries) GetLatestRunForPlacement(ctx context.Context, placementID stri
 	row := q.db.QueryRowContext(ctx, getLatestRunForPlacement, placementID)
 	var i GetLatestRunForPlacementRow
 	err := row.Scan(&i.ID, &i.SessionID)
+	return i, err
+}
+
+const getLatestSerialTaskSessionAssociationForNode = `-- name: GetLatestSerialTaskSessionAssociationForNode :one
+SELECT
+    association.session_id,
+    association.node_id,
+    association.associated_at_unix_ms
+FROM session_workflow_node_associations association
+JOIN sessions session ON session.id = association.session_id
+WHERE session.task_id = ?1
+  AND association.node_id = ?2
+  AND association.transition_branch_key IS NULL
+ORDER BY association.associated_at_unix_ms DESC, association.session_id DESC
+LIMIT 1
+`
+
+type GetLatestSerialTaskSessionAssociationForNodeParams struct {
+	TaskID sql.NullString
+	NodeID string
+}
+
+type GetLatestSerialTaskSessionAssociationForNodeRow struct {
+	SessionID          string
+	NodeID             string
+	AssociatedAtUnixMs int64
+}
+
+func (q *Queries) GetLatestSerialTaskSessionAssociationForNode(ctx context.Context, arg GetLatestSerialTaskSessionAssociationForNodeParams) (GetLatestSerialTaskSessionAssociationForNodeRow, error) {
+	row := q.db.QueryRowContext(ctx, getLatestSerialTaskSessionAssociationForNode, arg.TaskID, arg.NodeID)
+	var i GetLatestSerialTaskSessionAssociationForNodeRow
+	err := row.Scan(&i.SessionID, &i.NodeID, &i.AssociatedAtUnixMs)
 	return i, err
 }
 
@@ -6059,26 +6166,26 @@ func (q *Queries) ListSessionPromptHistoryText(ctx context.Context, arg ListSess
 }
 
 const listSessionWorkflowTaskIDs = `-- name: ListSessionWorkflowTaskIDs :many
-SELECT DISTINCT task.id
-FROM task_run_records run
-JOIN task_records task ON task.id = run.task_id
-WHERE run.session_id = ?1
-ORDER BY task.id ASC
+SELECT task_id
+FROM sessions
+WHERE id = ?1
+  AND task_id IS NOT NULL
+ORDER BY task_id ASC
 `
 
-func (q *Queries) ListSessionWorkflowTaskIDs(ctx context.Context, sessionID sql.NullString) ([]string, error) {
+func (q *Queries) ListSessionWorkflowTaskIDs(ctx context.Context, sessionID string) ([]sql.NullString, error) {
 	rows, err := q.db.QueryContext(ctx, listSessionWorkflowTaskIDs, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []string
+	var items []sql.NullString
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var task_id sql.NullString
+		if err := rows.Scan(&task_id); err != nil {
 			return nil, err
 		}
-		items = append(items, id)
+		items = append(items, task_id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -11120,6 +11227,39 @@ func (q *Queries) UpdateWorktreeCanonicalRoot(ctx context.Context, arg UpdateWor
 	return result.RowsAffected()
 }
 
+const upsertBranchSessionWorkflowNodeAssociation = `-- name: UpsertBranchSessionWorkflowNodeAssociation :exec
+INSERT INTO session_workflow_node_associations (
+    session_id,
+    node_id,
+    transition_branch_key,
+    associated_at_unix_ms
+) VALUES (
+    ?1,
+    ?2,
+    ?3,
+    ?4
+)
+ON CONFLICT(session_id, node_id, transition_branch_key) WHERE transition_branch_key IS NOT NULL DO UPDATE SET
+    associated_at_unix_ms = excluded.associated_at_unix_ms
+`
+
+type UpsertBranchSessionWorkflowNodeAssociationParams struct {
+	SessionID           string
+	NodeID              string
+	TransitionBranchKey sql.NullString
+	AssociatedAtUnixMs  int64
+}
+
+func (q *Queries) UpsertBranchSessionWorkflowNodeAssociation(ctx context.Context, arg UpsertBranchSessionWorkflowNodeAssociationParams) error {
+	_, err := q.db.ExecContext(ctx, upsertBranchSessionWorkflowNodeAssociation,
+		arg.SessionID,
+		arg.NodeID,
+		arg.TransitionBranchKey,
+		arg.AssociatedAtUnixMs,
+	)
+	return err
+}
+
 const upsertProject = `-- name: UpsertProject :exec
 INSERT INTO projects (
     id,
@@ -11156,6 +11296,33 @@ func (q *Queries) UpsertProject(ctx context.Context, arg UpsertProjectParams) er
 		arg.UpdatedAtUnixMs,
 		arg.MetadataJson,
 	)
+	return err
+}
+
+const upsertSerialSessionWorkflowNodeAssociation = `-- name: UpsertSerialSessionWorkflowNodeAssociation :exec
+INSERT INTO session_workflow_node_associations (
+    session_id,
+    node_id,
+    transition_branch_key,
+    associated_at_unix_ms
+) VALUES (
+    ?1,
+    ?2,
+    NULL,
+    ?3
+)
+ON CONFLICT(session_id, node_id) WHERE transition_branch_key IS NULL DO UPDATE SET
+    associated_at_unix_ms = excluded.associated_at_unix_ms
+`
+
+type UpsertSerialSessionWorkflowNodeAssociationParams struct {
+	SessionID          string
+	NodeID             string
+	AssociatedAtUnixMs int64
+}
+
+func (q *Queries) UpsertSerialSessionWorkflowNodeAssociation(ctx context.Context, arg UpsertSerialSessionWorkflowNodeAssociationParams) error {
+	_, err := q.db.ExecContext(ctx, upsertSerialSessionWorkflowNodeAssociation, arg.SessionID, arg.NodeID, arg.AssociatedAtUnixMs)
 	return err
 }
 

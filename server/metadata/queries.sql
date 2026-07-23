@@ -3763,11 +3763,88 @@ WHERE s.id = sqlc.arg(session_id)
 LIMIT 1;
 
 -- name: ListSessionWorkflowTaskIDs :many
-SELECT DISTINCT task.id
-FROM task_run_records run
-JOIN task_records task ON task.id = run.task_id
-WHERE run.session_id = sqlc.arg(session_id)
-ORDER BY task.id ASC;
+SELECT task_id
+FROM sessions
+WHERE id = sqlc.arg(session_id)
+  AND task_id IS NOT NULL
+ORDER BY task_id ASC;
+
+-- name: BindSessionToTask :execrows
+UPDATE sessions
+SET task_id = sqlc.arg(task_id)
+WHERE sessions.id = sqlc.arg(session_id)
+  AND EXISTS (
+      SELECT 1
+      FROM task_records task
+      WHERE task.id = sqlc.arg(task_id)
+        AND task.project_id = sessions.project_id
+  )
+  AND (
+      task_id IS NULL
+      OR task_id = sqlc.arg(task_id)
+  );
+
+-- name: UpsertSerialSessionWorkflowNodeAssociation :exec
+INSERT INTO session_workflow_node_associations (
+    session_id,
+    node_id,
+    transition_branch_key,
+    associated_at_unix_ms
+) VALUES (
+    sqlc.arg(session_id),
+    sqlc.arg(node_id),
+    NULL,
+    sqlc.arg(associated_at_unix_ms)
+)
+ON CONFLICT(session_id, node_id) WHERE transition_branch_key IS NULL DO UPDATE SET
+    associated_at_unix_ms = excluded.associated_at_unix_ms;
+
+-- name: UpsertBranchSessionWorkflowNodeAssociation :exec
+INSERT INTO session_workflow_node_associations (
+    session_id,
+    node_id,
+    transition_branch_key,
+    associated_at_unix_ms
+) VALUES (
+    sqlc.arg(session_id),
+    sqlc.arg(node_id),
+    sqlc.arg(transition_branch_key),
+    sqlc.arg(associated_at_unix_ms)
+)
+ON CONFLICT(session_id, node_id, transition_branch_key) WHERE transition_branch_key IS NOT NULL DO UPDATE SET
+    associated_at_unix_ms = excluded.associated_at_unix_ms;
+
+-- name: CountTaskSessions :one
+SELECT CAST(COUNT(*) AS INTEGER) AS session_count
+FROM sessions
+WHERE task_id = sqlc.arg(task_id);
+
+-- name: GetLatestSerialTaskSessionAssociationForNode :one
+SELECT
+    association.session_id,
+    association.node_id,
+    association.associated_at_unix_ms
+FROM session_workflow_node_associations association
+JOIN sessions session ON session.id = association.session_id
+WHERE session.task_id = sqlc.arg(task_id)
+  AND association.node_id = sqlc.arg(node_id)
+  AND association.transition_branch_key IS NULL
+ORDER BY association.associated_at_unix_ms DESC, association.session_id DESC
+LIMIT 1;
+
+-- name: GetLatestBranchTaskSessionAssociationForNode :one
+SELECT
+    association.session_id,
+    association.node_id,
+    association.transition_branch_key,
+    association.associated_at_unix_ms
+FROM session_workflow_node_associations association
+JOIN sessions session ON session.id = association.session_id
+WHERE session.task_id = sqlc.arg(task_id)
+  AND association.node_id = sqlc.arg(node_id)
+  AND association.transition_branch_key = sqlc.arg(transition_branch_key)
+ORDER BY association.associated_at_unix_ms DESC, association.session_id DESC
+LIMIT 1;
 
 -- name: RetargetSessionWorkspaceProject :execrows
 UPDATE sessions

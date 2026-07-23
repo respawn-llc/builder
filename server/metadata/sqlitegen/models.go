@@ -67,6 +67,7 @@ type Session struct {
 	MetadataJson         string
 	PreviousSessionID    sql.NullString
 	ParentAgentSessionID sql.NullString
+	TaskID               sql.NullString
 }
 
 type SessionPromptHistoryEntry struct {
@@ -75,6 +76,13 @@ type SessionPromptHistoryEntry struct {
 	SourceID        string
 	Text            string
 	CreatedAtUnixMs int64
+}
+
+type SessionWorkflowNodeAssociation struct {
+	SessionID           string
+	NodeID              string
+	TransitionBranchKey sql.NullString
+	AssociatedAtUnixMs  int64
 }
 
 type SqliteSchema struct {

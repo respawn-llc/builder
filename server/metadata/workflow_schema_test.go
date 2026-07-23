@@ -50,6 +50,7 @@ func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
 		"task_active_fanout_branches",
 		"task_pending_approvals",
 		"task_pending_approval_branches",
+		"session_workflow_node_associations",
 		"task_node_placements",
 		"task_runs",
 		"task_transitions",
@@ -366,6 +367,86 @@ func TestTaskCurrentNodeSchemaUsesNaturalReferencesAndLeanFanoutStorage(t *testi
 		"arrival_state":         {},
 		"arrival_values_json":   {},
 	})
+}
+
+func TestTaskSessionAssociationSchemaUsesDirectOwnerAndNaturalKeys(t *testing.T) {
+	store, cfg, binding := newMetadataTestStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC().UnixMilli()
+	seedWorkflowGraph(t, store.db, binding.ProjectID, now)
+	seedWorkflowTask(t, store, binding.ProjectID, "BLD-1")
+	other, err := store.CreateProjectForWorkspace(ctx, t.TempDir(), "Other Project")
+	if err != nil {
+		t.Fatalf("CreateProjectForWorkspace: %v", err)
+	}
+	seedWorkflowGraphForProject(t, store.db, other.ProjectID, now, "2")
+	seedWorkflowTaskWithID(t, store, "task-2", "link-2", 2, "OTH-1", "placement-start-2", "node-start-2")
+	sessionID := createMetadataTestSession(t, store, cfg, binding).Meta().SessionID
+
+	assertExactTableColumns(t, store.db, "session_workflow_node_associations", map[string]struct{}{
+		"session_id":            {},
+		"node_id":               {},
+		"transition_branch_key": {},
+		"associated_at_unix_ms": {},
+	})
+	for _, index := range []string{
+		"sessions_task_id_idx",
+		"session_workflow_node_associations_serial_unique_idx",
+		"session_workflow_node_associations_branch_unique_idx",
+	} {
+		if !indexExists(t, store.db, index) {
+			t.Fatalf("expected session association index %s", index)
+		}
+	}
+
+	assertSQLiteConstraint(t, store.db, `INSERT INTO session_workflow_node_associations (
+    session_id, node_id, transition_branch_key, associated_at_unix_ms
+) VALUES (?, 'node-agent', NULL, ?)`, sessionID, now)
+	assertSQLiteConstraint(t, store.db, `UPDATE sessions
+SET task_id = 'task-2'
+WHERE id = ?`, sessionID)
+	if _, err := store.db.Exec(`UPDATE sessions
+SET task_id = 'task-1'
+WHERE id = ?`, sessionID); err != nil {
+		t.Fatalf("bind session to direct task owner: %v", err)
+	}
+
+	if _, err := store.db.Exec(`INSERT INTO session_workflow_node_associations (
+    session_id, node_id, transition_branch_key, associated_at_unix_ms
+) VALUES (?, 'node-agent', NULL, ?)`, sessionID, now); err != nil {
+		t.Fatalf("insert serial association: %v", err)
+	}
+	assertSQLiteConstraint(t, store.db, `INSERT INTO session_workflow_node_associations (
+    session_id, node_id, transition_branch_key, associated_at_unix_ms
+) VALUES (?, 'node-agent', NULL, ?)`, sessionID, now+1)
+	for _, branch := range []string{"branch-a", "branch-b"} {
+		if _, err := store.db.Exec(`INSERT INTO session_workflow_node_associations (
+    session_id, node_id, transition_branch_key, associated_at_unix_ms
+) VALUES (?, 'node-agent', ?, ?)`, sessionID, branch, now); err != nil {
+			t.Fatalf("insert branch association %q: %v", branch, err)
+		}
+	}
+	assertSQLiteConstraint(t, store.db, `INSERT INTO session_workflow_node_associations (
+    session_id, node_id, transition_branch_key, associated_at_unix_ms
+) VALUES (?, 'node-agent', 'branch-a', ?)`, sessionID, now+1)
+	assertSQLiteConstraint(t, store.db, `INSERT INTO session_workflow_node_associations (
+    session_id, node_id, transition_branch_key, associated_at_unix_ms
+) VALUES (?, 'node-agent-2', NULL, ?)`, sessionID, now)
+
+	if _, err := store.db.Exec(`UPDATE sessions
+SET task_id = NULL
+WHERE id = ?`, sessionID); err != nil {
+		t.Fatalf("clear session direct task owner: %v", err)
+	}
+	var associationCount int
+	if err := store.db.QueryRow(`SELECT COUNT(*)
+FROM session_workflow_node_associations
+WHERE session_id = ?`, sessionID).Scan(&associationCount); err != nil {
+		t.Fatalf("count cleared session associations: %v", err)
+	}
+	if associationCount != 0 {
+		t.Fatalf("cleared owner left %d session associations, want 0", associationCount)
+	}
 }
 
 func TestProjectLabelSchemaEnforcesCatalogIdentityScopeAndCascades(t *testing.T) {
