@@ -65,43 +65,39 @@ func TestAttentionProjectionReturnsTypedErrorForInvalidQuestionRecommendation(t 
 	}
 }
 
-func TestAttentionProjectionFallsBackWhenQuestionMetadataIsUnavailable(t *testing.T) {
+func TestAttentionProjectionPropagatesQuestionMetadataSourceFailures(t *testing.T) {
 	sessionID := "session-1"
 	askID := "ask-1"
 	tests := []struct {
-		name     string
-		resolver *pendingQuestionResolver
+		name              string
+		pendingPromptFail bool
 	}{
 		{
 			name: "transcript source failure",
-			resolver: newPendingQuestionResolver(
-				failingQuestionMetadataSource{err: errors.New("transcript source unavailable")},
-				nil,
-			),
 		},
 		{
-			name: "pending prompt source failure",
-			resolver: newPendingQuestionResolver(
-				nil,
-				failingQuestionMetadataSource{err: errors.New("pending prompt source unavailable")},
-			),
+			name:              "pending prompt source failure",
+			pendingPromptFail: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			item, include, err := (&Attention{}).itemFromCandidate(
+			sourceErr := errors.New(tt.name)
+			source := failingQuestionMetadataSource{err: sourceErr}
+			resolver := newPendingQuestionResolver(source, nil)
+			if tt.pendingPromptFail {
+				resolver = newPendingQuestionResolver(nil, source)
+			}
+			_, include, err := (&Attention{}).itemFromCandidate(
 				t.Context(),
 				attentionProjectionQuestionCandidate(sessionID, askID),
-				tt.resolver,
+				resolver,
 			)
-			if err != nil {
-				t.Fatalf("itemFromCandidate error = %v", err)
+			if !errors.Is(err, sourceErr) {
+				t.Fatalf("itemFromCandidate error = %v, want source error %v", err, sourceErr)
 			}
-			if !include {
-				t.Fatal("itemFromCandidate omitted a question with unavailable metadata")
-			}
-			if item.Message != pendingQuestionFallbackMessage {
-				t.Fatalf("item message = %q, want fallback %q", item.Message, pendingQuestionFallbackMessage)
+			if include {
+				t.Fatal("itemFromCandidate included a question after metadata source failure")
 			}
 		})
 	}

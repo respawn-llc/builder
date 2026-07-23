@@ -245,8 +245,7 @@ func (a *Attention) itemFromCandidate(ctx context.Context, row attentionCandidat
 		}
 		question, err := questions.Question(ctx, row.sessionID, askID)
 		if err != nil {
-			var validationErr serverapi.WorkflowRequestValidationError
-			if errors.As(err, &validationErr) {
+			if !errors.Is(err, ErrPendingQuestionNotFound) {
 				return serverapi.WorkflowAttentionItem{}, false, err
 			}
 			question = pendingQuestion{message: pendingQuestionFallbackMessage}
