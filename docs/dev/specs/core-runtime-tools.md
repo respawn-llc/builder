@@ -10,7 +10,7 @@
 - Each controlling TUI may run its configured read-only lifecycle command after it accepts a lifecycle event. Desktop, headless, subagent, and server-only use never run it. The server neither supplies nor overrides the command.
 - Client transcript delivery is exactly once and ordered for each subscription. Every hydration and later update has a per-subscription monotonically increasing sequence number. Initial hydration and later updates use the same order; each update contains the required content, tool completions appear in committed order, and committed assistant entries retain the identity of their streamed output. Clients receive neither total transcript counts nor absolute offsets or revisions.
 - Clients receive transcript, session-activity, and prompt-activity updates in one ordered subscription.
-- `server/sessionruntime` owns exact Session-resource admission, `server/runtimecommand` owns Runtime Command ordering and dormant Goal commands, and `server/runtimecontrol` remains transport and idempotency only.
+- The server owns exact Session-resource admission, Runtime Command ordering, and dormant Goal commands. Transport keeps request identity and idempotency only; it never owns ordering, queueing, execution lifecycle, reconciliation, or persistence disposition.
 
 ## Skills And Generated Assets
 
