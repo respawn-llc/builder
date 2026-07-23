@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -25,6 +26,81 @@ func TestBuildTokenCountRequestForItemsUsesAutomaticToolChoice(t *testing.T) {
 	}
 	if llm.HasEffectiveAdvertisedTools(req.Tools, req.EnableNativeWebSearch) {
 		t.Fatalf("standalone token-count request advertised tools: %+v", req)
+	}
+}
+
+func TestCriticalExactCountRefreshesAfterCommittedToolCompletion(t *testing.T) {
+	store := mustCreateTestSession(t)
+	call := llm.ToolCall{
+		ID:    "tool-call",
+		Name:  string(toolspec.ToolExecCommand),
+		Input: json.RawMessage(`{"cmd":"pwd"}`),
+	}
+	client := &fakeCompactionClient{
+		inputTokenCountFn: func(request llm.Request) int {
+			for _, item := range request.Items {
+				if item.Type == llm.ResponseItemTypeFunctionCallOutput &&
+					item.CallID != nil &&
+					*item.CallID == call.ID {
+					return 200
+				}
+			}
+			return 100
+		},
+	}
+	engine := mustNewTestEngine(
+		t,
+		store,
+		client,
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolExecCommand,
+			Handler: fakeTool{name: toolspec.ToolExecCommand},
+		}),
+		Config{Model: "gpt-5", ContextWindowTokens: 400_000},
+	)
+	if err := engine.steer("step", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}},
+	)); err != nil {
+		t.Fatalf("persist assistant tool call: %v", err)
+	}
+
+	if precise, ok := engine.currentInputTokensPrecisely(context.Background()); !ok || precise != 100 {
+		t.Fatalf("initial exact count = (%d, %t), want (100, true)", precise, ok)
+	}
+	if client.countInputTokenCalls != 1 {
+		t.Fatalf("initial exact count calls = %d, want one", client.countInputTokenCalls)
+	}
+	if results, err := engine.executeToolCalls(context.Background(), "step", []llm.ToolCall{call}); err != nil {
+		t.Fatalf("execute tool call: %v", err)
+	} else if len(results) != 1 {
+		t.Fatalf("tool results = %+v, want one", results)
+	}
+
+	request, err := engine.buildRequest(context.Background(), "", true)
+	if err != nil {
+		t.Fatalf("build request after tool completion: %v", err)
+	}
+	outputPresent := false
+	for _, item := range request.Items {
+		if item.Type == llm.ResponseItemTypeFunctionCallOutput &&
+			item.CallID != nil &&
+			*item.CallID == call.ID {
+			outputPresent = true
+			break
+		}
+	}
+	if !outputPresent {
+		t.Fatalf("request omitted committed tool output: %+v", request.Items)
+	}
+
+	if precise, ok := engine.currentInputTokensPreciselyIfDueWithPriority(context.Background(), 1_000, true); !ok || precise != 200 {
+		t.Fatalf("critical exact count = (%d, %t), want (200, true)", precise, ok)
+	}
+	if client.countInputTokenCalls != 2 {
+		t.Fatalf("exact count calls = %d, want two", client.countInputTokenCalls)
 	}
 }
 
