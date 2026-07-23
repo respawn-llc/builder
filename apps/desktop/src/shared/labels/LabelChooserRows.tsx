@@ -1,5 +1,5 @@
-import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
-import { useId, type ReactNode } from "react";
+import { Check, Pencil, Trash2, X } from "lucide-react";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { ProjectLabel } from "@/api";
@@ -26,45 +26,6 @@ export type DeleteState = Readonly<{
   error: string | null;
   pending: boolean;
 }>;
-
-export function CreateLabelResultRow({
-  disabled,
-  disabledDescription,
-  name,
-  onCreate,
-}: Readonly<{
-  disabled: boolean;
-  disabledDescription?: string | undefined;
-  name: string;
-  onCreate(): void;
-}>) {
-  const { t } = useTranslation();
-  const descriptionID = useId();
-  return (
-    <ActionableListRow
-      role="listitem"
-      selectionControl={
-        <>
-          <Button
-            aria-describedby={disabledDescription === undefined ? undefined : descriptionID}
-            className="min-h-9 min-w-0 flex-1 justify-start gap-[var(--space-1)] text-left"
-            disabled={disabled}
-            onClick={onCreate}
-            variant="ghost"
-          >
-            <Plus aria-hidden="true" size={14} strokeWidth={1.8} />
-            <span className="min-w-0 truncate">{t("labels.create", { name })}</span>
-          </Button>
-          {disabledDescription === undefined ? null : (
-            <span className="sr-only" id={descriptionID}>
-              {disabledDescription}
-            </span>
-          )}
-        </>
-      }
-    />
-  );
-}
 
 export function LabelRenameEditor({
   onCancel,
@@ -157,22 +118,13 @@ export function LabelResultRow({
           />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-56" level={4} role="group" side="top">
+      <PopoverContent align="end" className="w-56" level={4} side="top">
         <span className="text-sm text-[var(--color-muted)]">{t("labels.deleteBody")}</span>
         {deletion?.error === null || deletion === null ? null : (
           <span className="text-xs text-[var(--color-error)]" role="alert">
             {deletion.error}
           </span>
         )}
-        <Button
-          disabled={deletion?.pending === true}
-          onClick={() => {
-            onDeleteOpenChange(false);
-          }}
-          variant="secondary"
-        >
-          {t("app.cancel")}
-        </Button>
         <Button disabled={deletion?.pending === true} onClick={onDeleteConfirm} variant="danger">
           {t("app.confirm")}
         </Button>
@@ -183,14 +135,35 @@ export function LabelResultRow({
     <LabelSelectionRow
       contextualActions={
         <>
+          {deleteAction}
           <IconTooltipButton label={t("labels.rename", { name: label.name })} onClick={onRename} size="icon-sm">
             <Pencil aria-hidden="true" size={14} strokeWidth={1.8} />
           </IconTooltipButton>
-          {deleteAction}
         </>
       }
       highlighted={highlighted}
       name={label.name}
+      onSelect={onSelect}
+      selected={selected}
+    />
+  );
+}
+
+export function UnlabeledResultRow({
+  highlighted,
+  name,
+  onSelect,
+  selected,
+}: Readonly<{
+  highlighted: boolean;
+  name: string;
+  onSelect(): void;
+  selected: boolean;
+}>) {
+  return (
+    <LabelSelectionRow
+      highlighted={highlighted}
+      name={name}
       onSelect={onSelect}
       selected={selected}
     />

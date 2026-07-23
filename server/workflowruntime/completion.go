@@ -66,6 +66,7 @@ type Config struct {
 	Contract                     CompletionContract
 	CompletionMode               CompletionMode
 	MaxInvalidCompletionAttempts int
+	UseAutomaticToolChoice       bool
 	Controller                   Controller
 	TaskCommentCounter           TaskCommentCounter
 	Instructions                 TaskInstructions

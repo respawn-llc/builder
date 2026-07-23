@@ -813,6 +813,7 @@ func TestWorkflowInvalidCompletionFailClosedWhenConfiguredCapInvalid(t *testing.
 				Contract:                     workflowruntime.CompletionContract{RunID: runID},
 				CompletionMode:               workflowruntime.CompletionModeTool,
 				MaxInvalidCompletionAttempts: 0,
+				UseAutomaticToolChoice:       true,
 				Controller:                   controller,
 			},
 		},
@@ -820,6 +821,9 @@ func TestWorkflowInvalidCompletionFailClosedWhenConfiguredCapInvalid(t *testing.
 
 	if _, err := engine.SubmitWorkflowTurn(context.Background()); err != nil {
 		t.Fatalf("submit workflow turn: %v", err)
+	}
+	if len(client.calls) != 1 || client.calls[0].ToolChoiceMode != llm.ToolChoiceModeAutomatic {
+		t.Fatalf("workflow requests = %+v, want one automatic-tool request", client.calls)
 	}
 	if len(controller.violations) != 1 {
 		t.Fatalf("workflow protocol violations = %+v", controller.violations)

@@ -1116,6 +1116,7 @@ func (s *Starter) startAgentExecution(ctx context.Context, req workflowexecution
 		input,
 		effectiveMode,
 		s.cfg.Settings.Workflow.MaxInvalidCompletionAttempts,
+		plan.ActiveSettings.Workflow.UseRequiredToolCalls,
 		workflowruntime.StoreController{Store: s.store, AttentionFinalizer: s.attentionFinalizer, AutomaticStarts: s.automaticStarts, MutationPermit: s.mutationPermit},
 		s.store,
 	)
@@ -1168,6 +1169,7 @@ func (s *Starter) startAgentExecution(ctx context.Context, req workflowexecution
 		},
 		Runner: func(runCtx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
 			turnErr := bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
+				engineCtx = metadata.WithQueryFailureDiagnostics(engineCtx)
 				if input.ContextMode == workflow.ContextModeCompactAndContinueSession &&
 					engine.LastCompactionWorkflowRunID() != string(req.RunID) {
 					if err := engine.CompactContextForWorkflowContinuation(engineCtx); err != nil {

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/workflow"
@@ -63,6 +64,14 @@ func latestActiveMetaContextMatches(items []llm.ResponseItem, desired llm.Messag
 	if !ok {
 		return false
 	}
+	currentClassification, ok := latestActiveMetaContextForSlot(items, desiredClassification.kind)
+	if !ok {
+		return false
+	}
+	return sameMetaContextIdentity(currentClassification, desiredClassification)
+}
+
+func latestActiveMetaContextForSlot(items []llm.ResponseItem, kind metaContextKind) (metaContextClassification, bool) {
 	for idx := len(items) - 1; idx >= 0; idx-- {
 		item := items[idx]
 		if item.Type != llm.ResponseItemTypeMessage {
@@ -74,12 +83,54 @@ func latestActiveMetaContextMatches(items []llm.ResponseItem, desired llm.Messag
 			SourcePath:      item.SourcePath,
 			WorktreeContext: item.WorktreeContext,
 		})
-		if !classified || !sameMetaContextSlot(classification.kind, desiredClassification.kind) {
+		if !classified || !sameMetaContextSlot(classification.kind, kind) {
 			continue
 		}
-		return sameMetaContextIdentity(classification, desiredClassification)
+		return classification, true
 	}
-	return false
+	return metaContextClassification{}, false
+}
+
+type workflowTaskPromptTrigger uint8
+
+const (
+	workflowTaskPromptTriggerUnknown workflowTaskPromptTrigger = iota
+	workflowTaskPromptTriggerTaskDelivery
+	workflowTaskPromptTriggerCompaction
+)
+
+func selectWorkflowTaskPrompt(items []llm.ResponseItem, runID string, trigger workflowTaskPromptTrigger) (prompts.WorkflowTaskPromptKind, bool) {
+	normalizedRunID := strings.TrimSpace(runID)
+	if normalizedRunID == "" {
+		panic("select workflow task prompt: workflow run ID is required")
+	}
+	desired, ok := classifyMetaContextMessage(llm.Message{
+		Role:        llm.RoleDeveloper,
+		MessageType: textutil.Value(llm.MessageTypeWorkflowMode),
+		SourcePath:  textutil.Value(normalizedRunID),
+	})
+	if !ok {
+		panic("select workflow task prompt: workflow-mode message classification failed")
+	}
+	current, hasWorkflowPrompt := latestActiveMetaContextForSlot(items, metaContextKindWorkflow)
+	if !hasWorkflowPrompt {
+		return prompts.WorkflowTaskPromptInitialAssignment, true
+	}
+	sameRun := sameMetaContextIdentity(current, desired)
+	switch trigger {
+	case workflowTaskPromptTriggerTaskDelivery:
+		if sameRun {
+			return prompts.WorkflowTaskPromptInitialAssignment, false
+		}
+		return prompts.WorkflowTaskPromptReassignment, true
+	case workflowTaskPromptTriggerCompaction:
+		if sameRun {
+			return prompts.WorkflowTaskPromptCompactionReminder, true
+		}
+		return prompts.WorkflowTaskPromptReassignment, true
+	default:
+		panic("select workflow task prompt: unknown trigger")
+	}
 }
 
 func sameMetaContextIdentity(current, desired metaContextClassification) bool {
@@ -194,11 +245,12 @@ func (e *Engine) steerWorkflowModeIfNeeded(ctx context.Context, stepID string) e
 		return nil
 	}
 	runID := strings.TrimSpace(string(e.cfg.WorkflowRun.Contract.RunID))
-	if latestActiveMetaContextMatches(e.transcriptRuntimeState().SnapshotItems(), llm.Message{
-		Role:        llm.RoleDeveloper,
-		MessageType: textutil.Value(llm.MessageTypeWorkflowMode),
-		SourcePath:  textutil.Value(runID),
-	}) {
+	kind, shouldInject := selectWorkflowTaskPrompt(
+		e.transcriptRuntimeState().SnapshotItems(),
+		runID,
+		workflowTaskPromptTriggerTaskDelivery,
+	)
+	if !shouldInject {
 		return nil
 	}
 	mode, err := e.workflowCompletionMode(ctx)
@@ -214,6 +266,7 @@ func (e *Engine) steerWorkflowModeIfNeeded(ctx context.Context, stepID string) e
 		WorkflowCompletionMode:   mode,
 		WorkflowRun:              e.cfg.WorkflowRun,
 		WorkflowTaskCommentCount: commentCount,
+		WorkflowTaskPromptKind:   kind,
 	})
 	if err != nil {
 		return err
@@ -240,6 +293,14 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 	opts.WorktreeReminder = session.CloneWorktreeReminderState(meta.WorktreeReminder)
 	if e.workflowRunActive() {
 		opts.SubagentInvocationContext = config.SubagentInvocationContextWorkflow
+		kind, shouldInject := selectWorkflowTaskPrompt(
+			e.transcriptRuntimeState().SnapshotItems(),
+			strings.TrimSpace(string(e.cfg.WorkflowRun.Contract.RunID)),
+			workflowTaskPromptTriggerCompaction,
+		)
+		if !shouldInject {
+			panic("build compaction meta context: active workflow did not select a workflow task prompt")
+		}
 		mode, err := e.workflowCompletionMode(ctx)
 		if err != nil {
 			return nil, err
@@ -247,6 +308,7 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 		opts.IncludeWorkflow = true
 		opts.WorkflowCompletionMode = mode
 		opts.WorkflowRun = e.cfg.WorkflowRun
+		opts.WorkflowTaskPromptKind = kind
 		commentCount, err := e.currentWorkflowTaskCommentCount(ctx)
 		if err != nil {
 			return nil, err

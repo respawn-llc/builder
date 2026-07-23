@@ -4,6 +4,7 @@ import {
   taskStatusSchema,
   transitionSchema,
   validationErrorSchema,
+  workflowGraphNodeLimit,
 } from "./common";
 
 const baseAttentionItem = {
@@ -167,8 +168,8 @@ describe("attentionItemSchema", () => {
     ).toThrow();
   });
 
-  it("accepts every server-projected approval target", () => {
-    const targets = Array.from({ length: 201 }, (_, index) => ({
+  it("enforces the workflow graph node limit for approval targets", () => {
+    const targets = Array.from({ length: workflowGraphNodeLimit }, (_, index) => ({
       display_name: `Target ${String(index)}`,
     }));
     const item = attentionItemSchema.parse({
@@ -182,7 +183,16 @@ describe("attentionItemSchema", () => {
       throw new Error("approval target item did not decode as an approval");
     }
 
-    expect(item.approvalSnapshot.targets).toHaveLength(201);
+    expect(item.approvalSnapshot.targets).toHaveLength(workflowGraphNodeLimit);
+    expect(() =>
+      attentionItemSchema.parse({
+        ...approvalAttentionItem,
+        approval_snapshot: {
+          ...approvalSnapshot,
+          targets: [...targets, { display_name: "Overflow" }],
+        },
+      }),
+    ).toThrow();
   });
 });
 

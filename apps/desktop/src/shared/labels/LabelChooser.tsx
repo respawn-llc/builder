@@ -10,7 +10,7 @@ import {
   type SetStateAction,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { SearchIcon } from "lucide-react";
+import { PlusIcon, SearchIcon } from "lucide-react";
 
 import {
   decodeWorkflowLabelError,
@@ -20,7 +20,7 @@ import {
 } from "@/api";
 import {
   Button,
-  InteractiveChip,
+  IconTooltipButton,
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -29,9 +29,9 @@ import {
   fieldInputClassName,
 } from "@/ui";
 import {
-  CreateLabelResultRow,
   LabelRenameEditor,
   LabelResultRow,
+  UnlabeledResultRow,
   type DeleteState,
   type RenameState,
 } from "./LabelChooserRows";
@@ -55,6 +55,10 @@ export type LabelChooserProps = Readonly<{
   invocation: LabelChooserInvocation;
   trigger: ReactElement;
 }>;
+
+type LabelChooserChoice =
+  | Readonly<{ kind: "unlabeled" }>
+  | Readonly<{ kind: "label"; label: ProjectLabel }>;
 
 export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
   const { t } = useTranslation();
@@ -99,13 +103,26 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
     preparedSearch.length > 0 && !labels.some((label) => labelNamesEqual(label.name, preparedSearch));
   const catalogAtLimit = (catalog.data?.labels.length ?? 0) >= workflowLabelMaxIDs;
   const unlabeledName = t("labels.unlabeled");
-  const choiceCount = labels.length;
+  const showUnlabeledChoice =
+    invocation.kind === "filter" &&
+    (catalog.data?.labels.length ?? 0) > 0 &&
+    labelNameContains(unlabeledName, preparedSearch);
+  const choices = useMemo<readonly LabelChooserChoice[]>(
+    () => [
+      ...(showUnlabeledChoice ? ([{ kind: "unlabeled" }] as const) : []),
+      ...labels.map((label) => ({ kind: "label" as const, label })),
+    ],
+    [labels, showUnlabeledChoice],
+  );
+  const choiceCount = choices.length;
   const createError = mutations.create.isError ? mutationErrorMessage(mutations.create.error) : null;
 
   const createLabel = async () => {
     try {
       const label = await mutations.create.mutateAsync(preparedSearch);
-      selectLabel(invocation, label.id, true);
+      if (invocation.kind === "assignment") {
+        selectLabel(invocation, label.id, true);
+      }
       setSearch("");
       setKeyboardHighlightedIndex(null);
       mutations.create.reset();
@@ -114,12 +131,16 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
     }
   };
   const activateChoice = (index: number) => {
-    const label = labels[index];
-    if (label === undefined) {
+    const choice = choices[index];
+    if (choice === undefined) {
       return;
     }
-    const selected = isLabelSelected(invocation, label.id);
-    selectLabel(invocation, label.id, !selected);
+    if (choice.kind === "unlabeled") {
+      selectUnlabeled(invocation);
+      return;
+    }
+    const selected = isLabelSelected(invocation, choice.label.id);
+    selectLabel(invocation, choice.label.id, !selected);
   };
   const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (handleLabelChoiceNavigation(event, choiceCount, setKeyboardHighlightedIndex)) {
@@ -128,12 +149,13 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
     if (event.key !== "Enter") {
       return;
     }
-    event.preventDefault();
     if (choiceCount > 0) {
+      event.preventDefault();
       activateChoice(Math.min(keyboardHighlightedIndex ?? 0, choiceCount - 1));
       return;
     }
     if (canCreate && !catalogAtLimit && !mutations.create.isPending) {
+      event.preventDefault();
       void createLabel();
     }
   };
@@ -224,37 +246,40 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
         }}
       >
         {renderLabelChooserSearch({
+          canCreate,
+          catalogAtLimit,
+          choiceCount,
           createError,
+          createPending: mutations.create.isPending,
           invocation,
+          onCreate() {
+            void createLabel();
+          },
           onKeyDown: handleSearchKeyDown,
           onSearchChange(value) {
             setSearch(value);
             setKeyboardHighlightedIndex(null);
             mutations.create.reset();
           },
+          preparedSearch,
           search,
           searchErrorID,
           t,
-          unlabeledName,
         })}
         {renderLabelChooserResults({
-          canCreate,
           catalog,
-          catalogAtLimit,
+          choices,
           confirmDelete,
           commitRename,
-          createLabel,
-          createPending: mutations.create.isPending,
           deletion,
           invocation,
           keyboardHighlightedIndex,
-          labels,
-          preparedSearch,
           rename,
           setDeletion,
           setKeyboardHighlightedIndex,
           setRename,
           t,
+          unlabeledName,
         })}
       </PopoverContent>
     </Popover>
@@ -285,23 +310,33 @@ function handleLabelChoiceNavigation(
 }
 
 function renderLabelChooserSearch({
+  canCreate,
+  catalogAtLimit,
+  choiceCount,
   createError,
+  createPending,
   invocation,
+  onCreate,
   onKeyDown,
   onSearchChange,
+  preparedSearch,
   search,
   searchErrorID,
   t,
-  unlabeledName,
 }: Readonly<{
+  canCreate: boolean;
+  catalogAtLimit: boolean;
+  choiceCount: number;
   createError: string | null;
+  createPending: boolean;
   invocation: LabelChooserInvocation;
+  onCreate(): void;
   onKeyDown(event: KeyboardEvent<HTMLInputElement>): void;
   onSearchChange(value: string): void;
+  preparedSearch: string;
   search: string;
   searchErrorID: string;
   t: TFunction;
-  unlabeledName: string;
 }>) {
   return (
     <div className="flex items-start gap-[var(--space-2)]">
@@ -327,13 +362,34 @@ function renderLabelChooserSearch({
             style={{
               height: "var(--space-6)",
               paddingBlock: "var(--space-0)",
-              paddingInlineEnd: "var(--space-2)",
+              paddingInlineEnd: "calc(var(--space-6) + var(--space-1))",
               paddingInlineStart: "calc(var(--space-2) + var(--space-4) + var(--space-1))",
             }}
             type="text"
             value={search}
           />
+          {canCreate ? (
+            <span className="absolute top-1/2 right-[var(--space-1)] -translate-y-1/2">
+              <IconTooltipButton
+                disabled={catalogAtLimit || createPending}
+                label={
+                  catalogAtLimit
+                    ? t("labels.catalogLimit")
+                    : t("labels.create", { name: preparedSearch })
+                }
+                onClick={onCreate}
+                size="icon-sm"
+              >
+                <PlusIcon aria-hidden="true" size={14} strokeWidth={1.8} />
+              </IconTooltipButton>
+            </span>
+          ) : null}
         </span>
+        {choiceCount === 0 && canCreate && !catalogAtLimit ? (
+          <span className="px-[var(--space-2)] py-[var(--space-1)] text-sm leading-relaxed text-[var(--color-muted)]">
+            {t("labels.noMatchesCreateHint")}
+          </span>
+        ) : null}
         {createError === null ? null : (
           <span
             className="px-[var(--space-1)] text-xs text-[var(--color-error)]"
@@ -344,82 +400,53 @@ function renderLabelChooserSearch({
           </span>
         )}
       </div>
-      {renderLabelChooserFilterControls(invocation, unlabeledName, t)}
-    </div>
-  );
-}
-
-function renderLabelChooserFilterControls(
-  invocation: LabelChooserInvocation,
-  unlabeledName: string,
-  t: TFunction,
-) {
-  if (invocation.kind !== "filter") {
-    return null;
-  }
-  return (
-    <div className="flex shrink-0 items-center gap-[var(--space-1)]">
-      <InteractiveChip
-        onClick={() => {
-          selectUnlabeled(invocation);
-        }}
-        selected={invocation.state.filter.kind === "unlabeled"}
-        size="compact"
-      >
-        {unlabeledName}
-      </InteractiveChip>
-      <SegmentedControl
-        ariaLabel={t("labels.matchMode")}
-        disabled={invocation.state.filter.kind === "unlabeled"}
-        onValueChange={(mode) => {
-          invocation.onAction({ type: "named.mode", mode });
-        }}
-        options={[
-          { label: t("labels.matchAny"), value: "any" },
-          { label: t("labels.matchAll"), value: "all" },
-        ]}
-        value={invocation.state.namedMode}
-      />
+      {invocation.kind === "filter" ? (
+        <SegmentedControl
+          ariaLabel={t("labels.matchMode")}
+          className="shrink-0"
+          disabled={invocation.state.filter.kind === "unlabeled"}
+          onValueChange={(mode) => {
+            invocation.onAction({ type: "named.mode", mode });
+          }}
+          options={[
+            { label: t("labels.matchAny"), value: "any" },
+            { label: t("labels.matchAll"), value: "all" },
+          ]}
+          value={invocation.state.namedMode}
+        />
+      ) : null}
     </div>
   );
 }
 
 function renderLabelChooserResults({
-  canCreate,
   catalog,
-  catalogAtLimit,
+  choices,
   confirmDelete,
   commitRename,
-  createLabel,
-  createPending,
   deletion,
   invocation,
   keyboardHighlightedIndex,
-  labels,
-  preparedSearch,
   rename,
   setDeletion,
   setKeyboardHighlightedIndex,
   setRename,
   t,
+  unlabeledName,
 }: Readonly<{
-  canCreate: boolean;
   catalog: ReturnType<typeof useProjectLabelCatalog>;
-  catalogAtLimit: boolean;
+  choices: readonly LabelChooserChoice[];
   confirmDelete(): Promise<void>;
   commitRename(): Promise<void>;
-  createLabel(): Promise<void>;
-  createPending: boolean;
   deletion: DeleteState | null;
   invocation: LabelChooserInvocation;
   keyboardHighlightedIndex: number | null;
-  labels: readonly ProjectLabel[];
-  preparedSearch: string;
   rename: RenameState | null;
   setDeletion: Dispatch<SetStateAction<DeleteState | null>>;
   setKeyboardHighlightedIndex: Dispatch<SetStateAction<number | null>>;
   setRename: Dispatch<SetStateAction<RenameState | null>>;
   t: TFunction;
+  unlabeledName: string;
 }>) {
   if (catalog.isPending) {
     return (
@@ -451,54 +478,61 @@ function renderLabelChooserResults({
       }}
       role="list"
     >
-      {labels.map((label, index) =>
-        renderLabelChooserLabelRow({
+      {choices.map((choice, index) =>
+        renderLabelChooserChoiceRow({
+          choice,
           confirmDelete,
           commitRename,
           deletion,
           highlighted: index === keyboardHighlightedIndex,
           invocation,
-          label,
           rename,
           setDeletion,
           setRename,
+          unlabeledName,
         }),
       )}
-      {canCreate ? (
-        <CreateLabelResultRow
-          disabled={catalogAtLimit || createPending}
-          disabledDescription={catalogAtLimit ? t("labels.catalogLimit") : undefined}
-          name={preparedSearch}
-          onCreate={() => {
-            void createLabel();
-          }}
-        />
-      ) : null}
     </div>
   );
 }
 
-function renderLabelChooserLabelRow({
+function renderLabelChooserChoiceRow({
+  choice,
   confirmDelete,
   commitRename,
   deletion,
   highlighted,
   invocation,
-  label,
   rename,
   setDeletion,
   setRename,
+  unlabeledName,
 }: Readonly<{
+  choice: LabelChooserChoice;
   confirmDelete(): Promise<void>;
   commitRename(): Promise<void>;
   deletion: DeleteState | null;
   highlighted: boolean;
   invocation: LabelChooserInvocation;
-  label: ProjectLabel;
   rename: RenameState | null;
   setDeletion: Dispatch<SetStateAction<DeleteState | null>>;
   setRename: Dispatch<SetStateAction<RenameState | null>>;
+  unlabeledName: string;
 }>) {
+  if (choice.kind === "unlabeled") {
+    return (
+      <UnlabeledResultRow
+        highlighted={highlighted}
+        key="unlabeled"
+        name={unlabeledName}
+        onSelect={() => {
+          selectUnlabeled(invocation);
+        }}
+        selected={invocation.kind === "filter" && invocation.state.filter.kind === "unlabeled"}
+      />
+    );
+  }
+  const { label } = choice;
   if (rename?.labelID === label.id) {
     return (
       <LabelRenameEditor

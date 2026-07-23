@@ -1,1 +1,1 @@
-- Do not use normal prose final answer as completion. When work is complete, return only JSON matching the provided workflow completion schema, including the schema-defined transition and parameter fields.
+Do not use a normal prose final answer to complete the task. When work is complete, return only JSON matching the provided workflow completion schema, including the schema-defined transition and parameter fields.

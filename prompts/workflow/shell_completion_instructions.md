@@ -1,4 +1,4 @@
-- When work is complete, run the `kent complete` command exactly as specified in this example:
+When work is complete, run the `kent complete` command exactly as specified in this example:
 {{- range .Examples }}
 ```sh
 {{.ShellCommand}}
