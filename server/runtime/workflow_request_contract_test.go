@@ -76,3 +76,33 @@ func TestNonWorkflowRequestOmitsCompleteNodeWithAutomaticChoice(t *testing.T) {
 		t.Fatalf("non-workflow request advertised workflow-only tools: %+v", request.Tools)
 	}
 }
+
+func TestShellWorkflowUsesNativeWebSearchAsRequiredToolChoice(t *testing.T) {
+	runID := workflow.RunID("workflow-run")
+	engine := mustNewWorkflowTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		&workflowruntime.Config{
+			RunID:          runID,
+			Contract:       workflowruntime.CompletionContract{RunID: runID},
+			CompletionMode: workflowruntime.CompletionModeShellCommand,
+			Controller:     &externallyCompletedWorkflowController{},
+		},
+		Config{
+			Model:         "gpt-5",
+			EnabledTools:  []toolspec.ID{toolspec.ToolWebSearch},
+			WebSearchMode: "native",
+		},
+	)
+
+	request, err := engine.buildRequest(context.Background(), "step", true)
+	if err != nil {
+		t.Fatalf("build shell workflow request: %v", err)
+	}
+	if request.ToolChoiceMode != llm.ToolChoiceModeRequired ||
+		!request.EnableNativeWebSearch ||
+		len(request.Tools) != 0 {
+		t.Fatalf("shell workflow tool policy = %+v, want required native-only web search", request)
+	}
+}
