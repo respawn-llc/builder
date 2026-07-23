@@ -333,6 +333,54 @@ func TestStructuredWorkflowCompletionStopsAfterSingleProviderDispatch(t *testing
 	}
 }
 
+func TestUnstructuredWorkflowCompletionRecordsParsedRequest(t *testing.T) {
+	runID := workflow.RunID("workflow-run")
+	controller := &workflowCompletionAccountingController{}
+	client := &fakeClient{responses: []llm.Response{
+		finalTextResponse(`{"commentary":"complete","summary":"done"}`),
+		finalTextResponse(`{"commentary":"unexpected","summary":"done"}`),
+	}}
+	engine := mustNewWorkflowTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		&workflowruntime.Config{
+			RunID: runID,
+			Contract: workflowruntime.CompletionContract{
+				RunID: runID,
+				Transitions: []workflowruntime.CompletionTransition{{
+					ID:         "done",
+					Parameters: []workflow.Parameter{{Key: "summary"}},
+				}},
+			},
+			CompletionMode: workflowruntime.CompletionModeUnstructuredOutput,
+			Controller:     controller,
+		},
+		Config{Model: "gpt-5"},
+	)
+
+	if _, err := engine.SubmitUserMessage(context.Background(), "run"); err != nil {
+		t.Fatalf("submit unstructured workflow turn: %v", err)
+	}
+	if len(client.calls) != 1 {
+		t.Fatalf("unstructured workflow provider calls = %d, want one", len(client.calls))
+	}
+	requests := controller.CompletionRequests()
+	if len(requests) != 1 {
+		t.Fatalf("unstructured workflow completion requests = %+v, want one", requests)
+	}
+	request := requests[0]
+	if request.RunID != runID ||
+		request.TransitionID != "done" ||
+		request.OutputValues["summary"] != "done" {
+		t.Fatalf("unstructured workflow completion request = %+v", request)
+	}
+	if terminal := engine.WorkflowTerminalState(); !terminal.Completed ||
+		terminal.Source != WorkflowCompletionSourceUnstructured {
+		t.Fatalf("unstructured workflow terminal state = %+v", terminal)
+	}
+}
+
 func workflowCompleteNodeCall(id, input string) llm.ToolCall {
 	return llm.ToolCall{
 		ID:    id,
@@ -356,16 +404,27 @@ func (t *workflowSideEffectTool) Call(_ context.Context, call tools.Call) (tools
 
 type workflowCompletionAccountingController struct {
 	externallyCompletedWorkflowController
-	completions atomic.Int32
-	violations  atomic.Int32
+	completionMu       sync.Mutex
+	completionRequests []workflowruntime.CompletionRequest
+	completions        atomic.Int32
+	violations         atomic.Int32
 }
 
 func (c *workflowCompletionAccountingController) CompleteWorkflowRun(
-	context.Context,
-	workflowruntime.CompletionRequest,
+	_ context.Context,
+	request workflowruntime.CompletionRequest,
 ) (workflowruntime.CompletionResult, error) {
+	c.completionMu.Lock()
+	c.completionRequests = append(c.completionRequests, request)
+	c.completionMu.Unlock()
 	c.completions.Add(1)
 	return workflowruntime.CompletionResult{}, nil
+}
+
+func (c *workflowCompletionAccountingController) CompletionRequests() []workflowruntime.CompletionRequest {
+	c.completionMu.Lock()
+	defer c.completionMu.Unlock()
+	return append([]workflowruntime.CompletionRequest(nil), c.completionRequests...)
 }
 
 func (c *workflowCompletionAccountingController) RecordWorkflowProtocolViolation(
