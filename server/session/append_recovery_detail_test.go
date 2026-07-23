@@ -10,6 +10,13 @@ import (
 	"time"
 )
 
+func TestNilIrreconcilableRecoveryDetailStillIdentifiesRecoveryRequirement(t *testing.T) {
+	var detail *IrreconcilableRecoveryDetail
+	if !errors.Is(detail, ErrStoreRecoveryRequired) {
+		t.Fatal("typed-nil irreconcilable recovery detail did not identify ErrStoreRecoveryRequired")
+	}
+}
+
 func TestOpenResolvedReportsIrreconcilableMetadataRecovery(t *testing.T) {
 	sessionDir := filepath.Join(t.TempDir(), "session-1")
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {

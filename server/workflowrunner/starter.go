@@ -638,26 +638,15 @@ func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartC
 			return launch.SessionPlan{}, nil, err
 		}
 		if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
-			if err := store.EnsureDurable(); err != nil {
-				return err
-			}
-			if compactAndContinueRequiresFreshContract(input, plan) {
-				if err := store.ResetLockedContractForCompactionBoundary(); err != nil {
-					return err
-				}
-				plan, err = planner.PlanSessionWithStore(ctx, launch.SessionRequest{
-					Mode:                                launch.ModeHeadless,
-					Intent:                              mustOpenWorkflowSessionIntent(plan.Descriptor.SessionID().String()),
-					SkipContinuationAgentRoleValidation: skipPersistedRoleValidation,
-				}, store)
-				if err != nil {
-					return err
-				}
-			}
-			overrides = workflowRunPromptOverrides(input.Node.SubagentRole)
-			plan, warnings, err = planner.ApplyRunPromptOverridesWithStore(plan, store, overrides, auth.EmptyState(), launch.RunPromptOverrideOptions{
-				AllowLockedAgentRoleChange: allowLockedWorkflowContinuationRoleChange(plan, overrides),
-			})
+			plan, warnings, err = prepareWorkflowSessionPlanWithStore(
+				ctx,
+				planner,
+				store,
+				input,
+				mustOpenWorkflowSessionIntent(plan.Descriptor.SessionID().String()),
+				skipPersistedRoleValidation,
+				plan,
+			)
 			return err
 		}); err != nil {
 			return launch.SessionPlan{}, nil, err
@@ -692,31 +681,14 @@ func (s *Starter) planExistingWorkflowSession(
 		if err != nil {
 			return err
 		}
-		if err := store.EnsureDurable(); err != nil {
-			return err
-		}
-		if compactAndContinueRequiresFreshContract(input, plan) {
-			if err := store.ResetLockedContractForCompactionBoundary(); err != nil {
-				return err
-			}
-			plan, err = planner.PlanSessionWithStore(ctx, launch.SessionRequest{
-				Mode:                                launch.ModeHeadless,
-				Intent:                              intent,
-				SkipContinuationAgentRoleValidation: skipPersistedRoleValidation,
-			}, store)
-			if err != nil {
-				return err
-			}
-		}
-		overrides := workflowRunPromptOverrides(input.Node.SubagentRole)
-		plan, warnings, err = planner.ApplyRunPromptOverridesWithStore(
-			plan,
+		plan, warnings, err = prepareWorkflowSessionPlanWithStore(
+			ctx,
+			planner,
 			store,
-			overrides,
-			auth.EmptyState(),
-			launch.RunPromptOverrideOptions{
-				AllowLockedAgentRoleChange: allowLockedWorkflowContinuationRoleChange(plan, overrides),
-			},
+			input,
+			intent,
+			skipPersistedRoleValidation,
+			plan,
 		)
 		return err
 	})
@@ -724,6 +696,38 @@ func (s *Starter) planExistingWorkflowSession(
 		return launch.SessionPlan{}, nil, err
 	}
 	return plan, warnings, nil
+}
+
+func prepareWorkflowSessionPlanWithStore(
+	ctx context.Context,
+	planner launch.Planner,
+	store *session.Store,
+	input workflowstore.RunStartContext,
+	replanIntent serverapi.SessionLaunchIntent,
+	skipPersistedRoleValidation bool,
+	plan launch.SessionPlan,
+) (launch.SessionPlan, []string, error) {
+	if err := store.EnsureDurable(); err != nil {
+		return launch.SessionPlan{}, nil, err
+	}
+	if compactAndContinueRequiresFreshContract(input, plan) {
+		if err := store.ResetLockedContractForCompactionBoundary(); err != nil {
+			return launch.SessionPlan{}, nil, err
+		}
+		var err error
+		plan, err = planner.PlanSessionWithStore(ctx, launch.SessionRequest{
+			Mode:                                launch.ModeHeadless,
+			Intent:                              replanIntent,
+			SkipContinuationAgentRoleValidation: skipPersistedRoleValidation,
+		}, store)
+		if err != nil {
+			return launch.SessionPlan{}, nil, err
+		}
+	}
+	overrides := workflowRunPromptOverrides(input.Node.SubagentRole)
+	return planner.ApplyRunPromptOverridesWithStore(plan, store, overrides, auth.EmptyState(), launch.RunPromptOverrideOptions{
+		AllowLockedAgentRoleChange: allowLockedWorkflowContinuationRoleChange(plan, overrides),
+	})
 }
 
 type workflowSessionLaunchRequest struct {

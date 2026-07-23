@@ -75,6 +75,9 @@ func (e *IrreconcilableRecoveryDetail) Error() string {
 }
 
 func (e *IrreconcilableRecoveryDetail) Unwrap() []error {
+	if e == nil {
+		return []error{ErrStoreRecoveryRequired}
+	}
 	if e.cause == nil {
 		return []error{ErrStoreRecoveryRequired}
 	}

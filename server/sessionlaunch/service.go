@@ -170,20 +170,7 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 		if err != nil {
 			return PlanResult{}, err
 		}
-		var preparedPromptFacingTarget *launch.PreparedBaseTarget
-		if req.Mode == serverapi.SessionLaunchModeHeadless && preparedOverrides.BaseTarget != nil {
-			target := *preparedOverrides.BaseTarget
-			preparedPromptFacingTarget = &target
-		} else if req.Mode == serverapi.SessionLaunchModeHeadless && preparedOverrides.NamedTarget != nil {
-			preparedPromptFacingTarget = &launch.PreparedBaseTarget{
-				Settings:     preparedOverrides.NamedTarget.Settings,
-				Source:       preparedOverrides.NamedTarget.Source,
-				EnabledTools: preparedOverrides.NamedTarget.EnabledTools,
-			}
-		}
-		if req.Mode != serverapi.SessionLaunchModeHeadless && !roleOverride.Present {
-			preparedOverrides.BaseTarget = nil
-		}
+		preparedPromptFacingTarget := preparePromptFacingTarget(req.Mode, roleOverride, &preparedOverrides)
 		return s.finalizeLaunchPlan(
 			ctx,
 			func() (launch.SessionPlan, []string, error) {
@@ -265,20 +252,7 @@ func (s *Service) planExistingSessionWithStore(
 	if err != nil {
 		return PlanResult{}, err
 	}
-	var preparedPromptFacingTarget *launch.PreparedBaseTarget
-	if req.Mode == serverapi.SessionLaunchModeHeadless && preparedOverrides.BaseTarget != nil {
-		target := *preparedOverrides.BaseTarget
-		preparedPromptFacingTarget = &target
-	} else if req.Mode == serverapi.SessionLaunchModeHeadless && preparedOverrides.NamedTarget != nil {
-		preparedPromptFacingTarget = &launch.PreparedBaseTarget{
-			Settings:     preparedOverrides.NamedTarget.Settings,
-			Source:       preparedOverrides.NamedTarget.Source,
-			EnabledTools: preparedOverrides.NamedTarget.EnabledTools,
-		}
-	}
-	if req.Mode != serverapi.SessionLaunchModeHeadless && !roleOverride.Present {
-		preparedOverrides.BaseTarget = nil
-	}
+	preparedPromptFacingTarget := preparePromptFacingTarget(req.Mode, roleOverride, &preparedOverrides)
 	return s.finalizeLaunchPlan(
 		ctx,
 		func() (launch.SessionPlan, []string, error) {
@@ -294,6 +268,31 @@ func (s *Service) planExistingSessionWithStore(
 			return planner.ApplyPreparedRunPromptOverridesWithStore(plan, store, req.Overrides, preparedOverrides, launch.RunPromptOverrideOptions{})
 		},
 	)
+}
+
+func preparePromptFacingTarget(
+	mode serverapi.SessionLaunchMode,
+	roleOverride serverapi.RunPromptAgentRoleOverride,
+	preparedOverrides *launch.PreparedRunPromptOverrides,
+) *launch.PreparedBaseTarget {
+	if mode != serverapi.SessionLaunchModeHeadless {
+		if !roleOverride.Present {
+			preparedOverrides.BaseTarget = nil
+		}
+		return nil
+	}
+	if preparedOverrides.BaseTarget != nil {
+		target := *preparedOverrides.BaseTarget
+		return &target
+	}
+	if preparedOverrides.NamedTarget == nil {
+		return nil
+	}
+	return &launch.PreparedBaseTarget{
+		Settings:     preparedOverrides.NamedTarget.Settings,
+		Source:       preparedOverrides.NamedTarget.Source,
+		EnabledTools: preparedOverrides.NamedTarget.EnabledTools,
+	}
 }
 
 func (s *Service) finalizeLaunchPlan(
