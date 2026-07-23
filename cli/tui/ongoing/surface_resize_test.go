@@ -241,50 +241,60 @@ func TestDirectTerminalExpansionErasesPreviousMutableBand(t *testing.T) {
 }
 
 func TestScratchHydrationResetErasesExpandedBottomBand(t *testing.T) {
-	var output bytes.Buffer
-	surface := NewSurfaceWithOptions(&output, SurfaceOptions{
-		TerminalResize: TerminalResizeWidthRehydration,
-		MarkdownLinks:  transcriptrender.MarkdownLinkLabelOnly,
-	})
-	stream, err := analyzer.NewStream(pty.MustDimensions(18, 80))
-	if err != nil {
-		t.Fatalf("new terminal stream: %v", err)
-	}
-	feedFrame := func(operation string) {
-		t.Helper()
-		if err := stream.Feed(output.Bytes()); err != nil {
-			t.Fatalf("%s terminal bytes: %v", operation, err)
-		}
-		output.Reset()
-	}
-	initial := FrameInput{
-		Size: Size{Width: 80, Height: 18},
-		Sections: []FrameSection{{
-			Kind:  FrameSectionStatus,
-			Lines: []string{"LIVE_TOP", "LIVE_BOTTOM"},
-		}},
-	}
-	if _, err := surface.ApplyTerminalMessage(committedAssistantMessage("IMMUTABLE"), initial); err != nil {
-		t.Fatalf("render legacy transcript and live band: %v", err)
-	}
-	feedFrame("render direct-terminal transcript and live band")
-	if err := stream.Resize(pty.MustDimensions(28, 81)); err != nil {
-		t.Fatalf("resize terminal: %v", err)
-	}
+	for _, test := range []struct {
+		name   string
+		policy TerminalResizePolicy
+	}{
+		{name: "direct terminal", policy: TerminalResizeWidthRehydration},
+		{name: "tmux", policy: TerminalResizeTmuxWidthRehydration},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			surface := NewSurfaceWithOptions(&output, SurfaceOptions{
+				TerminalResize: test.policy,
+				MarkdownLinks:  transcriptrender.MarkdownLinkLabelOnly,
+			})
+			stream, err := analyzer.NewStream(pty.MustDimensions(18, 80))
+			if err != nil {
+				t.Fatalf("new terminal stream: %v", err)
+			}
+			feedFrame := func(operation string) {
+				t.Helper()
+				if err := stream.Feed(output.Bytes()); err != nil {
+					t.Fatalf("%s terminal bytes: %v", operation, err)
+				}
+				output.Reset()
+			}
+			initial := FrameInput{
+				Size: Size{Width: 80, Height: 18},
+				Sections: []FrameSection{{
+					Kind:  FrameSectionStatus,
+					Lines: []string{"LIVE_TOP", "LIVE_BOTTOM"},
+				}},
+			}
+			if _, err := surface.ApplyTerminalMessage(committedAssistantMessage("IMMUTABLE"), initial); err != nil {
+				t.Fatalf("render legacy transcript and live band: %v", err)
+			}
+			feedFrame("render legacy transcript and live band")
+			if err := stream.Resize(pty.MustDimensions(28, 81)); err != nil {
+				t.Fatalf("resize terminal: %v", err)
+			}
 
-	expanded := initial
-	expanded.Size = Size{Width: 81, Height: 28}
-	if _, err := surface.ResetForScratchHydration(RehydrateReasonWidthChange, expanded); err != nil {
-		t.Fatalf("reset after expansion: %v", err)
-	}
-	feedFrame("reset after expansion")
+			expanded := initial
+			expanded.Size = Size{Width: 81, Height: 28}
+			if _, err := surface.ResetForScratchHydration(RehydrateReasonWidthChange, expanded); err != nil {
+				t.Fatalf("reset after expansion: %v", err)
+			}
+			feedFrame("reset after expansion")
 
-	snapshot, err := stream.ScreenSnapshot()
-	if err != nil {
-		t.Fatalf("snapshot after scratch reset: %v", err)
-	}
-	if screenContains(snapshot, "LIVE_TOP") || screenContains(snapshot, "LIVE_BOTTOM") {
-		t.Fatalf("scratch reset retained pre-resize mutable rows: %q", snapshot.RenderText())
+			snapshot, err := stream.ScreenSnapshot()
+			if err != nil {
+				t.Fatalf("snapshot after scratch reset: %v", err)
+			}
+			if screenContains(snapshot, "LIVE_TOP") || screenContains(snapshot, "LIVE_BOTTOM") {
+				t.Fatalf("scratch reset retained pre-resize mutable rows: %q", snapshot.RenderText())
+			}
+		})
 	}
 }
 
