@@ -819,18 +819,42 @@ func (s *Store) ResolveTaskWaitingAsk(ctx context.Context, taskID workflow.TaskI
 	return matches[0], nil
 }
 
-func (s *Store) ResolveActiveRunCompletionTarget(ctx context.Context, selector ActiveRunCompletionTargetSelector) (ActiveRunCompletionTarget, error) {
+func (s *Store) ResolveActiveRunCompletionTarget(ctx context.Context, selector ActiveRunCompletionTargetSelector) (RunCompletionTarget, error) {
 	matches, err := s.activeRunCompletionTargetMatches(ctx, selector)
 	if err != nil {
-		return ActiveRunCompletionTarget{}, err
+		return RunCompletionTarget{}, err
 	}
 	if len(matches) == 0 {
-		return ActiveRunCompletionTarget{}, sql.ErrNoRows
+		return RunCompletionTarget{}, sql.ErrNoRows
 	}
 	if len(matches) != 1 {
-		return ActiveRunCompletionTarget{}, fmt.Errorf("selector matched multiple active workflow runs; %w", ErrRunIDRequired)
+		return RunCompletionTarget{}, fmt.Errorf("selector matched multiple active workflow runs; %w", ErrRunIDRequired)
 	}
-	return ActiveRunCompletionTarget{Run: matches[0]}, nil
+	return RunCompletionTarget{Run: matches[0]}, nil
+}
+
+func (s *Store) ResolveIdleSessionRunCompletionTarget(ctx context.Context, sessionID string) (RunCompletionTarget, error) {
+	trimmedSessionID := strings.TrimSpace(sessionID)
+	if trimmedSessionID == "" {
+		return RunCompletionTarget{}, errors.New("session id is required")
+	}
+	runs, err := s.sessionRunCompletionTargets(ctx, trimmedSessionID)
+	if err != nil {
+		return RunCompletionTarget{}, err
+	}
+	matches := make([]RunRecord, 0, len(runs))
+	for _, run := range runs {
+		if run.InterruptedAt != nil {
+			matches = append(matches, run)
+		}
+	}
+	if len(matches) == 0 {
+		return RunCompletionTarget{}, sql.ErrNoRows
+	}
+	if len(matches) != 1 {
+		return RunCompletionTarget{}, fmt.Errorf("session matched multiple idle workflow runs; %w", ErrRunIDRequired)
+	}
+	return RunCompletionTarget{Run: matches[0]}, nil
 }
 
 func (s *Store) activeRunCompletionTargetMatches(ctx context.Context, selector ActiveRunCompletionTargetSelector) ([]RunRecord, error) {
@@ -854,7 +878,17 @@ func (s *Store) activeRunCompletionTargetMatches(ctx context.Context, selector A
 	case runID != "":
 		rows, err = s.queries.ResolveActiveRunCompletionTargetByRunID(ctx, runID)
 	case sessionID != "":
-		rows, err = s.queries.ResolveActiveRunCompletionTargetBySessionID(ctx, sql.NullString{String: sessionID, Valid: true})
+		runs, sessionErr := s.sessionRunCompletionTargets(ctx, sessionID)
+		if sessionErr != nil {
+			return nil, sessionErr
+		}
+		matches := make([]RunRecord, 0, len(runs))
+		for _, run := range runs {
+			if run.InterruptedAt == nil {
+				matches = append(matches, run)
+			}
+		}
+		return matches, nil
 	case taskID != "":
 		rows, err = s.queries.ResolveActiveRunCompletionTargetByTaskID(ctx, taskID)
 	case projectID != "":
@@ -862,6 +896,17 @@ func (s *Store) activeRunCompletionTargetMatches(ctx context.Context, selector A
 	default:
 		rows, err = s.queries.ResolveActiveRunCompletionTargetByShortID(ctx, shortID)
 	}
+	if err != nil {
+		return nil, err
+	}
+	return runRecordsFromTaskRunRecords(rows), nil
+}
+
+func (s *Store) sessionRunCompletionTargets(ctx context.Context, sessionID string) ([]RunRecord, error) {
+	rows, err := s.queries.ResolveSessionRunCompletionTargets(
+		ctx,
+		sql.NullString{String: strings.TrimSpace(sessionID), Valid: true},
+	)
 	if err != nil {
 		return nil, err
 	}

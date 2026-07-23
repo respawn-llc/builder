@@ -112,7 +112,10 @@
 - Forced `structured_output` fails fast with an actionable error when unsupported. Forced `tool` always uses dynamic tool mode. Forced `shell_command` fails execution start when the resolved runtime shell tool is unavailable.
 - In `shell_command` and `tool` modes, each model response must call at least one available tool. This requirement does not add, remove, or reorder tools.
 - Accepted live user steering re-enters the same live completion policy. `structured_output` and `unstructured_output` generation use automatic tool selection.
-- Manual interruption releases the specialized workflow execution. A later ordinary interactive activation uses automatic tool selection; Resume resolves the latest Workflow completion policy.
+- Manual interruption releases the specialized Exact Execution Scope.
+- If the retained Workflow Session still belongs to the interrupted Current Node, a later ordinary interactive activation uses automatic tool selection and remains eligible to complete that Current Node.
+- Kent resolves workflow-started and ordinary interactive completion from that retained Session to the same current Run. The interactive activation does not create a second Transition authority.
+- Resume starts a fresh Exact Execution Scope and resolves the latest Workflow completion policy.
 - `complete_node` is always available in tool completion mode, regardless of the Assignee's configured tools.
 - `shell_command` mode instructs the agent to run `kent task complete`. In an agent Session, `KENT_SESSION_ID` identifies the Task and Current Node. Outside an agent Session, the command requires `--force` and one unambiguous Task, Session, or Current Node.
 - Forced completion outside an agent Session applies only to one unambiguous idle executable Current Node. It does not create a lasting execution selection.
@@ -126,6 +129,7 @@
 - Size limits: output field name `<= 64` chars, output field description `<= 1000`, output value `<= 64 KiB`, commentary `<= 64 KiB`, task comment body `<= 256 KiB`.
 - Completion-contract changes in `structured_output` and `tool` modes can change prompt-cache continuity. `shell_command` and `unstructured_output` preserve the completion contract in appended instructions instead.
 - Kent accepts completion only from the matching Exact Execution Scope or for one unambiguous idle executable Current Node.
+- Completion from a retained Workflow Session may target its interrupted idle Agent Node when the Session is still bound to that Current Node. Completion atomically supersedes the interruption and applies the selected Transition.
 - Human input accepted before the Completion Fence replaces pending completion. Input after the fence is rejected and returns to the user's draft. Kent never transfers it to a successor Node or Session.
 - After five invalid completion attempts, Kent interrupts the Current Node. `[workflow].max_invalid_completion_attempts` configures this limit and defaults to `5`.
 - Workflow execution ends only after the Exact Execution Scope stops. The outcome is successful completion, a resumable blocked state, or a non-success terminal outcome.

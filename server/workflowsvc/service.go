@@ -1303,6 +1303,15 @@ func (s *Service) completeWorkflowTask(ctx context.Context, req serverapi.Workfl
 		return serverapi.WorkflowTaskCompleteResponse{}, err
 	}
 	target, err := s.store.ResolveActiveRunCompletionTarget(ctx, workflowCompletionTargetSelector(req))
+	admission := workflowstore.CompletionAdmission{}
+	if errors.Is(err, sql.ErrNoRows) &&
+		req.ActorKind == serverapi.WorkflowTaskCompleteActorAgent &&
+		workflowTaskCompleteExplicitSelectorCount(req) == 0 {
+		target, err = s.store.ResolveIdleSessionRunCompletionTarget(ctx, req.AgentSessionID)
+		if err == nil {
+			admission, err = workflowstore.NewIdleSessionCompletionAdmission(req.AgentSessionID)
+		}
+	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return serverapi.WorkflowTaskCompleteResponse{}, serverapi.ErrWorkflowTaskCompleteTargetNotFound
@@ -1327,6 +1336,7 @@ func (s *Service) completeWorkflowTask(ctx context.Context, req serverapi.Workfl
 		Actor:              actor,
 		ExpectedGeneration: target.Run.Generation,
 		RequireGeneration:  true,
+		Admission:          admission,
 	})
 	if err != nil {
 		return serverapi.WorkflowTaskCompleteResponse{}, err

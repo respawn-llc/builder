@@ -292,7 +292,7 @@ type ActiveRunCompletionTargetSelector struct {
 	ShortID   string
 }
 
-type ActiveRunCompletionTarget struct {
+type RunCompletionTarget struct {
 	Run RunRecord
 }
 

@@ -4366,11 +4366,18 @@ UPDATE task_runs
 SET
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms),
     completed_at_unix_ms = sqlc.narg(completed_at_unix_ms),
+    interrupted_at_unix_ms = NULL,
+    interruption_reason = NULL,
+    interruption_detail_json = '{}',
     waiting_ask_id = NULL
 WHERE id = sqlc.arg(run_id)
   AND run_generation = sqlc.arg(run_generation)
   AND completed_at_unix_ms IS NULL
-  AND interrupted_at_unix_ms IS NULL;
+  AND interrupted_at_unix_ms IS sqlc.narg(expected_interrupted_at_unix_ms)
+  AND (
+      CAST(sqlc.narg(expected_session_id) AS TEXT) IS NULL
+      OR session_id = CAST(sqlc.narg(expected_session_id) AS TEXT)
+  );
 
 -- name: StartTaskCompleteStartPlacement :execrows
 UPDATE task_node_placements
@@ -4484,7 +4491,7 @@ ORDER BY r.started_at_unix_ms DESC, (
     WHERE storage.id = r.id
 ) DESC;
 
--- name: ResolveActiveRunCompletionTargetBySessionID :many
+-- name: ResolveSessionRunCompletionTargets :many
 SELECT
     r.id,
     r.task_id,
@@ -4512,11 +4519,10 @@ JOIN task_node_placements p ON p.id = r.placement_id
 JOIN workflow_nodes n ON n.id = r.node_id
 WHERE r.started_at_unix_ms IS NOT NULL
   AND r.completed_at_unix_ms IS NULL
-  AND r.interrupted_at_unix_ms IS NULL
   AND trim(COALESCE(r.session_id, '')) != ''
   AND t.canceled_at_unix_ms IS NULL
   AND p.state = 'active'
-  AND n.kind IN ('agent', 'script')
+  AND n.kind = 'agent'
   AND r.session_id = sqlc.arg(session_id)
 ORDER BY r.started_at_unix_ms DESC, (
     SELECT storage.rowid
