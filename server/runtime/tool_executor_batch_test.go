@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	patchtool "core/server/tools/patch"
 	"core/shared/toolspec"
 )
 
@@ -39,33 +42,36 @@ func TestExecuteToolCallsRejectsMissingProviderCallIDBeforeToolExecution(t *test
 	}
 }
 
-type warnedToolHandler struct{}
-
-func (warnedToolHandler) Call(_ context.Context, call tools.Call) (tools.Result, error) {
-	return tools.Result{
-		CallID: call.ID,
-		Name:   call.Name,
-		Output: json.RawMessage(`{"ok":true}`),
-		ModelWarnings: []tools.ModelWarning{
-			tools.ForeignManagedWorktreeEditWarning(),
-		},
-	}, nil
-}
-
 func TestExecuteToolCallsMaterializesSuccessfulModelWarningBeforePersistence(t *testing.T) {
 	store := mustCreateTestSession(t)
+	base := t.TempDir()
+	currentRoot := filepath.Join(base, "current")
+	foreignRoot := filepath.Join(base, "foreign")
+	for _, path := range []string{currentRoot, foreignRoot} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	managedContext, err := tools.NewManagedWorktreePathContext(base, &currentRoot)
+	if err != nil {
+		t.Fatalf("new managed worktree path context: %v", err)
+	}
+	patchHandler, err := patchtool.New(currentRoot, true, patchtool.WithManagedWorktreePathContext(managedContext))
+	if err != nil {
+		t.Fatalf("new patch handler: %v", err)
+	}
 	engine := mustNewTestEngine(
 		t,
 		store,
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: warnedToolHandler{}}),
+		tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: patchHandler}),
 		Config{Model: "gpt-5"},
 	)
 
 	results, err := engine.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
 		ID:    "warned-patch",
 		Name:  string(toolspec.ToolPatch),
-		Input: json.RawMessage(`{"patch":"*** Begin Patch\n*** Add File: a.txt\n+ok\n*** End Patch\n"}`),
+		Input: json.RawMessage(`{"patch":"*** Begin Patch\n*** Add File: ` + filepath.Join(foreignRoot, "a.txt") + `\n+ok\n*** End Patch\n"}`),
 	}})
 	if err != nil {
 		t.Fatalf("execute warned tool: %v", err)
