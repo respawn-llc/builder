@@ -117,7 +117,7 @@
 - Kent resolves workflow-started and ordinary interactive completion from that retained Session to the same current Run. The interactive activation does not create a second Transition authority.
 - Resume starts a fresh Exact Execution Scope and resolves the latest Workflow completion policy.
 - `complete_node` is always available in tool completion mode, regardless of the Assignee's configured tools.
-- `shell_command` mode instructs the agent to run `kent task complete`. In an agent Session, `KENT_SESSION_ID` identifies the Task and Current Node. Outside an agent Session, the command requires `--force` and one unambiguous Task, Session, or Current Node.
+- `shell_command` mode instructs the agent to run `kent task complete`. In an agent Session, `KENT_SESSION_ID` identifies the Task and Current Node. Outside an agent Session, the command requires `--force` and a Session selector or a Task selector that matches exactly one idle executable Current Node.
 - Forced completion outside an agent Session applies only to one unambiguous idle executable Current Node. It does not create a lasting execution selection.
 - `unstructured_output` mode requires the assistant's final answer to be exactly one raw JSON object.
 - Any assistant answer that would otherwise complete an active workflow-controlled Node must pass through that Node's current completion contract in every completion mode, whether or not the answer carries an explicit final-phase designation.
@@ -174,9 +174,11 @@
 - Applied and rejected Transitions are not retained as workflow movement history. Pending Approval state is removed when the Approval applies or a manual move supersedes it.
 - A Task awaiting Approval remains at the source current Node and exposes `waiting_approval` status; target Nodes are not current.
 - Manually moving a Task that is awaiting Approval clears the proposed Transition and replaces the source current Node with the chosen target.
-- Manually moving a Task that is waiting on a Question stops that Exact Execution Scope before applying the move. The Question remains in the Session transcript. Its unresolved attention does not move to the target. The selected Transition Branch determines whether the target reuses the Session.
-- A manual override without a Transition Branch cannot target an executable Node. Movement into an Agent or Script Node requires a concrete branch with a prompt and completion requirements.
-- Task Start and manual movement make no change when Execution Target selection is required. A valid selection applies the original action once. Dismissal leaves the Task unchanged.
+- Manual movement acts on the Task, never on one Current Node.
+- Manual Move does not cancel or join a waiting Question scope. The operator must use Task Interrupt or wait for scope retirement before moving the Task.
+- After Task-wide Interrupt fully stops a Task with several Current Nodes, a manual move may atomically replace all of them with a Start/backlog or Terminal Node. Direct movement from parallel work to an executable target is rejected.
+- Missing-edge manual overrides cannot target executable Nodes. Manual movement into an agent or Script Node requires a concrete Workflow Edge so the target has a real prompt and completion contract.
+- Task start and manual movement into an executable node apply no movement or scheduling when target selection is required. A valid selection retries and applies the original action once; dismissal leaves it unchanged.
 - Approvals occur only after a task has reached an executable node and therefore always reuse the task's locked execution target.
 
 ## Context Preservation And Bindings
@@ -236,7 +238,7 @@
 - Clients offer Interrupt only while Kent reports matching active execution. Kent checks again before interrupting and makes no change if execution has already stopped.
 - Saved state without matching live execution never becomes interruptible as a fallback. Kent must prevent the mismatch, surface the lifecycle failure, or convert the affected Current Node to interrupted during restart recovery.
 - Kent rejects a manual move while an agent or Script is executing or while another lifecycle operation conflicts with movement.
-- A manual move stops a waiting-Question scope before it changes the Task.
+- Manual Move does not cancel or join a waiting Question scope. The operator must use Task Interrupt or wait for scope retirement before moving the Task.
 - Completion can change a Task only from the matching Exact Execution Scope or from one unambiguous idle executable Current Node. A stopped scope and a non-current Node cannot change Task state.
 - Completion replaces source Current Nodes, materializes target inputs, and adds target Current Nodes as one atomic change.
 - Runtime failures, crashes, interruptions, and fixable start-validation blockers leave the affected Current Node interrupted with a reason.
@@ -252,6 +254,9 @@
 - Workflow validity is not attention and does not create Inbox items.
 - Core Task detail includes an unresolved-attention count but not the attention items. It does not scan transcript history.
 - The Task-specific attention feed can read the newest active transcript segment to recover unresolved Question content. Desktop Task detail loads this feed independently so it does not delay core Task detail.
+- Task Activity is a server-paginated projection of durable Comments and retained Session creation. It contains no workflow movement, Node completion, interruption, attempt, or diagnostic history. Clients render Session creation as localized `Session started` activity.
+- Task detail reports the total retained Session count. It provides direct Open and Interrupt actions only for agent Sessions with live Exact Execution Scopes; non-live Sessions remain available through the Session picker.
+- Desktop shows Task-wide Interrupt when several Exact Execution Scopes are live or a Script Node is live.
 - Task status is structured and independent of a specific client. Each client renders and localizes it.
 - One primary status uses this precedence: done, live question, live or persisted workflow approval, running, queued, interrupted, backlog, active.
 - Running, queued, and live-Question status require matching Exact Execution Scope evidence. `running` means an agent loop or Script process is actively executing; `waiting_question` is not running and is not interruptible. Interruption metadata on a current Node never proves liveness.
