@@ -25,6 +25,7 @@ type taskShowOutput struct {
 	CurrentScripts    []serverapi.WorkflowTaskCurrentScript `json:"current_scripts"`
 	Status            serverapi.WorkflowTaskStatus          `json:"status"`
 	Actions           serverapi.WorkflowTaskActions         `json:"actions"`
+	LabelIDs          []string                              `json:"label_ids"`
 	AttentionCount    int                                   `json:"attention_count"`
 }
 
@@ -62,7 +63,12 @@ func taskShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			}
 			return writeCommandJSON(stdout, stderr, taskShowOutputFromDetail(task))
 		}
-		if err := writeTaskDetail(stdout, task); err != nil {
+		labelNames, err := taskLabelNamesForHumanOutput(context.Background(), remote, task.Summary.ProjectID, task.LabelIDs)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if err := writeTaskDetailWithLabelNames(stdout, task, labelNames); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -84,8 +90,14 @@ func taskShowOutputFromDetail(task serverapi.WorkflowTaskDetail) taskShowOutput 
 		CurrentScripts:    task.CurrentScripts,
 		Status:            task.Status,
 		Actions:           task.Actions,
+		LabelIDs:          normalizedLabelIDs(task.LabelIDs),
 		AttentionCount:    task.AttentionCount,
 	}
+}
+
+func normalizedLabelIDs(ids []string) []string {
+	normalized := make([]string, 0, len(ids))
+	return append(normalized, ids...)
 }
 
 func getWorkflowTaskForShow(ctx context.Context, cfg config.App, remote workflowCommandRemote, projectRef string, ref string) (string, serverapi.WorkflowTaskDetail, error) {
@@ -125,6 +137,10 @@ func getWorkflowTaskForShow(ctx context.Context, cfg config.App, remote workflow
 	return requestedProjectID, serverapi.WorkflowTaskDetail{}, fmt.Errorf("task %q not found", trimmed)
 }
 func writeTaskDetail(stdout io.Writer, task serverapi.WorkflowTaskDetail) error {
+	return writeTaskDetailWithLabelNames(stdout, task, nil)
+}
+
+func writeTaskDetailWithLabelNames(stdout io.Writer, task serverapi.WorkflowTaskDetail, labelNames []string) error {
 	statusText, err := taskStatusText(task.Status)
 	if err != nil {
 		return err
@@ -156,7 +172,25 @@ func writeTaskDetail(stdout io.Writer, task serverapi.WorkflowTaskDetail) error 
 	if strings.TrimSpace(task.SourceURL) != "" {
 		fmt.Fprintf(stdout, "Imported from: %s\n", task.SourceURL)
 	}
+	if len(labelNames) > 0 {
+		fmt.Fprintf(stdout, "Labels:")
+		for _, name := range labelNames {
+			fmt.Fprintf(stdout, " %q", name)
+		}
+		fmt.Fprintln(stdout)
+	}
 	return nil
+}
+
+func taskLabelNamesForHumanOutput(ctx context.Context, remote workflowCommandRemote, projectID string, ids []string) ([]string, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	_, snapshot, err := loadWorkflowProjectLabelCatalog(ctx, remote, projectID)
+	if err != nil {
+		return nil, err
+	}
+	return workflowProjectLabelNames(snapshot, ids)
 }
 
 func writeTaskExecutionTarget(stdout io.Writer, target serverapi.WorkflowExecutionTarget) {

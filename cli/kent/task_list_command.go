@@ -23,10 +23,14 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	var columnFlags repeatedStringFlag
 	var attentionFlags repeatedStringFlag
 	var sortFlags repeatedStringFlag
+	var labelFlags repeatedStringFlag
 	fs.Var(&statusFlags, "status", "task status filter; comma-separated or repeatable")
 	fs.Var(&columnFlags, "column", "workflow column key filter; comma-separated or repeatable")
 	fs.Var(&attentionFlags, "attention", "task attention filter; comma-separated or repeatable")
 	fs.Var(&sortFlags, "sort", "sort selectors such as status:asc,updated:desc")
+	fs.Var(&labelFlags, "label", "label name or canonical UUIDv4; repeat for multiple labels")
+	labelMatchRaw := fs.String("label-match", string(serverapi.WorkflowTaskNamedLabelFilterModeAny), "label match mode: any or all")
+	unlabeled := fs.Bool("unlabeled", false, "only include tasks without labels")
 	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
@@ -59,6 +63,12 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	labelMatchExplicit := flagWasProvided(fs, "label-match")
+	labelMatch, err := parseTaskListLabelMatch(*labelMatchRaw, labelMatchExplicit, len(labelFlags), *unlabeled)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	workflowProvided := flagWasProvided(fs, "workflow")
 	var selectedWorkflowID *string
 	var selectedWorkflowSelector *string
@@ -74,16 +84,43 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		selectorValue := selector.String()
 		selectedWorkflowSelector = &selectorValue
 	}
+	var recoveryLabelMatch *serverapi.WorkflowTaskNamedLabelFilterMode
+	if labelMatchExplicit {
+		value := labelMatch
+		recoveryLabelMatch = &value
+	}
 	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
 		projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, *projectRef)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
+		labelFilter := serverapi.WorkflowTaskLabelFilterNone()
+		if *unlabeled {
+			labelFilter = serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindUnlabeled}
+		} else if len(labelFlags) > 0 {
+			_, snapshot, err := loadWorkflowProjectLabelCatalog(context.Background(), remote, projectID)
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+			labelIDs, err := resolveWorkflowProjectLabelSelectors(snapshot, labelFlags)
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+			labelFilter = serverapi.WorkflowTaskLabelFilter{
+				Kind: serverapi.WorkflowTaskLabelFilterKindNamed,
+				Named: &serverapi.WorkflowTaskNamedLabelFilter{
+					Mode:     labelMatch,
+					LabelIDs: labelIDs,
+				},
+			}
+		}
 		request := serverapi.WorkflowTaskListRequest{
 			ProjectID:      &projectID,
 			WorkflowID:     selectedWorkflowID,
-			LabelFilter:    serverapi.WorkflowTaskLabelFilterNone(),
+			LabelFilter:    labelFilter,
 			ColumnKeys:     columnKeys,
 			StatusKinds:    statusKinds,
 			AttentionKinds: attentionKinds,
@@ -101,6 +138,9 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 				StatusKinds:        statusKinds,
 				AttentionKinds:     attentionKinds,
 				Sort:               sortSelectors,
+				LabelSelectors:     append([]string(nil), labelFlags...),
+				LabelMatch:         recoveryLabelMatch,
+				Unlabeled:          *unlabeled,
 				PageSize:           *pageSize,
 				PageToken:          *pageToken,
 				JSON:               *jsonOut,
@@ -114,11 +154,25 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		if selectedWorkflowID == nil && strings.TrimSpace(*pageToken) != "" {
 			expectedScope.WorkflowOwner = taskListExpectedWorkflowFromToken
 		}
-		return writeTaskListResponse(stdout, stderr, resp, expectedScope, *jsonOut)
+		return writeTaskListResponse(context.Background(), stdout, stderr, remote, resp, expectedScope, *jsonOut)
 	})
 }
 
-func writeTaskListResponse(stdout io.Writer, stderr io.Writer, resp serverapi.WorkflowTaskListResponse, expectedScope taskListExpectedScope, jsonOut bool) int {
+func parseTaskListLabelMatch(raw string, explicit bool, selectorCount int, unlabeled bool) (serverapi.WorkflowTaskNamedLabelFilterMode, error) {
+	mode := serverapi.WorkflowTaskNamedLabelFilterMode(raw)
+	if mode != serverapi.WorkflowTaskNamedLabelFilterModeAny && mode != serverapi.WorkflowTaskNamedLabelFilterModeAll {
+		return "", errors.New("--label-match is invalid")
+	}
+	if unlabeled && (selectorCount > 0 || explicit) {
+		return "", errors.New("--unlabeled cannot be combined with --label or --label-match")
+	}
+	if explicit && selectorCount == 0 {
+		return "", errors.New("--label-match requires at least one --label")
+	}
+	return mode, nil
+}
+
+func writeTaskListResponse(ctx context.Context, stdout io.Writer, stderr io.Writer, remote workflowCommandRemote, resp serverapi.WorkflowTaskListResponse, expectedScope taskListExpectedScope, jsonOut bool) int {
 	projection, err := taskListProjectionFromResponse(resp, expectedScope)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -126,6 +180,28 @@ func writeTaskListResponse(stdout io.Writer, stderr io.Writer, resp serverapi.Wo
 	}
 	if jsonOut {
 		return writeCommandJSON(stdout, stderr, projection.Output)
+	}
+	hasLabels := false
+	for _, row := range projection.Rows {
+		if len(row.Item.LabelIDs) > 0 {
+			hasLabels = true
+			break
+		}
+	}
+	if hasLabels {
+		_, snapshot, err := loadWorkflowProjectLabelCatalog(ctx, remote, resp.Scope.ProjectID)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		for index := range projection.Rows {
+			names, err := workflowProjectLabelNames(snapshot, projection.Rows[index].Item.LabelIDs)
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+			projection.Rows[index].LabelNames = names
+		}
 	}
 	for _, row := range projection.Rows {
 		statusText, err := taskStatusText(row.Item.Status)
@@ -139,6 +215,13 @@ func writeTaskListResponse(stdout io.Writer, stderr io.Writer, resp serverapi.Wo
 		}
 		if row.ShowColumns {
 			fmt.Fprintf(stdout, "Columns: %s\n", taskListColumnKeysText(*row.Item.ColumnKeys))
+		}
+		if len(row.LabelNames) > 0 {
+			fmt.Fprint(stdout, "Labels:")
+			for _, name := range row.LabelNames {
+				fmt.Fprintf(stdout, " %q", name)
+			}
+			fmt.Fprintln(stdout)
 		}
 	}
 	if resp.NextPageToken != nil {

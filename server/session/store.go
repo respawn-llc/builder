@@ -553,7 +553,7 @@ func (s *Store) mutateAndPersist(mutator func() error) error {
 		s.mu.Unlock()
 		return err
 	}
-	return s.unlockAndObservePersistence(s.persistMetaLocked())
+	return s.unlockAndObservePersistence(s.persistMetaAfterRecoveryVerifiedLocked())
 }
 
 func (s *Store) unlockAndObservePersistence(observation *persistenceObservation, err error) error {
@@ -786,7 +786,7 @@ func (s *Store) SetInputDraft(inputDraft string) error {
 		s.mu.Unlock()
 		return nil
 	}
-	return s.unlockAndObservePersistence(s.persistMetaLocked())
+	return s.unlockAndObservePersistence(s.persistMetaAfterRecoveryVerifiedLocked())
 }
 
 func (s *Store) SetInputDraftRecovery(inputDraft string, buffers []InputDraftRecoveryBuffer) error {
@@ -809,7 +809,7 @@ func (s *Store) SetInputDraftRecovery(inputDraft string, buffers []InputDraftRec
 		s.mu.Unlock()
 		return nil
 	}
-	return s.unlockAndObservePersistence(s.persistMetaLocked())
+	return s.unlockAndObservePersistence(s.persistMetaAfterRecoveryVerifiedLocked())
 }
 
 func inputDraftRecoveryBuffersEqual(a, b []InputDraftRecoveryBuffer) bool {
@@ -838,7 +838,7 @@ func (s *Store) SetHeadlessActive(active bool) error {
 	}
 	s.meta.HeadlessActive = active
 	s.meta.UpdatedAt = time.Now().UTC()
-	return s.unlockAndObservePersistence(s.persistMetaLocked())
+	return s.unlockAndObservePersistence(s.persistMetaAfterRecoveryVerifiedLocked())
 }
 
 func (s *Store) PromoteSubagentToMain() (bool, error) {
@@ -894,7 +894,7 @@ func (s *Store) SetCompactionSoonReminderIssued(issued bool) error {
 	}
 	s.meta.CompactionSoonReminderIssued = issued
 	s.meta.UpdatedAt = time.Now().UTC()
-	return s.unlockAndObservePersistence(s.persistMetaLocked())
+	return s.unlockAndObservePersistence(s.persistMetaAfterRecoveryVerifiedLocked())
 }
 
 func (s *Store) SetWorktreeReminderState(state *WorktreeReminderState) error {
@@ -929,7 +929,7 @@ func (s *Store) SetWorktreeReminderState(state *WorktreeReminderState) error {
 	}
 	s.meta.WorktreeReminder = CloneWorktreeReminderState(nextState)
 	s.meta.UpdatedAt = time.Now().UTC()
-	return s.unlockAndObservePersistence(s.persistMetaLocked())
+	return s.unlockAndObservePersistence(s.persistMetaAfterRecoveryVerifiedLocked())
 }
 
 func normalizeMetaWorktreeReminder(meta *Meta) error {
@@ -1154,7 +1154,7 @@ func (s *Store) SetContinuationContext(ctx ContinuationContext) error {
 		s.mu.Unlock()
 		return nil
 	}
-	return s.unlockAndObservePersistence(s.persistMetaLocked())
+	return s.unlockAndObservePersistence(s.persistMetaAfterRecoveryVerifiedLocked())
 }
 
 func (s *Store) SetContinuationContextAndMarkLockedPromptFacingContractStale(ctx ContinuationContext) (LockedContractMutationResult, error) {
@@ -1246,7 +1246,7 @@ func (s *Store) BackfillLockedContextBudget(contextWindow, contextPercent int) e
 		s.meta.Locked.ContextPercent = contextPercent
 	}
 	s.meta.UpdatedAt = time.Now().UTC()
-	return s.unlockAndObservePersistence(s.persistMetaLocked())
+	return s.unlockAndObservePersistence(s.persistMetaAfterRecoveryVerifiedLocked())
 }
 
 func (s *Store) BackfillLockedProviderContract(contract LockedProviderCapabilities) error {
@@ -1266,7 +1266,7 @@ func (s *Store) BackfillLockedProviderContract(contract LockedProviderCapabiliti
 	}
 	s.meta.Locked.ProviderContract = contract
 	s.meta.UpdatedAt = time.Now().UTC()
-	return s.unlockAndObservePersistence(s.persistMetaLocked())
+	return s.unlockAndObservePersistence(s.persistMetaAfterRecoveryVerifiedLocked())
 }
 
 func (s *Store) BackfillLockedSystemPrompt(systemPrompt string) error {
@@ -1285,7 +1285,7 @@ func (s *Store) BackfillLockedSystemPrompt(systemPrompt string) error {
 	s.meta.Locked.SystemPrompt = trimmed
 	s.meta.Locked.HasSystemPrompt = true
 	s.meta.UpdatedAt = time.Now().UTC()
-	return s.unlockAndObservePersistence(s.persistMetaLocked())
+	return s.unlockAndObservePersistence(s.persistMetaAfterRecoveryVerifiedLocked())
 }
 
 func (s *Store) BackfillLockedReviewerPrompt(reviewerPrompt string) error {
@@ -1304,7 +1304,7 @@ func (s *Store) BackfillLockedReviewerPrompt(reviewerPrompt string) error {
 	s.meta.Locked.ReviewerPrompt = trimmed
 	s.meta.Locked.HasReviewerPrompt = true
 	s.meta.UpdatedAt = time.Now().UTC()
-	return s.unlockAndObservePersistence(s.persistMetaLocked())
+	return s.unlockAndObservePersistence(s.persistMetaAfterRecoveryVerifiedLocked())
 }
 
 func (s *Store) MarkLockedPromptFacingSnapshotsStale() (LockedContractMutationResult, error) {
@@ -1351,6 +1351,12 @@ func (s *Store) persistMetaLocked() (*persistenceObservation, error) {
 	if err := s.requireMetadataPersistenceLocked(); err != nil {
 		return nil, err
 	}
+	return s.persistMetaAfterRecoveryVerifiedLocked()
+}
+
+// persistMetaAfterRecoveryVerifiedLocked advances metadata only while the
+// caller retains s.mu after requireMetadataPersistenceLocked succeeds.
+func (s *Store) persistMetaAfterRecoveryVerifiedLocked() (*persistenceObservation, error) {
 	if err := s.ensurePersistedLocked(); err != nil {
 		return nil, err
 	}

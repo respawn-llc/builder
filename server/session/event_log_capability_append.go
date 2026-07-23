@@ -284,7 +284,7 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 	}
 	endByteCursor := &endOffset
 	s.meta = postMeta
-	observation, err := s.persistMetaLocked()
+	observation, err := s.persistMetaAfterRecoveryVerifiedLocked()
 	if err != nil {
 		s.mu.Unlock()
 		return recordAppendOutcome{

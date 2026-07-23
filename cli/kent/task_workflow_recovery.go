@@ -17,6 +17,9 @@ type taskListCommandContext struct {
 	StatusKinds        []serverapi.WorkflowTaskStatusKind
 	AttentionKinds     []serverapi.WorkflowTaskAttentionKind
 	Sort               []serverapi.WorkflowTaskListSort
+	LabelSelectors     []string
+	LabelMatch         *serverapi.WorkflowTaskNamedLabelFilterMode
+	Unlabeled          bool
 	PageSize           int
 	PageToken          string
 	JSON               bool
@@ -31,6 +34,7 @@ type taskCreateCommandContext struct {
 	BodyFile           string
 	SourceURL          string
 	SourceWorkspace    string
+	LabelSelectors     []string
 	JSON               bool
 }
 
@@ -269,6 +273,9 @@ func taskCreateRetryCommandArgs(commandContext taskCreateCommandContext, workflo
 	if strings.TrimSpace(commandContext.SourceWorkspace) != "" {
 		args = append(args, "--source-workspace", commandContext.SourceWorkspace)
 	}
+	for _, selector := range commandContext.LabelSelectors {
+		args = append(args, "--label", selector)
+	}
 	if commandContext.JSON {
 		args = append(args, "--json")
 	}
@@ -291,6 +298,15 @@ func taskListRetryCommandArgs(commandContext taskListCommandContext, workflowID 
 	}
 	for _, sortSelector := range commandContext.Sort {
 		args = append(args, "--sort", string(sortSelector.Field)+":"+string(sortSelector.Direction))
+	}
+	for _, selector := range commandContext.LabelSelectors {
+		args = append(args, "--label", selector)
+	}
+	if commandContext.LabelMatch != nil {
+		args = append(args, "--label-match", string(*commandContext.LabelMatch))
+	}
+	if commandContext.Unlabeled {
+		args = append(args, "--unlabeled")
 	}
 	args = append(args, "--page-size", fmt.Sprintf("%d", commandContext.PageSize))
 	if preservePageToken && strings.TrimSpace(commandContext.PageToken) != "" {

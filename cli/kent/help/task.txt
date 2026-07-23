@@ -1,15 +1,21 @@
 Usage of kent task:
-  kent task create --title <title> (--body <body>|--body-file <path>) [--workflow <uuid>] [--project <project>] [--source-url <url>] [--source-workspace <id-or-path>] [--json]
+  kent task create --title <title> (--body <body>|--body-file <path>) [--workflow <uuid>] [--project <project>] [--label <name-or-uuid>]... [--source-url <url>] [--source-workspace <id-or-path>] [--json]
   kent task edit <short-id-or-task-id> [--title <title>] [--body <body>|--body-file <path>] [--source-workspace <id-or-path>] [--project <project>] [--json]
   kent task start <short-id-or-task-id> [--project <project>] [--execution-target none|head|default-branch|ref:<revision>] [--json]
   kent task resume <short-id-or-task-id> [--project <project>]
   kent task approve <transition-id> [--execution-target none|head|default-branch|ref:<revision>]
   kent task move <short-id-or-task-id> <target-node-id> [--project <project>] [--commentary <text>] [--output name=value] [--execution-target none|head|default-branch|ref:<revision>]
   kent task complete [--transition <key>] [--commentary <text>] [--param name=value] [--<parameter> <value>] [--json <payload>|--json-file <path>] [--run <run-id>|--session <session-id>|--task <task-id-or-short-id> [--project <project>]] [--force]
-  kent task list [--project <project>] [--workflow <uuid>] [--status <status>[,<status>...]] [--attention <attention>[,<attention>...]] [--column <key>[,<key>...]] [--sort <field:asc|desc>[,...]] [--page-size <n>] [--page-token <token>] [--json]
+  kent task list [--project <project>] [--workflow <uuid>] [--label <name-or-uuid>]... [--label-match any|all] [--unlabeled] [--status <status>[,<status>...]] [--attention <attention>[,<attention>...]] [--column <key>[,<key>...]] [--sort <field:asc|desc>[,...]] [--page-size <n>] [--page-token <token>] [--json]
   kent task show <short-id-or-task-id> [--project <project>] [--json]
   kent task cancel <short-id-or-task-id> [--project <project>] [--reason <text>]
   kent task delete <short-id-or-task-id> [--project <project>]
+  kent task label create <name> [--project <project>] [--json]
+  kent task label list [--project <project>] [--json]
+  kent task label rename --label <name-or-uuid> <new-name> [--project <project>] [--json]
+  kent task label delete --label <name-or-uuid> [--project <project>] [--json]
+  kent task label add <short-id-or-task-id> --label <name-or-uuid>... [--project <project>] [--json]
+  kent task label remove <short-id-or-task-id> --label <name-or-uuid>... [--project <project>] [--json]
   kent task comment add <short-id-or-task-id> (--body <text>|--body-file <path>) [--project <project>] [--author <user|agent>] [--author-id <id>]
   kent task comment list <short-id-or-task-id> [--project <project>] [--page-size <n>] [--page-token <token>]
   kent task comment replace <comment-id> --body <text>
@@ -29,6 +35,13 @@ Workflow selection:
   persisted `workflow-...` IDs are not accepted.
   Task creation uses `--workflow` when supplied. Otherwise it uses the project
   default, or the lone linked workflow when the project has no default.
+
+Labels:
+  Label selectors are literal repeatable `--label` values. A canonical UUIDv4
+  selects a label ID; every other value is trimmed and matched as a complete
+  case-insensitive Unicode label name. Values are never comma-split.
+  Catalog deletion is immediate and removes the label from every Project task.
+  Create, add, and remove resolve every selector before one atomic task mutation.
 
 Selecting an execution target:
   Task start, approve, and move never prompt. If a workflow requires target
@@ -53,4 +66,6 @@ Listing tasks:
   positions belong to one workflow.
   `--sort` accepts `created`, `updated`, `status`, `column`, `run_count`, or `title`
   followed by `:asc` or `:desc`.
+  `--label-match` defaults to `any`; `all` requires every selected label.
+  `--unlabeled` cannot be combined with `--label` or an explicit `--label-match`.
   The default order is `status:asc,updated:desc`.
