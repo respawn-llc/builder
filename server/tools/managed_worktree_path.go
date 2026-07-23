@@ -40,6 +40,25 @@ func (c ManagedWorktreePathContext) WarnsFor(requestedPath string, resolvedPath 
 	return c.currentRoot == nil || !pathWithin(*c.currentRoot, resolvedPath)
 }
 
+func (c *ManagedWorktreePathContext) WithCurrentWorktreeRoot(currentWorktreeRoot *string) (*ManagedWorktreePathContext, error) {
+	if c == nil {
+		return nil, nil
+	}
+	next := &ManagedWorktreePathContext{baseRoot: c.baseRoot}
+	if currentWorktreeRoot == nil {
+		return next, nil
+	}
+	current, err := config.ResolveExistingPathRealPath(*currentWorktreeRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve current managed worktree root: %w", err)
+	}
+	if !pathWithin(c.baseRoot, current) {
+		return nil, fmt.Errorf("current managed worktree root %q is outside managed worktree base %q", current, c.baseRoot)
+	}
+	next.currentRoot = &current
+	return next, nil
+}
+
 func pathWithin(root string, path string) bool {
 	rootIdentity, err := config.CanonicalLexicalPathIdentity(root)
 	if err != nil {

@@ -47,7 +47,6 @@
 ## Patch And Image Tools
 
 - `patch` applies atomically: malformed or conflicting patches leave files unchanged. It supports add, update, move, and delete; resolves real paths before validating targets; has no timeout; and is not retried automatically.
-- After a successful `patch` or `edit`, Kent adds `[You reached into another Kent worktree. Prefer using \`kent worktree enter <selector>\` to edit in that worktree]` when an explicitly absolute target resolves under the configured managed-worktree base but outside the current managed worktree. Relative targets, current-worktree targets, targets outside that base, and failed edits do not add this warning.
 - Outside-workspace edits require approval unless `allow_non_cwd_edits=true`; the default is `false`. A denied edit returns an explicit error telling the model not to circumvent the decision and to request manual user edits when essential.
 - `view_image` resolves absolute canonical paths before checking access. Workspace checks happen after symlink resolution, so symlink escapes are blocked. Outside-workspace image reads use the same approval policy as edits.
 - Approved outside-workspace image reads appear in run logs with the requested and resolved paths.

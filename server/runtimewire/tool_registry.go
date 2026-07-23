@@ -147,7 +147,35 @@ func (b *LocalToolRegistryBinding) Rebind(workspaceRoot string) error {
 	return b.RebindExecutionTarget(workspaceRoot, nil)
 }
 
-func (b *LocalToolRegistryBinding) RebindExecutionTarget(workspaceRoot string, managedWorktreePathContext *tools.ManagedWorktreePathContext) error {
+func (b *LocalToolRegistryBinding) RebindExecutionTarget(workspaceRoot string, currentWorktreeRoot *string) error {
+	if b == nil {
+		return fmt.Errorf("local tool registry binding is required")
+	}
+	trimmedRoot := strings.TrimSpace(workspaceRoot)
+	if trimmedRoot == "" {
+		return errWorkspaceRootRequired
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	managedWorktreePathContext, err := b.ctx.ManagedWorktreePathContext.WithCurrentWorktreeRoot(currentWorktreeRoot)
+	if err != nil {
+		return err
+	}
+	b.ctx.WorkspaceRoot = trimmedRoot
+	b.ctx.ManagedWorktreePathContext = managedWorktreePathContext
+	return b.rebuildLocked()
+}
+
+func (b *LocalToolRegistryBinding) ManagedWorktreePathContext() *tools.ManagedWorktreePathContext {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.ctx.ManagedWorktreePathContext
+}
+
+func (b *LocalToolRegistryBinding) RebindWithManagedWorktreePathContext(workspaceRoot string, managedWorktreePathContext *tools.ManagedWorktreePathContext) error {
 	if b == nil {
 		return fmt.Errorf("local tool registry binding is required")
 	}

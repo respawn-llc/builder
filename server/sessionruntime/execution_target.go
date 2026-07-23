@@ -9,6 +9,7 @@ import (
 	"core/server/runtime"
 	"core/server/runtimeactivity"
 	"core/server/session"
+	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
@@ -412,11 +413,15 @@ func normalizeTarget(target clientui.SessionExecutionTarget, reminder *session.W
 func syncResourceExecutionTarget(resource *agentResource, engine *runtime.Engine, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) (bool, error) {
 	previousWorkdir := strings.TrimSpace(engine.TranscriptWorkingDir())
 	previousReminder := engine.WorktreeReminderState()
+	var previousManagedWorktreePathContext *tools.ManagedWorktreePathContext
+	if resource.localTools != nil {
+		previousManagedWorktreePathContext = resource.localTools.ManagedWorktreePathContext()
+	}
 	if err := rebindResourceExecutionTarget(resource, engine, target); err != nil {
 		return false, err
 	}
 	if err := engine.SetWorktreeReminderState(reminder); err != nil {
-		rollbackErr := rollbackResourceExecutionTarget(resource, engine, previousWorkdir, previousReminder)
+		rollbackErr := rollbackResourceExecutionTarget(resource, engine, previousWorkdir, previousReminder, previousManagedWorktreePathContext)
 		if rollbackErr != nil {
 			engine.FailQueuedUserMessages(runtime.QueuedUserMessageFailureRuntimeUnavailable)
 			return true, errors.Join(err, rollbackErr)
@@ -444,7 +449,12 @@ func rebindResourceExecutionTarget(resource *agentResource, engine *runtime.Engi
 		return errors.New("active runtime resource is required")
 	}
 	if resource.localTools != nil {
-		if err := resource.localTools.Rebind(target.EffectiveWorkdir); err != nil {
+		var currentWorktreeRoot *string
+		if target.Worktree != nil {
+			root := target.Worktree.Root
+			currentWorktreeRoot = &root
+		}
+		if err := resource.localTools.RebindExecutionTarget(target.EffectiveWorkdir, currentWorktreeRoot); err != nil {
 			return err
 		}
 	}
@@ -452,12 +462,17 @@ func rebindResourceExecutionTarget(resource *agentResource, engine *runtime.Engi
 	return nil
 }
 
-func rollbackResourceExecutionTarget(resource *agentResource, engine *runtime.Engine, workdir string, reminder *session.WorktreeReminderState) error {
+func rollbackResourceExecutionTarget(resource *agentResource, engine *runtime.Engine, workdir string, reminder *session.WorktreeReminderState, managedWorktreePathContext *tools.ManagedWorktreePathContext) error {
 	var collected []error
 	if strings.TrimSpace(workdir) != "" {
-		if err := rebindResource(resource, engine, workdir); err != nil {
+		if resource.localTools != nil {
+			if err := resource.localTools.RebindWithManagedWorktreePathContext(workdir, managedWorktreePathContext); err != nil {
+				collected = append(collected, fmt.Errorf("rollback runtime workdir: %w", err))
+			}
+		} else if err := rebindResource(resource, engine, workdir); err != nil {
 			collected = append(collected, fmt.Errorf("rollback runtime workdir: %w", err))
 		}
+		engine.SetTranscriptWorkingDir(workdir)
 	}
 	if err := engine.SetWorktreeReminderState(reminder); err != nil {
 		collected = append(collected, fmt.Errorf("rollback worktree reminder: %w", err))

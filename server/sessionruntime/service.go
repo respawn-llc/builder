@@ -140,9 +140,12 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 		root := target.Worktree.Root
 		currentWorktreeRoot = &root
 	}
-	managedWorktreePathContext, err := tools.NewManagedWorktreePathContext(req.ActiveSettings.Worktrees.BaseDir, currentWorktreeRoot)
-	if err != nil {
-		return AgentRuntimePlan{}, err
+	var managedWorktreePathContext *tools.ManagedWorktreePathContext
+	if strings.TrimSpace(req.ActiveSettings.Worktrees.BaseDir) != "" {
+		managedWorktreePathContext, err = tools.NewManagedWorktreePathContext(req.ActiveSettings.Worktrees.BaseDir, currentWorktreeRoot)
+		if err != nil {
+			return AgentRuntimePlan{}, err
+		}
 	}
 	return NewAgentRuntimePlan(AgentRuntimePlanOptions{
 		Settings:                   req.ActiveSettings,
