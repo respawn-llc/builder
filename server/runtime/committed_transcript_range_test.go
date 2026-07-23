@@ -401,7 +401,7 @@ func TestTranscriptHydrationRetainsAdjacentRowsAroundProviderEmptyAssistant(t *t
 			message: llm.Message{Role: llm.RoleUser, Content: textutil.Value("before")},
 		},
 		{
-			stepID: emptyStepID,
+			stepID:  emptyStepID,
 			message: llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal)},
 		},
 		{

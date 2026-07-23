@@ -78,7 +78,7 @@ func TestMetadataMutationsLeaveOpaqueEventLogUnchanged(t *testing.T) {
 	if err := store.SetInputDraft("draft"); err != nil {
 		t.Fatalf("set input draft: %v", err)
 	}
-	if _, err := store.SetGoal("ship metadata boundary", GoalActorUser); err != nil {
+	if _, _, err := store.SetGoal("ship metadata boundary", GoalActorUser); err != nil {
 		t.Fatalf("set goal: %v", err)
 	}
 	if err := store.SetPendingModelRecovery(PendingModelRecovery{
@@ -145,13 +145,13 @@ func TestCurrentMetadataOperationsLeaveEventLogUnchanged(t *testing.T) {
 	if err := store.MarkModelDispatchLocked(sessionTestLockedContract()); err != nil {
 		t.Fatalf("set locked contract: %v", err)
 	}
-	if _, err := store.SetGoal("metadata-only goal", GoalActorUser); err != nil {
+	if _, _, err := store.SetGoal("metadata-only goal", GoalActorUser); err != nil {
 		t.Fatalf("set metadata-only goal: %v", err)
 	}
-	if _, err := store.SetGoalStatus(GoalStatusPaused, GoalActorUser); err != nil {
+	if _, _, _, err := store.SetGoalStatus(GoalStatusPaused, GoalActorUser); err != nil {
 		t.Fatalf("pause metadata-only goal: %v", err)
 	}
-	if _, err := store.ClearGoal(GoalActorUser); err != nil {
+	if _, _, err := store.ClearGoal(GoalActorUser); err != nil {
 		t.Fatalf("clear metadata-only goal: %v", err)
 	}
 	if err := store.SetPendingModelRecovery(PendingModelRecovery{

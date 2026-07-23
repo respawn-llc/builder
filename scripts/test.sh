@@ -22,15 +22,16 @@ implies the server target unless targets are named explicitly.
 
 Options:
   --no-wall-clock-cap
-            Disable the script-level server test cap while keeping Go's own package timeouts.
+            Disable the script-level server test-runtime cap while keeping Go's own package timeouts.
   --inherit-env
             Do not sanitize KENT_* environment variables before running tests.
 
 Environment:
   KENT_TEST_TIMEOUT_SECONDS
-            Server test wall-clock cap in seconds. Defaults to 180.
+            Server test-runtime cap in seconds. Defaults to 180.
   KENT_TEST_GO_PACKAGE_PARALLELISM
-            Maximum Go test packages to execute concurrently. Defaults to 4.
+            Maximum Go test packages to execute concurrently. Defaults to the detected CPU count,
+            capped at 18, and falls back to 4 when CPU detection is unavailable.
   KENT_TEST_TUI_TIMEOUT_SECONDS
             TUI test wall-clock cap in seconds. Defaults to 600.
   -h, --help
@@ -117,7 +118,21 @@ case "$disable_wall_clock_cap" in
 esac
 
 timeout_seconds="${KENT_TEST_TIMEOUT_SECONDS:-180}"
-go_test_package_parallelism="${KENT_TEST_GO_PACKAGE_PARALLELISM:-4}"
+default_go_test_package_parallelism=4
+if command -v nproc >/dev/null 2>&1; then
+    default_go_test_package_parallelism="$(nproc)"
+elif command -v sysctl >/dev/null 2>&1; then
+    default_go_test_package_parallelism="$(sysctl -n hw.ncpu 2>/dev/null || true)"
+fi
+case "$default_go_test_package_parallelism" in
+'' | *[!0-9]*)
+    default_go_test_package_parallelism=4
+    ;;
+esac
+if [ "$default_go_test_package_parallelism" -gt 18 ]; then
+    default_go_test_package_parallelism=18
+fi
+go_test_package_parallelism="${KENT_TEST_GO_PACKAGE_PARALLELISM:-$default_go_test_package_parallelism}"
 tui_timeout_seconds="${KENT_TEST_TUI_TIMEOUT_SECONDS:-600}"
 inside_tui_wall_clock_cap="${KENT_TEST_INSIDE_TUI_WALL_CLOCK_CAP:-0}"
 case "$go_test_package_parallelism" in
@@ -210,7 +225,7 @@ check_dependencies() {
     if target_selected server; then
         require_command go "run server tests"
         if [ "$disable_wall_clock_cap" != "1" ]; then
-            require_command python3 "enforce the server test wall-clock timeout"
+            require_command python3 "enforce the server test-runtime timeout"
         fi
     fi
     if target_selected tui && [ -f tui-rs/Cargo.toml ]; then
@@ -331,43 +346,124 @@ run_server_tests() {
     fi
 
     set +e
-    python3 - "$go_log_file" "${server_go_test_args[@]}" <<'PY' &
+    python3 - "$go_log_file" "$timeout_seconds" "${server_go_test_args[@]}" <<'PY' &
+import json
 import os
+import selectors
+import signal
+import subprocess
 import sys
+import time
 
 log_file = sys.argv[1]
-test_args = sys.argv[2:]
-os.setsid()
-fd = os.open(log_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-try:
-    os.dup2(fd, 1)
-    os.dup2(fd, 2)
-finally:
-    os.close(fd)
-os.execvp("go", ["go", "test", *test_args])
+runtime_limit_seconds = float(sys.argv[2])
+test_args = sys.argv[3:]
+process = subprocess.Popen(
+    ["go", "test", "-json", *test_args],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    bufsize=0,
+    start_new_session=True,
+)
+
+def terminate_test_process():
+    if process.poll() is not None:
+        return
+    os.killpg(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+
+def forward_signal(signum, _frame):
+    terminate_test_process()
+    raise SystemExit(128 + signum)
+
+signal.signal(signal.SIGINT, forward_signal)
+signal.signal(signal.SIGTERM, forward_signal)
+
+selector = selectors.DefaultSelector()
+selector.register(process.stdout, selectors.EVENT_READ)
+os.set_blocking(process.stdout.fileno(), False)
+running_tests = set()
+test_runtime_seconds = 0.0
+last_observation = time.monotonic()
+timed_out = False
+pending_output = b""
+
+def observe_line(line, log):
+    global running_tests
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        log.write(line)
+        return
+
+    output = event.get("Output")
+    if output is not None:
+        log.write(output)
+
+    package = event.get("Package")
+    action = event.get("Action")
+    test = event.get("Test")
+    if package is None or test is None:
+        return
+    test_id = (package, test)
+    if action == "run":
+        running_tests.add(test_id)
+    elif action in {"pass", "fail", "skip"}:
+        running_tests.discard(test_id)
+
+def consume_output(log):
+    global pending_output
+    while True:
+        try:
+            chunk = os.read(process.stdout.fileno(), 65536)
+        except BlockingIOError:
+            return
+        if not chunk:
+            return
+        pending_output += chunk
+        while b"\n" in pending_output:
+            raw_line, pending_output = pending_output.split(b"\n", 1)
+            observe_line(raw_line.decode("utf-8", errors="replace") + "\n", log)
+
+with open(log_file, "w", encoding="utf-8") as log:
+    while process.poll() is None:
+        now = time.monotonic()
+        if running_tests:
+            test_runtime_seconds += now - last_observation
+        last_observation = now
+        if test_runtime_seconds >= runtime_limit_seconds:
+            timed_out = True
+            terminate_test_process()
+            break
+
+        timeout = 0.1 if running_tests else 1.0
+        for _, _ in selector.select(timeout):
+            consume_output(log)
+
+    consume_output(log)
+    if pending_output:
+        observe_line(pending_output.decode("utf-8", errors="replace"), log)
+
+status = process.wait()
+if timed_out:
+    raise SystemExit(124)
+if status < 0:
+    raise SystemExit(128 - status)
+raise SystemExit(status)
 PY
     test_pid=$!
-    timed_out=0
-    deadline=$((SECONDS + timeout_seconds))
-
-    while kill -0 "$test_pid" 2>/dev/null; do
-        if [ "$SECONDS" -ge "$deadline" ]; then
-            timed_out=1
-            terminate_test_process_group
-            break
-        fi
-        sleep 1
-    done
-
-    set +e
     wait "$test_pid"
     status=$?
     set -e
     if [ "$status" -eq 0 ]; then
         return
     fi
-    if [ "$timed_out" -eq 1 ]; then
-        printf 'test suite exceeded %ds wall-clock cap; simplify or speed up tests before continuing\n' "$timeout_seconds"
+    if [ "$status" -eq 124 ]; then
+        printf 'test runtime exceeded %ds cap; simplify or speed up tests before continuing\n' "$timeout_seconds"
     elif [ "$status" -eq 143 ] || [ "$status" -eq 137 ]; then
         printf 'test process was terminated by a signal (exit status %d)\n' "$status"
     fi
