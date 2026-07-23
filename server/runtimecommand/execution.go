@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync"
 
 	"core/server/runtime"
 	"core/server/session"
@@ -37,30 +36,7 @@ func (a *ExecutionAdapter) RunAgentExecution(
 	if err != nil {
 		return err
 	}
-	operationContinues := make(chan bool, 1)
-	handle, err := a.authority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
-		Descriptor: descriptor,
-		Resource:   sessionruntime.CurrentAgentResource{},
-		Runner: func(executionCtx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
-			callbackRan := false
-			runErr := bridge.WithEngine(executionCtx, func(_ context.Context, engine *runtime.Engine) error {
-				callbackRan = true
-				runCtx, stop := MergeContexts(executionCtx, ctx)
-				err := run(runCtx, engine)
-				stop()
-				goalLoopActive := err == nil && engine.GoalLoopRunning()
-				operationContinues <- goalLoopActive
-				if err != nil || !goalLoopActive {
-					return err
-				}
-				return engine.WaitForGoalLoop(executionCtx)
-			})
-			if !callbackRan {
-				operationContinues <- false
-			}
-			return runErr
-		},
-	})
+	err = a.authority.RunCurrentAgentExecution(ctx, descriptor, run)
 	if err != nil {
 		if errors.Is(err, sessionruntime.ErrSessionStartsBlocked) {
 			return errors.Join(serverapi.ErrSessionWorktreeDeleting, err)
@@ -70,11 +46,7 @@ func (a *ExecutionAdapter) RunAgentExecution(
 		}
 		return err
 	}
-	if <-operationContinues {
-		return nil
-	}
-	_, err = handle.Wait(context.Background())
-	return err
+	return nil
 }
 
 func (a *ExecutionAdapter) WithLiveExecutionRuntime(
@@ -85,46 +57,5 @@ func (a *ExecutionAdapter) WithLiveExecutionRuntime(
 	if a == nil || a.authority == nil {
 		return errors.New("session runtime authority is required")
 	}
-	execution, ok := a.authority.SessionExecution(sessionID)
-	if !ok {
-		err := a.authority.WithCurrentRuntime(ctx, sessionID, func(context.Context, *runtime.Engine) error {
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-		return serverapi.ErrRuntimeNoActiveRun
-	}
-	resource, ok := execution.Scope().Resource()
-	if !ok {
-		return errors.New("agent execution scope has no runtime resource")
-	}
-	return a.authority.WithRuntime(ctx, resource, callback)
-}
-
-func MergeContexts(contexts ...context.Context) (context.Context, func()) {
-	ctx, cancel := context.WithCancel(context.Background())
-	var once sync.Once
-	stop := func() { once.Do(cancel) }
-	for _, source := range contexts {
-		if source == nil {
-			continue
-		}
-		if err := source.Err(); err != nil {
-			stop()
-			continue
-		}
-		done := source.Done()
-		if done == nil {
-			continue
-		}
-		go func() {
-			select {
-			case <-done:
-				stop()
-			case <-ctx.Done():
-			}
-		}()
-	}
-	return ctx, stop
+	return a.authority.WithLiveExecutionRuntime(ctx, sessionID, callback)
 }

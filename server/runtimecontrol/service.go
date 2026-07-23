@@ -263,7 +263,7 @@ func (s *Service) withRuntime(ctx context.Context, sessionID string, fn func(con
 }
 
 func mergeOperationContexts(contexts ...context.Context) (context.Context, func()) {
-	return runtimecommand.MergeContexts(contexts...)
+	return sessionruntime.MergeContexts(contexts...)
 }
 
 func (s *Service) operationAttemptCanceled(err error, attempt runtimeops.Attempt) bool {

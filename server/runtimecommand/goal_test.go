@@ -103,6 +103,27 @@ func TestGoalAuthorityDormantSetPersistsMetadataBeforeOneNoticeWithoutRuntime(t 
 	}
 }
 
+func TestGoalAuthorityDormantSetPreservesSessionNotFound(t *testing.T) {
+	_, _, goalAuthority, _ := newGoalAuthorityFixture(t, nil)
+	sessionID, err := runtimeids.ParseSessionID("018fdd67-89ab-4cde-8123-456789abcdef")
+	if err != nil {
+		t.Fatalf("parse unknown session id: %v", err)
+	}
+
+	_, err = goalAuthority.Set(context.Background(), GoalSetCommand{
+		SessionID: sessionID,
+		Objective: "missing session goal",
+		Actor:     session.GoalActorUser,
+	})
+
+	if !errors.Is(err, session.ErrSessionNotFound) {
+		t.Fatalf("dormant set error = %v, want session not found", err)
+	}
+	if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("dormant set error = %v, must not report runtime unavailable", err)
+	}
+}
+
 func TestGoalAuthorityDormantSetRespectsAdmissionFence(t *testing.T) {
 	tests := []struct {
 		name      string

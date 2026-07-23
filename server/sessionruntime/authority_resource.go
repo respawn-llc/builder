@@ -725,6 +725,51 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 	return executionHandle{execution: execution}, nil
 }
 
+func (a *Authority) RunCurrentAgentExecution(
+	ctx context.Context,
+	descriptor session.SessionDescriptor,
+	run func(context.Context, *runtime.Engine) error,
+) error {
+	if a == nil {
+		return errors.New("session runtime authority is required")
+	}
+	if run == nil {
+		return errors.New("agent runtime callback is required")
+	}
+	operationContinues := make(chan bool, 1)
+	handle, err := a.StartAgentExecution(ctx, AgentExecutionRequest{
+		Descriptor: descriptor,
+		Resource:   CurrentAgentResource{},
+		Runner: func(executionCtx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
+			callbackRan := false
+			runErr := bridge.WithEngine(executionCtx, func(_ context.Context, engine *runtime.Engine) error {
+				callbackRan = true
+				runCtx, stop := MergeContexts(executionCtx, ctx)
+				err := run(runCtx, engine)
+				stop()
+				goalLoopActive := err == nil && engine.GoalLoopRunning()
+				operationContinues <- goalLoopActive
+				if err != nil || !goalLoopActive {
+					return err
+				}
+				return engine.WaitForGoalLoop(executionCtx)
+			})
+			if !callbackRan {
+				operationContinues <- false
+			}
+			return runErr
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if <-operationContinues {
+		return nil
+	}
+	_, err = handle.Wait(context.Background())
+	return err
+}
+
 func (a *Authority) WithRuntime(ctx context.Context, ref runtimeids.SessionResourceRef, callback func(context.Context, *runtime.Engine) error) error {
 	if a == nil {
 		return errors.New("session runtime authority is required")
@@ -764,6 +809,31 @@ func (a *Authority) WithCurrentRuntime(ctx context.Context, sessionID runtimeids
 		)
 	}
 	return resource.withEngine(ctx, resource.ref, callback)
+}
+
+func (a *Authority) WithLiveExecutionRuntime(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	callback func(context.Context, *runtime.Engine) error,
+) error {
+	if a == nil {
+		return errors.New("session runtime authority is required")
+	}
+	execution, ok := a.SessionExecution(sessionID)
+	if !ok {
+		err := a.WithCurrentRuntime(ctx, sessionID, func(context.Context, *runtime.Engine) error {
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		return serverapi.ErrRuntimeNoActiveRun
+	}
+	resource, ok := execution.Scope().Resource()
+	if !ok {
+		return errors.New("agent execution scope has no runtime resource")
+	}
+	return a.WithRuntime(ctx, resource, callback)
 }
 
 func (a *Authority) retainResource(ref runtimeids.SessionResourceRef) (*ResourceRetention, error) {

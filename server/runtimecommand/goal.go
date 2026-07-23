@@ -185,9 +185,6 @@ func (a *GoalAuthority) withDormantAdmission(
 		return applyErr
 	})
 	if err != nil {
-		if errors.Is(err, session.ErrSessionNotFound) {
-			return GoalCommandResult{}, serverapi.ErrRuntimeUnavailable
-		}
 		return GoalCommandResult{}, err
 	}
 	if !admission.RuntimeAvailable {
