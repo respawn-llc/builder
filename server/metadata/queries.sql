@@ -3767,12 +3767,7 @@ SELECT
     s.project_id,
     p.display_name AS project_display_name,
     p.project_key,
-    s.artifact_relpath,
-    CAST(
-        json_type(s.metadata_json, '$.workflow_session') IS NOT NULL
-        AND json_type(s.metadata_json, '$.workflow_session') != 'null'
-        AS INTEGER
-    ) AS has_workflow_session
+    s.artifact_relpath
 FROM sessions s
 JOIN projects p ON p.id = s.project_id
 WHERE s.id = sqlc.arg(session_id)
@@ -3871,11 +3866,14 @@ SET
     cwd_relpath = '.',
     artifact_relpath = sqlc.arg(target_artifact_relpath),
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms),
-    metadata_json = json_set(
-        CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
-        '$.workspace_root', CAST(sqlc.arg(target_workspace_root) AS TEXT),
-        '$.workspace_container', CAST(sqlc.arg(target_workspace_container) AS TEXT),
-        '$.worktree_reminder', json('null')
+    metadata_json = json_remove(
+        json_set(
+            CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
+            '$.workspace_root', CAST(sqlc.arg(target_workspace_root) AS TEXT),
+            '$.workspace_container', CAST(sqlc.arg(target_workspace_container) AS TEXT),
+            '$.worktree_reminder', json('null')
+        ),
+        '$.workflow_session'
     )
 WHERE id = sqlc.arg(session_id)
   AND project_id = sqlc.arg(source_project_id)

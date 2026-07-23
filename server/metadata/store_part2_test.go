@@ -55,9 +55,6 @@ func TestResolvePersistedSessionValidatesContinuationRoleJSON(t *testing.T) {
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
 	sess := createMetadataTestSession(t, store, cfg, binding)
-	if err := sess.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1", TaskID: "task-1", WorkflowID: "workflow-1"}); err != nil {
-		t.Fatalf("SetWorkflowSessionState: %v", err)
-	}
 	tests := []struct {
 		name     string
 		payload  string
@@ -85,9 +82,6 @@ func TestResolvePersistedSessionValidatesContinuationRoleJSON(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("ResolvePersistedSession: %v", err)
-			}
-			if record.Meta.WorkflowSession == nil || record.Meta.WorkflowSession.RunID != "run-1" {
-				t.Fatalf("workflow session = %+v, want persisted workflow association", record.Meta.WorkflowSession)
 			}
 			got := record.Meta.Continuation
 			if tt.wantRole == nil {

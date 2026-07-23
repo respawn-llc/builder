@@ -1944,6 +1944,29 @@ func (s *Store) SessionBelongsToProject(ctx context.Context, sessionID string, p
 	return strings.TrimSpace(row.ProjectID) == strings.TrimSpace(projectID), nil
 }
 
+// SessionHasWorkflowTask reports whether direct Session ownership links the
+// Session to a retained workflow Task.
+func (s *Store) SessionHasWorkflowTask(ctx context.Context, sessionID string) (bool, error) {
+	if s == nil || s.queries == nil {
+		return false, errors.New("metadata store is required")
+	}
+	id := strings.TrimSpace(sessionID)
+	if id == "" {
+		return false, errors.New("session id is required")
+	}
+	taskIDs, err := s.queries.ListSessionWorkflowTaskIDs(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("list session workflow task ids: %w", err)
+	}
+	if len(taskIDs) == 0 {
+		return false, nil
+	}
+	if len(taskIDs) != 1 || !taskIDs[0].Valid || strings.TrimSpace(taskIDs[0].String) == "" {
+		return false, fmt.Errorf("session %q has invalid workflow task ownership", id)
+	}
+	return true, nil
+}
+
 func (s *Store) resolveSessionExecutionTargetRow(ctx context.Context, sessionID string) (sqlitegen.GetSessionExecutionTargetByIDRow, error) {
 	if s == nil || s.queries == nil {
 		return sqlitegen.GetSessionExecutionTargetByIDRow{}, errors.New("metadata store is required")
@@ -2130,7 +2153,6 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 		"pending_model_recovery":             snapshot.Meta.PendingModelRecovery,
 		"worktree_reminder":                  persistedWorktreeReminder,
 		"goal":                               snapshot.Meta.Goal,
-		"workflow_session":                   snapshot.Meta.WorkflowSession,
 	})
 	if err != nil {
 		return err
@@ -2271,7 +2293,6 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 		PendingModelRecovery            *session.PendingModelRecovery      `json:"pending_model_recovery"`
 		WorktreeReminder                *session.WorktreeReminderState     `json:"worktree_reminder"`
 		Goal                            *session.GoalState                 `json:"goal"`
-		WorkflowSession                 *session.WorkflowSessionState      `json:"workflow_session"`
 	}{}
 	if err := unmarshalStoredJSON(row.MetadataJson, &metadataPayload); err != nil {
 		return session.Meta{}, fmt.Errorf("decode session metadata json: %w", err)
@@ -2340,7 +2361,6 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 		PendingModelRecovery:            metadataPayload.PendingModelRecovery,
 		WorktreeReminder:                metadataPayload.WorktreeReminder,
 		Goal:                            metadataPayload.Goal,
-		WorkflowSession:                 metadataPayload.WorkflowSession,
 		UsageState:                      usageState,
 		Locked:                          locked,
 	}, nil

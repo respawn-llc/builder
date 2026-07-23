@@ -39,8 +39,8 @@ type PromptHistoryStore interface {
 	RecordPromptHistoryEntry(ctx context.Context, entry metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, bool, error)
 }
 
-type WorkflowSessionResolver interface {
-	ResolveSessionStore(ctx context.Context, sessionID string) (*session.Store, error)
+type WorkflowTaskSessionResolver interface {
+	SessionHasWorkflowTask(ctx context.Context, sessionID string) (bool, error)
 }
 
 var errWorkflowTaskSessionAutoCompactionDisable = errors.New("auto-compaction cannot be disabled for workflow task sessions")
@@ -51,7 +51,7 @@ type Service struct {
 	goalAuthority  *runtimecommand.GoalAuthority
 	activity       RuntimeActivityResolver
 	promptStore    PromptHistoryStore
-	workflowStates WorkflowSessionResolver
+	workflowTasks  WorkflowTaskSessionResolver
 	persisted      session.PersistedSessionResolver
 	operations     *runtimeops.Coordinator
 	sessionNames   *requestmemo.Memo[sessionStringMemoRequest, struct{}]
@@ -235,11 +235,11 @@ func (s *Service) WithPromptHistoryStore(store PromptHistoryStore) *Service {
 	return s
 }
 
-func (s *Service) WithWorkflowSessionResolver(resolver WorkflowSessionResolver) *Service {
+func (s *Service) WithWorkflowTaskSessionResolver(resolver WorkflowTaskSessionResolver) *Service {
 	if s == nil {
 		return nil
 	}
-	s.workflowStates = resolver
+	s.workflowTasks = resolver
 	return s
 }
 
@@ -741,14 +741,12 @@ func (s *Service) workflowTaskSession(ctx context.Context, sessionID string, eng
 	if engine != nil && engine.WorkflowSessionState().RunID != "" {
 		return true, nil
 	}
-	if s != nil && s.workflowStates != nil {
-		store, err := s.workflowStates.ResolveSessionStore(ctx, sessionID)
+	if s != nil && s.workflowTasks != nil {
+		workflow, err := s.workflowTasks.SessionHasWorkflowTask(ctx, sessionID)
 		if err != nil {
 			return false, err
 		}
-		if store != nil && store.Meta().WorkflowSession != nil {
-			return true, nil
-		}
+		return workflow, nil
 	}
 	return false, nil
 }

@@ -101,7 +101,6 @@ func (s *Store) PlanSessionWorkspaceRetarget(ctx context.Context, req SessionWor
 		sourceProject,
 		targetRoot,
 		targetProject.ID != sourceProject.ID,
-		state.HasWorkflowSession != 0,
 	); err != nil {
 		return SessionWorkspaceRetargetPlan{}, err
 	}
@@ -165,7 +164,6 @@ func (s *Store) CommitSessionWorkspaceRetarget(ctx context.Context, plan Session
 		plan.SourceProject,
 		plan.TargetWorkspaceRoot,
 		plan.CrossProject(),
-		state.HasWorkflowSession != 0,
 	); err != nil {
 		return SessionWorkspaceRetargetResult{}, err
 	}
@@ -214,7 +212,6 @@ func validateSessionWorkspaceRetargetWorkflowOwnership(
 	sourceProject serverapi.ProjectReference,
 	targetRoot string,
 	crossProject bool,
-	hasWorkflowSession bool,
 ) error {
 	if !crossProject {
 		return nil
@@ -230,7 +227,7 @@ func validateSessionWorkspaceRetargetWorkflowOwnership(
 		}
 		taskIDs = append(taskIDs, taskID.String)
 	}
-	if !hasWorkflowSession && len(taskIDs) == 0 {
+	if len(taskIDs) == 0 {
 		return nil
 	}
 	return &serverapi.SessionRetargetError{

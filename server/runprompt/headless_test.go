@@ -353,12 +353,10 @@ func TestWorkflowCallerDeniedTargetLeavesNoHeadlessLaunchArtifacts(t *testing.T)
 	if err != nil {
 		t.Fatalf("session.Create parent: %v", err)
 	}
-	if err := parent.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1"}); err != nil {
-		t.Fatalf("SetWorkflowSessionState: %v", err)
-	}
 	if err := parent.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable parent: %v", err)
 	}
+	testsetup.BindSessionToWorkflowTask(t, meta, binding.ProjectID, parent.Meta().SessionID)
 	ordinaryCaller, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.Create ordinary caller: %v", err)
@@ -558,9 +556,10 @@ func TestWorkflowCallerLaunchesDefaultAndCustomHeadlessSubagents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session.Create parent: %v", err)
 	}
-	if err := parent.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1"}); err != nil {
-		t.Fatalf("SetWorkflowSessionState: %v", err)
+	if err := parent.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable parent: %v", err)
 	}
+	testsetup.BindSessionToWorkflowTask(t, meta, binding.ProjectID, parent.Meta().SessionID)
 	parentID := parent.Meta().SessionID
 	ordinaryParent, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
 	if err != nil {

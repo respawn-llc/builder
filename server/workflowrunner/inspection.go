@@ -4,14 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"core/server/launch"
 	"core/server/session"
-	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/shared/config"
+	"core/shared/runtimeids"
 )
 
 // BuildWorkflowRuntimeConfig builds the runtime contract shared by live workflow
@@ -53,13 +52,19 @@ func optionalRunCompletionMode(mode *string) string {
 // supplied session store controls persistence, so callers can use a fileless
 // store for read-only inspection.
 func BuildPersistedWorkflowInspection(ctx context.Context, app config.App, sessionStore *session.Store, store *workflowstore.Store) (PersistedWorkflowInspection, error) {
-	if sessionStore == nil || sessionStore.Meta().WorkflowSession == nil {
-		return PersistedWorkflowInspection{}, errors.New("workflow session state is required")
+	if sessionStore == nil {
+		return PersistedWorkflowInspection{}, errors.New("session store is required")
 	}
-	state := *sessionStore.Meta().WorkflowSession
-	input, err := loadPersistedWorkflowRunInput(ctx, store, state, sessionStore.Meta().SessionID)
+	sessionID, err := runtimeids.ParseSessionID(sessionStore.Meta().SessionID)
 	if err != nil {
-		return PersistedWorkflowInspection{}, err
+		return PersistedWorkflowInspection{}, fmt.Errorf("parse persisted session id: %w", err)
+	}
+	if store == nil {
+		return PersistedWorkflowInspection{}, errors.New("workflow store is required")
+	}
+	input, err := store.ResolveCurrentSessionStartContext(ctx, sessionID)
+	if err != nil {
+		return PersistedWorkflowInspection{}, fmt.Errorf("resolve persisted workflow context: %w", err)
 	}
 	executionRoot, err := requireRunExecutionRoot(input)
 	if err != nil {
@@ -95,28 +100,4 @@ func BuildPersistedWorkflowInspection(ctx context.Context, app config.App, sessi
 		Runtime:       runtimeConfig,
 		ExecutionRoot: executionRoot.EffectiveRoot(),
 	}, nil
-}
-
-func loadPersistedWorkflowRunInput(ctx context.Context, store *workflowstore.Store, state session.WorkflowSessionState, sessionID string) (workflowstore.RunStartContext, error) {
-	if store == nil {
-		return workflowstore.RunStartContext{}, errors.New("workflow store is required")
-	}
-	runID := workflow.RunID(strings.TrimSpace(state.RunID))
-	if runID == "" {
-		return workflowstore.RunStartContext{}, errors.New("workflow session run id is required")
-	}
-	input, err := store.GetRunStartContext(ctx, runID)
-	if err != nil {
-		return workflowstore.RunStartContext{}, fmt.Errorf("load workflow run context: %w", err)
-	}
-	if strings.TrimSpace(input.Run.SessionID) != strings.TrimSpace(sessionID) {
-		return workflowstore.RunStartContext{}, fmt.Errorf("workflow run %q is attached to session %q, not %q", runID, input.Run.SessionID, sessionID)
-	}
-	if taskID := strings.TrimSpace(state.TaskID); taskID != "" && taskID != string(input.Task.ID) {
-		return workflowstore.RunStartContext{}, fmt.Errorf("workflow session task %q does not match run task %q", taskID, input.Task.ID)
-	}
-	if workflowID := strings.TrimSpace(state.WorkflowID); workflowID != "" && workflowID != string(input.Task.WorkflowID) {
-		return workflowstore.RunStartContext{}, fmt.Errorf("workflow session workflow %q does not match run workflow %q", workflowID, input.Task.WorkflowID)
-	}
-	return input, nil
 }

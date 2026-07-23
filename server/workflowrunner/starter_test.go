@@ -20,6 +20,7 @@ import (
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
+	"core/server/metadata/sqlitegen"
 	"core/server/registry"
 	"core/server/runtime"
 	"core/server/runtimewire"
@@ -1902,6 +1903,188 @@ func TestRemoveFanoutCloneDeletesOrphanedClone(t *testing.T) {
 	fixture.starter.removeFanoutClone(context.Background(), containerDir, cloneID)
 	if _, err := os.Stat(cloneDir); !os.IsNotExist(err) {
 		t.Fatalf("clone dir should be removed, stat err = %v", err)
+	}
+}
+
+func TestBuildPersistedWorkflowInspectionUsesDirectCurrentSessionOwnership(t *testing.T) {
+	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput)
+	ctx := context.Background()
+	task, err := fixture.store.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: fixture.projectID,
+		Title:     "Run workflow",
+		Body:      "Body for workflow",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := fixture.worktrees.RestoreLockedTaskWorktree(ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID}); err != nil {
+		t.Fatalf("RestoreLockedTaskWorktree: %v", err)
+	}
+	candidate := fixture.worktrees.executionTargetCandidate(task)
+	started, err := fixture.store.StartTaskWithExecutionTarget(ctx, task.ID, &candidate)
+	if err != nil {
+		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
+	}
+	if len(started.Mutation.Created) != 1 {
+		t.Fatalf("started current nodes = %+v, want one", started.Mutation.Created)
+	}
+	currentNode := started.Mutation.Created[0].Reference
+	def, workflowRecord, err := fixture.store.GetDefinition(ctx, fixture.workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	var agent workflow.Node
+	for _, node := range def.Nodes {
+		if workflow.NodeIDOf(node) == currentNode.NodeID {
+			agent = node
+			break
+		}
+	}
+	if agent == nil || agent.Kind() != workflow.NodeKindAgent {
+		t.Fatalf("started node = %#v, want agent", agent)
+	}
+	snapshotJSON, err := workflow.MarshalString(map[string]any{
+		"workflow_id":            fixture.workflowID,
+		"workflow_revision_seen": workflowRecord.Version,
+		"node": map[string]any{
+			"id":              workflow.NodeIDOf(agent),
+			"key":             workflow.NodeKey(agent),
+			"display_name":    workflow.NodeDisplayName(agent),
+			"kind":            agent.Kind(),
+			"subagent_role":   workflow.NodeSubagentRole(agent),
+			"prompt_template": workflow.NodePromptTemplate(agent),
+		},
+		"transition_groups": []any{},
+	})
+	if err != nil {
+		t.Fatalf("marshal legacy run snapshot: %v", err)
+	}
+	runMetadataJSON, err := workflow.MarshalString(map[string]any{
+		"context_mode":              workflow.ContextModeNewSession,
+		"context_resolution_frozen": true,
+		"prompt_template":           workflow.NodePromptTemplate(agent),
+	})
+	if err != nil {
+		t.Fatalf("marshal legacy run metadata: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	const (
+		placementID = "placement-inspection-direct-ownership"
+		runID       = "run-inspection-direct-ownership"
+	)
+	if err := fixture.metadata.Queries().InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{
+		ID:              placementID,
+		TaskID:          string(task.ID),
+		NodeID:          sql.NullString{String: string(currentNode.NodeID), Valid: true},
+		State:           "active",
+		CreatedAtUnixMs: now,
+		UpdatedAtUnixMs: now,
+	}); err != nil {
+		t.Fatalf("InsertTaskNodePlacement legacy bridge: %v", err)
+	}
+	if err := fixture.metadata.Queries().InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{
+		ID:                     runID,
+		PlacementID:            placementID,
+		RunGeneration:          0,
+		WorkflowRevisionSeen:   workflowRecord.Version,
+		CreatedAtUnixMs:        now,
+		UpdatedAtUnixMs:        now,
+		InterruptionDetailJson: "{}",
+		RunStartSnapshotJson:   snapshotJSON,
+		MetadataJson:           runMetadataJSON,
+	}); err != nil {
+		t.Fatalf("InsertTaskRun legacy bridge: %v", err)
+	}
+	claimed, err := fixture.store.ClaimRun(ctx, workflow.RunID(runID), 0)
+	if err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	if err := fixture.store.SetRunEffectiveCompletionMode(
+		ctx,
+		claimed.ID,
+		claimed.Generation,
+		string(config.WorkflowCompletionModeStructuredOutput),
+	); err != nil {
+		t.Fatalf("SetRunEffectiveCompletionMode: %v", err)
+	}
+
+	sessionRoot := filepath.Join(fixture.cfg.PersistenceRoot, "projects", fixture.projectID, "sessions")
+	persistedSession, err := session.Create(
+		sessionRoot,
+		filepath.Base(fixture.cfg.WorkspaceRoot),
+		fixture.cfg.WorkspaceRoot,
+		sessioncontract.SessionCategorySubagent,
+		fixture.metadata.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+	sessionID, err := runtimeids.ParseSessionID(persistedSession.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	if err := fixture.store.AttachRunSession(ctx, claimed.ID, claimed.Generation, sessionID.String()); err != nil {
+		t.Fatalf("AttachRunSession: %v", err)
+	}
+	if _, err := fixture.store.AssociateTaskSession(ctx, workflowstore.TaskSessionAssociationRequest{
+		SessionID:    sessionID,
+		CurrentNode:  currentNode,
+		AssociatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("AssociateTaskSession: %v", err)
+	}
+
+	interruptedAt := time.Now().UTC().UnixMilli()
+	updated, err := fixture.metadata.DB().ExecContext(ctx, `
+UPDATE task_current_nodes
+SET
+    session_id = ?,
+    scheduling_state = 'interrupted',
+    interruption_reason = 'server_restart',
+    interruption_detail_json = ?,
+    interrupted_at_unix_ms = ?
+WHERE task_id = ?
+  AND node_id = ?
+  AND transition_branch_key IS NULL`,
+		sessionID.String(),
+		`{"code":"workflow.execution.restarted","fields":{"operation":"recovery"}}`,
+		interruptedAt,
+		string(task.ID),
+		string(currentNode.NodeID),
+	)
+	if err != nil {
+		t.Fatalf("bind migrated current node: %v", err)
+	}
+	if rows, err := updated.RowsAffected(); err != nil {
+		t.Fatalf("count bound migrated current node: %v", err)
+	} else if rows != 1 {
+		t.Fatalf("bound migrated current nodes = %d, want one", rows)
+	}
+	if _, err := fixture.metadata.DB().ExecContext(ctx, `
+UPDATE sessions
+SET metadata_json = json_set(
+    metadata_json,
+    '$.workflow_session',
+    json_object(
+        'run_id', 'stale-run-id',
+        'task_id', 'stale-task-id',
+        'workflow_id', 'stale-workflow-id'
+    )
+)
+WHERE id = ?`, sessionID.String()); err != nil {
+		t.Fatalf("seed stale workflow metadata: %v", err)
+	}
+	reopenedSession, err := session.Open(persistedSession.Dir(), fixture.metadata.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("session.Open: %v", err)
+	}
+
+	inspection, err := BuildPersistedWorkflowInspection(ctx, fixture.cfg, reopenedSession, fixture.store)
+	if err != nil {
+		t.Fatalf("BuildPersistedWorkflowInspection: %v", err)
+	}
+	if inspection.Runtime.Contract.RunID != claimed.ID {
+		t.Fatalf("inspection run id = %q, want direct-owner run %q", inspection.Runtime.Contract.RunID, claimed.ID)
 	}
 }
 

@@ -56,7 +56,6 @@ func persistedMetaFromMetadata(metadata session.Meta) session.Meta {
 		WorktreeReminder:                metadata.WorktreeReminder,
 		UsageState:                      metadata.UsageState,
 		Goal:                            metadata.Goal,
-		WorkflowSession:                 metadata.WorkflowSession,
 		Locked:                          metadata.Locked,
 	}
 }

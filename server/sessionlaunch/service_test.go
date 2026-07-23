@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	"core/server/launch"
 	"core/server/metadata"
@@ -370,9 +371,10 @@ func TestPlanLaunchSessionUsesResolvedCallerWorkflowOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session.Create workflow caller: %v", err)
 	}
-	if err := workflowCaller.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1"}); err != nil {
-		t.Fatalf("SetWorkflowSessionState: %v", err)
+	if err := workflowCaller.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable workflow caller: %v", err)
 	}
+	testsetup.BindSessionToWorkflowTask(t, meta, binding.ProjectID, workflowCaller.Meta().SessionID)
 	ordinaryCaller, err := session.Create(containerDir, filepath.Base(containerDir), workspace, sessioncontract.SessionCategoryMain, meta.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("session.Create ordinary caller: %v", err)

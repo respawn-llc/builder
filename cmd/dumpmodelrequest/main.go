@@ -146,7 +146,11 @@ func captureSessionRequest(
 	activeSources := resolved.Source.Sources
 	workingDirectory := ""
 	var workflowConfig *workflowruntime.Config
-	if store.Meta().WorkflowSession != nil {
+	workflowOwned, err := md.SessionHasWorkflowTask(ctx, sessionID)
+	if err != nil {
+		return capturedRequest{}, fmt.Errorf("resolve workflow session ownership: %w", err)
+	}
+	if workflowOwned {
 		workflowInspection, workflowErr := resolvePersistedWorkflowInspection(ctx, cfg, md, store)
 		if workflowErr != nil {
 			return capturedRequest{}, fmt.Errorf("resolve workflow session launch settings: %w", workflowErr)

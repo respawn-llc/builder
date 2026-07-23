@@ -516,6 +516,17 @@ INSERT INTO task_runs (
     ?,
     ?
 )`, now, runUpdatedAt, now+1)
+	execSeed(t, db, "legacy workflow session metadata", `
+UPDATE sessions
+SET metadata_json = json_object(
+    'workflow_session',
+    json_object(
+        'run_id', 'run-stale-agent-migration',
+        'task_id', 'task-stale-agent-migration',
+        'workflow_id', 'workflow-stale-agent-migration'
+    )
+)
+WHERE id = '550e8400-e29b-41d4-a716-446655440000'`)
 	if err := db.Close(); err != nil {
 		t.Fatalf("close version 58 db: %v", err)
 	}
@@ -585,6 +596,16 @@ WHERE session.id = '550e8400-e29b-41d4-a716-446655440000'`).Scan(&taskID, &assoc
 	}
 	if taskID != "task-active-agent-migration" || associationNodeID != "node-agent" || associatedAt != runUpdatedAt {
 		t.Fatalf("projected active agent session = task=%q node=%q associated_at=%d", taskID, associationNodeID, associatedAt)
+	}
+	var legacyWorkflowMetadataType sql.NullString
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT json_type(metadata_json, '$.workflow_session')
+FROM sessions
+WHERE id = '550e8400-e29b-41d4-a716-446655440000'`).Scan(&legacyWorkflowMetadataType); err != nil {
+		t.Fatalf("query migrated workflow session metadata: %v", err)
+	}
+	if legacyWorkflowMetadataType.Valid {
+		t.Fatalf("migrated workflow session metadata type = %q, want absent", legacyWorkflowMetadataType.String)
 	}
 }
 

@@ -84,6 +84,69 @@ func (s *Store) LatestTaskSessionForNode(ctx context.Context, currentNode workfl
 	return latestTaskSessionForNode(ctx, s.queries, currentNode)
 }
 
+// ResolveCurrentSessionStartContext reconstructs a legacy runner input from the
+// Session's direct current-state ownership. It deliberately does not read
+// durable Session metadata or accept a Run ID from Session persistence.
+func (s *Store) ResolveCurrentSessionStartContext(ctx context.Context, sessionID runtimeids.SessionID) (RunStartContext, error) {
+	if sessionID.IsZero() {
+		return RunStartContext{}, errors.New("session id is required")
+	}
+	taskIDs, err := s.queries.ListSessionWorkflowTaskIDs(ctx, sessionID.String())
+	if err != nil {
+		return RunStartContext{}, err
+	}
+	if len(taskIDs) == 0 {
+		return RunStartContext{}, sql.ErrNoRows
+	}
+	if len(taskIDs) != 1 || !taskIDs[0].Valid {
+		return RunStartContext{}, fmt.Errorf("session %q has invalid task ownership", sessionID)
+	}
+	taskID := workflow.TaskID(taskIDs[0].String)
+	currentNodes, err := s.ListCurrentNodes(ctx, taskID)
+	if err != nil {
+		return RunStartContext{}, err
+	}
+	var currentNode *workflow.CurrentNode
+	for i := range currentNodes {
+		if currentNodes[i].SessionID == nil || *currentNodes[i].SessionID != sessionID {
+			continue
+		}
+		if currentNode != nil {
+			return RunStartContext{}, fmt.Errorf("session %q is bound to multiple current nodes for task %q", sessionID, taskID)
+		}
+		currentNode = &currentNodes[i]
+	}
+	if currentNode == nil {
+		return RunStartContext{}, sql.ErrNoRows
+	}
+	association, err := s.LatestTaskSessionForNode(ctx, currentNode.Reference)
+	if err != nil {
+		return RunStartContext{}, fmt.Errorf("resolve current session node association: %w", err)
+	}
+	if association.SessionID != sessionID {
+		return RunStartContext{}, fmt.Errorf("current node %v is associated with session %q, want %q", currentNode.Reference, association.SessionID, sessionID)
+	}
+	runs, err := s.ListRuns(ctx, taskID)
+	if err != nil {
+		return RunStartContext{}, err
+	}
+	var matchingRun *RunRecord
+	for i := range runs {
+		run := &runs[i]
+		if run.SessionID != sessionID.String() || run.NodeID != currentNode.Reference.NodeID || run.CompletedAt != nil {
+			continue
+		}
+		if matchingRun != nil {
+			return RunStartContext{}, fmt.Errorf("session %q has multiple unfinished runs for current node %v", sessionID, currentNode.Reference)
+		}
+		matchingRun = run
+	}
+	if matchingRun == nil {
+		return RunStartContext{}, sql.ErrNoRows
+	}
+	return s.GetRunStartContext(ctx, matchingRun.ID)
+}
+
 func latestTaskSessionForNode(ctx context.Context, q *sqlitegen.Queries, currentNode workflow.CurrentNodeReference) (TaskSessionAssociation, error) {
 	if err := currentNode.Validate(); err != nil {
 		return TaskSessionAssociation{}, err

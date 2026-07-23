@@ -174,7 +174,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithRuntimeActivityResolver(runtimeRegistry).
 		WithOperationCoordinator(runtimeOperations).
 		WithPromptHistoryStore(metadataStore).
-		WithWorkflowSessionResolver(sessionStoreResolver).
+		WithWorkflowTaskSessionResolver(metadataStore).
 		WithPersistedSessionResolver(metadataStore)
 	gitInspector := worktree.NewGitInspector(nil)
 	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeAuthority, runtimeRegistry, runtimeSupport.Background, worktree.ServiceOptions{

@@ -271,24 +271,6 @@ func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
 	}
 }
 
-func TestMainViewFromReopenedWorkflowSessionIncludesDurableWorkflowStatus(t *testing.T) {
-	store := newRuntimeViewStore(t)
-	if err := store.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: projectionWorkflowRun, TaskID: projectionWorkflowTask, WorkflowID: projectionWorkflowID}); err != nil {
-		t.Fatalf("SetWorkflowSessionState: %v", err)
-	}
-	eng := newRuntimeViewEngine(t, store, projectionFastClient{}, runtime.Config{Model: "gpt-5"})
-	view := mainViewFromRuntimeForTest(t, eng)
-	if view.Status.WorkflowActive {
-		t.Fatalf("workflow active = true, want false for reopened non-workflow runtime")
-	}
-	if view.Status.WorkflowSession == nil {
-		t.Fatalf("workflow session = nil, status=%+v", view.Status)
-	}
-	if view.Status.WorkflowSession.RunID != projectionWorkflowRun || view.Status.WorkflowSession.TaskID != projectionWorkflowTask || view.Status.WorkflowSession.WorkflowID != projectionWorkflowID {
-		t.Fatalf("workflow session = %+v, want run/task/workflow ids", view.Status.WorkflowSession)
-	}
-}
-
 func TestStatusFromRuntimeUsesFreshPreciseCurrentTokens(t *testing.T) {
 	eng := newRuntimeViewEngine(t, newRuntimeViewStore(t), projectionPreciseClient{inputTokens: 180}, runtime.Config{
 		Model:                         "gpt-5",

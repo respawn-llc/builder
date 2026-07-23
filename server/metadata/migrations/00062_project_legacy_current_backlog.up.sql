@@ -755,6 +755,15 @@ CREATE TEMP TABLE migration_session_task_errors (
     task_count INTEGER NOT NULL
 );
 
+UPDATE sessions
+SET metadata_json = json_remove(
+    CASE
+        WHEN json_valid(metadata_json) THEN metadata_json
+        ELSE '{}'
+    END,
+    '$.workflow_session'
+);
+
 -- +goose StatementBegin
 CREATE TEMP TRIGGER migration_session_task_errors_abort
 BEFORE INSERT ON migration_session_task_errors

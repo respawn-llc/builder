@@ -273,27 +273,6 @@ func (s *Starter) StartWorkflowRun(ctx context.Context, req workflowexecution.Sc
 	}); err != nil {
 		return errors.Join(err, cleanupSession())
 	}
-	var previousWorkflowSession *session.WorkflowSessionState
-	if workflowSession := plan.WorkflowSession; workflowSession != nil {
-		snap := *workflowSession
-		previousWorkflowSession = &snap
-	}
-	restoreWorkflowSession := func() error {
-		return s.withSessionStore(context.WithoutCancel(ctx), plan.Descriptor, func(_ context.Context, store *session.Store) error {
-			return store.SetWorkflowSessionState(previousWorkflowSession)
-		})
-	}
-	workflowSession := &session.WorkflowSessionState{
-		RunID:      string(req.RunID),
-		TaskID:     string(input.Task.ID),
-		WorkflowID: string(input.Task.WorkflowID),
-	}
-	if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
-		return store.SetWorkflowSessionState(workflowSession)
-	}); err != nil {
-		return errors.Join(err, cleanupSession())
-	}
-	plan.WorkflowSession = workflowSession
 	if err := s.mutationPermit.Run(ctx, func(ctx context.Context) error {
 		if err := s.ensureRunStartable(ctx, req); err != nil {
 			return err
@@ -303,7 +282,7 @@ func (s *Starter) StartWorkflowRun(ctx context.Context, req workflowexecution.Sc
 		}
 		return s.startAgentExecution(ctx, req, input, plan, warnings, client, effectiveMode)
 	}); err != nil {
-		return errors.Join(err, restoreWorkflowSession(), cleanupSession())
+		return errors.Join(err, cleanupSession())
 	}
 	return nil
 }
@@ -716,11 +695,7 @@ func mustOpenWorkflowSessionIntent(raw string) serverapi.SessionLaunchIntent {
 }
 
 func compactAndContinueRequiresFreshContract(input workflowstore.RunStartContext, plan launch.SessionPlan) bool {
-	if input.ContextMode != workflow.ContextModeCompactAndContinueSession {
-		return false
-	}
-	activeWorkflowSession := plan.WorkflowSession
-	return activeWorkflowSession == nil || strings.TrimSpace(activeWorkflowSession.RunID) != strings.TrimSpace(string(input.Run.ID))
+	return input.ContextMode == workflow.ContextModeCompactAndContinueSession
 }
 
 func allowLockedWorkflowContinuationRoleChange(plan launch.SessionPlan, overrides serverapi.RunPromptOverrides) bool {

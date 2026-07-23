@@ -134,12 +134,12 @@ func countPromptHistoryEvents(t *testing.T, store *session.Store, text string) i
 	return history.CountText(text)
 }
 
-type staticRuntimeControlSessionResolver struct {
-	store *session.Store
+type staticRuntimeControlWorkflowTaskResolver struct {
+	workflow bool
 }
 
-func (r staticRuntimeControlSessionResolver) ResolveSessionStore(context.Context, string) (*session.Store, error) {
-	return r.store, nil
+func (r staticRuntimeControlWorkflowTaskResolver) SessionHasWorkflowTask(context.Context, string) (bool, error) {
+	return r.workflow, nil
 }
 
 type runtimeControlFakeClient struct {
@@ -1120,21 +1120,15 @@ func TestServiceWorkflowRuntimeAllowsGoalStatusTransitions(t *testing.T) {
 
 func TestServiceDurableWorkflowSessionAllowsGoalControl(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	if err := store.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1", TaskID: "task-1", WorkflowID: "workflow-1"}); err != nil {
-		t.Fatalf("SetWorkflowSessionState: %v", err)
-	}
-	service = service.WithWorkflowSessionResolver(staticRuntimeControlSessionResolver{store: store})
+	service = service.WithWorkflowTaskSessionResolver(staticRuntimeControlWorkflowTaskResolver{workflow: true})
 	if _, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID}); err != nil {
-		t.Fatalf("ShowGoal for durable workflow session = %v, want allowed", err)
+		t.Fatalf("ShowGoal for workflow task session = %v, want allowed", err)
 	}
 }
 
 func TestServiceDurableWorkflowSessionRejectsAutoCompactionDisable(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	if err := store.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1", TaskID: "task-1", WorkflowID: "workflow-1"}); err != nil {
-		t.Fatalf("SetWorkflowSessionState: %v", err)
-	}
-	service = service.WithWorkflowSessionResolver(staticRuntimeControlSessionResolver{store: store})
+	service = service.WithWorkflowTaskSessionResolver(staticRuntimeControlWorkflowTaskResolver{workflow: true})
 
 	_, err := service.SetAutoCompactionEnabled(context.Background(), serverapi.RuntimeSetAutoCompactionEnabledRequest{
 		ClientRequestID: "req-auto-off-durable-workflow",

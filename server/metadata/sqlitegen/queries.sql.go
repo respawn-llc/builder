@@ -2397,12 +2397,7 @@ SELECT
     s.project_id,
     p.display_name AS project_display_name,
     p.project_key,
-    s.artifact_relpath,
-    CAST(
-        json_type(s.metadata_json, '$.workflow_session') IS NOT NULL
-        AND json_type(s.metadata_json, '$.workflow_session') != 'null'
-        AS INTEGER
-    ) AS has_workflow_session
+    s.artifact_relpath
 FROM sessions s
 JOIN projects p ON p.id = s.project_id
 WHERE s.id = ?1
@@ -2415,7 +2410,6 @@ type GetSessionWorkspaceRetargetStateByIDRow struct {
 	ProjectDisplayName string
 	ProjectKey         string
 	ArtifactRelpath    string
-	HasWorkflowSession int64
 }
 
 func (q *Queries) GetSessionWorkspaceRetargetStateByID(ctx context.Context, sessionID string) (GetSessionWorkspaceRetargetStateByIDRow, error) {
@@ -2427,7 +2421,6 @@ func (q *Queries) GetSessionWorkspaceRetargetStateByID(ctx context.Context, sess
 		&i.ProjectDisplayName,
 		&i.ProjectKey,
 		&i.ArtifactRelpath,
-		&i.HasWorkflowSession,
 	), getSessionWorkspaceRetargetStateByID, 1)
 
 	return i, err
@@ -10968,11 +10961,14 @@ SET
     cwd_relpath = '.',
     artifact_relpath = ?3,
     updated_at_unix_ms = ?4,
-    metadata_json = json_set(
-        CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
-        '$.workspace_root', CAST(?5 AS TEXT),
-        '$.workspace_container', CAST(?6 AS TEXT),
-        '$.worktree_reminder', json('null')
+    metadata_json = json_remove(
+        json_set(
+            CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
+            '$.workspace_root', CAST(?5 AS TEXT),
+            '$.workspace_container', CAST(?6 AS TEXT),
+            '$.worktree_reminder', json('null')
+        ),
+        '$.workflow_session'
     )
 WHERE id = ?7
   AND project_id = ?8
