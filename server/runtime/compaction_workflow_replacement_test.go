@@ -149,6 +149,65 @@ func TestWorkflowRequestAfterCompactionDoesNotDuplicateReinjectedWorkflowPrompt(
 	}
 }
 
+func TestWorkflowCompactionResetsProtocolViolationBudget(t *testing.T) {
+	runID := workflow.RunID("workflow-run")
+	controller := &workflowProtocolBudgetController{}
+	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{
+		remoteCompactionReplacement(1_000, 100, 200_000),
+	}}
+	engine := mustNewWorkflowTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		&workflowruntime.Config{
+			RunID:                        runID,
+			Contract:                     workflowruntime.CompletionContract{RunID: runID},
+			CompletionMode:               workflowruntime.CompletionModeTool,
+			MaxInvalidCompletionAttempts: 3,
+			Controller:                   controller,
+		},
+		Config{Model: "gpt-5"},
+	)
+	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+	)); err != nil {
+		t.Fatalf("persist compaction input: %v", err)
+	}
+	for want := int64(1); want <= 2; want++ {
+		violation, err := engine.recordWorkflowProtocolViolation(
+			context.Background(),
+			workflowruntime.ViolationKindInvalidCompletion,
+			"invalid completion",
+		)
+		if err != nil || violation.Count != want {
+			t.Fatalf("pre-compaction violation = %+v error=%v, want count %d", violation, err, want)
+		}
+	}
+
+	_, receipt, err := engine.compactNow(
+		context.Background(),
+		"compact",
+		compactionModeManual,
+		"",
+		false,
+	)
+	if err != nil || !receipt.Committed {
+		t.Fatalf("compact workflow context: receipt=%+v error=%v", receipt, err)
+	}
+
+	violation, err := engine.recordWorkflowProtocolViolation(
+		context.Background(),
+		workflowruntime.ViolationKindInvalidCompletion,
+		"invalid completion",
+	)
+	if err != nil || violation.Count != 1 {
+		t.Fatalf("post-compaction violation = %+v error=%v, want count one", violation, err)
+	}
+}
+
 type workflowTaskCommentCounterProbe struct {
 	count int64
 	calls atomic.Int32
@@ -157,4 +216,24 @@ type workflowTaskCommentCounterProbe struct {
 func (p *workflowTaskCommentCounterProbe) CountTaskComments(context.Context, workflow.TaskID) (int64, error) {
 	p.calls.Add(1)
 	return p.count, nil
+}
+
+type workflowProtocolBudgetController struct {
+	externallyCompletedWorkflowController
+	violationCount atomic.Int64
+}
+
+func (c *workflowProtocolBudgetController) RecordWorkflowProtocolViolation(
+	context.Context,
+	workflowruntime.ViolationRequest,
+) (workflowruntime.ViolationResult, error) {
+	return workflowruntime.ViolationResult{Count: c.violationCount.Add(1)}, nil
+}
+
+func (c *workflowProtocolBudgetController) ResetWorkflowProtocolViolationBudget(
+	context.Context,
+	workflowruntime.ViolationResetRequest,
+) error {
+	c.violationCount.Store(0)
+	return nil
 }
