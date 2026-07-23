@@ -18,6 +18,7 @@ var (
 	errPersistenceObserverRequired      = errors.New("persistence observer is required")
 	errEventLogReconcilerRequired       = errors.New("event log reconciliation observer is required")
 	errEphemeralStoreCannotBeDurable    = errors.New("ephemeral session store cannot be made durable")
+	errBackgroundNoticePartialIdentity  = errors.New("background notice identity requires both process and activity identities")
 
 	// Resolver-record validation guards. Each names a distinct way a resolver
 	// can return an invalid persisted session record.
