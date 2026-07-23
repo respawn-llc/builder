@@ -446,6 +446,59 @@ func TestRequestToolsRespectLockedVisionCapability(t *testing.T) {
 	}
 }
 
+func TestRequestToolsUseActiveProviderCapabilitiesForPatchShape(t *testing.T) {
+	store := mustCreateTestSession(t)
+	if err := store.MarkModelDispatchLocked(session.LockedContract{
+		Model:        "gpt-5",
+		EnabledTools: []string{string(toolspec.ToolPatch)},
+		ProviderContract: llm.LockedProviderCapabilitiesFromContract(llm.ProviderCapabilities{
+			ProviderID:           "openai",
+			SupportsResponsesAPI: true,
+			IsOpenAIFirstParty:   true,
+		}),
+	}); err != nil {
+		t.Fatalf("mark stale provider contract locked: %v", err)
+	}
+
+	activeCapabilities := llm.ProviderCapabilities{
+		ProviderID:           "openai-compatible",
+		SupportsResponsesAPI: true,
+		IsOpenAIFirstParty:   false,
+	}
+	engine := mustNewTestEngine(
+		t,
+		store,
+		&fakeClient{caps: activeCapabilities},
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolPatch,
+			Handler: fakeTool{name: toolspec.ToolPatch},
+		}),
+		Config{
+			Model:                        "gpt-5",
+			EnabledTools:                 []toolspec.ID{toolspec.ToolPatch},
+			ProviderCapabilitiesOverride: &activeCapabilities,
+		},
+	)
+
+	requestTools, err := engine.requestTools(context.Background(), "")
+	if err != nil {
+		t.Fatalf("request tools: %v", err)
+	}
+	if len(requestTools) != 1 {
+		t.Fatalf("request tools = %+v, want one patch tool", requestTools)
+	}
+	patchTool := requestTools[0]
+	if patchTool.Name != string(toolspec.ToolPatch) {
+		t.Fatalf("request tool = %+v, want patch tool", patchTool)
+	}
+	if patchTool.Custom != nil {
+		t.Fatalf("patch tool custom format = %+v, want schema format", patchTool.Custom)
+	}
+	if len(patchTool.Schema) == 0 {
+		t.Fatalf("patch tool schema is empty")
+	}
+}
+
 func workflowCompleteNodeCall(id, input string) llm.ToolCall {
 	return llm.ToolCall{
 		ID:    id,
