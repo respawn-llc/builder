@@ -2,7 +2,6 @@ package transcriptrender
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -303,7 +302,7 @@ func webSearchDisplayText(meta toolMeta) (string, bool) {
 	if query == "" {
 		return "", false
 	}
-	return webSearchDisplayPrefix + strconv.Quote(query), true
+	return webSearchDisplayPrefix + `"` + query + `"`, true
 }
 
 func detailedToolResultText(row clientui.TranscriptToolRow) string {
