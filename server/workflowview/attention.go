@@ -245,6 +245,9 @@ func (a *Attention) itemFromCandidate(ctx context.Context, row attentionCandidat
 		}
 		question, err := questions.Question(ctx, row.sessionID, askID)
 		if err != nil {
+			if !errors.Is(err, ErrPendingQuestionNotFound) {
+				return serverapi.WorkflowAttentionItem{}, false, err
+			}
 			question = pendingQuestion{message: pendingQuestionFallbackMessage}
 		}
 		return workflowQuestionAttentionItem(row.id, row.projectID, row.workflowID, taskID, shortID, title, runID, row.sessionID, askID, question, row.occurredAtUnixMs), true, nil

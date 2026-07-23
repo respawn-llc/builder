@@ -315,8 +315,8 @@ type staticTranscriptProvider struct {
 
 type staticPendingPromptSource map[string][]PendingPromptSnapshot
 
-func (s staticPendingPromptSource) ListPendingPrompts(sessionID string) []PendingPromptSnapshot {
-	return append([]PendingPromptSnapshot(nil), s[strings.TrimSpace(sessionID)]...)
+func (s staticPendingPromptSource) ListPendingPrompts(sessionID string) ([]PendingPromptSnapshot, error) {
+	return append([]PendingPromptSnapshot(nil), s[strings.TrimSpace(sessionID)]...), nil
 }
 
 func (p staticTranscriptProvider) SessionNewestActiveSegmentQuestions(_ context.Context, sessionID string) ([]PendingQuestionTranscriptEntry, error) {

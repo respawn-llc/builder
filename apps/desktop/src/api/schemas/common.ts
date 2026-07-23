@@ -23,7 +23,12 @@ import type {
   WorkspaceAvailability,
   OrdinaryQuestionPrompt,
 } from "../models";
-import type { AttentionItem } from "../attention";
+import type {
+  ApprovalAttentionItem,
+  AttentionItem,
+  InterruptedRunAttentionItem,
+  QuestionAttentionItem,
+} from "../attention";
 import { labelIDListSchema } from "./workflowLabels";
 
 export const emptyString = z.string().optional().default("");
@@ -354,7 +359,7 @@ export const boardCardSchema: z.ZodType<BoardCard> = z
     updatedAt: value.updated_at_unix_ms,
   }));
 
-const attentionItemBaseSchema = {
+const attentionItemBaseWireSchema = z.object({
   id: nonBlankString,
   project_id: nonBlankString,
   workflow_id: nonBlankString,
@@ -363,7 +368,25 @@ const attentionItemBaseSchema = {
   task_title: nonBlankString,
   message: z.string(),
   occurred_at_unix_ms: z.number(),
-};
+});
+
+type AttentionItemBase = Pick<
+  QuestionAttentionItem,
+  "id" | "projectID" | "workflowID" | "taskID" | "taskShortID" | "taskTitle" | "message" | "occurredAt"
+>;
+
+function adaptAttentionItemBase(value: z.output<typeof attentionItemBaseWireSchema>): AttentionItemBase {
+  return {
+    id: value.id,
+    projectID: value.project_id,
+    workflowID: value.workflow_id,
+    taskID: value.task_id,
+    taskShortID: value.task_short_id,
+    taskTitle: value.task_title,
+    message: value.message,
+    occurredAt: value.occurred_at_unix_ms,
+  };
+}
 
 const approvalSnapshotSchema = z
   .object({
@@ -383,9 +406,8 @@ const approvalSnapshotSchema = z
   }));
 
 export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnion("kind", [
-  z
-    .object({
-      ...attentionItemBaseSchema,
+  attentionItemBaseWireSchema
+    .extend({
       kind: z.literal("question"),
       run_id: nonBlankString,
       session_id: nullableNonBlankString,
@@ -395,16 +417,9 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       question: questionPromptSchema.nullish(),
     })
     .strict()
-    .transform((value) => ({
-      id: value.id,
+    .transform((value): QuestionAttentionItem => ({
+      ...adaptAttentionItemBase(value),
       kind: value.kind,
-      projectID: value.project_id,
-      workflowID: value.workflow_id,
-      taskID: value.task_id,
-      taskShortID: value.task_short_id,
-      taskTitle: value.task_title,
-      message: value.message,
-      occurredAt: value.occurred_at_unix_ms,
       runID: value.run_id,
       sessionID: value.session_id,
       askID: value.ask_id,
@@ -412,46 +427,30 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       recommendedOptionIndex: value.recommended_option_index,
       question: value.question ?? null,
     })),
-  z
-    .object({
-      ...attentionItemBaseSchema,
+  attentionItemBaseWireSchema
+    .extend({
       kind: z.literal("approval"),
       task_transition_id: nonBlankString,
       approval_snapshot: approvalSnapshotSchema,
     })
     .strict()
-    .transform((value) => ({
-      id: value.id,
+    .transform((value): ApprovalAttentionItem => ({
+      ...adaptAttentionItemBase(value),
       kind: value.kind,
-      projectID: value.project_id,
-      workflowID: value.workflow_id,
-      taskID: value.task_id,
-      taskShortID: value.task_short_id,
-      taskTitle: value.task_title,
-      message: value.message,
-      occurredAt: value.occurred_at_unix_ms,
       taskTransitionID: value.task_transition_id,
       approvalSnapshot: value.approval_snapshot,
     })),
-  z
-    .object({
-      ...attentionItemBaseSchema,
+  attentionItemBaseWireSchema
+    .extend({
       kind: z.literal("interrupted_run"),
       run_id: nonBlankString,
       session_id: nullableNonBlankString,
       detail_json: nullableNonBlankString,
     })
     .strict()
-    .transform((value) => ({
-      id: value.id,
+    .transform((value): InterruptedRunAttentionItem => ({
+      ...adaptAttentionItemBase(value),
       kind: value.kind,
-      projectID: value.project_id,
-      workflowID: value.workflow_id,
-      taskID: value.task_id,
-      taskShortID: value.task_short_id,
-      taskTitle: value.task_title,
-      message: value.message,
-      occurredAt: value.occurred_at_unix_ms,
       runID: value.run_id,
       sessionID: value.session_id,
       detailJSON: value.detail_json,

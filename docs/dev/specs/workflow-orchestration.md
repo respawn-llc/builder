@@ -244,6 +244,8 @@
 
 - Task detail, Workflow boards, and Task lists use one authoritative Task status derived from Current Nodes and current live activity.
 - Workflow attention has a global paginated Inbox and a bounded Task-specific feed. It has no Project-specific feed.
+- Workflow attention is task-scoped. It includes only unresolved Questions, unresolved Workflow Approvals, and executable Nodes interrupted by errors.
+- Workflow validity is not attention and does not create Inbox items.
 - Core Task detail includes an unresolved-attention count but not the attention items. It does not scan transcript history.
 - The Task-specific attention feed can read the newest active transcript segment to recover unresolved Question content. Desktop Task detail loads this feed independently so it does not delay core Task detail.
 - Task status is structured and independent of a specific client. Each client renders and localizes it.

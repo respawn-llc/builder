@@ -32,7 +32,7 @@ type PendingQuestionTranscriptEntry struct {
 }
 
 type PendingPromptSource interface {
-	ListPendingPrompts(sessionID string) []PendingPromptSnapshot
+	ListPendingPrompts(sessionID string) ([]PendingPromptSnapshot, error)
 }
 
 // ErrPendingQuestionNotFound is returned when the newest active transcript
@@ -84,7 +84,10 @@ func (r *pendingQuestionResolver) Question(ctx context.Context, sessionID *strin
 	if err != nil {
 		return pendingQuestion{}, fmt.Errorf("load session %q newest active transcript segment for pending question %q: %w", resolvedSessionID, askID, err)
 	}
-	question := pendingQuestionFromTranscriptEntries(entries, askID)
+	question, err := pendingQuestionFromTranscriptEntries(entries, askID)
+	if err != nil {
+		return pendingQuestion{}, err
+	}
 	if strings.TrimSpace(question.message) == "" {
 		return pendingQuestion{}, fmt.Errorf("pending question %q in session %q newest active transcript segment: %w", askID, resolvedSessionID, ErrPendingQuestionNotFound)
 	}
@@ -95,7 +98,11 @@ func (r *pendingQuestionResolver) questionFromPendingPrompt(sessionID string, as
 	if r == nil || r.prompts == nil {
 		return pendingQuestion{}, false, nil
 	}
-	for _, snapshot := range r.prompts.ListPendingPrompts(sessionID) {
+	snapshots, err := r.prompts.ListPendingPrompts(sessionID)
+	if err != nil {
+		return pendingQuestion{}, false, fmt.Errorf("load pending prompts for session %q: %w", sessionID, err)
+	}
+	for _, snapshot := range snapshots {
 		if strings.TrimSpace(snapshot.ID) != askID {
 			continue
 		}
@@ -149,7 +156,7 @@ func normalizedPendingQuestionSuggestions(in []string) []string {
 	return append([]string(nil), in...)
 }
 
-func pendingQuestionFromTranscriptEntries(entries []PendingQuestionTranscriptEntry, askID string) pendingQuestion {
+func pendingQuestionFromTranscriptEntries(entries []PendingQuestionTranscriptEntry, askID string) (pendingQuestion, error) {
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.AskID) != askID {
 			continue
@@ -157,7 +164,7 @@ func pendingQuestionFromTranscriptEntries(entries []PendingQuestionTranscriptEnt
 		if question := strings.TrimSpace(entry.Question); question != "" {
 			recommended, err := validatePendingQuestionRecommendation(entry.RecommendedOptionIndex, len(entry.Suggestions))
 			if err != nil {
-				return pendingQuestion{}
+				return pendingQuestion{}, fmt.Errorf("pending question %q: %w", entry.AskID, err)
 			}
 			return pendingQuestion{
 				message:                question,
@@ -168,10 +175,10 @@ func pendingQuestionFromTranscriptEntries(entries []PendingQuestionTranscriptEnt
 					Suggestions:            append([]string(nil), entry.Suggestions...),
 					RecommendedOptionIndex: textutil.Pointer(recommended),
 				},
-			}
+			}, nil
 		}
 	}
-	return pendingQuestion{}
+	return pendingQuestion{}, nil
 }
 
 func validatePendingQuestionRecommendation(index *int, suggestionCount int) (*int, error) {
@@ -179,7 +186,11 @@ func validatePendingQuestionRecommendation(index *int, suggestionCount int) (*in
 		return nil, nil
 	}
 	if *index < 1 || *index > suggestionCount {
-		return nil, fmt.Errorf("recommended_option_index %d is invalid for %d suggestions", *index, suggestionCount)
+		return nil, serverapi.WorkflowRequestValidationError{
+			Code:    serverapi.WorkflowRequestErrorInvalidValue,
+			Field:   "recommended_option_index",
+			Message: fmt.Sprintf("recommended option %d is invalid for %d suggestions", *index, suggestionCount),
+		}
 	}
 	return textutil.Pointer(index), nil
 }
