@@ -32,6 +32,7 @@ import {
   taskActionsSchema,
   taskStatusSchema,
   transitionSchema,
+  workflowGraphNodeLimit,
   workflowPickerItemSchema,
   workspaceSummarySchema,
 } from "./common";
