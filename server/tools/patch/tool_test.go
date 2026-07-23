@@ -71,6 +71,47 @@ func TestSuccessfulAbsoluteForeignManagedWorktreePatchWarnsForMoveDestination(t 
 	}
 }
 
+func TestPatchWarnsForEveryForeignAbsoluteTargetKind(t *testing.T) {
+	base := t.TempDir()
+	currentRoot := filepath.Join(base, "current")
+	foreignRoot := filepath.Join(base, "foreign")
+	for _, dir := range []string{currentRoot, foreignRoot, filepath.Join(currentRoot, "nested")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot)
+	if err != nil {
+		t.Fatalf("managed worktree path context: %v", err)
+	}
+	tool := newPatchTestTool(t, filepath.Join(currentRoot, "nested"), WithManagedWorktreePathContext(context))
+	update := filepath.Join(foreignRoot, "update.txt")
+	deletePath := filepath.Join(foreignRoot, "delete.txt")
+	moveSource := filepath.Join(foreignRoot, "move.txt")
+	for _, path := range []string{update, deletePath, moveSource} {
+		if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	tests := []struct {
+		name  string
+		patch string
+	}{
+		{name: "add", patch: "*** Begin Patch\n*** Add File: " + filepath.Join(foreignRoot, "added.txt") + "\n+after\n*** End Patch\n"},
+		{name: "update", patch: "*** Begin Patch\n*** Update File: " + update + "\n-before\n+after\n*** End Patch\n"},
+		{name: "delete", patch: "*** Begin Patch\n*** Delete File: " + deletePath + "\n*** End Patch\n"},
+		{name: "move source", patch: "*** Begin Patch\n*** Update File: " + moveSource + "\n*** Move to: " + filepath.Join(currentRoot, "moved.txt") + "\n-before\n+after\n*** End Patch\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := callPatch(t, tool, "foreign-"+test.name, test.patch)
+			if result.IsError || len(result.ModelWarnings) != 1 || result.ModelWarnings[0].Kind != tools.ModelWarningForeignManagedWorktreeEdit {
+				t.Fatalf("foreign %s result = %+v", test.name, result)
+			}
+		})
+	}
+}
+
 func TestPatchManagedWorktreeWarningSkipsRelativeCurrentOutsideAndFailures(t *testing.T) {
 	base := t.TempDir()
 	currentRoot := filepath.Join(base, "current")

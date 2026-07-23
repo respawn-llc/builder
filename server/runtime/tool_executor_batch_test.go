@@ -39,6 +39,70 @@ func TestExecuteToolCallsRejectsMissingProviderCallIDBeforeToolExecution(t *test
 	}
 }
 
+type warnedToolHandler struct{}
+
+func (warnedToolHandler) Call(_ context.Context, call tools.Call) (tools.Result, error) {
+	return tools.Result{
+		CallID: call.ID,
+		Name:   call.Name,
+		Output: json.RawMessage(`{"ok":true}`),
+		ModelWarnings: []tools.ModelWarning{
+			tools.ForeignManagedWorktreeEditWarning(),
+		},
+	}, nil
+}
+
+func TestExecuteToolCallsMaterializesSuccessfulModelWarningBeforePersistence(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(
+		t,
+		store,
+		&fakeClient{},
+		tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: warnedToolHandler{}}),
+		Config{Model: "gpt-5"},
+	)
+
+	results, err := engine.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
+		ID:    "warned-patch",
+		Name:  string(toolspec.ToolPatch),
+		Input: json.RawMessage(`{"patch":"*** Begin Patch\n*** Add File: a.txt\n+ok\n*** End Patch\n"}`),
+	}})
+	if err != nil {
+		t.Fatalf("execute warned tool: %v", err)
+	}
+	if len(results) != 1 || len(results[0].ModelWarnings) != 0 {
+		t.Fatalf("materialized result = %+v", results)
+	}
+	var output map[string]json.RawMessage
+	if err := json.Unmarshal(results[0].Output, &output); err != nil {
+		t.Fatalf("decode materialized output: %v", err)
+	}
+	if _, ok := output["ok"]; !ok {
+		t.Fatalf("materialized output lost success: %s", results[0].Output)
+	}
+	if _, ok := output["warning"]; !ok {
+		t.Fatalf("materialized output lost warning: %s", results[0].Output)
+	}
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(8)
+	if err != nil {
+		t.Fatalf("read persisted records: %v", err)
+	}
+	for _, record := range window.Records {
+		completion, ok := mustSessionEventPayload(record).(session.ToolCompletionRecord)
+		if !ok || completion.CallID != "warned-patch" {
+			continue
+		}
+		var persisted map[string]json.RawMessage
+		if err := json.Unmarshal(completion.Output, &persisted); err != nil {
+			t.Fatalf("decode persisted output: %v", err)
+		}
+		if _, ok := persisted["warning"]; ok {
+			return
+		}
+	}
+	t.Fatal("persisted completion omitted model warning")
+}
+
 func TestExecuteToolCallsRejectsInvalidWebSearchBeforeHandler(t *testing.T) {
 	tests := []struct {
 		name  string
