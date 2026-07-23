@@ -116,6 +116,55 @@ func TestNewConsumesPendingModelRecoveryOnReopen(t *testing.T) {
 	t.Fatalf("bounded recovery records contain no durable interruption marker: %+v", window.Records)
 }
 
+func TestNewTerminalRecoveredStepDoesNotPublishInterruption(t *testing.T) {
+	const stepID = "terminal-step"
+	store := mustCreateTestSession(t)
+	mustAppendTestEvent(t, store, stepID, llm.Message{Role: llm.RoleUser, Content: textutil.Value("input")})
+	mustAppendTestEvent(t, store, stepID, llm.Message{
+		Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("completed"),
+	})
+	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{
+		RecoveryID: "terminal-recovery", StepID: stepID, Reason: "provider_visible_output_persisted", CreatedAt: time.Unix(1, 0).UTC(),
+	}); err != nil {
+		t.Fatalf("set terminal recovery: %v", err)
+	}
+	reopened := mustOpenTestSession(t, store.Dir())
+	_ = mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	if reopened.Meta().PendingModelRecovery != nil {
+		t.Fatalf("terminal recovery retained pending metadata: %+v", reopened.Meta().PendingModelRecovery)
+	}
+	assertNoBoundedInterruptionRecord(t, reopened)
+}
+
+func TestNewRecoveryWithoutStepIDDiscardsCandidateWithoutInterruption(t *testing.T) {
+	store := mustCreateTestSession(t)
+	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{
+		RecoveryID: "missing-step-recovery", Reason: "provider_visible_output_persisted", CreatedAt: time.Unix(2, 0).UTC(),
+	}); err != nil {
+		t.Fatalf("set missing-step recovery: %v", err)
+	}
+	reopened := mustOpenTestSession(t, store.Dir())
+	_ = mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	if reopened.Meta().PendingModelRecovery != nil {
+		t.Fatalf("missing-step recovery retained pending metadata: %+v", reopened.Meta().PendingModelRecovery)
+	}
+	assertNoBoundedInterruptionRecord(t, reopened)
+}
+
+func assertNoBoundedInterruptionRecord(t *testing.T, store *session.Store) {
+	t.Helper()
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	if err != nil {
+		t.Fatalf("read bounded recovery records: %v", err)
+	}
+	for _, record := range window.Records {
+		message, ok := mustSessionEventPayload(record).(session.MessageRecord)
+		if ok && message.MessageType != nil && *message.MessageType == session.MessageTypeInterruption {
+			t.Fatalf("unexpected interruption record: %+v", message)
+		}
+	}
+}
+
 func TestNewPublishesRecoveredDanglingToolStartOnReopen(t *testing.T) {
 	const (
 		stepID = "interrupted-tool-step"

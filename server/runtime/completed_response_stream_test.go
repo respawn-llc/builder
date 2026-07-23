@@ -492,6 +492,110 @@ func TestCompletedResponseFinalAnswerWithToolsFinalizesAfterToolPersistence(t *t
 	}
 }
 
+func TestSubmitUserMessageFinalAnswerWithMixedToolCallsMaterializesAllToolsBeforeSingleFinal(t *testing.T) {
+	calls := []llm.ToolCall{
+		{ID: "final-tool-one", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"true"}`)},
+		{ID: "final-tool-two", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"true"}`)},
+	}
+	step := scriptedllm.ToolBatch("completed", calls...)
+	step.Response.Assistant.Phase = textutil.Value(llm.MessagePhaseFinal)
+	step.StreamDeltas = []llm.AssistantDelta{{Text: "draft", Phase: llm.MessagePhaseFinal}}
+	var events []Event
+	store := mustCreateTestSession(t)
+	engine := mustNewExecTestEngine(t, store, scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{step}}), Config{
+		Model:   "gpt-5",
+		OnEvent: func(event Event) { events = append(events, event) },
+	})
+	if _, err := engine.SubmitUserMessage(context.Background(), "turn"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+
+	starts, completions := map[string]int{}, map[string]int{}
+	finalIndex, terminalIndex := -1, -1
+	for index, event := range events {
+		switch event.Kind {
+		case EventToolCallStarted:
+			if event.ToolCall != nil {
+				starts[event.ToolCall.ID] = index
+			}
+		case EventToolCallCompleted:
+			if event.ToolResult != nil {
+				completions[event.ToolResult.CallID] = index
+			}
+		case EventAssistantMessage:
+			if event.Message.Role == llm.RoleAssistant && event.Message.Phase != nil && *event.Message.Phase == llm.MessagePhaseFinal {
+				if finalIndex >= 0 {
+					t.Fatalf("multiple final assistant events: %+v", events)
+				}
+				finalIndex = index
+			}
+		case EventAssistantDeltaReset:
+			terminalIndex = index
+		}
+	}
+	if finalIndex < 0 || terminalIndex <= finalIndex {
+		t.Fatalf("final/terminal order = final:%d terminal:%d events:%+v", finalIndex, terminalIndex, events)
+	}
+	for _, call := range calls {
+		start, started := starts[call.ID]
+		completion, completed := completions[call.ID]
+		if !started || !completed || start >= completion || completion >= finalIndex {
+			t.Fatalf("tool materialization %s = start:%d completion:%d final:%d events:%+v", call.ID, start, completion, finalIndex, events)
+		}
+	}
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	if err != nil {
+		t.Fatalf("read bounded records: %v", err)
+	}
+	recordCompletions, persistedFinalIndex := map[string]int{}, -1
+	for index, record := range window.Records {
+		switch payload := mustSessionEventPayload(record).(type) {
+		case session.ToolCompletionRecord:
+			recordCompletions[payload.CallID] = index
+		case session.MessageRecord:
+			message, restoreErr := llmMessageFromSessionRecord(payload)
+			if restoreErr != nil {
+				t.Fatalf("restore message: %v", restoreErr)
+			}
+			if message.Role == llm.RoleAssistant && message.Phase != nil && *message.Phase == llm.MessagePhaseFinal {
+				persistedFinalIndex = index
+			}
+		}
+	}
+	for _, call := range calls {
+		if completion, ok := recordCompletions[call.ID]; !ok || persistedFinalIndex < 0 || completion >= persistedFinalIndex {
+			t.Fatalf("persisted tool/final order %s = completion:%d final:%d records:%+v", call.ID, completion, persistedFinalIndex, window.Records)
+		}
+	}
+}
+
+func TestNoopStreamedFinalResetsWithoutFinalPublication(t *testing.T) {
+	var events []Event
+	engine := mustNewExecTestEngine(t, mustCreateTestSession(t), fakeNoopStreamClient{}, Config{
+		Model:   "gpt-5",
+		OnEvent: func(event Event) { events = append(events, event) },
+	})
+	if _, err := engine.SubmitUserMessage(context.Background(), "turn"); err != nil {
+		t.Fatalf("submit noop stream: %v", err)
+	}
+	var delta, reset *Event
+	for index := range events {
+		event := &events[index]
+		switch event.Kind {
+		case EventAssistantDelta:
+			delta = event
+		case EventAssistantDeltaReset:
+			reset = event
+		case EventAssistantMessage, EventModelResponse:
+			t.Fatalf("noop streamed final published %s: %+v", event.Kind, event)
+		}
+	}
+	if delta == nil || reset == nil || delta.AssistantTranscriptStreamID == nil || reset.AssistantTranscriptStreamID == nil ||
+		*delta.AssistantTranscriptStreamID != *reset.AssistantTranscriptStreamID {
+		t.Fatalf("noop stream terminal facts = delta:%+v reset:%+v", delta, reset)
+	}
+}
+
 func TestCompletedResponseExternalWorkflowCompletionDiscardsActiveStreamWithoutPersistence(t *testing.T) {
 	controller := &externallyCompletedWorkflowController{}
 	step := scriptedllm.ToolBatch("", llm.ToolCall{
