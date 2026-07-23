@@ -200,6 +200,7 @@
 ## Configuration
 
 - User settings load from `~/.kent/config.toml` by default unless persistence root is overridden.
+- When global and workspace settings locations identify the same existing physical `config.toml`, Kent applies it once as global configuration, disables the workspace layer, and retains both location diagnostics.
 - Unknown config keys are errors.
 - Precedence is CLI overrides > environment > settings file > built-in defaults.
 - After first successful auth, missing `config.toml` triggers first-time setup before session selection.

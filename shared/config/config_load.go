@@ -102,6 +102,7 @@ func loadAll(workspaceRoot string, includeWorkspaceLayer bool, opts LoadOptions)
 	}
 	workspaceSettingsPath := ""
 	workspaceSettingsExists := false
+	workspaceSettingsLayerEnabled := includeWorkspaceLayer
 	workspaceFileConfig := settingsFile{}
 	if includeWorkspaceLayer {
 		workspaceSettingsPath, err = resolveWorkspaceSettingsFilePath(absWorkspace)
@@ -112,7 +113,18 @@ func loadAll(workspaceRoot string, includeWorkspaceLayer bool, opts LoadOptions)
 		if err != nil {
 			return loadedConfig{}, err
 		}
-		if workspaceSettingsExists {
+		if homeSettingsExists && workspaceSettingsExists {
+			homeInfo, err := os.Stat(homeSettingsPath)
+			if err != nil {
+				return loadedConfig{}, err
+			}
+			workspaceInfo, err := os.Stat(workspaceSettingsPath)
+			if err != nil {
+				return loadedConfig{}, err
+			}
+			workspaceSettingsLayerEnabled = !os.SameFile(homeInfo, workspaceInfo)
+		}
+		if workspaceSettingsLayerEnabled && workspaceSettingsExists {
 			workspaceFileConfig, err = readSettingsFile(workspaceSettingsPath)
 			if err != nil {
 				return loadedConfig{}, err
@@ -134,7 +146,7 @@ func loadAll(workspaceRoot string, includeWorkspaceLayer bool, opts LoadOptions)
 	if err := appendSystemPromptFileFromConfig(homeFileConfig, homeSettingsPath, SystemPromptFileScopeHomeConfig, &state); err != nil {
 		return loadedConfig{}, err
 	}
-	if includeWorkspaceLayer {
+	if workspaceSettingsLayerEnabled {
 		if err := configRegistry.applyFile(workspaceFileConfig, workspaceSettingsPath, settingsFileLayerWorkspace, &state, sources); err != nil {
 			return loadedConfig{}, err
 		}
@@ -169,7 +181,7 @@ func loadAll(workspaceRoot string, includeWorkspaceLayer bool, opts LoadOptions)
 	state.Settings.Worktrees.BaseDir = absWorktreeBaseDir
 
 	settingsPath := homeSettingsPath
-	if workspaceSettingsExists {
+	if workspaceSettingsLayerEnabled && workspaceSettingsExists {
 		settingsPath = workspaceSettingsPath
 	}
 	settingsExists := homeSettingsExists || workspaceSettingsExists
@@ -187,7 +199,7 @@ func loadAll(workspaceRoot string, includeWorkspaceLayer bool, opts LoadOptions)
 				HomeSettingsFileExists:        homeSettingsExists,
 				WorkspaceSettingsPath:         workspaceSettingsPath,
 				WorkspaceSettingsFileExists:   workspaceSettingsExists,
-				WorkspaceSettingsLayerEnabled: includeWorkspaceLayer,
+				WorkspaceSettingsLayerEnabled: workspaceSettingsLayerEnabled,
 				Sources:                       sources,
 			},
 		},
