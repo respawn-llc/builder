@@ -1105,6 +1105,19 @@ func (q *Queries) DeleteTask(ctx context.Context, id string) (int64, error) {
 	return result.RowsAffected()
 }
 
+const deleteTaskActiveFanout = `-- name: DeleteTaskActiveFanout :execrows
+DELETE FROM task_active_fanouts
+WHERE task_id = ?1
+`
+
+func (q *Queries) DeleteTaskActiveFanout(ctx context.Context, taskID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTaskActiveFanout, taskID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteTaskComment = `-- name: DeleteTaskComment :execrows
 DELETE FROM task_comments
 WHERE id = ?1
@@ -10960,6 +10973,30 @@ func (q *Queries) UpdateSessionExecutionTargetByID(ctx context.Context, arg Upda
 		arg.CwdRelpath,
 		arg.SessionID,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateTaskActiveFanoutBranchArrival = `-- name: UpdateTaskActiveFanoutBranchArrival :execrows
+UPDATE task_active_fanout_branches
+SET
+    arrival_state = 'arrived',
+    arrival_values_json = ?1
+WHERE task_id = ?2
+  AND transition_branch_key = ?3
+  AND arrival_state = 'pending'
+`
+
+type UpdateTaskActiveFanoutBranchArrivalParams struct {
+	ArrivalValuesJson   sql.NullString
+	TaskID              string
+	TransitionBranchKey string
+}
+
+func (q *Queries) UpdateTaskActiveFanoutBranchArrival(ctx context.Context, arg UpdateTaskActiveFanoutBranchArrivalParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateTaskActiveFanoutBranchArrival, arg.ArrivalValuesJson, arg.TaskID, arg.TransitionBranchKey)
 	if err != nil {
 		return 0, err
 	}

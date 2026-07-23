@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"fmt"
-	"maps"
 	"strings"
 
 	"core/shared/toolspec"
@@ -617,8 +616,12 @@ func (s *validationState) validateRuntimeSupport() {
 		if group, groupExists := s.groupsByID[edge.TransitionGroupID]; groupExists {
 			source, sourceExists = s.nodesByID[group.SourceNodeID]
 		}
+		sourceKind := NodeKind("")
+		if sourceExists {
+			sourceKind = source.Kind()
+		}
 		s.validateContextSource(edge, source, sourceExists, target, targetExists, ref)
-		for _, issue := range UnsupportedRuntimeFeatures(RuntimeSupportEdge{ContextMode: edge.ContextMode, RequiresApproval: edge.RequiresApproval, TargetKind: targetKind, InputBindings: edge.InputBindings}) {
+		for _, issue := range UnsupportedRuntimeFeatures(RuntimeSupportEdge{SourceKind: sourceKind, ContextMode: edge.ContextMode, RequiresApproval: edge.RequiresApproval, TargetKind: targetKind, InputBindings: edge.InputBindings}) {
 			s.addSemantic(issue.Code, issue.Message, ref)
 		}
 	}
@@ -1065,81 +1068,12 @@ func (s *validationState) fanoutHasValidJoin(group TransitionGroup, edges []Edge
 		}
 		branchJoinDistances = append(branchJoinDistances, distances)
 	}
-	common := map[NodeID]int{}
-	for joinID, distance := range branchJoinDistances[0] {
-		common[joinID] = distance
-	}
-	for _, distances := range branchJoinDistances[1:] {
-		for joinID := range common {
-			distance, exists := distances[joinID]
-			if !exists {
-				delete(common, joinID)
-				continue
-			}
-			common[joinID] += distance
-		}
-	}
-	if len(common) == 0 {
-		return false
-	}
-	nearestDistance := 0
-	var nearestJoinID NodeID
-	nearestCount := 0
-	for joinID, distance := range common {
-		if nearestCount == 0 || distance < nearestDistance {
-			nearestDistance = distance
-			nearestJoinID = joinID
-			nearestCount = 1
-			continue
-		}
-		if distance == nearestDistance {
-			nearestCount++
-		}
-	}
-	return nearestCount == 1 && nearestJoinID != group.SourceNodeID
+	nearestJoinID, found := fanoutNearestCommonJoin(branchJoinDistances)
+	return found && nearestJoinID != group.SourceNodeID
 }
 
 func (s *validationState) branchJoinDistances(start NodeID) (map[NodeID]int, bool) {
-	type frame struct {
-		nodeID   NodeID
-		distance int
-		path     map[NodeID]bool
-	}
-	distances := map[NodeID]int{}
-	stack := []frame{{nodeID: start, distance: 0, path: map[NodeID]bool{}}}
-	for len(stack) > 0 {
-		current := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if current.path[current.nodeID] {
-			return nil, false
-		}
-		node, exists := s.nodesByID[current.nodeID]
-		if !exists {
-			return nil, false
-		}
-		if node.Kind() == NodeKindJoin {
-			previous, exists := distances[current.nodeID]
-			if !exists || current.distance < previous {
-				distances[current.nodeID] = current.distance
-			}
-			continue
-		}
-		if node.Kind() == NodeKindTerminal {
-			return nil, false
-		}
-		groups := s.groupsBySource[current.nodeID]
-		for _, branchGroup := range groups {
-			if len(s.edgesByGroup[branchGroup.ID]) > 1 {
-				return nil, false
-			}
-		}
-		nextPath := maps.Clone(current.path)
-		nextPath[current.nodeID] = true
-		for _, edge := range s.outgoingByNode[current.nodeID] {
-			stack = append(stack, frame{nodeID: edge.TargetNodeID, distance: current.distance + 1, path: nextPath})
-		}
-	}
-	return distances, true
+	return fanoutBranchJoinDistances(s.nodesByID, s.groupsBySource, s.edgesByGroup, s.outgoingByNode, start)
 }
 
 func (s *validationState) addHard(code ValidationErrorCode, message string, ref ValidationError) {

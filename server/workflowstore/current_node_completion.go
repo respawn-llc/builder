@@ -101,6 +101,26 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		return result, nil
 	}
 	target := targets[0]
+	if target.Node.Kind() == workflow.NodeKindJoin {
+		result, err := completeCurrentNodeJoinArrival(
+			ctx,
+			q,
+			definition,
+			currentSource,
+			target.Edge,
+			prepared.OutputValues,
+		)
+		if err != nil {
+			return CurrentNodeCompletionResult{}, err
+		}
+		if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
+			return CurrentNodeCompletionResult{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return CurrentNodeCompletionResult{}, err
+		}
+		return result, nil
+	}
 	targetCurrentNode, err := materializeCompletionTargetCurrentNode(
 		ctx,
 		q,
@@ -271,7 +291,22 @@ func currentNodeCompletionTransition(definition workflow.Definition, source work
 }
 
 func currentNodeCompletionOutputIssues(definition workflow.Definition, group workflow.TransitionGroup, values map[string]string) []CompletionValidationIssue {
-	required := workflow.DeriveWiring(definition).CurrentNodeOutputFieldsForTransitionGroup(group.ID)
+	wiring := workflow.DeriveWiring(definition)
+	required := wiring.CurrentNodeOutputFieldsForTransitionGroup(group.ID)
+	for _, edge := range definition.Edges {
+		if edge.TransitionGroupID != group.ID {
+			continue
+		}
+		target, err := currentNodeDefinitionNode(definition, edge.TargetNodeID)
+		if err != nil || target.Kind() != workflow.NodeKindJoin {
+			continue
+		}
+		for _, field := range wiring.RequiredProviderFieldsForJoinEdge(edge.ID) {
+			if !completionOutputFieldPresent(required, field.Name) {
+				required = append(required, field)
+			}
+		}
+	}
 	known := make(map[string]struct{}, len(required))
 	for _, field := range required {
 		name := strings.TrimSpace(field.Name)
@@ -298,6 +333,15 @@ func currentNodeCompletionOutputIssues(definition workflow.Definition, group wor
 	return issues
 }
 
+func completionOutputFieldPresent(fields []workflow.OutputField, name string) bool {
+	for _, field := range fields {
+		if strings.TrimSpace(field.Name) == strings.TrimSpace(name) {
+			return true
+		}
+	}
+	return false
+}
+
 func materializeCompletionTargetCurrentNode(
 	ctx context.Context,
 	q *sqlitegen.Queries,
@@ -314,7 +358,11 @@ func materializeCompletionTargetCurrentNode(
 	for _, binding := range wiring.CurrentNodeInputBindingsForEdge(edge.ID) {
 		value, exists := outputValues[binding.Field]
 		if !exists {
-			return workflow.CurrentNode{}, fmt.Errorf("completion output %q required to materialize current input %q", binding.Field, binding.Name)
+			return workflow.CurrentNode{}, CompletionValidationError{Issues: []CompletionValidationIssue{{
+				Code:    CompletionCodeRequiredOutputMissing,
+				Field:   strings.TrimSpace(binding.Field),
+				Message: "required output is missing",
+			}}}
 		}
 		currentInputValues[binding.Name] = value
 	}
@@ -330,12 +378,11 @@ func materializeCompletionTargetCurrentNode(
 			value, exists = currentSource.PriorNodeValues[nodeKey][requirement.OutputName]
 		}
 		if !exists {
-			return workflow.CurrentNode{}, fmt.Errorf(
-				"completion cannot materialize prior value %q from node %q for target %q",
-				requirement.OutputName,
-				nodeKey,
-				workflow.NodeIDOf(target),
-			)
+			return workflow.CurrentNode{}, CompletionValidationError{Issues: []CompletionValidationIssue{{
+				Code:    CompletionCodeRequiredOutputMissing,
+				Field:   strings.TrimSpace(requirement.OutputName),
+				Message: "required prior-node output is missing",
+			}}}
 		}
 		if priorNodeValues[nodeKey] == nil {
 			priorNodeValues[nodeKey] = make(map[string]string)

@@ -4737,6 +4737,19 @@ INSERT INTO task_active_fanout_branches (
     NULL
 );
 
+-- name: UpdateTaskActiveFanoutBranchArrival :execrows
+UPDATE task_active_fanout_branches
+SET
+    arrival_state = 'arrived',
+    arrival_values_json = sqlc.arg(arrival_values_json)
+WHERE task_id = sqlc.arg(task_id)
+  AND transition_branch_key = sqlc.arg(transition_branch_key)
+  AND arrival_state = 'pending';
+
+-- name: DeleteTaskActiveFanout :execrows
+DELETE FROM task_active_fanouts
+WHERE task_id = sqlc.arg(task_id);
+
 -- name: InsertTaskPendingApproval :exec
 INSERT INTO task_pending_approvals (
     id,
