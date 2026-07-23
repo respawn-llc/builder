@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func TestAttentionCandidateProjectionReturnsTypedValidationErrors(t *testing.T) {
@@ -44,32 +45,17 @@ func TestAttentionCandidateProjectionReturnsTypedValidationErrors(t *testing.T) 
 
 func TestAttentionProjectionReturnsTypedErrorForInvalidQuestionRecommendation(t *testing.T) {
 	sessionID := "session-1"
-	taskID := "task-1"
-	shortID := "KENT-1"
-	title := "Task"
-	runID := "run-1"
 	askID := "ask-1"
 	resolver := newPendingQuestionResolver(nil, staticPendingPromptSource{
 		sessionID: {{
 			ID:                     askID,
 			Question:               "Continue?",
 			Suggestions:            []string{"Yes"},
-			RecommendedOptionIndex: attentionProjectionTestPointer(2),
+			RecommendedOptionIndex: textutil.Value(2),
 		}},
 	})
 
-	_, _, err := (&Attention{}).itemFromCandidate(t.Context(), attentionCandidateRow{
-		kind:       "question",
-		id:         "question:" + askID,
-		projectID:  "project-1",
-		workflowID: "workflow-1",
-		taskID:     &taskID,
-		shortID:    &shortID,
-		title:      &title,
-		runID:      &runID,
-		sessionID:  &sessionID,
-		askID:      &askID,
-	}, resolver)
+	_, _, err := (&Attention{}).itemFromCandidate(t.Context(), attentionProjectionQuestionCandidate(sessionID, askID), resolver)
 	var validationErr serverapi.WorkflowRequestValidationError
 	if !errors.As(err, &validationErr) {
 		t.Fatalf("itemFromCandidate error = %T %v, want WorkflowRequestValidationError", err, err)
@@ -79,6 +65,71 @@ func TestAttentionProjectionReturnsTypedErrorForInvalidQuestionRecommendation(t 
 	}
 }
 
-func attentionProjectionTestPointer(value int) *int {
-	return &value
+func TestAttentionProjectionFallsBackWhenQuestionMetadataIsUnavailable(t *testing.T) {
+	sessionID := "session-1"
+	askID := "ask-1"
+	tests := []struct {
+		name     string
+		resolver *pendingQuestionResolver
+	}{
+		{
+			name: "transcript source failure",
+			resolver: newPendingQuestionResolver(
+				failingQuestionMetadataSource{err: errors.New("transcript source unavailable")},
+				nil,
+			),
+		},
+		{
+			name: "pending prompt source failure",
+			resolver: newPendingQuestionResolver(
+				nil,
+				failingQuestionMetadataSource{err: errors.New("pending prompt source unavailable")},
+			),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			item, include, err := (&Attention{}).itemFromCandidate(
+				t.Context(),
+				attentionProjectionQuestionCandidate(sessionID, askID),
+				tt.resolver,
+			)
+			if err != nil {
+				t.Fatalf("itemFromCandidate error = %v", err)
+			}
+			if !include {
+				t.Fatal("itemFromCandidate omitted a question with unavailable metadata")
+			}
+			if item.Message != pendingQuestionFallbackMessage {
+				t.Fatalf("item message = %q, want fallback %q", item.Message, pendingQuestionFallbackMessage)
+			}
+		})
+	}
+}
+
+func attentionProjectionQuestionCandidate(sessionID string, askID string) attentionCandidateRow {
+	return attentionCandidateRow{
+		kind:       "question",
+		id:         "question:" + askID,
+		projectID:  "project-1",
+		workflowID: "workflow-1",
+		taskID:     textutil.Value("task-1"),
+		shortID:    textutil.Value("KENT-1"),
+		title:      textutil.Value("Task"),
+		runID:      textutil.Value("run-1"),
+		sessionID:  textutil.Value(sessionID),
+		askID:      textutil.Value(askID),
+	}
+}
+
+type failingQuestionMetadataSource struct {
+	err error
+}
+
+func (s failingQuestionMetadataSource) SessionNewestActiveSegmentQuestions(context.Context, string) ([]PendingQuestionTranscriptEntry, error) {
+	return nil, s.err
+}
+
+func (s failingQuestionMetadataSource) ListPendingPrompts(string) ([]PendingPromptSnapshot, error) {
+	return nil, s.err
 }
