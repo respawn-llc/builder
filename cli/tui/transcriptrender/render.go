@@ -679,6 +679,9 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 	if row.Diagnostic != nil && (mode == ModeDetailExpanded || typedCompactText == "") {
 		text = firstNonEmpty(row.Diagnostic.Detail, string(row.Diagnostic.Code), text)
 	}
+	if isReasoningNotice(row) {
+		text = stripReasoningBoldDelimiters(text)
+	}
 	return noticeStyleRole(row), text
 }
 
@@ -782,9 +785,6 @@ func isReasoningNotice(row *clientui.TranscriptNoticeRow) bool {
 }
 
 func noticeUsesMarkdown(row *clientui.TranscriptNoticeRow) bool {
-	if isReasoningNotice(row) {
-		return true
-	}
 	if row == nil || row.MessageType == nil {
 		return false
 	}
@@ -802,6 +802,20 @@ func noticeUsesMarkdown(row *clientui.TranscriptNoticeRow) bool {
 	default:
 		return false
 	}
+}
+
+func stripReasoningBoldDelimiters(text string) string {
+	var out strings.Builder
+	out.Grow(len(text))
+	for index := 0; index < len(text); {
+		if index+1 < len(text) && text[index] == '*' && text[index+1] == '*' {
+			index += 2
+			continue
+		}
+		out.WriteByte(text[index])
+		index++
+	}
+	return out.String()
 }
 
 func noticeLegacyText(row *clientui.TranscriptNoticeRow) string {
