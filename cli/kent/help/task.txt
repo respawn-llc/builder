@@ -11,7 +11,7 @@ Usage of kent task:
   kent task cancel <short-id-or-task-id> [--project <project>] [--reason <text>]
   kent task delete <short-id-or-task-id> [--project <project>]
   kent task label create <name> [--project <project>] [--json]
-  kent task label list [--project <project>] [--json]
+  kent task label list [--project <project>] [--name <name>] [--json]
   kent task label rename --label <name-or-uuid> <new-name> [--project <project>] [--json]
   kent task label delete --label <name-or-uuid> [--project <project>] [--json]
   kent task label add <short-id-or-task-id> --label <name-or-uuid>... [--project <project>] [--json]

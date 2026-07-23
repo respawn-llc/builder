@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"core/shared/apicontract"
-	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -58,7 +57,7 @@ func TestWorkflowDeleteWithoutConfirmReturnsPreviewOnly(t *testing.T) {
 	remote := &workflowDeleteCommandRemote{
 		previewResponse: serverapi.WorkflowDeletePreviewResponse{Impact: impact},
 	}
-	installWorkflowDeleteCommandRemote(t, remote)
+	installWorkflowCommandRemote(t, remote)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -97,7 +96,7 @@ func TestWorkflowDeleteConfirmUsesPreviewedImpact(t *testing.T) {
 		previewResponse: serverapi.WorkflowDeletePreviewResponse{Impact: impact},
 		deleteResponse:  serverapi.WorkflowDeleteResponse{Deleted: true, Impact: impact},
 	}
-	installWorkflowDeleteCommandRemote(t, remote)
+	installWorkflowCommandRemote(t, remote)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -153,7 +152,7 @@ func TestWorkflowDeleteConfirmReturnsTypedBlockers(t *testing.T) {
 			Blockers: []serverapi.WorkflowDeleteBlocker{blocker},
 		},
 	}
-	installWorkflowDeleteCommandRemote(t, remote)
+	installWorkflowCommandRemote(t, remote)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -171,15 +170,4 @@ func TestWorkflowDeleteConfirmReturnsTypedBlockers(t *testing.T) {
 	if output.Deleted || output.Impact != expectedImpact || len(output.Blockers) != 1 || output.Blockers[0] != blocker {
 		t.Fatalf("output = %+v, want typed active-run blocker", output)
 	}
-}
-
-func installWorkflowDeleteCommandRemote(t *testing.T, remote workflowCommandRemote) {
-	t.Helper()
-	previous := workflowCommandRemoteOpener
-	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
-		return config.App{}, remote, nil
-	}
-	t.Cleanup(func() {
-		workflowCommandRemoteOpener = previous
-	})
 }

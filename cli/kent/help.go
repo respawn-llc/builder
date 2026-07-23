@@ -188,7 +188,7 @@ var (
 	taskDeleteUsage         = leafCommandUsage(config.Command+" task delete <task> [--project <project>]", "Permanently delete a task.", "", "User-only; unavailable inside Kent shell commands.")
 	taskLabelUsage          = leafCommandUsage(config.Command+" task label <add|create|delete|list|remove|rename> ...", "Manage Project labels and task label assignments.")
 	taskLabelCreateUsage    = leafCommandUsage(config.Command+" task label create [--project <project>] [--json] <name>", "Create a Project label.")
-	taskLabelListUsage      = leafCommandUsage(config.Command+" task label list [--project <project>] [--json]", "List labels in a Project catalog.")
+	taskLabelListUsage      = leafCommandUsage(config.Command+" task label list [--project <project>] [--name <name>] [--json]", "List labels in a Project catalog.")
 	taskLabelRenameUsage    = leafCommandUsage(config.Command+" task label rename --label <name-or-uuid> [--project <project>] [--json] <new-name>", "Rename a Project label.")
 	taskLabelDeleteUsage    = leafCommandUsage(config.Command+" task label delete --label <name-or-uuid> [--project <project>] [--json]", "Delete a Project label.")
 	taskLabelAddUsage       = leafCommandUsage(config.Command+" task label add <short-id-or-task-id> --label <name-or-uuid>... [--project <project>] [--json]", "Assign existing Project labels to a task.")
