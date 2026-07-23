@@ -1128,8 +1128,8 @@ func (s *Starter) startAgentExecution(ctx context.Context, req workflowexecution
 		currentWorktreeRoot = &root
 	}
 	var managedWorktreePathContext *askquestion.ManagedWorktreePathContext
-	if strings.TrimSpace(s.cfg.Settings.Worktrees.BaseDir) != "" {
-		managedWorktreePathContext, err = askquestion.NewManagedWorktreePathContext(s.cfg.Settings.Worktrees.BaseDir, currentWorktreeRoot)
+	if strings.TrimSpace(plan.ActiveSettings.Worktrees.BaseDir) != "" {
+		managedWorktreePathContext, err = askquestion.NewManagedWorktreePathContext(plan.ActiveSettings.Worktrees.BaseDir, currentWorktreeRoot)
 		if err != nil {
 			return err
 		}
