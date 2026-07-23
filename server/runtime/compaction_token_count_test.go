@@ -202,3 +202,31 @@ func TestShouldAutoCompactRechecksProviderBeforeCompactingOnLargeEstimate(t *tes
 		)
 	}
 }
+
+func TestShouldAutoCompactPrefersConfiguredThresholdOverResolvedContextWindow(t *testing.T) {
+	client := &preciseCompactionClient{inputTokenCount: 950, contextWindow: 1_000}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+		Model:                 "gpt-5",
+		ContextWindowTokens:   400_000,
+		AutoCompactTokenLimit: 360_000,
+	})
+	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+	)); err != nil {
+		t.Fatalf("persist input: %v", err)
+	}
+	if usage := engine.ContextUsage(); usage.WindowTokens != 400_000 {
+		t.Fatalf("configured context window = %d, want 400000", usage.WindowTokens)
+	}
+	shouldCompact := engine.shouldAutoCompactWithContext(context.Background())
+	if shouldCompact || client.resolveCalls != 0 {
+		t.Fatalf(
+			"configured auto-compaction decision/resolution calls = %t/%d, want false/zero",
+			shouldCompact,
+			client.resolveCalls,
+		)
+	}
+}
