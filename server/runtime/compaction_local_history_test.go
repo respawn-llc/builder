@@ -145,3 +145,31 @@ func TestManualCompactionLocalFailsWhenModelAttemptsToolCalls(t *testing.T) {
 		}
 	}
 }
+
+func TestManualCompactionDisabledWhenModeNone(t *testing.T) {
+	client := &fakeCompactionClient{}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+		Model:          "gpt-5",
+		CompactionMode: "none",
+	})
+	if err := engine.steer("input", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventNone,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+	)); err != nil {
+		t.Fatalf("persist compaction input: %v", err)
+	}
+
+	err := engine.CompactContext(context.Background(), "")
+	if !errors.Is(err, errCompactionDisabledModeNone) {
+		t.Fatalf("manual compaction error = %v, want disabled-mode rejection", err)
+	}
+	if len(client.calls) != 0 || len(client.compactionCalls) != 0 {
+		t.Fatalf(
+			"disabled compaction local/remote calls = %d/%d, want zero/zero",
+			len(client.calls),
+			len(client.compactionCalls),
+		)
+	}
+}
