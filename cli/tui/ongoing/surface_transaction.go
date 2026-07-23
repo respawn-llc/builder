@@ -91,13 +91,16 @@ func (s *Surface) writeFrameTransaction(frame FrameInput, immutableRows []string
 	transaction.WriteString(resetScrollRegionAndOriginMode())
 	transaction.WriteString(semanticOutputSequence())
 	if s.terminalHeightExpanded(frame.Size) {
+		previous := s.visiblePreviousMutableBand(frame.Size)
 		switch s.terminalResize {
 		case TerminalResizeWidthRehydration:
-			previous := s.visiblePreviousMutableBand(frame.Size)
 			if previous != nil {
 				writeMutableRowsErase(&transaction, previous.start, previous.end)
 			}
 		case TerminalResizeTmuxWidthRehydration:
+			if previous != nil {
+				writeMutableRowsErase(&transaction, previous.start, previous.end)
+			}
 			if s.immutableScrollbackProduced() {
 				writeImmutableRegionScrollForTerminalExpansion(
 					&transaction,

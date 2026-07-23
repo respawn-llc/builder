@@ -125,6 +125,17 @@ func TestTmuxResizeDoesNotMarkMutableBandAsRedrawable(t *testing.T) {
 		TerminalResize: TerminalResizeTmuxWidthRehydration,
 		MarkdownLinks:  transcriptrender.MarkdownLinkLabelOnly,
 	})
+	stream, err := analyzer.NewStream(pty.MustDimensions(18, 80))
+	if err != nil {
+		t.Fatalf("new terminal stream: %v", err)
+	}
+	feedFrame := func(operation string) {
+		t.Helper()
+		if err := stream.Feed(output.Bytes()); err != nil {
+			t.Fatalf("%s terminal bytes: %v", operation, err)
+		}
+		output.Reset()
+	}
 	initial := FrameInput{
 		Size: Size{Width: 80, Height: 18},
 		Sections: []FrameSection{{
@@ -135,7 +146,10 @@ func TestTmuxResizeDoesNotMarkMutableBandAsRedrawable(t *testing.T) {
 	if _, err := surface.ApplyTerminalMessage(committedAssistantMessage("IMMUTABLE"), initial); err != nil {
 		t.Fatalf("render legacy transcript and live band: %v", err)
 	}
-	output.Reset()
+	feedFrame("render legacy transcript and live band")
+	if err := stream.Resize(pty.MustDimensions(28, 80)); err != nil {
+		t.Fatalf("expand terminal: %v", err)
+	}
 	expanded := FrameInput{
 		Size: Size{Width: 80, Height: 28},
 		Sections: []FrameSection{{
@@ -151,18 +165,19 @@ func TestTmuxResizeDoesNotMarkMutableBandAsRedrawable(t *testing.T) {
 	if strings.Contains(resizeOutput, redrawableSemanticPromptSequence()) {
 		t.Fatalf("legacy resize emitted redrawable semantic prompt: %q", resizeOutput)
 	}
-	if strings.Contains(resizeOutput, "OLD_LIVE") {
-		t.Fatalf("legacy resize replayed stale mutable content: %q", resizeOutput)
+	feedFrame("resize legacy live band")
+	snapshot, err := stream.ScreenSnapshot()
+	if err != nil {
+		t.Fatalf("snapshot after tmux expansion: %v", err)
 	}
-	if !strings.Contains(resizeOutput, "NEW_LIVE_TOP") || !strings.Contains(resizeOutput, "NEW_LIVE_BOTTOM") {
-		t.Fatalf("legacy resize did not repaint current mutable content: %q", resizeOutput)
+	if screenContains(snapshot, "OLD_LIVE_TOP") || screenContains(snapshot, "OLD_LIVE_BOTTOM") {
+		t.Fatalf("tmux expansion retained stale mutable rows: %q", snapshot.RenderText())
 	}
-	if wantScroll := "\x1b[1;26r\x1b[26;1H"; !strings.Contains(resizeOutput, wantScroll) {
-		t.Fatalf(
-			"legacy expansion did not move immutable region into native scrollback: output=%q want_sequence=%q",
-			resizeOutput,
-			wantScroll,
-		)
+	if got := screenRow(snapshot, 26); got != "NEW_LIVE_TOP" {
+		t.Fatalf("tmux expansion live band first row = %q, want NEW_LIVE_TOP", got)
+	}
+	if got := screenRow(snapshot, 27); got != "NEW_LIVE_BOTTOM" {
+		t.Fatalf("tmux expansion live band bottom row = %q, want NEW_LIVE_BOTTOM", got)
 	}
 }
 

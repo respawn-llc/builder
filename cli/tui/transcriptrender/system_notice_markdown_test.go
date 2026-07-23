@@ -1,14 +1,13 @@
 package transcriptrender
 
 import (
-	"strings"
 	"testing"
 
 	"core/shared/clientui"
 	"core/shared/transcript"
 )
 
-func TestTypedSystemNoticesRenderMarkdown(t *testing.T) {
+func TestTypedSystemNoticesUseMarkdown(t *testing.T) {
 	for _, messageType := range []clientui.TranscriptMessageType{
 		clientui.TranscriptMessageAgentsMD,
 		clientui.TranscriptMessageSkills,
@@ -21,30 +20,27 @@ func TestTypedSystemNoticesRenderMarkdown(t *testing.T) {
 		clientui.TranscriptMessageWorkflowMode,
 	} {
 		t.Run(string(messageType), func(t *testing.T) {
-			presentation := RenderDetailPresentation(systemNoticeRow(messageType), 80, "dark")
-			if got := presentation.Expanded[0].Plain(); strings.Contains(got, "**") {
-				t.Fatalf("typed system notice retained Markdown delimiters: %q", got)
+			if !noticeUsesMarkdown(systemNoticeRow(messageType).Notice) {
+				t.Fatalf("message type %q does not use Markdown", messageType)
 			}
 		})
 	}
 }
 
-func TestExcludedSystemNoticesRemainPlaintext(t *testing.T) {
+func TestExcludedSystemNoticesDoNotUseMarkdown(t *testing.T) {
 	for _, messageType := range []clientui.TranscriptMessageType{
 		clientui.TranscriptMessageHandoffFutureMessage,
 		clientui.TranscriptMessageManualCompactionCarryover,
 	} {
 		t.Run(string(messageType), func(t *testing.T) {
-			presentation := RenderDetailPresentation(systemNoticeRow(messageType), 80, "dark")
-			if got := presentation.Expanded[0].Plain(); !strings.Contains(got, "**") {
-				t.Fatalf("excluded system notice unexpectedly rendered Markdown: %q", got)
+			if noticeUsesMarkdown(systemNoticeRow(messageType).Notice) {
+				t.Fatalf("message type %q unexpectedly uses Markdown", messageType)
 			}
 		})
 	}
 }
 
 func systemNoticeRow(messageType clientui.TranscriptMessageType) clientui.TranscriptCommittedRow {
-	content := "**content**"
 	return clientui.TranscriptCommittedRow{
 		Visibility: transcript.EntryVisibilityDetail,
 		Integrity:  transcript.RowIntegrityValid,
@@ -53,7 +49,6 @@ func systemNoticeRow(messageType clientui.TranscriptMessageType) clientui.Transc
 			Reason:      clientui.TranscriptNoticeLegacyUntypedNotice,
 			Severity:    clientui.TranscriptNoticeInfo,
 			MessageType: &messageType,
-			LegacyText:  &content,
 		},
 	}
 }

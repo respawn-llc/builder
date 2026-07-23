@@ -23,8 +23,12 @@ func TestExpandingDetailEntryPreservesCameraPosition(t *testing.T) {
 	m.detailScroll = 2
 	m.setSelectedDetailIndex(2)
 
+	beforeLines := len(m.detailProjection.lines)
 	m.toggleSelectedDetailEntry()
 
+	if got := len(m.detailProjection.lines); got <= beforeLines {
+		t.Fatalf("detail entry did not expand: before=%d after=%d", beforeLines, got)
+	}
 	if got := m.detailScroll; got != 2 {
 		t.Fatalf("detail scroll after expansion = %d, want preserved camera position", got)
 	}
