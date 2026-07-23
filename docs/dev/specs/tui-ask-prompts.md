@@ -7,7 +7,7 @@
 - The active question is Markdown-rendered and wraps within the live region. Answer options take viewport priority; question lines use the remaining capacity and follow the live region's existing collapse/truncation behavior. Pure freeform prompts retain the existing cursor-anchored viewport behavior.
 - Prompts use FIFO order and show one active prompt at a time. Resolving the active prompt shows the next one.
 - A prompt resolved from another attached client disappears from the active view or pending list.
-- An update to the active prompt refreshes it in place.
+- An update to the active prompt refreshes it in place without replacing the user's selection or draft.
 - The terminal bell rings when a new prompt appears.
 - Submitting an answer fixes the submitted content for that attempt. The editor remains responsive while Kent delivers it. Further edits affect only a later retry if delivery fails.
 - Allow commentary is queued before the Approval answer. The prompt does not accept another action until that queue operation finishes.
@@ -20,9 +20,9 @@
 
 ## Prompt Kinds
 
-- **Question with options**: numbered options plus an appended "Freeform answer" option. A recommended option is marked (star + recommended suffix) and the selection marker is distinct from the recommendation marker. Exact glyphs are presentation, not contract.
+- **Question with options**: numbered options plus an appended "Freeform answer" option. When the Question becomes active, its valid recommended option is selected; without a recommendation, option 1 is selected. A recommended option is marked (star + recommended suffix) and the selection marker is distinct from the recommendation marker. Exact glyphs are presentation, not contract.
 - **Pure freeform question** (no options): goes straight to text entry.
-- **Approval prompt**: options carry Approval decisions and have no freeform-answer option. Optional commentary attaches to the chosen decision. Denial commentary travels only with the Approval answer. Allow commentary is queued before the Approval answer.
+- **Approval prompt**: options carry Approval decisions and have no freeform-answer option. The one-time allow decision is selected when offered; otherwise the first offered decision is selected. Optional commentary attaches to the chosen decision. Denial commentary travels only with the Approval answer. Allow commentary is queued before the Approval answer.
 
 ## Keys
 

@@ -149,7 +149,7 @@ func TestAskProjectionSchedulerSameIdentityUsesLatestCompleteCandidate(t *testin
 		"new two",
 		"new three",
 	)
-	recommended := 2
+	recommended := 3
 	replacement.prompt.RecommendedOptionIndex = &recommended
 	next, replacementCommand := pending.Update(askEventMsg{event: replacement})
 	coalescing := next.(*uiModel)
@@ -197,7 +197,7 @@ func TestAskProjectionSameIDActiveReplacementPreservesPromptLocalState(t *testin
 	activeProjection := model.ask.activeProjection
 
 	replacement := testQuestionAskEvent("ask-1", "Same question", "new one", "new two", "new three")
-	recommended := 2
+	recommended := 3
 	replacement.prompt.RecommendedOptionIndex = &recommended
 	next, command := model.Update(askEventMsg{event: replacement})
 	updated := next.(*uiModel)

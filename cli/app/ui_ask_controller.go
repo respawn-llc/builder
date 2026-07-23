@@ -463,7 +463,7 @@ func (c uiAskController) setActiveAsk(evt askEvent) {
 	m.ask.activeProjection = nil
 	m.ask.latestDesiredProjection = nil
 	m.ask.answerPending = false
-	m.ask.cursor = 0
+	m.ask.cursor = initialAskCursor(current.prompt)
 	m.clearAskInput()
 	m.ask.freeform = askOptionCount(current.prompt) == 0
 	m.ask.freeformMode = askFreeformModeGeneric
@@ -563,6 +563,23 @@ func askOptionIsRecommended(req clientui.TranscriptPrompt, index int) bool {
 		return false
 	}
 	return req.RecommendedOptionIndex != nil && *req.RecommendedOptionIndex == index+1
+}
+
+func initialAskCursor(req clientui.TranscriptPrompt) int {
+	if transcriptPromptIsApproval(req) {
+		for index, decision := range req.ApprovalOptions {
+			if decision == clientui.ApprovalDecisionAllowOnce {
+				return index
+			}
+		}
+		return 0
+	}
+	for index := range askVisibleOptions(req) {
+		if askOptionIsRecommended(req, index) {
+			return index
+		}
+	}
+	return 0
 }
 
 func askRequiresFreeformSelectionCommentary(req clientui.TranscriptPrompt, cursor int) bool {
