@@ -414,6 +414,9 @@ func protocolError(err error) (int, string) {
 	if errors.Is(err, serverapi.ErrRuntimeNoFinalAnswer) {
 		return protocol.ErrCodeRuntimeNoFinalAnswer, message
 	}
+	if errors.Is(err, serverapi.ErrWorktreeBlocked) {
+		return protocol.ErrCodeWorktreeBlocked, message
+	}
 	if errors.Is(err, serverapi.ErrStreamUnavailable) {
 		return protocol.ErrCodeStreamUnavailable, message
 	}
